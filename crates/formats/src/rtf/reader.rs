@@ -2,7 +2,26 @@ use super::date::dttm_to_iso;
 use super::parse::column_grid;
 use super::state::{CellDef, Dest, HeaderFooter, MAX_GROUPS, MAX_REV_AUTHORS, MAX_SECTIONS, Output, PageGeom, SecFmt, St};
 use super::styles::{StyleDef, drop_style_formatting, style_fmt};
-use super::{Arc, Cell, FBlock, FTable, HashMap, Inline, Kind, Meta, Para, Rgb, model};
+use super::{Arc, Cell, FBlock, FTable, Fmt, HashMap, Inline, Kind, Meta, Para, Rgb, model};
+
+/// A field whose result depends on the page it lands on (`PAGE`, `NUMPAGES`, `SECTIONPAGES`),
+/// read as a field rather than as its cached text (which is the page the writer saw, usually 1).
+pub(super) struct PageField {
+    /// The depth of the group holding the field: it ends when that group closes.
+    depth: usize,
+    instr: String,
+    /// The cached result (`\fldrslt`), read instead of being added to the paragraph.
+    pub(super) result: String,
+    /// The formatting of the field's group, then of its result's first text.
+    pub(super) fmt: Fmt,
+    pub(super) from_result: bool,
+}
+
+/// Whether field code `instr` is a page number (`PAGE \* Arabic`, `NUMPAGES`…).
+pub(super) fn is_page_field(instr: &str) -> bool {
+    let name = instr.split_whitespace().next().unwrap_or_default();
+    ["PAGE", "NUMPAGES", "SECTIONPAGES"].iter().any(|n| name.eq_ignore_ascii_case(n))
+}
 
 #[derive(Default)]
 pub(super) struct Reader {
@@ -63,6 +82,8 @@ pub(super) struct Reader {
     pub(super) pict_sx: f32,
     pub(super) pict_sy: f32,
     pub(super) bkmk: Option<(usize, String)>,
+    /// The page-number field being read, from the end of its code to the end of its group.
+    pub(super) page_field: Option<PageField>,
     /// Authors of tracked changes (`\revtbl`), and the entry being read.
     rev_authors: Vec<String>,
     pub(super) rev_name: String,
@@ -247,6 +268,7 @@ impl Reader {
             }
             _ => {}
         }
+        let field = self.st.field;
         let Some(mut prev) = self.stack.pop() else { return };
         // The end of old formatting read in the body: the formatting it holds is the change's
         // old formatting (nested old-formatting groups only change their parent's copy).
@@ -279,6 +301,16 @@ impl Reader {
                 self.para_has = true;
             }
         }
+        if self.page_field.as_ref().is_some_and(|f| self.depth() < f.depth) {
+            self.end_page_field();
+        }
+        if closing == Dest::FldInst && prev.dest == Dest::Body && self.page_field.is_none() {
+            let instr = field.and_then(|i| self.fields.get(i)).map_or("", |s| s.trim());
+            if is_page_field(instr) {
+                let fmt = prev.fmt.clone();
+                self.page_field = Some(PageField { depth: self.depth(), instr: instr.to_string(), result: String::new(), fmt, from_result: false });
+            }
+        }
         self.st = prev;
         if self.hf.as_ref().is_some_and(|(d, _, _)| self.depth() < *d) {
             self.end_header_footer();
@@ -299,6 +331,14 @@ impl Reader {
         model::RevMark { author, date: dttm_to_iso(dttm).unwrap_or_default(), id: None }
     }
 
+    /// The page field being read ends: it goes into the paragraph.
+    pub(super) fn end_page_field(&mut self) {
+        if let Some(f) = self.page_field.take() {
+            self.para.inlines.push(Inline::Field { instr: f.instr, result: f.result, fmt: f.fmt });
+            self.para_has = true;
+        }
+    }
+
     /// `\par` (or `\sect`): end the paragraph, whose mark is tracked as inserted or deleted when the text
     /// at it is.
     pub(super) fn end_para_mark(&mut self) {
@@ -310,6 +350,7 @@ impl Reader {
 
     /// End the current paragraph (`\par`, `\cell`).
     pub(super) fn end_para(&mut self, in_cell: bool) {
+        self.end_page_field();
         let read = std::mem::take(&mut self.para);
         let props = self.para_props(&self.st);
         let mut p = Para { inlines: read.inlines, mark_ins: read.mark_ins, mark_del: read.mark_del, ..props };
@@ -326,7 +367,7 @@ impl Reader {
         // file's when its name gave the kind (not an outline level on another style).
         let base = if self.style_kind(&self.st) == Some(p.kind) { self.style_base(p.kind, self.st.style) } else { style_fmt(p.kind) };
         for i in &mut p.inlines {
-            if let Inline::Text(_, f) = i {
+            if let Inline::Text(_, f) | Inline::Field { fmt: f, .. } = i {
                 drop_style_formatting(p.kind, &base, f);
                 if let Some(c) = f.fmt_change.as_deref_mut() {
                     drop_style_formatting(p.kind, &base, &mut c.old);

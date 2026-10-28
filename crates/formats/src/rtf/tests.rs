@@ -470,6 +470,78 @@ fn unicode_in_info_bookmarks_and_field_instructions() {
     assert_eq!(texts(&f).last().map(String::as_str), Some("Normal:Café"));
 }
 
+/// The fields of the first paragraph of a header, footer or the body: (code, cached result) and
+/// the paragraph's text with each field as its object mark.
+fn fields_of(blocks: &[std::sync::Arc<wordcraft_doc::Block>]) -> (Vec<(String, String)>, String) {
+    let Some(wordcraft_doc::Block::Para(p)) = blocks.first().map(|b| &**b) else { return (vec![], String::new()) };
+    let fields = p
+        .objects
+        .iter()
+        .filter_map(|o| match o {
+            wordcraft_doc::InlineObject::Field { instr, result, .. } => Some((instr.clone(), result.clone())),
+            _ => None,
+        })
+        .collect();
+    (fields, p.text.clone())
+}
+
+#[test]
+fn page_number_fields_stay_fields() {
+    // A running head as a reporting system writes it: each field in a group of its own, with a
+    // cached result of 1. Kept as text, every page would read "Page 1 of 1".
+    let rtf = br"{\rtf1\ansi{\header \pard STUDY\tab Page {\field{\*\fldinst { PAGE }}{\fldrslt {1}}} of {\field{\*\fldinst { NUMPAGES }}{\fldrslt {1}}}\par}
+\pard Body\par}";
+    let d = import(rtf).unwrap();
+    let head = d.last_section.headers.default.and_then(|id| d.parts.get(&id)).unwrap();
+    let (fields, text) = fields_of(&head.blocks);
+    assert_eq!(fields, [("PAGE".to_string(), "1".to_string()), ("NUMPAGES".to_string(), "1".to_string())]);
+    assert_eq!(text, "STUDY\tPage \u{FFFC} of \u{FFFC}");
+
+    // A field started by `\field` inside a formatting group, with no result (Word refreshes a
+    // `\flddirty` field on open): the group's formatting is the field's, and its switch is kept.
+    let rtf = br"{\rtf1\ansi{\fonttbl{\f1 Courier New;}}{\header \pard {\f1\fs20\b Page }{\f1\fs20\b \field\flddirty{\*\fldinst{  PAGE   \\* MERGEFORMAT }}}{\f1\fs20\b  of }{\f1\fs20\b \field{\*\fldinst{ NUMPAGES}}}\par}
+\pard Body\par}";
+    let d = import(rtf).unwrap();
+    let head = d.last_section.headers.default.and_then(|id| d.parts.get(&id)).unwrap();
+    let (fields, text) = fields_of(&head.blocks);
+    assert_eq!(fields, [(r"PAGE   \* MERGEFORMAT".to_string(), String::new()), ("NUMPAGES".to_string(), String::new())]);
+    assert_eq!(text, "Page \u{FFFC} of \u{FFFC}");
+    let Some(wordcraft_doc::Block::Para(p)) = head.blocks.first().map(|b| &**b) else { panic!("no header paragraph") };
+    let mark = p.text.find('\u{FFFC}').unwrap();
+    let mut field_run = p.runs.iter().scan(0, |end, r| {
+        *end += r.len;
+        Some((*end, r))
+    });
+    let props = &field_run.find(|(end, _)| *end > mark).unwrap().1.props;
+    assert_eq!((props.bold, props.size, props.font.as_deref()), (Some(true), Some(10.0), Some("Courier New")));
+
+    // `\chpgn` is the page number itself (headers and footers).
+    let d = import(br"{\rtf1\ansi{\footer \pard Page \chpgn\par} Body\par}").unwrap();
+    let foot = d.last_section.footers.default.and_then(|id| d.parts.get(&id)).unwrap();
+    assert_eq!(fields_of(&foot.blocks), (vec![("PAGE".to_string(), String::new())], "Page \u{FFFC}".to_string()));
+
+    // Other fields keep their cached text, a hyperlink stays a link, and a page field in the body
+    // is a field too. The plain-text view of a paragraph reads a field as its cached result.
+    let f = parse(br#"{\rtf1\ansi\pard {\field{\*\fldinst DATE}{\fldrslt 1/2/2026}} {\field{\*\fldinst{HYPERLINK "https://example.test"}}{\fldrslt{link}}} p{\field{\*\fldinst PAGE}{\fldrslt 7}}\par}"#).unwrap();
+    assert_eq!(texts(&f), ["Normal:1/2/2026 link p7"]);
+    let d = import(br#"{\rtf1\ansi\pard {\field{\*\fldinst DATE}{\fldrslt 1/2/2026}} p{\field{\*\fldinst PAGE}{\fldrslt 7}}\par}"#).unwrap();
+    assert_eq!(fields_of(&d.body), (vec![("PAGE".to_string(), "7".to_string())], "1/2/2026 p\u{FFFC}".to_string()));
+}
+
+#[test]
+fn hostile_page_fields_never_panic() {
+    // Unclosed, nested and empty fields, and a field that is all switch: each still imports.
+    for rtf in [
+        &br"{\rtf1\ansi{\header {\field{\*\fldinst PAGE"[..],
+        br"{\rtf1\ansi{\field{\*\fldinst PAGE}{\fldrslt {\field{\*\fldinst NUMPAGES}{\fldrslt 2}}}}\par}",
+        br"{\rtf1\ansi{\field{\*\fldinst }{\fldrslt x}}\par}",
+        br"{\rtf1\ansi{\field{\*\fldinst \\* MERGEFORMAT}{\fldrslt x}}\par}",
+        br"{\rtf1\ansi\chpgn{\field}\par}",
+    ] {
+        assert!(import(rtf).is_ok());
+    }
+}
+
 /// A hand-written RTF with tracked changes: Alice inserts "added ", Bob deletes "gone", and
 /// "both" is inserted by Alice then deleted by Bob.
 pub(crate) const TRACKED: &[u8] = br"{\rtf1\ansi\deff0{\fonttbl{\f0 Arial;}}{\*\revtbl {Unknown;}{Alice;}{Bob;}}

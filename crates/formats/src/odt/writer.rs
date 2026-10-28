@@ -314,7 +314,7 @@ impl Writer {
         let last = inl.len().saturating_sub(1);
         for (idx, i) in inl.iter().enumerate() {
             match i {
-                Inline::Text(t, f) => {
+                Inline::Text(t, f) | Inline::Field { result: t, fmt: f, .. } => {
                     let mut body = String::new();
                     let mut spaces = 0usize;
                     let flush = |body: &mut String, spaces: &mut usize, prev_space: bool| {
@@ -414,7 +414,7 @@ impl Writer {
             }
         };
         let tracked = paras.len() > 1
-            || p.inlines.iter().any(|i| matches!(i, Inline::Text(_, f) | Inline::Ruby { fmt: f, .. } if f.ins.is_some() || f.del.is_some()));
+            || p.inlines.iter().any(|i| matches!(i, Inline::Text(_, f) | Inline::Ruby { fmt: f, .. } | Inline::Field { fmt: f, .. } if f.ins.is_some() || f.del.is_some()));
         if tracked {
             let mut items = Vec::new();
             for (k, q) in paras.iter().enumerate() {
@@ -700,7 +700,7 @@ impl Item<'_> {
     /// Its tracked insertion and deletion.
     fn marks(&self) -> (Option<&RevMark>, Option<&RevMark>) {
         match self {
-            Item::Inl(Inline::Text(_, f) | Inline::Ruby { fmt: f, .. }) => (f.ins.as_ref(), f.del.as_ref()),
+            Item::Inl(Inline::Text(_, f) | Inline::Ruby { fmt: f, .. } | Inline::Field { fmt: f, .. }) => (f.ins.as_ref(), f.del.as_ref()),
             Item::Inl(_) => (None, None),
             Item::Mark(p) => (p.mark_ins.as_deref(), p.mark_del.as_deref()),
         }

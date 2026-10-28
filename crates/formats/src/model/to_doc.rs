@@ -239,6 +239,17 @@ impl<'a> Builder<'a> {
                         append(&mut out, "", &cp, Some(obj));
                     }
                 }
+                Inline::Field { instr, result, fmt } => {
+                    let (instr, result) = (clean_text(instr.trim()), clean_text(result));
+                    let cp = self.budget(char_props(fmt));
+                    // A field without a code is only its cached text.
+                    if instr.is_empty() {
+                        append(&mut out, &result, &cp, None);
+                    } else {
+                        let obj = InlineObject::Field { instr, result, locked: false, dirty: false, code: false, form: String::new() };
+                        append(&mut out, "", &cp, Some(obj));
+                    }
+                }
             }
         }
         out.mark.ins = p.mark_ins.as_deref().map(|m| self.revision(RevisionKind::Insert, m));

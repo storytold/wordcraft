@@ -106,7 +106,7 @@ pub fn inlines_html(inlines: &[Inline]) -> String {
     let mut o = String::new();
     for i in inlines.iter() {
         match i {
-            Inline::Text(t, f) => {
+            Inline::Text(t, f) | Inline::Field { result: t, fmt: f, .. } => {
                 let (open, close) = fmt_tags(f);
                 let at_start = o.is_empty();
                 o.push_str(&open);

@@ -104,7 +104,7 @@ fn inlines_md_impl(inlines: &[Inline], in_table: bool) -> String {
     let inlines = crate::model::ruby_as_text(&eq);
     for i in inlines.iter() {
         match i {
-            Inline::Text(t, f) => {
+            Inline::Text(t, f) | Inline::Field { result: t, fmt: f, .. } => {
                 let has_emph = f.bold || f.italic || f.strike;
                 if has_emph && !f.code {
                     let core = t.trim_matches([' ', '\t', '\n']);

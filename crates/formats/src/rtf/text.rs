@@ -167,6 +167,16 @@ impl Reader {
                 if self.st.hidden {
                     return;
                 }
+                if let Some(field) = &mut self.page_field {
+                    if !field.from_result {
+                        field.fmt = self.st.fmt.clone();
+                        field.from_result = true;
+                    }
+                    if field.result.len() < 4096 {
+                        field.result.push_str(s);
+                    }
+                    return;
+                }
                 let mut f = self.st.fmt.clone();
                 let r = self.st.rev;
                 if r.ins {
