@@ -33,6 +33,7 @@ pub use host::show;
 pub(crate) use host::{dock_command, overlay_open};
 pub(crate) use inspector::describe_props;
 use inspector::inspector;
+pub(crate) use nav::HeadingCache;
 use nav::nav;
 #[cfg(test)]
 use nav::{nav_heading, nav_headings, visible_headings};

@@ -1,5 +1,12 @@
 use super::{Counters, Document, LevelSuffix, NumFormat, Path, Pos, StoryRef, Stroke, Tokens, Ui, WordApp, json, regular, semibold, vec2};
 
+type HeadingList = std::sync::Arc<Vec<(Path, u8, String)>>;
+#[derive(Default)]
+pub(crate) struct HeadingCache {
+    stamp: Option<(u64, u64)>,
+    items: HeadingList,
+}
+
 /// Draws the Navigation pane: search box and tabs, page list, find results and heading outline.
 pub(super) fn nav(app: &mut WordApp, ui: &mut Ui) {
     let qid = app.window_id("nav_query");
@@ -73,7 +80,7 @@ pub(super) fn nav(app: &mut WordApp, ui: &mut Ui) {
         }
         _ => {
             let caret = app.session.sel.focus.clone();
-            let items = nav_headings(&app.session.doc);
+            let items = cached_headings(app);
             let current = items.iter().rposition(|(path, ..)| *path <= caret.path);
             if items.is_empty() {
                 ui.label(egui::RichText::new(tl!("Create an interactive outline of your document.\n\nIt's a great way to keep track of where you are or quickly move your content around.\n\nTo get started, go to the Home tab and apply Heading styles to the headings in your document.")).weak());
@@ -83,18 +90,18 @@ pub(super) fn nav(app: &mut WordApp, ui: &mut Ui) {
             let collapsed_flags: Vec<bool> = items.iter().enumerate().map(|(i, (p, _, _))| has_children[i] && app.ui.nav_collapsed.contains(p)).collect();
             let levels: Vec<u8> = items.iter().map(|(_, lv, _)| *lv).collect();
             let visible = visible_headings(&levels, &collapsed_flags);
-            for (i, (path, lv, txt)) in items.into_iter().enumerate() {
+            for (i, (path, lv, txt)) in items.iter().enumerate() {
                 if !visible[i] {
                     continue;
                 }
                 let collapsed = collapsed_flags[i];
-                let (toggle, r) = nav_heading(ui, lv, &txt, current == Some(i), has_children[i].then_some(collapsed));
+                let (toggle, r) = nav_heading(ui, *lv, txt, current == Some(i), has_children[i].then_some(collapsed));
                 if toggle {
-                    if !app.ui.nav_collapsed.remove(&path) {
-                        app.ui.nav_collapsed.insert(path);
+                    if !app.ui.nav_collapsed.remove(path) {
+                        app.ui.nav_collapsed.insert(path.clone());
                     }
                 } else if r.clicked() {
-                    let _ = app.run("caret.set", json!({"pos": Pos { story: StoryRef::Body, path, off: 0 }}));
+                    let _ = app.run("caret.set", json!({"pos": Pos { story: StoryRef::Body, path: path.clone(), off: 0 }}));
                     // Align the chosen heading's page immediately against this pane, rather
                     // than the indeterminate minimum movement from scroll_to_rect.
                     app.canvas.nav_to_caret = true;
@@ -123,9 +130,23 @@ pub(super) fn visible_headings(levels: &[u8], collapsed: &[bool]) -> Vec<bool> {
         .collect()
 }
 
+/// The window owns one heading list, so other viewports cannot evict it and closing the
+/// window drops it. Document identity/revision changes replace its contents.
+fn cached_headings(app: &mut WordApp) -> HeadingList {
+    let stamp = (app.session.document_id(), app.session.rev());
+    let cache = &mut app.heading_cache;
+    if cache.stamp != Some(stamp) {
+        cache.items = std::sync::Arc::new(nav_headings(&app.session.doc));
+        cache.stamp = Some(stamp);
+    }
+    cache.items.clone()
+}
+
 /// The body's headings (paragraphs with an outline level) in document order, as (path, level,
 /// text). A numbered heading starts with the number it shows (`2.1 Method`), as in Word.
 pub(super) fn nav_headings(doc: &Document) -> Vec<(Path, u8, String)> {
+    #[cfg(test)]
+    HEADING_BUILDS.with(|n| n.set(n.get() + 1));
     // Every numbered paragraph advances the list counters, headings or not.
     let mut counters = Counters::default();
     let mut items = Vec::new();
@@ -187,4 +208,168 @@ pub(super) fn nav_heading(ui: &mut Ui, level: u8, text: &str, selected: bool, co
         (toggled, r)
     })
     .inner
+}
+
+#[cfg(test)]
+thread_local! {
+    static HEADING_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+    use wordcraft_doc::{CharProps, Paragraph, para_block};
+    use wordcraft_engine::Session;
+
+    fn app() -> WordApp {
+        let mut doc = Document::new();
+        doc.body = vec![para_block(Paragraph::with_text("First heading", CharProps::default()).styled("Heading1"))];
+        WordApp::new(Session::new(doc), crate::Services::default())
+    }
+
+    fn paint(ctx: &egui::Context, app: &mut WordApp) -> Vec<String> {
+        paint_viewport(ctx, app, egui::ViewportId::ROOT)
+    }
+
+    fn paint_viewport(ctx: &egui::Context, app: &mut WordApp, viewport_id: egui::ViewportId) -> Vec<String> {
+        let mut input =
+            egui::RawInput { viewport_id, screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(400.0, 600.0))), ..Default::default() };
+        input.viewports.entry(viewport_id).or_default();
+        let out = ctx.run_ui(input, |ui| nav(app, ui));
+        let text = out
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::Shape::Text(t) => Some(t.galley.job.text.clone()),
+                _ => None,
+            })
+            .collect();
+        out.drop_without_applying_deltas();
+        text
+    }
+
+    #[test]
+    fn navigation_repaints_do_not_rebuild_headings() {
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
+        let mut app = app();
+        HEADING_BUILDS.with(|n| n.set(0));
+        for _ in 0..4 {
+            assert!(paint(&ctx, &mut app).iter().any(|t| t == "First heading"));
+        }
+        assert_eq!(HEADING_BUILDS.with(|n| n.get()), 1, "unchanged repaints reuse the heading list");
+        app.session.run("caret.docEnd", &json!({})).unwrap();
+        paint(&ctx, &mut app);
+        assert_eq!(HEADING_BUILDS.with(|n| n.get()), 1, "moving the caret does not rebuild document headings");
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn navigation_alternating_windows_reuse_their_own_heading_lists() {
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
+        let mut app = app();
+        let first = app.windows.shown();
+        app.new_window();
+        let second = app.windows.shown();
+        assert_ne!(first, second);
+        HEADING_BUILDS.with(|n| n.set(0));
+        for _ in 0..4 {
+            for key in [first, second] {
+                assert!(app.enter_window(key));
+                assert!(paint_viewport(&ctx, &mut app, egui::ViewportId::from_hash_of(key)).iter().any(|t| t == "First heading"));
+            }
+        }
+        assert_eq!(HEADING_BUILDS.with(|n| n.get()), 2, "each window builds once across alternating viewport passes");
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn navigation_heading_cache_is_dropped_with_its_window() {
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
+        let mut app = app();
+        paint(&ctx, &mut app);
+        let first = app.windows.shown();
+        let weak = std::sync::Arc::downgrade(&app.heading_cache.items);
+        app.new_window();
+        assert_eq!(app.window_count(), 2);
+        assert!(weak.upgrade().is_some(), "the parked window owns its list");
+        app.close_window(first);
+        assert_eq!(app.window_count(), 1);
+        assert!(weak.upgrade().is_none(), "the closed window releases its list while egui stays alive");
+        assert!(paint(&ctx, &mut app).iter().any(|t| t == "First heading"));
+    }
+
+    #[test]
+    fn navigation_headings_refresh_after_edits_styles_numbering_and_history() {
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
+        let mut app = app();
+        paint(&ctx, &mut app);
+        app.session.run("caret.docEnd", &json!({})).unwrap();
+        app.session.run("text.insert", &json!({"text": " edited", "raw": true})).unwrap();
+        assert!(paint(&ctx, &mut app).iter().any(|t| t == "First heading edited"));
+        app.session.run("edit.undo", &json!({})).unwrap();
+        assert!(paint(&ctx, &mut app).iter().any(|t| t == "First heading"));
+        app.session.run("edit.redo", &json!({})).unwrap();
+        assert!(paint(&ctx, &mut app).iter().any(|t| t == "First heading edited"));
+        app.session.run("para.numbering", &json!({"value": true})).unwrap();
+        assert!(paint(&ctx, &mut app).iter().any(|t| t == "1. First heading edited"));
+        app.session.run("edit.undo", &json!({})).unwrap();
+        assert!(paint(&ctx, &mut app).iter().any(|t| t == "First heading edited"));
+        app.session.run("styles.modify", &json!({"style": "Heading1", "para": {"outlineLevel": 9}})).unwrap();
+        assert!(!paint(&ctx, &mut app).iter().any(|t| t == "First heading edited"), "a style edit can remove a heading");
+        app.session.run("edit.undo", &json!({})).unwrap();
+        assert!(paint(&ctx, &mut app).iter().any(|t| t == "First heading edited"));
+    }
+
+    #[test]
+    fn navigation_headings_follow_document_replacement_and_switches() {
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
+        let mut app = app();
+        let first = app.session.document_id();
+        assert!(paint(&ctx, &mut app).iter().any(|t| t == "First heading"));
+        let mut second = Document::new();
+        second.body = vec![para_block(Paragraph::with_text("Other heading", CharProps::default()).styled("Heading1"))];
+        let other = app.session.add_document(second.clone());
+        assert!(paint(&ctx, &mut app).iter().any(|t| t == "Other heading"));
+        app.session.switch_document(first).unwrap();
+        assert!(paint(&ctx, &mut app).iter().any(|t| t == "First heading"));
+        app.session.switch_document(other).unwrap();
+        assert!(paint(&ctx, &mut app).iter().any(|t| t == "Other heading"));
+        app.session.set_document(Document::new());
+        assert!(!paint(&ctx, &mut app).iter().any(|t| t == "Other heading"));
+        app.session.set_document(second);
+        assert!(paint(&ctx, &mut app).iter().any(|t| t == "Other heading"));
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn navigation_cached_headings_keep_collapse_and_click_targets_live() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = app();
+        app.session.doc.body.push(para_block(Paragraph::with_text("Child heading", CharProps::default()).styled("Heading2")));
+        app.session.doc.body.push(para_block(Paragraph::with_text("Last heading", CharProps::default()).styled("Heading1")));
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(vec2(400.0, 600.0))
+            .with_context_setup(crate::theme::install_fonts)
+            .build_ui_state(|ui, app: &mut WordApp| nav(app, ui), app);
+        h.run_steps(4);
+        h.get_by_label("Child heading").click();
+        h.run_steps(2);
+        assert_eq!(h.state().session.sel.focus.path, Path(vec![1]));
+        h.state_mut().ui.nav_collapsed.insert(Path(vec![0]));
+        h.run_steps(2);
+        assert!(h.query_by_label("Child heading").is_none());
+        h.get_by_label("Last heading").click();
+        h.run_steps(2);
+        assert_eq!(h.state().session.sel.focus.path, Path(vec![2]));
+        h.state_mut().ui.nav_collapsed.clear();
+        h.run_steps(2);
+        h.get_by_label("Child heading").click();
+        h.run_steps(2);
+        assert_eq!(h.state().session.sel.focus.path, Path(vec![1]));
+    }
 }
