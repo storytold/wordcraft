@@ -107,39 +107,19 @@ pub fn evaluate_field_with(
 
 /// The text of a formula result under the field's `\*` switches, where `text` is `value` formatted
 /// with the `\#` picture, or in the cell's language when there is no picture. A number format such
-/// as `\* CardText`, `\* OrdText` or `\* roman` writes a whole number the format covers (up to
-/// 999,999 for CardText and OrdText, 1 to 50,000 for roman, 1 to 780 for alphabetic), in lowercase
-/// for CardText and OrdText. `\* Hex` writes a whole number from 0 to 4,294,967,295 in uppercase
-/// hexadecimal digits. `\* DollarText` writes a result from 0 to 999,999.99 in lowercase cardinal
-/// text with its first two decimals (rounded) over 100 (see
-/// [`wordcraft_layout::fields::dollar_text`]). Any other result keeps its digits. The capitalization
-/// switches (`\* Upper`, `\* Lower`, `\* Caps`, `\* FirstCap`) then apply to the text in order. Other
-/// `\*` switches leave the text as it is. Quoted text, such as a `\#` picture, is not a switch.
+/// as `\* CardText`, `\* OrdText`, `\* roman` or `\* Hex` writes the rounded result as Word does (see
+/// [`wordcraft_layout::fields::field_value`]), and shows Word's "Error! Number cannot be
+/// represented in specified format." for one it can't write. `\* Arabic` writes the rounded result
+/// only without a picture, which then writes the text. The capitalization switches (`\* Upper`,
+/// `\* Lower`, `\* Caps`, `\* FirstCap`) then apply to the text in order. Other `\*` switches leave the
+/// text as it is. Quoted text, such as a `\#` picture, is not a switch.
 fn format_switches(switches: &str, value: f64, text: String) -> String {
     use wordcraft_doc::section::NumFormat;
-    let unquoted = switches.split('"').step_by(2).collect::<Vec<_>>().join(" ");
-    let fmt = wordcraft_layout::fields::format_switch(&unquoted).filter(|f| *f != NumFormat::Decimal);
-    match fmt {
-        Some(NumFormat::DollarText) => {
-            let text = wordcraft_layout::fields::dollar_text(value).unwrap_or(text);
-            wordcraft_layout::fields::apply_case_switch(switches, text)
-        }
-        Some(fmt) if number_format_covers(fmt, value) => wordcraft_layout::fields::field_number(switches, fmt, value as u32),
-        _ => wordcraft_layout::fields::apply_case_switch(switches, text),
+    match wordcraft_layout::fields::format_switch(switches) {
+        Some(NumFormat::Decimal) if picture_of(switches).is_some() => wordcraft_layout::fields::apply_case_switch(switches, text),
+        Some(fmt) => wordcraft_layout::fields::field_value(switches, fmt, value),
+        None => wordcraft_layout::fields::apply_case_switch(switches, text),
     }
-}
-
-/// Whether the `\*` number format `fmt` writes `value`: a whole number up to 999,999 for CardText
-/// and OrdText, 1 to 50,000 for roman, 1 to 780 for alphabetic, and 0 to `u32::MAX` otherwise.
-pub(crate) fn number_format_covers(fmt: wordcraft_doc::section::NumFormat, value: f64) -> bool {
-    use wordcraft_doc::section::NumFormat;
-    let range = match fmt {
-        NumFormat::CardinalText | NumFormat::OrdinalText => 0.0..=999_999.0,
-        NumFormat::LowerRoman | NumFormat::UpperRoman => 1.0..=50_000.0,
-        NumFormat::LowerLetter | NumFormat::UpperLetter => 1.0..=780.0,
-        _ => 0.0..=f64::from(u32::MAX),
-    };
-    value.fract() == 0.0 && range.contains(&value)
 }
 
 /// Splits a field's switches (`\#` and `\*`) off its formula: `=SUM(ABOVE) \# "0.00"` gives the
@@ -1010,13 +990,18 @@ mod tests {
         assert_eq!(shown("=A1 \\# \"#,##0.00\" \\* MERGEFORMAT"), "790.00");
         assert_eq!(shown("=A1 \\* MERGEFORMAT \\# 0.0"), "790.0", "a picture after a format switch");
         assert_eq!(shown("=A1 \\# \"0 \\* CardText items\""), "790 \\* CardText items", "a switch inside the picture is text");
-        assert_eq!(shown("=A2 \\* CardText"), "1.50", "a fraction keeps its digits");
-        assert_eq!(shown("=A1-800 \\* CardText"), "-10", "a negative number keeps its digits");
-        assert_eq!(shown("=A1*1266 \\* CardText"), "1000140", "a number past CardText keeps its digits");
-        assert_eq!(shown("=A1*1266 \\* OrdText \\* Upper"), "1000140");
-        assert_eq!(shown("=A1*64 \\* roman"), "50560", "a number past roman keeps its digits");
-        assert_eq!(shown("=A1-790 \\* roman"), "0", "roman has no zero");
-        assert_eq!(shown("=A1 \\* alphabetic"), "790", "a number past alphabetic keeps its digits");
+        // Word 16.0 (build 16.0.20527), 2026-10-26: the result is rounded, and one the format
+        // cannot write shows an error.
+        let error = "Error! Number cannot be represented in specified format.";
+        assert_eq!(shown("=A2 \\* CardText"), "two", "a fraction is rounded");
+        assert_eq!(shown("=A1-800 \\* CardText"), error, "a negative number");
+        assert_eq!(shown("=A1*1266 \\* CardText"), error, "a number past CardText");
+        assert_eq!(shown("=A1*1266 \\* OrdText \\* Upper"), error.to_uppercase());
+        assert_eq!(shown("=A1*64 \\* roman"), error, "a number past roman");
+        assert_eq!(shown("=A1-790 \\* roman"), " ", "roman shows a space for 0");
+        assert_eq!(shown("=A1 \\* alphabetic"), error, "a number past alphabetic");
+        assert_eq!(shown("=A2 \\* Arabic"), "2", "Arabic rounds too");
+        assert_eq!(shown("=A2/3 \\* CardText"), error, "from a half up to one is an error");
     }
 
     #[test]
@@ -1026,14 +1011,18 @@ mod tests {
         assert_eq!(shown("= 9.20 + 5.35 \\* DollarText \\* Upper"), "FOURTEEN AND 55/100");
         assert_eq!(shown("=A1+B1 \\* DollarText"), "fourteen and 55/100");
         assert_eq!(shown("=A2 \\* DollarText \\* FirstCap"), "Four hundred fifty-eight and 00/100");
-        assert_eq!(shown("=0.999 \\* DollarText"), "one and 00/100");
+        assert_eq!(shown("=0.999 \\* DollarText"), "zero and 00/100");
+        assert_eq!(shown("=1.995 \\* DollarText"), "one and 00/100");
+        assert_eq!(shown("=12.345 \\* DollarText"), "twelve and 35/100");
         assert_eq!(shown("=A2 \\* Hex"), "1CA");
         assert_eq!(shown("=A2 \\* Hex \\* Lower"), "1ca");
         assert_eq!(shown("=A2*0 \\* Hex"), "0");
-        assert_eq!(shown("=B2 \\* DollarText"), shown("=B2"), "a negative number keeps its digits");
-        assert_eq!(shown("=B2 \\* Hex"), shown("=B2"));
-        assert_eq!(shown("=A2/4 \\* Hex"), shown("=A2/4"), "a fraction keeps its digits");
-        assert_eq!(shown("=A2*2200 \\* DollarText"), shown("=A2*2200"), "a number past DollarText keeps its digits");
+        let error = "Error! Number cannot be represented in specified format.";
+        assert_eq!(shown("=B2 \\* DollarText"), error, "a negative number");
+        assert_eq!(shown("=B2 \\* Hex"), error);
+        assert_eq!(shown("=A2/4 \\* Hex"), "73", "a fraction is rounded");
+        assert_eq!(shown("=A2*2200 \\* DollarText"), error, "a number past DollarText");
+        assert_eq!(shown("=A2*200 \\* Hex"), error, "a number past 65,535");
         assert_eq!(shown("=A2 \\* ArabicDash"), "- 458 -");
     }
 

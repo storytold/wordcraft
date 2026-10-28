@@ -410,7 +410,7 @@ fn update_fields_apply_the_capitalization_switches() {
             "seventh",
             "Seventh",
             "BUDGET",
-            "new \\* Upper"
+            "new * Upper"
         ]
     );
 }
@@ -431,16 +431,17 @@ fn body_fields_apply_the_capitalization_switches() {
     assert_eq!(got, ["BOOKMARK TARGET TEXT".to_string(), "one".into(), "First".into(), name]);
 }
 
-/// A count the field's number format does not cover keeps its digits.
+/// A count the field's number format cannot write shows Word's error text.
 #[test]
-fn counts_past_the_number_format_keep_their_digits() {
+fn counts_past_the_number_format_show_the_error() {
     let mut doc = wordcraft_doc::Document::from_text("one two three");
     doc.core.revision = 1_000_000;
     let codes = [r"REVNUM \* ROMAN", r"REVNUM \* CardText", r"REVNUM \* alphabetic", r"NUMWORDS \* ROMAN"];
     let (mut s, hdr) = header_fields_session(doc, &codes);
     s.run("references.updateFields", &json!({})).unwrap();
     let got: Vec<String> = story_fields(&s, StoryRef::Part(hdr)).into_iter().map(|(_, r)| r).collect();
-    assert_eq!(got, ["1000000", "1000000", "1000000", "III"]);
+    let error = wordcraft_layout::fields::NUMBER_FORMAT_ERROR;
+    assert_eq!(got, [error, error, error, "III"]);
 }
 
 /// #1706: `all: true` (printing) updates the whole document even with the caret in a header.
