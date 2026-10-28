@@ -9,7 +9,9 @@
 //! an operator or space; a parenthesised operand loses its parentheses). `^`/`_` with nothing
 //! before them are pre-scripts. A top-level `#` numbers the equation (`E=mc^2#(1)`).
 
-use crate::math::{Arg, FracKind, MAX_DEPTH, MClass, MNode, MRun, ScriptKind, any_too_deep, is_nary_char, math_class, merge_runs, too_deep};
+use crate::math::{
+    Arg, FracKind, MAX_DEPTH, MAX_PARSE_CHARS, MClass, MNode, MRun, ScriptKind, any_too_deep, is_nary_char, math_class, merge_runs, too_deep,
+};
 
 /// Function names set upright and applied to the following operand.
 pub const FUNCTION_NAMES: &[&str] = &[
@@ -38,7 +40,7 @@ pub const PLACEHOLDER: char = '⬚';
 
 /// Parse linear-format text. Never fails: what isn't understood stays as text.
 pub fn parse(s: &str) -> Arg {
-    let mut p = P { c: s.chars().take(20_000).collect(), i: 0, depth: 0, no_limits: 0, steps: 0 };
+    let mut p = P { c: s.chars().take(MAX_PARSE_CHARS).collect(), i: 0, depth: 0, no_limits: 0, steps: 0 };
     let mut out = Vec::new();
     // Stray closers at the top level are text.
     while p.i < p.c.len() {
@@ -469,7 +471,8 @@ impl P {
         if !applies {
             return name;
         }
-        let e = self.operand(stops);
+        // Unlike fraction/radical grouping, a function's parentheses remain visible (UTN 28 §3.5).
+        let e = self.operand_with_parens(stops, true);
         if e.is_empty() {
             return name;
         }
@@ -498,6 +501,10 @@ impl P {
     /// An operand: a parenthesised group (parentheses dropped) or a run of atoms with their
     /// postfix scripts, accents and limits, up to an operator or space.
     fn operand(&mut self, stops: &[char]) -> Arg {
+        self.operand_with_parens(stops, false)
+    }
+
+    fn operand_with_parens(&mut self, stops: &[char], keep_parens: bool) -> Arg {
         if self.tired() {
             return self.rest();
         }
@@ -507,7 +514,7 @@ impl P {
             self.i += 1;
             let g = self.group(Some('('), &[')']);
             let inner = match g {
-                MNode::Delim { elems, end: Some(')'), .. } if elems.len() == 1 => elems.into_iter().next().unwrap_or_default(),
+                MNode::Delim { elems, end: Some(')'), .. } if !keep_parens && elems.len() == 1 => elems.into_iter().next().unwrap_or_default(),
                 other => vec![other],
             };
             out = inner;

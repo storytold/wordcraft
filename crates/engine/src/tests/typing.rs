@@ -18,6 +18,35 @@ fn run(s: &mut Session, id: &str, v: serde_json::Value) {
     s.run(id, &v).unwrap_or_else(|e| panic!("{id}: {e}"));
 }
 
+/// #4667: Space builds a function without erasing its visible argument parentheses.
+#[test]
+fn equation_build_up_preserves_function_parentheses() {
+    for keys in ["f(x)=3 ln(3x-2)+1 ", "sin(x+1) ", "cos(x) ", "log_2(x+1) "] {
+        let mut s = s();
+        run(&mut s, "insert.equation", json!({}));
+        for c in keys.chars() {
+            run(&mut s, "equation.type", json!({"text": c.to_string()}));
+        }
+        let before = s.run("equation.get", &json!({})).unwrap();
+        let parentheses = keys.matches('(').count();
+        assert_eq!(before["latex"].as_str().unwrap().matches("\\left(").count(), parentheses, "{keys}: {before}");
+        for (id, params) in [
+            ("equation.type", json!({"text": "+2 "})),
+            ("equation.convert", json!({"to": "linear"})),
+            ("equation.convert", json!({"to": "professional"})),
+        ] {
+            run(&mut s, id, params);
+        }
+        let after = s.run("equation.get", &json!({})).unwrap();
+        assert_eq!(after["latex"].as_str().unwrap().matches("\\left(").count(), parentheses, "{keys}: {after}");
+        let doc = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap();
+        let mut reopened = Session::new(doc);
+        run(&mut reopened, "equation.edit", json!({}));
+        let saved = reopened.run("equation.get", &json!({})).unwrap();
+        assert_eq!(saved["latex"], after["latex"], "{keys} after save/reopen");
+    }
+}
+
 /// Type like a person: `\n` is Enter, `\t` is Tab, `\u{8}` is Backspace, everything else one
 /// character at a time.
 fn typ(s: &mut Session, keys: &str) {

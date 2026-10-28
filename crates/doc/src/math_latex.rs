@@ -6,7 +6,8 @@
 //! spacing and every named symbol in [`crate::math_symbols`]. Unknown commands stay as text.
 
 use crate::math::{
-    Arg, ColJc, FracKind, MAX_DEPTH, MNode, MRun, MScr, MSty, ScriptKind, WRAP_DEPTH, any_too_deep, is_nary_char, math_class, merge_runs, too_deep,
+    Arg, ColJc, FracKind, MAX_DEPTH, MAX_PARSE_CHARS, MNode, MRun, MScr, MSty, ScriptKind, WRAP_DEPTH, any_too_deep, is_nary_char, math_class,
+    merge_runs, too_deep,
 };
 use crate::math_linear::{FUNCTION_NAMES, map_args};
 use crate::math_symbols::{name_of, symbol};
@@ -27,7 +28,7 @@ enum Tok {
 const TEXT_COMMANDS: &[&str] = &["text", "textrm", "mbox", "textnormal", "textbf", "textit"];
 
 fn tokenize(s: &str) -> Vec<Tok> {
-    let cs: Vec<char> = s.chars().take(20_000).collect();
+    let cs: Vec<char> = s.chars().take(MAX_PARSE_CHARS).collect();
     let mut out = Vec::new();
     let mut i = 0;
     // A text command was just read: its `{` starts text, where spaces count (#448).

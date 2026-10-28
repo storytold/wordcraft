@@ -3,7 +3,7 @@
 //! form, inline/display, justification and equation numbers.
 
 use serde_json::{Value, json};
-use wordcraft_doc::math::{Arg, MNode, Math, MathJc, parse_linear, to_linear};
+use wordcraft_doc::math::{Arg, MAX_PARSE_CHARS, MNode, Math, MathJc, parse_linear, to_linear};
 use wordcraft_doc::math_edit::{self as me, MathPos, TypeStyle};
 use wordcraft_doc::math_latex::{parse_latex, to_latex};
 use wordcraft_doc::para::OBJ;
@@ -607,10 +607,15 @@ fn enter(s: &mut Session, _: &Value) -> CmdResult {
 }
 
 /// Built-up ↔ linear form for one equation's nodes.
-fn convert_math(math: &mut Math, professional: bool, latex: bool) {
+fn convert_math(math: &mut Math, professional: bool, latex: bool) -> Result<(), CmdError> {
     if professional {
         if math.linear {
             let text = plain(&math.nodes);
+            // Serialization can exceed the parser's cap even when the original input fit.
+            // Refuse before replacing the nodes, rather than discarding the suffix.
+            if text.chars().nth(MAX_PARSE_CHARS).is_some() {
+                return Err(CmdError::Failed(format!("equation exceeds the {MAX_PARSE_CHARS}-character conversion limit")));
+            }
             math.nodes = if latex { parse_latex(&text) } else { parse_linear(&text) };
             math.linear = false;
         }
@@ -619,6 +624,7 @@ fn convert_math(math: &mut Math, professional: bool, latex: bool) {
         math.nodes = vec![MNode::Run(wordcraft_doc::math::MRun { text, lit: true, ..Default::default() })];
         math.linear = true;
     }
+    Ok(())
 }
 
 /// Converts one equation or all equations between built-up and linear form, honoring LaTeX mode,
@@ -640,7 +646,9 @@ fn convert(s: &mut Session, v: &Value) -> CmdResult {
                     .unwrap_or_default();
                 for off in offs {
                     let at = Pos { story, path: path.clone(), off };
-                    let (_, one) = with_eq(s, &at, |math, _| convert_math(math, professional, latex))?;
+                    let (converted, one) = with_eq(s, &at, |math, _| convert_math(math, professional, latex))?;
+                    // Session::run rolls back earlier equations too if a later one refuses.
+                    converted?;
                     effect.merge(one);
                     n += 1;
                 }
@@ -654,11 +662,8 @@ fn convert(s: &mut Session, v: &Value) -> CmdResult {
         return Ok(json!({"converted": n}));
     }
     let at = equation_at_caret(s).ok_or_else(|| CmdError::Disabled("no equation at the caret".into()))?;
-    let mut end = 0;
-    let (_, effect) = with_eq(s, &at, |math, _| {
-        convert_math(math, professional, latex);
-        end = me::units(&math.nodes);
-    })?;
+    let (end, effect) = with_eq(s, &at, |math, _| convert_math(math, professional, latex).map(|()| me::units(&math.nodes)))?;
+    let end = end?;
     if let Some(m) = s.math.as_mut() {
         m.pos = MathPos::new(Vec::new(), end);
     }

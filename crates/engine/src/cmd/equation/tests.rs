@@ -413,6 +413,87 @@ fn convert_all_merges_every_equations_effect() {
     assert!(outcome.classified && outcome.content_changed && outcome.state_changed, "{outcome:?}");
 }
 
+/// Function delimiters can expand a valid input past the parser's character cap. Refusing
+/// conversion must keep the whole equation, the editing caret and both history stacks.
+#[test]
+fn conversion_refuses_overlong_linear_without_losing_content() {
+    for latex in [false, true] {
+        let mut s = session();
+        let text = vec!["sin(x)"; 2501].join("+");
+        s.run("insert.equation", &json!({"linear": text})).unwrap();
+        s.run("equation.inputFormat", &json!({"format": if latex { "latex" } else { "unicode" }})).unwrap();
+        s.run("equation.convert", &json!({"to": "linear"})).unwrap();
+        assert!(linear(&s).chars().count() > 20_000);
+        s.run("equation.justify", &json!({"jc": "left"})).unwrap();
+        s.run("edit.undo", &json!({})).unwrap();
+        let doc = serde_json::to_value(&s.doc).unwrap();
+        let math = s.math.clone().unwrap();
+        let depth = s.undo_depth();
+        let redo = s.redo_label().unwrap().to_string();
+        let dirty = s.dirty;
+        let rev = revision(&mut s);
+        let err = s.run("equation.convert", &json!({"to": "professional"})).unwrap_err();
+        assert!(err.to_string().contains("20000"), "{err}");
+        assert_eq!(serde_json::to_value(&s.doc).unwrap(), doc);
+        assert_eq!(s.math.as_ref().unwrap().at, math.at);
+        assert_eq!(s.math.as_ref().unwrap().pos, math.pos);
+        assert_eq!(s.undo_depth(), depth);
+        assert_eq!(s.redo_label(), Some(redo.as_str()));
+        assert_eq!(s.dirty, dirty);
+        assert_eq!(revision(&mut s), rev);
+        s.run("edit.redo", &json!({})).unwrap();
+        assert!(s.doc.para_at(&math.at).unwrap().object_at(math.at.off).is_some());
+    }
+}
+
+/// A later overlong equation must roll back conversions that already succeeded in the same
+/// Convert All command, rather than leaving a partially converted document.
+#[test]
+fn conversion_refuses_overlong_all_atomically() {
+    for latex in [false, true] {
+        let mut s = session();
+        s.run("document.setText", &json!({"text": "\r"})).unwrap();
+        s.run("insert.equation", &json!({"linear": "a/b"})).unwrap();
+        s.run("equation.exit", &json!({})).unwrap();
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("insert.equation", &json!({"linear": vec!["sin(x)"; 2501].join("+")})).unwrap();
+        s.run("equation.inputFormat", &json!({"format": if latex { "latex" } else { "unicode" }})).unwrap();
+        s.run("equation.convert", &json!({"to": "linear", "all": true})).unwrap();
+        let doc = serde_json::to_value(&s.doc).unwrap();
+        let depth = s.undo_depth();
+        let pos = s.math.as_ref().unwrap().pos.clone();
+        let rev = revision(&mut s);
+        assert!(s.run("equation.convert", &json!({"to": "professional", "all": true})).is_err());
+        assert_eq!(serde_json::to_value(&s.doc).unwrap(), doc, "latex={latex}");
+        assert_eq!(s.undo_depth(), depth);
+        assert_eq!(s.math.as_ref().unwrap().pos, pos);
+        assert_eq!(revision(&mut s), rev);
+    }
+}
+
+/// The cap counts Unicode characters, not UTF-8 bytes, and the last permitted character
+/// still converts. One more character is refused whole in either input format.
+#[test]
+fn conversion_accepts_the_character_limit() {
+    for latex in [false, true] {
+        let mut s = session();
+        let text = "π".repeat(20_000);
+        s.run("insert.equation", &json!({"linear": text})).unwrap();
+        s.run("equation.convert", &json!({"to": "linear"})).unwrap();
+        s.run("equation.inputFormat", &json!({"format": if latex { "latex" } else { "unicode" }})).unwrap();
+        s.run("equation.convert", &json!({"to": "professional"})).unwrap();
+        assert_eq!(plain(&nodes_of(&s, &s.math.as_ref().unwrap().at).unwrap()), text);
+        // Return to Unicode input so the writer keeps literal π rather than spelling \pi.
+        s.run("equation.inputFormat", &json!({"format": "unicode"})).unwrap();
+        s.run("equation.convert", &json!({"to": "linear"})).unwrap();
+        s.run("equation.type", &json!({"text": "π"})).unwrap();
+        s.run("equation.inputFormat", &json!({"format": if latex { "latex" } else { "unicode" }})).unwrap();
+        let doc = serde_json::to_value(&s.doc).unwrap();
+        assert!(s.run("equation.convert", &json!({"to": "professional"})).is_err());
+        assert_eq!(serde_json::to_value(&s.doc).unwrap(), doc);
+    }
+}
+
 /// A bounded deletion around the caret removes the requested units in one undo step and reports
 /// a content change.
 #[test]
