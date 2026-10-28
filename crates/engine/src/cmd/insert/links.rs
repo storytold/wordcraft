@@ -1,4 +1,8 @@
 use super::{CharProps, CmdError, CmdResult, InlineObject, Pos, Selection, Session, StoryRef, Value, json, p, sel_result};
+use std::collections::HashSet;
+
+#[cfg(test)]
+mod tests;
 
 /// What a link can point to inside the document (Insert › Link › Place in This Document): the top
 /// of the document, its headings (body block, level, text) and its bookmarks, without the hidden
@@ -8,12 +12,9 @@ pub(super) fn link_targets(s: &mut Session, _: &Value) -> CmdResult {
         .into_iter()
         .map(|(block, level, text, _)| json!({"block": block, "level": level, "text": text}))
         .collect();
-    let mut bookmarks: Vec<String> = Vec::new();
-    for (name, _) in s.doc.bookmarks() {
-        if !name.starts_with('_') && !bookmarks.contains(&name) {
-            bookmarks.push(name);
-        }
-    }
+    let starts = s.doc.bookmarks();
+    let mut seen = HashSet::new();
+    let bookmarks: Vec<&str> = starts.iter().map(|(name, _)| name.as_str()).filter(|name| !name.starts_with('_') && seen.insert(*name)).collect();
     Ok(json!({"top": true, "headings": headings, "bookmarks": bookmarks}))
 }
 
@@ -92,8 +93,8 @@ pub fn bookmark_span(doc: &wordcraft_doc::Document, name: &str, start: &Pos) -> 
     let from = Pos { off: start.off.saturating_add(wordcraft_doc::para::OBJ.len_utf8()), ..start.clone() };
     let end = doc.para_paths(start.story).into_iter().skip_while(|p| *p != start.path).find_map(|path| {
         let para = doc.para(start.story, &path)?;
-        let off = para.object_offsets().into_iter().find(|o| {
-            (path != start.path || *o > start.off) && matches!(para.object_at(*o), Some(InlineObject::BookmarkEnd { name: n }) if n == name)
+        let off = para.objects_with_offsets().find_map(|(off, object)| {
+            ((path != start.path || off > start.off) && matches!(object, InlineObject::BookmarkEnd { name: n } if n == name)).then_some(off)
         })?;
         Some(Pos { story: start.story, path, off })
     });
@@ -111,13 +112,13 @@ fn remove_bookmark(s: &mut Session, name: &str) -> Result<bool, CmdError> {
         for path in s.doc.para_paths(story) {
             let Some(p) = s.doc.para(story, &path) else { continue };
             let mut marks = Vec::new();
-            for off in p.object_offsets() {
-                match p.object_at(off) {
-                    Some(InlineObject::BookmarkStart { name: n }) if n == name => {
+            for (off, object) in p.objects_with_offsets() {
+                match object {
+                    InlineObject::BookmarkStart { name: n } if n == name => {
                         found = true;
                         marks.push(off);
                     }
-                    Some(InlineObject::BookmarkEnd { name: n }) if n == name => marks.push(off),
+                    InlineObject::BookmarkEnd { name: n } if n == name => marks.push(off),
                     _ => {}
                 }
             }
