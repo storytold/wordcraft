@@ -337,6 +337,9 @@ pub struct CharProps {
     /// Kept for round trip; layout doesn't apply it yet.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub east_asian_layout: Option<EastAsianLayout>,
+    /// Fit text to a run width (`w:fitText`). Kept for round trip; layout doesn't apply it yet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fit_text: Option<FitText>,
     /// Hyperlink target: a URL, or `#bookmark` for an internal link.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link: Option<String>,
@@ -374,6 +377,20 @@ pub struct EastAsianLayout {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vert_compress: Option<bool>,
 }
+
+/// Width and grouping id of a run's `w:fitText` property.
+#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct FitText {
+    /// Target width in twips, capped at 22 inches when reading or writing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    /// The id shared by runs in the same fit-text group.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<i32>,
+}
+
+pub const MAX_FIT_TEXT_WIDTH: u32 = 31_680;
 
 /// Brackets around two lines in one (`ST_CombineBrackets`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -459,7 +476,7 @@ impl CharProps {
     }
 
     fn minus_script_style(&mut self, base: &CharProps) {
-        drop_same_fields!(self, base; cs, font_cs, font_ea, size_cs, bold_cs, italic_cs, lang_bidi, lang_ea, east_asian_layout);
+        drop_same_fields!(self, base; cs, font_cs, font_ea, size_cs, bold_cs, italic_cs, lang_bidi, lang_ea, east_asian_layout, fit_text);
     }
 
     fn minus_document_marks(&mut self, base: &CharProps) {
@@ -485,7 +502,7 @@ impl CharProps {
     }
 
     fn overlay_script_style(&mut self, patch: &CharProps) {
-        overlay_fields!(self, patch; cs, font_cs, font_ea, size_cs, bold_cs, italic_cs, lang_bidi, lang_ea, east_asian_layout);
+        overlay_fields!(self, patch; cs, font_cs, font_ea, size_cs, bold_cs, italic_cs, lang_bidi, lang_ea, east_asian_layout, fit_text);
     }
 
     fn overlay_document_marks(&mut self, patch: &CharProps) {

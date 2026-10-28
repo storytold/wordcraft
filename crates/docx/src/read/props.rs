@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use wordcraft_doc::para::cap_alt;
 use wordcraft_doc::props::{
-    Align, Border, BorderStyle, Borders, CellProps, CharProps, CombineBrackets, EastAsianLayout, HeightRule, Highlight, LineSpacing, NumRef,
+    Align, Border, BorderStyle, Borders, CellProps, CharProps, CombineBrackets, EastAsianLayout, FitText, HeightRule, Highlight, LineSpacing, NumRef,
     ParaProps, Rgb, RowProps, TabAlign, TabLeader, TabStop, TableFloat, TableLook, TableProps, TextColor, TextDirection, Underline, VAlign, VMerge,
     VertAlign,
 };
@@ -292,6 +292,11 @@ impl PropCtx {
                 "w:eastAsianLayout" => {
                     let l = east_asian_layout(k);
                     c.east_asian_layout = (l != EastAsianLayout::default()).then_some(l);
+                }
+                "w:fitText" => {
+                    let width = k.attr("w:val").and_then(u32_of).map(|v| v.min(wordcraft_doc::props::MAX_FIT_TEXT_WIDTH));
+                    let id = k.attr("w:id").and_then(int).and_then(|v| i32::try_from(v).ok());
+                    c.fit_text = (width.is_some() || id.is_some()).then_some(FitText { width, id });
                 }
                 "w:lang" => {
                     c.lang = k.attr("w:val").map(str::trim).filter(|v| !v.is_empty() && v.len() < 64).map(str::to_string);

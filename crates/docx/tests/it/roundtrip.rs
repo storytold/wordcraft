@@ -137,6 +137,7 @@ fn every_char_prop_round_trips() {
             vert: Some(false),
             vert_compress: Some(true),
         }),
+        fit_text: Some(wordcraft_doc::props::FitText { width: Some(720), id: Some(1) }),
         link: None,
         ins: None,
         del: None,
