@@ -393,10 +393,10 @@ pub(super) fn insert_toc(s: &mut Session, v: &Value) -> CmdResult {
 /// A hidden `_Toc` bookmark around the heading at body block `i` (after its leading page breaks),
 /// reusing one already there; its name.
 pub(crate) fn toc_bookmark(s: &mut Session, i: usize, lead: usize) -> Result<String, CmdError> {
-    bookmark_heading(s, &Path::top(i), lead)
+    bookmark_heading(s, &Path::top(i), lead, &mut None)
 }
 
-fn bookmark_heading(s: &mut Session, path: &Path, lead: usize) -> Result<String, CmdError> {
+fn bookmark_heading(s: &mut Session, path: &Path, lead: usize, next_toc: &mut Option<u64>) -> Result<String, CmdError> {
     const MARK: usize = wordcraft_doc::para::OBJ.len_utf8();
     let para = s.doc.para(StoryRef::Body, path).ok_or_else(|| CmdError::Failed("heading is gone".into()))?;
     if let Some(InlineObject::BookmarkStart { name }) = para.object_at(lead)
@@ -404,8 +404,11 @@ fn bookmark_heading(s: &mut Session, path: &Path, lead: usize) -> Result<String,
     {
         return Ok(name.clone());
     }
-    let next =
-        s.doc.bookmarks().iter().filter_map(|(n, _)| n.strip_prefix("_Toc").and_then(|d| d.parse::<u64>().ok())).max().unwrap_or(0).saturating_add(1);
+    // One scan for the whole rebuild, only if a heading needs a new bookmark. Reused marks
+    // leave the counter alone; Insert Link starts its own allocation with no cached value.
+    let next = next_toc.get_or_insert_with(|| {
+        s.doc.bookmarks().iter().filter_map(|(n, _)| n.strip_prefix("_Toc").and_then(|d| d.parse::<u64>().ok())).max().unwrap_or(0).saturating_add(1)
+    });
     let name = format!("_Toc{next:09}");
     let end = para.len();
     let props = CharProps::default();
@@ -424,6 +427,7 @@ fn bookmark_heading(s: &mut Session, path: &Path, lead: usize) -> Result<String,
     };
     shift(&mut s.sel.anchor);
     shift(&mut s.sel.focus);
+    *next = next.saturating_add(1);
     Ok(name)
 }
 
@@ -475,10 +479,11 @@ fn regenerate_toc(s: &mut Session, leader: Option<TabLeader>, tabs: &[(String, V
     let entries = toc_entries(s, &f);
     let links: Vec<Option<String>> = if f.has('h') {
         let mut v = Vec::new();
+        let mut next_toc = None;
         for e in &entries {
             // TC fields link to their paragraph's start.
             let lead = s.doc.para(StoryRef::Body, &e.path).map_or(0, |p| p.text.bytes().take_while(|b| *b == 0x0C).count());
-            v.push(Some(format!("#{}", bookmark_heading(s, &e.path, lead)?)));
+            v.push(Some(format!("#{}", bookmark_heading(s, &e.path, lead, &mut next_toc)?)));
         }
         v
     } else {
