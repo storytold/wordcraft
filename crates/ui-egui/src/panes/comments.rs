@@ -1,4 +1,12 @@
-use super::{BTreeMap, StoryRef, Stroke, Tokens, Ui, Value, WordApp, json, regular, semibold};
+use super::{BTreeMap, StoryRef, Stroke, Tokens, Ui, WordApp, json, regular, semibold};
+
+#[cfg(test)]
+thread_local! {
+    static LIST_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+mod cache_tests;
 
 /// Draws the Comments pane: New Comment and scrollable comment and reply cards with edit, go-to,
 /// reply, resolve or reopen, and delete actions.
@@ -7,34 +15,34 @@ pub(super) fn comments(app: &mut WordApp, ui: &mut Ui) {
         let _ = app.run("review.newComment", json!({"text": ""}));
     }
     ui.separator();
-    let list = app.session.run("review.comments", &json!({})).unwrap_or_default();
+    let list = cached_comments(app);
     let t = Tokens::get(ui.ctx());
     // Comment ids are the document's own; another window's document has the same ones.
     let document = app.session.document_id();
     egui::ScrollArea::vertical().show(ui, |ui| {
-        for c in list.as_array().cloned().unwrap_or_default() {
-            let id = c.get("id").and_then(Value::as_u64).unwrap_or(0);
-            let reply = c.get("parent").is_some_and(|p| !p.is_null());
-            let when = u32::try_from(id).ok().and_then(|i| app.session.doc.comments.get(&i)).map(crate::local_time::comment_time).unwrap_or_default();
+        for c in list.iter() {
+            let id = c.id;
+            let reply = c.reply;
+            let when = app.session.doc.comments.get(&id).map(crate::local_time::comment_time).unwrap_or_default();
             egui::Frame::NONE.fill(t.input).stroke(Stroke::new(1.0, t.border)).corner_radius(6).inner_margin(8).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 if reply {
                     ui.add_space(0.0);
                 }
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(c.get("author").and_then(Value::as_str).unwrap_or("")).font(semibold(12.0)));
+                    ui.label(egui::RichText::new(&c.author).font(semibold(12.0)));
                     ui.label(egui::RichText::new(when).small().weak());
-                    if c.get("resolved").and_then(Value::as_bool).unwrap_or(false) {
+                    if c.resolved {
                         ui.label(egui::RichText::new(tl!("Resolved")).small().color(t.green));
                     }
                 });
                 // Editable comment text (one undo step per edit, like the balloons).
-                comment_editor(app, ui, id as u32, None, false);
+                comment_editor(app, ui, id, None, false);
                 let open_key = egui::Id::unique(("comment_reply_open", document, id));
                 let mut replying = ui.data(|d| d.get_temp::<bool>(open_key)).unwrap_or(false);
                 ui.horizontal(|ui| {
                     if ui.small_button(tl!("Go to")).clicked()
-                        && let Some(a) = c.get("anchor").filter(|a| !a.is_null())
+                        && let Some(a) = c.anchor.as_ref()
                     {
                         let _ = app.run("caret.set", json!({"pos": a}));
                     }
@@ -43,7 +51,7 @@ pub(super) fn comments(app: &mut WordApp, ui: &mut Ui) {
                         ui.data_mut(|d| d.insert_temp(open_key, true));
                         ui.data_mut(|d| d.insert_temp(egui::Id::unique(("comment_reply_focus", document, id)), true));
                     }
-                    let resolved = c.get("resolved").and_then(Value::as_bool).unwrap_or(false);
+                    let resolved = c.resolved;
                     if ui.small_button(if resolved { tl!("Reopen") } else { tl!("Resolve") }).clicked() {
                         let _ = app.run("review.resolveComment", json!({"id": id}));
                     }
@@ -53,7 +61,7 @@ pub(super) fn comments(app: &mut WordApp, ui: &mut Ui) {
                 });
                 if replying {
                     let focus = ui.data_mut(|d| d.remove_temp::<bool>(egui::Id::unique(("comment_reply_focus", document, id)))).unwrap_or(false);
-                    if reply_editor(app, ui, id as u32, None, focus) {
+                    if reply_editor(app, ui, id, None, focus) {
                         ui.data_mut(|d| d.remove::<bool>(open_key));
                     }
                 }
@@ -61,6 +69,44 @@ pub(super) fn comments(app: &mut WordApp, ui: &mut Ui) {
             ui.add_space(6.0);
         }
     });
+}
+
+type CommentCards = std::sync::Arc<Vec<CommentCard>>;
+
+struct CommentCard {
+    id: u32,
+    author: String,
+    reply: bool,
+    resolved: bool,
+    anchor: Option<wordcraft_doc::Pos>,
+}
+
+/// One ordered comment list owned by its window. Closing the window releases it;
+/// changing the document or its revision replaces it. Draft text stays live.
+#[derive(Default)]
+pub(crate) struct CommentCache {
+    stamp: Option<(u64, u64)>,
+    items: CommentCards,
+}
+
+fn cached_comments(app: &mut WordApp) -> CommentCards {
+    let stamp = (app.session.document_id(), app.session.rev());
+    let cache = &mut app.comment_cache;
+    if cache.stamp != Some(stamp) {
+        #[cfg(test)]
+        LIST_BUILDS.with(|n| n.set(n.get() + 1));
+        cache.items = std::sync::Arc::new(
+            wordcraft_engine::cmd::review::comment_list(&app.session)
+                .into_iter()
+                .filter_map(|(id, anchor)| {
+                    let c = app.session.doc.comments.get(&id)?;
+                    Some(CommentCard { id, author: c.author.clone(), reply: c.parent.is_some(), resolved: c.resolved, anchor })
+                })
+                .collect(),
+        );
+        cache.stamp = Some(stamp);
+    }
+    cache.items.clone()
 }
 
 /// What has been typed in comment and reply fields but not yet written to the document (#1348).
