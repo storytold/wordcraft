@@ -501,7 +501,8 @@ fn split_para_as(s: &mut Session, at: &Pos, enter: bool) -> Result<Pos, CmdError
     if s.doc.settings.track_changes {
         let rid = new_revision(s, RevisionKind::Insert);
         let p = s.doc.para_mut(at.story, &at.path)?;
-        p.mark.ins = Some(rid);
+        // The split adds a new mark, not the deletion of the original mark it copied.
+        (p.mark.ins, p.mark.del) = (Some(rid), None);
         // The paragraph after the split ends with the original mark: it keeps that mark's
         // revisions, never those of the text at the split point (which would credit the split
         // to the author who inserted that text).

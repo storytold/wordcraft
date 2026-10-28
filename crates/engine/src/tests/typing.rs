@@ -1776,6 +1776,97 @@ fn reject_all_takes_out_the_paragraph_breaks_a_tracked_paste_inserted() {
 }
 
 #[test]
+fn tracked_replacement_keeps_inserted_paragraphs_on_accept() {
+    for (original, replacement) in
+        [("one", "A1\nB1"), ("one\ntwo", "A1\nB1"), ("one\ntwo", "A1\nB1\nC1"), ("第一行\nسطر ثان", "新しい行\nسطر جديد\nFinal")]
+    {
+        let mut s = Session::new(wordcraft_doc::Document::from_text(original));
+        run(&mut s, "review.trackChanges", json!({"value": true}));
+        run(&mut s, "select.all", json!({}));
+        let before = s.doc.body.clone();
+        let depth = s.undo_depth();
+        run(&mut s, "edit.pasteText", json!({"text": replacement}));
+        assert_eq!(s.undo_depth(), depth + 1, "the replacement is one undo step");
+        let pending = s.doc.clone();
+        run(&mut s, "edit.undo", json!({}));
+        assert_eq!(s.doc.body, before);
+        run(&mut s, "edit.redo", json!({}));
+        assert_eq!(s.doc.body, pending.body);
+        for reopen in [false, true] {
+            let doc = if reopen { wordcraft_docx::read(&wordcraft_docx::write(&pending).unwrap()).unwrap() } else { pending.clone() };
+            let mut accept = Session::new(doc.clone());
+            run(&mut accept, "review.acceptAll", json!({}));
+            assert_eq!(accept.doc.plain_text(StoryRef::Body), replacement, "{original:?}, reopen={reopen}");
+            assert!(accept.doc.revisions.is_empty());
+            let mut reject = Session::new(doc);
+            run(&mut reject, "review.rejectAll", json!({}));
+            assert_eq!(reject.doc.plain_text(StoryRef::Body), original, "reopen={reopen}");
+            assert!(reject.doc.revisions.is_empty());
+        }
+    }
+}
+
+#[test]
+fn tracked_replacement_split_preserves_original_marks_and_formatting() {
+    let mut s = typed("old");
+    s.author = "Original author".into();
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    typ(&mut s, "\nlast");
+    let first = s.doc.para_mut(StoryRef::Body, &Pos::body(0, 0).path).unwrap();
+    first.mark.bold = Some(true);
+    first.mark.size = Some(14.0);
+    first
+        .format(0, first.len(), &|c| {
+            c.bold = Some(true);
+            c.size = Some(14.0);
+        })
+        .unwrap();
+    first.props.space_after = Some(7.0);
+    let original_mark = first.mark.clone();
+    let original_props = first.props.clone();
+    assert!(original_mark.ins.is_some());
+    s.author = "Replacement author".into();
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "edit.pasteText", json!({"text": "A1\nB1"}));
+    let inserted = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+    assert!(inserted.mark.ins.is_some());
+    assert_ne!(inserted.mark.ins, original_mark.ins, "the new break belongs to the replacement author");
+    assert_eq!(inserted.mark.del, None, "a new break is not the original deleted break");
+    assert_eq!((inserted.mark.bold, inserted.mark.size), (Some(true), Some(14.0)));
+    assert_eq!(inserted.props, original_props);
+    let tail = s.doc.para_at(&Pos::body(1, 0)).unwrap();
+    assert_eq!(tail.mark.ins, original_mark.ins, "the original mark retains its insertion identity");
+    assert!(tail.mark.del.is_some(), "the replacement still deletes the original mark");
+    assert_eq!((tail.mark.bold, tail.mark.size), (Some(true), Some(14.0)));
+    assert_eq!(tail.props, original_props);
+}
+
+#[test]
+fn tracked_replacement_preserves_partial_selection_formatting() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("prefix old\nlast suffix"));
+    run(&mut s, "para.bullets", json!({}));
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 6)}));
+    run(&mut s, "format.bold", json!({"value": true}));
+    run(&mut s, "select.range", json!({"anchor": Pos::body(1, 4), "focus": Pos::body(1, 11)}));
+    run(&mut s, "format.italic", json!({"value": true}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 7), "focus": Pos::body(1, 4)}));
+    run(&mut s, "edit.pasteText", json!({"text": "A1\nB1"}));
+    let pending = s.doc.clone();
+    for reopen in [false, true] {
+        let doc = if reopen { wordcraft_docx::read(&wordcraft_docx::write(&pending).unwrap()).unwrap() } else { pending.clone() };
+        let mut accept = Session::new(doc);
+        run(&mut accept, "review.acceptAll", json!({}));
+        assert_eq!(accept.doc.plain_text(StoryRef::Body), "prefix A1\nB1 suffix");
+        let first = accept.doc.para_at(&Pos::body(0, 0)).unwrap();
+        assert!(first.props.numbering.is_some(), "the untouched prefix stays in its list");
+        assert_eq!(first.props_of_char(0).bold, Some(true));
+        let last = accept.doc.para_at(&Pos::body(1, 0)).unwrap();
+        assert_eq!(last.props_of_char(last.len() - 1).italic, Some(true));
+    }
+}
+
+#[test]
 fn plain_text_paste_keeps_an_empty_paragraph_in_a_list() {
     // Issue #422: the pasted paragraph separators went through Enter, which ends the list on an
     // empty item, so `A\n\nB` lost its empty paragraph.
