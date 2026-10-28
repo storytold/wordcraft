@@ -388,7 +388,9 @@ impl ParaProps {
 
     fn overlay_script_layout(&mut self, patch: &ParaProps) {
         overlay_fields!(self, patch; bidi, kinsoku, word_wrap, overflow_punct, top_line_punct, auto_space_de, auto_space_dn);
-        if patch.force_char_break { self.force_char_break = true; }
+        if patch.force_char_break {
+            self.force_char_break = true;
+        }
     }
     pub fn overlaid(mut self, patch: &ParaProps) -> ParaProps {
         self.overlay(patch);
