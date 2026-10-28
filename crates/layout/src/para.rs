@@ -3622,8 +3622,8 @@ mod tests {
                 L => Some(false),
                 _ => None,
             };
-            assert_eq!(bidi::strong_rtl(c), strong, "{:04x}", c as u32);
-            assert_eq!(chars::is_mark(c), matches!(class, NSM | BN) && !c.is_control(), "{:04x}", c as u32);
+            assert_eq!(strong_rtl(c), strong, "{:04x}", c as u32);
+            assert_eq!(is_mark(c), matches!(class, NSM | BN) && !c.is_control(), "{:04x}", c as u32);
         }
     }
 
