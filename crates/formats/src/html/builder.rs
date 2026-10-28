@@ -1,6 +1,6 @@
 use super::css::{apply_style, css_len_pt};
 use super::import::collapse_ws;
-use super::*;
+use super::{Align, Arc, Cell, FBlock, FTable, Flow, Fmt, Inline, Kind, ListInfo, Meta, Para, VAlign, data_uri, make_img, model, parse_color};
 
 /// Open elements kept at most (deeper start tags are ignored).
 const MAX_STACK: usize = 256;
@@ -41,6 +41,40 @@ struct TableB {
     row: Option<Vec<Cell>>,
     /// The table or one of its cells asks for borders.
     bordered: bool,
+}
+
+struct ElementStyle {
+    fmt: Fmt,
+    align: Option<Align>,
+    preserve: bool,
+    page_break: bool,
+    page_break_after: bool,
+}
+
+fn apply_font_attributes(attrs: &[(String, String)], fmt: &mut Fmt) {
+    if let Some(color) = attr(attrs, "color").and_then(parse_color) {
+        fmt.color = Some(color);
+    }
+    if let Some(face) = attr(attrs, "face") {
+        let family = face.split(',').next().unwrap_or("").trim().to_string();
+        if model::is_mono(&family) {
+            fmt.code = true;
+        } else if !family.is_empty() {
+            fmt.font = model::kept_font(&family).or(fmt.font.take());
+        }
+    }
+    let Some(size) = attr(attrs, "size") else { return };
+    let size = size.trim();
+    let points = if let Some(rest) = size.strip_prefix('+') {
+        rest.parse::<i32>().ok().map(|delta| 3 + delta)
+    } else if let Some(rest) = size.strip_prefix('-') {
+        rest.parse::<i32>().ok().map(|delta| 3 - delta)
+    } else {
+        size.parse::<i32>().ok()
+    };
+    if let Some(size) = points {
+        fmt.size = Some([7.5, 10.0, 12.0, 13.5, 18.0, 24.0, 36.0].get((size.clamp(1, 7) - 1) as usize).copied().unwrap_or(12.0));
+    }
 }
 
 /// Whether an element's `border` attribute or `style` declares a visible border.
@@ -481,29 +515,27 @@ impl<'r> Builder<'r> {
         }
     }
 
-    pub(super) fn start(&mut self, name: &str, attrs: &[(String, String)], self_close: bool) {
-        // Head metadata.
+    fn start_head_metadata(&mut self, name: &str, attrs: &[(String, String)]) -> bool {
         match name {
-            "title" => {
-                self.title = Some(String::new());
-            }
+            "title" => self.title = Some(String::new()),
             "meta" => {
-                let n = attr(attrs, "name").unwrap_or("").to_ascii_lowercase();
-                let c = attr(attrs, "content").unwrap_or("").to_string();
-                match n.as_str() {
-                    "author" => self.meta.author = c,
-                    "description" => self.meta.description = c,
-                    "keywords" => self.meta.keywords = c,
-                    "subject" => self.meta.subject = c,
+                let name = attr(attrs, "name").unwrap_or("").to_ascii_lowercase();
+                let content = attr(attrs, "content").unwrap_or("").to_string();
+                match name.as_str() {
+                    "author" => self.meta.author = content,
+                    "description" => self.meta.description = content,
+                    "keywords" => self.meta.keywords = content,
+                    "subject" => self.meta.subject = content,
                     _ => {}
                 }
-                return;
+                return true;
             }
             _ => {}
         }
-        let is_table_part = matches!(name, "tr" | "td" | "th");
-        let in_table = self.tables.len() < model::MAX_DEPTH;
-        // Implicit closes.
+        false
+    }
+
+    fn close_implicitly(&mut self, name: &str, is_table_part: bool) {
         if closes_p(name)
             && let Some(k) = self.find_open(|e| e.name == "p", |e| matches!(e.kind, ElKind::Cell | ElKind::Table | ElKind::Li | ElKind::Quote))
         {
@@ -533,7 +565,6 @@ impl<'r> Builder<'r> {
             if name == "tr"
                 && let Some(k) = self.find_open(|e| matches!(e.kind, ElKind::Tr | ElKind::Cell), |e| e.kind == ElKind::Table)
             {
-                // Pop to the outermost of cell/row inside the current table.
                 let mut kk = k;
                 while kk > 0 && self.stack.get(kk - 1).is_some_and(|e| matches!(e.kind, ElKind::Tr | ElKind::Cell)) {
                     kk -= 1;
@@ -541,62 +572,119 @@ impl<'r> Builder<'r> {
                 self.pop_to(kk);
             }
         }
-        if name == "a"
-            && !self.in_head()
-            && let Some(id) = attr(attrs, "id").or_else(|| attr(attrs, "name")).filter(|s| !s.is_empty())
-        {
-            self.start_para().inlines.push(Inline::Anchor(id.to_string()));
-        }
-        // Element-specific work.
+    }
+
+    fn start_special(&mut self, name: &str, attrs: &[(String, String)]) -> bool {
         match name {
             "br" => {
                 if self.stack.iter().any(|e| e.kind == ElKind::Pre) {
                     self.start_para();
                     self.flush();
                 } else {
-                    let f = self.fmt();
-                    self.start_para().push_text("\n", &f);
+                    let fmt = self.fmt();
+                    self.start_para().push_text("\n", &fmt);
                 }
-                return;
             }
             "hr" => {
                 self.flush();
                 self.container().push(FBlock::Para(Para::new(Kind::Rule)));
-                return;
             }
             "wbr" => {
-                let f = self.fmt();
-                self.start_para().push_text("\u{200B}", &f);
-                return;
+                let fmt = self.fmt();
+                self.start_para().push_text("\u{200B}", &fmt);
             }
             "img" => {
                 let alt = attr(attrs, "alt").unwrap_or("").to_string();
-                let dim = |k: &str| attr(attrs, k).and_then(|v| v.trim().trim_end_matches("px").trim().parse::<f32>().ok()).map(|p| p * 0.75);
-                let mut w = dim("width");
-                let mut h = dim("height");
-                if let Some(st) = attr(attrs, "style") {
-                    for decl in st.split(';') {
-                        if let Some((k, v)) = decl.split_once(':') {
-                            match k.trim().to_ascii_lowercase().as_str() {
-                                "width" => w = css_len_pt(v).or(w),
-                                "height" => h = css_len_pt(v).or(h),
+                let dim = |key: &str| attr(attrs, key).and_then(|v| v.trim().trim_end_matches("px").trim().parse::<f32>().ok()).map(|p| p * 0.75);
+                let mut width = dim("width");
+                let mut height = dim("height");
+                if let Some(style) = attr(attrs, "style") {
+                    for decl in style.split(';') {
+                        if let Some((key, value)) = decl.split_once(':') {
+                            match key.trim().to_ascii_lowercase().as_str() {
+                                "width" => width = css_len_pt(value).or(width),
+                                "height" => height = css_len_pt(value).or(height),
                                 _ => {}
                             }
                         }
                     }
                 }
-                let img = attr(attrs, "src")
+                let image = attr(attrs, "src")
                     .and_then(|src| if src.trim_start().starts_with("data:") { data_uri(src).map(Arc::new) } else { (self.images)(src.trim()) })
-                    .and_then(|d| make_img(d, w, h, &alt));
-                let f = self.fmt();
-                match img {
-                    Some(im) => self.start_para().inlines.push(Inline::Image(im)),
-                    None if !alt.is_empty() => self.start_para().push_text(&alt, &f),
+                    .and_then(|data| make_img(data, width, height, &alt));
+                let fmt = self.fmt();
+                match image {
+                    Some(image) => self.start_para().inlines.push(Inline::Image(image)),
+                    None if !alt.is_empty() => self.start_para().push_text(&alt, &fmt),
                     None => {}
                 }
-                return;
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    fn element_style(&self, name: &str, attrs: &[(String, String)], kind: ElKind) -> ElementStyle {
+        let mut fmt = self.fmt();
+        let mut align = None;
+        let mut preserve = self.preserve();
+        let mut page_break = false;
+        let mut page_break_after = false;
+        match name {
+            "b" | "strong" | "th" => fmt.bold = true,
+            "i" | "em" | "cite" | "var" | "dfn" | "address" => fmt.italic = true,
+            "u" | "ins" => fmt.underline = true,
+            "s" | "strike" | "del" => fmt.strike = true,
+            "code" | "kbd" | "tt" | "samp" => fmt.code = true,
+            "sup" => fmt.sup = true,
+            "sub" => fmt.sub = true,
+            "small" => fmt.size = Some(fmt.size.map_or(10.0, |s| (s * 0.833).max(1.0))),
+            "big" => fmt.size = Some(fmt.size.map_or(14.0, |s| (s * 1.2).min(1638.0))),
+            "mark" => fmt.background = Some(wordcraft_doc::Rgb(255, 255, 0)),
+            "font" => apply_font_attributes(attrs, &mut fmt),
+            "a" => {
+                if let Some(href) = attr(attrs, "href").filter(|h| wordcraft_doc::link::is_safe_href(h)) {
+                    fmt.link = model::kept_link(href.trim());
+                }
             }
             _ => {}
+        }
+        if let Some(value) = attr(attrs, "align").filter(|_| kind != ElKind::Table) {
+            align = match value.to_ascii_lowercase().as_str() {
+                "center" | "middle" => Some(Align::Center),
+                "right" => Some(Align::Right),
+                "justify" => Some(Align::Justify),
+                "left" => Some(Align::Left),
+                _ => None,
+            };
+        }
+        if name == "center" {
+            align = Some(Align::Center);
+        }
+        if let Some(style) = attr(attrs, "style") {
+            apply_style(style, &mut fmt, &mut align, &mut preserve, &mut page_break, &mut page_break_after);
+        }
+        if kind == ElKind::Pre {
+            preserve = true;
+        }
+        ElementStyle { fmt, align, preserve, page_break, page_break_after }
+    }
+
+    pub(super) fn start(&mut self, name: &str, attrs: &[(String, String)], self_close: bool) {
+        if self.start_head_metadata(name, attrs) {
+            return;
+        }
+        let is_table_part = matches!(name, "tr" | "td" | "th");
+        let in_table = self.tables.len() < model::MAX_DEPTH;
+        self.close_implicitly(name, is_table_part);
+        if name == "a"
+            && !self.in_head()
+            && let Some(id) = attr(attrs, "id").or_else(|| attr(attrs, "name")).filter(|s| !s.is_empty())
+        {
+            self.start_para().inlines.push(Inline::Anchor(id.to_string()));
+        }
+        if self.start_special(name, attrs) {
+            return;
         }
         if is_void(name) || self_close && block_kind(name).is_none() && !matches!(name, "a" | "span") {
             return;
@@ -614,76 +702,7 @@ impl<'r> Builder<'r> {
         if kind != ElKind::Inline {
             self.flush();
         }
-        let mut fmt = self.fmt();
-        let mut align = None;
-        let mut preserve = self.preserve();
-        let mut page_break = false;
-        let mut page_break_after = false;
-        match name {
-            // A header cell is bold, as in browsers and Word, unless its own CSS says otherwise.
-            "b" | "strong" | "th" => fmt.bold = true,
-            "i" | "em" | "cite" | "var" | "dfn" | "address" => fmt.italic = true,
-            "u" | "ins" => fmt.underline = true,
-            "s" | "strike" | "del" => fmt.strike = true,
-            "code" | "kbd" | "tt" | "samp" => fmt.code = true,
-            "sup" => fmt.sup = true,
-            "sub" => fmt.sub = true,
-            "small" => fmt.size = Some(fmt.size.map_or(10.0, |s| (s * 0.833).max(1.0))),
-            "big" => fmt.size = Some(fmt.size.map_or(14.0, |s| (s * 1.2).min(1638.0))),
-            "mark" => fmt.background = Some(wordcraft_doc::Rgb(255, 255, 0)),
-            "font" => {
-                if let Some(c) = attr(attrs, "color").and_then(parse_color) {
-                    fmt.color = Some(c);
-                }
-                if let Some(face) = attr(attrs, "face") {
-                    let fam = face.split(',').next().unwrap_or("").trim().to_string();
-                    if model::is_mono(&fam) {
-                        fmt.code = true;
-                    } else if !fam.is_empty() {
-                        fmt.font = model::kept_font(&fam).or(fmt.font.take());
-                    }
-                }
-                if let Some(sz) = attr(attrs, "size") {
-                    let s = sz.trim();
-                    let val = if let Some(rest) = s.strip_prefix('+') {
-                        rest.parse::<i32>().ok().map(|d| 3 + d)
-                    } else if let Some(rest) = s.strip_prefix('-') {
-                        rest.parse::<i32>().ok().map(|d| 3 - d)
-                    } else {
-                        s.parse::<i32>().ok()
-                    };
-                    if let Some(sz) = val {
-                        fmt.size = Some([7.5, 10.0, 12.0, 13.5, 18.0, 24.0, 36.0].get((sz.clamp(1, 7) - 1) as usize).copied().unwrap_or(12.0));
-                    }
-                }
-            }
-            "a" => {
-                if let Some(h) = attr(attrs, "href").filter(|h| wordcraft_doc::link::is_safe_href(h)) {
-                    fmt.link = model::kept_link(h.trim());
-                }
-            }
-            _ => {}
-        }
-        // `align` on a table is about where the table sits (not imported); it doesn't align the
-        // text in its cells.
-        if let Some(a) = attr(attrs, "align").filter(|_| kind != ElKind::Table) {
-            align = match a.to_ascii_lowercase().as_str() {
-                "center" | "middle" => Some(Align::Center),
-                "right" => Some(Align::Right),
-                "justify" => Some(Align::Justify),
-                "left" => Some(Align::Left),
-                _ => None,
-            };
-        }
-        if name == "center" {
-            align = Some(Align::Center);
-        }
-        if let Some(st) = attr(attrs, "style") {
-            apply_style(st, &mut fmt, &mut align, &mut preserve, &mut page_break, &mut page_break_after);
-        }
-        if kind == ElKind::Pre {
-            preserve = true;
-        }
+        let ElementStyle { mut fmt, align, preserve, page_break, page_break_after } = self.element_style(name, attrs, kind);
         match kind {
             ElKind::Table => self.tables.push(TableB { rows: Vec::new(), row: None, bordered: declares_border(attrs, true) }),
             ElKind::Tr => {

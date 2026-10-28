@@ -1,4 +1,8 @@
-use super::*;
+use super::{
+    Arc, Block, Blocks, Cell, CharProps, El, InlineObject, MAX_COLS, MAX_ROWS, MAX_TABLE_DEPTH, Node, NumChange, PB, Paragraph, Phase, PropChange,
+    Reader, Rels, RevisionKind, Row, Run, RunCtx, StoryCtx, Table, children_of_choice, clean_text, collect, last_para_mut, para_block,
+    placeholder_of, sectpr, tcpr, trpr,
+};
 
 impl Reader<'_> {
     /// Read a story's blocks from a container element (`w:body`, `w:hdr`, `w:tc`, `w:txbxContent`…).

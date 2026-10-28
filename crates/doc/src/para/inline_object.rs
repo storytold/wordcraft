@@ -1,6 +1,6 @@
 use super::float::{Float, Wrap, cap_alt};
 use super::inline_kinds::{NoteKind, PTabAlign, PTabBase, RubyAlign, ShapeKind};
-use super::*;
+use super::{CharProps, Deserialize, Serialize};
 
 /// An inline object anchored at a U+FFFC in the paragraph text.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

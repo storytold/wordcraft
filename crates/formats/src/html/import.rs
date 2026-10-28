@@ -1,7 +1,7 @@
 use super::builder::{Builder, ImageLoader};
 use super::lexer::{Lexer, Tok};
 use super::math_ruby::{read_math, read_ruby};
-use super::*;
+use super::{Document, Flow, Inline, model};
 
 /// Parse HTML text into the flow model.
 pub fn parse(s: &str) -> Flow {

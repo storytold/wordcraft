@@ -1,4 +1,4 @@
-use super::*;
+use super::{CmdError, CmdResult, Pos, Selection, Session, StoryRef, Value, json, p, pos_json};
 
 pub(super) fn word_count(s: &mut Session, v: &Value) -> CmdResult {
     if let Some(b) = p::bool(v, "includeTextBoxes") {

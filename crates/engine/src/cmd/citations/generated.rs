@@ -2,7 +2,10 @@ use super::cross_refs::caption_label;
 use super::render::entry;
 use super::sources::bib_order;
 use super::styles::style;
-use super::*;
+use super::{
+    Block, CharProps, CmdError, CmdResult, FieldCode, InlineObject, Paragraph, Path, Pos, Session, SortKey, StoryRef, TabAlign, TabLeader, TabStop,
+    Value, delete_selection, heading_letter, p, sel_result, sort_key,
+};
 
 /// The TOC field for `references.tableOfFigures` (ECMA-376 §17.16.5.68): `\c "<label>"` lists the
 /// captions that label's SEQ field numbers, `\a "<label>"` lists them without their label and

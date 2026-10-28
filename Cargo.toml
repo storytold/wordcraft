@@ -96,9 +96,11 @@ arboard = { version = "3.7", default-features = false, features = ["wayland-data
 unsafe_code = "forbid"
 
 [workspace.lints.clippy]
+cognitive_complexity = "deny"
+wildcard_imports = "deny"
 dbg_macro = "warn"
 todo = "warn"
-too_many_arguments = "allow"
+too_many_arguments = "deny"
 type_complexity = "allow"
 
 # Line tables keep file and line in panics and backtraces; full debug info
