@@ -170,7 +170,7 @@ impl Styles {
                 }
                 "default-style" if q.starts_with("style:") => in_default = get(&a, "style:family") == Some("paragraph"),
                 "text-properties" if in_default && cur.is_none() => {
-                    self.default_font = default_font(&a);
+                    self.default_font = default_font(&a).or(self.default_font.take());
                 }
                 "text-properties" => {
                     if let Some((_, s)) = &mut cur {

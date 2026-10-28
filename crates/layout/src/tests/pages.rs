@@ -612,3 +612,23 @@ fn a_page_ends_when_a_multiple_spaced_lines_text_no_longer_fits() {
         assert!(past_margin > 0, "{multiple}: some shift should leave the last line's leading past the margin");
     }
 }
+
+#[test]
+fn a_sections_header_is_measured_without_the_previous_sections_grid() {
+    // #4501 follow-up: section 1 has a line grid, section 2 a tall header of its own. The header
+    // room is measured before section 2's grid is on, so section 1's pitch never reaches it.
+    let body_top = |grid: Option<wordcraft_doc::section::DocGrid>| {
+        let mut d = Document::from_text("First section\nSecond section");
+        let id = d.add_part(PartKind::Header, paras("Header line", 8));
+        d.last_section.headers.default = Some(id);
+        let first = SectionProps { doc_grid: grid, headers: Default::default(), ..d.last_section.clone() };
+        d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().section = Some(Box::new(first));
+        let l = lay(&d);
+        assert_eq!(l.pages.len(), 2);
+        l.pages[1].body.y
+    };
+    let grid = wordcraft_doc::section::DocGrid { kind: wordcraft_doc::section::DocGridType::Lines, line_pitch: 18.0, char_space: 0 };
+    let plain = body_top(None);
+    assert!(plain > 72.0, "the header reaches past the top margin: {plain}");
+    assert_eq!(body_top(Some(grid)), plain, "section 1's grid leaked into section 2's header");
+}

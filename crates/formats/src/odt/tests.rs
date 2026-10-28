@@ -1135,3 +1135,18 @@ fn meta_creation_date_timezones_and_fallbacks() {
     assert_eq!(m2.created, "2024-03-05T13:45:00Z");
     assert_eq!(m2.author, "Solo Creator");
 }
+
+#[test]
+fn a_later_default_style_without_a_font_keeps_the_default_font() {
+    // #4501 follow-up: styles read twice (styles.xml, then content.xml) must not wipe the font.
+    let mut styles = styles::Styles::default();
+    let with_font = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:text-properties style:font-name="DejaVu Serif"/></style:default-style></office:styles></office:document-styles>"#
+    );
+    let without = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:text-properties fo:font-size="12pt"/></style:default-style></office:styles></office:document-styles>"#
+    );
+    styles.read(with_font.as_bytes(), false);
+    styles.read(without.as_bytes(), false);
+    assert_eq!(styles.doc_font().as_deref(), Some("DejaVu Serif"));
+}
