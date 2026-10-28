@@ -140,6 +140,45 @@ fn classified_noop(s: &mut Session) {
     s.set_ime_edit_outcome(ImeEditOutcome { classified: true, ..ImeEditOutcome::default() });
 }
 
+/// A conservative nesting budget shared by the math readers. Ordinary structures cost one;
+/// matrices and lists of arguments cost two because their native JSON has extra arrays.
+/// Empty and hidden arguments count as well: filling a slot must remain safe afterwards.
+fn nesting_cost(nodes: &[MNode]) -> usize {
+    let mut deepest = 1;
+    let mut todo = vec![(nodes, 1_usize)];
+    while let Some((nodes, depth)) = todo.pop() {
+        deepest = deepest.max(depth);
+        for node in nodes {
+            match node {
+                MNode::Matrix { rows, .. } => todo.extend(rows.iter().flatten().map(|a| (a.as_slice(), depth.saturating_add(2)))),
+                MNode::Delim { elems, .. } | MNode::EqArr { rows: elems } => {
+                    todo.extend(elems.iter().map(|a| (a.as_slice(), depth.saturating_add(2))));
+                }
+                _ => {
+                    for i in 0..me::child_count(node) {
+                        if let Some(a) = me::child(node, i) {
+                            todo.push((a.as_slice(), depth.saturating_add(1)));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    deepest
+}
+
+fn check_nesting(before: &[MNode], after: &[MNode], at: &Pos) -> Result<(), CmdError> {
+    // DOCX's math reader spends two levels per fraction; native JSON also needs room for
+    // the containing document. Each enclosing table adds six JSON containers.
+    let limit = (wordcraft_doc::math::MAX_DEPTH / 2).saturating_sub(at.path.depth().saturating_mul(3));
+    let depth = nesting_cost(after);
+    if depth > limit && depth >= nesting_cost(before) {
+        return Err(CmdError::Params("equation nesting limit exceeded".into()));
+    }
+    // Existing deeper trees may be reduced; import limits remain unchanged.
+    Ok(())
+}
+
 /// Run `f` on the equation at `at`; keeps its linear text in step and drops the source OMML
 /// (it no longer matches).
 ///
@@ -150,27 +189,37 @@ fn with_eq<R>(s: &mut Session, at: &Pos, f: impl FnOnce(&mut Math, &mut bool) ->
     let Some(InlineObject::Equation { linear, display, math }) = para.object_at_mut(at.off) else {
         return Err(CmdError::Failed("no equation there".into()));
     };
-    let normalized = math.nodes.is_empty() && !linear.is_empty() && !math.linear;
+    // Work on a candidate: even pure navigation can trigger build-up, and pure commands
+    // have no document rollback snapshot in Session::run.
+    let mut candidate = Math { nodes: math.nodes.clone(), omml: String::new(), jc: math.jc, linear: math.linear };
+    let mut next_display = *display;
+    let normalized = candidate.nodes.is_empty() && !linear.is_empty() && !candidate.linear;
     if normalized {
-        math.nodes = parse_linear(linear);
+        candidate.nodes = parse_linear(linear);
     }
-    let nodes_before = math.nodes.clone();
+    let materialized = normalized.then(|| candidate.nodes.clone());
+    let nodes_before = materialized.as_ref().unwrap_or(&math.nodes);
     let linear_mode_before = math.linear;
     let jc_before = math.jc;
     let display_before = *display;
     let cached_linear_before = linear.clone();
     let omml_before_nonempty = !math.omml.is_empty();
-    let r = f(math, display);
-    let new_linear = if math.linear { plain(&math.nodes) } else { to_linear(&math.nodes) };
-    let content_changed = math.nodes != nodes_before || math.linear != linear_mode_before;
+    let r = f(&mut candidate, &mut next_display);
+    if normalized || candidate.nodes != *nodes_before {
+        check_nesting(&math.nodes, &candidate.nodes, at)?;
+    }
+    let new_linear = if candidate.linear { plain(&candidate.nodes) } else { to_linear(&candidate.nodes) };
+    let content_changed = candidate.nodes != *nodes_before || candidate.linear != linear_mode_before;
     let state_changed = normalized
         || content_changed
-        || math.jc != jc_before
-        || *display != display_before
+        || candidate.jc != jc_before
+        || next_display != display_before
         || omml_before_nonempty
         || new_linear != cached_linear_before;
     *linear = new_linear;
-    math.omml.clear();
+    candidate.omml.clear();
+    *math = candidate;
+    *display = next_display;
     para.touch();
     Ok((r, EquationEffect { content_changed, state_changed }))
 }
@@ -228,6 +277,7 @@ fn insert_nodes_as_equation(s: &mut Session, nodes: Arg, v: &Value) -> CmdResult
     s.math = None;
     let props = s.typing_props();
     let at = delete_selection(s)?;
+    check_nesting(&[], &nodes, &at)?;
     // On an empty line it's a display equation, in text an inline one.
     let empty_line = s.doc.para_at(&at).is_none_or(|p| p.text.trim().is_empty());
     let display = p::bool(v, "display").unwrap_or(empty_line);
@@ -447,6 +497,10 @@ fn move_caret(s: &mut Session, v: &Value) -> CmdResult {
         }
         pos = candidate_pos;
         if changed && candidate != before {
+            let Some(InlineObject::Equation { math, .. }) = s.doc.para_at(&m.at).and_then(|p| p.object_at(m.at.off)) else {
+                return Err(CmdError::Failed("no equation there".into()));
+            };
+            check_nesting(&math.nodes, &candidate, &m.at)?;
             // `equation.move` is a pure command, so record the edit here.
             s.checkpoint("Build Up");
             let (_, effect) = with_eq(s, &m.at, |math, _| math.nodes = candidate.clone())?;

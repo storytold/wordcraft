@@ -51,6 +51,27 @@ fn snapshot(id: &str, text: &str) -> Snapshot {
         document: Document::from_text(text),
     }
 }
+
+#[test]
+fn deepest_editable_equations_keep_a_readable_recovery_snapshot() {
+    for (structure, count) in [("frac.stacked", 31), ("mat.2x2", 15)] {
+        let profile = Temp::new();
+        let mut s = session(&profile.0);
+        s.run("document.setText", &json!({"text": ""})).unwrap();
+        for _ in 0..count {
+            s.run("equation.insertStructure", &json!({"id": structure})).unwrap();
+        }
+        s.run("equation.insertSymbol", &json!({"char": "Recovered marker"})).unwrap();
+        let expected = s.doc.clone();
+        assert!(s.run("equation.insertStructure", &json!({"id": structure})).is_err());
+        save_now(&mut s);
+        assert_eq!(s.recovery_error(), None, "{structure}");
+        let id = s.recovery_slot.id.clone().unwrap();
+        let files = Store::files(&profile.0.join(id)).unwrap();
+        assert_eq!(files.len(), 1, "{structure}");
+        assert_eq!(read_snapshot(&files[0]).unwrap().document, expected, "{structure}");
+    }
+}
 fn settle(s: &mut Session) {
     let end = Instant::now() + Duration::from_secs(5);
     loop {

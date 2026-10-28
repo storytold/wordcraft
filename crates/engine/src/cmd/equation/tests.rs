@@ -13,6 +13,190 @@ fn linear(s: &Session) -> String {
 }
 
 #[test]
+fn nested_equation_edits_refuse_before_save_would_lose_content() {
+    // #3618: forty fractions saved successfully, but DOCX reopen kept only 33 and lost
+    // the innermost text. Empty arguments must count too, before the user fills them.
+    let mut s = session();
+    for _ in 0..31 {
+        s.run("equation.insertStructure", &json!({"id": "frac.stacked"})).unwrap();
+    }
+    s.run("equation.insertSymbol", &json!({"char": "Deep original marker"})).unwrap();
+    let before = s.doc.clone();
+    let caret = s.math.clone();
+    let sel = s.sel.clone();
+    let rev = s.rev();
+    assert!(s.run("equation.insertStructure", &json!({"id": "frac.stacked"})).is_err());
+    assert_eq!(s.doc, before);
+    assert_eq!(s.math, caret);
+    assert_eq!(s.sel, sel);
+    assert_eq!(s.rev(), rev);
+    let native = serde_json::to_vec(&s.doc).unwrap();
+    assert_eq!(serde_json::from_slice::<Document>(&native).unwrap(), before);
+    let reopened = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap();
+    let at = &s.math.as_ref().unwrap().at;
+    let Some(InlineObject::Equation { math: expected, .. }) = before.para_at(at).unwrap().object_at(at.off) else { panic!() };
+    let Some(InlineObject::Equation { math: actual, .. }) = reopened.para_at(at).unwrap().object_at(at.off) else { panic!() };
+    assert_eq!(actual.nodes, expected.nodes);
+    assert!(document_xml(&s).contains("Deep original marker"));
+    // A refused insertion must not add an undo step or consume the last successful one.
+    s.run("edit.undo", &json!({})).unwrap();
+    assert!(!document_xml(&s).contains("Deep original marker"));
+    s.run("edit.redo", &json!({})).unwrap();
+    assert_eq!(s.doc, before);
+}
+
+#[test]
+fn nested_equation_build_up_refusal_preserves_caret_and_history() {
+    let mut s = session();
+    for _ in 0..31 {
+        s.run("equation.insertStructure", &json!({"id": "frac.stacked"})).unwrap();
+    }
+    s.run("equation.type", &json!({"text": "a/b"})).unwrap();
+    let before = s.doc.clone();
+    let caret = s.math.clone();
+    let history = s.undo_labels();
+    let rev = s.rev();
+    for (id, params) in [("equation.type", json!({"text": " "})), ("equation.move", json!({"dir": "next"}))] {
+        assert!(s.run(id, &params).is_err(), "{id}");
+        assert_eq!(s.doc, before, "{id}");
+        assert_eq!(s.math, caret, "{id}");
+        assert_eq!(s.undo_labels(), history, "{id}");
+        assert_eq!(s.rev(), rev, "{id}");
+    }
+    // A refused edit does not consume a redo step either.
+    s.run("edit.undo", &json!({})).unwrap();
+    assert!(s.can_redo());
+    assert!(s.run("equation.insertStructure", &json!({"id": "frac.stacked"})).is_err());
+    assert!(s.can_redo());
+    s.run("edit.redo", &json!({})).unwrap();
+    assert_eq!(s.doc, before);
+}
+
+#[test]
+fn nested_equation_templates_keep_their_native_and_docx_content() {
+    for (id, count) in [("script.sup", 31), ("rad.sqrt", 31), ("fn.sin", 31), ("brk.paren", 15), ("brk.stack2", 15), ("mat.2x2", 15)] {
+        let mut s = session();
+        for _ in 0..count {
+            s.run("equation.insertStructure", &json!({"id": id})).unwrap();
+        }
+        s.run("equation.insertSymbol", &json!({"char": "Deep marker"})).unwrap();
+        let before = s.doc.clone();
+        assert!(s.run("equation.insertStructure", &json!({"id": id})).is_err(), "{id}");
+        assert_eq!(s.doc, before, "{id}");
+        let native = serde_json::to_vec(&s.doc).unwrap();
+        assert_eq!(serde_json::from_slice::<Document>(&native).unwrap(), before, "{id}");
+        let at = &s.math.as_ref().unwrap().at;
+        let mut expected = nodes_of(&s, at).unwrap();
+        // The writer spells out implicit centred matrix columns, even at depth one.
+        // Normalize only that established default; compare all arguments and text exactly.
+        fn explicit_matrix_defaults(nodes: &mut Arg) {
+            for node in nodes {
+                if let MNode::Matrix { rows, col_jc } = node
+                    && col_jc.is_empty()
+                {
+                    col_jc.resize(rows.iter().map(Vec::len).max().unwrap_or(0), wordcraft_doc::math::ColJc::Center);
+                }
+                for i in 0..me::child_count(node) {
+                    if let Some(arg) = me::child_mut(node, i) {
+                        explicit_matrix_defaults(arg);
+                    }
+                }
+            }
+        }
+        explicit_matrix_defaults(&mut expected);
+        let back = Session::new(wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap());
+        assert_eq!(nodes_of(&back, at).unwrap(), expected, "{id}");
+    }
+}
+
+#[test]
+fn nested_equation_limits_include_tables_and_allow_reducing_old_trees() {
+    let mut s = session();
+    s.run("table.quick", &json!({"rows": 1, "cols": 1})).unwrap();
+    for _ in 0..28 {
+        s.run("equation.insertStructure", &json!({"id": "frac.stacked"})).unwrap();
+    }
+    s.run("equation.type", &json!({"text": "Cell marker"})).unwrap();
+    assert!(s.run("equation.insertStructure", &json!({"id": "frac.stacked"})).is_err());
+    assert_eq!(serde_json::from_slice::<Document>(&serde_json::to_vec(&s.doc).unwrap()).unwrap(), s.doc);
+    // Import limits are unchanged. A pre-existing native tree beyond the editing limit can
+    // be made shallower, and unrelated display properties can still be changed.
+    let mut s = session();
+    for _ in 0..31 {
+        s.run("equation.insertStructure", &json!({"id": "frac.stacked"})).unwrap();
+    }
+    let m = s.math.clone().unwrap();
+    let Some(InlineObject::Equation { math, .. }) = s.doc.para_mut(m.at.story, &m.at.path).unwrap().object_at_mut(m.at.off) else { panic!() };
+    me::insert_nodes(&mut math.nodes, &m.pos, parse_linear("⬚/⬚"));
+    assert_eq!(nesting_cost(&math.nodes), 33);
+    s.run("equation.display", &json!({"value": false})).unwrap();
+    s.run("equation.structure", &json!({"action": "remove", "level": 0})).unwrap();
+    assert_eq!(nesting_cost(&nodes_of(&s, &m.at).unwrap()), 32);
+}
+
+#[test]
+fn nested_equation_boundary_conversion_and_failed_new_insert_are_atomic() {
+    let mut s = session();
+    for _ in 0..31 {
+        s.run("equation.insertStructure", &json!({"id": "frac.stacked"})).unwrap();
+    }
+    s.run("equation.type", &json!({"text": "1"})).unwrap();
+    let at = s.math.as_ref().unwrap().at.clone();
+    let expected = nodes_of(&s, &at).unwrap();
+    let before = s.doc.clone();
+    s.run("equation.convert", &json!({"to": "linear"})).unwrap();
+    let shown_linear = s.doc.clone();
+    let caret = s.math.clone();
+    let history = s.undo_labels();
+    // The existing parser may use additional argument wrappers when reading linear text.
+    // If that exceeds the budget, keep the complete linear text and the conversion's undo.
+    assert!(s.run("equation.convert", &json!({"to": "professional"})).is_err());
+    assert_eq!(s.doc, shown_linear);
+    assert_eq!(s.math, caret);
+    assert_eq!(s.undo_labels(), history);
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.doc, before);
+    assert_eq!(nodes_of(&s, &at).unwrap(), expected);
+    // New-equation insertion validates after deleting a selection; refusal restores that
+    // selection and its content as well as the existing history.
+    let mut s = session();
+    s.run("table.quick", &json!({"rows": 1, "cols": 1})).unwrap();
+    s.run("text.insert", &json!({"text": "Keep this selected text"})).unwrap();
+    s.run("select.text", &json!({"text": "Keep this selected text"})).unwrap();
+    let before = s.doc.clone();
+    let sel = s.sel.clone();
+    let history = s.undo_labels();
+    let latex = format!("{}x{}", "\\sqrt{".repeat(30), "}".repeat(30));
+    assert!(s.run("insert.equation", &json!({"latex": latex})).is_err());
+    assert_eq!(s.doc, before);
+    assert_eq!(s.sel, sel);
+    assert_eq!(s.undo_labels(), history);
+    assert!(s.math.is_none());
+}
+
+#[test]
+fn nested_equation_lazy_materialization_checks_the_stored_tree() {
+    let mut s = session();
+    s.run("insert.equation", &json!({"linear": "x"})).unwrap();
+    let at = s.math.as_ref().unwrap().at.clone();
+    let cached = format!("{}x{}", "■(".repeat(20), ")".repeat(20));
+    assert!(nesting_cost(&parse_linear(&cached)) > 32);
+    let Some(InlineObject::Equation { math, linear, .. }) = s.doc.para_mut(at.story, &at.path).unwrap().object_at_mut(at.off) else { panic!() };
+    // Older/imported equations can keep only their linear source until their first edit.
+    math.nodes.clear();
+    *linear = cached;
+    let before = s.doc.clone();
+    let caret = s.math.clone();
+    let history = s.undo_labels();
+    for (id, params) in [("equation.display", json!({"value": false})), ("equation.type", json!({"text": " "}))] {
+        assert!(s.run(id, &params).is_err(), "{id}");
+        assert_eq!(s.doc, before, "{id}");
+        assert_eq!(s.math, caret, "{id}");
+        assert_eq!(s.undo_labels(), history, "{id}");
+    }
+}
+
+#[test]
 fn type_an_equation_like_word() {
     let mut s = session();
     s.run("insert.equation", &json!({})).unwrap();
