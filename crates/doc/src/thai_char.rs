@@ -1,15 +1,13 @@
 //! Thai character name constants, type-class flags, and the per-character type table.
 //!
-//! This is a clean-room Rust translation of the definitions in `THAI.H` and the
-//! `TBL_CHTYPE` table from `THAI.CPP` (Algorithms Co., Ltd., 2001).
-//! The original used TIS-620 byte values (0xA1–0xFB); here every character is its
-//! Unicode codepoint (U+0E01–U+0E5B).
+//! Each of the 96 codepoints in the Thai Unicode block (U+0E00–U+0E5F) is assigned a
+//! bitmask of [`TCT_*`] flags that describe how it participates in layout, rendering,
+//! and input-sequence checking.  The classification is derived from the Unicode Standard
+//! (Thai block, Chapter 16) and TIS-620 (Thai Industrial Standard 620-2533), which define
+//! the script properties of every Thai character.  Call [`thai_char_type`] to obtain the
+//! flags for any codepoint.
 //!
 //! ## Character type flags
-//! Each Thai Unicode character carries a bitmask of [`TCT_*`] flags that describe how
-//! it participates in layout, rendering, and input-sequence checking.  Call
-//! [`thai_char_type`] to obtain the flags for any codepoint.  The flags correspond
-//! directly to the `TCT_*` bit-field described in `THAI.H`:
 //!
 //! ```text
 //! Bit  Symbol              Meaning
@@ -31,22 +29,21 @@
 //! 14   TCT_LEADINGVOWEL    Leading vowel (เ แ โ ใ ไ)
 //! ```
 //!
-//! ## Divergences from the original table
-//! The original `TBL_CHTYPE` was designed for rendering and classified some characters
-//! differently from how WordCraft's input-sequence checker uses them:
+//! ## Notes on specific characters
+//! Some characters have rendering vs. input-sequence interpretations that differ:
 //!
-//! | Character | TBL_CHTYPE | WordCraft input logic |
-//! |-----------|------------|-----------------------|
+//! | Character | Rendering flag | WordCraft input logic |
+//! |-----------|----------------|-----------------------|
 //! | PHINTHU ◌ฺ (U+0E3A) | `TCT_THAILOWERVOWEL` | Pali mark — not a vowel |
 //! | NIKHAHIT ◌ํ (U+0E4D) | `TCT_THAI` (plain) | Pali mark |
 //! | SARA_AM ำ (U+0E33) | `TCT_THAIVOWEL` | Upper vowel (occupies vowel slot) |
 //!
-//! [`thai_char_type`] faithfully reproduces the original rendering table.
-//! [`crate::thai_input::thai_char_class`] applies the WordCraft input-logic extensions.
+//! [`thai_char_type`] returns the rendering-oriented flags.
+//! The input-sequence checker applies its own classification on top of these.
 
 // ── Character name constants ───────────────────────────────────────────────────────────────
 //
-// Names follow THAI.H.  Thai glyphs are shown in comments for quick visual reference.
+// Names follow the Unicode Standard Thai block.  Thai glyphs are shown in comments for quick visual reference.
 
 // Consonants — normal (U+0E01–U+0E2E)
 pub const KOKAI: char = '\u{0E01}'; // ก
@@ -153,7 +150,7 @@ pub const KHOMUT: char = '\u{0E5B}'; // ๛  end of chapter
 
 // ── Type-class flags (TCT_*) ───────────────────────────────────────────────────────────────
 //
-// Bit layout (from THAI.H):
+// Bit layout:
 //   fedcba9876543210
 //   ||||||||||||||||
 //   ||||||||||||||||+── TCT_CONSONANCE   0x0001  consonant
@@ -228,13 +225,13 @@ pub const TCT_ENGDIGIT: u16 = TCT_ENGLISH | TCT_DIGIT;
 
 // ── Static type table for the Thai Unicode block (U+0E00–U+0E5F) ──────────────────────────
 //
-// Translated from `TBL_CHTYPE[0xA0..=0xFF]` in THAI.CPP.
+// Derived from the Unicode Standard (Thai block, Chapter 16) and TIS-620.
 // Index = codepoint − U+0E00 (so KOKAI U+0E01 is at index 1).
 //
-// NOTE: The original TBL_CHTYPE classified PHINTHU (U+0E3A, index 58) as
-// TCT_THAILOWERVOWEL and NIKHAHIT (U+0E4D, index 77) as plain TCT_THAI.
-// WordCraft's input logic treats both as Pali marks — see `thai_input::thai_char_class`.
-// SARA_AM (U+0E33, index 51) is TCT_THAIVOWEL here; the input logic uses it as UpperVowel.
+// NOTE: PHINTHU (U+0E3A, index 58) is classified as TCT_THAILOWERVOWEL for rendering;
+// NIKHAHIT (U+0E4D, index 77) is plain TCT_THAI.  WordCraft's input logic treats both
+// as Pali marks.  SARA_AM (U+0E33, index 51) is TCT_THAIVOWEL here; the input logic
+// uses it as UpperVowel.
 //
 // Entries beyond U+0E5B (indices 92–95) are unassigned in Unicode → TCT_CONTROL.
 
@@ -349,9 +346,8 @@ static THAI_CHAR_TYPE: [u16; 96] = [
 /// For Thai characters in U+0E00–U+0E5F this performs an O(1) table lookup.
 /// All other codepoints return `TCT_CONTROL` (zero).
 ///
-/// The returned flags reflect the *rendering/layout* classification from the original
-/// `TBL_CHTYPE` table.  For input-sequence purposes use
-/// [`crate::thai_input::thai_char_class`] instead.
+/// The returned flags reflect the *rendering/layout* classification.
+/// The input-sequence checker applies its own finer-grained classification on top of these.
 #[inline]
 pub fn thai_char_type(c: char) -> u16 {
     let cp = u32::from(c);
