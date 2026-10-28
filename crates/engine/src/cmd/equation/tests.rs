@@ -2,6 +2,75 @@ use super::*;
 use crate::Session;
 use wordcraft_doc::Document;
 
+// Convert All must discover equations without counting every preceding object again.
+#[test]
+fn convert_all_discovery_scales_with_unrelated_markers() {
+    use std::hint::black_box;
+    use std::time::{Duration, Instant};
+    fn marked(n: usize) -> Session {
+        let mut doc = Document::from_text("é tail");
+        let para = doc.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+        para.text = format!("é{} tail", OBJ.to_string().repeat(n));
+        para.runs.first_mut().unwrap().len = para.text.len();
+        para.objects = (0..n).map(|i| InlineObject::BookmarkEnd { name: i.to_string() }).collect();
+        Session::new(doc)
+    }
+    fn cpu_nanos() -> Option<u64> {
+        std::fs::read_to_string("/proc/thread-self/schedstat").ok()?.split_whitespace().next()?.parse().ok()
+    }
+    fn cost(s: &mut Session) -> Duration {
+        let mut best = Duration::MAX;
+        for _ in 0..3 {
+            let start = Instant::now();
+            let cpu = cpu_nanos();
+            let mut rounds = 0;
+            loop {
+                assert_eq!(convert(black_box(s), &json!({"all": true})).unwrap()["converted"], 0);
+                rounds += 1;
+                if start.elapsed() >= Duration::from_millis(10) {
+                    break;
+                }
+            }
+            // Fall back to elapsed time if this platform has no advancing thread counter.
+            let used = cpu.zip(cpu_nanos()).and_then(|(a, b)| b.checked_sub(a)).filter(|n| *n > 0);
+            best = best.min(used.map(Duration::from_nanos).unwrap_or_else(|| start.elapsed()) / rounds);
+        }
+        best
+    }
+    let a = cost(&mut marked(2_048));
+    let b = cost(&mut marked(16_384));
+    eprintln!("Convert All discovery, 8x markers: {a:?} -> {b:?}");
+    assert!(b < a.saturating_mul(24), "8x markers must not take quadratic discovery work: {a:?} -> {b:?}");
+}
+
+#[test]
+fn convert_all_discovers_equations_at_unicode_offsets_and_ignores_unpaired_objects() {
+    use wordcraft_doc::{Path, StoryRef};
+    let mut seed = session();
+    seed.run("insert.equation", &json!({"linear": "a/b", "edit": false})).unwrap();
+    let equation = seed.doc.para(StoryRef::Body, &Path::top(0)).unwrap().objects[0].clone();
+    let mut doc = Document::from_text("é tail");
+    let p = doc.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    p.text = format!("é{OBJ}中{OBJ}{OBJ} tail{OBJ}");
+    p.runs.first_mut().unwrap().len = p.text.len();
+    p.objects = vec![InlineObject::BookmarkEnd { name: "unrelated".into() }, equation.clone(), equation.clone()];
+    let mut s = Session::new(doc);
+    assert_eq!(s.run("equation.convert", &json!({"all": true, "to": "linear"})).unwrap()["converted"], 2);
+    let p = s.doc.para(StoryRef::Body, &Path::top(0)).unwrap();
+    for off in [8, 11] {
+        assert!(matches!(p.object_at(off), Some(InlineObject::Equation { math, .. }) if math.linear));
+    }
+    assert!(matches!(p.object_at(2), Some(InlineObject::BookmarkEnd { name }) if name == "unrelated"));
+    // With no text marker for a trailing object, that object is not converted.
+    let p = s.doc.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    p.text.truncate(14);
+    p.runs.first_mut().unwrap().len = p.text.len();
+    p.objects.push(p.objects[1].clone());
+    assert_eq!(s.run("equation.convert", &json!({"all": true, "to": "professional"})).unwrap()["converted"], 2);
+    let p = s.doc.para(StoryRef::Body, &Path::top(0)).unwrap();
+    assert!(matches!(p.objects.last(), Some(InlineObject::Equation { math, .. }) if math.linear));
+}
+
 fn session() -> Session {
     let mut s = Session::new(Document::new());
     s.run("document.setText", &json!({"text": ""})).unwrap();

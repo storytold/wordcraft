@@ -636,7 +636,9 @@ fn convert(s: &mut Session, v: &Value) -> CmdResult {
                 let offs: Vec<usize> = s
                     .doc
                     .para(story, &path)
-                    .map(|p| p.object_offsets().into_iter().filter(|o| matches!(p.object_at(*o), Some(InlineObject::Equation { .. }))).collect())
+                    .map(|p| {
+                        p.objects_with_offsets().filter_map(|(off, object)| matches!(object, InlineObject::Equation { .. }).then_some(off)).collect()
+                    })
                     .unwrap_or_default();
                 for off in offs {
                     let at = Pos { story, path: path.clone(), off };
