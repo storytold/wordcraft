@@ -138,10 +138,10 @@ fn is_thai_digit(c: char) -> bool {
     ('\u{0E50}'..='\u{0E59}').contains(&c)
 }
 
-/// Would a break between `before` and `after` split an amount: after the baht sign `฿`, or
-/// between two Thai digits?
+/// Would a break between `before` and `after` split an amount: after the baht sign `฿`, before it
+/// when a Thai digit comes first (`๑๒๓฿`), or between two Thai digits?
 fn splits_amount(before: char, after: char) -> bool {
-    before == '\u{0E3F}' || (is_thai_digit(before) && is_thai_digit(after))
+    before == '\u{0E3F}' || (is_thai_digit(before) && (is_thai_digit(after) || after == '\u{0E3F}'))
 }
 
 /// Byte offsets of `text` where a line may break between two Thai words, found by segmenting it
@@ -270,7 +270,10 @@ mod tests {
                 assert!(!splits_amount(before, after), "{text}: break at {b} splits an amount");
             }
         }
-        assert!(break_offsets("฿๑๒๓").is_empty());
+        // Independent of `splits_amount`: an amount stays whole, in either order.
+        for amount in ["฿๑๒๓", "๑๒๓฿", "฿๑๒๓๔๕๖", "๑๒๓๔๕๖฿"] {
+            assert!(break_offsets(amount).is_empty(), "{amount}: {:?}", break_offsets(amount));
+        }
     }
 
     #[test]
