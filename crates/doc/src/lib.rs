@@ -44,8 +44,8 @@ pub mod smart_art;
 pub mod styles;
 pub mod symbol_fonts;
 pub mod table;
-pub mod wordart;
 pub mod thai_char;
+pub mod wordart;
 pub mod wrap;
 
 use std::collections::BTreeMap;
