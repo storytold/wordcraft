@@ -51,15 +51,15 @@ pub(crate) fn follow_link(app: &mut WordApp, link: String) {
         if app.run("edit.goto", serde_json::json!({"bookmark": name})).is_ok() {
             let _ = app.run("select.collapse", serde_json::json!({}));
         }
-    } else if is_followable_link(&link) {
-        app.canvas.open_url = Some(link);
+    } else if let Some(url) = followable_link(&link) {
+        app.canvas.open_url = Some(url);
     } else {
         app.status(tl!("Only web (http, https) and email (mailto) links can be followed"));
     }
 }
 
-/// Whether Ctrl/⌘+click may hand a document's hyperlink to the system: web and email links only,
-/// so a document can't launch `file:` paths, programs or custom-scheme handlers.
-pub(super) fn is_followable_link(url: &str) -> bool {
-    wordcraft_doc::link::is_web_or_mail_link(url)
+/// The URL Ctrl/⌘+click may hand to the system, parsed: web and email links only, so a document
+/// can't launch `file:` paths, programs or custom-scheme handlers.
+pub(super) fn followable_link(url: &str) -> Option<String> {
+    wordcraft_doc::link::followable_url(url)
 }

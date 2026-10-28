@@ -51,7 +51,7 @@ use input::{UnitDrag, clamped_scroll, edge_scroll, mouse, wheel_hovered};
 pub(crate) use input::{hold_document_selection, press_count};
 pub(crate) use links::follow_link;
 #[cfg(test)]
-use links::{field_link, is_followable_link, is_generated_bookmark_link};
+use links::{field_link, followable_link, is_generated_bookmark_link};
 #[cfg(test)]
 use margins::MIN_TEXT;
 #[cfg(test)]
