@@ -922,3 +922,159 @@ fn legacy_password_is_verified_and_unknown_forms_refused() {
     assert!(e.to_string().contains(super::UNSUPPORTED_PASSWORD));
     assert!(super::enforced(&s.doc));
 }
+
+/// Consecutive permission boundaries must not recount the paragraph prefix or search all
+/// editable IDs once per marker. Both ends are used by typing and Enter.
+#[test]
+fn typing_boundary_many_permission_markers_is_not_quadratic() {
+    use wordcraft_doc::para::Run;
+    let cpu = || std::fs::read_to_string("/proc/thread-self/schedstat").ok()?.split_whitespace().next()?.parse::<u64>().ok();
+    let measure = |n: usize, at_end: bool| {
+        let mut p = wordcraft_doc::Paragraph::new();
+        p.text.push_str("λ prefix ");
+        let start = p.text.len();
+        for i in 0..n {
+            p.text.push(OBJ);
+            p.objects.push(InlineObject::PermStart { id: i as u32, group: "everyone".into(), editor: String::new() });
+        }
+        p.text.push_str("body");
+        let end = p.text.len();
+        for i in 0..n {
+            p.text.push(OBJ);
+            p.objects.push(InlineObject::PermEnd { id: i as u32 });
+        }
+        let after = p.text.len();
+        p.runs.push(Run { len: p.text.len(), props: CharProps::default() });
+        let mut doc = Document::new();
+        doc.body = vec![Block::Para(p).into()];
+        doc.settings.protection = Some("readOnly".into());
+        let s = Session::new(doc);
+        let at = Pos::body(0, if at_end { after } else { start });
+        let expected = Pos::body(0, if at_end { end } else { start + n * OBJ.len_utf8() });
+        let before = cpu();
+        for _ in 0..3 {
+            assert_eq!(typing_pos(std::hint::black_box(&s), &at), expected);
+        }
+        match (before, cpu()) {
+            (Some(a), Some(b)) if b > a => Some((b - a) as f64 * 1e-9),
+            _ => None,
+        }
+    };
+    for at_end in [false, true] {
+        let (small, large) = (measure(2_000, at_end), measure(16_000, at_end));
+        let (Some(a), Some(b)) = (small, large) else {
+            eprintln!("Typing boundary: CPU counter unavailable; semantic checks passed, timing assertion skipped");
+            continue;
+        };
+        eprintln!("Typing boundary end={at_end}: small={a:.9}s large={b:.9}s ratio={:.2}", b / a);
+        assert!(b < a * 24.0 + 0.005, "8x permission markers must not take quadratic boundary work: {a:.9}s -> {b:.9}s");
+    }
+}
+
+#[test]
+fn typing_boundary_keeps_author_precedence_and_malformed_pairing() {
+    use wordcraft_doc::para::Run;
+    // Frozen boundary semantics from before the one-pass lookup. This oracle deliberately
+    // uses object_at independently of the new traversal, including malformed storage.
+    let original = |s: &Session, p: &Pos| {
+        if !matches!(s.doc.settings.protection.as_deref(), Some("readOnly" | "comments")) {
+            return p.clone();
+        }
+        let Some(para) = s.doc.para_at(p) else { return p.clone() };
+        if para.objects.is_empty() {
+            return p.clone();
+        }
+        let editable: Vec<u32> = s.doc.perm_ranges().iter().filter(|r| editable_by(r, &s.author)).map(|r| r.id).collect();
+        let start = |off| matches!(para.object_at(off), Some(InlineObject::PermStart { id, .. }) if editable.contains(id));
+        let end = |off| matches!(para.object_at(off), Some(InlineObject::PermEnd { id }) if editable.contains(id));
+        let mut off = p.off;
+        if start(off) {
+            while start(off) {
+                off += OBJ.len_utf8();
+            }
+        } else {
+            while off >= OBJ.len_utf8() && end(off - OBJ.len_utf8()) {
+                off -= OBJ.len_utf8();
+            }
+        }
+        Pos { off, ..p.clone() }
+    };
+    let objects = [
+        InlineObject::PermStart { id: 1, group: "everyone".into(), editor: String::new() },
+        InlineObject::PermStart { id: 2, group: String::new(), editor: "  ALICE  ".into() },
+        InlineObject::PermStart { id: 3, group: String::new(), editor: "alice".into() },
+        InlineObject::PermEnd { id: 1 },
+        InlineObject::PermEnd { id: 3 },
+        InlineObject::BookmarkStart { name: "Original".into() },
+        InlineObject::PermEnd { id: 7 },
+        InlineObject::PermStart { id: 7, group: String::new(), editor: "Bob".into() },
+    ];
+    for text in
+        [format!("λ{}x{}終", OBJ.to_string().repeat(4), OBJ.to_string().repeat(4)), OBJ.to_string().repeat(9), format!("λ{OBJ}{OBJ}x{OBJ}{OBJ}{OBJ}")]
+    {
+        for count in 0..=objects.len() {
+            for mode in [None, Some("readOnly"), Some("comments"), Some("forms"), Some("trackedChanges")] {
+                let mut p = wordcraft_doc::Paragraph::new();
+                p.text = text.clone();
+                p.objects = objects[..count].to_vec();
+                p.runs.push(Run { len: p.text.len(), props: CharProps::default() });
+                let mut doc = Document::new();
+                doc.body = vec![Block::Para(p).into()];
+                doc.settings.protection = mode.map(str::to_string);
+                let mut s = Session::new(doc);
+                s.author = " Alice ".into();
+                for off in 0..=text.len() + 1 {
+                    let at = Pos::body(0, off);
+                    assert_eq!(typing_pos(&s, &at), original(&s, &at), "mode={mode:?} count={count} off={off} text={text:?}");
+                }
+            }
+        }
+    }
+    let mut s = Session::new(Document::from_text("outside"));
+    s.doc.settings.protection = Some("readOnly".into());
+    assert_eq!(typing_pos(&s, &Pos::body(99, 0)), Pos::body(99, 0));
+}
+
+#[test]
+fn typing_boundary_keeps_duplicate_ids_across_stories_and_start_precedence() {
+    use wordcraft_doc::para::Run;
+    let paragraph = |text: String, objects| wordcraft_doc::Paragraph {
+        runs: vec![Run { len: text.len(), props: CharProps::default() }],
+        text,
+        objects,
+        ..Default::default()
+    };
+    let mut doc = Document::new();
+    doc.body = vec![
+        Block::Para(paragraph(
+            format!("{OBJ}x{OBJ}"),
+            vec![InlineObject::PermStart { id: 1, group: String::new(), editor: "Bob".into() }, InlineObject::PermEnd { id: 1 }],
+        ))
+        .into(),
+    ];
+    doc.add_part(
+        wordcraft_doc::PartKind::Header,
+        vec![
+            Block::Para(paragraph(
+                format!("{OBJ}y{OBJ}"),
+                vec![InlineObject::PermStart { id: 1, group: "everyone".into(), editor: String::new() }, InlineObject::PermEnd { id: 1 }],
+            ))
+            .into(),
+        ],
+    );
+    doc.settings.protection = Some("comments".into());
+    let mut s = Session::new(doc);
+    s.author = "Alice".into();
+    // Preserve the existing document-wide ID membership, even for a duplicate in another story.
+    assert_eq!(typing_pos(&s, &Pos::body(0, 0)), Pos::body(0, OBJ.len_utf8()));
+    assert_eq!(typing_pos(&s, &Pos::body(0, 7)), Pos::body(0, 4));
+    s.doc.body = vec![
+        Block::Para(paragraph(
+            format!("{OBJ}{OBJ}x"),
+            vec![InlineObject::PermEnd { id: 1 }, InlineObject::PermStart { id: 1, group: "everyone".into(), editor: String::new() }],
+        ))
+        .into(),
+    ];
+    // A start to the right wins over an end to the left.
+    assert_eq!(typing_pos(&s, &Pos::body(0, 3)), Pos::body(0, 6));
+}
