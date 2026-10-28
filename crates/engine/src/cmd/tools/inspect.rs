@@ -1,5 +1,8 @@
 use super::{Block, CmdError, CmdResult, Document, InlineObject, Paragraph, Pos, Session, StoryRef, Value, json};
 
+#[cfg(test)]
+mod tests;
+
 pub(super) fn accessibility(s: &mut Session, _: &Value) -> CmdResult {
     let issues = crate::cmd::accessibility::check(&s.doc);
     Ok(json!({"ok": issues.is_empty(), "issues": issues}))
@@ -83,9 +86,9 @@ fn remove_hidden(doc: &mut Document) -> Result<Vec<Value>, CmdError> {
     let mut refs: Vec<u32> = Vec::new();
     for h in hidden_text(doc).into_iter().rev() {
         if let Some(p) = doc.para(h.story, &h.path) {
-            for off in p.object_offsets() {
+            for (off, object) in p.objects_with_offsets() {
                 if h.range.contains(&off)
-                    && let Some(InlineObject::NoteRef { id, .. }) = p.object_at(off)
+                    && let InlineObject::NoteRef { id, .. } = object
                 {
                     refs.push(*id);
                 }
@@ -101,8 +104,8 @@ fn remove_hidden(doc: &mut Document) -> Result<Vec<Value>, CmdError> {
     for story in all_stories(doc) {
         for path in doc.para_paths(story) {
             let Some(p) = doc.para(story, &path) else { continue };
-            for off in p.object_offsets() {
-                if let Some(InlineObject::NoteRef { id, .. }) = p.object_at(off)
+            for (_, object) in p.objects_with_offsets() {
+                if let InlineObject::NoteRef { id, .. } = object
                     && story != StoryRef::Part(*id)
                 {
                     kept.insert(*id);
@@ -138,15 +141,22 @@ fn removable(doc: &Document, story: StoryRef, path: &wordcraft_doc::Path, p: &Pa
     let is_table = |j: Option<usize>| j.and_then(|j| c.get(j)).is_some_and(|b| matches!(**b, Block::Table(_)));
     i + 1 < c.len()
         && p.section.is_none()
-        && !p.object_offsets().into_iter().any(|o| matches!(p.object_at(o), Some(InlineObject::ControlStart { .. } | InlineObject::ControlEnd)))
+        && !p.objects_with_offsets().any(|(_, o)| matches!(o, InlineObject::ControlStart { .. } | InlineObject::ControlEnd))
         && !(is_table(i.checked_sub(1)) && is_table(i.checked_add(1)))
 }
 
-/// Whether `range` of `p` holds text or an object, not only zero-width markers.
-fn has_content(p: &Paragraph, range: &std::ops::Range<usize>) -> bool {
-    p.text
-        .get(range.clone())
-        .is_some_and(|t| t.char_indices().any(|(i, ch)| ch != '\u{FFFC}' || p.object_at(range.start + i).is_some_and(|o| !o.is_marker())))
+/// Whether `range` of `p` holds text or an object, not only zero-width markers. Ranges are
+/// checked in text order, sharing the paragraph's non-marker offsets rather than restarting it.
+fn has_content(p: &Paragraph, range: &std::ops::Range<usize>, non_markers: &mut std::iter::Peekable<impl Iterator<Item = usize>>) -> bool {
+    p.text.get(range.clone()).is_some_and(|t| {
+        if t.chars().any(|ch| ch != '\u{FFFC}') {
+            return true;
+        }
+        while non_markers.peek().is_some_and(|&off| off < range.start) {
+            non_markers.next();
+        }
+        non_markers.peek().is_some_and(|&off| off < range.end)
+    })
 }
 
 /// Delete one hidden piece. Within a paragraph: straight in the paragraph, unless a content
@@ -157,9 +167,8 @@ fn has_content(p: &Paragraph, range: &std::ops::Range<usize>) -> bool {
 fn remove_piece(doc: &mut Document, h: &Hidden) -> Result<(), CmdError> {
     let Some(p) = doc.para(h.story, &h.path) else { return Ok(()) };
     let has_control = p
-        .object_offsets()
-        .into_iter()
-        .any(|o| h.range.contains(&o) && matches!(p.object_at(o), Some(InlineObject::ControlStart { .. } | InlineObject::ControlEnd)));
+        .objects_with_offsets()
+        .any(|(off, object)| h.range.contains(&off) && matches!(object, InlineObject::ControlStart { .. } | InlineObject::ControlEnd));
     if h.whole && removable(doc, h.story, &h.path, p) {
         let i = h.path.last();
         let blocks = doc.container_mut(h.story, &h.path)?;
@@ -237,15 +246,16 @@ fn hidden_text(doc: &Document) -> Vec<Hidden> {
                     _ => ranges.push(r),
                 }
             }
+            let mut non_markers = p.objects_with_offsets().filter_map(|(off, object)| (!object.is_marker()).then_some(off)).peekable();
             if all_hidden && doc.styles.resolve_char(style, &p.mark).hidden {
                 // An empty hidden paragraph that has to stay is invisible and holds no text.
-                if removable(doc, story, &path, p) || has_content(p, &(0..p.len())) {
+                if removable(doc, story, &path, p) || has_content(p, &(0..p.len()), &mut non_markers) {
                     out.push(Hidden { story, path: path.clone(), range: 0..p.len(), whole: true });
                 }
                 continue;
             }
             for range in ranges {
-                if has_content(p, &range) {
+                if has_content(p, &range, &mut non_markers) {
                     out.push(Hidden { story, path: path.clone(), range, whole: false });
                 }
             }
@@ -262,8 +272,8 @@ fn unsupported_hidden(doc: &Document) -> Vec<Value> {
         for path in doc.para_paths(story) {
             let Some(p) = doc.para(story, &path) else { continue };
             let style = p.props.style.as_deref();
-            for off in p.object_offsets() {
-                if let Some(InlineObject::Opaque { format, xml, .. }) = p.object_at(off)
+            for (off, object) in p.objects_with_offsets() {
+                if let InlineObject::Opaque { format, xml, .. } = object
                     && xml.contains("vanish")
                     && !doc.styles.resolve_char(style, p.props_of_char(off)).hidden
                 {
