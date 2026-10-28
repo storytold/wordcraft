@@ -147,6 +147,15 @@ fn page_texture(app: &WordApp, ctx: &egui::Context, lay: &DocLayout, page: usize
     Some(tex)
 }
 
+/// Return pressed with nothing else to take it: no field or list open and no control focused (a
+/// focused button takes Return itself). Consumes it when so.
+fn return_prints(ctx: &egui::Context) -> bool {
+    !ctx.text_edit_focused()
+        && !egui::Popup::is_any_open(ctx)
+        && ctx.memory(|m| m.focused().is_none())
+        && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
+}
+
 /// The Print page: settings on the left, the preview on the right.
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
@@ -167,10 +176,11 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 // #2958: as in Word, the page's action leads the settings, in the accent the app
                 // gives a dialog's primary button: the first thing seen, and plainly a button
                 // that prints now rather than one more setting in the list below.
+                let ready = !native || app.printing.ready();
+                // Return prints too, as in Word, whose ⌘P opens on Print as the default button.
                 if hook
-                    && ui
-                        .add_enabled(!native || app.printing.ready(), crate::widgets::primary_button(ui, tl!("Print")).min_size(vec2(320.0, 34.0)))
-                        .clicked()
+                    && (ui.add_enabled(ready, crate::widgets::primary_button(ui, tl!("Print")).min_size(vec2(320.0, 34.0))).clicked()
+                        || (ready && app.dialog.is_none() && return_prints(ui.ctx())))
                 {
                     let params = app.ui.print.params();
                     let _ = app.run("ui.print", params);
