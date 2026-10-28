@@ -1,4 +1,4 @@
-use super::{DocLayout, Hash, Hasher, Page, Placed, Pos, Pos2, Rect, StoryRef, WordApp, json, pos2};
+use super::{DocLayout, Hash, Hasher, Page, Placed, Pos, Pos2, Rect, StoryRef, TextureHandle, WordApp, json, pos2};
 
 /// Fingerprint of everything outside the layout that changes how pages render: the view's
 /// marks and markup, dark mode, the page colour and watermark, header/body dimming, the media,
@@ -87,6 +87,62 @@ pub(super) fn page_key(app: &mut WordApp, layout: &std::sync::Arc<DocLayout>, i:
     let mut h = std::collections::hash_map::DefaultHasher::new();
     (view, scale_px.to_bits(), app.canvas.page_keys.content(layout, i)).hash(&mut h);
     h.finish()
+}
+
+/// Page `i` of `layout` drawn `width` points wide, for the Navigation pane's Pages tab, from a
+/// cache of its own: the page's texture is kept only near the view, at the page's zoom. A
+/// thumbnail out of date (an edit, a change of view) shows until `budget` lets it be drawn again,
+/// one page off the budget each, so typing in a long document waits for no thumbnails.
+pub(crate) fn page_thumbnail(
+    app: &mut WordApp,
+    ctx: &egui::Context,
+    layout: &std::sync::Arc<DocLayout>,
+    i: usize,
+    width: f32,
+    budget: &mut usize,
+) -> Option<TextureHandle> {
+    let page = layout.pages.get(i)?;
+    // Thumbnails aren't tiled as the page is: one texture holds the whole page.
+    let max_side = ctx.input(|i| i.max_texture_side).min(wordcraft_render::MAX_SIDE as usize).max(1) as f32;
+    let scale_px = thumbnail_scale(width * ctx.pixels_per_point(), page.w, page.h, max_side);
+    let view = view_key(app, false, None);
+    let key = page_key(app, layout, i, view, scale_px);
+    let fresh = app.canvas.thumbnails.get(&i).is_some_and(|(k, _)| *k == key);
+    if !fresh && *budget > 0 {
+        *budget -= 1;
+        let img = wordcraft_render::render_page(&app.session.doc, page, scale_px, &page_render_options(app, false));
+        let ci = page_image(&img);
+        match app.canvas.thumbnails.get_mut(&i) {
+            Some((k, tex)) => {
+                tex.set(ci, egui::TextureOptions::LINEAR);
+                *k = key;
+            }
+            None => {
+                let tex = ctx.load_texture(format!("thumbnail{i}"), ci, egui::TextureOptions::LINEAR);
+                app.canvas.thumbnails.insert(i, (key, tex));
+            }
+        }
+    }
+    app.canvas.thumbnails.get(&i).map(|(_, tex)| tex.clone())
+}
+
+/// The raster scale of a thumbnail `width_px` pixels wide of a `page_w` × `page_h` point page,
+/// at most one pixel a point. A very tall Web or Draft page is drawn smaller still, so the whole
+/// page fits within `max_side` pixels: the backend's largest texture, at most
+/// [`wordcraft_render::MAX_SIDE`] (the renderer would cut it off there).
+pub(super) fn thumbnail_scale(width_px: f32, page_w: f32, page_h: f32, max_side: f32) -> f32 {
+    // A pixel short of the largest side: the renderer rounds the raster's sides up.
+    let side = (max_side - 1.0).max(1.0);
+    let (w, h) = (page_w.max(1.0), page_h.clamp(1.0, 1e6));
+    let scale = (width_px / w).clamp(0.02, 1.0);
+    if scale.is_finite() { scale.min(side / w).min(side / h) } else { 0.02 }
+}
+
+/// The Pages tab drew this frame: keep the thumbnails of the pages in `keep` (those near the
+/// pane's view) and drop the rest. Once a frame passes without it, the canvas drops them all.
+pub(crate) fn keep_thumbnails(app: &mut WordApp, keep: std::ops::Range<usize>) {
+    app.canvas.thumbnails_shown = true;
+    app.canvas.thumbnails.retain(|i, _| keep.contains(i));
 }
 
 pub(super) fn to_screen(origin: Pos2, page_rect: Rect, scale: f32, x: f32, y: f32) -> Pos2 {

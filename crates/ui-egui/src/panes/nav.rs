@@ -38,15 +38,7 @@ pub(super) fn nav(app: &mut WordApp, ui: &mut Ui) {
     });
     ui.separator();
     egui::ScrollArea::vertical().show(ui, |ui| match app.ui.nav_tab.as_str() {
-        "pages" => {
-            let l = app.session.layout();
-            for (i, p) in l.pages.iter().enumerate() {
-                let label = crate::i18n::fmt(tl!("Page {page}"), &[("page", &p.number.to_string())]);
-                if ui.selectable_label(app.session.page_hint == i, label).clicked() {
-                    let _ = app.run("edit.goto", json!({"page": i + 1}));
-                }
-            }
-        }
+        "pages" => page_thumbnails(app, ui),
         "results" => {
             let results = app.session.find.results.clone();
             ui.label(egui::RichText::new(format!("{} results", results.len())).small().weak());
@@ -104,6 +96,59 @@ pub(super) fn nav(app: &mut WordApp, ui: &mut Ui) {
             }
         }
     });
+}
+
+/// Thumbnails kept for pages this many either side of those in the Pages tab's view.
+pub(super) const THUMBNAILS_KEPT: usize = 8;
+
+/// The Pages tab: a picture of each page, as Word's Pages and Thumbnails show; a click goes to
+/// the page, and the page with the caret is outlined. Only thumbnails scrolled into view are
+/// drawn, two a frame at most ([`crate::canvas::page_thumbnail`]).
+fn page_thumbnails(app: &mut WordApp, ui: &mut egui::Ui) {
+    let layout = app.session.layout();
+    let mut shown: Option<(usize, usize)> = None;
+    let width = (ui.available_width() - 32.0).clamp(60.0, 220.0);
+    let mut budget = 2;
+    for (i, page) in layout.pages.iter().enumerate() {
+        let label = crate::i18n::fmt(tl!("Page {page}"), &[("page", &page.number.to_string())]);
+        let current = app.session.page_hint == i;
+        let size = egui::vec2(width, width * page.h / page.w.max(1.0));
+        ui.vertical_centered(|ui| {
+            let (rect, r) = ui.allocate_exact_size(size, egui::Sense::click());
+            if ui.is_rect_visible(rect) {
+                shown = Some(shown.map_or((i, i), |(first, _)| (first, i)));
+                let painter = ui.painter();
+                match crate::canvas::page_thumbnail(app, ui.ctx(), &layout, i, width, &mut budget) {
+                    Some(tex) => {
+                        painter.image(tex.id(), rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+                    }
+                    None => {
+                        painter.rect_filled(rect, 0.0, egui::Color32::WHITE);
+                    }
+                }
+                let stroke = if current || r.hovered() {
+                    egui::Stroke::new(if current { 2.5 } else { 1.5 }, ui.visuals().selection.stroke.color)
+                } else {
+                    egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color)
+                };
+                painter.rect_stroke(rect, 0.0, stroke, egui::StrokeKind::Outside);
+            }
+            r.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, current, &label));
+            if r.clicked() {
+                let _ = app.run("edit.goto", json!({"page": i + 1}));
+            }
+            ui.label(egui::RichText::new(page.number.to_string()).small().weak());
+        });
+        ui.add_space(6.0);
+    }
+    // Only the thumbnails near the pane's view stay: scrolling through a long document would
+    // otherwise keep a picture of every page it passed.
+    let keep = shown.map_or(0..0, |(first, last)| first.saturating_sub(THUMBNAILS_KEPT)..last.saturating_add(THUMBNAILS_KEPT + 1));
+    crate::canvas::keep_thumbnails(app, keep);
+    // Thumbnails left out of date wait for the next frame.
+    if budget == 0 {
+        ui.ctx().request_repaint();
+    }
 }
 
 /// Which headings the pane shows: those under a collapsed heading (every following heading

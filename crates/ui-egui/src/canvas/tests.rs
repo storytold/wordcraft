@@ -4798,3 +4798,49 @@ fn the_view_key_changes_when_a_drag_takes_an_object_off_the_page() {
     assert_ne!(hidden, view_key(&app, false, None), "the page without the dragged object is rendered again");
     assert_eq!(hidden, view_key(&app, false, Some(&object)), "the same drag keeps the key: no re-render every frame");
 }
+
+/// A thumbnail of a very tall Web or Draft page fits the renderer's largest side, scaled down as
+/// a whole rather than cut off; an ordinary page keeps its pane-width scale.
+#[test]
+fn a_tall_page_thumbnail_fits_the_largest_raster_side() {
+    let side = wordcraft_render::MAX_SIDE as f32;
+    // 220 px across an 800 pt page would be 16,500 px down a 60,000 pt one.
+    let scale = pages::thumbnail_scale(220.0, 800.0, 60_000.0, side);
+    assert!(scale < 220.0 / 800.0 && (60_000.0 * scale).ceil() <= side, "the whole page fits: {scale}");
+    let tallest = pages::thumbnail_scale(220.0, 800.0, 1e6, side);
+    assert!(tallest < 0.02 && (1e6 * tallest).ceil() <= side, "below 0.02 when it must be: {tallest}");
+    let doc = wordcraft_doc::Document::from_text("Tall");
+    let page = Page {
+        w: 800.0,
+        h: 60_000.0,
+        ..shown_layout(&mut WordApp::new(wordcraft_engine::Session::new(doc.clone()), crate::Services::default())).pages[0].clone()
+    };
+    let img = wordcraft_render::render_page(&doc, &page, scale, &wordcraft_render::RenderOptions::default());
+    assert!(img.height <= wordcraft_render::MAX_SIDE && (img.height as f32 - 60_000.0 * scale).abs() <= 1.0, "nothing cut off: {} px", img.height);
+    assert!((pages::thumbnail_scale(220.0, 612.0, 792.0, side) - 220.0 / 612.0).abs() < 1e-6, "a Letter page");
+    assert_eq!(pages::thumbnail_scale(2000.0, 612.0, 792.0, side), 1.0, "at most a pixel a point");
+    assert!(pages::thumbnail_scale(f32::NAN, 612.0, 792.0, side) > 0.0);
+}
+
+/// A thumbnail also fits the backend's largest texture, which can be smaller than the renderer's
+/// largest side (thumbnails aren't tiled as the page is): under a 2,048 px limit a 60,000 pt page's
+/// thumbnail is drawn whole within it.
+#[test]
+fn a_tall_page_thumbnail_fits_the_backends_largest_texture() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Tall")), crate::Services::default());
+    let mut layout = (*shown_layout(&mut app)).clone();
+    layout.pages[0].w = 800.0;
+    layout.pages[0].h = 60_000.0;
+    let layout = std::sync::Arc::new(layout);
+    let ctx = egui::Context::default();
+    let mut size = None;
+    let raw = egui::RawInput { max_texture_side: Some(2048), ..Default::default() };
+    let out = ctx.run_ui(raw, |ui| {
+        let mut budget = 1;
+        size = pages::page_thumbnail(&mut app, ui.ctx(), &layout, 0, 220.0, &mut budget).map(|t| t.size());
+    });
+    // No painter here: dropping the font atlas delta unapplied trips an epaint debug assertion.
+    out.drop_without_applying_deltas();
+    let [w, h] = size.expect("a thumbnail");
+    assert!(w <= 2048 && h <= 2048 && h > 1024, "the whole page within the backend's limit: {w} × {h}");
+}

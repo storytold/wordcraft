@@ -64,6 +64,76 @@ fn f6_past_the_last_pane_types_into_the_document() {
     assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim(), "typed");
 }
 
+/// The Pages tab shows each page as a picture, the caret's page outlined; a click on one goes
+/// to that page. Thumbnails are drawn a couple a frame, and only for pages in the pane's view.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn pages_tab_shows_page_thumbnails_that_go_to_their_page() {
+    use egui_kittest::kittest::Queryable;
+    let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("One")), crate::Services::default());
+    for text in ["Two", "Three"] {
+        app.run("insert.pageBreak", serde_json::json!({})).unwrap();
+        app.run("text.insert", serde_json::json!({"text": text})).unwrap();
+    }
+    app.run("view.navigationPane", serde_json::json!({"value": true})).unwrap();
+    app.ui.nav_tab = "pages".into();
+    let mut h = pane_harness(app);
+    h.run_steps(4);
+    assert_eq!(h.state_mut().session.layout().pages.len(), 3);
+    let drawn = h.state().canvas.thumbnail_pages();
+    assert!(drawn.starts_with(&[0, 1]), "the pages in the pane's view have their pictures: {drawn:?}");
+    assert_eq!(h.state().session.page_hint, 2, "the caret is on the last page");
+    assert!(h.query_by_label("Page 3").is_some());
+
+    h.get_by_label("Page 1").click();
+    h.run_steps(4);
+    assert_eq!(h.state().session.page_hint, 0, "a click goes to its page");
+
+    // An edit leaves the pictures in place until they are drawn again.
+    h.state_mut().run("text.insert", serde_json::json!({"text": "Edited "})).unwrap();
+    h.run_steps(4);
+    assert_eq!(h.state().canvas.thumbnail_pages(), drawn);
+}
+
+/// The Pages tab keeps thumbnails only for pages near its view, however many pages were drawn
+/// before, and drops them all once the tab or the pane closes.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn page_thumbnails_are_kept_near_the_view_and_dropped_when_the_tab_closes() {
+    let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("1")), crate::Services::default());
+    for n in 2..=40 {
+        app.run("insert.pageBreak", serde_json::json!({})).unwrap();
+        app.run("text.insert", serde_json::json!({"text": n.to_string()})).unwrap();
+    }
+    app.run("view.navigationPane", serde_json::json!({"value": true})).unwrap();
+    app.ui.nav_tab = "pages".into();
+    let mut h = pane_harness(app);
+    let layout = h.state_mut().session.layout();
+    assert_eq!(layout.pages.len(), 40);
+    // Pictures of every page, as scrolling through the whole document would leave them.
+    let ctx = h.ctx.clone();
+    let mut budget = usize::MAX;
+    for i in 0..layout.pages.len() {
+        crate::canvas::page_thumbnail(h.state_mut(), &ctx, &layout, i, 60.0, &mut budget);
+    }
+    assert_eq!(h.state().canvas.thumbnail_pages().len(), 40);
+    h.run_steps(2);
+    let kept = h.state().canvas.thumbnail_pages();
+    assert!(kept.contains(&0) && kept.len() < 40, "only pages near the view keep theirs: {kept:?}");
+    assert!(kept.iter().all(|&i| i <= 10 + super::nav::THUMBNAILS_KEPT), "{kept:?}");
+
+    h.state_mut().ui.nav_tab = "headings".into();
+    h.run_steps(2);
+    assert!(h.state().canvas.thumbnail_pages().is_empty(), "the Headings tab drops them");
+
+    h.state_mut().ui.nav_tab = "pages".into();
+    h.run_steps(4);
+    assert!(!h.state().canvas.thumbnail_pages().is_empty());
+    h.state_mut().run("view.navigationPane", serde_json::json!({"value": false})).unwrap();
+    h.run_steps(2);
+    assert!(h.state().canvas.thumbnail_pages().is_empty(), "closing the pane drops them");
+}
+
 fn pane_harness(app: crate::WordApp) -> egui_kittest::Harness<'static, crate::WordApp> {
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut crate::WordApp| {
