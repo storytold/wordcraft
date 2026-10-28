@@ -71,6 +71,7 @@ impl Session {
             typing_word: typing,
             filename: filename.clone(),
             filepath: filepath.clone(),
+            keep_next_splits: wordcraft_layout::KEEP_NEXT_SPLITS_ON_THIS_HOST,
         };
         let l = Arc::new(wordcraft_layout::layout(&self.doc, &mut self.cache, &opts));
         let [newest, _] = std::mem::take(&mut self.layout);

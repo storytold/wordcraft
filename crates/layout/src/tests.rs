@@ -8410,15 +8410,22 @@ fn list_indents_and_style_indents_combine_like_word() {
     }
 }
 
+/// Lay `doc` out with keep with next splitting a kept paragraph that fits, as in Word for Mac,
+/// or not ([`LayoutOptions::keep_next_splits`]), whatever the host.
+fn lay_keep_next(doc: &Document, splits: bool) -> DocLayout {
+    layout(doc, &mut LayoutCache::new(), &LayoutOptions { keep_next_splits: splits, ..Default::default() })
+}
+
 /// Keep with next at a page bottom, measured in Word for Windows (`plan/word` R19, 20 cases): a
 /// paragraph that would fit on the page by itself moves over with the next one, but one that
 /// doesn't fit anyway breaks as usual, its last lines going over with the next paragraph (with
 /// Keep lines together it moves whole); a chain of kept paragraphs moves together. NIH's
-/// five-line kept paragraph left a third of a page empty.
+/// five-line kept paragraph left a third of a page empty. Word for Mac splits the paragraph that
+/// would fit instead (`keep_next_splits`, #3850); both are checked on every host.
 #[test]
 fn keep_with_next_moves_a_paragraph_only_when_it_would_fit() {
     // Page of each of the kept paragraph's 5 lines and of the first paragraph after it.
-    let pages = |fillers: usize, kept: ParaProps, next: ParaProps| {
+    let pages = |fillers: usize, kept: ParaProps, next: ParaProps, splits: bool| {
         let mut d = Document::new();
         let plain = ParaProps {
             space_before: Some(0.0),
@@ -8428,14 +8435,14 @@ fn keep_with_next_moves_a_paragraph_only_when_it_would_fit() {
         };
         let para = |text: &str, p: &ParaProps| {
             let mut x = wordcraft_doc::Paragraph::with_text(text, Default::default());
-            x.props = ParaProps { keep_next: p.keep_next, keep_lines: p.keep_lines, ..plain.clone() };
+            x.props = ParaProps { keep_next: p.keep_next, keep_lines: p.keep_lines, widow_control: p.widow_control, ..plain.clone() };
             wordcraft_doc::para_block(x)
         };
         d.body = (0..fillers).map(|i| para(&format!("F{i}"), &plain)).collect();
         d.body.push(para("Ka\nKb\nKc\nKd\nKe", &kept));
         d.body.push(para("NX", &next));
         d.body.push(para("NY", &plain));
-        let l = lay(&d);
+        let l = lay_keep_next(&d, splits);
         let k = fillers;
         [0, 3, 6, 9, 12]
             .map(|off| l.caret(&Pos::body(k, off)).unwrap().page)
@@ -8446,14 +8453,98 @@ fn keep_with_next_moves_a_paragraph_only_when_it_would_fit() {
     let none = ParaProps::default();
     let kn = ParaProps { keep_next: Some(true), ..Default::default() };
     let kl = ParaProps { keep_lines: Some(true), ..kn.clone() };
-    // Find where the kept paragraph just fits: its last line on page 1, the next one's on page 2.
-    let fit = (20..80).find(|n| pages(*n, none.clone(), none.clone()) == [0, 0, 0, 0, 0, 1]).expect("a filler count that fills the page");
-    assert_eq!(pages(fit, kn.clone(), none.clone()), [1, 1, 1, 1, 1, 1], "fits by itself: moves with the next");
-    let split = pages(fit + 1, none.clone(), none.clone());
-    assert!(split[0] == 0 && split[4] == 1, "one more line splits it: {split:?}");
-    assert_eq!(pages(fit + 1, kn.clone(), none.clone()), split, "doesn't fit anyway: breaks as usual");
-    assert_eq!(pages(fit + 1, kl.clone(), none.clone()), [1, 1, 1, 1, 1, 1], "with keep lines together it moves whole");
-    assert_eq!(pages(fit - 1, kn.clone(), kn.clone()), [1, 1, 1, 1, 1, 1], "a kept chain moves together");
+    let kn_no_widow = ParaProps { widow_control: Some(false), ..kn.clone() };
+    for splits in [false, true] {
+        // Find where the kept paragraph just fits: its last line on page 1, the next one's on page 2.
+        let fit = (20..80).find(|n| pages(*n, none.clone(), none.clone(), splits) == [0, 0, 0, 0, 0, 1]).expect("a filler count that fills the page");
+        // Word for Mac splits it instead: its last two lines (widow control) go over with the
+        // next one, and so does a chain's (observed in Word for Mac 16.114, #3850).
+        let kept_over = if splits { [0, 0, 0, 1, 1, 1] } else { [1, 1, 1, 1, 1, 1] };
+        assert_eq!(pages(fit, kn.clone(), none.clone(), splits), kept_over, "splits {splits}: fits by itself: moves with the next");
+        let split = pages(fit + 1, none.clone(), none.clone(), splits);
+        assert!(split[0] == 0 && split[4] == 1, "splits {splits}: one more line splits it: {split:?}");
+        assert_eq!(pages(fit + 1, kn.clone(), none.clone(), splits), split, "splits {splits}: doesn't fit anyway: breaks as usual");
+        assert_eq!(pages(fit + 1, kl.clone(), none.clone(), splits), [1, 1, 1, 1, 1, 1], "splits {splits}: with keep lines together it moves whole");
+        // Keep lines together wins over the split: a kept paragraph that fits moves whole.
+        assert_eq!(pages(fit, kl.clone(), none.clone(), splits), [1, 1, 1, 1, 1, 1], "splits {splits}: keep lines together and keep with next");
+        assert_eq!(pages(fit - 1, kn.clone(), kn.clone(), splits), kept_over, "splits {splits}: a kept chain moves together");
+        // Without widow control only its last line goes over with the next one.
+        let one_over = if splits { [0, 0, 0, 0, 1, 1] } else { [1, 1, 1, 1, 1, 1] };
+        assert_eq!(pages(fit, kn_no_widow.clone(), none.clone(), splits), one_over, "splits {splits}: no widow control");
+    }
+}
+
+/// Keep with next before a three-line paragraph with widow control: that paragraph can't start a
+/// page bottom with two lines (it would leave one alone on the next page), so the kept one's last
+/// line always shares a page with its first line (#3850: WordCraft left the kept paragraph whole
+/// and sent the next one over alone, breaking the keep). Split as in Word for Mac or not.
+#[test]
+fn keep_with_next_holds_before_a_three_line_paragraph() {
+    let plain = ParaProps {
+        space_before: Some(0.0),
+        space_after: Some(0.0),
+        line_spacing: Some(wordcraft_doc::props::LineSpacing::Multiple(1.0)),
+        ..Default::default()
+    };
+    let para = |text: &str, keep: bool| {
+        let mut x = wordcraft_doc::Paragraph::with_text(text, Default::default());
+        x.props = ParaProps { keep_next: keep.then_some(true), ..plain.clone() };
+        wordcraft_doc::para_block(x)
+    };
+    for splits in [false, true] {
+        for fillers in 30..60 {
+            let mut d = Document::new();
+            d.body = (0..fillers).map(|i| para(&format!("F{i}"), false)).collect();
+            d.body.push(para("Ka\nKb\nKc\nKd\nKe\nKf", true));
+            d.body.push(para("Na\nNb\nNc", false));
+            d.body.push(para("NY", false));
+            let l = lay_keep_next(&d, splits);
+            let page = |pos: Pos| l.caret(&pos).unwrap().page;
+            assert_eq!(page(Pos::body(fillers, 15)), page(Pos::body(fillers + 1, 0)), "splits {splits}, {fillers} fillers: the keep holds");
+        }
+    }
+}
+
+/// #4066 review: a kept paragraph split as in Word for Mac whose first line can't go on the page
+/// after all (its footnote leaves no room there) moves to the next page before any line is
+/// placed; there it is no longer split, so all of it stays with the next paragraph instead of
+/// its last lines going on to a third page.
+#[test]
+fn a_kept_paragraph_moved_by_a_footnote_on_its_first_line_is_not_split_on_the_next_page() {
+    use wordcraft_doc::props::LineSpacing;
+    let plain = ParaProps { line_spacing: Some(LineSpacing::Exactly(18.0)), space_before: Some(0.0), space_after: Some(0.0), ..Default::default() };
+    let para = |text: &str, keep: bool| {
+        let mut x = wordcraft_doc::Paragraph::with_text(text, Default::default());
+        x.props = ParaProps { keep_next: keep.then_some(true), ..plain.clone() };
+        wordcraft_doc::para_block(x)
+    };
+    // Where the kept paragraph (four lines) just fits with no room for the next one to start.
+    let doc = |fillers: usize, note: bool, keep: bool| {
+        let mut d = Document::new();
+        d.body = (0..fillers).map(|i| para(&format!("F{i}"), false)).collect();
+        d.body.push(para("Ka\nKb\nKc\nKd", keep));
+        d.body.push(para("Na\nNb\nNc\nNd", false));
+        if note {
+            footnote(&mut d, &Pos::body(fillers, 2), "A one-line note.");
+        }
+        d
+    };
+    // Page of each of the kept paragraph's lines and of the next paragraph's first.
+    let pages = |d: &Document, fillers: usize, splits: bool| {
+        let l = lay_keep_next(d, splits);
+        let text = &d.para(StoryRef::Body, &Path::top(fillers)).unwrap().text;
+        ["Ka", "Kb", "Kc", "Kd"]
+            .map(|k| l.caret(&Pos::body(fillers, text.find(k).unwrap())).unwrap().page)
+            .into_iter()
+            .chain([l.caret(&Pos::body(fillers + 1, 0)).unwrap().page])
+            .collect::<Vec<_>>()
+    };
+    // The kept paragraph's last line on the page's last line: it fits, and the next can't start.
+    let full = (20..60).filter(|n| pages(&doc(*n, false, false), *n, false) == [0, 0, 0, 0, 1]).max().expect("a filler count that fills the page");
+    assert_eq!(pages(&doc(full, false, true), full, true), [0, 0, 1, 1, 1], "without the note it splits");
+    for splits in [false, true] {
+        assert_eq!(pages(&doc(full, true, true), full, splits), [1, 1, 1, 1, 1], "splits {splits}: moved whole by its footnote, it stays whole");
+    }
 }
 
 /// A kept heading goes with the paragraph after it when that paragraph cannot start on its

@@ -168,7 +168,7 @@ fn hindi_locale(tag: &str) -> bool {
     matches!(lang.as_str(), "ar" | "fa" | "ur" | "ps" | "sd" | "ku" | "ckb")
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct LayoutOptions {
     pub view: ViewMode,
     /// Width of the window in Web/Draft views, points.
@@ -210,6 +210,39 @@ pub struct LayoutOptions {
     pub filename: Option<Arc<str>>,
     /// Document full path for FILENAME \p fields ([`FieldCtx::filepath`]).
     pub filepath: Option<Arc<str>>,
+    /// Keep with next as in Word for Mac: a kept paragraph that fits on the page, followed by one
+    /// that can't start there, is split, its last lines (two with widow control) going over with
+    /// the next one (observed in Word for Mac 16.114, #3850). Off, it moves over whole, as in
+    /// Word for Windows. Defaults to [`KEEP_NEXT_SPLITS_ON_THIS_HOST`].
+    pub keep_next_splits: bool,
+}
+
+/// The default of [`LayoutOptions::keep_next_splits`]: on in the Mac builds, off elsewhere.
+pub const KEEP_NEXT_SPLITS_ON_THIS_HOST: bool = cfg!(target_os = "macos");
+
+impl Default for LayoutOptions {
+    fn default() -> Self {
+        LayoutOptions {
+            view: Default::default(),
+            web_width: Default::default(),
+            read_height: Default::default(),
+            read_line_spacing: Default::default(),
+            show_hidden: Default::default(),
+            hide_deleted: Default::default(),
+            hide_marked: Default::default(),
+            deletions_in_balloons: Default::default(),
+            proofing: Default::default(),
+            numeral: Default::default(),
+            comment_balloons: Default::default(),
+            field_codes: Default::default(),
+            outline: Default::default(),
+            proof: Default::default(),
+            typing_word: Default::default(),
+            filename: Default::default(),
+            filepath: Default::default(),
+            keep_next_splits: KEEP_NEXT_SPLITS_ON_THIS_HOST,
+        }
+    }
 }
 
 /// The word being typed ([`LayoutOptions::typing_word`]): the paragraph by its revision
