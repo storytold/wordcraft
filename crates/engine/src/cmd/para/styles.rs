@@ -108,11 +108,27 @@ pub(super) fn create_style(s: &mut Session, v: &Value) -> CmdResult {
 
 pub(super) fn modify_style(s: &mut Session, v: &Value) -> CmdResult {
     let id = style_id(s, p::req_str(v, "style")?)?;
-    let chr: Option<CharProps> = v.get("chr").map(|c| serde_json::from_value(c.clone())).transpose().map_err(|e| CmdError::Params(e.to_string()))?;
+    let mut chr: Option<CharProps> =
+        v.get("chr").map(|c| serde_json::from_value(c.clone())).transpose().map_err(|e| CmdError::Params(e.to_string()))?;
     let para: Option<ParaProps> =
         v.get("para").map(|c| serde_json::from_value(c.clone())).transpose().map_err(|e| CmdError::Params(e.to_string()))?;
     let next = p::str(v, "next").map(str::to_string);
     let name = p::str(v, "name").map(str::to_string);
+    if let Some(c) = &mut chr
+        && let Some(size) = c.size
+        && c.size_cs.is_none()
+    {
+        // A size edit keeps scripts linked only when they were linked before it. Resolve the
+        // full chain so an inherited, deliberately different complex-script size stays inherited.
+        let mut before = s.doc.styles.default_chr.clone();
+        for style in s.doc.styles.chain(&id) {
+            before.overlay(&style.chr);
+        }
+        let old_size = before.size.unwrap_or(wordcraft_doc::props::DEFAULT_FONT_SIZE);
+        if size != old_size && before.size_cs.is_none_or(|cs| cs == old_size) {
+            c.size_cs = Some(size);
+        }
+    }
     let st = s.doc.styles.get_mut(&id).ok_or_else(|| CmdError::Params("no such style".into()))?;
     if let Some(c) = chr {
         st.chr.overlay(&c);

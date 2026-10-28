@@ -167,7 +167,10 @@ fn style_set(s: &mut Session, v: &Value) -> CmdResult {
                 st.chr.spacing = Some(1.0);
                 st.chr.color = Some(TextColor::Rgb(Rgb(0x40, 0x40, 0x40)));
             }
-            "title" if st.id == "Title" => st.chr.size = Some(36.0),
+            "title" if st.id == "Title" => {
+                st.chr.size = Some(36.0);
+                st.chr.size_cs = Some(36.0);
+            }
             _ => {}
         }
     }

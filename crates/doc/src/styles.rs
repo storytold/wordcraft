@@ -485,7 +485,14 @@ impl StyleSheet {
     /// The built-in style set used for new documents.
     pub fn builtin() -> Self {
         let mut s = StyleSheet {
-            default_chr: CharProps { font: Some(BODY_FONT.into()), size: Some(12.0), kern: Some(1.0), lang: Some("en-US".into()), ..chr() },
+            default_chr: CharProps {
+                font: Some(BODY_FONT.into()),
+                size: Some(12.0),
+                size_cs: Some(12.0),
+                kern: Some(1.0),
+                lang: Some("en-US".into()),
+                ..chr()
+            },
             default_para: ParaProps {
                 space_after: Some(8.0),
                 space_before: Some(0.0),
@@ -544,7 +551,7 @@ impl StyleSheet {
                     outline_level: Some(i as u8),
                     ..para()
                 },
-                chr: CharProps { font: Some(font.into()), size: Some(size), italic, color: color(c), ..chr() },
+                chr: CharProps { font: Some(font.into()), size: Some(size), size_cs: Some(size), italic, color: color(c), ..chr() },
                 priority: Some(9 + n as u32),
                 quick: n <= 3,
                 ..p_style()
@@ -556,7 +563,7 @@ impl StyleSheet {
             based_on: Some("Normal".into()),
             next: Some("Normal".into()),
             para: ParaProps { space_after: Some(4.0), contextual_spacing: Some(true), line_spacing: Some(LineSpacing::Multiple(1.0)), ..para() },
-            chr: CharProps { font: Some(HEADING_FONT.into()), size: Some(28.0), spacing: Some(-0.5), kern: Some(14.0), ..chr() },
+            chr: CharProps { font: Some(HEADING_FONT.into()), size: Some(28.0), size_cs: Some(28.0), spacing: Some(-0.5), kern: Some(14.0), ..chr() },
             priority: Some(10),
             quick: true,
             ..p_style()
@@ -566,7 +573,7 @@ impl StyleSheet {
             name: "Subtitle".into(),
             based_on: Some("Normal".into()),
             next: Some("Normal".into()),
-            chr: CharProps { size: Some(14.0), spacing: Some(0.75), color: color(Rgb(0x59, 0x59, 0x59)), ..chr() },
+            chr: CharProps { size: Some(14.0), size_cs: Some(14.0), spacing: Some(0.75), color: color(Rgb(0x59, 0x59, 0x59)), ..chr() },
             priority: Some(11),
             quick: true,
             ..p_style()
@@ -644,7 +651,7 @@ impl StyleSheet {
             based_on: Some("Normal".into()),
             next: Some("Normal".into()),
             para: ParaProps { space_after: Some(10.0), line_spacing: Some(LineSpacing::Multiple(1.0)), ..para() },
-            chr: CharProps { italic: Some(true), size: Some(9.0), color: color(Rgb(0x0E, 0x28, 0x41)), ..chr() },
+            chr: CharProps { italic: Some(true), size: Some(9.0), size_cs: Some(9.0), color: color(Rgb(0x0E, 0x28, 0x41)), ..chr() },
             priority: Some(35),
             ..p_style()
         });
@@ -671,7 +678,7 @@ impl StyleSheet {
             name: "Footnote Text".into(),
             based_on: Some("Normal".into()),
             para: ParaProps { space_after: Some(0.0), line_spacing: Some(LineSpacing::Multiple(1.0)), ..para() },
-            chr: CharProps { size: Some(10.0), ..chr() },
+            chr: CharProps { size: Some(10.0), size_cs: Some(10.0), ..chr() },
             priority: Some(99),
             ..p_style()
         });
@@ -684,7 +691,7 @@ impl StyleSheet {
             name: "Endnote Text".into(),
             based_on: Some("Normal".into()),
             para: ParaProps { space_after: Some(0.0), line_spacing: Some(LineSpacing::Multiple(1.0)), ..para() },
-            chr: CharProps { size: Some(10.0), ..chr() },
+            chr: CharProps { size: Some(10.0), size_cs: Some(10.0), ..chr() },
             priority: Some(99),
             ..p_style()
         });
@@ -1045,6 +1052,18 @@ mod tests {
             g.based_on = Some("RedGrid".into());
         }
         assert!(s.table_style("RedGrid").is_some());
+    }
+
+    #[test]
+    fn generated_complex_script_sizes_match_latin_sizes() {
+        let sheet = StyleSheet::builtin();
+        assert_eq!(sheet.default_chr.size, Some(12.0));
+        assert_eq!(sheet.default_chr.size_cs, Some(12.0));
+        for style in &sheet.styles {
+            if let Some(size) = style.chr.size {
+                assert_eq!(style.chr.size_cs, Some(size), "{} must declare its intended complex-script size", style.id);
+            }
+        }
     }
 
     #[test]
