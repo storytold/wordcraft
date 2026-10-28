@@ -114,7 +114,7 @@ pub fn selected_all(s: &Session, max: usize) -> Vec<(Pos, InlineObject)> {
     let paths = if a == b { vec![a.path.clone()] } else { s.doc.paths_between(&a, &b) };
     for path in paths {
         let Some(p) = s.doc.para(story, &path) else { continue };
-        for off in p.object_offsets() {
+        for (off, o) in p.objects_with_offsets() {
             let inside = if a == b {
                 off + wordcraft_doc::para::OBJ.len_utf8() == a.off || off == a.off
             } else {
@@ -123,7 +123,7 @@ pub fn selected_all(s: &Session, max: usize) -> Vec<(Pos, InlineObject)> {
             if !inside {
                 continue;
             }
-            if let Some(o) = p.object_at(off).filter(|o| o.is_drawing()) {
+            if o.is_drawing() {
                 out.push((Pos { story, path: path.clone(), off }, o.clone()));
                 if out.len() >= max {
                     return out;
@@ -251,8 +251,8 @@ pub(crate) fn all_objects(s: &Session) -> Vec<(Pos, InlineObject)> {
     let mut v = Vec::new();
     for path in s.doc.para_paths(StoryRef::Body) {
         let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };
-        for off in p.object_offsets() {
-            if let Some(o) = p.object_at(off).filter(|o| o.is_drawing()) {
+        for (off, o) in p.objects_with_offsets() {
+            if o.is_drawing() {
                 v.push((Pos { story: StoryRef::Body, path: path.clone(), off }, o.clone()));
             }
         }

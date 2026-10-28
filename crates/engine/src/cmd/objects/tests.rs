@@ -1,5 +1,149 @@
 use super::*;
 
+fn drawing_marker_session(n: usize) -> Session {
+    use wordcraft_doc::{Document, Paragraph, para::Run, para_block};
+    let mut seed = Session::new(Document::new());
+    seed.run("insert.shape", &json!({"kind": "rectangle", "width": 40, "height": 20})).unwrap();
+    let shape = selected(&seed).unwrap().1;
+    let mut p = Paragraph::new();
+    p.text = format!("é{}tail", wordcraft_doc::para::OBJ.to_string().repeat(n + 1));
+    p.runs = vec![Run { len: p.len(), props: Default::default() }];
+    p.objects = vec![InlineObject::BookmarkStart { name: "Other".into() }; n];
+    p.objects.push(shape);
+    let mut doc = Document::new();
+    doc.body = vec![para_block(p)];
+    let mut s = Session::new(doc);
+    s.sel = Selection { anchor: Pos::body(0, 0), focus: s.doc.end_of(StoryRef::Body) };
+    s
+}
+
+/// CPU time excludes scheduler waits on Linux. Missing or nonadvancing counters use elapsed time.
+fn drawing_scan_cost(f: &mut impl FnMut()) -> f64 {
+    let ran = || {
+        let s = std::fs::read_to_string("/proc/thread-self/schedstat").ok()?;
+        s.split_whitespace().next()?.parse::<u64>().ok()
+    };
+    let (t, before) = (std::time::Instant::now(), ran());
+    f();
+    match (before, ran()) {
+        (Some(a), Some(b)) if b > a => (b - a) as f64 * 1e-9,
+        _ => t.elapsed().as_secs_f64(),
+    }
+}
+
+fn drawing_scan_scales(scan: impl Fn(&Session) -> Vec<(Pos, InlineObject)>) {
+    let (small, big) = (drawing_marker_session(2_000), drawing_marker_session(16_000));
+    let check = |s: &Session, n| {
+        let objects = scan(s);
+        assert_eq!(objects.len(), 1);
+        assert_eq!(objects[0].0, Pos::body(0, 2 + n * wordcraft_doc::para::OBJ.len_utf8()));
+        assert_eq!(objects[0].1.frame().map(|(w, h, _)| (w, h)), Some((40.0, 20.0)));
+        std::hint::black_box(objects);
+    };
+    check(&small, 2_000);
+    check(&big, 16_000);
+    let (mut t1, mut t8) = (f64::INFINITY, f64::INFINITY);
+    for _ in 0..5 {
+        t1 = t1.min(drawing_scan_cost(&mut || (0..8).for_each(|_| check(&small, 2_000))) / 8.0);
+        t8 = t8.min(drawing_scan_cost(&mut || check(&big, 16_000)));
+    }
+    let ratio = t8 / t1.max(1e-9);
+    assert!(ratio < 24.0, "drawing scan: {t1:.6}s -> {t8:.6}s, {ratio:.2}x for 8x markers");
+}
+
+#[test]
+fn drawing_list_scales_with_marker_count() {
+    drawing_scan_scales(all_objects);
+}
+
+#[test]
+fn drawing_selection_scales_with_marker_count() {
+    drawing_scan_scales(|s| selected_all(s, usize::MAX));
+}
+
+#[test]
+fn drawing_scans_preserve_offsets_ranges_caret_and_limits() {
+    use wordcraft_doc::para::{OBJ, Run};
+    let mut s = drawing_marker_session(1);
+    let shape = selected(&s).unwrap().1;
+    let mut hidden = shape.clone();
+    hidden.float_mut().unwrap().hidden = true;
+    let p = s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    p.text = format!("é{OBJ}{OBJ}漢{OBJ}{OBJ}z");
+    p.runs = vec![Run { len: p.len(), props: Default::default() }];
+    p.objects = vec![InlineObject::BookmarkStart { name: "B".into() }, shape.clone(), hidden, InlineObject::BookmarkEnd { name: "B".into() }];
+    let offsets = |v: Vec<(Pos, InlineObject)>| v.into_iter().map(|(p, _)| p.off).collect::<Vec<_>>();
+    assert_eq!(offsets(all_objects(&s)), [5, 11]);
+    s.sel = Selection { anchor: Pos::body(0, 17), focus: Pos::body(0, 0) };
+    assert_eq!(offsets(selected_all(&s, 9)), [5, 11]);
+    assert_eq!(offsets(selected_all(&s, 1)), [5]);
+    assert_eq!(offsets(selected_all(&s, 0)), [5], "existing zero-limit behavior");
+    s.sel = Selection { anchor: Pos::body(0, 8), focus: Pos::body(0, 11) };
+    assert!(selected_all(&s, 9).is_empty(), "the end boundary is excluded");
+    for off in [5, 8] {
+        s.sel = Selection::caret(Pos::body(0, off));
+        assert_eq!(offsets(selected_all(&s, 9)), [5], "caret at or just after the object");
+    }
+    s.sel = Selection::caret(Pos::body(0, 14));
+    assert_eq!(offsets(selected_all(&s, 9)), [11], "hidden drawings are still selectable");
+    s.sel = Selection::caret(Pos::body(0, 17));
+    assert!(selected_all(&s, 9).is_empty(), "bookmark markers are not drawings");
+    let before = s.doc.clone();
+    s.run("select.objects", &json!({"index": 1})).unwrap();
+    assert_eq!(s.sel.anchor, Pos::body(0, 11));
+    let list = s.run("arrange.selectionPane", &json!({})).unwrap();
+    assert_eq!(list[1]["hidden"], true);
+    assert_eq!(s.doc, before, "queries and selection leave content untouched");
+}
+
+#[test]
+fn drawing_scans_ignore_unmatched_storage_and_keep_story_boundaries() {
+    use wordcraft_doc::{Document, Paragraph, PartKind, para_block};
+    let mut s = drawing_marker_session(0);
+    let shape = selected(&s).unwrap().1;
+    let p = s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    p.objects.push(shape.clone());
+    assert_eq!(all_objects(&s).len(), 1, "extra storage has no marker");
+    let p = s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    p.objects.truncate(1);
+    p.text.push(wordcraft_doc::para::OBJ);
+    assert_eq!(all_objects(&s).len(), 1, "extra markers have no object");
+    let mut doc = Document::new();
+    doc.body = vec![para_block(Paragraph::with_text("body", Default::default()))];
+    let header = doc.add_part(PartKind::Header, vec![para_block(Paragraph::new())]);
+    doc.insert_object(&Pos { story: StoryRef::Part(header), path: wordcraft_doc::Path::top(0), off: 0 }, shape, &Default::default()).unwrap();
+    let mut s = Session::new(doc);
+    let at = Pos { story: StoryRef::Part(header), path: wordcraft_doc::Path::top(0), off: 0 };
+    s.sel = Selection::caret(at.clone());
+    assert_eq!(selected_all(&s, 9)[0].0, at);
+    assert!(all_objects(&s).is_empty(), "the Selection Pane lists the body only");
+}
+
+#[test]
+fn drawing_scans_keep_table_paths_and_selection_endpoints() {
+    use wordcraft_doc::{Block, Document, Path, Table};
+    let original = drawing_marker_session(0);
+    let para = original.doc.body[0].clone();
+    let mut table = Table::new(1, 2, 200.0);
+    table.rows[0].cells[0].blocks = vec![para.clone()];
+    table.rows[0].cells[1].blocks = vec![para.clone()];
+    let mut doc = Document::new();
+    doc.body = vec![para.clone(), std::sync::Arc::new(Block::Table(table)), para];
+    let mut s = Session::new(doc);
+    let expected = vec![
+        Pos::body(0, 2),
+        Pos { path: Path(vec![1, 0, 0, 0]), ..Pos::body(0, 2) },
+        Pos { path: Path(vec![1, 0, 1, 0]), ..Pos::body(0, 2) },
+        Pos::body(2, 2),
+    ];
+    let positions = |v: Vec<(Pos, InlineObject)>| v.into_iter().map(|(p, _)| p).collect::<Vec<_>>();
+    assert_eq!(positions(all_objects(&s)), expected);
+    s.sel = Selection { anchor: Pos::body(2, 5), focus: Pos::body(0, 0) };
+    assert_eq!(positions(selected_all(&s, 9)), expected);
+    s.sel = Selection { anchor: expected[1].clone(), focus: expected[2].clone() };
+    assert_eq!(positions(selected_all(&s, 9)), [expected[1].clone()], "cell boundaries retain the half-open selection");
+}
+
 fn png(w: u32, h: u32) -> Vec<u8> {
     let img = image::RgbaImage::from_fn(w, h, |x, y| {
         if x > 2 && x < w - 3 && y > 2 && y < h - 3 { image::Rgba([200, 30, 30, 255]) } else { image::Rgba([255, 255, 255, 255]) }
