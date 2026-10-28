@@ -327,7 +327,7 @@ mod tests {
     fn missing_dictionary_and_ignored_inputs_are_quiet() {
         let empty = AffixDict::default();
         assert!(is_correct_with(&empty, "prueva", ProofLang::Es));
-        assert!(install_dictionary(ProofLang::Es, "FLAG long\n", "1\ncasa\n").is_err());
+        assert!(install_dictionary(ProofLang::Es, "FLAG num\n", "1\ncasa\n").is_err());
         let d = AffixDict::from_hunspell(test_dict::AFF, test_dict::DIC, &[]).unwrap();
         for w in ["", "a", "2026", "EE", "1.º", "日本語", "-", "--"] {
             assert!(is_correct_with(&d, w, ProofLang::EsUy), "{w}");

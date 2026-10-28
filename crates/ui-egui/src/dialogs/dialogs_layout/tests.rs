@@ -14,6 +14,28 @@ fn form(a: &mut WordApp) -> LayoutDialog {
     *d
 }
 
+#[test]
+fn catalan_can_be_chosen_in_the_language_dialog() {
+    use egui_kittest::kittest::{By, Queryable};
+    let mut a = app();
+    a.run("select.all", json!({})).unwrap();
+    let fields = LanguageForm::read(&a);
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(500.0, 650.0)).build_ui_state(
+        |ui, (app, fields): &mut (WordApp, LanguageForm)| {
+            language_ui(app, ui, fields);
+        },
+        (a, fields),
+    );
+    h.run();
+    h.get(By::new().label_contains("Catalan")).click();
+    h.run();
+    assert_eq!(h.state().1.lang, "ca-ES");
+    h.get(By::new().label_contains("OK")).click();
+    h.run();
+    assert_eq!(h.state().0.session.typing_props().lang.as_deref(), Some("ca-ES"));
+    assert_eq!(language_name("ca-ES"), "Catalan");
+}
+
 /// #407: Line Numbering Options… opens with the section's numbering and OK sets every
 /// option; Hyphenation Options sets the document's hyphenation settings.
 #[test]

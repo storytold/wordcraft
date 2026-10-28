@@ -236,10 +236,25 @@ fn add_map_suggestions(col: &mut Collector, chars: &[char], map: &[Vec<char>]) {
 
 fn add_replacement_suggestions(col: &mut Collector, input: &str, replacements: &[(String, String)]) {
     for (from, to) in replacements {
+        // `^` and `$` anchor an entry to the word's start or end (`REP ^nml$ namelĳk`).
+        let (start, from) = from.strip_prefix('^').map_or((false, from.as_str()), |f| (true, f));
+        let (end, from) = from.strip_suffix('$').map_or((false, from), |f| (true, f));
         if from.is_empty() {
             continue;
         }
+        // Non-overlapping match iteration can miss a suffix such as `aba$` in `ababa`.
+        if end {
+            if let Some(prefix) = input.strip_suffix(from)
+                && (!start || prefix.is_empty())
+            {
+                col.offer(&format!("{prefix}{to}"), COST_REP);
+            }
+            continue;
+        }
         for (index, _) in input.match_indices(from) {
+            if start && index != 0 {
+                continue;
+            }
             if let (Some(prefix), Some(suffix)) = (input.get(..index), input.get(index + from.len()..)) {
                 col.offer(&format!("{prefix}{to}{suffix}"), COST_REP);
             }
@@ -413,6 +428,19 @@ mod tests {
         let ms = t.elapsed().as_secs_f64() * 1000.0;
         eprintln!("3 Czech suggestion calls: {ms:.0} ms");
         assert!(ms < 20_000.0, "{ms} ms");
+    }
+
+    #[test]
+    fn anchored_replacements_keep_overlapping_suffixes() {
+        for (pattern, input, expected) in
+            [("aba$", "ababa", "abcorrect"), ("^aba", "ababa", "correctba"), ("^aba$", "aba", "correct"), ("éé$", "ééé", "écorrect")]
+        {
+            let dictionary =
+                AffixDict::from_hunspell(&format!("SET UTF-8\nREP 1\nREP {pattern} correct\n"), &format!("1\n{expected}\n"), &[]).unwrap();
+            assert_eq!(suggest_in(&dictionary, input, 8), [expected], "{pattern} on {input}");
+        }
+        let dictionary = AffixDict::from_hunspell("REP 1\nREP ^aba$ correct\n", "1\nabcorrect\n", &[]).unwrap();
+        assert!(suggest_in(&dictionary, "ababa", 8).is_empty(), "both anchors require a whole-word match");
     }
 
     #[test]

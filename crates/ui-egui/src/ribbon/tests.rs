@@ -191,6 +191,37 @@ fn english_dialects_are_in_the_language_menu() {
 }
 
 #[test]
+fn catalan_language_menu_checks_alias_and_applies_canonical_tag() {
+    use egui_kittest::kittest::{By, NodeT, Queryable};
+    for tag in ["ca", "ca-ES", "CA-es", "cat"] {
+        assert_eq!(language_name(Some(tag)), "Catalan", "{tag}");
+    }
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Prova")), crate::Services::default());
+    app.run("review.language", json!({"lang": "cat", "default": true})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(500.0, 700.0)).build_ui_state(|ui, app: &mut WordApp| language_menu(ui, app), app);
+    h.run();
+    let checked: Vec<String> = h
+        .query_all(By::new().predicate(|n| n.toggled() == Some(egui::accesskit::Toggled::True)))
+        .filter_map(|n| n.accesskit_node().label())
+        .collect();
+    assert_eq!(checked.len(), 1, "{checked:?}");
+    assert!(checked[0].contains("Catalan"), "{checked:?}");
+    h.get(By::new().label_contains("Catalan")).click();
+    h.run();
+    assert_eq!(h.state_mut().session.run("format.state", &json!({})).unwrap()["lang"], "ca-ES");
+}
+
+#[test]
+fn dutch_has_a_name_in_the_language_menu() {
+    assert!(PROOFING_LANGUAGES.contains(&("nl-NL", "Dutch")));
+    for tag in ["nl", "nl-NL", "NL-nl", "nld", "dut"] {
+        assert_eq!(language_name(Some(tag)), "Dutch", "{tag}");
+    }
+    // Belgian Dutch keeps its region in the name; the same dictionary checks it.
+    assert_eq!(language_name(Some("nl-BE")), "Dutch (Belgium)");
+}
+
+#[test]
 fn indonesian_has_a_name_in_the_language_menu() {
     assert!(PROOFING_LANGUAGES.contains(&("id-ID", "Indonesian")));
     for tag in ["id", "id-ID", "ID-id", "ind", "in"] {

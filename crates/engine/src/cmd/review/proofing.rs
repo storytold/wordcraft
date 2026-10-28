@@ -59,8 +59,22 @@ pub(super) fn issue_at(s: &Session, at: &Pos) -> Option<(Pos, Pos, wordcraft_pro
 }
 
 fn issue_json(s: &Session, a: &Pos, b: &Pos, i: &wordcraft_proof::Issue) -> Value {
-    let word = s.doc.para_at(a).and_then(|p| p.text.get(a.off..b.off)).unwrap_or("").to_string();
-    let sugg = if i.kind == wordcraft_proof::IssueKind::Spelling { wordcraft_proof::suggest_in(&word, 6, i.lang) } else { i.suggestions.clone() };
+    let para = s.doc.para_at(a);
+    let word = para.and_then(|p| p.text.get(a.off..b.off)).unwrap_or("").to_string();
+    let mut sugg = if i.kind == wordcraft_proof::IssueKind::Spelling { wordcraft_proof::suggest_in(&word, 6, i.lang) } else { i.suggestions.clone() };
+    // Dutch tokenization leaves boundary apostrophes outside the issue. Reuse an existing
+    // apostrophe there, while allowing a suggestion to restore one that is actually missing.
+    if i.kind == wordcraft_proof::IssueKind::Spelling
+        && i.lang == wordcraft_proof::ProofLang::Nl
+        && para.and_then(|p| p.text.get(..a.off)).is_some_and(|text| text.ends_with(['\'', '’']))
+    {
+        for suggestion in &mut sugg {
+            if let Some(c) = suggestion.chars().next().filter(|c| matches!(c, '\'' | '’')) {
+                *suggestion = suggestion.get(c.len_utf8()..).unwrap_or("").to_string();
+            }
+        }
+        sugg.retain(|suggestion| !suggestion.is_empty());
+    }
     json!({
         "start": pos_json(a), "end": pos_json(b), "text": word,
         "kind": if i.kind == wordcraft_proof::IssueKind::Spelling { "spelling" } else { "grammar" },

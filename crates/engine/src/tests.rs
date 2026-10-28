@@ -8078,6 +8078,8 @@ fn dictionaries_folder_option_is_saved_searched_and_reported() {
         // would otherwise force a reload that finds no cs_CZ here and empties it mid-test. Same
         // fixture content either way keeps such a race harmless, as it already does for Polish.
         ("cs_CZ", czech_test_dict::AFF, czech_test_dict::DIC),
+        ("nl_NL", DUTCH_TEST_AFF, DUTCH_TEST_DIC),
+        ("ca_ES", CATALAN_TEST_AFF, CATALAN_TEST_DIC),
     ] {
         std::fs::write(dir.join(format!("{name}.aff")), aff).unwrap();
         std::fs::write(dir.join(format!("{name}.dic")), dic).unwrap();
@@ -8096,6 +8098,8 @@ fn dictionaries_folder_option_is_saved_searched_and_reported() {
     assert_eq!(file("pl"), Some(json!(dir.join("pl_PL.dic").to_string_lossy())));
     assert_eq!(file("pt"), Some(json!(dir.join("pt_BR.dic").to_string_lossy())));
     assert_eq!(file("id"), Some(json!(dir.join("id_ID.dic").to_string_lossy())));
+    assert_eq!(file("nl"), Some(json!(dir.join("nl_NL.dic").to_string_lossy())));
+    assert_eq!(file("ca"), Some(json!(dir.join("ca_ES.dic").to_string_lossy())));
     // Each Spanish variety reports its own file (Spain, Mexico, Latin America, Uruguay, in order).
     let spanish: Vec<serde_json::Value> = dicts.iter().filter(|d| d["language"] == "es").map(|d| d["file"].clone()).collect();
     assert_eq!(spanish.len(), 4);
@@ -8291,6 +8295,91 @@ fn new_documents_follow_the_regions_english() {
     }
     s.system_region = wordcraft_geom::Region::from_tag("fr-FR");
     assert_eq!(s.region_english(), None);
+}
+
+fn dutch_test_dictionary() {
+    wordcraft_proof::nl::install_dictionary(DUTCH_TEST_AFF, DUTCH_TEST_DIC).unwrap();
+}
+
+// Hand-written synthetic fixture (no system dictionary data): two-character flags, `ij` stored
+// as `ĳ` and converted on input and output, and compound parts.
+const DUTCH_TEST_AFF: &str = "SET UTF-8\nFLAG long\nTRY eantirodslgvhkmuwbpjzcf\nICONV 3\nICONV ’ '\nICONV ij ĳ\nICONV IJ Ĳ\nOCONV 2\nOCONV ĳ ij\nOCONV Ĳ IJ\nCOMPOUNDMIN 1\nCOMPOUNDBEGIN Ca\nCOMPOUNDEND Cc\nCOMPOUNDPERMITFLAG Cp\nSFX CA Y 1\nSFX CA 0 /CaCp .\nREP 3\nREP s-hertogenbosh 's-Hertogenbosch\nREP zwembat zwembad\nREP s-bochtt S-bocht\n";
+const DUTCH_TEST_DIC: &str = "10\nhet\nzwembad/CACc\nbouwer/Cc\nis\nklaar\nwĳ\nzĳn\nblĳ\n's-Hertogenbosch\nS-bocht\n";
+
+/// Dutch proofing (#2505) through the same commands as Review, F7, Change and Add to Dictionary:
+/// compounds the dictionary builds are correct, and suggestions show `ij` as typed.
+#[test]
+fn dutch_proofing_through_the_review_commands() {
+    dutch_test_dictionary();
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Het zwembadbouwer is klaar. Wij zjin blij blij."}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "review.language", json!({"lang": "nl_nl", "default": true}));
+    assert_eq!(s.doc.styles.default_chr.lang.as_deref(), Some("nl-NL"));
+    assert_eq!(run(&mut s, "format.state", json!({}))["lang"], "nl-NL");
+    let issues = run(&mut s, "review.issues", json!({}));
+    let arr = issues.as_array().unwrap();
+    assert_eq!(arr.len(), 2, "{issues}");
+    assert!(arr.iter().all(|i| i["lang"] == "nl"), "{issues}");
+    assert!(
+        arr.iter().any(|i| i["text"] == "zjin" && i["kind"] == "spelling" && i["suggestions"].as_array().unwrap().iter().any(|s| s == "zijn")),
+        "{issues}"
+    );
+    assert!(arr.iter().any(|i| i["text"] == "blij blij" && i["kind"] == "grammar"), "{issues}");
+    run(&mut s, "caret.docStart", json!({}));
+    assert_eq!(run(&mut s, "review.spelling", json!({}))["text"], "zjin");
+    run(&mut s, "review.applySuggestion", json!({"text": "zijn"}));
+    assert!(text(&s).contains("Wij zijn blij"), "{}", text(&s));
+    run(&mut s, "select.text", json!({"text": "klaar"}));
+    run(&mut s, "text.insert", json!({"text": "zqmijnwoord"}));
+    assert_eq!(run(&mut s, "review.issues", json!({})).as_array().unwrap().len(), 2);
+    run(&mut s, "review.addToDictionary", json!({"word": "zqmijnwoord"}));
+    let left = run(&mut s, "review.issues", json!({}));
+    let left = left.as_array().unwrap();
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0]["kind"], "grammar");
+    assert_eq!(left[0]["lang"], "nl");
+}
+
+#[test]
+fn dutch_suggestions_preserve_existing_apostrophes_and_quotation_marks() {
+    dutch_test_dictionary();
+    for (input, expected) in [
+        ("'s-Hertogenbosh", "'s-Hertogenbosch"),
+        ("’s-Hertogenbosh", "’s-Hertogenbosch"),
+        ("s-Hertogenbosh", "'s-Hertogenbosch"),
+        ("'zwembat'", "'zwembad'"),
+        ("’zwembat’", "’zwembad’"),
+        ("'S-bochtt'", "'S-bocht'"),
+        ("’S-bochtt’", "’S-bocht’"),
+        ("S-bochtt", "S-bocht"),
+    ] {
+        let mut s = s();
+        run(&mut s, "document.setText", json!({"text": input}));
+        run(&mut s, "select.all", json!({}));
+        run(&mut s, "review.language", json!({"lang": "nl-NL"}));
+        run(&mut s, "caret.docStart", json!({}));
+        let issue = run(&mut s, "review.spelling", json!({}));
+        let suggestions = issue["suggestions"].as_array().unwrap();
+        let wanted = if input.contains("zwembat") {
+            "zwembad"
+        } else if input.contains("S-bochtt") {
+            "S-bocht"
+        } else if input.starts_with(['\'', '’']) {
+            "s-Hertogenbosch"
+        } else {
+            "'s-Hertogenbosch"
+        };
+        assert!(suggestions.contains(&json!(wanted)), "{issue}");
+        assert_eq!(run(&mut s, "review.suggestions", json!({}))["suggestions"], issue["suggestions"]);
+        assert_eq!(run(&mut s, "review.issues", json!({}))[0]["suggestions"], issue["suggestions"]);
+        run(&mut s, "review.applySuggestion", json!({"text": wanted}));
+        assert_eq!(text(&s), expected);
+        run(&mut s, "edit.undo", json!({}));
+        assert_eq!(text(&s), input);
+        run(&mut s, "edit.redo", json!({}));
+        assert_eq!(text(&s), expected);
+    }
 }
 
 /// A Spanish interface writes new documents in the region's Spanish (#3360): Uruguay's on a
@@ -10864,6 +10953,48 @@ fn export_png_refuses_a_path_that_is_not_png() {
         assert!(std::fs::read(&target).unwrap().starts_with(b"\x89PNG"), "{name} is not a PNG");
     }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// Original miniature Catalan data for command integration; no installed dictionary bytes.
+const CATALAN_TEST_AFF: &str = "SET UTF-8\nFLAG long\nFULLSTRIP\nTRY abcdeghilmnoqrstuxàçéíïóü·-'\nICONV 1\nICONV ’ '\nREP 1\nREP cataln català\n";
+const CATALAN_TEST_DIC: &str = "6\ncatalà\ncol·legi\nil·lusió\nqüestió\nl'home\nprova\n";
+
+/// #2895: the Review commands use Catalan spelling and suggestions, and DOCX keeps the language.
+#[test]
+fn catalan_proofing_review_and_docx_reopen() {
+    wordcraft_proof::ca::install_dictionary(CATALAN_TEST_AFF, CATALAN_TEST_DIC).unwrap();
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Col·legi il·lusió l’home cataln"}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "review.language", json!({"lang": "ca_es", "default": true}));
+    assert_eq!(run(&mut s, "format.state", json!({}))["lang"], "ca-ES");
+    let issues = run(&mut s, "review.issues", json!({}));
+    let arr = issues.as_array().unwrap();
+    assert_eq!(arr.len(), 1, "{issues}");
+    assert_eq!(arr[0]["lang"], "ca");
+    assert_eq!(arr[0]["text"], "cataln");
+    assert!(arr[0]["suggestions"].as_array().unwrap().iter().any(|s| s == "català"));
+    let bytes = wordcraft_docx::write(&s.doc).unwrap();
+    let doc = wordcraft_docx::read(&bytes).unwrap();
+    assert_eq!(doc.styles.default_chr.lang.as_deref(), Some("ca-ES"));
+    let mut reopened = Session::new(doc);
+    assert_eq!(run(&mut reopened, "review.issues", json!({})), issues);
+    run(&mut reopened, "caret.docStart", json!({}));
+    assert_eq!(run(&mut reopened, "review.spelling", json!({}))["text"], "cataln");
+    run(&mut reopened, "review.applySuggestion", json!({"text": "català"}));
+    assert_eq!(text(&reopened), "Col·legi il·lusió l’home català");
+    assert!(run(&mut reopened, "review.issues", json!({})).as_array().unwrap().is_empty());
+    run(&mut reopened, "select.text", json!({"text": "il·lusió"}));
+    run(&mut reopened, "text.insert", json!({"text": "il·lusio"}));
+    let context = run(&mut reopened, "review.suggestions", json!({}));
+    assert_eq!(context["text"], "il·lusio");
+    assert!(context["suggestions"].as_array().unwrap().iter().any(|s| s == "il·lusió"));
+    run(&mut reopened, "review.applySuggestion", json!({"text": "il·lusió"}));
+    run(&mut reopened, "select.text", json!({"text": "català"}));
+    run(&mut reopened, "text.insert", json!({"text": "zqcaenginecustom"}));
+    assert_eq!(run(&mut reopened, "review.issues", json!({})).as_array().unwrap().len(), 1);
+    run(&mut reopened, "review.addToDictionary", json!({"word": "zqcaenginecustom"}));
+    assert!(run(&mut reopened, "review.issues", json!({})).as_array().unwrap().is_empty());
 }
 
 /// The body's IME replacement epoch advances when the whole body is swapped (setText, Undo/Redo)
