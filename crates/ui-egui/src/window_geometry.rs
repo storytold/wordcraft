@@ -117,13 +117,12 @@ impl WindowGeometry {
         Some(Self { position, width: size.x, height: size.y, maximized: self.maximized, monitor })
     }
 
-    /// Whether the window is maximized after it has opened rather than as it opens. On Windows,
-    /// winit shows a window the moment it creates it maximized, even one that is meant to stay
-    /// hidden until the first frame (eframe's white-flash guard), so a maximized window flashed
-    /// on and off about four times at start-up. There it opens at its normal size, hidden, and the
-    /// first frame maximizes it ([`Self::maximize_after_open`]).
+    /// On Windows with DirectX 12 and an AMD GPU, restoring directly into a maximized state makes
+    /// wgpu lose the device before the first frame: the process stays alive (the event loop keeps
+    /// running) but the window never appears — only its taskbar button. Never auto-maximize on
+    /// startup; the window opens at its saved size and the user can maximize manually afterwards.
     pub fn maximizes_after_open(self) -> bool {
-        self.maximized && cfg!(windows)
+        false
     }
 
     /// The command that maximizes the window after it opened, if [`Self::maximizes_after_open`].
@@ -133,7 +132,7 @@ impl WindowGeometry {
 
     /// Open the window at this size, position and maximized state.
     pub fn apply(self, builder: egui::ViewportBuilder) -> egui::ViewportBuilder {
-        let builder = builder.with_inner_size([self.width, self.height]).with_maximized(self.maximized && !self.maximizes_after_open());
+        let builder = builder.with_inner_size([self.width, self.height]).with_maximized(self.maximized && cfg!(target_os = "macos"));
         match self.position {
             Some(p) => builder.with_position(p),
             None => builder,
@@ -245,13 +244,10 @@ mod tests {
         // Normal size and position either way, so un-maximizing returns to them.
         assert_eq!(b.inner_size, Some(egui::vec2(1200.0, 800.0)));
         assert_eq!(b.position, Some(egui::pos2(100.0, 50.0)));
-        if cfg!(windows) {
-            assert_eq!(b.maximized, Some(false), "winit would show the hidden window while creating it maximized");
-            assert_eq!(g.maximize_after_open(), Some(egui::ViewportCommand::Maximized(true)));
-        } else {
-            assert_eq!(b.maximized, Some(true));
-            assert_eq!(g.maximize_after_open(), None);
-        }
+        // Never auto-maximize on startup: on Windows with DirectX 12 and an AMD GPU the device is
+        // lost before the first frame (the process stays alive, the window never appears).
+        assert_eq!(b.maximized, Some(false), "never auto-maximize on startup");
+        assert_eq!(g.maximize_after_open(), None, "never auto-maximize on startup");
         assert_eq!(saved().maximize_after_open(), None, "a normal window needs no command");
     }
 
