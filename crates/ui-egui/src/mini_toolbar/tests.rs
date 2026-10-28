@@ -336,6 +336,40 @@ fn context_menu_panel_keeps_its_own_width_under_the_toolbar() {
     assert!(copy.max.x + 20.0 < justify.max.x, "the panel ({copy:?}) is narrower than the toolbar ({justify:?})");
 }
 
+/// #4424: the command panel is painted below the formatting toolbar, and its pointer hit
+/// regions must move with it. Clicking the painted Copy row must not activate Cut above it.
+#[test]
+fn context_menu_command_rows_hit_where_they_are_painted() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = bar_over("brown fox");
+    let before = h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+    let caret = h.state_mut().session.layout().caret(&wordcraft_doc::Pos::body(0, 12)).unwrap();
+    let at = crate::canvas::page_to_screen(h.state_mut(), caret.page, caret.x, caret.top + caret.height / 2.0).unwrap();
+    h.event(egui::Event::PointerMoved(at));
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() });
+        h.step();
+    }
+    steps(&mut h);
+    let viewport = h.state().canvas.viewport.unwrap();
+    let copy = h.query_all_by_label_contains("Copy").map(|n| n.rect()).find(|r| viewport.contains_rect(*r)).expect("the context menu has Copy");
+    let painted = h
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            egui::Shape::Text(t) if t.galley.text() == "Copy" => Some(t.visual_bounding_rect()),
+            _ => None,
+        })
+        .find(|r| r.intersects(copy))
+        .expect("the Copy label is painted in its response");
+    h.state_mut().session.clipboard_text = "sentinel".into();
+    click_at(&mut h, egui::pos2(painted.center().x, painted.bottom() - 0.5));
+    assert_eq!(h.state().session.clipboard_text, "brown fox", "the painted Copy row copies the selection");
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), before, "Copy must not activate Cut");
+    assert!(!h.state().canvas.context_menu_open, "the painted Copy row executes and closes the menu");
+}
+
 #[test]
 fn escape_in_a_ribbon_list_does_not_open_the_context_menu() {
     use egui::accesskit::Role;

@@ -1211,7 +1211,10 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
             // layout would stretch it, so it takes the width egui measures in its sizing pass.
             let width_id = ui.scope_id().with("context_menu_width");
             let width = ui.data(|d| d.get_temp::<f32>(width_id)).filter(|_| !ui.is_sizing_pass());
-            let size = egui::vec2(width.unwrap_or(ui.available_width()), ui.available_height());
+            // Let the panel grow from the cursor instead of bounding it by all of the popup's
+            // remaining height. That oversized child could paint after the toolbar while its
+            // hit rectangles retained the pre-toolbar position (#4424).
+            let size = egui::vec2(width.unwrap_or(ui.available_width()), 0.0);
             let rect = egui::Rect::from_min_size(ui.cursor().min, size);
             let panel = ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
                 egui::Frame::popup(ui.style()).show(ui, |ui| context_menu(app, ui)).response.rect.width()
