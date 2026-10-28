@@ -1,6 +1,48 @@
 use super::*;
 
 #[test]
+fn finish_shares_blocks_without_merge_fields_between_recipients() {
+    use std::sync::Arc;
+    for (kind, header) in [("letters", false), ("directory", false), ("letters", true)] {
+        let mut doc = Document::from_text("Original unchanged paragraph.");
+        let mut table = wordcraft_doc::table::Table::new(16, 4, 468.0);
+        for (i, cell) in table.rows.iter_mut().flat_map(|row| &mut row.cells).enumerate() {
+            cell.blocks = Document::from_text(&format!("Original unchanged cell {i}.")).body;
+        }
+        doc.body.push(Arc::new(Block::Table(table)));
+        doc.body.push(para_block(Paragraph::new()));
+        let mut s = Session::new(doc);
+        s.merge.kind = kind.into();
+        s.run("mailings.recipients", &json!({"rows": [{"Name": "Ada"}, {"Name": "Grace"}]})).unwrap();
+        if header {
+            s.run("insert.header", &json!({"text": "Original header "})).unwrap();
+            s.run("caret.docEnd", &json!({})).unwrap();
+            s.run("mailings.insertField", &json!({"field": "Name"})).unwrap();
+            s.run("insert.closeHeader", &json!({})).unwrap();
+        }
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("mailings.insertField", &json!({"field": "Name"})).unwrap();
+        let original = s.doc.clone();
+        assert_eq!(original.body.len(), 3);
+        assert_eq!(s.run("mailings.finish", &json!({})).unwrap()["records"], 2);
+        assert_eq!(s.doc.body.len(), 6);
+        for offset in [0, 3] {
+            assert!(Arc::ptr_eq(&original.body[0], &s.doc.body[offset]), "{kind}: unchanged paragraph was copied");
+            assert!(Arc::ptr_eq(&original.body[1], &s.doc.body[offset + 1]), "{kind}: unchanged table was copied");
+        }
+        let text = s.doc.plain_text(StoryRef::Body);
+        assert!(text.contains("Ada") && text.contains("Grace"));
+        assert_eq!(text.matches("Original unchanged cell 63.").count(), 2);
+        assert!(original.plain_text(StoryRef::Body).contains("«Name»"));
+        if header {
+            let values: Vec<_> =
+                s.doc.sections().iter().map(|(_, section)| s.doc.plain_text(StoryRef::Part(section.headers.default.unwrap()))).collect();
+            assert_eq!(values, ["Original header Ada", "Original header Grace"]);
+        }
+    }
+}
+
+#[test]
 fn csv_parsing() {
     let r = parse_csv("Name,City\n\"Smith, Ann\",Paris\r\nBo,\"Oslo \"\"N\"\"\"\n\n");
     assert_eq!(r, vec![vec!["Name", "City"], vec!["Smith, Ann", "Paris"], vec!["Bo", "Oslo \"N\""]]);

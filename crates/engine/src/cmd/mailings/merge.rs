@@ -294,6 +294,9 @@ pub(super) fn finish(s: &mut Session, v: &Value) -> CmdResult {
             }
             let mut first = true;
             for b in &mut body {
+                if !matches!(&**b, Block::Para(p) if p.section.is_some()) {
+                    continue;
+                }
                 if let Block::Para(p) = std::sync::Arc::make_mut(b)
                     && let Some(sp) = p.section.as_deref_mut()
                 {
@@ -371,7 +374,7 @@ fn remap_headers(sp: &mut SectionProps, map: &[(u32, u32)], first: bool) {
 /// Nesting depth of tables the merge descends into.
 const MAX_DEPTH: usize = 32;
 
-fn has_merge_fields(blocks: &Blocks, depth: usize) -> bool {
+fn has_merge_fields(blocks: &[std::sync::Arc<Block>], depth: usize) -> bool {
     depth <= MAX_DEPTH
         && blocks.iter().any(|b| match &**b {
             Block::Para(p) => p.objects.iter().any(|o| matches!(o, InlineObject::Field { instr, .. } if placeholder(instr).is_some())),
@@ -387,6 +390,10 @@ fn merge_blocks(s: &Session, blocks: &mut Blocks, cur: &mut usize, end: usize, d
         return true;
     }
     for b in blocks.iter_mut() {
+        // Keep immutable subtrees shared between recipients and with the template.
+        if !has_merge_fields(std::slice::from_ref(b), depth) {
+            continue;
+        }
         match std::sync::Arc::make_mut(b) {
             Block::Para(p) => {
                 let mut repl = Vec::new();
