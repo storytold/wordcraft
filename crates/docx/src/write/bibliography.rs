@@ -1,4 +1,4 @@
-use super::*;
+use super::{Document, W};
 
 fn to_source_type(kind: &str) -> &str {
     match kind.to_ascii_lowercase().as_str() {

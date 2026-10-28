@@ -1,5 +1,5 @@
 use super::page::MOVE_COLOR;
-use super::*;
+use super::{Document, Placed, Rgb, StoryRef};
 
 /// Formatting marks shown even while Show/Hide ¶ is off (File › Options › Display, "Always show
 /// these formatting marks"). Show/Hide ¶ on shows them all.

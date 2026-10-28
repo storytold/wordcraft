@@ -1,4 +1,4 @@
-use super::*;
+use super::Rgb;
 
 fn hsl_to_rgb(h: f64, s: f64, l: f64) -> Rgb {
     let h = (h / 360.0).rem_euclid(1.0);

@@ -1,5 +1,5 @@
 use super::blocks::{MAX_NEST, Refs, ref_label};
-use super::*;
+use super::{Arc, Fmt, HashMap, Inline, decode_entity, make_img, model};
 
 // ---- inlines ----
 
@@ -105,6 +105,50 @@ impl Backticks {
     fn find(&self, from: usize, n: usize) -> Option<usize> {
         let starts = self.0.get(&n)?;
         starts.get(starts.partition_point(|&p| p < from)).copied()
+    }
+}
+
+struct LinkScan<'a> {
+    text: &'a str,
+    refs: &'a Refs,
+    ticks: &'a Backticks,
+    known: HashMap<usize, Option<usize>>,
+    budget: usize,
+}
+
+impl LinkScan<'_> {
+    fn parse_at(&mut self, open: usize) -> Option<(String, Arc<str>, usize)> {
+        let bytes = self.text.as_bytes();
+        let close = match self.known.get(&open).copied() {
+            Some(found) => found,
+            None if self.budget > 0 => {
+                let found = matching_bracket(self.text, open, self.budget, self.ticks, &mut self.known);
+                self.budget = self.budget.saturating_sub(found.unwrap_or(self.text.len()).saturating_sub(open));
+                found
+            }
+            None => None,
+        }?;
+        if self.budget == 0 {
+            return None;
+        }
+        let label_text = self.text.get(open + 1..close)?;
+        if bytes.get(close + 1) == Some(&b'(') {
+            let destination = link_dest(self.text, close + 1);
+            self.budget = self.budget.saturating_sub(destination.as_ref().map_or(self.text.len(), |d| d.1).saturating_sub(close));
+            let (destination, end) = destination?;
+            return Some((label_text.to_string(), Arc::from(destination), end));
+        }
+        // Full and shortcut reference links use definitions collected before inline parsing.
+        let (label, end) = match self.text.get(close + 1..).and_then(|rest| rest.strip_prefix('[')) {
+            Some(rest) => {
+                let shut = rest.find(']')?;
+                let inner = rest.get(..shut)?;
+                let label = if inner.trim().is_empty() { label_text } else { inner };
+                (label, close + 2 + shut + 1)
+            }
+            None => (label_text, close + 1),
+        };
+        Some((label_text.to_string(), self.refs.get(&ref_label(label))?.clone(), end))
     }
 }
 
@@ -217,9 +261,8 @@ fn tokenize(s: &str, base: &Fmt, depth: usize, refs: &Refs) -> Vec<Node> {
     // would otherwise rescan the rest of the text, which is quadratic on hostile input; once the
     // budget is gone, further brackets are plain text. A scan pays for what it reads; brackets an
     // earlier scan passed are looked up in `known` instead.
-    let mut scan_budget = s.len().saturating_mul(8).saturating_add(8192);
     let ticks = Backticks::new(s);
-    let mut known: HashMap<usize, Option<usize>> = HashMap::new();
+    let mut links = LinkScan { text: s, refs, ticks: &ticks, known: HashMap::new(), budget: s.len().saturating_mul(8).saturating_add(8192) };
     let b = s.as_bytes();
     let mut i = 0usize;
     let mut text_start = 0usize;
@@ -248,23 +291,9 @@ fn tokenize(s: &str, base: &Fmt, depth: usize, refs: &Refs) -> Vec<Node> {
             }
             b'`' => {
                 flush!();
-                let n = b.get(i..).map(|r| r.iter().take_while(|x| **x == b'`').count()).unwrap_or(1);
-                match ticks.find(i + n, n) {
-                    Some(end) => {
-                        let mut code = s.get(i + n..end).unwrap_or("").replace('\n', " ");
-                        if code.len() >= 2 && code.starts_with(' ') && code.ends_with(' ') && !code.trim().is_empty() {
-                            code = code[1..code.len() - 1].to_string();
-                        }
-                        let mut f = base.clone();
-                        f.code = true;
-                        push_text(&mut nodes, &code, &f);
-                        i = end + n;
-                    }
-                    None => {
-                        push_text(&mut nodes, s.get(i..i + n).unwrap_or(""), base);
-                        i += n;
-                    }
-                }
+                let (code, fmt, end) = code_span(s, i, base, &ticks);
+                push_text(&mut nodes, &code, &fmt);
+                i = end;
                 text_start = i;
             }
             b'*' | b'_' | b'~' => {
@@ -291,43 +320,7 @@ fn tokenize(s: &str, base: &Fmt, depth: usize, refs: &Refs) -> Vec<Node> {
             b'!' | b'[' if depth < MAX_NEST => {
                 let img = c == b'!';
                 let open = if img { i + 1 } else { i };
-                let parsed = if b.get(open) == Some(&b'[') {
-                    let found = match known.get(&open).copied() {
-                        Some(found) => found,
-                        None if scan_budget > 0 => {
-                            let found = matching_bracket(s, open, scan_budget, &ticks, &mut known);
-                            scan_budget = scan_budget.saturating_sub(found.unwrap_or(s.len()).saturating_sub(open));
-                            found
-                        }
-                        None => None,
-                    };
-                    found.filter(|_| scan_budget > 0).and_then(|close| {
-                        let text = s.get(open + 1..close)?;
-                        if b.get(close + 1) == Some(&b'(') {
-                            // A destination that does not parse may have been read to the end of the text.
-                            let dest = link_dest(s, close + 1);
-                            scan_budget = scan_budget.saturating_sub(dest.as_ref().map_or(s.len(), |d| d.1).saturating_sub(close));
-                            let (dest, end) = dest?;
-                            return Some((text.to_string(), Arc::from(dest), end));
-                        }
-                        // A reference link: `[text][label]`, `[text][]` and `[text]` all take
-                        // their destination from a definition collected before parsing (#3238).
-                        // The shortcut form is only a link when the label is defined, so an
-                        // ordinary bracketed phrase is still text.
-                        let (label, end) = match s.get(close + 1..).and_then(|rest| rest.strip_prefix('[')) {
-                            Some(rest) => {
-                                let shut = rest.find(']')?;
-                                let inner = rest.get(..shut)?;
-                                let label = if inner.trim().is_empty() { text } else { inner };
-                                (label, close + 2 + shut + 1)
-                            }
-                            None => (text, close + 1),
-                        };
-                        Some((text.to_string(), refs.get(&ref_label(label))?.clone(), end))
-                    })
-                } else {
-                    None
-                };
+                let parsed = if b.get(open) == Some(&b'[') { links.parse_at(open) } else { None };
                 match parsed {
                     Some((inner, dest, end)) if img => {
                         flush!();
@@ -360,38 +353,11 @@ fn tokenize(s: &str, base: &Fmt, depth: usize, refs: &Refs) -> Vec<Node> {
                 }
             }
             b'<' => {
-                if let Some(pos) = s.get(i..).and_then(|r| r.strip_prefix("<!--")).and_then(|r| r.find("-->")) {
+                if let Some((end, parsed)) = angle_inlines(s, i, base) {
                     flush!();
-                    i += 4 + pos + 3;
-                    text_start = i;
-                    continue;
-                }
-                let rest = s.get(i + 1..).unwrap_or("");
-                let end = within(rest, MAX_TAG).find('>');
-                let inner = end.and_then(|e| rest.get(..e)).unwrap_or("");
-                let lower = inner.to_ascii_lowercase();
-                let is_auto = !inner.is_empty()
-                    && !inner.contains([' ', '<', '\n'])
-                    && (inner.contains("://") || lower.starts_with("mailto:") || (inner.contains('@') && !inner.contains('/')));
-                if is_auto {
-                    flush!();
-                    let mut f = base.clone();
-                    f.link = Some(if inner.contains('@') && !inner.contains(':') { format!("mailto:{inner}").into() } else { inner.into() });
-                    push_text(&mut nodes, inner, &f);
-                    i += inner.len() + 2;
-                    text_start = i;
-                } else if matches!(lower.trim_end_matches('/').trim(), "br") {
-                    flush!();
-                    push_text(&mut nodes, "\n", base);
-                    i += inner.len() + 2;
-                    text_start = i;
-                } else if lower.starts_with("a ") && rest.get(inner.len() + 1..).is_some_and(|r| r.to_ascii_lowercase().starts_with("</a>")) {
-                    flush!();
-                    if let Some(name) = tag_attr(inner, "id").or_else(|| tag_attr(inner, "name")) {
-                        nodes.push(Node::Inl(Inline::Anchor(name)));
-                    }
-                    i += inner.len() + 2 + 4;
-                    text_start = i;
+                    nodes.extend(parsed);
+                    i = end;
+                    text_start = end;
                 } else {
                     i += 1;
                 }
@@ -413,6 +379,52 @@ fn tokenize(s: &str, base: &Fmt, depth: usize, refs: &Refs) -> Vec<Node> {
     }
     flush!();
     nodes
+}
+
+fn angle_inlines(s: &str, start: usize, base: &Fmt) -> Option<(usize, Vec<Node>)> {
+    if let Some(pos) = s.get(start..).and_then(|rest| rest.strip_prefix("<!--")).and_then(|rest| rest.find("-->")) {
+        return Some((start + 4 + pos + 3, Vec::new()));
+    }
+    let rest = s.get(start + 1..).unwrap_or("");
+    let tag_end = within(rest, MAX_TAG).find('>')?;
+    let inner = rest.get(..tag_end)?;
+    let lower = inner.to_ascii_lowercase();
+    let end = start + inner.len() + 2;
+    let mut nodes = Vec::new();
+    if !inner.is_empty()
+        && !inner.contains([' ', '<', '\n'])
+        && (inner.contains("://") || lower.starts_with("mailto:") || (inner.contains('@') && !inner.contains('/')))
+    {
+        let mut fmt = base.clone();
+        fmt.link = Some(if inner.contains('@') && !inner.contains(':') { format!("mailto:{inner}").into() } else { inner.into() });
+        push_text(&mut nodes, inner, &fmt);
+        Some((end, nodes))
+    } else if matches!(lower.trim_end_matches('/').trim(), "br") {
+        push_text(&mut nodes, "\n", base);
+        Some((end, nodes))
+    } else if lower.starts_with("a ") && rest.get(inner.len() + 1..).is_some_and(|tail| tail.to_ascii_lowercase().starts_with("</a>")) {
+        if let Some(name) = tag_attr(inner, "id").or_else(|| tag_attr(inner, "name")) {
+            nodes.push(Node::Inl(Inline::Anchor(name)));
+        }
+        Some((end + 4, nodes))
+    } else {
+        None
+    }
+}
+
+fn code_span(s: &str, start: usize, base: &Fmt, ticks: &Backticks) -> (String, Fmt, usize) {
+    let bytes = s.as_bytes();
+    let count = bytes.get(start..).map(|tail| tail.iter().take_while(|byte| **byte == b'`').count()).unwrap_or(1);
+    let Some(end) = ticks.find(start + count, count) else {
+        return (s.get(start..start + count).unwrap_or("").to_string(), base.clone(), start + count);
+    };
+    let mut code = s.get(start + count..end).unwrap_or("").replace('\n', " ");
+    if code.len() >= 2 && code.starts_with(' ') && code.ends_with(' ') && !code.trim().is_empty() {
+        code = code[1..code.len() - 1].to_string();
+    }
+    let mut fmt = base.clone();
+    fmt.code = true;
+    (code, fmt, end + count)
 }
 
 /// Longest `<...>` tag or autolink taken as inline HTML.

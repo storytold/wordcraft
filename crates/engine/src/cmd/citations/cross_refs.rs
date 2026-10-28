@@ -1,5 +1,5 @@
 use super::generated::page_of;
-use super::*;
+use super::{CharProps, CmdError, CmdResult, InlineObject, Paragraph, Pos, Selection, Session, StoryRef, Value, delete_selection, json, p};
 
 pub(super) fn cross_ref(s: &mut Session, v: &Value) -> CmdResult {
     let to = p::str(v, "to").unwrap_or("heading");

@@ -1,6 +1,6 @@
 use super::blocks::thematic_break;
 use super::inlines::within;
-use super::*;
+use super::{Align, Arc, Cell, Document, FBlock, FTable, Fmt, Inline, Kind, model};
 
 // ---------------------------------------------------------------------------------------------
 // Export

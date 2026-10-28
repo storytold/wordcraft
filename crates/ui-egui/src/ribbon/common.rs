@@ -1,5 +1,5 @@
 use super::language::mi_check;
-use super::*;
+use super::{Align2, Rect, Sense, Tokens, Ui, Value, WordApp, big, group, json, small, vec2};
 
 /// Custom groups (Customize Ribbon, #379): up to three commands as large buttons, more as small
 /// labelled buttons in columns of three. Each shows the command's own icon and label.
@@ -17,7 +17,7 @@ pub(super) fn custom_groups(app: &mut WordApp, ui: &mut Ui, groups: &[wordcraft_
             for column in ids.chunks(3) {
                 stack(ui, |ui| {
                     for (id, label) in column {
-                        small(ui, app, crate::widgets::command_icon(id), Some(label), label, id, json!({}), false);
+                        small(ui, app, crate::widgets::command_icon(id), Some(label), label, crate::widgets::ButtonAction::new(id, json!({}), false));
                     }
                 });
             }

@@ -98,12 +98,14 @@ const THAI_RUN: &str = "[D] น้ำ ค่ำ ปั้น ฝั่ง ปู
 #[test]
 fn a_thai_run_with_latin_falls_back_to_one_face() {
     let db = FontDb::global();
-    if db.fallback_for('น', 0).is_none() {
-        eprintln!("skipped: no Thai font installed");
+    let chars: Vec<char> = THAI_RUN.chars().filter(|c| !c.is_whitespace()).collect();
+    // Needs a Thai font with Latin letters and digits (Tahoma, Leelawadee UI, Thonburi, the
+    // TLWG fonts…): Noto Sans Thai alone has none, so no face covers the run.
+    if !chars.iter().all(|c| crate::word::resolve("TH Sarabun New", false, false).face.covers(*c)) {
+        eprintln!("skipped: no Thai font with Latin letters installed");
         return;
     }
     let latin = db.face(FALLBACK_FAMILY, "Regular");
-    let chars: Vec<char> = THAI_RUN.chars().filter(|c| !c.is_whitespace()).collect();
     let f = db.fallback_for_run(&chars, latin.id(), false, false).expect("one face covers the run");
     assert_ne!(f.id, latin.id);
     for c in &chars {

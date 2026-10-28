@@ -1,5 +1,7 @@
 use super::shell::{Next, go};
-use super::*;
+#[cfg(not(target_arch = "wasm32"))]
+use super::{AfterPick, Asked, FileDialogRequest};
+use super::{RefsDialog, Serialize, Source, Tokens, Ui, Value, WordApp, buttons, json, vec2};
 
 // ---------------------------------------------------------------------------------------------
 // Sources
@@ -150,7 +152,7 @@ pub(super) fn source_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SourceForm) -> N
     egui::Grid::new("src").num_columns(2).spacing(vec2(10.0, 5.0)).show(ui, |ui| {
         let kind_label = ui.label(tl!("Source type:"));
         let shown = SOURCE_TYPES.iter().find(|(k, ..)| *k == f.source.kind).map(|(_, l, _)| tl!(l).to_string()).unwrap_or_default();
-        let combo = egui::ComboBox::from_id_salt("src_kind").selected_text(shown).width(200.0).show_ui(ui, |ui| {
+        let combo = craft_ui::ComboBox::from_id_salt("src_kind").selected_text(shown).width(200.0).show_ui(ui, |ui| {
             for (k, l, _) in SOURCE_TYPES {
                 ui.selectable_value(&mut f.source.kind, k.to_string(), tl!(l));
             }

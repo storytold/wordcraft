@@ -1,4 +1,4 @@
-use super::*;
+use super::{Affine, Arc, Document, FontDb, HashMap, Item, Mutex, Page, Picture, Pixmap, PlacedItem, RenderContext, Seg, Shape, Weak, kurbo, peniko};
 
 /// Upper bound on the bytes the two decoded-media caches keep together (about 256 MB), half each;
 /// past its half a cache starts over.

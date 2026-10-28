@@ -475,9 +475,11 @@ fn unicode_in_info_bookmarks_and_field_instructions() {
 pub(crate) const TRACKED: &[u8] = br"{\rtf1\ansi\deff0{\fonttbl{\f0 Arial;}}{\*\revtbl {Unknown;}{Alice;}{Bob;}}
 \pard Keep {\revised\revauth1\revdttm-1480361314 added }text{\deleted\revauthdel2\revdttmdel-2016341499  gone} end{\revised\revauth1\revdttm-1480361314\deleted\revauthdel2\revdttmdel-2016341499  both}.\par}";
 
+/// A revision's (author, date).
+type Stamp = (String, String);
+
 /// (text, insertion (author, date), deletion (author, date)) of each run of the first paragraph.
-#[allow(clippy::type_complexity)]
-fn tracked_runs(doc: &Document) -> Vec<(String, Option<(String, String)>, Option<(String, String)>)> {
+fn tracked_runs(doc: &Document) -> Vec<(String, Option<Stamp>, Option<Stamp>)> {
     let rev = |i: Option<u32>, kind: wordcraft_doc::RevisionKind| {
         i.map(|i| {
             let r = doc.revisions.get(i as usize).unwrap();
@@ -1227,7 +1229,6 @@ fn hostile_formatting_revisions_never_panic() {
 
 #[test]
 fn sections_keep_their_page_columns_numbering_and_headers() {
-    use wordcraft_doc::section::{NumFormat, SectionStart};
     // A4 portrait → landscape restarting at 1 with its own header → continuous two columns
     // → portrait. A `\sectd` inside a footer group is the footer's, not the body's.
     let rtf = br"{\rtf1\ansi\paperw11906\paperh16838\margl1134\margr1134
@@ -1250,6 +1251,14 @@ fn sections_keep_their_page_columns_numbering_and_headers() {
     let secs = d.sections();
     assert_eq!(secs.len(), 4, "{secs:?}");
     let s: Vec<&wordcraft_doc::SectionProps> = secs.iter().map(|(_, s)| *s).collect();
+    assert_section_geometry(&s);
+    assert_section_breaks_and_layout(&s);
+    assert_section_headers_and_footers(&d, &s);
+    assert_section_body_boundaries(&d, &secs);
+    assert_section_page_defaults();
+}
+
+fn assert_section_geometry(s: &[&wordcraft_doc::SectionProps]) {
     // Page size and orientation; the document's margins apply to every section.
     for (i, land) in [(0, false), (1, true), (2, true), (3, false)] {
         assert_eq!(s[i].landscape, land, "section {i}");
@@ -1258,7 +1267,10 @@ fn sections_keep_their_page_columns_numbering_and_headers() {
         assert!((s[i].margin_left - 56.7).abs() < 0.1, "section {i}");
         assert!((s[i].header - 35.4).abs() < 0.1, "section {i}");
     }
-    // Break types.
+}
+
+fn assert_section_breaks_and_layout(s: &[&wordcraft_doc::SectionProps]) {
+    use wordcraft_doc::section::{NumFormat, SectionStart};
     assert_eq!(
         s.iter().map(|s| s.start).collect::<Vec<_>>(),
         [SectionStart::NextPage, SectionStart::NextPage, SectionStart::Continuous, SectionStart::OddPage]
@@ -1273,7 +1285,9 @@ fn sections_keep_their_page_columns_numbering_and_headers() {
     assert_eq!(s[1].page_num_format, NumFormat::LowerRoman);
     assert_eq!(s[0].page_num_format, NumFormat::Decimal);
     assert!(!s[0].title_page && s[1].title_page && !s[3].title_page);
-    // Headers and footers: sections 1 and 2 have their own; 3 and 4 inherit (none set).
+}
+
+fn assert_section_headers_and_footers(d: &wordcraft_doc::Document, s: &[&wordcraft_doc::SectionProps]) {
     let text = |id: Option<u32>| {
         let p = id.and_then(|id| d.parts.get(&id)).unwrap();
         p.blocks
@@ -1291,6 +1305,9 @@ fn sections_keep_their_page_columns_numbering_and_headers() {
     for i in [2, 3] {
         assert_eq!((s[i].headers, s[i].footers), Default::default(), "section {i}");
     }
+}
+
+fn assert_section_body_boundaries(d: &wordcraft_doc::Document, secs: &[(usize, &wordcraft_doc::SectionProps)]) {
     // Each section ends on its own paragraph, after the text it holds.
     let body_text = |i: usize| match d.body.get(i).map(|b| &**b) {
         Some(wordcraft_doc::Block::Para(p)) => p.text.clone(),
@@ -1300,6 +1317,9 @@ fn sections_keep_their_page_columns_numbering_and_headers() {
     assert_eq!(body_text(secs[1].0 - 1), "<table>");
     assert_eq!(body_text(secs[2].0), "Third");
     assert_eq!(body_text(secs[3].0), "Fourth");
+}
+
+fn assert_section_page_defaults() {
     // A landscape document default doesn't turn a section that gives its own portrait page.
     let d = import(br"{\rtf1\ansi\paperw16838\paperh11906\landscape\sectd a\sect\sectd\pgwsxn11906\pghsxn16838 b\par}").unwrap();
     let secs = d.sections();

@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    AutoSaveBlock, AwaitingSave, PromptSave, SaveChoice, Value, WordApp, async_saves, dialogs, file_dialogs, i18n, json, keeps_everything, panes,
+    printing,
+};
 
 impl WordApp {
     /// Answer the Save Changes prompt: Save (through Save As for a new document) and carry on,

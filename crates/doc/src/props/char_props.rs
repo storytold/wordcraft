@@ -1,6 +1,6 @@
 use super::color::{Rgb, TextColor};
 use super::para_props::Border;
-use super::*;
+use super::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -447,10 +447,23 @@ impl CharProps {
     /// The fields of `self` that differ from `base` (equal ones unset): what `self` adds when
     /// overlaid on `base`.
     pub fn minus(mut self, base: &CharProps) -> CharProps {
-        drop_same_fields!(self, base; style, font, sym_font, size, bold, italic, underline, underline_color, strike, double_strike, color, highlight,
-            shading, border, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, outline, shadow, emboss, engrave, lang, no_proof, rtl,
-            cs, font_cs, font_ea, size_cs, bold_cs, italic_cs, lang_bidi, lang_ea, east_asian_layout, link, ins, del, ligatures);
+        self.minus_text_style(base);
+        self.minus_script_style(base);
+        self.minus_document_marks(base);
         self
+    }
+
+    fn minus_text_style(&mut self, base: &CharProps) {
+        drop_same_fields!(self, base; style, font, sym_font, size, bold, italic, underline, underline_color, strike, double_strike, color, highlight,
+            shading, border, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, outline, shadow, emboss, engrave, lang, no_proof, rtl);
+    }
+
+    fn minus_script_style(&mut self, base: &CharProps) {
+        drop_same_fields!(self, base; cs, font_cs, font_ea, size_cs, bold_cs, italic_cs, lang_bidi, lang_ea, east_asian_layout);
+    }
+
+    fn minus_document_marks(&mut self, base: &CharProps) {
+        drop_same_fields!(self, base; link, ins, del, ligatures);
     }
 
     /// Apply every `Some` field of `patch` on top of `self`.
@@ -458,12 +471,25 @@ impl CharProps {
     /// Plain and complex-script properties inherit independently. Commands that intend to
     /// format both scripts must set both values explicitly.
     pub fn overlay(&mut self, patch: &CharProps) {
-        overlay_fields!(self, patch; style, font, sym_font, size, bold, italic, underline, underline_color, strike, double_strike, color, highlight,
-            shading, border, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, outline, shadow, emboss, engrave, lang, no_proof, rtl,
-            cs, font_cs, font_ea, size_cs, bold_cs, italic_cs, lang_bidi, lang_ea, east_asian_layout, link, ins, del, fmt_change, ligatures);
+        self.overlay_text_style(patch);
+        self.overlay_script_style(patch);
+        self.overlay_document_marks(patch);
         if let Some(p) = &patch.text_effects {
             self.text_effects.get_or_insert_with(Default::default).overlay(p);
         }
+    }
+
+    fn overlay_text_style(&mut self, patch: &CharProps) {
+        overlay_fields!(self, patch; style, font, sym_font, size, bold, italic, underline, underline_color, strike, double_strike, color, highlight,
+            shading, border, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, outline, shadow, emboss, engrave, lang, no_proof, rtl);
+    }
+
+    fn overlay_script_style(&mut self, patch: &CharProps) {
+        overlay_fields!(self, patch; cs, font_cs, font_ea, size_cs, bold_cs, italic_cs, lang_bidi, lang_ea, east_asian_layout);
+    }
+
+    fn overlay_document_marks(&mut self, patch: &CharProps) {
+        overlay_fields!(self, patch; link, ins, del, fmt_change, ligatures);
     }
     pub fn overlaid(mut self, patch: &CharProps) -> CharProps {
         self.overlay(patch);

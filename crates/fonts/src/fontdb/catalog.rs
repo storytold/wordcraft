@@ -1,8 +1,10 @@
+#[cfg(not(target_arch = "wasm32"))]
+use super::Ordering;
 use super::face::{FontBytes, FontFace};
 #[cfg(not(target_arch = "wasm32"))]
 use super::names::{CatalogEntry, file_face_names, style_italic, style_weight};
 use super::names::{LocalName, MAX_FAMILY_NAME, MAX_FILE_FACES, enumerate_faces, make_face, name_language_matches};
-use super::*;
+use super::{Arc, FontDb, HashMap};
 
 impl FontDb {
     /// Family names available (loaded plus cataloged system fonts), sorted and deduplicated. Like

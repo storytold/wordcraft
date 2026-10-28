@@ -1,4 +1,4 @@
-use super::*;
+use super::{DEFAULT_TAB, MAX_DICTIONARY, UiState, WordApp, desktop_theme, recent_fonts_from, theme};
 
 /// What the operating system says about light and dark. macOS and Windows answer through winit;
 /// winit reports nothing on Linux, where the desktop portal does ([`desktop_theme`]). `None` means

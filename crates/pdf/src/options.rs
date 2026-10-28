@@ -1,4 +1,4 @@
-use super::*;
+use super::{NumeralMode, WriteError};
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum PdfError {
