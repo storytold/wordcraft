@@ -18,6 +18,7 @@ pub(crate) enum Pass {
 /// Walk state while paginating.
 pub(crate) struct Ctx<'a> {
     pub(crate) doc: &'a Document,
+    pub(crate) styles: wordcraft_doc::resolve::StyleResolver<'a>,
     pub(crate) cache: &'a mut LayoutCache,
     pub(crate) opts: &'a LayoutOptions,
     pub(crate) counters: Counters,
@@ -198,7 +199,7 @@ impl Ctx<'_> {
             fit_objects: false,
             fitted: &[],
         };
-        let pl = Arc::new(para::layout_para(&p, &env));
+        let pl = Arc::new(para::layout_para_with_styles(&p, &env, &self.styles));
         self.numbers.insert(n, pl.clone());
         pl
     }
@@ -209,12 +210,12 @@ impl Ctx<'_> {
     pub(crate) fn has_label(&self, p: &Paragraph) -> bool {
         p.props
             .numbering
-            .or_else(|| self.doc.styles.resolve_para(&p.props).numbering)
+            .or_else(|| self.styles.resolve_para(&p.props).numbering)
             .filter(|n| n.num != 0)
             .is_some_and(|n| self.doc.numbering.shows_label(n.num, n.level))
     }
     pub(crate) fn next_label(&mut self, p: &Paragraph) -> Option<(String, Level)> {
-        let n = p.props.numbering.or_else(|| self.doc.styles.resolve_para(&p.props).numbering).filter(|n| n.num != 0)?;
+        let n = p.props.numbering.or_else(|| self.styles.resolve_para(&p.props).numbering).filter(|n| n.num != 0)?;
         self.counters.next_label(&self.doc.numbering, n.num, n.level)
     }
 
@@ -237,9 +238,10 @@ impl Ctx<'_> {
         }
         self.cache.misses += 1;
         let typing = key.typing;
-        let pl = Arc::new(para::layout_para(
+        let pl = Arc::new(para::layout_para_with_styles(
             p,
             &self.para_env(ParaEnvInput { width, label, table, exclusions, eq_number, typing_word: typing, fitted: &fitted }),
+            &self.styles,
         ));
         self.cache.paras.insert(key, pl.clone());
         pl
@@ -270,9 +272,10 @@ impl Ctx<'_> {
             return Some(pl.clone());
         }
         self.cache.misses += 1;
-        let pl = Arc::new(para::layout_para(
+        let pl = Arc::new(para::layout_para_with_styles(
             p,
             &self.para_env(ParaEnvInput { width, label, table: None, exclusions: &[], eq_number, typing_word: None, fitted: &[] }),
+            &self.styles,
         ));
         self.cache.paras.insert(key, pl.clone());
         Some(pl)
@@ -298,9 +301,10 @@ impl Ctx<'_> {
         }
         self.cache.misses += 1;
         let typing = key.typing;
-        let m = measure(&para::layout_para(
+        let m = measure(&para::layout_para_with_styles(
             p,
             &self.para_env(ParaEnvInput { width, label, table, exclusions: &[], eq_number, typing_word: typing, fitted: &fitted }),
+            &self.styles,
         ));
         self.cache.measures.insert(key, m);
         m

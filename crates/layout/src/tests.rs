@@ -11899,3 +11899,99 @@ fn an_empty_bulleted_mark_after_a_bulleted_section_closer_draws_no_bullet() {
         assert!(text, "{filler} lines above: the text closer keeps its bullet");
     }
 }
+
+/// #3615: scale the style definitions and paragraphs together. Scaling only paragraphs
+/// against a fixed sheet would also accept a linear scan of that sheet per paragraph.
+fn style_chain_document(paragraphs: usize) -> Document {
+    use wordcraft_doc::styles::Style;
+    let mut d = Document::new();
+    for i in 0..16 * paragraphs {
+        d.styles.styles.push(Style { id: format!("Unused{i}"), ..Default::default() });
+    }
+    for i in 0..32 {
+        d.styles.styles.push(Style {
+            id: format!("Chain{i}"),
+            based_on: Some(if i == 0 { "Normal".into() } else { format!("Chain{}", i - 1) }),
+            chr: CharProps { italic: (i == 0).then_some(true), ..Default::default() },
+            ..Default::default()
+        });
+    }
+    d.body = (0..paragraphs)
+        .map(|i| {
+            let mut p = Paragraph::with_text(&format!("Original style workload {i}."), CharProps::default());
+            p.props.style = Some("Chain31".into());
+            wordcraft_doc::para_block(p)
+        })
+        .collect();
+    d
+}
+
+fn assert_style_work_scales(what: &str, mut small: impl FnMut(), mut big: impl FnMut()) {
+    // Reuse the CPU-time ratio and warm-up used by the other scaling regressions.
+    // An 8x input costs about 8x with an index, about 64x with repeated linear lookups.
+    let mut ratios = Vec::new();
+    for _ in 0..3 {
+        let (t1, tk, ratio) = cost_ratio(SCALE, &mut small, &mut big);
+        eprintln!("{what}: t(n) {t1:.4} s, t(8n) {tk:.4} s, ratio {ratio:.1}");
+        if ratio < 24.0 {
+            return;
+        }
+        ratios.push(ratio);
+    }
+    panic!("{what}: 8x the styles and paragraphs took {ratios:.1?}x the time, three times over: not linear");
+}
+
+#[test]
+fn many_styles_and_long_chains_do_not_multiply_paragraph_layout_work() {
+    let (small, big) = (style_chain_document(16), style_chain_document(SCALE * 16));
+    for proofing in [false, true] {
+        let opts = LayoutOptions { proofing, ..Default::default() };
+        let lay = |d: &Document| layout(d, &mut LayoutCache::default(), &opts);
+        assert_style_work_scales(
+            &format!("style lookups with proofing={proofing}"),
+            || drop(std::hint::black_box(lay(&small))),
+            || drop(std::hint::black_box(lay(&big))),
+        );
+        let l = lay(&big);
+        assert!(l.pages.len() > 1);
+        assert_eq!(big.body.len(), SCALE * 16);
+        let first = l.index.get(&(StoryRef::Body, wordcraft_doc::Path(vec![0]))).expect("first paragraph placed");
+        assert!(!first.is_empty());
+        let para = l
+            .pages
+            .iter()
+            .flat_map(|page| &page.items)
+            .find_map(|item| match item {
+                Placed::Lines { story: StoryRef::Body, path, para, .. } if path.0 == [0] => Some(para),
+                _ => None,
+            })
+            .expect("first paragraph laid out");
+        let cluster = para.clusters.first().expect("first paragraph has text");
+        assert!(para.styles[cluster.style as usize].rc.italic, "laid-out text inherits italic with proofing={proofing}");
+    }
+    assert!(big.styles.resolve_char(Some("Chain31"), &CharProps::default()).italic);
+}
+
+/// Explicit AutoFit measures a batch of paragraphs, so it must share style lookups too.
+#[test]
+fn autofit_measurement_does_not_rescan_styles_per_paragraph() {
+    let make = |rows| {
+        let d = style_chain_document(rows * 2);
+        let mut table = wordcraft_doc::Table::new(rows, 2, 468.0);
+        for row in &mut table.rows {
+            for cell in &mut row.cells {
+                let mut p = Paragraph::with_text("Original AutoFit workload.", CharProps::default());
+                p.props.style = Some("Chain31".into());
+                cell.blocks = vec![wordcraft_doc::para_block(p)];
+            }
+        }
+        (d, table)
+    };
+    let (small, mut big) = (make(8), make(SCALE * 8));
+    let measure = |(d, table): &(Document, wordcraft_doc::Table)| crate::table::measure_table_columns(d, table);
+    assert_style_work_scales("AutoFit style lookups", || drop(std::hint::black_box(measure(&small))), || drop(std::hint::black_box(measure(&big))));
+    let measured = measure(&big);
+    big.0.styles.styles.retain(|style| !style.id.starts_with("Unused"));
+    assert_eq!(measured, measure(&big));
+    assert!(measured.iter().all(|(min, max)| *min > 0.0 && *max >= *min));
+}

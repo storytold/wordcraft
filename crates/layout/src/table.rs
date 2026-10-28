@@ -136,9 +136,9 @@ const EMPTY_TEXT: f32 = 12.0;
 
 /// What one paragraph needs: the longest run of text without a break opportunity (`min`) and
 /// its longest line when nothing wraps (`max`), indents included.
-fn measure_para(p: &wordcraft_doc::Paragraph, env: &crate::para::ParaEnv) -> (f32, f32) {
+fn measure_para(p: &wordcraft_doc::Paragraph, env: &crate::para::ParaEnv, styles: &wordcraft_doc::resolve::StyleResolver<'_>) -> (f32, f32) {
     use crate::para::ClKind;
-    let pl = crate::para::layout_para(p, env);
+    let pl = crate::para::layout_para_with_styles(p, env, styles);
     let rp = &pl.rp;
     let indents = rp.indent_left.max(0.0) + rp.indent_right.max(0.0) + rp.indent_first.max(0.0);
     let (mut word, mut min) = (0.0f32, 0.0f32);
@@ -183,6 +183,7 @@ fn measure_para(p: &wordcraft_doc::Paragraph, env: &crate::para::ParaEnv) -> (f3
 /// after [`MEASURE_BUDGET`] paragraphs the remaining rows are skipped.
 pub fn measure_table_columns(doc: &wordcraft_doc::Document, t: &Table) -> Vec<(f32, f32)> {
     use wordcraft_doc::Block;
+    let styles = wordcraft_doc::resolve::StyleResolver::new(&doc.styles);
     let style = t.props.style.as_deref().and_then(|id| doc.styles.table_style(id));
     let margins_def = default_margins(t, style.as_ref());
     let ncols = grid_cols(t).clamp(1, wordcraft_doc::table::MAX_COLS);
@@ -227,7 +228,7 @@ pub fn measure_table_columns(doc: &wordcraft_doc::Document, t: &Table) -> Vec<(f
                                 break 'rows;
                             }
                             budget -= 1;
-                            let (a, b) = measure_para(p, &env);
+                            let (a, b) = measure_para(p, &env, &styles);
                             min = min.max(a);
                             max = max.max(b);
                         }
@@ -1249,7 +1250,7 @@ fn blocks_content(ctx: &mut Ctx, blocks: &Blocks, text: Option<&CellText>, depth
 
 /// The list level `p` is in, for its indents (without counting it: measuring isn't laying out).
 fn list_level(ctx: &Ctx, p: &Paragraph) -> Option<wordcraft_doc::numbering::Level> {
-    let n = p.props.numbering.or_else(|| ctx.doc.styles.resolve_para(&p.props).numbering).filter(|n| n.num != 0)?;
+    let n = p.props.numbering.or_else(|| ctx.styles.resolve_para(&p.props).numbering).filter(|n| n.num != 0)?;
     ctx.doc.numbering.level(n.num, n.level).cloned()
 }
 

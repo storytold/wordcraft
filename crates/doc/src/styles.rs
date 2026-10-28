@@ -744,17 +744,7 @@ impl StyleSheet {
     }
     /// The `based_on` chain from the root down to `id` (bounded, cycle-safe).
     pub fn chain(&self, id: &str) -> Vec<&Style> {
-        let mut out = Vec::new();
-        let mut cur = self.get(id);
-        while let Some(s) = cur {
-            if out.len() >= 32 || out.iter().any(|o: &&Style| o.id == s.id) {
-                break;
-            }
-            out.push(s);
-            cur = s.based_on.as_deref().and_then(|b| self.get(b));
-        }
-        out.reverse();
-        out
+        style_chain(id, |id| self.get(id))
     }
     /// Which indents (left, first line) of a paragraph that gets its list from style `id` the style
     /// chain sets over the list level's own. Word applies the level's indents on top of the most
@@ -762,12 +752,7 @@ impl StyleSheet {
     /// and the styles it is based on don't (Heading 3 with its own left indent on Heading 2's
     /// list). `(false, false)` when no style in the chain gives a list.
     pub fn indents_over_list(&self, id: &str) -> (bool, bool) {
-        let chain = self.chain(id);
-        let Some(k) = chain.iter().rposition(|s| s.para.numbering.is_some()) else { return (false, false) };
-        let set = |v: Option<f32>, chars: Option<f32>| v.is_some() || chars.is_some_and(|c| c != 0.0);
-        chain.get(k..).unwrap_or_default().iter().fold((false, false), |(l, f), s| {
-            (l || set(s.para.indent_left, s.para.indent_left_chars), f || set(s.para.indent_first, s.para.indent_first_chars))
-        })
+        list_indents(&self.chain(id))
     }
     /// Table style `id` with its based-on chain merged, base styles first (`None` when there is no
     /// such table style). Styles of other kinds in the chain are skipped.
@@ -927,6 +912,30 @@ fn table_styles() -> Vec<Style> {
         ));
     }
     v
+}
+
+/// List-relative style indents, shared by linear and indexed resolution.
+pub(crate) fn list_indents(chain: &[&Style]) -> (bool, bool) {
+    let Some(k) = chain.iter().rposition(|s| s.para.numbering.is_some()) else { return (false, false) };
+    let set = |v: Option<f32>, chars: Option<f32>| v.is_some() || chars.is_some_and(|c| c != 0.0);
+    chain.get(k..).unwrap_or_default().iter().fold((false, false), |(l, f), s| {
+        (l || set(s.para.indent_left, s.para.indent_left_chars), f || set(s.para.indent_first, s.para.indent_first_chars))
+    })
+}
+
+/// Follow either a linear or indexed lookup with the same depth and cycle rules.
+pub(crate) fn style_chain<'a>(id: &str, get: impl Fn(&str) -> Option<&'a Style>) -> Vec<&'a Style> {
+    let mut out = Vec::new();
+    let mut cur = get(id);
+    while let Some(s) = cur {
+        if out.len() >= 32 || out.iter().any(|o: &&Style| o.id == s.id) {
+            break;
+        }
+        out.push(s);
+        cur = s.based_on.as_deref().and_then(&get);
+    }
+    out.reverse();
+    out
 }
 
 #[cfg(test)]

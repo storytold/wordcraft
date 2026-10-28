@@ -6,7 +6,7 @@ use super::page::PageFrame;
 use super::placed::Placed;
 use super::table_flow::below;
 use super::{
-    Anchor, Arc, Block, Blocks, Border, Document, Float, FloatAlign, HashMap, ParaLayout, Paragraph, Path, Rect, SectionProps, StoryRef, TableFloat,
+    Anchor, Arc, Block, Blocks, Border, Float, FloatAlign, HashMap, ParaLayout, Paragraph, Path, Rect, SectionProps, StoryRef, TableFloat,
     TextDirection, Wrap, WrapText, para, table,
 };
 
@@ -299,7 +299,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                 }
                 // Bordered paragraphs: room for their borders, those of a group joined in one box.
                 let cell = table.map(|t| &t.para);
-                let (above, below) = (joined(ctx.doc, blocks, i, i.checked_sub(1), cell), joined(ctx.doc, blocks, i, Some(i + 1), cell));
+                let (above, below) = (joined(&ctx.styles, blocks, i, i.checked_sub(1), cell), joined(&ctx.styles, blocks, i, Some(i + 1), cell));
                 let mut edges = Edges::own(&pl, 0, pl.lines.len());
                 if above {
                     edges.top = 0.0;
@@ -562,15 +562,26 @@ pub(crate) fn fit_box(items: Vec<Placed>, height: f32) -> Vec<Placed> {
 /// Word joins neighbouring paragraphs with the same borders and indents into one box: the top
 /// border goes above the first of them only, the bottom one below the last, and the shading and
 /// side borders run on through the space between them (`table`: the cell's paragraph properties).
-fn border_group(doc: &Document, a: &Paragraph, b: &Paragraph, table: Option<&wordcraft_doc::props::ParaProps>) -> bool {
-    let (a, b) = (doc.styles.resolve_para_in(&a.props, table), doc.styles.resolve_para_in(&b.props, table));
+fn border_group(
+    styles: &wordcraft_doc::resolve::StyleResolver<'_>,
+    a: &Paragraph,
+    b: &Paragraph,
+    table: Option<&wordcraft_doc::props::ParaProps>,
+) -> bool {
+    let (a, b) = (styles.resolve_para_in(&a.props, table), styles.resolve_para_in(&b.props, table));
     a.borders.is_some() && a.borders == b.borders && a.indent_left == b.indent_left && a.indent_right == b.indent_right
 }
 
 /// Whether paragraph `i` of `blocks` and the one at `j` are of one border group.
-pub(crate) fn joined(doc: &Document, blocks: &Blocks, i: usize, j: Option<usize>, table: Option<&wordcraft_doc::props::ParaProps>) -> bool {
+pub(crate) fn joined(
+    styles: &wordcraft_doc::resolve::StyleResolver<'_>,
+    blocks: &Blocks,
+    i: usize,
+    j: Option<usize>,
+    table: Option<&wordcraft_doc::props::ParaProps>,
+) -> bool {
     match (blocks.get(i).map(|b| &**b), j.and_then(|j| blocks.get(j)).map(|b| &**b)) {
-        (Some(Block::Para(a)), Some(Block::Para(b))) => border_group(doc, a, b, table),
+        (Some(Block::Para(a)), Some(Block::Para(b))) => border_group(styles, a, b, table),
         _ => false,
     }
 }

@@ -1,12 +1,14 @@
 //! Style resolution: document defaults → paragraph style chain → character style chain → direct
 //! formatting, into concrete values for layout.
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::props::{
     Align, Border, Borders, CharProps, Highlight, LineSpacing, NumRef, ParaProps, Rgb, TabAlign, TabStop, TextColor, Underline, VertAlign,
 };
-use crate::styles::{StyleKind, StyleSheet};
+use crate::styles::{Style, StyleKind, StyleSheet, list_indents, style_chain};
 
 /// Automatic (HTML-style) paragraph spacing, points: what Word for Windows gives `w:beforeAutospacing`
 /// and `w:afterAutospacing` at any font size (measured).
@@ -292,7 +294,74 @@ const MAX_CHARS: f32 = 1584.0;
 impl StyleSheet {
     /// Paragraph properties after defaults and the style chain (without direct formatting).
     pub fn para_style_props(&self, style: &str) -> (ParaProps, CharProps) {
-        self.para_style_props_over(style, self.default_para.clone(), self.default_chr.clone())
+        StyleResolver::linear(self).para_style_props(style)
+    }
+
+    /// Resolve a paragraph's properties.
+    pub fn resolve_para(&self, p: &ParaProps) -> ResolvedPara {
+        StyleResolver::linear(self).resolve_para(p)
+    }
+
+    /// Resolve a paragraph's properties; `table` is the paragraph formatting of the table style of
+    /// the table the paragraph is in. The order is that of ECMA-376 §17.7.2: document defaults, the
+    /// table style, the paragraph style chain, direct formatting. So the table style replaces
+    /// document defaults (Table Grid's single spacing beats the defaults' 8 pt after), but any
+    /// property the paragraph style chain sets, Normal included, beats the table style.
+    pub fn resolve_para_in(&self, p: &ParaProps, table: Option<&ParaProps>) -> ResolvedPara {
+        StyleResolver::linear(self).resolve_para_in(p, table)
+    }
+
+    /// Resolve character formatting for a run in a paragraph of style `para_style`.
+    pub fn resolve_char(&self, para_style: Option<&str>, c: &CharProps) -> ResolvedChar {
+        StyleResolver::linear(self).resolve_char(para_style, c)
+    }
+
+    /// Resolve character formatting for a run in a paragraph of style `para_style`; `table` is the
+    /// run formatting of the table style (with the cell's conditional formatting) of the table the
+    /// paragraph is in. Order: document defaults, the table style, the paragraph style chain, the
+    /// character style chain, direct formatting (ECMA-376 §17.7.2).
+    pub fn resolve_char_in(&self, para_style: Option<&str>, table: Option<&CharProps>, c: &CharProps) -> ResolvedChar {
+        StyleResolver::linear(self).resolve_char_in(para_style, table, c)
+    }
+}
+
+/// Style resolution for an immutable sheet. Build once for repeated layout lookups.
+/// The index borrows the sheet, so edits cannot leave it stale. Duplicate IDs keep the first
+/// definition, just as [`StyleSheet::get`] does; nothing is reordered or serialized.
+pub struct StyleResolver<'a> {
+    sheet: &'a StyleSheet,
+    index: Option<HashMap<&'a str, &'a Style>>,
+}
+
+impl<'a> StyleResolver<'a> {
+    pub fn new(sheet: &'a StyleSheet) -> Self {
+        let mut index = HashMap::with_capacity(sheet.styles.len());
+        for style in &sheet.styles {
+            index.entry(style.id.as_str()).or_insert(style);
+        }
+        Self { sheet, index: Some(index) }
+    }
+
+    /// Resolve one-off calls without allocating an index.
+    pub fn linear(sheet: &'a StyleSheet) -> Self {
+        Self { sheet, index: None }
+    }
+
+    fn chain(&self, id: &str) -> Vec<&Style> {
+        style_chain(id, |id| match &self.index {
+            Some(index) => index.get(id).copied(),
+            None => self.sheet.get(id),
+        })
+    }
+
+    /// Style indents that override a list level, as in [`StyleSheet::indents_over_list`].
+    pub fn indents_over_list(&self, id: &str) -> (bool, bool) {
+        list_indents(&self.chain(id))
+    }
+
+    /// Paragraph properties after defaults and the style chain (without direct formatting).
+    pub fn para_style_props(&self, style: &str) -> (ParaProps, CharProps) {
+        self.para_style_props_over(style, self.sheet.default_para.clone(), self.sheet.default_chr.clone())
     }
 
     /// The paragraph style chain of `style` applied over `pp` / `cp`.
@@ -326,7 +395,7 @@ impl StyleSheet {
     /// property the paragraph style chain sets, Normal included, beats the table style.
     pub fn resolve_para_in(&self, p: &ParaProps, table: Option<&ParaProps>) -> ResolvedPara {
         let style = p.style.clone().unwrap_or_else(|| "Normal".into());
-        let mut defaults = self.default_para.clone();
+        let mut defaults = self.sheet.default_para.clone();
         if let Some(t) = table {
             defaults.overlay(&ParaProps { style: None, ..t.clone() });
         }
@@ -357,7 +426,7 @@ impl StyleSheet {
     /// paragraph is in. Order: document defaults, the table style, the paragraph style chain, the
     /// character style chain, direct formatting (ECMA-376 §17.7.2).
     pub fn resolve_char_in(&self, para_style: Option<&str>, table: Option<&CharProps>, c: &CharProps) -> ResolvedChar {
-        let mut defaults = self.default_chr.clone();
+        let mut defaults = self.sheet.default_chr.clone();
         if let Some(t) = table {
             defaults.overlay(&CharProps { style: None, ..t.clone() });
         }
@@ -377,6 +446,9 @@ impl StyleSheet {
         ResolvedChar::from(&cp)
     }
 }
+
+#[cfg(test)]
+mod indexed_tests;
 
 #[cfg(test)]
 mod tests {

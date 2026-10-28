@@ -5,22 +5,22 @@ use super::grid::{auto_space, snap_chars};
 use super::justify::hyphenation_points;
 use super::lines::break_lines;
 use super::model::{ClKind, Cluster, Enclosed, Glyph, Label, LabelRun, ParaEnv, RubyLayout, undrawable_bullet};
-use super::proof::{ProofRun, is_list_item, proof_issues};
+use super::proof::{ProofRun, proof_issues};
 use super::{
-    Arc, COLUMN_BREAK, CharProps, Document, FIELD_SHADING, InlineObject, LINE_BREAK, NoteKind, OBJ, PAGE_BREAK, PTabAlign, PTabBase, ParaLayout,
-    Paragraph, ResolvedChar, ResolvedPara, TabLeader, field_code_text, field_text_on, reference_link,
+    Arc, COLUMN_BREAK, CharProps, FIELD_SHADING, InlineObject, LINE_BREAK, NoteKind, OBJ, PAGE_BREAK, PTabAlign, PTabBase, ParaLayout, Paragraph,
+    ResolvedChar, ResolvedPara, TabLeader, field_code_text, field_text_on, reference_link,
 };
 
 /// A run's formatting resolved in the paragraph's style and table.
 struct Resolver<'a> {
-    doc: &'a Document,
+    styles: &'a wordcraft_doc::resolve::StyleResolver<'a>,
     style: Option<&'a str>,
     table: Option<&'a CharProps>,
 }
 
 impl Resolver<'_> {
     fn char(&self, c: &CharProps) -> Arc<ResolvedChar> {
-        Arc::new(self.doc.styles.resolve_char_in(self.style, self.table, c))
+        Arc::new(self.styles.resolve_char_in(self.style, self.table, c))
     }
 }
 
@@ -89,29 +89,28 @@ fn is_special(c: char) -> bool {
 }
 
 /// The paragraph's formatting: its style's, the table's and the list level's indents.
-fn paragraph_props(p: &Paragraph, env: &ParaEnv) -> ResolvedPara {
-    let doc = env.doc;
-    let mut rp = doc.styles.resolve_para_in(&p.props, env.table.map(|t| &t.para));
+fn paragraph_props(p: &Paragraph, env: &ParaEnv, styles: &wordcraft_doc::resolve::StyleResolver<'_>) -> ResolvedPara {
+    let mut rp = styles.resolve_para_in(&p.props, env.table.map(|t| &t.para));
     if let Some(spacing) = env.read_line_spacing.filter(|s| s.is_finite() && (1.0..=2.0).contains(s)) {
         rp.line_spacing = wordcraft_doc::props::LineSpacing::Multiple(spacing);
     }
     // Indents in characters are measured in the paragraph mark's font size.
     if rp.indent_chars.iter().any(|c| *c != 0.0) {
-        rp.set_char_unit(doc.styles.resolve_char_in(p.props.style.as_deref(), env.table.map(|t| &t.chr), &p.mark).size);
+        rp.set_char_unit(styles.resolve_char_in(p.props.style.as_deref(), env.table.map(|t| &t.chr), &p.mark).size);
     }
-    list_indents(&mut rp, p, env);
+    list_indents(&mut rp, p, env, styles);
     rp
 }
 
 /// List level indents apply unless the paragraph sets its own, or, for a list from the style,
 /// the style giving the list (or one based on it) does (`indents_over_list`). A paragraph
 /// that switches its style's list off (`num: 0`) drops the styles' indents, as Word does.
-fn list_indents(rp: &mut ResolvedPara, p: &Paragraph, env: &ParaEnv) {
+fn list_indents(rp: &mut ResolvedPara, p: &Paragraph, env: &ParaEnv, styles: &wordcraft_doc::resolve::StyleResolver<'_>) {
     let own_left = p.props.indent_left.is_some() || p.props.indent_left_chars.is_some_and(|c| c != 0.0);
     let own_first = p.props.indent_first.is_some() || p.props.indent_first_chars.is_some_and(|c| c != 0.0);
     if let Some((_, lvl)) = &env.label {
         let (style_left, style_first) =
-            if p.props.numbering.is_some() { (false, false) } else { env.doc.styles.indents_over_list(p.props.style.as_deref().unwrap_or("Normal")) };
+            if p.props.numbering.is_some() { (false, false) } else { styles.indents_over_list(p.props.style.as_deref().unwrap_or("Normal")) };
         if !own_left && !style_left {
             rp.indent_left = lvl.indent;
         }
@@ -553,12 +552,15 @@ fn joined_cluster_starts(p: &Paragraph, clusters: &[Cluster]) -> Vec<usize> {
 
 /// Lay out one paragraph.
 pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
-    let doc = env.doc;
-    let rp = paragraph_props(p, env);
-    let res = Resolver { doc, style: p.props.style.as_deref(), table: env.table.map(|t| &t.chr) };
+    layout_para_with_styles(p, env, &wordcraft_doc::resolve::StyleResolver::linear(&env.doc.styles))
+}
+
+pub(crate) fn layout_para_with_styles(p: &Paragraph, env: &ParaEnv, styles: &wordcraft_doc::resolve::StyleResolver<'_>) -> ParaLayout {
+    let rp = paragraph_props(p, env, styles);
+    let res = Resolver { styles, style: p.props.style.as_deref(), table: env.table.map(|t| &t.chr) };
     let levels = bidi_levels(&p.text, rp.bidi);
     let b = Builder { env, styles: Vec::new(), style_index: Default::default(), glyphs: Vec::new(), clusters: Vec::new(), levels, shown: Vec::new() };
-    let cx = Cx { p, env, rp: &rp, res, math_props: doc.settings.math.clone().unwrap_or_default(), drop_first: drop_cap_char(p, &rp) };
+    let cx = Cx { p, env, rp: &rp, res, math_props: env.doc.settings.math.clone().unwrap_or_default(), drop_first: drop_cap_char(p, &rp) };
     let mut sh = Shaped::new(b, env.eq_number);
     let mark_rc = cx.res.char(&p.mark);
     let mark_style = sh.b.style(&mark_rc, None, false);
@@ -591,7 +593,18 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         joined_cluster_starts,
         has_page_fields,
         notes,
-        issues: env.proofing.map(|o| proof_issues(p, &runs, &o, env.typing_word, is_list_item(doc, p))).unwrap_or_default(),
+        issues: env
+            .proofing
+            .map(|o| {
+                proof_issues(
+                    p,
+                    &runs,
+                    &o,
+                    env.typing_word,
+                    p.props.numbering.or_else(|| styles.resolve_para(&p.props).numbering).is_some_and(|n| n.num != 0),
+                )
+            })
+            .unwrap_or_default(),
         drop_cap,
         hyph_after: Vec::new(),
         bidi_levels: b.levels,
@@ -610,7 +623,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     // paragraph in the final text, or moved-away text marked Hidden) is gone: it takes no room.
     // So is one whose mark is hidden and whose text is empty or hidden too: Word shows nothing of
     // it, not even its list number, though the number is counted (#3982).
-    let mark_left_out = env.hide_deleted.hides(doc, mark_rc.del) || (mark_rc.hidden && !env.show_hidden);
+    let mark_left_out = env.hide_deleted.hides(env.doc, mark_rc.del) || (mark_rc.hidden && !env.show_hidden);
     let gone = mark_left_out && (p.text.is_empty() || left.first() == Some(&(0..p.text.len())));
     pl.left_out = left;
     keep_graphemes_whole(&mut pl);
