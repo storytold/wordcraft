@@ -6,6 +6,157 @@ use super::*;
 use crate::Services;
 use wordcraft_engine::Session;
 
+/// #4721: command search uses the same desktop picker as a Text from File ribbon action.
+#[test]
+fn text_from_file_search_and_ribbon_request_a_picker() {
+    let (mut a, shown) = async_app();
+    a.run("ui.language", json!({"value": "en"})).unwrap();
+    a.dialog = Some(crate::dialogs::Dialog::Commands { query: "insert.textFromFile".into(), swallow: false });
+    let before = a.session.doc.clone();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    h.event(egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE });
+    h.run_steps(3);
+    assert!(h.state().file_dialog_open(), "Text from File search must request a picker instead of reporting a missing path");
+    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Open { purpose: "document".into() });
+    assert_eq!(h.state().session.doc, before);
+    answer(&shown, None);
+    h.run_steps(3);
+    assert!(!h.state().file_dialog_open());
+    assert_eq!(h.state().session.doc, before);
+    assert!(!h.state().session.can_undo());
+    crate::widgets::run_from_ribbon(h.state_mut(), "insert.textFromFile", json!({}));
+    assert!(h.state().file_dialog_open());
+    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Open { purpose: "document".into() });
+}
+
+/// A selected HTML file replaces the selection once, with formatting and one undo step.
+#[test]
+fn text_from_file_pick_inserts_once_and_preserves_cancel_and_failure() {
+    use wordcraft_doc::{Document, Pos, StoryRef};
+    let dir = std::env::temp_dir().join(format!("wordcraft-text-from-file-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let source = dir.join("original.html");
+    let bytes = b"<p><b>Inserted</b> body.</p><p><i>Second source.</i></p>";
+    std::fs::write(&source, bytes).unwrap();
+    let (mut a, shown) = async_app();
+    a.session = Session::new(Document::from_text("Before REPLACE after."));
+    a.session.sel = wordcraft_engine::Selection { anchor: Pos::body(0, 7), focus: Pos::body(0, 14) };
+    let before = a.session.doc.clone();
+    let selection = a.session.sel.clone();
+    let revision = a.session.rev();
+    let mut expected = Session::new(before.clone());
+    expected.sel = selection.clone();
+    expected.run("insert.textFromFile", &json!({"path": source})).unwrap();
+
+    assert_eq!(a.run("insert.textFromFile", json!({})).unwrap()["pending"], "textFromFile");
+    a.run("insert.textFromFile", json!({})).unwrap();
+    assert_eq!(shown.borrow().len(), 1, "one pending picker only");
+    assert_eq!(a.session.doc, before);
+    assert_eq!(a.session.rev(), revision);
+    answer(&shown, Some(&source.to_string_lossy()));
+    a.poll_file_dialog().unwrap().unwrap();
+    assert_eq!(a.session.doc, expected.doc);
+    assert!(body_text(&a).contains("Inserted body."));
+    assert!(!body_text(&a).contains("REPLACE"));
+    a.run("edit.undo", json!({})).unwrap();
+    assert_eq!(a.session.doc, before);
+    assert!(!a.session.can_undo(), "insertion is one edit");
+    a.run("edit.redo", json!({})).unwrap();
+    assert_eq!(a.session.doc, expected.doc);
+
+    for outcome in ["cancel", "disconnect", "missing"] {
+        let before = a.session.doc.clone();
+        let revision = a.session.rev();
+        let selection = a.session.sel.clone();
+        a.run("insert.textFromFile", json!({})).unwrap();
+        match outcome {
+            "cancel" => answer(&shown, None),
+            "disconnect" => {
+                shown.borrow_mut().pop();
+            }
+            _ => answer(&shown, Some(&dir.join("missing.html").to_string_lossy())),
+        }
+        let result = a.poll_file_dialog().unwrap();
+        assert_eq!(result.is_ok(), outcome != "missing");
+        assert_eq!(a.session.doc, before);
+        assert_eq!(a.session.sel, selection);
+        assert_eq!(a.session.rev(), revision);
+    }
+    assert_eq!(std::fs::read(&source).unwrap(), bytes);
+    assert!(a.execute("insert.textFromFile", json!({})).unwrap_err().contains("`path`"));
+    assert!(a.run("insert.textFromFile", json!({"path": 42})).is_err());
+    assert!(!a.file_dialog_open(), "agent calls and invalid explicit paths never ask");
+    a.execute("insert.textFromFile", json!({"path": source})).unwrap();
+    assert!(shown.borrow().is_empty());
+    assert_eq!(a.session.doc.plain_text(StoryRef::Body).matches("Inserted").count(), 2);
+}
+
+/// A late reply must not insert into a replacement document, and protection is checked twice.
+#[test]
+fn text_from_file_pick_respects_document_identity_and_protection() {
+    use wordcraft_doc::Document;
+    let (mut a, shown) = async_app();
+    a.run("insert.textFromFile", json!({})).unwrap();
+    a.session = Session::new(Document::from_text("Replacement document."));
+    let replacement = a.session.doc.clone();
+    answer(&shown, Some("missing.html"));
+    assert_eq!(a.poll_file_dialog().unwrap().unwrap()["cancelled"], true);
+    assert_eq!(a.session.doc, replacement);
+    assert!(!a.session.can_undo());
+
+    a.run("review.restrict", json!({"mode": "readOnly"})).unwrap();
+    assert!(a.run("insert.textFromFile", json!({})).is_err());
+    assert!(shown.borrow().is_empty() && !a.file_dialog_open());
+    a.run("review.restrict", json!({"stop": true})).unwrap();
+    a.run("insert.textFromFile", json!({})).unwrap();
+    a.run("review.restrict", json!({"mode": "readOnly"})).unwrap();
+    let protected = a.session.doc.clone();
+    answer(&shown, Some("missing.html"));
+    assert!(a.poll_file_dialog().unwrap().is_err());
+    assert_eq!(a.session.doc, protected, "the reply goes through normal protection checks");
+    a.ui.start_screen = true;
+    assert!(a.start_screen());
+    assert!(!a.has_document());
+    assert!(a.run("insert.textFromFile", json!({})).is_err());
+    assert!(shown.borrow().is_empty());
+}
+
+/// The blocking host and the built-in fallback finish the same insertion operation.
+#[test]
+fn text_from_file_blocking_and_unavailable_hosts_use_the_same_followup() {
+    let dir = std::env::temp_dir().join(format!("wordcraft-text-from-file-hosts-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let source = dir.join("original.txt");
+    std::fs::write(&source, "Original imported text.").unwrap();
+    let picked = source.to_string_lossy().into_owned();
+    let services = Services {
+        pick_open: Some(Box::new(move |purpose| {
+            assert_eq!(purpose, "document");
+            Some(picked.clone())
+        })),
+        ..Default::default()
+    };
+    let mut blocking = WordApp::new(Session::new(wordcraft_doc::Document::new()), services);
+    blocking.run("insert.textFromFile", json!({})).unwrap();
+    assert!(body_text(&blocking).contains("Original imported text."));
+    let (mut fallback, shown) = async_app();
+    fallback.run("insert.textFromFile", json!({})).unwrap();
+    shown.borrow_mut().pop().unwrap().1.send(Err("no original synthetic host".into())).unwrap();
+    assert!(fallback.poll_file_dialog().is_none());
+    assert!(fallback.file_dialog_open());
+    fallback.close_file_browser(Some(source));
+    assert!(!fallback.file_dialog_open());
+    assert!(body_text(&fallback).contains("Original imported text."));
+}
+
 const UNSAVED: &str = "My unsaved novel chapter";
 
 /// Original Word 97 compound file: one compressed text piece, built from MS-DOC's FIB/Clx.

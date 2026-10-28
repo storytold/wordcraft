@@ -58,6 +58,9 @@ pub fn open_filters(purpose: &str) -> &'static [(&'static str, &'static [&'stati
 pub(crate) enum AfterPick {
     /// Open the picked document from the window showing `document` ([`WordApp::open_file`]).
     OpenDocument { document: u64 },
+    /// Insert the picked document's text into the document that requested it (#4721).
+    #[cfg(not(target_arch = "wasm32"))]
+    TextFromFile { document: u64 },
     /// Insert the picked picture, or replace the pending Change Picture target.
     Picture,
     /// Save the document there, then carry on.
@@ -242,6 +245,14 @@ impl WordApp {
     /// Do what the dialog was for with the picked path (`None`: the user cancelled).
     pub(crate) fn finish_pick(&mut self, after: AfterPick, picked: Option<String>) -> Result<Value, String> {
         match after {
+            #[cfg(not(target_arch = "wasm32"))]
+            AfterPick::TextFromFile { document } => {
+                let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
+                if !self.has_document() || self.session.document_id() != document {
+                    return Ok(json!({"cancelled": true}));
+                }
+                self.run("insert.textFromFile", json!({"path": path}))
+            }
             AfterPick::OpenDocument { document } => {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
                 let r = self.open_file(&path, Some(document));

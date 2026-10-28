@@ -301,6 +301,23 @@ impl WordApp {
     /// User commands can ask for a supported Save As target or an opening password (#55).
     /// Scripts and agents use [`WordApp::execute`], which never opens these dialogs.
     pub(crate) fn execute_user(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        // Desktop Search and customized ribbon buttons have no path to pass yet (#4721).
+        // Scripts still use `execute`, and an explicit path keeps the engine's validation.
+        #[cfg(not(target_arch = "wasm32"))]
+        if id == "insert.textFromFile"
+            && (params.is_null() || params.as_object().is_some_and(|fields| fields.is_empty()))
+            && self.services.open_async.is_none()
+            && self.has_document()
+            && self.session.why_disabled(id).is_none()
+        {
+            let document = self.session.document_id();
+            return match self
+                .ask_file(file_dialogs::FileDialogRequest::Open { purpose: "document".into() }, file_dialogs::AfterPick::TextFromFile { document })
+            {
+                file_dialogs::Asked::Done(r) => r,
+                file_dialogs::Asked::Pending | file_dialogs::Asked::Busy => Ok(json!({"pending": "textFromFile"})),
+            };
+        }
         // Legacy Word files are import-only (#2445). Only a user's implicit Save asks for
         // a supported target; scripts and explicitly supplied paths keep their normal errors.
         if id == "file.save"
