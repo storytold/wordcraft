@@ -379,6 +379,8 @@ impl<'a> Flow<'a> {
         let mut fit = Fit { l1: l0, forced: None, mark_with_break: false, notes: Vec::new() };
         // Worked out only for a last line on a page with notes.
         let mut after_on_page: Option<f32> = None;
+        // A note referenced from a line placed on this page continues on the next one.
+        let mut splitting = false;
         while let Some(l) = pl.lines.get(fit.l1) {
             let line_notes = notes_on_line(ctx, pb, l, notes, &fit.notes);
             let limit = notes_limit(pb, &fit.notes, &line_notes);
@@ -394,7 +396,7 @@ impl<'a> Flow<'a> {
                 0.0
             };
             let over = bottom + tail > limit + 0.01;
-            let split = bottom > limit + 0.01 && notes_split(pb, (&fit.notes, &line_notes), bottom);
+            let split = bottom > limit + 0.01 && notes_split(pb, (&fit.notes, &line_notes), bottom, splitting);
             if over && fit.l1 > l0 && !split {
                 break;
             }
@@ -403,9 +405,10 @@ impl<'a> Flow<'a> {
             }
             fit.notes.extend(line_notes);
             fit.l1 += 1;
-            if self.ends_page(pb, l, &mut fit) || split {
+            if self.ends_page(pb, l, &mut fit) {
                 break;
             }
+            splitting |= split;
         }
         fit
     }
@@ -639,14 +642,25 @@ fn fit_height(pb: &PageBuilder, l: &para::Line, rp: &wordcraft_doc::resolve::Res
 }
 
 /// Notes too long for the rest of the page continue on the next one: the line still fits if the
-/// notes before its last one, and that one's first line, fit below it. The notes then take the
-/// rest of the page.
-fn notes_split(pb: &PageBuilder, (new_notes, line_notes): (&[NoteBox], &[NoteBox]), bottom: f32) -> bool {
-    line_notes.split_last().is_some_and(|(last, others)| {
-        let before: f32 = pb.notes.iter().chain(new_notes).chain(others).map(|n| n.h).sum();
+/// notes before its last one, and that one's first two lines, fit below it. The notes then take
+/// the rest of the page. Once a note is split (`splitting`), the paragraph's next lines go on the
+/// page the same way, as in Word for Mac (observed in 16.114: the line after the reference stays
+/// and the note continues below it), so widow control doesn't pull the reference line over to the
+/// next page with them.
+fn notes_split(pb: &PageBuilder, (new_notes, line_notes): (&[NoteBox], &[NoteBox]), bottom: f32, splitting: bool) -> bool {
+    let first_piece_fits = |last: &NoteBox, before: f32| {
         let sep = pb.seps.sep_h(pb.notes.first().is_some_and(|n| n.cont));
-        pb.body_floor().max(bottom) + sep + before + last.first_piece() + pb.seps.notice_h() <= pb.orig_bottom + 0.01
-    })
+        pb.body_floor().max(bottom) + sep + before + last.min_piece() + pb.seps.notice_h() <= pb.orig_bottom + 0.01
+    };
+    match line_notes.split_last() {
+        Some((last, others)) => first_piece_fits(last, pb.notes.iter().chain(new_notes).chain(others).map(|n| n.h).sum()),
+        // `new_notes.last()` is the note being split: notes are appended in line order, and once
+        // one is split no later line bringing a note of its own fits here.
+        None if splitting => {
+            new_notes.split_last().is_some_and(|(last, others)| first_piece_fits(last, pb.notes.iter().chain(others).map(|n| n.h).sum()))
+        }
+        None => false,
+    }
 }
 
 /// Keep the notes of the lines that are placed (those referenced before `placed_end`) on the page.

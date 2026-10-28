@@ -223,10 +223,11 @@ impl NoteBox {
         cuts
     }
 
-    /// The least of the note that must stay with its reference: its first line (all of it if it
-    /// can't be split).
-    pub(crate) fn first_piece(&self) -> f32 {
-        self.cuts().first().copied().unwrap_or(self.h).min(self.h)
+    /// The least of the note that may stay with its reference when the note continues on the
+    /// next page: its first two lines, or all of it when it has no more. Word for Mac keeps body
+    /// text off the page sooner than leave a note's first line alone there (observed in 16.114).
+    pub(crate) fn min_piece(&self) -> f32 {
+        self.cuts().get(1).copied().unwrap_or(self.h).min(self.h)
     }
 
     /// Split the note at line bottom `cut`: the part above (`cut` tall) and the rest, moved up to

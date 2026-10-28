@@ -7208,6 +7208,95 @@ fn footnote_longer_than_pages_ends() {
     assert!(pieces.windows(2).all(|w| w[0].2 == w[1].1 && w[1].0 == w[0].0 + 1), "{pieces:?}");
 }
 
+/// #3820: a paragraph near the page bottom whose second-to-last line references a long note.
+/// Word for Mac keeps that line and the paragraph's last line on the page and continues the note
+/// on the next one (observed in 16.114); WordCraft placed the reference line, stopped, and widow
+/// control then took it to the next page with the last line, leaving a gap above the notes.
+#[test]
+fn a_long_note_referenced_on_a_paragraphs_last_lines_continues_below_them() {
+    use wordcraft_doc::props::LineSpacing;
+    let props = ParaProps { line_spacing: Some(LineSpacing::Exactly(24.0)), space_before: Some(0.0), space_after: Some(0.0), ..Default::default() };
+    // 24 pt lines: 18 one-line paragraphs, then six lines in one, ending three lines above the
+    // bottom margin, with room below for two lines of the note but not all of it.
+    let mut d = Document::from_text(&"Filler line.\n".repeat(18));
+    let mut last = Paragraph::with_text("L1 text\nL2 text\nL3 text\nL4 text\nL5 text\nL6 text", CharProps::default());
+    last.props = props.clone();
+    let end = d.body.len();
+    d.insert_block(StoryRef::Body, &Path::top(end), wordcraft_doc::Block::Para(last)).unwrap();
+    for k in 0..d.body.len() {
+        d.para_mut(StoryRef::Body, &Path::top(k)).unwrap().props = props.clone();
+    }
+    let para = d.body.len() - 1;
+    let l5 = d.para(StoryRef::Body, &Path::top(para)).unwrap().text.find("L5").unwrap();
+    let id = footnote(&mut d, &Pos::body(para, l5), &"A long note that runs on for many lines. ".repeat(60));
+    let l = lay(&d);
+    let page = |pos: &Pos| l.caret(pos).unwrap().page;
+    let l6 = d.para(StoryRef::Body, &Path::top(para)).unwrap().text.find("L6").unwrap();
+    assert_eq!((page(&Pos::body(para, l5)), page(&Pos::body(para, l6))), (0, 0), "the reference line and the last line stay on page 1");
+    let pieces = note_pieces(&l, id);
+    assert_eq!((pieces[0].0, pieces.get(1).map(|p| p.0)), (0, Some(1)), "{pieces:?}");
+    assert!(pieces[0].2 - pieces[0].1 >= 2, "at least two of the note's lines stay with it: {pieces:?}");
+}
+
+/// `fillers` one-line paragraphs, then one paragraph of `lines` lines (`L1 text`, `L2 text`…),
+/// the fillers' lines exactly 24 pt and the last paragraph's exactly `h`, with no paragraph
+/// spacing, and a footnote saying `note` referenced at the start of line `refl` (1-based) of the
+/// last paragraph. The document, the last paragraph's index and the note's id.
+fn note_in_last_paragraph(fillers: usize, lines: usize, h: f32, refl: usize, note: &str) -> (Document, usize, u32) {
+    use wordcraft_doc::props::LineSpacing;
+    let props = ParaProps { line_spacing: Some(LineSpacing::Exactly(24.0)), space_before: Some(0.0), space_after: Some(0.0), ..Default::default() };
+    let mut d = Document::from_text(&"Filler line.\n".repeat(fillers));
+    let text: Vec<String> = (1..=lines).map(|k| format!("L{k} text")).collect();
+    for k in 0..d.body.len() {
+        d.para_mut(StoryRef::Body, &Path::top(k)).unwrap().props = props.clone();
+    }
+    let mut last = Paragraph::with_text(&text.join("\n"), CharProps::default());
+    last.props = ParaProps { line_spacing: Some(LineSpacing::Exactly(h)), ..props };
+    let para = d.body.len();
+    d.insert_block(StoryRef::Body, &Path::top(para), wordcraft_doc::Block::Para(last)).unwrap();
+    let at = d.para(StoryRef::Body, &Path::top(para)).unwrap().text.find(&format!("L{refl} ")).unwrap();
+    let id = footnote(&mut d, &Pos::body(para, at), note);
+    (d, para, id)
+}
+
+/// The page of the start of line `k` (1-based) of paragraph `para` built by
+/// [`note_in_last_paragraph`].
+fn page_of_line(d: &Document, l: &DocLayout, para: usize, k: usize) -> usize {
+    let at = d.para(StoryRef::Body, &Path::top(para)).unwrap().text.find(&format!("L{k} ")).unwrap();
+    l.caret(&Pos::body(para, at)).unwrap().page
+}
+
+/// #3820: a long note referenced on the first line of a longer paragraph near the page bottom.
+/// The paragraph's lines after the reference stay on the page while the note's first two lines
+/// still fit below them, and it stops before only one note line would be left (18 pt lines:
+/// after the eighth line two note lines fit, after the ninth only one would).
+#[test]
+fn a_long_note_referenced_on_a_paragraphs_first_line_keeps_two_of_its_lines_below_the_text() {
+    let (d, para, id) = note_in_last_paragraph(18, 12, 18.0, 1, &"A long note that runs on for many lines. ".repeat(60));
+    let l = lay(&d);
+    let pages: Vec<usize> = (1..=12).map(|k| page_of_line(&d, &l, para, k)).collect();
+    assert_eq!(pages, [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1], "lines 1-8 stay on page 1");
+    let pieces = note_pieces(&l, id);
+    assert_eq!(pieces.iter().map(|p| (p.0, p.1, p.2)).take(1).collect::<Vec<_>>(), [(0, 0, 2)], "two note lines stay: {pieces:?}");
+    assert_eq!(pieces.get(1).map(|p| (p.0, p.1)), Some((1, 2)), "the note continues on page 2: {pieces:?}");
+}
+
+/// #3820: a note of one or two lines isn't split (the least that may stay with its reference is
+/// two lines, or the whole note): where it doesn't fit whole below its reference line, the line
+/// goes to the next page with all of it, though the note's first line would fit.
+#[test]
+fn a_note_of_one_or_two_lines_stays_whole_with_its_reference() {
+    // (note text repeats, reference line, page of that line); 18 pt lines from y = 504.
+    for (repeat, refl, want) in [(4, 7, 0), (4, 8, 1), (2, 8, 0), (2, 9, 1)] {
+        let (d, para, id) = note_in_last_paragraph(18, 12, 18.0, refl, &"A long note that runs on for many lines. ".repeat(repeat));
+        let l = lay(&d);
+        let pieces = note_pieces(&l, id);
+        assert_eq!(pieces.len(), 1, "note of {repeat} repeats on line {refl} isn't split: {pieces:?}");
+        assert!(pieces[0].2 - pieces[0].1 <= 2, "a note of one or two lines: {pieces:?}");
+        assert_eq!((page_of_line(&d, &l, para, refl), pieces[0].0), (want, want), "note of {repeat} repeats on line {refl}: {pieces:?}");
+    }
+}
+
 /// A comment by `author` saying `text` on body paragraph `para`, bytes `a..b`; its id.
 fn comment_on(d: &mut Document, para: usize, a: usize, b: usize, author: &str, text: &str, parent: Option<u32>) -> u32 {
     let part = d.add_part(wordcraft_doc::PartKind::Comment, vec![wordcraft_doc::para_block(Paragraph::with_text(text, CharProps::default()))]);
