@@ -2152,6 +2152,59 @@ fn control_keyboard_preserves_native_focus_and_document_protection() {
     assert!(!a.canvas.focused);
 }
 
+/// Control text queued after another widget took the keyboard from the page stays out of the
+/// document: the root hook drops the page's keyboard ownership together with its focus.
+#[test]
+fn control_text_after_the_page_lost_the_keyboard_stays_out() {
+    let ctx = egui::Context::default();
+    let mut a = app();
+    a.run("document.setText", json!({"text": "Seed"})).unwrap();
+    for _ in 0..4 {
+        control_frame(&mut a, &ctx, true);
+    }
+    assert!(a.canvas.owns_keyboard(&ctx));
+    ctx.memory_mut(|m| m.request_focus(egui::Id::unique("dialog field")));
+    control_input(&mut a, &ctx, "ui.text", json!({"text": "Stray"}));
+    control_frame(&mut a, &ctx, true);
+    assert!(!a.canvas.focused && !a.canvas.owns_keyboard(&ctx));
+    assert_eq!(body_text(&a), "Seed");
+}
+
+/// A dialog that opens takes the keyboard from the page, whether the window is active or not:
+/// input method text then goes to the dialog alone, not to the document behind it as well.
+#[test]
+fn input_method_text_goes_to_a_dialog_that_took_the_keyboard_from_the_page() {
+    for active in [true, false] {
+        let ctx = egui::Context::default();
+        let mut a = app();
+        a.run("document.setText", json!({"text": "Seed"})).unwrap();
+        for _ in 0..4 {
+            control_frame(&mut a, &ctx, true);
+        }
+        for _ in 0..2 {
+            control_frame(&mut a, &ctx, active);
+        }
+        assert!(a.canvas.owns_keyboard(&ctx));
+        a.run("edit.advancedFind", json!({})).unwrap();
+        control_frame(&mut a, &ctx, active);
+        let mut raw = egui::RawInput {
+            focused: active,
+            events: vec![egui::Event::Ime(egui::ImeEvent::Commit("🚀".into()))],
+            time: Some(ctx.input(|i| i.time) + 1.0 / 60.0),
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0))),
+            ..Default::default()
+        };
+        a.raw_input_hook(&ctx, &mut raw);
+        ctx.run_ui(raw, |ui| {
+            a.logic(ui.ctx());
+            a.ui(ui);
+        })
+        .drop_without_applying_deltas();
+        assert!(matches!(&a.dialog, Some(dialogs::Dialog::Find { query, .. }) if query == "🚀"), "active: {active}");
+        assert_eq!(body_text(&a), "Seed", "active: {active}");
+    }
+}
+
 /// #2103: double-clicking the page number in a later page's footer opens the footer there;
 /// the view stays on that page instead of jumping to the top of the document.
 #[test]

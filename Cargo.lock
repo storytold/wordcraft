@@ -6518,7 +6518,7 @@ checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 [[package]]
 name = "winit"
 version = "0.30.13"
-source = "git+https://github.com/storytold/winit.git?rev=a517b3846ee8457d84ee4975110bfda6797c44dc#a517b3846ee8457d84ee4975110bfda6797c44dc"
+source = "git+https://github.com/storytold/winit.git?rev=41e0fc40a134709aa5f448b2d4f997af2679290d#41e0fc40a134709aa5f448b2d4f997af2679290d"
 dependencies = [
  "ahash",
  "android-activity",

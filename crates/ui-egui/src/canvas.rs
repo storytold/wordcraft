@@ -281,6 +281,19 @@ pub struct CanvasState {
 type TablePreviewKey = ((usize, usize, u64, u64, wordcraft_engine::Selection), std::sync::Arc<DocLayout>);
 
 impl CanvasState {
+    /// The page takes keys and input method text: it has the keyboard within its window, active
+    /// or not, as when the Emoji & Symbols picker holds the keyboard and types the chosen emoji
+    /// into it. Read from egui's memory each time, so a dialog that takes the keyboard takes it
+    /// from the page at once; with no widget focused, the page's own claim (`focused`) decides.
+    pub(crate) fn owns_keyboard(&self, ctx: &egui::Context) -> bool {
+        self.widget_id.map_or(self.focused, |(id, _)| self.owns_keyboard_as(ctx, id))
+    }
+
+    /// [`Self::owns_keyboard`] for the page's widget `id`, while the page is being drawn.
+    fn owns_keyboard_as(&self, ctx: &egui::Context, id: egui::Id) -> bool {
+        ctx.memory(|m| m.focused()).map_or(self.focused, |focused| focused == id)
+    }
+
     /// Another document is shown in the window: everything about the page that was shown (drags,
     /// menus, the input method's composition, a scroll in progress, rendered pages…) starts
     /// afresh. What belongs to the window or the user stays: the colours last applied, the
@@ -485,7 +498,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     // Keys first, so this frame lays out and paints what was typed (handled after painting, a
     // keystroke showed one frame later). Focus is the canvas's from the last frame.
     // While "Save changes?" is up, keys answer it rather than edit the document behind it.
-    if app.canvas.focused && !matches!(app.dialog, Some(crate::dialogs::Dialog::SaveChanges { .. })) {
+    if app.canvas.owns_keyboard(ui.ctx()) && !matches!(app.dialog, Some(crate::dialogs::Dialog::SaveChanges { .. })) {
         crate::keys::canvas_events(app, ui.ctx());
     } else {
         // Alt+numpad entry doesn't survive the canvas losing the keyboard.
@@ -1032,6 +1045,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         }
         // Caret.
         let focused = resp.has_focus() || app.canvas.focused;
+        let owns_keyboard = app.canvas.owns_keyboard_as(ui.ctx(), resp.id);
         // After an automatic change the web's text agent starts afresh
         // (`keys::note_automatic_change`) — only there, because on X11 an interrupt recreates the
         // input context and fcitx drops later keys (#1169). A body replacement interrupts on every
@@ -1093,6 +1107,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 }
                 if focused {
                     ui.ctx().request_repaint_after(std::time::Duration::from_millis(530 - (since as u64 % 530)));
+                }
+                if owns_keyboard {
                     let cr = Rect::from_min_max(pos2(x, y0), pos2(x + 1.0, y1));
                     ime_geometry = Some((cr, cr));
                 }
@@ -1163,7 +1179,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             }
             // IME candidate window placement.
             let cr = Rect::from_min_max(pos2(x, y0), pos2(x + 1.0, y1));
-            if focused {
+            if owns_keyboard {
                 ime_geometry = Some((cr, cr));
             }
         }

@@ -3941,6 +3941,43 @@ fn the_caret_follows_the_input_method_cursor_in_the_composition() {
     assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("にほん"));
 }
 
+/// The Emoji & Symbols picker takes the keyboard from the window, so the window is inactive when
+/// the emoji arrives. The page still owns the keyboard there: it keeps placing the picker at the
+/// caret and takes the emoji.
+#[test]
+fn the_page_takes_input_method_text_while_its_window_is_inactive() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    app.run("document.setText", json!({"text": "The"})).unwrap();
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1440.0, 900.0))
+        .with_context_setup(kana_test_glyphs)
+        .with_step_dt(1.0 / 60.0)
+        .build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+    for _ in 0..8 {
+        h.step();
+    }
+    assert!(h.state().canvas.focused);
+    h.input_mut().focused = false;
+    h.step();
+    h.step();
+    assert!(!h.state().canvas.focused && h.state().canvas.owns_keyboard(&h.ctx));
+    assert!(h.output().platform_output.ime.is_some(), "the picker is still placed at the caret");
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "に".into(), active_range_chars: None }));
+    h.step();
+    h.step();
+    assert_eq!(h.state().canvas.ime_preedit, "に", "a composition survives the inactive window");
+    h.event(egui::Event::Ime(egui::ImeEvent::Commit("🚀".into())));
+    h.step();
+    assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains('🚀'));
+}
+
 /// The outgoing IME descriptor is built from settled, visible logical text. A pre-edit does
 /// not change the model; an accepted commit alone earns `InputMethod`; ordinary typing earns
 /// `Other`. The commit mixes Korean, Japanese, ASCII and an emoji.

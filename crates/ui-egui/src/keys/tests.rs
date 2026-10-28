@@ -1204,6 +1204,25 @@ fn observe_ime_drops_a_preedit_without_focus() {
     assert_eq!(a.canvas.ime_preedit_range, None);
 }
 
+/// The Emoji & Symbols picker takes the keyboard from the window to search: the editor keeps its
+/// composition and stays the input method's target, so the chosen emoji lands in it.
+#[test]
+fn observe_ime_keeps_the_editor_while_its_window_is_inactive() {
+    let ctx = egui::Context::default();
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.canvas.ime_preedit = "に".into();
+    a.canvas.ime_preedit_range = Some(0..1);
+    a.canvas.focused = false;
+    let page = egui::Id::unique("page");
+    a.canvas.widget_id = Some((page, 0));
+    ctx.memory_mut(|m| m.request_focus(page));
+    ctx.input_mut(|i| i.focused = false);
+    let r = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(10.0, 10.0));
+    observe_ime(&mut a, &ctx, Some((r, r)), false);
+    assert_eq!(a.canvas.ime_preedit, "に");
+    assert!(ctx.output(|o| o.ime.is_some()), "the editor stays the input method's target");
+}
+
 #[test]
 fn typing_with_smart_art_selected_types_into_an_item() {
     let ctx = egui::Context::default();

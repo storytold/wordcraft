@@ -46,7 +46,7 @@ pub(crate) fn observe_ime(app: &mut WordApp, ctx: &egui::Context, geometry: Opti
     }
     let frame = ctx.cumulative_frame_nr_for(viewport);
     let pass = ctx.cumulative_pass_nr_for(viewport);
-    let focused = app.canvas.focused && geometry.is_some();
+    let focused = app.canvas.owns_keyboard(ctx) && geometry.is_some();
     let update = if focused {
         let target = ime_target(app);
         if app.session.math.is_some() {
