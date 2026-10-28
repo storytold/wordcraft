@@ -649,9 +649,14 @@ pub fn style_set_gallery(app: &mut WordApp, ui: &mut Ui) {
 
 /// Table Design: a tile previewing a table style.
 pub fn table_style_tile(ui: &mut Ui, app: &mut WordApp, style: &str) -> Response {
+    let (r, resp) = ui.allocate_exact_size(vec2(58.0, 46.0), Sense::click());
+    // Clipped tiles still take their place in the gallery, but must not fill and repeatedly
+    // clear the bounded preview cache while the visible tiles wait for the render budget.
+    if !ui.is_rect_visible(r) {
+        return resp;
+    }
     let t = Tokens::get(ui.ctx());
     let ppp = ui.ctx().pixels_per_point();
-    let (r, resp) = ui.allocate_exact_size(vec2(58.0, 46.0), Sense::click());
     if resp.hovered() {
         ui.painter().rect_filled(r, 3.0, t.hover);
     }
