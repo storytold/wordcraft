@@ -22,6 +22,8 @@ mod logging;
 mod print;
 mod region;
 #[cfg(target_os = "macos")]
+mod save_panel;
+#[cfg(target_os = "macos")]
 mod traffic_lights;
 
 use wordcraft_engine::Session;

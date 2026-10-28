@@ -59,6 +59,14 @@ impl Launcher {
     /// keeps them on top of it. Call after every pass that may ask for one.
     pub fn show(&self, parent: &eframe::Frame) {
         while let Ok((req, answer)) = self.queue.try_recv() {
+            // macOS: Save As has Word for Mac's File Format menu, which rfd's panel lacks.
+            #[cfg(target_os = "macos")]
+            if let FileDialogRequest::Save { name, dir } = &req
+                && no_system_dialog().is_none()
+            {
+                crate::save_panel::ask(name, dir.as_deref(), save_filters(name), answer, self.ctx.clone());
+                continue;
+            }
             // Built here, on the UI thread: macOS shows the panel as a sheet on the window now.
             let picking = picker(rfd::AsyncFileDialog::new().set_parent(parent), &req);
             #[cfg(all(unix, not(target_os = "macos")))]

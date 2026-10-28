@@ -6650,6 +6650,7 @@ name = "wordcraft"
 version = "0.12.0"
 dependencies = [
  "arboard",
+ "block2 0.6.2",
  "chrono",
  "clipboard-win",
  "craft-print",
