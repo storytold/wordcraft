@@ -4164,9 +4164,7 @@ fn thai_drop_cap_takes_whole_tcb() {
     let mut d = Document::from_text("x");
     d.body = vec![wordcraft_doc::para_block(p)];
     let l = lay(&d);
-    let pl = l.pages[0].items.iter().find_map(|i| {
-        if let Placed::Lines { para, .. } = i { Some(para.clone()) } else { None }
-    }).expect("no lines");
+    let pl = l.pages[0].items.iter().find_map(|i| if let Placed::Lines { para, .. } = i { Some(para.clone()) } else { None }).expect("no lines");
 
     let (nc, lines, _) = pl.drop_cap.expect("drop cap must be set");
     assert_eq!(lines, 3, "should span 3 lines");
@@ -4176,14 +4174,10 @@ fn thai_drop_cap_takes_whole_tcb() {
     // NOT byte 3 (past "ก" only) — the sara u must be consumed by the drop cap, not
     // rendered separately at body-text size.
     let body_start = pl.clusters.get(nc).map(|c| c.start);
-    assert_eq!(body_start, Some(6),
-        "body text must start at byte 6 (past กุ); got {body_start:?} — sara u leaked into body");
+    assert_eq!(body_start, Some(6), "body text must start at byte 6 (past กุ); got {body_start:?} — sara u leaked into body");
     // The drop cap's glyph should be significantly larger than body text (12 pt default).
     // Drop cap clusters come first; nc=1 means cluster[0] is the drop cap.
-    let cap_size = pl.clusters.first()
-        .and_then(|c| pl.styles.get(c.style as usize))
-        .map(|s| s.rc.size)
-        .unwrap_or(0.0);
+    let cap_size = pl.clusters.first().and_then(|c| pl.styles.get(c.style as usize)).map(|s| s.rc.size).unwrap_or(0.0);
     assert!(cap_size > 30.0, "drop cap font size {cap_size} should be >> 12pt for 3 lines");
 }
 
@@ -4198,16 +4192,13 @@ fn thai_drop_cap_leading_vowel_alone() {
     let mut d = Document::from_text("x");
     d.body = vec![wordcraft_doc::para_block(p)];
     let l = lay(&d);
-    let pl = l.pages[0].items.iter().find_map(|i| {
-        if let Placed::Lines { para, .. } = i { Some(para.clone()) } else { None }
-    }).expect("no lines");
+    let pl = l.pages[0].items.iter().find_map(|i| if let Placed::Lines { para, .. } = i { Some(para.clone()) } else { None }).expect("no lines");
 
     let (nc, lines, _) = pl.drop_cap.expect("drop cap must be set for leading-vowel paragraph");
     assert_eq!(lines, 3);
     // The drop cap is just "เ" (3 bytes); body cluster must start at byte 3, not 6.
     let body_start = pl.clusters.get(nc).map(|c| c.start);
-    assert_eq!(body_start, Some(3),
-        "leading vowel dropped alone: body must start at byte 3 (ก), not byte 6; got {body_start:?}");
+    assert_eq!(body_start, Some(3), "leading vowel dropped alone: body must start at byte 3 (ก), not byte 6; got {body_start:?}");
 }
 
 /// Sara aa (า U+0E32) is a pure trailing following vowel — no above/below component —
@@ -4222,17 +4213,14 @@ fn thai_drop_cap_sara_aa_stays_in_body() {
     let mut d = Document::from_text("x");
     d.body = vec![wordcraft_doc::para_block(p)];
     let l = lay(&d);
-    let pl = l.pages[0].items.iter().find_map(|i| {
-        if let Placed::Lines { para, .. } = i { Some(para.clone()) } else { None }
-    }).expect("no lines");
+    let pl = l.pages[0].items.iter().find_map(|i| if let Placed::Lines { para, .. } = i { Some(para.clone()) } else { None }).expect("no lines");
 
     pl.drop_cap.expect("drop cap must be set");
     // The cluster after the drop cap must start at byte 6 (past ข + ่ only),
     // NOT byte 9 (which would incorrectly include sara aa า in the drop cap).
     let (nc, _, _) = pl.drop_cap.unwrap();
     let body_start = pl.clusters.get(nc).map(|c| c.start);
-    assert_eq!(body_start, Some(6),
-        "sara aa (byte 6-9) must stay in body text, not be consumed by the drop cap; got {body_start:?}");
+    assert_eq!(body_start, Some(6), "sara aa (byte 6-9) must stay in body text, not be consumed by the drop cap; got {body_start:?}");
 }
 
 /// Sara am (ำ U+0E33) encodes nikhahit (above) + sara aa in one codepoint — it has an
@@ -4249,15 +4237,12 @@ fn thai_drop_cap_sara_am_in_tcb() {
     let mut d = Document::from_text("x");
     d.body = vec![wordcraft_doc::para_block(p)];
     let l = lay(&d);
-    let pl = l.pages[0].items.iter().find_map(|i| {
-        if let Placed::Lines { para, .. } = i { Some(para.clone()) } else { None }
-    }).expect("no lines");
+    let pl = l.pages[0].items.iter().find_map(|i| if let Placed::Lines { para, .. } = i { Some(para.clone()) } else { None }).expect("no lines");
 
     pl.drop_cap.expect("drop cap must be set");
     let (nc, _, _) = pl.drop_cap.unwrap();
     let body_start = pl.clusters.get(nc).map(|c| c.start);
-    assert_eq!(body_start, Some(6),
-        "TCB for สำ should be 6 bytes (ส + ำ); body_start={body_start:?}");
+    assert_eq!(body_start, Some(6), "TCB for สำ should be 6 bytes (ส + ำ); body_start={body_start:?}");
 
     // With tone mark: cons + tone + sara am → TCB is all three (9 bytes).
     // ข (U+0E02, 3) + ่ (U+0E48, 3) + ำ (U+0E33, 3)
@@ -4267,15 +4252,16 @@ fn thai_drop_cap_sara_am_in_tcb() {
     let mut d2 = Document::from_text("x");
     d2.body = vec![wordcraft_doc::para_block(p2)];
     let l2 = lay(&d2);
-    let pl2 = l2.pages[0].items.iter().find_map(|i| {
-        if let Placed::Lines { para, .. } = i { Some(para.clone()) } else { None }
-    }).expect("no lines (tone+sara am)");
+    let pl2 = l2.pages[0]
+        .items
+        .iter()
+        .find_map(|i| if let Placed::Lines { para, .. } = i { Some(para.clone()) } else { None })
+        .expect("no lines (tone+sara am)");
 
     pl2.drop_cap.expect("drop cap must be set (tone+sara am)");
     let (nc2, _, _) = pl2.drop_cap.unwrap();
     let body_start2 = pl2.clusters.get(nc2).map(|c| c.start);
-    assert_eq!(body_start2, Some(9),
-        "TCB for ข่ำ should be 9 bytes (ข + ่ + ำ); body_start={body_start2:?}");
+    assert_eq!(body_start2, Some(9), "TCB for ข่ำ should be 9 bytes (ข + ่ + ำ); body_start={body_start2:?}");
 }
 
 #[test]
