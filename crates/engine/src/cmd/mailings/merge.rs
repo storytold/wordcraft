@@ -390,8 +390,8 @@ fn merge_blocks(s: &Session, blocks: &mut Blocks, cur: &mut usize, end: usize, d
         match std::sync::Arc::make_mut(b) {
             Block::Para(p) => {
                 let mut repl = Vec::new();
-                for off in p.object_offsets() {
-                    let Some(InlineObject::Field { instr, .. }) = p.object_at(off) else { continue };
+                for (off, object) in p.objects_with_offsets() {
+                    let InlineObject::Field { instr, .. } = object else { continue };
                     let row = if *cur < end { *cur } else { s.merge.rows.len() };
                     match act(s, instr, row) {
                         Some(Act::Text(t)) => repl.push((off, t)),
@@ -420,3 +420,6 @@ fn merge_blocks(s: &Session, blocks: &mut Blocks, cur: &mut usize, end: usize, d
     }
     true
 }
+
+#[cfg(test)]
+mod tests;
