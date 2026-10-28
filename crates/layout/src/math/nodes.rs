@@ -2,6 +2,21 @@ use super::bx::{Bx, Cls, RunPart, St, compose, finalize, hcat};
 use super::state::{MAX_NODES, class_of};
 use super::*;
 
+/// Whether any visible delimiter is directly inside these arguments, looking through invisible
+/// groups (`〖…〗`), which only scope their content and draw no bracket.
+fn has_visible_delimiter(args: &[Arg]) -> bool {
+    let mut stack: Vec<&MNode> = args.iter().flatten().collect();
+    while let Some(n) = stack.pop() {
+        if let MNode::Delim { beg, end, elems, .. } = n {
+            if beg.is_some() || end.is_some() {
+                return true;
+            }
+            stack.extend(elems.iter().flatten());
+        }
+    }
+    false
+}
+
 impl Ctx {
     pub(super) fn arg(&mut self, a: &[MNode], st: St, depth: usize) -> Bx {
         let atoms = self.row(a, st, depth, 0);
@@ -338,7 +353,7 @@ impl Ctx {
                 // Word's nested brackets get a size larger at each level, even around an empty
                 // slot: the plain glyph is taller than the placeholder, so content alone would
                 // leave them all the same size (#4618).
-                let nested = elems.iter().flatten().any(|n| matches!(n, MNode::Delim { beg, end, .. } if beg.is_some() || end.is_some()));
+                let nested = has_visible_delimiter(elems);
                 let step = if nested { self.size(st) * 0.25 } else { 0.0 };
                 let mut row: Vec<Bx> = Vec::new();
                 if let Some(c) = beg {

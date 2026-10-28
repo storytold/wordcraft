@@ -211,6 +211,13 @@ fn nested_empty_delimiters_grow_with_nesting() {
         );
         let h = |m: &MathLayout| m.ascent + m.descent;
         assert!(h(&mixed) > h(&solo) * 1.05, "display={display}: {} vs {}", h(&mixed), h(&solo));
+        // Invisible grouping brackets add no glyph; the outer pair should still grow.
+        let invisible = |inner: Vec<MNode>| MNode::Delim { beg: None, end: None, sep: None, grow: true, shp_match: false, elems: vec![inner] };
+        let grouped = lay_in(&Math { nodes: vec![delim(vec![invisible(nest(1))])], ..Default::default() }, "", display, 400.0, &MathProps::default());
+        assert!(h(&grouped) > h(&solo) * 1.05, "display={display}: {} vs {}", h(&grouped), h(&solo));
+        let empty_group =
+            lay_in(&Math { nodes: vec![delim(vec![invisible(Vec::new())])], ..Default::default() }, "", display, 400.0, &MathProps::default());
+        assert!((h(&empty_group) - h(&solo)).abs() < 0.01, "display={display}: {} vs {}", h(&empty_group), h(&solo));
     }
 }
 
