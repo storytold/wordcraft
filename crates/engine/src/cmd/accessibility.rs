@@ -110,8 +110,10 @@ impl Checker<'_> {
 
     /// Alt text and reading order of the drawings in paragraph `p`.
     fn objects(&mut self, path: &Path, p: &Paragraph) {
-        for off in p.object_offsets() {
-            let Some(o) = p.object_at(off).filter(|o| o.is_drawing()) else { continue };
+        for (off, o) in p.objects_with_offsets() {
+            if !o.is_drawing() {
+                continue;
+            }
             let pos = at(path, off);
             let select = json!({"anchor": pos, "focus": at(path, off + OBJ.len_utf8())});
             // Ink: every stroke is its own object, so asking about each would bury the report. A
@@ -318,5 +320,30 @@ mod tests {
         s.run("caret.set", &json!({"pos": i["pos"]})).unwrap();
         s.run(i["action"]["command"].as_str().unwrap(), &i["action"]["params"]).unwrap();
         assert!(!rules(&mut s).iter().any(|(_, r)| r == "tableHeader"));
+    }
+
+    #[test]
+    fn accessibility_walks_dense_object_markers_once() {
+        const COUNT: usize = 100_000;
+        let mut s = Session::new(Document::from_text(""));
+        s.run("insert.shape", &json!({"kind": "ellipse"})).unwrap();
+        let drawing = s.doc.para(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().objects[0].clone();
+        let mut p = wordcraft_doc::Paragraph { text: format!("α{}終", "\u{fffc}".repeat(COUNT + 1)), ..Default::default() };
+        p.runs.push(wordcraft_doc::para::Run { len: p.len(), props: Default::default() });
+        p.objects = vec![wordcraft_doc::InlineObject::BookmarkEnd { name: "b".into() }; COUNT];
+        p.objects.push(drawing);
+        s.doc.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Para(p))];
+        s.doc.core.title = "Object walk".into();
+        let before = s.doc.clone();
+        let started = std::time::Instant::now();
+        let result = s.run("file.accessibility", &json!({})).unwrap();
+        let elapsed = started.elapsed();
+        let issues = result["issues"].as_array().unwrap();
+        let missing = issues.iter().find(|v| v["rule"] == "altText").unwrap();
+        assert_eq!(missing["pos"]["off"], 2 + COUNT * 3);
+        assert_eq!(missing["select"]["focus"]["off"], 2 + (COUNT + 1) * 3);
+        assert_eq!(issues.iter().filter(|v| v["rule"] == "altText").count(), 1);
+        assert_eq!(s.doc, before);
+        assert!(elapsed < std::time::Duration::from_secs(2), "dense accessibility walk took {elapsed:?}");
     }
 }

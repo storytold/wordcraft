@@ -128,8 +128,8 @@ fn past_citation(s: &mut Session, _: &Value) -> CmdResult {
         .collect();
     for path in s.doc.para_paths(story) {
         let Some(para) = s.doc.para(story, &path) else { continue };
-        for off in para.object_offsets() {
-            if let Some(InlineObject::Field { instr, .. }) = para.object_at(off)
+        for (off, object) in para.objects_with_offsets() {
+            if let InlineObject::Field { instr, .. } = object
                 && speech::is_citation_code(instr)
             {
                 spans.push((Pos::new(story, path.clone(), off), Pos::new(story, path.clone(), off + obj)));
@@ -279,5 +279,33 @@ mod tests {
         s.run("caret.pastCitation", &json!({})).unwrap();
         let p = s.doc.para_at(&s.sel.focus).unwrap();
         assert_eq!(p.text.get(s.sel.focus.off..), Some(" b."));
+    }
+
+    #[test]
+    fn past_citation_walks_dense_object_markers_once() {
+        const COUNT: usize = 100_000;
+        let mut p = wordcraft_doc::Paragraph { text: format!("α{}終", "\u{fffc}".repeat(COUNT + 2)), ..Default::default() };
+        p.runs.push(wordcraft_doc::para::Run { len: p.len(), props: Default::default() });
+        p.objects = vec![InlineObject::BookmarkEnd { name: "b".into() }; COUNT];
+        for instr in ["CITATION Original", "ADDIN ZOTERO_ITEM CSL_CITATION {}"] {
+            p.objects.push(InlineObject::Field {
+                instr: instr.into(),
+                result: "(Original)".into(),
+                locked: false,
+                dirty: false,
+                code: false,
+                form: String::new(),
+            });
+        }
+        let mut s = Session::new(Document::from_text(""));
+        s.doc.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Para(p))];
+        let before = s.doc.clone();
+        let started = std::time::Instant::now();
+        s.run("caret.pastCitation", &json!({})).unwrap();
+        let elapsed = started.elapsed();
+        assert_eq!(s.sel.focus, Pos::body(0, 2 + (COUNT + 2) * 3));
+        assert!(s.sel.is_collapsed());
+        assert_eq!(s.doc, before);
+        assert!(elapsed < std::time::Duration::from_secs(2), "dense citation walk took {elapsed:?}");
     }
 }
