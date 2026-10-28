@@ -2,8 +2,11 @@
 #
 # Flatpak builds run offline, so the crate sources must be vendored first. From the repo root:
 #
-#   curl -fsSLO https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/master/cargo/flatpak-cargo-generator.py
-#   python3 flatpak-cargo-generator.py Cargo.lock -o packaging/linux/flatpak/cargo-sources.json
+#   curl -fsSLO https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/9d86d336a39b9af38b86f114b6ce5820fe260f91/cargo/flatpak-cargo-generator.py
+#   python3 packaging/linux/flatpak/generate-cargo-sources.py Cargo.lock -o packaging/linux/flatpak/cargo-sources.json
+# The wrapper vendors [[patch.unused]] and keeps git revisions separate so Cargo can
+# resolve the complete dependency graph offline.
+#
 #   flatpak-builder --user --install --force-clean build-flatpak packaging/linux/flatpak/ai.storyteller.wordcraft.yml
 #   flatpak run ai.storyteller.wordcraft
 #
@@ -12,7 +15,7 @@
 # keep runtime, runtime-version, sdk and finish-args identical in both (packaging-lint checks this).
 id: ai.storyteller.wordcraft
 runtime: org.freedesktop.Platform
-runtime-version: '25.08'
+runtime-version: '26.08'
 sdk: org.freedesktop.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
