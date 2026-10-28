@@ -16,6 +16,7 @@
 use std::sync::Arc;
 
 use wordcraft_doc::props::VAlign;
+use wordcraft_doc::section::NumFormat;
 use wordcraft_doc::{Align, Document};
 
 use crate::model::{

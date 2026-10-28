@@ -1,8 +1,9 @@
 use super::types::{Cell, FBlock, FTable, Flow, Fmt, FmtChange, Img, Inline, Kind, ListInfo, MAX_DEPTH, Meta, Para, RevMark, Spacing};
 use super::{
-    Arc, Block, Blocks, CharProps, Document, InlineObject, NumFormat, OBJ, PAGE_BREAK, ParaProps, Paragraph, StyleKind, Table, TextColor, Underline,
-    VMerge, VertAlign,
+    Arc, Block, Blocks, CharProps, Document, InlineObject, NumFormat, NumRef, OBJ, PAGE_BREAK, ParaProps, Paragraph, StyleKind, Table, TextColor,
+    Underline, VMerge, VertAlign,
 };
+use wordcraft_doc::numbering::Counters;
 
 pub(super) fn uses_kind(blocks: &[FBlock], k: Kind, depth: usize) -> bool {
     depth <= MAX_DEPTH
@@ -126,18 +127,44 @@ fn media_ext(key: &str, data: &[u8]) -> String {
 /// A document paragraph as flow paragraphs: a page break character inside the text ends the
 /// paragraph, and the text after it starts a new one that carries `page_break`.
 pub fn flow_paras(doc: &Document, p: &Paragraph) -> Vec<Para> {
-    flow_paras_in(doc, p, false)
+    flow_paras_in(doc, p, false, &mut Counters::default())
+}
+
+/// Count `p` in `counters` as the page counts list paragraphs, in document order: its list's
+/// counters advance. The values of its list's levels then, when it is a numbered item.
+pub fn count_list_para(doc: &Document, p: &Paragraph, counters: &mut Counters) -> Option<(NumRef, [u32; 9])> {
+    let n = p.props.numbering.or_else(|| doc.styles.resolve_para(&p.props).numbering).filter(|n| n.num != 0)?;
+    counters.next_label(&doc.numbering, n.num, n.level)?;
+    Some((n, counters.values(&doc.numbering, n.num)?))
 }
 
 /// [`flow_paras`]; `tracked` keeps tracked changes: deleted text stays, and text carries its
-/// insertion and deletion marks.
-fn flow_paras_in(doc: &Document, p: &Paragraph, tracked: bool) -> Vec<Para> {
+/// insertion and deletion marks. `counters` count the document's list paragraphs so far.
+fn flow_paras_in(doc: &Document, p: &Paragraph, tracked: bool, counters: &mut Counters) -> Vec<Para> {
     let (kind, list) = para_kind(doc, p);
     let mut done: Vec<Para> = Vec::new();
     let borders = if kind == Kind::Rule { None } else { p.props.borders.filter(|b| b.any_visible()) };
+    // An ordered item's number as the page shows it, its format, and the numbers and formats of
+    // the levels above it.
+    let counted = count_list_para(doc, p, counters).filter(|_| list.is_some_and(|l| l.ordered));
+    let list_value = counted.and_then(|(n, v)| v.get(n.level as usize).copied());
+    let list_format = counted.and_then(|(n, _)| doc.numbering.level(n.num, n.level).map(|lv| lv.format));
+    let list_outer = counted.map_or_else(Vec::new, |(n, v)| {
+        (0..n.level.min(8))
+            .map(|k| {
+                let lv = doc.numbering.level(n.num, k);
+                // A level not counted yet shows its start.
+                let at = v.get(k as usize).copied().filter(|x| *x != 0).or(lv.map(|l| l.start)).unwrap_or(1);
+                (at, lv.map(|l| l.format))
+            })
+            .collect()
+    });
     let mut out = Para {
         kind,
         list,
+        list_value,
+        list_format,
+        list_outer,
         align: p.props.align,
         page_break: p.props.page_break_before.unwrap_or(false),
         keep_next: p.props.keep_next.unwrap_or(false),
@@ -169,6 +196,9 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, tracked: bool) -> Vec<Para> {
                     let next = Para {
                         kind,
                         list: None,
+                        list_value: None,
+                        list_format: None,
+                        list_outer: Vec::new(),
                         align: p.props.align,
                         page_break: true,
                         keep_next: p.props.keep_next.unwrap_or(false),
@@ -183,7 +213,12 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, tracked: bool) -> Vec<Para> {
                     let prev = std::mem::replace(&mut out, next);
                     if prev.inlines.is_empty() {
                         out.page_break |= prev.page_break;
+                        // The text after the break is the list item (with its number and
+                        // format) when nothing came before the break.
                         out.list = prev.list;
+                        out.list_value = prev.list_value;
+                        out.list_format = prev.list_format;
+                        out.list_outer = prev.list_outer;
                     } else {
                         done.push(prev);
                     }
@@ -276,16 +311,16 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, tracked: bool) -> Vec<Para> {
     done
 }
 
-fn flow_blocks(doc: &Document, bl: &Blocks, depth: usize, tracked: bool) -> Vec<FBlock> {
+fn flow_blocks(doc: &Document, bl: &Blocks, depth: usize, tracked: bool, counters: &mut Counters) -> Vec<FBlock> {
     let mut out = Vec::new();
     for b in bl {
         match &**b {
-            Block::Para(p) => out.extend(flow_paras_in(doc, p, tracked).into_iter().map(FBlock::Para)),
-            Block::Table(t) if depth < MAX_DEPTH => out.push(FBlock::Table(flow_table(doc, t, depth, tracked))),
+            Block::Para(p) => out.extend(flow_paras_in(doc, p, tracked, counters).into_iter().map(FBlock::Para)),
+            Block::Table(t) if depth < MAX_DEPTH => out.push(FBlock::Table(flow_table(doc, t, depth, tracked, counters))),
             Block::Table(t) => {
                 for r in &t.rows {
                     for c in &r.cells {
-                        out.extend(flow_blocks(doc, &c.blocks, depth, tracked));
+                        out.extend(flow_blocks(doc, &c.blocks, depth, tracked, counters));
                     }
                 }
             }
@@ -294,7 +329,7 @@ fn flow_blocks(doc: &Document, bl: &Blocks, depth: usize, tracked: bool) -> Vec<
     out
 }
 
-fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: bool) -> FTable {
+fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: bool, counters: &mut Counters) -> FTable {
     let mut rows = Vec::new();
     for (ri, r) in t.rows.iter().enumerate() {
         let header = r.props.header || (ri == 0 && t.props.look.header_row && t.rows.len() > 1);
@@ -312,7 +347,7 @@ fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: bool) -> FTable 
                 }
             }
             cells.push(Cell {
-                blocks: flow_blocks(doc, &c.blocks, depth + 1, tracked),
+                blocks: flow_blocks(doc, &c.blocks, depth + 1, tracked, counters),
                 colspan: c.span() as u32,
                 rowspan,
                 covered: c.props.vmerge == VMerge::Continue,
@@ -333,19 +368,26 @@ fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: bool) -> FTable 
 
 /// The document body as a flow.
 pub fn from_doc(doc: &Document) -> Flow {
-    flow_of(doc, false)
+    flow_of(doc, false, Counters::default())
+}
+
+/// [`from_doc`] for a part of a document (a copy): its list paragraphs count on from `counters`,
+/// the source's list counters where the part starts ([`count_list_para`]), so its items keep the
+/// numbers they show there.
+pub fn from_doc_counting_from(doc: &Document, counters: Counters) -> Flow {
+    flow_of(doc, false, counters)
 }
 
 /// [`from_doc`] keeping tracked changes: deleted text stays, and text carries its insertion and
 /// deletion marks ([`Fmt::ins`], [`Fmt::del`]), for formats that can write revisions (RTF).
 pub fn from_doc_tracked(doc: &Document) -> Flow {
-    flow_of(doc, true)
+    flow_of(doc, true, Counters::default())
 }
 
-fn flow_of(doc: &Document, tracked: bool) -> Flow {
+fn flow_of(doc: &Document, tracked: bool, mut counters: Counters) -> Flow {
     let c = &doc.core;
     Flow {
-        blocks: flow_blocks(doc, &doc.body, 0, tracked),
+        blocks: flow_blocks(doc, &doc.body, 0, tracked, &mut counters),
         meta: Meta {
             title: c.title.clone(),
             author: c.creator.clone(),

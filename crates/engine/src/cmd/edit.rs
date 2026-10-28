@@ -183,7 +183,10 @@ fn copy(s: &mut Session, _: &Value) -> CmdResult {
 /// and for a copy of one equation alone, its MathML (#1297).
 pub(crate) fn copy_result(s: &mut Session) -> Value {
     s.clipboard_html = match &s.clipboard {
-        Some(f) => wordcraft_formats::html::export_fragment(&f.to_document()),
+        Some(f) => {
+            let (d, lists) = clipboard_document(s, f);
+            wordcraft_formats::html::export_fragment(&d, lists)
+        }
         None => String::new(),
     };
     let mut r = json!({"text": s.clipboard_text});
@@ -198,6 +201,28 @@ pub(crate) fn copy_result(s: &mut Session) -> Value {
         r["mathml"] = json!(wordcraft_formats::mathml::linear_to_mathml(linear, display));
     }
     r
+}
+
+/// The copy as a document, for the HTML Copy puts on the system clipboard: the fragment with the
+/// source's styles and list definitions, so its numbered and bulleted paragraphs stay lists when
+/// another program pastes them (Word turns the HTML list back into numbering); and the source's
+/// list counters where the copy starts, so each copied item keeps the number the page shows for
+/// it: a copy of items 3 and 4 reads 3 and 4, as Word's does. The copy's paragraphs are the
+/// source's from its first on, in order (whole tables, or the paragraphs of the cells it spans),
+/// so counting on through them gives each one its number there, in the body, a table cell or
+/// any other story.
+fn clipboard_document(s: &Session, f: &Fragment) -> (wordcraft_doc::Document, wordcraft_doc::numbering::Counters) {
+    let mut d = f.to_document();
+    d.styles = s.doc.styles.clone();
+    d.numbering = s.doc.numbering.clone();
+    let (a, _) = s.sel.ordered();
+    let mut counters = wordcraft_doc::numbering::Counters::default();
+    for path in s.doc.para_paths(a.story).into_iter().take_while(|p| *p != a.path) {
+        if let Some(p) = s.doc.para(a.story, &path) {
+            wordcraft_formats::model::count_list_para(&s.doc, p, &mut counters);
+        }
+    }
+    (d, counters)
 }
 
 fn cut(s: &mut Session, v: &Value) -> CmdResult {

@@ -474,3 +474,67 @@ fn many_formatted_leading_breaks_trim_quickly() {
     let texts: Vec<String> = f.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p.text()) } else { None }).collect();
     assert_eq!(texts, ["x"]);
 }
+
+/// A document whose paragraphs are `(text, num)`, each item on its list's first level.
+fn listed<'a>(build: impl FnOnce(&mut wordcraft_doc::numbering::Numbering) -> Vec<(&'a str, u32)>) -> Document {
+    use wordcraft_doc::para::Paragraph;
+    use wordcraft_doc::props::{CharProps, NumRef};
+    let mut d = Document::new();
+    let items = build(&mut d.numbering);
+    d.body = items
+        .into_iter()
+        .map(|(t, num)| {
+            let mut p = Paragraph::with_text(t, CharProps::default());
+            p.props.numbering = (num != 0).then_some(NumRef { num, level: 0 });
+            wordcraft_doc::para_block(p)
+        })
+        .collect();
+    d
+}
+
+#[test]
+fn a_numbered_list_that_does_not_go_on_from_the_one_before_opens_a_list_of_its_own() {
+    use wordcraft_doc::ListKind;
+    // A list restarted under another (Word's "Restart at 1") reads 1, 2, 1: the second list is
+    // an HTML list of its own, not a third item.
+    let d = listed(|n| {
+        let a = n.add_list(ListKind::Numbered);
+        let b = n.restart(a).unwrap();
+        vec![("A1", a), ("A2", a), ("B1", b)]
+    });
+    let html = export_fragment(&d, Default::default()).replace('\n', "");
+    assert!(html.contains("<ol><li>A1</li><li>A2</li></ol><ol><li>B1</li></ol>"), "{html}");
+    // A list in another number format that goes on with the same numbers opens its own list too,
+    // so it keeps its letters.
+    let d = listed(|n| {
+        let a = n.add_list(ListKind::Numbered);
+        let c = n.add_list(ListKind::LowerLetterDot);
+        n.nums.iter_mut().find(|x| x.id == c).unwrap().start_overrides = vec![(0, 3)];
+        vec![("A1", a), ("A2", a), ("C3", c)]
+    });
+    let html = export_fragment(&d, Default::default()).replace('\n', "");
+    assert!(html.contains("<ol><li>A1</li><li>A2</li></ol><ol type=\"a\" start=\"3\"><li>C3</li></ol>"), "{html}");
+    // Items of one list stay one HTML list, a plain paragraph between them or not; after one,
+    // the list goes on at its next number.
+    let d = listed(|n| {
+        let a = n.add_list(ListKind::Numbered);
+        vec![("A1", a), ("A2", a), ("Note", 0), ("A3", a)]
+    });
+    let html = export_fragment(&d, Default::default()).replace('\n', "");
+    assert!(html.contains("<ol><li>A1</li><li>A2</li></ol><p>Note</p><ol start=\"3\"><li>A3</li></ol>"), "{html}");
+}
+
+#[test]
+fn a_numbered_item_that_opens_with_a_page_break_keeps_its_number_and_format() {
+    use wordcraft_doc::ListKind;
+    // The page break ends an empty piece before it: the item is the text after it, and still
+    // reads "b." where it shows.
+    let text = format!("{}Second", wordcraft_doc::para::PAGE_BREAK);
+    let d = listed(|n| {
+        let c = n.add_list(ListKind::LowerLetterDot);
+        vec![("Before", 0), ("First", c), ("Note", 0), (text.as_str(), c)]
+    });
+    let html = export_fragment(&d, Default::default()).replace('\n', "");
+    assert!(html.contains("<ol type=\"a\" start=\"2\"><li"), "{html}");
+    assert!(html.contains(">Second</li></ol>"), "{html}");
+}

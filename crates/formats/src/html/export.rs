@@ -1,4 +1,4 @@
-use super::{Align, Document, FBlock, FTable, Flow, Fmt, Inline, Kind, Para, VAlign, base64_encode, mime_of, model};
+use super::{Align, Document, FBlock, FTable, Flow, Fmt, Inline, Kind, NumFormat, Para, VAlign, base64_encode, mime_of, model};
 
 // ---------------------------------------------------------------------------------------------
 // Export
@@ -236,31 +236,49 @@ fn blocks_html(blocks: &[FBlock], out: &mut String, depth: usize) {
             }
             FBlock::Para(p) if p.list.is_some() => {
                 // Nested lists from consecutive list paragraphs.
-                let mut stack: Vec<(bool, bool)> = Vec::new(); // (ordered, li open)
+                let mut stack: Vec<OpenList> = Vec::new();
                 while let Some(FBlock::Para(q)) = blocks.get(i) {
                     let Some(li) = q.list else { break };
                     let lv = li.level.min(8) as usize;
                     while stack.len() > lv + 1 {
                         close_list(&mut stack, out);
                     }
-                    if stack.len() == lv + 1 && stack.last().is_some_and(|s| s.0 != li.ordered) {
+                    // A new list at this level: a numbered item that doesn't go on from the list
+                    // open there (another list, or one that restarts) or has another number format.
+                    let goes_on = |s: &OpenList| {
+                        s.ordered == li.ordered && (!li.ordered || (s.format == q.list_format && (s.next.is_none() || s.next == q.list_value)))
+                    };
+                    if stack.len() == lv + 1 && stack.last().is_some_and(|s| !goes_on(s)) {
                         close_list(&mut stack, out);
                     }
                     while stack.len() < lv + 1 {
                         if let Some(top) = stack.last_mut()
-                            && !top.1
+                            && !top.li_open
                         {
                             out.push_str("<li>");
-                            top.1 = true;
+                            top.li_open = true;
                         }
-                        out.push_str(if li.ordered { "<ol>" } else { "<ul>" });
-                        stack.push((li.ordered, false));
+                        // The innermost list opens with the item's number format and number, as a
+                        // browser and Word read them (`<ol type="a" start="3">`); a list opening
+                        // above it (the copy leaves its item out) with that level's.
+                        let (start, format) = match stack.len() == lv {
+                            true => (q.list_value.unwrap_or(li.start), q.list_format),
+                            false => q.list_outer.get(stack.len()).copied().unwrap_or((1, None)),
+                        };
+                        out.push_str(&match li.ordered {
+                            true => format!("<ol{}>", ol_attrs(start, format)),
+                            false => "<ul>".to_string(),
+                        });
+                        // The item the list above shows stands for its first number.
+                        let next = (li.ordered && stack.len() < lv).then(|| start.saturating_add(1));
+                        stack.push(OpenList { ordered: li.ordered, li_open: false, format, next });
                     }
                     if let Some(top) = stack.last_mut() {
-                        if top.1 {
+                        if top.li_open {
                             out.push_str("</li>\n");
                         }
-                        top.1 = true;
+                        top.li_open = true;
+                        top.next = q.list_value.map(|v| v.saturating_add(1));
                     }
                     let body = inlines_html(&q.inlines);
                     let attrs = para_attrs(q);
@@ -309,8 +327,36 @@ fn blocks_html(blocks: &[FBlock], out: &mut String, depth: usize) {
     }
 }
 
-fn close_list(stack: &mut Vec<(bool, bool)>, out: &mut String) {
-    if let Some((ordered, li_open)) = stack.pop() {
+/// A list `blocks_html` has open.
+struct OpenList {
+    ordered: bool,
+    /// Its last item is still open (a deeper list goes inside it).
+    li_open: bool,
+    /// The number format it opened with.
+    format: Option<NumFormat>,
+    /// The number its next item shows, when its items are numbered by a document's lists.
+    next: Option<u32>,
+}
+
+/// An ordered list's `type` (letters and roman numerals; decimal is the default) and `start`
+/// (when not 1).
+fn ol_attrs(start: u32, format: Option<NumFormat>) -> String {
+    let ty = match format {
+        Some(NumFormat::LowerLetter) => Some("a"),
+        Some(NumFormat::UpperLetter) => Some("A"),
+        Some(NumFormat::LowerRoman) => Some("i"),
+        Some(NumFormat::UpperRoman) => Some("I"),
+        _ => None,
+    };
+    let mut a = ty.map(|t| format!(" type=\"{t}\"")).unwrap_or_default();
+    if start != 1 {
+        a.push_str(&format!(" start=\"{start}\""));
+    }
+    a
+}
+
+fn close_list(stack: &mut Vec<OpenList>, out: &mut String) {
+    if let Some(OpenList { ordered, li_open, .. }) = stack.pop() {
         if li_open {
             out.push_str("</li>");
         }
@@ -325,9 +371,10 @@ pub fn export(doc: &Document) -> String {
 }
 
 /// `doc`'s content as an HTML fragment (no head or style sheet): what a copy puts on the system
-/// clipboard beside its text, equations as MathML (#816).
-pub fn export_fragment(doc: &Document) -> String {
-    let flow = model::from_doc(doc);
+/// clipboard beside its text, equations as MathML (#816). Its lists count on from `lists`: the
+/// source's list counters where the copy starts, so a copy of items 3 and 4 reads 3 and 4.
+pub fn export_fragment(doc: &Document, lists: wordcraft_doc::numbering::Counters) -> String {
+    let flow = model::from_doc_counting_from(doc, lists);
     let mut out = String::from("<meta charset=\"utf-8\">");
     blocks_html(&flow.blocks, &mut out, 0);
     out
