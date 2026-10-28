@@ -752,6 +752,6 @@ fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec
         found.dedup();
     }
     // Asian typography: kinsoku and breaking Latin words anywhere.
-    crate::kinsoku::apply(text, &mut found, rp.kinsoku, rp.word_wrap);
+    crate::kinsoku::apply(text, &mut found, rp.kinsoku, rp.word_wrap, rp.force_char_break);
     found
 }
