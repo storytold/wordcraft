@@ -147,21 +147,12 @@ fn coverage(b: &[u8], at: usize) -> Vec<u32> {
             for i in 0..n {
                 let r = at + 4 + i * 6;
                 let (Some(s), Some(e), Some(idx)) = (u16_at(b, r), u16_at(b, r + 2), u16_at(b, r + 4)) else { break };
-                if e < s {
-                    continue;
+                // OpenType requires distinct, ordered ranges and consecutive coverage indexes.
+                // Check before expanding: even malformed input then walks at most 65,536 glyphs.
+                if e < s || usize::from(idx) != out.len() || out.last().is_some_and(|&last| u32::from(s) <= last) {
+                    break;
                 }
-                for g in s..=e {
-                    let k = idx as usize + (g - s) as usize;
-                    if k >= 70_000 {
-                        break;
-                    }
-                    if out.len() <= k {
-                        out.resize(k + 1, u32::MAX);
-                    }
-                    if let Some(slot) = out.get_mut(k) {
-                        *slot = g as u32;
-                    }
-                }
+                out.extend((s..=e).map(u32::from));
             }
         }
         _ => {}
@@ -438,6 +429,80 @@ mod tests {
             b[0] = 0;
             b[1] = 1;
             let _ = parse(&b);
+        }
+    }
+
+    fn range_coverage(ranges: &[(u16, u16, u16)]) -> Vec<u8> {
+        let mut b = vec![0, 2];
+        b.extend_from_slice(&(ranges.len() as u16).to_be_bytes());
+        for &(start, end, index) in ranges {
+            for n in [start, end, index] {
+                b.extend_from_slice(&n.to_be_bytes());
+            }
+        }
+        b
+    }
+
+    #[test]
+    fn math_coverage_ranges_keep_valid_glyph_order_and_indexes() {
+        assert_eq!(coverage(&range_coverage(&[(4, 6, 0), (10, 11, 3)]), 0), [4, 5, 6, 10, 11]);
+        assert_eq!(coverage(&[0, 1, 0, 3, 0, 4, 0, 6, 0, 10], 0), [4, 6, 10]);
+        let full = coverage(&range_coverage(&[(0, u16::MAX, 0)]), 0);
+        assert_eq!(full.len(), 65_536);
+        assert_eq!(full.first(), Some(&0));
+        assert_eq!(full.last(), Some(&65_535));
+    }
+
+    #[test]
+    fn math_coverage_stops_before_invalid_ranges() {
+        for invalid in [(11, 14, 3), (8, 9, 3), (20, 19, 3), (20, 21, 4), (20, 21, 0)] {
+            assert_eq!(coverage(&range_coverage(&[(10, 12, 0), invalid, (30, 31, 5)]), 0), [10, 11, 12], "{invalid:?}");
+        }
+        assert!(coverage(&range_coverage(&[(10, 12, 1)]), 0).is_empty());
+        let mut truncated = range_coverage(&[(10, 12, 0), (20, 21, 3)]);
+        truncated.pop();
+        assert_eq!(coverage(&truncated, 0), [10, 11, 12]);
+    }
+
+    #[test]
+    fn math_coverage_repeated_full_ranges_have_bounded_work() {
+        let b = range_coverage(&vec![(0, u16::MAX, 0); usize::from(u16::MAX)]);
+        let start = std::time::Instant::now();
+        let glyphs = coverage(&b, 0);
+        assert_eq!(glyphs.len(), 65_536);
+        assert_eq!(glyphs.last(), Some(&65_535));
+        assert!(start.elapsed() < std::time::Duration::from_secs(2), "repeated coverage ranges took {:?}", start.elapsed());
+    }
+
+    #[test]
+    fn math_coverage_indexes_still_pair_values_and_constructions_with_glyphs() {
+        let cov = range_coverage(&[(4, 6, 0), (10, 11, 3)]);
+        let mut values = vec![0, 24, 0, 5];
+        for value in [100i16, 200, 300, 400, 500] {
+            values.extend_from_slice(&value.to_be_bytes());
+            values.extend_from_slice(&[0, 0]);
+        }
+        values.extend_from_slice(&cov);
+        let values = value_map(&values, 0);
+        assert_eq!(values.len(), 5);
+        for (glyph, value) in [(4, 100.0), (5, 200.0), (6, 300.0), (10, 400.0), (11, 500.0)] {
+            assert_eq!(values.get(&glyph), Some(&value));
+        }
+
+        let mut variants = vec![0, 52];
+        for offset in [12u16, 20, 28, 36, 44] {
+            variants.extend_from_slice(&offset.to_be_bytes());
+        }
+        for glyph in 20u16..25 {
+            variants.extend_from_slice(&[0, 0, 0, 1]);
+            variants.extend_from_slice(&glyph.to_be_bytes());
+            variants.extend_from_slice(&500u16.to_be_bytes());
+        }
+        variants.extend_from_slice(&cov);
+        let variants = constructions(&variants, 0, 0, 5, 2);
+        assert_eq!(variants.len(), 5);
+        for (glyph, variant) in [(4, 20), (5, 21), (6, 22), (10, 23), (11, 24)] {
+            assert_eq!(variants.get(&glyph).unwrap().variants, [(variant, 500.0)]);
         }
     }
 
