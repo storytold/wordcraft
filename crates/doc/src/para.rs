@@ -41,6 +41,22 @@ pub struct Paragraph {
     /// Change counter for caches (not part of equality).
     #[serde(skip, default = "next_rev")]
     pub rev: u64,
+    /// The paragraph's identity across replicas, minted by the collaboration
+    /// layer when a document is first shared — `(author tag << 32) | counter`,
+    /// the rule in `macula-craft-seam`'s `ids` module.
+    ///
+    /// `0` means **never shared**, which is what every paragraph of a document
+    /// that was never shared reads as, and what a document reopened from a
+    /// `.docx` reads as (OOXML has nowhere to keep it; a reopen without its
+    /// sidecar is a new share, not a renumbering). Not part of equality, like
+    /// `rev`: identity is not content.
+    #[serde(default, skip_serializing_if = "is_never_shared")]
+    pub pid: u64,
+}
+
+/// Whether a paragraph has never been shared (`pid` 0), so it is not written.
+fn is_never_shared(pid: &u64) -> bool {
+    *pid == 0
 }
 
 impl PartialEq for Paragraph {
@@ -70,6 +86,7 @@ impl Paragraph {
             objects: Vec::new(),
             section: None,
             rev: next_rev(),
+            pid: 0,
         }
     }
     /// A paragraph of plain text in one run.
@@ -469,6 +486,9 @@ impl Paragraph {
             objects: tail_objs,
             section: self.section.take(),
             rev: next_rev(),
+            // The collaboration layer mints an id for the tail while the
+            // document is shared; unshared, it has none.
+            pid: 0,
         };
         if tail.text.is_empty() {
             tail.mark = self.props_at(off).unlinked();

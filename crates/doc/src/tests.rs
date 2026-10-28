@@ -651,3 +651,31 @@ fn control_markers_kept_are_sorted() {
         assert!(kept.windows(2).all(|p| p[0] < p[1]), "sorted, no repeats: {kept:?}");
     }
 }
+
+/// A paragraph's collaboration id is identity, not content: it survives the
+/// native snapshot, is never written when the paragraph was never shared, and
+/// does not make two otherwise identical paragraphs unequal.
+#[test]
+fn a_paragraphs_shared_id_survives_the_native_snapshot_and_is_not_content() {
+    let mut d = Document::from_text("First\nSecond\n");
+    let path = d.para_paths(StoryRef::Body)[0].clone();
+    // Minted by the collaboration layer, the seam's rule: (tag << 32) | counter.
+    d.para_mut(StoryRef::Body, &path).expect("a paragraph").pid = (0x9f9f9f << 32) | 7;
+
+    let json = serde_json::to_string(&d).expect("the native snapshot serializes");
+    let back: Document = serde_json::from_str(&json).expect("and reads back");
+    assert_eq!(back.para(StoryRef::Body, &path).expect("still there").pid, (0x9f9f9f << 32) | 7);
+
+    // Never shared: no `pid` key at all, so a plain document's snapshot is
+    // byte-for-byte what it was before the field existed.
+    let plain = Document::from_text("Unshared\n");
+    let plain_json = serde_json::to_string(&plain).expect("serializes");
+    assert!(!plain_json.contains("\"pid\""), "an unshared paragraph carries no id in the snapshot");
+
+    // And identity is not equality: two paragraphs that read the same are equal
+    // whatever their ids, because a pid change alone must not dirty a document.
+    let mut a = Paragraph::with_text("Same", CharProps::default());
+    let b = Paragraph::with_text("Same", CharProps::default());
+    a.pid = 42;
+    assert_eq!(a, b);
+}
