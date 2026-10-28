@@ -65,6 +65,7 @@ pub mod patterns;
 pub mod pl;
 pub mod pt;
 pub mod ru;
+pub mod th;
 pub mod tr;
 pub mod vi;
 
@@ -490,7 +491,8 @@ fn accepted_by_options(word: &str, opts: &Options) -> bool {
     w.chars().count() <= 1
         || !w.chars().any(char::is_alphabetic)
         || (opts.ignore_numbers && w.chars().any(|c| c.is_ascii_digit()))
-        || (opts.ignore_uppercase && w.chars().all(|c| !c.is_lowercase()))
+        // Words in capitals: at least one capital, so a script without case (Thai) isn't "in capitals".
+        || (opts.ignore_uppercase && w.chars().any(char::is_uppercase) && w.chars().all(|c| !c.is_lowercase()))
         // The whole word: the languages split a hyphenated word into its parts, and an added
         // `Unigranrio-RJ` is none of them (#2082).
         || in_user_dictionary(&w.to_lowercase())
@@ -703,15 +705,43 @@ pub fn check_spelling_in(text: &str, lang: ProofLang) -> Vec<Issue> {
 /// cost quadratic scanning (#1335).
 fn spelling_issues(text: &str, lang: impl Fn(usize) -> ProofLang, opts: &Options) -> Vec<Issue> {
     let mut token = (0, 0, false);
-    words(text)
-        .into_iter()
-        .filter_map(|(a, b)| {
-            if a < token.0 || a >= token.1 {
-                token = enclosing_token(text, a, b);
-            }
-            spelling_issue(text, a, b, lang(a), opts, token.2)
-        })
-        .collect()
+    let mut out = Vec::new();
+    for (a, b) in words(text) {
+        if a < token.0 || a >= token.1 {
+            token = enclosing_token(text, a, b);
+        }
+        match lang(a) {
+            // Thai has no spaces: a "word" here is a run of words, and each unknown one is marked.
+            ProofLang::Th => thai_spelling_issues(text, a, b, opts, token.2, &mut out),
+            l => out.extend(spelling_issue(text, a, b, l, opts, token.2)),
+        }
+    }
+    out
+}
+
+/// The spelling issues of the Thai run at `a..b` of `text`: one for each stretch the Thai word
+/// list doesn't know ([`th::misspelled_ranges`]). Skipped like any word: in web and e-mail
+/// addresses, as numbers, and when the run is in the user dictionary.
+fn thai_spelling_issues(text: &str, a: usize, b: usize, opts: &Options, internet: bool, out: &mut Vec<Issue>) {
+    let Some(run) = text.get(a..b) else { return };
+    if (opts.ignore_internet && internet) || accepted_by_options(run, opts) {
+        return;
+    }
+    for r in th::misspelled_ranges(run) {
+        let (Some(start), Some(end)) = (a.checked_add(r.start), a.checked_add(r.end)) else { continue };
+        let Some(word) = text.get(start..end) else { continue };
+        if in_user_dictionary(&word.to_lowercase()) {
+            continue;
+        }
+        out.push(Issue {
+            start,
+            end,
+            kind: IssueKind::Spelling,
+            message: "Possible spelling mistake".into(),
+            suggestions: Vec::new(),
+            lang: ProofLang::Th,
+        });
+    }
 }
 
 /// The whitespace-delimited token enclosing the word at `a..b` of `text`: its byte range, and
@@ -787,6 +817,7 @@ pub fn is_correct_in_with(word: &str, lang: ProofLang, opts: &Options) -> bool {
         }
         ProofLang::Cs => accepted_by_options(word, opts) || cs::is_correct_with_options(word, opts),
         ProofLang::Id => accepted_by_options(word, opts) || id::is_correct_with_options(word, opts),
+        ProofLang::Th => accepted_by_options(word, opts) || th::is_correct(word),
         ProofLang::Bg | ProofLang::De | ProofLang::Other => true,
     }
 }
@@ -805,6 +836,7 @@ pub fn suggest_in(word: &str, max: usize, lang: ProofLang) -> Vec<String> {
         ProofLang::Ru => ru::suggest(word, max),
         ProofLang::Cs => cs::suggest(word, max),
         ProofLang::Id => id::suggest(word, max),
+        ProofLang::Th => th::suggest(word, max),
         ProofLang::Es | ProofLang::EsMx | ProofLang::Es419 | ProofLang::EsUy => es::suggest(word, max, lang),
         ProofLang::Bg | ProofLang::De | ProofLang::Other => Vec::new(),
     }
@@ -835,7 +867,7 @@ fn grammar_in(text: &str, lang: ProofLang, capital_first: bool) -> Vec<Issue> {
         ProofLang::Id => id::grammar::check(text),
         // Spanish has no sentence-capital rule either.
         ProofLang::Es | ProofLang::EsMx | ProofLang::Es419 | ProofLang::EsUy => es::grammar::check(text, lang),
-        ProofLang::Bg | ProofLang::De | ProofLang::Other => Vec::new(),
+        ProofLang::Th | ProofLang::Bg | ProofLang::De | ProofLang::Other => Vec::new(),
     }
 }
 
@@ -1018,6 +1050,45 @@ fn starts_consonant_sound(w: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// Thai: the word list is built in, each unknown word is one issue, a sentence is not one word.
+    #[test]
+    fn thai_spelling_marks_each_unknown_word() {
+        let text = "ฉันไปโรงเรียนวันนี้สวัดดีครับ";
+        let issues = check_text(text, &[(0..text.len(), ProofLang::Th)]);
+        let bad: Vec<&str> = issues.iter().filter_map(|i| text.get(i.start..i.end)).collect();
+        assert_eq!(bad, vec!["สวัดดี"]);
+        assert!(issues.iter().all(|i| i.kind == IssueKind::Spelling && i.lang == ProofLang::Th));
+        assert_eq!(suggest_in("สวัดดี", 4, ProofLang::Th).first().map(String::as_str), Some("สวัสดี"));
+        // Right sentences, words and mixed text: no marks.
+        for ok in ["ฉันไปโรงเรียนวันนี้", "กินข้าวกับปลา", "สวัสดี ครับ", "Hello สวัสดี 123", "ควร"]
+        {
+            assert!(check_text(ok, &[(0..ok.len(), ProofLang::Th)]).is_empty(), "{ok}");
+            assert!(is_correct_in(ok.split(' ').next().unwrap_or(ok), ProofLang::Th), "{ok}");
+        }
+        // A word of the same text in another language is not Thai spelling.
+        assert!(check_text(text, &[(0..text.len(), ProofLang::Other)]).is_empty());
+        // Several words in one sentence, a web address, the user dictionary.
+        let two = "สวัดดี กินข้าว ฟฟฟฟ";
+        assert_eq!(check_text(two, &[(0..two.len(), ProofLang::Th)]).len(), 2);
+        let url = "https://example.com/สวัดดี";
+        assert!(check_text(url, &[(0..url.len(), ProofLang::Th)]).is_empty());
+        for i in check_text(two, &[(0..two.len(), ProofLang::Th)]) {
+            assert!(two.is_char_boundary(i.start) && two.is_char_boundary(i.end));
+        }
+    }
+
+    /// Ignore words in UPPERCASE: a script without capitals (Thai) isn't "in capitals", and the
+    /// languages with capitals keep skipping `NASA`.
+    #[test]
+    fn ignore_uppercase_needs_a_capital() {
+        let opts = Options { ignore_uppercase: true, ..Options::default() };
+        assert!(!is_correct_in_with("สวัดดี", ProofLang::Th, &opts));
+        assert!(is_correct_in_with("ZQXVV", ProofLang::En, &opts));
+        assert!(!is_correct_in_with("ZQXVV", ProofLang::En, &Options { ignore_uppercase: false, ..Options::default() }));
+        let text = "สวัดดี";
+        assert_eq!(check_text_with(text, &[(0..text.len(), ProofLang::Th)], &opts, false, false).len(), 1);
+    }
+
     #[test]
     fn missing_dictionary_is_named_only_for_hunspell_languages_without_one() {
         assert_eq!(dictionary_needed(ProofLang::Pl, false), Some("pl_PL"));
@@ -1041,12 +1112,13 @@ mod tests {
             assert_eq!(dictionary_needed(l, false), Some(name), "{l:?}");
             assert_eq!(dictionary_needed(l, true), None, "{l:?}");
         }
-        // Every proofed language other than English has a Hunspell dictionary to report.
+        // Every proofed language other than English and Thai (whose word list is built in) has a
+        // Hunspell dictionary to report.
         for l in ProofLang::PROOFED {
-            let english = matches!(l, ProofLang::En | ProofLang::EnGb | ProofLang::EnCa);
-            assert_eq!(dictionary_needed(l, false).is_some(), !english, "{l:?}");
+            let built_in = l.is_english() || l == ProofLang::Th;
+            assert_eq!(dictionary_needed(l, false).is_some(), !built_in, "{l:?}");
         }
-        for l in [ProofLang::En, ProofLang::Bg, ProofLang::De, ProofLang::Other] {
+        for l in [ProofLang::En, ProofLang::Th, ProofLang::Bg, ProofLang::De, ProofLang::Other] {
             assert_eq!(dictionary_needed(l, false), None);
         }
         // Installed dictionaries and the built-in English list: no hint.
@@ -1859,7 +1931,7 @@ mod tests {
             let _ = has_dictionary(Some(&s));
             let _ = is_correct_for(&s, Some(&s));
             let _ = hyphen::hyphen_points(&s, &hyphen::Limits::default());
-            for lang in [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa, ProofLang::Pl, ProofLang::Pt, ProofLang::It, ProofLang::Hr, ProofLang::Tr, ProofLang::Ru, ProofLang::Cs, ProofLang::Id, ProofLang::De, ProofLang::Es, ProofLang::EsMx, ProofLang::Es419, ProofLang::EsUy, ProofLang::Other] {
+            for lang in [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa, ProofLang::Pl, ProofLang::Pt, ProofLang::It, ProofLang::Hr, ProofLang::Tr, ProofLang::Ru, ProofLang::Cs, ProofLang::Id, ProofLang::Th, ProofLang::De, ProofLang::Es, ProofLang::EsMx, ProofLang::Es419, ProofLang::EsUy, ProofLang::Other] {
                 let _ = check_spelling_in(&s, lang);
                 let _ = check_grammar_in(&s, lang);
                 let _ = is_correct_in(&s, lang);
@@ -1912,8 +1984,8 @@ mod tests {
         }
 
         #[test]
-        fn mixed_spans_never_panic(s in "\\PC{0,60}", cuts in proptest::collection::vec((0usize..80, 0usize..80, 0u8..15), 0..6)) {
-            let langs = [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa, ProofLang::Pl, ProofLang::Pt, ProofLang::It, ProofLang::Tr, ProofLang::Ru, ProofLang::Cs, ProofLang::Id, ProofLang::Es, ProofLang::EsMx, ProofLang::Es419, ProofLang::EsUy, ProofLang::Other];
+        fn mixed_spans_never_panic(s in "\\PC{0,60}", cuts in proptest::collection::vec((0usize..80, 0usize..80, 0u8..16), 0..6)) {
+            let langs = [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa, ProofLang::Pl, ProofLang::Pt, ProofLang::It, ProofLang::Tr, ProofLang::Ru, ProofLang::Cs, ProofLang::Id, ProofLang::Th, ProofLang::Es, ProofLang::EsMx, ProofLang::Es419, ProofLang::EsUy, ProofLang::Other];
             let spans: Vec<(Range<usize>, ProofLang)> = cuts.iter().map(|&(a, b, l)| (a.min(b)..a.max(b), langs[l as usize % langs.len()])).collect();
             for i in check_text(&s, &spans) {
                 proptest::prop_assert!(i.start <= i.end && i.end <= s.len());

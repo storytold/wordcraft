@@ -1,7 +1,7 @@
 use super::*;
 
 /// The proofing languages the Language menu offers: tag and English name (translated when drawn).
-pub(crate) const PROOFING_LANGUAGES: [(&str, &str); 16] = [
+pub(crate) const PROOFING_LANGUAGES: [(&str, &str); 17] = [
     ("en-US", "English (United States)"),
     ("en-GB", "English (United Kingdom)"),
     ("en-AU", "English (Australia)"),
@@ -14,6 +14,7 @@ pub(crate) const PROOFING_LANGUAGES: [(&str, &str); 16] = [
     ("ru-RU", "Russian"),
     ("cs-CZ", "Czech"),
     ("id-ID", "Indonesian"),
+    ("th-TH", "Thai"),
     ("es-ES", "Spanish (Spain)"),
     ("es-MX", "Spanish (Mexico)"),
     ("es-419", "Spanish (Latin America)"),
@@ -58,6 +59,7 @@ pub(crate) fn language_name(tag: Option<&str>) -> String {
             wordcraft_engine::proof::ProofLang::Ru => "Russian".into(),
             wordcraft_engine::proof::ProofLang::Cs => "Czech".into(),
             wordcraft_engine::proof::ProofLang::Id => "Indonesian".into(),
+            wordcraft_engine::proof::ProofLang::Th => "Thai".into(),
             wordcraft_engine::proof::ProofLang::Es => "Spanish (Spain)".into(),
             wordcraft_engine::proof::ProofLang::De => "German (Germany)".into(),
             wordcraft_engine::proof::ProofLang::En if tag.eq_ignore_ascii_case("en") => "English (United States)".into(),
@@ -68,7 +70,7 @@ pub(crate) fn language_name(tag: Option<&str>) -> String {
 
 /// The English name of a region subtag the language list has no entry for (else the subtag).
 fn region_name(code: &str) -> String {
-    const REGIONS: [(&str, &str); 62] = [
+    const REGIONS: [(&str, &str); 63] = [
         ("AE", "U.A.E."),
         ("AO", "Angola"),
         ("AR", "Argentina"),
@@ -125,6 +127,7 @@ fn region_name(code: &str) -> String {
         ("RU", "Russia"),
         ("SG", "Singapore"),
         ("SY", "Syria"),
+        ("TH", "Thailand"),
         ("TW", "Taiwan"),
         ("UA", "Ukraine"),
         ("US", "United States"),
@@ -198,6 +201,7 @@ pub(crate) fn language_menu(ui: &mut Ui, app: &mut WordApp) {
             || (tag == "tr-TR" && current.eq_ignore_ascii_case("tr"))
             || (tag == "cs-CZ" && wordcraft_engine::proof::ProofLang::from_tag(Some(&current)) == wordcraft_engine::proof::ProofLang::Cs)
             || (tag == "id-ID" && wordcraft_engine::proof::ProofLang::from_tag(Some(&current)) == wordcraft_engine::proof::ProofLang::Id)
+            || (tag == "th-TH" && wordcraft_engine::proof::ProofLang::from_tag(Some(&current)) == wordcraft_engine::proof::ProofLang::Th)
             || (tag == "es-ES" && current.eq_ignore_ascii_case("es"))
             || (tag == "en-US" && current.eq_ignore_ascii_case("en"))
     };

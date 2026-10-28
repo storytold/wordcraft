@@ -399,6 +399,13 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         found.sort_unstable();
         found.dedup();
     }
+    // Thai has no spaces between words and UAX #14 finds no break inside a run of Thai letters:
+    // wrap between the words the Thai word list finds (by script, whatever the run's language).
+    if wordcraft_proof::th::has_thai(&text) {
+        found.extend(wordcraft_proof::th::break_offsets(&text));
+        found.sort_unstable();
+        found.dedup();
+    }
     // Asian typography: kinsoku and breaking Latin words anywhere.
     crate::kinsoku::apply(&text, &mut found, rp.kinsoku, rp.word_wrap);
     let opps: std::collections::HashSet<usize> = found.into_iter().filter_map(to_para).collect();
