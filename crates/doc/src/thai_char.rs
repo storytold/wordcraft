@@ -351,7 +351,7 @@ static THAI_CHAR_TYPE: [u16; 96] = [
 #[inline]
 pub fn thai_char_type(c: char) -> u16 {
     let cp = u32::from(c);
-    if cp >= 0x0E00 && cp <= 0x0E5F { THAI_CHAR_TYPE[(cp - 0x0E00) as usize] } else { TCT_CONTROL }
+    if (0x0E00u32..=0x0E5F).contains(&cp) { THAI_CHAR_TYPE[(cp - 0x0E00) as usize] } else { TCT_CONTROL }
 }
 
 // ── Convenience predicates ─────────────────────────────────────────────────────────────────
