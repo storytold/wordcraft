@@ -47,6 +47,41 @@ fn finishing_a_merge_to_a_file_is_not_an_edit() {
 }
 
 #[test]
+fn csv_delimiter_reads_complete_header_record() {
+    for sep in [',', ';', '\t'] {
+        for newline in ["\n", "\r\n", "\r"] {
+            // All candidate separators and doubled quotes occur on both sides of the newline.
+            // The real separators follow the closing quote, beyond the first physical line.
+            let header = format!("Name,;\t \"given\"{newline}family,;\t \"last\"");
+            let quoted = header.replace('"', "\"\"");
+            let text = format!("\"{quoted}\"{sep}City{sep}{sep}\r\nAda{sep}Paris{sep}{sep}\nBo{sep}Oslo{sep}{sep}");
+            assert_eq!(
+                parse_csv(&text),
+                vec![vec![header.as_str(), "City", "", ""], vec!["Ada", "Paris", "", ""], vec!["Bo", "Oslo", "", ""]],
+                "separator {sep:?}, embedded newline {newline:?}"
+            );
+            // A multiline field after an ordinary column must not end detection either.
+            let text = format!("ID{sep}\"{quoted}\"{sep}City\n1{sep}Ada{sep}Paris\n2{sep}Bo{sep}Oslo");
+            assert_eq!(parse_csv(&text), vec![vec!["ID", header.as_str(), "City"], vec!["1", "Ada", "Paris"], vec!["2", "Bo", "Oslo"]]);
+        }
+    }
+}
+
+#[test]
+fn csv_delimiter_keeps_record_boundaries_and_ties() {
+    // Later records cannot choose the header's delimiter.
+    assert_eq!(parse_csv("Name;City\rAda;Paris,,,,\rBo;Oslo"), vec![vec!["Name", "City"], vec!["Ada", "Paris,,,,"], vec!["Bo", "Oslo"]]);
+    // Existing ties prefer tab, then semicolon, then comma.
+    assert_eq!(parse_csv("A,B;C\n1,2;3"), vec![vec!["A,B", "C"], vec!["1,2", "3"]]);
+    assert_eq!(parse_csv("A;B\tC\n1;2\t3"), vec![vec!["A;B", "C"], vec!["1;2", "3"]]);
+    assert_eq!(parse_csv("Name\nAda,Paris;Oslo"), vec![vec!["Name"], vec!["Ada,Paris;Oslo"]]);
+    assert!(parse_csv("").is_empty());
+    assert_eq!(parse_csv("\nName\nAda"), vec![vec!["Name"], vec!["Ada"]]);
+    // The reader remains permissive about an unterminated quoted cell.
+    assert_eq!(parse_csv("Name,City\nAda,\"Paris\nOslo"), vec![vec!["Name", "City"], vec!["Ada", "Paris\nOslo"]]);
+}
+
+#[test]
 fn csv_delimiter_ignores_quoted_text() {
     let r = parse_csv("\"Name, first, last\";City\nAnn;Paris\n");
     assert_eq!(r, vec![vec!["Name, first, last", "City"], vec!["Ann", "Paris"]]);
