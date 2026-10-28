@@ -230,7 +230,22 @@ fn revision_span(p: &Paragraph, off: usize) -> Option<std::ops::Range<usize>> {
         return Some(start..end);
     }
     // Comment anchors split a revision's text into several runs; the revision goes on past them.
-    let is_anchor = |k: usize| matches!(p.object_at(runs[k].0.start), Some(InlineObject::CommentStart { .. } | InlineObject::CommentEnd { .. }));
+    // Build only if a join reaches an object. Ordinary text boundaries need no object scan.
+    // The index lasts for this span lookup and keeps the paragraph's existing marker pairing.
+    let anchors = std::cell::OnceCell::new();
+    let is_anchor = |k: usize| {
+        let off = runs[k].0.start;
+        if !p.text.get(off..).is_some_and(|text| text.starts_with(wordcraft_doc::para::OBJ)) {
+            return false;
+        }
+        anchors
+            .get_or_init(|| {
+                p.objects_with_offsets()
+                    .filter_map(|(off, obj)| matches!(obj, InlineObject::CommentStart { .. } | InlineObject::CommentEnd { .. }).then_some(off))
+                    .collect::<std::collections::HashSet<_>>()
+            })
+            .contains(&off)
+    };
     let same = |k: usize| (runs[k].1.ins, runs[k].1.del) == key;
     let mut k = i;
     while k > 0 {
@@ -255,6 +270,91 @@ fn revision_span(p: &Paragraph, off: usize) -> Option<std::ops::Range<usize>> {
         end = runs[k].0.end;
     }
     Some(start..end)
+}
+
+#[cfg(test)]
+mod span_tests {
+    use super::*;
+    use wordcraft_doc::para::{OBJ, Run};
+    use wordcraft_doc::props::CharProps;
+
+    fn anchored_change(n: usize) -> Paragraph {
+        let mut p = Paragraph::new();
+        for i in 0..n {
+            p.text.push_str("λx");
+            p.runs.push(Run { len: "λx".len(), props: CharProps { ins: Some(0), ..Default::default() } });
+            p.text.push(OBJ);
+            p.runs.push(Run { len: OBJ.len_utf8(), props: CharProps::default() });
+            p.objects.push(if i % 2 == 0 {
+                InlineObject::CommentStart { id: (i / 2) as u32 }
+            } else {
+                InlineObject::CommentEnd { id: (i / 2) as u32 }
+            });
+        }
+        p.text.push_str("λx");
+        p.runs.push(Run { len: "λx".len(), props: CharProps { ins: Some(0), ..Default::default() } });
+        p
+    }
+
+    #[test]
+    fn revision_span_many_comment_anchors_is_not_quadratic() {
+        let cpu = || std::fs::read_to_string("/proc/thread-self/schedstat").ok()?.split_whitespace().next()?.parse::<u64>().ok();
+        let measure = |n| {
+            let p = anchored_change(n);
+            let off = p.len() / 2;
+            let before = cpu();
+            for _ in 0..3 {
+                assert_eq!(revision_span(std::hint::black_box(&p), off), Some(0..p.len()));
+            }
+            match (before, cpu()) {
+                (Some(a), Some(b)) if b > a => Some((b - a) as f64 * 1e-9),
+                _ => None,
+            }
+        };
+        let (small, large) = (measure(2_000), measure(16_000));
+        let (Some(a), Some(b)) = (small, large) else {
+            eprintln!("Revision span: CPU counter unavailable; semantic checks passed, timing assertion skipped");
+            return;
+        };
+        eprintln!("Revision span: small={a:.9}s large={b:.9}s ratio={:.2}", b / a);
+        assert!(b < a * 24.0 + 0.005, "8x anchors must not take quadratic lookup work: {a:.9}s -> {b:.9}s");
+    }
+
+    #[test]
+    fn revision_span_keeps_keys_boundaries_and_marker_pairing() {
+        let p = anchored_change(4);
+        for off in [0, 2, 6, 12, p.len()] {
+            assert_eq!(revision_span(&p, off), Some(0..p.len()));
+        }
+        // A non-comment marker stops joining, even between runs of the same revision.
+        for obj in [InlineObject::BookmarkStart { name: "Original".into() }, InlineObject::ControlEnd] {
+            let mut q = p.clone();
+            q.objects[1] = obj;
+            assert_eq!(revision_span(&q, 0), Some(0..9));
+            assert_eq!(revision_span(&q, q.len()), Some(12..q.len()));
+        }
+        // Missing storage stops at its first missing marker; surplus storage has no position.
+        let mut q = p.clone();
+        q.objects.truncate(1);
+        assert_eq!(revision_span(&q, 0), Some(0..9));
+        let mut q = p.clone();
+        q.objects.push(InlineObject::CommentStart { id: 99 });
+        assert_eq!(revision_span(&q, 0), Some(0..q.len()));
+        // Different insertion/deletion identities never join across a comment anchor.
+        for props in [CharProps { ins: Some(1), ..Default::default() }, CharProps { del: Some(0), ..Default::default() }] {
+            let mut q = p.clone();
+            q.runs[2].props = props;
+            assert_eq!(revision_span(&q, 0), Some(0..3));
+            assert_eq!(revision_span(&q, q.len()), Some(12..q.len()));
+        }
+        let q = Paragraph::with_text(
+            "Original format",
+            CharProps { fmt_change: wordcraft_doc::props::PropChange::boxed(0, CharProps::default()), ..Default::default() },
+        );
+        assert_eq!(revision_span(&q, 1), Some(0..q.len()));
+        assert_eq!(revision_span(&Paragraph::with_text("Untracked", CharProps::default()), 1), None);
+        assert_eq!(revision_span(&p, usize::MAX), None);
+    }
 }
 
 fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
