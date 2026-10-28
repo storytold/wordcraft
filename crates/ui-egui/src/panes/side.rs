@@ -1,5 +1,13 @@
 use super::{Stroke, Tokens, Ui, Value, WordApp, json, regular};
 
+#[cfg(test)]
+thread_local! {
+    static STYLE_LIST_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+mod style_cache_tests;
+
 /// Items collected by Copy and Cut, newest first; clicking one pastes it at the caret.
 pub(super) fn clipboard(app: &mut WordApp, ui: &mut Ui) {
     let items: Vec<String> = app.session.clip_history.items().iter().map(|i| i.preview()).collect();
@@ -73,22 +81,13 @@ pub(super) fn styles(app: &mut WordApp, ui: &mut Ui) {
         let _ = app.run("styles.inspector", json!({}));
     }
     ui.separator();
-    let mut list: Vec<(String, String, bool, bool)> = app
-        .session
-        .doc
-        .styles
-        .styles
-        .iter()
-        .filter(|s| !s.hidden && s.kind != wordcraft_doc::StyleKind::Table)
-        .map(|s| (s.id.clone(), crate::i18n::style_name(s), s.kind == wordcraft_doc::StyleKind::Character, s.builtin))
-        .collect();
-    list.sort_by_key(|s| s.1.to_lowercase());
+    let list = cached_styles(app);
     egui::ScrollArea::vertical().show(ui, |ui| {
-        for (id, name, is_char, builtin) in list {
+        for (id, name, is_char, builtin) in list.iter() {
             ui.horizontal(|ui| {
-                let r = ui.selectable_label(id == cur, &name);
+                let r = ui.selectable_label(id == &cur, name.as_str());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(egui::RichText::new(if is_char { "a" } else { "¶" }).weak());
+                    ui.label(egui::RichText::new(if *is_char { "a" } else { "¶" }).weak());
                 });
                 if r.clicked() {
                     let _ = app.run("para.style", json!({"style": id}));
@@ -96,7 +95,7 @@ pub(super) fn styles(app: &mut WordApp, ui: &mut Ui) {
                 }
                 r.context_menu(|ui| {
                     if ui.button(tl!("Modify…")).clicked() {
-                        app.dialog = crate::dialogs::Dialog::modify_style(app, &id);
+                        app.dialog = crate::dialogs::Dialog::modify_style(app, id);
                         ui.close();
                     }
                     if ui.button(tl!("Update to Match Selection")).clicked() {
@@ -104,7 +103,7 @@ pub(super) fn styles(app: &mut WordApp, ui: &mut Ui) {
                         app.canvas.want_focus = true;
                         ui.close();
                     }
-                    if ui.add_enabled(!builtin, egui::Button::new(tl!("Delete"))).clicked() {
+                    if ui.add_enabled(!*builtin, egui::Button::new(tl!("Delete"))).clicked() {
                         let _ = app.run("styles.delete", json!({"style": id}));
                         app.canvas.want_focus = true;
                         ui.close();
@@ -113,4 +112,35 @@ pub(super) fn styles(app: &mut WordApp, ui: &mut Ui) {
             });
         }
     });
+}
+
+type StyleRows = std::sync::Arc<Vec<(String, String, bool, bool)>>;
+
+/// One translated, ordered style list per window. Selection and actions stay live.
+#[derive(Default)]
+pub(crate) struct StyleCache {
+    stamp: Option<(u64, u64, crate::i18n::Lang)>,
+    items: StyleRows,
+}
+
+fn cached_styles(app: &mut WordApp) -> StyleRows {
+    let stamp = (app.session.document_id(), app.session.rev(), crate::i18n::current());
+    let cache = &mut app.style_cache;
+    if cache.stamp != Some(stamp) {
+        #[cfg(test)]
+        STYLE_LIST_BUILDS.with(|n| n.set(n.get() + 1));
+        let mut list: Vec<_> = app
+            .session
+            .doc
+            .styles
+            .styles
+            .iter()
+            .filter(|s| !s.hidden && s.kind != wordcraft_doc::StyleKind::Table)
+            .map(|s| (s.id.clone(), crate::i18n::style_name(s), s.kind == wordcraft_doc::StyleKind::Character, s.builtin))
+            .collect();
+        list.sort_by_key(|s| s.1.to_lowercase());
+        cache.items = std::sync::Arc::new(list);
+        cache.stamp = Some(stamp);
+    }
+    cache.items.clone()
 }

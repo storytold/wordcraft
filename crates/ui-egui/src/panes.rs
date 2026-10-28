@@ -36,6 +36,7 @@ use inspector::inspector;
 use nav::nav;
 #[cfg(test)]
 use nav::{nav_heading, nav_headings, visible_headings};
+pub(crate) use side::StyleCache;
 use side::{clipboard, styles};
 pub(crate) use state::float_rect;
 #[cfg(test)]
