@@ -219,6 +219,27 @@ fn spanish_varieties_are_in_the_language_menu() {
 }
 
 #[test]
+fn dictionary_only_languages_have_a_name_and_are_offered_in_set_proofing_language() {
+    for (tag, name, aliases) in [
+        ("bg-BG", "Bulgarian", ["bg", "BUL"]),
+        ("ro-RO", "Romanian", ["ro", "ron"]),
+        ("sl-SI", "Slovenian", ["sl", "slv"]),
+        ("sq-AL", "Albanian", ["sq", "sqi"]),
+        ("lt-LT", "Lithuanian", ["lt", "lit"]),
+        ("bs-BA", "Bosnian", ["bs", "bos"]),
+    ] {
+        // The short list stays short; Set Proofing Language… offers them.
+        assert!(crate::dialogs_layout::LANGUAGES.contains(&(tag, name)));
+        assert_eq!(language_name(Some(tag)), name);
+        for a in aliases {
+            assert_eq!(language_name(Some(a)), name, "{a}");
+            // Shown checked above the short list, once.
+            assert_eq!(language_checks(a, |_| false).extra.as_deref(), Some(name), "{a}");
+        }
+    }
+}
+
+#[test]
 fn czech_has_a_name_in_the_language_menu() {
     assert!(PROOFING_LANGUAGES.contains(&("cs-CZ", "Czech")));
     for tag in ["cs", "cs-CZ", "CS-cz", "ces", "CZE"] {

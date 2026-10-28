@@ -316,9 +316,9 @@ fn non_english_runs_are_not_proofed() {
     assert!(!before.as_array().map(|a| a.is_empty()).unwrap_or(true), "default language flags the words: {before}");
 
     run(&mut s, "select.all", json!({}));
-    run(&mut s, "review.language", json!({"lang": "lt-LT"}));
+    run(&mut s, "review.language", json!({"lang": "mk-MK"}));
     let after = run(&mut s, "review.issues", json!({}));
-    assert_eq!(after, json!([]), "Lithuanian runs are skipped: {after}");
+    assert_eq!(after, json!([]), "Macedonian runs are skipped: {after}");
 
     // English typos are still caught.
     let mut e = Session::new(wordcraft_doc::Document::new());

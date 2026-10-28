@@ -395,8 +395,14 @@ fn language_name(lang: wordcraft_engine::proof::ProofLang) -> &'static str {
         ProofLang::EsMx => tl!("Spanish (Mexico)"),
         ProofLang::Es419 => tl!("Spanish (Latin America)"),
         ProofLang::EsUy => tl!("Spanish (Uruguay)"),
-        // English uses its bundled word list; Bulgarian and German have no dictionary yet.
-        ProofLang::En | ProofLang::EnGb | ProofLang::EnCa | ProofLang::Bg | ProofLang::De | ProofLang::Other => "",
+        ProofLang::Bg => tl!("Bulgarian"),
+        ProofLang::Ro => tl!("Romanian"),
+        ProofLang::Sl => tl!("Slovenian"),
+        ProofLang::Sq => tl!("Albanian"),
+        ProofLang::Lt => tl!("Lithuanian"),
+        ProofLang::Bs => tl!("Bosnian"),
+        // English uses its bundled word list; German has no dictionary yet.
+        ProofLang::En | ProofLang::EnGb | ProofLang::EnCa | ProofLang::De | ProofLang::Other => "",
     }
 }
 
