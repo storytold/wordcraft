@@ -11,6 +11,11 @@ wordcraft-cli mcp --connect 127.0.0.1:7981 # …including clicks, keys and scree
 
 Claude Code: `claude mcp add wordcraft -- wordcraft-cli mcp`.
 
+The headless CLI server uses the system region for its initial blank page, New documents and
+plain-text, Markdown and HTML imports. `WORDCRAFT_REGION` overrides locale detection, as in `run` and
+`convert`. Opening a file with an explicit page size keeps that size. RTF and ODT retain their existing
+format-specific geometry defaults.
+
 With `--connect`, the bridge sends the app's control key, which it reads from
 `WORDCRAFT_CONTROL_KEY` or from the key file the app writes at start. It sends the key only to
 loopback addresses; see [Keys](control-protocol.md#keys). The bridge serves even when the app

@@ -52,3 +52,58 @@ fn every_run_session_follows_the_region() {
         assert_eq!(page_size_of("en-US", args), (612.0, 792.0), "Letter in the US: {args:?}");
     }
 }
+
+#[test]
+fn headless_mcp_uses_the_region_for_initial_new_and_unsized_documents() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    for (region, expected) in [("it-IT", (595.28, 841.89)), ("en-US", (612.0, 792.0))] {
+        let dir = std::env::temp_dir().join(format!("wordcraft-mcp-region-{region}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("page.html");
+        std::fs::write(&src, HTML).unwrap();
+        let mut child = Command::new(env!("CARGO_BIN_EXE_wordcraft-cli"))
+            .args(["mcp", "--author", "Region Author", "--automation-read-root"])
+            .arg(&dir)
+            .arg("--automation-write-root")
+            .arg(&dir)
+            .env("WORDCRAFT_REGION", region)
+            .env_remove("LC_ALL")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut input = child.stdin.take().unwrap();
+        let requests = [
+            serde_json::json!({"name":"save_document", "arguments":{"path":dir.join("initial.json")}}),
+            serde_json::json!({"name":"execute", "arguments":{"command":"file.new", "params":{}}}),
+            serde_json::json!({"name":"save_document", "arguments":{"path":dir.join("new.json")}}),
+            serde_json::json!({"name":"open_document", "arguments":{"path":src}}),
+            serde_json::json!({"name":"save_document", "arguments":{"path":dir.join("opened.json")}}),
+            serde_json::json!({"name":"execute", "arguments":{"command":"layout.size", "params":{"name":"Legal"}}}),
+            serde_json::json!({"name":"save_document", "arguments":{"path":dir.join("explicit.json")}}),
+            serde_json::json!({"name":"open_document", "arguments":{"path":dir.join("explicit.json")}}),
+            serde_json::json!({"name":"save_document", "arguments":{"path":dir.join("reopened.json")}}),
+        ];
+        for (i, params) in requests.iter().enumerate() {
+            writeln!(input, "{}", serde_json::json!({"jsonrpc":"2.0", "id":i, "method":"tools/call", "params":params})).unwrap();
+        }
+        drop(input);
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        let replies: Vec<serde_json::Value> = String::from_utf8(output.stdout).unwrap().lines().map(|s| serde_json::from_str(s).unwrap()).collect();
+        assert_eq!(replies.len(), requests.len());
+        for reply in replies {
+            assert!(reply.get("error").is_none() && reply["result"]["isError"] != true, "{reply}");
+        }
+        for name in ["initial", "new", "opened", "reopened"] {
+            let doc: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.join(format!("{name}.json"))).unwrap()).unwrap();
+            let (w, h) = (doc["lastSection"]["pageW"].as_f64().unwrap(), doc["lastSection"]["pageH"].as_f64().unwrap());
+            let expected = if name == "reopened" { (612.0, 1008.0) } else { expected };
+            assert!((w - expected.0).abs() < 0.01 && (h - expected.1).abs() < 0.01, "{region} {name}: {w} x {h}, expected {expected:?}");
+            assert_eq!(doc["core"]["lastModifiedBy"], "Region Author", "{region} {name}");
+        }
+    }
+}

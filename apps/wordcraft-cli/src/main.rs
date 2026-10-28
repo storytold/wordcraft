@@ -636,6 +636,8 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
                 }
                 None => {
                     let mut headless = wordcraft_mcp::Headless::default();
+                    headless.session.system_region = system_region();
+                    headless.session.doc = headless.session.blank_document();
                     if let Some(roots) = roots {
                         // Every thread of this process, not only the server's: nothing reaches past the roots.
                         wordcraft_engine::file_access::confine_process(roots.clone());
