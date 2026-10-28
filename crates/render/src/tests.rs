@@ -1185,6 +1185,46 @@ fn shape_line_caps_reach_the_screen() {
     }
 }
 
+/// A dotted line with round or square caps keeps its gaps, as in Word: the caps stay inside each
+/// dot. A 4 pt `sysDot` line paints 4 pt dots 4 pt apart (before, the caps closed the gaps).
+#[test]
+fn capped_dotted_lines_keep_their_gaps() {
+    use wordcraft_doc::{
+        connector::{LineCap, ShapeExtra},
+        line_dash::LineDash,
+        para::{Anchor, Float, InlineObject, Wrap},
+    };
+    for kind in [ShapeKind::Line, ShapeKind::StraightConnector] {
+        for cap in [LineCap::Flat, LineCap::Square, LineCap::Round] {
+            let shape = InlineObject::Shape {
+                kind,
+                w: 40.0,
+                h: 0.0,
+                fill: None,
+                stroke: Some(Rgb::BLACK),
+                stroke_width: 4.0,
+                float: Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 100.0, y: 100.0, ..Default::default() },
+                story: None,
+                freeform: None,
+                effects: Default::default(),
+                extra: ShapeExtra { cap, dash: LineDash::SystemDot, ..Default::default() },
+            };
+            let mut p = wordcraft_doc::Paragraph::new();
+            p.insert_object(0, shape, &Default::default()).unwrap();
+            let mut d = Document::new();
+            d.body = vec![wordcraft_doc::para_block(p)];
+            let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+            let image = render_page(&d, &l.pages[0], 4.0, &RenderOptions::default());
+            let painted = |x_pt: f32| image.pixel((x_pt * 4.0) as u32, 400)[0] < 80;
+            // Flat: dots 100–104, 108–112 pt. Square and round: the same, centred on 100 and 108.
+            let (dot, gap) = if cap == LineCap::Flat { (102.0, 106.0) } else { (100.5, 104.0) };
+            assert!(painted(dot), "{kind:?} {cap:?}: first dot");
+            assert!(!painted(gap), "{kind:?} {cap:?}: the gap after it");
+            assert!(painted(gap + 4.0), "{kind:?} {cap:?}: second dot");
+        }
+    }
+}
+
 #[test]
 fn zero_width_connector_dashes() {
     use wordcraft_doc::{

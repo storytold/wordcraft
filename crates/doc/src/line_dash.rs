@@ -89,6 +89,24 @@ impl LineDash {
         };
         preset.iter().map(|v| dash_points(*v, width)).collect()
     }
+
+    /// [`pattern`](Self::pattern) for an outline drawn with `cap`. Word keeps a square or round
+    /// cap inside each dash, so a `sysDot` line with round caps shows round dots one width apart.
+    /// The painters (PDF, the screen) add the cap past each end instead, half the width on either
+    /// side, which would close the gaps of a dotted line. Each dash is shortened by the width and
+    /// each gap lengthened by it, so the painted dashes and gaps match Word's.
+    pub fn pattern_with_cap(&self, width: f32, cap: crate::connector::LineCap) -> Vec<f32> {
+        let mut pattern = self.pattern(width);
+        if cap == crate::connector::LineCap::Flat {
+            return pattern;
+        }
+        // The width the painters stroke with: a zero or thinner width is painted 0.25 pt wide.
+        let ext = if width.is_finite() { width.clamp(0.25, 200.0) } else { 0.75 };
+        for (i, v) in pattern.iter_mut().enumerate() {
+            *v = if i % 2 == 0 { (*v - ext).max(MIN_DASH_POINTS) } else { (*v + ext).min(MAX_DASH_POINTS) };
+        }
+        pattern
+    }
 }
 
 fn dash_points(ratio: f32, width: f32) -> f32 {
@@ -106,6 +124,26 @@ mod tests {
         assert_eq!(LineDash::Dash.pattern(2.0), [8.0, 6.0]);
         assert_eq!(LineDash::Custom(vec![(200_000, 150_000)]).pattern(2.0), [4.0, 3.0]);
         assert!(LineDash::Solid.pattern(2.0).is_empty());
+    }
+
+    /// Square and round caps stay inside each dash, as in Word: a `sysDot` line with round caps
+    /// paints dots one width long and one width apart once the painter adds the caps back.
+    #[test]
+    fn capped_dashes_keep_their_caps_inside_the_dash() {
+        use crate::connector::LineCap;
+        assert_eq!(LineDash::SystemDot.pattern_with_cap(2.0, LineCap::Flat), [2.0, 2.0]);
+        for cap in [LineCap::Round, LineCap::Square] {
+            let p = LineDash::SystemDot.pattern_with_cap(2.0, cap);
+            // Painted with the caps (half the width past each end): 2 pt dots, 2 pt apart.
+            assert_eq!(p, [MIN_DASH_POINTS, 4.0], "{cap:?}");
+            assert_eq!(LineDash::Dash.pattern_with_cap(2.0, cap), [6.0, 8.0], "{cap:?}");
+            assert_eq!(LineDash::DashDot.pattern_with_cap(1.0, cap), [3.0, 4.0, MIN_DASH_POINTS, 4.0], "{cap:?}");
+        }
+        // A zero-width outline is painted 0.25 pt wide: its caps take 0.25 pt off each dot too.
+        assert_eq!(LineDash::SystemDot.pattern_with_cap(0.0, LineCap::Round), [MIN_DASH_POINTS, 0.5]);
+        assert!(LineDash::Solid.pattern_with_cap(2.0, LineCap::Round).is_empty());
+        let hostile = LineDash::Custom(vec![(0, u32::MAX); 3]).pattern_with_cap(f32::NAN, LineCap::Round);
+        assert!(hostile.iter().all(|v| v.is_finite() && *v >= MIN_DASH_POINTS && *v <= MAX_DASH_POINTS));
     }
 
     #[test]
