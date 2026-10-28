@@ -119,8 +119,77 @@ fn shortcuts_run_while_a_pane_title_bar_has_focus() {
     h.state_mut().nav_search_focus = true;
     h.run_steps(2);
     assert!(h.ctx.text_edit_focused());
-    press(&mut h, egui::Key::H, egui::Modifiers::COMMAND);
+    // Ctrl itself: on macOS ⌘H isn't the field's, and runs from it as other ⌘ shortcuts do.
+    press(&mut h, egui::Key::H, egui::Modifiers { ctrl: true, command: !cfg!(target_os = "macos"), ..Default::default() });
     assert!(h.state().dialog.is_none(), "the search field keeps Ctrl+H");
+}
+
+/// Word's search box doesn't swallow the window's shortcuts: with the Navigation pane's search
+/// focused, Mod+D opens the Font dialog, while Mod+A, the arrows and Mod+Z stay with the field.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn shortcuts_run_from_the_navigation_search_box() {
+    let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("kept")), crate::Services::default());
+    app.run("view.navigationPane", serde_json::json!({"value": true})).unwrap();
+    let mut h = pane_harness(app);
+    h.state_mut().nav_search_focus = true;
+    h.run_steps(2);
+    assert!(h.ctx.text_edit_focused() && !h.state().canvas.focused, "the search box has the keyboard");
+    let sel = h.state().session.sel.clone();
+    for (key, m) in
+        [(egui::Key::A, egui::Modifiers::COMMAND), (egui::Key::ArrowLeft, egui::Modifiers::COMMAND), (egui::Key::Z, egui::Modifiers::COMMAND)]
+    {
+        press(&mut h, key, m);
+        assert!(h.state().dialog.is_none() && h.ctx.text_edit_focused(), "{key:?} stays with the field");
+        assert_eq!(h.state().session.sel, sel, "{key:?} left the document's selection alone");
+    }
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim(), "kept", "Mod+Z left the document alone");
+    press(&mut h, egui::Key::D, egui::Modifiers::COMMAND);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("font"), "Mod+D opened Font from the search box");
+}
+
+/// Alt stays with the search box: Mod+Alt+N (Draft) and Mod+Alt+- (Em Dash) from the Navigation
+/// pane's search leave the view and the document alone, as AltGr and Option type characters.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn mod_alt_keys_stay_with_the_navigation_search_box() {
+    let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("kept")), crate::Services::default());
+    app.run("view.navigationPane", serde_json::json!({"value": true})).unwrap();
+    let mut h = pane_harness(app);
+    h.state_mut().nav_search_focus = true;
+    h.run_steps(2);
+    assert!(h.ctx.text_edit_focused() && !h.state().canvas.focused, "the search box has the keyboard");
+    let mode = h.state().session.view.mode;
+    let mod_alt = egui::Modifiers { alt: true, ..egui::Modifiers::COMMAND };
+    for key in [egui::Key::N, egui::Key::Minus] {
+        press(&mut h, key, mod_alt);
+        assert!(h.state().dialog.is_none() && h.ctx.text_edit_focused(), "Mod+Alt+{key:?} stays with the field");
+    }
+    assert_eq!(h.state().session.view.mode, mode, "Mod+Alt+N left the view alone");
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim(), "kept", "Mod+Alt+- left the document alone");
+}
+
+/// Copy and Paste Formatting run from the Navigation pane's search box: the box keeps Mod+C and
+/// Mod+V (Copy and Paste), not Mod+Shift+C and Mod+Shift+V.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn copy_and_paste_formatting_run_from_the_navigation_search_box() {
+    let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("kept")), crate::Services::default());
+    app.run("view.navigationPane", serde_json::json!({"value": true})).unwrap();
+    let mut h = pane_harness(app);
+    h.state_mut().nav_search_focus = true;
+    h.run_steps(2);
+    assert!(h.ctx.text_edit_focused() && !h.state().canvas.focused, "the search box has the keyboard");
+    let mod_shift = egui::Modifiers { shift: true, ..egui::Modifiers::COMMAND };
+    press(&mut h, egui::Key::C, egui::Modifiers::COMMAND);
+    assert!(h.state().session.painter.is_none(), "Mod+C stays with the field");
+    press(&mut h, egui::Key::C, mod_shift);
+    assert!(h.state().session.painter.is_some(), "Mod+Shift+C copied the formatting");
+    press(&mut h, egui::Key::V, egui::Modifiers::COMMAND);
+    assert!(h.state().session.painter.is_some(), "Mod+V stays with the field");
+    press(&mut h, egui::Key::V, mod_shift);
+    assert!(h.state().session.painter.is_none(), "Mod+Shift+V pasted the formatting");
+    assert!(h.ctx.text_edit_focused(), "the search box keeps the keyboard");
 }
 
 /// A dialog button with the keyboard keeps Ctrl+Z away from the document behind the dialog.
