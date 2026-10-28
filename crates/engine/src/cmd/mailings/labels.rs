@@ -1,5 +1,8 @@
 use super::merge::address_block;
-use super::*;
+use super::{
+    Align, Block, CharProps, CmdError, CmdResult, Document, Paragraph, Pos, SectionProps, Selection, Session, StoryRef, Table, Value, json, p,
+    para_block,
+};
 
 /// Common envelope sizes: name, width and height in points (long side first).
 pub const ENVELOPE_SIZES: [(&str, f32, f32); 8] = [

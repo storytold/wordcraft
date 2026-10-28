@@ -19,7 +19,7 @@ pub use fontdb::{
     base_style, bundled, decode_font_file, is_font_file_name, name_language_matches, sniff, system_font_dirs,
 };
 pub use harfrust::Feature;
-use harfrust::{Direction, ShapeOptions, Tag, UnicodeBuffer};
+use harfrust::{Direction, ShapeOptions, ShapePlan, ShapePlanKey, Shaper, Tag, UnicodeBuffer};
 pub use kurbo::BezPath;
 pub use script::{fallback_rank, is_emoji, needs_layout_tables, script_fallbacks};
 use skrifa::MetadataProvider;
@@ -133,7 +133,9 @@ pub fn feature_value(tag: &[u8; 4], value: u32) -> Feature {
 /// A strong right-to-left character (Hebrew, Arabic, …)?
 pub fn is_rtl(c: char) -> bool {
     use unicode_bidi::BidiClass::{AL, R};
-    matches!(unicode_bidi::bidi_class(c), R | AL)
+    // Nothing before the Hebrew block is right to left: Latin, Greek and Cyrillic text skips the
+    // table search.
+    c >= '\u{590}' && matches!(unicode_bidi::bidi_class(c), R | AL)
 }
 
 /// Maximal runs of one direction (neutrals join the run they're in): (byte range, right-to-left).
@@ -219,7 +221,8 @@ fn shape_dir(face: &FontFace, text: &str, features: &[Feature], map: &impl Fn(ch
             }
             buf.guess_segment_properties();
             buf.set_direction(if rtl { Direction::RightToLeft } else { Direction::LeftToRight });
-            let gb = shaper.shape(buf, ShapeOptions::new().features(features));
+            let plan = shape_plan(face, &shaper, &buf, features);
+            let gb = shaper.shape(buf, ShapeOptions::new().plan(plan.as_deref()).features(features));
             for (info, pos) in gb.glyph_infos().iter().zip(gb.glyph_positions()) {
                 out.push(ShapedGlyph {
                     gid: info.glyph_id,
@@ -245,6 +248,69 @@ fn shape_dir(face: &FontFace, text: &str, features: &[Feature], map: &impl Fn(ch
     out
 }
 
+/// How many shape plans each thread keeps: the oldest is dropped to make room, so a thread never
+/// holds more than this many, whatever fonts, scripts and feature sets it shapes.
+const MAX_SHAPE_PLANS: usize = 64;
+
+/// The face a kept shape plan was made for. Face ids come from one process-wide counter
+/// (`NEXT_ID`, taken once when a face is built), so no two faces share one; the font bytes'
+/// address and length and the face index are kept too, so a plan is only ever reused for the
+/// font data it was made from, even if the counter were to wrap after 2^32 faces.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct PlanFace {
+    id: u32,
+    data: usize,
+    len: usize,
+    index: u32,
+}
+
+impl PlanFace {
+    fn of(face: &FontFace) -> PlanFace {
+        let data = face.data();
+        PlanFace { id: face.id(), data: data.as_ptr() as usize, len: data.len(), index: face.index() }
+    }
+}
+
+thread_local! {
+    /// Shape plans made so far on this thread, by face: making one (the face's lookups for a
+    /// script, direction and feature set) can take longer than shaping the run.
+    static SHAPE_PLANS: std::cell::RefCell<Vec<(PlanFace, std::rc::Rc<ShapePlan>)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The plan the shaper would make for `buf` in `face` with `features`, made once per thread (the
+/// oldest dropped past [`MAX_SHAPE_PLANS`]). A kept plan is used only for the same face and when
+/// harfrust's own [`ShapePlanKey::matches`] accepts it (script, direction, language, the face's
+/// variation instance and the features). `None` leaves making it to the shaper.
+fn shape_plan(face: &FontFace, shaper: &Shaper, buf: &UnicodeBuffer, features: &[Feature]) -> Option<std::rc::Rc<ShapePlan>> {
+    // The buffer's script is unset when it reads as unknown: the guess never sets that.
+    let script = Some(buf.script()).filter(|s| *s != harfrust::script::UNKNOWN);
+    let language = buf.language();
+    let direction = buf.direction();
+    if direction == Direction::Invalid {
+        return None;
+    }
+    let key = ShapePlanKey::new(script, direction).language(language.as_ref()).instance(face.instance.as_ref()).features(features);
+    let of = PlanFace::of(face);
+    SHAPE_PLANS.with(|cell| {
+        let mut plans = cell.try_borrow_mut().ok()?;
+        if let Some((_, plan)) = plans.iter().find(|(f, plan)| *f == of && key.matches(plan)) {
+            return Some(plan.clone());
+        }
+        let plan = std::rc::Rc::new(ShapePlan::new(shaper, direction, script, language.as_ref(), features));
+        if plans.len() >= MAX_SHAPE_PLANS {
+            plans.remove(0);
+        }
+        plans.push((of, plan.clone()));
+        Some(plan)
+    })
+}
+
+/// How many shape plans this thread keeps.
+#[cfg(test)]
+fn kept_shape_plans() -> usize {
+    SHAPE_PLANS.with(|cell| cell.try_borrow().map_or(0, |p| p.len()))
+}
+
 /// Glyph id of the first of `chars` the face has (0 = .notdef).
 pub fn first_glyph(face: &FontFace, chars: &[char]) -> u32 {
     chars.iter().map(|c| face.glyph_for(*c)).find(|g| *g != 0).unwrap_or(0)
@@ -253,6 +319,15 @@ pub fn first_glyph(face: &FontFace, chars: &[char]) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The shortcut before the Hebrew block gives the bidi class's answer for every character.
+    #[test]
+    fn is_rtl_matches_the_bidi_class() {
+        use unicode_bidi::BidiClass::{AL, R};
+        for c in (0..=0x10ffff).filter_map(char::from_u32) {
+            assert_eq!(is_rtl(c), matches!(unicode_bidi::bidi_class(c), R | AL), "{:04x}", c as u32);
+        }
+    }
 
     #[test]
     fn last_resort_face_parses() {
@@ -280,6 +355,62 @@ mod tests {
         assert_eq!(g.len(), 5);
         assert_eq!(g.iter().map(|g| g.cluster).collect::<Vec<_>>(), vec![0, 1, 2, 3, 4]);
         assert!(g.iter().all(|g| g.x_advance > 0 && g.gid != 0));
+    }
+
+    /// Shaping with a plan kept from an earlier run gives what the shaper's own plan gives.
+    #[test]
+    fn kept_shape_plans_shape_as_fresh_ones() {
+        let fresh = |face: &FontFace, text: &str, features: &[Feature], rtl: bool| -> Vec<(u32, u32, i32, i32, i32)> {
+            let Some(hb) = face.hb() else { return Vec::new() };
+            let shaper = face.shaper.shaper(&hb).instance(face.instance.as_ref()).build();
+            let mut buf = UnicodeBuffer::new();
+            buf.push_str(text);
+            buf.guess_segment_properties();
+            buf.set_direction(if rtl { Direction::RightToLeft } else { Direction::LeftToRight });
+            let gb = shaper.shape(buf, ShapeOptions::new().features(features));
+            gb.glyph_infos().iter().zip(gb.glyph_positions()).map(|(i, p)| (i.glyph_id, i.cluster, p.x_advance, p.x_offset, p.y_offset)).collect()
+        };
+        let kept = |face: &FontFace, text: &str, features: &[Feature], rtl: bool| -> Vec<(u32, u32, i32, i32, i32)> {
+            shape_dir(face, text, features, &|c| c, rtl).iter().map(|g| (g.gid, g.cluster as u32, g.x_advance, g.x_offset, g.y_offset)).collect()
+        };
+        let db = FontDb::global();
+        let faces = [db.face(DEFAULT_FAMILY, "Regular"), db.face(DEFAULT_FAMILY, "Italic"), db.face("Source Sans 3", "Regular")];
+        let features =
+            [vec![], vec![feature("-liga").unwrap()], vec![feature_value(b"kern", 0)], vec![feature("smcp").unwrap(), feature("-kern").unwrap()]];
+        for _ in 0..2 {
+            for face in &faces {
+                for f in &features {
+                    for (text, rtl) in [("office affine", false), ("12, 34.", false), ("AVATAR Wolf", false), ("abc", true), ("", false)] {
+                        assert_eq!(kept(face, text, f, rtl), fresh(face, text, f, rtl), "{} {text:?} {f:?} {rtl}", face.family);
+                    }
+                }
+            }
+        }
+    }
+
+    /// However many feature sets and directions a thread shapes with, it keeps at most
+    /// [`MAX_SHAPE_PLANS`] plans, and shaping still matches a fresh plan once old ones are dropped.
+    #[test]
+    fn kept_shape_plans_are_bounded() {
+        let face = FontDb::global().face(DEFAULT_FAMILY, "Regular");
+        let fresh = |features: &[Feature], rtl: bool| -> Vec<(u32, i32)> {
+            let Some(hb) = face.hb() else { return Vec::new() };
+            let shaper = face.shaper.shaper(&hb).instance(face.instance.as_ref()).build();
+            let mut buf = UnicodeBuffer::new();
+            buf.push_str("office");
+            buf.guess_segment_properties();
+            buf.set_direction(if rtl { Direction::RightToLeft } else { Direction::LeftToRight });
+            let gb = shaper.shape(buf, ShapeOptions::new().features(features));
+            gb.glyph_infos().iter().zip(gb.glyph_positions()).map(|(i, p)| (i.glyph_id, p.x_advance)).collect()
+        };
+        for n in 0..3 * MAX_SHAPE_PLANS as u32 {
+            let features = [feature_value(b"kern", n % 2), feature_value(b"liga", n)];
+            let rtl = n % 3 == 0;
+            let kept: Vec<(u32, i32)> = shape_dir(&face, "office", &features, &|c| c, rtl).iter().map(|g| (g.gid, g.x_advance)).collect();
+            assert_eq!(kept, fresh(&features, rtl), "{n}");
+            assert!(kept_shape_plans() <= MAX_SHAPE_PLANS, "{}", kept_shape_plans());
+        }
+        assert_eq!(kept_shape_plans(), MAX_SHAPE_PLANS);
     }
 
     #[test]

@@ -522,7 +522,13 @@ fn preview(app: &WordApp, ctx: &egui::Context, layout: &DocLayout, o: &ObjectHit
     opts.dark = app.session.view.dark_mode;
     let items = wordcraft_layout::display::object_display(&app.session.doc, page, obj, o.rect, o.text_box, &opts.display);
     let b = o.bounds();
-    let img = wordcraft_render::render_items(&app.session.doc, &items, b.x, b.y, b.w, b.h, scale * ctx.pixels_per_point(), &opts);
+    let img = wordcraft_render::render_items(
+        &app.session.doc,
+        &items,
+        wordcraft_geom::Rect::new(b.x, b.y, b.w, b.h),
+        scale * ctx.pixels_per_point(),
+        &opts,
+    );
     let ci = egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &img.to_straight());
     Some(ctx.load_texture("object-drag", ci, egui::TextureOptions::LINEAR))
 }

@@ -2,7 +2,7 @@ use super::balloons::over_balloon;
 use super::links::{field_showing_code, is_followable_link, is_generated_bookmark_link, link_under};
 use super::navigation::page_at;
 use super::story::{enters_header_footer, in_text_box, part_kind, text_box_host};
-use super::*;
+use super::{CanvasState, DocLayout, PartKind, Pos, Pos2, Rect, StoryRef, Ui, WordApp, json};
 
 /// Drag-select auto-scroll (#688): the pointer within this many points of the viewport's edge
 /// starts scrolling, like Word.
@@ -86,9 +86,29 @@ pub(super) fn clamped_scroll(before: egui::Vec2, delta: egui::Vec2, max: egui::V
 /// handles, then page hit testing, outlines, headers and footers, equations, selection and caret
 /// interaction.
 pub(super) fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layout: &DocLayout, scale: f32) {
+    let Some(pointer) = route_pointer_targets(app, ui, resp, rects, layout, scale) else {
+        return;
+    };
+    // While drag-selecting, the pointer may sit past the viewport's edge (or the window's):
+    // hit-test where it would be inside the view, so as the edge auto-scroll moves the content the
+    // selection keeps growing under a stationary pointer (#688).
+    let p = if app.canvas.dragging
+        && ui.input(|i| i.pointer.primary_down())
+        && let Some(vp) = app.canvas.viewport
+    {
+        vp.clamp(pointer)
+    } else {
+        pointer
+    };
+    let Some((page, x, y)) = page_at(rects, layout, scale, p) else { return };
+    let story = app.session.sel.focus.story;
+    handle_page_pointer(app, PagePointer { ui, resp, layout, p, page, x, y, story });
+}
+
+fn route_pointer_targets(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layout: &DocLayout, scale: f32) -> Option<Pos2> {
     // A pen or the eraser (Draw tab) owns the pointer.
     if crate::ink::pointer(app, ui, resp, rects, layout, scale) {
-        return;
+        return None;
     }
     let pointer = resp.interact_pointer_pos().or_else(|| resp.hover_pos());
     // An object (or crop handle) drag follows the pointer anywhere until it's released.
@@ -97,109 +117,47 @@ pub(super) fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[
     if let Some(at) = object_pointer
         && crate::objects::pointer(app, ui, resp, rects, layout, scale, at)
     {
-        return;
+        return None;
     }
     // A press on a table border (or the table's resize handle) drags it instead of the caret.
     if crate::table_resize::pointer(app, ui, resp, rects, layout, scale) {
-        return;
+        return None;
     }
     // A press on a table's selection area, insert button or move handle.
     if crate::table_mouse::pointer(app, ui, resp, rects, layout, scale) {
-        return;
+        return None;
     }
-    let Some(p) = pointer else { return };
-    // While drag-selecting, the pointer may sit past the viewport's edge (or the window's):
-    // hit-test where it would be inside the view, so as the edge auto-scroll moves the content the
-    // selection keeps growing under a stationary pointer (#688).
-    let p = if app.canvas.dragging
-        && ui.input(|i| i.pointer.primary_down())
-        && let Some(vp) = app.canvas.viewport
-    {
-        vp.clamp(p)
-    } else {
-        p
-    };
-    let Some((page, x, y)) = page_at(rects, layout, scale, p) else { return };
+    pointer
+}
+
+#[derive(Clone, Copy)]
+struct PagePointer<'a> {
+    ui: &'a Ui,
+    resp: &'a egui::Response,
+    layout: &'a DocLayout,
+    p: Pos2,
+    page: usize,
+    x: f32,
+    y: f32,
+    story: StoryRef,
+}
+
+fn handle_page_pointer(app: &mut WordApp, pointer: PagePointer<'_>) {
+    let PagePointer { ui, resp, layout, p, page, x, y, story, .. } = pointer;
     let mods = ui.input(|i| i.modifiers);
-    let story = app.session.sel.focus.story;
-    // Inside an equation, clicks place the caret in it (and double-clicks don't select words);
-    // so do clicks on the grip and options strip of its frame.
+    if skip_equation_or_outline(app, &pointer) {
+        return;
+    }
     let on_frame = app.canvas.eq_options.is_some_and(|f| f.strip.contains(p) || f.grip.contains(p));
-    if (resp.double_clicked() || resp.triple_clicked()) && (on_frame || layout.equation_hit(page, x, y, story).is_some()) {
+    if handle_completed_click(app, &pointer) {
         return;
     }
-    // Outline view: a paragraph's symbol selects it with what is under it; a double-click
-    // expands or collapses the heading.
-    if app.session.view.mode == wordcraft_layout::ViewMode::Outline
-        && let Some(block) = layout.outline_symbol_at(page, x, y)
-    {
-        if resp.double_clicked() {
-            let _ = app.run("outline.toggle", json!({ "block": block }));
-        } else if ui.input(|i| i.pointer.primary_pressed()) && resp.contains_pointer() {
-            let _ = app.run("outline.selectSubtree", json!({ "block": block }));
-            app.session.page_hint = page;
-        }
-        return;
-    }
-    // The press already selected the word or paragraph (and a drag may have grown it).
-    let released_clicks = if resp.triple_clicked() {
-        3
-    } else if resp.double_clicked() {
-        2
-    } else {
-        0
-    };
-    if released_clicks > 0 && app.canvas.unit_drag.as_ref().is_some_and(|d| d.clicks == released_clicks) {
-        app.canvas.unit_drag = None;
-        app.canvas.dragging = false;
-        return;
-    }
-    // Double-click in the header/footer area edits it (creating it when the page has none, #960);
-    // double-click in the body leaves it. Print Layout only: the other views show no margins.
     let hf_zone = if app.session.view.mode == wordcraft_layout::ViewMode::Print && !app.session.view.read_mode {
         layout.header_footer_zone(page, y)
     } else {
         None
     };
     let hf_enter = enters_header_footer(app, story, hf_zone);
-    if resp.double_clicked() {
-        // Its first press already moved into the header/footer and placed the caret.
-        if app.canvas.hf_press_switched {
-            return;
-        }
-        if let Some((_, header)) = hf_zone
-            && hf_enter
-        {
-            let id = if header { "insert.editHeader" } else { "insert.editFooter" };
-            if app.run(id, json!({ "page": page })).is_ok()
-                && let Some(pos) = app.session.layout().hit(page, x, y, app.session.sel.focus.story)
-            {
-                app.session.sel = wordcraft_engine::Selection::caret(pos);
-            }
-            return;
-        }
-        if matches!(story, StoryRef::Part(_)) && !in_text_box(app) && hf_zone.is_none() {
-            let _ = app.run("insert.closeHeader", json!({}));
-            if let Some(pos) = layout.hit(page, x, y, StoryRef::Body) {
-                app.session.sel = wordcraft_engine::Selection::caret(pos);
-            }
-            return;
-        }
-        // Double-click a field showing its code: edit the code.
-        if let Some(pos) = layout.hit(page, x, y, story)
-            && let Some(field) = field_showing_code(app, &pos)
-        {
-            app.session.sel = wordcraft_engine::Selection::caret(field);
-            let _ = app.run("fields.setCode", json!({}));
-            return;
-        }
-        let _ = app.run("select.word", json!({}));
-        return;
-    }
-    if resp.triple_clicked() {
-        let _ = app.run("select.paragraph", json!({"cell": true}));
-        return;
-    }
     let pressed = ui.input(|i| i.pointer.primary_pressed()) && resp.contains_pointer() && !over_balloon(app, p);
     // The equation frame's grip and options strip stay in the equation (the strip's click opens
     // its menu, in `show`).
@@ -207,154 +165,7 @@ pub(super) fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[
         return;
     }
     if pressed {
-        let now = ui.input(|i| i.time);
-        let (delay, dist) = ui.ctx().options(|o| (o.input_options.max_double_click_delay, o.input_options.max_click_dist));
-        let clicks = press_count(app.canvas.last_press, now, p, delay, dist);
-        app.canvas.last_press = Some((now, p, clicks));
-        app.canvas.unit_drag = None;
-        if clicks <= 1 {
-            app.canvas.hf_press_switched = false;
-        }
-        // A double-click that enters or leaves a header/footer is handled on release.
-        let hf_switch = hf_enter || app.canvas.hf_press_switched || (matches!(story, StoryRef::Part(_)) && !in_text_box(app) && hf_zone.is_none());
-        // Clicking into a footnote/endnote or a text box edits it; clicking outside a text box goes
-        // back to where it is. While editing a header/footer, only its own text boxes are in reach.
-        let story = {
-            let is_note = |s: StoryRef| matches!(part_kind(app, s), Some(PartKind::Footnote | PartKind::Endnote));
-            let is_box = |s: StoryRef| part_kind(app, s) == Some(PartKind::TextBox);
-            let host = if is_box(story) { text_box_host(app, layout).unwrap_or(StoryRef::Body) } else { story };
-            let in_hf = matches!(part_kind(app, host), Some(PartKind::Header | PartKind::Footer));
-            let hf_box = if in_hf { layout.header_footer_text_box_at(page, x, y).map(StoryRef::Part) } else { None };
-            match (hf_box, layout.story_at(page, x, y)) {
-                (Some(b), _) => b,
-                (None, Some(s)) if is_note(s) => s,
-                (None, Some(s)) if is_box(s) && !in_hf => s,
-                (None, Some(StoryRef::Body)) if is_note(story) => StoryRef::Body,
-                _ if is_box(story) => host,
-                _ => story,
-            }
-        };
-        // While editing a header/footer, a press in another one (the footer while editing the
-        // header, or another page's own) edits that one, with the caret at the press. Hit-tested
-        // against the story being edited, the press put the caret back in it, scrolling the view
-        // away from the band that was clicked.
-        if !mods.shift
-            && matches!(part_kind(app, story), Some(PartKind::Header | PartKind::Footer))
-            && let Some((_, header)) = hf_zone
-            && enters_header_footer(app, story, hf_zone)
-        {
-            app.canvas.column_drag = None;
-            app.canvas.hf_press_switched = true;
-            let id = if header { "insert.editHeader" } else { "insert.editFooter" };
-            if app.run(id, json!({ "page": page })).is_ok() {
-                let to = app.session.sel.focus.story;
-                if let Some(pos) = app.session.layout().hit(page, x, y, to) {
-                    app.session.sel = wordcraft_engine::Selection::caret(pos);
-                }
-                app.session.page_hint = page;
-            }
-            return;
-        }
-        // A press in the header/footer area from the body leaves the caret where it is, as in
-        // Word (#2103): moving it to the nearest body text scrolled the view there, away from the
-        // footer the double-click was aiming at.
-        if hf_switch && !mods.shift && hf_zone.is_some() && story == StoryRef::Body && app.session.sel.focus.story == StoryRef::Body {
-            app.canvas.column_drag = None;
-            return;
-        }
-        if !mods.shift
-            && let Some((at, inner)) = layout.equation_hit(page, x, y, story)
-        {
-            app.session.sel = wordcraft_engine::Selection::caret(at);
-            let _ = app.run("equation.edit", json!({"pos": serde_json::to_value(&inner).unwrap_or_default()}));
-            app.session.page_hint = page;
-            return;
-        }
-        if app.session.math.is_some() {
-            let _ = app.run("equation.exit", json!({}));
-        }
-        // The selection bar (the left margin beside body text, #856): a click selects the line,
-        // a double-click the paragraph, a triple-click or Ctrl/⌘+click the document; Shift+click
-        // extends by lines; dragging grows the selection by the clicked unit.
-        if story == StoryRef::Body
-            && !mods.alt
-            && let Some(line) = layout.selection_bar_at(page, x, y)
-        {
-            app.canvas.column_drag = None;
-            app.session.page_hint = page;
-            let lj = serde_json::to_value(&line).unwrap_or_default();
-            let (unit, start, end) = if mods.shift {
-                let anchor = app.session.sel.anchor.clone();
-                let aj = serde_json::to_value(&anchor).unwrap_or_default();
-                let _ = app.run("select.dragUnit", json!({"unit": "line", "start": aj, "end": aj, "pos": lj}));
-                ("line", anchor.clone(), anchor)
-            } else {
-                let unit = match clicks {
-                    _ if mods.command => "document",
-                    3.. => "document",
-                    2 => "paragraph",
-                    _ => "line",
-                };
-                let _ = app.run("caret.set", json!({"pos": lj}));
-                let id = match unit {
-                    "document" => "select.all",
-                    "paragraph" => "select.paragraph",
-                    _ => "select.line",
-                };
-                let params = if id == "select.all" { json!({"whole": true}) } else { json!({}) };
-                let _ = app.run(id, params);
-                let (start, end) = app.session.sel.ordered();
-                (unit, start, end)
-            };
-            app.canvas.unit_drag = Some(UnitDrag { unit, clicks, start, end, last: line });
-            app.canvas.dragging = true;
-            return;
-        }
-        let Some(pos) = layout.hit(page, x, y, story) else { return };
-        // Ctrl/⌘+click follows a hyperlink.
-        if mods.command
-            && let Some(link) = link_under(app, layout, page, x, y, &pos)
-        {
-            if let Some(name) = link.strip_prefix('#') {
-                // The caret goes to the bookmark's start, as in Word (Go To selects its text).
-                if app.run("edit.goto", json!({"bookmark": name})).is_ok() {
-                    let _ = app.run("select.collapse", json!({}));
-                }
-            } else if is_followable_link(&link) {
-                app.canvas.open_url = Some(link);
-            } else {
-                app.status(tl!("Only web (http, https) and email (mailto) links can be followed"));
-            }
-            return;
-        }
-        let pj = serde_json::to_value(&pos).unwrap_or_default();
-        // Alt+drag selects a column (block) of text.
-        if mods.alt && !mods.shift && !mods.command {
-            let _ = app.run("caret.set", json!({"pos": pj}));
-            app.session.page_hint = page;
-            app.canvas.column_drag = Some(((page, x, y), (page, x, y)));
-            app.canvas.dragging = true;
-            return;
-        }
-        app.canvas.column_drag = None;
-        let _ = app.run("caret.set", json!({"pos": pj, "extend": mods.shift}));
-        // Double-click selects a word, triple-click a paragraph, Ctrl/⌘+click a sentence; holding
-        // the button and dragging then extends by whole units (Word, #549).
-        let unit = match clicks {
-            _ if mods.shift => None,
-            3 if !hf_switch => Some("paragraph"),
-            2 if !hf_switch => Some("word"),
-            1 if mods.command => Some("sentence"),
-            _ => None,
-        };
-        if let Some(unit) = unit {
-            let _ = app.run(&format!("select.{unit}"), json!({}));
-            let (start, end) = app.session.sel.ordered();
-            app.canvas.unit_drag = Some(UnitDrag { unit, clicks, start, end, last: pos });
-        }
-        app.session.page_hint = page;
-        app.canvas.dragging = true;
-        // Format painter applies on mouse up.
+        handle_primary_press(app, &pointer, mods, hf_zone, hf_enter);
     } else if app.canvas.dragging
         && ui.input(|i| i.pointer.primary_down())
         && let Some((from, last)) = app.canvas.column_drag
@@ -407,6 +218,259 @@ pub(super) fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[
             let _ = app.run("edit.pasteFormat", json!({}));
         }
     }
+    show_hover_link(app, &pointer);
+}
+
+fn handle_primary_press(
+    app: &mut WordApp,
+    pointer: &PagePointer<'_>,
+    mods: egui::Modifiers,
+    hf_zone: Option<(Option<StoryRef>, bool)>,
+    hf_enter: bool,
+) {
+    let PagePointer { ui, layout, p, page, x, y, story, .. } = *pointer;
+    let now = ui.input(|i| i.time);
+    let (delay, dist) = ui.ctx().options(|o| (o.input_options.max_double_click_delay, o.input_options.max_click_dist));
+    let clicks = press_count(app.canvas.last_press, now, p, delay, dist);
+    app.canvas.last_press = Some((now, p, clicks));
+    app.canvas.unit_drag = None;
+    if clicks <= 1 {
+        app.canvas.hf_press_switched = false;
+    }
+    // A double-click that enters or leaves a header/footer is handled on release.
+    let hf_switch = hf_enter || app.canvas.hf_press_switched || (matches!(story, StoryRef::Part(_)) && !in_text_box(app) && hf_zone.is_none());
+    // Clicking into a footnote/endnote or a text box edits it; clicking outside a text box goes
+    // back to where it is. While editing a header/footer, only its own text boxes are in reach.
+    let story = pointer_story(app, layout, page, x, y, story);
+    // While editing a header/footer, a press in another one (the footer while editing the
+    // header, or another page's own) edits that one, with the caret at the press. Hit-tested
+    // against the story being edited, the press put the caret back in it, scrolling the view
+    // away from the band that was clicked.
+    if !mods.shift
+        && matches!(part_kind(app, story), Some(PartKind::Header | PartKind::Footer))
+        && let Some((_, header)) = hf_zone
+        && enters_header_footer(app, story, hf_zone)
+    {
+        app.canvas.column_drag = None;
+        app.canvas.hf_press_switched = true;
+        let id = if header { "insert.editHeader" } else { "insert.editFooter" };
+        if app.run(id, json!({ "page": page })).is_ok() {
+            let to = app.session.sel.focus.story;
+            if let Some(pos) = app.session.layout().hit(page, x, y, to) {
+                app.session.sel = wordcraft_engine::Selection::caret(pos);
+            }
+            app.session.page_hint = page;
+        }
+        return;
+    }
+    // A press in the header/footer area from the body leaves the caret where it is, as in
+    // Word (#2103): moving it to the nearest body text scrolled the view there, away from the
+    // footer the double-click was aiming at.
+    if hf_switch && !mods.shift && hf_zone.is_some() && story == StoryRef::Body && app.session.sel.focus.story == StoryRef::Body {
+        app.canvas.column_drag = None;
+        return;
+    }
+    if !mods.shift
+        && let Some((at, inner)) = layout.equation_hit(page, x, y, story)
+    {
+        app.session.sel = wordcraft_engine::Selection::caret(at);
+        let _ = app.run("equation.edit", json!({"pos": serde_json::to_value(&inner).unwrap_or_default()}));
+        app.session.page_hint = page;
+        return;
+    }
+    if app.session.math.is_some() {
+        let _ = app.run("equation.exit", json!({}));
+    }
+    // The selection bar (the left margin beside body text, #856): a click selects the line,
+    // a double-click the paragraph, a triple-click or Ctrl/⌘+click the document; Shift+click
+    // extends by lines; dragging grows the selection by the clicked unit.
+    if story == StoryRef::Body
+        && !mods.alt
+        && let Some(line) = layout.selection_bar_at(page, x, y)
+    {
+        app.canvas.column_drag = None;
+        app.session.page_hint = page;
+        let lj = serde_json::to_value(&line).unwrap_or_default();
+        let (unit, start, end) = if mods.shift {
+            let anchor = app.session.sel.anchor.clone();
+            let aj = serde_json::to_value(&anchor).unwrap_or_default();
+            let _ = app.run("select.dragUnit", json!({"unit": "line", "start": aj, "end": aj, "pos": lj}));
+            ("line", anchor.clone(), anchor)
+        } else {
+            let unit = match clicks {
+                _ if mods.command => "document",
+                3.. => "document",
+                2 => "paragraph",
+                _ => "line",
+            };
+            let _ = app.run("caret.set", json!({"pos": lj}));
+            let id = match unit {
+                "document" => "select.all",
+                "paragraph" => "select.paragraph",
+                _ => "select.line",
+            };
+            let params = if id == "select.all" { json!({"whole": true}) } else { json!({}) };
+            let _ = app.run(id, params);
+            let (start, end) = app.session.sel.ordered();
+            (unit, start, end)
+        };
+        app.canvas.unit_drag = Some(UnitDrag { unit, clicks, start, end, last: line });
+        app.canvas.dragging = true;
+        return;
+    }
+    let Some(pos) = layout.hit(page, x, y, story) else { return };
+    // Ctrl/⌘+click follows a hyperlink.
+    if mods.command
+        && let Some(link) = link_under(app, layout, page, x, y, &pos)
+    {
+        if let Some(name) = link.strip_prefix('#') {
+            // The caret goes to the bookmark's start, as in Word (Go To selects its text).
+            if app.run("edit.goto", json!({"bookmark": name})).is_ok() {
+                let _ = app.run("select.collapse", json!({}));
+            }
+        } else if is_followable_link(&link) {
+            app.canvas.open_url = Some(link);
+        } else {
+            app.status(tl!("Only web (http, https) and email (mailto) links can be followed"));
+        }
+        return;
+    }
+    let pj = serde_json::to_value(&pos).unwrap_or_default();
+    // Alt+drag selects a column (block) of text.
+    if mods.alt && !mods.shift && !mods.command {
+        let _ = app.run("caret.set", json!({"pos": pj}));
+        app.session.page_hint = page;
+        app.canvas.column_drag = Some(((page, x, y), (page, x, y)));
+        app.canvas.dragging = true;
+        return;
+    }
+    app.canvas.column_drag = None;
+    let _ = app.run("caret.set", json!({"pos": pj, "extend": mods.shift}));
+    // Double-click selects a word, triple-click a paragraph, Ctrl/⌘+click a sentence; holding
+    // the button and dragging then extends by whole units (Word, #549).
+    let unit = match clicks {
+        _ if mods.shift => None,
+        3 if !hf_switch => Some("paragraph"),
+        2 if !hf_switch => Some("word"),
+        1 if mods.command => Some("sentence"),
+        _ => None,
+    };
+    if let Some(unit) = unit {
+        let _ = app.run(&format!("select.{unit}"), json!({}));
+        let (start, end) = app.session.sel.ordered();
+        app.canvas.unit_drag = Some(UnitDrag { unit, clicks, start, end, last: pos });
+    }
+    app.session.page_hint = page;
+    app.canvas.dragging = true;
+    // Format painter applies on mouse up
+}
+
+fn pointer_story(app: &WordApp, layout: &DocLayout, page: usize, x: f32, y: f32, story: StoryRef) -> StoryRef {
+    let is_note = |s| matches!(part_kind(app, s), Some(PartKind::Footnote | PartKind::Endnote));
+    let is_box = |s| part_kind(app, s) == Some(PartKind::TextBox);
+    let host = if is_box(story) { text_box_host(app, layout).unwrap_or(StoryRef::Body) } else { story };
+    let in_hf = matches!(part_kind(app, host), Some(PartKind::Header | PartKind::Footer));
+    let hf_box = if in_hf { layout.header_footer_text_box_at(page, x, y).map(StoryRef::Part) } else { None };
+    match (hf_box, layout.story_at(page, x, y)) {
+        (Some(b), _) => b,
+        (None, Some(s)) if is_note(s) => s,
+        (None, Some(s)) if is_box(s) && !in_hf => s,
+        (None, Some(StoryRef::Body)) if is_note(story) => StoryRef::Body,
+        _ if is_box(story) => host,
+        _ => story,
+    }
+}
+
+fn handle_completed_click(app: &mut WordApp, pointer: &PagePointer<'_>) -> bool {
+    let PagePointer { resp, layout, page, x, y, story, .. } = *pointer;
+    // The press already selected the word or paragraph (and a drag may have grown it).
+    let released_clicks = if resp.triple_clicked() {
+        3
+    } else if resp.double_clicked() {
+        2
+    } else {
+        0
+    };
+    if released_clicks > 0 && app.canvas.unit_drag.as_ref().is_some_and(|d| d.clicks == released_clicks) {
+        app.canvas.unit_drag = None;
+        app.canvas.dragging = false;
+        return true;
+    }
+    // Double-click in the header/footer area edits it (creating it when the page has none, #960);
+    // double-click in the body leaves it. Print Layout only: the other views show no margins.
+    let hf_zone = if app.session.view.mode == wordcraft_layout::ViewMode::Print && !app.session.view.read_mode {
+        layout.header_footer_zone(page, y)
+    } else {
+        None
+    };
+    let hf_enter = enters_header_footer(app, story, hf_zone);
+    if resp.double_clicked() {
+        // Its first press already moved into the header/footer and placed the caret.
+        if app.canvas.hf_press_switched {
+            return true;
+        }
+        if let Some((_, header)) = hf_zone
+            && hf_enter
+        {
+            let id = if header { "insert.editHeader" } else { "insert.editFooter" };
+            if app.run(id, json!({ "page": page })).is_ok()
+                && let Some(pos) = app.session.layout().hit(page, x, y, app.session.sel.focus.story)
+            {
+                app.session.sel = wordcraft_engine::Selection::caret(pos);
+            }
+            return true;
+        }
+        if matches!(story, StoryRef::Part(_)) && !in_text_box(app) && hf_zone.is_none() {
+            let _ = app.run("insert.closeHeader", json!({}));
+            if let Some(pos) = layout.hit(page, x, y, StoryRef::Body) {
+                app.session.sel = wordcraft_engine::Selection::caret(pos);
+            }
+            return true;
+        }
+        // Double-click a field showing its code: edit the code.
+        if let Some(pos) = layout.hit(page, x, y, story)
+            && let Some(field) = field_showing_code(app, &pos)
+        {
+            app.session.sel = wordcraft_engine::Selection::caret(field);
+            let _ = app.run("fields.setCode", json!({}));
+            return true;
+        }
+        let _ = app.run("select.word", json!({}));
+        return true;
+    }
+    if resp.triple_clicked() {
+        let _ = app.run("select.paragraph", json!({"cell": true}));
+        return true;
+    }
+    false
+}
+
+fn skip_equation_or_outline(app: &mut WordApp, pointer: &PagePointer<'_>) -> bool {
+    let PagePointer { ui, resp, layout, p, page, x, y, story, .. } = pointer;
+    // Inside an equation, clicks place the caret in it (and double-clicks don't select words);
+    // so do clicks on the grip and options strip of its frame.
+    let on_frame = app.canvas.eq_options.is_some_and(|f| f.strip.contains(*p) || f.grip.contains(*p));
+    if (resp.double_clicked() || resp.triple_clicked()) && (on_frame || layout.equation_hit(*page, *x, *y, *story).is_some()) {
+        return true;
+    }
+    // Outline view: a paragraph's symbol selects it with what is under it; a double-click
+    // expands or collapses the heading.
+    if app.session.view.mode == wordcraft_layout::ViewMode::Outline
+        && let Some(block) = layout.outline_symbol_at(*page, *x, *y)
+    {
+        if resp.double_clicked() {
+            let _ = app.run("outline.toggle", json!({ "block": block }));
+        } else if ui.input(|i| i.pointer.primary_pressed()) && resp.contains_pointer() {
+            let _ = app.run("outline.selectSubtree", json!({ "block": block }));
+            app.session.page_hint = *page;
+        }
+        return true;
+    }
+    false
+}
+
+fn show_hover_link(app: &WordApp, pointer: &PagePointer<'_>) {
+    let PagePointer { ui, resp, layout, page, x, y, story, .. } = pointer;
     // Hover a link: show its target, unless the context menu is opening or open: a tooltip draws
     // above the menu and would cover its first items (#3368).
     if resp.hovered()
@@ -414,8 +478,8 @@ pub(super) fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[
         && !app.canvas.context_menu_open
         && !resp.secondary_clicked()
         && !ui.input(|i| i.pointer.secondary_down())
-        && let Some(pos) = layout.hit(page, x, y, story)
-        && let Some(link) = link_under(app, layout, page, x, y, &pos)
+        && let Some(pos) = layout.hit(*page, *x, *y, *story)
+        && let Some(link) = link_under(app, layout, *page, *x, *y, &pos)
     {
         let key = if cfg!(target_os = "macos") { "⌘" } else { "Ctrl" };
         let target = if is_generated_bookmark_link(&link) { tl!("Current Document").to_string() } else { link };

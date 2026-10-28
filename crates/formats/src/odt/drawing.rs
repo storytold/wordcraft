@@ -3,8 +3,8 @@
 use wordcraft_doc::para::{Anchor, Float, FloatAlign, ShapeKind, Wrap, WrapText};
 use wordcraft_doc::props::VAlign;
 
-use super::xml::{Attrs, length};
-use super::*;
+use super::xml::{Attrs, get, length};
+use super::{Rgb, Styles, model};
 
 /// Key of the document's default graphic style (`style:default-style style:family="graphic"`),
 /// which drawing shapes fall back to. No style name contains a NUL.

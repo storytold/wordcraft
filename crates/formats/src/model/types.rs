@@ -1,4 +1,4 @@
-use super::*;
+use super::{Align, Arc, Float, InlineObject, OBJ, REPORTED, Rgb, RubyAlign, ShapeKind, VAlign, ruby_raise};
 
 /// Font used for code spans and code blocks.
 pub const MONO_FONT: &str = "Courier New";

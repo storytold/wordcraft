@@ -1,5 +1,5 @@
 use super::paint::append_path;
-use super::*;
+use super::{FaceRef, HashMap, Path, PathBuilder};
 
 /// The outlines of `glyphs` (glyph id, pen position) at `size`, as one path in page coordinates.
 pub(crate) fn glyph_outlines(face: &FaceRef, size: f32, glyphs: &[(u32, f32, f32)]) -> Option<Path> {
@@ -116,6 +116,10 @@ pub(crate) fn visual_order(
 
 /// The y most of a run's glyphs share: its baseline, which raised or lowered marks leave.
 pub(crate) fn baseline(glyphs: &[(u32, f32, f32)]) -> Option<f32> {
+    let &(_, _, first) = glyphs.first()?;
+    if glyphs.iter().all(|g| g.2.to_bits() == first.to_bits()) {
+        return Some(first);
+    }
     let mut counts: HashMap<u32, usize> = HashMap::new();
     for (_, _, y) in glyphs {
         *counts.entry(y.to_bits()).or_insert(0) += 1;

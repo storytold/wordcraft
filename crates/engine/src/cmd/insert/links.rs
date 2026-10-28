@@ -1,4 +1,4 @@
-use super::*;
+use super::{CharProps, CmdError, CmdResult, InlineObject, Pos, Selection, Session, StoryRef, Value, json, p, sel_result};
 
 /// What a link can point to inside the document (Insert › Link › Place in This Document): the top
 /// of the document, its headings (body block, level, text) and its bookmarks, without the hidden

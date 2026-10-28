@@ -2,7 +2,10 @@ use super::properties::{
     bookmark_text, count_text, date_picture, doc_property, doc_property_arg, new_property_value, set_summary_property, summary_property, text_result,
 };
 use super::toc::{heading_style_level, update_toc};
-use super::*;
+use super::{
+    Block, CharProps, CmdError, CmdResult, FieldCode, InlineObject, NumFormat, Paragraph, Path, Pos, Selection, Session, StoryRef, Value, p,
+    sel_result,
+};
 
 /// The `\*` format switch value for a caption's number format (OOXML names work too).
 pub fn seq_format(name: &str) -> &'static str {

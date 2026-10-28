@@ -1,4 +1,4 @@
-use super::*;
+use super::{Rect, Rgb};
 
 /// How an area is painted: one colour or a gradient (page points), opacities 0..1.
 #[derive(Clone, Debug, PartialEq)]

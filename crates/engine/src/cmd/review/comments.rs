@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    BTreeMap, BTreeSet, CmdError, CmdResult, Comment, InlineObject, Paragraph, PartKind, Pos, Selection, Session, StoryRef, Value, json, now_iso, p,
+    para_block, pos_json, sel_result,
+};
 
 pub(super) fn new_comment(s: &mut Session, v: &Value) -> CmdResult {
     let text = p::str(v, "text").unwrap_or("").to_string();

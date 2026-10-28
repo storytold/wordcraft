@@ -1,6 +1,6 @@
 use super::date::{iso_to_dttm, rtf_date};
 use super::styles::{style_fmt, styled};
-use super::*;
+use super::{Align, Document, FBlock, FTable, Fmt, Inline, Kind, Meta, Para, RevMark, Rgb, VAlign, model};
 
 // ---------------------------------------------------------------------------------------------
 // Export

@@ -2,7 +2,7 @@ use wordcraft_doc::props::{TabAlign, TabLeader, TabStop};
 
 use super::limits::MAX_TAB_STOPS;
 use super::xml::{Attrs, Ev, events, get, length, local};
-use super::*;
+use super::{Align, Arc, Columns, Fmt, HashMap, Kind, Rgb, VAlign, drawing, model};
 
 // ---------------------------------------------------------------------------------------------
 // Import
@@ -102,6 +102,55 @@ fn tab_stop(a: &Attrs) -> Option<TabStop> {
     Some(TabStop { pos, align, leader })
 }
 
+/// A `style:paragraph-properties` element of style `s`: alignment, page break before, keep with
+/// next, page number restart and a bottom border.
+fn paragraph_properties(a: &Attrs, s: &mut StyleInfo) {
+    s.align = match get(a, "fo:text-align").map(|v| v.trim().to_ascii_lowercase()).as_deref() {
+        Some("center") => Some(Align::Center),
+        Some("end") | Some("right") => Some(Align::Right),
+        Some("justify") => Some(Align::Justify),
+        Some("start") | Some("left") => Some(Align::Left),
+        _ => s.align,
+    };
+    if get(a, "fo:break-before").is_some_and(|b| b.trim().eq_ignore_ascii_case("page")) {
+        s.page_break = true;
+    }
+    match get(a, "fo:keep-with-next") {
+        Some("always") => s.keep_next = Some(true),
+        Some("auto") => s.keep_next = Some(false),
+        _ => {}
+    }
+    if let Some(v) = get(a, "style:page-number") {
+        s.page_number = Some(v.trim().parse::<u32>().ok().map(|n| n.min(32_767)));
+    }
+    if get(a, "fo:border-bottom").is_some_and(|b| !b.trim().eq_ignore_ascii_case("none")) {
+        s.border_bottom = true;
+    }
+}
+
+/// The default tab interval of a `style:paragraph-properties` (`style:tab-stop-distance`), in
+/// Word's limits: more than nothing, at most 22".
+fn tab_distance(a: &Attrs) -> Option<f32> {
+    get(a, "style:tab-stop-distance").and_then(length).filter(|v| *v > 0.0).map(|d| d.min(1584.0))
+}
+
+/// `style:tab-stops` starts the style `cur`'s own tab stops (replacing its parent's); each
+/// `style:tab-stop` in it adds one, up to `MAX_TAB_STOPS`.
+fn tab_element(cur: &mut Option<(String, StyleInfo)>, q: &str, a: &Attrs) {
+    let Some((_, s)) = cur else { return };
+    if !q.starts_with("style:") {
+        return;
+    }
+    if local(q) == "tab-stops" {
+        s.tabs = Some(Vec::new());
+    } else if let Some(tabs) = &mut s.tabs
+        && tabs.len() < MAX_TAB_STOPS
+        && let Some(t) = tab_stop(a)
+    {
+        tabs.push(t);
+    }
+}
+
 /// Columns of a `style:columns` element (ODF 1.3 §17.12): count and gap, clamped as the RTF and
 /// DOCX readers do; equal widths only (`style:column` widths are not read).
 pub(super) fn columns_of(a: &Attrs) -> Columns {
@@ -118,6 +167,58 @@ pub(super) fn columns_of(a: &Attrs) -> Columns {
 /// A `style:column-sep` (ODF 1.3 §17.13) draws a line between columns unless its style is "none".
 pub(super) fn column_sep(a: &Attrs) -> bool {
     get(a, "style:style") != Some("none")
+}
+
+fn default_font(a: &Attrs) -> Option<String> {
+    let family = get(a, "fo:font-family").or_else(|| get(a, "style:font-name"))?;
+    let family = family.split(',').next().unwrap_or("").trim().trim_matches(['\'', '"']);
+    (!family.is_empty() && !model::is_mono(family)).then(|| family.to_string())
+}
+
+fn text_properties(a: &Attrs, style: &mut StyleInfo) {
+    let fmt = &mut style.fmt;
+    let is_bold = |weight: &str| {
+        let weight = weight.trim();
+        weight.eq_ignore_ascii_case("bold") || weight.parse::<u32>().is_ok_and(|n| n >= 600)
+    };
+    // Latin attributes take precedence; Asian and complex-script attributes are fallbacks.
+    if let Some(weight) = get(a, "fo:font-weight").or_else(|| get(a, "style:font-weight-asian")).or_else(|| get(a, "style:font-weight-complex")) {
+        fmt.bold = Some(is_bold(weight));
+    }
+    let is_italic = |value: &str| value.trim().eq_ignore_ascii_case("italic") || value.trim().eq_ignore_ascii_case("oblique");
+    if let Some(value) = get(a, "fo:font-style").or_else(|| get(a, "style:font-style-asian")).or_else(|| get(a, "style:font-style-complex")) {
+        fmt.italic = Some(is_italic(value));
+    }
+    let is_not_none = |value: &str| !value.trim().eq_ignore_ascii_case("none");
+    if let Some(value) = get(a, "style:text-underline-style").or_else(|| get(a, "style:text-underline-type")) {
+        fmt.underline = Some(is_not_none(value));
+    }
+    if let Some(value) = get(a, "style:text-line-through-style").or_else(|| get(a, "style:text-line-through-type")) {
+        fmt.strike = Some(is_not_none(value));
+    }
+    if let Some(value) = get(a, "style:text-position") {
+        let first = value.split_whitespace().next().unwrap_or("");
+        let pct = first.trim_end_matches('%').parse::<f32>().unwrap_or(0.0);
+        fmt.sup = Some(first.eq_ignore_ascii_case("super") || pct > 0.0);
+        fmt.sub = Some(first.eq_ignore_ascii_case("sub") || pct < 0.0);
+    }
+    if let Some(color) = get(a, "fo:color").and_then(model::parse_color) {
+        fmt.color = Some(color);
+    }
+    if let Some(color) = get(a, "fo:background-color").and_then(model::parse_color) {
+        fmt.background = Some(color);
+    }
+    if let Some(size) = get(a, "fo:font-size").and_then(length).filter(|size| (1.0..=1638.0).contains(size)) {
+        fmt.size = Some(size);
+    }
+    if let Some(family) = get(a, "fo:font-family").or_else(|| get(a, "style:font-name")) {
+        let family = family.split(',').next().unwrap_or("").trim().trim_matches(['\'', '"']).to_string();
+        if model::is_mono(&family) || get(a, "style:font-pitch").is_some_and(|pitch| pitch.trim().eq_ignore_ascii_case("fixed")) {
+            fmt.code = Some(true);
+        } else if !family.is_empty() {
+            fmt.font = model::kept_font(&family);
+        }
+    }
 }
 
 #[derive(Default)]
@@ -139,12 +240,7 @@ impl Styles {
         events(xml, |ev| match ev {
             Ev::Start(q, a) => match local(&q) {
                 "automatic-styles" => in_auto = true,
-                "paragraph-properties" if in_default => {
-                    // Word's limits for the default tab interval: more than nothing, at most 22".
-                    if let Some(d) = get(&a, "style:tab-stop-distance").and_then(length).filter(|v| *v > 0.0) {
-                        self.default_tab = Some(d.min(1584.0));
-                    }
-                }
+                "paragraph-properties" if in_default => self.default_tab = tab_distance(&a).or(self.default_tab),
                 "style" if q.starts_with("style:") => {
                     if let Some(name) = get(&a, "style:name") {
                         let info = StyleInfo {
@@ -165,84 +261,11 @@ impl Styles {
                     }
                 }
                 "text-properties" if in_default && cur.is_none() => {
-                    if let Some(fam) = get(&a, "fo:font-family").or_else(|| get(&a, "style:font-name")) {
-                        let fam = fam.split(',').next().unwrap_or("").trim().trim_matches(['\'', '"']);
-                        if !fam.is_empty() && !model::is_mono(fam) {
-                            self.default_font = Some(fam.to_string());
-                        }
-                    }
+                    self.default_font = default_font(&a);
                 }
                 "text-properties" => {
                     if let Some((_, s)) = &mut cur {
-                        let d = &mut s.fmt;
-                        let is_bold = |w: &str| {
-                            let w = w.trim();
-                            w.eq_ignore_ascii_case("bold") || w.parse::<u32>().is_ok_and(|n| n >= 600)
-                        };
-                        // The fo: value governs Latin text; the Asian and complex-script values
-                        // stand in only when a style sets nothing else.
-                        let weight =
-                            get(&a, "fo:font-weight").or_else(|| get(&a, "style:font-weight-asian")).or_else(|| get(&a, "style:font-weight-complex"));
-                        if let Some(w) = weight {
-                            d.bold = Some(is_bold(w));
-                        }
-                        let is_italic = |v: &str| {
-                            let v = v.trim();
-                            v.eq_ignore_ascii_case("italic") || v.eq_ignore_ascii_case("oblique")
-                        };
-                        let style =
-                            get(&a, "fo:font-style").or_else(|| get(&a, "style:font-style-asian")).or_else(|| get(&a, "style:font-style-complex"));
-                        if let Some(v) = style {
-                            d.italic = Some(is_italic(v));
-                        }
-                        let is_not_none = |v: &str| !v.trim().eq_ignore_ascii_case("none");
-                        // The line style decides; the line type counts only when no style is given.
-                        let ul = get(&a, "style:text-underline-style").or_else(|| get(&a, "style:text-underline-type"));
-                        if let Some(v) = ul {
-                            d.underline = Some(is_not_none(v));
-                        }
-                        let strike = get(&a, "style:text-line-through-style").or_else(|| get(&a, "style:text-line-through-type"));
-                        if let Some(v) = strike {
-                            d.strike = Some(is_not_none(v));
-                        }
-                        if let Some(v) = get(&a, "style:text-position") {
-                            let v = v.trim();
-                            let first = v.split_whitespace().next().unwrap_or("");
-                            let pct = first.trim_end_matches('%').parse::<f32>().unwrap_or(0.0);
-                            d.sup = Some(first.eq_ignore_ascii_case("super") || pct > 0.0);
-                            d.sub = Some(first.eq_ignore_ascii_case("sub") || pct < 0.0);
-                        }
-                        if let Some(c) = get(&a, "fo:color").and_then(model::parse_color) {
-                            d.color = Some(c);
-                        }
-                        if let Some(c) = get(&a, "fo:background-color").and_then(model::parse_color) {
-                            d.background = Some(c);
-                        }
-                        if let Some(sz) = get(&a, "fo:font-size").and_then(length).filter(|v| *v >= 1.0 && *v <= 1638.0) {
-                            d.size = Some(sz);
-                        }
-                        if let Some(fam) = get(&a, "fo:font-family").or_else(|| get(&a, "style:font-name")) {
-                            let fam = fam.split(',').next().unwrap_or("").trim().trim_matches(['\'', '"']).to_string();
-                            if model::is_mono(&fam) || get(&a, "style:font-pitch").is_some_and(|p| p.trim().eq_ignore_ascii_case("fixed")) {
-                                d.code = Some(true);
-                            } else if !fam.is_empty() {
-                                d.font = model::kept_font(&fam);
-                            }
-                        }
-                    }
-                }
-                "tab-stops" if q.starts_with("style:") => {
-                    if let Some((_, s)) = &mut cur {
-                        s.tabs = Some(Vec::new());
-                    }
-                }
-                "tab-stop" if q.starts_with("style:") => {
-                    if let Some((_, s)) = &mut cur
-                        && let Some(tabs) = &mut s.tabs
-                        && tabs.len() < MAX_TAB_STOPS
-                        && let Some(t) = tab_stop(&a)
-                    {
-                        tabs.push(t);
+                        text_properties(&a, s);
                     }
                 }
                 "graphic-properties" if q.starts_with("style:") => {
@@ -250,6 +273,7 @@ impl Styles {
                         s.graphic = drawing::graphic_props(&a);
                     }
                 }
+                "tab-stops" | "tab-stop" => tab_element(&mut cur, &q, &a),
                 "table-properties" => {
                     if let Some((_, s)) = &mut cur
                         && let Some(v) = get(&a, "style:page-number")
@@ -281,27 +305,7 @@ impl Styles {
                 }
                 "paragraph-properties" => {
                     if let Some((_, s)) = &mut cur {
-                        s.align = match get(&a, "fo:text-align").map(|v| v.trim().to_ascii_lowercase()).as_deref() {
-                            Some("center") => Some(Align::Center),
-                            Some("end") | Some("right") => Some(Align::Right),
-                            Some("justify") => Some(Align::Justify),
-                            Some("start") | Some("left") => Some(Align::Left),
-                            _ => s.align,
-                        };
-                        if get(&a, "fo:break-before").is_some_and(|b| b.trim().eq_ignore_ascii_case("page")) {
-                            s.page_break = true;
-                        }
-                        match get(&a, "fo:keep-with-next") {
-                            Some("always") => s.keep_next = Some(true),
-                            Some("auto") => s.keep_next = Some(false),
-                            _ => {}
-                        }
-                        if let Some(v) = get(&a, "style:page-number") {
-                            s.page_number = Some(v.trim().parse::<u32>().ok().map(|n| n.min(32_767)));
-                        }
-                        if get(&a, "fo:border-bottom").is_some_and(|b| !b.trim().eq_ignore_ascii_case("none")) {
-                            s.border_bottom = true;
-                        }
+                        paragraph_properties(&a, s);
                     }
                 }
                 "columns" if q.starts_with("style:") => {

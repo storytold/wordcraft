@@ -275,34 +275,64 @@ fn content(app: &mut WordApp, ui: &mut egui::Ui, t: &Tokens) {
             let _ = app.run("format.size", json!({"size": x}));
         }
         ui.add_space(GAP);
-        widgets::small(ui, app, "grow", None, "Increase Font Size", "format.growFont", json!({}), false);
-        widgets::small(ui, app, "shrink", None, "Decrease Font Size", "format.shrinkFont", json!({}), false);
+        widgets::small(ui, app, "grow", None, "Increase Font Size", crate::widgets::ButtonAction::new("format.growFont", json!({}), false));
+        widgets::small(ui, app, "shrink", None, "Decrease Font Size", crate::widgets::ButtonAction::new("format.shrinkFont", json!({}), false));
     });
 
     row(ui, app, &|ui, app| {
-        widgets::small(ui, app, "bold", None, "Bold", "format.bold", json!({}), flag("bold"));
-        widgets::small(ui, app, "italic", None, "Italic", "format.italic", json!({}), flag("italic"));
-        widgets::small(ui, app, "underline", None, "Underline", "format.underline", json!({}), flag("underline"));
-        widgets::small(ui, app, "strike", None, "Strikethrough", "format.strikethrough", json!({}), flag("strike"));
+        widgets::small(ui, app, "bold", None, "Bold", crate::widgets::ButtonAction::new("format.bold", json!({}), flag("bold")));
+        widgets::small(ui, app, "italic", None, "Italic", crate::widgets::ButtonAction::new("format.italic", json!({}), flag("italic")));
+        widgets::small(ui, app, "underline", None, "Underline", crate::widgets::ButtonAction::new("format.underline", json!({}), flag("underline")));
+        widgets::small(
+            ui,
+            app,
+            "strike",
+            None,
+            "Strikethrough",
+            crate::widgets::ButtonAction::new("format.strikethrough", json!({}), flag("strike")),
+        );
         sep(ui, t);
 
         let hl = app.canvas.last_highlight.clone();
         let (icon, sw, color) = highlight_button_appearance(&hl);
-        widgets::split(ui, app, icon, "Text Highlight Color", "format.highlight", json!({"color": color}), false, sw, |ui, app| {
-            highlight_menu(ui, app);
-        });
+        widgets::split(
+            ui,
+            app,
+            icon,
+            "Text Highlight Color",
+            crate::widgets::ButtonAction::new("format.highlight", json!({"color": color}), false),
+            sw,
+            |ui, app| {
+                highlight_menu(ui, app);
+            },
+        );
         let fc = app.canvas.last_font_color.clone();
         let sw = wordcraft_doc::Rgb::parse(&fc).map(crate::theme::c32);
-        widgets::split(ui, app, "fontcolor", "Font Color", "format.color", json!({"color": fc}), false, sw, |ui, app| {
-            font_color_menu(ui, app);
-        });
+        widgets::split(
+            ui,
+            app,
+            "fontcolor",
+            "Font Color",
+            crate::widgets::ButtonAction::new("format.color", json!({"color": fc}), false),
+            sw,
+            |ui, app| {
+                font_color_menu(ui, app);
+            },
+        );
         sep(ui, t);
 
         use wordcraft_doc::Align as A;
-        widgets::small(ui, app, "alignLeft", None, "Align Left", "para.alignLeft", json!({}), align == A::Left);
-        widgets::small(ui, app, "alignCenter", None, "Center", "para.alignCenter", json!({}), align == A::Center);
-        widgets::small(ui, app, "alignRight", None, "Align Right", "para.alignRight", json!({}), align == A::Right);
-        widgets::small(ui, app, "justify", None, "Justify", "para.justify", json!({}), align == A::Justify);
+        widgets::small(ui, app, "alignLeft", None, "Align Left", crate::widgets::ButtonAction::new("para.alignLeft", json!({}), align == A::Left));
+        widgets::small(ui, app, "alignCenter", None, "Center", crate::widgets::ButtonAction::new("para.alignCenter", json!({}), align == A::Center));
+        widgets::small(
+            ui,
+            app,
+            "alignRight",
+            None,
+            "Align Right",
+            crate::widgets::ButtonAction::new("para.alignRight", json!({}), align == A::Right),
+        );
+        widgets::small(ui, app, "justify", None, "Justify", crate::widgets::ButtonAction::new("para.justify", json!({}), align == A::Justify));
     });
 }
 

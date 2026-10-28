@@ -1,5 +1,5 @@
 use super::buttons::enabled;
-use super::*;
+use super::{Rect, Response, Ui, WordApp};
 
 /// Shortcut text for a command (`⌘B` on macOS, `Ctrl+B` elsewhere): its first key in effect,
 /// custom keys included (Customize Keyboard).

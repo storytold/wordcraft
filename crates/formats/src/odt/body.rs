@@ -5,7 +5,7 @@ use super::drawing;
 use super::limits::{MAX_ALT_BYTES, MAX_INFO_CHARS, MAX_OPEN_INSERTIONS, MAX_REGIONS, MAX_SECTIONS, MAX_SHAPES, MAX_XML_DEPTH};
 use super::styles::Styles;
 use super::xml::{Attrs, Ev, events, get, length, local};
-use super::*;
+use super::{Cell, FBlock, FTable, Fmt, HashMap, Inline, Kind, ListInfo, Para, RevMark, RevisionKind, SectionProps, SectionStart, make_img, model};
 
 /// An embedded ODF formula sub-document's `content.xml`, read for its `math:math` element
 /// (ODF 1.3 §10.4.3.2 wraps it in `office:document-content`/`office:body`/`office:math`, but
@@ -628,27 +628,11 @@ impl Body<'_> {
             };
             return;
         }
-        if self.in_tc {
-            if self.del.is_none() {
-                self.tracked_start(q, a);
-                return;
-            }
-            // Inside deleted content: only insertions (text inserted, then deleted) nest.
-            if matches!(local(q), "change-start" | "change-end") {
-                let regions = &self.regions;
-                if let Some(d) = &mut self.del {
-                    change_mark(regions, &mut d.ins, local(q) == "change-start", a);
-                }
-                return;
-            }
-            if matches!(local(q), "tracked-changes" | "changed-region" | "insertion" | "deletion" | "format-change" | "change") {
-                self.skip = 1;
-                return;
-            }
-            if local(q) == "change-info" && self.region.is_some() {
-                self.info_at = Some(self.depth);
-                return;
-            }
+        if self.tracked_context(q, a) {
+            return;
+        }
+        if self.start_inline(q, a) || self.start_drawing(q, a) {
+            return;
         }
         match local(q) {
             "tracked-changes" => {
@@ -679,81 +663,10 @@ impl Body<'_> {
             | "table-of-content-source" => {
                 self.skip = 1;
             }
-            // Rectangles, ellipses and custom shapes (ODF 1.3 §10.3) are read with their text.
-            "rect" | "circle" | "ellipse" | "custom-shape" if q.starts_with("draw:") => {
-                let kind = match local(q) {
-                    "rect" => Some(ShapeKind::Rectangle),
-                    "custom-shape" => None,
-                    _ => Some(ShapeKind::Ellipse),
-                };
-                let size = (get(a, "svg:width").and_then(length), get(a, "svg:height").and_then(length));
-                let float = self.styles.float(a, true);
-                let look = self.styles.look(get(a, "draw:style-name"), true);
-                self.open_shape(kind, size, float, look);
-            }
-            "enhanced-geometry" if q.starts_with("draw:") => {
-                let depth = self.depth;
-                if let Some(s) = self.shapes.last_mut()
-                    && s.at + 1 == depth
-                {
-                    s.kind = get(a, "draw:type").and_then(drawing::geometry_kind);
-                }
-            }
-            // A text frame (ODF 1.3 §10.4.3) is a text box with the frame's size and look.
-            "text-box" if q.starts_with("draw:") => match self.frame.take() {
-                Some(fr) => {
-                    let h = fr.h.or_else(|| get(a, "fo:min-height").and_then(length));
-                    let look = self.styles.look(fr.style.as_deref(), false);
-                    self.open_shape(Some(ShapeKind::Rectangle), (fr.w, h), fr.float, look);
-                }
-                None => self.skip = 1,
-            },
-            // Other drawing shapes, with their text, are left out. Groups are walked, so the
-            // pictures and shapes in them still are.
-            "line" | "polyline" | "polygon" | "regular-polygon" | "path" | "connector" | "caption" | "measure" if q.starts_with("draw:") => {
-                self.skip = 1;
-            }
-            "page-number" | "page-count" if q.starts_with("text:") => {
-                self.field = Some((if local(q) == "page-number" { "PAGE" } else { "NUMPAGES" }, String::new()));
-            }
             "p" | "h" if !self.in_desc => {
                 let h =
                     if local(q) == "h" { Some(get(a, "text:outline-level").and_then(|v| v.trim().parse::<u8>().ok()).unwrap_or(1)) } else { None };
                 self.start_para(get(a, "text:style-name"), h);
-            }
-            "span" => {
-                let base = self.cur_fmt();
-                let f = match get(a, "text:style-name") {
-                    Some(s) => self.styles.text_fmt(s, &base),
-                    None => base,
-                };
-                self.fmt.push(f);
-            }
-            "a" => {
-                let mut f = self.cur_fmt();
-                if let Some(h) = get(a, "xlink:href").filter(|h| !h.is_empty()) {
-                    f.link = model::kept_link(h);
-                }
-                if let Some(s) = get(a, "text:style-name") {
-                    f = self.styles.text_fmt(s, &f);
-                }
-                self.fmt.push(f);
-            }
-            "s" => {
-                let n = get(a, "text:c").and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(1).clamp(1, 1000);
-                self.push_text(&" ".repeat(n));
-            }
-            "tab" => self.push_text("\t"),
-            "line-break" => self.push_text("\n"),
-            "bookmark" | "bookmark-start" => {
-                if let Some(n) = get(a, "text:name") {
-                    if self.para.is_none() {
-                        self.start_para(None, None);
-                    }
-                    if let Some(p) = &mut self.para {
-                        p.inlines.push(Inline::Anchor(n.to_string()));
-                    }
-                }
             }
             "list" => {
                 self.end_para();
@@ -999,6 +912,119 @@ impl Body<'_> {
             }
         }
         self.para = Some(rest);
+    }
+
+    fn tracked_context(&mut self, q: &str, a: &Attrs) -> bool {
+        if !self.in_tc {
+            return false;
+        }
+        if self.del.is_none() {
+            self.tracked_start(q, a);
+            return true;
+        }
+        // Inside deleted content: only insertions (text inserted, then deleted) nest.
+        if matches!(local(q), "change-start" | "change-end") {
+            let regions = &self.regions;
+            if let Some(d) = &mut self.del {
+                change_mark(regions, &mut d.ins, local(q) == "change-start", a);
+            }
+            return true;
+        }
+        if matches!(local(q), "tracked-changes" | "changed-region" | "insertion" | "deletion" | "format-change" | "change") {
+            self.skip = 1;
+            return true;
+        }
+        if local(q) == "change-info" && self.region.is_some() {
+            self.info_at = Some(self.depth);
+            return true;
+        }
+        false
+    }
+
+    /// A drawing shape or text frame starting (ODF 1.3 §10.3, §10.4.3); `false` for any other element.
+    fn start_drawing(&mut self, q: &str, a: &Attrs) -> bool {
+        if !q.starts_with("draw:") {
+            return false;
+        }
+        match local(q) {
+            // Rectangles, ellipses and custom shapes (ODF 1.3 §10.3) are read with their text.
+            "rect" | "circle" | "ellipse" | "custom-shape" => {
+                let kind = match local(q) {
+                    "rect" => Some(ShapeKind::Rectangle),
+                    "custom-shape" => None,
+                    _ => Some(ShapeKind::Ellipse),
+                };
+                let size = (get(a, "svg:width").and_then(length), get(a, "svg:height").and_then(length));
+                let float = self.styles.float(a, true);
+                let look = self.styles.look(get(a, "draw:style-name"), true);
+                self.open_shape(kind, size, float, look);
+            }
+            "enhanced-geometry" => {
+                let depth = self.depth;
+                if let Some(s) = self.shapes.last_mut()
+                    && s.at + 1 == depth
+                {
+                    s.kind = get(a, "draw:type").and_then(drawing::geometry_kind);
+                }
+            }
+            // A text frame (ODF 1.3 §10.4.3) is a text box with the frame's size and look.
+            "text-box" => match self.frame.take() {
+                Some(fr) => {
+                    let h = fr.h.or_else(|| get(a, "fo:min-height").and_then(length));
+                    let look = self.styles.look(fr.style.as_deref(), false);
+                    self.open_shape(Some(ShapeKind::Rectangle), (fr.w, h), fr.float, look);
+                }
+                None => self.skip = 1,
+            },
+            // Other drawing shapes, with their text, are left out. Groups are walked, so the
+            // pictures and shapes in them still are.
+            "line" | "polyline" | "polygon" | "regular-polygon" | "path" | "connector" | "caption" | "measure" => {
+                self.skip = 1;
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    fn start_inline(&mut self, q: &str, a: &Attrs) -> bool {
+        match local(q) {
+            "span" => {
+                let base = self.cur_fmt();
+                let fmt = get(a, "text:style-name").map_or_else(|| base.clone(), |s| self.styles.text_fmt(s, &base));
+                self.fmt.push(fmt);
+            }
+            "a" => {
+                let mut fmt = self.cur_fmt();
+                if let Some(href) = get(a, "xlink:href").filter(|href| !href.is_empty()) {
+                    fmt.link = model::kept_link(href);
+                }
+                if let Some(style) = get(a, "text:style-name") {
+                    fmt = self.styles.text_fmt(style, &fmt);
+                }
+                self.fmt.push(fmt);
+            }
+            "s" => {
+                let count = get(a, "text:c").and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(1).clamp(1, 1000);
+                self.push_text(&" ".repeat(count));
+            }
+            "tab" => self.push_text("\t"),
+            "line-break" => self.push_text("\n"),
+            "page-number" | "page-count" if q.starts_with("text:") => {
+                self.field = Some((if local(q) == "page-number" { "PAGE" } else { "NUMPAGES" }, String::new()));
+            }
+            "bookmark" | "bookmark-start" => {
+                if let Some(name) = get(a, "text:name") {
+                    if self.para.is_none() {
+                        self.start_para(None, None);
+                    }
+                    if let Some(p) = &mut self.para {
+                        p.inlines.push(Inline::Anchor(name.to_string()));
+                    }
+                }
+            }
+            _ => return false,
+        }
+        true
     }
 
     fn end(&mut self, q: &str) {
