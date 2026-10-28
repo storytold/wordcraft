@@ -1,13 +1,15 @@
 //! Thai character name constants, type-class flags, and the per-character type table.
 //!
-//! This is a clean-room Rust translation of the definitions in `THAIFUNC.H` and the
-//! `TBL_CHTYPE` table from `THAIFUNC.CPP`.
+//! This is a clean-room Rust translation of the definitions in `THAI.H` and the
+//! `TBL_CHTYPE` table from `THAI.CPP` (Algorithms Co., Ltd., 2001).
+//! The original used TIS-620 byte values (0xA1–0xFB); here every character is its
+//! Unicode codepoint (U+0E01–U+0E5B).
 //!
 //! ## Character type flags
 //! Each Thai Unicode character carries a bitmask of [`TCT_*`] flags that describe how
 //! it participates in layout, rendering, and input-sequence checking.  Call
 //! [`thai_char_type`] to obtain the flags for any codepoint.  The flags correspond
-//! directly to the `TCT_*` bit-field described in `THAIFUNC.H`:
+//! directly to the `TCT_*` bit-field described in `THAI.H`:
 //!
 //! ```text
 //! Bit  Symbol              Meaning
@@ -44,7 +46,7 @@
 
 // ── Character name constants ───────────────────────────────────────────────────────────────
 //
-// Thai glyphs are shown in comments for quick visual reference.
+// Names follow THAI.H.  Thai glyphs are shown in comments for quick visual reference.
 
 // Consonants — normal (U+0E01–U+0E2E)
 pub const KOKAI: char = '\u{0E01}'; // ก
@@ -151,7 +153,7 @@ pub const KHOMUT: char = '\u{0E5B}'; // ๛  end of chapter
 
 // ── Type-class flags (TCT_*) ───────────────────────────────────────────────────────────────
 //
-// Bit layout:
+// Bit layout (from THAI.H):
 //   fedcba9876543210
 //   ||||||||||||||||
 //   ||||||||||||||||+── TCT_CONSONANCE   0x0001  consonant
@@ -226,6 +228,7 @@ pub const TCT_ENGDIGIT: u16 = TCT_ENGLISH | TCT_DIGIT;
 
 // ── Static type table for the Thai Unicode block (U+0E00–U+0E5F) ──────────────────────────
 //
+// Translated from `TBL_CHTYPE[0xA0..=0xFF]` in THAI.CPP.
 // Index = codepoint − U+0E00 (so KOKAI U+0E01 is at index 1).
 //
 // NOTE: The original TBL_CHTYPE classified PHINTHU (U+0E3A, index 58) as
@@ -238,7 +241,7 @@ pub const TCT_ENGDIGIT: u16 = TCT_ENGLISH | TCT_DIGIT;
 #[allow(clippy::doc_markdown)]
 static THAI_CHAR_TYPE: [u16; 96] = [
     // ── U+0E00–0E0F ────────────────────────────────────────────────────────────
-    TCT_BREAK,         // U+0E00
+    TCT_BREAK,         // U+0E00  (unassigned; TIS-620 0xA0 non-breaking space)
     TCT_THAICONS,      // U+0E01  KOKAI ก
     TCT_THAICONS,      // U+0E02  KHOKHAI ข
     TCT_THAICONS,      // U+0E03  KHOKHUAT ฃ
