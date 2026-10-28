@@ -961,14 +961,11 @@ fn default_app_button(app: &mut WordApp, ui: &mut Ui) {
 fn field_shading_picker(app: &mut WordApp, ui: &mut Ui) {
     use wordcraft_engine::FieldShading;
     ui.horizontal(|ui| {
-        let label = ui.label(tl!("Field shading:"));
+        ui.label(tl!("Field shading:"));
         let mut sel = app.session.view.field_shading;
-        let combo = egui::ComboBox::from_id_salt("field_shading").selected_text(tl!(sel.label())).width(220.0).show_ui(ui, |ui| {
-            for shading in FieldShading::ALL {
-                ui.selectable_value(&mut sel, shading, tl!(shading.label()));
-            }
-        });
-        combo.response.labelled_by(label.id);
+        for shading in FieldShading::ALL {
+            ui.selectable_value(&mut sel, shading, tl!(shading.label()));
+        }
         if sel != app.session.view.field_shading {
             let _ = app.run("view.fieldShading", json!({ "value": sel.name() }));
         }
