@@ -292,7 +292,7 @@ fn equations_survive_a_round_trip() {
     d.body = vec![wordcraft_doc::para_block(p)];
     let tex = export(&d);
     assert!(tex.contains("$\\pi r^2$") && tex.contains("\\usepackage{amsmath}"), "{tex}");
-    let back = import(tex.as_bytes());
+    let back = import(tex.as_bytes()).unwrap();
     let wordcraft_doc::Block::Para(bp) = &*back.body[0] else { panic!() };
     assert!(
         bp.objects.iter().any(|o| matches!(o, wordcraft_doc::para::InlineObject::Equation { linear, .. } if linear == "π r^2")),
@@ -309,7 +309,7 @@ fn leading_brackets_stay_text() {
     // `\item [x]` and `\\ [1]` would read the bracket as an optional argument.
     assert_eq!(escape_text("[x] a\n [1] b [c]"), "{[}x] a\\\\\n {[}1] b [c]");
     let doc = crate::markdown::import("- [x] done");
-    let back = import(export(&doc).as_bytes());
+    let back = import(export(&doc).as_bytes()).unwrap();
     assert_eq!(back.plain_text(Default::default()), "[x] done");
 }
 
@@ -318,7 +318,7 @@ fn special_characters_round_trip() {
     let text = "50% of $5 & #1_a {b} ~c^ \\d <e> |f| -- ``g'' tab\there";
     let d = Document::from_text(text);
     let tex = export(&d);
-    let back = import(tex.as_bytes());
+    let back = import(tex.as_bytes()).unwrap();
     assert_eq!(back.plain_text(Default::default()).trim(), text.replace('\t', "\u{2003}"), "{tex}");
 }
 
@@ -399,7 +399,7 @@ fn table_borders_and_borderless_round_trip() {
     doc.body = vec![Arc::new(Block::Table(t_borderless))];
     let tex = export(&doc);
     assert!(!tex.contains("\\hline"));
-    let back = import(tex.as_bytes());
+    let back = import(tex.as_bytes()).unwrap();
     let Some(Block::Table(bt)) = back.body.first().map(|b| &**b) else { panic!() };
     assert!(bt.props.style.is_none(), "imported table should remain borderless");
 
@@ -415,7 +415,7 @@ fn table_borders_and_borderless_round_trip() {
     doc_bordered.body = vec![Arc::new(Block::Table(t_bordered))];
     let tex_bordered = export(&doc_bordered);
     assert!(tex_bordered.contains("\\hline"));
-    let back_bordered = import(tex_bordered.as_bytes());
+    let back_bordered = import(tex_bordered.as_bytes()).unwrap();
     let Some(Block::Table(bt_bordered)) = back_bordered.body.first().map(|b| &**b) else { panic!() };
     assert!(bt_bordered.props.style.is_some(), "imported table should remain bordered");
 }
@@ -448,4 +448,22 @@ fn nested_multicolumn_wrappers_are_bounded() {
     let Some(FBlock::Table(t)) = f.blocks.first() else { panic!("{:?}", f.blocks) };
     assert_eq!((t.rows[0][0].colspan, t.rows[0][0].rowspan), (2, 2));
     assert_eq!(t.rows[0][0].text(), "Both");
+}
+
+/// #1341: a source at the import limit opens whole; one byte more is an error naming the
+/// limit, never a silently cut prefix.
+#[test]
+fn source_over_the_limit_is_an_error_not_a_prefix() {
+    let at = format!("{}ENDMARK", "a".repeat(57));
+    assert_eq!(at.len(), 64);
+    let d = import_limited(at.as_bytes(), 64).unwrap();
+    assert!(d.plain_text(Default::default()).ends_with("ENDMARK"), "{:?}", d.plain_text(Default::default()));
+    let over = format!("{at}Z");
+    let err = import_limited(over.as_bytes(), 64).unwrap_err();
+    assert!(err.contains("64 bytes"), "{err}");
+    // The real limit, named in MiB.
+    let big = vec![b'a'; MAX_SOURCE + 1];
+    let err = import(&big).unwrap_err();
+    assert!(err.contains("32 MiB"), "{err}");
+    assert!(crate::import("tex", &big).is_some_and(|r| r.is_err()));
 }

@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::collections::VecDeque;
 
 use super::cache::{LayoutCache, Totals, env_hash, hash_of};
@@ -444,16 +445,29 @@ fn evict_unused(cache: &mut LayoutCache) {
     }
 }
 
-fn index_lines(pages: &[Page]) -> HashMap<(StoryRef, Path), Vec<(usize, usize)>> {
+/// The index of placed lines, and the paragraphs (body, header and footer) cut at the line limit.
+fn index_lines(pages: &[Page]) -> (HashMap<(StoryRef, Path), Vec<(usize, usize)>>, HashSet<(StoryRef, Path)>) {
     let mut index: HashMap<(StoryRef, Path), Vec<(usize, usize)>> = HashMap::new();
+    let mut truncated: HashSet<(StoryRef, Path)> = HashSet::new();
     for (pi, p) in pages.iter().enumerate() {
         for (ii, it) in p.items.iter().enumerate() {
-            if let Placed::Lines { story, path, .. } = it {
+            if let Placed::Lines { story, path, para, .. } = it {
                 index.entry((*story, path.clone())).or_default().push((pi, ii));
+                if para.truncated {
+                    truncated.insert((*story, path.clone()));
+                }
+            }
+        }
+        // Header and footer paragraphs are cut at the limit too; they aren't in the body index.
+        for it in p.header.iter().chain(p.footer.iter()) {
+            if let Placed::Lines { story, path, para, .. } = it
+                && para.truncated
+            {
+                truncated.insert((*story, path.clone()));
             }
         }
     }
-    index
+    (index, truncated)
 }
 
 /// One layout pass, numbering footnotes restarted on each page by `note_pages` ([`note_info`]),
@@ -537,7 +551,19 @@ pub(crate) fn layout_pass(
         return Pass::Again(found);
     }
     evict_unused(ctx.cache);
-    let mut lay = DocLayout { index: index_lines(&pages), pages, ms: 0.0, text_boxes: 0 };
+    let (index, truncated) = index_lines(&pages);
+    let warned = truncated.iter().fold(truncated.len() as u64, |acc, (story, path)| {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (story, path, doc.para(*story, path).map(|p| p.rev)).hash(&mut h);
+        acc.wrapping_add(h.finish())
+    });
+    if !truncated.is_empty() && warned != ctx.cache.line_limit_warned {
+        ctx.cache.line_limit_warnings = ctx.cache.line_limit_warnings.saturating_add(1);
+        log::warn!("{} paragraph(s) cut at {} lines: the rest of their text isn't laid out", truncated.len(), crate::para::MAX_PARA_LINES);
+    }
+    ctx.cache.line_limit_warned = warned;
+    let mut lay = DocLayout { index, pages, ms: 0.0, text_boxes: 0, truncated_paragraphs: truncated.len() };
     if opts.comment_balloons && !mode.web {
         balloons::add(&mut ctx, &mut lay);
     }

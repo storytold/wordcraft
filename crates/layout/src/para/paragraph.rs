@@ -602,6 +602,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         ptabs,
         left_out: Vec::new(),
         enclosures,
+        truncated: false,
         auto_space,
     };
     let auto = env.doc.settings.auto_hyphenation && !pl.rp.suppress_hyphens;

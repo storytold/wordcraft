@@ -10533,6 +10533,23 @@ fn vertical_align_command_sets_justified() {
     }
 }
 
+/// #1341: File › Info and the layout summary report how many paragraphs the layout cut at its
+/// line limit, through a small test limit (the `test-limits` feature of `wordcraft-layout`).
+#[test]
+fn info_reports_paragraphs_cut_at_the_line_limit() {
+    let mut d = wordcraft_doc::Document::new();
+    let cut = wordcraft_doc::Paragraph::with_text("L1\nL2\nL3\nTailEnd", Default::default());
+    d.body = vec![wordcraft_doc::para_block(cut), wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Short", Default::default()))];
+    let mut a = Session::new(d);
+    let (info, summary) =
+        wordcraft_layout::para::with_line_limit(3, || (run(&mut a, "file.info", json!({})), run(&mut a, "document.layout", json!({}))));
+    assert_eq!(info["truncatedParagraphs"], 1, "{info}");
+    assert_eq!(summary["truncatedParagraphs"], 1);
+    // Under the production limit nothing is cut.
+    let mut b = Session::new(wordcraft_doc::Document::from_text("L1\nL2\nL3\nTailEnd"));
+    assert_eq!(run(&mut b, "file.info", json!({}))["truncatedParagraphs"], 0);
+}
+
 /// #1876 review: only Web Layout wraps to the window's `web_width`. Draft and Outline keep a fixed
 /// 800 pt column, also after a visit to a wide Web Layout, and the window width is never serialized.
 #[test]

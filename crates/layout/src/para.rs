@@ -41,6 +41,34 @@ pub use model::{CellText, ClKind, Cluster, Enclosed, Glyph, Label, LabelRun, Lin
 pub use paragraph::layout_para;
 #[cfg(test)]
 pub(crate) use paragraph::word_widths;
+/// Most lines one paragraph lays out: a guard against hangs on hostile input. A longer
+/// paragraph is cut there ([`ParaLayout::truncated`]) and counted in
+/// [`crate::DocLayout::truncated_paragraphs`].
+pub const MAX_PARA_LINES: usize = 200_000;
+
+#[cfg(any(test, feature = "test-limits"))]
+thread_local! {
+    static LINE_LIMIT: std::cell::Cell<usize> = const { std::cell::Cell::new(MAX_PARA_LINES) };
+}
+
+/// The line limit in force ([`MAX_PARA_LINES`], or a test's smaller one).
+pub(crate) fn line_limit() -> usize {
+    #[cfg(any(test, feature = "test-limits"))]
+    return LINE_LIMIT.with(std::cell::Cell::get);
+    #[cfg(not(any(test, feature = "test-limits")))]
+    MAX_PARA_LINES
+}
+
+/// Run `f` with a smaller line limit (tests; other crates' tests through the `test-limits`
+/// feature).
+#[cfg(any(test, feature = "test-limits"))]
+pub fn with_line_limit<T>(limit: usize, f: impl FnOnce() -> T) -> T {
+    let old = LINE_LIMIT.with(|c| c.replace(limit));
+    let r = f();
+    LINE_LIMIT.with(|c| c.set(old));
+    r
+}
+
 pub use proof::{ProofRun, is_list_item, paragraph_issues, proof_runs, proof_text};
 
 /// A laid-out paragraph.
@@ -80,6 +108,8 @@ pub struct ParaLayout {
     pub rubies: Vec<RubyLayout>,
     /// Display equations (on lines of their own): cluster index and justification.
     pub displays: Vec<(usize, wordcraft_doc::math::MathJc)>,
+    /// The paragraph reached [`MAX_PARA_LINES`]: text after its last line isn't laid out.
+    pub truncated: bool,
     /// Positional tabs (laid out as tab clusters): cluster index, alignment, base and leader.
     pub ptabs: Vec<(usize, PTabAlign, PTabBase, TabLeader)>,
     /// Byte ranges of the text laid out as nothing ([`left_out`]): hidden text that is not shown,

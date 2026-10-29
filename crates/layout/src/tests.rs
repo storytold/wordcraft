@@ -10,6 +10,7 @@ mod budget;
 mod complex;
 mod grid;
 mod ligature;
+mod line_limit;
 pub(crate) mod linear;
 mod nbsp;
 mod numeral;

@@ -1,3 +1,5 @@
+use super::merge::finish_within;
+use super::recipients::{MAX_RECORDS, header_split, table_from_rows};
 use super::*;
 
 #[test]
@@ -687,4 +689,89 @@ fn merge_uses_only_filtered_records_in_sort_order() {
     assert!(s.merge.rows.is_empty());
     assert!(s.run("mailings.finish", &json!({})).is_err());
     assert!(s.run("mailings.editRecipients", &json!({})).is_ok());
+}
+
+/// #1341: Finish & Merge stops at its block budget, but says so: the result separates the
+/// records requested, merged, skipped by SKIPIF and left out over the limit.
+#[test]
+fn finish_reports_records_left_out_over_the_block_limit() {
+    let run = |names: &[&str], rule: Option<Value>| {
+        let mut s = Session::new(Document::new());
+        let rows: Vec<Value> = names.iter().map(|n| json!({"Name": n, "Skip": if n.starts_with("Skip") { "yes" } else { "no" }})).collect();
+        s.run("mailings.recipients", &json!({"rows": rows})).unwrap();
+        s.run("mailings.start", &json!({"kind": "directory"})).unwrap();
+        if let Some(r) = rule {
+            s.run("mailings.rules", &r).unwrap();
+        }
+        s.run("mailings.insertField", &json!({"field": "Name"})).unwrap();
+        let r = finish_within(&mut s, &json!({}), 3).unwrap();
+        (r, s.doc.plain_text(StoryRef::Body), s.status.clone())
+    };
+    // At the limit: every record merges.
+    let (r, text, _) = run(&["Alpha", "Beta", "LastFits"], None);
+    assert_eq!(r, json!({"records": 3, "requested": 3, "skipped": 0, "omitted": 0}));
+    assert_eq!(text, "Alpha\nBeta\nLastFits");
+    // One more: the fourth is left out, and the result and status bar say so.
+    let (r, text, status) = run(&["Alpha", "Beta", "LastFits", "OverLimit"], None);
+    assert_eq!((r["records"].clone(), r["requested"].clone(), r["omitted"].clone(), r["limit"].clone()), (json!(3), json!(4), json!(1), json!(3)));
+    assert!(r["warning"].as_str().is_some_and(|w| w.contains('1')), "{r}");
+    assert_eq!(text, "Alpha\nBeta\nLastFits");
+    assert!(status.contains("left out"), "{status}");
+    // Records SKIPIF drops are counted apart from those over the limit.
+    let skip = json!({"rule": "SKIPIF", "field": "Skip", "value": "yes"});
+    let (r, text, _) = run(&["Alpha", "SkipMe", "Beta"], Some(skip));
+    assert_eq!(r, json!({"records": 2, "requested": 3, "skipped": 1, "omitted": 0}));
+    assert_eq!(text, "Alpha\nBeta");
+}
+
+/// #1341 review: in per-letter mode the paragraph that carries a section break counts toward the
+/// block limit, so the merged body never passes it without saying records were left out.
+#[test]
+fn finish_counts_the_section_separator_toward_the_block_limit() {
+    let mut s = Session::new(Document::new());
+    s.run("mailings.recipients", &json!({"rows": [{"Name": "Alpha"}, {"Name": "Beta"}]})).unwrap();
+    s.run("insert.header", &json!({"text": "To: "})).unwrap();
+    s.run("caret.docEnd", &json!({})).unwrap();
+    s.run("mailings.insertField", &json!({"field": "Name"})).unwrap();
+    s.run("insert.closeHeader", &json!({})).unwrap();
+    s.run("text.insert", &json!({"text": "Body"})).unwrap();
+    s.run("insert.table", &json!({"rows": 1, "cols": 1})).unwrap();
+    s.doc.body.pop();
+    // The letter ends in a table, so the next letter needs a paragraph to carry the section.
+    assert!(!matches!(s.doc.body.last().map(|b| &**b), Some(Block::Para(_))));
+    let one = s.doc.body.len();
+    let r = finish_within(&mut s, &json!({}), one * 2).unwrap();
+    assert_eq!((r["records"].clone(), r["omitted"].clone()), (json!(1), json!(1)), "{r}");
+    assert!(s.doc.body.len() <= one * 2, "{}", s.doc.body.len());
+}
+
+/// #1341: a recipient list longer than the record limit is refused with the limit named,
+/// never cut silently; one at the limit loads whole.
+#[test]
+fn recipient_lists_over_the_record_limit_are_refused() {
+    let table = |n: usize| {
+        let mut all = vec![vec!["Name".to_string()]];
+        all.extend((1..=n).map(|i| vec![if i == n { "LastRecord".to_string() } else { format!("R{i}") }]));
+        all
+    };
+    let (_, rows) = header_split(table(3), true, 3).unwrap();
+    assert_eq!(rows.last(), Some(&vec!["LastRecord".to_string()]));
+    let err = header_split(table(4), true, 3).unwrap_err().to_string();
+    assert!(err.contains("3 records"), "{err}");
+    // Without a header row, every row counts.
+    assert!(header_split(table(2), false, 3).is_ok());
+    assert!(header_split(table(3), false, 3).is_err());
+    // Typed rows.
+    let rows = |n: usize| (0..n).map(|i| json!({"Name": format!("R{i}")})).collect::<Vec<_>>();
+    assert_eq!(table_from_rows(None, &rows(3), 3).unwrap().1.len(), 3);
+    assert!(table_from_rows(None, &rows(4), 3).unwrap_err().to_string().contains("3 records"));
+    // The real limit, through the command: a CSV one record over is refused and the list
+    // already loaded stays.
+    let mut s = Session::new(Document::new());
+    s.run("mailings.recipients", &json!({"csv": "Name\nAda"})).unwrap();
+    let csv = |n: usize| format!("Name\n{}", (0..n).map(|i| format!("R{i}\n")).collect::<String>());
+    let err = s.run("mailings.recipients", &json!({"csv": csv(MAX_RECORDS + 1)})).unwrap_err().to_string();
+    assert!(err.contains("100000"), "{err}");
+    assert_eq!(s.merge.rows.len(), 1);
+    assert_eq!(s.run("mailings.recipients", &json!({"csv": csv(MAX_RECORDS)})).unwrap()["records"], MAX_RECORDS);
 }

@@ -34,7 +34,7 @@ pub fn import(ext: &str, bytes: &[u8]) -> Option<Result<Document, String>> {
         "html" | "htm" | "xhtml" => Ok(html::import(&html::decode(bytes))),
         "rtf" => rtf::import(bytes),
         "odt" => odt::import(bytes),
-        "tex" | "latex" | "ltx" => Ok(latex::import(bytes)),
+        "tex" | "latex" | "ltx" => latex::import(bytes),
         _ => return None,
     };
     Some(r.map(|mut d| {

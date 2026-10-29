@@ -303,6 +303,8 @@ pub struct DocLayout {
     pub ms: f64,
     /// Text box stories laid out (each time a box's text was).
     pub text_boxes: usize,
+    /// Paragraphs cut at [`para::MAX_PARA_LINES`]: their text past the limit isn't laid out.
+    pub truncated_paragraphs: usize,
 }
 
 /// Lay out the whole document.

@@ -1,4 +1,5 @@
-/// Largest `.tex` source imported (bytes); longer input is cut off.
+/// Largest `.tex` source imported (bytes); longer input is refused (`import` returns an
+/// error naming the limit) rather than cut off.
 pub const MAX_SOURCE: usize = 32 << 20;
 
 /// Nesting limit for groups, environments and arguments (hostile input).
