@@ -15,7 +15,7 @@ fn read_formula(xml: &[u8]) -> Option<(String, bool)> {
     let mut math: Option<El> = None;
     let mut over = 0usize;
     let mut count = 0usize;
-    events(xml, |ev| {
+    let parsed = events(xml, |ev| {
         if math.is_some() {
             return;
         }
@@ -57,6 +57,11 @@ fn read_formula(xml: &[u8]) -> Option<(String, bool)> {
             }
         }
     });
+    // A malformed tail after the complete MathML subtree does not invalidate that
+    // subtree. Errors before we have captured it still make the formula unusable.
+    if parsed.is_err() && math.is_none() {
+        return None;
+    }
     crate::mathml::read(&math?)
 }
 

@@ -59,7 +59,7 @@ pub(super) struct Parts {
 /// Read each visible header and footer of the master pages in `pages`, and name it on its master
 /// page's section as part id 1, 2, … in order, so the sections the body starts carry them.
 /// [`add`] puts those parts into the document.
-pub(super) fn read(xml: &[u8], styles: &Styles, pages: &mut Pages, fetch: &mut dyn FnMut(&str) -> Option<Vec<u8>>) -> Parts {
+pub(super) fn read(xml: &[u8], styles: &Styles, pages: &mut Pages, fetch: &mut dyn FnMut(&str) -> Option<Vec<u8>>) -> Result<Parts, String> {
     let mut found: Vec<(String, Slot, Vec<Ev>)> = Vec::new();
     let mut master: Option<String> = None;
     // The slot being read, its nesting depth and whether it is kept.
@@ -103,7 +103,7 @@ pub(super) fn read(xml: &[u8], styles: &Styles, pages: &mut Pages, fetch: &mut d
             }
             _ => {}
         }
-    });
+    })?;
     let none = Pages::default();
     let mut out = Parts::default();
     for (name, kind, evs) in found {
@@ -142,7 +142,7 @@ pub(super) fn read(xml: &[u8], styles: &Styles, pages: &mut Pages, fetch: &mut d
     if let Some(first) = pages.first_name.as_ref().and_then(|n| pages.masters.get(n)) {
         pages.first = Some(first.clone());
     }
-    out
+    Ok(out)
 }
 
 /// Put the parts [`read`] found into `doc` under the ids its sections name. `doc` comes from

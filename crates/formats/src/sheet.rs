@@ -101,7 +101,7 @@ pub fn detect(bytes: &[u8]) -> Option<Kind> {
         return None;
     }
     let mut pkg = Package::open(bytes).ok()?;
-    pkg.kind()
+    pkg.kind().ok().flatten()
 }
 
 /// The sheet names, in workbook order.
@@ -110,7 +110,7 @@ pub fn sheet_names(bytes: &[u8]) -> Result<Vec<String>, String> {
         return xls::sheet_names(bytes);
     }
     let mut pkg = Package::open(bytes)?;
-    match pkg.kind().ok_or("not an Excel or OpenDocument spreadsheet")? {
+    match pkg.kind()?.ok_or("not an Excel or OpenDocument spreadsheet")? {
         Kind::Xlsx => Ok(xlsx_sheets(&mut pkg)?.into_iter().map(|s| s.name).collect()),
         Kind::Ods => Ok(ods_read(&pkg.read("content.xml")?, None)?.0),
         Kind::Xls => xls::sheet_names(bytes),
@@ -124,7 +124,7 @@ pub fn read_rows(bytes: &[u8], pick: Pick<'_>) -> Result<(Vec<String>, Vec<Vec<S
         return xls::read_rows(bytes, pick);
     }
     let mut pkg = Package::open(bytes)?;
-    match pkg.kind().ok_or("not an Excel or OpenDocument spreadsheet")? {
+    match pkg.kind()?.ok_or("not an Excel or OpenDocument spreadsheet")? {
         Kind::Xlsx => {
             let sheets = xlsx_sheets(&mut pkg)?;
             let names: Vec<String> = sheets.iter().map(|s| s.name.clone()).collect();
@@ -225,9 +225,9 @@ impl<'a> Package<'a> {
         Ok(out)
     }
 
-    fn kind(&mut self) -> Option<Kind> {
-        if self.workbook_path().is_some() {
-            return Some(Kind::Xlsx);
+    fn kind(&mut self) -> Result<Option<Kind>, String> {
+        if self.workbook_path()?.is_some() {
+            return Ok(Some(Kind::Xlsx));
         }
         if self.has("content.xml") {
             let ods = match self.read("mimetype") {
@@ -236,23 +236,23 @@ impl<'a> Package<'a> {
                 Err(_) => !self.has("word/document.xml"),
             };
             if ods {
-                return Some(Kind::Ods);
+                return Ok(Some(Kind::Ods));
             }
         }
-        None
+        Ok(None)
     }
 
     /// The SpreadsheetML workbook part: the package's main part when it is a workbook,
     /// otherwise `xl/workbook.xml` when present.
-    fn workbook_path(&mut self) -> Option<String> {
+    fn workbook_path(&mut self) -> Result<Option<String>, String> {
         if let Ok(rels) = self.read("_rels/.rels") {
-            for r in relationships(&rels, "") {
+            for r in relationships(&rels, "")? {
                 if r.kind.ends_with("/officeDocument") && r.target.to_ascii_lowercase().contains("workbook") && self.has(&r.target) {
-                    return Some(r.target);
+                    return Ok(Some(r.target));
                 }
             }
         }
-        self.has("xl/workbook.xml").then(|| "xl/workbook.xml".to_string())
+        Ok(self.has("xl/workbook.xml").then(|| "xl/workbook.xml".to_string()))
     }
 }
 
@@ -263,11 +263,11 @@ impl<'a> Package<'a> {
 /// [`MAX_XML_DEPTH`] (and their text) are skipped.
 enum Ev<'e> {
     Start(&'e BytesStart<'e>),
-    End(Vec<u8>),
+    End(String),
     Text(String),
 }
 
-fn walk(xml: &[u8], mut f: impl FnMut(Ev<'_>)) {
+fn walk(xml: &[u8], mut f: impl FnMut(Ev<'_>)) -> Result<(), String> {
     let mut r = quick_xml::Reader::from_reader(xml);
     let cfg = r.config_mut();
     cfg.trim_text(false);
@@ -287,39 +287,43 @@ fn walk(xml: &[u8], mut f: impl FnMut(Ev<'_>)) {
             Ok(Event::Empty(e)) => {
                 if depth < MAX_XML_DEPTH {
                     f(Ev::Start(&e));
-                    f(Ev::End(e.local_name().as_ref().to_vec()));
+                    f(Ev::End(e.local_name().as_ref().to_owned()));
                 }
             }
             Ok(Event::End(e)) => {
                 if depth <= MAX_XML_DEPTH {
-                    f(Ev::End(e.local_name().as_ref().to_vec()));
+                    f(Ev::End(e.local_name().as_ref().to_owned()));
                 }
                 depth = depth.saturating_sub(1);
             }
-            Ok(Event::Text(t)) if depth <= MAX_XML_DEPTH => f(Ev::Text(t.decode().map(|c| c.into_owned()).unwrap_or_default())),
-            Ok(Event::CData(t)) if depth <= MAX_XML_DEPTH => f(Ev::Text(String::from_utf8_lossy(&t).into_owned())),
+            Ok(Event::Text(t)) if depth <= MAX_XML_DEPTH => f(Ev::Text((*t).to_owned())),
+            Ok(Event::CData(t)) if depth <= MAX_XML_DEPTH => f(Ev::Text((*t).to_owned())),
             Ok(Event::GeneralRef(g)) if depth <= MAX_XML_DEPTH => {
-                let s = match &g[..] {
-                    b"amp" => "&".to_string(),
-                    b"lt" => "<".to_string(),
-                    b"gt" => ">".to_string(),
-                    b"quot" => "\"".to_string(),
-                    b"apos" => "'".to_string(),
+                let s = match &*g {
+                    "amp" => "&".to_string(),
+                    "lt" => "<".to_string(),
+                    "gt" => ">".to_string(),
+                    "quot" => "\"".to_string(),
+                    "apos" => "'".to_string(),
                     _ => g.resolve_char_ref().ok().flatten().map(|c| c.to_string()).unwrap_or_default(),
                 };
                 f(Ev::Text(s));
             }
-            Ok(Event::Eof) | Err(_) => break,
+            Ok(Event::Eof) => return Ok(()),
+            Err(e) => return Err(format!("spreadsheet XML: {e}")),
             Ok(_) => {}
         }
     }
 }
 
 /// An attribute's value by local name.
-fn attr(e: &BytesStart<'_>, name: &[u8]) -> Option<String> {
-    e.attributes().with_checks(false).flatten().take(64).find(|a| a.key.local_name().as_ref() == name).map(|a| {
-        a.normalized_value(XmlVersion::Explicit1_0).map(|c| c.into_owned()).unwrap_or_else(|_| String::from_utf8_lossy(&a.value).into_owned())
-    })
+fn attr(e: &BytesStart<'_>, name: &str) -> Option<String> {
+    e.attributes()
+        .with_checks(false)
+        .flatten()
+        .take(64)
+        .find(|a| a.key.local_name().as_ref() == name)
+        .map(|a| a.normalized_value(XmlVersion::Explicit1_0).map(|c| c.into_owned()).unwrap_or_else(|_| a.value.to_string()))
 }
 
 /// `s` + `t`, keeping `s` at most [`MAX_CELL_CHARS`] characters.
@@ -404,6 +408,11 @@ mod tests {
     #[test]
     fn negative_zero_formats_as_zero() {
         assert_eq!(number(-0.0), "0");
+    }
+
+    #[test]
+    fn malformed_spreadsheet_xml_is_an_error() {
+        assert!(walk(b"<root attr='unterminated", |_| {}).is_err());
     }
 
     fn zip(entries: &[(&str, &str)]) -> Vec<u8> {

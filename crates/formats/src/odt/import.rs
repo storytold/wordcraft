@@ -59,7 +59,7 @@ impl Pictures {
     }
 }
 
-pub(super) fn read_meta(xml: &[u8]) -> Meta {
+pub(super) fn read_meta(xml: &[u8]) -> Result<Meta, String> {
     let mut m = Meta::default();
     let mut cur: Option<String> = None;
     let mut keywords: Vec<String> = Vec::new();
@@ -79,7 +79,7 @@ pub(super) fn read_meta(xml: &[u8]) -> Meta {
             Some("dc:date") => mod_date.push_str(&t),
             _ => {}
         },
-    });
+    })?;
     if m.author.is_empty() {
         m.author = creator;
     }
@@ -100,7 +100,7 @@ pub(super) fn read_meta(xml: &[u8]) -> Meta {
     } else {
         m.created.clear();
     }
-    m
+    Ok(m)
 }
 
 /// Parse an `.odt` package into the flow model.
@@ -127,19 +127,22 @@ fn parse_tracked(bytes: &[u8]) -> Result<(Flow, SectionProps, Option<bool>, Opti
     let mut pages = Pages::default();
     let styles_xml = read_entry(&mut z, "styles.xml");
     if let Some(s) = &styles_xml {
-        styles.read(s, false);
-        pages = read_pages(s);
+        styles.read(s, false)?;
+        pages = read_pages(s)?;
     }
-    styles.read(&content, true);
-    let meta = read_entry(&mut z, "meta.xml").map(|m| read_meta(&m)).unwrap_or_default();
+    styles.read(&content, true)?;
+    let meta = read_entry(&mut z, "meta.xml").map(|m| read_meta(&m)).transpose()?.unwrap_or_default();
     let mut pictures = Pictures::new(MAX_ENTRY);
     let mut fetch = |path: &str| -> Option<Vec<u8>> {
         // A frame may point at any entry, as often as it likes: `Pictures` keeps that bounded.
         pictures.get(&mut z, path)
     };
-    let parts = styles_xml.as_deref().map(|x| page_parts::read(x, &styles, &mut pages, &mut fetch)).unwrap_or_default();
+    let parts = match styles_xml.as_deref() {
+        Some(x) => page_parts::read(x, &styles, &mut pages, &mut fetch)?,
+        None => page_parts::Parts::default(),
+    };
     let mut body = Body::new(&styles, &pages, &mut fetch);
-    events(&content, |ev| body.feed(ev));
+    events(&content, |ev| body.feed(ev))?;
     let mut blocks = body.take_blocks();
     // An open section with nothing in it (after a column section at the end) isn't one: the
     // section before it ends the document.
@@ -182,7 +185,7 @@ pub(super) struct Pages {
     pub(super) first_name: Option<String>,
 }
 
-fn read_pages(xml: &[u8]) -> Pages {
+fn read_pages(xml: &[u8]) -> Result<Pages, String> {
     let mut layouts: HashMap<String, (Attrs, Option<Columns>)> = HashMap::new();
     let mut cur: Option<String> = None;
     let mut masters: Vec<(String, String)> = Vec::new();
@@ -219,7 +222,7 @@ fn read_pages(xml: &[u8]) -> Pages {
             }
         }
         Ev::Text(_) => {}
-    });
+    })?;
     let mut pages = Pages::default();
     for (name, layout) in masters {
         let Some((a, cols)) = layouts.get(&layout) else { continue };
@@ -235,13 +238,13 @@ fn read_pages(xml: &[u8]) -> Pages {
         }
         pages.masters.entry(name).or_insert(sec);
     }
-    pages
+    Ok(pages)
 }
 
 /// Replace `sec` with the page setup of the first master page in `styles.xml`, if any.
 #[cfg(test)]
 pub(super) fn apply_page_layout(xml: &[u8], sec: &mut SectionProps) {
-    if let Some(first) = read_pages(xml).first {
+    if let Some(first) = read_pages(xml).ok().and_then(|p| p.first) {
         *sec = first;
     }
 }

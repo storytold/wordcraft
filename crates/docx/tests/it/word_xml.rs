@@ -68,6 +68,17 @@ fn reads_a_hand_written_flat_opc_package() {
     assert_eq!(doc.media.len(), 1);
 }
 
+#[test]
+fn reads_word_xml_with_129_namespace_declarations() {
+    let mut declarations = String::new();
+    for i in 0..128 {
+        declarations.push_str(&format!(" xmlns:n{i}=\"urn:test:{i}\""));
+    }
+    let xml = format!("<w:wordDocument xmlns:w=\"http://schemas.microsoft.com/office/word/2003/wordml\"{declarations}><w:body/></w:wordDocument>");
+    assert_eq!(sniff_xml(xml.as_bytes()), XmlKind::WordMl2003);
+    assert!(read_xml(xml.as_bytes()).is_ok());
+}
+
 /// A Word 2003 XML Document, hand-written from the Office 2003 XML Reference Schemas.
 fn wordml_2003_sample() -> String {
     let png = tiny_png_b64();

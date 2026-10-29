@@ -183,6 +183,23 @@ fn object_without_mathml_falls_back_to_its_replacement_image() {
     assert!(imgs[0].data.as_slice() == png.as_slice());
 }
 
+#[test]
+fn a_malformed_tail_after_embedded_mathml_keeps_the_captured_equation() {
+    let math = b"<math><mi>x</mi></math><broken";
+    let frame = r#"<draw:frame svg:width="1in" svg:height="1in"><draw:object xlink:href="./Object 1"/></draw:frame>"#;
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p>{frame}</text:p></office:text></office:body></office:document-content>"#
+    );
+    let pkg = zip_of(&[("content.xml", content.as_bytes()), ("Object 1/content.xml", math)]);
+    let flow = parse(&pkg).unwrap();
+    let eqs: Vec<String> = paras(&flow)
+        .into_iter()
+        .flat_map(|p| &p.inlines)
+        .filter_map(|i| if let Inline::Equation { linear, .. } = i { Some(linear.clone()) } else { None })
+        .collect();
+    assert_eq!(eqs, vec!["x".to_string()]);
+}
+
 const NS_T: &str = r#"xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0""#;
 
 /// A package with `content.xml` and, when given, `styles.xml`.
@@ -1108,30 +1125,35 @@ fn meta_creation_date_timezones_and_fallbacks() {
             <dc:creator>Modifier</dc:creator>
             <meta:initial-creator>Original Author</meta:initial-creator>
         </office:meta></office:document-meta>"#;
-    let m = read_meta(xml_neg);
+    let m = read_meta(xml_neg).unwrap();
     assert_eq!(m.created, "2024-03-05T13:45:00-05:00");
     assert_eq!(m.author, "Original Author");
 
     let xml_neg_frac = br#"<office:document-meta><office:meta>
             <meta:creation-date>2024-03-05T13:45:00.500-05:00</meta:creation-date>
         </office:meta></office:document-meta>"#;
-    assert_eq!(read_meta(xml_neg_frac).created, "2024-03-05T13:45:00.500-05:00");
+    assert_eq!(read_meta(xml_neg_frac).unwrap().created, "2024-03-05T13:45:00.500-05:00");
 
     let xml_local_frac = br#"<office:document-meta><office:meta>
             <meta:creation-date>2024-03-05T13:45:00.123</meta:creation-date>
         </office:meta></office:document-meta>"#;
-    assert_eq!(read_meta(xml_local_frac).created, "2024-03-05T13:45:00Z");
+    assert_eq!(read_meta(xml_local_frac).unwrap().created, "2024-03-05T13:45:00Z");
 
     let xml_z_lower = br#"<office:document-meta><office:meta>
             <meta:creation-date>2024-03-05T13:45:00z</meta:creation-date>
         </office:meta></office:document-meta>"#;
-    assert_eq!(read_meta(xml_z_lower).created, "2024-03-05T13:45:00z");
+    assert_eq!(read_meta(xml_z_lower).unwrap().created, "2024-03-05T13:45:00z");
 
     let xml_dc_date_fallback = br#"<office:document-meta><office:meta>
             <dc:date>2024-03-05T13:45:00Z</dc:date>
             <dc:creator>Solo Creator</dc:creator>
         </office:meta></office:document-meta>"#;
-    let m2 = read_meta(xml_dc_date_fallback);
+    let m2 = read_meta(xml_dc_date_fallback).unwrap();
     assert_eq!(m2.created, "2024-03-05T13:45:00Z");
     assert_eq!(m2.author, "Solo Creator");
+}
+
+#[test]
+fn malformed_odt_metadata_xml_is_an_error() {
+    assert!(read_meta(b"<office:document-meta attr='unterminated").is_err());
 }
