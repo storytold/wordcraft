@@ -39,6 +39,7 @@ impl Reader<'_> {
                     }
                     s.sum_paragraph_spacing = k.children("w:doNotUseHTMLParagraphAutoSpacing").any(on_off);
                     s.do_not_expand_shift_return = k.children("w:doNotExpandShiftReturn").any(on_off);
+                    s.adjust_line_height_in_table = k.children("w:adjustLineHeightInTable").any(on_off);
                 }
                 "w:trackRevisions" => s.track_changes = on_off(k),
                 "w:doNotTrackMoves" => s.track_moves = !on_off(k),

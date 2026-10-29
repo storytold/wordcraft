@@ -3927,6 +3927,45 @@ fn do_not_expand_shift_return_is_read_and_kept() {
     assert_eq!(settings(""), (false, false));
 }
 
+/// `w:textAlignment` in a paragraph's properties (§17.3.1.39): the vertical alignment of a line's
+/// characters is read and written back; a token that isn't one of the five is left unset.
+#[test]
+fn text_alignment_is_read_and_kept() {
+    let para = |val: &str| {
+        let body = format!(r#"<w:p><w:pPr><w:textAlignment w:val="{val}"/></w:pPr></w:p>"#);
+        let d = wordcraft_docx::read(&docx(&body, &[], &[])).unwrap();
+        let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+        let get = |d: &Document| match d.body.first().map(|b| &**b) {
+            Some(Block::Para(p)) => p.props.text_alignment,
+            _ => None,
+        };
+        (get(&d), get(&again))
+    };
+    use wordcraft_doc::props::TextAlignment;
+    assert_eq!(para("top"), (Some(TextAlignment::Top), Some(TextAlignment::Top)));
+    assert_eq!(para("center"), (Some(TextAlignment::Center), Some(TextAlignment::Center)));
+    assert_eq!(para("bottom"), (Some(TextAlignment::Bottom), Some(TextAlignment::Bottom)));
+    assert_eq!(para("baseline"), (Some(TextAlignment::Baseline), Some(TextAlignment::Baseline)));
+    assert_eq!(para("auto"), (Some(TextAlignment::Auto), Some(TextAlignment::Auto)));
+    assert_eq!(para("sideways"), (None, None));
+}
+
+/// `w:adjustLineHeightInTable` in the settings' `w:compat` (§17.15.3.1): the document grid's line
+/// pitch reaches table cells only when it is on.
+#[test]
+fn adjust_line_height_in_table_is_read_and_kept() {
+    let settings = |compat: &str| {
+        let s = format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings {W_NS}><w:compat>{compat}</w:compat></w:settings>"#);
+        let rels = [("rId9", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings", "settings.xml")];
+        let d = wordcraft_docx::read(&docx("<w:p/>", &rels, &[("word/settings.xml", &s)])).unwrap();
+        let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+        (d.settings.adjust_line_height_in_table, again.settings.adjust_line_height_in_table)
+    };
+    assert_eq!(settings("<w:adjustLineHeightInTable/>"), (true, true));
+    assert_eq!(settings(r#"<w:adjustLineHeightInTable w:val="0"/>"#), (false, false));
+    assert_eq!(settings(""), (false, false));
+}
+
 /// A right triangle (`rtTriangle`) has its right angle at the bottom left: a cover page's white
 /// corner cut-outs drawn as isosceles triangles pointed the wrong way.
 #[test]

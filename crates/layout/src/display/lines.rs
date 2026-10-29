@@ -92,7 +92,7 @@ fn collect_glyph_run(
     style_index: u32,
     style: &crate::para::StyleRun,
 ) -> (usize, Vec<(u32, f32, f32)>, String, Vec<std::ops::Range<usize>>) {
-    let (pl, para, line, x, base) = (ctx.pl, ctx.para, ctx.line, ctx.x, ctx.base);
+    let (pl, para, line, x) = (ctx.pl, ctx.para, ctx.line, ctx.x);
     let si = style_index;
     let st = style;
     let mut k = start;
@@ -114,6 +114,7 @@ fn collect_glyph_run(
             break;
         }
         let cx = x + line.cl_left(k).unwrap_or(0.0);
+        let base = ctx.base + line.shift_at(k);
         if matches!(c.kind, ClKind::Text | ClKind::Space) {
             let a = text.len();
             // An object's cluster (a field, a note number) stands for the text it shows.
@@ -188,8 +189,7 @@ fn collect_glyph_run(
 }
 
 fn draw_glyph_runs(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
-    let (doc, pl, line, x, base, opts, authors, alpha, down) =
-        (ctx.doc, ctx.pl, ctx.line, ctx.x, ctx.base, ctx.opts, ctx.authors, ctx.alpha, ctx.down);
+    let (doc, pl, line, x, opts, authors, alpha, down) = (ctx.doc, ctx.pl, ctx.line, ctx.x, ctx.opts, ctx.authors, ctx.alpha, ctx.down);
     let mut k = line.c0;
     while k < line.c1 {
         let Some(c) = pl.clusters.get(k) else { break };
@@ -201,6 +201,7 @@ fn draw_glyph_runs(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
         let run_start = k;
         let (run_end, mut glyphs, text, ranges) = collect_glyph_run(ctx, run_start, si, st);
         k = run_end;
+        let base = ctx.base + line.shift_at(run_start);
         let rc = &st.rc;
         let m = &opts.revisions;
         // Without markup a deletion is never drawn as ordinary text, even in a layout that
@@ -636,6 +637,7 @@ fn inline_objects(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
             continue;
         }
         let cx = x + line.cl_left(k).unwrap_or(0.0);
+        let base = base + line.shift_at(k);
         let obj = para.and_then(|p| p.objects.get(oi));
         let rect = inline_rect(obj, cx, base, c.adv, (c.obj_h, c.obj_d), pl.rule_room(line, k));
         let spin = obj.and_then(InlineObject::frame).map(|(_, _, f)| f.spin()).unwrap_or_default();
