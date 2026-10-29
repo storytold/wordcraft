@@ -131,11 +131,8 @@ pub fn specs() -> Vec<CommandSpec> {
             } else {
                 return Err(CmdError::Params("`path` or `data` required".into()));
             };
-            wordcraft_geom::picture::probe(&bytes).map_err(|e| match e {
-                wordcraft_geom::picture::Refusal::Unsupported(why) => CmdError::Failed(why.into()),
-                _ => CmdError::Failed("not a supported image".into()),
-            })?;
-            let key = s.doc.add_media(bytes.clone(), crate::cmd::insert::image_ext(&bytes));
+            let (_, _, ext) = crate::cmd::insert::picture_size(&bytes)?;
+            let key = crate::cmd::insert::add_picture_media(s, bytes, ext);
             with_obj(s, |o| {
                 if let InlineObject::Image { media, .. } = o {
                     *media = key.clone();

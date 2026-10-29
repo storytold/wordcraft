@@ -326,7 +326,7 @@ impl WordApp {
         for f in &files {
             let path = f.path().to_string_lossy().to_string();
             let lp = path.to_ascii_lowercase();
-            let img = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".wmf", ".emf"].iter().any(|e| lp.ends_with(e));
+            let img = crate::paste_picture::is_picture_name(&lp);
             let sheet = wordcraft_engine::cmd::mailings::is_spreadsheet_name(&lp);
             let _ = if img {
                 self.caret_after_placed_picture(placed_picture);
@@ -419,7 +419,7 @@ impl WordApp {
         let mut placed_picture = false;
         for (name, bytes) in files {
             let lower = name.to_ascii_lowercase();
-            let img = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".wmf", ".emf"].iter().any(|e| lower.ends_with(e));
+            let img = crate::paste_picture::is_picture_name(&lower);
             // Any recipient file ends the pending picker request, so a later .txt drop opens normally.
             let asked = std::mem::take(&mut self.recipient_list_pending);
             let list = lower.ends_with(".csv") || lower.ends_with(".tsv") || (lower.ends_with(".txt") && asked);

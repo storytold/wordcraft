@@ -30,6 +30,10 @@ pub(crate) struct Exporter<'a> {
     pub(crate) images: HashMap<String, Option<Image>>,
     /// Parsed metafiles by media key (`None`: not readable).
     pub(crate) vectors: HashMap<String, Option<Arc<Vector>>>,
+    /// Parsed SVG pictures by media key (`None`: not readable).
+    pub(crate) svgs: HashMap<String, Option<Arc<wordcraft_svg::Svg>>>,
+    /// Whether krilla can decode every raster image of the SVG picture of a media key.
+    pub(crate) svg_images_ok: HashMap<String, bool>,
     pub(crate) tags: Vec<TagEntry>,
     pub(crate) tag_index: HashMap<(StoryRef, DocPath), usize>,
     /// Link rectangles on the current page: (x0, y0, x1, y1, target).
@@ -99,6 +103,28 @@ impl Exporter<'_> {
         }
         self.vectors.insert(key.to_string(), v.clone());
         v
+    }
+
+    /// The SVG picture for a media key, parsed once (#1910). None when the bytes are not an SVG;
+    /// Some(None) when it doesn't parse (the raster path then draws the grey box).
+    fn svg(&mut self, key: &str) -> Option<Option<Arc<wordcraft_svg::Svg>>> {
+        let doc = self.doc;
+        let bytes = doc.media.get(key)?;
+        if !wordcraft_svg::is_svg(bytes) {
+            return None;
+        }
+        if let Some(v) = self.svgs.get(key) {
+            return Some(v.clone());
+        }
+        let v = match wordcraft_svg::parse(bytes) {
+            Ok(svg) => Some(Arc::new(svg)),
+            Err(e) => {
+                log::warn!("PDF: picture `{key}`: {e}");
+                None
+            }
+        };
+        self.svgs.insert(key.to_string(), v.clone());
+        Some(v)
     }
 
     fn image(&mut self, key: &str) -> Option<Image> {

@@ -5689,6 +5689,23 @@ fn a_paste_onto_the_focused_page_inserts_one_picture() {
     assert_eq!(object_count(h.state_mut()), 1, "once");
 }
 
+/// #1910: a dropped `.svg` file (any case) goes in as one SVG picture through the frame loop.
+#[test]
+fn a_dropped_svg_file_inserts_one_svg_picture() {
+    let mut a = app();
+    let q: Inbox = Inbox::default();
+    a.services.inbox = Some(q.clone());
+    let mut h = paste_harness(a);
+    let before = object_count(h.state_mut());
+    let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" fill="#ff0000"/></svg>"##;
+    q.lock().unwrap().push(("Logo.SVG".into(), svg.to_vec()));
+    h.step();
+    assert_eq!(object_count(h.state_mut()), before + 1);
+    let svgs: Vec<&String> = h.state().session.doc.media.iter().filter(|(_, b)| b.as_slice() == svg.as_slice()).map(|(k, _)| k).collect();
+    assert_eq!(svgs.len(), 1);
+    assert!(svgs[0].ends_with(".svg"), "{svgs:?}");
+}
+
 /// A real text field with focus (the Find box) takes the input: the picture is dropped.
 #[test]
 fn a_paste_with_the_find_dialog_open_is_ignored() {

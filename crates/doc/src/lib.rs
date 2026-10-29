@@ -116,6 +116,11 @@ pub struct Document {
     /// Embedded media (images) by key. Native JSON writes each as base64 (`byte_store.rs`).
     #[serde(skip_serializing_if = "BTreeMap::is_empty", with = "byte_store")]
     pub media: BTreeMap<String, Arc<Vec<u8>>>,
+    /// SVG pictures' PNG fallbacks (#1910): SVG media key → the media key of the PNG stored with it
+    /// (Word's own, read from a file, or one made on an earlier save), written back as it is so
+    /// a save neither draws it again nor loses what only the PNG shows.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub svg_fallbacks: BTreeMap<String, String>,
     /// Source-format parts we keep verbatim for round-trip (e.g. custom XML), by part name.
     #[serde(skip_serializing_if = "BTreeMap::is_empty", with = "byte_store")]
     pub passthrough: BTreeMap<String, Arc<Vec<u8>>>,

@@ -77,6 +77,8 @@ fn write_attempt(doc: &Document, lay: &DocLayout, opts: &PdfOptions, pages: &[us
         cmaps: HashMap::new(),
         images: HashMap::new(),
         vectors: HashMap::new(),
+        svgs: HashMap::new(),
+        svg_images_ok: HashMap::new(),
         tags: Vec::new(),
         tag_index: HashMap::new(),
         links: Vec::new(),

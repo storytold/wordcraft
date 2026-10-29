@@ -3,6 +3,7 @@ use super::{
     Draw, Exporter, Fill, FillRule, LineCap, LineJoin, LineStyle, PathBuilder, Rect, Rgb, ShapeKind, Size, Stroke, StrokeDash, Surface, Transform,
     append_path, fill, grown, krilla, norm, ok, paint_fill, pdf_line_cap, rect_path, rgb, shape_effects, shape_path, vector_picture,
 };
+use crate::picture::{image_decodes, svg_picture};
 
 impl Exporter<'_> {
     /// Paint one display item on the PDF surface in its current point-coordinate system.
@@ -308,6 +309,17 @@ impl Exporter<'_> {
         let Some(clip) = rect_path(rect) else { return };
         if let Some(v) = self.vector(media) {
             vector_picture(self, s, &v, rect, crop, &clip, alpha);
+            return;
+        }
+        if let Some(Some(svg)) = self.svg(media)
+            && svg_picture(s, &svg, rect, crop, &clip, alpha, || {
+                *self
+                    .svg_images_ok
+                    .entry(media.to_string())
+                    .or_insert_with(|| svg.raster_images().iter().all(|(kind, data)| image_decodes(kind, data)))
+            })
+            .is_some()
+        {
             return;
         }
         let Some(img) = self.image(media) else {

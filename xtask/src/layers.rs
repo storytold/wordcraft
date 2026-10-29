@@ -38,6 +38,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("doc", Class::Layer(1)),
     ("fonts", Class::Layer(1)),
     ("metafile", Class::Layer(1)),
+    ("svg", Class::Layer(1)),
     ("proof", Class::Layer(1)),
     ("layout", Class::Layer(2)),
     ("docx", Class::Layer(2)),
@@ -60,8 +61,9 @@ pub const TABLE: &[(&str, Class)] = &[
 /// Explicit orderings *within* a layer (earlier may be used by later).
 /// The L0 foundation is a small chain: `raster` builds on `color` and
 /// `geom`, which the §3 diagram draws on one line. The GPU backend (`gpu`)
-/// reuses the CPU reference (`compose`) for LUTs and parity tests.
-pub const INTRA_LAYER_ORDER: &[&[&str]] = &[&["doc", "fonts"]];
+/// reuses the CPU reference (`compose`) for LUTs and parity tests. SVG pictures (`svg`) draw their
+/// text with the document fonts (`fonts`).
+pub const INTRA_LAYER_ORDER: &[&[&str]] = &[&["doc", "fonts"], &["fonts", "svg"]];
 
 fn intra_layer_allowed(from: &str, to: &str) -> bool {
     let (from, to) = (short_name(from), short_name(to));

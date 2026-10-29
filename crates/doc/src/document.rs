@@ -73,6 +73,7 @@ impl Document {
             footnote_separators: NoteSeparators::default(),
             endnote_separators: NoteSeparators::default(),
             media: BTreeMap::new(),
+            svg_fallbacks: BTreeMap::new(),
             passthrough: BTreeMap::new(),
             glossary: Vec::new(),
             media_index: MediaIndex::default(),
@@ -151,6 +152,7 @@ impl Document {
             media,
             passthrough,
             glossary,
+            svg_fallbacks,
             media_index: _,
         } = self;
         let Document {
@@ -170,6 +172,7 @@ impl Document {
             media: other_media,
             passthrough: other_passthrough,
             glossary: other_glossary,
+            svg_fallbacks: other_fallbacks,
             media_index: _,
         } = other;
         same_blocks(body, other_body)
@@ -188,6 +191,7 @@ impl Document {
             && same_bytes(media, other_media)
             && same_bytes(passthrough, other_passthrough)
             && same_glossary(glossary, other_glossary)
+            && svg_fallbacks == other_fallbacks
     }
 
     pub fn story(&self, s: StoryRef) -> Option<&Blocks> {

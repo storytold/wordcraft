@@ -112,7 +112,10 @@ fn props_kind(doc: &Document, props: &ParaProps, blank: bool) -> (Kind, Option<L
     (kind, list)
 }
 
-fn media_ext(key: &str, data: &[u8]) -> String {
+pub(super) fn media_ext(key: &str, data: &[u8]) -> String {
+    if wordcraft_svg::is_svg(data) {
+        return "svg".into();
+    }
     match image::guess_format(data) {
         Ok(image::ImageFormat::Png) => "png".into(),
         Ok(image::ImageFormat::Jpeg) => "jpeg".into(),

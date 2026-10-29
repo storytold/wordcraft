@@ -21,7 +21,7 @@ mod media;
 #[cfg(test)]
 use media::{CACHE_BYTES, MediaCache, OVERSIZED_GLYPHS_NOTED, cacheable, decode_pixmap_within, note_oversized_glyphs, shrink};
 pub use media::{decode_pixmap, image_size, metafile_size};
-use media::{draw_page_picture, draw_vector, lock, pixmap_for, premul_pixmap, vector_for};
+use media::{draw_page_picture, draw_svg, draw_vector, lock, pixmap_for, premul_pixmap, svg_for, vector_for};
 
 mod color_glyph;
 pub mod icon_lib;
@@ -781,6 +781,10 @@ fn draw_image(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
     }
     if let Some(v) = vector_for(doc, media) {
         draw_vector(ctx, &v, &r, crop, *alpha, view);
+        return;
+    }
+    if let Some(Some(svg)) = svg_for(doc, media) {
+        draw_svg(ctx, &svg, &r, crop, *alpha, view, fr.visible);
         return;
     }
     let Some(pm) = pixmap_for(doc, media) else {

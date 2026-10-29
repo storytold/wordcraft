@@ -41,6 +41,12 @@ mod tests {
     use super::*;
 
     #[test]
+    fn svg_bytes_are_svg_whatever_the_media_key_says() {
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"/>"#;
+        assert_eq!(from_doc::media_ext("media/image1.png", svg), "svg");
+    }
+
+    #[test]
     fn percent_decode_requires_hex_digits() {
         assert_eq!(percent_decode("%+A"), b"%+A".to_vec());
         assert_eq!(percent_decode("%-A"), b"%-A".to_vec());
