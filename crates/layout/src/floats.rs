@@ -1,3 +1,4 @@
+use super::cache::hash_of;
 use super::ctx::Ctx;
 use super::page::{PageBuilder, PageFrame};
 use super::placed::Placed;
@@ -117,6 +118,16 @@ pub(crate) type WrapArea = (Rect, bool, Option<Arc<contour::Contour>>, WrapText,
 /// their areas. Layout places a float only when it reaches its anchor, so the text above that
 /// was laid out without it: the pass is done again with these known from the page's start.
 pub(crate) type EarlyFloats = HashMap<usize, Vec<(usize, usize, WrapArea)>>;
+
+/// The early floats a pass starts with, as a number: a pass laid out with others can't be resumed.
+pub(crate) fn early_hash(early: &EarlyFloats) -> u64 {
+    if early.is_empty() {
+        return 0;
+    }
+    let mut pages: Vec<_> = early.iter().collect();
+    pages.sort_by_key(|(page, _)| **page);
+    hash_of(&format!("{pages:?}"))
+}
 
 /// Layout passes made again at most for [`EarlyFloats`] (a float moving with the text it pushes
 /// down may move again). The pass after the last one keeps each float clear of the text laid

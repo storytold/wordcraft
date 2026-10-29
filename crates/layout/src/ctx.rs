@@ -333,7 +333,7 @@ impl Ctx<'_> {
 
     /// The cache key of `p` laid out with these inputs, and its first automatic equation number
     /// (advancing the count past its equations).
-    fn para_key(
+    pub(crate) fn para_key(
         &mut self,
         p: &Paragraph,
         width: f32,

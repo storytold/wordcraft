@@ -2,9 +2,10 @@ use std::collections::VecDeque;
 
 use super::cache::{LayoutCache, Totals, env_hash, hash_of};
 use super::ctx::{Ctx, Pass, with_pct_base};
-use super::floats::{EarlyFloats, WrapArea, early_covered};
+use super::floats::{EarlyFloats, WrapArea, early_covered, early_hash};
 use super::flow::{OutlinePass, place_outline_para, place_para};
 use super::headers::{HfLinks, bookmark_pages, headers_footers, headers_footers_refer_to_pages, marks_key, mirror_even_pages, section_side};
+use super::incremental;
 use super::notes::{MAX_NOTE_PAGES, NoteSeps, note_info, place_endnotes};
 use super::page::{PageBuilder, body_top_for, foot_top_for, item_bottom};
 use super::placed::Placed;
@@ -435,12 +436,22 @@ fn fill_headers_footers(
 }
 
 /// Evict paragraph layouts that weren't used this pass if the cache grew large.
-fn evict_unused(cache: &mut LayoutCache) {
-    if cache.paras.len() + cache.measures.len() > 4 * cache.used.len().max(1024) {
-        let used = std::mem::take(&mut cache.used);
-        cache.paras.retain(|k, _| used.contains(k));
-        cache.measures.retain(|k, _| used.contains(k));
-        cache.used = used;
+/// (Not after an incremental pass: it saw only the paragraphs it placed. When those passes have
+/// left too many stale layouts, the next pass is a full one, which evicts them.)
+fn evict_unused(cache: &mut LayoutCache, incremental: bool) {
+    let cached = cache.paras.len() + cache.measures.len();
+    if incremental {
+        if cached > 8 * cache.live.max(1024) {
+            cache.pass = None;
+        }
+    } else {
+        cache.live = cache.used.len();
+        if cached > 4 * cache.used.len().max(1024) {
+            let used = std::mem::take(&mut cache.used);
+            cache.paras.retain(|k, _| used.contains(k));
+            cache.measures.retain(|k, _| used.contains(k));
+            cache.used = used;
+        }
     }
 }
 
@@ -485,10 +496,47 @@ pub(crate) fn layout_pass(
     let mut endnotes = endnote_queue(&ctx);
     // Text boxes laid out in balancing attempts that were thrown away.
     let mut boxes_discarded = 0usize;
-    let mut block = 0usize;
     let turned = turned_sections(&mut ctx, sections, mode.web);
     let mut prev_turn = TextDirection::Horizontal;
-    for (si, (end, sect)) in sections.iter().enumerate() {
+    // Incremental pagination: resume from the page the edit is on (see `incremental`).
+    // A repeat pass for page totals (`NUMPAGES`) lays out with other totals: never resume across them.
+    let key = incremental::PassKey::new(doc, opts, ctx.cache.env, ctx.notes_hash ^ hash_of(&(totals.pages, &totals.sections)) ^ early_hash(early));
+    let prev = ctx.cache.pass.take();
+    // Balanced columns and endnotes at section ends re-lay or add pages behind the walk: those
+    // documents are paginated in full.
+    // Body text showing page totals depends on every page: such documents are laid out in full.
+    // Outline view and vertical sections are laid out in full too.
+    let can_resume = !mode.reflow
+        && outline.is_none()
+        && turned.iter().all(Option::is_none)
+        && incremental_ok(doc, sections)
+        && !prev.as_ref().is_some_and(|p| p.uses_totals);
+    let plan = if can_resume { prev.as_ref().and_then(|p| p.plan(&key, opts.typing_word, doc, sections)) } else { None };
+    let mut resume = None;
+    let mut converge_after = None;
+    if let Some(plan) = plan {
+        pb.pages = plan.pages;
+        pb.behind = vec![0; pb.pages.len()];
+        if let Some(cp) = plan.from {
+            pb.pages.push(cp.page);
+            pb.behind.push(0);
+            resume = Some(cp.state);
+        }
+        converge_after = plan.converge_after;
+    }
+    let mut pass = incremental::Pass::new(key, opts.typing_word, doc, sections);
+    if let (Some(p), Some(st)) = (&prev, &resume) {
+        pass.checkpoints = p.checkpoints.iter().filter(|c| c.state.block < st.block).cloned().collect();
+    }
+    let mut placed = 0usize;
+    let mut spliced = false;
+    let mut last_checkpoint = 0usize;
+    let mut block = resume.as_ref().map(|st| st.block).unwrap_or(0);
+    let start_si = resume.as_ref().map(|st| st.si).unwrap_or(0);
+    for (si, (end, sect)) in sections.iter().enumerate().skip(start_si) {
+        if spliced {
+            break;
+        }
         let turn = if mode.reflow { TextDirection::Horizontal } else { sect.text_direction };
         let sect: &SectionProps = match turned.get(si) {
             Some(Some(t)) => t,
@@ -499,6 +547,23 @@ pub(crate) fn layout_pass(
         let start = if si == 0 { SectionStart::NextPage } else { sect.start };
         let sec = Sec { si, sect, start, tops };
         begin_section_state(&mut ctx, &mut pb, &sec, totals, mode.web);
+        if let Some(st) = resume.take() {
+            // The section was started before the checkpoint; carry on from there.
+            st.restore(&mut pb, &mut ctx);
+            // The next section's start is stored after this section's end: it may have changed.
+            pb.next_starts_page = !mode.web && sections.get(si + 1).is_some_and(|(_, s)| s.start != SectionStart::Continuous);
+            ctx.grid = para::Grid::of(doc, sect);
+            pb.foot_top = sec.tops.foot;
+            let last = (*end).min(doc.body.len().saturating_sub(1));
+            place_blocks(
+                &mut ctx,
+                &mut pb,
+                (&mut block, last, si, sec.tops.body),
+                (&mut pass, prev.as_ref(), converge_after),
+                (&mut last_checkpoint, &mut placed, &mut spliced),
+            );
+            continue;
+        }
         if mode.web && si > 0 {
             // one long page
         } else if pb.pages.is_empty() || start != SectionStart::Continuous || turn != prev_turn {
@@ -510,10 +575,32 @@ pub(crate) fn layout_pass(
         pb.foot_top = sec.tops.foot;
         let last = (*end).min(doc.body.len().saturating_sub(1));
         let balance = prepare_section_end(&mut pb, sections, (si, mode.web));
-        let (next, discarded) = place_section_blocks(&mut ctx, &mut pb, &outline, (block, last), (balance, sec.tops.body));
-        (block, boxes_discarded) = (next, boxes_discarded + discarded);
+        if balance || outline.is_some() {
+            let (next, discarded) = place_section_blocks(&mut ctx, &mut pb, &outline, (block, last), (balance, sec.tops.body));
+            placed += next - block;
+            (block, boxes_discarded) = (next, boxes_discarded + discarded);
+        } else {
+            place_blocks(
+                &mut ctx,
+                &mut pb,
+                (&mut block, last, si, sec.tops.body),
+                (&mut pass, prev.as_ref(), converge_after),
+                (&mut last_checkpoint, &mut placed, &mut spliced),
+            );
+        }
         section_endnotes(&mut ctx, &mut pb, &mut endnotes, (sect, si, block));
     }
+    if spliced && let Some((_, s)) = sections.get(pb.sect_idx) {
+        pb.sect = s;
+    }
+    if can_resume {
+        pass.uses_totals = ctx.uses_totals || (spliced && prev.as_ref().is_some_and(|p| p.uses_totals));
+        pass.end = incremental::PageState::take(&pb, &ctx, block, pb.sect_idx);
+        pass.end_pages = pb.pages.clone();
+        pass.end_behind = pb.behind.clone();
+        ctx.cache.pass = Some(pass);
+    }
+    let incremental = prev.is_some() && (placed < doc.body.len() || spliced);
     if pb.pages.is_empty() {
         pb.new_page(0, sect_ref.margin_top);
     }
@@ -536,13 +623,67 @@ pub(crate) fn layout_pass(
     {
         return Pass::Again(found);
     }
-    evict_unused(ctx.cache);
-    let mut lay = DocLayout { index: index_lines(&pages), pages, ms: 0.0, text_boxes: 0 };
+    evict_unused(ctx.cache, incremental);
+    let mut lay = DocLayout { index: index_lines(&pages), pages, ms: 0.0, text_boxes: 0, blocks_placed: placed };
     if opts.comment_balloons && !mode.web {
         balloons::add(&mut ctx, &mut lay);
     }
     lay.text_boxes = ctx.boxes.total().saturating_sub(boxes_discarded);
     Pass::Done(lay)
+}
+
+/// Whether a later pass may resume part-way through this document (#554): not when a section's
+/// columns are balanced (its last page is laid out again) or its endnotes close the section.
+fn incremental_ok(doc: &Document, sections: &[(usize, &SectionProps)]) -> bool {
+    sections.iter().enumerate().all(|(si, (_, sect))| {
+        let balanced = sect.columns.count > 1 && sections.get(si + 1).is_some_and(|(_, s)| s.start == SectionStart::Continuous);
+        !balanced && doc.note_options(sect, true).pos != wordcraft_doc::section::NotePos::SectEnd
+    })
+}
+
+/// Place body blocks `*block..=last` of section `si`, recording a checkpoint at the first block
+/// boundary of each page; past `converge_after`, a page boundary where the state and the page so
+/// far match the previous pass's takes the rest of that pass's pages and ends the walk
+/// (`*spliced`).
+fn place_blocks(
+    ctx: &mut Ctx,
+    pb: &mut PageBuilder,
+    (block, last, si, body_top): (&mut usize, usize, usize, f32),
+    (pass, prev, converge_after): (&mut incremental::Pass, Option<&incremental::Pass>, Option<usize>),
+    (last_checkpoint, placed, spliced): (&mut usize, &mut usize, &mut bool),
+) {
+    while *block <= last {
+        let Some(b) = ctx.doc.body.get(*block) else { break };
+        if !pb.web && pb.pages.len() != *last_checkpoint {
+            *last_checkpoint = pb.pages.len();
+            let state = incremental::PageState::take(pb, ctx, *block, si);
+            if converge_after.is_some_and(|c| *block >= c)
+                && let Some(prev) = prev
+                && let Some(page) = pb.pages.last()
+                && prev.converges(&state, pb.pages.len(), page)
+            {
+                // From here on the pages come out as last time.
+                pb.pages.truncate(pb.pages.len().saturating_sub(1));
+                pb.pages.extend(prev.end_pages.iter().skip(pb.pages.len()).cloned());
+                pb.behind.clone_from(&prev.end_behind);
+                pass.checkpoints.extend(prev.checkpoints.iter().filter(|c| c.state.block >= *block).cloned());
+                prev.end.restore(pb, ctx);
+                *block = prev.end.block;
+                *spliced = true;
+                return;
+            }
+            if let Some(page) = pb.pages.last() {
+                pass.checkpoints.push(incremental::Checkpoint { state, pages: pb.pages.len(), page: page.clone() });
+            }
+        }
+        pb.mark_block();
+        match &**b {
+            Block::Para(p) => place_para(ctx, pb, p, *block, body_top),
+            Block::Table(t) => place_table(ctx, pb, t, *block, body_top),
+        }
+        *placed += 1;
+        *block += 1;
+    }
 }
 
 /// Pagination state saved before a block, to lay the blocks from there out again (balancing

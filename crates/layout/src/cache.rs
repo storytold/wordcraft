@@ -35,6 +35,8 @@ pub struct LayoutCache {
     pub(crate) paras: HashMap<Key, Arc<ParaLayout>>,
     /// Narrowest and widest content of paragraphs measured for table autofit ([`Ctx::para_measured`]).
     pub(crate) measures: HashMap<Key, (f32, f32)>,
+    /// The last pass's paging, for incremental pagination.
+    pub(crate) pass: Option<super::incremental::Pass>,
     /// Outlines of pictures' opaque pixels (Tight and Through wrapping), by media key, the
     /// media's bytes (address and length) and crop. Kept from one layout to the next, so each
     /// entry holds a weak reference to its bytes: their allocation isn't freed while the entry is
@@ -42,6 +44,8 @@ pub struct LayoutCache {
     pub(crate) outlines: Outlines,
     pub(crate) env: u64,
     pub(crate) used: HashSet<Key>,
+    /// How many layouts the last full pass used: the cache's live size.
+    pub(crate) live: usize,
     /// The STYLEREF style index of the last pass and what it was built from: the body blocks
     /// (shared, so an edited block is a different pointer) and `env` (styles and numbering). Kept
     /// while both are unchanged, so headers using STYLEREF don't rebuild it on every pass.
@@ -63,6 +67,7 @@ impl LayoutCache {
     pub fn clear(&mut self) {
         self.paras.clear();
         self.measures.clear();
+        self.pass = None;
         self.outlines.clear();
         self.styleref = None;
     }
@@ -142,7 +147,7 @@ pub(crate) fn has_total_fields(p: &Paragraph) -> bool {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Totals {
     pub(crate) pages: u32,
-    sections: Vec<u32>,
+    pub(crate) sections: Vec<u32>,
 }
 
 impl Totals {
