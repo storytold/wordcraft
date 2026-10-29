@@ -101,6 +101,14 @@ pub struct ParaLayout {
 }
 
 impl ParaLayout {
+    /// The styles cluster `c` is drawn in: its own, and those of its glyphs shaped in another
+    /// ([`ParaLayout::glyph_styles`]).
+    pub fn cluster_styles(&self, c: &Cluster) -> impl Iterator<Item = u32> + '_ {
+        let from = self.glyph_styles.partition_point(|(g, _)| *g < c.g0);
+        let to = self.glyph_styles.partition_point(|(g, _)| *g < c.g1);
+        std::iter::once(c.style).chain(self.glyph_styles.get(from..to).unwrap_or_default().iter().map(|(_, s)| *s))
+    }
+
     /// The style glyph `g` of cluster `c` is drawn in: the cluster's, unless it was shaped in more
     /// than one ([`ParaLayout::glyph_styles`]).
     pub fn glyph_style(&self, c: &Cluster, g: u32) -> u32 {

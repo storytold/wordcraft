@@ -504,15 +504,23 @@ impl<'a> Builder<'a> {
         let g1 = added.last().map(|c| c.g1).unwrap_or(g0);
         // A result shaped in more than one font (`Résumé` in a run whose high-ANSI font is
         // another) keeps each glyph's: its glyph ids are that font's.
-        if added.iter().any(|c| c.g1 > c.g0 && c.style != style) {
-            let mut runs: Vec<(u32, u32)> = added.iter().filter(|c| c.g1 > c.g0).map(|c| (c.g0, c.style)).collect();
-            runs.sort_unstable();
-            runs.dedup_by(|b, a| a.1 == b.1);
-            let at = self.glyph_styles.partition_point(|(g, _)| *g < g0);
-            self.glyph_styles.splice(at..at, runs);
-        }
+        let runs: Vec<(u32, u32)> = added.iter().filter(|c| c.g1 > c.g0).map(|c| (c.g0, c.style)).collect();
+        self.set_glyph_styles(g0..g1, style, runs);
         self.shown.push((self.clusters.len(), text.to_string(), ranges));
         self.clusters.push(Cluster { start, end, adv: x, kind: ClKind::Text, style, g0, g1, break_after: false, obj_h: 0.0, obj_d: 0.0, dot: false });
+    }
+
+    /// Record the glyph styles `runs` (from glyph `.0` on, style `.1`) of a cluster with glyphs
+    /// `glyphs` and style `style` in place of any it had: none when all are `style`.
+    fn set_glyph_styles(&mut self, glyphs: std::ops::Range<u32>, style: u32, mut runs: Vec<(u32, u32)>) {
+        let from = self.glyph_styles.partition_point(|(g, _)| *g < glyphs.start);
+        let to = self.glyph_styles.partition_point(|(g, _)| *g < glyphs.end);
+        if runs.iter().all(|(_, s)| *s == style) {
+            runs.clear();
+        }
+        runs.sort_unstable_by_key(|(g, _)| *g);
+        runs.dedup_by(|b, a| a.1 == b.1);
+        self.glyph_styles.splice(from..to, runs);
     }
 
     /// Shape `texts` on top of one another as one cluster for `start..end`: each aligned within
@@ -558,6 +566,17 @@ impl<'a> Builder<'a> {
             Some(c) => c.style,
             None => self.style(rc, None, false),
         };
+        // Each text keeps its fonts: its own glyph styles, else its one style.
+        let mut runs = Vec::new();
+        for c in added.iter().filter(|c| c.g1 > c.g0) {
+            let from = self.glyph_styles.partition_point(|(g, _)| *g < c.g0);
+            let to = self.glyph_styles.partition_point(|(g, _)| *g < c.g1);
+            match self.glyph_styles.get(from..to) {
+                Some(own) if !own.is_empty() => runs.extend_from_slice(own),
+                _ => runs.push((c.g0, c.style)),
+            }
+        }
+        self.set_glyph_styles(g0..g1, style, runs);
         let k = self.clusters.len();
         if !text.is_empty() {
             self.shown.push((k, text, ranges));

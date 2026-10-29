@@ -138,6 +138,46 @@ fn a_row_of_zero_width_spaces_is_as_tall_as_a_row_of_text() {
     assert!((steps[1] - steps[0]).abs() < 0.01 && (steps[2] - steps[0]).abs() < 0.01, "row steps {steps:?}");
 }
 
+/// A field result that starts in the run's short ASCII font and goes on in its taller high-ANSI
+/// font (`w:hAnsi`) is one cluster: its line is as tall as the taller font's, as it would be for
+/// the same text outside a field.
+#[test]
+fn a_field_result_partly_in_a_taller_high_ansi_font_makes_its_line_taller() {
+    let with_field = |result: &str| {
+        let hansi = wordcraft_doc::CharProps { font_hansi: Some("Source Sans 3".into()), ..chr() };
+        let mut d = Document::new();
+        let mut p = para("p ");
+        p.mark = hansi.clone();
+        d.body = vec![wordcraft_doc::para_block(p)];
+        let field = wordcraft_doc::InlineObject::Field {
+            instr: "DOCPROPERTY Title".into(),
+            result: result.into(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+        };
+        d.insert_object(&wordcraft_doc::Pos::body(0, 2), field, &hansi).unwrap();
+        d
+    };
+    let text = |t: &str| {
+        let hansi = wordcraft_doc::CharProps { font_hansi: Some("Source Sans 3".into()), ..chr() };
+        let mut d = Document::new();
+        let mut p = wordcraft_doc::Paragraph::with_text(t, hansi.clone());
+        p.mark = hansi;
+        p.props.space_before = Some(0.0);
+        p.props.space_after = Some(0.0);
+        p.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(1.0));
+        d.body = vec![wordcraft_doc::para_block(p)];
+        d
+    };
+    let short = line_heights(&with_field("A"))[0];
+    let mixed = line_heights(&with_field("A\u{e9}"))[0];
+    let as_text = line_heights(&text("p A\u{e9}"))[0];
+    assert!(mixed > short + 0.5, "the é makes the line taller: {short} {mixed}");
+    assert!((mixed - as_text).abs() < 0.01, "as tall as the same text outside a field: {mixed} {as_text}");
+}
+
 /// A run with a distinct high-ANSI font (`w:hAnsi`, here one with taller lines): a zero-width
 /// space is not high-ANSI text, so it stays in the run's ASCII font, at its line height. It
 /// counted as non-ASCII Latin text, and as a mark it also took the high-ANSI choice of the

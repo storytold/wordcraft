@@ -8310,8 +8310,37 @@ fn a_field_result_in_two_fonts_draws_each_glyph_in_its_own() {
         c.font_hansi = Some(hansi.into());
     })
     .unwrap();
-    let l = lay(&d);
-    let items = display::page_display(&d, &l.pages[0], &display::DisplayOptions::default());
+    let families = glyph_families(&d);
+    assert!(families.contains(&('é', hansi.to_string())), "{families:?}");
+    assert!(families.contains(&('R', ascii.to_string())), "{families:?}");
+
+    // `EQ \o` draws texts on top of one another as one cluster: each in one font of its own
+    // here, the A in the run's, the é in its high-ANSI font.
+    let eq = InlineObject::Field {
+        instr: "eq \\o(A,\u{e9})".into(),
+        result: String::new(),
+        locked: false,
+        dirty: false,
+        code: false,
+        form: String::new(),
+    };
+    let mut d = Document::from_text("p ");
+    d.insert_object(&Pos::body(0, 2), eq, &Default::default()).unwrap();
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, len), &|c| {
+        c.font = Some(ascii.into());
+        c.font_hansi = Some(hansi.into());
+    })
+    .unwrap();
+    let families = glyph_families(&d);
+    assert!(families.contains(&('é', hansi.to_string())), "{families:?}");
+    assert!(families.contains(&('A', ascii.to_string())), "{families:?}");
+}
+
+/// Each letter drawn on the first page and its font's family, checking that its glyph id is that
+/// font's.
+fn glyph_families(d: &Document) -> Vec<(char, String)> {
+    let l = lay(d);
+    let items = display::page_display(d, &l.pages[0], &display::DisplayOptions::default());
     let mut families = Vec::new();
     for i in &items {
         let display::Draw::Glyphs { face, glyphs, text, ranges, .. } = i else { continue };
@@ -8321,8 +8350,7 @@ fn a_field_result_in_two_fonts_draws_each_glyph_in_its_own() {
             families.push((ch, face.get().family.clone()));
         }
     }
-    assert!(families.contains(&('é', hansi.to_string())), "{families:?}");
-    assert!(families.contains(&('R', ascii.to_string())), "{families:?}");
+    families
 }
 
 /// A page total in the footer ("Page X of Y") is filled in after pagination, so it doesn't make
