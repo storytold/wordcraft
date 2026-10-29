@@ -307,3 +307,240 @@ fn clicking_the_autosave_label_toggles_autosave() {
     assert!(h.state().autosaves(), "and clicking it again turns it back on");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// #4311: On non-macOS desktop (Windows, Linux), window controls (Minimize, Maximize, Close) are drawn
+/// on the unified title bar and dispatch viewport commands.
+#[test]
+fn window_controls_drawn_and_functional_on_non_macos() {
+    let a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    assert!(!a.integrated_titlebar);
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            if app.fonts_frames < 2 {
+                app.fonts_frames += 1;
+                return;
+            }
+            title_bar(app, ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    assert!(h.ctx.read_response(window_close_button_id()).is_some(), "Close button is drawn");
+    assert!(h.ctx.read_response(window_maximize_button_id()).is_some(), "Maximize button is drawn");
+    assert!(h.ctx.read_response(window_minimize_button_id()).is_some(), "Minimize button is drawn");
+
+    let click = |h: &mut egui_kittest::Harness<'_, WordApp>, id| {
+        let at = h.ctx.read_response(id).expect("button is drawn").rect.center();
+        h.event(egui::Event::PointerMoved(at));
+        h.step();
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+        h.step();
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+        h.step();
+    };
+
+    click(&mut h, window_minimize_button_id());
+    let minimized = h.output().viewport_output.values().flat_map(|v| v.commands.iter()).any(|c| matches!(c, egui::ViewportCommand::Minimized(true)));
+    assert!(minimized, "Minimize button sends ViewportCommand::Minimized");
+
+    click(&mut h, window_maximize_button_id());
+    let maximized = h.output().viewport_output.values().flat_map(|v| v.commands.iter()).any(|c| matches!(c, egui::ViewportCommand::Maximized(_)));
+    assert!(maximized, "Maximize button sends ViewportCommand::Maximized");
+
+    click(&mut h, window_close_button_id());
+    let closes = h.output().viewport_output.values().flat_map(|v| v.commands.iter()).any(|c| matches!(c, egui::ViewportCommand::Close));
+    assert!(closes, "Close button sends ViewportCommand::Close");
+}
+
+/// #4311: When integrated title bar is active (macOS), custom window caption controls are omitted so
+/// macOS native traffic lights remain unobstructed.
+#[test]
+fn window_controls_omitted_on_macos_integrated_titlebar() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.integrated_titlebar = true;
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            if app.fonts_frames < 2 {
+                app.fonts_frames += 1;
+                return;
+            }
+            title_bar(app, ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    assert!(h.ctx.read_response(window_close_button_id()).is_none(), "Close button omitted on macOS");
+    assert!(h.ctx.read_response(window_maximize_button_id()).is_none(), "Maximize button omitted on macOS");
+    assert!(h.ctx.read_response(window_minimize_button_id()).is_none(), "Minimize button omitted on macOS");
+}
+
+/// #4311: Edge resize zones dispatch BeginResize when dragged.
+#[test]
+fn resize_zones_dispatch_begin_resize_on_drag() {
+    let ctx = ctx();
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 600.0));
+    let mut input = egui::RawInput { screen_rect: Some(rect), ..Default::default() };
+    let _ = ctx.run_ui(input.clone(), |ui| {
+        resize_zones(ui);
+    });
+
+    // Drag the top edge (North)
+    let p1 = egui::pos2(500.0, 2.0);
+    let p2 = egui::pos2(500.0, 10.0);
+    input.events = vec![
+        egui::Event::PointerMoved(p1),
+        egui::Event::PointerButton { pos: p1, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() },
+        egui::Event::PointerMoved(p2),
+    ];
+    let mut out = ctx.run_ui(input, |ui| {
+        resize_zones(ui);
+    });
+    out.textures_delta.clear();
+    let cmds = out.viewport_output.get(&egui::ViewportId::ROOT).map(|v| v.commands.clone()).unwrap_or_default();
+    assert!(
+        cmds.contains(&egui::ViewportCommand::BeginResize(egui::ResizeDirection::North)),
+        "dragging north edge initiates BeginResize(North): {cmds:?}"
+    );
+}
+
+/// #4311: When window is maximized, resize zones are disabled.
+#[test]
+fn resize_zones_disabled_when_maximized() {
+    let ctx = ctx();
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 600.0));
+    let mut input = egui::RawInput { screen_rect: Some(rect), ..Default::default() };
+    if let Some(v) = input.viewports.get_mut(&egui::ViewportId::ROOT) {
+        v.maximized = Some(true);
+    }
+    let p1 = egui::pos2(500.0, 2.0);
+    let p2 = egui::pos2(500.0, 10.0);
+    input.events = vec![
+        egui::Event::PointerMoved(p1),
+        egui::Event::PointerButton { pos: p1, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() },
+        egui::Event::PointerMoved(p2),
+    ];
+    let mut out = ctx.run_ui(input, |ui| {
+        resize_zones(ui);
+    });
+    out.textures_delta.clear();
+    let cmds = out.viewport_output.get(&egui::ViewportId::ROOT).map(|v| v.commands.clone()).unwrap_or_default();
+    assert!(!cmds.iter().any(|c| matches!(c, egui::ViewportCommand::BeginResize(_))), "maximized window must not begin resize: {cmds:?}");
+}
+
+/// #4311: Dragging on empty title bar space or document name sends StartDrag.
+#[test]
+fn title_bar_drag_sends_start_drag() {
+    let a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            if app.fonts_frames < 2 {
+                app.fonts_frames += 1;
+                return;
+            }
+            title_bar(app, ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+
+    let empty = egui::pos2(500.0, 20.0);
+    h.event(egui::Event::PointerMoved(empty));
+    h.step();
+    h.event(egui::Event::PointerButton { pos: empty, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+    h.step();
+    h.event(egui::Event::PointerMoved(empty + egui::vec2(20.0, 0.0)));
+    h.step();
+
+    let dragged = h.output().viewport_output.values().flat_map(|v| v.commands.iter()).any(|c| matches!(c, egui::ViewportCommand::StartDrag));
+    assert!(dragged, "Dragging title bar initiates StartDrag");
+}
+
+/// #4311: Double-clicking the document title toggles maximize and does not trigger rename.
+#[test]
+fn document_title_double_click_maximizes_without_rename() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let (ctx, mut n) = (ctx(), 0);
+    let title_pos = egui::pos2(720.0, 19.0);
+    let button =
+        |pressed| egui::Event::PointerButton { pos: title_pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+
+    let step = |n: &mut u32, events: Vec<egui::Event>, a: &mut WordApp| {
+        *n += 1;
+        let input = egui::RawInput {
+            time: Some(f64::from(*n) / 60.0),
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0))),
+            events,
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input, |ui| title_bar(a, ui));
+        out.textures_delta.clear();
+        out.viewport_output.get(&egui::ViewportId::ROOT).map(|v| v.commands.clone()).unwrap_or_default()
+    };
+    step(&mut n, vec![], &mut a);
+    step(&mut n, vec![egui::Event::PointerMoved(title_pos)], &mut a);
+    let mut cmds = Vec::new();
+    cmds.extend(step(&mut n, vec![button(true)], &mut a));
+    cmds.extend(step(&mut n, vec![button(false)], &mut a));
+    cmds.extend(step(&mut n, vec![button(true)], &mut a));
+    cmds.extend(step(&mut n, vec![button(false)], &mut a));
+    assert!(cmds.contains(&egui::ViewportCommand::Maximized(true)), "cmds: {cmds:?}");
+    assert!(a.dialog.is_none(), "Double-clicking document title must not open rename dialog");
+}
+
+/// #4311: An outside press before the double-click timeout cancels the pending rename.
+#[test]
+fn outside_press_cancels_pending_rename() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let (ctx, mut n) = (ctx(), 0);
+    let title_pos = egui::pos2(720.0, 19.0);
+    let outside_pos = egui::pos2(200.0, 19.0);
+
+    let step = |n: &mut u32, time_sec: f64, events: Vec<egui::Event>, a: &mut WordApp| {
+        *n += 1;
+        let input = egui::RawInput {
+            time: Some(time_sec),
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0))),
+            events,
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input, |ui| title_bar(a, ui));
+        out.textures_delta.clear();
+    };
+
+    // Click title at t = 0.0s..0.10s
+    step(&mut n, 0.0, vec![egui::Event::PointerMoved(title_pos)], &mut a);
+    step(
+        &mut n,
+        0.05,
+        vec![egui::Event::PointerButton { pos: title_pos, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() }],
+        &mut a,
+    );
+    step(
+        &mut n,
+        0.10,
+        vec![egui::Event::PointerButton { pos: title_pos, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() }],
+        &mut a,
+    );
+
+    // Press outside title at t = 0.20s (before 0.35s expires)
+    step(
+        &mut n,
+        0.20,
+        vec![
+            egui::Event::PointerMoved(outside_pos),
+            egui::Event::PointerButton { pos: outside_pos, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() },
+        ],
+        &mut a,
+    );
+
+    // Advance time past 0.50s
+    step(&mut n, 0.50, vec![], &mut a);
+
+    assert!(a.dialog.is_none(), "Outside press must cancel the pending rename");
+}

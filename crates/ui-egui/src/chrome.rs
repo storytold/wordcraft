@@ -1,6 +1,6 @@
 //! Title bar (Quick Access Toolbar, title, search, account) and status bar.
 
-use egui::{Align2, Rect, Sense, Stroke, Ui, pos2, vec2};
+use egui::{Align2, CursorIcon, Id, LayerId, Order, PointerButton, Rect, ResizeDirection, Sense, Stroke, Ui, ViewportCommand, pos2, vec2};
 use serde_json::json;
 use wordcraft_doc::{PartKind, StoryRef};
 
@@ -275,6 +275,207 @@ impl MacTitleBar {
     }
 }
 
+/// Width of a window control caption button (Minimize, Maximize, Close) on the title bar.
+pub const WINDOW_CONTROL_WIDTH: f32 = 46.0;
+
+/// The title bar Close button's id.
+pub(crate) fn window_close_button_id() -> egui::Id {
+    egui::Id::unique("window_close_button")
+}
+
+/// The title bar Maximize/Restore button's id.
+pub(crate) fn window_maximize_button_id() -> egui::Id {
+    egui::Id::unique("window_maximize_button")
+}
+
+/// The title bar Minimize button's id.
+pub(crate) fn window_minimize_button_id() -> egui::Id {
+    egui::Id::unique("window_minimize_button")
+}
+
+/// The Close caption button on the title bar.
+pub(crate) fn window_close_button(ui: &mut Ui, t: &Tokens, height: f32) -> egui::Response {
+    let (r, _) = ui.allocate_exact_size(vec2(WINDOW_CONTROL_WIDTH, height), Sense::hover());
+    let resp = ui.interact(r, window_close_button_id(), Sense::click());
+    let down = resp.is_pointer_button_down_on() && resp.contains_pointer();
+    let hot = down || resp.hovered();
+    if hot {
+        ui.painter().rect_filled(r, 0.0, if down { t.close_pressed } else { t.close_hover });
+    }
+    let c = pos2(ui.painter().round_to_pixel_center(r.center().x), ui.painter().round_to_pixel_center(r.center().y));
+    let glyph = 4.5;
+    let stroke = Stroke::new(1.0, if hot { t.on_close } else { t.text });
+    ui.painter().line_segment([c + vec2(-glyph, -glyph), c + vec2(glyph, glyph)], stroke);
+    ui.painter().line_segment([c + vec2(-glyph, glyph), c + vec2(glyph, -glyph)], stroke);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Close")));
+    let resp = resp.on_hover_text(tl!("Close"));
+    if resp.clicked() {
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+    resp
+}
+
+/// The Maximize/Restore caption button on the title bar.
+pub(crate) fn window_maximize_button(ui: &mut Ui, t: &Tokens, height: f32) -> egui::Response {
+    let (r, _) = ui.allocate_exact_size(vec2(WINDOW_CONTROL_WIDTH, height), Sense::hover());
+    let resp = ui.interact(r, window_maximize_button_id(), Sense::click());
+    let down = resp.is_pointer_button_down_on() && resp.contains_pointer();
+    let hot = down || resp.hovered();
+    if hot {
+        ui.painter().rect_filled(r, 0.0, t.hover);
+    }
+    let max = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
+    let c = pos2(ui.painter().round_to_pixel_center(r.center().x), ui.painter().round_to_pixel_center(r.center().y));
+    let stroke = Stroke::new(1.0, t.text);
+    if max {
+        let front = Rect::from_min_size(c + vec2(-4.0, -2.0), vec2(8.0, 8.0));
+        let back = Rect::from_min_size(c + vec2(-2.0, -4.0), vec2(8.0, 8.0));
+        ui.painter().line_segment([back.left_top(), back.right_top()], stroke);
+        ui.painter().line_segment([back.right_top(), back.right_bottom()], stroke);
+        ui.painter().line_segment([back.left_top(), pos2(back.left(), front.top())], stroke);
+        ui.painter().line_segment([pos2(front.right(), back.bottom()), back.right_bottom()], stroke);
+        ui.painter().rect_filled(front, 0.0, if hot { t.hover } else { t.title_bar });
+        ui.painter().rect_stroke(front, 0.0, stroke, egui::StrokeKind::Inside);
+    } else {
+        ui.painter().rect_stroke(Rect::from_center_size(c, vec2(10.0, 10.0)), 0.0, stroke, egui::StrokeKind::Inside);
+    }
+    let tip = if max { tl!("Restore") } else { tl!("Maximize") };
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tip));
+    let resp = resp.on_hover_text(tip);
+    if resp.clicked() {
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
+    }
+    resp
+}
+
+/// The Minimize caption button on the title bar.
+pub(crate) fn window_minimize_button(ui: &mut Ui, t: &Tokens, height: f32) -> egui::Response {
+    let (r, _) = ui.allocate_exact_size(vec2(WINDOW_CONTROL_WIDTH, height), Sense::hover());
+    let resp = ui.interact(r, window_minimize_button_id(), Sense::click());
+    let down = resp.is_pointer_button_down_on() && resp.contains_pointer();
+    let hot = down || resp.hovered();
+    if hot {
+        ui.painter().rect_filled(r, 0.0, t.hover);
+    }
+    let c = pos2(ui.painter().round_to_pixel_center(r.center().x), ui.painter().round_to_pixel_center(r.center().y));
+    let stroke = Stroke::new(1.0, t.text);
+    ui.painter().line_segment([c + vec2(-5.0, 0.0), c + vec2(5.0, 0.0)], stroke);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Minimize")));
+    let resp = resp.on_hover_text(tl!("Minimize"));
+    if resp.clicked() {
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+    }
+    resp
+}
+
+/// Window caption controls (Minimize, Maximize/Restore, Close) for non-macOS windows.
+pub(crate) fn window_controls(ui: &mut Ui, height: f32) {
+    let t = Tokens::get(ui.ctx());
+    let rtl = ui.layout().prefer_right_to_left();
+    let prev_spacing = ui.spacing().item_spacing;
+    ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+    if rtl {
+        window_close_button(ui, &t, height);
+        window_maximize_button(ui, &t, height);
+        window_minimize_button(ui, &t, height);
+    } else {
+        window_minimize_button(ui, &t, height);
+        window_maximize_button(ui, &t, height);
+        window_close_button(ui, &t, height);
+    }
+    ui.spacing_mut().item_spacing = prev_spacing;
+    if rtl {
+        ui.add_space(6.0);
+    }
+}
+
+/// Resize zone thickness along an edge, and the side of a corner zone (matching native resize borders).
+const EDGE: f32 = 8.0;
+const CORNER: f32 = 12.0;
+
+/// The edge and corner zones of a window with content rect `w`: (zone, direction, cursor). Corners
+/// come last so they win where they overlap the edges.
+fn zones(w: Rect) -> [(Rect, ResizeDirection, CursorIcon); 8] {
+    use ResizeDirection::*;
+    let (e, c) = (EDGE, CORNER);
+    [
+        (Rect::from_min_max(w.left_top(), pos2(w.right(), w.top() + e)), North, CursorIcon::ResizeNorth),
+        (Rect::from_min_max(pos2(w.left(), w.bottom() - e), w.right_bottom()), South, CursorIcon::ResizeSouth),
+        (Rect::from_min_max(w.left_top(), pos2(w.left() + e, w.bottom())), West, CursorIcon::ResizeWest),
+        (Rect::from_min_max(pos2(w.right() - e, w.top()), w.right_bottom()), East, CursorIcon::ResizeEast),
+        (Rect::from_min_size(w.left_top(), vec2(c, c)), NorthWest, CursorIcon::ResizeNwSe),
+        (Rect::from_min_size(w.right_top() - vec2(c, 0.0), vec2(c, c)), NorthEast, CursorIcon::ResizeNeSw),
+        (Rect::from_min_size(w.left_bottom() - vec2(0.0, c), vec2(c, c)), SouthWest, CursorIcon::ResizeNeSw),
+        (Rect::from_min_size(w.right_bottom() - vec2(c, c), vec2(c, c)), SouthEast, CursorIcon::ResizeNwSe),
+    ]
+}
+
+fn resize_handed_off_id() -> Id {
+    Id::unique("titlebar-resize-handed-off")
+}
+
+/// An OS resize started at `pass`; `released` is the pass whose input ended the press
+/// ([`release_after_os_resize`]).
+#[derive(Clone, Copy, Debug)]
+struct HandOff {
+    pass: u64,
+    released: Option<u64>,
+}
+
+/// The compositor takes the button release of an OS resize (KDE Wayland), so egui kept the edge
+/// pressed: the zones stopped hovering until the next click, every other resize (#1581). End the
+/// press ourselves on the input after the hand-off, but only while egui still has it down and this
+/// input brings no release of its own: where the OS does send it (Windows, X11), nothing is added,
+/// so no second release can turn into a click. Call from `raw_input_hook`.
+pub fn release_after_os_resize(ctx: &egui::Context, raw: &mut egui::RawInput) {
+    let Some(h) = ctx.data(|d| d.get_temp::<HandOff>(resize_handed_off_id())) else { return };
+    if h.released.is_some() || h.pass >= ctx.cumulative_pass_nr() {
+        return;
+    }
+    let os_released = raw.events.iter().any(|e| matches!(e, egui::Event::PointerButton { button: PointerButton::Primary, pressed: false, .. }));
+    if let Some(pos) = ctx.input(|i| i.pointer.latest_pos()).filter(|_| !os_released && ctx.input(|i| i.pointer.primary_down())) {
+        raw.events.push(egui::Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, modifiers: ctx.input(|i| i.modifiers) });
+    }
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|d| d.insert_temp(resize_handed_off_id(), HandOff { released: Some(pass), ..h }));
+}
+
+/// The compositor owns the pointer during an OS resize: it sets its own cursor, and the button
+/// release goes to it, not to us. egui-winit only re-sends a cursor that changed, so afterwards the
+/// window kept the compositor's arrow until the next press (KDE Wayland, #1581). On the first
+/// pointer motion after the hand-off, show the default cursor for one frame so the resize cursor is
+/// sent again on the next.
+fn reshow_cursor_after_os_resize(ctx: &egui::Context) {
+    let Some(HandOff { released: Some(pass), .. }) = ctx.data(|d| d.get_temp::<HandOff>(resize_handed_off_id())) else { return };
+    if pass < ctx.cumulative_pass_nr() && ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::PointerMoved(_)))) {
+        ctx.data_mut(|d| d.remove::<HandOff>(resize_handed_off_id()));
+        ctx.set_cursor_icon(CursorIcon::Default);
+        ctx.request_repaint();
+    }
+}
+
+/// Invisible resize zones along the window's edges, above everything else; a press in one starts
+/// an OS resize in that direction. None while the window is maximized or full screen.
+pub fn resize_zones(ui: &mut Ui) {
+    let ctx = ui.ctx().clone();
+    if ctx.input(|i| i.viewport().maximized.unwrap_or(false) || i.viewport().fullscreen.unwrap_or(false)) {
+        reshow_cursor_after_os_resize(&ctx);
+        return;
+    }
+    let w = ctx.content_rect();
+    let layer = LayerId::new(Order::Foreground, Id::unique("titlebar-resize"));
+    let zui = ui.new_child(egui::UiBuilder::new().layer_id(layer).max_rect(w));
+    for (i, (r, dir, cursor)) in zones(w).into_iter().enumerate() {
+        let resp = zui.interact(r, Id::unique(("titlebar-resize", i)), Sense::drag()).on_hover_cursor(cursor);
+        if resp.drag_started_by(PointerButton::Primary) {
+            ctx.send_viewport_cmd(ViewportCommand::BeginResize(dir));
+            let pass = ctx.cumulative_pass_nr();
+            ctx.data_mut(|d| d.insert_temp(resize_handed_off_id(), HandOff { pass, released: None }));
+        }
+    }
+    reshow_cursor_after_os_resize(&ctx);
+}
+
 /// Draws the title bar with window dragging, AutoSave, quick access, account, community and search
 /// controls, and the centred clickable document title.
 pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
@@ -282,17 +483,25 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
     // macOS: shorter, so the system's traffic lights are centred in it; the tallest controls
     // shrink to keep a margin above and below them.
     let mac = app.integrated_titlebar;
+    let custom_caption = !mac && !cfg!(target_arch = "wasm32");
     let bar = app.mac_titlebar;
     let left = if mac { bar.content_left as i8 } else { 8 };
     let control_h = if mac { 22.0 } else { 26.0 };
+    let bar_h = if mac { bar.height } else { 38.0 };
     egui::Panel::top("title_bar")
-        .exact_size(if mac { bar.height } else { 38.0 })
-        .frame(egui::Frame::NONE.fill(t.title_bar).inner_margin(egui::Margin { left, right: 10, top: 0, bottom: 0 }))
+        .exact_size(bar_h)
+        .frame(egui::Frame::NONE.fill(t.title_bar).inner_margin(egui::Margin { left, right: if mac { 10 } else { 0 }, top: 0, bottom: 0 }))
         .show(ui, |ui| {
             let full = ui.max_rect();
-            // Drag the window by the title bar (integrated title bar on macOS).
-            let drag = ui.interact(full, ui.scope_id().with("title_drag"), Sense::click_and_drag());
+            // Drag the window by the title bar (integrated title bar on macOS and unified header on Windows/Linux).
+            let drag_rect =
+                if custom_caption { Rect::from_min_max(full.min, pos2(full.max.x - 3.0 * WINDOW_CONTROL_WIDTH, full.max.y)) } else { full };
+            let drag = ui.interact(drag_rect, ui.scope_id().with("title_drag"), Sense::click_and_drag());
             if drag.drag_started() {
+                let max = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
+                if max {
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(false));
+                }
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
             }
             if drag.double_clicked() {
@@ -346,6 +555,9 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                 }
                 qat_end = ui.min_rect().max.x;
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if custom_caption {
+                        window_controls(ui, bar_h);
+                    }
                     // Account / community.
                     let (r, resp) = ui.allocate_exact_size(vec2(control_h, control_h), Sense::click());
                     ui.painter().circle_filled(r.center(), control_h / 2.0 - 1.0, t.accent);
@@ -407,10 +619,36 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
             let w = text_width(ui.painter(), &shown, &font, track, t.text);
             if available > 24.0 {
                 let rect = Rect::from_center_size(pos2(cx, full.center().y), vec2(w + 8.0, control_h));
-                let response = ui.interact(rect, ui.scope_id().with("document_name"), Sense::click()).on_hover_text(tl!("Rename Document"));
+                let response = ui.interact(rect, ui.scope_id().with("document_name"), Sense::click_and_drag()).on_hover_text(tl!("Rename Document"));
                 response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &title));
-                if response.clicked() {
-                    let _ = app.run("file.rename", json!({}));
+                let pending_id = ui.scope_id().with("pending_rename_at");
+                if response.drag_started() {
+                    ui.ctx().data_mut(|d| d.remove::<f64>(pending_id));
+                    let max = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
+                    if max {
+                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(false));
+                    }
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                }
+                if response.double_clicked() {
+                    ui.ctx().data_mut(|d| d.remove::<f64>(pending_id));
+                    let max = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
+                } else if response.clicked() {
+                    let now = ui.input(|i| i.time);
+                    ui.ctx().data_mut(|d| d.insert_temp(pending_id, now));
+                    ui.ctx().request_repaint_after(std::time::Duration::from_millis(350));
+                }
+                let outside_press = ui.input(|i| i.pointer.any_pressed() && i.pointer.latest_pos().is_some_and(|p| !rect.contains(p)));
+                if outside_press {
+                    ui.ctx().data_mut(|d| d.remove::<f64>(pending_id));
+                }
+                if let Some(t_click) = ui.ctx().data(|d| d.get_temp::<f64>(pending_id)) {
+                    let now = ui.input(|i| i.time);
+                    if now - t_click >= 0.35 {
+                        ui.ctx().data_mut(|d| d.remove::<f64>(pending_id));
+                        let _ = app.run("file.rename", json!({}));
+                    }
                 }
 
                 paint_text(

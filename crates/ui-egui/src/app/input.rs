@@ -24,6 +24,9 @@ impl WordApp {
         if cfg!(target_os = "macos") {
             control_click_as_secondary(&mut raw.events, &mut self.control_click);
         }
+        if !self.integrated_titlebar && !cfg!(target_arch = "wasm32") {
+            crate::chrome::release_after_os_resize(ctx, raw);
+        }
         if self.synthetic_pending || self.synthetic.is_empty() || self.fonts_frames < 2 || !self.control_input_is_roots(ctx) {
             return;
         }

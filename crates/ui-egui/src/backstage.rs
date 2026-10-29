@@ -62,7 +62,18 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 // The hit area is scoped to the chevron, not the whole 200px-wide row (#3041):
                 // the row reads as plain sidebar background next to it, so clicking there must
                 // not also close the File page, same as the macOS chevron fix (#2972) below.
-                let (r, _) = ui.allocate_exact_size(vec2(200.0, 40.0), Sense::hover());
+                let (r, drag) = ui.allocate_exact_size(vec2(200.0, 40.0), Sense::click_and_drag());
+                if drag.drag_started() {
+                    let max = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
+                    if max {
+                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(false));
+                    }
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                }
+                if drag.double_clicked() {
+                    let max = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
+                }
                 let c = pos2(r.min.x + 26.0, r.center().y);
                 let resp = ui.interact(Rect::from_center_size(c, vec2(22.0, r.height())), ui.scope_id().with("backstage_back"), Sense::click());
                 icons::paint(ui.painter(), Rect::from_center_size(c, vec2(18.0, 18.0)), "chevronLeft", egui::Color32::WHITE, egui::Color32::WHITE);
@@ -159,6 +170,19 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             _ => home_page(app, ui),
         });
     });
+    if !mac && !cfg!(target_arch = "wasm32") {
+        egui::Area::new(egui::Id::unique("backstage_window_controls"))
+            .fixed_pos(pos2(ui.ctx().content_rect().max.x - 3.0 * crate::chrome::WINDOW_CONTROL_WIDTH, 0.0))
+            .order(egui::Order::Foreground)
+            .show(ui.ctx(), |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+                    crate::chrome::window_minimize_button(ui, &t, 38.0);
+                    crate::chrome::window_maximize_button(ui, &t, 38.0);
+                    crate::chrome::window_close_button(ui, &t, 38.0);
+                });
+            });
+    }
 }
 
 /// Recovery is a separate copy. Leaving this page never discards it.

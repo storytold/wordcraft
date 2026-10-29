@@ -103,6 +103,9 @@ impl WordApp {
         if let Some(url) = self.canvas.open_url.take() {
             ctx.open_url(egui::OpenUrl::new_tab(url));
         }
+        if !self.integrated_titlebar && !cfg!(target_arch = "wasm32") {
+            chrome::resize_zones(ui);
+        }
     }
 
     /// Keep the window title and full-screen state in sync, then record this frame's time.

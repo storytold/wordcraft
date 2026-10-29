@@ -181,3 +181,7 @@ sync_github_name = true
 
 [people.pakiat]
 display_name = "OtorO"
+
+[people.Bitslay]
+real_name = "Asef Zaman Dian"
+sync_github_name = true
