@@ -266,6 +266,19 @@ impl egui::Plugin for ViewportInput {
 }
 
 impl WordApp {
+    /// Only the root native window has a Linux Global Menu binding for now. Never project
+    /// another window's document or selection onto that binding, including before its first paint.
+    pub fn root_menu_active(&self) -> bool {
+        if !self.windows.native {
+            return true;
+        }
+        let Some(root) = self.windows.viewports.as_ref().and_then(|v| v.root()) else { return false };
+        let Some(key) = self.windows.list.get(root).copied() else { return false };
+        self.windows.list.active() == Some(root)
+            && self.windows.shown == key
+            && self.windows.get(key).is_some_and(|w| w.doc == self.session.document_id())
+    }
+
     /// How many windows are open.
     pub fn window_count(&self) -> usize {
         if self.windows.native { self.windows.open.len() } else { 1 }

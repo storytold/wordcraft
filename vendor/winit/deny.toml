@@ -1,0 +1,80 @@
+# https://embarkstudios.github.io/cargo-deny
+# cargo install cargo-deny
+# cargo update && cargo deny --target aarch64-apple-ios check
+# Note: running just `cargo deny check` without a `--target` will result in
+# false positives due to https://github.com/EmbarkStudios/cargo-deny/issues/324
+[graph]
+all-features = true
+exclude-dev = true
+targets = [
+    { triple = "aarch64-apple-ios" },
+    { triple = "aarch64-linux-android" },
+    { triple = "i686-pc-windows-gnu" },
+    { triple = "i686-pc-windows-msvc" },
+    { triple = "i686-unknown-linux-gnu" },
+    { triple = "wasm32-unknown-unknown", features = [
+        "atomics",
+    ] },
+    { triple = "x86_64-apple-darwin" },
+    { triple = "x86_64-apple-ios" },
+    { triple = "x86_64-pc-windows-gnu" },
+    { triple = "x86_64-pc-windows-msvc" },
+    { triple = "x86_64-unknown-linux-gnu" },
+    { triple = "x86_64-unknown-redox" },
+]
+
+[licenses]
+allow = [
+    "Apache-2.0",   # https://tldrlegal.com/license/apache-license-2.0-(apache-2.0)
+    "BSD-2-Clause", # https://tldrlegal.com/license/bsd-2-clause-license-(freebsd)
+    "BSD-3-Clause", # https://tldrlegal.com/license/bsd-3-clause-license-(revised)
+    "ISC",          # https://tldrlegal.com/license/isc-license
+    "MIT",          # https://tldrlegal.com/license/mit-license
+    "Unicode-3.0",  # https://spdx.org/licenses/Unicode-3.0.html
+]
+confidence-threshold = 1.0
+private = { ignore = true }
+
+[bans]
+multiple-versions = "deny"
+skip = [
+    { crate = "raw-window-handle", reason = "we depend on multiple behind features" },
+    { crate = "bitflags@1", reason = "the ecosystem is in the process of migrating" },
+    { crate = "rustix@0.38", reason = "the ecosystem is in the process of migrating" },
+    { crate = "linux-raw-sys@0.4", reason = "the ecosystem is in the process of migrating" },
+]
+wildcards = "allow" # at least until https://github.com/EmbarkStudios/cargo-deny/issues/241 is fixed
+
+[bans.build]
+include-archives = true
+interpreted = "deny"
+
+[[bans.build.bypass]]
+allow = [
+    { path = "generate-bindings.sh", checksum = "268ec23248218d779e33853cdc60e2985e70214ff004716cd734270de1f6b561" },
+]
+crate = "android-activity"
+
+[[bans.build.bypass]]
+allow-globs = ["ci/*", "githooks/*", "cargo.sh"]
+crate = "zerocopy"
+
+[[bans.build.bypass]]
+allow-globs = ["freetype2/*"]
+crate = "freetype-sys"
+
+[[bans.build.bypass]]
+allow-globs = ["lib/*.a"]
+crate = "windows_i686_gnu"
+
+[[bans.build.bypass]]
+allow-globs = ["lib/*.lib"]
+crate = "windows_i686_msvc"
+
+[[bans.build.bypass]]
+allow-globs = ["lib/*.a"]
+crate = "windows_x86_64_gnu"
+
+[[bans.build.bypass]]
+allow-globs = ["lib/*.lib"]
+crate = "windows_x86_64_msvc"

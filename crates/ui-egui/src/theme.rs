@@ -435,8 +435,66 @@ impl Tokens {
         }
     }
     pub fn get(ctx: &egui::Context) -> Tokens {
-        if ctx.global_style().visuals.dark_mode { Tokens::dark() } else { Tokens::light() }
+        let tokens = if ctx.global_style().visuals.dark_mode { Tokens::dark() } else { Tokens::light() };
+        tokens.with_system_accent(system_accent(ctx))
     }
+
+    fn with_system_accent(mut self, accent: Option<Color32>) -> Self {
+        if let Some(mut accent) = accent {
+            // Preserve readability for arbitrary desktop accents, including black/white.
+            let target = if self.dark { Color32::WHITE } else { Color32::BLACK };
+            for _ in 0..32 {
+                if contrast_ratio(accent, self.ribbon) >= 4.5 {
+                    break;
+                }
+                accent = Color32::from_rgb(
+                    ((u16::from(accent.r()) * 3 + u16::from(target.r())) / 4) as u8,
+                    ((u16::from(accent.g()) * 3 + u16::from(target.g())) / 4) as u8,
+                    ((u16::from(accent.b()) * 3 + u16::from(target.b())) / 4) as u8,
+                );
+            }
+            self.accent = accent;
+            self.accent_text = accent;
+            self.on_accent = if contrast_ratio(accent, Color32::WHITE) >= 4.5 { Color32::WHITE } else { Color32::BLACK };
+            self.selection = Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 0x55);
+        }
+        self
+    }
+}
+
+fn contrast_ratio(a: Color32, b: Color32) -> f32 {
+    let luminance = |c: Color32| {
+        let linear = |v: u8| {
+            let s = f32::from(v) / 255.0;
+            if s <= 0.04045 { s / 12.92 } else { ((s + 0.055) / 1.055).powf(2.4) }
+        };
+        0.2126 * linear(c.r()) + 0.7152 * linear(c.g()) + 0.0722 * linear(c.b())
+    };
+    let (a, b) = (luminance(a), luminance(b));
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
+}
+
+fn system_accent(ctx: &egui::Context) -> Option<Color32> {
+    ctx.data(|d| d.get_temp::<Color32>(egui::Id::unique("desktop-system-accent")))
+}
+
+/// Apply a desktop accent only in System mode. Returns whether palettes need refreshing.
+pub fn set_system_accent(ctx: &egui::Context, rgb: Option<[f64; 3]>) -> bool {
+    let next = rgb
+        .and_then(craft_desktop::appearance::validate_accent)
+        .map(|v| Color32::from_rgb((v[0] * 255.).round() as u8, (v[1] * 255.).round() as u8, (v[2] * 255.).round() as u8));
+    if system_accent(ctx) == next {
+        return false;
+    }
+    ctx.data_mut(|d| {
+        let id = egui::Id::unique("desktop-system-accent");
+        if let Some(color) = next {
+            d.insert_temp(id, color);
+        } else {
+            d.remove::<Color32>(id);
+        }
+    });
+    true
 }
 
 /// Install the UI fonts (Inter, JetBrains Mono) and the craft-fonts CJK interface faces if built
@@ -747,8 +805,8 @@ fn tracked_job(text: &str, font: &FontId, tracking: f32, color: Color32) -> egui
 /// Setting a concrete theme for `System` would pin the native window too, and macOS then stops
 /// reporting appearance changes (#311).
 pub fn apply(ctx: &egui::Context, appearance: Appearance) {
-    ctx.set_visuals_of(egui::Theme::Light, visuals(&Tokens::light()));
-    ctx.set_visuals_of(egui::Theme::Dark, visuals(&Tokens::dark()));
+    ctx.set_visuals_of(egui::Theme::Light, visuals(&Tokens::light().with_system_accent(system_accent(ctx))));
+    ctx.set_visuals_of(egui::Theme::Dark, visuals(&Tokens::dark().with_system_accent(system_accent(ctx))));
     ctx.all_styles_mut(|s| {
         s.spacing.item_spacing = egui::vec2(6.0, 4.0);
         s.spacing.button_padding = egui::vec2(8.0, 3.0);
@@ -820,6 +878,22 @@ pub fn c32(c: wordcraft_doc::Rgb) -> Color32 {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
+
+    #[test]
+    fn desktop_accents_remain_readable_and_fixed_themes_restore() {
+        use egui::Color32;
+        for t in [super::Tokens::light(), super::Tokens::dark()] {
+            for color in [Color32::WHITE, Color32::BLACK, Color32::RED, Color32::GREEN, Color32::BLUE, Color32::GRAY] {
+                let adapted = t.with_system_accent(Some(color));
+                assert!(super::contrast_ratio(adapted.accent_text, adapted.ribbon) >= 4.5);
+                assert!(super::contrast_ratio(adapted.on_accent, adapted.accent) >= 4.5);
+            }
+        }
+        let ctx = egui::Context::default();
+        assert!(super::set_system_accent(&ctx, Some([1., 0., 0.])));
+        assert!(super::set_system_accent(&ctx, None));
+        assert_eq!(super::system_accent(&ctx), None);
+    }
 
     /// WCAG contrast ratio between two opaque colours.
     pub(super) fn contrast(a: egui::Color32, b: egui::Color32) -> f32 {

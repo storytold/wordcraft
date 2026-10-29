@@ -101,6 +101,29 @@ fn app(text: &str) -> WordApp {
     a
 }
 
+/// A root-only panel binding must not apply a cached action to a child, even when both
+/// windows show the same document with different selections.
+#[test]
+fn root_global_menu_rejects_another_window_of_the_same_document() {
+    let ctx = backend();
+    let mut a = app("Hello");
+    frames(&ctx, &mut a, 2);
+    assert!(a.root_menu_active());
+    let doc = a.session.document_id();
+    let action = crate::native_menu::Action { command: "format.bold".into(), params: json!({}) };
+    a.run("view.newWindow", json!({})).unwrap();
+    assert!(!a.root_menu_active(), "reject even before the child's first paint");
+    frames(&ctx, &mut a, 3);
+    assert_eq!(a.session.document_id(), doc);
+    assert!(crate::native_menu::snapshot(&a).items.is_empty());
+    assert!(crate::native_menu::activate(&mut a, doc, &action).is_err());
+    focus(ViewportId::ROOT);
+    frames(&ctx, &mut a, 2);
+    assert!(a.root_menu_active());
+    assert!(!crate::native_menu::snapshot(&a).items.is_empty());
+    crate::native_menu::activate(&mut a, doc, &action).unwrap();
+}
+
 fn text(a: &WordApp) -> String {
     a.session.doc.plain_text(StoryRef::Body).trim().to_string()
 }

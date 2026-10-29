@@ -1012,6 +1012,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-desktop"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "raw-window-handle",
+ "serde_json",
+ "wayland-client",
+ "wayland-protocols-plasma",
+ "winit",
+ "x11rb",
+ "zbus",
+]
+
+[[package]]
 name = "craft-fonts-build"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=92d392cff132eaf53e13afff77f38b5c11b73aa0#92d392cff132eaf53e13afff77f38b5c11b73aa0"
@@ -6518,7 +6532,6 @@ checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 [[package]]
 name = "winit"
 version = "0.30.13"
-source = "git+https://github.com/storytold/winit.git?rev=a517b3846ee8457d84ee4975110bfda6797c44dc#a517b3846ee8457d84ee4975110bfda6797c44dc"
 dependencies = [
  "ahash",
  "android-activity",
@@ -6652,6 +6665,7 @@ dependencies = [
  "arboard",
  "chrono",
  "clipboard-win",
+ "craft-desktop",
  "craft-print",
  "craft-update",
  "dispatch2",
@@ -6914,6 +6928,7 @@ version = "0.12.0"
 dependencies = [
  "cfb",
  "chrono",
+ "craft-desktop",
  "craft-i18n",
  "craft-ui",
  "craft-update",
@@ -6935,7 +6950,6 @@ dependencies = [
  "wordcraft-layout",
  "wordcraft-render",
  "wordcraft-zotero",
- "zbus",
  "zip 3.0.0",
 ]
 

@@ -27,14 +27,21 @@ fn main() {
         wordcraft_engine::sample::sample_document()
     };
     let mut app = WordApp::new(Session::new(doc), Services::default()).with_control(rx);
-    app.integrated_titlebar = true;
+    // Linux SSD mode can be reproduced without injecting the macOS integrated title bar.
+    app.integrated_titlebar = lines.first().and_then(|l| l.get("integrated_titlebar")).and_then(|v| v.as_bool()).unwrap_or(true);
     if lines.first().is_some_and(|l| l.get("startScreen").is_some()) {
         app.start_screen();
     }
     let w = lines.iter().find_map(|l| l.get("width").and_then(|v| v.as_f64())).unwrap_or(1440.0) as f32;
     let h = lines.iter().find_map(|l| l.get("height").and_then(|v| v.as_f64())).unwrap_or(900.0) as f32;
+    // Logical dimensions and native scale are independent; exercise fractional compositor DPI.
+    let ppp = lines
+        .iter()
+        .find_map(|l| l.get("pixels_per_point").and_then(|v| v.as_f64()))
+        .filter(|v| v.is_finite() && (0.5..=4.0).contains(v))
+        .unwrap_or(2.0) as f32;
     let mut harness =
-        egui_kittest::Harness::builder().with_size(egui::vec2(w, h)).with_pixels_per_point(2.0).with_max_steps(1_000_000).wgpu().build_ui_state(
+        egui_kittest::Harness::builder().with_size(egui::vec2(w, h)).with_pixels_per_point(ppp).with_max_steps(1_000_000).wgpu().build_ui_state(
             |ui, app: &mut WordApp| {
                 if !READY.load(std::sync::atomic::Ordering::Relaxed) {
                     return;

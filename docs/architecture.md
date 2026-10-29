@@ -1,6 +1,8 @@
 # WordCraft architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (`proof` is per language: English and Polish; previously major: first committed version; `plan/architecture.md` is local-only) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **KDE integration update:** 2026-10-21 · minor: shared Linux transport, native Wayland binding and portal appearance; see [KDE.md](KDE.md).
+
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-22 · **Change:** minor (`proof` is per language: English and Polish; previously major: first committed version; `plan/architecture.md` is local-only) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 How WordCraft is built today (origin/main `40c5d51`). The longer design notes in
 `plan/architecture.md` are gitignored and local to the original author's machine; this file is the
@@ -48,7 +50,29 @@ winit or rfd.
    an egui/wgpu canvas; PDF export walks the same display list through `pdf`.
 5. **Save:** `engine::io` picks a writer by extension.
 
+## Desktop application menu
+
+The toolkit-independent application menu lives in `ui-egui::native_menu`. The Linux host's
+`apps/wordcraft/src/appmenu.rs` delegates snapshots to `vendor/craft-desktop`, which exports `com.canonical.dbusmenu`, sets the
+KDE window properties and registers with `com.canonical.AppMenu.Registrar`. A worker performs
+all bus/X11 calls; bounded messages send clicks back to the UI thread's `WordApp::run`.
+Actions are revalidated against the current document and modal state. Item IDs remain stable
+across translations and reordering, but are retired when the document is replaced. Native
+Wayland association uses the existing winit surface and an independent guest event queue;
+a bundled one-method winit patch avoids raw-pointer reconstruction. The adapter is absent from other platforms.
+Property updates are signalled per item (including shortcut removals), and structural updates
+per parent, so Plasma's lazily loaded submenu caches stay in sync with the editor.
+
 ## Testing and gates
+
+KDE integration validation (2026-10-14): native workspace tests, Clippy, formatting, assets and
+layer checks passed. In the current shared adapter, the private-bus test
+(`dbus-run-session -- cargo test --manifest-path vendor/craft-desktop/Cargo.toml
+--features linux,portal appmenu_dbus -- --ignored`) covers the wire layout and activation. A live Plasma session check
+verified registration, menu reads by plasmashell, English/Russian labels, Bold activation and
+its property-update signal, Undo availability and the unsaved-document guard. Socket tests need
+permission to bind local sockets. The WASM check was blocked by the missing
+`wasm32-unknown-unknown` toolchain target; Flatpak packaging was not built or runtime-tested.
 
 - 821 `#[test]` functions and 10 property-test blocks: model, layout, DOCX round-trip and hostile
   input, `.doc`, formats, typing parity (`engine/src/tests/typing.rs`), bidi, i18n catalogs, UI
@@ -64,5 +88,8 @@ winit or rfd.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-22 | trivial | Review follow-up: point the private-session-bus test command at the standalone vendored adapter |
+| 2026-10-21 | minor | Shared Linux integration; safe native Wayland association, standardized portal theme/accent, fractional-DPI test hooks and tab overflow |
+| 2026-10-14 | minor | KDE Global Menu: toolkit-independent menu model and Linux DBusMenu/window adapter for X11/XWayland |
 | 2026-10-10 | minor | `proof`: proofing languages (English, Polish), affix engine, Polish patterns; layout and engine route each run by its language |
 | 2026-10-10 | major | First committed architecture doc, from the crates' sources and `AGENTS.md` |

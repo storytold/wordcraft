@@ -9,6 +9,7 @@ description = "WordCraft egui front end (Word-style ribbon UI); swappable: nothi
 workspace = true
 
 [dependencies]
+craft-desktop = { path = "../../vendor/craft-desktop", default-features = false }
 craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0" }
 # Interface translations: lookup, fallback, plurals and system-locale matching over the craft-i18n
 # catalogs that `build.rs` embeds from `CRAFT_I18N_DIR` (storytold/craft-i18n, pinned in
@@ -39,7 +40,7 @@ sys-locale = { version = "0.3", features = ["js"] }
 # `desktop_theme.rs`). Already in the tree, with these features, through egui's own accessibility
 # bus; pinned to one version so nothing is built twice.
 [target.'cfg(target_os = "linux")'.dependencies]
-zbus = "=5.19.0"
+craft-desktop = { path = "../../vendor/craft-desktop", features = ["portal"] }
 
 # Comment times in the user's own time zone (`local_time.rs`); the web app asks the browser.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

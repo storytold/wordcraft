@@ -45,6 +45,7 @@ pub mod keys;
 pub mod keytips;
 mod local_time;
 pub mod mini_toolbar;
+pub mod native_menu;
 pub mod objects;
 pub mod options;
 pub mod panes;
@@ -539,6 +540,7 @@ pub struct WordApp {
     legacy_interface_size: Option<f64>,
     /// The desktop's light/dark choice, watched while the app runs (Linux has no winit answer).
     desktop_theme: desktop_theme::DesktopTheme,
+    desktop_accent: Option<[f64; 3]>,
     /// The last answer [`desktop_theme`] gave, so a frame that asks costs nothing.
     desktop_dark: Option<bool>,
     /// The interface language and the editing language the session last got for it

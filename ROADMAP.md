@@ -1,5 +1,7 @@
 # WordCraft roadmap
 
+> **KDE reconciliation (2026-10-29):** Global Menu currently binds only the original native window. Child windows retain local controls, and panel actions are rejected while a child is active, including another window on the same document. Upstream ribbon and multiwindow behavior are retained. See [KDE integration](docs/KDE.md) for validation limits.
+
 > **Highlight update:** 2026-10-25 · Highlight shortcut toggles the last chosen colour off when the whole selection has it; explicit colour commands remain setters (#4085). Readiness estimates unchanged.
 
 **Stage: alpha** · next: beta, ~15 points (60% → 75% ready for real work) and ~150–230 h away
@@ -139,6 +141,8 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
    (20–30 h).
 
 ## Progress log
+
+- 2026-10-29: KDE integration reconciled with upstream egui 0.37 and document windows. Panel dispatch is restricted to the active original window, preserving local controls in child windows. Exact full CI passed all eight stages; an isolated native Wayland Ruler toggle/checkmark and real Plasma menu consumer were verified. A host-font-dependent pagination fixture now pins the existing bundled face without weakening its geometry assertions. Child-window export and broader live acceptance remain open; see [KDE evidence](docs/KDE.md).
 
 - 2026-10-29: Recipient labels continue across product-sized sheets instead of stopping after the first sheet (#4880). Labels → New Document with one label per recipient includes every selected address, with unused labels blank on the final sheet. Fixed-text and single-label output remain one sheet. Finish & Merge template expansion is separate.
 - 2026-10-22: View › Window › New Window opens a second window on the document (desktop). The windows are titled `Name:1` and `Name:2` and each keeps its own caret, scroll position, zoom and view; edits and Undo are the document's and show in both. Closing one of them asks nothing; the last one asks about unsaved changes, and quitting asks once per document.
@@ -640,6 +644,8 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 Footer page-table height and body wrapping are corrected. Other pagination gaps remain open.
 
 ## Revision history
+
+> 2026-10-29 · KDE reconciliation: full CI and root-window Wayland smoke passed; original-window scope and separate test-fixture portability correction recorded. Readiness estimates unchanged.
 
 > 2026-10-23 · cu20we review follow-up: Only paragraph-relative box floats use the pre-spacing origin. Line-relative floats and page/margin fallbacks in cells and text boxes keep the text-top origin. Synthetic controls compare zero and 24 pt space-before across all four box contexts. New cap conversion helpers and regression tests document their contracts; readiness estimates unchanged.
 

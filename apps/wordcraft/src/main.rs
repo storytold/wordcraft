@@ -12,6 +12,8 @@
 mod animations;
 #[cfg(target_os = "macos")]
 mod apple_events;
+#[cfg(target_os = "linux")]
+mod appmenu;
 mod clipboard;
 mod control_server;
 mod default_apps;
@@ -43,6 +45,7 @@ struct App(
     // a hidden logic tick.
     RawWindowState,
     #[cfg(target_os = "macos")] fmv_macos_events::Inbox,
+    #[cfg(target_os = "linux")] Option<appmenu::Bridge>,
 );
 
 impl eframe::App for App {
@@ -53,6 +56,10 @@ impl eframe::App for App {
         #[cfg(target_os = "macos")]
         apple_events::poll(&self.5, &mut self.0, ctx);
         self.0.logic(ctx);
+        #[cfg(target_os = "linux")]
+        if let Some(menu) = &mut self.5 {
+            menu.poll(&mut self.0, ctx);
+        }
         self.3.show(frame);
         let window = self.4;
         // A window that doesn't fit on its screen (the default size on a laptop) shrinks to fit
@@ -114,9 +121,15 @@ impl eframe::App for App {
     }
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.0.ui(ui);
+        #[cfg(target_os = "linux")]
+        if let Some(menu) = &mut self.5 {
+            menu.publish(&self.0);
+        }
         self.3.show(frame);
     }
     fn on_exit(&mut self) {
+        #[cfg(target_os = "linux")]
+        self.5.take();
         print::finish_pending_jobs();
         self.0.session.finish_recovery();
         save_prefs(&self.0);
@@ -510,6 +523,8 @@ fn main() -> eframe::Result {
             for f in other_files {
                 open_non_unicode(&mut app, &f);
             }
+            #[cfg(target_os = "linux")]
+            let menu = appmenu::Bridge::start(cc, &app);
             Ok(Box::new(App(
                 app,
                 // With nothing restored, the window the system placed is checked all the same.
@@ -519,6 +534,8 @@ fn main() -> eframe::Result {
                 RawWindowState::default(),
                 #[cfg(target_os = "macos")]
                 apple_events.connect(&cc.egui_ctx),
+                #[cfg(target_os = "linux")]
+                menu,
             )))
         }),
     )

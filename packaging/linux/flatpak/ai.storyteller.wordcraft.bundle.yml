@@ -24,6 +24,8 @@ finish-args:
   - --share=ipc
   # GPU access for the wgpu renderer (Vulkan, or GL as a fallback).
   - --device=dri
+  # Bind an X11/XWayland window's exported Global Menu to the Plasma panel.
+  - --talk-name=com.canonical.AppMenu.Registrar
   # Open/Save dialogs go through the file-chooser portal (rfd's xdg-portal backend) and
   # drag-and-drop through the document portal, so picked files work anywhere without broad
   # filesystem access. Documents and Pictures are granted so files passed by path (the command

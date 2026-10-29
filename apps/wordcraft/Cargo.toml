@@ -25,6 +25,9 @@ serde_json = { workspace = true }
 log = { workspace = true }
 chrono = { workspace = true }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+craft-desktop = { path = "../../vendor/craft-desktop", features = ["linux"] }
+
 [build-dependencies]
 # Icon + VERSIONINFO for wordcraft.exe; build.rs only uses it when the target is Windows.
 winresource = "0.1"

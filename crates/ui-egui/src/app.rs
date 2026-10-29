@@ -122,6 +122,7 @@ impl WordApp {
             legacy_interface_size: None,
             // Inert until the app binary calls `watch_desktop_theme`.
             desktop_theme: desktop_theme::DesktopTheme::default(),
+            desktop_accent: None,
             desktop_dark: None,
             applied_editing: None,
             system_animations: None,
@@ -246,7 +247,8 @@ impl WordApp {
         self.ensure_find_fonts();
         self.install_ui_fonts(ctx, lang);
         if let Some(answer) = self.desktop_theme.take_change() {
-            self.desktop_dark = Some(answer);
+            self.desktop_dark = answer.dark;
+            self.desktop_accent = answer.accent;
         }
         // Both palettes are installed and egui picks one: with `System` it follows an OS appearance
         // change live (winit reports it and repaints, #311). Where winit is silent (Linux) the
@@ -260,7 +262,8 @@ impl WordApp {
             },
             other => other,
         };
-        if self.applied_theme != Some(effective) {
+        let accent_changed = theme::set_system_accent(ctx, if self.ui.theme == theme::Appearance::System { self.desktop_accent } else { None });
+        if self.applied_theme != Some(effective) || accent_changed {
             theme::apply(ctx, effective);
             self.applied_theme = Some(effective);
         }

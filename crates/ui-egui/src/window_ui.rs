@@ -186,6 +186,7 @@ impl WordApp {
             native_scale: _,
             legacy_interface_size: _,
             desktop_theme: _,
+            desktop_accent: _,
             desktop_dark: _,
             applied_editing: _,
             system_animations: _,
