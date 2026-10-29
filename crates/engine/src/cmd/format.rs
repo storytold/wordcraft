@@ -301,7 +301,8 @@ fn underline(s: &mut Session, v: &Value) -> CmdResult {
     apply(s, &|c| c.underline = Some(u))
 }
 
-/// `format.font`: `name` is the font (Latin text, and Persian/Arabic text too); `eastAsia` sets the
+/// `format.font`: `name` is the font (Latin text, ASCII and the rest alike, and Persian/Arabic text
+/// too); `eastAsia` sets the
 /// East Asian text's font on its own, as the Font dialog's Asian text font box does (#505).
 fn font(s: &mut Session, v: &Value) -> CmdResult {
     let arg = |k: &str| -> Result<Option<String>, CmdError> {
@@ -328,6 +329,8 @@ fn font(s: &mut Session, v: &Value) -> CmdResult {
     apply(s, &|c| {
         if let Some(n) = &name {
             c.font = Some(n.clone());
+            // The high-ANSI font (`w:hAnsi`) too, as Word does.
+            c.font_hansi = None;
             c.font_cs = Some(n.clone());
         }
         if let Some(n) = &ea {

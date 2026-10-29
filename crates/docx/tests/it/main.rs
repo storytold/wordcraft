@@ -13,6 +13,7 @@ mod east_asian_lang;
 mod east_asian_layout;
 mod fixtures;
 mod glossary;
+mod hansi_font;
 mod legacy_forms;
 mod ligatures;
 mod malformed;

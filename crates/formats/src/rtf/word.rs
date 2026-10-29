@@ -52,6 +52,9 @@ impl Reader {
         }
         match w {
             "par" => self.end_para_mark(),
+            "chpgn" if self.st.dest == Dest::Body && !self.st.hidden && self.page_field.is_none() => {
+                self.page_number();
+            }
             "sect" => self.end_section(),
             "cell" => self.end_cell(),
             "nestcell" => self.end_para(true),
@@ -255,6 +258,7 @@ impl Reader {
             }
             "field" => self.start_field(),
             "fldrslt" => {
+                self.start_page_field_result();
                 let link = self.st.field.and_then(|i| self.fields.get(i)).and_then(|s| hyperlink(s));
                 if link.is_some() {
                     self.st.fmt.link = link.as_deref().and_then(model::kept_link);

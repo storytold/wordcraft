@@ -329,7 +329,7 @@ impl Writer<'_> {
                 w.open("a:graphicData", &[("uri", "http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas")]);
                 w.open("wpc:wpc", &[]);
                 w.open("wpc:bg", &[]);
-                write_fill(w, c.fill.as_ref());
+                self.area_fill(w, c.fill.as_ref(), rels);
                 w.close("wpc:bg");
                 w.open("wpc:whole", &[]);
                 match c.stroke {

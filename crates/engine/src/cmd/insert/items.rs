@@ -154,6 +154,7 @@ pub(super) fn symbol(s: &mut Session, v: &Value) -> CmdResult {
             props.sym_font = Some(font.to_string());
         } else {
             props.font = Some(font.to_string());
+            props.font_hansi = None;
         }
         s.pending = Some(props);
         r = type_text(s, ch.encode_utf8(&mut buf));

@@ -19,6 +19,7 @@ impl Writer<'_> {
                 if let Some(f) = p.props.drop_cap_font.as_ref().filter(|f| !f.trim().is_empty()) {
                     for r in &mut head.runs {
                         r.props.font = Some(f.clone());
+                        r.props.font_hansi = None;
                     }
                 }
                 head.section = None;

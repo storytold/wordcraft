@@ -1008,3 +1008,4 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-23 | trivial | Progress log: justified lines ending in a manual line break reach the margin (#3924) |
 | 2026-10-23 | trivial | Progress log: "NaN" in the Font dialog's Size box no longer closes the app (#3663) |
 | 2026-10-23 | trivial | Progress log: a table cell span from a `.json` file no longer overflows (#3637) |
+| 2026-10-27 | trivial | Progress log: a shape filled with a picture (a report cover's banner) shows the picture, clipped to the shape |

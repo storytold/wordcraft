@@ -18,6 +18,7 @@ mod styleref;
 mod table_contact;
 mod textbox;
 mod vertical;
+mod zwsp;
 
 const WRAP_TEST_FONT: &str = "Source Sans 3";
 
@@ -1344,6 +1345,32 @@ fn an_empty_section_mark_stays_on_a_full_page() {
         let one_page = lay(&d).pages[0].items.iter().filter(|i| matches!(i, Placed::Lines { .. })).count();
         let mut d = Document::from_text(&format!("{}\n\nNext", lines[..one_page].join("\n")));
         let mark = d.para_mut(StoryRef::Body, &Path::top(one_page)).unwrap();
+        if carries_section {
+            mark.section = Some(Box::new(SectionProps::default()));
+        } else {
+            d.para_mut(StoryRef::Body, &Path::top(one_page + 1)).unwrap().props.page_break_before = Some(true);
+        }
+        lay(&d).pages.len()
+    };
+    assert_eq!(pages(true), 2);
+    assert_eq!(pages(false), 3);
+}
+
+#[test]
+fn an_empty_section_mark_in_a_keep_lines_style_stays_on_a_full_page() {
+    use wordcraft_doc::section::SectionProps;
+    // The same full page, but the mark is in a style that keeps its lines together, as Word's
+    // built-in headings do. Keep lines together moved it to a page of its own before the
+    // section-mark rule was reached, leaving that page blank; the mark needs no room, so there
+    // is nothing for it to keep together. A plain empty paragraph in that style still moves on.
+    let pages = |carries_section: bool| {
+        let lines: Vec<String> = (1..=200).map(|i| format!("Line {i}")).collect();
+        let d = Document::from_text(&lines.join("\n"));
+        let one_page = lay(&d).pages[0].items.iter().filter(|i| matches!(i, Placed::Lines { .. })).count();
+        let mut d = Document::from_text(&format!("{}\n\nNext", lines[..one_page].join("\n")));
+        let mark = d.para_mut(StoryRef::Body, &Path::top(one_page)).unwrap();
+        mark.props.keep_lines = Some(true);
+        mark.props.keep_next = Some(true);
         if carries_section {
             mark.section = Some(Box::new(SectionProps::default()));
         } else {
@@ -4935,6 +4962,111 @@ fn at_least_rows_add_cell_margins_and_border_bands() {
     assert!((tops[0] - (72.0 + 0.5 + 5.0)).abs() < 0.01, "first cell text at {}", tops[0]);
 }
 
+/// Line tops of a table of 15pt at-least rows without cell margins, its rows split by 0.5pt
+/// single borders except one edge, between the second and third rows, drawn `double` at `width`.
+fn double_border_row_tops(width: f32, last_bottom: bool) -> Vec<f32> {
+    use wordcraft_doc::props::{Border, BorderStyle, Borders, HeightRule};
+    let mut d = Document::from_text("");
+    let single = Some(Border { style: BorderStyle::Single, width: 0.5, color: None, space: 0.0 });
+    let double = Some(Border { style: BorderStyle::Double, width, color: None, space: 0.0 });
+    let mut t = Table::new(4, 1, 200.0);
+    t.props.borders = Some(Borders { top: single, left: single, bottom: single, right: single, between: single, inside_v: single });
+    t.props.cell_margins = Some([0.0, 5.4, 0.0, 5.4]);
+    for (r, row) in t.rows.iter_mut().enumerate() {
+        row.props.height = Some(15.0);
+        row.props.height_rule = HeightRule::AtLeast;
+        let cell = &mut row.cells[0];
+        cell.blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&format!("row {r}"), Default::default()))];
+        // Both cells along the edge carry it, as Word writes a border set on a row's bottom.
+        let own = match r {
+            1 => Borders { bottom: double, ..Default::default() },
+            2 => Borders { top: double, ..Default::default() },
+            3 if last_bottom => Borders { bottom: double, ..Default::default() },
+            _ => continue,
+        };
+        cell.props.borders = Some(own);
+    }
+    let after = wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("after", Default::default()));
+    d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(t)), after];
+    line_tops(&lay(&d))
+}
+
+/// A double border takes its two lines and the gap between them, three times its line width, of
+/// the row's height (Word: in a table of 15pt at-least rows with 0.5pt borders the text steps
+/// 15.5pt from row to row, and 16.5pt into the row below a 0.5pt double border; measured on a
+/// table-heavy report).
+#[test]
+fn a_double_border_band_is_three_line_widths() {
+    let tops = double_border_row_tops(0.5, false);
+    let steps: Vec<f32> = tops.windows(2).map(|w| w[1] - w[0]).collect();
+    assert_eq!(steps.len(), 4, "{tops:?}");
+    assert!((steps[0] - 15.5).abs() < 0.01, "below a single border: {steps:?}");
+    assert!((steps[1] - 16.5).abs() < 0.01, "below the double border: {steps:?}");
+    assert!((steps[2] - 15.5).abs() < 0.01, "back to single borders: {steps:?}");
+    // The paragraph after the table starts below the last row's 0.5pt bottom border.
+    assert!((steps[3] - 15.5).abs() < 0.01, "after the table: {steps:?}");
+}
+
+/// The band scales with the line width (a 0.75pt double is 2.25pt), and a double bottom border on
+/// the last row takes its band below the table the same way.
+#[test]
+fn a_double_border_band_scales_with_its_width_and_closes_the_table() {
+    let tops = double_border_row_tops(0.75, true);
+    let steps: Vec<f32> = tops.windows(2).map(|w| w[1] - w[0]).collect();
+    assert_eq!(steps.len(), 4, "{tops:?}");
+    assert!((steps[1] - (15.0 + 2.25)).abs() < 0.01, "below the double border: {steps:?}");
+    assert!((steps[3] - (15.0 + 2.25)).abs() < 0.01, "after a double bottom border: {steps:?}");
+}
+
+/// Row heights (cell rectangles) and the first cell's line height of a three-row table with
+/// `margin` top and bottom cell margins and `width` single borders below every row. The first row
+/// has its own top border; the cells below have none (`nil`), so the border between them is the
+/// one the row above draws.
+fn shared_edge_rows(margin: f32, width: f32) -> (Vec<f32>, f32) {
+    let mut d = Document::from_text("");
+    let line = Some(Border { style: BorderStyle::Single, width, color: None, space: 0.0 });
+    let nil = Some(Border { style: BorderStyle::None, width: 0.0, color: None, space: 0.0 });
+    let mut t = Table::new(3, 1, 200.0);
+    t.props.style = None;
+    t.props.borders = Some(Borders::default());
+    t.props.cell_margins = Some([margin, 5.4, margin, 5.4]);
+    for (r, row) in t.rows.iter_mut().enumerate() {
+        let cell = &mut row.cells[0];
+        cell.props.borders = Some(Borders { top: if r == 0 { line } else { nil }, bottom: line, ..Default::default() });
+        let mut p = wordcraft_doc::Paragraph::with_text(&format!("row {r}"), Default::default());
+        p.props = ParaProps { space_before: Some(0.0), space_after: Some(0.0), ..Default::default() };
+        cell.blocks = vec![wordcraft_doc::para_block(p)];
+    }
+    d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(t))];
+    let l = lay(&d);
+    let heights = (0..3).map(|r| row_height(&l, r)).collect();
+    let line =
+        l.pages[0].items.iter().find_map(|i| if let Placed::Lines { para, .. } = i { para.lines.first().map(|l| l.height) } else { None }).unwrap();
+    (heights, line)
+}
+
+/// A cell without a top border of its own, below a row that draws one along their shared edge,
+/// keeps its top margin from the row's top: the border lies inside the margin (Word: 3.6pt cell
+/// margins, 0.5pt borders and a 17.09pt line make 24.29pt rows below the first, which is 0.5pt
+/// taller with its own top border; measured on a table-heavy report).
+#[test]
+fn a_border_from_the_row_above_lies_inside_the_top_margin() {
+    let (h, line) = shared_edge_rows(3.6, 0.5);
+    assert!((h[0] - (0.5 + 3.6 + line + 3.6)).abs() < 0.01, "own top border: {h:?}, line {line}");
+    assert!((h[1] - (3.6 + line + 3.6)).abs() < 0.01, "border from the row above: {h:?}, line {line}");
+    // The last row adds its bottom border below its bottom margin.
+    assert!((h[2] - (h[1] + 0.5)).abs() < 0.01, "last row: {h:?}");
+}
+
+/// The border from the row above still clears the text when it is wider than the top margin:
+/// the text starts below the border, not the border plus the margin.
+#[test]
+fn a_border_from_the_row_above_wider_than_the_margin_clears_the_text() {
+    let (h, line) = shared_edge_rows(1.0, 3.0);
+    assert!((h[0] - (3.0 + 1.0 + line + 1.0)).abs() < 0.01, "own top border: {h:?}, line {line}");
+    assert!((h[1] - (3.0 + line + 1.0)).abs() < 0.01, "border from the row above: {h:?}, line {line}");
+}
+
 /// Word gives every cell in a row the row's largest top and bottom margins: a cell without its
 /// own lines up with a neighbour that has them, and the row is as tall as if all had them.
 #[test]
@@ -6187,6 +6319,7 @@ fn graphic_items_draw_inside_the_object() {
             bold: false,
             align: TextAlign::Center,
             font: None,
+            vertical: false,
         },
     ];
     let mut d = Document::from_text("Chart");
@@ -6216,6 +6349,7 @@ fn graphic_text_in_a_degenerate_rectangle_is_not_drawn() {
         bold: false,
         align: TextAlign::Center,
         font: None,
+        vertical: false,
     };
     let items = vec![text([f32::NAN, 0.0, 10.0, 10.0], 10.0), text([0.0, 0.0, f32::INFINITY, 10.0], 10.0), text([0.0, 0.0, 10.0, 10.0], f32::NAN)];
     let graphic = Graphic { kind: GraphicKind::Diagram, items, ..Default::default() };
@@ -8126,6 +8260,97 @@ fn east_asian_text_takes_the_asian_font_and_latin_text_the_latin_font() {
         let want = if ch.is_ascii() { latin_face } else { asian_face };
         assert_eq!(face, want, "{ch:?} in {}", if ch.is_ascii() { latin } else { &asian });
     }
+}
+
+#[test]
+fn hansi_font_sets_non_ascii_latin_text_and_ascii_font_the_rest() {
+    // `w:hAnsi` names the font of a run's non-ASCII Latin characters (curly quotes, accented
+    // letters), `w:ascii` that of U+0000-U+007F (ECMA-376 Part 1 §17.3.2.26): a run with only an
+    // hAnsi font keeps the inherited font for its ASCII text.
+    let (ascii, hansi) = ("Source Serif 4", "JetBrains Mono");
+    let text = "say “café” now";
+    let mut d = Document::from_text(text);
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, text.len()), &|c| {
+        c.font = Some(ascii.into());
+        c.font_hansi = Some(hansi.into());
+    })
+    .unwrap();
+    let l = lay(&d);
+    let para =
+        l.pages.iter().flat_map(|p| p.items.iter()).find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+    let mut seen = (false, false);
+    for c in &para.clusters {
+        let Some(ch) = text.get(c.start..c.end).and_then(|s| s.chars().next()).filter(|ch| !ch.is_whitespace()) else { continue };
+        let family = para.styles[c.style as usize].face.get().family.clone();
+        let want = if ch.is_ascii() { ascii } else { hansi };
+        assert_eq!(family, want, "{ch:?}");
+        if ch.is_ascii() { seen.0 = true } else { seen.1 = true }
+    }
+    assert_eq!(seen, (true, true));
+}
+
+/// A field result is one cluster, but its letters may be shaped in two fonts (the run's, and
+/// its high-ANSI font for the accented ones): each glyph is drawn in the font that shaped it.
+#[test]
+fn a_field_result_in_two_fonts_draws_each_glyph_in_its_own() {
+    let (ascii, hansi) = ("Source Serif 4", "JetBrains Mono");
+    let field = InlineObject::Field {
+        instr: "DOCPROPERTY Title".into(),
+        result: "Résumé".into(),
+        locked: false,
+        dirty: false,
+        code: false,
+        form: String::new(),
+    };
+    let mut d = Document::from_text("p ");
+    d.insert_object(&Pos::body(0, 2), field, &Default::default()).unwrap();
+    let len = 2 + wordcraft_doc::para::OBJ.len_utf8();
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, len), &|c| {
+        c.font = Some(ascii.into());
+        c.font_hansi = Some(hansi.into());
+    })
+    .unwrap();
+    let families = glyph_families(&d);
+    assert!(families.contains(&('é', hansi.to_string())), "{families:?}");
+    assert!(families.contains(&('R', ascii.to_string())), "{families:?}");
+
+    // `EQ \o` draws texts on top of one another as one cluster: each in one font of its own
+    // here, the A in the run's, the é in its high-ANSI font.
+    let eq = InlineObject::Field {
+        instr: "eq \\o(A,\u{e9})".into(),
+        result: String::new(),
+        locked: false,
+        dirty: false,
+        code: false,
+        form: String::new(),
+    };
+    let mut d = Document::from_text("p ");
+    d.insert_object(&Pos::body(0, 2), eq, &Default::default()).unwrap();
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, len), &|c| {
+        c.font = Some(ascii.into());
+        c.font_hansi = Some(hansi.into());
+    })
+    .unwrap();
+    let families = glyph_families(&d);
+    assert!(families.contains(&('é', hansi.to_string())), "{families:?}");
+    assert!(families.contains(&('A', ascii.to_string())), "{families:?}");
+}
+
+/// Each letter drawn on the first page and its font's family, checking that its glyph id is that
+/// font's.
+fn glyph_families(d: &Document) -> Vec<(char, String)> {
+    let l = lay(d);
+    let items = display::page_display(d, &l.pages[0], &display::DisplayOptions::default());
+    let mut families = Vec::new();
+    for i in &items {
+        let display::Draw::Glyphs { face, glyphs, text, ranges, .. } = i else { continue };
+        for (g, r) in glyphs.iter().zip(ranges) {
+            let Some(ch) = text.get(r.clone()).and_then(|t| t.chars().next()).filter(|c| c.is_alphabetic()) else { continue };
+            assert_eq!(g.0, face.glyph_for(ch), "{ch:?} drawn with another font's glyph id");
+            families.push((ch, face.get().family.clone()));
+        }
+    }
+    families
 }
 
 /// A page total in the footer ("Page X of Y") is filled in after pagination, so it doesn't make
@@ -11898,4 +12123,102 @@ fn an_empty_bulleted_mark_after_a_bulleted_section_closer_draws_no_bullet() {
             .any(|it| matches!(it, Placed::Lines { path, para, .. } if *path == Path::top(filler) && para.label.is_some()));
         assert!(text, "{filler} lines above: the text closer keeps its bullet");
     }
+}
+
+/// A shape with a picture fill (`a:blipFill`): `media` stretched over it per `stretch`, cropped by `crop`.
+fn picture_filled(kind: wordcraft_doc::para::ShapeKind, freeform: Option<wordcraft_doc::freeform::Freeform>, stretch: [f32; 4]) -> InlineObject {
+    use wordcraft_doc::fill::{Fill, PictureFill};
+    let pic = PictureFill { media: "fill.png".into(), crop: [0.25, 0.0, 0.0, 0.0], stretch, transparency: 50.0, rot_with_shape: true, tile: None };
+    InlineObject::Shape {
+        kind,
+        w: 200.0,
+        h: 100.0,
+        fill: Some(Fill::Picture(Arc::new(pic))),
+        stroke: Some(wordcraft_doc::props::Rgb::BLACK),
+        stroke_width: 1.0,
+        float: Default::default(),
+        story: None,
+        freeform: freeform.map(Arc::new),
+        effects: Default::default(),
+        extra: Default::default(),
+    }
+}
+
+/// Every draw, with clipped, rotated and figure draws' contents after them.
+fn deep(draws: &[display::Draw], out: &mut Vec<display::Draw>) {
+    for d in draws {
+        out.push(d.clone());
+        match d {
+            display::Draw::Figure { draws, .. } => deep(draws, out),
+            display::Draw::Clip { items, .. } | display::Draw::Rotated { items, .. } | display::Draw::ClipTo { items, .. } => deep(items, out),
+            _ => {}
+        }
+    }
+}
+
+/// A picture-filled shape draws its picture stretched over its frame (inset by `a:fillRect`,
+/// here 10 % past its right edge), cropped as the file says, clipped to the shape's outline, with
+/// its outline on top and no solid fill standing in for the picture.
+#[test]
+fn a_picture_fill_is_drawn_clipped_to_the_shape() {
+    use wordcraft_doc::para::ShapeKind;
+    let mut d = Document::from_text("Banner");
+    d.insert_object(&Pos::body(0, 0), picture_filled(ShapeKind::Ellipse, None, [0.0, 0.0, -10.0, 0.0]), &Default::default()).unwrap();
+    let l = lay(&d);
+    let draws = display::page_display(&d, &l.pages[0], &Default::default());
+    let i = draws.iter().position(|x| matches!(x, display::Draw::ClipTo { .. })).expect("a clipped picture");
+    let display::Draw::ClipTo { outline: display::Outline::Shape { rect: frame, kind, .. }, items } = &draws[i] else { panic!("{:?}", draws[i]) };
+    assert_eq!((*kind, frame.w, frame.h), (ShapeKind::Ellipse, 200.0, 100.0));
+    let [display::Draw::Image { rect, media, crop, alpha, .. }] = items.as_slice() else { panic!("{items:?}") };
+    assert_eq!((media.as_str(), *crop, *alpha), ("fill.png", [0.25, 0.0, 0.0, 0.0], 0.5));
+    assert_eq!((rect.x, rect.y, rect.w, rect.h), (frame.x, frame.y, 220.0, 100.0));
+    // The outline, unfilled, drawn over the picture.
+    let outline =
+        draws[i..].iter().find_map(|x| if let display::Draw::Shape { fill, stroke, .. } = x { Some((fill.clone(), *stroke)) } else { None });
+    assert_eq!(outline, Some((None, Some(wordcraft_doc::props::Rgb::BLACK))));
+    let mut all = Vec::new();
+    deep(&draws, &mut all);
+    assert!(!all.iter().any(|x| matches!(x, display::Draw::Shape { fill: Some(_), .. })), "no solid stand-in: {all:?}");
+}
+
+/// A freeform (`a:custGeom`) in a group clips its picture to its own path, in page coordinates.
+#[test]
+fn a_picture_filled_freeform_in_a_group_clips_to_its_path() {
+    use wordcraft_doc::freeform::{FreePath, Freeform};
+    use wordcraft_doc::graphic::PathSeg;
+    use wordcraft_doc::para::{GroupChild, ShapeKind};
+    let tri = Freeform {
+        w: 200.0,
+        h: 100.0,
+        paths: vec![FreePath { pts: vec![[0.0, 0.0], [200.0, 0.0], [100.0, 100.0]], closed: true }],
+        ..Default::default()
+    };
+    let member = picture_filled(ShapeKind::Freeform, Some(tri), [0.0; 4]);
+    let group = InlineObject::Group {
+        w: 400.0,
+        h: 200.0,
+        float: Default::default(),
+        ch_w: 400.0,
+        ch_h: 200.0,
+        children: vec![GroupChild { x: 50.0, y: 20.0, obj: member }],
+        canvas: None,
+    };
+    let mut d = Document::from_text("Group");
+    d.insert_object(&Pos::body(0, 0), group, &Default::default()).unwrap();
+    let l = lay(&d);
+    let mut all = Vec::new();
+    deep(&display::page_display(&d, &l.pages[0], &Default::default()), &mut all);
+    let (segs, items) = all
+        .iter()
+        .find_map(|x| match x {
+            display::Draw::ClipTo { outline: display::Outline::Path(segs), items } => Some((segs.clone(), items.clone())),
+            _ => None,
+        })
+        .expect("a picture clipped to the freeform's path");
+    let [display::Draw::Image { rect, .. }] = items.as_slice() else { panic!("{items:?}") };
+    assert_eq!((rect.w, rect.h), (200.0, 100.0));
+    let PathSeg::Move(x, y) = segs[0] else { panic!("{segs:?}") };
+    assert_eq!((x, y), (rect.x, rect.y), "the path starts at the member's corner");
+    assert!(matches!(segs.last(), Some(PathSeg::Close)), "{segs:?}");
+    assert!(!all.iter().any(|x| matches!(x, display::Draw::Path { fill: Some(_), .. })), "no solid stand-in");
 }

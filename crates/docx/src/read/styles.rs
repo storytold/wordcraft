@@ -186,6 +186,12 @@ impl Reader<'_> {
             t.band_size = tp.child_val("w:tblStyleRowBandSize").and_then(u32_of).map(|n| n.min(1000));
             t.col_band_size = tp.child_val("w:tblStyleColBandSize").and_then(u32_of).map(|n| n.min(1000));
         }
+        // The style's own cell properties cover every cell, like the `wholeTable` region. Word's
+        // built-in table styles (Grid Table 5 Dark…) keep their cell shading here; a cell's fill
+        // paints over the table's, and a `wholeTable` region's below takes over from both.
+        if let Some(fill) = s.child("w:tcPr").and_then(|p| p.child("w:shd")).and_then(|e| self.pc.shd_fill(e)) {
+            t.fill = Some(fill);
+        }
         for c in s.children("w:tblStylePr").take(64) {
             let Some(part) = c.attr("w:type").and_then(TablePart::from_ooxml) else { continue };
             let tc = c.child("w:tcPr");

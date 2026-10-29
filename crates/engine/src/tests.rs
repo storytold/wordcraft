@@ -9037,6 +9037,27 @@ fn imported_pictures_fit_the_text_width() {
 }
 
 #[test]
+fn format_font_sets_the_ascii_and_high_ansi_fonts() {
+    // Home › Font sets the font of a run's ASCII and non-ASCII Latin text alike (`w:ascii` and
+    // `w:hAnsi`), whatever separate high-ANSI font the run had.
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "a “b”"}));
+    run(&mut s, "select.all", json!({}));
+    let fonts = |s: &Session| {
+        let p = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+        let c = s.doc.styles.resolve_char(p.props.style.as_deref(), p.props_of_char(0));
+        (c.font, c.font_hansi)
+    };
+    s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().format(0, 9, &|c| c.font_hansi = Some("Calibri".into())).unwrap();
+    assert_eq!(fonts(&s).1.as_deref(), Some("Calibri"));
+    run(&mut s, "format.font", json!({"name": "Georgia"}));
+    assert_eq!(fonts(&s), ("Georgia".into(), None));
+    s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().format(0, 9, &|c| c.font_hansi = Some("Calibri".into())).unwrap();
+    run(&mut s, "format.set", json!({"props": {"font": "Arial"}}));
+    assert_eq!(fonts(&s), ("Arial".into(), None));
+}
+
+#[test]
 fn format_font_sets_the_asian_and_latin_fonts_separately() {
     // #505: Word's Font dialog sets an Asian text font and a Latin text font of their own.
     let mut s = s();

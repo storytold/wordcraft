@@ -7,6 +7,15 @@ use super::grid::east_asian;
 use super::model::{ClKind, Cluster, Enclosed, Glyph, ParaEnv, RubyLayout, StyleRun, SymbolRun};
 use super::{Arc, Document, FaceRef, NumeralMode, ResolvedChar, RubyAlign, SOFT_HYPHEN};
 
+/// U+200B, a line break opportunity with no width or glyph.
+const ZERO_WIDTH_SPACE: char = '\u{200B}';
+
+/// Whether `c` is set in a run's high-ANSI font: non-ASCII, neither complex script nor East Asian.
+/// A zero-width space has nothing to draw and stays in the ASCII font.
+fn high_ansi(rc: &ResolvedChar, c: char) -> bool {
+    !c.is_ascii() && c != ZERO_WIDTH_SPACE && !rc.uses_complex(c) && !east_asian(c)
+}
+
 pub(super) struct Builder<'a> {
     pub(super) env: &'a ParaEnv<'a>,
     pub(super) styles: Vec<StyleRun>,
@@ -18,6 +27,8 @@ pub(super) struct Builder<'a> {
     pub(super) levels: Vec<u8>,
     /// Text drawn by clusters that stand for an object, by cluster index (see `ParaLayout::shown`).
     pub(super) shown: Vec<(usize, String, Vec<std::ops::Range<usize>>)>,
+    /// Glyph styles of clusters shaped in more than one style (see `ParaLayout::glyph_styles`).
+    pub(super) glyph_styles: Vec<(u32, u32)>,
 }
 
 struct SegmentInput<'a> {
@@ -26,6 +37,8 @@ struct SegmentInput<'a> {
     rc_cs: Option<&'a Arc<ResolvedChar>>,
     primary: FaceRef,
     primary_cs: Option<FaceRef>,
+    rc_ha: Option<&'a Arc<ResolvedChar>>,
+    primary_ha: Option<FaceRef>,
     primary_ea: Option<FaceRef>,
     run_face: Option<FaceRef>,
     ea_face: Option<FaceRef>,
@@ -47,7 +60,23 @@ impl<'a> Builder<'a> {
     }
 
     fn segment_keys(&self, input: SegmentInput<'_>) -> Vec<(usize, usize, SegKey)> {
-        let SegmentInput { text, rc, rc_cs, primary, primary_cs, primary_ea, run_face, ea_face, sym, levels, lbase, use_levels, context } = input;
+        let SegmentInput {
+            text,
+            rc,
+            rc_cs,
+            primary,
+            primary_cs,
+            rc_ha,
+            primary_ha,
+            primary_ea,
+            run_face,
+            ea_face,
+            sym,
+            levels,
+            lbase,
+            use_levels,
+            context,
+        } = input;
         let show = |c: char| sym.map_or(c, |m| m.show(c));
         let mut seg_start = 0;
         let mut cur: Option<SegKey> = None;
@@ -61,12 +90,26 @@ impl<'a> Builder<'a> {
                 Some(k) if mark => k.complex,
                 _ => rc_cs.is_some() && rc.uses_complex(dc),
             };
-            let primary = if complex { primary_cs.unwrap_or(primary) } else { primary };
+            let ha = match cur {
+                // U+200B is a mark to the bidi classes, but takes no font from the text before it.
+                _ if c == ZERO_WIDTH_SPACE => false,
+                Some(k) if mark => k.high_ansi,
+                _ => !complex && rc_ha.is_some() && high_ansi(rc, dc),
+            };
+            let primary = if complex {
+                primary_cs.unwrap_or(primary)
+            } else if ha {
+                primary_ha.unwrap_or(primary)
+            } else {
+                primary
+            };
             let face = match cur {
                 Some(k) if mark => k.face,
                 _ if !complex && east_asian(c) && primary_ea.is_some_and(|f| f.covers(c)) => primary_ea,
                 _ if !c.is_control() && c != SOFT_HYPHEN && run_face.is_some_and(|f| f.covers(dc)) => run_face,
-                _ if primary.covers(dc) || c.is_whitespace() || c.is_control() || c == SOFT_HYPHEN => None,
+                // A zero-width space has nothing to draw: it stays in the run's font, so a line of
+                // them is as tall as a line of text in it (Word), not a fallback face's line.
+                _ if primary.covers(dc) || c.is_whitespace() || c.is_control() || c == SOFT_HYPHEN || c == ZERO_WIDTH_SPACE => None,
                 Some(SegKey { face: Some(face), .. }) if face.covers(dc) => Some(face),
                 _ if !complex && ea_face.is_some() && crate::kinsoku::is_east_asian(c) => ea_face,
                 _ => {
@@ -74,7 +117,7 @@ impl<'a> Builder<'a> {
                     wordcraft_fonts::FontDb::global().fallback_styled(dc, primary.id(), bold, italic).map(|f| FaceRef::of(&f))
                 }
             };
-            let key = SegKey { face, small: rc.small_caps && !rc.caps && c.is_lowercase(), complex, rtl };
+            let key = SegKey { face, small: rc.small_caps && !rc.caps && c.is_lowercase(), complex, high_ansi: ha, rtl };
             match cur {
                 Some(previous) if previous.same(&key) => {}
                 Some(previous) => {
@@ -169,6 +212,11 @@ impl<'a> Builder<'a> {
         let sym = SymbolRun::of(&rc.font, &resolved);
         let show = |c: char| sym.map_or(c, |m| m.show(c));
         let primary_cs = rc_cs.as_ref().map(|r| wordcraft_fonts::word::resolve(lookup_family(self.env.doc, &r.font), r.bold, r.italic).face);
+        // Non-ASCII Latin characters (curly quotes, accented letters) use the run's high-ANSI font
+        // (`w:hAnsi`, ECMA-376 §17.3.2.26) when it differs from its ASCII font.
+        let rc_ha: Option<Arc<ResolvedChar>> =
+            if sym.is_none() && text.chars().any(|c| high_ansi(rc, c)) { rc.high_ansi().map(Arc::new) } else { None };
+        let primary_ha = rc_ha.as_ref().map(|r| wordcraft_fonts::word::resolve(lookup_family(self.env.doc, &r.font), r.bold, r.italic).face);
         // Chinese, Japanese and Korean characters use the run's East Asian font (`w:eastAsia`) when
         // it is installed and has them.
         let primary_ea = rc
@@ -215,6 +263,8 @@ impl<'a> Builder<'a> {
             rc_cs: rc_cs.as_ref(),
             primary,
             primary_cs,
+            rc_ha: rc_ha.as_ref(),
+            primary_ha,
             primary_ea,
             run_face,
             ea_face,
@@ -227,8 +277,9 @@ impl<'a> Builder<'a> {
         let no_kern = [wordcraft_fonts::feature_value(b"kern", 0)];
         for (a, b, key) in segs {
             let Some(sub) = text.get(a..b) else { continue };
-            let rc = match (&rc_cs, key.complex) {
-                (Some(cs), true) => cs.clone(),
+            let rc = match (&rc_cs, &rc_ha) {
+                (Some(cs), _) if key.complex => cs.clone(),
+                (_, Some(ha)) if key.high_ansi => ha.clone(),
                 _ => rc.clone(),
             };
             let rc = &rc;
@@ -451,8 +502,25 @@ impl<'a> Builder<'a> {
         let g0 = first.g0;
         let style = first.style;
         let g1 = added.last().map(|c| c.g1).unwrap_or(g0);
+        // A result shaped in more than one font (`Résumé` in a run whose high-ANSI font is
+        // another) keeps each glyph's: its glyph ids are that font's.
+        let runs: Vec<(u32, u32)> = added.iter().filter(|c| c.g1 > c.g0).map(|c| (c.g0, c.style)).collect();
+        self.set_glyph_styles(g0..g1, style, runs);
         self.shown.push((self.clusters.len(), text.to_string(), ranges));
         self.clusters.push(Cluster { start, end, adv: x, kind: ClKind::Text, style, g0, g1, break_after: false, obj_h: 0.0, obj_d: 0.0, dot: false });
+    }
+
+    /// Record the glyph styles `runs` (from glyph `.0` on, style `.1`) of a cluster with glyphs
+    /// `glyphs` and style `style` in place of any it had: none when all are `style`.
+    fn set_glyph_styles(&mut self, glyphs: std::ops::Range<u32>, style: u32, mut runs: Vec<(u32, u32)>) {
+        let from = self.glyph_styles.partition_point(|(g, _)| *g < glyphs.start);
+        let to = self.glyph_styles.partition_point(|(g, _)| *g < glyphs.end);
+        if runs.iter().all(|(_, s)| *s == style) {
+            runs.clear();
+        }
+        runs.sort_unstable_by_key(|(g, _)| *g);
+        runs.dedup_by(|b, a| a.1 == b.1);
+        self.glyph_styles.splice(from..to, runs);
     }
 
     /// Shape `texts` on top of one another as one cluster for `start..end`: each aligned within
@@ -498,6 +566,17 @@ impl<'a> Builder<'a> {
             Some(c) => c.style,
             None => self.style(rc, None, false),
         };
+        // Each text keeps its fonts: its own glyph styles, else its one style.
+        let mut runs = Vec::new();
+        for c in added.iter().filter(|c| c.g1 > c.g0) {
+            let from = self.glyph_styles.partition_point(|(g, _)| *g < c.g0);
+            let to = self.glyph_styles.partition_point(|(g, _)| *g < c.g1);
+            match self.glyph_styles.get(from..to) {
+                Some(own) if !own.is_empty() => runs.extend_from_slice(own),
+                _ => runs.push((c.g0, c.style)),
+            }
+        }
+        self.set_glyph_styles(g0..g1, style, runs);
         let k = self.clusters.len();
         if !text.is_empty() {
             self.shown.push((k, text, ranges));
@@ -540,6 +619,7 @@ pub(super) fn overstrike(
     b.clusters.truncate(c0);
     b.glyphs.truncate(g0);
     b.shown.truncate(s0);
+    b.glyph_styles.retain(|(g, _)| *g < g0 as u32);
     // The shape's box (`bw` × `bh`, centred `cy` above the baseline) and the text's size.
     let cy = s * 0.34;
     let (bw, bh, size) = match style {

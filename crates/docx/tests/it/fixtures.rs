@@ -598,6 +598,26 @@ fn table_style_whole_table_shading_and_margins() {
     assert_eq!(merged.parts.cell_margins, Some([1.0, 14.4, 0.0, 14.4]), "from Base");
 }
 
+/// Word's built-in table styles (Grid Table 5 Dark and the like) give every cell its shading in a
+/// `w:tcPr` of the style itself, beside its `w:tblPr`, rather than in a `wholeTable` region. It
+/// fills the cells no conditional format covers; it was ignored, so they came out white.
+#[test]
+fn table_style_cell_shading_in_the_style_tcpr_fills_every_cell() {
+    let styles = format!(
+        r#"<w:styles {W_NS}>
+ <w:style w:type="table" w:styleId="Grid5"><w:name w:val="Grid Table 5 Dark"/><w:tblPr><w:tblBorders><w:top w:val="single" w:sz="4" w:space="0" w:color="FFFFFF"/></w:tblBorders></w:tblPr><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="F2CEED"/></w:tcPr><w:tblStylePr w:type="firstRow"><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="A02B93"/></w:tcPr></w:tblStylePr></w:style>
+ <w:style w:type="table" w:styleId="Region"><w:name w:val="Region"/><w:basedOn w:val="Grid5"/><w:tblStylePr w:type="wholeTable"><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="DDEBF7"/></w:tcPr></w:tblStylePr></w:style>
+</w:styles>"#
+    );
+    let bytes = docx("<w:p/>", &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &styles)]);
+    let d = wordcraft_docx::read(&bytes).unwrap();
+    let grid = d.styles.table_style("Grid5").unwrap();
+    assert_eq!(grid.parts.fill, Some(wordcraft_doc::Rgb(0xF2, 0xCE, 0xED)));
+    // A derived style's own whole-table region still takes over.
+    let region = d.styles.table_style("Region").unwrap();
+    assert_eq!(region.parts.fill, Some(wordcraft_doc::Rgb(0xDD, 0xEB, 0xF7)));
+}
+
 fn gallery_ids(styles: &str) -> Vec<String> {
     let bytes = docx("<w:p/>", &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", styles)]);
     let d = wordcraft_docx::read(&bytes).unwrap();
@@ -2082,10 +2102,13 @@ fn theme_font_wins_over_the_fixed_font() {
     let d = themed_docx(body, styles, None);
     assert_eq!(d.styles.get("Heading1").unwrap().chr.font.as_deref(), Some("Major Face"));
     let p = paras(&d);
-    assert_eq!(p[1].props_of_char(0).font.as_deref(), Some("Minor Face"));
-    assert_eq!(p[1].props_of_char(1).font.as_deref(), Some("Minor Face"));
-    // An explicit ascii font still beats a theme font given only for hAnsi.
-    assert_eq!(p[1].props_of_char(2).font.as_deref(), Some("Arial"));
+    // The hAnsi theme font is the font of the run's non-ASCII Latin text only (ECMA-376
+    // §17.3.2.26); its ASCII font is inherited.
+    let fonts = |i: usize| (p[1].props_of_char(i).font.as_deref(), p[1].props_of_char(i).font_hansi.as_deref());
+    assert_eq!(fonts(0), (None, Some("Minor Face")));
+    assert_eq!(fonts(1), (Some("Minor Face"), None));
+    // An explicit ascii font beside a theme font given only for hAnsi: each for its characters.
+    assert_eq!(fonts(2), (Some("Arial"), Some("Major Face")));
 }
 
 /// Issue #400: moved text (ECMA-376 §17.13.5.21–28). `w:moveFrom` / `w:moveTo` inside named

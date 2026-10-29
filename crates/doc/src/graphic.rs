@@ -116,7 +116,13 @@ pub enum GraphicItem {
         align: TextAlign,
         #[serde(default)]
         font: Option<String>,
+        /// Turned 90° counter-clockwise, reading bottom to top up `rect` (a chart's display-units
+        /// label beside its value axis).
+        #[serde(default)]
+        vertical: bool,
     },
+    /// `rect` painted with a shape fill, solid or gradient (a chart area's or plot area's fill).
+    Fill { rect: [f32; 4], fill: crate::fill::Fill },
     /// A picture (`Document::media` key) stretched into `rect`.
     Image { rect: [f32; 4], media: String },
 }

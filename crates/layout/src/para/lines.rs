@@ -1,7 +1,7 @@
 use super::bidi::{even_row, reorder_line};
 use super::grid::{Exclusion, Grid};
 use super::justify::{HYPHENATION_ZONE, hyphen_glyph, shrink_line_spaces, space_room};
-use super::model::{ClKind, Cluster, Line, LineEnd, ParaEnv};
+use super::model::{ClKind, Cluster, Line, LineEnd, ParaEnv, StyleRun};
 use super::paragraph::word_widths;
 use super::tabs::{next_tab, pl_text_at, ptab_stop, resolve_tab};
 use super::{Align, Arc, Level, LevelSuffix, LineSpacing, MathJc, ParaLayout, TabAlign, TabLeader, TabStop, VecDeque, WrapText};
@@ -430,7 +430,12 @@ impl<'e> Breaker<'e> {
                 }
             } else {
                 // `obj_h` is set on text clusters only under ruby text, which the line grows to fit.
-                let (a, d) = st.line_extent();
+                // A field result shaped in more than one font is as tall as its tallest.
+                let (a, d) = pl
+                    .cluster_styles(c)
+                    .filter_map(|s| pl.styles.get(s as usize))
+                    .map(StyleRun::line_extent)
+                    .fold((0.0f32, 0.0f32), |(a, d), (sa, sd)| (a.max(sa), d.max(sd)));
                 (a.max(c.obj_h + st.shift), d)
             };
             ex.asc = ex.asc.max(a);

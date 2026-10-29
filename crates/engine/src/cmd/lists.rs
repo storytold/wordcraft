@@ -117,6 +117,9 @@ pub fn level_from(mut l: Level, i: usize, v: &Value) -> Level {
         Some(_) => l.tab = pt("tabAt").or(l.tab),
         None => {}
     }
+    if matches!(v.get("font"), Some(Value::Null | Value::String(_))) {
+        l.chr.font_hansi = None;
+    }
     match v.get("font") {
         Some(Value::Null) => l.chr.font = None,
         Some(Value::String(s)) => l.chr.font = Some(s.chars().take(64).collect()).filter(|s: &String| !s.trim().is_empty()),

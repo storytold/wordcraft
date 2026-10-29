@@ -374,7 +374,7 @@ impl Writer {
         let inl = model::equations_as_text(inl);
         for i in inl.iter() {
             match i {
-                Inline::Text(t, f) => self.run(t, f, out),
+                Inline::Text(t, f) | Inline::Field { result: t, fmt: f, .. } => self.run(t, f, out),
                 Inline::Image(img) => self.picture(img, out),
                 Inline::Anchor(a) => {
                     let a = esc(a);

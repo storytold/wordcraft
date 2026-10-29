@@ -233,8 +233,15 @@ pub struct CharProps {
     /// Character style id.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub style: Option<String>,
+    /// The font of the run's text; with [`Self::font_hansi`] set, of its ASCII characters only
+    /// (OOXML `w:rFonts/@w:ascii`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub font: Option<String>,
+    /// The font of the run's non-ASCII Latin text: curly quotes, accented letters… (OOXML
+    /// `w:rFonts/@w:hAnsi`, ECMA-376 §17.3.2.26), when it differs from `font`. `None` = inherit,
+    /// except that setting `font` without it sets both, as Home › Font does.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_hansi: Option<String>,
     /// The symbol's own font (OOXML `w:sym/@w:font`, ECMA-376 §17.3.3.30), set on a symbol
     /// character from a `w:sym` or Insert › Symbol: it is shown in this font whatever `font` is,
     /// so changing the text's font keeps the symbol. `None` = the run's font.
@@ -447,9 +454,17 @@ impl CharProps {
     /// The fields of `self` that differ from `base` (equal ones unset): what `self` adds when
     /// overlaid on `base`.
     pub fn minus(mut self, base: &CharProps) -> CharProps {
+        // The high-ANSI font each stands for: its own, or the font it sets with it.
+        let hansi = |c: &CharProps| c.font_hansi.clone().or_else(|| c.font.clone());
+        let (own_hansi, base_hansi) = (hansi(&self), hansi(base));
         self.minus_text_style(base);
         self.minus_script_style(base);
         self.minus_document_marks(base);
+        // Kept where overlaying the rest on `base` would show another high-ANSI font.
+        self.font_hansi = match &self.font {
+            Some(f) => own_hansi.filter(|h| h != f),
+            None => own_hansi.filter(|h| Some(h) != base_hansi.as_ref()),
+        };
         self
     }
 
@@ -471,6 +486,11 @@ impl CharProps {
     /// Plain and complex-script properties inherit independently. Commands that intend to
     /// format both scripts must set both values explicitly.
     pub fn overlay(&mut self, patch: &CharProps) {
+        // A font set without a high-ANSI font of its own is the font of all the run's Latin text.
+        if patch.font.is_some() {
+            self.font_hansi = None;
+        }
+        overlay_fields!(self, patch; font_hansi);
         self.overlay_text_style(patch);
         self.overlay_script_style(patch);
         self.overlay_document_marks(patch);

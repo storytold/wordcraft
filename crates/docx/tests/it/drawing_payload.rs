@@ -139,21 +139,139 @@ fn picture_group_canvas_keep_kind() {
     }
 }
 
+/// The picture fill of shape `obj`, else a panic naming what it has.
+fn picture_fill(obj: &InlineObject) -> &wordcraft_doc::fill::PictureFill {
+    match obj {
+        InlineObject::Shape { fill: Some(wordcraft_doc::fill::Fill::Picture(p)), .. } => p,
+        o => panic!("no picture fill: {o:?}"),
+    }
+}
+
 #[test]
-fn own_picture_fill_keeps_image() {
-    // Keep the existing WPS picture-fill fallback, distinct from a nested picture.
+fn own_picture_fill_is_the_shapes_fill() {
+    // A shape filled with a picture stays a shape (its outline, geometry and text) whose fill is
+    // the picture, distinct from a picture nested in its text.
     let start = INLINE_XML.find("<wps:spPr>").unwrap();
     let end = INLINE_XML.find("</wps:wsp>").unwrap();
-    let payload = r#"<wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="2286000" cy="1016000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:blipFill><a:blip r:embed="rIdIsolationRect"/><a:stretch><a:fillRect/></a:stretch></a:blipFill></wps:spPr><wps:bodyPr/>"#;
+    let payload = r#"<wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="2286000" cy="1016000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:blipFill rotWithShape="1"><a:blip r:embed="rIdIsolationRect"><a:alphaModFix amt="40000"/></a:blip><a:srcRect l="10000" r="20000"/><a:stretch><a:fillRect r="-7574"/></a:stretch></a:blipFill></wps:spPr><wps:bodyPr/>"#;
     let xml = format!("{}{}{}", &INLINE_XML[..start], payload, &INLINE_XML[end..]);
     let doc = wordcraft_docx::read(&package(&xml)).unwrap();
     assert!(doc.parts.is_empty());
     let objects = &doc.body[0].as_para().unwrap().objects;
     assert_eq!(objects.len(), 1);
-    let InlineObject::Image { w, h, media, float, .. } = &objects[0] else {
+    let InlineObject::Shape { kind, w, h, float, .. } = &objects[0] else {
         panic!("own picture fill lost: {:?}", objects[0]);
     };
-    assert_eq!((*w, *h), (180.0, 80.0));
+    assert_eq!((*kind, *w, *h), (ShapeKind::TextBox, 180.0, 80.0));
     assert_eq!((float.wrap, float.x, float.y), (Wrap::InFrontOfText, 72.0, 100.0));
-    assert_eq!(doc.media[media].as_slice(), BLUE_PNG);
+    let p = picture_fill(&objects[0]);
+    assert_eq!(doc.media[&p.media].as_slice(), BLUE_PNG);
+    assert_eq!((p.crop, p.stretch, p.transparency, p.rot_with_shape), ([0.1, 0.0, 0.2, 0.0], [0.0, 0.0, -7.574, 0.0], 60.0, true));
+    // Saved and read back: the same picture fill, the picture kept in the package.
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).unwrap();
+    let q = picture_fill(&back.body[0].as_para().unwrap().objects[0]);
+    assert_eq!(back.media[&q.media].as_slice(), BLUE_PNG);
+    assert_eq!(wordcraft_doc::fill::PictureFill { media: p.media.clone(), ..q.clone() }, p.clone());
+}
+
+/// A group (`wpg:wgp`) of a theme-coloured freeform and a picture-filled rectangle on top, both
+/// with the theme's fill reference: the rectangle's fill is its picture, not the reference's
+/// colour, and it survives saving.
+#[test]
+fn a_group_members_picture_fill_is_kept() {
+    let start = INLINE_XML.find("<w:body>").unwrap() + "<w:body>".len();
+    let style = r#"<wps:style><a:lnRef idx="2"><a:schemeClr val="accent1"/></a:lnRef><a:fillRef idx="1"><a:schemeClr val="accent1"/></a:fillRef><a:effectRef idx="0"><a:schemeClr val="accent1"/></a:effectRef><a:fontRef idx="minor"><a:schemeClr val="lt1"/></a:fontRef></wps:style><wps:bodyPr/>"#;
+    let band = r#"<a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/><a:rect l="0" t="0" r="r" b="b"/><a:pathLst><a:path w="100" h="100"><a:moveTo><a:pt x="0" y="0"/></a:moveTo><a:lnTo><a:pt x="100" y="0"/></a:lnTo><a:lnTo><a:pt x="100" y="100"/></a:lnTo><a:lnTo><a:pt x="50" y="60"/></a:lnTo><a:lnTo><a:pt x="0" y="100"/></a:lnTo><a:close/></a:path></a:pathLst></a:custGeom>"#;
+    let body = format!(
+        r#"<w:p><w:r><w:drawing><wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="2" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1"><wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="page"><wp:align>center</wp:align></wp:positionH><wp:positionV relativeFrom="page"><wp:posOffset>254000</wp:posOffset></wp:positionV><wp:extent cx="2540000" cy="1270000"/><wp:wrapNone/><wp:docPr id="1" name="Banner"/><wp:cNvGraphicFramePr/><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup"><wpg:wgp><wpg:cNvGrpSpPr/><wpg:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="2540000" cy="1270000"/><a:chOff x="0" y="0"/><a:chExt cx="2540000" cy="1270000"/></a:xfrm></wpg:grpSpPr><wps:wsp><wps:cNvPr id="2" name="Band"/><wps:cNvSpPr/><wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="2540000" cy="1143000"/></a:xfrm>{band}<a:ln><a:noFill/></a:ln></wps:spPr>{style}</wps:wsp><wps:wsp><wps:cNvPr id="3" name="Picture band"/><wps:cNvSpPr/><wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="2540000" cy="1270000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:blipFill><a:blip r:embed="rIdIsolationRect"/><a:stretch><a:fillRect r="-10000"/></a:stretch></a:blipFill><a:ln><a:noFill/></a:ln></wps:spPr>{style}</wps:wsp></wpg:wgp></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r></w:p></w:body></w:document>"#
+    );
+    let xml = format!("{}{}", &INLINE_XML[..start], body);
+    let check = |doc: &Document| {
+        let objects = &doc.body[0].as_para().unwrap().objects;
+        let InlineObject::Group { children, .. } = &objects[0] else { panic!("group lost: {:?}", objects[0]) };
+        assert_eq!(children.len(), 2);
+        let InlineObject::Shape { kind, fill, .. } = &children[0].obj else { panic!("{:?}", children[0].obj) };
+        assert_eq!(*kind, ShapeKind::Freeform);
+        assert!(matches!(fill, Some(wordcraft_doc::fill::Fill::Solid { .. })), "the band keeps its theme colour: {fill:?}");
+        let InlineObject::Shape { kind, w, h, stroke, .. } = &children[1].obj else { panic!("{:?}", children[1].obj) };
+        assert_eq!((*kind, *w, *h, *stroke), (ShapeKind::Rectangle, 200.0, 100.0, None));
+        let p = picture_fill(&children[1].obj);
+        assert_eq!(p.stretch, [0.0, 0.0, -10.0, 0.0]);
+        assert_eq!(doc.media[&p.media].as_slice(), BLUE_PNG);
+    };
+    let doc = wordcraft_docx::read(&package(&xml)).unwrap();
+    check(&doc);
+    let saved = wordcraft_docx::write(&doc).unwrap();
+    check(&wordcraft_docx::read(&saved).unwrap());
+    // The relationship the fill names is an image part in the package.
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(saved)).unwrap();
+    let mut part = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut part).unwrap();
+    let at = part.find("<a:blipFill").expect("the fill is written as a picture fill");
+    let rid = part[at..].split("r:embed=\"").nth(1).and_then(|r| r.split('"').next()).unwrap().to_string();
+    let mut rels = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/_rels/document.xml.rels").unwrap(), &mut rels).unwrap();
+    let rel = rels.split("<Relationship ").find(|r| r.contains(&format!("Id=\"{rid}\""))).expect("its relationship");
+    assert!(rel.contains("relationships/image"), "{rel}");
+    let target = rel.split("Target=\"").nth(1).and_then(|t| t.split('"').next()).unwrap();
+    assert_eq!(zip.by_name(&format!("word/{target}")).unwrap().size(), BLUE_PNG.len() as u64);
+}
+
+/// A picture fill whose picture is missing (a broken relationship) reads as no picture, never a
+/// crash, and is saved without a dangling relationship.
+#[test]
+fn a_picture_fill_without_its_picture_is_dropped() {
+    let start = INLINE_XML.find("<wps:spPr>").unwrap();
+    let end = INLINE_XML.find("</wps:wsp>").unwrap();
+    let payload = r#"<wps:spPr><a:prstGeom prst="rect"/><a:blipFill><a:blip r:embed="rIdNowhere"/><a:srcRect l="-5" t="999999999999"/><a:tile tx="1" sx="-9999999999" algn="nonsense-alignment"/></a:blipFill></wps:spPr><wps:bodyPr/>"#;
+    let xml = format!("{}{}{}", &INLINE_XML[..start], payload, &INLINE_XML[end..]);
+    let doc = wordcraft_docx::read(&package(&xml)).unwrap();
+    let InlineObject::Shape { fill, .. } = &doc.body[0].as_para().unwrap().objects[0] else { panic!() };
+    assert!(!matches!(fill, Some(wordcraft_doc::fill::Fill::Picture(_))), "{fill:?}");
+    wordcraft_docx::write(&doc).unwrap();
+}
+
+/// A tiled picture fill keeps its tiling through a save (it is drawn stretched).
+#[test]
+fn a_tiled_picture_fill_keeps_its_tiling() {
+    let start = INLINE_XML.find("<wps:spPr>").unwrap();
+    let end = INLINE_XML.find("</wps:wsp>").unwrap();
+    let payload = r#"<wps:spPr><a:prstGeom prst="rect"/><a:blipFill><a:blip r:embed="rIdIsolationRect"/><a:tile tx="12700" ty="0" sx="50000" sy="25000" flip="xy" algn="tl"/></a:blipFill></wps:spPr><wps:bodyPr/>"#;
+    let xml = format!("{}{}{}", &INLINE_XML[..start], payload, &INLINE_XML[end..]);
+    let doc = wordcraft_docx::read(&package(&xml)).unwrap();
+    let p = picture_fill(&doc.body[0].as_para().unwrap().objects[0]).clone();
+    let tile = p.tile.clone().expect("the tiling");
+    assert_eq!(
+        (tile.tx, tile.ty, tile.sx, tile.sy, tile.flip, tile.align.as_str()),
+        (1.0, 0.0, 50.0, 25.0, wordcraft_doc::fill::GradientFlip::Xy, "tl")
+    );
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).unwrap();
+    let q = picture_fill(&back.body[0].as_para().unwrap().objects[0]);
+    assert_eq!(q.tile, p.tile);
+}
+
+/// A Drawing Canvas's picture background is saved with its picture and reads back as that
+/// picture fill; it was written as `a:noFill` and lost on save.
+#[test]
+fn a_canvas_picture_background_round_trips() {
+    use wordcraft_doc::fill::{Fill, PictureFill};
+    let mut doc = Document::new();
+    doc.media.insert("background.png".into(), Arc::new(BLUE_PNG.to_vec()));
+    let pic = PictureFill { media: "background.png".into(), crop: [0.0; 4], stretch: [0.0; 4], transparency: 0.0, rot_with_shape: true, tile: None };
+    let canvas = InlineObject::Group {
+        w: 200.0,
+        h: 100.0,
+        float: Float::default(),
+        ch_w: 200.0,
+        ch_h: 100.0,
+        children: Vec::new(),
+        canvas: Some(CanvasStyle { fill: Some(Fill::Picture(Arc::new(pic))), stroke: None, stroke_width: 0.0 }),
+    };
+    doc.insert_object(&Pos::body(0, 0), canvas, &Default::default()).unwrap();
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).unwrap();
+    let InlineObject::Group { canvas: Some(c), .. } = &back.body[0].as_para().unwrap().objects[0] else {
+        panic!("canvas lost: {:?}", back.body[0].as_para().unwrap().objects);
+    };
+    let Some(Fill::Picture(p)) = &c.fill else { panic!("background is not a picture fill: {:?}", c.fill) };
+    assert_eq!(back.media[&p.media].as_slice(), BLUE_PNG);
 }

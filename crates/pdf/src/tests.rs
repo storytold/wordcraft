@@ -943,6 +943,7 @@ fn inline_chart_is_a_figure_with_its_text_inside_it() {
         bold: false,
         align: TextAlign::Center,
         font: None,
+        vertical: false,
     }];
     let graphic = Graphic { kind: GraphicKind::Chart, items, ..Default::default() };
     let obj = InlineObject::Graphic { w: 216.0, h: 144.0, alt: "Sales by quarter".into(), float: Default::default(), graphic: Arc::new(graphic) };
@@ -2461,4 +2462,86 @@ fn baseline_is_the_most_shared_y() {
     assert_eq!(baseline(&[(1, 0.0, 7.5), (2, 3.0, 4.0), (3, 6.0, 7.5)]), Some(7.5));
     assert_eq!(baseline(&[(1, 0.0, 9.0), (2, 3.0, 4.0)]), Some(4.0));
     assert_eq!(baseline(&[(1, 0.0, -0.0), (2, 3.0, 0.0)]), Some(0.0));
+}
+
+/// Each image drawn, with the clip paths in force around it (their element counts and whether
+/// they curve), over every page.
+fn clipped_images(bytes: &[u8]) -> Vec<Vec<(usize, bool)>> {
+    use hayro_interpret::font::Glyph;
+    use hayro_interpret::{
+        BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, SoftMask,
+        interpret_page,
+    };
+    use hayro_syntax::Pdf;
+    #[derive(Default)]
+    struct Seen {
+        clips: Vec<(usize, bool)>,
+        images: Vec<Vec<(usize, bool)>>,
+    }
+    impl Device<'_> for Seen {
+        fn set_soft_mask(&mut self, _: Option<SoftMask<'_>>) {}
+        fn set_blend_mode(&mut self, _: BlendMode) {}
+        fn draw_path(&mut self, _: &kurbo::BezPath, _: kurbo::Affine, _: &Paint<'_>, _: &PathDrawMode) {}
+        fn push_clip_path(&mut self, c: &ClipPath) {
+            let curved = c.path.elements().iter().any(|e| matches!(e, kurbo::PathEl::CurveTo(..) | kurbo::PathEl::QuadTo(..)));
+            self.clips.push((c.path.elements().len(), curved));
+        }
+        fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, _: BlendMode) {}
+        fn draw_glyph(&mut self, _: &Glyph<'_>, _: kurbo::Affine, _: kurbo::Affine, _: &Paint<'_>, _: &GlyphDrawMode) {}
+        fn draw_image(&mut self, _: Image<'_, '_>, _: kurbo::Affine) {
+            self.images.push(self.clips.clone());
+        }
+        fn pop_clip_path(&mut self) {
+            self.clips.pop();
+        }
+        fn pop_transparency_group(&mut self) {}
+    }
+    let pdf = Pdf::new(bytes.to_vec()).expect("parse");
+    let cache = InterpreterCache::new();
+    let mut seen = Seen::default();
+    for page in pdf.pages().iter() {
+        let mut ctx = Context::new(kurbo::Affine::IDENTITY, kurbo::Rect::new(0.0, 0.0, 1.0, 1.0), &cache, pdf.xref(), InterpreterSettings::default());
+        interpret_page(page, &mut ctx, &mut seen);
+    }
+    seen.images
+}
+
+/// A picture-filled ellipse exports its picture, clipped to the ellipse; a freeform's picture is
+/// clipped to its (straight-sided) path.
+#[test]
+fn picture_fills_export_clipped_to_their_shape() {
+    use wordcraft_doc::fill::{Fill, PictureFill};
+    use wordcraft_doc::freeform::{FreePath, Freeform};
+    let mut d = Document::from_text("Pictures");
+    let key = d.add_media(png(), "png");
+    let pic = |stretch| {
+        Fill::Picture(Arc::new(PictureFill { media: key.clone(), crop: [0.0; 4], stretch, transparency: 0.0, rot_with_shape: true, tile: None }))
+    };
+    let shape = |kind, fill, freeform: Option<Freeform>| InlineObject::Shape {
+        kind,
+        w: 120.0,
+        h: 60.0,
+        fill: Some(fill),
+        stroke: None,
+        stroke_width: 0.0,
+        float: Default::default(),
+        story: None,
+        freeform: freeform.map(Arc::new),
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    let tri = Freeform {
+        w: 120.0,
+        h: 60.0,
+        paths: vec![FreePath { pts: vec![[0.0, 0.0], [120.0, 0.0], [60.0, 60.0]], closed: true }],
+        ..Default::default()
+    };
+    // Each goes in at the start: the ellipse ends up first.
+    d.insert_object(&wordcraft_doc::Pos::body(0, 0), shape(ShapeKind::Freeform, pic([0.0; 4]), Some(tri)), &CharProps::default()).unwrap();
+    d.insert_object(&wordcraft_doc::Pos::body(0, 0), shape(ShapeKind::Ellipse, pic([0.0, 0.0, -10.0, 0.0]), None), &CharProps::default()).unwrap();
+    let bytes = export(&d, &PdfOptions::default()).unwrap();
+    let images = clipped_images(&bytes);
+    assert_eq!(images.len(), 2, "both pictures are drawn: {images:?}");
+    assert!(images[0].iter().any(|(_, curved)| *curved), "the first is clipped to the ellipse: {images:?}");
+    assert!(images[1].iter().any(|(n, curved)| !curved && *n == 4), "the second to the triangle (move, 2 lines, close): {images:?}");
 }

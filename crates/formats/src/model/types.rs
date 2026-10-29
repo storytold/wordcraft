@@ -164,6 +164,14 @@ pub enum Inline {
         ruby: String,
         fmt: Fmt,
     },
+    /// A field whose result depends on where its text lands (`PAGE`, `NUMPAGES`…), read as a field
+    /// so each page shows its own number: `instr` is the field code, `result` the cached text a
+    /// format without fields writes in its place.
+    Field {
+        instr: String,
+        result: String,
+        fmt: Fmt,
+    },
 }
 
 /// Base text size (points) a phonetic guide falls back to when the source states none: the
@@ -269,7 +277,9 @@ impl Para {
         let mut s = String::new();
         for i in &self.inlines {
             match i {
-                Inline::Text(t, _) | Inline::Equation { linear: t, .. } | Inline::Ruby { base: t, .. } => s.push_str(t),
+                Inline::Text(t, _) | Inline::Equation { linear: t, .. } | Inline::Ruby { base: t, .. } | Inline::Field { result: t, .. } => {
+                    s.push_str(t)
+                }
                 Inline::Image(_) | Inline::Anchor(_) | Inline::Figure(_) => {}
             }
         }
@@ -285,7 +295,7 @@ impl Para {
                     Some(font) if wordcraft_doc::symbol_fonts::is_symbol_font(font) => s.push_str(&wordcraft_doc::symbol_fonts::map_text(font, t)),
                     _ => s.push_str(t),
                 },
-                Inline::Equation { linear: t, .. } | Inline::Ruby { base: t, .. } => s.push_str(t),
+                Inline::Equation { linear: t, .. } | Inline::Ruby { base: t, .. } | Inline::Field { result: t, .. } => s.push_str(t),
                 Inline::Image(_) | Inline::Anchor(_) | Inline::Figure(_) => {}
             }
         }

@@ -83,12 +83,7 @@ pub(super) fn lines(input: LineRender<'_, '_, '_>, out: &mut Vec<Draw>) {
     }
 }
 
-fn collect_glyph_run(
-    ctx: &LineContext<'_, '_, '_>,
-    start: usize,
-    style_index: u32,
-    style: &crate::para::StyleRun,
-) -> (usize, Vec<(u32, f32, f32)>, String, Vec<std::ops::Range<usize>>) {
+fn collect_glyph_run(ctx: &LineContext<'_, '_, '_>, start: usize, style_index: u32, style: &crate::para::StyleRun) -> GlyphRun {
     let (pl, para, line, x, base) = (ctx.pl, ctx.para, ctx.line, ctx.x, ctx.base);
     let si = style_index;
     let st = style;
@@ -105,6 +100,14 @@ fn collect_glyph_run(
     let mut text = String::with_capacity(n_bytes);
     let mut ranges: Vec<std::ops::Range<usize>> = Vec::with_capacity(n_glyphs);
     let symbol_font = wordcraft_doc::symbol_fonts::is_symbol_font(&st.rc.font);
+    let mut restyled = Vec::new();
+    // A glyph of a cluster shaped in more than one style, in another than the run's.
+    let mut restyle = |c: &crate::para::Cluster, g: usize, at: usize| {
+        let s = pl.glyph_style(c, c.g0 + g as u32);
+        if s != restyled.last().map_or(si, |&(_, s)| s) {
+            restyled.push((at, s));
+        }
+    };
     while k < line.c1 {
         let Some(c) = pl.clusters.get(k) else { break };
         if c.style != si {
@@ -160,6 +163,7 @@ fn collect_glyph_run(
                             from..to
                         }
                     };
+                    restyle(c, n, glyphs.len());
                     glyphs.push((g.gid, cx + g.dx, base - st.shift - g.dy));
                     ranges.push(r.start..r.end.max(r.start));
                 }
@@ -174,14 +178,48 @@ fn collect_glyph_run(
                     r.end = b;
                 }
             }
-            for g in cg {
+            for (n, g) in cg.iter().enumerate() {
+                restyle(c, n, glyphs.len());
                 glyphs.push((g.gid, cx + g.dx, base - st.shift - g.dy));
                 ranges.push(a..b);
             }
         }
         k += 1;
     }
-    (k, glyphs, text, ranges)
+    GlyphRun { end: k, glyphs, text, ranges, restyled }
+}
+
+/// A run of glyphs drawn in one style, from [`collect_glyph_run`].
+struct GlyphRun {
+    /// The cluster after the run.
+    end: usize,
+    glyphs: Vec<(u32, f32, f32)>,
+    text: String,
+    ranges: Vec<std::ops::Range<usize>>,
+    /// Where glyphs of a cluster shaped in more than one style switch style: from glyph `.0` of
+    /// the run on, style `.1` (back to the run's own included). Empty for most runs.
+    restyled: Vec<(usize, u32)>,
+}
+
+/// A run's `n` glyphs by the style that shaped them: one part in the run's style `st`, unless a
+/// cluster in it was shaped in more than one font (`restyled`, from [`GlyphRun`]).
+fn style_parts<'a>(
+    pl: &'a crate::para::ParaLayout,
+    st: &'a crate::para::StyleRun,
+    restyled: &[(usize, u32)],
+    n: usize,
+) -> Vec<(std::ops::Range<usize>, &'a crate::para::StyleRun)> {
+    let mut parts = Vec::new();
+    let mut from = (0, st);
+    for &(at, s) in restyled {
+        let Some(ps) = pl.styles.get(s as usize) else { continue };
+        if at > from.0 {
+            parts.push((from.0..at, from.1));
+        }
+        from = (at, ps);
+    }
+    parts.push((from.0..n, from.1));
+    parts
 }
 
 fn draw_glyph_runs(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
@@ -196,7 +234,7 @@ fn draw_glyph_runs(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
             continue;
         };
         let run_start = k;
-        let (run_end, mut glyphs, text, ranges) = collect_glyph_run(ctx, run_start, si, st);
+        let GlyphRun { end: run_end, mut glyphs, text, ranges, restyled } = collect_glyph_run(ctx, run_start, si, st);
         k = run_end;
         let rc = &st.rc;
         let m = &opts.revisions;
@@ -264,8 +302,11 @@ fn draw_glyph_runs(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
                 g.0 = gid;
             }
         }
-        let synth_bold = st.synth_bold || ins_mark == Some(InsertMark::Bold) || del_mark == Some(DeleteMark::Bold);
-        let synth_italic = st.synth_italic || ins_mark == Some(InsertMark::Italic) || del_mark == Some(DeleteMark::Italic);
+        let bold_mark = ins_mark == Some(InsertMark::Bold) || del_mark == Some(DeleteMark::Bold);
+        let italic_mark = ins_mark == Some(InsertMark::Italic) || del_mark == Some(DeleteMark::Italic);
+        // `#` deletion marks are all the run's font's.
+        let restyled = if del_mark == Some(DeleteMark::Hash) { &[][..] } else { &restyled[..] };
+        let parts = style_parts(pl, st, restyled, glyphs.len());
         // Text effects draw the letters from their outlines; the glyphs stay, invisible, for
         // the PDF's text. Not for colour glyphs (no outlines), top-to-bottom text with upright
         // characters (their outlines would lie on their side), `#` deletion marks, or WordArt
@@ -275,30 +316,43 @@ fn draw_glyph_runs(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
             (!upright && !glyphs.is_empty() && del_mark != Some(DeleteMark::Hash) && (rc.text_effects.is_none() || ins.is_none() && del.is_none()))
                 .then(|| crate::wordart::run_effects(rc, color))
                 .flatten()
-                .filter(|_| !st.face.has_color_glyphs());
+                .filter(|_| !parts.iter().any(|(_, ps)| ps.face.has_color_glyphs()));
         let has_art = art.is_some();
         if let Some(mut fx) = art {
-            if synth_bold {
+            if st.synth_bold || bold_mark {
                 crate::wordart::embolden(&mut fx, color, st.size);
             }
-            let path = crate::wordart::glyph_path(&st.face, st.size, &glyphs, synth_italic);
+            let mut path = kurbo::BezPath::new();
+            for (r, ps) in &parts {
+                let part = glyphs.get(r.clone()).unwrap_or_default();
+                path.extend(crate::wordart::glyph_path(&ps.face, ps.size, part, ps.synth_italic || italic_mark));
+            }
             out.push(Draw::Art { path, fx: Box::new(fx), color, alpha, text_bg });
         }
-        if !glyphs.is_empty() {
-            out.push(Draw::Glyphs {
-                face: st.face,
-                size: st.size,
-                glyphs,
-                color,
-                alpha: if has_art { 0.0 } else { alpha },
-                synth_bold,
-                synth_italic,
-                text,
-                link: rc.link.clone(),
-                ranges,
-                text_bg,
-                x_scale: rc.scale / 100.0,
-            });
+        let glyph_draw = |ps: &crate::para::StyleRun, glyphs, text, ranges| Draw::Glyphs {
+            face: ps.face,
+            size: ps.size,
+            glyphs,
+            color,
+            alpha: if has_art { 0.0 } else { alpha },
+            synth_bold: ps.synth_bold || bold_mark,
+            synth_italic: ps.synth_italic || italic_mark,
+            text,
+            link: rc.link.clone(),
+            ranges,
+            text_bg,
+            x_scale: rc.scale / 100.0,
+        };
+        if let [(_, ps)] = parts[..] {
+            if !glyphs.is_empty() {
+                out.push(glyph_draw(ps, glyphs, text, ranges));
+            }
+        } else {
+            for (r, ps) in &parts {
+                let part = glyphs.get(r.clone()).map(<[_]>::to_vec).unwrap_or_default();
+                let part_ranges = ranges.get(r.clone()).map(<[_]>::to_vec).unwrap_or_default();
+                out.push(glyph_draw(ps, part, text.clone(), part_ranges));
+            }
         }
         // Decorations across the run (underline skips trailing spaces of the line). Right-to-left
         // text inside a run can split it into several visual spans.

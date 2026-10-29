@@ -281,6 +281,34 @@ impl InlineObject {
     pub fn is_canvas(&self) -> bool {
         self.canvas_style().is_some()
     }
+    /// Repoint the media keys this object shows (a picture's, a picture-filled shape's, and
+    /// those of its group members) through `map`; keys `map` returns `None` for stay as they are.
+    pub fn remap_media(&mut self, map: &dyn Fn(&str) -> Option<String>) {
+        match self {
+            InlineObject::Image { media, .. } => {
+                if let Some(k) = map(media) {
+                    *media = k;
+                }
+            }
+            InlineObject::Shape { fill: Some(crate::fill::Fill::Picture(p)), .. } => {
+                if let Some(k) = map(&p.media) {
+                    std::sync::Arc::make_mut(p).media = k;
+                }
+            }
+            InlineObject::Group { children, canvas, .. } => {
+                // A Drawing Canvas's picture background names media too.
+                if let Some(crate::fill::Fill::Picture(p)) = canvas.as_mut().and_then(|c| c.fill.as_mut())
+                    && let Some(k) = map(&p.media)
+                {
+                    std::sync::Arc::make_mut(p).media = k;
+                }
+                for c in children {
+                    c.obj.remap_media(map);
+                }
+            }
+            _ => {}
+        }
+    }
     /// The text box story this object shows, if it is a text box.
     pub fn text_box(&self) -> Option<u32> {
         match self {

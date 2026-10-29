@@ -470,6 +470,149 @@ fn unicode_in_info_bookmarks_and_field_instructions() {
     assert_eq!(texts(&f).last().map(String::as_str), Some("Normal:Café"));
 }
 
+/// The fields of the first paragraph of a header, footer or the body: (code, cached result) and
+/// the paragraph's text with each field as its object mark.
+fn fields_of(blocks: &[std::sync::Arc<wordcraft_doc::Block>]) -> (Vec<(String, String)>, String) {
+    let Some(wordcraft_doc::Block::Para(p)) = blocks.first().map(|b| &**b) else { return (vec![], String::new()) };
+    let fields = p
+        .objects
+        .iter()
+        .filter_map(|o| match o {
+            wordcraft_doc::InlineObject::Field { instr, result, .. } => Some((instr.clone(), result.clone())),
+            _ => None,
+        })
+        .collect();
+    (fields, p.text.clone())
+}
+
+#[test]
+fn page_number_fields_stay_fields() {
+    // A running head as a reporting system writes it: each field in a group of its own, with a
+    // cached result of 1. Kept as text, every page would read "Page 1 of 1".
+    let rtf = br"{\rtf1\ansi{\header \pard STUDY\tab Page {\field{\*\fldinst { PAGE }}{\fldrslt {1}}} of {\field{\*\fldinst { NUMPAGES }}{\fldrslt {1}}}\par}
+\pard Body\par}";
+    let d = import(rtf).unwrap();
+    let head = d.last_section.headers.default.and_then(|id| d.parts.get(&id)).unwrap();
+    let (fields, text) = fields_of(&head.blocks);
+    assert_eq!(fields, [("PAGE".to_string(), "1".to_string()), ("NUMPAGES".to_string(), "1".to_string())]);
+    assert_eq!(text, "STUDY\tPage \u{FFFC} of \u{FFFC}");
+
+    // A field started by `\field` inside a formatting group, with no result (Word refreshes a
+    // `\flddirty` field on open): the group's formatting is the field's, and its switch is kept.
+    let rtf = br"{\rtf1\ansi{\fonttbl{\f1 Courier New;}}{\header \pard {\f1\fs20\b Page }{\f1\fs20\b \field\flddirty{\*\fldinst{  PAGE   \\* MERGEFORMAT }}}{\f1\fs20\b  of }{\f1\fs20\b \field{\*\fldinst{ NUMPAGES}}}\par}
+\pard Body\par}";
+    let d = import(rtf).unwrap();
+    let head = d.last_section.headers.default.and_then(|id| d.parts.get(&id)).unwrap();
+    let (fields, text) = fields_of(&head.blocks);
+    assert_eq!(fields, [(r"PAGE   \* MERGEFORMAT".to_string(), String::new()), ("NUMPAGES".to_string(), String::new())]);
+    assert_eq!(text, "Page \u{FFFC} of \u{FFFC}");
+    let Some(wordcraft_doc::Block::Para(p)) = head.blocks.first().map(|b| &**b) else { panic!("no header paragraph") };
+    let mark = p.text.find('\u{FFFC}').unwrap();
+    let mut field_run = p.runs.iter().scan(0, |end, r| {
+        *end += r.len;
+        Some((*end, r))
+    });
+    let props = &field_run.find(|(end, _)| *end > mark).unwrap().1.props;
+    assert_eq!((props.bold, props.size, props.font.as_deref()), (Some(true), Some(10.0), Some("Courier New")));
+
+    // `\chpgn` is the page number itself (headers and footers).
+    let d = import(br"{\rtf1\ansi{\footer \pard Page \chpgn\par} Body\par}").unwrap();
+    let foot = d.last_section.footers.default.and_then(|id| d.parts.get(&id)).unwrap();
+    assert_eq!(fields_of(&foot.blocks), (vec![("PAGE".to_string(), String::new())], "Page \u{FFFC}".to_string()));
+
+    // Other fields keep their cached text, a hyperlink stays a link, and a page field in the body
+    // is a field too. The plain-text view of a paragraph reads a field as its cached result.
+    let f = parse(br#"{\rtf1\ansi\pard {\field{\*\fldinst DATE}{\fldrslt 1/2/2026}} {\field{\*\fldinst{HYPERLINK "https://example.test"}}{\fldrslt{link}}} p{\field{\*\fldinst PAGE}{\fldrslt 7}}\par}"#).unwrap();
+    assert_eq!(texts(&f), ["Normal:1/2/2026 link p7"]);
+    let d = import(br#"{\rtf1\ansi\pard {\field{\*\fldinst DATE}{\fldrslt 1/2/2026}} p{\field{\*\fldinst PAGE}{\fldrslt 7}}\par}"#).unwrap();
+    assert_eq!(fields_of(&d.body), (vec![("PAGE".to_string(), "7".to_string())], "1/2/2026 p\u{FFFC}".to_string()));
+}
+
+/// The properties of the run holding the first paragraph's first field.
+fn field_props(blocks: &[std::sync::Arc<wordcraft_doc::Block>]) -> wordcraft_doc::CharProps {
+    let Some(wordcraft_doc::Block::Para(p)) = blocks.first().map(|b| &**b) else { panic!("no paragraph") };
+    let mark = p.text.find('\u{FFFC}').expect("no field");
+    let mut end = 0;
+    p.runs
+        .iter()
+        .find(|r| {
+            end += r.len;
+            end > mark
+        })
+        .map(|r| r.props.clone())
+        .unwrap()
+}
+
+#[test]
+fn a_page_field_result_is_only_what_fldrslt_holds() {
+    // The specification's own spacing: a space between the code and result groups. It is neither
+    // part of the cached result nor where the field takes its formatting from.
+    let d = import(br"{\rtf1\ansi\pard p{\field{\*\fldinst PAGE} {\fldrslt 7}}\par}").unwrap();
+    assert_eq!(fields_of(&d.body), (vec![("PAGE".to_string(), "7".to_string())], "p\u{FFFC}".to_string()));
+    let d = import(br"{\rtf1\ansi\pard p{\field{\*\fldinst PAGE}{\b  }{\fldrslt 7}}\par}").unwrap();
+    assert_eq!(fields_of(&d.body).0, [("PAGE".to_string(), "7".to_string())]);
+    assert_eq!(field_props(&d.body).bold, None, "the bold space is not the result");
+    // Nor is a group after the result.
+    let d = import(br"{\rtf1\ansi\pard p{\field{\*\fldinst PAGE}{\fldrslt 7}{\b x}}\par}").unwrap();
+    assert_eq!(fields_of(&d.body).0, [("PAGE".to_string(), "7".to_string())]);
+}
+
+#[test]
+fn page_fields_keep_their_tracked_changes() {
+    // A field inserted by Alice, a field in text deleted by Bob, and `\chpgn` inserted by Alice:
+    // each field is marked like the text around it.
+    let author = |d: &Document, i: Option<u32>| i.and_then(|i| d.revisions.get(i as usize)).map(|r| r.author.clone());
+    let tbl = r"{\*\revtbl {Unknown;}{Alice;}{Bob;}}";
+    for (body, ins, del) in [
+        (r"{\revised\revauth1 p{\field{\*\fldinst PAGE}{\fldrslt 7}}}", Some("Alice"), None),
+        (r"{\deleted\revauthdel2 p{\field{\*\fldinst PAGE}}}", None, Some("Bob")),
+        (r"{\revised\revauth1 p\chpgn}", Some("Alice"), None),
+    ] {
+        let d = import(format!(r"{{\rtf1\ansi{tbl}\pard {body}\par}}").as_bytes()).unwrap();
+        let cp = field_props(&d.body);
+        assert_eq!(author(&d, cp.ins).as_deref(), ins, "{body}");
+        assert_eq!(author(&d, cp.del).as_deref(), del, "{body}");
+    }
+    // A field whose formatting was changed (made bold, with `\oldcprops` saying it was not)
+    // keeps that formatting change, like the text around it.
+    for body in [r"{\crauth1\b{\*\oldcprops\plain} p{\field{\*\fldinst PAGE}{\fldrslt 7}}}", r"{\crauth1\b{\*\oldcprops\plain} p\chpgn}"] {
+        let d = import(format!(r"{{\rtf1\ansi{tbl}\pard {body}\par}}").as_bytes()).unwrap();
+        let cp = field_props(&d.body);
+        assert_eq!(cp.bold, Some(true), "{body}");
+        let change = cp.fmt_change.as_ref().unwrap_or_else(|| panic!("no formatting change: {body}"));
+        assert_eq!(author(&d, Some(change.rev)).as_deref(), Some("Alice"), "{body}");
+    }
+}
+
+#[test]
+fn a_long_page_field_result_stays_within_its_cap() {
+    // A run of text reaches the reader whole, however long. A short run ("1", ended by `\i0`)
+    // then a long one must not carry the cached result past its 4096 bytes: the long one is cut
+    // to the room left, the "é" that straddles the cut is left out whole, and the result ends
+    // there (no "y" after the gap).
+    let long = format!("{}\\u233?{}", "x".repeat(4094), "y".repeat(10_000));
+    let rtf = format!(r"{{\rtf1\ansi\uc1\pard p{{\field{{\*\fldinst PAGE}}{{\fldrslt 1\i0 {long}}}}}\par}}");
+    let f = parse(rtf.as_bytes()).unwrap();
+    let inl: Vec<&Inline> = f.blocks.iter().flat_map(|b| if let FBlock::Para(p) = b { p.inlines.iter().collect() } else { vec![] }).collect();
+    let result = inl.iter().find_map(|i| if let Inline::Field { result, .. } = i { Some(result) } else { None }).unwrap();
+    assert_eq!(result.len(), 4095, "cut at the cap, not dropped, and never past it");
+    assert!(result.starts_with("1xx") && result.ends_with('x'));
+}
+
+#[test]
+fn hostile_page_fields_never_panic() {
+    // Unclosed, nested and empty fields, and a field that is all switch: each still imports.
+    for rtf in [
+        &br"{\rtf1\ansi{\header {\field{\*\fldinst PAGE"[..],
+        br"{\rtf1\ansi{\field{\*\fldinst PAGE}{\fldrslt {\field{\*\fldinst NUMPAGES}{\fldrslt 2}}}}\par}",
+        br"{\rtf1\ansi{\field{\*\fldinst }{\fldrslt x}}\par}",
+        br"{\rtf1\ansi{\field{\*\fldinst \\* MERGEFORMAT}{\fldrslt x}}\par}",
+        br"{\rtf1\ansi\chpgn{\field}\par}",
+    ] {
+        assert!(import(rtf).is_ok());
+    }
+}
+
 /// A hand-written RTF with tracked changes: Alice inserts "added ", Bob deletes "gone", and
 /// "both" is inserted by Alice then deleted by Bob.
 pub(crate) const TRACKED: &[u8] = br"{\rtf1\ansi\deff0{\fonttbl{\f0 Arial;}}{\*\revtbl {Unknown;}{Alice;}{Bob;}}

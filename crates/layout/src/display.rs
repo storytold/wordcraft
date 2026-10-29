@@ -28,7 +28,7 @@ pub(crate) use objects::inline_rect;
 pub use objects::seg_path;
 pub use options::{BalloonMode, ChangeBar, CommentDisplay, DeleteMark, DisplayOptions, FormattingMarks, InsertMark, MarkupOptions};
 pub use page::{CHANGE_BAR, ItemDisplay, MOVE_COLOR, object_display, page_display, page_layers, revision_color};
-pub use paint::{Paint, Stroke, paint_for};
+pub use paint::{Outline, Paint, Stroke, paint_for, picture_fill};
 
 #[derive(Clone, Debug)]
 pub enum Draw {
@@ -120,6 +120,9 @@ pub enum Draw {
     /// `items` clipped to `rect` (a Drawing Canvas's members to its frame). Inside a
     /// [`Draw::Rotated`], `rect` is in the turned frame's (unturned) coordinates.
     Clip { rect: Rect, items: Vec<Draw> },
+    /// `items` clipped to a shape's outline (a picture fill's picture). Inside a
+    /// [`Draw::Rotated`], the outline is in the turned frame's coordinates, as for [`Draw::Clip`].
+    ClipTo { outline: Outline, items: Vec<Draw> },
     /// Text drawn from its outlines with WordArt effects (and bent, in a warped text box):
     /// `path` in page coordinates, painted as [`crate::wordart::art_layers`] says. `color` is the
     /// run's own colour, the fill when the effects set none. `text_bg`: as for [`Draw::Glyphs`].

@@ -16,8 +16,11 @@ occasional.
 
 DOCX textboxes retain their own frame and story when they contain an inline picture.
 The direct WPS payload takes precedence over picture blips inside its text. Textbox fitting
-and floating-child paint require separate qualification. A shape's own picture fill retains
-its existing image fallback.
+and floating-child paint require separate qualification. A shape's own picture fill
+(`a:blipFill`, alone or in a group) is the shape's fill: the picture is stretched over the
+shape (`a:fillRect`, cropped by `a:srcRect`, faded by `a:alphaModFix`), clipped to its preset or
+freeform outline in the PDF and on screen, and written back with its relationship. A tiled
+picture fill keeps its `a:tile` but is drawn stretched; `rotWithShape="0"` is kept, not drawn.
 
 > **Comment command update:** 2026-10-14 · malformed explicit IDs rejected; synthetic refusal, undo/redo and DOCX save/reopen checks (#1690 finding 3). Readiness estimates unchanged.
 
@@ -285,6 +288,8 @@ Repeated DOCX style IDs use the last complete definition. The original regressio
 | 2026-10-21 | trivial | Tables: table style band sizes (`w:tblStyleRowBandSize`, `w:tblStyleColBandSize`) are written for our banded styles and read with zero kept; a style without them has no bands, as in Word, so banded rows shade the same rows in both (#3415) |
 | 2026-10-21 | trivial | ODT: `table:table-column` styles (`style:column-width`, `table:number-columns-repeated`) are read as the table's grid, so column widths set in LibreOffice or changed in WordCraft survive a save; before, every opened table got equal columns and the written widths were dropped on the next open |
 | 2026-10-21 | trivial | A document with many content controls saves in the time the controls take: 32,000 controls took four seconds to save and take a tenth of one now (#13) |
+| 2026-10-27 | trivial | DOCX: a shape's picture fill (`a:blipFill`) fills the shape, clipped to its outline, and round-trips; a picture-filled member of a group is drawn with its picture. |
+| 2026-10-29 | trivial | RTF import: `PAGE`, `NUMPAGES` and `SECTIONPAGES` fields, and `\chpgn`, are read as fields in the text's formatting, so each page shows its own number; before, the cached result (usually 1) was read as text and every page of a multi-page header read "Page 1 of 1", or "Page of" for a field without a result (`rtf::tests::page_number_fields_stay_fields`). Other fields keep their cached text, and other formats write a field's cached text. |
 | 2026-10-20 | trivial | Nested-picture textboxes retain their frames; WPS picture fills keep their existing image fallback. |
 | 2026-10-20 | trivial | Restrict Editing: a file command that changes the open document is checked like any other — the privacy options, the properties and the inspector's removals are refused on a protected document — and restoring a stored version keeps the protection and its password instead of the snapshot's stale ones |
 | 2026-10-22 | trivial | The CLI author flag and the Options user name field cannot change the session name after protection starts (#3279 follow-up). |

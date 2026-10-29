@@ -231,7 +231,7 @@ impl Writer {
         let mut o = String::new();
         for i in inlines {
             match i {
-                Inline::Text(t, f) => {
+                Inline::Text(t, f) | Inline::Field { result: t, fmt: f, .. } => {
                     let s = self.span(t, f);
                     o.push_str(&s);
                 }

@@ -146,10 +146,15 @@ impl ThemeFills {
 /// more, so a hostile theme with millions of entries keeps a bounded list.
 const MAX_THEME_FILLS: usize = 999;
 
+/// The fill element of a `…spPr` element (`a:noFill`, `a:solidFill`, `a:blipFill`…), if any.
+pub(crate) fn own_fill_element(sppr: &El) -> Option<&El> {
+    sppr.els().find(|c| matches!(c.name.as_str(), "a:noFill" | "a:blipFill" | "a:grpFill" | "a:solidFill" | "a:gradFill" | "a:pattFill"))
+}
+
 /// The fill a `…spPr` element states itself: `Some(None)` for none (`a:noFill`, picture fills),
 /// `group` for `a:grpFill`, `None` when it leaves the fill to the shape's style.
 pub(crate) fn own_fill(sppr: Option<&El>, theme: &[Rgb], group: Option<&Fill>) -> Option<Option<Fill>> {
-    let f = sppr?.els().find(|c| matches!(c.name.as_str(), "a:noFill" | "a:blipFill" | "a:grpFill" | "a:solidFill" | "a:gradFill" | "a:pattFill"))?;
+    let f = own_fill_element(sppr?)?;
     Some(match f.name.as_str() {
         "a:grpFill" => group.cloned(),
         _ => read_fill(f, theme, None),

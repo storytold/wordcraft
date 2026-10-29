@@ -72,6 +72,8 @@ fn every_char_prop_round_trips() {
     let all = CharProps {
         style: Some("Strong".into()),
         font: Some("Georgia".into()),
+        // The font of the non-ASCII Latin text (`w:hAnsi`).
+        font_hansi: Some("Verdana".into()),
         // The symbol's own font: the run is written as `w:sym` characters (#2036).
         sym_font: Some("Wingdings".into()),
         size: Some(10.5),
