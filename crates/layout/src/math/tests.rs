@@ -256,6 +256,21 @@ fn nested_empty_delimiters_grow_with_nesting() {
             &MathProps::default(),
         );
         assert!((h(&one_argument) - h(&solo)).abs() < 0.01, "display={display}: {} vs {}", h(&one_argument), h(&solo));
+        // Boxed content and shown phantoms draw no boundary of their own.
+        let boxed =
+            lay_in(&Math { nodes: vec![delim(vec![MNode::Boxed { e: nest(1) }])], ..Default::default() }, "", display, 400.0, &MathProps::default());
+        assert!(h(&boxed) > h(&solo) * 1.05, "display={display}: {} vs {}", h(&boxed), h(&solo));
+        let phantom = lay_in(
+            &Math {
+                nodes: vec![delim(vec![MNode::Phant { show: true, zero_wid: false, zero_asc: false, zero_desc: false, e: nest(1) }])],
+                ..Default::default()
+            },
+            "",
+            display,
+            400.0,
+            &MathProps::default(),
+        );
+        assert!(h(&phantom) > h(&solo) * 1.05, "display={display}: {} vs {}", h(&phantom), h(&solo));
     }
 }
 

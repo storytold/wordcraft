@@ -3,15 +3,20 @@ use super::state::{MAX_NODES, class_of};
 use super::*;
 
 /// Whether any visible delimiter or separator is directly inside these arguments, looking through
-/// invisible groups (`〖…〗`), which only scope their content and draw no bracket.
+/// wrappers that draw no boundary of their own: invisible groups (`〖…〗`), boxed content and shown
+/// phantoms.
 fn has_visible_delimiter(args: &[Arg]) -> bool {
     let mut stack: Vec<&MNode> = args.iter().flatten().collect();
     while let Some(n) = stack.pop() {
-        if let MNode::Delim { beg, end, sep, elems, .. } = n {
-            if beg.is_some() || end.is_some() || (sep.is_some() && elems.len() > 1) {
-                return true;
+        match n {
+            MNode::Delim { beg, end, sep, elems, .. } => {
+                if beg.is_some() || end.is_some() || (sep.is_some() && elems.len() > 1) {
+                    return true;
+                }
+                stack.extend(elems.iter().flatten());
             }
-            stack.extend(elems.iter().flatten());
+            MNode::Boxed { e } | MNode::Phant { show: true, zero_asc: false, zero_desc: false, e, .. } => stack.extend(e.iter()),
+            _ => {}
         }
     }
     false
