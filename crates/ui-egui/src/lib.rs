@@ -688,6 +688,10 @@ pub struct WordApp {
     /// language picker or Language packs list: load an installed Arabic font when no embedded face
     /// covers it (dev builds without craft-fonts).
     pub(crate) want_system_arabic: bool,
+    /// The document's selection last put on the primary selection (#1934), so the same selection
+    /// isn't put there again. App-wide: the primary selection is one for the whole screen, so
+    /// every window shares the one record of what was put there.
+    pub(crate) shared_selection: Option<system_clipboard::SharedSelection>,
     /// The document (id, revision) whose comment text [`WordApp::ensure_comment_fonts`] last
     /// looked at.
     comment_fonts_for: Option<(u64, u64)>,

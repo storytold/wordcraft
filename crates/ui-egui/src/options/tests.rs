@@ -521,3 +521,15 @@ fn screen_paper_color_options_round_trip_and_work_without_a_document() {
     h.run_steps(3);
     assert_eq!(h.state().session.prefs.paper_color, PaperColor::Cream);
 }
+
+/// #1934: "Use the middle mouse button to paste instead of autoscroll" belongs to Linux alone —
+/// the primary selection is a Unix idea, and Word for Mac and Windows have no such setting to
+/// find. This runs on every platform, so the box is checked for in CI wherever it builds.
+#[test]
+fn the_middle_click_paste_option_is_offered_on_linux_only() {
+    let mut h = nav_harness("en", 100);
+    h.state_mut().run("file.options", json!({"pane": "advanced"})).unwrap();
+    h.run_steps(4);
+    let label = crate::i18n::tr(crate::i18n::Lang::EN, "Use the middle mouse button to paste instead of autoscroll");
+    assert_eq!(h.query_by_label(label).is_some(), cfg!(target_os = "linux"), "the middle-click paste option is a Linux setting only");
+}
