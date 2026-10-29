@@ -10533,6 +10533,22 @@ fn vertical_align_command_sets_justified() {
     }
 }
 
+/// Hangul documents open by extension and, since their packages look like Word's, by what they
+/// hold: a `.hwpx` named `.docx` or `.doc`, or with no extension at all.
+#[test]
+fn hangul_documents_open_by_name_and_content() {
+    let hwpx = wordcraft_formats::hangul_samples::hwpx();
+    for name in ["a.hwpx", "a.HWPX", "renamed.docx", "renamed.doc", "noext"] {
+        let doc = crate::io::open_bytes(name, &hwpx).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let text = doc.plain_text(StoryRef::Body);
+        assert!(text.contains("Hello bold") && text.contains("merged"), "{name}: {text}");
+    }
+    assert!(crate::io::OPEN_EXTS.contains(&"hwpx"));
+    // A damaged Hangul file says what went wrong.
+    let err = crate::io::open_bytes("x.hwpx", b"PK\x03\x04junk").unwrap_err();
+    assert!(err.contains("HWPX"), "{err}");
+}
+
 /// #1876 review: only Web Layout wraps to the window's `web_width`. Draft and Outline keep a fixed
 /// 800 pt column, also after a visit to a wide Web Layout, and the window width is never serialized.
 #[test]
