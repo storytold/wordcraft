@@ -24,6 +24,8 @@ pub mod sample;
 mod session;
 pub(crate) mod snapshot;
 pub mod speech;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod storage;
 pub(crate) mod view;
 
 use std::collections::HashMap;

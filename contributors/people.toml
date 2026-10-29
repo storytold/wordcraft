@@ -181,3 +181,7 @@ sync_github_name = true
 
 [people.pakiat]
 display_name = "OtorO"
+
+[people.mission-deny-the-mission]
+display_name = "Harry Hall"
+sync_github_name = false

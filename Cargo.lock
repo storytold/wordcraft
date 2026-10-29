@@ -6690,6 +6690,7 @@ dependencies = [
  "wordcraft-engine",
  "wordcraft-mcp",
  "wordcraft-render",
+ "wordcraft-storage",
  "wordcraft-zotero",
 ]
 
@@ -6779,6 +6780,7 @@ dependencies = [
  "wordcraft-pdf",
  "wordcraft-proof",
  "wordcraft-render",
+ "wordcraft-storage",
  "zeroize",
  "zip 3.0.0",
 ]
@@ -6906,6 +6908,16 @@ dependencies = [
  "wordcraft-geom",
  "wordcraft-layout",
  "wordcraft-metafile",
+]
+
+[[package]]
+name = "wordcraft-storage"
+version = "0.11.0"
+dependencies = [
+ "base64 0.23.1",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

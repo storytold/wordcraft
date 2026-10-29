@@ -56,6 +56,23 @@ USAGE:
                                               running): addEditCitation, addEditBibliography,
                                               addNote, refresh, removeCodes, setDocPrefs
                                               (--cmd runs first, e.g. --cmd caret.docEnd)
+  wordcraft-cli store-write PATH FILE [--store local --store-root DIR | --store webdav
+                    --store-url URL [--store-user U --store-password P | --store-token T]] [--etag TAG] [--atomic]
+                                              upload a local file to storage at PATH (--etag writes
+                                              only if the stored version still carries TAG)
+  wordcraft-cli store-read PATH OUT [--store …]  download storage PATH to local file OUT
+  wordcraft-cli store-stat PATH [--store …]   metadata (size, ETag) as JSON
+  wordcraft-cli store-list [PREFIX] [--store …] direct children as JSON
+  wordcraft-cli store-remove PATH [--store …] delete (missing: success)
+  wordcraft-cli store-probe [--store …]       capabilities + server probe as JSON
+  wordcraft-cli store-recover [--store …]     finish or drop interrupted writes, as JSON
+                    --store-root is a local/NAS/synced folder; --store-url is the WebDAV
+                    collection (a --store-url alone picks webdav), e.g. http://ocis.lan:9200/remote.php/dav/files/alice/Docs/
+                    (plain http only: LAN, VPN or SSH tunnel; https is refused, see #518).
+                    WebDAV auth is Basic (--store-user/--store-password) or an OIDC
+                    Bearer token (--store-token, or $CRAFT_DAV_TOKEN to keep it off argv),
+                    never both. Credentials go only to a loopback host unless
+                    --store-insecure-http says the network is trusted.
   wordcraft-cli [<command>] -h | --help       this help
   wordcraft-cli --version
 
@@ -71,7 +88,25 @@ same output on every machine.
 ";
 
 /// The subcommands, in `USAGE` order; `--help` or `-h` after any of them prints `USAGE` (#968).
-const SUBCOMMANDS: &[&str] = &["convert", "info", "text", "inspect", "render", "run", "commands", "parity", "mcp", "zotero"];
+const SUBCOMMANDS: &[&str] = &[
+    "convert",
+    "info",
+    "text",
+    "inspect",
+    "render",
+    "run",
+    "commands",
+    "parity",
+    "mcp",
+    "zotero",
+    "store-write",
+    "store-read",
+    "store-stat",
+    "store-list",
+    "store-remove",
+    "store-probe",
+    "store-recover",
+];
 
 fn wants_help(cmd: &str, rest: &[String]) -> bool {
     SUBCOMMANDS.contains(&cmd) && rest.iter().any(|a| a == "--help" || a == "-h")
@@ -329,6 +364,17 @@ const ZOTERO_OPTIONS: &[OptionSpec] = &[
     OptionSpec { name: "--save", takes_value: true },
     OptionSpec { name: "--trace", takes_value: false },
     OptionSpec { name: "--port", takes_value: true },
+];
+const STORE_OPTIONS: &[OptionSpec] = &[
+    OptionSpec { name: "--store", takes_value: true },
+    OptionSpec { name: "--store-root", takes_value: true },
+    OptionSpec { name: "--store-url", takes_value: true },
+    OptionSpec { name: "--store-user", takes_value: true },
+    OptionSpec { name: "--store-password", takes_value: true },
+    OptionSpec { name: "--store-token", takes_value: true },
+    OptionSpec { name: "--store-insecure-http", takes_value: false },
+    OptionSpec { name: "--etag", takes_value: true },
+    OptionSpec { name: "--atomic", takes_value: false },
 ];
 
 /// Why a CLI run stopped early.
@@ -696,8 +742,139 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             Ok(())
         }
         "--version" | "-V" => write_stdout(|o| writeln!(o, "wordcraft-cli {}", env!("CARGO_PKG_VERSION"))),
+        "store-write" | "store-read" | "store-stat" | "store-list" | "store-remove" | "store-probe" | "store-recover" => store_command(cmd, &rest),
         "" | "help" | "--help" | "-h" => write_stdout(|o| write!(o, "{USAGE}")),
         other => Err(format!("unknown command `{other}`\n\n{USAGE}").into()),
+    }
+}
+
+/// Open the storage backend named by the `--store*` flags: `local` (a folder at `--store-root`)
+/// or `webdav` (a collection at `--store-url`, Basic auth via `--store-user`/`--store-password`
+/// or an OIDC/Bearer token via `--store-token`; the two schemes are mutually exclusive).
+fn open_store(command: &str, args: &[String]) -> Result<Box<dyn wordcraft_storage::StorageBackend>, String> {
+    // Without --store, a --store-url names a WebDAV collection; otherwise it's a local folder.
+    let default_kind = if arg_value(args, "--store-url").is_some() { "webdav" } else { "local" };
+    match arg_value(args, "--store").as_deref().unwrap_or(default_kind) {
+        "local" => {
+            let root = arg_value(args, "--store-root").ok_or_else(|| format!("{command}: --store local needs --store-root DIR"))?;
+            if arg_value(args, "--store-url").is_some() {
+                return Err(format!("{command}: --store-url is for --store webdav, not local"));
+            }
+            wordcraft_storage::local::LocalBackend::open(std::path::Path::new(&root))
+                .map(|b| Box::new(b) as Box<dyn wordcraft_storage::StorageBackend>)
+                .map_err(|e| format!("{command}: {e}"))
+        }
+        "webdav" => {
+            let url = arg_value(args, "--store-url").ok_or_else(|| format!("{command}: --store webdav needs --store-url URL"))?;
+            if arg_value(args, "--store-root").is_some() {
+                return Err(format!("{command}: --store-root is for --store local, not webdav"));
+            }
+            let (user, password, token) = (arg_value(args, "--store-user"), arg_value(args, "--store-password"), arg_value(args, "--store-token"));
+            // The token may arrive via the environment instead of argv, where other processes can read it.
+            let token = token.or_else(|| std::env::var("CRAFT_DAV_TOKEN").ok().filter(|t| !t.is_empty()));
+            if token.is_some() && (user.is_some() || password.is_some()) {
+                return Err(format!("{command}: --store-token cannot be combined with --store-user/--store-password (pick one auth scheme)"));
+            }
+            let backend = match (token, user, password) {
+                (Some(t), None, None) => wordcraft_storage::webdav::WebDavBackend::with_bearer(&url, &t),
+                (None, u, p) => wordcraft_storage::webdav::WebDavBackend::new(&url, u.as_deref(), p.as_deref()),
+                _ => return Err(format!("{command}: --store-token cannot be combined with --store-user/--store-password (pick one auth scheme)")),
+            };
+            // Credentials go only to a loopback host over plain HTTP unless the network is trusted.
+            let insecure = args.iter().any(|a| a == "--store-insecure-http");
+            backend
+                .map(|b| if insecure { b.allow_cleartext_credentials() } else { b })
+                .map(|b| Box::new(b) as Box<dyn wordcraft_storage::StorageBackend>)
+                .map_err(|e| format!("{command}: {e}"))
+        }
+        other => Err(format!("{command}: unknown --store `{other}` (local or webdav)")),
+    }
+}
+
+fn store_command(command: &str, rest: &[String]) -> Result<(), Failure> {
+    validate_options(command, rest, STORE_OPTIONS)?;
+    let positional: Vec<String> = positionals(rest, STORE_OPTIONS).into_iter().cloned().collect();
+    let pos = |i: usize| positional.get(i).cloned().ok_or_else(missing_argument);
+    let store = open_store(command, rest).map_err(Failure::Error)?;
+    match command {
+        "store-write" => {
+            let (path, file) = (pos(0)?, pos(1)?);
+            wordcraft_engine::file_access::check_read(&file).map_err(Failure::Error)?;
+            let bytes = std::fs::read(&file).map_err(|e| Failure::Error(format!("{file}: {e}")))?;
+            let opts = wordcraft_storage::WriteOptions { if_match: arg_value(rest, "--etag"), atomic: rest.iter().any(|a| a == "--atomic") };
+            let meta = store.write(&path, &bytes, &opts).map_err(|e| Failure::Error(format!("{path}: {e}")))?;
+            write_stdout(|o| {
+                writeln!(o, "{}", serde_json::to_string_pretty(&json!({"path": path, "size": meta.size, "etag": meta.etag})).unwrap_or_default())
+            })?;
+            eprintln!("wrote {path} ({} bytes)", bytes.len());
+            Ok(())
+        }
+        "store-read" => {
+            let (path, out) = (pos(0)?, pos(1)?);
+            let bytes = store.read(&path).map_err(|e| Failure::Error(format!("{path}: {e}")))?;
+            wordcraft_engine::file_access::check_write(&out).map_err(Failure::Error)?;
+            std::fs::write(&out, &bytes).map_err(|e| Failure::Error(format!("{out}: {e}")))?;
+            eprintln!("wrote {out} ({} bytes)", bytes.len());
+            Ok(())
+        }
+        "store-stat" => {
+            let path = pos(0)?;
+            let meta = store.stat(&path).map_err(|e| Failure::Error(format!("{path}: {e}")))?;
+            write_stdout(|o| {
+                writeln!(
+                    o,
+                    "{}",
+                    serde_json::to_string_pretty(
+                        &json!({"path": path, "size": meta.size, "etag": meta.etag, "modified": meta.modified, "isDir": meta.is_dir})
+                    )
+                    .unwrap_or_default()
+                )
+            })
+        }
+        "store-list" => {
+            let prefix = positional.first().cloned().unwrap_or_default();
+            let entries = store.list(&prefix).map_err(|e| Failure::Error(format!("{}: {e}", if prefix.is_empty() { "(root)" } else { &prefix })))?;
+            let list: Vec<Value> =
+                entries.iter().map(|e| json!({"path": e.path, "size": e.meta.size, "etag": e.meta.etag, "isDir": e.meta.is_dir})).collect();
+            write_stdout(|o| writeln!(o, "{}", serde_json::to_string_pretty(&list).unwrap_or_default()))
+        }
+        "store-remove" => {
+            let path = pos(0)?;
+            store.remove(&path).map_err(|e| Failure::Error(format!("{path}: {e}")))?;
+            eprintln!("removed {path}");
+            Ok(())
+        }
+        "store-probe" => {
+            let probe = store.probe().map_err(|e| Failure::Error(e.to_string()))?;
+            // What the server said, not what the backend assumed before asking.
+            let caps = &probe.capabilities;
+            write_stdout(|o| {
+                writeln!(
+                    o,
+                    "{}",
+                    serde_json::to_string_pretty(&json!({
+                        "atomicWrite": caps.atomic_write, "conditionalWrite": caps.conditional_write, "list": caps.list,
+                        "etag": caps.etag, "persistent": caps.persistent,
+                        "davClasses": probe.dav_classes, "notes": probe.notes,
+                    }))
+                    .unwrap_or_default()
+                )
+            })
+        }
+        _ => {
+            // store-recover: finish or drop interrupted writes; safe at every startup.
+            let report = store.recover().map_err(|e| Failure::Error(e.to_string()))?;
+            write_stdout(|o| {
+                writeln!(
+                    o,
+                    "{}",
+                    serde_json::to_string_pretty(
+                        &json!({"completed": report.completed, "dropped": report.dropped, "removedTemp": report.removed_temp})
+                    )
+                    .unwrap_or_default()
+                )
+            })
+        }
     }
 }
 

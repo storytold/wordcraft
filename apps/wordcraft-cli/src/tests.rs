@@ -543,3 +543,52 @@ fn script_parse_resolves_paths_against_the_base() {
     assert_eq!(s.save, vec!["o.docx".to_string()]);
     assert_eq!(s.commands.len(), 1);
 }
+
+#[test]
+fn store_flags_open_the_right_backend_or_explain() {
+    assert!(
+        validate_options(
+            "store-write",
+            &args(&["a.docx", "f.docx", "--store", "local", "--store-root", "x", "--etag", "t", "--atomic"]),
+            STORE_OPTIONS
+        )
+        .is_ok()
+    );
+    assert!(
+        validate_options(
+            "store-probe",
+            &args(&["--store", "webdav", "--store-url", "http://h/dav/", "--store-user", "u", "--store-password", "p"]),
+            STORE_OPTIONS
+        )
+        .is_ok()
+    );
+    assert!(validate_options("store-list", &args(&["--bogus"]), STORE_OPTIONS).is_err());
+    assert!(open_store("store-probe", &args(&["--store", "webdav", "--store-url", "http://127.0.0.1:9/dav/"])).is_ok());
+    assert!(open_store("store-probe", &args(&["--store", "webdav", "--store-url", "https://h/dav/"])).is_err());
+    // Bearer token: accepted alone, rejected with user/password, rejected empty.
+    assert!(
+        validate_options("store-probe", &args(&["--store", "webdav", "--store-url", "http://h/dav/", "--store-token", "t"]), STORE_OPTIONS).is_ok()
+    );
+    assert!(open_store("store-probe", &args(&["--store", "webdav", "--store-url", "http://127.0.0.1:9/dav/", "--store-token", "t"])).is_ok());
+    assert!(
+        open_store("store-probe", &args(&["--store", "webdav", "--store-url", "http://127.0.0.1:9/dav/", "--store-token", "t", "--store-user", "u"]))
+            .is_err()
+    );
+    assert!(open_store("store-probe", &args(&["--store", "webdav", "--store-url", "http://127.0.0.1:9/dav/", "--store-token", ""])).is_err());
+    assert!(open_store("store-probe", &args(&[])).is_err());
+    assert!(open_store("store-probe", &args(&["--store", "tape"])).is_err());
+    assert!(open_store("store-probe", &args(&["--store", "local", "--store-root", "x", "--store-url", "http://h/"])).is_err());
+    assert!(open_store("store-probe", &args(&["--store", "local", "--store-url", "http://h/"])).is_err());
+    // A --store-url alone picks WebDAV (opening does not touch the network).
+    assert!(open_store("store-probe", &args(&["--store-url", "http://127.0.0.1:9/dav/"])).is_ok());
+}
+
+#[test]
+fn store_positionals_skip_option_values_wherever_they_appear() {
+    assert_eq!(
+        positionals(&args(&["--store", "local", "--store-root", "r", "a.docx", "f.docx", "--atomic"]), STORE_OPTIONS),
+        vec!["a.docx", "f.docx"]
+    );
+    assert_eq!(positionals(&args(&["a.docx", "--etag", "t"]), STORE_OPTIONS), vec!["a.docx"]);
+    assert!(positionals(&args(&["--atomic"]), STORE_OPTIONS).is_empty());
+}
