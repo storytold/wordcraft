@@ -65,6 +65,27 @@ Typing, Enter, Backspace, Tab, lists, AutoCorrect and AutoFormat follow Word's o
 ## Roadmap
 Progress docs follow [`craftrules/standards/progress-docs.md`](https://github.com/storytold/craftrules/blob/main/standards/progress-docs.md): `ROADMAP.md` (stage, headline numbers, progress log), `docs/target-app-parity.md` (the assessment), `docs/gaps.md` (ranked work list), `docs/roadmap.md` (milestones, Current focus), `docs/architecture.md`, and the parity checklists `docs/file-format-parity.md`, `docs/layout-parity.md`, `docs/typing-parity.md`, `docs/ui-parity.md`, `docs/hardware-parity.md`, `docs/localization-parity.md`. When work lands, update the gap, the parity doc and the progress log, and bump each touched doc's status line and revision history.
 
+## User documentation
+
+The [English guide](docs/usage/usage.md) is the source text; the
+[German guide](docs/usage/usage-de.md) is the initial example translation, not a limit on languages.
+The [language index and translation guide](docs/usage/README.md) explains how to add more languages
+as `docs/usage/usage-<language-code>.md`.
+
+- When adding, changing or removing a user-facing feature or keyboard shortcut, update the
+  English instructions and affected **existing translations in the same change**.
+- Describe actual behavior: where to find the action, prerequisites, steps, expected result,
+  keyboard context, platform differences and relevant limitations. Do not document planned
+  features or proposed bindings as available.
+- Reuse an existing canonical topic page instead of duplicating it. Keep translated guides,
+  their coverage notes, the language index and README links aligned when adding or moving docs.
+- Verify shortcuts against the command registry **and** the relevant UI/tool/context handlers;
+  distinguish defaults from custom assignments and text-field/dialog input. Check relative links
+  and anchors, and update the checked revision/date after re-verifying the relevant guide.
+- New translations follow the English guide's structure and coverage. Retain findable UI labels,
+  exact key combinations and limitations. List only existing translations, without placeholder files.
+- If a change has no user-facing effect, state in the PR why no usage update is needed.
+
 ## Contributor credits (About window)
 
 - About ▸ Contributors/Models are compiled into the binary from `contributors/contributors.json`

@@ -69,6 +69,8 @@
   <a href="#license-and-credits">License and credits</a>
 </p>
 
+**User guide and keyboard shortcuts:** [English](docs/usage/usage.md) · [Deutsch](docs/usage/usage-de.md) · [All languages / translate](docs/usage/README.md)
+
 ## A tour
 
 Every screenshot below is WordCraft itself, rendered offscreen by its own UI test harness
