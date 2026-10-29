@@ -18,6 +18,12 @@ mod structure;
 
 pub(super) use cells::grid_cols;
 pub use cells::selected_cells;
+
+/// Shade the selected cells edge to edge (`w:tcPr/w:shd`): Table Design › Shading, and Home ›
+/// Shading when whole cells are selected.
+pub(super) fn shade_cells(s: &mut Session, c: Option<Rgb>) -> CmdResult {
+    with_cells(s, |cl| cl.props.shading = c)
+}
 use cells::{cell, with_cells, with_table};
 pub(crate) use cells::{cell_text, row_ends};
 pub(crate) use clear::{backspace_cells, clear_cells};
@@ -89,10 +95,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(
             r#"{"headerRow"?: bool, "totalRow"?: bool, "bandedRows"?: bool, "firstColumn"?: bool, "lastColumn"?: bool, "bandedColumns"?: bool}"#,
         )),
-        t(CommandSpec::new("table.shading", "Shading", "Table Design › Table Styles", |s, v| {
-            let c = p::str(v, "color").and_then(Rgb::parse);
-            with_cells(s, |cl| cl.props.shading = c)
-        })
+        t(CommandSpec::new("table.shading", "Shading", "Table Design › Table Styles", |s, v| shade_cells(s, p::str(v, "color").and_then(Rgb::parse)))
         .params(r#"{"color": "RRGGBB" | null}"#)),
         t(CommandSpec::new("table.borders", "Borders", "Table Design › Borders", borders)
             .params(r#"{"kind": "all|outside|inside|none|top|bottom|left|right", "width"?: pt, "color"?: "RRGGBB"}"#)),

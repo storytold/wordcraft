@@ -182,9 +182,14 @@ pub fn specs() -> Vec<CommandSpec> {
             .key(if cfg!(target_os = "macos") { "Ctrl+Shift+Right" } else { "Alt+Shift+Right" }),
         CommandSpec::new("para.shading", "Shading", "Home › Paragraph", |s, v| {
             let c = p::str(v, "color").and_then(Rgb::parse);
+            // As in Word, whole cells selected take the shading themselves, edge to edge, rather
+            // than each paragraph inside the cell margins.
+            if s.cell_range().is_some() {
+                return super::table::shade_cells(s, c);
+            }
             fmt(s, &|p| p.shading = c)
         })
-        .params(r#"{"color": "RRGGBB" | null}"#),
+        .params(r#"{"color": "RRGGBB" | null} — whole cells selected: the cells are shaded (as table.shading)"#),
         CommandSpec::new("para.borders", "Borders", "Home › Paragraph", borders).params(
             r#"{"kind": "bottom|top|left|right|none|all|outside|inside|horizontalLine", "width"?: pt, "color"?: "RRGGBB", "style"?: "single|double|dotted|dashed|thick|triple|dotDash|wave", "sides"?: Sides} where Sides = {"top"|"left"|"bottom"|"right"|"between": {"style"?, "width"?: pt, "color"?: "RRGGBB"} | null}: exactly these sides (others off), instead of `kind`"#,
         ),
