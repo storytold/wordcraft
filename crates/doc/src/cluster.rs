@@ -64,6 +64,11 @@ pub fn is_cluster_boundary(text: &str, off: usize) -> bool {
 /// Byte offsets where clusters start (graphemes, joined per [`joins_cluster`]), in order; the
 /// first is 0 for non-empty text.
 pub fn cluster_starts(text: &str) -> Vec<usize> {
+    // ASCII: every character starts a grapheme except LF after CR, and none joins (UAX #29).
+    if text.is_ascii() {
+        let b = text.as_bytes();
+        return (0..b.len()).filter(|&i| !(i > 0 && b.get(i - 1) == Some(&b'\r') && b.get(i) == Some(&b'\n'))).collect();
+    }
     let mut out: Vec<usize> = Vec::new();
     let mut prev: Option<char> = None;
     for (i, g) in text.grapheme_indices(true) {
@@ -186,6 +191,22 @@ mod tests {
         assert_eq!(cluster_starts(stacked), vec![0]);
         let kinzi = "\u{1021}\u{1004}\u{103A}\u{1039}\u{1002}\u{101C}\u{102D}\u{1015}\u{103A}"; // အင်္ဂလိပ်
         assert_eq!(split(kinzi, &cluster_starts(kinzi)), vec!["အ", "င်္ဂ", "လိ", "ပ်"]);
+    }
+
+    /// The ASCII shortcut gives the grapheme rules' answer.
+    #[test]
+    fn ascii_cluster_starts_match_the_graphemes() {
+        let graphemes = |t: &str| -> Vec<usize> { t.grapheme_indices(true).map(|(i, _)| i).collect() };
+        let all: String = (0u8..128).map(char::from).collect();
+        for t in ["", "a", "Hello, world.", "\r\n", "a\r\nb\n\rc\r\r\n\n", "\t \u{7f}x\u{0}", all.as_str()] {
+            assert_eq!(cluster_starts(t), graphemes(t), "{t:?}");
+        }
+        for a in 0u8..128 {
+            for b in 0u8..128 {
+                let t = format!("{}{}", char::from(a), char::from(b));
+                assert_eq!(cluster_starts(&t), graphemes(&t), "{t:?}");
+            }
+        }
     }
 
     #[test]

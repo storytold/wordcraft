@@ -79,7 +79,22 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
     {
         return;
     }
-    let a = accent;
+    if paint_clipboard_to_insert(&pen, name)
+        || paint_draw_to_review(&pen, name)
+        || paint_view_and_tables(&pen, name)
+        || paint_file_and_tools(&pen, name)
+    {
+        return;
+    }
+    // Fallback: a rounded tile with the first letter.
+    p.rect_stroke(r.shrink(r.width() * 0.12), 3.0, Stroke::new(1.0, c), egui::StrokeKind::Middle);
+    let ch = name.chars().next().map(|x| x.to_ascii_uppercase().to_string()).unwrap_or_default();
+    p.text(r.center(), egui::Align2::CENTER_CENTER, ch, FontId::proportional(r.height() * 0.45), accent);
+}
+
+/// Icons of one section of the set; false when `name` is not one of them.
+fn paint_clipboard_to_insert(pen: &Pen, name: &str) -> bool {
+    let (c, a) = (pen.c, pen.a);
     let red = Color32::from_rgb(0xD1, 0x3B, 0x3B);
     let yellow = Color32::from_rgb(0xF2, 0xC8, 0x11);
     let green = Color32::from_rgb(0x2E, 0x8B, 0x57);
@@ -212,15 +227,15 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
         "pilcrow" => pen.text(10.0, 10.5, 15.0, "¶", c, false),
         "alignLeft" => {
             pen.lines(3.0, 17.0, &[4.0, 10.0, 16.0]);
-            ().then_lines(&pen, 3.0, 12.0, &[7.0, 13.0])
+            ().then_lines(pen, 3.0, 12.0, &[7.0, 13.0])
         }
         "alignCenter" => {
             pen.lines(3.0, 17.0, &[4.0, 10.0, 16.0]);
-            ().then_lines(&pen, 6.0, 14.0, &[7.0, 13.0])
+            ().then_lines(pen, 6.0, 14.0, &[7.0, 13.0])
         }
         "alignRight" => {
             pen.lines(3.0, 17.0, &[4.0, 10.0, 16.0]);
-            ().then_lines(&pen, 8.0, 17.0, &[7.0, 13.0])
+            ().then_lines(pen, 8.0, 17.0, &[7.0, 13.0])
         }
         "justify" => pen.lines(3.0, 17.0, &[4.0, 7.0, 10.0, 13.0, 16.0]),
         // Text direction: lines set from the start edge, an arrow in the reading direction.
@@ -332,7 +347,7 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.fcircle(13.5, 7.0, 1.5, yellow);
         }
         "onlinePicture" => {
-            paint(p, Rect::from_min_size(r.min, r.size() * 0.8), "picture", c, accent);
+            paint(pen.p, Rect::from_min_size(pen.r.min, pen.r.size() * 0.8), "picture", c, a);
             pen.circle(15.0, 15.0, 3.5, a);
         }
         "shapes" => {
@@ -561,6 +576,19 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
         }
         "equation" => pen.text(10.0, 10.0, 17.0, "π", a, false),
         "symbol" => pen.text(10.0, 10.0, 17.0, "Ω", c, false),
+        _ => return false,
+    }
+    true
+}
+
+/// Icons of one section of the set; false when `name` is not one of them.
+fn paint_draw_to_review(pen: &Pen, name: &str) -> bool {
+    let (c, a) = (pen.c, pen.a);
+    let red = Color32::from_rgb(0xD1, 0x3B, 0x3B);
+    let yellow = Color32::from_rgb(0xF2, 0xC8, 0x11);
+    let green = Color32::from_rgb(0x2E, 0x8B, 0x57);
+    let orange = Color32::from_rgb(0xE0, 0x7B, 0x1F);
+    match name {
         // Draw
         "pen" => {
             pen.line(&[(4.0, 16.0), (14.0, 6.0), (16.0, 8.0), (6.0, 18.0), (3.5, 18.5), (4.0, 16.0)]);
@@ -966,6 +994,16 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.line_c(&[(3.0, 13.0), (6.0, 8.0), (9.0, 13.0), (12.0, 8.0)], a);
             pen.line(&[(3.0, 3.0), (17.0, 17.0)]);
         }
+        _ => return false,
+    }
+    true
+}
+
+/// Icons of one section of the set; false when `name` is not one of them.
+fn paint_view_and_tables(pen: &Pen, name: &str) -> bool {
+    let (c, a) = (pen.c, pen.a);
+    let red = Color32::from_rgb(0xD1, 0x3B, 0x3B);
+    match name {
         // View
         "readMode" => {
             pen.closed(&[(2.0, 4.0), (9.5, 5.0), (9.5, 17.0), (2.0, 16.0)], c);
@@ -1300,6 +1338,17 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.fcircle(7.5, 10.5, 1.5, Color32::WHITE);
             pen.fcircle(12.5, 10.5, 1.5, Color32::WHITE);
         }
+        _ => return false,
+    }
+    true
+}
+
+/// Icons of one section of the set; false when `name` is not one of them.
+fn paint_file_and_tools(pen: &Pen, name: &str) -> bool {
+    let (c, a) = (pen.c, pen.a);
+    let red = Color32::from_rgb(0xD1, 0x3B, 0x3B);
+    let yellow = Color32::from_rgb(0xF2, 0xC8, 0x11);
+    match name {
         // Open: a folder with its flap lifted.
         "open" => {
             pen.closed(&[(2.5, 5.0), (7.5, 5.0), (9.0, 6.5), (15.5, 6.5), (15.5, 9.0)], c);
@@ -1493,13 +1542,9 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.line_c(&[(4.0, 12.0), (8.0, 16.0)], a);
             pen.line(&[(7.0, 13.0), (7.0, 12.0)]);
         }
-        _ => {
-            // Fallback: a rounded tile with the first letter.
-            p.rect_stroke(r.shrink(r.width() * 0.12), 3.0, Stroke::new(1.0, c), egui::StrokeKind::Middle);
-            let ch = name.chars().next().map(|x| x.to_ascii_uppercase().to_string()).unwrap_or_default();
-            p.text(r.center(), egui::Align2::CENTER_CENTER, ch, FontId::proportional(r.height() * 0.45), a);
-        }
+        _ => return false,
     }
+    true
 }
 
 /// The Insert › Shapes menu's icons: each shape kind (`insert.shape` ids) as a small outline.

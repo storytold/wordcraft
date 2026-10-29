@@ -440,7 +440,7 @@ fn body(ui: &mut Ui, b: &mut FileBrowser, t: &Tokens) -> Option<Option<PathBuf>>
         }
         let before = b.filter;
         let current = b.filters.get(b.filter).map(|(l, _)| tl!(l.as_str()).to_string()).unwrap_or_default();
-        egui::ComboBox::from_id_salt("builtin_file_browser_type")
+        craft_ui::ComboBox::from_id_salt("builtin_file_browser_type")
             .selected_text(current)
             .width(150.0)
             .show_ui(ui, |ui| {
