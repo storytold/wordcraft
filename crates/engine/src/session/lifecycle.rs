@@ -2,6 +2,7 @@ use super::doc_state::MAX_UI_REQUESTS;
 use super::prefs::Prefs;
 use super::view::ViewState;
 use super::{Arc, DocState, Document, ImeEditOutcome, Registry, Session, Value};
+use crate::CommandSpec;
 
 impl Session {
     /// Queue a request for the front end. A headless session never drains the queue, so only

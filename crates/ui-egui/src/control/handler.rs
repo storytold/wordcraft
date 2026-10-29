@@ -1,5 +1,6 @@
 use super::screenshots::render_png;
 use super::{ControlRequest, Value, WordApp, json};
+use wordcraft_engine::file_access;
 
 pub enum Outcome {
     Done(Value),
