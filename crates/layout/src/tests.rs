@@ -5130,6 +5130,55 @@ fn justified_spaces_shrink_a_quarter_at_most_and_by_the_word() {
     }
 }
 
+/// Measured in Word for Mac (compatibility mode 15, synthetic justified paragraphs that start
+/// with a label and a tab, or with words and then a left tab): a line with a tab shrinks its
+/// spaces too, but only those after its last tab. WordCraft never shrank a line with a tab, so a
+/// numbered paragraph's first line wrapped a word earlier than Word's.
+#[test]
+fn justified_line_with_a_tab_shrinks_only_the_spaces_after_it() {
+    use wordcraft_doc::props::{TabAlign, TabStop};
+    let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(12.0), ..Default::default() };
+    let word = "nnnn";
+    let (lead, n) = ("n n n n n n n n n n n n", 12);
+    let tab_at = 200.0;
+    let para = |text: &str, right: f32| {
+        let mut d = Document::new();
+        d.settings.compat_mode = 15;
+        let mut p = wordcraft_doc::Paragraph::with_text(text, chr.clone());
+        p.props = ParaProps {
+            align: Some(Align::Justify),
+            indent_right: Some(right),
+            tabs: Some(vec![TabStop { pos: tab_at, align: TabAlign::Left, leader: Default::default() }]),
+            ..Default::default()
+        };
+        d.body = vec![wordcraft_doc::para_block(p)];
+        d
+    };
+    // Words after the tab on the first line.
+    let after_tab = |d: &Document| {
+        let l = lay(d);
+        let pl = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+        let line = &pl.lines[0];
+        let text = &d.para(StoryRef::Body, &Path::top(0)).unwrap().text[line.start..line.stop];
+        text.split('\t').nth(1).unwrap_or("").split_whitespace().count()
+    };
+    let probe = para(&format!("{word} {word}"), 0.0);
+    let l = lay(&probe);
+    let pl = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+    let w = pl.x_of(0, word.len()).unwrap() - pl.x_of(0, 0).unwrap();
+    let sw = pl.x_of(0, word.len() + 1).unwrap() - pl.x_of(0, word.len()).unwrap();
+    // Room from the n spaces after the tab alone; the eleven before it would allow more.
+    let room = (0.25 * n as f32 * sw).min(0.355 * (w + sw));
+    let all_room = (0.25 * (n + 11) as f32 * sw).min(0.355 * (w + sw));
+    assert!(all_room > room + 0.5, "the test needs the spaces before the tab to matter: {room} vs {all_room}");
+    let text = format!("{lead}\t{}", vec![word; 3 * n].join(" "));
+    let full = probe.last_section.text_width();
+    let width = |overrun: f32| tab_at + (n + 1) as f32 * w + n as f32 * sw - overrun;
+    for (overrun, words) in [(room - 0.1, n + 1), (room + 0.1, n)] {
+        assert_eq!(after_tab(&para(&text, full - width(overrun))), words, "overrun {overrun:.2} of {room:.2} allowed");
+    }
+}
+
 #[test]
 fn space_shrinking_is_only_for_justified_text() {
     let text = "We tie the spend to a pipe and to the books, so it is in an ad hoc view of all of it. ".repeat(40);

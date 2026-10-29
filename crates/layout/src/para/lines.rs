@@ -23,7 +23,7 @@ struct Breaker<'e> {
     default_tab: f32,
     hanging_at: Option<f32>,
     /// Word 2013+ (compatibility mode 15) fits more text on a justified line by shrinking its
-    /// spaces (`space_room`); never on lines with tabs.
+    /// spaces (`space_room`); on a line with tabs, only the spaces after the last one.
     shrink_spaces: bool,
     /// Word stretches a justified line ending in a manual line break unless the document says not to.
     expand_break: bool,
@@ -90,9 +90,8 @@ struct Scan {
     j: usize,
     /// Tab cluster, stop, and x where the tab started.
     pending_tab: Option<(usize, TabStop, f32)>,
-    /// The width of the spaces so far on this line.
+    /// The width of the spaces so far on this line, after its last tab.
     space_w: f32,
-    has_tab: bool,
     /// The first word doesn't fit a span narrowed by a floating object: it moves on whole.
     skip: bool,
 }
@@ -277,7 +276,6 @@ impl<'e> Breaker<'e> {
             j: self.i,
             pending_tab: None,
             space_w: 0.0,
-            has_tab: false,
             skip: false,
         }
     }
@@ -525,9 +523,9 @@ impl<'e> Breaker<'e> {
         let stretch_end = sc.end == LineEnd::Wrap || (sc.end == LineEnd::LineBreak && self.expand_break);
         let justify = display.is_none() && ((rp.align == Align::Justify && stretch_end) || rp.align == Align::Distribute);
         // A line that only fits with shrunk spaces is shrunk, the last line of the paragraph too.
-        let shrink = display.is_none() && self.shrink_spaces && slack < 0.0 && last_tab.is_none();
+        let shrink = display.is_none() && self.shrink_spaces && slack < 0.0;
         if shrink {
-            shrink_line_spaces(pl, &mut sc.xs, c0, c1, content_end, slack);
+            shrink_line_spaces(pl, &mut sc.xs, (c0, align_from), c1, content_end, slack);
         } else if justify && slack > 0.0 {
             justify_line(pl, &mut sc.xs, (c0, c1, align_from), (content_end, slack), rp.align == Align::Distribute);
         }
@@ -726,7 +724,8 @@ impl Scan {
     /// A tab: its stop, and the room to it. True when the line ends before it.
     fn tab(&mut self, bk: &mut Breaker, pl: &mut ParaLayout) -> bool {
         let j = self.j;
-        self.has_tab = true;
+        // Only the spaces after a line's last tab shrink (measured in Word for Mac).
+        self.space_w = 0.0;
         resolve_tab(pl, &mut self.pending_tab, &mut self.xs, self.c0, self.x, &mut self.x);
         let rp = &bk.rp;
         let ptab = pl.ptabs.iter().find(|t| t.0 == j).map(|&(_, a, b, l)| ptab_stop(a, b, l, bk.width, (rp.indent_left, rp.indent_right)));
@@ -809,11 +808,7 @@ impl Scan {
         // each segment's font, glyphs and position for painting.
         let advance = pl.atomic_advance(j);
         let absorbs = self.absorbs(pl, advance);
-        let shrink = if bk.shrink_spaces && !self.has_tab {
-            space_room(self.space_w, self.x + advance - pl.auto_space_after(j) - self.word_from)
-        } else {
-            0.0
-        };
+        let shrink = if bk.shrink_spaces { space_room(self.space_w, self.x + advance - pl.auto_space_after(j) - self.word_from) } else { 0.0 };
         let fits = absorbs
             || self.x + advance - pl.auto_space_after(j) <= self.right_edge + shrink + 0.01
             || c.kind == ClKind::Space
