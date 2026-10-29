@@ -15,6 +15,9 @@ use crate::WRAP_RELAYS;
 /// A closing mark before a continuous section takes no room after content. An otherwise empty
 /// section starting a new page retains its paragraph line.
 pub(crate) fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: usize, body_top: f32) {
+    if place_break_mark(ctx, pb, p, block) {
+        return;
+    }
     if !pb.web && ctx.quiet_marks.binary_search(&block).is_ok() {
         let follows_section = block.checked_sub(1).and_then(|i| ctx.doc.body.get(i)).and_then(|b| b.as_para()).is_some_and(|p| p.section.is_some());
         let section = pb.sect_idx;
@@ -66,6 +69,39 @@ pub(crate) fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, blo
         return;
     }
     place_para_in_flow(ctx, pb, p, block, body_top);
+}
+
+fn place_break_mark(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: usize) -> bool {
+    if pb.web || !super::empty_break_page(pb) || !pb.next_starts_page || p.section.is_none() || !super::only_bookmarks(p) || ctx.has_label(p) {
+        return false;
+    }
+    let Some(page) = pb.pages.len().checked_sub(2) else { return false };
+    // The structural section mark stays with the preceding break, without filling its new page.
+    let owner = pb.para_end.filter(|(count, _, _)| *count == page + 1);
+    let (x, width) = owner.and(pb.break_column).unwrap_or_else(|| {
+        let prev = &pb.pages[page];
+        (prev.body.x, prev.body.w)
+    });
+    let pl = ctx.para_labelled(p, width, None, &[], None);
+    let prev = &mut pb.pages[page];
+    let x = x + mirror_shift(&pl.rp, prev.number, pb.web);
+    // Page alignment can move the body after its paragraph end was recorded.
+    let y = owner
+        .filter(|_| ctx.hf.sections.get(prev.section).is_some_and(|(_, sect)| sect.valign == wordcraft_doc::section::PageVAlign::Top))
+        .map(|(_, _, end)| end)
+        .or_else(|| {
+            prev.items.iter().rev().find_map(|item| match item {
+                Placed::Lines { story: StoryRef::Body, path, l1, .. }
+                    if pb.break_line.as_ref().is_some_and(|(owner, end)| path == owner && l1 == end) =>
+                {
+                    Some(super::notes::v_span(item).1)
+                }
+                _ => None,
+            })
+        });
+    let Some(y) = y else { return false };
+    push_para(&mut prev.items, (StoryRef::Body, &[block as u32]), &pl, (0, pl.lines.len()), (x, y), width, Edges::own(&pl, 0, pl.lines.len()));
+    true
 }
 
 /// Remove the list label from a mark's lines; optionally keep its other drawing items.
@@ -395,10 +431,12 @@ impl<'a> Flow<'a> {
             };
             let over = bottom + tail > limit + 0.01;
             let split = bottom > limit + 0.01 && notes_split(pb, (&fit.notes, &line_notes), bottom);
-            if over && fit.l1 > l0 && !split {
+            let only_break = self.only_break(l) && (l.end != LineEnd::PageBreak || free);
+            if over && fit.l1 > l0 && !split && !(only_break && l.end == LineEnd::PageBreak) {
                 break;
             }
-            if over && fit.l1 == l0 && !pb.fresh() && !split && !self.stays_at_bottom(pb, l) {
+            let closing_mark = pb.next_starts_page && self.p.section.is_some() && self.p.text.is_empty();
+            if over && fit.l1 == l0 && !pb.fresh() && !split && !only_break && !closing_mark {
                 break;
             }
             fit.notes.extend(line_notes);
@@ -410,18 +448,14 @@ impl<'a> Flow<'a> {
         fit
     }
 
-    /// Whether the line may overflow the page: one holding nothing but a page or column break stays
-    /// at the bottom of the page even when it doesn't fit (it only ends the page, and moving it
-    /// would leave a blank page behind it, as in Word), and so does an empty paragraph closing a
-    /// section before a new page (measured in Word: it stays on a full page instead of starting
-    /// one of its own).
-    fn stays_at_bottom(&self, pb: &PageBuilder, l: &para::Line) -> bool {
-        let p = self.p;
-        let only_break = matches!(l.end, LineEnd::PageBreak | LineEnd::ColumnBreak)
-            && p.text
+    /// Whether the line contains only page or column breaks.
+    fn only_break(&self, l: &para::Line) -> bool {
+        matches!(l.end, LineEnd::PageBreak | LineEnd::ColumnBreak)
+            && self
+                .p
+                .text
                 .get(l.start..l.stop)
-                .is_some_and(|t| t.chars().all(|c| matches!(c, wordcraft_doc::para::PAGE_BREAK | wordcraft_doc::para::COLUMN_BREAK)));
-        only_break || (pb.next_starts_page && p.section.is_some() && p.text.is_empty())
+                .is_some_and(|t| t.chars().all(|c| matches!(c, wordcraft_doc::para::PAGE_BREAK | wordcraft_doc::para::COLUMN_BREAK)))
     }
 
     /// Whether the line (just taken, `fit.l1` is after it) forces a break, noted in `fit`.
@@ -524,7 +558,9 @@ impl<'a> Flow<'a> {
             },
         );
         items.extend(front);
-        items.extend(line_numbers(ctx, pb, &self.pl, (l0, l1), y));
+        // An absorbed terminal mark shares the break's counted line.
+        let numbered_end = if fit.mark_with_break { l1.saturating_sub(1) } else { l1 };
+        items.extend(line_numbers(ctx, pb, &self.pl, (l0, numbered_end), y));
         add_items(pb, behind, items);
         if let (Some(f), Some(l)) = (self.pl.lines.get(l0), self.pl.lines.get(l1 - 1)) {
             pb.y = y + (l.top + l.height - f.top);
@@ -544,6 +580,8 @@ impl<'a> Flow<'a> {
             });
         match forced {
             Some(LineEnd::PageBreak) if mark_with_break => {
+                pb.break_column = Some((pb.col_x(), pb.col_w()));
+                pb.break_line = Some((Path::top(block), self.l0));
                 pb.new_page(block, body_top);
                 pb.after_break_mark = true;
             }
