@@ -7,88 +7,35 @@ pub(crate) mod suggest;
 #[cfg(test)]
 pub(crate) mod test_dict;
 
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use crate::affix::AffixDict;
+use crate::slot::DictSlot;
 
 pub use suggest::suggest;
 
-/// The Czech dictionary and whether it came from [`install_dictionary`] rather than a file on
-/// disk (it then has no file of its own to report from [`installed_path`], even if a matching
-/// file also happens to exist): one lock, so a reload and an install can't interleave their two
-/// fields into an inconsistent combination.
-static DICT: RwLock<DictState> = RwLock::new(DictState { dict: None, in_memory: false });
-
-struct DictState {
-    dict: Option<Arc<AffixDict>>,
-    in_memory: bool,
-}
-
 /// File names of a Czech Hunspell dictionary.
 const NAMES: &[&str] = &["cs_CZ", "cs-CZ", "cs"];
+
+/// The Czech dictionary, found on first use (see [`DictSlot`]).
+pub(crate) static DICT: DictSlot<AffixDict> = DictSlot::new(NAMES, "Czech");
 
 /// The Czech dictionary: the installed Hunspell `cs_CZ` (read on first use), one given with
 /// [`install_dictionary`], or an empty one when none is available (Czech spelling is off
 /// then; see [`has_dictionary`]).
 pub fn dictionary() -> Arc<AffixDict> {
-    if let Some(d) = DICT.read().unwrap_or_else(std::sync::PoisonError::into_inner).dict.as_ref() {
-        return d.clone();
-    }
-    let loaded = Arc::new(load_installed());
-    let mut slot = DICT.write().unwrap_or_else(std::sync::PoisonError::into_inner);
-    // Another thread (or an install) may have filled it meanwhile: that one wins.
-    slot.dict.get_or_insert(loaded).clone()
-}
-
-fn load_installed() -> AffixDict {
-    let Some((aff, dic)) = crate::hunspell::find(NAMES) else {
-        crate::hunspell::clear_load_error(NAMES[0]);
-        log::info!("Czech spelling: no Hunspell cs_CZ dictionary installed");
-        return AffixDict::default();
-    };
-    crate::hunspell::note_load(NAMES[0], &dic, crate::hunspell::load(&aff, &dic)).unwrap_or_else(|e| {
-        log::warn!("Czech spelling: {e}");
-        AffixDict::default()
-    })
+    DICT.get()
 }
 
 /// Use this Czech dictionary from now on (Hunspell `.aff` and `.dic` text, decoded to
 /// UTF-8), for example one the user picked. On error the current dictionary stays.
 pub fn install_dictionary(aff: &str, dic: &str) -> Result<(), String> {
-    let d = AffixDict::from_hunspell(aff, dic, &[])?;
-    let mut slot = DICT.write().unwrap_or_else(std::sync::PoisonError::into_inner);
-    slot.dict = Some(Arc::new(d));
-    slot.in_memory = true;
-    Ok(())
-}
-
-/// Forget the loaded dictionary, so the next check looks for an installed one again (after
-/// [`crate::hunspell::set_dictionary_dir`] or a dictionary was installed).
-pub fn reload_dictionary() {
-    let mut slot = DICT.write().unwrap_or_else(std::sync::PoisonError::into_inner);
-    slot.dict = None;
-    slot.in_memory = false;
-}
-
-/// The `.dic` file of the installed Czech dictionary, searching the dictionaries folder and
-/// the system locations now (File › Options › Proofing shows it, #3226); `None` when there is
-/// none. A dictionary given with [`install_dictionary`] has no file and isn't reported, even if a
-/// matching file also happens to exist.
-pub fn installed_path() -> Option<std::path::PathBuf> {
-    if DICT.read().unwrap_or_else(std::sync::PoisonError::into_inner).in_memory {
-        return None;
-    }
-    crate::hunspell::find(NAMES).map(|(_, dic)| dic)
+    DICT.install(aff, dic)
 }
 
 /// Is a Czech dictionary available (spelling is checked)?
 pub fn has_dictionary() -> bool {
-    !dictionary().is_empty()
-}
-
-/// Is `c` a letter of the Latin script (the only one the Czech dictionary covers)?
-fn is_latin_letter(c: char) -> bool {
-    c.is_alphabetic() && (c < '\u{0250}' || ('\u{1E00}'..='\u{1EFF}').contains(&c))
+    DICT.has_dictionary()
 }
 
 /// Is `word` spelled correctly in Czech? Numbers, single letters, short words in capitals
@@ -112,21 +59,9 @@ pub fn is_correct_with(d: &AffixDict, word: &str) -> bool {
 
 /// [`is_correct_with_options`] against a given dictionary.
 fn check(d: &AffixDict, word: &str, opts: &crate::Options) -> bool {
-    if d.is_empty() {
-        return true; // no Czech dictionary installed: no spelling marks
-    }
-    let w = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'' && c != '’');
-    let w = w.trim_matches(['\'', '’']);
-    let n = w.chars().count();
-    if n <= 1 || (opts.ignore_numbers && w.chars().any(|c| c.is_ascii_digit())) || !w.chars().any(char::is_alphabetic) {
+    let Some(w) = crate::spelling::word_to_check(d, word, opts) else {
         return true;
-    }
-    if opts.ignore_uppercase && w.chars().all(|c| !c.is_lowercase()) && n <= 6 {
-        return true;
-    }
-    if !w.chars().any(is_latin_letter) {
-        return true; // other scripts: no dictionary
-    }
+    };
     if w.contains('-') {
         return w.split('-').all(|p| p.chars().count() <= 1 || known(d, p));
     }
