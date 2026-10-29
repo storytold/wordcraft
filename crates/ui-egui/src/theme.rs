@@ -575,6 +575,10 @@ pub fn font_definitions_language(prefer_hans: bool, prefer_korean: bool, system_
     for f in wordcraft_fonts::georgian_fonts() {
         add_cjk(&mut fonts, format!("{} {}", f.family, f.style), FontData::from_static(f.bytes));
     }
+    // Arabic likewise: without it, Arabic text in the web build is all boxes.
+    for f in wordcraft_fonts::arabic_fonts() {
+        add_cjk(&mut fonts, format!("{} {}", f.family, f.style), FontData::from_static(f.bytes));
+    }
     // The embedded faces leave interface characters without a glyph (a build without craft-fonts,
     // without its Chinese face, #241, or with faces lacking catalog characters, #486): an
     // installed CJK font after them, so the menus don't show boxes or `?`.
