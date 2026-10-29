@@ -95,6 +95,7 @@ fn new_ctx<'a>(
         boxes: wordcraft_doc::BoxBudget::default(),
         chains: Default::default(),
         grid: para::Grid::default(),
+        cell_grid_off: false,
         uses_totals: false,
         track_totals: true,
         pct_base: None,

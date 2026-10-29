@@ -202,12 +202,9 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
         BoxContext::Other => (false, None, None),
         BoxContext::Cell { text, left, right, clamp } => (true, Some(text.unwrap_or(&empty_cell)), clamp.then_some((left, right))),
     };
-    // ECMA-376 §17.15.3.1: the document grid's line pitch reaches the lines of a table cell only with
-    // `adjustLineHeightInTable`; the character grid still applies.
-    let outer_grid = ctx.grid;
-    if in_cell && !ctx.doc.settings.adjust_line_height_in_table {
-        ctx.grid.line = None;
-    }
+    // ECMA-376 §17.15.3.1: a table cell's own lines take the grid's line pitch only with
+    // `adjustLineHeightInTable`. A text box or note in the cell is laid out on the section's grid.
+    let outer_cell_grid = std::mem::replace(&mut ctx.cell_grid_off, in_cell && !ctx.doc.settings.adjust_line_height_in_table);
     // Word 16.113.3: the override applies in modes 11/12/14, but not mode 15.
     let allow_same_style_space =
         in_cell && ctx.doc.settings.allow_space_of_same_style_in_table && matches!(ctx.doc.settings.compat_mode, 11 | 12 | 14);
@@ -406,7 +403,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     }
     let floats_bottom = float_tables.iter().map(|r| r.bottom()).fold(float_objects_bottom, f32::max);
     ctx.hide_deleted = outer_hide;
-    ctx.grid = outer_grid;
+    ctx.cell_grid_off = outer_cell_grid;
     BoxLayout { items, height: y.max(0.0), floats_bottom, last_top: last_top.max(0.0), table_areas, page_table_wraps }
 }
 

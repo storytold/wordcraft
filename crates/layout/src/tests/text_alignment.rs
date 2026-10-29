@@ -163,3 +163,63 @@ fn the_grid_line_pitch_reaches_cell_lines_only_with_adjust_line_height_in_table(
     assert!(!on.is_empty());
     assert!(on.iter().all(|h| (h / 18.0 - (h / 18.0).round()).abs() < 1e-3 && *h >= 18.0), "cell lines snap to the pitch: {on:?}");
 }
+
+/// Like [`grid_table`], with a text box inside the cell after its "Cell" text.
+fn grid_table_with_text_box(adjust: bool) -> Document {
+    let mut d = Document::from_text("Lead");
+    d.last_section.doc_grid = Some(DocGrid { kind: DocGridType::Lines, line_pitch: 18.0, char_space: 0 });
+    d.settings.adjust_line_height_in_table = adjust;
+    // Single spacing: the grid makes a line whole pitches only at a multiple of 1.
+    let mut boxed = wordcraft_doc::Paragraph::with_text("Box", Default::default());
+    boxed.props.line_spacing = Some(LineSpacing::Multiple(1.0));
+    let id = d.add_part(wordcraft_doc::PartKind::TextBox, vec![wordcraft_doc::para_block(boxed)]);
+    d.parts.get_mut(&id).unwrap().body = wordcraft_doc::TextBody::default();
+    let shape = wordcraft_doc::InlineObject::Shape {
+        kind: wordcraft_doc::para::ShapeKind::TextBox,
+        w: 120.0,
+        h: 40.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 0.0,
+        float: Default::default(),
+        story: Some(id),
+        effects: Default::default(),
+        freeform: None,
+        extra: Default::default(),
+    };
+    let mut cell = wordcraft_doc::Paragraph::with_text("Cell", Default::default());
+    cell.props.line_spacing = Some(LineSpacing::Multiple(1.0));
+    cell.insert_object(4, shape, &Default::default()).unwrap();
+    let mut t = Table::new(1, 1, 300.0);
+    t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(cell)];
+    d.body.insert(0, Arc::new(Block::Table(t)));
+    d
+}
+
+/// Heights of the lines of the paragraphs in text boxes' stories.
+fn text_box_line_heights(l: &DocLayout) -> Vec<f32> {
+    let mut hs = Vec::new();
+    for p in &l.pages {
+        for it in &p.items {
+            if let Placed::Lines { story: StoryRef::Part(_), para, l0, l1, .. } = it {
+                hs.extend(para.lines[*l0..*l1].iter().map(|line| line.height));
+            }
+        }
+    }
+    hs
+}
+
+#[test]
+fn a_text_box_in_a_cell_keeps_the_grid_whatever_the_cells_own_text_does() {
+    let on_pitch = |h: &f32| (h / 18.0 - (h / 18.0).round()).abs() < 1e-3 && *h >= 18.0;
+    // The cell's own text ignores the pitch without the flag; the box inside it is a story of its own.
+    let off = lay(&grid_table_with_text_box(false));
+    let (cell_off, boxed_off) = (cell_line_heights(&off), text_box_line_heights(&off));
+    assert!(!cell_off.is_empty() && cell_off.iter().all(|h| !on_pitch(h)), "cell lines keep their own height: {cell_off:?}");
+    assert!(!boxed_off.is_empty() && boxed_off.iter().all(on_pitch), "the text box keeps the grid: {boxed_off:?}");
+    // With the flag, the cell's lines take the pitch too.
+    let on = lay(&grid_table_with_text_box(true));
+    let (cell_on, boxed_on) = (cell_line_heights(&on), text_box_line_heights(&on));
+    assert!(!cell_on.is_empty() && cell_on.iter().all(on_pitch), "cell lines snap with the flag: {cell_on:?}");
+    assert!(!boxed_on.is_empty() && boxed_on.iter().all(on_pitch), "the text box keeps the grid: {boxed_on:?}");
+}
