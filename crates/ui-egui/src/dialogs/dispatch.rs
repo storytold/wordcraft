@@ -46,6 +46,7 @@ pub(super) fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         Dialog::Password { .. } => password_dialog(app, ui, d),
         Dialog::EncryptPassword { .. } => encrypt_password_dialog(app, ui, d),
         Dialog::DefineList { form } => crate::dialogs_lists::define_list(app, ui, form),
+        Dialog::DefineNumber { form } => crate::dialogs_lists::define_number(app, ui, form),
         Dialog::TrackOptions { form } => crate::dialogs_lists::track_options(app, ui, form),
         Dialog::Review(d) => crate::dialogs_review::body(app, ui, d),
         Dialog::CustomizeKeyboard { form } => crate::dialogs_keyboard::customize_keyboard(app, ui, form),
@@ -221,7 +222,12 @@ fn font_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     ui.label(job);
     let (ok, cancel) = buttons(ui, tl!("OK"));
     if ok {
-        apply_font(app, d);
+        // For a list's number OK only says so; the number's dialog reads the fields.
+        if let Dialog::Font { for_number: Some(done), .. } = d {
+            *done = true;
+        } else {
+            apply_font(app, d);
+        }
     }
     ok || cancel
 }
