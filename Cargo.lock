@@ -6959,6 +6959,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "wordcraft-webdav"
+version = "0.12.0"
+dependencies = [
+ "thiserror 2.0.21",
+ "ureq",
+]
+
+[[package]]
 name = "wordcraft-zotero"
 version = "0.12.0"
 dependencies = [
