@@ -1,5 +1,5 @@
 use super::paint::append_path;
-use super::*;
+use super::{FaceRef, HashMap, Path, PathBuilder};
 
 /// The outlines of `glyphs` (glyph id, pen position) at `size`, as one path in page coordinates.
 pub(crate) fn glyph_outlines(face: &FaceRef, size: f32, glyphs: &[(u32, f32, f32)]) -> Option<Path> {

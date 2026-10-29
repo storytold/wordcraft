@@ -1,4 +1,4 @@
-use super::*;
+use super::{MeasureExt, Ui, Value, WordApp, json, semibold};
 
 /// Labels of Page Setup's paper size (#1433), in one place in case Word's wording differs.
 pub(crate) const PAPER_LABELS: PaperLabels =

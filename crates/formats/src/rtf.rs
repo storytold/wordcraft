@@ -42,7 +42,6 @@ mod styles;
 mod text;
 mod word;
 
-use date::iso_date;
 pub use date::{dttm_to_iso, iso_to_dttm};
 #[cfg(test)]
 use export::{Tables, Writer};
@@ -51,7 +50,6 @@ pub use parse::{import, parse};
 use reader::Reader;
 #[cfg(test)]
 use state::MAX_SECTIONS;
-use state::{CommentData, MARK_CLOSE, MARK_OPEN, MAX_NOTE_BLOCKS, MAX_NOTES, NoteData, Sub};
 #[cfg(test)]
 use word::hyperlink;
 

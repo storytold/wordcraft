@@ -1,5 +1,5 @@
 use super::structure::{del_col, del_row};
-use super::*;
+use super::{CmdError, CmdResult, Paragraph, Path, Pos, RevisionKind, Selection, Session, StoryRef, Value, sel_result};
 
 /// Backspace with whole cells selected (#1844): whole rows go like Delete Rows (every row: the
 /// table, like Delete Table), whole columns like Delete Columns, with their undo and Track

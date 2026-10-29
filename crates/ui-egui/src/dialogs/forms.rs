@@ -1,5 +1,5 @@
 use super::chrome::buttons;
-use super::*;
+use super::{MeasureExt, Sense, Serialize, Tokens, Ui, Value, WordApp, json, semibold, vec2};
 
 /// The Custom tab of File › Info › Properties › Advanced Properties (#2982): the document's
 /// custom properties, edited as a working copy. OK sends the whole difference from what the

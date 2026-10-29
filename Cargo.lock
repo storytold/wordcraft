@@ -6647,7 +6647,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "arboard",
  "chrono",
@@ -6682,7 +6682,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-cli"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "serde_json",
  "sys-locale",
@@ -6695,11 +6695,11 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-control-key"
-version = "0.11.0"
+version = "0.12.0"
 
 [[package]]
 name = "wordcraft-doc"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "base64 0.23.1",
  "log",
@@ -6713,7 +6713,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-docbin"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "cfb",
  "chrono",
@@ -6730,7 +6730,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-docx"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "aes",
  "base64 0.23.1",
@@ -6754,7 +6754,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-engine"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "cfb",
  "chrono",
@@ -6785,7 +6785,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-fonts"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "brotli-decompressor",
  "harfrust 0.13.3",
@@ -6799,7 +6799,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-formats"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "cfb",
  "chardetng",
@@ -6817,7 +6817,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-geom"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "image",
  "serde",
@@ -6825,7 +6825,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-layout"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "image",
  "js-sys",
@@ -6845,7 +6845,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-mcp"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "log",
  "serde_json",
@@ -6857,7 +6857,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-metafile"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "kurbo",
  "thiserror 2.0.21",
@@ -6865,7 +6865,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-pdf"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "chrono",
  "craft-pdf",
@@ -6886,7 +6886,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-proof"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "log",
  "miniz_oxide 0.9.1",
@@ -6896,7 +6896,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-render"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "image",
  "log",
@@ -6910,7 +6910,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-ui-egui"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "cfb",
  "chrono",
@@ -6941,7 +6941,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-web"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "eframe",
  "egui",
@@ -6960,7 +6960,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-zotero"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "log",
  "proptest",
@@ -7123,7 +7123,7 @@ checksum = "9440ea3e5aeabb0ac63af70daf835274065238cdd0cec83418f417eae38bacee"
 
 [[package]]
 name = "xtask"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "serde_json",
 ]

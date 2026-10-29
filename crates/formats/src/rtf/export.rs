@@ -1,6 +1,9 @@
 use super::date::{iso_to_dttm, rtf_date};
 use super::styles::{style_fmt, styled};
-use super::*;
+use super::state::{MARK_CLOSE, MARK_OPEN, MAX_NOTE_BLOCKS};
+use super::{
+    Align, Arc, Block, Blocks, Document, FBlock, FTable, Fmt, HashSet, Inline, InlineObject, Kind, Meta, Para, Paragraph, RevMark, Rgb, VAlign, model,
+};
 
 // ---------------------------------------------------------------------------------------------
 // Export

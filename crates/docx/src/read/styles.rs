@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    AbstractNum, DocxError, El, Level, LevelSuffix, Num, NumFormat, PartFormat, Reader, Style, StyleKind, StyleSheet, TablePart, TableStyleParts,
+    VAlign, flag, int, props, tw, u32_of,
+};
 
 /// Built-in style names Word stores in lower case, and how the UI shows them.
 pub(crate) const LOWER_NAMES: &[(&str, &str)] = &[

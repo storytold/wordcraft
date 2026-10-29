@@ -1,6 +1,6 @@
 use super::reader::Reader;
-use super::state::{Dest, HeaderFooter, HfPages, MAX_PICT, PageGeom};
-use super::*;
+use super::state::{CommentData, Dest, HeaderFooter, HfPages, MARK_CLOSE, MARK_OPEN, MAX_PICT, NoteData, PageGeom};
+use super::{Arc, Block, Blocks, Cell, Document, FBlock, Flow, HashMap, InlineObject, Para, Paragraph, model};
 
 /// Parse RTF bytes into the flow model.
 pub fn parse(bytes: &[u8]) -> Result<Flow, String> {
@@ -201,6 +201,10 @@ fn parse_full(bytes: &[u8], marks: bool) -> Result<Parsed, String> {
             }
         }
     }
+    Ok(finalize(r))
+}
+
+fn finalize(mut r: Reader) -> Parsed {
     // A multibyte run ends here, and so does a note, comment, header or footer left open by a
     // truncated file.
     r.finish_multibyte();
@@ -231,7 +235,7 @@ fn parse_full(bytes: &[u8], marks: bool) -> Result<Parsed, String> {
         blocks.push(FBlock::Para(Para::default()));
     }
     let default_font = r.fonts.get(&r.deff).filter(|n| !model::is_mono(n)).map(|n| n.to_string());
-    Ok(Parsed {
+    Parsed {
         flow: Flow { blocks, meta: r.meta },
         page: r.page,
         last_section,
@@ -239,7 +243,7 @@ fn parse_full(bytes: &[u8], marks: bool) -> Result<Parsed, String> {
         headers_footers,
         notes: r.notes,
         comments: r.comments,
-    })
+    }
 }
 
 /// The column grid of a table from its rows' cell right edges: every distinct edge starts a grid

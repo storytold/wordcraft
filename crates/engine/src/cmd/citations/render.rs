@@ -1,5 +1,5 @@
+use super::Source;
 use super::styles::{Cite, Name, Names, style};
-use super::*;
 
 pub(super) fn authors(a: &str) -> Vec<(String, String)> {
     a.split(';')

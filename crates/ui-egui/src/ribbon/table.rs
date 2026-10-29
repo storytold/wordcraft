@@ -1,5 +1,5 @@
 use super::common::{mi, stack};
-use super::*;
+use super::{MeasureExt, Remember, Target, Ui, WordApp, big, group, json, menu_button, small, split, vec2};
 
 pub(super) fn table_design(app: &mut WordApp, ui: &mut Ui) {
     let look = app.session.sel.focus.path.cell().and_then(|(tp, _, _)| app.session.doc.table(app.session.sel.focus.story, &tp).map(|t| t.props.look));
@@ -60,28 +60,41 @@ pub(super) fn table_design(app: &mut WordApp, ui: &mut Ui) {
             let can_modify = current.is_some();
             // Built-in table styles can't be deleted.
             let can_delete = current == Some(false);
-            menu_button(ui, app, "styles", Some("Styles"), "Table Styles", false, "table.style", |ui, app| {
-                mi(ui, app, "New Table Style…", "ui.dialog", json!({"name": "newTableStyle"}));
-                if ui.add_enabled(can_modify, egui::Button::new(tl!("Modify Table Style…")).min_size(vec2(200.0, 0.0))).clicked() {
-                    let _ = app.run("ui.dialog", json!({"name": "modifyTableStyle"}));
-                    ui.close();
-                }
-                if ui.add_enabled(can_delete, egui::Button::new(tl!("Delete Table Style")).min_size(vec2(200.0, 0.0))).clicked() {
-                    if let Err(e) = app.run("table.deleteStyle", json!({})) {
-                        app.status(e);
+            menu_button(
+                ui,
+                app,
+                crate::widgets::MenuButtonOptions::new("styles", Some("Styles"), "Table Styles", false, "table.style"),
+                |ui, app| {
+                    mi(ui, app, "New Table Style…", "ui.dialog", json!({"name": "newTableStyle"}));
+                    if ui.add_enabled(can_modify, egui::Button::new(tl!("Modify Table Style…")).min_size(vec2(200.0, 0.0))).clicked() {
+                        let _ = app.run("ui.dialog", json!({"name": "modifyTableStyle"}));
+                        ui.close();
                     }
-                    ui.close();
-                }
-            });
-            split(ui, app, "shading", "Shading", "table.shading", json!({"color": app.canvas.last_shading.clone()}), false, None, |ui, app| {
-                mi(ui, app, "No Color", "table.shading", json!({"color": null}));
-                let theme = app.session.doc.settings.theme_colors.clone();
-                crate::colors::menu(ui, app, &theme, Target::cmd("table.shading").remember(Remember::Shading));
-            });
+                    if ui.add_enabled(can_delete, egui::Button::new(tl!("Delete Table Style")).min_size(vec2(200.0, 0.0))).clicked() {
+                        if let Err(e) = app.run("table.deleteStyle", json!({})) {
+                            app.status(e);
+                        }
+                        ui.close();
+                    }
+                },
+            );
+            split(
+                ui,
+                app,
+                "shading",
+                "Shading",
+                crate::widgets::ButtonAction::new("table.shading", json!({"color": app.canvas.last_shading.clone()}), false),
+                None,
+                |ui, app| {
+                    mi(ui, app, "No Color", "table.shading", json!({"color": null}));
+                    let theme = app.session.doc.settings.theme_colors.clone();
+                    crate::colors::menu(ui, app, &theme, Target::cmd("table.shading").remember(Remember::Shading));
+                },
+            );
         });
     });
     group(ui, "Borders", None, app, |ui, app| {
-        menu_button(ui, app, "borders", Some("Borders"), "Borders", true, "table.borders", |ui, app| {
+        menu_button(ui, app, crate::widgets::MenuButtonOptions::new("borders", Some("Borders"), "Borders", true, "table.borders"), |ui, app| {
             for (l, k) in [
                 ("All Borders", "all"),
                 ("Outside Borders", "outside"),
@@ -163,15 +176,34 @@ fn cell_size_boxes(ui: &mut Ui, app: &mut WordApp) {
 pub(super) fn table_layout(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Table", None, app, |ui, app| {
         stack(ui, |ui| {
-            menu_button(ui, app, "selectTable", Some("Select"), "Select", false, "table.selectTable", |ui, app| {
-                mi(ui, app, "Select Cell", "table.selectCell", json!({}));
-                mi(ui, app, "Select Column", "table.selectColumn", json!({}));
-                mi(ui, app, "Select Row", "table.selectRow", json!({}));
-                mi(ui, app, "Select Table", "table.selectTable", json!({}));
-            });
+            menu_button(
+                ui,
+                app,
+                crate::widgets::MenuButtonOptions::new("selectTable", Some("Select"), "Select", false, "table.selectTable"),
+                |ui, app| {
+                    mi(ui, app, "Select Cell", "table.selectCell", json!({}));
+                    mi(ui, app, "Select Column", "table.selectColumn", json!({}));
+                    mi(ui, app, "Select Row", "table.selectRow", json!({}));
+                    mi(ui, app, "Select Table", "table.selectTable", json!({}));
+                },
+            );
             let g = app.session.view.table_gridlines;
-            small(ui, app, "gridlines", Some("View Gridlines"), "View Gridlines", "table.viewGridlines", json!({}), g);
-            small(ui, app, "properties", Some("Properties"), "Table Properties", "table.properties", json!({}), false);
+            small(
+                ui,
+                app,
+                "gridlines",
+                Some("View Gridlines"),
+                "View Gridlines",
+                crate::widgets::ButtonAction::new("table.viewGridlines", json!({}), g),
+            );
+            small(
+                ui,
+                app,
+                "properties",
+                Some("Properties"),
+                "Table Properties",
+                crate::widgets::ButtonAction::new("table.properties", json!({}), false),
+            );
         });
     });
     group(ui, "Draw", None, app, |ui, app| {
@@ -181,36 +213,76 @@ pub(super) fn table_layout(app: &mut WordApp, ui: &mut Ui) {
         crate::widgets::big_toggle(ui, app, "eraser", "Eraser", "table.eraser", tool == Some(TableTool::Erase));
     });
     group(ui, "Rows & Columns", None, app, |ui, app| {
-        menu_button(ui, app, "deleteTable", Some("Delete"), "Delete", true, "table.deleteTable", |ui, app| {
-            mi(ui, app, "Delete Cells", "table.deleteCells", json!({}));
-            mi(ui, app, "Delete Columns", "table.deleteColumn", json!({}));
-            mi(ui, app, "Delete Rows", "table.deleteRow", json!({}));
-            mi(ui, app, "Delete Table", "table.deleteTable", json!({}));
-        });
+        menu_button(
+            ui,
+            app,
+            crate::widgets::MenuButtonOptions::new("deleteTable", Some("Delete"), "Delete", true, "table.deleteTable"),
+            |ui, app| {
+                mi(ui, app, "Delete Cells", "table.deleteCells", json!({}));
+                mi(ui, app, "Delete Columns", "table.deleteColumn", json!({}));
+                mi(ui, app, "Delete Rows", "table.deleteRow", json!({}));
+                mi(ui, app, "Delete Table", "table.deleteTable", json!({}));
+            },
+        );
         big(ui, app, "insertAbove", "Insert\nAbove", "table.insertRowAbove", json!({}), false);
         stack(ui, |ui| {
-            small(ui, app, "insertBelow", Some("Insert Below"), "Insert Below", "table.insertRowBelow", json!({}), false);
-            small(ui, app, "insertLeft", Some("Insert Left"), "Insert Left", "table.insertColumnLeft", json!({}), false);
-            small(ui, app, "insertRight", Some("Insert Right"), "Insert Right", "table.insertColumnRight", json!({}), false);
+            small(
+                ui,
+                app,
+                "insertBelow",
+                Some("Insert Below"),
+                "Insert Below",
+                crate::widgets::ButtonAction::new("table.insertRowBelow", json!({}), false),
+            );
+            small(
+                ui,
+                app,
+                "insertLeft",
+                Some("Insert Left"),
+                "Insert Left",
+                crate::widgets::ButtonAction::new("table.insertColumnLeft", json!({}), false),
+            );
+            small(
+                ui,
+                app,
+                "insertRight",
+                Some("Insert Right"),
+                "Insert Right",
+                crate::widgets::ButtonAction::new("table.insertColumnRight", json!({}), false),
+            );
         });
     });
     group(ui, "Merge", None, app, |ui, app| {
         stack(ui, |ui| {
-            small(ui, app, "merge", Some("Merge Cells"), "Merge Cells", "table.merge", json!({}), false);
-            small(ui, app, "splitCells", Some("Split Cells"), "Split Cells", "table.split", json!({}), false);
-            small(ui, app, "splitTable", Some("Split Table"), "Split Table", "table.splitTable", json!({}), false);
+            small(ui, app, "merge", Some("Merge Cells"), "Merge Cells", crate::widgets::ButtonAction::new("table.merge", json!({}), false));
+            small(ui, app, "splitCells", Some("Split Cells"), "Split Cells", crate::widgets::ButtonAction::new("table.split", json!({}), false));
+            small(ui, app, "splitTable", Some("Split Table"), "Split Table", crate::widgets::ButtonAction::new("table.splitTable", json!({}), false));
         });
     });
     group(ui, "Cell Size", None, app, |ui, app| {
-        menu_button(ui, app, "autofit", Some("AutoFit"), "AutoFit", true, "table.autofit", |ui, app| {
+        menu_button(ui, app, crate::widgets::MenuButtonOptions::new("autofit", Some("AutoFit"), "AutoFit", true, "table.autofit"), |ui, app| {
             mi(ui, app, "AutoFit Contents", "table.autofit", json!({"mode": "contents"}));
             mi(ui, app, "AutoFit Window", "table.autofit", json!({"mode": "window"}));
             mi(ui, app, "Fixed Column Width", "table.autofit", json!({"mode": "fixed"}));
         });
         cell_size_boxes(ui, app);
         stack(ui, |ui| {
-            small(ui, app, "distributeRows", Some("Distribute Rows"), "Distribute Rows", "table.distributeRows", json!({}), false);
-            small(ui, app, "distributeCols", Some("Distribute Columns"), "Distribute Columns", "table.distributeColumns", json!({}), false);
+            small(
+                ui,
+                app,
+                "distributeRows",
+                Some("Distribute Rows"),
+                "Distribute Rows",
+                crate::widgets::ButtonAction::new("table.distributeRows", json!({}), false),
+            );
+            small(
+                ui,
+                app,
+                "distributeCols",
+                Some("Distribute Columns"),
+                "Distribute Columns",
+                crate::widgets::ButtonAction::new("table.distributeColumns", json!({}), false),
+            );
         });
     });
     group(ui, "Alignment", None, app, |ui, app| {
@@ -221,7 +293,7 @@ pub(super) fn table_layout(app: &mut WordApp, ui: &mut Ui) {
                 [("bottomLeft", "Align Bottom Left"), ("bottomCenter", "Align Bottom Center"), ("bottomRight", "Align Bottom Right")],
             ] {
                 for (v, tip) in row {
-                    small(ui, app, "cellAlign", None, tip, "table.cellAlign", json!({"value": v}), false);
+                    small(ui, app, "cellAlign", None, tip, crate::widgets::ButtonAction::new("table.cellAlign", json!({"value": v}), false));
                 }
                 ui.end_row();
             }
@@ -232,9 +304,16 @@ pub(super) fn table_layout(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Data", None, app, |ui, app| {
         big(ui, app, "sort", "Sort", "table.sort", json!({}), false);
         stack(ui, |ui| {
-            small(ui, app, "repeatHeader", Some("Repeat Header Rows"), "Repeat Header Rows", "table.repeatHeader", json!({}), false);
-            small(ui, app, "toText", Some("Convert to Text"), "Convert to Text", "table.toText", json!({}), false);
-            small(ui, app, "formula", Some("Formula"), "Formula", "table.formula", json!({}), false);
+            small(
+                ui,
+                app,
+                "repeatHeader",
+                Some("Repeat Header Rows"),
+                "Repeat Header Rows",
+                crate::widgets::ButtonAction::new("table.repeatHeader", json!({}), false),
+            );
+            small(ui, app, "toText", Some("Convert to Text"), "Convert to Text", crate::widgets::ButtonAction::new("table.toText", json!({}), false));
+            small(ui, app, "formula", Some("Formula"), "Formula", crate::widgets::ButtonAction::new("table.formula", json!({}), false));
         });
     });
 }

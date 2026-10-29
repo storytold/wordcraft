@@ -1,4 +1,4 @@
-use super::*;
+use super::{QUIT, WordApp, i18n, theme};
 
 impl WordApp {
     /// Fonts were added or removed (a command, the web shell loading stored fonts): lay out

@@ -1,4 +1,4 @@
-use super::*;
+use super::{Deserialize, Rgb, Serialize, math, section, styles};
 
 /// A bibliography source.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
