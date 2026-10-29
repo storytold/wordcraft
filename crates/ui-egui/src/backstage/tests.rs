@@ -75,6 +75,218 @@ fn opening_a_missing_recent_file_keeps_file_open_with_the_error() {
     assert!(app.ui.backstage, "File stays open");
 }
 
+fn harness(a: WordApp, size: egui::Vec2) -> egui_kittest::Harness<'static, WordApp> {
+    egui_kittest::Harness::builder().with_size(size).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    )
+}
+
+/// A Recent document that doesn't open (moved, or a relative path from another folder) keeps
+/// File › Home up with the reason, instead of leaving for an empty Document1.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn recent_that_does_not_open_stays_on_the_list_and_says_why() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    assert!(a.start_screen());
+    let missing = "no/such/folder/Notes.docx";
+    a.ui.recent = vec![missing.to_string()];
+    let returned = super::open_recent(&mut a, missing).unwrap_err();
+    assert!(a.ui.backstage, "still on File › Home");
+    let err = a.recent_error.clone().unwrap();
+    assert_eq!(returned, err);
+    assert_eq!(err.matches(missing).count(), 1, "the path is named once: {err}");
+    assert!(a.pending_recent.is_none());
+    let mut h = harness(a, egui::vec2(1440.0, 900.0));
+    h.run_steps(4);
+    assert!(h.query_by_label(&err).is_some(), "the reason is shown");
+
+    // One that opens leaves for the editor and clears the message.
+    let path = std::env::temp_dir().join(format!("wordcraft-ui-recent-{}.docx", std::process::id()));
+    let a = h.state_mut();
+    a.run("file.new", json!({"template": "sample"})).unwrap();
+    assert!(a.recent_error.is_some(), "a new document leaves the message alone");
+    a.run("file.save", json!({"path": path.to_string_lossy()})).unwrap();
+    a.run("ui.backstage", json!({"value": true, "page": "open"})).unwrap();
+    super::open_recent(a, &path.to_string_lossy()).unwrap();
+    assert!(!a.ui.backstage && a.recent_error.is_none());
+    // Opening by another route (Browse, an agent) clears it too.
+    a.run("ui.backstage", json!({"value": true, "page": "open"})).unwrap();
+    super::open_recent(a, missing).unwrap_err();
+    assert!(a.recent_error.is_some());
+    a.run("file.new", json!({})).unwrap();
+    a.run("file.open", json!({"path": path.to_string_lossy()})).unwrap();
+    assert!(a.recent_error.is_none(), "any successful open clears the stale message");
+    assert!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("Studio"));
+    let _ = std::fs::remove_file(&path);
+}
+
+/// Recent entries recorded relative to the home folder (older builds, `wordcraft Documenti/…`
+/// run in `~`) open from anywhere, and are then listed by their absolute path only.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn relative_recent_entries_are_found_in_the_home_folder() {
+    let home = std::env::temp_dir().join(format!("wordcraft-ui-home-{}", std::process::id()));
+    let dir = home.join("Documenti").join("MCB");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("Notes.docx");
+    let rel = "Documenti/MCB/Notes.docx";
+    let abs = file.to_string_lossy().to_string();
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.run("file.new", json!({"template": "sample"})).unwrap();
+    a.run("file.save", json!({"path": abs})).unwrap();
+    assert_eq!(super::resolve_recent(rel, Some(&home)), abs);
+    assert_eq!(super::resolve_recent("Documenti/MCB/Missing.docx", Some(&home)), "Documenti/MCB/Missing.docx", "nothing there: as it was");
+    assert_eq!(super::resolve_recent(rel, None), rel);
+    assert_eq!(super::resolve_recent(&abs, Some(std::path::Path::new("/elsewhere"))), abs, "absolute entries are left alone");
+
+    a.run("file.close", json!({})).unwrap();
+    a.ui.recent = vec!["Other.docx".into(), rel.into()];
+    a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
+    super::open_recent_from(&mut a, rel, Some(&home)).unwrap();
+    assert!(!a.ui.backstage && a.recent_error.is_none(), "it opened");
+    assert!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("Studio"));
+    assert!(!a.ui.recent.iter().any(|r| r == rel), "the relative entry is replaced: {:?}", a.ui.recent);
+    assert!(a.ui.recent.contains(&abs), "by the absolute one: {:?}", a.ui.recent);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// With unsaved changes a Recent document opens beside them, without asking first: File leaves
+/// for it, the relative entry is replaced and the unsaved document stays open.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn recent_open_beside_unsaved_changes() {
+    let home = std::env::temp_dir().join(format!("wordcraft-ui-home-beside-{}", std::process::id()));
+    std::fs::create_dir_all(home.join("Docs")).unwrap();
+    let abs = home.join("Docs").join("Notes.docx").to_string_lossy().to_string();
+    let rel = "Docs/Notes.docx";
+    let mut s = wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Studio"));
+    s.run("file.save", &json!({"path": abs})).unwrap();
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.run("text.insert", json!({"text": "unsaved"})).unwrap();
+    let unsaved = a.session.document_id();
+    a.ui.recent = vec![rel.into(), "Other.docx".into()];
+    a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
+
+    super::open_recent_from(&mut a, rel, Some(&home)).unwrap();
+    assert!(a.dialog.is_none(), "nothing to ask: it opens beside the unsaved document");
+    assert!(!a.ui.backstage && a.pending_recent.is_none() && a.recent_error.is_none());
+    assert!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("Studio"));
+    assert!(a.session.is_open(unsaved), "the unsaved document is still open");
+    assert!(!a.ui.recent.iter().any(|r| r == rel) && a.ui.recent.contains(&abs), "the relative entry is replaced: {:?}", a.ui.recent);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// A password-protected Recent document: a wrong password keeps its prompt and the open pending,
+/// with no "Couldn't open"; the right one opens it and leaves File.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn recent_open_with_a_wrong_password_is_still_pending() {
+    let dir = std::env::temp_dir().join(format!("wordcraft-ui-recent-pw-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Locked.docx").to_string_lossy().to_string();
+    let mut s = wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Locked"));
+    s.run("file.save", &json!({"path": path, "password": "sesame"})).unwrap();
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.ui.recent = vec![path.clone()];
+    a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
+    super::open_recent(&mut a, &path).unwrap();
+    assert!(matches!(a.dialog, Some(crate::dialogs::Dialog::Password { .. })), "the password is asked for");
+    assert!(a.pending_recent.is_some() && a.recent_error.is_none());
+    // What the Password dialog's OK does.
+    let e = a.execute("file.open", json!({"path": path, "password": "wrong"})).unwrap_err();
+    assert!(wordcraft_engine::io::wrong_password(&e), "{e}");
+    assert!(a.pending_recent.is_some() && a.recent_error.is_none(), "a wrong password is not a failed open");
+    assert!(a.ui.backstage);
+    a.canvas.want_focus = false;
+    a.execute("file.open", json!({"path": path, "password": "sesame"})).unwrap();
+    assert!(!a.ui.backstage && a.pending_recent.is_none() && a.recent_error.is_none(), "it opened");
+    assert!(a.canvas.want_focus, "the editor takes the keyboard once the document shows");
+
+    // Cancelling the prompt ends the pending open without a message.
+    a.pending_recent = Some((path.clone(), path.clone()));
+    crate::backstage::recent_cancelled(&mut a, Some("/elsewhere.docx"));
+    assert!(a.pending_recent.is_some(), "another file's prompt leaves it alone");
+    crate::backstage::recent_cancelled(&mut a, Some(&path));
+    assert!(a.pending_recent.is_none() && a.recent_error.is_none());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A legacy relative entry for the document already shown opens nothing new, but File closes
+/// and the relative spelling leaves the list, keeping the absolute one.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn relative_entry_for_the_shown_document_is_dropped() {
+    let home = std::env::temp_dir().join(format!("wordcraft-ui-home-shown-{}", std::process::id()));
+    std::fs::create_dir_all(home.join("Docs")).unwrap();
+    let abs = home.join("Docs").join("Notes.docx").to_string_lossy().to_string();
+    let rel = "Docs/Notes.docx";
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Shown")), Services::default());
+    a.run("file.save", json!({"path": abs})).unwrap();
+    a.ui.recent = vec![abs.clone(), rel.into()];
+    a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
+    super::open_recent_from(&mut a, rel, Some(&home)).unwrap();
+    assert!(!a.ui.backstage && a.pending_recent.is_none());
+    assert_eq!(a.ui.recent, vec![abs.clone()]);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// A relative entry is looked for in the home folder before the folder the app runs from.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn relative_entries_prefer_the_home_folder() {
+    let home = std::env::temp_dir().join(format!("wordcraft-ui-home-first-{}", std::process::id()));
+    std::fs::create_dir_all(home.join("src")).unwrap();
+    // `src/lib.rs` exists where the tests run (the crate folder) and in this home.
+    std::fs::write(home.join("src").join("lib.rs"), "home").unwrap();
+    assert!(std::path::Path::new("src/lib.rs").exists());
+    assert_eq!(super::resolve_recent("src/lib.rs", Some(&home)), home.join("src").join("lib.rs").to_string_lossy());
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// Paths through `..` or a link name the same file.
+#[test]
+#[cfg(unix)]
+fn same_file_sees_through_dots_and_links() {
+    let dir = std::env::temp_dir().join(format!("wordcraft-ui-same-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("a")).unwrap();
+    let file = dir.join("a").join("x.docx");
+    std::fs::write(&file, "").unwrap();
+    std::os::unix::fs::symlink(dir.join("a"), dir.join("link")).unwrap();
+    assert!(super::same_file(&file, &dir.join("a").join("..").join("a").join("x.docx")));
+    assert!(super::same_file(&file, &dir.join("link").join("x.docx")));
+    assert!(!super::same_file(&file, &dir.join("a").join("y.docx")));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// With a long Recent list in a short window the reason is still on screen, and showing it
+/// doesn't move the rows under the pointer.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn recent_error_stays_in_view_and_rows_keep_their_places() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.ui.recent = (1..=12).map(|i| format!("no/such/folder/Doc{i}.docx")).collect();
+    a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
+    let h_px = 500.0;
+    let mut h = harness(a, egui::vec2(1000.0, h_px));
+    h.run_steps(4);
+    let before = h.get_by_label("Doc1.docx").rect();
+    super::open_recent(h.state_mut(), "no/such/folder/Doc1.docx").unwrap_err();
+    let err = h.state().recent_error.clone().unwrap();
+    h.run_steps(4);
+    assert_eq!(h.get_by_label("Doc1.docx").rect(), before, "the rows don't move");
+    let shown = h.get_by_label(&err).rect();
+    assert!(shown.max.y <= h_px && shown.min.y >= 0.0, "the reason is in the window: {shown:?}");
+    // Closing File forgets it.
+    h.state_mut().ui.backstage = false;
+    h.run_steps(2);
+    assert!(h.state().recent_error.is_none());
+}
+
 /// #1873: the macOS back chevron sits beside the traffic lights windowed, at the plain
 /// control inset in full screen.
 #[test]

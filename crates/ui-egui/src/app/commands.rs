@@ -1,7 +1,7 @@
 use super::{
-    DefaultApp, MAX_RECENT, SaveChoice, SaveInFlight, Value, WordApp, applied_font, async_saves, chrome, colors, crop, dialogs, dialogs_table_style,
-    file_dialogs, i18n, json, keeps_everything, keytips, now_ms, options, panes, paste_picture, printing, push_recent_font, system_clipboard,
-    table_pen, theme, widgets, zotero,
+    DefaultApp, MAX_RECENT, SaveChoice, SaveInFlight, Value, WordApp, applied_font, async_saves, backstage, chrome, colors, crop, dialogs,
+    dialogs_table_style, file_dialogs, i18n, json, keeps_everything, keytips, now_ms, options, panes, paste_picture, printing, push_recent_font,
+    system_clipboard, table_pen, theme, widgets, zotero,
 };
 
 impl WordApp {
@@ -240,10 +240,25 @@ impl WordApp {
         // Another document is shown (not when Open only showed its picker): the window's state
         // for the one it showed is put aside.
         if self.session.document_id() != document {
+            // A file opened by any route (Browse, the built-in browser, Recent, an agent) clears
+            // the stale "Couldn't open" under the Recent list, in the window that asked and in
+            // the one that shows the file. A Recent open is finished in the window it was
+            // clicked in, before the switch puts that window's state aside.
+            let recent = id == "file.open" && {
+                self.recent_error = None;
+                backstage::recent_opened(self)
+            };
             // A requested New/Open wins over the asynchronous startup recovery scan.
             // Older copies remain available through File > Recover.
             self.recovery_seen = true;
             self.sync_document();
+            if id == "file.open" {
+                self.recent_error = None;
+            }
+            if recent {
+                self.ui.backstage = false;
+                self.canvas.want_focus = true;
+            }
         }
         // An explicit save to the document's own file lets AutoSave keep writing there.
         if let Ok(v) = &r
@@ -317,13 +332,15 @@ impl WordApp {
         }
         let retry = (id == "file.open").then(|| params.clone());
         let r = self.execute(id, params);
-        if let (Err(e), Some(params)) = (&r, retry)
-            && wordcraft_engine::io::needs_password(e)
-        {
-            let path = params.get("path").and_then(Value::as_str).unwrap_or("");
-            let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string());
-            self.dialog = Some(dialogs::Dialog::Password { name, params, password: Default::default(), message: String::new() });
-            return Ok(json!({"pending": "password"}));
+        if let (Err(e), Some(params)) = (&r, retry) {
+            if wordcraft_engine::io::needs_password(e) {
+                let path = params.get("path").and_then(Value::as_str).unwrap_or("");
+                let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string());
+                self.dialog = Some(dialogs::Dialog::Password { name, params, password: Default::default(), message: String::new() });
+                return Ok(json!({"pending": "password"}));
+            }
+            // A Recent open that failed: File says why.
+            backstage::recent_failed(self, params.get("path").and_then(Value::as_str), e);
         }
         r
     }

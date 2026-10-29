@@ -1240,8 +1240,15 @@ fn password_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 *message = tl!("That password isn't right. Check it (passwords are case-sensitive) and try again.").to_string();
                 password.as_mut_string().clear();
             }
-            Err(e) => *message = e,
+            Err(e) => {
+                // Not a password problem: a Recent open is over, and File says why too.
+                crate::backstage::recent_failed(app, params.get("path").and_then(serde_json::Value::as_str), &e);
+                *message = e;
+            }
         }
+    }
+    if cancel {
+        crate::backstage::recent_cancelled(app, params.get("path").and_then(serde_json::Value::as_str));
     }
     cancel
 }

@@ -147,6 +147,19 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             export_page(app, ui);
             return;
         }
+        // Why a Recent document didn't open, pinned under the page instead of in it: below a long
+        // list it scrolled out of sight, and above it the rows moved under the pointer. Here
+        // the rows keep their places; the page just shows a line less.
+        if matches!(app.ui.backstage_page.as_str(), "home" | "open")
+            && let Some(e) = app.recent_error.clone()
+        {
+            egui::Panel::bottom("backstage_recent_error")
+                .resizable(false)
+                .frame(egui::Frame::NONE.fill(t.ribbon).inner_margin(egui::Margin { left: 0, right: 0, top: 8, bottom: 0 }))
+                .show(ui, |ui| {
+                    ui.label(egui::RichText::new(e).color(ui.visuals().error_fg_color));
+                });
+        }
         egui::ScrollArea::vertical().show(ui, |ui| match app.ui.backstage_page.as_str() {
             "home" => home_page(app, ui),
             "new" => new_page(app, ui),
@@ -508,17 +521,12 @@ fn personal_error_id() -> egui::Id {
     egui::Id::unique("backstage_personal_error")
 }
 
-/// Draws the Recent documents list, distinguishes duplicate names by path for screen readers, and
-/// stores an open failure in this page's temporary state.
+/// Draws the Recent documents list, distinguishing duplicate names by path for screen readers. Why
+/// a document didn't open is shown under the page ([`WordApp::recent_error`]).
 fn open_list(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     ui.label(egui::RichText::new(tl!("Recent")).font(semibold(16.0)));
     ui.add_space(6.0);
-    let error = ui.ctx().data(|d| d.get_temp::<String>(open_error_id())).unwrap_or_default();
-    if !error.is_empty() {
-        ui.label(egui::RichText::new(error).color(ui.visuals().error_fg_color));
-        ui.add_space(6.0);
-    }
     if app.ui.recent.is_empty() {
         ui.label(egui::RichText::new(tl!("Documents you open will show up here.")).color(t.text_dim));
     }
@@ -537,23 +545,16 @@ fn open_list(app: &mut WordApp, ui: &mut Ui) {
         ui.painter().text(pos2(r.min.x + 40.0, r.min.y + 13.0), Align2::LEFT_CENTER, name, medium(13.0), t.text);
         ui.painter().text(pos2(r.min.x + 40.0, r.min.y + 29.0), Align2::LEFT_CENTER, p, regular(11.0), t.text_dim);
         if resp.clicked() {
-            let failed = open_recent(app, p).err();
-            ui.ctx().data_mut(|d| d.insert_temp(open_error_id(), failed.unwrap_or_default()));
+            let _ = open_recent(app, p);
         }
     }
 }
 
-/// Stable storage id for the Recent list's open error.
-fn open_error_id() -> egui::Id {
-    egui::Id::unique("backstage_open_error")
-}
-
 /// Drop the Recent list's open error once File is closed, so it doesn't come back next time.
-pub(crate) fn forget_open_error(ctx: &egui::Context) {
-    ctx.data_mut(|d| {
-        d.remove::<String>(open_error_id());
-        d.remove::<String>(personal_error_id());
-    });
+pub(crate) fn forget_open_error(app: &mut WordApp, ctx: &egui::Context) {
+    app.recent_error = None;
+    app.pending_recent = None;
+    ctx.data_mut(|d| d.remove::<String>(personal_error_id()));
 }
 
 /// The Save As page's write-failure message ([`WordApp::fail_save_as`]): this page's own
@@ -569,13 +570,101 @@ pub(crate) fn forget_save_as_error(ctx: &egui::Context) {
     ctx.data_mut(|d| d.remove::<String>(save_as_error_id()));
 }
 
-/// Open a file from the Recent list. A file that can't be opened (deleted, moved, unreadable)
-/// leaves File open so the list can say why, rather than closing it on a greyed-out window.
+/// Open a file from the Recent list. A file that can't be opened (deleted, moved, unreadable, or
+/// a relative path from another folder) leaves File open and says why, rather than closing it on
+/// a greyed-out window or an empty document (#2938).
 pub(crate) fn open_recent(app: &mut WordApp, path: &str) -> Result<(), String> {
-    app.open_file(path, None)?;
+    #[cfg(not(target_arch = "wasm32"))]
+    let home = crate::file_browser::home();
+    #[cfg(target_arch = "wasm32")]
+    let home: Option<std::path::PathBuf> = None;
+    open_recent_from(app, path, home.as_deref())
+}
+
+/// [`open_recent`], with relative entries also looked for in `home`.
+fn open_recent_from(app: &mut WordApp, p: &str, home: Option<&std::path::Path>) -> Result<(), String> {
+    let target = resolve_recent(p, home);
+    // Finished by `recent_opened` or `recent_failed`, which may be after the password prompt;
+    // until then the list, the entry and File stay as they are.
+    app.pending_recent = Some((p.to_string(), target.clone()));
+    match app.open_file(&target, None) {
+        Ok(v) if v.get("pending").is_some() => Ok(()),
+        Ok(_) => {
+            // Already the shown document: no switch ran `recent_opened`, so tidy the list here.
+            recent_opened(app);
+            app.recent_error = None;
+            app.ui.backstage = false;
+            app.canvas.want_focus = true;
+            Ok(())
+        }
+        Err(e) => {
+            // Failures from `file.open` itself are reported as it returns; this covers the rest.
+            recent_failed(app, Some(&target), &e);
+            Err(app.recent_error.clone().unwrap_or(e))
+        }
+    }
+}
+
+/// A file has opened: if it is the Recent entry being opened, close File in the window it was
+/// clicked in and list the entry by the document's absolute path only, dropping the relative
+/// spelling it came from. True when it was; the caller then focuses the editor once the window
+/// shows the document (switching documents resets the canvas).
+pub(crate) fn recent_opened(app: &mut WordApp) -> bool {
+    let Some((entry, target)) = app.pending_recent.take() else { return false };
+    let Some(opened) = app.session.path.clone().filter(|p| same_file(p, std::path::Path::new(&target))) else { return false };
+    if entry != opened.to_string_lossy() {
+        app.ui.recent.retain(|r| *r != entry);
+    }
     app.ui.backstage = false;
-    app.canvas.want_focus = true;
-    Ok(())
+    true
+}
+
+/// Whether two paths name one file: the same absolute path, or the same file through a link or
+/// `..` (as `file.open` finds a file that is already open).
+fn same_file(a: &std::path::Path, b: &std::path::Path) -> bool {
+    let absolute = |p: &std::path::Path| std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf());
+    if absolute(a) == absolute(b) {
+        return true;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if let (Ok(a), Ok(b)) = (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        return a == b;
+    }
+    false
+}
+
+/// The password prompt for `path` was cancelled: if it was the Recent entry being opened, that
+/// open is over, with nothing to report.
+pub(crate) fn recent_cancelled(app: &mut WordApp, path: Option<&str>) {
+    app.pending_recent.take_if(|(_, target)| Some(target.as_str()) == path);
+}
+
+/// `file.open` of `path` failed for good: if it was the Recent entry being opened, File stays up
+/// and says why. A file that needs a password is not this, and nor is a wrong password: the
+/// prompt stays open and the open is still pending.
+pub(crate) fn recent_failed(app: &mut WordApp, path: Option<&str>, error: &str) {
+    let Some((entry, target)) = app.pending_recent.take_if(|(_, target)| Some(target.as_str()) == path) else { return };
+    log::warn!("{entry}: {error}");
+    // The engine's error already starts with the path; name it once.
+    let error = error.strip_prefix(&format!("{target}: ")).unwrap_or(error);
+    app.recent_error = Some(crate::i18n::fmt(tl!("Couldn't open {path}: {error}"), &[("path", &entry), ("error", error)]));
+}
+
+/// Where a Recent entry is. Builds before `file.open` kept absolute paths recorded the path as
+/// typed, e.g. `Documenti/notes.docx` from `wordcraft Documenti/notes.docx` run in the home
+/// folder; started from anywhere else, that names nothing. A relative entry is looked for in
+/// the home folder first (where launchers start the app), so a file of the same name under
+/// the folder the app happens to run from isn't opened in its place; otherwise the entry is
+/// used as it is.
+fn resolve_recent(p: &str, home: Option<&std::path::Path>) -> String {
+    let path = std::path::Path::new(p);
+    if path.is_absolute() {
+        return p.to_string();
+    }
+    match home.map(|h| h.join(path)).filter(|h| h.exists()) {
+        Some(found) => found.to_string_lossy().to_string(),
+        None => p.to_string(),
+    }
 }
 
 fn open_page(app: &mut WordApp, ui: &mut Ui) {

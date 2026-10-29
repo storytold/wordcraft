@@ -50,6 +50,8 @@ pub(crate) struct WindowUi {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) file_browser: crate::file_browser::State,
     pub(crate) info_editing: Option<(&'static str, u64)>,
+    pub(crate) recent_error: Option<String>,
+    pub(crate) pending_recent: Option<(String, String)>,
     pub(crate) shown_document: u64,
     // From UiState.
     pub(crate) tab: String,
@@ -119,6 +121,8 @@ impl WindowUi {
             #[cfg(not(target_arch = "wasm32"))]
             file_browser: Default::default(),
             info_editing: None,
+            recent_error: None,
+            pending_recent: None,
             shown_document: document,
             tab,
             backstage,
@@ -240,6 +244,8 @@ impl WordApp {
             #[cfg(not(target_arch = "wasm32"))]
             file_browser,
             info_editing,
+            recent_error,
+            pending_recent,
             shown_document,
         } = self;
         let UiState {
@@ -336,6 +342,8 @@ impl WordApp {
             #[cfg(not(target_arch = "wasm32"))]
             file_browser,
             info_editing,
+            recent_error,
+            pending_recent,
             shown_document,
             tab,
             backstage,

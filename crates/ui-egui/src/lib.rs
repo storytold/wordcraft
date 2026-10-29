@@ -599,6 +599,12 @@ pub struct WordApp {
     /// keystroke, so one visit's keystrokes make a single undo step (and anything else in
     /// between, such as an Undo, starts a new one).
     pub(crate) info_editing: Option<(&'static str, u64)>,
+    /// Why the last Recent document clicked on File › Home or Open didn't open; shown under the
+    /// page until a file opens or File closes (#2938).
+    pub(crate) recent_error: Option<String>,
+    /// The Recent entry being opened and the path it resolved to, until that file opens or fails:
+    /// at once, or after Save Changes or the password prompt (`backstage::open_recent`).
+    pub(crate) pending_recent: Option<(String, String)>,
     recovery_seen: bool,
     /// Started on the Start screen with nothing to open (#1129): the id of the placeholder
     /// blank document the session holds until the user creates or opens one. While it is still

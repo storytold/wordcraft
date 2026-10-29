@@ -64,6 +64,8 @@ impl WordApp {
             awaiting_save,
             file_dialog,
             info_editing,
+            recent_error,
+            pending_recent,
             shown_document,
             #[cfg(not(target_arch = "wasm32"))]
             file_browser,
@@ -173,6 +175,8 @@ impl WordApp {
             awaiting_save,
             file_dialog,
             info_editing,
+            recent_error,
+            pending_recent,
             shown_document,
             #[cfg(not(target_arch = "wasm32"))]
             file_browser,
@@ -426,7 +430,7 @@ impl WordApp {
         crate::keytips::logic(self, &ctx);
         // A failed Recent open, or a failed Save As, is news only until File closes (#2938).
         if !self.ui.backstage {
-            backstage::forget_open_error(&ctx);
+            backstage::forget_open_error(self, &ctx);
             backstage::forget_save_as_error(&ctx);
         }
         self.paint_window(ui, &ctx, t);

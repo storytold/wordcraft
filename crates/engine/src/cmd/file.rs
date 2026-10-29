@@ -283,13 +283,14 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
     if let Some(z) = s.doc.settings.zoom {
         super::view::restore_zoom(s, z);
     }
-    s.path = Some(path.into());
+    // Bytes sent with `data` only name the file.
+    s.path = Some(if p::str(v, "data").is_some() { path.into() } else { on_disk(std::path::Path::new(path)) });
     // Like Word, a document opened with a password is saved with it again.
     if encrypted {
         s.password = password.map(crate::io::Password::new);
     }
     Ok(
-        json!({"path": path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count(), "encrypted": encrypted, "alreadyOpen": false, "id": s.document_id()}),
+        json!({"path": s.path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count(), "encrypted": encrypted, "alreadyOpen": false, "id": s.document_id()}),
     )
 }
 
@@ -332,8 +333,15 @@ fn encrypt(s: &mut Session, v: &Value) -> CmdResult {
     Ok(json!({"encrypted": s.password.is_some()}))
 }
 
+/// The path a document keeps for its file: absolute, so Save, AutoSave and the Recent list
+/// still find the file after the working directory changes (a relative path in Recent opened
+/// nothing when the app was started elsewhere). `..` is kept: resolving it would follow links.
+fn on_disk(path: &std::path::Path) -> std::path::PathBuf {
+    std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
 fn save(s: &mut Session, v: &Value) -> CmdResult {
-    let path = match p::str(v, "path").map(std::path::PathBuf::from).or_else(|| s.path.clone()) {
+    let path = match p::str(v, "path").map(|p| on_disk(std::path::Path::new(p))).or_else(|| s.path.clone()) {
         Some(p) => p,
         None => {
             s.push_ui_request(json!({"open": "saveAs"}));
