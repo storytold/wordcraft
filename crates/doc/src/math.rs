@@ -488,8 +488,28 @@ fn lin_arg(a: &[MNode], s: &mut String, depth: usize) {
     if depth > MAX_DEPTH {
         return;
     }
+    // A fraction's operands are read up to a space or operator (#4253): a space keeps what's
+    // written before its numerator, and after a bare denominator, out of the fraction.
+    let mut bare_den = false;
     for (i, n) in a.iter().enumerate() {
+        let at = s.len();
+        if matches!(n, MNode::Frac { .. }) {
+            let parted = i == 0 || matches!(a.get(i - 1), Some(MNode::Run(r)) if r.text.ends_with(crate::math_linear::is_boundary));
+            if !parted && !s.ends_with(' ') {
+                s.push(' ');
+            }
+        }
         lin_node(n, s, depth + 1);
+        // The first node that writes something follows the denominator; an empty run doesn't.
+        if bare_den && let Some(c) = s.get(at..).and_then(|t| t.chars().next()) {
+            bare_den = false;
+            if !crate::math_linear::is_boundary(c) {
+                s.insert(at, ' ');
+            }
+        }
+        if let MNode::Frac { den, .. } = n {
+            bare_den = simple_operand(den);
+        }
         // A bare script or limit ends at a space: a letter, digit or period after it is its own item.
         if matches!(n, MNode::Script { kind, .. } if *kind != ScriptKind::Pre) || matches!(n, MNode::Lim { .. }) {
             let ends_bare = s.chars().next_back().is_some_and(|c| c.is_alphanumeric() || c == '.');
@@ -512,11 +532,9 @@ fn first_lin_char(n: &MNode) -> Option<char> {
     }
 }
 
-/// An argument as an operand: bare when it's a single simple atom, parenthesised otherwise.
-fn lin_operand(a: &[MNode], s: &mut String, depth: usize) {
-    let mut inner = String::new();
-    lin_arg(a, &mut inner, depth);
-    let simple = match a {
+/// Whether [`lin_operand`] writes `a` bare: a single simple atom.
+fn simple_operand(a: &[MNode]) -> bool {
+    match a {
         [MNode::Run(r)] => {
             let mut cs = r.text.chars();
             match (cs.next(), cs.next()) {
@@ -526,8 +544,14 @@ fn lin_operand(a: &[MNode], s: &mut String, depth: usize) {
         }
         [MNode::Delim { .. }] => true,
         _ => false,
-    };
-    if simple && !inner.is_empty() {
+    }
+}
+
+/// An argument as an operand: bare when it's a single simple atom, parenthesised otherwise.
+fn lin_operand(a: &[MNode], s: &mut String, depth: usize) {
+    let mut inner = String::new();
+    lin_arg(a, &mut inner, depth);
+    if simple_operand(a) && !inner.is_empty() {
         s.push_str(&inner);
     } else {
         s.push('(');
@@ -914,11 +938,46 @@ mod tests {
             "▭(a)+¯(b)+▁(c)",
             "(a│b)",
             "E=mc^2#(1)",
+            "3/2 x",
+            "x 3/2",
+            "3/2x",
+            "a/b c/d",
+            "1/2 (x+1)",
+            "x^2 3/2",
         ] {
             let n = parse_linear(s);
             let back = parse_linear(&to_linear(&n));
             assert_eq!(n, back, "{s} → {}", to_linear(&n));
         }
+    }
+
+    #[test]
+    fn a_fraction_keeps_its_neighbours_out() {
+        // #4253: (3/2)·x was written `3/2x`, which reads back as 3/(2x).
+        let half = MNode::Frac { kind: FracKind::Bar, num: vec![run("3")], den: vec![run("2")] };
+        let after = vec![half.clone(), run("x")];
+        assert_eq!(to_linear(&after), "3/2 x");
+        let before = vec![run("x"), half.clone()];
+        assert_eq!(to_linear(&before), "x 3/2");
+        assert_eq!(to_linear(&[run("x="), half.clone(), run("+1")]), "x=3/2+1", "no space next to an operator");
+        let mut group = parse_linear("(x+1)");
+        group.insert(0, half.clone());
+        for n in [after.clone(), before, vec![half.clone(), half.clone()], group] {
+            assert_eq!(parse_linear(&to_linear(&n)), n, "{}", to_linear(&n));
+        }
+        // An empty run between them writes nothing and doesn't use up the space (review).
+        let gap = vec![half, run(""), run("x")];
+        assert_eq!(to_linear(&gap), "3/2 x");
+        assert_eq!(parse_linear(&to_linear(&gap)), after);
+        // A structure after a bare denominator is kept out of it the same way.
+        assert!(matches!(parse_linear("1/π∑_(k=1)^n▒k").as_slice(), [MNode::Frac { .. }]), "unspaced, the sum is the denominator's");
+        let n = parse_linear("1/π ∑_(k=1)^n▒k");
+        assert!(matches!(n.as_slice(), [MNode::Frac { .. }, MNode::Nary { .. }]), "{n:#?}");
+        assert_eq!(to_linear(&n), "1/π ∑_(k=1)^n▒k");
+        // A denominator that is one operand stays one.
+        let n = parse_linear("3/(2x)");
+        assert!(matches!(n.as_slice(), [MNode::Frac { den, .. }] if den == &vec![run("2x")]), "{n:#?}");
+        assert_eq!(parse_linear(&to_linear(&n)), n);
     }
 
     //T1
