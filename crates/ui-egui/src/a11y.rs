@@ -353,8 +353,8 @@ impl Builder<'_> {
                     (ClKind::Text | ClKind::Space, None) => dp.text.get(cl.start..cl.end).unwrap_or(""),
                     (ClKind::Tab, None) => "\t",
                     (ClKind::LineBreak, None) => "\n",
-                    (ClKind::Object(_), None) => {
-                        let picture = match dp.object_at(cl.start) {
+                    (ClKind::Object(index), None) => {
+                        let picture = match dp.objects.get(index) {
                             Some(InlineObject::Image { alt, .. } | InlineObject::Graphic { alt, .. }) => Some(alt.clone()),
                             _ => None,
                         };
@@ -780,6 +780,75 @@ mod tests {
             b.y0 <= f64::from(caret.y) + 0.5 && f64::from(caret.y + height) <= b.y1 + 0.5,
             "{step}: it is on the caret's line: {b:?} vs caret {caret:?} + {height}"
         );
+    }
+
+    /// A page of pictures after unrelated markers on the preceding page of the same paragraph.
+    fn pictures_after_markers(markers: usize, pictures: usize) -> Document {
+        let mut doc = Document::new();
+        let mut para = wordcraft_doc::Paragraph::with_text("x", Default::default());
+        para.text = format!("{}\u{c}{} Fin Γ", "\u{fffc}".repeat(markers), "\u{fffc}".repeat(pictures));
+        para.runs[0].len = para.text.len();
+        para.objects.extend((0..markers).map(|_| InlineObject::BookmarkStart { name: "padding".into() }));
+        for k in 0..pictures {
+            let alt = if k % 3 == 0 { String::new() } else { format!("Picture {k} Γ") };
+            para.objects.push(if k % 2 == 0 {
+                InlineObject::Image { media: "original".into(), w: 1.0, h: 1.0, alt, float: Default::default(), crop: Default::default(), ole: None }
+            } else {
+                InlineObject::Graphic { w: 1.0, h: 1.0, alt, float: Default::default(), graphic: Arc::new(Default::default()) }
+            });
+        }
+        *doc.para_mut(StoryRef::Body, &Path::top(0)).unwrap() = para;
+        doc
+    }
+
+    fn picture_page(doc: &Document) -> (Arc<DocLayout>, Vec<Rect>, Pos) {
+        let mut session = wordcraft_engine::Session::new(doc.clone());
+        let layout = session.layout();
+        assert_eq!(layout.pages.len(), 2);
+        let rects = vec![Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(612.0, 792.0)); 2];
+        let end = Pos::body(0, doc.para(StoryRef::Body, &Path::top(0)).unwrap().len());
+        (layout, rects, end)
+    }
+
+    #[test]
+    fn picture_labels_follow_object_indices_past_offscreen_markers() {
+        let doc = pictures_after_markers(17, 8);
+        let (layout, rects, end) = picture_page(&doc);
+        let tree = build(&doc, &layout, Id::unique("pictures"), &rects, (1, 2), (&end, &end));
+        let images: Vec<_> = tree.nodes.iter().filter(|(_, n)| n.role() == Role::Image).map(|(_, n)| n).collect();
+        assert_eq!(images.len(), 8);
+        for (k, image) in images.iter().enumerate() {
+            let label = (k % 3 != 0).then(|| format!("Picture {k} Γ"));
+            assert_eq!(image.label(), label.as_deref());
+            assert!(image.bounds().is_some());
+        }
+        let focus = tree.selection.expect("the final text keeps its caret").focus;
+        let run = tree.nodes.iter().find(|(id, _)| id.accesskit_id() == focus.node).unwrap();
+        assert_eq!(run.1.value(), Some(" Fin Γ\n"));
+    }
+
+    /// Run explicitly when changing picture lookups. Layout is outside the timed interval;
+    /// unrelated markers on an offscreen page must not be recounted for each visible picture.
+    #[test]
+    #[ignore = "performance check; run explicitly without competing CPU load"]
+    fn picture_lookup_does_not_rescan_the_offscreen_prefix() {
+        let measure = |markers| {
+            let doc = pictures_after_markers(markers, 1000);
+            let (layout, rects, end) = picture_page(&doc);
+            (0..3)
+                .map(|_| {
+                    let start = web_time::Instant::now();
+                    let tree = build(&doc, &layout, Id::unique("pictures"), &rects, (1, 2), (&end, &end));
+                    let elapsed = start.elapsed();
+                    assert_eq!(tree.nodes.iter().filter(|(_, n)| n.role() == Role::Image).count(), 1000);
+                    elapsed
+                })
+                .min()
+                .unwrap()
+        };
+        let small = measure(0);
+        let padded = measure(200_000);
+        assert!(padded <= small * 8 + std::time::Duration::from_millis(25), "tree build: {small:?} without padding, {padded:?} with padding");
     }
 
     /// Hostile layouts and junk geometry don't panic and the tree stays bounded.
