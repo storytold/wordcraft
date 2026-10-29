@@ -389,4 +389,7 @@ pub struct ParaEnv<'a> {
     /// Heights of the paragraph's inline text boxes that resize to fit their text, by object
     /// index: they take these instead of their saved heights.
     pub fitted: &'a [(usize, f32)],
+    /// The paragraph goes on from the line of the one before, whose mark is hidden (#3986): its
+    /// list number is counted and sets its indents, but isn't drawn.
+    pub joined: bool,
 }

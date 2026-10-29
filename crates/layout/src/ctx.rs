@@ -46,6 +46,9 @@ pub(crate) struct Ctx<'a> {
     /// Empty body paragraphs with hidden marks or continuous section breaks, in order:
     /// they take no room (see [`place_para`]).
     pub(crate) quiet_marks: Vec<usize>,
+    /// The paragraph (by revision) being laid out as going on from the line of the one before,
+    /// whose mark is hidden: its list number is counted but not drawn (#3986).
+    pub(crate) joined: Option<u64>,
     /// Empty paragraphs closing a continuous section right after another section's mark, in
     /// order: each takes its line while it fits, then stays at the page's bottom (#3907).
     pub(crate) stacked_marks: Vec<usize>,
@@ -79,6 +82,7 @@ struct ParaEnvInput<'a> {
     eq_number: u32,
     typing_word: Option<(usize, usize)>,
     fitted: &'a [(usize, f32)],
+    joined: bool,
 }
 
 /// A header or footer (`story`) laid out for page `number` of a section (`sect`, `mirror`): its
@@ -197,10 +201,24 @@ impl Ctx<'_> {
             grid: para::Grid::default(),
             fit_objects: false,
             fitted: &[],
+            joined: false,
         };
         let pl = Arc::new(para::layout_para(&p, &env));
         self.numbers.insert(n, pl.clone());
         pl
+    }
+
+    /// Whether `p`'s paragraph mark is hidden, with hidden text not shown: Word then shows the
+    /// paragraph on one line with the next one (#3986). A section's closing mark never joins.
+    pub(crate) fn mark_hidden(&self, p: &Paragraph, table_chr: Option<&CharProps>) -> bool {
+        !self.opts.show_hidden && p.section.is_none() && self.doc.styles.resolve_char_in(p.props.style.as_deref(), table_chr, &p.mark).hidden
+    }
+
+    /// Whether `p` shows none of its text (it has none, or all of it is hidden and not shown).
+    pub(crate) fn text_hidden(&self, p: &Paragraph, table_chr: Option<&CharProps>) -> bool {
+        p.text.is_empty()
+            || (!self.opts.show_hidden
+                && p.runs.iter().all(|r| r.len == 0 || self.doc.styles.resolve_char_in(p.props.style.as_deref(), table_chr, &r.props).hidden))
     }
 
     /// The list label of `p`, advancing the list counters: call it once per paragraph, in
@@ -239,7 +257,16 @@ impl Ctx<'_> {
         let typing = key.typing;
         let pl = Arc::new(para::layout_para(
             p,
-            &self.para_env(ParaEnvInput { width, label, table, exclusions, eq_number, typing_word: typing, fitted: &fitted }),
+            &self.para_env(ParaEnvInput {
+                width,
+                label,
+                table,
+                exclusions,
+                eq_number,
+                typing_word: typing,
+                fitted: &fitted,
+                joined: self.joined == Some(p.rev),
+            }),
         ));
         self.cache.paras.insert(key, pl.clone());
         pl
@@ -272,7 +299,16 @@ impl Ctx<'_> {
         self.cache.misses += 1;
         let pl = Arc::new(para::layout_para(
             p,
-            &self.para_env(ParaEnvInput { width, label, table: None, exclusions: &[], eq_number, typing_word: None, fitted: &[] }),
+            &self.para_env(ParaEnvInput {
+                width,
+                label,
+                table: None,
+                exclusions: &[],
+                eq_number,
+                typing_word: None,
+                fitted: &[],
+                joined: self.joined == Some(p.rev),
+            }),
         ));
         self.cache.paras.insert(key, pl.clone());
         Some(pl)
@@ -300,7 +336,16 @@ impl Ctx<'_> {
         let typing = key.typing;
         let m = measure(&para::layout_para(
             p,
-            &self.para_env(ParaEnvInput { width, label, table, exclusions: &[], eq_number, typing_word: typing, fitted: &fitted }),
+            &self.para_env(ParaEnvInput {
+                width,
+                label,
+                table,
+                exclusions: &[],
+                eq_number,
+                typing_word: typing,
+                fitted: &fitted,
+                joined: self.joined == Some(p.rev),
+            }),
         ));
         self.cache.measures.insert(key, m);
         m
@@ -374,6 +419,7 @@ impl Ctx<'_> {
             hide_deleted: self.hide_deleted,
             sref: if self.fields.styleref.is_some() && styleref::has_styleref(p) { self.fields.styleref_key(p) } else { 0 },
             typing: self.opts.typing_word.filter(|t| t.rev == p.rev).map(|t| (t.start, t.end)),
+            joined: self.joined == Some(p.rev),
         };
         (key, eq_number)
     }
@@ -394,7 +440,7 @@ impl Ctx<'_> {
     }
 
     fn para_env<'b>(&'b self, input: ParaEnvInput<'b>) -> para::ParaEnv<'b> {
-        let ParaEnvInput { width, label, table, exclusions, eq_number, typing_word, fitted } = input;
+        let ParaEnvInput { width, label, table, exclusions, eq_number, typing_word, fitted, joined } = input;
         para::ParaEnv {
             doc: self.doc,
             width,
@@ -413,6 +459,7 @@ impl Ctx<'_> {
             grid: self.grid,
             fit_objects: self.boxes.inside(),
             fitted,
+            joined,
         }
     }
 }

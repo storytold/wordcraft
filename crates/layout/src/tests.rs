@@ -1788,6 +1788,290 @@ fn empty_list_paragraph_with_a_hidden_mark_counts_but_shows_nothing() {
 }
 
 #[test]
+fn a_paragraph_with_a_hidden_mark_goes_on_into_the_next_one() {
+    // Word (#3986): a paragraph whose mark is hidden is shown on one line with the next one. The
+    // next one's text goes on from where the first one's ends; its number is counted but not
+    // drawn ("1. AlphaOmega", then "3. Beta") and it takes no line of its own. A paragraph that
+    // shows nothing in between passes the joint on. In a table cell as in the body.
+    let doc = |paras: &[(&str, bool)], in_cell: bool| {
+        let text: Vec<&str> = paras.iter().map(|(t, _)| *t).collect();
+        let mut d = Document::from_text(&text.join("\n"));
+        let id = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+        let last = d.body.len() - 1;
+        let end = paras.last().map_or(0, |(t, _)| t.len());
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(last, end), &|p| {
+            p.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 });
+        })
+        .unwrap();
+        for (i, (_, hidden)) in paras.iter().enumerate() {
+            if *hidden {
+                d.para_mut(StoryRef::Body, &Path::top(i)).unwrap().mark.hidden = Some(true);
+            }
+        }
+        if in_cell {
+            let mut table = Table::new(1, 1, 400.0);
+            table.rows[0].cells[0].blocks = std::mem::take(&mut d.body);
+            d.body = vec![std::sync::Arc::new(Block::Table(table))];
+        }
+        d
+    };
+    // Each paragraph's number, the top of its first line, and the x its text starts and ends at.
+    let laid = |d: &Document, show_hidden: bool| {
+        let l = layout(d, &mut LayoutCache::new(), &LayoutOptions { show_hidden, ..Default::default() });
+        let lines: Vec<(Option<String>, f32, f32, f32)> = l
+            .pages
+            .iter()
+            .flat_map(|p| &p.items)
+            .filter_map(|it| match it {
+                Placed::Lines { para, l0, l1, x, y, .. } => {
+                    let last = l1.checked_sub(1)?;
+                    Some((para.label.as_ref().map(|label| label.text.clone()), *y, x + para.x_of(*l0, 0)?, x + para.x_of(last, para.text_len)?))
+                }
+                _ => None,
+            })
+            .collect();
+        lines
+    };
+    for in_cell in [false, true] {
+        let plain = laid(&doc(&[("Alpha", false), ("Beta", false)], in_cell), false);
+        let beta_y = plain[1].1;
+
+        // Text: "Omega" on Alpha's line, after Alpha's text.
+        let joined = laid(&doc(&[("Alpha", true), ("Omega", false), ("Beta", false)], in_cell), false);
+        let labels: Vec<_> = joined.iter().map(|l| l.0.as_deref()).collect();
+        assert_eq!(labels, vec![Some("1."), None, Some("3.")], "in_cell={in_cell}");
+        assert!((joined[1].1 - joined[0].1).abs() < 0.01, "in_cell={in_cell}: Omega at {} not on Alpha's line {}", joined[1].1, joined[0].1);
+        assert!((joined[1].2 - joined[0].3).abs() < 0.5, "in_cell={in_cell}: Omega starts at {}, Alpha ends at {}", joined[1].2, joined[0].3);
+        assert!((joined[2].1 - beta_y).abs() < 0.01, "in_cell={in_cell}: Beta at {} instead of {beta_y}", joined[2].1);
+
+        // An empty paragraph: no line of its own, no number.
+        let empty = laid(&doc(&[("Alpha", true), ("", false), ("Beta", false)], in_cell), false);
+        let labels: Vec<_> = empty.iter().map(|l| l.0.as_deref()).collect();
+        assert_eq!(labels, vec![Some("1."), None, Some("3.")], "in_cell={in_cell}");
+        assert!((empty[2].1 - beta_y).abs() < 0.01, "in_cell={in_cell}: Beta at {} instead of {beta_y}", empty[2].1);
+
+        // Through an empty paragraph with a hidden mark (which shows nothing).
+        let chain = laid(&doc(&[("Alpha", true), ("", true), ("Omega", false), ("Beta", false)], in_cell), false);
+        let labels: Vec<_> = chain.iter().map(|l| l.0.as_deref()).collect();
+        assert_eq!(labels, vec![Some("1."), None, None, Some("4.")], "in_cell={in_cell}");
+        assert!((chain[2].1 - chain[0].1).abs() < 0.01, "in_cell={in_cell}: Omega not on Alpha's line");
+
+        // Hidden text shown: each paragraph on its own line, with its number.
+        let shown = laid(&doc(&[("Alpha", true), ("Omega", false), ("Beta", false)], in_cell), true);
+        let labels: Vec<_> = shown.iter().map(|l| l.0.as_deref()).collect();
+        assert_eq!(labels, vec![Some("1."), Some("2."), Some("3.")], "in_cell={in_cell}");
+        assert!(shown[1].1 > shown[0].1 + 5.0, "in_cell={in_cell}: shown hidden text keeps the paragraphs apart");
+    }
+    // A click on the joined text lands in the paragraph it belongs to.
+    let d = doc(&[("Alpha", true), ("Omega", false), ("Beta", false)], false);
+    let l = lay(&d);
+    let omega = l.caret(&Pos::body(1, 2)).unwrap();
+    let hit = l.hit(omega.page, omega.x + 0.5, omega.top + omega.height / 2.0, StoryRef::Body).unwrap();
+    assert_eq!(hit.path, Path::top(1));
+}
+
+#[test]
+fn text_going_on_from_a_larger_heading_sits_on_its_baseline() {
+    // A heading with a hidden mark followed by body text (a style separator in Word, #3986): the
+    // body text's first line goes on beside the heading, on the heading's baseline; its next lines
+    // start at the margin, below both.
+    let body = "Body text that is long enough to wrap onto a second line in this column. ".repeat(3);
+    let mut d = Document::from_text(&format!("Heading\n{body}"));
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, 7), &|c| c.size = Some(18.0)).unwrap();
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().mark.hidden = Some(true);
+    let l = lay(&d);
+    let lines: Vec<(Path, f32, f32, f32)> = l.pages[0]
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            Placed::Lines { path, para, l0, l1, x, y, .. } => {
+                let first = para.lines.get(*l0)?;
+                let (x, y) = (*x, *y);
+                Some((*l0..*l1).filter_map(move |li| {
+                    let line = para.lines.get(li)?;
+                    Some((path.clone(), y + line.baseline - first.top, x + para.x_of(li, line.start)?, y + line.top - first.top))
+                }))
+            }
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    let heading = lines.iter().find(|l| l.0 == Path::top(0)).unwrap();
+    let body: Vec<_> = lines.iter().filter(|l| l.0 == Path::top(1)).collect();
+    assert!(body.len() >= 2, "{lines:?}");
+    assert!((body[0].1 - heading.1).abs() < 0.01, "body baseline {} vs heading {}", body[0].1, heading.1);
+    assert!(body[0].2 > 100.0, "the body text starts after the heading's, at {}", body[0].2);
+    assert!((body[1].2 - 72.0).abs() < 0.5, "the next line starts at the margin, not at {}", body[1].2);
+    assert!(body[1].3 > heading.1, "the next line is below the shared one");
+}
+
+#[test]
+fn a_text_box_anchored_in_a_paragraph_with_a_hidden_mark_is_not_joined() {
+    // A text box anchored in the first paragraph lays its own story out, whose first line has
+    // the same path as that paragraph (#3986). The next paragraph goes on from the paragraph's
+    // text, not from the box's, which is drawn after it.
+    let mut d = Document::from_text("Alpha\nOmega");
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().mark.hidden = Some(true);
+    let float = wordcraft_doc::para::Float {
+        wrap: wordcraft_doc::para::Wrap::InFrontOfText,
+        h_rel: wordcraft_doc::para::Anchor::Column,
+        v_rel: wordcraft_doc::para::Anchor::Paragraph,
+        x: 200.0,
+        y: 100.0,
+        dist: 0.0,
+        ..Default::default()
+    };
+    text_box(&mut d, 0, "Box", 100.0, 40.0, float);
+    let l = lay(&d);
+    // The top of a story's line at a block, and the x its text starts and ends at.
+    let line = |story: StoryRef, block: usize| {
+        l.pages[0].items.iter().find_map(|it| match it {
+            Placed::Lines { story: s, path, para, l0, l1, x, y, .. } if *s == story && *path == Path::top(block) => {
+                Some((*y, x + para.x_of(*l0, 0)?, x + para.x_of(l1.checked_sub(1)?, para.text_len)?))
+            }
+            _ => None,
+        })
+    };
+    let (alpha, omega) = (line(StoryRef::Body, 0).unwrap(), line(StoryRef::Body, 1).unwrap());
+    assert!((omega.0 - alpha.0).abs() < 0.01, "Omega at {} not on Alpha's line {}", omega.0, alpha.0);
+    assert!((omega.1 - alpha.2).abs() < 0.5, "Omega starts at {}, Alpha ends at {}", omega.1, alpha.2);
+}
+
+#[test]
+fn a_joined_paragraph_moved_to_the_next_page_has_its_own_number() {
+    // A paragraph going on from one with a hidden mark (#3986) that moves whole to the next page
+    // (its lines kept together) no longer shares that line: there its number is drawn and its
+    // text starts at its own indent.
+    let omega = "Omega ".repeat(60);
+    let build = |filler: usize| {
+        let mut text: Vec<String> = (0..filler).map(|i| format!("Filler {i}")).collect();
+        text.push("Alpha".into());
+        text.push(omega.clone());
+        let mut d = Document::from_text(&text.join("\n"));
+        let id = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+        d.format_paragraphs(&Pos::body(filler, 0), &Pos::body(filler + 1, omega.len()), &|p| {
+            p.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 });
+        })
+        .unwrap();
+        d.para_mut(StoryRef::Body, &Path::top(filler)).unwrap().mark.hidden = Some(true);
+        d.para_mut(StoryRef::Body, &Path::top(filler + 1)).unwrap().props.keep_lines = Some(true);
+        d
+    };
+    // The page of a paragraph's first line, with its number there.
+    let first = |l: &DocLayout, block: usize| {
+        l.pages.iter().enumerate().find_map(|(pi, page)| {
+            page.items.iter().find_map(|it| match it {
+                Placed::Lines { path, para, l0: 0, .. } if *path == Path::top(block) => {
+                    Some((pi, para.label.as_ref().map(|label| label.text.clone())))
+                }
+                _ => None,
+            })
+        })
+    };
+    for filler in 20..80 {
+        let d = build(filler);
+        let l = lay(&d);
+        let (Some((0, alpha)), Some((1, omega_label))) = (first(&l, filler), first(&l, filler + 1)) else { continue };
+        assert_eq!(alpha.as_deref(), Some("1."));
+        assert_eq!(omega_label.as_deref(), Some("2."), "the moved paragraph draws its number");
+        let (a, o) = (l.caret(&Pos::body(filler, 0)).unwrap(), l.caret(&Pos::body(filler + 1, 0)).unwrap());
+        assert_eq!(o.page, 1);
+        assert!((o.x - a.x).abs() < 0.5, "the moved paragraph's text starts at its own indent: {} vs {}", o.x, a.x);
+        return;
+    }
+    panic!("no filler put Alpha last on the first page with the joined paragraph moved on");
+}
+
+#[test]
+fn a_joined_first_word_that_does_not_fit_goes_on_the_next_line_at_the_indent() {
+    // Word (#3986): when the next paragraph's first word doesn't fit after the first one's text,
+    // it goes on the next line, still joined (no number drawn), at the indent of the list's text.
+    let build = |n: usize| {
+        let alpha = vec!["aa"; n].join(" ");
+        let omega = "Omegaomegaomega tail";
+        let mut d = Document::from_text(&format!("{alpha}\n{omega}"));
+        let id = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(1, omega.len()), &|p| {
+            p.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 });
+        })
+        .unwrap();
+        d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().mark.hidden = Some(true);
+        (d, alpha.len())
+    };
+    for n in 20..200 {
+        let (d, alpha_len) = build(n);
+        let l = lay(&d);
+        let (end, start) = (l.caret(&Pos::body(0, alpha_len)).unwrap(), l.caret(&Pos::body(1, 0)).unwrap());
+        if (start.top - end.top).abs() < 0.5 {
+            continue; // still on the shared line
+        }
+        let indent = l.caret(&Pos::body(0, 0)).unwrap().x;
+        assert!(start.top > end.top, "the first word goes below the shared line");
+        assert!((start.x - indent).abs() < 0.5, "at the list text's indent {indent}, not {}", start.x);
+        let label = l.pages.iter().flat_map(|p| &p.items).find_map(|it| match it {
+            Placed::Lines { path, para, .. } if *path == Path::top(1) => Some(para.label.as_ref().map(|label| label.text.clone())),
+            _ => None,
+        });
+        assert_eq!(label, Some(None), "still joined: no number drawn");
+        return;
+    }
+    panic!("no length of the first paragraph left its last line too full for the next one's first word");
+}
+
+#[test]
+fn a_shared_line_is_one_line_for_line_numbers_and_vertical_alignment() {
+    // Word (#3986): the line two paragraphs share through a hidden mark is one line. Line
+    // numbering gives it one number ("Line one", the shared line, "After": 1, 2, 3), and justified
+    // vertical alignment keeps the two paragraphs together as one block.
+    let doc = |valign: wordcraft_doc::section::PageVAlign| {
+        let mut d = Document::from_text("Line one\nAlpha\nOmega\nAfter");
+        for b in d.body.iter_mut() {
+            if let Block::Para(p) = std::sync::Arc::make_mut(b) {
+                p.props.space_before = Some(0.0);
+                p.props.space_after = Some(0.0);
+            }
+        }
+        d.para_mut(StoryRef::Body, &Path::top(1)).unwrap().mark.hidden = Some(true);
+        d.last_section.valign = valign;
+        d
+    };
+    let mut d = doc(wordcraft_doc::section::PageVAlign::Top);
+    d.last_section.line_numbers = Some(Default::default());
+    let l = lay(&d);
+    let numbers: Vec<f32> = l.pages[0]
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            Placed::Lines { story, y, .. } if *story == DECOR_STORY => Some(*y),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(numbers.len(), 3, "one number per shown line: {numbers:?}");
+    assert!(numbers.windows(2).all(|w| w[1] > w[0] + 5.0), "no two numbers on one line: {numbers:?}");
+
+    let l = lay(&doc(wordcraft_doc::section::PageVAlign::Justify));
+    let y = |off: (usize, usize)| l.caret(&Pos::body(off.0, off.1)).unwrap().top;
+    assert!((y((2, 0)) - y((1, 0))).abs() < 0.01, "Omega stays on Alpha's line: {} vs {}", y((2, 0)), y((1, 0)));
+    let (g1, g2) = (y((1, 0)) - y((0, 0)), y((3, 0)) - y((1, 0)));
+    assert!(g1 > 100.0 && (g1 - g2).abs() < 0.05, "equal gaps around the shared line: {g1} {g2}");
+}
+
+#[test]
+fn a_joined_line_with_a_hanging_indent_still_starts_after_the_text_before() {
+    // The joined paragraph's first-line indent reaches left of the margin: its text still starts
+    // after the text of the paragraph before, never left of it (#3986).
+    let mut d = Document::from_text("Alpha\na b c");
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().mark.hidden = Some(true);
+    let q = d.para_mut(StoryRef::Body, &Path::top(1)).unwrap();
+    q.props.indent_left = Some(0.0);
+    q.props.indent_first = Some(-36.0);
+    let l = lay(&d);
+    let (end, start) = (l.caret(&Pos::body(0, 5)).unwrap(), l.caret(&Pos::body(1, 0)).unwrap());
+    assert!((start.top - end.top).abs() < 0.01, "on the shared line");
+    assert!(start.x >= end.x - 0.01, "after Alpha: starts at {}, Alpha ends at {}", start.x, end.x);
+}
+
+#[test]
 fn a_numbered_heading_opening_with_a_page_break_takes_its_number_along() {
     // "Before", then a numbered paragraph whose text opens with a page break: Word draws its
     // number on the next page with the text, not alone at the bottom of the first.

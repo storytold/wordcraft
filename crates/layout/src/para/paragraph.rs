@@ -458,13 +458,14 @@ fn mark_break_opportunities(clusters: &mut [Cluster], bt: &BreakText, rp: &Resol
     }
 }
 
-/// The list label, shaped; none on a paragraph containing only a page break: Word hides it there.
-/// The list counter has already advanced, so the following item keeps its number.
+/// The list label, shaped; none on a paragraph containing only a page break, nor on one that goes
+/// on from the line of the paragraph before (#3986): Word hides it there. The list counter has
+/// already advanced, so the following item keeps its number.
 fn list_label(cx: &Cx, b: &mut Builder, mark_style: u32) -> Option<Label> {
     let (p, rp) = (cx.p, cx.rp);
     let break_only =
         b.clusters.iter().any(|c| c.kind == ClKind::PageBreak) && b.clusters.iter().all(|c| matches!(c.kind, ClKind::PageBreak | ClKind::Marker));
-    let (text, lvl) = cx.env.label.as_ref().filter(|_| !break_only)?;
+    let (text, lvl) = cx.env.label.as_ref().filter(|_| !break_only && !cx.env.joined)?;
     let rc = cx.res.char(&p.mark.clone().overlaid(&lvl.chr));
     // A bullet no installed font can draw would come from whatever icon font has its
     // private-use code (Font Awesome's Twitter logo at U+F081, #1683): it shows the level's
@@ -603,6 +604,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         left_out: Vec::new(),
         enclosures,
         auto_space,
+        joined: env.joined,
     };
     let auto = env.doc.settings.auto_hyphenation && !pl.rp.suppress_hyphens;
     pl.hyph_after = hyphenation_points(&bt.text, |i| bt.to_para(i), &pl, auto, env.doc.settings.hyphenate_caps, &runs);

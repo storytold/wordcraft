@@ -268,6 +268,14 @@ pub fn page_lines(page: &Page, story: StoryRef) -> Vec<LineHit<'_>> {
             }
         }
     }
+    // A paragraph going on from the last line of one whose mark is hidden shares that line
+    // (#3986): the first one's part of it ends where the second one's text starts.
+    let joins: Vec<(f32, f32, f32)> = v.iter().filter(|l| l.para.joined && l.li == 0).map(|l| (l.top, l.bottom, l.left)).collect();
+    for (top, bottom, left) in joins {
+        for l in v.iter_mut().filter(|l| l.top < bottom && top < l.bottom && l.left < left && left < l.right) {
+            l.right = left;
+        }
+    }
     v
 }
 
