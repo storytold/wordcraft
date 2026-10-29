@@ -211,7 +211,7 @@ impl Drag {
 
     /// Follow the pointer. A move keeps the grabbed point under it, across pages too; a resize
     /// moves the grabbed edges, keeping `min` size and, with `keep_aspect`, the proportions.
-    pub fn update(&mut self, pointer: Pos2, pages: &[egui::Rect], scale: f32, min: f32, keep_aspect: bool) {
+    pub fn update(&mut self, pointer: Pos2, pages: &[egui::Rect], bands: &[(f32, f32)], scale: f32, min: f32, keep_aspect: bool) {
         if !self.moved && pointer.distance(self.press) < DRAG_START {
             return;
         }
@@ -220,7 +220,7 @@ impl Drag {
         match self.grab {
             Grab::Move => {
                 let Some(origin) = pages.get(self.page) else { return };
-                let Some((page, r)) = crate::canvas::nearest_page(pages, pointer).and_then(|i| Some((i, pages.get(i)?))) else { return };
+                let Some((page, r)) = crate::canvas::nearest_page(pages, bands, pointer).and_then(|i| Some((i, pages.get(i)?))) else { return };
                 let (x, y) = ((pointer.x - r.min.x) / scale, (pointer.y - r.min.y) / scale);
                 // The grabbed point within the frame, points.
                 let gx = (self.press.x - origin.min.x) / scale - self.start.x;
@@ -338,13 +338,13 @@ mod tests {
         let pages =
             [egui::Rect::from_min_size(pos2(10.0, 10.0), vec2(612.0, 792.0)), egui::Rect::from_min_size(pos2(10.0, 812.0), vec2(612.0, 792.0))];
         let mut d = Drag::new(Grab::Move, 0, R, 0.0, pos2(10.0 + 150.0, 10.0 + 60.0));
-        d.update(pos2(161.0, 71.0), &pages, 1.0, 4.0, false);
+        d.update(pos2(161.0, 71.0), &pages, &[], 1.0, 4.0, false);
         assert!(!d.moved, "under the drag threshold");
-        d.update(pos2(210.0, 110.0), &pages, 1.0, 4.0, false);
+        d.update(pos2(210.0, 110.0), &pages, &[], 1.0, 4.0, false);
         assert!(d.moved);
         assert_eq!((d.to_page, d.rect), (0, Rect::new(150.0, 90.0, 200.0, 100.0)));
         // Onto the next page.
-        d.update(pos2(160.0, 812.0 + 60.0), &pages, 1.0, 4.0, false);
+        d.update(pos2(160.0, 812.0 + 60.0), &pages, &[], 1.0, 4.0, false);
         assert_eq!((d.to_page, d.rect), (1, R));
     }
 

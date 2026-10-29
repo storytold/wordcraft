@@ -181,7 +181,7 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
                 return false;
             }
             let shift = ui.input(|i| i.modifiers.shift);
-            d.drag.update(at, pages, scale, d.min, d.picture != shift);
+            d.drag.update(at, pages, &app.canvas.page_bands, scale, d.min, d.picture != shift);
             if !d.drag.moved {
                 app.canvas.obj_drag = Some(d);
                 return false;
@@ -195,7 +195,9 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
         }
         if let Some((which, _)) = d.end {
             if ui.input(|i| i.pointer.primary_down()) {
-                if let Some((_, x, y)) = crate::canvas::page_at(pages, layout, scale, at).filter(|(p, ..)| *p == d.object.page) {
+                if let Some((_, x, y)) =
+                    crate::canvas::page_at(pages, &app.canvas.page_bands, layout, scale, at).filter(|(p, ..)| *p == d.object.page)
+                {
                     d.end = Some((which, (x, y)));
                     d.drag.moved = true;
                 }
@@ -215,7 +217,7 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
                 d.drag.turn_to(at, pages, scale, shift);
             } else {
                 // Pictures keep their proportions from a corner unless Shift; shapes only with Shift.
-                d.drag.update(at, pages, scale, d.min, d.picture != shift);
+                d.drag.update(at, pages, &app.canvas.page_bands, scale, d.min, d.picture != shift);
                 // Alignment guides: a move snaps to the page, the margins and the other objects
                 // (Alt: freely).
                 d.guides.clear();
@@ -339,7 +341,7 @@ pub(crate) fn dragged_off_page(drag: Option<&ObjectDrag>) -> Option<(usize, Pos)
 /// Where an In Line with Text object dragged to `at` (screen) lands: the nearest position of its
 /// own story's text there, with the insertion cursor's colour (the same contrast as the caret's).
 fn drop_point(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at: Pos2, d: &ObjectDrag) -> Option<(Pos, Color32)> {
-    let (page, x, y) = crate::canvas::page_at(pages, layout, scale, at)?;
+    let (page, x, y) = crate::canvas::page_at(pages, &app.canvas.page_bands, layout, scale, at)?;
     let pos = layout.hit(page, x, y, d.object.story)?;
     if let Some((was, color)) = &d.drop_at
         && *was == pos
@@ -407,7 +409,7 @@ fn link_click(app: &mut WordApp, layout: &DocLayout, pages: &[Rect], scale: f32,
     if !pressed {
         return;
     }
-    let target = crate::canvas::page_at(pages, layout, scale, at).and_then(|(page, x, y)| {
+    let target = crate::canvas::page_at(pages, &app.canvas.page_bands, layout, scale, at).and_then(|(page, x, y)| {
         layout.find_object(page, |o| o.page == page && o.text_box.is_some() && o.rect.contains(wordcraft_geom::Point::new(x, y)))
     });
     let Some(target) = target else {
@@ -449,7 +451,7 @@ fn grab_at(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at: Po
         frame::handle_at(f, o.spin.deg, at).map(|h| (o, Grab::Resize(h)))
     });
     handle.or_else(|| {
-        let (page, x, y) = crate::canvas::page_at(pages, layout, scale, at)?;
+        let (page, x, y) = crate::canvas::page_at(pages, &app.canvas.page_bands, layout, scale, at)?;
         // A Behind Text picture is normally hit only where no body text is present, so text above
         // it remains easy to edit. Once the picture is selected (for example with the arrow keys
         // or the Selection Pane), let its own frame win inside the frame so the user can drag it
@@ -492,7 +494,7 @@ fn behind_draggable(app: &WordApp, o: &ObjectHit) -> bool {
 /// edits the text it sits behind (see `pending_behind`).
 fn behind_drag_at(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at: Pos2) -> Option<(ObjectHit, Grab)> {
     let story = active_story(app, layout);
-    let (page, x, y) = crate::canvas::page_at(pages, layout, scale, at)?;
+    let (page, x, y) = crate::canvas::page_at(pages, &app.canvas.page_bands, layout, scale, at)?;
     let edge = EDGE / scale.max(0.01);
     layout
         .find_object(page, |o| {

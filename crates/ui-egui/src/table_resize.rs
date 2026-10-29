@@ -101,7 +101,7 @@ pub(crate) fn available(app: &WordApp) -> bool {
 
 /// The border or handle under screen point `p`, if any.
 fn target_at(app: &WordApp, layout: &DocLayout, rects: &[Rect], scale: f32, p: Pos2) -> Option<(usize, f32, f32, ResizeTarget)> {
-    let (page, x, y) = crate::canvas::page_at(rects, layout, scale, p)?;
+    let (page, x, y) = crate::canvas::page_at(rects, &app.canvas.page_bands, layout, scale, p)?;
     let sc = page_scale(rects, layout, scale, page)?;
     let t = table_resize::resize_target(layout, &app.session.doc, page, x, y, REACH_PX / sc)?;
     Some((page, x, y, t))
@@ -275,7 +275,7 @@ pub fn paint(app: &WordApp, painter: &egui::Painter, t: &Tokens, layout: &DocLay
     }
     // The handle shows while the pointer is over the table (or on the handle itself).
     let Some(p) = painter.ctx().input(|i| i.pointer.hover_pos()) else { return };
-    let Some((page, x, y)) = crate::canvas::page_at(rects, layout, scale, p) else { return };
+    let Some((page, x, y)) = crate::canvas::page_at(rects, &app.canvas.page_bands, layout, scale, p) else { return };
     let Some(sc) = page_scale(rects, layout, scale, page) else { return };
     let Some(tg) = table_resize::table_under(layout, &app.session.doc, page, x, y, REACH_PX / sc) else { return };
     let h = tg.handle();

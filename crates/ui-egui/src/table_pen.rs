@@ -85,7 +85,7 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect]
     let latest = ui.input(|i| i.pointer.latest_pos());
     if ui.input(|i| i.pointer.primary_pressed()) && resp.contains_pointer() {
         if let Some(p) = latest
-            && let Some((page, x, y)) = crate::canvas::page_at(rects, layout, scale, p)
+            && let Some((page, x, y)) = crate::canvas::page_at(rects, &app.canvas.page_bands, layout, scale, p)
         {
             app.canvas.table_stroke = Some(PenStroke { page, from: (x, y), to: (x, y) });
         }
@@ -167,7 +167,7 @@ pub fn paint(app: &WordApp, painter: &egui::Painter, t: &Tokens, layout: &DocLay
         },
         (TableTool::Erase, _) => {
             if let Some(p) = hover
-                && let Some((page, x, y)) = crate::canvas::page_at(pages, layout, scale, p)
+                && let Some((page, x, y)) = crate::canvas::page_at(pages, &app.canvas.page_bands, layout, scale, p)
                 && let Some(e) = table_draw::erase_target(layout, page, x, y)
                 && let (Some(a), Some(b)) = (to_screen(page, e.from.0, e.from.1), to_screen(page, e.to.0, e.to.1))
             {

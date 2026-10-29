@@ -137,6 +137,8 @@ pub struct CanvasState {
     pub open_url: Option<String>,
     /// Screen rects of pages last frame (for the control channel: page ↔ screen coordinates).
     pub page_rects: Vec<Rect>,
+    /// Visible vertical bands of the same frame, as offsets from each full page rect.
+    pub page_bands: Vec<(f32, f32)>,
     /// While the vertical scrollbar is dragged: the page at the top of the window (0-based),
     /// which a tip beside the pointer names (#2551).
     pub scrollbar_page: Option<usize>,
@@ -363,6 +365,7 @@ impl Default for CanvasState {
             last_shading: "FFF2CC".into(),
             open_url: None,
             page_rects: Vec::new(),
+            page_bands: Vec::new(),
             scrollbar_page: None,
             viewed_page: None,
             scale: PX_PER_PT,
@@ -521,7 +524,7 @@ fn prepare_view(app: &mut WordApp, ui: &Ui, full: Rect, layout: &DocLayout) -> C
     let mut zoom_anchor = None;
     if (zoom_delta - 1.0).abs() > 1e-3 && ui.rect_contains_pointer(area) {
         if !read_mode && let Some(p) = ui.input(|i| i.pointer.latest_pos()) {
-            zoom_anchor = page_at(&app.canvas.page_rects, layout, app.canvas.scale, p).map(|at| (p, at));
+            zoom_anchor = page_at(&app.canvas.page_rects, &app.canvas.page_bands, layout, app.canvas.scale, p).map(|at| (p, at));
         }
         let pct =
             (app.canvas.scale / PX_PER_PT * zoom_delta * 100.0).clamp(if read_mode { 75.0 } else { 10.0 }, if read_mode { 150.0 } else { 500.0 });
@@ -1107,7 +1110,7 @@ fn handle_secondary_selection(app: &mut WordApp, resp: &egui::Response, rects: &
     if secondary_clicked
         && let Some(range) = app.session.cell_range()
         && let Some(p) = resp.interact_pointer_pos()
-        && let Some((page, x, y)) = page_at(rects, layout, geo.scale, p)
+        && let Some((page, x, y)) = page_at(rects, &geo.bands, layout, geo.scale, p)
     {
         let at = wordcraft_geom::Point::new(x, y);
         let on_cells =
@@ -1120,7 +1123,7 @@ fn handle_secondary_selection(app: &mut WordApp, resp: &egui::Response, rects: &
     // Right-click in an equation puts the caret there and opens the equation menu.
     if secondary_clicked
         && let Some(p) = resp.interact_pointer_pos()
-        && let Some((page, x, y)) = page_at(rects, layout, geo.scale, p)
+        && let Some((page, x, y)) = page_at(rects, &geo.bands, layout, geo.scale, p)
     {
         match layout.equation_hit(page, x, y, app.session.sel.focus.story) {
             Some((at, inner)) => {
@@ -1137,7 +1140,7 @@ fn handle_secondary_selection(app: &mut WordApp, resp: &egui::Response, rects: &
     if secondary_clicked
         && app.session.math.is_none()
         && let Some(p) = resp.interact_pointer_pos()
-        && let Some((page, x, y)) = page_at(rects, layout, geo.scale, p)
+        && let Some((page, x, y)) = page_at(rects, &geo.bands, layout, geo.scale, p)
     {
         if crate::objects::select_at(app, layout, rects, geo.scale, p) {
             app.canvas.context_issue = None;
@@ -1238,7 +1241,9 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
         // plain arrow stands in (#856).
         let in_bar = app.session.sel.focus.story == StoryRef::Body
             && (app.canvas.unit_drag.as_ref().is_some_and(|d| d.unit == "line")
-                || latest.and_then(|p| page_at(&rects, layout, geo.scale, p)).is_some_and(|(pg, x, y)| layout.selection_bar_at(pg, x, y).is_some()));
+                || latest
+                    .and_then(|p| page_at(&rects, &geo.bands, layout, geo.scale, p))
+                    .is_some_and(|(pg, x, y)| layout.selection_bar_at(pg, x, y).is_some()));
         // An armed Format Painter shows over the text, as Word's brush does; egui has no brush,
         // so the copy pointer stands in (#3453). The selection bar keeps its arrow.
         let fallback = if in_bar {
@@ -1365,6 +1370,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         app.canvas.textures.retain(|k, _| *k < n && geo.rects.get(*k).is_some_and(|r| r.translate(content_origin.to_vec2()).intersects(near)));
         app.canvas.tiles.retain(|id, _| visible_tile_keys.contains(id));
         app.canvas.page_rects = rects.clone();
+        app.canvas.page_bands.clone_from(&geo.bands);
         let view_rect = ui.clip_rect();
         if floating_comments(app) {
             // Its own layer, so presses on the card never reach the canvas under it.

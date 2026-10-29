@@ -888,9 +888,9 @@ fn selection_bar_clicks_select_lines() {
         page_to_screen(h.state_mut(), c.page, 30.0, c.top + c.height * (li + 0.5)).expect("on screen")
     };
     let line_start = |h: &mut egui_kittest::Harness<'_, WordApp>, at: Pos2| {
-        let (rects, scale) = (h.state().canvas.page_rects.clone(), h.state().canvas.scale);
+        let (rects, bands, scale) = (h.state().canvas.page_rects.clone(), h.state().canvas.page_bands.clone(), h.state().canvas.scale);
         let layout = h.state_mut().session.layout();
-        let (pg, x, y) = page_at(&rects, &layout, scale, at).expect("page");
+        let (pg, x, y) = page_at(&rects, &bands, &layout, scale, at).expect("page");
         layout.selection_bar_at(pg, x, y).expect("in the selection bar")
     };
     let span = |h: &mut egui_kittest::Harness<'_, WordApp>, pos: &Pos| h.state_mut().session.layout().line_span(pos, 0).expect("line");
@@ -3062,7 +3062,7 @@ fn pages_flow_into_rows_when_they_fit() {
     assert!(size.x >= 1000.0 && size.y >= rects[3].bottom());
     // Each page's centre maps back to that page.
     for (i, r) in rects.iter().enumerate() {
-        assert_eq!(nearest_page(&rects, r.center()), Some(i));
+        assert_eq!(nearest_page(&rects, &[], r.center()), Some(i));
     }
     // Hostile page sizes and scales stay finite.
     let bad = [(f32::NAN, f32::INFINITY), (-1.0, 0.0), (1e30, 1e30)];
@@ -3794,11 +3794,11 @@ fn hiding_white_space_stacks_page_bands_and_keeps_hit_testing() {
     assert!(h < rects[2].bottom() - 2.0 * 66.0 * 2.0);
     // A point inside page 2's band maps to that page and the right page coordinates.
     let p = pos2(moved[1].center().x, moved[1].min.y + 300.0);
-    assert_eq!(page_at_index(&moved, p), Some(1));
+    assert_eq!(page_at_index(&moved, &bands, p), Some(1));
     // Just above the seam is page 1's text area, just below is page 2's, though the rects overlap.
     let seam = moved[0].min.y + bands[0].1;
-    assert_eq!(nearest_page(&moved, pos2(moved[0].center().x, seam - 2.0)), Some(0));
-    assert_eq!(nearest_page(&moved, pos2(moved[0].center().x, seam + SEAM + 2.0)), Some(1));
+    assert_eq!(nearest_page(&moved, &bands, pos2(moved[0].center().x, seam - 2.0)), Some(0));
+    assert_eq!(nearest_page(&moved, &bands, pos2(moved[0].center().x, seam + SEAM + 2.0)), Some(1));
     assert!(on_page_gap(&moved, &bands, pos2(moved[0].center().x, seam + 0.5)));
     assert!(!on_page_gap(&moved, &bands, pos2(moved[0].center().x, seam - 40.0)));
     // The drawn I-beam takes the canvas colour in the gap and on a cut margin (#1746).
@@ -3808,6 +3808,69 @@ fn hiding_white_space_stacks_page_bands_and_keeps_hit_testing() {
     // Hostile numbers never panic.
     let _ = collapse_white_space(&rects, &[(f32::NAN, f32::INFINITY), (-1e9, 1e9)], f32::NAN, f32::NAN);
     let _ = collapse_white_space(&[], &[], 1.0, 1.0);
+}
+
+/// #4802: the first body line after a hidden margin belongs to that page, even
+/// when unequal margins put the preceding page's centre nearer the pointer.
+#[test]
+fn hidden_white_space_keeps_the_first_body_line_clickable() {
+    use egui::{Event, PointerButton};
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("layout.margins", json!({"top": 36, "bottom": 144})).unwrap();
+    for text in ["First page", "Second page", "Third page"] {
+        if text != "First page" {
+            a.run("layout.break", json!({"kind": "page"})).unwrap();
+        }
+        a.run("text.insert", json!({"text": text})).unwrap();
+    }
+    a.run("view.commentsPane", json!({"value": false})).unwrap();
+    a.run("view.hideWhiteSpace", json!({"value": true})).unwrap();
+    a.run("caret.docStart", json!({})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 2200.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    let layout = h.state_mut().session.layout().clone();
+    assert_eq!(layout.pages.len(), 3);
+    let page = &layout.pages[1];
+    let at = page_to_screen(h.state_mut(), 1, page.body.x + 8.0, page.body.y + 6.0).unwrap();
+    let original = h.state().session.doc.clone();
+    h.event(Event::PointerMoved(at));
+    for _ in 0..2 {
+        h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Default::default() });
+        h.step();
+        h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Default::default() });
+        h.step();
+        assert_eq!(h.state().session.sel.focus.story, StoryRef::Body, "clicking visible body text must not enter a header/footer");
+        assert_eq!(h.state().session.page_hint, 1, "the clicked page, not the preceding hidden margin");
+    }
+    assert!(!h.state().session.sel.is_collapsed(), "double-click selects the visible word");
+    assert_eq!(h.state().session.doc, original, "selection must not create a header/footer or edit content");
+}
+
+#[test]
+fn hidden_white_space_hit_testing_uses_visible_bands_with_unequal_pages() {
+    for scale in [0.5, 1.0, 2.0] {
+        for bodies in [[(36.0, 648.0), (120.0, 806.0), (48.0, 356.0)], [(144.0, 756.0), (36.0, 698.0), (120.0, 464.0)]] {
+            let sizes = [(612.0, 792.0), (595.0, 842.0), (612.0, 500.0)];
+            let (rects, _) = place_pages(&sizes, 0.0, scale, 1, vec2(1400.0, 2200.0));
+            let (moved, bands, _) = collapse_white_space(&rects, &bodies, scale, 2200.0);
+            for (page, (r, &(top, bottom))) in moved.iter().zip(&bodies).enumerate() {
+                for y in [top + 6.0, bottom - 6.0] {
+                    let at = pos2(r.center().x, r.top() + y * scale);
+                    assert_eq!(nearest_page(&moved, &bands, at), Some(page), "visible text at {y} on page {page}, scale {scale}");
+                }
+            }
+        }
+    }
+    assert_eq!(nearest_page(&[], &[], pos2(0.0, 0.0)), None);
 }
 
 /// #1169: Space and Enter count as `Response::clicked` on the focused canvas, and
@@ -4781,8 +4844,8 @@ fn crop_is_disabled_when_cursor_is_adjacent_without_selection() {
     assert!(crate::crop::active(&app).is_none());
 }
 
-fn page_at_index(rects: &[Rect], p: Pos2) -> Option<usize> {
-    nearest_page(rects, p)
+fn page_at_index(rects: &[Rect], bands: &[(f32, f32)], p: Pos2) -> Option<usize> {
+    nearest_page(rects, bands, p)
 }
 
 /// A page drawn without a dragged object must not pass for the page with it: the drag's start

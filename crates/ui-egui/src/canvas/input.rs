@@ -100,7 +100,7 @@ pub(super) fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[
     } else {
         pointer
     };
-    let Some((page, x, y)) = page_at(rects, layout, scale, p) else { return };
+    let Some((page, x, y)) = page_at(rects, &app.canvas.page_bands, layout, scale, p) else { return };
     let story = app.session.sel.focus.story;
     handle_page_pointer(app, PagePointer { ui, resp, layout, p, page, x, y, story });
 }

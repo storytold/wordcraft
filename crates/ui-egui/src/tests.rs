@@ -992,7 +992,7 @@ fn ctrl_wheel_zoom_keeps_the_place_under_the_pointer() {
         frame(&mut a, Vec::new());
     }
     assert!(a.canvas.scroll_offset.y > 500.0, "scrolled down: {:?}", a.canvas.scroll_offset);
-    let page = canvas::nearest_page(&a.canvas.page_rects, pointer).unwrap();
+    let page = canvas::nearest_page(&a.canvas.page_rects, &a.canvas.page_bands, pointer).unwrap();
     assert!(page >= 3, "a few pages down: page {page}");
     let under = |a: &WordApp| (pointer - a.canvas.page_rects[page].min) / a.canvas.scale;
     let at = under(&a);
@@ -1604,7 +1604,7 @@ fn ctrl_wheel_zoom_does_not_scroll_the_document() {
             frame(&mut a, Vec::new());
         }
         let layout = a.session.layout();
-        let under = |a: &WordApp| canvas::page_at(&a.canvas.page_rects, &layout, a.canvas.scale, pointer);
+        let under = |a: &WordApp| canvas::page_at(&a.canvas.page_rects, &a.canvas.page_bands, &layout, a.canvas.scale, pointer);
         let (page, x, y) = under(&a).unwrap();
         let scale = a.canvas.scale;
         frame(&mut a, vec![wheel(50.0, modifiers)]);
