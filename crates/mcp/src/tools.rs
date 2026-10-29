@@ -99,7 +99,7 @@ pub fn tool_definitions() -> Value {
         tool(
             "open_document",
             "Open",
-            "Open a .docx, .doc, .odt, .rtf, .md, .tex, .html, .txt or .json file, or any other text file (.m3u, .log, .ini…) as plain text. Give `password` for a protected file; without it the call fails asking for one. The file opens beside the documents already open (it replaces a blank one nobody has used) and becomes the active one; a file that is already open becomes active again (`alreadyOpen`). The reply's `id` addresses it (`doc`).",
+            "Open a .docx, .doc, .odt, .hwp, .hwpx, .rtf, .md, .tex, .html, .txt or .json file, or any other text file (.m3u, .log, .ini…) as plain text. Give `password` for a protected file; without it the call fails asking for one. The file opens beside the documents already open (it replaces a blank one nobody has used) and becomes the active one; a file that is already open becomes active again (`alreadyOpen`). The reply's `id` addresses it (`doc`).",
             obj(json!({"path": s("File path"), "password": s("Password, if the file is protected")}), &["path"]),
             false
         ),

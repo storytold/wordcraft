@@ -3,7 +3,7 @@ name = "wordcraft-formats"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "WordCraft import/export: plain text, Markdown, HTML, RTF, OpenDocument Text and LaTeX"
+description = "WordCraft import/export: plain text, Markdown, HTML, RTF, OpenDocument Text and LaTeX; Hangul (HWP, HWPX) import"
 
 [lints]
 workspace = true
@@ -15,6 +15,7 @@ image = { workspace = true }
 quick-xml = { workspace = true }
 zip = { workspace = true }
 cfb = { workspace = true }
+miniz_oxide = { workspace = true }
 encoding_rs = { workspace = true }
 chardetng = { workspace = true }
 log = { workspace = true }
