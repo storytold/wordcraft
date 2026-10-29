@@ -94,8 +94,12 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
             Some(wm) if !footer => watermark::run(wm, done, &doc.last_section),
             _ => None,
         };
-        wr.blocks(&mut w, &blocks, &mut prels, false, 0);
-        // Always taken: the story ends with a top-level paragraph.
+        if footer {
+            wr.footer_blocks(&mut w, &blocks, &mut prels);
+        } else {
+            wr.blocks(&mut w, &blocks, &mut prels, false, 0);
+        }
+        // A header's watermark was taken by its own or its trailing top-level paragraph.
         wr.pending_watermark = None;
         w.close(tag);
         push_part(

@@ -17,6 +17,17 @@ impl Writer<'_> {
 
     /// Write a block list. `top` = body level (sections allowed).
     pub fn blocks(&mut self, w: &mut W, bl: &Blocks, rels: &mut PartRels, top: bool, depth: usize) {
+        self.blocks_inner(w, bl, rels, top, depth, true);
+    }
+
+    /// CT_HdrFtr permits a footer to end in a table. A synthetic trailing paragraph would
+    /// increase the footer's intrinsic height and move that table up after reopening.
+    pub fn footer_blocks(&mut self, w: &mut W, bl: &Blocks, rels: &mut PartRels) {
+        self.blocks_inner(w, bl, rels, false, 0, false);
+    }
+
+    /// Serialize blocks and balance their ranges, optionally adding a paragraph after a final table.
+    fn blocks_inner(&mut self, w: &mut W, bl: &Blocks, rels: &mut PartRels, top: bool, depth: usize, trailing_after_table: bool) {
         if depth > MAX_DEPTH {
             w.raw("<w:p/>");
             return;
@@ -45,7 +56,7 @@ impl Writer<'_> {
         if depth == 0 {
             self.move_ranges(w, &[]);
         }
-        if bl.last().is_none_or(|b| matches!(**b, Block::Table(_))) {
+        if bl.is_empty() || (trailing_after_table && bl.last().is_some_and(|b| matches!(**b, Block::Table(_)))) {
             self.write_trailing_para(w, depth);
         }
     }
