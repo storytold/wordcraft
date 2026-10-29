@@ -605,6 +605,15 @@ impl WordApp {
                 }
                 json!({"theme": self.ui.theme.code(), "dark": self.ui_is_dark()})
             }
+            "ui.headerColour" => {
+                if let Some(value) = p.get("value") {
+                    let Some(colour) = value.as_str().and_then(theme::HeaderColour::from_code) else {
+                        return Some(Err("use #RRGGBB or default for the header colour".into()));
+                    };
+                    self.ui.header_colour = colour;
+                }
+                json!({"value": self.ui.header_colour.code()})
+            }
             "ui.interfaceSize" => {
                 // `auto` (the display scale the system reports) or an absolute size in percent,
                 // 50–300 (clamped); no value reads it. `percent` in the result is the size the
@@ -1008,6 +1017,7 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.keytips"
             | "ui.dark"
             | "ui.theme"
+            | "ui.headerColour"
             | "ui.interfaceSize"
             | "ui.animations"
             | "ui.language"
