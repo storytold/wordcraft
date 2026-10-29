@@ -160,28 +160,31 @@ pub(super) fn hf_nav(s: &mut Session, dir: i32) -> CmdResult {
     sel_result(s)
 }
 
+/// Until separate selections are supported, select only the first match. Return every range
+/// so a caller can act on the matches without selecting the differently formatted text between.
 pub(super) fn select_similar(s: &mut Session, _: &Value) -> CmdResult {
     let f = s.sel.ordered().0;
     let target = s.doc.para_at(&f).map(|p| p.props_of_char(f.off).clone()).unwrap_or_default();
-    let mut first: Option<Pos> = None;
-    let mut last: Option<Pos> = None;
-    let mut count = 0;
+    let mut ranges = Vec::new();
     for path in s.doc.para_paths(f.story) {
         let Some(p) = s.doc.para(f.story, &path) else { continue };
         for (r, c) in p.run_ranges() {
             if *c == target {
-                count += 1;
-                if first.is_none() {
-                    first = Some(Pos { story: f.story, path: path.clone(), off: r.start });
-                }
-                last = Some(Pos { story: f.story, path: path.clone(), off: r.end });
+                ranges.push(Selection {
+                    anchor: Pos { story: f.story, path: path.clone(), off: r.start },
+                    focus: Pos { story: f.story, path: path.clone(), off: r.end },
+                });
             }
         }
     }
-    if let (Some(a), Some(b)) = (first, last) {
-        s.sel = Selection { anchor: a, focus: b };
+    if let Some(first) = ranges.first() {
+        s.sel = first.clone();
+        // The same corners can belong to an old column or table-cell selection.
+        s.column = None;
+        s.column_mode = false;
+        s.pending = None;
     }
-    Ok(json!({"runs": count}))
+    Ok(json!({"runs": ranges.len(), "ranges": ranges}))
 }
 
 /// Tools › Customize Keyboard: read and change the custom keyboard shortcuts ([`crate::KeyMap`]).

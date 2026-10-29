@@ -346,7 +346,9 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .pure(),
         CommandSpec::new("review.editor", "Editor", "Home › Editor", |s, v| s.run("review.spelling", v)).pure(),
-        CommandSpec::new("select.similar", "Select Text with Similar Formatting", "Home › Editing › Select", select_similar).pure(),
+        CommandSpec::new("select.similar", "Select Text with Similar Formatting", "Home › Editing › Select", select_similar)
+            .params(r#"{} → {"runs": n, "ranges": [{"anchor": Pos, "focus": Pos}, …]}; selects only the first matching run in the current story; ranges refer to the original document; use select.range on each range, applying destructive edits in reverse document order"#)
+            .pure(),
         CommandSpec::new("select.extend", "Extend Selection", "Editing › Selection", |s, _| {
             // F8 grows the selection: word → sentence → paragraph → document.
             let (a, b) = s.sel.ordered();
