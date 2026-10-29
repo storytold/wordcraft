@@ -275,6 +275,20 @@ fn nested_empty_delimiters_grow_with_nesting() {
 }
 
 #[test]
+fn nested_delimiters_grow_their_separator() {
+    use wordcraft_doc::math::*;
+    let pair = || MNode::Delim { beg: Some('('), end: Some(')'), sep: None, grow: true, shp_match: false, elems: vec![Vec::new()] };
+    let group =
+        |inner: Vec<MNode>| MNode::Delim { beg: None, end: None, sep: Some('|'), grow: true, shp_match: false, elems: vec![inner, Vec::new()] };
+    for display in [false, true] {
+        let plain = lay_in(&Math { nodes: vec![group(Vec::new())], ..Default::default() }, "", display, 400.0, &MathProps::default());
+        let nested = lay_in(&Math { nodes: vec![group(vec![pair()])], ..Default::default() }, "", display, 400.0, &MathProps::default());
+        let h = |m: &MathLayout| m.ascent + m.descent;
+        assert!(h(&nested) > h(&plain) * 1.05, "display={display}: {} vs {}", h(&nested), h(&plain));
+    }
+}
+
+#[test]
 fn every_structure_lays_out() {
     use wordcraft_doc::math::*;
     let x = || vec![MNode::Run(MRun::new("x"))];
