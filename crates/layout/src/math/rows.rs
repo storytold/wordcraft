@@ -349,4 +349,11 @@ impl Ctx {
         out.w = out.w.max(right);
         out
     }
+
+    /// Inline equation: same wrapping as display equations but inline within `avail`.
+    /// Delegates to [`Ctx::wrapped`]; kept separate so the inline branch in `para.rs` can
+    /// call it explicitly instead of `cx.arg` which ignores available width (#3461).
+    pub(super) fn inline_wrapped(&mut self, a: &[MNode], st: St, avail: f32, mp: &MathProps) -> Bx {
+        self.wrapped(a, st, avail, mp)
+    }
 }

@@ -223,6 +223,17 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     let frames = !matches!(story, StoryRef::Part(id) if ctx.doc.parts.get(&id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::TextBox));
     // The bottom of the last paragraph's lines.
     let mut prev_end = 0.0f32;
+    // Stacked paragraphs sharing the same text frame: track the last bottom so subsequent
+    // paragraphs in the same frame stack below instead of overlapping (#2357).
+    #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+    struct FrameKey {
+        x: f32,
+        y: f32,
+        h_anchor: String,
+        v_anchor: String,
+        wrap: String,
+    }
+    let mut frame_run: Option<(FrameKey, f32)> = None;
     for (i, b) in blocks.iter().enumerate() {
         last_top = y;
         let mut path = prefix.to_vec();
@@ -236,6 +247,11 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                 // floating object, and the text after it wraps around it; it takes no room in
                 // the flow.
                 if let Some(fr) = pl.rp.frame.clone().filter(|_| frames) {
+                    let key = FrameKey { x: fr.x, y: fr.y, h_anchor: fr.h_anchor.clone(), v_anchor: fr.v_anchor.clone(), wrap: fr.wrap.clone() };
+                    let top = match &mut frame_run {
+                        Some((k, bottom)) if *k == key => *bottom,
+                        _ => y,
+                    };
                     let fw = fr.w.unwrap_or_else(|| natural_width(&pl)).clamp(1.0, 1584.0);
                     let pf = if (fw - width).abs() > 0.01 { ctx.para_labelled(p, fw, table, &[], label) } else { pl };
                     let h = match fr.h {
@@ -244,10 +260,11 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                         None => pf.height,
                     };
                     let float = frame_float(&fr);
-                    let r = float_rect(frame, (0.0, width), y, fw, h, &float);
+                    let r = float_rect(frame, (0.0, width), top, fw, h, &float);
                     push_para(&mut items, (story, &path), &pf, (0, pf.lines.len()), (r.x, r.y), fw, Edges::own(&pf, 0, pf.lines.len()));
                     excl.extend(wrap_area(r, &float, None));
                     float_tables.push(r);
+                    frame_run = Some((key, top + h));
                     continue;
                 }
                 let (ctxl, before) = paragraph_spacing(ParagraphSpacing {
