@@ -3,8 +3,8 @@ use super::limits::{MAX_INFO_CHARS, MAX_OPEN_INSERTIONS, MAX_REGIONS, MAX_SECTIO
 use super::styles::Styles;
 use super::xml::{Attrs, Ev, events, get, length, local};
 use super::{
-    Arc, Block, Blocks, Cell, CharProps, Comment, Document, FBlock, FTable, Fmt, HashMap, HashSet, Inline, InlineObject, Kind, ListInfo, NoteKind, OBJ,
-    Para, Paragraph, PartKind, RevMark, RevisionKind, SectionProps, SectionStart, make_img, model,
+    Arc, Block, Blocks, Cell, CharProps, Comment, Document, FBlock, FTable, Fmt, HashMap, HashSet, Inline, InlineObject, Kind, ListInfo, NoteKind,
+    OBJ, Para, Paragraph, PartKind, RevMark, RevisionKind, SectionProps, SectionStart, make_img, model,
 };
 
 /// An embedded ODF formula sub-document's `content.xml`, read for its `math:math` element
