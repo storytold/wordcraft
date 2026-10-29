@@ -56,7 +56,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 // The chevron's stroke starts at the content edge.
                 let c = back_chevron_c(band.min.x, band.center().y, app.session.view.full_screen, app.mac_titlebar.content_left);
                 let resp = ui.interact(Rect::from_center_size(c, vec2(22.0, band.height())), ui.scope_id().with("backstage_back"), Sense::click());
-                icons::paint(ui.painter(), Rect::from_center_size(c, vec2(18.0, 18.0)), "chevronLeft", egui::Color32::WHITE, egui::Color32::WHITE);
+                icons::paint(ui.painter(), Rect::from_center_size(c, vec2(16.0, 16.0)), "chevronLeft", egui::Color32::WHITE, egui::Color32::WHITE);
                 resp
             } else {
                 // The hit area is scoped to the chevron, not the whole 200px-wide row (#3041):
@@ -65,7 +65,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 let (r, _) = ui.allocate_exact_size(vec2(200.0, 40.0), Sense::hover());
                 let c = pos2(r.min.x + 26.0, r.center().y);
                 let resp = ui.interact(Rect::from_center_size(c, vec2(22.0, r.height())), ui.scope_id().with("backstage_back"), Sense::click());
-                icons::paint(ui.painter(), Rect::from_center_size(c, vec2(18.0, 18.0)), "chevronLeft", egui::Color32::WHITE, egui::Color32::WHITE);
+                icons::paint(ui.painter(), Rect::from_center_size(c, vec2(16.0, 16.0)), "chevronLeft", egui::Color32::WHITE, egui::Color32::WHITE);
                 resp
             };
             // Escape in the built-in file browser closes only the browser.
@@ -533,9 +533,9 @@ fn open_list(app: &mut WordApp, ui: &mut Ui) {
         if resp.hovered() {
             ui.painter().rect_filled(r, 4.0, t.hover);
         }
-        icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 18.0, r.center().y), vec2(22.0, 22.0)), "printLayout", t.icon, t.accent);
-        ui.painter().text(pos2(r.min.x + 40.0, r.min.y + 13.0), Align2::LEFT_CENTER, name, medium(13.0), t.text);
-        ui.painter().text(pos2(r.min.x + 40.0, r.min.y + 29.0), Align2::LEFT_CENTER, p, regular(11.0), t.text_dim);
+        icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 20.0, r.center().y), vec2(32.0, 32.0)), "printLayout", t.icon, t.accent);
+        ui.painter().text(pos2(r.min.x + 44.0, r.min.y + 13.0), Align2::LEFT_CENTER, name, medium(13.0), t.text);
+        ui.painter().text(pos2(r.min.x + 44.0, r.min.y + 29.0), Align2::LEFT_CENTER, p, regular(11.0), t.text_dim);
         if resp.clicked() {
             let failed = open_recent(app, p).err();
             ui.ctx().data_mut(|d| d.insert_temp(open_error_id(), failed.unwrap_or_default()));

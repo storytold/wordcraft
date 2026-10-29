@@ -292,7 +292,7 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
                     "shading",
                     "Shading",
                     crate::widgets::ButtonAction::new("para.shading", json!({"color": app.canvas.last_shading.clone()}), false),
-                    None,
+                    wordcraft_doc::Rgb::parse(&app.canvas.last_shading).map(crate::theme::c32),
                     |ui, app| {
                         mi(ui, app, "No Color", "para.shading", json!({"color": null}));
                         let theme = app.session.doc.settings.theme_colors.clone();

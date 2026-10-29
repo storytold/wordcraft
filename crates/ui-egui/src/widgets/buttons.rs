@@ -71,8 +71,8 @@ pub fn big_toggle(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &
 }
 
 /// Size of the drop-down marker drawn after a label or beside a split button (#659: one marker,
-/// the `dropdown` icon, everywhere; no text glyph).
-pub const DROPDOWN: f32 = 10.0;
+/// the `dropdown` icon, everywhere; no text glyph). 16 px, on the icon grid like every icon (#660).
+pub const DROPDOWN: f32 = 16.0;
 
 /// One centred label line (top at `y`); `marker` draws the drop-down icon after the text, in the
 /// text's colour, and the pair is centred together.
@@ -147,7 +147,7 @@ pub fn small(ui: &mut Ui, app: &mut WordApp, icon: &str, label: Option<&str>, ti
     keytip_badge(ui, r, id, tip);
     let on = enabled(app, id);
     bg(ui, r, &resp, checked, &t);
-    let ic = Rect::from_center_size(pos2(r.min.x + 12.0, r.center().y), vec2(17.0, 17.0));
+    let ic = Rect::from_center_size(pos2(r.min.x + 12.0, r.center().y), vec2(16.0, 16.0));
     let (c, a) = if on { (t.icon, t.accent) } else { (t.text_disabled, t.text_disabled) };
     icons::paint(ui.painter(), ic, icon, c, a);
     if let Some(l) = label {
@@ -181,16 +181,12 @@ pub fn split(
     let on = enabled(app, id);
     bg(ui, r, &resp, checked, &t);
     bg(ui, ar, &aresp, false, &t);
-    let ic = Rect::from_center_size(r.center(), vec2(17.0, 17.0));
-    let (c, a) = if on { (t.icon, t.accent) } else { (t.text_disabled, t.text_disabled) };
+    let ic = Rect::from_center_size(r.center(), vec2(16.0, 16.0));
+    // Colour commands (font colour, highlight, shading) draw their colour bar in the accent, so the
+    // swatch is the colour that will be applied.
+    let (c, a) = if on { (t.icon, swatch.unwrap_or(t.accent)) } else { (t.text_disabled, t.text_disabled) };
     icons::paint(ui.painter(), ic, icon, c, a);
-    if let Some(sw) = swatch {
-        let sw = if on { sw } else { t.text_disabled };
-        let bar = Rect::from_min_max(pos2(r.min.x + 4.0, r.max.y - 5.0), pos2(r.max.x - 4.0, r.max.y - 2.0));
-        ui.painter().rect_filled(bar, 0.0, sw);
-        ui.painter().rect_stroke(bar, 0.0, Stroke::new(0.5, t.border), egui::StrokeKind::Inside);
-    }
-    icons::paint(ui.painter(), Rect::from_center_size(ar.center(), vec2(DROPDOWN, DROPDOWN)), "dropdown", c, a);
+    icons::paint(ui.painter(), Rect::from_center_size(ar.center(), vec2(DROPDOWN, DROPDOWN)), "dropdown", c, c);
     let resp = tooltip(app, resp, tip, id);
     command_menu(&resp, app, id);
     if resp.clicked() && on {
@@ -260,14 +256,14 @@ pub fn menu_button(ui: &mut Ui, app: &mut WordApp, options: MenuButtonOptions<'_
         resp
     } else {
         let text_w = label.map(|l| ui.ctx().fonts_mut(|f| f.layout_no_wrap(l.to_string(), regular(11.5), t.text).size().x) + 6.0).unwrap_or(0.0);
-        let (r, resp) = ui.allocate_exact_size(vec2(24.0 + text_w + 10.0, 22.0), Sense::click());
+        let (r, resp) = ui.allocate_exact_size(vec2(24.0 + text_w + 14.0, 22.0), Sense::click());
         keytip_badge(ui, r, "menu", tip);
         bg(ui, r, &resp, false, &t);
-        icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 12.0, r.center().y), vec2(17.0, 17.0)), icon, c, a);
+        icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 12.0, r.center().y), vec2(16.0, 16.0)), icon, c, a);
         if let Some(l) = label {
             ui.painter().text(pos2(r.min.x + 24.0, r.center().y), Align2::LEFT_CENTER, l, regular(11.5), text);
         }
-        icons::paint(ui.painter(), Rect::from_center_size(pos2(r.max.x - 6.0, r.center().y), vec2(DROPDOWN, DROPDOWN)), "dropdown", c, c);
+        icons::paint(ui.painter(), Rect::from_center_size(pos2(r.max.x - 8.0, r.center().y), vec2(DROPDOWN, DROPDOWN)), "dropdown", c, c);
         resp
     };
     let reason = if on { None } else { Some(app.session.why_disabled(id).unwrap_or("")) };

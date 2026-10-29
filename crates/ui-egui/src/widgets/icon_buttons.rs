@@ -8,13 +8,13 @@ pub fn primary_button(ui: &Ui, text: impl Into<String>) -> egui::Button<'static>
     egui::Button::new(egui::RichText::new(text.into()).color(t.on_accent)).fill(t.accent)
 }
 
-/// A frameless 22 px icon button (pane close buttons): ribbon-style hover and press feedback.
+/// A frameless 22 px icon button (pane close buttons) with a 16 px icon: ribbon-style hover and press feedback.
 pub fn icon_button(ui: &mut Ui, icon: &str, tip: &str) -> Response {
     let t = Tokens::get(ui.ctx());
     let (r, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
     let st = drawn_state(ui, &resp, false);
     ui.painter().rect_filled(r, CornerRadius::same(4), st.fill);
-    icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(14.0, 14.0)), icon, t.icon, t.accent);
+    icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(16.0, 16.0)), icon, t.icon, t.accent);
     resp.on_hover_text(tip)
 }
 
