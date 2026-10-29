@@ -1,5 +1,35 @@
 use super::toc::written_toc_span;
-use super::{Block, Blocks, CharProps, MAX_DEPTH, PartRels, Table, W, Writer, tblpr, tcpr, trpr, twips};
+use super::{Block, Blocks, CharProps, InlineObject, MAX_DEPTH, Paragraph, PartRels, Table, W, Writer, tblpr, tcpr, trpr, twips};
+use wordcraft_doc::MarkPlace;
+use wordcraft_doc::para::OBJ;
+use wordcraft_doc::table::Row;
+
+/// The first (or last) paragraph of a block list, entering tables (their first or last cell)
+/// to [`MAX_DEPTH`], and the number of tables entered.
+fn edge_para(bl: &[std::sync::Arc<Block>], last: bool, depth: usize) -> Option<(&Paragraph, u8)> {
+    let b = if last { bl.last() } else { bl.first() }?;
+    match &**b {
+        Block::Para(p) => Some((p, 0)),
+        Block::Table(t) if depth < MAX_DEPTH => {
+            let row = if last { t.rows.last() } else { t.rows.first() }?;
+            edge_row_para(row, last, depth + 1).map(|(p, n)| (p, n.saturating_add(1)))
+        }
+        Block::Table(_) => None,
+    }
+}
+
+fn edge_row_para(row: &Row, last: bool, depth: usize) -> Option<(&Paragraph, u8)> {
+    let cell = if last { row.cells.last() } else { row.cells.first() }?;
+    edge_para(&cell.blocks, last, depth)
+}
+
+/// The markers at the start (or end) of `p`, before (after) any text.
+fn edge_objects(p: &Paragraph, last: bool) -> &[InlineObject] {
+    let n = if last { p.text.chars().rev().take_while(|c| *c == OBJ).count() } else { p.text.chars().take_while(|c| *c == OBJ).count() };
+    let n = n.min(p.objects.len());
+    let range = if last { p.objects.len() - n..p.objects.len() } else { 0..n };
+    p.objects.get(range).unwrap_or(&[])
+}
 
 impl Writer<'_> {
     fn write_trailing_para(&mut self, w: &mut W, depth: usize) {
@@ -30,6 +60,10 @@ impl Writer<'_> {
                 crate::write::sdt::open(w, c);
             }
             self.update_toc_before_block(i, toc, toc_field_open, w);
+            let one = std::slice::from_ref(b);
+            let after = self.lift_marks(edge_para(one, true, depth), true, |tables| MarkPlace::AfterBlock { tables });
+            let before = self.lift_marks(edge_para(one, false, depth), false, |tables| MarkPlace::BeforeBlock { tables });
+            self.write_marks(w, &before);
             match &**b {
                 Block::Para(p) => {
                     self.inline_controls = plan.inline_in(i);
@@ -37,6 +71,7 @@ impl Writer<'_> {
                 }
                 Block::Table(t) => self.table(w, t, rels, depth),
             }
+            self.write_marks(w, &after);
             self.update_toc_after_block(i, toc, &mut toc_field_open, w);
             for _ in 0..plan.closes.get(i).copied().unwrap_or(0) {
                 crate::write::sdt::close(w);
@@ -47,6 +82,37 @@ impl Writer<'_> {
         }
         if bl.last().is_none_or(|b| matches!(**b, Block::Table(_))) {
             self.write_trailing_para(w, depth);
+        }
+    }
+
+    /// The bookmark markers at the edge of `at` (a paragraph and the tables entered to reach
+    /// it) that the file had at `place` instead of inside it: noted to be skipped there, and
+    /// returned (name, is end) for writing between blocks or rows.
+    fn lift_marks(&mut self, at: Option<(&Paragraph, u8)>, last: bool, place: impl Fn(u8) -> MarkPlace) -> Vec<(String, bool)> {
+        if self.doc.bookmark_places.is_empty() {
+            return Vec::new();
+        }
+        let Some((p, tables)) = at else { return Vec::new() };
+        let want = place(tables);
+        let mut out = Vec::new();
+        for o in edge_objects(p, last) {
+            let (name, end) = match o {
+                InlineObject::BookmarkStart { name } => (name, false),
+                InlineObject::BookmarkEnd { name } => (name, true),
+                _ => continue,
+            };
+            let Some(kept) = self.doc.bookmark_places.get(name) else { continue };
+            if if end { kept.end } else { kept.start } == want {
+                *self.lifted.entry((name.clone(), end)).or_insert(0) += 1;
+                out.push((name.clone(), end));
+            }
+        }
+        out
+    }
+
+    fn write_marks(&mut self, w: &mut W, marks: &[(String, bool)]) {
+        for (name, end) in marks {
+            self.bookmark_mark(w, name, *end);
         }
     }
 
@@ -111,6 +177,9 @@ impl Writer<'_> {
                 crate::write::sdt::open(w, c);
                 open_rows += 1;
             }
+            let after = self.lift_marks(edge_row_para(r, true, depth), true, |tables| MarkPlace::AfterRow { tables });
+            let before = self.lift_marks(edge_row_para(r, false, depth), false, |tables| MarkPlace::BeforeRow { tables });
+            self.write_marks(w, &before);
             w.open("w:tr", &[]);
             let chg = r.props.fmt_change.as_ref().map(|c| self.change_attrs(c.rev));
             trpr(w, &r.props, chg.as_ref());
@@ -135,6 +204,7 @@ impl Writer<'_> {
                 crate::write::sdt::close(w);
             }
             w.close("w:tr");
+            self.write_marks(w, &after);
             let n = r.controls.close.min(open_rows);
             for _ in 0..n {
                 crate::write::sdt::close(w);

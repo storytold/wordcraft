@@ -9,7 +9,7 @@ use wordcraft_doc::graphic::{Embedded, Graphic, GraphicItem, GraphicKind};
 use wordcraft_doc::para::{AltText, Anchor, Float, FloatAlign, NoteKind, PTabAlign, PTabBase, ShapeKind, Wrap, WrapText, cap_alt};
 use wordcraft_doc::props::{CharProps, NumChange, PropChange, Rgb, TextColor};
 use wordcraft_doc::table::{Cell, MAX_COLS, MAX_ROWS, Row, Table};
-use wordcraft_doc::{Block, Blocks, InlineObject, Paragraph, PartKind, RevisionKind, Run, para_block};
+use wordcraft_doc::{Block, Blocks, InlineObject, MarkPlace, Paragraph, PartKind, RevisionKind, Run, para_block};
 
 use super::Reader;
 use super::props::{sectpr, tcpr, trpr};
@@ -84,11 +84,26 @@ struct FieldState {
 }
 
 /// The last paragraph of a block list: its last block, or inside a final table the last
-/// paragraph of its last cell (nested tables to [`MAX_TABLE_DEPTH`]).
-fn last_para_mut(out: &mut Blocks, depth: usize) -> Option<&mut Paragraph> {
+/// paragraph of its last cell (nested tables to [`MAX_TABLE_DEPTH`]), with the number of tables
+/// entered to reach it.
+fn last_para_mut(out: &mut Blocks, depth: usize) -> Option<(&mut Paragraph, u8)> {
     match Arc::make_mut(out.last_mut()?) {
-        Block::Para(p) => Some(p),
-        Block::Table(t) if depth < MAX_TABLE_DEPTH => last_para_mut(&mut t.rows.last_mut()?.cells.last_mut()?.blocks, depth + 1),
+        Block::Para(p) => Some((p, 0)),
+        Block::Table(t) if depth < MAX_TABLE_DEPTH => {
+            last_para_mut(&mut t.rows.last_mut()?.cells.last_mut()?.blocks, depth + 1).map(|(p, n)| (p, n.saturating_add(1)))
+        }
+        Block::Table(_) => None,
+    }
+}
+
+/// The first paragraph of a block list, the same way (inside a first table: the first paragraph
+/// of its first cell).
+fn first_para_mut(out: &mut Blocks, depth: usize) -> Option<(&mut Paragraph, u8)> {
+    match Arc::make_mut(out.first_mut()?) {
+        Block::Para(p) => Some((p, 0)),
+        Block::Table(t) if depth < MAX_TABLE_DEPTH => {
+            first_para_mut(&mut t.rows.first_mut()?.cells.first_mut()?.blocks, depth + 1).map(|(p, n)| (p, n.saturating_add(1)))
+        }
         Block::Table(_) => None,
     }
 }
@@ -109,6 +124,10 @@ pub struct StoryCtx {
     fields: Vec<FieldState>,
     ignored_begins: usize,
     pending: Vec<InlineObject>,
+    /// For each pending marker, the table nesting it was read at.
+    pending_tables: Vec<u8>,
+    /// Table nesting of the content being read.
+    tables: u8,
     /// Text-box nesting depth.
     pub story_depth: usize,
     /// Reading a header or footer (not a text box inside one): where Word keeps its watermark.
@@ -168,21 +187,31 @@ fn children_of_choice(ac: &El) -> Option<&El> {
 
 /// Gather `name` children (rows, cells), looking through `w:sdt`/`w:customXml` wrappers; each
 /// with the content controls that open before it and how many close after it. `pending` holds
-/// controls opened but not yet given to an element.
-fn collect<'a>(e: &'a El, name: &str, out: &mut Vec<(&'a El, ControlWrap)>, pending: &mut Vec<ContentControl>, depth: usize) {
+/// controls opened but not yet given to an element. Bookmark markers between them go to
+/// `marks`, with the number of elements gathered before each.
+fn collect<'a>(
+    e: &'a El,
+    name: &str,
+    out: &mut Vec<(&'a El, ControlWrap)>,
+    pending: &mut Vec<ContentControl>,
+    marks: &mut Vec<(usize, &'a El)>,
+    depth: usize,
+) {
     if depth > 8 {
         return;
     }
     for k in e.els() {
         if k.name == name {
             out.push((k, ControlWrap { open: std::mem::take(pending), close: 0 }));
+        } else if matches!(k.name.as_str(), "w:bookmarkStart" | "w:bookmarkEnd") {
+            marks.push((out.len(), k));
         } else if k.name == "w:sdt" {
             if let Some(c) = k.child("w:sdtContent") {
                 let mut ctl = super::sdt::sdt_pr(k.child("w:sdtPr"), true);
                 ctl.end_pr_xml = super::sdt::sdt_end_pr(k.child("w:sdtEndPr"));
                 let before = out.len();
                 pending.push(ctl);
-                collect(c, name, out, pending, depth + 1);
+                collect(c, name, out, pending, marks, depth + 1);
                 let grew = out.len() > before;
                 match out.last_mut() {
                     Some((_, w)) if grew => w.close = w.close.saturating_add(1),
@@ -193,7 +222,7 @@ fn collect<'a>(e: &'a El, name: &str, out: &mut Vec<(&'a El, ControlWrap)>, pend
                 }
             }
         } else if k.name == "w:customXml" {
-            collect(k, name, out, pending, depth + 1);
+            collect(k, name, out, pending, marks, depth + 1);
         }
     }
 }

@@ -1,5 +1,6 @@
 mod bidi;
 mod bidi_runs;
+mod bookmark_places;
 mod cell_margin_inheritance;
 mod char_units;
 mod citations;

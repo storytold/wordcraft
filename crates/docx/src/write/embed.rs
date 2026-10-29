@@ -347,6 +347,16 @@ impl super::Writer<'_> {
     /// The same bounded preservation operation, retaining the parsed tree for a caller that
     /// must rebuild an ink AlternateContent drawing frame without reparsing unbound prefixes.
     pub(super) fn embedded_tree(&mut self, src: &Embedded, rels: &mut PartRels, resize: Option<(f32, f32, &Float, &str)>) -> Option<El> {
+        self.embedded_tree_in(src, rels, resize, false)
+    }
+
+    /// Markup kept with a picture (its `a:blip` extensions): every picture showing the image
+    /// writes it, all of them sharing the parts it uses (an image layer is the image's own).
+    pub(super) fn shared_embedded_xml(&mut self, src: &Embedded, rels: &mut PartRels) -> Option<String> {
+        self.embedded_tree_in(src, rels, None, true).map(|root| root.to_xml())
+    }
+
+    fn embedded_tree_in(&mut self, src: &Embedded, rels: &mut PartRels, resize: Option<(f32, f32, &Float, &str)>, share: bool) -> Option<El> {
         let Some(left) = self.embeds.markup_bytes.checked_sub(src.xml.len() as u64) else {
             log::warn!("docx: too much embedded-object markup; the rest is left out");
             return None;
@@ -363,7 +373,7 @@ impl super::Writer<'_> {
         }
         let roots: Vec<&str> = src.refs.iter().filter(|r| !r.external).map(|r| r.target.as_str()).collect();
         // Written before (a copy of this object): give this one its own parts while the budget lasts.
-        let again = roots.iter().any(|r| self.embeds.first.contains_key(*r));
+        let again = !share && roots.iter().any(|r| self.embeds.first.contains_key(*r));
         let cost = if again { self.embeds.tree_cost(&roots) } else { 0 };
         let fresh = again && cost <= self.embeds.copy_bytes;
         if fresh {

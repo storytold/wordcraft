@@ -89,6 +89,9 @@ pub(crate) struct Writer<'d> {
     /// Media key → file name under `word/media/`.
     media_files: BTreeMap<String, String>,
     bookmarks: HashMap<String, u32>,
+    /// Bookmark markers (name, is end) already written between blocks or rows, each to be
+    /// skipped once where its paragraph holds it.
+    lifted: HashMap<(String, bool), u32>,
     next_rev_id: u32,
     /// Move ranges open in the output: (revision, range `w:id`, destination?).
     open_moves: Vec<(u32, String, bool)>,
@@ -187,6 +190,22 @@ impl Writer<'_> {
     fn bookmark_id(&mut self, name: &str) -> String {
         let n = self.bookmarks.len() as u32;
         self.bookmarks.entry(name.to_string()).or_insert(n).to_string()
+    }
+
+    /// A bookmark's start or end marker, with the columns of a column bookmark.
+    fn bookmark_mark(&mut self, w: &mut W, name: &str, end: bool) {
+        let id = self.bookmark_id(name);
+        if end {
+            w.empty("w:bookmarkEnd", &[("w:id", &id)]);
+            return;
+        }
+        match self.doc.bookmark_places.get(name).and_then(|p| p.cols) {
+            Some((first, last)) => {
+                let (first, last) = (first.to_string(), last.to_string());
+                w.empty("w:bookmarkStart", &[("w:id", &id), ("w:name", name), ("w:colFirst", &first), ("w:colLast", &last)]);
+            }
+            None => w.empty("w:bookmarkStart", &[("w:id", &id), ("w:name", name)]),
+        }
     }
 
     fn note_id(&mut self, part: u32, foot: bool) -> String {

@@ -75,6 +75,8 @@ impl Document {
             media: BTreeMap::new(),
             passthrough: BTreeMap::new(),
             glossary: Vec::new(),
+            bookmark_places: BTreeMap::new(),
+            picture_ext: BTreeMap::new(),
             media_index: MediaIndex::default(),
         }
     }
@@ -151,6 +153,9 @@ impl Document {
             media,
             passthrough,
             glossary,
+            // Where a file had things, set when it is read: no edit changes it.
+            bookmark_places: _,
+            picture_ext: _,
             media_index: _,
         } = self;
         let Document {
@@ -170,6 +175,8 @@ impl Document {
             media: other_media,
             passthrough: other_passthrough,
             glossary: other_glossary,
+            bookmark_places: _,
+            picture_ext: _,
             media_index: _,
         } = other;
         same_blocks(body, other_body)
