@@ -113,6 +113,7 @@ impl WordApp {
             fonts_hans: false,
             fonts_korean: false,
             fonts_system_cjk: false,
+            fonts_system_arabic: false,
             want_system_cjk: false,
             recover_fonts_for: None,
             recent_fonts_for: Vec::new(),

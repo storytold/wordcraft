@@ -516,6 +516,9 @@ pub struct WordApp {
     fonts_korean: bool,
     /// Whether the installed UI fonts include an installed CJK fallback font (#241).
     fonts_system_cjk: bool,
+    /// Whether the installed UI fonts were asked to include an installed Arabic font (an Arabic
+    /// interface; used when no embedded face has Arabic letters).
+    fonts_system_arabic: bool,
     /// CJK text is (about to be) on screen in a non-CJK interface, e.g. the language names in
     /// File ▸ Options: load the installed CJK fallback font if no embedded face covers it.
     pub(crate) want_system_cjk: bool,
