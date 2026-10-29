@@ -242,6 +242,13 @@ pub struct RowProps {
     /// Tracked formatting change (`w:trPrChange`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fmt_change: Option<Box<PropChange<RowProps>>>,
+    /// The row is a tracked insertion or deletion (`w:trPr/w:ins`, `w:trPr/w:del`, ECMA-376
+    /// Part 1 §17.13.5): a `Document::revisions` index. Accepting a deleted row or rejecting an
+    /// inserted one removes the row (and a table left without rows goes too).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ins: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub del: Option<u32>,
 }
 
 fn is_zero(v: &u32) -> bool {

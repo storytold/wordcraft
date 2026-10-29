@@ -30,7 +30,7 @@ fn records(id: &str) -> bool {
 }
 
 /// Tables nested deeper than this aren't compared (hostile documents).
-const MAX_DEPTH: usize = 16;
+pub(crate) const MAX_DEPTH: usize = 16;
 
 /// A paragraph's, table's or cell's tracked formatting change, if it carries one.
 type Slot<T> = Option<Box<PropChange<T>>>;
@@ -354,7 +354,8 @@ pub fn resolve_table(t: &mut Table, accept: bool) {
 /// Accept or reject a row's change.
 pub fn resolve_row(r: &mut Row, accept: bool) {
     if let Some(ch) = r.props.fmt_change.take().filter(|_| !accept) {
-        r.props = RowProps { fmt_change: None, ..ch.old };
+        // The row's own insertion or deletion is not formatting: it stays.
+        r.props = RowProps { fmt_change: None, ins: r.props.ins, del: r.props.del, ..ch.old };
     }
 }
 

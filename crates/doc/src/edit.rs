@@ -889,6 +889,13 @@ impl Document {
         }
     }
 
+    /// Give every text box in `blocks` (content brought in from another document whose text box
+    /// stories are `parts`) a new story of its own, as pasting does.
+    pub fn adopt_text_box_stories(&mut self, blocks: &mut [Block], parts: &BTreeMap<u32, Part>) {
+        let mut budget = BoxBudget::new();
+        self.adopt_text_boxes(blocks, parts, 0, &mut budget);
+    }
+
     /// A new text box story copied from `old`; its own boxes get new stories too. Blocks without
     /// text boxes are shared with the source (copy-on-write), the others copied. A box showing a
     /// story it is inside, or whose story the paste's budget can't hold, gets none (CWE-400);

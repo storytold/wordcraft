@@ -1058,3 +1058,83 @@ fn rtf_tracked_changes_accept_and_reject_after_opening_and_round_trip() {
         }
     }
 }
+
+/// #1317: rejecting a row formatting change keeps the row's own insertion mark, so Reject All
+/// on an inserted row with a formatting change removes it instead of leaving an empty table.
+#[test]
+fn reject_all_removes_an_inserted_row_with_a_formatting_change() {
+    use std::sync::Arc;
+    use wordcraft_doc::{Block, Revision, RevisionKind, Table, props::PropChange, props::RowProps};
+    let mut d = Document::from_text("Before\nAfter");
+    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "A".into(), date: String::new(), move_name: None });
+    d.revisions.push(Revision { kind: RevisionKind::Format, author: "A".into(), date: String::new(), move_name: None });
+    let mut t = Table::new(1, 1, 100.0);
+    t.rows[0].props.ins = Some(0);
+    t.rows[0].props.height = Some(30.0);
+    t.rows[0].props.fmt_change = PropChange::boxed(1, RowProps::default());
+    d.body.insert(1, Arc::new(Block::Table(t)));
+    let mut s = Session::new(d);
+    s.run("review.rejectAll", &json!({})).unwrap();
+    assert!(s.doc.body.iter().all(|b| !matches!(**b, Block::Table(_))), "the inserted row and its table are gone");
+}
+
+/// #1317 (#10): a comment whose marks Accept All deletes with the text around them goes too,
+/// with its text, rather than staying as a comment on nothing.
+#[test]
+fn accept_all_removes_a_comment_whose_anchors_were_deleted() {
+    use wordcraft_doc::para::InlineObject;
+    use wordcraft_doc::{CharProps, Comment, Paragraph, PartKind, Revision, RevisionKind, para_block};
+    let mut d = Document::from_text("Intro");
+    d.revisions.push(Revision { kind: RevisionKind::Delete, author: "A".into(), date: String::new(), move_name: None });
+    let part = d.try_add_part(PartKind::Comment, vec![para_block(Paragraph::with_text("Note", CharProps::default()))]).unwrap();
+    d.comments.insert(0, Comment { author: "A".into(), part, ..Default::default() });
+    let mut p = Paragraph::with_text("Keep ", CharProps::default());
+    let n = p.len();
+    p.insert_object(n, InlineObject::CommentStart { id: 0 }, &CharProps::default()).unwrap();
+    let n = p.len();
+    p.insert_text(n, "gone", &CharProps::default()).unwrap();
+    let n = p.len();
+    p.insert_object(n, InlineObject::CommentEnd { id: 0 }, &CharProps::default()).unwrap();
+    let n = p.len();
+    p.format(5, n, &|c| c.del = Some(0)).unwrap();
+    d.body.push(para_block(p));
+    let mut s = Session::new(d);
+    s.run("review.acceptAll", &json!({})).unwrap();
+    assert!(s.doc.comments.is_empty());
+    assert!(!s.doc.parts.contains_key(&part));
+}
+
+/// #1317 (N3): a reply that keeps its own marks stays when Accept All removes its parent's.
+#[test]
+fn accept_all_keeps_a_reply_that_still_has_marks() {
+    use wordcraft_doc::para::InlineObject;
+    use wordcraft_doc::{CharProps, Comment, Paragraph, PartKind, Revision, RevisionKind, para_block};
+    let mut d = Document::from_text("Intro");
+    d.revisions.push(Revision { kind: RevisionKind::Delete, author: "A".into(), date: String::new(), move_name: None });
+    for id in [0u32, 1] {
+        let part = d.try_add_part(PartKind::Comment, vec![para_block(Paragraph::with_text("Note", CharProps::default()))]).unwrap();
+        d.comments.insert(id, Comment { author: "A".into(), part, parent: (id == 1).then_some(0), ..Default::default() });
+    }
+    let plain = CharProps::default();
+    let mut p = Paragraph::with_text("Keep", plain.clone());
+    for (obj, text) in [(InlineObject::CommentStart { id: 1 }, ""), (InlineObject::CommentEnd { id: 1 }, " ")] {
+        let n = p.len();
+        p.insert_object(n, obj, &plain).unwrap();
+        let n = p.len();
+        p.insert_text(n, text, &plain).unwrap();
+    }
+    let start = p.len();
+    for (obj, text) in [(InlineObject::CommentStart { id: 0 }, "gone"), (InlineObject::CommentEnd { id: 0 }, "")] {
+        let n = p.len();
+        p.insert_object(n, obj, &plain).unwrap();
+        let n = p.len();
+        p.insert_text(n, text, &plain).unwrap();
+    }
+    let n = p.len();
+    p.format(start, n, &|c| c.del = Some(0)).unwrap();
+    d.body.push(para_block(p));
+    let mut s = Session::new(d);
+    s.run("review.acceptAll", &json!({})).unwrap();
+    assert!(!s.doc.comments.contains_key(&0));
+    assert!(s.doc.comments.contains_key(&1), "the reply with its own marks stays");
+}

@@ -18,7 +18,7 @@ pub use changes::{
 };
 use changes::{list_changes, nav_change, resolve_all_then, resolve_sel_then, tracking_options};
 use comments::{
-    comment_at_caret, comments_change, delete_comment, edit_comment, list_comments, nav_comment, new_comment, reply, validate_comment_id,
+    comment_at_caret, comments_change, delete_comment, edit_comment, list_comments, nav_comment, new_comment, reply, thread_of, validate_comment_id,
 };
 pub use comments::{comment_list, comment_range_at_caret};
 use proofing::{all_issues, issue_at, next_issue, suggestions, thesaurus, word_count};
