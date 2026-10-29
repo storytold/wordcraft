@@ -120,6 +120,7 @@ impl WordApp {
             fonts_system_arabic: false,
             want_system_cjk: false,
             want_system_arabic: false,
+            shared_selection: None,
             recover_fonts_for: None,
             recent_fonts_for: Vec::new(),
             fonts_frames: 0,
