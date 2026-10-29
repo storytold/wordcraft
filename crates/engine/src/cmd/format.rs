@@ -2,7 +2,7 @@
 
 use serde_json::{Value, json};
 use wordcraft_doc::eq::{EncloseShape, EncloseStyle, Enclosure};
-use wordcraft_doc::props::{Border, CharProps, Highlight, Rgb, TextColor, Underline, VertAlign};
+use wordcraft_doc::props::{Border, CharProps, Highlight, Ligatures, Rgb, TextColor, Underline, VertAlign};
 use wordcraft_doc::resolve::ResolvedChar;
 use wordcraft_doc::{InlineObject, PartKind, Pos, RevisionKind, StoryRef};
 
@@ -138,6 +138,13 @@ pub fn specs() -> Vec<CommandSpec> {
             apply(s, &|c| c.position = Some(x))
         })
         .params(r#"{"points": number}"#),
+        CommandSpec::new("format.kerning", "Kerning fonts", "Home › Font › Font › Advanced", kerning)
+            .params(r#"{"value"?: bool, "minSize"?: number}"#),
+        CommandSpec::new("format.ligatures", "Ligatures", "Home › Font › Font › Advanced", |s, v| {
+            let mode = p::str(v, "mode").and_then(Ligatures::from_ooxml)
+                .ok_or_else(|| CmdError::Params("mode must be a ligature selection".into()))?;
+            apply(s, &|c| c.ligatures = Some(mode))
+        }).params(r#"{"mode": "none|standard|contextual|historical|discretional|standardContextual|standardHistorical|contextualHistorical|standardDiscretional|contextualDiscretional|historicalDiscretional|standardContextualHistorical|standardContextualDiscretional|standardHistoricalDiscretional|contextualHistoricalDiscretional|all"}"#),
         CommandSpec::new("format.charStyle", "Apply Character Style", "Home › Styles", char_style).params(r#"{"style": string}"#),
         CommandSpec::new("format.set", "Set Character Formatting", "Home › Font › Font", set).params(r#"{"props": CharProps}"#),
         CommandSpec::new("format.fontDialog", "Font Dialog", "Home › Font", |s, _| {
@@ -150,6 +157,19 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(r#"{"shape": "circle|square|triangle|diamond" | null, "style"?: "shrink|enlarge", "text"?: string}"#),
         CommandSpec::new("format.state", "Formatting at Selection", "Home › Font", |s, _| Ok(state(s))).pure(),
     ]
+}
+
+fn kerning(s: &mut Session, v: &Value) -> CmdResult {
+    let min = if v.get("minSize").is_some() { Some(p::req_f32(v, "minSize")?.clamp(0.5, 1638.0)) } else { None };
+    let current = state(s);
+    let on = match v.get("value") {
+        Some(Value::Bool(on)) => *on,
+        Some(_) => return Err(CmdError::Params("value must be a boolean".into())),
+        None => min.is_some() || current.get("kerning").and_then(Value::as_bool) != Some(true),
+    };
+    let existing = current.get("kernMinSize").and_then(Value::as_f64).filter(|n| *n > 0.0).map(|n| n as f32);
+    let threshold = if on { min.or(existing).unwrap_or(1.0) } else { 0.0 };
+    apply(s, &|c| c.kern = Some(threshold))
 }
 
 /// The selection to format: the selection, or the word around a collapsed caret (Word
@@ -788,7 +808,7 @@ fn char_style(s: &mut Session, v: &Value) -> CmdResult {
 }
 
 fn set(s: &mut Session, v: &Value) -> CmdResult {
-    let mut props: CharProps = serde_json::from_value(v.get("props").cloned().unwrap_or(Value::Null)).map_err(|e| CmdError::Params(e.to_string()))?;
+    let mut props = p::char_props(v.get("props").unwrap_or(&Value::Null))?;
     // The font dialog and callers supplying one value format both scripts. Explicit
     // complex-script values still take precedence; importing a DOCX never uses this command.
     props.size_cs = props.size_cs.or(props.size);
@@ -828,6 +848,9 @@ pub fn state(s: &Session) -> Value {
         "spacing": same(&|r| json!(r.spacing)),
         // Kerning for fonts: the smallest kerned size, points; 0 = off.
         "kern": same(&|r| json!(r.kern)),
+        "kerning": same(&|r| json!(r.kern > 0.0)),
+        "kernMinSize": same(&|r| json!(r.kern)),
+        "ligatures": same(&|r| json!(r.ligatures)),
         "color": same(&|r| json!(match r.color { TextColor::Auto => "auto".to_string(), TextColor::Rgb(c) => c.hex() })),
         "highlight": same(&|r| json!(r.highlight.map(|c| c.hex()))),
         "style": style,

@@ -88,6 +88,8 @@ pub enum Dialog {
         /// differs, shown neither on nor off; `kern_at` is its Points and above size.
         kern: Option<bool>,
         kern_at: f32,
+        /// Unset while the selected runs disagree.
+        ligatures: Option<wordcraft_doc::props::Ligatures>,
         /// The properties the fields stood for when the dialog opened: OK sends only what the
         /// user changed, so formatting the dialog can't show (a double underline) or left
         /// alone stays as it is.
@@ -584,7 +586,7 @@ impl Dialog {
                     text
                 };
                 let asian = ["zh", "ja", "ko"].iter().any(|l| lang.starts_with(l)) || !font_ea.is_empty() || text.chars().any(east_asian_char);
-                let kern = st.get("kern").and_then(Value::as_f64);
+                let kern = st.get("kernMinSize").and_then(Value::as_f64);
                 let mut d = Dialog::Font {
                     font_was: font.clone(),
                     font,
@@ -603,8 +605,9 @@ impl Dialog {
                     hidden: b("hidden"),
                     color: s("color"),
                     spacing: st.get("spacing").and_then(Value::as_f64).unwrap_or(0.0) as f32,
-                    kern: kern.map(|k| k > 0.0),
-                    kern_at: kern.filter(|k| *k > 0.0).unwrap_or(12.0) as f32,
+                    kern: st.get("kerning").and_then(Value::as_bool),
+                    kern_at: kern.filter(|k| *k > 0.0).unwrap_or(1.0) as f32,
+                    ligatures: st.get("ligatures").and_then(Value::as_str).and_then(wordcraft_doc::props::Ligatures::from_ooxml),
                     start: serde_json::Map::new(),
                 };
                 let props = font_props(&d);

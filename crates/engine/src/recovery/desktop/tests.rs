@@ -91,6 +91,28 @@ fn records(root: &Path) -> Vec<String> {
     ids
 }
 
+#[test]
+fn recovery_restores_legacy_ligature_flags() {
+    use wordcraft_doc::props::Ligatures;
+    let profile = Temp::new();
+    let id = new_id().unwrap();
+    {
+        let mut store = Store::new(profile.0.clone()).unwrap();
+        store.save(snapshot(&id, "Recover this formatting")).unwrap();
+        let path = &store.entries[&id].path;
+        let mut saved: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        saved["document"]["styles"]["defaultChr"]["ligatures"] = json!({"standard": true, "contextual": true});
+        fs::write(path, serde_json::to_vec(&saved).unwrap()).unwrap();
+    }
+    let mut s = session(&profile.0);
+    assert_eq!(s.recovery_documents()[0].id, id);
+    s.run("file.recover", &json!({"restore": id})).unwrap();
+    settle(&mut s);
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Recover this formatting");
+    assert_eq!(s.doc.styles.default_chr.ligatures, Some(Ligatures::StandardContextual));
+    assert!(s.dirty);
+}
+
 /// #3140: a save that lands right before the app closes can race the process exiting before
 /// the now-redundant recovery copy is actually removed, so the next launch wrongly offers to
 /// recover a document that was in fact saved cleanly. `finish_recovery` (desktop hosts call it

@@ -9,6 +9,7 @@ use wordcraft_doc::{Pos, StoryRef};
 
 use crate::{Session, cmd};
 
+mod advanced_font;
 mod bidi;
 mod documents;
 mod fonts;

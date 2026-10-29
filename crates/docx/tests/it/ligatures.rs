@@ -75,3 +75,35 @@ fn no_ligatures_element_without_a_value() {
         assert!(!xml.contains("ligatures"), "{name}");
     }
 }
+
+#[test]
+fn ligatures_roundtrip() {
+    for mode in Ligatures::ALL {
+        let run = format!(r#"<w14:ligatures w14:val="{}"/>"#, mode.as_ooxml());
+        let d = wordcraft_docx::read(&package("", "", &run)).unwrap();
+        let bytes = wordcraft_docx::write(&d).unwrap();
+        let reopened = wordcraft_docx::read(&bytes).unwrap();
+        assert_eq!(paragraph(&reopened).runs[0].props.ligatures, Some(mode));
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut xml = String::new();
+        std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+        assert!(xml.contains(&run), "{mode:?}");
+    }
+}
+
+#[test]
+fn docdefaults_match_word() {
+    let defaults = r#"<w:kern w:val="2"/><w:sz w:val="24"/><w14:ligatures w14:val="standardContextual"/>"#;
+    for d in [wordcraft_docx::read(&package(defaults, "", "")).unwrap(), Document::new()] {
+        let bytes = wordcraft_docx::write(&d).unwrap();
+        let reopened = wordcraft_docx::read(&bytes).unwrap();
+        let rc = reopened.styles.resolve_char(None, &Default::default());
+        assert_eq!(rc.kern, 1.0);
+        assert_eq!(rc.ligatures, Ligatures::StandardContextual);
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut xml = String::new();
+        std::io::Read::read_to_string(&mut zip.by_name("word/styles.xml").unwrap(), &mut xml).unwrap();
+        assert!(xml.contains(r#"<w:kern w:val="2"/>"#));
+        assert!(xml.contains(r#"<w14:ligatures w14:val="standardContextual"/>"#));
+    }
+}

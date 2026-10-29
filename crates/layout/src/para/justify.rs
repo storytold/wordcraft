@@ -60,7 +60,8 @@ pub(super) fn hyphen_glyph(pl: &ParaLayout, style: u32, cache: &mut Vec<(u32, u3
         .styles
         .get(style as usize)
         .and_then(|st| {
-            let g = wordcraft_fonts::shape(&st.face, "-", &[], |c| c).into_iter().next()?;
+            let features = super::chars::shaping_features(&st.rc);
+            let g = wordcraft_fonts::shape(&st.face, "-", &features, |c| c).into_iter().next()?;
             let k = st.size / st.face.upem.max(1.0) as f32 * st.rc.scale / 100.0;
             Some((style, g.gid, g.x_advance as f32 * k))
         })

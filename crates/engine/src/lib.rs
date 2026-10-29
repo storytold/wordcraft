@@ -195,6 +195,17 @@ pub mod p {
     pub fn bool(v: &Value, k: &str) -> Option<bool> {
         v.get(k).and_then(Value::as_bool)
     }
+    /// Commands take ligature names; only saved documents may use the old flag object.
+    pub(crate) fn char_props(v: &Value) -> Result<wordcraft_doc::CharProps, CmdError> {
+        let mut props = Some(v);
+        while let Some(p) = props {
+            if p.get("ligatures").is_some_and(|l| !l.is_null() && !l.is_string()) {
+                return Err(CmdError::Params("`ligatures` must be a selection name (string)".into()));
+            }
+            props = p.get("fmtChange").and_then(|c| c.get("old"));
+        }
+        serde::Deserialize::deserialize(v).map_err(|e| CmdError::Params(e.to_string()))
+    }
     /// The `value` param, or the first positional-ish string.
     pub fn value(v: &Value) -> Option<&Value> {
         v.get("value")

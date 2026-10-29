@@ -61,43 +61,132 @@ impl Underline {
     }
 }
 
-/// The OpenType ligatures a run asks for ([MS-DOCX] `w14:ligatures`): standard (`liga`),
-/// contextual (`clig`), historical (`hlig`) and discretional (`dlig`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
-#[serde(default, rename_all = "camelCase")]
-pub struct Ligatures {
-    pub standard: bool,
-    pub contextual: bool,
-    pub historical: bool,
-    pub discretional: bool,
+/// OpenType ligature selection ([MS-DOCX] `w14:ligatures`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum Ligatures {
+    #[default]
+    None,
+    Standard,
+    Contextual,
+    Historical,
+    Discretional,
+    StandardContextual,
+    StandardHistorical,
+    ContextualHistorical,
+    StandardDiscretional,
+    ContextualDiscretional,
+    HistoricalDiscretional,
+    StandardContextualHistorical,
+    StandardContextualDiscretional,
+    StandardHistoricalDiscretional,
+    ContextualHistoricalDiscretional,
+    All,
+}
+
+impl<'de> Deserialize<'de> for Ligatures {
+    /// Migrate saved flag objects on read; new documents always write the enum name.
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        use serde::de::{Error, MapAccess, Unexpected, Visitor, value::MapAccessDeserializer};
+
+        #[derive(Default, Deserialize)]
+        #[serde(default)]
+        struct Flags {
+            standard: bool,
+            contextual: bool,
+            historical: bool,
+            discretional: bool,
+        }
+
+        struct V;
+        impl<'de> Visitor<'de> for V {
+            type Value = Ligatures;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a ligature selection name or saved ligature flags")
+            }
+
+            fn visit_str<E: Error>(self, s: &str) -> Result<Ligatures, E> {
+                Ligatures::ALL.into_iter().find(|l| l.as_ooxml() == s).ok_or_else(|| E::invalid_value(Unexpected::Str(s), &self))
+            }
+
+            fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Ligatures, A::Error> {
+                let flags = Flags::deserialize(MapAccessDeserializer::new(map))?;
+                let features = (flags.standard, flags.contextual, flags.historical, flags.discretional);
+                Ligatures::ALL.into_iter().find(|l| l.features() == features).ok_or_else(|| A::Error::custom("invalid ligature flags"))
+            }
+        }
+        d.deserialize_any(V)
+    }
 }
 
 impl Ligatures {
-    /// Every combination of the four flags.
-    pub fn all() -> impl Iterator<Item = Ligatures> {
-        (0u8..16).map(|b| Ligatures { standard: b & 1 != 0, contextual: b & 2 != 0, historical: b & 4 != 0, discretional: b & 8 != 0 })
-    }
-    /// The `w14:ligatures/@w14:val` name: `none`, `all`, or the set flags joined in camelCase
-    /// (`standardContextual`).
-    pub fn ooxml(self) -> String {
-        let on: Vec<&str> =
-            [(self.standard, "standard"), (self.contextual, "contextual"), (self.historical, "historical"), (self.discretional, "discretional")]
-                .into_iter()
-                .filter_map(|(on, n)| on.then_some(n))
-                .collect();
-        match on.len() {
-            0 => "none".into(),
-            4 => "all".into(),
-            _ => on
-                .iter()
-                .enumerate()
-                .flat_map(|(i, n)| n.chars().enumerate().map(move |(j, c)| if i > 0 && j == 0 { c.to_ascii_uppercase() } else { c }))
-                .collect(),
+    pub const ALL: [Self; 16] = [
+        Self::None,
+        Self::Standard,
+        Self::Contextual,
+        Self::Historical,
+        Self::Discretional,
+        Self::StandardContextual,
+        Self::StandardHistorical,
+        Self::ContextualHistorical,
+        Self::StandardDiscretional,
+        Self::ContextualDiscretional,
+        Self::HistoricalDiscretional,
+        Self::StandardContextualHistorical,
+        Self::StandardContextualDiscretional,
+        Self::StandardHistoricalDiscretional,
+        Self::ContextualHistoricalDiscretional,
+        Self::All,
+    ];
+
+    pub fn as_ooxml(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Standard => "standard",
+            Self::Contextual => "contextual",
+            Self::Historical => "historical",
+            Self::Discretional => "discretional",
+            Self::StandardContextual => "standardContextual",
+            Self::StandardHistorical => "standardHistorical",
+            Self::ContextualHistorical => "contextualHistorical",
+            Self::StandardDiscretional => "standardDiscretional",
+            Self::ContextualDiscretional => "contextualDiscretional",
+            Self::HistoricalDiscretional => "historicalDiscretional",
+            Self::StandardContextualHistorical => "standardContextualHistorical",
+            Self::StandardContextualDiscretional => "standardContextualDiscretional",
+            Self::StandardHistoricalDiscretional => "standardHistoricalDiscretional",
+            Self::ContextualHistoricalDiscretional => "contextualHistoricalDiscretional",
+            Self::All => "all",
         }
     }
-    /// `None` for a name [MS-DOCX] doesn't define.
-    pub fn from_ooxml(s: &str) -> Option<Ligatures> {
-        Ligatures::all().find(|l| l.ooxml() == s)
+
+    /// Unknown values are ignored by the DOCX reader.
+    pub fn from_ooxml(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|l| l.as_ooxml().eq_ignore_ascii_case(s))
+    }
+
+    /// Standard (`liga`), contextual (`calt`), historical (`hlig`), discretional (`dlig`).
+    pub fn features(self) -> (bool, bool, bool, bool) {
+        let bits = match self {
+            Self::None => 0,
+            Self::Standard => 1,
+            Self::Contextual => 2,
+            Self::Historical => 4,
+            Self::Discretional => 8,
+            Self::StandardContextual => 3,
+            Self::StandardHistorical => 5,
+            Self::ContextualHistorical => 6,
+            Self::StandardDiscretional => 9,
+            Self::ContextualDiscretional => 10,
+            Self::HistoricalDiscretional => 12,
+            Self::StandardContextualHistorical => 7,
+            Self::StandardContextualDiscretional => 11,
+            Self::StandardHistoricalDiscretional => 13,
+            Self::ContextualHistoricalDiscretional => 14,
+            Self::All => 15,
+        };
+        (bits & 1 != 0, bits & 2 != 0, bits & 4 != 0, bits & 8 != 0)
     }
 }
 
@@ -285,8 +374,7 @@ pub struct CharProps {
     /// Kerning for fonts at or above this size (points); 0 = off.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kern: Option<f32>,
-    /// OpenType ligatures (`w14:ligatures`). `None` leaves WordCraft's default: standard and
-    /// contextual ligatures.
+    /// Ligature selection; unset inherits, `Ligatures::None` explicitly disables it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ligatures: Option<Ligatures>,
     #[serde(skip_serializing_if = "Option::is_none")]

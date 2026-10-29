@@ -36,11 +36,16 @@ pub(crate) fn push_caps(rc: &ResolvedChar, c: char, out: &mut String) {
     if rc.caps || (rc.small_caps && c.is_lowercase()) { out.extend(c.to_uppercase()) } else { out.push(c) }
 }
 
-/// The OpenType ligature features a `w14:ligatures` value sets, each on or off. Required
-/// ligatures (`rlig`, Arabic lam-alef) are never turned off.
-pub(crate) fn ligature_features(l: wordcraft_doc::props::Ligatures) -> [wordcraft_fonts::Feature; 4] {
+/// Explicit optional typography, leaving required script features to the shaper.
+pub(crate) fn shaping_features(rc: &ResolvedChar) -> [wordcraft_fonts::Feature; 5] {
     let f = |tag: &[u8; 4], on: bool| wordcraft_fonts::feature_value(tag, on as u32);
-    [f(b"liga", l.standard), f(b"clig", l.contextual), f(b"hlig", l.historical), f(b"dlig", l.discretional)]
+    let (liga, calt, hlig, dlig) = rc.ligatures.features();
+    [f(b"kern", rc.kerned()), f(b"liga", liga), f(b"calt", calt), f(b"hlig", hlig), f(b"dlig", dlig)]
+}
+
+/// Preserve Khmer defaults only within one itemized script span, not its neighbours.
+pub(crate) fn script_features<'a>(features: &'a [wordcraft_fonts::Feature; 5], text: &str) -> &'a [wordcraft_fonts::Feature] {
+    if text.chars().any(is_khmer) { &features[..1] } else { features }
 }
 
 /// A Khmer letter, sign or digit (U+1780–U+17FF, Khmer Symbols U+19E0–U+19FF).

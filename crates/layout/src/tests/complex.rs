@@ -274,8 +274,7 @@ fn a_missing_roman_thai_font_is_not_drawn_in_cambria() {
     assert_eq!(face(true).id(), face(false).id());
 }
 
-/// `w14:ligatures` (Word writes `historicalDiscretional` on whole Khmer documents) turns `liga`
-/// and `clig` off, which breaks Khmer OS syllables: Khmer text is shaped the same either way.
+/// Khmer syllable construction remains enabled regardless of optional ligature settings.
 #[test]
 fn khmer_ignores_the_ligature_setting() {
     use wordcraft_doc::props::{CharProps, Ligatures};
@@ -287,7 +286,7 @@ fn khmer_ignores_the_ligature_setting() {
         let l = lay(&d);
         para_layout(&l, 0).glyphs.iter().map(|g| g.gid).collect::<Vec<_>>()
     };
-    let hd = Ligatures { historical: true, discretional: true, ..Default::default() };
+    let hd = Ligatures::HistoricalDiscretional;
     assert_eq!(gids(Some(hd)), gids(None));
     assert_eq!(gids(Ligatures::from_ooxml("none")), gids(None));
 }

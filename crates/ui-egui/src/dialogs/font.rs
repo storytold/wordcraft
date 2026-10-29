@@ -9,7 +9,24 @@ pub(super) fn preview_size(size: &str) -> f32 {
 /// The character properties the Font dialog's fields stand for.
 pub(super) fn font_props(d: &Dialog) -> serde_json::Map<String, Value> {
     let Dialog::Font {
-        font, font_ea, size, bold, italic, underline, strike, sup, sub, small_caps, caps, hidden, color, spacing, kern, kern_at, ..
+        font,
+        font_ea,
+        size,
+        bold,
+        italic,
+        underline,
+        strike,
+        sup,
+        sub,
+        small_caps,
+        caps,
+        hidden,
+        color,
+        spacing,
+        kern,
+        kern_at,
+        ligatures,
+        ..
     } = d
     else {
         return serde_json::Map::new();
@@ -33,12 +50,15 @@ pub(super) fn font_props(d: &Dialog) -> serde_json::Map<String, Value> {
     props.insert("spacing".into(), json!(*spacing));
     match kern {
         Some(true) => {
-            props.insert("kern".into(), json!(kern_at.clamp(1.0, 1638.0)));
+            props.insert("kern".into(), json!(kern_at.clamp(0.5, 1638.0)));
         }
         Some(false) => {
             props.insert("kern".into(), json!(0.0));
         }
         None => {}
+    }
+    if let Some(mode) = ligatures {
+        props.insert("ligatures".into(), json!(mode));
     }
     if !font.trim().is_empty() {
         props.insert("font".into(), json!(font.trim()));
@@ -80,5 +100,28 @@ pub(super) fn apply_font(app: &mut WordApp, d: &Dialog) {
     }
     if !changed.is_empty() {
         let _ = app.run("format.set", json!({"props": changed}));
+    }
+}
+
+/// Display labels are translated at the UI boundary, not stored in the document.
+pub(super) fn ligature_label(mode: wordcraft_doc::props::Ligatures) -> &'static str {
+    use wordcraft_doc::props::Ligatures;
+    match mode {
+        Ligatures::None => tl!("None"),
+        Ligatures::Standard => tl!("Standard"),
+        Ligatures::Contextual => tl!("Contextual"),
+        Ligatures::Historical => tl!("Historical"),
+        Ligatures::Discretional => tl!("Discretional"),
+        Ligatures::StandardContextual => tl!("Standard and Contextual"),
+        Ligatures::StandardHistorical => tl!("Standard and Historical"),
+        Ligatures::ContextualHistorical => tl!("Contextual and Historical"),
+        Ligatures::StandardDiscretional => tl!("Standard and Discretional"),
+        Ligatures::ContextualDiscretional => tl!("Contextual and Discretional"),
+        Ligatures::HistoricalDiscretional => tl!("Historical and Discretional"),
+        Ligatures::StandardContextualHistorical => tl!("Standard, Contextual and Historical"),
+        Ligatures::StandardContextualDiscretional => tl!("Standard, Contextual and Discretional"),
+        Ligatures::StandardHistoricalDiscretional => tl!("Standard, Historical and Discretional"),
+        Ligatures::ContextualHistoricalDiscretional => tl!("Contextual, Historical and Discretional"),
+        Ligatures::All => tl!("All"),
     }
 }

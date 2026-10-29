@@ -485,7 +485,14 @@ impl StyleSheet {
     /// The built-in style set used for new documents.
     pub fn builtin() -> Self {
         let mut s = StyleSheet {
-            default_chr: CharProps { font: Some(BODY_FONT.into()), size: Some(12.0), kern: Some(1.0), lang: Some("en-US".into()), ..chr() },
+            default_chr: CharProps {
+                font: Some(BODY_FONT.into()),
+                size: Some(12.0),
+                kern: Some(1.0),
+                ligatures: Some(crate::props::Ligatures::StandardContextual),
+                lang: Some("en-US".into()),
+                ..chr()
+            },
             default_para: ParaProps {
                 space_after: Some(8.0),
                 space_before: Some(0.0),

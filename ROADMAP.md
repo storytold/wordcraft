@@ -1,5 +1,7 @@
 # WordCraft roadmap
 
+> **Font Advanced update:** 2026-10-29 · Kerning fonts and all 16 ligature selections are available in the Font dialog and through commands. New documents explicitly declare standard/contextual ligatures; imported documents without a selection resolve to none. Legacy JSON/recovery ligature flags migrate on read while commands remain string-only; paragraph and graphic text apply the Khmer shaping exception per script span. Readiness estimates unchanged.
+
 > **Highlight update:** 2026-10-25 · Highlight shortcut toggles the last chosen colour off when the whole selection has it; explicit colour commands remain setters (#4085). Readiness estimates unchanged.
 
 **Stage: alpha** · next: beta, ~15 points (60% → 75% ready for real work) and ~150–230 h away
@@ -139,6 +141,18 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
    (20–30 h).
 
 ## Progress log
+
+- 2026-10-29: Font › Advanced: Kerning fonts (0.5–1638 pt threshold) and all 16 ligature selections, including mixed selections and undo. `format.kerning`, `format.ligatures`, and `format.set` expose the same settings to CLI/MCP/control clients. DOCX preserves every selection; new document defaults explicitly request kerning from 1 pt and standard/contextual ligatures. Optional contextual shaping uses `calt`; required script shaping, including Khmer syllable construction, stays enabled. Synthetic DOCX, command, cache-invalidation, substitution, and rendered-dialog checks cover the change; no new Word compatibility-prompt check.
+- 2026-10-29: PR #4807 review follow-up: saved JSON and recovery snapshots retain old Boolean ligature selections and write enum names on their next save; formatting and style commands still require strings. Paragraphs and graphic text select features after script itemization, so Khmer keeps its defaults without overriding neighbouring Latin ligature choices; feature arrays remain stack-allocated. Independent expectations cover all 16 feature combinations and their persisted flags. Regression checks cover legacy JSON save/reopen, recovery restore, rejected command objects and mixed-script labels. CLI JSON/DOCX/PDF checks pass; rendering changes for Latin/mixed labels with None versus Contextual while Khmer-only rendering is unchanged. No new native Word comparison.
+
+Local release-mode shaping probe (Linux, bundled fonts, 1,000 paragraphs / 308 pages, median of 11 runs; timings are not a cross-machine guarantee):
+
+| Measurement | Upstream `aadb077` | Font Advanced |
+|---|---:|---:|
+| Cold layout | 492.728 ms | 468.167 ms |
+| Relayout after one formatting edit | 18.184 ms | 19.441 ms |
+
+The existing `layout_is_fast` regression remains the performance gate. Feature construction uses a fixed five-element stack array, with no per-segment heap allocation.
 
 - 2026-10-22: View › Window › New Window opens a second window on the document (desktop). The windows are titled `Name:1` and `Name:2` and each keeps its own caret, scroll position, zoom and view; edits and Undo are the document's and show in both. Closing one of them asks nothing; the last one asks about unsaved changes, and quitting asks once per document.
 - 2026-10-22: One native window per open document on the desktop. File › New and Open (from the ribbon, File, shortcuts, the file manager, the command line or the control channel) open the document in a window of its own, focused and placed a step below and right of the last one; opening a file replaces a blank document nobody has used in its own window, and a file that is already open brings its window to the front. Each window keeps its own ribbon tab, File page, dialogs, panes, scroll position and composition. View › Window › Switch Windows lists the windows and brings the chosen one forward. File › Close and a window's close button close that window, asking about unsaved changes first; the last window stays open with no document. Quitting asks about each document with unsaved changes in its own window, and Cancel keeps everything open. The control channel's input and screenshots go to the window focused last. The web app keeps one window.
@@ -644,6 +658,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-29 | trivial | Font Advanced commands and all 16 ligature choices; explicit defaults, legacy JSON/recovery migration with string-only commands, script-local Khmer exception and independent feature-mapping checks; synthetic, rendered-dialog and CLI round-trip checks, local layout timing recorded; readiness estimates unchanged |
 | 2026-10-22 | trivial | Progress log: one native window per open document |
 | 2026-10-22 | trivial | Progress log: every open document keeps its own recovery copy |
 | 2026-10-22 | trivial | Progress log: several open documents in the desktop window |

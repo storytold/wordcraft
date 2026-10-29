@@ -89,34 +89,57 @@ mod tests {
         }
     }
 
-    /// The 16 `w14:ligatures` values of [MS-DOCX], each to its flags and back.
+    /// Public JSON and OOXML names accept every selection, including explicit off.
     #[test]
     fn ligature_names() {
-        let l = |standard, contextual, historical, discretional| Ligatures { standard, contextual, historical, discretional };
-        for (name, flags) in [
-            ("none", l(false, false, false, false)),
-            ("standard", l(true, false, false, false)),
-            ("contextual", l(false, true, false, false)),
-            ("historical", l(false, false, true, false)),
-            ("discretional", l(false, false, false, true)),
-            ("standardContextual", l(true, true, false, false)),
-            ("standardHistorical", l(true, false, true, false)),
-            ("contextualHistorical", l(false, true, true, false)),
-            ("standardDiscretional", l(true, false, false, true)),
-            ("contextualDiscretional", l(false, true, false, true)),
-            ("historicalDiscretional", l(false, false, true, true)),
-            ("standardContextualHistorical", l(true, true, true, false)),
-            ("standardContextualDiscretional", l(true, true, false, true)),
-            ("standardHistoricalDiscretional", l(true, false, true, true)),
-            ("contextualHistoricalDiscretional", l(false, true, true, true)),
-            ("all", l(true, true, true, true)),
-        ] {
-            assert_eq!(Ligatures::from_ooxml(name), Some(flags), "{name}");
-            assert_eq!(flags.ooxml(), name);
+        for mode in Ligatures::ALL {
+            let name = mode.as_ooxml();
+            assert_eq!(Ligatures::from_ooxml(&name.to_ascii_uppercase()), Some(mode));
+            assert_eq!(serde_json::from_value::<Ligatures>(serde_json::json!(name)).unwrap(), mode);
+            assert_eq!(serde_json::to_value(mode).unwrap(), serde_json::json!(name));
         }
-        assert_eq!(Ligatures::all().count(), 16);
-        for bad in ["", "Standard", "contextualStandard", "standardstandard", "allx"] {
+        for bad in ["", "contextualStandard", "standardstandard", "allx"] {
             assert_eq!(Ligatures::from_ooxml(bad), None, "{bad:?}");
+            assert!(serde_json::from_value::<Ligatures>(serde_json::json!(bad)).is_err());
+        }
+    }
+
+    #[test]
+    fn ligature_modes_and_saved_flags() {
+        use serde_json::{from_value, json, to_value};
+        let expected = [
+            (Ligatures::None, (false, false, false, false)),
+            (Ligatures::Standard, (true, false, false, false)),
+            (Ligatures::Contextual, (false, true, false, false)),
+            (Ligatures::Historical, (false, false, true, false)),
+            (Ligatures::Discretional, (false, false, false, true)),
+            (Ligatures::StandardContextual, (true, true, false, false)),
+            (Ligatures::StandardHistorical, (true, false, true, false)),
+            (Ligatures::ContextualHistorical, (false, true, true, false)),
+            (Ligatures::StandardDiscretional, (true, false, false, true)),
+            (Ligatures::ContextualDiscretional, (false, true, false, true)),
+            (Ligatures::HistoricalDiscretional, (false, false, true, true)),
+            (Ligatures::StandardContextualHistorical, (true, true, true, false)),
+            (Ligatures::StandardContextualDiscretional, (true, true, false, true)),
+            (Ligatures::StandardHistoricalDiscretional, (true, false, true, true)),
+            (Ligatures::ContextualHistoricalDiscretional, (false, true, true, true)),
+            (Ligatures::All, (true, true, true, true)),
+        ];
+        for (mode, flags) in expected {
+            assert_eq!(mode.features(), flags, "{mode:?}");
+            let (standard, contextual, historical, discretional) = flags;
+            let props: CharProps = from_value(json!({"ligatures": {
+                "standard": standard, "contextual": contextual, "historical": historical, "discretional": discretional
+            }}))
+            .unwrap();
+            assert_eq!(props.ligatures, Some(mode));
+            assert_eq!(to_value(props).unwrap(), json!({"ligatures": mode.as_ooxml()}));
+        }
+        for (flags, expected) in [(json!({}), Ligatures::None), (json!({"contextual": true}), Ligatures::Contextual)] {
+            assert_eq!(from_value::<Ligatures>(flags).unwrap(), expected);
+        }
+        for bad in [json!({"standard": "true"}), json!({"contextual": null}), json!(true), json!(4), json!([]), json!("Standard")] {
+            assert!(from_value::<Ligatures>(bad).is_err());
         }
     }
 

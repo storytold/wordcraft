@@ -1,7 +1,7 @@
 use super::bidi::{Dir, bidi_levels, strong_rtl, visual_order};
 use super::chars::{
-    SegKey, caps_expands, context_digit_dirs, is_khmer, is_mark, is_numeral_digit, ligature_features, lookup_family, remap_range, thai_run_face,
-    upper_char,
+    SegKey, caps_expands, context_digit_dirs, is_mark, is_numeral_digit, lookup_family, remap_range, script_features, shaping_features,
+    thai_run_face, upper_char,
 };
 use super::grid::east_asian;
 use super::model::{ClKind, Cluster, Enclosed, Glyph, ParaEnv, RubyLayout, StyleRun, SymbolRun};
@@ -224,7 +224,6 @@ impl<'a> Builder<'a> {
             use_levels,
             context: &context,
         });
-        let no_kern = [wordcraft_fonts::feature_value(b"kern", 0)];
         for (a, b, key) in segs {
             let Some(sub) = text.get(a..b) else { continue };
             let rc = match (&rc_cs, key.complex) {
@@ -276,26 +275,12 @@ impl<'a> Builder<'a> {
                     c
                 }
             };
-            // The shaper kerns by default; Word kerns only when Kerning for fonts covers the size.
-            // Without `w14:ligatures` the shaper's default (standard and contextual) stays.
-            let [kern_off] = no_kern;
-            // Khmer shaping builds its syllables (pre-base vowels, stacked signs) in `liga` and
-            // `clig`, so a run's ligature setting never reaches Khmer text: Word ignores it there.
-            let ligatures = rc.ligatures.filter(|_| !shape_text.chars().any(is_khmer));
-            let all = match ligatures {
-                Some(l) => {
-                    let [a, b, c, d] = ligature_features(l);
-                    [kern_off, a, b, c, d]
-                }
-                None => [kern_off; 5],
-            };
-            let from = usize::from(rc.kerned());
-            let to = if ligatures.is_some() { all.len() } else { 1 };
-            let features: &[wordcraft_fonts::Feature] = all.get(from..to).unwrap_or_default();
+            let features = shaping_features(rc);
+            let features = |text: &str| script_features(&features, text);
             let shaped = if use_levels {
-                wordcraft_fonts::shape_run(&st.face, shape_text, features, map, key.rtl)
+                wordcraft_fonts::shape_run_with_features(&st.face, shape_text, features, map, key.rtl)
             } else {
-                wordcraft_fonts::shape(&st.face, shape_text, features, map)
+                wordcraft_fonts::shape_with_features(&st.face, shape_text, features, map)
             };
             let k = st.size / st.face.upem.max(1.0) as f32;
             let hscale = rc.scale / 100.0;

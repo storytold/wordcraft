@@ -54,7 +54,10 @@ Version 1 snapshots wrap the native JSON document with an id, document name, tim
 monotonic generation. Native JSON now includes media bytes, opaque preserved parts, and
 chart/SmartArt/OLE source markup and relationships. Media and preserved parts are written as one
 base64 string each. Older JSON without these fields, or with their bytes as arrays of numbers (as
-written before base64), still opens.
+written before base64), still opens. Ligature selections saved as four Boolean flags also
+restore; later snapshots write the corresponding camelCase selection name.
+Builds that only understand the old flag-object representation cannot read the new string
+selections in JSON documents or snapshots; restore these with a current build.
 Paragraph cache revisions are transient and regenerated on load; undo history and selection are
 not part of the document snapshot. Recovery preserves the current in-memory model. It cannot
 recover content already lost during import or make later export more faithful than the exporter.

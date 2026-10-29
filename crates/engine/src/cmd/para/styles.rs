@@ -108,7 +108,7 @@ pub(super) fn create_style(s: &mut Session, v: &Value) -> CmdResult {
 
 pub(super) fn modify_style(s: &mut Session, v: &Value) -> CmdResult {
     let id = style_id(s, p::req_str(v, "style")?)?;
-    let chr: Option<CharProps> = v.get("chr").map(|c| serde_json::from_value(c.clone())).transpose().map_err(|e| CmdError::Params(e.to_string()))?;
+    let chr = v.get("chr").map(p::char_props).transpose()?;
     let para: Option<ParaProps> =
         v.get("para").map(|c| serde_json::from_value(c.clone())).transpose().map_err(|e| CmdError::Params(e.to_string()))?;
     let next = p::str(v, "next").map(str::to_string);

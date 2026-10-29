@@ -6205,6 +6205,49 @@ fn graphic_items_draw_inside_the_object() {
 }
 
 #[test]
+fn graphic_mixed_script_text_keeps_ligature_selection() {
+    use wordcraft_doc::graphic::{Graphic, GraphicItem, TextAlign};
+    use wordcraft_doc::props::Ligatures;
+    use wordcraft_fonts::{feature_value, shape};
+    // Real Latin letters on both sides establish separate script spans. The bundled
+    // font makes contextual substitutions observable without an installed Khmer face.
+    let (prefix, khmer, suffix) = ("Latin -> != === ", "\u{1780} ", "Latin -> != ===");
+    let text = format!("{prefix}{khmer}{suffix}");
+    let face = wordcraft_fonts::word::resolve("JetBrains Mono", false, false).face;
+    let gids = |text: &str, features: &[wordcraft_fonts::Feature]| shape(&face, text, features, |c| c).iter().map(|g| g.gid).collect::<Vec<_>>();
+    assert_ne!(gids(prefix, &[]), gids(prefix, &[feature_value(b"calt", 0)]), "the font has contextual substitutions");
+    let graphic = Graphic {
+        items: vec![GraphicItem::Text {
+            rect: [0.0, 0.0, 400.0, 30.0],
+            text: text.clone(),
+            size: 12.0,
+            color: Rgb::BLACK,
+            bold: false,
+            align: TextAlign::Left,
+            font: Some("JetBrains Mono".into()),
+        }],
+        ..Default::default()
+    };
+    let mut d = Document::new();
+    let object = InlineObject::Graphic { w: 400.0, h: 30.0, alt: String::new(), float: Default::default(), graphic: Arc::new(graphic) };
+    d.insert_object(&Pos::body(0, 0), object, &Default::default()).unwrap();
+    for (mode, calt) in [(Ligatures::None, 0), (Ligatures::Contextual, 1)] {
+        let features = [feature_value(b"liga", 0), feature_value(b"calt", calt), feature_value(b"hlig", 0), feature_value(b"dlig", 0)];
+        let expected: Vec<_> = gids(prefix, &features).into_iter().chain(gids(khmer, &[])).chain(gids(suffix, &features)).collect();
+        d.styles.default_chr.ligatures = Some(mode);
+        let draws = flat(display::page_display(&d, &lay(&d).pages[0], &Default::default()));
+        let actual = draws
+            .iter()
+            .find_map(|draw| match draw {
+                display::Draw::Glyphs { text: label, glyphs, .. } if label == &text => Some(glyphs.iter().map(|g| g.0).collect::<Vec<_>>()),
+                _ => None,
+            })
+            .expect("graphic text");
+        assert_eq!(actual, expected, "{mode:?}: selected Latin features and default Khmer features");
+    }
+}
+
+#[test]
 fn graphic_text_in_a_degenerate_rectangle_is_not_drawn() {
     use wordcraft_doc::graphic::{Graphic, GraphicItem, GraphicKind, TextAlign};
     use wordcraft_doc::props::Rgb;
@@ -8949,18 +8992,6 @@ fn ligatures_follow_w14_ligatures() {
     assert_eq!(glyphs(none, None), letters, "none from the character style");
     assert!(glyphs(none, standard) < letters, "standard over a style with none draws them again");
     assert_eq!(glyphs(None, Ligatures::from_ooxml("contextual")), letters, "fi is a standard ligature, not a contextual one");
-}
-
-/// Each flag of `w14:ligatures` sets its OpenType feature: standard `liga`, contextual `clig`,
-/// historical `hlig`, discretional `dlig`.
-#[test]
-fn ligature_flags_map_to_opentype_features() {
-    use wordcraft_doc::props::Ligatures;
-    let f = |t: &[u8; 4], v: u32| wordcraft_fonts::feature_value(t, v);
-    let hd = Ligatures { historical: true, discretional: true, ..Default::default() };
-    assert_eq!(para::ligature_features(hd), [f(b"liga", 0), f(b"clig", 0), f(b"hlig", 1), f(b"dlig", 1)]);
-    let sc = Ligatures { standard: true, contextual: true, ..Default::default() };
-    assert_eq!(para::ligature_features(sc), [f(b"liga", 1), f(b"clig", 1), f(b"hlig", 0), f(b"dlig", 0)]);
 }
 
 /// Word's automatic (HTML-style) paragraph spacing, measured in Word for Windows: 14 pt at any
@@ -11898,4 +11929,85 @@ fn an_empty_bulleted_mark_after_a_bulleted_section_closer_draws_no_bullet() {
             .any(|it| matches!(it, Placed::Lines { path, para, .. } if *path == Path::top(filler) && para.label.is_some()));
         assert!(text, "{filler} lines above: the text closer keeps its bullet");
     }
+}
+
+/// Reuse one cache while changing direct formatting, a style, and document defaults.
+#[test]
+fn advanced_font_settings_invalidate_cached_layout() {
+    use wordcraft_doc::props::{CharProps, Ligatures, VertAlign};
+    use wordcraft_doc::styles::{Style, StyleKind};
+    let mut d = Document::from_text("AVAV To office affinity");
+    d.styles.default_chr.font = Some("Source Serif 4".into());
+    d.styles.default_chr.size = Some(12.0);
+    d.styles.default_chr.kern = Some(0.0);
+    d.styles.default_chr.ligatures = None;
+    let mut cache = LayoutCache::new();
+    let end = d.end_of(wordcraft_doc::StoryRef::Body);
+    let mut measure = |d: &Document| {
+        let l = layout(d, &mut cache, &LayoutOptions::default());
+        let width = l.caret(&end).unwrap().x - l.caret(&Pos::body(0, 0)).unwrap().x;
+        let glyphs = l
+            .pages
+            .iter()
+            .flat_map(|p| &p.items)
+            .filter_map(|item| if let Placed::Lines { para, .. } = item { Some(para.glyphs.len()) } else { None })
+            .sum::<usize>();
+        (width, glyphs)
+    };
+    let plain = measure(&d);
+    assert_eq!(plain.1, "AVAV To office affinity".chars().count());
+    d.styles.default_chr.kern = Some(1.0);
+    let kerned = measure(&d);
+    assert!(kerned.0 < plain.0, "{kerned:?} vs {plain:?}");
+    d.styles.default_chr.kern = Some(14.0);
+    assert_eq!(measure(&d), plain, "threshold above the resolved 12 pt size");
+    d.styles.default_chr.kern = Some(12.0);
+    assert_eq!(measure(&d), kerned, "threshold equal to the resolved size");
+    d.format_range(&Pos::body(0, 0), &end, &|c| c.vert_align = Some(VertAlign::Superscript)).unwrap();
+    let super_kerned = measure(&d);
+    d.styles.default_chr.kern = Some(0.0);
+    assert!(super_kerned.0 < measure(&d).0, "kerning compares 12 pt, not the superscript's drawn size");
+    d.format_range(&Pos::body(0, 0), &end, &|c| c.vert_align = None).unwrap();
+    d.styles.upsert(Style {
+        id: "Ligatures".into(),
+        name: "Ligatures".into(),
+        kind: StyleKind::Character,
+        chr: CharProps { ligatures: Some(Ligatures::Standard), ..Default::default() },
+        ..Default::default()
+    });
+    d.format_range(&Pos::body(0, 0), &end, &|c| c.style = Some("Ligatures".into())).unwrap();
+    assert!(measure(&d).1 < plain.1, "inherited standard ligatures");
+    d.format_range(&Pos::body(0, 0), &end, &|c| c.ligatures = Some(Ligatures::None)).unwrap();
+    assert_eq!(measure(&d), plain, "direct none overrides the style");
+    d.format_range(&Pos::body(0, 0), &end, &|c| c.ligatures = None).unwrap();
+    let mut style = d.styles.get("Ligatures").unwrap().clone();
+    style.chr.ligatures = Some(Ligatures::None);
+    d.styles.upsert(style);
+    assert_eq!(measure(&d), plain, "a style edit invalidates cached shaping");
+}
+
+/// Exercise real substitutions, not just the feature tags passed to the shaper.
+#[test]
+fn contextual_and_discretional_ligatures_select_their_own_substitutions() {
+    use wordcraft_doc::props::Ligatures;
+    let glyphs = |font: &str, text: &str, mode| {
+        let mut d = Document::from_text(text);
+        d.styles.default_chr.font = Some(font.into());
+        d.styles.default_chr.ligatures = Some(mode);
+        let l = lay(&d);
+        l.pages
+            .iter()
+            .flat_map(|p| &p.items)
+            .filter_map(|it| if let Placed::Lines { para, .. } = it { Some(para.glyphs.iter().map(|g| g.gid).collect::<Vec<_>>()) } else { None })
+            .flatten()
+            .collect::<Vec<_>>()
+    };
+    let plain = glyphs("JetBrains Mono", "-> != ===", Ligatures::None);
+    let contextual = glyphs("JetBrains Mono", "-> != ===", Ligatures::Contextual);
+    assert_ne!(contextual, plain, "contextual must enable calt, not clig");
+    assert_eq!(glyphs("JetBrains Mono", "-> != ===", Ligatures::Standard), plain);
+    let plain = glyphs("Source Sans 3", ":-) .-)", Ligatures::None);
+    let discretional = glyphs("Source Sans 3", ":-) .-)", Ligatures::Discretional);
+    assert!(discretional.len() < plain.len(), "{discretional:?} vs {plain:?}");
+    assert_eq!(glyphs("Source Sans 3", ":-) .-)", Ligatures::Contextual), plain);
 }

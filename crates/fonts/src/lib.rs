@@ -170,13 +170,24 @@ fn direction_runs(text: &str) -> Vec<(std::ops::Range<usize>, bool)> {
 /// order: right-to-left runs are shaped right to left, then their clusters put back in text
 /// order (each cluster's glyphs keep the shaper's order); line layout reorders them visually.
 pub fn shape(face: &FontFace, text: &str, features: &[Feature], map: impl Fn(char) -> char) -> Vec<ShapedGlyph> {
+    shape_with_features(face, text, |_| features, map)
+}
+
+/// Shape with features selected for each itemized script span. The selector borrows
+/// caller-owned feature arrays; cluster offsets still refer to the original text.
+pub fn shape_with_features<'a>(
+    face: &FontFace,
+    text: &str,
+    features: impl Fn(&str) -> &'a [Feature],
+    map: impl Fn(char) -> char,
+) -> Vec<ShapedGlyph> {
     if !text.chars().any(is_rtl) {
-        return shape_dir(face, text, features, &map, false);
+        return shape_dir(face, text, &features, &map, false);
     }
     let mut out = Vec::with_capacity(text.len());
     for (r, rtl) in direction_runs(text) {
         let Some(sub) = text.get(r.clone()) else { continue };
-        let mut g = shape_run(face, sub, features, &map, rtl);
+        let mut g = shape_run_with_features(face, sub, &features, &map, rtl);
         for x in &mut g {
             x.cluster += r.start;
         }
@@ -190,7 +201,19 @@ pub fn shape(face: &FontFace, text: &str, features: &[Feature], map: impl Fn(cha
 /// mark positioning. Glyphs come back in logical order like [`shape`]: clusters in text order,
 /// each cluster's glyphs in the shaper's (visual) order.
 pub fn shape_run(face: &FontFace, text: &str, features: &[Feature], map: impl Fn(char) -> char, rtl: bool) -> Vec<ShapedGlyph> {
-    let g = shape_dir(face, text, features, &map, rtl);
+    shape_run_with_features(face, text, |_| features, map, rtl)
+}
+
+/// [`shape_with_features`] in a known bidi direction. Script spans share the run's
+/// direction, and right-to-left clusters return in logical order as in [`shape_run`].
+pub fn shape_run_with_features<'a>(
+    face: &FontFace,
+    text: &str,
+    features: impl Fn(&str) -> &'a [Feature],
+    map: impl Fn(char) -> char,
+    rtl: bool,
+) -> Vec<ShapedGlyph> {
+    let g = shape_dir(face, text, &features, &map, rtl);
     if !rtl {
         return g;
     }
@@ -206,7 +229,7 @@ pub fn shape_run(face: &FontFace, text: &str, features: &[Feature], map: impl Fn
     groups.into_iter().flatten().collect()
 }
 
-fn shape_dir(face: &FontFace, text: &str, features: &[Feature], map: &impl Fn(char) -> char, rtl: bool) -> Vec<ShapedGlyph> {
+fn shape_dir<'a>(face: &FontFace, text: &str, features: &impl Fn(&str) -> &'a [Feature], map: &impl Fn(char) -> char, rtl: bool) -> Vec<ShapedGlyph> {
     let mut out = Vec::with_capacity(text.len());
     let shaped = face.hb().map(|hb| {
         let shaper = face.shaper.shaper(&hb).instance(face.instance.as_ref()).build();
@@ -215,6 +238,7 @@ fn shape_dir(face: &FontFace, text: &str, features: &[Feature], map: &impl Fn(ch
         // shaped as Latin. Runs come in text order; right-to-left callers regroup by cluster.
         for r in script::script_runs(text) {
             let Some(sub) = text.get(r.clone()) else { continue };
+            let features = features(sub);
             let mut buf = UnicodeBuffer::new();
             for (i, c) in sub.char_indices() {
                 buf.add(map(c), (r.start + i) as u32);
@@ -371,7 +395,7 @@ mod tests {
             gb.glyph_infos().iter().zip(gb.glyph_positions()).map(|(i, p)| (i.glyph_id, i.cluster, p.x_advance, p.x_offset, p.y_offset)).collect()
         };
         let kept = |face: &FontFace, text: &str, features: &[Feature], rtl: bool| -> Vec<(u32, u32, i32, i32, i32)> {
-            shape_dir(face, text, features, &|c| c, rtl).iter().map(|g| (g.gid, g.cluster as u32, g.x_advance, g.x_offset, g.y_offset)).collect()
+            shape_dir(face, text, &|_| features, &|c| c, rtl).iter().map(|g| (g.gid, g.cluster as u32, g.x_advance, g.x_offset, g.y_offset)).collect()
         };
         let db = FontDb::global();
         let faces = [db.face(DEFAULT_FAMILY, "Regular"), db.face(DEFAULT_FAMILY, "Italic"), db.face("Source Sans 3", "Regular")];
@@ -406,7 +430,7 @@ mod tests {
         for n in 0..3 * MAX_SHAPE_PLANS as u32 {
             let features = [feature_value(b"kern", n % 2), feature_value(b"liga", n)];
             let rtl = n % 3 == 0;
-            let kept: Vec<(u32, i32)> = shape_dir(&face, "office", &features, &|c| c, rtl).iter().map(|g| (g.gid, g.x_advance)).collect();
+            let kept: Vec<(u32, i32)> = shape_dir(&face, "office", &|_| &features, &|c| c, rtl).iter().map(|g| (g.gid, g.x_advance)).collect();
             assert_eq!(kept, fresh(&features, rtl), "{n}");
             assert!(kept_shape_plans() <= MAX_SHAPE_PLANS, "{}", kept_shape_plans());
         }

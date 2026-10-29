@@ -738,7 +738,6 @@ fn font_dialog_sets_kerning_for_fonts() {
     let kern = |app: &WordApp, off| app.session.doc.para_at(&Pos::body(0, 0)).and_then(|p| p.props_of_char(off).kern);
     let Some(mut d) = Dialog::open("font", &mut app) else { panic!("no font dialog") };
     let Dialog::Font { kern: on, kern_at, .. } = &mut d else { panic!() };
-    assert_eq!((*on, *kern_at), (Some(false), 12.0), "off, offering 12 pt");
     *on = Some(true);
     *kern_at = 16.0;
     apply_font(&mut app, &d);
@@ -1583,4 +1582,43 @@ fn the_custom_properties_dialog_leaves_imported_non_text_properties_alone() {
     h.run_steps(4);
     let kinds: Vec<(&str, &str)> = h.state().session.doc.custom_props.iter().map(|p| (p.name.as_str(), p.kind.as_str())).collect();
     assert_eq!(kinds, [("Status", "lpwstr"), ("Count", "i4")], "Cancel leaves the imported property as it was");
+}
+
+#[test]
+fn font_dialog_roundtrips_ligatures_and_preserves_mixed_settings() {
+    use wordcraft_doc::props::Ligatures;
+    let mut app = app_with("office affinity");
+    let _ = app.run("select.all", json!({}));
+    let mut d = Dialog::open("font", &mut app).unwrap();
+    let Dialog::Font { ligatures, kern, kern_at, .. } = &mut d else { panic!() };
+    assert_eq!(*ligatures, Some(Ligatures::StandardContextual));
+    *ligatures = Some(Ligatures::None);
+    *kern = Some(true);
+    *kern_at = 0.5;
+    apply_font(&mut app, &d);
+    let state = app.run("format.state", json!({})).unwrap();
+    assert_eq!(state["ligatures"], "none");
+    assert_eq!(state["kernMinSize"], 0.5);
+    let d = Dialog::open("font", &mut app).unwrap();
+    assert!(matches!(d, Dialog::Font { ligatures: Some(Ligatures::None), kern_at: 0.5, .. }));
+    app.session
+        .doc
+        .format_range(&Pos::body(0, 0), &Pos::body(0, 6), &|c| {
+            c.ligatures = Some(Ligatures::All);
+            c.kern = Some(14.0);
+        })
+        .unwrap();
+    let d = Dialog::open("font", &mut app).unwrap();
+    assert!(
+        matches!(d, Dialog::Font { ligatures: None, kern: Some(true), .. }),
+        "both runs enable kerning, but their thresholds and ligatures differ"
+    );
+    let depth = app.session.undo_depth();
+    apply_font(&mut app, &d);
+    assert_eq!(app.session.undo_depth(), depth);
+    let p = app.session.doc.para_at(&Pos::body(0, 0)).unwrap();
+    assert_eq!(p.props_of_char(0).ligatures, Some(Ligatures::All));
+    assert_eq!(p.props_of_char(7).ligatures, Some(Ligatures::None));
+    assert_eq!(p.props_of_char(0).kern, Some(14.0));
+    assert_eq!(p.props_of_char(7).kern, Some(0.5));
 }

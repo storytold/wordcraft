@@ -1,7 +1,7 @@
 use super::bookmarks::{bookmark, enclose_preview, icons_body};
 use super::chrome::{buttons, color_field};
 use super::find::{FindTab, SEARCH_SUGGESTIONS, command_matches, find_in_navigation_pane, goto_body, special_menu, swallow_shortcut_text};
-use super::font::{apply_font, preview_size};
+use super::font::{apply_font, ligature_label, preview_size};
 use super::forms::{cell_margins_dialog, custom_properties, table_properties};
 use super::mailings::{ADDRESS_PARTS, recipient_list, rule_params};
 use super::page_setup::{page_layout_commands, page_paper_group, page_valign_combo, page_valign_value, run_as_one_step};
@@ -114,6 +114,7 @@ fn font_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         spacing,
         kern,
         kern_at,
+        ligatures,
         ..
     } = d
     else {
@@ -176,23 +177,6 @@ fn font_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         let spacing_label = ui.label(tl!("Spacing (pt):"));
         ui.add(egui::DragValue::new(spacing).speed(0.1).range(-20.0..=20.0)).labelled_by(spacing_label.id);
         ui.end_row();
-        let label = tl!("Kerning for fonts:");
-        match kern {
-            Some(on) => {
-                ui.checkbox(on, label);
-            }
-            None => {
-                if ui.add(egui::Checkbox::new(&mut false, label).indeterminate(true)).clicked() {
-                    *kern = Some(true);
-                }
-            }
-        }
-        ui.horizontal(|ui| {
-            let points = ui.add_enabled(*kern == Some(true), egui::DragValue::new(kern_at).speed(0.5).range(1.0..=1638.0).max_decimals(1));
-            let points_label = ui.label(tl!("Points and above"));
-            points.labelled_by(points_label.id);
-        });
-        ui.end_row();
     });
     ui.separator();
     ui.label(egui::RichText::new(tl!("Effects")).font(semibold(12.5)));
@@ -210,6 +194,38 @@ fn font_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         ui.checkbox(caps, tl!("All caps"));
         ui.end_row();
         ui.checkbox(hidden, tl!("Hidden"));
+        ui.end_row();
+    });
+    ui.separator();
+    ui.label(egui::RichText::new(tl!("Advanced")).font(semibold(12.5)));
+    egui::Grid::new("font_advanced").num_columns(2).show(ui, |ui| {
+        let label = tl!("Kerning fonts");
+        match kern {
+            Some(on) => {
+                ui.checkbox(on, label);
+            }
+            None => {
+                if ui.add(egui::Checkbox::new(&mut false, label).indeterminate(true)).clicked() {
+                    *kern = Some(true);
+                }
+            }
+        }
+        ui.horizontal(|ui| {
+            let label = ui.label(tl!("Apply sizes from"));
+            ui.add_enabled(*kern == Some(true), egui::DragValue::new(kern_at).speed(0.5).range(0.5..=1638.0).max_decimals(1).suffix(" pt"))
+                .labelled_by(label.id);
+        });
+        ui.end_row();
+        let label = ui.label(tl!("Ligatures"));
+        craft_ui::ComboBox::from_id_salt("font_ligatures")
+            .selected_text(ligatures.map(ligature_label).unwrap_or(tl!("Mixed")))
+            .show_ui(ui, |ui| {
+                for mode in wordcraft_doc::props::Ligatures::ALL {
+                    ui.selectable_value(ligatures, Some(mode), ligature_label(mode));
+                }
+            })
+            .response
+            .labelled_by(label.id);
         ui.end_row();
     });
     // Live preview of the chosen font/size/colour/effects.

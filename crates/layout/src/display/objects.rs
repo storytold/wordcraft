@@ -284,7 +284,9 @@ fn text_glyphs(doc: &Document, r: Rect, it: &GraphicItem, alpha: f32, k: f32) ->
     let size = size.clamp(1.0, 400.0);
     let resolved = wordcraft_fonts::word::resolve(family, *bold, false);
     let face = resolved.face.get();
-    let shaped = wordcraft_fonts::shape(face, text, &[], |c| c);
+    let rc = doc.styles.resolve_char(None, &wordcraft_doc::CharProps { size: Some(size), ..Default::default() });
+    let features = crate::para::shaping_features(&rc);
+    let shaped = wordcraft_fonts::shape_with_features(face, text, |text| crate::para::script_features(&features, text), |c| c);
     if shaped.is_empty() {
         return None;
     }

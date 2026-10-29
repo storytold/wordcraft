@@ -77,6 +77,8 @@ Home|Font|Engrave|format.engrave
 Home|Font|Character Spacing|format.spacing
 Home|Font|Character Scale|format.scale
 Home|Font|Character Position|format.position
+Home|Font|Kerning fonts|format.kerning
+Home|Font|Ligatures|format.ligatures
 Home|Font|Character Border|format.border
 Home|Font|Phonetic Guide|format.phonetic
 Home|Font|Enclose Characters|format.enclose

@@ -93,7 +93,7 @@ fn every_char_prop_round_trips() {
         scale: Some(150.0),
         position: Some(3.0),
         kern: Some(8.0),
-        ligatures: Some(wordcraft_doc::props::Ligatures { standard: true, historical: true, ..Default::default() }),
+        ligatures: Some(wordcraft_doc::props::Ligatures::StandardHistorical),
         outline: Some(true),
         shadow: Some(true),
         emboss: Some(false),

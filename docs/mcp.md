@@ -42,6 +42,25 @@ open another one and make it active; later commands and the saves work on the ac
 `view.switchWindows={"id": n}` makes one active. A failing command stops the run with `command N (id): …` and exit
 status 1, and nothing is saved. Every output is checked (known extension, folder exists) before the first is written. Paths inside command params (a picture to insert, say) are relative to the working folder, not the script's. Scripts are capped at 4 MiB.
 
+### Font Advanced formatting
+
+`execute` accepts `format.kerning` with optional boolean `value` and numeric `minSize`,
+for example `{"value": true, "minSize": 14}`.
+Without either parameter it toggles; `minSize` alone enables kerning at that threshold
+(points, clamped to 0.5–1638). `{"value": false}` disables it.
+`format.ligatures {"mode": "standardContextual"}` selects any of the 16 OOXML
+ligature names, including `none` and `all`. Unknown names fail without editing.
+The `format.set` character property is now a camelCase string:
+`{"props": {"ligatures": "none"}}`, not a flag object. `styles.modify` uses the
+same string in `chr.ligatures`. Legacy flag objects remain readable in saved JSON
+documents and recovery snapshots; saving migrates them to strings. Commands
+reject flag objects, including in tracked formatting's previous properties.
+`format.state` returns `kerning`, `kernMinSize`, and `ligatures`; a value is `null`
+when the selection disagrees. These command contracts also apply to the CLI and
+control channel. New documents explicitly declare kerning from 1 pt and
+`standardContextual`; an imported document with neither property anywhere in its
+style hierarchy has neither kerning nor optional ligatures.
+
 ## Tracked changes by an agent
 
 Tracked changes and comments are recorded under the session's user name ("WordCraft User" by
