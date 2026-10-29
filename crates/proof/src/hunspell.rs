@@ -14,8 +14,8 @@ use std::sync::RwLock;
 
 use crate::affix::AffixDict;
 
-/// Largest `.aff` or `.dic` file read (real ones are a few MB).
-const MAX_FILE: u64 = 64 << 20;
+/// Largest `.aff` or `.dic` file read (most are a few MB; Turkish's `.dic` is ~36 MB).
+pub const MAX_FILE: u64 = 64 << 20;
 
 /// An extra directory searched first (a setting), set by the front end.
 static EXTRA_DIR: RwLock<Option<PathBuf>> = RwLock::new(None);
@@ -52,6 +52,23 @@ pub fn set_dictionary_dir(dir: Option<PathBuf>) {
     LOAD_ERRORS.write().unwrap_or_else(std::sync::PoisonError::into_inner).clear(); // they belong to the old search path
 }
 
+/// WordCraft's own folder for downloaded dictionaries (`dictionaries` in the settings folder),
+/// set by the front end; searched after the folder of [`set_dictionary_dir`].
+static DOWNLOAD_DIR: RwLock<Option<PathBuf>> = RwLock::new(None);
+
+/// Set WordCraft's folder for downloaded dictionaries ([`crate::libreoffice`]).
+pub fn set_download_dir(dir: Option<PathBuf>) {
+    *DOWNLOAD_DIR.write().unwrap_or_else(|e| e.into_inner()) = dir;
+}
+
+/// Where a downloaded dictionary goes: the dictionaries folder the user chose (File › Options ›
+/// Proofing), else WordCraft's own folder; `None` when neither is set (the web, or a run without
+/// settings).
+pub fn download_dir() -> Option<PathBuf> {
+    let chosen = EXTRA_DIR.read().unwrap_or_else(|e| e.into_inner()).clone();
+    chosen.or_else(|| DOWNLOAD_DIR.read().unwrap_or_else(|e| e.into_inner()).clone())
+}
+
 /// The LibreOffice extension directories a Hunspell dictionary name may live in: LibreOffice's
 /// IDs are per dictionary — Polish is `dict-pl`, Brazilian Portuguese `dict-pt-BR` — so both
 /// the primary-language folder and the dashed full name are tried.
@@ -68,6 +85,9 @@ fn lo_ext_dirs(name: &str) -> Vec<String> {
 pub fn search_dirs(lo_exts: Option<&[String]>) -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = Vec::new();
     if let Some(d) = EXTRA_DIR.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone() {
+        dirs.push(d);
+    }
+    if let Some(d) = DOWNLOAD_DIR.read().unwrap_or_else(|e| e.into_inner()).clone() {
         dirs.push(d);
     }
     if cfg!(target_arch = "wasm32") {

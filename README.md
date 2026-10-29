@@ -382,7 +382,7 @@ with its author, source and license in [ATTRIBUTION.md](ATTRIBUTION.md).
 The English spelling dictionary and hyphenation come from Grady Ward's public-domain Moby
 Hyphenator II word list. Polish spelling reads the Hunspell `pl_PL` dictionary installed on the system (not bundled), as
 do Russian, Portuguese, Czech, Italian, Croatian and Turkish spelling (how to install them:
-[docs/spelling-dictionaries.md](docs/spelling-dictionaries.md)), and
+[docs/spelling-dictionaries.md](docs/spelling-dictionaries.md); File › Options › Proofing can also download the Polish, Portuguese, Italian, Russian and Czech ones from [LibreOffice's dictionary collection](https://github.com/LibreOffice/dictionaries), where each keeps its own license), and
 Polish hyphenation the TeX patterns by Hanna Kołodziejska, Bogusław Jackowski and Marek Ryćko (MIT
 option). The sample documents and templates are original text written for WordCraft.
 

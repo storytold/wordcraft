@@ -28,6 +28,7 @@ pub mod credits;
 pub mod crop;
 pub mod desktop_theme;
 pub mod dialogs;
+pub mod dictionaries;
 pub mod documents;
 pub mod equation_tab;
 /// The built-in file browser, for desktops without a system file dialog (#576).
@@ -574,6 +575,8 @@ pub struct WordApp {
     pub(crate) outline_prev_tab: Option<String>,
     /// Zotero commands in flight (`ui.zotero.*`).
     pub zotero: zotero::ZoteroLink,
+    /// Spelling dictionary downloads (`ui.dictionaries.*`).
+    pub dictionaries: dictionaries::Downloads,
     /// The egui context, once the first frame has run (background work wakes the UI with it).
     pub(crate) ctx: Option<egui::Context>,
     /// Whether the current command was entered by an input method's own transaction. The engine

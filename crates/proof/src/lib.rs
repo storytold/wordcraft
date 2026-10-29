@@ -61,6 +61,7 @@ pub mod hyphen;
 pub mod id;
 pub mod it;
 pub mod lang;
+pub mod libreoffice;
 pub mod patterns;
 pub mod pl;
 pub mod pt;
@@ -174,6 +175,24 @@ pub fn set_dictionaries_folder(dir: Option<std::path::PathBuf>) {
     DICTIONARY_GENERATION.fetch_add(1, Ordering::Relaxed);
 }
 
+/// Look for `lang`'s Hunspell dictionary again (after one was downloaded into the dictionaries
+/// folder, [`libreoffice`]), and tell cached proofing results to refresh.
+pub fn reload_dictionary(lang: ProofLang) {
+    match lang {
+        ProofLang::Pl => pl::reload_dictionary(),
+        ProofLang::Pt => pt::reload_dictionary(),
+        ProofLang::It => it::reload_dictionary(),
+        ProofLang::Hr => hr::reload_dictionary(),
+        ProofLang::Tr => tr::reload_dictionary(),
+        ProofLang::Ru => ru::reload_dictionary(),
+        ProofLang::Cs => cs::reload_dictionary(),
+        ProofLang::Id => id::reload_dictionary(),
+        ProofLang::Es | ProofLang::EsMx | ProofLang::Es419 | ProofLang::EsUy => es::reload_dictionary(),
+        ProofLang::En | ProofLang::EnGb | ProofLang::EnCa | ProofLang::Bg | ProofLang::De | ProofLang::Other => return,
+    }
+    DICTIONARY_GENERATION.fetch_add(1, Ordering::Relaxed);
+}
+
 /// Each language that reads an installed Hunspell dictionary, with the `.dic` file found for it
 /// now (`None`: not installed, so the language has no spelling marks).
 pub fn installed_dictionaries() -> Vec<(ProofLang, Option<std::path::PathBuf>)> {
@@ -204,6 +223,8 @@ pub fn dictionary_load_error(lang: ProofLang) -> Option<String> {
         ProofLang::Hr => "hr_HR",
         ProofLang::Tr => "tr_TR",
         ProofLang::Id => "id_ID",
+        ProofLang::Ru => "ru_RU",
+        ProofLang::Cs => "cs_CZ",
         ProofLang::Es | ProofLang::EsMx | ProofLang::Es419 | ProofLang::EsUy => es::dictionary_name(lang),
         _ => return None,
     };
@@ -1062,6 +1083,18 @@ mod tests {
 
     /// Held by tests that swap or rely on the shared Spanish dictionary, so a folder reset can't land mid-test.
     static DICTIONARY_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Russian and Czech report why their dictionary didn't load, as the other Hunspell
+    /// languages do (File › Options › Proofing shows the reason).
+    #[test]
+    fn russian_and_czech_load_errors_are_reported() {
+        for (lang, key) in [(ProofLang::Ru, "ru_RU"), (ProofLang::Cs, "cs_CZ")] {
+            let _ = hunspell::note_load::<()>(key, std::path::Path::new("/nowhere/x.dic"), Err("FLAG long is not supported".into()));
+            assert_eq!(dictionary_load_error(lang).as_deref(), Some("FLAG long is not supported"), "{lang:?}");
+            hunspell::clear_load_error(key);
+            assert_eq!(dictionary_load_error(lang), None);
+        }
+    }
 
     /// #1063: the dictionaries folder is searched before the system locations; the dictionaries
     /// in it are reported and used, and cached checks are dropped. The folder holds the same test

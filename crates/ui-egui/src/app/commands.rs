@@ -128,6 +128,12 @@ impl WordApp {
         if let Some(r) = table_pen::toggle(self, id, &params) {
             return r;
         }
+        if let Some(r) = dictionaries::command(self, id, &params) {
+            if let Err(e) = &r {
+                self.status(e.clone());
+            }
+            return r;
+        }
         let ctx = self.ctx.clone();
         if let Some(r) = zotero::command(self, id, &params, ctx.as_ref()) {
             if let Err(e) = &r {
@@ -1019,6 +1025,8 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.caretAnimation"
             | "ui.startScreen"
             | "ui.checkForUpdates"
+            | "ui.dictionaries"
+            | "ui.dictionaries.download"
     ) || id.starts_with("help.")
 }
 

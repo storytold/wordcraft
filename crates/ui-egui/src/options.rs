@@ -349,38 +349,63 @@ fn dictionaries(app: &mut WordApp, ui: &mut Ui) {
     });
     ui.data_mut(|d| d.insert_temp(id, folder));
     note(ui, "Hunspell .aff and .dic files here (pl_PL, pt_BR, it_IT, hr_HR, tr_TR) are used before the system's.");
-    // The dictionary each language found, looked up again after the folder changes.
+    // The dictionary each language found, looked up again after the folder changes or a
+    // download finishes.
     let found_id = egui::Id::unique("options_dictionaries_found");
     let generation = wordcraft_engine::proof::dictionary_generation();
-    let cached = ui.data(|d| d.get_temp::<(u64, Vec<(String, Option<String>, Option<String>)>)>(found_id)).filter(|(g, _)| *g == generation);
+    type Found = Vec<(wordcraft_engine::proof::ProofLang, Option<String>, Option<String>)>;
+    let cached = ui.data(|d| d.get_temp::<(u64, Found)>(found_id)).filter(|(g, _)| *g == generation);
     let found = match cached {
         Some((_, f)) => f,
         None => {
-            let f: Vec<(String, Option<String>, Option<String>)> = wordcraft_engine::proof::installed_dictionaries()
+            let f: Found = wordcraft_engine::proof::installed_dictionaries()
                 .into_iter()
-                .map(|(lang, dic)| {
-                    let error = wordcraft_engine::proof::dictionary_load_error(lang);
-                    (language_name(lang).to_string(), dic.map(|d| d.to_string_lossy().into_owned()), error)
-                })
+                .map(|(lang, dic)| (lang, dic.map(|d| d.to_string_lossy().into_owned()), wordcraft_engine::proof::dictionary_load_error(lang)))
                 .collect();
             ui.data_mut(|d| d.insert_temp(found_id, (generation, f.clone())));
             f
         }
     };
-    for (language, file, error) in found {
-        let line = match (file, error) {
-            (Some(f), Some(e)) => {
-                crate::i18n::fmt(tl!("{language}: {file} (unreadable: {reason})"), &[("language", &language), ("file", &f), ("reason", &e)])
+    // A missing dictionary can be downloaded from LibreOffice's collection (desktop, with a
+    // dictionaries folder to put it in).
+    let busy = app.dictionaries.busy();
+    let can_download = !cfg!(target_arch = "wasm32") && wordcraft_engine::proof::hunspell::download_dir().is_some();
+    let mut missing = false;
+    for (lang, file, error) in found {
+        let language = language_name(lang);
+        ui.horizontal(|ui| {
+            let line = match (&file, &error) {
+                (Some(f), Some(e)) => {
+                    crate::i18n::fmt(tl!("{language}: {file} (unreadable: {reason})"), &[("language", language), ("file", f), ("reason", e)])
+                }
+                (Some(f), None) => crate::i18n::fmt(tl!("{language}: {file}"), &[("language", language), ("file", f)]),
+                (None, _) => crate::i18n::fmt(tl!("{language}: no dictionary found"), &[("language", language)]),
+            };
+            ui.add(egui::Label::new(RichText::new(line).small()).truncate());
+            // An unreadable pair can be replaced: the download goes to a folder searched first.
+            if (file.is_some() && error.is_none()) || !can_download || wordcraft_engine::proof::libreoffice::source(lang).is_none() {
+                return;
             }
-            (Some(f), None) => crate::i18n::fmt(tl!("{language}: {file}"), &[("language", &language), ("file", &f)]),
-            (None, _) => crate::i18n::fmt(tl!("{language}: no dictionary found"), &[("language", &language)]),
-        };
-        ui.add(egui::Label::new(RichText::new(line).small()).truncate());
+            missing = true;
+            if busy == Some(lang) {
+                ui.label(RichText::new(tl!("Downloading…")).small().weak());
+            } else if ui.add_enabled(busy.is_none(), egui::Button::new(tl!("Download")).small()).clicked()
+                && let Err(e) = app.run("ui.dictionaries.download", json!({"lang": lang.code()}))
+            {
+                app.status(e);
+            }
+        });
+    }
+    if missing {
+        note(
+            ui,
+            "Download fetches the dictionary from LibreOffice's dictionary collection into the dictionaries folder. Each keeps its own licence (GPL, LGPL or MPL) and stays a separate file that WordCraft only reads.",
+        );
     }
 }
 
 /// The interface name of a language with a Hunspell dictionary.
-fn language_name(lang: wordcraft_engine::proof::ProofLang) -> &'static str {
+pub(crate) fn language_name(lang: wordcraft_engine::proof::ProofLang) -> &'static str {
     use wordcraft_engine::proof::ProofLang;
     match lang {
         ProofLang::Pl => tl!("Polish"),

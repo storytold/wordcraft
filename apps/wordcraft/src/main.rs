@@ -203,6 +203,16 @@ fn load_prefs(app: &mut WordApp) {
     }
 }
 
+/// Spelling dictionaries downloaded from File › Options › Proofing go to `dictionaries` in the
+/// settings folder (unless the user chose a dictionaries folder), which is searched before the
+/// system locations. Runs without preferences don't look there.
+fn set_download_dir() {
+    if !prefs_enabled() {
+        return;
+    }
+    wordcraft_proof::hunspell::set_download_dir(wordcraft_control_key::settings_dir().map(|d| d.join("dictionaries")));
+}
+
 /// Fonts the user added (#582) live in `fonts` in the settings folder: load them, and store fonts
 /// added later there. Runs without preferences neither read nor keep them.
 fn load_user_fonts() {
@@ -431,6 +441,7 @@ fn main() -> eframe::Result {
     load_user_fonts();
     // Windows opened for further documents start like the first one, before its saved place.
     let window_builder = options.viewport.clone();
+    set_download_dir();
     let restored = saved_window();
     if let Some(window) = restored {
         options.viewport = window.apply(options.viewport);
