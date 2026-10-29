@@ -178,3 +178,19 @@ fn words_hyphenated_at_line_ends_read_whole() {
     let text = doc.plain_text(StoryRef::Body);
     assert!(text.contains("courts applied the Chevron framework to an Anglo-Saxon rule of 1789 and 18- 20 as written in it."), "{text:?}");
 }
+
+#[test]
+fn codec_dimensions_beyond_the_limit_are_refused_before_decoding() {
+    // A JPEG whose own header says 20000 x 20000 behind a 2 x 1 picture dictionary.
+    let jpeg: &[u8] = &[0xFF, 0xD8, 0xFF, 0xC0, 0x00, 0x11, 0x08, 0x4E, 0x20, 0x4E, 0x20, 0x03, 0x01, 0x11, 0x00, 0x02, 0x11, 0x00, 0x03, 0x11, 0x00];
+    let placeholder = "J".repeat(jpeg.len());
+    let image = format!(
+        "<< /Type /XObject /Subtype /Image /Width 2 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length {} >>\nstream\n{placeholder}\nendstream",
+        jpeg.len()
+    );
+    let mut bytes = pdf(&["BT /F1 12 Tf 72 720 Td (Text) Tj ET q 100 0 0 100 0 0 cm /Im Do Q"], &[&image]);
+    let at = bytes.windows(placeholder.len()).position(|w| w == placeholder.as_bytes()).unwrap();
+    bytes[at..at + jpeg.len()].copy_from_slice(jpeg);
+    assert_eq!(jpeg_dimensions(jpeg), Some((20000, 20000)));
+    assert!(matches!(read(&bytes, None), Err(ImportError::Limit(_))));
+}
