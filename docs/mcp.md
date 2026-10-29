@@ -129,6 +129,7 @@ files it was given rather than guarding against other software on the computer.
 | `render_page` | a page as PNG |
 | `parity` | feature coverage |
 | `screenshot`, `click`, `key`, `ui_inspect` | app only (`--connect`) |
+| `say_to_user` | app only: a message of at most 280 characters (or a question with up to 3 `choices` of at most 40; the input schema carries these limits) for the person at the keyboard, shown by Nib, the Assistant, labelled with your client's name (`clientInfo` from `initialize`; "an agent" without one); read the answer with `execute ui.assistantReply {id}` (`{"choice", "open"}`; a message still waiting when the user mutes agent messages is dropped, never shown even after unmuting, and answers `{"choice": null, "open": false, "muted": true}`; one already showing stays); only the user can unmute agent messages or answer your question: `ui.assistantMute` refuses `false`, and input from the `click` and `key` tools (the control channel's `ui.click`, `ui.key`…) is ignored by "Mute agent messages" (Nib's right-click menu and File › Options › General, either way) and by a question's choices; `click` or `key` can still close the message (the answer is then `null`) or hide Nib (#959) |
 
 ### Several documents
 

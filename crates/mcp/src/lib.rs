@@ -70,6 +70,10 @@ fn answer_on(session: &mut Session, method: &str, params: Value) -> Result<Value
     match method {
         "engine.execute" | "command" => {
             let id = params.get("command").and_then(Value::as_str).ok_or("missing `command`")?.to_string();
+            // Interface commands (Nib's agent messages, dialogs…) need the app's window.
+            if id.starts_with("ui.") {
+                return Err(format!("`{id}` {NEEDS_APP}"));
+            }
             let p = params.get("params").cloned().filter(|v| !v.is_null()).unwrap_or(json!({}));
             session.run(&id, &p).map_err(|e| e.to_string())
         }

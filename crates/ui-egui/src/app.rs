@@ -122,6 +122,7 @@ impl WordApp {
             legacy_interface_size: None,
             // Inert until the app binary calls `watch_desktop_theme`.
             desktop_theme: desktop_theme::DesktopTheme::default(),
+            assistant: assistant::Assistant::default(),
             desktop_dark: None,
             applied_editing: None,
             system_animations: None,

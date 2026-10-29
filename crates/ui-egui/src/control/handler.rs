@@ -97,6 +97,47 @@ const UNSAVED: &str = "the document has unsaved changes: save it first, or pass 
 /// The reply to a request that needs a document while none is open (#1129).
 const NO_DOCUMENT: &str = "no document is open; create one (file.new) or open one (file.open) first";
 
+/// A lowercase letter that looks like one of `wordcraft` or `nib`'s (Cyrillic, Greek, fullwidth,
+/// dotless i, small capitals), as that letter; anything else unchanged.
+fn fold_lookalike(c: char) -> char {
+    match c {
+        'ԝ' | 'ѡ' | 'ω' | 'ᴡ' | 'ｗ' => 'w',
+        'о' | 'ο' | 'σ' | 'ᴏ' | 'ｏ' | '0' => 'o',
+        'г' | 'ᴦ' | 'ʀ' | 'ｒ' => 'r',
+        'ԁ' | 'ᴅ' | 'ｄ' => 'd',
+        'с' | 'ϲ' | 'ᴄ' | 'ｃ' => 'c',
+        'а' | 'α' | 'ᴀ' | 'ａ' => 'a',
+        'ғ' | 'ϝ' | 'ꜰ' | 'ｆ' => 'f',
+        'т' | 'τ' | 'ᴛ' | 'ｔ' => 't',
+        'п' | 'η' | 'ո' | 'ɴ' | 'ｎ' => 'n',
+        'і' | 'ı' | 'ι' | 'ɪ' | 'ӏ' | 'ｉ' | 'l' | '1' => 'i',
+        'ь' | 'в' | 'ʙ' | 'ｂ' | 'ϐ' => 'b',
+        _ => c,
+    }
+}
+
+/// What a control client (an agent through MCP, or the raw channel) may not do with Nib (#959):
+/// let agent messages through again once the user has muted them (only Nib's menu and
+/// File › Options › General can), or sign a message as WordCraft or Nib.
+fn agent_refused(id: &str, p: &Value) -> Option<&'static str> {
+    // Letters and digits only, so invisible or punctuation characters can't slip past, with
+    // lookalikes of the names' letters folded to them (Cyrillic `і` in `Nіb`).
+    let reserved = |from: &str| {
+        let fold = |s: &str| -> String { s.chars().flat_map(char::to_lowercase).filter(|c| c.is_alphanumeric()).map(fold_lookalike).collect() };
+        // The name as sent and as the Balloon shows it (cut to its length), so padding past the
+        // cut can't hide `Nib`.
+        let shown = crate::assistant::shown_from(from).unwrap_or_default();
+        [fold(from), fold(&shown)].iter().any(|f| ["wordcraft", "nib"].contains(&f.as_str()))
+    };
+    match id {
+        "ui.assistantMute" if p.get("value") == Some(&Value::Bool(false)) => {
+            Some("only the user can unmute agent messages (Nib's menu or File › Options › General)")
+        }
+        "ui.assistantSay" if p.get("from").and_then(Value::as_str).is_some_and(reserved) => Some("`from` can't be WordCraft or Nib"),
+        _ => None,
+    }
+}
+
 /// The methods that take `doc`.
 const DOC_METHODS: &[&str] = &["engine.execute", "command", "document.inspect", "ui.render"];
 
@@ -188,6 +229,9 @@ pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> O
             let Some(id) = s("command").or(s("id")) else { return err("missing `command`") };
             let params = p.get("params").cloned().filter(|v| !v.is_null()).unwrap_or(json!({}));
             if let Some(e) = close_refused(app, id, &params) {
+                return err(e);
+            }
+            if let Some(e) = agent_refused(id, &params) {
                 return err(e);
             }
             match app.execute(id, params) {
@@ -346,7 +390,7 @@ pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> O
         }
         other => {
             // Anything else: a command id.
-            if let Some(e) = close_refused(app, other, p) {
+            if let Some(e) = close_refused(app, other, p).or_else(|| agent_refused(other, p)) {
                 return err(e);
             }
             match app.execute(other, p.clone()) {

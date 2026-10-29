@@ -9,6 +9,7 @@
 //! background work such as a Zotero session). The window is 1440×900 pt at 2× and opens the sample
 //! document unless the first line is `{"empty": true}`; `{"empty": true, "startScreen": true}`
 //! starts the way the desktop app does with nothing to open (File › Home, #766).
+//! A `{"assistant": true}` line lets the Assistant (Nib, #959) introduce itself and offer Tips.
 
 use wordcraft_engine::Session;
 use wordcraft_ui_egui::{ControlRequest, Services, WordApp};
@@ -31,6 +32,8 @@ fn main() {
     if lines.first().is_some_and(|l| l.get("startScreen").is_some()) {
         app.start_screen();
     }
+    // `{"assistant": true}`: Nib speaks on its own, as in the desktop app (#959).
+    app.assistant.automatic = lines.iter().any(|l| l.get("assistant").is_some());
     let w = lines.iter().find_map(|l| l.get("width").and_then(|v| v.as_f64())).unwrap_or(1440.0) as f32;
     let h = lines.iter().find_map(|l| l.get("height").and_then(|v| v.as_f64())).unwrap_or(900.0) as f32;
     let mut harness =

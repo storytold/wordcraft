@@ -63,6 +63,11 @@ pub(super) fn list(s: &mut Session, v: &Value, default: ListKind) -> CmdResult {
     })
 }
 
+/// Restart at 1 applies only inside a numbered list (greyed out elsewhere, as in Word).
+pub(super) fn in_numbered_list(s: &Session) -> Option<&'static str> {
+    s.doc.para_at(&s.sel.focus).and_then(|p| p.props.numbering).filter(|n| n.num != 0).map_or(Some("not in a numbered list"), |_| None)
+}
+
 pub(super) fn restart_numbering(s: &mut Session, _: &Value) -> CmdResult {
     let f = s.sel.focus.clone();
     let Some(n) = s.doc.para_at(&f).and_then(|p| p.props.numbering).filter(|n| n.num != 0) else {

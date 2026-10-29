@@ -54,6 +54,7 @@ pub(crate) fn bg(ui: &Ui, r: Rect, resp: &Response, checked: bool, t: &Tokens) {
 /// continues without another click, as in Word (#686). Interface commands (`ui.*`) open dialogs,
 /// panes and tabs that take focus themselves, so they keep it.
 pub(crate) fn run_from_ribbon(app: &mut WordApp, id: &str, params: Value) {
+    app.assistant.next_source = Some(wordcraft_engine::assistant::Source::Ribbon);
     let _ = app.run(id, params);
     if !id.starts_with("ui.") {
         app.canvas.want_focus = true;

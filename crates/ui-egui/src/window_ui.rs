@@ -186,6 +186,8 @@ impl WordApp {
             native_scale: _,
             legacy_interface_size: _,
             desktop_theme: _,
+            // One Nib for the app, over whichever window is active (#959).
+            assistant: _,
             desktop_dark: _,
             applied_editing: _,
             system_animations: _,
@@ -283,6 +285,7 @@ impl WordApp {
             print_backgrounds: _,
             update_fields_before_print: _,
             dictionary: _,
+            assistant: _,
             // Where each task pane sits, and their order.
             styles_pane_dock: _,
             styles_pane_float: _,

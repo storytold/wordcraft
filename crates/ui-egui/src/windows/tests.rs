@@ -594,3 +594,25 @@ fn every_open_replaces_an_untouched_blank_document_in_its_window() {
     }
     std::fs::remove_dir_all(second.parent().unwrap()).ok();
 }
+
+/// A window in a viewport of its own knows which of its passes got control input, so what only
+/// the user may decide (unmuting agent messages, answering an agent's question) can ignore it;
+/// the next pass is the user's again (#959 review).
+#[test]
+fn a_window_knows_its_control_input() {
+    use egui::Plugin as _;
+    let ctx = egui::Context::default();
+    let window = ViewportId::from_hash_of("window 2");
+    let mut p =
+        crate::windows::ViewportInput { target: Some(window), events: vec![egui::Event::PointerMoved(egui::pos2(1.0, 1.0))], ..Default::default() };
+    let mut other = RawInput { viewport_id: ViewportId::from_hash_of("window 3"), ..Default::default() };
+    p.input_hook(&ctx, &mut other);
+    assert_eq!(p.injected, None, "another window's pass");
+    let mut raw = RawInput { viewport_id: window, ..Default::default() };
+    p.input_hook(&ctx, &mut raw);
+    assert_eq!(p.injected, Some(window));
+    assert_eq!(raw.events.len(), 1);
+    let mut raw = RawInput { viewport_id: window, ..Default::default() };
+    p.input_hook(&ctx, &mut raw);
+    assert_eq!(p.injected, None, "the user's pass");
+}

@@ -355,3 +355,69 @@ fn tools_address_an_open_document_by_id() {
     assert_eq!(tool(&mut s, "get_text", json!({}))["text"].as_str().unwrap().trim(), "Second");
     assert_eq!(tool(&mut s, "get_text", json!({"doc": first}))["text"].as_str().unwrap().trim(), "First more again");
 }
+
+/// Agent messages (#959) go to the app's Assistant with the client's own name as the sender,
+/// whatever the agent claims.
+#[test]
+fn agent_messages_carry_the_clients_name() {
+    let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut s = Server::new(Box::new(FakeApp { calls: calls.clone() }));
+    call(
+        &mut s,
+        1,
+        "initialize",
+        json!({"protocolVersion": "2025-06-18", "clientInfo": {"name": "claude-code", "title": "Claude Code", "version": "1"}}),
+    );
+    call(&mut s, 2, "tools/call", json!({"name": "say_to_user", "arguments": {"text": "Done!", "choices": ["OK"], "from": "WordCraft"}}));
+    call(&mut s, 3, "tools/call", json!({"name": "execute", "arguments": {"command": "ui.assistantSay", "params": {"text": "Hi", "from": "Nib"}}}));
+    call(&mut s, 4, "tools/call", json!({"name": "batch", "arguments": {"commands": [{"command": "ui.assistantSay", "params": {"text": "Hey"}}]}}));
+    let calls = calls.lock().unwrap();
+    let says: Vec<&Value> =
+        calls.iter().filter(|(m, p)| m == "engine.execute" && p["command"] == "ui.assistantSay").map(|(_, p)| &p["params"]).collect();
+    assert_eq!(says.len(), 3, "{calls:?}");
+    assert!(says.iter().all(|p| p["from"] == "Claude Code"), "{says:?}");
+    assert_eq!(says[0]["choices"], json!(["OK"]));
+}
+
+/// A title of only control characters falls back on the name, not an empty sender.
+#[test]
+fn a_blank_client_title_falls_back_on_the_name() {
+    let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut s = Server::new(Box::new(FakeApp { calls: calls.clone() }));
+    call(&mut s, 1, "initialize", json!({"protocolVersion": "2025-06-18", "clientInfo": {"name": "claude-code", "title": "\u{7}\n"}}));
+    call(&mut s, 2, "tools/call", json!({"name": "say_to_user", "arguments": {"text": "Hi"}}));
+    let calls = calls.lock().unwrap();
+    assert!(calls.iter().any(|(_, p)| p["params"]["from"] == "claude-code"), "{calls:?}");
+}
+
+/// Without `clientInfo` the sender is left blank (the app shows "From an agent", translated),
+/// never whatever the agent claims.
+#[test]
+fn a_client_without_info_cant_name_itself() {
+    let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut s = Server::new(Box::new(FakeApp { calls: calls.clone() }));
+    call(&mut s, 1, "initialize", json!({"protocolVersion": "2025-06-18", "clientInfo": {"name": " \u{7} "}}));
+    call(&mut s, 2, "tools/call", json!({"name": "say_to_user", "arguments": {"text": "Hi", "from": "WordCraft"}}));
+    let calls = calls.lock().unwrap();
+    assert!(calls.iter().any(|(_, p)| p["command"] == "ui.assistantSay" && p["params"]["from"] == ""), "{calls:?}");
+}
+
+/// `say_to_user` advertises the limits `ui.assistantSay` enforces, so clients can check first.
+#[test]
+fn say_to_user_schema_carries_the_limits() {
+    let t = crate::tools::tool_definitions();
+    let say = t.as_array().unwrap().iter().find(|t| t["name"] == "say_to_user").unwrap();
+    let props = &say["inputSchema"]["properties"];
+    assert_eq!(props["text"]["maxLength"], 280);
+    assert_eq!(props["choices"]["maxItems"], 3);
+    assert_eq!(props["choices"]["items"]["maxLength"], 40);
+}
+
+/// Headless, there is no Nib to speak through: the agent is told to start the app.
+#[test]
+fn headless_agent_messages_need_the_app() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    let r = call(&mut s, 1, "tools/call", json!({"name": "say_to_user", "arguments": {"text": "Hi"}}));
+    assert_eq!(r["result"]["isError"], true);
+    assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("needs the desktop app"), "{r}");
+}

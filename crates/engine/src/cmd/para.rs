@@ -19,7 +19,7 @@ mod tabs_borders;
 use format::{align, asian_typography, cur, direction, line_spacing, ls, set_align, set_props, tog};
 pub use format::{fmt, indent, outdent};
 pub use lists::{ListButtons, list_buttons, manage_list, touch_all};
-use lists::{list, restart_numbering};
+use lists::{in_numbered_list, list, restart_numbering};
 pub(crate) use outline::{ensure_heading_style, set_heading};
 use outline::{move_paras, outline_step, sort};
 use styles::{apply_style, apply_styles, create_style, delete_style, modify_style, set_visibility, style_id, update_to_match};
@@ -171,7 +171,7 @@ pub fn specs() -> Vec<CommandSpec> {
             })
         })
         .params(r#"{"level": 0-8}"#),
-        CommandSpec::new("para.restartNumbering", "Restart at 1", "Home › Paragraph › Numbering", restart_numbering),
+        CommandSpec::new("para.restartNumbering", "Restart at 1", "Home › Paragraph › Numbering", restart_numbering).when(in_numbered_list),
         CommandSpec::new("para.moveUp", "Move Paragraph Up", "Home › Paragraph", |s, _| move_paras(s, true))
             .key(if cfg!(target_os = "macos") { "Ctrl+Shift+Up" } else { "Alt+Shift+Up" }),
         CommandSpec::new("para.moveDown", "Move Paragraph Down", "Home › Paragraph", |s, _| move_paras(s, false))

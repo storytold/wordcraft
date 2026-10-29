@@ -15,6 +15,7 @@ macro_rules! tl {
 
 pub mod a11y;
 pub mod a11y_pane;
+pub mod assistant;
 pub mod async_saves;
 pub mod autoscroll;
 pub mod backstage;
@@ -270,6 +271,8 @@ pub struct UiState {
     pub update_fields_before_print: bool,
     /// The custom dictionary (File › Options › Proofing, Add to Dictionary), kept between runs.
     pub dictionary: Vec<String>,
+    /// The Assistant, Nib (#959): on or off, Sayings, dismissed Tips, where it stands.
+    pub assistant: assistant::Prefs,
 }
 
 /// The ribbon tab the app opens on, and the one it falls back to when the tab that was showing
@@ -345,6 +348,7 @@ impl Default for UiState {
             print_backgrounds: false,
             update_fields_before_print: false,
             dictionary: Vec::new(),
+            assistant: assistant::Prefs::default(),
         }
     }
 }
@@ -539,6 +543,8 @@ pub struct WordApp {
     legacy_interface_size: Option<f64>,
     /// The desktop's light/dark choice, watched while the app runs (Linux has no winit answer).
     desktop_theme: desktop_theme::DesktopTheme,
+    /// The Assistant while the app runs (#959); its settings are in [`UiState::assistant`].
+    pub assistant: assistant::Assistant,
     /// The last answer [`desktop_theme`] gave, so a frame that asks costs nothing.
     desktop_dark: Option<bool>,
     /// The interface language and the editing language the session last got for it

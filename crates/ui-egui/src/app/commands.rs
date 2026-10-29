@@ -73,6 +73,9 @@ impl WordApp {
         {
             return r;
         }
+        // The Assistant's Triggers notice deleting a lot at once (#959).
+        let deleting = matches!(id, "text.backspace" | "text.delete" | "edit.cut" | "edit.clear") && !self.session.sel.is_collapsed();
+        let deleted = if deleting { self.session.selected_text().chars().count() } else { 0 };
         let applied = applied_font(id, &params);
         let r = self.execute_user(id, params);
         // A save error already on the status line is the reason to see; the refusal shows otherwise.
@@ -81,6 +84,9 @@ impl WordApp {
         }
         if let (Ok(_), Some(name)) = (&r, applied) {
             push_recent_font(&mut self.ui.recent_fonts, &name);
+        }
+        if r.is_ok() && !id.starts_with("ui.assistant") {
+            self.assistant.record(id, deleted);
         }
         if matches!(id, "insert.picture" | "insert.icon") {
             self.select_inserted_picture(&r);
@@ -483,6 +489,9 @@ impl WordApp {
 
     /// Commands that live in the UI layer.
     pub(crate) fn ui_command(&mut self, id: &str, p: &Value) -> Option<Result<Value, String>> {
+        if id.starts_with("ui.assistant") {
+            return assistant::command(self, id, p);
+        }
         let s = |k: &str| p.get(k).and_then(Value::as_str);
         Some(Ok(match id {
             "ui.checkForUpdates" | "help.checkForUpdates" => {
@@ -1019,6 +1028,12 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.caretAnimation"
             | "ui.startScreen"
             | "ui.checkForUpdates"
+            | "ui.assistant"
+            | "ui.assistantSayings"
+            | "ui.assistantResetTips"
+            | "ui.assistantMute"
+            | "ui.assistantSay"
+            | "ui.assistantReply"
     ) || id.starts_with("help.")
 }
 

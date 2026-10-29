@@ -42,6 +42,16 @@ impl WordApp {
         self.synthetic_injected = n;
     }
 
+    /// Whether this pass's input came from the control channel (`ui.click`, `ui.key`, `ui.drag`,
+    /// `ui.text`…; MCP's `click` and `key` tools send `ui.click` and `ui.key`). Decisions that are only the
+    /// user's ignore it: letting agent messages through again, and answering an agent's question
+    /// (#959 review). A real click in the same frame as a control step is ignored too, which errs
+    /// the safe way.
+    pub(crate) fn input_from_control(&self, ctx: &egui::Context) -> bool {
+        let viewport = ctx.viewport_id();
+        self.synthetic_pending || ctx.with_plugin(|p: &mut crate::windows::ViewportInput| p.injected == Some(viewport)).unwrap_or(false)
+    }
+
     /// The control channel's next input frame, taken off the queue.
     pub(crate) fn next_synthetic(&mut self) -> Option<Vec<egui::Event>> {
         let (events, n) = self.peek_synthetic()?;
@@ -119,25 +129,31 @@ impl WordApp {
         }
         let on_chrome = on_focus_ribbon || ctx.layer_id_at(pos).is_none_or(|l| l.order == egui::Order::Background);
         if on_chrome && ctx.memory(|m| m.focused().is_none()) && !egui::Popup::is_any_open(ctx) {
-            self.canvas.want_focus = true;
-            // The page has already been drawn, so it only sees `want_focus` next frame, and its own
-            // `focused` flag (which gates the keys) isn't recomputed until then either. Claim both
-            // now, or the click swallows the first keystroke.
-            self.canvas.focused = true;
-            // Only a page this pass drew. The File page's back arrow closes the File page in the
-            // pass that drew it instead of the page, and focus on a widget missing from the pass
-            // names a node AccessKit doesn't have: with accessibility on, AccessKit ends the program
-            // over that. `want_focus` hands the keyboard over next frame instead.
-            if let Some((id, pass)) = self.canvas.widget_id
-                && pass == ctx.cumulative_pass_nr()
-            {
-                ctx.memory_mut(|m| m.request_focus(id));
-            }
-            // The canvas reads keys before it takes focus back (#1107), so it counts as focused
-            // now: a keystroke in the very next frame reaches the page instead of being dropped.
-            self.canvas.focused = true;
-            ctx.request_repaint();
+            self.give_the_page_the_keyboard(ctx);
         }
+    }
+
+    /// Hands keyboard focus to the page at once, for a click on chrome that doesn't keep it
+    /// (above, and anything on the Assistant: `assistant::draw`).
+    pub(crate) fn give_the_page_the_keyboard(&mut self, ctx: &egui::Context) {
+        self.canvas.want_focus = true;
+        // The page has already been drawn, so it only sees `want_focus` next frame, and its own
+        // `focused` flag (which gates the keys) isn't recomputed until then either. Claim both
+        // now, or the click swallows the first keystroke.
+        self.canvas.focused = true;
+        // Only a page this pass drew. The File page's back arrow closes the File page in the
+        // pass that drew it instead of the page, and focus on a widget missing from the pass
+        // names a node AccessKit doesn't have: with accessibility on, AccessKit ends the program
+        // over that. `want_focus` hands the keyboard over next frame instead.
+        if let Some((id, pass)) = self.canvas.widget_id
+            && pass == ctx.cumulative_pass_nr()
+        {
+            ctx.memory_mut(|m| m.request_focus(id));
+        }
+        // The canvas reads keys before it takes focus back (#1107), so it counts as focused
+        // now: a keystroke in the very next frame reaches the page instead of being dropped.
+        self.canvas.focused = true;
+        ctx.request_repaint();
     }
 }
 

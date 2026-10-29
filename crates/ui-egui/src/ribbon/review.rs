@@ -176,6 +176,8 @@ pub(super) fn help(app: &mut WordApp, ui: &mut Ui) {
         big(ui, app, "help", "Help", "ui.dialog", json!({"name": "about"}), false);
         big(ui, app, "checkForUpdates", "Check for\nUpdates…", "ui.checkForUpdates", json!({}), false);
         big(ui, app, "discord", "Community\nDiscord", "ui.discord", json!({}), false);
+        let on = app.ui.assistant.visible;
+        crate::widgets::big_toggle(ui, app, "assistant", "Assistant", "ui.assistant", on);
     });
     group(ui, "Agents", None, app, |ui, app| {
         big(ui, app, "macros", "Commands", "ui.dialog", json!({"name": "commands"}), false);
