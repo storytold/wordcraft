@@ -2262,9 +2262,13 @@ fn bibliography_sources_round_trip() {
     });
 
     let bytes = wordcraft_docx::write(&d).expect("write");
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
 
-    // Verify package-root customXml parts exist
+    assert_bibliography_parts(&bytes);
+    assert_bibliography_sources_round_trip(&bytes);
+}
+
+fn assert_bibliography_parts(bytes: &[u8]) {
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
     assert!(zip.by_name("customXml/item1.xml").is_ok());
     assert!(zip.by_name("customXml/itemProps1.xml").is_ok());
     assert!(zip.by_name("customXml/_rels/item1.xml.rels").is_ok());
@@ -2281,6 +2285,12 @@ fn bibliography_sources_round_trip() {
 
     let mut item_xml = String::new();
     std::io::Read::read_to_string(&mut zip.by_name("customXml/item1.xml").unwrap(), &mut item_xml).unwrap();
+    assert_bibliography_types(&item_xml);
+    assert_bibliography_people(&item_xml);
+    assert_bibliography_details(&item_xml);
+}
+
+fn assert_bibliography_types(item_xml: &str) {
     assert!(item_xml.contains("SelectedStyle=\"\\APA.XSL\""), "{item_xml}");
     assert!(item_xml.contains("StyleName=\"APA\""), "{item_xml}");
     assert!(item_xml.contains("<b:SourceType>Book</b:SourceType>"), "{item_xml}");
@@ -2288,12 +2298,18 @@ fn bibliography_sources_round_trip() {
     assert!(item_xml.contains("<b:SourceType>InternetSite</b:SourceType>"), "{item_xml}");
     assert!(item_xml.contains("<b:SourceType>BookSection</b:SourceType>"), "{item_xml}");
     assert!(item_xml.contains("<b:SourceType>Misc</b:SourceType>"), "{item_xml}");
+}
+
+fn assert_bibliography_people(item_xml: &str) {
     assert!(item_xml.contains("<b:Author><b:Author><b:NameList><b:Person>"), "{item_xml}");
     assert!(item_xml.contains("<b:Last>Rivera</b:Last><b:First>Alex</b:First>"), "{item_xml}");
     assert!(item_xml.contains("<b:Last>Smith</b:Last><b:First>John</b:First><b:Middle>David</b:Middle>"), "{item_xml}");
     assert!(item_xml.contains("<b:Last>Solo</b:Last>"), "{item_xml}");
     assert!(item_xml.contains("<b:Editor>"), "{item_xml}");
     assert!(item_xml.contains("<b:Last>Johnson</b:Last><b:First>Robert</b:First>"), "{item_xml}");
+}
+
+fn assert_bibliography_details(item_xml: &str) {
     assert!(item_xml.contains("<b:Edition>2nd</b:Edition>"), "{item_xml}");
     assert!(item_xml.contains("<b:Month>10</b:Month>"), "{item_xml}");
     assert!(item_xml.contains("<b:Day>15</b:Day>"), "{item_xml}");
@@ -2303,50 +2319,68 @@ fn bibliography_sources_round_trip() {
     assert!(item_xml.contains("<b:MonthAccessed>05</b:MonthAccessed>"), "{item_xml}");
     assert!(item_xml.contains("<b:DayAccessed>15</b:DayAccessed>"), "{item_xml}");
     assert!(item_xml.contains("<b:Accessed>2024-05-15</b:Accessed>"), "{item_xml}");
+}
 
-    let back = wordcraft_docx::read(&bytes).expect("read");
+fn assert_bibliography_sources_round_trip(bytes: &[u8]) {
+    let back = wordcraft_docx::read(bytes).expect("read");
     assert_eq!(back.sources.len(), 5);
-    assert_eq!(back.sources[0].tag, "Rivera2021");
-    assert_eq!(back.sources[0].kind, "book");
-    assert_eq!(back.sources[0].author, "Rivera, Alex; Chen, Mei");
-    assert_eq!(back.sources[0].title, "Shared Spaces");
-    assert_eq!(back.sources[0].year, "2021");
-    assert_eq!(back.sources[0].publisher, "Harbor Books");
-    assert_eq!(back.sources[0].city, "Portland");
-    assert_eq!(back.sources[0].editor, "Johnson, Robert");
-    assert_eq!(back.sources[0].edition, "2nd");
-    assert_eq!(back.sources[0].month, "10");
-    assert_eq!(back.sources[0].day, "15");
+    assert_bibliography_source_0(&back.sources[0]);
+    assert_bibliography_source_1(&back.sources[1]);
+    assert_bibliography_source_2(&back.sources[2]);
+    assert_bibliography_source_3(&back.sources[3]);
+    assert_bibliography_source_4(&back.sources[4]);
+}
 
-    assert_eq!(back.sources[1].tag, "Smith2023");
-    assert_eq!(back.sources[1].kind, "article");
-    assert_eq!(back.sources[1].author, "Smith, John David");
-    assert_eq!(back.sources[1].title, "Modern Typography");
-    assert_eq!(back.sources[1].journal, "Design Quarterly");
-    assert_eq!(back.sources[1].volume, "12");
-    assert_eq!(back.sources[1].pages, "45-60");
-    assert_eq!(back.sources[1].url, "https://example.com/typo");
-    assert_eq!(back.sources[1].issue, "4");
-    assert_eq!(back.sources[1].doi, "10.1000/182");
+fn assert_bibliography_source_0(source: &Source) {
+    assert_eq!(source.tag, "Rivera2021");
+    assert_eq!(source.kind, "book");
+    assert_eq!(source.author, "Rivera, Alex; Chen, Mei");
+    assert_eq!(source.title, "Shared Spaces");
+    assert_eq!(source.year, "2021");
+    assert_eq!(source.publisher, "Harbor Books");
+    assert_eq!(source.city, "Portland");
+    assert_eq!(source.editor, "Johnson, Robert");
+    assert_eq!(source.edition, "2nd");
+    assert_eq!(source.month, "10");
+    assert_eq!(source.day, "15");
+}
 
-    assert_eq!(back.sources[2].tag, "WebSite2024");
-    assert_eq!(back.sources[2].kind, "website");
-    assert_eq!(back.sources[2].author, "Solo");
-    assert_eq!(back.sources[2].title, "Open Fonts");
-    assert_eq!(back.sources[2].url, "https://example.org");
-    assert_eq!(back.sources[2].accessed, "2024-05-15");
+fn assert_bibliography_source_1(source: &Source) {
+    assert_eq!(source.tag, "Smith2023");
+    assert_eq!(source.kind, "article");
+    assert_eq!(source.author, "Smith, John David");
+    assert_eq!(source.title, "Modern Typography");
+    assert_eq!(source.journal, "Design Quarterly");
+    assert_eq!(source.volume, "12");
+    assert_eq!(source.pages, "45-60");
+    assert_eq!(source.url, "https://example.com/typo");
+    assert_eq!(source.issue, "4");
+    assert_eq!(source.doi, "10.1000/182");
+}
 
-    assert_eq!(back.sources[3].tag, "Chapter2025");
-    assert_eq!(back.sources[3].kind, "bookSection");
-    assert_eq!(back.sources[3].author, "Lee, Harper");
-    assert_eq!(back.sources[3].title, "Chapter One");
-    assert_eq!(back.sources[3].journal, "Anthology of Prose");
-    assert_eq!(back.sources[3].pages, "1-20");
+fn assert_bibliography_source_2(source: &Source) {
+    assert_eq!(source.tag, "WebSite2024");
+    assert_eq!(source.kind, "website");
+    assert_eq!(source.author, "Solo");
+    assert_eq!(source.title, "Open Fonts");
+    assert_eq!(source.url, "https://example.org");
+    assert_eq!(source.accessed, "2024-05-15");
+}
 
-    assert_eq!(back.sources[4].tag, "Misc2026");
-    assert_eq!(back.sources[4].kind, "other");
-    assert_eq!(back.sources[4].title, "Archive Manuscript");
-    assert_eq!(back.sources[4].city, "Oxford");
+fn assert_bibliography_source_3(source: &Source) {
+    assert_eq!(source.tag, "Chapter2025");
+    assert_eq!(source.kind, "bookSection");
+    assert_eq!(source.author, "Lee, Harper");
+    assert_eq!(source.title, "Chapter One");
+    assert_eq!(source.journal, "Anthology of Prose");
+    assert_eq!(source.pages, "1-20");
+}
+
+fn assert_bibliography_source_4(source: &Source) {
+    assert_eq!(source.tag, "Misc2026");
+    assert_eq!(source.kind, "other");
+    assert_eq!(source.title, "Archive Manuscript");
+    assert_eq!(source.city, "Oxford");
 }
 
 #[test]
