@@ -94,6 +94,15 @@ pub fn rpr_inner(w: &mut W, c: &CharProps) {
     if let Some(s) = c.shading {
         w.empty("w:shd", &[("w:val", "clear"), ("w:color", "auto"), ("w:fill", &s.hex())]);
     }
+    if let Some(fit) = c.fit_text.filter(|f| f.width.is_finite()) {
+        let width = twips(fit.width.clamp(0.0, 1584.0));
+        let id = fit.id.map(|id| id.to_string());
+        let mut attrs = vec![("w:val", width.as_str())];
+        if let Some(id) = &id {
+            attrs.push(("w:id", id));
+        }
+        w.empty("w:fitText", &attrs);
+    }
     if let Some(v) = c.vert_align {
         w.val(
             "w:vertAlign",

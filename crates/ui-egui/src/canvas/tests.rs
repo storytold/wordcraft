@@ -1,6 +1,43 @@
 use super::*;
 use crate::table_resize::tests::{H, cell, screen, steps, table_window};
 
+/// A zoom percentage uses the host word processor's logical screen units. In the
+/// macOS comparison, Word's 130% A4 page was about the width of our former 100%
+/// page: the 96/72 conversion belongs to Windows/web, not AppKit's 72 pt/in.
+#[test]
+fn document_zoom_matches_the_host_screen_point_convention() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let layout = app.session.layout();
+    let page = &layout.pages[0];
+    let logical_points_per_inch = if cfg!(target_os = "macos") { 72.0 } else { 96.0 };
+    for percent in [100.0, 130.0, 200.0] {
+        app.session.run("view.zoom", &json!({"value": percent})).unwrap();
+        let g = geometry(&app, &layout, vec2(1440.0, 900.0));
+        let expected = percent / 100.0 * logical_points_per_inch / 72.0;
+        assert!((g.rects[0].width() - page.w * expected).abs() < 0.01, "{percent}%: {:?}", g.rects[0]);
+        assert!((g.rects[0].height() - page.h * expected).abs() < 0.01, "the whole sheet uses the same zoom");
+    }
+}
+
+/// Fit modes have a geometric scale of their own, but their reported percentage
+/// and the next manual zoom use the same host convention as the page canvas.
+#[test]
+fn fitted_zoom_round_trips_through_the_host_scale() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let layout = app.session.layout();
+    let avail = vec2(1100.0, 760.0);
+    for fit in ["pageWidth", "onePage", "multiplePages"] {
+        app.session.view.fit = fit.into();
+        let fitted = geometry(&app, &layout, avail);
+        sync_fit_zoom(&mut app, fitted.scale);
+        let percent = app.session.view.zoom * 100.0;
+        app.session.run("view.zoom", &json!({"value": percent})).unwrap();
+        let manual = geometry(&app, &layout, avail);
+        assert!((manual.scale - fitted.scale).abs() < 0.001, "{fit}: {percent}%");
+        assert!((manual.rects[0].width() - fitted.rects[0].width()).abs() < 0.01, "{fit}: the sheet keeps its width");
+    }
+}
+
 /// #3931: while Insert › Table's grid asks for a preview the page is laid out with that
 /// table; the document, its revision and undo history stay as they were, and without a
 /// request the page is the document's own again.
@@ -703,7 +740,7 @@ fn dragging_the_scrollbar_names_the_page_at_the_top() {
         }
         let page = h.state().canvas.scrollbar_page.expect("a tip while the scrollbar is dragged");
         assert!((4..9).contains(&page), "a page well down the document: {page}");
-        assert!(h.query_by_label(&format!("Page {} of 12", page + 1)).is_some(), "the tip names page {}", page + 1);
+        assert!(h.query_all_by_label(&format!("Page {} of 12", page + 1)).any(|n| n.rect().center().x > 700.0), "the tip names page {}", page + 1);
         let end = pos2(from.x, bar.bottom() - 4.0);
         for k in 1..=6 {
             h.event(Event::PointerMoved(to + (end - to) * (k as f32 / 6.0)));
@@ -3032,10 +3069,10 @@ fn a_right_click_keeps_selected_cells_only_on_them() {
 }
 
 /// Issue #123: zoomed out, pages sit side by side in rows when the width allows; at 100% a
-/// letter page in an ordinary window stays one per row.
+/// letter page in a 96 pt/in window stays one per row.
 #[test]
 fn pages_flow_into_rows_when_they_fit() {
-    let letter = 612.0 * PX_PER_PT;
+    let letter = 612.0 * 96.0 / 72.0;
     assert_eq!(columns_for(1200.0, letter, 10, 1, true), 1, "100%: one page per row");
     assert_eq!(columns_for(1200.0, letter * 0.6, 10, 1, true), 2, "60%: two per row");
     assert_eq!(columns_for(1200.0, letter * 0.25, 10, 1, true), 5, "25%: five per row");
@@ -3505,8 +3542,17 @@ fn ruler_numbers_skip_the_margins_and_the_markers_and_thin_out() {
     a.run("para.indents", json!({"left": 0.0})).unwrap();
     let d = frames(&mut a, &mut t);
     assert_eq!(names(&d.h_labels), ["1", "2", "3", "4", "5", "6"]);
-    // At 10% an inch is 9.6 px: a number every 4 inches, the text keeps its size.
-    a.run("view.zoom", json!({"value": 10})).unwrap();
+    // At 10% on Mac an inch is 7.2 logical points: numbers appear every 8 inches,
+    // so only the vertical text area is long enough to contain a numbered mark.
+    if cfg!(target_os = "macos") {
+        a.run("view.zoom", json!({"value": 10})).unwrap();
+        let d = frames(&mut a, &mut t);
+        assert!(d.h_labels.is_empty());
+        assert_eq!(names(&d.v_labels), ["8"]);
+    }
+    // An inch at 9.6 logical points gives a number every 4 inches on either host;
+    // the label font keeps its size while the document shrinks.
+    a.run("view.zoom", json!({"value": 10.0 * (96.0 / 72.0) / PX_PER_PT})).unwrap();
     let d = frames(&mut a, &mut t);
     assert_eq!(names(&d.h_labels), ["4"]);
     assert_eq!(names(&d.v_labels), ["4", "8"]);

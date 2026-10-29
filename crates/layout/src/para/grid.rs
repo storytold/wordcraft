@@ -7,7 +7,7 @@ use super::{Arc, CharProps, Document, WrapText};
 pub struct Grid {
     /// Line pitch, points: line heights snap to multiples of it.
     pub line: Option<f32>,
-    /// Character pitch, points: East Asian characters advance by it.
+    /// Character pitch at the default font size, points.
     pub chars: Option<f32>,
     /// The default font size the character pitch is based on, points.
     pub font_size: f32,
@@ -47,9 +47,10 @@ pub fn is_east_asian(c: char) -> bool {
         | 0xFE30..=0xFE4F | 0xFF01..=0xFF60 | 0xFFE0..=0xFFE6 | 0x20000..=0x3FFFF)
 }
 
-/// Character grid: East Asian characters (all text with `snapToChars`) take whole cells of the
-/// pitch, the glyph centred in them. A character at the default size takes one cell, a larger one
-/// as many as its size needs; Latin text stays proportional unless everything snaps.
+/// Character grid: `linesAndChars` adds the grid's character-spacing delta to each East Asian
+/// cluster's own advance. In particular, a run larger than Normal must not be squeezed into
+/// Normal's cell while its glyph stays full size. `snapToChars` instead centres characters in
+/// whole cells; Latin text stays proportional unless everything snaps.
 pub(super) fn snap_chars(b: &mut Builder, text: &str, grid: &Grid) {
     let Some(pitch) = grid.chars else { return };
     let base = grid.font_size.max(1.0);
@@ -57,14 +58,25 @@ pub(super) fn snap_chars(b: &mut Builder, text: &str, grid: &Grid) {
         if !matches!(c.kind, ClKind::Text | ClKind::Space) || c.adv <= 0.0 {
             continue;
         }
+        // A manual width controls this group's glyphs and advances together; applying
+        // the character grid first would squeeze the advances without the outlines.
+        if b.styles.get(c.style as usize).is_some_and(|st| st.rc.fit_text.is_some_and(|f| f.width > 0.0)) {
+            continue;
+        }
         let Some(ch) = text.get(c.start..).and_then(|t| t.chars().next()) else { continue };
         let east_asian = is_east_asian(ch);
         if !(east_asian || (grid.snap_all && c.kind == ClKind::Text)) {
             continue;
         }
-        let size = b.styles.get(c.style as usize).map_or(base, |st| st.size);
-        let cells = if east_asian { (size / base).round() } else { (c.adv / pitch - 0.01).ceil() }.clamp(1.0, 64.0);
-        let adv = cells * pitch;
+        let adv = if grid.snap_all {
+            let size = b.styles.get(c.style as usize).map_or(base, |st| st.size);
+            let cells = if east_asian { (size / base).round() } else { (c.adv / pitch - 0.01).ceil() }.clamp(1.0, 64.0);
+            cells * pitch
+        } else {
+            // `charSpace` is a delta in 1/4096 pt from Normal's advance, not an absolute
+            // width for every run (ECMA-376 §17.6.5). Keep shaping, scale and tracking.
+            (c.adv + pitch - base).clamp(0.1, 1e6)
+        };
         let shift = (adv - c.adv) / 2.0;
         for g in b.glyphs.get_mut(c.g0 as usize..c.g1 as usize).into_iter().flatten() {
             g.dx += shift;

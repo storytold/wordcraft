@@ -295,6 +295,19 @@ impl<'e> Breaker<'e> {
         let end = lab.x + lab.width;
         match self.level.map(|l| l.suffix).unwrap_or(LevelSuffix::Tab) {
             LevelSuffix::Tab => {
+                // When the paragraph pulls a list's text indent left of the level's own tab,
+                // a label that just reaches that indent must not jump to the old level tab.
+                // A small overrun can arise from the label's font metrics. Keep the text after
+                // the label (never overlap it); longer labels still follow normal tab stops.
+                if let (Some(level), Some(hanging)) = (self.level, self.hanging_at)
+                    && level.tab.is_some_and(|tab| tab >= level.indent - 0.01)
+                    && level.indent > hanging + 0.01
+                    && (self.rp.indent_first + level.hanging).abs() < 0.01
+                    && end >= hanging - 0.01
+                    && end <= hanging + pl.styles.get(lab.style as usize).map(|s| s.size * 0.5).unwrap_or(6.0)
+                {
+                    return end.max(hanging);
+                }
                 let t = next_tab(end, &self.rp.tabs, self.default_tab, self.hanging_at).pos;
                 // The level's own tab stop after the number, when it comes first.
                 match self.level.and_then(|l| l.tab).filter(|p| p.is_finite() && *p > end + 0.01) {
@@ -404,7 +417,7 @@ impl<'e> Breaker<'e> {
     /// tallest picture on it (which sits on the baseline).
     fn extents(&self, pl: &ParaLayout, (c0, c1): (usize, usize)) -> Extents {
         let rp = &self.rp;
-        let mut ex = Extents { asc: 0.0, desc: 0.0, obj_asc: 0.0 };
+        let mut ex = Extents { asc: 0.0, desc: 0.0, obj_asc: 0.0, grid_height: 0.0 };
         let mut any = false;
         let dropped = pl.drop_cap.map_or(0, |d| d.0);
         for (k, c) in pl.clusters.get(c0..c1).into_iter().flatten().enumerate() {
@@ -417,10 +430,15 @@ impl<'e> Breaker<'e> {
                 continue;
             }
             let Some(st) = pl.styles.get(c.style as usize) else { continue };
+            // A grid row is sized from the requested point size, not the ascent and descent of
+            // the face used to draw the glyph. A missing East Asian font can fall back to one
+            // with much taller metrics and must not turn every 12 pt line into two grid rows.
+            ex.grid_height = ex.grid_height.max(st.rc.size);
+            let math = matches!(c.kind, ClKind::Object(k) if pl.maths.iter().any(|(i, _)| *i == k));
             // A picture sits on the baseline of its run: the line keeps that font's ascent
             // and descent, and grows above the baseline to fit a taller picture.
             let (a, d) = if matches!(c.kind, ClKind::Object(_)) && c.obj_h > 0.0 {
-                if pl.maths.iter().any(|(k, _)| c.kind == ClKind::Object(*k)) {
+                if math {
                     // Exact spacing keeps the run's baseline; tall math may overflow the
                     // fixed line box without moving adjacent text up by its denominator.
                     if matches!(rp.line_spacing, LineSpacing::Exactly(_)) { (st.ascent, st.descent) } else { (c.obj_h, c.obj_d) }
@@ -435,6 +453,11 @@ impl<'e> Breaker<'e> {
             };
             ex.asc = ex.asc.max(a);
             ex.desc = ex.desc.max(d);
+            // Ruby and math need their real extent; pictures are kept by the separate floor,
+            // so multiple spacing does not enlarge them.
+            if c.obj_h > 0.0 && (!matches!(c.kind, ClKind::Object(_)) || math) {
+                ex.grid_height = ex.grid_height.max(c.obj_h + c.obj_d);
+            }
             any = true;
         }
         if (!any || (ex.asc == 0.0 && ex.desc == 0.0))
@@ -442,6 +465,7 @@ impl<'e> Breaker<'e> {
         {
             ex.asc = st.ascent;
             ex.desc = st.descent;
+            ex.grid_height = st.rc.size;
         }
         ex
     }
@@ -449,7 +473,7 @@ impl<'e> Breaker<'e> {
     /// The line's height, baseline and text extent.
     fn measure(&self, pl: &ParaLayout, range: (usize, usize)) -> Measure {
         let rp = &self.rp;
-        let Extents { mut asc, mut desc, obj_asc } = self.extents(pl, range);
+        let Extents { mut asc, mut desc, obj_asc, mut grid_height } = self.extents(pl, range);
         let text_natural = asc + desc;
         let (text_asc, text_desc) = (asc.max(obj_asc), desc);
         let text_pictures = if obj_asc > asc { obj_asc + desc } else { 0.0 };
@@ -462,6 +486,9 @@ impl<'e> Breaker<'e> {
                 // overflow adds room, unscaled by the automatic spacing multiplier.
                 label_extra = (lab.ascent - asc).max(0.0);
                 asc = asc.max(lab.ascent);
+                for st in lab.runs.iter().filter_map(|r| pl.styles.get(r.style as usize)) {
+                    grid_height = grid_height.max(st.rc.size);
+                }
             } else {
                 for st in lab.runs.iter().filter_map(|r| pl.styles.get(r.style as usize)) {
                     asc = asc.max(st.ascent);
@@ -478,8 +505,8 @@ impl<'e> Breaker<'e> {
         // Document grid: the line takes whole line pitches, its text centred in them.
         let grid = self.grid.as_ref();
         let (height, centred) = match (rp.line_spacing, grid) {
-            (LineSpacing::Multiple(m), Some(g)) => ((g.snap_height(natural) * m).max(g.snap_height(pictures)), true),
-            (LineSpacing::AtLeast(v), Some(g)) => (g.snap_height(natural.max(pictures)).max(v), true),
+            (LineSpacing::Multiple(m), Some(g)) => ((g.snap_height(grid_height) * m).max(g.snap_height(pictures)), true),
+            (LineSpacing::AtLeast(v), Some(g)) => (g.snap_height(grid_height.max(pictures)).max(v), true),
             (LineSpacing::Multiple(m), None) => ((text_natural * m + label_extra).max(text_pictures), false),
             (LineSpacing::AtLeast(v), None) => (natural.max(text_pictures).max(v), false),
             (LineSpacing::Exactly(v), _) => (v, false),
@@ -558,9 +585,10 @@ impl<'e> Breaker<'e> {
         let grid = self.grid.as_ref();
         let (asc, desc) = pl.styles.get(self.mark_style as usize).map(|s| (s.ascent, s.descent)).unwrap_or((10.0, 3.0));
         let natural = asc + desc;
+        let grid_height = pl.styles.get(self.mark_style as usize).map_or(natural, |s| s.rc.size);
         let h = match (rp.line_spacing, grid) {
-            (LineSpacing::Multiple(m), Some(g)) => g.snap_height(natural) * m,
-            (LineSpacing::AtLeast(v), Some(g)) => g.snap_height(natural).max(v),
+            (LineSpacing::Multiple(m), Some(g)) => g.snap_height(grid_height) * m,
+            (LineSpacing::AtLeast(v), Some(g)) => g.snap_height(grid_height).max(v),
             (LineSpacing::Multiple(m), None) => natural * m,
             (LineSpacing::AtLeast(v), None) => natural.max(v),
             (LineSpacing::Exactly(v), _) => v,
@@ -634,6 +662,7 @@ struct Extents {
     asc: f32,
     desc: f32,
     obj_asc: f32,
+    grid_height: f32,
 }
 
 /// A line's height and baseline, and the extent of its text.

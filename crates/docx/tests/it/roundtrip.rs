@@ -91,6 +91,7 @@ fn every_char_prop_round_trips() {
         hidden: Some(true),
         spacing: Some(1.5),
         scale: Some(150.0),
+        fit_text: Some(wordcraft_doc::props::FitText { width: 321.0, id: Some(-1467784952) }),
         position: Some(3.0),
         kern: Some(8.0),
         ligatures: Some(wordcraft_doc::props::Ligatures { standard: true, historical: true, ..Default::default() }),

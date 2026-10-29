@@ -97,7 +97,25 @@ fn paragraph_props(p: &Paragraph, env: &ParaEnv) -> ResolvedPara {
     }
     // Indents in characters are measured in the paragraph mark's font size.
     if rp.indent_chars.iter().any(|c| *c != 0.0) {
-        rp.set_char_unit(doc.styles.resolve_char_in(p.props.style.as_deref(), env.table.map(|t| &t.chr), &p.mark).size);
+        let size = doc.styles.resolve_char_in(p.props.style.as_deref(), env.table.map(|t| &t.chr), &p.mark).size;
+        rp.set_char_unit(size);
+        // A Word document was observed with conflicting character and point indents whose
+        // first line matches the point values. Restrict the fallback to a materially different
+        // left/hanging pair that would otherwise move the line outside the margin. Character-only
+        // and ordinary mixed indents continue to use character units.
+        if let (Some(left), Some(first), Some(left_chars), Some(first_chars)) =
+            (p.props.indent_left, p.props.indent_first, p.props.indent_left_chars, p.props.indent_first_chars)
+            && left.is_finite()
+            && first.is_finite()
+            && left_chars > 0.0
+            && first_chars < 0.0
+            && left + first >= 0.0
+            && rp.indent_left + rp.indent_first < 0.0
+            && (left - rp.indent_left).abs() > size.max(1.0)
+        {
+            rp.indent_left = left.clamp(-1584.0, 1584.0);
+            rp.indent_first = first.clamp(-1584.0, 1584.0);
+        }
     }
     list_indents(&mut rp, p, env);
     rp
@@ -571,6 +589,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     // Text on a character grid keeps to its cells.
     let auto_space =
         if rp.snap_to_grid && env.grid.chars.is_some() { Vec::new() } else { auto_space(&mut sh.b, &p.text, rp.auto_space_de, rp.auto_space_dn) };
+    super::textfit::fit_text(&mut sh.b);
     let mut skip = sh.left.clone();
     skip.extend(sh.bare.iter().cloned());
     let bt = BreakText::new(&p.text, skip);

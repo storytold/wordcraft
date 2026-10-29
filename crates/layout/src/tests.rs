@@ -1700,6 +1700,64 @@ fn lists_get_labels_and_indent() {
 }
 
 #[test]
+fn overridden_list_indent_keeps_a_nearby_label_out_of_the_old_tab() {
+    use wordcraft_doc::props::{NumRef, TabAlign, TabLeader, TabStop};
+    use wordcraft_doc::section::NumFormat;
+    let mut d = Document::from_text(
+        "一
+二",
+    );
+    let id = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+    let level = &mut d.numbering.abstracts[0].levels[0];
+    level.indent = 78.5;
+    level.hanging = 36.0;
+    level.tab = Some(78.5);
+    level.format = NumFormat::DecimalFullWidth;
+    level.text = "（%1）".into();
+    level.chr.size = Some(12.0);
+    for i in 0..2 {
+        let p = d.para_mut(StoryRef::Body, &Path::top(i)).unwrap();
+        p.props.numbering = Some(NumRef { num: id, level: 0 });
+        p.props.indent_left = Some(45.05);
+        p.mark.size = Some(12.0);
+        if i == 0 {
+            p.props.tabs = Some(vec![TabStop { pos: 56.7, align: TabAlign::Left, leader: TabLeader::None }]);
+        }
+    }
+    let l = lay(&d);
+    let paras: Vec<_> = l.pages[0]
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            Placed::Lines { para, .. } => Some(para),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(paras.len(), 2);
+    for p in paras {
+        let label = p.label.as_ref().unwrap();
+        let text_start = p.lines[0].xs[0];
+        assert!(label.x + label.width >= 45.04, "fixture must reach the hanging indent");
+        assert!(text_start >= label.x + label.width - 0.01, "label overlaps text");
+        assert!(text_start < 51.1, "text jumped to an old tab: {text_start}");
+    }
+    // A substantially longer label still advances to the next tab rather than colliding.
+    d.numbering.abstracts[0].levels[0].text = "（第%1番号）".into();
+    let l = lay(&d);
+    let p = l.pages[0]
+        .items
+        .iter()
+        .find_map(|it| match it {
+            Placed::Lines { para, .. } => Some(para),
+            _ => None,
+        })
+        .unwrap();
+    let label = p.label.as_ref().unwrap();
+    assert!(label.x + label.width > 51.05);
+    assert!(p.lines[0].xs[0] > label.x + label.width, "long label must use the next tab");
+}
+
+#[test]
 fn break_only_list_has_no_label() {
     use wordcraft_doc::ListKind;
     for kind in [ListKind::Numbered, ListKind::Bullet] {
@@ -5892,6 +5950,29 @@ fn character_indents_use_the_paragraph_mark_size() {
     let para = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para.clone()) } else { None }).unwrap();
     assert!((para.lines[0].left - 60.0).abs() < 0.01, "first line at {}", para.lines[0].left);
     assert!((para.lines[1].left - 20.0).abs() < 0.01, "second line at {}", para.lines[1].left);
+}
+
+/// A stale character-unit left/hanging pair must not move a Word paragraph into the margin.
+#[test]
+fn conflicting_character_and_point_hanging_indents_keep_word_position() {
+    let first_line_left = |left: Option<f32>, hanging: Option<f32>, left_chars: f32, hanging_chars: f32| {
+        let mut p = wordcraft_doc::Paragraph::with_text("　　・項目", Default::default());
+        p.props.indent_left = left;
+        p.props.indent_first = hanging;
+        p.props.indent_left_chars = Some(left_chars);
+        p.props.indent_first_chars = Some(hanging_chars);
+        p.mark.size = Some(12.0);
+        let mut d = Document::from_text("");
+        d.body = vec![wordcraft_doc::para_block(p)];
+        let l = lay(&d);
+        l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para.lines[0].left) } else { None }).unwrap()
+    };
+    // Point pair: 82.85 - 73.70 = 9.15pt; character pair: 10.32 - 84 = -73.68pt.
+    assert!((first_line_left(Some(82.85), Some(-73.7), 0.86, -7.0) - 9.15).abs() < 0.01);
+    // Without point values the character indents remain authoritative.
+    assert!((first_line_left(None, None, 0.86, -7.0) + 73.68).abs() < 0.01);
+    // A consistent pair continues to use character units.
+    assert!((first_line_left(Some(24.0), Some(-12.0), 2.0, -1.0) - 12.0).abs() < 0.01);
 }
 
 #[test]

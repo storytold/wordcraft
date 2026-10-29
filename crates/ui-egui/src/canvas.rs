@@ -76,8 +76,13 @@ pub use story::{EquationFrame, editing_header_footer, in_text_box};
 use story::{dims_body, equation_frame};
 pub(crate) use story::{part_kind, text_box_host};
 
-/// Points on screen per document point at 100% (96 px per inch, like a word processor).
-pub const PX_PER_PT: f32 = 96.0 / 72.0;
+/// Logical screen points per document point at 100% document zoom.
+///
+/// Word for Mac uses 72 logical points per inch (one AppKit point per document point),
+/// while Windows and web use 96. Retina's backing scale is applied separately by egui;
+/// counting it here too would change the zoom's meaning when moving between displays.
+/// Using 96 on macOS made a 100% page as large as Word's 133% page.
+pub const PX_PER_PT: f32 = if cfg!(target_os = "macos") { 1.0 } else { 96.0 / 72.0 };
 const GAP: f32 = 18.0;
 /// Width reserved for the vertical scrollbar beside the canvas.
 const SCROLLBAR: f32 = 14.0;

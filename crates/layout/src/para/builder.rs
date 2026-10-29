@@ -299,6 +299,8 @@ impl<'a> Builder<'a> {
             };
             let k = st.size / st.face.upem.max(1.0) as f32;
             let hscale = rc.scale / 100.0;
+            // Manual run width takes precedence over expanded/condensed spacing.
+            let spacing = if rc.fit_text.is_some_and(|f| f.width > 0.0) { 0.0 } else { rc.spacing };
             // Group glyphs by cluster byte offset; graphemes may span several shaper clusters.
             // Complex-script syllables the graphemes split (Myanmar vowel signs, stacked
             // consonants) stay one cluster: the caret never stops inside them.
@@ -332,7 +334,7 @@ impl<'a> Builder<'a> {
                 } else {
                     ClKind::Text
                 });
-                let adv = if kind == ClKind::Marker { 0.0 } else { adv + rc.spacing };
+                let adv = if kind == ClKind::Marker { 0.0 } else { adv + spacing };
                 // Clusters index the document text, never the displayed text.
                 let (cs, ce) = if substituted { remap_range(&map_starts, &orig_of, sub.len(), gs, ge) } else { (gs, ge) };
                 self.clusters.push(Cluster {
@@ -350,7 +352,7 @@ impl<'a> Builder<'a> {
                 });
             }
             if matches!(dir, Dir::Para) {
-                self.split_ligature_advances(seg_c0, rc.spacing, key.rtl);
+                self.split_ligature_advances(seg_c0, spacing, key.rtl);
             }
         }
     }

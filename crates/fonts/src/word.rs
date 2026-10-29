@@ -40,6 +40,9 @@ fn substitutes_by_name(family: &str) -> (&'static [&'static str], bool) {
     const SANS: &[&str] = &["Carlito", "Helvetica Neue", "Arial", "Liberation Sans", "Noto Sans", "DejaVu Sans", "Source Sans 3"];
     const SERIF: &[&str] = &["Caladea", "Times New Roman", "Liberation Serif", "Georgia", "Noto Serif", "DejaVu Serif", "Source Serif 4"];
     const MONO: &[&str] = &["Courier New", "Liberation Mono", "Menlo", "Consolas", "DejaVu Sans Mono", "JetBrains Mono"];
+    // Japanese Gothic substitutes preserve a sans-serif appearance and Japanese coverage.
+    // BIZ UDPGothic is bundled under the OFL; its proportional metrics differ from MS Gothic.
+    const MS_GOTHIC: &[&str] = &["BIZ UDPGothic", "Noto Sans JP", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo"];
     const ARIAL: &[&str] = &["Liberation Sans", "Helvetica", "Helvetica Neue", "Arimo", "Source Sans 3"];
     const ARIAL_UNICODE: &[&str] = &["Arial", "Liberation Sans", "Helvetica", "Helvetica Neue", "Arimo", "Source Sans 3"];
     const TIMES: &[&str] = &["Liberation Serif", "Times", "Tinos", "Source Serif 4"];
@@ -107,7 +110,7 @@ fn substitutes_by_name(family: &str) -> (&'static [&'static str], bool) {
         "DejaVu Serif",
         "Source Serif 4",
     ];
-    let f = family.to_ascii_lowercase();
+    let f = family.to_lowercase();
     if is_thai_serif(&f) {
         return (THAI_SERIF, true);
     }
@@ -127,6 +130,7 @@ fn substitutes_by_name(family: &str) -> (&'static [&'static str], bool) {
         return (ARABIC_SANS, true);
     }
     match f.as_str() {
+        "ms gothic" | "ms ゴシック" | "ｍｓ ゴシック" | "ｍｓ　ゴシック" => (MS_GOTHIC, true),
         "palatino linotype" | "book antiqua" | "palatino" => (PALATINO, true),
         "arial" | "helvetica" | "arial nova" => (ARIAL, true),
         "arial unicode ms" => (ARIAL_UNICODE, true),
@@ -360,6 +364,16 @@ fn substitute(db: &FontDb, family: &str) -> Option<&'static str> {
         .or_else(|| installed.first().copied())
 }
 
+// Localized MS Gothic family names may be cataloged under their English name (or vice versa).
+// Resolve these aliases as the original font before considering an actual substitute.
+fn installed_ms_gothic_alias(family: &str, has_family: impl Fn(&str) -> bool) -> Option<&'static str> {
+    let name = family.trim().to_lowercase();
+    if !matches!(name.as_str(), "ms gothic" | "ms ゴシック" | "ｍｓ ゴシック" | "ｍｓ　ゴシック") {
+        return None;
+    }
+    ["MS Gothic", "ＭＳ ゴシック", "MS ゴシック", "ＭＳ　ゴシック"].into_iter().find(|name| has_family(name))
+}
+
 fn style_name(bold: bool, italic: bool) -> &'static str {
     match (bold, italic) {
         (false, false) => "Regular",
@@ -404,6 +418,8 @@ pub fn resolve(family: &str, bold: bool, italic: bool) -> Resolved {
     } else if base != family && db.has_family(base) {
         // Windows maps the charset names to the font itself: not a substitution.
         (base.to_string(), false)
+    } else if let Some(alias) = installed_ms_gothic_alias(base, |name| db.has_family(name)) {
+        (alias.to_string(), false)
     } else {
         (substitute(db, base).unwrap_or(crate::FALLBACK_FAMILY).to_string(), true)
     };
@@ -486,6 +502,26 @@ mod tests {
         assert!(!b.synth_bold);
         let (a, d) = line_metrics(&b.face);
         assert!(a > 0.0 && d >= 0.0);
+    }
+
+    #[test]
+    fn ms_gothic_aliases_prefer_the_installed_original_then_japanese_sans() {
+        for name in ["MS Gothic", "ms gothic", "MS ゴシック", "ＭＳ ゴシック", "ＭＳ　ゴシック"] {
+            assert_eq!(installed_ms_gothic_alias(name, |candidate| candidate == "MS Gothic"), Some("MS Gothic"));
+            assert_eq!(installed_ms_gothic_alias(name, |candidate| candidate == "ＭＳ ゴシック"), Some("ＭＳ ゴシック"));
+            assert_eq!(installed_ms_gothic_alias(name, |_| false), None);
+            assert_eq!(substitutes(name).first(), Some(&"BIZ UDPGothic"));
+            assert!(has_named_substitutes(name));
+        }
+        assert_eq!(installed_ms_gothic_alias("MS PGothic", |_| true), None);
+        let db = FontDb::global();
+        if !["MS Gothic", "ＭＳ ゴシック", "MS ゴシック", "ＭＳ　ゴシック"].iter().any(|n| db.has_family(n)) && db.has_family("BIZ UDPGothic")
+        {
+            let resolved = resolve("ＭＳ ゴシック", false, false);
+            assert!(resolved.substituted);
+            assert!(resolved.face.named("BIZ UDPGothic"));
+            assert!(resolved.face.covers('日'));
+        }
     }
 
     #[test]

@@ -1299,8 +1299,10 @@ fn read_mode_click_and_caret_keep_scroll(d: &mut FrameDriver, a: &mut WordApp, s
     d.frame(a, vec![], screen);
     assert!((a.canvas.scroll_offset.x - initial_scroll).abs() < 0.5);
     assert!(a.session.sel.is_collapsed());
-    // An explicit caret move outside the visible columns must still reveal its destination.
-    a.run("caret.set", json!({"pos": wordcraft_doc::Pos::body(0, 5000)})).unwrap();
+    // The final column stays outside the viewport at either host screen scale.
+    // A fixed character offset can fall in a visible column when Mac's smaller
+    // 100% text fits more characters into each column.
+    a.run("caret.docEnd", json!({})).unwrap();
     d.frame(a, vec![], screen);
     assert!(a.canvas.scroll_offset.x > initial_scroll + a.session.view.read_width * a.canvas.scale);
     a.run("caret.set", json!({"pos": wordcraft_doc::Pos::body(0, 0)})).unwrap();
