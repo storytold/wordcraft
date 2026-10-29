@@ -241,6 +241,10 @@ impl Writer {
                 }
                 Inline::Anchor(name) => o.push_str(&format!("\\hypertarget{{{}}}{{}}", escape_url(name))),
                 Inline::Figure(_) => {}
+                Inline::Field { result, fmt, .. } => {
+                    let s = self.span(result, fmt);
+                    o.push_str(&s);
+                }
                 // LaTeX keeps no ruby (no package): its base text, in the run's formatting.
                 Inline::Ruby { base, fmt, .. } => {
                     let s = self.span(base, fmt);

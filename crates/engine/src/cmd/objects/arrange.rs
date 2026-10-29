@@ -183,6 +183,8 @@ fn move_object_once(s: &mut Session, pos: &Pos, page: usize, x: f32, y: f32, (w,
         }
         f.h_rel = Anchor::Page;
         f.v_rel = Anchor::Page;
+        // Where it is dropped, though that runs past the bottom margin.
+        f.keep_on_page = false;
         f.h_align = None;
         f.v_align = None;
         f.x = x.clamp(-MAX_OFFSET, MAX_OFFSET);

@@ -2,13 +2,14 @@
 //! reader (#863).
 use std::collections::HashSet;
 
-use wordcraft_doc::{Document, Part, PartKind};
+use wordcraft_doc::{Document, PartKind};
 
 use super::{Body, Ev, FBlock, Pages, SectionProps, Styles, events, get, model};
 
 /// Most XML events kept for all headers and footers together; a slot past it is left out.
 const MAX_EVENTS: usize = 1 << 20;
 
+/// Where on a master page a header or footer goes.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Slot {
     Header,
@@ -20,6 +21,7 @@ enum Slot {
 }
 
 impl Slot {
+    /// The slot of element `q`, if it is a header or footer.
     fn of(q: &str) -> Option<Self> {
         Some(match q {
             "style:header" => Self::Header,
@@ -32,10 +34,12 @@ impl Slot {
         })
     }
 
+    /// Whether it is a footer.
     fn footer(self) -> bool {
         matches!(self, Self::Footer | Self::FooterLeft | Self::FooterFirst)
     }
 
+    /// Name part `id` in this slot of `sec` (a first-page one turns on a different first page).
     fn set(self, sec: &mut SectionProps, id: u32) {
         let set = if self.footer() { &mut sec.footers } else { &mut sec.headers };
         match self {
@@ -106,7 +110,9 @@ pub(super) fn read(xml: &[u8], styles: &Styles, pages: &mut Pages, fetch: &mut d
     });
     let none = Pages::default();
     let mut out = Parts::default();
+    let mut areas = HashSet::new();
     for (name, kind, evs) in found {
+        areas.insert((name.clone(), kind.footer()));
         let mut reader = Body::new(styles, &none, fetch);
         reader.in_text = true;
         for ev in evs {
@@ -117,6 +123,12 @@ pub(super) fn read(xml: &[u8], styles: &Styles, pages: &mut Pages, fetch: &mut d
             kind.set(sec, out.parts.len() as u32);
         }
         out.even_odd |= matches!(kind, Slot::HeaderLeft | Slot::FooterLeft);
+    }
+    for (name, footer) in areas {
+        let height = pages.hf.get(&name).and_then(|h| h.get(usize::from(footer)).copied().flatten());
+        if let (Some(sec), Some(h)) = (pages.masters.get_mut(&name), height) {
+            make_room(sec, footer, h);
+        }
     }
     // Each master page stands alone, but a section without its own header or footer continues
     // the previous one's: give those an empty one, and left pages the right pages' one.
@@ -145,12 +157,49 @@ pub(super) fn read(xml: &[u8], styles: &Styles, pages: &mut Pages, fetch: &mut d
     out
 }
 
-/// Put the parts [`read`] found into `doc` under the ids its sections name. `doc` comes from
-/// [`model::to_doc`], which adds no parts of its own.
+/// Put the parts [`read`] found into `doc`, and point its sections at them: [`read`] numbered
+/// them 1, 2, … in order, but `doc` may already have parts of its own (the body's text boxes).
 pub(super) fn add(doc: &mut Document, parts: Parts) {
-    for (i, (kind, blocks)) in parts.parts.into_iter().enumerate() {
+    let mut ids = Vec::with_capacity(parts.parts.len());
+    for (kind, blocks) in parts.parts {
+        // The blocks first, so the text boxes in a header get ids of their own.
         let blocks = model::part_blocks(doc, &blocks);
-        doc.parts.insert(i as u32 + 1, Part { kind, blocks, body: Default::default() });
+        ids.push(doc.add_part(kind, blocks));
     }
+    let real = |n: Option<u32>| n.and_then(|n| n.checked_sub(1)).and_then(|i| ids.get(i as usize).copied());
+    let fix = |s: &mut SectionProps| {
+        for set in [&mut s.headers, &mut s.footers] {
+            set.default = real(set.default);
+            set.first = real(set.first);
+            set.even = real(set.even);
+        }
+    };
+    for b in &mut doc.body {
+        if let wordcraft_doc::Block::Para(p) = &**b
+            && p.section.is_some()
+            && let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b)
+            && let Some(s) = p.section.as_deref_mut()
+        {
+            fix(s);
+        }
+    }
+    fix(&mut doc.last_section);
     doc.settings.even_odd_headers |= parts.even_odd;
+}
+
+/// ODF measures the page margin to the header (footer) and puts the body text below the header
+/// area, `height` points tall; Word measures the margin to the body text and the header distance
+/// to the header. Set `sec`'s header (footer) distance and margin to match, leaving the body at
+/// least half an inch.
+fn make_room(sec: &mut SectionProps, footer: bool, height: f32) {
+    let (edge, other) = if footer { (sec.margin_bottom, sec.margin_top) } else { (sec.margin_top, sec.margin_bottom) };
+    let most = (sec.page_h - other - 36.0).max(edge);
+    let margin = (edge + height).min(most);
+    if footer {
+        sec.footer = edge;
+        sec.margin_bottom = margin;
+    } else {
+        sec.header = edge;
+        sec.margin_top = margin;
+    }
 }

@@ -81,6 +81,9 @@ fn para_props(p: &Para, list_num: Option<u32>) -> ParaProps {
         },
         ..Default::default()
     };
+    if p.tabs.is_some() {
+        out.tabs.clone_from(&p.tabs);
+    }
     if p.kind == Kind::Rule {
         out.borders = Some(rule_borders());
     } else if p.borders.is_some() {
@@ -212,6 +215,12 @@ impl<'a> Builder<'a> {
                     let (w, h) = (finite_or(img.w, 72.0).clamp(1.0, 1584.0), finite_or(img.h, 72.0).clamp(1.0, 1584.0));
                     let obj = InlineObject::Image { media: key, w, h, alt: img.alt.clone(), float: Default::default(), crop: [0.0; 4], ole: None };
                     append(&mut out, "", &CharProps::default(), Some(obj));
+                }
+                Inline::Field { instr, result, fmt } => {
+                    let result = clean_text(result);
+                    let obj = InlineObject::Field { instr: instr.clone(), result, locked: false, dirty: false, code: false, form: String::new() };
+                    let cp = self.budget(char_props(fmt));
+                    append(&mut out, "", &cp, Some(obj));
                 }
                 Inline::Anchor(name) => {
                     append(&mut out, "", &CharProps::default(), Some(InlineObject::BookmarkStart { name: name.clone() }));

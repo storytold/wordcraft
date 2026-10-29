@@ -1,4 +1,7 @@
+use super::limits::MAX_TAB_STOPS;
 use super::*;
+use wordcraft_doc::para::InlineObject;
+use wordcraft_doc::props::{TabAlign, TabLeader, TabStop};
 
 #[test]
 fn escaper_drops_noncharacters() {
@@ -407,6 +410,7 @@ fn sections_package() -> Vec<u8> {
     package(&content, Some(&styles))
 }
 
+/// The plain text of header or footer part `id`.
 fn part_text(d: &Document, id: Option<u32>) -> String {
     d.plain_text(wordcraft_doc::StoryRef::Part(id.expect("part")))
 }
@@ -985,6 +989,59 @@ fn exported_changes_always_have_a_date_and_keep_paragraph_separators() {
     assert_eq!(marks(&back).len(), 1);
 }
 
+const NS_D: &str = r#"xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:loext="urn:org:documentfoundation:names:experimental:office:xmlns:loext:1.0""#;
+
+/// A master page "Standard" with `header` and `footer` (inside `style:header`/`style:footer`
+/// when not empty), graphic styles `graphic`, and a body of `body`.
+fn with_master_page(graphic: &str, header: &str, footer: &str, body: &str) -> Vec<u8> {
+    let hf = |tag: &str, inner: &str| if inner.is_empty() { String::new() } else { format!("<style:{tag}>{inner}</style:{tag}>") };
+    let styles = format!(
+        r#"<office:document-styles {NS_T} {NS_D}><office:automatic-styles>{graphic}
+        <style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="210mm" fo:page-height="297mm" fo:margin-top="12.5mm" fo:margin-bottom="12.5mm" fo:margin-left="20mm" fo:margin-right="20mm"/>
+        <style:header-style><style:header-footer-properties fo:min-height="17.5mm" fo:margin-bottom="16.5mm"/></style:header-style>
+        <style:footer-style><style:header-footer-properties fo:min-height="10mm" fo:margin-top="5mm"/></style:footer-style></style:page-layout>
+        </office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1">{}{}</style:master-page></office:master-styles></office:document-styles>"#,
+        hf("header", header),
+        hf("footer", footer)
+    );
+    let content =
+        format!(r#"<office:document-content {NS_T} {NS_D}><office:body><office:text>{body}</office:text></office:body></office:document-content>"#);
+    package(&content, Some(&styles))
+}
+
+/// The paragraphs of part `id`.
+fn part_paras(d: &Document, id: Option<u32>) -> Vec<wordcraft_doc::Paragraph> {
+    let Some(part) = id.and_then(|i| d.parts.get(&i)) else { return Vec::new() };
+    part.blocks.iter().filter_map(|b| if let wordcraft_doc::Block::Para(p) = &**b { Some(p.clone()) } else { None }).collect()
+}
+
+#[test]
+fn header_area_sets_header_distance_and_top_margin() {
+    let mm = |v: f32| v * 72.0 / 25.4;
+    let d = import(&with_master_page("", "<text:p>Head</text:p>", "<text:p>Foot</text:p>", "<text:p>Body</text:p>")).unwrap();
+    let s = &d.last_section;
+    assert!((s.header - mm(12.5)).abs() < 0.01 && (s.margin_top - mm(30.0)).abs() < 0.01, "{} {}", s.header, s.margin_top);
+    assert!((s.footer - mm(12.5)).abs() < 0.01 && (s.margin_bottom - mm(22.5)).abs() < 0.01, "{} {}", s.footer, s.margin_bottom);
+    // Without a header or footer the margins are the page layout's.
+    let d = import(&with_master_page("", "", "", "<text:p>Body</text:p>")).unwrap();
+    assert!((d.last_section.margin_top - mm(12.5)).abs() < 0.01);
+    assert!((d.last_section.margin_bottom - mm(12.5)).abs() < 0.01);
+}
+
+#[test]
+fn footer_page_number_and_count_are_fields() {
+    let footer = r#"<text:p>Page <text:page-number text:select-page="current">4</text:page-number> of <text:page-count>9</text:page-count></text:p>"#;
+    let d = import(&with_master_page("", "", footer, "<text:p>Body</text:p>")).unwrap();
+    let ps = part_paras(&d, d.last_section.footers.default);
+    let fields: Vec<(&str, &str)> = ps[0]
+        .objects
+        .iter()
+        .filter_map(|o| if let InlineObject::Field { instr, result, .. } = o { Some((instr.as_str(), result.as_str())) } else { None })
+        .collect();
+    assert_eq!(fields, [("PAGE", "4"), ("NUMPAGES", "9")]);
+    assert_eq!(ps[0].text.replace(wordcraft_doc::para::OBJ, "#"), "Page # of #");
+}
+
 #[test]
 fn spaces_after_a_tab_survive_a_round_trip() {
     for src in ["a\t b", "a\t  b", "a\t   éa", "é\t 😀a", "a\t\t b"] {
@@ -992,6 +1049,53 @@ fn spaces_after_a_tab_survive_a_round_trip() {
         let back = import(&export(&doc).unwrap()).unwrap();
         assert_eq!(back.plain_text(wordcraft_doc::StoryRef::Body).trim_end(), src, "{src:?}");
     }
+}
+
+#[test]
+fn paragraph_style_tab_stops_and_default_interval_are_read() {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles>
+        <style:default-style style:family="paragraph"><style:paragraph-properties style:tab-stop-distance="23mm"/></style:default-style>
+        <style:style style:name="Footer" style:family="paragraph"><style:paragraph-properties><style:tab-stops><style:tab-stop style:position="82.55mm" style:type="center"/><style:tab-stop style:position="165.1mm" style:type="right" style:leader-text="."/></style:tab-stops></style:paragraph-properties></style:style>
+        <style:style style:name="Child" style:family="paragraph" style:parent-style-name="Footer"/>
+        <style:style style:name="None" style:family="paragraph" style:parent-style-name="Footer"><style:paragraph-properties><style:tab-stops/></style:paragraph-properties></style:style>
+        </office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p text:style-name="Child">A<text:tab/>B</text:p><text:p text:style-name="None">C</text:p><text:p>D</text:p></office:text></office:body></office:document-content>"#
+    );
+    let d = import(&package(&content, Some(&styles))).unwrap();
+    let mm = |v: f32| v * 72.0 / 25.4;
+    assert!((d.settings.default_tab - mm(23.0)).abs() < 0.01);
+    let tabs: Vec<Option<Vec<TabStop>>> =
+        d.body.iter().filter_map(|b| if let wordcraft_doc::Block::Para(p) = &**b { Some(p.props.tabs.clone()) } else { None }).collect();
+    let Some(Some(inherited)) = tabs.first() else { panic!("{tabs:?}") };
+    assert_eq!(
+        inherited.iter().map(|t| (t.align, t.leader)).collect::<Vec<_>>(),
+        [(TabAlign::Center, TabLeader::None), (TabAlign::Right, TabLeader::Dot)]
+    );
+    assert!((inherited[1].pos - mm(165.1)).abs() < 0.01);
+    // An empty `style:tab-stops` clears the parent's; no style keeps the defaults.
+    assert_eq!(tabs.get(1), Some(&Some(Vec::new())));
+    assert_eq!(tabs.get(2), Some(&None));
+}
+
+#[test]
+fn hostile_tab_stops_are_bounded() {
+    let stops = r#"<style:tab-stop style:position="1e30mm" style:type="right"/><style:tab-stop style:position="-5mm"/><style:tab-stop style:position="NaNmm"/>"#.to_string()
+        + &r#"<style:tab-stop style:position="1in"/>"#.repeat(1000);
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:paragraph-properties style:tab-stop-distance="1e30in"/></style:default-style><style:style style:name="T" style:family="paragraph"><style:paragraph-properties><style:tab-stops>{stops}</style:tab-stops></style:paragraph-properties></style:style></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p text:style-name="T">x</text:p></office:text></office:body></office:document-content>"#
+    );
+    let d = import(&package(&content, Some(&styles))).unwrap();
+    assert!(d.settings.default_tab <= 1584.0);
+    let Some(wordcraft_doc::Block::Para(p)) = d.body.first().map(|b| &**b) else { panic!("no paragraph") };
+    let tabs = p.props.tabs.clone().unwrap_or_default();
+    assert_eq!(tabs.len(), MAX_TAB_STOPS);
+    assert!(tabs.iter().all(|t| t.pos.is_finite() && (0.0..=1584.0).contains(&t.pos)));
 }
 
 #[test]

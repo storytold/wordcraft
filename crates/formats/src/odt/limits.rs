@@ -15,3 +15,6 @@ pub(super) const MAX_OPEN_INSERTIONS: usize = 64;
 
 /// Longest change author or date kept, in characters.
 pub(super) const MAX_INFO_CHARS: usize = 256;
+
+/// Most tab stops kept per paragraph style.
+pub(super) const MAX_TAB_STOPS: usize = 64;

@@ -649,7 +649,8 @@ fn legacy_font_effects_are_drawn() {
     const MIN_DIRECTION_PIXELS: usize = 100;
     let shot = |c: CharProps, offset: f32| {
         let mut d = Document::from_text("x");
-        let cp = CharProps { size: Some(SIZE), bold: Some(true), ..c };
+        // The bundled font, so the glyphs are the same whatever fonts the machine has.
+        let cp = CharProps { font: Some("Source Sans 3".into()), size: Some(SIZE), bold: Some(true), ..c };
         d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("HHHH", cp))];
         let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
         render_area(&d, &l.pages[0], wordcraft_geom::Rect::new(-offset, -offset, 400.0, 150.0), SCALE, &RenderOptions::default())

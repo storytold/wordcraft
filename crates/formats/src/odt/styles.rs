@@ -1,3 +1,6 @@
+use wordcraft_doc::props::{TabAlign, TabLeader, TabStop};
+
+use super::limits::MAX_TAB_STOPS;
 use super::xml::{Attrs, Ev, events, get, length, local};
 use super::{Align, Arc, Columns, Fmt, HashMap, Kind, Rgb, VAlign, model};
 
@@ -66,6 +69,84 @@ struct StyleInfo {
     page_number: Option<Option<u32>>,
     /// `style:columns` of a section style.
     columns: Option<Columns>,
+    /// `style:tab-stops` of a paragraph style: they replace the parent style's.
+    tabs: Option<Vec<TabStop>>,
+}
+
+/// A `style:tab-stop` (ODF 1.3 §17.8): position, kind and leader; `None` without a usable
+/// position. Positions are from the paragraph's left edge (LibreOffice's "tabs relative to
+/// indent"; the reader keeps no indents, so both readings agree).
+fn tab_stop(a: &Attrs) -> Option<TabStop> {
+    let pos = get(a, "style:position").and_then(length).filter(|v| *v >= 0.0)?.min(1584.0);
+    let align = match get(a, "style:type") {
+        Some("center") => TabAlign::Center,
+        Some("right") => TabAlign::Right,
+        Some("char") => TabAlign::Decimal,
+        _ => TabAlign::Left,
+    };
+    let leader = match get(a, "style:leader-text").and_then(|t| t.chars().next()) {
+        Some('.') | Some('…') => TabLeader::Dot,
+        Some('-') => TabLeader::Hyphen,
+        Some('_') => TabLeader::Underscore,
+        Some('·') => TabLeader::MiddleDot,
+        Some(' ') => TabLeader::None,
+        _ => match get(a, "style:leader-style") {
+            Some("dotted") => TabLeader::Dot,
+            Some("dash" | "long-dash" | "dot-dash" | "dot-dot-dash") => TabLeader::Hyphen,
+            Some("solid") => TabLeader::Underscore,
+            _ => TabLeader::None,
+        },
+    };
+    Some(TabStop { pos, align, leader })
+}
+
+/// A `style:paragraph-properties` element of style `s`: alignment, page break before, keep with
+/// next, page number restart and a bottom border.
+fn paragraph_properties(a: &Attrs, s: &mut StyleInfo) {
+    s.align = match get(a, "fo:text-align").map(|v| v.trim().to_ascii_lowercase()).as_deref() {
+        Some("center") => Some(Align::Center),
+        Some("end") | Some("right") => Some(Align::Right),
+        Some("justify") => Some(Align::Justify),
+        Some("start") | Some("left") => Some(Align::Left),
+        _ => s.align,
+    };
+    if get(a, "fo:break-before").is_some_and(|b| b.trim().eq_ignore_ascii_case("page")) {
+        s.page_break = true;
+    }
+    match get(a, "fo:keep-with-next") {
+        Some("always") => s.keep_next = Some(true),
+        Some("auto") => s.keep_next = Some(false),
+        _ => {}
+    }
+    if let Some(v) = get(a, "style:page-number") {
+        s.page_number = Some(v.trim().parse::<u32>().ok().map(|n| n.min(32_767)));
+    }
+    if get(a, "fo:border-bottom").is_some_and(|b| !b.trim().eq_ignore_ascii_case("none")) {
+        s.border_bottom = true;
+    }
+}
+
+/// The default tab interval of a `style:paragraph-properties` (`style:tab-stop-distance`), in
+/// Word's limits: more than nothing, at most 22".
+fn tab_distance(a: &Attrs) -> Option<f32> {
+    get(a, "style:tab-stop-distance").and_then(length).filter(|v| *v > 0.0).map(|d| d.min(1584.0))
+}
+
+/// `style:tab-stops` starts the style `cur`'s own tab stops (replacing its parent's); each
+/// `style:tab-stop` in it adds one, up to `MAX_TAB_STOPS`.
+fn tab_element(cur: &mut Option<(String, StyleInfo)>, q: &str, a: &Attrs) {
+    let Some((_, s)) = cur else { return };
+    if !q.starts_with("style:") {
+        return;
+    }
+    if local(q) == "tab-stops" {
+        s.tabs = Some(Vec::new());
+    } else if let Some(tabs) = &mut s.tabs
+        && tabs.len() < MAX_TAB_STOPS
+        && let Some(t) = tab_stop(a)
+    {
+        tabs.push(t);
+    }
 }
 
 /// Columns of a `style:columns` element (ODF 1.3 §17.12): count and gap, clamped as the RTF and
@@ -142,6 +223,8 @@ fn text_properties(a: &Attrs, style: &mut StyleInfo) {
 pub(super) struct Styles {
     map: HashMap<String, StyleInfo>,
     pub(super) lists: HashMap<String, Vec<bool>>,
+    /// Default tab interval of the paragraph default style (`style:tab-stop-distance`), points.
+    pub(super) default_tab: Option<f32>,
     /// Font of `style:default-style` for paragraphs (the document default, ODF 1.3 §16.4).
     default_font: Option<String>,
 }
@@ -155,6 +238,7 @@ impl Styles {
         events(xml, |ev| match ev {
             Ev::Start(q, a) => match local(&q) {
                 "automatic-styles" => in_auto = true,
+                "paragraph-properties" if in_default => self.default_tab = tab_distance(&a).or(self.default_tab),
                 "style" if q.starts_with("style:") => {
                     if let Some(name) = get(&a, "style:name") {
                         let info = StyleInfo {
@@ -177,6 +261,7 @@ impl Styles {
                         text_properties(&a, s);
                     }
                 }
+                "tab-stops" | "tab-stop" => tab_element(&mut cur, &q, &a),
                 "table-properties" => {
                     if let Some((_, s)) = &mut cur
                         && let Some(v) = get(&a, "style:page-number")
@@ -208,27 +293,7 @@ impl Styles {
                 }
                 "paragraph-properties" => {
                     if let Some((_, s)) = &mut cur {
-                        s.align = match get(&a, "fo:text-align").map(|v| v.trim().to_ascii_lowercase()).as_deref() {
-                            Some("center") => Some(Align::Center),
-                            Some("end") | Some("right") => Some(Align::Right),
-                            Some("justify") => Some(Align::Justify),
-                            Some("start") | Some("left") => Some(Align::Left),
-                            _ => s.align,
-                        };
-                        if get(&a, "fo:break-before").is_some_and(|b| b.trim().eq_ignore_ascii_case("page")) {
-                            s.page_break = true;
-                        }
-                        match get(&a, "fo:keep-with-next") {
-                            Some("always") => s.keep_next = Some(true),
-                            Some("auto") => s.keep_next = Some(false),
-                            _ => {}
-                        }
-                        if let Some(v) = get(&a, "style:page-number") {
-                            s.page_number = Some(v.trim().parse::<u32>().ok().map(|n| n.min(32_767)));
-                        }
-                        if get(&a, "fo:border-bottom").is_some_and(|b| !b.trim().eq_ignore_ascii_case("none")) {
-                            s.border_bottom = true;
-                        }
+                        paragraph_properties(&a, s);
                     }
                 }
                 "columns" if q.starts_with("style:") => {
@@ -333,6 +398,11 @@ impl Styles {
     /// Vertical alignment of a table-cell style (whole chain).
     pub(super) fn cell_valign(&self, name: &str) -> Option<VAlign> {
         self.chain(name).iter().find_map(|(_, s)| s.cell_valign)
+    }
+
+    /// The tab stops of paragraph style `name`: its own, or the nearest parent's.
+    pub(super) fn tabs(&self, name: &str) -> Option<Vec<TabStop>> {
+        self.chain(name).iter().find_map(|(_, s)| s.tabs.clone())
     }
 
     /// Paragraph kind, alignment, page break, rule, keep-with-next and base formatting. The text formatting of

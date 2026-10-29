@@ -483,6 +483,7 @@ fn widow_control_moves_a_three_line_paragraph_whole() {
         for (fill, shift) in (30usize..60).flat_map(|f| (0..15).step_by(2).map(move |s| (f, s))) {
             let filler = "Filler line.\n".repeat(fill);
             let mut d = Document::from_text(&format!("{filler}{}\nAfter.", "word ".repeat(words)));
+            // The bundled font, so the line counts are the same whatever fonts the machine has.
             d.styles.default_chr.font = Some("Source Sans 3".into());
             d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.space_before = Some(shift as f32)).unwrap();
             let l = lay(&d);

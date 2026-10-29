@@ -130,6 +130,8 @@ pub(super) struct Body<'a> {
     /// `(width, height, picture bytes, alt text, equation read from an embedded `draw:object`)`.
     frame: Option<(Option<f32>, Option<f32>, Option<Vec<u8>>, String, Option<(String, bool)>)>,
     in_desc: bool,
+    /// The field being read (`text:page-number`…): its instruction and saved result.
+    field: Option<(&'static str, String)>,
     /// The master pages' page setups.
     pages: &'a Pages,
     /// The current master page's setup (a column section's page, without its columns).
@@ -160,6 +162,8 @@ pub(super) struct Body<'a> {
 }
 
 impl<'a> Body<'a> {
+    /// A reader starting on the first master page, resolving styles from `styles` and pictures
+    /// through `zip`.
     pub(super) fn new(styles: &'a Styles, pages: &'a Pages, zip: &'a mut dyn FnMut(&str) -> Option<Vec<u8>>) -> Self {
         let page = pages.first.clone().unwrap_or_default();
         Body {
@@ -180,6 +184,7 @@ impl<'a> Body<'a> {
             depth: 0,
             frame: None,
             in_desc: false,
+            field: None,
             pages,
             sec: page.clone(),
             page,
@@ -198,6 +203,7 @@ impl<'a> Body<'a> {
         }
     }
 
+    /// Take the next XML event, ignoring what lies deeper than `MAX_XML_DEPTH`.
     pub(super) fn feed(&mut self, ev: Ev) {
         match ev {
             Ev::Start(q, a) => {
@@ -300,6 +306,16 @@ impl Body<'_> {
         Some(SectionProps { start: SectionStart::NextPage, page_num_start: restart, ..page })
     }
 
+    /// Put `inline` at the end of the open paragraph, starting one if none is open.
+    fn push_inline(&mut self, inline: Inline) {
+        if self.para.is_none() {
+            self.start_para(None, None);
+        }
+        if let Some(p) = &mut self.para {
+            p.inlines.push(inline);
+        }
+    }
+
     fn start_para(&mut self, style: Option<&str>, heading: Option<u8>) {
         self.end_para();
         let (mut kind, align, mut pb, rule, keep_next, base) =
@@ -313,7 +329,8 @@ impl Body<'_> {
         if let Some(h) = heading {
             kind = Kind::Heading(h.clamp(1, 6));
         }
-        let mut p = Para { kind, align, page_break: pb, keep_next, ..Default::default() };
+        let tabs = style.and_then(|s| self.styles.tabs(s));
+        let mut p = Para { kind, align, page_break: pb, keep_next, tabs, ..Default::default() };
         if rule && kind == Kind::Normal {
             p.kind = Kind::Rule;
         }
@@ -438,6 +455,11 @@ impl Body<'_> {
             if let Some(fr) = &mut self.frame {
                 fr.3.push_str(t);
             }
+            return;
+        }
+        if let Some((_, r)) = &mut self.field {
+            let room = MAX_INFO_CHARS.saturating_sub(r.chars().count());
+            r.extend(t.chars().take(room));
             return;
         }
         let Some(p) = &self.para else {
@@ -827,6 +849,9 @@ impl Body<'_> {
             }
             "tab" => self.push_text("\t"),
             "line-break" => self.push_text("\n"),
+            "page-number" | "page-count" if q.starts_with("text:") => {
+                self.field = Some((if local(q) == "page-number" { "PAGE" } else { "NUMPAGES" }, String::new()));
+            }
             "bookmark" | "bookmark-start" => {
                 if let Some(name) = get(a, "text:name") {
                     if self.para.is_none() {
@@ -899,6 +924,12 @@ impl Body<'_> {
         }
         match local(q) {
             "p" | "h" if !self.in_desc => self.end_para(),
+            "page-number" | "page-count" if q.starts_with("text:") => {
+                if let Some((instr, result)) = self.field.take() {
+                    let fmt = self.cur_fmt();
+                    self.push_inline(Inline::Field { instr: instr.to_string(), result: result.trim().to_string(), fmt });
+                }
+            }
             "span" | "a" if self.fmt.len() > usize::from(self.para.is_some()) => {
                 self.fmt.pop();
             }
@@ -964,12 +995,7 @@ impl Body<'_> {
                         None => img.and_then(|data| make_img(data, w, h, alt.trim())).map(Inline::Image),
                     };
                     if let Some(inline) = inline {
-                        if self.para.is_none() {
-                            self.start_para(None, None);
-                        }
-                        if let Some(p) = &mut self.para {
-                            p.inlines.push(inline);
-                        }
+                        self.push_inline(inline);
                     }
                 }
                 self.frame = None;
