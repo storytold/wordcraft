@@ -56,6 +56,15 @@ These are app-test settings, not changes to the desktop scale.
 
 ## Reproducible validation
 
+Follow-up validation (2026-10-30): incorporated upstream
+`165d5725dc25b4a7887d8025c3b1fe506ccc3dcc` (recipient label sheets), preserving both
+upstream and KDE progress entries. Exact `cargo xtask ci` again passed all eight stages,
+with 4,611 passing tests and four ignored cases across 72 test summaries; required pinned
+fonts/translations and the matching WASM sysroot were used. Log:
+`/tmp/wordcraft-kde-ci-165d5725.log`. This follow-up changes mailings engine code/tests and
+progress documents, not the UI, native host or toolkit. The earlier native smoke remains
+evidence for those unchanged integration sources; it is not a new GUI run of the rebuilt binary.
+
 Current reconciliation (2026-10-29): exact `cargo xtask ci` passed all eight stages
 (formatting, workspace Clippy, tests, i18n report, doctests, assets, layers and WASM),
 using required pinned fonts and translations. The log contains 4,609 passing tests
