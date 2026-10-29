@@ -608,6 +608,20 @@ fn read_bounded(file: std::fs::File, meta: &std::fs::Metadata, limit: u64) -> st
     Ok(out)
 }
 
+/// The most bytes of a document (or any file opened by path) that is read into memory.
+pub const MAX_OPEN_BYTES: u64 = 2 << 30;
+
+/// `max` for an error message: whole gigabytes (when exact), else megabytes, else bytes.
+pub fn limit_text(max: u64) -> String {
+    if max >= 1 << 30 && max.is_multiple_of(1 << 30) {
+        format!("{} GB", max >> 30)
+    } else if max >= 1 << 20 {
+        format!("{} MB", max >> 20)
+    } else {
+        format!("{max} bytes")
+    }
+}
+
 /// Largest file [`read_file`] reads whole — the same 2 GB ceiling [`open_path_with`] gives a
 /// document.
 pub const MAX_READ_FILE: u64 = 2 << 30;
