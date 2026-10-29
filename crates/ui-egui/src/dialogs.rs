@@ -159,6 +159,19 @@ pub enum Dialog {
         rows: u32,
         cols: u32,
     },
+    /// Hangul-style Create Table: size, width fit, row height and Hangul's table look.
+    CreateTable {
+        rows: u32,
+        cols: u32,
+        /// `"column"`, `"paragraph"` or `"custom"`.
+        fit: &'static str,
+        /// Custom width and at-least row height in points, so a unit change while the dialog is
+        /// open keeps their size; the fields show them in the interface unit.
+        width: f32,
+        at_least: bool,
+        height: f32,
+        hangul: bool,
+    },
     PageSetup {
         top: f32,
         bottom: f32,
@@ -489,6 +502,7 @@ impl Dialog {
             Dialog::Find { tab: FindTab::Replace, .. } => "replace",
             Dialog::Find { tab: FindTab::GoTo, .. } => "goto",
             Dialog::InsertTable { .. } => "insertTable",
+            Dialog::CreateTable { .. } => "createTable",
             Dialog::PageSetup { .. } => "pageSetup",
             Dialog::Link { .. } => "link",
             Dialog::Bookmark { .. } => "bookmark",
@@ -676,6 +690,16 @@ impl Dialog {
                 focus: true,
             },
             "insertTable" => Dialog::InsertTable { rows: 2, cols: 5 },
+            "createTable" => Dialog::CreateTable {
+                rows: 5,
+                cols: 5,
+                fit: "column",
+                // Custom starts at the width "Fit to column" gives: the caret's column.
+                width: wordcraft_engine::cmd::insert::caret_column_width(&mut app.session),
+                at_least: false,
+                height: 20.0,
+                hangul: true,
+            },
             "pageSetup" => {
                 let sp = wordcraft_engine::cmd::page::sect(&app.session);
                 use wordcraft_doc::section::DocGridType;

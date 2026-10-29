@@ -1584,3 +1584,28 @@ fn the_custom_properties_dialog_leaves_imported_non_text_properties_alone() {
     let kinds: Vec<(&str, &str)> = h.state().session.doc.custom_props.iter().map(|p| (p.name.as_str(), p.kind.as_str())).collect();
     assert_eq!(kinds, [("Status", "lpwstr"), ("Count", "i4")], "Cancel leaves the imported property as it was");
 }
+
+/// Create Table (Hangul style): Custom starts at the caret column's width, as Fit to column
+/// does, and a measurement-unit change while the dialog is open keeps its width and row height.
+#[test]
+fn create_table_starts_at_the_caret_column_and_keeps_lengths_across_a_unit_change() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = app_harness(app_with("Columns"));
+    h.state_mut().run("layout.columns", json!({"count": 2, "space": 36})).unwrap();
+    let half = (wordcraft_engine::cmd::page::sect(&h.state().session).text_width() - 36.0) / 2.0;
+    h.state_mut().run("ui.dialog", json!({"name": "createTable"})).unwrap();
+    h.run_steps(2);
+    {
+        let Some(Dialog::CreateTable { fit, width, at_least, height, .. }) = h.state_mut().dialog.as_mut() else { panic!("dialog") };
+        assert!((*width - half).abs() < 0.01, "{width} vs {half}");
+        (*fit, *width, *at_least, *height) = ("custom", 150.0, true, 30.0);
+    }
+    h.state_mut().run("file.options", json!({"units": "centimeters"})).unwrap();
+    h.run_steps(3);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    h.state_mut().run("file.options", json!({"units": "auto"})).unwrap();
+    let t = h.state().session.doc.body.iter().find_map(|b| b.as_table()).cloned().unwrap();
+    assert_eq!(t.props.width, Some(150.0));
+    assert!(t.rows.iter().all(|r| r.props.height == Some(30.0)), "{:?}", t.rows[0].props.height);
+}

@@ -2,6 +2,7 @@ use super::{
     Block, CharProps, CmdError, CmdResult, Float, InlineObject, Paragraph, PartKind, Path, Pos, Rgb, Selection, Session, ShapeKind, StoryRef, Table,
     Value, Wrap, delete_selection, json, p, para_block, sel_result,
 };
+use wordcraft_doc::props::{Border, BorderStyle, Borders, HeightRule};
 
 /// Insert a block after the caret's paragraph (splitting it if the caret is mid-paragraph).
 fn insert_block_at_caret(s: &mut Session, block: Block) -> Result<Path, CmdError> {
@@ -23,14 +24,69 @@ fn insert_block_at_caret(s: &mut Session, block: Block) -> Result<Path, CmdError
     Ok(insert_at)
 }
 
+/// The width a new table fits to: the caret's column of the caret's section. In a multi-column
+/// section, the column whose box holds the caret (unequal columns differ), else the text width.
+pub fn caret_column_width(s: &mut Session) -> f32 {
+    let sect = crate::cmd::page::sect(s);
+    let boxes = sect.column_boxes();
+    if boxes.len() > 1 {
+        let focus = s.sel.focus.clone();
+        let x = s.layout().caret(&focus).map(|c| c.x - sect.margin_left - sect.gutter);
+        x.and_then(|x| boxes.iter().find(|(o, w)| x >= o - 0.5 && x <= o + w + 0.5)).or(boxes.first()).map(|b| b.1)
+    } else {
+        None
+    }
+    .unwrap_or_else(|| sect.text_width())
+    .max(36.0)
+}
+
 pub(super) fn table(s: &mut Session, v: &Value) -> CmdResult {
     let rows = p::u64(v, "rows").unwrap_or(2).clamp(1, 1000) as usize;
     let cols = p::u64(v, "cols").unwrap_or(2).clamp(1, 63) as usize;
-    let width = s.doc.sections().first().map(|(_, sp)| sp.text_width()).unwrap_or(468.0);
+    let column = caret_column_width(s);
+    // Hangul's Create Table width choices: fit to the column, fit to the caret's paragraph
+    // (between its indents), or a width in points.
+    let (width, indent) = match v.get("width") {
+        None | Some(Value::Null) => (column, None),
+        Some(Value::String(w)) if w == "column" => (column, None),
+        Some(Value::String(w)) if w == "paragraph" => {
+            let rp = s.doc.para_at(&s.sel.focus).map(|x| s.doc.styles.resolve_para(&x.props));
+            let (l, r) = rp.map(|rp| (rp.indent_left.max(0.0), rp.indent_right.max(0.0))).unwrap_or((0.0, 0.0));
+            ((column - l - r).max(column * 0.1), (l > 0.0).then_some(l))
+        }
+        Some(w) => match w.as_f64().filter(|w| w.is_finite()) {
+            Some(w) => ((w as f32).clamp(cols as f32 * 7.2, 1584.0), None),
+            None => return Err(CmdError::Params("`width` is \"column\", \"paragraph\" or points".into())),
+        },
+    };
     let mut t = Table::new(rows, cols, width);
+    if width != column {
+        t.props.width = Some(width);
+    }
+    t.props.indent = indent;
     if let Some(st) = p::str(v, "style") {
         let id = s.doc.styles.find(st).map(|x| x.id.clone()).ok_or_else(|| CmdError::Params(format!("no table style `{st}`")))?;
         t.props.style = Some(id);
+    }
+    match v.get("look") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(l)) if l == "hangul" => {
+            // Hangul's new-table look: every line solid 0.12 mm black; cells padded 1.8 mm left
+            // and right, 0.5 mm top and bottom.
+            let line = Border { style: BorderStyle::Single, width: 0.12 * MM, color: Some(Rgb(0, 0, 0)), space: 0.0 };
+            t.props.borders = Some(Borders::all(line));
+            t.props.cell_margins = Some([0.5 * MM, 1.8 * MM, 0.5 * MM, 1.8 * MM]);
+        }
+        Some(other) => return Err(CmdError::Params(format!("unknown table look {other} (try \"hangul\")"))),
+    }
+    if let Some(h) = v.get("rowHeight").filter(|h| !h.is_null()) {
+        let h =
+            h.as_f64().filter(|h| h.is_finite() && *h > 0.0).ok_or_else(|| CmdError::Params("`rowHeight` is a height in points, above 0".into()))?
+                as f32;
+        for row in &mut t.rows {
+            row.props.height = Some(h.clamp(2.0, 1584.0));
+            row.props.height_rule = HeightRule::AtLeast;
+        }
     }
     // Like Word, a table inserted in a right-to-left paragraph is a right-to-left table (#2634):
     // its first cell stands at the right, so Tab, which follows reading order, moves leftwards.
@@ -44,6 +100,9 @@ pub(super) fn table(s: &mut Session, v: &Value) -> CmdResult {
     s.sel = Selection::caret(Pos { story, path: Path(first), off: 0 });
     Ok(json!({"table": path.0}))
 }
+
+/// Points per millimetre.
+const MM: f32 = 72.0 / 25.4;
 
 /// Minimal base64 (standard alphabet, padding optional, whitespace ignored).
 pub fn base64_decode(s: &str) -> Option<Vec<u8>> {

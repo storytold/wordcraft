@@ -22,6 +22,7 @@ pub(super) fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         Dialog::TableProperties { .. } => table_properties_dialog(app, ui, d),
         Dialog::CellMargins { .. } => cell_margins_arm(app, ui, d),
         Dialog::InsertTable { .. } => insert_table_dialog(app, ui, d),
+        Dialog::CreateTable { .. } => create_table_dialog(app, ui, d),
         Dialog::PageSetup { .. } => page_setup_dialog(app, ui, d),
         Dialog::Link { .. } => link_dialog(app, ui, d),
         Dialog::Bookmark { name, by_location, hidden, deleted } => bookmark(app, ui, name, by_location, hidden, deleted),
@@ -545,6 +546,63 @@ fn insert_table_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     let (ok, cancel) = buttons(ui, tl!("OK"));
     if ok {
         let _ = app.run("insert.table", json!({"rows": *rows, "cols": *cols}));
+    }
+    ok || cancel
+}
+
+fn create_table_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
+    let Dialog::CreateTable { rows, cols, fit, width, at_least, height, hangul } = d else {
+        return false;
+    };
+    let unit = crate::options::unit();
+    let ppu = unit.pt_per_unit();
+    // A length kept in points, edited in the interface unit; written back only when edited.
+    let measured = |ui: &mut Ui, enabled: bool, pt: &mut f32, min: f32, label: egui::Id| {
+        let mut shown = *pt / ppu;
+        let field = egui::DragValue::new(&mut shown).speed(3.6 / ppu).range(min / ppu..=1584.0 / ppu).measure(unit).max_decimals(2);
+        if ui.add_enabled(enabled, field).labelled_by(label).changed() {
+            *pt = shown * ppu;
+        }
+    };
+    egui::Grid::new("ct").num_columns(2).show(ui, |ui| {
+        let label = ui.label(tl!("Number of rows:"));
+        ui.add(egui::DragValue::new(rows).range(1..=1000)).labelled_by(label.id);
+        ui.end_row();
+        let label = ui.label(tl!("Number of columns:"));
+        ui.add(egui::DragValue::new(cols).range(1..=63)).labelled_by(label.id);
+        ui.end_row();
+    });
+    ui.separator();
+    ui.label(egui::RichText::new(tl!("Size")).font(semibold(12.5)));
+    egui::Grid::new("ct-size").num_columns(2).show(ui, |ui| {
+        let label = ui.label(tl!("Width:"));
+        ui.horizontal(|ui| {
+            ui.radio_value(fit, "column", tl!("Fit to column"));
+            ui.radio_value(fit, "paragraph", tl!("Fit to paragraph"));
+            ui.radio_value(fit, "custom", tl!("Custom"));
+            measured(ui, *fit == "custom", width, 7.2, label.id);
+        });
+        ui.end_row();
+        let label = ui.label(tl!("Height:"));
+        ui.horizontal(|ui| {
+            ui.radio_value(at_least, false, tl!("Auto"));
+            ui.radio_value(at_least, true, tl!("At least"));
+            measured(ui, *at_least, height, 2.0, label.id);
+        });
+        ui.end_row();
+    });
+    ui.checkbox(hangul, tl!("Hangul table look (thin black lines, roomy cells)"));
+    let (ok, cancel) = buttons(ui, tl!("OK"));
+    if ok {
+        let mut params = json!({"rows": *rows, "cols": *cols});
+        params["width"] = if *fit == "custom" { json!(*width) } else { json!(*fit) };
+        if *at_least {
+            params["rowHeight"] = json!(*height);
+        }
+        if *hangul {
+            params["look"] = json!("hangul");
+        }
+        let _ = app.run("insert.table", params);
     }
     ok || cancel
 }
