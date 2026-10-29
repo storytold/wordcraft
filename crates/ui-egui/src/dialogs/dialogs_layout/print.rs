@@ -33,7 +33,7 @@ pub(super) fn envelopes_ui(app: &mut WordApp, ui: &mut Ui, f: &mut EnvelopeForm)
     ui.add(egui::TextEdit::multiline(&mut f.delivery).desired_rows(4).desired_width(340.0));
     ui.horizontal(|ui| {
         ui.label(tl!("Return address:"));
-        crate::rtl::checkbox(ui, &mut f.omit_return, tl!("Omit"));
+        ui.checkbox(&mut f.omit_return, tl!("Omit"));
     });
     ui.add_enabled(!f.omit_return, egui::TextEdit::multiline(&mut f.ret).desired_rows(3).desired_width(340.0));
     ui.horizontal(|ui| {
@@ -148,7 +148,7 @@ pub(super) fn product_label(i: usize) -> String {
 pub(super) fn labels_ui(app: &mut WordApp, ui: &mut Ui, f: &mut LabelsForm) -> bool {
     let has_recipients = !app.session.merge.rows.is_empty();
     if has_recipients {
-        crate::rtl::checkbox(ui, &mut f.recipients, tl!("One label per recipient"));
+        ui.checkbox(&mut f.recipients, tl!("One label per recipient"));
     }
     ui.add_enabled_ui(!(has_recipients && f.recipients && !f.single), |ui| {
         ui.label(tl!("Address:"));
@@ -164,9 +164,9 @@ pub(super) fn labels_ui(app: &mut WordApp, ui: &mut Ui, f: &mut LabelsForm) -> b
     });
     let (rows, cols) = LABEL_PRODUCTS.get(f.product).map_or((1, 1), |p| (p.rows, p.cols));
     heading(ui, "Print");
-    crate::rtl::radio_value(ui, &mut f.single, false, tl!("Full page of the same label"));
+    ui.radio_value(&mut f.single, false, tl!("Full page of the same label"));
     ui.horizontal(|ui| {
-        crate::rtl::radio_value(ui, &mut f.single, true, tl!("Single label"));
+        ui.radio_value(&mut f.single, true, tl!("Single label"));
         ui.add_enabled_ui(f.single, |ui| {
             ui.label(tl!("Row:"));
             ui.add(egui::DragValue::new(&mut f.row).range(1..=rows));

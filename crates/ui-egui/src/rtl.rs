@@ -13,6 +13,23 @@
 
 use egui::{Align, Align2, InnerResponse, Layout, Rect, Ui, UiBuilder, pos2};
 
+use craft_ui::direction::{self, Direction};
+
+fn dir(rtl: bool) -> Direction {
+    if rtl { Direction::Rtl } else { Direction::Ltr }
+}
+
+/// Install the interface direction on `ctx` when the language's has changed: the shared
+/// `craft_ui::direction` state, and egui's own chrome (check boxes and radio buttons with the mark
+/// at the reading start, submenus, scroll bars, title bars, the font combo) through
+/// `Style::right_to_left`.
+pub fn sync(ctx: &egui::Context) {
+    let want = dir(on());
+    if direction::HasDirection::direction(ctx) != want {
+        direction::apply(ctx, want);
+    }
+}
+
 /// Is the interface language written right to left?
 pub fn on() -> bool {
     crate::i18n::current().rtl()
@@ -60,7 +77,8 @@ pub fn row_layout(ui: &Ui, align: Align) -> Layout {
 
 /// The x coordinate `inset` points in from the leading edge of `rect` (left, or right when `rtl`).
 pub fn lead_x(rtl: bool, rect: Rect, inset: f32) -> f32 {
-    if rtl { rect.max.x - inset } else { rect.min.x + inset }
+    let d = dir(rtl);
+    direction::start_x(&d, rect) + direction::forward(&d) * inset
 }
 
 /// The x coordinate `inset` points in from the trailing edge of `rect`.
@@ -70,12 +88,12 @@ pub fn trail_x(rtl: bool, rect: Rect, inset: f32) -> f32 {
 
 /// Text anchored at its leading edge and vertically centred: left-centre, or right-centre when `rtl`.
 pub fn lead_center(rtl: bool) -> Align2 {
-    if rtl { Align2::RIGHT_CENTER } else { Align2::LEFT_CENTER }
+    direction::align2(&dir(rtl), Align2::LEFT_CENTER)
 }
 
 /// Text anchored at its leading edge and top.
 pub fn lead_top(rtl: bool) -> Align2 {
-    if rtl { Align2::RIGHT_TOP } else { Align2::LEFT_TOP }
+    direction::align2(&dir(rtl), Align2::LEFT_TOP)
 }
 
 /// Where to put something `width` wide so that it starts `inset` in from the leading edge of
@@ -91,12 +109,12 @@ pub fn lead_corner(rtl: bool, rect: Rect) -> egui::Pos2 {
 
 /// A side panel on the side reading starts from (left; right in a right-to-left interface).
 pub fn start_panel(id: &'static str) -> egui::Panel {
-    if on() { egui::Panel::right(id) } else { egui::Panel::left(id) }
+    direction::start_panel(&dir(on()), id)
 }
 
 /// A side panel on the side reading ends on (right; left in a right-to-left interface).
 pub fn end_panel(id: &'static str) -> egui::Panel {
-    if on() { egui::Panel::left(id) } else { egui::Panel::right(id) }
+    direction::end_panel(&dir(on()), id)
 }
 
 /// `egui::Popup::menu`, with its items aligned to the side reading starts from.
@@ -164,74 +182,4 @@ pub fn island<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
 /// inside a right-to-left area it is drawn in an [`island`]. Its columns keep their order.
 pub fn grid<R>(ui: &mut Ui, grid: egui::Grid, add: impl FnOnce(&mut Ui) -> R) -> InnerResponse<R> {
     island(ui, |ui| grid.show(ui, add))
-}
-
-/// `ui.checkbox`, with the box on the side reading starts from: egui always draws it on the left.
-pub fn checkbox(ui: &mut Ui, checked: &mut bool, text: impl Into<egui::WidgetText>) -> egui::Response {
-    if !flows(ui) {
-        return ui.checkbox(checked, text);
-    }
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = ui.spacing().icon_spacing;
-        let mark = ui.checkbox(checked, "");
-        let label = ui.add(egui::Label::new(text).selectable(false).sense(egui::Sense::click()));
-        // The mark is drawn without text so the label can sit beside it; the label names it.
-        let mut mark = mark.labelled_by(label.id);
-        if label.clicked() {
-            *checked = !*checked;
-            mark.mark_changed();
-        }
-        mark.union(label)
-    })
-    .inner
-}
-
-/// `ui.radio_value`, with the button on the side reading starts from.
-pub fn radio_value<V: PartialEq>(ui: &mut Ui, current: &mut V, alternative: V, text: impl Into<egui::WidgetText>) -> egui::Response {
-    if !flows(ui) {
-        return ui.radio_value(current, alternative, text);
-    }
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = ui.spacing().icon_spacing;
-        let mark = ui.radio(*current == alternative, "");
-        let label = ui.add(egui::Label::new(text).selectable(false).sense(egui::Sense::click()));
-        let mut mark = mark.labelled_by(label.id);
-        if (mark.clicked() || label.clicked()) && *current != alternative {
-            *current = alternative;
-            mark.mark_changed();
-        }
-        mark.union(label)
-    })
-    .inner
-}
-
-/// `ui.radio(selected, text).clicked()`, with the button on the side reading starts from.
-pub fn radio(ui: &mut Ui, selected: bool, text: impl Into<egui::WidgetText>) -> bool {
-    if !flows(ui) {
-        return ui.radio(selected, text).clicked();
-    }
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = ui.spacing().icon_spacing;
-        let mark = ui.radio(selected, "");
-        let label = ui.add(egui::Label::new(text).selectable(false).sense(egui::Sense::click()));
-        let mark = mark.labelled_by(label.id);
-        mark.clicked() || label.clicked()
-    })
-    .inner
-}
-
-/// A check box showing the mixed (indeterminate) state, with the box on the side reading starts
-/// from; true when it was clicked.
-pub fn indeterminate_checkbox(ui: &mut Ui, text: &str) -> bool {
-    if !flows(ui) {
-        return ui.add(egui::Checkbox::new(&mut false, text).indeterminate(true)).clicked();
-    }
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = ui.spacing().icon_spacing;
-        let mark = ui.add(egui::Checkbox::new(&mut false, "").indeterminate(true));
-        let label = ui.add(egui::Label::new(text).selectable(false).sense(egui::Sense::click()));
-        let mark = mark.labelled_by(label.id);
-        mark.clicked() || label.clicked()
-    })
-    .inner
 }

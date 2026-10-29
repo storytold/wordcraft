@@ -184,8 +184,8 @@ pub(super) fn size_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SizeForm) -> bool 
         }
         ui.end_row();
     });
-    crate::rtl::checkbox(ui, &mut f.lock, tl!("Lock aspect ratio"));
-    ui.add_enabled_ui(f.original.is_some(), |ui| crate::rtl::checkbox(ui, &mut f.relative, tl!("Relative to original picture size")));
+    ui.checkbox(&mut f.lock, tl!("Lock aspect ratio"));
+    ui.add_enabled_ui(f.original.is_some(), |ui| ui.checkbox(&mut f.relative, tl!("Relative to original picture size")));
     if let Some((w, h)) = f.uncropped {
         heading(ui, "Original size");
         ui.horizontal(|ui| {
@@ -267,9 +267,9 @@ pub(super) fn page_numbers_ui(app: &mut WordApp, ui: &mut Ui, f: &mut PageNumber
         }
     });
     heading(ui, "Page numbering");
-    crate::rtl::radio_value(ui, &mut f.cont, true, tl!("Continue from previous section"));
+    ui.radio_value(&mut f.cont, true, tl!("Continue from previous section"));
     ui.horizontal(|ui| {
-        crate::rtl::radio_value(ui, &mut f.cont, false, tl!("Start at:"));
+        ui.radio_value(&mut f.cont, false, tl!("Start at:"));
         ui.add_enabled(!f.cont, egui::DragValue::new(&mut f.start).range(1..=100_000));
     });
     let (ok, cancel) = buttons(ui, "OK", true);

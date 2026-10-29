@@ -127,12 +127,12 @@ pub fn body(app: &mut WordApp, ui: &mut Ui, f: &mut ControlForm) -> bool {
         }
     });
     ui.add_space(6.0);
-    crate::rtl::checkbox(ui, &mut f.lock_delete, tl!("Can't be deleted"));
-    crate::rtl::checkbox(ui, &mut f.lock_edit, tl!("Contents can't be edited"));
-    crate::rtl::checkbox(ui, &mut f.temporary, tl!("Remove the control once edited"));
+    ui.checkbox(&mut f.lock_delete, tl!("Can't be deleted"));
+    ui.checkbox(&mut f.lock_edit, tl!("Contents can't be edited"));
+    ui.checkbox(&mut f.temporary, tl!("Remove the control once edited"));
     match f.kind.as_str() {
         "plainText" => {
-            crate::rtl::checkbox(ui, &mut f.multi_line, tl!("Allow line breaks"));
+            ui.checkbox(&mut f.multi_line, tl!("Allow line breaks"));
         }
         "comboBox" | "dropDown" => entries(ui, f),
         "date" => {

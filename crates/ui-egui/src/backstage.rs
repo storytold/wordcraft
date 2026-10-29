@@ -735,7 +735,8 @@ fn export_page(app: &mut WordApp, ui: &mut Ui) {
         heading(ui, "Print");
         // Print Markup (a print setting, as in Word): the comments beside each page.
         let mut markup = app.session.prefs.print_markup;
-        if crate::rtl::checkbox(ui, &mut markup, tl!("Print Markup"))
+        if ui
+            .checkbox(&mut markup, tl!("Print Markup"))
             .on_hover_text(tl!(
                 "Comments beside each page and tracked changes in PDFs, prints and images; a comment list at the end of web pages, Markdown and text."
             ))

@@ -103,9 +103,9 @@ pub fn pane(app: &mut WordApp, ui: &mut Ui) {
         Some(Fill::Gradient(_)) => 2,
     };
     let mut pick = kind;
-    crate::rtl::radio_value(ui, &mut pick, 0, tl!("No fill"));
-    crate::rtl::radio_value(ui, &mut pick, 1, tl!("Solid fill"));
-    crate::rtl::radio_value(ui, &mut pick, 2, tl!("Gradient fill"));
+    ui.radio_value(&mut pick, 0, tl!("No fill"));
+    ui.radio_value(&mut pick, 1, tl!("Solid fill"));
+    ui.radio_value(&mut pick, 2, tl!("Gradient fill"));
     if pick != kind {
         let accent1 = theme.get(4).copied().unwrap_or(Rgb(68, 114, 196));
         let main = fill.as_ref().map_or(accent1, Fill::main_color);
@@ -312,7 +312,7 @@ fn gradient(app: &mut WordApp, ui: &mut Ui, theme: &[Rgb], g: &Gradient) {
         apply(app, ui, Some(&set(GradStop { transparency: t, ..stop })), Some(&r));
     }
     let mut rot = g.rot_with_shape;
-    if crate::rtl::checkbox(ui, &mut rot, tl!("Rotate with shape")).changed() {
+    if ui.checkbox(&mut rot, tl!("Rotate with shape")).changed() {
         apply(app, ui, Some(&with(g, |g| g.rot_with_shape = rot)), None);
     }
 }

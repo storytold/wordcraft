@@ -75,12 +75,12 @@ pub(super) fn manage_styles(app: &mut WordApp, ui: &mut Ui, alphabetical: &mut b
     let builtin = cur.get("builtIn").and_then(Value::as_bool).unwrap_or(true);
     if ty != "table" {
         let mut gallery = cur.get("inGallery").and_then(Value::as_bool).unwrap_or(false);
-        if crate::rtl::checkbox(ui, &mut gallery, tl!("Show in the Styles gallery")).changed() {
+        if ui.checkbox(&mut gallery, tl!("Show in the Styles gallery")).changed() {
             let _ = app.run("styles.setVisibility", json!({"style": selected, "gallery": gallery}));
         }
     }
     let mut hidden = cur.get("hidden").and_then(Value::as_bool).unwrap_or(false);
-    if crate::rtl::checkbox(ui, &mut hidden, tl!("Hide from style lists")).changed() {
+    if ui.checkbox(&mut hidden, tl!("Hide from style lists")).changed() {
         let _ = app.run("styles.setVisibility", json!({"style": selected, "hidden": hidden}));
     }
     ui.add_space(4.0);

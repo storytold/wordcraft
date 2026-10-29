@@ -261,7 +261,7 @@ pub(crate) fn recipient_list(
     if !editing {
         filter.editing = None;
     }
-    ui.add_enabled_ui(order.is_some(), |ui| crate::rtl::checkbox(ui, &mut filter.only_merged, tl!("Show only records that will be merged")));
+    ui.add_enabled_ui(order.is_some(), |ui| ui.checkbox(&mut filter.only_merged, tl!("Show only records that will be merged")));
     let visible = ui
         .horizontal(|ui| {
             ui.label(tl!("Find in list:"));

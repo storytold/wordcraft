@@ -74,7 +74,7 @@ pub fn templates(app: &mut WordApp, ui: &mut Ui, f: &mut TemplatesForm) -> bool 
             pick(app);
         }
     });
-    crate::rtl::checkbox(ui, &mut f.link, tl!("Automatically update document styles"));
+    ui.checkbox(&mut f.link, tl!("Automatically update document styles"));
     ui.add_space(6.0);
     let organizer = ui.button(tl!("Organizer…")).clicked();
     if !f.message.is_empty() {

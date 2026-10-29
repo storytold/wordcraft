@@ -53,7 +53,7 @@ pub(super) fn drop_cap_ui(app: &mut WordApp, ui: &mut Ui, f: &mut DropCapForm) -
     ui.label(egui::RichText::new(tl!("Position")).font(semibold(12.5)));
     ui.horizontal(|ui| {
         for (v, l) in [("none", "None"), ("dropped", "Dropped"), ("margin", "In margin")] {
-            crate::rtl::radio_value(ui, &mut f.position, v.to_string(), tl!(l));
+            ui.radio_value(&mut f.position, v.to_string(), tl!(l));
         }
     });
     ui.add_space(6.0);
@@ -376,7 +376,7 @@ pub(super) fn columns_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ColumnsForm) ->
             f.set_count(n);
         }
         ui.add_space(16.0);
-        crate::rtl::checkbox(ui, &mut f.separator, tl!("Line between"));
+        ui.checkbox(&mut f.separator, tl!("Line between"));
     });
     ui.add_space(6.0);
     ui.label(egui::RichText::new(tl!("Width and spacing")).font(semibold(12.5)));
@@ -416,7 +416,7 @@ pub(super) fn columns_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ColumnsForm) ->
                 f.rebalance(i);
             }
             let mut equal = f.equal;
-            if ui.add_enabled_ui(f.count > 1, |ui| crate::rtl::checkbox(ui, &mut equal, tl!("Equal column width"))).inner.changed() {
+            if ui.add_enabled_ui(f.count > 1, |ui| ui.checkbox(&mut equal, tl!("Equal column width"))).inner.changed() {
                 f.equal = equal;
                 if equal {
                     f.even_out();

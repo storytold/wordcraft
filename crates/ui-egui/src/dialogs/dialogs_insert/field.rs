@@ -306,7 +306,7 @@ pub(super) fn field_ui(app: &mut WordApp, ui: &mut Ui, f: &mut FieldForm) -> boo
             } else {
                 field_options(ui, f, &t);
                 ui.add_space(4.0);
-                crate::rtl::checkbox(ui, &mut f.preserve, tl!("Preserve formatting during updates"));
+                ui.checkbox(&mut f.preserve, tl!("Preserve formatting during updates"));
             }
         });
     });
@@ -400,7 +400,7 @@ fn field_options(ui: &mut Ui, f: &mut FieldForm, t: &Tokens) {
             ui.add_space(4.0);
             for (c, label) in STYLEREF_SWITCHES {
                 let mut on = f.style_switches.contains(*c);
-                if crate::rtl::checkbox(ui, &mut on, tl!(label)).changed() {
+                if ui.checkbox(&mut on, tl!(label)).changed() {
                     f.style_switches.retain(|x| x != *c);
                     if on {
                         f.style_switches.push(*c);

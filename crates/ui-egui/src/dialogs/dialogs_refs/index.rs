@@ -71,15 +71,15 @@ pub(super) fn index_ui(app: &mut WordApp, ui: &mut Ui, f: &mut IndexForm) -> Nex
     crate::rtl::grid(ui, egui::Grid::new("idx").num_columns(2).spacing(vec2(10.0, 6.0)), |ui| {
         ui.label(tl!("Type:"));
         ui.horizontal(|ui| {
-            crate::rtl::radio_value(ui, &mut f.kind, "indented".to_string(), tl!("Indented"));
-            crate::rtl::radio_value(ui, &mut f.kind, "runIn".to_string(), tl!("Run-in"));
+            ui.radio_value(&mut f.kind, "indented".to_string(), tl!("Indented"));
+            ui.radio_value(&mut f.kind, "runIn".to_string(), tl!("Run-in"));
         });
         ui.end_row();
         let columns_label = ui.label(tl!("Columns:"));
         ui.add(egui::DragValue::new(&mut f.columns).range(1..=4)).labelled_by(columns_label.id);
         ui.end_row();
         ui.label("");
-        crate::rtl::checkbox(ui, &mut f.right_align, tl!("Page numbers at the right margin"));
+        ui.checkbox(&mut f.right_align, tl!("Page numbers at the right margin"));
         ui.end_row();
         let leader_label = ui.label(tl!("Tab leader:"));
         ui.add_enabled_ui(f.right_align, |ui| {
@@ -88,7 +88,7 @@ pub(super) fn index_ui(app: &mut WordApp, ui: &mut Ui, f: &mut IndexForm) -> Nex
         });
         ui.end_row();
         ui.label("");
-        crate::rtl::checkbox(ui, &mut f.headings, tl!("Letter headings"));
+        ui.checkbox(&mut f.headings, tl!("Letter headings"));
         ui.end_row();
     });
     ui.add_space(4.0);
@@ -163,14 +163,13 @@ pub(super) fn mark_ui(app: &mut WordApp, ui: &mut Ui, f: &mut MarkForm) -> Next 
     });
     heading(ui, "Options");
     ui.horizontal(|ui| {
-        let see_label = crate::rtl::radio_value(ui, &mut f.option, "see".to_string(), tl!("Cross-reference:"));
+        let see_label = ui.radio_value(&mut f.option, "see".to_string(), tl!("Cross-reference:"));
         ui.add_enabled(f.option == "see", egui::TextEdit::singleline(&mut f.see).desired_width(160.0)).labelled_by(see_label.id);
     });
-    crate::rtl::radio_value(ui, &mut f.option, "page".to_string(), tl!("This page"));
+    ui.radio_value(&mut f.option, "page".to_string(), tl!("This page"));
     ui.horizontal(|ui| {
-        let bookmark_label = ui
-            .add_enabled_ui(!f.bookmarks.is_empty(), |ui| crate::rtl::radio_value(ui, &mut f.option, "range".to_string(), tl!("Pages of bookmark:")))
-            .inner;
+        let bookmark_label =
+            ui.add_enabled_ui(!f.bookmarks.is_empty(), |ui| ui.radio_value(&mut f.option, "range".to_string(), tl!("Pages of bookmark:"))).inner;
         ui.add_enabled_ui(f.option == "range", |ui| {
             let opts: Vec<(String, &str)> = f.bookmarks.iter().map(|b| (b.clone(), b.as_str())).collect();
             let combo = craft_ui::ComboBox::from_id_salt("xe_bm").selected_text(f.bookmark.clone()).width(140.0).show_ui(ui, |ui| {
@@ -183,8 +182,8 @@ pub(super) fn mark_ui(app: &mut WordApp, ui: &mut Ui, f: &mut MarkForm) -> Next 
     });
     heading(ui, "Page number style");
     ui.horizontal(|ui| {
-        crate::rtl::checkbox(ui, &mut f.bold, tl!("Bold"));
-        crate::rtl::checkbox(ui, &mut f.italic, tl!("Italic"));
+        ui.checkbox(&mut f.bold, tl!("Bold"));
+        ui.checkbox(&mut f.italic, tl!("Italic"));
     });
     if !f.message.is_empty() {
         ui.label(egui::RichText::new(&f.message).small());

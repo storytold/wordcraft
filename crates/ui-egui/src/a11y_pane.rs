@@ -97,7 +97,7 @@ pub fn alt_text(app: &mut WordApp, ui: &mut Ui) {
         }
         ui.add_space(6.0);
         let mut d = decorative;
-        if crate::rtl::checkbox(ui, &mut d, tl!("Mark as decorative")).changed() {
+        if ui.checkbox(&mut d, tl!("Mark as decorative")).changed() {
             let _ = app.run("object.altText", json!({"decorative": d}));
         }
         ui.label(egui::RichText::new(tl!("Decorative objects only add visual interest: screen readers skip them.")).small().weak());

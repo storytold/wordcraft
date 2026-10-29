@@ -48,7 +48,7 @@ impl LineNumbersForm {
 }
 
 pub(super) fn line_numbers_ui(app: &mut WordApp, ui: &mut Ui, f: &mut LineNumbersForm) -> bool {
-    crate::rtl::checkbox(ui, &mut f.on, tl!("Add line numbering"));
+    ui.checkbox(&mut f.on, tl!("Add line numbering"));
     ui.add_enabled_ui(f.on, |ui| {
         crate::rtl::grid(ui, egui::Grid::new("lnum").num_columns(2).spacing(vec2(10.0, 6.0)), |ui| {
             ui.label(tl!("Start at:"));
@@ -56,7 +56,7 @@ pub(super) fn line_numbers_ui(app: &mut WordApp, ui: &mut Ui, f: &mut LineNumber
             ui.end_row();
             ui.label(tl!("From text:"));
             ui.horizontal(|ui| {
-                crate::rtl::checkbox(ui, &mut f.auto_distance, tl!("Auto"));
+                ui.checkbox(&mut f.auto_distance, tl!("Auto"));
                 ui.add_enabled(
                     !f.auto_distance,
                     egui::DragValue::new(&mut f.distance).speed(0.01).range(0.0..=22.0 * 72.0 / unit().pt_per_unit()).measure(unit()).max_decimals(2),
@@ -69,7 +69,7 @@ pub(super) fn line_numbers_ui(app: &mut WordApp, ui: &mut Ui, f: &mut LineNumber
         });
         heading(ui, "Numbering:");
         for (v, l) in [("restartPage", "Restart Each Page"), ("restartSection", "Restart Each Section"), ("continuous", "Continuous")] {
-            crate::rtl::radio_value(ui, &mut f.restart, v.to_string(), tl!(l));
+            ui.radio_value(&mut f.restart, v.to_string(), tl!(l));
         }
     });
     let (ok, cancel) = buttons(ui, "OK", true);
@@ -110,8 +110,8 @@ impl HyphenationForm {
 }
 
 pub(super) fn hyphenation_ui(app: &mut WordApp, ui: &mut Ui, f: &mut HyphenationForm) -> bool {
-    crate::rtl::checkbox(ui, &mut f.auto, tl!("Automatically hyphenate document"));
-    crate::rtl::checkbox(ui, &mut f.caps, tl!("Hyphenate words in CAPS"));
+    ui.checkbox(&mut f.auto, tl!("Automatically hyphenate document"));
+    ui.checkbox(&mut f.caps, tl!("Hyphenate words in CAPS"));
     crate::rtl::grid(ui, egui::Grid::new("hyph").num_columns(2).spacing(vec2(10.0, 6.0)), |ui| {
         ui.label(tl!("Hyphenation zone:"));
         ui.add(egui::DragValue::new(&mut f.zone).speed(0.01).range(0.0..=22.0 * 72.0 / unit().pt_per_unit()).measure(unit()).max_decimals(2));
@@ -345,8 +345,8 @@ pub(super) fn language_ui(app: &mut WordApp, ui: &mut Ui, f: &mut LanguageForm) 
         });
     });
     ui.add_space(4.0);
-    crate::rtl::checkbox(ui, &mut f.no_proof, tl!("Do not check spelling or grammar"));
-    crate::rtl::checkbox(ui, &mut f.detect, tl!("Detect language automatically"));
+    ui.checkbox(&mut f.no_proof, tl!("Do not check spelling or grammar"));
+    ui.checkbox(&mut f.detect, tl!("Detect language automatically"));
     ui.add_space(4.0);
     let set_default = ui.button(tl!("Set As Default")).clicked();
     if set_default && run(app, "review.language", json!({"lang": f.lang, "default": true, "detect": f.detect})) {

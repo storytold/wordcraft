@@ -119,7 +119,7 @@ pub(super) fn caption_ui(app: &mut WordApp, ui: &mut Ui, f: &mut CaptionForm) ->
         choice(ui, "cap_pos", &mut f.position, &[("below".to_string(), "Below the item"), ("above".to_string(), "Above the item")], &position_label);
         ui.end_row();
     });
-    crate::rtl::checkbox(ui, &mut f.exclude_label, tl!("Leave the label out of the caption"));
+    ui.checkbox(&mut f.exclude_label, tl!("Leave the label out of the caption"));
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         if ui.button(tl!("New Label…")).clicked() {
@@ -156,7 +156,7 @@ pub(super) fn numbering_ui(ui: &mut Ui, f: &mut CaptionForm, was: &CaptionForm) 
         choice(ui, "cap_fmt", &mut f.format, &opts, &format_label);
         ui.end_row();
     });
-    crate::rtl::checkbox(ui, &mut f.chapter, tl!("Add the chapter number"));
+    ui.checkbox(&mut f.chapter, tl!("Add the chapter number"));
     ui.add_enabled_ui(f.chapter, |ui| {
         crate::rtl::grid(ui, egui::Grid::new("cap_chap").num_columns(2).spacing(vec2(10.0, 6.0)), |ui| {
             let chapter_label = ui.label(tl!("Chapters begin at:"));

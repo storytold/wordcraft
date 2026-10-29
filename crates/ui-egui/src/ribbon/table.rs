@@ -17,7 +17,7 @@ pub(super) fn table_design(app: &mut WordApp, ui: &mut Ui) {
                 let _ = row;
                 for (label, key, val) in items {
                     let mut v = *val;
-                    if crate::rtl::checkbox(ui, &mut v, tl!(label)).changed() {
+                    if ui.checkbox(&mut v, tl!(label)).changed() {
                         let _ = app.run("table.look", json!({ *key: v }));
                     }
                 }

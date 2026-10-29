@@ -179,10 +179,10 @@ fn font_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         let label = tl!("Kerning for fonts:");
         match kern {
             Some(on) => {
-                crate::rtl::checkbox(ui, on, label);
+                ui.checkbox(on, label);
             }
             None => {
-                if crate::rtl::indeterminate_checkbox(ui, label) {
+                if ui.add(egui::Checkbox::new(&mut false, label).indeterminate(true)).clicked() {
                     *kern = Some(true);
                 }
             }
@@ -206,19 +206,19 @@ fn font_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     ui.separator();
     ui.label(egui::RichText::new(tl!("Effects")).font(semibold(12.5)));
     crate::rtl::grid(ui, egui::Grid::new("fx").num_columns(2), |ui| {
-        crate::rtl::checkbox(ui, bold, tl!("Bold"));
-        crate::rtl::checkbox(ui, italic, tl!("Italic"));
+        ui.checkbox(bold, tl!("Bold"));
+        ui.checkbox(italic, tl!("Italic"));
         ui.end_row();
-        crate::rtl::checkbox(ui, underline, tl!("Underline"));
-        crate::rtl::checkbox(ui, strike, tl!("Strikethrough"));
+        ui.checkbox(underline, tl!("Underline"));
+        ui.checkbox(strike, tl!("Strikethrough"));
         ui.end_row();
-        crate::rtl::checkbox(ui, sup, tl!("Superscript"));
-        crate::rtl::checkbox(ui, sub, tl!("Subscript"));
+        ui.checkbox(sup, tl!("Superscript"));
+        ui.checkbox(sub, tl!("Subscript"));
         ui.end_row();
-        crate::rtl::checkbox(ui, small_caps, tl!("Small caps"));
-        crate::rtl::checkbox(ui, caps, tl!("All caps"));
+        ui.checkbox(small_caps, tl!("Small caps"));
+        ui.checkbox(caps, tl!("All caps"));
         ui.end_row();
-        crate::rtl::checkbox(ui, hidden, tl!("Hidden"));
+        ui.checkbox(hidden, tl!("Hidden"));
         ui.end_row();
     });
     // Live preview of the chosen font/size/colour/effects.
@@ -271,7 +271,7 @@ fn paragraph_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 // Neither while the selected paragraphs differ.
                 let blank = mixed.contains("bidi");
                 for (value, text) in [(true, tl!("Right-to-left")), (false, tl!("Left-to-right"))] {
-                    if crate::rtl::radio(ui, !blank && *rtl == value, text) {
+                    if ui.radio(!blank && *rtl == value, text).clicked() {
                         *rtl = value;
                         mixed.remove("bidi");
                     }
@@ -395,9 +395,9 @@ fn find_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     // Word greys out Match case and the word options with wildcards (they always match case).
     let plain = !extra.wildcards;
     ui.horizontal(|ui| {
-        ui.add_enabled_ui(plain, |ui| crate::rtl::checkbox(ui, match_case, tl!("Match case")));
-        ui.add_enabled_ui(plain, |ui| crate::rtl::checkbox(ui, whole_word, tl!("Whole words")));
-        crate::rtl::checkbox(ui, &mut extra.wildcards, tl!("Use wildcards"));
+        ui.add_enabled_ui(plain, |ui| ui.checkbox(match_case, tl!("Match case")));
+        ui.add_enabled_ui(plain, |ui| ui.checkbox(whole_word, tl!("Whole words")));
+        ui.checkbox(&mut extra.wildcards, tl!("Use wildcards"));
     });
     let arrow = if extra.more { "▾" } else { "▸" };
     if ui.selectable_label(extra.more, format!("{arrow} {}", tl!("Search Options"))).clicked() {
@@ -405,15 +405,15 @@ fn find_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     }
     if extra.more {
         ui.horizontal(|ui| {
-            ui.add_enabled_ui(plain, |ui| crate::rtl::checkbox(ui, &mut extra.prefix, tl!("Match prefix")));
-            ui.add_enabled_ui(plain, |ui| crate::rtl::checkbox(ui, &mut extra.suffix, tl!("Match suffix")));
+            ui.add_enabled_ui(plain, |ui| ui.checkbox(&mut extra.prefix, tl!("Match prefix")));
+            ui.add_enabled_ui(plain, |ui| ui.checkbox(&mut extra.suffix, tl!("Match suffix")));
         });
         ui.horizontal(|ui| {
-            ui.add_enabled_ui(plain, |ui| crate::rtl::checkbox(ui, &mut extra.ignore_punct, tl!("Ignore punctuation characters")));
-            ui.add_enabled_ui(plain, |ui| crate::rtl::checkbox(ui, &mut extra.ignore_space, tl!("Ignore white-space characters")));
+            ui.add_enabled_ui(plain, |ui| ui.checkbox(&mut extra.ignore_punct, tl!("Ignore punctuation characters")));
+            ui.add_enabled_ui(plain, |ui| ui.checkbox(&mut extra.ignore_space, tl!("Ignore white-space characters")));
         });
         ui.horizontal(|ui| {
-            crate::rtl::checkbox(ui, regex, tl!("Regular expressions"));
+            ui.checkbox(regex, tl!("Regular expressions"));
             if let Some(code) = special_menu(ui, extra) {
                 if extra.to_replace { replace.push_str(code) } else { query.push_str(code) }
             }
@@ -482,7 +482,7 @@ fn enclose_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     ui.label(egui::RichText::new(tl!("Style")).font(semibold(12.5)));
     ui.horizontal(|ui| {
         for (v, l) in [("none", "None"), ("shrink", "Shrink text"), ("enlarge", "Enlarge symbol")] {
-            crate::rtl::radio_value(ui, style, v.to_string(), tl!(l));
+            ui.radio_value(style, v.to_string(), tl!(l));
         }
     });
     ui.add_space(6.0);
@@ -599,18 +599,18 @@ fn page_setup_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     });
     ui.label(egui::RichText::new(tl!("Orientation")).font(semibold(12.5)));
     ui.horizontal(|ui| {
-        crate::rtl::radio_value(ui, landscape, false, tl!("Portrait"));
-        crate::rtl::radio_value(ui, landscape, true, tl!("Landscape"));
+        ui.radio_value(landscape, false, tl!("Portrait"));
+        ui.radio_value(landscape, true, tl!("Landscape"));
     });
     ui.label(egui::RichText::new(tl!("Pages")).font(semibold(12.5)));
-    crate::rtl::checkbox(ui, mirror, tl!("Mirror margins"));
+    ui.checkbox(mirror, tl!("Mirror margins"));
     page_paper_group(ui, paper, landscape, paper_custom);
     ui.label(egui::RichText::new(tl!("Document Grid")).font(semibold(12.5)));
     ui.horizontal_wrapped(|ui| {
-        crate::rtl::radio_value(ui, &mut grid.0, 0, tl!("No grid"));
-        crate::rtl::radio_value(ui, &mut grid.0, 1, tl!("Lines only"));
-        crate::rtl::radio_value(ui, &mut grid.0, 2, tl!("Lines and characters"));
-        crate::rtl::radio_value(ui, &mut grid.0, 3, tl!("Text snaps to characters"));
+        ui.radio_value(&mut grid.0, 0, tl!("No grid"));
+        ui.radio_value(&mut grid.0, 1, tl!("Lines only"));
+        ui.radio_value(&mut grid.0, 2, tl!("Lines and characters"));
+        ui.radio_value(&mut grid.0, 3, tl!("Text snaps to characters"));
     });
     crate::rtl::grid(ui, egui::Grid::new("ps_grid").num_columns(4), |ui| {
         let chars_label = ui.add_enabled(grid.0 >= 2, egui::Label::new(tl!("Characters per line:")));
@@ -621,8 +621,8 @@ fn page_setup_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     });
     ui.horizontal(|ui| {
         ui.label(tl!("Section direction:"));
-        crate::rtl::radio_value(ui, rtl, false, tl!("Left-to-right"));
-        crate::rtl::radio_value(ui, rtl, true, tl!("Right-to-left"));
+        ui.radio_value(rtl, false, tl!("Left-to-right"));
+        ui.radio_value(rtl, true, tl!("Right-to-left"));
     });
     if !message.is_empty() {
         ui.label(egui::RichText::new(message.as_str()).small().color(ui.visuals().error_fg_color));
@@ -630,8 +630,8 @@ fn page_setup_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     page_valign_combo(ui, valign);
     // Word's Page Setup › Layout: a title page without the page number (#1230).
     ui.label(egui::RichText::new(tl!("Headers and footers")).font(semibold(12.5)));
-    crate::rtl::checkbox(ui, odd_even, tl!("Different Odd & Even Pages"));
-    crate::rtl::checkbox(ui, first_page, tl!("Different First Page"));
+    ui.checkbox(odd_even, tl!("Different Odd & Even Pages"));
+    ui.checkbox(first_page, tl!("Different First Page"));
     let (mut ok, cancel) = buttons(ui, tl!("OK"));
     if ok {
         // Everything OK changes is one undo step; a refused command applies nothing.
@@ -785,7 +785,7 @@ fn word_count_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         }
     });
     let mut include = stats.get("includeTextBoxes").and_then(Value::as_bool).unwrap_or(true);
-    if crate::rtl::checkbox(ui, &mut include, tl!("Count words in text boxes and notes")).changed()
+    if ui.checkbox(&mut include, tl!("Count words in text boxes and notes")).changed()
         && let Ok(v) = app.run("review.wordCount", json!({"includeTextBoxes": include}))
     {
         *stats = v;
@@ -800,7 +800,7 @@ fn zoom_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     };
     ui.horizontal(|ui| {
         for p in [200.0, 100.0, 75.0] {
-            crate::rtl::radio_value(ui, percent, p, format!("{p}%"));
+            ui.radio_value(percent, p, format!("{p}%"));
         }
     });
     // Logarithmic like the status bar slider, and wide enough to aim: the default 100 pt
@@ -839,8 +839,8 @@ fn watermark_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         ui.text_edit_singleline(text);
     });
     ui.horizontal(|ui| {
-        crate::rtl::radio_value(ui, diagonal, true, tl!("Diagonal"));
-        crate::rtl::radio_value(ui, diagonal, false, tl!("Horizontal"));
+        ui.radio_value(diagonal, true, tl!("Diagonal"));
+        ui.radio_value(diagonal, false, tl!("Horizontal"));
     });
     let (ok, cancel) = buttons(ui, tl!("OK"));
     if ok {
@@ -962,8 +962,8 @@ fn modify_style_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         ui.end_row();
     });
     ui.horizontal(|ui| {
-        crate::rtl::checkbox(ui, bold, tl!("Bold"));
-        crate::rtl::checkbox(ui, italic, tl!("Italic"));
+        ui.checkbox(bold, tl!("Bold"));
+        ui.checkbox(italic, tl!("Italic"));
     });
     let (ok, cancel) = buttons(ui, tl!("OK"));
     if ok {
@@ -1055,7 +1055,7 @@ fn paste_special_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool 
     }
     for (i, f) in formats.iter().enumerate() {
         let label = wordcraft_engine::cmd::paste::FORMATS.iter().find(|(id, _)| id == f).map(|(_, l)| *l).unwrap_or(f.as_str());
-        crate::rtl::radio_value(ui, choice, i, tl!(label));
+        ui.radio_value(choice, i, tl!(label));
     }
     if let Some(f) = formats.get(*choice) {
         ui.add_space(6.0);
@@ -1349,7 +1349,7 @@ fn select_table_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             }
         });
     });
-    crate::rtl::checkbox(ui, headers, tl!("First row of data contains column headers"));
+    ui.checkbox(headers, tl!("First row of data contains column headers"));
     if !message.is_empty() {
         ui.label(egui::RichText::new(message.as_str()).color(Tokens::get(ui.ctx()).red));
     }
@@ -1393,10 +1393,10 @@ fn merge_records_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool 
     let Dialog::MergeRecords { print, choice, from, to, message } = d else {
         return false;
     };
-    crate::rtl::radio_value(ui, choice, 0, tl!("All"));
-    crate::rtl::radio_value(ui, choice, 1, tl!("Current record"));
+    ui.radio_value(choice, 0, tl!("All"));
+    ui.radio_value(choice, 1, tl!("Current record"));
     ui.horizontal(|ui| {
-        let from_label = crate::rtl::radio_value(ui, choice, 2, tl!("From:"));
+        let from_label = ui.radio_value(choice, 2, tl!("From:"));
         // Typing a number picks the range, as in Word.
         if ui.add(egui::TextEdit::singleline(from).desired_width(60.0)).labelled_by(from_label.id).changed() {
             *choice = 2;

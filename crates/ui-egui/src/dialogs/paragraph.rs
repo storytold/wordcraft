@@ -94,8 +94,8 @@ pub(super) fn para_number(ui: &mut Ui, value: &mut f32, kind: ParaNumber, key: &
 /// it, it shows as neither on nor off, and a click turns it on for all of them.
 pub(super) fn para_check(ui: &mut Ui, on: &mut bool, text: &str, key: &str, mixed: &mut BTreeSet<String>) {
     if !mixed.contains(key) {
-        crate::rtl::checkbox(ui, on, text);
-    } else if crate::rtl::indeterminate_checkbox(ui, text) {
+        ui.checkbox(on, text);
+    } else if ui.add(egui::Checkbox::new(&mut false, text).indeterminate(true)).clicked() {
         *on = true;
         mixed.remove(key);
     }

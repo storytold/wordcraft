@@ -174,7 +174,7 @@ pub(super) fn source_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SourceForm) -> N
             ui.end_row();
         }
     });
-    crate::rtl::checkbox(ui, &mut f.show_all, tl!("Show every bibliography field"));
+    ui.checkbox(&mut f.show_all, tl!("Show every bibliography field"));
     let (ok, cancel) = buttons(ui, tl!("OK"));
     if ok {
         let src = serde_json::to_value(&f.source).unwrap_or(Value::Null);

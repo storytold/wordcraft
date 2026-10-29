@@ -366,13 +366,13 @@ pub(super) fn table_properties(ui: &mut Ui, f: &mut TableForm) {
     };
     heading(ui, "Table");
     crate::rtl::grid(ui, egui::Grid::new("tp_table").num_columns(2).spacing(vec2(10.0, 6.0)), |ui| {
-        crate::rtl::checkbox(ui, &mut f.width_on, tl!("Preferred width:"));
+        ui.checkbox(&mut f.width_on, tl!("Preferred width:"));
         ui.add_enabled(f.width_on, len(&mut f.width, 0.1, unit));
         ui.end_row();
         ui.label(tl!("Alignment:"));
         ui.horizontal(|ui| {
             for (v, l) in [("left", "Left"), ("center", "Center"), ("right", "Right")] {
-                crate::rtl::radio_value(ui, &mut f.align, v.to_string(), tl!(l));
+                ui.radio_value(&mut f.align, v.to_string(), tl!(l));
             }
         });
         ui.end_row();
@@ -381,14 +381,14 @@ pub(super) fn table_properties(ui: &mut Ui, f: &mut TableForm) {
         ui.end_row();
         ui.label(tl!("Table direction:"));
         ui.horizontal(|ui| {
-            crate::rtl::radio_value(ui, &mut f.rtl, false, tl!("Left-to-right"));
-            crate::rtl::radio_value(ui, &mut f.rtl, true, tl!("Right-to-left"));
+            ui.radio_value(&mut f.rtl, false, tl!("Left-to-right"));
+            ui.radio_value(&mut f.rtl, true, tl!("Right-to-left"));
         });
         ui.end_row();
     });
     heading(ui, "Row");
     crate::rtl::grid(ui, egui::Grid::new("tp_row").num_columns(2).spacing(vec2(10.0, 6.0)), |ui| {
-        crate::rtl::checkbox(ui, &mut f.row_height_on, tl!("Specify height:"));
+        ui.checkbox(&mut f.row_height_on, tl!("Specify height:"));
         ui.horizontal(|ui| {
             ui.add_enabled(f.row_height_on, len(&mut f.row_height, 0.02, unit));
             ui.add_enabled_ui(f.row_height_on, |ui| {
@@ -400,8 +400,8 @@ pub(super) fn table_properties(ui: &mut Ui, f: &mut TableForm) {
         });
         ui.end_row();
     });
-    crate::rtl::checkbox(ui, &mut f.allow_break, tl!("Allow row to break across pages"));
-    crate::rtl::checkbox(ui, &mut f.header_row, tl!("Repeat as header row on each page"));
+    ui.checkbox(&mut f.allow_break, tl!("Allow row to break across pages"));
+    ui.checkbox(&mut f.header_row, tl!("Repeat as header row on each page"));
     heading(ui, "Column");
     crate::rtl::grid(ui, egui::Grid::new("tp_col").num_columns(2).spacing(vec2(10.0, 6.0)), |ui| {
         ui.label(tl!("Preferred width:"));
@@ -410,13 +410,13 @@ pub(super) fn table_properties(ui: &mut Ui, f: &mut TableForm) {
     });
     heading(ui, "Cell");
     crate::rtl::grid(ui, egui::Grid::new("tp_cell").num_columns(2).spacing(vec2(10.0, 6.0)), |ui| {
-        crate::rtl::checkbox(ui, &mut f.cell_width_on, tl!("Preferred width:"));
+        ui.checkbox(&mut f.cell_width_on, tl!("Preferred width:"));
         ui.add_enabled(f.cell_width_on, len(&mut f.cell_width, 0.1, unit));
         ui.end_row();
         ui.label(tl!("Vertical alignment:"));
         ui.horizontal(|ui| {
             for (v, l) in [("top", "Top"), ("center", "Center"), ("bottom", "Bottom")] {
-                crate::rtl::radio_value(ui, &mut f.valign, v.to_string(), tl!(l));
+                ui.radio_value(&mut f.valign, v.to_string(), tl!(l));
             }
         });
         ui.end_row();

@@ -64,11 +64,11 @@ pub(super) fn bookmark(app: &mut WordApp, ui: &mut Ui, name: &mut String, by_loc
     crate::rtl::horizontal_top(ui, |ui| {
         ui.label(tl!("Sort by:"));
         crate::rtl::vertical(ui, |ui| {
-            crate::rtl::radio_value(ui, by_location, false, tl!("Name"));
-            crate::rtl::radio_value(ui, by_location, true, tl!("Location"));
+            ui.radio_value(by_location, false, tl!("Name"));
+            ui.radio_value(by_location, true, tl!("Location"));
         });
     });
-    crate::rtl::checkbox(ui, hidden, tl!("Hidden bookmarks"));
+    ui.checkbox(hidden, tl!("Hidden bookmarks"));
     let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
     if add || (enter && wordcraft_engine::cmd::insert::bookmark_name_ok(name.trim())) {
         let _ = app.run("insert.bookmark", json!({"name": name.trim()}));
