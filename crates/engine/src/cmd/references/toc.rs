@@ -93,7 +93,7 @@ pub(super) fn heading_style_level(p: &Paragraph) -> Option<u8> {
 /// fields (`\f`, levels `\l`).
 fn toc_entries(s: &Session, f: &FieldCode) -> Vec<TocEntry> {
     let o = f.has('o').then(|| f.arg('o').and_then(level_range).unwrap_or((1, 9)));
-    let max = o.map(|r| r.1).unwrap_or(9);
+    let (min, max) = o.unwrap_or((1, 9));
     let styles: Vec<(String, u8)> = f
         .arg('t')
         .map(|t| {
@@ -129,8 +129,9 @@ fn toc_entries(s: &Session, f: &FieldCode) -> Vec<TocEntry> {
         let by_style =
             styles.iter().find(|(n, _)| s.doc.styles.get(style).is_some_and(|st| st.name.eq_ignore_ascii_case(n)) || n == style).map(|(_, l)| *l);
         // `Some(9)` direct outline level is body text: "Do Not Show in Table of Contents".
-        let by_outline = f.has('u').then_some(p.props.outline_level).flatten().filter(|l| *l < 9).map(|l| l + 1).filter(|l| *l <= max);
-        let hidden = f.has('u') && p.props.outline_level == Some(9);
+        let outline = s.doc.styles.resolve_para(&p.props).outline_level;
+        let by_outline = f.has('u').then_some(outline).flatten().filter(|l| *l < 9).map(|l| l + 1).filter(|l| (min..=max).contains(l));
+        let hidden = f.has('u') && outline == Some(9);
         let by_heading = o.and_then(|(a, b)| {
             let l = heading_style_level(p).or_else(|| {
                 s.doc
@@ -433,6 +434,20 @@ pub fn update_toc(s: &mut Session) -> Result<(), CmdError> {
     regenerate_toc(s, None, &tabs)
 }
 
+fn toc_entry_style(s: &Session, level: u8) -> String {
+    let canonical = format!("TOC{level}");
+    if s.doc.styles.get(&canonical).is_some() {
+        return canonical;
+    }
+    // Some imported built-in styles use the spaced ID. Keep their tabs and formatting.
+    let spaced = format!("TOC {level}");
+    s.doc
+        .styles
+        .get(&spaced)
+        .filter(|style| style.builtin && style.kind == wordcraft_doc::styles::StyleKind::Paragraph)
+        .map_or(canonical, |style| style.id.clone())
+}
+
 /// Rebuild the entries the TOC field's switches ask for. The tab leader is `leader`, or the one
 /// the entries had (Word keeps it in the entries' tab stops, not in the field).
 fn regenerate_toc(s: &mut Session, leader: Option<TabLeader>, tabs: &[(String, Vec<TabStop>)]) -> Result<(), CmdError> {
@@ -510,7 +525,7 @@ fn regenerate_toc(s: &mut Session, leader: Option<TabLeader>, tabs: &[(String, V
             let show_page = no_pages.is_none_or(|(a, b)| !(a..=b).contains(&(e.level + 1)));
             let text = if show_page { format!("{}{sep}{page}", e.text) } else { e.text.clone() };
             let props = CharProps { link: links.get(k).cloned().flatten(), ..Default::default() };
-            let mut para = Paragraph::with_text(&text, props).styled(&format!("TOC{}", e.level + 1));
+            let mut para = Paragraph::with_text(&text, props).styled(&toc_entry_style(s, e.level + 1));
             para.mark = CharProps::default();
             if e.text.contains('\t') {
                 para.props.tabs = tabs.iter().find(|(style, _)| Some(style) == para.props.style.as_ref()).map(|(_, tabs)| tabs.clone());
@@ -544,4 +559,18 @@ fn entry_tabs(s: &Session, props: &wordcraft_doc::ParaProps, text: &str, right: 
     }
     tabs.push(right);
     tabs
+}
+
+mod pdf_toc;
+
+pub(super) fn update_spec() -> super::CommandSpec {
+    use super::CommandSpec;
+    CommandSpec::new("references.updateToc", "Update Table", "References › Table of Contents", |s, v| {
+        if p::bool(v, "forPdf").unwrap_or(false) {
+            return pdf_toc::refresh(s, v);
+        }
+        update_toc(s)?;
+        sel_result(s)
+    })
+    .params(r#"{"forPdf"?: bool (guarded single-table refresh for a disposable PDF session), "markup"?: bool}"#)
 }

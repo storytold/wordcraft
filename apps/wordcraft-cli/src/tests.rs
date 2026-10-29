@@ -543,3 +543,23 @@ fn script_parse_resolves_paths_against_the_base() {
     assert_eq!(s.save, vec!["o.docx".to_string()]);
     assert_eq!(s.commands.len(), 1);
 }
+
+#[test]
+fn toc_refresh_requires_pdf() {
+    assert_eq!(run(&args(&["convert", "missing.docx", "out.docx", "--refresh-toc"])), Err("--refresh-toc requires PDF output".into()));
+    assert_eq!(
+        run(&args(&["convert", "missing.docx", "out.pdf", "--refresh-toc", "--update-fields"])),
+        Err("--refresh-toc cannot be combined with --update-fields".into())
+    );
+    assert!(validate_options("convert", &args(&["in.docx", "out.pdf", "--refresh-toc"]), CONVERT_OPTIONS).is_ok());
+}
+
+#[test]
+fn protected_refresh_is_skipped() {
+    let mut doc = wordcraft_doc::Document::from_text("Cached contents");
+    doc.settings.protection = Some("readOnly".into());
+    let before = serde_json::to_value(&doc).unwrap();
+    let mut session = Session::new(doc);
+    refresh_pdf_toc(&mut session, &json!({"forPdf": true})).unwrap();
+    assert_eq!(serde_json::to_value(&session.doc).unwrap(), before);
+}

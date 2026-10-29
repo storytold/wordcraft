@@ -66,6 +66,7 @@ impl Slot {
 struct Shaped<'a> {
     b: Builder<'a>,
     has_page_fields: bool,
+    ref_breaks: Vec<(usize, bool)>,
     notes: Vec<(usize, u32)>,
     obj_index: usize,
     drop_cap: Option<(usize, u8, f32)>,
@@ -154,6 +155,7 @@ impl<'a> Shaped<'a> {
         Shaped {
             b,
             has_page_fields: false,
+            ref_breaks: Vec::new(),
             notes: Vec::new(),
             obj_index: 0,
             drop_cap: None,
@@ -377,7 +379,7 @@ impl<'a> Shaped<'a> {
             None => {
                 let (t, page_dep) = field_text_on(instr, result, cx.env.fields, cx.env.fields.page_at(start));
                 self.has_page_fields |= page_dep;
-                self.b.shape_atomic(&t, start, end, &linked(rc, instr));
+                self.ref_breaks.extend(self.b.shape_field(instr, &t, start..end, &linked(rc, instr)));
             }
         }
     }
@@ -575,6 +577,12 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     skip.extend(sh.bare.iter().cloned());
     let bt = BreakText::new(&p.text, skip);
     mark_break_opportunities(&mut sh.b.clusters, &bt, &rp);
+    // Expanded REF pieces share one object offset, so use their own space boundaries.
+    for (i, allowed) in &sh.ref_breaks {
+        if let Some(c) = sh.b.clusters.get_mut(*i) {
+            c.break_after = *allowed;
+        }
+    }
     let label = list_label(&cx, &mut sh.b, mark_style);
     let joined_cluster_starts = joined_cluster_starts(p, &sh.b.clusters);
     let Shaped { b, has_page_fields, notes, drop_cap, drop_cap_w, maths, enclosures, rubies, displays, ptabs, left, runs, .. } = sh;

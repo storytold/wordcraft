@@ -5,6 +5,8 @@ use super::{Document, Session, StoryRef, next_document_id};
 impl Session {
     /// Replace the document (open/new).
     pub fn set_document(&mut self, doc: Document) {
+        self.visual_anchor = None;
+        self.visual_focus = None;
         self.autocap = None;
         let replaced = self.document_id;
         self.document_id = next_document_id();
@@ -83,6 +85,8 @@ impl Session {
             find: _,
             goal_x: _,
             page_hint: _,
+            visual_anchor: _,
+            visual_focus: _,
             registry: _,
             author: _,
             initials: _,

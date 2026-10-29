@@ -430,8 +430,18 @@ fn export_png(s: &mut Session, v: &Value) -> CmdResult {
     };
     let page = p::u64(v, "page").unwrap_or(1).max(1) as usize - 1;
     let scale = p::f32(v, "scale").unwrap_or(2.0).clamp(0.1, 8.0);
-    let l = s.export_layout_with(export_options(s, v).markup);
-    let pg = l.pages.get(page).ok_or_else(|| CmdError::Params(format!("no page {}", page + 1)))?;
+    let markup = export_options(s, v);
+    let (filename, filepath) = s.resolved_filenames();
+    let lo = wordcraft_layout::LayoutOptions {
+        view: wordcraft_layout::ViewMode::Print,
+        comment_balloons: markup.markup && markup.comments,
+        numeral: markup.numeral,
+        filename: Some(filename.into()),
+        filepath: Some(filepath.into()),
+        ..Default::default()
+    };
+    let output = crate::print_fields::prepare(&s.doc, &lo).map_err(CmdError::Failed)?;
+    let pg = output.layout.pages.get(page).ok_or_else(|| CmdError::Params(format!("no page {}", page + 1)))?;
     // A page image is the printed page: headers and footers at full strength. Dimming them is
     // the on-screen cue while editing the body, not part of the page.
     let mut opts = wordcraft_render::RenderOptions::default();
@@ -439,7 +449,7 @@ fn export_png(s: &mut Session, v: &Value) -> CmdResult {
     if !path.to_ascii_lowercase().ends_with(".png") {
         return Err(CmdError::Params("path must end in .png".into()));
     }
-    let img = wordcraft_render::render_page(&s.doc, pg, scale, &opts);
+    let img = wordcraft_render::render_page(&output.doc, pg, scale, &opts);
     let png = img.to_png();
     crate::io::write_file(path, &png).map_err(CmdError::Failed)?;
     Ok(json!({"path": path, "width": img.width, "height": img.height, "bytes": png.len()}))
