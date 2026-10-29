@@ -1635,7 +1635,21 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         (resp, rects)
     });
     finish_canvas_frame(
-        CanvasFinish { app, ui, layout: &layout, geo: &geo, caret, ime_geometry, ime_interrupt, area, dim_body, hruler, vruler, scroll_base, rescaled },
+        CanvasFinish {
+            app,
+            ui,
+            layout: &layout,
+            geo: &geo,
+            caret,
+            ime_geometry,
+            ime_interrupt,
+            area,
+            dim_body,
+            hruler,
+            vruler,
+            scroll_base,
+            rescaled,
+        },
         out,
     );
 }
