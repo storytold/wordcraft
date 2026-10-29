@@ -488,6 +488,14 @@ again.
   them short, read the document back to verify, and ask first. Screenshots of Word's window only,
   under `plan/word/screenshots/`.
 
+## Formatting at the caret
+
+Tests are in `crates/engine/src/tests.rs`.
+
+| Keys | Word's result | Test |
+|---|---|---|
+| ⌘B / Font / Size with the caret inside a word | the whole word takes it (Word's default "Select entire word"); at a word start, just after a word or between spaces only typed text does. The Font, Size and Bold… controls show the character before the caret, not blank when the word is mixed | `tests::collapsed_caret_inside_a_word_still_formats_the_whole_word`, `tests::collapsed_caret_state_is_the_run_at_the_caret_not_the_whole_word` |
+
 ## Revision history
 
 | Date | Change | Summary |
@@ -524,6 +532,7 @@ again.
 | 2026-10-16 | trivial | Smart quotes in Hebrew follow logical order; ” (not gershayim) in acronyms, as Word does (#1670) |
 | 2026-10-15 | trivial | Paste: plain text from another program pastes as Keep Text Only does. Every line takes the formatting of the paragraph it lands in (a right-to-left paragraph stays right-to-left), and empty lines stay empty paragraphs |
 | 2026-10-15 | trivial | Spelling as you type: the word being typed, apostrophes and hyphens included, is not marked until the caret leaves it; F7 and the Spelling pane still report it (#1552) |
+| 2026-10-16 | trivial | Ribbon Font/Size/Bold show the character before a collapsed caret; whole-word formatting pinned (#1418) |
 | 2026-10-14 | trivial | Shift+Delete cuts the selection, and does nothing without one, on macOS and Linux too, as in Word for Windows (#1669); Shift+Backspace already erased (#707) |
 | 2026-10-13 | trivial | Select All then Delete or Backspace removes a table the document starts with (#1198) |
 | 2026-10-12 | trivial | Editing keys: Down and Up from the start of a line beside a table go into it instead of skipping it (#1007) |
