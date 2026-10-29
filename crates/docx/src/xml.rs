@@ -4,9 +4,11 @@
 //! `r:id`, `a:blip`…), so the reader doesn't care which prefixes a producer chose. Names in
 //! unknown namespaces keep their local name behind a `?:` prefix.
 
+use std::collections::BTreeMap;
+
 use quick_xml::XmlVersion;
 use quick_xml::events::Event;
-use quick_xml::name::{QName, ResolveResult};
+use quick_xml::name::{NamespaceResolver, QName, ResolveResult};
 use quick_xml::reader::NsReader;
 
 use crate::DocxError;
@@ -320,6 +322,49 @@ pub fn parse_strict(bytes: &[u8]) -> Result<El, DocxError> {
     parse_with(bytes, &[], true)
 }
 
+/// Repeated prefixes in an unchanged scope need one resolver walk, not one per name.
+/// Keep both the tree and compatibility-feature mappings; the latter ignores `extra`.
+#[derive(Default)]
+struct NamespaceCache {
+    prefixes: BTreeMap<Vec<u8>, Option<(&'static str, &'static str)>>,
+}
+
+impl NamespaceCache {
+    fn resolve(
+        &mut self,
+        resolver: &NamespaceResolver,
+        name: QName<'_>,
+        use_default: bool,
+        extra: &[(&'static str, &str)],
+    ) -> Option<(&'static str, &'static str)> {
+        let prefix = name.prefix().map(|p| p.into_inner());
+        // The default namespace never applies to unqualified attributes.
+        if prefix.is_none() && !use_default {
+            return None;
+        }
+        let key = prefix.unwrap_or(b"");
+        // A malformed `:name` has an explicit empty prefix. The resolver treats it as
+        // unknown, unlike a bare element name in the default namespace.
+        let cacheable = prefix != Some(&[][..]);
+        if cacheable && let Some(value) = self.prefixes.get(key) {
+            return *value;
+        }
+        let value = match resolver.resolve(name, use_default).0 {
+            ResolveResult::Bound(ns) => Some((prefix_for(ns.as_ref(), extra), requirement_prefix(ns.as_ref()))),
+            _ => None,
+        };
+        // Untrusted names must not grow a document-wide cache without a bound.
+        if cacheable && self.prefixes.len() < MAX_ATTRS {
+            self.prefixes.insert(key.to_vec(), value);
+        }
+        value
+    }
+
+    fn clear(&mut self) {
+        self.prefixes.clear();
+    }
+}
+
 fn parse_with(bytes: &[u8], extra: &[(&'static str, &str)], strict: bool) -> Result<El, DocxError> {
     // UTF-16 (with a BOM) is transcoded to UTF-8; a UTF-8 BOM is stripped.
     let transcoded = utf16_to_utf8(bytes);
@@ -336,16 +381,15 @@ fn parse_with(bytes: &[u8], extra: &[(&'static str, &str)], strict: bool) -> Res
         c.check_end_names = strict;
     }
     let mut stack: Vec<El> = Vec::new();
+    let mut declaring_scopes = Vec::new();
+    let mut namespaces = NamespaceCache::default();
     let mut root: Option<El> = None;
     let mut count = 0usize;
     let mut buf = Vec::new();
     loop {
         buf.clear();
-        let (res, ev) = r.read_resolved_event_into(&mut buf).map_err(|e| DocxError::Xml(e.to_string()))?;
-        let el_prefix = match &res {
-            ResolveResult::Bound(ns) => Some(prefix_for(ns.as_ref(), extra)),
-            _ => None,
-        };
+        // NsReader still validates and bounds declarations before returning the event.
+        let ev = r.read_event_into(&mut buf).map_err(|e| DocxError::Xml(e.to_string()))?;
         match ev {
             Event::Start(ref e) | Event::Empty(ref e) => {
                 if strict && root.is_some() && stack.is_empty() {
@@ -355,6 +399,11 @@ fn parse_with(bytes: &[u8], extra: &[(&'static str, &str)], strict: bool) -> Res
                 if count > MAX_ELEMENTS {
                     return Err(DocxError::Limit("too many XML elements".into()));
                 }
+                let declares = e.attributes().with_checks(false).flatten().any(|a| a.key.as_namespace_binding().is_some());
+                if declares {
+                    namespaces.clear();
+                }
+                let el_prefix = namespaces.resolve(r.resolver(), e.name(), true, extra).map(|p| p.0);
                 let local = String::from_utf8_lossy(e.local_name().as_ref()).into_owned();
                 let name = match el_prefix {
                     Some(p) => format!("{p}:{local}"),
@@ -371,11 +420,10 @@ fn parse_with(bytes: &[u8], extra: &[(&'static str, &str)], strict: bool) -> Res
                     if raw_key == b"xmlns" || raw_key.starts_with(b"xmlns:") {
                         continue;
                     }
-                    let (ares, alocal) = r.resolver_mut().resolve_attribute(key);
-                    let alocal = String::from_utf8_lossy(alocal.as_ref()).into_owned();
-                    let aname = match ares {
-                        ResolveResult::Bound(ns) => format!("{}:{alocal}", prefix_for(ns.as_ref(), extra)),
-                        _ => alocal,
+                    let alocal = String::from_utf8_lossy(key.local_name().as_ref()).into_owned();
+                    let aname = match namespaces.resolve(r.resolver(), key, false, extra) {
+                        Some((prefix, _)) => format!("{prefix}:{alocal}"),
+                        None => alocal,
                     };
                     let val = match a.normalized_value(XmlVersion::Explicit1_0) {
                         Ok(v) => v.into_owned(),
@@ -392,10 +440,7 @@ fn parse_with(bytes: &[u8], extra: &[(&'static str, &str)], strict: bool) -> Res
                                 .into_iter()
                                 .map(|prefix| {
                                     let qualified = format!("{prefix}:requirement");
-                                    match r.resolver_mut().resolve_attribute(QName(qualified.as_bytes())).0 {
-                                        ResolveResult::Bound(ns) => requirement_prefix(ns.as_ref()),
-                                        _ => "?",
-                                    }
+                                    namespaces.resolve(r.resolver(), QName(qualified.as_bytes()), false, extra).map_or("?", |p| p.1)
                                 })
                                 .collect::<Vec<_>>()
                                 .join(" ")
@@ -410,13 +455,20 @@ fn parse_with(bytes: &[u8], extra: &[(&'static str, &str)], strict: bool) -> Res
                         return Err(DocxError::Limit("XML nesting too deep".into()));
                     }
                     stack.push(el);
+                    declaring_scopes.push(declares);
                 } else {
                     attach(&mut stack, &mut root, el);
+                    if declares {
+                        namespaces.clear();
+                    }
                 }
             }
             Event::End(_) => {
                 if let Some(el) = stack.pop() {
                     attach(&mut stack, &mut root, el);
+                }
+                if declaring_scopes.pop().unwrap_or(false) {
+                    namespaces.clear();
                 }
             }
             Event::Text(t) => {
@@ -576,6 +628,112 @@ pub fn body_ns() -> Vec<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Repeated names must not search all inherited namespace declarations for each element.
+    #[test]
+    fn repeated_namespace_names_do_not_rescan_every_binding() {
+        fn fixture(depth: usize, leaves: usize) -> Vec<u8> {
+            let mut s = format!("<w:root xmlns:w=\"{}\">", NAMESPACES[0].1);
+            for level in 0..depth {
+                s.push_str("<w:wrapper");
+                for prefix in 0..120 {
+                    s.push_str(&format!(" xmlns:n{level}_{prefix}=\"urn:unrelated:{level}:{prefix}\""));
+                }
+                s.push('>');
+            }
+            s.push_str(&"<w:a w:val=\"Original\"/>".repeat(leaves));
+            s.push_str(&"</w:wrapper>".repeat(depth));
+            s.push_str("</w:root>");
+            s.into_bytes()
+        }
+        let small = fixture(24, 4_000);
+        let big = fixture(192, 32_000);
+        for (input, depth, leaves) in [(&small, 24, 4_000), (&big, 192, 32_000)] {
+            let root = parse(input).unwrap();
+            let mut inner = &root;
+            for _ in 0..depth {
+                inner = inner.child("w:wrapper").unwrap();
+            }
+            assert_eq!(inner.children("w:a").count(), leaves);
+            assert!(inner.els().all(|e| e.attr("w:val") == Some("Original")));
+        }
+        let run = |input: &[u8]| {
+            std::hint::black_box(parse(input).unwrap());
+        };
+        run(&small);
+        run(&big);
+        let (mut t1, mut t8) = (f64::INFINITY, f64::INFINITY);
+        for _ in 0..5 {
+            let start = std::time::Instant::now();
+            for _ in 0..8 {
+                run(&small);
+            }
+            t1 = t1.min(start.elapsed().as_secs_f64() / 8.0);
+            let start = std::time::Instant::now();
+            run(&big);
+            t8 = t8.min(start.elapsed().as_secs_f64());
+        }
+        let ratio = t8 / t1.max(1e-9);
+        eprintln!("namespace lookup t(n) {t1:.4}s, t(8n) {t8:.4}s, ratio {ratio:.1}");
+        assert!(ratio < 20.0, "8x namespace-heavy input took {ratio:.1}x the time ({t1:.4}s -> {t8:.4}s)");
+    }
+
+    /// Default bindings affect elements, not bare attributes; local rebindings end with their scope.
+    #[test]
+    fn namespace_scopes_restore_after_empty_and_nested_elements() {
+        let w = NAMESPACES[0].1;
+        let r = NAMESPACES[1].1;
+        let xml = format!(
+            r#"<root xmlns="{w}" xmlns:x="{w}" xmlns:r="{r}">
+                <x:a x:val="before" val="bare" r:id="source" xml:space="preserve"/>
+                <x:a xmlns:x="urn:unknown" x:val="unknown"/>
+                <x:a x:val="after-empty"/>
+                <holder xmlns="" xmlns:x=""><x:a x:val="unbound"/><bare val="bare"/></holder>
+                <x:a x:val="after-nested"/>
+                <a xmlns="urn:unknown" val="bare"/>
+                <a val="after-default"/>
+            </root>"#
+        );
+        let root = parse_strict(xml.as_bytes()).unwrap();
+        assert_eq!(root.name, "w:root");
+        let children: Vec<_> = root.els().collect();
+        assert_eq!(children.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["w:a", "?:a", "w:a", "holder", "w:a", "?:a", "w:a"]);
+        let first = children[0];
+        assert_eq!(
+            first.attrs,
+            [
+                ("w:val".into(), "before".into()),
+                ("val".into(), "bare".into()),
+                ("r:id".into(), "source".into()),
+                ("xml:space".into(), "preserve".into())
+            ]
+        );
+        assert_eq!(children[1].attrs, [("?:val".into(), "unknown".into())]);
+        assert_eq!(children[2].attr("w:val"), Some("after-empty"));
+        assert_eq!(children[3].child("a").unwrap().attrs, [("val".into(), "unbound".into())]);
+        assert_eq!(children[3].child("bare").unwrap().attrs, [("val".into(), "bare".into())]);
+        assert_eq!(children[4].attr("w:val"), Some("after-nested"));
+        assert_eq!(children[6].attrs, [("val".into(), "after-default".into())]);
+    }
+
+    /// An explicitly empty prefix is unresolved, rather than the element's default binding.
+    #[test]
+    fn empty_name_prefix_does_not_use_the_default_namespace() {
+        let xml = format!(r#"<root xmlns="{}"><:a :val="bare"/><a val="default"/></root>"#, NAMESPACES[0].1);
+        let root = parse(xml.as_bytes()).unwrap();
+        assert_eq!(root.child("a").unwrap().attrs, [("val".into(), "bare".into())]);
+        assert_eq!(root.child("w:a").unwrap().attrs, [("val".into(), "default".into())]);
+    }
+
+    /// Vocabulary-specific aliases must not make unsupported compatibility features supported.
+    #[test]
+    fn extra_namespace_mapping_does_not_change_choice_requirements() {
+        let xml = br#"<x:root xmlns:x="urn:custom" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><x:before/><mc:Choice Requires="x"/></x:root>"#;
+        let root = parse_ns(xml, &[("w", "urn:custom")]).unwrap();
+        assert_eq!(root.name, "w:root");
+        assert!(root.child("w:before").is_some());
+        assert_eq!(root.child("mc:Choice").unwrap().attr("Requires"), Some("?"));
+    }
 
     #[test]
     fn strict_parsing_rejects_a_dropped_entity_and_trailing_markup() {
