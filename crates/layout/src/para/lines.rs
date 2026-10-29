@@ -599,8 +599,11 @@ impl<'e> Breaker<'e> {
         let short = lines.len() < dl as usize;
         let dy = if short { (dl as f32 - 1.0) * l0.height } else { ln.baseline - l0.baseline };
         let lead = self.first_x0.unwrap_or(0.0) - self.first_left.max(rp.indent_left);
-        // In margin, the letter's right edge stays the distance away from the text's edge.
-        let dx = if rp.drop_cap_margin { lead.max(0.0) + pl.drop_cap_w + rp.drop_cap_distance } else { dw.min(lead) };
+        // In margin, the letter's right edge stays the distance left of the text column (or of a
+        // hanging first line), whatever the alignment or first-line indent: always in the margin.
+        let edge = self.first_left.min(rp.indent_left);
+        let in_margin = (self.first_x0.unwrap_or(0.0) - edge).max(0.0) + pl.drop_cap_w + rp.drop_cap_distance;
+        let dx = if rp.drop_cap_margin { in_margin } else { dw.min(lead) };
         // Toward the start edge: left, or right (and from the letter's right edge) when mirrored.
         let dx = if self.rtl_para { pl.drop_cap_w - dx } else { dx };
         if short {

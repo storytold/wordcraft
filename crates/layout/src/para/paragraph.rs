@@ -249,6 +249,8 @@ impl<'a> Shaped<'a> {
         big.size = (((lines - 1.0) * line_h + rc.size * 0.7) / 0.7).min(1000.0).max(rc.size);
         if let Some(f) = &rp.drop_cap_font {
             big.font = f.clone();
+            big.font_cs = f.clone();
+            big.font_ea = Some(f.clone());
         }
         let before = self.b.clusters.len();
         self.b.shape(first, 0, &Arc::new(big), None);
