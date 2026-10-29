@@ -7,12 +7,19 @@ use super::{CharProps, Document, Paragraph, ResolvedChar};
 pub struct ProofRun {
     pub range: std::ops::Range<usize>,
     pub lang: wordcraft_proof::ProofLang,
+    /// The language tag as the document gives it (an external checker is asked in it).
+    pub tag: Option<String>,
     pub skip: bool,
 }
 
 impl ProofRun {
     pub(super) fn of(range: std::ops::Range<usize>, rc: &ResolvedChar) -> ProofRun {
-        ProofRun { range, lang: wordcraft_proof::ProofLang::from_tag(rc.lang.as_deref()), skip: rc.no_proof || rc.hidden || rc.link.is_some() }
+        ProofRun {
+            range,
+            lang: wordcraft_proof::ProofLang::from_tag(rc.lang.as_deref()),
+            tag: rc.lang.clone(),
+            skip: rc.no_proof || rc.hidden || rc.link.is_some(),
+        }
     }
 }
 
@@ -37,6 +44,7 @@ pub(super) fn lang_at(runs: &[ProofRun], off: usize) -> wordcraft_proof::ProofLa
 pub fn paragraph_issues(
     p: &Paragraph,
     runs: &[ProofRun],
+    external_language: &str,
     spelling: &wordcraft_proof::Options,
     grammar: bool,
     list_item: bool,
@@ -47,7 +55,47 @@ pub fn paragraph_issues(
     let text = proof_text(p);
     let spans: Vec<(std::ops::Range<usize>, wordcraft_proof::ProofLang)> = runs.iter().map(|r| (r.range.clone(), r.lang)).collect();
     let skip = |a: usize, b: usize| runs.iter().any(|r| r.skip && r.range.start < b && a < r.range.end);
+    // The external checker's result for this text when it has one (#575), each issue in the
+    // language of the run it is in; grammar marks only with `grammar`.
+    if let Some(found) = wordcraft_proof::check_external(&text, external_language) {
+        let lang_at = |at: usize| spans.iter().find(|(r, _)| r.contains(&at)).map(|(_, l)| *l).unwrap_or_default();
+        return found
+            .into_iter()
+            .filter(|i| !skip(i.start, i.end) && (grammar || i.kind != wordcraft_proof::IssueKind::Grammar))
+            .filter(|i| {
+                i.kind != wordcraft_proof::IssueKind::Spelling || !wordcraft_proof::spelling_ignored_by_options(&text, i.start, i.end, spelling)
+            })
+            .map(|i| wordcraft_proof::Issue { lang: lang_at(i.start), ..i })
+            .collect();
+    }
     wordcraft_proof::check_text_with(&text, &spans, spelling, grammar, list_item).into_iter().filter(|i| !skip(i.start, i.end)).collect()
+}
+
+/// The key an external checker's results for `p` are stored under: the setting, or the language
+/// of its first run, and, when the runs carry different language tags, where each tag applies
+/// ([`language_key`]), so the same text with other language marks is checked again.
+pub fn external_language(doc: &Document, p: &Paragraph) -> String {
+    let plain = CharProps::default();
+    let first = p.run_ranges().next().map(|(_, c)| c).unwrap_or(&plain);
+    let base = wordcraft_proof::external::wanted(doc.styles.resolve_char(p.props.style.as_deref(), first).lang.as_deref());
+    let runs = proof_runs(doc, p, None);
+    match runs.first() {
+        Some(f) if runs.iter().any(|r| r.tag != f.tag) => format!("{base}|{}", language_key(&runs)),
+        _ => base,
+    }
+}
+
+/// The language tags of `runs` with the bytes each covers (adjacent runs of one tag merged).
+pub fn language_key(runs: &[ProofRun]) -> String {
+    let mut spans: Vec<(&str, usize, usize)> = Vec::new();
+    for r in runs {
+        let tag = r.tag.as_deref().unwrap_or("");
+        match spans.last_mut() {
+            Some((t, _, end)) if *t == tag && *end == r.range.start => *end = r.range.end,
+            _ => spans.push((tag, r.range.start, r.range.end)),
+        }
+    }
+    spans.iter().map(|(t, a, b)| format!("{t}@{a}-{b}")).collect::<Vec<_>>().join(",")
 }
 
 /// Whether the paragraph is a list item: its own numbering, or its style's, names a list (not 0).
@@ -59,11 +107,12 @@ pub fn is_list_item(doc: &Document, p: &Paragraph) -> bool {
 pub(super) fn proof_issues(
     p: &Paragraph,
     runs: &[ProofRun],
+    external_language: &str,
     opts: &crate::ProofOptions,
     typing: Option<(usize, usize)>,
     list_item: bool,
 ) -> Vec<(usize, usize, bool)> {
-    paragraph_issues(p, runs, &opts.spelling, opts.grammar, list_item)
+    paragraph_issues(p, runs, external_language, &opts.spelling, opts.grammar, list_item)
         .into_iter()
         .map(|i| (i.start, i.end, i.kind == wordcraft_proof::IssueKind::Grammar))
         .filter(|&(a, b, grammar)| grammar || !typing.is_some_and(|(s, e)| a < e && s < b))

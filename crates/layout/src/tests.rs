@@ -4322,6 +4322,37 @@ fn paragraph_style_and_direct_formatting_beat_table_style() {
     assert_eq!(cell_para(&lay(&d), 2, 0).rp.space_after, 10.0, "Normal");
 }
 
+/// #2679: an external checker's result is stored under the paragraph's language key built without
+/// table formatting (as the app does), so a cell whose language comes only from its table style
+/// still shows it.
+#[test]
+fn external_result_shows_in_a_cell_whose_language_is_from_its_table_style() {
+    let mut d = styled_table_doc(Some("FrGrid"), 3);
+    d.styles.upsert(wordcraft_doc::Style {
+        id: "FrGrid".into(),
+        name: "Fr Grid".into(),
+        kind: wordcraft_doc::StyleKind::Table,
+        chr: CharProps { lang: Some("fr-FR".into()), ..Default::default() },
+        ..Default::default()
+    });
+    // A word with letters only: numbers are ignored by default.
+    d.para_mut(StoryRef::Body, &Path(vec![1, 1, 0, 0])).unwrap().insert_text(0, "Teh ", &Default::default()).unwrap();
+    let cell = d.para(StoryRef::Body, &Path(vec![1, 1, 0, 0])).unwrap();
+    let key = para::external_language(&d, cell);
+    let text = para::proof_text(cell);
+    let issue = wordcraft_proof::Issue {
+        start: 0,
+        end: 3,
+        kind: wordcraft_proof::IssueKind::Spelling,
+        message: "m".into(),
+        suggestions: Vec::new(),
+        lang: wordcraft_proof::ProofLang::En,
+    };
+    wordcraft_proof::external::put(&text, &key, vec![issue]);
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions { proofing: true, ..LayoutOptions::default() });
+    assert_eq!(cell_para(&l, 1, 0).issues, vec![(0, 3, false)]);
+}
+
 /// A table style based on another keeps the base style's borders and cell text formatting, and
 /// adds its own run formatting and conditional formats.
 #[test]
@@ -7901,10 +7932,48 @@ fn hyphenation_and_proofing_follow_each_runs_language() {
     assert_eq!(flagged, ["żeka", "beautifull"]);
     // The layout and the Review commands report the same issues.
     let p = d.para(StoryRef::Body, &Path::top(0)).unwrap();
-    let issues = para::paragraph_issues(p, &para::proof_runs(&d, p, None), &Default::default(), true, false);
+    let issues = {
+        let runs = para::proof_runs(&d, p, None);
+        para::paragraph_issues(p, &runs, &para::external_language(&d, p), &Default::default(), true, false)
+    };
     assert_eq!(issues.iter().map(|i| (i.start, i.end, i.kind == wordcraft_proof::IssueKind::Grammar)).collect::<Vec<_>>(), para.issues);
     assert_eq!(issues[0].lang, wordcraft_proof::ProofLang::Pl);
     assert_eq!(issues[1].lang, wordcraft_proof::ProofLang::En);
+}
+
+/// #2679: identical paragraph text with another mix of languages has its own external result
+/// (#763 stores a mixed paragraph's result under its language key).
+#[test]
+fn external_results_follow_the_paragraphs_language_marks() {
+    let text = "Les enfant jouent";
+    let mut d = Document::from_text(&format!("{text}\n{text}"));
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, 3), &|c| c.lang = Some("fr-FR".into())).unwrap();
+    d.format_range(&Pos::body(0, 3), &Pos::body(0, text.len()), &|c| c.lang = Some("en-US".into())).unwrap();
+    let first = d.para(StoryRef::Body, &Path::top(0)).unwrap();
+    let second = d.para(StoryRef::Body, &Path::top(1)).unwrap();
+    let (k1, k2) = (para::external_language(&d, first), para::external_language(&d, second));
+    assert_ne!(k1, k2, "the same text marked differently needs a result of its own");
+    let issue = |start, end| wordcraft_proof::Issue {
+        start,
+        end,
+        kind: wordcraft_proof::IssueKind::Spelling,
+        message: "m".into(),
+        suggestions: Vec::new(),
+        lang: wordcraft_proof::ProofLang::En,
+    };
+    wordcraft_proof::external::put(text, &k1, vec![issue(4, 10)]);
+    wordcraft_proof::external::put(text, &k2, vec![issue(0, 3)]);
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions { proofing: true, ..LayoutOptions::default() });
+    let issues = |i: usize| {
+        l.pages[0]
+            .items
+            .iter()
+            .filter_map(|it| if let Placed::Lines { para, .. } = it { Some(para.issues.clone()) } else { None })
+            .nth(i)
+            .unwrap_or_default()
+    };
+    assert_eq!(issues(0), vec![(4, 10, false)]);
+    assert_eq!(issues(1), vec![(0, 3, false)]);
 }
 
 /// A list item may be a fragment: the drawn squiggles skip its first word's missing capital, a
