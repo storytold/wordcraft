@@ -218,6 +218,44 @@ fn nested_empty_delimiters_grow_with_nesting() {
         let empty_group =
             lay_in(&Math { nodes: vec![delim(vec![invisible(Vec::new())])], ..Default::default() }, "", display, 400.0, &MathProps::default());
         assert!((h(&empty_group) - h(&solo)).abs() < 0.01, "display={display}: {} vs {}", h(&empty_group), h(&solo));
+        // An invisible group can still draw a visible separator between its arguments.
+        let separated = lay_in(
+            &Math {
+                nodes: vec![delim(vec![MNode::Delim {
+                    beg: None,
+                    end: None,
+                    sep: Some('|'),
+                    grow: true,
+                    shp_match: false,
+                    elems: vec![Vec::new(), Vec::new()],
+                }])],
+                ..Default::default()
+            },
+            "",
+            display,
+            400.0,
+            &MathProps::default(),
+        );
+        assert!(h(&separated) > h(&solo) * 1.05, "display={display}: {} vs {}", h(&separated), h(&solo));
+        // A separator field with a single argument draws nothing, so it is not visible.
+        let one_argument = lay_in(
+            &Math {
+                nodes: vec![delim(vec![MNode::Delim {
+                    beg: None,
+                    end: None,
+                    sep: Some('|'),
+                    grow: true,
+                    shp_match: false,
+                    elems: vec![Vec::new()],
+                }])],
+                ..Default::default()
+            },
+            "",
+            display,
+            400.0,
+            &MathProps::default(),
+        );
+        assert!((h(&one_argument) - h(&solo)).abs() < 0.01, "display={display}: {} vs {}", h(&one_argument), h(&solo));
     }
 }
 
