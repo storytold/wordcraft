@@ -13,6 +13,28 @@ fn double_click_on_format_painter_makes_it_sticky() {
     assert!(matches!(app.session.painter, Some((_, _, true))), "the double-click leaves it sticky");
 }
 
+/// #1012: a screen reader hears Format Painter as on once one click has armed it.
+#[test]
+fn format_painter_reports_the_armed_state() {
+    use egui::accesskit::Toggled;
+    use egui_kittest::kittest::{By, NodeT, Queryable};
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1600.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default()),
+    );
+    h.run_steps(3);
+    let toggled = |h: &egui_kittest::Harness<'_, WordApp>| h.get(By::new().label(tl!("Format Painter"))).accesskit_node().toggled();
+    assert_eq!(toggled(&h), Some(Toggled::False), "off to begin with");
+    h.get(By::new().label(tl!("Format Painter"))).click();
+    h.run_steps(3);
+    assert!(h.state().session.painter.is_some(), "one click arms it");
+    assert_eq!(toggled(&h), Some(Toggled::True), "armed reads as on");
+}
+
 fn png_data() -> String {
     let img = image::RgbaImage::from_fn(20, 10, |x, y| {
         if x > 2 && x < 17 && y > 2 && y < 7 { image::Rgba([200, 30, 30, 255]) } else { image::Rgba([255, 255, 255, 255]) }
@@ -549,6 +571,249 @@ fn resolve_tab_falls_back_when_contextual_tab_expires() {
     assert_eq!(resolve_tab("Picture Format", &["Home"]), "Home");
     assert_eq!(resolve_tab("Table Design", &["Home"]), "Home");
     assert_eq!(resolve_tab("Home", &["Home"]), "Home");
+}
+
+/// #1012: what a screen reader is told about the clickable things in `h`, as
+/// `role "name"` lines, for the ones with no name or no real role.
+fn unnamed_controls(h: &egui_kittest::Harness<'_, WordApp>, place: &str, within: impl Fn(Rect) -> bool) -> Vec<String> {
+    use egui::accesskit::{Action, Role};
+    use egui_kittest::kittest::{By, NodeT, Queryable};
+    h.query_all(By::new().predicate(|n| n.data().supports_action(Action::Click) && !n.is_hidden()))
+        .filter(|n| within(n.rect()))
+        .filter_map(|n| {
+            let node = n.accesskit_node();
+            let role = node.role();
+            // Static text (selectable, so clickable) isn't a control; a scroll bar is
+            // announced by its role.
+            let label = node.label().unwrap_or_default();
+            let unnamed = label.trim().is_empty() && !matches!(role, Role::ScrollBar | Role::Label);
+            (unnamed || matches!(role, Role::Unknown | Role::GenericContainer)).then(|| format!("{place}: {role:?} {label:?} at {:?}", n.rect()))
+        })
+        .collect()
+}
+
+/// One ribbon tab's groups, with the interface fonts installed.
+fn tab_only(ui: &mut Ui, app: &mut WordApp) {
+    let ctx = ui.ctx().clone();
+    app.logic(&ctx);
+    // Fonts installed by `logic` take effect on the next frame.
+    if app.fonts_frames < 2 {
+        app.fonts_frames += 1;
+        return;
+    }
+    ui.horizontal_top(|ui| tab_content(app, ui));
+}
+
+/// #1012: every control on every built-in and contextual tab tells a screen reader its name
+/// and what it is; a command that can't run says so, toggles say whether they're on, and
+/// menu and split buttons say they open a menu.
+#[test]
+fn every_ribbon_control_has_a_name_role_and_state() {
+    use egui::accesskit::{HasPopup, Role, Toggled};
+    use egui_kittest::kittest::{By, NodeT, Queryable};
+    let tabs = TABS.iter().filter(|t| **t != "File").chain(wordcraft_engine::ribbon::CONTEXTUAL_TABS.iter()).chain(["Outlining"].iter());
+    let mut missing = Vec::new();
+    for tab in tabs {
+        let mut app = WordApp::new(Session::new(wordcraft_engine::sample::sample_document()), crate::Services::default());
+        if *tab == "Equation" {
+            app.run("insert.equation", json!({})).unwrap();
+        }
+        app.ui.tab = (*tab).to_string();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(4000.0, 200.0)).build_ui_state(tab_only, app);
+        h.run_steps(4);
+        missing.extend(unnamed_controls(&h, tab, |_| true));
+    }
+    assert!(missing.is_empty(), "ribbon controls a screen reader can't name: {missing:#?}");
+
+    // Outside a table, Merge Cells can't run, and says so.
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+    app.ui.tab = "Table Layout".into();
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(4000.0, 200.0)).build_ui_state(tab_only, app);
+    h.run_steps(4);
+    assert!(h.get_by_label(tl!("Merge Cells")).accesskit_node().is_disabled(), "Merge Cells is disabled outside a table");
+
+    // Bold on, Italic off: both are toggles; Cut is a plain button.
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+    app.run("select.all", json!({})).unwrap();
+    app.run("format.bold", json!({})).unwrap();
+    app.run("para.bullets", json!({})).unwrap();
+    app.ui.tab = "Home".into();
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(4000.0, 200.0)).build_ui_state(tab_only, app);
+    h.run_steps(4);
+    let toggled = |h: &egui_kittest::Harness<'_, WordApp>, name: &str| -> Option<Toggled> {
+        let nodes: Vec<Option<Toggled>> = h.query_all(By::new().role(Role::Button).label(name)).map(|n| n.accesskit_node().toggled()).collect();
+        *nodes.first().unwrap_or_else(|| panic!("{name} button"))
+    };
+    assert_eq!(toggled(&h, tl!("Bold")), Some(Toggled::True));
+    assert_eq!(toggled(&h, tl!("Italic")), Some(Toggled::False));
+    assert_eq!(toggled(&h, tl!("Cut")), None, "Cut is not a toggle");
+    // Underline and Bullets are split buttons: the button toggles, the arrow opens a menu.
+    let underline: Vec<_> = h.query_all(By::new().role(Role::Button).label(tl!("Underline"))).map(|n| n.accesskit_node()).collect();
+    assert!(underline.iter().any(|n| n.toggled() == Some(Toggled::False)), "Underline toggles");
+    let arrow = crate::i18n::fmt(tl!("{name} options"), &[("name", tl!("Underline"))]);
+    let underline_arrow: Vec<_> = h.query_all(By::new().role(Role::Button).label(&arrow)).map(|n| n.accesskit_node()).collect();
+    assert!(underline_arrow.iter().any(|n| n.has_popup() == Some(HasPopup::Menu)), "Underline's arrow opens a menu");
+    let bullets: Vec<_> = h.query_all(By::new().role(Role::Button).label(tl!("Bullets"))).map(|n| n.accesskit_node()).collect();
+    assert!(bullets.iter().any(|n| n.toggled() == Some(Toggled::True)), "Bullets are on");
+    let paste: Vec<_> = h.query_all(By::new().role(Role::Button).label_contains(tl!("Paste"))).map(|n| n.accesskit_node()).collect();
+    assert!(paste.iter().any(|n| n.has_popup() == Some(HasPopup::Menu)), "Paste opens a menu");
+
+    // Review: Track Changes and Show Comments say whether they're on (#1012 review).
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+    app.run("review.trackChanges", json!({"value": true})).unwrap();
+    app.run("view.commentsPane", json!({"value": true})).unwrap();
+    app.ui.tab = "Review".into();
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(4000.0, 200.0)).build_ui_state(tab_only, app);
+    h.run_steps(4);
+    assert_eq!(toggled(&h, tl!("Track Changes")), Some(Toggled::True), "Track Changes is on");
+    assert_eq!(toggled(&h, tl!("Show Comments")), Some(Toggled::True), "Show Comments is on");
+    h.state_mut().run("review.trackChanges", json!({"value": false})).unwrap();
+    h.run_steps(2);
+    assert_eq!(toggled(&h, tl!("Track Changes")), Some(Toggled::False), "Track Changes is off");
+
+    // Design: the style-set tiles are read by their display names, not their ids.
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+    app.ui.tab = "Design".into();
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(4000.0, 200.0)).build_ui_state(tab_only, app);
+    h.run_steps(4);
+    for (id, label) in crate::previews::STYLE_SET_LABELS {
+        assert!(h.query(By::new().role(Role::Button).label(id)).is_none(), "{id}: not read out by its id");
+        assert!(h.query(By::new().role(Role::Button).label(tl!(label))).is_some(), "{label}: a style-set tile");
+    }
+}
+
+fn app_harness(app: WordApp) -> egui_kittest::Harness<'static, WordApp> {
+    egui_kittest::Harness::builder().with_size(vec2(1600.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    )
+}
+
+/// #1012: the tab strip is a tab list: each tab is a Tab named as shown, and exactly one,
+/// the active one, is selected. The Quick Access Toolbar's buttons are named too.
+#[test]
+fn ribbon_tabs_are_a_tab_list_with_one_selected() {
+    use egui::accesskit::{HasPopup, Role};
+    use egui_kittest::kittest::{By, NodeT, Queryable};
+    let mut h = app_harness(WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default()));
+    h.run_steps(3);
+    let selected = |h: &egui_kittest::Harness<'_, WordApp>| -> Vec<String> {
+        h.query_all(By::new().role(Role::Tab))
+            .filter(|n| n.accesskit_node().is_selected() == Some(true))
+            .filter_map(|n| n.accesskit_node().label())
+            .collect()
+    };
+    let tabs: Vec<_> = h.query_all(By::new().role(Role::Tab)).collect();
+    assert!(tabs.len() >= 10, "every tab is a Tab: {}", tabs.len());
+    for tab in &tabs {
+        let node = tab.accesskit_node();
+        assert!(!node.label().unwrap_or_default().is_empty(), "named");
+        assert_eq!(node.parent().map(|p| p.role()), Some(Role::TabList), "inside a tab list");
+        assert!(node.toggled().is_none(), "a tab is selected, not pressed");
+    }
+    assert_eq!(selected(&h), [tl!("Home")]);
+    // The title bar and the tab strip, above the Home tab's bottom edge: all named.
+    let strip_bottom = h.get(By::new().role(Role::Tab).label(tl!("Home"))).rect().bottom();
+    let chrome = unnamed_controls(&h, "title bar and tabs", |r| r.bottom() <= strip_bottom + 0.5);
+    assert!(chrome.is_empty(), "unnamed title bar or tab strip controls: {chrome:#?}");
+    h.get(By::new().role(Role::Tab).label(tl!("Insert"))).click();
+    h.run_steps(2);
+    assert_eq!(selected(&h), [tl!("Insert")]);
+
+    // Quick Access Toolbar: Save is named; Undo has nothing to undo and says so.
+    assert!(h.query(By::new().role(Role::Button).label(tl!("Save"))).is_some(), "Save button named");
+    let undo: Vec<_> = h.query_all(By::new().role(Role::Button).label_contains(tl!("Undo"))).map(|n| n.accesskit_node()).collect();
+    assert!(!undo.is_empty() && undo.iter().all(|n| n.is_disabled()), "Undo is disabled on a fresh document");
+    let more = h.get(By::new().role(Role::Button).label(tl!("Customize Quick Access Toolbar")));
+    assert_eq!(more.accesskit_node().has_popup(), Some(HasPopup::Menu));
+}
+
+/// #1012: keytips move the keyboard focus a screen reader follows, and expose their letters
+/// as access keys: F10 focuses the active tab, H the first Home command, Escape steps back a
+/// level, and leaving keytips gives the keyboard back to the document.
+#[test]
+fn keytips_move_focus_and_expose_their_letters() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{By, NodeT, Queryable};
+    let mut h = app_harness(WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default()));
+    h.run_steps(3);
+    let focused = |h: &egui_kittest::Harness<'_, WordApp>| -> (Role, String, Option<String>) {
+        let n = h.query(By::new().predicate(|n| n.is_focused())).expect("something has the keyboard focus");
+        let node = n.accesskit_node();
+        (node.role(), node.label().unwrap_or_default(), node.data().access_key().map(str::to_string))
+    };
+    assert_eq!(focused(&h).0, Role::Document, "the page starts with the keyboard");
+
+    h.key_press(egui::Key::F10);
+    h.run_steps(3);
+    assert_eq!(h.state().ui.keytips, crate::keytips::Phase::Tabs);
+    assert_eq!(focused(&h), (Role::Tab, tl!("Home").to_string(), Some("H".to_string())), "F10 focuses the active tab");
+    let insert = h.get(By::new().role(Role::Tab).label(tl!("Insert")));
+    assert_eq!(insert.accesskit_node().data().access_key(), Some("N"), "tabs expose their letters");
+    let save = h.get(By::new().role(Role::Button).label(tl!("Save")));
+    assert_eq!(save.accesskit_node().data().access_key(), Some("1"), "toolbar buttons expose their numbers");
+
+    h.key_press(egui::Key::H);
+    h.run_steps(3);
+    assert_eq!(h.state().ui.keytips, crate::keytips::Phase::Commands);
+    let first_letter = crate::keytips::letter_for(h.state(), 0);
+    let (role, name, key) = focused(&h);
+    assert_eq!(role, Role::Button);
+    assert!(name.starts_with(tl!("Paste")), "the first Home command has the focus: {name}");
+    assert_eq!(key, Some(first_letter), "and exposes its keytip");
+
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert_eq!(h.state().ui.keytips, crate::keytips::Phase::Tabs, "Escape steps back to the tabs");
+    assert_eq!(focused(&h).0, Role::Tab);
+    assert_eq!(focused(&h).1, tl!("Home"));
+
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert_eq!(h.state().ui.keytips, crate::keytips::Phase::Off);
+    assert_eq!(focused(&h).0, Role::Document, "leaving keytips gives the page the keyboard back");
+    assert!(h.query(By::new().role(Role::Tab).predicate(|n| n.data().access_key().is_some())).is_none(), "no letters once keytips are off");
+}
+
+/// #1012: Backstage opened with nothing focused gives the keyboard to the open page's button.
+#[test]
+fn backstage_focuses_the_open_page() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{By, NodeT, Queryable};
+    let mut h = app_harness(WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default()));
+    h.run_steps(3);
+    // Through the File tab, as a user does.
+    h.get(By::new().role(Role::Tab).label(tl!("File"))).click();
+    h.run_steps(4);
+    assert!(h.state().ui.backstage);
+    let n = h.query(By::new().predicate(|n| n.is_focused())).expect("the keyboard has a target in Backstage");
+    assert_eq!(n.accesskit_node().role(), Role::Button);
+    let page = h.state().ui.backstage_page.clone();
+    let label = crate::backstage::PAGES.iter().find(|(id, _, _)| *id == page.as_str()).map(|(_, l, _)| tl!(l)).unwrap_or_default();
+    assert_eq!(n.accesskit_node().label().unwrap_or_default(), label, "the open page ({page}) has the keyboard");
+}
+
+/// #1012: keytips that end because the window lost focus give the keyboard back to the page,
+/// so typing works when the window comes back.
+#[test]
+fn keytips_cut_short_give_the_page_the_keyboard_back() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{By, Queryable};
+    let mut h = app_harness(WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default()));
+    h.run_steps(3);
+    h.key_press(egui::Key::F10);
+    h.run_steps(3);
+    assert!(h.query(By::new().role(Role::Tab).predicate(|n| n.is_focused())).is_some(), "the active tab has the focus");
+    h.input_mut().focused = false;
+    h.run_steps(2);
+    h.input_mut().focused = true;
+    h.run_steps(3);
+    assert_eq!(h.state().ui.keytips, crate::keytips::Phase::Off);
+    assert!(h.query(By::new().role(Role::Document).predicate(|n| n.is_focused())).is_some(), "the page has the keyboard again");
 }
 
 /// #2573, #1901: Picture Format › Size's width shows the interface unit and takes a size typed

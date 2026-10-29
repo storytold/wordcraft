@@ -534,6 +534,13 @@ fn caret_animation_is_a_ui_command_and_survives_a_restart() {
     assert_eq!(a.run("ui.caretAnimation", json!({"value": true})).unwrap()["caretAnimation"], true);
 }
 
+/// Click the lowest button named `label`: the status bar's, when the ribbon has one too.
+fn click_lowest_button(h: &egui_kittest::Harness<'_, WordApp>, label: &str) {
+    use egui_kittest::kittest::{By, Queryable};
+    let lowest = h.query_all(By::new().role(egui::accesskit::Role::Button).label(label)).max_by(|a, b| a.rect().top().total_cmp(&b.rect().top()));
+    lowest.unwrap_or_else(|| panic!("a {label} button")).click();
+}
+
 /// #1945: showing or hiding the Quick Access Toolbar is a UI command (no value toggles it),
 /// kept between runs; settings saved before it existed show the toolbar; it works with no
 /// document open, like the other interface settings.
@@ -3494,6 +3501,38 @@ fn type_after_click(h: &mut egui_kittest::Harness<'_, WordApp>, what: &str, text
     assert!(body_text(h.state()).ends_with(text), "{what}: typing continues in the document");
 }
 
+/// #1012 review: Tab or an arrow key while keytips show ends them, and the page keeps the
+/// keyboard: egui's own focus move (it reads Tab and arrows before the keytips do) must not
+/// carry the focus off to another widget, or the next letters reach no document.
+#[test]
+fn tab_or_arrows_during_keytips_leave_typing_in_the_document() {
+    use egui::Key;
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::By;
+    let mut cases: Vec<(&str, Vec<Key>)> = vec![("F10, Tab", vec![Key::F10, Key::Tab]), ("F10, Down", vec![Key::F10, Key::ArrowDown])];
+    // Alt never arms keytips on macOS (Option types accents there).
+    if !cfg!(target_os = "macos") {
+        cases.push(("Alt, Down", vec![Key::AltLeft, Key::ArrowDown]));
+    }
+    for (what, keys) in cases {
+        let mut h = harness(WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), Services::default()));
+        for _ in 0..6 {
+            h.step();
+        }
+        let (first, last) = (keys[0], keys[1]);
+        h.key_press(first);
+        h.run_steps(3);
+        assert_eq!(h.state().ui.keytips, keytips::Phase::Tabs, "{what}: keytips show");
+        h.key_press(last);
+        h.run_steps(3);
+        assert_eq!(h.state().ui.keytips, keytips::Phase::Off, "{what}: the key ends keytips");
+        assert!(h.query(By::new().role(Role::Document).predicate(|n| n.is_focused())).is_some(), "{what}: the page has the keyboard");
+        h.event(egui::Event::Text("Zq".into()));
+        h.run_steps(2);
+        assert!(body_text(h.state()).contains("Zq"), "{what}: typing reaches the document: {:?}", body_text(h.state()));
+    }
+}
+
 /// #1093: clicks on ribbon and status-bar chrome that isn't a command button (gallery tiles,
 /// tab names, empty ribbon space, View check boxes, the status bar's view buttons and
 /// language menu) used to take keyboard focus from the page: the caret vanished and typing
@@ -3522,7 +3561,8 @@ fn clicks_on_ribbon_and_status_bar_chrome_keep_typing_in_the_document() {
     assert_eq!(para.props.style.as_deref(), Some("Heading1"), "the tile applied its style");
 
     // A ribbon tab name, then a View tab check box.
-    h.get_by_role_and_label(Role::Button, "View").click();
+    // Tabs are Tabs to screen readers (#1012).
+    h.get_by_role_and_label(Role::Tab, "View").click();
     type_after_click(&mut h, "View tab", " tab");
     assert_eq!(h.state().ui.tab, "View");
     let ruler = h.state().session.view.ruler;
@@ -3531,7 +3571,7 @@ fn clicks_on_ribbon_and_status_bar_chrome_keep_typing_in_the_document() {
     assert_ne!(h.state().session.view.ruler, ruler, "the check box toggled the ruler");
 
     // Empty space at the right end of the ribbon, under the tab strip.
-    let tab = h.get_by_role_and_label(Role::Button, "View").rect();
+    let tab = h.get_by_role_and_label(Role::Tab, "View").rect();
     let blank = egui::pos2(1425.0, tab.max.y + 25.0);
     for pressed in [true, false] {
         h.hover_at(blank);
@@ -3540,10 +3580,11 @@ fn clicks_on_ribbon_and_status_bar_chrome_keep_typing_in_the_document() {
     type_after_click(&mut h, "empty ribbon space", " blank");
 
     // The status bar's view buttons.
-    h.get_by_role_and_label(Role::Button, "Web Layout").click();
+    // The View tab has buttons of the same names; the status bar's are the lowest (#1012).
+    click_lowest_button(&h, "Web Layout");
     type_after_click(&mut h, "Web Layout", " web");
     assert_eq!(h.state().session.view.mode, wordcraft_layout::ViewMode::Web);
-    h.get_by_role_and_label(Role::Button, "Print Layout").click();
+    click_lowest_button(&h, "Print Layout");
     type_after_click(&mut h, "Print Layout", " print");
     assert_eq!(h.state().session.view.mode, wordcraft_layout::ViewMode::Print);
 
@@ -3564,7 +3605,7 @@ fn clicks_on_ribbon_and_status_bar_chrome_keep_typing_in_the_document() {
     type_after_click(&mut h, "language menu cancelled", " lang");
 
     // Back on Home, a text field still takes the focus: the font size box.
-    h.get_by_role_and_label(Role::Button, "Home").click();
+    h.get_by_role_and_label(Role::Tab, "Home").click();
     type_after_click(&mut h, "Home tab", " home");
     let before = body_text(h.state());
     let size_box =
@@ -6982,7 +7023,8 @@ fn focus_hides_the_ribbon_and_escape_brings_it_back() {
     }
     let shown = |h: &egui_kittest::Harness<WordApp>, label| h.query_by_label(label).is_some();
     assert!(shown(&h, "Ruler"), "the View tab is showing");
-    h.get_by_role_and_label(egui::accesskit::Role::Button, "Focus").click();
+    // The status bar's Focus button (the View tab has one too, #1012).
+    click_lowest_button(&h, "Focus");
     h.step();
     h.step();
     assert!(h.state().session.view.focus_mode);

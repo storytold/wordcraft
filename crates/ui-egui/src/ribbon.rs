@@ -181,7 +181,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                         if share_text {
                             ui.painter().text(pos2(r.min.x + 26.0, r.center().y), Align2::LEFT_CENTER, share, medium(12.0), t.on_accent);
                         }
-                        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, share));
+                        crate::widgets::describe_button(&resp, share, ui.is_enabled(), None);
                         if resp.on_hover_text(tl!("Export a copy to share (PDF, Word document)")).clicked() {
                             let _ = app.run("ui.backstage", json!({"value": true, "page": "export"}));
                         }
@@ -215,61 +215,78 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     ui.add_space(8.0);
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         // The tabs that don't fit go into a » menu at the end of the strip (#897, #2026).
-                        for (i, ((tab, custom), _)) in tabs.iter().zip(&plan.fits).enumerate().filter(|(_, (_, fits))| **fits) {
-                            let (tab, custom) = (tab.as_str(), *custom);
-                            let contextual = !custom && wordcraft_engine::ribbon::CONTEXTUAL_TABS.contains(&tab);
-                            // A custom tab's name is the user's own text: shown as typed.
-                            let shown = if custom { tab } else { tl!(tab) };
-                            let w = plan.widths.get(i).copied().unwrap_or(0.0) - 2.0;
-                            let cut = specs.get(i).is_some_and(|sp| sp.text_w + plan.pad > w + 0.5);
-                            let (r, resp) = ui.allocate_exact_size(vec2(w, 30.0), Sense::click());
-                            if app.ui.keytips == crate::keytips::Phase::Tabs {
-                                crate::keytips::record_tab(r, tab, &app.ui.keytip_prefix, &mut app.keytip_rects);
-                            } else if app.ui.keytips == crate::keytips::Phase::Legacy {
-                                // Every tab: they only place the legacy keys' hint (#1697).
-                                crate::keytips::record_tab(r, tab, "", &mut app.keytip_rects);
+                        // The tabs are a tab list to screen readers (#1012).
+                        ui.scope(|ui| {
+                            ui.ctx().accesskit_node_builder(ui.unique_id(), |n| n.set_role(egui::accesskit::Role::TabList));
+                            for (i, ((tab, custom), _)) in tabs.iter().zip(&plan.fits).enumerate().filter(|(_, (_, fits))| **fits) {
+                                let (tab, custom) = (tab.as_str(), *custom);
+                                let contextual = !custom && wordcraft_engine::ribbon::CONTEXTUAL_TABS.contains(&tab);
+                                // A custom tab's name is the user's own text: shown as typed.
+                                let shown = if custom { tab } else { tl!(tab) };
+                                let w = plan.widths.get(i).copied().unwrap_or(0.0) - 2.0;
+                                let cut = specs.get(i).is_some_and(|sp| sp.text_w + plan.pad > w + 0.5);
+                                let (r, resp) = ui.allocate_exact_size(vec2(w, 30.0), Sense::click());
+                                if app.ui.keytips == crate::keytips::Phase::Tabs {
+                                    crate::keytips::record_tab(r, tab, &app.ui.keytip_prefix, &mut app.keytip_rects);
+                                } else if app.ui.keytips == crate::keytips::Phase::Legacy {
+                                    // Every tab: they only place the legacy keys' hint (#1697).
+                                    crate::keytips::record_tab(r, tab, "", &mut app.keytip_rects);
+                                }
+                                let active = app.ui.tab == tab && !app.ui.backstage;
+                                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, shown));
+                                let keytips = app.ui.keytips == crate::keytips::Phase::Tabs;
+                                ui.ctx().accesskit_node_builder(resp.id, |n| {
+                                    n.set_role(egui::accesskit::Role::Tab);
+                                    n.set_selected(active);
+                                    let letter = crate::keytips::tab_letter(tab);
+                                    if keytips && !letter.is_empty() {
+                                        n.set_access_key(letter);
+                                    }
+                                });
+                                // Alt or F10 puts the keyboard on the active tab.
+                                if active {
+                                    crate::keytips::take_focus(ui.ctx(), &resp, crate::keytips::Phase::Tabs);
+                                }
+                                if resp.hovered() && !active {
+                                    ui.painter().rect_filled(r.shrink2(vec2(0.0, 4.0)), 4.0, t.hover);
+                                }
+                                let color = if contextual || active { t.accent_text } else { t.text };
+                                if cut {
+                                    let mut job = egui::text::LayoutJob::single_section(
+                                        shown.to_string(),
+                                        egui::text::TextFormat::simple(if active { semibold(12.5) } else { medium(12.5) }, color),
+                                    );
+                                    job.wrap = egui::text::TextWrapping {
+                                        max_width: (w - plan.pad).max(1.0),
+                                        max_rows: 1,
+                                        break_anywhere: true,
+                                        overflow_character: Some('…'),
+                                    };
+                                    let galley = ui.painter().layout_job(job);
+                                    ui.painter().galley(r.center() - galley.size() / 2.0, galley, color);
+                                } else {
+                                    ui.painter().text(
+                                        r.center(),
+                                        Align2::CENTER_CENTER,
+                                        shown,
+                                        if active { semibold(12.5) } else { medium(12.5) },
+                                        color,
+                                    );
+                                }
+                                let resp = if cut { resp.on_hover_text(shown) } else { resp };
+                                if active {
+                                    let u = Rect::from_center_size(pos2(r.center().x, r.max.y - 2.0), vec2(w - 16.0, 3.0));
+                                    ui.painter().rect_filled(u, 2.0, t.accent);
+                                }
+                                if resp.clicked() {
+                                    let _ = app.run("ui.tab", json!({"tab": tab}));
+                                }
+                                if resp.double_clicked() && tab != "File" {
+                                    let _ = app.run("ui.collapseRibbon", json!({}));
+                                }
+                                resp.context_menu(|ui| crate::widgets::customize_menu_items(ui, app));
                             }
-                            let active = app.ui.tab == tab && !app.ui.backstage;
-                            resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, active, shown));
-                            if resp.hovered() && !active {
-                                ui.painter().rect_filled(r.shrink2(vec2(0.0, 4.0)), 4.0, t.hover);
-                            }
-                            let color = if contextual || active { t.accent_text } else { t.text };
-                            if cut {
-                                let mut job = egui::text::LayoutJob::single_section(
-                                    shown.to_string(),
-                                    egui::text::TextFormat::simple(if active { semibold(12.5) } else { medium(12.5) }, color),
-                                );
-                                job.wrap = egui::text::TextWrapping {
-                                    max_width: (w - plan.pad).max(1.0),
-                                    max_rows: 1,
-                                    break_anywhere: true,
-                                    overflow_character: Some('…'),
-                                };
-                                let galley = ui.painter().layout_job(job);
-                                ui.painter().galley(r.center() - galley.size() / 2.0, galley, color);
-                            } else {
-                                ui.painter().text(
-                                    r.center(),
-                                    Align2::CENTER_CENTER,
-                                    shown,
-                                    if active { semibold(12.5) } else { medium(12.5) },
-                                    color,
-                                );
-                            }
-                            let resp = if cut { resp.on_hover_text(shown) } else { resp };
-                            if active {
-                                let u = Rect::from_center_size(pos2(r.center().x, r.max.y - 2.0), vec2(w - 16.0, 3.0));
-                                ui.painter().rect_filled(u, 2.0, t.accent);
-                            }
-                            if resp.clicked() {
-                                let _ = app.run("ui.tab", json!({"tab": tab}));
-                            }
-                            if resp.double_clicked() && tab != "File" {
-                                let _ = app.run("ui.collapseRibbon", json!({}));
-                            }
-                            resp.context_menu(|ui| crate::widgets::customize_menu_items(ui, app));
-                        }
+                        });
                         let left_out: Vec<(&str, &str)> = tabs
                             .iter()
                             .zip(&labels)
@@ -293,7 +310,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                             );
                             // "»" means nothing read aloud: the button says what it holds.
                             let more = tl!("More tabs");
-                            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, more));
+                            crate::widgets::describe_button(&resp, more, true, None);
+                            crate::widgets::opens_menu(&resp);
                             let resp = resp.on_hover_text(more);
                             egui::Popup::menu(&resp).show(|ui| {
                                 for (tab, shown) in left_out {
@@ -324,6 +342,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 ui.disable();
             }
             let bg = ui.interact(ui.max_rect(), ui.scope_id().with("ribbon_background"), Sense::click());
+            // Only a right-click target: nothing for a screen reader to name.
+            ui.ctx().accesskit_node_builder(bg.id, |n| n.set_hidden());
             bg.context_menu(|ui| crate::widgets::customize_menu_items(ui, app));
             let entry = user_tabs.iter().find(|e| e.name == app.ui.tab);
             crate::ribbon_fit::begin(ui.ctx(), &app.ui.tab, ui.available_width() - 4.0);
@@ -344,29 +364,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                         Some(e) if e.custom => return custom_groups(app, ui, &e.groups),
                         _ => {}
                     }
-                    match app.ui.tab.as_str() {
-                        "Home" => home(app, ui),
-                        "Insert" => insert(app, ui),
-                        "Draw" => draw(app, ui),
-                        "Design" => design(app, ui),
-                        "Layout" => layout(app, ui),
-                        "References" => references(app, ui),
-                        "Mailings" => mailings(app, ui),
-                        "Review" => review(app, ui),
-                        "View" => view(app, ui),
-                        "Developer" => developer(app, ui),
-                        "Zotero" => zotero(app, ui),
-                        "Help" => help(app, ui),
-                        "Table Design" => table_design(app, ui),
-                        "Table Layout" => table_layout(app, ui),
-                        "Equation" if app.session.math.is_some() => crate::equation_tab::show(app, ui),
-                        "Picture Format" => picture_format(app, ui),
-                        "Shape Format" => shape_format(app, ui),
-                        "SmartArt Design" => smart_art_design(app, ui),
-                        "Outlining" => outlining(app, ui),
-                        "Chart Design" => chart_design(app, ui),
-                        _ => home(app, ui),
-                    }
+                    tab_content(app, ui);
                     if let Some(e) = entry {
                         custom_groups(app, ui, &e.groups);
                     }
@@ -400,6 +398,33 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 ui.ctx().request_repaint();
             }
         });
+}
+
+/// The active tab's groups (built-in and contextual tabs; custom groups are added after).
+fn tab_content(app: &mut WordApp, ui: &mut Ui) {
+    match app.ui.tab.as_str() {
+        "Home" => home(app, ui),
+        "Insert" => insert(app, ui),
+        "Draw" => draw(app, ui),
+        "Design" => design(app, ui),
+        "Layout" => layout(app, ui),
+        "References" => references(app, ui),
+        "Mailings" => mailings(app, ui),
+        "Review" => review(app, ui),
+        "View" => view(app, ui),
+        "Developer" => developer(app, ui),
+        "Zotero" => zotero(app, ui),
+        "Help" => help(app, ui),
+        "Table Design" => table_design(app, ui),
+        "Table Layout" => table_layout(app, ui),
+        "Equation" if app.session.math.is_some() => crate::equation_tab::show(app, ui),
+        "Picture Format" => picture_format(app, ui),
+        "Shape Format" => shape_format(app, ui),
+        "SmartArt Design" => smart_art_design(app, ui),
+        "Outlining" => outlining(app, ui),
+        "Chart Design" => chart_design(app, ui),
+        _ => home(app, ui),
+    }
 }
 
 #[cfg(test)]

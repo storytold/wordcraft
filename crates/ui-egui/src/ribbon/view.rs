@@ -54,14 +54,21 @@ pub(super) fn view(app: &mut WordApp, ui: &mut Ui) {
             small(ui, app, "zoomOut", Some("Zoom Out"), "Zoom Out", crate::widgets::ButtonAction::new("view.zoomOut", json!({}), false));
         });
         stack(ui, |ui| {
-            small(ui, app, "onePage", Some("One Page"), "One Page", crate::widgets::ButtonAction::new("view.onePage", json!({}), v.fit == "onePage"));
+            small(
+                ui,
+                app,
+                "onePage",
+                Some("One Page"),
+                "One Page",
+                crate::widgets::ButtonAction::toggle("view.onePage", json!({}), v.fit == "onePage"),
+            );
             small(
                 ui,
                 app,
                 "multiplePages",
                 Some("Multiple Pages"),
                 "Multiple Pages",
-                crate::widgets::ButtonAction::new("view.multiplePages", json!({}), v.multi_page),
+                crate::widgets::ButtonAction::toggle("view.multiplePages", json!({}), v.multi_page),
             );
             small(
                 ui,
@@ -69,7 +76,7 @@ pub(super) fn view(app: &mut WordApp, ui: &mut Ui) {
                 "pageWidth",
                 Some("Page Width"),
                 "Page Width",
-                crate::widgets::ButtonAction::new("view.pageWidth", json!({}), v.fit == "pageWidth"),
+                crate::widgets::ButtonAction::toggle("view.pageWidth", json!({}), v.fit == "pageWidth"),
             );
         });
     });
@@ -99,13 +106,7 @@ pub(super) fn view(app: &mut WordApp, ui: &mut Ui) {
             crate::widgets::MenuButtonOptions::new("switchWindows", Some("Switch\nWindows"), "Switch Windows", true, "view.switchWindows"),
             crate::documents::switch_windows_menu,
         );
-        // The Full Screen button carries its name for assistive technology (and for the
-        // regression test that clicks it): big buttons are otherwise drawn unlabeled. Its
-        // enabled state is the command's own, as every other ribbon control reports: the
-        // browser has no full screen to ask for, and says so (#662).
-        let on = crate::widgets::enabled(app, "view.fullScreen");
-        let resp = big_toggle(ui, app, "fullScreen", "Full\nScreen", "view.fullScreen", v.full_screen);
-        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, on, v.full_screen, "Full Screen"));
+        big_toggle(ui, app, "fullScreen", "Full\nScreen", "view.fullScreen", v.full_screen);
     });
     group(ui, "Macros", None, app, |ui, app| {
         big(ui, app, "macros", "Macros", "tools.macros", json!({}), false);

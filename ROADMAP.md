@@ -204,6 +204,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 | Date | What landed |
 | 2026-10-17 | Password-protected Word files from Word 2007 (Standard encryption: AES-128/192/256, SHA-1) open with their password, also when named `.doc` or `.dot`; a wrong or missing password is reported as for newer files. Word 97-2003 files with an AES header, which the public spec doesn't define, are refused with a clear message (gap 9) |
 | 2026-10-23 | A command that changes nothing is not an edit: it adds no undo step, marks no unsaved changes and forces no relayout, so the redo stack survives it and five hundred of them can no longer push the user's own edits out of the undo history. |
+| 2026-10-15 | Screen readers hear the ribbon (#1012): every control on every tab, the contextual tabs and the Quick Access Toolbar has a name, a role and its disabled, on/off or opens-a-menu state; tabs are a tab list with the active tab selected. Keytips move the keyboard focus (Alt/F10 the active tab, a tab letter its first command, Escape back a level, then the page) and expose their letters as access keys. Tested headlessly; no NVDA, VoiceOver or Orca run yet. |
 | 2026-10-23 | Interface translations come from storytold/craft-i18n, shared with the other Crafting Apps: the catalogs are embedded at build time from the commit in `craft-i18n.rev` and looked up through craft-libs' `craft-i18n` crate; `crates/ui-egui/src/i18n/*.tsv` are gone (translations now go to craft-i18n). Strings other apps already translate show translated; a build without `CRAFT_I18N_DIR` is English only |
 | 2026-10-25 | #4085 mark review: whole-cell and ordinary highlight targets include their selected paragraph marks; empty, inherited and partial-column controls added. |
 | 2026-10-25 | #4085 review: highlight toggling checks the full target with constant resolved-run storage; a different colour after 10,000 runs prevents clearing. |
@@ -671,6 +672,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-23 | trivial | Progress log: a relationship the markup names without the prefix is read as it wrote (#3411 follow-up) |
 | 2026-10-21 | trivial | Progress log: a document with many relationships opens in the time its part takes (#3411) |
 | 2026-10-23 | trivial | Progress log: an empty paragraph with a hidden mark draws no list number (#3982) |
+| 2026-10-15 | trivial | Progress log: the ribbon and keytips described to screen readers (#1012) |
 | 2026-10-22 | minor | Progress log: Spanish proofing (#3360, #3553) |
 | 2026-10-23 | trivial | Progress log: Update Table keeps a two-column TOC from a localized Word in its columns (#3889) |
 | 2026-10-22 | minor | Compare's new and revised untitled results clear the previous document's version snapshots; a rejected protected comparison or mailing result preserves the snapshots and file identity. |

@@ -8,7 +8,8 @@ fn format_painter_button(ui: &mut Ui, app: &mut WordApp) {
     let sticky = matches!(app.session.painter, Some((_, _, true)));
     let armed = app.session.painter.is_some();
     let resp =
-        small(ui, app, "painter", Some("Format"), "Format Painter", crate::widgets::ButtonAction::new("edit.formatPainter", json!({}), sticky));
+        small(ui, app, "painter", Some("Format"), "Format Painter", crate::widgets::ButtonAction::toggle("edit.formatPainter", json!({}), sticky));
+    crate::widgets::describe_button(&resp, tl!("Format Painter"), ui.is_enabled(), Some(armed));
     if resp.double_clicked() {
         painter_double_click(app);
     } else if armed && !sticky {
@@ -98,28 +99,49 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
             });
             ui.add_space(3.0);
             crate::widgets::row(ui, |ui| {
-                small(ui, app, "bold", None, "Bold", crate::widgets::ButtonAction::new("format.bold", json!({}), flag("bold")));
-                small(ui, app, "italic", None, "Italic", crate::widgets::ButtonAction::new("format.italic", json!({}), flag("italic")));
+                small(ui, app, "bold", None, "Bold", crate::widgets::ButtonAction::toggle("format.bold", json!({}), flag("bold")));
+                small(ui, app, "italic", None, "Italic", crate::widgets::ButtonAction::toggle("format.italic", json!({}), flag("italic")));
                 split(
                     ui,
                     app,
                     "underline",
                     "Underline",
-                    crate::widgets::ButtonAction::new("format.underline", json!({}), flag("underline")),
+                    crate::widgets::ButtonAction::toggle("format.underline", json!({}), flag("underline")),
                     None,
                     underline_menu,
                 );
-                small(ui, app, "strike", None, "Strikethrough", crate::widgets::ButtonAction::new("format.strikethrough", json!({}), flag("strike")));
-                small(ui, app, "subscript", None, "Subscript", crate::widgets::ButtonAction::new("format.subscript", json!({}), flag("subscript")));
+                small(
+                    ui,
+                    app,
+                    "strike",
+                    None,
+                    "Strikethrough",
+                    crate::widgets::ButtonAction::toggle("format.strikethrough", json!({}), flag("strike")),
+                );
+                small(
+                    ui,
+                    app,
+                    "subscript",
+                    None,
+                    "Subscript",
+                    crate::widgets::ButtonAction::toggle("format.subscript", json!({}), flag("subscript")),
+                );
                 small(
                     ui,
                     app,
                     "superscript",
                     None,
                     "Superscript",
-                    crate::widgets::ButtonAction::new("format.superscript", json!({}), flag("superscript")),
+                    crate::widgets::ButtonAction::toggle("format.superscript", json!({}), flag("superscript")),
                 );
-                small(ui, app, "charborder", None, "Character Border", crate::widgets::ButtonAction::new("format.border", json!({}), flag("border")));
+                small(
+                    ui,
+                    app,
+                    "charborder",
+                    None,
+                    "Character Border",
+                    crate::widgets::ButtonAction::toggle("format.border", json!({}), flag("border")),
+                );
                 small(ui, app, "enclose", None, "Enclose Characters", crate::widgets::ButtonAction::new("format.enclose", json!({}), false));
                 ui.add_space(4.0);
                 menu_button(ui, app, crate::widgets::MenuButtonOptions::new("effects", None, "Text Effects and Typography", false, ""), |ui, app| {
@@ -174,33 +196,49 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
         let lists = wordcraft_engine::cmd::para::list_buttons(&app.session.doc, rp.as_ref().and_then(|r| r.numbering));
         stack(ui, |ui| {
             crate::widgets::row(ui, |ui| {
-                split(ui, app, "bullets", "Bullets", crate::widgets::ButtonAction::new("para.bullets", json!({}), lists.bullets), None, |ui, app| {
-                    ui.label(egui::RichText::new(tl!("Bullet Library")).small().weak());
-                    ui.horizontal(|ui| {
-                        for c in ["•", "○", "▪", "◆", "➢", "✓", "–"] {
-                            // The interface fonts have no ➢, so its tile draws the arrowhead.
-                            let label = if c == "➢" { " " } else { c };
-                            let resp = ui.button(egui::RichText::new(label).size(16.0));
-                            if c == "➢" {
-                                let m = resp.rect.center();
-                                let pts = [(-4.0, -5.0), (5.0, 0.0), (-4.0, 5.0), (-1.5, 0.0)].map(|(x, y)| m + vec2(x, y));
-                                ui.painter().add(egui::Shape::convex_polygon(vec![pts[0], pts[1], pts[3]], Tokens::get(ui.ctx()).text, Stroke::NONE));
-                                ui.painter().add(egui::Shape::convex_polygon(vec![pts[3], pts[1], pts[2]], Tokens::get(ui.ctx()).text, Stroke::NONE));
+                split(
+                    ui,
+                    app,
+                    "bullets",
+                    "Bullets",
+                    crate::widgets::ButtonAction::toggle("para.bullets", json!({}), lists.bullets),
+                    None,
+                    |ui, app| {
+                        ui.label(egui::RichText::new(tl!("Bullet Library")).small().weak());
+                        ui.horizontal(|ui| {
+                            for c in ["•", "○", "▪", "◆", "➢", "✓", "–"] {
+                                // The interface fonts have no ➢, so its tile draws the arrowhead.
+                                let label = if c == "➢" { " " } else { c };
+                                let resp = ui.button(egui::RichText::new(label).size(16.0));
+                                if c == "➢" {
+                                    let m = resp.rect.center();
+                                    let pts = [(-4.0, -5.0), (5.0, 0.0), (-4.0, 5.0), (-1.5, 0.0)].map(|(x, y)| m + vec2(x, y));
+                                    ui.painter().add(egui::Shape::convex_polygon(
+                                        vec![pts[0], pts[1], pts[3]],
+                                        Tokens::get(ui.ctx()).text,
+                                        Stroke::NONE,
+                                    ));
+                                    ui.painter().add(egui::Shape::convex_polygon(
+                                        vec![pts[3], pts[1], pts[2]],
+                                        Tokens::get(ui.ctx()).text,
+                                        Stroke::NONE,
+                                    ));
+                                }
+                                if resp.clicked() {
+                                    let _ = app.run("para.bullets", json!({"kind": c}));
+                                    ui.close();
+                                }
                             }
-                            if resp.clicked() {
-                                let _ = app.run("para.bullets", json!({"kind": c}));
-                                ui.close();
-                            }
-                        }
-                    });
-                    mi(ui, app, "None", "para.bullets", json!({"off": true}));
-                });
+                        });
+                        mi(ui, app, "None", "para.bullets", json!({"off": true}));
+                    },
+                );
                 split(
                     ui,
                     app,
                     "numbering",
                     "Numbering",
-                    crate::widgets::ButtonAction::new("para.numbering", json!({}), lists.numbering),
+                    crate::widgets::ButtonAction::toggle("para.numbering", json!({}), lists.numbering),
                     None,
                     |ui, app| {
                         for (l, k) in [
@@ -223,7 +261,7 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
                     app,
                     "multilevel",
                     "Multilevel List",
-                    crate::widgets::ButtonAction::new("para.multilevel", json!({}), lists.multilevel),
+                    crate::widgets::ButtonAction::toggle("para.multilevel", json!({}), lists.multilevel),
                     None,
                     |ui, app| {
                         mi(ui, app, "1. 1.1. 1.1.1.", "para.multilevel", json!({"kind": "legal"}));
@@ -259,18 +297,32 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
                 ui.add_space(4.0);
                 small(ui, app, "sort", None, "Sort", crate::widgets::ButtonAction::new("para.sort", json!({}), false));
                 let marks = app.session.view.marks;
-                small(ui, app, "pilcrow", None, "Show/Hide ¶", crate::widgets::ButtonAction::new("view.marks", json!({}), marks));
+                small(ui, app, "pilcrow", None, "Show/Hide ¶", crate::widgets::ButtonAction::toggle("view.marks", json!({}), marks));
             });
             ui.add_space(3.0);
             crate::widgets::row(ui, |ui| {
                 use wordcraft_doc::Align as A;
-                small(ui, app, "alignLeft", None, "Align Left", crate::widgets::ButtonAction::new("para.alignLeft", json!({}), align == A::Left));
-                small(ui, app, "alignCenter", None, "Center", crate::widgets::ButtonAction::new("para.alignCenter", json!({}), align == A::Center));
-                small(ui, app, "alignRight", None, "Align Right", crate::widgets::ButtonAction::new("para.alignRight", json!({}), align == A::Right));
-                small(ui, app, "justify", None, "Justify", crate::widgets::ButtonAction::new("para.justify", json!({}), align == A::Justify));
+                small(ui, app, "alignLeft", None, "Align Left", crate::widgets::ButtonAction::toggle("para.alignLeft", json!({}), align == A::Left));
+                small(
+                    ui,
+                    app,
+                    "alignCenter",
+                    None,
+                    "Center",
+                    crate::widgets::ButtonAction::toggle("para.alignCenter", json!({}), align == A::Center),
+                );
+                small(
+                    ui,
+                    app,
+                    "alignRight",
+                    None,
+                    "Align Right",
+                    crate::widgets::ButtonAction::toggle("para.alignRight", json!({}), align == A::Right),
+                );
+                small(ui, app, "justify", None, "Justify", crate::widgets::ButtonAction::toggle("para.justify", json!({}), align == A::Justify));
                 ui.add_space(4.0);
-                small(ui, app, "textLtr", None, "Left-to-Right Text Direction", crate::widgets::ButtonAction::new("para.ltr", json!({}), !rtl));
-                small(ui, app, "textRtl", None, "Right-to-Left Text Direction", crate::widgets::ButtonAction::new("para.rtl", json!({}), rtl));
+                small(ui, app, "textLtr", None, "Left-to-Right Text Direction", crate::widgets::ButtonAction::toggle("para.ltr", json!({}), !rtl));
+                small(ui, app, "textRtl", None, "Right-to-Left Text Direction", crate::widgets::ButtonAction::toggle("para.rtl", json!({}), rtl));
                 ui.add_space(4.0);
                 menu_button(
                     ui,

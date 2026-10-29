@@ -40,7 +40,9 @@ pub(super) fn table_design(app: &mut WordApp, ui: &mut Ui) {
         egui::ScrollArea::horizontal().max_width(420.0).show(ui, |ui| {
             ui.horizontal(|ui| {
                 for (_, id, name) in styles {
-                    if crate::previews::table_style_tile(ui, app, &id).on_hover_text(name).clicked() {
+                    let tile = crate::previews::table_style_tile(ui, app, &id);
+                    crate::widgets::describe_button(&tile, &name, ui.is_enabled(), None);
+                    if tile.on_hover_text(name).clicked() {
                         let _ = app.run("table.style", json!({"style": id}));
                     }
                 }
@@ -147,9 +149,10 @@ fn cell_size_boxes(ui: &mut Ui, app: &mut WordApp) {
     let boxed = |ui: &mut Ui, label: &str, pt: f32| -> Option<(f32, bool)> {
         let mut out = None;
         crate::widgets::row(ui, |ui| {
-            ui.add_sized(vec2(48.0, 18.0), egui::Label::new(egui::RichText::new(tl!(label)).small()));
+            let label = ui.add_sized(vec2(48.0, 18.0), egui::Label::new(egui::RichText::new(tl!(label)).small()));
             let mut v = pt / k;
             let r = ui.add_sized(vec2(72.0, 18.0), egui::DragValue::new(&mut v).speed(0.01).range(0.02..=22.0).measure(unit).max_decimals(2));
+            crate::widgets::labelled_by(&r, &[&label]);
             if r.changed() {
                 out = Some((v * k, r.dragged() && !r.drag_started()));
             }
@@ -194,7 +197,7 @@ pub(super) fn table_layout(app: &mut WordApp, ui: &mut Ui) {
                 "gridlines",
                 Some("View Gridlines"),
                 "View Gridlines",
-                crate::widgets::ButtonAction::new("table.viewGridlines", json!({}), g),
+                crate::widgets::ButtonAction::toggle("table.viewGridlines", json!({}), g),
             );
             small(
                 ui,

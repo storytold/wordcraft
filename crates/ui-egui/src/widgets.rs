@@ -13,8 +13,8 @@ mod icon_buttons;
 mod tooltip;
 
 pub use buttons::{
-    BIG_ICON_Y, BIG_LABEL_Y, ButtonAction, CONTENT_H, DROPDOWN, LABEL_H, LABEL_LINE_H, LABEL_PITCH, MenuButtonOptions, big, big_toggle, enabled,
-    label_line, menu_button, menu_enabled, small, split,
+    BIG_ICON_Y, BIG_LABEL_Y, ButtonAction, CONTENT_H, DROPDOWN, LABEL_H, LABEL_LINE_H, LABEL_PITCH, MenuButtonOptions, big, big_toggle,
+    big_toggle_with, enabled, label_line, menu_button, menu_enabled, small, split,
 };
 pub(crate) use buttons::{bg, run_from_ribbon};
 pub(crate) use combo::swatch;
@@ -32,6 +32,7 @@ pub use icon_buttons::{
 use tooltip::show_hint;
 #[cfg(test)]
 pub(crate) use tooltip::tooltip_lines;
+pub(crate) use tooltip::{describe_button, labelled_by, opens_menu};
 pub use tooltip::{key_text, shortcut_text};
 // #653: a two-line label ends inside the content, above the group title row.
 const _: () = assert!(BIG_LABEL_Y + LABEL_PITCH + LABEL_LINE_H <= CONTENT_H);

@@ -137,11 +137,12 @@ pub(super) fn shape_format(app: &mut WordApp, ui: &mut Ui) {
         stack(ui, |ui| {
             crate::widgets::row(ui, |ui| {
                 for (label, key, v0) in [("W:", "width", w0), ("H:", "height", h0)] {
-                    ui.label(egui::RichText::new(tl!(label)).small());
+                    let label = ui.label(egui::RichText::new(tl!(label)).small());
                     let mut v = v0;
                     // `picture.size`'s own range; a size outside it (a thin line) is shown as it
                     // is (clamped, egui would report a change and resize the shape unasked).
                     let r = ui.add(egui::DragValue::new(&mut v).speed(1.0).range(1.0..=4000.0).clamp_existing_to_range(false).suffix(" pt"));
+                    crate::widgets::labelled_by(&r, &[&label]);
                     if r.changed() && v != v0 {
                         if r.dragged() && !r.drag_started() {
                             app.session.join_next_undo();
@@ -201,7 +202,7 @@ fn shape_text_group(app: &mut WordApp, ui: &mut Ui) {
                     "textBoxLink",
                     Some("Create Link"),
                     "Create Link",
-                    crate::widgets::ButtonAction::new("ui.linkTextBox", json!({}), waiting),
+                    crate::widgets::ButtonAction::toggle("ui.linkTextBox", json!({}), waiting),
                 );
             }
         });

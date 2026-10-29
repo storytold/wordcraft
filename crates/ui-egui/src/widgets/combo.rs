@@ -1,5 +1,5 @@
 use super::buttons::DROPDOWN;
-use super::tooltip::{keytip_badge, show_hint};
+use super::tooltip::{describe_button, keytip_badge, opens_menu, show_hint};
 use super::{Color32, CornerRadius, Rect, Response, Sense, Stroke, Tokens, Ui, icons, pos2, regular, vec2};
 
 /// Word's standard colour grid (theme colours + tints, standard colours). Returns a picked hex.
@@ -204,6 +204,18 @@ struct ComboSearch {
     view_h: f32,
 }
 
+/// The name screen readers hear for a combo box, by its id (its label is drawn elsewhere, or
+/// not at all).
+fn combo_name(id: &str) -> Option<&'static str> {
+    Some(match id {
+        "font" | "mini_font" | "fontdlg_font" | "tstyle_font" | "ms_font" | "symbol_font" => tl!("Font"),
+        "size" | "mini_size" => tl!("Font Size"),
+        "outlineLevel" => tl!("Outline Level"),
+        "outlineShowLevel" => tl!("Show Level"),
+        _ => return None,
+    })
+}
+
 /// Draws an editable or searchable combo box: keeps temporary text and search state, supports
 /// keyboard selection, popup rows with recent and preview sections, an arrow and hint, and
 /// returns the chosen or committed text.
@@ -243,12 +255,11 @@ fn combo_impl(ui: &mut Ui, options: ComboOptions<'_>) -> Option<String> {
         // The arrow's box is painted here, under the field, once its size is known.
         let arrow_bg = ui.painter().add(egui::Shape::Noop);
         let resp = ui.add(te);
-        // The field says what it is: without a name a screen reader has only "edit" to say
-        // (#3172). The arrow says whose options it opens, as the split buttons' arrow does.
-        if !tip.is_empty() {
-            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, ui.is_enabled(), tip));
+        keytip_badge(ui, &resp, "combo", id);
+        let name = combo_name(id).or_else(|| (!tip.is_empty()).then_some(tip));
+        if let Some(name) = name {
+            ui.ctx().accesskit_node_builder(resp.id, |n| n.set_label(name));
         }
-        keytip_badge(ui, resp.rect, "combo", id);
         focused = resp.has_focus();
         let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         let mut reveal = step != 0;
@@ -300,10 +311,11 @@ fn combo_impl(ui: &mut Ui, options: ComboOptions<'_>) -> Option<String> {
             out = Some(text.clone());
         }
         let (ar, aresp) = ui.allocate_exact_size(vec2(16.0, resp.rect.height()), Sense::click());
-        if !tip.is_empty() {
-            let arrow_name = crate::i18n::fmt(tl!("{name} options"), &[("name", tip)]);
-            aresp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &arrow_name));
+        if let Some(name) = name {
+            let arrow_name = crate::i18n::fmt(tl!("{name} options"), &[("name", name)]);
+            describe_button(&aresp, &arrow_name, ui.is_enabled(), None);
         }
+        opens_menu(&aresp);
         // It reaches one border width under the field, so the field's right border is the only line
         // between them: two borders side by side read as a double-width divider.
         let ar_radius = CornerRadius { nw: 0, sw: 0, ne: r.ne, se: r.se };

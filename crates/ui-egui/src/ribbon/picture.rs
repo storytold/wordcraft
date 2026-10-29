@@ -71,6 +71,7 @@ pub(super) fn picture_format(app: &mut WordApp, ui: &mut Ui) {
                 let key = egui::Id::unique(("picture_transparency", media, off));
                 let mut v = ui.data(|d| d.get_temp::<f64>(key)).unwrap_or(0.0);
                 let r = ui.add(egui::DragValue::new(&mut v).speed(1.0).range(0.0..=100.0).suffix("%"));
+                r.ctx.accesskit_node_builder(r.id, |n| n.set_label(tl!("Picture transparency")));
                 if r.changed() {
                     ui.data_mut(|d| d.insert_temp(key, v));
                     if r.dragged() && !r.drag_started() {
@@ -167,11 +168,12 @@ pub(super) fn picture_format(app: &mut WordApp, ui: &mut Ui) {
             ui.add_space(2.0);
             crate::widgets::row(ui, |ui| {
                 let cropping = crate::crop::active(app).is_some();
-                small(ui, app, "crop", Some("Crop"), "Crop", crate::widgets::ButtonAction::new("ui.crop", json!({}), cropping));
+                small(ui, app, "crop", Some("Crop"), "Crop", crate::widgets::ButtonAction::toggle("ui.crop", json!({}), cropping));
                 for (i, side) in ["L", "T", "R", "B"].iter().enumerate() {
-                    ui.label(egui::RichText::new(tl!(side)).small());
+                    let label = ui.label(egui::RichText::new(tl!(side)).small());
                     let mut v = crop0[i] * 100.0;
                     let r = ui.add(egui::DragValue::new(&mut v).speed(0.5).range(0.0..=95.0).suffix("%"));
+                    crate::widgets::labelled_by(&r, &[&label]);
                     if r.changed() {
                         if r.dragged() && !r.drag_started() {
                             app.session.join_next_undo();
@@ -190,12 +192,13 @@ pub(super) fn picture_format(app: &mut WordApp, ui: &mut Ui) {
             });
             ui.add_space(2.0);
             crate::widgets::row(ui, |ui| {
-                ui.label(egui::RichText::new(tl!("Alt:")).small());
+                let label = ui.label(egui::RichText::new(tl!("Alt:")).small());
                 // Frame-local buffers lose keystrokes; keep the draft in egui temp memory keyed
                 // by picture (same pattern as the comment editor in panes.rs).
                 let key = egui::Id::unique(("picture_alt", media.clone(), off));
                 let mut alt = ui.data(|d| d.get_temp::<String>(key)).unwrap_or_else(|| alt0.clone());
                 let r = ui.add(egui::TextEdit::singleline(&mut alt).desired_width(120.0).hint_text(tl!("Alt text")));
+                crate::widgets::labelled_by(&r, &[&label]);
                 if r.changed() {
                     ui.data_mut(|d| d.insert_temp(key, alt.clone()));
                 }

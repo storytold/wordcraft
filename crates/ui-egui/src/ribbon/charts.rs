@@ -22,7 +22,7 @@ pub(super) fn smart_art_design(app: &mut WordApp, ui: &mut Ui) {
                 "textPane",
                 Some("Text Pane"),
                 "Text Pane",
-                crate::widgets::ButtonAction::new("smartArt.textPane", json!({}), app.session.view.smart_art_pane),
+                crate::widgets::ButtonAction::toggle("smartArt.textPane", json!({}), app.session.view.smart_art_pane),
             );
         });
     });
@@ -41,6 +41,7 @@ pub(super) fn smart_art_design(app: &mut WordApp, ui: &mut Ui) {
                 };
                 ui.painter().rect(r, 3.0, fill, Stroke::new(1.0, if on { t.accent } else { t.border }), egui::StrokeKind::Inside);
                 crate::dialogs_smart_art::preview(ui.painter(), r.shrink(2.0), layout, g.colors, &theme, t.text_dim);
+                resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, tl!(layout.label())));
                 if resp.on_hover_text(tl!(layout.label())).clicked() && !on {
                     let _ = app.run("smartArt.layout", json!({"layout": layout.id()}));
                 }

@@ -126,7 +126,7 @@ pub(super) fn tooltip(app: &WordApp, resp: Response, label: &str, id: &str) -> R
 
 /// Record a keytip badge over a control's rect when keytips are showing commands. `ui` reaches
 /// the phase and badge list through egui memory, so widgets without `&mut WordApp` can record too.
-pub(super) fn keytip_badge(ui: &Ui, rect: Rect, id: &str, name: &str) {
+pub(super) fn keytip_badge(ui: &Ui, resp: &Response, id: &str, name: &str) {
     if ui.data(|d| d.get_temp::<crate::keytips::Phase>(crate::keytips::phase_id())) != Some(crate::keytips::Phase::Commands) {
         return;
     }
@@ -144,10 +144,40 @@ pub(super) fn keytip_badge(ui: &Ui, rect: Rect, id: &str, name: &str) {
     };
     let letter = ui.data(|d| d.get_temp::<Vec<String>>(crate::keytips::letters_id().with(&tab))).and_then(|l| l.get(i).cloned());
     if let Some(l) = letter {
+        // Screen readers announce the letters as the control's access key (#1012).
+        ui.ctx().accesskit_node_builder(resp.id, |n| n.set_access_key(l.clone()));
         ui.data_mut(|d| {
             let mut v: Vec<(Rect, String)> = d.get_temp::<Vec<(Rect, String)>>(crate::keytips::rects_id()).unwrap_or_default();
-            v.push((rect, l));
+            v.push((resp.rect, l));
             d.insert_temp(crate::keytips::rects_id(), v);
         });
+        // Choosing a tab moves the keyboard focus to its first command (the first to ask while
+        // the focus is pending); never to a combo's text box, which would start editing.
+        if id != "combo" {
+            crate::keytips::take_focus(ui.ctx(), resp, crate::keytips::Phase::Commands);
+        }
     }
+}
+
+/// What a screen reader is told about a drawn ribbon button: its name, whether it can run,
+/// and, for a toggle (`Some`), whether it is on. Free while no screen reader is on.
+pub(crate) fn describe_button(resp: &Response, name: &str, enabled: bool, toggled: Option<bool>) {
+    match toggled {
+        Some(on) => resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, enabled, on, name)),
+        None => resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, name)),
+    }
+}
+
+/// Name a field (a number box, a text box) to screen readers by the labels drawn beside it.
+pub(crate) fn labelled_by(field: &Response, labels: &[&Response]) {
+    field.ctx.accesskit_node_builder(field.id, |n| {
+        for l in labels {
+            n.push_labelled_by(l.id.accesskit_id());
+        }
+    });
+}
+
+/// Tell a screen reader that `resp` opens a menu (drop-down and split-button arrows).
+pub(crate) fn opens_menu(resp: &Response) {
+    resp.ctx.accesskit_node_builder(resp.id, |n| n.set_has_popup(egui::accesskit::HasPopup::Menu));
 }

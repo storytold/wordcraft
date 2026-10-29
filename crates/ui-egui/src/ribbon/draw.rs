@@ -112,7 +112,9 @@ fn gallery_pen(ui: &mut Ui, app: &mut WordApp, i: usize, pen: wordcraft_engine::
         InkTool::Highlighter => "Highlighter",
     });
     let size = crate::i18n::fmt(tl!("{n} pt"), &[("n", &pen.width.to_string())]);
-    let resp = resp.on_hover_text(format!("{kind}: {size}, #{}", pen.color.hex()));
+    let name = format!("{kind}: {size}, #{}", pen.color.hex());
+    crate::widgets::describe_button(&resp, &name, true, Some(active));
+    let resp = resp.on_hover_text(name);
     if resp.clicked() {
         let _ = app.run(pen_command(pen.kind), json!({"color": pen.color.hex(), "width": pen.width}));
     }

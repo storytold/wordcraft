@@ -541,3 +541,39 @@ fn alt_then_q_opens_search() {
     assert_eq!(a.ui.keytips, Phase::Off);
     assert!(matches!(a.dialog, Some(crate::dialogs::Dialog::Commands { .. })), "{:?}", a.dialog.as_ref().map(|d| d.name()));
 }
+
+/// #1012 review: choosing a tab focuses its first command, but never a text field (a combo's
+/// box would start editing): the first button after it takes the focus.
+#[test]
+fn commands_focus_skips_a_text_field() {
+    use egui_kittest::kittest::{By, Queryable};
+    let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).build_ui_state(
+        |ui, app: &mut WordApp| {
+            if app.fonts_frames < 2 {
+                if app.fonts_frames == 0 {
+                    crate::theme::install_fonts(ui.ctx());
+                }
+                app.fonts_frames += 1;
+                return;
+            }
+            ui.ctx().data_mut(|d| {
+                d.insert_temp(phase_id(), Phase::Commands);
+                d.insert_temp(tab_id(), "Home".to_string());
+                d.insert_temp(letters_id().with("Home"), vec!["V".to_string(), "X".to_string()]);
+                d.insert_temp(rects_id(), Vec::<(Rect, String)>::new());
+            });
+            // A combo whose name matches Home's first control, then Cut.
+            let _ = crate::widgets::combo(ui, "Paste", 100.0, "", &[], None);
+            crate::widgets::small(ui, app, "cut", None, "Cut", crate::widgets::ButtonAction::new("edit.cut", serde_json::json!({}), false));
+        },
+        app(),
+    );
+    h.run_steps(3);
+    h.ctx.data_mut(|d| d.insert_temp(focus_pending_id(), Phase::Commands));
+    h.run_steps(2);
+    assert!(h.query(By::new().role(egui::accesskit::Role::TextInput).predicate(|n| n.is_focused())).is_none(), "the box isn't editing");
+    assert!(
+        h.query(By::new().role(egui::accesskit::Role::Button).label("Cut").predicate(|n| n.is_focused())).is_some(),
+        "the first button has the focus"
+    );
+}
