@@ -23,7 +23,7 @@ use wordcraft_doc::{Blocks, Document, PartKind};
 
 use crate::package::{MAX_VBA_RELATED, VBA_PROJECT_PART, VBA_RELATED, rt, zip_entries};
 use crate::xml::{self, W};
-use crate::{DocxError, Flavor, MAX_DOC_VAR_VALUE, MAX_DOC_VARS};
+use crate::{DocxError, Flavor};
 
 mod bibliography;
 mod parts;
