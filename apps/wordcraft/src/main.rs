@@ -27,7 +27,7 @@ mod traffic_lights;
 use wordcraft_engine::Session;
 use wordcraft_ui_egui::{
     Services, UiState, WordApp,
-    window_geometry::{RawWindowState, WindowGeometry, take_rescue},
+    window_geometry::{RawWindowState, WindowGeometry, off_screen_rescue, take_rescue},
 };
 
 /// The app, the restored window geometry (or, with none, the default: no position) until the
@@ -55,6 +55,43 @@ impl eframe::App for App {
         self.0.logic(ctx);
         self.3.show(frame);
         let window = self.4;
+        // A window whose position was saved on a monitor that no longer exists — a
+        // tablet-as-display driver, an unplugged TV or projector — restores into that dead
+        // area: the process lives, the window is nowhere. The size-comparison rescue can't
+        // notice when the dead and the living monitors are the same size, so winit's monitor
+        // list decides: on no monitor at all, the window comes back to the centre of the one
+        // the host reports for it, leaving full screen if it was on the dead one (a
+        // full-screen window cannot be moved).
+        if let Some(native) = frame.winit_window() {
+            let scale = native.scale_factor() as f32;
+            // winit reports monitors in physical pixels of the desktop space the window's outer
+            // rectangle (points) also lives in; the window's own scale converts the two.
+            let monitors: Vec<egui::Rect> = native
+                .available_monitors()
+                .map(|m| {
+                    let p = m.position();
+                    let s = m.size();
+                    egui::Rect::from_min_size(
+                        egui::pos2(p.x as f32 / scale, p.y as f32 / scale),
+                        egui::vec2(s.width as f32 / scale, s.height as f32 / scale),
+                    )
+                })
+                .collect();
+            let current = native.current_monitor().map(|m| {
+                let p = m.position();
+                let s = m.size();
+                egui::Rect::from_min_size(
+                    egui::pos2(p.x as f32 / scale, p.y as f32 / scale),
+                    egui::vec2(s.width as f32 / scale, s.height as f32 / scale),
+                )
+            });
+            if let Some(at) = off_screen_rescue(&window, &monitors, current) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(at));
+                if window.fullscreen == Some(true) {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+                }
+            }
+        }
         // A window that doesn't fit on its screen (the default size on a laptop) shrinks to fit
         // there, so all of the scroll bar can be dragged (#1215). Checked on the frame that first
         // knows the monitor: the off-screen check below takes the pending geometry then.

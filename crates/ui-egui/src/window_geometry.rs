@@ -195,6 +195,29 @@ pub fn take_rescue(pending: &mut Option<WindowGeometry>, window: &RawWindowState
     pending.take()?.rescue_position(window)
 }
 
+/// Where to move a window that is on no monitor at all. `monitors` are the monitor rectangles in
+/// points, in the same global desktop space as `window`'s outer rectangle; `current` is the
+/// monitor the host reports for the window now. A window whose position was saved on a monitor
+/// that no longer exists — a tablet-as-display driver, an unplugged TV or projector — restores
+/// into that dead area: the process lives, the window is nowhere. The monitor-size comparison in
+/// [`WindowGeometry::rescue_position`] can't notice when the dead and the living monitors are the
+/// same size, so this checks the window's rectangle against every monitor there is. A window
+/// that covers area on any monitor stays where it is.
+pub fn off_screen_rescue(window: &RawWindowState, monitors: &[egui::Rect], current: Option<egui::Rect>) -> Option<egui::Pos2> {
+    let outer = window.outer_rect?;
+    let monitor = current?;
+    if monitors.is_empty() {
+        return None;
+    }
+    // Touching an edge covers no area: some part of the window has to be on the monitor.
+    let on_a_monitor = |m: &egui::Rect| m.min.x < outer.max.x && outer.min.x < m.max.x && m.min.y < outer.max.y && outer.min.y < m.max.y;
+    if monitors.iter().any(on_a_monitor) {
+        return None;
+    }
+    let free = monitor.size() - outer.size();
+    Some(egui::pos2(monitor.min.x + (free.x / 2.0).max(0.0), monitor.min.y + (free.y / 2.0).max(0.0)))
+}
+
 /// The window size to ask for when a caller (the control channel's `ui.resize`) wants `size`:
 /// `None` unless both sides are positive and finite. Otherwise at least [`MIN_SIZE`], the desktop
 /// app's minimum, and at most `max_side` points (the largest texture the GPU draws, which the
@@ -433,6 +456,51 @@ mod tests {
         assert_eq!(requested_size(egui::vec2(1200.0, 300.0), 600.0), Some(egui::vec2(600.0, 480.0)));
         assert_eq!(requested_size(egui::vec2(1200.0, 300.0), 100.0), Some(egui::vec2(100.0, 100.0)));
         assert_eq!(requested_size(egui::vec2(1200.0, 800.0), 0.0), None);
+    }
+
+    /// A window restored onto a monitor that no longer exists — the tablet-as-display or
+    /// unplugged TV its position was saved on — is brought back, centred on the monitor the
+    /// host reports now. A window that covers area on any monitor stays where it is.
+    #[test]
+    fn a_window_on_no_monitor_is_brought_back_to_one() {
+        let primary = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1920.0, 1080.0));
+        // The observed restore of the dead-monitor case: saved at (-1920, -1080), both
+        // monitors 1920 × 1080, so the size-comparison rescue in `rescue_position` stays put.
+        let lost = RawWindowState {
+            outer_rect: Some(egui::Rect::from_min_size(egui::pos2(-1920.0, -1080.0), egui::vec2(1456.0, 959.0))),
+            ..Default::default()
+        };
+        assert_eq!(off_screen_rescue(&lost, &[primary], Some(primary)), Some(egui::pos2(232.0, 60.5)));
+        // Visibly on a second monitor: stays.
+        let two = [primary, egui::Rect::from_min_size(egui::pos2(1920.0, 0.0), egui::vec2(1920.0, 1080.0))];
+        let there =
+            RawWindowState { outer_rect: Some(egui::Rect::from_min_size(egui::pos2(1930.0, 50.0), egui::vec2(1456.0, 959.0))), ..Default::default() };
+        assert_eq!(off_screen_rescue(&there, &two, Some(two[1])), None);
+        // Overlapping a monitor by a point covers area: stays.
+        let edge =
+            RawWindowState { outer_rect: Some(egui::Rect::from_min_size(egui::pos2(1919.0, 50.0), egui::vec2(1456.0, 959.0))), ..Default::default() };
+        assert_eq!(off_screen_rescue(&edge, &two, Some(two[1])), None);
+        // Touching a monitor's edge covers none: off screen.
+        let touch = RawWindowState {
+            outer_rect: Some(egui::Rect::from_min_size(egui::pos2(-1456.0, 50.0), egui::vec2(1456.0, 959.0))),
+            ..Default::default()
+        };
+        assert_eq!(off_screen_rescue(&touch, &[primary], Some(primary)), Some(egui::pos2(232.0, 60.5)));
+        // No monitors to judge by, or no window rectangle (Wayland): nothing to do.
+        assert_eq!(off_screen_rescue(&lost, &[], Some(primary)), None);
+        assert_eq!(off_screen_rescue(&RawWindowState::default(), &[primary], Some(primary)), None);
+        // No monitor reported for the window now: nowhere to bring it back to.
+        assert_eq!(off_screen_rescue(&lost, &[primary], None), None);
+        // Larger than the monitor it comes back to: that monitor's top-left corner.
+        let huge = RawWindowState {
+            outer_rect: Some(egui::Rect::from_min_size(egui::pos2(-5000.0, -5000.0), egui::vec2(4000.0, 3000.0))),
+            ..Default::default()
+        };
+        assert_eq!(off_screen_rescue(&huge, &[primary], Some(primary)), Some(egui::Pos2::ZERO));
+        // Centred on the current monitor's own origin, not the desktop's: the second at (1920, 0).
+        let current = egui::Rect::from_min_size(egui::pos2(1920.0, 0.0), egui::vec2(1920.0, 1080.0));
+        let third = [egui::Rect::from_min_size(egui::pos2(3840.0, 0.0), egui::vec2(1920.0, 1080.0)), current];
+        assert_eq!(off_screen_rescue(&lost, &third, Some(current)), Some(egui::pos2(2152.0, 60.5)));
     }
 
     /// An oversized default window shrinks and is centred to fit, while a restored window keeps its
