@@ -5,7 +5,9 @@ use super::parts::{MAX_LINKED_BOXES, NoteSeparators, Part, PartKind, PermRange, 
 use super::position::{Path, Pos, StoryRef};
 use super::settings::{CoreProps, CustomProp, Settings};
 use super::text_walk::{TextMode, notes_and_boxes, story_word_count_of, text_of, walk};
-use super::*;
+use std::sync::Arc;
+
+use super::{BTreeMap, CharProps, Document, InlineObject, Numbering, Paragraph, SectionProps, StyleSheet, Table, edit, numbering, para, section};
 
 /// [`Document::media`] by content, so adding media is linear in the bytes added rather than a
 /// scan of every earlier image (CWE-407). Rebuilt whenever `media` changed size behind its back;

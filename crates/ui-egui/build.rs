@@ -73,10 +73,12 @@ fn craft_i18n() -> String {
     o
 }
 
+/// A locale's code, its `common.tsv` if any, and its app catalog.
+type Locale = (String, Option<std::path::PathBuf>, std::path::PathBuf);
+
 /// Every locale under `dir` with this app's catalog, by code: (code, its `common.tsv` if any, its
 /// app catalog). An error when `dir` isn't a craft-i18n `locales/` directory.
-#[allow(clippy::type_complexity)]
-fn locales(dir: &std::path::Path) -> Result<Vec<(String, Option<std::path::PathBuf>, std::path::PathBuf)>, String> {
+fn locales(dir: &std::path::Path) -> Result<Vec<Locale>, String> {
     // Build scripts run in the crate's directory and `include_str!` resolves against `OUT_DIR`, so
     // a relative path would mean two different places.
     if !dir.is_absolute() {

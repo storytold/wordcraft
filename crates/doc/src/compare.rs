@@ -1,6 +1,6 @@
 use super::block::{Block, Blocks};
 use super::parts::Part;
-use super::*;
+use super::{Arc, BTreeMap, BuildingBlock, Cell, Paragraph, Row, Table};
 
 pub fn para_block(p: Paragraph) -> Arc<Block> {
     Arc::new(Block::Para(p))

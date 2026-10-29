@@ -1,5 +1,5 @@
 use super::enter_tab::tab_indent_on;
-use super::*;
+use super::{Block, CmdResult, NumRef, Pos, Selection, Session, StoryRef, Value, delete_selection, delete_selection_effect, sel_result};
 
 pub(super) fn backspace(s: &mut Session, v: &Value) -> CmdResult {
     let r = backspace_inner(s, v)?;

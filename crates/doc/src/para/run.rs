@@ -1,4 +1,4 @@
-use super::*;
+use super::{AtomicU64, CharProps, Deserialize, Ordering, Serialize};
 
 /// Object replacement character: marks an inline object in paragraph text.
 pub const OBJ: char = '\u{FFFC}';

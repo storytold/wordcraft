@@ -375,6 +375,75 @@ fn envelope_sizes_add_to_document_and_label_products() {
     assert!(s.run("mailings.labels", &json!({"product": "nope"})).is_err());
 }
 
+/// #4880: every selected recipient gets a label, including those beyond the first sheet.
+#[test]
+fn recipient_labels_continue_on_product_sheets() {
+    for product in LABEL_PRODUCTS {
+        let per_sheet = product.rows * product.cols;
+        for count in [1, per_sheet, per_sheet + 1, per_sheet * 2, per_sheet * 2 + 5] {
+            let mut s = Session::new(Document::from_text("Original letter"));
+            let rows: Vec<Value> = (0..count).map(|i| json!({"FirstName": format!("Recipient{i:03}"), "Address": "Original Street"})).collect();
+            s.run("mailings.recipients", &json!({"rows": rows})).unwrap();
+            let r = s.run("mailings.labels", &json!({"product": product.id, "fromRecipients": true})).unwrap();
+            let sheets = count.div_ceil(per_sheet);
+            assert_eq!(r["filled"], count, "{}: {count} recipients", product.id);
+            assert_eq!(r["labels"], sheets * per_sheet);
+            assert_eq!(s.doc.sections().len(), sheets);
+            let tables: Vec<_> = s
+                .doc
+                .body
+                .iter()
+                .filter_map(|b| match &**b {
+                    Block::Table(t) => Some(t),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(tables.len(), sheets);
+            let label_text: Vec<_> = tables
+                .iter()
+                .flat_map(|t| t.rows.iter())
+                .flat_map(|r| &r.cells)
+                .flat_map(|c| &c.blocks)
+                .filter_map(|b| match &**b {
+                    Block::Para(p) if !p.text.is_empty() => Some(p.text.clone()),
+                    _ => None,
+                })
+                .collect();
+            let expected: Vec<_> = (0..count).flat_map(|i| [format!("Recipient{i:03}"), "Original Street".to_string()]).collect();
+            assert_eq!(label_text, expected);
+            assert!(tables.windows(2).all(|t| t[0].grid == t[1].grid && t[0].props == t[1].props));
+        }
+    }
+}
+
+#[test]
+fn recipient_label_sheets_keep_the_source_and_selected_order() {
+    let mut s = Session::new(Document::from_text("Original letter"));
+    s.run("text.insert", &json!({"text": "Draft "})).unwrap();
+    let original = s.doc.clone();
+    let id = s.document_id();
+    let rows: Vec<Value> = (0..65).map(|i| json!({"FirstName": format!("Recipient{i:03}")})).collect();
+    s.run("mailings.recipients", &json!({"rows": rows})).unwrap();
+    s.run(
+        "mailings.filterRecipients",
+        &json!({"rules": [{"field": "FirstName", "op": "notEqual", "value": "Recipient003"}],
+        "sort": [{"field": "FirstName", "descending": true}]}),
+    )
+    .unwrap();
+    let selected = s.run("mailings.editRecipients", &json!({})).unwrap();
+    let r = s.run("mailings.labels", &json!({"fromRecipients": true})).unwrap();
+    assert_eq!(r["filled"], 64);
+    assert_eq!(r["labels"], 90);
+    assert_eq!(s.undo_depth(), 0, "labels are a new document");
+    let text = s.doc.plain_text(StoryRef::Body);
+    let names: Vec<_> = text.split_whitespace().filter(|l| l.starts_with("Recipient")).collect();
+    assert_eq!(names, (0..65).rev().filter(|i| *i != 3).map(|i| format!("Recipient{i:03}")).collect::<Vec<_>>());
+    s.run("view.switchWindows", &json!({"id": id})).unwrap();
+    assert_eq!(s.doc, original, "the original letter stays open and unchanged");
+    assert_eq!(s.run("mailings.editRecipients", &json!({})).unwrap(), selected);
+    assert_eq!(s.undo_depth(), 1, "the source keeps its edit history");
+}
+
 fn b64(b: &[u8]) -> String {
     super::super::insert::base64_encode(b)
 }

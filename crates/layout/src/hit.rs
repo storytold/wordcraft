@@ -74,6 +74,22 @@ pub struct ObjectHit {
     pub origin: Point,
 }
 
+/// The inputs for a column selection across laid-out lines.
+pub struct ColumnSelection<'a> {
+    /// The selection's first corner.
+    pub start: &'a Pos,
+    /// The selection's opposite corner.
+    pub end: &'a Pos,
+    /// One horizontal edge in page coordinates.
+    pub left: f32,
+    /// The other horizontal edge in page coordinates.
+    pub right: f32,
+    /// The page nearest the selection's starting corner.
+    pub page_hint: usize,
+    /// The maximum number of lines to return.
+    pub max_lines: usize,
+}
+
 impl ObjectHit {
     /// The object's position (its U+FFFC).
     pub fn pos(&self) -> Pos {
@@ -709,8 +725,9 @@ impl DocLayout {
     /// Column (block) selection: the piece of every line from the line holding `a` to the line
     /// holding `b` (document order) that lies between page x `left` and `right`. One `(start,
     /// end)` pair per line, both in the same paragraph; lines shorter than `left` give an empty
-    /// pair. At most `max` lines.
-    pub fn column_segments(&self, doc: &Document, a: &Pos, b: &Pos, left: f32, right: f32, page_hint: usize, max: usize) -> Vec<(Pos, Pos)> {
+    /// pair. At most `selection.max_lines` lines.
+    pub fn column_segments(&self, doc: &Document, selection: ColumnSelection<'_>) -> Vec<(Pos, Pos)> {
+        let ColumnSelection { start: a, end: b, left, right, page_hint, max_lines } = selection;
         let (a, b) = if a <= b { (a, b) } else { (b, a) };
         let (left, right) = if left <= right { (left, right) } else { (right, left) };
         let mut out = Vec::new();
@@ -727,7 +744,7 @@ impl DocLayout {
                     if li < first || li > last {
                         continue;
                     }
-                    if out.len() >= max {
+                    if out.len() >= max_lines {
                         return out;
                     }
                     let o0 = para.off_at_x(li, left - x);

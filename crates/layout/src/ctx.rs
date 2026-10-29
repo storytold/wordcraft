@@ -2,7 +2,10 @@ use super::cache::{Key, LayoutCache, Totals, has_page_fields, has_total_fields, 
 use super::floats::{EarlyFloats, WrapArea};
 use super::headers::HfLinks;
 use super::placed::Placed;
-use super::*;
+use super::{
+    Anchor, Arc, Block, CharProps, Counters, DocLayout, Document, FieldCtx, Float, HashMap, HashSet, HideDeleted, InlineObject, LayoutOptions, Level,
+    ParaLayout, Paragraph, Rect, Rgb, SectionProps, StoryRef, ViewMode, Wrap, contour, math, para, styleref, textbox,
+};
 
 /// A layout pass: finished, or to be done again with the page totals it found, or with the
 /// floats placed above their anchors it found ([`EarlyFloats`]).
@@ -66,6 +69,16 @@ pub(crate) struct Ctx<'a> {
     pub(crate) hf: Arc<HfLinks<'a>>,
     /// Pictures' transparency, decoded for Tight and Through wrapping ([`Ctx::wrap_outline`]).
     pub(crate) alphas: contour::Alphas,
+}
+
+struct ParaEnvInput<'a> {
+    width: f32,
+    label: Option<(String, Level)>,
+    table: Option<&'a para::CellText>,
+    exclusions: &'a [para::Exclusion],
+    eq_number: u32,
+    typing_word: Option<(usize, usize)>,
+    fitted: &'a [(usize, f32)],
 }
 
 /// A header or footer (`story`) laid out for page `number` of a section (`sect`, `mirror`): its
@@ -224,7 +237,10 @@ impl Ctx<'_> {
         }
         self.cache.misses += 1;
         let typing = key.typing;
-        let pl = Arc::new(para::layout_para(p, &self.para_env(width, label, table, exclusions, eq_number, typing, &fitted)));
+        let pl = Arc::new(para::layout_para(
+            p,
+            &self.para_env(ParaEnvInput { width, label, table, exclusions, eq_number, typing_word: typing, fitted: &fitted }),
+        ));
         self.cache.paras.insert(key, pl.clone());
         pl
     }
@@ -254,7 +270,10 @@ impl Ctx<'_> {
             return Some(pl.clone());
         }
         self.cache.misses += 1;
-        let pl = Arc::new(para::layout_para(p, &self.para_env(width, label, None, &[], eq_number, None, &[])));
+        let pl = Arc::new(para::layout_para(
+            p,
+            &self.para_env(ParaEnvInput { width, label, table: None, exclusions: &[], eq_number, typing_word: None, fitted: &[] }),
+        ));
         self.cache.paras.insert(key, pl.clone());
         Some(pl)
     }
@@ -279,7 +298,10 @@ impl Ctx<'_> {
         }
         self.cache.misses += 1;
         let typing = key.typing;
-        let m = measure(&para::layout_para(p, &self.para_env(width, label, table, &[], eq_number, typing, &fitted)));
+        let m = measure(&para::layout_para(
+            p,
+            &self.para_env(ParaEnvInput { width, label, table, exclusions: &[], eq_number, typing_word: typing, fitted: &fitted }),
+        ));
         self.cache.measures.insert(key, m);
         m
     }
@@ -371,16 +393,8 @@ impl Ctx<'_> {
         h
     }
 
-    fn para_env<'b>(
-        &'b self,
-        width: f32,
-        label: Option<(String, Level)>,
-        table: Option<&'b para::CellText>,
-        exclusions: &'b [para::Exclusion],
-        eq_number: u32,
-        typing_word: Option<(usize, usize)>,
-        fitted: &'b [(usize, f32)],
-    ) -> para::ParaEnv<'b> {
+    fn para_env<'b>(&'b self, input: ParaEnvInput<'b>) -> para::ParaEnv<'b> {
+        let ParaEnvInput { width, label, table, exclusions, eq_number, typing_word, fitted } = input;
         para::ParaEnv {
             doc: self.doc,
             width,

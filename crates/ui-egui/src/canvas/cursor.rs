@@ -1,7 +1,7 @@
 use super::navigation::{page_at, page_to_screen};
 use super::pages::{page_render_options, page_screen_scale};
 use super::story::dims_body;
-use super::*;
+use super::{Color32, DocLayout, Hash, Hasher, Pos, Pos2, WordApp};
 
 /// Caret position on screen.
 pub fn caret_screen(app: &mut WordApp) -> Option<(Pos2, f32)> {
