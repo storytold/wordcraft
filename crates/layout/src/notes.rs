@@ -186,6 +186,7 @@ pub(crate) fn v_span(it: &Placed) -> (f32, f32) {
         | Placed::Shape { rect, .. }
         | Placed::Graphic { rect, .. }
         | Placed::Clip { rect, .. }
+        | Placed::Spun { rect, .. }
         | Placed::Cell { rect, .. }
         | Placed::Object { rect, .. } => (rect.y, rect.y + rect.h),
         Placed::Rule { y0, y1, .. } => (y0.min(*y1), y0.max(*y1)),

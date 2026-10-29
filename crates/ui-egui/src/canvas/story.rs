@@ -1,5 +1,24 @@
 use super::{DocLayout, PartKind, Rect, StoryRef, WordApp, pos2, vec2};
 
+/// The text box story being edited: a turned text box showing it is drawn straight (Word).
+pub(crate) fn edited_box(app: &WordApp) -> Option<u32> {
+    match app.session.sel.focus.story {
+        StoryRef::Part(id) if in_text_box(app) => Some(id),
+        _ => None,
+    }
+}
+
+/// The edited text box story the page is drawn with straight: the caret's text box, when it is
+/// turned (an unturned one looks the same either way, so the page isn't redrawn for it).
+pub(crate) fn straight_box(app: &WordApp, layout: &DocLayout) -> Option<u32> {
+    edited_box(app).filter(|id| layout.text_box(*id, app.session.page_hint).is_some_and(|o| turned(&o)))
+}
+
+/// Whether object `o` is turned (flips alone don't turn a text box's text).
+pub(crate) fn turned(o: &wordcraft_layout::hit::ObjectHit) -> bool {
+    !wordcraft_geom::Spin::new(o.spin.deg, false, false).is_identity()
+}
+
 /// Whether the caret is in a text box's story.
 pub fn in_text_box(app: &WordApp) -> bool {
     part_kind(app, app.session.sel.focus.story) == Some(PartKind::TextBox)

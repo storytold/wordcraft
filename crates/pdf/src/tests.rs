@@ -1953,6 +1953,73 @@ fn right_to_left_clusters_are_written_whole_left_to_right() {
     assert_eq!(visual_order(text, &glyphs, &ranges, &parts), [5, 4, 2, 3, 0, 1]);
 }
 
+/// Text in a text box turned 30° is drawn turned with it (gap 10): its glyphs' transforms carry
+/// the turn, while the body's stay upright.
+#[test]
+fn text_in_a_rotated_text_box_is_turned_in_the_pdf() {
+    use hayro_interpret::font::Glyph;
+    use hayro_interpret::{
+        BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, SoftMask,
+        interpret_page,
+    };
+    use wordcraft_doc::para::{ShapeKind, Wrap};
+    use wordcraft_doc::{PartKind, Path, Pos, StoryRef};
+    let mut d = Document::from_text("Body words around it.");
+    let id = d.add_part(PartKind::TextBox, vec![para_block(Paragraph::with_text("Turned", Default::default()))]);
+    let mut float = wordcraft_doc::para::Float { wrap: Wrap::Square, rot: 30.0, ..Default::default() };
+    float.y = 100.0;
+    let shape = InlineObject::Shape {
+        kind: ShapeKind::TextBox,
+        w: 180.0,
+        h: 60.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 1.0,
+        float,
+        story: Some(id),
+        effects: Default::default(),
+        freeform: None,
+        extra: Default::default(),
+    };
+    d.insert_object(&Pos { story: StoryRef::Body, path: Path::top(0), off: 0 }, shape, &Default::default()).unwrap();
+    let bytes = export(&d, &PdfOptions::default()).unwrap();
+    // (character, the angle its glyph is drawn at, degrees).
+    struct Ex(Vec<(String, f64)>);
+    impl Device<'_> for Ex {
+        fn set_soft_mask(&mut self, _: Option<SoftMask<'_>>) {}
+        fn set_blend_mode(&mut self, _: BlendMode) {}
+        fn draw_path(&mut self, _: &kurbo::BezPath, _: kurbo::Affine, _: &Paint<'_>, _: &PathDrawMode) {}
+        fn push_clip_path(&mut self, _: &ClipPath) {}
+        fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, _: BlendMode) {}
+        fn draw_glyph(&mut self, g: &Glyph<'_>, t: kurbo::Affine, gt: kurbo::Affine, _: &Paint<'_>, mode: &GlyphDrawMode) {
+            if matches!(mode, GlyphDrawMode::Stroke(_)) {
+                return;
+            }
+            let c = match g.as_unicode() {
+                Some(hayro_cmap::BfString::Char(c)) => c.to_string(),
+                Some(hayro_cmap::BfString::String(s)) => s.to_string(),
+                None => String::new(),
+            };
+            let [a, b, ..] = (t * gt).as_coeffs();
+            self.0.push((c, b.atan2(a).to_degrees()));
+        }
+        fn draw_image(&mut self, _: Image<'_, '_>, _: kurbo::Affine) {}
+        fn pop_clip_path(&mut self) {}
+        fn pop_transparency_group(&mut self) {}
+    }
+    let pdf = hayro_syntax::Pdf::new(bytes).expect("parse");
+    let cache = InterpreterCache::new();
+    let page = pdf.pages().iter().next().expect("a page");
+    let mut ctx = Context::new(kurbo::Affine::IDENTITY, kurbo::Rect::new(0.0, 0.0, 1.0, 1.0), &cache, pdf.xref(), InterpreterSettings::default());
+    let mut ex = Ex(Vec::new());
+    interpret_page(page, &mut ctx, &mut ex);
+    let angle = |ch: &str| ex.0.iter().find(|(c, _)| c == ch).map(|(_, a)| *a);
+    let body = angle("B").expect("the body's B");
+    let turned = angle("T").expect("the box's T");
+    assert!(body.abs() < 0.5, "body text is upright: {body}");
+    assert!((turned + 30.0).abs() < 0.5, "the box turns clockwise, 30° (-30° in the PDF's y-up page space): {turned}");
+}
+
 /// A PNG signature, an IHDR declaring `w`×`h` 8-bit RGBA and a short IDAT (all CRCs valid, so
 /// the header parses), with no real pixel data.
 fn ihdr_only_png(w: u32, h: u32) -> Vec<u8> {

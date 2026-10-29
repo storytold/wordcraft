@@ -345,7 +345,10 @@ fn caret_contrasts_with_what_lies_under_it() {
     let at = |a: &mut WordApp, off: usize| {
         let layout = a.session.layout();
         let c = layout.caret_on(&Pos::body(0, off), 0).unwrap();
-        let view = view_key(a, false, None);
+        let view = {
+            let l = a.session.layout();
+            view_key(a, &l, false, None)
+        };
         caret_color_at(a, &layout, c.page, c.x, c.top + c.height / 2.0, view, false)
     };
     assert_eq!(at(&mut a, 2), Color32::BLACK, "white paper");
@@ -372,19 +375,31 @@ fn read_mode_page_color_sets_the_reading_paper() {
     a.run("design.pageColor", json!({"color": "#102040"})).unwrap();
     let paper = |a: &WordApp| page_render_options(a, false).paper_of(&a.session.doc);
     assert_eq!(paper(&a), Rgb(0x10, 0x20, 0x40), "Print Layout shows the page color");
-    let print_key = view_key(&a, false, None);
+    let print_key = {
+        let l = a.session.layout();
+        view_key(&a, &l, false, None)
+    };
     a.run("view.readMode", json!({})).unwrap();
     assert_eq!(paper(&a), Rgb::WHITE, "None: white, the page color ignored");
-    let none_key = view_key(&a, false, None);
+    let none_key = {
+        let l = a.session.layout();
+        view_key(&a, &l, false, None)
+    };
     a.run("view.readPageColor", json!({"value": "sepia"})).unwrap();
     assert_eq!(paper(&a), wordcraft_render::SEPIA_PAPER);
     assert!(!page_render_options(&a, false).dark, "Sepia keeps the text's colors");
-    let sepia_key = view_key(&a, false, None);
+    let sepia_key = {
+        let l = a.session.layout();
+        view_key(&a, &l, false, None)
+    };
     a.run("view.readPageColor", json!({"value": "inverse"})).unwrap();
     assert!(page_render_options(&a, false).dark);
     let d = wordcraft_render::DARK_PAPER;
     assert_eq!(paper(&a), Rgb(d, d, d));
-    let inverse_key = view_key(&a, false, None);
+    let inverse_key = {
+        let l = a.session.layout();
+        view_key(&a, &l, false, None)
+    };
     let keys = [print_key, none_key, sepia_key, inverse_key];
     for (i, k) in keys.iter().enumerate() {
         assert!(!keys[..i].contains(k), "each paper has its own view key");
@@ -4792,9 +4807,107 @@ fn page_at_index(rects: &[Rect], p: Pos2) -> Option<usize> {
 #[test]
 fn the_view_key_changes_when_a_drag_takes_an_object_off_the_page() {
     let doc = wordcraft_doc::Document::from_text("Hello WordCraft");
-    let app = WordApp::new(wordcraft_engine::Session::new(doc), Default::default());
+    let mut app = WordApp::new(wordcraft_engine::Session::new(doc), Default::default());
     let object = Pos::body(0, 5);
-    let hidden = view_key(&app, false, Some(&object));
-    assert_ne!(hidden, view_key(&app, false, None), "the page without the dragged object is rendered again");
-    assert_eq!(hidden, view_key(&app, false, Some(&object)), "the same drag keeps the key: no re-render every frame");
+    let layout = app.session.layout();
+    let hidden = view_key(&app, &layout, false, Some(&object));
+    assert_ne!(hidden, view_key(&app, &layout, false, None), "the page without the dragged object is rendered again");
+    assert_eq!(hidden, view_key(&app, &layout, false, Some(&object)), "the same drag keeps the key: no re-render every frame");
+}
+
+/// Gap 10: a click on a turned text box's text edits it at the character under the pointer
+/// and the box is drawn straight; a click in the body turns it back.
+#[test]
+fn entering_a_turned_text_box_straightens_it_and_leaving_turns_it_back() {
+    use crate::objects::tests::{on_screen, press, turned_box_window};
+    let (mut h, id) = turned_box_window();
+    let layout = h.state_mut().session.layout();
+    assert_eq!(straight_box(h.state(), &layout), None, "turned while the caret is in the body");
+    // A quarter into the character at byte 8 ("t" of "text"), where it is drawn: turned.
+    let o = layout.text_box(id, 0).expect("laid out");
+    let pos = |off| Pos { story: StoryRef::Part(id), path: wordcraft_doc::Path::top(0), off };
+    let (a, b) = (layout.caret_on(&pos(8), 0).unwrap(), layout.caret_on(&pos(9), 0).unwrap());
+    let (ux, uy) = (a.x + (b.x - a.x) * 0.25, a.top + a.height / 2.0);
+    let (x, y) = wordcraft_geom::Spin::new(30.0, false, false).apply(o.rect.x + o.rect.w / 2.0, o.rect.y + o.rect.h / 2.0, ux, uy);
+    let at = on_screen(&h, x, y);
+    press(&mut h, at, true);
+    press(&mut h, at, false);
+    assert_eq!(h.state().session.sel.focus, pos(8), "the click lands on the character drawn there");
+    let layout = h.state_mut().session.layout();
+    assert_eq!(straight_box(h.state(), &layout), Some(id), "edited, the box is drawn straight");
+    // Back in the body: turned again.
+    let c = layout.caret_on(&Pos::body(0, 2), 0).unwrap();
+    let at = on_screen(&h, c.x + 1.0, c.top + c.height / 2.0);
+    press(&mut h, at, true);
+    press(&mut h, at, false);
+    assert_eq!(h.state().session.sel.focus.story, StoryRef::Body);
+    let layout = h.state_mut().session.layout();
+    assert_eq!(straight_box(h.state(), &layout), None, "left, the box turns back");
+}
+
+/// Ctrl/⌘+click on a link in a turned text box (drawn turned, not edited) follows it: the
+/// point is taken into the box's unturned frame before the link is looked up.
+#[test]
+fn ctrl_click_follows_a_link_in_a_turned_text_box() {
+    use crate::objects::tests::{on_screen, turned_box_window};
+    let (mut h, id) = turned_box_window();
+    let story = StoryRef::Part(id);
+    let pos = |off| Pos { story, path: wordcraft_doc::Path::top(0), off };
+    h.state_mut().run("select.range", json!({"anchor": pos(0), "focus": pos(16)})).unwrap();
+    h.state_mut().run("insert.link", json!({"url": "https://example.com/"})).unwrap();
+    h.state_mut().session.sel = wordcraft_engine::Selection::caret(Pos::body(0, 10));
+    for _ in 0..3 {
+        h.step();
+    }
+    let layout = h.state_mut().session.layout();
+    assert_eq!(straight_box(h.state(), &layout), None, "the box is drawn turned");
+    let o = layout.text_box(id, 0).expect("laid out");
+    let (a, b) = (layout.caret_on(&pos(8), 0).unwrap(), layout.caret_on(&pos(9), 0).unwrap());
+    let (ux, uy) = (a.x + (b.x - a.x) * 0.5, a.top + a.height / 2.0);
+    let (x, y) = wordcraft_geom::Spin::new(30.0, false, false).apply(o.rect.x + o.rect.w / 2.0, o.rect.y + o.rect.h / 2.0, ux, uy);
+    let at = on_screen(&h, x, y);
+    let mods = egui::Modifiers::COMMAND;
+    h.event(egui::Event::ModifiersChanged(mods));
+    h.event(egui::Event::PointerMoved(at));
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: mods });
+    h.step();
+    // The app hands the link to the system in the same frame.
+    let opened: Vec<&str> = h
+        .output()
+        .platform_output
+        .commands
+        .iter()
+        .filter_map(|c| if let egui::OutputCommand::OpenUrl(u) = c { Some(u.url.as_str()) } else { None })
+        .collect();
+    assert_eq!(opened, ["https://example.com/"], "the link under the turned text is followed");
+}
+
+/// The page image is redrawn when the edited turned box changes (so it never shows a box
+/// straight that should be turned, or turned while edited), and not for an unturned box.
+#[test]
+fn the_page_image_follows_the_edited_turned_box() {
+    use crate::objects::tests::{edit, turned_box_window};
+    let (mut h, id) = turned_box_window();
+    let key = |h: &crate::objects::tests::H| h.state().canvas.textures.get(&0).map(|(k, _)| *k).expect("page 1 is drawn");
+    let turned = key(&h);
+    edit(&mut h, id);
+    let straight = key(&h);
+    assert_ne!(straight, turned, "entering the turned box redraws the page");
+    h.state_mut().session.sel = wordcraft_engine::Selection::caret(Pos::body(0, 10));
+    for _ in 0..3 {
+        h.step();
+    }
+    assert_eq!(key(&h), turned, "leaving it redraws it turned");
+    // An unturned box: entering it changes nothing on the page.
+    let pos = h.state_mut().session.layout().text_box(id, 0).unwrap().pos();
+    let end = Pos { off: pos.off + 3, ..pos.clone() };
+    h.state_mut().run("select.range", json!({"anchor": pos, "focus": end})).unwrap();
+    h.state_mut().run("arrange.rotation", json!({"degrees": 0})).unwrap();
+    h.state_mut().session.sel = wordcraft_engine::Selection::caret(Pos::body(0, 10));
+    for _ in 0..3 {
+        h.step();
+    }
+    let flat = key(&h);
+    edit(&mut h, id);
+    assert_eq!(key(&h), flat, "entering an unturned box keeps the page image");
 }

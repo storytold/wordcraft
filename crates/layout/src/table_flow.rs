@@ -324,7 +324,8 @@ fn placed_intersects(item: &Placed, rect: &Rect) -> bool {
         | Placed::Graphic { rect: bounds, .. }
         | Placed::Cell { rect: bounds, .. }
         | Placed::Object { rect: bounds, .. }
-        | Placed::Clip { rect: bounds, .. } => bounds.intersects(rect),
+        | Placed::Clip { rect: bounds, .. }
+        | Placed::Spun { rect: bounds, .. } => bounds.intersects(rect),
         Placed::Rule { x0, y0, x1, y1, .. } => Rect::new(x0.min(*x1), y0.min(*y1), (x1 - x0).abs(), (y1 - y0).abs()).intersects(rect),
     }
 }

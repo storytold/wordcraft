@@ -74,7 +74,7 @@ use rulers::rulers;
 use rulers::{RULER_LABEL_PX, RULER_MAX_MARKS, RULER_SPARSEST, RulerMark, UNIT_TICK, ruler_d, ruler_density, ruler_marks, ruler_x};
 pub use story::{EquationFrame, editing_header_footer, in_text_box};
 use story::{dims_body, equation_frame};
-pub(crate) use story::{part_kind, text_box_host};
+pub(crate) use story::{part_kind, straight_box, text_box_host, turned};
 
 /// Points on screen per document point at 100% (96 px per inch, like a word processor).
 pub const PX_PER_PT: f32 = 96.0 / 72.0;
@@ -125,6 +125,8 @@ pub struct CanvasState {
     /// The last primary press on the page (time, screen point, clicks in a row), to count
     /// double- and triple-presses as they go down (egui reports them on release).
     pub(crate) last_press: Option<(f64, Pos2, u8)>,
+    /// A press that entered a turned text box (drawn straight from then on): where it was.
+    turned_press: Option<Pos2>,
     /// The first press of the current run of presses moved header/footer editing into another
     /// header/footer; the double-click it starts doesn't select a word there.
     hf_press_switched: bool,
@@ -356,6 +358,7 @@ impl Default for CanvasState {
             dragging: false,
             column_drag: None,
             last_press: None,
+            turned_press: None,
             hf_press_switched: false,
             unit_drag: None,
             last_highlight: "yellow".into(),
@@ -908,6 +911,7 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
             let mut opts = page_render_options(app, dim_body);
             // Only on the page it is on: the `Pos` can't match an object of another page.
             opts.display.hide_object = hidden.as_ref().filter(|(page, _)| *page == i).map(|(_, p)| p.clone());
+            opts.display.straight = straight_box(app, layout);
             let img = wordcraft_render::render_page(page_doc(app), page, scale_px, &opts);
             let ci = page_image(&img);
             match app.canvas.textures.get_mut(&i) {
@@ -969,6 +973,7 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
                     let mut opts = page_render_options(app, dim_body);
                     // Only on the page it is on: the `Pos` can't match an object of another page.
                     opts.display.hide_object = hidden.as_ref().filter(|(page, _)| *page == i).map(|(_, p)| p.clone());
+                    opts.display.straight = straight_box(app, layout);
                     // The tiny subtraction avoids a 1px overshoot from round-tripping f32
                     // pixels through page points and render_area's ceil() conversion.
                     let img = wordcraft_render::render_area(
@@ -1334,7 +1339,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         let max_tex = ui.ctx().input(|i| i.max_texture_side).min(wordcraft_render::MAX_SIDE as usize).max(1) as f32;
         let content_origin = ui.min_rect().min;
         let hidden = app.canvas.dragged_off_page();
-        let page_view = view_key(app, dim_body, hidden.as_ref().map(|(_, p)| p));
+        let page_view = view_key(app, &layout, dim_body, hidden.as_ref().map(|(_, p)| p));
         let t0 = crate::now_ms();
         let PagePaintOutput { rects, visible_tile_keys, rendered } = paint_pages(PagePaint {
             app,

@@ -60,8 +60,15 @@ impl<'a> ItemDisplay<'a> {
     /// The draw items of `it` alone, as [`page_display`] gives them for a page holding just it
     /// (and, for a line in a clipped cell, the cell's clip).
     pub fn draws(&self, it: &Placed, opts: &DisplayOptions) -> Vec<Draw> {
+        self.draws_in(&[], it, opts)
+    }
+
+    /// [`Self::draws`] for `it` inside the turned text boxes `turns` (their opening
+    /// [`Placed::Spun`] markers, outermost first): drawn turned with them.
+    pub fn draws_in(&self, turns: &[Placed], it: &Placed, opts: &DisplayOptions) -> Vec<Draw> {
         let mut out = Vec::new();
-        let items = std::slice::from_ref(it);
+        let items: Vec<Placed> = turns.iter().cloned().chain(std::iter::once(it.clone())).collect();
+        let items = &items[..];
         let (_, ba) = dimming(opts);
         stories_display(self.doc, &[items], Some(&self.clips), opts, &self.authors, ba, &mut out);
         body_change_bars(self.doc, self.page, items, opts, ba, &mut out);
@@ -117,7 +124,12 @@ fn stories_display(
             }
         };
         let mut done: Vec<u32> = Vec::new();
+        // Turned text boxes being drawn: what was drawn before each, and its turn (`None` when
+        // shown straight, as while its text is edited).
+        let mut turns: Vec<(Vec<Draw>, Option<(Rect, Spin)>)> = Vec::new();
         for it in items.iter() {
+            // The turn the item is drawn inside (a shape's effects follow it).
+            let outer = turns.iter().filter_map(|(_, t)| t.map(|(_, s)| s)).fold(Spin::default(), |o, s| s.within(o));
             // The object being dragged is drawn by its preview instead: leave it out here.
             if hidden.as_ref().is_some_and(|h| h.hides(it)) {
                 continue;
@@ -131,6 +143,15 @@ fn stories_display(
                 continue;
             }
             match it {
+                Placed::Spun { rect, spin, part, open: true } => {
+                    let shown = (opts.straight != Some(*part)).then_some((*rect, *spin));
+                    turns.push((std::mem::take(out), shown));
+                }
+                Placed::Spun { open: false, .. } => {
+                    if let Some((before, t)) = turns.pop() {
+                        unturn(before, t, out);
+                    }
+                }
                 Placed::Lines { story: StoryRef::Part(id), .. } if warps.iter().any(|(w, ..)| w == id) => {
                     // A warped text box's lines are drawn together, bent, where its first one is.
                     if done.contains(id) {
@@ -143,8 +164,38 @@ fn stories_display(
                         warped_text(WarpedText { doc, lines: &lines, rect: *rect, warp, opts, authors, alpha: a }, out);
                     }
                 }
-                _ => item(doc, it, opts, authors, a, out),
+                _ => item_in(doc, it, opts, authors, a, outer, out),
             }
+        }
+        while let Some((before, t)) = turns.pop() {
+            unturn(before, t, out);
+        }
+    }
+}
+
+/// Close a turned text box: what was drawn since it opened (`out`) goes inside its turn `t`
+/// (straight when `None`), after what was drawn before it.
+fn unturn(before: Vec<Draw>, t: Option<(Rect, Spin)>, out: &mut Vec<Draw>) {
+    let inner = std::mem::replace(out, before);
+    match t {
+        Some((rect, spin)) => {
+            // Link areas are axis-aligned page rectangles: turned text gets none.
+            let mut inner = inner;
+            clear_links(&mut inner);
+            spun(spin, rect, inner, out)
+        }
+        None => out.extend(inner),
+    }
+}
+
+/// Take the hyperlink off every glyph run in `draws`, however deeply nested.
+fn clear_links(draws: &mut [Draw]) {
+    for d in draws {
+        match d {
+            Draw::Glyphs { link, .. } => *link = None,
+            Draw::Turned { items, .. } | Draw::Rotated { items, .. } | Draw::Clip { items, .. } => clear_links(items),
+            Draw::Figure { draws, .. } => clear_links(draws),
+            _ => {}
         }
     }
 }
@@ -401,7 +452,8 @@ fn item_in(doc: &Document, it: &Placed, opts: &DisplayOptions, authors: &Authors
             }
             spun(*spin, *rect, vec![Draw::Clip { rect: *rect, items: inner }], out)
         }
-        Placed::Cell { .. } | Placed::Object { .. } => {}
+        // A turned text box's ends: the page's walk turns what is between (see `stories_display`).
+        Placed::Cell { .. } | Placed::Object { .. } | Placed::Spun { .. } => {}
         Placed::Lines { story, path, para, l0, l1, x, y, turn } if turn.is_turned() => {
             let mut items = Vec::new();
             lines(

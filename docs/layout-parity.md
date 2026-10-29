@@ -364,6 +364,7 @@ layout suite are pending; this is not a new Word/native-IME acceptance claim.
 | 2026-10-14 | trivial | A section can restart its page numbers at 0 (`w:pgNumType w:start="0"`), as a cover page numbered 0 does; the restart was read but laid out from 1 |
 | 2026-10-13 | trivial | A shape or picture dragged into another column anchors there, so the text in that column wraps around it (#884) |
 | 2026-10-13 | trivial | On a page with footnotes, a paragraph that ends there keeps its space after above the footnote separator; if it doesn't fit, its last line (and, with widow control, one more) goes to the next page with the note. Pages without notes are unchanged (#1116) |
+| 2026-10-14 | trivial | Text in a freely rotated text box turns with the box (screen, render, PDF; flips don't mirror it); while its text is edited the box is drawn straight with its resize and rotation handles on the straight frame, as in Word (Word checks J and P; gap 10) |
 | 2026-10-12 | trivial | STYLEREF fields in headers and footers show each page's chapter (or other styled text); Insert › Quick Parts › Field offers STYLEREF (#775) |
 | 2026-10-12 | trivial | a list label moves with its first line when the paragraph is centred or end-aligned (#1159) |
 | 2026-10-13 | trivial | A paragraph ending with a page break keeps its space after on the old page with its mark: the next page starts with the next paragraph at the top (it started that much too low, and a page break before after it opened a blank page) |

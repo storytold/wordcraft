@@ -52,6 +52,11 @@ pub struct ObjectDrag {
     pending_behind: bool,
     /// Dragging a connector's end (false: its start, true: its end) to this page point.
     end: Option<(bool, (f32, f32))>,
+    /// A handle of a turned text box being edited (drawn straight, Word check P): the drag works
+    /// on the straight frame, a turn adds to the box's real angle (`base`), and the text stays
+    /// edited (`keep`, the selection to go back to).
+    base: f32,
+    keep: Option<wordcraft_engine::Selection>,
     /// Ctrl/⌘ is held: dropping leaves the original and puts a copy at the new place.
     copy: bool,
     /// The alignment guides a move snapped to, shown while dragging ([`crate::guides`]).
@@ -160,6 +165,11 @@ pub fn active(app: &WordApp, layout: &DocLayout) -> Option<(ObjectHit, bool)> {
     }
 }
 
+/// A turned text box whose text is being edited, so drawn straight.
+fn straightened(o: &ObjectHit, editing: bool) -> bool {
+    editing && crate::canvas::turned(o)
+}
+
 fn screen(pages: &[Rect], scale: f32, page: usize, r: wordcraft_geom::Rect) -> Option<Rect> {
     pages.get(page).map(|p| frame::to_screen(*p, scale, r))
 }
@@ -211,7 +221,14 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
         if ui.input(|i| i.pointer.primary_down()) {
             let shift = ui.input(|i| i.modifiers.shift);
             d.copy = ui.input(|i| i.modifiers.command) && d.drag.grab == Grab::Move;
-            if d.drag.grab == Grab::Rotate {
+            if d.drag.grab == Grab::Rotate && d.keep.is_some() {
+                // A straightened frame's turn adds to the box's angle: Shift snaps the sum.
+                d.drag.turn_to(at, pages, scale, false);
+                if shift {
+                    let step = frame::SNAP_DEG;
+                    d.drag.deg = wordcraft_geom::normalize_degrees(((d.base + d.drag.deg) / step).round() * step - d.base);
+                }
+            } else if d.drag.grab == Grab::Rotate {
                 d.drag.turn_to(at, pages, scale, shift);
             } else {
                 // Pictures keep their proportions from a corner unless Shift; shapes only with Shift.
@@ -254,6 +271,8 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
             picture: false,
             pending_behind: false,
             end: Some((which, (0.0, 0.0))),
+            base: 0.0,
+            keep: None,
             guides: Vec::new(),
             preview: None,
             copy: false,
@@ -276,6 +295,33 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
         let _ = app.run("select.addObject", json!({"pos": object.pos()}));
         return true;
     }
+    // A handle of a turned text box being edited: the text stays edited and the box straight.
+    let straight_handle = grab != Grab::Move && active(app, layout).is_some_and(|(o, editing)| straightened(&o, editing) && o.pos() == object.pos());
+    if pressed && straight_handle {
+        let min = app
+            .session
+            .doc
+            .para(object.story, &object.path)
+            .and_then(|p| p.object_at(object.off))
+            .map_or(0.0, wordcraft_engine::cmd::objects::min_size);
+        let drag = Drag::new(grab, object.page, object.rect, 0.0, at);
+        let (base, keep) = (object.spin.deg, Some(app.session.sel.clone()));
+        app.canvas.obj_drag = Some(ObjectDrag {
+            drag,
+            object,
+            min,
+            picture: false,
+            pending_behind: false,
+            end: None,
+            base,
+            keep,
+            guides: Vec::new(),
+            preview: None,
+            copy: false,
+            drop_at: None,
+        });
+        return true;
+    }
     if pressed && grab == Grab::Move && object.behind() && behind_draggable(app, &object) {
         let (min, picture) = match app.session.doc.para_at(&object.pos()).and_then(|p| p.object_at(object.pos().off)) {
             Some(o) => (wordcraft_engine::cmd::objects::min_size(o), matches!(o, InlineObject::Image { .. })),
@@ -288,6 +334,8 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
             picture,
             pending_behind: true,
             end: None,
+            base: 0.0,
+            keep: None,
             guides: Vec::new(),
             preview: None,
             copy: false,
@@ -314,6 +362,8 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
                 picture,
                 pending_behind: false,
                 end: None,
+                base: 0.0,
+                keep: None,
                 guides: Vec::new(),
                 preview: None,
                 copy,
@@ -441,12 +491,16 @@ pub fn select_at(app: &mut WordApp, layout: &DocLayout, pages: &[Rect], scale: f
 /// being edited (body, or the header/footer).
 fn grab_at(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at: Pos2) -> Option<(ObjectHit, Grab)> {
     let story = active_story(app, layout);
-    let handle = active(app, layout).filter(|(o, _)| o.story == story && !fixed(app, o)).and_then(|(o, _)| {
+    // A turned text box being edited is drawn straight, without handles (its handles would
+    // turn and size it from the straight frame); its border still moves it.
+    // A turned text box being edited is drawn straight, its handles on the straight frame.
+    let handle = active(app, layout).filter(|(o, _)| o.story == story && !fixed(app, o)).and_then(|(o, editing)| {
         let f = screen(pages, scale, o.page, o.rect)?;
-        if !size_only(app, &o) && frame::rotate_handle_at(f, o.spin.deg, at) {
+        let deg = if straightened(&o, editing) { 0.0 } else { o.spin.deg };
+        if !size_only(app, &o) && frame::rotate_handle_at(f, deg, at) {
             return Some((o, Grab::Rotate));
         }
-        frame::handle_at(f, o.spin.deg, at).map(|h| (o, Grab::Resize(h)))
+        frame::handle_at(f, deg, at).map(|h| (o, Grab::Resize(h)))
     });
     handle.or_else(|| {
         let (page, x, y) = crate::canvas::page_at(pages, layout, scale, at)?;
@@ -464,7 +518,8 @@ fn grab_at(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at: Po
         }
         // Selectable: body objects (table cells too) or the header/footer's own objects;
         // notes' objects aren't yet.
-        layout.object_at_in(page, x, y, EDGE / scale.max(0.01), story).map(|o| (o, Grab::Move))
+        let straight = crate::canvas::straight_box(app, layout);
+        layout.object_at_shown(page, x, y, EDGE / scale.max(0.01), story, straight).map(|o| (o, Grab::Move))
     })
 }
 
@@ -538,15 +593,43 @@ fn drop(app: &mut WordApp, d: &ObjectDrag) {
     if !d.drag.moved {
         return;
     }
-    let r = d.drag.rect;
+    // A handle of an edited turned box: the commands act on the box, then the text is edited
+    // again.
+    if let Some(keep) = &d.keep {
+        let pos = d.object.pos();
+        let end = Pos { off: pos.off + OBJ.len_utf8(), ..pos.clone() };
+        let _ = app.run("select.range", json!({"anchor": pos, "focus": end}));
+        commit(app, d);
+        app.session.sel = keep.clone();
+        return;
+    }
+    commit(app, d);
+}
+
+/// Run a finished drag's command.
+fn commit(app: &mut WordApp, d: &ObjectDrag) {
+    let mut r = d.drag.rect;
     // A chart or SmartArt takes a new size, never a new place.
     if matches!(d.drag.grab, Grab::Resize(_)) && size_only(app, &d.object) {
         let _ = app.run("picture.size", json!({"width": r.w, "height": r.h, "lockAspect": false}));
         return;
     }
+    // A resize of an edited turned box ran on its straight frame: once it turns back about its
+    // new centre, the edge held still would move by R·Δc − Δc. Move the frame back by that, so
+    // the held edge stays at the same page point (as a turned frame's resize does).
+    if d.keep.is_some() && matches!(d.drag.grab, Grab::Resize(_)) {
+        let s = d.drag.start;
+        let (dx, dy) = (r.x + r.w / 2.0 - (s.x + s.w / 2.0), r.y + r.h / 2.0 - (s.y + s.h / 2.0));
+        let (tx, ty) = wordcraft_geom::Spin::new(d.base, false, false).apply(0.0, 0.0, dx, dy);
+        if (tx - dx).is_finite() && (ty - dy).is_finite() {
+            r.x += tx - dx;
+            r.y += ty - dy;
+        }
+    }
     let params = match d.drag.grab {
         Grab::Rotate => {
-            let _ = app.run("arrange.rotation", json!({"degrees": d.drag.deg}));
+            let deg = wordcraft_geom::normalize_degrees(d.base + d.drag.deg);
+            let _ = app.run("arrange.rotation", json!({"degrees": deg}));
             return;
         }
         // An In Line with Text object stays in the text, at the insertion cursor; dropped on
@@ -613,7 +696,7 @@ pub fn paint(app: &WordApp, painter: &Painter, t: &Tokens, layout: &DocLayout, p
                 mesh.rotate(egui::emath::Rot2::from_angle(delta.to_radians()), to.center());
                 painter.add(egui::Shape::mesh(mesh));
             }
-            frame::paint_turning(painter, t, to, d.drag.deg);
+            frame::paint_turning(painter, t, to, d.drag.deg, d.base + d.drag.deg);
             return;
         }
         if !shows_pixels(d) {
@@ -646,7 +729,9 @@ pub fn paint(app: &WordApp, painter: &Painter, t: &Tokens, layout: &DocLayout, p
         // Handles where it can be resized and turned (body and header/footer objects,
         // not charts): else a plain frame.
         let handles = selectable_story(app, o.story) && !fixed(app, &o);
-        frame::paint(painter, t, f, o.spin.deg, editing, handles, handles && !size_only(app, &o));
+        // A turned text box being edited is drawn straight, and so is its frame (Word check P).
+        let deg = if straightened(&o, editing) { 0.0 } else { o.spin.deg };
+        frame::paint(painter, t, f, deg, editing, handles, handles && !size_only(app, &o));
     }
 }
 
@@ -757,4 +842,4 @@ pub fn enter_text_box(app: &mut WordApp) -> bool {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

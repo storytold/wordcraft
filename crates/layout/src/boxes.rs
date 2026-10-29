@@ -547,6 +547,7 @@ pub(crate) fn fit_box(items: Vec<Placed>, height: f32) -> Vec<Placed> {
             | Placed::Shape { rect, .. }
             | Placed::Graphic { rect, .. }
             | Placed::Clip { rect, .. }
+            | Placed::Spun { rect, .. }
             | Placed::Cell { rect, .. }
             | Placed::Object { rect, .. }
                 if rect.y < limit =>

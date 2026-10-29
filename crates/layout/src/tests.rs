@@ -3859,6 +3859,41 @@ fn split_row_rejects_a_hostile_cut() {
     assert!(split_row(&r, 100.0).is_some());
 }
 
+/// A turned text box's text is bracketed by two `Spun` markers; when the row splits through the
+/// box's lines, both fragments keep a bracketed scope, so neither's lines are drawn unturned.
+#[test]
+fn a_split_row_keeps_a_turned_boxs_scope_in_both_fragments() {
+    use crate::table::{CellPart, RowLayout, split_row};
+    let d = Document::from_text(&"word ".repeat(400));
+    let l = lay(&d);
+    let Some(Placed::Lines { story, path, para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })).cloned() else {
+        panic!("no line")
+    };
+    assert!(para.lines.len() > 6);
+    let spun = |open| Placed::Spun {
+        rect: Rect::new(0.0, 0.0, 100.0, 20.0),
+        spin: wordcraft_geom::Spin { deg: 30.0, flip_h: false, flip_v: false },
+        part: 7,
+        open,
+    };
+    let lines = Placed::Lines { story, path, para: para.clone(), l0: 0, l1: para.lines.len(), x: 0.0, y: 0.0, turn: TextDirection::Horizontal };
+    let height = para.lines.last().map_or(100.0, |l| l.top + l.height) + 4.0;
+    let row = RowLayout {
+        height,
+        items: vec![spun(true), lines, spun(false)],
+        bottom: 0.0,
+        edge: 0.0,
+        cells: vec![CellPart { top: 0.0, items: 0..3, end: None }],
+    };
+    let (a, b) = split_row(&row, height / 2.0).expect("the row splits between lines");
+    for (name, part) in [("first", &a), ("second", &b)] {
+        let at = |open| part.items.iter().position(|i| matches!(i, Placed::Spun { open: o, .. } if *o == open));
+        let lines = part.items.iter().position(|i| matches!(i, Placed::Lines { .. })).expect("lines");
+        let (open, close) = (at(true), at(false));
+        assert!(open.is_some_and(|o| o < lines) && close.is_some_and(|c| c > lines), "{name} fragment: scope brackets its lines");
+    }
+}
+
 #[test]
 fn repeated_header_is_followed_by_the_next_row_even_when_it_overflows() {
     // A one-column table at the top of a letter page (body 648 pt), then an empty paragraph. Returns

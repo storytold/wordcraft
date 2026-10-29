@@ -74,6 +74,17 @@ pub enum Placed {
         spin: Spin,
         items: Vec<Placed>,
     },
+    /// Opens (`open`) or closes the items of a turned text box: its frame's shape and its
+    /// text, laid out in the unturned frame `rect` and drawn turned by `spin` about the frame's
+    /// centre, as Word does. While story `part` (the text it shows) is being edited, they are
+    /// drawn straight instead (see [`display::DisplayOptions::straight`]). The items between
+    /// stay in the page's list, so carets, selections and searches find the text as ever.
+    Spun {
+        rect: Rect,
+        spin: Spin,
+        part: u32,
+        open: bool,
+    },
     /// A table cell's area (for hit testing and cell selection). A vertically merged cell is
     /// one `Cell` as tall as all its rows; its continuation rows get a `covered` `Cell` (their
     /// own row's height) so the rows keep a box each, but it isn't a cell of its own on screen.
@@ -117,6 +128,7 @@ impl Placed {
             | Placed::Image { rect, .. }
             | Placed::Shape { rect, .. }
             | Placed::Graphic { rect, .. }
+            | Placed::Spun { rect, .. }
             | Placed::Cell { rect, .. } => {
                 rect.x += dx;
                 rect.y += dy;
@@ -174,6 +186,7 @@ impl Placed {
             | Placed::Image { rect, .. }
             | Placed::Shape { rect, .. }
             | Placed::Graphic { rect, .. }
+            | Placed::Spun { rect, .. }
             | Placed::Cell { rect, .. } => {
                 *rect = turn_rect(turn, x, y, *rect);
             }
