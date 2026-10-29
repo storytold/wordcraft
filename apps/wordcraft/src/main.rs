@@ -119,7 +119,7 @@ impl eframe::App for App {
     fn on_exit(&mut self) {
         print::finish_pending_jobs();
         self.0.session.finish_recovery();
-        save_prefs(&self.0);
+        save_prefs(&mut self.0);
         if let Some(key_file) = &self.2 {
             key_file.remove();
         }
@@ -200,6 +200,10 @@ fn load_prefs(app: &mut WordApp) {
         && let Some(ui) = UiState::from_json(&bytes)
     {
         app.apply_prefs(ui);
+        // A LanguageTool API key that moved to the credential store leaves `ui.json` now (#764).
+        if app.sync_secrets() {
+            save_prefs(app);
+        }
     }
 }
 
@@ -225,10 +229,11 @@ fn saved_window() -> Option<WindowGeometry> {
     UiState::from_json(&bytes)?.window?.sanitized()
 }
 
-fn save_prefs(app: &WordApp) {
+fn save_prefs(app: &mut WordApp) {
     if !prefs_enabled() {
         return;
     }
+    app.sync_secrets();
     if let Some(p) = prefs_path() {
         if let Some(dir) = p.parent()
             && let Err(e) = std::fs::create_dir_all(dir)
@@ -262,9 +267,11 @@ fn write_prefs(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
 /// Native file dialogs, shown without blocking the window (`file_dialogs`, #94), File › Print
 /// through the system spooler (`print`), the system clipboard's text, formatted copies,
 /// pictures and format names (`clipboard`, #45, #584, #687, #833), the system's animation setting
-/// (`animations`), and making WordCraft the default app for Word documents (`default_apps`, #295).
+/// (`animations`), making WordCraft the default app for Word documents (`default_apps`, #295), and
+/// the credential store for the LanguageTool API key (#764; runs without preferences leave it alone).
 fn services(file_dialog: file_dialogs::Hook, ctx: &egui::Context) -> Services {
     Services {
+        secrets: if prefs_enabled() { wordcraft_ui_egui::secrets::os_store() } else { None },
         file_dialog: Some(file_dialog),
         printers: Some(print::discover()),
         print_native: Some(print::submit()),

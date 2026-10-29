@@ -43,6 +43,7 @@ pub mod icons;
 pub mod ink;
 pub mod keys;
 pub mod keytips;
+pub mod languagetool;
 mod local_time;
 pub mod mini_toolbar;
 pub mod objects;
@@ -57,6 +58,7 @@ pub mod ribbon;
 pub mod ribbon_fit;
 pub mod ruler_tabs;
 pub mod scroll;
+pub mod secrets;
 pub mod system_clipboard;
 pub mod table_mouse;
 pub mod table_pen;
@@ -208,6 +210,10 @@ pub struct UiState {
     /// Digits entered for a multi-key Quick Access Toolbar badge; never persisted.
     #[serde(skip)]
     pub keytip_prefix: String,
+    /// LanguageTool checking (File › Options › Proofing, #575): off by default.
+    pub language_tool: wordcraft_languagetool::Settings,
+    /// The credential store holds the LanguageTool API key, so `ui.json` doesn't (#764).
+    pub language_tool_key_in_store: bool,
     /// Keytips (Alt) state; not persisted, it resets each session.
     #[serde(skip)]
     pub keytips: crate::keytips::Phase,
@@ -323,6 +329,8 @@ impl Default for UiState {
             read_aloud_skip_citations: true,
             keytips_enabled: true,
             keytip_prefix: String::new(),
+            language_tool: wordcraft_languagetool::Settings::default(),
+            language_tool_key_in_store: false,
             keytips: crate::keytips::Phase::Off,
             alt_pressed: false,
             alt_chord_used: false,
@@ -451,6 +459,29 @@ fn migrate_units(v: &mut Value) {
     }
 }
 
+/// Where the LanguageTool API key is kept (#764).
+#[derive(Default)]
+pub(crate) struct LtKeyPlace {
+    /// The key the credential store is known to hold; `ui.json` leaves out a key equal to it.
+    stored: Option<String>,
+    /// `ui.json` said the store holds a key but it couldn't be read: keep saying so, so the key
+    /// comes back once the store is reachable again.
+    unread: bool,
+    /// Why the store couldn't keep, give back or forget the key, for File › Options.
+    pub(crate) error: Option<LtKeyError>,
+}
+
+/// What went wrong with the LanguageTool API key in the credential store (#764).
+pub(crate) enum LtKeyError {
+    /// The store failed to save or read the key: its error.
+    Store(String),
+    /// `ui.json` said the store holds the key, but it has none (removed outside WordCraft) or one
+    /// too long to be a key.
+    Lost,
+    /// A cleared key couldn't be removed from the store: its error.
+    NotRemoved(String),
+}
+
 /// The application.
 pub struct WordApp {
     pub session: Session,
@@ -574,6 +605,10 @@ pub struct WordApp {
     pub(crate) outline_prev_tab: Option<String>,
     /// Zotero commands in flight (`ui.zotero.*`).
     pub zotero: zotero::ZoteroLink,
+    /// LanguageTool checking in flight (`ui.languageTool`, #575).
+    pub language_tool: languagetool::LtLink,
+    /// Where the LanguageTool API key is kept (#764): see [`WordApp::sync_secrets`].
+    pub(crate) lt_key: LtKeyPlace,
     /// The egui context, once the first frame has run (background work wakes the UI with it).
     pub(crate) ctx: Option<egui::Context>,
     /// Whether the current command was entered by an input method's own transaction. The engine

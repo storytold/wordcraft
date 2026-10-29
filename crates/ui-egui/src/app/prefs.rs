@@ -1,4 +1,5 @@
 use super::{DEFAULT_TAB, MAX_DICTIONARY, UiState, WordApp, desktop_theme, recent_fonts_from, theme};
+use crate::{LtKeyError, LtKeyPlace, secrets};
 
 /// What the operating system says about light and dark. macOS and Windows answer through winit;
 /// winit reports nothing on Linux, where the desktop portal does ([`desktop_theme`]). `None` means
@@ -25,6 +26,11 @@ impl WordApp {
         ui.keyboard = self.session.keymap.clone();
         ui.ribbon = self.session.ribbon.clone();
         ui.ink_pens = self.session.view.draw.pens.clone();
+        // A key the credential store holds is left out (#764).
+        ui.language_tool_key_in_store = self.language_tool_key_in_store();
+        if ui.language_tool_key_in_store {
+            ui.language_tool.api_key.clear();
+        }
         ui
     }
 
@@ -79,6 +85,84 @@ impl WordApp {
         self.session.ribbon = std::mem::take(&mut self.ui.ribbon);
         self.session.ribbon.retain_known(&reg);
         self.session.view.draw.pens = std::mem::take(&mut self.ui.ink_pens);
+        self.load_secrets();
+    }
+
+    /// Read the LanguageTool API key back from the credential store when `ui.json` says it is
+    /// there (#764). A key still in `ui.json` (from before #764, or kept there when the store
+    /// refused it) wins; [`WordApp::sync_secrets`] moves it.
+    fn load_secrets(&mut self) {
+        let in_store = std::mem::take(&mut self.ui.language_tool_key_in_store);
+        self.lt_key = LtKeyPlace::default();
+        let Some(store) = &self.services.secrets else { return };
+        if !in_store || !self.ui.language_tool.api_key.is_empty() {
+            return;
+        }
+        match store.get(secrets::LANGUAGE_TOOL_KEY) {
+            Ok(Some(key)) if key.len() <= secrets::MAX_SECRET_LEN => {
+                self.ui.language_tool.api_key = key.clone();
+                self.lt_key.stored = Some(key);
+            }
+            // Removed outside WordCraft, or too long to be a key: say so rather than let it vanish.
+            Ok(_) => {
+                log::warn!("credential store: the LanguageTool API key is no longer there");
+                self.lt_key.error = Some(LtKeyError::Lost);
+            }
+            Err(e) => {
+                log::warn!("credential store: cannot read the LanguageTool API key: {e}");
+                self.lt_key.unread = true;
+                self.lt_key.error = Some(LtKeyError::Store(e));
+            }
+        }
+    }
+
+    /// Bring the credential store up to date with the LanguageTool API key (#764): save a new or
+    /// changed key there, or forget a cleared one. Run before saving `ui.json`, which then leaves
+    /// the key out ([`WordApp::prefs`]). `true` when the store changed, so `ui.json` should be
+    /// written again. Without a store, or when it fails, the key stays in `ui.json` and
+    /// File › Options says why.
+    pub fn sync_secrets(&mut self) -> bool {
+        let Some(store) = &self.services.secrets else { return false };
+        let key = &self.ui.language_tool.api_key;
+        if key.is_empty() {
+            // The key couldn't be read: the user didn't clear it, so leave it in the store.
+            if self.lt_key.unread || self.lt_key.stored.take().is_none() {
+                return false;
+            }
+            self.lt_key.error = match store.delete(secrets::LANGUAGE_TOOL_KEY) {
+                Ok(()) => None,
+                Err(e) => {
+                    log::warn!("credential store: cannot remove the LanguageTool API key: {e}");
+                    Some(LtKeyError::NotRemoved(e))
+                }
+            };
+            return true;
+        }
+        if self.lt_key.stored.as_deref() == Some(key.as_str()) {
+            return false;
+        }
+        // A longer key would be read back as lost on the next start, so it stays in ui.json.
+        if key.len() > secrets::MAX_SECRET_LEN {
+            self.lt_key.error = Some(LtKeyError::Store("the key is too long for the credential store".into()));
+            return false;
+        }
+        match store.set(secrets::LANGUAGE_TOOL_KEY, key) {
+            Ok(()) => {
+                self.lt_key = LtKeyPlace { stored: Some(key.clone()), unread: false, error: None };
+                true
+            }
+            Err(e) => {
+                log::warn!("credential store: cannot save the LanguageTool API key: {e}");
+                self.lt_key.error = Some(LtKeyError::Store(e));
+                false
+            }
+        }
+    }
+
+    /// Whether the LanguageTool API key is kept in the credential store rather than `ui.json`.
+    pub fn language_tool_key_in_store(&self) -> bool {
+        let key = &self.ui.language_tool.api_key;
+        if key.is_empty() { self.lt_key.unread } else { self.lt_key.stored.as_deref() == Some(key.as_str()) }
     }
 
     /// Follow the desktop's light/dark choice while the app runs (Linux, where winit reports no

@@ -174,6 +174,13 @@ impl Session {
         Arc::new(wordcraft_layout::layout(&self.doc, &mut LayoutCache::new(), &opts))
     }
 
+    /// Lay out again on next use, keeping the paragraph cache: an external proofing result
+    /// arrived (#575). Paragraphs whose result changed miss the cache by their own key; the
+    /// document and its undo history are untouched.
+    pub fn proofing_changed(&mut self) {
+        self.layout = Default::default();
+    }
+
     /// Invalidate the cached layout (fonts changed etc.).
     pub fn relayout(&mut self) {
         self.layout = Default::default();

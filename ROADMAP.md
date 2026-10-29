@@ -203,6 +203,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 
 | Date | What landed |
 | 2026-10-17 | Password-protected Word files from Word 2007 (Standard encryption: AES-128/192/256, SHA-1) open with their password, also when named `.doc` or `.dot`; a wrong or missing password is reported as for newer files. Word 97-2003 files with an AES header, which the public spec doesn't define, are refused with a clear message (gap 9) |
+| 2026-10-17 | The LanguageTool API key is kept in the system's credential store (macOS Keychain, Windows Credential Manager, the Secret Service on Linux and the BSDs) instead of plain text in `ui.json`; a key already there moves on the next start. Where there is no store (the web app, a desktop without a Secret Service) or it refuses the key, the key stays in `ui.json` and File › Options says so (#764) |
 | 2026-10-23 | A command that changes nothing is not an edit: it adds no undo step, marks no unsaved changes and forces no relayout, so the redo stack survives it and five hundred of them can no longer push the user's own edits out of the undo history. |
 | 2026-10-23 | Interface translations come from storytold/craft-i18n, shared with the other Crafting Apps: the catalogs are embedded at build time from the commit in `craft-i18n.rev` and looked up through craft-libs' `craft-i18n` crate; `crates/ui-egui/src/i18n/*.tsv` are gone (translations now go to craft-i18n). Strings other apps already translate show translated; a build without `CRAFT_I18N_DIR` is English only |
 | 2026-10-25 | #4085 mark review: whole-cell and ordinary highlight targets include their selected paragraph marks; empty, inherited and partial-column controls added. |
@@ -576,6 +577,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 | 2026-10-11 | Complex scripts (#604): Myanmar, Khmer and Indic text shaped one script at a time in OpenType fallback fonts (regular weight, not AAT-only fonts), the caret and line breaks never split a syllable, Myanmar wraps between syllables, Backspace removes one sign at a time |
 | 2026-10-11 | Any text file opens (#569): `.m3u`/`.m3u8` playlists and other unknown extensions open as plain text with encoding detection (UTF-8, BOMs, UTF-16, Windows-1252), misnamed Word/RTF files by their signature; binary files give a clear error |
 | 2026-10-11 | Select by dragging whole units (#549): after a double-click the drag grows by words, after a triple-click by paragraphs, after Ctrl/⌘+click by sentences, as in Word |
+| 2026-10-11 | LanguageTool spelling and grammar checking (#575), opt-in: File › Options › Proofing (server, default the public one or self-hosted; username/API key; language auto or per paragraph); paragraphs checked in the background, debounced and paced to the rate limit; squiggles and suggestions as in the built-in checker; `ui.languageTool` for agents; desktop only |
 | 2026-10-12 | Selection bar (#856): in the left margin beside body text a click selects the line, a double-click the paragraph, a triple-click or Ctrl/⌘+click the document; dragging there selects whole lines and Shift+click extends by lines; the pointer turns to an arrow. Right margin for right-to-left paragraphs not yet |
 | 2026-10-11 | Compare / Combine dialog with comparison settings, Restrict Editing pane (exceptions, SHA-512 password, locked styles; DOCX round trip), AutoCorrect Options dialog saved per user (#412) |
 | 2026-10-11 | DOCX diagrams (#611): lines, connectors and boxes styled by the theme now show (they were invisible); callouts and flowchart boxes drawn as the nearest shape; VML lines, rectangles and ovals |
@@ -645,6 +647,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-17 | trivial | Progress log: the LanguageTool API key in the system's credential store (#764) |
 | 2026-10-29 | trivial | Recipient labels continue across product-sized sheets instead of stopping after the first sheet (#4880). Filtered/sorted order, product geometry and single-label mode retained; readiness estimates unchanged. |
 | 2026-10-22 | trivial | Progress log: one native window per open document |
 | 2026-10-22 | trivial | Progress log: every open document keeps its own recovery copy |
