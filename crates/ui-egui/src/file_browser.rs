@@ -388,13 +388,18 @@ fn body(ui: &mut Ui, b: &mut FileBrowser, t: &Tokens) -> Option<Option<PathBuf>>
                     let rtl = crate::rtl::on();
                     let icon = Rect::from_center_size(pos2(crate::rtl::lead_x(rtl, r, 14.0), r.center().y), vec2(18.0, 18.0));
                     icons::paint(ui.painter(), icon, if e.dir { "folder" } else { "file" }, t.icon, t.accent);
-                    ui.painter().with_clip_rect(r).text(
-                        pos2(crate::rtl::lead_x(rtl, r, 30.0), r.center().y),
-                        crate::rtl::lead_center(rtl),
-                        crate::i18n::isolate(&e.name),
-                        regular(13.0),
-                        t.text,
-                    );
+                    // A long name keeps its beginning and ends in an ellipsis inside the row, from the
+                    // side reading starts from; the whole name is the row's tooltip then.
+                    let mut job = egui::text::LayoutJob::simple_singleline(crate::i18n::isolate(&e.name), regular(13.0), t.text);
+                    job.wrap.max_width = (r.width() - 36.0).max(0.0);
+                    job.wrap.max_rows = 1;
+                    job.wrap.break_anywhere = true;
+                    let galley = ui.painter().layout_job(job);
+                    let text_x = crate::rtl::lead_x(rtl, r, 30.0);
+                    let at = pos2(if rtl { text_x - galley.size().x } else { text_x }, r.center().y - galley.size().y / 2.0);
+                    let elided = galley.elided;
+                    ui.painter().galley(at, galley, t.text);
+                    let resp = if elided { resp.on_hover_text(&e.name) } else { resp };
                     if resp.double_clicked() {
                         if e.dir {
                             go = Some(e.path.clone());
