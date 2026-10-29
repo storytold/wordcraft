@@ -114,29 +114,6 @@ pub enum ClKind {
     Marker,
 }
 
-/// One drawing segment of a grapheme cluster (or object, tab, break).
-/// Font/style changes may split its drawing; paragraph edit/wrap boundaries keep it atomic.
-#[derive(Clone, Debug)]
-pub struct Cluster {
-    pub start: usize,
-    pub end: usize,
-    pub adv: f32,
-    pub kind: ClKind,
-    /// Index into `ParaLayout::styles`.
-    pub style: u32,
-    /// Glyph range in `ParaLayout::glyphs`.
-    pub g0: u32,
-    pub g1: u32,
-    /// A line may break after this cluster.
-    pub break_after: bool,
-    /// Height above the baseline for objects (images), points.
-    pub obj_h: f32,
-    /// Depth below the baseline for objects (equations), points.
-    pub obj_d: f32,
-    /// The cluster is a decimal separator (decimal tabs align on it).
-    pub dot: bool,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LineEnd {
     /// Wrapped (or last line).

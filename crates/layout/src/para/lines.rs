@@ -1,10 +1,12 @@
 use super::bidi::{even_row, reorder_line};
 use super::grid::{Exclusion, Grid};
 use super::justify::{HYPHENATION_ZONE, hyphen_glyph, shrink_line_spaces, space_room};
-use super::model::{ClKind, Cluster, Line, LineEnd, ParaEnv};
+use super::model::{ClKind, Line, LineEnd, ParaEnv};
 use super::paragraph::word_widths;
 use super::tabs::{next_tab, pl_text_at, ptab_stop, resolve_tab};
-use super::{Align, Arc, Level, LevelSuffix, LineSpacing, MathJc, ParaLayout, TabAlign, TabLeader, TabStop, VecDeque, WrapText};
+use super::{
+    Align, Arc, Cluster, Level, LevelSuffix, LineSpacing, MathJc, ParaLayout, TabAlign, TabLeader, TabStop, VecDeque, WrapText, label_line_index,
+};
 
 /// Narrow cells and float spans must retain their usable width.
 const MIN_LINE_WIDTH: f32 = 1.0;
@@ -450,6 +452,11 @@ impl<'e> Breaker<'e> {
     fn measure(&self, pl: &ParaLayout, range: (usize, usize)) -> Measure {
         let rp = &self.rp;
         let Extents { mut asc, mut desc, obj_asc } = self.extents(pl, range);
+        let picture_only = matches!(rp.line_spacing, LineSpacing::Multiple(m) if m >= 1.0)
+            && self.grid.is_none()
+            && obj_asc > asc
+            && (pl.label.is_none() || self.lines.len() != label_line_index(&self.lines, &pl.clusters))
+            && picture_clusters_only(pl, range.0, range.1);
         let text_natural = asc + desc;
         let (text_asc, text_desc) = (asc.max(obj_asc), desc);
         let text_pictures = if obj_asc > asc { obj_asc + desc } else { 0.0 };
@@ -469,10 +476,8 @@ impl<'e> Breaker<'e> {
                 }
             }
         }
-        // Keep the picture floor independent of list-label metrics and line-spacing multipliers.
-        // shortcut: Word leaves less than a full descent below a line of only pictures (0.5pt to
-        // 1.9pt in docxide-pdf's header fixtures case121/case123, where the descent is 3.3pt), and
-        // no rule tried so far (none, only the text's descent) matched both; it needs Word probes.
+        // Picture-only auto-spaced lines add the font's extra leading below the picture
+        // (Word Mac probes at single, 1.15 and double spacing). Labels and grids keep their floor.
         let natural = asc + desc;
         let pictures = if obj_asc > asc { obj_asc + desc } else { 0.0 };
         // Document grid: the line takes whole line pitches, its text centred in them.
@@ -480,7 +485,10 @@ impl<'e> Breaker<'e> {
         let (height, centred) = match (rp.line_spacing, grid) {
             (LineSpacing::Multiple(m), Some(g)) => ((g.snap_height(natural) * m).max(g.snap_height(pictures)), true),
             (LineSpacing::AtLeast(v), Some(g)) => (g.snap_height(natural.max(pictures)).max(v), true),
-            (LineSpacing::Multiple(m), None) => ((text_natural * m + label_extra).max(text_pictures), false),
+            (LineSpacing::Multiple(m), None) => {
+                let floor = if picture_only { obj_asc + text_natural * (m - 1.0).max(0.0) } else { text_pictures };
+                ((text_natural * m + label_extra).max(floor), false)
+            }
             (LineSpacing::AtLeast(v), None) => (natural.max(text_pictures).max(v), false),
             (LineSpacing::Exactly(v), _) => (v, false),
         };
@@ -488,7 +496,8 @@ impl<'e> Breaker<'e> {
             let up = asc.max(obj_asc);
             self.top + ((height - up - desc) / 2.0).max(0.0) + up
         } else {
-            self.top + baseline_offset(rp.line_spacing, asc, height, desc).max(obj_asc.min(height - desc))
+            let cap = if picture_only { height } else { height - desc };
+            self.top + baseline_offset(rp.line_spacing, asc, height, desc).max(obj_asc.min(cap))
         };
         Measure { height, baseline, text_asc, text_desc }
     }
@@ -1021,4 +1030,17 @@ fn row_spans(exclusions: &[Exclusion], top: f32, h: f32, table_h: f32, lo: f32, 
         return Err(taken.iter().map(|t| t.2).reduce(f32::min).unwrap_or(top));
     }
     Ok(spans.into())
+}
+
+fn picture_clusters_only(pl: &ParaLayout, c0: usize, c1: usize) -> bool {
+    pl.clusters.get(c0..c1).is_some_and(|cs| {
+        cs.iter().enumerate().all(|(i, c)| match c.kind {
+            // Hidden and floating anchors have no inline extent or font height.
+            ClKind::Object(_) => c.picture || (c.adv == 0.0 && c.obj_h == 0.0),
+            ClKind::Space | ClKind::Tab | ClKind::Marker => true,
+            // A terminal manual break has no ink and keeps the picture's leading policy.
+            ClKind::LineBreak => i + 1 == cs.len() && c.adv == 0.0 && c.obj_h == 0.0 && c.obj_d == 0.0 && c.g0 == c.g1,
+            _ => false,
+        })
+    })
 }
