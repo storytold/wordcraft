@@ -201,6 +201,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 - 2026-10-15: Find opens Navigation on Results; editing the query restores Results after manual Headings/Pages navigation. Typed and selected-text searches retain document contents (#2096).
 
 | Date | What landed |
+| 2026-10-16 | Inline drawings in text boxes retain their declared dimensions. |
 | 2026-10-17 | Password-protected Word files from Word 2007 (Standard encryption: AES-128/192/256, SHA-1) open with their password, also when named `.doc` or `.dot`; a wrong or missing password is reported as for newer files. Word 97-2003 files with an AES header, which the public spec doesn't define, are refused with a clear message (gap 9) |
 | 2026-10-23 | A command that changes nothing is not an edit: it adds no undo step, marks no unsaved changes and forces no relayout, so the redo stack survives it and five hundred of them can no longer push the user's own edits out of the undo history. |
 | 2026-10-23 | Interface translations come from storytold/craft-i18n, shared with the other Crafting Apps: the catalogs are embedded at build time from the commit in `craft-i18n.rev` and looked up through craft-libs' `craft-i18n` crate; `crates/ui-egui/src/i18n/*.tsv` are gone (translations now go to craft-i18n). Strings other apps already translate show translated; a build without `CRAFT_I18N_DIR` is English only |
@@ -644,6 +645,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | trivial | Inline drawings in text boxes retain their declared dimensions. Synthetic regressions. |
 | 2026-10-22 | trivial | Progress log: one native window per open document |
 | 2026-10-22 | trivial | Progress log: every open document keeps its own recovery copy |
 | 2026-10-22 | trivial | Progress log: several open documents in the desktop window |
