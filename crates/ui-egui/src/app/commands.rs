@@ -605,6 +605,16 @@ impl WordApp {
                 }
                 json!({"theme": self.ui.theme.code(), "dark": self.ui_is_dark()})
             }
+            "ui.neverChangePage" => {
+                // File › Options › General › Never change the document page color; no value reads it.
+                if let Some(v) = p.get("value") {
+                    match v.as_bool() {
+                        Some(never) => self.set_never_change_page(never),
+                        None => return Some(Err("value must be true or false".into())),
+                    }
+                }
+                json!({"neverChangePage": self.ui.never_change_page.unwrap_or(false), "dark": self.page_is_dark()})
+            }
             "ui.interfaceSize" => {
                 // `auto` (the display scale the system reports) or an absolute size in percent,
                 // 50–300 (clamped); no value reads it. `percent` in the result is the size the
@@ -1008,6 +1018,7 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.keytips"
             | "ui.dark"
             | "ui.theme"
+            | "ui.neverChangePage"
             | "ui.interfaceSize"
             | "ui.animations"
             | "ui.language"

@@ -18,7 +18,10 @@ impl WordApp {
         ui.editing = self.session.prefs.clone();
         ui.read_aloud_rate = self.session.read_aloud.rate();
         ui.read_aloud_skip_citations = self.session.read_aloud.skip_citations;
-        ui.dark_page = self.session.view.dark_mode;
+        // The flip is saved only where it outlives a theme change (Never change); otherwise a
+        // restart under another theme would bring back a flip made under the old one.
+        ui.dark_page = self.session.view.dark_mode && self.ui.never_change_page.unwrap_or(false);
+        ui.never_change_page = Some(self.ui.never_change_page.unwrap_or(false));
         ui.nav_pane = self.session.view.nav_pane;
         ui.styles_pane_dock = self.session.view.styles_pane_dock;
         ui.check_spelling = self.session.view.proofing;
@@ -67,7 +70,12 @@ impl WordApp {
         }
         self.session.read_aloud.set_rate(self.ui.read_aloud_rate);
         self.session.read_aloud.skip_citations = self.ui.read_aloud_skip_citations;
-        self.session.view.dark_mode = self.ui.dark_page;
+        // A `ui.json` from before #1722 had "Dark page": that page stays dark in every theme, so
+        // it becomes Never change plus the explicit switch. An unticked one follows the theme.
+        if self.ui.never_change_page.is_none() {
+            self.ui.never_change_page = Some(self.ui.dark_page);
+        }
+        self.session.view.dark_mode = self.ui.dark_page && self.ui.never_change_page.unwrap_or(false);
         self.session.view.nav_pane = self.ui.nav_pane;
         self.session.view.styles_pane_dock = self.ui.styles_pane_dock;
         self.session.view.proofing = self.ui.check_spelling;
@@ -79,6 +87,37 @@ impl WordApp {
         self.session.ribbon = std::mem::take(&mut self.ui.ribbon);
         self.session.ribbon.retain_known(&reg);
         self.session.view.draw.pens = std::mem::take(&mut self.ui.ink_pens);
+    }
+
+    /// Whether pages are drawn dark (#1722). The page follows the interface theme unless
+    /// File › Options › Never change the document page color is on; View › Switch Modes flips
+    /// whichever it would have been. Every drawing site asks here; saving, printing and PDF
+    /// never do.
+    pub fn page_is_dark(&self) -> bool {
+        let themed = self.theme_dark && !self.ui.never_change_page.unwrap_or(false);
+        themed != self.session.view.dark_mode
+    }
+
+    /// Set File › Options › Never change the document page color. The Switch Modes flip is
+    /// dropped with it, so the page is what the ticked or unticked label promises (a migrated
+    /// "Dark page" would otherwise turn over the theme's page once unticked).
+    pub fn set_never_change_page(&mut self, never: bool) {
+        let changed = self.ui.never_change_page.unwrap_or(false) != never;
+        self.ui.never_change_page = Some(never);
+        if changed {
+            self.session.view.dark_mode = false;
+        }
+    }
+
+    /// Record the installed palette. A change of theme drops the Switch Modes flip (#1722), which
+    /// is made against one theme and would give the opposite page in the other; with Never change
+    /// on the page doesn't follow the theme, so the flip stays.
+    pub(crate) fn note_theme(&mut self, dark: bool) {
+        if self.theme_seen && dark != self.theme_dark && !self.ui.never_change_page.unwrap_or(false) {
+            self.session.view.dark_mode = false;
+        }
+        self.theme_dark = dark;
+        self.theme_seen = true;
     }
 
     /// Follow the desktop's light/dark choice while the app runs (Linux, where winit reports no

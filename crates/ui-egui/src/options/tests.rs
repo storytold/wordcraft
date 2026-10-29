@@ -352,6 +352,34 @@ fn general_start_up_turns_the_start_screen_off_and_on() {
     assert!(h.state().ui.start_screen, "and on again");
 }
 
+/// File › Options › General › Never change the document page color (#1722): the checkbox
+/// is the `ui.neverChangePage` setting and decides whether the page follows the theme.
+#[test]
+fn general_never_change_page_checkbox_pins_the_page() {
+    let mut a = app();
+    a.run("ui.theme", json!({"value": "dark"})).unwrap();
+    a.run("file.options", json!({"pane": "general"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    let label = "Never change the document page color";
+    assert!(h.state().page_is_dark(), "off: the dark theme gives a dark page");
+    h.get_by_label(label).click();
+    h.run_steps(4);
+    assert_eq!(h.state().ui.never_change_page, Some(true));
+    assert!(!h.state().page_is_dark(), "on: the document's own light page");
+    h.get_by_label(label).click();
+    h.run_steps(4);
+    assert_eq!(h.state().ui.never_change_page, Some(false));
+    assert!(h.state().page_is_dark(), "off again: the page follows the theme");
+}
+
 /// File › Options › Advanced › Editing: the alignment guides checkbox is the
 /// `ui.alignmentGuides` setting.
 #[test]

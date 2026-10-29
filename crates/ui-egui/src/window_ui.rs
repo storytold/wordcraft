@@ -156,6 +156,8 @@ impl WordApp {
             // App-wide.
             session: _,
             services: _,
+            theme_dark: _,
+            theme_seen: _,
             printing: _,
             print_feedback_seen: _,
             font_generation: _,
@@ -267,6 +269,7 @@ impl WordApp {
             read_aloud_skip_citations: _,
             keytips_enabled: _,
             dark_page: _,
+            never_change_page: _,
             check_spelling: _,
             caret_animation: _,
             keyboard: _,

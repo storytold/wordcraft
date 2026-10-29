@@ -118,6 +118,8 @@ impl WordApp {
             recent_fonts_for: Vec::new(),
             fonts_frames: 0,
             applied_theme: None,
+            theme_dark: false,
+            theme_seen: false,
             native_scale: 1.0,
             legacy_interface_size: None,
             // Inert until the app binary calls `watch_desktop_theme`.
@@ -251,7 +253,7 @@ impl WordApp {
         // Both palettes are installed and egui picks one: with `System` it follows an OS appearance
         // change live (winit reports it and repaints, #311). Where winit is silent (Linux) the
         // desktop portal's answer fills in instead. The interface follows the Interface theme
-        // setting alone; Dark page only changes how pages are drawn (#312).
+        // setting alone; Dark page only changes how pages are drawn (#312, #1722).
         let effective = match self.ui.theme {
             theme::Appearance::System if ctx.system_theme().is_none() => match self.desktop_dark {
                 Some(true) => theme::Appearance::Dark,
@@ -264,6 +266,8 @@ impl WordApp {
             theme::apply(ctx, effective);
             self.applied_theme = Some(effective);
         }
+        // `System` follows the OS inside egui, so the palette actually showing is read back.
+        self.note_theme(theme::Tokens::get(ctx).dark);
         // Interface size (#475, #822): egui's zoom factor multiplies the display scale the system
         // reports (native pixels per point). Auto keeps that scale; a chosen size divides it back
         // out, so "100%" is one screen pixel per point even where the system's scale is a guess.

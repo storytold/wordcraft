@@ -229,6 +229,9 @@ pub struct UiState {
     /// View › Switch Modes: show pages dark (white text on black), kept between runs. Only the
     /// pages: the interface follows [`UiState::theme`] (#312).
     pub dark_page: bool,
+    /// File › Options › General › Never change the document page color (#1722). `None` is a
+    /// `ui.json` from before the setting: [`WordApp::apply_prefs`] reads it from `dark_page`.
+    pub never_change_page: Option<bool>,
     /// File › Options › Proofing › Check spelling as you type, kept between runs (#1792).
     pub check_spelling: bool,
     /// File › Options › Advanced › Animation: the caret glides to its new place and its blink
@@ -329,6 +332,7 @@ impl Default for UiState {
             alt_key_down: false,
             alt_modifier_seen: false,
             dark_page: false,
+            never_change_page: None,
             check_spelling: true,
             caret_animation: true,
             keyboard: wordcraft_engine::KeyMap::default(),
@@ -530,6 +534,11 @@ pub struct WordApp {
     fonts_frames: u32,
     /// The effective interface theme last installed in egui ([`theme::apply`]).
     applied_theme: Option<theme::Appearance>,
+    /// The installed interface palette is dark, seen at the start of the frame; see
+    /// [`WordApp::page_is_dark`].
+    theme_dark: bool,
+    /// `theme_dark` has been read at least once, so a change in it is a real theme change.
+    theme_seen: bool,
     /// The display scale (native pixels per point) seen in the last frame, 1.0 before the first;
     /// `ui.interfaceSize` reports the size Auto draws at with it.
     native_scale: f32,
