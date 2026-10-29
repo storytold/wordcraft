@@ -1,7 +1,9 @@
 # Releasing WordCraft
 
-The canonical recipe is [craftrules `release/playbook.md`](https://github.com/storytold/craftrules/blob/main/release/playbook.md);
-this file has the WordCraft specifics.
+This is the WordCraft-specific release guide for maintainers. The canonical shared recipe,
+`craftrules/release/playbook.md`, lives in the internal `storytold/craftrules` repository and
+requires access. External contributors do not need that playbook or the release steps below
+to prepare a contribution.
 
 1. Bump the version on `main`: `cargo xtask version set 0.2.0` (the one source of truth is
    `[workspace.package] version`; the app shows it in `--version` and About, with the commit from
@@ -20,7 +22,8 @@ this file has the WordCraft specifics.
 3. The run drafts a GitHub Release `WordCraft v<version>` with `SHA256SUMS.txt`; review and publish it.
 
 Signing secrets live in the repository's `release` environment (deployment branch: `release` only),
-synced from the release manager's machine (`craftrules/release/signing-setup.md`). Missing secrets
+synced from the release manager's machine (`craftrules/release/signing-setup.md`, an internal
+maintainer reference). Missing secrets
 produce unsigned builds with a warning, so forks still build.
 
 Local packaging: `packaging/macos/package.sh --arch universal`, `packaging/windows/package.ps1`,
