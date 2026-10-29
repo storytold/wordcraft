@@ -3966,6 +3966,30 @@ fn adjust_line_height_in_table_is_read_and_kept() {
     assert_eq!(settings(""), (false, false));
 }
 
+/// Turning `w:adjustLineHeightInTable` on or off after a read is saved and read back, also when the
+/// original settings keep other compatibility options (their block is merged, not regenerated).
+#[test]
+fn adjust_line_height_in_table_edits_survive_a_save_over_original_compat() {
+    let original = |flag: &str| {
+        let s = format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings {W_NS}><w:compat>{flag}<w:useFELayout/></w:compat></w:settings>"#
+        );
+        let rels = [("rId9", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings", "settings.xml")];
+        wordcraft_docx::read(&docx("<w:p/>", &rels, &[("word/settings.xml", &s)])).unwrap()
+    };
+    let saved = |d: &Document| wordcraft_docx::read(&wordcraft_docx::write(d).unwrap()).unwrap();
+    for (start, edit, expected) in
+        [("", true, true), ("<w:adjustLineHeightInTable/>", false, false), ("", false, false), ("<w:adjustLineHeightInTable/>", true, true)]
+    {
+        let mut d = original(start);
+        assert_eq!(d.settings.adjust_line_height_in_table, !start.is_empty(), "read {start:?}");
+        d.settings.adjust_line_height_in_table = edit;
+        let again = saved(&d);
+        assert_eq!(again.settings.adjust_line_height_in_table, expected, "from {start:?} to {edit}");
+        assert_eq!(again.settings.compat_mode, d.settings.compat_mode);
+    }
+}
+
 /// A right triangle (`rtTriangle`) has its right angle at the bottom left: a cover page's white
 /// corner cut-outs drawn as isosceles triangles pointed the wrong way.
 #[test]
