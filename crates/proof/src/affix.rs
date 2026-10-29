@@ -314,13 +314,12 @@ fn parse_aff(aff: &str) -> Result<Rules, String> {
         match dir {
             "SET" | "LANG" | "NAME" | "VERSION" | "HOME" | "WORDCHARS" | "MAXNGRAMSUGS" | "MAXDIFF" | "ONLYMAXDIFF" | "NOSPLITSUGS"
             | "SUGSWITHDOTS" | "WARN" | "FORBIDWARN" | "MAXCPDSUGS" => {}
-            "FLAG" => {
-                // Per-character flag modes (`FLAG UTF-8`, as VERO's pt_BR dictionary uses) work
-                // with the one-character parsing here; only the multi-character encodings differ.
-                if !matches!(at(1), "UTF-8" | "DEFAULT" | "utf-8" | "default" | "UTF8" | "") {
-                    return Err(format!("line {}: FLAG {} is not supported (one-character flags only)", n + 1, at(1)));
-                }
+            // Per-character flag modes (`FLAG UTF-8`, as VERO's pt_BR dictionary uses) work
+            // with the one-character parsing here; only the multi-character encodings differ.
+            "FLAG" if !matches!(at(1), "UTF-8" | "DEFAULT" | "utf-8" | "default" | "UTF8" | "") => {
+                return Err(format!("line {}: FLAG {} is not supported (one-character flags only)", n + 1, at(1)));
             }
+            "FLAG" => {}
             directive @ ("FORBIDDENWORD" | "NOSUGGEST") => {
                 let mut it = at(1).chars().filter(|&c| c != EMOJI_SELECTOR);
                 match (it.next(), it.next()) {

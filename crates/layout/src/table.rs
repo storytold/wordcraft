@@ -9,7 +9,7 @@ use wordcraft_doc::{Block, Blocks, Paragraph, Row, StoryRef, Table};
 use wordcraft_geom::Rect;
 
 use crate::para::{CellText, ClKind, ParaLayout};
-use crate::{BoxContext, BoxLayout, Ctx, Placed, layout_box};
+use crate::{BoxInput, BoxLayout, Ctx, Placed, layout_box};
 
 /// Largest preferred table width, as a share of the text column, that a file can ask for.
 const MAX_WIDTH_SHARE: f32 = 10.0;
@@ -362,11 +362,36 @@ fn region_borders(parts: &[(TablePart, Borders)], (ri, nrows): (usize, usize), (
     out
 }
 
-pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], avail: f32, depth: usize) -> TableLayout {
-    let style = table_style(ctx, t);
-    // Cell text formatting and looks per set of style parts, built once per table.
-    let mut cell_text: Vec<(Region, CellText)> = Vec::new();
-    let mut looks: Vec<(Region, RegionLook)> = Vec::new();
+struct CellBox {
+    items: Vec<Placed>,
+    h: f32,
+    x: f32,
+    w: f32,
+    valign: VAlign,
+    fill: Option<Rgb>,
+    borders: Borders,
+    vmerge: VMerge,
+    margins: [f32; 4],
+    g: usize,
+    span: usize,
+    /// Turned text: `items` are still in the turned frame (placed in the second pass).
+    turned: Option<Turned>,
+    /// Where the content ends below the cell's top (before vertical alignment).
+    end: f32,
+}
+
+struct TableFrame {
+    ncols: usize,
+    colx: Vec<f32>,
+    acc: f32,
+    total: f32,
+    margins_def: [f32; 4],
+    tborders: Borders,
+    rtl: bool,
+    x: f32,
+}
+
+fn table_frame(ctx: &mut Ctx, t: &Table, avail: f32, depth: usize, style: Option<&TableStyleProps>) -> TableFrame {
     let ncols = grid_cols(t).max(1);
     // Column widths.
     let mut grid: Vec<f32> = if t.grid.len() == ncols {
@@ -412,7 +437,7 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
     if !t.props.fixed {
         // Measuring lays paragraphs out once more; it mustn't count their equations twice.
         let eq_count = ctx.eq_count;
-        let content = column_content(ctx, t, style.as_ref(), depth);
+        let content = column_content(ctx, t, style, depth);
         ctx.eq_count = eq_count;
         if let Some(content) = content {
             autofit(&mut grid, &content, t, avail);
@@ -434,10 +459,10 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
     colx.push(acc);
     // Word 2013 and later (compatibility mode 15) put the table's border at the margin (plus its
     // indent); earlier modes line the first cell's text up with it instead.
-    let margins_def = default_margins(t, style.as_ref());
+    let margins_def = default_margins(t, style);
     let indent = t.props.indent.unwrap_or(0.0);
     // The style's borders, overlaid by the table's own side by side.
-    let mut tborders = style.as_ref().and_then(|s| s.parts.borders).unwrap_or_default();
+    let mut tborders = style.and_then(|s| s.parts.borders).unwrap_or_default();
     if let Some(own) = t.props.borders {
         tborders.overlay(&own);
     }
@@ -463,25 +488,18 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
         (_, true) => avail - total - start_offset,
         (_, false) => start_offset,
     };
+    TableFrame { ncols, colx, acc, total, margins_def, tborders, rtl, x }
+}
+
+pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], avail: f32, depth: usize) -> TableLayout {
+    let style = table_style(ctx, t);
+    // Cell text formatting and looks per set of style parts, built once per table.
+    let mut cell_text: Vec<(Region, CellText)> = Vec::new();
+    let mut looks: Vec<(Region, RegionLook)> = Vec::new();
+    let TableFrame { ncols, colx, acc, total, margins_def, tborders, rtl, x } = table_frame(ctx, t, avail, depth, style.as_ref());
     let nrows = t.rows.len();
     // First pass: lay out every cell's content.
-    struct CellBox {
-        items: Vec<Placed>,
-        h: f32,
-        x: f32,
-        w: f32,
-        valign: VAlign,
-        fill: Option<Rgb>,
-        borders: Borders,
-        vmerge: VMerge,
-        margins: [f32; 4],
-        g: usize,
-        span: usize,
-        /// Turned text: `items` are still in the turned frame (placed in the second pass).
-        turned: Option<Turned>,
-        /// Where the content ends below the cell's top (before vertical alignment).
-        end: f32,
-    }
+
     let mut rows: Vec<Vec<CellBox>> = Vec::with_capacity(nrows);
     let mut heights: Vec<f32> = Vec::with_capacity(nrows);
     let mut bottoms: Vec<f32> = Vec::with_capacity(nrows);
@@ -601,19 +619,18 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
                 let len = match (row.props.height, row.props.height_rule) {
                     (Some(h), HeightRule::Exact) if h > 0.0 => (h + row_bottom - insets).clamp(4.0, TURNED_LIMIT),
                     _ => {
-                        let probe = layout_box(ctx, story, &cell.blocks, &cpath, TURNED_MAX, BoxContext::Cell(text), depth, None).items;
+                        let probe = layout_box(ctx, BoxInput::cell(story, &cell.blocks, &cpath, TURNED_MAX, text, depth)).items;
                         (ctx.counters, ctx.eq_count) = (snap.0.clone(), snap.1);
                         natural_length(&probe).clamp(4.0, TURNED_MAX)
                     }
                 };
-                let BoxLayout { items, height, floats_bottom, .. } =
-                    layout_box(ctx, story, &cell.blocks, &cpath, len, BoxContext::Cell(text), depth, None);
+                let BoxLayout { items, height, floats_bottom, .. } = layout_box(ctx, BoxInput::cell(story, &cell.blocks, &cpath, len, text, depth));
                 let across = height.max(floats_bottom);
                 turned = Some(Turned { turn, len, across, snap, region, ci, top: margins[0] + band_t });
                 (items, len)
             } else {
                 let BoxLayout { mut items, mut height, floats_bottom, last_top, .. } =
-                    layout_box(ctx, story, &cell.blocks, &cpath, cw, BoxContext::Cell(text), depth, None);
+                    layout_box(ctx, BoxInput::cell(story, &cell.blocks, &cpath, cw, text, depth));
                 // A hidden end-of-cell mark: an empty last paragraph takes no room (Word for
                 // Windows: a row of empty such cells is only its borders).
                 if cell.props.hide_mark && cell.blocks.last().and_then(|b| b.as_para()).is_some_and(|p| p.text.is_empty()) {
@@ -670,6 +687,11 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
         heights.push(if collapsed && !cells.is_empty() { rh.max(0.0) } else { rh.max(4.0) });
         rows.push(cells);
     }
+    grow_vertical_merges(&rows, &mut heights);
+    finish_table_rows(ctx, TableRows { story, table: t, path, depth, cell_text, rows, heights, bottoms, edges, x, total })
+}
+
+fn grow_vertical_merges(rows: &[Vec<CellBox>], heights: &mut [f32]) {
     // Vertically merged cells: grow the last row of the merge if the content is taller.
     for ri in 0..rows.len() {
         let restarts: Vec<(usize, f32, usize)> =
@@ -687,6 +709,24 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             }
         }
     }
+}
+
+struct TableRows<'a> {
+    story: StoryRef,
+    table: &'a Table,
+    path: &'a [u32],
+    depth: usize,
+    cell_text: Vec<(Region, CellText)>,
+    rows: Vec<Vec<CellBox>>,
+    heights: Vec<f32>,
+    bottoms: Vec<f32>,
+    edges: Vec<f32>,
+    x: f32,
+    total: f32,
+}
+
+fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
+    let TableRows { story, table: t, path, depth, cell_text, rows, heights, bottoms, edges, x, total } = input;
     // Grid columns holding a vertical-merge continuation, per row.
     let cont: Vec<Vec<usize>> = t
         .rows
@@ -758,7 +798,7 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
                     let text = cell_text.iter().find(|(r, _)| *r == tn.region).map(|(_, c)| c);
                     // Same list numbers as the first layout: lay it out from the same counters.
                     let now = (std::mem::replace(&mut ctx.counters, tn.snap.0), std::mem::replace(&mut ctx.eq_count, tn.snap.1));
-                    let b = layout_box(ctx, story, &cell.blocks, &cpath, len, BoxContext::Cell(text), depth, None);
+                    let b = layout_box(ctx, BoxInput::cell(story, &cell.blocks, &cpath, len, text, depth));
                     (cell_items, across) = (b.items, b.height.max(b.floats_bottom));
                     (ctx.counters, ctx.eq_count) = now;
                 }
