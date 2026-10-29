@@ -3,9 +3,36 @@ use super::parts::PartKind;
 use super::position::Path;
 use super::{InlineObject, Numbering, numbering, para, section, styles};
 
-/// Words in `s` (tokens separated by whitespace that contain at least one alphanumeric char).
+/// Count Japanese and other East Asian full-width characters individually, while counting
+/// whitespace-delimited runs of other scripts as words. This approximates Word's mixed-script
+/// count; it is not a Japanese morphological word segmentation.
 pub fn count_words(s: &str) -> usize {
-    s.split(|c: char| c.is_whitespace() || c == para::OBJ).filter(|w| w.chars().any(char::is_alphanumeric)).count()
+    use unicode_segmentation::UnicodeSegmentation;
+
+    fn east_asian(c: char) -> bool {
+        matches!(c as u32,
+            0x2e80..=0x2fff | 0x3000..=0x303f | 0x3040..=0x30ff |
+            0x3100..=0x312f | 0x31a0..=0x31ff | 0x3400..=0x4dbf |
+            0x4e00..=0x9fff | 0xac00..=0xd7af | 0xf900..=0xfaff |
+            0xfe30..=0xfe4f | 0xff01..=0xff60 | 0xff61..=0xff9f |
+            0xffe0..=0xffe6 | 0x20000..=0x323af)
+    }
+
+    let mut total = 0;
+    let mut word = false;
+    for g in s.graphemes(true) {
+        let Some(c) = g.chars().next() else { continue };
+        if c.is_whitespace() || c == para::OBJ {
+            total += usize::from(word);
+            word = false;
+        } else if east_asian(c) {
+            total += usize::from(word) + 1;
+            word = false;
+        } else if g.chars().any(char::is_alphanumeric) {
+            word = true;
+        }
+    }
+    total + usize::from(word)
 }
 
 /// How deep in nested tables [`Document::para_paths`] goes: cells below this are skipped.

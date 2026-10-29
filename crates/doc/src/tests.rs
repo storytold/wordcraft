@@ -17,6 +17,18 @@ fn word_count() {
 }
 
 #[test]
+fn word_count_handles_japanese_and_mixed_text() {
+    assert_eq!(count_words("Wordで文字数をカウントします"), 13);
+    assert_eq!(count_words("日本語、ＡＢ１２。"), 9);
+    assert_eq!(count_words("日本語abc 123日本語"), 8);
+    assert_eq!(count_words("ｶﾀｶﾅ"), 4);
+    assert_eq!(count_words("か\u{3099}𠮷"), 2);
+    assert_eq!(count_words("Hello, world! -- 42"), 3);
+    assert_eq!(count_words("\t日本語\tABC\t123"), 5);
+    assert_eq!(Document::from_text("日本語\nEnglish text").word_count(), 5);
+}
+
+#[test]
 fn word_count_includes_numbered_list_labels_but_not_bullets() {
     let mut d = Document::new();
     let num_id = d.numbering.add_list(ListKind::Numbered);

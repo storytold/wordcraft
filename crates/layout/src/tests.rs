@@ -5884,6 +5884,52 @@ fn a_floating_table_taller_than_a_page_runs_across_pages() {
     assert_eq!(rows, 80);
 }
 
+/// A page-positioned table may follow the text it wraps in document order. Its page position
+/// must be reserved before laying out that text, rather than painting over the notes above its
+/// anchor. The following section then starts after the displaced notes.
+#[test]
+fn a_page_anchored_floating_table_wraps_text_before_its_anchor() {
+    use wordcraft_doc::para::Anchor;
+    use wordcraft_doc::props::{HeightRule, LineSpacing, TableFloat};
+    let mut d = Document::from_text("\u{000C}Notes above the table anchor.\nContinuation notes.\nAfter the table.");
+    for block in &mut d.body {
+        if let Block::Para(p) = Arc::make_mut(block) {
+            p.props.line_spacing = Some(LineSpacing::Exactly(24.0));
+            p.props.space_before = Some(0.0);
+            p.props.space_after = Some(0.0);
+        }
+    }
+    let mut t = Table::new(1, 1, 468.0);
+    t.rows[0].props.height = Some(480.0);
+    t.rows[0].props.height_rule = HeightRule::Exact;
+    t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Form", Default::default()))];
+    t.props.float = Some(TableFloat { h_rel: Anchor::Margin, v_rel: Anchor::Page, y: 72.0, ..Default::default() });
+    d.insert_block(StoryRef::Body, &Path::top(2), wordcraft_doc::Block::Table(t)).unwrap();
+    let layout = lay(&d);
+    assert_eq!(layout.pages.len(), 2);
+    let page = &layout.pages[1];
+    let cell = page
+        .items
+        .iter()
+        .find_map(|i| match i {
+            Placed::Cell { rect, .. } => Some(*rect),
+            _ => None,
+        })
+        .unwrap();
+    assert!((cell.y - 72.0).abs() < 0.01);
+    for block in [0, 1, 3] {
+        let y = page
+            .items
+            .iter()
+            .find_map(|i| match i {
+                Placed::Lines { path, y, para, l0, .. } if path.0 == [block] => Some(y + para.lines[*l0].top),
+                _ => None,
+            })
+            .unwrap();
+        assert!(y >= cell.bottom() - 0.01, "body block {block} at {y}, table ends at {}", cell.bottom());
+    }
+}
+
 /// #534: a table placed on the page (`w:tblpPr w:vertAnchor="page"`) whose anchor comes after a
 /// page full of text goes to the next page with it, like Word, instead of covering that text.
 #[test]

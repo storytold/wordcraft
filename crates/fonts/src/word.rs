@@ -41,8 +41,9 @@ fn substitutes_by_name(family: &str) -> (&'static [&'static str], bool) {
     const SERIF: &[&str] = &["Caladea", "Times New Roman", "Liberation Serif", "Georgia", "Noto Serif", "DejaVu Serif", "Source Serif 4"];
     const MONO: &[&str] = &["Courier New", "Liberation Mono", "Menlo", "Consolas", "DejaVu Sans Mono", "JetBrains Mono"];
     // Japanese Gothic substitutes preserve a sans-serif appearance and Japanese coverage.
-    // BIZ UDPGothic is bundled under the OFL; its proportional metrics differ from MS Gothic.
-    const MS_GOTHIC: &[&str] = &["BIZ UDPGothic", "Noto Sans JP", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo"];
+    // Prefer the fixed-width Japanese BIZ face where available; the bundled proportional
+    // face remains a fallback when it is not installed.
+    const MS_GOTHIC: &[&str] = &["BIZ UDGothic", "BIZ UDPGothic", "Noto Sans JP", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo"];
     const ARIAL: &[&str] = &["Liberation Sans", "Helvetica", "Helvetica Neue", "Arimo", "Source Sans 3"];
     const ARIAL_UNICODE: &[&str] = &["Arial", "Liberation Sans", "Helvetica", "Helvetica Neue", "Arimo", "Source Sans 3"];
     const TIMES: &[&str] = &["Liberation Serif", "Times", "Tinos", "Source Serif 4"];
@@ -347,11 +348,10 @@ fn is_hebrew(f: &str) -> bool {
 /// letters and digits as well as Thai ones (a Thai face without Latin would leave a mixed run in
 /// two fonts, #1549), else the first with Thai letters, else the first installed.
 fn substitute(db: &FontDb, family: &str) -> Option<&'static str> {
-    let mut installed = substitutes(family).iter().copied().filter(|s| db.has_family(s));
     if !is_thai_family(family) {
-        return installed.next();
+        return first_installed_substitute(family, |name| db.has_family(name));
     }
-    let installed: Vec<&'static str> = installed.collect();
+    let installed: Vec<&'static str> = substitutes(family).iter().copied().filter(|s| db.has_family(s)).collect();
     let covers = |name: &str, chars: &[char]| {
         let face = db.face(name, "Regular");
         face.named(name) && chars.iter().all(|c| face.covers(*c))
@@ -362,6 +362,10 @@ fn substitute(db: &FontDb, family: &str) -> Option<&'static str> {
         .find(|s| covers(s, &['\u{0E19}', 'A', 'z', '0', '9']))
         .or_else(|| installed.iter().copied().find(|s| covers(s, &['\u{0E19}'])))
         .or_else(|| installed.first().copied())
+}
+
+fn first_installed_substitute(family: &str, has_family: impl Fn(&str) -> bool) -> Option<&'static str> {
+    substitutes(family).iter().copied().find(|name| has_family(name))
 }
 
 // Localized MS Gothic family names may be cataloged under their English name (or vice versa).
@@ -510,16 +514,19 @@ mod tests {
             assert_eq!(installed_ms_gothic_alias(name, |candidate| candidate == "MS Gothic"), Some("MS Gothic"));
             assert_eq!(installed_ms_gothic_alias(name, |candidate| candidate == "ＭＳ ゴシック"), Some("ＭＳ ゴシック"));
             assert_eq!(installed_ms_gothic_alias(name, |_| false), None);
-            assert_eq!(substitutes(name).first(), Some(&"BIZ UDPGothic"));
+            assert_eq!(&substitutes(name)[..2], &["BIZ UDGothic", "BIZ UDPGothic"]);
             assert!(has_named_substitutes(name));
         }
+        assert_eq!(first_installed_substitute("MS Gothic", |n| n == "BIZ UDGothic" || n == "BIZ UDPGothic"), Some("BIZ UDGothic"));
+        assert_eq!(first_installed_substitute("MS Gothic", |n| n == "BIZ UDPGothic"), Some("BIZ UDPGothic"));
+        assert_eq!(first_installed_substitute("MS Gothic", |_| false), None);
         assert_eq!(installed_ms_gothic_alias("MS PGothic", |_| true), None);
         let db = FontDb::global();
         if !["MS Gothic", "ＭＳ ゴシック", "MS ゴシック", "ＭＳ　ゴシック"].iter().any(|n| db.has_family(n)) && db.has_family("BIZ UDPGothic")
         {
             let resolved = resolve("ＭＳ ゴシック", false, false);
             assert!(resolved.substituted);
-            assert!(resolved.face.named("BIZ UDPGothic"));
+            assert!(resolved.face.named(if db.has_family("BIZ UDGothic") { "BIZ UDGothic" } else { "BIZ UDPGothic" }));
             assert!(resolved.face.covers('日'));
         }
     }

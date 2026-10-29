@@ -244,8 +244,29 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
     }
 }
 
+// A body block is either a paragraph or a table, so this cannot collide with a paragraph's
+// object index in the early-float map.
+const FLOATING_TABLE_OBJECT: usize = usize::MAX;
+
+/// Remember a floating table which intersects earlier text. Like a floating drawing, it must
+/// be known before that text is laid out on the next pass. Keep an existing seed after the text
+/// moves clear of it, and replace that seed's exclusion instead of appending it twice.
+fn remember_floating_table(ctx: &mut Ctx, pb: &mut PageBuilder, block: usize, area: WrapArea, covers_text: bool) {
+    let page = pb.pages.len().saturating_sub(1);
+    let key = (block, FLOATING_TABLE_OBJECT);
+    let seed = pb.early.get(&page).and_then(|v| v.iter().position(|(b, k, _)| (*b, *k) == key)).filter(|k| *k < pb.seeded);
+    let above = (area.0.y < pb.y - 0.5 && (covers_text || seed.is_some())).then(|| (page, area.clone()));
+    ctx.floats_above.insert(key, above);
+    if let Some(slot) = seed.and_then(|k| pb.excl.get_mut(k)) {
+        *slot = area.clone();
+    } else {
+        pb.excl.push(area.clone());
+    }
+    pb.float_tables.push(area.0);
+}
+
 /// Place floating table `tl` (`w:tblpPr`): at its own position, which takes no room in the text
-/// flow; the text after it wraps around it.
+/// flow; intersecting text before and after it wraps around it.
 fn place_floating_table(ctx: &mut Ctx, pb: &mut PageBuilder, tl: &table::TableLayout, f: &TableFloat, legacy: f32, block: usize, body_top: f32) {
     let h: f32 = tl.rows.iter().map(|r| r.height).sum::<f32>().clamp(0.0, 100_000.0);
     let w = tl.width.clamp(1.0, 100_000.0);
@@ -266,12 +287,8 @@ fn place_floating_table(ctx: &mut Ctx, pb: &mut PageBuilder, tl: &table::TableLa
         // Like Word, a table that doesn't fit below the text before it moves to the next page with
         // its anchor: one placed relative to the paragraph when it would run off the page, one
         // placed on the page or margin when it would also cover the text already on the page.
-        let moves = if f.v_rel == Anchor::Paragraph {
-            r.bottom() > pb.bottom + 0.01
-        } else {
-            let covers_text = pb.page().is_some_and(|page| page.items.iter().any(|item| placed_intersects(item, &r)));
-            covers_text && pb.y + h > pb.bottom + 0.01
-        };
+        let covers_text = pb.page().is_some_and(|page| page.items.iter().any(|item| placed_intersects(item, &r)));
+        let moves = if f.v_rel == Anchor::Paragraph { r.bottom() > pb.bottom + 0.01 } else { covers_text && pb.y + h > pb.bottom + 0.01 };
         if attempt == 0 && moves && !pb.at_top() {
             pb.advance(block, body_top);
             continue;
@@ -289,8 +306,8 @@ fn place_floating_table(ctx: &mut Ctx, pb: &mut PageBuilder, tl: &table::TableLa
             pg.float_tables.push(Path::top(block));
         }
         let area = r.inset(-dl, -dt, -dr, -db);
-        pb.excl.push((area, false, None, WrapText::BothSides, true));
-        pb.float_tables.push(area);
+        let rewrap = covers_text && matches!(f.v_rel, Anchor::Page | Anchor::Margin);
+        remember_floating_table(ctx, pb, block, (area, false, None, WrapText::BothSides, true), rewrap);
         return;
     }
 }

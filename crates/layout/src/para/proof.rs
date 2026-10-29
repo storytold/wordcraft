@@ -80,7 +80,9 @@ pub fn proof_text(p: &wordcraft_doc::Paragraph) -> String {
     let mut run = runs.next();
     let mut end = run.map_or(0, |r| r.len);
     for (i, c) in p.text.char_indices() {
+        crate::work::steps(1); // Inspect this character.
         while run.is_some() && i >= end {
+            crate::work::steps(1); // Advance past this run.
             run = runs.next();
             end = end.saturating_add(run.map_or(0, |r| r.len));
         }
