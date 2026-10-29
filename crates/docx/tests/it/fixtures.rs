@@ -3646,6 +3646,23 @@ fn do_not_expand_shift_return_is_read_and_kept() {
     assert_eq!(settings(""), (false, false));
 }
 
+/// `w:balanceSingleByteDoubleByteWidth` and `w:useFELayout` in the settings' `w:compat`: together
+/// they widen runs of spaces to the East Asian font's space.
+#[test]
+fn balance_width_and_fe_layout_are_read_and_kept() {
+    let settings = |compat: &str| {
+        let s = format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings {W_NS}><w:compat>{compat}</w:compat></w:settings>"#);
+        let rels = [("rId9", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings", "settings.xml")];
+        let d = wordcraft_docx::read(&docx("<w:p/>", &rels, &[("word/settings.xml", &s)])).unwrap();
+        let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+        let pair = |s: &wordcraft_doc::Settings| (s.balance_sbcs_dbcs_width, s.use_fe_layout);
+        (pair(&d.settings), pair(&again.settings))
+    };
+    assert_eq!(settings("<w:balanceSingleByteDoubleByteWidth/><w:useFELayout/>"), ((true, true), (true, true)));
+    assert_eq!(settings("<w:useFELayout/>"), ((false, true), (false, true)));
+    assert_eq!(settings(r#"<w:balanceSingleByteDoubleByteWidth w:val="0"/>"#), ((false, false), (false, false)));
+}
+
 /// A right triangle (`rtTriangle`) has its right angle at the bottom left: a cover page's white
 /// corner cut-outs drawn as isosceles triangles pointed the wrong way.
 #[test]

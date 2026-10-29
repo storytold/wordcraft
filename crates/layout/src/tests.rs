@@ -8128,6 +8128,41 @@ fn east_asian_text_takes_the_asian_font_and_latin_text_the_latin_font() {
     }
 }
 
+/// Measured in Word for Mac: with `useFELayout` and `balanceSingleByteDoubleByteWidth` both set,
+/// each space of a run of two or more is as wide as a space in the run's East Asian font (6 pt for
+/// PMingLiU at 12 pt, against Times New Roman's 3 pt), so a double space after a sentence takes
+/// 12 pt and justified lines holding one fit less. A single space, and either setting alone, keep
+/// the normal width. An East Asian font that isn't installed counts as having half-em spaces.
+#[test]
+fn a_run_of_spaces_takes_the_east_asian_space_under_balanced_width() {
+    let text = "nnnn nnnn.  nnnn   nnnn";
+    let gaps = |balance: bool, fe: bool, ea: Option<&str>| {
+        let mut d = Document::from_text(text);
+        d.settings.balance_sbcs_dbcs_width = balance;
+        d.settings.use_fe_layout = fe;
+        d.format_range(&Pos::body(0, 0), &Pos::body(0, text.len()), &|c| {
+            c.font = Some("Source Sans 3".into());
+            c.size = Some(12.0);
+            c.font_ea = ea.map(String::from);
+        })
+        .unwrap();
+        let l = lay(&d);
+        let pl = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+        let x = |i: usize| pl.x_of(0, i).unwrap();
+        // The single space, the double one and the triple one.
+        (x(5) - x(4), x(12) - x(10), x(19) - x(16))
+    };
+    let (one, two, three) = gaps(false, false, Some("Quillmark Ming"));
+    assert!((two - 2.0 * one).abs() < 0.01 && (three - 3.0 * one).abs() < 0.01, "plain: {one} {two} {three}");
+    for (balance, fe) in [(true, false), (false, true)] {
+        assert_eq!(gaps(balance, fe, Some("Quillmark Ming")), (one, two, three), "only one setting: {balance} {fe}");
+    }
+    assert_eq!(gaps(true, true, None), (one, two, three), "no East Asian font named");
+    let (b1, b2, b3) = gaps(true, true, Some("Quillmark Ming"));
+    assert!((b1 - one).abs() < 0.01, "a single space keeps its width: {b1} vs {one}");
+    assert!((b2 - 12.0).abs() < 0.01 && (b3 - 18.0).abs() < 0.01, "half an em per space in a run: {b2} {b3}");
+}
+
 /// A page total in the footer ("Page X of Y") is filled in after pagination, so it doesn't make
 /// the body lay out a second time; one in the body still does.
 #[test]

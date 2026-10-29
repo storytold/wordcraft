@@ -565,6 +565,9 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     for (range, props) in p.run_ranges() {
         sh.run(&cx, range, props);
     }
+    if doc.settings.use_fe_layout && doc.settings.balance_sbcs_dbcs_width {
+        sh.b.widen_space_runs(&p.text);
+    }
     if rp.snap_to_grid {
         snap_chars(&mut sh.b, &p.text, &env.grid);
     }

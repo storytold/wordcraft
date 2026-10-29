@@ -139,11 +139,17 @@ fn write_note_settings(
 fn write_compatibility_settings(w: &mut W, doc: &Document) {
     w.open("w:compat", &[]);
     // CT_Compat: the older switches come before the `w:compatSetting`s.
+    if doc.settings.balance_sbcs_dbcs_width {
+        w.empty("w:balanceSingleByteDoubleByteWidth", &[]);
+    }
     if doc.settings.do_not_expand_shift_return {
         w.empty("w:doNotExpandShiftReturn", &[]);
     }
     if doc.settings.sum_paragraph_spacing {
         w.empty("w:doNotUseHTMLParagraphAutoSpacing", &[]);
+    }
+    if doc.settings.use_fe_layout {
+        w.empty("w:useFELayout", &[]);
     }
     if doc.settings.allow_space_of_same_style_in_table {
         w.empty("w:allowSpaceOfSameStyleInTable", &[]);

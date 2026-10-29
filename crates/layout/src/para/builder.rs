@@ -355,6 +355,38 @@ impl<'a> Builder<'a> {
         }
     }
 
+    /// Under `useFELayout` with `balanceSingleByteDoubleByteWidth`, Word draws each space of a run
+    /// of two or more (a double space after a sentence) as wide as a space in the run's East Asian
+    /// font: half an em in PMingLiU, against a quarter em in Times New Roman (measured in Word for
+    /// Mac). A single space keeps its own width. An East Asian font that isn't installed is taken
+    /// as having half-width spaces, as Chinese, Japanese and Korean fonts do.
+    pub(super) fn widen_space_runs(&mut self, text: &str) {
+        let is_space = |c: &Cluster| c.kind == ClKind::Space && text.get(c.start..c.end) == Some(" ");
+        let mut i = 0;
+        while i < self.clusters.len() {
+            let n = self.clusters[i..].iter().take_while(|c| is_space(c)).count();
+            if n >= 2 {
+                for k in i..i + n {
+                    let Some(c) = self.clusters.get(k) else { continue };
+                    let Some(st) = self.styles.get(c.style as usize) else { continue };
+                    let Some(ea) = st.rc.font_ea.as_deref().filter(|f| !f.is_empty()) else { continue };
+                    let r = wordcraft_fonts::word::resolve(ea, st.rc.bold, st.rc.italic);
+                    let em = if r.substituted {
+                        0.5
+                    } else {
+                        let f = r.face.get();
+                        f.advance(f.glyph_for(' ')) / f.units_per_em().max(1.0)
+                    };
+                    let w = em as f32 * st.size + st.rc.spacing;
+                    if let Some(c) = self.clusters.get_mut(k) {
+                        c.adv = c.adv.max(w);
+                    }
+                }
+            }
+            i += n.max(1);
+        }
+    }
+
     /// A ligature glyph (fi, ffi, lam-alef) sits on the first cluster of the letters it draws and
     /// the clusters after it have no glyph and no width, so the caret, clicks and selection edges
     /// inside it all land after the whole glyph. Give each letter an even share of the glyph's

@@ -123,6 +123,14 @@ pub struct Settings {
     /// natural spacing; by default Word stretches it to the margin like a wrapped line.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub do_not_expand_shift_return: bool,
+    /// `w:balanceSingleByteDoubleByteWidth`: with [`Settings::use_fe_layout`], each space in a run
+    /// of two or more takes the width of a space in the run's East Asian font.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub balance_sbcs_dbcs_width: bool,
+    /// `w:useFELayout`: lay out with Word's East Asian line-layout rules (see
+    /// [`Settings::balance_sbcs_dbcs_width`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub use_fe_layout: bool,
     /// Keep contextual paragraph spacing inside legacy table cells (`allowSpaceOfSameStyleInTable`).
     /// Word ignores the layout override in compatibility mode 15, but the flag still round-trips.
     pub allow_space_of_same_style_in_table: bool,
@@ -290,6 +298,8 @@ impl Default for Settings {
             roman_fonts: Vec::new(),
             sum_paragraph_spacing: false,
             do_not_expand_shift_return: false,
+            balance_sbcs_dbcs_width: false,
+            use_fe_layout: false,
             allow_space_of_same_style_in_table: false,
             grid_h: DEFAULT_GRID,
             grid_v: DEFAULT_GRID,
