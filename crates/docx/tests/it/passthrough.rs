@@ -403,3 +403,43 @@ fn a_part_reached_under_many_spellings_is_kept_and_written_once() {
     let written: usize = files.values().map(Vec::len).sum();
     assert!(written < 4 * 64 * 1024, "{written} bytes written");
 }
+
+#[test]
+fn embedded_fonts_load_and_save_when_the_package_spells_the_font_table_in_capitals() {
+    // Part names are case-insensitive: a package storing `WORD/FONTTABLE.XML` and its fonts in
+    // capitals, related in lower case, loaded no fonts, and a save dropped the table and every
+    // font (review of #3872).
+    let table = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?><w:fonts xmlns:w="{W}" xmlns:r="{R_NS}"><w:font w:name="Quill Sans"><w:embedRegular r:id="rId1"/></w:font></w:fonts>"#
+    );
+    let table_rels = rels(&[("rId1", &format!("{REL}/font"), "fonts/font1.odttf")]);
+    let font_bytes = vec![9u8; 2048];
+    let ct = CT.replace(
+        "<Default Extension=\"jpeg\"",
+        "<Default Extension=\"odttf\" ContentType=\"application/vnd.openxmlformats-officedocument.obfuscatedFont\"/><Default Extension=\"jpeg\"",
+    );
+    let mut entries: Vec<(&str, Vec<u8>)> = vec![
+        ("_rels/.rels", rels(&[("rIdMain", &format!("{REL}/officeDocument"), "word/document.xml")])),
+        ("[Content_Types].xml", ct.into_bytes()),
+        (
+            "word/document.xml",
+            format!(r#"<w:document xmlns:w="{W}"><w:body><w:p><w:r><w:t>Body</w:t></w:r></w:p></w:body></w:document>"#).into_bytes(),
+        ),
+        ("word/_rels/document.xml.rels", rels(&[("rId1", &format!("{REL}/fontTable"), "fontTable.xml")])),
+    ];
+    entries.push(("WORD/FONTTABLE.XML", table.into_bytes()));
+    entries.push(("WORD/_RELS/FONTTABLE.XML.RELS", table_rels));
+    entries.push(("WORD/FONTS/FONT1.ODTTF", font_bytes.clone()));
+    let doc = wordcraft_docx::read(&zip(&entries)).unwrap();
+    let fonts = wordcraft_docx::embedded_fonts(&doc);
+    assert_eq!(fonts.len(), 1, "the font loads");
+    assert_eq!(fonts[0].data, font_bytes);
+    // And through a save and a reopen.
+    let saved = wordcraft_docx::write(&doc).unwrap();
+    let files = unzip(&saved);
+    assert!(files.keys().any(|k| k.to_ascii_lowercase().ends_with("fonttable.xml")), "{:?}", files.keys());
+    let again = wordcraft_docx::read(&saved).unwrap();
+    let fonts = wordcraft_docx::embedded_fonts(&again);
+    assert_eq!(fonts.len(), 1, "the font survives a save: {:?}", files.keys());
+    assert_eq!(fonts[0].data, font_bytes);
+}
