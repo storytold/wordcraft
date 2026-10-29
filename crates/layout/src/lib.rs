@@ -2075,7 +2075,6 @@ impl PageBuilder<'_> {
 /// depend on the pages they land on, which (barely) depend on the numbers' widths.
 const MAX_NOTE_PASSES: usize = 3;
 
-
 /// Lay out the whole document.
 pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> DocLayout {
     let t0 = now_ms();
