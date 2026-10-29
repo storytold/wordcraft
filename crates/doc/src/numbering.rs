@@ -356,35 +356,81 @@ impl Counters {
         if def.format == NumFormat::Bullet {
             return Some((def.text.clone(), def));
         }
-        let mut label = String::new();
-        // Word's level text is short; .docx and the lists command already cap it at 64.
-        let mut chars = def.text.chars().take(MAX_LEVEL_TEXT).peekable();
-        while let Some(c) = chars.next() {
-            if c == '%'
-                && let Some(d) = chars.peek().and_then(|d| d.to_digit(10))
-            {
-                chars.next();
-                let k = (d as usize).saturating_sub(1).min(8);
-                let val = vals.get(k).copied().unwrap_or(0);
-                let counted = started.get(k).is_some_and(|f| f.started);
-                let val = if counted { val } else { level_def(k).map(|l| l.start).unwrap_or(1) };
-                // Legal numbering (w:isLgl) shows every level in Arabic digits, whatever its own
-                // format (二 of a Chinese outline becomes 2 in "2.1").
-                let fmt = match level_def(k).map(|l| l.format).unwrap_or(NumFormat::Decimal) {
-                    NumFormat::DecimalZero => NumFormat::DecimalZero,
-                    _ if def.legal => NumFormat::Decimal,
-                    f => f,
-                };
-                label.push_str(&fmt.format(val));
-                if label.len() > MAX_LABEL_BYTES {
-                    break;
-                }
-            } else {
-                label.push(c);
-            }
-        }
+        let label = render_label(numbering, num, &def, &vals, &started);
         Some((label, def))
     }
+    /// Which levels of `num`'s list have counted a paragraph yet (a level never used has no
+    /// number of its own to show in a reference).
+    pub fn started(&self, numbering: &Numbering, num: u32) -> Option<[bool; 9]> {
+        let abs = numbering.abstract_of(num)?;
+        let flags = self.flags.get(&abs.id).copied().unwrap_or_default();
+        Some(flags.map(|f| f.started))
+    }
+
+    /// The label `level` of `num`'s list shows at this point of the walk, without counting: what
+    /// the last paragraph at that level showed (`"14."` while walking clause 14's sub-clauses).
+    /// `None` for a bullet or "none" level, or a level the list doesn't define.
+    pub fn current_label(&self, numbering: &Numbering, num: u32, level: u8) -> Option<String> {
+        let abs = numbering.abstract_of(num)?;
+        let def = numbering.level(num, level.min(8))?;
+        if matches!(def.format, NumFormat::None | NumFormat::Bullet) {
+            return None;
+        }
+        let vals = self.state.get(&abs.id).copied().unwrap_or([0; 9]);
+        let started = self.flags.get(&abs.id).copied().unwrap_or_default();
+        Some(render_label(numbering, num, def, &vals, &started))
+    }
+}
+
+/// The zero-based levels a label template shows (`"%1.%2"` → `[0, 1]`, `"(%3)"` → `[2]`).
+pub fn template_levels(text: &str) -> Vec<usize> {
+    let mut out = Vec::new();
+    let mut chars = text.chars().take(MAX_LEVEL_TEXT).peekable();
+    while let Some(c) = chars.next() {
+        if c == '%'
+            && let Some(d) = chars.peek().and_then(|d| d.to_digit(10))
+        {
+            chars.next();
+            let k = (d as usize).saturating_sub(1).min(8);
+            if !out.contains(&k) {
+                out.push(k);
+            }
+        }
+    }
+    out
+}
+
+/// Render a list label without advancing counters, retaining the existing hostile-input caps.
+fn render_label(numbering: &Numbering, num: u32, def: &Level, vals: &[u32; 9], started: &[LevelFlags; 9]) -> String {
+    let level_def = |k: usize| numbering.level(num, k as u8);
+    let mut label = String::new();
+    // Word's level text is short; .docx and the lists command already cap it at 64.
+    let mut chars = def.text.chars().take(MAX_LEVEL_TEXT).peekable();
+    while let Some(c) = chars.next() {
+        if c == '%'
+            && let Some(d) = chars.peek().and_then(|d| d.to_digit(10))
+        {
+            chars.next();
+            let k = (d as usize).saturating_sub(1).min(8);
+            let val = vals.get(k).copied().unwrap_or(0);
+            let counted = started.get(k).is_some_and(|f| f.started);
+            let val = if counted { val } else { level_def(k).map(|l| l.start).unwrap_or(1) };
+            // Legal numbering (w:isLgl) shows every level in Arabic digits, whatever its own
+            // format (二 of a Chinese outline becomes 2 in "2.1").
+            let fmt = match level_def(k).map(|l| l.format).unwrap_or(NumFormat::Decimal) {
+                NumFormat::DecimalZero => NumFormat::DecimalZero,
+                _ if def.legal => NumFormat::Decimal,
+                f => f,
+            };
+            label.push_str(&fmt.format(val));
+            if label.len() > MAX_LABEL_BYTES {
+                break;
+            }
+        } else {
+            label.push(c);
+        }
+    }
+    label
 }
 
 /// Longest level text (in characters) expanded into a list label.
@@ -395,6 +441,24 @@ const MAX_LABEL_BYTES: usize = 256;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Read-only counter APIs retain the renderer's bounds and never advance a list.
+    #[test]
+    fn reference_labels_are_bounded_and_do_not_advance_counters() {
+        let mut n = Numbering::default();
+        let id = n.add_list(ListKind::Numbered);
+        if let Some(num) = n.nums.iter_mut().find(|x| x.id == id) {
+            num.level_overrides = vec![(0, Level { text: "%1".repeat(30_000), ..Level::default() })];
+        }
+        let mut c = Counters::default();
+        let label = c.next_label(&n, id, 0).unwrap().0;
+        let before = c.values(&n, id);
+        assert_eq!(c.current_label(&n, id, 0).as_deref(), Some(label.as_str()));
+        assert_eq!(c.values(&n, id), before);
+        assert!(label.len() <= 512);
+        assert_eq!(template_levels(&"%1%9".repeat(30_000)), [0, 8]);
+        assert!(c.started(&n, id).unwrap()[0]);
+    }
 
     #[test]
     fn a_huge_level_text_gives_a_bounded_label() {
