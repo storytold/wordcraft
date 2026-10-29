@@ -495,6 +495,12 @@ fn styles_numbering_settings_notes_comments_from_parts() {
         ("docProps/core.xml", core.as_bytes()),
     ]);
     let d = wordcraft_docx::read(&bytes).unwrap();
+    assert_imported_styles(&d);
+    assert_imported_numbering_and_settings(&d);
+    assert_imported_body_and_metadata(&d);
+}
+
+fn assert_imported_styles(d: &Document) {
     // Styles: localized default id renamed to Normal; display names mapped.
     let h = d.styles.get("1").unwrap();
     assert_eq!(h.name, "Heading 1");
@@ -511,6 +517,9 @@ fn styles_numbering_settings_notes_comments_from_parts() {
     assert_eq!(g.header_chr.bold, Some(true));
     assert_eq!(d.settings.theme_colors[4], wordcraft_doc::Rgb(0x44, 0x72, 0xC4));
     assert_eq!(d.settings.major_font, "Major Face");
+}
+
+fn assert_imported_numbering_and_settings(d: &Document) {
     // Numbering.
     let lv = d.numbering.level(2, 0).unwrap();
     assert_eq!((lv.start, lv.text.as_str(), lv.indent, lv.hanging, lv.align), (3, "%1)", 36.0, 18.0, Align::Right));
@@ -525,8 +534,11 @@ fn styles_numbering_settings_notes_comments_from_parts() {
     // A hostile start is clamped, an unknown position left out.
     let fp = d.settings.footnote_pr;
     assert_eq!((fp.pos, fp.num_start, fp.num_restart), (None, Some(1), Some(wordcraft_doc::section::NoteRestart::EachPage)));
+}
+
+fn assert_imported_body_and_metadata(d: &Document) {
     // Body.
-    let p = paras(&d);
+    let p = paras(d);
     assert_eq!(p[0].props.style.as_deref(), Some("1"));
     assert_eq!(p[0].props.numbering, Some(wordcraft_doc::props::NumRef { num: 2, level: 1 }));
     assert_eq!(p[0].props_of_char(4).font.as_deref(), Some("Major Face"));

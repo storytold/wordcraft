@@ -356,6 +356,31 @@ pub enum Piece {
 
 /// Read Replace with text: `^` codes (unless `literal`), `\1`–`\9` with wildcards, and with a
 /// regex also `$n`, `${n}`, `${name}`, `$name`, `$$`, `\n` (paragraph mark), `\t` and `\\`.
+/// Pushes the pending literal text, if any.
+fn flush_literal(cur: &mut String, out: &mut Vec<Piece>) {
+    if !cur.is_empty() {
+        out.push(Piece::Lit(std::mem::take(cur)));
+    }
+}
+
+/// The `^` code whose letter is `chars[i]` (`^&`, `^c`, a replace code or a numeric one): pushes
+/// its piece and returns the characters it used, or `None` when it isn't a code.
+fn caret_code(chars: &[char], i: usize, cur: &mut String, out: &mut Vec<Piece>) -> Option<usize> {
+    let &n = chars.get(i)?;
+    if n == '&' || n == 'c' {
+        flush_literal(cur, out);
+        out.push(if n == '&' { Piece::Found } else { Piece::Clip });
+        return Some(1);
+    }
+    if let Some(ch) = replace_code(n) {
+        cur.push(ch);
+        return Some(1);
+    }
+    let (ch, used) = numeric_code(chars, i)?;
+    cur.push(ch);
+    Some(used)
+}
+
 pub fn parse_replace(with: &str, o: &Opts) -> Vec<Piece> {
     // With a regex, `special: false` turns off only the `^` codes; group references still expand.
     if o.literal && !o.regex {
@@ -364,11 +389,6 @@ pub fn parse_replace(with: &str, o: &Opts) -> Vec<Piece> {
     let chars: Vec<char> = with.chars().collect();
     let mut out = Vec::new();
     let mut cur = String::new();
-    let flush = |cur: &mut String, out: &mut Vec<Piece>| {
-        if !cur.is_empty() {
-            out.push(Piece::Lit(std::mem::take(cur)));
-        }
-    };
     let mut i = 0;
     while let Some(&c) = chars.get(i) {
         i += 1;
@@ -379,7 +399,7 @@ pub fn parse_replace(with: &str, o: &Opts) -> Vec<Piece> {
                     i += used;
                 }
                 Some((Ref::Group(pc), used)) => {
-                    flush(&mut cur, &mut out);
+                    flush_literal(&mut cur, &mut out);
                     out.extend(pc);
                     i += used;
                 }
@@ -391,7 +411,7 @@ pub fn parse_replace(with: &str, o: &Opts) -> Vec<Piece> {
         if c == '\\' && o.wildcards {
             match chars.get(i) {
                 Some(d) if d.is_ascii_digit() && *d != '0' => {
-                    flush(&mut cur, &mut out);
+                    flush_literal(&mut cur, &mut out);
                     out.push(Piece::Group(d.to_digit(10).unwrap_or(0) as usize));
                     i += 1;
                     continue;
@@ -406,28 +426,14 @@ pub fn parse_replace(with: &str, o: &Opts) -> Vec<Piece> {
         }
         if c == '^'
             && !o.literal
-            && let Some(&n) = chars.get(i)
+            && let Some(used) = caret_code(&chars, i, &mut cur, &mut out)
         {
-            if n == '&' || n == 'c' {
-                flush(&mut cur, &mut out);
-                out.push(if n == '&' { Piece::Found } else { Piece::Clip });
-                i += 1;
-                continue;
-            }
-            if let Some(ch) = replace_code(n) {
-                cur.push(ch);
-                i += 1;
-                continue;
-            }
-            if let Some((ch, used)) = numeric_code(&chars, i) {
-                cur.push(ch);
-                i += used;
-                continue;
-            }
+            i += used;
+            continue;
         }
         cur.push(c);
     }
-    flush(&mut cur, &mut out);
+    flush_literal(&mut cur, &mut out);
     out
 }
 
