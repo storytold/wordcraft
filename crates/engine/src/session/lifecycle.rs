@@ -98,6 +98,7 @@ impl Session {
             pending_move,
             clipboard_text: String::new(),
             clipboard_html: String::new(),
+            clipboard_rtf: String::new(),
             clip_history: Default::default(),
             find,
             goal_x,

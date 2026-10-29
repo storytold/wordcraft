@@ -79,6 +79,7 @@ impl Session {
             pending_move: _,
             clipboard_text: _,
             clipboard_html: _,
+            clipboard_rtf: _,
             clip_history: _,
             find: _,
             goal_x: _,

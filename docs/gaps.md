@@ -115,11 +115,13 @@ The same gaps grouped the way the parity documents are, for agents working in on
   their formatting (system clipboard HTML/RTF), Merge Formatting keeps emphasis, Paste Special lists
   what the system clipboard holds, and Linux/Wayland clipboard pictures paste (#687, #833);
 - **UI/UX gaps:** #7, #18, #24; context menus for objects (the table's landed; it still lacks Border Styles); Linux title bar theming (#78); File ›
-  still missing: the Paste Options button after a paste, and RTF on macOS and X11. Copy puts
-  HTML beside the text on the clipboard, so other programs keep the formatting (#1523), with
-  equations as MathML (#816), and a lone equation also in the MathML clipboard formats on
-  Windows and macOS (#1297; pasting into Word/LibreOffice not yet verified); RTF on the
-  clipboard is not written yet.
+  still missing: the Paste Options button after a paste. Copy puts HTML and RTF beside the text
+  on the clipboard, so other programs keep the formatting (#1523), with equations as MathML
+  (#816), and a lone equation also in the MathML clipboard formats on Windows and macOS (#1297;
+  pasting into Word/LibreOffice not yet verified); RTF is written on Windows, macOS and Wayland,
+  while an X11 copy still carries text and HTML only (arboard owns the selection there); a
+  copy of only pictures or shapes carries neither, so WordCraft pastes its own copy. Paste
+  reads RTF on all four.
   Options › Animation effects › Use system setting reads macOS (Reduce motion) and the Linux/BSD
   desktops (`apps/wordcraft/src/animations.rs`) but hasn't been tried on a Mac or in a real
   GNOME or KDE session yet.
@@ -152,6 +154,7 @@ Recipient label generation (#4880) now includes all selected recipients across a
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-17 | trivial | UI/UX gaps: copies put RTF on the clipboard (Windows, macOS, Wayland; not X11), and paste reads RTF on macOS and X11 too |
 | 2026-10-29 | trivial | Recipient labels continue across product-sized sheets instead of stopping after the first sheet (#4880). Filtered/sorted order, product geometry and single-label mode retained; readiness estimates unchanged. |
 | 2026-10-22 | trivial | View windows: several open documents and Switch Windows in the engine |
 | 2026-10-25 | trivial | egui 0.37 migration: interface catalogs remain pinned by `craft-i18n.rev` (`9205108…`; 27 languages, English fallback); IME surrounding deletions and composition resets are implemented with regressions, but managed CI passed; native IME acceptance and native-speaker catalog review remain open; no gap or readiness change |
