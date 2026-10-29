@@ -62,12 +62,18 @@ pub(crate) fn run_from_ribbon(app: &mut WordApp, id: &str, params: Value) {
 
 /// A large ribbon button: 32 px icon over a (possibly two-line) label.
 pub fn big(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, params: Value, menu: bool) -> Response {
-    big_button(ui, app, icon, label, id, params, BigState { menu, checked: false })
+    big_button(ui, app, icon, label, id, params, BigState { menu, checked: false, swatch: None })
 }
 
 /// A large ribbon button for a mode that stays on (`checked` draws it pressed), run without params.
 pub fn big_toggle(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, checked: bool) -> Response {
-    big_button(ui, app, icon, label, id, Value::Object(Default::default()), BigState { menu: false, checked })
+    big_button(ui, app, icon, label, id, Value::Object(Default::default()), BigState { menu: false, checked, swatch: None })
+}
+
+/// [`big_toggle`] for a colour tool (Draw › Highlighter): the icon's colour bar is `swatch`, the
+/// colour the tool applies, not the accent.
+pub fn big_toggle_swatch(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, checked: bool, swatch: Color32) -> Response {
+    big_button(ui, app, icon, label, id, Value::Object(Default::default()), BigState { menu: false, checked, swatch: Some(swatch) })
 }
 
 /// Size of the drop-down marker drawn after a label or beside a split button (#659: one marker,
@@ -93,10 +99,12 @@ pub fn label_line(ui: &Ui, cx: f32, y: f32, text: &str, font: egui::FontId, colo
 struct BigState {
     menu: bool,
     checked: bool,
+    /// The icon's colour bar, when not the accent.
+    swatch: Option<Color32>,
 }
 
 fn big_button(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, params: Value, state: BigState) -> Response {
-    let BigState { menu, checked } = state;
+    let BigState { menu, checked, swatch } = state;
     let label = tl!(label);
     let t = Tokens::get(ui.ctx());
     let galley_w =
@@ -107,8 +115,8 @@ fn big_button(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str,
     let on = enabled(app, id);
     bg(ui, r, &resp, checked, &t);
     let ic = Rect::from_center_size(pos2(r.center().x, r.min.y + BIG_ICON_Y), vec2(32.0, 32.0));
-    let (c, a) = if on { (t.icon, t.accent) } else { (t.text_disabled, t.text_disabled) };
-    icons::paint(ui.painter(), ic, icon, c, a);
+    let (c, a) = if on { (t.icon, swatch.unwrap_or(t.accent)) } else { (t.text_disabled, t.text_disabled) };
+    icons::paint_state(ui.painter(), ic, icon, c, a, !on);
     let mut y = r.min.y + BIG_LABEL_Y;
     let lines: Vec<&str> = label.split('\n').collect();
     for (i, l) in lines.iter().enumerate() {
@@ -121,6 +129,15 @@ fn big_button(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str,
         run_from_ribbon(app, id, params);
     }
     resp
+}
+
+/// The highlight split's colour bar: the highlight `last` (an OOXML highlight name) applies, if
+/// it is one. "No Color" has no bar at all (a transparent swatch), not the accent.
+pub fn highlight_swatch(last: &str) -> Option<Color32> {
+    if last == "none" {
+        return Some(Color32::TRANSPARENT);
+    }
+    wordcraft_doc::props::Highlight::ALL.iter().find(|h| h.ooxml() == last).and_then(|h| h.rgb()).map(crate::theme::c32)
 }
 
 /// A small button: 16 px icon with an optional label; `checked` draws the toggled state.
@@ -147,7 +164,7 @@ pub fn small(ui: &mut Ui, app: &mut WordApp, icon: &str, label: Option<&str>, ti
     keytip_badge(ui, r, id, tip);
     let on = enabled(app, id);
     bg(ui, r, &resp, checked, &t);
-    let ic = Rect::from_center_size(pos2(r.min.x + 12.0, r.center().y), vec2(17.0, 17.0));
+    let ic = Rect::from_center_size(pos2(r.min.x + 12.0, r.center().y), vec2(16.0, 16.0));
     let (c, a) = if on { (t.icon, t.accent) } else { (t.text_disabled, t.text_disabled) };
     icons::paint(ui.painter(), ic, icon, c, a);
     if let Some(l) = label {
@@ -181,16 +198,12 @@ pub fn split(
     let on = enabled(app, id);
     bg(ui, r, &resp, checked, &t);
     bg(ui, ar, &aresp, false, &t);
-    let ic = Rect::from_center_size(r.center(), vec2(17.0, 17.0));
-    let (c, a) = if on { (t.icon, t.accent) } else { (t.text_disabled, t.text_disabled) };
-    icons::paint(ui.painter(), ic, icon, c, a);
-    if let Some(sw) = swatch {
-        let sw = if on { sw } else { t.text_disabled };
-        let bar = Rect::from_min_max(pos2(r.min.x + 4.0, r.max.y - 5.0), pos2(r.max.x - 4.0, r.max.y - 2.0));
-        ui.painter().rect_filled(bar, 0.0, sw);
-        ui.painter().rect_stroke(bar, 0.0, Stroke::new(0.5, t.border), egui::StrokeKind::Inside);
-    }
-    icons::paint(ui.painter(), Rect::from_center_size(ar.center(), vec2(DROPDOWN, DROPDOWN)), "dropdown", c, a);
+    let ic = Rect::from_center_size(r.center(), vec2(16.0, 16.0));
+    // Colour commands (font colour, highlight, shading) draw their colour bar in the accent, so the
+    // swatch is the colour that will be applied.
+    let (c, a) = if on { (t.icon, swatch.unwrap_or(t.accent)) } else { (t.text_disabled, t.text_disabled) };
+    icons::paint_state(ui.painter(), ic, icon, c, a, !on);
+    icons::paint(ui.painter(), Rect::from_center_size(ar.center(), vec2(DROPDOWN, DROPDOWN)), "dropdown", c, c);
     let resp = tooltip(app, resp, tip, id);
     command_menu(&resp, app, id);
     if resp.clicked() && on {
@@ -202,6 +215,7 @@ pub fn split(
     // The arrow opens the choices beside the button: it says whose, so it is not just "button"
     // (#3172).
     aresp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, &arrow_title));
+    // A disabled split's arrow doesn't open its menu either.
     if !on {
         return;
     }
@@ -223,23 +237,31 @@ pub struct MenuButtonOptions<'a> {
     pub tip: &'a str,
     pub big_btn: bool,
     pub id: &'a str,
+    /// The icon's colour bar for a colour menu (Shape Fill): the current colour (transparent =
+    /// none, no bar), not the accent.
+    pub swatch: Option<Color32>,
 }
 
 impl<'a> MenuButtonOptions<'a> {
     pub fn new(icon: &'a str, label: Option<&'a str>, tip: &'a str, big_btn: bool, id: &'a str) -> Self {
-        Self { icon, label, tip, big_btn, id }
+        Self { icon, label, tip, big_btn, id, swatch: None }
+    }
+
+    pub fn swatch(mut self, swatch: Color32) -> Self {
+        self.swatch = Some(swatch);
+        self
     }
 }
 
 pub fn menu_button(ui: &mut Ui, app: &mut WordApp, options: MenuButtonOptions<'_>, menu: impl FnOnce(&mut Ui, &mut WordApp)) {
-    let MenuButtonOptions { icon, label, tip, big_btn, id } = options;
+    let MenuButtonOptions { icon, label, tip, big_btn, id, swatch } = options;
     let (label, tip) = (label.map(|l| tl!(l)), tl!(tip));
     let label = label.filter(|_| big_btn || !crate::ribbon_fit::compact(ui.ctx()));
     let t = Tokens::get(ui.ctx());
     // `id` names the command the menu is about (Header for the Header menu…); while it is
     // disabled the button greys out and doesn't open, like the other ribbon buttons. "" = always on.
     let on = menu_enabled(app, id);
-    let (c, a, text) = if on { (t.icon, t.accent, t.text) } else { (t.text_disabled, t.text_disabled, t.text_disabled) };
+    let (c, a, text) = if on { (t.icon, swatch.unwrap_or(t.accent), t.text) } else { (t.text_disabled, t.text_disabled, t.text_disabled) };
     let resp = if big_btn {
         let galley_w = label
             .unwrap_or("")
@@ -250,7 +272,7 @@ pub fn menu_button(ui: &mut Ui, app: &mut WordApp, options: MenuButtonOptions<'_
         let (r, resp) = ui.allocate_exact_size(vec2(w, CONTENT_H), Sense::click());
         keytip_badge(ui, r, "menu", tip);
         bg(ui, r, &resp, false, &t);
-        icons::paint(ui.painter(), Rect::from_center_size(pos2(r.center().x, r.min.y + BIG_ICON_Y), vec2(32.0, 32.0)), icon, c, a);
+        icons::paint_state(ui.painter(), Rect::from_center_size(pos2(r.center().x, r.min.y + BIG_ICON_Y), vec2(32.0, 32.0)), icon, c, a, !on);
         let lines: Vec<&str> = label.unwrap_or("").split('\n').collect();
         let mut y = r.min.y + BIG_LABEL_Y;
         for (i, l) in lines.iter().enumerate() {
@@ -263,7 +285,7 @@ pub fn menu_button(ui: &mut Ui, app: &mut WordApp, options: MenuButtonOptions<'_
         let (r, resp) = ui.allocate_exact_size(vec2(24.0 + text_w + 10.0, 22.0), Sense::click());
         keytip_badge(ui, r, "menu", tip);
         bg(ui, r, &resp, false, &t);
-        icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 12.0, r.center().y), vec2(17.0, 17.0)), icon, c, a);
+        icons::paint_state(ui.painter(), Rect::from_center_size(pos2(r.min.x + 12.0, r.center().y), vec2(16.0, 16.0)), icon, c, a, !on);
         if let Some(l) = label {
             ui.painter().text(pos2(r.min.x + 24.0, r.center().y), Align2::LEFT_CENTER, l, regular(11.5), text);
         }

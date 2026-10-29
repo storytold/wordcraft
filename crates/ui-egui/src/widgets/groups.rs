@@ -162,7 +162,8 @@ fn group_icon(title: &str) -> &'static str {
 
 /// The icon a command's button shows outside its own ribbon group (custom groups, the Quick
 /// Access Toolbar): the one its ribbon button uses, which is usually named after the id's last
-/// part. Names the icon set doesn't have draw a lettered tile ([`icons::paint`]).
+/// part. Names the icon set doesn't have draw the fallback: a frame with the name's first letter
+/// in the accent ([`icons::paint`]).
 pub fn command_icon(id: &str) -> &str {
     const ICONS: &[(&str, &str)] = &[
         ("arrange.wrap", "wrapText"),

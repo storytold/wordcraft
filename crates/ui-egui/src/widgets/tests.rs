@@ -1,5 +1,45 @@
 use super::*;
 
+/// #1282: the highlight split (ribbon and mini toolbar) shows the highlight it applies.
+#[test]
+fn highlight_swatch_is_the_colour_applied() {
+    assert_eq!(highlight_swatch("yellow"), Some(Color32::from_rgb(255, 255, 0)));
+    assert_ne!(highlight_swatch("green"), highlight_swatch("yellow"));
+    assert_eq!(highlight_swatch("no such colour"), None);
+    assert_eq!(highlight_swatch("none"), Some(Color32::TRANSPARENT));
+}
+
+/// #1282: the arrow of a disabled split button doesn't open its menu.
+#[test]
+fn disabled_split_arrow_opens_no_menu() {
+    for (id, opens) in [("nope.noSuchCommand", false), ("ui.noop", true)] {
+        let app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        assert_eq!(enabled(&app, id), opens);
+        let shown = std::rc::Rc::new(std::cell::Cell::new(false));
+        let origin = std::rc::Rc::new(std::cell::Cell::new(egui::Pos2::ZERO));
+        let (seen, at) = (shown.clone(), origin.clone());
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(240.0, 240.0)).build_ui_state(
+            move |ui, app: &mut WordApp| {
+                ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
+                at.set(ui.cursor().min);
+                let seen = seen.clone();
+                ui.horizontal(|ui| split(ui, app, "highlight", "Split", ButtonAction::new(id, Value::Null, false), None, move |_, _| seen.set(true)));
+            },
+            app,
+        );
+        h.run_steps(2);
+        // The arrow sits right of the 24 px button.
+        let arrow = origin.get() + vec2(29.5, 11.0);
+        h.hover_at(arrow);
+        h.run_steps(1);
+        h.drag_at(arrow);
+        h.run_steps(1);
+        h.drop_at(arrow);
+        h.run_steps(3);
+        assert_eq!(shown.get(), opens, "{id}: menu shown = {}", shown.get());
+    }
+}
+
 /// #653: a large button's label line is no taller than `LABEL_LINE_H` in the interface font, so
 /// two lines (checked at compile time) end above the group title row.
 #[test]
