@@ -125,6 +125,24 @@ impl WordApp {
         Ok(())
     }
 
+    /// Whether the open document `id` has changes that aren't written to a file yet, or a save
+    /// the browser hasn't confirmed. The Save Changes prompt asks about the same work, so the
+    /// prompt and a programmatic refusal cannot drift apart (#1268, #3274).
+    pub(crate) fn document_unsaved_by_id(&self, id: u64) -> bool {
+        let dirty = self.session.document_dirty(id);
+        let unconfirmed = self.saves_in_flight.iter().any(|s| s.marked_saved && s.document == id);
+        dirty || unconfirmed
+    }
+
+    /// Whether the open document `id` has comment or reply text typed but not yet written to
+    /// it (#1348): closing the document would drop that text.
+    pub(crate) fn document_has_comment_drafts(&self, id: u64) -> bool {
+        if id == self.session.document_id() {
+            return panes::has_comment_drafts(self);
+        }
+        self.parked.get(&id).is_some_and(|p| !p.comment_drafts.is_empty())
+    }
+
     /// The open documents with work that would be lost on quitting: the shown one first, then
     /// the others in the order they were opened. Unsaved changes, a save the browser hasn't
     /// confirmed, or comment text not yet written to the document. The Start screen's
@@ -132,13 +150,11 @@ impl WordApp {
     fn unsaved_documents(&self) -> Vec<u64> {
         let active = self.session.document_id();
         let mut out = Vec::new();
-        if self.has_document() && (self.session.dirty || self.save_unconfirmed() || panes::has_comment_drafts(self)) {
+        if self.has_document() && (self.document_unsaved_by_id(active) || self.document_has_comment_drafts(active)) {
             out.push(active);
         }
         for d in self.session.documents() {
-            let unconfirmed = || self.saves_in_flight.iter().any(|s| s.marked_saved && s.document == d.id);
-            let drafts = || self.parked.get(&d.id).is_some_and(|p| !p.comment_drafts.is_empty());
-            if d.id != active && Some(d.id) != self.no_document && (d.dirty || unconfirmed() || drafts()) {
+            if d.id != active && Some(d.id) != self.no_document && (self.document_unsaved_by_id(d.id) || self.document_has_comment_drafts(d.id)) {
                 out.push(d.id);
             }
         }

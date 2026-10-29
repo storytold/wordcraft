@@ -44,10 +44,9 @@ impl WordApp {
             self.dialog = dialogs::Dialog::open(name, self);
             return Ok(json!({"pending": name}));
         }
-        if (self.session.dirty || self.save_unconfirmed() || refused.is_some())
-            && discards_document(id, &params)
-            && !self.closes_only_its_window(id, &params)
-        {
+        // The same unsaved work the control channel's refusal covers, so the prompt and the
+        // refusal can't drift apart (#3274).
+        if (self.document_unsaved() || refused.is_some()) && discards_document(id, &params) && !self.closes_only_its_window(id, &params) {
             let name = self.prompt_name();
             self.dialog = Some(dialogs::Dialog::SaveChanges {
                 name,
@@ -121,6 +120,13 @@ impl WordApp {
         }
         if id == "file.close" {
             return self.close_document(&params);
+        }
+        // `file.closeDocument` closes the document its `id` names (the active one by default):
+        // the same unsaved work would go with it, so it needs the same explicit `force` (#3274).
+        if id == "file.closeDocument"
+            && let Some(e) = crate::control::close_refused(self, id, &params)
+        {
+            return Err(e.into());
         }
         if id == "file.autosave" {
             return self.set_autosave(&params);

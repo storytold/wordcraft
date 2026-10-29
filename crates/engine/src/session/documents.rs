@@ -403,6 +403,12 @@ impl Session {
         id == self.document_id || self.others.iter().any(|d| d.document_id == id)
     }
 
+    /// Whether the open document `id` has changes that aren't written to a file yet: the
+    /// active document's own flag, or a background document's.
+    pub fn document_dirty(&self, id: u64) -> bool {
+        if id == self.document_id { self.dirty } else { self.others.iter().any(|d| d.document_id == id && d.dirty) }
+    }
+
     /// Every open document in the order they were opened, the active one included.
     pub fn documents(&self) -> Vec<DocInfo> {
         self.order
