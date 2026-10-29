@@ -64,10 +64,14 @@ fn source(s: &Session, v: &Value, fmt: &str) -> Option<String> {
     let non_empty = |t: String| if t.is_empty() { None } else { Some(t) };
     match fmt {
         "formatted" => {
-            let f = s.clipboard.as_ref()?;
-            // System clipboard text that isn't our own copy means someone else copied since.
+            s.clipboard.as_ref()?;
+            // System clipboard text that isn't our own copy means someone else copied since. The
+            // comparison is against what Copy actually put on the clipboard -- a list goes there
+            // with its numbers (`1.\tItem 1`, #2015) -- not the fragment's unlabelled text, which
+            // stopped matching and made Paste treat our own copy as another program's (#2023
+            // review).
             match p::str(v, "text") {
-                Some(t) if f.clipboard_text() != t.replace("\r\n", "\n") => None,
+                Some(t) if s.clipboard_text != t.replace("\r\n", "\n") => None,
                 _ => Some(String::new()),
             }
         }
@@ -270,7 +274,7 @@ pub enum Pasted {
 pub fn paste_content(s: &mut Session, v: &Value) -> Result<Pasted, CmdError> {
     let text = p::str(v, "text").map(|t| t.replace("\r\n", "\n"));
     if let Some(f) = &s.clipboard
-        && text.as_ref().is_none_or(|t| f.clipboard_text() == *t)
+        && text.as_ref().is_none_or(|t| s.clipboard_text == *t)
         && (text.is_some() || (p::str(v, "html").is_none() && p::str(v, "rtf").is_none()))
     {
         return Ok(Pasted::Fragment(f.clone()));

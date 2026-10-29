@@ -122,20 +122,21 @@ pub fn import_on(bytes: &[u8], page: &wordcraft_doc::SectionProps) -> Document {
     doc
 }
 
-fn blocks_text(blocks: &[FBlock], out: &mut Vec<String>, lists: &mut ListCounter, depth: usize) {
+fn blocks_text(blocks: &[FBlock], out: &mut Vec<String>, lists: &mut ListCounter, depth: usize, nl: &str, listed: &mut bool) {
     for b in blocks {
         match b {
             FBlock::Para(p) => {
                 let mut line = String::new();
                 match p.list {
                     Some(li) => {
+                        *listed = true;
                         line.push_str(&"\t".repeat(li.level as usize));
                         line.push_str(&lists.label(li));
                         line.push('\t');
                     }
                     None => lists.reset(),
                 }
-                line.push_str(&p.shown_text().replace('\n', "\r\n").replace(['\u{000C}', '\u{000E}'], ""));
+                line.push_str(&p.shown_text().replace('\n', nl).replace(['\u{000C}', '\u{000E}'], ""));
                 out.push(line);
             }
             FBlock::Table(t) => {
@@ -148,7 +149,7 @@ fn blocks_text(blocks: &[FBlock], out: &mut Vec<String>, lists: &mut ListCounter
                                 return String::new();
                             }
                             let mut v = Vec::new();
-                            blocks_text(&c.blocks, &mut v, &mut ListCounter::default(), depth + 1);
+                            blocks_text(&c.blocks, &mut v, &mut ListCounter::default(), depth + 1, nl, listed);
                             v.join(" ")
                         })
                         .collect();
@@ -161,8 +162,18 @@ fn blocks_text(blocks: &[FBlock], out: &mut Vec<String>, lists: &mut ListCounter
 
 /// UTF-8 text, CRLF line ends.
 pub fn export(doc: &Document) -> Vec<u8> {
+    export_lines(doc, "\r\n").0.join("\r\n").into_bytes()
+}
+
+/// The document as plain-text lines, a list paragraph carrying its level's tabs, its label and a
+/// tab. `nl` is what a line break inside a paragraph becomes, so a caller joining the lines with
+/// the same string gets one consistent text: `\r\n` for the `.txt` export, `\n` for the clipboard.
+/// Also says whether any paragraph carried a list label, so a caller can tell a copy that needs
+/// this rendering from one that does not, without deriving list membership a second way.
+pub fn export_lines(doc: &Document, nl: &str) -> (Vec<String>, bool) {
     let flow = from_doc(doc);
     let mut lines = Vec::new();
-    blocks_text(&flow.blocks, &mut lines, &mut ListCounter::default(), 0);
-    lines.join("\r\n").into_bytes()
+    let mut listed = false;
+    blocks_text(&flow.blocks, &mut lines, &mut ListCounter::default(), 0, nl, &mut listed);
+    (lines, listed)
 }

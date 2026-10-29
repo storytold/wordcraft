@@ -11086,3 +11086,126 @@ fn scale_font_sizes_reaches_char_table_and_cs_sizes_and_unset_default() {
     assert_eq!(grid.header_chr.size, Some(16.0));
     assert_eq!(grid.regions.get(&TablePart::Band2Horz).unwrap().chr.size, Some(10.0));
 }
+
+#[test]
+fn copying_a_list_keeps_its_numbers_and_bullets() {
+    // Pasting a list into another editor should bring its labels, as Word does and as the .txt
+    // export already did (#2015).
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Item 1\nItem 2"}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "para.numbering", json!({}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "edit.copy", json!({}));
+    assert_eq!(s.clipboard_text, "1.\tItem 1\n2.\tItem 2");
+
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "para.bullets", json!({}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "edit.copy", json!({}));
+    assert_eq!(s.clipboard_text, "\u{2022}\tItem 1\n\u{2022}\tItem 2");
+
+    // What Copy puts on the clipboard and what Save as .txt writes now agree, apart from the
+    // line ending each of them uses.
+    let txt = String::from_utf8_lossy(&wordcraft_formats::txt::export(&s.doc)).replace("\r\n", "\n");
+    assert_eq!(txt, s.clipboard_text);
+}
+
+/// Pasting WordCraft's own copy of a list back in: Copy puts the labelled text on the system
+/// clipboard (`1.\tItem 1`), and Paste compares the text the host hands back with what Copy put
+/// there. It used to compare with the fragment's *unlabelled* text, so after copying a list the
+/// two differed, our own copy looked like another program's, and Paste typed out `1.\tItem 1` as
+/// plain text instead of inserting the items (#2023 review).
+#[test]
+fn pasting_our_own_copy_of_a_list_inserts_the_items() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Item 1\nItem 2"}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "para.numbering", json!({}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "edit.copy", json!({}));
+    let clipboard = s.clipboard_text.clone();
+    assert_eq!(clipboard, "1.\tItem 1\n2.\tItem 2");
+
+    // A new document, and the host hands back exactly what Copy gave it.
+    let mut t = s;
+    run(&mut t, "document.setText", json!({"text": ""}));
+    run(&mut t, "select.all", json!({}));
+    run(&mut t, "edit.paste", json!({"text": clipboard.clone()}));
+    assert_eq!(t.doc.plain_text(StoryRef::Body), "Item 1\nItem 2", "the items, without the labels typed out");
+    let paras: Vec<_> = (0..2).filter_map(|b| t.doc.para_at(&Pos::body(b, 0))).collect();
+    assert_eq!(paras.len(), 2, "two paragraphs");
+    assert!(paras.iter().all(|p| p.props.numbering.is_some_and(|n| n.num != 0)), "pasted as list items");
+    assert!(!t.doc.plain_text(StoryRef::Body).contains('\t'), "no tab from the label");
+
+    // And Paste Special still knows the copy is ours, so "keep source formatting" is among the
+    // formats it offers -- the choice that was lost when our own copy looked foreign.
+    let formats = run(&mut t, "edit.pasteSpecial", json!({"text": clipboard}));
+    assert!(formats.to_string().contains("formatted"), "the formatted source is offered: {formats}");
+
+    // Text the host changed since (another program copied) is still pasted as plain text.
+    run(&mut t, "select.all", json!({}));
+    run(&mut t, "edit.paste", json!({"text": "from elsewhere"}));
+    assert_eq!(t.doc.plain_text(StoryRef::Body), "from elsewhere");
+}
+
+#[test]
+fn copying_text_that_is_not_a_list_is_unchanged() {
+    // The guard: a copy with no list paragraph keeps the document's own shown text, so tables,
+    // fields and partial selections are untouched by #2015.
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "alpha beta\ngamma"}));
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 6}, "focus": {"block": 1, "off": 2}}));
+    run(&mut s, "edit.copy", json!({}));
+    assert_eq!(s.clipboard_text, "beta\nga");
+}
+
+#[test]
+fn copying_up_to_the_next_item_does_not_bring_its_label() {
+    // A selection that stops at the start of the next item brings that paragraph along as the
+    // mark that ends the last line -- `copy_blocks` truncates it to nothing -- and it was
+    // rendered as an item of its own, so the clipboard ended with a bare "2.\t" (#2023 review).
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Item 1\nItem 2\nItem 3"}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "para.numbering", json!({}));
+
+    for (anchor, focus, want) in [
+        // To the next item's start: the first item and the break, nothing of the second.
+        ((0, 0), (1, 0), "1.\tItem 1\n"),
+        // Two items and a break, from the middle of the first.
+        ((0, 2), (2, 0), "1.\tem 1\n2.\tItem 2\n"),
+        // The guard: a selection that takes any of the next item still labels it.
+        ((0, 0), (1, 3), "1.\tItem 1\n2.\tIte"),
+    ] {
+        run(&mut s, "select.range", json!({"anchor": {"block": anchor.0, "off": anchor.1}, "focus": {"block": focus.0, "off": focus.1}}));
+        run(&mut s, "edit.copy", json!({}));
+        assert_eq!(s.clipboard_text, want, "{anchor:?}..{focus:?}");
+    }
+
+    // And Copy still agrees with Save as .txt, which is what #2015 set out to fix: a list whose
+    // last paragraph is an empty mark reads the same either way.
+    let mut t = crate::tests::s();
+    run(&mut t, "document.setText", json!({"text": "Item 1\nItem 2\n"}));
+    run(&mut t, "select.all", json!({}));
+    run(&mut t, "para.numbering", json!({}));
+    run(&mut t, "select.all", json!({}));
+    run(&mut t, "edit.copy", json!({}));
+    let txt = String::from_utf8_lossy(&wordcraft_formats::txt::export(&t.doc)).replace("\r\n", "\n");
+    assert_eq!(t.clipboard_text, "1.\tItem 1\n2.\tItem 2\n");
+    assert_eq!(txt, t.clipboard_text);
+}
+
+#[test]
+fn copying_part_of_a_list_numbers_from_the_copy() {
+    // Known limit, shared with the `.txt` export: the label counts from the start of what is
+    // rendered, so items 3 and 4 copy as 1 and 2. Word puts their own numbers on the clipboard.
+    // Pinned here so the behaviour is a decision and not a surprise (#2015).
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "One\nTwo\nThree\nFour"}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "para.numbering", json!({}));
+    run(&mut s, "select.range", json!({"anchor": {"block": 2, "off": 0}, "focus": {"block": 3, "off": 4}}));
+    run(&mut s, "edit.copy", json!({}));
+    assert_eq!(s.clipboard_text, "1.\tThree\n2.\tFour");
+}
