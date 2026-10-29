@@ -32,10 +32,10 @@ mod view;
 use arrange::align_menu;
 pub(crate) use arrange::wrap_text_items;
 use charts::{chart_design, smart_art_design};
-pub(crate) use common::mi;
 #[cfg(test)]
 pub(crate) use common::size_menu;
 use common::{custom_groups, edge_cue};
+pub(crate) use common::{mi, shading_swatch};
 use design::design;
 #[cfg(test)]
 use design::style_set_box;

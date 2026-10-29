@@ -1,5 +1,5 @@
 use super::common::{mi, stack};
-use super::{MeasureExt, Remember, Target, Ui, WordApp, big, group, json, menu_button, small, split, vec2};
+use super::{MeasureExt, Remember, Target, Ui, WordApp, big, group, json, menu_button, shading_swatch, small, split, vec2};
 
 pub(super) fn table_design(app: &mut WordApp, ui: &mut Ui) {
     let look = app.session.sel.focus.path.cell().and_then(|(tp, _, _)| app.session.doc.table(app.session.sel.focus.story, &tp).map(|t| t.props.look));
@@ -84,7 +84,7 @@ pub(super) fn table_design(app: &mut WordApp, ui: &mut Ui) {
                 "shading",
                 "Shading",
                 crate::widgets::ButtonAction::new("table.shading", json!({"color": app.canvas.last_shading.clone()}), false),
-                None,
+                shading_swatch(&app.canvas.last_shading),
                 |ui, app| {
                     mi(ui, app, "No Color", "table.shading", json!({"color": null}));
                     let theme = app.session.doc.settings.theme_colors.clone();
@@ -293,7 +293,14 @@ pub(super) fn table_layout(app: &mut WordApp, ui: &mut Ui) {
                 [("bottomLeft", "Align Bottom Left"), ("bottomCenter", "Align Bottom Center"), ("bottomRight", "Align Bottom Right")],
             ] {
                 for (v, tip) in row {
-                    small(ui, app, "cellAlign", None, tip, crate::widgets::ButtonAction::new("table.cellAlign", json!({"value": v}), false));
+                    small(
+                        ui,
+                        app,
+                        &format!("cellAlign.{v}"),
+                        None,
+                        tip,
+                        crate::widgets::ButtonAction::new("table.cellAlign", json!({"value": v}), false),
+                    );
                 }
                 ui.end_row();
             }

@@ -1,6 +1,6 @@
 use super::common::{mi, mi_text, stack};
 use super::underline::underline_menu;
-use super::{Remember, Stroke, Target, Tokens, Ui, Value, WordApp, big, group, json, menu_button, small, split, vec2};
+use super::{Remember, Stroke, Target, Tokens, Ui, Value, WordApp, big, group, json, menu_button, shading_swatch, small, split, vec2};
 
 /// The Format Painter button. A click arms it for one use (blue border only); a double-click keeps
 /// it on across several uses (full checked look), like Word. Esc or another click turns it off.
@@ -292,7 +292,7 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
                     "shading",
                     "Shading",
                     crate::widgets::ButtonAction::new("para.shading", json!({"color": app.canvas.last_shading.clone()}), false),
-                    None,
+                    shading_swatch(&app.canvas.last_shading),
                     |ui, app| {
                         mi(ui, app, "No Color", "para.shading", json!({"color": null}));
                         let theme = app.session.doc.settings.theme_colors.clone();

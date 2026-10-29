@@ -12,6 +12,8 @@ mod groups;
 mod icon_buttons;
 mod tooltip;
 
+#[cfg(test)]
+use buttons::split_colors;
 pub use buttons::{
     BIG_ICON_Y, BIG_LABEL_Y, ButtonAction, CONTENT_H, DROPDOWN, LABEL_H, LABEL_LINE_H, LABEL_PITCH, MenuButtonOptions, big, big_toggle, enabled,
     label_line, menu_button, menu_enabled, small, split,

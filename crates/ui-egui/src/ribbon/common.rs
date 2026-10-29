@@ -141,3 +141,8 @@ pub(super) fn graphic_size(ui: &mut Ui, app: &mut WordApp) {
         });
     });
 }
+
+/// The Shading button's bar: the last shading used (hex), if it parses.
+pub(crate) fn shading_swatch(hex: &str) -> Option<egui::Color32> {
+    wordcraft_doc::Rgb::parse(hex).map(crate::theme::c32)
+}

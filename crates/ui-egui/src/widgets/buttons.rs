@@ -108,7 +108,7 @@ fn big_button(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str,
     bg(ui, r, &resp, checked, &t);
     let ic = Rect::from_center_size(pos2(r.center().x, r.min.y + BIG_ICON_Y), vec2(32.0, 32.0));
     let (c, a) = if on { (t.icon, t.accent) } else { (t.text_disabled, t.text_disabled) };
-    icons::paint(ui.painter(), ic, icon, c, a);
+    icons::paint_state(ui.painter(), ic, icon, c, a, !on);
     let mut y = r.min.y + BIG_LABEL_Y;
     let lines: Vec<&str> = label.split('\n').collect();
     for (i, l) in lines.iter().enumerate() {
@@ -147,9 +147,9 @@ pub fn small(ui: &mut Ui, app: &mut WordApp, icon: &str, label: Option<&str>, ti
     keytip_badge(ui, r, id, tip);
     let on = enabled(app, id);
     bg(ui, r, &resp, checked, &t);
-    let ic = Rect::from_center_size(pos2(r.min.x + 12.0, r.center().y), vec2(17.0, 17.0));
+    let ic = Rect::from_center_size(pos2(r.min.x + 12.0, r.center().y), vec2(16.0, 16.0));
     let (c, a) = if on { (t.icon, t.accent) } else { (t.text_disabled, t.text_disabled) };
-    icons::paint(ui.painter(), ic, icon, c, a);
+    icons::paint_state(ui.painter(), ic, icon, c, a, !on);
     if let Some(l) = label {
         ui.painter().text(pos2(r.min.x + 24.0, r.center().y), Align2::LEFT_CENTER, l, regular(11.5), if on { t.text } else { t.text_disabled });
     }
@@ -160,6 +160,12 @@ pub fn small(ui: &mut Ui, app: &mut WordApp, icon: &str, label: Option<&str>, ti
     }
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, tip));
     resp
+}
+
+/// A split button's ink and accent. Colour commands (font colour, highlight, shading) draw their
+/// colour bar in the accent, so the swatch is the colour that will be applied.
+pub(super) fn split_colors(on: bool, swatch: Option<Color32>, t: &Tokens) -> (Color32, Color32) {
+    if on { (t.icon, swatch.unwrap_or(t.accent)) } else { (t.text_disabled, t.text_disabled) }
 }
 
 /// A split button: the left part runs `id`, the arrow opens a menu filled by `menu`.
@@ -181,16 +187,10 @@ pub fn split(
     let on = enabled(app, id);
     bg(ui, r, &resp, checked, &t);
     bg(ui, ar, &aresp, false, &t);
-    let ic = Rect::from_center_size(r.center(), vec2(17.0, 17.0));
-    let (c, a) = if on { (t.icon, t.accent) } else { (t.text_disabled, t.text_disabled) };
-    icons::paint(ui.painter(), ic, icon, c, a);
-    if let Some(sw) = swatch {
-        let sw = if on { sw } else { t.text_disabled };
-        let bar = Rect::from_min_max(pos2(r.min.x + 4.0, r.max.y - 5.0), pos2(r.max.x - 4.0, r.max.y - 2.0));
-        ui.painter().rect_filled(bar, 0.0, sw);
-        ui.painter().rect_stroke(bar, 0.0, Stroke::new(0.5, t.border), egui::StrokeKind::Inside);
-    }
-    icons::paint(ui.painter(), Rect::from_center_size(ar.center(), vec2(DROPDOWN, DROPDOWN)), "dropdown", c, a);
+    let ic = Rect::from_center_size(r.center(), vec2(16.0, 16.0));
+    let (c, a) = split_colors(on, swatch, &t);
+    icons::paint_state(ui.painter(), ic, icon, c, a, !on);
+    icons::paint(ui.painter(), Rect::from_center_size(ar.center(), vec2(DROPDOWN, DROPDOWN)), "dropdown", c, c);
     let resp = tooltip(app, resp, tip, id);
     command_menu(&resp, app, id);
     if resp.clicked() && on {
@@ -263,7 +263,7 @@ pub fn menu_button(ui: &mut Ui, app: &mut WordApp, options: MenuButtonOptions<'_
         let (r, resp) = ui.allocate_exact_size(vec2(24.0 + text_w + 10.0, 22.0), Sense::click());
         keytip_badge(ui, r, "menu", tip);
         bg(ui, r, &resp, false, &t);
-        icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 12.0, r.center().y), vec2(17.0, 17.0)), icon, c, a);
+        icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 12.0, r.center().y), vec2(16.0, 16.0)), icon, c, a);
         if let Some(l) = label {
             ui.painter().text(pos2(r.min.x + 24.0, r.center().y), Align2::LEFT_CENTER, l, regular(11.5), text);
         }
