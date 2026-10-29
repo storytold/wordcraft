@@ -263,6 +263,20 @@ fn series_are_capped_to_the_cell_budget() {
     assert_eq!(strokes, MAX_CELLS / 10_000);
 }
 
+/// A combination's chart types share one cell budget: once the first type has spent it, the
+/// next one's series are not parsed at all.
+#[test]
+fn combination_chart_types_share_one_cell_budget() {
+    let sers: String = (0..20)
+        .map(|i| format!(r#"<c:ser><c:idx val="{i}"/><c:val><c:numRef><c:numCache><c:ptCount val="10000"/><c:pt idx="0"><c:v>1</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser>"#))
+        .collect();
+    let ty = |name: &str| crate::xml::parse(format!(r#"<c:{name} {NS}>{sers}</c:{name}>"#).as_bytes()).unwrap();
+    let mut budget = MAX_CELLS;
+    assert_eq!(read_series(&ty("barChart"), false, &theme(), &mut budget).len(), MAX_CELLS / 10_000);
+    assert_eq!(budget, 0);
+    assert!(read_series(&ty("lineChart"), false, &theme(), &mut budget).is_empty(), "nothing is left for the line");
+}
+
 #[test]
 fn series_without_values_draw_nothing() {
     let plot = format!(
@@ -642,7 +656,7 @@ fn an_auto_marker_symbol_takes_the_series_automatic_marker() {
             r#"<c:lineChart {NS}><c:ser><c:idx val="{idx}"/><c:order val="{idx}"/><c:marker>{symbol}</c:marker><c:val><c:numRef><c:numCache><c:pt idx="0"><c:v>1</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser><c:marker val="1"/></c:lineChart>"#
         );
         let ty = crate::xml::parse(x.as_bytes()).unwrap();
-        read_series(&ty, false, &theme()).first().and_then(|s| s.marker.as_ref()).map(|m| m.shape)
+        read_series(&ty, false, &theme(), &mut { MAX_CELLS }).first().and_then(|s| s.marker.as_ref()).map(|m| m.shape)
     };
     assert_eq!(shape(0, r#"<c:symbol val="auto"/>"#), Some(MarkerShape::Diamond));
     assert_eq!(shape(2, r#"<c:symbol val="auto"/>"#), Some(MarkerShape::Triangle));

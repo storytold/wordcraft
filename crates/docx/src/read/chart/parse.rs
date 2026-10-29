@@ -16,15 +16,17 @@ impl Chart {
         let scatter = kind == Kind::Scatter;
         let date1904 = space.child("c:date1904").is_some_and(|d| d.attr("val").is_none_or(truthy));
         let horizontal = kind == Kind::Bar && ty.child("c:barDir").and_then(|d| d.attr("val")) == Some("bar");
-        let mut series = read_series(ty, scatter, theme);
+        // One cell budget for the whole chart, shared by every chart type of a combination.
+        let mut budget = MAX_CELLS;
+        let mut series = read_series(ty, scatter, theme, &mut budget);
         let mut types = vec![ty];
         if matches!(kind, Kind::Bar | Kind::Line | Kind::Area) && !horizontal {
             for other in combined_types(plot, ty) {
                 // Past the series limit a chart type is only noted (its bar spacing may still
                 // count), not parsed: each would cost a full cell budget for series dropped.
                 let room = MAX_SERIES.saturating_sub(series.len());
-                if room > 0 {
-                    series.extend(read_series(other, false, theme).into_iter().take(room));
+                if room > 0 && budget > 0 {
+                    series.extend(read_series(other, false, theme, &mut budget).into_iter().take(room));
                 }
                 types.push(other);
             }
@@ -213,17 +215,20 @@ pub(super) fn series_key(s: &Series) -> Key {
     if s.kind == Kind::Line { Key::Line(s.marker) } else { Key::Swatch }
 }
 
-/// The series of a chart type element, within the chart's cell budget.
-pub(super) fn read_series(ty: &El, scatter: bool, theme: &[Rgb]) -> Vec<Series> {
+/// The series of a chart type element, within what is left of the chart's cell `budget`; parsing
+/// stops once it is spent.
+pub(super) fn read_series(ty: &El, scatter: bool, theme: &[Rgb], budget: &mut usize) -> Vec<Series> {
     let kind = Kind::of(&ty.name).unwrap_or(Kind::Bar);
     // A line chart shows its series' markers when it says so (`c:marker` of the chart type).
     let markers = kind == Kind::Line && ty.child("c:marker").is_some_and(|m| m.attr("val").is_none_or(truthy));
     let type_labels = show_values(ty.child("c:dLbls"));
-    let mut budget = MAX_CELLS;
     let mut series = Vec::new();
     for ser in ty.children("c:ser").take(MAX_SERIES) {
-        let mut s = Series::parse(ser, scatter, theme, budget.min(MAX_POINTS));
-        budget = budget.saturating_sub(s.values.len().max(s.xs.len()));
+        if *budget == 0 {
+            break;
+        }
+        let mut s = Series::parse(ser, scatter, theme, (*budget).min(MAX_POINTS));
+        *budget = budget.saturating_sub(s.values.len().max(s.xs.len()));
         s.kind = kind;
         s.labels = s.labels.or(type_labels);
         if !markers {

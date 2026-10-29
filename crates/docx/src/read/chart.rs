@@ -140,7 +140,8 @@ fn placeholder(out: &mut Vec<GraphicItem>, space: &El, theme: &[Rgb], w: f32, h:
     out.push(GraphicItem::Shape { rect: [0.0, 0.0, w, h], kind: ShapeKind::Rectangle, fill: None, stroke: Some(AXIS), stroke_width: 0.75 });
     let mut area = Rect { x: PAD, y: PAD, w: (w - 2.0 * PAD).max(1.0), h: (h - 2.0 * PAD).max(1.0) };
     let colour = chart_text_colour(space, theme);
-    if let Some(t) = title_of(chart, &read_series(ty, false, theme)) {
+    let mut budget = MAX_CELLS;
+    if let Some(t) = title_of(chart, &read_series(ty, false, theme, &mut budget)) {
         let title_colour = chart.child("c:title").and_then(|t| element_text_colour(t, theme)).unwrap_or(colour);
         let title_bold = chart.child("c:title").and_then(element_bold).or_else(|| chart_bold(space)).unwrap_or(true);
         let title_size = chart.child("c:title").and_then(element_size).unwrap_or(TITLE_SIZE);
