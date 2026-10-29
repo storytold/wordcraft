@@ -92,3 +92,24 @@ fn character_grid_places_east_asian_text_on_the_pitch() {
         }
     }
 }
+
+/// Multiple spacing on an 18 pt grid, against Word for Mac's line heights (grid probe, Roboto
+/// Regular): 11 and 14 pt text is m pitches tall; 18 pt text, whose natural height (about 21 pt)
+/// is over one pitch, is 36 pt up to 2× and 54 pt at 3×. Natural heights are passed in directly,
+/// so the assertions hold whatever font the machine has.
+#[test]
+fn multiple_spacing_follows_word_on_an_18_point_grid() {
+    let g = para::Grid { line: Some(18.0), ..Default::default() };
+    for natural in [13.0, 16.5] {
+        for (m, want) in [(1.0, 18.0), (1.5, 27.0), (2.0, 36.0), (3.0, 54.0)] {
+            assert_eq!(g.multiple_height(natural, m), want, "natural {natural} at {m}x");
+        }
+    }
+    for (m, want) in [(1.0, 36.0), (1.5, 36.0), (2.0, 36.0), (3.0, 54.0)] {
+        assert_eq!(g.multiple_height(21.1, m), want, "18 pt text at {m}x");
+    }
+    // Below single spacing the multiple still scales the snapped height.
+    assert_eq!(g.multiple_height(13.0, 0.5), 9.0);
+    // Without a line grid the natural height is simply multiplied.
+    assert_eq!(para::Grid::default().multiple_height(21.0, 1.5), 31.5);
+}

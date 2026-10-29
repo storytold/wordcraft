@@ -482,7 +482,7 @@ impl<'e> Breaker<'e> {
         // Document grid: the line takes whole line pitches, its text centred in them.
         let grid = self.grid.as_ref();
         let (height, centred) = match (rp.line_spacing, grid) {
-            (LineSpacing::Multiple(m), Some(g)) => ((g.snap_height(natural) * m).max(g.snap_height(pictures)), true),
+            (LineSpacing::Multiple(m), Some(g)) => (g.multiple_height(natural, m).max(g.snap_height(pictures)), true),
             (LineSpacing::AtLeast(v), Some(g)) => (g.snap_height(natural.max(pictures)).max(v), true),
             (LineSpacing::Multiple(m), None) => ((text_natural * m + label_extra).max(text_pictures), false),
             (LineSpacing::AtLeast(v), None) => (natural.max(text_pictures).max(v), false),
@@ -563,7 +563,7 @@ impl<'e> Breaker<'e> {
         let (asc, desc) = pl.styles.get(self.mark_style as usize).map(|s| (s.ascent, s.descent)).unwrap_or((10.0, 3.0));
         let natural = asc + desc;
         let h = match (rp.line_spacing, grid) {
-            (LineSpacing::Multiple(m), Some(g)) => g.snap_height(natural) * m,
+            (LineSpacing::Multiple(m), Some(g)) => g.multiple_height(natural, m),
             (LineSpacing::AtLeast(v), Some(g)) => g.snap_height(natural).max(v),
             (LineSpacing::Multiple(m), None) => natural * m,
             (LineSpacing::AtLeast(v), None) => natural.max(v),

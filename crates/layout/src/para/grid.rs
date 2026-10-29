@@ -36,6 +36,19 @@ impl Grid {
             _ => h,
         }
     }
+    /// The height of a line with multiple spacing `m` whose natural height is `natural`, points.
+    /// From `m` = 1 up, the line is at least `m` pitches tall as well as its natural height
+    /// snapped up to whole pitches: Word for Mac lays 18 pt Roboto (natural ≈ 21 pt) out at 36 pt
+    /// for 1×, 1.5× and 2×, and 54 pt for 3×, while 11 pt and 14 pt text at 1.5× is 27 pt
+    /// (`snap_height(natural) × m` gave 54, 72 and 108 pt for 18 pt at 1.5×, 2× and 3×). Below 1×
+    /// the multiple still scales the snapped height.
+    pub fn multiple_height(&self, natural: f32, m: f32) -> f32 {
+        let snapped = self.snap_height(natural);
+        match self.line {
+            Some(p) if m.is_finite() && m >= 1.0 => snapped.max(m * p).min(1e6),
+            _ => snapped * m,
+        }
+    }
 }
 
 /// East Asian characters the character grid places on its pitch: CJK ideographs, kana, Hangul,

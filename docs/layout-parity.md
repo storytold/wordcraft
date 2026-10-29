@@ -288,6 +288,7 @@ The front-of-text opt-out is retained from the earlier implementation; this patc
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-05 | trivial | PR #4545: eligible cell floats retain in-bounds offsets and touch the outer cell edge only on overflow, ignoring wrap distances for object placement. Front-of-text, turned-cell and outside-cell opt-outs remain. Synthetic geometry controls; native front/behind-text parity remains unqualified. |
+| 2026-10-29 | trivial | Multiple line spacing on a document grid (#4859): a natural line over one pitch takes whole pitches before the multiple, at least `m` pitches, as Word for Mac draws 18 pt text at 1.5× and 2× (36 pt, was 54 and 72) and 3× (54 pt, was 108); 11 and 14 pt unchanged. Probe-verified against Word's PDF export |
 | 2026-11-04 | trivial | PR #4609: relative REF keeps context already displayed by the own or a needed ancestor label; six synthetic legal-template cases and separate-list context follow the Word for Windows measurements reported by @pakiat in PR discussion. Existing unknown-switch/cache boundaries and readiness estimates unchanged; no new native Word run. |
 | 2026-10-28 | trivial | Shared MATH construction records reuse variants and assembly data without changing glyph mappings or existing limits (#3630); readiness estimates unchanged |
 | 2026-11-01 | trivial | SEQ fields in text boxes are numbered where their boxes are anchored, in output and after F9, and a REF finds a bookmark in a text box |
