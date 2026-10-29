@@ -21,6 +21,8 @@ pub(super) struct Reader {
     pub(super) deff: i32,
     /// The document's page (`\paperw`, `\margl`…) and the current section's formatting.
     pub(super) page: PageGeom,
+    /// Document-wide facing-page mode; stored even stories alone do not enable it.
+    pub(super) even_odd_headers: bool,
     pub(super) sec: SecFmt,
     /// The headers and footers of each section ended so far (`\sect`); `hf_parts` holds the
     /// current section's.

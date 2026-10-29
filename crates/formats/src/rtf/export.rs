@@ -70,7 +70,7 @@ pub(super) struct Writer {
     /// size, code font…): what a run's formatting without a direct value resolves to.
     pub(super) base: Fmt,
     /// The body's sections in order (the last is the document's); empty when it has just one.
-    pub(super) sections: Vec<wordcraft_doc::SectionProps>,
+    pub(super) sections: Vec<(wordcraft_doc::SectionProps, String)>,
     /// The section being written.
     pub(super) sect_i: usize,
 }
@@ -471,6 +471,7 @@ impl Writer {
         out
     }
 
+    /// Write formatted blocks and advance body sections at top-level section breaks.
     fn blocks(&mut self, blocks: &[FBlock], intbl: bool, last_end: &str, out: &mut String, depth: usize) {
         let mut counter = model::ListCounter::default();
         let mut cur_list: Option<usize> = None;
@@ -483,7 +484,10 @@ impl Writer {
                     // A paragraph that ends a section ends it with `\sect`; the next one begins.
                     if p.section.is_some() && !intbl && depth == 0 && self.sect_i + 1 < self.sections.len() {
                         self.sect_i += 1;
-                        end = format!("\\sect\n{}", self.sections.get(self.sect_i).map(sect_words).unwrap_or_default());
+                        end = format!(
+                            "\\sect\n{}",
+                            self.sections.get(self.sect_i).map(|(s, stories)| format!("{}{}", sect_words(s), stories)).unwrap_or_default()
+                        );
                         // A body that ends on the break keeps its last section: an empty paragraph holds it.
                         if i + 1 == n {
                             end.push_str("\\pard\\plain \\par");
@@ -649,10 +653,39 @@ pub fn export(doc: &Document) -> String {
         sect_i: 0,
     };
     let mut body = String::new();
+    if doc.settings.even_odd_headers {
+        body.push_str("\\facingp\n");
+    }
     // Every section starts with its own `\sectd`; `\sect` breaks only where there are several.
-    let secs: Vec<wordcraft_doc::SectionProps> = doc.sections().into_iter().map(|(_, s)| s.clone()).collect();
-    if let Some(first) = secs.first() {
+    // Render each section's stories through the same writer before emitting the global font,
+    // colour and revision tables. A missing story keeps RTF's link-to-previous behaviour;
+    // an explicitly empty story emits an empty group and clears the previous one.
+    let mut story_doc = doc.clone();
+    let mut secs = Vec::new();
+    for (_, section) in doc.sections() {
+        let mut stories = String::new();
+        for (destination, id) in [
+            (if doc.settings.even_odd_headers { "headerr" } else { "header" }, section.headers.default),
+            ("headerf", section.headers.first),
+            ("headerl", section.headers.even),
+            (if doc.settings.even_odd_headers { "footerr" } else { "footer" }, section.footers.default),
+            ("footerf", section.footers.first),
+            ("footerl", section.footers.even),
+        ] {
+            let Some(part) = id.and_then(|id| doc.parts.get(&id)) else { continue };
+            story_doc.body = part.blocks.clone();
+            let story = model::from_doc_tracked(&story_doc);
+            stories.push_str(&format!("{{\\{destination} "));
+            // Body section state is installed only after all stories are rendered, so a story
+            // cannot consume a body section break. Depth zero keeps its own tables as tables.
+            w.blocks(&story.blocks, false, "\\par", &mut stories, 0);
+            stories.push_str("}\n");
+        }
+        secs.push((section.clone(), stories));
+    }
+    if let Some((first, stories)) = secs.first() {
         body.push_str(&sect_words(first));
+        body.push_str(stories);
     }
     if secs.len() > 1 {
         w.sections = secs;

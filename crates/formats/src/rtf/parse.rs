@@ -20,10 +20,13 @@ struct Parsed {
     /// The last section's properties (the others are on the paragraphs that end them).
     last_section: wordcraft_doc::SectionProps,
     default_font: Option<String>,
+    /// Whether the document enabled separate even/odd headers with `\facingp`.
+    even_odd_headers: bool,
     /// Each section's headers and footers, in order, the last section's last.
     headers_footers: Vec<Vec<(HeaderFooter, Vec<FBlock>)>>,
 }
 
+/// Parse the document body, sections, stories and document-wide header setting.
 fn parse_full(bytes: &[u8]) -> Result<Parsed, String> {
     let start = bytes.iter().position(|b| !b.is_ascii_whitespace()).unwrap_or(0);
     if !bytes.get(start..).is_some_and(|b| b.starts_with(b"{\\rtf")) {
@@ -199,6 +202,7 @@ fn parse_full(bytes: &[u8]) -> Result<Parsed, String> {
     Ok(finalize(r))
 }
 
+/// Finish bounded reader output and retain its document-wide header setting.
 fn finalize(mut r: Reader) -> Parsed {
     // A header or footer left open by a truncated file ends here, and so does a multibyte run.
     r.finish_multibyte();
@@ -228,7 +232,7 @@ fn finalize(mut r: Reader) -> Parsed {
         blocks.push(FBlock::Para(Para::default()));
     }
     let default_font = r.fonts.get(&r.deff).filter(|n| !model::is_mono(n)).map(|n| n.to_string());
-    Parsed { flow: Flow { blocks, meta: r.meta }, page: r.page, last_section, default_font, headers_footers }
+    Parsed { flow: Flow { blocks, meta: r.meta }, page: r.page, last_section, default_font, headers_footers, even_odd_headers: r.even_odd_headers }
 }
 
 /// The column grid of a table from its rows' cell right edges: every distinct edge starts a grid
@@ -271,8 +275,9 @@ pub(super) fn column_grid(rows: &mut [Vec<Cell>], rights: &[Vec<i32>]) -> Vec<f3
 /// Parse RTF bytes into a document.
 pub fn import(bytes: &[u8]) -> Result<Document, String> {
     model::begin_import();
-    let Parsed { flow, last_section, default_font, headers_footers, .. } = parse_full(bytes)?;
+    let Parsed { flow, last_section, default_font, headers_footers, even_odd_headers, .. } = parse_full(bytes)?;
     let mut doc = model::to_doc_in(&flow, last_section);
+    doc.settings.even_odd_headers = even_odd_headers;
     // Each section's own headers and footers; those it leaves out stay linked to the previous.
     let mut sets = Vec::with_capacity(headers_footers.len());
     for parts in &headers_footers {

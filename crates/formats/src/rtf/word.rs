@@ -3,6 +3,7 @@ use super::styles::{StyleDef, is_char_format_word, is_format_word};
 use super::{Align, Fmt, Reader, VAlign, model};
 
 impl Reader {
+    /// Apply a control word in its destination, keeping document settings out of stories.
     pub(super) fn word(&mut self, w: &str, p: Option<i32>, starred: bool, first_in_group: bool) {
         // Every control word ends a multibyte run: the code page it is read in may change here
         // (`\f`, `\fcharset`, `\cpg`, `\ansicpg`, `\pard`), and `\par` must see the text before it.
@@ -51,6 +52,7 @@ impl Reader {
             return;
         }
         match w {
+            "facingp" if self.st.dest == Dest::Body && self.hf.is_none() && !self.st.intbl => self.even_odd_headers = on,
             "par" => self.end_para_mark(),
             "sect" => self.end_section(),
             "cell" => self.end_cell(),
