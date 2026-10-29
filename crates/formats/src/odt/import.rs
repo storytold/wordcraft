@@ -114,7 +114,7 @@ fn parse_full(bytes: &[u8]) -> Result<(Flow, SectionProps), String> {
 }
 
 /// [`parse_full`], plus whether change tracking is on (`None`: the document has no tracked changes).
-fn parse_tracked(bytes: &[u8]) -> Result<(Flow, SectionProps, Option<bool>, Option<String>, page_parts::Parts), String> {
+fn parse_tracked(bytes: &[u8]) -> Result<(Flow, SectionProps, Option<bool>, page_parts::Parts, Option<f32>, Option<String>), String> {
     let mut z = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| format!("ODT: not a valid package ({e})"))?;
     if let Some(mt) = read_entry(&mut z, "mimetype") {
         let mt = String::from_utf8_lossy(&mt);
@@ -154,19 +154,22 @@ fn parse_tracked(bytes: &[u8]) -> Result<(Flow, SectionProps, Option<bool>, Opti
         blocks.push(FBlock::Para(Para::default()));
     }
     let track = body.track;
-    Ok((Flow { blocks, meta }, last, track, styles.doc_font(), parts))
+    Ok((Flow { blocks, meta }, last, track, parts, styles.default_tab, styles.doc_font()))
 }
 
 /// Parse an `.odt` package into a document.
 pub fn import(bytes: &[u8]) -> Result<Document, String> {
     model::begin_import();
-    let (flow, last, track, font, parts) = parse_tracked(bytes)?;
+    let (flow, last, track, parts, default_tab, font) = parse_tracked(bytes)?;
     let mut doc = model::to_doc(&flow);
     if font.is_some() {
         doc.styles.default_chr.font = font;
     }
     doc.last_section = last;
     page_parts::add(&mut doc, parts);
+    if let Some(t) = default_tab {
+        doc.settings.default_tab = t;
+    }
     if let Some(t) = track {
         doc.settings.track_changes = t;
     }
@@ -180,11 +183,16 @@ pub(super) struct Pages {
     pub(super) masters: HashMap<String, SectionProps>,
     pub(super) first: Option<SectionProps>,
     pub(super) first_name: Option<String>,
+    /// Height of each master page's header and footer areas (`style:header-style`,
+    /// `style:footer-style`), points, by master page name.
+    pub(super) hf: HashMap<String, [Option<f32>; 2]>,
 }
 
 fn read_pages(xml: &[u8]) -> Pages {
-    let mut layouts: HashMap<String, (Attrs, Option<Columns>)> = HashMap::new();
+    let mut layouts: HashMap<String, (Attrs, Option<Columns>, [Option<f32>; 2])> = HashMap::new();
     let mut cur: Option<String> = None;
+    // Inside the page layout's `style:header-style` (false) or `style:footer-style` (true).
+    let mut hf: Option<bool> = None;
     let mut masters: Vec<(String, String)> = Vec::new();
     events(xml, |ev| match ev {
         Ev::Start(q, a) => match local(&q) {
@@ -193,7 +201,18 @@ fn read_pages(xml: &[u8]) -> Pages {
                 if let Some(n) = &cur
                     && layouts.len() < MAX_SECTIONS
                 {
-                    layouts.insert(n.clone(), (a, None));
+                    layouts.insert(n.clone(), (a, None, [None; 2]));
+                }
+            }
+            "header-style" | "footer-style" if q.starts_with("style:") => hf = Some(local(&q) == "footer-style"),
+            "header-footer-properties" => {
+                if let (Some(footer), Some(l)) = (hf, cur.as_ref().and_then(|n| layouts.get_mut(n))) {
+                    // The area's height: its fixed height, or its least height; both include
+                    // the spacing to the body text (as LibreOffice lays them out).
+                    let h = get(&a, "svg:height").or_else(|| get(&a, "fo:min-height")).and_then(length).filter(|v| *v >= 0.0);
+                    if let Some(slot) = l.2.get_mut(usize::from(footer)) {
+                        *slot = h.map(|v| v.min(1584.0));
+                    }
                 }
             }
             "columns" if q.starts_with("style:") => {
@@ -213,16 +232,17 @@ fn read_pages(xml: &[u8]) -> Pages {
             }
             _ => {}
         },
-        Ev::End(q) => {
-            if local(&q) == "page-layout" {
-                cur = None;
-            }
-        }
+        Ev::End(q) => match local(&q) {
+            "page-layout" => cur = None,
+            "header-style" | "footer-style" => hf = None,
+            _ => {}
+        },
         Ev::Text(_) => {}
     });
     let mut pages = Pages::default();
     for (name, layout) in masters {
-        let Some((a, cols)) = layouts.get(&layout) else { continue };
+        let Some((a, cols, hf)) = layouts.get(&layout) else { continue };
+        pages.hf.entry(name.clone()).or_insert(*hf);
         let mut sec = SectionProps::default();
         apply_layout(a, &mut sec);
         // A one-column layout keeps the default columns (and their gap).

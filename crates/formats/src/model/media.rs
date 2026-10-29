@@ -45,7 +45,7 @@ pub fn make_img(data: impl Into<Arc<Vec<u8>>>, w: Option<f32>, h: Option<f32>, a
         h *= 468.0 / w;
         w = 468.0;
     }
-    Some(Img { data, ext: ext.to_string(), w: w.clamp(1.0, 1584.0), h: h.clamp(1.0, 1584.0), alt: alt.to_string() })
+    Some(Img { data, ext: ext.to_string(), w: w.clamp(1.0, 1584.0), h: h.clamp(1.0, 1584.0), alt: alt.to_string(), float: None })
 }
 
 const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

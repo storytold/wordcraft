@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use wordcraft_doc::numbering::{AbstractNum, Level, ListKind, Num, levels_for};
-use wordcraft_doc::para::{InlineObject, OBJ, PAGE_BREAK, RubyAlign, Run, ruby_raise};
+use wordcraft_doc::para::{Float, InlineObject, OBJ, PAGE_BREAK, RubyAlign, Run, ShapeKind, ruby_raise};
 use wordcraft_doc::props::{
     Border, BorderStyle, Borders, CellProps, CharProps, NumRef, ParaProps, PropChange, RowProps, TextColor, Underline, VAlign, VMerge, VertAlign,
 };
@@ -25,7 +25,7 @@ pub use media::{base64_decode, base64_encode, data_uri, decode_bounded, image_px
 pub use to_doc::{char_props, part_blocks, to_doc, to_doc_in};
 pub use types::{
     CODE_STYLE, Cell, FBlock, FTable, Flow, Fmt, FmtChange, Img, Inline, Kind, ListInfo, MAX_DEPTH, MAX_FONT_NAME, MAX_LINK, MONO_FONT, Meta, Para,
-    RUBY_BASE_SIZE, RevMark, Spacing, clean_text, equations_as_text, kept_font, kept_link, ruby_as_text, ruby_object,
+    RUBY_BASE_SIZE, RevMark, Shape, Spacing, clean_text, equations_as_text, kept_font, kept_link, ruby_as_text, ruby_object,
 };
 pub(crate) use types::{Dropped, begin_import, dropped};
 

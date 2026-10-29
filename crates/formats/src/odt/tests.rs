@@ -1,4 +1,7 @@
+use super::limits::{MAX_SHAPES, MAX_TAB_STOPS};
 use super::*;
+use wordcraft_doc::para::{Anchor, FloatAlign, InlineObject, ShapeKind, Wrap, WrapText};
+use wordcraft_doc::props::{TabAlign, TabLeader, TabStop, TextColor};
 
 #[test]
 fn escaper_drops_noncharacters() {
@@ -36,6 +39,18 @@ fn default_paragraph_style_font_becomes_document_font() {
     );
     let doc = import(&package(&content, Some(&only_default))).unwrap();
     assert_eq!(doc.styles.default_chr.font.as_deref(), Some("DejaVu Serif"));
+}
+
+#[test]
+fn default_graphic_style_reaches_shapes() {
+    // The graphic default style was shadowed by the paragraph default-style arm and never kept.
+    let xml = format!(
+        r##"<office:document-styles {NS_T} xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0"><office:styles><style:default-style style:family="graphic"><style:graphic-properties draw:fill-color="#729fcf"/></style:default-style></office:styles></office:document-styles>"##
+    );
+    let mut styles = Styles::default();
+    styles.read(xml.as_bytes(), false);
+    assert_eq!(styles.graphic(None, "draw:fill-color", true), Some("#729fcf"));
+    assert_eq!(styles.graphic(None, "draw:fill-color", false), None);
 }
 
 #[test]
@@ -227,7 +242,8 @@ fn common_paragraph_styles_give_text_formatting() {
 #[test]
 fn text_after_a_drawing_shape_stays_in_its_paragraph() {
     // #1654: a shape's own text:p closed the paragraph it is anchored in, and the text after
-    // the shape was dropped. Shapes are skipped like text boxes; the paragraph keeps its text.
+    // the shape was dropped. The shapes' text goes into their text boxes; the paragraph keeps
+    // its own text and the shapes.
     let draw =
         r#"xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0""#;
     let content = format!(
@@ -240,6 +256,11 @@ fn text_after_a_drawing_shape_stays_in_its_paragraph() {
     let ps = paras(&f);
     assert_eq!(ps.iter().map(|p| p.text()).collect::<Vec<_>>(), ["Before middle after", "Next"]);
     assert!(ps[0].inlines.iter().all(|i| !matches!(i, Inline::Text(_, f) if !f.bold)), "{:?}", ps[0].inlines);
+    let shapes: Vec<&model::Shape> = ps[0].inlines.iter().filter_map(|i| if let Inline::Shape(s) = i { Some(&**s) } else { None }).collect();
+    assert_eq!(shapes.len(), 3);
+    let texts: Vec<String> =
+        shapes.iter().map(|s| paras(&Flow { blocks: s.blocks.clone(), meta: Meta::default() }).iter().map(|p| p.text()).collect()).collect();
+    assert_eq!(texts, ["In the shape", "", "In the group"]);
 }
 
 #[test]
@@ -407,6 +428,7 @@ fn sections_package() -> Vec<u8> {
     package(&content, Some(&styles))
 }
 
+/// The plain text of header or footer part `id`.
 fn part_text(d: &Document, id: Option<u32>) -> String {
     d.plain_text(wordcraft_doc::StoryRef::Part(id.expect("part")))
 }
@@ -985,6 +1007,199 @@ fn exported_changes_always_have_a_date_and_keep_paragraph_separators() {
     assert_eq!(marks(&back).len(), 1);
 }
 
+const NS_D: &str = r#"xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:loext="urn:org:documentfoundation:names:experimental:office:xmlns:loext:1.0""#;
+
+/// A master page "Standard" with `header` and `footer` (inside `style:header`/`style:footer`
+/// when not empty), graphic styles `graphic`, and a body of `body`.
+fn with_master_page(graphic: &str, header: &str, footer: &str, body: &str) -> Vec<u8> {
+    let hf = |tag: &str, inner: &str| if inner.is_empty() { String::new() } else { format!("<style:{tag}>{inner}</style:{tag}>") };
+    let styles = format!(
+        r#"<office:document-styles {NS_T} {NS_D}><office:automatic-styles>{graphic}
+        <style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="210mm" fo:page-height="297mm" fo:margin-top="12.5mm" fo:margin-bottom="12.5mm" fo:margin-left="20mm" fo:margin-right="20mm"/>
+        <style:header-style><style:header-footer-properties fo:min-height="17.5mm" fo:margin-bottom="16.5mm"/></style:header-style>
+        <style:footer-style><style:header-footer-properties fo:min-height="10mm" fo:margin-top="5mm"/></style:footer-style></style:page-layout>
+        </office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1">{}{}</style:master-page></office:master-styles></office:document-styles>"#,
+        hf("header", header),
+        hf("footer", footer)
+    );
+    let content =
+        format!(r#"<office:document-content {NS_T} {NS_D}><office:body><office:text>{body}</office:text></office:body></office:document-content>"#);
+    package(&content, Some(&styles))
+}
+
+/// The paragraphs of part `id`.
+fn part_paras(d: &Document, id: Option<u32>) -> Vec<wordcraft_doc::Paragraph> {
+    let Some(part) = id.and_then(|i| d.parts.get(&i)) else { return Vec::new() };
+    part.blocks.iter().filter_map(|b| if let wordcraft_doc::Block::Para(p) = &**b { Some(p.clone()) } else { None }).collect()
+}
+
+/// The header band of todo_appfactory.odt: a filled text box behind the text.
+const BAND_STYLE: &str = r##"<style:style style:name="Mgr1" style:family="graphic"><style:graphic-properties draw:stroke="solid" svg:stroke-width="0.26mm" svg:stroke-color="#ffffff" draw:fill="solid" draw:fill-color="#1f497d" draw:textarea-vertical-align="top" fo:padding-top="7.62mm" fo:padding-bottom="1.27mm" fo:padding-left="2.54mm" fo:padding-right="2.54mm" style:run-through="background" style:wrap="run-through" style:vertical-pos="from-top" style:vertical-rel="paragraph" style:horizontal-pos="from-left" style:horizontal-rel="paragraph"/></style:style><style:style style:name="MT3" style:family="text"><style:text-properties fo:color="#ffffff"/></style:style>"##;
+const BAND: &str = r#"<text:p><draw:custom-shape text:anchor-type="char" draw:style-name="Mgr1" svg:width="215.64mm" svg:height="23.03mm" svg:x="-22.38mm" svg:y="-12.72mm"><text:p><text:span text:style-name="MT3">To do: App Factory</text:span></text:p><draw:enhanced-geometry draw:type="ooxml-rect"/></draw:custom-shape></text:p>"#;
+
+#[test]
+fn header_text_box_shape_is_read() {
+    let d = import(&with_master_page(BAND_STYLE, BAND, "", "<text:p>Body</text:p>")).unwrap();
+    let header = d.last_section.headers.default;
+    let ps = part_paras(&d, header);
+    assert_eq!(ps.len(), 1);
+    let Some(InlineObject::Shape { kind, fill, stroke, float, story, w, .. }) = ps[0].objects.first() else { panic!("no shape: {:?}", ps[0]) };
+    assert_eq!(*kind, ShapeKind::TextBox);
+    assert_eq!((fill.clone(), *stroke), (Some(wordcraft_doc::fill::Fill::solid(Rgb(0x1f, 0x49, 0x7d))), Some(Rgb(255, 255, 255))));
+    assert_eq!(float.wrap, Wrap::BehindText);
+    assert_eq!((float.h_rel, float.v_rel), (Anchor::Column, Anchor::Paragraph));
+    assert!((float.y - -12.72 * 72.0 / 25.4).abs() < 0.01 && (float.x - -22.38 * 72.0 / 25.4).abs() < 0.01, "{float:?}");
+    assert!((*w - 215.64 * 72.0 / 25.4).abs() < 0.01);
+    assert_ne!(*story, header);
+    let part = story.and_then(|id| d.parts.get(&id)).expect("text box part");
+    assert_eq!(part.kind, wordcraft_doc::PartKind::TextBox);
+    assert_eq!(part.body.anchor, VAlign::Top);
+    assert_eq!(part.body.inset.map(|i| i[1]), Some((7.62 * 72.0 / 25.4 * 12_700.0) as u32));
+    assert_eq!(d.plain_text(wordcraft_doc::StoryRef::Part(story.unwrap_or(0))), "To do: App Factory");
+    let tp = part_paras(&d, *story);
+    assert!(tp[0].runs.iter().all(|r| r.props.color == Some(TextColor::Rgb(Rgb(255, 255, 255)))), "{:?}", tp[0].runs);
+}
+
+#[test]
+fn header_area_sets_header_distance_and_top_margin() {
+    let mm = |v: f32| v * 72.0 / 25.4;
+    let d = import(&with_master_page("", "<text:p>Head</text:p>", "<text:p>Foot</text:p>", "<text:p>Body</text:p>")).unwrap();
+    let s = &d.last_section;
+    assert!((s.header - mm(12.5)).abs() < 0.01 && (s.margin_top - mm(30.0)).abs() < 0.01, "{} {}", s.header, s.margin_top);
+    assert!((s.footer - mm(12.5)).abs() < 0.01 && (s.margin_bottom - mm(22.5)).abs() < 0.01, "{} {}", s.footer, s.margin_bottom);
+    // Without a header or footer the margins are the page layout's.
+    let d = import(&with_master_page("", "", "", "<text:p>Body</text:p>")).unwrap();
+    assert!((d.last_section.margin_top - mm(12.5)).abs() < 0.01);
+    assert!((d.last_section.margin_bottom - mm(12.5)).abs() < 0.01);
+}
+
+#[test]
+fn body_text_boxes_and_header_parts_get_their_own_ids() {
+    let body = format!(r#"<text:p>Before</text:p>{BAND}<text:p>After</text:p>"#);
+    let d = import(&with_master_page(BAND_STYLE, BAND, "<text:p>Foot</text:p>", &body)).unwrap();
+    let (h, f) = (d.last_section.headers.default, d.last_section.footers.default);
+    assert_eq!(d.parts.get(&h.unwrap_or(0)).map(|p| p.kind), Some(wordcraft_doc::PartKind::Header));
+    assert_eq!(part_text(&d, f), "Foot");
+    let boxes: Vec<_> = d.parts.values().filter(|p| p.kind == wordcraft_doc::PartKind::TextBox).collect();
+    assert_eq!(boxes.len(), 2);
+    assert_eq!(d.parts.len(), 4);
+    // The body's shape is in the paragraph it is anchored in.
+    let texts: Vec<String> = d
+        .body
+        .iter()
+        .filter_map(|b| if let wordcraft_doc::Block::Para(p) = &**b { Some(p.text.replace(wordcraft_doc::para::OBJ, "#")) } else { None })
+        .collect();
+    assert_eq!(texts, ["Before", "#", "After"]);
+}
+
+#[test]
+fn anchored_frames_float_and_as_char_frames_stay_inline() {
+    let png = [b"\x89PNG\r\n\x1a\n".as_slice(), &[7u8; 300]].concat();
+    let styles = format!(
+        r#"<office:document-styles {NS_T} {NS_D}><office:styles><style:style style:name="Graphics" style:family="graphic"><style:graphic-properties style:wrap="dynamic" style:vertical-pos="top" style:horizontal-pos="center" style:horizontal-rel="paragraph"/></style:style></office:styles>
+        <office:automatic-styles><style:style style:name="fr1" style:family="graphic" style:parent-style-name="Graphics"><style:graphic-properties style:vertical-pos="from-top" style:vertical-rel="paragraph" style:horizontal-pos="from-left"/></style:style></office:automatic-styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T} {NS_D}><office:body><office:text><text:p>A<draw:frame draw:style-name="fr1" text:anchor-type="char" svg:x="10mm" svg:y="5mm" svg:width="1in" svg:height="1in"><draw:image xlink:href="Pictures/a.png"/></draw:frame><draw:frame draw:style-name="Graphics" text:anchor-type="paragraph" svg:width="1in" svg:height="1in"><draw:image xlink:href="Pictures/a.png"/></draw:frame><draw:frame text:anchor-type="as-char" svg:width="1in" svg:height="1in"><draw:image xlink:href="Pictures/a.png"/></draw:frame>B</text:p></office:text></office:body></office:document-content>"#
+    );
+    let pkg = zip_of(&[("content.xml", content.as_bytes()), ("styles.xml", styles.as_bytes()), ("Pictures/a.png", &png)]);
+    let flow = parse(&pkg).unwrap();
+    let ps = paras(&flow);
+    assert_eq!(ps.len(), 1);
+    let imgs: Vec<&model::Img> = ps[0].inlines.iter().filter_map(|i| if let Inline::Image(img) = i { Some(img) } else { None }).collect();
+    assert_eq!(imgs.len(), 3);
+    let f = imgs[0].float.as_ref().expect("floats");
+    assert_eq!(
+        (f.wrap, f.wrap_text, f.h_rel, f.v_rel, f.h_align, f.v_align),
+        (Wrap::Square, WrapText::Largest, Anchor::Column, Anchor::Paragraph, None, None)
+    );
+    assert!((f.x - 10.0 * 72.0 / 25.4).abs() < 0.01 && (f.y - 5.0 * 72.0 / 25.4).abs() < 0.01);
+    let f = imgs[1].float.as_ref().expect("floats");
+    assert_eq!((f.h_align, f.v_align), (Some(FloatAlign::Center), Some(FloatAlign::Start)));
+    assert!(imgs[2].float.is_none());
+    let d = import(&pkg).unwrap();
+    let Some(wordcraft_doc::Block::Para(p)) = d.body.first().map(|b| &**b) else { panic!("no paragraph") };
+    assert_eq!(p.objects.iter().filter(|o| o.is_floating()).count(), 2);
+}
+
+#[test]
+fn page_anchored_shapes_go_into_the_next_paragraph() {
+    let content = format!(
+        r#"<office:document-content {NS_T} {NS_D}><office:body><office:text><draw:rect text:anchor-type="page" svg:x="1in" svg:y="1in" svg:width="1in" svg:height="1in"/><text:p>First</text:p></office:text></office:body></office:document-content>"#
+    );
+    let flow = parse(&package(&content, None)).unwrap();
+    let ps = paras(&flow);
+    assert_eq!(ps.len(), 1);
+    let Some(Inline::Shape(s)) = ps[0].inlines.first() else { panic!("{:?}", ps[0].inlines) };
+    assert_eq!((s.kind, s.float.h_rel, s.float.v_rel), (ShapeKind::Rectangle, Anchor::Page, Anchor::Page));
+    assert_eq!(ps[0].text(), "First");
+}
+
+#[test]
+fn text_frames_are_text_boxes() {
+    let styles = format!(
+        r##"<office:document-styles {NS_T} {NS_D}><office:automatic-styles><style:style style:name="fr1" style:family="graphic"><style:graphic-properties fo:background-color="#ffff00" fo:border="0.5pt solid #ff0000" fo:padding="2mm" style:wrap="none"/></style:style></office:automatic-styles></office:document-styles>"##
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T} {NS_D}><office:body><office:text><text:p>Text<draw:frame draw:style-name="fr1" text:anchor-type="paragraph" svg:width="2in"><draw:text-box fo:min-height="1in"><text:p>Boxed</text:p></draw:text-box></draw:frame></text:p></office:text></office:body></office:document-content>"#
+    );
+    let d = import(&package(&content, Some(&styles))).unwrap();
+    let Some(wordcraft_doc::Block::Para(p)) = d.body.first().map(|b| &**b) else { panic!("no paragraph") };
+    let Some(InlineObject::Shape { kind, w, h, fill, stroke, stroke_width, float, story, .. }) = p.objects.first() else { panic!("{p:?}") };
+    assert_eq!((*kind, *w, *h), (ShapeKind::TextBox, 144.0, 72.0));
+    assert_eq!((fill.clone(), *stroke, *stroke_width), (Some(wordcraft_doc::fill::Fill::solid(Rgb(255, 255, 0))), Some(Rgb(255, 0, 0)), 0.5));
+    assert_eq!(float.wrap, Wrap::TopAndBottom);
+    assert_eq!(d.plain_text(wordcraft_doc::StoryRef::Part(story.unwrap_or(0))), "Boxed");
+    assert_eq!(p.text.replace(wordcraft_doc::para::OBJ, ""), "Text");
+}
+
+#[test]
+fn footer_page_number_and_count_are_fields() {
+    let footer = r#"<text:p>Page <text:page-number text:select-page="current">4</text:page-number> of <text:page-count>9</text:page-count></text:p>"#;
+    let d = import(&with_master_page("", "", footer, "<text:p>Body</text:p>")).unwrap();
+    let ps = part_paras(&d, d.last_section.footers.default);
+    let fields: Vec<(&str, &str)> = ps[0]
+        .objects
+        .iter()
+        .filter_map(|o| if let InlineObject::Field { instr, result, .. } = o { Some((instr.as_str(), result.as_str())) } else { None })
+        .collect();
+    assert_eq!(fields, [("PAGE", "4"), ("NUMPAGES", "9")]);
+    assert_eq!(ps[0].text.replace(wordcraft_doc::para::OBJ, "#"), "Page # of #");
+}
+
+#[test]
+fn hostile_shapes_are_bounded() {
+    // Shapes nested past the limit, unclosed, with absurd sizes and positions, and very many.
+    let deep = format!(
+        "{}<text:p>Deep</text:p>{}",
+        r#"<draw:rect svg:width="1e30mm" svg:height="-5mm" svg:x="NaNmm" svg:y="1e38in">"#.repeat(40),
+        "</draw:rect>".repeat(40)
+    );
+    let many = r#"<draw:ellipse svg:width="1mm" svg:height="1mm"/>"#.repeat(MAX_SHAPES + 50);
+    let unclosed = r#"<text:p>Open<draw:custom-shape svg:width="1mm"><text:p>Inside"#;
+    for body in [format!("<text:p>{deep}</text:p>"), format!("<text:p>{many}</text:p>"), unclosed.to_string()] {
+        let content = format!(
+            r#"<office:document-content {NS_T} {NS_D}><office:body><office:text>{body}</office:text></office:body></office:document-content>"#
+        );
+        let d = import(&package(&content, None)).unwrap();
+        let shapes = d.body.iter().filter_map(|b| if let wordcraft_doc::Block::Para(p) = &**b { Some(p.objects.len()) } else { None }).sum::<usize>();
+        assert!(shapes <= MAX_SHAPES);
+        for p in d.parts.values() {
+            for b in &p.blocks {
+                if let wordcraft_doc::Block::Para(p) = &**b {
+                    for o in &p.objects {
+                        if let InlineObject::Shape { w, h, float, .. } = o {
+                            assert!(w.is_finite() && h.is_finite() && *w >= 1.0 && *w <= 1584.0 && *h >= 1.0 && *h <= 1584.0);
+                            assert!(float.x.is_finite() && float.y.is_finite() && float.y.abs() <= 1584.0);
+                        }
+                    }
+                }
+            }
+        }
+        assert!(d.parts.len() <= model::MAX_DEPTH + 1, "{}", d.parts.len());
+    }
+}
+
 #[test]
 fn spaces_after_a_tab_survive_a_round_trip() {
     for src in ["a\t b", "a\t  b", "a\t   éa", "é\t 😀a", "a\t\t b"] {
@@ -992,6 +1207,53 @@ fn spaces_after_a_tab_survive_a_round_trip() {
         let back = import(&export(&doc).unwrap()).unwrap();
         assert_eq!(back.plain_text(wordcraft_doc::StoryRef::Body).trim_end(), src, "{src:?}");
     }
+}
+
+#[test]
+fn paragraph_style_tab_stops_and_default_interval_are_read() {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles>
+        <style:default-style style:family="paragraph"><style:paragraph-properties style:tab-stop-distance="23mm"/></style:default-style>
+        <style:style style:name="Footer" style:family="paragraph"><style:paragraph-properties><style:tab-stops><style:tab-stop style:position="82.55mm" style:type="center"/><style:tab-stop style:position="165.1mm" style:type="right" style:leader-text="."/></style:tab-stops></style:paragraph-properties></style:style>
+        <style:style style:name="Child" style:family="paragraph" style:parent-style-name="Footer"/>
+        <style:style style:name="None" style:family="paragraph" style:parent-style-name="Footer"><style:paragraph-properties><style:tab-stops/></style:paragraph-properties></style:style>
+        </office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p text:style-name="Child">A<text:tab/>B</text:p><text:p text:style-name="None">C</text:p><text:p>D</text:p></office:text></office:body></office:document-content>"#
+    );
+    let d = import(&package(&content, Some(&styles))).unwrap();
+    let mm = |v: f32| v * 72.0 / 25.4;
+    assert!((d.settings.default_tab - mm(23.0)).abs() < 0.01);
+    let tabs: Vec<Option<Vec<TabStop>>> =
+        d.body.iter().filter_map(|b| if let wordcraft_doc::Block::Para(p) = &**b { Some(p.props.tabs.clone()) } else { None }).collect();
+    let Some(Some(inherited)) = tabs.first() else { panic!("{tabs:?}") };
+    assert_eq!(
+        inherited.iter().map(|t| (t.align, t.leader)).collect::<Vec<_>>(),
+        [(TabAlign::Center, TabLeader::None), (TabAlign::Right, TabLeader::Dot)]
+    );
+    assert!((inherited[1].pos - mm(165.1)).abs() < 0.01);
+    // An empty `style:tab-stops` clears the parent's; no style keeps the defaults.
+    assert_eq!(tabs.get(1), Some(&Some(Vec::new())));
+    assert_eq!(tabs.get(2), Some(&None));
+}
+
+#[test]
+fn hostile_tab_stops_are_bounded() {
+    let stops = r#"<style:tab-stop style:position="1e30mm" style:type="right"/><style:tab-stop style:position="-5mm"/><style:tab-stop style:position="NaNmm"/>"#.to_string()
+        + &r#"<style:tab-stop style:position="1in"/>"#.repeat(1000);
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:paragraph-properties style:tab-stop-distance="1e30in"/></style:default-style><style:style style:name="T" style:family="paragraph"><style:paragraph-properties><style:tab-stops>{stops}</style:tab-stops></style:paragraph-properties></style:style></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p text:style-name="T">x</text:p></office:text></office:body></office:document-content>"#
+    );
+    let d = import(&package(&content, Some(&styles))).unwrap();
+    assert!(d.settings.default_tab <= 1584.0);
+    let Some(wordcraft_doc::Block::Para(p)) = d.body.first().map(|b| &**b) else { panic!("no paragraph") };
+    let tabs = p.props.tabs.clone().unwrap_or_default();
+    assert_eq!(tabs.len(), MAX_TAB_STOPS);
+    assert!(tabs.iter().all(|t| t.pos.is_finite() && (0.0..=1584.0).contains(&t.pos)));
 }
 
 #[test]

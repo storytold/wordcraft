@@ -182,6 +182,12 @@ pub struct Float {
     /// off, any VML shape in a header or footer): a picture watermark in a header that starts with a table.
     #[serde(skip_serializing_if = "is_false")]
     pub outside_cell: bool,
+    /// Kept inside the page's text area: placed down from its paragraph and running past the
+    /// bottom margin, it takes the paragraph to the next page, as LibreOffice lays out its frames
+    /// (ODF `style:flow-with-text`). Off, it runs past the margin where it was put, as in Word
+    /// (a dragged object lands where it is dropped, #3169).
+    #[serde(skip_serializing_if = "is_false")]
+    pub keep_on_page: bool,
     /// Stacking order among floating objects (`wp:anchor/@relativeHeight`): higher is drawn on
     /// top. 0 = unknown, drawn in document order (objects inserted here, or from other formats).
     #[serde(skip_serializing_if = "is_zero_u32")]

@@ -1,4 +1,4 @@
-use super::{Align, Arc, InlineObject, OBJ, REPORTED, Rgb, RubyAlign, VAlign, ruby_raise};
+use super::{Align, Arc, Float, InlineObject, OBJ, REPORTED, Rgb, RubyAlign, ShapeKind, VAlign, ruby_raise};
 
 /// Font used for code spans and code blocks.
 pub const MONO_FONT: &str = "Courier New";
@@ -139,6 +139,29 @@ pub struct Img {
     pub w: f32,
     pub h: f32,
     pub alt: String,
+    /// Where it floats, when it isn't in line with the text (ODT anchored frames).
+    pub float: Option<Float>,
+}
+
+/// A drawing shape: a rectangle, ellipse or text box, with its text as blocks (ODT drawing
+/// shapes and text-box frames).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Shape {
+    pub kind: ShapeKind,
+    /// Size, points.
+    pub w: f32,
+    pub h: f32,
+    pub fill: Option<Rgb>,
+    pub stroke: Option<Rgb>,
+    /// Outline width, points.
+    pub stroke_width: f32,
+    pub float: Float,
+    /// Internal margins (left, top, right, bottom), EMU; `None` = Word's defaults.
+    pub inset: Option<[u32; 4]>,
+    /// Where the text sits between the shape's top and bottom.
+    pub valign: VAlign,
+    /// The shape's text; empty = no text box.
+    pub blocks: Vec<FBlock>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -155,6 +178,14 @@ pub enum Inline {
     Equation {
         linear: String,
         display: bool,
+    },
+    /// A drawing shape anchored here.
+    Shape(Box<Shape>),
+    /// A field (`PAGE`, `NUMPAGES`…) with its last result.
+    Field {
+        instr: String,
+        result: String,
+        fmt: Fmt,
     },
     /// Ruby (phonetic guide): `ruby` text (furigana, pinyin…) over `base` text, in the formatting
     /// of the run it sits in (#1681). Formats without ruby write the base text
@@ -234,6 +265,8 @@ pub struct Para {
     pub spacing: Spacing,
     /// Borders the source puts on the paragraph itself (RTF `\brdrb`…).
     pub borders: Option<wordcraft_doc::props::Borders>,
+    /// Tab stops the source gives the paragraph (ODT paragraph styles); `None` = the defaults.
+    pub tabs: Option<Vec<wordcraft_doc::props::TabStop>>,
     /// The section this paragraph ends (RTF `\sect`), as the document's last paragraph of it.
     pub section: Option<Box<wordcraft_doc::SectionProps>>,
     /// Tracked insertion of the paragraph mark.
@@ -269,8 +302,10 @@ impl Para {
         let mut s = String::new();
         for i in &self.inlines {
             match i {
-                Inline::Text(t, _) | Inline::Equation { linear: t, .. } | Inline::Ruby { base: t, .. } => s.push_str(t),
-                Inline::Image(_) | Inline::Anchor(_) | Inline::Figure(_) => {}
+                Inline::Text(t, _) | Inline::Equation { linear: t, .. } | Inline::Field { result: t, .. } | Inline::Ruby { base: t, .. } => {
+                    s.push_str(t)
+                }
+                Inline::Image(_) | Inline::Anchor(_) | Inline::Figure(_) | Inline::Shape(_) => {}
             }
         }
         s
@@ -285,8 +320,8 @@ impl Para {
                     Some(font) if wordcraft_doc::symbol_fonts::is_symbol_font(font) => s.push_str(&wordcraft_doc::symbol_fonts::map_text(font, t)),
                     _ => s.push_str(t),
                 },
-                Inline::Equation { linear: t, .. } | Inline::Ruby { base: t, .. } => s.push_str(t),
-                Inline::Image(_) | Inline::Anchor(_) | Inline::Figure(_) => {}
+                Inline::Equation { linear: t, .. } | Inline::Field { result: t, .. } | Inline::Ruby { base: t, .. } => s.push_str(t),
+                Inline::Image(_) | Inline::Anchor(_) | Inline::Figure(_) | Inline::Shape(_) => {}
             }
         }
         s
@@ -439,17 +474,17 @@ pub struct Flow {
     pub meta: Meta,
 }
 
-/// `inlines` with equations as their linear text (default formatting), for formats that have no
-/// equations.
+/// `inlines` with equations as their linear text (default formatting) and fields as their result,
+/// for formats that have neither.
 pub fn equations_as_text(inlines: &[Inline]) -> std::borrow::Cow<'_, [Inline]> {
-    if !inlines.iter().any(|i| matches!(i, Inline::Equation { .. })) {
+    if !inlines.iter().any(|i| matches!(i, Inline::Equation { .. } | Inline::Field { .. })) {
         return std::borrow::Cow::Borrowed(inlines);
     }
     let mut p = Para::default();
     for i in inlines {
         match i {
             Inline::Equation { linear, .. } => p.push_text(linear, &Fmt::default()),
-            Inline::Text(t, f) => p.push_text(t, f),
+            Inline::Text(t, f) | Inline::Field { result: t, fmt: f, .. } => p.push_text(t, f),
             other => p.inlines.push(other.clone()),
         }
     }

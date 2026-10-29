@@ -1,12 +1,14 @@
 use super::boxes::{BoxInput, BoxLayout, Edges, joined, layout_box, push_para};
 use super::cache::has_page_number_fields;
 use super::ctx::Ctx;
-use super::floats::{FloatAnchor, ObjFrame, ObjectPlacement, anchor_floats, body_wraps, continued_exclusions, place_objects};
+use super::floats::{
+    FloatAnchor, ObjFrame, ObjectPlacement, anchor_floats, body_wraps, continued_exclusions, floating, left_out_objects, place_objects,
+};
 use super::notes::{DECOR_STORY, NoteBox, para_notes};
 use super::page::{PageBuilder, PageFrame, item_bottom};
 use super::placed::Placed;
 use super::{
-    Arc, Block, Counters, Document, HashMap, InlineObject, Level, LineEnd, Page, ParaLayout, Paragraph, Path, Rect, StoryRef, TextDirection,
+    Anchor, Arc, Block, Counters, Document, HashMap, InlineObject, Level, LineEnd, Page, ParaLayout, Paragraph, Path, Rect, StoryRef, TextDirection,
     ViewMode, outline, para,
 };
 #[cfg(test)]
@@ -318,6 +320,57 @@ impl<'a> Flow<'a> {
             return rp.space_before.min(0.0);
         }
         before
+    }
+
+    /// A floating object kept on the page (`Float::keep_on_page`), placed down from this
+    /// paragraph, that would run past the bottom margin takes the paragraph to the next column or
+    /// page, where it fits (as LibreOffice lays it out), rather than running over the footer or off
+    /// the page. Returns the space before applied (`before`, or what is left of it there).
+    fn keep_floats_on_page(&self, ctx: &mut Ctx, pb: &mut PageBuilder, before: f32) -> f32 {
+        if pb.web || pb.fresh() {
+            return before;
+        }
+        let shift = (pb.y - before) - (self.guess - self.pl.rp.space_before);
+        // (A rotated object reaches as far as its rotated bounds, as it wraps text.)
+        let reach = self
+            .float_rects
+            .iter()
+            .filter_map(|(oi, r)| self.p.objects.get(*oi).and_then(floating).map(|(_, _, f)| (f, r)))
+            .filter(|(f, _)| f.keep_on_page && f.v_rel == Anchor::Paragraph && f.v_align.is_none())
+            .map(|(f, r)| f.spin().bounds(*r).bottom())
+            .fold(f32::NEG_INFINITY, f32::max);
+        // How far below the paragraph's top it reaches, against an empty column.
+        let need = reach - (self.guess - self.pl.rp.space_before);
+        // The footnotes of the lines beside it go to the bottom of its page too: it has to clear them.
+        let notes_h = if reach.is_finite() { self.notes_beside(ctx, pb, need) } else { 0.0 };
+        if reach.is_finite() && reach + shift > pb.bottom - notes_h + 0.01 && need + notes_h <= pb.next_room(self.body_top) {
+            pb.advance(self.block, self.body_top);
+            pb.y += self.pl.rp.space_before.min(0.0);
+            return self.pl.rp.space_before.min(0.0);
+        }
+        before
+    }
+
+    /// The height the footnotes of the lines above `need` (below the paragraph's top) take at the
+    /// bottom of the page, with the separator when they are the page's first.
+    fn notes_beside(&self, ctx: &mut Ctx, pb: &PageBuilder, need: f32) -> f32 {
+        let mut notes_h = 0.0;
+        let mut seen = Vec::new();
+        for (ci, id) in para_notes(ctx.doc, self.p, &self.pl) {
+            if !seen.contains(&id)
+                && !pb.notes.iter().any(|x| x.id == id)
+                && self.pl.lines.iter().any(|l| ci >= l.c0 && ci < l.c1 && l.top < need)
+                && let Some(part) = ctx.doc.parts.get(&id).filter(|p| p.kind == wordcraft_doc::PartKind::Footnote)
+            {
+                seen.push(id);
+                let blocks = part.blocks.clone();
+                notes_h += layout_box(ctx, BoxInput::other(StoryRef::Part(id), &blocks, pb.sect.text_width(), 0, None)).height;
+            }
+        }
+        if notes_h > 0.0 && pb.notes.is_empty() {
+            notes_h += pb.seps.sep_h(false);
+        }
+        notes_h
     }
 
     /// The lines going into a new column (or page) were broken around the wrap areas where the
@@ -721,6 +774,7 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
     pb.y += before;
     let rooms = Rooms::of(ctx, block, &f.pl);
     let applied_before = f.keep_together(ctx, pb, rooms, before);
+    let applied_before = f.keep_floats_on_page(ctx, pb, applied_before);
     // A different top only matters when there is something to wrap around.
     if spot(pb) != placed_at || ((pb.y - f.guess).abs() > 0.01 && !pb.excl.is_empty()) {
         let y0 = pb.y;
@@ -869,6 +923,22 @@ fn space_after_kept(ctx: &Ctx, block: usize, rp: &wordcraft_doc::resolve::Resolv
     after
 }
 
+/// How far below the top of paragraph `p` (above its space before) its floating objects kept on
+/// the page and placed down from it reach: those relative to the paragraph at an offset, to their rotated bounds,
+/// leaving out those the layout leaves out (as `anchor_floats` does); 0 without any.
+fn float_reach(ctx: &Ctx, p: &Paragraph) -> f32 {
+    let left_out = left_out_objects(ctx.doc, p, None, ctx.opts.show_hidden, ctx.hide_deleted);
+    p.objects
+        .iter()
+        .enumerate()
+        .filter(|(oi, _)| !left_out(*oi))
+        .filter_map(|(_, o)| floating(o))
+        .filter(|(_, _, f)| f.keep_on_page && f.v_rel == Anchor::Paragraph && f.v_align.is_none() && !f.hidden)
+        .map(|(w, h, f)| f.spin().bounds(Rect::new(0.0, f.y, w, h)).bottom())
+        .filter(|v| v.is_finite())
+        .fold(0.0, f32::max)
+}
+
 /// The room the paragraphs after `block` need on the page for keep with next: enough of the
 /// next one to start there — its first line, two of its lines with widow/orphan control (it
 /// doesn't leave a single line at the bottom of a page; it moves over whole instead), or all
@@ -912,7 +982,10 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counte
             let top = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block), None) { 0.0 } else { own.top };
             if pl.rp.keep_next && depth < 8 {
                 let bottom = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block + 2), None) { 0.0 } else { own.bottom };
-                pl.rp.space_before + top + pl.height + bottom + pl.rp.space_after + next_first_line(ctx, block + 1, width, depth + 1, counters)
+                // Its floats count in the chain too (see below).
+                (pl.rp.space_before + top + pl.height + bottom).max(float_reach(ctx, p))
+                    + pl.rp.space_after
+                    + next_first_line(ctx, block + 1, width, depth + 1, counters)
             } else {
                 // The room this one needs to start on the page with the kept paragraph before
                 // it (#966).
@@ -920,7 +993,7 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counte
                     (Some(first), Some(last)) => last.top + last.height - first.top,
                     _ => 0.0,
                 };
-                pl.rp.space_before
+                let text = pl.rp.space_before
                     + top
                     + if pl.rp.keep_lines {
                         pl.height
@@ -928,7 +1001,10 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counte
                         to(1)
                     } else {
                         to(0)
-                    }
+                    };
+                // A floating object placed down from it goes where it goes (see
+                // `place_para_in_flow`), so the kept paragraph needs room for it too.
+                text.max(float_reach(ctx, p))
             }
         }
         Some(Block::Table(_)) => 24.0,

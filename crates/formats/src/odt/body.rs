@@ -1,5 +1,8 @@
 use super::import::Pages;
-use super::limits::{MAX_INFO_CHARS, MAX_OPEN_INSERTIONS, MAX_REGIONS, MAX_SECTIONS, MAX_XML_DEPTH};
+use wordcraft_doc::para::{Float, ShapeKind};
+
+use super::drawing;
+use super::limits::{MAX_ALT_BYTES, MAX_INFO_CHARS, MAX_OPEN_INSERTIONS, MAX_REGIONS, MAX_SECTIONS, MAX_SHAPES, MAX_XML_DEPTH};
 use super::styles::Styles;
 use super::xml::{Attrs, Ev, events, get, length, local};
 use super::{Cell, FBlock, FTable, Fmt, HashMap, Inline, Kind, ListInfo, Para, RevMark, RevisionKind, SectionProps, SectionStart, make_img, model};
@@ -108,6 +111,37 @@ struct DelState {
     ins: Vec<(String, RevMark)>,
 }
 
+/// A `draw:frame` being read: its size, picture, description and where it floats.
+struct Frame {
+    w: Option<f32>,
+    h: Option<f32>,
+    data: Option<Vec<u8>>,
+    alt: String,
+    /// `None`: in line with the text.
+    float: Option<Float>,
+    /// Its graphic style.
+    style: Option<String>,
+    /// An equation read from an embedded `draw:object`: its linear form and whether it is display.
+    eq: Option<(String, bool)>,
+}
+
+/// A drawing shape being read, and the reading state of the paragraph it is anchored in, put
+/// aside while its own text is read.
+struct ShapeB {
+    /// Depth of the element that opened it.
+    at: usize,
+    /// `None`: a custom shape whose geometry WordCraft doesn't draw (yet), shown only for its text.
+    kind: Option<ShapeKind>,
+    size: (Option<f32>, Option<f32>),
+    float: Option<Float>,
+    look: drawing::Look,
+    para: Option<Para>,
+    para_cont: bool,
+    fmt: usize,
+    lists: Vec<(Option<String>, bool)>,
+    item_used: Vec<bool>,
+}
+
 pub(super) struct Body<'a> {
     styles: &'a Styles,
     zip: &'a mut dyn FnMut(&str) -> Option<Vec<u8>>,
@@ -127,9 +161,17 @@ pub(super) struct Body<'a> {
     pub(super) in_text: bool,
     skip: usize,
     depth: usize,
-    /// `(width, height, picture bytes, alt text, equation read from an embedded `draw:object`)`.
-    frame: Option<(Option<f32>, Option<f32>, Option<Vec<u8>>, String, Option<(String, bool)>)>,
+    frame: Option<Frame>,
     in_desc: bool,
+    /// Drawing shapes being read, innermost last.
+    shapes: Vec<ShapeB>,
+    /// Shapes read so far (capped at [`MAX_SHAPES`]).
+    shape_count: usize,
+    /// Floating objects anchored where no paragraph is open (to the page, between paragraphs):
+    /// they go into the next paragraph.
+    pending: Vec<Inline>,
+    /// The field being read (`text:page-number`…): its instruction and saved result.
+    field: Option<(&'static str, String)>,
     /// The master pages' page setups.
     pages: &'a Pages,
     /// The current master page's setup (a column section's page, without its columns).
@@ -160,6 +202,8 @@ pub(super) struct Body<'a> {
 }
 
 impl<'a> Body<'a> {
+    /// A reader starting on the first master page, resolving styles from `styles` and pictures
+    /// through `zip`.
     pub(super) fn new(styles: &'a Styles, pages: &'a Pages, zip: &'a mut dyn FnMut(&str) -> Option<Vec<u8>>) -> Self {
         let page = pages.first.clone().unwrap_or_default();
         Body {
@@ -180,6 +224,10 @@ impl<'a> Body<'a> {
             depth: 0,
             frame: None,
             in_desc: false,
+            shapes: Vec::new(),
+            shape_count: 0,
+            pending: Vec::new(),
+            field: None,
             pages,
             sec: page.clone(),
             page,
@@ -198,6 +246,7 @@ impl<'a> Body<'a> {
         }
     }
 
+    /// Take the next XML event, ignoring what lies deeper than `MAX_XML_DEPTH`.
     pub(super) fn feed(&mut self, ev: Ev) {
         match ev {
             Ev::Start(q, a) => {
@@ -220,6 +269,12 @@ impl<'a> Body<'a> {
 
     /// The blocks read, with anything still open closed.
     pub(super) fn take_blocks(&mut self) -> Vec<FBlock> {
+        while !self.shapes.is_empty() {
+            self.close_shape();
+        }
+        if !self.pending.is_empty() && self.para.is_none() {
+            self.start_para(None, None);
+        }
         self.end_para();
         while self.containers.len() > 1 {
             let c = self.containers.pop().unwrap_or_default();
@@ -300,6 +355,82 @@ impl Body<'_> {
         Some(SectionProps { start: SectionStart::NextPage, page_num_start: restart, ..page })
     }
 
+    /// Put `inline` at the end of the open paragraph. A floating object with no paragraph open
+    /// waits for the next one; anything else starts one.
+    fn push_inline(&mut self, inline: Inline) {
+        let floating = match &inline {
+            Inline::Image(img) => img.float.is_some(),
+            Inline::Shape(s) => s.float.wrap != wordcraft_doc::para::Wrap::Inline,
+            _ => false,
+        };
+        if self.para.is_none() {
+            if floating {
+                self.pending.push(inline);
+                return;
+            }
+            self.start_para(None, None);
+        }
+        if let Some(p) = &mut self.para {
+            p.inlines.push(inline);
+        }
+    }
+
+    /// Start reading a drawing shape: its text goes into a container of its own, and the
+    /// paragraph it is anchored in waits until the shape ends. Inside tracked changes, past
+    /// [`MAX_SHAPES`] or nested deeper than [`model::MAX_DEPTH`], the shape is left out.
+    fn open_shape(&mut self, kind: Option<ShapeKind>, size: (Option<f32>, Option<f32>), float: Option<Float>, look: drawing::Look) {
+        if self.in_tc || self.shape_count >= MAX_SHAPES || self.shapes.len() >= model::MAX_DEPTH {
+            self.skip = 1;
+            return;
+        }
+        self.shape_count += 1;
+        self.shapes.push(ShapeB {
+            at: self.depth,
+            kind,
+            size,
+            float,
+            look,
+            para: self.para.take(),
+            para_cont: std::mem::take(&mut self.para_cont),
+            fmt: self.fmt.len(),
+            lists: std::mem::take(&mut self.lists),
+            item_used: std::mem::take(&mut self.item_used),
+        });
+        self.containers.push(Vec::new());
+    }
+
+    /// End the innermost shape: its text becomes its text box, and the shape goes back into the
+    /// paragraph it is anchored in.
+    fn close_shape(&mut self) {
+        let Some(s) = self.shapes.pop() else { return };
+        self.end_para();
+        let blocks = if self.containers.len() > 1 { self.containers.pop().unwrap_or_default() } else { Vec::new() };
+        self.fmt.truncate(s.fmt);
+        self.para = s.para;
+        self.para_cont = s.para_cont;
+        self.lists = s.lists;
+        self.item_used = s.item_used;
+        let (kind, look) = match s.kind {
+            Some(k) => (k, s.look),
+            // A geometry WordCraft can't draw: its text in a plain box, or nothing.
+            None if !blocks.is_empty() => (ShapeKind::Rectangle, drawing::Look { fill: None, stroke: None, ..s.look }),
+            None => return,
+        };
+        let shape = model::Shape {
+            kind,
+            w: s.size.0.unwrap_or(72.0),
+            h: s.size.1.unwrap_or(72.0),
+            fill: look.fill,
+            stroke: look.stroke,
+            stroke_width: look.stroke_width,
+            float: s.float.unwrap_or_default(),
+            inset: look.inset,
+            valign: look.valign,
+            blocks,
+        };
+        self.push_inline(Inline::Shape(Box::new(shape)));
+    }
+
     fn start_para(&mut self, style: Option<&str>, heading: Option<u8>) {
         self.end_para();
         let (mut kind, align, mut pb, rule, keep_next, base) =
@@ -313,7 +444,9 @@ impl Body<'_> {
         if let Some(h) = heading {
             kind = Kind::Heading(h.clamp(1, 6));
         }
-        let mut p = Para { kind, align, page_break: pb, keep_next, ..Default::default() };
+        let tabs = style.and_then(|s| self.styles.tabs(s));
+        let mut p = Para { kind, align, page_break: pb, keep_next, tabs, ..Default::default() };
+        p.inlines.append(&mut self.pending);
         if rule && kind == Kind::Normal {
             p.kind = Kind::Rule;
         }
@@ -435,9 +568,16 @@ impl Body<'_> {
             return;
         }
         if self.in_desc {
-            if let Some(fr) = &mut self.frame {
-                fr.3.push_str(t);
+            if let Some(fr) = &mut self.frame
+                && fr.alt.len() < MAX_ALT_BYTES
+            {
+                fr.alt.push_str(t);
             }
+            return;
+        }
+        if let Some((_, r)) = &mut self.field {
+            let room = MAX_INFO_CHARS.saturating_sub(r.chars().count());
+            r.extend(t.chars().take(room));
             return;
         }
         let Some(p) = &self.para else {
@@ -491,7 +631,7 @@ impl Body<'_> {
         if self.tracked_context(q, a) {
             return;
         }
-        if self.start_inline(q, a) {
+        if self.start_inline(q, a) || self.start_drawing(q, a) {
             return;
         }
         match local(q) {
@@ -515,21 +655,12 @@ impl Body<'_> {
             "change-start" | "change-end" => change_mark(&self.regions, &mut self.active_ins, local(q) == "change-start", a),
             "note"
             | "annotation"
-            | "text-box"
             | "sequence-decls"
             | "forms"
             | "variable-decls"
             | "user-field-decls"
             | "index-title-template"
             | "table-of-content-source" => {
-                self.skip = 1;
-            }
-            // Drawing shapes (ODF 1.3 §10.3), with their text, until shapes are read (#1654).
-            // Groups are walked, so the pictures in them still are.
-            "rect" | "line" | "polyline" | "polygon" | "regular-polygon" | "path" | "circle" | "ellipse" | "connector" | "caption" | "measure"
-            | "custom-shape"
-                if q.starts_with("draw:") =>
-            {
                 self.skip = 1;
             }
             "p" | "h" if !self.in_desc => {
@@ -603,18 +734,24 @@ impl Body<'_> {
                 }
             }
             "frame" => {
-                let w = get(a, "svg:width").and_then(length);
-                let h = get(a, "svg:height").and_then(length);
-                self.frame = Some((w, h, None, String::new(), None));
+                self.frame = Some(Frame {
+                    w: get(a, "svg:width").and_then(length),
+                    h: get(a, "svg:height").and_then(length),
+                    data: None,
+                    alt: String::new(),
+                    float: self.styles.float(a, false),
+                    style: get(a, "draw:style-name").map(String::from),
+                    eq: None,
+                });
             }
             "image" => {
                 if let Some(href) = get(a, "xlink:href")
                     && let Some(fr) = &mut self.frame
-                    && fr.2.is_none()
-                    && fr.4.is_none()
+                    && fr.data.is_none()
+                    && fr.eq.is_none()
                 {
                     let path = href.trim_start_matches("./");
-                    fr.2 = (self.zip)(path);
+                    fr.data = (self.zip)(path);
                 }
             }
             // An embedded object (ODF 1.3 §10.4.3): a formula sub-document's `content.xml` holds
@@ -623,11 +760,11 @@ impl Body<'_> {
             "object" => {
                 if let Some(href) = get(a, "xlink:href")
                     && let Some(fr) = &mut self.frame
-                    && fr.4.is_none()
+                    && fr.eq.is_none()
                 {
                     let path = format!("{}/content.xml", href.trim_start_matches("./").trim_end_matches('/'));
                     if let Some(xml) = (self.zip)(&path) {
-                        fr.4 = read_formula(&xml);
+                        fr.eq = read_formula(&xml);
                     }
                 }
             }
@@ -804,6 +941,51 @@ impl Body<'_> {
         false
     }
 
+    /// A drawing shape or text frame starting (ODF 1.3 §10.3, §10.4.3); `false` for any other element.
+    fn start_drawing(&mut self, q: &str, a: &Attrs) -> bool {
+        if !q.starts_with("draw:") {
+            return false;
+        }
+        match local(q) {
+            // Rectangles, ellipses and custom shapes (ODF 1.3 §10.3) are read with their text.
+            "rect" | "circle" | "ellipse" | "custom-shape" => {
+                let kind = match local(q) {
+                    "rect" => Some(ShapeKind::Rectangle),
+                    "custom-shape" => None,
+                    _ => Some(ShapeKind::Ellipse),
+                };
+                let size = (get(a, "svg:width").and_then(length), get(a, "svg:height").and_then(length));
+                let float = self.styles.float(a, true);
+                let look = self.styles.look(get(a, "draw:style-name"), true);
+                self.open_shape(kind, size, float, look);
+            }
+            "enhanced-geometry" => {
+                let depth = self.depth;
+                if let Some(s) = self.shapes.last_mut()
+                    && s.at + 1 == depth
+                {
+                    s.kind = get(a, "draw:type").and_then(drawing::geometry_kind);
+                }
+            }
+            // A text frame (ODF 1.3 §10.4.3) is a text box with the frame's size and look.
+            "text-box" => match self.frame.take() {
+                Some(fr) => {
+                    let h = fr.h.or_else(|| get(a, "fo:min-height").and_then(length));
+                    let look = self.styles.look(fr.style.as_deref(), false);
+                    self.open_shape(Some(ShapeKind::Rectangle), (fr.w, h), fr.float, look);
+                }
+                None => self.skip = 1,
+            },
+            // Other drawing shapes, with their text, are left out. Groups are walked, so the
+            // pictures and shapes in them still are.
+            "line" | "polyline" | "polygon" | "regular-polygon" | "path" | "connector" | "caption" | "measure" => {
+                self.skip = 1;
+            }
+            _ => return false,
+        }
+        true
+    }
+
     fn start_inline(&mut self, q: &str, a: &Attrs) -> bool {
         match local(q) {
             "span" => {
@@ -827,6 +1009,9 @@ impl Body<'_> {
             }
             "tab" => self.push_text("\t"),
             "line-break" => self.push_text("\n"),
+            "page-number" | "page-count" if q.starts_with("text:") => {
+                self.field = Some((if local(q) == "page-number" { "PAGE" } else { "NUMPAGES" }, String::new()));
+            }
             "bookmark" | "bookmark-start" => {
                 if let Some(name) = get(a, "text:name") {
                     if self.para.is_none() {
@@ -897,8 +1082,18 @@ impl Body<'_> {
                 _ => return,
             }
         }
+        if self.shapes.last().is_some_and(|s| s.at == self.depth + 1) {
+            self.close_shape();
+            return;
+        }
         match local(q) {
             "p" | "h" if !self.in_desc => self.end_para(),
+            "page-number" | "page-count" if q.starts_with("text:") => {
+                if let Some((instr, result)) = self.field.take() {
+                    let fmt = self.cur_fmt();
+                    self.push_inline(Inline::Field { instr: instr.to_string(), result: result.trim().to_string(), fmt });
+                }
+            }
             "span" | "a" if self.fmt.len() > usize::from(self.para.is_some()) => {
                 self.fmt.pop();
             }
@@ -958,18 +1153,16 @@ impl Body<'_> {
                 self.break_section(next);
             }
             "frame" => {
-                if let Some((w, h, img, alt, eq)) = self.frame.take() {
+                if let Some(Frame { w, h, data, alt, float, eq, .. }) = self.frame.take() {
                     let inline = match eq {
                         Some((linear, display)) => Some(Inline::Equation { linear, display }),
-                        None => img.and_then(|data| make_img(data, w, h, alt.trim())).map(Inline::Image),
+                        None => data.and_then(|data| make_img(data, w, h, alt.trim())).map(|mut img| {
+                            img.float = float;
+                            Inline::Image(img)
+                        }),
                     };
                     if let Some(inline) = inline {
-                        if self.para.is_none() {
-                            self.start_para(None, None);
-                        }
-                        if let Some(p) = &mut self.para {
-                            p.inlines.push(inline);
-                        }
+                        self.push_inline(inline);
                     }
                 }
                 self.frame = None;
