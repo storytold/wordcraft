@@ -1,5 +1,52 @@
 use super::*;
 
+#[test]
+fn resource_tables_keep_first_spelling_order_and_shared_colors() {
+    use wordcraft_doc::{CharProps, Paragraph, TextColor};
+    let black = Rgb(0, 0, 0);
+    let red = Rgb(255, 0, 0);
+    let blue = Rgb(0x05, 0x63, 0xC1);
+    let fonts = ["mIxEd", "Zulu", "zUlU", "École", "éCOLE", "ÉCOLE", "A{B}\\C"];
+    let paras = fonts
+        .iter()
+        .enumerate()
+        .map(|(i, font)| {
+            Paragraph::with_text(
+                &format!("row{i}"),
+                CharProps {
+                    font: Some((*font).into()),
+                    color: Some(TextColor::Rgb(if i == 1 { blue } else { black })),
+                    shading: Some(red),
+                    ..Default::default()
+                },
+            )
+        })
+        .chain([Paragraph::with_text("link", CharProps { link: Some("https://example.test/".into()), ..Default::default() })])
+        .collect();
+    let mut doc = doc_with(paras, Vec::new());
+    doc.styles.default_chr.font = Some("MiXeD".into());
+    let rtf = export(&doc);
+    let table = format!(
+        "{{\\fonttbl{{\\f0\\fswiss\\fcharset0 MiXeD;}}{{\\f1\\fswiss\\fcharset0 Zulu;}}{{\\f2\\fswiss\\fcharset0 {};}}{{\\f3\\fswiss\\fcharset0 {};}}{{\\f4\\fswiss\\fcharset0 {};}}}}",
+        esc("École"),
+        esc("éCOLE"),
+        esc("A{B}\\C"),
+    );
+    assert!(rtf.contains(&table), "{rtf}");
+    assert!(rtf.contains("{\\colortbl;\\red0\\green0\\blue0;\\red255\\green0\\blue0;\\red5\\green99\\blue193;}"), "{rtf}");
+    let runs = text_runs(rtf.as_bytes());
+    for (text, font) in [("row1", "Zulu"), ("row2", "Zulu"), ("row3", "École"), ("row4", "éCOLE"), ("row5", "École"), ("row6", "A{B}\\C")] {
+        assert_eq!(run_fmt(&runs, text).font.as_deref(), Some(font), "{rtf}");
+    }
+    for i in 0..fonts.len() {
+        let fmt = run_fmt(&runs, &format!("row{i}"));
+        assert_eq!(fmt.color, Some(if i == 1 { blue } else { black }));
+        assert_eq!(fmt.background, Some(red));
+    }
+    assert_eq!(run_fmt(&runs, "link").color, Some(blue));
+    assert_eq!(rtf, export(&doc));
+}
+
 fn texts(f: &Flow) -> Vec<String> {
     f.blocks
         .iter()
@@ -952,14 +999,7 @@ fn old_formatting_in_a_code_paragraph_has_the_code_font() {
     let mark = RevMark { author: "Alice".into(), date: String::new(), id: None };
     let mut p = Para { kind: Kind::Code, ..Default::default() };
     p.push_text("x", &Fmt { font: Some("Arial".into()), fmt_change: Some(Box::new(FmtChange { mark, old: Fmt::default() })), ..Default::default() });
-    let mut w = Writer {
-        t: Tables { fonts: vec!["Aptos".into()], colors: Vec::new() },
-        lists: Vec::new(),
-        authors: None,
-        base: Fmt::default(),
-        sections: Vec::new(),
-        sect_i: 0,
-    };
+    let mut w = Writer { t: Tables::new("Aptos".into()), lists: Vec::new(), authors: None, base: Fmt::default(), sections: Vec::new(), sect_i: 0 };
     let mut out = String::new();
     w.para(&p, false, None, "\\par", &mut out);
     let mono = w.t.font(model::MONO_FONT);

@@ -1,6 +1,7 @@
 use super::date::{iso_to_dttm, rtf_date};
 use super::styles::{style_fmt, styled};
 use super::{Align, Document, FBlock, FTable, Fmt, Inline, Kind, Meta, Para, RevMark, Rgb, VAlign, model};
+use std::collections::HashMap;
 
 // ---------------------------------------------------------------------------------------------
 // Export
@@ -36,27 +37,35 @@ pub fn esc(s: &str) -> String {
 pub(super) struct Tables {
     pub(super) fonts: Vec<String>,
     pub(super) colors: Vec<Rgb>,
+    font_indices: HashMap<String, usize>,
+    color_indices: HashMap<Rgb, usize>,
 }
 
 impl Tables {
-    pub(super) fn font(&mut self, name: &str) -> usize {
-        match self.fonts.iter().position(|f| f.eq_ignore_ascii_case(name)) {
-            Some(i) => i,
-            None => {
-                self.fonts.push(name.to_string());
-                self.fonts.len() - 1
-            }
+    pub(super) fn new(base_font: String) -> Self {
+        Self {
+            font_indices: HashMap::from([(base_font.to_ascii_lowercase(), 0)]),
+            fonts: vec![base_font],
+            colors: Vec::new(),
+            color_indices: HashMap::new(),
         }
+    }
+
+    pub(super) fn font(&mut self, name: &str) -> usize {
+        // Match ASCII case only; the ordered table retains the first spelling for export.
+        let next = self.fonts.len();
+        *self.font_indices.entry(name.to_ascii_lowercase()).or_insert_with(|| {
+            self.fonts.push(name.to_string());
+            next
+        })
     }
     /// Colour table index (1-based; 0 is "auto").
     fn color(&mut self, c: Rgb) -> usize {
-        match self.colors.iter().position(|x| *x == c) {
-            Some(i) => i + 1,
-            None => {
-                self.colors.push(c);
-                self.colors.len()
-            }
-        }
+        let next = self.colors.len() + 1;
+        *self.color_indices.entry(c).or_insert_with(|| {
+            self.colors.push(c);
+            next
+        })
     }
 }
 
@@ -640,14 +649,7 @@ fn level_def(ordered: bool, l: usize) -> String {
 pub fn export(doc: &Document) -> String {
     let flow = model::from_doc_tracked(doc);
     let base_font = doc.styles.default_chr.font.clone().unwrap_or_else(|| wordcraft_doc::styles::BODY_FONT.to_string());
-    let mut w = Writer {
-        t: Tables { fonts: vec![base_font], colors: Vec::new() },
-        lists: Vec::new(),
-        authors: None,
-        base: Fmt::default(),
-        sections: Vec::new(),
-        sect_i: 0,
-    };
+    let mut w = Writer { t: Tables::new(base_font), lists: Vec::new(), authors: None, base: Fmt::default(), sections: Vec::new(), sect_i: 0 };
     let mut body = String::new();
     // Every section starts with its own `\sectd`; `\sect` breaks only where there are several.
     let secs: Vec<wordcraft_doc::SectionProps> = doc.sections().into_iter().map(|(_, s)| s.clone()).collect();
