@@ -103,6 +103,23 @@ impl Session {
         self.dirty = true;
     }
 
+    /// Current Find result ranges, refreshed after edits without moving the selection or
+    /// changing the document. Keep the original story even when the caret has moved elsewhere.
+    pub fn find_results(&mut self) -> &[(Pos, Pos)] {
+        if let Some((rev, story)) = self.find.results_revision
+            && rev != self.rev
+        {
+            let mut found = crate::cmd::edit::search(self, story).unwrap_or_default();
+            if let Some((a, b)) = &self.find.results_selection {
+                found.retain(|(x, y)| x >= a && y <= b);
+            }
+            self.find.current = self.find.current.min(found.len().saturating_sub(1));
+            self.find.results = found;
+            self.find.results_revision = Some((self.rev, story));
+        }
+        &self.find.results
+    }
+
     /// Reading Highlight ranges for the current document (searched again after edits); empty when it's off.
     pub fn find_highlights(&mut self) -> &[(Pos, Pos)] {
         if !self.find.highlight {

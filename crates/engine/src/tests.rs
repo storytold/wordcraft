@@ -11,6 +11,7 @@ use crate::{Session, cmd};
 
 mod bidi;
 mod documents;
+mod find_refresh;
 mod fonts;
 mod ime_noop;
 mod revision_checks;

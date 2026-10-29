@@ -265,6 +265,11 @@ impl Session {
         if self.find.highlights.as_ref().is_some_and(|(r, _)| *r != rev) {
             self.find.highlights = None;
         }
+        if let Some((r, _)) = &mut self.find.results_revision
+            && *r != rev
+        {
+            *r = rev.wrapping_sub(1);
+        }
         let facts = self.protect_facts.get_mut().unwrap_or_else(std::sync::PoisonError::into_inner);
         if facts.as_ref().is_some_and(|((_, r, _), _)| *r != rev) {
             *facts = None;

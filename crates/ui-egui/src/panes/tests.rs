@@ -2,6 +2,50 @@ use super::{Content, Pane};
 use craft_ui::panes::PaneContent;
 use egui::vec2;
 
+/// Editing before a Navigation hit must not leave the old byte range highlighted (#4891).
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn navigation_results_follow_edits_without_moving_the_caret() {
+    use serde_json::json;
+    use wordcraft_doc::{Document, Pos, StoryRef};
+
+    let mut app = crate::WordApp::new(wordcraft_engine::Session::new(Document::from_text("identity and identity")), crate::Services::default());
+    app.run("view.navigationPane", json!({"value": true})).unwrap();
+    app.run("edit.find", json!({"text": "identity"})).unwrap();
+    app.ui.nav_tab = "results".into();
+    let mut h = pane_harness(app);
+    h.state_mut().run("caret.set", json!({"pos": Pos::body(0, 0)})).unwrap();
+    h.state_mut().run("text.insert", json!({"text": "Earlier words "})).unwrap();
+    let selection = h.state().session.sel.clone();
+    let undo = h.state().session.undo_depth();
+    let revision = h.state().session.rev();
+    h.run_steps(3);
+    let s = &h.state().session;
+    assert_eq!(s.find.results.len(), 2);
+    for (a, b) in &s.find.results {
+        assert_eq!(a.story, StoryRef::Body);
+        assert_eq!(s.doc.para_at(a).unwrap().text.get(a.off..b.off), Some("identity"));
+    }
+    assert_eq!(s.sel, selection, "refresh must not select the first hit again");
+    assert_eq!(s.undo_depth(), undo, "refresh is not an edit");
+    assert_eq!(s.rev(), revision, "refresh does not invalidate layout");
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    h.run_steps(2);
+    assert_eq!(h.state().session.find.results.iter().map(|(a, _)| a.off).collect::<Vec<_>>(), [0, 13]);
+    h.state_mut().run("edit.redo", json!({})).unwrap();
+    h.run_steps(2);
+    assert_eq!(h.state().session.find.results.iter().map(|(a, _)| a.off).collect::<Vec<_>>(), [14, 27]);
+    let qid = h.state().window_id("nav_query");
+    h.ctx.data_mut(|d| d.insert_temp(qid, "identity".to_string()));
+    h.state_mut().nav_search_focus = true;
+    h.run_steps(2);
+    press(&mut h, egui::Key::Backspace, egui::Modifiers::NONE);
+    assert!(h.state().session.find.results.is_empty());
+    h.state_mut().run("text.insert", json!({"text": "identity"})).unwrap();
+    h.run_steps(2);
+    assert!(h.state().session.find.results.is_empty(), "cleared Navigation results stay cleared after edits");
+}
+
 /// #1902: Clipboard Delete returns focus to the document like paste does.
 #[test]
 #[cfg(not(target_arch = "wasm32"))]

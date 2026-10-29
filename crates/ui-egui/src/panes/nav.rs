@@ -26,6 +26,7 @@ pub(super) fn nav(app: &mut WordApp, ui: &mut Ui) {
             let _ = app.session.run("edit.find", &json!({"text": q}));
         } else {
             app.session.find.results.clear();
+            app.session.find.results_revision = None;
         }
     }
     ui.add_space(4.0);
@@ -48,7 +49,7 @@ pub(super) fn nav(app: &mut WordApp, ui: &mut Ui) {
             }
         }
         "results" => {
-            let results = app.session.find.results.clone();
+            let results = app.session.find_results().to_vec();
             ui.label(egui::RichText::new(format!("{} results", results.len())).small().weak());
             for (a, b) in results.iter().take(500) {
                 let Some(p) = app.session.doc.para_at(a) else { continue };

@@ -565,6 +565,10 @@ pub(crate) fn search_full(s: &Session, story: StoryRef, with_rep: bool) -> Resul
 fn read_opts(s: &mut Session, v: &Value) {
     // A new search changes what Reading Highlight marks.
     s.find.highlights = None;
+    let stale = s.rev().wrapping_sub(1);
+    if let Some((rev, _)) = &mut s.find.results_revision {
+        *rev = stale;
+    }
     if let Some(t) = p::str(v, "text") {
         s.find.query = t.to_string();
     }
@@ -611,6 +615,8 @@ fn find(s: &mut Session, v: &Value) -> CmdResult {
     }
     let story = s.sel.focus.story;
     s.find.results = search(s, story)?;
+    s.find.results_revision = Some((s.rev(), story));
+    s.find.results_selection = None;
     // Select the first match after the caret.
     let caret = s.sel.focus.clone();
     let idx = s.find.results.iter().position(|(a, _)| *a >= caret).unwrap_or(0);
@@ -650,12 +656,16 @@ fn advanced_find(s: &mut Session, v: &Value) -> CmdResult {
     let matches: Vec<Value> = found.iter().take(200).map(|(a, b)| json!({"start": pos_json(a), "end": pos_json(b)})).collect();
     s.find.current = 0;
     s.find.results = found;
+    s.find.results_revision = Some((s.rev(), story));
+    s.find.results_selection = within;
     Ok(json!({"count": n, "matches": matches, "highlight": s.find.highlight}))
 }
 
 fn step(s: &mut Session, dir: i64) -> CmdResult {
     let story = s.sel.focus.story;
     s.find.results = search(s, story)?;
+    s.find.results_revision = Some((s.rev(), story));
+    s.find.results_selection = None;
     let n = s.find.results.len();
     if n == 0 {
         return Err(CmdError::Failed("no matches".into()));
