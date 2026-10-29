@@ -225,7 +225,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     let mut prev_end = 0.0f32;
     // Stacked paragraphs sharing the same text frame: track the last bottom so subsequent
     // paragraphs in the same frame stack below instead of overlapping (#2357).
-    #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+    #[derive(Clone, Debug, PartialEq)]
     struct FrameKey {
         x: f32,
         y: f32,
