@@ -2228,19 +2228,21 @@ fn east_asian_number_formats_read_label_and_round_trip() {
 }
 
 /// #464: a bookmark whose end follows the document's final table keeps its end (it goes into
-/// the table's last cell) and is saved as a matched pair.
+/// the table's last cell) and is saved as a matched pair: the end is written back after the
+/// table, before the paragraph a story ends with (`bookmark_places.rs`).
 #[test]
 fn bookmark_around_final_table_keeps_its_end() {
     let body = r#"<w:bookmarkStart w:id="7" w:name="TableRange"/><w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="1440"/></w:tblGrid><w:tr><w:tc><w:tcPr/><w:p><w:r><w:t>Cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:bookmarkEnd w:id="7"/><w:sectPr/>"#;
     let d = read_body(body);
-    let marks = |d: &Document| {
+    let cell = |d: &Document| {
         let Block::Table(t) = &*d.body[0] else { panic!("{:?}", d.body[0]) };
         t.rows[0].cells[0].blocks[0].as_para().unwrap().objects.clone()
     };
-    let want = vec![InlineObject::BookmarkStart { name: "TableRange".into() }, InlineObject::BookmarkEnd { name: "TableRange".into() }];
-    assert_eq!(marks(&d), want);
+    let (start, end) = (InlineObject::BookmarkStart { name: "TableRange".into() }, InlineObject::BookmarkEnd { name: "TableRange".into() });
+    assert_eq!(cell(&d), vec![start.clone(), end.clone()]);
     let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
-    assert_eq!(marks(&again), want);
+    assert_eq!(cell(&again), vec![start]);
+    assert_eq!(again.body[1].as_para().unwrap().objects, vec![end]);
     assert_eq!(again.bookmarks().len(), 1);
 }
 

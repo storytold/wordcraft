@@ -26,7 +26,14 @@ impl Writer<'_> {
         w.close("pic:cNvPicPr");
         w.close("pic:nvPicPr");
         w.open("pic:blipFill", &[]);
-        w.empty("a:blip", &[("r:embed", &rid)]);
+        match self.doc.picture_ext.get(media).and_then(|ext| self.shared_embedded_xml(&ext.clone(), rels)) {
+            Some(ext) => {
+                w.open("a:blip", &[("r:embed", &rid)]);
+                w.raw(&ext);
+                w.close("a:blip");
+            }
+            None => w.empty("a:blip", &[("r:embed", &rid)]),
+        }
         if crop.iter().any(|c| *c > 0.0) {
             let c = |v: f32| n((wordcraft_geom::finite(v).clamp(0.0, 1.0) * 100_000.0).round() as i64);
             w.empty("a:srcRect", &[("l", &c(crop[0])), ("t", &c(crop[1])), ("r", &c(crop[2])), ("b", &c(crop[3]))]);

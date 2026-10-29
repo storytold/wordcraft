@@ -26,6 +26,7 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
         doc,
         media_files: BTreeMap::new(),
         bookmarks: HashMap::new(),
+        lifted: HashMap::new(),
         next_rev_id: 0,
         open_moves: Vec::new(),
         // Fresh drawing ids start past the shapes' own (connectors refer to those).

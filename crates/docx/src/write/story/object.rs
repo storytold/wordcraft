@@ -8,13 +8,17 @@ impl Writer<'_> {
         match o {
             // Written by `para_content` (inline) or `blocks` (around paragraphs).
             InlineObject::ControlStart { .. } | InlineObject::ControlEnd => {}
-            InlineObject::BookmarkStart { name } => {
-                let id = self.bookmark_id(name);
-                w.empty("w:bookmarkStart", &[("w:id", &id), ("w:name", name)]);
-            }
-            InlineObject::BookmarkEnd { name } => {
-                let id = self.bookmark_id(name);
-                w.empty("w:bookmarkEnd", &[("w:id", &id)]);
+            InlineObject::BookmarkStart { name } | InlineObject::BookmarkEnd { name } => {
+                let end = matches!(o, InlineObject::BookmarkEnd { .. });
+                // Written between blocks or rows already (see `blocks`).
+                if !self.lifted.is_empty()
+                    && let Some(n) = self.lifted.get_mut(&(name.clone(), end))
+                    && *n > 0
+                {
+                    *n -= 1;
+                    return;
+                }
+                self.bookmark_mark(w, name, end);
             }
             InlineObject::PermStart { id, group, editor } => {
                 let id = id.to_string();

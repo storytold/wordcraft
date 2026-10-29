@@ -36,6 +36,9 @@ pub const NAMESPACES: &[(&str, &str)] = &[
     ("wpc", "http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas"),
     ("dgm", "http://schemas.openxmlformats.org/drawingml/2006/diagram"),
     ("dsp", "http://schemas.microsoft.com/office/drawing/2008/diagram"),
+    // Office 2010 drawing extensions (a picture's artistic effects, `a14:imgProps`; local DPI),
+    // kept with the picture.
+    ("a14", "http://schemas.microsoft.com/office/drawing/2010/main"),
     ("m", "http://schemas.openxmlformats.org/officeDocument/2006/math"),
     ("v", "urn:schemas-microsoft-com:vml"),
     ("o", "urn:schemas-microsoft-com:office:office"),

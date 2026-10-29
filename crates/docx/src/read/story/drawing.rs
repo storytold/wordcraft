@@ -253,6 +253,14 @@ impl Reader<'_> {
         let blip = pic.find("a:blip")?;
         float.set_spin(xfrm_spin(pic.find("pic:spPr")));
         let media = blip.attr("r:embed").and_then(|id| self.media_for(rels, id))?;
+        // The picture's own extensions (an artistic effect's image layer, a `.wdp` part; local
+        // DPI…): kept with the image, with the parts they use, and written back with it.
+        if let Some(ext) = blip.child("a:extLst")
+            && !self.doc.picture_ext.contains_key(&media)
+            && let Some(kept) = self.keep_embedded(ext, rels, &[])
+        {
+            self.doc.picture_ext.insert(media.clone(), kept);
+        }
         let mut crop = [0.0f32; 4];
         if let Some(sr) = pic.find("a:srcRect") {
             for (i, n) in ["l", "t", "r", "b"].iter().enumerate() {

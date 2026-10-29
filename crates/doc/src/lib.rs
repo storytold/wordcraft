@@ -28,6 +28,7 @@ pub mod fill;
 pub mod freeform;
 pub mod graphic;
 pub mod ime_text;
+pub mod kept;
 pub mod legacy_form;
 pub mod line_dash;
 pub mod link;
@@ -56,6 +57,7 @@ use serde::{Deserialize, Serialize};
 
 pub use control::{ContentControl, ControlKind, ControlLock, ControlRange, ControlWrap};
 pub use fields::FieldRange;
+pub use kept::{BookmarkPlace, MarkPlace};
 pub use numbering::{ListKind, Numbering};
 pub use para::{InlineObject, Paragraph, Run};
 pub use props::{Align, CharProps, ParaProps, Rgb, TextColor};
@@ -122,6 +124,14 @@ pub struct Document {
     /// The document's own building blocks (its glossary document), in file order.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub glossary: Vec<BuildingBlock>,
+    /// Bookmarks whose markers sat between blocks or table rows in the file (or that cover
+    /// table columns), by name: where saving puts their markers back (see [`kept`]).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub bookmark_places: BTreeMap<String, BookmarkPlace>,
+    /// A picture's own `a:blip` extensions as read (artistic effects and the image layer they
+    /// use, local DPI…), by media key: written back with every picture showing that image.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub picture_ext: BTreeMap<String, Arc<graphic::Embedded>>,
     /// Lookup cache for [`Document::add_media`]; not part of the document (never saved, ignored
     /// by `==`).
     #[serde(skip)]
