@@ -477,3 +477,15 @@ fn length_units_follow_the_interface_language() {
     h.run_steps(4);
     assert_eq!(length(72.0), "25,4 mm", "English keeps the English names");
 }
+
+/// #1934: "Use the middle mouse button to paste instead of autoscroll" belongs to Linux alone —
+/// the primary selection is a Unix idea, and Word for Mac and Windows have no such setting to
+/// find. This runs on every platform, so the box is checked for in CI wherever it builds.
+#[test]
+fn the_middle_click_paste_option_is_offered_on_linux_only() {
+    let mut h = nav_harness("en", 100);
+    h.state_mut().run("file.options", json!({"pane": "advanced"})).unwrap();
+    h.run_steps(4);
+    let label = crate::i18n::tr(crate::i18n::Lang::EN, "Use the middle mouse button to paste instead of autoscroll");
+    assert_eq!(h.query_by_label(label).is_some(), cfg!(target_os = "linux"), "the middle-click paste option is a Linux setting only");
+}

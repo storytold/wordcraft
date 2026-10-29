@@ -114,6 +114,7 @@ impl WordApp {
             fonts_korean: false,
             fonts_system_cjk: false,
             want_system_cjk: false,
+            shared_selection: None,
             recover_fonts_for: None,
             recent_fonts_for: Vec::new(),
             fonts_frames: 0,

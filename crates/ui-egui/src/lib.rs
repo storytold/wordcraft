@@ -518,6 +518,10 @@ pub struct WordApp {
     /// CJK text is (about to be) on screen in a non-CJK interface, e.g. the language names in
     /// File ▸ Options: load the installed CJK fallback font if no embedded face covers it.
     pub(crate) want_system_cjk: bool,
+    /// The document's selection last put on the primary selection (#1934), so the same selection
+    /// isn't put there again. App-wide: the primary selection is one for the whole screen, so
+    /// every window shares the one record of what was put there.
+    pub(crate) shared_selection: Option<system_clipboard::SharedSelection>,
     /// The document (id, revision) whose comment text [`WordApp::ensure_comment_fonts`] last
     /// looked at.
     comment_fonts_for: Option<(u64, u64)>,

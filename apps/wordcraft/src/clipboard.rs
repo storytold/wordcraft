@@ -66,9 +66,55 @@ fn set_html_text(html: &str, text: &str) -> bool {
     })
 }
 
+/// Put `text` on the primary selection — the one a middle click pastes on Linux (#1934) — so a
+/// copy here can be pasted with the middle button, as browsers and LibreOffice do. Text only: the
+/// primary selection carries no formatting, and its contents are served on demand, so they are
+/// not kept for the clipboard's history. `false` when it couldn't be set, or when `text` is larger
+/// than a paste should take from another program.
+///
+/// Unlike [`set_html`] this does not ask whether arboard can set the clipboard natively: the
+/// primary selection is what a middle click reads, and that read falls back to X11 the same way,
+/// so a copy set here is what a middle click pastes back.
+#[cfg(target_os = "linux")]
+pub fn set_primary(text: &str) -> bool {
+    use arboard::{LinuxClipboardKind, SetExtLinux};
+
+    if text.is_empty() || text.len() > MAX_PASTE_BYTES {
+        return false;
+    }
+    WRITER.with(|w| {
+        let Ok(mut slot) = w.try_borrow_mut() else { return false };
+        if slot.is_none() {
+            *slot = open();
+        }
+        match slot.as_mut().map(|c| c.set().clipboard(LinuxClipboardKind::Primary).text(text)) {
+            Some(Ok(())) => true,
+            Some(Err(e)) => {
+                log::warn!("primary selection: {e}");
+                *slot = None;
+                false
+            }
+            None => false,
+        }
+    })
+}
+
 /// The clipboard's text.
 pub fn text() -> Option<String> {
     open()?.get_text().ok()
+}
+
+/// The primary selection's (mouse selection) text, for a middle click paste (#1934). arboard
+/// reads it over X11 when the compositor has no data-control protocol, so this works on plain
+/// X11 sessions too. `None` when there is nothing there, or it is too large to be pasted.
+#[cfg(target_os = "linux")]
+pub fn primary_selection_text() -> Option<String> {
+    use arboard::{GetExtLinux, LinuxClipboardKind};
+
+    let mut clipboard = open()?;
+    let text = clipboard.get().clipboard(LinuxClipboardKind::Primary).text().ok()?;
+    // The clipboard can hold far more text than a paste should take from another program.
+    (text.len() <= MAX_PASTE_BYTES).then_some(text)
 }
 
 /// The clipboard's HTML (Windows: the fragment of its "HTML Format"), if not too large.

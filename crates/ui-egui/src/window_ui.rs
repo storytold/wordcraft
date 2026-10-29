@@ -165,6 +165,9 @@ impl WordApp {
             updates_rt: _,
             // The control channel's screenshots and input go to the active window, whichever it is.
             shots: _,
+            // The primary selection is one for the whole screen, so every window shares the one
+            // record of what was put there (#1934).
+            shared_selection: _,
             capture_epoch: _,
             surface_geometry: _,
             capture_geometry: _,

@@ -510,7 +510,8 @@ fn accessibility(app: &mut WordApp, ui: &mut Ui) {
     }
 }
 
-/// Draws Advanced options: typing and overtype behavior, alignment guides, recent-document count,
+/// File › Options › Advanced: the editing, measurement and display settings that need no pane of
+/// their own — typing and overtype behaviour, alignment guides, recent-document count,
 /// measurement units, region, keytips, caret animation, file locations and customization.
 fn advanced(app: &mut WordApp, ui: &mut Ui) {
     section(ui, "Editing");
@@ -518,6 +519,8 @@ fn advanced(app: &mut WordApp, ui: &mut Ui) {
     flag(app, ui, "Typing replaces selected text", "typingReplacesSelection", pr.typing_replaces_selection);
     flag(app, ui, "Use the Insert key to switch overtype on and off", "insertKeyOvertype", pr.insert_key_overtype);
     flag(app, ui, "Overtype (typing replaces the characters after the caret)", "overtype", pr.overtype);
+    #[cfg(target_os = "linux")]
+    flag(app, ui, "Use the middle mouse button to paste instead of autoscroll", "middleClickPaste", pr.middle_click_paste);
     let mut guides = app.ui.alignment_guides;
     if ui
         .checkbox(&mut guides, tl!("Show alignment guides when moving pictures and shapes"))

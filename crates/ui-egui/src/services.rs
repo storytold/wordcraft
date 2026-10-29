@@ -60,6 +60,9 @@ pub struct Services {
     /// Desktop: the text on the system clipboard, if any. Ctrl+V gets it from egui's paste event;
     /// the ribbon and context-menu Paste read it here (#584).
     pub clipboard_text: Option<Box<dyn Fn() -> Option<String>>>,
+    /// Desktop: the text in the primary selection (Linux X11/Wayland mouse selection), if any.
+    /// Used for middle-click paste when that option is enabled (#1934).
+    pub primary_selection_text: Option<Box<dyn Fn() -> Option<String>>>,
     /// Desktop: the HTML on the system clipboard — another program's formatted copy (a Word
     /// document, a web page) — if any. Paste keeps its formatting (#687); see [`system_clipboard`].
     pub clipboard_html: Option<Box<dyn Fn() -> Option<String>>>,
@@ -69,6 +72,10 @@ pub struct Services {
     /// as well, which Word reads a pasted equation from (#1297). `true` when the HTML and text are
     /// there; otherwise the copy's text goes through egui as usual.
     pub set_clipboard_html: Option<Box<dyn Fn(&str, &str, &str) -> bool>>,
+    /// Desktop: put `text` on the primary selection — what a middle click pastes on Linux
+    /// (#1934) — so a copy here can be pasted with the middle button, as browsers do. `true` when
+    /// it was set; the copy still reaches the ordinary clipboard either way.
+    pub set_primary_text: Option<Box<dyn Fn(&str) -> bool>>,
     /// Desktop: the RTF on the system clipboard, where the platform offers it (#687).
     pub clipboard_rtf: Option<Box<dyn Fn() -> Option<String>>>,
     /// Desktop: the names of the formats on the system clipboard (MIME types, Windows format

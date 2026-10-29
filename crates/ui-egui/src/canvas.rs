@@ -659,11 +659,16 @@ fn scroll_motion(app: &mut WordApp, ui: &Ui, full: Rect, view: &CanvasView) -> S
         egui::Vec2::ZERO
     };
     // Middle-click scrolling (#1065): Print Layout and the other editing views, not Read Mode.
+    // On Linux, if middle_click_paste is enabled, skip autoscroll and let the canvas handle paste.
+    #[cfg(target_os = "linux")]
+    let middle_click_paste = app.session.prefs.middle_click_paste;
+    #[cfg(not(target_os = "linux"))]
+    let middle_click_paste = false;
     let middle_delta = if app.session.view.read_mode || app.dialog.is_some() {
         app.canvas.auto_scroll.cancel();
         egui::Vec2::ZERO
     } else {
-        app.canvas.auto_scroll.update(ui, view.area)
+        app.canvas.auto_scroll.update(ui, view.area, middle_click_paste)
     };
     ScrollMotion { wheel: wheel_delta, auto: auto_delta, middle: middle_delta }
 }
@@ -1163,6 +1168,17 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
     crate::a11y::expose(app, ui.ctx(), resp.id, layout, &rects, area);
     // The buttons that start or stop middle-click scrolling don't also click the page.
     let middle_gesture = app.canvas.auto_scroll.blocks_input();
+    // Middle-click paste (#1934), Linux only, with the option on: a middle click pastes the primary
+    // selection rather than starting the autoscroll gesture.
+    if app.canvas.auto_scroll.paste_requested()
+        && let Some(get_text) = &app.services.primary_selection_text
+        && let Some(text) = get_text()
+    {
+        // Plain text, and only plain text: the primary selection carries no formatting, and it
+        // carries no owner either — another program's selection that merely reads like our copy
+        // cannot be told apart from ours, so no copy's formatting may be applied to it (#1934).
+        let _ = app.run("edit.pasteText", json!({"text": text}));
+    }
     handle_primary_pointer(app, ui, &resp, &rects, layout, geo, middle_gesture);
     // A click on a check box ticks it; on a list's button opens the list.
     if !middle_gesture {
@@ -1306,6 +1322,9 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
     }
 }
 
+/// Draw the document canvas in the space `ui` has left, one frame: the pages, caret, selection
+/// and rulers, with the mouse editing and the pointer shape over them (selection, dragging, the
+/// middle-click gestures).
 /// Lays out and paints the document pages for print, Read and Web views, settles viewports, draw
 /// rulers and overlays, anchors zoom and scrolling, and routes pointer, selection, IME and caret
 /// input.

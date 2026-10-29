@@ -116,6 +116,10 @@ impl WordApp {
             self.sent_title = title;
         }
         self.sync_full_screen(ctx);
+        // The document's selection goes on the primary selection, so a middle click elsewhere
+        // pastes it (#1934). It is done here, after the canvas has handled the mouse and the
+        // keys have been read, so the selection has settled.
+        crate::system_clipboard::share_selection(self, ctx);
         self.frame_ms = now_ms() - t0;
         // Typing and formatting land here, after `logic` has reported.
         self.report_dirty();
