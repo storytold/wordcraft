@@ -297,7 +297,6 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
     }
     let mut result = json!({"path": path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count(), "encrypted": encrypted, "alreadyOpen": false, "id": s.document_id()});
     if let Some(summary) = pdf {
-        s.push_ui_request(json!({"open": "pdfImportReport", "warnings": summary.warnings}));
         result["import"] = json!({"format": "pdf", "pages": summary.pages, "textCharacters": summary.text_characters, "images": summary.images, "warnings": summary.warnings, "saveAsRequired": true});
     }
     Ok(result)

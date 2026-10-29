@@ -10789,6 +10789,32 @@ fn pdf_import_sniffs_renamed_files_and_failed_open_preserves_the_current_documen
 }
 
 #[test]
+fn a_word_document_named_pdf_opens_as_the_word_document() {
+    let bytes = crate::io::save_bytes("letter.docx", &wordcraft_doc::Document::from_text("Word content")).unwrap();
+    let mut session = s();
+    let result = run(&mut session, "file.open", json!({"path": "letter.pdf", "data": crate::cmd::insert::base64_encode(&bytes)}));
+    assert!(result.get("import").is_none(), "{result}");
+    assert!(text(&session).contains("Word content"));
+}
+
+#[test]
+fn an_oversized_pdf_is_refused_before_it_is_read() {
+    let dir = std::env::temp_dir().join(format!("wordcraft-pdf-limit-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    // Sparse: the size is past the import limit without writing 64 MiB.
+    for name in ["big.pdf", "big-renamed.txt"] {
+        let path = dir.join(name);
+        let file = std::fs::File::create(&path).unwrap();
+        std::io::Write::write_all(&mut &file, b"%PDF-1.7\n").unwrap();
+        file.set_len(wordcraft_pdf::import::MAX_BYTES as u64 + 1).unwrap();
+        let e = crate::io::open_path_report(&path, None).err().unwrap();
+        assert!(e.contains("import limit"), "{name}: {e}");
+        std::fs::remove_file(path).unwrap();
+    }
+    std::fs::remove_dir(dir).unwrap();
+}
+
+#[test]
 fn exported_page_images_draw_headers_at_full_strength() {
     // file.exportPng (and `wordcraft-cli render`) drew headers and footers dimmed, as the screen
     // does while the body is edited; Word's exported pages and WordCraft's PDF don't.

@@ -174,7 +174,7 @@ pub fn open_bytes_report(name: &str, bytes: &[u8], password: Option<&str>) -> Re
 
 /// [`open_bytes_report`] using the region's paper for formats without a page size.
 pub fn open_bytes_report_in(name: &str, bytes: &[u8], password: Option<&str>, region: &wordcraft_geom::Region) -> Result<OpenedDocument, String> {
-    if wordcraft_pdf::import::is_pdf(bytes) || ext_of(name) == "pdf" {
+    if opens_as_pdf(name, bytes) {
         let (doc, summary) = wordcraft_pdf::import::read(bytes, password).map_err(|e| match e {
             wordcraft_pdf::import::ImportError::NeedsPassword => wordcraft_docx::PASSWORD_REQUIRED.to_string(),
             wordcraft_pdf::import::ImportError::WrongPassword => wordcraft_docx::WRONG_PASSWORD.to_string(),
@@ -453,11 +453,13 @@ pub fn open_path_report(path: &std::path::Path, password: Option<&str>) -> Resul
 /// read as [`read_document`] reads it; a PDF must also be within the import limit.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn open_path_report_in(path: &std::path::Path, password: Option<&str>, region: &wordcraft_geom::Region) -> Result<OpenedDocument, String> {
-    let bytes = read_document(path)?;
     let name = path.to_string_lossy();
-    let pdf = wordcraft_pdf::import::is_pdf(&bytes);
-    if (pdf || ext_of(&name) == "pdf") && bytes.len() > wordcraft_pdf::import::MAX_BYTES {
-        return Err(format!("{}: file exceeds the {} MiB import limit", path.display(), wordcraft_pdf::import::MAX_BYTES / (1024 * 1024)));
+    refuse_oversized_pdf(path, &name)?;
+    let bytes = read_document(path)?;
+    let pdf = opens_as_pdf(&name, &bytes);
+    // Checked again on what was read: the file may have grown since.
+    if pdf && bytes.len() > wordcraft_pdf::import::MAX_BYTES {
+        return Err(pdf_limit_error(path));
     }
     if !pdf && matches!(ext_of(&name).as_str(), "html" | "htm" | "xhtml") {
         // Pictures referenced by a relative path load from beside the HTML file.
@@ -469,6 +471,38 @@ pub fn open_path_report_in(path: &std::path::Path, password: Option<&str>, regio
         return Ok(OpenedDocument { doc, encrypted: false, pdf: None });
     }
     open_bytes_report_in(&name, &bytes, password, region)
+}
+
+/// Whether the file opens through the PDF importer: it holds a PDF, or it is named `.pdf` and
+/// holds no other format the app recognizes (a Word document misnamed `.pdf` opens as one).
+fn opens_as_pdf(name: &str, bytes: &[u8]) -> bool {
+    wordcraft_pdf::import::is_pdf(bytes) || (ext_of(name) == "pdf" && !other_document_signature(bytes))
+}
+
+/// Does the file start like a document format other than PDF: a Word or OpenDocument package,
+/// a Word 97-2003 file, RTF, Word XML or a web page?
+fn other_document_signature(bytes: &[u8]) -> bool {
+    bytes.starts_with(ZIP_SIG) || bytes.starts_with(OLE_SIG) || bytes.starts_with(b"{\\rtf") || is_word_xml(bytes) || looks_like_web_page(bytes)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn pdf_limit_error(path: &std::path::Path) -> String {
+    format!("{}: file exceeds the {} MiB import limit", path.display(), wordcraft_pdf::import::MAX_BYTES / (1024 * 1024))
+}
+
+/// Refuse a PDF over the import limit from its size and first bytes, before reading it whole.
+#[cfg(not(target_arch = "wasm32"))]
+fn refuse_oversized_pdf(path: &std::path::Path, name: &str) -> Result<(), String> {
+    use std::io::Read;
+    crate::file_access::check_read(name)?;
+    // Anything that can't be looked at here is reported by the full read.
+    let Ok((file, meta)) = open_regular_file(path) else { return Ok(()) };
+    if meta.len() <= wordcraft_pdf::import::MAX_BYTES as u64 {
+        return Ok(());
+    }
+    let mut head = Vec::with_capacity(1024);
+    let _ = file.take(1024).read_to_end(&mut head);
+    if opens_as_pdf(name, &head) { Err(pdf_limit_error(path)) } else { Ok(()) }
 }
 
 /// Largest document file opened by path.

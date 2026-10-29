@@ -442,11 +442,6 @@ impl WordApp {
         if let Some(what) = req.get("open").and_then(Value::as_str) {
             match what {
                 "openFile" => self.open_dialog(),
-                "pdfImportReport" => {
-                    let warnings =
-                        req.get("warnings").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect();
-                    self.dialog = Some(dialogs::Dialog::PdfImportReport { warnings });
-                }
                 "saveAs" => {
                     self.save_as_dialog();
                 }
