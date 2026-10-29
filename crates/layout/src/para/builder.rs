@@ -27,6 +27,8 @@ pub(super) struct Builder<'a> {
     pub(super) levels: Vec<u8>,
     /// Text drawn by clusters that stand for an object, by cluster index (see `ParaLayout::shown`).
     pub(super) shown: Vec<(usize, String, Vec<std::ops::Range<usize>>)>,
+    /// Glyph styles of clusters shaped in more than one style (see `ParaLayout::glyph_styles`).
+    pub(super) glyph_styles: Vec<(u32, u32)>,
 }
 
 struct SegmentInput<'a> {
@@ -500,6 +502,15 @@ impl<'a> Builder<'a> {
         let g0 = first.g0;
         let style = first.style;
         let g1 = added.last().map(|c| c.g1).unwrap_or(g0);
+        // A result shaped in more than one font (`Résumé` in a run whose high-ANSI font is
+        // another) keeps each glyph's: its glyph ids are that font's.
+        if added.iter().any(|c| c.g1 > c.g0 && c.style != style) {
+            let mut runs: Vec<(u32, u32)> = added.iter().filter(|c| c.g1 > c.g0).map(|c| (c.g0, c.style)).collect();
+            runs.sort_unstable();
+            runs.dedup_by(|b, a| a.1 == b.1);
+            let at = self.glyph_styles.partition_point(|(g, _)| *g < g0);
+            self.glyph_styles.splice(at..at, runs);
+        }
         self.shown.push((self.clusters.len(), text.to_string(), ranges));
         self.clusters.push(Cluster { start, end, adv: x, kind: ClKind::Text, style, g0, g1, break_after: false, obj_h: 0.0, obj_d: 0.0, dot: false });
     }
@@ -589,6 +600,7 @@ pub(super) fn overstrike(
     b.clusters.truncate(c0);
     b.glyphs.truncate(g0);
     b.shown.truncate(s0);
+    b.glyph_styles.retain(|(g, _)| *g < g0 as u32);
     // The shape's box (`bw` × `bh`, centred `cy` above the baseline) and the text's size.
     let cy = s * 0.34;
     let (bw, bh, size) = match style {

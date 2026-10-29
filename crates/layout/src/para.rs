@@ -89,6 +89,10 @@ pub struct ParaLayout {
     /// equations) rather than for the paragraph's own text, by cluster index, sorted, with each of
     /// the cluster's glyphs' byte range in that text (a ligature's glyph spans its letters).
     pub shown: Vec<(usize, String, Vec<std::ops::Range<usize>>)>,
+    /// Within a cluster shaped in more than one style (a field result partly in its run's
+    /// high-ANSI font or a fallback font): from glyph `.0` on, the glyphs are in style `.1`, sorted
+    /// by glyph. A cluster drawn in its own one style has none.
+    pub glyph_styles: Vec<(u32, u32)>,
     /// Shapes drawn around overstruck field text (enclosed characters, `EQ \o`), by cluster index.
     pub enclosures: Vec<(usize, Enclosed)>,
     /// Room after a cluster between Asian text and Latin text or digits ([`auto_space`]), by
@@ -97,6 +101,16 @@ pub struct ParaLayout {
 }
 
 impl ParaLayout {
+    /// The style glyph `g` of cluster `c` is drawn in: the cluster's, unless it was shaped in more
+    /// than one ([`ParaLayout::glyph_styles`]).
+    pub fn glyph_style(&self, c: &Cluster, g: u32) -> u32 {
+        let i = self.glyph_styles.partition_point(|(from, _)| *from <= g);
+        match i.checked_sub(1).and_then(|i| self.glyph_styles.get(i)) {
+            Some(&(from, style)) if from >= c.g0 => style,
+            _ => c.style,
+        }
+    }
+
     /// Returns whether `off` is a legal caret and edit boundary, that is, not the interior start of a
     /// joined grapheme cluster.
     fn is_edit_boundary(&self, off: usize) -> bool {

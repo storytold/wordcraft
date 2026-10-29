@@ -8289,6 +8289,42 @@ fn hansi_font_sets_non_ascii_latin_text_and_ascii_font_the_rest() {
     assert_eq!(seen, (true, true));
 }
 
+/// A field result is one cluster, but its letters may be shaped in two fonts (the run's, and
+/// its high-ANSI font for the accented ones): each glyph is drawn in the font that shaped it.
+#[test]
+fn a_field_result_in_two_fonts_draws_each_glyph_in_its_own() {
+    let (ascii, hansi) = ("Source Serif 4", "JetBrains Mono");
+    let field = InlineObject::Field {
+        instr: "DOCPROPERTY Title".into(),
+        result: "Résumé".into(),
+        locked: false,
+        dirty: false,
+        code: false,
+        form: String::new(),
+    };
+    let mut d = Document::from_text("p ");
+    d.insert_object(&Pos::body(0, 2), field, &Default::default()).unwrap();
+    let len = 2 + wordcraft_doc::para::OBJ.len_utf8();
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, len), &|c| {
+        c.font = Some(ascii.into());
+        c.font_hansi = Some(hansi.into());
+    })
+    .unwrap();
+    let l = lay(&d);
+    let items = display::page_display(&d, &l.pages[0], &display::DisplayOptions::default());
+    let mut families = Vec::new();
+    for i in &items {
+        let display::Draw::Glyphs { face, glyphs, text, ranges, .. } = i else { continue };
+        for (g, r) in glyphs.iter().zip(ranges) {
+            let Some(ch) = text.get(r.clone()).and_then(|t| t.chars().next()).filter(|c| c.is_alphabetic()) else { continue };
+            assert_eq!(g.0, face.glyph_for(ch), "{ch:?} drawn with another font's glyph id");
+            families.push((ch, face.get().family.clone()));
+        }
+    }
+    assert!(families.contains(&('é', hansi.to_string())), "{families:?}");
+    assert!(families.contains(&('R', ascii.to_string())), "{families:?}");
+}
+
 /// A page total in the footer ("Page X of Y") is filled in after pagination, so it doesn't make
 /// the body lay out a second time; one in the body still does.
 #[test]
