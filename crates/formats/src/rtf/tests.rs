@@ -526,6 +526,49 @@ fn tracked_changes_survive_export_and_import() {
 }
 
 #[test]
+fn revision_author_indices_follow_first_use_and_keep_name_matching() {
+    use wordcraft_doc::{CharProps, Paragraph, Revision, RevisionKind};
+    // Revision storage order differs from encounter order; trimmed aliases share an index,
+    // but case variants and the literal name "Unknown" remain distinct table entries.
+    let names = [" Alpha ", "alpha", " Zulu ", "\t", "Unknown", "Zulu", "A;B", "Γ{\\}"];
+    let order = [2, 0, 1, 2, 3, 4, 5, 6, 7, 0];
+    let paras = order.iter().map(|&i| Paragraph::with_text("x", CharProps { ins: Some(i), ..Default::default() })).collect();
+    let revisions = names.iter().map(|name| Revision::new(RevisionKind::Insert, *name, "2024-03-15T10:30:00Z")).collect();
+    let rtf = export(&doc_with(paras, revisions));
+    let table = format!("{{\\*\\revtbl {{Unknown;}}{{Zulu;}}{{Alpha;}}{{alpha;}}{{Unknown;}}{{A,B;}}{{{};}}}}", esc("Γ{\\}"));
+    assert!(rtf.contains(&table), "{rtf}");
+    let back = import(rtf.as_bytes()).unwrap();
+    let expected = ["Zulu", "Alpha", "alpha", "Zulu", "Unknown", "Unknown", "Zulu", "A,B", "Γ{\\}", "Alpha"];
+    for (p, author) in doc_paras(&back).iter().zip(expected) {
+        assert_eq!(rev_of(&back, p.props_of_char(0).ins), Some((RevisionKind::Insert, author.into(), "2024-03-15T10:30:00Z".into())));
+    }
+    assert_eq!(doc_paras(&back).len(), expected.len());
+    // Repeated exports cannot take a hash map's iteration order for the on-disk indices.
+    assert_eq!(
+        rtf,
+        export(&doc_with(
+            order.iter().map(|&i| Paragraph::with_text("x", CharProps { ins: Some(i), ..Default::default() })).collect(),
+            names.iter().map(|name| Revision::new(RevisionKind::Insert, *name, "2024-03-15T10:30:00Z")).collect(),
+        ))
+    );
+}
+
+#[test]
+fn empty_revision_author_still_writes_the_unknown_table() {
+    use wordcraft_doc::{CharProps, Paragraph, Revision, RevisionKind};
+    let plain = doc_with(vec![Paragraph::with_text("plain", CharProps::default())], Vec::new());
+    assert!(!export(&plain).contains("\\revtbl"));
+    let tracked = doc_with(
+        vec![Paragraph::with_text("added", CharProps { ins: Some(0), ..Default::default() })],
+        vec![Revision::new(RevisionKind::Insert, " \t ", "")],
+    );
+    let rtf = export(&tracked);
+    assert!(rtf.contains("{\\*\\revtbl {Unknown;}}"), "{rtf}");
+    assert!(rtf.contains("\\revised\\revauth0 added"), "{rtf}");
+    assert_eq!(tracked_runs(&import(rtf.as_bytes()).unwrap()), vec![("added".into(), Some(("Unknown".into(), String::new())), None)]);
+}
+
+#[test]
 fn plain_text_export_still_drops_deleted_text() {
     // Only RTF keeps the deletions: the shared flow for other formats leaves them out.
     let doc = import(TRACKED).unwrap();

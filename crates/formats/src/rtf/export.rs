@@ -1,6 +1,7 @@
 use super::date::{iso_to_dttm, rtf_date};
 use super::styles::{style_fmt, styled};
 use super::{Align, Document, FBlock, FTable, Fmt, Inline, Kind, Meta, Para, RevMark, Rgb, VAlign, model};
+use std::{collections::HashMap, sync::Arc};
 
 // ---------------------------------------------------------------------------------------------
 // Export
@@ -60,12 +61,20 @@ impl Tables {
     }
 }
 
+/// First-seen order determines the on-disk author numbers; the index avoids rescanning names
+/// for every revision. Both collections share each stored name.
+#[derive(Default)]
+pub(super) struct Authors {
+    names: Vec<Arc<str>>,
+    indices: HashMap<Arc<str>, usize>,
+}
+
 pub(super) struct Writer {
     pub(super) t: Tables,
     /// List definitions: per list, the ordered flag per level.
     pub(super) lists: Vec<[bool; 9]>,
     /// Authors of tracked changes (`\revtbl` entries after "Unknown"), when the text has any.
-    pub(super) authors: Option<Vec<String>>,
+    pub(super) authors: Option<Authors>,
     /// The character formatting the current paragraph's style gives its runs (heading bold and
     /// size, code font…): what a run's formatting without a direct value resolves to.
     pub(super) base: Fmt,
@@ -182,18 +191,19 @@ impl Writer {
 
     /// `\revtbl` index of a tracked change's author (0 = "Unknown").
     fn author(&mut self, a: &str) -> usize {
-        let authors = self.authors.get_or_insert_with(Vec::new);
+        let authors = self.authors.get_or_insert_default();
         let a = a.trim();
         if a.is_empty() {
             return 0;
         }
-        match authors.iter().position(|x| x == a) {
-            Some(i) => i + 1,
-            None => {
-                authors.push(a.to_string());
-                authors.len()
-            }
+        if let Some(&i) = authors.indices.get(a) {
+            return i;
         }
+        let name: Arc<str> = a.into();
+        authors.names.push(name.clone());
+        let i = authors.names.len();
+        authors.indices.insert(name, i);
+        i
     }
 
     /// Control words of a tracked insertion and deletion (`\revised`, `\deleted`).
@@ -697,7 +707,7 @@ fn export_with(m: &Meta, w: &Writer, body: &str, sec: &wordcraft_doc::SectionPro
     }
     if let Some(authors) = &w.authors {
         out.push_str("{\\*\\revtbl {Unknown;}");
-        for a in authors {
+        for a in &authors.names {
             out.push_str(&format!("{{{};}}", esc(&a.replace(';', ","))));
         }
         out.push_str("}\n");
