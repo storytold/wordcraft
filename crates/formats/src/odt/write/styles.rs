@@ -113,27 +113,7 @@ pub(super) fn char_props(ctx: &mut Ctx, c: &CharProps, p: &mut Props) {
         p.insert("style:font-style-complex", on(i, "italic", "normal"));
     }
     if let Some(u) = c.underline {
-        let (style, ty, width) = match u {
-            Underline::None => ("none", None, None),
-            Underline::Double => ("solid", Some("double"), None),
-            Underline::Thick => ("solid", None, Some("bold")),
-            Underline::Dotted => ("dotted", None, None),
-            Underline::Dash => ("dash", None, None),
-            Underline::DotDash => ("dot-dash", None, None),
-            Underline::DotDotDash => ("dot-dot-dash", None, None),
-            Underline::Wave => ("wave", None, None),
-            Underline::DoubleWave => ("wave", Some("double"), None),
-            Underline::Single | Underline::Words => ("solid", None, None),
-        };
-        p.insert("style:text-underline-style", style.into());
-        if style != "none" {
-            p.insert("style:text-underline-width", width.unwrap_or("auto").into());
-            p.insert("style:text-underline-color", c.underline_color.map(color).unwrap_or_else(|| "font-color".into()));
-            p.insert("style:text-underline-mode", on(u == Underline::Words, "skip-white-space", "continuous"));
-        }
-        if let Some(t) = ty {
-            p.insert("style:text-underline-type", t.into());
-        }
+        underline_props(c, u, p);
     }
     if let Some(s) = c.strike {
         p.insert("style:text-line-through-style", on(s, "solid", "none"));
@@ -142,6 +122,74 @@ pub(super) fn char_props(ctx: &mut Ctx, c: &CharProps, p: &mut Props) {
         p.insert("style:text-line-through-style", "solid".into());
         p.insert("style:text-line-through-type", "double".into());
     }
+    color_and_position(ctx, c, p);
+    if let Some(v) = c.caps {
+        p.insert("fo:text-transform", on(v, "uppercase", "none"));
+    }
+    if let Some(v) = c.small_caps {
+        p.insert("fo:font-variant", on(v, "small-caps", "normal"));
+    }
+    if c.hidden == Some(true) {
+        p.insert("text:display", "none".into());
+    }
+    if let Some(s) = c.spacing.filter(|s| s.is_finite()) {
+        p.insert("fo:letter-spacing", if s == 0.0 { "normal".into() } else { pt(s.clamp(-1584.0, 1584.0)) });
+    }
+    if let Some(s) = c.scale.filter(|s| s.is_finite() && *s > 0.0) {
+        p.insert("style:text-scale", format!("{}%", s.clamp(1.0, 600.0).round()));
+    }
+    if let Some(k) = c.kern {
+        p.insert("style:letter-kerning", on(k > 0.0, "true", "false"));
+    }
+    if let Some(v) = c.outline {
+        p.insert("style:text-outline", on(v, "true", "false"));
+    }
+    if let Some(v) = c.shadow {
+        p.insert("fo:text-shadow", on(v, "1pt 1pt", "none"));
+    }
+    if c.emboss == Some(true) {
+        p.insert("style:font-relief", "embossed".into());
+    } else if c.engrave == Some(true) {
+        p.insert("style:font-relief", "engraved".into());
+    } else if c.emboss.is_some() || c.engrave.is_some() {
+        p.insert("style:font-relief", "none".into());
+    }
+    if let Some(l) = c.lang.as_deref() {
+        lang(p, l, "fo:language", "fo:country");
+    }
+    if let Some(l) = c.lang_bidi.as_deref() {
+        lang(p, l, "style:language-complex", "style:country-complex");
+    }
+    // todo: character borders, text effects, East Asian language, no-proof.
+}
+
+/// `style:text-underline-*` attributes of underline `u` of `c`.
+fn underline_props(c: &CharProps, u: Underline, p: &mut Props) {
+    let (style, ty, width) = match u {
+        Underline::None => ("none", None, None),
+        Underline::Double => ("solid", Some("double"), None),
+        Underline::Thick => ("solid", None, Some("bold")),
+        Underline::Dotted => ("dotted", None, None),
+        Underline::Dash => ("dash", None, None),
+        Underline::DotDash => ("dot-dash", None, None),
+        Underline::DotDotDash => ("dot-dot-dash", None, None),
+        Underline::Wave => ("wave", None, None),
+        Underline::DoubleWave => ("wave", Some("double"), None),
+        Underline::Single | Underline::Words => ("solid", None, None),
+    };
+    p.insert("style:text-underline-style", style.into());
+    if style != "none" {
+        p.insert("style:text-underline-width", width.unwrap_or("auto").into());
+        p.insert("style:text-underline-color", c.underline_color.map(color).unwrap_or_else(|| "font-color".into()));
+        p.insert("style:text-underline-mode", on(u == Underline::Words, "skip-white-space", "continuous"));
+    }
+    if let Some(t) = ty {
+        p.insert("style:text-underline-type", t.into());
+    }
+}
+
+/// Text color, background and raise or lower of `c`.
+fn color_and_position(ctx: &Ctx, c: &CharProps, p: &mut Props) {
     match c.color {
         Some(TextColor::Rgb(rgb)) => {
             p.insert("fo:color", color(rgb));
@@ -182,44 +230,6 @@ pub(super) fn char_props(ctx: &mut Ctx, c: &CharProps, p: &mut Props) {
             }
         }
     }
-    if let Some(v) = c.caps {
-        p.insert("fo:text-transform", on(v, "uppercase", "none"));
-    }
-    if let Some(v) = c.small_caps {
-        p.insert("fo:font-variant", on(v, "small-caps", "normal"));
-    }
-    if c.hidden == Some(true) {
-        p.insert("text:display", "none".into());
-    }
-    if let Some(s) = c.spacing.filter(|s| s.is_finite()) {
-        p.insert("fo:letter-spacing", if s == 0.0 { "normal".into() } else { pt(s.clamp(-1584.0, 1584.0)) });
-    }
-    if let Some(s) = c.scale.filter(|s| s.is_finite() && *s > 0.0) {
-        p.insert("style:text-scale", format!("{}%", s.clamp(1.0, 600.0).round()));
-    }
-    if let Some(k) = c.kern {
-        p.insert("style:letter-kerning", on(k > 0.0, "true", "false"));
-    }
-    if let Some(v) = c.outline {
-        p.insert("style:text-outline", on(v, "true", "false"));
-    }
-    if let Some(v) = c.shadow {
-        p.insert("fo:text-shadow", on(v, "1pt 1pt", "none"));
-    }
-    if c.emboss == Some(true) {
-        p.insert("style:font-relief", "embossed".into());
-    } else if c.engrave == Some(true) {
-        p.insert("style:font-relief", "engraved".into());
-    } else if c.emboss.is_some() || c.engrave.is_some() {
-        p.insert("style:font-relief", "none".into());
-    }
-    if let Some(l) = c.lang.as_deref() {
-        lang(p, l, "fo:language", "fo:country");
-    }
-    if let Some(l) = c.lang_bidi.as_deref() {
-        lang(p, l, "style:language-complex", "style:country-complex");
-    }
-    // todo: character borders, text effects, East Asian language, no-proof.
 }
 
 /// Paragraph properties of `pp` (set fields only) into `p` (`style:paragraph-properties`) and
