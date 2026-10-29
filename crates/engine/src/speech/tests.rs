@@ -187,6 +187,76 @@ fn player_finishes_on_its_own() {
 }
 
 #[test]
+fn every_reading_counts_as_a_new_one() {
+    // The worker forgets what it learnt about the speech programs when a reading starts, even
+    // when the same worker thread carries on (a pause, then Read Aloud again).
+    let mut r = ReadAloud::default();
+    r.backend = Backend::Hold;
+    let readings = |r: &ReadAloud| lock(&r.shared.0).readings;
+    let doc = Document::from_text("One. Two.");
+    r.start(sentences(&doc, &Pos::body(0, 0), None, true));
+    let first = readings(&r);
+    r.play_pause();
+    r.start(sentences(&doc, &Pos::body(0, 0), None, true));
+    assert_eq!(readings(&r), first + 1);
+    r.play_pause();
+    r.play_pause();
+    assert_eq!(readings(&r), first + 1, "pause and play are the same reading");
+    r.stop();
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+#[test]
+fn a_sentence_that_never_began_says_so_not_another_program() {
+    // No begin event within the queue bound: no other program need be involved, so the
+    // message names the sentence not starting, not another program stopping it.
+    let halted = |o| match dispatcher_spoken(Ok(o)) {
+        Spoken::Halted(m) => m,
+        _ => String::new(),
+    };
+    assert_eq!(halted(ssip::Outcome::NotStarted), NOT_STARTED);
+    assert!(!NOT_STARTED.contains("another program"));
+    assert_eq!(halted(ssip::Outcome::Halted), HALTED_BY_OTHER);
+}
+
+#[test]
+fn play_after_a_failed_sentence_plays_it_again() {
+    // A sentence whose end never came stops reading with an error (as the worker does on a
+    // timeout); Play starts it again and the message goes.
+    let mut r = ReadAloud::default();
+    r.backend = Backend::Hold;
+    r.start(sentences(&Document::from_text("One. Two."), &Pos::body(0, 0), None, true));
+    r.skip(1);
+    {
+        let mut s = lock(&r.shared.0);
+        s.state = State::Stopped;
+        s.error = Some("Read Aloud couldn't use Speech Dispatcher: the sentence didn't end".into());
+    }
+    r.play_pause();
+    assert_eq!((r.state(), r.progress().0, r.error()), (State::Playing, 1, None));
+    r.stop();
+}
+
+#[test]
+fn play_after_a_halt_carries_on_and_clears_the_message() {
+    // Another program stopped the sentence: reading paused on it with a message, and Play
+    // goes on from the same sentence.
+    let mut r = ReadAloud::default();
+    r.backend = Backend::Hold;
+    r.start(sentences(&Document::from_text("One. Two."), &Pos::body(0, 0), None, true));
+    {
+        let mut s = lock(&r.shared.0);
+        s.state = State::Paused;
+        s.error = Some("stopped by another program".into());
+    }
+    r.play_pause();
+    assert_eq!(r.state(), State::Playing);
+    assert_eq!(r.progress().0, 0);
+    assert_eq!(r.error(), None);
+    r.stop();
+}
+
+#[test]
 fn empty_queue_does_not_play() {
     let mut r = ReadAloud::default();
     r.start(Vec::new());
@@ -271,6 +341,364 @@ fn espeak_gets_the_language() {
     assert_eq!(espeak_args("180", Some("uk")), ["-s", "180", "-v", "uk", "--stdin"]);
     assert_eq!(espeak_args("180", None), ["-s", "180", "--stdin"]);
     assert_eq!(espeak_args("180", Some("--evil")), ["-s", "180", "--stdin"]);
+    assert_eq!(espeak_args("180", Some("hu-HU")), ["-s", "180", "-v", "hu", "--stdin"]);
+    // A chosen voice goes the same way, never as an option of its own.
+    assert_eq!(espeak_voice_args("180", Some("urj/hu")), ["-s", "180", "-v", "urj/hu", "--stdin"]);
+    assert_eq!(espeak_voice_args("180", Some("--version")), ["-s", "180", "--stdin"]);
+    assert_eq!(espeak_voice_args("180", Some("a b")), ["-s", "180", "--stdin"]);
+}
+
+#[test]
+fn installed_voices_are_read_from_each_listing() {
+    let espeak = " Pty Language       Age/Gender VoiceName          File                 Other Languages\n 5  hu              --/M      Hungarian          urj/hu               \n 2  en-gb           --/M      English_(Great_Britain) gmw/en               (en 2)\n 7  hu              --/F      hungarian-mbrola-1 mb/mb-hu1            \n\n";
+    let v = espeak_voices(espeak, &|_| false);
+    assert_eq!(v.len(), 2, "MBROLA voices need mbrola and their database: {v:?}");
+    assert_eq!(v[0], Voice { id: "urj/hu".into(), name: "Hungarian".into(), lang: "hu".into(), kind: VoiceKind::Espeak });
+    assert_eq!(v[1].name, "English (Great Britain)");
+    assert_eq!(espeak_voices(espeak, &|db| db == "hu1").len(), 3);
+    assert_eq!(espeak_voices(espeak, &|db| db == "de4").len(), 2, "only the voices whose database is there");
+    let win = "Microsoft Szabolcs\thu-HU\r\nMicrosoft Zira Desktop\ten-US\r\n\tbroken\r\n";
+    let v = windows_voices(win);
+    assert_eq!(v.len(), 2);
+    assert_eq!((v[0].id.as_str(), v[0].lang.as_str()), ("Microsoft Szabolcs", "hu-HU"));
+    assert!(WINDOWS_VOICES.contains("GetInstalledVoices"));
+    // Voice names arrive in UTF-8 without a byte order mark; a mark that comes anyway is dropped.
+    assert!(WINDOWS_VOICES.starts_with("[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false;"), "{WINDOWS_VOICES}");
+    let v = windows_voices("\u{FEFF}Microsoft Szabolcs\thu-HU\r\n  Padded  \ten-US\r\n");
+    assert_eq!(v.iter().map(|v| v.id.as_str()).collect::<Vec<_>>(), ["Microsoft Szabolcs", "Padded"]);
+    assert!(espeak_voices("", &|_| true).is_empty() && windows_voices("").is_empty());
+}
+
+#[test]
+fn a_good_voice_list_survives_an_empty_answer() {
+    let hu = Voice { id: "urj/hu".into(), name: "Hungarian".into(), lang: "hu".into(), kind: VoiceKind::Espeak };
+    let old: Arc<[Voice]> = vec![hu.clone()].into();
+    // Speech Dispatcher exited after its idle timeout: the refresh found nothing.
+    assert_eq!(&*keep_voices(Some(Arc::clone(&old)), Vec::new()), &[hu.clone()][..]);
+    assert!(keep_voices(None, Vec::new()).is_empty());
+    assert!(keep_voices(Some(Arc::new([])), Vec::new()).is_empty());
+    let gb = Voice { id: "gmw/en".into(), name: "English".into(), lang: "en-gb".into(), kind: VoiceKind::Espeak };
+    assert_eq!(&*keep_voices(Some(old), vec![gb.clone()]), &[gb][..], "a new list replaces it");
+}
+
+#[test]
+fn the_voice_picker_may_start_the_server_once() {
+    use std::time::Duration;
+    let s = Duration::from_secs;
+    // An empty list asked for a moment ago: not again on every repaint…
+    assert!(!ask_voices_now(true, false, Some(s(1)), false));
+    // …but at once when the picker opens and the server may be started.
+    assert!(ask_voices_now(true, false, Some(s(1)), true));
+    assert!(!ask_voices_now(true, true, Some(s(1)), true), "not while asking");
+    assert!(!ask_voices_now(false, false, Some(s(1)), true), "a list is there");
+    assert!(ask_voices_now(true, false, Some(VOICES_RETRY), false));
+    assert!(ask_voices_now(false, false, Some(VOICES_REFRESH), false));
+    assert!(ask_voices_now(true, false, None, false), "never asked");
+    // A request that arrives while a query without it runs (the saved voice restored at
+    // start-up, the picker opened during the first frame's query) isn't lost: an empty
+    // answer is followed at once by a query that may start the server.
+    assert_eq!(after_voice_query(true, false, true), (true, true));
+    // A query that ran with it settles it, whatever it found; so does a list that came back,
+    // so no later refresh starts a server.
+    assert_eq!(after_voice_query(true, true, false), (false, false));
+    assert_eq!(after_voice_query(false, false, true), (true, false));
+    // No request: nothing more.
+    assert_eq!(after_voice_query(true, false, false), (false, false));
+    // A silent backend never asks the system, picker or not.
+    let r = ReadAloud::default();
+    r.ask_voices_starting_server();
+    assert_eq!(r.voices().as_deref(), Some(&[][..]));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_voice_listing_program_that_hangs_is_stopped() {
+    assert_eq!(run_listing("sh".as_ref(), &["-c", "echo hu"]).as_deref(), Some("hu\n"));
+    assert_eq!(run_listing("sh".as_ref(), &["-c", "exit 3"]), None, "a failure lists nothing");
+    let start = std::time::Instant::now();
+    assert_eq!(run_listing("sh".as_ref(), &["-c", "echo partial; sleep 30"]), None);
+    assert!(start.elapsed() < LIST_TIMEOUT * 4, "{:?}", start.elapsed());
+    assert_eq!(run_listing("no-such-program-for-wordcraft".as_ref(), &[]), None);
+    // The program exits but a child keeps its output open for a while: the listing still
+    // arrives, within the overall bound.
+    let script = "echo hu; (sleep 0.5; echo late) & exit 0";
+    assert_eq!(run_listing("sh".as_ref(), &["-c", script]).as_deref(), Some("hu\nlate\n"));
+}
+
+#[test]
+fn an_mbrola_voice_is_listed_only_with_its_database() {
+    // espeak-ng's own places: `mbrola/<db>`, `mbrola/<db>/<db>` and `mbrola/voices/<db>`.
+    let root = std::env::temp_dir().join(format!("wordcraft-mbrola-{}", std::process::id()));
+    let (a, b) = (root.join("a"), root.join("b"));
+    std::fs::create_dir_all(a.join("mbrola").join("hu1")).unwrap();
+    std::fs::create_dir_all(b.join("mbrola").join("voices")).unwrap();
+    std::fs::create_dir_all(b.join("mbrola").join("en1")).unwrap();
+    std::fs::write(a.join("mbrola").join("hu1").join("hu1"), b"").unwrap();
+    std::fs::write(b.join("mbrola").join("voices").join("de4"), b"").unwrap();
+    let dirs = std::env::join_paths([&a, &b]).unwrap();
+    assert!(mbrola_database("hu1", Some(&dirs)));
+    assert!(mbrola_database("de4", Some(&dirs)));
+    assert!(!mbrola_database("en1", Some(&dirs)), "a folder without the database");
+    assert!(!mbrola_database("fr1", Some(&dirs)));
+    let listing = " Pty Language Age/Gender VoiceName File Other\n 7 hu --/F hungarian-mbrola-1 mb/mb-hu1\n 6 en --/M german-mbrola-4-en mb/mb-de4-en\n 5 en --/M english-mb-en1 mb/mb-en1\n 5 xx --/M odd mb/../../x\n";
+    let ids: Vec<String> = espeak_voices(listing, &|db| mbrola_database(db, Some(&dirs))).into_iter().map(|v| v.id).collect();
+    assert_eq!(ids, ["mb/mb-hu1", "mb/mb-de4-en"]);
+    // espeak-ng 1.52's `--voices` has no MBROLA lines at all; `--voices=mb` lists them.
+    let plain = " Pty Language Age/Gender VoiceName File Other\n 5 hu --/M Hungarian urj/hu\n";
+    let mb = " Pty Language Age/Gender VoiceName File Other\n 7 hu --/F hungarian-mbrola-1 mb/mb-hu1\n 6 en --/M english-mb-en1 mb/mb-en1\n";
+    let ids: Vec<String> = espeak_all_voices(plain, Some(mb), &|db| mbrola_database(db, Some(&dirs))).into_iter().map(|v| v.id).collect();
+    assert_eq!(ids, ["urj/hu", "mb/mb-hu1"]);
+    assert_eq!(espeak_all_voices(plain, None, &|_| true).len(), 1, "no mbrola program: no listing asked for");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_chosen_voice_reads_its_own_language() {
+    let hu = Voice { id: "urj/hu".into(), name: "Hungarian".into(), lang: "hu".into(), kind: VoiceKind::Espeak };
+    assert_eq!(voice_for(Some(&hu), Some("hu-HU"), "Jó reggelt"), Some(&hu));
+    assert_eq!(voice_for(Some(&hu), None, "Jó reggelt"), Some(&hu), "no language: the chosen voice");
+    assert_eq!(voice_for(Some(&hu), Some("ru-RU"), "Привет"), None, "a Russian quotation keeps the Russian voice");
+    assert_eq!(voice_for(Some(&hu), Some("x-none"), "x"), Some(&hu));
+    let gb = Voice { id: "gmw/en".into(), name: "English".into(), lang: "en-gb".into(), kind: VoiceKind::Espeak };
+    assert_eq!(voice_for(Some(&gb), Some("en-US"), "Hello"), Some(&gb));
+    assert_eq!(voice_for(None, Some("hu"), "Szia"), None);
+    // Text in another script than the voice's keeps its language's voice, either way round.
+    let ru = Voice { id: "Milena".into(), name: "Milena".into(), lang: "ru_RU".into(), kind: VoiceKind::Mac };
+    assert_eq!(voice_for(Some(&ru), Some("ru"), "Привет"), Some(&ru));
+    assert_eq!(voice_for(Some(&ru), Some("uk-UA"), "Привіт"), Some(&ru), "the same script");
+    assert_eq!(voice_for(Some(&ru), Some("en-US"), "Hello"), None, "English text keeps an English voice");
+    let cmn = Voice { id: "sit/cmn".into(), name: "Chinese (Mandarin)".into(), lang: "cmn".into(), kind: VoiceKind::Espeak };
+    assert_eq!(voice_for(Some(&cmn), Some("zh"), "你好"), Some(&cmn));
+    assert_eq!(voice_for(Some(&cmn), Some("en-US"), "Hello"), None);
+    // Scripts the detection doesn't know aren't taken for Latin, either way round.
+    assert_eq!(voice_for(Some(&hu), Some("hi"), "नमस्ते दुनिया"), None, "Hindi keeps the Hindi voice");
+    assert_eq!(voice_for(Some(&hu), Some("en-US"), "नमस्ते दुनिया"), None, "Devanagari tagged en-US too");
+    let hi = Voice { id: "inc/hi".into(), name: "Hindi".into(), lang: "hi".into(), kind: VoiceKind::Espeak };
+    assert_eq!(voice_for(Some(&hi), Some("hi-IN"), "नमस्ते"), Some(&hi));
+    assert_eq!(voice_for(Some(&hi), Some("en-US"), "Hello"), None, "a Hindi voice doesn't read English");
+    let ka = Voice { id: "ccs/ka".into(), name: "Georgian".into(), lang: "ka".into(), kind: VoiceKind::Espeak };
+    assert_eq!(voice_for(Some(&ka), Some("en-US"), "Hello"), None);
+    assert!(is_latin_text("Árvíztűrő tükörfúrógép, Ñandú, Łódź 123"));
+    assert!(!is_latin_text("Hello мир"));
+    // Symbols, ligatures, modifier letters and a stray Greek letter don't make text foreign.
+    assert!(is_latin_text("5 µm vastag réteg"));
+    assert!(is_latin_text("A ﬁnom ﬁlm ﬂottul fut."));
+    assert!(is_latin_text("Hawaiʻi és Oʼahu szigete"));
+    assert!(is_latin_text("Az α-részecskék pályáját mérték a kísérletben."));
+    assert!(!is_latin_text("123 – !"), "no letters: not Latin text");
+    // A number in a Japanese, Russian or Hindi document keeps the voice of its tag; in a
+    // document tagged with a Latin-script language it keeps the chosen voice.
+    assert_eq!(voice_for(Some(&gb), Some("ja"), "2026"), None);
+    assert_eq!(voice_for(Some(&gb), Some("ru-RU"), "3.14"), None);
+    assert_eq!(voice_for(Some(&hu), Some("ja"), "2026"), None);
+    assert_eq!(voice_for(Some(&hu), Some("hi-IN"), "2026"), None);
+    assert_eq!(voice_for(Some(&hu), Some("en-US"), "2026"), Some(&hu), "a Hungarian document tagged en-US");
+    assert_eq!(voice_for(Some(&hu), Some("de"), "3.14 – 42"), Some(&hu));
+    assert_eq!(voice_for(Some(&hu), Some("en-US"), "5 µm vastag réteg"), Some(&hu));
+    assert_eq!(voice_for(Some(&hu), Some("en-US"), "A ﬁnom ﬁlm ﬂottul fut."), Some(&hu));
+    // A Latin-script voice reads Latin text whatever the tag: an English sentence in a Russian
+    // document (every run `ru-RU`), or a Greek-tagged Latin sentence.
+    assert_eq!(voice_for(Some(&gb), Some("ru-RU"), "This sentence is English."), Some(&gb));
+    assert_eq!(voice_for(Some(&gb), Some("el"), "Plain Latin text."), Some(&gb));
+    assert_eq!(voice_for(Some(&gb), Some("ru-RU"), "Это русский текст."), None, "Cyrillic keeps the Russian voice");
+    // A voice whose language the program doesn't name reads Latin text, as before.
+    for lang in ["", "none", "x"] {
+        let unnamed = Voice { id: "v".into(), name: "Voice".into(), lang: lang.into(), kind: VoiceKind::Mac };
+        assert_eq!(voice_for(Some(&unnamed), Some("en-US"), "Hello"), Some(&unnamed), "{lang:?}");
+        assert_eq!(voice_for(Some(&unnamed), Some("ru"), "Привет"), None, "{lang:?}");
+    }
+}
+
+#[test]
+fn a_chosen_voice_reads_text_tagged_with_the_default_language() {
+    // A new document (and almost every Word file) tags every run `en-US`, Hungarian text too:
+    // the chosen Hungarian voice reads it, and only the Russian sentence gets its own voice.
+    let doc = Document::from_text("Jó reggelt kívánok. Привет, как дела?");
+    let s = sentences(&doc, &Pos::body(0, 0), None, true);
+    assert_eq!(s.iter().map(|u| u.lang.as_deref()).collect::<Vec<_>>(), [Some("en-US"), Some("ru")]);
+    let hu = Voice { id: "urj/hu".into(), name: "Hungarian".into(), lang: "hu".into(), kind: VoiceKind::Espeak };
+    assert_eq!(voice_for(Some(&hu), s[0].lang.as_deref(), &s[0].text), Some(&hu));
+    assert_eq!(voice_for(Some(&hu), s[1].lang.as_deref(), &s[1].text), None);
+}
+
+#[test]
+fn the_browser_player_says_an_interrupted_sentence_again() {
+    let first = WebAttempt::default();
+    // Cancelled from outside: said again, twice at most, then reading pauses on it.
+    assert_eq!(web_retry("interrupted", first, true), WebRetry::Again(WebAttempt { plain: false, resends: 1 }));
+    assert_eq!(web_retry("canceled", WebAttempt { plain: false, resends: 1 }, false), WebRetry::Again(WebAttempt { plain: false, resends: 2 }));
+    assert_eq!(web_retry("canceled", WebAttempt { plain: false, resends: MAX_WEB_RESENDS }, false), WebRetry::Pause);
+    // A language or voice the browser lacks: once more in its default voice, then an error.
+    for code in ["language-unavailable", "voice-unavailable", "synthesis-failed"] {
+        assert_eq!(web_retry(code, first, true), WebRetry::Again(WebAttempt { plain: true, resends: 0 }), "{code}");
+        assert_eq!(web_retry(code, WebAttempt { plain: true, resends: 0 }, false), WebRetry::Stop, "{code}");
+        assert_eq!(web_retry(code, first, false), WebRetry::Stop, "nothing to leave out: {code}");
+    }
+    assert_eq!(web_retry("not-allowed", first, true), WebRetry::Stop);
+    assert_eq!(web_retry("", first, true), WebRetry::Stop);
+}
+
+#[test]
+fn delayed_browser_voices_still_arrive_after_an_empty_timeout() {
+    // The browser loads its voices late: the list is pending at first, then empty once the
+    // wait is over, and the voices still show when they arrive, however many repaints asked.
+    let none: Arc<[Voice]> = Arc::new([]);
+    let late: Arc<[Voice]> = vec![Voice { id: "urn:hu".into(), name: "Hungarian".into(), lang: "hu-HU".into(), kind: VoiceKind::Web }].into();
+    for frame in 0..1000 {
+        assert_eq!(web_voice_list(Arc::clone(&none), f64::from(frame)), None, "pending at frame {frame}");
+    }
+    assert_eq!(web_voice_list(Arc::clone(&none), WEB_VOICES_WAIT_MS).as_deref(), Some(&[][..]), "empty after the wait");
+    assert_eq!(web_voice_list(Arc::clone(&late), WEB_VOICES_WAIT_MS * 3.0).as_deref(), Some(&late[..]), "arrived later: shown");
+    // An empty cache is asked again, though not on every repaint; a full one isn't.
+    assert!(!ask_browser_voices_again(true, 10.0));
+    assert!(ask_browser_voices_again(true, WEB_EMPTY_VOICES_AGAIN_MS));
+    assert!(ask_browser_voices_again(true, f64::NAN), "a broken clock never stops asking");
+    assert!(!ask_browser_voices_again(false, 1e9));
+}
+
+#[test]
+fn the_browser_voice_list_waits_a_while_for_its_voices() {
+    assert!(web_voices_pending(0.0));
+    assert!(web_voices_pending(WEB_VOICES_WAIT_MS - 1.0));
+    assert!(!web_voices_pending(WEB_VOICES_WAIT_MS));
+    assert!(!web_voices_pending(f64::NAN), "a broken clock never keeps it pending");
+}
+
+#[test]
+fn only_the_reading_player_stops_the_browser_speech() {
+    // The utterance remembers its player. That player may always stop it; another one only
+    // when it starts playing itself, never by going away or changing while stopped (a
+    // template preview's session).
+    let (reading, preview) = (Arc::new(1), Arc::new(1));
+    let owner = Arc::downgrade(&reading);
+    assert!(may_cancel(Some(&owner), &reading, false));
+    assert!(may_cancel(Some(&owner), &reading, true));
+    assert!(!may_cancel(Some(&owner), &preview, false));
+    assert!(may_cancel(Some(&owner), &preview, true), "a player that starts reading takes over");
+    assert!(!may_cancel(None, &preview, false), "nothing spoken: nothing to stop");
+}
+
+#[test]
+fn a_player_that_loses_the_browser_speech_pauses() {
+    // Two players (two documents): when one starts reading, the other, cut off with its
+    // sentence's events and watchdog, pauses on its sentence instead of hanging as Playing.
+    let mut r = ReadAloud::default();
+    r.backend = Backend::Hold;
+    r.start(sentences(&Document::from_text("One. Two."), &Pos::body(0, 0), None, true));
+    r.skip(1);
+    speech_taken_over(&r.shared);
+    assert_eq!(r.state(), State::Paused);
+    assert_eq!(r.progress().0, 1, "on the same sentence");
+    r.play_pause();
+    assert_eq!(r.state(), State::Playing, "Play carries on");
+    // A stopped player stays stopped.
+    r.stop();
+    speech_taken_over(&r.shared);
+    assert_eq!(r.state(), State::Stopped);
+}
+
+#[test]
+fn a_player_waiting_to_speak_its_next_sentence_is_told_it_lost_the_speech() {
+    // The reading player's next sentence waits for its timer after a cancel (nothing is being
+    // spoken): another player that starts reading still finds it as the owner and pauses it.
+    let mut reading = ReadAloud::default();
+    reading.backend = Backend::Hold;
+    reading.start(sentences(&Document::from_text("One. Two."), &Pos::body(0, 0), None, true));
+    let mut other = ReadAloud::default();
+    other.backend = Backend::Hold;
+    other.start(sentences(&Document::from_text("Three."), &Pos::body(0, 0), None, true));
+    // As `web::owner` finds it: nothing being spoken, the waiting sentence's player.
+    let owner = None.or(Some(Arc::downgrade(&reading.shared)));
+    assert!(may_cancel(owner.as_ref(), &other.shared, true));
+    lose_speech(owner, &other.shared);
+    assert_eq!(reading.state(), State::Paused);
+    assert_eq!(other.state(), State::Playing);
+    // A player taking over from itself (a change while it reads) doesn't pause.
+    lose_speech(Some(Arc::downgrade(&other.shared)), &other.shared);
+    assert_eq!(other.state(), State::Playing);
+    reading.stop();
+    other.stop();
+}
+
+#[test]
+fn the_browser_gets_a_bounded_time_per_sentence() {
+    assert_eq!(web_sentence_limit_ms(0, 1.0), 30_000.0);
+    assert_eq!(web_sentence_limit_ms(600, 1.0), 270_000.0);
+    assert_eq!(web_sentence_limit_ms(600, 3.0), 270_000.0, "never shorter when faster");
+    assert_eq!(web_sentence_limit_ms(0, MIN_RATE), 60_000.0, "longer when slower");
+    assert_eq!(web_sentence_limit_ms(0, f32::NAN), 30_000.0);
+}
+
+#[test]
+fn the_chosen_voice_is_kept_and_reported() {
+    let mut r = ReadAloud::default();
+    assert_eq!(r.status()["voice"], Value::Null);
+    // A silent backend never asks the system (no `espeak-ng --voices`, no server started).
+    assert_ne!(r.backend, Backend::System);
+    assert_eq!(r.voices().as_deref(), Some(&[][..]));
+    r.set_voice(Some(" urj/hu "));
+    assert_eq!(r.voice().as_deref(), Some("urj/hu"));
+    assert_eq!(r.status()["voice"], "urj/hu");
+    r.set_voice(Some(""));
+    assert_eq!(r.voice(), None);
+    r.set_voice(Some(&"x".repeat(MAX_VOICE_ID + 1)));
+    assert_eq!(r.voice(), None, "an overlong id is dropped");
+    r.set_voice(None);
+    assert_eq!(r.voice(), None);
+    // During reading a new voice restarts the sentence; the same voice again doesn't.
+    r.backend = Backend::Hold;
+    r.start(sentences(&Document::from_text("One. Two."), &Pos::body(0, 0), None, true));
+    let generation = |r: &ReadAloud| lock(&r.shared.0).generation;
+    let before = generation(&r);
+    r.set_voice(Some("urj/hu"));
+    assert_eq!(generation(&r), before + 1);
+    r.set_voice(Some(" urj/hu "));
+    assert_eq!(generation(&r), before + 1, "the same voice: the sentence goes on");
+    r.stop();
+}
+
+#[test]
+fn windows_speaks_with_the_chosen_voice() {
+    let w = windows_speech_with(None, 1.0, Some("ru"), Some("Microsoft Szabolcs"));
+    assert!(w.args[3].contains("$s.SelectVoice('Microsoft Szabolcs');"), "{}", w.args[3]);
+    assert!(!w.args[3].contains("GetInstalledVoices"), "the chosen voice replaces the choice by language");
+    let evil = windows_speech_with(None, 1.0, None, Some("x'); Remove-Item y; ('"));
+    assert!(evil.args[3].contains("SelectVoice('x''); Remove-Item y; (''');"), "{}", evil.args[3]);
+    // PowerShell ends a single-quoted string at a typographic quote too.
+    let curly = windows_speech_with(None, 1.0, None, Some("x\u{2019}); Remove-Item y; (\u{2018}"));
+    assert!(curly.args[3].contains("SelectVoice('x\u{2019}\u{2019}); Remove-Item y; (\u{2018}\u{2018}');"), "{}", curly.args[3]);
+    assert_eq!(powershell_literal("a\u{201A}b\u{201B}c\nd"), "a\u{201A}\u{201A}b\u{201B}\u{201B}cd");
+}
+
+#[test]
+fn speech_dispatcher_rate_follows_the_speed() {
+    assert_eq!(spd_rate(1.0), 0);
+    assert_eq!(spd_rate(MIN_RATE), -50);
+    assert_eq!(spd_rate(MAX_RATE), 100);
+    assert_eq!(spd_rate(2.0), 50);
+    assert_eq!(spd_rate(10.0), 100);
+    assert_eq!(spd_rate(0.0), -50);
+    assert_eq!(spd_rate(f32::NAN), 0);
+    assert_eq!(spd_rate(1.5), 25);
+}
+
+#[test]
+fn speech_dispatcher_keeps_the_region() {
+    let tag = |t| dispatcher_language(Some(t));
+    assert_eq!(tag("en-GB").as_deref(), Some("en-GB"));
+    assert_eq!(tag(" pt-BR ").as_deref(), Some("pt-BR"));
+    assert_eq!(tag("zh-TW").as_deref(), Some("zh-TW"));
+    assert_eq!(tag("hu").as_deref(), Some("hu"));
+    assert_eq!(tag("HU-hu").as_deref(), Some("hu-HU"));
+    // SSIP takes language and region: script and variant subtags are left out.
+    assert_eq!(tag("sr-Latn-RS").as_deref(), Some("sr-RS"));
+    assert_eq!(tag("zh-Hant-TW").as_deref(), Some("zh-TW"));
+    assert_eq!(tag("es-419").as_deref(), Some("es-419"));
+    assert_eq!(tag("de-CH-1996").as_deref(), Some("de-CH"));
+    assert_eq!(tag("sr-Cyrl").as_deref(), Some("sr"));
+    assert_eq!(dispatcher_language(Some("x-none")), None);
+    assert_eq!(dispatcher_language(Some("hu\r\nQUIT")), None);
+    assert_eq!(dispatcher_language(None), None);
 }
 
 #[test]

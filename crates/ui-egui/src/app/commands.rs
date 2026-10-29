@@ -993,6 +993,7 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "font.remove"
             | "readAloud.speed"
             | "readAloud.skipCitations"
+            | "readAloud.voice"
             | "tools.customizeKeyboard"
             | "tools.customizeRibbon"
             | "view.darkMode"

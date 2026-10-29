@@ -18,6 +18,7 @@ impl WordApp {
         ui.editing = self.session.prefs.clone();
         ui.read_aloud_rate = self.session.read_aloud.rate();
         ui.read_aloud_skip_citations = self.session.read_aloud.skip_citations;
+        ui.read_aloud_voice = self.session.read_aloud.voice();
         ui.dark_page = self.session.view.dark_mode;
         ui.nav_pane = self.session.view.nav_pane;
         ui.styles_pane_dock = self.session.view.styles_pane_dock;
@@ -67,6 +68,7 @@ impl WordApp {
         }
         self.session.read_aloud.set_rate(self.ui.read_aloud_rate);
         self.session.read_aloud.skip_citations = self.ui.read_aloud_skip_citations;
+        self.session.read_aloud.set_voice(self.ui.read_aloud_voice.as_deref());
         self.session.view.dark_mode = self.ui.dark_page;
         self.session.view.nav_pane = self.ui.nav_pane;
         self.session.view.styles_pane_dock = self.ui.styles_pane_dock;

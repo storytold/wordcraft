@@ -10,12 +10,15 @@
 //! letters (Cyrillic, Greek, Arabic, Hebrew, CJK, Thai…), so a Russian sentence gets a Russian voice
 //! where one is installed instead of being spelled out letter by letter. The system's own voice
 //! stays whenever it already speaks the language (English text on an English system keeps the
-//! voice the user chose), and without a voice for the language the default voice speaks.
+//! voice the user chose), and without a voice for the language the default voice speaks. Speech
+//! Dispatcher is the exception: it can't be asked for its default language, so it is told the
+//! language of every sentence.
 //!
-//! The speech itself runs on a worker thread (desktop only): it starts `say` (macOS), `espeak`
-//! / `spd-say` (Linux, BSD) or the Windows speech synthesizer (PowerShell) for the current
-//! sentence, and moves on when it finishes. Commands only change the shared state and wake the
-//! worker, which stops the running sentence when the state changed under it.
+//! The speech itself runs on a worker thread (desktop only): it starts `say` (macOS), `espeak-ng`
+//! / `espeak` (Linux, BSD) or the Windows speech synthesizer (PowerShell) for the current sentence,
+//! or talks to Speech Dispatcher over its socket when neither espeak is installed, and moves on when
+//! the sentence ends. Commands only change the shared state and wake the worker, which stops the
+//! running sentence when the state changed under it.
 
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 
@@ -231,7 +234,7 @@ fn script_language(primary: &str) -> Option<&'static str> {
         "th" => "th",
         "ko" => "ko",
         "ja" => "ja",
-        "zh" => "zh",
+        "zh" | "cmn" | "yue" => "zh",
         _ => return None,
     })
 }
@@ -257,7 +260,7 @@ pub fn speech_language(text: &str, explicit: Option<&str>, bidi: Option<&str>) -
 
 /// The primary language subtag of a plain tag, lowercased (`ru-RU` gives `ru`). `None` for tags
 /// without a two- or three-letter language, such as Word's `x-none`.
-#[cfg(any(unix, windows, test))]
+#[cfg(any(unix, windows, target_arch = "wasm32", test))]
 fn primary_tag(tag: &str) -> Option<String> {
     let t = plain_tag(tag)?;
     t.split('-').next().filter(|p| (2..=3).contains(&p.len()) && p.chars().all(|c| c.is_ascii_alphabetic())).map(str::to_ascii_lowercase)
@@ -274,10 +277,17 @@ fn voice_language(lang: Option<&str>, default: &str) -> Option<String> {
 /// (espeak's default voice), and `--stdin`.
 #[cfg(any(all(unix, not(target_os = "macos")), test))]
 fn espeak_args(wpm: &str, lang: Option<&str>) -> Vec<String> {
+    espeak_voice_args(wpm, voice_language(lang, "en").as_deref())
+}
+
+/// The arguments of `espeak-ng`/`espeak` with `voice` (a language or a voice file, `urj/hu`),
+/// left out unless it is a plain name that can't be taken for an option.
+#[cfg(any(all(unix, not(target_os = "macos")), test))]
+fn espeak_voice_args(wpm: &str, voice: Option<&str>) -> Vec<String> {
     let mut a = vec!["-s".to_string(), wpm.to_string()];
-    if let Some(p) = voice_language(lang, "en") {
+    if let Some(v) = voice.filter(|v| !v.is_empty() && !v.starts_with('-') && !v.chars().any(|c| c.is_control() || c.is_whitespace())) {
         a.push("-v".into());
-        a.push(p);
+        a.push(v.to_string());
     }
     a.push("--stdin".into());
     a
@@ -369,6 +379,612 @@ fn mac_default_voice_language() -> &'static str {
         let voice = read(&["read", "com.apple.speech.voice.prefs", "SelectedVoiceName"]);
         let locale = read(&["read", "-g", "AppleLocale"]).or_else(|| std::env::var("LANG").ok());
         mac_default_language(voice.as_deref(), mac_voice_listing(), locale.as_deref())
+    })
+}
+
+#[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+mod ssip;
+#[cfg(target_arch = "wasm32")]
+mod web;
+
+/// Longest voice id kept (ids come from saved settings and commands, hostile input).
+pub(crate) const MAX_VOICE_ID: usize = 200;
+
+/// `id` as a voice id: without outer whitespace, not empty, at most [`MAX_VOICE_ID`] bytes and
+/// without control characters (it goes on a command line or into a script).
+pub(crate) fn voice_id(id: &str) -> Option<&str> {
+    let id = id.trim();
+    (!id.is_empty() && id.len() <= MAX_VOICE_ID && !id.chars().any(char::is_control)).then_some(id)
+}
+
+/// Which speech program a [`Voice`] belongs to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VoiceKind {
+    /// `espeak-ng` / `espeak`: the id is the voice file (`urj/hu`, `gmw/en-GB-x-rp`).
+    Espeak,
+    /// Speech Dispatcher: the id is the synthesis voice name (`SET SELF SYNTHESIS_VOICE`).
+    Dispatcher,
+    /// macOS `say -v`: the id is the voice name.
+    Mac,
+    /// The Windows speech synthesizer: the id is the voice name.
+    Windows,
+    /// The browser's speech synthesis: the id is the voice URI.
+    Web,
+}
+
+/// An installed voice Read Aloud can read in.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Voice {
+    /// What the speech program is given, and what [`ReadAloud::set_voice`] takes.
+    pub id: String,
+    /// The name to show.
+    pub name: String,
+    /// The voice's language, as the program reports it (`hu`, `en-gb`, `ru_RU`).
+    pub lang: String,
+    pub kind: VoiceKind,
+}
+
+impl Voice {
+    pub fn to_json(&self) -> Value {
+        json!({"id": self.id, "name": self.name, "lang": self.lang})
+    }
+}
+
+/// Languages written in a script [`detect_language`] doesn't tell apart (Indic, Georgian,
+/// Armenian, Ethiopic, Southeast Asian…): their voices don't read Latin text.
+const OTHER_SCRIPT_LANGUAGES: &[&str] = &[
+    "hi", "mr", "ne", "sa", "bn", "as", "pa", "gu", "or", "ta", "te", "kn", "ml", "si", "ka", "hy", "am", "ti", "km", "lo", "my", "bo", "dz", "dv",
+    "iu",
+];
+
+/// Is `text` written in Latin letters (with their accented forms and ligatures)? Letters of other
+/// scripts may be there, but less than a fifth of them, as in [`detect_language`]: a Greek letter
+/// in a formula doesn't make a Hungarian sentence Greek. Modifier letters (`ʼ`) and the micro sign
+/// count for no script. Text without letters (`2026`, `3.14`) is no Latin text: [`voice_for`]
+/// decides it by its tag.
+fn is_latin_text(text: &str) -> bool {
+    let (mut latin, mut other) = (0usize, 0usize);
+    for c in text.chars().filter(|c| c.is_alphabetic()) {
+        if c.is_ascii_alphabetic()
+            || matches!(c, 'ª' | 'º' | '\u{00C0}'..='\u{024F}' | '\u{1E00}'..='\u{1EFF}' | '\u{2C60}'..='\u{2C7F}' | '\u{A720}'..='\u{A7FF}' | '\u{AB30}'..='\u{AB6F}' | '\u{FB00}'..='\u{FB06}')
+        {
+            latin += 1;
+        } else if !matches!(c, 'µ' | '\u{02B0}'..='\u{02FF}') {
+            other += 1;
+        }
+    }
+    latin > 0 && other.saturating_mul(5) < latin.saturating_add(other)
+}
+
+/// The chosen voice, when it suits the sentence `text` in `lang`: the sentence has no language,
+/// the voice speaks its language, or the voice speaks another language in the same script. A
+/// Latin-script voice reads every sentence of Latin letters whatever its tag, since the tag is
+/// often only the default (Word and new documents tag every run `en-US`, Hungarian text
+/// included); text in another script keeps the voice of its language, so a Hungarian voice
+/// doesn't spell out a Russian or Hindi sentence letter by letter, and a Hindi voice doesn't read
+/// English.
+fn voice_for<'a>(voice: Option<&'a Voice>, lang: Option<&str>, text: &str) -> Option<&'a Voice> {
+    let voice = voice?;
+    // A language as a program writes it: `hu`, `en-gb`, `ru_RU`, `cmn-latn-pinyin`.
+    let primary = |tag: &str| primary_tag(tag.split(['-', '_']).next().unwrap_or(""));
+    let Some(sentence) = lang.and_then(primary) else { return Some(voice) };
+    // A voice without a language the program names (empty, `none`) counts as a Latin-script one.
+    let own = primary(&voice.lang);
+    if own.as_deref() == Some(sentence.as_str()) {
+        return Some(voice);
+    }
+    let script = script_language(&sentence);
+    if let Some(own_script) = own.as_deref().and_then(script_language) {
+        return (script == Some(own_script)).then_some(voice);
+    }
+    if own.is_some_and(|o| OTHER_SCRIPT_LANGUAGES.contains(&o.as_str())) {
+        return None;
+    }
+    // Text without letters (a `2026` cell) keeps the chosen voice, unless its tag is a language of
+    // another script, whose voice reads the number in that language.
+    if !text.chars().any(char::is_alphabetic) {
+        return (script.is_none() && !OTHER_SCRIPT_LANGUAGES.contains(&sentence.as_str())).then_some(voice);
+    }
+    // A Latin-script voice reads Latin text whatever the tag: an English sentence in a Russian
+    // document (every run `ru-RU`) goes to the chosen English voice.
+    is_latin_text(text).then_some(voice)
+}
+
+/// The voices in `espeak-ng --voices`' `listing`: a header, then `Pty Language Age/Gender
+/// VoiceName File Other…` per voice. espeak-ng lists every MBROLA voice (`mb/mb-hu1`) it has a
+/// voice file for, but speaks one only with the `mbrola` program and the voice's database
+/// installed; `mbrola(database)` says whether both are (`hu1` for `mb/mb-hu1` and `mb/mb-hu1-en`).
+#[cfg(any(all(unix, not(target_os = "macos")), test))]
+fn espeak_voices(listing: &str, mbrola: &dyn Fn(&str) -> bool) -> Vec<Voice> {
+    listing
+        .lines()
+        .skip(1)
+        .filter_map(|line| {
+            let f: Vec<&str> = line.split_whitespace().collect();
+            let (lang, name, file) = (f.get(1)?, f.get(3)?, f.get(4)?);
+            let speakable = match file.strip_prefix("mb/") {
+                Some(mb) => mb
+                    .strip_prefix("mb-")
+                    .and_then(|v| v.split('-').next())
+                    .is_some_and(|db| !db.is_empty() && db.chars().all(|c| c.is_ascii_alphanumeric()) && mbrola(db)),
+                None => true,
+            };
+            speakable.then(|| Voice { id: file.to_string(), name: name.replace('_', " "), lang: lang.to_string(), kind: VoiceKind::Espeak })
+        })
+        .collect()
+}
+
+/// The voices of `espeak-ng --voices` (`listing`) and of `espeak-ng --voices=mb` (`mbrola_listing`):
+/// the plain listing leaves the MBROLA voices out, so they are asked for on their own.
+#[cfg(any(all(unix, not(target_os = "macos")), test))]
+fn espeak_all_voices(listing: &str, mbrola_listing: Option<&str>, mbrola: &dyn Fn(&str) -> bool) -> Vec<Voice> {
+    let mut voices = espeak_voices(listing, mbrola);
+    let more = mbrola_listing.map(|l| espeak_voices(l, mbrola)).unwrap_or_default();
+    for v in more {
+        if v.id.starts_with("mb/") && !voices.iter().any(|w| w.id == v.id) {
+            voices.push(v);
+        }
+    }
+    voices
+}
+
+/// Is MBROLA voice `database` installed in one of `data_dirs` (`XDG_DATA_DIRS`, else
+/// `/usr/local/share:/usr/share`), where espeak-ng looks for it: `mbrola/<db>`,
+/// `mbrola/<db>/<db>` or `mbrola/voices/<db>`?
+#[cfg(any(all(unix, not(target_os = "macos")), test))]
+fn mbrola_database(database: &str, data_dirs: Option<&std::ffi::OsStr>) -> bool {
+    let dirs = data_dirs.filter(|d| !d.is_empty()).unwrap_or("/usr/local/share:/usr/share".as_ref());
+    std::env::split_paths(dirs).any(|d| {
+        let m = d.join("mbrola");
+        [m.join(database), m.join(database).join(database), m.join("voices").join(database)].iter().any(|p| p.is_file())
+    })
+}
+
+/// Is `program` a file in one of the `PATH` folders?
+#[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+fn on_path(program: &str) -> bool {
+    std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(program).is_file()))
+}
+
+/// The voices in the Windows listing ([`WINDOWS_VOICES`]): `name<TAB>culture` per line.
+#[cfg(any(target_os = "windows", test))]
+fn windows_voices(listing: &str) -> Vec<Voice> {
+    listing
+        .lines()
+        .filter_map(|line| {
+            // PowerShell may start its UTF-8 output with a byte order mark.
+            let (name, lang) = line.trim_start_matches('\u{FEFF}').trim_end_matches('\r').split_once('\t')?;
+            voice_id(name).map(|name| Voice { id: name.to_string(), name: name.to_string(), lang: lang.trim().to_string(), kind: VoiceKind::Windows })
+        })
+        .collect()
+}
+
+/// PowerShell that lists the enabled Windows voices, one `name<TAB>culture` per line, in UTF-8
+/// (PowerShell writes its output in the console's code page otherwise, and accented voice names
+/// would come out garbled).
+#[cfg(any(target_os = "windows", test))]
+const WINDOWS_VOICES: &str = "[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false; Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).GetInstalledVoices() | Where-Object { $_.Enabled } | ForEach-Object { $_.VoiceInfo.Name + [char]9 + $_.VoiceInfo.Culture.Name }";
+
+/// Ask the system which voices it has (desktop only; nothing in tests or with speech off).
+#[cfg(not(target_arch = "wasm32"))]
+fn list_voices(start_server: bool) -> Vec<Voice> {
+    if cfg!(test) || std::env::var("WORDCRAFT_SPEECH").is_ok_and(|v| v == "off") {
+        return Vec::new();
+    }
+    let run = |program: &str, args: &[&str]| run_listing(program.as_ref(), args);
+    // Only Speech Dispatcher (Linux, BSD) is a server that may be started for the list.
+    let _ = start_server;
+    #[cfg(target_os = "macos")]
+    {
+        // Asked afresh (the listing `say` uses is kept for the process).
+        return mac_voices(&run("say", &["-v", "?"]).unwrap_or_default())
+            .filter(|(name, _)| !MAC_NOVELTY_VOICES.contains(&name.as_str()))
+            .map(|(name, lang)| Voice { id: name.clone(), name, lang, kind: VoiceKind::Mac })
+            .collect();
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let ps = windows_powershell(std::env::var_os("SystemRoot"));
+        let _ = &run;
+        return run_listing(ps.as_os_str(), &["-NoProfile", "-NonInteractive", "-Command", WINDOWS_VOICES])
+            .map(|l| windows_voices(&l))
+            .unwrap_or_default();
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let mbrola = on_path("mbrola");
+        let data_dirs = std::env::var_os("XDG_DATA_DIRS");
+        let database = |db: &str| mbrola && mbrola_database(db, data_dirs.as_deref());
+        for prog in ["espeak-ng", "espeak"] {
+            if let Some(l) = run(prog, &["--voices"]) {
+                let mb = if mbrola { run(prog, &["--voices=mb"]) } else { None };
+                return espeak_all_voices(&l, mb.as_deref(), &database);
+            }
+        }
+        // A running Speech Dispatcher; started for the list only when the voice picker opened or
+        // a voice was chosen, never from a repaint or a retry.
+        let stream = if start_server {
+            match ssip::connect(&|| false) {
+                ssip::Connection::Open(s) => Some(s),
+                _ => None,
+            }
+        } else {
+            ssip::connect_running()
+        };
+        let listed = stream.and_then(|s| ssip::list_voices(&s).ok()).unwrap_or_default();
+        return listed
+            .into_iter()
+            .map(|(name, lang)| Voice { id: name.clone(), name: name.replace('_', " "), lang, kind: VoiceKind::Dispatcher })
+            .collect();
+    }
+    #[allow(unreachable_code)]
+    Vec::new()
+}
+
+/// Longest a voice-listing program may run before it is stopped (a hung PowerShell mustn't keep
+/// the list pending).
+#[cfg(not(target_arch = "wasm32"))]
+const LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(if cfg!(test) { 1 } else { 15 });
+/// Most output kept from a voice-listing program.
+#[cfg(not(target_arch = "wasm32"))]
+const LIST_MAX_OUTPUT: u64 = 4 << 20;
+
+/// The standard output of `program` with `args`, when it exits successfully within
+/// [`LIST_TIMEOUT`]; a program still running then is stopped.
+#[cfg(not(target_arch = "wasm32"))]
+fn run_listing(program: &std::ffi::OsStr, args: &[&str]) -> Option<String> {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    let mut c = Command::new(program);
+    c.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+    #[cfg(target_os = "windows")]
+    std::os::windows::process::CommandExt::creation_flags(&mut c, CREATE_NO_WINDOW);
+    let mut child = c.spawn().ok()?;
+    let out = child.stdout.take();
+    let (tx, rx) = std::sync::mpsc::channel();
+    // Read on a thread, so a program with a lot to say never blocks on a full pipe.
+    let reader = std::thread::Builder::new().name("read-aloud-voice-list".into()).spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(out) = out {
+            let _ = out.take(LIST_MAX_OUTPUT).read_to_end(&mut buf);
+        }
+        let _ = tx.send(buf);
+    });
+    let until = std::time::Instant::now() + LIST_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) if reader.is_ok() => break Some(status),
+            Ok(None) if reader.is_ok() && std::time::Instant::now() < until => std::thread::sleep(std::time::Duration::from_millis(20)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+        }
+    };
+    // A program that exited may have left a child holding its output open: wait for the rest
+    // within the same bound.
+    let rest = until.saturating_duration_since(std::time::Instant::now()).max(std::time::Duration::from_millis(100));
+    let out = rx.recv_timeout(rest).ok()?;
+    status.filter(std::process::ExitStatus::success).map(|_| String::from_utf8_lossy(&out).into_owned())
+}
+
+/// How long an empty voice list stands before the system is asked again: a speech server may
+/// still have been starting, or a speech program may be installed meanwhile.
+#[cfg(not(target_arch = "wasm32"))]
+const VOICES_RETRY: std::time::Duration = std::time::Duration::from_secs(10);
+/// How long a voice list stands before it is asked for again in the background (voices installed
+/// meanwhile); the old list serves until the new one arrives.
+#[cfg(not(target_arch = "wasm32"))]
+const VOICES_REFRESH: std::time::Duration = std::time::Duration::from_secs(60);
+/// Longest wait of a sentence for the voice list, when a voice is chosen.
+#[cfg(not(target_arch = "wasm32"))]
+const VOICE_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The voice list and when it was last asked for.
+#[cfg(not(target_arch = "wasm32"))]
+struct VoiceList {
+    voices: Option<Arc<[Voice]>>,
+    asked: Option<std::time::Instant>,
+    asking: bool,
+    /// A request to start Speech Dispatcher for the list (the voice picker opened, a voice was
+    /// chosen), kept until a query that may start it takes it: a query without it that is
+    /// already running leaves it for the next one.
+    start_server: bool,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+static VOICES: Mutex<VoiceList> = Mutex::new(VoiceList { voices: None, asked: None, asking: false, start_server: false });
+
+/// Should the voices be asked for now? Not while asked already; an empty list after
+/// [`VOICES_RETRY`], or at once when Speech Dispatcher may be started for it; any other list after
+/// [`VOICES_REFRESH`].
+#[cfg(not(target_arch = "wasm32"))]
+fn ask_voices_now(empty: bool, asking: bool, since: Option<std::time::Duration>, start_server: bool) -> bool {
+    let again = if empty { VOICES_RETRY } else { VOICES_REFRESH };
+    !asking && (since.is_none_or(|t| t >= again) || (empty && start_server))
+}
+
+/// After a query for the voices that ran with (`with_server`) or without leave to start Speech
+/// Dispatcher and found `found_empty`, with a request for that leave `pending`: whether the request
+/// is settled (cleared), and whether to ask again at once, starting the server. A list that came
+/// back settles it (no later refresh starts a server); an empty answer from a query without leave
+/// is followed at once by one with it.
+#[cfg(not(target_arch = "wasm32"))]
+fn after_voice_query(found_empty: bool, with_server: bool, pending: bool) -> (bool, bool) {
+    let again = pending && found_empty && !with_server;
+    (!found_empty || again, again)
+}
+
+/// The list to keep after asking: a good list is never replaced by an empty answer (a server
+/// that exited meanwhile, a program that failed once).
+#[cfg(not(target_arch = "wasm32"))]
+fn keep_voices(old: Option<Arc<[Voice]>>, found: Vec<Voice>) -> Arc<[Voice]> {
+    match old {
+        Some(old) if found.is_empty() && !old.is_empty() => old,
+        _ => found.into(),
+    }
+}
+
+/// The installed voices, or `None` while the system is asked for the first time. Asking happens
+/// on a thread, so neither a settings page nor the speech worker waits on a slow speech program;
+/// an empty list is asked for again after [`VOICES_RETRY`], any other after [`VOICES_REFRESH`].
+fn installed_voices() -> Option<Arc<[Voice]>> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let mut l = VOICES.lock().unwrap_or_else(PoisonError::into_inner);
+        let empty = l.voices.as_ref().is_none_or(|v| v.is_empty());
+        if ask_voices_now(empty, l.asking, l.asked.map(|t| t.elapsed()), l.start_server) {
+            l.asking = true;
+            l.asked = Some(std::time::Instant::now());
+            let start_server = std::mem::take(&mut l.start_server);
+            let asked = std::thread::Builder::new().name("read-aloud-voices".into()).spawn(move || {
+                let mut with_server = start_server;
+                loop {
+                    let found = list_voices(with_server);
+                    let mut l = VOICES.lock().unwrap_or_else(PoisonError::into_inner);
+                    let found_empty = found.is_empty();
+                    l.voices = Some(keep_voices(l.voices.take(), found));
+                    let (settled, again) = after_voice_query(found_empty, with_server, l.start_server);
+                    if settled {
+                        l.start_server = false;
+                    }
+                    if again {
+                        l.asked = Some(std::time::Instant::now());
+                        with_server = true;
+                        continue;
+                    }
+                    l.asking = false;
+                    break;
+                }
+            });
+            if asked.is_err() {
+                l.asking = false;
+                l.voices.get_or_insert_with(|| Arc::new([]));
+            }
+        }
+        l.voices.clone()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        // Browsers load their voices after the page: an empty list is pending for a while.
+        let (list, waited) = web::voices();
+        web_voice_list(list, waited)
+    }
+}
+
+/// How long the browser's voice list stays pending while it is empty, in milliseconds.
+#[cfg(any(target_arch = "wasm32", test))]
+const WEB_VOICES_WAIT_MS: f64 = 5000.0;
+
+/// Is an empty browser voice list still pending, `waited_ms` after it was first asked for?
+#[cfg(any(target_arch = "wasm32", test))]
+fn web_voices_pending(waited_ms: f64) -> bool {
+    waited_ms < WEB_VOICES_WAIT_MS
+}
+
+/// The browser's voice list as the player reports it, `waited_ms` after it was first asked for:
+/// `None` (pending) while it is empty and the browser may still be loading its voices, then the
+/// list as it is. Nothing is kept from an empty answer, so voices that arrive later still show.
+#[cfg(any(target_arch = "wasm32", test))]
+fn web_voice_list(list: Arc<[Voice]>, waited_ms: f64) -> Option<Arc<[Voice]>> {
+    (!list.is_empty() || !web_voices_pending(waited_ms)).then_some(list)
+}
+
+/// Is a cached browser voice list to be asked for again, `since_ms` after it was asked? An empty
+/// one after [`WEB_EMPTY_VOICES_AGAIN_MS`] (not on every repaint), one with voices only when the
+/// browser says they changed.
+#[cfg(any(target_arch = "wasm32", test))]
+fn ask_browser_voices_again(empty: bool, since_ms: f64) -> bool {
+    empty && (since_ms >= WEB_EMPTY_VOICES_AGAIN_MS || since_ms.is_nan())
+}
+
+/// How often an empty browser voice list is asked for again (ms).
+#[cfg(any(target_arch = "wasm32", test))]
+const WEB_EMPTY_VOICES_AGAIN_MS: f64 = 1000.0;
+
+/// How often the browser player says a sentence again that was cancelled from outside it.
+#[cfg(any(target_arch = "wasm32", test))]
+const MAX_WEB_RESENDS: usize = 2;
+
+/// How the browser player is trying a sentence.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct WebAttempt {
+    /// Without the sentence's language and voice (the browser couldn't speak it with them).
+    plain: bool,
+    /// How often it was said again after a cancel from outside the player.
+    resends: usize,
+}
+
+/// What the browser player does after an `error` event.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Debug, PartialEq, Eq)]
+enum WebRetry {
+    /// Say the sentence again, this way.
+    Again(WebAttempt),
+    /// Pause on the sentence (Play carries on from it).
+    Pause,
+    /// Stop with the error.
+    Stop,
+}
+
+/// What follows the browser's `error` event `code` for a sentence tried as `attempt`, which was
+/// given a language or a voice when `tailored`. The player's own cancel detaches the handler
+/// first, so `interrupted` and `canceled` come from outside it (another script on the page): the
+/// sentence is said again, twice at most, then reading pauses. A language or voice the browser
+/// can't speak gives way to its default voice, as on the desktop: a missing voice must never mean
+/// silence.
+#[cfg(any(target_arch = "wasm32", test))]
+fn web_retry(code: &str, attempt: WebAttempt, tailored: bool) -> WebRetry {
+    match code {
+        "interrupted" | "canceled" if attempt.resends < MAX_WEB_RESENDS => WebRetry::Again(WebAttempt { resends: attempt.resends + 1, ..attempt }),
+        "interrupted" | "canceled" => WebRetry::Pause,
+        "language-unavailable" | "voice-unavailable" | "synthesis-failed" if tailored && !attempt.plain => {
+            WebRetry::Again(WebAttempt { plain: true, ..attempt })
+        }
+        _ => WebRetry::Stop,
+    }
+}
+
+/// `player` takes the browser's speech over from its `owner`: another player that was speaking
+/// (or waiting to speak its next sentence) loses it, with its sentence's events and watchdog,
+/// and pauses instead of waiting forever as Playing.
+#[cfg(any(target_arch = "wasm32", test))]
+fn lose_speech(owner: Option<std::sync::Weak<(Mutex<Shared>, Condvar)>>, player: &Arc<(Mutex<Shared>, Condvar)>) {
+    if let Some(other) = owner.and_then(|o| o.upgrade()).filter(|o| !Arc::ptr_eq(o, player)) {
+        speech_taken_over(&other);
+    }
+}
+
+/// Another player took the browser's speech over from `player`: a reading pauses on its sentence
+/// (Play carries on from it) rather than staying Playing with nothing spoken.
+#[cfg(any(target_arch = "wasm32", test))]
+fn speech_taken_over(player: &(Mutex<Shared>, Condvar)) {
+    let (m, cv) = player;
+    let mut s = lock(m);
+    if s.state == State::Playing {
+        s.state = State::Paused;
+        s.generation = s.generation.wrapping_add(1);
+        cv.notify_all();
+    }
+}
+
+/// May `player` stop the browser's speech? When it is `playing` (it takes over the speech), or
+/// when the sentence being spoken is its own (`owner`): a player that changes while stopped, or
+/// goes away (the session a template preview builds and drops), leaves another's reading alone.
+#[cfg(any(target_arch = "wasm32", test))]
+fn may_cancel<T>(owner: Option<&std::sync::Weak<T>>, player: &Arc<T>, playing: bool) -> bool {
+    playing || owner.is_some_and(|o| std::sync::Weak::ptr_eq(o, &Arc::downgrade(player)))
+}
+
+/// How long the browser gets for a sentence of `chars` characters at `rate` before the player
+/// gives up on it, in milliseconds: far more than the slowest reading takes, so only a browser
+/// that never reports the end (some drop long utterances silently) reaches it.
+#[cfg(any(target_arch = "wasm32", test))]
+fn web_sentence_limit_ms(chars: usize, rate: f32) -> f64 {
+    let rate = if rate.is_finite() { rate.clamp(MIN_RATE, 1.0) } else { 1.0 };
+    (30_000.0 + 400.0 * chars as f64) / f64::from(rate)
+}
+
+/// The installed voice `id`, waiting while the list is asked for the first time, but no longer
+/// than [`VOICE_WAIT`]; `Err` as soon as reading moves on.
+#[cfg(not(target_arch = "wasm32"))]
+fn chosen_voice(id: &str, changed: &dyn Fn() -> bool) -> Result<Option<Voice>, ()> {
+    let until = std::time::Instant::now() + VOICE_WAIT;
+    loop {
+        if let Some(list) = installed_voices() {
+            return Ok(list.iter().find(|v| v.id == id).cloned());
+        }
+        if changed() {
+            return Err(());
+        }
+        if std::time::Instant::now() >= until {
+            return Ok(None);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(30));
+    }
+}
+
+/// What Read Aloud says when the system has none of the speech programs it knows.
+#[cfg(not(target_arch = "wasm32"))]
+const MISSING_PROGRAM: &str = if cfg!(all(unix, not(target_os = "macos"))) {
+    "Read Aloud needs a speech program: install espeak-ng or Speech Dispatcher from your distribution's packages"
+} else {
+    "Read Aloud couldn't find the system's speech program"
+};
+
+/// Read Aloud's speed (1 = normal) as Speech Dispatcher's rate, -100 to 100 with 0 the voice's
+/// normal speed: the slowest speed is -50 and the fastest 100.
+#[cfg(any(all(unix, not(target_os = "macos")), test))]
+fn spd_rate(rate: f32) -> i32 {
+    let rate = if rate.is_finite() { rate.clamp(MIN_RATE, MAX_RATE) } else { 1.0 };
+    let scaled = if rate >= 1.0 { (rate - 1.0) / (MAX_RATE - 1.0) * 100.0 } else { (rate - 1.0) * 100.0 };
+    scaled.round().clamp(-100.0, 100.0) as i32
+}
+
+/// Say one sentence through Speech Dispatcher ([`ssip`]), in the sentence's language whenever it
+/// has one, region included (its voices are per region: `en-GB`, `pt-BR`), and in the chosen
+/// `voice` (a name from its list). Its default language is its own setting (`en-US` unless
+/// configured), which SSIP can't ask for, so English is named too. `None` when Speech Dispatcher
+/// isn't installed.
+#[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+fn speak_dispatcher(text: &str, lang: Option<&str>, voice: Option<&str>, rate: f32, changed: &dyn Fn() -> bool) -> Option<Spoken> {
+    let stream = match ssip::connect(changed) {
+        ssip::Connection::Open(s) => s,
+        ssip::Connection::Missing => return None,
+        ssip::Connection::Interrupted => return Some(Spoken::Interrupted),
+        ssip::Connection::Unreachable(why) => return Some(Spoken::Failed(format!("Read Aloud couldn't reach Speech Dispatcher: {why}"))),
+    };
+    let lang = dispatcher_language(lang);
+    let req = ssip::Request { text, rate: spd_rate(rate), lang: lang.as_deref(), voice };
+    Some(dispatcher_spoken(ssip::converse(&stream, &req, changed)))
+}
+
+/// How a sentence Speech Dispatcher handled ended, for the worker.
+#[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+fn dispatcher_spoken(outcome: std::io::Result<ssip::Outcome>) -> Spoken {
+    match outcome {
+        Ok(ssip::Outcome::Done) => Spoken::Done,
+        Ok(ssip::Outcome::Interrupted) => Spoken::Interrupted,
+        Ok(ssip::Outcome::Halted) => Spoken::Halted(HALTED_BY_OTHER.into()),
+        Ok(ssip::Outcome::NotStarted) => Spoken::Halted(NOT_STARTED.into()),
+        Err(e) => Spoken::Failed(format!("Read Aloud couldn't use Speech Dispatcher: {e}")),
+    }
+}
+
+/// Why reading paused when another program cancelled or paused the sentence.
+#[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+const HALTED_BY_OTHER: &str =
+    "Speech Dispatcher kept stopping the sentence for another program (a screen reader, or a stop for every program): press Play to go on";
+
+/// Why reading paused when Speech Dispatcher never began the sentence.
+#[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+const NOT_STARTED: &str =
+    "Speech Dispatcher didn't start the sentence (other speech may be queued before it, or its speech module may be stuck): press Play to try again";
+
+#[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+thread_local! {
+    /// Neither espeak command was found during this reading (the worker thread lives as long as
+    /// one reading): the next sentences go straight to Speech Dispatcher.
+    static NO_ESPEAK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The language tag Speech Dispatcher is given for a sentence in `lang`: its language and region,
+/// as SSIP's `SET LANGUAGE` takes them (`sr-Latn-RS` gives `sr-RS`, `zh-Hant-TW` gives `zh-TW`),
+/// when it names a language (Word's `x-none` doesn't).
+#[cfg(any(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")), test))]
+fn dispatcher_language(lang: Option<&str>) -> Option<String> {
+    let tag = lang.and_then(plain_tag)?;
+    let primary = primary_tag(tag)?;
+    let region = tag
+        .split('-')
+        .skip(1)
+        .take(2)
+        .find(|t| (t.len() == 2 && t.chars().all(|c| c.is_ascii_alphabetic())) || (t.len() == 3 && t.chars().all(|c| c.is_ascii_digit())));
+    Some(match region {
+        Some(r) => format!("{primary}-{}", r.to_ascii_uppercase()),
+        None => primary,
     })
 }
 
@@ -535,12 +1151,18 @@ struct Shared {
     index: usize,
     state: State,
     rate: f32,
+    /// The voice the user chose ([`Voice::id`]), or `None` for the voice of each sentence's language.
+    voice: Option<String>,
     /// Bumped on every change that should stop the sentence being spoken.
     generation: u64,
     error: Option<String>,
     /// A worker thread is running (cleared under the lock as it exits).
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     running: bool,
+    /// Bumped when a reading starts: a worker thread can outlive a reading (a pause, then a new
+    /// Read Aloud), and what it learnt about the system's speech programs is per reading.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    readings: u64,
 }
 
 /// The Read Aloud player.
@@ -561,7 +1183,17 @@ impl Default for ReadAloud {
         let off = cfg!(test) || std::env::var("WORDCRAFT_SPEECH").is_ok_and(|v| v == "off");
         ReadAloud {
             shared: Arc::new((
-                Mutex::new(Shared { queue: Vec::new(), index: 0, state: State::Stopped, rate: 1.0, generation: 0, error: None, running: false }),
+                Mutex::new(Shared {
+                    queue: Vec::new(),
+                    index: 0,
+                    state: State::Stopped,
+                    rate: 1.0,
+                    voice: None,
+                    generation: 0,
+                    error: None,
+                    running: false,
+                    readings: 0,
+                }),
                 Condvar::new(),
             )),
             backend: if off { Backend::Hold } else { Backend::System },
@@ -597,6 +1229,7 @@ impl ReadAloud {
             s.queue = queue;
             s.index = 0;
             s.error = None;
+            s.readings = s.readings.wrapping_add(1);
         });
     }
 
@@ -610,6 +1243,7 @@ impl ReadAloud {
                     if s.index >= s.queue.len() {
                         s.index = 0;
                     }
+                    s.error = None;
                     State::Playing
                 }
             };
@@ -651,6 +1285,56 @@ impl ReadAloud {
     pub fn rate(&self) -> f32 {
         lock(&self.shared.0).rate
     }
+
+    /// Choose the voice to read in ([`Voice::id`]), or `None` (or an empty id) for the voice of
+    /// each sentence's language. The id is kept as given: a voice that isn't installed (a saved
+    /// choice from another machine) is simply not used.
+    pub fn set_voice(&mut self, voice: Option<&str>) {
+        let v = voice.and_then(voice_id).map(str::to_string);
+        let changed = self.voice() != v;
+        // The list is asked for now, so the first sentence doesn't wait for it; a newly chosen
+        // (or restored) voice may start Speech Dispatcher for it, once.
+        if v.is_some() && changed {
+            self.ask_voices_starting_server();
+        } else if v.is_some() && self.backend == Backend::System {
+            let _ = installed_voices();
+        }
+        if !changed {
+            return;
+        }
+        if self.state() == State::Playing {
+            self.change(|s| s.voice = v);
+        } else {
+            lock(&self.shared.0).voice = v;
+        }
+    }
+    /// The chosen voice's id, if any.
+    pub fn voice(&self) -> Option<String> {
+        lock(&self.shared.0).voice.clone()
+    }
+    /// The voices to choose from, or `None` while the system is still being asked: the installed
+    /// voices with the system's speech, none with a silent backend (tests never ask the system).
+    pub fn voices(&self) -> Option<Arc<[Voice]>> {
+        if self.backend == Backend::System { installed_voices() } else { Some(Arc::new([])) }
+    }
+    /// Ask for the voices once more, allowing Speech Dispatcher to be started for them (the voice
+    /// picker just opened): with only Speech Dispatcher installed, its voices are listed only
+    /// while it runs. Nothing with a silent backend.
+    pub fn ask_voices_starting_server(&self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.backend == Backend::System {
+            {
+                // Only while there is no list: a list already there leaves no request behind for
+                // a later background refresh to act on. A query running meanwhile leaves it to
+                // the next one.
+                let mut l = VOICES.lock().unwrap_or_else(PoisonError::into_inner);
+                if l.voices.as_ref().is_none_or(|v| v.is_empty()) {
+                    l.start_server = true;
+                }
+            }
+            let _ = installed_voices();
+        }
+    }
     /// The sentence being read (or paused on).
     pub fn current(&self) -> Option<Utterance> {
         let s = lock(&self.shared.0);
@@ -675,19 +1359,19 @@ impl ReadAloud {
             "index": s.index,
             "count": s.queue.len(),
             "rate": s.rate,
+            "voice": s.voice,
             "skipCitations": self.skip_citations,
             "current": current.map(Utterance::to_json),
             "error": s.error,
         })
     }
 
+    /// In the browser there is no worker thread: the browser's speech synthesis speaks the
+    /// current sentence, and its end event moves on ([`web`]).
     #[cfg(target_arch = "wasm32")]
     fn ensure_worker(&mut self) {
-        let (m, _) = &*self.shared;
-        let mut s = lock(m);
-        if s.state == State::Playing && self.backend == Backend::System {
-            s.state = State::Stopped;
-            s.error = Some("Read Aloud isn't available in the browser".into());
+        if self.backend == Backend::System {
+            web::sync(&self.shared);
         }
     }
 
@@ -710,11 +1394,17 @@ impl ReadAloud {
 
 impl Drop for ReadAloud {
     fn drop(&mut self) {
-        let (m, cv) = &*self.shared;
-        let mut s = lock(m);
-        s.state = State::Stopped;
-        s.generation = s.generation.wrapping_add(1);
-        cv.notify_all();
+        {
+            let (m, cv) = &*self.shared;
+            let mut s = lock(m);
+            s.state = State::Stopped;
+            s.generation = s.generation.wrapping_add(1);
+            cv.notify_all();
+        }
+        #[cfg(target_arch = "wasm32")]
+        if self.backend == Backend::System {
+            web::cancel_for(&self.shared);
+        }
     }
 }
 
@@ -723,14 +1413,18 @@ impl Drop for ReadAloud {
 enum Spoken {
     Done,
     Interrupted,
+    /// Another program stopped the sentence: reading pauses on it, saying why.
+    #[cfg_attr(not(all(unix, not(target_os = "macos"))), allow(dead_code))]
+    Halted(String),
     Failed(String),
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn worker(shared: &(Mutex<Shared>, Condvar), backend: Backend) {
     let (m, cv) = shared;
+    let mut reading = None;
     loop {
-        let (text, lang, generation, rate) = {
+        let (text, lang, voice, generation, rate, readings) = {
             let mut s = lock(m);
             while s.state == State::Paused {
                 s = cv.wait(s).unwrap_or_else(PoisonError::into_inner);
@@ -740,7 +1434,7 @@ fn worker(shared: &(Mutex<Shared>, Condvar), backend: Backend) {
                 return;
             }
             match s.queue.get(s.index) {
-                Some(u) => (u.text.clone(), u.lang.clone(), s.generation, s.rate),
+                Some(u) => (u.text.clone(), u.lang.clone(), s.voice.clone(), s.generation, s.rate, s.readings),
                 None => {
                     s.state = State::Stopped;
                     s.running = false;
@@ -748,9 +1442,18 @@ fn worker(shared: &(Mutex<Shared>, Condvar), backend: Backend) {
                 }
             }
         };
+        // A new reading asks the system afresh which speech programs it has.
+        if reading != Some(readings) {
+            reading = Some(readings);
+            #[cfg(all(unix, not(target_os = "macos")))]
+            NO_ESPEAK.set(false);
+        }
         let changed = || lock(m).generation != generation;
         let outcome = match backend {
-            Backend::System => speak(&text, lang.as_deref(), rate, &changed),
+            Backend::System => match voice.as_deref().map(|id| chosen_voice(id, &changed)).transpose() {
+                Ok(chosen) => speak(&text, lang.as_deref(), voice_for(chosen.flatten().as_ref(), lang.as_deref(), &text), rate, &changed),
+                Err(()) => Spoken::Interrupted,
+            },
             Backend::Instant => Spoken::Done,
             Backend::Hold => {
                 let mut s = lock(m);
@@ -774,6 +1477,10 @@ fn worker(shared: &(Mutex<Shared>, Condvar), backend: Backend) {
                 }
             }
             Spoken::Interrupted => {}
+            Spoken::Halted(why) => {
+                s.state = State::Paused;
+                s.error = Some(why);
+            }
             Spoken::Failed(e) => {
                 s.state = State::Stopped;
                 s.error = Some(e);
@@ -807,19 +1514,48 @@ struct WindowsSpeech {
     creation_flags: u32,
 }
 
-#[cfg(any(target_os = "windows", test))]
+/// [`windows_speech_with`] without a chosen voice (the tests' shorthand).
+#[cfg(test)]
 fn windows_speech(system_root: Option<std::ffi::OsString>, rate: f32, lang: Option<&str>) -> WindowsSpeech {
+    windows_speech_with(system_root, rate, lang, None)
+}
+
+/// `text` for a single-quoted PowerShell string: every quote mark PowerShell ends such a string
+/// with (`'` and the typographic ‘ ’ ‚ ‛) doubled, and control characters dropped.
+#[cfg(any(target_os = "windows", test))]
+fn powershell_literal(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars().filter(|c| !c.is_control()) {
+        if matches!(c, '\'' | '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}') {
+            out.push(c);
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// [`windows_speech`] with the voice the user chose (an installed voice's name), which replaces
+/// the choice by language.
+#[cfg(any(target_os = "windows", test))]
+fn windows_speech_with(system_root: Option<std::ffi::OsString>, rate: f32, lang: Option<&str>, chosen: Option<&str>) -> WindowsSpeech {
     // SAPI rate: -10 (a third of normal speed) … 10 (three times).
     let r = ((rate.ln() / 3f32.ln()) * 10.0).round().clamp(-10.0, 10.0) as i64;
     // The voice of the sentence's language, when one is installed (the default voice would spell
     // out Cyrillic, Greek… letters one by one), but only when the user's default voice doesn't
     // speak that language already, in any region. The tag is `primary_tag`-clean, so it can't end
     // the quote.
-    let voice = lang.and_then(primary_tag).map_or_else(String::new, |p| {
+    let by_language = lang.and_then(primary_tag).map_or_else(String::new, |p| {
         format!(
             "if ($s.Voice.Culture.TwoLetterISOLanguageName -ne '{p}') {{ $v = $s.GetInstalledVoices() | Where-Object {{ $_.Enabled -and $_.VoiceInfo.Culture.TwoLetterISOLanguageName -eq '{p}' }} | Select-Object -First 1; if ($v) {{ $s.SelectVoice($v.VoiceInfo.Name) }} }}; "
         )
     });
+    // A chosen voice comes from the installed list, but the name is still quoted as a PowerShell
+    // literal, so no name can end the quote: PowerShell takes the typographic single quotes
+    // (‘ ’ ‚ ‛) as quote marks too, and any of them is doubled like `'`.
+    let voice = match chosen {
+        Some(name) => format!("$s.SelectVoice('{}'); ", powershell_literal(name)),
+        None => by_language,
+    };
     // The sentence arrives on stdin as UTF-8 bytes; `[Console]::In` would decode them with the
     // console's code page (Cyrillic became `?` and the voice read single letters), so read the raw
     // stream and decode it as UTF-8. The text itself is never part of the script.
@@ -838,10 +1574,10 @@ fn windows_speech(system_root: Option<std::ffi::OsString>, rate: f32, lang: Opti
 /// Speak one sentence with the system's speech program, stopping early when `changed()`. When
 /// the program fails with the sentence's voice, the default voice says it instead.
 #[cfg(not(target_arch = "wasm32"))]
-fn speak(text: &str, lang: Option<&str>, rate: f32, changed: &dyn Fn() -> bool) -> Spoken {
-    let (spoken, gave_voice, exited_ok) = speak_with(text, lang, rate, changed);
+fn speak(text: &str, lang: Option<&str>, voice: Option<&Voice>, rate: f32, changed: &dyn Fn() -> bool) -> Spoken {
+    let (spoken, gave_voice, exited_ok) = speak_with(text, lang, voice, rate, changed);
     if retry_without_voice(gave_voice, exited_ok) {
-        return speak_with(text, None, rate, changed).0;
+        return speak_with(text, None, None, rate, changed).0;
     }
     spoken
 }
@@ -849,7 +1585,7 @@ fn speak(text: &str, lang: Option<&str>, rate: f32, changed: &dyn Fn() -> bool) 
 /// [`speak`] in `lang`'s voice once: how it ended, whether the program was given a voice, and
 /// whether it exited successfully (`None` when it didn't exit on its own).
 #[cfg(not(target_arch = "wasm32"))]
-fn speak_with(text: &str, lang: Option<&str>, rate: f32, changed: &dyn Fn() -> bool) -> (Spoken, bool, Option<bool>) {
+fn speak_with(text: &str, lang: Option<&str>, voice: Option<&Voice>, rate: f32, changed: &dyn Fn() -> bool) -> (Spoken, bool, Option<bool>) {
     use std::io::Write;
     use std::process::{Command, Stdio};
     let wpm = ((BASE_WPM * rate).round() as i64).to_string();
@@ -860,7 +1596,8 @@ fn speak_with(text: &str, lang: Option<&str>, rate: f32, changed: &dyn Fn() -> b
     {
         let mut c = Command::new("say");
         c.args(["-r", &wpm]);
-        let voice = lang.and_then(|l| mac_voice(l, mac_voice_listing(), mac_default_voice_language()));
+        let chosen = voice.filter(|v| v.kind == VoiceKind::Mac).map(|v| v.id.clone());
+        let voice = chosen.or_else(|| lang.and_then(|l| mac_voice(l, mac_voice_listing(), mac_default_voice_language())));
         if let Some(voice) = &voice {
             c.args(["-v", voice.as_str()]);
         }
@@ -868,16 +1605,22 @@ fn speak_with(text: &str, lang: Option<&str>, rate: f32, changed: &dyn Fn() -> b
     }
     #[cfg(target_os = "windows")]
     {
-        let w = windows_speech(std::env::var_os("SystemRoot"), rate, lang);
+        let chosen = voice.filter(|v| v.kind == VoiceKind::Windows).map(|v| v.id.as_str());
+        let w = windows_speech_with(std::env::var_os("SystemRoot"), rate, lang, chosen);
         let mut c = Command::new(&w.program);
         c.args(&w.args);
         std::os::windows::process::CommandExt::creation_flags(&mut c, w.creation_flags);
-        tries.push((c, lang.and_then(primary_tag).is_some()));
+        tries.push((c, chosen.is_some() || lang.and_then(primary_tag).is_some()));
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        for prog in ["espeak-ng", "espeak"] {
-            let args = espeak_args(&wpm, lang);
+        let chosen = |kind: VoiceKind| voice.filter(|v| v.kind == kind).map(|v| v.id.as_str());
+        let programs: &[&str] = if NO_ESPEAK.get() { &[] } else { &["espeak-ng", "espeak"] };
+        for prog in programs {
+            let args = match chosen(VoiceKind::Espeak) {
+                Some(id) => espeak_voice_args(&wpm, Some(id)),
+                None => espeak_args(&wpm, lang),
+            };
             let voiced = args.iter().any(|a| a == "-v");
             let mut c = Command::new(prog);
             c.args(args);
@@ -886,6 +1629,7 @@ fn speak_with(text: &str, lang: Option<&str>, rate: f32, changed: &dyn Fn() -> b
     }
     let _ = (&wpm, lang);
     let mut child = None;
+    let mut not_found = true;
     let mut last_err = String::from("no speech program on this system");
     for (mut c, voiced) in tries {
         match c.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
@@ -893,11 +1637,25 @@ fn speak_with(text: &str, lang: Option<&str>, rate: f32, changed: &dyn Fn() -> b
                 child = Some((ch, voiced));
                 break;
             }
-            Err(e) => last_err = e.to_string(),
+            Err(e) => {
+                not_found &= e.kind() == std::io::ErrorKind::NotFound;
+                last_err = e.to_string();
+            }
         }
     }
     let Some((mut child, voiced)) = child else {
-        return (Spoken::Failed(format!("Read Aloud couldn't start the speech program: {last_err}")), false, None);
+        // Speech Dispatcher, which many desktops install without the espeak command.
+        #[cfg(all(unix, not(target_os = "macos")))]
+        if not_found {
+            NO_ESPEAK.set(true);
+            if let Some(spoken) =
+                speak_dispatcher(text, lang, voice.filter(|v| v.kind == VoiceKind::Dispatcher).map(|v| v.id.as_str()), rate, changed)
+            {
+                return (spoken, false, None);
+            }
+        }
+        let message = if not_found { MISSING_PROGRAM.to_string() } else { format!("Read Aloud couldn't start the speech program: {last_err}") };
+        return (Spoken::Failed(message), false, None);
     };
     if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.write_all(text.as_bytes());

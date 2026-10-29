@@ -6769,6 +6769,8 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "wasm-bindgen",
+ "web-sys",
  "wordcraft-doc",
  "wordcraft-docbin",
  "wordcraft-docx",
