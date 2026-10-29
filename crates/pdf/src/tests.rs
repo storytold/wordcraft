@@ -161,7 +161,16 @@ fn a_scanned_page_with_a_searchable_page_number_is_uncertain() {
     let mut p = Paragraph::with_text("", CharProps::default());
     p.insert_object(
         0,
-        InlineObject::Image { media, w: 300.0, h: 400.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None, fx: Default::default() },
+        InlineObject::Image {
+            media,
+            w: 300.0,
+            h: 400.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            ole: None,
+            fx: Default::default(),
+        },
         &CharProps::default(),
     )
     .unwrap();
@@ -192,7 +201,16 @@ fn an_image_only_scan_is_uncertain_not_not_searchable() {
     let mut scan = Paragraph::with_text("", CharProps::default());
     scan.insert_object(
         0,
-        InlineObject::Image { media, w: 300.0, h: 400.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None, fx: Default::default() },
+        InlineObject::Image {
+            media,
+            w: 300.0,
+            h: 400.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            ole: None,
+            fx: Default::default(),
+        },
         &CharProps::default(),
     )
     .unwrap();
@@ -229,7 +247,16 @@ fn a_searchable_cover_with_scanned_body_pages_is_not_searchable() {
     let mut scan = Paragraph::with_text("", CharProps::default());
     scan.insert_object(
         0,
-        InlineObject::Image { media, w: 300.0, h: 400.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None, fx: Default::default() },
+        InlineObject::Image {
+            media,
+            w: 300.0,
+            h: 400.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            ole: None,
+            fx: Default::default(),
+        },
         &CharProps::default(),
     )
     .unwrap();
@@ -253,7 +280,16 @@ fn a_scan_with_a_caption_is_uncertain() {
     let mut scan = Paragraph::with_text("", CharProps::default());
     scan.insert_object(
         0,
-        InlineObject::Image { media, w: 300.0, h: 400.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None, fx: Default::default() },
+        InlineObject::Image {
+            media,
+            w: 300.0,
+            h: 400.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            ole: None,
+            fx: Default::default(),
+        },
         &CharProps::default(),
     )
     .unwrap();
@@ -275,7 +311,16 @@ fn a_dominant_scan_with_a_long_caption_is_uncertain() {
     let mut scan = Paragraph::with_text("", CharProps::default());
     scan.insert_object(
         0,
-        InlineObject::Image { media, w: 300.0, h: 400.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None, fx: Default::default() },
+        InlineObject::Image {
+            media,
+            w: 300.0,
+            h: 400.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            ole: None,
+            fx: Default::default(),
+        },
         &CharProps::default(),
     )
     .unwrap();
@@ -297,7 +342,16 @@ fn a_dominant_picture_with_some_text_is_uncertain() {
     let mut scan = Paragraph::with_text("", CharProps::default());
     scan.insert_object(
         0,
-        InlineObject::Image { media, w: 300.0, h: 400.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None, fx: Default::default() },
+        InlineObject::Image {
+            media,
+            w: 300.0,
+            h: 400.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            ole: None,
+            fx: Default::default(),
+        },
         &CharProps::default(),
     )
     .unwrap();
@@ -319,7 +373,16 @@ fn a_small_figure_with_a_caption_stays_searchable() {
     figure
         .insert_object(
             n,
-            InlineObject::Image { media, w: 80.0, h: 40.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None, fx: Default::default() },
+            InlineObject::Image {
+                media,
+                w: 80.0,
+                h: 40.0,
+                alt: String::new(),
+                float: Default::default(),
+                crop: [0.0; 4],
+                ole: None,
+                fx: Default::default(),
+            },
             &CharProps::default(),
         )
         .unwrap();

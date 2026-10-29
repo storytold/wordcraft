@@ -21,13 +21,13 @@ fn test_fonts() {
 }
 
 pub mod balloons;
-pub mod module_proof;
 mod contour;
 pub mod display;
 pub mod fields;
 pub mod hit;
 pub mod kinsoku;
 pub mod math;
+pub mod module_proof;
 pub mod outline;
 pub mod para;
 pub mod styleref;

@@ -55,9 +55,7 @@ impl WordApp {
         }
         // The same unsaved work the control channel's refusal covers, so the prompt and the
         // refusal can't drift apart (#3274).
-        if (self.document_unsaved() || refused.is_some())
-            && (replaces || discards_document(id, &params))
-            && !self.closes_only_its_window(id, &params)
+        if (self.document_unsaved() || refused.is_some()) && (replaces || discards_document(id, &params)) && !self.closes_only_its_window(id, &params)
         {
             let name = self.prompt_name();
             self.dialog = Some(dialogs::Dialog::SaveChanges {

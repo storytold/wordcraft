@@ -541,7 +541,16 @@ fn dominant_scan_with_long_caption_warns_on_the_page() {
     let mut scan = Paragraph::with_text("", CharProps::default());
     scan.insert_object(
         0,
-        InlineObject::Image { media, w: 300.0, h: 400.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None, fx: Default::default() },
+        InlineObject::Image {
+            media,
+            w: 300.0,
+            h: 400.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            ole: None,
+            fx: Default::default(),
+        },
         &CharProps::default(),
     )
     .unwrap();
@@ -562,7 +571,16 @@ fn image_only_scan_warns_on_the_page() {
     let mut scan = Paragraph::with_text("", CharProps::default());
     scan.insert_object(
         0,
-        InlineObject::Image { media, w: 300.0, h: 400.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None, fx: Default::default() },
+        InlineObject::Image {
+            media,
+            w: 300.0,
+            h: 400.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            ole: None,
+            fx: Default::default(),
+        },
         &CharProps::default(),
     )
     .unwrap();
@@ -582,7 +600,16 @@ fn scan_with_only_a_page_number_footer_warns_on_the_page() {
     let mut scan = Paragraph::with_text("", CharProps::default());
     scan.insert_object(
         0,
-        InlineObject::Image { media, w: 300.0, h: 400.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None, fx: Default::default() },
+        InlineObject::Image {
+            media,
+            w: 300.0,
+            h: 400.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            ole: None,
+            fx: Default::default(),
+        },
         &CharProps::default(),
     )
     .unwrap();

@@ -113,7 +113,14 @@ pub fn check_spelling_with_module(text: &str, opts: &Options, module: ModuleEn) 
 
 /// [`wordcraft_proof::check_text_with`] plus the module's supplements: its words are not
 /// misspelled, and its grammar checks run on English text when `grammar` is on.
-pub fn check_paragraph(text: &str, spans: &[(Range<usize>, ProofLang)], opts: &Options, grammar: bool, list_item: bool, module: ModuleEn) -> Vec<Issue> {
+pub fn check_paragraph(
+    text: &str,
+    spans: &[(Range<usize>, ProofLang)],
+    opts: &Options,
+    grammar: bool,
+    list_item: bool,
+    module: ModuleEn,
+) -> Vec<Issue> {
     let issues = wordcraft_proof::check_text_with(text, spans, opts, grammar, list_item);
     let lang_at = |at: usize| spans.iter().find(|(r, _)| r.contains(&at)).map_or(ProofLang::En, |(_, l)| *l);
     apply(text, issues, lang_at, grammar, module)
@@ -144,7 +151,14 @@ mod tests {
     fn module_en_grammar_hook() {
         fn always_hello(text: &str) -> Vec<Issue> {
             text.find("hello")
-                .map(|start| Issue { start, end: start + 5, kind: IssueKind::Grammar, message: "test".into(), suggestions: vec![], lang: ProofLang::En })
+                .map(|start| Issue {
+                    start,
+                    end: start + 5,
+                    kind: IssueKind::Grammar,
+                    message: "test".into(),
+                    suggestions: vec![],
+                    lang: ProofLang::En,
+                })
                 .into_iter()
                 .collect()
         }

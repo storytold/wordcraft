@@ -2481,9 +2481,7 @@ fn a_command_that_replaces_the_document_asks_about_a_pending_comment_draft() {
         Ok(json!({}))
     }
     let (mut h, id) = comment_harness();
-    h.state_mut()
-        .session
-        .install_commands(vec![wordcraft_engine::CommandSpec::new("test.replace", "Replace", "Test", replace).replaces_document()]);
+    h.state_mut().session.install_commands(vec![wordcraft_engine::CommandSpec::new("test.replace", "Replace", "Test", replace).replaces_document()]);
     h.state_mut().session.dirty = false;
     click_balloon(&mut h, id);
     type_in(&mut h, "Typed ");
