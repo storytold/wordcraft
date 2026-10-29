@@ -1,3 +1,4 @@
+use super::model::MarkerShape;
 use super::*;
 use wordcraft_doc::THEME_COLORS;
 
@@ -630,6 +631,23 @@ fn line_markers_are_drawn_unless_the_series_turns_them_off() {
     assert_eq!(marked(""), 3, "an automatic marker on each point");
     assert_eq!(marked(r#"<c:symbol val="square"/>"#), 3);
     assert_eq!(marked(r#"<c:symbol val="none"/>"#), 0);
+}
+
+/// `c:symbol val="auto"` asks for the series' automatic marker, as if there were no symbol: the
+/// first series a diamond, the third a triangle.
+#[test]
+fn an_auto_marker_symbol_takes_the_series_automatic_marker() {
+    let shape = |idx: usize, symbol: &str| {
+        let x = format!(
+            r#"<c:lineChart {NS}><c:ser><c:idx val="{idx}"/><c:order val="{idx}"/><c:marker>{symbol}</c:marker><c:val><c:numRef><c:numCache><c:pt idx="0"><c:v>1</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser><c:marker val="1"/></c:lineChart>"#
+        );
+        let ty = crate::xml::parse(x.as_bytes()).unwrap();
+        read_series(&ty, false, &theme()).first().and_then(|s| s.marker.as_ref()).map(|m| m.shape)
+    };
+    assert_eq!(shape(0, r#"<c:symbol val="auto"/>"#), Some(MarkerShape::Diamond));
+    assert_eq!(shape(2, r#"<c:symbol val="auto"/>"#), Some(MarkerShape::Triangle));
+    assert_eq!(shape(2, ""), Some(MarkerShape::Triangle));
+    assert_eq!(shape(2, r#"<c:symbol val="square"/>"#), Some(MarkerShape::Square));
 }
 
 /// Display units (`c:dispUnits`): the value axis labels count thousands, and the unit's name

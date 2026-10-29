@@ -342,8 +342,8 @@ impl Series {
         let mk = ser.child("c:marker");
         let idx = ser.child("c:idx").and_then(|e| e.attr("val")).and_then(int).and_then(|i| usize::try_from(i).ok()).unwrap_or(0);
         let shape = match mk.and_then(|m| m.child("c:symbol")).and_then(|e| e.attr("val")) {
+            Some("auto") | None => Some(MarkerShape::auto(idx)),
             Some(symbol) => MarkerShape::of(symbol),
-            None => Some(MarkerShape::auto(idx)),
         };
         let marker_sp = mk.and_then(|m| m.child("c:spPr"));
         let marker = shape.map(|shape| Marker {

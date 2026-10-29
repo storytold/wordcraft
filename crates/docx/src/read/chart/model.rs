@@ -169,7 +169,7 @@ pub(super) enum MarkerShape {
 }
 
 impl MarkerShape {
-    /// The shape a `c:symbol` names; `None` for `none`.
+    /// The shape a `c:symbol` names; `None` for `none`. `auto` is the series' own, [`MarkerShape::auto`].
     pub(super) fn of(symbol: &str) -> Option<MarkerShape> {
         Some(match symbol {
             "none" => return None,
