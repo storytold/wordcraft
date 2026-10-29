@@ -239,7 +239,14 @@ fn combo_impl(ui: &mut Ui, options: ComboOptions<'_>) -> Option<String> {
                 }
             });
         }
-        let te = egui::TextEdit::singleline(&mut text).id(te_id).desired_width(width - 16.0).font(regular(12.0)).margin(vec2(4.0, 3.0));
+        // The theme makes the field taller than its text row and margins (22 pt at least): the
+        // row is centred in it, or the spare height all goes below the text.
+        let te = egui::TextEdit::singleline(&mut text)
+            .id(te_id)
+            .desired_width(width - 16.0)
+            .font(regular(12.0))
+            .margin(vec2(4.0, 3.0))
+            .align(egui::Align2::LEFT_CENTER);
         // The arrow's box is painted here, under the field, once its size is known.
         let arrow_bg = ui.painter().add(egui::Shape::Noop);
         let resp = ui.add(te);

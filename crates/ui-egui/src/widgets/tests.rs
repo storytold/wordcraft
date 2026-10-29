@@ -504,6 +504,55 @@ fn combo_field_and_arrow_share_one_outline() {
     }
 }
 
+/// The ribbon's Font and Font Size boxes drew their text 0.73 pt high: the theme makes a field at
+/// least 22 pt tall, taller than the 12 pt text row and its margins, and the text sat at the top
+/// of the room with the spare height below it. The text row is centred in the box, and so are the
+/// digits' ink, in both themes and at every display scale.
+#[test]
+fn combo_text_sits_in_the_middle_of_its_box() {
+    let sizes: Vec<String> = ["10", "28"].map(String::from).to_vec();
+    let ctx = egui::Context::default();
+    ctx.set_fonts(crate::theme::font_definitions(false, false));
+    for appearance in [crate::theme::Appearance::Light, crate::theme::Appearance::Dark] {
+        crate::theme::apply(&ctx, appearance);
+        for ppp in [1.0, 1.25, 1.5, 2.0] {
+            ctx.set_pixels_per_point(ppp);
+            // The first frame takes the new scale and fonts; the second is measured.
+            ctx.run_ui(egui::RawInput::default(), |ui| {
+                combo(ui, "size", 52.0, "28", &sizes, None);
+            })
+            .drop_without_applying_deltas();
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                combo(ui, "size", 52.0, "28", &sizes, None);
+            });
+            let shapes = std::mem::take(&mut out.shapes);
+            out.drop_without_applying_deltas();
+            let field = shapes.iter().find_map(|c| match &c.shape {
+                egui::Shape::Rect(r) if r.corner_radius.nw > 0 && r.corner_radius.ne == 0 => Some(r.rect),
+                _ => None,
+            });
+            let text = shapes.iter().find_map(|c| match &c.shape {
+                egui::Shape::Text(t) if t.galley.text() == "28" => Some((t.pos, t.galley.clone())),
+                _ => None,
+            });
+            let (Some(field), Some((pos, galley))) = (field, text) else { panic!("{appearance:?} at {ppp}: no field or no text") };
+            // Text is placed on whole pixels, so it may be up to half a pixel from the exact middle.
+            let tolerance = 0.5 / ppp + 0.01;
+            let row = galley.rect.translate(pos.to_vec2());
+            let ink = galley.mesh_bounds.translate(pos.to_vec2());
+            assert!(field.height() > row.height(), "{appearance:?} at {ppp}: field {field:?} is not taller than the text row {row:?}");
+            assert!(
+                (row.center().y - field.center().y).abs() <= tolerance,
+                "{appearance:?} at {ppp}: text row {row:?} is not centred in the field {field:?}"
+            );
+            assert!(
+                (ink.center().y - field.center().y).abs() <= tolerance + 0.1,
+                "{appearance:?} at {ppp}: the digits' ink {ink:?} is not centred in the field {field:?}"
+            );
+        }
+    }
+}
+
 #[test]
 fn a_long_combo_list_builds_only_the_rows_in_view() {
     // #121: the font menu built (and so loaded the font of) every installed family.
