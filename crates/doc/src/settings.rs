@@ -126,6 +126,10 @@ pub struct Settings {
     /// Keep contextual paragraph spacing inside legacy table cells (`allowSpaceOfSameStyleInTable`).
     /// Word ignores the layout override in compatibility mode 15, but the flag still round-trips.
     pub allow_space_of_same_style_in_table: bool,
+    /// `w:adjustLineHeightInTable` (ECMA-376 §17.15.3.1): the document grid's line pitch also
+    /// applies to lines in table cells. Off when absent, so cell text keeps its own line height.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub adjust_line_height_in_table: bool,
     /// Drawing grid spacing in points, across and down (View › Gridlines); ECMA-376's default is 1/8 inch.
     pub grid_h: f32,
     pub grid_v: f32,
@@ -291,6 +295,7 @@ impl Default for Settings {
             sum_paragraph_spacing: false,
             do_not_expand_shift_return: false,
             allow_space_of_same_style_in_table: false,
+            adjust_line_height_in_table: false,
             grid_h: DEFAULT_GRID,
             grid_v: DEFAULT_GRID,
             math: None,

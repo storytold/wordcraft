@@ -16,6 +16,7 @@ mod numeral;
 mod pages;
 mod styleref;
 mod table_contact;
+mod text_alignment;
 mod textbox;
 mod vertical;
 

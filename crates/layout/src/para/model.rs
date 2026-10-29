@@ -184,6 +184,10 @@ pub struct Line {
     pub vis: Vec<VisCl>,
     /// The paragraph reads right to left (its start edge is on the right).
     pub rtl: bool,
+    /// Each cluster's baseline shift from the line's baseline (points, down positive) under the
+    /// paragraph's `w:textAlignment`: one per cluster of the line. Empty when every cluster sits
+    /// on the baseline.
+    pub shifts: Vec<f32>,
 }
 
 /// Where a cluster of a bidirectional line is drawn.
@@ -215,6 +219,11 @@ impl VisCl {
 pub const PARA_MARK_WIDTH: f32 = 5.0;
 
 impl Line {
+    /// How far cluster `k`'s baseline sits below the line's (0 when the line keeps its baseline).
+    pub fn shift_at(&self, k: usize) -> f32 {
+        k.checked_sub(self.c0).and_then(|i| self.shifts.get(i)).copied().unwrap_or(0.0)
+    }
+
     /// Left edge of cluster `k` (a paragraph cluster index on this line).
     pub fn cl_left(&self, k: usize) -> Option<f32> {
         let i = k.checked_sub(self.c0)?;

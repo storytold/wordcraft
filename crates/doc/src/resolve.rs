@@ -4,7 +4,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::props::{
-    Align, Border, Borders, CharProps, Highlight, LineSpacing, NumRef, ParaProps, Rgb, TabAlign, TabStop, TextColor, Underline, VertAlign,
+    Align, Border, Borders, CharProps, Highlight, LineSpacing, NumRef, ParaProps, Rgb, TabAlign, TabStop, TextAlignment, TextColor, Underline,
+    VertAlign,
 };
 use crate::styles::{StyleKind, StyleSheet};
 
@@ -204,6 +205,9 @@ pub struct ResolvedPara {
     pub auto_space_dn: bool,
     /// Lines snap to the document grid, when the section has one.
     pub snap_to_grid: bool,
+    /// Vertical alignment of the characters in a line that mixes sizes (see `ParaProps::text_alignment`).
+    #[serde(default)]
+    pub text_alignment: TextAlignment,
     /// Indents in characters (left, right, first line; 0 = in points), which win over the
     /// point values; see [`ResolvedPara::set_char_unit`].
     #[serde(default)]
@@ -280,6 +284,7 @@ impl ResolvedPara {
             auto_space_de: p.auto_space_de.unwrap_or(true),
             auto_space_dn: p.auto_space_dn.unwrap_or(true),
             snap_to_grid: p.snap_to_grid.unwrap_or(true),
+            text_alignment: p.text_alignment.unwrap_or_default(),
             indent_chars: [p.indent_left_chars, p.indent_right_chars, p.indent_first_chars]
                 .map(|c| c.filter(|c| c.is_finite()).unwrap_or(0.0).clamp(-MAX_CHARS, MAX_CHARS)),
         }

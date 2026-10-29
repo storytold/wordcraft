@@ -227,8 +227,69 @@ fn children(xml: &str, root: &str) -> Option<(usize, usize, Vec<Child>)> {
     Some((open_end, close, out))
 }
 
-/// The original `w:compat` with its `compatibilityMode` taken from the generated one.
+/// The original `w:compat` with its `compatibilityMode` taken from the generated one, and its
+/// `w:adjustLineHeightInTable` made to match the generated block's.
 fn merge_compat(orig: &str, generated: &str) -> Option<String> {
+    sync_adjust_line_height(merge_mode(orig, generated)?, generated)
+}
+
+/// Add or remove `w:adjustLineHeightInTable` (CT_Compat, §17.15.3.1) so that the block holds it
+/// exactly when the generated one does. The generated block writes the switch only when it is on.
+/// A new switch goes before the first later option the block holds, or before `</w:compat>`.
+fn sync_adjust_line_height(compat: String, generated: &str) -> Option<String> {
+    const TAG: &str = "<w:adjustLineHeightInTable";
+    const CLOSE: &str = "</w:adjustLineHeightInTable>";
+    // The options that follow it in CT_Compat's sequence.
+    const AFTER: [&str; 17] = [
+        "w:autoSpaceLikeWord95",
+        "w:noSpaceRaiseLower",
+        "w:doNotUseHTMLParagraphAutoSpacing",
+        "w:layoutRawTableWidth",
+        "w:layoutTableRowsApart",
+        "w:useWord97LineBreakRules",
+        "w:doNotBreakWrappedTables",
+        "w:doNotSnapToGridInCell",
+        "w:selectFldWithFirstOrLastChar",
+        "w:applyBreakingRules",
+        "w:doNotWrapTextWithPunct",
+        "w:doNotUseEastAsianBreakRules",
+        "w:useWord2002TableStyleRules",
+        "w:growAutofit",
+        "w:useFELayout",
+        "w:allowSpaceOfSameStyleInTable",
+        "w:compatSetting",
+    ];
+    let wanted = generated.contains(TAG);
+    let Some(start) = compat.find(TAG) else {
+        if !wanted {
+            return Some(compat);
+        }
+        let at = AFTER.iter().filter_map(|name| compat.find(&format!("<{name}"))).min().or_else(|| compat.rfind("</w:compat>"))?;
+        return Some(format!("{}<w:adjustLineHeightInTable/>{}", compat.get(..at)?, compat.get(at..)?));
+    };
+    let tag_end = start + compat.get(start..)?.find('>')? + 1;
+    let end = if compat.get(start..tag_end)?.ends_with("/>") { tag_end } else { tag_end + compat.get(tag_end..)?.find(CLOSE)? + CLOSE.len() };
+    // The original element is kept only when it switches the option on the way the model does.
+    let keep = wanted && !is_switched_off(compat.get(start..tag_end)?);
+    if keep {
+        return Some(compat);
+    }
+    let replacement = if wanted { "<w:adjustLineHeightInTable/>" } else { "" };
+    Some(format!("{}{}{}", compat.get(..start)?, replacement, compat.get(end..)?))
+}
+
+/// Is an on/off element's start tag switched off? ST_OnOff (§22.9.2.7) reads `0`, `false` and `off`
+/// as off; an element with no `w:val` is on.
+fn is_switched_off(tag: &str) -> bool {
+    let Some(at) = tag.find("w:val=") else { return false };
+    let Some(rest) = tag.get(at + "w:val=".len()..) else { return false };
+    let Some(quote) = rest.chars().next().filter(|c| *c == '"' || *c == '\'') else { return false };
+    let value = rest.get(1..).and_then(|v| v.split(quote).next()).unwrap_or("");
+    matches!(value, "0" | "false" | "off")
+}
+
+/// The original `w:compat` with its `compatibilityMode` taken from the generated one.
+fn merge_mode(orig: &str, generated: &str) -> Option<String> {
     let mode = |s: &str| -> Option<(usize, usize)> {
         let at = s.find("w:name=\"compatibilityMode\"")?;
         let tag_start = s.get(..at)?.rfind('<')?;
@@ -377,6 +438,37 @@ mod tests {
         assert!(out.contains("<w:useFELayout/>") && out.contains("compatibilityMode"), "{out}");
         assert!(has_unowned(orig.as_bytes()));
         assert!(!has_unowned(GEN.as_bytes()));
+    }
+
+    #[test]
+    fn adjust_line_height_in_table_follows_the_model_both_ways() {
+        let gen_on = GEN.replace("<w:compat>", "<w:compat><w:adjustLineHeightInTable/>");
+        let settings = |compat: &str| format!(r#"<w:settings xmlns:w="w" xmlns:m="m" xmlns:r="r"><w:compat>{compat}</w:compat></w:settings>"#);
+        // Turned on: added before the later option it sits ahead of in the sequence.
+        let on = String::from_utf8(merge(settings("<w:useFELayout/>").as_bytes(), gen_on.as_bytes()).unwrap()).unwrap();
+        assert!(on.contains("<w:adjustLineHeightInTable/><w:useFELayout/>"), "{on}");
+        assert!(on.contains("<w:useFELayout/>") && on.contains("compatibilityMode"), "{on}");
+        assert_eq!(on.matches("<w:adjustLineHeightInTable").count(), 1, "{on}");
+        // Turned off: an original switch, self-closing or with a value, is removed; the others stay.
+        for flag in ["<w:adjustLineHeightInTable/>", r#"<w:adjustLineHeightInTable w:val="1"/>"#] {
+            let off = String::from_utf8(merge(settings(&format!("{flag}<w:useFELayout/>")).as_bytes(), GEN.as_bytes()).unwrap()).unwrap();
+            assert!(!off.contains("adjustLineHeightInTable") && off.contains("<w:useFELayout/>"), "{off}");
+            assert!(off.contains("compatibilityMode"), "{off}");
+        }
+        // Explicitly off in the original, on in the model: the switch is replaced, not kept off.
+        for flag in [
+            r#"<w:adjustLineHeightInTable w:val="0"/>"#,
+            r#"<w:adjustLineHeightInTable w:val="false"/>"#,
+            "<w:adjustLineHeightInTable w:val='off'></w:adjustLineHeightInTable>",
+        ] {
+            let on = String::from_utf8(merge(settings(&format!("{flag}<w:useFELayout/>")).as_bytes(), gen_on.as_bytes()).unwrap()).unwrap();
+            assert_eq!(on.matches("<w:adjustLineHeightInTable").count(), 1, "{flag}: {on}");
+            assert!(on.contains("<w:adjustLineHeightInTable/><w:useFELayout/>"), "{flag}: {on}");
+            assert!(!on.contains("</w:adjustLineHeightInTable>"), "{flag}: {on}");
+        }
+        // Kept as it is when the original and the model agree.
+        let kept = String::from_utf8(merge(settings("<w:adjustLineHeightInTable/>").as_bytes(), gen_on.as_bytes()).unwrap()).unwrap();
+        assert_eq!(kept.matches("<w:adjustLineHeightInTable").count(), 1, "{kept}");
     }
 
     #[test]

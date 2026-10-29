@@ -8,4 +8,5 @@ mod recovery_format;
 mod rtf_sections;
 #[cfg(not(target_arch = "wasm32"))]
 mod safe_save;
+mod text_alignment;
 mod three_column_headers;

@@ -26,6 +26,45 @@ impl Align {
     }
 }
 
+/// Vertical alignment of the characters within a line (`w:textAlignment`, ECMA-376 §17.3.1.39):
+/// where each character's box sits in the line's height when a line mixes sizes, such as text
+/// beside a taller inline picture. `Auto` and `Baseline` keep the characters on the baseline.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum TextAlignment {
+    #[default]
+    Auto,
+    Baseline,
+    Top,
+    Center,
+    Bottom,
+}
+
+impl TextAlignment {
+    /// The `w:val` token of this alignment.
+    pub fn ooxml(self) -> &'static str {
+        match self {
+            TextAlignment::Auto => "auto",
+            TextAlignment::Baseline => "baseline",
+            TextAlignment::Top => "top",
+            TextAlignment::Center => "center",
+            TextAlignment::Bottom => "bottom",
+        }
+    }
+
+    /// The alignment a `w:val` token names; `None` for anything else.
+    pub fn from_ooxml(v: &str) -> Option<TextAlignment> {
+        Some(match v {
+            "auto" => TextAlignment::Auto,
+            "baseline" => TextAlignment::Baseline,
+            "top" => TextAlignment::Top,
+            "center" => TextAlignment::Center,
+            "bottom" => TextAlignment::Bottom,
+            _ => return None,
+        })
+    }
+}
+
 /// Line spacing rule.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "rule", content = "value")]
@@ -301,6 +340,10 @@ pub struct ParaProps {
     /// 0..=8 = Level 1..9; 9 = body text.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outline_level: Option<u8>,
+    /// `w:textAlignment`: vertical alignment of the characters in a line that mixes sizes.
+    /// Unset = automatic (on the baseline).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text_alignment: Option<TextAlignment>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub numbering: Option<NumRef>,
     /// Tab stops (replaces the inherited list; `TabAlign::Clear` stops remove inherited ones).
@@ -383,7 +426,7 @@ impl ParaProps {
     }
 
     fn overlay_script_layout(&mut self, patch: &ParaProps) {
-        overlay_fields!(self, patch; bidi, kinsoku, word_wrap, overflow_punct, top_line_punct, auto_space_de, auto_space_dn);
+        overlay_fields!(self, patch; bidi, kinsoku, word_wrap, overflow_punct, top_line_punct, auto_space_de, auto_space_dn, text_alignment);
     }
     pub fn overlaid(mut self, patch: &ParaProps) -> ParaProps {
         self.overlay(patch);

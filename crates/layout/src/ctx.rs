@@ -32,6 +32,10 @@ pub(crate) struct Ctx<'a> {
     pub(crate) chains: textbox::Chains,
     /// The current section's document grid (body text only: none for headers and footers).
     pub(crate) grid: para::Grid,
+    /// The text laid out now is a table cell's own text, which leaves out the grid's line pitch
+    /// unless `adjustLineHeightInTable` is set (ECMA-376 §17.15.3.1). Cleared for a text box or note
+    /// inside a cell, which is a story of its own.
+    pub(crate) cell_grid_off: bool,
     /// Whether tracked deletions are left out in the story being laid out
     /// ([`LayoutOptions::hides_deleted`]): the body's, or the story of the [`layout_box`] at work.
     pub(crate) hide_deleted: HideDeleted,
@@ -368,7 +372,7 @@ impl Ctx<'_> {
             excl: if exclusions.is_empty() { 0 } else { hash_of(&format!("{exclusions:?}")) },
             eq: if eq_here > 0 { eq_number } else { 0 },
             read_spacing: if self.opts.view == ViewMode::Read { self.opts.read_line_spacing.map(f32::to_bits) } else { None },
-            grid: self.grid.key(),
+            grid: self.para_grid().key(),
             fit: self.boxes.inside(),
             fitted: if fitted.is_empty() { 0 } else { hash_of(&format!("{fitted:?}")) },
             hide_deleted: self.hide_deleted,
@@ -393,6 +397,12 @@ impl Ctx<'_> {
         h
     }
 
+    /// The document grid as paragraphs in the current story lay out on: without its line pitch
+    /// where the text is a table cell's own (see [`Ctx::cell_grid_off`]).
+    pub(crate) fn para_grid(&self) -> para::Grid {
+        if self.cell_grid_off { para::Grid { line: None, ..self.grid } } else { self.grid }
+    }
+
     fn para_env<'b>(&'b self, input: ParaEnvInput<'b>) -> para::ParaEnv<'b> {
         let ParaEnvInput { width, label, table, exclusions, eq_number, typing_word, fitted } = input;
         para::ParaEnv {
@@ -410,7 +420,7 @@ impl Ctx<'_> {
             exclusions,
             eq_number,
             read_line_spacing: if self.opts.view == ViewMode::Read { self.opts.read_line_spacing } else { None },
-            grid: self.grid,
+            grid: self.para_grid(),
             fit_objects: self.boxes.inside(),
             fitted,
         }
