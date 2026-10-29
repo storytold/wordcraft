@@ -23,6 +23,9 @@ chrono = { workspace = true }
 hayro-syntax = "0.7.2"
 hayro-interpret = { version = "0.7.0", default-features = false, features = ["embed-fonts"] }
 hayro-cmap = "0.1"
+# Read only for the dimensions a picture's codec declares (the same versions hayro-syntax decodes with).
+hayro-jpeg2000 = { version = "0.3.5", default-features = false }
+hayro-jbig2 = { version = "0.3.1", default-features = false }
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 # The browser clock (`SystemTime::now()` panics on wasm32-unknown-unknown).
