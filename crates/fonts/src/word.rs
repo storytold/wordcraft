@@ -140,6 +140,13 @@ fn substitutes_for(family: &str) -> (&'static [&'static str], bool) {
     }
 }
 
+/// Does `family` have substitutes of its own, picked by its name (a metric-compatible clone such
+/// as Liberation Serif for Times New Roman, or the same design under another name), rather than
+/// the generic lists any unknown font gets?
+pub fn has_named_substitutes(family: &str) -> bool {
+    substitutes_for(charset_base_family(family)).1
+}
+
 /// Ascent and descent (em) of Word's symbol fonts, which aren't open fonts. Their characters are
 /// drawn from other faces (`wordcraft_doc::symbol_fonts`), but Word sizes a line by the font
 /// itself: a Symbol bullet makes its line taller than the text alone. The values are those Word's
