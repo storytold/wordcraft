@@ -9,6 +9,15 @@
 #![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+// The experimental Windows 7 build (docs/windows7.md) is OpenGL only, on the win7 Rust target:
+// the ordinary Windows target's standard library itself needs Windows 10.
+#[cfg(all(feature = "windows7", any(feature = "wgpu", feature = "accessibility")))]
+compile_error!("windows7 requires --no-default-features (wgpu and accessibility must be disabled)");
+#[cfg(all(windows, feature = "windows7", not(target_vendor = "win7")))]
+compile_error!("windows7 requires --target x86_64-win7-windows-msvc; the ordinary Windows target still imports newer APIs");
+#[cfg(all(target_vendor = "win7", not(feature = "windows7")))]
+compile_error!("the win7 target requires --no-default-features --features windows7");
+
 mod animations;
 #[cfg(target_os = "macos")]
 mod apple_events;
@@ -16,7 +25,7 @@ mod clipboard;
 mod control_server;
 mod default_apps;
 mod file_dialogs;
-#[cfg(any(target_os = "windows", target_os = "macos", test))]
+#[cfg(all(feature = "wgpu", any(target_os = "windows", target_os = "macos", test)))]
 mod graphics;
 mod logging;
 mod print;
@@ -116,7 +125,21 @@ impl eframe::App for App {
         self.0.ui(ui);
         self.3.show(frame);
     }
+    #[cfg(not(feature = "windows7"))]
     fn on_exit(&mut self) {
+        self.exit();
+    }
+    // With OpenGL (the Windows 7 build), eframe hands `on_exit` the GL context.
+    #[cfg(feature = "windows7")]
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.exit();
+    }
+}
+
+impl App {
+    /// What [`eframe::App::on_exit`] does: waits for print jobs, ends crash recovery, saves the
+    /// preferences and removes the control key file.
+    fn exit(&mut self) {
         print::finish_pending_jobs();
         self.0.session.finish_recovery();
         save_prefs(&self.0);
@@ -415,6 +438,9 @@ fn main() -> eframe::Result {
             .with_fullsize_content_view(true)
             .with_titlebar_shown(false)
             .with_title_shown(false),
+        // The Windows 7 build draws with OpenGL (docs/windows7.md).
+        #[cfg(feature = "windows7")]
+        renderer: eframe::Renderer::Glow,
         ..Default::default()
     };
     if let Some(icon) = app_icon() {
@@ -423,10 +449,10 @@ fn main() -> eframe::Result {
     // Before eframe creates the wgpu instance: default Windows to DirectX 12 only, or OpenGL when
     // DirectX 12 has no GPU driver or this is a 32-bit build, and compile DirectX 12 shaders with
     // FXC, which needs no DLL of ours (#603; see graphics.rs).
-    #[cfg(target_os = "windows")]
+    #[cfg(all(target_os = "windows", feature = "wgpu"))]
     graphics::configure(&mut options, eframe::wgpu::Backends::from_env());
     // Intel Macs: Metal's compiler aborts on wgpu's indirect-validation shaders (#2652).
-    #[cfg(target_os = "macos")]
+    #[cfg(all(target_os = "macos", feature = "wgpu"))]
     graphics::configure_indirect_validation(&mut options, graphics::skips_indirect_validation(true, cfg!(target_arch = "x86_64")));
     load_user_fonts();
     // Windows opened for further documents start like the first one, before its saved place.

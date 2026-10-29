@@ -85,10 +85,24 @@ mod windows {
 
     /// Settings › Default apps, on the page of the app registered as `WordCraft` under
     /// `HKLM\Software\RegisteredApplications` (the MSI writes it).
+    #[cfg(not(target_vendor = "win7"))]
     const SETTINGS_URI: &str = "ms-settings:defaultapps?registeredAppMachine=WordCraft";
 
+    #[cfg(not(target_vendor = "win7"))]
     pub(super) fn open_default_apps() -> Result<DefaultApp, String> {
         open::that_detached(SETTINGS_URI).map_err(|e| format!("couldn't open Settings: {e}"))?;
+        Ok(DefaultApp::SettingsOpened)
+    }
+
+    /// Windows 7 has no Settings app (docs/windows7.md): Control Panel › Default Programs ›
+    /// Set your default programs, where the user picks WordCraft.
+    #[cfg(target_vendor = "win7")]
+    pub(super) fn open_default_apps() -> Result<DefaultApp, String> {
+        let root = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into()));
+        std::process::Command::new(root.join("System32").join("control.exe"))
+            .args(["/name", "Microsoft.DefaultPrograms", "/page", "pageDefaultProgram"])
+            .spawn()
+            .map_err(|e| format!("couldn't open Control Panel: {e}"))?;
         Ok(DefaultApp::SettingsOpened)
     }
 }

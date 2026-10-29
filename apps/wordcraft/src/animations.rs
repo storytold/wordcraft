@@ -2,7 +2,8 @@
 //! follows when set to "Use system setting" (`Services::animations_enabled`).
 //!
 //! - Windows: Settings › Accessibility › Visual effects › Animation effects, read through the
-//!   Windows Runtime's `UISettings`.
+//!   Windows Runtime's `UISettings`. Windows 7 has no Windows Runtime: the Windows 7 build
+//!   (docs/windows7.md) doesn't ask, and the Options setting decides.
 //! - macOS: System Settings › Accessibility › Display › Reduce motion, read through `NSWorkspace`.
 //! - Linux and the BSDs: the desktop's setting, read through the settings portal ([`desktop`]).
 //!
@@ -16,7 +17,7 @@ mod desktop;
 /// The answer to "does the system have animation effects on?" for the UI: `None` when the system
 /// doesn't say. `ctx` is asked to redraw when an answer that arrives later changes it.
 pub fn hook(ctx: &egui::Context) -> Box<dyn Fn() -> Option<bool>> {
-    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    #[cfg(any(all(windows, not(target_vendor = "win7")), target_os = "macos"))]
     {
         let _ = ctx;
         Box::new(remembered(system_enabled, REFRESH))
@@ -25,7 +26,7 @@ pub fn hook(ctx: &egui::Context) -> Box<dyn Fn() -> Option<bool>> {
     {
         Box::new(desktop::watch(ctx.clone()))
     }
-    #[cfg(not(any(target_os = "windows", unix)))]
+    #[cfg(not(any(all(windows, not(target_vendor = "win7")), unix)))]
     {
         let _ = ctx;
         Box::new(|| None)
@@ -33,11 +34,11 @@ pub fn hook(ctx: &egui::Context) -> Box<dyn Fn() -> Option<bool>> {
 }
 
 /// How long an answer from Windows or macOS is kept before the system is asked again.
-#[cfg(any(target_os = "windows", target_os = "macos"))]
+#[cfg(any(all(windows, not(target_vendor = "win7")), target_os = "macos"))]
 const REFRESH: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// `read`, asked at most once per `every` and answered from memory in between.
-#[cfg(any(target_os = "windows", target_os = "macos", test))]
+#[cfg(any(all(windows, not(target_vendor = "win7")), target_os = "macos", test))]
 fn remembered(read: impl Fn() -> Option<bool>, every: std::time::Duration) -> impl Fn() -> Option<bool> {
     let last = std::cell::Cell::new(None::<(std::time::Instant, Option<bool>)>);
     move || {
@@ -53,7 +54,7 @@ fn remembered(read: impl Fn() -> Option<bool>, every: std::time::Duration) -> im
 }
 
 /// Whether Windows has animation effects on; `None` when it can't be asked.
-#[cfg(target_os = "windows")]
+#[cfg(all(windows, not(target_vendor = "win7")))]
 fn system_enabled() -> Option<bool> {
     windows::UI::ViewManagement::UISettings::new()
         .and_then(|settings| settings.AnimationsEnabled())

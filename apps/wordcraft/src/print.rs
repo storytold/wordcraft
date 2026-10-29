@@ -1,5 +1,11 @@
 //! Desktop spooler adapter. Discovery and submission never run on the UI thread.
-use wordcraft_ui_egui::printing::{Discover, Duplex, Printer, Settings, Submit};
+use wordcraft_ui_egui::printing::{Discover, Settings, Submit};
+#[cfg(not(target_vendor = "win7"))]
+use wordcraft_ui_egui::printing::{Duplex, Printer};
+
+/// The experimental Windows 7 build's spooler: the PDF viewer's print verb (docs/windows7.md).
+#[cfg(any(test, target_vendor = "win7"))]
+mod windows7;
 
 /// Returns a discovery callback that enumerates spooler printers on a named worker thread and
 /// sends the list through a channel, keeping spooler calls off the UI thread.
@@ -7,11 +13,7 @@ pub fn discover() -> Discover {
     Box::new(|| {
         let (sender, receiver) = std::sync::mpsc::channel();
         let _ = std::thread::Builder::new().name("print-discovery".into()).spawn(move || {
-            let printers = craft_print::printers()
-                .into_iter()
-                .map(|printer| Printer { name: printer.name, label: printer.description, default: printer.default })
-                .collect();
-            let _ = sender.send(printers);
+            let _ = sender.send(printers());
         });
         receiver
     })
@@ -30,25 +32,46 @@ pub fn finish_pending_jobs() {
     }
 }
 
+/// The spooler's printers.
+#[cfg(not(target_vendor = "win7"))]
+fn printers() -> Vec<Printer> {
+    craft_print::printers().into_iter().map(|printer| Printer { name: printer.name, label: printer.description, default: printer.default }).collect()
+}
+
+#[cfg(target_vendor = "win7")]
+use windows7::printers;
+
+/// Hands `bytes` to the spooler; the result is its receipt or the error.
+#[cfg(not(target_vendor = "win7"))]
+fn send(bytes: &[u8], settings: Settings, collate: bool, options: Vec<(String, String)>) -> Result<String, String> {
+    let job = craft_print::Job {
+        printer: Some(settings.printer),
+        copies: settings.copies.clamp(1, 999),
+        collate,
+        duplex: settings.duplex.map(|value| match value {
+            Duplex::LongEdge => craft_print::Duplex::LongEdge,
+            Duplex::ShortEdge => craft_print::Duplex::ShortEdge,
+            Duplex::Off => craft_print::Duplex::Off,
+        }),
+        grayscale: settings.grayscale,
+        scaling: craft_print::Scaling::ShrinkToFit,
+        title: "WordCraft document".into(),
+        options,
+    };
+    craft_print::submit(bytes, &job).map_err(|error| error.to_string())
+}
+
+/// Hands `bytes` to the PDF viewer, which prints with its own settings (docs/windows7.md).
+#[cfg(target_vendor = "win7")]
+fn send(bytes: &[u8], settings: Settings, _collate: bool, _options: Vec<(String, String)>) -> Result<String, String> {
+    windows7::submit(bytes, &settings.printer, settings.copies)
+}
+
 pub fn submit() -> Submit {
     Box::new(|bytes, settings: Settings, collate, options| {
         let (sender, receiver) = std::sync::mpsc::channel();
         let worker = std::thread::Builder::new().name("print-submit".into()).spawn(move || {
-            let job = craft_print::Job {
-                printer: Some(settings.printer),
-                copies: settings.copies.clamp(1, 999),
-                collate,
-                duplex: settings.duplex.map(|value| match value {
-                    Duplex::LongEdge => craft_print::Duplex::LongEdge,
-                    Duplex::ShortEdge => craft_print::Duplex::ShortEdge,
-                    Duplex::Off => craft_print::Duplex::Off,
-                }),
-                grayscale: settings.grayscale,
-                scaling: craft_print::Scaling::ShrinkToFit,
-                title: "WordCraft document".into(),
-                options,
-            };
-            let _ = sender.send(craft_print::submit(&bytes, &job).map_err(|error| error.to_string()));
+            let _ = sender.send(send(&bytes, settings, collate, options));
         });
         if let Ok(worker) = worker {
             let mut jobs = JOBS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);

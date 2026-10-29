@@ -1,0 +1,63 @@
+# Experimental, unsupported Windows 7 SP1 x64 portable build (docs/windows7.md), ported from
+# VectorCraft's. It runs by hand and weekly and for changes to the compatibility path; the weekly run
+# shows when a dependency update starts importing a post-Windows-7 API.
+# packaging/windows/windows7.ps1 does the work: it is the only build that uses the patched
+# vendor/windows-link. A modern Windows runner proves compilation and host smoke tests only: run the
+# checklist in docs/windows7.md on actual Windows 7 before claiming support.
+name: Windows 7 x64 compatibility
+
+on:
+  pull_request:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "apps/wordcraft/Cargo.toml"
+      - "apps/wordcraft/src/main.rs"
+      - "apps/wordcraft/src/animations.rs"
+      - "apps/wordcraft/src/default_apps.rs"
+      - "apps/wordcraft/src/region.rs"
+      - "apps/wordcraft/src/print.rs"
+      - "apps/wordcraft/src/print/**"
+      - "apps/wordcraft-cli/Cargo.toml"
+      - "vendor/windows-link/**"
+      - "packaging/windows/windows7.ps1"
+      - ".github/workflows/windows7.yml"
+  schedule:
+    - cron: "37 5 * * 1" # weekly
+  workflow_dispatch:
+
+concurrency:
+  group: windows7-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        with:
+          arch: x64
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: nightly-2026-10-01
+          components: rust-src
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: windows7-x64
+      - name: Build, check and test the portable package
+        shell: pwsh
+        run: ./packaging/windows/windows7.ps1 -Test
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wordcraft-windows7-x64-portable
+          path: dist/release/wordcraft-windows7-x64-portable.zip
+          if-no-files-found: error

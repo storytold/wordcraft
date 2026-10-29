@@ -14,7 +14,8 @@ pub fn system() -> wordcraft_engine::Region {
         return wordcraft_engine::Region::default();
     }
     let region = wordcraft_ui_egui::i18n::system_region();
-    #[cfg(target_os = "windows")]
+    // Not on the Windows 7 build (docs/windows7.md): the API is part of the Windows Runtime.
+    #[cfg(all(windows, not(target_vendor = "win7")))]
     {
         if std::env::var_os("WORDCRAFT_REGION").is_none() {
             return match windows::System::UserProfile::GlobalizationPreferences::HomeGeographicRegion() {
