@@ -42,7 +42,7 @@ locale update uses craft-pdf, krilla, craft-print and craft-i18n at
 `17744430be327d0257496a6a31c8d38fe20a6756`. These are immutable canonical Git URL pins.
 The predecessor passed full CI; the latest main integration is undergoing its own full CI.
 The translation catalog is pinned
-separately to the reviewed `9205108cfdced5177706264038848b68b2422d2b`; it is not a Cargo dependency.
+separately to the reviewed `a95f320fc1bc8f36614310c91ac8b1e78c7bb4d2`; it is not a Cargo dependency.
 Publication observations and
 authority remain separate from this local status. Stock 0.37 is a measurement control, not the production target.
 Earlier baseline and research revisions below remain historical references.

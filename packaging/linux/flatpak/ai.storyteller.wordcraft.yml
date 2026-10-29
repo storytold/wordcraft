@@ -72,6 +72,6 @@ modules:
       # The interface translations at the commit in craft-i18n.rev (a test keeps the two equal).
       - type: git
         url: https://github.com/storytold/craft-i18n
-        commit: 9205108cfdced5177706264038848b68b2422d2b
+        commit: a95f320fc1bc8f36614310c91ac8b1e78c7bb4d2
         dest: craft-i18n
       - cargo-sources.json

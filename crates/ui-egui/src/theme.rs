@@ -584,6 +584,14 @@ pub fn font_definitions_language(prefer_hans: bool, prefer_korean: bool, system_
         data.index = f.index;
         add_cjk(&mut fonts, format!("system {}", f.family), data);
     }
+    // An Arabic-script interface (Persian, Arabic, Urdu...) has no glyphs in any embedded face:
+    // an installed Arabic-script font after them, so the menus don't show boxes or `?`.
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(f) = system_arabic_font() {
+        let mut data = FontData::from_static(&f.bytes);
+        data.index = f.index;
+        add_cjk(&mut fonts, format!("system {}", f.family), data);
+    }
     #[cfg(target_arch = "wasm32")]
     let _ = system_cjk;
     // Symbols and emoji fall back to egui's defaults (kept in the families).
@@ -618,6 +626,28 @@ fn system_cjk_font(hans: bool, korean: bool) -> Option<&'static wordcraft_fonts:
         }
         log::debug!("interface: {} CJK characters lack an embedded glyph", needed.len());
         wordcraft_fonts::system_cjk_ui_font_for(hans, korean, &needed)
+    })
+    .as_ref()
+}
+
+/// The installed Arabic-script interface font (Persian, Arabic, Urdu...) when the embedded faces
+/// leave the interface catalogs' Arabic-script characters ([`Lang::arabic_font_text`]) without a
+/// glyph (they always do: no embedded face carries Arabic script). Chosen once. `None` when the
+/// interface has no right-to-left catalog. Native only; wasm has no system fonts to read.
+#[cfg(not(target_arch = "wasm32"))]
+fn system_arabic_font() -> Option<&'static wordcraft_fonts::SystemUiFont> {
+    static AR: std::sync::OnceLock<Option<wordcraft_fonts::SystemUiFont>> = std::sync::OnceLock::new();
+    AR.get_or_init(|| {
+        let (catalogs, names) = crate::i18n::Lang::arabic_font_text();
+        let mut needed = wordcraft_fonts::ui_uncovered_arabic(&catalogs, &[]);
+        if needed.is_empty() {
+            needed = wordcraft_fonts::ui_uncovered_arabic(&[&names], &[]);
+            if needed.is_empty() {
+                return None;
+            }
+        }
+        log::debug!("interface: {} Arabic-script characters lack an embedded glyph", needed.len());
+        wordcraft_fonts::system_arabic_ui_font(&needed)
     })
     .as_ref()
 }

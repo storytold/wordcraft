@@ -153,6 +153,61 @@ pub fn system_cjk_ui_font_for(hans: bool, korean: bool, needed: &[char]) -> Opti
     find_ui_font(&with_asset_data(crate::system_font_dirs()), &candidates(hans, korean), needed, hans)
 }
 
+/// Is `c` drawn from an Arabic-script font: Arabic letters (Persian, Urdu, Arabic...), their
+/// marks and the Arabic-Indic and Persian digits, and the Arabic presentation forms? Latin,
+/// Cyrillic and symbols come from the interface's Latin faces. ZWNJ (a format character) is not
+/// a glyph and is left out.
+pub fn is_arabic_script(c: char) -> bool {
+    matches!(c,
+        '\u{0600}'..='\u{06FF}' // Arabic (includes Arabic-Indic and Persian digits)
+        | '\u{0750}'..='\u{077F}' // Arabic Supplement
+        | '\u{0870}'..='\u{089F}' // Arabic Extended-B
+        | '\u{08A0}'..='\u{08FF}' // Arabic Extended-A
+        | '\u{FB50}'..='\u{FDFF}' // presentation forms A
+        | '\u{FE70}'..='\u{FEFF}' // presentation forms B
+        | '\u{1EE00}'..='\u{1EEFF}' // Arabic mathematical alphabetic symbols
+    )
+}
+
+/// The distinct Arabic-script characters of `texts` (see [`is_arabic_script`]) that none of the
+/// `embedded` faces maps, in code point order. The embedded interface faces (Inter, Source Sans,
+/// the CJK and Georgian faces) carry no Arabic script, so a Persian interface would draw boxes
+/// and `?` without an installed font.
+pub fn ui_uncovered_arabic(texts: &[&str], embedded: &[&CraftFont]) -> Vec<char> {
+    let faces: Vec<_> = embedded.iter().filter_map(|f| skrifa::FontRef::from_index(f.bytes, 0).ok()).map(|f| f.charmap()).collect();
+    let chars: std::collections::BTreeSet<char> = texts.iter().flat_map(|t| t.chars()).filter(|c| is_arabic_script(*c)).collect();
+    chars.into_iter().filter(|c| !faces.iter().any(|m| m.map(*c).is_some())).collect()
+}
+
+/// Font files to look for, relative to a font folder (or absolute), best first: open Arabic-script
+/// fonts with full Persian coverage (Vazirmatn, Noto Sans/Naskh Arabic, Amiri), then the
+/// platforms' own (Tahoma, Segoe UI, Geeza Pro, DejaVu Sans).
+fn arabic_candidates() -> Vec<&'static str> {
+    if cfg!(windows) {
+        vec!["tahoma.ttf", "arial.ttf", "segoeui.ttf", "NotoSansArabic-Regular.ttf", "NotoNaskhArabic-Regular.ttf"]
+    } else if cfg!(target_os = "macos") {
+        vec!["Geeza Pro.ttc", "GeezaPro.ttc", "SFArabic.ttf", "Tahoma.ttf", "arial.ttf"]
+    } else {
+        vec![
+            "truetype/vazirmatn/Vazirmatn-Regular.ttf",
+            "Vazirmatn-Regular.ttf",
+            "Vazir.ttf",
+            "truetype/noto/NotoSansArabic-Regular.ttf",
+            "truetype/noto/NotoNaskhArabic-Regular.ttf",
+            "opentype/fonts-hosny-amiri/Amiri-Regular.ttf",
+            "truetype/dejavu/DejaVuSans.ttf",
+        ]
+    }
+}
+
+/// The installed Arabic-script font that best covers `needed` (the characters the embedded faces
+/// lack; empty: a Persian letter), if one is found. Never panics on damaged files.
+pub fn system_arabic_ui_font(needed: &[char]) -> Option<SystemUiFont> {
+    let probe = ['\u{0633}']; // س, a letter shared by Arabic and Persian
+    let needed = if needed.is_empty() { &probe[..] } else { needed.get(..MAX_NEEDED).unwrap_or(needed) };
+    find_ui_font(&with_asset_data(crate::system_font_dirs()), &arabic_candidates(), needed, false)
+}
+
 /// `dirs` and, for each macOS font asset folder among them (`com_apple_MobileAsset_Font<N>`),
 /// the `AssetData` folder of every `<hash>.asset` in it: macOS ships PingFang there, e.g.
 /// `/System/Library/AssetsV2/com_apple_MobileAsset_Font7/<hash>.asset/AssetData/PingFang.ttc`
@@ -238,6 +293,30 @@ pub(crate) fn pick_face(data: &[u8], needed: &[char], hans: bool) -> Option<(u32
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn arabic_script_is_recognised_and_left_to_a_system_font() {
+        assert!(is_arabic_script('\u{0633}'), "س");
+        assert!(is_arabic_script('\u{06af}'), "گ");
+        assert!(is_arabic_script('\u{06f2}'), "a Persian digit");
+        assert!(!is_arabic_script('\u{200c}'), "ZWNJ is a format character, not a glyph");
+        assert!(!is_arabic_script('A'));
+        // No embedded face covers Arabic script, so every Arabic-script character is needed.
+        assert_eq!(ui_uncovered_arabic(&["سلام Save"], &[]), ['\u{0627}', '\u{0633}', '\u{0644}', '\u{0645}']);
+        // The installed font found for the interface catalogs must draw Persian letters (a
+        // machine with none shows boxes, as Word without a Persian font does).
+        let needed = ui_uncovered_arabic(&["سلام دنیا"], &[]);
+        if let Some(f) = system_arabic_ui_font(&needed) {
+            eprintln!("arabic UI fallback: {} ({} bytes)", f.family, f.bytes.len());
+            let font = skrifa::FontRef::from_index(&f.bytes, f.index).expect("chosen font parses");
+            let charmap = font.charmap();
+            for c in needed {
+                assert!(charmap.map(c).is_some(), "{} covers {c}", f.family);
+            }
+        } else {
+            eprintln!("skipped: no Arabic-script UI font installed");
+        }
+    }
 
     #[test]
     fn korean_interface_uses_korean_first_system_font_candidates() {

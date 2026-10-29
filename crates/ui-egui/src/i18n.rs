@@ -70,7 +70,7 @@ pub struct LangInfo {
 
 /// The languages WordCraft offers, when their catalogs are embedded. English first: it is the
 /// fallback and the source language.
-pub static LANGUAGES: [LangInfo; 27] = [
+pub static LANGUAGES: [LangInfo; 28] = [
     LangInfo { code: "en", prefer_hans: false, editing_lang: None },
     // Simplified Chinese; `zh`, `zh-CN`, `zh-SG` and `zh-Hans-*` resolve here (the crate's matching).
     LangInfo { code: "zh-hans", prefer_hans: true, editing_lang: None },
@@ -126,6 +126,10 @@ pub static LANGUAGES: [LangInfo; 27] = [
     LangInfo { code: "ro", prefer_hans: false, editing_lang: None },
     // Slovenian; `sl`, `sl-SI` and `sl_SI.UTF-8` resolve here.
     LangInfo { code: "sl", prefer_hans: false, editing_lang: None },
+    // Persian; `fa`, `fa-IR` and `fa_IR.UTF-8` resolve here. The interface text is right to
+    // left; the new egui/epaint lays each paragraph by its first strong character, so labels
+    // read correctly, but the chrome (ribbon, panes, dialogs) is not mirrored yet.
+    LangInfo { code: "fa", prefer_hans: false, editing_lang: None },
 ];
 
 /// A language the UI can be shown in: English, or an offered language whose catalogs are embedded.
@@ -189,6 +193,12 @@ impl Lang {
         self.name().chars().any(|c| ('\u{2E80}'..='\u{9FFF}').contains(&c) || ('\u{AC00}'..='\u{D7AF}').contains(&c))
     }
 
+    /// Is the interface written in an Arabic-script language (its own name is), so it needs an
+    /// Arabic-script face? Persian, Arabic, Urdu...
+    pub fn uses_rtl(self) -> bool {
+        self.name().chars().any(wordcraft_fonts::is_arabic_script)
+    }
+
     /// The embedded catalogs (shared, then WordCraft's) this language reads; none for English.
     fn catalog_texts(self) -> impl Iterator<Item = &'static str> {
         let code = self.code();
@@ -207,6 +217,14 @@ impl Lang {
     pub fn cjk_font_text_for(hans: bool, korean: bool) -> (Vec<&'static str>, String) {
         let catalogs =
             Lang::all().filter(|l| l.uses_cjk() && l.prefers_hans() == hans && l.prefers_korean() == korean).flat_map(Lang::catalog_texts).collect();
+        (catalogs, Lang::all().map(Lang::name).collect::<Vec<_>>().join(" "))
+    }
+
+    /// The Arabic-script interface text the fonts must cover: the catalogs of the right-to-left
+    /// languages (Persian...), and every language's own name (the Options list). The interface
+    /// fonts use it to decide whether an installed Arabic-script font is needed after them.
+    pub fn arabic_font_text() -> (Vec<&'static str>, String) {
+        let catalogs = Lang::all().filter(|l| l.uses_rtl()).flat_map(Lang::catalog_texts).collect();
         (catalogs, Lang::all().map(Lang::name).collect::<Vec<_>>().join(" "))
     }
 
