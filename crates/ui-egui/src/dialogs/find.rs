@@ -162,7 +162,7 @@ pub(super) fn command_matches(c: &wordcraft_engine::CommandSpec, query: &str) ->
         c.label.to_lowercase(),
         c.location.to_lowercase(),
         c.id.to_lowercase(),
-        crate::i18n::lowercase(tl!(c.label)),
+        crate::i18n::lowercase(&tl!(c.label)),
         crate::i18n::lowercase(&crate::i18n::location(c.location))
     );
     query.split_whitespace().all(|w| hay.contains(&w.to_lowercase()) || hay.contains(&crate::i18n::lowercase(w)))

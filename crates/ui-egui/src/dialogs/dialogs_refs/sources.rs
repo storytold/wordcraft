@@ -166,7 +166,7 @@ pub(super) fn source_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SourceForm) -> N
                 let hint = match key {
                     "author" => tl!("Last, First; Last, First"),
                     "tag" => tl!("Made from the author and year when empty"),
-                    _ => "",
+                    _ => std::borrow::Cow::Borrowed(""),
                 };
                 ui.add_enabled(!(edit && key == "tag"), egui::TextEdit::singleline(v).desired_width(260.0).hint_text(hint))
                     .labelled_by(field_label.id);
@@ -175,7 +175,7 @@ pub(super) fn source_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SourceForm) -> N
         }
     });
     ui.checkbox(&mut f.show_all, tl!("Show every bibliography field"));
-    let (ok, cancel) = buttons(ui, tl!("OK"));
+    let (ok, cancel) = buttons(ui, &tl!("OK"));
     if ok {
         let src = serde_json::to_value(&f.source).unwrap_or(Value::Null);
         let r = if f.cite { app.run("references.citation", json!({"source": src})) } else { app.run("references.sources", json!({"add": src})) };

@@ -22,7 +22,7 @@ pub fn accessibility(app: &mut WordApp, ui: &mut Ui) {
             if group.is_empty() {
                 continue;
             }
-            let heading = crate::i18n::fmt(tl!(title), &[("n", &group.len().to_string())]);
+            let heading = crate::i18n::fmt(&tl!(title), &[("n", &group.len().to_string())]);
             egui::CollapsingHeader::new(egui::RichText::new(heading).font(semibold(13.0))).id_salt(("a11y", kind)).default_open(true).show(
                 ui,
                 |ui| {

@@ -370,11 +370,11 @@ fn table_tabs_stay_clickable_when_the_tab_strip_overflows() {
         app,
     );
     h.run_steps(3);
-    let buttons = [tl!("Comments"), tl!("Editing")].map(|b| h.get_by_label(b).rect());
+    let buttons = [tl!("Comments"), tl!("Editing")].map(|b| h.get_by_label(b.as_ref()).rect());
     for tab in ["Table Design", "Table Layout"] {
-        let r = h.get_by_label(tl!(tab)).rect();
+        let r = h.get_by_label(tl!(tab).as_ref()).rect();
         assert!(r.right() <= 1280.0 && buttons.iter().all(|b| !b.intersects(r)), "{tab} {r:?} under {buttons:?}");
-        h.get_by_label(tl!(tab)).click();
+        h.get_by_label(tl!(tab).as_ref()).click();
         h.run_steps(2);
         assert_eq!(h.state().ui.tab, tab);
     }
@@ -410,11 +410,11 @@ fn tab_strip_never_overlaps_the_right_buttons() {
             for tab in crate::ribbon::TABS.iter().copied().chain(["Table Design", "Table Layout"]) {
                 // A group folded into a button can share the tab's name (Draw): only the node on
                 // the strip is the tab.
-                let Some(r) = h.query_all_by_label(tl!(tab)).map(|n| n.rect()).find(|r| r.top() <= 40.0) else { continue };
+                let Some(r) = h.query_all_by_label(tl!(tab).as_ref()).map(|n| n.rect()).find(|r| r.top() <= 40.0) else { continue };
                 assert!(r.right() <= width + 0.5, "{lang} {width}: {tab} {r:?} past the window");
                 assert!(buttons.iter().all(|b| !b.intersects(r)), "{lang} {width}: {tab} {r:?} under {buttons:?}");
             }
-            assert!(h.query_by_label(tl!("File")).is_some(), "{lang} {width}: File stays on the strip");
+            assert!(h.query_by_label(tl!("File").as_ref()).is_some(), "{lang} {width}: File stays on the strip");
         }
     }
 }
@@ -469,12 +469,14 @@ fn the_tab_strip_buttons_have_names() {
         app,
     );
     h.run_steps(3);
-    h.get_by_role_and_label(egui::accesskit::Role::Button, tl!("Share"));
-    let more = h.get_by_role_and_label(egui::accesskit::Role::Button, tl!("More tabs"));
+    let share_label = tl!("Share");
+    let more_label = tl!("More tabs");
+    h.get_by_role_and_label(egui::accesskit::Role::Button, share_label.as_ref());
+    let more = h.get_by_role_and_label(egui::accesskit::Role::Button, more_label.as_ref());
     more.click();
     h.run_steps(2);
     // The menu lists a tab that didn't fit (View is among the last on a narrow strip).
-    assert!(h.query_by_label(tl!("View")).is_some(), "the » menu lists the tabs left out");
+    assert!(h.query_by_label(tl!("View").as_ref()).is_some(), "the » menu lists the tabs left out");
 }
 
 #[test]

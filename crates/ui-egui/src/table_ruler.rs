@@ -57,8 +57,8 @@ fn grip(app: &mut WordApp, ui: &Ui, layout: &DocLayout, zone: Rect, column: bool
         ("ruler_row", tl!("Table Row Height"), egui::CursorIcon::ResizeRow)
     };
     let r = ui.interact(zone, ui.scope_id().with((name, i)), Sense::drag()).on_hover_cursor(cursor);
-    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Splitter, true, label));
-    let r = if r.dragged() { r } else { r.on_hover_text(label) };
+    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Splitter, true, label.as_ref()));
+    let r = if r.dragged() { r } else { r.on_hover_text(label.as_ref()) };
     if r.drag_started() {
         crate::table_resize::grab(app, layout, at.0, at.1, at.2);
     }

@@ -163,7 +163,7 @@ pub fn customize_ribbon(app: &mut WordApp, ui: &mut Ui, f: &mut RibbonForm) -> b
         if ui.add_enabled(custom, egui::Button::new(tl!("Reset…"))).clicked() {
             f.confirm_reset = true;
         }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.with_layout(crate::i18n::trailing_layout(egui::Align::Center), |ui| {
             if ui.button(tl!("Close")).clicked() {
                 close = true;
             }

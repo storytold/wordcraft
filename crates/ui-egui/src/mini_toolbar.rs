@@ -269,7 +269,7 @@ fn content(app: &mut WordApp, ui: &mut egui::Ui, t: &Tokens) {
             st.get("size").and_then(Value::as_f64).map(|s| if s.fract() == 0.0 { format!("{s:.0}") } else { s.to_string() }).unwrap_or_default();
         let sizes: Vec<String> =
             wordcraft_engine::cmd::format::SIZES.iter().map(|s| if s.fract() == 0.0 { format!("{s:.0}") } else { s.to_string() }).collect();
-        if let Some(v) = widgets::combo_hint(ui, "mini_size", COMBO_SIZE_W, &size, &sizes, None, tl!("Font Size"))
+        if let Some(v) = widgets::combo_hint(ui, "mini_size", COMBO_SIZE_W, &size, &sizes, None, &tl!("Font Size"))
             && let Ok(x) = v.trim().parse::<f64>()
         {
             let _ = app.run("format.size", json!({"size": x}));

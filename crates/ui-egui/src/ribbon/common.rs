@@ -82,9 +82,9 @@ pub(crate) fn size_menu(ui: &mut Ui, app: &mut WordApp) {
         // Paper names are the industry's (Letter, A4, B5 (JIS)) and stay as they are; the
         // envelopes say what they are. Sizes in the measurement unit, written the region's
         // way (`21 cm × 29,7 cm`, #838).
-        let name = if n.starts_with("Envelope ") { tl!(n) } else { n };
+        let name = if n.starts_with("Envelope ") { tl!(n) } else { std::borrow::Cow::Borrowed(*n) };
         let (width, height) = (crate::options::length(*w), crate::options::length(*h));
-        let label = crate::i18n::fmt(tl!("{paper}   {width} × {height}"), &[("paper", name), ("width", &width), ("height", &height)]);
+        let label = crate::i18n::fmt(&tl!("{paper}   {width} × {height}"), &[("paper", name.as_ref()), ("width", &width), ("height", &height)]);
         mi_check(ui, app, &label, current == Some(*n), "layout.size", json!({"name": n}));
     }
     ui.separator();
@@ -92,14 +92,14 @@ pub(crate) fn size_menu(ui: &mut Ui, app: &mut WordApp) {
 }
 
 pub(crate) fn mi(ui: &mut Ui, app: &mut WordApp, label: &str, id: &str, params: Value) {
-    mi_text(ui, app, tl!(label), id, params);
+    mi_text(ui, app, &tl!(label), id, params);
 }
 
 /// [`mi`] with a drawn icon before the label.
 pub(super) fn mi_icon(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, params: Value) {
     let sc = crate::widgets::shortcut_text(app, id);
     let enabled = crate::widgets::enabled(app, id);
-    let resp = ui.add_enabled_ui(enabled, |ui| crate::widgets::icon_menu_item(ui, icon, tl!(label), &sc, 200.0)).inner;
+    let resp = ui.add_enabled_ui(enabled, |ui| crate::widgets::icon_menu_item(ui, icon, &tl!(label), &sc, 200.0)).inner;
     if resp.clicked() {
         crate::widgets::run_from_ribbon(app, id, params);
         ui.close();

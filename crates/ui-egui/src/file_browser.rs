@@ -340,10 +340,10 @@ fn body(ui: &mut Ui, b: &mut FileBrowser, t: &Tokens) -> Option<Option<PathBuf>>
     }
     let mut location_done = false;
     ui.horizontal(|ui| {
-        if icon_button(ui, t, "chevronUp", tl!("Up one level"), b.dir.parent().is_some()) {
+        if icon_button(ui, t, "chevronUp", &tl!("Up one level"), b.dir.parent().is_some()) {
             b.up();
         }
-        if icon_button(ui, t, "homeFolder", tl!("Home folder"), true)
+        if icon_button(ui, t, "homeFolder", &tl!("Home folder"), true)
             && let Some(h) = home()
         {
             b.navigate(h);
@@ -409,14 +409,14 @@ fn body(ui: &mut Ui, b: &mut FileBrowser, t: &Tokens) -> Option<Option<PathBuf>>
         b.navigate(dir);
     }
     let message = match (&b.listing, &b.note) {
-        (_, Note::NotFound(name)) => Some((crate::i18n::fmt(tl!("{name} wasn't found."), &[("name", name)]), t.red)),
+        (_, Note::NotFound(name)) => Some((crate::i18n::fmt(&tl!("{name} wasn't found."), &[("name", name)]), t.red)),
         (_, Note::Replace(p)) => {
             let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            Some((crate::i18n::fmt(tl!("{name} already exists. Choose Save again to replace it."), &[("name", &name)]), t.red))
+            Some((crate::i18n::fmt(&tl!("{name} already exists. Choose Save again to replace it."), &[("name", &name)]), t.red))
         }
-        (Err(e), _) => Some((crate::i18n::fmt(tl!("This folder can't be read: {error}"), &[("error", e)]), t.red)),
+        (Err(e), _) => Some((crate::i18n::fmt(&tl!("This folder can't be read: {error}"), &[("error", e)]), t.red)),
         (Ok(l), _) if l.truncated => {
-            Some((crate::i18n::fmt(tl!("Showing the first {count} items."), &[("count", &l.entries.len().to_string())]), t.text_dim))
+            Some((crate::i18n::fmt(&tl!("Showing the first {count} items."), &[("count", &l.entries.len().to_string())]), t.text_dim))
         }
         _ => None,
     };
@@ -459,9 +459,9 @@ fn body(ui: &mut Ui, b: &mut FileBrowser, t: &Tokens) -> Option<Option<PathBuf>>
     let mut cancel = ui.input(|i| i.key_pressed(egui::Key::Escape));
     let enter = !location_done && ui.input(|i| i.key_pressed(egui::Key::Enter));
     ui.horizontal(|ui| {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.with_layout(crate::i18n::trailing_layout(egui::Align::Center), |ui| {
             let (ok, cancelb) =
-                crate::dialogs::ok_cancel_responses(ui, |ui| ui.add(crate::widgets::primary_button(ui, tl!(b.ok_label()))), tl!("Cancel"));
+                crate::dialogs::ok_cancel_responses(ui, |ui| ui.add(crate::widgets::primary_button(ui, tl!(b.ok_label()))), &tl!("Cancel"));
             cancel |= cancelb.clicked();
             pick |= ok.clicked() || enter;
         });

@@ -114,14 +114,14 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
     item(ui, app, "New Comment", "review.newComment", json!({}));
     if !wordcraft_engine::cmd::fields::selected(&app.session).is_empty() {
         ui.separator();
-        item(ui, app, tl!("Update Field"), "references.updateFields", json!({}));
-        item(ui, app, tl!("Edit Field…"), "fields.setCode", json!({}));
-        item(ui, app, tl!("Toggle Field Codes"), "fields.toggleCode", json!({}));
+        item(ui, app, &tl!("Update Field"), "references.updateFields", json!({}));
+        item(ui, app, &tl!("Edit Field…"), "fields.setCode", json!({}));
+        item(ui, app, &tl!("Toggle Field Codes"), "fields.toggleCode", json!({}));
     } else if wordcraft_engine::cmd::references::caret_in_toc(&app.session) {
         // The TOC field sits in the table's heading; its entries are plain paragraphs.
         ui.separator();
-        item(ui, app, tl!("Update Field"), "references.updateToc", json!({}));
-        item(ui, app, tl!("Remove Table of Contents"), "references.removeToc", json!({}));
+        item(ui, app, &tl!("Update Field"), "references.updateToc", json!({}));
+        item(ui, app, &tl!("Remove Table of Contents"), "references.removeToc", json!({}));
     }
     let selected_object = wordcraft_engine::cmd::objects::selected(&app.session).is_some();
     if selected_object || app.session.sel.focus.path.cell().is_some() {

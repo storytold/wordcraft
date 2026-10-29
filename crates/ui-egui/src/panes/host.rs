@@ -55,6 +55,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     route_f6(app, ui.ctx());
     let states: Vec<(Pane, PaneState)> = open.iter().map(|pane| (*pane, pane_state(app, *pane))).collect();
     let out = PaneHost::new(app.window_id(HOST))
+        .rtl(crate::i18n::current().is_rtl())
         .policy(SidePolicy::Columns)
         .f6(false)
         .labels(labels())

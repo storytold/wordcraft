@@ -71,7 +71,7 @@ impl ChartDataForm {
                     None => {
                         let at = self.categories.get(i).filter(|c| !c.is_empty()).cloned().unwrap_or_else(|| (i + 1).to_string());
                         return Err(crate::i18n::fmt(
-                            tl!("“{text}” ({row}, {series}) isn't a number."),
+                            &tl!("“{text}” ({row}, {series}) isn't a number."),
                             &[("text", t), ("row", &at), ("series", name)],
                         ));
                     }
@@ -85,14 +85,14 @@ impl ChartDataForm {
     // Default names become document text (saved and exported), so no isolate marks.
     fn add_row(&mut self) {
         if self.categories.len() < MAX_POINTS {
-            self.categories.push(crate::i18n::fmt_plain(tl!("Category {n}"), &[("n", &(self.categories.len() + 1).to_string())]));
+            self.categories.push(crate::i18n::fmt_plain(&tl!("Category {n}"), &[("n", &(self.categories.len() + 1).to_string())]));
             self.cells.push(vec![String::new(); self.names.len()]);
         }
     }
 
     fn add_series(&mut self) {
         if self.names.len() < MAX_SERIES {
-            self.names.push(crate::i18n::fmt_plain(tl!("Series {n}"), &[("n", &(self.names.len() + 1).to_string())]));
+            self.names.push(crate::i18n::fmt_plain(&tl!("Series {n}"), &[("n", &(self.names.len() + 1).to_string())]));
             for r in &mut self.cells {
                 r.push(String::new());
             }
@@ -236,7 +236,7 @@ pub fn type_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ChartTypeForm) -> bool {
             }
         }
     });
-    let (ok, cancel) = crate::dialogs::buttons(ui, tl!("OK"));
+    let (ok, cancel) = crate::dialogs::buttons(ui, &tl!("OK"));
     let Some(kind) = chosen.or(ok.then_some(f.kind)) else { return cancel };
     let r = if f.change { app.run("chart.type", json!({"type": kind.id()})) } else { app.run("insert.chart", json!({"type": kind.id()})) };
     r.is_ok() || cancel
@@ -324,7 +324,7 @@ pub fn data_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ChartDataForm) -> bool {
     if !f.message.is_empty() {
         ui.label(egui::RichText::new(f.message.as_str()).color(Tokens::get(ui.ctx()).red));
     }
-    let (ok, cancel) = crate::dialogs::buttons(ui, tl!("OK"));
+    let (ok, cancel) = crate::dialogs::buttons(ui, &tl!("OK"));
     if !ok {
         return cancel;
     }

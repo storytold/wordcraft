@@ -862,7 +862,7 @@ fn legacy_hint(app: &WordApp, ui: &Ui, tabs: Option<Rect>) {
     let tabs = legacy_hint_anchor(tabs, ui.ctx().content_rect());
     let t = Tokens::get(ui.ctx());
     let keys: Vec<String> = app.ui.keytip_prefix.chars().map(String::from).collect();
-    let text = crate::i18n::fmt(tl!("Old menu keys: Alt, {keys}. Keep typing, or press Esc to cancel."), &[("keys", &keys.join(", "))]);
+    let text = crate::i18n::fmt(&tl!("Old menu keys: Alt, {keys}. Keep typing, or press Esc to cancel."), &[("keys", &keys.join(", "))]);
     let font = egui::FontId::proportional(12.0);
     let galley = ui.ctx().fonts_mut(|f| f.layout_no_wrap(text, font, t.text));
     let r = Rect::from_min_size(tabs.left_bottom() + Vec2::new(4.0, 2.0), galley.size() + Vec2::new(16.0, 10.0));

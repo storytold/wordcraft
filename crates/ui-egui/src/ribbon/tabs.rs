@@ -52,7 +52,7 @@ pub(super) fn reading_toolbar(app: &mut WordApp, ui: &mut Ui, t: Tokens) {
                 });
                 ui.separator();
                 let spacing = app.session.view.read_line_spacing;
-                let label = spacing.map_or_else(|| tl!("Document").to_owned(), |v| format!("{v}×"));
+                let label = spacing.map_or_else(|| tl!("Document").into_owned(), |v| format!("{v}×"));
                 ui.menu_button(format!("{}: {}", tl!("Line spacing"), label), |ui| {
                     if ui.selectable_label(spacing.is_none(), tl!("Document")).clicked() {
                         let _ = app.run("view.readLineSpacing", json!({"value": "document"}));

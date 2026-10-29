@@ -170,7 +170,7 @@ fn describe(prop: &str, v: &Value) -> String {
         other => other,
     };
     let label = tl!(label);
-    let pt = |x: f64| crate::i18n::fmt(tl!("{n} pt"), &[("n", &trim_num(x))]);
+    let pt = |x: f64| crate::i18n::fmt(&tl!("{n} pt"), &[("n", &trim_num(x))]);
     let hex = |c: &Value| -> Option<String> {
         let a = c.as_array()?;
         let ch = |i: usize| a.get(i).and_then(Value::as_u64).unwrap_or(0).min(255);
@@ -178,14 +178,14 @@ fn describe(prop: &str, v: &Value) -> String {
     };
     let value = match (prop, v) {
         (_, Value::Bool(true)) => return label.to_string(),
-        (_, Value::Bool(false)) => return crate::i18n::fmt(tl!("Not {name}"), &[("name", label)]),
+        (_, Value::Bool(false)) => return crate::i18n::fmt(&tl!("Not {name}"), &[("name", label.as_ref())]),
         ("scale", Value::Number(n)) => format!("{}%", trim_num(n.as_f64().unwrap_or(100.0))),
         ("outlineLevel", Value::Number(n)) => match n.as_u64().unwrap_or(9) {
-            l @ 0..=8 => crate::i18n::fmt(tl!("Level {n}"), &[("n", &(l + 1).to_string())]),
+            l @ 0..=8 => crate::i18n::fmt(&tl!("Level {n}"), &[("n", &(l + 1).to_string())]),
             _ => tl!("Body Text").to_string(),
         },
         ("dropCapFont", Value::String(s)) => s.clone(),
-        ("dropCap", Value::Number(n)) => crate::i18n::fmt(tl!("{n} lines"), &[("n", &n.to_string())]),
+        ("dropCap", Value::Number(n)) => crate::i18n::fmt(&tl!("{n} lines"), &[("n", &n.to_string())]),
         (_, Value::Number(n)) => pt(n.as_f64().unwrap_or(0.0)),
         ("align", Value::String(s)) => tl!(match s.as_str() {
             "center" => "Centered",
@@ -201,9 +201,9 @@ fn describe(prop: &str, v: &Value) -> String {
         ("lineSpacing", Value::Object(o)) => {
             let x = o.get("value").and_then(Value::as_f64).unwrap_or(1.0);
             match o.get("rule").and_then(Value::as_str) {
-                Some("atLeast") => crate::i18n::fmt(tl!("At least {n}"), &[("n", &pt(x))]),
-                Some("exactly") => crate::i18n::fmt(tl!("Exactly {n}"), &[("n", &pt(x))]),
-                _ => crate::i18n::fmt(tl!("{n} lines"), &[("n", &trim_num(x))]),
+                Some("atLeast") => crate::i18n::fmt(&tl!("At least {n}"), &[("n", &pt(x))]),
+                Some("exactly") => crate::i18n::fmt(&tl!("Exactly {n}"), &[("n", &pt(x))]),
+                _ => crate::i18n::fmt(&tl!("{n} lines"), &[("n", &trim_num(x))]),
             }
         }
         (_, Value::String(s)) => tl!(&camel_words(s)).to_string(),

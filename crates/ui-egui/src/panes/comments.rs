@@ -3,7 +3,7 @@ use super::{BTreeMap, StoryRef, Stroke, Tokens, Ui, Value, WordApp, json, regula
 /// Draws the Comments pane: New Comment and scrollable comment and reply cards with edit, go-to,
 /// reply, resolve or reopen, and delete actions.
 pub(super) fn comments(app: &mut WordApp, ui: &mut Ui) {
-    if crate::widgets::icon_text_button(ui, "newComment", tl!("New Comment"), regular(12.5)).clicked() {
+    if crate::widgets::icon_text_button(ui, "newComment", &tl!("New Comment"), regular(12.5)).clicked() {
         let _ = app.run("review.newComment", json!({"text": ""}));
     }
     ui.separator();

@@ -24,6 +24,9 @@ impl WordApp {
         if stem.chars().any(wordcraft_fonts::is_cjk) {
             self.want_system_cjk = true;
         }
+        if stem.chars().any(|c| ('\u{0590}'..='\u{05FF}').contains(&c)) {
+            self.want_hebrew_ui = true;
+        }
         let new = theme::faces_for_preedit(&stem, &self.canvas.ime_faces, theme::caption_char_covered, |c| {
             wordcraft_fonts::FontDb::global().fallback_for(c, u32::MAX)
         });
@@ -143,6 +146,25 @@ impl WordApp {
             self.want_system_cjk = true;
         }
         let new = theme::faces_for_preedit(&text, &self.canvas.ime_faces, theme::caption_char_covered, |c| {
+            wordcraft_fonts::FontDb::global().fallback_for(c, u32::MAX)
+        });
+        if !new.is_empty() {
+            self.canvas.ime_faces.extend(new);
+            self.styled = false;
+        }
+    }
+
+    /// The interface faces have no Hebrew. When the UI is Hebrew, or the language list is showing
+    /// עברית, borrow one installed fallback face the way the caption borrows a face for a Hebrew
+    /// file name. Tried once: a machine with no Hebrew font keeps the English faces and does not
+    /// scan again every frame.
+    pub(super) fn ensure_hebrew_ui_font(&mut self, lang: i18n::Lang) {
+        if self.hebrew_ui_checked || !(lang.is_rtl() || self.want_hebrew_ui) {
+            return;
+        }
+        self.hebrew_ui_checked = true;
+        let sample = "אבגדהוזחטיכלמנסעפצקרשת";
+        let new = theme::faces_for_preedit(sample, &self.canvas.ime_faces, theme::caption_char_covered, |c| {
             wordcraft_fonts::FontDb::global().fallback_for(c, u32::MAX)
         });
         if !new.is_empty() {

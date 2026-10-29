@@ -195,7 +195,7 @@ pub(super) fn size_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SizeForm) -> bool 
             if let Some((pw, ph)) = f.pixels {
                 ui.add_space(12.0);
                 let (pw, ph) = (pw.to_string(), ph.to_string());
-                ui.weak(crate::i18n::fmt(tl!("{width} × {height} pixels"), &[("width", &pw), ("height", &ph)]));
+                ui.weak(crate::i18n::fmt(&tl!("{width} × {height} pixels"), &[("width", &pw), ("height", &ph)]));
             }
             ui.add_space(12.0);
             if ui.button(tl!("Reset")).clicked() {

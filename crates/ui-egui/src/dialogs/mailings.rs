@@ -272,7 +272,7 @@ pub(crate) fn recipient_list(
             let visible = hold_rows(fresh, &mut filter.held, editing, rows.len());
             if !filter.find.trim().is_empty() {
                 let count = visible.len().to_string();
-                ui.label(egui::RichText::new(crate::i18n::fmt(tl!("Matches: {count}"), &[("count", &count)])).weak());
+                ui.label(egui::RichText::new(crate::i18n::fmt(&tl!("Matches: {count}"), &[("count", &count)])).weak());
             }
             visible
         })
@@ -318,9 +318,10 @@ pub(crate) fn recipient_list(
                             // Keyed on the record, not its place in the grid: when the view hides
                             // or moves rows, the keyboard can't land in another record (#1576).
                             let field_name = fields.get(j).map_or("", String::as_str);
-                            let cell = ui
-                                .add_sized([CELL_W, ROW_H - 4.0], egui::TextEdit::singleline(c).id_salt(("recipient_cell", r, j)))
-                                .accessible_name(crate::i18n::fmt(tl!("{field}, record {n}"), &[("field", field_name), ("n", &(r + 1).to_string())]));
+                            let cell =
+                                ui.add_sized([CELL_W, ROW_H - 4.0], egui::TextEdit::singleline(c).id_salt(("recipient_cell", r, j))).accessible_name(
+                                    crate::i18n::fmt(&tl!("{field}, record {n}"), &[("field", field_name), ("n", &(r + 1).to_string())]),
+                                );
                             if cell.has_focus() {
                                 focused = Some(cell.id);
                             }
@@ -386,14 +387,14 @@ pub(crate) fn recipient_list(
         let count = order.iter().flatten().count().to_string();
         let total = rows.len().to_string();
         ui.label(
-            egui::RichText::new(crate::i18n::fmt(tl!("{count} of {total} recipients will be merged."), &[("count", &count), ("total", &total)]))
+            egui::RichText::new(crate::i18n::fmt(&tl!("{count} of {total} recipients will be merged."), &[("count", &count), ("total", &total)]))
                 .weak(),
         );
     }
     if !message.is_empty() {
         ui.label(egui::RichText::new(message.as_str()).color(Tokens::get(ui.ctx()).red));
     }
-    let (ok, cancel) = buttons(ui, tl!("OK"));
+    let (ok, cancel) = buttons(ui, &tl!("OK"));
     if !ok {
         return cancel;
     }

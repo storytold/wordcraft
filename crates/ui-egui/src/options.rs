@@ -147,7 +147,7 @@ pub fn page(app: &mut WordApp, ui: &mut Ui) {
                 let label = tl!(pane_label(id));
                 let active = current == id;
                 let (r, resp) = ui.allocate_exact_size(vec2(170.0, 30.0), egui::Sense::click());
-                resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, active, label));
+                resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, active, label.as_ref()));
                 if active {
                     ui.painter().rect_filled(r, 4.0, t.checked);
                 } else if resp.hovered() {
@@ -155,7 +155,13 @@ pub fn page(app: &mut WordApp, ui: &mut Ui) {
                 }
                 let font = if active { semibold(14.0) } else { crate::theme::regular(14.0) };
                 // Long translations stay inside the row; WidgetInfo above keeps the full name.
-                ui.painter().with_clip_rect(r).text(egui::pos2(r.min.x + 12.0, r.center().y), egui::Align2::LEFT_CENTER, label, font, t.text);
+                ui.painter().with_clip_rect(r).text(
+                    egui::pos2(r.min.x + 12.0, r.center().y),
+                    egui::Align2::LEFT_CENTER,
+                    label.as_ref(),
+                    font,
+                    t.text,
+                );
                 if resp.clicked() {
                     app.ui.options_pane = id.to_string();
                 }
@@ -370,17 +376,17 @@ fn dictionaries(app: &mut WordApp, ui: &mut Ui) {
     for (language, file, error) in found {
         let line = match (file, error) {
             (Some(f), Some(e)) => {
-                crate::i18n::fmt(tl!("{language}: {file} (unreadable: {reason})"), &[("language", &language), ("file", &f), ("reason", &e)])
+                crate::i18n::fmt(&tl!("{language}: {file} (unreadable: {reason})"), &[("language", &language), ("file", &f), ("reason", &e)])
             }
-            (Some(f), None) => crate::i18n::fmt(tl!("{language}: {file}"), &[("language", &language), ("file", &f)]),
-            (None, _) => crate::i18n::fmt(tl!("{language}: no dictionary found"), &[("language", &language)]),
+            (Some(f), None) => crate::i18n::fmt(&tl!("{language}: {file}"), &[("language", &language), ("file", &f)]),
+            (None, _) => crate::i18n::fmt(&tl!("{language}: no dictionary found"), &[("language", &language)]),
         };
         ui.add(egui::Label::new(RichText::new(line).small()).truncate());
     }
 }
 
 /// The interface name of a language with a Hunspell dictionary.
-fn language_name(lang: wordcraft_engine::proof::ProofLang) -> &'static str {
+fn language_name(lang: wordcraft_engine::proof::ProofLang) -> std::borrow::Cow<'static, str> {
     use wordcraft_engine::proof::ProofLang;
     match lang {
         ProofLang::Pl => tl!("Polish"),
@@ -396,7 +402,7 @@ fn language_name(lang: wordcraft_engine::proof::ProofLang) -> &'static str {
         ProofLang::Es419 => tl!("Spanish (Latin America)"),
         ProofLang::EsUy => tl!("Spanish (Uruguay)"),
         // English uses its bundled word list; Bulgarian and German have no dictionary yet.
-        ProofLang::En | ProofLang::EnGb | ProofLang::EnCa | ProofLang::Bg | ProofLang::De | ProofLang::Other => "",
+        ProofLang::En | ProofLang::EnGb | ProofLang::EnCa | ProofLang::Bg | ProofLang::De | ProofLang::Other => std::borrow::Cow::Borrowed(""),
     }
 }
 
@@ -479,11 +485,11 @@ fn language(app: &mut WordApp, ui: &mut Ui) {
     let text = if crate::ribbon::caret_no_proof(app) {
         tl!("The text at the insertion point is marked Do not check spelling or grammar.").to_string()
     } else if !crate::ribbon::caret_language_proofed(app) {
-        crate::i18n::fmt(tl!("{language}: WordCraft doesn't check spelling or grammar in this language yet."), &[("language", &lang)])
+        crate::i18n::fmt(&tl!("{language}: WordCraft doesn't check spelling or grammar in this language yet."), &[("language", &lang)])
     } else {
         let unreadable = crate::ribbon::caret_unreadable_dictionary(app);
         crate::chrome::dictionary_problem(&lang, &unreadable, crate::ribbon::caret_missing_dictionary(app))
-            .unwrap_or_else(|| crate::i18n::fmt(tl!("Spelling and grammar are checked in {language}."), &[("language", &lang)]))
+            .unwrap_or_else(|| crate::i18n::fmt(&tl!("Spelling and grammar are checked in {language}."), &[("language", &lang)]))
     };
     ui.label(RichText::new(text).small().weak());
 }
@@ -559,7 +565,7 @@ fn advanced(app: &mut WordApp, ui: &mut Ui) {
         let chosen = app.session.prefs.region.clone();
         let system = &app.session.system_region;
         let system_tag = if system.territory.is_empty() { system.language.clone() } else { format!("{}-{}", system.language, system.territory) };
-        let automatic = crate::i18n::fmt(tl!("Automatic ({region})"), &[("region", system_tag.as_str())]);
+        let automatic = crate::i18n::fmt(&tl!("Automatic ({region})"), &[("region", system_tag.as_str())]);
         let shown = chosen.clone().unwrap_or_else(|| automatic.clone());
         let combo = craft_ui::ComboBox::from_id_salt("options_region").selected_text(shown).width(200.0).show_ui(ui, |ui| {
             if ui.selectable_label(chosen.is_none(), automatic.as_str()).clicked() {
@@ -669,7 +675,7 @@ fn interface_size_picker(app: &mut WordApp, ui: &mut Ui) {
     use crate::theme::InterfaceSize;
     let size = app.ui.interface_size;
     let native = ui.ctx().native_pixels_per_point().unwrap_or(1.0);
-    let auto = crate::i18n::fmt(tl!("Auto ({percent}%)"), &[("percent", &InterfaceSize::AUTO.drawn_percent(native).to_string())]);
+    let auto = crate::i18n::fmt(&tl!("Auto ({percent}%)"), &[("percent", &InterfaceSize::AUTO.drawn_percent(native).to_string())]);
     let selected = size.percent().map_or_else(|| auto.clone(), |pct| format!("{pct}%"));
     ui.horizontal(|ui| {
         let label = ui.label(tl!("Interface size:"));
@@ -721,27 +727,62 @@ fn animations_picker(app: &mut WordApp, ui: &mut Ui) {
     }
 }
 
+/// A language's own name as egui should paint it. `present` leaves a name logical unless the
+/// interface is already right to left — the picker is usually opened from another language.
+/// Only names that contain right-to-left letters are reordered.
+fn language_label(name: &str) -> String {
+    let rtl_letters = name.chars().any(|c| matches!(unicode_bidi::bidi_class(c), unicode_bidi::BidiClass::R | unicode_bidi::BidiClass::AL));
+    if rtl_letters { crate::i18n::visual_for_ui(name) } else { name.to_string() }
+}
+
 /// Interface language: follow the system (the default) or pick one (#8).
 fn language_picker(app: &mut WordApp, ui: &mut Ui) {
     use crate::i18n::{AUTO, Lang};
     // The language names are in their own scripts: fonts for them load from the next frame.
     app.want_system_cjk = true;
+    app.want_hebrew_ui = true;
     let system = crate::i18n::system_lang();
-    let auto_label = crate::i18n::fmt(tl!("Automatic ({language})"), &[("language", system.name())]);
-    let current = if app.ui.language == AUTO { auto_label.clone() } else { Lang::from_pref(&app.ui.language).name().to_string() };
+    let system_name = system.name();
+    let system_visual = language_label(system_name);
+    let auto_label = crate::i18n::fmt(tl!("Automatic ({language})").as_ref(), &[("language", system_visual.as_str())]);
+    // Screen readers get the logical string. `t` is not reordered; the painted label above is.
+    let auto_logical = crate::i18n::fmt(crate::i18n::t("Automatic ({language})"), &[("language", system_name)]);
+    let picked = Lang::from_pref(&app.ui.language);
+    let current_logical = if app.ui.language == AUTO { auto_logical.clone() } else { picked.name().to_string() };
+    let current = if app.ui.language == AUTO { auto_label.clone() } else { language_label(picked.name()) };
     ui.horizontal(|ui| {
         let label = ui.label(tl!("Interface language:"));
-        let combo = craft_ui::ComboBox::from_id_salt("interface_language").selected_text(current).width(220.0).show_ui(ui, |ui| {
-            if ui.selectable_label(app.ui.language == AUTO, auto_label.as_str()).clicked() {
+        let combo = craft_ui::ComboBox::from_id_salt("interface_language").selected_text(current.as_str()).width(220.0).show_ui(ui, |ui| {
+            let auto = ui.selectable_label(app.ui.language == AUTO, auto_label.as_str());
+            if auto_label != auto_logical {
+                ui.ctx().accesskit_node_builder(auto.id, |node| {
+                    node.set_label(auto_logical.clone());
+                });
+            }
+            if auto.clicked() {
                 let _ = app.run("ui.language", json!({"value": AUTO}));
             }
             for lang in Lang::for_picker() {
-                if ui.selectable_label(app.ui.language == lang.code(), lang.name()).clicked() {
+                let logical = lang.name();
+                let visual = language_label(logical);
+                let response = ui.selectable_label(app.ui.language == lang.code(), visual.as_str());
+                if visual != logical {
+                    ui.ctx().accesskit_node_builder(response.id, |node| {
+                        node.set_label(logical.to_owned());
+                    });
+                }
+                if response.clicked() {
                     let _ = app.run("ui.language", json!({"value": lang.code()}));
                 }
             }
         });
+        let combo_id = combo.response.id;
         combo.response.labelled_by(label.id);
+        if current != current_logical {
+            ui.ctx().accesskit_node_builder(combo_id, |node| {
+                node.set_label(current_logical);
+            });
+        }
     });
     ui.label(RichText::new(tl!("Automatic follows your system's language. Menus and commands change; your documents don't.")).small().weak());
 }

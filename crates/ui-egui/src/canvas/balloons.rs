@@ -321,9 +321,10 @@ fn active_balloon(app: &mut WordApp, ui: &mut Ui, painter: &egui::Painter, ballo
     child.add_space(2.0);
     child.horizontal(|ui| {
         let button = |ui: &mut Ui, s: &str| ui.add(egui::Button::new(egui::RichText::new(s).font(small.clone())).small()).clicked();
-        reply = button(ui, tl!("Reply"));
-        resolve = button(ui, if resolved { tl!("Reopen") } else { tl!("Resolve") });
-        delete = button(ui, tl!("Delete"));
+        reply = button(ui, &tl!("Reply"));
+        let resolve_label = if resolved { tl!("Reopen") } else { tl!("Resolve") };
+        resolve = button(ui, resolve_label.as_ref());
+        delete = button(ui, &tl!("Delete"));
     });
     let card = Rect::from_min_max(card.min, pos2(card.max.x, child.min_rect().max.y + 6.0));
     app.canvas.balloon_h = card.height();

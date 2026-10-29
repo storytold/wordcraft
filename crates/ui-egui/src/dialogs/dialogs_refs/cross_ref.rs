@@ -94,7 +94,7 @@ pub(super) fn cross_ref_ui(app: &mut WordApp, ui: &mut Ui, f: &mut CrossRefForm)
             }
         });
     });
-    let (ok, cancel) = buttons(ui, tl!("Insert"));
+    let (ok, cancel) = buttons(ui, &tl!("Insert"));
     if ok && let Some(params) = f.params() {
         if let Err(e) = app.run("insert.crossReference", params) {
             app.status(e);

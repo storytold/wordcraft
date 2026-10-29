@@ -54,11 +54,11 @@ impl CustomPropertiesForm {
         let max_name = wordcraft_engine::cmd::file::MAX_CUSTOM_NAME;
         let name = self.name.trim();
         if name.is_empty() || name.chars().count() > max_name {
-            return Err(crate::i18n::fmt(tl!("Property names are 1–{max} characters."), &[("max", &max_name.to_string())]));
+            return Err(crate::i18n::fmt(&tl!("Property names are 1–{max} characters."), &[("max", &max_name.to_string())]));
         }
         if self.value.len() > wordcraft_engine::cmd::file::MAX_CUSTOM_VALUE {
             let max = wordcraft_engine::cmd::file::MAX_CUSTOM_VALUE;
-            return Err(crate::i18n::fmt(tl!("Property values are at most {max} bytes."), &[("max", &max.to_string())]));
+            return Err(crate::i18n::fmt(&tl!("Property values are at most {max} bytes."), &[("max", &max.to_string())]));
         }
         Ok((name.to_string(), self.value.clone()))
     }
@@ -312,7 +312,7 @@ pub fn table_grid_picker(ui: &mut Ui, app: &mut WordApp) {
     let id = egui::Id::unique("table_picker_hover");
     let hover: (usize, usize) = ui.data(|d| d.get_temp(id)).unwrap_or((0, 0));
     ui.label(if hover.0 > 0 {
-        crate::i18n::fmt(tl!("{cols}×{rows} Table"), &[("cols", &hover.1.to_string()), ("rows", &hover.0.to_string())])
+        crate::i18n::fmt(&tl!("{cols}×{rows} Table"), &[("cols", &hover.1.to_string()), ("rows", &hover.0.to_string())])
     } else {
         tl!("Insert Table").to_string()
     });
@@ -495,7 +495,7 @@ pub(super) fn custom_properties(app: &mut WordApp, ui: &mut Ui, f: &mut CustomPr
         ui.colored_label(ui.visuals().error_fg_color, f.message.as_str());
     }
     ui.label(egui::RichText::new(tl!("Text properties only: Word's number, date and yes-no types aren't offered.")).small().weak());
-    let (ok, cancel) = buttons(ui, tl!("OK"));
+    let (ok, cancel) = buttons(ui, &tl!("OK"));
     if cancel {
         return true;
     }

@@ -244,7 +244,7 @@ pub fn contributors_ui(ui: &mut egui::Ui) {
     });
     let list = sorted(CONTRIBUTORS, v.names, v.key, v.ascending);
     let summary = crate::i18n::fmt(
-        tl!("{contributors} contributors · {commits} commits"),
+        &tl!("{contributors} contributors · {commits} commits"),
         &[("contributors", &list.len().to_string()), ("commits", &group(TOTAL_COMMITS))],
     );
     ui.label(RichText::new(summary).small().weak());

@@ -147,7 +147,7 @@ pub fn note_options(app: &mut WordApp, ui: &mut Ui, f: &mut NoteForm) -> bool {
     let (mut insert, mut apply, mut cancel) = (false, false, false);
     ui.add_space(8.0);
     ui.horizontal(|ui| {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.with_layout(crate::i18n::trailing_layout(egui::Align::Center), |ui| {
             let label = if f.endnote { "Insert Endnote" } else { "Insert Footnote" };
             let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
             if cfg!(target_os = "macos") {

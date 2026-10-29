@@ -221,19 +221,19 @@ impl WordApp {
             }
         }
         let n = added.to_string();
-        let mut msg = if added == 1 { tl!("Added 1 font").to_string() } else { crate::i18n::fmt(tl!("Added {n} fonts"), &[("n", &n)]) };
+        let mut msg = if added == 1 { tl!("Added 1 font").to_string() } else { crate::i18n::fmt(&tl!("Added {n} fonts"), &[("n", &n)]) };
         if !failed.is_empty() {
             let count = failed.len().to_string();
             let mut names = failed.iter().take(3).cloned().collect::<Vec<_>>().join(", ");
             if failed.len() > 3 {
                 let more = (failed.len() - 3).to_string();
-                names = crate::i18n::fmt(tl!("{names} and {n} more"), &[("names", &names), ("n", &more)]);
+                names = crate::i18n::fmt(&tl!("{names} and {n} more"), &[("names", &names), ("n", &more)]);
             }
-            msg = crate::i18n::fmt(tl!("{added}; {count} couldn't be read: {names}"), &[("added", &msg), ("count", &count), ("names", &names)]);
+            msg = crate::i18n::fmt(&tl!("{added}; {count} couldn't be read: {names}"), &[("added", &msg), ("count", &count), ("names", &names)]);
         }
         if skipped > 0 {
             let (n, max) = (skipped.to_string(), MAX_FONTS_PER_PICK.to_string());
-            msg = crate::i18n::fmt(tl!("{added}; {n} skipped (limit {max})"), &[("added", &msg), ("n", &n), ("max", &max)]);
+            msg = crate::i18n::fmt(&tl!("{added}; {n} skipped (limit {max})"), &[("added", &msg), ("n", &n), ("max", &max)]);
         }
         self.status(msg);
         Ok(json!({"added": added, "failed": failed, "skipped": skipped}))
@@ -269,7 +269,7 @@ impl WordApp {
                     let msg = match added {
                         0 => tl!("No new sources in that file").to_string(),
                         1 => tl!("Imported 1 source").to_string(),
-                        n => crate::i18n::fmt(tl!("Imported {n} sources"), &[("n", &n.to_string())]),
+                        n => crate::i18n::fmt(&tl!("Imported {n} sources"), &[("n", &n.to_string())]),
                     };
                     self.status(msg);
                 }
@@ -300,7 +300,7 @@ impl WordApp {
                     self.run("file.saveAs", json!({"path": path}))
                 };
                 if r.is_ok() {
-                    self.status(crate::i18n::fmt(tl!("Exported {path}"), &[("path", &path)]));
+                    self.status(crate::i18n::fmt(&tl!("Exported {path}"), &[("path", &path)]));
                 }
                 r
             }
@@ -310,7 +310,7 @@ impl WordApp {
                 params["path"] = json!(path);
                 let r = self.run("file.printPdf", params);
                 if r.is_ok() {
-                    self.status(crate::i18n::fmt(tl!("Exported {path}"), &[("path", &path)]));
+                    self.status(crate::i18n::fmt(&tl!("Exported {path}"), &[("path", &path)]));
                 }
                 r
             }

@@ -99,7 +99,7 @@ pub fn font_combo(
     items: &[String],
     preview: Option<&dyn Fn(&mut Ui, &str) -> Response>,
 ) -> Option<String> {
-    combo_impl(ui, ComboOptions { id, width, current, items, recent: &[], preview, search: true, tip: tl!("Font") })
+    combo_impl(ui, ComboOptions { id, width, current, items, recent: &[], preview, search: true, tip: &tl!("Font") })
 }
 
 /// [`font_combo`] with the `recent` families (most recent first) in a Recently Used Fonts
@@ -116,7 +116,7 @@ pub fn font_combo_with_recent(
     recent: &[String],
     preview: Option<&dyn Fn(&mut Ui, &str) -> Response>,
 ) -> Option<String> {
-    combo_impl(ui, ComboOptions { id, width, current, items, recent, preview, search: true, tip: tl!("Font") })
+    combo_impl(ui, ComboOptions { id, width, current, items, recent, preview, search: true, tip: &tl!("Font") })
 }
 
 /// [`font_combo_with_recent`] with a hover hint `tip` (already translated).
@@ -301,7 +301,7 @@ fn combo_impl(ui: &mut Ui, options: ComboOptions<'_>) -> Option<String> {
         }
         let (ar, aresp) = ui.allocate_exact_size(vec2(16.0, resp.rect.height()), Sense::click());
         if !tip.is_empty() {
-            let arrow_name = crate::i18n::fmt(tl!("{name} options"), &[("name", tip)]);
+            let arrow_name = crate::i18n::fmt(&tl!("{name} options"), &[("name", tip)]);
             aresp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &arrow_name));
         }
         // It reaches one border width under the field, so the field's right border is the only line
@@ -421,7 +421,7 @@ pub fn combo_list(ui: &mut Ui, width: f32, current: &str, items: &[String], prev
 
 /// A row of a combo's list: a dim section heading nothing picks, or an entry.
 pub(super) enum Row<'a> {
-    Heading(&'a str),
+    Heading(std::borrow::Cow<'static, str>),
     Item(&'a String),
 }
 
@@ -496,7 +496,7 @@ fn draw_rows(ui: &mut Ui, options: RowDrawOptions<'_, '_>) -> Option<String> {
         let it = match row(k) {
             Some(Row::Item(it)) => it,
             Some(Row::Heading(h)) => {
-                heading_row(ui, h, vec2(width + 60.0, row_h), k > 0);
+                heading_row(ui, h.as_ref(), vec2(width + 60.0, row_h), k > 0);
                 continue;
             }
             None => continue,

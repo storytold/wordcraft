@@ -234,7 +234,7 @@ pub fn insert_button(ui: &mut Ui, app: &mut WordApp) {
         t.icon,
         t.accent,
     );
-    crate::widgets::label_line(ui, r.center().x, r.min.y + BIG_LABEL_Y, label, regular(11.5), t.text, true);
+    crate::widgets::label_line(ui, r.center().x, r.min.y + BIG_LABEL_Y, label.as_ref(), regular(11.5), t.text, true);
     if rt.on_hover_text(tl!("Insert a new equation (Alt+=)")).clicked() {
         let _ = app.run("insert.equation", json!({}));
         app.canvas.want_focus = true;

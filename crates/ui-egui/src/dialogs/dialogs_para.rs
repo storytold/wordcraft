@@ -283,7 +283,7 @@ pub fn tabs(app: &mut WordApp, ui: &mut Ui, f: &mut TabsForm) -> bool {
                                         f.set_leader(i, l);
                                         pick = Some(i);
                                     }
-                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    ui.with_layout(crate::i18n::trailing_layout(egui::Align::Center), |ui| {
                                         ui.add_space(10.0); // clear of the scrollbar
                                         if ui.add(egui::Button::new("×").small().frame(false)).on_hover_text(tl!("Clear")).clicked() {
                                             remove = Some(i);
@@ -339,7 +339,7 @@ pub fn tabs(app: &mut WordApp, ui: &mut Ui, f: &mut TabsForm) -> bool {
             ui.label(egui::RichText::new(list).weak());
         });
     });
-    let (ok, cancel) = buttons(ui, tl!("OK"));
+    let (ok, cancel) = buttons(ui, &tl!("OK"));
     if ok && let Some(params) = f.params() {
         let _ = app.run("para.tabs", params);
     }
@@ -592,7 +592,7 @@ pub fn borders(app: &mut WordApp, ui: &mut Ui, f: &mut BordersForm) -> bool {
             });
         }
     }
-    let (ok, cancel) = buttons(ui, tl!("OK"));
+    let (ok, cancel) = buttons(ui, &tl!("OK"));
     if ok {
         f.apply(app);
     }
@@ -641,11 +641,11 @@ fn lines(ui: &mut Ui, id: &str, l: &mut LineForm, theme: &[Rgb], fill: Option<Rg
             color_menu(ui, theme, &mut l.color);
             ui.label(tl!("Width:"));
             craft_ui::ComboBox::from_id_salt((id, "width"))
-                .selected_text(crate::i18n::fmt(tl!("{n} pt"), &[("n", &l.width.to_string())]))
+                .selected_text(crate::i18n::fmt(&tl!("{n} pt"), &[("n", &l.width.to_string())]))
                 .width(120.0)
                 .show_ui(ui, |ui| {
                     for w in WIDTHS {
-                        ui.selectable_value(&mut l.width, w, crate::i18n::fmt(tl!("{n} pt"), &[("n", &w.to_string())]));
+                        ui.selectable_value(&mut l.width, w, crate::i18n::fmt(&tl!("{n} pt"), &[("n", &w.to_string())]));
                     }
                 });
         });

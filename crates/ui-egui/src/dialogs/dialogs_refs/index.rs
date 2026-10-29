@@ -95,7 +95,7 @@ pub(super) fn index_ui(app: &mut WordApp, ui: &mut Ui, f: &mut IndexForm) -> Nex
     if ui.button(tl!("Mark Entry…")).clicked() {
         return go(RefsDialog::MarkEntry(MarkForm::read(app)));
     }
-    let (ok, cancel) = buttons(ui, tl!("OK"));
+    let (ok, cancel) = buttons(ui, &tl!("OK"));
     if ok && let Err(e) = app.run("references.index", f.params()) {
         app.status(e);
     }
@@ -199,7 +199,7 @@ pub(super) fn mark_ui(app: &mut WordApp, ui: &mut Ui, f: &mut MarkForm) -> Next 
             if ui.add_enabled(can, egui::Button::new(tl!("Mark All"))).clicked() {
                 f.message = match app.run("references.markEntry", f.params(true)) {
                     Ok(v) => {
-                        crate::i18n::fmt(tl!("{n} entries marked."), &[("n", &v.get("marked").and_then(Value::as_u64).unwrap_or(0).to_string())])
+                        crate::i18n::fmt(&tl!("{n} entries marked."), &[("n", &v.get("marked").and_then(Value::as_u64).unwrap_or(0).to_string())])
                     }
                     Err(e) => e,
                 };

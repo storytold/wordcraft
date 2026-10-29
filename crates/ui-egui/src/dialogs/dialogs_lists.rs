@@ -214,7 +214,7 @@ pub fn define_list(app: &mut WordApp, ui: &mut Ui, f: &mut ListForm) -> bool {
             ui.label(tl!("Include level number from:"));
             craft_ui::ComboBox::from_id_salt("mll_include").selected_text("").show_ui(ui, |ui| {
                 for k in 0..i {
-                    if ui.selectable_label(false, crate::i18n::fmt(tl!("Level {n}"), &[("n", &(k + 1).to_string())])).clicked() {
+                    if ui.selectable_label(false, crate::i18n::fmt(&tl!("Level {n}"), &[("n", &(k + 1).to_string())])).clicked() {
                         l.text.push_str(&format!("%{}", k + 1));
                     }
                 }
@@ -227,10 +227,10 @@ pub fn define_list(app: &mut WordApp, ui: &mut Ui, f: &mut ListForm) -> bool {
         if i > 0 {
             ui.checkbox(&mut l.restart, tl!("Restart list after:"));
             ui.add_enabled_ui(l.restart, |ui| {
-                let shown = crate::i18n::fmt(tl!("Level {n}"), &[("n", &l.restart_after.clamp(1, i as u8).to_string())]);
+                let shown = crate::i18n::fmt(&tl!("Level {n}"), &[("n", &l.restart_after.clamp(1, i as u8).to_string())]);
                 craft_ui::ComboBox::from_id_salt("mll_restart").selected_text(shown).show_ui(ui, |ui| {
                     for k in 1..=i as u8 {
-                        ui.selectable_value(&mut l.restart_after, k, crate::i18n::fmt(tl!("Level {n}"), &[("n", &k.to_string())]));
+                        ui.selectable_value(&mut l.restart_after, k, crate::i18n::fmt(&tl!("Level {n}"), &[("n", &k.to_string())]));
                     }
                 });
             });
@@ -287,7 +287,7 @@ pub fn define_list(app: &mut WordApp, ui: &mut Ui, f: &mut ListForm) -> bool {
         ui.add_enabled(l.follow == "tab" && l.tab_on, len(&mut l.tab_at, unit));
         ui.end_row();
     });
-    let (ok, cancel) = buttons(ui, tl!("OK"));
+    let (ok, cancel) = buttons(ui, &tl!("OK"));
     if ok && let Err(e) = app.run("list.define", f.params()) {
         app.status(e);
     }
@@ -563,7 +563,7 @@ pub fn track_options(app: &mut WordApp, ui: &mut Ui, f: &mut TrackForm) -> bool 
     });
     ui.add_space(4.0);
     ui.checkbox(&mut f.track_formatting, tl!("Track formatting"));
-    let (ok, cancel) = buttons(ui, tl!("OK"));
+    let (ok, cancel) = buttons(ui, &tl!("OK"));
     if ok && let Err(e) = app.run("review.trackingOptions", f.params()) {
         app.status(e);
     }

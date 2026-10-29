@@ -94,7 +94,7 @@ impl TocForm {
 pub(super) fn toc_ui(app: &mut WordApp, ui: &mut Ui, f: &mut TocForm) -> Next {
     let lines: Vec<(usize, String, String)> = (1..=f.levels.min(3))
         .map(|l| {
-            let name = crate::i18n::fmt(tl!("Heading {n}"), &[("n", &l.to_string())]);
+            let name = crate::i18n::fmt(&tl!("Heading {n}"), &[("n", &l.to_string())]);
             (l as usize - 1, name, if f.page_numbers { (l * 2 - 1).to_string() } else { String::new() })
         })
         .collect();
@@ -129,7 +129,7 @@ pub(super) fn toc_ui(app: &mut WordApp, ui: &mut Ui, f: &mut TocForm) -> Next {
     if let Some(g) = then {
         return go(g);
     }
-    let (ok, cancel) = buttons(ui, tl!("OK"));
+    let (ok, cancel) = buttons(ui, &tl!("OK"));
     if ok && let Err(e) = app.run("references.toc", f.params()) {
         app.status(e);
     }
@@ -140,7 +140,7 @@ pub(super) fn toc_ui(app: &mut WordApp, ui: &mut Ui, f: &mut TocForm) -> Next {
 /// fields, with Reset. OK returns the edited form and Cancel the original.
 pub(super) fn toc_options_ui(app: &mut WordApp, ui: &mut Ui, f: &mut TocForm, was: &TocForm) -> Next {
     heading(ui, "Collect entries from:");
-    ui.checkbox(&mut f.heading_styles, crate::i18n::fmt(tl!("Heading styles (levels 1–{n})"), &[("n", &f.levels.to_string())]));
+    ui.checkbox(&mut f.heading_styles, crate::i18n::fmt(&tl!("Heading styles (levels 1–{n})"), &[("n", &f.levels.to_string())]));
     ui.label(tl!("Other styles and their TOC level:"));
     // A solid scroll bar takes its own room beside the list instead of floating over the level boxes.
     ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
@@ -167,7 +167,7 @@ pub(super) fn toc_options_ui(app: &mut WordApp, ui: &mut Ui, f: &mut TocForm, wa
             *l = 0;
         }
     }
-    let (ok, cancel) = buttons(ui, tl!("OK"));
+    let (ok, cancel) = buttons(ui, &tl!("OK"));
     if ok {
         return go(RefsDialog::Toc(f.clone()));
     }
@@ -197,7 +197,7 @@ pub(super) fn toc_styles_ui(app: &mut WordApp, ui: &mut Ui, f: &mut TocForm, lev
         app.dialog = Some(d);
         return Next::Close;
     }
-    let (ok, cancel) = buttons(ui, tl!("OK"));
+    let (ok, cancel) = buttons(ui, &tl!("OK"));
     if ok || cancel { go(RefsDialog::Toc(f.clone())) } else { Next::Stay }
 }
 
@@ -276,7 +276,7 @@ pub(super) fn figures_ui(app: &mut WordApp, ui: &mut Ui, f: &mut FiguresForm) ->
         });
     });
     ui.add_space(4.0);
-    let (ok, cancel) = buttons(ui, tl!("OK"));
+    let (ok, cancel) = buttons(ui, &tl!("OK"));
     if ok && let Err(e) = app.run("references.tableOfFigures", f.params()) {
         app.status(e);
     }

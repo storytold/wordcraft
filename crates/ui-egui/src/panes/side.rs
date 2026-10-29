@@ -53,7 +53,7 @@ pub(super) fn styles(app: &mut WordApp, ui: &mut Ui) {
         .get(&cur)
         .map(crate::i18n::style_name)
         .unwrap_or_else(|| st.get("styleName").and_then(Value::as_str).unwrap_or("").to_string());
-    ui.label(egui::RichText::new(crate::i18n::fmt(tl!("Current style: {style}"), &[("style", &current_name)])).small());
+    ui.label(egui::RichText::new(crate::i18n::fmt(&tl!("Current style: {style}"), &[("style", &current_name)])).small());
     // Wrapped: the host gives the pane a fixed width, and the row is wider than its default.
     ui.horizontal_wrapped(|ui| {
         if ui.button(tl!("New Style…")).clicked() {

@@ -123,10 +123,10 @@ fn describe(st: &Value) -> String {
         parts.push(tl!("Built-in style").to_string());
     }
     if let Some(x) = fs("font") {
-        parts.push(crate::i18n::fmt(tl!("Font: {font}"), &[("font", x)]));
+        parts.push(crate::i18n::fmt(&tl!("Font: {font}"), &[("font", x)]));
     }
     if let Some(x) = fnum("size") {
-        parts.push(crate::i18n::fmt(tl!("{size} pt"), &[("size", &pt(x))]));
+        parts.push(crate::i18n::fmt(&tl!("{size} pt"), &[("size", &pt(x))]));
     }
     if f.get("bold").and_then(Value::as_bool) == Some(true) {
         parts.push(tl!("Bold").to_string());
@@ -135,16 +135,16 @@ fn describe(st: &Value) -> String {
         parts.push(tl!("Italic").to_string());
     }
     if let Some(x) = fs("color") {
-        parts.push(crate::i18n::fmt(tl!("Color: {color}"), &[("color", &format!("#{x}"))]));
+        parts.push(crate::i18n::fmt(&tl!("Color: {color}"), &[("color", &format!("#{x}"))]));
     }
     if let Some(x) = fnum("spaceBefore") {
-        parts.push(crate::i18n::fmt(tl!("Space before: {pt} pt"), &[("pt", &pt(x))]));
+        parts.push(crate::i18n::fmt(&tl!("Space before: {pt} pt"), &[("pt", &pt(x))]));
     }
     if let Some(x) = fnum("spaceAfter") {
-        parts.push(crate::i18n::fmt(tl!("Space after: {pt} pt"), &[("pt", &pt(x))]));
+        parts.push(crate::i18n::fmt(&tl!("Space after: {pt} pt"), &[("pt", &pt(x))]));
     }
     if let Some(b) = st.get("basedOn").and_then(Value::as_str) {
-        parts.push(crate::i18n::fmt(tl!("Based on: {style}"), &[("style", b)]));
+        parts.push(crate::i18n::fmt(&tl!("Based on: {style}"), &[("style", b)]));
     }
     parts.join(", ")
 }

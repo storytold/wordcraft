@@ -5,11 +5,12 @@
 //! the menus, ribbon, shortcuts, control channel and MCP all reach the same behaviour.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-/// An English UI string in the current interface language ([`i18n::t`]).
+/// An English UI string in the current interface language, reordered for a right-to-left interface
+/// ([`i18n::present`]).
 #[macro_export]
 macro_rules! tl {
     ($s:expr) => {
-        $crate::i18n::t($s)
+        $crate::i18n::present($crate::i18n::t($s))
     };
 }
 
@@ -518,6 +519,11 @@ pub struct WordApp {
     /// CJK text is (about to be) on screen in a non-CJK interface, e.g. the language names in
     /// File ▸ Options: load the installed CJK fallback font if no embedded face covers it.
     pub(crate) want_system_cjk: bool,
+    /// Hebrew interface text, or the language list, is on screen. The bundled UI faces have no
+    /// Hebrew, so one installed fallback face is borrowed into the UI fonts.
+    pub(crate) want_hebrew_ui: bool,
+    /// The Hebrew UI fallback was looked up once, so a machine without that font does not rescan.
+    hebrew_ui_checked: bool,
     /// The document (id, revision) whose comment text [`WordApp::ensure_comment_fonts`] last
     /// looked at.
     comment_fonts_for: Option<(u64, u64)>,

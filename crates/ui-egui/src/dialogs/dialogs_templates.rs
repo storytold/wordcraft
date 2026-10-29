@@ -80,7 +80,7 @@ pub fn templates(app: &mut WordApp, ui: &mut Ui, f: &mut TemplatesForm) -> bool 
     if !f.message.is_empty() {
         ui.add(egui::Label::new(egui::RichText::new(f.message.as_str()).small().color(ui.visuals().error_fg_color)).wrap());
     }
-    let (ok, cancel) = buttons(ui, tl!("OK"));
+    let (ok, cancel) = buttons(ui, &tl!("OK"));
     if organizer {
         let back = TemplatesForm { message: String::new(), ..f.clone() };
         app.dialog = Some(Dialog::Organizer { form: Box::new(OrganizerForm::read(app, Some(back))) });
@@ -254,7 +254,7 @@ pub fn organizer(app: &mut WordApp, ui: &mut Ui, f: &mut OrganizerForm) -> bool 
     ui.add_space(8.0);
     let mut close = ui.input(|i| i.key_pressed(egui::Key::Escape));
     ui.horizontal(|ui| {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.with_layout(crate::i18n::trailing_layout(egui::Align::Center), |ui| {
             close |= ui.add(crate::widgets::primary_button(ui, tl!("Close"))).clicked();
         });
     });

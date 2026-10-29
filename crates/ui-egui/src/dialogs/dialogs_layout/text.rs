@@ -350,7 +350,7 @@ pub(super) fn language_ui(app: &mut WordApp, ui: &mut Ui, f: &mut LanguageForm) 
     ui.add_space(4.0);
     let set_default = ui.button(tl!("Set As Default")).clicked();
     if set_default && run(app, "review.language", json!({"lang": f.lang, "default": true, "detect": f.detect})) {
-        app.status(crate::i18n::fmt(tl!("{language} is now the document's default language."), &[("language", &language_name(&f.lang))]));
+        app.status(crate::i18n::fmt(&tl!("{language} is now the document's default language."), &[("language", &language_name(&f.lang))]));
     }
     let (ok, cancel) = buttons(ui, "OK", true);
     if ok {

@@ -114,6 +114,8 @@ impl WordApp {
             fonts_korean: false,
             fonts_system_cjk: false,
             want_system_cjk: false,
+            want_hebrew_ui: false,
+            hebrew_ui_checked: false,
             recover_fonts_for: None,
             recent_fonts_for: Vec::new(),
             fonts_frames: 0,
@@ -240,6 +242,7 @@ impl WordApp {
         // language names in Options, or a file name the caption is drawing. A file opened later
         // in this frame (dialog, drop, control channel) is picked up again at the end.
         self.ensure_caption_fonts();
+        self.ensure_hebrew_ui_font(lang);
         self.ensure_comment_fonts();
         self.ensure_recover_fonts();
         self.ensure_recent_fonts();
@@ -344,6 +347,7 @@ impl WordApp {
         }
         // The open above may have changed the file name the caption draws.
         self.ensure_caption_fonts();
+        self.ensure_hebrew_ui_font(lang);
         self.ensure_comment_fonts();
         self.ensure_recover_fonts();
         self.ensure_recent_fonts();
@@ -383,6 +387,7 @@ impl WordApp {
         // The drawn window's caption, comments and Find results borrow faces it may not have.
         if self.windows.native() {
             self.ensure_caption_fonts();
+            self.ensure_hebrew_ui_font(i18n::current());
             self.ensure_comment_fonts();
             self.ensure_find_fonts();
         }

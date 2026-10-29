@@ -140,7 +140,7 @@ pub(super) fn caption_ui(app: &mut WordApp, ui: &mut Ui, f: &mut CaptionForm) ->
     if let Some(g) = then {
         return go(g);
     }
-    let (ok, cancel) = buttons(ui, tl!("OK"));
+    let (ok, cancel) = buttons(ui, &tl!("OK"));
     if ok && let Err(e) = f.insert(app) {
         app.status(e);
     }
@@ -160,7 +160,7 @@ pub(super) fn numbering_ui(ui: &mut Ui, f: &mut CaptionForm, was: &CaptionForm) 
     ui.add_enabled_ui(f.chapter, |ui| {
         egui::Grid::new("cap_chap").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
             let chapter_label = ui.label(tl!("Chapters begin at:"));
-            let opts: Vec<(u8, String)> = (1..=9u8).map(|l| (l, crate::i18n::fmt(tl!("Heading {n}"), &[("n", &l.to_string())]))).collect();
+            let opts: Vec<(u8, String)> = (1..=9u8).map(|l| (l, crate::i18n::fmt(&tl!("Heading {n}"), &[("n", &l.to_string())]))).collect();
             let shown = opts.iter().find(|(l, _)| *l == f.chapter_level).map(|(_, s)| s.clone()).unwrap_or_default();
             let combo = craft_ui::ComboBox::from_id_salt("cap_level").selected_text(shown).width(150.0).show_ui(ui, |ui| {
                 for (l, s) in &opts {
@@ -176,8 +176,8 @@ pub(super) fn numbering_ui(ui: &mut Ui, f: &mut CaptionForm, was: &CaptionForm) 
         });
     });
     ui.add_space(4.0);
-    ui.label(crate::i18n::fmt(tl!("Example: {sample}"), &[("sample", &f.preview())]));
-    let (ok, cancel) = buttons(ui, tl!("OK"));
+    ui.label(crate::i18n::fmt(&tl!("Example: {sample}"), &[("sample", &f.preview())]));
+    let (ok, cancel) = buttons(ui, &tl!("OK"));
     if ok {
         return go(RefsDialog::Caption(f.clone()));
     }
@@ -195,7 +195,7 @@ pub(super) fn new_label_ui(app: &mut WordApp, ui: &mut Ui, f: &mut CaptionForm) 
     if !r.has_focus() {
         r.request_focus();
     }
-    let (ok, cancel) = buttons(ui, tl!("OK"));
+    let (ok, cancel) = buttons(ui, &tl!("OK"));
     let name: String = f.new_label.chars().filter(|c| !matches!(c, '"' | '\\') && !c.is_control()).take(40).collect::<String>().trim().to_string();
     if ok && !name.is_empty() {
         if !f.labels.contains(&name) {

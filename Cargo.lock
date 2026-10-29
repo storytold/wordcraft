@@ -6927,6 +6927,7 @@ dependencies = [
  "serde_json",
  "sys-locale",
  "toml",
+ "unicode-bidi",
  "web-time",
  "wordcraft-doc",
  "wordcraft-engine",

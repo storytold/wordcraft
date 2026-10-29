@@ -129,7 +129,7 @@ pub(super) fn page_valign_combo(ui: &mut egui::Ui, valign: &mut wordcraft_doc::s
         [(PageVAlign::Top, "Top"), (PageVAlign::Center, "Center"), (PageVAlign::Justify, "Justified"), (PageVAlign::Bottom, "Bottom")];
     ui.horizontal(|ui| {
         let label = ui.label(tl!("Vertical alignment:"));
-        let shown = CHOICES.iter().find(|(v, _)| v == valign).map_or("", |(_, l)| tl!(l));
+        let shown = CHOICES.iter().find(|(v, _)| v == valign).map_or_else(|| std::borrow::Cow::Borrowed(""), |(_, l)| tl!(l));
         let combo = craft_ui::ComboBox::from_id_salt("ps_valign").selected_text(shown).show_ui(ui, |ui| {
             for (v, l) in CHOICES {
                 ui.selectable_value(valign, v, tl!(l));

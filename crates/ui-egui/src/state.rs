@@ -61,7 +61,7 @@ impl AutoSaveBlock {
             }
             AutoSaveBlock::Unsaved => tl!("Save the document to turn on AutoSave").to_string(),
             AutoSaveBlock::Format { name } => i18n::fmt(
-                tl!("AutoSave only keeps .docx, .odt and .rtf files; {name} can't keep all formatting. Save as .docx to turn on AutoSave."),
+                &tl!("AutoSave only keeps .docx, .odt and .rtf files; {name} can't keep all formatting. Save as .docx to turn on AutoSave."),
                 &[("name", name)],
             ),
             AutoSaveBlock::NotSavedHere => {

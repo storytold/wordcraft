@@ -176,7 +176,7 @@ impl WordApp {
                 (None, None) => Ok(()),
             };
             if let Err(e) = delivered {
-                let msg = i18n::fmt(tl!("Couldn't download {name}: {error}"), &[("name", &name), ("error", &e)]);
+                let msg = i18n::fmt(&tl!("Couldn't download {name}: {error}"), &[("name", &name), ("error", &e)]);
                 log::error!("download of {name} failed: {e}");
                 self.status(msg.clone());
                 return Err(msg);
@@ -808,7 +808,7 @@ impl WordApp {
             }
             Err(e) => {
                 log::warn!("make default app: {e}");
-                let msg = i18n::fmt(tl!("Couldn't make WordCraft the default: {error}"), &[("error", &e)]);
+                let msg = i18n::fmt(&tl!("Couldn't make WordCraft the default: {error}"), &[("error", &e)]);
                 self.status(msg.clone());
                 Err(msg)
             }
@@ -841,7 +841,7 @@ impl WordApp {
             self.dialog = Some(dialogs::Dialog::SelectTable { sheets, selected: 0, headers: true, message: String::new(), params });
         } else if let Ok(v) = &r {
             let records = v.get("records").and_then(Value::as_u64).unwrap_or(0).to_string();
-            self.status(i18n::fmt(tl!("Recipients: {count}"), &[("count", &records)]));
+            self.status(i18n::fmt(&tl!("Recipients: {count}"), &[("count", &records)]));
         }
         r
     }

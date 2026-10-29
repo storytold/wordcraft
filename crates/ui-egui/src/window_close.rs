@@ -57,8 +57,8 @@ pub(crate) fn show(ctx: &egui::Context, window: &Response, t: &Tokens) -> bool {
     // Pointer-only, like a caption button: Tab never lands on it.
     let r = ui.interact(rect, id.with("hit"), Sense::CLICK | Sense::DRAG);
     let label = tl!("Close");
-    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
-    let r = r.on_hover_text(label);
+    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label.as_ref()));
+    let r = r.on_hover_text(label.as_ref());
     let down = r.is_pointer_button_down_on() && r.contains_pointer();
     let hot = down || r.hovered();
     let painter = ctx.layer_painter(window.layer_id);

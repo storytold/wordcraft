@@ -22,7 +22,9 @@
 //! # Adding a language
 //! 1. craft-i18n gets `locales/<code>/wordcraft.tsv` and the language's `@id language.name` row.
 //! 2. Add one row to [`LANGUAGES`]. Set its `editing_lang` only when `wordcraft-proof` can proof
-//!    the language (Polish: `pl-PL`): new documents are then written in it.
+//!    the language (Polish: `pl-PL`): new documents are then written in it. Hebrew (`he`) is the
+//!    mirrored interface ([`Lang::is_rtl`]); its rows live in craft-i18n
+//!    (`locales/he/wordcraft.tsv`) and the mirrored UI turns on once that catalog is embedded.
 //!
 //! The Options dropdown and the system-language match pick it up from there.
 //!
@@ -34,6 +36,7 @@
 //! - [`fmt`]: fill `{name}` placeholders after a lookup; translators may reorder them.
 //! - [`fmt_plain`]: [`fmt`] without bidi isolate marks, for text that goes into the document.
 
+use std::borrow::Cow;
 use std::cell::Cell;
 use std::sync::{LazyLock, OnceLock};
 
@@ -69,8 +72,9 @@ pub struct LangInfo {
 }
 
 /// The languages WordCraft offers, when their catalogs are embedded. English first: it is the
-/// fallback and the source language.
-pub static LANGUAGES: [LangInfo; 27] = [
+/// fallback and the source language. Hebrew is listed so a craft-i18n `he` catalog turns the
+/// mirrored interface on; until that catalog is in the pinned revision it is not offered.
+pub static LANGUAGES: [LangInfo; 28] = [
     LangInfo { code: "en", prefer_hans: false, editing_lang: None },
     // Simplified Chinese; `zh`, `zh-CN`, `zh-SG` and `zh-Hans-*` resolve here (the crate's matching).
     LangInfo { code: "zh-hans", prefer_hans: true, editing_lang: None },
@@ -126,6 +130,9 @@ pub static LANGUAGES: [LangInfo; 27] = [
     LangInfo { code: "ro", prefer_hans: false, editing_lang: None },
     // Slovenian; `sl`, `sl-SI` and `sl_SI.UTF-8` resolve here.
     LangInfo { code: "sl", prefer_hans: false, editing_lang: None },
+    // Hebrew; `he`, `he-IL` and `he_IL.UTF-8` resolve here once `locales/he` is embedded.
+    // The interface is mirrored.
+    LangInfo { code: "he", prefer_hans: false, editing_lang: None },
 ];
 
 /// A language the UI can be shown in: English, or an offered language whose catalogs are embedded.
@@ -182,6 +189,12 @@ impl Lang {
     /// The language new blank documents are written in with this interface ([`LangInfo::editing_lang`]).
     pub fn editing_lang(self) -> Option<&'static str> {
         self.info().and_then(|l| l.editing_lang)
+    }
+
+    /// A mirrored interface: Hebrew. Rows pack from the right, and Hebrew text is reordered for
+    /// egui, which places glyphs left to right.
+    pub fn is_rtl(self) -> bool {
+        self.code() == "he"
     }
 
     /// Is the interface written in CJK script (its own name is), so it needs a CJK face?
@@ -384,11 +397,171 @@ pub fn tr(lang: Lang, s: &str) -> &str {
     lang.i18n().t(lang.lang, s)
 }
 
+/// Does `s` contain a strong right-to-left letter?
+fn contains_rtl(s: &str) -> bool {
+    s.chars().any(|c| matches!(unicode_bidi::bidi_class(c), unicode_bidi::BidiClass::R | unicode_bidi::BidiClass::AL))
+}
+
+/// Bracket `c` as drawn in a right-to-left run. egui paints the character it is given.
+fn mirror_bracket(c: char) -> char {
+    match c {
+        '(' => ')',
+        ')' => '(',
+        '[' => ']',
+        ']' => '[',
+        // `{` `}` stay: catalog placeholders are `{name}`, and reversing a brace would hide it from `fmt`.
+        '<' => '>',
+        '>' => '<',
+        '«' => '»',
+        '»' => '«',
+        '‹' => '›',
+        '›' => '‹',
+        _ => c,
+    }
+}
+
+/// Keep `{name}` together as left-to-right text. A brace is direction-neutral, so an right-to-left
+/// paragraph would otherwise peel it off the name and `fmt` could no longer see `{page}`.
+fn protect_placeholders(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some((before, after_open)) = rest.split_once('{') {
+        out.push_str(before);
+        if let Some((name, after)) = after_open.split_once('}')
+            && !name.is_empty()
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            out.push('\u{202A}');
+            out.push('{');
+            out.push_str(name);
+            out.push('}');
+            out.push('\u{202C}');
+            rest = after;
+            continue;
+        }
+        out.push('{');
+        rest = after_open;
+    }
+    out.push_str(rest);
+    out
+}
+
+/// `text` in the order egui should paint when the interface is right to left. egui lays glyphs
+/// out left to right and does not run the bidi algorithm, so each right-to-left run is reversed
+/// (and its brackets mirrored) while left-to-right runs, including `{placeholders}`, stay put.
+pub fn visual_for_ui(text: &str) -> String {
+    let protected = protect_placeholders(text);
+    let mut out = String::with_capacity(protected.len());
+    for para in protected.split_inclusive('\n') {
+        let (body, nl) = match para.strip_suffix('\n') {
+            Some(body) => (body, true),
+            None => (para, false),
+        };
+        if !body.is_empty() {
+            let info = unicode_bidi::BidiInfo::new(body, Some(unicode_bidi::Level::rtl()));
+            if let Some(p) = info.paragraphs.first() {
+                let (levels, runs) = info.visual_runs(p, p.range.clone());
+                for run in runs {
+                    let rtl = levels.get(run.start).is_some_and(|level| level.is_rtl());
+                    let Some(piece) = body.get(run) else { continue };
+                    if rtl {
+                        out.extend(piece.chars().rev().map(mirror_bracket));
+                    } else {
+                        out.push_str(piece);
+                    }
+                }
+            } else {
+                out.push_str(body);
+            }
+        }
+        if nl {
+            out.push('\n');
+        }
+    }
+    out.retain(|c| c != '\u{202A}' && c != '\u{202C}');
+    out
+}
+
+/// `s` as egui should paint it. Left-to-right interfaces borrow `s`. A right-to-left interface
+/// returns an owned reordering; the caller drops it, and the lookup cache does too when it is full.
+pub fn present(s: &str) -> Cow<'_, str> {
+    #[cfg(test)]
+    if pseudo::on() {
+        return Cow::Borrowed(s);
+    }
+    if !current().is_rtl() || !contains_rtl(s) {
+        return Cow::Borrowed(s);
+    }
+    Cow::Owned(cached_visual(s))
+}
+
+/// Reordered strings for labels drawn every frame. Entries are owned and dropped when the cache
+/// is full, so a document with many distinct right-to-left names cannot grow this without bound.
+const VISUAL_CACHE_MAX_ENTRIES: usize = 8192;
+const VISUAL_CACHE_MAX_BYTES: usize = 512 * 1024;
+
+struct VisualCache {
+    map: std::collections::HashMap<String, String>,
+    bytes: usize,
+}
+
+static VISUAL_CACHE: std::sync::LazyLock<std::sync::Mutex<VisualCache>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(VisualCache { map: std::collections::HashMap::new(), bytes: 0 }));
+
+fn cached_visual(logical: &str) -> String {
+    let guard = VISUAL_CACHE.lock().unwrap_or_else(|err| err.into_inner());
+    if let Some(found) = guard.map.get(logical) {
+        return found.clone();
+    }
+    drop(guard);
+    let visual = visual_for_ui(logical);
+    let cost = logical.len().saturating_add(visual.len());
+    // One enormous label is painted from the caller's copy and is not kept.
+    if cost > VISUAL_CACHE_MAX_BYTES {
+        return visual;
+    }
+    let mut guard = VISUAL_CACHE.lock().unwrap_or_else(|err| err.into_inner());
+    if let Some(found) = guard.map.get(logical) {
+        return found.clone();
+    }
+    if guard.map.len() >= VISUAL_CACHE_MAX_ENTRIES || guard.bytes.saturating_add(cost) > VISUAL_CACHE_MAX_BYTES {
+        guard.map.clear();
+        guard.bytes = 0;
+    }
+    guard.bytes = guard.bytes.saturating_add(cost);
+    guard.map.insert(logical.to_string(), visual.clone());
+    visual
+}
+
+/// [`present`] as an owned string, for text built from more than one lookup.
+pub fn present_owned(s: &str) -> String {
+    present(s).into_owned()
+}
+
+#[cfg(test)]
+pub(crate) fn visual_cache_entries() -> usize {
+    VISUAL_CACHE.lock().unwrap_or_else(|err| err.into_inner()).map.len()
+}
+
+/// Pack a horizontal row toward the trailing edge: the right in a left-to-right interface, the
+/// left when the interface is mirrored. English keeps today's `right_to_left` rows.
+pub fn trailing_layout(valign: egui::Align) -> egui::Layout {
+    if current().is_rtl() { egui::Layout::left_to_right(valign) } else { egui::Layout::right_to_left(valign) }
+}
+
+/// Lay `body` out from the right when the interface is Hebrew. egui 0.36 panels are created
+/// `top_down(Align::Min)` and [`egui::Ui`] has no way to change that layout afterwards, so Hebrew
+/// runs `body` in a child with `Align::Max`. That is what makes [`egui::Ui::horizontal`] pack from
+/// the right. English calls `body` on `ui` directly, so an English frame is unchanged.
+pub fn mirrored<R>(ui: &mut egui::Ui, body: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    if current().is_rtl() { ui.with_layout(egui::Layout::top_down(egui::Align::Max), body).inner } else { body(ui) }
+}
+
 /// A style's name as the interface shows it: built-in styles (`Normal`, `Heading 2`, `TOC 3`) in
 /// the current language, styles the author made exactly as named. Display only: the document,
 /// commands and saved files keep the English name.
 pub fn style_name(style: &wordcraft_doc::Style) -> String {
-    if style.builtin { builtin_style_name(&style.name) } else { style.name.clone() }
+    if style.builtin { builtin_style_name(&style.name) } else { present_owned(&style.name) }
 }
 
 /// A built-in style's English name in the current language; numbered families go through one
@@ -396,31 +569,31 @@ pub fn style_name(style: &wordcraft_doc::Style) -> String {
 pub fn builtin_style_name(name: &str) -> String {
     let direct = t(name);
     if direct != name {
-        return direct.to_string();
+        return present_owned(direct);
     }
     for (prefix, template) in [("Heading ", "Heading {n}"), ("TOC ", "TOC {n}"), ("Index ", "Index {n}")] {
         if let Some(n) = name.strip_prefix(prefix)
             && !n.is_empty()
             && n.chars().all(|c| c.is_ascii_digit())
         {
-            return fmt(t(template), &[("n", n)]);
+            return present_owned(&fmt(t(template), &[("n", n)]));
         }
     }
-    name.to_string()
+    present_owned(name)
 }
 
 /// A ribbon location (`Home › Font`) in the current language, segment by segment.
 pub fn location(loc: &str) -> String {
-    loc.split(" › ").map(t).collect::<Vec<_>>().join(" › ")
+    present_owned(&loc.split(" › ").map(t).collect::<Vec<_>>().join(" › "))
 }
 
 /// A label with an action after a fixed English prefix, e.g. `Undo Typing`: both parts translated
 /// where the catalog has them.
 pub fn prefixed(prefix: &str, rest: &str) -> String {
     if rest.is_empty() {
-        return t(prefix).to_string();
+        return present_owned(t(prefix));
     }
-    fmt(t(&format!("{prefix} {{action}}")), &[("action", t(rest))])
+    present_owned(&fmt(t(&format!("{prefix} {{action}}")), &[("action", t(rest))]))
 }
 
 /// A test language whose WordCraft catalog is `source` (catalog format), so tests of lookup code

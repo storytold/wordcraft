@@ -361,7 +361,7 @@ pub fn table_style_preview(ui: &mut Ui, style: Option<&TableStyleProps>, look: T
     for (ri, row) in TEXT.iter().enumerate() {
         for (ci, txt) in row.iter().enumerate() {
             // Sample words in the interface language; numbers as they are.
-            let txt = if txt.chars().any(char::is_alphabetic) { tl!(*txt) } else { *txt };
+            let txt = if txt.chars().any(char::is_alphabetic) { tl!(*txt) } else { std::borrow::Cow::Borrowed(*txt) };
             let cell = Rect::from_min_size(table.min + vec2(ci as f32 * cw, ri as f32 * rh), vec2(cw, rh));
             let mut fill = None;
             let mut chr = CharProps::default();
@@ -432,10 +432,10 @@ pub fn table_style_preview(ui: &mut Ui, style: Option<&TableStyleProps>, look: T
                 _ => (egui::Align::Min, cell.top() + 2.0),
             };
             let pos = pos2(x, y);
-            let r = painter.text(pos, egui::Align2([ax, ay]), txt, font.clone(), color);
+            let r = painter.text(pos, egui::Align2([ax, ay]), txt.as_ref(), font.clone(), color);
             if chr.bold.unwrap_or(false) {
                 // A second pass a hair to the right reads as bold at this size.
-                painter.text(pos + vec2(0.6, 0.0), egui::Align2([ax, ay]), txt, font, color);
+                painter.text(pos + vec2(0.6, 0.0), egui::Align2([ax, ay]), txt.as_ref(), font, color);
             }
             if chr.underline.is_some_and(|u| u != Underline::None) && !txt.is_empty() {
                 painter.line_segment([r.left_bottom(), r.right_bottom()], Stroke::new(0.8, color));
@@ -536,11 +536,11 @@ pub fn body(app: &mut WordApp, ui: &mut Ui, f: Form) -> bool {
             style.response.labelled_by(style_label.id);
             let width_label = ui.label(tl!("Width:"));
             let width = craft_ui::ComboBox::from_id_salt("tstyle_pen_width")
-                .selected_text(crate::i18n::fmt(tl!("{n} pt"), &[("n", &pen.width.to_string())]))
+                .selected_text(crate::i18n::fmt(&tl!("{n} pt"), &[("n", &pen.width.to_string())]))
                 .width(70.0)
                 .show_ui(ui, |ui| {
                     for w in WIDTHS {
-                        ui.selectable_value(&mut pen.width, w, crate::i18n::fmt(tl!("{n} pt"), &[("n", &w.to_string())]));
+                        ui.selectable_value(&mut pen.width, w, crate::i18n::fmt(&tl!("{n} pt"), &[("n", &w.to_string())]));
                     }
                 });
             width.response.labelled_by(width_label.id);
@@ -570,7 +570,7 @@ pub fn body(app: &mut WordApp, ui: &mut Ui, f: Form) -> bool {
             egui::Grid::new("tstyle_align").spacing(vec2(1.0, 1.0)).show(ui, |ui| {
                 for (i, ((n, v, h), tip)) in CELL_ALIGNS.iter().zip(ALIGN_TIPS).enumerate() {
                     let on = r.align == *n;
-                    if align_button(ui, (*v, *h), on, tl!(tip)).clicked() {
+                    if align_button(ui, (*v, *h), on, &tl!(tip)).clicked() {
                         r.align = if on { String::new() } else { n.to_string() };
                     }
                     if i % 3 == 2 {
@@ -595,7 +595,7 @@ pub fn body(app: &mut WordApp, ui: &mut Ui, f: Form) -> bool {
     ui.add_space(4.0);
     ui.label(egui::RichText::new(tl!("Preview")).small().weak());
     table_style_preview(ui, wordcraft_engine::cmd::table_style::preview(&app.session, &v).as_ref(), look);
-    let (ok, cancel) = buttons(ui, tl!("OK"));
+    let (ok, cancel) = buttons(ui, &tl!("OK"));
     if ok {
         let cmd = if id.is_some() { "table.modifyStyle" } else { "table.newStyle" };
         if let Err(e) = app.run(cmd, v) {

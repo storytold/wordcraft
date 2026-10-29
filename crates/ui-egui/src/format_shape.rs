@@ -133,7 +133,7 @@ fn solid(app: &mut WordApp, ui: &mut Ui, theme: &[Rgb], color: Rgb, transparency
         apply(app, ui, Some(&Fill::Solid { color: c, transparency }), None);
     }
     let mut t = transparency;
-    if let Some(r) = percent(ui, tl!("Transparency"), &mut t) {
+    if let Some(r) = percent(ui, &tl!("Transparency"), &mut t) {
         apply(app, ui, Some(&Fill::Solid { color, transparency: t }), Some(&r));
     }
 }
@@ -272,7 +272,7 @@ fn gradient(app: &mut WordApp, ui: &mut Ui, theme: &[Rgb], g: &Gradient) {
     ui.horizontal(|ui| {
         stops_bar(app, ui, g, sel);
         let sel = ui.data(|d| d.get_temp::<usize>(stop_id())).unwrap_or(0).min(g.stops.len().saturating_sub(1));
-        if crate::widgets::icon_button(ui, "plus", tl!("Add gradient stop")).clicked() {
+        if crate::widgets::icon_button(ui, "plus", &tl!("Add gradient stop")).clicked() {
             let next = g.stops.get(sel + 1).map_or(100.0, |s| s.pos);
             let here = g.stops.get(sel).map_or(0.0, |s| s.pos);
             let mut st = g.stops.clone();
@@ -281,7 +281,7 @@ fn gradient(app: &mut WordApp, ui: &mut Ui, theme: &[Rgb], g: &Gradient) {
                 apply(app, ui, Some(&with(g, |g| g.stops = st)), None);
             }
         }
-        if crate::widgets::icon_button(ui, "minus", tl!("Remove gradient stop")).clicked() {
+        if crate::widgets::icon_button(ui, "minus", &tl!("Remove gradient stop")).clicked() {
             let mut st = g.stops.clone();
             if stops::remove(&mut st, sel) {
                 ui.data_mut(|d| d.insert_temp(stop_id(), sel.saturating_sub(1)));
@@ -308,7 +308,7 @@ fn gradient(app: &mut WordApp, ui: &mut Ui, theme: &[Rgb], g: &Gradient) {
         }
     });
     let mut t = stop.transparency;
-    if let Some(r) = percent(ui, tl!("Transparency"), &mut t) {
+    if let Some(r) = percent(ui, &tl!("Transparency"), &mut t) {
         apply(app, ui, Some(&set(GradStop { transparency: t, ..stop })), Some(&r));
     }
     let mut rot = g.rot_with_shape;
@@ -440,8 +440,8 @@ pub fn swatch(ui: &mut Ui, fill: &Fill, tip: &str) -> bool {
     let ring = if resp.hovered() { Stroke::new(2.0, t.accent) } else { Stroke::new(1.0, t.border) };
     ui.painter().rect_stroke(r.shrink(2.0), 0.0, ring, egui::StrokeKind::Outside);
     let name = tl!(tip);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name));
-    resp.on_hover_text(name).clicked()
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name.as_ref()));
+    resp.on_hover_text(name.as_ref()).clicked()
 }
 
 /// Paints `fill` over `r`: a grid of vertex colours, fine enough for previews.

@@ -59,7 +59,7 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
                         items: &fams,
                         recent: &recent,
                         preview: Some(&*prev),
-                        tip: tl!("Font"),
+                        tip: &tl!("Font"),
                     },
                 ) {
                     let _ = if f == crate::widgets::ADD_FONT {
@@ -78,7 +78,7 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
                     .unwrap_or_default();
                 let sizes: Vec<String> =
                     wordcraft_engine::cmd::format::SIZES.iter().map(|s| if s.fract() == 0.0 { format!("{s:.0}") } else { s.to_string() }).collect();
-                if let Some(v) = crate::widgets::combo_hint(ui, "size", 52.0, &size, &sizes, None, tl!("Font Size"))
+                if let Some(v) = crate::widgets::combo_hint(ui, "size", 52.0, &size, &sizes, None, &tl!("Font Size"))
                     && let Ok(x) = v.trim().parse::<f64>()
                 {
                     let _ = app.run("format.size", json!({"size": x}));

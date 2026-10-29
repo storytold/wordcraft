@@ -39,7 +39,7 @@ native-speaker review (human).
   catalog covers **661 (98%)**. Some newer dialog and pane strings (Equation tab tooltips, Zotero,
   Read Aloud) aren't wrapped in `tl!` yet, so they show in English in every
   language: the true share of visible strings is **~93–95%** (estimated).
-- Pending PRs: Norwegian Bokmål (#208) and Nynorsk (#210), Hebrew with RTL (#20).
+- Pending: Norwegian Bokmål (#208) and Nynorsk (#210). Hebrew's mirrored interface is in the app (`he` is registered); its catalog rows belong in craft-i18n and the language is offered once `locales/he` is in the pinned revision.
 - **Proofing: English, Polish, Portuguese, Italian, Russian, Czech, Indonesian and Spanish**, chosen per run from its language (`w:lang`, resolved through
   the styles; Review › Language and the status bar set it: a short list, plus Set Proofing
   Language… for any of 38 languages and Set As Default for the document and future blank documents). Languages without proofing tools get
@@ -223,6 +223,7 @@ WordCraft keeps 2,54 cm).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-29 | trivial | Hebrew mirrored UI: `he` is registered, rows pack from the right, and Hebrew labels are reordered without leaking. The catalog stays in craft-i18n (`locales/he/wordcraft.tsv`); until that revision is pinned, Hebrew is not offered and the interface stays English. |
 | 2026-10-24 | minor | Preserved “Delete Around Caret in Equation” in all 27 shared WordCraft catalogs; the native/release pin and Flatpak source advance together. |
 | 2026-10-23 | minor | Interface catalogs moved to storytold/craft-i18n (`locales/<locale>/wordcraft.tsv`), looked up through craft-libs' `craft-i18n` crate and embedded from the pinned commit (`craft-i18n.rev`); strings other Crafting Apps already translate in the shared catalog now show translated; the "Open" paragraph-spacing preset no longer shows the file verb |
 | 2026-10-23 | trivial | Lookup, context, template, style-name and command-search tests use inline fixture catalogs or the pseudo-language; tests that asserted one language's catalog wording removed |

@@ -17,7 +17,7 @@ pub(super) fn margins_items(ui: &mut Ui, app: &mut WordApp) {
         ("Office 2003 Default", "office2003", None),
     ] {
         let label = match uniform {
-            Some(pt) => crate::i18n::fmt(tl!(l), &[("size", &crate::options::length(pt))]),
+            Some(pt) => crate::i18n::fmt(&tl!(l), &[("size", &crate::options::length(pt))]),
             None => l.to_string(),
         };
         // Mirrored margins come from the document as well as from the preset (#1181).

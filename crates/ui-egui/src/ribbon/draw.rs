@@ -46,7 +46,7 @@ pub(super) fn draw(app: &mut WordApp, ui: &mut Ui) {
             menu_button(ui, app, crate::widgets::MenuButtonOptions::new("thickness", None, "Thickness", false, "draw.pen"), |ui, app| {
                 let widths: &[f32] = if tool == InkTool::Highlighter { &[4.0, 8.0, 12.0, 18.0, 24.0] } else { &[0.5, 1.0, 1.5, 2.5, 3.5, 5.0] };
                 for w in widths {
-                    let label = crate::i18n::fmt(tl!("{n} pt"), &[("n", &w.to_string())]);
+                    let label = crate::i18n::fmt(&tl!("{n} pt"), &[("n", &w.to_string())]);
                     mi_check(ui, app, &label, (set.width - w).abs() < 0.01, pen_command(tool), json!({"width": w}));
                 }
                 update_gallery_pen(app, custom, tool);
@@ -111,7 +111,7 @@ fn gallery_pen(ui: &mut Ui, app: &mut WordApp, i: usize, pen: wordcraft_engine::
         InkTool::Pencil => "Pencil",
         InkTool::Highlighter => "Highlighter",
     });
-    let size = crate::i18n::fmt(tl!("{n} pt"), &[("n", &pen.width.to_string())]);
+    let size = crate::i18n::fmt(&tl!("{n} pt"), &[("n", &pen.width.to_string())]);
     let resp = resp.on_hover_text(format!("{kind}: {size}, #{}", pen.color.hex()));
     if resp.clicked() {
         let _ = app.run(pen_command(pen.kind), json!({"color": pen.color.hex(), "width": pen.width}));

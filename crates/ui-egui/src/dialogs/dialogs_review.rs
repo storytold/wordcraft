@@ -67,11 +67,11 @@ fn buttons(ui: &mut Ui, ok_enabled: bool) -> (bool, bool) {
     let mut r = (false, false);
     ui.add_space(8.0);
     ui.horizontal(|ui| {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.with_layout(crate::i18n::trailing_layout(egui::Align::Center), |ui| {
             let (okb, cancelb) = crate::dialogs::ok_cancel_responses(
                 ui,
                 |ui| ui.add_enabled(ok_enabled, crate::widgets::primary_button(ui, tl!("OK"))),
-                tl!("Cancel"),
+                &tl!("Cancel"),
             );
             if cancelb.clicked() || crate::dialogs::cancel_key_pressed(ui) {
                 r.1 = true;
@@ -288,7 +288,7 @@ fn compare_ui(app: &mut WordApp, ui: &mut Ui, f: &mut CompareForm) -> bool {
         match app.run(id, params) {
             Ok(v) => {
                 let n = v.get("changes").and_then(Value::as_u64).unwrap_or(0).to_string();
-                app.status(crate::i18n::fmt(tl!("Compared: {changes} changes"), &[("changes", &n)]));
+                app.status(crate::i18n::fmt(&tl!("Compared: {changes} changes"), &[("changes", &n)]));
                 return true;
             }
             Err(e) => {

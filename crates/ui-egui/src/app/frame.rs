@@ -14,11 +14,12 @@ impl WordApp {
     /// named in the interface language, as `Document1` is in English.
     pub fn title_stem(&self) -> String {
         match &self.session.path {
-            Some(p) => p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| tl!("Document1").into()),
+            // Logical text: file names and the control channel must not be visually reordered.
+            Some(p) => p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| crate::i18n::t("Document1").into()),
             None => match &self.session.file_name {
                 Some(name) => name.clone(),
                 None if self.session.doc.core.title.is_empty() => {
-                    documents::untitled_title(&self.session.resolved_filenames().0).unwrap_or_else(|| tl!("Document1").into())
+                    documents::untitled_title(&self.session.resolved_filenames().0).unwrap_or_else(|| crate::i18n::t("Document1").into())
                 }
                 None => self.session.doc.core.title.clone(),
             },

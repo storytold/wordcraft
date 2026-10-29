@@ -140,7 +140,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
     });
     if let Some(shown) = &shown {
         if let Dialog::SaveChanges { name, message, .. } = &d {
-            let question = crate::i18n::fmt(tl!("Do you want to save changes to {name}?"), &[("name", name)]);
+            let question = crate::i18n::fmt(&tl!("Do you want to save changes to {name}?"), &[("name", name)]);
             let mut description = tl!("Your changes will be lost if you don't save them.").to_string();
             if !message.is_empty() {
                 description.push('\n');
@@ -189,7 +189,7 @@ pub(crate) fn buttons(ui: &mut Ui, ok: &str) -> (bool, bool) {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             // Enter and Escape belong to the Colors dialog while it is open above this one.
             let keys = !crate::colors::is_open(ui.ctx());
-            let (okb, cancelb) = ok_cancel_responses(ui, |ui| ui.add(crate::widgets::primary_button(ui, ok)), tl!("Cancel"));
+            let (okb, cancelb) = ok_cancel_responses(ui, |ui| ui.add(crate::widgets::primary_button(ui, ok)), &tl!("Cancel"));
             if cancelb.clicked() || (keys && cancel_key_pressed(ui)) {
                 r.1 = true;
             }

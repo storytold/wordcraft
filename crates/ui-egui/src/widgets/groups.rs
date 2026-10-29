@@ -6,7 +6,7 @@ use super::{Align2, Rect, Response, Sense, Stroke, Tokens, Ui, WordApp, icons, p
 /// A ribbon group: content, a centred label below and a divider on the right.
 pub fn group(ui: &mut Ui, title: &str, launcher: Option<&str>, app: &mut WordApp, add: impl FnOnce(&mut Ui, &mut WordApp)) {
     // The English title keys the launcher's id; the drawn title is translated.
-    group_titled(ui, title, tl!(title), launcher, app, add);
+    group_titled(ui, title, &tl!(title), launcher, app, add);
 }
 
 /// A ribbon group whose title is shown as is (a custom group's name, Customize Ribbon).
@@ -26,6 +26,10 @@ pub fn group_titled(ui: &mut Ui, id_title: &str, title: &str, launcher: Option<&
             ui.set_min_width(label_w + if launcher.is_some() { 22.0 } else { 10.0 });
             crate::ribbon_fit::set_compact(ui.ctx(), level == crate::ribbon_fit::COMPACT);
             let content = ui.allocate_ui_with_layout(vec2(ui.available_width(), CONTENT_H), egui::Layout::left_to_right(egui::Align::Min), |ui| {
+                // A right-to-left ribbon row offers this column only the group's minimum width on
+                // the first pass, and a checkbox would then wrap one letter per line. Labels stay
+                // one line; the group grows to fit them, as it does in a left-to-right row.
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                 ui.spacing_mut().item_spacing = vec2(1.0, 1.0);
                 add(ui, app);
             });
@@ -66,7 +70,7 @@ fn title_row(ui: &mut Ui, r: Rect, id_title: &str, title: &str, launcher: Option
             ui.painter().rect_filled(lr.expand(2.0), 2.0, t.hover);
         }
         icons::paint(ui.painter(), lr, "launcher", t.text_dim, t.accent);
-        if resp.on_hover_text(crate::i18n::fmt(tl!("{group} settings"), &[("group", title)])).clicked() {
+        if resp.on_hover_text(crate::i18n::fmt(&tl!("{group} settings"), &[("group", title)])).clicked() {
             let _ = app.run(cmd, serde_json::json!({}));
         }
     }

@@ -483,7 +483,7 @@ fn show_hover_link(app: &WordApp, pointer: &PagePointer<'_>) {
     {
         let key = if cfg!(target_os = "macos") { "⌘" } else { "Ctrl" };
         let target = if is_generated_bookmark_link(&link) { tl!("Current Document").to_string() } else { link };
-        let tip = format!("{target}\n{}", crate::i18n::fmt(tl!("{key}+Click to follow link"), &[("key", key)]));
+        let tip = format!("{target}\n{}", crate::i18n::fmt(&tl!("{key}+Click to follow link"), &[("key", key)]));
         egui::Tooltip::always_open(ui.ctx().clone(), ui.layer_id(), egui::Id::unique("link_tip"), egui::PopupAnchor::Pointer).show(|ui| {
             ui.label(tip);
         });

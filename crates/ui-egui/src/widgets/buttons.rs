@@ -142,23 +142,29 @@ pub fn small(ui: &mut Ui, app: &mut WordApp, icon: &str, label: Option<&str>, ti
     // A compact group (#662) shows only the icon; the tooltip keeps the name.
     let label = label.filter(|_| !crate::ribbon_fit::compact(ui.ctx()));
     let t = Tokens::get(ui.ctx());
-    let text_w = label.map(|l| ui.ctx().fonts_mut(|f| f.layout_no_wrap(l.to_string(), regular(11.5), t.text).size().x) + 6.0).unwrap_or(0.0);
+    let text_w = label.as_ref().map(|l| ui.ctx().fonts_mut(|f| f.layout_no_wrap(l.to_string(), regular(11.5), t.text).size().x) + 6.0).unwrap_or(0.0);
     let (r, resp) = ui.allocate_exact_size(vec2(24.0 + text_w, 22.0), Sense::click());
-    keytip_badge(ui, r, id, tip);
+    keytip_badge(ui, r, id, tip.as_ref());
     let on = enabled(app, id);
     bg(ui, r, &resp, checked, &t);
     let ic = Rect::from_center_size(pos2(r.min.x + 12.0, r.center().y), vec2(17.0, 17.0));
     let (c, a) = if on { (t.icon, t.accent) } else { (t.text_disabled, t.text_disabled) };
     icons::paint(ui.painter(), ic, icon, c, a);
-    if let Some(l) = label {
-        ui.painter().text(pos2(r.min.x + 24.0, r.center().y), Align2::LEFT_CENTER, l, regular(11.5), if on { t.text } else { t.text_disabled });
+    if let Some(l) = label.as_ref() {
+        ui.painter().text(
+            pos2(r.min.x + 24.0, r.center().y),
+            Align2::LEFT_CENTER,
+            l.as_ref(),
+            regular(11.5),
+            if on { t.text } else { t.text_disabled },
+        );
     }
-    let resp = tooltip(app, resp, tip, id);
+    let resp = tooltip(app, resp, tip.as_ref(), id);
     command_menu(&resp, app, id);
     if resp.clicked() && on {
         run_from_ribbon(app, id, params);
     }
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, tip));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, tip.as_ref()));
     resp
 }
 
@@ -176,7 +182,7 @@ pub fn split(
     let tip = tl!(tip);
     let t = Tokens::get(ui.ctx());
     let (r, resp) = ui.allocate_exact_size(vec2(24.0, 22.0), Sense::click());
-    keytip_badge(ui, r, id, tip);
+    keytip_badge(ui, r, id, tip.as_ref());
     let (ar, aresp) = ui.allocate_exact_size(vec2(11.0, 22.0), Sense::click());
     let on = enabled(app, id);
     bg(ui, r, &resp, checked, &t);
@@ -191,14 +197,14 @@ pub fn split(
         ui.painter().rect_stroke(bar, 0.0, Stroke::new(0.5, t.border), egui::StrokeKind::Inside);
     }
     icons::paint(ui.painter(), Rect::from_center_size(ar.center(), vec2(DROPDOWN, DROPDOWN)), "dropdown", c, a);
-    let resp = tooltip(app, resp, tip, id);
+    let resp = tooltip(app, resp, tip.as_ref(), id);
     command_menu(&resp, app, id);
     if resp.clicked() && on {
         run_from_ribbon(app, id, params);
     }
-    let (arrow_title, _) = tooltip_lines(&crate::i18n::fmt(tl!("{name} options"), &[("name", tip)]), "", "", None);
+    let (arrow_title, _) = tooltip_lines(&crate::i18n::fmt(&tl!("{name} options"), &[("name", tip.as_ref())]), "", "", None);
     show_hint(&aresp, &arrow_title, &[]);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, tip));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, tip.as_ref()));
     // The arrow opens the choices beside the button: it says whose, so it is not just "button"
     // (#3172).
     aresp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, &arrow_title));
@@ -242,16 +248,17 @@ pub fn menu_button(ui: &mut Ui, app: &mut WordApp, options: MenuButtonOptions<'_
     let (c, a, text) = if on { (t.icon, t.accent, t.text) } else { (t.text_disabled, t.text_disabled, t.text_disabled) };
     let resp = if big_btn {
         let galley_w = label
+            .as_deref()
             .unwrap_or("")
             .split('\n')
             .map(|l| ui.ctx().fonts_mut(|f| f.layout_no_wrap(l.to_string(), regular(11.5), t.text).size().x))
             .fold(0.0, f32::max);
         let w = (galley_w + 22.0).max(44.0);
         let (r, resp) = ui.allocate_exact_size(vec2(w, CONTENT_H), Sense::click());
-        keytip_badge(ui, r, "menu", tip);
+        keytip_badge(ui, r, "menu", tip.as_ref());
         bg(ui, r, &resp, false, &t);
         icons::paint(ui.painter(), Rect::from_center_size(pos2(r.center().x, r.min.y + BIG_ICON_Y), vec2(32.0, 32.0)), icon, c, a);
-        let lines: Vec<&str> = label.unwrap_or("").split('\n').collect();
+        let lines: Vec<&str> = label.as_deref().unwrap_or("").split('\n').collect();
         let mut y = r.min.y + BIG_LABEL_Y;
         for (i, l) in lines.iter().enumerate() {
             label_line(ui, r.center().x, y, l, regular(11.5), text, i + 1 == lines.len());
@@ -259,21 +266,22 @@ pub fn menu_button(ui: &mut Ui, app: &mut WordApp, options: MenuButtonOptions<'_
         }
         resp
     } else {
-        let text_w = label.map(|l| ui.ctx().fonts_mut(|f| f.layout_no_wrap(l.to_string(), regular(11.5), t.text).size().x) + 6.0).unwrap_or(0.0);
+        let text_w =
+            label.as_ref().map(|l| ui.ctx().fonts_mut(|f| f.layout_no_wrap(l.to_string(), regular(11.5), t.text).size().x) + 6.0).unwrap_or(0.0);
         let (r, resp) = ui.allocate_exact_size(vec2(24.0 + text_w + 10.0, 22.0), Sense::click());
-        keytip_badge(ui, r, "menu", tip);
+        keytip_badge(ui, r, "menu", tip.as_ref());
         bg(ui, r, &resp, false, &t);
         icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 12.0, r.center().y), vec2(17.0, 17.0)), icon, c, a);
-        if let Some(l) = label {
-            ui.painter().text(pos2(r.min.x + 24.0, r.center().y), Align2::LEFT_CENTER, l, regular(11.5), text);
+        if let Some(l) = label.as_ref() {
+            ui.painter().text(pos2(r.min.x + 24.0, r.center().y), Align2::LEFT_CENTER, l.as_ref(), regular(11.5), text);
         }
         icons::paint(ui.painter(), Rect::from_center_size(pos2(r.max.x - 6.0, r.center().y), vec2(DROPDOWN, DROPDOWN)), "dropdown", c, c);
         resp
     };
     let reason = if on { None } else { Some(app.session.why_disabled(id).unwrap_or("")) };
-    let (title, notes) = tooltip_lines(tip, &shortcut_text(app, id), "", reason);
+    let (title, notes) = tooltip_lines(tip.as_ref(), &shortcut_text(app, id), "", reason);
     show_hint(&resp, &title, &notes);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, tip));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, tip.as_ref()));
     if !on {
         return;
     }

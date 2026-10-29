@@ -222,7 +222,7 @@ pub fn submit(app: &mut crate::WordApp, params: &serde_json::Value) -> Result<se
         }
         Err(error) => {
             log::error!("print failed: {error}");
-            let msg = crate::i18n::fmt(tl!("Print failed: {error}"), &[("error", &error)]);
+            let msg = crate::i18n::fmt(&tl!("Print failed: {error}"), &[("error", &error)]);
             app.status(msg.clone());
             Err(msg)
         }

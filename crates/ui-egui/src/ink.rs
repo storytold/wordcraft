@@ -396,19 +396,19 @@ pub fn replay_bar(app: &mut WordApp, ui: &Ui, area: Rect) {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing = vec2(6.0, 0.0);
-                    if crate::widgets::icon_button(ui, "replayRewind", tl!("Rewind")).clicked() {
+                    if crate::widgets::icon_button(ui, "replayRewind", &tl!("Rewind")).clicked() {
                         action = Some("rewind");
                     }
                     let (icon, tip) = if playing { ("replayPause", tl!("Pause")) } else { ("replayPlay", tl!("Play")) };
-                    if crate::widgets::icon_button(ui, icon, tip).clicked() {
+                    if crate::widgets::icon_button(ui, icon, tip.as_ref()).clicked() {
                         action = Some("play");
                     }
-                    if crate::widgets::icon_button(ui, "replayForward", tl!("Forward")).clicked() {
+                    if crate::widgets::icon_button(ui, "replayForward", &tl!("Forward")).clicked() {
                         action = Some("forward");
                     }
-                    let label = crate::i18n::fmt(tl!("Stroke {n} of {total}"), &[("n", &n.to_string()), ("total", &total.to_string())]);
+                    let label = crate::i18n::fmt(&tl!("Stroke {n} of {total}"), &[("n", &n.to_string()), ("total", &total.to_string())]);
                     ui.label(label);
-                    if crate::widgets::icon_button(ui, "close", tl!("Close")).clicked() {
+                    if crate::widgets::icon_button(ui, "close", &tl!("Close")).clicked() {
                         action = Some("close");
                     }
                 });

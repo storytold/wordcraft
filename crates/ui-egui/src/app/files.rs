@@ -92,7 +92,8 @@ impl WordApp {
     /// the message, the prompt answer's error.
     pub(crate) fn save_failed(&mut self, error: &str, then: String, params: Value, document: u64) -> String {
         let name = self.prompt_name();
-        let message = i18n::fmt(tl!("Couldn't save {name}, so it is still open and nothing was lost: {error}"), &[("name", &name), ("error", error)]);
+        let message =
+            i18n::fmt(&tl!("Couldn't save {name}, so it is still open and nothing was lost: {error}"), &[("name", &name), ("error", error)]);
         log::error!("save from the Save Changes prompt failed: {error}");
         self.prompt_again(message, then, params, document)
     }
@@ -131,7 +132,7 @@ impl WordApp {
                     }
                 }
                 if let async_saves::SaveOutcome::Failed(error) = &outcome {
-                    let msg = i18n::fmt(tl!("Couldn't download {name}: {error}"), &[("name", &save.name), ("error", error)]);
+                    let msg = i18n::fmt(&tl!("Couldn't download {name}: {error}"), &[("name", &save.name), ("error", error)]);
                     log::error!("the save picker couldn't save {}: {error}", save.name);
                     self.status(msg);
                 }
@@ -161,7 +162,7 @@ impl WordApp {
                 }
                 async_saves::SaveOutcome::Cancelled => {
                     let name = self.prompt_name();
-                    let message = i18n::fmt(tl!("Saving {name} was cancelled, so it is still open and nothing was lost."), &[("name", &name)]);
+                    let message = i18n::fmt(&tl!("Saving {name} was cancelled, so it is still open and nothing was lost."), &[("name", &name)]);
                     self.prompt_again(message, wait.then, wait.params, wait.document);
                 }
                 async_saves::SaveOutcome::Failed(error) => {
@@ -406,7 +407,7 @@ impl WordApp {
             if let Err(e) = self.session.run("file.save", &json!({})) {
                 log::warn!("AutoSave failed: {e}");
                 self.autosave_path = None;
-                self.status(i18n::fmt(tl!("AutoSave failed: {error}. Save the document to turn AutoSave back on."), &[("error", &e.to_string())]));
+                self.status(i18n::fmt(&tl!("AutoSave failed: {error}. Save the document to turn AutoSave back on."), &[("error", &e.to_string())]));
             }
         }
     }

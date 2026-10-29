@@ -38,7 +38,7 @@ pub(super) fn scrollbar_page_tip(app: &mut WordApp, ui: &Ui, scroll: egui::Id, r
     app.canvas.scrollbar_page =
         (dragged && !rects.is_empty() && pages > 0).then(|| top_page(rects, bands, app.canvas.scroll_offset.y).min(pages - 1));
     let (Some(page), Some(at)) = (app.canvas.scrollbar_page, ui.ctx().pointer_latest_pos()) else { return };
-    let text = crate::i18n::fmt(tl!("Page {page} of {pages}"), &[("page", &(page + 1).to_string()), ("pages", &pages.to_string())]);
+    let text = crate::i18n::fmt(&tl!("Page {page} of {pages}"), &[("page", &(page + 1).to_string()), ("pages", &pages.to_string())]);
     egui::Area::new(egui::Id::unique("scrollbar_page_tip"))
         .order(egui::Order::Tooltip)
         .interactable(false)

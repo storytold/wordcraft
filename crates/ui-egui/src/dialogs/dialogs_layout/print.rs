@@ -73,7 +73,7 @@ pub(crate) fn envelope_label(name: &str, w: f32, h: f32) -> String {
         let mm = |pt: f32| (pt * 25.4 / 72.0).round();
         (tl!("{name}   {height} × {width} mm"), mm(w), mm(h))
     };
-    crate::i18n::fmt(template, &[("name", short), ("height", &with_decimal(h.to_string())), ("width", &with_decimal(w.to_string()))])
+    crate::i18n::fmt(template.as_ref(), &[("name", short), ("height", &with_decimal(h.to_string())), ("width", &with_decimal(w.to_string()))])
 }
 
 /// A number written with `.` rewritten with the region's decimal separator (`2,625`).
@@ -133,15 +133,16 @@ pub(super) fn product_label(i: usize) -> String {
     // Inches on Letter, millimetres on A4, as the sheets are sold.
     let size = if p.paper == "A4" {
         let mm = |pt: f32| with_decimal(format!("{:.1}", pt * 25.4 / 72.0));
-        crate::i18n::fmt(tl!("{width} × {height} mm"), &[("width", &mm(p.width)), ("height", &mm(p.height))])
+        crate::i18n::fmt(&tl!("{width} × {height} mm"), &[("width", &mm(p.width)), ("height", &mm(p.height))])
     } else {
         let i = |pt: f32| with_decimal((((pt / 72.0) * 1000.0).round() / 1000.0).to_string());
         format!("{}\" × {}\"", i(p.width), i(p.height))
     };
     let (columns, rows) = (p.cols.to_string(), p.rows.to_string());
+    let paper = tl!(p.paper);
     crate::i18n::fmt(
-        tl!("{kind}, {columns} × {rows}, {size} ({paper})"),
-        &[("kind", kind), ("columns", &columns), ("rows", &rows), ("size", &size), ("paper", tl!(p.paper))],
+        &tl!("{kind}, {columns} × {rows}, {size} ({paper})"),
+        &[("kind", kind.as_ref()), ("columns", &columns), ("rows", &rows), ("size", &size), ("paper", paper.as_ref())],
     )
 }
 

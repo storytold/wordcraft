@@ -178,6 +178,8 @@ impl WordApp {
             fonts_korean: _,
             fonts_system_cjk: _,
             want_system_cjk: _,
+            want_hebrew_ui: _,
+            hebrew_ui_checked: _,
             recent_fonts_for: _,
             // File › Recover lists the copies of every window's documents.
             recover_fonts_for: _,

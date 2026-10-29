@@ -30,7 +30,7 @@ pub(crate) fn tooltip_lines(label: &str, shortcut: &str, desc: &str, disabled: O
         notes.push(desc.to_string());
     }
     if let Some(reason) = disabled {
-        notes.push(if reason.is_empty() { tl!("Not available right now").to_string() } else { capitalised(tl!(reason)) });
+        notes.push(if reason.is_empty() { tl!("Not available right now").to_string() } else { capitalised(&tl!(reason)) });
     }
     (title, notes)
 }
@@ -117,8 +117,9 @@ pub(super) fn tooltip(app: &WordApp, resp: Response, label: &str, id: &str) -> R
     } else if !app.has_document() && !crate::works_without_document(id) {
         Some(tl!("Open a document first"))
     } else {
-        Some(app.session.why_disabled(id).unwrap_or(""))
+        Some(std::borrow::Cow::Borrowed(app.session.why_disabled(id).unwrap_or("")))
     };
+    let reason = reason.as_deref();
     let (title, notes) = tooltip_lines(label, &shortcut_text(app, id), &desc, reason);
     show_hint(&resp, &title, &notes);
     resp

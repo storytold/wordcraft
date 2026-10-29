@@ -83,17 +83,17 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         ui.set_width(236.0);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
-            if button(ui, &t, "mediaPrev", tl!("Previous sentence"), count > 0 && index > 0) {
+            if button(ui, &t, "mediaPrev", &tl!("Previous sentence"), count > 0 && index > 0) {
                 run = Some(("readAloud.previous", json!({})));
             }
             let (icon, tip) = if state == State::Playing { ("mediaPause", tl!("Pause")) } else { ("mediaPlay", tl!("Play")) };
-            if button(ui, &t, icon, tip, true) {
+            if button(ui, &t, icon, tip.as_ref(), true) {
                 run = Some(("readAloud.playPause", json!({})));
             }
-            if button(ui, &t, "mediaNext", tl!("Next sentence"), index + 1 < count) {
+            if button(ui, &t, "mediaNext", &tl!("Next sentence"), index + 1 < count) {
                 run = Some(("readAloud.next", json!({})));
             }
-            if button(ui, &t, "mediaStop", tl!("Stop"), true) {
+            if button(ui, &t, "mediaStop", &tl!("Stop"), true) {
                 run = Some(("readAloud.stop", json!({})));
             }
             ui.add_space(4.0);

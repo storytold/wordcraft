@@ -512,8 +512,8 @@ fn body(ui: &mut Ui, d: &mut ColorsDialog) -> Option<bool> {
     let mut out = None;
     ui.add_space(8.0);
     ui.horizontal(|ui| {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let (okb, cancelb) = crate::dialogs::ok_cancel_responses(ui, |ui| ui.add(crate::widgets::primary_button(ui, tl!("OK"))), tl!("Cancel"));
+        ui.with_layout(crate::i18n::trailing_layout(egui::Align::Center), |ui| {
+            let (okb, cancelb) = crate::dialogs::ok_cancel_responses(ui, |ui| ui.add(crate::widgets::primary_button(ui, tl!("OK"))), &tl!("Cancel"));
             if cancelb.clicked() {
                 out = Some(false);
             }

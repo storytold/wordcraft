@@ -41,7 +41,7 @@ pub(super) fn nav(app: &mut WordApp, ui: &mut Ui) {
         "pages" => {
             let l = app.session.layout();
             for (i, p) in l.pages.iter().enumerate() {
-                let label = crate::i18n::fmt(tl!("Page {page}"), &[("page", &p.number.to_string())]);
+                let label = crate::i18n::fmt(&tl!("Page {page}"), &[("page", &p.number.to_string())]);
                 if ui.selectable_label(app.session.page_hint == i, label).clicked() {
                     let _ = app.run("edit.goto", json!({"page": i + 1}));
                 }

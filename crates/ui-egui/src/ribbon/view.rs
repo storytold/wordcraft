@@ -121,7 +121,7 @@ pub(super) fn outlining(app: &mut WordApp, ui: &mut Ui) {
     use wordcraft_engine::layout::outline::{BODY, para_level};
     let o = app.session.view.outline.clone();
     let level = app.session.doc.para_at(&app.session.sel.focus).map(|p| para_level(&app.session.doc, p)).unwrap_or(BODY);
-    let name = |l: u8| if l >= BODY { tl!("Body Text").to_string() } else { crate::i18n::fmt(tl!("Level {n}"), &[("n", &l.to_string())]) };
+    let name = |l: u8| if l >= BODY { tl!("Body Text").to_string() } else { crate::i18n::fmt(&tl!("Level {n}"), &[("n", &l.to_string())]) };
     group(ui, "Outline Tools", None, app, |ui, app| {
         stack(ui, |ui| {
             crate::widgets::row(ui, |ui| {
@@ -135,7 +135,7 @@ pub(super) fn outlining(app: &mut WordApp, ui: &mut Ui) {
                 );
                 small(ui, app, "outlinePromote", None, "Promote", crate::widgets::ButtonAction::new("outline.promote", json!({}), false));
                 let levels: Vec<String> = (1..=BODY).map(name).collect();
-                if let Some(v) = crate::widgets::combo_hint(ui, "outlineLevel", 100.0, &name(level), &levels, None, tl!("Outline Level"))
+                if let Some(v) = crate::widgets::combo_hint(ui, "outlineLevel", 100.0, &name(level), &levels, None, &tl!("Outline Level"))
                     && let Some(i) = levels.iter().position(|x| *x == v)
                 {
                     let l = if i + 1 >= usize::from(BODY) { json!("body") } else { json!(i + 1) };
@@ -162,7 +162,7 @@ pub(super) fn outlining(app: &mut WordApp, ui: &mut Ui) {
                 let mut shown: Vec<String> = vec![tl!("All Levels").to_string()];
                 shown.extend((1..BODY).map(name));
                 let current = shown.get(usize::from(o.show_level)).cloned().unwrap_or_default();
-                if let Some(v) = crate::widgets::combo_hint(ui, "outlineShowLevel", 90.0, &current, &shown, None, tl!("Show Level"))
+                if let Some(v) = crate::widgets::combo_hint(ui, "outlineShowLevel", 90.0, &current, &shown, None, &tl!("Show Level"))
                     && let Some(i) = shown.iter().position(|x| *x == v)
                 {
                     let l = if i == 0 { json!("all") } else { json!(i) };

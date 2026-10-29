@@ -107,7 +107,7 @@ impl SortForm {
     pub fn column_label(&self, i: usize) -> String {
         match self.headers.get(i).filter(|h| self.header && !h.is_empty()) {
             Some(h) => h.clone(),
-            None => crate::i18n::fmt(tl!("Column {n}"), &[("n", &(i + 1).to_string())]),
+            None => crate::i18n::fmt(&tl!("Column {n}"), &[("n", &(i + 1).to_string())]),
         }
     }
 
@@ -230,11 +230,11 @@ impl SplitCellsForm {
             return None;
         };
         if self.rows > limit {
-            return Some(crate::i18n::fmt(tl!("The number must be between 1 and {max}."), &[("max", &limit.to_string())]));
+            return Some(crate::i18n::fmt(&tl!("The number must be between 1 and {max}."), &[("max", &limit.to_string())]));
         }
         // A merged cell splits into a divisor of its height, as in Word (the engine refuses the rest).
         let divides = self.cells <= 1 && self.height > 1 && self.rows > 1 && !self.height.is_multiple_of(self.rows);
-        divides.then(|| crate::i18n::fmt(tl!("The number must be a divisor of {max}."), &[("max", &self.height.to_string())]))
+        divides.then(|| crate::i18n::fmt(&tl!("The number must be a divisor of {max}."), &[("max", &self.height.to_string())]))
     }
 
     /// `table.split` parameters for OK.
@@ -358,7 +358,7 @@ impl TextToTableForm {
         }
         let sep = crate::options::decimal();
         let (min, max) = (unit().format_with(0.0, sep), unit().format_with(22.0 * 72.0, sep));
-        Some(crate::i18n::fmt(tl!("The measurement must be between {min} and {max}."), &[("min", &min), ("max", &max)]))
+        Some(crate::i18n::fmt(&tl!("The measurement must be between {min} and {max}."), &[("min", &min), ("max", &max)]))
     }
 
     /// `table.fromText` parameters for OK.

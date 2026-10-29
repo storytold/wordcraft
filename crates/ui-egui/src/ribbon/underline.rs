@@ -41,11 +41,11 @@ fn underline_item(ui: &mut Ui, app: &mut WordApp, style: &str, name: &str) {
     let enabled = crate::widgets::enabled(app, "format.underline");
     let resp = ui.add_enabled(enabled, egui::Button::new("").min_size(vec2(200.0, 22.0)));
     let label = tl!(name);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label.as_ref()));
     let t = Tokens::get(ui.ctx());
     let color = if enabled { t.text } else { t.text_disabled };
     paint_underline(ui.painter(), resp.rect.shrink2(vec2(10.0, 0.0)), style, color);
-    if resp.on_hover_text(label).clicked() {
+    if resp.on_hover_text(label.as_ref()).clicked() {
         crate::widgets::run_from_ribbon(app, "format.underline", json!({"style": style}));
         ui.close();
     }

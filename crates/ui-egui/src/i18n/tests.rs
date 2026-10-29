@@ -1139,8 +1139,12 @@ fn the_languages_offered_are_the_embedded_ones_of_the_list() {
         assert_eq!(tr(Lang::EN, "File"), "File");
         return;
     }
-    let listed: Vec<&str> = LANGUAGES.iter().map(|l| l.code).collect();
-    assert_eq!(all, listed, "every language WordCraft lists has its catalog in craft-i18n");
+    // Hebrew is registered before its craft-i18n catalog is in the pinned revision, so it is
+    // listed but not offered until `locales/he` is embedded.
+    let listed: Vec<&str> = LANGUAGES.iter().map(|l| l.code).filter(|c| Lang::from_code(c).is_some() || *c == "he").collect();
+    let offered: Vec<&str> = listed.iter().copied().filter(|c| Lang::from_code(c).is_some()).collect();
+    assert_eq!(all, offered, "every embedded language WordCraft lists is offered");
+    assert!(listed.contains(&"he"), "Hebrew stays registered so its catalog turns the mirrored UI on");
     assert!(Lang::from_code("pseudo").is_none(), "the pseudo locale is never a setting");
 }
 
@@ -1158,4 +1162,84 @@ fn the_flatpak_manifest_pins_the_craft_i18n_rev() {
     let commit = source.lines().find_map(|l| l.trim().strip_prefix("commit:")).expect("the craft-i18n source pins a commit");
     assert_eq!(commit.trim().trim_matches(['\'', '"']), rev);
     assert!(manifest.contains("CRAFT_I18N_DIR: /run/build/wordcraft/craft-i18n"), "the build embeds the catalogs");
+}
+
+#[test]
+fn hebrew_locales_preference_and_catalog_are_right_to_left() {
+    // The mirrored UI is exercised with a fixture until craft-i18n embeds `locales/he`.
+    let he = Lang::from_code("he").unwrap_or_else(|| fixture_lang("he", "\tFile\tקובץ\n\tHome\tבית\n\tSave\tשמור\n"));
+    if Lang::from_code("he").is_some() {
+        for tag in ["he", "he-IL", "he_IL.UTF-8", "HE-il"] {
+            assert_eq!(lang_from_tag(tag), Some(he), "{tag}");
+        }
+        assert_eq!(first_supported([UNSUPPORTED, "he-IL", "en-US"]), Some(he));
+        assert_eq!(he.name(), "עברית (Hebrew)");
+        assert_eq!(tr(he, "File"), "קובץ");
+    } else {
+        assert_eq!(tr(he, "File"), "קובץ");
+        assert_eq!(tr(he, "Home"), "בית");
+        assert_eq!(tr(he, "Save"), "שמור");
+    }
+    assert!(he.is_rtl());
+    assert!(!he.uses_cjk());
+    assert_eq!(tr(he, "unknown future label"), "unknown future label");
+    let template = "Page {page} of {pages}";
+    let visual = visual_for_ui(template);
+    assert!(visual.contains("{page}") && visual.contains("{pages}"), "{visual}");
+    let logical = fmt(template, &[("page", "3"), ("pages", "9")]);
+    assert_eq!(fmt(&visual, &[("page", "3"), ("pages", "9")]), visual_for_ui(&logical));
+    set_current(he);
+    assert_eq!(present("שלום").as_ref(), "םולש");
+    assert_eq!(trailing_layout(egui::Align::Center).main_dir, egui::Direction::LeftToRight);
+    set_current(Lang::EN);
+    assert_eq!(present("שלום").as_ref(), "שלום");
+    assert_eq!(trailing_layout(egui::Align::Center).main_dir, egui::Direction::RightToLeft);
+}
+
+/// Distinct right-to-left labels stay correct after the lookup cache fills, and the cache itself
+/// stays within its entry cap. The strings are owned, so filling it does not leak.
+#[test]
+fn visual_reorder_cache_stays_bounded() {
+    struct Restore;
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            set_current(Lang::EN);
+        }
+    }
+    let _restore = Restore;
+    set_current(Lang::from_code("he").unwrap_or_else(|| fixture_lang("he", "")));
+    for i in 0..9_000 {
+        let logical = format!("שלום {i}");
+        assert_eq!(present(&logical).as_ref(), visual_for_ui(&logical));
+    }
+    assert!(visual_cache_entries() <= 8192);
+    assert_eq!(present("שלום").as_ref(), "םולש");
+}
+
+#[test]
+fn hebrew_rows_pack_from_the_right() {
+    let ctx = egui::Context::default();
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+    set_current(Lang::from_code("he").unwrap_or_else(|| fixture_lang("he", "")));
+    let mut xs = (0.0_f32, 0.0_f32);
+    ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| {
+        mirrored(ui, |ui| {
+            ui.horizontal(|ui| {
+                let first = ui.label("א");
+                let second = ui.label("ב");
+                xs = (first.rect.center().x, second.rect.center().x);
+            });
+        });
+    })
+    .drop_without_applying_deltas();
+    set_current(Lang::EN);
+    assert!(xs.0 > xs.1, "the first widget sits to the right of the second: {xs:?}");
+}
+
+#[test]
+fn hebrew_ui_font_falls_back_when_a_face_is_installed() {
+    let Some(face) = wordcraft_fonts::FontDb::global().fallback_for('א', u32::MAX) else {
+        return;
+    };
+    assert!(face.covers('א') && face.covers('ת'), "the borrowed face covers the Hebrew alphabet");
 }

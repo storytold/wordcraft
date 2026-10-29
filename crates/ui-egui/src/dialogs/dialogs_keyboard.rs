@@ -89,7 +89,7 @@ pub(crate) fn matching_commands(app: &WordApp, category: &str, query: &str) -> V
         .registry
         .all()
         .iter()
-        .filter(|s| s.id.to_lowercase().contains(&q) || s.label.to_lowercase().contains(&q) || crate::i18n::lowercase(tl!(s.label)).contains(&q))
+        .filter(|s| s.id.to_lowercase().contains(&q) || s.label.to_lowercase().contains(&q) || crate::i18n::lowercase(&tl!(s.label)).contains(&q))
         .map(|s| (s.id.to_string(), tl!(s.label).to_string()))
         .collect();
     out.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()).then(a.0.cmp(&b.0)));
@@ -239,7 +239,10 @@ pub fn customize_keyboard(app: &mut WordApp, ui: &mut Ui, f: &mut KeyboardForm) 
             ui.add_space(4.0);
             if !f.pressed.is_empty() {
                 let owner = match app.session.keymap.resolve(&reg, &f.pressed) {
-                    Some(s) => crate::i18n::fmt(tl!("Now used by {command}"), &[("command", tl!(s.label))]),
+                    Some(s) => {
+                        let command = tl!(s.label);
+                        crate::i18n::fmt(&tl!("Now used by {command}"), &[("command", command.as_ref())])
+                    }
                     None => tl!("Not used by any command").to_string(),
                 };
                 ui.label(owner);
@@ -280,7 +283,7 @@ pub fn customize_keyboard(app: &mut WordApp, ui: &mut Ui, f: &mut KeyboardForm) 
         if ui.add_enabled(!app.session.keymap.is_empty(), egui::Button::new(tl!("Reset All…"))).clicked() {
             f.confirm_reset = true;
         }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.with_layout(crate::i18n::trailing_layout(egui::Align::Center), |ui| {
             if ui.button(tl!("Close")).clicked() {
                 close = true;
             }
