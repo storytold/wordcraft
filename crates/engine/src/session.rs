@@ -8,7 +8,7 @@ use wordcraft_doc::props::CharProps;
 use wordcraft_doc::{Document, PartKind, Path, Pos, StoryRef};
 use wordcraft_layout::{DocLayout, LayoutCache, LayoutOptions, ViewMode};
 
-use crate::{CmdError, CommandSpec, ImeEditOutcome, Registry};
+use crate::{CmdError, ImeEditOutcome, Registry};
 
 mod documents;
 mod views;
