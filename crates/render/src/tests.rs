@@ -1318,3 +1318,120 @@ fn a_line_runs_from_top_left_to_bottom_right() {
     let p = shape_path(ShapeKind::Line, kurbo::Rect::new(10.0, 20.0, 30.0, 60.0), None);
     assert_eq!(p.elements(), &[kurbo::PathEl::MoveTo((10.0, 20.0).into()), kurbo::PathEl::LineTo((30.0, 60.0).into())]);
 }
+
+/// #1534: a hexagon filled with a picture paints the picture inside its outline, and nothing
+/// at its box's corner, outside the hexagon; turned, the same. The new presets have paths.
+#[test]
+fn picture_fills_are_clipped_to_the_outline() {
+    use wordcraft_doc::para::{Anchor, Float, ShapeKind, Wrap};
+    let r = kurbo::Rect::new(0.0, 0.0, 10.0, 10.0);
+    for k in [
+        ShapeKind::Hexagon,
+        ShapeKind::Octagon,
+        ShapeKind::Pentagon,
+        ShapeKind::Parallelogram,
+        ShapeKind::Trapezoid,
+        ShapeKind::Plus,
+        ShapeKind::Chevron,
+        ShapeKind::Decagon,
+    ] {
+        assert!(!shape_path(k, r, None).elements().is_empty(), "{k:?}");
+        assert!(!shape_path(k, kurbo::Rect::new(0.0, 0.0, 0.0, 0.0), None).elements().is_empty(), "{k:?}");
+    }
+    let green = image::RgbaImage::from_pixel(8, 8, image::Rgba([0, 200, 0, 255]));
+    let mut png = Vec::new();
+    image::DynamicImage::ImageRgba8(green).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let rendered = |rot: f32| {
+        let mut d = Document::new();
+        let key = d.add_media(png.clone(), "png");
+        let float = Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 100.0, y: 100.0, rot, ..Default::default() };
+        let shape = wordcraft_doc::para::InlineObject::Shape {
+            kind: ShapeKind::Hexagon,
+            w: 200.0,
+            h: 200.0,
+            fill: None,
+            stroke: None,
+            stroke_width: 0.0,
+            float,
+            story: None,
+            freeform: None,
+            effects: Default::default(),
+            extra: wordcraft_doc::connector::ShapeExtra { picture: Some(key), ..Default::default() },
+        };
+        let mut p = wordcraft_doc::Paragraph::new();
+        p.insert_object(0, shape, &Default::default()).unwrap();
+        d.body = vec![wordcraft_doc::para_block(p)];
+        let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+        render_page(&d, &l.pages[0], 1.0, &RenderOptions::default())
+    };
+    for rot in [0.0, 180.0] {
+        let img = rendered(rot);
+        assert_eq!(img.pixel(200, 200), [0, 200, 0, 255], "the picture fills the middle, turned {rot}");
+        assert_eq!(img.pixel(103, 103), [255, 255, 255, 255], "the box's corner is outside the hexagon, turned {rot}");
+        assert_eq!(img.pixel(297, 297), [255, 255, 255, 255], "the far corner too, turned {rot}");
+    }
+}
+
+/// A green picture filling a shape laid out at (100, 100) on the page: `kind`, 200 × 200,
+/// with `freeform` geometry, `effects` and a 1 pt black outline.
+fn picture_filled(
+    kind: wordcraft_doc::para::ShapeKind,
+    freeform: Option<wordcraft_doc::freeform::Freeform>,
+    effects: wordcraft_doc::effects::ShapeEffects,
+) -> Rendered {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let green = image::RgbaImage::from_pixel(8, 8, image::Rgba([0, 200, 0, 255]));
+    let mut png = Vec::new();
+    image::DynamicImage::ImageRgba8(green).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let mut d = Document::new();
+    let key = d.add_media(png, "png");
+    let float = Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 100.0, y: 100.0, ..Default::default() };
+    let shape = wordcraft_doc::para::InlineObject::Shape {
+        kind,
+        w: 200.0,
+        h: 200.0,
+        fill: None,
+        stroke: Some(Rgb::BLACK),
+        stroke_width: 1.0,
+        float,
+        story: None,
+        freeform: freeform.map(std::sync::Arc::new),
+        effects,
+        extra: wordcraft_doc::connector::ShapeExtra { picture: Some(key), ..Default::default() },
+    };
+    let mut p = wordcraft_doc::Paragraph::new();
+    p.insert_object(0, shape, &Default::default()).unwrap();
+    d.body = vec![wordcraft_doc::para_block(p)];
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    render_page(&d, &l.pages[0], 1.0, &RenderOptions::default())
+}
+
+/// #1534 review: a freeform (`a:custGeom`) shape filled with a picture shows the picture
+/// inside its path, and not outside it.
+#[test]
+fn picture_fills_follow_a_freeforms_path() {
+    use wordcraft_doc::freeform::{FreePath, Freeform};
+    // A triangle: the top-left half of its frame.
+    let tri = Freeform {
+        w: 200.0,
+        h: 200.0,
+        paths: vec![FreePath { pts: vec![[0.0, 0.0], [200.0, 0.0], [0.0, 200.0]], closed: true }],
+        ..Default::default()
+    };
+    let img = picture_filled(ShapeKind::Freeform, Some(tri), Default::default());
+    assert_eq!(img.pixel(140, 140), [0, 200, 0, 255], "inside the path");
+    assert_eq!(img.pixel(260, 260), [255, 255, 255, 255], "outside the path, inside the frame");
+}
+
+/// #1534 review: a picture-filled shape's shadow lies under the picture, cast by the whole
+/// shape (not by its outline only).
+#[test]
+fn picture_fill_shadows_sit_under_the_picture() {
+    use wordcraft_doc::effects::{Shadow, ShapeEffects};
+    // Straight down 10 pt, solid black, sharp.
+    let shadow = Shadow { color: Rgb::BLACK, transparency: 0.0, blur: 0.0, distance: 10.0, angle: 90.0, rot_with_shape: false };
+    let img = picture_filled(ShapeKind::Hexagon, None, ShapeEffects { shadow: Some(shadow), ..Default::default() });
+    assert_eq!(img.pixel(200, 110), [0, 200, 0, 255], "the picture, not the outline's shadow, 10 pt below the top edge");
+    assert_eq!(img.pixel(200, 200), [0, 200, 0, 255], "the middle");
+    assert!(img.pixel(200, 305)[0] < 60, "the shadow shows below the shape: {:?}", img.pixel(200, 305));
+}

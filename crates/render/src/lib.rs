@@ -586,6 +586,7 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
         Draw::Art { .. } => draw_art(ctx, &fr, it),
         Draw::Ink { .. } => draw_ink(ctx, &fr, it),
         Draw::Shape { .. } => draw_shape(ctx, &fr, it),
+        Draw::ShapePicture { .. } => draw_shape_picture(ctx, doc, &fr, it),
         Draw::Clip { rect, items } => {
             let r = kurbo_rect(rect);
             if !r.is_finite() || !r.overlaps(*visible) {
@@ -922,6 +923,35 @@ fn shape_soft_edges(ctx: &mut RenderContext, fr: &Frame, geom: &ShapeGeom, (rad,
     }
 }
 
+/// A shape's picture fill: its shadow and glow, then the picture stretched over the box and
+/// clipped to the outline (or a freeform's paths).
+fn draw_shape_picture(ctx: &mut RenderContext, doc: &Document, fr: &Frame, it: &Draw) {
+    let Draw::ShapePicture { rect, kind, corner, media, clip, effects, stroke_width } = it else { return };
+    let r = kurbo_rect(rect);
+    if !r.is_finite() || r.width() <= 0.0 || r.height() <= 0.0 {
+        return;
+    }
+    ctx.set_transform(fr.view);
+    // The filled shape's shadow and glow, under the picture.
+    let fx = effects.sanitized();
+    if !fx.is_empty() && clip.is_empty() {
+        let geom = ShapeGeom { r, kind: *kind, corner: *corner, can_fill: true, stroked: stroke_width.is_some() };
+        let sw = stroke_width.unwrap_or(0.0);
+        let sw = if sw.is_finite() { sw.clamp(0.25, 200.0) as f64 } else { 0.75 };
+        shape_shadow_and_glow(ctx, fr, (&geom, sw), &fx);
+    }
+    if !r.overlaps(*fr.visible) {
+        return;
+    }
+    // The picture stretched over the box, inside the outline (or a freeform's paths) only.
+    let outline = if clip.is_empty() { shape_path(*kind, r, *corner) } else { wordcraft_layout::display::seg_path(clip) };
+    ctx.set_transform(fr.view);
+    ctx.push_clip_layer(&outline);
+    let image = Draw::Image { rect: *rect, media: media.clone(), crop: [0.0; 4], alpha: 1.0, alt: String::new(), decorative: false };
+    draw(ctx, doc, &image, fr.view, fr.visible, fr.opts);
+    ctx.pop_layer();
+}
+
 fn draw_shape(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
     let Draw::Shape { rect, kind, fill, stroke, stroke_width, effects, corner, dash, cap } = it else { return };
     let r = kurbo_rect(rect);
@@ -1014,6 +1044,18 @@ pub fn shape_path(kind: ShapeKind, r: kurbo::Rect, corner: Option<u32>) -> BezPa
             p.move_to((cx, r.y0));
             p.line_to((cx, r.y1));
             p
+        }
+        ShapeKind::Hexagon
+        | ShapeKind::Octagon
+        | ShapeKind::Pentagon
+        | ShapeKind::Parallelogram
+        | ShapeKind::Trapezoid
+        | ShapeKind::Plus
+        | ShapeKind::Chevron
+        | ShapeKind::Decagon => {
+            let unit = wordcraft_doc::preset::polygon(kind, r.width() as f32, r.height() as f32).unwrap_or_default();
+            let pts: Vec<(f64, f64)> = unit.iter().map(|(x, y)| (r.x0 + f64::from(*x) * r.width(), r.y0 + f64::from(*y) * r.height())).collect();
+            poly(&pts)
         }
         ShapeKind::Triangle => poly(&[(cx, r.y0), (r.x1, r.y1), (r.x0, r.y1)]),
         ShapeKind::RightTriangle => poly(&[(r.x0, r.y0), (r.x1, r.y1), (r.x0, r.y1)]),

@@ -100,6 +100,21 @@ pub enum Draw {
         /// A rounded rectangle's corner ([`wordcraft_doc::connector::ShapeExtra::corner`]).
         corner: Option<u32>,
     },
+    /// A shape's picture fill: picture `media` stretched over `rect` and clipped to the `kind`
+    /// outline (`corner`: a rounded rectangle's), or to a freeform's closed paths `clip` when
+    /// there are some. The shape's shadow and glow (`effects`, cast by the filled shape, grown
+    /// by half the outline's `stroke_width` when it has one) are drawn first, under the
+    /// picture. It comes just before the shape's [`Draw::Shape`] or paths, which draw the
+    /// outline over it.
+    ShapePicture {
+        rect: Rect,
+        kind: ShapeKind,
+        corner: Option<u32>,
+        media: String,
+        clip: Vec<PathSeg>,
+        effects: wordcraft_doc::effects::ShapeEffects,
+        stroke_width: Option<f32>,
+    },
     /// An ink stroke: a line through `pts` (page points) with round ends and joins, `width`
     /// wide, in `color` at opacity `alpha`.
     Ink { pts: Vec<(f32, f32)>, color: Rgb, width: f32, alpha: f32 },

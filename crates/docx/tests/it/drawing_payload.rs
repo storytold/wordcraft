@@ -141,7 +141,7 @@ fn picture_group_canvas_keep_kind() {
 
 #[test]
 fn own_picture_fill_keeps_image() {
-    // Keep the existing WPS picture-fill fallback, distinct from a nested picture.
+    // A shape's own picture fill (#1534) stays a shape with that picture as its fill, distinct from a nested picture.
     let start = INLINE_XML.find("<wps:spPr>").unwrap();
     let end = INLINE_XML.find("</wps:wsp>").unwrap();
     let payload = r#"<wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="2286000" cy="1016000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:blipFill><a:blip r:embed="rIdIsolationRect"/><a:stretch><a:fillRect/></a:stretch></a:blipFill></wps:spPr><wps:bodyPr/>"#;
@@ -150,10 +150,11 @@ fn own_picture_fill_keeps_image() {
     assert!(doc.parts.is_empty());
     let objects = &doc.body[0].as_para().unwrap().objects;
     assert_eq!(objects.len(), 1);
-    let InlineObject::Image { w, h, media, float, .. } = &objects[0] else {
+    let InlineObject::Shape { w, h, float, extra, .. } = &objects[0] else {
         panic!("own picture fill lost: {:?}", objects[0]);
     };
     assert_eq!((*w, *h), (180.0, 80.0));
     assert_eq!((float.wrap, float.x, float.y), (Wrap::InFrontOfText, 72.0, 100.0));
+    let media = extra.picture.as_ref().expect("the picture fill");
     assert_eq!(doc.media[media].as_slice(), BLUE_PNG);
 }

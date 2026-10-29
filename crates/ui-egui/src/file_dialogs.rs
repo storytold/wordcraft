@@ -54,12 +54,19 @@ pub fn open_filters(purpose: &str) -> &'static [(&'static str, &'static [&'stati
     }
 }
 
+/// The shape a pending Shape Fill › Picture is for: its document, position and content, so a
+/// replaced shape at the same place isn't taken for it.
+pub(crate) type FillTarget = (u64, wordcraft_doc::Pos, wordcraft_doc::para::InlineObject);
+
 /// What to do with the path picked in a dialog.
 pub(crate) enum AfterPick {
     /// Open the picked document from the window showing `document` ([`WordApp::open_file`]).
     OpenDocument { document: u64 },
     /// Insert the picked picture, or replace the pending Change Picture target.
     Picture,
+    /// Fill the shape that was selected when the dialog opened with the picked picture (Shape
+    /// Fill › Picture): the document's identity, the shape's position and the shape itself, checked again on return.
+    FillPicture { target: Option<Box<FillTarget>> },
     /// Save the document there, then carry on.
     SaveAs { after: AfterSave, document: u64 },
     /// Save a copy there in this format (`pdf`, `docx`, `png`…).
@@ -254,6 +261,14 @@ impl WordApp {
                     return Ok(json!({"cancelled": true}));
                 };
                 self.insert_or_change_picture(json!({"path": path}))
+            }
+            AfterPick::FillPicture { target } => {
+                let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
+                // The selection (or document) may have changed while the dialog was open.
+                if target != self.selected_shape_target() {
+                    return Ok(json!({"cancelled": true}));
+                }
+                self.run("shape.fill", json!({"picture": {"path": path}}))
             }
             AfterPick::Font => {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
@@ -460,6 +475,23 @@ impl WordApp {
             return;
         }
         let _ = self.ask_file(FileDialogRequest::Open { purpose: "picture".into() }, AfterPick::Picture);
+    }
+
+    /// Shape Fill › Picture: pick the picture to fill the selected shape with. The browser has no
+    /// paths to hand the command, so it isn't offered there yet.
+    pub(crate) fn pick_fill_picture(&mut self) {
+        if self.services.open_async.is_some() {
+            self.status(tl!("Picture fills aren't available in the browser yet."));
+            return;
+        }
+        let target = self.selected_shape_target();
+        let _ = self.ask_file(FileDialogRequest::Open { purpose: "picture".into() }, AfterPick::FillPicture { target });
+    }
+
+    /// Which shape is selected, and in which document: what a pending picture fill is bound to.
+    fn selected_shape_target(&self) -> Option<Box<FillTarget>> {
+        let (pos, shape) = wordcraft_engine::cmd::objects::selected(&self.session)?;
+        Some(Box::new((self.session.document_id(), pos, shape)))
     }
 
     /// Pick a font file to add (Add Font…; web: it arrives through the inbox).

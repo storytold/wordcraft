@@ -35,6 +35,7 @@ use select::{has_group, holds_ink, obj_size};
 pub use select::{min_size, object_selection, picked_objects, selected, selected_all};
 #[cfg(test)]
 use shape::can_link;
+pub(crate) use shape::picture_fill;
 pub(crate) use shape::set_text_body;
 pub use shape::text_box_target;
 pub use specs::specs;

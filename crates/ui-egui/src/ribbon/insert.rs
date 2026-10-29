@@ -45,6 +45,14 @@ pub(super) fn insert(app: &mut WordApp, ui: &mut Ui) {
                 ("Arrow", "arrow"),
                 ("Star", "star"),
                 ("Heart", "heart"),
+                ("Hexagon", "hexagon"),
+                ("Octagon", "octagon"),
+                ("Regular Pentagon", "pentagon"),
+                ("Decagon", "decagon"),
+                ("Parallelogram", "parallelogram"),
+                ("Trapezoid", "trapezoid"),
+                ("Cross", "plus"),
+                ("Chevron", "chevron"),
             ] {
                 mi_icon(ui, app, &format!("shape.{k}"), l, "insert.shape", json!({"kind": k}));
             }

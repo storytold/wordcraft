@@ -63,6 +63,25 @@ impl Exporter<'_> {
                 s.set_fill(None);
                 s.set_stroke(None);
             }
+            Draw::ShapePicture { rect, kind, corner, media, clip, effects, stroke_width } => {
+                // The filled shape's shadow and glow, under the picture.
+                let fx = effects.sanitized();
+                if !fx.is_empty() && clip.is_empty() {
+                    shape_effects(s, (*kind, *corner), rect, &fx, (true, stroke_width.is_some(), stroke_width.unwrap_or(0.0)));
+                }
+                // The picture stretched over the box, inside the outline (or a freeform's paths) only.
+                let clip = if clip.is_empty() {
+                    shape_path(*kind, rect, *corner)
+                } else {
+                    let mut pb = PathBuilder::new();
+                    append_path(&mut pb, &wordcraft_layout::display::seg_path(clip));
+                    pb.finish()
+                };
+                let Some(clip) = clip else { return };
+                s.push_clip_path(&clip, &FillRule::NonZero);
+                self.picture(s, rect, media, &[0.0; 4], 1.0);
+                s.pop();
+            }
             Draw::Ink { pts, color, width, alpha } => {
                 let mut pb = PathBuilder::new();
                 let mut used = 0usize;

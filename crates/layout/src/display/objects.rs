@@ -111,6 +111,16 @@ pub(super) fn shape_draws(rect: Rect, look: &ShapeLook, opts: &DisplayOptions, o
         return;
     }
     let Some(f) = freeform.filter(|_| kind == ShapeKind::Freeform) else {
+        // A picture fill casts the shape's effects itself, under the picture.
+        let effects = match &extra.picture {
+            Some(media) => {
+                let stroke_width = stroke.map(|_| stroke_width);
+                let (corner, media, clip) = (extra.corner, media.clone(), Vec::new());
+                out.push(Draw::ShapePicture { rect, kind, corner, media, clip, effects, stroke_width });
+                Default::default()
+            }
+            None => effects,
+        };
         out.push(Draw::Shape {
             rect,
             kind,
@@ -128,6 +138,20 @@ pub(super) fn shape_draws(rect: Rect, look: &ShapeLook, opts: &DisplayOptions, o
         return;
     }
     let width = if stroke_width.is_finite() { stroke_width.clamp(0.0, 200.0) } else { 0.75 };
+    // A picture fill inside the closed paths, under their outlines.
+    if let Some(media) = extra.picture.as_ref().filter(|_| !f.is_ink()) {
+        let mut clip = Vec::new();
+        for (pts, _) in f.placed(rect.x, rect.y, rect.w, rect.h).into_iter().filter(|(_, closed)| *closed) {
+            for (i, [x, y]) in pts.iter().enumerate() {
+                clip.push(if i == 0 { PathSeg::Move(*x, *y) } else { PathSeg::Line(*x, *y) });
+            }
+            clip.push(PathSeg::Close);
+        }
+        if !clip.is_empty() {
+            let effects = Default::default();
+            out.push(Draw::ShapePicture { rect, kind, corner: None, media: media.clone(), clip, effects, stroke_width: None });
+        }
+    }
     for (pts, closed) in f.placed(rect.x, rect.y, rect.w, rect.h) {
         if f.is_ink() || (!closed && fill.is_none()) {
             if let Some(color) = stroke {

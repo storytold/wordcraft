@@ -1,4 +1,4 @@
-use super::select::{all_objects, edit_obj, picked_objects, selected, selected_all};
+use super::select::{all_objects, edit_obj, picked_objects, selected, selected_all, with_obj};
 use super::{CmdError, CmdResult, InlineObject, Pos, Rgb, Session, StoryRef, TextBody, Value, json, p};
 
 pub(super) const NO_TEXT_BOX: &str = "select a text box first";
@@ -168,4 +168,61 @@ pub(super) fn shape_effects(s: &mut Session, v: &Value) -> CmdResult {
         }
     }
     Ok(json!({"shapes": targets.len(), "effects": serde_json::to_value(last).unwrap_or(Value::Null)}))
+}
+
+/// Largest picture a shape fill takes (as Insert › Pictures).
+const MAX_FILL_PICTURE: usize = 200 << 20;
+
+/// Shape Fill › Picture: fill the selected shape with the picture at `path` or in base64 `data`,
+/// in place of its colour. Without either, the app is asked to pick one.
+pub(crate) fn picture_fill(s: &mut Session, v: &Value) -> CmdResult {
+    if !v.is_object() {
+        return Err(CmdError::Params("`picture`: {\"path\": string} or {\"data\": base64}".into()));
+    }
+    if !matches!(selected(s), Some((_, InlineObject::Shape { .. }))) {
+        return Err(CmdError::Disabled("select a shape first".into()));
+    }
+    let bytes = match (v.get("data"), v.get("path")) {
+        (Some(d), _) => {
+            let d = d.as_str().ok_or_else(|| CmdError::Params("`data`: base64 text".into()))?;
+            crate::cmd::insert::base64_decode(d).ok_or_else(|| CmdError::Params("bad base64 data".into()))?
+        }
+        (None, Some(path)) => {
+            let path = path.as_str().ok_or_else(|| CmdError::Params("`path`: text".into()))?;
+            read_fill_picture(path)?
+        }
+        (None, None) => {
+            s.ui_requests.push(json!({"open": "shapeFillPicture"}));
+            return crate::cmd::sel_result(s);
+        }
+    };
+    if bytes.len() > MAX_FILL_PICTURE {
+        return Err(CmdError::Failed("image is larger than 200 MB".into()));
+    }
+    // Only pictures the renderers can draw (bitmaps and metafiles) are kept.
+    let ext = if wordcraft_render::image_size(&bytes).is_some() {
+        crate::cmd::insert::image_ext(&bytes)
+    } else if let Some((_, _, ext)) = wordcraft_render::metafile_size(&bytes) {
+        ext
+    } else {
+        return Err(CmdError::Failed("not a supported image (PNG, JPEG, GIF, WebP, BMP, WMF, EMF)".into()));
+    };
+    let key = s.doc.add_media(bytes, ext);
+    with_obj(s, |o| {
+        if let InlineObject::Shape { fill, extra, .. } = o {
+            *fill = None;
+            extra.picture = Some(key.clone());
+        }
+    })
+}
+
+/// The picture file at `path`, refused by its size before it is read.
+#[cfg(not(target_arch = "wasm32"))]
+fn read_fill_picture(path: &str) -> Result<Vec<u8>, CmdError> {
+    crate::io::read_file_capped(path, MAX_FILL_PICTURE as u64, "picture").map_err(CmdError::Failed)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn read_fill_picture(path: &str) -> Result<Vec<u8>, CmdError> {
+    crate::io::read_file(path).map_err(CmdError::Failed)
 }
