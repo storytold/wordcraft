@@ -18,7 +18,7 @@ pub(super) struct PageField {
     /// The depth of the `\fldrslt` group once it opens: only text within it is the result, not
     /// text between the code and the result.
     pub(super) result_depth: Option<usize>,
-    /// The `\fldrslt` group has closed: the result is complete.
+    /// The result is complete: its `\fldrslt` group closed, or it reached its cap.
     pub(super) result_done: bool,
 }
 

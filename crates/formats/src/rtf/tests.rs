@@ -585,6 +585,21 @@ fn page_fields_keep_their_tracked_changes() {
 }
 
 #[test]
+fn a_long_page_field_result_stays_within_its_cap() {
+    // A run of text reaches the reader whole, however long. A short run ("1", ended by `\i0`)
+    // then a long one must not carry the cached result past its 4096 bytes: the long one is cut
+    // to the room left, the "é" that straddles the cut is left out whole, and the result ends
+    // there (no "y" after the gap).
+    let long = format!("{}\\u233?{}", "x".repeat(4094), "y".repeat(10_000));
+    let rtf = format!(r"{{\rtf1\ansi\uc1\pard p{{\field{{\*\fldinst PAGE}}{{\fldrslt 1\i0 {long}}}}}\par}}");
+    let f = parse(rtf.as_bytes()).unwrap();
+    let inl: Vec<&Inline> = f.blocks.iter().flat_map(|b| if let FBlock::Para(p) = b { p.inlines.iter().collect() } else { vec![] }).collect();
+    let result = inl.iter().find_map(|i| if let Inline::Field { result, .. } = i { Some(result) } else { None }).unwrap();
+    assert_eq!(result.len(), 4095, "cut at the cap, not dropped, and never past it");
+    assert!(result.starts_with("1xx") && result.ends_with('x'));
+}
+
+#[test]
 fn hostile_page_fields_never_panic() {
     // Unclosed, nested and empty fields, and a field that is all switch: each still imports.
     for rtf in [

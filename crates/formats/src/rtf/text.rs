@@ -180,9 +180,14 @@ impl Reader {
                         field.fmt = fmt;
                         field.from_result = true;
                     }
-                    if field.result.len() < 4096 {
-                        field.result.push_str(s);
+                    // A run arrives whole, however long: cut it to the room left under the cap, at
+                    // a character boundary, and end the result there.
+                    let mut end = 4096usize.saturating_sub(field.result.len()).min(s.len());
+                    while !s.is_char_boundary(end) {
+                        end = end.saturating_sub(1);
                     }
+                    field.result.push_str(s.get(..end).unwrap_or_default());
+                    field.result_done |= end < s.len();
                     return;
                 }
                 let f = self.text_fmt();
