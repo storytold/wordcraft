@@ -6,8 +6,8 @@ use super::page::PageFrame;
 use super::placed::Placed;
 use super::table_flow::below;
 use super::{
-    Anchor, Arc, Block, Blocks, Border, Document, Float, FloatAlign, HashMap, ParaLayout, Paragraph, Path, Rect, SectionProps, StoryRef, TableFloat,
-    TextDirection, Wrap, WrapText, para, table,
+    Anchor, Arc, Block, Blocks, Border, Borders, Document, Float, FloatAlign, HashMap, ParaLayout, Paragraph, Path, Rect, SectionProps, StoryRef,
+    TableFloat, TextDirection, Wrap, WrapText, para, table,
 };
 
 /// Cell identity is independent of optional table-style formatting.
@@ -298,18 +298,11 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                     pl = ctx.para_labelled(p, width, table, &rel, label);
                 }
                 // Bordered paragraphs: room for their borders, those of a group joined in one box.
-                let cell = table.map(|t| &t.para);
-                let (above, below) = (joined(ctx.doc, blocks, i, i.checked_sub(1), cell), joined(ctx.doc, blocks, i, Some(i + 1), cell));
-                let mut edges = Edges::own(&pl, 0, pl.lines.len());
-                if above {
-                    edges.top = 0.0;
-                }
-                if below {
-                    edges.bottom = 0.0;
-                }
+                let (above, below) = (joined(ctx.doc, blocks, i, i.checked_sub(1), table), joined(ctx.doc, blocks, i, Some(i + 1), table));
+                let mut edges = Edges::grouped(&pl, above, below);
                 let lead = pl.lines.first().map_or(0.0, |l| l.top.max(0.0)) + edges.top;
                 if above {
-                    edges.up = (y + lead - prev_end).max(0.0);
+                    edges.up = (y + lead - edges.top - prev_end).max(0.0);
                 }
                 prev_end = push_para(&mut items, (story, &path), &pl, (0, pl.lines.len()), (0.0, y + lead), width, edges);
                 // Pictures, shapes and text boxes: drawn, their areas and text boxes' text.
@@ -561,24 +554,48 @@ pub(crate) fn fit_box(items: Vec<Placed>, height: f32) -> Vec<Placed> {
 
 /// Word joins neighbouring paragraphs with the same borders and indents into one box: the top
 /// border goes above the first of them only, the bottom one below the last, and the shading and
-/// side borders run on through the space between them (`table`: the cell's paragraph properties).
-fn border_group(doc: &Document, a: &Paragraph, b: &Paragraph, table: Option<&wordcraft_doc::props::ParaProps>) -> bool {
-    let (a, b) = (doc.styles.resolve_para_in(&a.props, table), doc.styles.resolve_para_in(&b.props, table));
-    a.borders.is_some() && a.borders == b.borders && a.indent_left == b.indent_left && a.indent_right == b.indent_right
+/// side borders run on through the space between them (`table`: the cell's text properties).
+/// Indents are compared as laid out, list indents included; framed paragraphs stand apart.
+fn border_group(doc: &Document, a: &Paragraph, b: &Paragraph, table: Option<&para::CellText>) -> bool {
+    let a = para::effective_para(doc, a, table);
+    if a.borders.is_none() || a.frame.is_some() {
+        return false;
+    }
+    let b = para::effective_para(doc, b, table);
+    b.frame.is_none() && a.borders == b.borders && a.indent_left == b.indent_left && a.indent_right == b.indent_right
 }
 
-/// Whether paragraph `i` of `blocks` and the one at `j` are of one border group.
-pub(crate) fn joined(doc: &Document, blocks: &Blocks, i: usize, j: Option<usize>, table: Option<&wordcraft_doc::props::ParaProps>) -> bool {
-    match (blocks.get(i).map(|b| &**b), j.and_then(|j| blocks.get(j)).map(|b| &**b)) {
-        (Some(Block::Para(a)), Some(Block::Para(b))) => border_group(doc, a, b, table),
+/// Whether paragraph `i` of `blocks` and the one at `j` are of one border group. A section
+/// break ends a group, and so does a paragraph mark tracked as deleted on either side (a
+/// paragraph deleted whole may be left out, drawing no borders).
+pub(crate) fn joined(doc: &Document, blocks: &Blocks, i: usize, j: Option<usize>, table: Option<&para::CellText>) -> bool {
+    let Some(j) = j else { return false };
+    match (blocks.get(i.min(j)).map(|b| &**b), blocks.get(i.max(j)).map(|b| &**b)) {
+        (Some(Block::Para(a)), Some(Block::Para(b))) if i != j => {
+            a.section.is_none() && a.mark.del.is_none() && b.mark.del.is_none() && border_group(doc, a, b, table)
+        }
         _ => false,
     }
 }
 
-/// The room a paragraph's top or bottom border takes in the text flow: its distance from the
-/// text plus its width (Word).
+/// Most room a border takes from the text, points (distance plus width).
+const MAX_BORDER_ROOM: f32 = 64.0;
+
+/// A border's distance from the text and its width, clamped (hostile values from files and
+/// commands): never negative, together at most [`MAX_BORDER_ROOM`].
+fn border_parts(b: &Border) -> (f32, f32) {
+    let clamp = |v: f32| if v.is_nan() { 0.0 } else { v.clamp(0.0, MAX_BORDER_ROOM) };
+    let width = clamp(b.width);
+    (clamp(b.space).min(MAX_BORDER_ROOM - width), width)
+}
+
+/// The room a paragraph's top, bottom or between border takes in the text flow: its distance
+/// from the text plus its width (Word).
 fn border_room(b: Option<Border>) -> f32 {
-    b.filter(Border::is_visible).map_or(0.0, |b| b.space + b.width)
+    b.filter(Border::is_visible).map_or(0.0, |b| {
+        let (space, width) = border_parts(&b);
+        space + width
+    })
 }
 
 /// How a piece of a paragraph meets the paragraphs around it: the room taken by its top and
@@ -590,14 +607,74 @@ pub(crate) struct Edges {
     pub(crate) top: f32,
     pub(crate) bottom: f32,
     pub(crate) up: f32,
+    /// The top edge is the group's between border (ISO 29500 §17.3.1.5), not the top border.
+    pub(crate) between: bool,
 }
 
 impl Edges {
     /// A paragraph on its own: its top and bottom borders at its ends.
     pub(crate) fn own(pl: &ParaLayout, l0: usize, l1: usize) -> Edges {
         let b = pl.rp.borders.unwrap_or_default();
-        Edges { top: if l0 == 0 { border_room(b.top) } else { 0.0 }, bottom: if l1 >= pl.lines.len() { border_room(b.bottom) } else { 0.0 }, up: 0.0 }
+        Edges {
+            top: if l0 == 0 { border_room(b.top) } else { 0.0 },
+            bottom: if l1 >= pl.lines.len() { border_room(b.bottom) } else { 0.0 },
+            ..Edges::default()
+        }
     }
+    /// A whole paragraph in its border group: joined to the paragraph `above` it, the between
+    /// border takes the top border's place (taking room like it; not verified against Word: no
+    /// public reference uses `w:between`), and joined to the one below, no bottom border.
+    pub(crate) fn grouped(pl: &ParaLayout, above: bool, below: bool) -> Edges {
+        let mut e = Edges::own(pl, 0, pl.lines.len());
+        if above {
+            e.top = border_room(pl.rp.borders.and_then(|b| b.between));
+            e.between = true;
+        }
+        if below {
+            e.bottom = 0.0;
+        }
+        e
+    }
+}
+
+/// The x of a bordered paragraph's left and right side borders.
+fn side_x(pl: &ParaLayout, b: &Borders, x: f32, width: f32) -> (f32, f32) {
+    // Indents are logical: a right-to-left paragraph's start indent (and hanging indent) is on the right.
+    let start = pl.rp.indent_left.min(pl.rp.indent_left + pl.rp.indent_first);
+    let (li, ri) = if pl.rp.bidi { (pl.rp.indent_right, start) } else { (start, pl.rp.indent_right) };
+    let sp = |o: &Option<Border>| o.map_or(0.0, |b| border_parts(&b).0);
+    (x + li - sp(&b.left), x + width - ri + sp(&b.right))
+}
+
+/// The x of a paragraph's shading and its width: out to the left border's distance on both
+/// sides (4 pt without a left border), none past the indents without borders.
+fn shading_x(pl: &ParaLayout, x: f32, width: f32) -> (f32, f32) {
+    let (left, right) = side_x(pl, &Borders::default(), x, width);
+    let pad = pl.rp.borders.as_ref().map(|b| b.left.map_or(4.0, |l| border_parts(&l).0)).unwrap_or(0.0);
+    (left - pad, right - left + pad * 2.0)
+}
+
+/// The end of a border group below member `pl` (its text ending at `end`), should the next
+/// member start another page or column: the bottom rule, the sides (and the shading) reaching
+/// down to it. shortcut: the rule's room (its distance plus width, up to [`MAX_BORDER_ROOM`]) isn't
+/// reserved against the body bottom, so it may reach into the bottom margin; reserve it once a
+/// Word comparison shows Word does.
+pub(crate) fn group_end(pl: &ParaLayout, x: f32, width: f32, end: f32) -> Vec<Placed> {
+    let Some(b) = pl.rp.borders else { return Vec::new() };
+    let Some(t) = b.bottom.filter(Border::is_visible) else { return Vec::new() };
+    let (lx, rx) = side_x(pl, &b, x, width);
+    let (space, w) = border_parts(&t);
+    let cy = end + space + w / 2.0;
+    let mut close = Vec::new();
+    if let Some(c) = pl.rp.shading {
+        let (fx, fw) = shading_x(pl, x, width);
+        close.push(Placed::Fill { rect: Rect::new(fx, end, fw, space + w), color: c });
+    }
+    close.push(Placed::Rule { x0: lx, y0: cy, x1: rx, y1: cy, border: t });
+    for (sx, side) in [(lx, b.left), (rx, b.right)] {
+        close.extend(side.filter(Border::is_visible).map(|t| Placed::Rule { x0: sx, y0: end, x1: sx, y1: cy, border: t }));
+    }
+    close
 }
 
 /// Paragraph lines plus their shading and borders; returns the bottom of the lines. The
@@ -615,27 +692,25 @@ pub(crate) fn push_para(
         return y;
     };
     let h = last.top + last.height - first.top;
-    // Indents are logical: a right-to-left paragraph's start indent (and hanging indent) is on the right.
-    let start = pl.rp.indent_left.min(pl.rp.indent_left + pl.rp.indent_first);
-    let (li, ri) = if pl.rp.bidi { (pl.rp.indent_right, start) } else { (start, pl.rp.indent_right) };
-    let left = x + li;
-    let right = x + width - ri;
     let (top, bottom) = (y - e.top - e.up, y + h + e.bottom);
     if let Some(c) = pl.rp.shading {
-        let pad = pl.rp.borders.as_ref().map(|b| b.left.map(|l| l.space).unwrap_or(4.0)).unwrap_or(0.0);
-        items.push(Placed::Fill { rect: Rect::new(left - pad, top, right - left + pad * 2.0, bottom - top), color: c });
+        let (fx, fw) = shading_x(pl, x, width);
+        items.push(Placed::Fill { rect: Rect::new(fx, top, fw, bottom - top), color: c });
     }
     items.push(Placed::Lines { story, path: Path(path.to_vec()), para: pl.clone(), l0, l1, x, y, turn: TextDirection::Horizontal });
     if let Some(b) = &pl.rp.borders {
-        let sp = |o: &Option<Border>| o.map(|b| b.space).unwrap_or(0.0);
-        let (lx, rx) = (left - sp(&b.left), right + sp(&b.right));
-        // The top and bottom lines lie beyond their distance from the text.
-        if let Some(t) = b.top.filter(|t| e.top > 0.0 && t.is_visible()) {
-            let ty = y - t.space - t.width / 2.0;
+        let (lx, rx) = side_x(pl, b, x, width);
+        // The top (or between) and bottom lines lie beyond their distance from the text.
+        let beyond = |t: &Border| {
+            let (space, width) = border_parts(t);
+            space + width / 2.0
+        };
+        if let Some(t) = if e.between { b.between } else { b.top }.filter(|t| e.top > 0.0 && t.is_visible()) {
+            let ty = y - beyond(&t);
             items.push(Placed::Rule { x0: lx, y0: ty, x1: rx, y1: ty, border: t });
         }
         if let Some(t) = b.bottom.filter(|t| e.bottom > 0.0 && t.is_visible()) {
-            let by = y + h + t.space + t.width / 2.0;
+            let by = y + h + beyond(&t);
             items.push(Placed::Rule { x0: lx, y0: by, x1: rx, y1: by, border: t });
         }
         if let Some(t) = b.left.filter(Border::is_visible) {

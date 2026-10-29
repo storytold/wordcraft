@@ -58,6 +58,10 @@ pub(crate) struct PageBuilder<'a> {
     pub(crate) seps: NoteSeps,
     /// Where the last paragraph's lines ended: page count, column and y.
     pub(crate) para_end: Option<(usize, usize, f32)>,
+    /// The end of a border group whose member placed last ends this page or column so far
+    /// ([`group_end`]): put on the page as it is left, the next member then starting the next
+    /// page or column with a top border of its own (Word ends a group there).
+    pub(crate) group_close: Vec<Placed>,
     /// Per page: how many items were inserted at the front of its list (behind the text), so a
     /// [`Snap`] can take them out again.
     pub(crate) behind: Vec<usize>,
@@ -78,6 +82,14 @@ pub(crate) struct PageBuilder<'a> {
     /// Top of the footer of the pages being started: a footer reaching above the bottom margin
     /// pushes the body up (`f32::MAX`: no footer).
     pub(crate) foot_top: f32,
+    /// Top of the even pages' footer under Different Odd & Even Pages (`f32::MAX`: none, or not
+    /// set for the page being started). shortcut: pages take the default footer's room even where
+    /// they show the even one; only the leading's hang keeps clear of the even one on even pages,
+    /// until each page measures its own footer.
+    pub(crate) even_foot_top: f32,
+    /// The current page's footer top (`foot_top` as the page started: the first page's footer
+    /// may differ from the next pages'), or its bottom edge without a footer.
+    pub(crate) page_foot_top: f32,
     /// The wrap areas pages start with ([`EarlyFloats`]) ...
     pub(crate) early: &'a EarlyFloats,
     /// ... and how many of the current page's `excl` they are (its first ones).
@@ -281,6 +293,7 @@ impl PageBuilder<'_> {
         true
     }
     pub(crate) fn new_page(&mut self, first_block: usize, body_top: f32) {
+        self.close_group();
         self.apply_valign();
         self.flush_notes();
         self.beneath = self.sect_beneath;
@@ -325,6 +338,9 @@ impl PageBuilder<'_> {
         self.page_top = body_top;
         self.bottom = if self.web { f32::MAX / 8.0 } else { bottom };
         self.orig_bottom = self.bottom;
+        // An even page shows the even footer (when there is one); an odd page, the default.
+        let foot_top = if self.number.is_multiple_of(2) { self.foot_top.min(self.even_foot_top) } else { self.foot_top };
+        self.page_foot_top = foot_top.min(h);
         self.y = self.top;
         // Notes continued from the page before come first in this page's note area.
         // (`cap_columns` below keeps the columns above them.)
@@ -362,6 +378,17 @@ impl PageBuilder<'_> {
             self.body_bottom(body_top) - self.stack_h(&self.carry) - body_top
         }
     }
+    /// How far a last line's leading may hang below the body: into the bottom margin, not into a
+    /// footer reaching above it (that footer already pushed the body up) nor past the page edge.
+    /// None in balanced columns shorter than the page: a pass fits only when every line's whole
+    /// box does. Columns as tall as the page (the last pass) keep it, as the unbalanced layout
+    /// did: else a page full only thanks to the hang spills, and the text after it is lost.
+    pub(crate) fn hang_room(&self) -> f32 {
+        if self.balance.is_some_and(|(page, h)| page + 1 == self.pages.len() && self.top + h < self.uncapped_bottom() - 0.01) {
+            return 0.0;
+        }
+        (self.page_foot_top - self.orig_bottom).max(0.0)
+    }
     /// The bottom of the columns without balancing: above the footnotes.
     pub(crate) fn uncapped_bottom(&self) -> f32 {
         self.orig_bottom - self.notes_h()
@@ -388,12 +415,24 @@ impl PageBuilder<'_> {
     /// Move to the next column or page.
     pub(crate) fn advance(&mut self, block: usize, body_top: f32) {
         if self.col + 1 < self.cols.len() {
+            self.close_group();
             self.max_y = self.max_y.max(self.y);
             self.col += 1;
             self.y = self.top;
         } else {
             self.new_page(block, body_top);
         }
+    }
+    /// Ends a border group left open on the page or column being left (see `group_close`).
+    pub(crate) fn close_group(&mut self) {
+        let close = std::mem::take(&mut self.group_close);
+        let behind = self.behind.last().copied().unwrap_or(0);
+        let Some(pg) = self.pages.last_mut() else { return };
+        let (end, n) = (pg.items.len().saturating_sub(behind), close.len());
+        pg.items.extend(close);
+        // A block that moved on whole left its mark at the end: it stays there, not a gap for
+        // justified vertical alignment.
+        self.block_marks.iter_mut().filter(|m| **m == end).for_each(|m| *m = m.saturating_add(n));
     }
     pub(crate) fn page(&mut self) -> Option<&mut Page> {
         self.pages.last_mut()

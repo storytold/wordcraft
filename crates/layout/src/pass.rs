@@ -36,6 +36,8 @@ struct Tops {
     first: f32,
     foot: f32,
     first_foot: f32,
+    /// The even pages' footer top (`f32::MAX` without different odd and even pages).
+    even_foot: f32,
 }
 
 /// A section being laid out: its index, its properties as laid out (turned for vertical text),
@@ -185,6 +187,7 @@ fn new_page_builder<'p>(sect: &'p SectionProps, early: &'p EarlyFloats, web: boo
         page_valign: wordcraft_doc::section::PageVAlign::Top,
         seps: NoteSeps::default(),
         para_end: None,
+        group_close: Vec::new(),
         behind: Vec::new(),
         max_y: 0.0,
         content_bottom: 0.0,
@@ -193,6 +196,8 @@ fn new_page_builder<'p>(sect: &'p SectionProps, early: &'p EarlyFloats, web: boo
         sect_beneath: false,
         beneath: false,
         foot_top: f32::MAX,
+        even_foot_top: f32::MAX,
+        page_foot_top: f32::MAX,
         early,
         seeded: 0,
         settle,
@@ -237,7 +242,9 @@ fn section_tops(ctx: &mut Ctx, hf: &HfLinks, (si, sect): (usize, &SectionProps),
     let first = if fixed || !sect.title_page { body } else { with_pct_base(ctx, hb(heads.first), |c| body_top_for(c, sect, heads.first)) };
     let foot = if fixed { f32::MAX } else { with_pct_base(ctx, fb(feet.default), |c| foot_top_for(c, sect, feet.default)) };
     let first_foot = if fixed || !sect.title_page { foot } else { with_pct_base(ctx, fb(feet.first), |c| foot_top_for(c, sect, feet.first)) };
-    Tops { body, first, foot, first_foot }
+    let even_foot =
+        if fixed || !ctx.doc.settings.even_odd_headers { f32::MAX } else { with_pct_base(ctx, fb(feet.even), |c| foot_top_for(c, sect, feet.even)) };
+    Tops { body, first, foot, first_foot, even_foot }
 }
 
 /// Set up the walk state for a section: its grid, field values and footnote separators.
@@ -285,6 +292,7 @@ fn start_section_page<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, hf: &HfLinks<
         pb.restart_at = restart;
     }
     pb.foot_top = sec.tops.first_foot;
+    pb.even_foot_top = if sec.sect.title_page { f32::MAX } else { sec.tops.even_foot };
     pb.new_page(block, sec.tops.first);
 }
 
@@ -508,6 +516,7 @@ pub(crate) fn layout_pass(
         }
         prev_turn = turn;
         pb.foot_top = sec.tops.foot;
+        pb.even_foot_top = sec.tops.even_foot;
         let last = (*end).min(doc.body.len().saturating_sub(1));
         let balance = prepare_section_end(&mut pb, sections, (si, mode.web));
         let (next, discarded) = place_section_blocks(&mut ctx, &mut pb, &outline, (block, last), (balance, sec.tops.body));
@@ -520,6 +529,7 @@ pub(crate) fn layout_pass(
     // The rest of the endnotes after the last paragraph.
     let rest: Vec<u32> = endnotes.into_iter().map(|(id, _)| id).collect();
     place_endnotes(&mut ctx, &mut pb, rest, block);
+    pb.close_group();
     let mut pages = finish_pages(pb, doc, sections, mode.web);
     if mode.web {
         fit_web_page(&mut pages);
@@ -691,6 +701,8 @@ fn balance_columns<'a>(ctx: &mut Ctx, pb: &mut PageBuilder<'a>, blocks: (usize, 
         thrown = discard(ctx);
         if !pass(ctx, pb, hi) && hi < full {
             thrown = discard(ctx);
+            // May report failure when a line hangs its leading past `top + full` (content_bottom),
+            // but its layout is kept: nothing may act on that `false`.
             pass(ctx, pb, full);
         }
     }

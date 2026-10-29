@@ -4,7 +4,7 @@ use super::chars::caps_char;
 use super::grid::{auto_space, snap_chars};
 use super::justify::hyphenation_points;
 use super::lines::break_lines;
-use super::model::{ClKind, Cluster, Enclosed, Glyph, Label, LabelRun, ParaEnv, RubyLayout, undrawable_bullet};
+use super::model::{CellText, ClKind, Cluster, Enclosed, Glyph, Label, LabelRun, ParaEnv, RubyLayout, undrawable_bullet};
 use super::proof::{ProofRun, is_list_item, proof_issues};
 use super::{
     Arc, COLUMN_BREAK, CharProps, Document, FIELD_SHADING, InlineObject, LINE_BREAK, NoteKind, OBJ, PAGE_BREAK, PTabAlign, PTabBase, ParaLayout,
@@ -95,23 +95,52 @@ fn paragraph_props(p: &Paragraph, env: &ParaEnv) -> ResolvedPara {
     if let Some(spacing) = env.read_line_spacing.filter(|s| s.is_finite() && (1.0..=2.0).contains(s)) {
         rp.line_spacing = wordcraft_doc::props::LineSpacing::Multiple(spacing);
     }
+    apply_indents(doc, p, &mut rp, env.table.map(|t| &t.chr), env.label.as_ref().map(|(_, l)| l));
+    rp
+}
+
+/// Indents in characters and list level indents, on top of the styles' (`level`: the list level
+/// of the paragraph's label, if it has one).
+fn apply_indents(
+    doc: &Document,
+    p: &Paragraph,
+    rp: &mut ResolvedPara,
+    table_chr: Option<&CharProps>,
+    level: Option<&wordcraft_doc::numbering::Level>,
+) {
     // Indents in characters are measured in the paragraph mark's font size.
     if rp.indent_chars.iter().any(|c| *c != 0.0) {
-        rp.set_char_unit(doc.styles.resolve_char_in(p.props.style.as_deref(), env.table.map(|t| &t.chr), &p.mark).size);
+        rp.set_char_unit(doc.styles.resolve_char_in(p.props.style.as_deref(), table_chr, &p.mark).size);
     }
-    list_indents(&mut rp, p, env);
+    list_indents(rp, p, doc, level);
+}
+
+/// A paragraph's properties as [`layout_para`] resolves them (list level and character-unit
+/// indents, table style), without laying it out or counting its list label: for comparing
+/// neighbouring paragraphs.
+pub(crate) fn effective_para(doc: &Document, p: &Paragraph, table: Option<&CellText>) -> ResolvedPara {
+    let mut rp = doc.styles.resolve_para_in(&p.props, table.map(|t| &t.para));
+    // The level whose label the paragraph would get (as `Counters::next_label` finds it).
+    let level = p
+        .props
+        .numbering
+        .or(rp.numbering)
+        .filter(|n| n.num != 0)
+        .and_then(|n| doc.numbering.level(n.num, n.level.min(8)))
+        .filter(|l| l.format != wordcraft_doc::section::NumFormat::None);
+    apply_indents(doc, p, &mut rp, table.map(|t| &t.chr), level);
     rp
 }
 
 /// List level indents apply unless the paragraph sets its own, or, for a list from the style,
 /// the style giving the list (or one based on it) does (`indents_over_list`). A paragraph
 /// that switches its style's list off (`num: 0`) drops the styles' indents, as Word does.
-fn list_indents(rp: &mut ResolvedPara, p: &Paragraph, env: &ParaEnv) {
+fn list_indents(rp: &mut ResolvedPara, p: &Paragraph, doc: &Document, level: Option<&wordcraft_doc::numbering::Level>) {
     let own_left = p.props.indent_left.is_some() || p.props.indent_left_chars.is_some_and(|c| c != 0.0);
     let own_first = p.props.indent_first.is_some() || p.props.indent_first_chars.is_some_and(|c| c != 0.0);
-    if let Some((_, lvl)) = &env.label {
+    if let Some(lvl) = level {
         let (style_left, style_first) =
-            if p.props.numbering.is_some() { (false, false) } else { env.doc.styles.indents_over_list(p.props.style.as_deref().unwrap_or("Normal")) };
+            if p.props.numbering.is_some() { (false, false) } else { doc.styles.indents_over_list(p.props.style.as_deref().unwrap_or("Normal")) };
         if !own_left && !style_left {
             rp.indent_left = lvl.indent;
         }

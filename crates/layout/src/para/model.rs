@@ -158,6 +158,10 @@ pub struct Line {
     /// The text's own ascent and descent on this line, without line-spacing leading (the caret's extent).
     pub text_asc: f32,
     pub text_desc: f32,
+    /// The room below the text's descent (below a picture-only last line's pictures): multiple
+    /// spacing's extra leading (none on a document grid). The last line on a page may hang it
+    /// into the bottom margin.
+    pub hang: f32,
     /// Cluster index range.
     pub c0: usize,
     pub c1: usize,

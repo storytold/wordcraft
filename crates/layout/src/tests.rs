@@ -4807,18 +4807,124 @@ fn picture(w: f32, h: f32, float: wordcraft_doc::para::Float) -> InlineObject {
 #[test]
 fn line_spacing_does_not_scale_pictures() {
     use wordcraft_doc::props::LineSpacing;
-    let mut d = Document::from_text("");
-    if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
-        p.props.line_spacing = Some(LineSpacing::Multiple(1.15));
-        p.insert_object(0, picture(144.0, 144.0, Default::default()), &Default::default()).unwrap();
+    // (text beside the picture, expected room below the picture given (ascent, descent))
+    let cases: [(&str, fn(f32, f32) -> f32); 2] = [
+        // A line of only a picture: no descent, just the 0.15 extra leading of the font's line
+        // (Word reference PDFs: a 68.25pt logo at 1.15 lines of 11pt Calibri makes a 70.3pt line).
+        ("", |a, d| 0.15 * (a + d)),
+        // Text beside it: the picture stands on the baseline above the text's descent.
+        ("x", |_, d| d),
+    ];
+    for (text, below) in cases {
+        let mut d = Document::from_text(text);
+        if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
+            p.props.line_spacing = Some(LineSpacing::Multiple(1.15));
+            p.insert_object(0, picture(144.0, 144.0, Default::default()), &Default::default()).unwrap();
+        }
+        let l = lay(&d);
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+        let line = &para.lines[0];
+        let want = 144.0 + below(para.styles[0].ascent, para.styles[0].descent);
+        // Never (picture + descent) x 1.15.
+        assert!((line.height - want).abs() < 0.01, "{text:?}: line {} for a 144pt picture, want {want}", line.height);
+        assert!((line.baseline - line.top - 144.0).abs() < 0.01, "{text:?}: the picture stands on the baseline at the line top");
+        // What may hang into the bottom margin: all the room below a lone picture, the room
+        // below the text's descent beside one.
+        let hang = if text.is_empty() { below(para.styles[0].ascent, para.styles[0].descent) } else { 0.0 };
+        assert!((line.hang - hang).abs() < 0.01, "{text:?}: hang {} want {hang}", line.hang);
     }
+}
+
+/// A row of pictures alone in single-spaced cells is as tall as the pictures: Word keeps no
+/// descent below them (Word reference PDFs: 14.13pt checkmarks in 10pt Calibri cells step 14.13pt
+/// plus the 0.5pt border, a 78.35pt picture between empty paragraphs takes 78.35pt).
+#[test]
+fn a_cell_line_of_only_a_picture_keeps_no_descent() {
+    use wordcraft_doc::props::LineSpacing;
+    let mut d = Document::from_text("");
+    let mut t = Table::new(3, 1, 200.0);
+    t.props.cell_margins = Some([0.0, 5.4, 0.0, 5.4]);
+    for r in t.rows.iter_mut() {
+        let mut p = wordcraft_doc::Paragraph::with_text("", Default::default());
+        p.props.line_spacing = Some(LineSpacing::Multiple(1.0));
+        p.props.space_after = Some(0.0);
+        p.insert_object(0, picture(14.0, 14.0, Default::default()), &Default::default()).unwrap();
+        r.cells[0].blocks = vec![wordcraft_doc::para_block(p)];
+    }
+    d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(t))];
+    let tops = line_tops(&lay(&d));
+    assert_eq!(tops.len(), 3);
+    // The picture plus the 0.5pt border between the rows (a new table's grid).
+    for w in tops.windows(2) {
+        assert!((w[1] - w[0] - 14.5).abs() < 0.01, "row pitch {} for 14pt pictures", w[1] - w[0]);
+    }
+}
+
+/// On a document grid a picture-only line is centred in whole line pitches with its descent, as
+/// before the no-descent rule for picture-only lines (which is for lines off the grid): a 35pt
+/// picture on an 18pt grid takes three pitches, not two that cut its descent off.
+#[test]
+fn a_picture_only_line_on_a_grid_keeps_its_descent() {
+    use wordcraft_doc::props::LineSpacing;
+    use wordcraft_doc::section::{DocGrid, DocGridType};
+    for spacing in [LineSpacing::Multiple(1.0), LineSpacing::AtLeast(0.0)] {
+        let mut d = Document::from_text("");
+        d.last_section.doc_grid = Some(DocGrid { kind: DocGridType::Lines, line_pitch: 18.0, char_space: 0 });
+        let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+        p.props.line_spacing = Some(spacing);
+        p.insert_object(0, picture(35.0, 35.0, Default::default()), &Default::default()).unwrap();
+        let l = lay(&d);
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+        let line = &para.lines[0];
+        assert!((line.height - 54.0).abs() < 0.01, "{spacing:?}: height {}", line.height);
+        assert!(line.top + line.height - line.baseline >= para.styles[0].descent - 0.01, "{spacing:?}: {line:?}");
+        // Its slack in the pitches doesn't hang into the bottom margin (no evidence it may).
+        assert_eq!(line.hang, 0.0, "{spacing:?}");
+    }
+}
+
+/// At-least spacing smaller than the picture keeps no descent below a picture-only last line
+/// either (Word 365 probes on #1172: at least 12pt under 100–140pt pictures adds nothing), and it
+/// doesn't hang into the bottom margin.
+#[test]
+fn an_at_least_spaced_picture_only_line_keeps_no_descent() {
+    use wordcraft_doc::props::LineSpacing;
+    let mut d = Document::from_text("");
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    p.props.line_spacing = Some(LineSpacing::AtLeast(12.0));
+    p.insert_object(0, picture(35.0, 35.0, Default::default()), &Default::default()).unwrap();
     let l = lay(&d);
     let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
     let line = &para.lines[0];
-    let desc = para.styles[0].descent;
-    // Word: the picture plus the font's descent, not (picture + descent) x 1.15.
-    assert!((line.height - (144.0 + desc)).abs() < 0.01, "line {} for a 144pt picture (descent {desc})", line.height);
-    assert!((line.baseline - line.top - 144.0).abs() < 0.01, "the picture stands on the baseline");
+    assert!(para.styles[0].descent > 0.0);
+    assert!((line.height - 35.0).abs() < 0.01, "height {}", line.height);
+    assert!((line.baseline - line.top - 35.0).abs() < 0.01, "{line:?}");
+    assert_eq!(line.hang, 0.0);
+}
+
+/// Picture lines under at-least spacing above the picture's height and under exact spacing
+/// (Word 365 probes on #1172): at least 160pt puts a 100pt picture on the line's bottom edge;
+/// exactly 160pt puts its baseline four fifths down the line, text beside it or not. Neither
+/// hangs into the bottom margin.
+#[test]
+fn picture_lines_sit_where_word_puts_them_under_at_least_and_exact_spacing() {
+    use wordcraft_doc::props::LineSpacing;
+    for (spacing, text, baseline) in [
+        (LineSpacing::AtLeast(160.0), "", 160.0),
+        (LineSpacing::Exactly(160.0), "", 128.0),
+        (LineSpacing::Exactly(160.0), " text", 128.0),
+        (LineSpacing::Exactly(12.0), "", 9.6),
+    ] {
+        let mut d = Document::from_text(text);
+        let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+        p.props.line_spacing = Some(spacing);
+        p.insert_object(0, picture(100.0, 100.0, Default::default()), &Default::default()).unwrap();
+        let l = lay(&d);
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+        let line = &para.lines[0];
+        assert!((line.baseline - line.top - baseline).abs() < 0.01, "{spacing:?} {text:?}: {line:?}");
+        assert_eq!(line.hang, 0.0, "{spacing:?} {text:?}");
+    }
 }
 
 #[test]
@@ -7782,6 +7888,22 @@ fn columns_before_a_continuous_break_are_balanced() {
     }
 }
 
+/// Balanced columns of multiple-spaced paragraphs come out level too: a column's last line
+/// doesn't hang its leading below the balanced height (which made that height fail and the
+/// columns end up uneven).
+#[test]
+fn balanced_columns_of_multiple_spaced_lines_are_level() {
+    use wordcraft_doc::props::LineSpacing;
+    use wordcraft_doc::section::SectionStart;
+    for k in 3..=12 {
+        let m = k as f32 * 0.5;
+        let mut d = two_column_section(SectionStart::Continuous, vec![]);
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(9, 0), &|p| p.line_spacing = Some(LineSpacing::Multiple(m))).unwrap();
+        let (nl, _, nr, _, _) = column_bottoms(&lay(&d));
+        assert!(nl == 5 || nl == 6, "spacing {m}: {nl} left, {nr} right");
+    }
+}
+
 #[test]
 fn columns_before_a_page_break_or_a_column_break_are_not_balanced() {
     use wordcraft_doc::section::SectionStart;
@@ -9497,30 +9619,25 @@ fn space_after_stays_clear_of_the_footnote_separator() {
 
 #[test]
 fn space_after_may_overflow_the_bottom_margin_without_notes() {
-    // Without footnotes nothing changes: the last line only has to fit, its space after may run
-    // past the bottom margin (Word). "Fit" means its text: the leading multiple spacing adds below
-    // the text (this paragraph's 1.15) may run past the margin too (observed in Word at 1.15, 1.5
-    // and double spacing; see `a_page_ends_when_a_multiple_spaced_lines_text_no_longer_fits`).
+    // Without footnotes nothing changes: the last line's text only has to fit (multiple spacing's
+    // leading may hang below it), its space after may run past the bottom margin (Word).
     let mut tight = 0;
     for before in 0..=300 {
         let (d, t, _) = space_after_doc(before as f32, false);
         let l = lay(&d);
         let bottom_margin = d.last_section.page_h - d.last_section.margin_bottom;
         let (pieces, _) = para_pieces(&l, t);
-        let &(page, _, l1, bottom) = pieces.last().unwrap();
-        let leading = l.pages[page]
-            .items
+        let &(_, _, _, bottom) = pieces.last().unwrap();
+        let hang = l
+            .pages
             .iter()
+            .flat_map(|p| &p.items)
             .find_map(|it| match it {
-                Placed::Lines { story: StoryRef::Body, path, para, .. } if path.0 == [t as u32] => {
-                    para.lines.get(l1 - 1).map(|ln| ln.height - (ln.baseline - ln.top + ln.text_desc))
-                }
+                Placed::Lines { story: StoryRef::Body, path, para, .. } if path.0 == [t as u32] => para.lines.last().map(|x| x.hang),
                 _ => None,
             })
-            .unwrap()
-            .max(0.0);
-        let bottom = bottom - leading;
-        assert!(bottom <= bottom_margin + 0.01, "before {before}: the last line's text ends at {bottom}");
+            .unwrap();
+        assert!(bottom - hang <= bottom_margin + 0.01, "before {before}: {bottom} (hang {hang})");
         if bottom > bottom_margin - 6.0 {
             tight += 1;
         }
@@ -10180,6 +10297,331 @@ fn split_cell_reuses_top_inset() {
                     })
                     .unwrap();
                 assert!((top - cell.y - width - margin).abs() < 0.01, "width={width}, margin={margin}, top={top}, cell={cell:?}");
+            }
+        }
+    }
+}
+
+/// Word keeps the text clear of a paragraph's top and bottom borders: each takes its space plus
+/// its width in the flow (a 1/2 pt rule 1 pt below the text pushes what follows down 1.5 pt, a
+/// table too, in the body and in a cell), and consecutive paragraphs with the same borders share
+/// them (no bands between them).
+#[test]
+fn paragraph_top_and_bottom_borders_take_room() {
+    use wordcraft_doc::{Block, Paragraph, para_block};
+    let rule = |space: f32| Some(Border { style: BorderStyle::Single, width: 0.5, color: None, space });
+    let para = |text: &str, borders: Option<Borders>| {
+        let mut p = Paragraph::with_text(text, Default::default());
+        p.props = ParaProps { space_before: Some(0.0), space_after: Some(0.0), borders, ..Default::default() };
+        p
+    };
+    let table = |text: &str| {
+        let mut t = Table::new(1, 1, 200.0);
+        t.props.cell_margins = Some([0.0; 4]);
+        t.rows[0].cells[0].blocks = vec![para_block(para(text, None))];
+        std::sync::Arc::new(Block::Table(t))
+    };
+    // Steps between the tops of consecutive lines.
+    let steps = |blocks: Vec<std::sync::Arc<Block>>| {
+        let mut d = Document::from_text("");
+        d.body = blocks;
+        let tops = line_tops(&lay(&d));
+        tops.windows(2).map(|w| w[1] - w[0]).collect::<Vec<f32>>()
+    };
+    let close = |a: f32, b: f32| (a - b).abs() < 0.01;
+    let bottom = Some(Borders { bottom: rule(1.0), ..Default::default() });
+    let plain = steps(vec![para_block(para("Heading", None)), table("cell")]);
+    let ruled = steps(vec![para_block(para("Heading", bottom)), table("cell")]);
+    assert!(close(ruled[0] - plain[0], 1.5), "bottom border before a table: {ruled:?} vs {plain:?}");
+    // In a cell, before the next paragraph.
+    let mut t = Table::new(1, 1, 200.0);
+    t.rows[0].cells[0].blocks = vec![para_block(para("Heading", bottom)), para_block(para("text", None))];
+    let mut u = t.clone();
+    u.rows[0].cells[0].blocks = vec![para_block(para("Heading", None)), para_block(para("text", None))];
+    let (ruled, plain) = (steps(vec![std::sync::Arc::new(Block::Table(t))]), steps(vec![std::sync::Arc::new(Block::Table(u))]));
+    assert!(close(ruled[0] - plain[0], 1.5), "in a cell: {ruled:?} vs {plain:?}");
+    // A box 5 pt from the text around three paragraphs: 5.5 pt above the first and below the
+    // last, nothing between them.
+    let boxed = Some(Borders { top: rule(5.0), bottom: rule(5.0), left: rule(4.0), right: rule(4.0), ..Default::default() });
+    let lines = |b: Option<Borders>| {
+        steps(vec![
+            para_block(para("before", None)),
+            para_block(para("one", b)),
+            para_block(para("two", b)),
+            para_block(para("three", b)),
+            para_block(para("after", None)),
+        ])
+    };
+    let (ruled, plain) = (lines(boxed), lines(None));
+    let diff: Vec<f32> = ruled.iter().zip(&plain).map(|(a, b)| a - b).collect();
+    assert!(close(diff[0], 5.5) && close(diff[1], 0.0) && close(diff[2], 0.0) && close(diff[3], 5.5), "{diff:?}");
+    // One top rule above the group and one bottom rule below it.
+    let mut d = Document::from_text("");
+    d.body = vec![para_block(para("one", boxed)), para_block(para("two", boxed))];
+    let l = lay(&d);
+    let rules: Vec<f32> =
+        l.pages[0].items.iter().filter_map(|i| if let Placed::Rule { y0, y1, .. } = i { (y0 == y1).then_some(*y0) } else { None }).collect();
+    assert_eq!(rules.len(), 2, "{rules:?}");
+}
+
+/// A shaded heading boxed by 3 pt rules with no space (`w:sz="24" w:space="0"`): Word for Mac
+/// draws each rule in a 3 pt band of its own above and below the line, both in the flow after
+/// the spacing before and before the spacing after. The shading fills the box out to the bands
+/// (#1800), where the rules cover it: Word shows the shading over the line only.
+#[test]
+fn a_thick_box_with_no_space_adds_its_rules_around_the_line() {
+    use wordcraft_doc::{Paragraph, para_block};
+    let rule = Some(Border { style: BorderStyle::Single, width: 3.0, color: None, space: 0.0 });
+    let boxed = Some(Borders { top: rule, bottom: rule, left: rule, right: rule, ..Default::default() });
+    let para = |text: &str, borders: Option<Borders>| {
+        let mut p = Paragraph::with_text(text, Default::default());
+        p.props = ParaProps { space_before: Some(10.0), space_after: Some(0.0), borders, ..Default::default() };
+        if borders.is_some() {
+            p.props.shading = Some(wordcraft_doc::props::Rgb(0x4F, 0x81, 0xBD));
+        }
+        para_block(p)
+    };
+    let lay_out = |b: Option<Borders>| {
+        let mut d = Document::from_text("");
+        d.body = vec![para("before", None), para("Heading", b), para("after", None)];
+        lay(&d)
+    };
+    let (ruled, plain) = (lay_out(boxed), lay_out(None));
+    let (r, p) = (line_tops(&ruled), line_tops(&plain));
+    assert!(((r[1] - r[0]) - (p[1] - p[0]) - 3.0).abs() < 0.01, "3 pt above the heading: {r:?} vs {p:?}");
+    assert!(((r[2] - r[1]) - (p[2] - p[1]) - 3.0).abs() < 0.01, "3 pt below it: {r:?} vs {p:?}");
+    let fill = ruled.pages[0].items.iter().find_map(|i| if let Placed::Fill { rect, .. } = i { Some(*rect) } else { None }).unwrap();
+    assert!((fill.y - (r[1] - 3.0)).abs() < 0.01, "the shading starts under the top rule, which covers it: {} vs {}", fill.y, r[1]);
+    let top_rule =
+        ruled.pages[0].items.iter().find_map(|i| if let Placed::Rule { y0, y1, .. } = i { (y0 == y1).then_some(*y0) } else { None }).unwrap();
+    assert!((top_rule - (r[1] - 1.5)).abs() < 0.01, "the top rule is centred in its band: {top_rule}");
+}
+
+/// The last line on a page fits when its text does: the extra leading below the text of
+/// multiple line spacing may hang into the bottom margin (Word keeps a double-spaced last line
+/// whose box ends 5pt past the margin), but text that would cross the margin moves on.
+#[test]
+fn multiple_spacing_leading_hangs_into_the_bottom_margin() {
+    use wordcraft_doc::props::LineSpacing;
+    let doc = |first_before: f32| {
+        let mut d = Document::from_text("");
+        d.body = (0..40)
+            .map(|i| {
+                let mut p = wordcraft_doc::Paragraph::with_text(&format!("Line {i}"), Default::default());
+                p.props = ParaProps {
+                    line_spacing: Some(LineSpacing::Multiple(2.0)),
+                    space_before: Some(if i == 0 { first_before } else { 0.0 }),
+                    space_after: Some(0.0),
+                    ..Default::default()
+                };
+                wordcraft_doc::para_block(p)
+            })
+            .collect();
+        d
+    };
+    let on_page_one = |l: &DocLayout| line_tops(l).len();
+    // A double-spaced line: its text fills the top half, the leading the bottom half.
+    let probe = lay(&doc(0.0));
+    let Some(Placed::Lines { para, .. }) = probe.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { story: StoryRef::Body, .. })) else {
+        panic!("no body line")
+    };
+    let (h, hang) = (para.lines[0].height, para.lines[0].hang);
+    assert!(hang > 0.4 * h && hang < 0.6 * h, "height {h}, hang {hang}");
+    // `k` whole lines fill the 648pt of text on a Letter page with `r` to spare.
+    let k = (648.0 / h).floor();
+    let r = 648.0 - k * h;
+    // Pushed down so the last line's box ends a quarter line past the margin: its text still fits.
+    let hanging = lay(&doc(r + 0.25 * h));
+    assert_eq!(on_page_one(&hanging), k as usize, "line {h}pt, {r}pt to spare");
+    let last = line_tops(&hanging).last().copied().unwrap_or_default();
+    assert!(last + h > 720.0 && last + h - hang <= 720.0, "last line at {last}");
+    // Pushed three quarters of a line down, its text would cross the margin: it moves on.
+    assert_eq!(on_page_one(&lay(&doc(r + 0.75 * h))), k as usize - 1);
+}
+
+/// Horizontal rules (a paragraph's top, bottom and between borders) on every page: (page, y).
+fn horizontal_rules(l: &DocLayout) -> Vec<(usize, f32)> {
+    l.pages
+        .iter()
+        .enumerate()
+        .flat_map(|(pi, p)| {
+            p.items.iter().filter_map(move |i| if let Placed::Rule { y0, y1, .. } = i { (y0 == y1).then_some((pi, *y0)) } else { None })
+        })
+        .collect()
+}
+
+fn ruled_para(text: &str, borders: Option<Borders>) -> wordcraft_doc::Paragraph {
+    let mut p = wordcraft_doc::Paragraph::with_text(text, Default::default());
+    p.props = ParaProps { space_before: Some(0.0), space_after: Some(0.0), borders, ..Default::default() };
+    p
+}
+
+fn boxed(space: f32) -> Option<Borders> {
+    let rule = Some(Border { style: BorderStyle::Single, width: 0.5, color: None, space });
+    Some(Borders { top: rule, bottom: rule, left: rule, right: rule, ..Default::default() })
+}
+
+/// A bordered paragraph that can't fit even on an empty page overflows there: its top border's
+/// band (above the first line on the new page) doesn't stop the page counting as empty, which
+/// moved it on to a new page again and again (endless pages). A picture taller than the page,
+/// with and without keep lines together, two pictures each over half a page (the orphan rule)
+/// and a line exactly spaced taller than the page.
+#[test]
+fn a_bordered_paragraph_taller_than_the_page_overflows_instead_of_looping() {
+    use wordcraft_doc::para_block;
+    use wordcraft_doc::props::LineSpacing;
+    let cases: [(&str, fn(&mut wordcraft_doc::Paragraph)); 4] = [
+        ("900pt picture", |p| p.insert_object(0, picture(300.0, 900.0, Default::default()), &Default::default()).unwrap()),
+        ("900pt picture, keep lines", |p| {
+            p.props.keep_lines = Some(true);
+            p.insert_object(0, picture(300.0, 900.0, Default::default()), &Default::default()).unwrap();
+        }),
+        ("two 400pt pictures", |p| {
+            p.insert_object(0, picture(400.0, 400.0, Default::default()), &Default::default()).unwrap();
+            let end = p.text.len();
+            p.insert_object(end, picture(400.0, 400.0, Default::default()), &Default::default()).unwrap();
+        }),
+        ("exactly 900pt", |p| {
+            p.text = "tall".into();
+            p.props.line_spacing = Some(LineSpacing::Exactly(900.0));
+        }),
+    ];
+    for (name, make) in cases {
+        let mut p = ruled_para("", boxed(4.0));
+        make(&mut p);
+        let mut d = Document::from_text("");
+        d.body = vec![para_block(ruled_para("Text before.", None)), para_block(p)];
+        let l = lay(&d);
+        assert!(l.pages.len() <= 3, "{name}: {} pages", l.pages.len());
+    }
+}
+
+/// The bottom border goes on the page with the paragraph's last line: the line fits with the
+/// border's band below it, and its multiple-spacing leading doesn't hang past the margin then.
+#[test]
+fn a_bottom_border_stays_above_the_bottom_margin() {
+    use wordcraft_doc::para_block;
+    use wordcraft_doc::props::LineSpacing;
+    let rule = Some(Border { style: BorderStyle::Single, width: 0.5, color: None, space: 12.0 });
+    let doc = |spacing: f32, room: f32| {
+        let mut text = ruled_para("Text", None);
+        let mut last = ruled_para("Line", Some(Borders { bottom: rule, ..Default::default() }));
+        last.props.line_spacing = Some(LineSpacing::Multiple(spacing));
+        text.props.space_after = Some(room);
+        let mut d = Document::from_text("");
+        d.body = vec![para_block(text), para_block(last)];
+        d
+    };
+    for spacing in [1.0, 2.0] {
+        let probe = lay(&doc(spacing, 0.0));
+        let tops = line_tops(&probe);
+        let Some(Placed::Lines { para, .. }) = probe.pages[0].items.iter().filter(|i| matches!(i, Placed::Lines { .. })).nth(1) else { panic!() };
+        let h = para.lines[0].height;
+        // The bordered line's box ends 5pt above the margin (single), or its leading a quarter
+        // line past it (double): its text fits, its border wouldn't.
+        let past = if spacing > 1.0 { 0.25 * h } else { -5.0 };
+        let l = lay(&doc(spacing, 648.0 - (tops[1] - tops[0]) - h + past));
+        let rules = horizontal_rules(&l);
+        assert_eq!(rules.len(), 1);
+        for (page, y) in rules {
+            let bottom = l.pages[page].body.y + l.pages[page].body.h;
+            assert!(y <= bottom + 0.01, "{spacing}: the bottom rule at {y} on page {page}, below the margin at {bottom}");
+        }
+    }
+}
+
+/// A border group is one box: its sides (and a shading all its members share) run on through
+/// the spacing between the members.
+#[test]
+fn a_border_group_is_one_continuous_box() {
+    use wordcraft_doc::para_block;
+    let mut d = Document::from_text("");
+    d.body = ["one", "two", "three"]
+        .iter()
+        .map(|t| {
+            let mut p = ruled_para(t, boxed(4.0));
+            p.props.space_after = Some(10.0);
+            p.props.shading = Some(wordcraft_doc::props::Rgb(0xEE, 0xEE, 0xEE));
+            para_block(p)
+        })
+        .collect();
+    let l = lay(&d);
+    let items = &l.pages[0].items;
+    let mut sides: Vec<(f32, f32, f32)> =
+        items.iter().filter_map(|i| if let Placed::Rule { x0, y0, x1, y1, .. } = i { (x0 == x1).then_some((*x0, *y0, *y1)) } else { None }).collect();
+    sides.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+    assert_eq!(sides.len(), 6, "{sides:?}");
+    for w in sides.windows(2) {
+        if (w[0].0 - w[1].0).abs() < 0.01 {
+            assert!((w[1].1 - w[0].2).abs() < 0.01, "a gap in a side between {} and {}", w[0].2, w[1].1);
+        }
+    }
+    let mut fills: Vec<Rect> = items.iter().filter_map(|i| if let Placed::Fill { rect, .. } = i { Some(*rect) } else { None }).collect();
+    fills.sort_by(|a, b| a.y.total_cmp(&b.y));
+    assert_eq!(fills.len(), 3);
+    for w in fills.windows(2) {
+        assert!((w[1].y - (w[0].y + w[0].h)).abs() < 0.01, "a gap in the shading: {:?}", w);
+    }
+    assert_eq!(horizontal_rules(&l).len(), 2, "one top and one bottom rule");
+}
+
+/// List items with the same borders are one group too: their list indents are compared like
+/// any other paragraph's.
+#[test]
+fn bordered_list_items_share_one_box() {
+    use wordcraft_doc::para_block;
+    let mut d = Document::from_text("");
+    let num = d.numbering.add_list(wordcraft_doc::numbering::ListKind::Bullet);
+    d.body = ["one", "two", "three"]
+        .iter()
+        .map(|t| {
+            let mut p = ruled_para(t, boxed(1.0));
+            p.props.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
+            para_block(p)
+        })
+        .collect();
+    assert_eq!(horizontal_rules(&lay(&d)).len(), 2, "one top and one bottom rule around the list");
+}
+
+/// A border group's between border (ISO 29500 §17.3.1.5) goes above each member after the
+/// first, taking room like a top border.
+#[test]
+fn a_between_border_separates_the_members_of_a_group() {
+    use wordcraft_doc::para_block;
+    let rule = |space: f32| Some(Border { style: BorderStyle::Single, width: 0.5, color: None, space });
+    let all = Some(Borders { top: rule(1.0), bottom: rule(1.0), between: rule(3.0), ..Default::default() });
+    let lay_out = |b: Option<Borders>| {
+        let mut d = Document::from_text("");
+        d.body = ["one", "two", "three"].iter().map(|t| para_block(ruled_para(t, b))).collect();
+        lay(&d)
+    };
+    let (ruled, plain) = (lay_out(all), lay_out(None));
+    let (r, p) = (line_tops(&ruled), line_tops(&plain));
+    let rules: Vec<f32> = horizontal_rules(&ruled).into_iter().map(|(_, y)| y).collect();
+    assert_eq!(rules.len(), 4, "top, two between, bottom: {rules:?}");
+    for k in 1..3 {
+        // The between rule's 3.5pt band above the member, the rule centred in its width.
+        assert!(((r[k] - r[k - 1]) - (p[k] - p[k - 1]) - 3.5).abs() < 0.01, "{r:?} vs {p:?}");
+        assert!(rules.iter().any(|y| (y - (r[k] - 3.25)).abs() < 0.01), "a between rule above line {k}: {rules:?}");
+    }
+}
+
+/// Hostile border sizes (from commands or files) are clamped: the borders take bounded room.
+#[test]
+fn hostile_border_sizes_take_bounded_room() {
+    use wordcraft_doc::para_block;
+    for (space, width) in [(f32::MAX, 0.5), (0.5, f32::MAX), (f32::NAN, f32::NAN), (-1e9, -1e9), (f32::INFINITY, f32::NEG_INFINITY)] {
+        let rule = Some(Border { style: BorderStyle::Single, width, color: None, space });
+        let b = Some(Borders { top: rule, bottom: rule, left: rule, right: rule, between: rule, ..Default::default() });
+        let mut d = Document::from_text("");
+        d.body = vec![para_block(ruled_para("one", b)), para_block(ruled_para("two", None))];
+        let l = lay(&d);
+        assert_eq!(l.pages.len(), 1);
+        let tops = line_tops(&l);
+        assert!(tops.iter().all(|y| y.is_finite()) && tops[1] - tops[0] < 200.0, "{space}/{width}: {tops:?}");
+        for it in &l.pages[0].items {
+            if let Placed::Rule { x0, y0, x1, y1, .. } = it {
+                assert!([x0, y0, x1, y1].iter().all(|v| v.is_finite() && (-100.0..900.0).contains(*v)), "{space}/{width}: {it:?}");
             }
         }
     }
@@ -11704,6 +12146,267 @@ fn a_row_leaves_room_for_the_border_below_it() {
             assert!(end + border <= bottom + 0.02, "border {border}, {fill} filler lines: the last row ends at {end}, the margin at {bottom}");
         }
     }
+}
+
+/// Keep with next counts the next paragraph's top border band: a heading whose next paragraph's
+/// first line fits below it only without its border moves on with it.
+#[test]
+fn keep_with_next_counts_the_next_paragraphs_top_border() {
+    use wordcraft_doc::para_block;
+    let rule = Some(Border { style: BorderStyle::Single, width: 0.5, color: None, space: 30.0 });
+    let doc = |b: Option<Borders>, before: f32| {
+        let mut head = ruled_para("Heading", None);
+        head.props.keep_next = Some(true);
+        head.props.space_before = Some(before);
+        let mut d = Document::from_text("");
+        d.body = vec![para_block(head), para_block(ruled_para("Text", b))];
+        d
+    };
+    let probe = lay(&doc(None, 0.0));
+    let tops = line_tops(&probe);
+    let h = tops[1] - tops[0];
+    // Room for the two lines and 10pt more.
+    let before = 648.0 - 2.0 * h - 10.0;
+    assert_eq!(line_tops(&lay(&doc(None, before))).len(), 2, "both fit without the border");
+    let l = lay(&doc(Some(Borders { top: rule, ..Default::default() }), before));
+    assert_eq!(line_tops(&l).len(), 0, "the heading moves on with the bordered paragraph");
+}
+
+/// A section break ends a border group: each side of it gets its own top and bottom rule.
+#[test]
+fn a_section_break_ends_a_border_group() {
+    use wordcraft_doc::para_block;
+    let mut d = Document::from_text("");
+    let mut first = ruled_para("one", boxed(1.0));
+    first.section = Some(Box::new(d.last_section.clone()));
+    d.body = vec![para_block(first), para_block(ruled_para("two", boxed(1.0)))];
+    assert_eq!(horizontal_rules(&lay(&d)).len(), 4);
+}
+
+/// A page break ends a border group, as in Word: the member last on the page gets the bottom
+/// border and the one first on the next page the top border, its band above the text.
+#[test]
+fn a_page_break_ends_a_border_group() {
+    use wordcraft_doc::para_block;
+    let doc = |before: f32| {
+        let mut filler = ruled_para("Text", None);
+        filler.props.space_before = Some(before);
+        let mut d = Document::from_text("");
+        d.body = vec![para_block(filler), para_block(ruled_para("one", boxed(1.0))), para_block(ruled_para("two", boxed(1.0)))];
+        d
+    };
+    let tops = line_tops(&lay(&doc(0.0)));
+    let h = tops[2] - tops[1];
+    // "two" would end half a line past the margin: it starts the next page.
+    let l = lay(&doc(720.0 - tops[2] - h / 2.0));
+    assert_eq!(l.pages.len(), 2);
+    let rules = horizontal_rules(&l);
+    let on = |page: usize| rules.iter().filter(|r| r.0 == page).count();
+    assert_eq!((on(0), on(1)), (2, 2), "a top and a bottom rule on each page: {rules:?}");
+    // The bottom rule 1pt below "one", centred in its 0.5pt width.
+    let one = line_tops(&l)[1];
+    assert!(rules.iter().any(|&(pg, y)| pg == 0 && (y - (one + h + 1.25)).abs() < 0.01), "{rules:?}");
+    // "two" below the top border's 1.5pt band.
+    let two = l.pages[1].items.iter().find_map(|i| if let Placed::Lines { y, story: StoryRef::Body, .. } = i { Some(*y) } else { None });
+    assert_eq!(two.map(|y| y - l.pages[1].body.y), Some(1.5));
+    // Justified vertical alignment spreads page 1's two blocks; the closing rule stays under "one"
+    // (it isn't a gap of its own).
+    let mut d = doc(720.0 - tops[2] - h / 2.0);
+    d.last_section.valign = wordcraft_doc::section::PageVAlign::Justify;
+    let l = lay(&d);
+    let one = line_tops(&l)[1];
+    let rules = horizontal_rules(&l);
+    assert!(rules.iter().any(|&(pg, y)| pg == 0 && (y - (one + h + 1.25)).abs() < 0.01), "{one}: {rules:?}");
+}
+
+/// A three-line paragraph at the top of a page with room for two keeps them there (the third
+/// line goes over): its top border's band doesn't make the page count as not empty, which moved
+/// it whole, overflowing a single line (an orphan) instead.
+#[test]
+fn a_bordered_three_line_paragraph_at_the_top_keeps_two_lines() {
+    use wordcraft_doc::para_block;
+    use wordcraft_doc::props::LineSpacing;
+    for borders in [None, boxed(4.0)] {
+        let mut p = ruled_para("alpha bravo charlie", borders);
+        // One word a line, each line 300pt: two fit on the 648pt page.
+        p.props.indent_right = Some(468.0 - 50.0);
+        p.props.line_spacing = Some(LineSpacing::Exactly(300.0));
+        let mut d = Document::from_text("");
+        d.body = vec![para_block(p)];
+        let l = lay(&d);
+        let lines = |pg: usize| -> usize {
+            l.pages[pg].items.iter().map(|i| if let Placed::Lines { l0, l1, story: StoryRef::Body, .. } = i { l1 - l0 } else { 0 }).sum()
+        };
+        assert_eq!(l.pages.len(), 2, "{borders:?}");
+        assert_eq!((lines(0), lines(1)), (2, 1), "{borders:?}");
+    }
+}
+
+/// A paragraph with a deleted mark ends a border group: in the final text a paragraph deleted
+/// whole takes no room, and the member above it keeps its bottom border (it lost it to the
+/// deleted one, which draws nothing), also when the next member starts the next page.
+#[test]
+fn a_deleted_paragraph_ends_a_border_group() {
+    use wordcraft_doc::para_block;
+    let fin = LayoutOptions { hide_deleted: true, ..Default::default() };
+    let build = |paras: &[(&str, bool)], shift: f32, deleted: Option<usize>| {
+        let mut d = Document::from_text("");
+        d.body = paras.iter().map(|(t, b)| para_block(ruled_para(t, if *b { boxed(1.0) } else { None }))).collect();
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.space_before = Some(shift)).unwrap();
+        if let Some(k) = deleted {
+            d.format_range(&Pos::body(k, 0), &Pos::body(k + 1, 0), &|c| c.del = Some(0)).unwrap();
+        }
+        layout(&d, &mut LayoutCache::new(), &fin)
+    };
+    let l = build(&[("One", true), ("Gone", true), ("After", false)], 0.0, Some(1));
+    let without = build(&[("One", true), ("After", false)], 0.0, None);
+    assert_eq!(horizontal_rules(&l), horizontal_rules(&without));
+    assert_eq!(line_tops(&l).last(), line_tops(&without).last());
+    // "Two" would end half a line past the margin: it starts the next page.
+    let paras = [("Text", false), ("One", true), ("Gone", true), ("Two", true)];
+    let tops = line_tops(&build(&paras, 0.0, Some(2)));
+    let h = tops[1] - tops[0] - 1.5;
+    let l = build(&paras, 720.0 - tops[3] - h / 2.0, Some(2));
+    let rules = horizontal_rules(&l);
+    let on = |page: usize| rules.iter().filter(|r| r.0 == page).count();
+    assert_eq!((on(0), on(1)), (2, 2), "a top and a bottom rule on each page: {rules:?}");
+}
+
+/// The leading of multiple spacing doesn't hang into the footnotes: with a note on the page,
+/// the last line's whole box stays above the note area, which stays at the page bottom (a line
+/// hanging into it pushed the note down).
+#[test]
+fn multiple_spacing_leading_does_not_hang_into_footnotes() {
+    use wordcraft_doc::props::LineSpacing;
+    let mut notes = Vec::new();
+    for eighth in 0..8 {
+        let mut d = Document::from_text("");
+        d.body = (0..40)
+            .map(|i| {
+                let mut p = wordcraft_doc::Paragraph::with_text(&format!("Line {i}"), Default::default());
+                p.props = ParaProps {
+                    line_spacing: Some(LineSpacing::Multiple(2.0)),
+                    space_before: Some(if i == 0 { eighth as f32 * 4.0 } else { 0.0 }),
+                    space_after: Some(0.0),
+                    ..Default::default()
+                };
+                wordcraft_doc::para_block(p)
+            })
+            .collect();
+        footnote(&mut d, &Pos::body(0, 4), "Note.");
+        let l = lay(&d);
+        let page = &l.pages[0];
+        let body: Vec<(f32, f32)> = page
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                Placed::Lines { y, story: StoryRef::Body, para, l0, l1, .. } => {
+                    let (f, z) = (para.lines.get(*l0)?, para.lines.get(l1.checked_sub(1)?)?);
+                    Some((*y, y + z.top + z.height - f.top))
+                }
+                _ => None,
+            })
+            .collect();
+        let note = page.items.iter().find_map(|i| if let Placed::Lines { y, story: StoryRef::Part(_), .. } = i { Some(*y) } else { None });
+        let (Some(note), Some(last)) = (note, body.last()) else { panic!("{eighth}: no note or body text on page 1") };
+        // (The note area starts with the separator above the note.)
+        assert!(last.1 <= note - NOTE_SEP + 0.01, "{eighth}: the last line's box ends at {}, the note starts at {note}", last.1);
+        notes.push(note);
+    }
+    assert!(notes.iter().all(|y| (y - notes[0]).abs() < 0.01), "the note moved: {notes:?}");
+}
+
+/// Balanced columns on a page that is full only thanks to the hanging leading of a line: the
+/// last pass, as tall as the page, lets it hang as the unbalanced layout did. It spilled instead
+/// (the first column's last line going over, pushing the second one's last line onto the next
+/// page), which ended the pass there, and the section's paragraphs after that line were lost.
+#[test]
+fn balanced_columns_on_a_page_full_by_the_hang_keep_all_their_text() {
+    use wordcraft_doc::props::LineSpacing;
+    use wordcraft_doc::section::{SectionProps, SectionStart};
+    let line = |text: &str, spacing: LineSpacing, before: f32| {
+        let mut p = wordcraft_doc::Paragraph::with_text(text, Default::default());
+        p.props = ParaProps { line_spacing: Some(spacing), space_before: Some(before), space_after: Some(0.0), ..Default::default() };
+        p
+    };
+    let mut probe = Document::from_text("");
+    probe.body = vec![wordcraft_doc::para_block(line("Line", LineSpacing::Multiple(2.0), 0.0))];
+    let probe = lay(&probe);
+    let Some(Placed::Lines { para, .. }) = probe.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { story: StoryRef::Body, .. })) else {
+        panic!("no body line")
+    };
+    let h = para.lines[0].height;
+    // Columns holding `k` double-spaced lines and half a line to spare.
+    let k = 20;
+    let mut s = SectionProps::default();
+    s.columns.count = 2;
+    s.margin_bottom = s.page_h - s.margin_top - (k as f32 + 0.5) * h;
+    // The first column's last line hangs a quarter line past the margin, the second ends with a
+    // quarter-line paragraph (closing the section) in its spare room.
+    let mut d = Document::from_text("");
+    d.body = (0..2 * k)
+        .map(|i| wordcraft_doc::para_block(line(&format!("Line {i}"), LineSpacing::Multiple(2.0), if i == 0 { 0.75 * h } else { 0.0 })))
+        .collect();
+    let mut end = line("End", LineSpacing::Exactly(0.25 * h), 0.0);
+    end.section = Some(Box::new(s.clone()));
+    d.body.push(wordcraft_doc::para_block(end));
+    d.body.push(wordcraft_doc::para_block(line("After", LineSpacing::Multiple(1.0), 0.0)));
+    d.last_section = s;
+    d.last_section.start = SectionStart::Continuous;
+    let l = lay(&d);
+    let laid = |b: usize| {
+        l.pages.iter().any(|p| p.items.iter().any(|i| matches!(i, Placed::Lines { story: StoryRef::Body, path, .. } if *path == Path::top(b))))
+    };
+    assert!((0..=2 * k + 1).all(laid), "a paragraph is missing");
+}
+
+/// Paragraphs with borders or shading keep their box on the page: their last line on a page
+/// doesn't hang its leading into the bottom margin, where the shading, the side borders and a
+/// bottom rule (also one closing a border group whose next member starts the next page) would
+/// follow it.
+#[test]
+fn bordered_or_shaded_lines_keep_their_leading_on_the_page() {
+    use wordcraft_doc::para_block;
+    use wordcraft_doc::props::LineSpacing;
+    let doc = |shift: usize, look: u8| {
+        let mut filler = ruled_para("Text", None);
+        filler.props.space_before = Some(shift as f32);
+        let mut d = Document::from_text("");
+        d.body = vec![para_block(filler)];
+        for t in ["one", "two"] {
+            // (3: rules above and below only, the group's end drawn below "one" when "two" starts
+            // the next page.)
+            let ruled = boxed(1.0).map(|b| if look == 3 { Borders { left: None, right: None, ..b } } else { b });
+            let mut p = ruled_para(t, if look == 1 || look == 3 { ruled } else { None });
+            p.props.line_spacing = Some(LineSpacing::Multiple(2.0));
+            if look == 2 {
+                p.props.shading = Some(wordcraft_doc::props::Rgb(0xDD, 0xDD, 0xDD));
+            }
+            d.body.push(para_block(p));
+        }
+        lay(&d)
+    };
+    // The bottom of the lines of "one" and "two" on the first page.
+    let lowest = |l: &DocLayout| {
+        l.pages[0]
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                Placed::Lines { story: StoryRef::Body, path, para, l0, l1, y, .. } if *path != Path::top(0) => item_bottom(*y, para, *l0, *l1),
+                _ => None,
+            })
+            .fold(0.0f32, f32::max)
+    };
+    let mut hung = 0;
+    for shift in 560..720 {
+        if lowest(&doc(shift, 0)) > 720.01 {
+            hung += 1;
+        }
+        for look in [1, 2, 3] {
+            assert!(lowest(&doc(shift, look)) <= 720.01, "shift {shift}, look {look}: a box hangs into the margin");
+        }
+    }
+    assert!(hung > 0, "plain lines never hung");
 }
 
 /// A kept-together paragraph starting a continuous section low on a page, with room there for

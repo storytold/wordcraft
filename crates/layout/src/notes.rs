@@ -364,6 +364,27 @@ pub(crate) fn place_endnotes(ctx: &mut Ctx, pb: &mut PageBuilder, ids: Vec<u32>,
     }
 }
 
+/// How far line `k` of `pl` may hang its leading below the body (`room`: as far as the page
+/// lets it, see [`PageBuilder::hang_room`]): the line fits when its text does (Word). Not with
+/// a footnote (`noted`: the notes need the whole line), nor under shading or side borders,
+/// which run down the line's whole box, nor on a last line with a bottom border, which has to
+/// be on the page (also when it closes its group at the page end).
+pub(crate) fn line_hang(pl: &ParaLayout, k: usize, noted: bool, room: f32) -> f32 {
+    let Some(l) = pl.lines.get(k) else { return 0.0 };
+    let b = pl.rp.borders.unwrap_or_default();
+    let shown = |e: Option<Border>| e.is_some_and(|e| e.is_visible());
+    if noted || pl.rp.shading.is_some() || shown(b.left) || shown(b.right) || (k + 1 >= pl.lines.len() && shown(b.bottom)) {
+        return 0.0;
+    }
+    l.hang.min(room).max(0.0)
+}
+
+/// Whether `notes` ([`para_notes`]) reference a footnote before cluster `c1`: the line loop lets
+/// no leading hang below such lines.
+pub(crate) fn footnote_before(doc: &Document, notes: &[(usize, u32)], c1: usize) -> bool {
+    notes.iter().any(|(ci, id)| *ci < c1 && doc.parts.get(id).is_some_and(|q| q.kind == wordcraft_doc::PartKind::Footnote))
+}
+
 /// Footnotes referenced in a paragraph laid out as `pl`: in its text, and inside its text boxes
 /// (on the box's cluster), as (cluster, note id).
 pub(crate) fn para_notes(doc: &Document, p: &Paragraph, pl: &ParaLayout) -> Vec<(usize, u32)> {
