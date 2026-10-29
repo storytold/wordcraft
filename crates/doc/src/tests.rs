@@ -91,6 +91,45 @@ fn parts_and_media() {
 }
 
 #[test]
+fn many_distinct_media_add_in_linear_time() {
+    // An import with tens of thousands of small distinct images (same length, differing only at
+    // the end) used to compare each against every earlier one.
+    let mut d = Document::new();
+    let t = std::time::Instant::now();
+    let n = 40_000u32;
+    for i in 0..n {
+        let mut bytes = vec![7u8; 256];
+        bytes.extend(i.to_le_bytes());
+        d.add_media(bytes, "png");
+    }
+    assert_eq!(d.media.len(), n as usize);
+    // Duplicates still find their first copy, including media inserted directly.
+    let mut first = vec![7u8; 256];
+    first.extend(0u32.to_le_bytes());
+    assert_eq!(d.add_media(first, "png"), "image1.png");
+    d.media.insert("direct.png".into(), Arc::new(vec![9, 9]));
+    assert_eq!(d.add_media(vec![9, 9], "png"), "direct.png");
+    // About half a second on a loaded machine; the old scan took over two minutes.
+    assert!(t.elapsed().as_secs_f32() < 10.0, "{:?}", t.elapsed());
+    // The lookup cache isn't part of the document.
+    let mut e = d.clone();
+    e.media_index = MediaIndex::default();
+    assert_eq!(d, e);
+}
+
+#[test]
+fn media_keys_skip_taken_names_once() {
+    let mut d = Document::new();
+    // A file whose media already use the names add_media would pick next.
+    for i in 2..2002u32 {
+        d.media.insert(format!("image{i}.png"), Arc::new(i.to_le_bytes().to_vec()));
+    }
+    assert_eq!(d.add_media(vec![0], "png"), "image2002.png");
+    assert_eq!(d.add_media(vec![1], "png"), "image2003.png");
+    assert_eq!(d.add_media(vec![2], "png"), "image2004.png");
+}
+
+#[test]
 fn free_ids_skip_taken_ones_instead_of_overflowing() {
     assert_eq!(free_id(None, std::iter::empty(), 1), Some(1));
     assert_eq!(free_id(Some(7), [3, 7].into_iter(), 1), Some(8));
@@ -139,6 +178,72 @@ fn clone_is_shallow() {
     assert!(Arc::ptr_eq(&d.body[0], &e.body[0]));
     assert!(!Arc::ptr_eq(&d.body[1], &e.body[1]));
     assert_eq!(d.plain_text(StoryRef::Body), "a\nb");
+}
+
+/// [`Document::same_content`] is what tells the engine that a command changed nothing: it
+/// must see every change, and it must not call two different documents the same.
+#[test]
+fn same_content_sees_every_change() {
+    let d = Document::from_text("Hello\nWorld");
+    assert!(d.same_content(&d.clone()), "a copy is the same document");
+    // The text changed.
+    let mut e = d.clone();
+    e.insert_text(&Pos::body(0, 0), "x", &CharProps::default()).unwrap();
+    assert!(!d.same_content(&e), "the text changed");
+    // The formatting changed.
+    let mut e = d.clone();
+    e.format_range(&Pos::body(0, 0), &Pos::body(0, 5), &|c| c.bold = Some(true)).unwrap();
+    assert!(!d.same_content(&e), "the formatting changed");
+    // The styles changed.
+    let mut e = d.clone();
+    e.styles.get_mut("Normal").unwrap().chr.bold = Some(true);
+    assert!(!d.same_content(&e), "a style changed");
+    // The lists changed.
+    let mut e = d.clone();
+    e.numbering.add_list(ListKind::Numbered);
+    assert!(!d.same_content(&e), "a list was added");
+    // The settings changed.
+    let mut e = d.clone();
+    e.settings.track_changes = true;
+    assert!(!d.same_content(&e), "a setting changed");
+    // The metadata changed.
+    let mut e = d.clone();
+    e.core.title = "Draft".into();
+    assert!(!d.same_content(&e), "the title changed");
+    // A part changed.
+    let mut e = d.clone();
+    e.add_part(PartKind::Header, vec![para_block(Paragraph::new())]);
+    assert!(!d.same_content(&e), "a part was added");
+    // A picture changed.
+    let mut e = d.clone();
+    e.media.insert("i.png".into(), Arc::new(vec![1, 2, 3]));
+    assert!(!d.same_content(&e), "a picture was added");
+    // A revision was recorded.
+    let mut e = d.clone();
+    e.revisions.push(Revision::new(RevisionKind::Insert, "Mira", "2026-10-23T00:00:00Z"));
+    assert!(!d.same_content(&e), "a revision was recorded");
+    // A comment was added.
+    let mut e = d.clone();
+    e.comments.insert(1, Comment { author: "Mira".into(), ..Default::default() });
+    assert!(!d.same_content(&e), "a comment was added");
+    // A paragraph that was marked as changed but holds the same content is the same.
+    let mut e = d.clone();
+    e.para_mut(StoryRef::Body, &Path::top(0)).unwrap().touch();
+    assert!(d.same_content(&e), "the paragraph only changed its counter");
+    // A table copied for an edit: the same until a cell's content changes.
+    let mut d = Document::from_text("Hello");
+    d.body.insert(0, Arc::new(Block::Table(Table::new(2, 2, 200.0))));
+    let mut e = d.clone();
+    Arc::make_mut(&mut e.body[0]);
+    assert!(!Arc::ptr_eq(&d.body[0], &e.body[0]));
+    assert!(d.same_content(&e), "the table was only copied");
+    let Block::Table(t) = Arc::make_mut(&mut e.body[0]) else { panic!("a table") };
+    t.rows[1].cells[1].blocks[0] = para_block(Paragraph::with_text("x", CharProps::default()));
+    assert!(!d.same_content(&e), "a cell's text changed");
+    // A building block was added.
+    let mut e = d.clone();
+    e.glossary.push(BuildingBlock { name: "Sign-off".into(), ..Default::default() });
+    assert!(!d.same_content(&e), "a building block was added");
 }
 
 #[test]
@@ -456,4 +561,93 @@ fn custom_props_set_get_remove() {
     assert!(d.remove_custom_prop("other"));
     assert!(!d.remove_custom_prop("other"));
     assert_eq!(d.custom_props.len(), 1);
+}
+
+/// A paragraph that is nothing but `objs` (built directly: inserting one at a time is slow too).
+fn para_of_objects(objs: Vec<InlineObject>) -> Paragraph {
+    let mut p = Paragraph::new();
+    p.text = para::OBJ.to_string().repeat(objs.len());
+    p.runs = vec![Run { len: p.text.len(), props: CharProps::default() }];
+    p.objects = objs;
+    p
+}
+
+#[test]
+fn object_walks_are_linear_in_the_paragraph() {
+    // #3614: loops of object_offsets + object_at recounted the objects before each one, so a
+    // paragraph of 40,000 markers took seconds per walk.
+    let n = 40_000u32;
+    let w = para::OBJ.len_utf8();
+    let mut objs: Vec<InlineObject> = Vec::new();
+    for i in 0..n {
+        objs.push(InlineObject::BookmarkStart { name: format!("b{i}") });
+        objs.push(fs("ADDIN x"));
+        objs.push(InlineObject::PermStart { id: i, group: "everyone".into(), editor: String::new() });
+    }
+    // Ranges close in the order they opened (the worst case for a backwards search).
+    for i in 0..n {
+        objs.push(InlineObject::FieldEnd);
+        objs.push(InlineObject::PermEnd { id: i });
+    }
+    let mut d = Document::new();
+    d.body = vec![Arc::new(Block::Para(para_of_objects(objs)))];
+    let t = std::time::Instant::now();
+    assert_eq!(d.bookmarks().len(), n as usize);
+    assert_eq!(d.field_ranges(StoryRef::Body).len(), n as usize);
+    let perms = d.perm_ranges();
+    assert_eq!(perms.len(), n as usize);
+    assert!(perms.iter().all(|r| r.end.off > r.start.off), "every range closed by its own end");
+    assert_eq!(d.text_box_anchor(7), None);
+    // A caret before a long row of field ends moves past all of them.
+    let first_end = 3 * n as usize * w;
+    let p = d.past_field_ends(&Pos::body(0, first_end));
+    assert_eq!(p.off, first_end + w);
+    // Under 0.3 s on a loaded machine; the old walks took minutes (360 s for the first test).
+    assert!(t.elapsed().as_secs_f32() < 10.0, "{:?}", t.elapsed());
+
+    let ends: Vec<InlineObject> = (0..n).map(|_| InlineObject::FieldEnd).collect();
+    d.body = vec![Arc::new(Block::Para(para_of_objects(ends)))];
+    let t = std::time::Instant::now();
+    assert_eq!(d.past_field_ends(&Pos::body(0, 0)).off, n as usize * w);
+    // Typing at the end of a row of block-level control starts.
+    let block = ContentControl { block: true, ..Default::default() };
+    let starts: Vec<InlineObject> = (0..n).map(|_| InlineObject::ControlStart { control: Box::new(block.clone()) }).collect();
+    d.body = vec![Arc::new(Block::Para(para_of_objects(starts)))];
+    let end = Pos::body(0, n as usize * w);
+    assert_eq!(d.typing_pos(&end), end);
+    assert!(t.elapsed().as_secs_f32() < 10.0, "{:?}", t.elapsed());
+}
+
+#[test]
+fn deleting_across_many_lone_control_markers_is_not_quadratic() {
+    // A millisecond now; the old delete took 18 s at 1,500 markers and 114 s at 3,000.
+    let n = 3_000;
+    let starts: Vec<InlineObject> = (0..n).map(|_| InlineObject::ControlStart { control: Box::default() }).collect();
+    let mut d = Document::from_text("before\n\nafter");
+    d.body[1] = Arc::new(Block::Para(para_of_objects(starts)));
+    let t = std::time::Instant::now();
+    let at = d.delete_range(&Pos::body(0, 3), &Pos::body(2, 2)).unwrap();
+    assert_eq!(at, Pos::body(0, 3));
+    assert_eq!(d.plain_text(StoryRef::Body), "befter");
+    assert!(t.elapsed().as_secs_f32() < 10.0, "{:?}", t.elapsed());
+}
+
+#[test]
+fn control_markers_kept_are_sorted() {
+    // `delete_range` groups the kept markers by paragraph and binary-searches each group, so
+    // `kept_control_markers` must hand them over sorted and without repeats (review of #3874).
+    let start = || InlineObject::ControlStart { control: Box::default() };
+    let mut d = Document::from_text("before");
+    // Controls open and close across paragraphs: 1 closes the one 0 opens, 3 the one 2 opens…
+    for i in 0..12 {
+        let objs = if i % 2 == 0 { vec![start(), start()] } else { vec![InlineObject::ControlEnd, InlineObject::ControlEnd] };
+        d.body.push(Arc::new(Block::Para(para_of_objects(objs))));
+    }
+    d.body.push(Arc::new(Block::Para(Paragraph::with_text("after", CharProps::default()))));
+    let w = para::OBJ.len_utf8();
+    for (a, b) in [(Pos::body(2, w), Pos::body(11, w)), (Pos::body(1, w), Pos::body(12, w)), (Pos::body(3, w), Pos::body(8, 0))] {
+        let kept = d.kept_control_markers(&a, &b);
+        assert!(!kept.is_empty(), "{a:?}..{b:?}");
+        assert!(kept.windows(2).all(|p| p[0] < p[1]), "sorted, no repeats: {kept:?}");
+    }
 }

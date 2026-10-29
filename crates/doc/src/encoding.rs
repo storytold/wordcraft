@@ -1,7 +1,8 @@
 //! Windows-1252 (the byte encoding legacy Word text pieces use) and the other single-byte Windows
 //! code pages RTF files name with `\ansicpg` or a font's `\fcharset` (Cyrillic 1251, Central
-//! European 1250, Greek, Turkish, Hebrew, Arabic, Baltic, Vietnamese, Thai), and Mac OS Roman
-//! (10000, RTF `\mac`).
+//! European 1250, Greek, Turkish, Hebrew, Arabic, Baltic, Vietnamese, Thai), Mac OS Roman
+//! (10000, RTF `\mac`), and the East Asian multibyte code pages (932 Shift-JIS, 936 GBK, 949 UHC,
+//! 950 Big5), whose bytes decode as runs rather than one at a time.
 
 /// Windows-1252 code points for 0x80..=0x9F.
 const CP1252: [u16; 32] = [
@@ -84,7 +85,7 @@ const CP1255: [u16; 128] = [
     0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014, 0x02DC, 0x2122, 0xFFFD, 0x203A, 0xFFFD, 0xFFFD, 0xFFFD, 0xFFFD, 0x00A0, 0x00A1, 0x00A2, 0x00A3,
     0x20AA, 0x00A5, 0x00A6, 0x00A7, 0x00A8, 0x00A9, 0x00D7, 0x00AB, 0x00AC, 0x00AD, 0x00AE, 0x00AF, 0x00B0, 0x00B1, 0x00B2, 0x00B3, 0x00B4, 0x00B5,
     0x00B6, 0x00B7, 0x00B8, 0x00B9, 0x00F7, 0x00BB, 0x00BC, 0x00BD, 0x00BE, 0x00BF, 0x05B0, 0x05B1, 0x05B2, 0x05B3, 0x05B4, 0x05B5, 0x05B6, 0x05B7,
-    0x05B8, 0x05B9, 0xFFFD, 0x05BB, 0x05BC, 0x05BD, 0x05BE, 0x05BF, 0x05C0, 0x05C1, 0x05C2, 0x05C3, 0x05F0, 0x05F1, 0x05F2, 0x05F3, 0x05F4, 0xFFFD,
+    0x05B8, 0x05B9, 0x05BA, 0x05BB, 0x05BC, 0x05BD, 0x05BE, 0x05BF, 0x05C0, 0x05C1, 0x05C2, 0x05C3, 0x05F0, 0x05F1, 0x05F2, 0x05F3, 0x05F4, 0xFFFD,
     0xFFFD, 0xFFFD, 0xFFFD, 0xFFFD, 0xFFFD, 0xFFFD, 0x05D0, 0x05D1, 0x05D2, 0x05D3, 0x05D4, 0x05D5, 0x05D6, 0x05D7, 0x05D8, 0x05D9, 0x05DA, 0x05DB,
     0x05DC, 0x05DD, 0x05DE, 0x05DF, 0x05E0, 0x05E1, 0x05E2, 0x05E3, 0x05E4, 0x05E5, 0x05E6, 0x05E7, 0x05E8, 0x05E9, 0x05EA, 0xFFFD, 0xFFFD, 0x200E,
     0x200F, 0xFFFD,
@@ -286,13 +287,47 @@ pub fn code_page_byte(code_page: u16, b: u8) -> char {
     if b >= 0x80 && OEM_CODE_PAGES.contains(&code_page) { oem_byte(code_page, b) } else { windows_byte(code_page, b) }
 }
 
+/// The East Asian multibyte code pages a document format names with `\ansicpg` or a font's `\cpg`:
+/// 932 Shift-JIS (Japanese), 936 GBK (Simplified Chinese), 949 UHC (Korean) and 950 Big5
+/// (Traditional Chinese).
+pub const MULTIBYTE_CODE_PAGES: [u16; 4] = [932, 936, 949, 950];
+
+/// Whether `code_page` is one of the East Asian multibyte code pages ([`MULTIBYTE_CODE_PAGES`]):
+/// its bytes decode as a run, a lead byte together with its trail byte.
+pub fn is_multibyte_code_page(code_page: u16) -> bool {
+    multibyte_encoding_name(code_page).is_some()
+}
+
+/// The WHATWG encoding name of an East Asian multibyte code page (see [`MULTIBYTE_CODE_PAGES`]),
+/// for `encoding_rs::Encoding::for_label`; `None` for the single-byte code pages, whose bytes
+/// decode one at a time, and anything else.
+pub fn multibyte_encoding_name(code_page: u16) -> Option<&'static str> {
+    Some(match code_page {
+        932 => "shift_jis",
+        936 => "gbk",
+        949 => "euc-kr",
+        950 => "big5",
+        _ => return None,
+    })
+}
+
+/// Whether a document format can name `code_page` for its text: a single-byte Windows, DOS or Mac
+/// one ([`is_byte_code_page`]) or an East Asian multibyte one ([`is_multibyte_code_page`]).
+pub fn is_text_code_page(code_page: u16) -> bool {
+    is_byte_code_page(code_page) || is_multibyte_code_page(code_page)
+}
+
 /// The code page of an RTF or Word font charset (`\fcharset`): 204 Russian → 1251, 238 Eastern
-/// European → 1250, 77 Mac → 10000, 254 PC / 255 OEM → 437… `None` for the ANSI and default charsets (the
-/// document's code page applies), symbol fonts and the double-byte East Asian charsets.
+/// European → 1250, 77 Mac → 10000, 254 PC / 255 OEM → 437, 128 Japanese → 932, 129 Korean → 949,
+/// 134 Simplified Chinese → 936, 136 Traditional Chinese → 950… `None` for the ANSI and default
+/// charsets (the document's code page applies) and symbol fonts.
 pub fn charset_code_page(charset: i32) -> Option<u16> {
     Some(match charset {
         77 => MAC_ROMAN_CODE_PAGE,
-        254 | 255 => 437,
+        128 => 932,
+        129 => 949,
+        134 => 936,
+        136 => 950,
         161 => 1253,
         162 => 1254,
         163 => 1258,
@@ -302,6 +337,7 @@ pub fn charset_code_page(charset: i32) -> Option<u16> {
         204 => 1251,
         222 => 874,
         238 => 1250,
+        254 | 255 => 437,
         _ => return None,
     })
 }
@@ -333,6 +369,11 @@ mod tests {
         }
     }
 
+    #[test]
+    fn windows_1255_holam_haser_for_vav() {
+        assert_eq!(windows_byte(1255, 0xCA), '\u{05BA}');
+    }
+
     /// #1653: one decoder for document text in any code page RTF names: Windows, DOS or Mac.
     #[test]
     fn document_text_in_windows_dos_and_mac_code_pages() {
@@ -345,6 +386,25 @@ mod tests {
             assert!(is_byte_code_page(cp), "{cp}");
         }
         assert!(!is_byte_code_page(932) && !is_byte_code_page(0) && !SINGLE_BYTE_CODE_PAGES.contains(&10000));
+    }
+
+    /// #1653: the East Asian charsets and code pages RTF names are multibyte: their bytes decode
+    /// as runs (a lead byte and its trail byte together), not one at a time.
+    #[test]
+    fn east_asian_code_pages_are_multibyte() {
+        assert_eq!(charset_code_page(128), Some(932), "Japanese");
+        assert_eq!(charset_code_page(129), Some(949), "Korean");
+        assert_eq!(charset_code_page(134), Some(936), "Simplified Chinese");
+        assert_eq!(charset_code_page(136), Some(950), "Traditional Chinese");
+        assert_eq!(charset_code_page(255), Some(437), "OEM is single-byte");
+        assert_eq!(MULTIBYTE_CODE_PAGES, [932, 936, 949, 950]);
+        for cp in MULTIBYTE_CODE_PAGES {
+            assert!(is_multibyte_code_page(cp) && is_text_code_page(cp), "{cp}");
+            assert!(!is_byte_code_page(cp) && !SINGLE_BYTE_CODE_PAGES.contains(&cp), "{cp}");
+            assert!(multibyte_encoding_name(cp).is_some(), "{cp}");
+        }
+        assert!(is_text_code_page(1251) && is_text_code_page(437) && is_text_code_page(10000));
+        assert!(!is_text_code_page(0) && !is_text_code_page(9999));
     }
 
     #[test]

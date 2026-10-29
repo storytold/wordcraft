@@ -24,13 +24,41 @@ pub(super) fn write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let written = replace_with(path, private, |file| {
         file.write_all(bytes)?;
         if let Some(permissions) = permissions {
-            file.set_permissions(permissions)?;
+            keep_permissions(file.set_permissions(permissions))?;
         }
         // Synchronize the prepared file before replacing the destination. Directory durability
         // and network-filesystem/power-loss guarantees are outside this operation's contract.
         file.sync_all()
     });
     written.map_err(explain)
+}
+
+/// A folder that keeps no Unix modes refuses to set one with "Operation not supported": a NAS
+/// share mounted by GVFS (`smb://` in the Linux file manager) refuses every mode change (#3003).
+/// There is no mode to keep there, so the save goes on; any other failure still stops it.
+fn keep_permissions(set: io::Result<()>) -> io::Result<()> {
+    match set {
+        Err(e) if not_supported(&e) => Ok(()),
+        set => set,
+    }
+}
+
+/// ENOTSUP and EOPNOTSUPP, which std doesn't count as `Unsupported` (only ENOSYS), plus that kind.
+fn not_supported(e: &io::Error) -> bool {
+    const CODES: &[i32] = if cfg!(any(target_os = "linux", target_os = "android")) {
+        &[95]
+    } else if cfg!(any(target_os = "macos", target_os = "ios")) {
+        &[45, 102]
+    } else if cfg!(target_os = "openbsd") {
+        &[45, 91]
+    } else if cfg!(target_os = "netbsd") {
+        &[45, 86]
+    } else if cfg!(any(target_os = "freebsd", target_os = "dragonfly")) {
+        &[45]
+    } else {
+        &[]
+    };
+    e.kind() == io::ErrorKind::Unsupported || e.raw_os_error().is_some_and(|code| CODES.contains(&code))
 }
 
 fn replace_with(path: &Path, private: bool, prepare: impl FnOnce(&mut File) -> io::Result<()>) -> io::Result<()> {
@@ -243,6 +271,43 @@ mod tests {
         assert_eq!(fs::read(&path).unwrap(), b"Exported bytes.");
         assert_eq!(fs::read(&alias).unwrap(), b"Original bytes.");
         assert_eq!(fs::read_dir(&d.0).unwrap().count(), 2);
+    }
+
+    /// #3003: a folder that refuses mode changes (a GVFS-mounted NAS share) still takes the
+    /// save; a refused mode change for any other reason still stops it and keeps the original.
+    #[test]
+    fn a_folder_without_unix_modes_still_takes_the_save() {
+        let d = Scratch::new();
+        let path = d.target();
+        fs::write(&path, b"Original bytes.").unwrap();
+        replace_with(&path, true, |file| {
+            file.write_all(b"Saved on the share.")?;
+            keep_permissions(Err(io::Error::from(io::ErrorKind::Unsupported)))?;
+            file.sync_all()
+        })
+        .unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"Saved on the share.");
+        assert_eq!(fs::read_dir(&d.0).unwrap().count(), 1);
+
+        let err = replace_with(&path, true, |file| {
+            file.write_all(b"Refused.")?;
+            keep_permissions(Err(io::Error::from(io::ErrorKind::PermissionDenied)))
+        })
+        .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(fs::read(&path).unwrap(), b"Saved on the share.");
+        assert_eq!(fs::read_dir(&d.0).unwrap().count(), 1);
+    }
+
+    /// GVFS reports a refused mode change as ENOTSUP, which std leaves uncategorized; other OS
+    /// errors still stop the save.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn enotsup_from_the_os_is_an_unsupported_mode_change() {
+        let enotsup = if cfg!(target_os = "linux") { 95 } else { 45 };
+        assert!(keep_permissions(Err(io::Error::from_raw_os_error(enotsup))).is_ok());
+        let eacces = 13;
+        assert!(keep_permissions(Err(io::Error::from_raw_os_error(eacces))).is_err());
     }
 
     /// Makes `dir` read-only while `f` runs. `None` when running as root, where the folder isn't

@@ -48,7 +48,7 @@ fn paint_style(p: &egui::Painter, r: Rect, id: &str, theme: &[Rgb]) {
         p.rect_filled(
             Rect::from_min_max(pos2(r.center().x - r.width() * 0.25, r.max.y - 3.0), pos2(r.center().x + r.width() * 0.25, r.max.y)),
             1.0,
-            Color32::from_gray(190),
+            Tokens::get(p.ctx()).text_dim,
         );
     }
     if let Some(o) = fx.outline.and_then(|o| o.color) {
