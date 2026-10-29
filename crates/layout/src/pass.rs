@@ -36,6 +36,7 @@ struct Tops {
     first: f32,
     foot: f32,
     first_foot: f32,
+    even_foot: f32,
 }
 
 /// A section being laid out: its index, its properties as laid out (turned for vertical text),
@@ -193,6 +194,7 @@ fn new_page_builder<'p>(sect: &'p SectionProps, early: &'p EarlyFloats, web: boo
         sect_beneath: false,
         beneath: false,
         foot_top: f32::MAX,
+        even_foot_top: f32::MAX,
         early,
         seeded: 0,
         settle,
@@ -237,7 +239,13 @@ fn section_tops(ctx: &mut Ctx, hf: &HfLinks, (si, sect): (usize, &SectionProps),
     let first = if fixed || !sect.title_page { body } else { with_pct_base(ctx, hb(heads.first), |c| body_top_for(c, sect, heads.first)) };
     let foot = if fixed { f32::MAX } else { with_pct_base(ctx, fb(feet.default), |c| foot_top_for(c, sect, feet.default)) };
     let first_foot = if fixed || !sect.title_page { foot } else { with_pct_base(ctx, fb(feet.first), |c| foot_top_for(c, sect, feet.first)) };
-    Tops { body, first, foot, first_foot }
+    let even_foot = if fixed || !ctx.doc.settings.even_odd_headers {
+        foot
+    } else {
+        let id = feet.even.or(feet.default);
+        with_pct_base(ctx, fb(id), |c| foot_top_for(c, sect, id))
+    };
+    Tops { body, first, foot, first_foot, even_foot }
 }
 
 /// Set up the walk state for a section: its grid, field values and footnote separators.
@@ -265,6 +273,9 @@ fn end_previous_section<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, hf: &HfLink
     let (ph, pf) = (hf.heads.set(si - 1), hf.feet.set(si - 1));
     let top = body_top_for(ctx, prev, ph.default);
     pb.foot_top = foot_top_for(ctx, prev, pf.default);
+    let even_id = if ctx.doc.settings.even_odd_headers { pf.even.or(pf.default) } else { pf.default };
+    let base = hf.defining_width(true, si - 1, even_id);
+    pb.even_foot_top = with_pct_base(ctx, base, |c| foot_top_for(c, prev, even_id));
     pb.new_page(block, top);
 }
 
@@ -285,6 +296,7 @@ fn start_section_page<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, hf: &HfLinks<
         pb.restart_at = restart;
     }
     pb.foot_top = sec.tops.first_foot;
+    pb.even_foot_top = if sec.sect.title_page { sec.tops.first_foot } else { sec.tops.even_foot };
     pb.new_page(block, sec.tops.first);
 }
 
@@ -508,6 +520,7 @@ pub(crate) fn layout_pass(
         }
         prev_turn = turn;
         pb.foot_top = sec.tops.foot;
+        pb.even_foot_top = sec.tops.even_foot;
         let last = (*end).min(doc.body.len().saturating_sub(1));
         let balance = prepare_section_end(&mut pb, sections, (si, mode.web));
         let (next, discarded) = place_section_blocks(&mut ctx, &mut pb, &outline, (block, last), (balance, sec.tops.body));

@@ -1,5 +1,5 @@
 use super::boxes::{BoxInput, clear_of_float_tables, layout_box};
-use super::ctx::{Ctx, with_pct_base};
+use super::ctx::{Ctx, with_pct_base, with_pin};
 use super::floats::{WrapArea, align_in, body_wraps};
 use super::flow::again;
 use super::headers::{MAX_HEADER_ITEMS, header_table_areas};
@@ -8,8 +8,8 @@ use super::page::{PageBuilder, PageFrame, page_frame};
 use super::placed::Placed;
 use super::{Anchor, Arc, HeightRule, Path, Rect, StoryRef, TableFloat, ViewMode, WrapText, table};
 
-/// Footer page tables wrap only the intersecting body lines, which resume below them.
-pub(crate) fn footer_table_wraps(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<WrapArea> {
+/// Footer tables and mid-page drawings let body flow resume below them.
+pub(crate) fn footer_body_wraps(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<WrapArea> {
     if pb.web || ctx.opts.view == ViewMode::Read {
         return Vec::new();
     }
@@ -49,14 +49,21 @@ pub(crate) fn footer_table_wraps(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<WrapAre
     let areas = again(ctx, 0, |ctx| {
         with_pct_base(ctx, base, |ctx| {
             let story = StoryRef::Part(id);
-            let h = layout_box(ctx, BoxInput::other(story, &blocks, sect.text_width(), 0, None)).height;
+            let (h, ..) =
+                with_pin(ctx, id, sect, page.number, |ctx| layout_box(ctx, BoxInput::other(story, &blocks, sect.text_width(), 0, None)).height);
             let y = sect.page_h - sect.footer - h;
             let frame = PageFrame { sect, origin: (x, y), number: page.number, mirror: ctx.mirror };
-            let mut areas = layout_box(ctx, BoxInput::other(story, &blocks, sect.text_width(), 0, Some(frame))).page_table_wraps;
+            let (positioned, _, _, pinned) =
+                with_pin(ctx, id, sect, page.number, |ctx| layout_box(ctx, BoxInput::other(story, &blocks, sect.text_width(), 0, Some(frame))));
+            let mut areas = positioned.page_table_wraps;
+            areas.extend(positioned.exclusions.into_iter().filter(|(_, top_bottom, ..)| *top_bottom));
             for (rect, ..) in &mut areas {
                 rect.x += x;
                 rect.y += y;
             }
+            // Pinned bounds are already on the page. Reserved-band drawings cap it instead.
+            areas.extend(pinned);
+            areas.retain(|(rect, top_bottom, ..)| !*top_bottom || !super::footer_band_overlap(*rect, sect));
             areas
         })
     });
@@ -192,9 +199,14 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
         // Each pass places the part of the row that fits, then breaks the page.
         for _ in 0..1000 {
             let cur = rest.as_ref().unwrap_or(row);
+            let (x0, x1) = (pb.col_x() + tl.x, pb.col_x() + tl.x + tl.width);
+            let footer_areas: Vec<_> = footer_body_wraps(ctx, pb).into_iter().filter(|(_, top_bottom, ..)| *top_bottom).collect();
+            pb.y = below(&footer_areas, pb.y, x0, x1);
+            let free_bottom =
+                footer_areas.iter().filter(|(r, ..)| r.y > pb.y + 0.01 && r.x < x1 && r.right() > x0).map(|(r, ..)| r.y).fold(pb.bottom, f32::min);
             // A fitting kept row follows the next row when that row cannot start below it.
             // Move only the prefix's start; an oversized follower cannot separate its kept rows.
-            let defer_kept = pb.y + cur.height <= pb.bottom + 0.01
+            let defer_kept = pb.y + cur.height <= free_bottom + 0.01
                 && !pb.web
                 && !pb.at_top()
                 && !fresh
@@ -206,15 +218,15 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
                     }
                     let (Some(next), Some(laid)) = (t.rows.get(end), tl.rows.get(end)) else { return false };
                     let page_height = pb.bottom - body_top - repeated_height;
-                    height <= page_height + 0.01 && !row_can_start(next, laid, pb.bottom - pb.y - height, page_height)
+                    height <= page_height + 0.01 && !row_can_start(next, laid, free_bottom - pb.y - height, page_height)
                 });
             // A row another row follows needs room for the border below it too (measured in Word).
-            if pb.y + cur.height + cur.edge <= pb.bottom + 0.01 && !defer_kept {
+            if pb.y + cur.height + cur.edge <= free_bottom + 0.01 && !defer_kept {
                 break;
             }
             // An at-least row with less room than its minimum moves on whole, unless nothing
             // is above it on this page (moving on would gain nothing).
-            let room = pb.bottom - pb.y;
+            let room = free_bottom - pb.y;
             let moves_on = rest.is_none() && !pb.at_top() && !fresh && !under_top_headers && short_of_min(ri, room);
             let split = if splittable && !moves_on && !defer_kept { table::split_row(cur, room) } else { None };
             match split {
@@ -225,8 +237,13 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
                 }
                 // Like Word, a row that does not fit on an empty page, or under the header rows
                 // repeated there, is placed anyway and runs into the bottom margin.
-                None if pb.at_top() || fresh => break,
+                None if free_bottom >= pb.bottom - 0.01 && (pb.at_top() || fresh) => break,
                 None => {}
+            }
+            if free_bottom < pb.bottom - 0.01 {
+                // A footer drawing interrupts this page, not the remaining table rows.
+                pb.y = below(&footer_areas, free_bottom, x0, x1);
+                continue;
             }
             pb.advance(block, body_top);
             // Repeat header rows, up to this table's cap.

@@ -93,6 +93,8 @@ pub(crate) struct Pin {
     pub(crate) mirror: bool,
     pub(crate) behind: Vec<Placed>,
     pub(crate) front: Vec<Placed>,
+    /// Pinned top-and-bottom wrap areas, in page coordinates.
+    pub(super) top_bottom: Vec<WrapArea>,
     pub(crate) seen: HashSet<(Vec<u32>, usize)>,
 }
 
@@ -107,11 +109,17 @@ pub(crate) fn page_anchored(f: &Float) -> bool {
 
 /// Run `f`, a layout of header or footer `id` for page `number` of `sect`, with the floats in its
 /// table cells that are placed on the page put there (see [`Pin`]). Returns `f`'s result and those
-/// floats' items, in page coordinates: behind the header's text, and in front.
-pub(crate) fn with_pin<T>(ctx: &mut Ctx, id: u32, sect: &SectionProps, number: u32, f: impl FnOnce(&mut Ctx) -> T) -> (T, Vec<Placed>, Vec<Placed>) {
+/// floats' items, in page coordinates: behind the text, in front, and top-and-bottom wrap bounds.
+pub(crate) fn with_pin<T>(
+    ctx: &mut Ctx,
+    id: u32,
+    sect: &SectionProps,
+    number: u32,
+    f: impl FnOnce(&mut Ctx) -> T,
+) -> (T, Vec<Placed>, Vec<Placed>, Vec<WrapArea>) {
     let tables = ctx.doc.parts.get(&id).is_some_and(|p| p.blocks.iter().any(|b| matches!(**b, Block::Table(_))));
     if !tables {
-        return (f(ctx), Vec::new(), Vec::new());
+        return (f(ctx), Vec::new(), Vec::new(), Vec::new());
     }
     let pin = Pin {
         story: StoryRef::Part(id),
@@ -120,13 +128,14 @@ pub(crate) fn with_pin<T>(ctx: &mut Ctx, id: u32, sect: &SectionProps, number: u
         mirror: ctx.mirror,
         behind: Vec::new(),
         front: Vec::new(),
+        top_bottom: Vec::new(),
         seen: HashSet::new(),
     };
     let outer = ctx.pin.replace(pin);
     let out = f(ctx);
     let pin = std::mem::replace(&mut ctx.pin, outer);
-    let (behind, front) = pin.map(|p| (p.behind, p.front)).unwrap_or_default();
-    (out, behind, front)
+    let (behind, front, top_bottom) = pin.map(|p| (p.behind, p.front, p.top_bottom)).unwrap_or_default();
+    (out, behind, front, top_bottom)
 }
 
 /// Picture outlines by media name, bytes (address and length) and crop ([`LayoutCache`]), each

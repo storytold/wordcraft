@@ -353,5 +353,10 @@ thread_local! {
     static WRAP_RELAYS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// Whether a wrap area reaches into the reserved bottom-margin band.
+fn footer_band_overlap(rect: Rect, sect: &SectionProps) -> bool {
+    rect.bottom() > sect.page_h - sect.margin_bottom && rect.y < sect.page_h
+}
+
 #[cfg(test)]
 mod tests;

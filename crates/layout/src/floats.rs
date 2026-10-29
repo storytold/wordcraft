@@ -1,7 +1,7 @@
 use super::ctx::Ctx;
 use super::page::{PageBuilder, PageFrame};
 use super::placed::Placed;
-use super::table_flow::footer_table_wraps;
+use super::table_flow::footer_body_wraps;
 use super::{
     Anchor, Arc, CharProps, Document, Float, FloatAlign, HashMap, HideDeleted, InlineObject, Level, ParaLayout, Paragraph, Path, Point, Rect,
     SectionProps, Spin, StoryRef, Wrap, WrapText, contour, display, para, textbox,
@@ -387,7 +387,7 @@ pub(crate) fn anchor_floats(
 }
 
 pub(crate) fn body_wraps(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<WrapArea> {
-    let mut areas = footer_table_wraps(ctx, pb);
+    let mut areas = footer_body_wraps(ctx, pb);
     areas.extend_from_slice(&pb.excl);
     areas
 }
@@ -536,6 +536,9 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
                 {
                     pin.behind.extend(behind);
                     pin.front.extend(front);
+                    if let Some(area @ (_, true, ..)) = wrap_area(rect, float, None) {
+                        pin.top_bottom.push(area);
+                    }
                 }
                 continue;
             }
