@@ -1,5 +1,7 @@
 use super::shell::{Next, go};
-use super::*;
+#[cfg(not(target_arch = "wasm32"))]
+use super::{AfterPick, Asked, FileDialogRequest};
+use super::{RefsDialog, Serialize, Source, Tokens, Ui, Value, WordApp, buttons, json, vec2};
 
 // ---------------------------------------------------------------------------------------------
 // Sources

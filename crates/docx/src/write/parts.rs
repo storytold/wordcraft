@@ -3,7 +3,10 @@ use super::settings::{
     ANONYMOUS_INITIALS, annotation_author, app_xml, core_xml, note_id_base, notes_part, settings_xml, theme_xml, write_comment_ids,
 };
 use super::styles::{numbering_xml, styles_xml};
-use super::*;
+use super::{
+    BTreeMap, Blocks, CT_WML, Document, DocxError, Flavor, HashMap, MAX_VBA_RELATED, PartRels, VBA_PROJECT_PART, VBA_RELATED, W, Writer, embed,
+    glossary, rt, settings_merge, watermark, xml,
+};
 
 /// The parts of the package [`write_as`] zips, in order, `[Content_Types].xml` first: (part name
 /// without the leading `/`, bytes).
@@ -60,6 +63,8 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
     let mut overrides: Vec<(String, String)> = Vec::new();
     let mut rels = PartRels::default();
     let mut root = PartRels::default();
+    let ns = xml::body_ns();
+    let ns_refs: Vec<(&str, &str)> = ns.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
 
     // Comments get paragraph ids before any story is written.
     let mut comment_paras: Vec<(u32, String)> = Vec::new();
@@ -73,41 +78,7 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
         }
     }
 
-    // Body.
-    let mut w = W::new();
-    let ns = xml::body_ns();
-    let ns_refs: Vec<(&str, &str)> = ns.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
-    w.open("w:document", &ns_refs);
-    let pic = doc.settings.page_picture.as_ref().filter(|p| wr.media_files.contains_key(&p.media) && doc.media.contains_key(&p.media));
-    if pic.is_some() || doc.settings.page_color.is_some() {
-        let color = doc.settings.page_color.map(|c| c.hex());
-        let attrs: Vec<(&str, &str)> = color.iter().map(|c| ("w:color", c.as_str())).collect();
-        w.open("w:background", &attrs);
-        if let Some(p) = pic
-            && let Some(file) = wr.media_files.get(&p.media)
-        {
-            let rid = rels.add(rt::IMAGE, &format!("media/{file}"), false);
-            wr.used_media.insert(p.media.clone());
-            w.open("v:background", &[("id", "_x0000_s1025"), ("o:bwmode", "white")]);
-            let mut fa: Vec<(&str, &str)> = vec![("r:id", &rid)];
-            if !p.fill_type.is_empty() {
-                fa.push(("type", &p.fill_type));
-            }
-            if !p.title.is_empty() {
-                fa.push(("o:title", &p.title));
-            }
-            w.empty("v:fill", &fa);
-            w.close("v:background");
-        }
-        w.close("w:background");
-    }
-    w.open("w:body", &[]);
-    wr.blocks(&mut w, &doc.body, &mut rels, true, 0);
-    let last = doc.last_section.clone();
-    wr.sectpr(&mut w, &last, &mut rels);
-    w.close("w:body");
-    w.close("w:document");
-    let body = w.into_bytes();
+    let body = write_document_body(doc, &mut wr, &mut rels, &ns_refs);
 
     // Headers and footers (discovered while writing sections).
     let mut done = 0;
@@ -150,126 +121,9 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
         wr.glossary(&mut entries, &mut overrides, &mut rels);
     }
 
-    // Notes (references were collected from the body and headers).
-    for foot in [true, false] {
-        let seps = if foot { &doc.footnote_separators } else { &doc.endnote_separators };
-        if !notes_part(doc, &wr, foot) {
-            continue;
-        }
-        let (root, tag, file) = if foot { ("w:footnotes", "w:footnote", "footnotes.xml") } else { ("w:endnotes", "w:endnote", "endnotes.xml") };
-        let mut prels = PartRels::default();
-        let mut w = W::new();
-        w.open(root, &ns_refs);
-        // The separators and continuation notice: the document's own, else the defaults (no
-        // notice). Word numbers them -1, 0 and 1.
-        for (id, kind, own) in [
-            ("-1", "separator", &seps.separator),
-            ("0", "continuationSeparator", &seps.continuation_separator),
-            ("1", "continuationNotice", &seps.continuation_notice),
-        ] {
-            match own {
-                Some(blocks) => {
-                    w.open(tag, &[("w:type", kind), ("w:id", id)]);
-                    if blocks.is_empty() {
-                        w.empty("w:p", &[]);
-                    } else {
-                        wr.blocks(&mut w, blocks, &mut prels, false, 0);
-                    }
-                    w.close(tag);
-                }
-                None if kind != "continuationNotice" => {
-                    w.open(tag, &[("w:type", kind), ("w:id", id)]);
-                    w.open("w:p", &[]);
-                    w.open("w:pPr", &[]);
-                    w.empty("w:spacing", &[("w:after", "0"), ("w:line", "240"), ("w:lineRule", "auto")]);
-                    w.close("w:pPr");
-                    w.open("w:r", &[]);
-                    w.empty(if kind == "separator" { "w:separator" } else { "w:continuationSeparator" }, &[]);
-                    w.close("w:r");
-                    w.close("w:p");
-                    w.close(tag);
-                }
-                None => {}
-            }
-        }
-        let base = note_id_base(doc, foot);
-        let mut k = 0;
-        while let Some(pid) = (if foot { &wr.footnotes } else { &wr.endnotes }).get(k).copied() {
-            let nid = (k + base).to_string();
-            k += 1;
-            w.open(tag, &[("w:id", &nid)]);
-            let blocks: Blocks = doc.parts.get(&pid).map(|p| p.blocks.clone()).unwrap_or_default();
-            wr.note_blocks(&mut w, &blocks, &mut prels, foot, pid);
-            w.close(tag);
-        }
-        w.close(root);
-        let kind = if foot { rt::FOOTNOTES } else { rt::ENDNOTES };
-        rels.add(kind, file, false);
-        push_part(
-            &mut entries,
-            &mut overrides,
-            &format!("word/{file}"),
-            w.into_bytes(),
-            &format!("{CT_WML}{}+xml", if foot { "footnotes" } else { "endnotes" }),
-            prels,
-        );
-    }
+    write_notes(doc, &ns_refs, &mut wr, &mut entries, &mut overrides, &mut rels);
 
-    // Comments.
-    if !doc.comments.is_empty() {
-        let mut prels = PartRels::default();
-        let mut w = W::new();
-        w.open("w:comments", &ns_refs);
-        for (cid, c) in &doc.comments {
-            let id = cid.to_string();
-            let author = annotation_author(doc, &c.author);
-            let mut a = vec![("w:id", id.as_str()), ("w:author", author)];
-            if !c.date.is_empty() && !doc.settings.remove_date_time {
-                a.push(("w:date", c.date.as_str()));
-            }
-            if doc.settings.remove_personal_info {
-                a.push(("w:initials", ANONYMOUS_INITIALS));
-            } else if !c.initials.is_empty() {
-                a.push(("w:initials", c.initials.as_str()));
-            }
-            w.open("w:comment", &a);
-            let blocks: Blocks = doc.parts.get(&c.part).map(|p| p.blocks.clone()).unwrap_or_default();
-            wr.blocks(&mut w, &blocks, &mut prels, false, 0);
-            w.close("w:comment");
-        }
-        w.close("w:comments");
-        rels.add(rt::COMMENTS, "comments.xml", false);
-        push_part(&mut entries, &mut overrides, "word/comments.xml", w.into_bytes(), &format!("{CT_WML}comments+xml"), prels);
-
-        let mut w = W::new();
-        w.open(
-            "w15:commentsEx",
-            &[
-                ("xmlns:w15", "http://schemas.microsoft.com/office/word/2012/wordml"),
-                ("xmlns:mc", "http://schemas.openxmlformats.org/markup-compatibility/2006"),
-            ],
-        );
-        let pid_of = |cid: u32| comment_paras.iter().find(|(c, _)| *c == cid).map(|(_, p)| p.clone());
-        for (cid, c) in &doc.comments {
-            let Some(pid) = pid_of(*cid) else { continue };
-            let done = if c.resolved { "1" } else { "0" };
-            match c.parent.and_then(pid_of) {
-                Some(parent) => w.empty("w15:commentEx", &[("w15:paraId", &pid), ("w15:paraIdParent", &parent), ("w15:done", done)]),
-                None => w.empty("w15:commentEx", &[("w15:paraId", &pid), ("w15:done", done)]),
-            }
-        }
-        w.close("w15:commentsEx");
-        rels.add(rt::COMMENTS_EX, "commentsExtended.xml", false);
-        push_part(
-            &mut entries,
-            &mut overrides,
-            "word/commentsExtended.xml",
-            w.into_bytes(),
-            &format!("{CT_WML}commentsExtended+xml"),
-            PartRels::default(),
-        );
-        write_comment_ids(doc, &comment_paras, &mut entries, &mut overrides, &mut rels);
-    }
+    write_comments(doc, &comment_paras, &ns_refs, &mut wr, &mut entries, &mut overrides, &mut rels);
 
     rels.add(rt::STYLES, "styles.xml", false);
     push_part(&mut entries, &mut overrides, "word/styles.xml", styles_xml(doc), &format!("{CT_WML}styles+xml"), PartRels::default());
@@ -423,6 +277,172 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
     w.close("Types");
     entries.insert(0, ("[Content_Types].xml".into(), w.into_bytes()));
     Ok(entries)
+}
+
+fn write_document_body(doc: &Document, wr: &mut Writer<'_>, rels: &mut PartRels, ns_refs: &[(&str, &str)]) -> Vec<u8> {
+    let mut w = W::new();
+    w.open("w:document", ns_refs);
+    let pic = doc.settings.page_picture.as_ref().filter(|p| wr.media_files.contains_key(&p.media) && doc.media.contains_key(&p.media));
+    if pic.is_some() || doc.settings.page_color.is_some() {
+        let color = doc.settings.page_color.map(|c| c.hex());
+        let attrs: Vec<(&str, &str)> = color.iter().map(|c| ("w:color", c.as_str())).collect();
+        w.open("w:background", &attrs);
+        if let Some(p) = pic
+            && let Some(file) = wr.media_files.get(&p.media)
+        {
+            let rid = rels.add(rt::IMAGE, &format!("media/{file}"), false);
+            wr.used_media.insert(p.media.clone());
+            w.open("v:background", &[("id", "_x0000_s1025"), ("o:bwmode", "white")]);
+            let mut fa: Vec<(&str, &str)> = vec![("r:id", &rid)];
+            if !p.fill_type.is_empty() {
+                fa.push(("type", &p.fill_type));
+            }
+            if !p.title.is_empty() {
+                fa.push(("o:title", &p.title));
+            }
+            w.empty("v:fill", &fa);
+            w.close("v:background");
+        }
+        w.close("w:background");
+    }
+    w.open("w:body", &[]);
+    wr.blocks(&mut w, &doc.body, rels, true, 0);
+    let last = doc.last_section.clone();
+    wr.sectpr(&mut w, &last, rels);
+    w.close("w:body");
+    w.close("w:document");
+    w.into_bytes()
+}
+
+fn write_notes(
+    doc: &Document,
+    ns_refs: &[(&str, &str)],
+    wr: &mut Writer<'_>,
+    entries: &mut Vec<(String, Vec<u8>)>,
+    overrides: &mut Vec<(String, String)>,
+    rels: &mut PartRels,
+) {
+    for foot in [true, false] {
+        let seps = if foot { &doc.footnote_separators } else { &doc.endnote_separators };
+        if !notes_part(doc, wr, foot) {
+            continue;
+        }
+        let (root, tag, file) = if foot { ("w:footnotes", "w:footnote", "footnotes.xml") } else { ("w:endnotes", "w:endnote", "endnotes.xml") };
+        let mut prels = PartRels::default();
+        let mut w = W::new();
+        w.open(root, ns_refs);
+        // The separators and continuation notice: the document's own, else the defaults (no
+        // notice). Word numbers them -1, 0 and 1.
+        for (id, kind, own) in [
+            ("-1", "separator", &seps.separator),
+            ("0", "continuationSeparator", &seps.continuation_separator),
+            ("1", "continuationNotice", &seps.continuation_notice),
+        ] {
+            match own {
+                Some(blocks) => {
+                    w.open(tag, &[("w:type", kind), ("w:id", id)]);
+                    if blocks.is_empty() {
+                        w.empty("w:p", &[]);
+                    } else {
+                        wr.blocks(&mut w, blocks, &mut prels, false, 0);
+                    }
+                    w.close(tag);
+                }
+                None if kind != "continuationNotice" => {
+                    w.open(tag, &[("w:type", kind), ("w:id", id)]);
+                    w.open("w:p", &[]);
+                    w.open("w:pPr", &[]);
+                    w.empty("w:spacing", &[("w:after", "0"), ("w:line", "240"), ("w:lineRule", "auto")]);
+                    w.close("w:pPr");
+                    w.open("w:r", &[]);
+                    w.empty(if kind == "separator" { "w:separator" } else { "w:continuationSeparator" }, &[]);
+                    w.close("w:r");
+                    w.close("w:p");
+                    w.close(tag);
+                }
+                None => {}
+            }
+        }
+        let base = note_id_base(doc, foot);
+        let mut k = 0;
+        while let Some(pid) = (if foot { &wr.footnotes } else { &wr.endnotes }).get(k).copied() {
+            let nid = (k + base).to_string();
+            k += 1;
+            w.open(tag, &[("w:id", &nid)]);
+            let blocks: Blocks = doc.parts.get(&pid).map(|p| p.blocks.clone()).unwrap_or_default();
+            wr.note_blocks(&mut w, &blocks, &mut prels, foot, pid);
+            w.close(tag);
+        }
+        w.close(root);
+        let kind = if foot { rt::FOOTNOTES } else { rt::ENDNOTES };
+        rels.add(kind, file, false);
+        push_part(
+            entries,
+            overrides,
+            &format!("word/{file}"),
+            w.into_bytes(),
+            &format!("{CT_WML}{}+xml", if foot { "footnotes" } else { "endnotes" }),
+            prels,
+        );
+    }
+}
+
+fn write_comments(
+    doc: &Document,
+    comment_paras: &[(u32, String)],
+    ns_refs: &[(&str, &str)],
+    wr: &mut Writer<'_>,
+    entries: &mut Vec<(String, Vec<u8>)>,
+    overrides: &mut Vec<(String, String)>,
+    rels: &mut PartRels,
+) {
+    if !doc.comments.is_empty() {
+        let mut prels = PartRels::default();
+        let mut w = W::new();
+        w.open("w:comments", ns_refs);
+        for (cid, c) in &doc.comments {
+            let id = cid.to_string();
+            let author = annotation_author(doc, &c.author);
+            let mut a = vec![("w:id", id.as_str()), ("w:author", author)];
+            if !c.date.is_empty() && !doc.settings.remove_date_time {
+                a.push(("w:date", c.date.as_str()));
+            }
+            if doc.settings.remove_personal_info {
+                a.push(("w:initials", ANONYMOUS_INITIALS));
+            } else if !c.initials.is_empty() {
+                a.push(("w:initials", c.initials.as_str()));
+            }
+            w.open("w:comment", &a);
+            let blocks: Blocks = doc.parts.get(&c.part).map(|p| p.blocks.clone()).unwrap_or_default();
+            wr.blocks(&mut w, &blocks, &mut prels, false, 0);
+            w.close("w:comment");
+        }
+        w.close("w:comments");
+        rels.add(rt::COMMENTS, "comments.xml", false);
+        push_part(entries, overrides, "word/comments.xml", w.into_bytes(), &format!("{CT_WML}comments+xml"), prels);
+
+        let mut w = W::new();
+        w.open(
+            "w15:commentsEx",
+            &[
+                ("xmlns:w15", "http://schemas.microsoft.com/office/word/2012/wordml"),
+                ("xmlns:mc", "http://schemas.openxmlformats.org/markup-compatibility/2006"),
+            ],
+        );
+        let pid_of = |cid: u32| comment_paras.iter().find(|(c, _)| *c == cid).map(|(_, p)| p.clone());
+        for (cid, c) in &doc.comments {
+            let Some(pid) = pid_of(*cid) else { continue };
+            let done = if c.resolved { "1" } else { "0" };
+            match c.parent.and_then(pid_of) {
+                Some(parent) => w.empty("w15:commentEx", &[("w15:paraId", &pid), ("w15:paraIdParent", &parent), ("w15:done", done)]),
+                None => w.empty("w15:commentEx", &[("w15:paraId", &pid), ("w15:done", done)]),
+            }
+        }
+        w.close("w15:commentsEx");
+        rels.add(rt::COMMENTS_EX, "commentsExtended.xml", false);
+        push_part(entries, overrides, "word/commentsExtended.xml", w.into_bytes(), &format!("{CT_WML}commentsExtended+xml"), PartRels::default());
+        write_comment_ids(doc, comment_paras, entries, overrides, rels);
+    }
 }
 
 pub(super) fn push_part(

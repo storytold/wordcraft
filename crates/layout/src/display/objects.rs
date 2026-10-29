@@ -1,6 +1,6 @@
 use super::options::DisplayOptions;
 use super::paint::{Paint, paint_for};
-use super::*;
+use super::{BezPath, Document, Draw, Graphic, GraphicItem, GraphicKind, InlineObject, PathSeg, Rect, Rgb, ShapeKind, Spin, TextAlign};
 
 /// The draws of a chart or diagram's items inside `rect` (page coordinates). The items were built
 /// for the size `g.w` × `g.h` (0: `rect`'s own size), so they are scaled to `rect`; strokes and text
@@ -88,21 +88,22 @@ fn page_segs(segs: &[PathSeg], map: impl Fn(f32, f32) -> (f32, f32)) -> Vec<Path
 }
 
 /// A path of clean segments (see [`page_segs`]) as a kurbo path, for the rasteriser and PDF.
+/// How a shape looks: its preset `kind`, fill, outline, effects, freeform paths and connector extras.
+#[derive(Clone, Copy)]
+pub(super) struct ShapeLook<'a> {
+    pub kind: ShapeKind,
+    pub fill: Option<&'a wordcraft_doc::fill::Fill>,
+    pub stroke: Option<Rgb>,
+    pub stroke_width: f32,
+    pub effects: wordcraft_doc::effects::ShapeEffects,
+    pub freeform: Option<&'a wordcraft_doc::freeform::Freeform>,
+    pub extra: &'a wordcraft_doc::connector::ShapeExtra,
+}
+
 /// The draws of a shape at `rect`: a preset outline, or a freeform's paths (an ink stroke left out
 /// under Review › Hide Ink).
-#[allow(clippy::too_many_arguments)]
-pub(super) fn shape_draws(
-    rect: Rect,
-    kind: ShapeKind,
-    fill: Option<&wordcraft_doc::fill::Fill>,
-    stroke: Option<Rgb>,
-    stroke_width: f32,
-    effects: wordcraft_doc::effects::ShapeEffects,
-    freeform: Option<&wordcraft_doc::freeform::Freeform>,
-    extra: &wordcraft_doc::connector::ShapeExtra,
-    opts: &DisplayOptions,
-    out: &mut Vec<Draw>,
-) {
+pub(super) fn shape_draws(rect: Rect, look: &ShapeLook, opts: &DisplayOptions, out: &mut Vec<Draw>) {
+    let ShapeLook { kind, fill, stroke, stroke_width, effects, freeform, extra } = *look;
     // Freeforms are painted across the shape's frame, not each path's bounds.
     let fill = fill.and_then(|f| paint_for(f, rect));
     if kind.is_open() {
@@ -339,7 +340,20 @@ pub(super) fn object_draws(o: &InlineObject, rect: Rect, outer: Spin, alpha: f32
         InlineObject::Shape { kind, fill, stroke, stroke_width, effects, freeform, extra, .. } => {
             let effects = effects_in(*effects, own.within(outer));
             let mut items = Vec::new();
-            shape_draws(rect, *kind, fill.as_ref(), *stroke, *stroke_width, effects, freeform.as_deref(), extra, opts, &mut items);
+            shape_draws(
+                rect,
+                &ShapeLook {
+                    kind: *kind,
+                    fill: fill.as_ref(),
+                    stroke: *stroke,
+                    stroke_width: *stroke_width,
+                    effects,
+                    freeform: freeform.as_deref(),
+                    extra,
+                },
+                opts,
+                &mut items,
+            );
             match crate::shape_figure_alt(o) {
                 // A described shape is one figure with its description (tagged PDF).
                 Some(alt) => {

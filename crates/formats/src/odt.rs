@@ -47,7 +47,7 @@ mod styles;
 mod writer;
 mod xml;
 
-use body::{Body, Extras, MARK, MAX_NOTES, MarkKind, attach_extras, for_paras, mark_name, parse_mark};
+use body::Body;
 use import::Pages;
 #[cfg(test)]
 use import::{Pictures, apply_page_layout, read_entry, read_meta};
@@ -56,7 +56,6 @@ pub use import::{import, parse};
 use limits::MAX_XML_DEPTH;
 pub use package::export;
 use styles::Styles;
-use writer::prepare_export;
 #[cfg(test)]
 use writer::x;
 #[cfg(test)]

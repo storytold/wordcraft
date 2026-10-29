@@ -134,9 +134,19 @@ fn alignment_declarations_end_with_their_group() {
 #[test]
 fn article_structure() {
     let flow = parse(ARTICLE);
+    assert_article_metadata(&flow);
+    let ps = paras(ARTICLE);
+    assert_article_blocks(&ps);
+    assert_article_formatting(&ps);
+    assert_article_preamble_is_not_text();
+}
+
+fn assert_article_metadata(flow: &Flow) {
     assert_eq!(flow.meta.title, "On Sample Documents");
     assert_eq!(flow.meta.author, "Ada Lovelace Charles Babbage");
-    let ps = paras(ARTICLE);
+}
+
+fn assert_article_blocks(ps: &[Para]) {
     let find = |t: &str| ps.iter().find(|p| p.text().trim() == t).unwrap_or_else(|| panic!("no {t:?} in {:?}", texts(ARTICLE)));
     assert_eq!(find("On Sample Documents").kind, Kind::Title);
     assert_eq!(find("Introduction").kind, Kind::Heading(1));
@@ -150,6 +160,13 @@ fn article_structure() {
     assert_eq!(find("println!(\"{}\", 1 % 2);").kind, Kind::Code, "verbatim keeps % and indentation");
     assert!(ps.iter().any(|p| p.text() == "    println!(\"{}\", 1 % 2);"));
     assert_eq!(find("A table.").align, Some(Align::Center));
+    let second = ps.iter().find(|p| p.text().starts_with("A second")).unwrap();
+    assert!(second.text().contains("footnote (The note.) and a link."), "{}", second.text());
+    assert!(second.inlines.iter().any(|i| matches!(i, Inline::Text(t, f) if t == "link" && f.link.as_deref() == Some("https://example.com"))));
+    assert!(!second.text().contains("comment"));
+}
+
+fn assert_article_formatting(ps: &[Para]) {
     let body = ps.iter().find(|p| p.text().starts_with("This is")).unwrap();
     let has = |t: &str, f: &dyn Fn(&Fmt) -> bool| body.inlines.iter().any(|i| matches!(i, Inline::Text(x, fm) if x == t && f(fm)));
     assert!(has("bold", &|f| f.bold));
@@ -157,10 +174,6 @@ fn article_structure() {
     assert!(has("underlined", &|f| f.underline));
     assert!(has("code", &|f| f.code));
     assert!(body.text().contains("“like this” and dashes – or — with 50% and $5 & more\u{A0}text."), "{}", body.text());
-    let second = ps.iter().find(|p| p.text().starts_with("A second")).unwrap();
-    assert!(second.text().contains("footnote (The note.) and a link."), "{}", second.text());
-    assert!(second.inlines.iter().any(|i| matches!(i, Inline::Text(t, f) if t == "link" && f.link.as_deref() == Some("https://example.com"))));
-    assert!(!second.text().contains("comment"));
     let accents = ps.iter().find(|p| p.text().starts_with("Café")).unwrap();
     assert!(accents.page_break, "\\newpage");
     assert!(accents.text().starts_with("Café naïve ça šé and grouped bold after."), "{}", accents.text());
@@ -168,7 +181,9 @@ fn article_structure() {
     assert!(accents.inlines.iter().any(|i| matches!(i, Inline::Text(t, f) if t.starts_with(" after.") && !f.bold)), "{:?}", accents.inlines);
     assert!(accents.inlines.iter().any(|i| matches!(i, Inline::Text(t, f) if t.contains("red text") && f.color == Some(Rgb(255, 0, 0)))));
     assert!(accents.inlines.iter().any(|i| matches!(i, Inline::Text(t, f) if t == "green" && f.color == Some(Rgb(0, 255, 0)))));
-    // Preamble definitions and layout commands leave no text.
+}
+
+fn assert_article_preamble_is_not_text() {
     let all = texts(ARTICLE).join("\n");
     for gone in ["mathbb", "utf8", "11pt", "today", "sec:intro}", "amsmath", "maths"] {
         assert!(!all.contains(gone), "{gone:?} leaked: {all}");

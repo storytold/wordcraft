@@ -1,6 +1,6 @@
 use super::page::revision_color;
 use super::paint::Stroke;
-use super::*;
+use super::{Document, Draw, HashMap, Rect, Rgb, ShapeKind, Spin, TextColor};
 
 /// Each author's place among `authors` in order of first appearance (which colour marks their
 /// changes and comments), found in one pass.

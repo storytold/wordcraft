@@ -1,5 +1,5 @@
 use super::state::{Dest, MAX_PICT, St};
-use super::*;
+use super::{Fmt, Inline, Reader, Rgb, make_img, model};
 
 /// The encoding of an East Asian multibyte code page (932 Shift-JIS, 936 GBK, 949 UHC, 950 Big5),
 /// which [`Reader::finish_multibyte`] decodes a run with; `None` for the single-byte code pages.
