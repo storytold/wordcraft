@@ -26,6 +26,33 @@ pub(super) struct UnitDrag {
     last: Pos,
 }
 
+/// See [`CanvasState::multi_drag`]. A drag past the click distance adds the piece from `start`
+/// to the pointer (`select.add`); a click without one selects the sentence on release, and the
+/// selection is kept so that a second click (a Ctrl/⌘+double-click) adds the word instead.
+pub(super) struct MultiDrag {
+    /// The selection the piece is added to.
+    sel: wordcraft_engine::Selection,
+    column: Option<wordcraft_engine::ColumnBlock>,
+    /// Where the press hit, its screen point and the last position the pointer hit.
+    start: Pos,
+    at: Pos2,
+    last: Pos,
+    /// A piece was added (dragged, or the word of a double-click).
+    added: bool,
+    /// Clicks in a row (1, or 2 for a double-click).
+    clicks: u8,
+}
+
+impl MultiDrag {
+    /// Put back the selection the piece is added to, clamped to the document as it is now; if
+    /// the document changed under it, its pieces are dropped and only the clamped selection stays.
+    fn restore(&self, s: &mut wordcraft_engine::Session) {
+        let sel = wordcraft_engine::Selection { anchor: s.doc.clamp(&self.sel.anchor), focus: s.doc.clamp(&self.sel.focus) };
+        s.column = if sel == self.sel { self.column.clone() } else { None };
+        s.sel = sel;
+    }
+}
+
 /// After a whole-document selection from a press (not a line, so it can't grow): holds the press
 /// so its release isn't a caret click.
 pub(crate) fn hold_document_selection(app: &mut WordApp, clicks: u8) {
@@ -168,6 +195,25 @@ fn handle_page_pointer(app: &mut WordApp, pointer: PagePointer<'_>) {
         handle_primary_press(app, &pointer, mods, hf_zone, hf_enter);
     } else if app.canvas.dragging
         && ui.input(|i| i.pointer.primary_down())
+        && let Some(m) = app.canvas.multi_drag.as_mut()
+    {
+        // Each frame adds the piece to the selection as it was, so the drag shows it live (the
+        // button held after a double-click keeps the word).
+        let dist = ui.ctx().options(|o| o.input_options.max_click_dist);
+        if m.clicks == 1
+            && let Some(pos) = layout.hit(page, x, y, m.start.story)
+            && pos != m.last
+            && (m.added || (p - m.at).length() > dist)
+        {
+            m.last = pos.clone();
+            m.added = true;
+            m.restore(&mut app.session);
+            let _ = app.session.run("select.add", &json!({"anchor": m.start, "focus": pos}));
+            app.session.page_hint = page;
+            app.canvas.caret_visible_since = crate::now_ms();
+        }
+    } else if app.canvas.dragging
+        && ui.input(|i| i.pointer.primary_down())
         && let Some((from, last)) = app.canvas.column_drag
     {
         if last != (page, x, y) {
@@ -214,6 +260,15 @@ fn handle_page_pointer(app: &mut WordApp, pointer: PagePointer<'_>) {
         app.canvas.dragging = false;
         app.canvas.column_drag = None;
         app.canvas.unit_drag = None;
+        // A Ctrl/⌘+click that didn't drag selects the sentence (kept for a double-click, above).
+        match app.canvas.multi_drag.as_ref() {
+            Some(m) if !m.added => {
+                let pj = serde_json::to_value(&m.start).unwrap_or_default();
+                let _ = app.run("caret.set", json!({"pos": pj}));
+                let _ = app.run("select.sentence", json!({}));
+            }
+            _ => app.canvas.multi_drag = None,
+        }
         if app.session.painter.is_some() && !app.session.sel.is_collapsed() {
             let _ = app.run("edit.pasteFormat", json!({}));
         }
@@ -234,6 +289,7 @@ fn handle_primary_press(
     let clicks = press_count(app.canvas.last_press, now, p, delay, dist);
     app.canvas.last_press = Some((now, p, clicks));
     app.canvas.unit_drag = None;
+    let prev_multi = app.canvas.multi_drag.take();
     if clicks <= 1 {
         app.canvas.hf_press_switched = false;
     }
@@ -336,6 +392,31 @@ fn handle_primary_press(
         return;
     }
     let pj = serde_json::to_value(&pos).unwrap_or_default();
+    // With text selected, Ctrl/⌘+drag adds a separate piece and Ctrl/⌘+double-click the word
+    // (#788); a Ctrl/⌘+click without a drag still selects the sentence, on release. With no
+    // text selected, Ctrl/⌘+click and drag selects by sentences (#549).
+    if mods.command && !mods.shift && !mods.alt && !hf_switch {
+        if clicks == 2
+            && let Some(mut m) = prev_multi
+        {
+            m.restore(&mut app.session);
+            let _ = app.run("select.add", json!({"word": pj}));
+            m.clicks = 2;
+            m.added = true;
+            app.canvas.multi_drag = Some(m);
+            app.session.page_hint = page;
+            app.canvas.dragging = true;
+            return;
+        }
+        if clicks == 1 && (!app.session.sel.is_collapsed() || app.session.selection_pieces().is_some()) {
+            let (sel, column) = (app.session.sel.clone(), app.session.column.clone());
+            app.canvas.multi_drag = Some(MultiDrag { sel, column, start: pos.clone(), at: p, last: pos, added: false, clicks: 1 });
+            app.canvas.column_drag = None;
+            app.session.page_hint = page;
+            app.canvas.dragging = true;
+            return;
+        }
+    }
     // Alt+drag selects a column (block) of text.
     if mods.alt && !mods.shift && !mods.command {
         let _ = app.run("caret.set", json!({"pos": pj}));
@@ -393,6 +474,12 @@ fn handle_completed_click(app: &mut WordApp, pointer: &PagePointer<'_>) -> bool 
     };
     if released_clicks > 0 && app.canvas.unit_drag.as_ref().is_some_and(|d| d.clicks == released_clicks) {
         app.canvas.unit_drag = None;
+        app.canvas.dragging = false;
+        return true;
+    }
+    // The press of a Ctrl/⌘+double-click already added the word.
+    if released_clicks > 0 && app.canvas.multi_drag.as_ref().is_some_and(|m| m.clicks == released_clicks) {
+        app.canvas.multi_drag = None;
         app.canvas.dragging = false;
         return true;
     }

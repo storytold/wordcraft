@@ -44,7 +44,7 @@ use geometry::{collapse_white_space, columns_for, place_pages};
 use geometry::{floating_comments, on_page_gap, on_visible_page, white_space_hidden};
 #[cfg(test)]
 use input::{EDGE_MARGIN, EDGE_MAX_DT, EDGE_SPEED_MAX};
-use input::{UnitDrag, clamped_scroll, edge_scroll, mouse, wheel_hovered};
+use input::{MultiDrag, UnitDrag, clamped_scroll, edge_scroll, mouse, wheel_hovered};
 pub(crate) use input::{hold_document_selection, press_count};
 #[cfg(test)]
 use links::{field_link, is_followable_link, is_generated_bookmark_link};
@@ -131,6 +131,8 @@ pub struct CanvasState {
     /// A drag after a double-click, triple-click or Ctrl/⌘+click: the unit it extends by, the
     /// unit first selected, and the last position the pointer hit.
     unit_drag: Option<UnitDrag>,
+    /// Ctrl/⌘+press with text selected: adding a separate piece to the selection (#788).
+    multi_drag: Option<MultiDrag>,
     pub last_highlight: String,
     pub last_font_color: String,
     pub last_shading: String,
@@ -312,6 +314,7 @@ impl CanvasState {
         self.dragging = false;
         self.column_drag = None;
         self.unit_drag = None;
+        self.multi_drag = None;
     }
 
     /// The object a drag has taken off its page: which page, and which object. `None` unless an
@@ -358,6 +361,7 @@ impl Default for CanvasState {
             last_press: None,
             hf_press_switched: false,
             unit_drag: None,
+            multi_drag: None,
             last_highlight: "yellow".into(),
             last_font_color: "C00000".into(),
             last_shading: "FFF2CC".into(),

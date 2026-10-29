@@ -4798,3 +4798,128 @@ fn the_view_key_changes_when_a_drag_takes_an_object_off_the_page() {
     assert_ne!(hidden, view_key(&app, false, None), "the page without the dragged object is rendered again");
     assert_eq!(hidden, view_key(&app, false, Some(&object)), "the same drag keeps the key: no re-render every frame");
 }
+
+/// #788: with text selected, Ctrl/⌘+drag adds a separate piece and Ctrl/⌘+double-click adds
+/// a word; a Ctrl/⌘+click without a drag still selects the sentence.
+#[test]
+fn ctrl_drag_adds_separate_pieces() {
+    use egui::{Event, Modifiers, PointerButton};
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("text.insert", json!({"text": "Alpha beta gamma delta\rSecond para\rThird para"})).unwrap();
+    a.run("view.commentsPane", json!({"value": false})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    h.state_mut().run("select.text", json!({"text": "Alpha"})).unwrap();
+    h.step();
+    let screen = |h: &mut egui_kittest::Harness<'_, WordApp>, pos: Pos| {
+        let c = h.state_mut().session.layout().caret(&pos).expect("caret");
+        page_to_screen(h.state_mut(), c.page, c.x + 1.0, c.top + c.height / 2.0).expect("on screen")
+    };
+    let ctrl = Modifiers { ctrl: true, command: true, ..Default::default() };
+    let button = |at: Pos2, pressed: bool| Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: ctrl };
+    let press = |h: &mut egui_kittest::Harness<'_, WordApp>, at: Pos2, clicks: usize, to: Pos2| {
+        h.event(Event::ModifiersChanged(ctrl));
+        h.event(Event::PointerMoved(at));
+        h.step();
+        for i in 0..clicks {
+            h.event(button(at, true));
+            h.step();
+            if i + 1 < clicks {
+                h.event(button(at, false));
+                h.step();
+            }
+        }
+        for k in 1..=4 {
+            h.event(Event::PointerMoved(at + (to - at) * (k as f32 / 4.0)));
+            h.step();
+        }
+        h.event(button(to, false));
+        for _ in 0..3 {
+            h.step();
+        }
+        // Let the double-click time pass.
+        for _ in 0..40 {
+            h.step();
+        }
+    };
+    let pieces = |h: &egui_kittest::Harness<'_, WordApp>| {
+        let s = &h.state().session;
+        s.selection_pieces().map(|p| p.iter().map(|(a, b)| s.doc.copy_range(a, b).plain_text()).collect::<Vec<_>>())
+    };
+    // Ctrl+drag across "Second" adds it.
+    let (from, to) = (screen(&mut h, Pos::body(1, 0)), screen(&mut h, Pos::body(1, 6)));
+    press(&mut h, from, 1, to);
+    assert_eq!(pieces(&h), Some(vec!["Alpha".to_string(), "Second".to_string()]));
+    // Ctrl+double-click in "Third" adds the word.
+    let at = screen(&mut h, Pos::body(2, 2));
+    press(&mut h, at, 2, at);
+    assert_eq!(pieces(&h), Some(vec!["Alpha".to_string(), "Second".to_string(), "Third ".to_string()]));
+    // A Ctrl+click without a drag selects the sentence instead.
+    let at = screen(&mut h, Pos::body(0, 8));
+    press(&mut h, at, 1, at);
+    assert_eq!(pieces(&h), None);
+    assert_eq!(h.state().session.sel.ordered(), (Pos::body(0, 0), Pos::body(0, 22)));
+    // A Ctrl+double-click in the top margin still opens the header, text selected or not.
+    h.state_mut().run("select.text", json!({"text": "Alpha"})).unwrap();
+    h.step();
+    // (Right of the text, clear of the mini toolbar over the selection.)
+    let at = page_to_screen(h.state_mut(), 0, 500.0, 30.0).expect("on screen");
+    press(&mut h, at, 2, at);
+    assert!(matches!(h.state().session.sel.focus.story, wordcraft_doc::StoryRef::Part(_)), "the header is not being edited");
+    assert_eq!(pieces(&h), None);
+}
+/// #788: with text selected in page 1's own header (Different First Page), a Ctrl/⌘+double-
+/// click on page 2's header still goes there instead of adding a word.
+#[test]
+fn ctrl_double_click_reaches_another_header_with_text_selected() {
+    use egui::{Event, Modifiers, PointerButton};
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("text.insert", json!({"text": "Page one"})).unwrap();
+    a.run("insert.pageBreak", json!({})).unwrap();
+    a.run("text.insert", json!({"text": "Page two"})).unwrap();
+    a.run("view.commentsPane", json!({"value": false})).unwrap();
+    a.run("insert.header", json!({"text": "Head"})).unwrap();
+    let head = a.session.sel.focus.story;
+    a.run("layout.differentFirstPage", json!({"value": true})).unwrap();
+    a.run("insert.editHeader", json!({"page": 0})).unwrap();
+    a.run("text.insert", json!({"text": "Cover"})).unwrap();
+    let cover = a.session.sel.focus.story;
+    assert_ne!(cover, head);
+    a.run("select.all", json!({})).unwrap();
+    assert!(!a.session.sel.is_collapsed());
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 2200.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    let page = h.state_mut().session.layout().pages[1].clone();
+    assert_eq!(page.header_story.map(StoryRef::Part), Some(head));
+    let p = page_to_screen(h.state_mut(), 1, page.body.right() - 40.0, page.body.y / 2.0).expect("top margin on screen");
+    let ctrl = Modifiers { ctrl: true, command: true, ..Default::default() };
+    h.event(Event::ModifiersChanged(ctrl));
+    h.event(Event::PointerMoved(p));
+    h.step();
+    for _ in 0..2 {
+        h.event(Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: true, modifiers: ctrl });
+        h.step();
+        h.event(Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: false, modifiers: ctrl });
+        h.step();
+    }
+    assert_eq!(h.state().session.sel.focus.story, head, "page 2's header, not page 1's");
+    assert!(h.state().session.selection_pieces().is_none());
+}
