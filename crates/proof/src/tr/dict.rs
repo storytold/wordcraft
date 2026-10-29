@@ -87,7 +87,8 @@ impl TrDict {
 
     /// Check if word is correct (stem or affixed).
     pub fn contains(&self, word: &str) -> bool {
-        if self.is_empty() || word.is_empty() {
+        // Longer input is never a dictionary word, and isn't scanned (#3625).
+        if self.is_empty() || word.is_empty() || word.len() > crate::affix::MAX_WORD_BYTES {
             return false;
         }
 

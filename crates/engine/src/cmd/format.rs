@@ -401,19 +401,9 @@ fn target_has_highlight(s: &Session, h: Highlight) -> bool {
     if let Some(rows) = column_rows(s) {
         for (a, b) in rows {
             let Some(p) = s.doc.para_at(&a) else { continue };
-            if a == b || (a.off == 0 && b.off == p.len()) {
-                seen = true;
-                if !matches(p.props.style.as_deref(), &p.mark) {
-                    return false;
-                }
-            }
-            for (r, c) in p.run_ranges() {
-                if r.end > a.off && r.start < b.off {
-                    seen = true;
-                    if !matches(p.props.style.as_deref(), c) {
-                        return false;
-                    }
-                }
+            let mark = a == b || (a.off == 0 && b.off == p.len());
+            if !span_matches(p, mark, a.off, b.off, &matches, &mut seen) {
+                return false;
             }
         }
         if seen {
@@ -426,24 +416,42 @@ fn target_has_highlight(s: &Session, h: Highlight) -> bool {
             let from = if path == a.path { a.off } else { 0 };
             let to = if path == b.path { b.off } else { p.len() };
             // Match format_range: fully selected paragraphs include their mark.
-            if to == p.len() && (from == 0 || path != a.path) {
-                seen = true;
-                if !matches(p.props.style.as_deref(), &p.mark) {
-                    return false;
-                }
-            }
-            for (r, c) in p.run_ranges() {
-                if r.end > from && r.start < to {
-                    seen = true;
-                    if !matches(p.props.style.as_deref(), c) {
-                        return false;
-                    }
-                }
+            let mark = to == p.len() && (from == 0 || path != a.path);
+            if !span_matches(p, mark, from, to, &matches, &mut seen) {
+                return false;
             }
         }
     }
     // No runs: retain the caret/pending and empty text-box paragraph-mark rules.
     seen || resolved(s).iter().all(|r| r.highlight == h.rgb())
+}
+
+/// Whether the paragraph's mark (when `mark`) and the runs overlapping `from..to` all match
+/// `matches`; `seen` records that something was checked.
+fn span_matches(
+    p: &wordcraft_doc::Paragraph,
+    mark: bool,
+    from: usize,
+    to: usize,
+    matches: &impl Fn(Option<&str>, &CharProps) -> bool,
+    seen: &mut bool,
+) -> bool {
+    let style = p.props.style.as_deref();
+    if mark {
+        *seen = true;
+        if !matches(style, &p.mark) {
+            return false;
+        }
+    }
+    for (r, c) in p.run_ranges() {
+        if r.end > from && r.start < to {
+            *seen = true;
+            if !matches(style, c) {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 /// Explicit palette/automation colours set highlighting; the shortcut (no colour) toggles
