@@ -172,10 +172,19 @@ impl<'e> Breaker<'e> {
         let rp = pl.rp.clone();
         let width = env.width.max(MIN_LINE_WIDTH);
         let settings = &env.doc.settings;
+        let grid = Some(env.grid).filter(|g| g.line.is_some() && rp.snap_to_grid);
+        // The estimate matches what `measure` lays out, so a float is met by the line that is drawn.
         let est_h = pl
             .styles
             .get(mark_style as usize)
-            .map(|st| (st.ascent + st.descent) * if let LineSpacing::Multiple(m) = rp.line_spacing { m } else { 1.0 })
+            .map(|st| {
+                let natural = st.ascent + st.descent;
+                match (rp.line_spacing, grid) {
+                    (LineSpacing::Multiple(m), Some(g)) => g.multiple_height(natural, m),
+                    (LineSpacing::Multiple(m), None) => natural * m,
+                    _ => natural,
+                }
+            })
             .unwrap_or(14.0)
             .max(1.0);
         Breaker {
@@ -195,7 +204,7 @@ impl<'e> Breaker<'e> {
             hyph_limit: settings.consecutive_hyphen_limit as usize,
             widths: word_widths(&pl.clusters, &pl.hyph_after),
             rtl_para: rp.bidi,
-            grid: Some(env.grid).filter(|g| g.line.is_some() && rp.snap_to_grid),
+            grid,
             bidi: rp.bidi || !pl.bidi_levels.is_empty(),
             est_h,
             // Exact spacing fixes the table-contact boundary even when the mark has other metrics.

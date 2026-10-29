@@ -113,3 +113,55 @@ fn multiple_spacing_follows_word_on_an_18_point_grid() {
     // Without a line grid the natural height is simply multiplied.
     assert_eq!(para::Grid::default().multiple_height(21.0, 1.5), 31.5);
 }
+
+/// A top-and-bottom shape whose top lies just under the first grid line of 18 pt text at 3×
+/// (54 pt tall, measured). The float check estimates the line before measuring it: with the
+/// estimate at the plain `natural × 3` (over 63 pt) the line would be taken to meet the shape and
+/// pushed below it, although it ends above the shape's top at 55 pt.
+#[test]
+fn grid_multiple_spacing_estimates_the_line_the_float_check_meets() {
+    use wordcraft_doc::para::{Anchor, Float, InlineObject, ShapeKind, Wrap};
+    use wordcraft_doc::{CharProps, Paragraph, Pos};
+    let mut d = Document::new();
+    d.last_section.doc_grid = Some(DocGrid { kind: DocGridType::Lines, line_pitch: 18.0, char_space: 0 });
+    let ch = CharProps { font: Some("Source Sans 3".into()), size: Some(18.0), ..Default::default() };
+    d.body = (1..=3)
+        .map(|n| {
+            let mut p = Paragraph::with_text(&format!("P{n}"), ch.clone());
+            p.mark = ch.clone();
+            p.props = wordcraft_doc::props::ParaProps {
+                space_before: Some(0.0),
+                space_after: Some(0.0),
+                line_spacing: Some(LineSpacing::Multiple(3.0)),
+                widow_control: Some(false),
+                ..Default::default()
+            };
+            wordcraft_doc::para_block(p)
+        })
+        .collect();
+    let shape = InlineObject::Shape {
+        kind: ShapeKind::Rectangle,
+        w: 468.0,
+        h: 20.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 0.0,
+        float: Float { wrap: Wrap::TopAndBottom, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 72.0, y: 72.0 + 55.0, ..Default::default() },
+        story: None,
+        effects: Default::default(),
+        freeform: None,
+        extra: Default::default(),
+    };
+    d.insert_object(&Pos::body(0, 0), shape, &Default::default()).unwrap();
+    let l = lay(&d);
+    let first = l.pages[0]
+        .items
+        .iter()
+        .find_map(|it| match it {
+            Placed::Lines { path, y, para, story: StoryRef::Body, .. } if path.0.len() == 1 => Some((*y, para.lines[0].height)),
+            _ => None,
+        })
+        .expect("first paragraph's lines");
+    assert!((first.1 - 54.0).abs() < 0.01, "a 3x line on an 18 pt grid is 3 pitches: {first:?}");
+    assert!((first.0 - 72.0).abs() < 0.01, "the line ends above the shape at 127 pt, so it stays at the top: {first:?}");
+}
