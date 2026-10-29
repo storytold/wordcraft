@@ -1,7 +1,7 @@
 use super::{
     DefaultApp, MAX_RECENT, SaveChoice, SaveInFlight, Value, WordApp, applied_font, async_saves, chrome, colors, crop, dialogs, dialogs_table_style,
-    file_dialogs, i18n, json, keeps_everything, keytips, now_ms, options, panes, paste_picture, printing, push_recent_font, system_clipboard,
-    table_pen, theme, widgets, zotero,
+    file_dialogs, i18n, json, keeps_everything, keytips, languagetool, now_ms, options, panes, paste_picture, printing, push_recent_font,
+    system_clipboard, table_pen, theme, widgets, zotero,
 };
 
 impl WordApp {
@@ -126,6 +126,9 @@ impl WordApp {
             return self.set_autosave(&params);
         }
         if let Some(r) = table_pen::toggle(self, id, &params) {
+            return r;
+        }
+        if let Some(r) = languagetool::command(self, id, &params) {
             return r;
         }
         let ctx = self.ctx.clone();
@@ -995,6 +998,7 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "readAloud.skipCitations"
             | "tools.customizeKeyboard"
             | "tools.customizeRibbon"
+            | "ui.languageTool"
             | "view.darkMode"
             | "view.marks"
             | "view.ruler"
