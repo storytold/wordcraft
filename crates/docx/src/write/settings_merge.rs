@@ -9,7 +9,7 @@
 //! byte for byte; owned children come from the generated part (or go, when the model turned
 //! them off); owned children the original lacks are inserted at their CT_Settings position; in
 //! `w:compat` only the `compatibilityMode` setting is replaced. Kept children that refer to a
-//! relationship (`r:id`, e.g. a mail merge data source) are dropped: their relationships aren't
+//! relationship (by namespace, e.g. a mail merge data source) are dropped: their relationships aren't
 //! carried. Anything unexpected returns `None`, and the generated part is written as before.
 
 /// Children of `w:settings` the model writes (`super::settings_xml`).
@@ -151,80 +151,108 @@ struct Child {
     name: String,
     start: usize,
     end: usize,
-}
-
-/// Byte index of the `>` that ends the tag at the start of `s`, skipping quoted attribute values.
-fn tag_end(s: &str) -> Option<usize> {
-    let mut quote = None;
-    for (i, c) in s.char_indices() {
-        match (quote, c) {
-            (Some(q), c) if c == q => quote = None,
-            (Some(_), _) => {}
-            (None, '"' | '\'') => quote = Some(c),
-            (None, '>') => return Some(i),
-            _ => {}
-        }
-    }
-    None
+    has_relationship: bool,
 }
 
 /// The root start tag's span end and the root's direct children, or `None` for anything the
-/// scanner doesn't expect (CDATA, DOCTYPE, a different root).
+/// scanner doesn't expect (CDATA, DOCTYPE, a different root). Retain byte spans while resolving
+/// relationship attributes in each child's namespace scope, including descendant rebindings.
 fn children(xml: &str, root: &str) -> Option<(usize, usize, Vec<Child>)> {
-    let open = xml.find(&format!("<{root}"))?;
-    let open_end = open + tag_end(xml.get(open..)?)? + 1;
-    if xml.get(open_end - 2..open_end)? == "/>" {
-        return None;
-    }
-    let close = xml.rfind(&format!("</{root}>"))?;
+    use quick_xml::events::Event;
+
+    let mut reader = quick_xml::NsReader::from_str(xml);
+    let mut open_end = None;
+    let mut close = None;
     let mut out = Vec::new();
     let mut depth = 0usize;
-    let mut i = open_end;
-    let mut cur: Option<(String, usize)> = None;
-    while i < close {
-        let rest = xml.get(i..close)?;
-        let Some(lt) = rest.find('<') else { break };
-        let at = i + lt;
-        let tail = xml.get(at..close)?;
-        if tail.starts_with("<!--") {
-            i = at + tail.find("-->")? + 3;
-            continue;
-        }
-        if tail.starts_with("<![CDATA[") || tail.starts_with("<!") {
-            return None;
-        }
-        if tail.starts_with("<?") {
-            i = at + tail.find("?>")? + 2;
-            continue;
-        }
-        let gt = at + tag_end(tail)? + 1;
-        let tag = xml.get(at..gt)?;
-        if tag.starts_with("</") {
-            depth = depth.checked_sub(1)?;
-            if depth == 0 {
-                let (name, s) = cur.take()?;
-                out.push(Child { name, start: s, end: gt });
-            }
-        } else {
-            let name: String = tag.get(1..)?.chars().take_while(|c| !c.is_whitespace() && *c != '>' && *c != '/').collect();
-            let selfclose = tag.ends_with("/>");
-            if depth == 0 {
-                if selfclose {
-                    out.push(Child { name, start: at, end: gt });
-                } else {
-                    cur = Some((name, at));
-                    depth = 1;
+    let mut cur: Option<Child> = None;
+    // Normalize a namespace once per declaration, not once per attribute that inherits it.
+    // Each element restores the previous bindings when its scope ends.
+    let mut namespaces: std::collections::HashMap<Vec<u8>, bool> = std::collections::HashMap::new();
+    let mut changes: Vec<(Vec<u8>, Option<bool>)> = Vec::new();
+    let mut scopes = Vec::new();
+    loop {
+        let start = usize::try_from(reader.buffer_position()).ok()?;
+        let event = reader.read_event().ok()?;
+        let end = usize::try_from(reader.buffer_position()).ok()?;
+        let mut restore_to = None;
+        match event {
+            Event::Start(ref e) | Event::Empty(ref e) => {
+                let empty = matches!(event, Event::Empty(_));
+                let scope = changes.len();
+                for attr in e.attributes().with_checks(false) {
+                    let attr = attr.ok()?;
+                    if let Some(prefix) = attr.key.as_ref().strip_prefix(b"xmlns:") {
+                        let namespace = attr.normalized_value(quick_xml::XmlVersion::Explicit1_0).ok()?;
+                        let relationship = matches!(
+                            namespace.as_ref(),
+                            "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+                                | "http://purl.oclc.org/ooxml/officeDocument/relationships"
+                        );
+                        let prefix = prefix.to_vec();
+                        let previous = namespaces.insert(prefix.clone(), relationship);
+                        changes.push((prefix, previous));
+                    }
                 }
-            } else if !selfclose {
-                depth += 1;
+                if !empty {
+                    scopes.push(scope);
+                }
+                if depth == 0 {
+                    if open_end.is_some() || e.name().as_ref() != root.as_bytes() || empty {
+                        return None;
+                    }
+                    open_end = Some(end);
+                    depth = 1;
+                    continue;
+                }
+                if depth == 1 {
+                    cur = Some(Child { name: std::str::from_utf8(e.name().as_ref()).ok()?.to_string(), start, end, has_relationship: false });
+                }
+                for attr in e.attributes().with_checks(false) {
+                    let attr = attr.ok()?;
+                    if let Some(prefix) = attr.key.prefix()
+                        && namespaces.get(prefix.as_ref()).copied().unwrap_or(false)
+                    {
+                        cur.as_mut()?.has_relationship = true;
+                    }
+                }
+                if !empty {
+                    depth = depth.checked_add(1)?;
+                } else {
+                    restore_to = Some(scope);
+                    if depth == 1 {
+                        out.push(cur.take()?);
+                    }
+                }
+            }
+            Event::End(_) => {
+                restore_to = Some(scopes.pop()?);
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    close = Some(start);
+                } else if depth == 1 {
+                    let mut child = cur.take()?;
+                    child.end = end;
+                    out.push(child);
+                }
+            }
+            Event::DocType(_) | Event::CData(_) => return None,
+            Event::Text(t) if depth == 0 && !t.decode().ok()?.trim().is_empty() => return None,
+            Event::GeneralRef(_) if depth == 0 => return None,
+            Event::Eof => return (depth == 0).then_some((open_end?, close?, out)),
+            _ => {}
+        }
+        if let Some(scope) = restore_to {
+            while changes.len() > scope {
+                let (prefix, previous) = changes.pop()?;
+                if let Some(relationship) = previous {
+                    namespaces.insert(prefix, relationship);
+                } else {
+                    namespaces.remove(&prefix);
+                }
             }
         }
-        i = gt;
     }
-    if depth != 0 {
-        return None;
-    }
-    Some((open_end, close, out))
 }
 
 /// The original `w:compat` with its `compatibilityMode` taken from the generated one.
@@ -308,7 +336,7 @@ pub fn merge(original: &[u8], generated: &[u8]) -> Option<Vec<u8>> {
                 None => text.to_string(),
             };
             out.push((k.name.clone(), merged));
-        } else if !text.contains("r:id=") {
+        } else if !k.has_relationship {
             out.push((k.name.clone(), text.to_string()));
         }
     }

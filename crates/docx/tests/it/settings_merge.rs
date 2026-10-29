@@ -163,3 +163,108 @@ fn do_not_track_moves_round_trips() {
     assert!(s.contains("<w:doNotTrackMoves/>"), "{s}");
     assert!(!wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).unwrap().settings.track_moves);
 }
+
+#[test]
+fn settings_merge_does_not_carry_a_document_type_declaration() {
+    for declaration in
+        [r#"<!DOCTYPE w:settings [<!ENTITY unused "original">]>"#, r#"<!DOCTYPE w:settings SYSTEM "https://invalid.example/settings.dtd">"#]
+    {
+        let original = SETTINGS.replacen("<w:settings", &format!("{declaration}<w:settings"), 1);
+        let doc = wordcraft_docx::read(&with_settings(&original)).unwrap();
+        let s = text(&save(&doc), "word/settings.xml");
+        assert!(!s.contains("<!DOCTYPE"), "{s}");
+        // Falling back to the generated settings still writes what the model owns.
+        assert!(s.contains(r#"<w:defaultTabStop w:val="708"/>"#), "{s}");
+        let back = wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).unwrap();
+        assert_eq!(back.settings, doc.settings);
+    }
+}
+
+#[test]
+fn settings_merge_drops_unowned_relationships_by_namespace() {
+    for child in [
+        format!(r#"<w:saveThroughXslt xmlns:q="{REL}" q:id="missing"/>"#),
+        format!(r#"<w:unknown><w:source xmlns:q="{REL}" q:embed="missing"/></w:unknown>"#),
+        r#"<w:saveThroughXslt xmlns:q="http://purl.oclc.org/ooxml/officeDocument/relationships" q:id="missing"/>"#.into(),
+        r#"<w:saveThroughXslt r:id = "missing"/>"#.into(),
+        r#"<w:unknown><w:a xmlns:r="urn:original" r:id="ordinary"/><w:b r:id="missing"/></w:unknown>"#.into(),
+        r#"<w:saveThroughXslt xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationship&#115;" r:id="missing"/>"#.into(),
+        r#"<w:saveThroughXslt xmlns:q="http://purl.oclc.org/ooxml/officeDocument/relation&#x73;hips" q:id="missing"/>"#.into(),
+    ] {
+        let original = SETTINGS.replace("</w:settings>", &format!("{child}</w:settings>"));
+        let doc = wordcraft_docx::read(&with_settings(&original)).unwrap();
+        let s = text(&save(&doc), "word/settings.xml");
+        assert!(!s.contains("missing"), "{child}: {s}");
+        assert!(s.contains(r#"w:name="ClauseSet" w:val="B""#), "unrelated settings: {s}");
+        assert_eq!(text(&save(&wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).unwrap()), "word/settings.xml"), s);
+    }
+}
+
+#[test]
+fn settings_merge_keeps_relationship_like_text_and_unrelated_attributes() {
+    for child in [
+        r#"<w:docVars><w:docVar w:name="Original" w:val="r:id=literal"/></w:docVars>"#,
+        r#"<w:unknown xmlns:r="urn:original" r:id="ordinary"/>"#,
+        r#"<w:unknown id="ordinary"><!-- r:id=comment --><?original r:id=instruction?></w:unknown>"#,
+        r#"<w:unknown w:id="ordinary"/>"#,
+        r#"<w:unknown xmlns:q="urn:original&amp;literal"><w:a q:id="ordinary"/></w:unknown>"#,
+    ] {
+        let original = SETTINGS.replace("</w:settings>", &format!("{child}</w:settings>"));
+        let doc = wordcraft_docx::read(&with_settings(&original)).unwrap();
+        let s = text(&save(&doc), "word/settings.xml");
+        assert!(s.contains(child), "{child}: {s}");
+    }
+    let original = SETTINGS.replacen("<w:settings", "<!-- A harmless DOCTYPE mention --><?original preserve?><w:settings", 1);
+    let doc = wordcraft_docx::read(&with_settings(&original)).unwrap();
+    let s = text(&save(&doc), "word/settings.xml");
+    assert!(s.contains("<!-- A harmless DOCTYPE mention --><?original preserve?>"), "{s}");
+    assert!(s.contains("ClauseSet"), "{s}");
+}
+
+/// Both inputs stay below the reader's per-element namespace and nesting limits. Grow the
+/// active bindings and the attributes eightfold: resolving each attribute by scanning the
+/// bindings used to multiply those two costs.
+#[test]
+fn settings_merge_namespace_lookup_scales_with_the_settings_part() {
+    use std::fmt::Write as _;
+
+    let fixture = |levels: usize, count: usize| {
+        let mut xml =
+            format!(r#"<w:settings xmlns:w="{W}" xmlns:r="{REL}" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><w:unknown>"#);
+        for level in 0..levels {
+            xml.push_str("<w:n");
+            for prefix in 0..120 {
+                write!(xml, r#" xmlns:p{level}_{prefix}="urn:original:{level}:{prefix}""#).unwrap();
+            }
+            xml.push('>');
+        }
+        for _ in 0..count {
+            xml.push_str(r#"<w:a w:val="Original"/>"#);
+        }
+        for _ in 0..levels {
+            xml.push_str("</w:n>");
+        }
+        xml.push_str("</w:unknown></w:settings>");
+        let mut doc = wordcraft_doc::Document::new();
+        doc.passthrough.insert("wordcraft:settings.orig".into(), xml.into_bytes().into());
+        doc
+    };
+    let small = fixture(24, 4_000);
+    let big = fixture(192, 32_000);
+    for (doc, count) in [(&small, 4_000), (&big, 32_000)] {
+        let settings = text(&save(doc), "word/settings.xml");
+        assert_eq!(settings.matches(r#"<w:a w:val="Original"/>"#).count(), count);
+        assert!(settings.contains("<w:defaultTabStop"));
+    }
+    let (small_cost, big_cost, ratio) = super::content_control_save_cost::cost_ratio(
+        8,
+        || {
+            wordcraft_docx::write(&small).unwrap();
+        },
+        || {
+            wordcraft_docx::write(&big).unwrap();
+        },
+    );
+    eprintln!("settings merge: {small_cost:.4}s -> {big_cost:.4}s, ratio {ratio:.1}");
+    assert!(ratio < 24.0, "eight times the settings took {ratio:.1}x the time");
+}

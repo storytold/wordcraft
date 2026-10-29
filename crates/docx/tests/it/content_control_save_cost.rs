@@ -54,7 +54,7 @@ fn block_controls(n: usize) -> Document {
 /// Each is the cheapest of several runs after a warm-up, the runs alternating so a busy spell
 /// slows both sizes alike; the smaller document is saved `scale` times over per run, so both
 /// timings are long against the clock's resolution.
-fn cost_ratio(scale: usize, mut small: impl FnMut(), mut big: impl FnMut()) -> (f64, f64, f64) {
+pub(super) fn cost_ratio(scale: usize, mut small: impl FnMut(), mut big: impl FnMut()) -> (f64, f64, f64) {
     small();
     big();
     let mut small_scaled = || (0..scale).for_each(|_| small());
