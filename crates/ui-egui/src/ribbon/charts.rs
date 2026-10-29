@@ -40,6 +40,7 @@ pub(super) fn smart_art_design(app: &mut WordApp, ui: &mut Ui) {
                     t.ribbon
                 };
                 ui.painter().rect(r, 3.0, fill, Stroke::new(1.0, if on { t.accent } else { t.border }), egui::StrokeKind::Inside);
+                crate::widgets::focus_ring_with(ui, r, &resp, 3, t.focus);
                 crate::dialogs_smart_art::preview(ui.painter(), r.shrink(2.0), layout, g.colors, &theme, t.text_dim);
                 if resp.on_hover_text(tl!(layout.label())).clicked() && !on {
                     let _ = app.run("smartArt.layout", json!({"layout": layout.id()}));

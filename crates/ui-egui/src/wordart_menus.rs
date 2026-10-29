@@ -23,6 +23,7 @@ fn cell(ui: &mut Ui, w: f32, h: f32, tip: &str, paint: impl FnOnce(&egui::Painte
     let bg = if resp.hovered() { t.hover } else { t.input };
     ui.painter().rect_filled(r, 3.0, bg);
     ui.painter().rect_stroke(r, 3.0, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+    crate::widgets::focus_ring_with(ui, r, &resp, 3, t.focus);
     paint(ui.painter(), r.shrink(3.0));
     resp.on_hover_text(crate::tl!(tip)).clicked()
 }

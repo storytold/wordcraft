@@ -1,4 +1,4 @@
-use super::buttons::DROPDOWN;
+use super::buttons::{DROPDOWN, focus_ring, focus_ring_with};
 use super::combo::drawn_state;
 use super::{Color32, CornerRadius, Rect, Response, Sense, Stroke, Tokens, Ui, icons, pos2, regular, vec2};
 
@@ -14,6 +14,7 @@ pub fn icon_button(ui: &mut Ui, icon: &str, tip: &str) -> Response {
     let (r, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
     let st = drawn_state(ui, &resp, false);
     ui.painter().rect_filled(r, CornerRadius::same(4), st.fill);
+    focus_ring(ui, r, &resp, &t);
     icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(14.0, 14.0)), icon, t.icon, t.accent);
     resp.on_hover_text(tip)
 }
@@ -63,6 +64,7 @@ fn icon_text_button_with(ui: &mut Ui, icon: &str, text: &str, font: egui::FontId
     let st = drawn_state(ui, &resp, true);
     let r = r.expand(st.expansion);
     ui.painter().rect(r, ui.visuals().widgets.inactive.corner_radius, st.fill, st.stroke, egui::StrokeKind::Inside);
+    focus_ring_with(ui, r, &resp, ui.visuals().widgets.inactive.corner_radius, t.focus);
     icons::paint(
         ui.painter(),
         Rect::from_center_size(pos2(r.min.x + pad.x + icon_w / 2.0, r.center().y), vec2(icon_w, icon_w)),
@@ -95,6 +97,7 @@ pub fn icon_menu_item(ui: &mut Ui, icon: &str, text: &str, shortcut: &str, min_w
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), text));
     let st = drawn_state(ui, &resp, false);
     ui.painter().rect_filled(r, ui.visuals().widgets.inactive.corner_radius, st.fill);
+    focus_ring_with(ui, r, &resp, ui.visuals().widgets.inactive.corner_radius, t.focus);
     let (line, accent) = if ui.is_enabled() { (t.icon, t.accent) } else { (t.text_disabled, t.text_disabled) };
     let text_c = if ui.is_enabled() { st.text } else { t.text_disabled };
     icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + pad.x + icon_w / 2.0, r.center().y), vec2(icon_w, icon_w)), icon, line, accent);
@@ -135,6 +138,7 @@ pub fn dialog_tabs(ui: &mut Ui, labels: &[String], selected: usize) -> Option<us
         if on {
             p.rect_filled(Rect::from_min_max(pos2(r.min.x + 1.0, base_y - 1.0), pos2(r.max.x - 1.0, base_y + 1.0)), 0.0, page);
         }
+        focus_ring_with(ui, shown, &resp, top, t.focus);
         let color = if on { t.text } else { t.text.gamma_multiply(0.8) };
         p.galley(pos2(r.center().x - galley.size().x / 2.0, r.center().y - galley.size().y / 2.0), galley, color);
         if resp.clicked() && !on {

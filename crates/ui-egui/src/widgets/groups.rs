@@ -1,6 +1,6 @@
 #[cfg(test)]
 use super::TALL_GROUPS;
-use super::buttons::{BIG_ICON_Y, BIG_LABEL_Y, CONTENT_H, DROPDOWN, LABEL_H, bg, label_line};
+use super::buttons::{BIG_ICON_Y, BIG_LABEL_Y, CONTENT_H, DROPDOWN, LABEL_H, bg, focus_ring_with, label_line};
 use super::{Align2, Rect, Response, Sense, Stroke, Tokens, Ui, WordApp, icons, pos2, regular, vec2};
 
 /// A ribbon group: content, a centred label below and a divider on the right.
@@ -65,6 +65,7 @@ fn title_row(ui: &mut Ui, r: Rect, id_title: &str, title: &str, launcher: Option
         if resp.hovered() {
             ui.painter().rect_filled(lr.expand(2.0), 2.0, t.hover);
         }
+        focus_ring_with(ui, lr.expand(2.0), &resp, 2, t.focus);
         icons::paint(ui.painter(), lr, "launcher", t.text_dim, t.accent);
         if resp.on_hover_text(crate::i18n::fmt(tl!("{group} settings"), &[("group", title)])).clicked() {
             let _ = app.run(cmd, serde_json::json!({}));

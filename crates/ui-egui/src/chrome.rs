@@ -5,6 +5,7 @@ use serde_json::json;
 use wordcraft_doc::{PartKind, StoryRef};
 
 use crate::theme::{Tokens, TypeRung, fit_text, medium, paint_text, regular, semibold, text_width};
+use crate::widgets::{FOCUS_RING_W, focus_ring, focus_ring_with};
 use crate::{WordApp, icons};
 
 /// Why the caret's language isn't spell-checked (dictionary unreadable or missing), if it isn't.
@@ -36,6 +37,7 @@ fn qat_button(ui: &mut Ui, app: &mut WordApp, icon: &str, tip: &str, id: &str, e
     if resp.hovered() && enabled {
         ui.painter().rect_filled(r, 4.0, t.hover);
     }
+    focus_ring(ui, r, &resp, &t);
     let c = if enabled { t.icon } else { t.text_disabled };
     icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(16.0, 16.0)), icon, c, if enabled { t.accent } else { c });
     let sc = crate::widgets::shortcut_text(app, id);
@@ -91,6 +93,7 @@ fn quick_access(ui: &mut Ui, app: &mut WordApp) {
     if resp.hovered() {
         ui.painter().rect_filled(r, 4.0, t.hover);
     }
+    focus_ring(ui, r, &resp, &t);
     icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(16.0, 16.0)), "more", t.icon, t.accent);
     let resp = resp.on_hover_text(tl!("Customize Quick Access Toolbar"));
     egui::Popup::menu(&resp).show(|ui| {
@@ -141,6 +144,7 @@ fn undo_list_button(ui: &mut Ui, app: &mut WordApp, enabled: bool) {
     if resp.hovered() && enabled {
         ui.painter().rect_filled(r, 4.0, t.hover);
     }
+    focus_ring(ui, r, &resp, &t);
     let c = if enabled { t.icon } else { t.text_disabled };
     icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(9.0, 9.0)), "dropdown", c, c);
     let resp = resp.on_hover_text(tl!("Undo History"));
@@ -158,7 +162,7 @@ fn undo_list(ui: &mut Ui, app: &mut WordApp) {
     let (mut hovered, mut clicked) = (None, None);
     egui::ScrollArea::vertical().max_height(ROW * 18.0).auto_shrink([false, true]).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 0.0;
-        let rects: Vec<Rect> = (0..rows.len())
+        let rects: Vec<(Rect, egui::Response)> = (0..rows.len())
             .map(|i| {
                 let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), ROW), Sense::hover());
                 let resp = ui.interact(r, undo_list_row_id(i), Sense::click());
@@ -168,13 +172,14 @@ fn undo_list(ui: &mut Ui, app: &mut WordApp) {
                 if resp.clicked() {
                     clicked = Some(i);
                 }
-                r
+                (r, resp)
             })
             .collect();
-        for (i, (r, label)) in rects.iter().zip(&rows).enumerate() {
+        for (i, ((r, resp), label)) in rects.iter().zip(&rows).enumerate() {
             if hovered.is_some_and(|h| i <= h) {
                 ui.painter().rect_filled(*r, 0.0, t.selection);
             }
+            focus_ring_with(ui, *r, resp, 0, t.focus);
             // Clipped to its row: a long label never runs into the scroll bar.
             ui.painter_at(r.shrink2(vec2(6.0, 0.0))).text(pos2(r.min.x + 6.0, r.center().y), Align2::LEFT_CENTER, label, regular(12.0), t.text);
         }
@@ -188,6 +193,7 @@ fn undo_list(ui: &mut Ui, app: &mut WordApp) {
         if resp.hovered() {
             ui.painter().rect_filled(r, 0.0, t.selection);
         }
+        focus_ring_with(ui, r, &resp, 0, t.focus);
         ui.painter().text(pos2(r.min.x + 6.0, r.center().y), Align2::LEFT_CENTER, undo_list_footer(0), regular(12.0), t.text);
         if resp.clicked() {
             ui.close();
@@ -320,6 +326,8 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                     (None, false) => (t.input, t.border_strong, t.text_dim),
                 };
                 ui.painter().rect(r, 8.0, fill, Stroke::new(1.0, stroke), egui::StrokeKind::Inside);
+                // Outside the switch: on, it is filled with the accent.
+                focus_ring_with(ui, r.expand(3.0), &resp, 11, t.focus);
                 let knob = if on { r.max.x - 8.0 } else { r.min.x + 8.0 };
                 ui.painter().circle_filled(pos2(knob, r.center().y), 5.0, knob_fill);
                 let tip = block
@@ -349,6 +357,10 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                     // Account / community.
                     let (r, resp) = ui.allocate_exact_size(vec2(control_h, control_h), Sense::click());
                     ui.painter().circle_filled(r.center(), control_h / 2.0 - 1.0, t.accent);
+                    if resp.has_focus() {
+                        // Around the accent disc, a point clear of it.
+                        ui.painter().circle_stroke(r.center(), control_h / 2.0 + FOCUS_RING_W / 2.0, Stroke::new(FOCUS_RING_W, t.focus));
+                    }
                     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Account")));
                     let initials: String = app.session.user_initials().chars().take(2).collect();
                     ui.painter().text(r.center(), Align2::CENTER_CENTER, initials, semibold(10.5), t.on_accent);
@@ -359,6 +371,7 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                     if app.ui.show_discord {
                         let (r, resp) = ui.allocate_exact_size(vec2(84.0, 22.0), Sense::click());
                         ui.painter().rect_filled(r, 11.0, if resp.hovered() { t.accent_text } else { t.accent });
+                        focus_ring_with(ui, r.expand(3.0), &resp, 14, t.focus);
                         icons::paint(
                             ui.painter(),
                             Rect::from_center_size(pos2(r.min.x + 13.0, r.center().y), vec2(14.0, 14.0)),
@@ -409,6 +422,7 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                 let rect = Rect::from_center_size(pos2(cx, full.center().y), vec2(w + 8.0, control_h));
                 let response = ui.interact(rect, ui.scope_id().with("document_name"), Sense::click()).on_hover_text(tl!("Rename Document"));
                 response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &title));
+                focus_ring(ui, rect, &response, &t);
                 if response.clicked() {
                     let _ = app.run("file.rename", json!({}));
                 }
@@ -434,6 +448,7 @@ fn search_box(app: &mut WordApp, ui: &mut Ui, control_h: f32) {
     let ph = tl!("Search commands and help");
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, ph));
     ui.painter().rect(r, 6.0, if resp.hovered() { t.input } else { t.ribbon }, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+    focus_ring_with(ui, r, &resp, 6, t.focus);
     icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 16.0, r.center().y), vec2(16.0, 16.0)), "search", t.text_dim, t.accent);
     let pfont = TypeRung::Control.regular();
     let ptrack = TypeRung::Control.tracking();
@@ -507,6 +522,7 @@ pub fn screen_bar(app: &mut WordApp, ui: &mut Ui, screen: Screen) {
             let resp = ui.allocate_rect(r, Sense::click());
             let shade = if resp.hovered() || app.focus_ribbon { egui::Color32::from_gray(70) } else { egui::Color32::from_gray(40) };
             ui.painter().rect_filled(r, 4.0, shade);
+            focus_ring_with(ui, r, &resp, 4, egui::Color32::from_gray(220));
             icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(14.0, 14.0)), "more", egui::Color32::from_gray(220), t.accent);
             resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Show the ribbon")));
             if resp.on_hover_text(tl!("Show the ribbon")).clicked() {
@@ -572,6 +588,8 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     let w = text_width(ui.painter(), s, &font, track, t.text_dim);
                     let (r, resp) = ui.allocate_exact_size(vec2(w + 1.0, TypeRung::Caption.line_height()), Sense::click());
                     paint_text(ui.painter(), pos2(r.min.x, r.min.y), Align2::LEFT_TOP, s, &font, track, t.text_dim);
+                    // Around the text, which fills the control.
+                    focus_ring_with(ui, r.expand(2.0), &resp, 3, t.focus);
                     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, s));
                     resp
                 };
@@ -642,6 +660,7 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     let zslot = text_width(ui.painter(), "000%", &zfont, ztrack, t.text_dim) + 4.0;
                     let (zr, zresp) = ui.allocate_exact_size(vec2(zw.max(zslot) + 1.0, TypeRung::Caption.line_height()), Sense::click());
                     paint_text(ui.painter(), pos2(zr.max.x - 1.0, zr.min.y), Align2::RIGHT_TOP, &ztxt, &zfont, ztrack, t.text_dim);
+                    focus_ring_with(ui, zr.expand(2.0), &zresp, 3, t.focus);
                     if zresp.clicked() && !reading {
                         let _ = app.run("ui.dialog", json!({ "name": "zoom" }));
                     }
@@ -685,6 +704,7 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                         } else if resp.hovered() {
                             ui.painter().rect_filled(r, 3.0, t.hover);
                         }
+                        focus_ring_with(ui, r, &resp, 3, t.focus);
                         icons::paint(ui.painter(), r.shrink(3.0), icon, t.icon, t.accent);
                         resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, name));
                         if resp.on_hover_text(name).clicked() {
@@ -701,6 +721,7 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     if resp.hovered() {
                         ui.painter().rect_filled(r, 3.0, t.hover);
                     }
+                    focus_ring_with(ui, r, &resp, 3, t.focus);
                     icons::paint(ui.painter(), Rect::from_min_size(r.min + vec2(2.0, 2.0), vec2(16.0, 16.0)), "focus", t.icon, t.accent);
                     let ffont = TypeRung::Caption.regular();
                     let ftrack = TypeRung::Caption.tracking();
@@ -746,6 +767,7 @@ fn small_icon(ui: &mut Ui, icon: &str, tip: &str) -> bool {
     if resp.hovered() {
         ui.painter().rect_filled(r, 3.0, t.hover);
     }
+    focus_ring_with(ui, r, &resp, 3, t.focus);
     icons::paint(ui.painter(), r.shrink(3.0), icon, t.icon, t.accent);
     resp.on_hover_text(tip).clicked()
 }

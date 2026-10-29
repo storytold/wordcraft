@@ -298,6 +298,10 @@ pub struct Tokens {
     pub close_hover: Color32,
     pub close_pressed: Color32,
     pub on_close: Color32,
+    /// The keyboard focus ring around a drawn control (#4495): near-black in the light theme and
+    /// near-white in the dark one, as the system focus outline is, so it reads on the ribbon and
+    /// on hover, pressed and checked fills, and never looks like a checked control's accent.
+    pub focus: Color32,
 }
 
 impl Tokens {
@@ -364,6 +368,7 @@ impl Tokens {
             close_hover: Color32::from_rgb(0xC4, 0x2B, 0x1C),
             close_pressed: Color32::from_rgb(0xA6, 0x23, 0x16),
             on_close: Color32::WHITE,
+            focus: Color32::from_rgb(0x1A, 0x1A, 0x1A),
         }
     }
     pub fn dark() -> Self {
@@ -432,6 +437,7 @@ impl Tokens {
             close_hover: Color32::from_rgb(0xD6, 0x3C, 0x2C),
             close_pressed: Color32::from_rgb(0xB3, 0x30, 0x23),
             on_close: Color32::WHITE,
+            focus: Color32::from_rgb(0xF2, 0xF2, 0xF2),
         }
     }
     pub fn get(ctx: &egui::Context) -> Tokens {
@@ -873,6 +879,38 @@ mod tests {
             for (name, bg) in [("input", t.input), ("ribbon", t.ribbon), ("panel", t.panel), ("menu", t.menu), ("title bar", t.title_bar)] {
                 let r = contrast(t.input_border, bg);
                 assert!(r >= 3.0, "dark={}: input_border on {name} is {r:.2}:1", t.dark);
+            }
+        }
+    }
+
+    /// #4495: the keyboard focus ring reaches 3:1 against every fill a focused control can have and
+    /// everything it sits on, in both themes, and is not the accent a checked control is drawn in.
+    /// On the File page's side bar the ring is white, as its text is.
+    #[test]
+    fn the_focus_ring_reads_on_every_control_fill() {
+        for t in [super::Tokens::light(), super::Tokens::dark()] {
+            let fills = [
+                ("ribbon", t.ribbon),
+                ("hover", t.hover),
+                ("pressed", t.pressed),
+                ("checked", t.checked),
+                ("title bar", t.title_bar),
+                ("tab strip", t.tab_strip),
+                ("status bar", t.status_bar),
+                ("panel", t.panel),
+                ("menu", t.menu),
+                ("input", t.input),
+            ];
+            for (name, bg) in fills {
+                let r = contrast(t.focus, bg);
+                assert!(r >= 3.0, "dark={}: focus ring on {name} is {r:.2}:1", t.dark);
+            }
+            assert!(contrast(t.focus, t.accent) > 1.5, "dark={}: the focus ring looks like the accent", t.dark);
+            // The side bar's selected row is white at 46/255 over the bar.
+            let selected = t.nav.lerp_to_gamma(egui::Color32::WHITE, 46.0 / 255.0);
+            for (name, bg) in [("side bar", t.nav), ("selected side bar row", selected)] {
+                let r = contrast(egui::Color32::WHITE, bg);
+                assert!(r >= 3.0, "dark={}: white focus ring on the {name} is {r:.2}:1", t.dark);
             }
         }
     }

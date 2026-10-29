@@ -44,6 +44,7 @@ pub(super) fn edge_cue(ui: &mut Ui, rect: Rect, glyph: &str, hint: &str, t: &Tok
     let resp = ui.interact(rect, ui.scope_id().with(glyph), Sense::click()).on_hover_text(hint);
     let ink = if resp.hovered() { t.text } else { t.text_dim };
     ui.painter().rect_filled(rect, 0.0, t.ribbon);
+    crate::widgets::focus_ring(ui, rect, &resp, t);
     ui.painter().text(rect.center(), Align2::CENTER_CENTER, glyph, egui::FontId::proportional(18.0), ink);
     resp.clicked()
 }

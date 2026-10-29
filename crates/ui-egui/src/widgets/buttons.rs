@@ -34,20 +34,57 @@ pub fn enabled(app: &WordApp, id: &str) -> bool {
     }
 }
 
+/// A ribbon button's background: the pressed, checked or hover fill, then the focus ring.
 pub(crate) fn bg(ui: &Ui, r: Rect, resp: &Response, checked: bool, t: &Tokens) {
     let fill = if resp.is_pointer_button_down_on() {
-        t.pressed
+        Some(t.pressed)
     } else if checked {
-        t.checked
+        Some(t.checked)
     } else if resp.hovered() {
-        t.hover
+        Some(t.hover)
     } else {
-        return;
+        None
     };
-    ui.painter().rect_filled(r, CornerRadius::same(4), fill);
+    if let Some(fill) = fill {
+        ui.painter().rect_filled(r, CornerRadius::same(4), fill);
+    }
     if checked {
         ui.painter().rect_stroke(r, CornerRadius::same(4), Stroke::new(1.0, t.accent.linear_multiply(0.5)), egui::StrokeKind::Inside);
     }
+    focus_ring(ui, r, resp, t);
+}
+
+/// Width of the keyboard focus ring (#4495).
+pub const FOCUS_RING_W: f32 = 2.0;
+
+/// The keyboard focus ring (#4495, WCAG 2.4.7): a [`FOCUS_RING_W`] ring in `color` just inside
+/// `r` while `resp` has the keyboard focus. A click doesn't focus a drawn control, only Tab does,
+/// so the ring shows where Enter and Space go without following the mouse. Paint it over the
+/// control's fill and under its icon and label.
+pub fn focus_ring_with(ui: &Ui, r: Rect, resp: &Response, corner_radius: impl Into<CornerRadius>, color: Color32) {
+    if resp.has_focus() {
+        ui.painter().rect_stroke(r, corner_radius, Stroke::new(FOCUS_RING_W, color), egui::StrokeKind::Inside);
+    }
+}
+
+/// [`focus_ring_with`] in the theme's focus colour with the ribbon buttons' rounding.
+pub fn focus_ring(ui: &Ui, r: Rect, resp: &Response, t: &Tokens) {
+    focus_ring_with(ui, r, resp, CornerRadius::same(4), t.focus);
+}
+
+/// The focus rings a frame painted in `color`: the rectangles stroked [`FOCUS_RING_W`] wide.
+#[cfg(test)]
+pub(crate) fn focus_rings(out: &egui::FullOutput, color: Color32) -> Vec<Rect> {
+    fn walk(shape: &egui::Shape, color: Color32, rings: &mut Vec<Rect>) {
+        match shape {
+            egui::Shape::Rect(r) if r.stroke.width == FOCUS_RING_W && r.stroke.color == color => rings.push(r.rect),
+            egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, color, rings)),
+            _ => {}
+        }
+    }
+    let mut rings = Vec::new();
+    out.shapes.iter().for_each(|c| walk(&c.shape, color, &mut rings));
+    rings
 }
 
 /// Runs a ribbon button's command, then hands keyboard focus back to the document so typing

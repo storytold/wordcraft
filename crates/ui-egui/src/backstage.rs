@@ -4,6 +4,7 @@ use egui::{Align2, Rect, Sense, Stroke, Ui, pos2, vec2};
 use serde_json::json;
 
 use crate::theme::{Tokens, medium, regular, semibold};
+use crate::widgets::{focus_ring, focus_ring_with};
 use crate::{WordApp, icons};
 
 /// The side menu: page id, label and icon (#1714).
@@ -56,6 +57,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 // The chevron's stroke starts at the content edge.
                 let c = back_chevron_c(band.min.x, band.center().y, app.session.view.full_screen, app.mac_titlebar.content_left);
                 let resp = ui.interact(Rect::from_center_size(c, vec2(22.0, band.height())), ui.scope_id().with("backstage_back"), Sense::click());
+                // White, as everything on the side bar is.
+                focus_ring_with(ui, Rect::from_center_size(c, vec2(28.0, 28.0)), &resp, 4, egui::Color32::WHITE);
                 icons::paint(ui.painter(), Rect::from_center_size(c, vec2(18.0, 18.0)), "chevronLeft", egui::Color32::WHITE, egui::Color32::WHITE);
                 resp
             } else {
@@ -65,6 +68,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 let (r, _) = ui.allocate_exact_size(vec2(200.0, 40.0), Sense::hover());
                 let c = pos2(r.min.x + 26.0, r.center().y);
                 let resp = ui.interact(Rect::from_center_size(c, vec2(22.0, r.height())), ui.scope_id().with("backstage_back"), Sense::click());
+                focus_ring_with(ui, Rect::from_center_size(c, vec2(28.0, 28.0)), &resp, 4, egui::Color32::WHITE);
                 icons::paint(ui.painter(), Rect::from_center_size(c, vec2(18.0, 18.0)), "chevronLeft", egui::Color32::WHITE, egui::Color32::WHITE);
                 resp
             };
@@ -85,6 +89,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 } else if on && resp.hovered() {
                     ui.painter().rect_filled(r, 0.0, egui::Color32::from_white_alpha(26));
                 }
+                focus_ring_with(ui, r.shrink(2.0), &resp, 4, egui::Color32::WHITE);
                 let ink = if on { egui::Color32::WHITE } else { egui::Color32::from_white_alpha(110) };
                 icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 31.0, r.center().y), vec2(18.0, 18.0)), icon, ink, ink);
                 ui.painter().text(
@@ -130,6 +135,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     if resp.hovered() {
                         ui.painter().rect_filled(r, 0.0, egui::Color32::from_white_alpha(26));
                     }
+                    focus_ring_with(ui, r.shrink(2.0), &resp, 4, egui::Color32::WHITE);
                     ui.painter().text(pos2(r.min.x + 22.0, r.center().y), Align2::LEFT_CENTER, tl!(label), regular(13.0), egui::Color32::WHITE);
                     if resp.clicked() {
                         if id == "discord" {
@@ -244,6 +250,8 @@ fn template_tile(ui: &mut Ui, app: &mut WordApp, label: &str, template: &str) {
             Stroke::new(if resp.hovered() { 2.0 } else { 1.0 }, if resp.hovered() { t.accent } else { t.border_strong }),
             egui::StrokeKind::Inside,
         );
+        // Around the page and its caption, clear of the page, which is white in both themes.
+        focus_ring_with(ui, tile.expand(4.0), &resp, 4, t.focus);
         let ppp = ui.ctx().pixels_per_point();
         let key = format!("tpl:{template}:{ppp}");
         let region = app.session.region();
@@ -483,6 +491,7 @@ fn personal_tile(ui: &mut Ui, app: &mut WordApp, p: &PersonalTemplate) {
             Stroke::new(if resp.hovered() { 2.0 } else { 1.0 }, if resp.hovered() { t.accent } else { t.border_strong }),
             egui::StrokeKind::Inside,
         );
+        focus_ring_with(ui, r.expand(4.0), &resp, 4, t.focus);
         let mark = egui::Color32::from_gray(150);
         icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(44.0, 44.0)), "documentTemplate", mark, t.accent);
         let resp = resp.on_hover_text(&p.path);
@@ -533,6 +542,7 @@ fn open_list(app: &mut WordApp, ui: &mut Ui) {
         if resp.hovered() {
             ui.painter().rect_filled(r, 4.0, t.hover);
         }
+        focus_ring(ui, r, &resp, &t);
         icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 18.0, r.center().y), vec2(22.0, 22.0)), "printLayout", t.icon, t.accent);
         ui.painter().text(pos2(r.min.x + 40.0, r.min.y + 13.0), Align2::LEFT_CENTER, name, medium(13.0), t.text);
         ui.painter().text(pos2(r.min.x + 40.0, r.min.y + 29.0), Align2::LEFT_CENTER, p, regular(11.0), t.text_dim);

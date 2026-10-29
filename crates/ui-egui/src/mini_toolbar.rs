@@ -354,11 +354,13 @@ pub(crate) fn highlight_button_appearance(name: &str) -> (&'static str, Option<e
 /// No Color too, becomes the split button's colour, as in Word: after No Color a click on the
 /// button removes highlighting (#2105).
 pub(crate) fn highlight_menu(ui: &mut egui::Ui, app: &mut WordApp) {
+    let focus = Tokens::get(ui.ctx()).focus;
     egui::Grid::new("mini_hl").spacing(Vec2::new(3.0, 3.0)).show(ui, |ui| {
         for (i, h) in wordcraft_doc::props::Highlight::ALL.iter().enumerate().skip(1) {
             let Some(c) = h.rgb() else { continue };
             let (r, resp) = ui.allocate_exact_size(Vec2::new(18.0, 18.0), Sense::click());
             ui.painter().rect_filled(r, 2.0, egui::Color32::from_rgb(c.0, c.1, c.2));
+            widgets::focus_ring_with(ui, r, &resp, 2, focus);
             if resp.on_hover_text(h.name()).clicked() {
                 app.canvas.last_highlight = h.ooxml().to_string();
                 widgets::run_from_ribbon(app, "format.highlight", json!({"color": h.ooxml()}));

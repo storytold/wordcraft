@@ -258,6 +258,50 @@ fn drawn_buttons_fade_in_on_hover_and_darken_while_pressed() {
     assert_eq!(settle().3, t.pressed);
 }
 
+/// #4495: a ribbon button reached with Tab draws a focus ring around itself in both themes, and
+/// the ring is not its hover or pressed look: pointing at it and clicking it draw none.
+#[test]
+fn a_ribbon_button_reached_with_tab_draws_a_focus_ring() {
+    use egui_kittest::kittest::Queryable;
+    for appearance in [crate::theme::Appearance::Light, crate::theme::Appearance::Dark] {
+        let a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(vec2(240.0, 80.0))
+            .with_context_setup(move |ctx| {
+                ctx.set_fonts(crate::theme::font_definitions(false, false));
+                crate::theme::apply(ctx, appearance);
+            })
+            .build_ui_state(
+                |ui, app: &mut WordApp| {
+                    small(ui, app, "bold", None, "Bold", ButtonAction::new("format.bold", serde_json::json!({}), false));
+                },
+                a,
+            );
+        h.run_steps(2);
+        let t = Tokens::get(&h.ctx);
+        let button = h.get_by_label("Bold").rect();
+        let rings = |h: &egui_kittest::Harness<'_, WordApp>| crate::widgets::focus_rings(h.output(), t.focus);
+        assert!(rings(&h).is_empty(), "{appearance:?}: a ring before anything has focus");
+
+        let at = button.center();
+        h.event(egui::Event::PointerMoved(at));
+        h.run_steps(2);
+        assert!(rings(&h).is_empty(), "{appearance:?}: pointing at the button draws a ring");
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
+        }
+        h.run_steps(2);
+        assert!(rings(&h).is_empty(), "{appearance:?}: a click focuses the button");
+
+        // Away from the button, so only the keyboard focus can mark it.
+        h.event(egui::Event::PointerMoved(egui::pos2(230.0, 70.0)));
+        h.key_press(egui::Key::Tab);
+        h.run_steps(2);
+        assert!(h.ctx.memory(|m| m.focused()).is_some(), "{appearance:?}: Tab did not focus the button");
+        assert_eq!(rings(&h), vec![button], "{appearance:?}: the focused button's ring");
+    }
+}
+
 #[test]
 fn font_matches_puts_exact_and_prefix_before_substring() {
     let items: Vec<String> = ["Arial Black", "Arial", "Courier New", "Times New Roman", "Roman Serif"].map(String::from).to_vec();
