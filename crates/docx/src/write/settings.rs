@@ -1,5 +1,6 @@
 use super::parts::push_part;
 use super::{CT_WML, Document, PartRels, W, Writer, math, rt, story, xml};
+use crate::{MAX_DOC_VAR_VALUE, MAX_DOC_VARS};
 
 /// The file id of the first footnote or endnote: after the separators (-1, 0) and the
 /// continuation notice (1), when the document has one.
