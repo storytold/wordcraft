@@ -192,7 +192,9 @@ pub(super) fn goto_body(app: &mut WordApp, ui: &mut Ui, what: &mut GoToWhat, tar
         ui.vertical(|ui| match what {
             GoToWhat::Page => {
                 let label = ui.label(tl!("Enter page number:"));
-                let r = ui.add(egui::TextEdit::singleline(target).desired_width(220.0)).labelled_by(label.id);
+                let edit = egui::TextEdit::singleline(target).desired_width(220.0);
+                let clipboard = app.services.clipboard_text.as_deref();
+                let r = crate::field_menu::text_field(ui, edit, app.window_id("go_to_page"), clipboard).labelled_by(label.id);
                 if !r.has_focus() {
                     r.request_focus();
                 }

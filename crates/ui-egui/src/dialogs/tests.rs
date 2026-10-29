@@ -906,6 +906,70 @@ fn replace_all_with_regex_groups_from_the_dialog() {
     }
 }
 
+/// #4404: a right-click in Find what or Replace with opens a menu with Cut, Copy, Paste and
+/// Select All, as the system's text boxes have. The right-click keeps the selection (egui would
+/// move the caret to it), Paste reads the system clipboard into the field, not the document, and
+/// the dialog stays open.
+#[test]
+fn find_and_replace_fields_have_an_edit_menu() {
+    use egui_kittest::kittest::Queryable;
+    let services = crate::Services { clipboard_text: Some(Box::new(|| Some("glow".into()))), ..Default::default() };
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), services);
+    let _ = app.run("document.setText", json!({"text": "Lanterns"}));
+    let mut h = app_harness(app);
+    h.state_mut().run("ui.dialog", json!({"name": "replace"})).unwrap();
+    h.run_steps(2);
+    if let Some(Dialog::Find { query, .. }) = h.state_mut().dialog.as_mut() {
+        *query = "old".into();
+    }
+    h.run_steps(2);
+    let fields = |h: &egui_kittest::Harness<'_, WordApp>| match h.state().dialog.as_ref() {
+        Some(Dialog::Find { query, replace, .. }) => (query.clone(), replace.clone()),
+        _ => panic!("the dialog stays open"),
+    };
+    // Right-click a field, then pick a menu item (the ribbon has its own Cut and Paste, above).
+    let menu = |h: &mut egui_kittest::Harness<'_, WordApp>, field: &str, item: &str| {
+        let at = h.get_by_label(field).rect().center();
+        let button =
+            |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: egui::Modifiers::NONE };
+        h.event(egui::Event::PointerMoved(at));
+        h.step();
+        h.event(button(true));
+        h.step();
+        h.event(button(false));
+        h.run_steps(2);
+        let node = h.query_all_by_label(item).find(|n| n.rect().top() >= at.y).unwrap_or_else(|| panic!("{item} is in the menu"));
+        node.click();
+        h.run_steps(3);
+    };
+    menu(&mut h, "Find what:", "Select All");
+    menu(&mut h, "Find what:", "Cut");
+    assert_eq!(fields(&h).0, "", "Cut takes the text the right-click kept selected");
+    menu(&mut h, "Find what:", "Paste");
+    menu(&mut h, "Replace with:", "Paste");
+    assert_eq!(fields(&h), ("glow".to_string(), "glow".to_string()), "Paste puts the clipboard's text in the field");
+    // With no selection, a right-click moves the caret to the click, as on the page: Paste
+    // goes there, not where the caret was (the end of the text).
+    let field = h.get_by_label("Replace with:").rect();
+    let start = egui::pos2(field.left() + 1.0, field.center().y);
+    let button =
+        |pressed| egui::Event::PointerButton { pos: start, button: egui::PointerButton::Secondary, pressed, modifiers: egui::Modifiers::NONE };
+    h.event(egui::Event::PointerMoved(start));
+    h.step();
+    h.event(button(true));
+    h.step();
+    h.event(button(false));
+    h.run_steps(2);
+    h.query_all_by_label("Paste").find(|n| n.rect().top() >= start.y).expect("Paste is in the menu").click();
+    h.run_steps(3);
+    assert_eq!(fields(&h).1, "glowglow");
+    // Typing shows where the caret is: after the text pasted at the start, not at the end.
+    h.event(egui::Event::Text("!".into()));
+    h.run_steps(2);
+    assert_eq!(fields(&h).1, "glow!glow", "pasted where the right-click put the caret");
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Lanterns", "the document is untouched");
+}
+
 fn app_harness(app: WordApp) -> egui_kittest::Harness<'static, WordApp> {
     egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {

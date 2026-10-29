@@ -862,7 +862,7 @@ fn find_shortcut_focuses_find_what() {
     for _ in 0..2 {
         frame(&mut a, Vec::new());
     }
-    assert!(ctx.memory(|m| m.has_focus(egui::Id::unique("find_what"))), "Find what has the focus");
+    assert!(ctx.memory(|m| m.has_focus(a.window_id("find_what"))), "Find what has the focus");
     frame(&mut a, vec![egui::Event::Text("abc".into())]);
     let Some(dialogs::Dialog::Find { query, .. }) = &a.dialog else { panic!("no Find dialog") };
     assert!(query.ends_with("abc"), "typing went into Find what: {query:?}");
@@ -2126,7 +2126,7 @@ fn control_keyboard_keeps_the_background_widget_target() {
     for _ in 0..2 {
         control_frame(&mut a, &ctx, true);
     }
-    assert!(ctx.memory(|m| m.has_focus(egui::Id::unique("find_what"))));
+    assert!(ctx.memory(|m| m.has_focus(a.window_id("find_what"))));
     for _ in 0..2 {
         control_frame(&mut a, &ctx, false);
     }
@@ -5697,7 +5697,8 @@ fn a_paste_with_the_find_dialog_open_is_ignored() {
     a.services.pasted = Some(q.clone());
     a.run("ui.dialog", json!({"name": "find"})).unwrap();
     let mut h = paste_harness(a);
-    h.ctx.memory_mut(|m| m.request_focus(egui::Id::unique("find_what")));
+    let find_what = h.state().window_id("find_what");
+    h.ctx.memory_mut(|m| m.request_focus(find_what));
     h.step();
     h.step();
     assert!(!h.state().canvas.focused);
