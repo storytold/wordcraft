@@ -847,3 +847,19 @@ fn remap_original_lines_cases() {
     remap_original_lines(&mut empty, &[1, 2]);
     assert!(empty.is_empty());
 }
+
+#[test]
+fn trailing_line_break_does_not_become_a_literal_backslash() {
+    use wordcraft_doc::{CharProps, Document, Paragraph, StoryRef, para_block};
+    for s in ["x\n", "x\n\n"] {
+        let mut d = Document::new();
+        d.body = vec![para_block(Paragraph::with_text(s, CharProps::default()))];
+        let md = export(&d);
+        let back = import(&md).plain_text(StoryRef::Body);
+        assert_eq!(back, s, "{md:?}");
+    }
+    let bold = Fmt { bold: true, ..Fmt::default() };
+    let md = export::inlines_md(&[Inline::Text("x\n".into(), bold)]);
+    assert!(!md.contains('\\'), "{md:?}");
+    assert_eq!(md, "**x**<br>");
+}
