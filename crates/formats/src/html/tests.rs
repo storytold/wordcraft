@@ -148,6 +148,74 @@ fn header_cells_are_bold_unless_their_css_says_otherwise() {
     assert!(!any_bold(&rows[1][0][0]), "td stays regular");
 }
 
+fn font_flags(html: &str) -> Vec<(String, bool, bool)> {
+    parse(html)
+        .blocks
+        .iter()
+        .filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None })
+        .flat_map(|p| &p.inlines)
+        .filter_map(|i| if let Inline::Text(t, f) = i { Some((t.clone(), f.bold, f.italic)) } else { None })
+        .collect()
+}
+
+#[test]
+fn invalid_font_declarations_preserve_valid_formatting() {
+    for value in ["bogus", "boldly", "bold italic", "0", "-1", "1001", "NaN", "inf"] {
+        let html = format!("<b><i><span style='font-weight:{value};font-style:bogus'>kept</span></i></b>");
+        assert_eq!(font_flags(&html), [("kept".into(), true, true)], "{value}");
+    }
+    assert_eq!(
+        font_flags("<span style='font-weight:700;font-weight:bogus;font-style:italic;font-style:bogus'>kept</span>"),
+        [("kept".into(), true, true)]
+    );
+    assert_eq!(font_flags("<span style='font-weight:boldly'>plain</span>"), [("plain".into(), false, false)]);
+    assert_eq!(font_flags("<span style='font-weight:1001'>plain</span>"), [("plain".into(), false, false)]);
+}
+
+#[test]
+fn malformed_numeric_font_weights_preserve_the_previous_value() {
+    for value in ["700.", "+700.", "7.e2", "+7.E+2", "700. !important"] {
+        let html = format!("<span style='font-weight:400;font-weight:{value}'>plain</span>");
+        assert_eq!(font_flags(&html), [("plain".into(), false, false)], "{value}");
+    }
+    for value in ["400.", "4.e2", "+4.E+2"] {
+        let html = format!("<span style='font-weight:700;font-weight:{value}'>kept</span>");
+        assert_eq!(font_flags(&html), [("kept".into(), true, false)], "{value}");
+        let html = format!("<b><span style='font-weight:{value}'>kept</span></b>");
+        assert_eq!(font_flags(&html), [("kept".into(), true, false)], "inherited {value}");
+    }
+    assert_eq!(font_flags("<span style='font-weight:700.'>plain</span>"), [("plain".into(), false, false)]);
+}
+
+#[test]
+fn css_font_inheritance_uses_the_parent_not_earlier_declarations_or_tags() {
+    for value in ["inherit", "unset", "InHeRiT !IMPORTANT"] {
+        let html =
+            format!("<b><i><span style='font-weight:normal;font-weight:{value};font-style:normal;font-style:{value}'>kept</span></i></b>plain");
+        assert_eq!(font_flags(&html), [("kept".into(), true, true), ("plain".into(), false, false)], "{value}");
+        let html = format!("<b style='font-weight:{value}'><i style='font-style:{value}'>plain</i></b>");
+        assert_eq!(font_flags(&html), [("plain".into(), false, false)], "{value}");
+    }
+    for value in ["normal", "initial"] {
+        let html = format!("<b><i><span style='font-weight:{value};font-style:{value}'>plain</span></i></b>");
+        assert_eq!(font_flags(&html), [("plain".into(), false, false)], "{value}");
+    }
+    let f = parse("<table><tr><th><span style='font-weight:inherit;font-style:bogus'>heading</span></th></tr></table>");
+    assert!(all_bold(&cell_paras(&f)[0][0][0]), "table header inheritance");
+}
+
+#[test]
+fn supported_css_font_values_keep_their_existing_binary_formatting() {
+    for value in ["bold", "bolder", "600", "700", "1000", "700.5", "7e2", "+700", ".7e3", "7E+2", "600.0", "0700"] {
+        let html = format!("<span style='font-weight:{value};font-style:oblique'>styled</span>");
+        assert_eq!(font_flags(&html), [("styled".into(), true, true)], "{value}");
+    }
+    for value in ["normal", "lighter", "1", "400", "599.5", "400.5", "+4e+2"] {
+        let html = format!("<b><span style='font-weight:{value};font-style:normal'>plain</span></b>");
+        assert_eq!(font_flags(&html), [("plain".into(), false, false)], "{value}");
+    }
+}
+
 #[test]
 fn cell_text_align_reaches_the_cell_paragraphs() {
     // #1381: `text-align` on a td/th, or inherited from its tr/thead/tbody/table, aligns the

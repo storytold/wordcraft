@@ -1,5 +1,13 @@
 use super::{Align, Fmt, model, parse_color};
 
+pub(super) struct ElementStyle {
+    pub fmt: Fmt,
+    pub align: Option<Align>,
+    pub preserve: bool,
+    pub page_break: bool,
+    pub page_break_after: bool,
+}
+
 /// A CSS length (or font-size keyword) in points; `None` when it is not one.
 pub fn css_len_pt(v: &str) -> Option<f32> {
     let v = v.trim().to_ascii_lowercase();
@@ -45,22 +53,38 @@ fn strip_important(v: &str) -> &str {
 }
 
 /// Apply a `style` attribute to formatting / block properties.
-pub(super) fn apply_style(
-    css: &str,
-    f: &mut Fmt,
-    align: &mut Option<Align>,
-    preserve: &mut bool,
-    page_break: &mut bool,
-    page_break_after: &mut bool,
-) {
+pub(super) fn apply_style(css: &str, style: &mut ElementStyle, parent: &Fmt) {
+    let ElementStyle { fmt: f, align, preserve, page_break, page_break_after } = style;
     for decl in css.split(';').take(64) {
         let Some((k, v)) = decl.split_once(':') else { continue };
         let k = k.trim().to_ascii_lowercase();
         let v = strip_important(v);
         let lv = v.to_ascii_lowercase();
         match k.as_str() {
-            "font-weight" => f.bold = lv.starts_with("bold") || lv.parse::<u32>().is_ok_and(|w| w >= 600),
-            "font-style" => f.italic = lv == "italic" || lv == "oblique",
+            "font-weight" => {
+                let bold = match lv.as_str() {
+                    "inherit" | "unset" => Some(parent.bold),
+                    "normal" | "initial" | "lighter" => Some(false),
+                    "bold" | "bolder" => Some(true),
+                    // Rust accepts `700.` and `7.e2`; CSS requires a digit after the dot.
+                    _ if lv.split_once('.').is_some_and(|(_, tail)| !tail.as_bytes().first().is_some_and(u8::is_ascii_digit)) => None,
+                    _ => lv.parse::<f32>().ok().filter(|w| (1.0..=1000.0).contains(w)).map(|w| w >= 600.0),
+                };
+                if let Some(bold) = bold {
+                    f.bold = bold;
+                }
+            }
+            "font-style" => {
+                let italic = match lv.as_str() {
+                    "inherit" | "unset" => Some(parent.italic),
+                    "normal" | "initial" => Some(false),
+                    "italic" | "oblique" => Some(true),
+                    _ => None,
+                };
+                if let Some(italic) = italic {
+                    f.italic = italic;
+                }
+            }
             "text-decoration" | "text-decoration-line" => {
                 if lv.contains("none") {
                     f.underline = false;

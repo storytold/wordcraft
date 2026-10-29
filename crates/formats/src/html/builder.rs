@@ -1,4 +1,4 @@
-use super::css::{apply_style, css_len_pt};
+use super::css::{ElementStyle, apply_style, css_len_pt};
 use super::import::collapse_ws;
 use super::{Align, Arc, Cell, FBlock, FTable, Flow, Fmt, Inline, Kind, ListInfo, Meta, Para, VAlign, data_uri, make_img, model, parse_color};
 
@@ -41,14 +41,6 @@ struct TableB {
     row: Option<Vec<Cell>>,
     /// The table or one of its cells asks for borders.
     bordered: bool,
-}
-
-struct ElementStyle {
-    fmt: Fmt,
-    align: Option<Align>,
-    preserve: bool,
-    page_break: bool,
-    page_break_after: bool,
 }
 
 fn apply_font_attributes(attrs: &[(String, String)], fmt: &mut Fmt) {
@@ -625,11 +617,12 @@ impl<'r> Builder<'r> {
     }
 
     fn element_style(&self, name: &str, attrs: &[(String, String)], kind: ElKind) -> ElementStyle {
-        let mut fmt = self.fmt();
+        let parent = self.fmt();
+        let mut fmt = parent.clone();
         let mut align = None;
-        let mut preserve = self.preserve();
-        let mut page_break = false;
-        let mut page_break_after = false;
+        let preserve = self.preserve();
+        let page_break = false;
+        let page_break_after = false;
         match name {
             "b" | "strong" | "th" => fmt.bold = true,
             "i" | "em" | "cite" | "var" | "dfn" | "address" => fmt.italic = true,
@@ -661,13 +654,14 @@ impl<'r> Builder<'r> {
         if name == "center" {
             align = Some(Align::Center);
         }
-        if let Some(style) = attr(attrs, "style") {
-            apply_style(style, &mut fmt, &mut align, &mut preserve, &mut page_break, &mut page_break_after);
+        let mut style = ElementStyle { fmt, align, preserve, page_break, page_break_after };
+        if let Some(css) = attr(attrs, "style") {
+            apply_style(css, &mut style, &parent);
         }
         if kind == ElKind::Pre {
-            preserve = true;
+            style.preserve = true;
         }
-        ElementStyle { fmt, align, preserve, page_break, page_break_after }
+        style
     }
 
     pub(super) fn start(&mut self, name: &str, attrs: &[(String, String)], self_close: bool) {
