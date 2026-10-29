@@ -205,9 +205,10 @@ impl ImeContext {
             cursor_pos: 0,
         }));
 
-        let style = if allowed { im.preedit_style } else { im.none_style };
-
-        let ic = match style as _ {
+        // The context keeps the preedit style while IME is disallowed. Input methods keep their
+        // per-context state (such as whether Vietnamese Telex is on) only while the context lives,
+        // so disallowing IME stops filtering keys and unfocuses the context instead.
+        let ic = match im.preedit_style as _ {
             Style::Preedit(style) => unsafe {
                 ImeContext::create_preedit_ic(
                     xconn,
@@ -337,8 +338,26 @@ impl ImeContext {
         xconn.check_errors()
     }
 
+    /// Discards the composition: the input method drops its preedit and starts over.
+    pub(crate) fn reset(&mut self, xconn: &Arc<XConnection>) -> Result<(), XError> {
+        unsafe {
+            // Returns the discarded preedit text, which has to be freed.
+            let text = (xconn.xlib.XmbResetIC)(self.ic);
+            if !text.is_null() {
+                (xconn.xlib.XFree)(text.cast());
+            }
+        }
+        self._client_data.text.clear();
+        self._client_data.cursor_pos = 0;
+        xconn.check_errors()
+    }
+
     pub fn is_allowed(&self) -> bool {
         self.allowed
+    }
+
+    pub(crate) fn set_allowed(&mut self, allowed: bool) {
+        self.allowed = allowed;
     }
 
     // Set the spot for preedit text. Setting spot isn't working with libX11 when preedit callbacks

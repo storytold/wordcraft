@@ -73,11 +73,11 @@ impl Collector<'_> {
         let mut words = Vec::new();
         let mut cost = cost;
         for part in cand.split(' ') {
-            if self.d.contains(part) {
+            if self.d.contains_suggestible(part) {
                 words.push(part.to_string());
             } else {
                 let c = capitalize(part);
-                if !self.d.contains(&c) {
+                if !self.d.contains_suggestible(&c) {
                     return;
                 }
                 words.push(c);
@@ -90,6 +90,9 @@ impl Collector<'_> {
 
     /// Keep a suggestion known to be correct.
     fn keep(&mut self, text: String, cost: u32) {
+        if !text.split(' ').all(|part| self.d.can_suggest(part)) {
+            return;
+        }
         self.seq += 1;
         let seq = self.seq;
         let e = self.found.entry(text).or_insert((cost, seq));
@@ -371,6 +374,11 @@ mod tests {
     fn has(word: &str, want: &str) {
         let s = suggest(word, 8);
         assert!(s.iter().any(|x| x == want), "{word} → {s:?}, want {want}");
+    }
+
+    #[test]
+    fn nosuggest_stems_and_forms_are_never_offered() {
+        crate::affix::tests::assert_nosuggest_is_honoured(suggest_in);
     }
 
     #[test]

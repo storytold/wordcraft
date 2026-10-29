@@ -34,7 +34,6 @@ unsafe fn open_im(xconn: &Arc<XConnection>, locale_modifiers: &CStr) -> Option<f
 pub struct InputMethod {
     pub im: ffi::XIM,
     pub preedit_style: Style,
-    pub none_style: Style,
     _name: String,
 }
 
@@ -81,9 +80,8 @@ impl InputMethod {
         }
 
         let preedit_style = preedit_style.unwrap_or_else(|| none_style.unwrap());
-        let none_style = none_style.unwrap_or(preedit_style);
 
-        Some(InputMethod { im, _name: name, preedit_style, none_style })
+        Some(InputMethod { im, _name: name, preedit_style })
     }
 }
 

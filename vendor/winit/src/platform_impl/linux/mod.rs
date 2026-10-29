@@ -533,6 +533,16 @@ impl Window {
     }
 
     #[inline]
+    pub fn reset_ime(&self) {
+        x11_or_wayland!(match self; Window(w) => w.reset_ime())
+    }
+
+    #[inline]
+    pub fn reset_ime_with_request(&self, request_id: u64) {
+        x11_or_wayland!(match self; Window(w) => w.reset_ime_with_request(request_id))
+    }
+
+    #[inline]
     pub fn focus_window(&self) {
         x11_or_wayland!(match self; Window(w) => w.focus_window())
     }
@@ -635,6 +645,8 @@ impl Window {
 pub struct KeyEventExtra {
     pub text_with_all_modifiers: Option<SmolStr>,
     pub key_without_modifiers: Key,
+    pub latin_key: Option<Key>,
+    pub is_latin_layout: bool,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]

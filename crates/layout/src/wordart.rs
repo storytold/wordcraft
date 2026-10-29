@@ -7,29 +7,24 @@
 //! [`wordcraft_doc::effects::bands`], as for shapes.
 
 use kurbo::{Affine, BezPath, PathEl, Point, Shape};
+use wordcraft_doc::effects::Shadow;
 use wordcraft_doc::props::Rgb;
-use wordcraft_doc::wordart::{TextEffects, TextFill, TextWarp};
+use wordcraft_doc::resolve::ResolvedChar;
+use wordcraft_doc::wordart::{TextEffects, TextFill, TextOutline, TextWarp};
 use wordcraft_fonts::FaceRef;
 use wordcraft_geom::Rect;
 
-/// How a layer is painted.
-#[derive(Clone, Debug, PartialEq)]
-pub enum ArtPaint {
-    Solid(Rgb, f32),
-    /// A linear gradient from `p0` to `p1` (page points); stops are (offset 0..1, colour, opacity).
-    Linear {
-        p0: (f32, f32),
-        p1: (f32, f32),
-        stops: Vec<(f32, Rgb, f32)>,
-    },
-}
+use crate::display::Paint;
 
 /// One fill (`stroke: None`) or stroke (its width, points) of a path.
 #[derive(Clone, Debug)]
 pub struct ArtLayer {
     pub path: BezPath,
-    pub paint: ArtPaint,
+    pub paint: Paint,
     pub stroke: Option<f32>,
+    /// The letters themselves (fill, outline), not a shadow, glow or reflection of them: a dark
+    /// page inks these against the text's background.
+    pub letters: bool,
 }
 
 /// The outlines of `glyphs` (glyph id, pen x, baseline y in page points) of `face` at `size`, as
@@ -68,10 +63,10 @@ pub fn art_layers(path: &BezPath, fx: &TextEffects, color: Rgb, alpha: f32) -> V
     let Some(b) = bbox(path) else { return Vec::new() };
     let mut out = Vec::new();
     let fill = fx.fill.clone().unwrap_or(TextFill::Solid { color, transparency: 0.0 });
-    let fill_paint = |path: &BezPath| -> Option<ArtPaint> {
+    let fill_paint = |path: &BezPath| -> Option<Paint> {
         match &fill {
             TextFill::None => None,
-            TextFill::Solid { color, transparency } => Some(ArtPaint::Solid(*color, alpha * (1.0 - transparency / 100.0))),
+            TextFill::Solid { color, transparency } => Some(Paint::Solid(*color, alpha * (1.0 - transparency / 100.0))),
             TextFill::Gradient { stops, angle } => {
                 let b = bbox(path)?;
                 let (s, c) = (f64::from(*angle).to_radians().sin(), f64::from(*angle).to_radians().cos());
@@ -79,7 +74,7 @@ pub fn art_layers(path: &BezPath, fx: &TextEffects, color: Rgb, alpha: f32) -> V
                 let ctr = b.center();
                 let p0 = ((ctr.x - d * c) as f32, (ctr.y - d * s) as f32);
                 let p1 = ((ctr.x + d * c) as f32, (ctr.y + d * s) as f32);
-                Some(ArtPaint::Linear {
+                Some(Paint::Linear {
                     p0,
                     p1,
                     stops: stops.iter().map(|g| (g.pos / 100.0, g.color, alpha * (1.0 - g.transparency / 100.0))).collect(),
@@ -101,35 +96,82 @@ pub fn art_layers(path: &BezPath, fx: &TextEffects, color: Rgb, alpha: f32) -> V
         let a = alpha * (1.0 - r.transparency / 100.0);
         out.push(ArtLayer {
             path: mirror,
-            paint: ArtPaint::Linear { p0: (x, top), p1: (x, bottom), stops: vec![(0.0, ink, a), (1.0, ink, 0.0)] },
+            paint: Paint::Linear { p0: (x, top), p1: (x, bottom), stops: vec![(0.0, ink, a), (1.0, ink, 0.0)] },
             stroke: None,
+            letters: false,
         });
     }
     if let Some(sh) = fx.shadow {
         let (dx, dy) = sh.offset();
         let moved = Affine::translate((f64::from(dx), f64::from(dy))) * path.clone();
         for (g, a) in wordcraft_doc::effects::bands(0.0, sh.blur / 2.0, sh.opacity() * alpha) {
-            let paint = ArtPaint::Solid(sh.color, a);
-            out.push(ArtLayer { path: moved.clone(), paint: paint.clone(), stroke: None });
+            let paint = Paint::Solid(sh.color, a);
+            out.push(ArtLayer { path: moved.clone(), paint: paint.clone(), stroke: None, letters: false });
             if g > 0.05 {
-                out.push(ArtLayer { path: moved.clone(), paint, stroke: Some(2.0 * g) });
+                out.push(ArtLayer { path: moved.clone(), paint, stroke: Some(2.0 * g), letters: false });
             }
         }
     }
     if let Some(gl) = fx.glow {
         for (g, a) in wordcraft_doc::effects::bands(0.0, gl.size, gl.opacity() * alpha) {
             if g > 0.05 {
-                out.push(ArtLayer { path: path.clone(), paint: ArtPaint::Solid(gl.color, a), stroke: Some(2.0 * g) });
+                out.push(ArtLayer { path: path.clone(), paint: Paint::Solid(gl.color, a), stroke: Some(2.0 * g), letters: false });
             }
         }
     }
     if let Some(p) = fill_paint(path) {
-        out.push(ArtLayer { path: path.clone(), paint: p, stroke: None });
+        out.push(ArtLayer { path: path.clone(), paint: p, stroke: None, letters: true });
     }
     if let Some((c, w, a)) = outline {
-        out.push(ArtLayer { path: path.clone(), paint: ArtPaint::Solid(c, a), stroke: Some(w) });
+        out.push(ArtLayer { path: path.clone(), paint: Paint::Solid(c, a), stroke: Some(w), letters: true });
     }
     out
+}
+
+/// The effects a run is drawn with: its WordArt effects on top of the legacy font effects
+/// (`w:outline`, `w:shadow`, `w:emboss`, `w:imprint`, ECMA-376 §17.3.2), as Word's PDFs draw
+/// them: hollow letters outlined in `color`; a sharp grey copy behind, down-right (shadow,
+/// emboss) or up-left (imprint). `None`: plain text.
+pub fn run_effects(rc: &ResolvedChar, color: Rgb) -> Option<TextEffects> {
+    if !(rc.outline || rc.shadow || rc.emboss || rc.engrave) {
+        return rc.text_effects.as_deref().cloned();
+    }
+    let mut fx = TextEffects::default();
+    if rc.outline {
+        fx.fill = Some(TextFill::None);
+        fx.outline = Some(TextOutline { color: Some(color), width: 0.5, transparency: 0.0 });
+    }
+    if rc.shadow || rc.emboss || rc.engrave {
+        let distance = (rc.size / 20.0).clamp(0.5, 6.0);
+        let angle = if rc.engrave { 225.0 } else { 45.0 };
+        fx.shadow = Some(Shadow { color: Rgb(128, 128, 128), transparency: 0.0, blur: 0.0, distance, angle, rot_with_shape: false });
+    }
+    if let Some(w) = &rc.text_effects {
+        fx.overlay(w);
+    }
+    Some(fx)
+}
+
+/// Synthetic bold for text drawn from its outlines: the letters' outline widened by `size` × 0.03
+/// (the raster glyphs' synthetic-bold stroke), or such an outline in a solid fill's colour and
+/// transparency (`color` for the default fill) when there is none.
+pub fn embolden(fx: &mut TextEffects, color: Rgb, size: f32) {
+    let w = if size.is_finite() { (size * 0.03).clamp(0.0, wordcraft_doc::wordart::MAX_OUTLINE) } else { 0.0 };
+    match &mut fx.outline {
+        Some(o) if o.color.is_some() => o.width += w,
+        _ => {
+            // shortcut: gradient fills get no bold rim (a one-colour rim would show); stroke with
+            // the gradient if bold gradients matter.
+            let rim = match &fx.fill {
+                None => Some((color, 0.0)),
+                Some(TextFill::Solid { color, transparency }) => Some((*color, *transparency)),
+                Some(TextFill::None | TextFill::Gradient { .. }) => None,
+            };
+            if let Some((c, transparency)) = rim {
+                fx.outline = Some(TextOutline { color: Some(c), width: w, transparency });
+            }
+        }
+    }
 }
 
 /// How a warp bends text: two edges (top and bottom, the text stretched between them), or an arc
@@ -316,6 +358,100 @@ mod tests {
         // Arch down runs along the bottom.
         let d = Warp::new(&TextWarp::new("textArchDown").unwrap(), frame, 0.25).unwrap();
         assert!(d.map(0.5, 1.0).1 > 119.0);
+    }
+
+    /// #2534: the legacy font effects become text effects, under any WordArt effects.
+    #[test]
+    fn legacy_font_effects_are_drawn_as_text_effects() {
+        use wordcraft_doc::CharProps;
+        let rc = |c: CharProps| wordcraft_doc::styles::StyleSheet::default().resolve_char(None, &CharProps { size: Some(20.0), ..c });
+        let red = Rgb(200, 0, 0);
+        assert_eq!(run_effects(&rc(CharProps::default()), red), None);
+        let o = run_effects(&rc(CharProps { outline: Some(true), ..Default::default() }), red).unwrap();
+        assert_eq!(o.fill, Some(TextFill::None));
+        assert_eq!(o.outline.and_then(|l| l.color), Some(red));
+        assert!(o.shadow.is_none());
+        let off = |c: CharProps| run_effects(&rc(c), red).and_then(|f| f.shadow).map(|s| s.offset()).unwrap();
+        let (sx, sy) = off(CharProps { shadow: Some(true), ..Default::default() });
+        assert!(sx > 0.5 && sy > 0.5, "down-right {sx} {sy}");
+        assert_eq!(off(CharProps { emboss: Some(true), ..Default::default() }), (sx, sy));
+        let (ix, iy) = off(CharProps { engrave: Some(true), ..Default::default() });
+        assert!(ix < -0.5 && iy < -0.5, "up-left {ix} {iy}");
+        // WordArt effects win over the legacy ones.
+        let fill = TextFill::Solid { color: red, transparency: 0.0 };
+        let fx = TextEffects { fill: Some(fill.clone()), ..Default::default() };
+        let both = run_effects(&rc(CharProps { outline: Some(true), text_effects: Some(Box::new(fx)), ..Default::default() }), red).unwrap();
+        assert_eq!(both.fill, Some(fill));
+        // Every layer is a plain fill or stroke of the letters.
+        let mut p = BezPath::new();
+        p.move_to((0.0, 0.0));
+        p.line_to((10.0, 0.0));
+        p.line_to((10.0, 10.0));
+        p.close_path();
+        assert_eq!(art_layers(&p, &o, red, 1.0).len(), 1, "outline only: one stroke, no fill");
+    }
+
+    /// #2534: synthetic bold widens the outline, or adds one in the fill's colour.
+    #[test]
+    fn embolden_widens_or_adds_the_outline() {
+        let red = Rgb(200, 0, 0);
+        let mut plain = TextEffects::default();
+        embolden(&mut plain, red, 20.0);
+        assert_eq!(plain.outline, Some(TextOutline { color: Some(red), width: 20.0 * 0.03, transparency: 0.0 }));
+        let mut hollow = TextEffects { fill: Some(TextFill::None), outline: Some(TextOutline::default()), ..Default::default() };
+        embolden(&mut hollow, red, 20.0);
+        assert_eq!(hollow.outline.map(|o| o.width), Some(0.75 + 20.0 * 0.03));
+        let mut nothing = TextEffects { fill: Some(TextFill::None), ..Default::default() };
+        embolden(&mut nothing, red, f32::NAN);
+        assert_eq!(nothing.outline, None);
+        // A translucent fill gets an equally translucent rim; a gradient none.
+        let mut glass = TextEffects { fill: Some(TextFill::Solid { color: red, transparency: 40.0 }), ..Default::default() };
+        embolden(&mut glass, Rgb::BLACK, 20.0);
+        assert_eq!(glass.outline, Some(TextOutline { color: Some(red), width: 20.0 * 0.03, transparency: 40.0 }));
+        let stops = vec![wordcraft_doc::wordart::GradStop { pos: 0.0, color: red, transparency: 0.0 }];
+        let mut grad = TextEffects { fill: Some(TextFill::Gradient { stops, angle: 0.0 }), ..Default::default() };
+        embolden(&mut grad, red, 20.0);
+        assert_eq!(grad.outline, None);
+    }
+
+    /// #2534: tracked insertions keep their effects (in the revision's bold mark); turned text
+    /// draws its glyphs plainly.
+    #[test]
+    fn effects_on_tracked_and_turned_text() {
+        use crate::display::{DisplayOptions, Draw, InsertMark, page_display};
+        use wordcraft_doc::props::TextDirection;
+        use wordcraft_doc::{CharProps, Document, Paragraph, Revision, RevisionKind, para_block};
+        let mut d = Document::new();
+        d.revisions.push(Revision { kind: RevisionKind::Insert, author: "Ada".into(), date: String::new(), move_name: None });
+        let cp = CharProps { outline: Some(true), size: Some(20.0), ins: Some(0), ..Default::default() };
+        d.body = vec![para_block(Paragraph::with_text("Inserted", cp))];
+        let mut opts = DisplayOptions { markup: true, ..Default::default() };
+        opts.revisions.insert_mark = InsertMark::Bold;
+        let arts = |d: &Document, opts: &DisplayOptions| {
+            let l = crate::layout(d, &mut crate::LayoutCache::new(), &crate::LayoutOptions::default());
+            // Turned text's draws are inside its `Draw::Turned`.
+            page_display(d, &l.pages[0], opts)
+                .into_iter()
+                .flat_map(|x| match x {
+                    Draw::Turned { items, .. } => items,
+                    x => vec![x],
+                })
+                .filter_map(|x| match x {
+                    Draw::Art { fx, .. } => fx.outline.map(|o| o.width),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(arts(&d, &opts), vec![0.5 + 20.0 * 0.03], "outlined and emboldened");
+        // Top to bottom: WordArt without upright characters keeps its effects; ideographs, drawn
+        // upright, are drawn from their glyphs.
+        d.last_section.text_direction = TextDirection::Down;
+        let fx = TextEffects { outline: Some(TextOutline::default()), ..Default::default() };
+        let art = CharProps { size: Some(20.0), text_effects: Some(Box::new(fx)), ..Default::default() };
+        d.body = vec![para_block(Paragraph::with_text("WordArt", art.clone()))];
+        assert_eq!(arts(&d, &opts), vec![0.75], "turned WordArt keeps its effects");
+        d.body = vec![para_block(Paragraph::with_text("日本語", art))];
+        assert!(arts(&d, &opts).is_empty(), "upright ideographs are drawn from their glyphs");
     }
 
     #[test]

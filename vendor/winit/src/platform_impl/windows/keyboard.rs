@@ -14,8 +14,8 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     VK_CONTROL, VK_DECIMAL, VK_DELETE, VK_DIVIDE, VK_DOWN, VK_END, VK_F4, VK_HOME, VK_INSERT,
     VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_MULTIPLY, VK_NEXT, VK_NUMLOCK,
     VK_NUMPAD0, VK_NUMPAD1, VK_NUMPAD2, VK_NUMPAD3, VK_NUMPAD4, VK_NUMPAD5, VK_NUMPAD6, VK_NUMPAD7,
-    VK_NUMPAD8, VK_NUMPAD9, VK_PRIOR, VK_RCONTROL, VK_RETURN, VK_RIGHT, VK_RMENU, VK_RSHIFT,
-    VK_RWIN, VK_SCROLL, VK_SHIFT, VK_SUBTRACT, VK_UP,
+    VK_NUMPAD8, VK_NUMPAD9, VK_PRIOR, VK_PROCESSKEY, VK_RCONTROL, VK_RETURN, VK_RIGHT, VK_RMENU,
+    VK_RSHIFT, VK_RWIN, VK_SCROLL, VK_SHIFT, VK_SUBTRACT, VK_UP,
 };
 use windows_sys::Win32::UI::TextServices::HKL;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -145,6 +145,15 @@ impl KeyEventBuilder {
                         }
                     }
                     if let Some(event_info) = finished_event_info {
+                        // The IME took this key (`VK_PROCESSKEY`) and reports what it does with it
+                        // as `Ime` events. Sent as a `Process` key press with the key's physical
+                        // code, it reached apps that fall back to the physical key (egui-winit
+                        // does) as a press of that key, so Backspace, Enter or an arrow typed into
+                        // a composition acted twice: in the composition and in the app. Text the
+                        // IME passes on as `WM_CHAR` is still sent, by the `WM_CHAR` branch.
+                        if event_info.vkey == VK_PROCESSKEY {
+                            return MatchResult::TokenToRemove(pending_token);
+                        }
                         let ev = event_info.finalize();
                         return MatchResult::MessagesToDispatch(self.pending.complete_pending(
                             pending_token,

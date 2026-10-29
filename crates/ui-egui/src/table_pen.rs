@@ -202,4 +202,22 @@ mod tests {
         assert!(a.run("table.draw", json!({"page": 0, "x0": 1, "y0": 1, "x1": 2, "y1": 2})).is_err());
         assert!(a.canvas.table_tool.is_none());
     }
+
+    /// Deleting a table or removing its last cells turns off the eraser.
+    #[test]
+    fn deleting_table_turns_off_the_eraser() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        a.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+        a.run("table.eraser", json!({"on": true})).unwrap();
+        assert_eq!(a.canvas.table_tool, Some(TableTool::Erase));
+        a.run("table.deleteTable", json!({})).unwrap();
+        assert_eq!(a.canvas.table_tool, None);
+
+        // Deleting the only row also removes the table and stops the eraser.
+        a.run("insert.table", json!({"rows": 1, "cols": 1})).unwrap();
+        a.run("table.eraser", json!({"on": true})).unwrap();
+        assert_eq!(a.canvas.table_tool, Some(TableTool::Erase));
+        a.run("table.deleteRow", json!({})).unwrap();
+        assert_eq!(a.canvas.table_tool, None);
+    }
 }

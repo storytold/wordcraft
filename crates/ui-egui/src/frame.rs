@@ -102,7 +102,7 @@ pub fn to_screen(page: egui::Rect, scale: f32, r: Rect) -> egui::Rect {
 }
 
 /// The handles a frame shows: corners always, edge middles when there's room.
-fn handles(f: egui::Rect) -> impl Iterator<Item = Handle> {
+pub(crate) fn handles(f: egui::Rect) -> impl Iterator<Item = Handle> {
     let (wide, tall) = (f.width() >= EDGE_HANDLES_FROM, f.height() >= EDGE_HANDLES_FROM);
     Handle::ALL.into_iter().filter(move |h| (h.x != 0 || wide) && (h.y != 0 || tall))
 }

@@ -1,6 +1,6 @@
 # KDE Plasma / Linux
 
-Updated 2026-10-21. The implementation supports two distinct window bindings:
+Updated 2026-10-29. The implementation supports two distinct window bindings:
 
 - Native Wayland: KDE `org_kde_kwin_appmenu_manager` associates the D-Bus menu with
   the existing surface. The bundled winit patch exposes a safe cloned proxy;
@@ -11,8 +11,12 @@ Both use the same `vendor/craft-desktop` transport. `ui-egui::native_menu` deriv
 commands from the registry and interactive UI entry points; `WordApp::run` remains
 the handler. Clicks are revalidated against the current document, modal state and
 availability. Lazy submenu state updates use property signals and per-parent layout
-signals. The ribbon stays visible, with horizontal overflow and clickable edge
-arrows for its tab strip and command groups.
+signals. The ribbon stays visible and retains upstream's narrow-window overflow menu.
+
+The exporter currently binds only the original native window. Additional document windows,
+including another view of the same document, retain their local controls. While a child is
+active, the root menu is cleared and its queued actions are rejected. Per-window Global Menu
+binding remains pending; this migration does not claim full multiwindow Plasma acceptance.
 
 ## Build and launch
 
@@ -21,10 +25,10 @@ cargo build -p wordcraft
 WORDCRAFT_WAYLAND=1 cargo run -p wordcraft -- --sample
 ```
 
-The existing default display policy is unchanged: when XWayland is available it
-is preferred for winit file drag-and-drop. The environment override above selects
-native Wayland, which also avoids XWayland fractional-scale resampling. File dialogs
-remain available on both backends; file drag-and-drop is a separate known limitation.
+The existing default display policy still prefers XWayland when available. The environment
+override above selects native Wayland, which avoids XWayland fractional-scale resampling.
+The current pinned winit fork includes native Wayland file-drop support; that path has not
+been verified live in this reconciliation. File dialogs remain available on both backends.
 
 Add Plasma's **Global Menu** widget to the panel if needed. No GTK module or Qt
 conversion is required. Absence of that widget, registrar, session bus or compositor
@@ -52,6 +56,24 @@ These are app-test settings, not changes to the desktop scale.
 
 ## Reproducible validation
 
+Current reconciliation (2026-10-29): exact `cargo xtask ci` passed all eight stages
+(formatting, workspace Clippy, tests, i18n report, doctests, assets, layers and WASM),
+using required pinned fonts and translations. The log contains 4,609 passing tests
+and four ignored cases across its test summaries. The focused native-menu, root-window,
+accent and i18n checks also passed; these overlap the full suite.
+
+The first full run exposed a host-font-dependent upstream pagination fixture. It now
+uses the existing bundled Source Sans 3 fixture helper and verifies the exact font bytes
+and 12 pt size; all original geometry assertions remain. All 559 layout tests passed on
+the full rerun. This is test portability work, not a change to document layout behavior.
+
+A fresh isolated native Wayland smoke toggled Ruler from true to false through the exported
+DBusMenu action, confirmed `view.ruler` through the control API and checked the exported
+checkmark. The window screenshot was inspected; the real `plasmashell` process requested
+`GetLayout`. Evidence: workspace artifact `native-smoke-wordcraft-r4k_n68m` and
+`/tmp/wordcraft-kde-full-ci-rerun.log`. This validates one root-window action and transport,
+not child-window export or the full clipboard, portal, dragging and physical-DPI matrix.
+
 ```sh
 cargo fmt --all -- --check
 cargo check -p wordcraft
@@ -62,7 +84,7 @@ cargo test --manifest-path vendor/craft-desktop/Cargo.toml --features linux,port
 dbus-run-session -- cargo test --manifest-path vendor/craft-desktop/Cargo.toml --features linux,portal appmenu_dbus -- --ignored
 ```
 
-Use a fresh temporary XDG_CONFIG_HOME and WORDCRAFT_NO_PREFS for synthetic GUI tests;
+Use fresh temporary XDG_CONFIG_HOME and WORDCRAFT_PROFILE_DIR directories for synthetic GUI tests;
 do not overwrite a real document or clipboard. Check both native Wayland and XWayland:
 
 1. Focus the editor. Confirm textual top-level sections in the Plasma panel, and

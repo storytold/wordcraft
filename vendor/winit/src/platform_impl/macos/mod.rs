@@ -3,11 +3,14 @@ mod util;
 
 mod app;
 mod app_state;
+mod command_key;
 mod cursor;
 mod event;
 mod event_handler;
 mod event_loop;
 mod ffi;
+mod ime_document;
+mod ime_startup;
 mod menu;
 mod monitor;
 mod observer;
@@ -26,6 +29,7 @@ pub(crate) use self::monitor::{MonitorHandle, VideoModeHandle};
 pub(crate) use self::window::WindowId;
 pub(crate) use self::window_delegate::PlatformSpecificWindowAttributes;
 use crate::event::DeviceId as RootDeviceId;
+use crate::platform::macos::ImeDeleteSurrounding;
 
 pub(crate) use self::cursor::CustomCursor as PlatformCustomCursor;
 pub(crate) use self::window::Window;

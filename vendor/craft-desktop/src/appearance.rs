@@ -2,13 +2,16 @@
 //! A bounded two-second poll also recovers from portal restarts. Dropping the handle
 //! wakes the worker immediately; no permanently blocked signal listener is leaked.
 
+/// Last successfully decoded desktop preferences, with independent optional fields.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Appearance {
+    /// Explicit dark/light preference; `None` means the desktop expresses no preference.
     pub dark: Option<bool>,
     /// sRGB channels in 0..=1. Absent/invalid values leave the application's accent intact.
     pub accent: Option<[f64; 3]>,
 }
 
+/// Nonblocking UI-side receiver; dropping it asks the background poller to stop.
 #[derive(Default)]
 pub struct Watcher {
     changes: Option<std::sync::mpsc::Receiver<Appearance>>,
@@ -16,6 +19,8 @@ pub struct Watcher {
 }
 
 impl Watcher {
+    /// Start bounded portal reads off the UI thread and request repaint on changes.
+    /// Unsupported platforms/features or thread creation failure return an inert watcher.
     pub fn start(repaint: impl Fn() + Send + 'static) -> Self {
         #[cfg(all(target_os = "linux", feature = "portal"))]
         {
@@ -28,7 +33,7 @@ impl Watcher {
                     let mut bus = None;
                     let mut previous = None;
                     loop {
-                        if let Some(current) = read(&mut bus)
+                        if let Some(current) = read(&mut bus, previous.unwrap_or_default())
                             && previous != Some(current)
                         {
                             previous = Some(current);
@@ -59,15 +64,18 @@ impl Watcher {
         }
     }
 
+    /// Whether a polling worker was started, not a guarantee that the portal is available.
     pub fn watching(&self) -> bool {
         self.changes.is_some()
     }
 
+    /// Drain pending notifications and return only the newest snapshot without waiting.
     pub fn take_change(&mut self) -> Option<Appearance> {
         self.changes.as_ref()?.try_iter().last()
     }
 }
 
+/// Interpret standard portal codes: dark (1), light (2), otherwise no preference.
 pub fn decode_scheme(value: u32) -> Option<bool> {
     match value {
         1 => Some(true),
@@ -76,6 +84,7 @@ pub fn decode_scheme(value: u32) -> Option<bool> {
     }
 }
 
+/// Accept only finite sRGB channels in the inclusive unit interval.
 pub fn validate_accent(rgb: [f64; 3]) -> Option<[f64; 3]> {
     rgb.iter()
         .all(|v| v.is_finite() && (0.0..=1.0).contains(v))
@@ -83,6 +92,7 @@ pub fn validate_accent(rgb: [f64; 3]) -> Option<[f64; 3]> {
 }
 
 #[cfg(all(target_os = "linux", feature = "portal"))]
+/// Remove at most four variant wrappers used by older Settings portal implementations.
 fn unpack(mut value: zbus::zvariant::Value<'_>) -> zbus::zvariant::Value<'_> {
     for _ in 0..4 {
         match value {
@@ -94,7 +104,8 @@ fn unpack(mut value: zbus::zvariant::Value<'_>) -> zbus::zvariant::Value<'_> {
 }
 
 #[cfg(all(target_os = "linux", feature = "portal"))]
-fn read(bus: &mut Option<zbus::blocking::Connection>) -> Option<Appearance> {
+/// Read both fields independently; retry the connection after total portal failure.
+fn read(bus: &mut Option<zbus::blocking::Connection>, previous: Appearance) -> Option<Appearance> {
     use zbus::{blocking::connection::Builder, zvariant::OwnedValue};
     if bus.is_none() {
         *bus = Builder::session()
@@ -125,21 +136,40 @@ fn read(bus: &mut Option<zbus::blocking::Connection>) -> Option<Appearance> {
         *bus = None;
         return None; // Keep the last successful answer while the portal is restarting.
     }
-    Some(Appearance {
+    Some(decode_appearance(scheme, accent, previous))
+}
+
+/// Preserve each field on a failed/malformed read, but honor a successfully decoded
+/// reset (scheme 0 or an invalid RGB range). `None` after decoding is not a read error.
+#[cfg(all(target_os = "linux", feature = "portal"))]
+fn decode_appearance(
+    scheme: Option<zbus::zvariant::OwnedValue>,
+    accent: Option<zbus::zvariant::OwnedValue>,
+    previous: Appearance,
+) -> Appearance {
+    Appearance {
         dark: scheme
             .and_then(|v| u32::try_from(unpack(v.into())).ok())
-            .and_then(decode_scheme),
+            .map(decode_scheme)
+            .unwrap_or(previous.dark),
         accent: accent
             .and_then(|v| <(f64, f64, f64)>::try_from(unpack(v.into())).ok())
-            .and_then(|(r, g, b)| validate_accent([r, g, b])),
-    })
+            .map(|(r, g, b)| validate_accent([r, g, b]))
+            .unwrap_or(previous.accent),
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
     use super::*;
     #[cfg(all(target_os = "linux", feature = "portal"))]
-    struct Settings(std::sync::Arc<std::sync::Mutex<u32>>);
+    struct SettingsState {
+        scheme: Option<u32>,
+        accent: Option<(f64, f64, f64)>,
+    }
+    #[cfg(all(target_os = "linux", feature = "portal"))]
+    struct Settings(std::sync::Arc<std::sync::Mutex<SettingsState>>);
 
     #[cfg(all(target_os = "linux", feature = "portal"))]
     #[zbus::interface(name = "org.freedesktop.portal.Settings")]
@@ -152,14 +182,15 @@ mod tests {
             if namespace != "org.freedesktop.appearance" {
                 return Err(zbus::fdo::Error::InvalidArgs("namespace".into()));
             }
+            let state = self
+                .0
+                .lock()
+                .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
+            let missing = || zbus::fdo::Error::Failed("synthetic partial read failure".into());
             match key {
-                "color-scheme" => self
-                    .0
-                    .lock()
-                    .map(|v| (*v).into())
-                    .map_err(|e| zbus::fdo::Error::Failed(e.to_string())),
+                "color-scheme" => state.scheme.map(Into::into).ok_or_else(missing),
                 "accent-color" => zbus::zvariant::OwnedValue::try_from(
-                    zbus::zvariant::Value::from((0.2f64, 0.4f64, 0.6f64)),
+                    zbus::zvariant::Value::from(state.accent.ok_or_else(missing)?),
                 )
                 .map_err(|e| zbus::fdo::Error::Failed(e.to_string())),
                 _ => Err(zbus::fdo::Error::InvalidArgs("key".into())),
@@ -176,7 +207,10 @@ mod tests {
             sync::{Arc, Mutex},
             time::{Duration, Instant},
         };
-        let value = Arc::new(Mutex::new(1));
+        let value = Arc::new(Mutex::new(SettingsState {
+            scheme: Some(1),
+            accent: Some((0.2, 0.4, 0.6)),
+        }));
         let _server = zbus::blocking::connection::Builder::session()
             .unwrap()
             .name("org.freedesktop.portal.Desktop")
@@ -194,13 +228,32 @@ mod tests {
         let first = rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert_eq!(first.dark, Some(true));
         assert_eq!(first.accent, Some([0.2, 0.4, 0.6]));
-        *value.lock().unwrap() = 2;
+        value.lock().unwrap().scheme = Some(2);
         assert_eq!(
             rx.recv_timeout(Duration::from_secs(4)).unwrap().dark,
             Some(false)
         );
-        *value.lock().unwrap() = 0;
-        assert_eq!(rx.recv_timeout(Duration::from_secs(4)).unwrap().dark, None);
+        *value.lock().unwrap() = SettingsState {
+            scheme: None,
+            accent: Some((0.3, 0.5, 0.7)),
+        };
+        let partial = rx.recv_timeout(Duration::from_secs(4)).unwrap();
+        assert_eq!(
+            partial.dark,
+            Some(false),
+            "failed scheme read must keep light mode"
+        );
+        assert_eq!(partial.accent, Some([0.3, 0.5, 0.7]));
+        *value.lock().unwrap() = SettingsState {
+            scheme: Some(0),
+            accent: None,
+        };
+        let reset = rx.recv_timeout(Duration::from_secs(4)).unwrap();
+        assert_eq!(reset.dark, None, "successful zero resets the preference");
+        assert_eq!(
+            reset.accent, partial.accent,
+            "failed accent read preserves the last value"
+        );
         drop(watcher);
         let deadline = Instant::now() + Duration::from_secs(3);
         while weak.upgrade().is_some() && Instant::now() < deadline {
@@ -234,6 +287,57 @@ mod tests {
         assert_eq!(
             u32::try_from(unpack(Value::Value(Box::new(Value::U32(1))))).ok(),
             Some(1)
+        );
+    }
+
+    /// Missing or mistyped portal fields preserve their own last answer, not the whole snapshot.
+    #[test]
+    #[cfg(all(target_os = "linux", feature = "portal"))]
+    fn partial_appearance_reads_preserve_only_failed_fields() {
+        use zbus::zvariant::{OwnedValue, Value};
+        let previous = Appearance {
+            dark: Some(true),
+            accent: Some([0.2, 0.4, 0.6]),
+        };
+        let accent = OwnedValue::try_from(Value::from((0.3, 0.5, 0.7))).unwrap();
+        assert_eq!(
+            decode_appearance(None, Some(accent), previous),
+            Appearance {
+                dark: Some(true),
+                accent: Some([0.3, 0.5, 0.7])
+            }
+        );
+        assert_eq!(
+            decode_appearance(Some(2u32.into()), None, previous),
+            Appearance {
+                dark: Some(false),
+                ..previous
+            }
+        );
+        assert_eq!(decode_appearance(None, None, previous), previous);
+        assert_eq!(
+            decode_appearance(Some(true.into()), Some(true.into()), previous),
+            previous
+        );
+    }
+
+    /// An explicit no-preference answer must not be mistaken for a failed read.
+    #[test]
+    #[cfg(all(target_os = "linux", feature = "portal"))]
+    fn successful_appearance_resets_are_not_replaced_with_stale_values() {
+        use zbus::zvariant::{OwnedValue, Value};
+        let previous = Appearance {
+            dark: Some(true),
+            accent: Some([0.2, 0.4, 0.6]),
+        };
+        let invalid = OwnedValue::try_from(Value::from((1.2, 0.5, 0.7))).unwrap();
+        assert_eq!(
+            decode_appearance(Some(0u32.into()), Some(invalid), previous),
+            Appearance::default()
+        );
+        assert_eq!(
+            decode_appearance(Some(99u32.into()), None, previous).dark,
+            None
         );
     }
 }

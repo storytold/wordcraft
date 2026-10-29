@@ -70,11 +70,11 @@ impl Collector<'_> {
         let mut words = Vec::new();
         let mut cost = cost;
         for part in cand.split(' ') {
-            if self.d.contains(part) {
+            if self.d.contains_suggestible(part) {
                 words.push(part.to_string());
             } else {
                 let c = capitalize(part);
-                if !self.d.contains(&c) {
+                if !self.d.contains_suggestible(&c) {
                     return;
                 }
                 words.push(c);
@@ -88,6 +88,9 @@ impl Collector<'_> {
 
     /// Keep a suggestion known to be correct.
     fn keep(&mut self, text: String, cost: u32) {
+        if !text.split(' ').all(|part| self.d.can_suggest(part)) {
+            return;
+        }
         self.seq += 1;
         let seq = self.seq;
         let e = self.found.entry(text).or_insert((cost, seq));
@@ -275,7 +278,10 @@ pub fn suggest_in(d: &AffixDict, word: &str, max: usize) -> Vec<String> {
                 if let Some(x) = v.get_mut(i) {
                     *x = c;
                 }
-                col.offer(&s(&v), COST_MISTYPE);
+                // Final devoicing can make a voiced consonant sound voiceless.
+                let final_devoicing = i == n - 1 && matches!((chars[i], c), ('p', 'b') | ('t', 'd') | ('k', 'g'));
+                let cost = if final_devoicing { COST_ADD_DIACRITIC - 1 } else { COST_MISTYPE };
+                col.offer(&s(&v), cost);
             }
         }
     }
@@ -369,6 +375,11 @@ mod tests {
     }
 
     #[test]
+    fn nosuggest_stems_and_forms_are_never_offered() {
+        crate::affix::tests::assert_nosuggest_is_honoured(suggest_in);
+    }
+
+    #[test]
     fn polish_misspellings_get_the_right_suggestion() {
         crate::pl::test_dict::install();
         has("żeka", "rzeka");
@@ -387,6 +398,13 @@ mod tests {
         has("konstytucija", "konstytucja");
         has("wziąść", "wziąć");
         has("dziewczyan", "dziewczyna");
+    }
+
+    #[test]
+    fn voiced_consonant_suggestion_ranks_first() {
+        crate::pl::test_dict::install();
+        let result = suggest("chlep", 6);
+        assert_eq!(result.first().map(String::as_str), Some("chleb"), "{result:?}");
     }
 
     #[test]

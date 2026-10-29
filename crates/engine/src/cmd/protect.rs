@@ -8,9 +8,10 @@
 //! command that nothing outside them changed (the command is rolled back otherwise).
 
 use serde_json::{Value, json};
+use std::collections::HashSet;
 use wordcraft_doc::para::{InlineObject, OBJ};
-use wordcraft_doc::props::CharProps;
-use wordcraft_doc::{Document, PermRange, Pos, StoryRef};
+use wordcraft_doc::props::{CellProps, CharProps, RowProps, TableProps};
+use wordcraft_doc::{Block, Blocks, Document, Path, PermRange, Pos, StoryRef};
 
 use crate::{CmdError, CmdResult, CommandSpec, Session, p};
 
@@ -37,12 +38,20 @@ pub fn state(s: &Session) -> Value {
         "lockedStyles": s.doc.styles.styles.iter().filter(|x| x.locked).map(|x| x.id.clone()).collect::<Vec<_>>(),
         "exceptions": regions.len(),
         "regions": regions,
+        "formFields": s.doc.fillable_controls(),
     })
 }
 
 /// Is the document's editing or formatting restricted?
 pub fn enforced(doc: &Document) -> bool {
     doc.settings.protection.is_some()
+}
+
+/// Is the document's editing restricted? The formatting-only protection stores the mode "none"
+/// (`w:documentProtection w:edit="none"` with `w:formatting="1"`), so it doesn't count here: it
+/// limits the styles, not the editing.
+pub fn editing_restricted(doc: &Document) -> bool {
+    doc.settings.protection.as_deref().is_some_and(|m| m != "none")
 }
 
 /// May `author` edit inside the range?
@@ -80,7 +89,14 @@ fn restrict(s: &mut Session, v: &Value) -> CmdResult {
         return Err(CmdError::Params(format!("unknown `mode` {m:?}: none, readOnly, comments, trackedChanges or forms")));
     }
     let formatting = p::bool(v, "formatting");
-    let stop = p::bool(v, "stop") == Some(true) || (mode == Some("none") && formatting != Some(true));
+    let explicit_stop = p::bool(v, "stop") == Some(true);
+    // Stopping the protection is explicit: the "none" mode is the shorthand for it, but on a
+    // protected document only `{"stop": true}` stops it — a command that merely names a mode
+    // can't strip a user's protection (Word asks for Stop Protection first).
+    if mode == Some("none") && formatting != Some(true) && !explicit_stop && enforced(&s.doc) {
+        return Err(CmdError::Disabled("the document is protected: stop protection first (\"stop\": true)".into()));
+    }
+    let stop = explicit_stop || (mode == Some("none") && formatting != Some(true));
     if stop {
         return stop_protection(s, p::str(v, "password").unwrap_or(""));
     }
@@ -88,8 +104,16 @@ fn restrict(s: &mut Session, v: &Value) -> CmdResult {
         // Only the locked styles changed (or nothing): report the state.
         return Ok(state(s));
     }
-    if enforced(&s.doc) && !s.doc.settings.protect_hash.is_empty() {
-        return Err(CmdError::Disabled("the document is protected with a password: stop protection first".into()));
+    // The protection of a protected document doesn't change: Word asks for Stop Protection first.
+    // (The formatting-only protection isn't one: it limits the styles, not the editing — but a
+    // password on it still guards it, so it can't be replaced either.)
+    if editing_restricted(&s.doc) || !s.doc.settings.protect_hash.is_empty() {
+        let why = if s.doc.settings.protect_hash.is_empty() {
+            "the document is protected: stop protection first"
+        } else {
+            "the document is protected with a password: stop protection first"
+        };
+        return Err(CmdError::Disabled(why.into()));
     }
     let formatting = formatting.unwrap_or(false);
     let mode = mode.unwrap_or("none");
@@ -187,9 +211,107 @@ fn remove_exceptions(s: &mut Session, all: bool) -> Result<(), CmdError> {
     Ok(())
 }
 
-/// Commands always allowed in a protected document: protection itself, file commands, undo.
-fn always_allowed(id: &str) -> bool {
-    id == "review.restrict" || id.starts_with("file.") || id == "edit.undo" || id == "edit.redo"
+/// The Developer tab's commands that insert a content control.
+const CONTROL_INSERTS: [&str; 9] = [
+    "developer.richText",
+    "developer.plainText",
+    "developer.picture",
+    "developer.buildingBlock",
+    "developer.checkBox",
+    "developer.comboBox",
+    "developer.dropDown",
+    "developer.datePicker",
+    "developer.repeatingSection",
+];
+
+/// Commands always allowed in a protected document: protection itself, undo, and the file
+/// commands that don't change the open document. A `file.*` command that does change it is
+/// checked like any other, so the protection holds for it too: the privacy options and the
+/// properties are document settings, and the inspector removes content (#1327 follow-up).
+fn always_allowed(id: &str, params: &Value) -> bool {
+    if id == "review.restrict" || id == "edit.undo" || id == "edit.redo" {
+        return true;
+    }
+    if !id.starts_with("file.") {
+        return false;
+    }
+    match id {
+        "file.privacyOptions" | "file.properties" => false,
+        // The user name says who may edit the document and who the revisions belong to: it is
+        // checked like any other change, not waved through.
+        "file.setAuthor" => false,
+        // The inspector reads the document; its removals change it.
+        "file.inspect" => params.get("remove").and_then(Value::as_array).is_none_or(|a| a.is_empty()),
+        _ => true,
+    }
+}
+
+/// The user name (`file.setAuthor`) is the identity a named exception range is checked against,
+/// and the author recorded on new revisions and comments: it can't change while the document is
+/// protected. Word lets the user name change under protection (it is a preference there); this
+/// project doesn't, because the name says who may edit what (#1327 follow-up).
+pub(crate) fn check_user_name(s: &Session) -> Result<(), CmdError> {
+    if enforced(&s.doc) {
+        return Err(CmdError::Disabled("file.setAuthor: stop protection before changing the user name".into()));
+    }
+    Ok(())
+}
+
+/// A version restore replaces the whole document, including the content the protection kept
+/// read-only, so it needs the protection stopped first — and the password with it, when the
+/// document has one. (`file.versions` is a pure command, so `check_before` doesn't see it; the
+/// command checks this itself — see [`check_version_restore`].)
+pub(crate) fn check_version_restore(s: &Session) -> Result<(), CmdError> {
+    if enforced(&s.doc) {
+        return Err(CmdError::Disabled("file.versions: stop protection before restoring a version".into()));
+    }
+    Ok(())
+}
+
+/// What decides a protected document's outright refusals: whether the current author may edit
+/// any exception (`w:permStart`), and how many content controls take entries. Both walk the
+/// whole document.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Facts {
+    pub exceptions: bool,
+    pub fillable: usize,
+}
+
+impl Facts {
+    pub(crate) fn of(s: &Session) -> Facts {
+        Facts { exceptions: s.doc.perm_ranges().iter().any(|r| editable_by(r, &s.author)), fillable: s.doc.fillable_controls() }
+    }
+}
+
+/// Why protection refuses command `id` whatever its params and the selection, so the ribbon greys
+/// it out ([`Session::why_disabled`], with [`Facts`] cached per document revision) and
+/// [`check_before`] refuses it. Observed in Word for Mac: with Filling in forms enforced, the
+/// Developer tab's control buttons and Properties are greyed out and a field's shortcut menu
+/// offers no Remove Content Control. The form's fields stay as they are; only their content is
+/// filled in. A document that is read only (or open to comments only) with no exception the
+/// author may edit takes no other edits at all.
+pub(crate) fn greyed_out(s: &Session, id: &str, facts: impl FnOnce() -> Facts) -> Option<&'static str> {
+    let mode = s.doc.settings.protection.as_deref()?;
+    if always_allowed(id, &Value::Null) {
+        return None;
+    }
+    if mode == "forms" {
+        match id {
+            "developer.removeControl" => return Some("stop protection before removing a content control"),
+            "developer.properties" => return Some("stop protection before changing a content control's properties"),
+            _ if CONTROL_INSERTS.contains(&id) => return Some("stop protection before inserting a content control"),
+            _ => {}
+        }
+    }
+    let comment_ok = id.starts_with("review.") && (id.contains("Comment") || id == "review.reply");
+    let tracked = matches!(id, "review.accept" | "review.reject" | "review.acceptAll" | "review.rejectAll" | "review.trackChanges");
+    match mode {
+        "readOnly" => (!facts().exceptions).then_some("the document is protected (read only)"),
+        "forms" => (facts().fillable == 0).then_some("the document is protected (read only)"),
+        "comments" if !comment_ok => (!facts().exceptions).then_some("only comments are allowed in this document"),
+        "trackedChanges" if tracked => Some("changes to this document are tracked"),
+        _ => None,
+    }
 }
 
 /// What a protected document lets command `id` do before it runs: `Err` refuses it; `Ok(true)`
@@ -197,20 +319,53 @@ fn always_allowed(id: &str) -> bool {
 /// [`outside_unchanged`]).
 pub(crate) fn check_before(s: &Session, id: &str, params: &Value) -> Result<bool, CmdError> {
     let Some(mode) = s.doc.settings.protection.as_deref() else { return Ok(false) };
-    if always_allowed(id) {
+    if always_allowed(id, params) {
         return Ok(false);
+    }
+    // The user name says who may edit the document, and who the new revisions and comments
+    // belong to: it can't change while the document is protected. (`file.setAuthor` is a pure
+    // command, so `check_before` doesn't see it; the command checks this itself — see
+    // [`check_user_name`].)
+    if id == "file.setAuthor" {
+        check_user_name(s)?;
+    }
+    // Word blocks content-control property edits until Stop Protection: changing a control's
+    // lock flags would reshape what forms mode lets through. The param's presence is the
+    // trigger — absent, the command keeps the current lock (as `check_formatting` inspects
+    // params). In other modes, other properties (title, tag, placeholder…) stay editable; forms
+    // mode refuses every property change (below).
+    if id == "developer.properties" && (params.get("lockEdit").is_some() || params.get("lockDelete").is_some()) {
+        return Err(CmdError::Disabled(format!("{id}: stop protection before changing a content control's locks")));
+    }
+    // The document's properties and its privacy options are document-wide state, and they aren't
+    // tracked: a document that tracks changes would take them with no revision to show for it, and
+    // the revision trail would say nothing about them. They're refused while the document is
+    // protected, as the content control's properties are (#3278 follow-up).
+    // The inspector's removals take content out of the document — the comments, the revisions,
+    // the properties, the hidden text, the headers — so they are refused in every mode too: under
+    // tracked changes they would change the document with no revision to show for it, and under
+    // the other modes the document may not change at all. (An inspection without removals only
+    // reads the document, and is let through by `always_allowed`.)
+    if enforced(&s.doc) {
+        match id {
+            "file.properties" => return Err(CmdError::Disabled(format!("{id}: stop protection before changing the document's properties"))),
+            "file.privacyOptions" => return Err(CmdError::Disabled(format!("{id}: stop protection before changing the privacy options"))),
+            "file.inspect" => return Err(CmdError::Disabled(format!("{id}: stop protection before removing content with the inspector"))),
+            _ => {}
+        }
+    }
+    if let Some(why) = greyed_out(s, id, || Facts::of(s)) {
+        return Err(CmdError::Disabled(format!("{id}: {why}")));
     }
     if s.doc.settings.protect_formatting {
         check_formatting(s, id, params)?;
     }
+    // Not refused outright: read only and comments mode have an exception this author may edit,
+    // forms mode has fillable controls. Comments are always allowed in comments mode.
     let comment_ok = id.starts_with("review.") && (id.contains("Comment") || id == "review.reply");
-    let exceptions = || s.doc.perm_ranges().iter().any(|r| editable_by(r, &s.author));
     match mode {
-        "readOnly" if exceptions() => Ok(true),
-        "readOnly" | "forms" => Err(CmdError::Disabled(format!("{id}: the document is protected (read only)"))),
         "comments" if comment_ok => Ok(false),
-        "comments" if exceptions() => Ok(true),
-        "comments" => Err(CmdError::Disabled(format!("{id}: only comments are allowed in this document"))),
+        "readOnly" | "forms" | "comments" => Ok(true),
         _ => Ok(false),
     }
 }
@@ -218,7 +373,7 @@ pub(crate) fn check_before(s: &Session, id: &str, params: &Value) -> Result<bool
 /// Formatting limited to a selection of styles: no direct formatting, and no locked style.
 fn check_formatting(s: &Session, id: &str, params: &Value) -> Result<(), CmdError> {
     let style = match id {
-        "para.style" | "format.charStyle" => p::str(params, "style"),
+        "para.style" | "format.charStyle" | "table.style" => p::str(params, "style"),
         "para.normal" => Some("Normal"),
         "para.heading1" => Some("Heading1"),
         "para.heading2" => Some("Heading2"),
@@ -234,36 +389,138 @@ fn check_formatting(s: &Session, id: &str, params: &Value) -> Result<(), CmdErro
         || id.starts_with("styles.create")
         || id.starts_with("styles.modify")
         || id.starts_with("styles.update")
-        || id.starts_with("styles.delete");
+        || id.starts_with("styles.delete")
+        // Direct formatting outside the prefixes: Paste Formatting, and table and cell formatting.
+        || matches!(
+            id,
+            "edit.pasteFormat"
+                | "table.shading"
+                | "table.borders"
+                | "table.borderPainter"
+                | "table.cellAlign"
+                | "table.cellMargins"
+                | "table.textDirection"
+                | "table.properties"
+                | "table.rowHeight"
+                | "table.newStyle"
+                | "table.modifyStyle"
+                | "table.deleteStyle"
+                | "tools.updateStyles"
+                // Copies style definitions in from another file, locked flags included (#3692).
+                | "styles.copyFrom"
+        )
+        // Attach Template updates the styles from it when asked (`linkStyles` is only a setting).
+        || (id == "tools.attachTemplate" && p::bool(params, "update") == Some(true));
     if direct {
         return Err(CmdError::Disabled(format!("{id}: formatting is limited to the document's styles")));
     }
     Ok(())
 }
 
-/// Did a command leave everything outside the exceptions as it was? Compares the text, run
-/// formatting and paragraph formatting outside the ranges `author` may edit, in every story.
-pub(crate) fn outside_unchanged(before: &Document, after: &Document, author: &str) -> bool {
-    outside(before, author) == outside(after, author)
+/// Which parts of a protected document stay editable: the `w:permStart` ranges `author` may
+/// edit (readOnly, comments), or — filling in forms — the interiors of the content controls
+/// whose `w:lock` allows editing them.
+enum HoleMode {
+    Perms(String),
+    Controls,
 }
 
-/// One piece of protected content: text with its formatting, or a paragraph mark's formatting.
-#[derive(PartialEq)]
+/// Did a command leave everything outside the editable regions as it was? Compares the text,
+/// run formatting and paragraph formatting outside the ranges `author` may edit, in every story,
+/// and the formatting of every table, row and cell that holds any of that protected content, and what
+/// reaches the whole document: page setup, the document defaults and the existing styles
+/// (applying a style may add one), the document's settings and its metadata.
+pub(crate) fn outside_unchanged(before: &Document, after: &Document, author: &str) -> bool {
+    // Protection can't change mid-command (`protection_lifted` guards undo and redo).
+    let mode = if Some("forms") == before.settings.protection.as_deref() { HoleMode::Controls } else { HoleMode::Perms(author.into()) };
+    let (b, a) = (&before.styles, &after.styles);
+    before.last_section == after.last_section
+        && sections(before) == sections(after)
+        && b.default_chr == a.default_chr
+        && b.default_para == a.default_para
+        && b.styles.iter().all(|st| a.get(&st.id) == Some(st))
+        && before.settings == after.settings
+        && before.core == after.core
+        && before.custom_props == after.custom_props
+        && comments_unchanged(before, after)
+        && lists_unchanged(before, after)
+        && sources_unchanged(before, after)
+        && outside(before, &mode) == outside(after, &mode)
+}
+
+/// The comments' resolved flags: a comment's text is a part, and the parts are compared with the
+/// rest of the document; the flag is the comment's own state.
+fn comments_unchanged(before: &Document, after: &Document) -> bool {
+    before.comments.iter().all(|(id, c)| after.comments.get(id).is_some_and(|a| a.resolved == c.resolved))
+}
+
+/// The list definitions: the ones the document had must be unchanged — a list's format reaches
+/// every paragraph that uses it — but a new one may be added, like a new style: applying a list
+/// inside an editable region adds its definition.
+fn lists_unchanged(before: &Document, after: &Document) -> bool {
+    before.numbering.abstracts.iter().all(|x| after.numbering.abstracts.contains(x))
+        && before.numbering.nums.iter().all(|x| after.numbering.nums.contains(x))
+}
+
+/// The bibliography sources: the ones the document had must be unchanged; a new one may be added
+/// (a citation inserted inside an editable region).
+fn sources_unchanged(before: &Document, after: &Document) -> bool {
+    before.sources.iter().all(|x| after.sources.contains(x))
+}
+
+/// The section properties paragraphs end, in order.
+fn sections(doc: &Document) -> Vec<&wordcraft_doc::SectionProps> {
+    doc.para_paths(StoryRef::Body).iter().filter_map(|path| doc.para(StoryRef::Body, path)?.section.as_deref()).collect()
+}
+
+/// One piece of protected content: text with its formatting, a paragraph mark's formatting, or
+/// the formatting of a table, row or cell holding protected content.
+#[derive(PartialEq, Debug)]
 enum Piece {
     Text(String, CharProps),
     Object(Option<InlineObject>),
     Mark(Box<wordcraft_doc::ParaProps>, CharProps),
+    /// Tables nested deeper than the paragraph walk reaches, compared as a whole.
+    Deep(String),
+    Table(Box<TableProps>, Vec<f32>),
+    Row(Box<RowProps>),
+    Cell(Box<CellProps>),
 }
 
-/// Everything outside the editable ranges, in order.
-fn outside(doc: &Document, author: &str) -> Vec<Piece> {
-    let editable: Vec<u32> = doc.perm_ranges().iter().filter(|r| editable_by(r, author)).map(|r| r.id).collect();
+/// The control markers of a story that pair, bracket-style — the start and end positions of
+/// the doc crate's [`Document::control_ranges`], which pairs per block list (never across a
+/// table-cell boundary) and skips controls wrapped around tables. These are the same markers
+/// [`outside`] walks and [`Document::fillable_controls`] counts, so the walk and the count
+/// agree. A start that never closes (or an end nothing opened) is an orphan, not a hole: it
+/// stays ordinary protected content, and the text after it stays protected.
+fn paired_control_markers(doc: &Document, story: StoryRef) -> HashSet<(Path, usize)> {
+    doc.control_ranges(story).into_iter().flat_map(|r| [(r.start.path, r.start.off), (r.end.path, r.end.off)]).collect()
+}
+
+/// Everything outside the editable regions, in order.
+fn outside(doc: &Document, mode: &HoleMode) -> Vec<Piece> {
+    let editable: Vec<u32> = match mode {
+        HoleMode::Perms(author) => doc.perm_ranges().iter().filter(|r| editable_by(r, author)).map(|r| r.id).collect(),
+        HoleMode::Controls => Vec::new(),
+    };
     let mut out = Vec::new();
     let stories = std::iter::once(StoryRef::Body).chain(doc.parts.keys().map(|k| StoryRef::Part(*k)));
     for story in stories {
         let mut open: Vec<u32> = Vec::new();
+        let mut fillable: Vec<bool> = Vec::new();
+        // In forms mode, only markers that pair open and close holes (orphans stay content).
+        let paired = if matches!(mode, HoleMode::Controls) { paired_control_markers(doc, story) } else { HashSet::new() };
+        // The perm range or fillable control the walk is inside, innermost last.
+        let in_hole = |open: &[u32], fillable: &[bool]| match mode {
+            HoleMode::Perms(_) => !open.is_empty(),
+            HoleMode::Controls => fillable.last() == Some(&true),
+        };
+        // The paragraphs with protected content, and every table, row and cell above them.
+        let mut protected: HashSet<Vec<u32>> = HashSet::new();
+        let mut holding: HashSet<Vec<u32>> = HashSet::new();
         for path in doc.para_paths(story) {
             let Some(p) = doc.para(story, &path) else { continue };
+            let pieces = out.len();
             let mut k = 0;
             for (r, props) in p.run_ranges() {
                 let Some(text) = p.text.get(r.clone()) else { continue };
@@ -272,44 +529,105 @@ fn outside(doc: &Document, author: &str) -> Vec<Piece> {
                     if c == OBJ {
                         let obj = p.objects.get(k);
                         k += 1;
-                        match obj {
-                            Some(InlineObject::PermStart { id, .. }) if editable.contains(id) => {
-                                flush(&mut out, &mut piece, props, &open);
-                                open.push(*id);
-                                continue;
-                            }
-                            Some(InlineObject::PermEnd { id }) if editable.contains(id) => {
-                                flush(&mut out, &mut piece, props, &open);
-                                if let Some(j) = open.iter().rposition(|x| x == id) {
-                                    open.remove(j);
+                        // A marker that opens or closes a hole moves the walk's stack instead.
+                        let mut boundary = false;
+                        match mode {
+                            HoleMode::Perms(_) => match obj {
+                                Some(InlineObject::PermStart { id, .. }) if editable.contains(id) => {
+                                    flush(&mut out, &mut piece, props, in_hole(&open, &fillable));
+                                    open.push(*id);
+                                    boundary = true;
                                 }
-                                continue;
-                            }
-                            _ => {}
+                                Some(InlineObject::PermEnd { id }) if editable.contains(id) => {
+                                    flush(&mut out, &mut piece, props, in_hole(&open, &fillable));
+                                    if let Some(j) = open.iter().rposition(|x| x == id) {
+                                        open.remove(j);
+                                    }
+                                    boundary = true;
+                                }
+                                _ => {}
+                            },
+                            HoleMode::Controls => match obj {
+                                Some(InlineObject::ControlStart { control }) if paired.contains(&(path.clone(), r.start + i)) => {
+                                    flush(&mut out, &mut piece, props, in_hole(&open, &fillable));
+                                    fillable.push(control.lock.can_edit());
+                                    boundary = true;
+                                }
+                                Some(InlineObject::ControlEnd) if paired.contains(&(path.clone(), r.start + i)) => {
+                                    flush(&mut out, &mut piece, props, in_hole(&open, &fillable));
+                                    fillable.pop();
+                                    boundary = true;
+                                }
+                                _ => {}
+                            },
                         }
-                        if open.is_empty() {
-                            flush(&mut out, &mut piece, props, &open);
+                        if !boundary && !in_hole(&open, &fillable) {
+                            flush(&mut out, &mut piece, props, false);
                             out.push(Piece::Object(obj.cloned()));
                         }
-                        let _ = i;
                         continue;
                     }
-                    if open.is_empty() {
+                    if !in_hole(&open, &fillable) {
                         piece.push(c);
                     }
                 }
-                flush(&mut out, &mut piece, props, &open);
+                flush(&mut out, &mut piece, props, in_hole(&open, &fillable));
             }
-            if open.is_empty() {
+            if !in_hole(&open, &fillable) {
                 out.push(Piece::Mark(Box::new(p.props.clone()), p.mark.clone()));
             }
+            let ancestors = (1..path.0.len()).filter_map(|n| path.0.get(..n));
+            if out.len() > pieces {
+                protected.extend(ancestors.clone().map(<[u32]>::to_vec));
+            }
+            holding.extend(ancestors.map(<[u32]>::to_vec));
+        }
+        if let Some(blocks) = doc.story(story) {
+            structure(blocks, &mut Vec::new(), &protected, &holding, &mut out, 0);
         }
     }
     out
 }
 
-fn flush(out: &mut Vec<Piece>, piece: &mut String, props: &CharProps, open: &[u32]) {
-    if !piece.is_empty() && open.is_empty() {
+/// The formatting of every table, row and cell in `blocks` that holds protected content (or no
+/// paragraph at all): an exception covering only some of it can't reformat the rest.
+fn structure(blocks: &Blocks, prefix: &mut Vec<u32>, protected: &HashSet<Vec<u32>>, holding: &HashSet<Vec<u32>>, out: &mut Vec<Piece>, depth: usize) {
+    // `Document::para_paths` stops at the same depth; deeper nesting can't hold an editable
+    // exception, so any change below it counts as a change to protected content.
+    if depth > 16 {
+        if !blocks.is_empty() {
+            out.push(Piece::Deep(format!("{blocks:?}")));
+        }
+        return;
+    }
+    let guarded = |at: &Vec<u32>| protected.contains(at) || !holding.contains(at);
+    for (i, b) in blocks.iter().enumerate() {
+        let Block::Table(t) = &**b else { continue };
+        prefix.push(u32::try_from(i).unwrap_or(u32::MAX));
+        if guarded(prefix) {
+            out.push(Piece::Table(Box::new(t.props.clone()), t.grid.clone()));
+        }
+        for (r, row) in t.rows.iter().enumerate() {
+            prefix.push(u32::try_from(r).unwrap_or(u32::MAX));
+            if guarded(prefix) {
+                out.push(Piece::Row(Box::new(row.props.clone())));
+            }
+            for (c, cell) in row.cells.iter().enumerate() {
+                prefix.push(u32::try_from(c).unwrap_or(u32::MAX));
+                if guarded(prefix) {
+                    out.push(Piece::Cell(Box::new(cell.props.clone())));
+                }
+                structure(&cell.blocks, prefix, protected, holding, out, depth + 1);
+                prefix.pop();
+            }
+            prefix.pop();
+        }
+        prefix.pop();
+    }
+}
+
+fn flush(out: &mut Vec<Piece>, piece: &mut String, props: &CharProps, in_hole: bool) {
+    if !piece.is_empty() && !in_hole {
         out.push(Piece::Text(std::mem::take(piece), props.clone()));
     }
     piece.clear();
@@ -321,108 +639,50 @@ pub(crate) fn protection_lifted(before: &Document, after: &Document) -> bool {
     b.protection.is_some() && (a.protection != b.protection || a.protect_formatting != b.protect_formatting || a.protect_hash != b.protect_hash)
 }
 
+/// Where typing at the caret `p` goes in a document that is read only or open to comments only: a
+/// caret right before the start of an exception this author may edit goes inside it, and one right
+/// after its end goes back inside it. The markers take no room, so the start of a line that an
+/// exception starts, and the end of a line that one ends, are those carets.
+pub(crate) fn typing_pos(s: &Session, p: &Pos) -> Pos {
+    if !matches!(s.doc.settings.protection.as_deref(), Some("readOnly" | "comments")) {
+        return p.clone();
+    }
+    let Some(para) = s.doc.para_at(p) else { return p.clone() };
+    if para.objects.is_empty() {
+        return p.clone();
+    }
+    let editable: Vec<u32> = s.doc.perm_ranges().iter().filter(|r| editable_by(r, &s.author)).map(|r| r.id).collect();
+    let is_start = |off: usize| matches!(para.object_at(off), Some(InlineObject::PermStart { id, .. }) if editable.contains(id));
+    let is_end = |off: usize| matches!(para.object_at(off), Some(InlineObject::PermEnd { id }) if editable.contains(id));
+    let w = OBJ.len_utf8();
+    let mut off = p.off;
+    if is_start(off) {
+        while is_start(off) {
+            off += w;
+        }
+        return Pos { off, ..p.clone() };
+    }
+    while off >= w && is_end(off - w) {
+        off -= w;
+    }
+    Pos { off, ..p.clone() }
+}
+
 /// The first position in an editable range after `from` (wrapping round), for Find Next Region
-/// I Can Edit; with it, the range's end.
+/// I Can Edit; with it, the range's end. Filling in forms: the next fillable control's content.
 pub fn next_region(s: &Session, from: &Pos) -> Option<(Pos, Pos)> {
+    if s.doc.settings.protection.as_deref() == Some("forms") {
+        let stories = std::iter::once(StoryRef::Body).chain(s.doc.parts.keys().map(|k| StoryRef::Part(*k)));
+        let mut ranges: Vec<(Pos, Pos)> =
+            stories.flat_map(|story| s.doc.control_ranges(story)).filter(|r| r.control.lock.can_edit()).map(|r| (r.content_start(), r.end)).collect();
+        ranges.sort_by(|a, b| a.0.cmp(&b.0));
+        let next = ranges.iter().find(|r| r.0 > *from).or_else(|| ranges.first())?;
+        return Some((next.0.clone(), next.1.clone()));
+    }
     let ranges: Vec<PermRange> = s.doc.perm_ranges().into_iter().filter(|r| editable_by(r, &s.author)).collect();
     let next = ranges.iter().find(|r| r.start > *from).or_else(|| ranges.first())?;
     Some((next.start.clone(), next.end.clone()))
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::Selection;
-
-    fn select(s: &mut Session, text: &str) {
-        s.run("select.text", &json!({"text": text})).unwrap();
-    }
-
-    #[test]
-    fn read_only_with_an_exception_allows_edits_only_inside_it() {
-        let mut s = Session::new(Document::from_text("Locked intro.\nFill in here.\nLocked end."));
-        select(&mut s, "Fill in here.");
-        s.run("review.restrict", &json!({"exception": "add"})).unwrap();
-        s.run("review.restrict", &json!({"mode": "readOnly"})).unwrap();
-        // Inside the exception: typing works.
-        select(&mut s, "here");
-        s.run("text.insert", &json!({"text": "there"})).unwrap();
-        assert!(s.doc.plain_text(StoryRef::Body).contains("Fill in there."));
-        // Outside it: refused, and the document is as it was.
-        let before = s.doc.plain_text(StoryRef::Body);
-        select(&mut s, "intro");
-        assert!(s.run("text.insert", &json!({"text": "x"})).is_err());
-        assert!(s.run("format.bold", &json!({})).is_err());
-        // Backspace at the start of the exception would delete outside it.
-        let start = s.doc.perm_ranges()[0].start.clone();
-        s.sel = Selection::caret(start);
-        assert!(s.run("text.backspace", &json!({})).is_err());
-        assert_eq!(s.doc.plain_text(StoryRef::Body), before);
-        // Undo can't lift the protection.
-        for _ in 0..5 {
-            let _ = s.run("edit.undo", &json!({}));
-        }
-        assert_eq!(s.doc.settings.protection.as_deref(), Some("readOnly"));
-    }
-
-    #[test]
-    fn password_guards_stop_protection_and_survives_docx() {
-        let mut s = Session::new(Document::from_text("Secret plan.\nEditable part."));
-        select(&mut s, "Editable part.");
-        s.run("review.restrict", &json!({"exception": "add"})).unwrap();
-        s.run("review.restrict", &json!({"mode": "readOnly", "password": "pw1", "formatting": true, "lockedStyles": ["Heading1"]})).unwrap();
-        let bytes = crate::io::save_bytes("x.docx", &s.doc).unwrap();
-        let doc = crate::io::open_bytes("x.docx", &bytes).unwrap();
-        let st = &doc.settings;
-        assert_eq!(st.protection.as_deref(), Some("readOnly"));
-        assert!(st.protect_formatting);
-        assert!(st.protect_hash.iter().any(|(k, v)| k == "w:algorithmName" && v == "SHA-512"));
-        assert!(doc.styles.get("Heading1").is_some_and(|x| x.locked));
-        let r = doc.perm_ranges();
-        assert_eq!(r.len(), 1);
-        assert!(r[0].everyone());
-        let mut t = Session::new(doc);
-        assert!(t.run("review.restrict", &json!({"stop": true, "password": "wrong"})).is_err());
-        assert!(t.run("review.restrict", &json!({"mode": "none"})).is_err());
-        assert!(t.run("para.heading1", &json!({})).is_err(), "locked style");
-        t.run("review.restrict", &json!({"stop": true, "password": "pw1"})).unwrap();
-        assert!(t.doc.settings.protection.is_none());
-        // The password isn't kept for Repeat or macros.
-        assert!(t.last_command.as_ref().is_none_or(|(_, p)| p.get("password").is_none()));
-    }
-
-    /// A Word file with the legacy hash (`w:cryptAlgorithmSid`): a wrong password is rejected, the
-    /// right one unlocks; a hash WordCraft can't check never unlocks.
-    #[test]
-    fn legacy_password_is_verified_and_unknown_forms_refused() {
-        let protected = |sid: &str| {
-            let mut doc = Document::from_text("Locked.");
-            doc.settings.protection = Some("readOnly".into());
-            doc.settings.protect_hash = [
-                ("w:cryptProviderType", "rsaFull"),
-                ("w:cryptAlgorithmClass", "hash"),
-                ("w:cryptAlgorithmType", "typeAny"),
-                ("w:cryptAlgorithmSid", sid),
-                ("w:cryptSpinCount", "100000"),
-                // SHA-1 of salt 00…0F + Word's legacy key for "Example" (ECMA-376 Part 4 §14.8.1).
-                ("w:hash", "pEWelKoH6SVpvMmyPAJ8bHA/g/s="),
-                ("w:salt", "AAECAwQFBgcICQoLDA0ODw=="),
-            ]
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
-            Session::new(doc)
-        };
-        let mut s = protected("4");
-        assert!(s.run("review.restrict", &json!({"stop": true, "password": "wrong"})).is_err());
-        assert!(s.run("review.restrict", &json!({"stop": true, "password": ""})).is_err());
-        assert!(super::enforced(&s.doc));
-        s.run("review.restrict", &json!({"stop": true, "password": "Example"})).unwrap();
-        assert!(!super::enforced(&s.doc));
-        // MD2 isn't supported: refused whatever the password.
-        let mut s = protected("1");
-        let e = s.run("review.restrict", &json!({"stop": true, "password": "anything"})).unwrap_err();
-        assert!(e.to_string().contains(super::UNSUPPORTED_PASSWORD));
-        assert!(super::enforced(&s.doc));
-    }
-}
+mod tests;

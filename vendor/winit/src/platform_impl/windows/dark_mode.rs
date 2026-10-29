@@ -15,7 +15,8 @@ use crate::window::Theme;
 
 use super::util;
 
-static WIN10_BUILD_VERSION: Lazy<Option<u32>> = Lazy::new(|| {
+// Used by WM_DPICHANGED to preserve Windows 10 behavior while accepting Windows 11 geometry.
+pub(crate) static WIN10_BUILD_VERSION: Lazy<Option<u32>> = Lazy::new(|| {
     type RtlGetVersion = unsafe extern "system" fn(*mut OSVERSIONINFOW) -> NTSTATUS;
     let handle = get_function!("ntdll.dll", RtlGetVersion);
 

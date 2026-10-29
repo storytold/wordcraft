@@ -78,6 +78,9 @@ fn section(label: &str, children: Vec<Item>) -> Item {
 /// parameterized primitives. Exposing those with empty parameters would silently do the wrong
 /// thing. Dialogs and explicit choices below mirror the ribbon's interactive entry points.
 pub fn snapshot(app: &WordApp) -> Menu {
+    if !app.root_menu_active() {
+        return Menu::default();
+    }
     i18n::set_current(i18n::Lang::from_pref(&app.ui.language));
     let mut file = commands(app, "file.new file.open file.save file.saveAs file.print");
     file.push(action(app, "Export", "ui.backstage", json!({"value": true, "page": "export"})));
@@ -169,6 +172,9 @@ pub fn snapshot(app: &WordApp) -> Menu {
 /// Revalidate a queued click on the UI thread. Modal dialogs and document changes can happen
 /// after Plasma read the menu; a stale event must not dismiss a save prompt or edit another file.
 pub fn activate(app: &mut WordApp, document: u64, action: &Action) -> Result<(), String> {
+    if !app.root_menu_active() {
+        return Err("the root window's menu is inactive while another window is active".into());
+    }
     if document != app.session.document_id() {
         return Err("the menu belongs to a document that has been closed".into());
     }
@@ -211,16 +217,15 @@ mod tests {
     }
 
     #[test]
-    fn native_menu_new_preserves_unsaved_guard_and_modal_blocks_later_clicks() {
+    fn native_menu_new_preserves_dirty_document_and_retires_old_root_actions() {
         let mut a = app();
         a.run("text.insert", json!({"text": "Do not lose this"})).unwrap();
         let doc = a.session.document_id();
         let new = find(&snapshot(&a).items, "file.new").unwrap().action.clone().unwrap();
         activate(&mut a, doc, &new).unwrap();
-        assert_eq!(a.dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
-        assert!(activate(&mut a, doc, &new).is_err());
-        assert_eq!(a.session.document_id(), doc);
-        a.run("ui.saveChanges", json!({"answer": "dontSave"})).unwrap();
+        // Current upstream opens New in another window rather than replacing the dirty one.
+        assert!(a.session.documents().iter().any(|d| d.id == doc && d.dirty));
+        assert_ne!(a.session.document_id(), doc);
         assert!(activate(&mut a, doc, &new).is_err());
     }
 

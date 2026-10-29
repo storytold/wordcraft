@@ -85,6 +85,7 @@ pub(crate) fn parse(table: &[u8], fib: &Fib, fonts: &[String]) -> Numbering {
             id: i as u32,
             name: None,
             levels: def.levels.iter().enumerate().map(|(j, l)| level_of(l, j, fonts)).collect(),
+            ..Default::default()
         });
     }
     if let Some((fc, lcb)) = fib.pair(pair::PLF_LFO)
@@ -224,7 +225,7 @@ fn parse_plf_lfo(table: &[u8], fc: u32, defs: &[ListDef], numbering: &mut Number
                 }
             }
             let id = numbering.abstracts.len() as u32;
-            numbering.abstracts.push(AbstractNum { id, name: None, levels });
+            numbering.abstracts.push(AbstractNum { id, name: None, levels, ..Default::default() });
             id
         };
         numbering.nums.push(Num { id: (i + 1) as u32, abstract_id, start_overrides, ..Default::default() });

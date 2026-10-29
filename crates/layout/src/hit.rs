@@ -1,11 +1,13 @@
 //! Hit testing and caret geometry.
 
+use std::collections::HashMap;
+
 use wordcraft_doc::para::Wrap;
 use wordcraft_doc::props::TextDirection;
 use wordcraft_doc::{Document, Path, Pos, StoryRef};
 use wordcraft_geom::{Point, Rect};
 
-use crate::para::ParaLayout;
+use crate::para::{PARA_MARK_WIDTH, ParaLayout};
 use crate::{DocLayout, Page, Placed};
 
 /// Caret geometry on a page: a bar from (`x`, `top`) to (`x + width`, `top + height`). It is
@@ -18,6 +20,18 @@ pub struct Caret {
     pub top: f32,
     pub height: f32,
     pub width: f32,
+}
+
+/// An equation as [`DocLayout::equation_box`] finds it, in page coordinates: its left edge
+/// `x` and baseline `base`, the top and bottom of its line, and its layout (`math.width` wide).
+#[derive(Clone, Debug)]
+pub struct EquationBox {
+    pub page: usize,
+    pub x: f32,
+    pub base: f32,
+    pub top: f32,
+    pub bottom: f32,
+    pub math: std::sync::Arc<crate::math::MathLayout>,
 }
 
 /// Result of [`DocLayout::visual_step`].
@@ -58,6 +72,22 @@ pub struct ObjectHit {
     pub wrap: Wrap,
     /// Where column- and paragraph-relative offsets start (see [`Placed::Object`]).
     pub origin: Point,
+}
+
+/// The inputs for a column selection across laid-out lines.
+pub struct ColumnSelection<'a> {
+    /// The selection's first corner.
+    pub start: &'a Pos,
+    /// The selection's opposite corner.
+    pub end: &'a Pos,
+    /// One horizontal edge in page coordinates.
+    pub left: f32,
+    /// The other horizontal edge in page coordinates.
+    pub right: f32,
+    /// The page nearest the selection's starting corner.
+    pub page_hint: usize,
+    /// The maximum number of lines to return.
+    pub max_lines: usize,
 }
 
 impl ObjectHit {
@@ -128,7 +158,72 @@ fn text_at(p: &Page, index: usize, x: f32, y: f32) -> Option<StoryRef> {
     })
 }
 
+/// The pieces of story `story`'s paragraphs on each page, by paragraph, for the pages looked at
+/// so far ([`DocLayout::pieces_in`]).
+struct PartPages<'a> {
+    story: StoryRef,
+    pages: HashMap<usize, HashMap<&'a Path, Vec<&'a Placed>>>,
+    /// The first page that shows each paragraph, made the first time one is asked for, in one
+    /// walk of the pages (not one walk of them for every paragraph).
+    first: Option<HashMap<&'a Path, usize>>,
+}
+
+impl<'a> PartPages<'a> {
+    fn new(story: StoryRef) -> Self {
+        PartPages { story, pages: HashMap::new(), first: None }
+    }
+
+    /// The first page of `lay` that shows a piece of the paragraph at `path`.
+    fn first_page(&mut self, lay: &'a DocLayout, path: &Path) -> Option<usize> {
+        let story = self.story;
+        let first = self.first.get_or_insert_with(|| {
+            let mut first: HashMap<&'a Path, usize> = HashMap::new();
+            for (pi, p) in lay.pages.iter().enumerate() {
+                crate::work::steps(1);
+                for it in items_of(p, story) {
+                    if let Placed::Lines { story: s, path, .. } = it
+                        && *s == story
+                    {
+                        first.entry(path).or_insert(pi);
+                    }
+                }
+            }
+            first
+        });
+        first.get(path).copied()
+    }
+
+    /// The pieces of the paragraph at `path` on page `pi` of `lay`, as [`DocLayout::pieces_on`]
+    /// gives them.
+    fn on(&mut self, lay: &'a DocLayout, pi: usize, path: &Path) -> Vec<(usize, &'a Placed)> {
+        let Some(p) = lay.pages.get(pi) else { return Vec::new() };
+        crate::work::steps(1);
+        let story = self.story;
+        let index = self.pages.entry(pi).or_insert_with(|| {
+            let mut index: HashMap<&'a Path, Vec<&'a Placed>> = HashMap::new();
+            for it in items_of(p, story) {
+                if let Placed::Lines { story: s, path, .. } = it
+                    && *s == story
+                {
+                    index.entry(path).or_default().push(it);
+                }
+            }
+            index
+        });
+        index.get(path).map(|v| v.iter().map(|it| (pi, *it)).collect()).unwrap_or_default()
+    }
+}
+
+/// The items of `page` that `story`'s pieces are among (each one looked at counted as a step of
+/// [`crate::work`]).
 fn items_of(page: &Page, story: StoryRef) -> Box<dyn Iterator<Item = &Placed> + '_> {
+    let items = story_items(page, story);
+    #[cfg(test)]
+    let items: Box<dyn Iterator<Item = &Placed> + '_> = Box::new(items.inspect(|_| crate::work::steps(1)));
+    items
+}
+
+fn story_items(page: &Page, story: StoryRef) -> Box<dyn Iterator<Item = &Placed> + '_> {
     match story {
         StoryRef::Body => Box::new(page.items.iter()),
         // Headers and footers, and the text boxes in them, are drawn with the page's header and
@@ -176,6 +271,37 @@ pub fn page_lines(page: &Page, story: StoryRef) -> Vec<LineHit<'_>> {
     v
 }
 
+/// Of `lines`, the one nearest the caret moving up (`dir < 0`) or down: the lowest above it or
+/// the highest below it.
+fn nearest<'a, 'b>(lines: &[&'b LineHit<'a>], dir: i32) -> Option<&'b LineHit<'a>> {
+    if dir < 0 { lines.iter().copied().max_by(|a, b| a.top.total_cmp(&b.top)) } else { lines.iter().copied().min_by(|a, b| a.top.total_cmp(&b.top)) }
+}
+
+/// The line of `lines` to go to: of the nearest one and the lines of the other cells in its table
+/// row, the one across page x `gx` (else the one horizontally nearest it), on a tie the nearer.
+fn in_row<'a, 'b>(lines: &[&'b LineHit<'a>], gx: f32, dir: i32) -> Option<&'b LineHit<'a>> {
+    let n = nearest(lines, dir)?;
+    let off = |l: &LineHit| (l.left - gx).max(gx - l.right).max(0.0);
+    lines
+        .iter()
+        .copied()
+        .filter(|l| (l.path == n.path && l.li == n.li) || beside(n.path, l.path))
+        .min_by(|a, b| off(a).total_cmp(&off(b)).then(if dir < 0 { b.top.total_cmp(&a.top) } else { a.top.total_cmp(&b.top) }))
+}
+
+/// Whether paragraph `l` is in another cell of the table row paragraph `p` is in: where their
+/// paths part is a cell index (`[block, row, cell, block, …]`).
+fn beside(p: &Path, l: &Path) -> bool {
+    p.0.iter().zip(&l.0).position(|(x, y)| x != y).is_some_and(|i| i % 3 == 2)
+}
+
+/// Whether paragraph `l` comes between paragraphs `a` and `b` (either way round) in document
+/// order, not in another cell of a table row either of them is in (that stands beside it).
+fn between(a: &Path, b: &Path, l: &Path) -> bool {
+    let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+    lo < l && l < hi && !beside(a, l) && !beside(b, l)
+}
+
 /// The position in turned text (a table cell's text direction) of `story` under page point
 /// (x, y), if there is turned text there.
 fn turned_hit(page: &Page, story: StoryRef, x: f32, y: f32) -> Option<Pos> {
@@ -195,11 +321,12 @@ fn turned_hit(page: &Page, story: StoryRef, x: f32, y: f32) -> Option<Pos> {
     })
 }
 
-/// The position in the turned text of `story` nearest to page point (x, y), wherever it is.
-fn nearest_turned(page: &Page, story: StoryRef, x: f32, y: f32) -> Option<Pos> {
+/// The position in the turned text of `story` nearest to page point (x, y), wherever it is, in a
+/// paragraph `skip` doesn't leave out.
+fn nearest_turned(page: &Page, story: StoryRef, x: f32, y: f32, skip: &dyn Fn(&Path) -> bool) -> Option<Pos> {
     let dist = |r: Rect| band_dist(x, r.x, r.w).hypot(band_dist(y, r.y, r.h));
     let it = items_of(page, story)
-        .filter(|it| matches!(it, Placed::Lines { story: s, .. } if *s == story))
+        .filter(|it| matches!(it, Placed::Lines { story: s, path, .. } if *s == story && !skip(path)))
         .filter_map(|it| it.turned_bounds().map(|r| (it, dist(r))))
         .min_by(|a, b| a.1.total_cmp(&b.1))?
         .0;
@@ -222,6 +349,23 @@ fn nearest_line_at<'a>(page: &'a Page, y: f32, top_only: bool) -> Option<LineHit
         .min_by(|a, b| band_dist(y, a.top, a.bottom - a.top).total_cmp(&band_dist(y, b.top, b.bottom - b.top)).then(a.left.total_cmp(&b.left)))
 }
 
+/// Each floating body table on `page` with the area its cells cover there.
+fn float_table_areas(page: &Page) -> Vec<(&Path, Rect)> {
+    page.float_tables
+        .iter()
+        .filter_map(|t| {
+            page.items
+                .iter()
+                .filter_map(|it| match it {
+                    Placed::Cell { rect, table, story: StoryRef::Body, .. } if table == t => Some(*rect),
+                    _ => None,
+                })
+                .reduce(|a, b| a.union(&b))
+                .map(|r| (t, r))
+        })
+        .collect()
+}
+
 /// How far `v` is outside the band `top..top + h`.
 fn band_dist(v: f32, top: f32, h: f32) -> f32 {
     if v < top {
@@ -240,12 +384,17 @@ impl DocLayout {
         if let Some(pos) = turned_hit(p, story, x, y) {
             return Some(pos);
         }
+        // Like Word, a click outside a floating table doesn't land in its cells while there's
+        // other text on the page: below one, it goes to the text beside or after it (#2038).
+        let floats = if story == StoryRef::Body { float_table_areas(p) } else { Vec::new() };
+        let away = |path: &Path| floats.iter().any(|(t, r)| path.0.len() > t.0.len() && path.0.starts_with(&t.0) && !r.contains(Point::new(x, y)));
         let lines = page_lines(p, story);
         if lines.is_empty() {
             // A page of turned text (a vertical section): the nearest turned line.
-            return nearest_turned(p, story, x, y);
+            return nearest_turned(p, story, x, y, &away).or_else(|| nearest_turned(p, story, x, y, &|_: &Path| false));
         }
-        let best = lines.iter().min_by(|a, b| score(a, x, y).total_cmp(&score(b, x, y)))?;
+        let nearest = |a: &&LineHit, b: &&LineHit| score(a, x, y).total_cmp(&score(b, x, y));
+        let best = lines.iter().filter(|l| !away(l.path)).min_by(nearest).or_else(|| lines.iter().min_by(nearest))?;
         let off = best.para.off_at_x(best.li, x - best.x);
         Some(Pos { story: best.story, path: best.path.clone(), off })
     }
@@ -321,12 +470,23 @@ impl DocLayout {
 
     /// Which header/footer (if any) is at (x, y) on a page — for double-click editing.
     pub fn header_footer_at(&self, page: usize, y: f32) -> Option<(StoryRef, bool)> {
+        let (story, header) = self.header_footer_zone(page, y)?;
+        story.map(|s| (s, header))
+    }
+
+    /// Whether y on `page` is in its header area (above the body: `Some((_, true))`) or footer
+    /// area (below it: `Some((_, false))`), with the story shown there — `None` when the page
+    /// has no header/footer yet (double-clicking there creates one, #960).
+    pub fn header_footer_zone(&self, page: usize, y: f32) -> Option<(Option<StoryRef>, bool)> {
         let p = self.pages.get(page)?;
+        if !y.is_finite() {
+            return None;
+        }
         if y < p.body.y {
-            return p.header_story.map(|id| (StoryRef::Part(id), true));
+            return Some((p.header_story.map(StoryRef::Part), true));
         }
         if y > p.body.bottom() {
-            return p.footer_story.map(|id| (StoryRef::Part(id), false));
+            return Some((p.footer_story.map(StoryRef::Part), false));
         }
         None
     }
@@ -340,16 +500,24 @@ impl DocLayout {
                 .map(|v| v.iter().filter_map(|(pi, ii)| self.pages.get(*pi).and_then(|p| p.items.get(*ii)).map(|it| (*pi, it))).collect())
                 .unwrap_or_default();
         }
+        let mut first = || (0..self.pages.len()).find(|pi| !self.pieces_on(*pi, story, path).is_empty());
+        self.part_pieces(page_hint, &mut first, &mut |pi| self.pieces_on(pi, story, path))
+    }
+
+    /// Pieces of a paragraph of a story part (see [`Self::pieces`]), `on` giving those on a page.
+    fn part_pieces<'a>(
+        &'a self,
+        page_hint: usize,
+        first: &mut dyn FnMut() -> Option<usize>,
+        on: &mut dyn FnMut(usize) -> Vec<(usize, &'a Placed)>,
+    ) -> Vec<(usize, &'a Placed)> {
         // Headers/footers repeat: prefer the hinted page, else the first that shows the part.
-        let mut order: Vec<usize> = (0..self.pages.len()).collect();
-        if page_hint < order.len() {
-            order.retain(|p| *p != page_hint);
-            order.insert(0, page_hint);
-        }
-        for pi in order {
-            let mut found = self.pieces_on(pi, story, path);
+        let hinted = if page_hint < self.pages.len() { on(page_hint) } else { Vec::new() };
+        let start = if hinted.is_empty() { first() } else { Some(page_hint) };
+        if let Some(pi) = start {
+            let mut found = if hinted.is_empty() { on(pi) } else { hinted };
             if found.is_empty() {
-                continue;
+                return found;
             }
             // A note continued over pages has the rest of the paragraph on the pages before or
             // after (a repeated header shows all of it on every page: one page is enough).
@@ -362,7 +530,7 @@ impl DocLayout {
             let mut k = pi;
             while lo > 0 && k > 0 {
                 k -= 1;
-                let more = self.pieces_on(k, story, path);
+                let more = on(k);
                 if more.is_empty() {
                     break;
                 }
@@ -372,7 +540,7 @@ impl DocLayout {
             let mut k = pi;
             while hi < n && k + 1 < self.pages.len() {
                 k += 1;
-                let more = self.pieces_on(k, story, path);
+                let more = on(k);
                 if more.is_empty() {
                     break;
                 }
@@ -382,6 +550,19 @@ impl DocLayout {
             return found;
         }
         Vec::new()
+    }
+
+    /// [`Self::pieces`] for each of many paragraphs of `pages.story`: a part's pieces on a page
+    /// are looked up in that page's index, made the first time it is looked at, so a selection
+    /// over many header, footer or text box paragraphs walks each page's items once rather than
+    /// once for every paragraph.
+    fn pieces_in<'a>(&'a self, pages: &mut PartPages<'a>, path: &Path, page_hint: usize) -> Vec<(usize, &'a Placed)> {
+        if pages.story == StoryRef::Body {
+            return self.pieces(StoryRef::Body, path, page_hint);
+        }
+        // The first-page index is made only when the hinted page doesn't show the paragraph.
+        let pages = std::cell::RefCell::new(pages);
+        self.part_pieces(page_hint, &mut || pages.borrow_mut().first_page(self, path), &mut |pi| pages.borrow_mut().on(self, pi, path))
     }
 
     /// Pieces of a paragraph of story part `story` on page `pi`.
@@ -405,6 +586,7 @@ impl DocLayout {
             let first = para.lines.get(*l0)?;
             let l = para.lines.get(li)?;
             let cx = para.x_of(li, pos.off)?;
+            let cx = para.caret_limit(li).map_or(cx, |m| cx.min(m));
             // In the lines' own frame (turned text turns it onto the page).
             let top = l.top - first.top;
             // Caret spans the text height (ascent + descent), not the full line spacing.
@@ -435,18 +617,21 @@ impl DocLayout {
                 }
             })
             .collect();
-        let target = if dir < 0 {
-            cands
-                .iter()
-                .filter(|l| gx >= l.left - 2.0 && gx <= l.right + 2.0)
-                .max_by(|a, b| a.top.total_cmp(&b.top))
-                .or_else(|| cands.iter().max_by(|a, b| a.top.total_cmp(&b.top)))
-        } else {
-            cands
-                .iter()
-                .filter(|l| gx >= l.left - 2.0 && gx <= l.right + 2.0)
-                .min_by(|a, b| a.top.total_cmp(&b.top))
-                .or_else(|| cands.iter().min_by(|a, b| a.top.total_cmp(&b.top)))
+        let across: Vec<&LineHit> = cands.iter().copied().filter(|l| gx >= l.left - 2.0 && gx <= l.right + 2.0).collect();
+        let target = match nearest(&across, dir) {
+            // The nearest line across `gx`, unless lines between the caret's paragraph and that
+            // line's in document order come before it on the way: a table row whose cells' text
+            // `gx` misses (left of the table, or in the gap between two cells) is the next line,
+            // as in Word.
+            Some(t) => {
+                let skipped: Vec<&LineHit> = cands
+                    .iter()
+                    .copied()
+                    .filter(|l| (if dir < 0 { l.top > t.top } else { l.top < t.top }) && between(&pos.path, t.path, l.path))
+                    .collect();
+                if skipped.is_empty() { Some(t) } else { in_row(&skipped, gx, dir) }
+            }
+            None => in_row(&cands, gx, dir),
         };
         if let Some(l) = target {
             let off = l.para.off_at_x(l.li, gx - l.x);
@@ -485,20 +670,27 @@ impl DocLayout {
         None
     }
 
-    /// Word's selection bar (#856): when (x, y) is in the page's left margin, left of the body
-    /// text column, the start of the body line at that height. Not in the header/footer area,
-    /// not beside a table's lines (those are left to the table), nothing on an empty page.
+    /// Word's selection bar (#856): when (x, y) is in the page margin beside the text column,
+    /// the start of the body line at that height. The bar is the left margin for a left-to-right
+    /// paragraph and the right margin for a right-to-left one. Not in the header/footer area,
+    /// not beside a table's lines (those are the table's row areas), nothing on an empty page.
     pub fn selection_bar_at(&self, page: usize, x: f32, y: f32) -> Option<Pos> {
         let p = self.pages.get(page)?;
-        if !(x.is_finite() && y.is_finite()) || x < 0.0 || x >= p.body.x || y < p.body.y || y > p.body.bottom() {
+        if !(x.is_finite() && y.is_finite()) || x < 0.0 || x > p.w || y < p.body.y || y > p.body.bottom() {
+            return None;
+        }
+        let left = x < p.body.x;
+        if !left && x <= p.body.right() {
             return None;
         }
         let l = nearest_line_at(p, y, false)?;
-        if l.path.0.len() > 1 || l.left < p.body.x - 0.5 {
-            // A table's line, or text hanging into the margin: not the selection bar.
+        let line = l.para.lines.get(l.li)?;
+        // The line's own side, and no text hanging into that margin.
+        let hangs = if line.rtl { l.right > p.body.right() + 0.5 } else { l.left < p.body.x - 0.5 };
+        if l.path.0.len() > 1 || line.rtl == left || hangs {
             return None;
         }
-        Some(Pos { story: StoryRef::Body, path: l.path.clone(), off: l.para.lines.get(l.li)?.start })
+        Some(Pos { story: StoryRef::Body, path: l.path.clone(), off: line.start })
     }
 
     /// The start of the top-level body line nearest height `y` on `page` (dragging in the
@@ -533,16 +725,18 @@ impl DocLayout {
     /// Column (block) selection: the piece of every line from the line holding `a` to the line
     /// holding `b` (document order) that lies between page x `left` and `right`. One `(start,
     /// end)` pair per line, both in the same paragraph; lines shorter than `left` give an empty
-    /// pair. At most `max` lines.
-    pub fn column_segments(&self, doc: &Document, a: &Pos, b: &Pos, left: f32, right: f32, page_hint: usize, max: usize) -> Vec<(Pos, Pos)> {
+    /// pair. At most `selection.max_lines` lines.
+    pub fn column_segments(&self, doc: &Document, selection: ColumnSelection<'_>) -> Vec<(Pos, Pos)> {
+        let ColumnSelection { start: a, end: b, left, right, page_hint, max_lines } = selection;
         let (a, b) = if a <= b { (a, b) } else { (b, a) };
         let (left, right) = if left <= right { (left, right) } else { (right, left) };
         let mut out = Vec::new();
         if a.story != b.story || !left.is_finite() || !right.is_finite() {
             return out;
         }
+        let mut pages = PartPages::new(a.story);
         for path in doc.paths_between(a, b) {
-            for (_, it) in self.pieces(a.story, &path, page_hint) {
+            for (_, it) in self.pieces_in(&mut pages, &path, page_hint) {
                 let Placed::Lines { para, l0, l1, x, .. } = it else { continue };
                 let first = if path == a.path { para.line_of(a.off) } else { 0 };
                 let last = if path == b.path { para.line_of(b.off) } else { usize::MAX };
@@ -550,7 +744,7 @@ impl DocLayout {
                     if li < first || li > last {
                         continue;
                     }
-                    if out.len() >= max {
+                    if out.len() >= max_lines {
                         return out;
                     }
                     let o0 = para.off_at_x(li, left - x);
@@ -568,8 +762,9 @@ impl DocLayout {
     pub fn selection_rects(&self, doc: &Document, a: &Pos, b: &Pos, page_hint: usize) -> Vec<(usize, Rect)> {
         let (a, b) = if a <= b { (a, b) } else { (b, a) };
         let mut out = Vec::new();
+        let mut pages = PartPages::new(a.story);
         for path in doc.paths_between(a, b) {
-            for (pi, it) in self.pieces(a.story, &path, page_hint) {
+            for (pi, it) in self.pieces_in(&mut pages, &path, page_hint) {
                 let Placed::Lines { para, l0, l1, x, y, turn, .. } = it else { continue };
                 let Some(first) = para.lines.get(*l0) else { continue };
                 // Rectangles in the lines' own frame, turned onto the page.
@@ -597,8 +792,8 @@ impl DocLayout {
                         // Selection continuing past the paragraph end shows the paragraph mark.
                         if li + 1 == para.lines.len() && path != b.path {
                             let ex = l.end_x();
-                            let x0 = if l.rtl { ex - 5.0 } else { ex };
-                            put(Rect::new(x0, top, 5.0, l.height));
+                            let x0 = if l.rtl { ex - PARA_MARK_WIDTH } else { ex };
+                            put(Rect::new(x0, top, PARA_MARK_WIDTH, l.height));
                         }
                         continue;
                     }
@@ -607,7 +802,7 @@ impl DocLayout {
                     // Selection continuing past the paragraph end shows the paragraph mark.
                     let last_line = li + 1 == para.lines.len();
                     if last_line && path != b.path {
-                        x1 += 5.0;
+                        x1 += PARA_MARK_WIDTH;
                     }
                     if path == b.path && to >= l.stop && li + 1 < para.lines.len() && b.off > l.stop {
                         x1 = para.x_of(li, l.stop).unwrap_or(x1);
@@ -634,8 +829,8 @@ impl DocLayout {
             let l = para.lines.get(li)?;
             let here = para.x_of(li, pos.off)?;
             let mut best: Option<(usize, f32)> = None;
-            for off in para.line_offsets(li) {
-                let Some(x) = para.x_of(li, off) else { continue };
+            for (off, x) in para.line_carets(li) {
+                let Some(x) = x else { continue };
                 let ahead = if left { x < here - 0.01 } else { x > here + 0.01 };
                 let d = (x - here).abs();
                 if ahead && best.is_none_or(|b| d < b.1) {
@@ -653,6 +848,12 @@ impl DocLayout {
     /// Where the equation at `pos` (its U+FFFC) is drawn: page, x of its left edge and its
     /// baseline (page coordinates), and its layout.
     pub fn equation_geom(&self, pos: &Pos, page_hint: usize) -> Option<(usize, f32, f32, std::sync::Arc<crate::math::MathLayout>)> {
+        self.equation_box(pos, page_hint).map(|b| (b.page, b.x, b.base, b.math))
+    }
+
+    /// The box around the equation at `pos` (its U+FFFC): its own width, and the height of its
+    /// line (Word frames the equation the caret is in this way), in page coordinates.
+    pub fn equation_box(&self, pos: &Pos, page_hint: usize) -> Option<EquationBox> {
         for (pi, it) in self.pieces(pos.story, &pos.path, page_hint) {
             // Equations in turned text aren't edited in place.
             let Placed::Lines { para, l0, l1, x, y, turn: TextDirection::Horizontal, .. } = it else { continue };
@@ -668,10 +869,14 @@ impl DocLayout {
                 if c.start != pos.off {
                     continue;
                 }
-                let ml = para.maths.iter().find(|(o, _)| *o == oi)?.1.clone();
+                let math = para.maths.iter().find(|(o, _)| *o == oi)?.1.clone();
                 let cx = l.cl_left(k)?;
-                let base = y + (l.baseline - first.top);
-                return Some((pi, x + cx, base, ml));
+                let top = y + (l.top - first.top);
+                let base = top + (l.baseline - l.top);
+                // A line holds its tallest piece, so it holds the equation too; `max` keeps
+                // the box around it should the line's own box come out shorter.
+                let (top, bottom) = ((base - math.ascent).min(top), (base + math.descent).max(top + l.height));
+                return Some(EquationBox { page: pi, x: x + cx, base, top, bottom, math });
             }
         }
         None
@@ -709,7 +914,7 @@ impl DocLayout {
     pub fn cell_at(&self, page: usize, x: f32, y: f32) -> Option<(StoryRef, Path, usize, usize)> {
         let p = self.pages.get(page)?;
         p.items.iter().rev().find_map(|it| match it {
-            Placed::Cell { rect, table, row, cell, story, covered: false } if rect.contains(wordcraft_geom::Point::new(x, y)) => {
+            Placed::Cell { rect, table, row, cell, story, covered: false, .. } if rect.contains(wordcraft_geom::Point::new(x, y)) => {
                 Some((*story, table.clone(), *row, *cell))
             }
             _ => None,

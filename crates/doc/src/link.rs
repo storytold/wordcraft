@@ -9,14 +9,23 @@ pub fn is_web_or_mail_link(url: &str) -> bool {
     ["http", "https", "mailto"].iter().any(|s| scheme.eq_ignore_ascii_case(s))
 }
 
-/// Whether a hyperlink may be written as an `href` (or Markdown destination) in an exported file:
-/// a web or email link, a bookmark (`#name`) or a relative path. Scripts (`javascript:`,
-/// `vbscript:`), `data:`, `file:` and every other scheme are refused, read the way a browser reads
-/// a URL: ASCII control characters and spaces are dropped first, so `java\nscript:` is a script.
+/// Whether a hyperlink may be written as an `href` (or Markdown destination, RTF `HYPERLINK`
+/// field, ODT `xlink:href`, LaTeX `\href`) in an exported file: a web or email link, a bookmark
+/// (`#name`) or a relative path. Scripts (`javascript:`, `vbscript:`), `data:`, `file:` and every
+/// other scheme are refused, read the way a browser reads a URL: ASCII control characters and
+/// spaces are dropped first, so `java\nscript:` is a script. A protocol-relative reference
+/// (`//host/…`) or a UNC path (`\\host\…`, or `//host` once backslashes are read as separators)
+/// names another machine — following it on Windows leaks the user's NTLM credentials — so it is
+/// refused too.
 pub fn is_safe_href(url: &str) -> bool {
+    let cleaned: String = url.chars().filter(|c| !c.is_ascii_control() && *c != ' ').collect();
+    // `//host` (protocol-relative) and `\\host` (UNC), with `\` read as `/` the way Windows does.
+    if cleaned.replace('\\', "/").starts_with("//") {
+        return false;
+    }
     match scheme(url) {
         Some(s) => matches!(s.as_str(), "http" | "https" | "mailto"),
-        None => !url.trim().is_empty(),
+        None => !cleaned.is_empty(),
     }
 }
 
@@ -73,6 +82,11 @@ mod tests {
             "data:text/html,<script>alert(1)</script>",
             "file:///etc/passwd",
             "ms-msdt:/id",
+            // Protocol-relative and UNC references name another machine (NTLM leak on Windows).
+            "//attacker.example/share/x",
+            "\\\\attacker.example\\share\\x",
+            "/\\attacker.example\\x",
+            " //attacker.example/x",
             "",
         ] {
             assert!(!is_safe_href(bad), "{bad:?}");

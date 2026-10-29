@@ -8,7 +8,7 @@ use std::ffi::c_void;
 use std::marker::PhantomData;
 use std::os::windows::io::{AsRawHandle as _, FromRawHandle as _, OwnedHandle, RawHandle};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -71,7 +71,7 @@ use crate::event::{
 use crate::event_loop::{ActiveEventLoop as RootAEL, ControlFlow, DeviceEvents, EventLoopClosed};
 use crate::keyboard::ModifiersState;
 use crate::platform::pump_events::PumpStatus;
-use crate::platform_impl::platform::dark_mode::try_theme;
+use crate::platform_impl::platform::dark_mode::{try_theme, WIN10_BUILD_VERSION};
 use crate::platform_impl::platform::dpi::{become_dpi_aware, dpi_to_scale_factor};
 use crate::platform_impl::platform::drop_handler::FileDropHandler;
 use crate::platform_impl::platform::icon::WinCursor;
@@ -122,11 +122,21 @@ pub(crate) struct WindowData {
     pub _file_drop_handler: Option<FileDropHandler>,
     pub userdata_removed: Cell<bool>,
     pub recurse_depth: Cell<u32>,
+    pub ime_reset_alive: Arc<AtomicBool>,
 }
 
 impl WindowData {
     fn send_event(&self, event: Event<UserEventPlaceholder>) {
         self.event_loop_runner.send_event(event);
+    }
+
+    fn publish_ime_batch(&self, window: HWND, events: Vec<WindowEvent>) {
+        self.event_loop_runner.publish_ime_batch(
+            events.into_iter().map(|event| Event::WindowEvent {
+                window_id: RootWindowId(WindowId(window)),
+                event,
+            }),
+        );
     }
 
     fn window_state_lock(&self) -> MutexGuard<'_, WindowState> {
@@ -901,6 +911,30 @@ pub(crate) static DESTROY_MSG_ID: LazyMessageId = LazyMessageId::new("Winit::Des
 // documentation in the `window_state` module for more information.
 pub(crate) static SET_RETAIN_STATE_ON_SIZE_MSG_ID: LazyMessageId =
     LazyMessageId::new("Winit::SetRetainMaximized\0");
+// Message sent by `Window::reset_ime` on the window's thread. WPARAM and LPARAM are unused.
+pub(crate) static RESET_IME_MSG_ID: LazyMessageId = LazyMessageId::new("Winit::ResetIme\0");
+// The low and high 32-bit halves of the request occupy WPARAM and LPARAM respectively.
+// No pointer is borrowed across thread dispatch, and no u64 is truncated on 32-bit Windows.
+pub(crate) static RESET_IME_WITH_REQUEST_MSG_ID: LazyMessageId =
+    LazyMessageId::new("Winit::ResetImeWithRequest\0");
+
+pub(crate) fn encode_ime_reset_request(request_id: u64) -> (usize, isize) {
+    (request_id as u32 as usize, (request_id >> 32) as u32 as isize)
+}
+
+fn decode_ime_reset_request(wparam: usize, lparam: isize) -> u64 {
+    u64::from(wparam as u32) | (u64::from(lparam as u32) << 32)
+}
+
+unsafe fn drain_pending_ime_messages(window: HWND) {
+    let mut pending: MSG = unsafe { mem::zeroed() };
+    while unsafe {
+        PeekMessageW(&mut pending, window, WM_IME_STARTCOMPOSITION, WM_IME_COMPOSITION, PM_REMOVE)
+    } != 0
+    {
+        unsafe { DispatchMessageW(&pending) };
+    }
+}
 static THREAD_EVENT_TARGET_WINDOW_CLASS: Lazy<Vec<u16>> =
     Lazy::new(|| util::encode_wide("Winit Thread Event Target"));
 /// When the taskbar is created, it registers a message with the "TaskbarCreated" string and then
@@ -1259,6 +1293,7 @@ unsafe fn public_window_callback_inner(
 
         WM_DESTROY => {
             use crate::event::WindowEvent::Destroyed;
+            userdata.ime_reset_alive.store(false, Ordering::Release);
             unsafe { RevokeDragDrop(window) };
             userdata.send_event(Event::WindowEvent {
                 window_id: RootWindowId(WindowId(window)),
@@ -1268,6 +1303,7 @@ unsafe fn public_window_callback_inner(
         },
 
         WM_NCDESTROY => {
+            userdata.ime_reset_alive.store(false, Ordering::Release);
             unsafe { super::set_window_long(window, GWL_USERDATA, 0) };
             userdata.userdata_removed.set(true);
             result = ProcResult::Value(0);
@@ -1532,13 +1568,11 @@ unsafe fn public_window_callback_inner(
             // Windows Hangul IME sends WM_IME_COMPOSITION after WM_IME_ENDCOMPOSITION, so
             // check whether composing.
             if ime_allowed_and_composing {
+                let mut events = Vec::new();
                 let ime_context = unsafe { ImeContext::current(window) };
 
                 if lparam == 0 {
-                    userdata.send_event(Event::WindowEvent {
-                        window_id: RootWindowId(WindowId(window)),
-                        event: WindowEvent::Ime(Ime::Preedit(String::new(), None)),
-                    });
+                    events.push(WindowEvent::Ime(Ime::Preedit(String::new(), None)));
                 }
 
                 // Google Japanese Input and ATOK have both flags, so
@@ -1547,31 +1581,23 @@ unsafe fn public_window_callback_inner(
                     if let Some(text) = unsafe { ime_context.get_composed_text() } {
                         userdata.window_state_lock().ime_state = ImeState::Enabled;
 
-                        userdata.send_event(Event::WindowEvent {
-                            window_id: RootWindowId(WindowId(window)),
-                            event: WindowEvent::Ime(Ime::Preedit(String::new(), None)),
-                        });
-                        userdata.send_event(Event::WindowEvent {
-                            window_id: RootWindowId(WindowId(window)),
-                            event: WindowEvent::Ime(Ime::Commit(text)),
-                        });
+                        events.push(WindowEvent::Ime(Ime::Preedit(String::new(), None)));
+                        events.push(WindowEvent::Ime(Ime::Commit(text)));
                     }
                 }
 
                 // Next, receive preedit range for next composing if exist.
                 if (lparam as u32 & GCS_COMPSTR) != 0 {
                     if let Some((text, first, last)) =
-                        unsafe { ime_context.get_composing_text_and_cursor() }
+                        unsafe { ime_context.get_composing_text_and_cursor(lparam as u32) }
                     {
                         userdata.window_state_lock().ime_state = ImeState::Preedit;
                         let cursor_range = first.map(|f| (f, last.unwrap_or(f)));
 
-                        userdata.send_event(Event::WindowEvent {
-                            window_id: RootWindowId(WindowId(window)),
-                            event: WindowEvent::Ime(Ime::Preedit(text, cursor_range)),
-                        });
+                        events.push(WindowEvent::Ime(Ime::Preedit(text, cursor_range)));
                     }
                 }
+                userdata.publish_ime_batch(window, events);
             }
 
             // Not calling DefWindowProc to hide composing text drawn by IME.
@@ -1584,28 +1610,21 @@ unsafe fn public_window_callback_inner(
                 w.ime_allowed || w.ime_state != ImeState::Disabled
             };
             if ime_allowed_or_composing {
+                let mut events = Vec::new();
                 if userdata.window_state_lock().ime_state == ImeState::Preedit {
                     // Windows Hangul IME sends WM_IME_COMPOSITION after WM_IME_ENDCOMPOSITION, so
                     // trying receiving composing result and commit if exists.
                     let ime_context = unsafe { ImeContext::current(window) };
                     if let Some(text) = unsafe { ime_context.get_composed_text() } {
-                        userdata.send_event(Event::WindowEvent {
-                            window_id: RootWindowId(WindowId(window)),
-                            event: WindowEvent::Ime(Ime::Preedit(String::new(), None)),
-                        });
-                        userdata.send_event(Event::WindowEvent {
-                            window_id: RootWindowId(WindowId(window)),
-                            event: WindowEvent::Ime(Ime::Commit(text)),
-                        });
+                        events.push(WindowEvent::Ime(Ime::Preedit(String::new(), None)));
+                        events.push(WindowEvent::Ime(Ime::Commit(text)));
                     }
                 }
 
                 userdata.window_state_lock().ime_state = ImeState::Disabled;
 
-                userdata.send_event(Event::WindowEvent {
-                    window_id: RootWindowId(WindowId(window)),
-                    event: WindowEvent::Ime(Ime::Disabled),
-                });
+                events.push(WindowEvent::Ime(Ime::Disabled));
+                userdata.publish_ime_batch(window, events);
             }
 
             result = ProcResult::DefWindowProc(wparam);
@@ -2143,7 +2162,11 @@ unsafe fn public_window_callback_inner(
         },
 
         WM_SETFOCUS => {
-            let active_focus_changed = userdata.window_state_lock().set_focused(true);
+            let (active_focus_changed, caret) = {
+                let mut w = userdata.window_state_lock();
+                (w.set_focused(true), w.system_caret.set_focused(true))
+            };
+            unsafe { ImeContext::update_system_caret(window, caret) };
             if active_focus_changed {
                 unsafe { gain_active_focus(window, userdata) };
             }
@@ -2151,7 +2174,11 @@ unsafe fn public_window_callback_inner(
         },
 
         WM_KILLFOCUS => {
-            let active_focus_changed = userdata.window_state_lock().set_focused(false);
+            let (active_focus_changed, caret) = {
+                let mut w = userdata.window_state_lock();
+                (w.set_focused(false), w.system_caret.set_focused(false))
+            };
+            unsafe { ImeContext::update_system_caret(window, caret) };
             if active_focus_changed {
                 unsafe { lose_active_focus(window, userdata) };
             }
@@ -2305,8 +2332,11 @@ unsafe fn public_window_callback_inner(
                 }
             }
 
-            let new_outer_rect: RECT;
-            {
+            // Windows 11's suggested rectangle avoids the old-monitor nudge during a cross-monitor
+            // drag.
+            let new_outer_rect: RECT = if !WIN10_BUILD_VERSION.is_some_and(|build| build < 22000) {
+                suggested_rect
+            } else {
                 let suggested_ul =
                     (suggested_rect.left + margin_left, suggested_rect.top + margin_top);
 
@@ -2349,7 +2379,7 @@ unsafe fn public_window_callback_inner(
                 let new_dpi_monitor = unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONULL) };
                 let conservative_rect_monitor =
                     unsafe { MonitorFromRect(&conservative_rect, MONITOR_DEFAULTTONULL) };
-                new_outer_rect = if conservative_rect_monitor == new_dpi_monitor {
+                if conservative_rect_monitor == new_dpi_monitor {
                     conservative_rect
                 } else {
                     let get_monitor_rect = |monitor| {
@@ -2402,8 +2432,8 @@ unsafe fn public_window_callback_inner(
                     }
 
                     conservative_rect
-                };
-            }
+                }
+            };
 
             unsafe {
                 SetWindowPos(
@@ -2450,6 +2480,61 @@ unsafe fn public_window_callback_inner(
                 window_state.set_window_flags_in_place(|f| {
                     f.set(WindowFlags::MARKER_RETAIN_STATE_ON_SIZE, wparam != 0)
                 });
+                result = ProcResult::Value(0);
+            } else if msg == RESET_IME_MSG_ID.get() || msg == RESET_IME_WITH_REQUEST_MSG_ID.get() {
+                let request_id = (msg == RESET_IME_WITH_REQUEST_MSG_ID.get())
+                    .then(|| decode_ime_reset_request(wparam, lparam));
+                if request_id.is_some() {
+                    // A sent reset message can overtake posted native composition messages.
+                    // Accept those through the ordinary window procedure before cancelling;
+                    // otherwise a pending old result could be read after an empty-context
+                    // no-op fence. Only this window's contiguous START/END/COMPOSITION range
+                    // is drained, and no window-state lock is held across dispatch.
+                    unsafe { drain_pending_ime_messages(window) };
+                }
+                // Leave `Preedit` before cancelling, so `WM_IME_ENDCOMPOSITION` doesn't read the
+                // result string and commit it. The lock is released before the call, since the
+                // IME may send its messages during it.
+                let (allowed, was_composing) = {
+                    let mut w = userdata.window_state_lock();
+                    let composing = w.ime_allowed && w.ime_state == ImeState::Preedit;
+                    if composing {
+                        w.ime_state = ImeState::Enabled;
+                    }
+                    (w.ime_allowed, composing)
+                };
+                // An already cleared preedit can still have a terminal pending in the app.
+                // Cancel for a request even without a visible preedit, and do not acknowledge
+                // native failure. SendMessage callbacks are buffered before the fence below.
+                let cancelled = if allowed && request_id.is_some() {
+                    unsafe { ImeContext::current(window).reset_composition() }
+                } else if was_composing {
+                    unsafe { ImeContext::current(window).cancel_composition() }
+                } else {
+                    false
+                };
+                if was_composing {
+                    userdata.send_event(Event::WindowEvent {
+                        window_id: RootWindowId(WindowId(window)),
+                        event: WindowEvent::Ime(Ime::Preedit(String::new(), None)),
+                    });
+                }
+                if cancelled {
+                    if let Some(request_id) = request_id {
+                        let alive = Arc::clone(&userdata.ime_reset_alive);
+                        let state = Arc::clone(&userdata.window_state);
+                        userdata.event_loop_runner.send_ime_reset_completion(
+                            Event::WindowEvent {
+                                window_id: RootWindowId(WindowId(window)),
+                                event: WindowEvent::ImeResetCompleted { request_id },
+                            },
+                            move || {
+                                alive.load(Ordering::Acquire)
+                                    && state.lock().map(|state| state.ime_allowed).unwrap_or(false)
+                            },
+                        );
+                    }
+                }
                 result = ProcResult::Value(0);
             } else if msg == TASKBAR_CREATED.get() {
                 let window_state = userdata.window_state_lock();
@@ -2672,5 +2757,112 @@ fn get_pointer_move_kind(
         PointerMoveKind::Leave
     } else {
         PointerMoveKind::None
+    }
+}
+
+#[cfg(test)]
+mod ime_reset_transport_tests {
+    use super::{decode_ime_reset_request, encode_ime_reset_request};
+
+    #[test]
+    fn reset_request_transport_preserves_all_bits_on_32_and_64_bit_windows() {
+        for request in [0, 1, u64::from(u32::MAX), 1u64 << 32, 1u64 << 63, u64::MAX] {
+            let (low, high) = encode_ime_reset_request(request);
+            assert_eq!(decode_ime_reset_request(low, high), request);
+            // Model the signed LPARAM narrowing on a 32-bit message transport as well.
+            assert_eq!(
+                decode_ime_reset_request(low as u32 as usize, high as i32 as isize),
+                request
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod ime_reset_pending_message_tests {
+    use std::cell::RefCell;
+    use std::{mem, ptr};
+
+    use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DefWindowProcW, DestroyWindow, PostMessageW, RegisterClassW,
+        UnregisterClassW, WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION, WM_IME_STARTCOMPOSITION,
+        WNDCLASSW,
+    };
+
+    use super::drain_pending_ime_messages;
+    use crate::platform_impl::platform::util;
+
+    thread_local! {
+        static DELIVERED: RefCell<Vec<(HWND, u32)>> = const { RefCell::new(Vec::new()) };
+    }
+
+    unsafe extern "system" fn procedure(
+        window: HWND,
+        message: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        if matches!(message, WM_IME_STARTCOMPOSITION | WM_IME_ENDCOMPOSITION | WM_IME_COMPOSITION) {
+            DELIVERED.with(|events| events.borrow_mut().push((window, message)));
+            0
+        } else {
+            unsafe { DefWindowProcW(window, message, wparam, lparam) }
+        }
+    }
+
+    #[test]
+    fn reset_drains_posted_ime_prefix_for_only_its_own_window() {
+        let name: Vec<u16> = "Winit::ImeResetPendingTest\0".encode_utf16().collect();
+        let instance = util::get_instance_handle();
+        let class = WNDCLASSW {
+            lpfnWndProc: Some(procedure),
+            hInstance: instance,
+            lpszClassName: name.as_ptr(),
+            ..unsafe { mem::zeroed() }
+        };
+        assert_ne!(unsafe { RegisterClassW(&class) }, 0);
+        let create = || unsafe {
+            CreateWindowExW(
+                0,
+                name.as_ptr(),
+                ptr::null(),
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                instance,
+                ptr::null(),
+            )
+        };
+        let first = create();
+        let second = create();
+        assert_ne!(first, 0);
+        assert_ne!(second, 0);
+        DELIVERED.with(|events| events.borrow_mut().clear());
+        for message in [WM_IME_STARTCOMPOSITION, WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION] {
+            assert_ne!(unsafe { PostMessageW(first, message, 0, 0) }, 0);
+        }
+        assert_ne!(unsafe { PostMessageW(second, WM_IME_STARTCOMPOSITION, 0, 0) }, 0);
+        unsafe { drain_pending_ime_messages(first) };
+        DELIVERED.with(|events| {
+            assert_eq!(*events.borrow(), vec![
+                (first, WM_IME_STARTCOMPOSITION),
+                (first, WM_IME_COMPOSITION),
+                (first, WM_IME_ENDCOMPOSITION),
+            ])
+        });
+        unsafe { drain_pending_ime_messages(second) };
+        DELIVERED.with(|events| {
+            assert_eq!(events.borrow().last(), Some(&(second, WM_IME_STARTCOMPOSITION)))
+        });
+        unsafe {
+            DestroyWindow(first);
+            DestroyWindow(second);
+            UnregisterClassW(name.as_ptr(), instance);
+        }
     }
 }

@@ -10,9 +10,13 @@ use sctk::reexports::client::globals::GlobalList;
 use sctk::reexports::client::protocol::wl_output::WlOutput;
 use sctk::reexports::client::protocol::wl_surface::WlSurface;
 use sctk::reexports::client::{Connection, Proxy, QueueHandle};
+use sctk::reexports::protocols::wp::primary_selection::zv1::client::zwp_primary_selection_device_manager_v1::ZwpPrimarySelectionDeviceManagerV1;
+use sctk::reexports::protocols::wp::primary_selection::zv1::client::zwp_primary_selection_offer_v1::ZwpPrimarySelectionOfferV1;
 
 use sctk::compositor::{CompositorHandler, CompositorState};
+use sctk::data_device_manager::DataDeviceManagerState;
 use sctk::output::{OutputHandler, OutputState};
+use sctk::primary_selection::PrimarySelectionManagerState;
 use sctk::registry::{ProvidesRegistryState, RegistryState};
 use sctk::seat::pointer::ThemedPointer;
 use sctk::seat::SeatState;
@@ -23,6 +27,7 @@ use sctk::shm::slot::SlotPool;
 use sctk::shm::{Shm, ShmHandler};
 use sctk::subcompositor::SubcompositorState;
 
+use crate::platform_impl::wayland::clipboard::ClipboardState;
 use crate::platform_impl::wayland::event_loop::sink::EventSink;
 use crate::platform_impl::wayland::output::MonitorHandle;
 use crate::platform_impl::wayland::seat::{
@@ -53,6 +58,13 @@ pub struct WinitState {
 
     /// The seat state responsible for all sorts of input.
     pub seat_state: SeatState,
+
+    /// The data device manager, which gives each seat a data device for file drags and the
+    /// clipboard.
+    pub data_device_manager_state: Option<DataDeviceManagerState>,
+
+    /// The clipboard, which shares each seat's data device with file drags.
+    pub clipboard: Arc<ClipboardState>,
 
     /// The shm for software buffers, such as cursors.
     pub shm: Shm,
@@ -91,6 +103,12 @@ pub struct WinitState {
     /// event loop run.
     pub events_sink: EventSink,
 
+    /// Raw PRIMARY offer from the selection event currently being forwarded to SCTK's device
+    /// dispatch. The `PrimarySelectionDeviceHandler` callback consumes it immediately so the
+    /// wrapper and its raw proxy are stored under one clipboard lock. It is not a second source
+    /// of protocol ownership: SCTK still owns offer lifetime.
+    pub pending_primary_offer: Option<ZwpPrimarySelectionOfferV1>,
+
     /// Xdg activation.
     pub xdg_activation: Option<XdgActivationState>,
 
@@ -119,6 +137,7 @@ pub struct WinitState {
 
 impl WinitState {
     pub fn new(
+        connection: &Connection,
         globals: &GlobalList,
         queue_handle: &QueueHandle<Self>,
         loop_handle: LoopHandle<'static, WinitState>,
@@ -143,9 +162,62 @@ impl WinitState {
 
         let seat_state = SeatState::new(globals, queue_handle);
 
+        let data_device_manager_state = match DataDeviceManagerState::bind(globals, queue_handle) {
+            Ok(manager) => Some(manager),
+            Err(e) => {
+                tracing::warn!(
+                    "Data device manager not available, ignoring file drops and the regular \
+                     clipboard (PRIMARY selection has its own protocol): {e:?}"
+                );
+                None
+            },
+        };
+
+        let primary_selection_manager_state = {
+            // The old `zwp_primary_selection_manager_v1` spelling never matches a real global
+            // and made the advertised-but-unbound diagnostic unreachable. Use the generated
+            // protocol interface name so this cannot drift again.
+            let primary_interface = ZwpPrimarySelectionDeviceManagerV1::interface().name;
+            let advertised = globals
+                .contents()
+                .with_list(|list| list.iter().any(|global| global.interface == primary_interface));
+            match PrimarySelectionManagerState::bind(globals, queue_handle) {
+                Ok(manager) => Some(Arc::new(manager)),
+                Err(error) => {
+                    if advertised {
+                        // A global that cannot be bound is a real failure, not a compositor
+                        // without PRIMARY support.
+                        tracing::warn!(
+                            "PRIMARY selection was advertised but could not be bound: {error:?}"
+                        );
+                    } else {
+                        tracing::debug!(
+                            "PRIMARY selection is unavailable on this compositor: {error:?}"
+                        );
+                    }
+                    None
+                },
+            }
+        };
+
+        let clipboard = ClipboardState::new(
+            connection,
+            queue_handle,
+            data_device_manager_state.as_ref().map(|manager| manager.data_device_manager().clone()),
+            primary_selection_manager_state,
+        );
+
         let mut seats = AHashMap::default();
         for seat in seat_state.seats() {
-            seats.insert(seat.id(), WinitSeatState::new());
+            let data_device = data_device_manager_state
+                .as_ref()
+                .map(|manager| manager.get_data_device(queue_handle, &seat));
+            clipboard.add_seat(
+                &seat,
+                data_device.as_ref().map(|device| device.inner().clone()),
+                queue_handle,
+            );
+            seats.insert(seat.id(), WinitSeatState::new(data_device));
         }
 
         let (viewporter_state, fractional_scaling_manager) =
@@ -164,6 +236,8 @@ impl WinitState {
             subcompositor_state: subcompositor_state.map(Arc::new),
             output_state,
             seat_state,
+            data_device_manager_state,
+            clipboard,
             shm,
             custom_cursor_pool,
 
@@ -189,6 +263,7 @@ impl WinitState {
 
             monitors: Arc::new(Mutex::new(monitors)),
             events_sink: EventSink::new(),
+            pending_primary_offer: None,
             loop_handle,
             // Make it true by default.
             dispatched_events: true,

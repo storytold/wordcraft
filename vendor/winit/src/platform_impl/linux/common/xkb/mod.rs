@@ -191,6 +191,13 @@ impl KeyContext<'_> {
         state: ElementState,
         repeat: bool,
     ) -> KeyEvent {
+        let layout = self.state.layout(keycode);
+        let is_latin_layout = self.keymap.is_latin_layout(layout);
+        let latin_key = self
+            .keymap
+            .latin_char(layout, keycode)
+            .map(|c| Key::Character(SmolStr::new(c.encode_utf8(&mut [0; 4]))));
+
         let mut event =
             KeyEventResults::new(self, keycode, !repeat && state == ElementState::Pressed);
         let physical_key = keymap::raw_keycode_to_physicalkey(keycode);
@@ -199,7 +206,12 @@ impl KeyContext<'_> {
         let (key_without_modifiers, _) = event.key_without_modifiers();
         let text_with_all_modifiers = event.text_with_all_modifiers();
 
-        let platform_specific = KeyEventExtra { text_with_all_modifiers, key_without_modifiers };
+        let platform_specific = KeyEventExtra {
+            text_with_all_modifiers,
+            key_without_modifiers,
+            latin_key,
+            is_latin_layout,
+        };
 
         KeyEvent { physical_key, logical_key, text, location, state, repeat, platform_specific }
     }

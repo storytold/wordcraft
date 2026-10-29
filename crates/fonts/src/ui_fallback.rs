@@ -65,17 +65,30 @@ const MAX_FACES: u32 = 64;
 const MAX_ASSETS: usize = 8192;
 /// Characters a face's coverage is measured on.
 const MAX_NEEDED: usize = 4096;
+/// The tables skrifa reads glyph outlines from: TrueType, CFF, CFF2 and VARC. A face with
+/// outlines only in Apple's `hvgl` table has none of them, and the interface draws its characters
+/// as blank space.
+pub(crate) const OUTLINE_TABLES: [&[u8; 4]; 4] = [b"glyf", b"CFF ", b"CFF2", b"VARC"];
 
-/// A character only a font for the language has: a simplified-only hanzi, or kana.
-fn probe(hans: bool) -> char {
-    if hans { '页' } else { 'の' }
+/// A character only a font for the language has: a simplified-only hanzi, kana, or Hangul.
+fn probe(hans: bool, korean: bool) -> char {
+    if korean {
+        '한'
+    } else if hans {
+        '页'
+    } else {
+        'の'
+    }
 }
 
-/// Font files to look for, relative to a font folder (or absolute), best first. Chinese faces
-/// cover kana too, so the Japanese list ends with the Chinese one.
-fn candidates(hans: bool) -> Vec<&'static str> {
-    let (zh, ja): (&[&str], &[&str]) = if cfg!(windows) {
-        (&["Deng.ttf", "msyh.ttc", "simhei.ttf", "simsun.ttc", "NotoSansSC-VF.ttf"], &["YuGothR.ttc", "meiryo.ttc", "msgothic.ttc"])
+/// Font files to look for, relative to a font folder (or absolute), best first.
+fn candidates(hans: bool, korean: bool) -> Vec<&'static str> {
+    let (zh, ja, ko): (&[&str], &[&str], &[&str]) = if cfg!(windows) {
+        (
+            &["Deng.ttf", "msyh.ttc", "simhei.ttf", "simsun.ttc", "NotoSansSC-VF.ttf"],
+            &["YuGothR.ttc", "meiryo.ttc", "msgothic.ttc"],
+            &["malgun.ttf", "malgunsl.ttf", "gulim.ttc", "batang.ttc"],
+        )
     } else if cfg!(target_os = "macos") {
         (
             &[
@@ -88,6 +101,7 @@ fn candidates(hans: bool) -> Vec<&'static str> {
                 "/System/Library/PrivateFrameworks/FontServices.framework/Resources/Reserved/PingFangUI.ttc",
             ],
             &["ヒラギノ角ゴシック W3.ttc", "Hiragino Sans W3.ttc"],
+            &["/System/Library/Fonts/AppleSDGothicNeo.ttc", "/System/Library/Fonts/Supplemental/AppleGothic.ttf"],
         )
     } else {
         (
@@ -106,18 +120,37 @@ fn candidates(hans: bool) -> Vec<&'static str> {
                 "truetype/droid/DroidSansFallbackFull.ttf",
             ],
             &["noto-cjk/NotoSansCJKjp-Regular.otf", "opentype/noto/NotoSansCJKjp-Regular.otf"],
+            &[
+                "noto-cjk/NotoSansCJKkr-Regular.otf",
+                "opentype/noto/NotoSansCJKkr-Regular.otf",
+                "google-noto-sans-cjk-fonts/NotoSansCJKkr-Regular.otf",
+                "adobe-source-han-sans/SourceHanSansK-Regular.otf",
+                "opentype/adobe-source-han-sans/SourceHanSansK-Regular.otf",
+                "truetype/nanum/NanumGothic.ttf",
+            ],
         )
     };
-    if hans { zh.to_vec() } else { ja.iter().chain(zh).copied().collect() }
+    if korean {
+        ko.iter().chain(ja).chain(zh).copied().collect()
+    } else if hans {
+        zh.to_vec()
+    } else {
+        ja.iter().chain(zh).copied().collect()
+    }
 }
 
 /// The installed CJK font for a Chinese (`hans`) or other interface that best covers `needed`
 /// (the characters the embedded faces lack; empty: a character typical of the language), if one
 /// is found. Never panics on damaged files.
 pub fn system_cjk_ui_font(hans: bool, needed: &[char]) -> Option<SystemUiFont> {
-    let probe = [probe(hans)];
+    system_cjk_ui_font_for(hans, false, needed)
+}
+
+/// The installed CJK font for a Chinese, Korean or Japanese interface.
+pub fn system_cjk_ui_font_for(hans: bool, korean: bool, needed: &[char]) -> Option<SystemUiFont> {
+    let probe = [probe(hans, korean)];
     let needed = if needed.is_empty() { &probe[..] } else { needed.get(..MAX_NEEDED).unwrap_or(needed) };
-    find_ui_font(&with_asset_data(crate::system_font_dirs()), &candidates(hans), needed, hans)
+    find_ui_font(&with_asset_data(crate::system_font_dirs()), &candidates(hans, korean), needed, hans)
 }
 
 /// `dirs` and, for each macOS font asset folder among them (`com_apple_MobileAsset_Font<N>`),
@@ -149,7 +182,7 @@ pub(crate) fn find_ui_font(dirs: &[std::path::PathBuf], names: &[&str], needed: 
         if !tried.insert(path.clone()) {
             continue;
         }
-        let Some(size) = std::fs::metadata(&path).ok().filter(|m| m.is_file()).map(|m| m.len()) else { continue };
+        let Some(size) = std::fs::metadata(&path).ok().filter(std::fs::Metadata::is_file).map(|m| m.len()) else { continue };
         if size > MAX_FILE {
             continue;
         }
@@ -169,8 +202,9 @@ pub(crate) fn find_ui_font(dirs: &[std::path::PathBuf], names: &[&str], needed: 
 
 /// The face of a font file (or collection) to use and how many of `needed` it maps: the one
 /// mapping the most, then preferring a Regular style and, for Chinese, a Simplified Chinese
-/// family (`… SC`, `… GB`, as in a pan-CJK collection). `None` if the header isn't a font's or
-/// no face maps any of `needed`.
+/// family (`… SC`, `… GB`, as in a pan-CJK collection). Faces with none of the
+/// [`OUTLINE_TABLES`] are skipped. `None` if the header isn't a font's or no face with outlines
+/// maps any of `needed`.
 pub(crate) fn pick_face(data: &[u8], needed: &[char], hans: bool) -> Option<(u32, String, usize)> {
     let magic = data.get(..4)?;
     if ![&[0, 1, 0, 0][..], b"OTTO", b"ttcf"].contains(&magic) {
@@ -183,6 +217,9 @@ pub(crate) fn pick_face(data: &[u8], needed: &[char], hans: bool) -> Option<(u32
     let mut best: Option<((usize, bool, bool), u32, String)> = None;
     for i in 0..count {
         let Ok(f) = skrifa::FontRef::from_index(data, i) else { continue };
+        if !OUTLINE_TABLES.iter().any(|t| f.table_data(skrifa::Tag::new(t)).is_some()) {
+            continue;
+        }
         let charmap = f.charmap();
         let covered = needed.iter().filter(|c| charmap.map(**c).is_some()).count();
         if covered == 0 {
@@ -201,6 +238,22 @@ pub(crate) fn pick_face(data: &[u8], needed: &[char], hans: bool) -> Option<(u32
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn korean_interface_uses_korean_first_system_font_candidates() {
+        let names = candidates(false, true);
+        assert_eq!(
+            names.first(),
+            Some(&if cfg!(windows) {
+                "malgun.ttf"
+            } else if cfg!(target_os = "macos") {
+                "/System/Library/Fonts/AppleSDGothicNeo.ttc"
+            } else {
+                "noto-cjk/NotoSansCJKkr-Regular.otf"
+            })
+        );
+        assert_eq!(probe(false, true), '한');
+    }
 
     #[test]
     fn needs_system_cjk_when_an_embedded_face_lacks_an_interface_character() {
@@ -252,6 +305,30 @@ mod tests {
         // No file maps every needed character: the one mapping the most is used.
         let found = find_ui_font(&dirs, &["sub/good.ttf", "PingFang.ttc"], &['A', '页'], true).unwrap();
         assert_eq!(found.family, "Source Sans 3");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn skips_faces_without_outlines() {
+        // Renaming the `glyf` table to `hvgl` gives a face like those of `PingFangUI.ttc` on
+        // macOS 27.0.1. Its cmap maps characters, and skrifa reads no outlines from it.
+        let sans = crate::bundled()[0];
+        let mut hvgl = sans.to_vec();
+        let tables = u16::from_be_bytes([hvgl[4], hvgl[5]]) as usize;
+        let glyf = (0..tables).map(|r| 12 + r * 16).find(|&at| &hvgl[at..at + 4] == b"glyf").unwrap();
+        hvgl[glyf..glyf + 4].copy_from_slice(b"hvgl");
+        assert!(skrifa::FontRef::new(&hvgl).unwrap().charmap().map('A').is_some());
+        assert!(pick_face(&hvgl, &['A'], true).is_none());
+        assert_eq!(pick_face(sans, &['A'], true), Some((0, "Source Sans 3".to_string(), 1)));
+        // `find_ui_font` uses the next file, and returns `None` when no other file is listed.
+        let dir = std::env::temp_dir().join(format!("wc-uifallback-outlines-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("hvgl.ttf"), &hvgl).unwrap();
+        std::fs::write(dir.join("glyf.ttf"), sans).unwrap();
+        let found = find_ui_font(std::slice::from_ref(&dir), &["hvgl.ttf", "glyf.ttf"], &['A'], true).unwrap();
+        assert!(found.bytes == sans);
+        assert!(find_ui_font(std::slice::from_ref(&dir), &["hvgl.ttf"], &['A'], true).is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

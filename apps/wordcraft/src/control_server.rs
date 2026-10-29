@@ -484,7 +484,16 @@ mod tests {
         assert!(!dir.exists() || std::fs::read_dir(&dir).unwrap().next().is_none(), "no key file after a failed bind");
         drop(taken);
         // Bound: the key file holds the key that opens the port.
-        let (rx, key_file) = start(port, egui::Context::default(), Some(&dir)).unwrap();
+        let mut free_port = port.wrapping_add(1).max(1024);
+        let mut started = None;
+        for _ in 0..100 {
+            if let Some(res) = start(free_port, egui::Context::default(), Some(&dir)) {
+                started = Some((res, free_port));
+                break;
+            }
+            free_port = free_port.wrapping_add(1).max(1024);
+        }
+        let ((rx, key_file), port) = started.unwrap();
         let key_file = key_file.unwrap();
         assert_eq!(key_file.path(), wordcraft_control_key::key_path(&dir, port));
         let key = std::fs::read_to_string(key_file.path()).unwrap();

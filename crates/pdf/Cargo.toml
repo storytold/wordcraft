@@ -3,25 +3,26 @@ name = "wordcraft-pdf"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "WordCraft PDF export (krilla): embedded font subsets with selectable text, links, outline, tagging"
+description = "WordCraft PDF export (craft-pdf / Krilla): embedded font subsets with selectable text, links, outline, tagging"
 
 [lints]
 workspace = true
 
 [dependencies]
 wordcraft-doc = { workspace = true }
-wordcraft-geom = { workspace = true }
+wordcraft-geom = { workspace = true, features = ["image"] }
 wordcraft-fonts = { workspace = true }
 wordcraft-layout = { workspace = true }
 wordcraft-metafile = { workspace = true }
-krilla = { workspace = true }
+craft-pdf = { workspace = true }
 kurbo = { workspace = true }
 image = { workspace = true }
 thiserror = { workspace = true }
 log = { workspace = true }
+chrono = { workspace = true }
 
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-# The browser clock (`SystemTime::now()` panics on wasm32).
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+# The browser clock (`SystemTime::now()` panics on wasm32-unknown-unknown).
 js-sys = "0.3"
 
 [dev-dependencies]

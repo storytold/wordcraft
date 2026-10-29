@@ -328,7 +328,9 @@ impl<T: 'static> EventLoop<T> {
             first_touch: None,
             active_window: None,
             modifiers: Default::default(),
-            is_composing: false,
+            ime_compositions: Default::default(),
+            ime_spots: HashMap::new(),
+            ime_busy_until: None,
         };
 
         // Register for device hotplug events
@@ -463,15 +465,26 @@ impl<T: 'static> EventLoop<T> {
             min_timeout(control_flow_timeout, timeout)
         };
 
+        // Wake up to send IME spots held back while the input method was busy, without starting
+        // a loop iteration for it.
+        let ime_spots_timeout = self
+            .event_processor
+            .ime_spots_deadline()
+            .map(|deadline| deadline.saturating_duration_since(start));
+
         self.state.x11_readiness = Readiness::EMPTY;
-        if let Err(error) =
-            self.event_loop.dispatch(timeout, &mut self.state).map_err(std::io::Error::from)
+        if let Err(error) = self
+            .event_loop
+            .dispatch(min_timeout(timeout, ime_spots_timeout), &mut self.state)
+            .map_err(std::io::Error::from)
         {
             tracing::error!("Failed to poll for events: {error:?}");
             let exit_code = error.raw_os_error().unwrap_or(1);
             self.set_exit_code(exit_code);
             return;
         }
+
+        self.event_processor.send_ime_spots();
 
         // NB: `StartCause::Init` is handled as a special case and doesn't need
         // to be considered here

@@ -107,16 +107,16 @@ fn record(cv: &mut Canvas, func: u16, r: Bytes) {
         0x0213 => xy16(r, 6).map(|p| cv.line_to(p)),
         0x0325 => counted_points(r).map(|pts| cv.poly(&pts, false, false, true)),
         0x0324 => counted_points(r).map(|pts| cv.poly(&pts, true, true, true)),
-        0x0538 => polypolygon(r).map(|ops| cv.shape(&ops, true, true)),
-        0x041B => rect16(r, 6).map(|[l, t, rr, b]| cv.shape(&geom::rect(l, t, rr, b), true, true)),
+        0x0538 => polypolygon(r).map(|ops| cv.shape(ops, true, true)),
+        0x041B => rect16(r, 6).map(|[l, t, rr, b]| cv.shape(geom::rect(l, t, rr, b), true, true)),
         0x061C => {
             let [ew, eh] = [r.i16(8), r.i16(6)];
             let (Some(ew), Some(eh)) = (ew, eh) else { return };
             rect16(r, 10).map(|[l, t, rr, b]| {
-                cv.shape(&geom::round_rect(l, t, rr, b, f64::from(ew), f64::from(eh)), true, true);
+                cv.shape(geom::round_rect(l, t, rr, b, f64::from(ew), f64::from(eh)), true, true);
             })
         }
-        0x0418 => rect16(r, 6).map(|[l, t, rr, b]| cv.shape(&geom::ellipse(l, t, rr, b), true, true)),
+        0x0418 => rect16(r, 6).map(|[l, t, rr, b]| cv.shape(geom::ellipse(l, t, rr, b), true, true)),
         0x0817 | 0x081A | 0x0830 => arc16(r).map(|(bounds, s, e)| {
             let kind = match func {
                 0x0817 => ArcKind::Arc,
@@ -124,7 +124,7 @@ fn record(cv: &mut Canvas, func: u16, r: Bytes) {
                 _ => ArcKind::Chord,
             };
             let [l, t, rr, b] = bounds;
-            cv.shape(&geom::arc_shape(l, t, rr, b, s, e, kind), kind != ArcKind::Arc, true);
+            cv.shape(geom::arc_shape(l, t, rr, b, s, e, kind), kind != ArcKind::Arc, true);
         }),
         0x02FA => create_pen(cv, r),
         0x02FC => create_brush(cv, r),
@@ -265,9 +265,8 @@ fn dib_blit(cv: &mut Canvas, r: Bytes, at: usize, rop: u32, dst: [f64; 4], src: 
     let n = dib::info_len(dib)?;
     let info = dib.slice(0, n)?;
     let bits = dib.tail(n)?;
-    let mut img = dib::decode(Bytes(info), bits, false)?;
+    let (mut img, dst) = dib::decode_clip(Bytes(info), bits, false, src.map(|v| v as i64), dst)?;
     dib::prepare(&mut img, dib::Blend::Rop(rop));
-    let (img, dst) = dib::clip_blit(&img, src.map(|v| v as i64), dst)?;
     cv.bitmap(dst, img);
     Some(())
 }

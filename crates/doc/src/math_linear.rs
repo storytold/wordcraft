@@ -9,7 +9,7 @@
 //! an operator or space; a parenthesised operand loses its parentheses). `^`/`_` with nothing
 //! before them are pre-scripts. A top-level `#` numbers the equation (`E=mc^2#(1)`).
 
-use crate::math::{Arg, FracKind, MAX_DEPTH, MClass, MNode, MRun, ScriptKind, is_nary_char, math_class, merge_runs};
+use crate::math::{Arg, FracKind, MAX_DEPTH, MClass, MNode, MRun, ScriptKind, any_too_deep, is_nary_char, math_class, merge_runs, too_deep};
 
 /// Function names set upright and applied to the following operand.
 pub const FUNCTION_NAMES: &[&str] = &[
@@ -17,6 +17,18 @@ pub const FUNCTION_NAMES: &[&str] = &[
     "gcd", "hom", "inf", "ker", "lg", "lim", "liminf", "limsup", "ln", "log", "max", "min", "mod", "Pr", "sec", "sech", "sin", "sinh", "sup", "tan",
     "tanh",
 ];
+
+/// Length of the longest of [`FUNCTION_NAMES`].
+const MAX_NAME: usize = {
+    let (mut max, mut i) = (0, 0);
+    while i < FUNCTION_NAMES.len() {
+        if FUNCTION_NAMES[i].len() > max {
+            max = FUNCTION_NAMES[i].len();
+        }
+        i += 1;
+    }
+    max
+};
 
 /// Function names whose subscripts go underneath (`lim_(n→∞)`).
 const LIMIT_NAMES: &[&str] = &["lim", "liminf", "limsup", "max", "min", "sup", "inf", "det", "gcd", "Pr"];
@@ -135,6 +147,11 @@ impl P {
                 '/' | '⁄' | '∕' | '¦' => {
                     self.i += 1;
                     let start = operand_start(&out);
+                    // A numerator that is already deep stays as it is: `/` is text then.
+                    if out.get(start..).is_some_and(any_too_deep) {
+                        out.push(text(c));
+                        continue;
+                    }
                     let num = strip_parens(out.drain(start..).collect());
                     let den = self.operand(stops);
                     let kind = match c {
@@ -156,20 +173,34 @@ impl P {
                     } else {
                         self.i += 1;
                         let s = self.script_operand(stops);
-                        let base = out.pop();
-                        out.push(attach_script(base, c == '^', s));
+                        if out.last().is_some_and(too_deep) {
+                            out.push(text(c));
+                            out.extend(s);
+                        } else {
+                            let base = out.pop();
+                            out.push(attach_script(base, c == '^', s));
+                        }
                     }
                 }
                 '┬' | '┴' => {
                     self.i += 1;
                     let lim = self.script_operand(stops);
-                    let e = out.pop().map(|n| vec![n]).unwrap_or_default();
-                    out.push(MNode::Lim { upper: c == '┴', e: strip_parens(e), lim });
+                    if out.last().is_some_and(too_deep) {
+                        out.push(text(c));
+                        out.extend(lim);
+                    } else {
+                        let e = out.pop().map(|n| vec![n]).unwrap_or_default();
+                        out.push(MNode::Lim { upper: c == '┴', e: strip_parens(e), lim });
+                    }
                 }
                 c if is_combining(c) => {
                     self.i += 1;
-                    let e = out.pop().map(|n| strip_parens(vec![n])).unwrap_or_default();
-                    out.push(MNode::Acc { chr: c, e });
+                    if out.last().is_some_and(too_deep) {
+                        out.push(text(c));
+                    } else {
+                        let e = out.pop().map(|n| strip_parens(vec![n])).unwrap_or_default();
+                        out.push(MNode::Acc { chr: c, e });
+                    }
                 }
                 '▒' | '\u{2061}' => self.i += 1,
                 ' ' => {
@@ -320,7 +351,7 @@ impl P {
     /// A prefix structure after its character.
     fn prefix(&mut self, c: char, stops: &[char]) -> MNode {
         match c {
-            '√' | '∛' | '∜' => {
+            '√'..='∜' => {
                 let mut deg = match c {
                     '∛' => vec![text('3')],
                     '∜' => vec![text('4')],
@@ -391,10 +422,12 @@ impl P {
     fn word(&mut self, stops: &[char]) -> Arg {
         let start = self.i;
         let mut end = start;
-        while self.c.get(end).is_some_and(|c| c.is_ascii_alphabetic()) {
+        // Look no further than the longest name (and one past it, to see the run is longer): a
+        // scan to the end of every run made a long run of letters quadratic (CWE-407).
+        while end - start <= MAX_NAME && self.c.get(end).is_some_and(char::is_ascii_alphabetic) {
             end += 1;
         }
-        let word: String = self.c.get(start..end).unwrap_or(&[]).iter().collect();
+        let word: String = if end - start > MAX_NAME { String::new() } else { self.c.get(start..end).unwrap_or(&[]).iter().collect() };
         if !FUNCTION_NAMES.contains(&word.as_str()) {
             self.i = start + 1;
             return vec![text(self.c.get(start).copied().unwrap_or(' '))];
@@ -537,31 +570,39 @@ impl P {
                 }
                 out.pop()
             };
+            if !(matches!(c, '^' | '_') || matches!(c, '┬' | '┴') && self.no_limits == 0 || is_combining(c)) {
+                break;
+            }
+            // The base is already deep: the operator is text (see `too_deep`).
+            let deep = if whole { any_too_deep(out) } else { out.last().is_some_and(too_deep) };
+            self.i += 1;
+            if deep {
+                let s = if matches!(c, '^' | '_' | '┬' | '┴') { self.script_operand(stops) } else { Vec::new() };
+                out.push(text(c));
+                out.extend(s);
+                continue;
+            }
             match c {
                 '^' | '_' => {
-                    self.i += 1;
                     let s = self.script_operand(stops);
                     let b = base(out);
                     out.push(attach_script(b, c == '^', s));
                 }
-                '┬' | '┴' if self.no_limits == 0 => {
-                    self.i += 1;
+                '┬' | '┴' => {
                     let lim = self.script_operand(stops);
                     let b = base(out);
                     out.push(MNode::Lim { upper: c == '┴', e: b.map(|n| vec![n]).unwrap_or_default(), lim });
                 }
-                c if is_combining(c) => {
-                    self.i += 1;
+                _ => {
                     let b = base(out);
                     out.push(MNode::Acc { chr: c, e: b.map(|n| strip_parens(vec![n])).unwrap_or_default() });
                 }
-                _ => break,
             }
         }
     }
 
-    /// A script or limit: a parenthesised group, a structure, a number, a signed operand or one
-    /// character.
+    /// A script or limit: a parenthesised group, a structure, a number, a signed operand, a run of
+    /// letters (and digits) or one other character.
     fn script_operand(&mut self, stops: &[char]) -> Arg {
         if self.tired() {
             return self.rest();
@@ -585,7 +626,7 @@ impl P {
             Some(c) if is_prefix(c) || closer(c).is_some() => self.atom(stops),
             Some(c) if c.is_ascii_digit() => {
                 let start = self.i;
-                while self.peek().is_some_and(|k| k.is_ascii_digit() || k == '.') {
+                while self.peek().is_some_and(|k| k.is_alphanumeric() || k == '.') {
                     self.i += 1;
                 }
                 let t: String = self.c.get(start..self.i).unwrap_or(&[]).iter().collect();
@@ -597,10 +638,16 @@ impl P {
                 v.extend(self.script_operand(stops));
                 v
             }
-            Some(c) if c.is_ascii_alphabetic() => {
-                // A function name as a script (`e^sin x` is rare): one letter.
-                self.i += 1;
-                vec![text(c)]
+            Some(c) if c.is_alphabetic() => {
+                // Word (#1609): the whole run of letters and digits up to a space or operator, so
+                // `V_dd` is V with a subscript `dd`, exactly like `V_(dd)`.
+                let start = self.i;
+                while self.peek().is_some_and(char::is_alphanumeric) {
+                    self.i += 1;
+                }
+                let t: String = self.c.get(start..self.i).unwrap_or(&[]).iter().collect();
+                // A known function name stays upright, as Word builds it.
+                vec![MNode::Run(if FUNCTION_NAMES.contains(&t.as_str()) { MRun::plain(t) } else { MRun::new(t) })]
             }
             Some(c) if !stops.contains(&c) && c != ' ' && !is_closer(c) => {
                 self.i += 1;

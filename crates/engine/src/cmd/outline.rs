@@ -3,7 +3,7 @@
 //! Line Only, Show Text Formatting. What's collapsed and shown is view state ([`OutlineState`]),
 //! never saved in the document; level changes and moves are ordinary undoable edits.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::hash::{Hash, Hasher};
 
 use serde::{Deserialize, Serialize};
@@ -46,14 +46,21 @@ fn in_outline(s: &Session) -> Option<&'static str> {
     (s.view.mode != ViewMode::Outline).then_some("only in Outline view")
 }
 
+/// Runs another command as part of this one: it adds no undo checkpoint of its own, so one
+/// outline command is one undo step.
+fn run_joined(s: &mut Session, id: &str) -> CmdResult {
+    s.join_next_undo();
+    s.run(id, &json!({}))
+}
+
 const LEVEL: &str = r#"{"level": 1-9 | "body"}"#;
 const BLOCK: &str = r#"{"block"?: body paragraph index (default: the selection)}"#;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("outline.promoteToHeading1", "Promote to Heading 1", "Outlining › Outline Tools", |s, _| set_levels(s, Some(1))),
-        CommandSpec::new("outline.promote", "Promote", "Outlining › Outline Tools", |s, _| s.run("para.promote", &json!({}))),
-        CommandSpec::new("outline.demote", "Demote", "Outlining › Outline Tools", |s, _| s.run("para.demote", &json!({}))),
+        CommandSpec::new("outline.promote", "Promote", "Outlining › Outline Tools", |s, _| run_joined(s, "para.promote")),
+        CommandSpec::new("outline.demote", "Demote", "Outlining › Outline Tools", |s, _| run_joined(s, "para.demote")),
         CommandSpec::new("outline.demoteToBody", "Demote to Body Text", "Outlining › Outline Tools", |s, _| set_levels(s, None)),
         CommandSpec::new("outline.level", "Outline Level", "Outlining › Outline Tools", |s, v| {
             let level = match v.get("level") {
@@ -67,8 +74,8 @@ pub fn specs() -> Vec<CommandSpec> {
             set_levels(s, level)
         })
         .params(LEVEL),
-        CommandSpec::new("outline.moveUp", "Move Up", "Outlining › Outline Tools", |s, _| s.run("para.moveUp", &json!({}))),
-        CommandSpec::new("outline.moveDown", "Move Down", "Outlining › Outline Tools", |s, _| s.run("para.moveDown", &json!({}))),
+        CommandSpec::new("outline.moveUp", "Move Up", "Outlining › Outline Tools", |s, _| run_joined(s, "para.moveUp")),
+        CommandSpec::new("outline.moveDown", "Move Down", "Outlining › Outline Tools", |s, _| run_joined(s, "para.moveDown")),
         CommandSpec::new("outline.expand", "Expand", "Outlining › Outline Tools", |s, v| expand(s, v, false))
             .key("Alt+Shift+=")
             .params(BLOCK)
@@ -150,6 +157,7 @@ pub fn specs() -> Vec<CommandSpec> {
             s.view.outline.first_line_only = p::bool(v, "value").unwrap_or(!s.view.outline.first_line_only);
             Ok(json!({"value": s.view.outline.first_line_only}))
         })
+        .key(super::non_mac("Alt+Shift+L"))
         .params(r#"{"value"?: bool}"#)
         .when(in_outline)
         .pure(),
@@ -452,31 +460,59 @@ pub(crate) fn move_shown(s: &mut Session, up: bool) -> Option<CmdResult> {
     Some(sel_result(s))
 }
 
+/// Keeps collapsed headings collapsed after an edit: each one moves to the nearest heading with the
+/// same text that is still free.
+fn remap_collapsed_headings(s: &mut Session) {
+    let hashes: Vec<Option<u64>> = (0..s.doc.body.len()).map(|i| text_hash(&s.doc, i)).collect();
+    let levels = ol::levels(&s.doc);
+    // The headings not yet taken, by text hash.
+    let mut by_hash: HashMap<u64, BTreeSet<usize>> = HashMap::new();
+    for (j, h) in hashes.iter().enumerate() {
+        if let Some(h) = h
+            && levels.get(j).is_some_and(|l| *l < BODY)
+        {
+            by_hash.entry(*h).or_default().insert(j);
+        }
+    }
+    let mut used = BTreeSet::new();
+    let mut out = Vec::new();
+    for (i, h) in std::mem::take(&mut s.view.outline.collapsed) {
+        let free = |j: usize, used: &BTreeSet<usize>| levels.get(j).is_some_and(|l| *l < BODY) && !used.contains(&j);
+        let same = |j: usize| hashes.get(j).copied().flatten() == Some(h);
+        let found = if free(i, &used) && same(i) {
+            Some(i)
+        } else {
+            // The nearest free heading with the same text (the earlier one on a tie).
+            let nearest = by_hash.get(&h).and_then(|set| {
+                let below = set.range(..=i).next_back().copied();
+                let above = set.range(i..).next().copied();
+                match (below, above) {
+                    (Some(b), Some(a)) => Some(if a.abs_diff(i) < b.abs_diff(i) { a } else { b }),
+                    (b, a) => b.or(a),
+                }
+            });
+            nearest.or_else(|| free(i, &used).then_some(i))
+        };
+        if let Some(j) = found {
+            used.insert(j);
+            if let Some(set) = hashes.get(j).copied().flatten().and_then(|hj| by_hash.get_mut(&hj)) {
+                set.remove(&j);
+            }
+            out.push((j, hashes.get(j).copied().flatten().unwrap_or(h)));
+        }
+    }
+    out.sort_unstable();
+    s.view.outline.collapsed = out;
+}
+
 /// After every command: collapsed headings are found again where edits moved them (by their
 /// text; one whose text changed in place stays collapsed), and in Outline view a caret the
 /// outline doesn't show (in collapsed text, or past a body paragraph's first line) moves on to
 /// the nearest place it does, in the direction it was going.
-pub(crate) fn after_command(s: &mut Session, before: &Selection) {
-    if !s.view.outline.collapsed.is_empty() {
-        let hashes: Vec<Option<u64>> = (0..s.doc.body.len()).map(|i| text_hash(&s.doc, i)).collect();
-        let levels = ol::levels(&s.doc);
-        let mut used = BTreeSet::new();
-        let mut out = Vec::new();
-        for (i, h) in std::mem::take(&mut s.view.outline.collapsed) {
-            let free = |j: usize, used: &BTreeSet<usize>| levels.get(j).is_some_and(|l| *l < BODY) && !used.contains(&j);
-            let same = |j: usize| hashes.get(j).copied().flatten() == Some(h);
-            let found = if free(i, &used) && same(i) {
-                Some(i)
-            } else {
-                (0..levels.len()).filter(|j| free(*j, &used) && same(*j)).min_by_key(|j| j.abs_diff(i)).or_else(|| free(i, &used).then_some(i))
-            };
-            if let Some(j) = found {
-                used.insert(j);
-                out.push((j, hashes.get(j).copied().flatten().unwrap_or(h)));
-            }
-        }
-        out.sort_unstable();
-        s.view.outline.collapsed = out;
+/// `changed` says whether the document changed (its revision moved); if not, nothing moved.
+pub(crate) fn after_command(s: &mut Session, before: &Selection, changed: bool) {
+    if changed && !s.view.outline.collapsed.is_empty() {
+        remap_collapsed_headings(s);
     }
     if s.view.mode != ViewMode::Outline || !s.sel.is_collapsed() || s.sel.focus.story != StoryRef::Body {
         return;

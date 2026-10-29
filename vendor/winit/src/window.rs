@@ -1300,6 +1300,56 @@ impl Window {
         self.window.maybe_queue_on_main(move |w| w.set_ime_purpose(purpose))
     }
 
+    /// Discards the IME composition in progress and resets the input method's state for the
+    /// text, as when the text cursor moves to another field or the user clicks elsewhere in the
+    /// text.
+    ///
+    /// The in-progress composition is cancelled where the platform allows it, and the window
+    /// receives an empty [`Ime::Preedit`] if one was visible. Text the input method has already
+    /// committed is not discarded: a [`Ime::Commit`] winit accepted before the reset is still
+    /// delivered, before the reset's preedit clear. To keep the composed text, insert the last
+    /// preedit text before calling this. Has no effect while IME is not allowed.
+    ///
+    /// ## Platform-specific
+    ///
+    /// - **X11:** Resets the window's input context (`XmbResetIC`).
+    /// - **Wayland:** Disables and re-enables text input, then restores the purpose and cursor
+    ///   area. Records for the disabled generation are rejected, so the old composition is
+    ///   cancelled. An input method configured to commit when its text input is deactivated may
+    ///   send a commit, but winit only accepts it when the compositor assigns that `done` to the
+    ///   re-enabled generation; some compositors assign it to the disabled serial, where it is
+    ///   discarded. That commit is therefore not guaranteed.
+    /// - **Windows:** Cancels the composition string (`ImmNotifyIME` with `CPS_CANCEL`).
+    /// - **macOS:** Discards the marked text (`NSTextInputContext discardMarkedText`).
+    /// - **iOS / Android / Web / Orbital:** Unsupported.
+    ///
+    /// [`Ime::Preedit`]: crate::event::Ime::Preedit
+    /// [`Ime::Commit`]: crate::event::Ime::Commit
+    #[inline]
+    pub fn reset_ime(&self) {
+        let _span = tracing::debug_span!("winit::Window::reset_ime").entered();
+        self.window.maybe_queue_on_main(|w| w.reset_ime())
+    }
+
+    /// Resets composition like [`Self::reset_ime`] and queues an ordered completion fence.
+    ///
+    /// A supported, allowed context that resets successfully receives
+    /// [`ImeResetCompleted`](crate::event::WindowEvent::ImeResetCompleted) with this
+    /// `request_id`, including when no preedit is visible. Already accepted input precedes the
+    /// fence; input admitted after cancellation follows it. The identifier is opaque to winit:
+    /// callers must distinguish outstanding requests and check the event's window as well.
+    ///
+    /// This acknowledges the local cancellation boundary, not a compositor response. It does
+    /// not retract text already committed by the input method. Unsupported platforms, an IME
+    /// that is not allowed, and native reset failures do not produce a successful completion.
+    /// Queued completion can be discarded if its window/context is invalidated before delivery.
+    /// See [`Self::reset_ime`] for platform cancellation behavior and limitations.
+    #[inline]
+    pub fn reset_ime_with_request(&self, request_id: u64) {
+        let _span = tracing::debug_span!("winit::Window::reset_ime_with_request").entered();
+        self.window.maybe_queue_on_main(move |w| w.reset_ime_with_request(request_id))
+    }
+
     /// Brings the window to the front and sets input focus. Has no effect if the window is
     /// already in focus, minimized, or not visible.
     ///

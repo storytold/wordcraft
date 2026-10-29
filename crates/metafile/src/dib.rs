@@ -11,11 +11,10 @@ const ROP_SRCAND: u32 = 0x0088_00C6;
 const ROP_SRCPAINT: u32 = 0x00EE_0086;
 const ROP_SRCINVERT: u32 = 0x0066_0046;
 
-/// A decoded picture. `bottom_up` records the DIB's native row order, which source rectangles use.
+/// A decoded picture, rows top-down.
 pub(crate) struct Rgba {
     pub w: usize,
     pub h: usize,
-    pub bottom_up: bool,
     pub px: Vec<u8>,
 }
 
@@ -83,10 +82,13 @@ pub(crate) fn info_len(dib: Bytes) -> Option<usize> {
     h.pal_off.checked_add(h.pal_n.checked_mul(4)?)
 }
 
-/// Decodes a DIB given as its info part (header plus masks and palette) and its pixel bits. The
+/// Decodes the part of a DIB that the source rectangle `src` = `[x, y, w, h]` selects and returns it
+/// (top-down) with the part of the destination `dst` that it fills; see [`clip_rect`] for the
+/// coordinates. `info` is the info part (header plus masks and palette) and `bits` the pixel bits. The
 /// 32-bit alpha byte is kept only when `keep_alpha` is set (per-pixel alpha blends); otherwise pixels
-/// are opaque.
-pub(crate) fn decode(info: Bytes, bits: Bytes, keep_alpha: bool) -> Option<Rgba> {
+/// are opaque. Only the clipped rows and columns are decoded, so the work and the memory follow the
+/// crop, not the whole bitmap; the whole bitmap is still validated (size cap, palette, bits length).
+pub(crate) fn decode_clip(info: Bytes, bits: Bytes, keep_alpha: bool, src: [i64; 4], dst: [f64; 4]) -> Option<(Rgba, [f64; 4])> {
     let hd = Header::read(info)?;
     let pixels = hd.w.checked_mul(hd.h)?;
     if pixels == 0 || pixels > MAX_PIXELS {
@@ -95,20 +97,28 @@ pub(crate) fn decode(info: Bytes, bits: Bytes, keep_alpha: bool) -> Option<Rgba>
     let stride = hd.w.checked_mul(hd.bpp)?.checked_add(31)? / 32 * 4;
     let data = bits.slice(0, stride.checked_mul(hd.h)?)?;
     let pal = info.slice(hd.pal_off, hd.pal_n * 4)?;
-    let mut px = vec![0u8; pixels * 4];
-    for y in 0..hd.h {
+    let (clip, out) = clip_rect(hd.w, hd.h, !hd.top_down, src, dst)?;
+    let (ow, oh) = (clip.x1 - clip.x0, clip.r1 - clip.r0);
+    let mut px = vec![0u8; ow.checked_mul(oh)?.checked_mul(4)?];
+    for (y, line) in (clip.r0..clip.r1).zip(px.chunks_exact_mut(ow * 4)) {
         let src_row = if hd.top_down { y } else { hd.h - 1 - y };
         let row = src_row * stride;
-        for x in 0..hd.w {
-            let p = pixel(data, row, x, &hd, pal, keep_alpha)?;
-            let o = (y * hd.w + x) * 4;
-            px.get_mut(o..o + 4)?.copy_from_slice(&p);
+        for (x, dst_px) in (clip.x0..clip.x1).zip(line.as_chunks_mut::<4>().0) {
+            *dst_px = pixel(data, row, x, &hd, pal, keep_alpha)?;
         }
     }
-    Some(Rgba { w: hd.w, h: hd.h, bottom_up: !hd.top_down, px })
+    Some((Rgba { w: ow, h: oh, px }, out))
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Pixels decoded on this thread, so the tests can check that the work follows the crop.
+    static DECODED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 fn pixel(data: &[u8], row: usize, x: usize, hd: &Header, pal: &[u8], keep_alpha: bool) -> Option<[u8; 4]> {
+    #[cfg(test)]
+    DECODED.with(|d| d.set(d.get() + 1));
     let [m_r, m_g, m_b] = hd.masks;
     let [r, g, b] = match hd.bpp {
         1 => {
@@ -155,16 +165,25 @@ fn field(v: u32, mask: u32) -> u8 {
     ((val * 255 + max / 2) / max) as u8
 }
 
-/// Clips a source rectangle `src` = `[x, y, w, h]` to the bitmap and returns the cropped pixels (top-down)
+/// The columns `x0..x1` and top-down rows `r0..r1` of a bitmap that a clipped source rectangle covers.
+struct Clip {
+    x0: usize,
+    x1: usize,
+    r0: usize,
+    r1: usize,
+}
+
+/// Clips a source rectangle `src` = `[x, y, w, h]` to a `w` x `h` bitmap and returns the covered pixels
 /// with the part of the destination `dst` that they fill. `src` is in DIB pixel coordinates (`y` counted
 /// from the DIB's origin, so bottom-up images count from the bottom); a non-positive source size means the
 /// whole bitmap. Clipping shrinks the destination by the same ratio and shifts it by the clipped-off part,
 /// so the rest of the image keeps its place. A negative destination extent is kept (the caller mirrors).
-pub(crate) fn clip_blit(img: &Rgba, src: [i64; 4], dst: [f64; 4]) -> Option<(Rgba, [f64; 4])> {
-    let (iw, ih) = (img.w as i64, img.h as i64);
+/// `None` when nothing of the bitmap is covered.
+fn clip_rect(w: usize, h: usize, bottom_up: bool, src: [i64; 4], dst: [f64; 4]) -> Option<(Clip, [f64; 4])> {
+    let (iw, ih) = (w as i64, h as i64);
     let [sx, sy, sw, sh] = if src[2] > 0 && src[3] > 0 { src } else { [0, 0, iw, ih] };
     // The request's top row in top-down order.
-    let top = if img.bottom_up { ih.saturating_sub(sy).saturating_sub(sh) } else { sy };
+    let top = if bottom_up { ih.saturating_sub(sy).saturating_sub(sh) } else { sy };
     let (x0, x1) = (sx.max(0), sx.saturating_add(sw).min(iw));
     let (r0, r1) = (top.max(0), top.saturating_add(sh).min(ih));
     if x1 <= x0 || r1 <= r0 {
@@ -172,14 +191,7 @@ pub(crate) fn clip_blit(img: &Rgba, src: [i64; 4], dst: [f64; 4]) -> Option<(Rgb
     }
     let (kx, ky) = (dst[2] / sw as f64, dst[3] / sh as f64);
     let out = [dst[0] + (x0 - sx) as f64 * kx, dst[1] + (r0 - top) as f64 * ky, (x1 - x0) as f64 * kx, (r1 - r0) as f64 * ky];
-    let (x0, x1, r0, r1) = (x0 as usize, x1 as usize, r0 as usize, r1 as usize);
-    let (ow, oh) = (x1 - x0, r1 - r0);
-    let mut px = Vec::with_capacity(ow * oh * 4);
-    for row in r0..r1 {
-        let s = (row * img.w + x0) * 4;
-        px.extend_from_slice(img.px.get(s..s + ow * 4)?);
-    }
-    Some((Rgba { w: ow, h: oh, bottom_up: false, px }, out))
+    Some((Clip { x0: x0 as usize, x1: x1 as usize, r0: r0 as usize, r1: r1 as usize }, out))
 }
 
 /// Applies a blend to decoded pixels before they are drawn. The picture has no destination pixels, so
@@ -255,5 +267,138 @@ fn swap_rows(px: &mut [u8], a: usize, b: usize, len: usize) {
     let Some((head, tail)) = px.split_at_mut_checked(b) else { return };
     if let (Some(top), Some(bottom)) = (head.get_mut(a..a.saturating_add(len)), tail.get_mut(..len)) {
         top.swap_with_slice(bottom);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The pipeline before `decode_clip`: decode the whole bitmap, then copy the clipped part out.
+    fn decode_whole(info: Bytes, bits: Bytes, keep_alpha: bool) -> Option<Rgba> {
+        let hd = Header::read(info)?;
+        let pixels = hd.w.checked_mul(hd.h)?;
+        if pixels == 0 || pixels > MAX_PIXELS {
+            return None;
+        }
+        let stride = hd.w.checked_mul(hd.bpp)?.checked_add(31)? / 32 * 4;
+        let data = bits.slice(0, stride.checked_mul(hd.h)?)?;
+        let pal = info.slice(hd.pal_off, hd.pal_n * 4)?;
+        let mut px = vec![0u8; pixels * 4];
+        for y in 0..hd.h {
+            let src_row = if hd.top_down { y } else { hd.h - 1 - y };
+            let row = src_row * stride;
+            for x in 0..hd.w {
+                let p = pixel(data, row, x, &hd, pal, keep_alpha)?;
+                let o = (y * hd.w + x) * 4;
+                px.get_mut(o..o + 4)?.copy_from_slice(&p);
+            }
+        }
+        Some(Rgba { w: hd.w, h: hd.h, px })
+    }
+
+    fn clip_blit_whole(img: &Rgba, bottom_up: bool, src: [i64; 4], dst: [f64; 4]) -> Option<(Rgba, [f64; 4])> {
+        let (iw, ih) = (img.w as i64, img.h as i64);
+        let [sx, sy, sw, sh] = if src[2] > 0 && src[3] > 0 { src } else { [0, 0, iw, ih] };
+        let top = if bottom_up { ih.saturating_sub(sy).saturating_sub(sh) } else { sy };
+        let (x0, x1) = (sx.max(0), sx.saturating_add(sw).min(iw));
+        let (r0, r1) = (top.max(0), top.saturating_add(sh).min(ih));
+        if x1 <= x0 || r1 <= r0 {
+            return None;
+        }
+        let (kx, ky) = (dst[2] / sw as f64, dst[3] / sh as f64);
+        let out = [dst[0] + (x0 - sx) as f64 * kx, dst[1] + (r0 - top) as f64 * ky, (x1 - x0) as f64 * kx, (r1 - r0) as f64 * ky];
+        let (x0, x1, r0, r1) = (x0 as usize, x1 as usize, r0 as usize, r1 as usize);
+        let (ow, oh) = (x1 - x0, r1 - r0);
+        let mut px = Vec::with_capacity(ow * oh * 4);
+        for row in r0..r1 {
+            let s = (row * img.w + x0) * 4;
+            px.extend_from_slice(img.px.get(s..s + ow * 4)?);
+        }
+        Some((Rgba { w: ow, h: oh, px }, out))
+    }
+
+    /// A BITMAPINFOHEADER DIB with a palette for indexed depths; returns (info, bits).
+    fn make_dib(w: usize, h: i32, bpp: usize, seed: &mut u64) -> (Vec<u8>, Vec<u8>) {
+        let mut rnd = || {
+            *seed ^= *seed << 13;
+            *seed ^= *seed >> 7;
+            *seed ^= *seed << 17;
+            *seed
+        };
+        let mut info = Vec::new();
+        info.extend(40u32.to_le_bytes());
+        info.extend((w as i32).to_le_bytes());
+        info.extend(h.to_le_bytes());
+        info.extend(1u16.to_le_bytes());
+        info.extend((bpp as u16).to_le_bytes());
+        info.extend([0u8; 24]);
+        if bpp <= 8 {
+            for _ in 0..(1usize << bpp) * 4 {
+                info.push(rnd() as u8);
+            }
+        }
+        let stride = (w * bpp).div_ceil(32) * 4;
+        let bits = (0..stride * h.unsigned_abs() as usize).map(|_| rnd() as u8).collect();
+        (info, bits)
+    }
+
+    #[test]
+    fn decode_clip_matches_decode_then_clip_blit() {
+        let mut seed = 0x2545_F491_4F6C_DD1Du64;
+        let mut cases = 0;
+        for bpp in [1, 4, 8, 16, 24, 32] {
+            for h in [5, -5, 1, -1] {
+                let w = 7;
+                let (info, bits) = make_dib(w, h, bpp, &mut seed);
+                for keep_alpha in [false, true] {
+                    // Source x/y from outside the bitmap on both sides; sizes include zero and negative.
+                    for sx in [-9, -2, 0, 3, 6, 8, 20] {
+                        for sy in [-9, -2, 0, 2, 4, 5, 20] {
+                            for (sw, sh) in [(0, 0), (-3, 4), (4, -2), (1, 1), (3, 2), (7, 5), (30, 30), (2, 9)] {
+                                let src = [sx, sy, sw, sh];
+                                let dst = [10.0, 20.0, 70.0, 50.0];
+                                let old = decode_whole(Bytes(&info), Bytes(&bits), keep_alpha).and_then(|img| clip_blit_whole(&img, h > 0, src, dst));
+                                let new = decode_clip(Bytes(&info), Bytes(&bits), keep_alpha, src, dst);
+                                match (old, new) {
+                                    (None, None) => {}
+                                    (Some((a, ad)), Some((b, bd))) => {
+                                        assert_eq!((a.w, a.h, &a.px), (b.w, b.h, &b.px), "{bpp} bpp h={h} {src:?}");
+                                        assert_eq!(ad.map(f64::to_bits), bd.map(f64::to_bits), "{bpp} bpp h={h} {src:?}");
+                                    }
+                                    _ => panic!("old and new disagree on None: {bpp} bpp h={h} {src:?}"),
+                                }
+                                cases += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(cases > 10_000);
+    }
+
+    #[test]
+    fn decode_clip_rejects_what_decode_rejected() {
+        let mut seed = 7;
+        let (info, bits) = make_dib(7, 5, 24, &mut seed);
+        let short = &bits[..bits.len() - 1];
+        // A short bits buffer fails the whole image even when the crop lies in the rows that exist.
+        assert!(decode_clip(Bytes(&info), Bytes(short), false, [0, 0, 1, 1], [0.0, 0.0, 1.0, 1.0]).is_none());
+        assert!(decode_whole(Bytes(&info), Bytes(short), false).is_none());
+    }
+
+    #[test]
+    fn decode_clip_decodes_only_the_cropped_pixels() {
+        let mut seed = 99;
+        let (info, bits) = make_dib(400, -300, 24, &mut seed);
+        DECODED.with(|d| d.set(0));
+        let (img, _) = decode_clip(Bytes(&info), Bytes(&bits), false, [10, 20, 8, 4], [0.0, 0.0, 8.0, 4.0]).unwrap();
+        assert_eq!((img.w, img.h), (8, 4));
+        assert_eq!(DECODED.with(|d| d.get()), 8 * 4);
+        // The whole-bitmap path decodes all 400 x 300.
+        DECODED.with(|d| d.set(0));
+        decode_whole(Bytes(&info), Bytes(&bits), false).unwrap();
+        assert_eq!(DECODED.with(|d| d.get()), 400 * 300);
     }
 }

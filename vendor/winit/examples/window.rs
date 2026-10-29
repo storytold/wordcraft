@@ -476,7 +476,8 @@ impl ApplicationHandler<UserEvent> for Application {
             | WindowEvent::HoveredFile(_)
             | WindowEvent::Destroyed
             | WindowEvent::Touch(_)
-            | WindowEvent::Moved(_) => (),
+            | WindowEvent::Moved(_)
+            | WindowEvent::ImeResetCompleted { .. } => (),
         }
     }
 

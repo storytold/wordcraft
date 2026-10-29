@@ -3,6 +3,7 @@
 use std::cell::Cell;
 use std::ffi::c_void;
 use std::mem::{self, MaybeUninit};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::{io, panic, ptr};
@@ -34,14 +35,14 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, EnableMenuItem, FlashWindowEx, GetClientRect, GetCursorPos,
     GetForegroundWindow, GetSystemMenu, GetSystemMetrics, GetWindowPlacement, GetWindowTextLengthW,
     GetWindowTextW, IsWindowVisible, LoadCursorW, PeekMessageW, PostMessageW, RegisterClassExW,
-    SetCursor, SetCursorPos, SetForegroundWindow, SetMenuDefaultItem, SetWindowDisplayAffinity,
-    SetWindowPlacement, SetWindowPos, SetWindowTextW, TrackPopupMenu, CS_HREDRAW, CS_VREDRAW,
-    CW_USEDEFAULT, FLASHWINFO, FLASHW_ALL, FLASHW_STOP, FLASHW_TIMERNOFG, FLASHW_TRAY,
-    GWLP_HINSTANCE, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTLEFT, HTRIGHT, HTTOP,
-    HTTOPLEFT, HTTOPRIGHT, MENU_ITEM_STATE, MFS_DISABLED, MFS_ENABLED, MF_BYCOMMAND, NID_READY,
-    PM_NOREMOVE, SC_CLOSE, SC_MAXIMIZE, SC_MINIMIZE, SC_MOVE, SC_RESTORE, SC_SIZE, SM_DIGITIZER,
-    SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, TPM_LEFTALIGN, TPM_RETURNCMD,
-    WDA_EXCLUDEFROMCAPTURE, WDA_NONE, WM_NCLBUTTONDOWN, WM_SYSCOMMAND, WNDCLASSEXW,
+    SendMessageW, SetCursor, SetCursorPos, SetForegroundWindow, SetMenuDefaultItem,
+    SetWindowDisplayAffinity, SetWindowPlacement, SetWindowPos, SetWindowTextW, TrackPopupMenu,
+    CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, FLASHWINFO, FLASHW_ALL, FLASHW_STOP, FLASHW_TIMERNOFG,
+    FLASHW_TRAY, GWLP_HINSTANCE, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTLEFT, HTRIGHT,
+    HTTOP, HTTOPLEFT, HTTOPRIGHT, MENU_ITEM_STATE, MFS_DISABLED, MFS_ENABLED, MF_BYCOMMAND,
+    NID_READY, PM_NOREMOVE, SC_CLOSE, SC_MAXIMIZE, SC_MINIMIZE, SC_MOVE, SC_RESTORE, SC_SIZE,
+    SM_DIGITIZER, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, TPM_LEFTALIGN,
+    TPM_RETURNCMD, WDA_EXCLUDEFROMCAPTURE, WDA_NONE, WM_NCLBUTTONDOWN, WM_SYSCOMMAND, WNDCLASSEXW,
 };
 
 use tracing::warn;
@@ -59,9 +60,13 @@ use crate::platform_impl::platform::dpi::{
     dpi_to_scale_factor, enable_non_client_dpi_scaling, hwnd_dpi,
 };
 use crate::platform_impl::platform::drop_handler::FileDropHandler;
-use crate::platform_impl::platform::event_loop::{self, ActiveEventLoop, DESTROY_MSG_ID};
+use crate::platform_impl::platform::event_loop::{
+    self, encode_ime_reset_request, ActiveEventLoop, DESTROY_MSG_ID, RESET_IME_MSG_ID,
+    RESET_IME_WITH_REQUEST_MSG_ID,
+};
 use crate::platform_impl::platform::icon::{self, IconType, WinCursor};
 use crate::platform_impl::platform::ime::ImeContext;
+use crate::platform_impl::platform::ime_caret::CaretArea;
 use crate::platform_impl::platform::keyboard::KeyEventBuilder;
 use crate::platform_impl::platform::monitor::{self, MonitorHandle};
 use crate::platform_impl::platform::window_state::{
@@ -80,6 +85,7 @@ pub(crate) struct Window {
 
     /// The current window state.
     window_state: Arc<Mutex<WindowState>>,
+    ime_reset_alive: Arc<AtomicBool>,
 
     // The events loop proxy.
     thread_executor: event_loop::EventLoopThreadExecutor,
@@ -913,8 +919,15 @@ impl Window {
         let window = self.window;
         let state = self.window_state.clone();
         self.thread_executor.execute_in_thread(move || unsafe {
-            let scale_factor = state.lock().unwrap().scale_factor;
+            let (scale_factor, caret) = {
+                let mut state = state.lock().unwrap();
+                let scale_factor = state.scale_factor;
+                let (x, y) = spot.to_physical::<i32>(scale_factor).into();
+                let (width, height) = size.to_physical::<i32>(scale_factor).into();
+                (scale_factor, state.system_caret.set_area(CaretArea::new(x, y, width, height)))
+            };
             ImeContext::current(window).set_ime_cursor_area(spot, size, scale_factor);
+            ImeContext::update_system_caret(window, caret);
         });
     }
 
@@ -923,13 +936,36 @@ impl Window {
         let window = self.window;
         let state = self.window_state.clone();
         self.thread_executor.execute_in_thread(move || unsafe {
-            state.lock().unwrap().ime_allowed = allowed;
+            let caret = {
+                let mut state = state.lock().unwrap();
+                state.ime_allowed = allowed;
+                state.system_caret.set_ime_allowed(allowed)
+            };
             ImeContext::set_ime_allowed(window, allowed);
+            ImeContext::update_system_caret(window, caret);
         })
     }
 
     #[inline]
     pub fn set_ime_purpose(&self, _purpose: ImePurpose) {}
+
+    #[inline]
+    pub fn reset_ime(&self) {
+        // Handled in the window procedure, which can send the cleared preedit.
+        let window = self.window;
+        self.thread_executor.execute_in_thread(move || unsafe {
+            SendMessageW(window, RESET_IME_MSG_ID.get(), 0, 0);
+        })
+    }
+
+    #[inline]
+    pub fn reset_ime_with_request(&self, request_id: u64) {
+        let window = self.window;
+        let (low, high) = encode_ime_reset_request(request_id);
+        self.thread_executor.execute_in_thread(move || unsafe {
+            SendMessageW(window, RESET_IME_WITH_REQUEST_MSG_ID.get(), low, high);
+        })
+    }
 
     #[inline]
     pub fn request_user_attention(&self, request_type: Option<UserAttentionType>) {
@@ -1107,6 +1143,8 @@ impl Window {
 impl Drop for Window {
     #[inline]
     fn drop(&mut self) {
+        // Drop may occur on a different thread before its posted destroy message is handled.
+        self.ime_reset_alive.store(false, Ordering::Release);
         unsafe {
             // The window must be destroyed from the same thread that created it, so we send a
             // custom message to be handled by our callback to do the actual work.
@@ -1160,7 +1198,12 @@ impl InitData<'_> {
 
         unsafe { ImeContext::set_ime_allowed(window, false) };
 
-        Window { window, window_state, thread_executor: self.event_loop.create_thread_executor() }
+        Window {
+            window,
+            window_state,
+            ime_reset_alive: Arc::new(AtomicBool::new(true)),
+            thread_executor: self.event_loop.create_thread_executor(),
+        }
     }
 
     unsafe fn create_window_data(&self, win: &Window) -> event_loop::WindowData {
@@ -1204,6 +1247,7 @@ impl InitData<'_> {
             _file_drop_handler: file_drop_handler,
             userdata_removed: Cell::new(false),
             recurse_depth: Cell::new(0),
+            ime_reset_alive: Arc::clone(&win.ime_reset_alive),
         }
     }
 

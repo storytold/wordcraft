@@ -205,11 +205,17 @@ pub(crate) struct PlatformSpecificEventLoopAttributes {
     pub(crate) activation_policy: Option<ActivationPolicy>,
     pub(crate) default_menu: bool,
     pub(crate) activate_ignoring_other_apps: bool,
+    pub(crate) close_requested_on_terminate: bool,
 }
 
 impl Default for PlatformSpecificEventLoopAttributes {
     fn default() -> Self {
-        Self { activation_policy: None, default_menu: true, activate_ignoring_other_apps: true }
+        Self {
+            activation_policy: None,
+            default_menu: true,
+            activate_ignoring_other_apps: true,
+            close_requested_on_terminate: false,
+        }
     }
 }
 
@@ -234,6 +240,7 @@ impl<T> EventLoop<T> {
             activation_policy,
             attributes.default_menu,
             attributes.activate_ignoring_other_apps,
+            attributes.close_requested_on_terminate,
         );
 
         autoreleasepool(|_| {

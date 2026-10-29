@@ -17,6 +17,13 @@
 # To remove your names, delete your entry (or set fields empty) in a PR. The next
 # contributors.py run, and the next build, drop them.
 
+[people.divyanshu2074]
+real_name = "Divyanshu Gupta"
+sync_github_name = true
+
+[people.lokinmodar]
+sync_github_name = true
+
 [people.echelon]
 real_name = "Brandon Thomas"
 display_name = "Brandon Thomas"
@@ -57,6 +64,8 @@ display_name = "Ufuk Efe"
 sync_github_name = true
 
 [people.GhostMitra]
+sync_github_name = true
+
 [people.DevCoderMax]
 real_name = "Gleyson do Nascimento Carvalho"
 display_name = "Gleyson Carvalho"
@@ -72,3 +81,103 @@ sync_github_name = false
 real_name = "Manuel Carmona"
 display_name = "manucarcor"
 [people.odedigo]
+
+[people.neupaneprashant]
+real_name = "Prashant Neupane"
+[people.cyril265]
+display_name = "cyril265"
+
+[people.webdevtodayjason]
+display_name = "Jason Brashear"
+sync_github_name = false
+
+[people.lupant]
+sync_github_name = true
+[people.Nael-Nathanael]
+[people.Losminek]
+[people.Nghiathan13]
+
+[people.leoncral]
+sync_github_name = true
+
+[people.ms-youssef]
+sync_github_name = true
+
+[people.finwarman]
+real_name = "Fin Warman"
+
+
+[people.albayazid]
+real_name = "Sazid Al Bayazid"
+
+[people.switch87]
+real_name = "Gert Pellin"
+display_name = "Gert Pellin"
+
+[people.tlomts-dev]
+display_name = "The Legend Of MTS Dev"
+
+[people.dotCooCoo]
+real_name = "Robert Lee"
+sync_github_name = true
+
+[people.rbr48]
+real_name = "M S Rana"
+display_name = "Izhaan Intellect"
+
+
+
+[people.holmbom]
+real_name = "Erik Holmbom"
+display_name = "Erik Holmbom"
+sync_github_name = false
+
+[people.andrejskvorc]
+real_name = "Andrej Škvorc"
+display_name = "Andrej Škvorc"
+sync_github_name = false
+
+[people.olekkut]
+real_name = "Aleksander Kutycki"
+display_name = "Aleksander Kutycki"
+sync_github_name = true
+
+[people.marcoarnulfo]
+real_name = "Marco Arnulfo"
+display_name = "Marco Arnulfo"
+sync_github_name = false
+
+[people.rem5411]
+real_name = "Vivien Janny"
+sync_github_name = true
+
+[people.C00kieMonsta]
+real_name = "Antoine Boxho"
+sync_github_name = true
+
+[people.matteo-andreuzza]
+sync_github_name = true
+
+[people.lucAmbr0]
+sync_github_name = true
+
+[people.maxm11]
+real_name = "Max Murphy"
+
+[people.SlavenDj]
+sync_github_name = true
+
+[people.asystemoffields]
+display_name = "asystemoffields"
+
+[people.dmim2502-commits]
+display_name = "Mulai"
+
+[people.Bortlesboat]
+real_name = "Andrew Barnes"
+
+[people.matstrange]
+sync_github_name = true
+
+[people.pakiat]
+display_name = "OtorO"

@@ -142,14 +142,14 @@ impl XConnection {
                 dpi_override
             },
             EnvVarDPI::NotSet => {
-                if let Some(dpi) = self.get_xft_dpi() {
-                    dpi / 96.
-                } else {
-                    calc_dpi_factor(
-                        (crtc.width.into(), crtc.height.into()),
-                        (output_info.mm_width as _, output_info.mm_height as _),
-                    )
-                }
+                let screen = self.default_root();
+                default_dpi_factor(
+                    self.get_xft_dpi(),
+                    (screen.width_in_pixels.into(), screen.height_in_pixels.into()),
+                    (screen.width_in_millimeters.into(), screen.height_in_millimeters.into()),
+                    (crtc.width.into(), crtc.height.into()),
+                    (output_info.mm_width as _, output_info.mm_height as _),
+                )
             },
         };
 
@@ -182,5 +182,76 @@ impl XConnection {
 
     pub fn get_crtc_mode(&self, crtc_id: randr::Crtc) -> Result<randr::Mode, X11Error> {
         Ok(self.xcb_connection().randr_get_crtc_info(crtc_id, x11rb::CURRENT_TIME)?.reply()?.mode)
+    }
+}
+
+// PdfCraft patch: without Xft DPI, use the X server's configured screen DPI before
+// the output's physical density. Xorg can deliberately run a dense panel at 96 DPI;
+// using its EDID dimensions instead makes only winit applications appear zoomed.
+// Keep configured HiDPI screens and the explicit `randr` override working.
+fn default_dpi_factor(
+    xft_dpi: Option<f64>,
+    screen_pixels: (u32, u32),
+    screen_mm: (u64, u64),
+    output_pixels: (u32, u32),
+    output_mm: (u64, u64),
+) -> f64 {
+    if let Some(dpi) = xft_dpi {
+        return dpi / 96.;
+    }
+    if screen_pixels.0 != 0 && screen_pixels.1 != 0 && screen_mm.0 != 0 && screen_mm.1 != 0 {
+        calc_dpi_factor(screen_pixels, screen_mm)
+    } else {
+        calc_dpi_factor(output_pixels, output_mm)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{calc_dpi_factor, default_dpi_factor};
+
+    const PIXELS: (u32, u32) = (1920, 1080);
+    const SCREEN_96: (u64, u64) = (508, 285);
+    const SCREEN_144: (u64, u64) = (339, 190);
+    const SCREEN_192: (u64, u64) = (254, 143);
+    const PANEL: (u64, u64) = (381, 214);
+
+    #[test]
+    fn server_dpi_wins_over_the_panels_physical_density() {
+        assert_eq!(default_dpi_factor(None, PIXELS, SCREEN_96, PIXELS, PANEL), 1.0);
+        assert_eq!(default_dpi_factor(None, PIXELS, SCREEN_144, PIXELS, PANEL), 1.5);
+        assert_eq!(default_dpi_factor(None, PIXELS, SCREEN_192, PIXELS, PANEL), 2.0);
+    }
+
+    #[test]
+    fn xft_dpi_still_has_priority() {
+        for dpi in [96.0, 120.0, 144.0, 192.0] {
+            assert_eq!(
+                default_dpi_factor(Some(dpi), PIXELS, SCREEN_192, PIXELS, PANEL),
+                dpi / 96.0,
+            );
+        }
+    }
+
+    #[test]
+    fn missing_screen_dimensions_keep_the_randr_fallback() {
+        let physical_scale = calc_dpi_factor(PIXELS, PANEL);
+        assert!(physical_scale > 1.0);
+        for screen_mm in [(0, 285), (508, 0), (0, 0)] {
+            assert_eq!(default_dpi_factor(None, PIXELS, screen_mm, PIXELS, PANEL), physical_scale);
+        }
+        for screen_pixels in [(0, 1080), (1920, 0), (0, 0)] {
+            assert_eq!(
+                default_dpi_factor(None, screen_pixels, SCREEN_96, PIXELS, PANEL),
+                physical_scale
+            );
+        }
+        assert_eq!(default_dpi_factor(None, PIXELS, (0, 0), PIXELS, (0, 0)), 1.0);
+    }
+
+    #[test]
+    fn explicit_randr_calculation_still_uses_output_dimensions() {
+        assert_eq!(calc_dpi_factor(PIXELS, PANEL), 4.0 / 3.0);
+        assert_eq!(calc_dpi_factor(PIXELS, SCREEN_192), 2.0);
     }
 }

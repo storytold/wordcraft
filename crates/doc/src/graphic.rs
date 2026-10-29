@@ -24,7 +24,7 @@ pub struct Graphic {
     pub h: f32,
     /// Where the graphic was read from, so saving writes the original drawing itself back (not
     /// only these items). `None` for graphics made some other way.
-    #[serde(skip)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<std::sync::Arc<Embedded>>,
     /// A SmartArt graphic WordCraft can edit (one it made, or one read back exactly as it wrote
     /// it): saving writes the diagram parts from it, and the items are drawn from it. See
@@ -41,18 +41,18 @@ pub struct Graphic {
 /// source format and the package parts that markup refers to. Never edited; WordCraft only moves
 /// and resizes the object around it. The parts themselves (bytes, content type and their own
 /// relationships) are kept in [`crate::Document::passthrough`] under their part names.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Embedded {
     /// The object's markup as a standalone XML element with its namespace declarations (DOCX:
     /// the `a:graphic` of a chart, SmartArt diagram or native ink, an ink `mc:AlternateContent`,
-    /// or the `w:object` of an OLE object).
+    /// the `w:object` of an OLE object, or the `w:pict` of a signature line).
     pub xml: String,
     /// The relationships it uses, by the ids in `xml` (or in its parts, for a SmartArt drawing).
     pub refs: Vec<EmbeddedRef>,
 }
 
 /// One relationship an [`Embedded`] object uses.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct EmbeddedRef {
     /// The relationship id the markup uses.
     pub id: String,

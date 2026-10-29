@@ -6,13 +6,15 @@ use std::time::Instant;
 use objc2::rc::Retained;
 use objc2::{declare_class, msg_send_id, mutability, ClassType, DeclaredClass};
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSRunningApplication,
+    NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate,
+    NSApplicationTerminateReply, NSRunningApplication,
 };
 use objc2_foundation::{MainThreadMarker, NSNotification, NSObject, NSObjectProtocol};
 
 use super::event_handler::EventHandler;
 use super::event_loop::{notify_windows_of_exit, stop_app_immediately, ActiveEventLoop, PanicInfo};
 use super::observer::{EventLoopWaker, RunLoop};
+use super::window::WinitWindow;
 use super::{menu, WindowId, DEVICE_ID};
 use crate::event::{DeviceEvent, Event, StartCause, WindowEvent};
 use crate::event_loop::{ActiveEventLoop as RootActiveEventLoop, ControlFlow};
@@ -23,8 +25,11 @@ pub(super) struct AppState {
     activation_policy: Option<NSApplicationActivationPolicy>,
     default_menu: bool,
     activate_ignoring_other_apps: bool,
+    close_requested_on_terminate: bool,
+    termination_queued: Cell<bool>,
     run_loop: RunLoop,
     event_handler: EventHandler,
+    pending_dispatch: Cell<usize>,
     stop_on_launch: Cell<bool>,
     stop_before_wait: Cell<bool>,
     stop_after_wait: Cell<bool>,
@@ -61,6 +66,11 @@ declare_class!(
     unsafe impl NSObjectProtocol for ApplicationDelegate {}
 
     unsafe impl NSApplicationDelegate for ApplicationDelegate {
+        #[method(applicationShouldTerminate:)]
+        fn app_should_terminate(&self, application: &NSApplication) -> NSApplicationTerminateReply {
+            self.should_terminate(application)
+        }
+
         #[method(applicationDidFinishLaunching:)]
         fn app_did_finish_launching(&self, notification: &NSNotification) {
             self.did_finish_launching(notification)
@@ -79,13 +89,17 @@ impl ApplicationDelegate {
         activation_policy: Option<NSApplicationActivationPolicy>,
         default_menu: bool,
         activate_ignoring_other_apps: bool,
+        close_requested_on_terminate: bool,
     ) -> Retained<Self> {
         let this = mtm.alloc().set_ivars(AppState {
             activation_policy,
             default_menu,
             activate_ignoring_other_apps,
+            close_requested_on_terminate,
+            termination_queued: Cell::new(false),
             run_loop: RunLoop::main(mtm),
             event_handler: EventHandler::new(),
+            pending_dispatch: Cell::new(0),
             stop_on_launch: Cell::new(false),
             stop_before_wait: Cell::new(false),
             stop_after_wait: Cell::new(false),
@@ -161,6 +175,49 @@ impl ApplicationDelegate {
             let app = NSApplication::sharedApplication(mtm);
             stop_app_immediately(&app);
         }
+    }
+
+    fn should_terminate(&self, application: &NSApplication) -> NSApplicationTerminateReply {
+        trace_scope!("applicationShouldTerminate:");
+        if !self.ivars().close_requested_on_terminate || !self.is_running() || self.exiting() {
+            return NSApplicationTerminateReply::NSTerminateNow;
+        }
+
+        // Native panels and other libraries' windows must not become Winit events.
+        // Snapshot IDs, not windows: a window closed before delivery must stay closed.
+        let windows: Vec<_> = application
+            .windows()
+            .iter()
+            .filter(|window| window.is_kind_of::<WinitWindow>())
+            .map(|window| WindowId(window as *const _ as usize))
+            .collect();
+        if windows.is_empty() {
+            return NSApplicationTerminateReply::NSTerminateNow;
+        }
+        if !self.ivars().termination_queued.replace(true) {
+            let this = self.retain();
+            self.ivars().run_loop.queue_closure(move || {
+                let app = NSApplication::sharedApplication(MainThreadMarker::from(&*this));
+                for id in windows {
+                    if !this.is_running() || this.exiting() {
+                        break;
+                    }
+                    let still_open = app.windows().iter().any(|window| {
+                        window.is_kind_of::<WinitWindow>()
+                            && WindowId(window as *const _ as usize) == id
+                    });
+                    if still_open {
+                        // Never re-enter a handler, including a native panel's nested loop.
+                        this.maybe_queue_window_event(id, WindowEvent::CloseRequested);
+                    }
+                }
+                this.ivars().termination_queued.set(false);
+            });
+            self.ivars().run_loop.wakeup();
+        }
+        // NSTerminateLater enters an AppKit modal loop and can prevent normal redraws.
+        // Cancel now, then let the application exit through its ordinary event loop.
+        NSApplicationTerminateReply::NSTerminateCancel
     }
 
     fn will_terminate(&self, _notification: &NSNotification) {
@@ -266,6 +323,22 @@ impl ApplicationDelegate {
         self.maybe_queue_event(Event::WindowEvent { window_id: RootWindowId(window_id), event });
     }
 
+    /// Run `handle` while no event is being handled: now, or after the current event, in order
+    /// with the events queued by `maybe_queue_window_event`.
+    pub fn maybe_queue_handler(&self, handle: impl FnOnce(&Self) + 'static) {
+        if !self.ivars().event_handler.in_use() && self.ivars().pending_dispatch.get() == 0 {
+            handle(self);
+        } else {
+            let pending = &self.ivars().pending_dispatch;
+            pending.set(pending.get().checked_add(1).expect("deferred dispatch count exhausted"));
+            let this = self.retain();
+            self.ivars().run_loop.queue_closure(move || {
+                let _pending = PendingDispatch(&this.ivars().pending_dispatch);
+                handle(&this);
+            });
+        }
+    }
+
     pub fn handle_window_event(&self, window_id: WindowId, event: WindowEvent) {
         self.handle_event(Event::WindowEvent { window_id: RootWindowId(window_id), event });
     }
@@ -310,13 +383,9 @@ impl ApplicationDelegate {
         // However, it is not documented which actions do this, and which ones are done immediately,
         // so to make sure that we don't encounter re-entrancy issues, we first check if we're
         // currently handling another event, and if we are, we queue the event instead.
-        if !self.ivars().event_handler.in_use() {
-            self.handle_event(event);
-        } else {
-            tracing::debug!(?event, "had to queue event since another is currently being handled");
-            let this = self.retain();
-            self.ivars().run_loop.queue_closure(move || this.handle_event(event));
-        }
+        // A native interpretKeyEvents call can resume after an app callback but before its
+        // deferred work runs. Both events and attached-delete handlers must join that FIFO.
+        self.maybe_queue_handler(move |this| this.handle_event(event));
     }
 
     #[track_caller]
@@ -443,4 +512,33 @@ fn window_activation_hack(app: &NSApplication) {
             tracing::trace!("Skipping activating invisible window");
         }
     })
+}
+
+/// Includes the currently running deferred handler so nested native callbacks stay behind it.
+struct PendingDispatch<'a>(&'a Cell<usize>);
+
+impl Drop for PendingDispatch<'_> {
+    fn drop(&mut self) {
+        // Cleanup must also run while a callback unwinds; never panic a second time here.
+        self.0.set(self.0.get().saturating_sub(1));
+    }
+}
+
+#[cfg(test)]
+mod deferred_dispatch_cleanup_tests {
+    use std::cell::Cell;
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+
+    use super::PendingDispatch;
+
+    #[test]
+    fn deferred_count_is_released_when_callback_panics() {
+        let pending = Cell::new(1);
+        assert!(catch_unwind(AssertUnwindSafe(|| {
+            let _guard = PendingDispatch(&pending);
+            panic!("callback failure");
+        }))
+        .is_err());
+        assert_eq!(pending.get(), 0);
+    }
 }

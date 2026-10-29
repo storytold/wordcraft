@@ -462,7 +462,6 @@ mod tests {
         assert!(run(json!({"rename": {"tab": "Writing", "to": "insert"}})).is_err());
         assert!(run(json!({"add": {"tab": "Writing", "group": "New Group", "command": "no.such"}})).is_err());
         assert!(run(json!({"move": {"tab": "Nope", "by": 1}})).is_err());
-        drop(run);
         assert!(s.ui_requests.is_empty(), "programmatic calls never open dialogs");
         s.run("tools.customizeRibbon", &json!({"reset": true})).unwrap();
         assert_eq!(s.ribbon, RibbonLayout::default());

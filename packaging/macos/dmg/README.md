@@ -2,8 +2,14 @@
 
 What Finder shows when the DMG opens: a 660 × 400 pt background with the app icon and the
 `Applications` link side by side. `package.sh` copies these files into the image; nothing here is
-generated at build time, so the DMG still builds with `hdiutil makehybrid` (no mounted device, no
-Finder scripting on CI, nothing extra installed in the signing job).
+generated at build time, so the DMG builds with a plain `hdiutil create -srcfolder` (no Finder
+scripting on CI, nothing extra installed in the signing job).
+
+Nothing in this step may touch `WordCraft.app`: `codesign --verify --deep --strict` rejects any
+`com.apple.FinderInfo` or resource fork on the bundle. `hdiutil makehybrid -hfs`, which built the
+image before, put a FinderInfo on every file in it, so the released app failed that check (#525).
+`package.sh` clears extended attributes before signing and, after building the DMG, mounts it
+read-only and checks the app inside it, and a `ditto` copy of it, with `--strict`.
 
 | File | What |
 |---|---|

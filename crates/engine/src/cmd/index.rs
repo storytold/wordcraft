@@ -66,7 +66,7 @@ fn mark_entry(s: &mut Session, v: &Value) -> CmdResult {
     }
     let instr = xe_instr(s, v, &main)?;
     let hidden = CharProps { hidden: Some(true), ..Default::default() };
-    let field = || InlineObject::Field { instr: instr.clone(), result: String::new(), locked: false, code: false };
+    let field = || InlineObject::Field { instr: instr.clone(), result: String::new(), locked: false, dirty: false, code: false, form: String::new() };
     if !p::bool(v, "all").unwrap_or(false) {
         let (_, b) = s.sel.ordered();
         s.doc.insert_object(&b, field(), &hidden)?;

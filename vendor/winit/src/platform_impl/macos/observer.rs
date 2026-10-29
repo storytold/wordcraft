@@ -310,3 +310,62 @@ impl EventLoopWaker {
         }
     }
 }
+
+#[cfg(test)]
+mod ime_reset_queue_tests {
+    use std::cell::RefCell;
+    use std::ptr;
+    use std::rc::Rc;
+
+    use core_foundation::base::CFRelease;
+    use core_foundation::date::CFAbsoluteTimeGetCurrent;
+    use core_foundation::runloop::{
+        kCFRunLoopDefaultMode, CFRunLoopAddTimer, CFRunLoopGetCurrent, CFRunLoopRunInMode,
+        CFRunLoopTimerCreate, CFRunLoopTimerInvalidate, CFRunLoopTimerRef,
+    };
+
+    use super::RunLoop;
+    use crate::event::{Ime, WindowEvent};
+
+    extern "C" fn keep_alive(_: CFRunLoopTimerRef, _: *mut std::ffi::c_void) {}
+
+    #[test]
+    fn native_runloop_keeps_reset_fence_between_old_input_and_new_suffix() {
+        // A private test-thread run loop exercises the production CFRunLoopPerformBlock FIFO
+        // without NSApplication's process-global/main-thread lifecycle.
+        let run_loop = RunLoop(unsafe { CFRunLoopGetCurrent() });
+        let timer = unsafe {
+            CFRunLoopTimerCreate(
+                ptr::null_mut(),
+                CFAbsoluteTimeGetCurrent() + 60.0,
+                0.0,
+                0,
+                0,
+                keep_alive,
+                ptr::null_mut(),
+            )
+        };
+        assert!(!timer.is_null());
+        unsafe { CFRunLoopAddTimer(run_loop.0, timer, kCFRunLoopDefaultMode) };
+        for visible in [false, true] {
+            let output = Rc::new(RefCell::new(Vec::new()));
+            let mut expected = Vec::new();
+            if visible {
+                expected.push(WindowEvent::Ime(Ime::Commit("accepted old".into())));
+                expected.push(WindowEvent::Ime(Ime::Preedit(String::new(), None)));
+            }
+            expected.push(WindowEvent::ImeResetCompleted { request_id: u64::MAX });
+            expected.push(WindowEvent::Ime(Ime::Preedit("new".into(), Some((3, 3)))));
+            for event in expected.iter().cloned() {
+                let output = Rc::clone(&output);
+                run_loop.queue_closure(move || output.borrow_mut().push(event));
+            }
+            unsafe { CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.01, false as _) };
+            assert_eq!(*output.borrow(), expected);
+        }
+        unsafe {
+            CFRunLoopTimerInvalidate(timer);
+            CFRelease(timer as _);
+        }
+    }
+}

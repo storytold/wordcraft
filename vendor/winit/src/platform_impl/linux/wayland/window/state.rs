@@ -39,8 +39,11 @@ use crate::platform_impl::wayland::types::kwin_blur::KWinBlurManager;
 use crate::platform_impl::{PlatformCustomCursor, WindowId};
 use crate::window::{CursorGrabMode, CursorIcon, ImePurpose, ResizeDirection, Theme};
 
+use crate::platform::wayland::{ImeDeleteSurrounding, ImeTextChangeCause};
 use crate::platform_impl::wayland::seat::{
-    PointerConstraintsState, WinitPointerData, WinitPointerDataExt, ZwpTextInputV3Ext,
+    context_reset_needed, reset_ime_with_fence, surrounding_text_excerpt, OutgoingCommit,
+    OutgoingImeState, PointerConstraintsState, TextInputData, WinitPointerData,
+    WinitPointerDataExt, ZwpTextInputV3Ext,
 };
 use crate::platform_impl::wayland::state::{WindowCompositorUpdate, WinitState};
 
@@ -51,6 +54,107 @@ pub type WinitFrame = sctk::shell::xdg::fallback_frame::FallbackFrame<WinitState
 
 // Minimum window inner size.
 const MIN_WINDOW_SIZE: LogicalSize<u32> = LogicalSize::new(2, 1);
+
+/// What removing one seat's text input from a window left behind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TextInputLeft {
+    /// The proxy wasn't registered on this window; leave must not emit a lifecycle boundary.
+    NotTracked,
+
+    /// Another seat's text input is still entered, so IME is still on for the window.
+    Remaining,
+
+    /// This was the last entered text input; the window can report IME off.
+    Last,
+}
+
+/// What an accepted text-input `done` did to the window's public composition slot.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ImeBatchOutcome {
+    /// A `commit_string` (including a deletion-only empty commit) was accepted and delivered.
+    pub(crate) committed: bool,
+    /// The window's visible composition ended, either by a commit or by its owner clearing it.
+    pub(crate) composition_ended: bool,
+    /// A non-empty preedit was delivered and now owns the public preedit slot.
+    pub(crate) preedit_visible: bool,
+}
+
+/// Whether an IME state operation actually wrote a protocol request and which synthetic
+/// lifecycle event (if any) it queued.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ImeStateUpdate {
+    /// Ordering ticket for a synthetic clear/`Enabled`/`Disabled` event.
+    pub(crate) boundary: Option<u64>,
+    /// At least one text input received a protocol request. The event loop must be woken even
+    /// when there is no visible preedit and therefore no callback event.
+    pub(crate) sent: bool,
+}
+
+/// The text input that owns the window's visible IME preedit.
+///
+/// The public `Ime` stream has no seat identity, so the window keeps at most one preedit owner.
+/// The ownership rules are kept in this small reducer so the multi-seat transitions are testable
+/// without constructing real Wayland proxies.
+pub(crate) struct ImePreeditOwnership<K> {
+    owner: Option<K>,
+}
+
+impl<K> Default for ImePreeditOwnership<K> {
+    fn default() -> Self {
+        Self { owner: None }
+    }
+}
+
+impl<K: Clone + PartialEq> ImePreeditOwnership<K> {
+    pub(crate) fn claim(&mut self, key: &K) {
+        self.owner = Some(key.clone());
+    }
+
+    pub(crate) fn release(&mut self, key: &K) -> bool {
+        if self.owner.as_ref() == Some(key) {
+            self.owner = None;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(crate) fn owns(&self, key: &K) -> bool {
+        self.owner.as_ref() == Some(key)
+    }
+
+    /// Whether this text input may clear the window's one public preedit slot.
+    ///
+    /// A non-owner must not erase another seat's newer composition.
+    pub(crate) fn may_clear(&self, key: &K) -> bool {
+        self.owner.as_ref().map_or(true, |owner| owner == key)
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.owner = None;
+    }
+
+    /// Applies one accepted `done` to the window's single visible composition slot.
+    ///
+    /// A commit from any seat ends the old composition window-wide, because the public event has
+    /// no seat identity. A non-owner's empty preedit neither ends nor claims it. A non-empty new
+    /// preedit makes its seat the owner, including after that same seat's commit.
+    pub(crate) fn after_done(&mut self, key: &K, outcome: ImeBatchOutcome) {
+        if outcome.committed {
+            self.owner = None;
+        } else if outcome.composition_ended {
+            self.release(key);
+        }
+        if outcome.preedit_visible {
+            self.claim(key);
+        }
+    }
+
+    /// Whether any text input currently owns the window's visible preedit.
+    pub(crate) fn has_owner(&self) -> bool {
+        self.owner.is_some()
+    }
+}
 
 /// The state of the window which is being updated from the [`WinitState`].
 pub struct WindowState {
@@ -112,8 +216,24 @@ pub struct WindowState {
     /// The current IME purpose.
     ime_purpose: ImePurpose,
 
+    /// The last IME cursor area, as `x, y, width, height`.
+    ime_cursor_area: Option<(i32, i32, i32, i32)>,
+
+    /// The last surrounding text, trimmed, with the cursor and anchor offsets in it.
+    ime_surrounding_text: Option<(String, i32, i32)>,
+
+    /// The deletion that goes with the `Ime::Commit` being delivered.
+    pub ime_delete_surrounding: Option<ImeDeleteSurrounding>,
+
     /// The text inputs observed on the window.
     text_inputs: Vec<ZwpTextInputV3>,
+
+    /// The text input whose preedit is currently visible for this window.
+    ///
+    /// `Ime::Preedit` carries no seat identity, so the window has at most one visible preedit
+    /// owner even when several seats have an entered text input. A later preedit from another
+    /// seat replaces the owner; only that owner's leave/commit/clear may end the window preedit.
+    ime_preedit_owner: ImePreeditOwnership<ZwpTextInputV3>,
 
     /// The inner size of the window, as in without client side decorations.
     size: LogicalSize<u32>,
@@ -200,6 +320,9 @@ impl WindowState {
             has_pending_move: None,
             ime_allowed: false,
             ime_purpose: ImePurpose::Normal,
+            ime_cursor_area: None,
+            ime_surrounding_text: None,
+            ime_delete_surrounding: None,
             last_configure: None,
             max_inner_size: None,
             min_inner_size: MIN_WINDOW_SIZE,
@@ -215,6 +338,7 @@ impl WindowState {
             stateless_size: initial_size.to_logical(1.),
             initial_size: Some(initial_size),
             text_inputs: Vec::new(),
+            ime_preedit_owner: ImePreeditOwnership::default(),
             theme,
             title: String::default(),
             transparent: false,
@@ -1015,46 +1139,288 @@ impl WindowState {
         self.seat_focus.remove(seat);
     }
 
-    /// Returns `true` if the requested state was applied.
-    pub fn set_ime_allowed(&mut self, allowed: bool) -> bool {
-        self.ime_allowed = allowed;
+    /// The snapshot an enabled text input should currently know.
+    ///
+    /// A password purpose never carries text, and `None` means unavailable (no
+    /// `set_surrounding_text` request). An available empty document is internally
+    /// `Some(("", 0, 0))`; text-input-v3 cannot guarantee that a compositor retains it across a
+    /// later change, so the public contract is best-effort.
+    pub(crate) fn outgoing_ime_state(&self) -> OutgoingImeState {
+        OutgoingImeState::new(
+            self.ime_purpose,
+            self.ime_cursor_area,
+            self.ime_surrounding_text.clone(),
+        )
+    }
 
-        let mut applied = false;
-        for text_input in &self.text_inputs {
-            applied = true;
-            if allowed {
-                text_input.enable();
-                text_input.set_content_type_by_purpose(self.ime_purpose);
-            } else {
-                text_input.disable();
-            }
-            text_input.commit();
+    /// Applies the IME allow transition and reports whether a request was sent and the synthetic
+    /// event's ordering ticket.
+    ///
+    /// The window queues one `Enabled`/`Disabled` event for all of its seats. When enabling, the
+    /// earliest boundary ticket keeps that event before any protocol record of the new
+    /// generation. When disabling, the latest ticket keeps it after every commit already accepted
+    /// by any seat.
+    pub(crate) fn set_ime_allowed(&mut self, allowed: bool) -> ImeStateUpdate {
+        self.ime_allowed = allowed;
+        if !allowed {
+            self.ime_surrounding_text = None;
         }
 
-        applied
+        let state = self.outgoing_ime_state();
+        let mut boundary = None;
+        let mut sent = false;
+        for text_input in &self.text_inputs {
+            // An enable/disable transition is a lifecycle boundary. Disabling stops accepting
+            // the old generation immediately, including a `done` that was in flight, while a
+            // commit already accepted from an earlier `done` stays deliverable before the
+            // synthetic `Disabled`. Enabling accepts only `done` serials at or after its commit.
+            //
+            // `enable_with_state` sends `enable` before the state setters: text-input-v3
+            // resets the content type, cursor rectangle and surrounding text on enable.
+            sent = true;
+            if allowed {
+                let (_, sequence) = text_input.enable_with_state(&state);
+                boundary = Some(boundary.map_or(sequence, |old: u64| old.min(sequence)));
+            } else {
+                let (_, sequence) = text_input.disable_and_commit();
+                boundary = Some(boundary.map_or(sequence, |old: u64| old.max(sequence)));
+            }
+        }
+
+        if !allowed {
+            // Every entered text input is disabled, so the window no longer shows an IME preedit.
+            self.ime_preedit_owner.clear();
+        }
+
+        ImeStateUpdate { boundary, sent }
+    }
+
+    /// Set the text around the IME cursor for an application-originated change.
+    ///
+    /// This is the default public setter, so it reports [`ImeTextChangeCause::Other`]. An
+    /// unchanged snapshot sends nothing. While a seat has an unacknowledged commit the new
+    /// snapshot is coalesced and flushed by that commit's matching `done`.
+    pub fn set_ime_surrounding_text(&mut self, text: &str, cursor: usize, anchor: usize) {
+        self.set_ime_surrounding_text_with_change_cause(
+            text,
+            cursor,
+            anchor,
+            ImeTextChangeCause::Other,
+        );
+    }
+
+    /// Set the surrounding text and the protocol cause for changing it.
+    pub(crate) fn set_ime_surrounding_text_with_change_cause(
+        &mut self,
+        text: &str,
+        cursor: usize,
+        anchor: usize,
+        cause: ImeTextChangeCause,
+    ) -> ImeStateUpdate {
+        // A password field must never publish its text, even when a caller passes it explicitly.
+        if self.ime_purpose == ImePurpose::Password {
+            return ImeStateUpdate::default();
+        }
+        let (text, cursor, anchor) = surrounding_text_excerpt(text, cursor, anchor);
+        let (cursor, anchor) = (cursor as i32, anchor as i32);
+        // Each commit makes the compositor send `done`, and input-method-v2 compositors ignore
+        // input-method commits made against an older serial, so an app calling this every frame
+        // would lose typed text.
+        let unchanged =
+            |(t, c, a): &(String, i32, i32)| (t.as_str(), *c, *a) == (text, cursor, anchor);
+        if self.ime_surrounding_text.as_ref().is_some_and(unchanged) {
+            // Cause-only changes are deliberately deduplicated: the text on the wire is already
+            // current, and republishing it would make the input method re-evaluate its preedit.
+            return ImeStateUpdate::default();
+        }
+        self.ime_surrounding_text = Some((text.to_owned(), cursor, anchor));
+        let mut sent = false;
+        if self.ime_allowed {
+            let state = self.outgoing_ime_state();
+            for text_input in &self.text_inputs {
+                sent |= matches!(
+                    text_input.sync_ime_state(&state, Some(cause)),
+                    OutgoingCommit::Sent(_)
+                );
+            }
+        }
+        ImeStateUpdate { boundary: None, sent }
     }
 
     /// Set the IME position.
-    pub fn set_ime_cursor_area(&self, position: LogicalPosition<u32>, size: LogicalSize<u32>) {
+    pub(crate) fn set_ime_cursor_area(
+        &mut self,
+        position: LogicalPosition<u32>,
+        size: LogicalSize<u32>,
+    ) -> ImeStateUpdate {
         // FIXME: This won't fly unless user will have a way to request IME window per seat, since
         // the ime windows will be overlapping, but winit doesn't expose API to specify for
         // which seat we're setting IME position.
         let (x, y) = (position.x as i32, position.y as i32);
         let (width, height) = (size.width as i32, size.height as i32);
-        for text_input in self.text_inputs.iter() {
-            text_input.set_cursor_rectangle(x, y, width, height);
-            text_input.commit();
+        let area = (x, y, width, height);
+        if self.ime_cursor_area == Some(area) {
+            return ImeStateUpdate::default();
         }
+        self.ime_cursor_area = Some(area);
+        let mut sent = false;
+        if self.ime_allowed {
+            let state = self.outgoing_ime_state();
+            for text_input in self.text_inputs.iter() {
+                // A geometry-only commit still carries the cached surrounding text. Pass `None`
+                // here: `sync_ime_state` then labels an immediate commit `Other`, while a commit
+                // already waiting for `done` keeps a coalesced `InputMethod` receipt cause.
+                sent |= matches!(text_input.sync_ime_state(&state, None), OutgoingCommit::Sent(_));
+            }
+        }
+        ImeStateUpdate { boundary: None, sent }
+    }
+
+    /// Discards the composition where the input method allows; input methods that commit on
+    /// focus-out commit it.
+    ///
+    /// Reports whether protocol requests were sent and the synthetic clear's ordering ticket
+    /// when the window's visible preedit owner was reset. Resetting a non-owner must not clear
+    /// another seat's newer composition.
+    pub(crate) fn reset_ime(&mut self) -> ImeStateUpdate {
+        let state = self.outgoing_ime_state();
+        let mut clear_boundary = None;
+        let mut reset_owner = false;
+        let mut sent = false;
+        for text_input in &self.text_inputs {
+            // A disable and an enable in separate commits make the compositor deactivate and
+            // reactivate the input method. The disable ends the old incoming generation, so a
+            // commit or `done` already in flight cannot be applied at the new caret position.
+            //
+            // Enabling resets the text input's state, so the full snapshot is sent again, after
+            // the enable and before the commit. The enable commit starts the only generation
+            // whose `done` may apply.
+            sent = true;
+            let owns_preedit = self.ime_preedit_owner.owns(text_input);
+            let (was_shown, _, sequence) = text_input.reset_with_state(&state);
+            if owns_preedit {
+                reset_owner = true;
+                if was_shown {
+                    clear_boundary =
+                        Some(clear_boundary.map_or(sequence, |old: u64| old.max(sequence)));
+                }
+            }
+        }
+        if reset_owner {
+            self.ime_preedit_owner.clear();
+        }
+        ImeStateUpdate { boundary: clear_boundary, sent }
+    }
+
+    pub(crate) fn reset_ime_with_fence(&mut self) -> (ImeStateUpdate, u64) {
+        let state = self.outgoing_ime_state();
+        let (resets, completion) = reset_ime_with_fence(&self.text_inputs, &state);
+        let mut clear_boundary = None;
+        for (text_input, (shown, sequence)) in self.text_inputs.iter().zip(resets) {
+            if self.ime_preedit_owner.owns(text_input) && shown {
+                clear_boundary = Some(sequence);
+            }
+        }
+        self.ime_preedit_owner.clear();
+        let update =
+            ImeStateUpdate { boundary: clear_boundary, sent: !self.text_inputs.is_empty() };
+        (update, completion)
+    }
+
+    /// Forgets the cached surrounding text and invalidates the protocol context when needed.
+    ///
+    /// An empty available document must be sent with [`Self::set_ime_surrounding_text`]; this is
+    /// the separate "unavailable" operation. The only way to make already-published surrounding
+    /// text unavailable again is a committed disable/enable, so one is sent when text was
+    /// published or an incoming generation is active. A disabled window is only forgotten, never
+    /// enabled, and a context with nothing published/active sends nothing.
+    ///
+    /// Reports whether protocol requests were sent and the synthetic preedit-clear ticket when
+    /// the visible composition was cancelled.
+    pub(crate) fn clear_ime_surrounding_text(&mut self) -> ImeStateUpdate {
+        let had_surrounding_text = self.ime_surrounding_text.take().is_some();
+        self.clear_ime_context(had_surrounding_text)
+    }
+
+    /// Whether clearing now needs a committed reset rather than only forgetting the cache.
+    fn needs_context_reset(&self, had_surrounding_text: bool) -> bool {
+        let has_pending_or_active = self.text_inputs.iter().any(|text_input| {
+            text_input.data::<TextInputData>().is_some_and(TextInputData::has_pending_or_active)
+        });
+        context_reset_needed(
+            had_surrounding_text,
+            self.ime_allowed,
+            !self.text_inputs.is_empty(),
+            self.ime_preedit_owner.has_owner(),
+            has_pending_or_active,
+        )
+    }
+
+    fn clear_ime_context(&mut self, had_surrounding_text: bool) -> ImeStateUpdate {
+        if !self.needs_context_reset(had_surrounding_text) {
+            return ImeStateUpdate::default();
+        }
+
+        // The state sent after the enable has no surrounding-text request: the input method must
+        // see the context as unavailable, not as an empty document.
+        let state = self.outgoing_ime_state();
+        let mut clear_boundary = None;
+        let mut reset_owner = false;
+        let mut sent = false;
+        for text_input in &self.text_inputs {
+            sent = true;
+            let owns_preedit = self.ime_preedit_owner.owns(text_input);
+            let (was_shown, _, sequence) = text_input.reset_with_state(&state);
+            if owns_preedit {
+                reset_owner = true;
+                if was_shown {
+                    clear_boundary =
+                        Some(clear_boundary.map_or(sequence, |old: u64| old.max(sequence)));
+                }
+            }
+        }
+        if reset_owner {
+            self.ime_preedit_owner.clear();
+        }
+        ImeStateUpdate { boundary: clear_boundary, sent }
     }
 
     /// Set the IME purpose.
-    pub fn set_ime_purpose(&mut self, purpose: ImePurpose) {
+    ///
+    /// Entering a password context forgets the surrounding text and, when there is a protocol
+    /// context to invalidate, uses the same committed reset as
+    /// [`Self::clear_ime_surrounding_text`]. It never enables a disabled window. Reports whether
+    /// requests were sent and the synthetic clear ticket, mirroring `reset_ime`.
+    pub(crate) fn set_ime_purpose(&mut self, purpose: ImePurpose) -> ImeStateUpdate {
+        let changed = self.ime_purpose != purpose;
+        if !changed {
+            // Adapters may call this every frame with the same descriptor purpose. Repeating the
+            // same purpose must not turn into a permanent disable/enable once per frame: the
+            // first transition to `Password` already dropped the text and invalidated the
+            // pre-password generation, and later setters cannot publish text while it stays
+            // `Password`.
+            return ImeStateUpdate::default();
+        }
         self.ime_purpose = purpose;
 
-        for text_input in &self.text_inputs {
-            text_input.set_content_type_by_purpose(purpose);
-            text_input.commit();
+        if purpose == ImePurpose::Password {
+            // Entering a password context forgets any cached text and, when there is a protocol
+            // context to invalidate, performs a committed reset. This is the transition that
+            // must not let a buffered pre-password commit reach the new context.
+            let had_surrounding_text = self.ime_surrounding_text.take().is_some();
+            if self.needs_context_reset(had_surrounding_text) {
+                return self.clear_ime_context(had_surrounding_text);
+            }
         }
+
+        let mut sent = false;
+        if self.ime_allowed {
+            let state = self.outgoing_ime_state();
+            for text_input in &self.text_inputs {
+                sent |= matches!(text_input.sync_ime_state(&state, None), OutgoingCommit::Sent(_));
+            }
+        }
+        ImeStateUpdate { boundary: None, sent }
     }
 
     /// Get the IME purpose.
@@ -1133,11 +1499,43 @@ impl WindowState {
     }
 
     /// The text input left the top-level.
+    ///
+    /// A window holds one text input per seat and `enter` is sent to each of them, so a leave
+    /// only ends the window's IME lifecycle when it removes the last one.
     #[inline]
-    pub fn text_input_left(&mut self, text_input: &ZwpTextInputV3) {
+    pub(crate) fn text_input_left(&mut self, text_input: &ZwpTextInputV3) -> TextInputLeft {
         if let Some(position) = self.text_inputs.iter().position(|t| t == text_input) {
             self.text_inputs.remove(position);
+            if self.text_inputs.is_empty() {
+                TextInputLeft::Last
+            } else {
+                TextInputLeft::Remaining
+            }
+        } else {
+            TextInputLeft::NotTracked
         }
+    }
+
+    /// Records what an accepted `done` did to the window's visible composition.
+    ///
+    /// A non-empty preedit from any seat replaces the owner. A commit ends the old visible
+    /// composition even when it came from a non-owner. A non-owner's empty preedit is inert: it
+    /// cannot clear or steal another seat's newer composition.
+    pub(crate) fn note_ime_done(&mut self, text_input: &ZwpTextInputV3, outcome: ImeBatchOutcome) {
+        self.ime_preedit_owner.after_done(text_input, outcome);
+    }
+
+    /// Releases this text input's preedit ownership and reports whether it owned the preedit.
+    ///
+    /// The caller emits the clear only for the owner; a leaving non-owner must not clear a newer
+    /// seat's composition.
+    pub(crate) fn release_ime_preedit(&mut self, text_input: &ZwpTextInputV3) -> bool {
+        self.ime_preedit_owner.release(text_input)
+    }
+
+    /// Whether this text input may clear the window's one public preedit slot.
+    pub(crate) fn may_clear_ime_preedit(&self, text_input: &ZwpTextInputV3) -> bool {
+        self.ime_preedit_owner.may_clear(text_input)
     }
 
     /// Get the cached title.

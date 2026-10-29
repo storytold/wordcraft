@@ -75,7 +75,7 @@ permission to bind local sockets. The WASM check was blocked by the missing
 `wasm32-unknown-unknown` toolchain target; Flatpak packaging was not built or runtime-tested.
 
 - 821 `#[test]` functions and 10 property-test blocks: model, layout, DOCX round-trip and hostile
-  input, `.doc`, formats, typing parity (`engine/src/tests_typing.rs`), bidi, i18n catalogs, UI
+  input, `.doc`, formats, typing parity (`engine/src/tests/typing.rs`), bidi, i18n catalogs, UI
   interaction (egui_kittest), MCP acceptance; `hostile_params_never_panic` runs every command with
   junk params.
 - `cargo xtask ci`: fmt, clippy `-D warnings`, tests, asset attribution, layering, wasm build.

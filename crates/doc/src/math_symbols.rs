@@ -85,6 +85,7 @@ pub const SYMBOLS: &[(&str, char)] = &[
     ("vee", '∨'),
     ("wedge", '∧'),
     ("setminus", '∖'),
+    ("backslash", '\\'),
     ("wr", '≀'),
     ("diamond", '⋄'),
     ("dagger", '†'),

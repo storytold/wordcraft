@@ -15,7 +15,7 @@ use wordcraft_doc::{Paragraph, PartKind, Pos, StoryRef, para_block};
 use super::sel_result;
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 
-const EFFECT_PARAMS: &str = r#"{"style"?: "solid"|"outlined"|"hollow"|"gradient"|"shadowed"|"glowing"|"reflected"|"sunset", "clear"?: bool, "fill"?: "RRGGBB"|"none" (hollow)|{"color": "RRGGBB", "transparency"?: %}|{"gradient": ["RRGGBB", …], "angle"?: deg}|null (the run's colour), "outline"?: "RRGGBB"|"none"|{"color"?: "RRGGBB"|null, "width"?: pt, "transparency"?: %}|null, "shadow"?: preset|{"color"?, "transparency"?, "blur"?, "distance"?, "angle"?}|null, "glow"?: pt|{"color"?, "size"?, "transparency"?}|null, "reflection"?: bool|{"transparency"?: %, "size"?: %, "distance"?: pt}|null}  (an omitted key is left as it is; with a shape selected or the caret in a text box, the box's whole text)"#;
+const EFFECT_PARAMS: &str = r#"{"style"?: "solid"|"outlined"|"hollow"|"gradient"|"shadowed"|"glowing"|"reflected"|"sunset", "clear"?: bool, "fill"?: "RRGGBB"|"none" (hollow)|{"color": "RRGGBB", "transparency"?: %}|{"gradient": ["RRGGBB", …], "angle"?: deg}|null (the run's colour), "outline"?: "RRGGBB"|"none"|{"color"?: "RRGGBB"|null, "width"?: pt, "transparency"?: %}|null, "shadow"?: preset|{"color"?, "transparency"?, "blur"?, "distance"?, "angle"?}|null, "glow"?: pt|{"color"?, "size"?, "transparency"?}|null, "reflection"?: bool|"none"|{"transparency"?: %, "size"?: %, "distance"?: pt}|null}  (an omitted key is left as it is; with a shape selected or the caret in a text box, the box's whole text)"#;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -100,13 +100,14 @@ fn parse_outline(v: Option<&Value>) -> Result<Change<TextOutline>, CmdError> {
     Ok(match v {
         None => None,
         Some(Value::Null) => Some(None),
-        Some(Value::String(x)) if x == "none" => Some(Some(TextOutline { color: None, ..d })),
+        Some(Value::String(x)) if x.eq_ignore_ascii_case("none") => Some(Some(TextOutline { color: None, ..d })),
         Some(Value::String(x)) => {
             Some(Some(TextOutline { color: Some(Rgb::parse(x).ok_or_else(|| CmdError::Params("`outline`: a colour".into()))?), ..d }))
         }
         Some(o @ Value::Object(_)) => Some(Some(TextOutline {
             color: match o.get("color") {
                 Some(Value::Null) => None,
+                Some(Value::String(s)) if s.eq_ignore_ascii_case("none") => None,
                 Some(_) => color(o, "color").or(d.color),
                 None => d.color,
             },
@@ -123,7 +124,7 @@ fn parse_shadow(v: Option<&Value>) -> Result<Change<Shadow>, CmdError> {
         None => None,
         Some(Value::Null) => Some(None),
         Some(Value::Bool(b)) => Some(b.then(Shadow::default)),
-        Some(Value::String(id)) if id == "none" => Some(None),
+        Some(Value::String(id)) if id.eq_ignore_ascii_case("none") => Some(None),
         Some(Value::String(id)) => Some(Some(preset(id)?)),
         Some(o @ Value::Object(_)) => {
             let mut sh = match p::str(o, "preset") {
@@ -146,7 +147,7 @@ fn parse_glow(v: Option<&Value>, accent: Rgb) -> Result<Change<Glow>, CmdError> 
     Ok(match v {
         None => None,
         Some(Value::Null) => Some(None),
-        Some(Value::String(x)) if x == "none" => Some(None),
+        Some(Value::String(x)) if x.eq_ignore_ascii_case("none") => Some(None),
         Some(n @ Value::Number(_)) => Some(Some(Glow { size: n.as_f64().unwrap_or(0.0) as f32, ..d }.sanitized()).filter(|g| g.size > 0.0)),
         Some(o @ Value::Object(_)) => Some(
             Some(
@@ -169,13 +170,14 @@ fn parse_reflection(v: Option<&Value>) -> Result<Change<Reflection>, CmdError> {
         None => None,
         Some(Value::Null) => Some(None),
         Some(Value::Bool(b)) => Some(b.then_some(d)),
+        Some(Value::String(x)) if x.eq_ignore_ascii_case("none") => Some(None),
         Some(o @ Value::Object(_)) => Some(Some(Reflection {
             transparency: p::f32(o, "transparency").unwrap_or(d.transparency),
             size: p::f32(o, "size").unwrap_or(d.size),
             distance: p::f32(o, "distance").unwrap_or(d.distance),
             blur: p::f32(o, "blur").unwrap_or(d.blur),
         })),
-        Some(_) => return Err(CmdError::Params("`reflection`: true, an object or null".into())),
+        Some(_) => return Err(CmdError::Params("`reflection`: true, \"none\", an object or null".into())),
     })
 }
 
@@ -285,7 +287,7 @@ fn insert(s: &mut Session, v: &Value) -> CmdResult {
             _ => h * 1.6,
         };
     }
-    let id = s.doc.add_part(PartKind::TextBox, vec![para_block(Paragraph::with_text(&text, props))]);
+    let id = s.doc.try_add_part(PartKind::TextBox, vec![para_block(Paragraph::with_text(&text, props))])?;
     if let Some(p) = s.doc.parts.get_mut(&id)
         && let Some(b) = p.blocks.first_mut()
         && let wordcraft_doc::Block::Para(para) = std::sync::Arc::make_mut(b)

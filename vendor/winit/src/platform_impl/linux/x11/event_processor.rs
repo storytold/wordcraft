@@ -3,6 +3,7 @@ use std::collections::{HashMap, VecDeque};
 use std::os::raw::{c_char, c_int, c_long, c_ulong};
 use std::slice;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use x11_dl::xinput2::{
     self, XIDeviceEvent, XIEnterEvent, XIFocusInEvent, XIFocusOutEvent, XIHierarchyEvent,
@@ -28,7 +29,7 @@ use crate::event_loop::ActiveEventLoop as RootAEL;
 use crate::keyboard::ModifiersState;
 use crate::platform_impl::common::xkb::{self, XkbState};
 use crate::platform_impl::platform::common::xkb::Context;
-use crate::platform_impl::platform::x11::ime::{ImeEvent, ImeEventReceiver, ImeRequest};
+use crate::platform_impl::platform::x11::ime::{CompositionState, ImeEventReceiver, ImeRequest};
 use crate::platform_impl::platform::x11::ActiveEventLoop;
 use crate::platform_impl::platform::ActiveEventLoop as PlatformActiveEventLoop;
 use crate::platform_impl::x11::atoms::*;
@@ -71,19 +72,88 @@ pub struct EventProcessor {
     // delivered at near the same time.
     pub xfiltered_modifiers: VecDeque<u8>,
     pub xmodmap: util::ModifierKeymap,
-    pub is_composing: bool,
+    pub(crate) ime_compositions: CompositionState,
+    /// The latest IME spot requested for each window, not yet sent to the input method.
+    pub ime_spots: HashMap<XWindow, (i16, i16)>,
+    /// Until when the input method may still be answering the keys it was given.
+    pub ime_busy_until: Option<Instant>,
 }
 
+/// How long after its last message an input method is taken to have finished answering a key.
+const IME_SETTLE_TIME: Duration = Duration::from_millis(100);
+
 impl EventProcessor {
+    /// Sends the queued IME spots once the input method has gone quiet.
+    ///
+    /// Setting the spot is a synchronous XIM request. Xlib handles the keys an input method
+    /// forwards back while it waits for the reply, puts them back on the event queue in reverse
+    /// order and marks only the last one as forwarded, so the rest are filtered again: the input
+    /// method gets its own keys back as new key presses, and the app gets them after the text
+    /// committed with them. Vietnamese engines that fix a word by forwarding BackSpaces and
+    /// committing the new tail garble the text this way (rust-windowing/winit#4777). Input
+    /// methods only send keys back in answer to keys this thread gave them, so the request is
+    /// safe once no event is queued and no input method message has arrived for a while.
+    pub fn send_ime_spots(&mut self) {
+        if self.ime_spots.is_empty()
+            || self.ime_busy_until.is_some_and(|until| Instant::now() < until)
+            || self.poll()
+        {
+            return;
+        }
+        self.ime_busy_until = None;
+        let window_target = Self::window_target_mut(&mut self.target);
+        if let Some(ime) = window_target.ime.as_mut() {
+            let ime = ime.get_mut();
+            for (window_id, (x, y)) in self.ime_spots.drain() {
+                ime.send_xim_spot(window_id, x, y);
+            }
+        } else {
+            self.ime_spots.clear();
+        }
+    }
+
+    /// When the event loop has to wake up to send the queued IME spots.
+    pub fn ime_spots_deadline(&self) -> Option<Instant> {
+        if self.ime_spots.is_empty() {
+            None
+        } else {
+            Some(self.ime_busy_until.unwrap_or_else(Instant::now))
+        }
+    }
+
     pub fn process_event<T: 'static, F>(&mut self, xev: &mut XEvent, mut callback: F)
     where
         F: FnMut(&RootAEL, Event<T>),
     {
+        // Requests made since the last event go first: a reset or allow request made when focus
+        // moved to another field has to reach the input method before the next key does.
+        self.handle_ime_requests();
+        // The reset fence shares the XIM callback channel. Deliver it before processing the
+        // next native event, which can itself synchronously deliver a new commit.
+        self.drain_ime_events(&mut callback);
         self.process_xevent(xev, &mut callback);
+        self.handle_ime_requests();
+        self.drain_ime_events(&mut callback);
+    }
 
+    fn drain_ime_events<T: 'static, F>(&mut self, callback: &mut F)
+    where
+        F: FnMut(&RootAEL, Event<T>),
+    {
+        while let Ok((window, event)) = self.ime_event_receiver.try_recv() {
+            let window_id = mkwid(window as xproto::Window);
+            for event in self.ime_compositions.handle(window, event).into_iter().flatten() {
+                callback(&self.target, Event::WindowEvent { window_id, event });
+            }
+            // A callback can switch the edit target and request another reset. Establish it
+            // before the next native event, while preserving the callback channel's order.
+            self.handle_ime_requests();
+        }
+    }
+
+    fn handle_ime_requests(&mut self) {
         let window_target = Self::window_target_mut(&mut self.target);
 
-        // Handle IME requests.
         while let Ok(request) = self.ime_receiver.try_recv() {
             let ime = match window_target.ime.as_mut() {
                 Some(ime) => ime,
@@ -92,40 +162,34 @@ impl EventProcessor {
             let ime = ime.get_mut();
             match request {
                 ImeRequest::Position(window_id, x, y) => {
-                    ime.send_xim_spot(window_id, x, y);
+                    self.ime_spots.insert(window_id, (x, y));
                 },
+                // Toolkits allow IME when a text field gains focus and disallow it when the field
+                // loses it, while the window keeps the focus, so no focus event follows. The
+                // context is focused here, or reset and unfocused so the input method drops the
+                // composition and its candidate window.
                 ImeRequest::Allow(window_id, allowed) => {
-                    ime.set_ime_allowed(window_id, allowed);
+                    if let Ok(true) = ime.set_ime_allowed(window_id, allowed) {
+                        if !allowed {
+                            let _ = ime.reset(window_id);
+                            let _ = ime.unfocus(window_id);
+                        } else if self.active_window == Some(window_id as xproto::Window) {
+                            let _ = ime.focus(window_id);
+                        }
+                    }
                 },
+                ImeRequest::Reset(window_id) if ime.is_ime_allowed(window_id) => {
+                    let _ = ime.reset_with_request(window_id, None);
+                },
+                ImeRequest::ResetWithRequest(window_id, request_id)
+                    if ime.is_ime_allowed(window_id) =>
+                {
+                    let _ = ime.reset_with_request(window_id, Some(request_id));
+                },
+                ImeRequest::Reset(_) | ImeRequest::ResetWithRequest(..) => {},
             }
         }
-
-        // Drain IME events.
-        while let Ok((window, event)) = self.ime_event_receiver.try_recv() {
-            let window_id = mkwid(window as xproto::Window);
-            let event = match event {
-                ImeEvent::Enabled => WindowEvent::Ime(Ime::Enabled),
-                ImeEvent::Start => {
-                    self.is_composing = true;
-                    WindowEvent::Ime(Ime::Preedit("".to_owned(), None))
-                },
-                ImeEvent::Update(text, position) if self.is_composing => {
-                    WindowEvent::Ime(Ime::Preedit(text, Some((position, position))))
-                },
-                ImeEvent::End => {
-                    self.is_composing = false;
-                    // Issue empty preedit on `Done`.
-                    WindowEvent::Ime(Ime::Preedit(String::new(), None))
-                },
-                ImeEvent::Disabled => {
-                    self.is_composing = false;
-                    WindowEvent::Ime(Ime::Disabled)
-                },
-                _ => continue,
-            };
-
-            callback(&self.target, Event::WindowEvent { window_id, event });
-        }
+        self.send_ime_spots();
     }
 
     /// XFilterEvent tells us when an event has been discarded by the input method.
@@ -181,6 +245,7 @@ impl EventProcessor {
 
         // Don't process event if it was filtered.
         if filtered {
+            self.ime_busy_until = Some(Instant::now() + IME_SETTLE_TIME);
             return;
         }
 
@@ -821,7 +886,7 @@ impl EventProcessor {
         callback(&self.target, event);
     }
 
-    fn destroy_notify<T: 'static, F>(&self, xev: &XDestroyWindowEvent, mut callback: F)
+    fn destroy_notify<T: 'static, F>(&mut self, xev: &XDestroyWindowEvent, mut callback: F)
     where
         F: FnMut(&RootAEL, Event<T>),
     {
@@ -829,6 +894,8 @@ impl EventProcessor {
 
         let window = xev.window as xproto::Window;
         let window_id = mkwid(window);
+
+        self.ime_compositions.end(window as XWindow);
 
         // In the event that the window's been destroyed without being dropped first, we
         // cleanup again here.
@@ -966,7 +1033,7 @@ impl EventProcessor {
             self.update_mods_from_core_event(window_id, xev.state as u16, &mut callback);
         }
 
-        if keycode != 0 && !self.is_composing {
+        if keycode != 0 && !self.ime_compositions.is_composing(window as XWindow) {
             // Don't alter the modifiers state from replaying.
             if replay {
                 self.send_synthic_modifier_from_core(window_id, xev.state as u16, &mut callback);
@@ -1005,7 +1072,7 @@ impl EventProcessor {
                 let event =
                     Event::WindowEvent { window_id, event: WindowEvent::Ime(Ime::Commit(written)) };
 
-                self.is_composing = false;
+                self.ime_compositions.end(window as XWindow);
                 callback(&self.target, event);
             }
         }
@@ -1848,7 +1915,7 @@ impl EventProcessor {
                 .find(|prev_monitor| prev_monitor.name == new_monitor.name)
                 .map(|prev_monitor| prev_monitor.scale_factor);
             if Some(new_monitor.scale_factor) != maybe_prev_scale_factor {
-                for window in wt.windows.borrow().iter().filter_map(|(_, w)| w.upgrade()) {
+                for window in wt.windows.borrow().values().filter_map(|w| w.upgrade()) {
                     window.refresh_dpi_for_monitor(&new_monitor, maybe_prev_scale_factor, |event| {
                         callback(&self.target, event);
                     })

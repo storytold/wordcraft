@@ -26,7 +26,12 @@ chatroom
 checkbox
 checklist
 childcare
+clamour
 clickable
+colourful
+colourisation
+colourise
+colourless
 configurable
 copyedit
 coronavirus
@@ -54,6 +59,7 @@ ecommerce
 email
 emoji
 emoticon
+endeavour
 esports
 facebook
 favicon
@@ -71,6 +77,7 @@ geolocation
 gigabit
 gigabyte
 github
+glamour
 globalization
 google
 groupthink
@@ -80,6 +87,9 @@ hashtag
 healthcare
 homepage
 homeschool
+honour
+honourable
+honourably
 hotspot
 hyperlink
 hypertext
@@ -106,6 +116,7 @@ logout
 lowercase
 makeover
 malware
+manoeuvrable
 megabyte
 megapixel
 meme
@@ -127,6 +138,7 @@ onboard
 online
 onscreen
 outsource
+paediatric
 paralegal
 passcode
 petabyte
@@ -139,10 +151,13 @@ podcast
 popup
 prequel
 printout
+prioritise
 prioritization
 prioritize
+privatise
 ransomware
 recyclable
+rigour
 ringtone
 roadmap
 rollout
@@ -171,6 +186,7 @@ subfolder
 sunscreen
 superfood
 superuser
+synthesise
 tagline
 takeout
 techie
@@ -188,6 +204,7 @@ touchpad
 touchscreen
 trackball
 trackpad
+travelogue
 upcycle
 upload
 uppercase

@@ -6,11 +6,12 @@ use std::rc::Rc;
 
 use wasm_bindgen::JsCast as _;
 use wordcraft_engine::Session;
+use wordcraft_ui_egui::async_saves::{AsyncSaves, SaveOutcome};
 use wordcraft_ui_egui::{Inbox, Services, WordApp};
 
 const DOC_EXTS: &[&str] = &["docx", "docm", "dotx", "dotm", "doc", "dot", "odt", "rtf", "txt", "md", "html", "htm", "tex", "json", "xml"];
 const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "wmf", "emf"];
-const RECIPIENT_EXTS: &[&str] = &["csv", "tsv", "txt", "xlsx", "xlsm", "ods"];
+const RECIPIENT_EXTS: &[&str] = wordcraft_engine::cmd::mailings::RECIPIENT_EXTENSIONS;
 mod font_store;
 const CANVAS_ID: &str = "wordcraft_canvas";
 const LOADING_ID: &str = "wordcraft_loading";
@@ -26,9 +27,15 @@ pub fn start() {
             log::error!("missing <canvas id=\"{CANVAS_ID}\">");
             return;
         };
+        // `?host=parent`: a same-origin page framing WordCraft opens documents in it and stores
+        // what it saves (`host`). That page guards leaving it, so this one doesn't.
+        let bridge = if query_param("host").as_deref() == Some("parent") { crate::host::Bridge::new() } else { None };
+        let app_bridge = bridge.clone();
         let dirty = Rc::new(Cell::new(false));
-        let saves = Rc::new(PickerSaves::default());
-        if let Err(e) = guard_unload(dirty.clone(), saves.clone()) {
+        let saves = AsyncSaves::default();
+        if bridge.is_none()
+            && let Err(e) = guard_unload(dirty.clone(), saves.clone())
+        {
             log::error!("no unsaved-changes guard: {e}");
         }
         let mut options = eframe::WebOptions::default();
@@ -48,26 +55,61 @@ pub fn start() {
                     // Fonts the user added on an earlier visit (#582); the app notices them arrive.
                     font_store::load_all(cc.egui_ctx.clone());
                     let inbox: Inbox = Inbox::default();
-                    if let Err(e) = listen_for_pasted_pictures(inbox.clone(), cc.egui_ctx.clone()) {
+                    let pasted: Inbox = Inbox::default();
+                    if let Err(e) = listen_for_pasted_pictures(pasted.clone(), cc.egui_ctx.clone()) {
                         log::error!("pasting pictures is unavailable: {e}");
                     }
                     // The browser's locale picks the new document's paper, the units and the
                     // decimal separator (#838).
                     let region = wordcraft_ui_egui::i18n::system_region();
-                    let sample = query().contains("sample");
+                    // In host mode the parent sends the document to edit; no sample meanwhile.
+                    let sample = app_bridge.is_none() && query().contains("sample");
                     let doc = if sample { wordcraft_engine::sample::sample_document() } else { wordcraft_engine::blank_document(&region) };
                     let mut session = Session::new(doc);
                     session.system_region = region;
-                    let mut app = WordApp::new(session, services(inbox.clone(), cc.egui_ctx.clone(), dirty, saves.clone()));
+                    let messages = Rc::new(RefCell::new(Vec::new()));
+                    let mut services = services(inbox.clone(), cc.egui_ctx.clone(), dirty, saves.clone(), messages.clone());
+                    if let Some(bridge) = &app_bridge {
+                        bridge.connect(&mut services, inbox.clone(), cc.egui_ctx.clone());
+                    }
+                    let mut app = WordApp::new(session, services);
+                    // Pasted pictures wait apart from dropped files: the app inserts one only when the page is the edit target (#1349).
+                    app.services.pasted = Some(pasted);
                     app.autosave = false;
+                    // Preferences from an earlier visit (#2132), as the desktop app reads `ui.json`.
+                    let stored = stored_prefs();
+                    crate::prefs::restore(&mut app, stored.as_deref());
+                    // A region chosen in File › Options replaces the browser's for the first blank
+                    // document too (#838).
+                    if !sample && app.session.prefs.region.is_some() {
+                        let doc = app.session.blank_document();
+                        app.session.set_document(doc);
+                    }
+                    let mut prefs = crate::prefs::PrefsSync::new(stored);
                     // No document to show: start on File › Home, as the desktop app does (#766).
                     if !sample {
                         app.start_screen();
                     }
-                    Ok(Box::new(WebShell { app, inbox, saves }))
+                    // The host's name for the user signs this visit's work, but isn't stored as the
+                    // browser's own preference, which a visit outside the host would restore.
+                    if app_bridge.is_some()
+                        && let Some(author) = query_param("author")
+                    {
+                        let own = app.session.author.clone();
+                        crate::host::Bridge::set_author(&mut app, &author);
+                        prefs.keep_own_author(&app.session.author, &own);
+                    }
+                    Ok(Box::new(WebShell { app, inbox, messages, prefs }))
                 }),
             )
             .await;
+        // Ready only once the runner is up: starting can still fail after the app is made.
+        if let Some(bridge) = &bridge {
+            match &result {
+                Ok(()) => bridge.post_ready(),
+                Err(e) => bridge.post_failed(&format!("{e:?}")),
+            }
+        }
         if let Some(el) = document.get_element_by_id(LOADING_ID) {
             match result {
                 Ok(()) => el.remove(),
@@ -81,71 +123,79 @@ fn query() -> String {
     web_sys::window().and_then(|w| w.location().search().ok()).unwrap_or_default()
 }
 
+fn query_param(key: &str) -> Option<String> {
+    web_sys::UrlSearchParams::new_with_str(&query()).ok()?.get(key)
+}
+
 /// Wraps the app to read dropped files asynchronously (browsers can't read them synchronously)
 /// and feed them through the inbox.
 struct WebShell {
     app: WordApp,
     inbox: Inbox,
-    saves: Rc<PickerSaves>,
+    messages: Rc<RefCell<Vec<String>>>,
+    prefs: crate::prefs::PrefsSync,
 }
 
-/// Saves the browser's save picker finishes after `download` has returned (#728). The app marks
-/// the document saved as soon as `download` returns, so a cancelled or failed picker save must
-/// mark it unsaved again, and the `beforeunload` guard keeps warning while one is in flight.
-#[derive(Default)]
-struct PickerSaves {
-    /// Picker saves started and not yet written and closed.
-    pending: Cell<u32>,
-    /// Picker saves that didn't write the file: (name, error, or `None` when cancelled).
-    unsaved: RefCell<Vec<(String, Option<String>)>>,
+fn local_storage() -> Option<web_sys::Storage> {
+    web_sys::window()?.local_storage().ok()?
 }
 
-impl WebShell {
-    /// A picker save that didn't happen leaves the document with unsaved changes.
-    fn settle_picker_saves(&mut self) {
-        let unsaved = std::mem::take(&mut *self.saves.unsaved.borrow_mut());
-        for (name, error) in unsaved {
-            // Only a save in a format that keeps everything marked the document saved.
-            if wordcraft_ui_egui::keeps_everything(&name) {
-                self.app.session.dirty = true;
-            }
-            if let Some(error) = error {
-                let msg = wordcraft_ui_egui::i18n::fmt(
-                    wordcraft_ui_egui::i18n::t("Couldn't download {name}: {error}"),
-                    &[("name", &name), ("error", &error)],
-                );
-                self.app.status(msg);
-            }
-        }
-    }
+/// The preferences stored on an earlier visit, if the browser allows storage.
+fn stored_prefs() -> Option<String> {
+    local_storage()?.get_item(crate::prefs::KEY).ok()?
 }
 
 impl eframe::App for WebShell {
+    /// Runs one browser frame: forwards queued host messages to the status bar, advances the app,
+    /// then writes changed preferences to browser storage immediately, because a reload or closed
+    /// tab never runs the exit path.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        let dropped = ctx.input_mut(|i| std::mem::take(&mut i.raw.dropped_files));
-        for f in dropped {
-            let inbox = self.inbox.clone();
-            let ctx = ctx.clone();
-            wasm_bindgen_futures::spawn_local(async move {
-                let name = f.path().file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "dropped".into());
-                match f.bytes_async().await {
-                    Ok(bytes) => {
-                        inbox.lock().unwrap_or_else(|e| e.into_inner()).push((name, bytes));
-                        ctx.request_repaint();
-                    }
-                    Err(e) => log::error!("couldn't read dropped file {name}: {e}"),
-                }
-            });
+        let msgs = std::mem::take(&mut *self.messages.borrow_mut());
+        for msg in msgs {
+            self.app.status(msg);
         }
-        self.settle_picker_saves();
         self.app.logic(ctx);
+        // Store changed preferences straight away: a reload or closed tab runs no exit code (#2132).
+        if let Some(json) = self.prefs.changed(&self.app) {
+            match local_storage() {
+                Some(store) => {
+                    if let Err(e) = store.set_item(crate::prefs::KEY, &json) {
+                        log::warn!("preferences: cannot save: {e:?}");
+                    }
+                }
+                None => log::warn!("preferences: browser storage is unavailable"),
+            }
+        }
     }
 
-    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
-        self.app.raw_input_hook(raw);
+    /// Forwards this frame's raw browser input to the app before widgets run.
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        self.app.raw_input_hook(ctx, raw);
     }
 
+    /// Draws the app. On the first pass of a visible frame it takes the browser's dropped files and
+    /// spawns asynchronous byte reads into the inbox; later passes only draw.
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // Browser drops are input: take them only in the first real UI pass, never in a hidden
+        // `run_logic` tick that still sees the previous shown frame's RawInput.
+        if ui.ctx().current_pass_index() == 0 {
+            let ctx = ui.ctx().clone();
+            let dropped = ctx.input_mut(|i| std::mem::take(&mut i.raw.dropped_files));
+            for f in dropped {
+                let inbox = self.inbox.clone();
+                let ctx = ctx.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    let name = f.path().file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "dropped".into());
+                    match f.bytes_async().await {
+                        Ok(bytes) => {
+                            inbox.lock().unwrap_or_else(|e| e.into_inner()).push((name, bytes));
+                            ctx.request_repaint();
+                        }
+                        Err(e) => log::error!("couldn't read dropped file {name}: {e}"),
+                    }
+                });
+            }
+        }
         self.app.ui(ui);
     }
 }
@@ -157,10 +207,11 @@ const MAX_PASTED_PICTURES: u32 = 20;
 
 /// Pasting a picture (#45): eframe's paste handler only reads text, so a clipboard holding just
 /// pictures (a screenshot, a browser's Copy Image) is read here and the pictures arrive through
-/// the inbox like dropped ones. A clipboard with text is left to eframe.
+/// the app's `pasted` queue, which inserts them only when the page is the edit target (#1349). A clipboard with text is left to eframe.
 fn listen_for_pasted_pictures(inbox: Inbox, ctx: egui::Context) -> Result<(), String> {
     let document = web_sys::window().and_then(|w| w.document()).ok_or("no document")?;
     let on_paste = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::ClipboardEvent)>::new(move |e: web_sys::ClipboardEvent| {
+        // The target is always eframe's hidden text input while the page has focus; the app decides (#1349).
         let Some(data) = e.clipboard_data() else { return };
         if !data.get_data("text").unwrap_or_default().is_empty() {
             return;
@@ -181,7 +232,7 @@ fn listen_for_pasted_pictures(inbox: Inbox, ctx: egui::Context) -> Result<(), St
                 match wasm_bindgen_futures::JsFuture::from(file.array_buffer()).await {
                     Ok(buf) => {
                         let bytes = js_sys::Uint8Array::new(&buf).to_vec();
-                        // The inbox inserts files named like pictures; the engine reads the format from the bytes.
+                        // The engine reads the format from the bytes; the name is ignored.
                         inbox.lock().unwrap_or_else(|e| e.into_inner()).push(("pasted.png".into(), bytes));
                         ctx.request_repaint();
                     }
@@ -197,9 +248,11 @@ fn listen_for_pasted_pictures(inbox: Inbox, ctx: egui::Context) -> Result<(), St
 }
 
 /// `dirty` is the flag the `beforeunload` guard reads ([`guard_unload`]).
-fn services(inbox: Inbox, ctx: egui::Context, dirty: Rc<Cell<bool>>, saves: Rc<PickerSaves>) -> Services {
+fn services(inbox: Inbox, ctx: egui::Context, dirty: Rc<Cell<bool>>, saves: AsyncSaves, messages: Rc<RefCell<Vec<String>>>) -> Services {
     let open_inbox = inbox.clone();
     let save_ctx = ctx.clone();
+    let font_ctx = ctx.clone();
+    let font_messages = messages.clone();
     Services {
         open_async: Some(Box::new(move |purpose: &str| {
             let inbox = open_inbox.clone();
@@ -213,17 +266,28 @@ fn services(inbox: Inbox, ctx: egui::Context, dirty: Rc<Cell<bool>>, saves: Rc<P
             } else {
                 rfd::AsyncFileDialog::new().add_filter("Documents", DOC_EXTS)
             };
+            let many = purpose == "font";
             wasm_bindgen_futures::spawn_local(async move {
-                let Some(file) = dialog.pick_file().await else {
-                    return;
-                };
-                let bytes = file.read().await;
-                inbox.lock().unwrap_or_else(|e| e.into_inner()).push((file.file_name(), bytes));
-                ctx.request_repaint();
+                // Add Font takes every selected file (#1789); the others one.
+                let files = if many { dialog.pick_files().await.unwrap_or_default() } else { dialog.pick_file().await.into_iter().collect() };
+                for file in files.into_iter().take(MAX_PICKED_FILES) {
+                    let mut bytes = file.read().await;
+                    let mut pending = inbox.lock().unwrap_or_else(|e| e.into_inner());
+                    // Fonts waiting for the app to drain them stay under a byte cap. A file
+                    // over it is queued empty, so Add Font reports that file on its own.
+                    let held: usize = pending.iter().map(|(_, b)| b.len()).fold(0, usize::saturating_add);
+                    if many && held.saturating_add(bytes.len()) > MAX_PENDING_PICKED_BYTES {
+                        bytes = Vec::new();
+                    }
+                    pending.push((file.file_name(), bytes));
+                    drop(pending);
+                    ctx.request_repaint();
+                }
             });
         })),
         // Exports ask for a name; the browser decides where the download goes.
         pick_save: Some(Box::new(|name: &str| Some(name.to_string()))),
+        async_saves: Some(saves.clone()),
         download: Some(Box::new(move |path: &str, bytes: &[u8]| download(&saves, &save_ctx, path, bytes))),
         print: Some(Box::new(print_pdf)),
         inbox: Some(inbox),
@@ -231,8 +295,114 @@ fn services(inbox: Inbox, ctx: egui::Context, dirty: Rc<Cell<bool>>, saves: Rc<P
         animations_enabled: Some(animations_enabled()),
         store_font: Some(Box::new(font_store::store)),
         forget_font: Some(Box::new(font_store::forget)),
+        load_system_fonts: Some(Box::new(move || {
+            load_system_fonts(font_ctx.clone(), font_messages.clone());
+        })),
         ..Default::default()
     }
+}
+
+/// Most files one multi-select pick (Add Font) reads.
+const MAX_PICKED_FILES: usize = 2000;
+/// Most bytes of picked fonts held in the inbox before the app drains them.
+const MAX_PENDING_PICKED_BYTES: usize = 256 << 20;
+/// Most local fonts one Load System Installed Fonts installs (a designer's machine has thousands).
+const MAX_SYSTEM_FONTS: usize = 500;
+/// Most font bytes one Load System Installed Fonts reads into memory (wasm memory is small).
+const MAX_SYSTEM_FONT_BYTES: usize = 256 << 20;
+/// Most local fonts looked at, installed or not (already available, unreadable, too big).
+const MAX_SYSTEM_FONTS_TRIED: u32 = 4000;
+
+/// Query the browser's Local Font Access API (`window.queryLocalFonts()`) and install the faces
+/// into the global font database, up to [`MAX_SYSTEM_FONTS`] faces and [`MAX_SYSTEM_FONT_BYTES`].
+fn load_system_fonts(ctx: egui::Context, messages: Rc<RefCell<Vec<String>>>) {
+    wasm_bindgen_futures::spawn_local(async move {
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        let query_fn = match js_sys::Reflect::get(&window, &wasm_bindgen::JsValue::from_str("queryLocalFonts")) {
+            Ok(val) if val.is_function() => js_sys::Function::from(val),
+            _ => {
+                messages.borrow_mut().push(wordcraft_ui_egui::i18n::t("Local font access is not supported by your browser.").to_string());
+                ctx.request_repaint();
+                return;
+            }
+        };
+        let fonts_promise = match query_fn.call0(&window) {
+            Ok(p) => js_sys::Promise::from(p),
+            Err(e) => {
+                log::warn!("queryLocalFonts call failed: {e:?}");
+                messages.borrow_mut().push(wordcraft_ui_egui::i18n::t("Local font access was denied.").to_string());
+                ctx.request_repaint();
+                return;
+            }
+        };
+        let fonts_val = match wasm_bindgen_futures::JsFuture::from(fonts_promise).await {
+            Ok(val) => val,
+            Err(e) => {
+                log::warn!("queryLocalFonts promise rejected: {e:?}");
+                messages.borrow_mut().push(wordcraft_ui_egui::i18n::t("Local font access was denied.").to_string());
+                ctx.request_repaint();
+                return;
+            }
+        };
+        let font_list = js_sys::Array::from(&fonts_val);
+        let len = font_list.length();
+        let mut loaded = 0usize;
+        let mut total_bytes = 0usize;
+        for i in 0..len.min(MAX_SYSTEM_FONTS_TRIED) {
+            if loaded >= MAX_SYSTEM_FONTS || total_bytes >= MAX_SYSTEM_FONT_BYTES {
+                log::warn!("local fonts: stopped after {loaded} fonts ({total_bytes} bytes)");
+                break;
+            }
+            let font_data = font_list.get(i);
+            let Ok(blob_fn) = js_sys::Reflect::get(&font_data, &wasm_bindgen::JsValue::from_str("blob")) else {
+                continue;
+            };
+            if !blob_fn.is_function() {
+                continue;
+            }
+            let Ok(blob_val) = js_sys::Function::from(blob_fn).call0(&font_data) else {
+                continue;
+            };
+            let Ok(blob_js) = wasm_bindgen_futures::JsFuture::from(js_sys::Promise::from(blob_val)).await else {
+                continue;
+            };
+            let Ok(blob) = blob_js.dyn_into::<web_sys::Blob>() else {
+                continue;
+            };
+            // Skip a face too big on its own or for what is left of the budget, before reading it.
+            let size = blob.size().clamp(0.0, usize::MAX as f64) as usize;
+            if size > wordcraft_fonts::MAX_FONT_FILE_BYTES || total_bytes.saturating_add(size) > MAX_SYSTEM_FONT_BYTES {
+                continue;
+            }
+            let Ok(array_buffer) = wasm_bindgen_futures::JsFuture::from(blob.array_buffer()).await else {
+                continue;
+            };
+            let bytes = js_sys::Uint8Array::new(&array_buffer).to_vec();
+            if bytes.len() > wordcraft_fonts::MAX_FONT_FILE_BYTES {
+                continue;
+            }
+            total_bytes = total_bytes.saturating_add(bytes.len());
+            let ps_name = js_sys::Reflect::get(&font_data, &wasm_bindgen::JsValue::from_str("postscriptName"))
+                .ok()
+                .and_then(|v| v.as_string())
+                .unwrap_or_else(|| format!("local-font-{i}"));
+            let name = format!("{ps_name}.ttf");
+            match wordcraft_fonts::FontDb::global().install_font(&name, &bytes) {
+                Ok(_) => loaded += 1,
+                Err(wordcraft_fonts::UserFontError::AlreadyAvailable(_)) => {}
+                Err(e) => log::warn!("local font {name} skipped: {e}"),
+            }
+        }
+        if loaded > 0 {
+            let msg = wordcraft_ui_egui::i18n::fmt(wordcraft_ui_egui::i18n::t("Loaded {count} system fonts."), &[("count", &loaded.to_string())]);
+            messages.borrow_mut().push(msg);
+        } else {
+            messages.borrow_mut().push(wordcraft_ui_egui::i18n::t("All system fonts are already available.").to_string());
+        }
+        ctx.request_repaint();
+    });
 }
 
 /// Whether the system has animation effects on, as the browser passes it on: off while the
@@ -245,11 +415,11 @@ fn animations_enabled() -> Box<dyn Fn() -> Option<bool>> {
 
 /// Closing, reloading or leaving the tab with unsaved changes asks first. Browsers show their own
 /// confirmation (a page can only ask for it), so there is no Save button: Cancel, then File › Save.
-fn guard_unload(dirty: Rc<Cell<bool>>, saves: Rc<PickerSaves>) -> Result<(), String> {
+fn guard_unload(dirty: Rc<Cell<bool>>, saves: AsyncSaves) -> Result<(), String> {
     let window = web_sys::window().ok_or("no window")?;
     let on_unload = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::BeforeUnloadEvent)>::new(move |e: web_sys::BeforeUnloadEvent| {
         // A save still in the browser's picker hasn't written anything yet.
-        if dirty.get() || saves.pending.get() > 0 {
+        if dirty.get() || saves.pending() > 0 {
             e.prevent_default();
             // Older browsers ask only when `returnValue` is set.
             e.set_return_value("unsaved changes");
@@ -262,7 +432,7 @@ fn guard_unload(dirty: Rc<Cell<bool>>, saves: Rc<PickerSaves>) -> Result<(), Str
 }
 
 /// Trigger a browser save dialog or download of `bytes` named after the last component of `path`.
-fn download(saves: &Rc<PickerSaves>, ctx: &egui::Context, path: &str, bytes: &[u8]) -> Result<(), String> {
+fn download(saves: &AsyncSaves, ctx: &egui::Context, path: &str, bytes: &[u8]) -> Result<(), String> {
     let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "document".into());
     let window = web_sys::window().ok_or("no window")?;
 
@@ -284,7 +454,7 @@ fn download(saves: &Rc<PickerSaves>, ctx: &egui::Context, path: &str, bytes: &[u
 }
 
 fn trigger_save_file_picker(
-    saves: &Rc<PickerSaves>,
+    saves: &AsyncSaves,
     ctx: &egui::Context,
     window: &web_sys::Window,
     picker_fn: &js_sys::Function,
@@ -292,7 +462,7 @@ fn trigger_save_file_picker(
     bytes: &[u8],
 ) -> Result<(), String> {
     let js = |e: wasm_bindgen::JsValue| format!("{e:?}");
-    let ext = std::path::Path::new(name).extension().and_then(|e| e.to_str()).unwrap_or("docx").to_ascii_lowercase();
+    let ext = std::path::Path::new(name).extension().and_then(std::ffi::OsStr::to_str).unwrap_or("docx").to_ascii_lowercase();
     let dot_ext = format!(".{ext}");
     let mime = mime_for(name);
 
@@ -325,39 +495,35 @@ fn trigger_save_file_picker(
     let prom: js_sys::Promise = prom_val.dyn_into().map_err(|_| "not a promise".to_string())?;
 
     let bytes_vec = bytes.to_vec();
+    let window = window.clone();
     let saves = saves.clone();
     let ctx = ctx.clone();
     let name = name.to_string();
-    saves.pending.set(saves.pending.get().saturating_add(1));
+    // The app holds back a Save Changes prompt's New/Open until this ticket ends (#1315).
+    let ticket = saves.start();
     wasm_bindgen_futures::spawn_local(async move {
         // The document counts as saved only once the file is written and closed.
-        let unsaved = match wasm_bindgen_futures::JsFuture::from(prom).await {
+        let outcome = match wasm_bindgen_futures::JsFuture::from(prom).await {
             Ok(handle_val) => match write_file_handle(&handle_val, &bytes_vec).await {
                 Ok(()) => {
                     log::info!("saved {name} through the save picker");
-                    None
+                    SaveOutcome::Saved
                 }
                 Err(e) => {
                     log::error!("couldn't write {name}: {e}");
-                    Some(Some(e))
+                    SaveOutcome::Failed(e)
                 }
             },
             Err(e) => {
                 let err_name =
                     js_sys::Reflect::get(&e, &wasm_bindgen::JsValue::from_str("name")).ok().and_then(|v| v.as_string()).unwrap_or_default();
-                if err_name == "AbortError" {
-                    log::debug!("save picker cancelled");
-                    Some(None)
-                } else {
-                    log::error!("showSaveFilePicker error: {e:?}");
-                    Some(Some(format!("{e:?}")))
-                }
+                // A browser can expose the picker but reject its promise (for example in
+                // a cross-origin iframe). Use the same download path as an absent API;
+                // cancelling a picker must never start an unwanted download (#1246).
+                crate::save_fallback::picker_rejected(&err_name, || trigger_anchor_download(&window, &name, &bytes_vec))
             }
         };
-        if let Some(error) = unsaved {
-            saves.unsaved.borrow_mut().push((name, error));
-        }
-        saves.pending.set(saves.pending.get().saturating_sub(1));
+        saves.finish(ticket, outcome);
         ctx.request_repaint();
     });
     Ok(())

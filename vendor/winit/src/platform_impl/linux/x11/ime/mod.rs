@@ -17,6 +17,7 @@ pub use self::context::ImeContextCreationError;
 use self::inner::{close_im, ImeInner};
 use self::input_method::PotentialInputMethods;
 use super::{ffi, util, XConnection, XError};
+use crate::event::{Ime as PublicIme, WindowEvent};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -26,12 +27,78 @@ pub enum ImeEvent {
     Update(String, usize),
     End,
     Disabled,
+    /// Enqueued after XmbResetIC and its callbacks, never delivered ahead of this channel.
+    Reset {
+        request_id: Option<u64>,
+    },
+}
+
+/// Composition belongs to a window; resetting one context must not clear another's preview.
+#[derive(Default)]
+pub(crate) struct CompositionState(std::collections::HashSet<ffi::Window>);
+
+impl CompositionState {
+    pub(crate) fn is_composing(&self, window: ffi::Window) -> bool {
+        self.0.contains(&window)
+    }
+
+    pub(crate) fn end(&mut self, window: ffi::Window) -> bool {
+        self.0.remove(&window)
+    }
+
+    pub(crate) fn handle(
+        &mut self,
+        window: ffi::Window,
+        event: ImeEvent,
+    ) -> [Option<WindowEvent>; 2] {
+        let event = match event {
+            ImeEvent::Enabled => PublicIme::Enabled,
+            ImeEvent::Start => {
+                self.0.insert(window);
+                PublicIme::Preedit(String::new(), None)
+            },
+            ImeEvent::Update(text, position) if self.is_composing(window) => {
+                PublicIme::Preedit(text, Some((position, position)))
+            },
+            ImeEvent::End => {
+                self.end(window);
+                PublicIme::Preedit(String::new(), None)
+            },
+            ImeEvent::Disabled => {
+                self.end(window);
+                PublicIme::Disabled
+            },
+            ImeEvent::Reset { request_id } => {
+                let clear = self
+                    .end(window)
+                    .then(|| WindowEvent::Ime(PublicIme::Preedit(String::new(), None)));
+                let completion =
+                    request_id.map(|request_id| WindowEvent::ImeResetCompleted { request_id });
+                return [clear, completion];
+            },
+            ImeEvent::Update(..) => return [None, None],
+        };
+        [Some(WindowEvent::Ime(event)), None]
+    }
 }
 
 pub type ImeReceiver = Receiver<ImeRequest>;
 pub type ImeSender = Sender<ImeRequest>;
 pub type ImeEventReceiver = Receiver<(ffi::Window, ImeEvent)>;
 pub type ImeEventSender = Sender<(ffi::Window, ImeEvent)>;
+
+fn queue_reset_fence(
+    sender: &ImeEventSender,
+    window: ffi::Window,
+    request_id: Option<u64>,
+    reset: Result<bool, XError>,
+) -> Result<bool, XError> {
+    let reset = reset?;
+    if reset {
+        let _ = sender.send((window, ImeEvent::Reset { request_id }));
+    }
+    Ok(reset)
+}
 
 /// Request to control XIM handler from the window.
 pub enum ImeRequest {
@@ -40,6 +107,12 @@ pub enum ImeRequest {
 
     /// Allow IME input for the given `window_id`.
     Allow(ffi::Window, bool),
+
+    /// Discard the composition of the given `window_id`.
+    Reset(ffi::Window),
+
+    /// Discard composition and queue the corresponding ordered completion fence.
+    ResetWithRequest(ffi::Window, u64),
 }
 
 #[derive(Debug)]
@@ -167,10 +240,11 @@ impl Ime {
         if self.is_destroyed() {
             return Ok(false);
         }
-        if let Some(&mut Some(ref mut context)) = self.inner.contexts.get_mut(&window) {
-            context.focus(&self.xconn).map(|_| true)
-        } else {
-            Ok(false)
+        match self.inner.contexts.get_mut(&window) {
+            // A context with IME disallowed stays unfocused, so the input method doesn't show
+            // itself for a window that doesn't take text.
+            Some(Some(context)) if context.is_allowed() => context.focus(&self.xconn).map(|_| true),
+            _ => Ok(false),
         }
     }
 
@@ -194,22 +268,52 @@ impl Ime {
         }
     }
 
-    pub fn set_ime_allowed(&mut self, window: ffi::Window, allowed: bool) {
+    /// Discards the window's composition, if it has a context.
+    pub fn reset(&mut self, window: ffi::Window) -> Result<bool, XError> {
         if self.is_destroyed() {
-            return;
+            return Ok(false);
         }
-
         if let Some(&mut Some(ref mut context)) = self.inner.contexts.get_mut(&window) {
-            if allowed == context.is_allowed() {
-                return;
-            }
+            context.reset(&self.xconn).map(|_| true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    pub fn reset_with_request(
+        &mut self,
+        window: ffi::Window,
+        request_id: Option<u64>,
+    ) -> Result<bool, XError> {
+        // XmbResetIC may synchronously enqueue End or other callbacks. The fence must follow
+        // those and callbacks already waiting, not bypass the receiver's FIFO.
+        let reset = self.reset(window);
+        queue_reset_fence(&self.inner.event_sender, window, request_id, reset)
+    }
+
+    /// Returns whether IME was turned on or off. The window keeps its input context either way;
+    /// when the window has the focus, the caller focuses the context, or resets and unfocuses it.
+    pub fn set_ime_allowed(
+        &mut self,
+        window: ffi::Window,
+        allowed: bool,
+    ) -> Result<bool, ImeContextCreationError> {
+        if self.is_destroyed() {
+            return Ok(false);
         }
 
-        // Remove context for that window.
-        let _ = self.remove_context(window);
-
-        // Create new context supporting IME input.
-        let _ = self.create_context(window, allowed);
+        match self.inner.contexts.get_mut(&window) {
+            Some(Some(context)) => {
+                if allowed == context.is_allowed() {
+                    return Ok(false);
+                }
+                context.set_allowed(allowed);
+                let event = if allowed { ImeEvent::Enabled } else { ImeEvent::Disabled };
+                self.inner.event_sender.send((window, event)).expect("Failed to send IME event");
+                Ok(true)
+            },
+            _ => self.create_context(window, allowed),
+        }
     }
 
     pub fn is_ime_allowed(&self, window: ffi::Window) -> bool {
@@ -229,5 +333,74 @@ impl Drop for Ime {
             let _ = self.inner.destroy_all_contexts_if_necessary();
             let _ = self.inner.close_im_if_necessary();
         }
+    }
+}
+
+#[cfg(test)]
+mod reset_fence_tests {
+    use std::sync::mpsc::channel;
+
+    use super::{queue_reset_fence, CompositionState, ImeEvent, XError};
+    use crate::event::{Ime, WindowEvent};
+
+    #[test]
+    fn reset_fence_follows_queued_callbacks_and_precedes_new_composition() {
+        let (sender, receiver) = channel();
+        sender.send((1, ImeEvent::Start)).unwrap();
+        sender.send((1, ImeEvent::Update("old".into(), 3))).unwrap();
+        assert!(queue_reset_fence(&sender, 1, Some(u64::MAX), Ok(true)).unwrap());
+        // A late update without a new Start cannot revive the reset composition.
+        sender.send((1, ImeEvent::Update("obsolete".into(), 8))).unwrap();
+        sender.send((1, ImeEvent::Start)).unwrap();
+        sender.send((1, ImeEvent::Update("new".into(), 3))).unwrap();
+
+        let mut state = CompositionState::default();
+        let actual: Vec<_> = receiver
+            .try_iter()
+            .flat_map(|(window, event)| state.handle(window, event).into_iter().flatten())
+            .collect();
+        assert_eq!(actual, vec![
+            WindowEvent::Ime(Ime::Preedit(String::new(), None)),
+            WindowEvent::Ime(Ime::Preedit("old".into(), Some((3, 3)))),
+            WindowEvent::Ime(Ime::Preedit(String::new(), None)),
+            WindowEvent::ImeResetCompleted { request_id: u64::MAX },
+            WindowEvent::Ime(Ime::Preedit(String::new(), None)),
+            WindowEvent::Ime(Ime::Preedit("new".into(), Some((3, 3)))),
+        ]);
+    }
+
+    #[test]
+    fn terminal_pending_fence_completes_without_clearing_another_window() {
+        let mut state = CompositionState::default();
+        state.handle(2, ImeEvent::Start);
+        assert_eq!(state.handle(1, ImeEvent::Reset { request_id: Some(7) }), [
+            None,
+            Some(WindowEvent::ImeResetCompleted { request_id: 7 })
+        ],);
+        assert!(state.is_composing(2));
+        assert_eq!(state.handle(2, ImeEvent::Update("other".into(), 5)), [
+            Some(WindowEvent::Ime(Ime::Preedit("other".into(), Some((5, 5))))),
+            None
+        ],);
+        state.handle(1, ImeEvent::Start);
+        state.handle(1, ImeEvent::End);
+        assert_eq!(state.handle(1, ImeEvent::Reset { request_id: Some(8) }), [
+            None,
+            Some(WindowEvent::ImeResetCompleted { request_id: 8 })
+        ],);
+    }
+
+    #[test]
+    fn failed_or_missing_context_does_not_queue_a_successful_fence() {
+        let (sender, receiver) = channel();
+        assert!(!queue_reset_fence(&sender, 1, Some(1), Ok(false)).unwrap());
+        let failure = XError {
+            description: "reset failed".into(),
+            error_code: 1,
+            request_code: 0,
+            minor_code: 0,
+        };
+        assert!(queue_reset_fence(&sender, 1, Some(2), Err(failure)).is_err());
+        assert!(receiver.try_recv().is_err());
     }
 }

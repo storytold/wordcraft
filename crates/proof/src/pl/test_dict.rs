@@ -33,10 +33,16 @@ PFX N 0 nie .
 ";
 
 /// Stems (the count line first, as in Hunspell files).
-pub const DIC: &str = "63
+pub const DIC: &str = "69
 źdźbło
 gżegżółka
 chrząszcz
+chleb
+chłep
+chlap
+chlip
+chlup
+chlej
 pięćdziesięciu
 rzeka
 którzy

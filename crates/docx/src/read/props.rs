@@ -4,16 +4,17 @@ use std::collections::HashMap;
 
 use wordcraft_doc::para::cap_alt;
 use wordcraft_doc::props::{
-    Align, Border, BorderStyle, Borders, CellProps, CharProps, HeightRule, Highlight, LineSpacing, NumRef, ParaProps, Rgb, RowProps, TabAlign,
-    TabLeader, TabStop, TableFloat, TableLook, TableProps, TextColor, TextDirection, Underline, VAlign, VMerge, VertAlign,
+    Align, Border, BorderStyle, Borders, CellProps, CharProps, CombineBrackets, EastAsianLayout, HeightRule, Highlight, LineSpacing, NumRef,
+    ParaProps, Rgb, RowProps, TabAlign, TabLeader, TabStop, TableFloat, TableLook, TableProps, TextColor, TextDirection, Underline, VAlign, VMerge,
+    VertAlign,
 };
 use wordcraft_doc::section::{
     Columns, DocGrid, DocGridType, LineNumberRestart, LineNumbering, MAX_CHAR_SPACE, MAX_GRID_PITCH, NotePos, NoteProps, NoteRestart, NumFormat,
-    SectionProps, SectionStart,
+    PageVAlign, SectionProps, SectionStart,
 };
 
 use super::drawing_color::adjust_lum;
-use crate::units::{int, measure, on_off, tw, u32_of};
+use crate::units::{int, line_multiple, measure, on_off, tw, u32_of};
 
 /// A text frame (`w:framePr` without a drop cap, ECMA-376 §17.3.1.11), sizes and offsets in
 /// points (clamped), names kept as OOXML writes them.
@@ -43,6 +44,15 @@ use crate::xml::El;
 pub struct PropCtx {
     pub major_font: String,
     pub minor_font: String,
+    /// The theme's complex-script fonts (`a:cs`), which the `…Bidi` theme slots fall back on.
+    pub major_cs: String,
+    pub minor_cs: String,
+    /// The theme's per-script fonts (`a:font script="Arab" typeface="…"`).
+    pub major_scripts: Vec<(String, String)>,
+    pub minor_scripts: Vec<(String, String)>,
+    /// The script (ISO 15924) of `w:themeFontLang/@w:bidi`, which picks the font a `…Bidi` theme
+    /// slot names. `None` = the settings name no bidi language.
+    pub bidi_script: Option<&'static str>,
     /// The theme's colour scheme (dk1, lt1, dk2, lt2, accent1..6, hlink, folHlink); empty when the
     /// package has none, and then `w:themeColor` falls back to the fixed colour.
     pub theme_colors: Vec<Rgb>,
@@ -59,6 +69,64 @@ pub struct PropCtx {
 /// paragraph's style chain uses (ECMA-376 §17.3.1.19). A placeholder while reading, never left in
 /// a document (`resolve_list_levels`).
 pub(crate) const LEVEL_ONLY: u32 = u32::MAX;
+
+/// The font Word draws a `minorBidi`/`majorBidi` theme slot in when the settings name no bidi
+/// language, or the theme has no font for it.
+const BIDI_THEME_FALLBACK_FONT: &str = "Times New Roman";
+
+/// The script a language tag is written in, as a theme's `a:font script` names it (ISO 15924, and
+/// Office's own `Uigh` for Uyghur and `Viet` for Vietnamese): an explicit script subtag
+/// (`ku-Arab`), else the language's usual script. Languages not listed are taken as Latin.
+pub(crate) fn lang_script(tag: &str) -> &'static str {
+    const SCRIPTS: &[&str] = &[
+        "Arab", "Armn", "Beng", "Cans", "Cher", "Cyrl", "Deva", "Ethi", "Geor", "Grek", "Gujr", "Guru", "Hang", "Hans", "Hant", "Hebr", "Jpan",
+        "Khmr", "Knda", "Laoo", "Latn", "Mlym", "Mong", "Mymr", "Orya", "Sinh", "Syrc", "Taml", "Telu", "Tfng", "Thaa", "Thai", "Tibt", "Uigh",
+        "Viet", "Yiii",
+    ];
+    let mut parts = tag.split(['-', '_']).filter(|p| !p.is_empty());
+    let lang = parts.next().unwrap_or_default().to_ascii_lowercase();
+    let rest: Vec<&str> = parts.take(8).collect();
+    if let Some(s) = rest.iter().find_map(|p| SCRIPTS.iter().find(|s| s.eq_ignore_ascii_case(p))) {
+        return s;
+    }
+    match lang.as_str() {
+        "ar" | "fa" | "ur" | "ps" | "sd" | "ckb" | "prs" => "Arab",
+        "ug" => "Uigh",
+        "vi" => "Viet",
+        "he" | "yi" => "Hebr",
+        "syr" => "Syrc",
+        "dv" => "Thaa",
+        "th" => "Thai",
+        "hi" | "mr" | "ne" | "sa" | "kok" => "Deva",
+        "bn" | "as" => "Beng",
+        // Measured in Word: Punjabi takes the Arabic-script font in Pakistan, Gurmukhi elsewhere.
+        "pa" if rest.iter().any(|p| p.eq_ignore_ascii_case("pk")) => "Arab",
+        "pa" => "Guru",
+        "gu" => "Gujr",
+        "or" => "Orya",
+        "ta" => "Taml",
+        "te" => "Telu",
+        "kn" => "Knda",
+        "ml" => "Mlym",
+        "si" => "Sinh",
+        "lo" => "Laoo",
+        "km" => "Khmr",
+        "bo" => "Tibt",
+        "my" => "Mymr",
+        "am" | "ti" => "Ethi",
+        "chr" => "Cher",
+        "iu" => "Cans",
+        "ii" => "Yiii",
+        "ka" => "Geor",
+        "hy" => "Armn",
+        "el" => "Grek",
+        "ja" => "Jpan",
+        "ko" => "Hang",
+        "zh" if rest.iter().any(|p| ["tw", "hk", "mo"].iter().any(|r| r.eq_ignore_ascii_case(p))) => "Hant",
+        "zh" => "Hans",
+        _ => "Latn",
+    }
+}
 
 /// The list a level-only `numPr` refers to: the nearest numbering in style `style`'s based-on chain
 /// (its own included) that names a list. `None` when no style in the chain has one.
@@ -82,8 +150,25 @@ impl PropCtx {
     }
 
     fn theme_font(&self, t: &str) -> Option<String> {
-        let f = if t.starts_with("major") { &self.major_font } else { &self.minor_font };
-        (!f.is_empty()).then(|| f.clone())
+        let major = t.starts_with("major");
+        let latin = if major { &self.major_font } else { &self.minor_font };
+        if t.ends_with("Bidi") {
+            return Some(self.bidi_theme_font(major));
+        }
+        (!latin.is_empty()).then(|| latin.clone())
+    }
+
+    /// The font a `majorBidi`/`minorBidi` theme slot names. Measured in Word for Mac: the theme's
+    /// font for the script of the settings' `w:themeFontLang/@w:bidi` (its `a:latin` for a Latin
+    /// language), else the theme's `a:cs`, else Times New Roman; with no bidi language there,
+    /// Times New Roman whatever the theme says. The run's own `w:lang` plays no part.
+    fn bidi_theme_font(&self, major: bool) -> String {
+        let (latin, cs, scripts) =
+            if major { (&self.major_font, &self.major_cs, &self.major_scripts) } else { (&self.minor_font, &self.minor_cs, &self.minor_scripts) };
+        let named = |f: &String| (!f.is_empty()).then(|| f.clone());
+        let Some(script) = self.bidi_script else { return BIDI_THEME_FALLBACK_FONT.to_string() };
+        let by_script = if script == "Latn" { named(latin) } else { scripts.iter().find(|(s, _)| s == script).and_then(|(_, f)| named(f)) };
+        by_script.or_else(|| named(cs)).unwrap_or_else(|| BIDI_THEME_FALLBACK_FONT.to_string())
     }
 
     /// The theme colour `e` names in `attr` (`w:themeColor`, `w:themeFill`), through the colour
@@ -146,22 +231,11 @@ impl PropCtx {
                     // `w:ascii`, `w:hAnsiTheme` over `w:hAnsi`).
                     let named = |a: &str| k.attr(a).filter(|f| !f.is_empty()).map(str::to_string);
                     let themed = |a: &str| k.attr(a).and_then(|t| self.theme_font(t));
-                    c.font =
-                        themed("w:asciiTheme").or_else(|| named("w:ascii")).or_else(|| themed("w:hAnsiTheme")).or_else(|| named("w:hAnsi")).or_else(
-                            || {
-                                // `w:eastAsia` and `w:cs` name fonts for other scripts; they stand in for the
-                                // Latin font only when the run is hinted as that script. Otherwise the Latin
-                                // font is inherited (a Normal style with only `w:eastAsia`/`w:cs` keeps the
-                                // `docDefaults` font, as in Word).
-                                match k.attr("w:hint") {
-                                    Some("eastAsia") => k.attr("w:eastAsia"),
-                                    Some("cs") => k.attr("w:cs"),
-                                    _ => None,
-                                }
-                                .filter(|f| !f.is_empty())
-                                .map(str::to_string)
-                            },
-                        );
+                    // `w:eastAsia` and `w:cs` name fonts for other scripts and stay in `font_ea` /
+                    // `font_cs`: `w:hint` only picks between them for ambiguous characters, never for
+                    // Latin letters. A Normal style with only `w:eastAsia`/`w:cs` keeps the
+                    // `docDefaults` font, and so does a hinted run, as in Word.
+                    c.font = themed("w:asciiTheme").or_else(|| named("w:ascii")).or_else(|| themed("w:hAnsiTheme")).or_else(|| named("w:hAnsi"));
                     // The complex-script font (Persian, Arabic, Hebrew text). A `w:cstheme` font is
                     // left to inherit: the theme's per-script fonts aren't read.
                     c.font_cs = k.attr("w:cs").filter(|f| !f.is_empty() && f.len() < 256).map(str::to_string);
@@ -201,11 +275,8 @@ impl PropCtx {
                 "w:szCs" => c.size_cs = k.attr("w:val").and_then(|v| measure(v, 2.0)).filter(|v| *v > 0.0).map(|v| v.clamp(1.0, 1638.0)),
                 "w:highlight" => c.highlight = k.attr("w:val").map(Highlight::from_ooxml),
                 "w:u" => {
-                    if let Some(v) = k.attr("w:val") {
-                        c.underline = Some(Underline::from_ooxml(v));
-                    } else {
-                        c.underline = Some(Underline::Single);
-                    }
+                    // w:val has no default in the schema: without it Word draws no underline
+                    c.underline = k.attr("w:val").map(Underline::from_ooxml);
                     c.underline_color =
                         self.theme_color(k, "w:themeColor", "w:themeTint", "w:themeShade").or_else(|| k.attr("w:color").and_then(Rgb::parse));
                 }
@@ -218,10 +289,16 @@ impl PropCtx {
                         _ => VertAlign::Baseline,
                     })
                 }
-                "w:lang" => {
-                    c.lang = k.attr("w:val").filter(|v| !v.is_empty() && v.len() < 64).map(str::to_string);
-                    c.lang_bidi = k.attr("w:bidi").filter(|v| !v.is_empty() && v.len() < 64).map(str::to_string);
+                "w:eastAsianLayout" => {
+                    let l = east_asian_layout(k);
+                    c.east_asian_layout = (l != EastAsianLayout::default()).then_some(l);
                 }
+                "w:lang" => {
+                    c.lang = k.attr("w:val").map(str::trim).filter(|v| !v.is_empty() && v.len() < 64).map(str::to_string);
+                    c.lang_bidi = k.attr("w:bidi").map(str::trim).filter(|v| !v.is_empty() && v.len() < 64).map(str::to_string);
+                    c.lang_ea = k.attr("w:eastAsia").map(str::trim).filter(|v| !v.is_empty() && v.len() < 64).map(str::to_string);
+                }
+                "w14:ligatures" => c.ligatures = k.attr("w14:val").and_then(wordcraft_doc::props::Ligatures::from_ooxml),
                 n if n.starts_with("w14:") => {
                     let fx = c.text_effects.get_or_insert_with(Default::default);
                     super::wordart::read(k, &self.theme, fx);
@@ -260,8 +337,11 @@ impl PropCtx {
                 "w:autoSpaceDN" => p.auto_space_dn = Some(on_off(k)),
                 "w:snapToGrid" => p.snap_to_grid = Some(on_off(k)),
                 "w:framePr" => {
-                    if matches!(k.attr("w:dropCap"), Some("drop") | Some("margin")) {
+                    if let Some(kind @ ("drop" | "margin")) = k.attr("w:dropCap") {
                         p.drop_cap = Some(k.attr("w:lines").and_then(u32_of).unwrap_or(3).clamp(1, 10) as u8);
+                        p.drop_cap_margin = (kind == "margin").then_some(true);
+                        p.drop_cap_distance =
+                            tw(k, "w:hSpace").filter(|d| d.is_finite() && *d > 0.0).map(|d| d.min(wordcraft_doc::resolve::MAX_DROP_CAP_DISTANCE));
                     } else {
                         p.frame = Some(text_frame(k));
                     }
@@ -306,7 +386,8 @@ impl PropCtx {
                         p.line_spacing = match rule.as_str() {
                             "exact" => measure(line, 20.0).map(|v| LineSpacing::Exactly(v.abs())),
                             "atleast" => measure(line, 20.0).map(|v| LineSpacing::AtLeast(v.abs())),
-                            _ => measure(line, 240.0).map(|v| LineSpacing::Multiple(v.abs().clamp(0.06, 132.0))),
+                            // Strict OOXML writes the height with a unit (`13.90pt`, #2329).
+                            _ => line_multiple(line).map(|v| LineSpacing::Multiple(v.abs().clamp(0.06, 132.0))),
                         };
                     }
                 }
@@ -366,14 +447,18 @@ fn tab_stop(t: &El) -> Option<TabStop> {
         "clear" => TabAlign::Clear,
         _ => TabAlign::Left,
     };
-    let leader = match t.attr("w:leader").unwrap_or("none") {
+    Some(TabStop { pos, align, leader: tab_leader(t.attr("w:leader").unwrap_or("none")) })
+}
+
+/// A tab stop's or positional tab's `w:leader` (`ST_TabTlc`, `ST_PTabLeader`).
+pub(crate) fn tab_leader(v: &str) -> TabLeader {
+    match v {
         "dot" => TabLeader::Dot,
         "hyphen" => TabLeader::Hyphen,
         "underscore" | "heavy" => TabLeader::Underscore,
         "middleDot" => TabLeader::MiddleDot,
         _ => TabLeader::None,
-    };
-    Some(TabStop { pos, align, leader })
+    }
 }
 
 /// `w:shd/@w:fill` (a solid fill colour; `auto` = none), ignoring theme fills ([`PropCtx::shd_fill`]).
@@ -416,7 +501,11 @@ pub fn borders(e: &El) -> Borders {
 
 /// Margins element (`w:tblCellMar`, `w:tcMar`) → [top, left, bottom, right].
 pub fn margins(e: &El) -> [f32; 4] {
-    let get = |names: &[&str]| names.iter().find_map(|n| e.child(n)).and_then(|c| tw(c, "w:w")).unwrap_or(0.0).clamp(0.0, 1584.0);
+    margin_sides(e).map(|side| side.unwrap_or(0.0))
+}
+
+fn margin_sides(e: &El) -> [Option<f32>; 4] {
+    let get = |names: &[&str]| names.iter().find_map(|n| e.child(n)).and_then(|c| tw(c, "w:w")).map(|v| v.clamp(0.0, 1584.0));
     [get(&["w:top"]), get(&["w:left", "w:start"]), get(&["w:bottom"]), get(&["w:right", "w:end"])]
 }
 
@@ -510,10 +599,22 @@ pub fn trpr(e: &El) -> RowProps {
             }
             "w:tblHeader" => r.header = on_off(k),
             "w:cantSplit" => r.cant_split = on_off(k),
+            "w:gridBefore" => r.grid_before = k.attr("w:val").and_then(u32_of).unwrap_or(0).min(63),
+            "w:gridAfter" => r.grid_after = k.attr("w:val").and_then(u32_of).unwrap_or(0).min(63),
+            "w:wBefore" => r.w_before = gap_width(k),
+            "w:wAfter" => r.w_after = gap_width(k),
             _ => {}
         }
     }
     r
+}
+
+/// `w:wBefore`/`w:wAfter` in points: only a width in twips (`dxa`) is kept.
+fn gap_width(k: &El) -> Option<f32> {
+    match k.attr("w:type") {
+        None | Some("dxa") => tw(k, "w:w").filter(|v| *v >= 0.0).map(|v| v.min(crate::units::MAX_LEN_PT)),
+        _ => None,
+    }
 }
 
 /// `w:tcPr`; returns the props and whether the cell is a legacy `hMerge` continuation.
@@ -539,14 +640,24 @@ pub fn tcpr(pc: &PropCtx, e: &El) -> (CellProps, bool) {
             "w:shd" => c.shading = pc.shd_fill(k),
             "w:noWrap" => c.no_wrap = on_off(k),
             "w:hideMark" => c.hide_mark = on_off(k),
-            "w:tcMar" => c.margins = Some(margins(k)),
-            "w:textDirection" => c.text_direction = TextDirection::from_ooxml(k.attr("w:val").unwrap_or("")),
+            "w:tcMar" => {
+                let sides = margin_sides(k);
+                if sides.iter().all(Option::is_some) {
+                    c.margins = Some(sides.map(|side| side.unwrap_or(0.0)));
+                } else {
+                    c.partial_margins = Some(sides);
+                }
+            }
+            "w:textDirection" => {
+                c.text_direction = TextDirection::from_ooxml(k.attr("w:val").unwrap_or(""));
+                c.text_direction_set = k.attr("w:val") == Some("lrTb");
+            }
             "w:vAlign" => {
-                c.valign = match k.attr("w:val") {
+                c.valign = Some(match k.attr("w:val") {
                     Some("center") => VAlign::Center,
                     Some("bottom") => VAlign::Bottom,
                     _ => VAlign::Top,
-                }
+                })
             }
             _ => {}
         }
@@ -629,14 +740,19 @@ pub fn sectpr(e: &El) -> (SectionProps, Vec<HfRef>) {
             }
             "w:footnotePr" => s.footnote_pr = note_pr(k, true),
             "w:endnotePr" => s.endnote_pr = note_pr(k, true),
+            "w:formProt" => s.form_prot = Some(on_off(k)),
             "w:titlePg" => s.title_page = on_off(k),
             "w:bidi" => s.rtl = on_off(k),
-            "w:textDirection" => s.text_direction = wordcraft_doc::props::TextDirection::from_ooxml(k.attr("w:val").unwrap_or("")),
+            "w:textDirection" => {
+                s.text_direction = wordcraft_doc::props::TextDirection::from_ooxml(k.attr("w:val").unwrap_or(""));
+                s.text_direction_set = k.attr("w:val") == Some("lrTb");
+            }
             "w:pgNumType" => {
                 s.page_num_start = k.attr("w:start").and_then(u32_of);
                 if let Some(f) = k.attr("w:fmt") {
                     s.page_num_format = NumFormat::from_ooxml(f);
                 }
+                s.page_num_set = s.page_num_start.is_none() && s.page_num_format == NumFormat::Decimal;
             }
             "w:lnNumType" => {
                 let mut l = LineNumbering::default();
@@ -656,9 +772,10 @@ pub fn sectpr(e: &El) -> (SectionProps, Vec<HfRef>) {
             }
             "w:vAlign" => {
                 s.valign = match k.attr("w:val") {
-                    Some("center") | Some("both") => VAlign::Center,
-                    Some("bottom") => VAlign::Bottom,
-                    _ => VAlign::Top,
+                    Some("center") => PageVAlign::Center,
+                    Some("both") => PageVAlign::Justify,
+                    Some("bottom") => PageVAlign::Bottom,
+                    _ => PageVAlign::Top,
                 }
             }
             "w:pgBorders" => s.page_borders = Some(borders(k)),
@@ -713,5 +830,24 @@ fn table_float(e: &El) -> TableFloat {
         v_align: align("w:tblpYSpec"),
         dist: [dist("w:leftFromText"), dist("w:topFromText"), dist("w:rightFromText"), dist("w:bottomFromText")],
         overlap: true,
+    }
+}
+
+/// `w:eastAsianLayout` (ISO/IEC 29500-1 §17.3.2.10). Attributes the schema doesn't allow (an id
+/// out of `xsd:int`, an unknown bracket, an on/off that isn't one) are left unset.
+fn east_asian_layout(e: &El) -> EastAsianLayout {
+    let flag = |name: &str| {
+        e.attr(name).and_then(|v| match v.trim() {
+            "1" | "true" | "on" => Some(true),
+            "0" | "false" | "off" => Some(false),
+            _ => None,
+        })
+    };
+    EastAsianLayout {
+        id: e.attr("w:id").and_then(int).and_then(|v| i32::try_from(v).ok()),
+        combine: flag("w:combine"),
+        combine_brackets: e.attr("w:combineBrackets").and_then(|v| CombineBrackets::from_ooxml(v.trim())),
+        vert: flag("w:vert"),
+        vert_compress: flag("w:vertCompress"),
     }
 }

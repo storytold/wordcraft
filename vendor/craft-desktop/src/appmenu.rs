@@ -40,6 +40,8 @@ pub struct Bridge {
 }
 
 impl Bridge {
+    /// Export this window's snapshots unless disabled or no safe native handle is available.
+    /// Connection/retry work runs off the UI thread; callers retain their local menus.
     pub fn start(
         window: Arc<winit::window::Window>,
         application_id: &str,
@@ -92,6 +94,7 @@ impl Bridge {
         })
     }
 
+    /// Coalesce a newer snapshot and wake the worker without blocking on transport I/O.
     pub fn publish(&self, next: Menu) {
         if let Ok(mut pending) = self.pending.lock()
             && *pending != next
@@ -154,6 +157,13 @@ struct Changes {
 }
 
 impl Tree {
+    /// Begin a new export generation without recycling any previously advertised ID.
+    /// The worker retains this tree even when the D-Bus connection is replaced.
+    fn restart(&mut self, menu: &Menu) -> Result<(), String> {
+        self.ids.clear();
+        self.update(menu)
+    }
+
     fn update(&mut self, menu: &Menu) -> Result<(), String> {
         fn add(tree: &mut Tree, parent: &[String], item: &Item) -> Result<i32, String> {
             // Separate path components cannot collide when keys contain '/' (for
@@ -196,11 +206,21 @@ impl Tree {
         }
         self.document = menu.document;
         self.revision = self.revision.wrapping_add(1);
-        let children = menu
+        let children = match menu
             .items
             .iter()
             .map(|i| add(self, &[], i))
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Result<Vec<_>, _>>()
+        {
+            Ok(children) => children,
+            Err(error) => {
+                // A failed rebuild must not expose an actionable partial generation.
+                // Keep next_id advanced: even failed attempts must never recycle IDs.
+                self.nodes.clear();
+                self.ids.clear();
+                return Err(error);
+            }
+        };
         self.nodes.insert(
             0,
             Node {
@@ -351,6 +371,8 @@ impl Exporter {
             return Ok(());
         }
         if let Some(action) = &n.item.action {
+            // Backpressure must not block a D-Bus executor while holding the tree lock.
+            // A full queue rejects this request explicitly; accepted clicks stay FIFO.
             self.clicks
                 .try_send(Click {
                     document: tree.document,
@@ -573,6 +595,7 @@ fn wait_for_retry(updates: &mpsc::Receiver<()>, delay: Duration) -> bool {
     }
 }
 
+/// Retry transport failures while retaining the lifetime-wide item-ID namespace.
 fn worker(
     window: Option<u32>,
     service: String,
@@ -582,6 +605,7 @@ fn worker(
     addresses: mpsc::Sender<Option<String>>,
     repaint: Repaint,
 ) {
+    let tree = Arc::new(RwLock::new(Tree::default()));
     loop {
         if let Err(e) = serve(
             window,
@@ -591,6 +615,7 @@ fn worker(
             clicks.clone(),
             &addresses,
             repaint.clone(),
+            &tree,
         ) {
             log::warn!("global menu: {e}; retrying in a few seconds");
             let _ = addresses.send(None);
@@ -605,6 +630,7 @@ fn worker(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Serve one connection generation, retiring old IDs before advertising its address.
 fn serve(
     window: Option<u32>,
     service: &str,
@@ -613,11 +639,10 @@ fn serve(
     clicks: mpsc::SyncSender<Click>,
     addresses: &mpsc::Sender<Option<String>>,
     repaint: Repaint,
+    tree: &Arc<RwLock<Tree>>,
 ) -> Result<(), String> {
     let mut last = pending.lock().map_err(|e| e.to_string())?.clone();
-    let mut initial = Tree::default();
-    initial.update(&last)?;
-    let tree = Arc::new(RwLock::new(initial));
+    tree.write().map_err(|e| e.to_string())?.restart(&last)?;
     let bus = Builder::session()
         .map_err(|e| e.to_string())?
         .method_timeout(Duration::from_secs(1))
@@ -849,6 +874,97 @@ mod tests {
         assert_eq!(rx.try_recv().unwrap().action.command, "file.save");
     }
 
+    /// Overload returns errors without dropping accepted events or blocking layout updates.
+    #[test]
+    fn appmenu_full_queue_rejects_explicitly_and_preserves_fifo() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let mut t = Tree::default();
+        t.update(&menu()).unwrap();
+        let id = |cmd: &str| {
+            *t.nodes
+                .iter()
+                .find(|(_, n)| n.item.action.as_ref().is_some_and(|a| a.command == cmd))
+                .unwrap()
+                .0
+        };
+        let (save, bold) = (id("file.save"), id("format.bold"));
+        let (tx, rx) = mpsc::sync_channel(32);
+        let paints = Arc::new(AtomicUsize::new(0));
+        let counter = paints.clone();
+        let server = Exporter {
+            tree: Arc::new(RwLock::new(t)),
+            clicks: tx,
+            repaint: Arc::new(move || {
+                counter.fetch_add(1, Ordering::SeqCst);
+            }),
+        };
+        for i in 0..32 {
+            server
+                .click(if i % 2 == 0 { save } else { bold }, "clicked")
+                .unwrap();
+        }
+        assert!(server.event(save, "clicked", 0i32.into(), 0).is_err());
+        assert_eq!(
+            server.event_group(vec![(bold, "clicked".into(), 0i32.into(), 0)]),
+            vec![bold]
+        );
+        assert_eq!(paints.load(Ordering::SeqCst), 32);
+        assert!(
+            server.tree.try_write().is_ok(),
+            "overload must release the tree lock"
+        );
+        for i in 0..32 {
+            assert_eq!(
+                rx.try_recv().unwrap().action.command,
+                if i % 2 == 0 {
+                    "file.save"
+                } else {
+                    "format.bold"
+                }
+            );
+        }
+        assert!(
+            rx.try_recv().is_err(),
+            "rejected requests are not acknowledged as queued"
+        );
+        server.click(save, "clicked").unwrap();
+        assert_eq!(rx.try_recv().unwrap().action.command, "file.save");
+        drop(rx);
+        assert!(server.click(save, "clicked").is_err());
+    }
+
+    /// Every recovery retires the previous generation, even if its document is unchanged.
+    #[test]
+    fn appmenu_restart_never_recycles_ids_and_exhaustion_fails_closed() {
+        let mut t = Tree::default();
+        let mut m = menu();
+        t.restart(&m).unwrap();
+        let first: Vec<_> = t.nodes.keys().copied().filter(|id| *id != 0).collect();
+        t.restart(&m).unwrap();
+        assert!(first.iter().all(|id| !t.nodes.contains_key(id)));
+        let second: Vec<_> = t.nodes.keys().copied().filter(|id| *id != 0).collect();
+        m.document += 1;
+        t.restart(&m).unwrap();
+        assert!(second.iter().all(|id| !t.nodes.contains_key(id)));
+        t.next_id = i32::MAX;
+        assert!(t.restart(&m).is_err());
+        assert!(
+            t.nodes.is_empty(),
+            "exhaustion must not wrap or leave stale actions enabled"
+        );
+        // Also fail closed when exhaustion happens after some new nodes were built.
+        t.next_id = i32::MAX - 2;
+        assert!(t.restart(&m).is_err());
+        assert!(
+            t.nodes.is_empty(),
+            "partial generation must not remain actionable"
+        );
+        assert!(
+            t.ids.is_empty(),
+            "failed generation must not retain key mappings"
+        );
+    }
+
     #[test]
     fn appmenu_old_document_item_ids_are_retired() {
         let mut m = menu();
@@ -1068,6 +1184,32 @@ mod tests {
                 &(save, "clicked", Value::from(0i32), 0u32),
             )
             .unwrap();
+        let overloaded = client
+            .call_method(
+                Some(dest),
+                PATH,
+                Some(INTERFACE),
+                "Event",
+                &(save, "clicked", Value::from(0i32), 0u32),
+            )
+            .unwrap_err();
+        assert!(
+            matches!(overloaded, zbus::Error::MethodError(..)),
+            "full queue must return a D-Bus error, not wait for a client timeout"
+        );
+        let rejected: Vec<i32> = client
+            .call_method(
+                Some(dest),
+                PATH,
+                Some(INTERFACE),
+                "EventGroup",
+                &(vec![(save, "clicked", Value::from(0i32), 0u32)],),
+            )
+            .unwrap()
+            .body()
+            .deserialize()
+            .unwrap();
+        assert_eq!(rejected, vec![save]);
         assert_eq!(
             rx.recv_timeout(Duration::from_secs(2))
                 .unwrap()
@@ -1075,5 +1217,93 @@ mod tests {
                 .command,
             "file.save"
         );
+    }
+
+    /// Reacquiring the same bus address must reject a consumer's pre-recovery ID.
+    #[test]
+    #[ignore = "requires a private D-Bus session"]
+    fn appmenu_dbus_recovery_rejects_cached_ids_at_same_address() {
+        const SERVICE: &str = "org.craft.Desktop.RecoveryTest";
+        let mut m = menu();
+        let tree = Arc::new(RwLock::new(Tree::default()));
+        tree.write().unwrap().restart(&m).unwrap();
+        let save_id = || {
+            *tree
+                .read()
+                .unwrap()
+                .nodes
+                .iter()
+                .find(|(_, n)| n.item.key == "file.save")
+                .unwrap()
+                .0
+        };
+        let old = save_id();
+        let (tx, rx) = mpsc::sync_channel(32);
+        let export = || {
+            Builder::session()
+                .unwrap()
+                .name(SERVICE)
+                .unwrap()
+                .serve_at(
+                    PATH,
+                    Exporter {
+                        tree: tree.clone(),
+                        clicks: tx.clone(),
+                        repaint: Arc::new(|| {}),
+                    },
+                )
+                .unwrap()
+                .build()
+                .unwrap()
+        };
+        let client = Builder::session()
+            .unwrap()
+            .method_timeout(Duration::from_secs(2))
+            .build()
+            .unwrap();
+        let layout = || -> (u32, Layout) {
+            client
+                .call_method(
+                    Some(SERVICE),
+                    PATH,
+                    Some(INTERFACE),
+                    "GetLayout",
+                    &(0i32, -1i32, Vec::<String>::new()),
+                )
+                .unwrap()
+                .body()
+                .deserialize()
+                .unwrap()
+        };
+        let event = |id| {
+            client.call_method(
+                Some(SERVICE),
+                PATH,
+                Some(INTERFACE),
+                "Event",
+                &(id, "clicked", Value::from(0i32), 0u32),
+            )
+        };
+        let server = export();
+        let (old_revision, _) = layout();
+        event(old).unwrap();
+        assert_eq!(rx.recv_timeout(Duration::from_secs(2)).unwrap().document, 1);
+        server.close().unwrap();
+        m.document = 2;
+        m.items[0].children[0].action.as_mut().unwrap().command = "file.saveAs".into();
+        tree.write().unwrap().restart(&m).unwrap();
+        let new = save_id();
+        assert_ne!(old, new);
+        let server = export();
+        // Deliberately send the cached ID before refreshing the client's layout.
+        assert!(event(old).is_err());
+        assert!(rx.try_recv().is_err());
+        let (new_revision, _) = layout();
+        assert!(new_revision > old_revision);
+        event(new).unwrap();
+        let click = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(click.document, 2);
+        assert_eq!(click.action.command, "file.saveAs");
+        server.close().unwrap();
     }
 }

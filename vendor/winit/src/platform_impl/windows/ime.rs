@@ -5,15 +5,19 @@ use std::ptr::null_mut;
 use windows_sys::Win32::Foundation::{POINT, RECT};
 use windows_sys::Win32::Globalization::HIMC;
 use windows_sys::Win32::UI::Input::Ime::{
-    ImmAssociateContextEx, ImmGetCompositionStringW, ImmGetContext, ImmReleaseContext,
-    ImmSetCandidateWindow, ImmSetCompositionWindow, ATTR_TARGET_CONVERTED,
-    ATTR_TARGET_NOTCONVERTED, CANDIDATEFORM, CFS_EXCLUDE, CFS_POINT, COMPOSITIONFORM, GCS_COMPATTR,
-    GCS_COMPSTR, GCS_CURSORPOS, GCS_RESULTSTR, IACE_CHILDREN, IACE_DEFAULT,
+    ImmAssociateContextEx, ImmGetCompositionStringW, ImmGetContext, ImmNotifyIME,
+    ImmReleaseContext, ImmSetCandidateWindow, ImmSetCompositionWindow, ATTR_TARGET_CONVERTED,
+    ATTR_TARGET_NOTCONVERTED, CANDIDATEFORM, CFS_EXCLUDE, CFS_POINT, COMPOSITIONFORM, CPS_CANCEL,
+    GCS_COMPATTR, GCS_COMPSTR, GCS_CURSORPOS, GCS_RESULTSTR, IACE_CHILDREN, IACE_DEFAULT,
+    NI_COMPOSITIONSTR,
 };
-use windows_sys::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_IMMENABLED};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    CreateCaret, DestroyCaret, GetSystemMetrics, SetCaretPos, SM_IMMENABLED,
+};
 
 use crate::dpi::{Position, Size};
 use crate::platform::windows::HWND;
+use crate::platform_impl::platform::ime_caret::CaretChange;
 
 pub struct ImeContext {
     hwnd: HWND,
@@ -26,8 +30,10 @@ impl ImeContext {
         ImeContext { hwnd, himc }
     }
 
+    /// `composition_flags` is the `lParam` of the `WM_IME_COMPOSITION` message.
     pub unsafe fn get_composing_text_and_cursor(
         &self,
+        composition_flags: u32,
     ) -> Option<(String, Option<usize>, Option<usize>)> {
         let text = unsafe { self.get_composition_string(GCS_COMPSTR) }?;
         let attrs = unsafe { self.get_composition_data(GCS_COMPATTR) }.unwrap_or_default();
@@ -60,7 +66,15 @@ impl ImeContext {
         } else if first.is_none() {
             // IME haven't split words and select any clause yet, so trying to retrieve normal
             // cursor.
-            let cursor = unsafe { self.get_composition_cursor(&text) };
+            // WordCraft patch: read `GCS_CURSORPOS` only when `WM_IME_COMPOSITION` says it is set,
+            // else put the cursor at the end (rust-windowing/winit#4746). The Microsoft Korean IME
+            // never sets it, so the cursor read as 0 and was drawn before the syllable being
+            // composed, with the candidate window there too.
+            let cursor = if composition_flags & GCS_CURSORPOS != 0 {
+                unsafe { self.get_composition_cursor(&text) }
+            } else {
+                Some(text.len())
+            };
             first = cursor;
             last = cursor;
         }
@@ -138,6 +152,22 @@ impl ImeContext {
         }
     }
 
+    /// Asks the IME to discard the composition (`NI_COMPOSITIONSTR`, `CPS_CANCEL`). Which
+    /// composition messages the IME sends in response, if any, depends on the IME.
+    pub unsafe fn cancel_composition(&self) -> bool {
+        unsafe { ImmNotifyIME(self.himc, NI_COMPOSITIONSTR, CPS_CANCEL, 0) != 0 }
+    }
+
+    /// Establishes cancellation, including a successful empty-context no-op. CPS_CANCEL's
+    /// boolean return is not documented to distinguish "already empty" from a failure.
+    pub unsafe fn reset_composition(&self) -> bool {
+        if self.himc == 0 {
+            return false;
+        }
+        let size = unsafe { ImmGetCompositionStringW(self.himc, GCS_COMPSTR, null_mut(), 0) };
+        composition_reset_succeeded(size, || unsafe { self.cancel_composition() })
+    }
+
     pub unsafe fn set_ime_allowed(hwnd: HWND, allowed: bool) {
         if !unsafe { ImeContext::system_has_ime() } {
             return;
@@ -150,13 +180,57 @@ impl ImeContext {
         }
     }
 
+    /// Applies a change to the hidden system caret that follows the IME cursor area
+    /// (`ime_caret.rs`). Runs on the window's thread, which owns the caret.
+    pub unsafe fn update_system_caret(hwnd: HWND, change: Option<CaretChange>) {
+        match change {
+            None => {},
+            // A new caret is hidden, and this one is never shown.
+            Some(CaretChange::Create(area)) => unsafe {
+                if CreateCaret(hwnd, 0, area.width, area.height) != 0 {
+                    SetCaretPos(area.x, area.y);
+                }
+            },
+            Some(CaretChange::Move(area)) => unsafe {
+                SetCaretPos(area.x, area.y);
+            },
+            Some(CaretChange::Destroy) => unsafe {
+                DestroyCaret();
+            },
+        }
+    }
+
     unsafe fn system_has_ime() -> bool {
         unsafe { GetSystemMetrics(SM_IMMENABLED) != 0 }
     }
 }
 
+fn composition_reset_succeeded(size: i32, cancel: impl FnOnce() -> bool) -> bool {
+    // Zero is a successful empty-string query. Negative IMM_ERROR_NODATA/GENERAL values are
+    // not evidence of an empty context; they still require a successful cancellation.
+    size == 0 || cancel()
+}
+
 impl Drop for ImeContext {
     fn drop(&mut self) {
         unsafe { ImmReleaseContext(self.hwnd, self.himc) };
+    }
+}
+
+#[cfg(test)]
+mod reset_tests {
+    use super::composition_reset_succeeded;
+
+    #[test]
+    fn empty_context_reset_is_a_noop_even_if_cancel_would_report_false() {
+        assert!(composition_reset_succeeded(0, || panic!("empty context must not need notify")));
+    }
+
+    #[test]
+    fn nonempty_or_unavailable_context_needs_successful_cancellation() {
+        for size in [2, -1, -2] {
+            assert!(!composition_reset_succeeded(size, || false));
+            assert!(composition_reset_succeeded(size, || true));
+        }
     }
 }

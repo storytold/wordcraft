@@ -43,12 +43,12 @@ fn scan(story: StoryRef, bl: &Blocks, prefix: &mut Vec<u32>, depth: usize, out: 
         match &**b {
             Block::Para(p) => {
                 let path = Path(prefix.clone());
-                for off in p.object_offsets() {
-                    match p.object_at(off) {
-                        Some(InlineObject::FieldStart { instr, locked }) => {
+                for (off, o) in p.objects_with_offsets() {
+                    match o {
+                        InlineObject::FieldStart { instr, locked, .. } => {
                             open.push((instr.clone(), *locked, Pos::new(story, path.clone(), off)));
                         }
-                        Some(InlineObject::FieldEnd) => match open.pop() {
+                        InlineObject::FieldEnd => match open.pop() {
                             Some((instr, locked, start)) => {
                                 let depth = open.len();
                                 out.ranges.push(FieldRange { instr, locked, start, end: Pos::new(story, path.clone(), off), depth });
@@ -91,6 +91,21 @@ impl Document {
     /// The whole range fields of a story, in document order of their starts.
     pub fn field_ranges(&self, story: StoryRef) -> Vec<FieldRange> {
         self.story(story).map(|bl| scan_story(story, bl).ranges).unwrap_or_default()
+    }
+
+    /// `p` moved past the range-field ends right after it. A click just after a field's result
+    /// lands before its end marker (the marker takes no room); typing or inserting there belongs
+    /// after the field, as in Word, not in its result.
+    pub fn past_field_ends(&self, p: &Pos) -> Pos {
+        let Some(para) = self.para_at(p) else { return p.clone() };
+        let mut off = p.off;
+        for (at, o) in para.objects_with_offsets().skip_while(|(at, _)| *at < p.off) {
+            if at != off || !matches!(o, InlineObject::FieldEnd) {
+                break;
+            }
+            off += OBJ.len_utf8();
+        }
+        Pos { off, ..p.clone() }
     }
 
     /// Whether any story holds a range-field marker without its partner.

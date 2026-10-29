@@ -3,12 +3,32 @@
 use wordcraft_doc::math::{
     Arg, BrkBin, BrkBinSub, ColJc, FracKind, LimLoc, MAX_DEPTH, MNode, MRun, MScr, MSty, Math, MathJc, MathProps, ScriptKind, parse_linear,
 };
+use wordcraft_doc::props::Rgb;
 
 use crate::xml::W;
 
 /// Write an equation: `m:oMath`, inside `m:oMathPara` for a display equation. The source OMML
-/// is written back unchanged when the equation came from a file.
-pub fn write_equation(w: &mut W, linear: &str, display: bool, math: &Math) {
+/// is written back unchanged when the equation came from a file. `color` (the equation's run
+/// colour) goes on every math run without its own: OMML has no equation-level colour (#1467).
+pub fn write_equation(w: &mut W, linear: &str, display: bool, math: &Math, color: Option<Rgb>) {
+    let tinted;
+    let math = if color == omml_color(&math.omml) {
+        math
+    } else {
+        // The kept source XML has the old colour baked in: write from the nodes instead.
+        let mut m = math.clone();
+        if m.nodes.is_empty() {
+            m.nodes = parse_linear(linear);
+        }
+        if let Some(c) = color {
+            wordcraft_doc::math_edit::each_run_mut(&mut m.nodes, &mut |r| {
+                r.color.get_or_insert(c);
+            });
+        }
+        m.omml.clear();
+        tinted = m;
+        &tinted
+    };
     if display {
         w.open("m:oMathPara", &[]);
         let jc = match math.jc {
@@ -82,6 +102,16 @@ pub fn resolve_numbers(math: &Math, display: bool, counter: &mut u32) -> Option<
     changed.then(|| Math { nodes: vec![MNode::EqArr { rows: out }], omml: String::new(), ..math.clone() })
 }
 
+/// The equation colour the kept source OMML carries, as the reader lifts it.
+fn omml_color(omml: &str) -> Option<Rgb> {
+    if omml.is_empty() {
+        return None;
+    }
+    let root = crate::xml::parse(wrap_ns(omml).as_bytes()).ok()?;
+    let e = root.child("m:oMath")?;
+    crate::read::math::lift_color(&mut crate::read::math::read_omath(e, MathJc::default()))
+}
+
 /// The kept XML with namespace declarations, for validating it on its own.
 fn wrap_ns(xml: &str) -> String {
     let decl: String = crate::xml::body_ns().iter().filter(|(k, _)| k.starts_with("xmlns:")).map(|(k, v)| format!(" {k}=\"{v}\"")).collect();
@@ -149,6 +179,67 @@ fn char_prop(w: &mut W, name: &str, c: Option<char>) {
     val(w, name, &s);
 }
 
+fn write_matrix(w: &mut W, n: &MNode, depth: usize) {
+    let MNode::Matrix { rows, col_jc } = n else { return };
+    let cols = rows.iter().map(|r| r.len()).max().unwrap_or(0).max(1);
+    w.open("m:m", &[]);
+    w.open("m:mPr", &[]);
+    w.open("m:mcs", &[]);
+    for c in 0..cols {
+        let jc = match col_jc.get(c).copied().unwrap_or_default() {
+            ColJc::Center => "center",
+            ColJc::Left => "left",
+            ColJc::Right => "right",
+        };
+        w.open("m:mc", &[]);
+        w.open("m:mcPr", &[]);
+        val(w, "m:count", "1");
+        val(w, "m:mcJc", jc);
+        w.close("m:mcPr");
+        w.close("m:mc");
+    }
+    w.close("m:mcs");
+    ctrl(w);
+    w.close("m:mPr");
+    for row in rows {
+        w.open("m:mr", &[]);
+        for c in 0..cols {
+            arg(w, "m:e", row.get(c).map(|v| v.as_slice()).unwrap_or(&[]), depth);
+        }
+        w.close("m:mr");
+    }
+    w.close("m:m");
+}
+
+fn write_nary(w: &mut W, n: &MNode, depth: usize) {
+    let MNode::Nary { chr, lim_loc, grow, sub_hide, sup_hide, sub, sup, e } = n else { return };
+    w.open("m:nary", &[]);
+    w.open("m:naryPr", &[]);
+    if *chr != '∫' {
+        char_prop(w, "m:chr", Some(*chr));
+    }
+    match lim_loc {
+        Some(LimLoc::UndOvr) => val(w, "m:limLoc", "undOvr"),
+        Some(LimLoc::SubSup) => val(w, "m:limLoc", "subSup"),
+        None => {}
+    }
+    if *grow {
+        val(w, "m:grow", "1");
+    }
+    if *sub_hide {
+        val(w, "m:subHide", "1");
+    }
+    if *sup_hide {
+        val(w, "m:supHide", "1");
+    }
+    ctrl(w);
+    w.close("m:naryPr");
+    arg(w, "m:sub", sub, depth);
+    arg(w, "m:sup", sup, depth);
+    arg(w, "m:e", e, depth);
+    w.close("m:nary");
+}
+
 fn node(w: &mut W, n: &MNode, depth: usize) {
     match n {
         MNode::Run(r) => run(w, r),
@@ -205,33 +296,7 @@ fn node(w: &mut W, n: &MNode, depth: usize) {
             arg(w, "m:e", e, depth);
             w.close("m:rad");
         }
-        MNode::Nary { chr, lim_loc, grow, sub_hide, sup_hide, sub, sup, e } => {
-            w.open("m:nary", &[]);
-            w.open("m:naryPr", &[]);
-            if *chr != '∫' {
-                char_prop(w, "m:chr", Some(*chr));
-            }
-            match lim_loc {
-                Some(LimLoc::UndOvr) => val(w, "m:limLoc", "undOvr"),
-                Some(LimLoc::SubSup) => val(w, "m:limLoc", "subSup"),
-                None => {}
-            }
-            if *grow {
-                val(w, "m:grow", "1");
-            }
-            if *sub_hide {
-                val(w, "m:subHide", "1");
-            }
-            if *sup_hide {
-                val(w, "m:supHide", "1");
-            }
-            ctrl(w);
-            w.close("m:naryPr");
-            arg(w, "m:sub", sub, depth);
-            arg(w, "m:sup", sup, depth);
-            arg(w, "m:e", e, depth);
-            w.close("m:nary");
-        }
+        MNode::Nary { .. } => write_nary(w, n, depth),
         MNode::Delim { beg, end, sep, grow, shp_match, elems } => {
             w.open("m:d", &[]);
             w.open("m:dPr", &[]);
@@ -345,36 +410,7 @@ fn node(w: &mut W, n: &MNode, depth: usize) {
             }
             w.close("m:eqArr");
         }
-        MNode::Matrix { rows, col_jc } => {
-            let cols = rows.iter().map(|r| r.len()).max().unwrap_or(0).max(1);
-            w.open("m:m", &[]);
-            w.open("m:mPr", &[]);
-            w.open("m:mcs", &[]);
-            for c in 0..cols {
-                let jc = match col_jc.get(c).copied().unwrap_or_default() {
-                    ColJc::Center => "center",
-                    ColJc::Left => "left",
-                    ColJc::Right => "right",
-                };
-                w.open("m:mc", &[]);
-                w.open("m:mcPr", &[]);
-                val(w, "m:count", "1");
-                val(w, "m:mcJc", jc);
-                w.close("m:mcPr");
-                w.close("m:mc");
-            }
-            w.close("m:mcs");
-            ctrl(w);
-            w.close("m:mPr");
-            for r in rows {
-                w.open("m:mr", &[]);
-                for c in 0..cols {
-                    arg(w, "m:e", r.get(c).map(|v| v.as_slice()).unwrap_or(&[]), depth);
-                }
-                w.close("m:mr");
-            }
-            w.close("m:m");
-        }
+        MNode::Matrix { .. } => write_matrix(w, n, depth),
         MNode::Phant { show, zero_wid, zero_asc, zero_desc, e } => {
             w.open("m:phant", &[]);
             w.open("m:phantPr", &[]);

@@ -18,8 +18,12 @@ impl Bridge {
     pub fn publish(&self, app: &WordApp) {
         self.0.publish(native_menu::snapshot(app));
     }
-    pub fn poll(&mut self, app: &mut WordApp) {
+    pub fn poll(&mut self, app: &mut WordApp, ctx: &egui::Context) {
         for click in self.0.take_events() {
+            // Fresh viewport focus can arrive before the app swaps in that window's state.
+            if ctx.input(|i| i.raw.viewports.iter().any(|(id, v)| *id != egui::ViewportId::ROOT && v.focused == Some(true))) {
+                continue;
+            }
             if let Err(e) = native_menu::activate(app, click.document, &click.action) {
                 log::debug!("global menu: {e}");
             }

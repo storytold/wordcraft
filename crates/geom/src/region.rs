@@ -119,6 +119,20 @@ impl Region {
         self
     }
 
+    /// The system region from the locale variables `var` reads (the process environment) and,
+    /// when none is set, the platform's first preferred locale `platform` gives. One tag for
+    /// everything first (`WORDCRAFT_REGION`, then `LC_ALL`); otherwise Unix sets each convention
+    /// on its own: numbers (`LC_NUMERIC`, else `LANG`), paper (`LC_PAPER`) and measurement
+    /// (`LC_MEASUREMENT`). Empty, `C` and `POSIX` values count as unset.
+    pub fn from_locale_vars(var: impl Fn(&str) -> Option<String>, platform: impl FnOnce() -> Option<String>) -> Region {
+        let var = |name: &str| var(name).filter(|v| usable_locale(v));
+        if let Some(tag) = var("WORDCRAFT_REGION").or_else(|| var("LC_ALL")) {
+            return Region::from_tag(&tag);
+        }
+        let base = var("LC_NUMERIC").or_else(|| var("LANG")).unwrap_or_else(|| platform().unwrap_or_default());
+        Region::from_tag(&base).with_paper_and_measurement(var("LC_PAPER").as_deref(), var("LC_MEASUREMENT").as_deref())
+    }
+
     /// Does a new document start on US Letter here (otherwise A4)?
     pub fn uses_letter(&self) -> bool {
         self.letter.unwrap_or_else(|| LETTER.contains(&self.territory.as_str()))
@@ -149,6 +163,12 @@ impl Region {
     pub fn format(&self, unit: Unit, pt: f32) -> String {
         unit.format_with(pt, self.decimal())
     }
+}
+
+/// A locale variable that names a locale (not empty, `C` or `POSIX`).
+fn usable_locale(v: &str) -> bool {
+    let v = v.trim();
+    !v.is_empty() && !v.eq_ignore_ascii_case("c") && !v.eq_ignore_ascii_case("posix") && !v.starts_with("C.")
 }
 
 #[cfg(test)]
@@ -194,5 +214,19 @@ mod tests {
         assert_eq!((mixed.paper().0, mixed.units(), mixed.decimal()), ("A4", Unit::Centimeters, '.'));
         assert_eq!(Region::from_tag("pl-PL").with_paper_and_measurement(Some(""), Some("junk")).paper().0, "Letter", "junk is en-US");
         assert_eq!(us.format(Unit::Inches, 90.0), "1.25\"");
+    }
+
+    #[test]
+    fn region_from_locale_variables() {
+        // #1381: the CLI and the app read the system region the same way.
+        let env = |pairs: &'static [(&'static str, &'static str)]| move |n: &str| pairs.iter().find(|(k, _)| *k == n).map(|(_, v)| v.to_string());
+        let none = || None;
+        assert_eq!(Region::from_locale_vars(env(&[("LANG", "it_IT.UTF-8")]), none).paper().0, "A4");
+        assert_eq!(Region::from_locale_vars(env(&[("LANG", "en_US.UTF-8")]), none).paper().0, "Letter");
+        assert_eq!(Region::from_locale_vars(env(&[("LANG", "it_IT.UTF-8"), ("LC_ALL", "en_US")]), none).paper().0, "Letter");
+        assert_eq!(Region::from_locale_vars(env(&[("LANG", "en_US"), ("WORDCRAFT_REGION", "de-DE")]), none).territory, "DE");
+        assert_eq!(Region::from_locale_vars(env(&[("LANG", "en_US"), ("LC_PAPER", "it_IT")]), none).paper().0, "A4");
+        assert_eq!(Region::from_locale_vars(env(&[("LANG", "C.UTF-8")]), || Some("it-IT".into())).territory, "IT");
+        assert_eq!(Region::from_locale_vars(env(&[]), none), Region::default());
     }
 }

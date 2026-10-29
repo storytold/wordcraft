@@ -60,8 +60,20 @@ pub fn specs() -> Vec<CommandSpec> {
         .key("Mod+Y / Mod+Shift+Z")
         .pure(),
         CommandSpec::new("edit.cut", "Cut", "Home › Clipboard", cut).key("Mod+X").when(has_sel),
-        CommandSpec::new("edit.copy", "Copy", "Home › Clipboard", copy).key("Mod+C").pure(),
-        CommandSpec::new("edit.paste", "Paste", "Home › Clipboard", paste).key("Mod+V").params(r#"{"text"?: string, "html"?: string, "rtf"?: string}"#),
+        CommandSpec::new("edit.copy", "Copy", "Home › Clipboard", copy).key("Mod+C / Mod+Insert").pure(),
+        // Word's Spike (Ctrl+F3, Ctrl+Shift+F3; ⌘ on the Mac): the AutoText entry "Spike", so Quick
+        // Parts and AutoText insert it without emptying it, as in Word.
+        CommandSpec::new("edit.spike", "Spike", "Editing", spike).key("Mod+F3").when(has_sel),
+        CommandSpec::new("edit.insertSpike", "Insert Spike", "Editing", insert_spike).key("Mod+Shift+F3").when(|s| {
+            if s.math.is_some() {
+                Some("leave the equation first")
+            } else if s.building_blocks.contains_key(SPIKE) {
+                None
+            } else {
+                Some("the Spike is empty")
+            }
+        }),
+        CommandSpec::new("edit.paste", "Paste", "Home › Clipboard", paste).key("Mod+V / Shift+Insert").params(r#"{"text"?: string, "html"?: string, "rtf"?: string}"#),
         CommandSpec::new("edit.pasteText", "Paste: Keep Text Only", "Home › Clipboard › Paste", paste_text)
             .params(r#"{"text"?: string}"#)
             .key("Mod+Shift+Alt+V"),
@@ -103,7 +115,7 @@ pub fn specs() -> Vec<CommandSpec> {
             read_opts(s, v);
             step(s, 1)
         })
-        .key("Mod+G / F3 / Mod+PageDown")
+        .key("Mod+G / F3 / Shift+F4 / Mod+PageDown")
         .params(r#"{"text"?: string, "matchCase"?: bool, "wholeWord"?: bool, "regex"?: bool}"#)
         .pure(),
         CommandSpec::new("edit.findPrevious", "Find Previous", "Home › Editing › Find", |s, v| {
@@ -122,17 +134,18 @@ pub fn specs() -> Vec<CommandSpec> {
                 t @ ("find" | "replace" | "goto") => t,
                 other => return Err(CmdError::Params(format!("`tab` is find, replace or goto, not `{other}`"))),
             };
-            s.ui_requests.push(json!({"open": tab}));
+            s.push_ui_request(json!({"open": tab}));
             Ok(json!({"open": tab}))
         })
-        .key("Mod+H")
+        // Word for Mac's own key is ⌃H.
+        .key(super::mac_or("Mod+H / Ctrl+H", "Mod+H"))
         .params(r#"{"tab"?: "find|replace|goto" (default replace)}"#)
         .pure(),
         CommandSpec::new("edit.replaceAll", "Replace All", "Home › Editing › Replace", replace_all)
-            .params(r#"{"text": string, "with": string (^p ^t ^& ^c …; \\1 with wildcards), …options of edit.find}"#),
+            .params(r#"{"text": string, "with": string (^p ^t ^& ^c …; \\1 with wildcards; with regex also $1 ${n} ${name} $0 $$ \\1 \\n (paragraph mark) \\t), …options of edit.find}"#),
         CommandSpec::new("edit.goto", "Go To", "Home › Editing › Find", goto)
             .key("Mod+Alt+G / F5")
-            .params(r#"{"page"?: n, "pageBy"?: int (pages forward, negative back, from the caret's page), "bookmark"?: string, "paragraph"?: n}; none opens Find and Replace on its Go To tab"#)
+            .params(r#"{"page"?: n, "pageBy"?: int (pages forward, negative back, from the caret's page), "bookmark"?: string (selects its text), "paragraph"?: n}; none opens Find and Replace on its Go To tab"#)
             .pure(),
         CommandSpec::new("edit.goBack", "Go Back", "Navigation", |s, _| {
             let p = s.go_back().ok_or_else(|| CmdError::Failed("no edits to go back to yet".into()))?;
@@ -140,7 +153,7 @@ pub fn specs() -> Vec<CommandSpec> {
             s.goal_x = None;
             sel_result(s)
         })
-        .key("Shift+F5")
+        .key("Shift+F5 / Mod+Alt+Z")
         .pure(),
         CommandSpec::new("edit.formatPainter", "Format Painter", "Home › Clipboard", painter).params(r#"{"sticky"?: bool}"#).pure(),
         CommandSpec::new("edit.copyFormat", "Copy Formatting", "Home › Clipboard", |s, _| {
@@ -162,7 +175,29 @@ fn copy(s: &mut Session, _: &Value) -> CmdResult {
     s.clipboard_text = f.clipboard_text();
     s.clip_history.push(&f, &s.clipboard_text);
     s.clipboard = Some(f);
-    Ok(json!({"text": s.clipboard_text}))
+    Ok(copy_result(s))
+}
+
+/// What Copy and Cut return: the clipboard's text, and the copy as HTML (equations as MathML,
+/// #816) for the host to put on the system clipboard too, so other programs keep the formatting;
+/// and for a copy of one equation alone, its MathML (#1297).
+pub(crate) fn copy_result(s: &mut Session) -> Value {
+    s.clipboard_html = match &s.clipboard {
+        Some(f) => wordcraft_formats::html::export_fragment(&f.to_document()),
+        None => String::new(),
+    };
+    let mut r = json!({"text": s.clipboard_text});
+    if !s.clipboard_html.is_empty() {
+        r["html"] = json!(s.clipboard_html);
+    }
+    // A copy of one equation alone, as MathML for the clipboard formats equation editors read
+    // ("MathML" on Windows, `public.mathml.presentation` on macOS; #1297). Word looks for them
+    // before anything else when it pastes; a copy with text around the equation doesn't offer
+    // them, so pasting it keeps the text.
+    if let Some((linear, display)) = s.clipboard.as_ref().and_then(|f| f.sole_equation()) {
+        r["mathml"] = json!(wordcraft_formats::mathml::linear_to_mathml(linear, display));
+    }
+    r
 }
 
 fn cut(s: &mut Session, v: &Value) -> CmdResult {
@@ -175,11 +210,42 @@ fn cut(s: &mut Session, v: &Value) -> CmdResult {
     Ok(r)
 }
 
-/// Paste keeps the source formatting: our own copy while the system clipboard still holds it,
-/// else another program's HTML or RTF (#687), else the system clipboard's text.
-fn paste(s: &mut Session, v: &Value) -> CmdResult {
-    let frag = super::paste::paste_fragment(s, v)?;
+/// The AutoText entry the Spike collects into.
+const SPIKE: &str = "Spike";
+
+/// Ctrl+F3: cut the selection to the end of the Spike. The clipboard is left alone.
+fn spike(s: &mut Session, _: &Value) -> CmdResult {
+    let (a, b) = s.sel.ordered();
+    // Column selection collapses the selection before the command runs.
+    if a == b {
+        return Err(CmdError::Disabled("edit.spike: nothing is selected".into()));
+    }
+    let piece = s.doc.copy_range(&a, &b);
+    if piece.blocks.is_empty() {
+        return Err(CmdError::Disabled("edit.spike: this selection can't be collected".into()));
+    }
+    delete_selection(s)?;
+    super::controls::restore_placeholder(s)?;
+    s.building_blocks.entry(SPIKE.to_string()).or_default().append_piece(piece);
+    sel_result(s)
+}
+
+/// Ctrl+Shift+F3: insert everything the Spike collected, in order, and empty it.
+fn insert_spike(s: &mut Session, _: &Value) -> CmdResult {
+    let frag = s.building_blocks.get(SPIKE).cloned().ok_or_else(|| CmdError::Disabled("edit.insertSpike: the Spike is empty".into()))?;
     super::paste::insert(s, frag)?;
+    s.building_blocks.remove(SPIKE);
+    sel_result(s)
+}
+
+/// Paste keeps the source formatting: our own copy while the system clipboard still holds it,
+/// else another program's HTML or RTF (#687). The system clipboard's text has none, so it pastes
+/// as Keep Text Only does.
+fn paste(s: &mut Session, v: &Value) -> CmdResult {
+    match super::paste::paste_content(s, v)? {
+        super::paste::Pasted::Fragment(frag) => super::paste::insert(s, frag)?,
+        super::paste::Pasted::Text(text) => super::paste::insert_text(s, &text)?,
+    }
     sel_result(s)
 }
 
@@ -393,7 +459,10 @@ pub(crate) fn search_full(s: &Session, story: StoryRef, with_rep: bool) -> Resul
         .configure(meta::Config::new().nfa_size_limit(Some(1 << 20)))
         .build(&c.pattern)
         .map_err(|e| CmdError::Params(format!("bad pattern: {e}")))?;
-    let pieces = with_rep.then(|| find_pattern::parse_replace(&f.replace, &opts));
+    let pieces = with_rep.then(|| {
+        let index = |name: &str| re.group_info().to_index(regex_automata::PatternID::ZERO, name);
+        find_pattern::resolve_names(find_pattern::parse_replace(&f.replace, &opts), &index)
+    });
     let paths = s.doc.para_paths(story);
     // Paragraphs read as one text: consecutive siblings when the pattern spans paragraphs.
     let mut chunks: Vec<std::ops::Range<usize>> = Vec::new();
@@ -537,7 +606,7 @@ fn find(s: &mut Session, v: &Value) -> CmdResult {
         // Word's Ctrl+F: the Navigation pane with its search box ready to type in (#712); the
         // Find and Replace dialog is Advanced Find.
         s.view.nav_pane = true;
-        s.ui_requests.push(json!({"focus": "navSearch"}));
+        s.push_ui_request(json!({"focus": "navSearch"}));
         return Ok(json!({"count": s.find.results.len()}));
     }
     let story = s.sel.focus.story;
@@ -558,7 +627,7 @@ fn find(s: &mut Session, v: &Value) -> CmdResult {
 /// Find in the classic dialog: every match in the body or the selection, optionally highlighted while you read.
 fn advanced_find(s: &mut Session, v: &Value) -> CmdResult {
     if p::str(v, "text").is_none() && v.get("highlight").is_none() {
-        s.ui_requests.push(json!({"open": "find"}));
+        s.push_ui_request(json!({"open": "find"}));
         return Ok(json!({"count": s.find.results.len()}));
     }
     read_opts(s, v);
@@ -604,7 +673,17 @@ fn step(s: &mut Session, dir: i64) -> CmdResult {
     Ok(json!({"index": idx, "count": n}))
 }
 
+/// Replace needs something to look for: the `text` given, or the last search's (Find then Replace
+/// with just a `with`). Neither is a call that would silently replace nothing (a misspelt `text`).
+fn need_query(s: &Session, v: &Value) -> Result<(), CmdError> {
+    if p::str(v, "text").is_none() && s.find.query.is_empty() {
+        return Err(CmdError::Params("`text` (string) is required".into()));
+    }
+    Ok(())
+}
+
 fn replace(s: &mut Session, v: &Value) -> CmdResult {
+    need_query(s, v)?;
     read_opts(s, v);
     let story = s.sel.focus.story;
     let results = search_full(s, story, true)?;
@@ -620,10 +699,12 @@ fn replace(s: &mut Session, v: &Value) -> CmdResult {
 /// Every match replaced, last first so earlier positions stay valid (one undo step). A `\r` in
 /// the replacement (`^p`) splits the paragraph.
 fn replace_all(s: &mut Session, v: &Value) -> CmdResult {
+    need_query(s, v)?;
     read_opts(s, v);
     let story = s.sel.focus.story;
     let results = search_full(s, story, true)?;
     let n = results.len();
+    super::controls::check_deletions(s, story, results.iter().map(|f| (&f.a, &f.b)))?;
     for Found { a, b, rep } in results.into_iter().rev() {
         let with = rep.unwrap_or_default();
         if s.doc.settings.track_changes {
@@ -632,7 +713,8 @@ fn replace_all(s: &mut Session, v: &Value) -> CmdResult {
             super::paste_text(s, &with)?;
             continue;
         }
-        let props = s.doc.para_at(&a).map(|p| p.props_of_char(a.off).clone()).unwrap_or_default();
+        // Replacing a symbol gives the new text the symbol's formatting, not its own font.
+        let props = s.doc.para_at(&a).map(|p| p.props_of_char(a.off).clone().without_symbol()).unwrap_or_default();
         let mut at = s.doc.delete_range(&a, &b)?;
         for (k, part) in with.split(['\r', '\u{2029}']).enumerate() {
             if k > 0 {
@@ -669,12 +751,18 @@ fn goto(s: &mut Session, v: &Value) -> CmdResult {
             s.sel = Selection::caret(t);
             s.page_hint = idx;
         }
-        s.ui_requests.push(json!({"scrollTo": "caret"}));
+        s.push_ui_request(json!({"scrollTo": "caret"}));
         return sel_result(s);
     }
     if let Some(name) = p::str(v, "bookmark") {
-        let bm = s.doc.bookmarks().into_iter().find(|(n, _)| n == name).ok_or_else(|| CmdError::Failed(format!("no bookmark `{name}`")))?;
-        s.sel = Selection::caret(bm.1);
+        // Word's built-in bookmark: the top of the document.
+        if name == "_top" {
+            s.sel = Selection::caret(Pos::body(0, 0));
+            return sel_result(s);
+        }
+        // As in Word, the bookmark's text is selected (a caret for an empty bookmark).
+        let (from, to) = super::insert::bookmark_range(&s.doc, name).ok_or_else(|| CmdError::Failed(format!("no bookmark `{name}`")))?;
+        s.sel = Selection { anchor: from, focus: to };
         return sel_result(s);
     }
     if let Some(n) = p::u64(v, "paragraph") {
@@ -684,13 +772,14 @@ fn goto(s: &mut Session, v: &Value) -> CmdResult {
         }
         return sel_result(s);
     }
-    s.ui_requests.push(json!({"open": "goto"}));
+    s.push_ui_request(json!({"open": "goto"}));
     sel_result(s)
 }
 
 fn painter_pick(s: &mut Session) {
     let f = s.sel.ordered().0;
-    let chr = s.doc.para_at(&f).map(|p| p.props_of_char(f.off).clone()).unwrap_or_default();
+    // A symbol's own font isn't formatting to paint onto text.
+    let chr = s.doc.para_at(&f).map(|p| p.props_of_char(f.off).clone().without_symbol()).unwrap_or_default();
     let para = s.doc.para_at(&f).map(|p| p.props.clone()).unwrap_or_default();
     s.painter = Some((chr, para, false));
 }

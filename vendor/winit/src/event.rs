@@ -230,6 +230,14 @@ pub enum WindowEvent {
     /// - **iOS / Android / Web / Orbital:** Unsupported.
     Ime(Ime),
 
+    /// The ordered cancellation fence requested by [`Window::reset_ime_with_request`].
+    ///
+    /// Input already accepted before this reset is delivered before this event. New input
+    /// admitted after the reset follows it. This is a local input boundary, not an
+    /// acknowledgement from the input method or compositor. It is emitted even when no
+    /// preedit was visible, but not for unsupported, disallowed or failed resets.
+    ImeResetCompleted { request_id: u64 },
+
     /// The cursor has moved on the window.
     ///
     /// ## Platform-specific

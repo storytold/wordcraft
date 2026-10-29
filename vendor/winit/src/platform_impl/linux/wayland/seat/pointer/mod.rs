@@ -34,6 +34,7 @@ use crate::platform_impl::wayland::state::WinitState;
 use crate::platform_impl::wayland::{self, DeviceId, WindowId};
 
 pub mod relative_pointer;
+mod scroll;
 
 impl PointerHandler for WinitState {
     fn pointer_frame(
@@ -157,6 +158,12 @@ impl PointerHandler for WinitState {
                 | ref kind @ PointerEventKind::Release { button, serial, .. } => {
                     // Update the last button serial.
                     pointer.winit_data().inner.lock().unwrap().latest_button_serial = serial;
+                    self.clipboard.pointer_input(
+                        &seat.id(),
+                        serial,
+                        crate::window::WindowId(window_id),
+                        matches!(kind, PointerEventKind::Press { .. }),
+                    );
 
                     let button = wayland_button_to_winit(button);
                     let state = if matches!(kind, PointerEventKind::Press { .. }) {
@@ -169,26 +176,20 @@ impl PointerHandler for WinitState {
                         window_id,
                     );
                 },
-                PointerEventKind::Axis { horizontal, vertical, .. } => {
+                PointerEventKind::Axis { horizontal, vertical, source, .. } => {
                     // Get the current phase.
                     let mut pointer_data = pointer.winit_data().inner.lock().unwrap();
 
                     let has_discrete_scroll = horizontal.discrete != 0 || vertical.discrete != 0;
 
-                    // Figure out what to do about start/ended phases here.
-                    //
-                    // Figure out how to deal with `Started`. Also the `Ended` is not guaranteed
-                    // to be sent for mouse wheels.
-                    let phase = if horizontal.stop || vertical.stop {
-                        TouchPhase::Ended
-                    } else {
-                        match pointer_data.phase {
-                            // Discrete scroll only results in moved events.
-                            _ if has_discrete_scroll => TouchPhase::Moved,
-                            TouchPhase::Started | TouchPhase::Moved => TouchPhase::Moved,
-                            _ => TouchPhase::Started,
-                        }
-                    };
+                    // PdfCraft patch (13, #991): use the source as well as discrete steps;
+                    // pixel-only wheels do not promise an Ended event either.
+                    let phase = scroll::phase(
+                        pointer_data.phase,
+                        source,
+                        has_discrete_scroll,
+                        horizontal.stop || vertical.stop,
+                    );
 
                     // Update the phase.
                     pointer_data.phase = phase;

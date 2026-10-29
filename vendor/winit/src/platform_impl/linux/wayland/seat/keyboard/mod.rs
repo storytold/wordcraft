@@ -61,7 +61,7 @@ impl Dispatch<WlKeyboard, KeyboardData, WinitState> for WinitState {
                     warn!("unknown keymap format 0x{:x}", value)
                 },
             },
-            WlKeyboardEvent::Enter { surface, .. } => {
+            WlKeyboardEvent::Enter { surface, serial, .. } => {
                 let window_id = wayland::make_wid(&surface);
 
                 // Mark the window as focused.
@@ -82,6 +82,11 @@ impl Dispatch<WlKeyboard, KeyboardData, WinitState> for WinitState {
                 }
 
                 *data.window_id.lock().unwrap() = Some(window_id);
+                state.clipboard.keyboard_focus_enter(
+                    &data.seat.id(),
+                    serial,
+                    crate::window::WindowId(window_id),
+                );
 
                 // The keyboard focus is considered as general focus.
                 if was_unfocused {
@@ -98,6 +103,7 @@ impl Dispatch<WlKeyboard, KeyboardData, WinitState> for WinitState {
             },
             WlKeyboardEvent::Leave { surface, .. } => {
                 let window_id = wayland::make_wid(&surface);
+                state.clipboard.keyboard_focus_leave(&data.seat.id());
 
                 // NOTE: we should drop the repeat regardless whether it was for the present
                 // window of for the window which just went gone.
@@ -131,7 +137,16 @@ impl Dispatch<WlKeyboard, KeyboardData, WinitState> for WinitState {
                     state.events_sink.push_window_event(WindowEvent::Focused(false), window_id);
                 }
             },
-            WlKeyboardEvent::Key { key, state: WEnum::Value(WlKeyState::Pressed), .. } => {
+            WlKeyboardEvent::Key {
+                key, serial, state: WEnum::Value(WlKeyState::Pressed), ..
+            } => {
+                if let Some(window_id) = *data.window_id.lock().unwrap() {
+                    state.clipboard.keyboard_key(
+                        &data.seat.id(),
+                        serial,
+                        crate::window::WindowId(window_id),
+                    );
+                }
                 let key = key + 8;
 
                 key_input(

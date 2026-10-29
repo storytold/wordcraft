@@ -1,6 +1,7 @@
 use crate::dpi::{PhysicalPosition, PhysicalSize, Size};
 use crate::icon::Icon;
 use crate::keyboard::ModifiersState;
+use crate::platform_impl::platform::ime_caret::SystemCaret;
 use crate::platform_impl::platform::{event_loop, util, Fullscreen, SelectedCursor};
 use crate::window::{Theme, WindowAttributes};
 use bitflags::bitflags;
@@ -45,6 +46,7 @@ pub(crate) struct WindowState {
 
     pub ime_state: ImeState,
     pub ime_allowed: bool,
+    pub system_caret: SystemCaret,
 
     // Used by WM_NCACTIVATE, WM_SETFOCUS and WM_KILLFOCUS
     pub is_active: bool,
@@ -169,6 +171,7 @@ impl WindowState {
 
             ime_state: ImeState::Disabled,
             ime_allowed: false,
+            system_caret: SystemCaret::default(),
 
             is_active: false,
             is_focused: false,
@@ -325,12 +328,20 @@ impl WindowFlags {
         }
 
         if new.contains(WindowFlags::VISIBLE) {
-            let flag = if !self.contains(WindowFlags::MARKER_ACTIVATE) {
-                self.set(WindowFlags::MARKER_ACTIVATE, true);
-                SW_SHOWNOACTIVATE
-            } else {
-                SW_SHOW
-            };
+            // WordCraft patch: a hidden window that becomes visible while maximized is shown with
+            // one `SW_MAXIMIZE`, and maximizing (below) waits until the window is visible
+            // (rust-windowing/winit#4587). `ShowWindow(SW_MAXIMIZE)` shows a hidden window, so
+            // restoring a maximized window that eframe keeps hidden until its first frame showed it
+            // unpainted (white) and disturbed its focus.
+            let flag =
+                if new.contains(WindowFlags::MAXIMIZED) && diff.contains(WindowFlags::VISIBLE) {
+                    SW_MAXIMIZE
+                } else if !self.contains(WindowFlags::MARKER_ACTIVATE) {
+                    self.set(WindowFlags::MARKER_ACTIVATE, true);
+                    SW_SHOWNOACTIVATE
+                } else {
+                    SW_SHOW
+                };
             unsafe {
                 ShowWindow(window, flag);
             }
@@ -359,7 +370,10 @@ impl WindowFlags {
             }
         }
 
-        if diff.contains(WindowFlags::MAXIMIZED) || new.contains(WindowFlags::MAXIMIZED) {
+        if (diff.contains(WindowFlags::MAXIMIZED) || new.contains(WindowFlags::MAXIMIZED))
+            && new.contains(WindowFlags::VISIBLE)
+            && !diff.contains(WindowFlags::VISIBLE)
+        {
             unsafe {
                 ShowWindow(window, match new.contains(WindowFlags::MAXIMIZED) {
                     true => SW_MAXIMIZE,

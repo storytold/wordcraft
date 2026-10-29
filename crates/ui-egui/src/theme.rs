@@ -14,9 +14,9 @@ pub const APP_INK: Color32 = Color32::from_rgb(0x2B, 0x47, 0xB5);
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(from = "String", into = "String")]
 pub enum Appearance {
-    #[default]
     Light,
     Dark,
+    #[default]
     System,
 }
 
@@ -79,53 +79,88 @@ impl From<Appearance> for String {
     }
 }
 
-/// Interface size (File › Options › General, `ui.interfaceSize`), in percent (#475): scales the
-/// ribbon, menus, panes and dialogs on top of the display scale the system reports, through
-/// egui's zoom factor. Document zoom (View › Zoom) is a separate setting and never changes with it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
-#[serde(from = "serde_json::Value", into = "u16")]
-pub struct InterfaceSize(u16);
+/// Interface size (File › Options › General, `ui.interfaceSize`): how large the ribbon, menus, panes
+/// and dialogs are drawn, through egui's zoom factor. Document zoom (View › Zoom) is a separate
+/// setting and never changes with it.
+///
+/// `Auto` (the default) keeps the display scale the system reports. A chosen size is absolute, as in
+/// PhotoCraft and PdfCraft (#822): "100%" is one screen pixel per point whatever the display reports,
+/// so a system that guesses 200 % (a bare window manager on X11, where winit falls back to the
+/// monitor's DPI) doesn't make "100%" draw at 200 %. The display's scale is divided back out in
+/// [`InterfaceSize::zoom_factor`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(from = "serde_json::Value", into = "serde_json::Value")]
+pub struct InterfaceSize(Option<u16>);
 
 impl InterfaceSize {
-    pub const MIN: u16 = 80;
-    pub const MAX: u16 = 200;
-    pub const DEFAULT: InterfaceSize = InterfaceSize(100);
-    /// The choices in File › Options, in percent.
-    pub const PRESETS: [u16; 8] = [80, 90, 100, 110, 125, 150, 175, 200];
+    pub const MIN: u16 = 50;
+    pub const MAX: u16 = 300;
+    /// Follow the display scale the system reports.
+    pub const AUTO: InterfaceSize = InterfaceSize(None);
+    /// The sizes File › Options offers after Auto, in percent (PhotoCraft's and PdfCraft's).
+    pub const PRESETS: [u16; 12] = [75, 80, 85, 90, 95, 100, 125, 150, 175, 200, 250, 300];
 
-    /// A size from any number: rounded and clamped to 80–200 %; `None` for NaN or infinity.
+    /// A chosen size from any number: rounded and clamped to 50–300 %; `None` for NaN or infinity.
     pub fn from_percent(percent: f64) -> Option<InterfaceSize> {
-        percent.is_finite().then(|| InterfaceSize(percent.round().clamp(f64::from(Self::MIN), f64::from(Self::MAX)) as u16))
+        percent.is_finite().then(|| InterfaceSize(Some(percent.round().clamp(f64::from(Self::MIN), f64::from(Self::MAX)) as u16)))
     }
 
-    pub fn percent(self) -> u16 {
+    /// The chosen size in percent, or `None` for Auto.
+    pub fn percent(self) -> Option<u16> {
         self.0
     }
 
-    /// The egui zoom factor (1.0 at 100 %).
-    pub fn zoom_factor(self) -> f32 {
-        f32::from(self.0) / 100.0
+    pub fn is_auto(self) -> bool {
+        self.0.is_none()
+    }
+
+    /// The egui zoom factor on a display whose own scale (native pixels per point) is `native`:
+    /// 1.0 for Auto, or the chosen size with the display's scale divided back out.
+    pub fn zoom_factor(self, native: f32) -> f32 {
+        match self.0 {
+            None => 1.0,
+            Some(pct) => f32::from(pct) / 100.0 / usable_scale(native),
+        }
+    }
+
+    /// The size the interface is drawn at on that display, in percent (screen pixels per point × 100).
+    pub fn drawn_percent(self, native: f32) -> u16 {
+        let drawn = usable_scale(native) * self.zoom_factor(native) * 100.0;
+        drawn.round().clamp(0.0, f32::from(u16::MAX)) as u16
     }
 }
 
-impl Default for InterfaceSize {
-    fn default() -> Self {
-        Self::DEFAULT
-    }
+/// The display's scale, or 1.0 when egui doesn't know it (or reports nonsense).
+pub fn usable_scale(native: f32) -> f32 {
+    if native.is_finite() && native > 0.0 { native } else { 1.0 }
 }
 
-/// A saved value that isn't a number reads as 100 %, and an out-of-range one is clamped, rather than
-/// discarding the whole `ui.json`.
+/// `"auto"`, or a percentage; anything else reads as Auto rather than discarding the whole `ui.json`.
 impl From<serde_json::Value> for InterfaceSize {
     fn from(v: serde_json::Value) -> Self {
         v.as_f64().and_then(InterfaceSize::from_percent).unwrap_or_default()
     }
 }
 
-impl From<InterfaceSize> for u16 {
+impl From<InterfaceSize> for serde_json::Value {
     fn from(s: InterfaceSize) -> Self {
-        s.0
+        s.0.map_or_else(|| serde_json::Value::from("auto"), serde_json::Value::from)
     }
+}
+
+/// A `ui.json` from before #822 saved `interfaceSize` as a percentage on top of the display scale.
+/// Its default, 100, meant "the display's scale", which is Auto now (`None`); another value was
+/// picked on purpose and is returned, to become an absolute size once the display's scale is
+/// known ([`migrate_legacy_interface_size`]). Junk reads as Auto.
+pub fn legacy_interface_percent(v: &serde_json::Value) -> Option<f64> {
+    v.as_f64().filter(|p| p.is_finite() && (p - 100.0).abs() >= 0.5)
+}
+
+/// The absolute size a pre-#822 `interfaceSize` of `old` percent drew at on a display whose own
+/// scale is `native`: `old × native`, clamped to 50–300 %. A 2× display with 125 % drew at 250 %,
+/// and keeps drawing there.
+pub fn migrate_legacy_interface_size(old: f64, native: f32) -> InterfaceSize {
+    InterfaceSize::from_percent(old * f64::from(usable_scale(native))).unwrap_or_default()
 }
 
 /// The Animation effects setting (File › Options › Accessibility, `ui.animations`): on, off, or
@@ -213,6 +248,8 @@ pub struct Tokens {
     pub pressed: Color32,
     pub checked: Color32,
     pub accent: Color32,
+    /// The File page's side bar; white text and icons sit on it in both themes.
+    pub nav: Color32,
     pub accent_text: Color32,
     /// Text/icon colour drawn on top of `accent` (e.g. keytip badge letters).
     pub on_accent: Color32,
@@ -226,16 +263,41 @@ pub struct Tokens {
     pub selection: Color32,
     /// Find › Reading Highlight.
     pub find_highlight: Color32,
-    pub caret: Color32,
     pub page_shadow: Color32,
     /// Selection-frame handles (pictures, shapes, text boxes) and their shadow.
     pub handle: Color32,
     pub handle_shadow: Color32,
+    /// Alignment guides while moving a picture or shape: drawn on the page, so legible on white
+    /// paper in both themes.
+    pub guide: Color32,
+    /// The frame around the equation the caret is in, its grip and its options strip: drawn on
+    /// the page, so the same light blue in both themes.
+    pub equation_box: Color32,
+    /// Crop mode: the crop handles, and the dim over the cropped-away part of a picture.
+    pub crop_handle: Color32,
+    pub crop_dim: Color32,
+    /// Comment and revision balloons in the markup area beside the page (#2045): the card, the
+    /// area behind it and its edge. The card holds `text`, so it is dark in the dark theme.
+    pub balloon: Color32,
+    pub markup_area: Color32,
+    pub markup_edge: Color32,
+    /// "Resolved" on a balloon: `green` is only 4.2:1 on the light card.
+    pub resolved_text: Color32,
+    /// One stripe and leader colour per comment author, in turn.
+    pub author_colors: [Color32; 5],
+    /// The same colours for the leader line across the page: the paper stays white in the dark
+    /// theme, so these are the light-theme colours in both.
+    pub leader_colors: [Color32; 5],
     pub menu: Color32,
     pub blue: Color32,
     pub red: Color32,
     pub green: Color32,
     pub orange: Color32,
+    /// A window's close box while the pointer is over it (the red of a Windows caption button),
+    /// while pressed, and the ✕ drawn on it then (#1885).
+    pub close_hover: Color32,
+    pub close_pressed: Color32,
+    pub on_close: Color32,
 }
 
 impl Tokens {
@@ -257,6 +319,7 @@ impl Tokens {
             pressed: Color32::from_rgb(0xD6, 0xD6, 0xD6),
             checked: Color32::from_rgb(0xDD, 0xE3, 0xF8),
             accent: APP_COLOR,
+            nav: APP_COLOR,
             accent_text: APP_INK,
             on_accent: Color32::WHITE,
             input: Color32::WHITE,
@@ -268,15 +331,39 @@ impl Tokens {
             status_bar: Color32::from_rgb(0xF0, 0xF0, 0xF0),
             selection: Color32::from_rgba_unmultiplied(0x3B, 0x5B, 0xDB, 0x48),
             find_highlight: Color32::from_rgba_unmultiplied(0xFF, 0xE0, 0x3D, 0x90),
-            caret: Color32::BLACK,
             page_shadow: Color32::from_rgba_unmultiplied(0, 0, 0, 0x22),
             handle: Color32::WHITE,
             handle_shadow: Color32::from_rgba_unmultiplied(0, 0, 0, 0x28),
+            guide: Color32::from_rgb(0xC0, 0x28, 0x8C),
+            equation_box: Color32::from_rgb(0x6E, 0x9B, 0xE6),
+            crop_handle: Color32::BLACK,
+            crop_dim: Color32::from_rgba_unmultiplied(0x30, 0x30, 0x30, 0xE0),
+            balloon: Color32::WHITE,
+            markup_area: Color32::from_rgb(0xF3, 0xF3, 0xF3),
+            markup_edge: Color32::from_rgb(0xE0, 0xE0, 0xE0),
+            resolved_text: Color32::from_rgb(0x1B, 0x6B, 0x42),
+            author_colors: [
+                Color32::from_rgb(0x2F, 0x6F, 0xD0),
+                Color32::from_rgb(0xB0, 0x3A, 0x2E),
+                Color32::from_rgb(0x2E, 0x7D, 0x32),
+                Color32::from_rgb(0x8E, 0x44, 0xAD),
+                Color32::from_rgb(0xE0, 0x7B, 0x1F),
+            ],
+            leader_colors: [
+                Color32::from_rgb(0x2F, 0x6F, 0xD0),
+                Color32::from_rgb(0xB0, 0x3A, 0x2E),
+                Color32::from_rgb(0x2E, 0x7D, 0x32),
+                Color32::from_rgb(0x8E, 0x44, 0xAD),
+                Color32::from_rgb(0xE0, 0x7B, 0x1F),
+            ],
             menu: Color32::WHITE,
             blue: Color32::from_rgb(0x2F, 0x6F, 0xD0),
             red: Color32::from_rgb(0xD1, 0x3B, 0x3B),
             green: Color32::from_rgb(0x2E, 0x8B, 0x57),
             orange: Color32::from_rgb(0xE0, 0x7B, 0x1F),
+            close_hover: Color32::from_rgb(0xC4, 0x2B, 0x1C),
+            close_pressed: Color32::from_rgb(0xA6, 0x23, 0x16),
+            on_close: Color32::WHITE,
         }
     }
     pub fn dark() -> Self {
@@ -297,27 +384,54 @@ impl Tokens {
             pressed: Color32::from_rgb(0x4A, 0x4A, 0x4A),
             checked: Color32::from_rgb(0x2E, 0x3A, 0x66),
             accent: Color32::from_rgb(0x7A, 0x93, 0xF0),
+            nav: Color32::from_rgb(0x27, 0x31, 0x5C),
             accent_text: Color32::from_rgb(0x9C, 0xB0, 0xF5),
             // Dark text on the light dark-theme accent: white on #7a93f0 is only 2.9:1 (#655).
             on_accent: Color32::from_rgb(0x11, 0x16, 0x2E),
             input: Color32::from_rgb(0x1E, 0x1E, 0x1E),
             input_border: Color32::from_rgb(0x7A, 0x7A, 0x7A),
             group_label: Color32::from_rgb(0xA0, 0xA0, 0xA0),
-            ruler: Color32::from_rgb(0x2E, 0x2E, 0x2E),
-            ruler_margin: Color32::from_rgb(0x45, 0x45, 0x45),
-            ruler_tick: Color32::from_rgb(0xA0, 0xA0, 0xA0),
+            // The text area is lighter than the margins, as in the light theme (#1148).
+            ruler: Color32::from_rgb(0x45, 0x45, 0x45),
+            ruler_margin: Color32::from_rgb(0x2E, 0x2E, 0x2E),
+            ruler_tick: Color32::from_rgb(0xB4, 0xB4, 0xB4),
             status_bar: Color32::from_rgb(0x1F, 0x1F, 0x1F),
             selection: Color32::from_rgba_unmultiplied(0x7A, 0x93, 0xF0, 0x55),
             find_highlight: Color32::from_rgba_unmultiplied(0xC8, 0xA8, 0x00, 0x70),
-            caret: Color32::BLACK,
             page_shadow: Color32::from_rgba_unmultiplied(0, 0, 0, 0x60),
             handle: Color32::from_rgb(0xF2, 0xF2, 0xF2),
             handle_shadow: Color32::from_rgba_unmultiplied(0, 0, 0, 0x5A),
+            guide: Color32::from_rgb(0xE0, 0x4C, 0xB0),
+            equation_box: Color32::from_rgb(0x6E, 0x9B, 0xE6),
+            crop_handle: Color32::BLACK,
+            crop_dim: Color32::from_rgba_unmultiplied(0x30, 0x30, 0x30, 0xE0),
+            balloon: Color32::from_rgb(0x2B, 0x2B, 0x2B),
+            markup_area: Color32::from_rgb(0x1B, 0x1B, 0x1B),
+            markup_edge: Color32::from_rgb(0x3A, 0x3A, 0x3A),
+            resolved_text: Color32::from_rgb(0x5B, 0xC0, 0x8A),
+            author_colors: [
+                Color32::from_rgb(0x7F, 0xA8, 0xF2),
+                Color32::from_rgb(0xE5, 0x78, 0x6B),
+                Color32::from_rgb(0x6F, 0xBF, 0x73),
+                Color32::from_rgb(0xC0, 0x8F, 0xE0),
+                Color32::from_rgb(0xF0, 0xA0, 0x50),
+            ],
+            leader_colors: [
+                Color32::from_rgb(0x2F, 0x6F, 0xD0),
+                Color32::from_rgb(0xB0, 0x3A, 0x2E),
+                Color32::from_rgb(0x2E, 0x7D, 0x32),
+                Color32::from_rgb(0x8E, 0x44, 0xAD),
+                Color32::from_rgb(0xE0, 0x7B, 0x1F),
+            ],
             menu: Color32::from_rgb(0x2B, 0x2B, 0x2B),
             blue: Color32::from_rgb(0x6C, 0x9B, 0xEA),
             red: Color32::from_rgb(0xEE, 0x6A, 0x6A),
             green: Color32::from_rgb(0x5B, 0xC0, 0x8A),
             orange: Color32::from_rgb(0xF0, 0xA0, 0x50),
+            // A little lighter than the light theme's red, so it reads against the dark window.
+            close_hover: Color32::from_rgb(0xD6, 0x3C, 0x2C),
+            close_pressed: Color32::from_rgb(0xB3, 0x30, 0x23),
+            on_close: Color32::WHITE,
         }
     }
     pub fn get(ctx: &egui::Context) -> Tokens {
@@ -361,7 +475,7 @@ fn contrast_ratio(a: Color32, b: Color32) -> f32 {
 }
 
 fn system_accent(ctx: &egui::Context) -> Option<Color32> {
-    ctx.data(|d| d.get_temp::<Color32>(egui::Id::new("desktop-system-accent")))
+    ctx.data(|d| d.get_temp::<Color32>(egui::Id::unique("desktop-system-accent")))
 }
 
 /// Apply a desktop accent only in System mode. Returns whether palettes need refreshing.
@@ -373,7 +487,7 @@ pub fn set_system_accent(ctx: &egui::Context, rgb: Option<[f64; 3]>) -> bool {
         return false;
     }
     ctx.data_mut(|d| {
-        let id = egui::Id::new("desktop-system-accent");
+        let id = egui::Id::unique("desktop-system-accent");
         if let Some(color) = next {
             d.insert_temp(id, color);
         } else {
@@ -389,10 +503,15 @@ pub fn install_fonts(ctx: &egui::Context) {
     install_fonts_for(ctx, false);
 }
 
-/// [`install_fonts`] with the CJK fallback order for the interface language: the Chinese face
-/// first for Chinese (#8), the Japanese one otherwise. The new fonts apply from the next frame.
+/// [`install_fonts`] with the Chinese or Japanese CJK fallback order. The new fonts apply from the
+/// next frame.
 pub fn install_fonts_for(ctx: &egui::Context, prefer_hans: bool) {
     install_fonts_with(ctx, prefer_hans, false);
+}
+
+/// [`install_fonts_for`] with the CJK fallback order for a Korean interface.
+pub fn install_fonts_language(ctx: &egui::Context, prefer_hans: bool, prefer_korean: bool) {
+    install_fonts_language_with(ctx, prefer_hans, prefer_korean, false);
 }
 
 /// [`install_fonts_for`], also adding an installed CJK font after the embedded faces when
@@ -403,11 +522,27 @@ pub fn install_fonts_with(ctx: &egui::Context, prefer_hans: bool, system_cjk: bo
     install_fonts_extra(ctx, prefer_hans, system_cjk, &[]);
 }
 
+/// [`install_fonts_with`] with the CJK font order selected for the interface language.
+pub fn install_fonts_language_with(ctx: &egui::Context, prefer_hans: bool, prefer_korean: bool, system_cjk: bool) {
+    install_fonts_language_extra(ctx, prefer_hans, prefer_korean, system_cjk, &[]);
+}
+
 /// [`install_fonts_with`], also adding document-font `faces` as last-resort fallbacks (#565): the
 /// faces that cover text the interface fonts cannot draw (an input method's composition, or a
 /// file name in the window caption).
 pub fn install_fonts_extra(ctx: &egui::Context, prefer_hans: bool, system_cjk: bool, faces: &[Arc<wordcraft_fonts::FontFace>]) {
-    let mut fonts = font_definitions(prefer_hans, system_cjk);
+    install_fonts_language_extra(ctx, prefer_hans, false, system_cjk, faces);
+}
+
+/// [`install_fonts_extra`] with the CJK font order selected for the interface language.
+pub fn install_fonts_language_extra(
+    ctx: &egui::Context,
+    prefer_hans: bool,
+    prefer_korean: bool,
+    system_cjk: bool,
+    faces: &[Arc<wordcraft_fonts::FontFace>],
+) {
+    let mut fonts = font_definitions_language(prefer_hans, prefer_korean, system_cjk);
     add_fallback_faces(&mut fonts, faces);
     ctx.set_fonts(fonts);
 }
@@ -458,6 +593,11 @@ pub fn faces_for_preedit(
 
 /// The interface fonts; see [`install_fonts_with`].
 pub fn font_definitions(prefer_hans: bool, system_cjk: bool) -> FontDefinitions {
+    font_definitions_language(prefer_hans, false, system_cjk)
+}
+
+/// The interface fonts, ordered for the preferred CJK writing system.
+pub fn font_definitions_language(prefer_hans: bool, prefer_korean: bool, system_cjk: bool) -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
     let add = |fonts: &mut FontDefinitions, name: &str, bytes: &'static [u8]| {
         fonts.font_data.insert(name.into(), Arc::new(FontData::from_static(bytes)));
@@ -484,16 +624,20 @@ pub fn font_definitions(prefer_hans: bool, system_cjk: bool) -> FontDefinitions 
             }
         }
     };
-    let cjk = wordcraft_fonts::ui_cjk_fonts(prefer_hans);
+    let cjk = wordcraft_fonts::ui_cjk_fonts_for(prefer_hans, prefer_korean);
     for f in &cjk {
         // The same static bytes the document fonts use: one copy in the binary.
+        add_cjk(&mut fonts, format!("{} {}", f.family, f.style), FontData::from_static(f.bytes));
+    }
+    // Georgian has no glyphs in Inter, Source Sans or the CJK faces: the craft-fonts Geor face.
+    for f in wordcraft_fonts::georgian_fonts() {
         add_cjk(&mut fonts, format!("{} {}", f.family, f.style), FontData::from_static(f.bytes));
     }
     // The embedded faces leave interface characters without a glyph (a build without craft-fonts,
     // without its Chinese face, #241, or with faces lacking catalog characters, #486): an
     // installed CJK font after them, so the menus don't show boxes or `?`.
     #[cfg(not(target_arch = "wasm32"))]
-    if system_cjk && let Some(f) = system_cjk_font(prefer_hans) {
+    if system_cjk && let Some(f) = system_cjk_font(prefer_hans, prefer_korean) {
         let mut data = FontData::from_static(&f.bytes);
         data.index = f.index;
         add_cjk(&mut fonts, format!("system {}", f.family), data);
@@ -509,24 +653,31 @@ pub fn font_definitions(prefer_hans: bool, system_cjk: bool) -> FontDefinitions 
 /// ([`cjk_font_text`](crate::i18n::Lang::cjk_font_text)). The font is picked for the catalogs'
 /// missing characters, or for the language names when only those are missing.
 #[cfg(not(target_arch = "wasm32"))]
-fn system_cjk_font(hans: bool) -> Option<&'static wordcraft_fonts::SystemUiFont> {
+fn system_cjk_font(hans: bool, korean: bool) -> Option<&'static wordcraft_fonts::SystemUiFont> {
     static ZH: std::sync::OnceLock<Option<wordcraft_fonts::SystemUiFont>> = std::sync::OnceLock::new();
     static OTHER: std::sync::OnceLock<Option<wordcraft_fonts::SystemUiFont>> = std::sync::OnceLock::new();
-    (if hans { &ZH } else { &OTHER })
-        .get_or_init(|| {
-            let embedded = wordcraft_fonts::ui_cjk_fonts(hans);
-            let (catalogs, names) = crate::i18n::Lang::cjk_font_text(hans);
-            let mut needed = wordcraft_fonts::ui_uncovered_cjk(&catalogs, &embedded);
+    static KO: std::sync::OnceLock<Option<wordcraft_fonts::SystemUiFont>> = std::sync::OnceLock::new();
+    (if hans {
+        &ZH
+    } else if korean {
+        &KO
+    } else {
+        &OTHER
+    })
+    .get_or_init(|| {
+        let embedded = wordcraft_fonts::ui_cjk_fonts_for(hans, korean);
+        let (catalogs, names) = crate::i18n::Lang::cjk_font_text_for(hans, korean);
+        let mut needed = wordcraft_fonts::ui_uncovered_cjk(&catalogs, &embedded);
+        if needed.is_empty() {
+            needed = wordcraft_fonts::ui_uncovered_cjk(&[&names], &embedded);
             if needed.is_empty() {
-                needed = wordcraft_fonts::ui_uncovered_cjk(&[&names], &embedded);
-                if needed.is_empty() {
-                    return None;
-                }
+                return None;
             }
-            log::debug!("interface: {} CJK characters lack an embedded glyph", needed.len());
-            wordcraft_fonts::system_cjk_ui_font(hans, &needed)
-        })
-        .as_ref()
+        }
+        log::debug!("interface: {} CJK characters lack an embedded glyph", needed.len());
+        wordcraft_fonts::system_cjk_ui_font_for(hans, korean, &needed)
+    })
+    .as_ref()
 }
 
 pub fn medium(size: f32) -> FontId {
@@ -598,6 +749,35 @@ pub fn text_width(painter: &egui::Painter, text: &str, font: &FontId, tracking: 
         return painter.layout_no_wrap(text.to_string(), font.clone(), color).size().x;
     }
     painter.layout_job(tracked_job(text, font, tracking, color)).size().x
+}
+
+/// The text as it fits in `width`: shortened with an ellipsis when it is too long, and empty
+/// when not even the ellipsis fits (#2402). The beginning of the text is kept, so the reader
+/// still sees what the message is about.
+pub fn fit_text(painter: &egui::Painter, text: &str, font: &FontId, tracking: f32, color: Color32, width: f32) -> String {
+    if text.is_empty() || width <= 0.0 {
+        return String::new();
+    }
+    let full = text_width(painter, text, font, tracking, color);
+    if full <= width {
+        return text.to_string();
+    }
+    let count = text.chars().count();
+    // A rough cut first, so a long text doesn't need a layout for every character.
+    let per_char = (full / count as f32).max(0.5);
+    let mut shown: String = text.chars().take((width / per_char) as usize).collect();
+    while !shown.is_empty() && text_width(painter, &format!("{shown}…"), font, tracking, color) > width {
+        shown.pop();
+    }
+    if shown.is_empty() {
+        // Only the ellipsis is left: it stands for the whole text when it fits.
+        if text_width(painter, "…", font, tracking, color) <= width {
+            return "…".to_string();
+        }
+        return String::new();
+    }
+    shown.push('…');
+    shown
 }
 
 /// Paint one line of tracked text with the given anchor and return its rect.
@@ -728,6 +908,17 @@ mod tests {
         (x.max(y) + 0.05) / (x.min(y) + 0.05)
     }
 
+    /// #1885: the ✕ on a window's close box reads on its hover and pressed reds in both themes.
+    #[test]
+    fn close_box_glyph_reads_on_its_reds() {
+        for t in [super::Tokens::light(), super::Tokens::dark()] {
+            for (name, bg) in [("close_hover", t.close_hover), ("close_pressed", t.close_pressed)] {
+                let r = contrast(t.on_close, bg);
+                assert!(r >= 4.5, "dark={}: on_close on {name} is {r:.2}:1", t.dark);
+            }
+        }
+    }
+
     /// #655: text and knobs on filled accent controls (Share, avatar, AutoSave, keytips) reach 4.5:1
     /// on the accent and on its hover shade, in both themes.
     #[test]
@@ -740,6 +931,15 @@ mod tests {
         }
     }
 
+    /// White text and icons on the File page's side bar reach 4.5:1 in both themes.
+    #[test]
+    fn the_file_sidebar_reads_in_both_themes() {
+        for t in [super::Tokens::light(), super::Tokens::dark()] {
+            let r = contrast(egui::Color32::WHITE, t.nav);
+            assert!(r >= 4.5, "dark={}: white on the sidebar is {r:.2}:1", t.dark);
+        }
+    }
+
     /// #657: text field and combo outlines reach 3:1 against the field and everything it sits on.
     #[test]
     fn input_borders_reach_three_to_one() {
@@ -749,6 +949,63 @@ mod tests {
                 assert!(r >= 3.0, "dark={}: input_border on {name} is {r:.2}:1", t.dark);
             }
         }
+    }
+
+    /// #1148: on both rulers the text area is lighter than the margins in both themes, as in the
+    /// light theme, and the numbers drawn on it still reach 4.5:1.
+    #[test]
+    fn ruler_text_area_is_lighter_than_its_margins() {
+        let lum = |c: egui::Color32| contrast(c, egui::Color32::BLACK);
+        for t in [super::Tokens::light(), super::Tokens::dark()] {
+            assert!(lum(t.ruler) > lum(t.ruler_margin), "dark={}: ruler text area is darker than its margins", t.dark);
+            let r = contrast(t.ruler_tick, t.ruler);
+            assert!(r >= 4.5, "dark={}: ruler numbers on the text area are {r:.2}:1", t.dark);
+        }
+    }
+
+    /// #2045: comment and revision balloons were drawn on a hard-coded white card, so the light
+    /// text of the dark theme was near-invisible. Every text colour a balloon uses reaches 4.5:1
+    /// on the card, and the author stripes and borders 3:1 on the card and the markup area.
+    #[test]
+    fn comment_balloons_are_readable() {
+        for t in [super::Tokens::light(), super::Tokens::dark()] {
+            for (name, card) in [("card", t.balloon), ("selected card", t.checked)] {
+                for (what, fg) in [("text", t.text), ("dim text", t.text_dim), ("resolved label", t.resolved_text)] {
+                    let r = contrast(fg, card);
+                    assert!(r >= 4.5, "dark={}: {what} on the {name} is {r:.2}:1", t.dark);
+                }
+            }
+            // The light stripes are unchanged; only the dark theme's were unreadable.
+            for (i, c) in t.author_colors.iter().enumerate().filter(|_| t.dark) {
+                for (name, bg) in [("card", t.balloon), ("selected card", t.checked), ("markup area", t.markup_area)] {
+                    let r = contrast(*c, bg);
+                    assert!(r >= 3.0, "dark={}: author colour {i} on the {name} is {r:.2}:1", t.dark);
+                }
+            }
+            // The leader's on-page part is drawn at 70% on white paper in both themes, no fainter than before (#2045).
+            for (i, c) in t.leader_colors.iter().enumerate() {
+                let on_paper = |a: u8| u8::try_from((u16::from(a) * 7 + 255 * 3) / 10).unwrap_or(255);
+                let blended = egui::Color32::from_rgb(on_paper(c.r()), on_paper(c.g()), on_paper(c.b()));
+                let r = contrast(blended, egui::Color32::WHITE);
+                assert!(r >= 2.1, "dark={}: leader colour {i} on the page is {r:.2}:1", t.dark);
+            }
+            let r = contrast(t.markup_edge, t.markup_area);
+            assert!(r >= 1.1, "dark={}: the markup area edge is invisible ({r:.2}:1)", t.dark);
+        }
+    }
+
+    /// The test root declares egui's `default_fonts` and `monochrome_emoji_fonts` features
+    /// explicitly (kittest's own dev-dependencies do not propagate). WordCraft inserts Inter at
+    /// the front and SourceSans after egui's complete default fallback block, including the
+    /// monochrome emoji faces. Production keeps only `default_fonts` through eframe.
+    #[test]
+    fn interface_font_order_keeps_test_default_fonts_explicit() {
+        let defs = super::font_definitions(false, false);
+        let prop = &defs.families[&egui::FontFamily::Proportional];
+        assert_eq!(
+            prop.iter().take(6).map(String::as_str).collect::<Vec<_>>(),
+            ["Inter", "Ubuntu-Light", "egui-icons", "NotoEmoji-Regular", "emoji-icon-font", "SourceSans"]
+        );
     }
 
     /// #565: the composition of an input method (Bangla through ibus) drew as boxes because only the
@@ -800,10 +1057,9 @@ mod tests {
     fn interface_colours_come_from_the_theme() {
         let banned = ["fill(crate::theme::APP_COLOR)", "0x58, 0x65, 0xF2", "0x47, 0x52, 0xC4", "0xFF, 0xF1, 0x76", "0xD1, 0x3B, 0x3B"];
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        for entry in std::fs::read_dir(&dir).unwrap() {
-            let path = entry.unwrap().path();
+        for path in crate::rust_sources(&dir) {
             let name = path.file_name().unwrap().to_string_lossy().to_string();
-            if !name.ends_with(".rs") || name == "theme.rs" || name == "icons.rs" {
+            if path == dir.join("theme.rs") || path == dir.join("icons.rs") {
                 continue;
             }
             let src = std::fs::read_to_string(&path).unwrap();
@@ -811,6 +1067,28 @@ mod tests {
                 assert!(!src.contains(b), "{name} hard-codes {b}; use theme::Tokens");
             }
         }
+    }
+
+    /// #2402: text that is too long for the room it has is shortened with an ellipsis, keeping
+    /// its beginning; text that fits is left alone.
+    #[test]
+    fn fit_text_shortens_text_that_does_not_fit() {
+        let long = "C:\\Test\\Documents\\Reports\\Final individual test folder\\Second level folder\\Project - Gadgets and sleep of teenagers.docx: The system cannot find the path specified. (os error 3)";
+        let font = super::TypeRung::Caption.regular();
+        let track = super::TypeRung::Caption.tracking();
+        let ctx = egui::Context::default();
+        let (mut whole, mut short, mut short_width, mut fitted) = (0.0, String::new(), 0.0, String::new());
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            whole = super::text_width(ui.painter(), long, &font, track, egui::Color32::BLACK);
+            short = super::fit_text(ui.painter(), long, &font, track, egui::Color32::BLACK, whole / 2.0);
+            short_width = super::text_width(ui.painter(), &short, &font, track, egui::Color32::BLACK);
+            fitted = super::fit_text(ui.painter(), long, &font, track, egui::Color32::BLACK, whole);
+        })
+        .drop_without_applying_deltas();
+        assert!(short.ends_with('…'), "{short}");
+        assert!(long.starts_with(short.trim_end_matches('…')), "{short}");
+        assert!(short_width <= whole / 2.0, "{short}");
+        assert_eq!(fitted, long, "text that fits is left as it is");
     }
 
     /// Symbols written as text in the interface code must exist in the interface fonts (Inter and
@@ -823,11 +1101,8 @@ mod tests {
         ctx.run_ui(egui::RawInput::default(), |_| {}).drop_without_applying_deltas();
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut symbols = BTreeSet::new();
-        for entry in std::fs::read_dir(&dir).unwrap() {
-            let path = entry.unwrap().path();
-            if path.extension().is_none_or(|e| e != "rs") {
-                continue;
-            }
+        // The i18n module's literals are catalog and pseudo-locale test text, not interface text.
+        for path in crate::rust_sources(&dir).into_iter().filter(|p| !p.starts_with(dir.join("i18n"))) {
             let code = std::fs::read_to_string(&path).unwrap();
             // Characters inside string literals, line by line (good enough for this code base).
             for line in code.lines().filter(|l| !l.trim_start().starts_with("//")) {
@@ -836,7 +1111,7 @@ mod tests {
                         symbols.extend(
                             part.chars()
                                 .filter(|c| !c.is_ascii() && !c.is_alphabetic() && !c.is_whitespace())
-                                .map(|c| (c, path.file_name().unwrap().to_string_lossy().to_string())),
+                                .map(|c| (c, path.strip_prefix(&dir).unwrap().to_string_lossy().replace('\\', "/"))),
                         );
                     }
                 }
@@ -847,7 +1122,7 @@ mod tests {
         // The ➢ bullet is a value for `para.bullets`; its menu tile draws the shape instead.
         let exempt = |c: char, file: &str| match file {
             "equation_tab.rs" => matches!(c, '≜' | '┬'),
-            "ribbon.rs" => c == '➢',
+            _ if file == "ribbon.rs" || file.starts_with("ribbon/") => c == '➢',
             _ => false,
         };
         symbols.retain(|(c, file)| !exempt(*c, file));

@@ -35,14 +35,15 @@ impl AppleEvents {
 }
 
 /// Open the documents and act on the quit requests that arrived since the last frame. A document
-/// opens like File › Open (asking about unsaved changes first); quitting closes the window, which
-/// asks the same.
+/// opens like File › Open: beside the open ones, in place of an untouched blank one, or, when it
+/// is already open, by showing it. Quitting closes the window, which asks about every document
+/// with unsaved changes.
 pub fn poll(inbox: &Inbox, app: &mut WordApp, ctx: &egui::Context) {
     for e in inbox.drain() {
         match e {
             Event::Open(paths) => {
                 for p in paths.iter().filter_map(|p| p.to_str()) {
-                    match app.run("file.open", serde_json::json!({"path": p})) {
+                    match app.open_file(p, None) {
                         // Leave Backstage, as opening from the Open dialog does.
                         Ok(_) => app.ui.backstage = false,
                         Err(e) => {
@@ -54,7 +55,12 @@ pub fn poll(inbox: &Inbox, app: &mut WordApp, ctx: &egui::Context) {
                     }
                 }
             }
-            Event::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            // Quitting asks about every document with unsaved changes, each in its window; the
+            // app closes once that's done (`quit_requested`).
+            Event::Quit => {
+                app.quit();
+                ctx.request_repaint();
+            }
         }
     }
 }

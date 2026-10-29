@@ -188,6 +188,7 @@ mod drop_handler;
 mod event_loop;
 mod icon;
 mod ime;
+mod ime_caret;
 mod keyboard;
 mod keyboard_layout;
 mod monitor;

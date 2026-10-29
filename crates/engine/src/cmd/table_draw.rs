@@ -29,7 +29,7 @@ pub fn specs() -> Vec<CommandSpec> {
             r#"{"page": n, "x0": pt, "y0": pt, "x1": pt, "y1": pt, "story"?: StoryRef} (a pen stroke in page points, 0-based page: a rectangle at least 12 pt each way outside any table inserts a one-cell table of that size at the paragraph under its start; a straight vertical or horizontal line inside a table splits the cells it crosses there. In the app the button turns the pen on.)"#,
         ),
         CommandSpec::new("table.eraser", "Eraser", "Table Layout › Draw", eraser).params(
-            r#"{"page": n, "x": pt, "y": pt} (removes the border between two cells within 4 pt of the point by merging them. In the app the button turns the eraser on.)"#,
+            r#"{"page": n, "x": pt, "y": pt} (removes the border between two cells within 4 pt of the point: cells that make one rectangle merge, including cells merged down the same rows; otherwise the border is hidden along the whole edge. In the app the button turns the eraser on.)"#,
         ),
     ]
 }
@@ -191,6 +191,90 @@ fn vgroup(t: &Table, r: usize, c: usize) -> (usize, usize) {
     (r0, r1)
 }
 
+/// A cell as the grid rectangle it covers: rows `top..=bot`, grid columns `g0..g1`.
+#[derive(Clone, Copy, Debug)]
+struct Logical {
+    top: usize,
+    bot: usize,
+    g0: usize,
+    g1: usize,
+}
+
+fn logical(t: &Table, r: usize, c: usize) -> Logical {
+    let g0 = t.grid_col(r, c);
+    let span = t.rows.get(r).and_then(|row| row.cells.get(c)).map_or(1, Cell::span);
+    let (top, bot) = vgroup(t, r, c);
+    Logical { top, bot, g0, g1: g0 + span }
+}
+
+/// The rows (`top`, `bot`) two cells side by side share when erasing the border between them
+/// leaves one rectangle: every row of both has exactly their cells there, merged the same way.
+fn aligned_rows(t: &Table, a: &Logical, b: &Logical) -> Option<(usize, usize)> {
+    if a.top != b.top || a.bot != b.bot || a.g1 != b.g0 {
+        return None;
+    }
+    for row in a.top..=a.bot {
+        let ci = t.cell_at_grid(row, a.g0).filter(|&ci| t.grid_col(row, ci) == a.g0)?;
+        let cells = &t.rows.get(row)?.cells;
+        let (x, y) = (cells.get(ci)?, cells.get(ci + 1)?);
+        if x.span() != a.g1 - a.g0 || y.span() != b.g1 - b.g0 || x.props.vmerge != y.props.vmerge {
+            return None;
+        }
+    }
+    Some((a.top, a.bot))
+}
+
+/// Hide the border line on both sides along an edge: set no border on every cell beside it.
+/// `vertical`: the line sits left of grid column `line` and the edge covers rows `lo..=hi`;
+/// otherwise it sits above row `line` and covers grid columns `lo..hi`.
+fn hide_edge(t: &mut Table, vertical: bool, line: usize, (lo, hi): (usize, usize)) {
+    let nil = wordcraft_doc::props::Border { style: wordcraft_doc::props::BorderStyle::None, width: 0.0, color: None, space: 0.0 };
+    // Only a cell whose edge lies on the line is touched.
+    let set_v = |t: &mut Table, r: usize, g: usize, before: bool| {
+        let Some(ci) = t.cell_at_grid(r, g) else { return };
+        let start = t.grid_col(r, ci);
+        let Some(cell) = t.rows.get_mut(r).and_then(|row| row.cells.get_mut(ci)) else { return };
+        let end = start + cell.span();
+        let b = cell.props.borders.get_or_insert_with(Default::default);
+        if before && end == line {
+            b.right = Some(nil);
+        } else if !before && start == line {
+            b.left = Some(nil);
+        }
+    };
+    let set_h = |t: &mut Table, r: usize, g: usize, above: bool| {
+        let Some(ci) = t.cell_at_grid(r, g) else { return };
+        let Some(cell) = t.rows.get_mut(r).and_then(|row| row.cells.get_mut(ci)) else { return };
+        let b = cell.props.borders.get_or_insert_with(Default::default);
+        if above {
+            b.bottom = Some(nil);
+        } else {
+            b.top = Some(nil);
+        }
+    };
+    if vertical {
+        for r in lo..=hi.min(t.rows.len().saturating_sub(1)) {
+            if let Some(l) = line.checked_sub(1) {
+                set_v(t, r, l, true);
+            }
+            set_v(t, r, line, false);
+        }
+    } else {
+        let below_cont = |t: &Table, g: usize| {
+            t.cell_at_grid(line, g).and_then(|ci| t.rows.get(line)?.cells.get(ci)).is_some_and(|c| c.props.vmerge == VMerge::Continue)
+        };
+        for g in lo..hi.min(MAX_COLS) {
+            if below_cont(t, g) {
+                continue;
+            }
+            if let Some(above) = line.checked_sub(1) {
+                set_h(t, above, g, true);
+            }
+            set_h(t, line, g, false);
+        }
+    }
+}
+
 /// A vertical line at page `x`: split each crossed cell into two columns there.
 fn split_columns(s: &mut Session, l: &DocLayout, page: usize, x: f32, (ya, yb): (f32, f32)) -> CmdResult {
     let boxes = cell_boxes(l, page);
@@ -309,6 +393,10 @@ fn split_rows(s: &mut Session, l: &DocLayout, page: usize, y: f32, (xa, xb): (f3
     if t.rows.len() >= MAX_ROWS {
         return Err(CmdError::Failed("the table has too many rows".into()));
     }
+    // An exact height leaves out the row's bottom margin (its cells' largest), which the layout
+    // adds below it: take it off each half so the two rows draw where the line went.
+    let row_bottom =
+        t.rows.get(r).map_or(0.0, |row| (0..row.cells.len()).map(|ci| wordcraft_layout::cell_margins(&s.doc, t, r, ci)[2]).fold(0.0f32, f32::max));
     let crossed_set: std::collections::BTreeSet<usize> = cells.iter().map(|c| c.1).collect();
     let merged = |ci: &usize| t.rows.get(r).and_then(|row| row.cells.get(*ci)).is_some_and(|c| c.props.vmerge != VMerge::None);
     if crossed_set.iter().any(merged) {
@@ -320,9 +408,10 @@ fn split_rows(s: &mut Session, l: &DocLayout, page: usize, y: f32, (xa, xb): (f3
     new_row.props.header = false;
     if top.is_finite() && bottom.is_finite() && bottom > top {
         let rule = if row.props.height_rule == HeightRule::Exact { HeightRule::Exact } else { HeightRule::AtLeast };
-        row.props.height = Some((y - top).clamp(1.0, 1584.0));
+        let less = if rule == HeightRule::Exact { row_bottom } else { 0.0 };
+        row.props.height = Some((y - top - less).clamp(1.0, 1584.0));
         row.props.height_rule = rule;
-        new_row.props.height = Some((bottom - y).clamp(1.0, 1584.0));
+        new_row.props.height = Some((bottom - y - less).clamp(1.0, 1584.0));
         new_row.props.height_rule = rule;
     }
     for (ci, cell) in row.cells.iter_mut().enumerate() {
@@ -434,20 +523,32 @@ fn eraser(s: &mut Session, v: &Value) -> CmdResult {
     let t = s.doc.table_mut(story, &tp)?;
     let ((r, c), (r2, c2)) = (e.first, e.second);
     let cell = |t: &Table, r: usize, c: usize| t.rows.get(r).and_then(|row| row.cells.get(c)).map(|x| (x.props.vmerge, x.span()));
-    let (Some((va, sa)), Some((vb, sb))) = (cell(t, r, c), cell(t, r2, c2)) else {
+    let (Some((_, sa)), Some((vb, sb))) = (cell(t, r, c), cell(t, r2, c2)) else {
         return Err(CmdError::Failed("the cells aren't there any more".into()));
     };
+    let (la, lb) = (logical(t, r, c), logical(t, r2, c2));
     if e.across {
-        if va != VMerge::None || vb != VMerge::None {
-            return Err(CmdError::Failed("erasing a border beside a vertically merged cell isn't supported".into()));
+        // Both sides merged down the same rows (or plain single cells): they become one cell.
+        if let Some(rows) = aligned_rows(t, &la, &lb) {
+            let ci0 = t.cell_at_grid(rows.0, la.g0).unwrap_or(0);
+            for row in rows.0..=rows.1 {
+                if let Some(ci) = t.cell_at_grid(row, la.g0) {
+                    t.merge_right(row, ci, ci + 1);
+                }
+            }
+            super::table::sync_cell_widths(t);
+            return finish(s, story, &tp, rows.0, ci0);
         }
-        t.merge_right(r, c, c2);
-        super::table::sync_cell_widths(t);
-        return finish(s, story, &tp, r, c);
+        // Two sides that can't make one rectangle: the border is only hidden.
+        hide_edge(t, true, la.g1, (la.top.min(lb.top), la.bot.max(lb.bot)));
+        let ci0 = t.cell_at_grid(la.top, la.g0).unwrap_or(0);
+        return finish(s, story, &tp, la.top, ci0);
     }
     let (ga, gb) = (t.grid_col(r, c), t.grid_col(r2, c2));
     if ga != gb || sa != sb {
-        return Err(CmdError::Failed("the cells above and below the border don't line up, so they can't be merged".into()));
+        hide_edge(t, false, la.bot + 1, (la.g0.min(lb.g0), la.g1.max(lb.g1)));
+        let ci0 = t.cell_at_grid(la.top, la.g0).unwrap_or(0);
+        return finish(s, story, &tp, la.top, ci0);
     }
     if vb == VMerge::Continue {
         return Err(CmdError::Failed("those cells are already merged".into()));
@@ -527,6 +628,32 @@ mod tests {
         assert!(s.run("table.draw", &json!({})).is_err());
     }
 
+    /// A line drawn through an exact-height row splits it into two exact rows that draw where
+    /// the line went: the bottom margin the layout adds below each isn't counted twice.
+    #[test]
+    fn a_line_through_an_exact_row_keeps_its_drawn_height() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("insert.table", &json!({"rows": 2, "cols": 2})).unwrap();
+        let t = s.doc.body.iter_mut().find_map(|b| match std::sync::Arc::make_mut(b) {
+            Block::Table(t) => Some(t),
+            _ => None,
+        });
+        let t = t.unwrap();
+        t.props.cell_margins = Some([4.0, 5.4, 4.0, 5.4]);
+        t.rows[0].props.height = Some(60.0);
+        t.rows[0].props.height_rule = HeightRule::Exact;
+        s.touch();
+        let (a, b) = (cell_rect(&mut s, 0, 0), cell_rect(&mut s, 0, 1));
+        assert!((a.h - 64.0).abs() < 0.5, "an exact 60pt row with a 4pt bottom margin: {a:?}");
+        let y = a.y + 25.0;
+        s.run("table.draw", &json!({"page": 0, "x0": b.x + 1.0, "y0": y, "x1": b.right() - 1.0, "y1": y})).unwrap();
+        let t = first_table(&s);
+        assert_eq!((t.rows[0].props.height_rule, t.rows[1].props.height_rule), (HeightRule::Exact, HeightRule::Exact));
+        let (top, low) = (cell_rect(&mut s, 0, 1), cell_rect(&mut s, 1, 1));
+        assert!((top.h - 25.0).abs() < 0.5 && (top.y - a.y).abs() < 0.01, "{top:?}");
+        assert!((low.bottom() - a.bottom()).abs() < 0.5, "the pair keeps the row's height: {low:?} vs {a:?}");
+    }
+
     /// Erasing a horizontal border merges the cells into one laid-out cell (#640): the lower
     /// row's box is `covered`, the merged cell's box spans both rows, and erasing the border
     /// below the merge extends it.
@@ -597,5 +724,68 @@ mod tests {
         assert!(s.run("table.eraser", &json!({"page": 0, "x": c.x + c.w / 2.0, "y": c.y + c.h / 2.0})).is_err());
         assert!(s.run("table.eraser", &json!({"page": 0, "x": 1e30, "y": -1e30})).is_err());
         assert_eq!(first_table(&s), start);
+    }
+
+    /// A 3x3 table with columns 1 and 2 merged down rows 0-1 (made with the eraser itself).
+    fn merged_columns_table() -> Session {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("insert.table", &json!({"rows": 3, "cols": 3})).unwrap();
+        for cell in [2, 1] {
+            let a = cell_rect(&mut s, 0, cell);
+            s.run("table.eraser", &json!({"page": 0, "x": a.x + a.w / 2.0, "y": a.bottom() + 0.5})).unwrap();
+        }
+        s
+    }
+
+    /// The border between two cells merged down the same rows merges them into one cell that is
+    /// still merged down those rows; one undo step.
+    #[test]
+    fn erasing_between_cells_merged_down_the_same_rows_merges_them() {
+        let mut s = merged_columns_table();
+        let start = first_table(&s);
+        assert_eq!(shape(&start), json!([[1, 1, 1], [1, 1, 1], [1, 1, 1]]));
+        let a = cell_rect(&mut s, 0, 1);
+        s.run("table.eraser", &json!({"page": 0, "x": a.right() + 0.5, "y": a.y + 3.0})).unwrap();
+        let t = first_table(&s);
+        assert_eq!(shape(&t), json!([[1, 2], [1, 2], [1, 1, 1]]));
+        assert_eq!((t.rows[0].cells[1].props.vmerge, t.rows[1].cells[1].props.vmerge), (VMerge::Restart, VMerge::Continue));
+        let merged = cell_rect(&mut s, 0, 1);
+        assert!(merged.w > a.w * 1.9 && (merged.h - a.h).abs() < 0.5, "{merged:?}");
+        s.run("edit.undo", &json!({})).unwrap();
+        assert_eq!(first_table(&s), start);
+    }
+
+    /// A border whose two sides can't make one rectangle (a one-row cell beside a cell merged
+    /// down two rows) is hidden on both sides instead of refused; nothing merges; one undo step.
+    #[test]
+    fn erasing_between_cells_that_dont_line_up_hides_the_border() {
+        let mut s = merged_columns_table();
+        let start = first_table(&s);
+        let a = cell_rect(&mut s, 0, 0);
+        s.run("table.eraser", &json!({"page": 0, "x": a.right() + 0.5, "y": a.y + a.h / 2.0})).unwrap();
+        let t = first_table(&s);
+        assert_eq!(shape(&t), shape(&start), "no merge");
+        for r in 0..2 {
+            let right = t.rows[r].cells[0].props.borders.and_then(|b| b.right);
+            let left = t.rows[r].cells[1].props.borders.and_then(|b| b.left);
+            assert!(right.is_some_and(|b| !b.is_visible()) && left.is_some_and(|b| !b.is_visible()), "row {r}");
+        }
+        assert!(t.rows[2].cells[0].props.borders.is_none(), "rows outside the edge are untouched");
+        s.run("edit.undo", &json!({})).unwrap();
+        assert_eq!(first_table(&s), start);
+        // A cell spanning two columns above single cells: the horizontal border is hidden too.
+        let a = cell_rect(&mut s, 0, 1);
+        s.run("table.eraser", &json!({"page": 0, "x": a.right() + 0.5, "y": a.y + 3.0})).unwrap();
+        let merged = cell_rect(&mut s, 0, 1);
+        let before = first_table(&s);
+        s.run("table.eraser", &json!({"page": 0, "x": merged.x + 3.0, "y": merged.bottom() + 0.5})).unwrap();
+        let t = first_table(&s);
+        assert_eq!(shape(&t), shape(&before), "no merge");
+        let vis = |r: usize, c: usize, top: bool| {
+            let b = t.rows[r].cells[c].props.borders;
+            b.and_then(|b| if top { b.top } else { b.bottom }).is_some_and(|b| !b.is_visible())
+        };
+        assert!(vis(1, 1, false) && vis(2, 1, true) && vis(2, 2, true), "both sides along the whole edge");
+        assert!(!vis(2, 0, true), "the first column is not part of the edge");
     }
 }
