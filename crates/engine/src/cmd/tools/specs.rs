@@ -6,6 +6,12 @@ use super::{
     Block, CharProps, CmdError, CommandSpec, InlineObject, NumRef, Paragraph, Selection, StoryRef, Value, delete_selection, json, p, para_block,
     sel_result,
 };
+use crate::cmd::insert::MAX_TABLE_ROWS;
+use crate::cmd::mailings::{CsvLimits, MAX_TEXT_BYTES};
+use wordcraft_doc::table::MAX_COLS;
+
+/// What a spreadsheet table keeps: the columns and rows an inserted table has.
+const TABLE_LIMITS: CsvLimits = CsvLimits { fields: MAX_COLS, cells: MAX_TABLE_ROWS * MAX_COLS, text: MAX_TEXT_BYTES };
 
 /// Builds the tools, review, file and insertion command table: Repeat and macros; AutoCorrect,
 /// keyboard and ribbon customization and search; Compare, accessibility, inspection, protection,
@@ -217,8 +223,14 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"path": string}"#),
         CommandSpec::new("insert.spreadsheet", "Spreadsheet Table", "Insert › Tables", |s, v| {
             let csv = p::str(v, "csv").unwrap_or("A,B,C\n1,2,3\n4,5,6");
-            let rows = crate::cmd::mailings::parse_csv(csv);
-            let cols = rows.iter().map(Vec::len).max().unwrap_or(1).clamp(1, 63);
+            let rows = crate::cmd::mailings::parse_csv(csv, &TABLE_LIMITS)
+                .map_err(|e| CmdError::Failed(format!("{e}; a table holds at most {MAX_TABLE_ROWS} rows of {MAX_COLS} columns")))?;
+            // A table holds so many rows: a longer list would lose its records quietly, because
+            // the table the command inserts is shorter than the list.
+            if rows.len() > MAX_TABLE_ROWS {
+                return Err(CmdError::Failed(format!("a table holds at most {MAX_TABLE_ROWS} rows")));
+            }
+            let cols = rows.iter().map(Vec::len).max().unwrap_or(1).clamp(1, MAX_COLS);
             s.run("insert.table", &json!({"rows": rows.len().max(1), "cols": cols, "style": "GridTable1Light"}))?;
             let Some((tp, _, _)) = s.sel.focus.path.cell() else { return sel_result(s) };
             let t = s.doc.table_mut(s.sel.focus.story, &tp)?;

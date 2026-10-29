@@ -210,3 +210,24 @@ fn inspect_removals_work_when_the_document_does_not_track_changes() {
     assert!(!text.contains("Hidden"), "the hidden text is still there: {text}");
     assert!(text.contains("Visible text."), "{text}");
 }
+
+/// A CSV too wide or too long for a table is refused, not cut.
+#[test]
+fn insert_spreadsheet_refuses_a_csv_a_table_cannot_hold() {
+    use crate::cmd::insert::MAX_TABLE_ROWS;
+    use wordcraft_doc::table::MAX_COLS;
+    let mut s = Session::new(Document::new());
+    // Wider than a table's columns.
+    let wide = format!("{}\nvalue", "c,".repeat(MAX_COLS));
+    let e = s.run("insert.spreadsheet", &json!({"csv": wide})).unwrap_err();
+    assert!(e.to_string().contains(&format!("{MAX_COLS} columns")), "{e}");
+    // Longer than a table's rows: the records above the limit would be lost quietly.
+    let long = format!("value\n{}", "value\n".repeat(MAX_TABLE_ROWS));
+    let e = s.run("insert.spreadsheet", &json!({"csv": long})).unwrap_err();
+    assert!(e.to_string().contains(&format!("{MAX_TABLE_ROWS} rows")), "{e}");
+    // A table's own width and length are fine.
+    let ok = format!("{}\nvalue", "c,".repeat(MAX_COLS - 1));
+    s.run("insert.spreadsheet", &json!({"csv": ok})).unwrap();
+    let ok = "value\n".repeat(MAX_TABLE_ROWS);
+    s.run("insert.spreadsheet", &json!({"csv": ok})).unwrap();
+}

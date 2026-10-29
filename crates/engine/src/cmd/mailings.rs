@@ -26,7 +26,7 @@ pub use merge::{merge_range, refresh};
 #[cfg(test)]
 use merge::{mergefield_name, placeholder};
 use recipients::recipients;
-pub use recipients::{RECIPIENT_EXTENSIONS, is_spreadsheet_name, parse_csv};
+pub use recipients::{CsvLimits, MAX_CELLS, MAX_FIELDS, MAX_TEXT_BYTES, RECIPIENT_EXTENSIONS, RECIPIENT_LIMITS, is_spreadsheet_name, parse_csv};
 
 /// The mail-merge data source and preview state (lives in the session, not the document).
 #[derive(Clone, Debug, Default)]

@@ -2,9 +2,54 @@ use super::*;
 
 #[test]
 fn csv_parsing() {
-    let r = parse_csv("Name,City\n\"Smith, Ann\",Paris\r\nBo,\"Oslo \"\"N\"\"\"\n\n");
+    let r = parse_csv("Name,City\n\"Smith, Ann\",Paris\r\nBo,\"Oslo \"\"N\"\"\"\n\n", &RECIPIENT_LIMITS).unwrap();
     assert_eq!(r, vec![vec!["Name", "City"], vec!["Smith, Ann", "Paris"], vec!["Bo", "Oslo \"N\""]]);
-    assert_eq!(parse_csv("a;b\n1;2")[1], vec!["1", "2"]);
+    assert_eq!(parse_csv("a;b\n1;2", &RECIPIENT_LIMITS).unwrap()[1], vec!["1", "2"]);
+}
+
+/// The parser keeps its limits while it reads the list, so a hostile list is refused
+/// instead of being built and then cut.
+#[test]
+fn csv_parsing_refuses_a_list_over_its_limits() {
+    // A record wider than the limit.
+    let e = parse_csv("a,b,c,d,e", &CsvLimits { fields: 4, cells: 100, text: 1_000 }).unwrap_err();
+    assert!(e.to_string().contains("4 columns"), "{e}");
+    // More cells than the list keeps.
+    let e = parse_csv("a,b\nc,d\ne,f\ng,h\ni,j\nk,l", &CsvLimits { fields: 10, cells: 10, text: 1_000 }).unwrap_err();
+    assert!(e.to_string().contains("10 cells"), "{e}");
+    // More text than the list keeps.
+    let e = parse_csv("abcdefghij", &CsvLimits { fields: 10, cells: 100, text: 8 }).unwrap_err();
+    assert!(e.to_string().contains("of text"), "{e}");
+    // A list inside the limits still parses.
+    let limits = CsvLimits { fields: 4, cells: 10, text: 1_000 };
+    assert_eq!(parse_csv("a,b\nc,d", &limits).unwrap(), vec![vec!["a", "b"], vec!["c", "d"]]);
+}
+
+/// A recipient list over its limits is refused, not built.
+#[test]
+fn a_recipient_list_over_its_limits_is_refused() {
+    // A record wider than the list's fields.
+    let wide = format!("{}\nvalue", "f,".repeat(MAX_FIELDS + 1));
+    let e = parse_csv(&wide, &RECIPIENT_LIMITS).unwrap_err();
+    assert!(e.to_string().contains(&format!("{MAX_FIELDS} columns")), "{e}");
+
+    // A record of exactly the limit's width is kept.
+    let exact = format!("{}\nvalue", "f,".repeat(MAX_FIELDS - 1));
+    assert_eq!(parse_csv(&exact, &RECIPIENT_LIMITS).unwrap()[0].len(), MAX_FIELDS);
+
+    // A wide header over many records: the list would cost more cells than it keeps, and
+    // every record is padded to the header's width.
+    let mut csv = format!("{}\n", (0..MAX_FIELDS).map(|i| format!("f{i}")).collect::<Vec<_>>().join(","));
+    for _ in 0..=MAX_CELLS / MAX_FIELDS {
+        csv.push_str("value\n");
+    }
+    let e = parse_csv(&csv, &RECIPIENT_LIMITS).unwrap_err();
+    assert!(e.to_string().contains(&format!("{MAX_CELLS} cells")), "{e}");
+
+    // The command refuses it too, with a message of its own.
+    let mut s = Session::new(Document::new());
+    let e = s.run("mailings.recipients", &json!({"csv": wide})).unwrap_err();
+    assert!(e.to_string().contains("columns"), "{e}");
 }
 
 /// #4001: finishing a merge opens a new document, with a new undo history. It is not an
@@ -48,7 +93,7 @@ fn finishing_a_merge_to_a_file_is_not_an_edit() {
 
 #[test]
 fn csv_delimiter_ignores_quoted_text() {
-    let r = parse_csv("\"Name, first, last\";City\nAnn;Paris\n");
+    let r = parse_csv("\"Name, first, last\";City\nAnn;Paris\n", &RECIPIENT_LIMITS).unwrap();
     assert_eq!(r, vec![vec!["Name, first, last", "City"], vec!["Ann", "Paris"]]);
 }
 
