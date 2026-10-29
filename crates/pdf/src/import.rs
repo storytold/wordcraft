@@ -57,6 +57,76 @@ pub struct ImportSummary {
     pub warnings: Vec<String>,
 }
 
+/// Refuse a picture whose compressed data declares more pixels than the import allows, before
+/// anything decodes it. A JPEG, JPEG 2000 or JBIG2 stream carries its own dimensions, which can
+/// be far larger than the picture's `/Width` and `/Height`; the decoder allocates for its own, so
+/// the check in [`Collector::draw_image`] would come after the memory is spent. Only the codec
+/// headers are read here. A codec behind another filter is left to the decoder's own limits.
+fn check_codec_dimensions(pdf: &Pdf) -> Result<(), ImportError> {
+    use hayro_syntax::Filter;
+    use hayro_syntax::object::dict::keys::{DECODE_PARMS, DP, JBIG2_GLOBALS, SUBTYPE};
+    use hayro_syntax::object::{Array, Object, Stream};
+    for object in pdf.objects() {
+        let Object::Stream(stream) = object else { continue };
+        let dict = stream.dict();
+        if !dict.get::<Name<'_>>(SUBTYPE).is_some_and(|n| n.as_str() == "Image") {
+            continue;
+        }
+        let Some(first) = stream.filters().first().copied() else { continue };
+        let data = stream.raw_data();
+        let size = match first {
+            Filter::DctDecode => jpeg_dimensions(&data),
+            Filter::JpxDecode => {
+                let settings = hayro_jpeg2000::DecodeSettings { resolve_palette_indices: false, strict: false, target_resolution: None };
+                hayro_jpeg2000::Image::new(&data, &settings).ok().map(|i| (i.width(), i.height()))
+            }
+            Filter::Jbig2Decode => {
+                let params = dict
+                    .get::<Dict<'_>>(DP)
+                    .or_else(|| dict.get::<Dict<'_>>(DECODE_PARMS))
+                    .or_else(|| dict.get::<Array<'_>>(DP).or_else(|| dict.get::<Array<'_>>(DECODE_PARMS)).and_then(|a| a.iter::<Dict<'_>>().next()));
+                let globals = params.and_then(|p| p.get::<Stream<'_>>(JBIG2_GLOBALS)).and_then(|g| g.decoded().ok());
+                hayro_jbig2::Image::new_embedded(&data, globals.as_deref()).ok().map(|i| (i.width(), i.height()))
+            }
+            _ => None,
+        };
+        if let Some((w, h)) = size
+            && u64::from(w) * u64::from(h) > MAX_IMAGE_PIXELS
+        {
+            return Err(ImportError::Limit("picture size/count (16 MP each, 64 MP total, 1000 pictures)"));
+        }
+    }
+    Ok(())
+}
+
+/// Width and height from a JPEG's start-of-frame marker, without decoding it.
+fn jpeg_dimensions(data: &[u8]) -> Option<(u32, u32)> {
+    let mut i = data.windows(2).position(|w| w == [0xFF, 0xD8])? + 2;
+    while i + 4 <= data.len() {
+        if data[i] != 0xFF {
+            i += 1;
+            continue;
+        }
+        let marker = data[i + 1];
+        if marker == 0xFF || marker == 0x01 || (0xD0..=0xD8).contains(&marker) {
+            i += if marker == 0xFF { 1 } else { 2 };
+            continue;
+        }
+        let len = usize::from(u16::from_be_bytes([data[i + 2], data[i + 3]]));
+        let sof = matches!(marker, 0xC0..=0xCF) && !matches!(marker, 0xC4 | 0xC8 | 0xCC);
+        if sof {
+            let h = u16::from_be_bytes([*data.get(i + 5)?, *data.get(i + 6)?]);
+            let w = u16::from_be_bytes([*data.get(i + 7)?, *data.get(i + 8)?]);
+            return Some((u32::from(w), u32::from(h)));
+        }
+        if marker == 0xDA || len < 2 {
+            return None;
+        }
+        i += 2 + len;
+    }
+    None
+}
+
 /// Identify PDF content even when the filename has no extension or a misleading one.
 pub fn is_pdf(bytes: &[u8]) -> bool {
     // PDF readers commonly accept a header after a short leading wrapper.
@@ -81,6 +151,7 @@ pub fn read(bytes: &[u8], password: Option<&str>) -> Result<(Document, ImportSum
     if pdf.pages().is_empty() || pdf.pages().len() > MAX_PAGES {
         return Err(ImportError::Limit("1–500 pages"));
     }
+    check_codec_dimensions(&pdf)?;
     let mut doc = Document::new();
     doc.body.clear();
     let mut summary = ImportSummary { pages: pdf.pages().len(), ..Default::default() };
