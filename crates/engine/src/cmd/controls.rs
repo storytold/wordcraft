@@ -112,9 +112,11 @@ fn symbol_param(v: &Value, k: &str) -> Option<char> {
 /// A date `YYYY-MM-DD` (a full ISO date-time is fine too): (year, month, day), checked.
 pub fn parse_date(t: &str) -> Option<(i64, u32, u32)> {
     let t = t.trim();
-    let y: i64 = t.get(0..4)?.parse().ok()?;
-    let m: u32 = t.get(5..7)?.parse().ok()?;
-    let d: u32 = t.get(8..10)?.parse().ok()?;
+    // Digits only: `str::parse` would also accept a leading '+'.
+    let field = |r: std::ops::Range<usize>| t.get(r).filter(|s| s.bytes().all(|b| b.is_ascii_digit()));
+    let y: i64 = field(0..4)?.parse().ok()?;
+    let m: u32 = field(5..7)?.parse().ok()?;
+    let d: u32 = field(8..10)?.parse().ok()?;
     if t.get(4..5) != Some("-") || t.get(7..8) != Some("-") || !(1..=9999).contains(&y) || !(1..=12).contains(&m) || d == 0 || d > days_in_month(y, m)
     {
         return None;
@@ -284,7 +286,7 @@ fn content_base(s: &Session, r: &ControlRange) -> CharProps {
 /// and stops showing it. Returns the formatting the text should get, when it changes.
 pub fn prepare_edit(s: &mut Session) -> Result<Option<CharProps>, CmdError> {
     if s.sel.is_collapsed() {
-        let at = s.doc.typing_pos(&s.sel.focus);
+        let at = super::protect::typing_pos(s, &s.doc.typing_pos(&s.sel.focus));
         if at != s.sel.focus {
             s.sel = Selection::caret(at);
         }
@@ -577,27 +579,8 @@ fn info(s: &mut Session, v: &Value) -> CmdResult {
     Ok(describe(s, &r))
 }
 
-fn properties(s: &mut Session, v: &Value) -> CmdResult {
-    let r = target(s, v)?;
-    let mut c = r.control.clone();
-    let mut content: Option<String> = None;
-    if let Some(t) = short(v, "title") {
-        c.title = t;
-    }
-    if let Some(t) = short(v, "tag") {
-        c.tag = t;
-    }
-    let (no_delete, no_edit) = (p::bool(v, "lockDelete").unwrap_or(!c.lock.can_delete()), p::bool(v, "lockEdit").unwrap_or(!c.lock.can_edit()));
-    c.lock = ControlLock::from_flags(no_delete, no_edit);
-    if let Some(t) = p::bool(v, "temporary") {
-        c.temporary = t;
-    }
-    if let Some(t) = short(v, "placeholder").filter(|t| !t.trim().is_empty()) {
-        if c.showing_placeholder && t != c.placeholder_shown() {
-            content = Some(t.clone());
-        }
-        c.placeholder_text = t;
-    }
+fn apply_kind_properties(c: &mut ContentControl, v: &Value) -> Option<String> {
+    let mut content = None;
     match &mut c.kind {
         ControlKind::Text { multi_line } => {
             if let Some(m) = p::bool(v, "multiLine") {
@@ -630,6 +613,33 @@ fn properties(s: &mut Session, v: &Value) -> CmdResult {
             content = Some((if *checked { *checked_char } else { *unchecked_char }).to_string());
         }
         _ => {}
+    }
+    content
+}
+
+fn properties(s: &mut Session, v: &Value) -> CmdResult {
+    let r = target(s, v)?;
+    let mut c = r.control.clone();
+    let mut content: Option<String> = None;
+    if let Some(t) = short(v, "title") {
+        c.title = t;
+    }
+    if let Some(t) = short(v, "tag") {
+        c.tag = t;
+    }
+    let (no_delete, no_edit) = (p::bool(v, "lockDelete").unwrap_or(!c.lock.can_delete()), p::bool(v, "lockEdit").unwrap_or(!c.lock.can_edit()));
+    c.lock = ControlLock::from_flags(no_delete, no_edit);
+    if let Some(t) = p::bool(v, "temporary") {
+        c.temporary = t;
+    }
+    if let Some(t) = short(v, "placeholder").filter(|t| !t.trim().is_empty()) {
+        if c.showing_placeholder && t != c.placeholder_shown() {
+            content = Some(t.clone());
+        }
+        c.placeholder_text = t;
+    }
+    if let Some(kc) = apply_kind_properties(&mut c, v) {
+        content = Some(kc);
     }
     if let Some(text) = content {
         let base = content_base(s, &r);
@@ -762,6 +772,15 @@ mod tests {
     }
 
     #[test]
+    fn parse_date_rejects_signs_and_non_digits() {
+        for bad in ["2024-+1-+5", "+123-01-01", "2024-01-+5", "2024-+1-05", "-024-01-01"] {
+            assert_eq!(parse_date(bad), None, "{bad}");
+        }
+        assert_eq!(parse_date("2024-01-05"), Some((2024, 1, 5)));
+        assert_eq!(parse_date("2024-01-05T10:00:00"), Some((2024, 1, 5)));
+    }
+
+    #[test]
     fn days_from_civil_and_days_in_month_exact_beyond_chronos_range() {
         // Past `NaiveDate`'s ±262143 the 400-year cycles carry the result; values from the
         // pre-chrono formula, both directions, both sides of the epoch.
@@ -843,6 +862,25 @@ mod editing_tests {
         let r = s.doc.control_at(&s.sel.focus).unwrap();
         let typed = s.doc.para_at(&r.content_start()).unwrap().props_of_char(r.content_start().off).style.clone();
         assert_eq!(typed, None, "a placeholder style localized in id and name");
+    }
+
+    /// Typed text with line breaks in it (`type_text` with paragraphs, a typed paste) is the
+    /// Enter key pressed between the lines, so a one-line control, where Enter does nothing, stays
+    /// one paragraph, and a multi-line one splits (#3973: the line breaks went in as one command
+    /// and split a one-line control).
+    #[test]
+    fn typed_line_breaks_do_not_split_a_one_line_control() {
+        for (multi_line, paragraphs) in [(false, 1), (true, 2)] {
+            let mut s = Session::new(wordcraft_doc::Document::new());
+            run(&mut s, "text.insert", json!({"text": "Name: "}));
+            run(&mut s, "developer.plainText", json!({"title": "Name", "tag": "name"}));
+            run(&mut s, "developer.properties", json!({"control": "name", "multiLine": multi_line}));
+            run(&mut s, "caret.right", json!({}));
+            run(&mut s, "text.insert", json!({"text": "Ada\rLovelace", "raw": true}));
+            assert_eq!(s.doc.body.len(), paragraphs, "multi-line control: {multi_line}");
+            let r = s.doc.control_at(&s.sel.focus).unwrap();
+            assert_eq!(r.control.tag, "name", "still inside the control");
+        }
     }
 
     #[test]

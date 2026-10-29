@@ -134,7 +134,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 t @ ("find" | "replace" | "goto") => t,
                 other => return Err(CmdError::Params(format!("`tab` is find, replace or goto, not `{other}`"))),
             };
-            s.ui_requests.push(json!({"open": tab}));
+            s.push_ui_request(json!({"open": tab}));
             Ok(json!({"open": tab}))
         })
         // Word for Mac's own key is ⌃H.
@@ -142,7 +142,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"tab"?: "find|replace|goto" (default replace)}"#)
         .pure(),
         CommandSpec::new("edit.replaceAll", "Replace All", "Home › Editing › Replace", replace_all)
-            .params(r#"{"text": string, "with": string (^p ^t ^& ^c …; \\1 with wildcards), …options of edit.find}"#),
+            .params(r#"{"text": string, "with": string (^p ^t ^& ^c …; \\1 with wildcards; with regex also $1 ${n} ${name} $0 $$ \\1 \\n (paragraph mark) \\t), …options of edit.find}"#),
         CommandSpec::new("edit.goto", "Go To", "Home › Editing › Find", goto)
             .key("Mod+Alt+G / F5")
             .params(r#"{"page"?: n, "pageBy"?: int (pages forward, negative back, from the caret's page), "bookmark"?: string (selects its text), "paragraph"?: n}; none opens Find and Replace on its Go To tab"#)
@@ -459,7 +459,10 @@ pub(crate) fn search_full(s: &Session, story: StoryRef, with_rep: bool) -> Resul
         .configure(meta::Config::new().nfa_size_limit(Some(1 << 20)))
         .build(&c.pattern)
         .map_err(|e| CmdError::Params(format!("bad pattern: {e}")))?;
-    let pieces = with_rep.then(|| find_pattern::parse_replace(&f.replace, &opts));
+    let pieces = with_rep.then(|| {
+        let index = |name: &str| re.group_info().to_index(regex_automata::PatternID::ZERO, name);
+        find_pattern::resolve_names(find_pattern::parse_replace(&f.replace, &opts), &index)
+    });
     let paths = s.doc.para_paths(story);
     // Paragraphs read as one text: consecutive siblings when the pattern spans paragraphs.
     let mut chunks: Vec<std::ops::Range<usize>> = Vec::new();
@@ -603,7 +606,7 @@ fn find(s: &mut Session, v: &Value) -> CmdResult {
         // Word's Ctrl+F: the Navigation pane with its search box ready to type in (#712); the
         // Find and Replace dialog is Advanced Find.
         s.view.nav_pane = true;
-        s.ui_requests.push(json!({"focus": "navSearch"}));
+        s.push_ui_request(json!({"focus": "navSearch"}));
         return Ok(json!({"count": s.find.results.len()}));
     }
     let story = s.sel.focus.story;
@@ -624,7 +627,7 @@ fn find(s: &mut Session, v: &Value) -> CmdResult {
 /// Find in the classic dialog: every match in the body or the selection, optionally highlighted while you read.
 fn advanced_find(s: &mut Session, v: &Value) -> CmdResult {
     if p::str(v, "text").is_none() && v.get("highlight").is_none() {
-        s.ui_requests.push(json!({"open": "find"}));
+        s.push_ui_request(json!({"open": "find"}));
         return Ok(json!({"count": s.find.results.len()}));
     }
     read_opts(s, v);
@@ -748,7 +751,7 @@ fn goto(s: &mut Session, v: &Value) -> CmdResult {
             s.sel = Selection::caret(t);
             s.page_hint = idx;
         }
-        s.ui_requests.push(json!({"scrollTo": "caret"}));
+        s.push_ui_request(json!({"scrollTo": "caret"}));
         return sel_result(s);
     }
     if let Some(name) = p::str(v, "bookmark") {
@@ -769,7 +772,7 @@ fn goto(s: &mut Session, v: &Value) -> CmdResult {
         }
         return sel_result(s);
     }
-    s.ui_requests.push(json!({"open": "goto"}));
+    s.push_ui_request(json!({"open": "goto"}));
     sel_result(s)
 }
 

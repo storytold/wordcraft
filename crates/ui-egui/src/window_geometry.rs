@@ -6,6 +6,52 @@
 
 use serde::{Deserialize, Serialize};
 
+/// The host's window state for one raw frame.
+///
+/// [`egui::InputState::viewport`] still describes the last painted frame on a hidden logic tick,
+/// and its `viewport_rect()` is that frame's content size. The host's [`egui::RawInput`] is the
+/// fresh answer for this frame, so the app copies the fields it needs here in `raw_input_hook`.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RawWindowState {
+    /// The content rectangle, when the platform reports it (not Wayland).
+    pub inner_rect: Option<egui::Rect>,
+    /// The window rectangle including decorations, when the platform reports it.
+    pub outer_rect: Option<egui::Rect>,
+    /// This frame's `RawInput::screen_rect`: the content size even where `inner_rect` is unknown.
+    pub screen_rect: Option<egui::Rect>,
+    pub monitor_size: Option<egui::Vec2>,
+    pub maximized: Option<bool>,
+    pub minimized: Option<bool>,
+    pub fullscreen: Option<bool>,
+}
+
+impl RawWindowState {
+    /// Copy the window state out of this frame's raw input.
+    pub fn from_raw(raw: &egui::RawInput) -> Self {
+        Self::from_viewport(raw.viewports.get(&raw.viewport_id), raw.screen_rect)
+    }
+
+    /// The state of one viewport, from what egui knows about it and its content rectangle.
+    pub fn from_viewport(viewport: Option<&egui::ViewportInfo>, screen_rect: Option<egui::Rect>) -> Self {
+        Self {
+            inner_rect: viewport.and_then(|v| v.inner_rect).filter(|r| r.is_finite()),
+            outer_rect: viewport.and_then(|v| v.outer_rect).filter(|r| r.is_finite()),
+            screen_rect: screen_rect.filter(|r| r.is_finite()),
+            monitor_size: viewport.and_then(|v| v.monitor_size),
+            maximized: viewport.and_then(|v| v.maximized),
+            minimized: viewport.and_then(|v| v.minimized),
+            fullscreen: viewport.and_then(|v| v.fullscreen),
+        }
+    }
+
+    /// The content size reported by this frame, if any. Never the last painted size: a hidden
+    /// Wayland tick with neither an `inner_rect` nor a screen rect has no usable geometry.
+    pub fn content_size(self) -> Option<egui::Vec2> {
+        let size = self.inner_rect.or(self.screen_rect)?.size();
+        (size.is_finite() && size.x > 0.0 && size.y > 0.0).then_some(size)
+    }
+}
+
 /// The smallest window restored: the desktop app's minimum inner size.
 pub const MIN_SIZE: egui::Vec2 = egui::vec2(760.0, 480.0);
 /// Larger saved sizes are corrupt. eframe also shrinks the start size to the largest monitor.
@@ -35,21 +81,26 @@ impl WindowGeometry {
     /// The geometry to save, given the last saved one and the window as it is now. While the
     /// window is minimized, full screen or maximized, the last un-maximized size and position are
     /// kept, so un-maximizing after the next launch returns to them.
-    pub fn track(prev: Option<Self>, info: &egui::ViewportInfo, content_size: egui::Vec2) -> Option<Self> {
-        if info.minimized == Some(true) || info.fullscreen == Some(true) {
+    pub fn track(prev: Option<Self>, window: &RawWindowState) -> Option<Self> {
+        if window.minimized == Some(true) || window.fullscreen == Some(true) {
             return prev;
         }
         // egui reads the maximized state on macOS only when the window opens (egui#3494), so a
         // window that opened zoomed would stay "maximized" for good. There the zoomed frame is
         // saved like any other size instead.
-        let maximized = info.maximized == Some(true) && !cfg!(target_os = "macos");
+        let maximized = window.maximized == Some(true) && !cfg!(target_os = "macos");
         if maximized && let Some(prev) = prev {
             return Some(Self { maximized, ..prev });
         }
-        let rect = if cfg!(target_os = "macos") { info.inner_rect } else { info.outer_rect };
-        let size = info.inner_rect.map_or(content_size, |r| r.size());
+        let rect = if cfg!(target_os = "macos") { window.inner_rect } else { window.outer_rect };
+        // No rect on this raw frame: keep the last saved geometry. Falling back to
+        // `InputState::viewport_rect()` here would save the previous painted size, which is the
+        // stale value a hidden Wayland tick must not write.
+        let Some(size) = window.content_size() else {
+            return prev;
+        };
         let position = rect.map(|r| [r.min.x, r.min.y]);
-        let monitor = info.monitor_size.map(|s| [s.x, s.y]);
+        let monitor = window.monitor_size.map(|s| [s.x, s.y]);
         Self { position, width: size.x, height: size.y, maximized, monitor }.sanitized().or(prev)
     }
 
@@ -94,12 +145,12 @@ impl WindowGeometry {
     /// position no monitor covers any more doesn't open off screen. Centred on the primary
     /// monitor, whose top-left corner is the origin. A maximized window fills whichever monitor
     /// the system picks, so it stays put.
-    pub fn rescue_position(&self, info: &egui::ViewportInfo) -> Option<egui::Pos2> {
+    pub fn rescue_position(&self, window: &RawWindowState) -> Option<egui::Pos2> {
         if self.maximized || self.position.is_none() {
             return None;
         }
         let saved = egui::Vec2::from(self.monitor?);
-        let now = info.monitor_size.filter(|s| s.is_finite() && s.x > 0.0 && s.y > 0.0)?;
+        let now = window.monitor_size.filter(|s| s.is_finite() && s.x > 0.0 && s.y > 0.0)?;
         if (now - saved).length() <= 1.0 {
             return None;
         }
@@ -115,13 +166,13 @@ impl WindowGeometry {
     /// (no position here) is on the primary monitor, whose top-left corner is the origin, so its
     /// position counts too; a restored one may be on another monitor, so only its size does. A
     /// maximized window fills its monitor already.
-    pub fn fit_on_monitor(&self, info: &egui::ViewportInfo) -> Option<(egui::Pos2, egui::Vec2)> {
-        if self.maximized || info.maximized == Some(true) || info.fullscreen == Some(true) || info.minimized == Some(true) {
+    pub fn fit_on_monitor(&self, window: &RawWindowState) -> Option<(egui::Pos2, egui::Vec2)> {
+        if self.maximized || window.maximized == Some(true) || window.fullscreen == Some(true) || window.minimized == Some(true) {
             return None;
         }
-        let monitor = info.monitor_size.filter(|s| s.is_finite() && s.x > 0.0 && s.y > 0.0)?;
-        let inner = info.inner_rect.filter(|r| r.is_finite())?;
-        let outer = info.outer_rect.filter(|r| r.is_finite()).unwrap_or(inner);
+        let monitor = window.monitor_size.filter(|s| s.is_finite() && s.x > 0.0 && s.y > 0.0)?;
+        let inner = window.inner_rect.filter(|r| r.is_finite())?;
+        let outer = window.outer_rect.filter(|r| r.is_finite()).unwrap_or(inner);
         let frame = (outer.size() - inner.size()).max(egui::Vec2::ZERO);
         let room = monitor - 2.0 * SYSTEM_BAR;
         let too_big = outer.width() > room.x || outer.height() > room.y;
@@ -137,29 +188,49 @@ impl WindowGeometry {
 }
 
 /// Checks the restored geometry in `pending` once, and only once the monitor size is known: while
-/// `info` doesn't report a usable one, `pending` is left in place for a later frame. Then it is taken
+/// `window` doesn't report a usable one, `pending` is left in place for a later frame. Then it is taken
 /// and [`WindowGeometry::rescue_position`] decides where to move the window, if anywhere.
-pub fn take_rescue(pending: &mut Option<WindowGeometry>, info: &egui::ViewportInfo) -> Option<egui::Pos2> {
-    info.monitor_size.filter(|s| s.is_finite() && s.x > 0.0 && s.y > 0.0)?;
-    pending.take()?.rescue_position(info)
+pub fn take_rescue(pending: &mut Option<WindowGeometry>, window: &RawWindowState) -> Option<egui::Pos2> {
+    window.monitor_size.filter(|s| s.is_finite() && s.x > 0.0 && s.y > 0.0)?;
+    pending.take()?.rescue_position(window)
+}
+
+/// The window size to ask for when a caller (the control channel's `ui.resize`) wants `size`:
+/// `None` unless both sides are positive and finite. Otherwise at least [`MIN_SIZE`], the desktop
+/// app's minimum, and at most `max_side` points (the largest texture the GPU draws, which the
+/// window's surface must fit in) or 16384, whichever is smaller; the GPU's limit wins over the
+/// minimum (#3734).
+pub fn requested_size(size: egui::Vec2, max_side: f32) -> Option<egui::Vec2> {
+    if !size.is_finite() || size.x <= 0.0 || size.y <= 0.0 {
+        return None;
+    }
+    let max = MAX_SIZE.min(egui::Vec2::splat(max_side));
+    if !(max.x > 0.0 && max.y > 0.0) {
+        return None;
+    }
+    Some(size.max(MIN_SIZE).min(max))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn info(rect: egui::Rect, monitor: egui::Vec2) -> egui::ViewportInfo {
-        egui::ViewportInfo { inner_rect: Some(rect), outer_rect: Some(rect), monitor_size: Some(monitor), ..Default::default() }
+    /// Builds a raw window-state fixture whose inner, outer and screen rectangles match and whose
+    /// monitor is `monitor`.
+    fn raw(rect: egui::Rect, monitor: egui::Vec2) -> RawWindowState {
+        RawWindowState { inner_rect: Some(rect), outer_rect: Some(rect), screen_rect: Some(rect), monitor_size: Some(monitor), ..Default::default() }
     }
 
     fn saved() -> WindowGeometry {
         WindowGeometry { position: Some([100.0, 50.0]), width: 1200.0, height: 800.0, maximized: false, monitor: Some([1920.0, 1080.0]) }
     }
 
+    /// Tracking a normal rectangle saves its position, size and monitor, and applies them to a
+    /// viewport builder.
     #[test]
     fn records_the_window_and_restores_it() {
         let rect = egui::Rect::from_min_size(egui::pos2(100.0, 50.0), egui::vec2(1200.0, 800.0));
-        let g = WindowGeometry::track(None, &info(rect, egui::vec2(1920.0, 1080.0)), egui::Vec2::ZERO);
+        let g = WindowGeometry::track(None, &raw(rect, egui::vec2(1920.0, 1080.0)));
         assert_eq!(g, Some(saved()));
         let b = saved().apply(egui::ViewportBuilder::default());
         assert_eq!(b.inner_size, Some(egui::vec2(1200.0, 800.0)));
@@ -184,12 +255,15 @@ mod tests {
         assert_eq!(saved().maximize_after_open(), None, "a normal window needs no command");
     }
 
+    /// On macOS a zoomed frame is saved as its zoomed frame rectangle without the maximized flag;
+    /// elsewhere the previous geometry is kept with the maximized state. Minimized and full-screen
+    /// frames change nothing.
     #[test]
     fn maximized_keeps_the_normal_size_and_position() {
         let full = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1920.0, 1040.0));
-        let mut i = info(full, egui::vec2(1920.0, 1080.0));
+        let mut i = raw(full, egui::vec2(1920.0, 1080.0));
         i.maximized = Some(true);
-        let g = WindowGeometry::track(Some(saved()), &i, egui::Vec2::ZERO);
+        let g = WindowGeometry::track(Some(saved()), &i);
         if cfg!(target_os = "macos") {
             // The zoomed frame is saved as the size; the window never reopens "maximized".
             assert_eq!(g.map(|g| (g.position, g.width, g.height, g.maximized)), Some((Some([0.0, 0.0]), 1920.0, 1040.0, false)));
@@ -199,19 +273,71 @@ mod tests {
         // Minimized or full screen: nothing changes.
         i.maximized = Some(false);
         i.minimized = Some(true);
-        assert_eq!(WindowGeometry::track(Some(saved()), &i, egui::Vec2::ZERO), Some(saved()));
+        assert_eq!(WindowGeometry::track(Some(saved()), &i), Some(saved()));
         i.minimized = None;
         i.fullscreen = Some(true);
-        assert_eq!(WindowGeometry::track(Some(saved()), &i, egui::Vec2::ZERO), Some(saved()));
+        assert_eq!(WindowGeometry::track(Some(saved()), &i), Some(saved()));
     }
 
+    /// With no position reported, the raw screen rectangle still supplies the size, and the restored
+    /// builder has no position.
     #[test]
-    fn without_a_position_the_content_size_is_kept() {
-        // Wayland reports neither rect.
-        let i = egui::ViewportInfo::default();
-        let g = WindowGeometry::track(None, &i, egui::vec2(1000.0, 700.0));
+    fn without_a_position_the_raw_screen_size_is_kept() {
+        // Wayland reports no inner/outer rect, but RawInput still carries the content screen rect.
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 700.0));
+        let i = RawWindowState { screen_rect: Some(rect), ..Default::default() };
+        let g = WindowGeometry::track(None, &i);
         assert_eq!(g, Some(WindowGeometry { position: None, width: 1000.0, height: 700.0, maximized: false, monitor: None }));
         assert_eq!(g.map(|g| g.apply(egui::ViewportBuilder::default()).position), Some(None));
+    }
+
+    /// A hidden Wayland logic tick has no fresh rect. It must keep the saved geometry rather than
+    /// write the previous painted `InputState` size, and a fresh `screen_rect` on the same raw
+    /// frame is used when the host reports one.
+    #[test]
+    fn a_hidden_raw_tick_never_reuses_the_last_painted_size() {
+        assert_eq!(WindowGeometry::track(Some(saved()), &RawWindowState::default()), Some(saved()));
+
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 700.0));
+        let fresh = RawWindowState {
+            inner_rect: None,
+            outer_rect: None,
+            screen_rect: Some(rect),
+            monitor_size: Some(egui::vec2(1920.0, 1080.0)),
+            ..Default::default()
+        };
+        let g = WindowGeometry::track(Some(saved()), &fresh).expect("the fresh raw size");
+        assert_eq!((g.position, g.width, g.height, g.monitor), (None, 1000.0, 700.0, Some([1920.0, 1080.0])));
+    }
+
+    /// Only the current frame's root viewport contributes inner, outer, content and monitor sizes; a
+    /// missing viewport or non-finite data leaves defaults.
+    #[test]
+    fn raw_window_state_reads_only_this_frames_viewport() {
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(640.0, 480.0));
+        let mut input = egui::RawInput { screen_rect: Some(rect), ..Default::default() };
+        input.viewports.insert(
+            egui::ViewportId::ROOT,
+            egui::ViewportInfo {
+                inner_rect: Some(rect),
+                outer_rect: Some(rect.expand(10.0)),
+                monitor_size: Some(egui::vec2(1920.0, 1080.0)),
+                maximized: Some(false),
+                minimized: Some(false),
+                fullscreen: Some(false),
+                ..Default::default()
+            },
+        );
+        let state = RawWindowState::from_raw(&input);
+        assert_eq!(state.inner_rect, Some(rect));
+        assert_eq!(state.outer_rect, Some(rect.expand(10.0)));
+        assert_eq!(state.content_size(), Some(egui::vec2(640.0, 480.0)));
+        assert_eq!(state.monitor_size, Some(egui::vec2(1920.0, 1080.0)));
+
+        // A frame without its viewport entry (or with non-finite rects) contributes nothing.
+        let empty = RawWindowState::from_raw(&egui::RawInput::default());
+        assert_eq!(empty, RawWindowState::default());
+        assert_eq!(empty.content_size(), None);
     }
 
     #[test]
@@ -228,36 +354,40 @@ mod tests {
         assert_eq!(saved().sanitized(), Some(saved()));
     }
 
+    /// A saved window on a different monitor is centred on it, or clamped to its origin when too
+    /// large; the same monitor, missing data, no saved position or a maximized window does nothing.
     #[test]
     fn a_window_whose_monitor_is_gone_is_moved_on_screen() {
         let on = egui::Rect::from_min_size(egui::pos2(2000.0, 50.0), egui::vec2(1200.0, 800.0));
         // Same monitor: stays where it was.
-        assert_eq!(saved().rescue_position(&info(on, egui::vec2(1920.0, 1080.0))), None);
+        assert_eq!(saved().rescue_position(&raw(on, egui::vec2(1920.0, 1080.0))), None);
         // A different (smaller) monitor now: centred on it.
-        assert_eq!(saved().rescue_position(&info(on, egui::vec2(1600.0, 900.0))), Some(egui::pos2(200.0, 50.0)));
+        assert_eq!(saved().rescue_position(&raw(on, egui::vec2(1600.0, 900.0))), Some(egui::pos2(200.0, 50.0)));
         // Larger than that monitor: its top-left corner.
-        assert_eq!(saved().rescue_position(&info(on, egui::vec2(1024.0, 768.0))), Some(egui::Pos2::ZERO));
+        assert_eq!(saved().rescue_position(&raw(on, egui::vec2(1024.0, 768.0))), Some(egui::Pos2::ZERO));
         // Nothing to compare, or no saved position: no move.
-        assert_eq!(WindowGeometry { monitor: None, ..saved() }.rescue_position(&info(on, egui::vec2(1600.0, 900.0))), None);
-        assert_eq!(WindowGeometry { position: None, ..saved() }.rescue_position(&info(on, egui::vec2(1600.0, 900.0))), None);
-        assert_eq!(WindowGeometry { maximized: true, ..saved() }.rescue_position(&info(on, egui::vec2(1600.0, 900.0))), None);
-        assert_eq!(saved().rescue_position(&egui::ViewportInfo::default()), None);
+        assert_eq!(WindowGeometry { monitor: None, ..saved() }.rescue_position(&raw(on, egui::vec2(1600.0, 900.0))), None);
+        assert_eq!(WindowGeometry { position: None, ..saved() }.rescue_position(&raw(on, egui::vec2(1600.0, 900.0))), None);
+        assert_eq!(WindowGeometry { maximized: true, ..saved() }.rescue_position(&raw(on, egui::vec2(1600.0, 900.0))), None);
+        assert_eq!(saved().rescue_position(&RawWindowState::default()), None);
     }
 
+    /// The rescue waits for a known monitor size, then runs once (moving when needed) and clears the
+    /// pending geometry.
     #[test]
     fn the_rescue_waits_for_the_monitor_size() {
         let on = egui::Rect::from_min_size(egui::pos2(2000.0, 50.0), egui::vec2(1200.0, 800.0));
         // The first frame doesn't know the monitor yet: nothing happens and the geometry is kept.
         let mut pending = Some(saved());
-        assert_eq!(take_rescue(&mut pending, &egui::ViewportInfo::default()), None);
+        assert_eq!(take_rescue(&mut pending, &RawWindowState::default()), None);
         assert_eq!(pending, Some(saved()));
         // A later frame reports a different monitor: centred on it, and the check is done.
-        assert_eq!(take_rescue(&mut pending, &info(on, egui::vec2(1600.0, 900.0))), Some(egui::pos2(200.0, 50.0)));
+        assert_eq!(take_rescue(&mut pending, &raw(on, egui::vec2(1600.0, 900.0))), Some(egui::pos2(200.0, 50.0)));
         assert_eq!(pending, None);
-        assert_eq!(take_rescue(&mut pending, &info(on, egui::vec2(1024.0, 768.0))), None);
+        assert_eq!(take_rescue(&mut pending, &raw(on, egui::vec2(1024.0, 768.0))), None);
         // The same monitor: no move, and the check is done as well.
         let mut pending = Some(saved());
-        assert_eq!(take_rescue(&mut pending, &info(on, egui::vec2(1920.0, 1080.0))), None);
+        assert_eq!(take_rescue(&mut pending, &raw(on, egui::vec2(1920.0, 1080.0))), None);
         assert_eq!(pending, None);
     }
 
@@ -274,8 +404,8 @@ mod tests {
     }
 
     /// A window opened with its frame's top-left corner at `at`: 8 pt borders, a 31 pt title bar.
-    fn opened(at: egui::Pos2, content: egui::Vec2, monitor: egui::Vec2) -> egui::ViewportInfo {
-        egui::ViewportInfo {
+    fn opened(at: egui::Pos2, content: egui::Vec2, monitor: egui::Vec2) -> RawWindowState {
+        RawWindowState {
             inner_rect: Some(egui::Rect::from_min_size(at + egui::vec2(8.0, 31.0), content)),
             outer_rect: Some(egui::Rect::from_min_size(at, content + egui::vec2(16.0, 39.0))),
             monitor_size: Some(monitor),
@@ -283,6 +413,31 @@ mod tests {
         }
     }
 
+    #[test]
+    fn requested_sizes_are_positive_and_fit_the_gpu() {
+        let bad = [
+            egui::vec2(-5.0, 600.0),
+            egui::vec2(0.0, 0.0),
+            egui::vec2(1200.0, f32::NAN),
+            egui::vec2(f32::NEG_INFINITY, 600.0),
+            egui::vec2(f32::INFINITY, 600.0),
+        ];
+        for bad in bad {
+            assert_eq!(requested_size(bad, 8192.0), None, "{bad:?}");
+        }
+        assert_eq!(requested_size(egui::vec2(1200.0, 800.0), 8192.0), Some(egui::vec2(1200.0, 800.0)));
+        assert_eq!(requested_size(egui::vec2(1e9, 1.0), 8192.0), Some(egui::vec2(8192.0, MIN_SIZE.y)));
+        assert_eq!(requested_size(egui::vec2(1e9, 1e9), f32::INFINITY), Some(MAX_SIZE));
+        assert_eq!(requested_size(egui::vec2(1e9, 1e9), f32::NAN), Some(MAX_SIZE));
+        // A GPU that can't hold the minimum: its limit wins, and no limit at all refuses.
+        assert_eq!(requested_size(egui::vec2(1200.0, 300.0), 600.0), Some(egui::vec2(600.0, 480.0)));
+        assert_eq!(requested_size(egui::vec2(1200.0, 300.0), 100.0), Some(egui::vec2(100.0, 100.0)));
+        assert_eq!(requested_size(egui::vec2(1200.0, 800.0), 0.0), None);
+    }
+
+    /// An oversized default window shrinks and is centred to fit, while a restored window keeps its
+    /// place; maximized, full-screen, minimized and unknown-monitor frames, and frames without
+    /// rectangles, are left alone.
     #[test]
     fn a_window_too_big_for_its_screen_shrinks_to_fit() {
         let system = WindowGeometry::default();
@@ -325,6 +480,6 @@ mod tests {
         i.monitor_size = None;
         assert_eq!(system.fit_on_monitor(&i), None);
         // Wayland reports no rects.
-        assert_eq!(system.fit_on_monitor(&egui::ViewportInfo { monitor_size: Some(laptop), ..Default::default() }), None);
+        assert_eq!(system.fit_on_monitor(&RawWindowState { monitor_size: Some(laptop), ..Default::default() }), None);
     }
 }

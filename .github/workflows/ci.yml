@@ -1,8 +1,7 @@
-# The CLAUDE.md quality gate (`cargo xtask ci`: fmt, clippy -D warnings, tests, assets, layers,
-# wasm) on every pull request and every push to main, so a merge burst can't land a red tree that
-# only the next contributor's local run discovers.
 name: CI
 
+# Quality gates for every push to main and every pull request (`cargo xtask ci`), through the
+# suite's shared gate workflow in craft-common-actions.
 on:
   push:
     branches: [main]
@@ -12,51 +11,18 @@ on:
 permissions:
   contents: read
 
+# A newer push to a PR branch cancels its older run; every push to main runs to the end.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
-
-env:
-  # Same craft-fonts commit as release.yml and freebsd.yml, so layout tests see the fonts a
-  # release build embeds (the checkout is an optional build input, see crates/fonts/build.rs).
-  CRAFT_FONTS_REF: 8dcdacd5153e64560d109541a47d806f26f048c0
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   gate:
-    name: cargo xtask ci
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    env:
-      CARGO_TERM_COLOR: always
-      CARGO_INCREMENTAL: "0"
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Check out craft-fonts
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: storytold/craft-fonts
-          ref: ${{ env.CRAFT_FONTS_REF }}
-          path: craft-fonts
-
-      - name: Install Linux build dependencies (winit, wgpu, rfd)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            pkg-config libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev \
-            libxi-dev libgtk-3-dev libfontconfig1-dev libfreetype-dev mesa-vulkan-drivers
-
-      - name: Install Rust (stable + clippy, rustfmt, wasm32)
-        run: |
-          rustup toolchain install stable --profile minimal --component clippy,rustfmt \
-            --target wasm32-unknown-unknown
-          rustup default stable
-
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
-      - name: Quality gate
-        env:
-          CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
-        run: cargo xtask ci
+    # Tracks @main so suite-wide CI fixes reach every app without a PR in each repository.
+    uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
+    with:
+      # Same craft-fonts commit as release.yml.
+      craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+      packages: >-
+        pkg-config libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev
+        libgtk-3-dev libfontconfig1-dev libfreetype-dev mesa-vulkan-drivers

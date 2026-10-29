@@ -201,7 +201,7 @@ fn options(s: &mut Session, v: &Value) -> CmdResult {
         // Marks, hidden text and proofing change what is laid out.
         s.relayout();
     } else {
-        s.ui_requests.push(json!({"open": "options", "pane": pane}));
+        s.push_ui_request(json!({"open": "options", "pane": pane}));
     }
     let mut r = current(s);
     if let Some(o) = r.as_object_mut() {
@@ -263,6 +263,8 @@ fn folder_setting(key: &str, f: &str, local_only: bool) -> Result<Option<String>
     if !path.is_absolute() {
         return Err(CmdError::Params(format!("`{key}`: {f:?} isn't a full path")));
     }
+    // Its files are read from now on, and on every start: only from inside the read root (#3737).
+    crate::file_access::check_read(&path.to_string_lossy()).map_err(CmdError::Failed)?;
     if !path.is_dir() {
         return Err(CmdError::Failed(format!("no folder at {}", path.display())));
     }

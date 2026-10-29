@@ -48,6 +48,12 @@ impl Row {
     pub fn first_grid(&self) -> usize {
         (self.props.grid_before as usize).min(MAX_COLS)
     }
+
+    /// Grid columns `w:gridAfter` leaves empty after the row's last cell, bounded as the DOCX
+    /// reader bounds them (a native document can say anything).
+    pub fn grid_after(&self) -> usize {
+        (self.props.grid_after as usize).min(MAX_COLS)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
@@ -97,7 +103,8 @@ impl Table {
     }
 
     pub fn cols(&self) -> usize {
-        let row_cols = |r: &Row| r.first_grid() + r.cells.iter().map(Cell::span).sum::<usize>() + r.props.grid_after as usize;
+        let row_cols =
+            |r: &Row| r.first_grid().saturating_add(r.cells.iter().map(Cell::span).fold(0, usize::saturating_add)).saturating_add(r.grid_after());
         self.grid.len().max(self.rows.iter().map(row_cols).max().unwrap_or(0))
     }
 
@@ -165,6 +172,54 @@ impl Table {
         self.rows.remove(r);
     }
 
+    /// Split the table before row `at`: the rows from `at` on move to the returned table, which
+    /// has this table's properties and grid. A vertical merge that the split cuts ends in this
+    /// table's last row and starts again in the new table's first row. A row content control
+    /// around rows on both sides closes after this table's last row and opens again (without its
+    /// `w:id`) before the new table's first row. Content controls that close after this table
+    /// close after the new one.
+    pub fn split_off(&mut self, at: usize) -> Table {
+        let at = at.min(self.rows.len());
+        let mut open = Vec::new();
+        for row in self.rows.iter().take(at) {
+            open.extend(row.controls.open.iter().cloned());
+            let close = usize::try_from(row.controls.close).unwrap_or(usize::MAX).min(open.len());
+            open.truncate(open.len() - close);
+        }
+        let mut tail = Table {
+            props: self.props.clone(),
+            grid: self.grid.clone(),
+            rows: self.rows.split_off(at),
+            controls: ControlWrap { open: Vec::new(), close: std::mem::take(&mut self.controls.close) },
+        };
+        if let Some(last) = self.rows.last_mut() {
+            last.controls.close = last.controls.close.saturating_add(u32::try_from(open.len()).unwrap_or(u32::MAX));
+            for c in &mut last.cells {
+                if c.props.vmerge == VMerge::Restart {
+                    c.props.vmerge = VMerge::None;
+                }
+            }
+        }
+        for c in &mut open {
+            c.id = None;
+        }
+        if let Some(first) = tail.rows.first_mut() {
+            let own = std::mem::replace(&mut first.controls.open, open);
+            first.controls.open.extend(own);
+        }
+        let starts: Vec<(usize, usize)> = (0..tail.rows.first().map_or(0, |row| row.cells.len()))
+            .filter(|&c| tail.rows.first().and_then(|row| row.cells.get(c)).is_some_and(|x| x.props.vmerge == VMerge::Continue))
+            .map(|c| (c, tail.grid_col(0, c)))
+            .collect();
+        for (c, g) in starts {
+            let more = tail.cell_at_grid(1, g).and_then(|i| tail.rows.get(1)?.cells.get(i)).is_some_and(|x| x.props.vmerge == VMerge::Continue);
+            if let Some(x) = tail.rows.first_mut().and_then(|r| r.cells.get_mut(c)) {
+                x.props.vmerge = if more { VMerge::Restart } else { VMerge::None };
+            }
+        }
+        tail
+    }
+
     /// Insert a grid column at grid index `g` (cells spanning it widen instead).
     pub fn insert_col(&mut self, g: usize) {
         if self.grid.len() >= MAX_COLS {
@@ -193,7 +248,8 @@ impl Table {
                 match idx {
                     Some((i, true)) => {
                         if let Some(c) = row.cells.get_mut(i) {
-                            c.props.span += 1;
+                            // From the clamped span: a `.json` file can carry any `u32` (#3637).
+                            c.props.span = (c.span() + 1).min(MAX_COLS) as u32;
                         }
                     }
                     Some((i, false)) => {
@@ -223,7 +279,7 @@ impl Table {
             for (i, c) in row.cells.iter_mut().enumerate() {
                 if g < x + c.span() {
                     if c.span() > 1 {
-                        c.props.span -= 1;
+                        c.props.span = (c.span() - 1) as u32;
                     } else {
                         rm = Some(i);
                     }
@@ -247,7 +303,7 @@ impl Table {
         let removed: Vec<Cell> = row.cells.drain(c0 + 1..=c1).collect();
         if let Some(first) = row.cells.get_mut(c0) {
             for c in removed {
-                first.props.span += c.props.span.max(1);
+                first.props.span = (first.span() + c.span()).min(MAX_COLS) as u32;
                 let nonempty: Vec<_> = c.blocks.into_iter().filter(|b| b.as_para().is_none_or(|p| !p.is_empty())).collect();
                 first.blocks.extend(nonempty);
             }
@@ -547,6 +603,32 @@ mod tests {
         assert_eq!(t.rows.len(), 2);
         t.delete_row(99);
         t.delete_col(99);
+    }
+
+    /// #3637: a `.json` file can give a cell any span; inserting a column through it, merging it
+    /// or deleting a column under it doesn't overflow, and the span it gets is in 1..=MAX_COLS.
+    #[test]
+    fn a_huge_span_from_a_file_does_not_overflow() {
+        let huge = || {
+            let mut t = Table::new(1, 2, 200.0);
+            t.rows[0].cells[0].props.span = u32::MAX;
+            t
+        };
+        // Column 1 is inside the spanning cell, so the cell widens.
+        let mut t = huge();
+        t.insert_col(1);
+        assert_eq!(t.rows[0].cells[0].props.span, MAX_COLS as u32);
+        let mut t = huge();
+        t.merge_right(0, 0, 1);
+        assert_eq!(t.rows[0].cells.len(), 1);
+        assert_eq!(t.rows[0].cells[0].props.span, MAX_COLS as u32);
+        let mut t = huge();
+        t.rows[0].cells[1].props.span = u32::MAX;
+        t.merge_right(0, 0, 1);
+        assert_eq!(t.rows[0].cells[0].props.span, MAX_COLS as u32);
+        let mut t = huge();
+        t.delete_col(0);
+        assert_eq!(t.rows[0].cells[0].props.span, MAX_COLS as u32 - 1);
     }
 
     #[test]

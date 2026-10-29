@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::para::InlineObject;
+use crate::para::{InlineObject, Run};
 use crate::props::{CharProps, ParaProps};
 use crate::{Block, Blocks, DocError, Document, Paragraph, Part, PartKind, Path, Pos, Result, para_block};
 use crate::{Table, table::MAX_TABLE_DEPTH};
@@ -188,6 +188,111 @@ fn fit_tables(b: Block, room: usize, out: &mut Vec<Block>) {
 const MAX_BOX_DEPTH: usize = 8;
 /// Most text box stories one paste may create (hostile documents can fan out).
 const MAX_PASTED_BOXES: usize = 4096;
+/// Most text box content (estimated bytes, see [`block_cost`]) one paste may copy: thousands of
+/// boxes can show the same story, and each needs a story of its own. Blocks without text boxes
+/// are shared between those stories, not copied, so they are not charged per box.
+const MAX_PASTED_BOX_BYTES: usize = 32 << 20;
+
+/// What a paste may still spend on text box stories.
+struct BoxBudget {
+    stories: usize,
+    bytes: usize,
+    /// The source stories being copied, innermost last: a box inside one of them showing it
+    /// again is a cycle.
+    active: Vec<u32>,
+    /// Each source story's cost ([`block_cost`]), worked out once per paste: a story too big for
+    /// what is left is not walked again for every box that shows it.
+    costs: BTreeMap<u32, usize>,
+    /// Boxes left without a story because the paste's budget couldn't hold theirs.
+    skipped: usize,
+}
+
+impl BoxBudget {
+    fn new() -> BoxBudget {
+        BoxBudget { stories: MAX_PASTED_BOXES, bytes: MAX_PASTED_BOX_BYTES, active: Vec::new(), costs: BTreeMap::new(), skipped: 0 }
+    }
+}
+
+/// Rough size of a block's content, and whether it holds text boxes (and so must be copied).
+fn block_cost(b: &Block) -> (usize, bool) {
+    let (mut cost, mut boxes) = (std::mem::size_of::<Block>(), false);
+    each_para(b, 0, &mut |p| {
+        let items = p
+            .runs
+            .len()
+            .saturating_mul(std::mem::size_of::<Run>())
+            .saturating_add(p.objects.len().saturating_mul(std::mem::size_of::<InlineObject>()));
+        let objects = p.objects.iter().fold(0usize, |n, o| n.saturating_add(object_cost(o)));
+        cost = cost.saturating_add(p.text.len()).saturating_add(items).saturating_add(objects);
+        boxes |= box_ids(p).next().is_some();
+    });
+    (cost, boxes)
+}
+
+/// Rough heap bytes a clone of `o` copies beyond its own storage: its strings and lists, and its
+/// group members however deep. What it shares through `Arc` (pictures' embedded objects, charts,
+/// freeforms, wrap polygons, gradients) is not copied, so not counted.
+fn object_cost(o: &InlineObject) -> usize {
+    let float = |f: &crate::para::Float| f.alt.text.len().saturating_add(f.alt.title.len());
+    let mut cost = 0usize;
+    let mut todo = vec![o];
+    while let Some(o) = todo.pop() {
+        let add = match o {
+            InlineObject::Image { media, alt, float: f, .. } => media.len().saturating_add(alt.len()).saturating_add(float(f)),
+            InlineObject::Graphic { alt, float: f, .. } => alt.len().saturating_add(float(f)),
+            InlineObject::Shape { float: f, extra, .. } => {
+                let warp = extra.warp.as_ref().map_or(0, |w| {
+                    let adj = w.adj.iter().map(|(name, _)| std::mem::size_of::<(String, i64)>().saturating_add(name.len()));
+                    adj.fold(w.preset.len(), usize::saturating_add)
+                });
+                float(f).saturating_add(warp)
+            }
+            InlineObject::Group { float: f, children, .. } => {
+                todo.extend(children.iter().map(|c| &c.obj));
+                children.len().saturating_mul(std::mem::size_of::<crate::para::GroupChild>()).saturating_add(float(f))
+            }
+            InlineObject::Field { instr, result, form, .. } => instr.len().saturating_add(result.len()).saturating_add(form.len()),
+            InlineObject::FieldStart { instr, .. } => instr.len(),
+            InlineObject::ControlStart { control } => std::mem::size_of::<crate::control::ContentControl>().saturating_add(serialized_len(control)),
+            InlineObject::NoteRef { custom, .. } => custom.len(),
+            InlineObject::BookmarkStart { name } | InlineObject::BookmarkEnd { name } => name.len(),
+            InlineObject::PermStart { group, editor, .. } => group.len().saturating_add(editor.len()),
+            InlineObject::Equation { linear, math, .. } => linear.len().saturating_add(math.heap_bytes()),
+            InlineObject::Ruby { base, ruby, lang, props, .. } => {
+                [base.len(), ruby.len(), lang.len(), std::mem::size_of::<CharProps>(), serialized_len(props)]
+                    .into_iter()
+                    .fold(0, usize::saturating_add)
+            }
+            InlineObject::Opaque { format, xml, text } => format.len().saturating_add(xml.len()).saturating_add(text.len()),
+            InlineObject::FieldEnd
+            | InlineObject::ControlEnd
+            | InlineObject::CommentStart { .. }
+            | InlineObject::CommentEnd { .. }
+            | InlineObject::PermEnd { .. }
+            | InlineObject::PositionalTab { .. } => 0,
+        };
+        cost = cost.saturating_add(add);
+    }
+    cost
+}
+
+/// Length of `v` written as JSON: at least the bytes of every string and list it owns. For the
+/// nested formatting and control types, which share nothing through `Arc`.
+fn serialized_len<T: Serialize>(v: &T) -> usize {
+    struct Count(usize);
+    impl std::io::Write for Count {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0 = self.0.saturating_add(b.len());
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut n = Count(0);
+    let _ = serde_json::to_writer(&mut n, v);
+    n.0
+}
 
 /// Call `f` on every paragraph of a block, in document order, however deep its tables nest. The
 /// walk keeps its own stack instead of recursing, so it is complete: a text box it doesn't reach
@@ -474,7 +579,13 @@ impl Document {
         }
         // Content control markers whose partner is outside the range stay (the control is
         // emptied, not broken).
-        let kept = self.kept_control_markers(&a, &b);
+        let mut kept = self.kept_control_markers(&a, &b);
+        // The walk below groups `kept` by paragraph (`chunk_by`) and looks offsets up
+        // (`binary_search`), so it must be sorted; `kept_control_markers` returns it so, and this
+        // keeps a change there from quietly losing markers.
+        if !kept.is_sorted() {
+            kept.sort();
+        }
         let kept_in = |path: &Path| -> Vec<usize> { kept.iter().filter(|(p, _)| p == path).map(|(_, o)| *o).collect() };
         if a.path == b.path {
             self.para_mut(a.story, &a.path)?.delete_except(a.off, b.off, &kept_in(&a.path))?;
@@ -485,13 +596,21 @@ impl Document {
             let (ia, ib) = (a.path.last(), b.path.last());
             // Kept markers of the paragraphs in between move to the join.
             let mut moved: Vec<(InlineObject, CharProps)> = Vec::new();
-            for (path, off) in &kept {
-                if *path != a.path
-                    && *path != b.path
-                    && let Some(p) = self.para(a.story, path)
-                    && let Some(o) = p.object_at(*off)
-                {
-                    moved.push((o.clone(), p.props_of_char(*off).clone()));
+            // `kept` is sorted: one walk of each paragraph's objects and runs (#3614).
+            for group in kept.chunk_by(|x, y| x.0 == y.0) {
+                let Some((path, _)) = group.first() else { continue };
+                if *path == a.path || *path == b.path {
+                    continue;
+                }
+                let Some(p) = self.para(a.story, path) else { continue };
+                let mut runs = p.run_ranges().peekable();
+                for (off, o) in p.objects_with_offsets() {
+                    if group.binary_search_by_key(&off, |(_, k)| *k).is_err() {
+                        continue;
+                    }
+                    while runs.next_if(|(r, _)| r.end <= off).is_some() {}
+                    let props = runs.peek().filter(|(r, _)| r.contains(&off)).map_or(&p.mark, |(_, c)| *c);
+                    moved.push((o.clone(), props.clone()));
                 }
             }
             {
@@ -744,7 +863,7 @@ impl Document {
     /// Give every text box in `blocks` a new story of its own, copied from `parts` (or, for a
     /// fragment without them, from this document's text box of that id). A box whose story can't
     /// be found keeps no story rather than showing an unrelated one.
-    fn adopt_text_boxes(&mut self, blocks: &mut [Block], parts: &BTreeMap<u32, Part>, depth: usize, budget: &mut usize) {
+    fn adopt_text_boxes(&mut self, blocks: &mut [Block], parts: &BTreeMap<u32, Part>, depth: usize, budget: &mut BoxBudget) {
         let mut any = false;
         for b in blocks.iter() {
             each_para(b, 0, &mut |p| any |= box_ids(p).next().is_some());
@@ -770,18 +889,53 @@ impl Document {
         }
     }
 
-    /// A new text box story copied from `old`; its own boxes get new stories too.
-    fn adopt_text_box(&mut self, old: u32, parts: &BTreeMap<u32, Part>, depth: usize, budget: &mut usize) -> Option<u32> {
-        if depth >= MAX_BOX_DEPTH || *budget == 0 {
+    /// A new text box story copied from `old`; its own boxes get new stories too. Blocks without
+    /// text boxes are shared with the source (copy-on-write), the others copied. A box showing a
+    /// story it is inside, or whose story the paste's budget can't hold, gets none (CWE-400);
+    /// only that box: a later box with a smaller story is still copied while the budget lasts.
+    fn adopt_text_box(&mut self, old: u32, parts: &BTreeMap<u32, Part>, depth: usize, budget: &mut BoxBudget) -> Option<u32> {
+        if depth >= MAX_BOX_DEPTH || budget.active.contains(&old) {
+            return None;
+        }
+        if budget.stories == 0 {
+            budget.skipped = budget.skipped.saturating_add(1);
             return None;
         }
         let src = parts.get(&old).or_else(|| self.parts.get(&old).filter(|p| p.kind == PartKind::TextBox))?;
-        let mut blocks: Vec<Block> = src.blocks.iter().map(|b| (**b).clone()).collect();
+        // Charge what the copy really allocates before making any of it: the block slots, and the
+        // blocks holding text boxes (deep-copied below). The rest are shared `Arc`s, however many
+        // boxes show them, so they cost nothing more. Worked out once per paste.
+        let cost = *budget.costs.entry(old).or_insert_with(|| {
+            let slots = src.blocks.len().saturating_mul(std::mem::size_of::<Arc<Block>>());
+            src.blocks.iter().fold(slots, |a, b| match block_cost(b) {
+                (c, true) => a.saturating_add(c),
+                (_, false) => a,
+            })
+        });
+        let Some(left) = budget.bytes.checked_sub(cost) else {
+            budget.skipped = budget.skipped.saturating_add(1);
+            return None;
+        };
+        budget.bytes = left;
+        budget.stories -= 1;
+        let src_blocks = src.blocks.clone();
         // The copy keeps its text direction and alignment, not its link (a copy stands alone).
         let body = crate::TextBody { next: None, ..src.body };
-        *budget -= 1;
-        self.adopt_text_boxes(&mut blocks, parts, depth + 1, budget);
-        let id = self.try_add_part(PartKind::TextBox, blocks.into_iter().map(Arc::new).collect()).ok()?;
+        budget.active.push(old);
+        let mut blocks: Blocks = Vec::with_capacity(src_blocks.len());
+        for b in src_blocks {
+            let mut boxes = false;
+            each_para(&b, 0, &mut |p| boxes |= box_ids(p).next().is_some());
+            if boxes {
+                let mut copy = (*b).clone();
+                self.adopt_text_boxes(std::slice::from_mut(&mut copy), parts, depth + 1, budget);
+                blocks.push(Arc::new(copy));
+            } else {
+                blocks.push(b);
+            }
+        }
+        budget.active.pop();
+        let id = self.try_add_part(PartKind::TextBox, blocks).ok()?;
         if let Some(p) = self.parts.get_mut(&id) {
             p.body = body;
         }
@@ -803,8 +957,15 @@ impl Document {
             return Err(DocError::BadPath(pos.path.to_string()));
         }
         // Pasted text boxes get stories of their own (never shared with the copy's source).
-        let mut budget = MAX_PASTED_BOXES;
+        let mut budget = BoxBudget::new();
         self.adopt_text_boxes(&mut blocks, &frag.parts, 0, &mut budget);
+        if budget.skipped > 0 {
+            // Once per paste, not once per box (review of #3874).
+            log::warn!(
+                "paste: {} text boxes are left empty; their stories are past what one paste copies ({MAX_PASTED_BOXES} stories, {MAX_PASTED_BOX_BYTES} bytes)",
+                budget.skipped
+            );
+        }
         // Single paragraph: inline insert keeping runs.
         if blocks.len() == 1
             && let Some(Block::Para(src)) = blocks.first()
@@ -879,542 +1040,4 @@ impl Document {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{StoryRef, Table};
-
-    fn doc(lines: &[&str]) -> Document {
-        Document::from_text(&lines.join("\n"))
-    }
-
-    /// Paths between two positions are those of all the story's paragraphs between them.
-    #[test]
-    fn paths_between_matches_every_path_filtered() {
-        let mut d = doc(&["a", "b", "c", "d", "e"]);
-        let mut inner = Table::new(2, 2, 100.0);
-        inner.rows[1].cells[0].blocks.push(crate::para_block(crate::Paragraph::new()));
-        let mut t = Table::new(3, 2, 200.0);
-        t.rows[1].cells[1].blocks.insert(0, Arc::new(Block::Table(inner)));
-        d.insert_block(StoryRef::Body, &Path::top(2), Block::Table(t)).unwrap();
-        d.insert_block(StoryRef::Body, &Path::top(4), Block::Table(Table::new(1, 3, 200.0))).unwrap();
-        let all = d.para_paths(StoryRef::Body);
-        for a in &all {
-            for b in &all {
-                let (pa, pb) = (Pos { story: StoryRef::Body, path: a.clone(), off: 0 }, Pos { story: StoryRef::Body, path: b.clone(), off: 0 });
-                let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
-                let want: Vec<Path> = all.iter().filter(|p| *p >= lo && *p <= hi).cloned().collect();
-                assert_eq!(d.paths_between(&pa, &pb), want, "{a:?} {b:?}");
-            }
-        }
-    }
-
-    #[test]
-    fn split_and_join() {
-        let mut d = doc(&["Hello world"]);
-        let p = d.split_paragraph(&Pos::body(0, 5)).unwrap();
-        assert_eq!(p, Pos::body(1, 0));
-        assert_eq!(d.plain_text(StoryRef::Body), "Hello\n world");
-        let at = d.delete_range(&Pos::body(0, 5), &Pos::body(1, 0)).unwrap();
-        assert_eq!(at, Pos::body(0, 5));
-        assert_eq!(d.plain_text(StoryRef::Body), "Hello world");
-    }
-
-    #[test]
-    fn delete_range_with_bad_end_leaves_document_unchanged() {
-        let mut d = doc(&["one", "two", "three"]);
-        let before = d.plain_text(StoryRef::Body);
-        // Missing paragraph as the second end.
-        assert!(d.delete_range(&Pos::body(0, 1), &Pos::body(9, 0)).is_err());
-        assert_eq!(d.plain_text(StoryRef::Body), before);
-        // Offset past the end of the second paragraph.
-        assert!(d.delete_range(&Pos::body(0, 1), &Pos::body(1, 99)).is_err());
-        assert_eq!(d.plain_text(StoryRef::Body), before);
-        // Offset inside a multi-byte character.
-        let mut d = doc(&["abc", "\u{e9}x"]);
-        assert!(d.delete_range(&Pos::body(0, 1), &Pos::body(1, 1)).is_err());
-        assert_eq!(d.plain_text(StoryRef::Body), "abc\n\u{e9}x");
-        // Range entering a table with a bad offset at its start: the cell text stays.
-        let mut d = doc(&["before", "after"]);
-        d.insert_block(StoryRef::Body, &Path::top(1), Block::Table(Table::new(2, 1, 200.0))).unwrap();
-        d.insert_text(&Pos { story: StoryRef::Body, path: Path(vec![1, 0, 0, 0]), off: 0 }, "x", &CharProps::default()).unwrap();
-        let before = d.plain_text(StoryRef::Body);
-        let cell = Pos { story: StoryRef::Body, path: Path(vec![1, 1, 0, 0]), off: 0 };
-        assert!(d.delete_range(&Pos::body(0, 99), &cell).is_err());
-        assert_eq!(d.plain_text(StoryRef::Body), before);
-    }
-
-    #[test]
-    fn delete_multi() {
-        let mut d = doc(&["one", "two", "three"]);
-        d.delete_range(&Pos::body(2, 2), &Pos::body(0, 1)).unwrap();
-        assert_eq!(d.plain_text(StoryRef::Body), "oree");
-        assert_eq!(d.body.len(), 1);
-    }
-
-    /// #2127: a range over two section breaks joins three sections into the last; the headers
-    /// and footers it showed by linking to earlier ones stay, each from the nearest section that
-    /// named it, as they resolved before the delete.
-    #[test]
-    fn delete_over_two_section_breaks_keeps_the_linked_headers() {
-        let mut d = doc(&["A", "B", "C"]);
-        let set = |default| crate::section::HeaderSet { default: Some(default), ..Default::default() };
-        let s1 = crate::section::SectionProps { headers: set(1), footers: set(5), ..Default::default() };
-        let s2 = crate::section::SectionProps { headers: set(2), ..Default::default() };
-        let s3 = crate::section::SectionProps { margin_left: 99.0, ..Default::default() };
-        for (i, s) in [(0, s1), (1, s2), (2, s3.clone())] {
-            if let Some(Block::Para(p)) = d.body.get_mut(i).map(Arc::make_mut) {
-                p.section = Some(Box::new(s));
-            }
-        }
-        assert_eq!(d.sections().len(), 4);
-        d.delete_range(&Pos::body(0, 1), &Pos::body(2, 0)).unwrap();
-        assert_eq!(d.plain_text(StoryRef::Body), "AC");
-        let sections = d.sections();
-        assert_eq!(sections.len(), 2);
-        assert_eq!(*sections[0].1, crate::section::SectionProps { headers: set(2), footers: set(5), ..s3 });
-    }
-
-    #[test]
-    fn format_across() {
-        let mut d = doc(&["abc", "def"]);
-        d.format_range(&Pos::body(0, 1), &Pos::body(1, 2), &|c| c.bold = Some(true)).unwrap();
-        let p0 = d.para(StoryRef::Body, &Path::top(0)).unwrap();
-        assert_eq!(p0.props_of_char(0).bold, None);
-        assert_eq!(p0.props_of_char(1).bold, Some(true));
-        let p1 = d.para(StoryRef::Body, &Path::top(1)).unwrap();
-        assert_eq!(p1.props_of_char(1).bold, Some(true));
-        assert_eq!(p1.props_of_char(2).bold, None);
-    }
-
-    #[test]
-    fn copy_paste_round_trip() {
-        let mut d = doc(&["alpha", "beta", "gamma"]);
-        let f = d.copy_range(&Pos::body(0, 2), &Pos::body(2, 3));
-        assert_eq!(f.plain_text(), "pha\nbeta\ngam");
-        let end = d.insert_fragment(&Pos::body(2, 5), &f).unwrap();
-        assert_eq!(d.plain_text(StoryRef::Body), "alpha\nbeta\ngammapha\nbeta\ngam");
-        assert_eq!(end, Pos::body(4, 3));
-        let one = Fragment::from_text("XY");
-        let e = d.insert_fragment(&Pos::body(0, 0), &one).unwrap();
-        assert_eq!(e, Pos::body(0, 2));
-        assert!(d.plain_text(StoryRef::Body).starts_with("XYalpha"));
-    }
-
-    /// The first paragraph of the deepest cell, following the first table at each level.
-    fn deepest(d: &Document) -> Path {
-        let (mut path, mut blocks) = (Vec::new(), &d.body);
-        while let Some((i, t)) = blocks.iter().enumerate().find_map(|(i, b)| if let Block::Table(t) = &**b { Some((i, t)) } else { None }) {
-            path.extend([i as u32, 0, 0]);
-            blocks = &t.rows[0].cells[0].blocks;
-        }
-        path.push(0);
-        Path(path)
-    }
-
-    fn body_height(d: &Document) -> usize {
-        d.body.iter().filter_map(|b| if let Block::Table(t) = &**b { Some(table_height(t)) } else { None }).max().unwrap_or(0)
-    }
-
-    /// How many times `c` is in `blocks`, the deepest cells too.
-    fn count(blocks: &[Arc<Block>], c: char) -> usize {
-        blocks
-            .iter()
-            .map(|b| match &**b {
-                Block::Para(p) => p.text.matches(c).count(),
-                Block::Table(t) => t.rows.iter().flat_map(|r| &r.cells).map(|cell| count(&cell.blocks, c)).sum(),
-            })
-            .sum()
-    }
-
-    #[test]
-    fn tables_nest_at_most_max_table_depth() {
-        let mut d = doc(&["x", ""]);
-        for _ in 0..MAX_TABLE_DEPTH {
-            let at = deepest(&d);
-            d.insert_block(StoryRef::Body, &at, Block::Table(Table::new(1, 1, 100.0))).unwrap();
-        }
-        assert_eq!(body_height(&d), MAX_TABLE_DEPTH);
-        // One more in the deepest cell is refused and changes nothing; a paragraph is fine.
-        let (at, before) = (deepest(&d), d.clone());
-        assert_eq!(at.depth(), MAX_TABLE_DEPTH);
-        assert!(d.insert_block(StoryRef::Body, &at, Block::Table(Table::new(1, 1, 100.0))).is_err());
-        assert_eq!(d, before);
-        d.insert_block(StoryRef::Body, &at, Block::Para(Paragraph::new())).unwrap();
-        // One level up, a table fits but a table holding a table doesn't.
-        let up = Path(at.0[..at.0.len() - 3].to_vec());
-        let mut two = Table::new(1, 1, 100.0);
-        two.rows[0].cells[0].blocks.insert(0, Arc::new(Block::Table(Table::new(1, 1, 100.0))));
-        assert!(d.insert_block(StoryRef::Body, &up, Block::Table(two)).is_err());
-        d.insert_block(StoryRef::Body, &up, Block::Table(Table::new(1, 1, 100.0))).unwrap();
-        assert_eq!(body_height(&d), MAX_TABLE_DEPTH);
-    }
-
-    #[test]
-    fn pasting_a_table_into_its_own_cell_stops_at_max_table_depth() {
-        // #1596: copy everything and paste it into the deepest cell, again and again: each round
-        // doubled the nesting, until saving, copying or closing the document overflowed the stack.
-        let mut d = doc(&["x", ""]);
-        d.insert_block(StoryRef::Body, &Path::top(1), Block::Table(Table::new(1, 1, 100.0))).unwrap();
-        d.insert_text(&Pos { story: StoryRef::Body, path: Path(vec![1, 0, 0, 0]), off: 0 }, "a", &CharProps::default()).unwrap();
-        for _ in 0..8 {
-            let all = d.copy_range(&Pos::body(0, 0), &Pos::body(d.body.len() - 1, 0));
-            let at = deepest(&d);
-            let off = d.para(StoryRef::Body, &at).map_or(0, Paragraph::len);
-            d.insert_fragment(&Pos { story: StoryRef::Body, path: at, off }, &all).unwrap();
-        }
-        assert_eq!(body_height(&d), MAX_TABLE_DEPTH);
-        // Nothing is lost: every copy's text is there, below the limit as paragraphs.
-        assert_eq!((count(&d.body, 'x'), count(&d.body, 'a')), (256, 256));
-    }
-
-    fn text_box(d: &mut Document, pos: &Pos, text: &str) -> u32 {
-        let id = d.add_part(PartKind::TextBox, vec![para_block(Paragraph::with_text(text, CharProps::default()))]);
-        d.insert_object(pos, box_shape(Some(id)), &CharProps::default()).unwrap();
-        id
-    }
-
-    fn box_shape(story: Option<u32>) -> InlineObject {
-        InlineObject::Shape {
-            kind: crate::para::ShapeKind::TextBox,
-            w: 144.0,
-            h: 72.0,
-            fill: None,
-            stroke: None,
-            stroke_width: 0.75,
-            float: Default::default(),
-            story,
-            freeform: None,
-            effects: Default::default(),
-            extra: Default::default(),
-        }
-    }
-
-    /// Story ids of the boxes in a body paragraph, in order.
-    fn boxes_in(d: &Document, path: &Path) -> Vec<Option<u32>> {
-        let p = d.para(StoryRef::Body, path).unwrap();
-        p.objects.iter().filter_map(|o| if let InlineObject::Shape { story, .. } = o { Some(*story) } else { None }).collect()
-    }
-
-    #[test]
-    fn pasted_text_box_gets_its_own_story() {
-        let mut d = doc(&["ab", "cd"]);
-        let id = text_box(&mut d, &Pos::body(0, 1), "Inside");
-        let f = d.copy_range(&Pos::body(0, 0), &Pos::body(0, 5));
-        assert_eq!(f.parts.keys().copied().collect::<Vec<_>>(), vec![id]);
-        // Edit the original after copying: the paste keeps the copied text.
-        d.insert_text(&Pos { story: StoryRef::Part(id), path: Path::top(0), off: 6 }, " later", &CharProps::default()).unwrap();
-        d.insert_fragment(&Pos::body(1, 2), &f).unwrap();
-        let pasted = boxes_in(&d, &Path::top(1));
-        let [Some(new)] = pasted[..] else { panic!("{pasted:?}") };
-        assert_ne!(new, id);
-        assert_eq!(d.parts.get(&new).map(|p| p.kind), Some(PartKind::TextBox));
-        assert_eq!(d.plain_text(StoryRef::Part(new)), "Inside");
-        assert_eq!(d.plain_text(StoryRef::Part(id)), "Inside later");
-        // Editing the copy leaves the original alone; a second paste is a third story.
-        d.insert_text(&Pos { story: StoryRef::Part(new), path: Path::top(0), off: 0 }, "Copy: ", &CharProps::default()).unwrap();
-        assert_eq!(d.plain_text(StoryRef::Part(id)), "Inside later");
-        d.insert_fragment(&Pos::body(1, 0), &f).unwrap();
-        let again = boxes_in(&d, &Path::top(1));
-        assert_eq!(again.len(), 2);
-        assert!(again.iter().all(|s| s.is_some_and(|s| s != id)) && again[0] != again[1], "{again:?}");
-        // Multi-paragraph pastes too.
-        let f2 = d.copy_range(&Pos::body(0, 0), &Pos::body(1, 1));
-        let before = d.parts.len();
-        d.insert_fragment(&Pos::body(1, 0), &f2).unwrap();
-        assert_eq!(d.parts.len(), before + 1);
-    }
-
-    #[test]
-    fn text_box_pasted_into_another_document_brings_its_text() {
-        let mut src = doc(&["x"]);
-        let id = text_box(&mut src, &Pos::body(0, 1), "From the source");
-        let f = src.copy_range(&Pos::body(0, 0), &Pos::body(0, 1 + 3));
-        // The target already has a header with the same part id.
-        let mut dst = doc(&["target"]);
-        let hdr = dst.add_part(PartKind::Header, vec![para_block(Paragraph::with_text("Header text", CharProps::default()))]);
-        assert_eq!(hdr, id);
-        dst.insert_fragment(&Pos::body(0, 6), &f).unwrap();
-        let [Some(new)] = boxes_in(&dst, &Path::top(0))[..] else { panic!() };
-        assert_ne!(new, hdr);
-        assert_eq!(dst.plain_text(StoryRef::Part(new)), "From the source");
-        assert_eq!(dst.plain_text(StoryRef::Part(hdr)), "Header text");
-        // The whole body of a document, as Insert › Text from File uses it.
-        let mut dst2 = doc(&["t"]);
-        dst2.insert_fragment(&Pos::body(0, 1), &src.body_fragment()).unwrap();
-        let [Some(n2)] = boxes_in(&dst2, &Path::top(0))[..] else { panic!() };
-        assert_eq!(dst2.plain_text(StoryRef::Part(n2)), "From the source");
-    }
-
-    #[test]
-    fn text_box_in_a_copied_table_gets_its_own_story() {
-        let mut d = doc(&["before", "after"]);
-        d.insert_block(StoryRef::Body, &Path::top(1), Block::Table(Table::new(1, 1, 200.0))).unwrap();
-        let cell = Pos { story: StoryRef::Body, path: Path(vec![1, 0, 0, 0]), off: 0 };
-        let id = text_box(&mut d, &cell, "In a cell");
-        let f = d.copy_range(&Pos::body(0, 0), &Pos::body(2, 5));
-        assert!(f.parts.contains_key(&id));
-        d.insert_fragment(&Pos::body(2, 5), &f).unwrap();
-        let ids: Vec<u32> = d
-            .para_paths(StoryRef::Body)
-            .iter()
-            .filter_map(|p| d.para(StoryRef::Body, p))
-            .flat_map(|p| p.objects.iter())
-            .filter_map(|o| if let InlineObject::Shape { story, .. } = o { *story } else { None })
-            .collect();
-        assert_eq!(ids.len(), 2, "{ids:?}");
-        assert_ne!(ids[0], ids[1]);
-        assert!(ids.iter().all(|i| d.plain_text(StoryRef::Part(*i)) == "In a cell"));
-    }
-
-    #[test]
-    fn fragment_without_parts_never_shows_an_unrelated_story() {
-        let mut d = doc(&["x"]);
-        let hdr = d.add_part(PartKind::Header, Vec::new());
-        let own = d.add_part(PartKind::TextBox, vec![para_block(Paragraph::with_text("Mine", CharProps::default()))]);
-        let mut p = Paragraph::new();
-        p.insert_object(0, box_shape(Some(hdr)), &CharProps::default()).unwrap();
-        p.insert_object(0, box_shape(Some(own)), &CharProps::default()).unwrap();
-        p.insert_object(0, box_shape(Some(999)), &CharProps::default()).unwrap();
-        let f = Fragment { blocks: vec![Block::Para(p)], ..Default::default() };
-        d.insert_fragment(&Pos::body(0, 1), &f).unwrap();
-        let got = boxes_in(&d, &Path::top(0));
-        assert_eq!(got.len(), 3);
-        assert_eq!(got[0], None, "missing story");
-        let Some(copy) = got[1] else { panic!("{got:?}") };
-        assert_ne!(copy, own);
-        assert_eq!(d.plain_text(StoryRef::Part(copy)), "Mine");
-        assert_eq!(got[2], None, "a header isn't a text box");
-    }
-
-    #[test]
-    fn self_nested_text_box_paste_is_bounded() {
-        let mut d = doc(&["x"]);
-        let id = text_box(&mut d, &Pos::body(0, 1), "loop");
-        // The box contains a box showing itself.
-        d.insert_object(&Pos { story: StoryRef::Part(id), path: Path::top(0), off: 0 }, box_shape(Some(id)), &CharProps::default()).unwrap();
-        let f = d.copy_range(&Pos::body(0, 0), &Pos::body(0, 1 + 3));
-        let before = d.parts.len();
-        d.insert_fragment(&Pos::body(0, 0), &f).unwrap();
-        let added = d.parts.len() - before;
-        assert!((1..=MAX_BOX_DEPTH).contains(&added), "{added}");
-    }
-
-    #[test]
-    fn tables_in_paths() {
-        let mut d = doc(&["before", "after"]);
-        d.insert_block(StoryRef::Body, &Path::top(1), Block::Table(Table::new(2, 2, 200.0))).unwrap();
-        let paths = d.para_paths(StoryRef::Body);
-        assert_eq!(paths.len(), 6);
-        assert_eq!(paths[1], Path(vec![1, 0, 0, 0]));
-        let cell = Pos { story: StoryRef::Body, path: Path(vec![1, 0, 1, 0]), off: 0 };
-        let e = d.insert_text(&cell, "x", &CharProps::default()).unwrap();
-        assert_eq!(e.off, 1);
-        assert_eq!(d.next_para(StoryRef::Body, &Path(vec![1, 0, 1, 0])), Some(Path(vec![1, 1, 0, 0])));
-        assert!(d.plain_text(StoryRef::Body).contains("\tx"));
-        // Delete from before the table into a cell: text cleared, table kept (partially covered).
-        d.delete_range(&Pos::body(0, 2), &cell).unwrap();
-        assert_eq!(d.para(StoryRef::Body, &Path::top(0)).unwrap().text, "be");
-        assert!(d.container(StoryRef::Body, &Path(vec![1, 0, 0, 0])).is_some());
-        assert_eq!(Path(vec![1, 0, 1, 0]).cell(), Some((Path::top(1), 0, 1)));
-    }
-
-    fn para(text: &str) -> Block {
-        Block::Para(Paragraph::with_text(text, CharProps::default()))
-    }
-
-    #[test]
-    fn appended_pieces_are_each_followed_by_one_paragraph_mark() {
-        let mut spike = Fragment::default();
-        spike.append_piece(Fragment { blocks: vec![para("a")], ..Default::default() });
-        spike.append_piece(Fragment { blocks: vec![para("b")], ..Default::default() });
-        assert_eq!(spike.plain_text(), "a\nb\n");
-        // A piece that already ends with its paragraph mark gets no second one.
-        let mut spike = Fragment::default();
-        spike.append_piece(Fragment { blocks: vec![para("a"), para("")], ..Default::default() });
-        assert_eq!(spike.plain_text(), "a\n");
-        spike.append_piece(Fragment { blocks: vec![para("b"), para("c")], ..Default::default() });
-        assert_eq!(spike.plain_text(), "a\nb\nc\n");
-    }
-
-    #[test]
-    fn appended_pieces_keep_their_own_text_boxes() {
-        // Two documents give their first text box the same id.
-        let mut one = doc(&["x"]);
-        let id1 = text_box(&mut one, &Pos::body(0, 1), "One");
-        let mut two = doc(&["y"]);
-        let id2 = text_box(&mut two, &Pos::body(0, 1), "Two");
-        assert_eq!(id1, id2);
-        let mut spike = Fragment::default();
-        spike.append_piece(one.copy_range(&Pos::body(0, 0), &Pos::body(0, 1 + 3)));
-        spike.append_piece(two.copy_range(&Pos::body(0, 0), &Pos::body(0, 1 + 3)));
-        let mut dst = doc(&[""]);
-        dst.insert_fragment(&Pos::body(0, 0), &spike).unwrap();
-        let texts: Vec<String> =
-            [0, 1].iter().flat_map(|i| boxes_in(&dst, &Path::top(*i))).map(|b| dst.plain_text(StoryRef::Part(b.unwrap()))).collect();
-        assert_eq!(texts, ["One", "Two"]);
-    }
-
-    #[test]
-    fn bad_positions_error() {
-        let mut d = doc(&["é"]);
-        assert!(d.insert_text(&Pos::body(0, 1), "x", &CharProps::default()).is_err());
-        assert!(d.insert_text(&Pos::body(5, 0), "x", &CharProps::default()).is_err());
-        assert!(d.split_paragraph(&Pos::body(0, 99)).is_err());
-        let c = d.clamp(&Pos::body(9, 9));
-        assert_eq!(c, Pos::body(0, 2));
-        assert!(d.delete_range(&Pos { story: StoryRef::Part(3), path: Path::top(0), off: 0 }, &Pos::body(0, 0)).is_err());
-    }
-
-    // delete_range over whole tables (#1844), in the body, a header and a footnote.
-
-    /// A document whose story (the body, or a header or footnote part) holds `lines`.
-    fn story_doc(kind: Option<PartKind>, lines: &[&str]) -> (Document, StoryRef) {
-        match kind {
-            None => (doc(lines), StoryRef::Body),
-            Some(k) => {
-                let mut d = doc(&["body"]);
-                let blocks = lines.iter().map(|l| para_block(Paragraph::with_text(l, CharProps::default()))).collect();
-                let id = d.add_part(k, blocks);
-                (d, StoryRef::Part(id))
-            }
-        }
-    }
-
-    const STORIES: [Option<PartKind>; 3] = [None, Some(PartKind::Header), Some(PartKind::Footnote)];
-
-    fn at(story: StoryRef, path: &[u32], off: usize) -> Pos {
-        Pos { story, path: Path(path.to_vec()), off }
-    }
-
-    /// Insert an `rows`×`cols` table at `path` whose cells hold `texts`, row by row.
-    fn put_table(d: &mut Document, story: StoryRef, path: &[u32], rows: usize, cols: usize, texts: &[&str]) {
-        d.insert_block(story, &Path(path.to_vec()), Block::Table(Table::new(rows, cols, 200.0))).unwrap();
-        for (k, t) in texts.iter().enumerate() {
-            let mut p = path.to_vec();
-            p.extend([(k / cols) as u32, (k % cols) as u32, 0]);
-            d.insert_text(&at(story, &p, 0), t, &CharProps::default()).unwrap();
-        }
-    }
-
-    /// The story's top-level blocks: a paragraph's text, or `[table]`.
-    fn shape(d: &Document, story: StoryRef) -> Vec<String> {
-        d.story(story).unwrap().iter().map(|b| b.as_para().map_or("[table]".to_string(), |p| p.text.clone())).collect()
-    }
-
-    fn cell_text(d: &Document, story: StoryRef, table: &[u32], r: u32, c: u32) -> String {
-        let mut p = table.to_vec();
-        p.extend([r, c, 0]);
-        d.para(story, &Path(p)).map(|p| p.text.clone()).unwrap_or_else(|| "<none>".into())
-    }
-
-    #[test]
-    fn a_range_ending_at_the_end_of_a_cell_that_isnt_the_last_keeps_the_table() {
-        for kind in STORIES {
-            for (r, c) in [(0, 1), (1, 0)] {
-                let (mut d, st) = story_doc(kind, &["before", "after"]);
-                put_table(&mut d, st, &[1], 2, 2, &["a", "b", "c", "d"]);
-                d.delete_range(&at(st, &[0], 0), &at(st, &[1, r, c, 0], 1)).unwrap();
-                assert_eq!(shape(&d, st), ["", "[table]", "after"], "{kind:?} ({r},{c})");
-                assert_eq!(cell_text(&d, st, &[1], 1, 1), "d", "{kind:?} ({r},{c})");
-            }
-        }
-    }
-
-    #[test]
-    fn a_range_from_the_start_of_one_table_into_the_middle_of_the_next_removes_only_the_first() {
-        for kind in STORIES {
-            let (mut d, st) = story_doc(kind, &["x", "mid", "y"]);
-            put_table(&mut d, st, &[2], 2, 2, &["e", "f", "g", "h"]);
-            put_table(&mut d, st, &[1], 2, 2, &["a", "b", "c", "d"]);
-            assert_eq!(shape(&d, st), ["x", "[table]", "mid", "[table]", "y"]);
-            let to = d.delete_range(&at(st, &[1, 0, 0, 0], 0), &at(st, &[3, 0, 1, 0], 1)).unwrap();
-            assert_eq!(shape(&d, st), ["x", "", "[table]", "y"], "{kind:?}");
-            assert_eq!([cell_text(&d, st, &[2], 0, 0), cell_text(&d, st, &[2], 0, 1), cell_text(&d, st, &[2], 1, 0)], ["", "", "g"], "{kind:?}");
-            assert!(d.para(st, &to.path).is_some(), "{kind:?}: {to:?}");
-        }
-    }
-
-    #[test]
-    fn a_range_from_a_cell_paragraph_to_the_end_of_a_table_nested_in_that_cell_removes_only_the_nested_table() {
-        for kind in STORIES {
-            let (mut d, st) = story_doc(kind, &["before", "after"]);
-            put_table(&mut d, st, &[1], 1, 1, &["p"]);
-            put_table(&mut d, st, &[1, 0, 0, 1], 1, 1, &["n"]);
-            d.insert_block(st, &Path(vec![1, 0, 0, 2]), Block::Para(Paragraph::with_text("q", CharProps::default()))).unwrap();
-            let to = d.delete_range(&at(st, &[1, 0, 0, 0], 1), &at(st, &[1, 0, 0, 1, 0, 0, 0], 1)).unwrap();
-            assert_eq!(shape(&d, st), ["before", "[table]", "after"], "{kind:?}");
-            let cell = d.container(st, &Path(vec![1, 0, 0, 0])).unwrap();
-            let cell: Vec<String> = cell.iter().map(|b| b.as_para().map_or("[table]".to_string(), |p| p.text.clone())).collect();
-            assert_eq!(cell, ["pq"], "{kind:?}");
-            assert_eq!(to, at(st, &[1, 0, 0, 0], 1), "{kind:?}");
-        }
-    }
-
-    #[test]
-    fn two_whole_tables_at_the_end_of_a_story_leave_one_empty_paragraph() {
-        for kind in STORIES {
-            for trailing in [true, false] {
-                let (mut d, st) = story_doc(kind, &[""]);
-                put_table(&mut d, st, &[0], 1, 2, &["a", "b"]);
-                put_table(&mut d, st, &[1], 2, 1, &["c", "d"]);
-                if !trailing {
-                    // A story that ends in a table (a hostile file).
-                    d.story_mut(st).unwrap().pop();
-                }
-                let to = d.delete_range(&at(st, &[0, 0, 0, 0], 0), &at(st, &[1, 1, 0, 0], 1)).unwrap();
-                assert_eq!(shape(&d, st), [""], "{kind:?} trailing {trailing}");
-                assert_eq!(to, at(st, &[0], 0), "{kind:?} trailing {trailing}");
-            }
-        }
-    }
-
-    /// Content controls pair their markers within one block list (a story, or a cell), so a
-    /// marker in a table never has its partner outside it: a control inside a table removed whole
-    /// goes with it, and one the range only enters keeps both markers (the control is emptied).
-    #[test]
-    fn removing_a_whole_table_keeps_a_control_the_range_only_partly_covers() {
-        use crate::control::ContentControl;
-        let start = || InlineObject::ControlStart { control: Box::new(ContentControl::default()) };
-        for kind in STORIES {
-            let (mut d, st) = story_doc(kind, &["before", "after"]);
-            put_table(&mut d, st, &[1], 1, 1, &["c"]);
-            // One control around "efo" in "before", one around the cell's text.
-            d.insert_object(&at(st, &[0], 4), InlineObject::ControlEnd, &CharProps::default()).unwrap();
-            let in_before = d.insert_object(&at(st, &[0], 1), start(), &CharProps::default()).unwrap();
-            d.insert_object(&at(st, &[1, 0, 0, 0], 1), InlineObject::ControlEnd, &CharProps::default()).unwrap();
-            d.insert_object(&at(st, &[1, 0, 0, 0], 0), start(), &CharProps::default()).unwrap();
-            assert_eq!(d.control_ranges(st).len(), 2, "setup");
-            let end = d.para(st, &Path(vec![1, 0, 0, 0])).unwrap().len();
-            // From inside the first control to the end of the table.
-            d.delete_range(&Pos { off: in_before.off + 1, ..in_before }, &at(st, &[1, 0, 0, 0], end)).unwrap();
-            assert_eq!(shape(&d, st), ["b\u{FFFC}e\u{FFFC}after"], "{kind:?}: the table goes, the paragraphs join");
-            let ranges = d.control_ranges(st);
-            assert_eq!(ranges.len(), 1, "{kind:?}: {ranges:?}");
-            assert!(ranges.iter().all(|r| r.start.path == Path::top(0) && r.end.path == Path::top(0)), "{kind:?}");
-            let objects = d.para(st, &Path::top(0)).map_or(0, |p| p.objects.len());
-            assert_eq!(objects, 2, "{kind:?}: no orphan markers left");
-        }
-    }
-
-    #[test]
-    fn a_table_nested_deeper_than_the_paragraph_walk_is_never_removed_whole() {
-        // 20 tables, each in the first cell of the one around it, ahead of that cell's paragraph:
-        // the innermost paragraphs come first in the document but the paragraph walk stops short.
-        let mut t = Table::new(1, 1, 200.0);
-        if let Some(cell) = t.rows.get_mut(0).and_then(|r| r.cells.get_mut(0)) {
-            cell.blocks = vec![para_block(Paragraph::with_text("deep", CharProps::default()))];
-        }
-        for _ in 0..20 {
-            let mut outer = Table::new(1, 1, 200.0);
-            if let Some(cell) = outer.rows.get_mut(0).and_then(|r| r.cells.get_mut(0)) {
-                cell.blocks.insert(0, Arc::new(Block::Table(t)));
-            }
-            t = outer;
-        }
-        let mut d = doc(&["before", "after"]);
-        d.insert_block(StoryRef::Body, &Path::top(1), Block::Table(t)).unwrap();
-        let first = d.para_paths(StoryRef::Body).into_iter().find(|p| p.0.first() == Some(&1)).unwrap();
-        d.delete_range(&Pos { story: StoryRef::Body, path: first, off: 0 }, &Pos::body(2, 0)).unwrap();
-        assert!(d.body.get(1).is_some_and(|b| b.as_table().is_some()), "a table with paragraphs the walk never saw was removed");
-    }
-}
+mod tests;

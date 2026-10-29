@@ -120,6 +120,11 @@ fn parse_cond(text: &str) -> Result<Box<[Cond]>, String> {
 const MAX_CHAIN: u8 = 2;
 /// How many suffixes may sit under the outermost one: the depth `form_has_flag` walks.
 const INNER_CHAIN: u8 = MAX_CHAIN - 1;
+/// Most forms [`AffixDict::forms`] lists for one stem (real stems have a few hundred at most).
+pub const MAX_FORMS: usize = 4096;
+/// Most rules [`AffixDict::forms`] tries along continuation chains and prefix–suffix cross
+/// products for one stem: real dictionaries need a few thousand, hostile ones are cut off.
+const MAX_FORMS_WORK: usize = 1 << 18;
 
 /// One prefix or suffix rule.
 #[derive(Clone, Debug)]
@@ -182,6 +187,8 @@ pub struct AffixDict {
     suffixes: Vec<Rule>,
     /// Appended string → groups of suffix rules by stripped string.
     sfx_index: FxMap<Box<str>, Vec<SfxGroup>>,
+    /// Per flag bit: the suffix rules of that flag, in rule order.
+    sfx_by_flag: Vec<Vec<u32>>,
     /// Longest appended suffix, in chars.
     max_sfx_chars: usize,
     try_chars: String,
@@ -261,6 +268,26 @@ struct Rules {
 /// A rule as parsed from text, before flags become bits: `(flag, cross, strip, add, cont, cond)`.
 type RawRule = (char, bool, String, String, String, String);
 
+/// Most distinct `TRY` characters kept; a hostile `.aff` could otherwise make every suggestion
+/// round cost time and memory proportional to the file size.
+const MAX_TRY_CHARS: usize = 128;
+
+/// Keeps the first [`MAX_TRY_CHARS`] distinct characters of a `TRY` value, in order.
+fn cap_try(s: &str) -> String {
+    let mut out = String::new();
+    let mut n = 0;
+    for c in s.chars() {
+        if n >= MAX_TRY_CHARS {
+            break;
+        }
+        if !out.contains(c) {
+            out.push(c);
+            n += 1;
+        }
+    }
+    out
+}
+
 /// `0` means empty in Hunspell's strip and append fields.
 fn zero_empty(s: &str) -> String {
     if s == "0" { String::new() } else { s.to_string() }
@@ -287,13 +314,12 @@ fn parse_aff(aff: &str) -> Result<Rules, String> {
         match dir {
             "SET" | "LANG" | "NAME" | "VERSION" | "HOME" | "WORDCHARS" | "MAXNGRAMSUGS" | "MAXDIFF" | "ONLYMAXDIFF" | "NOSPLITSUGS"
             | "SUGSWITHDOTS" | "WARN" | "FORBIDWARN" | "MAXCPDSUGS" => {}
-            "FLAG" => {
-                // Per-character flag modes (`FLAG UTF-8`, as VERO's pt_BR dictionary uses) work
-                // with the one-character parsing here; only the multi-character encodings differ.
-                if !matches!(at(1), "UTF-8" | "DEFAULT" | "utf-8" | "default" | "UTF8" | "") {
-                    return Err(format!("line {}: FLAG {} is not supported (one-character flags only)", n + 1, at(1)));
-                }
+            // Per-character flag modes (`FLAG UTF-8`, as VERO's pt_BR dictionary uses) work
+            // with the one-character parsing here; only the multi-character encodings differ.
+            "FLAG" if !matches!(at(1), "UTF-8" | "DEFAULT" | "utf-8" | "default" | "UTF8" | "") => {
+                return Err(format!("line {}: FLAG {} is not supported (one-character flags only)", n + 1, at(1)));
             }
+            "FLAG" => {}
             directive @ ("FORBIDDENWORD" | "NOSUGGEST") => {
                 let mut it = at(1).chars().filter(|&c| c != EMOJI_SELECTOR);
                 match (it.next(), it.next()) {
@@ -307,7 +333,7 @@ fn parse_aff(aff: &str) -> Result<Rules, String> {
                     _ => return Err(format!("line {}: {directive} needs one flag character", n + 1)),
                 }
             }
-            "TRY" => r.try_chars = at(1).to_string(),
+            "TRY" => r.try_chars = cap_try(at(1)),
             "KEY" => r.key = at(1).to_string(),
             "MAP" => {
                 if !map_header && at(1).parse::<usize>().is_ok() {
@@ -399,7 +425,7 @@ impl AffixDict {
             }
             stems.push((word, flags));
         }
-        AffixDict::build(rules, stems, comments.iter().map(|s| s.to_string()).collect())
+        AffixDict::build(rules, stems, comments.iter().map(ToString::to_string).collect())
     }
 
     fn build(rules: Rules, mut stems: Vec<(String, String)>, comments: Vec<String>) -> Result<AffixDict, String> {
@@ -464,14 +490,27 @@ impl AffixDict {
     /// Build the suffix index and the stem hash table.
     fn index(&mut self) {
         let mut idx: FxMap<Box<str>, Vec<SfxGroup>> = FxMap::default();
+        // Each (appended, stripped) pair's group, found by hash rather than by scanning the
+        // appended string's groups: a dictionary with many strips per suffix stays linear.
+        let mut group_of: FxMap<(&str, &str), usize> = FxMap::default();
+        let mut by_flag: Vec<Vec<u32>> = vec![Vec::new(); 128];
         for (i, r) in self.suffixes.iter().enumerate() {
             let groups = idx.entry(r.add.clone()).or_default();
             let Ok(i) = u32::try_from(i) else { break };
-            match groups.iter_mut().find(|g| g.strip == r.strip) {
+            match group_of.get(&(&*r.add, &*r.strip)).and_then(|&g| groups.get_mut(g)) {
                 Some(g) => g.rules.push(i),
-                None => groups.push(SfxGroup { strip: r.strip.clone(), rules: vec![i] }),
+                None => {
+                    group_of.insert((&r.add, &r.strip), groups.len());
+                    groups.push(SfxGroup { strip: r.strip.clone(), rules: vec![i] });
+                }
+            }
+            if r.bit != 0
+                && let Some(list) = by_flag.get_mut(r.bit.trailing_zeros() as usize)
+            {
+                list.push(i);
             }
         }
+        self.sfx_by_flag = by_flag;
         self.max_sfx_chars = self.suffixes.iter().map(|r| r.add.chars().count()).max().unwrap_or(0);
         self.sfx_index = idx;
         let n = self.len();
@@ -576,10 +615,14 @@ impl AffixDict {
         None
     }
 
-    /// Does `w` carry flag `bit` — as a stem, or as the form of a suffix rule whose
-    /// continuation classes include `bit` (chained suffixation, depth-bounded)?
-    fn form_has_flag(&self, w: &str, bit: u128, depth: u8, excluded: u128) -> bool {
-        if self.stem_flags_excluding(w, excluded).is_some_and(|f| f & bit != 0) {
+    /// Does `w` carry any flag of `flags` — as a stem, or as the form of a suffix rule whose
+    /// continuation classes include one (chained suffixation, depth-bounded)?
+    ///
+    /// The rules of a group that could lead to `w` are merged into one mask of their flags and
+    /// followed once, not once per rule: the answer is the same, but thousands of rules of one
+    /// flag cost one walk, not one each (#3613).
+    fn form_has_flag(&self, w: &str, flags: u128, depth: u8, excluded: u128) -> bool {
+        if self.stem_flags_excluding(w, excluded).is_some_and(|f| f & flags != 0) {
             return true;
         }
         if depth == 0 {
@@ -594,10 +637,14 @@ impl AffixDict {
                 root.clear();
                 root.push_str(base);
                 root.push_str(&g.strip);
-                for r in g.rules.iter().filter_map(|&i| self.suffixes.get(i as usize)) {
-                    if r.cont & bit != 0 && r.cond_matches(&root, true) && self.form_has_flag(&root, r.bit, depth - 1, excluded) {
-                        return true;
-                    }
+                let inner = g
+                    .rules
+                    .iter()
+                    .filter_map(|&i| self.suffixes.get(i as usize))
+                    .filter(|r| r.cont & flags != 0 && r.cond_matches(&root, true))
+                    .fold(0u128, |m, r| m | r.bit);
+                if inner != 0 && self.form_has_flag(&root, inner, depth - 1, excluded) {
+                    return true;
                 }
             }
         }
@@ -670,9 +717,13 @@ impl AffixDict {
                     return true;
                 }
                 // Continuation classes: `root` need not be a stem carrying this rule's flag —
-                // it may be a form that gained the flag from another rule's continuation.
-                if need == 0 && rules().any(|r| r.cond_matches(&root, true) && self.form_has_flag(&root, r.bit, INNER_CHAIN, excluded)) {
-                    return true;
+                // it may be a form that gained the flag from another rule's continuation. The
+                // matching rules' flags are looked for together, in one walk.
+                if need == 0 {
+                    let flags = rules().filter(|r| r.cond_matches(&root, true)).fold(0u128, |m, r| m | r.bit);
+                    if flags != 0 && self.form_has_flag(&root, flags, INNER_CHAIN, excluded) {
+                        return true;
+                    }
                 }
             }
         }
@@ -705,13 +756,19 @@ impl AffixDict {
         }
     }
 
-    /// Every form of the stem `stem` (itself included), unsorted, possibly with repeats.
+    /// Every form of the stem `stem` (itself included), unsorted, possibly with repeats; at most
+    /// [`MAX_FORMS`], and at most [`MAX_FORMS_WORK`] rules tried along the continuation chains and
+    /// cross products, so a dictionary with thousands of self-continuing rules can't make one stem
+    /// cost millions of strings (#3613).
     pub fn forms(&self, stem: &str) -> Vec<String> {
         let Some(f) = self.stem_flags(stem) else { return Vec::new() };
         let mut out = vec![stem.to_string()];
         let mut cross_sfx = Vec::new();
-        // Suffix forms queued with the continuation classes they carry, for chained expansion.
+        // Suffix forms queued with the continuation classes they carry, for chained expansion;
+        // each (form, classes) pair is expanded once.
         let mut chain: Vec<(String, u128)> = Vec::new();
+        let mut queued: std::collections::HashSet<(String, u128)> = std::collections::HashSet::new();
+        let mut work = 0usize;
         for r in &self.suffixes {
             if f & r.bit == 0 || !r.cond_matches(stem, true) {
                 continue;
@@ -721,29 +778,39 @@ impl AffixDict {
             if r.cross {
                 cross_sfx.push(form.clone());
             }
-            if r.cont != 0 {
+            if r.cont != 0 && queued.insert((form.clone(), r.cont)) {
                 chain.push((form.clone(), r.cont));
             }
             out.push(form);
+            if out.len() >= MAX_FORMS {
+                return out;
+            }
         }
         // Continuation classes chain suffixes (`workable/B` → `workables`), up to [`MAX_CHAIN`]
         // suffixes in all — the same bound the checker walks.
-        for _ in 0..INNER_CHAIN {
+        'chain: for _ in 0..INNER_CHAIN {
             let level = std::mem::take(&mut chain);
             if level.is_empty() {
                 break;
             }
             for (form, flags) in level {
-                for r in &self.suffixes {
-                    if flags & r.bit == 0 || !r.cond_matches(&form, true) {
+                for r in self.suffixes_with(flags).into_iter().filter_map(|i| self.suffixes.get(i as usize)) {
+                    work += 1;
+                    if work > MAX_FORMS_WORK {
+                        break 'chain;
+                    }
+                    if !r.cond_matches(&form, true) {
                         continue;
                     }
                     let Some(base) = form.strip_suffix(&*r.strip) else { continue };
                     let next = format!("{base}{}", r.add);
-                    if r.cont != 0 {
+                    if r.cont != 0 && queued.insert((next.clone(), r.cont)) {
                         chain.push((next.clone(), r.cont));
                     }
                     out.push(next);
+                    if out.len() >= MAX_FORMS {
+                        return out;
+                    }
                 }
             }
         }
@@ -755,13 +822,36 @@ impl AffixDict {
             out.push(format!("{}{rest}", r.add));
             if r.cross {
                 for s in &cross_sfx {
+                    work += 1;
+                    if out.len() >= MAX_FORMS || work > MAX_FORMS_WORK {
+                        return out;
+                    }
                     if let Some(rest) = s.strip_prefix(&*r.strip) {
                         out.push(format!("{}{rest}", r.add));
                     }
                 }
             }
+            if out.len() >= MAX_FORMS {
+                return out;
+            }
         }
         out
+    }
+
+    /// The suffix rules carrying any flag of `mask`, in rule order.
+    fn suffixes_with(&self, mask: u128) -> Vec<u32> {
+        let mut rules: Vec<u32> = Vec::new();
+        let mut lists = 0;
+        for (bit, list) in self.sfx_by_flag.iter().enumerate() {
+            if bit < 128 && mask & (1u128 << bit) != 0 && !list.is_empty() {
+                rules.extend_from_slice(list);
+                lists += 1;
+            }
+        }
+        if lists > 1 {
+            rules.sort_unstable();
+        }
+        rules
     }
 
     /// The `TRY` letters, most frequent first (suggestions try these).
@@ -857,8 +947,8 @@ impl AffixDict {
 
     /// Read data written by [`AffixDict::to_bytes`].
     pub fn from_bytes(data: &[u8]) -> Result<AffixDict, String> {
-        let raw =
-            miniz_oxide::inflate::decompress_to_vec_with_limit(data, 64 << 20).map_err(|e| format!("affix dictionary: inflate failed: {e:?}"))?;
+        let raw = miniz_oxide::inflate::decompress_to_vec_with_limit(data, 64 << 20)
+            .map_err(|e| format!("affix dictionary: inflate failed: {:?}", e.status))?;
         let words_at = raw.windows(7).position(|w| w == b"\nWORDS\n").ok_or("affix dictionary: no WORDS section")?;
         let head = std::str::from_utf8(raw.get(..words_at).unwrap_or_default()).map_err(|_| "affix dictionary: bad utf-8 in the rules")?;
         let mut lines = head.lines();
@@ -875,7 +965,7 @@ impl AffixDict {
             let f: Vec<&str> = line.split_whitespace().collect();
             let at = |k: usize| f.get(k).copied().unwrap_or("");
             match at(0) {
-                "TRY" => rules.try_chars = at(1).to_string(),
+                "TRY" => rules.try_chars = cap_try(at(1)),
                 "KEY" => rules.key = at(1).to_string(),
                 "MAP" => rules.map.push(at(1).chars().collect()),
                 "REP" => rules.rep.push((at(1).replace('_', " "), at(2).replace('_', " "))),
@@ -980,6 +1070,29 @@ pub(crate) mod tests {
         assert_eq!(hash.try_chars(), "a#b");
         assert_eq!(hash.key(), "a#b");
         assert_eq!(AffixDict::from_bytes(&hash.to_bytes()).unwrap().key(), "a#b");
+    }
+
+    #[test]
+    fn try_alphabet_is_capped_and_deduplicated() {
+        let aff = format!("TRY {}\n", "abcdefghijklmnopqrstuvwxyz".repeat(10_000));
+        let d = AffixDict::from_hunspell(&aff, "1\nkot\n", &[]).unwrap();
+        assert_eq!(d.try_chars(), "abcdefghijklmnopqrstuvwxyz");
+        let compact = AffixDict::from_bytes(&d.to_bytes()).unwrap();
+        assert_eq!(compact.try_chars(), "abcdefghijklmnopqrstuvwxyz");
+
+        // More distinct characters than the cap, each repeated: keep the first 128 in order.
+        let many: String = (0x100u32..0x100 + 300).filter_map(char::from_u32).collect();
+        let aff = format!("TRY {many}{many}\n");
+        let want: String = many.chars().take(128).collect();
+        let d = AffixDict::from_hunspell(&aff, "1\nkot\n", &[]).unwrap();
+        assert_eq!(d.try_chars(), want);
+        let compact = AffixDict::from_bytes(&d.to_bytes()).unwrap();
+        assert_eq!(compact.try_chars(), want);
+
+        // An oversized TRY line fed straight to the compact reader is capped as well.
+        let raw = format!("{MAGIC}\nTRY {many}{many}\nWORDS\n\0kot\n");
+        let bytes = miniz_oxide::deflate::compress_to_vec(raw.as_bytes(), 6);
+        assert_eq!(AffixDict::from_bytes(&bytes).unwrap().try_chars(), want);
     }
 
     /// Shared hand-written fixture: collectors must reject every path to NOSUGGEST forms.
@@ -1171,6 +1284,65 @@ pub(crate) mod tests {
         for form in d.forms("work") {
             assert!(d.contains(&form), "every listed form is accepted: {form}");
         }
+    }
+
+    #[test]
+    fn continuation_classes_merge_the_flags_of_a_group() {
+        // `s` under B and under C share one group (same append, same strip): a form carrying
+        // either flag takes it, and the stem carrying neither doesn't.
+        let aff = "SET UTF-8\nSFX A N 1\nSFX A 0 able/C .\nSFX D N 1\nSFX D 0 er/B .\nSFX B N 1\nSFX B 0 s .\nSFX C N 1\nSFX C 0 s [e]\n";
+        let d = AffixDict::from_hunspell(aff, "2\nwork/A\nplay/D\n", &[]).unwrap();
+        assert!(d.contains("workables") && d.contains("players"));
+        assert!(!d.contains("works") && !d.contains("plays") && !d.contains("workabless"));
+        assert!(d.forms("work").iter().any(|f| f == "workables") && d.forms("play").iter().any(|f| f == "players"));
+    }
+
+    /// `n` suffix rules of flag A on one stem, `rule(i)` giving each rule's strip, append and condition.
+    fn many_rules(n: usize, rule: impl Fn(usize) -> String) -> AffixDict {
+        let mut aff = format!("SET UTF-8\nSFX A Y {n}\n");
+        for i in 0..n {
+            aff.push_str(&format!("SFX A {}\n", rule(i)));
+        }
+        AffixDict::from_hunspell(&aff, "1\nkot/A\n", &[]).unwrap()
+    }
+
+    #[test]
+    fn self_continuing_rules_check_in_linear_time() {
+        // Thousands of empty-append rules that continue with their own flag: each check used to
+        // follow every rule from every rule, millions of steps a word (#3613). The checks take
+        // about a millisecond; the old checker took 14 s for two of them at 16,000 rules, so at
+        // 40,000 (quadratic: minutes) the 10 s bound leaves a busy machine a wide margin.
+        let d = many_rules(40_000, |_| "0 0/A .".into());
+        let t = std::time::Instant::now();
+        assert!(d.check("kot") && !d.check("pies") && !d.check("kotx"));
+        assert!(t.elapsed().as_secs_f64() < 10.0, "{:?}", t.elapsed());
+    }
+
+    #[test]
+    fn forms_of_self_continuing_rules_are_bounded() {
+        // Every rule's form continues with every rule: millions of strings for one stem (#3613).
+        let same = many_rules(3000, |_| "0 0/A .".into());
+        let distinct = many_rules(3000, |i| format!("0 x{i}/A ."));
+        let t = std::time::Instant::now();
+        let (a, b) = (same.forms("kot"), distinct.forms("kot"));
+        // The cap on the count is what tells the old code (9 million forms each) apart; the
+        // generous time bound (tens of ms here) only backs up the rule-visit cap.
+        assert!(t.elapsed().as_secs_f64() < 10.0, "{:?}", t.elapsed());
+        assert!(a.len() <= MAX_FORMS && b.len() <= MAX_FORMS, "{} {}", a.len(), b.len());
+        assert!(b.iter().any(|f| f == "kotx0x1"), "chained forms are still listed");
+    }
+
+    #[test]
+    fn many_strips_per_suffix_index_in_linear_time() {
+        // One append with thousands of strips: the index used to scan the append's groups for
+        // each rule. Building 200,000 rules takes well under a second; the old index took 3 s at
+        // 30,000 and over 10 minutes at 300,000.
+        let n = 200_000;
+        let t = std::time::Instant::now();
+        let d = many_rules(n, |i| format!("k{i} y ."));
+        assert!(t.elapsed().as_secs_f64() < 10.0, "{:?}", t.elapsed());
+        assert_eq!(d.sfx_index.get("y").map(Vec::len), Some(n));
+        assert!(!d.contains("koty"));
     }
 
     #[test]

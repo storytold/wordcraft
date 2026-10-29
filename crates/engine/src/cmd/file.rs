@@ -14,16 +14,24 @@ pub const FORMAT_FLAT_OPC: &str = "flatopc";
 
 pub const MAX_AUTHOR_CHARS: usize = 255;
 
-/// Sets the user name that new tracked changes and comments are recorded under. The name is
-/// trimmed, stripped of control characters (they can't go into the saved XML) and cut to
-/// [`MAX_AUTHOR_CHARS`]; a blank name is refused so revisions always carry an author.
-pub(crate) fn set_author(s: &mut Session, v: &Value) -> CmdResult {
-    let name: String = p::req_str(v, "name")?.trim().chars().filter(|c| !c.is_control()).take(MAX_AUTHOR_CHARS).collect();
+/// The user name as it is stored: trimmed, stripped of control characters (they can't go into
+/// the saved XML) and cut to [`MAX_AUTHOR_CHARS`]; a blank name is refused so revisions always
+/// carry an author.
+pub fn normalize_author(name: &str) -> Result<String, CmdError> {
+    let name: String = name.trim().chars().filter(|c| !c.is_control()).take(MAX_AUTHOR_CHARS).collect();
     let name = name.trim_end();
     if name.is_empty() {
         return Err(CmdError::Params("`name` must not be blank".into()));
     }
-    s.author = name.to_string();
+    Ok(name.to_string())
+}
+
+/// Sets the user name that new tracked changes and comments are recorded under. The name is
+/// normalised by [`normalize_author`].
+/// A protected document refuses it: the name is the identity its exceptions are checked against.
+pub(crate) fn set_author(s: &mut Session, v: &Value) -> CmdResult {
+    super::protect::check_user_name(s)?;
+    s.author = normalize_author(p::req_str(v, "name")?)?;
     let mut r = sel_result(s)?;
     if let Some(o) = r.as_object_mut() {
         o.insert("name".into(), json!(s.author));
@@ -71,6 +79,10 @@ fn rename(s: &mut Session, v: &Value) -> CmdResult {
     Ok(json!({"name": name, "path": s.path}))
 }
 
+/// Builds the file and document command table: rename, new, open, save, save as and encryption,
+/// PDF/PNG/print output and print settings, close, properties and info, author and privacy
+/// settings, and document inspection and text access. Recovery, compatibility, sharing, autosave,
+/// `file.newFromTemplate` and `file.saveTemplate` are registered in [`super::tools::specs`].
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("file.rename", "Rename Document", "File › Info", rename).params(r#"{"name": string (document name; its extension is kept, so the name may be given with or without it)}"#).pure(),
@@ -93,7 +105,7 @@ pub fn specs() -> Vec<CommandSpec> {
             // No path (the command search, say): the app asks where to save, as File › Export
             // does, instead of failing on the required parameter (#2313).
             let Some(path) = p::str(v, "path") else {
-                s.ui_requests.push(json!({"open": "exportPdf"}));
+                s.push_ui_request(json!({"open": "exportPdf"}));
                 return Ok(json!({"exported": false}));
             };
             let path = if path.to_ascii_lowercase().ends_with(".pdf") { path.to_string() } else { format!("{path}.pdf") };
@@ -119,18 +131,21 @@ pub fn specs() -> Vec<CommandSpec> {
             )
             .pure(),
         CommandSpec::new("file.print", "Print", "File", |s, _| {
-            s.ui_requests.push(json!({"open": "print"}));
+            s.push_ui_request(json!({"open": "print"}));
             sel_result(s)
         })
         .key("Mod+P / Mod+Shift+F12 / Mod+F2 / Mod+Alt+I")
         .pure(),
         CommandSpec::new("file.close", "Close", "File", |s, _| {
-            s.ui_requests.push(json!({"close": true}));
+            s.push_ui_request(json!({"close": true}));
             sel_result(s)
         })
         .key("Mod+W / Mod+F4")
-        .params(r#"{"force"?: bool (desktop app's control channel and MCP bridge only: without it a document with unsaved changes is an error and stays open; with it the changes are discarded. Headless sessions never ask)}"#)
+        .params(r#"{"force"?: bool (desktop app's control channel and MCP bridge only: without it a document with unsaved changes is an error and stays open; with it the changes are discarded. Headless sessions never ask; file.closeDocument closes a document there)}"#)
         .pure(),
+        CommandSpec::new("file.closeDocument", "Close Document", "Agents", close_document)
+            .params(r#"{"id"?: n (an open document, see view.switchWindows; default the active one), "force"?: bool (discard unsaved changes; without it a document with unsaved changes is an error and stays open)} → {"closed": id, "active": id, "documents": [{"id", "title", "path", "dirty", "active"}]}; closing the last document leaves a new blank one"#)
+            .pure(),
         CommandSpec::new("file.properties", "Properties", "File › Info", properties)
             .params(r#"{"title"?, "subject"?, "author"?, "keywords"?, "comments"?, "category"?, "custom"?: {name: string | null (removes)}}"#),
         CommandSpec::new("file.info", "Info", "File", info).pure(),
@@ -180,6 +195,10 @@ pub fn specs() -> Vec<CommandSpec> {
             let text = p::req_str(v, "text")?;
             let d = Document::from_text(text);
             s.doc.body = d.body;
+            // The body is new even though the document id stays: a live IME composition (or an
+            // equation editing session at the same offset) belongs to the old content.
+            s.note_body_replaced();
+            s.math = None;
             s.sel = crate::Selection::caret(s.doc.start_of(StoryRef::Body));
             sel_result(s)
         })
@@ -192,7 +211,8 @@ fn privacy(s: &Session) -> Value {
     json!({"removePersonalInfo": s.doc.settings.remove_personal_info, "removeDateTime": s.doc.settings.remove_date_time})
 }
 
-/// Create a blank document in the saved proofing language, or use the requested template.
+/// Open a new document beside the open ones and make it active: a blank one in the saved
+/// proofing language, or the requested template.
 fn new(s: &mut Session, v: &Value) -> CmdResult {
     let doc = match p::str(v, "template").unwrap_or("blank") {
         "sample" => crate::sample::sample_document(),
@@ -201,14 +221,13 @@ fn new(s: &mut Session, v: &Value) -> CmdResult {
         "report" => crate::sample::report(),
         _ => normal_document(s),
     };
-    s.set_document(doc);
-    s.path = None;
+    s.add_document(doc);
     sel_result(s)
 }
 
 /// A blank document on the Normal template: the region's paper (#838), written in the editing
 /// language (the templates' text is English).
-fn normal_document(s: &Session) -> Document {
+pub(crate) fn normal_document(s: &Session) -> Document {
     let mut d = s.blank_document();
     if let Some(lang) = s.prefs.default_language.as_ref().or(s.editing_lang.as_ref()) {
         d.styles.default_chr.lang = Some(lang.clone());
@@ -216,12 +235,22 @@ fn normal_document(s: &Session) -> Document {
     d
 }
 
-/// Open a document, using the saved proofing default only for plain text and Markdown.
+/// Open a document, using the saved proofing default only for plain text and Markdown. A file
+/// that is already open becomes the active document instead (`"alreadyOpen": true`). The file
+/// replaces an untouched blank document; otherwise it opens beside the open documents.
 fn open(s: &mut Session, v: &Value) -> CmdResult {
     let Some(path) = p::str(v, "path") else {
-        s.ui_requests.push(json!({"open": "openFile"}));
+        s.push_ui_request(json!({"open": "openFile"}));
         return sel_result(s);
     };
+    if p::str(v, "data").is_none()
+        && let Some(id) = s.find_open(std::path::Path::new(path))
+    {
+        s.activate(id)?;
+        return Ok(
+            json!({"path": s.path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count(), "encrypted": s.password.is_some(), "alreadyOpen": true, "id": id}),
+        );
+    }
     let password = p::str(v, "password");
     let (mut doc, encrypted) = if let Some(data) = p::str(v, "data") {
         let bytes = super::insert::base64_decode(data).ok_or_else(|| CmdError::Params("bad base64".into()))?;
@@ -238,13 +267,19 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
         crate::io::open_path_in(std::path::Path::new(path), password, &s.region()).map_err(CmdError::Failed)?
     };
     // Plain text and Markdown carry no language: they are in the editing language.
-    let ext = std::path::Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    let ext = std::path::Path::new(path).extension().and_then(std::ffi::OsStr::to_str).unwrap_or("").to_ascii_lowercase();
     if let Some(lang) = s.prefs.default_language.as_ref().or(s.editing_lang.as_ref())
         && matches!(ext.as_str(), "txt" | "text" | "md" | "markdown")
     {
         doc.styles.default_chr.lang = Some(lang.clone());
     }
-    s.set_document(doc);
+    match s.used_because() {
+        None => s.set_document(doc),
+        Some(why) => {
+            log::info!("file.open: opened beside document {}, not in its place: {why}", s.document_id());
+            s.add_opened_document(doc);
+        }
+    }
     if let Some(z) = s.doc.settings.zoom {
         super::view::restore_zoom(s, z);
     }
@@ -253,7 +288,26 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
     if encrypted {
         s.password = password.map(crate::io::Password::new);
     }
-    Ok(json!({"path": path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count(), "encrypted": encrypted}))
+    Ok(
+        json!({"path": path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count(), "encrypted": encrypted, "alreadyOpen": false, "id": s.document_id()}),
+    )
+}
+
+/// Close a document with no window to ask about it (agents, headless sessions).
+fn close_document(s: &mut Session, v: &Value) -> CmdResult {
+    let id = match v.get("id").filter(|x| !x.is_null()) {
+        None => s.document_id(),
+        Some(x) => x.as_u64().ok_or_else(|| CmdError::Params("`id` must be an open document's id".into()))?,
+    };
+    if !s.is_open(id) {
+        return Err(CmdError::Params(format!("no open document has id {id}")));
+    }
+    let dirty = s.documents().iter().any(|d| d.id == id && d.dirty);
+    if dirty && p::bool(v, "force") != Some(true) {
+        return Err(CmdError::Failed("the document has unsaved changes: save it first, or pass \"force\": true to discard them".into()));
+    }
+    s.close_document(id)?;
+    Ok(json!({"closed": id, "active": s.document_id(), "documents": s.documents()}))
 }
 
 /// File › Info › Protect Document › Encrypt with Password: the password Word documents are saved
@@ -282,7 +336,7 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
     let path = match p::str(v, "path").map(std::path::PathBuf::from).or_else(|| s.path.clone()) {
         Some(p) => p,
         None => {
-            s.ui_requests.push(json!({"open": "saveAs"}));
+            s.push_ui_request(json!({"open": "saveAs"}));
             return Ok(json!({"saved": false}));
         }
     };
@@ -349,23 +403,29 @@ fn is_word_2003_file(_path: &std::path::Path) -> bool {
 
 fn save_as(s: &mut Session, v: &Value) -> CmdResult {
     if p::str(v, "path").is_none() {
-        s.ui_requests.push(json!({"open": "saveAs"}));
+        s.push_ui_request(json!({"open": "saveAs"}));
         return Ok(json!({"saved": false}));
     }
     save(s, v)
 }
 
 /// How a copy is written: Print Markup from the command's `markup`, else the File › Print
-/// setting (`file.printMarkup`); comments as Track Changes Options show them.
+/// setting (`file.printMarkup`); comments as Track Changes Options show them; digits as the
+/// Numeral setting shows them on screen.
 pub fn export_options(s: &Session, v: &Value) -> crate::io::ExportOptions {
     let markup = p::bool(v, "markup").unwrap_or(s.prefs.print_markup);
-    crate::io::ExportOptions { markup, comments: markup && s.prefs.markup.comments, word2003: p::str(v, "format") == Some(FORMAT_WORD_2003) }
+    crate::io::ExportOptions {
+        markup,
+        comments: markup && s.prefs.markup.comments,
+        word2003: p::str(v, "format") == Some(FORMAT_WORD_2003),
+        numeral: s.view.numeral.resolve(crate::session::system_locale()),
+    }
 }
 
 fn export_png(s: &mut Session, v: &Value) -> CmdResult {
     // No path: the app asks where to save, as file.exportPdf does (#2313).
     let Some(path) = p::str(v, "path") else {
-        s.ui_requests.push(json!({"open": "exportPng"}));
+        s.push_ui_request(json!({"open": "exportPng"}));
         return Ok(json!({"exported": false}));
     };
     let page = p::u64(v, "page").unwrap_or(1).max(1) as usize - 1;
@@ -376,6 +436,9 @@ fn export_png(s: &mut Session, v: &Value) -> CmdResult {
     // the on-screen cue while editing the body, not part of the page.
     let mut opts = wordcraft_render::RenderOptions::default();
     opts.display.dim_header = false;
+    if !path.to_ascii_lowercase().ends_with(".png") {
+        return Err(CmdError::Params("path must end in .png".into()));
+    }
     let img = wordcraft_render::render_page(&s.doc, pg, scale, &opts);
     let png = img.to_png();
     crate::io::write_file(path, &png).map_err(CmdError::Failed)?;
@@ -399,15 +462,25 @@ fn properties(s: &mut Session, v: &Value) -> CmdResult {
         let Some(m) = custom.as_object() else {
             return Err(CmdError::Params("`custom` must be an object of name → string or null".into()));
         };
+        // Removals first: a case-only rename sends the old spelling as null and the new one
+        // with its value, and `set_custom_prop` matches names case-insensitively, so setting
+        // first would keep the old spelling (object keys are sorted, either spelling may lead).
         for (name, val) in m {
-            if name.trim().is_empty() || name.chars().count() > MAX_CUSTOM_NAME {
-                return Err(CmdError::Params(format!("custom property names are 1–{MAX_CUSTOM_NAME} characters")));
+            if val.is_null() {
+                s.doc.remove_custom_prop(name);
             }
+        }
+        for (name, val) in m {
             match val {
-                Value::Null => {
-                    s.doc.remove_custom_prop(name);
+                // Removals took the name as stored above: a file opened from an older Word may
+                // hold one longer than today's limit, and it must still be deletable (#2982).
+                Value::Null => {}
+                Value::String(x) if x.len() <= MAX_CUSTOM_VALUE => {
+                    if name.trim().is_empty() || name.chars().count() > MAX_CUSTOM_NAME {
+                        return Err(CmdError::Params(format!("custom property names are 1–{MAX_CUSTOM_NAME} characters")));
+                    }
+                    s.doc.set_custom_prop(name, x);
                 }
-                Value::String(x) if x.len() <= MAX_CUSTOM_VALUE => s.doc.set_custom_prop(name, x),
                 _ => return Err(CmdError::Params(format!("custom property `{name}` must be a string (≤ {MAX_CUSTOM_VALUE} bytes) or null"))),
             }
         }
@@ -419,10 +492,12 @@ fn properties(s: &mut Session, v: &Value) -> CmdResult {
     Ok(out)
 }
 
-/// Longest custom property name (Word's limit).
-const MAX_CUSTOM_NAME: usize = 255;
-/// Largest custom property value we accept from a command.
-const MAX_CUSTOM_VALUE: usize = 1024 * 1024;
+/// Longest custom property name (Word's limit). The Custom Properties dialog validates with it
+/// too (#2982).
+pub const MAX_CUSTOM_NAME: usize = 255;
+/// Largest custom property value we accept from a command. The Custom Properties dialog
+/// validates with it too (#2982).
+pub const MAX_CUSTOM_VALUE: usize = 1024 * 1024;
 
 fn info(s: &mut Session, _: &Value) -> CmdResult {
     let l = s.layout();

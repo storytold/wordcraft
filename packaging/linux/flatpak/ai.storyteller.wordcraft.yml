@@ -31,9 +31,10 @@ finish-args:
   # line, Open Recent, "Save" next to the original) work in the usual places.
   - --filesystem=xdg-documents
   - --filesystem=xdg-pictures
-  # Deliberately not granted: network (the optional --control server listens on 127.0.0.1 in
-  # the sandbox; `flatpak override --user --share=network ai.storyteller.wordcraft` exposes it to
-  # host agents) and home/host filesystem access.
+  # Network: update checks reach GitHub. Shared host network namespace, so the optional
+  # --control server's 127.0.0.1 listener is reachable from the host as well.
+  - --share=network
+  # Deliberately not granted: home/host filesystem access.
 build-options:
   append-path: /usr/lib/sdk/rust-stable/bin
 modules:
@@ -43,9 +44,13 @@ modules:
       env:
         CARGO_HOME: /run/build/wordcraft/cargo
         CARGO_NET_OFFLINE: 'true'
+        # The interface translations (the craft-i18n source below), embedded by build.rs.
+        CRAFT_I18N_DIR: /run/build/wordcraft/craft-i18n
+        CRAFT_I18N_REQUIRED: '1'
     build-commands:
       - cargo --offline build --release --locked -p wordcraft -p wordcraft-cli
       - install -Dm755 target/release/wordcraft /app/bin/wordcraft
+      - install -Dm644 NOTICE /app/share/doc/wordcraft/NOTICE
       - install -Dm755 target/release/wordcraft-cli /app/bin/wordcraft-cli
       - install -Dm644 packaging/linux/ai.storyteller.wordcraft.desktop /app/share/applications/ai.storyteller.wordcraft.desktop
       - install -Dm644 packaging/linux/ai.storyteller.wordcraft.mime.xml /app/share/mime/packages/ai.storyteller.wordcraft.xml
@@ -64,4 +69,9 @@ modules:
           - corpus
           - build-flatpak
           - .flatpak-builder
+      # The interface translations at the commit in craft-i18n.rev (a test keeps the two equal).
+      - type: git
+        url: https://github.com/storytold/craft-i18n
+        commit: 9205108cfdced5177706264038848b68b2422d2b
+        dest: craft-i18n
       - cargo-sources.json

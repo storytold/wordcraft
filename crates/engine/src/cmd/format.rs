@@ -4,14 +4,16 @@ use serde_json::{Value, json};
 use wordcraft_doc::eq::{EncloseShape, EncloseStyle, Enclosure};
 use wordcraft_doc::props::{Border, CharProps, Highlight, Rgb, TextColor, Underline, VertAlign};
 use wordcraft_doc::resolve::ResolvedChar;
-use wordcraft_doc::{Pos, RevisionKind};
+use wordcraft_doc::{InlineObject, PartKind, Pos, RevisionKind, StoryRef};
 
 use super::sel_result;
+use super::tools::{is_turkic, lower_char, upper_char};
 use crate::{CmdError, CmdResult, CommandSpec, Session, p};
 
 /// Word's font size list.
 pub const SIZES: [f32; 17] = [8.0, 9.0, 10.0, 10.5, 11.0, 12.0, 14.0, 16.0, 18.0, 20.0, 22.0, 24.0, 26.0, 28.0, 36.0, 48.0, 72.0];
 
+/// Register character-formatting commands, their parameters and keyboard bindings.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("format.bold", "Bold", "Home › Font", |s, v| {
@@ -106,7 +108,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(r#"{"color": "RRGGBB" | "auto"} (the underline's own colour; "auto" follows the text colour)"#),
         CommandSpec::new("format.highlight", "Text Highlight Color", "Home › Font", highlight)
             .params(
-                r#"{"color": "yellow|brightGreen|turquoise|pink|blue|red|darkBlue|teal|green|violet|darkRed|darkYellow|gray50|gray25|black|none"}"#,
+                r#"{"color"?: "yellow|brightGreen|turquoise|pink|blue|red|darkBlue|teal|green|violet|darkRed|darkYellow|gray50|gray25|black|none"} (explicit colour sets it; omitted toggles the last chosen colour, initially yellow)"#,
             )
             // ⌘⌥H hides other apps on macOS.
             .key(super::non_mac("Mod+Alt+H")),
@@ -139,7 +141,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("format.charStyle", "Apply Character Style", "Home › Styles", char_style).params(r#"{"style": string}"#),
         CommandSpec::new("format.set", "Set Character Formatting", "Home › Font › Font", set).params(r#"{"props": CharProps}"#),
         CommandSpec::new("format.fontDialog", "Font Dialog", "Home › Font", |s, _| {
-            s.ui_requests.push(json!({"open": "font"}));
+            s.push_ui_request(json!({"open": "font"}));
             sel_result(s)
         })
         .key("Mod+D")
@@ -170,6 +172,14 @@ fn target(s: &Session) -> Option<(Pos, Pos)> {
     None
 }
 
+/// A text box selected as an object (its frame, not text in it): all its text, which Word's Font
+/// group formats then, instead of the box's anchor in the text around it.
+fn selected_text_box(s: &Session) -> Option<(Pos, Pos)> {
+    let (_, InlineObject::Shape { story: Some(id), .. }) = super::objects::object_selection(s)? else { return None };
+    let story = StoryRef::Part(*id);
+    s.doc.parts.get(id).filter(|p| p.kind == PartKind::TextBox).map(|_| (s.doc.start_of(story), s.doc.end_of(story)))
+}
+
 /// The non-empty rows of a column selection, if one is active. Of whole cells, every paragraph:
 /// an empty one's mark takes the formatting.
 fn column_rows(s: &Session) -> Option<Vec<(Pos, Pos)>> {
@@ -198,7 +208,7 @@ pub fn apply(s: &mut Session, f: &dyn Fn(&mut CharProps)) -> CmdResult {
         }
         return sel_result(s);
     }
-    match target(s) {
+    match selected_text_box(s).or_else(|| target(s)) {
         Some((a, b)) => {
             s.doc.format_range(&a, &b, f)?;
         }
@@ -219,7 +229,8 @@ pub fn apply(s: &mut Session, f: &dyn Fn(&mut CharProps)) -> CmdResult {
     sel_result(s)
 }
 
-/// Resolved formatting of every character in the target (or the caret).
+/// Resolved target formatting, sampled up to a paragraph/column-row boundary after 10,000 runs.
+/// Empty targets use pending caret formatting or the selected text box paragraph mark.
 fn resolved(s: &Session) -> Vec<ResolvedChar> {
     let mut out = Vec::new();
     if let Some(rows) = column_rows(s) {
@@ -242,7 +253,7 @@ fn resolved(s: &Session) -> Vec<ResolvedChar> {
             return out;
         }
     }
-    let Some((a, b)) = target(s) else {
+    let Some((a, b)) = selected_text_box(s).or_else(|| target(s)) else {
         let f = &s.sel.focus;
         let style = s.doc.para_at(f).and_then(|p| p.props.style.clone());
         out.push(s.doc.styles.resolve_char(style.as_deref(), &s.typing_props()));
@@ -262,8 +273,11 @@ fn resolved(s: &Session) -> Vec<ResolvedChar> {
         }
     }
     if out.is_empty() {
-        let style = s.doc.para_at(&a).and_then(|p| p.props.style.clone());
-        out.push(s.doc.styles.resolve_char(style.as_deref(), &s.typing_props()));
+        let p = s.doc.para_at(&a);
+        let style = p.and_then(|p| p.props.style.clone());
+        // An empty selected text box has only its paragraph mark, which is what gets formatted.
+        let empty_box = selected_text_box(s).and(p).map(|p| &p.mark);
+        out.push(s.doc.styles.resolve_char(style.as_deref(), empty_box.unwrap_or(&s.typing_props())));
     }
     out
 }
@@ -379,23 +393,100 @@ fn underline_color(s: &mut Session, v: &Value) -> CmdResult {
     apply(s, &|x| x.underline_color = rgb)
 }
 
-fn highlight(s: &mut Session, v: &Value) -> CmdResult {
-    let c = p::str(v, "color").unwrap_or("yellow");
-    let h = Highlight::ALL
-        .iter()
-        .copied()
-        .find(|h| {
-            h.ooxml().eq_ignore_ascii_case(c)
-                || h.name().replace(['-', ' ', '%'], "").eq_ignore_ascii_case(&c.replace(['-', ' ', '%'], ""))
-                || format!("{h:?}").eq_ignore_ascii_case(c)
-        })
-        .ok_or_else(|| CmdError::Params(format!("unknown highlight colour `{c}`")))?;
-    apply(s, &|x| x.highlight = Some(h))
+/// Test the entire highlight target without the formatting-state query's run cap.
+/// Resolve one run at a time and stop at the first mismatch, without collecting them.
+fn target_has_highlight(s: &Session, h: Highlight) -> bool {
+    let matches = |style: Option<&str>, props: &CharProps| s.doc.styles.resolve_char(style, props).highlight == h.rgb();
+    let mut seen = false;
+    if let Some(rows) = column_rows(s) {
+        for (a, b) in rows {
+            let Some(p) = s.doc.para_at(&a) else { continue };
+            let mark = a == b || (a.off == 0 && b.off == p.len());
+            if !span_matches(p, mark, a.off, b.off, &matches, &mut seen) {
+                return false;
+            }
+        }
+        if seen {
+            return true;
+        }
+    }
+    if let Some((a, b)) = selected_text_box(s).or_else(|| target(s)) {
+        for path in s.doc.paths_between(&a, &b) {
+            let Some(p) = s.doc.para(a.story, &path) else { continue };
+            let from = if path == a.path { a.off } else { 0 };
+            let to = if path == b.path { b.off } else { p.len() };
+            // Match format_range: fully selected paragraphs include their mark.
+            let mark = to == p.len() && (from == 0 || path != a.path);
+            if !span_matches(p, mark, from, to, &matches, &mut seen) {
+                return false;
+            }
+        }
+    }
+    // No runs: retain the caret/pending and empty text-box paragraph-mark rules.
+    seen || resolved(s).iter().all(|r| r.highlight == h.rgb())
 }
 
+/// Whether the paragraph's mark (when `mark`) and the runs overlapping `from..to` all match
+/// `matches`; `seen` records that something was checked.
+fn span_matches(
+    p: &wordcraft_doc::Paragraph,
+    mark: bool,
+    from: usize,
+    to: usize,
+    matches: &impl Fn(Option<&str>, &CharProps) -> bool,
+    seen: &mut bool,
+) -> bool {
+    let style = p.props.style.as_deref();
+    if mark {
+        *seen = true;
+        if !matches(style, &p.mark) {
+            return false;
+        }
+    }
+    for (r, c) in p.run_ranges() {
+        if r.end > from && r.start < to {
+            *seen = true;
+            if !matches(style, c) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Explicit palette/automation colours set highlighting; the shortcut (no colour) toggles
+/// the last choice off only when the whole formatting target already has that colour.
+fn highlight(s: &mut Session, v: &Value) -> CmdResult {
+    let color = v.get("color").map(|_| p::req_str(v, "color")).transpose()?;
+    let h = match color {
+        None => s.last_highlight,
+        Some(c) => Highlight::ALL
+            .iter()
+            .copied()
+            .find(|h| {
+                h.ooxml().eq_ignore_ascii_case(c)
+                    || h.name().replace(['-', ' ', '%'], "").eq_ignore_ascii_case(&c.replace(['-', ' ', '%'], ""))
+                    || format!("{h:?}").eq_ignore_ascii_case(c)
+            })
+            .ok_or_else(|| CmdError::Params(format!("unknown highlight colour `{c}`")))?,
+    };
+    let remove = color.is_none() && target_has_highlight(s, h);
+    let value = if remove { Highlight::None } else { h };
+    let result = apply(s, &|x| x.highlight = Some(value))?;
+    s.last_highlight = h;
+    Ok(result)
+}
+
+/// `format.changeCase`: `mode` (lower, upper, title, sentence, toggle), or Shift+F3's cycle
+/// without one. Works on the selection, the word at the caret, or a selected text box's text.
 fn change_case(s: &mut Session, v: &Value) -> CmdResult {
-    let (a, b) = s.sel.ordered();
-    let (a, b) = if a == b { target(s).unwrap_or((a, b)) } else { (a, b) };
+    let (a, b) = match selected_text_box(s) {
+        Some(all) => all,
+        None => {
+            let (a, b) = s.sel.ordered();
+            if a == b { target(s).unwrap_or((a, b)) } else { (a, b) }
+        }
+    };
     if a == b {
         return sel_result(s);
     }
@@ -435,7 +526,16 @@ fn change_case(s: &mut Session, v: &Value) -> CmdResult {
             let to = if path == b.path { b.off } else { p.len() };
             let chars = live_chars(p, from, to);
             let src: String = chars.iter().map(|(_, c)| c).collect();
-            case_groups(p, &chars, &convert_chars(&src, &mode, from == 0))
+            // Turkish, Azerbaijani and Crimean Tatar text follows the same case mapping as
+            // AutoCorrect (#1923); each run's own language decides (#3479).
+            let turkic: Vec<bool> = chars
+                .iter()
+                .map(|(off, _)| {
+                    let lang = s.doc.styles.resolve_char(p.props.style.as_deref(), p.props_of_char(*off)).lang;
+                    is_turkic(lang.as_deref().or(s.editing_lang.as_deref()))
+                })
+                .collect();
+            case_groups(p, &chars, &convert_chars(&src, &mode, from == 0, &turkic))
         };
         if groups.is_empty() {
             continue;
@@ -569,69 +669,91 @@ fn is_title(t: &str) -> bool {
 
 #[cfg(test)]
 fn convert(src: &str, mode: &str, para_start: bool) -> String {
-    convert_chars(src, mode, para_start).concat()
+    let turkic = vec![false; src.chars().count()];
+    convert_chars(src, mode, para_start, &turkic).concat()
+}
+
+fn convert_title_char(c: char, i: usize, up: &mut bool, upper: impl Fn(char) -> String, lower: impl Fn(usize, char) -> String) -> String {
+    let n = if *up && c.is_alphabetic() {
+        *up = false;
+        upper(c)
+    } else {
+        lower(i, c)
+    };
+    if c.is_whitespace() {
+        *up = true;
+    }
+    n
+}
+
+fn convert_sentence_char(
+    c: char,
+    i: usize,
+    up: &mut bool,
+    chars: &[char],
+    upper: impl Fn(char) -> String,
+    lower: impl Fn(usize, char) -> String,
+) -> String {
+    let n = if *up && c.is_alphabetic() {
+        *up = false;
+        upper(c)
+    } else {
+        lower(i, c)
+    };
+    let is_decimal = c == '.'
+        && i.checked_sub(1).and_then(|j| chars.get(j)).is_some_and(char::is_ascii_digit)
+        && chars.get(i + 1).is_some_and(char::is_ascii_digit);
+    if matches!(c, '!' | '?') || (c == '.' && !is_decimal) {
+        *up = true;
+    }
+    n
 }
 
 /// The case-converted form of each character of `src`, in order (one entry per char, so a
-/// change of length such as ß → SS or İ → i̇ can be applied run by run).
-fn convert_chars(src: &str, mode: &str, para_start: bool) -> Vec<String> {
+/// change of length such as ß → SS or İ → i̇ can be applied run by run). `turkic` is one flag
+/// per char: true when that character's run is Turkish, Azerbaijani or Crimean Tatar.
+fn convert_chars(src: &str, mode: &str, para_start: bool, turkic: &[bool]) -> Vec<String> {
     let chars: Vec<char> = src.chars().collect();
     // Greek capital sigma lowers to the final form at the end of a word (as `str::to_lowercase`).
     let lower = |i: usize, c: char| -> String {
         let prev = i.checked_sub(1).and_then(|j| chars.get(j)).is_some_and(|p| p.is_alphabetic());
         let next = chars.get(i + 1).is_some_and(|n| n.is_alphabetic());
-        if c == 'Σ' && prev && !next { "ς".to_string() } else { c.to_lowercase().collect() }
+        if c == 'Σ' && prev && !next {
+            "ς".to_string()
+        } else if turkic.get(i).copied().unwrap_or(false) {
+            lower_char(c, true)
+        } else {
+            c.to_lowercase().collect()
+        }
     };
     // Title case capitalises the first word of any selection; sentence case only at a paragraph start.
     let mut up = mode == "title" || para_start;
     let mut out = Vec::with_capacity(chars.len());
     for (i, &c) in chars.iter().enumerate() {
+        let turkic = turkic.get(i).copied().unwrap_or(false);
+        let upper = |c: char| upper_char(c, turkic);
         let new = match mode {
-            "upper" => c.to_uppercase().collect(),
+            "upper" => upper(c),
             "lower" => lower(i, c),
             "toggle" => {
                 if c.is_uppercase() {
                     lower(i, c)
                 } else {
-                    c.to_uppercase().collect()
+                    upper(c)
                 }
             }
-            "title" => {
-                let n = if up && c.is_alphabetic() {
-                    up = false;
-                    c.to_uppercase().collect()
-                } else {
-                    lower(i, c)
-                };
-                if c.is_whitespace() {
-                    up = true;
-                }
-                n
-            }
-            _ => {
-                // Sentence case.
-                let n = if up && c.is_alphabetic() {
-                    up = false;
-                    c.to_uppercase().collect()
-                } else {
-                    lower(i, c)
-                };
-                let is_decimal = c == '.'
-                    && i.checked_sub(1).and_then(|j| chars.get(j)).is_some_and(|p| p.is_ascii_digit())
-                    && chars.get(i + 1).is_some_and(|n| n.is_ascii_digit());
-                if matches!(c, '!' | '?') || (c == '.' && !is_decimal) {
-                    up = true;
-                }
-                n
-            }
+            "title" => convert_title_char(c, i, &mut up, upper, lower),
+            _ => convert_sentence_char(c, i, &mut up, &chars, upper, lower),
         };
         out.push(new);
     }
     out
 }
 
+/// `format.clear` (Clear All Formatting): direct character formatting off and the paragraphs back
+/// to Normal, for the selection or a selected text box's text; at a caret, for what's typed next.
 fn clear(s: &mut Session, _: &Value) -> CmdResult {
-    match target(s) {
+    match selected_text_box(s).or_else(|| target(s)) {
         Some((a, b)) => {
             s.doc.format_range(&a, &b, &|c| *c = c.cleared())?;
             // Clear Formatting also resets the paragraph to Normal.
@@ -652,7 +774,7 @@ fn clear(s: &mut Session, _: &Value) -> CmdResult {
 
 /// Remove direct character formatting, keeping the paragraph and any character style.
 fn reset_char(s: &mut Session, _: &Value) -> CmdResult {
-    match target(s) {
+    match selected_text_box(s).or_else(|| target(s)) {
         Some((a, b)) => s.doc.format_range(&a, &b, &|c| *c = CharProps { style: c.style.clone(), ..c.cleared() })?,
         None => s.pending = Some(CharProps::default()),
     }
@@ -684,7 +806,9 @@ pub fn state(s: &Session) -> Value {
         let v0 = f(r);
         if all.iter().all(|r| f(r) == v0) { v0 } else { Value::Null }
     };
-    let style = s.doc.para_at(&s.sel.focus).and_then(|p| p.props.style.clone()).unwrap_or_else(|| "Normal".into());
+    // A selected text box shows its own (first) paragraph's style, like its text's formatting.
+    let at = selected_text_box(s).map_or_else(|| s.sel.focus.clone(), |(a, _)| a);
+    let style = s.doc.para_at(&at).and_then(|p| p.props.style.clone()).unwrap_or_else(|| "Normal".into());
     let style_name = s.doc.styles.get(&style).map(|st| st.name.clone()).unwrap_or(style.clone());
     json!({
         "font": same(&|r| json!(r.font)),
@@ -712,28 +836,6 @@ pub fn state(s: &Session) -> Value {
         "lang": same(&|r| json!(r.lang)),
         "noProof": all.iter().all(|r| r.no_proof),
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::convert;
-
-    #[test]
-    fn case_conversions() {
-        assert_eq!(convert("hello world. again", "sentence", true), "Hello world. Again");
-        assert_eq!(convert("hello WORLD", "title", true), "Hello World");
-        assert_eq!(convert("Hello", "toggle", true), "hELLO");
-        assert_eq!(convert("straße", "upper", true), "STRASSE");
-        assert_eq!(convert("hello world", "title", false), "Hello World");
-        assert_eq!(convert("ΣΟΦΟΣ ΟΔΟΣ", "lower", true), "σοφος οδος");
-    }
-
-    #[test]
-    fn sentence_case_ignores_decimal_points() {
-        // #3485: A period between two digits is a decimal point, not a sentence boundary.
-        assert_eq!(convert("one 3.14 apples and two 2.5 pears.", "sentence", true), "One 3.14 apples and two 2.5 pears.");
-        assert_eq!(convert("pi is 3.14. next sentence.", "sentence", true), "Pi is 3.14. Next sentence.");
-    }
 }
 
 /// What Enclose Characters works on: the selected text (one full-width or up to two half-width
@@ -841,4 +943,26 @@ fn enclose(s: &mut Session, v: &Value) -> CmdResult {
     };
     s.sel = crate::Selection { anchor: at, focus: end };
     sel_result(s)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::convert;
+
+    #[test]
+    fn case_conversions() {
+        assert_eq!(convert("hello world. again", "sentence", true), "Hello world. Again");
+        assert_eq!(convert("hello WORLD", "title", true), "Hello World");
+        assert_eq!(convert("Hello", "toggle", true), "hELLO");
+        assert_eq!(convert("straße", "upper", true), "STRASSE");
+        assert_eq!(convert("hello world", "title", false), "Hello World");
+        assert_eq!(convert("ΣΟΦΟΣ ΟΔΟΣ", "lower", true), "σοφος οδος");
+    }
+
+    #[test]
+    fn sentence_case_ignores_decimal_points() {
+        // #3485: A period between two digits is a decimal point, not a sentence boundary.
+        assert_eq!(convert("one 3.14 apples and two 2.5 pears.", "sentence", true), "One 3.14 apples and two 2.5 pears.");
+        assert_eq!(convert("pi is 3.14. next sentence.", "sentence", true), "Pi is 3.14. Next sentence.");
+    }
 }
