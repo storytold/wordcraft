@@ -378,10 +378,11 @@ const LEFT: usize = 2;
 const RIGHT: usize = 3;
 const BETWEEN: usize = 4;
 
-const STYLES: [(BorderStyle, &str); 8] = [
+const STYLES: [(BorderStyle, &str); 9] = [
     (BorderStyle::Single, "Single"),
     (BorderStyle::Dotted, "Dotted"),
     (BorderStyle::Dashed, "Dashed"),
+    (BorderStyle::DashSmallGap, "Dashed, small gaps"),
     (BorderStyle::DotDash, "Dot dash"),
     (BorderStyle::Double, "Double"),
     (BorderStyle::Triple, "Triple"),
@@ -751,10 +752,13 @@ fn draw_line(p: &egui::Painter, [a, b]: [egui::Pos2; 2], style: BorderStyle, wid
             p.extend(egui::Shape::dashed_line(&[a, b], stroke, px, px * 1.5));
         }
         BorderStyle::Dashed => {
-            p.extend(egui::Shape::dashed_line(&[a, b], stroke, px * 4.0, px * 2.0));
+            p.extend(egui::Shape::dashed_line(&[a, b], stroke, px * 4.0, px * 4.0));
+        }
+        BorderStyle::DashSmallGap => {
+            p.extend(egui::Shape::dashed_line(&[a, b], stroke, px * 4.0, px));
         }
         BorderStyle::DotDash => {
-            p.extend(egui::Shape::dashed_line_with_offset(&[a, b], stroke, &[px * 4.0, px], &[px * 2.0, px * 2.0], 0.0));
+            p.extend(egui::Shape::dashed_line_with_offset(&[a, b], stroke, &[px * 7.0, px * 3.0], &[px * 3.0, px * 3.0], 0.0));
         }
         BorderStyle::Wave => {
             let len = (b - a).length();
@@ -977,5 +981,41 @@ mod tests {
             })
             .collect();
         assert!(texts.iter().any(|t| t.contains("(none)")), "empty-state hint shown");
+    }
+    /// Painted paragraph previews use distinct document dash arrays at each preview stroke width.
+    #[test]
+    fn border_preview_paragraph_patterns_match_document_strokes() {
+        let ctx = egui::Context::default();
+        for width in [0.5, 1.0, 3.0] {
+            for (kind, ratios) in [
+                (BorderStyle::Dashed, [4.0, 4.0, 4.0, 4.0]),
+                (BorderStyle::DashSmallGap, [4.0, 1.0, 4.0, 1.0]),
+                (BorderStyle::DotDash, [7.0, 3.0, 3.0, 3.0]),
+            ] {
+                let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    draw_line(ui.painter(), [egui::pos2(10.0, 20.0), egui::pos2(250.0, 20.0)], kind, width, egui::Color32::BLACK);
+                });
+                let segments: Vec<_> = out
+                    .shapes
+                    .iter()
+                    .filter_map(|s| if let egui::Shape::LineSegment { points, stroke } = &s.shape { Some((*points, stroke.width)) } else { None })
+                    .collect();
+                out.drop_without_applying_deltas();
+                assert!(segments.len() > 2);
+                let actual = [
+                    segments[0].0[1].x - segments[0].0[0].x,
+                    segments[1].0[0].x - segments[0].0[1].x,
+                    segments[1].0[1].x - segments[1].0[0].x,
+                    segments[2].0[0].x - segments[1].0[1].x,
+                ];
+                for (actual, ratio) in actual.into_iter().zip(ratios) {
+                    assert!(
+                        (actual - ratio * segments[0].1).abs() < 0.01,
+                        "{kind:?}, width {width}: expected {}, got {actual}",
+                        ratio * segments[0].1
+                    );
+                }
+            }
+        }
     }
 }

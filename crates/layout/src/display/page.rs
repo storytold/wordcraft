@@ -321,10 +321,12 @@ fn change_bars(doc: &Document, page: &Page, items: &[Placed], m: &MarkupOptions,
     }
 }
 
+/// Map a paragraph or table border to its stroke without changing underline dash patterns.
 fn border_stroke(s: BorderStyle) -> Stroke {
     match s {
         BorderStyle::Dotted => Stroke::BorderDotted,
         BorderStyle::Dashed => Stroke::BorderDashed,
+        BorderStyle::DashSmallGap => Stroke::BorderDashSmallGap,
         BorderStyle::DotDash => Stroke::BorderDotDash,
         BorderStyle::Double => Stroke::Double,
         BorderStyle::Triple => Stroke::Triple,

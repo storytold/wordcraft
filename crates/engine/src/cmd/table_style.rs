@@ -360,12 +360,13 @@ fn color_param(r: &Value, k: &str) -> Result<Option<Rgb>, CmdError> {
 const NO_LINE: Border = Border { style: BorderStyle::None, width: 0.0, color: None, space: 0.0 };
 
 /// The border styles by param name.
-const LINE_STYLES: [(&str, BorderStyle); 9] = [
+const LINE_STYLES: [(&str, BorderStyle); 10] = [
     ("none", BorderStyle::None),
     ("single", BorderStyle::Single),
     ("double", BorderStyle::Double),
     ("dotted", BorderStyle::Dotted),
     ("dashed", BorderStyle::Dashed),
+    ("dashSmallGap", BorderStyle::DashSmallGap),
     ("dotDash", BorderStyle::DotDash),
     ("thick", BorderStyle::Thick),
     ("triple", BorderStyle::Triple),

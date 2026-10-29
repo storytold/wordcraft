@@ -2384,10 +2384,12 @@ fn raw_pdf(d: &Document) -> String {
     String::from_utf8_lossy(&export(d, &PdfOptions { compress: false, tagged: false, ..Default::default() }).unwrap()).into_owned()
 }
 
+/// PDF border dash arrays scale independently for dotted, dashed, small-gap and dot-dash styles.
 #[test]
 fn borders_are_dashed_with_words_patterns() {
-    // Word draws a border's dots one width on and one off, its dashes three on and one off, and
-    // dash-dot as three, one, one, one; underlines keep their own patterns.
+    // Border dots are one width on and one off; dashes four on and four off; small-gap
+    // dashes four on and one off; dash-dot seven, three, three, three. Underlines keep
+    // their own patterns.
     use wordcraft_doc::props::{Border, BorderStyle, Borders};
     let bordered = |style: BorderStyle, width: f32| {
         let mut p = Paragraph::with_text("Rule", CharProps::default());
@@ -2395,11 +2397,17 @@ fn borders_are_dashed_with_words_patterns() {
         para_block(p)
     };
     let mut d = Document::new();
-    d.body = vec![bordered(BorderStyle::Dotted, 1.0), bordered(BorderStyle::Dashed, 2.0), bordered(BorderStyle::DotDash, 1.0)];
+    d.body = vec![
+        bordered(BorderStyle::Dotted, 1.0),
+        bordered(BorderStyle::Dashed, 2.0),
+        bordered(BorderStyle::DashSmallGap, 2.0),
+        bordered(BorderStyle::DotDash, 1.0),
+    ];
     let raw = raw_pdf(&d);
     assert!(raw.contains("[1 1]0 d") || raw.contains("[1 1] 0 d"), "the dotted border");
-    assert!(raw.contains("[6 2]0 d") || raw.contains("[6 2] 0 d"), "the dashed border");
-    assert!(raw.contains("[3 1 1 1]0 d") || raw.contains("[3 1 1 1] 0 d"), "the dash-dot border");
+    assert!(raw.contains("[8 8]0 d") || raw.contains("[8 8] 0 d"), "the dashed border");
+    assert!(raw.contains("[8 2]0 d") || raw.contains("[8 2] 0 d"), "the dash-small-gap border");
+    assert!(raw.contains("[7 3 3 3]0 d") || raw.contains("[7 3 3 3] 0 d"), "the dash-dot border");
 }
 
 #[test]

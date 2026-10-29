@@ -99,10 +99,13 @@ pub enum Stroke {
     /// Three thin lines side by side (a `triple` border).
     Triple,
     Wave,
-    /// Word's border patterns (paragraph, cell and table borders): dots one width on, one off;
-    /// dashes three on, one off; dash and dot.
+    /// Word's border patterns (paragraph, cell and table borders), in line widths: dots one on,
+    /// one off; dashes four on, four off (small gaps: four on, one off); dash and dot seven on, three off, three on, three off.
+    /// Measured in Word for Mac's PDF export at every `w:sz` from 2 to 24, the same for
+    /// paragraph and table borders.
     BorderDotted,
     BorderDashed,
+    BorderDashSmallGap,
     BorderDotDash,
 }
 
@@ -114,8 +117,9 @@ impl Stroke {
             Stroke::Dotted => Some(&[1.0, 2.0]),
             Stroke::Dashed => Some(&[4.0, 2.0]),
             Stroke::BorderDotted => Some(&[1.0, 1.0]),
-            Stroke::BorderDashed => Some(&[3.0, 1.0]),
-            Stroke::BorderDotDash => Some(&[3.0, 1.0, 1.0, 1.0]),
+            Stroke::BorderDashed => Some(&[4.0, 4.0]),
+            Stroke::BorderDashSmallGap => Some(&[4.0, 1.0]),
+            Stroke::BorderDotDash => Some(&[7.0, 3.0, 3.0, 3.0]),
             Stroke::Solid | Stroke::Double | Stroke::Triple | Stroke::Wave => None,
         }
     }

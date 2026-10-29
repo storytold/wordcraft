@@ -3,6 +3,7 @@ use super::styles::{StyleDef, is_char_format_word, is_format_word};
 use super::{Align, Fmt, Reader, VAlign, model};
 
 impl Reader {
+    /// Apply an RTF control word to reader state, including distinct dash and small-gap borders.
     pub(super) fn word(&mut self, w: &str, p: Option<i32>, starred: bool, first_in_group: bool) {
         // Every control word ends a multibyte run: the code page it is read in may change here
         // (`\f`, `\fcharset`, `\cpg`, `\ansicpg`, `\pard`), and `\par` must see the text before it.
@@ -214,7 +215,8 @@ impl Reader {
                     "brdrth" => BorderStyle::Thick,
                     "brdrdb" | "brdrthtnsg" | "brdrtnthsg" | "brdrthtnmg" | "brdrtnthmg" | "brdrwavydb" => BorderStyle::Double,
                     "brdrdot" => BorderStyle::Dotted,
-                    "brdrdash" | "brdrdashsm" => BorderStyle::Dashed,
+                    "brdrdash" => BorderStyle::Dashed,
+                    "brdrdashsm" => BorderStyle::DashSmallGap,
                     "brdrdashd" | "brdrdashdd" => BorderStyle::DotDash,
                     "brdrtriple" => BorderStyle::Triple,
                     "brdrwavy" => BorderStyle::Wave,

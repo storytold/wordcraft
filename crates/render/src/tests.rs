@@ -1318,3 +1318,55 @@ fn a_line_runs_from_top_left_to_bottom_right() {
     let p = shape_path(ShapeKind::Line, kurbo::Rect::new(10.0, 20.0, 30.0, 60.0), None);
     assert_eq!(p.elements(), &[kurbo::PathEl::MoveTo((10.0, 20.0).into()), kurbo::PathEl::LineTo((30.0, 60.0).into())]);
 }
+
+/// Paragraph and table borders follow Word's patterns, in line widths (measured in Word for
+/// Mac's PDF export): dashed four on, four off; small gaps four on, one off; dot-dash seven on, three off, three on, three
+/// off; dotted one on, one off. A ½ pt dashed letterhead rule then reads as dashes, not as a
+/// near-solid grey line.
+#[test]
+fn border_dash_patterns_follow_word() {
+    use wordcraft_doc::props::{Border, BorderStyle, Borders};
+    const SCALE: f32 = 8.0;
+    // Dark and light run lengths (points) along a 2 pt bottom border of `style`.
+    let runs = |style: BorderStyle| {
+        let mut p = wordcraft_doc::Paragraph::with_text("Bordered", Default::default());
+        p.props.borders =
+            Some(Borders { bottom: Some(Border { style, width: 2.0, color: Some(Rgb(0, 0, 0)), ..Border::single(2.0) }), ..Borders::default() });
+        let mut d = Document::new();
+        d.body = vec![wordcraft_doc::para_block(p)];
+        let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+        let img = render_page(&d, &l.pages[0], SCALE, &RenderOptions::default());
+        let dark = |x: u32, y: u32| img.pixel(x, y)[1] < 128;
+        let (x0, x1) = ((150.0 * SCALE) as u32, (450.0 * SCALE) as u32);
+        // The border's row: the one below the text with the most dark pixels between x0 and x1.
+        let y = (0..img.height / 3).max_by_key(|&y| (x0..x1).filter(|&x| dark(x, y)).count()).unwrap();
+        let mut out: Vec<(bool, f32)> = Vec::new();
+        for x in x0..x1 {
+            let d = dark(x, y);
+            match out.last_mut() {
+                Some((k, n)) if *k == d => *n += 1.0 / SCALE,
+                _ => out.push((d, 1.0 / SCALE)),
+            }
+        }
+        // The ends are cut by the window.
+        out[1..out.len() - 1].to_vec()
+    };
+    let near = |a: f32, b: f32| (a - b).abs() <= 0.5;
+    let all = |r: &[(bool, f32)], dark: bool, f: &dyn Fn(f32) -> bool| r.iter().filter(|(d, _)| *d == dark).all(|(_, n)| f(*n));
+    // 2 pt line: dashes 8 pt, gaps 8 pt.
+    let dashed = runs(BorderStyle::Dashed);
+    assert!(dashed.len() > 10, "dashes drawn: {dashed:?}");
+    assert!(all(&dashed, true, &|n| near(n, 8.0)), "dashed: 4 widths on {dashed:?}");
+    assert!(all(&dashed, false, &|n| near(n, 8.0)), "dashed: 4 widths off {dashed:?}");
+    // Small gaps: 8 pt dashes, 2 pt gaps.
+    let small = runs(BorderStyle::DashSmallGap);
+    assert!(all(&small, true, &|n| near(n, 8.0)) && all(&small, false, &|n| near(n, 2.0)), "dashSmallGap: {small:?}");
+    // Dots 2 pt on, 2 pt off.
+    let dotted = runs(BorderStyle::Dotted);
+    assert!(all(&dotted, true, &|n| near(n, 2.0)) && all(&dotted, false, &|n| near(n, 2.0)), "dotted: {dotted:?}");
+    // Dot-dash: 14 pt dash, 6 pt dot, 6 pt gaps.
+    let dot_dash = runs(BorderStyle::DotDash);
+    assert!(all(&dot_dash, true, &|n| near(n, 14.0) || near(n, 6.0)), "dot-dash on: {dot_dash:?}");
+    assert!(all(&dot_dash, false, &|n| near(n, 6.0)), "dot-dash off: {dot_dash:?}");
+    assert!(dot_dash.iter().any(|(d, n)| *d && near(*n, 14.0)) && dot_dash.iter().any(|(d, n)| *d && near(*n, 6.0)), "both: {dot_dash:?}");
+}

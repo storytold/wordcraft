@@ -188,6 +188,8 @@ impl Exporter<'_> {
         }
     }
 
+    /// Draw a bounded line with the requested stroke, scaling dash lengths by its width.
+    /// Invalid coordinates are skipped; border styles use their own dash and gap arrays.
     fn line(&mut self, s: &mut Surface, (x0, y0, x1, y1): (f32, f32, f32, f32), width: f32, c: Rgb, style: LineStyle, alpha: f32) {
         if ![x0, y0, x1, y1].iter().all(|v| ok(*v)) {
             return;
@@ -216,7 +218,12 @@ impl Exporter<'_> {
                 s.set_stroke(Some(stroke(w, None, LineCap::Butt)));
                 seg(s, 0.0, 0.0);
             }
-            LineStyle::Dotted | LineStyle::Dashed | LineStyle::BorderDotted | LineStyle::BorderDashed | LineStyle::BorderDotDash => {
+            LineStyle::Dotted
+            | LineStyle::Dashed
+            | LineStyle::BorderDotted
+            | LineStyle::BorderDashed
+            | LineStyle::BorderDashSmallGap
+            | LineStyle::BorderDotDash => {
                 let array = style.dashes().unwrap_or(&[]).iter().map(|k| k * w).collect();
                 s.set_stroke(Some(stroke(w, Some(StrokeDash { array, offset: 0.0 }), LineCap::Butt)));
                 seg(s, 0.0, 0.0);
