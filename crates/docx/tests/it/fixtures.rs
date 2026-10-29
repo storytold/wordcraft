@@ -3978,11 +3978,18 @@ fn adjust_line_height_in_table_edits_survive_a_save_over_original_compat() {
         wordcraft_docx::read(&docx("<w:p/>", &rels, &[("word/settings.xml", &s)])).unwrap()
     };
     let saved = |d: &Document| wordcraft_docx::read(&wordcraft_docx::write(d).unwrap()).unwrap();
-    for (start, edit, expected) in
-        [("", true, true), ("<w:adjustLineHeightInTable/>", false, false), ("", false, false), ("<w:adjustLineHeightInTable/>", true, true)]
-    {
+    // The original's switch, the edit, and the value after the save.
+    let cases = [
+        ("", true, true),
+        ("<w:adjustLineHeightInTable/>", false, false),
+        ("", false, false),
+        ("<w:adjustLineHeightInTable/>", true, true),
+        (r#"<w:adjustLineHeightInTable w:val="0"/>"#, true, true),
+    ];
+    for (start, edit, expected) in cases {
         let mut d = original(start);
-        assert_eq!(d.settings.adjust_line_height_in_table, !start.is_empty(), "read {start:?}");
+        let read_on = !start.is_empty() && !start.contains(r#"w:val="0""#);
+        assert_eq!(d.settings.adjust_line_height_in_table, read_on, "read {start:?}");
         d.settings.adjust_line_height_in_table = edit;
         let again = saved(&d);
         assert_eq!(again.settings.adjust_line_height_in_table, expected, "from {start:?} to {edit}");

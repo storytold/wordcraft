@@ -259,18 +259,33 @@ fn sync_adjust_line_height(compat: String, generated: &str) -> Option<String> {
         "w:allowSpaceOfSameStyleInTable",
         "w:compatSetting",
     ];
-    match (generated.contains(TAG), compat.find(TAG)) {
-        (true, Some(_)) | (false, None) => Some(compat),
-        (false, Some(start)) => {
-            let tag_end = start + compat.get(start..)?.find('>')? + 1;
-            let end = if compat.get(start..tag_end)?.ends_with("/>") { tag_end } else { tag_end + compat.get(tag_end..)?.find(CLOSE)? + CLOSE.len() };
-            Some(format!("{}{}", compat.get(..start)?, compat.get(end..)?))
+    let wanted = generated.contains(TAG);
+    let Some(start) = compat.find(TAG) else {
+        if !wanted {
+            return Some(compat);
         }
-        (true, None) => {
-            let at = AFTER.iter().filter_map(|name| compat.find(&format!("<{name}"))).min().or_else(|| compat.rfind("</w:compat>"))?;
-            Some(format!("{}<w:adjustLineHeightInTable/>{}", compat.get(..at)?, compat.get(at..)?))
-        }
+        let at = AFTER.iter().filter_map(|name| compat.find(&format!("<{name}"))).min().or_else(|| compat.rfind("</w:compat>"))?;
+        return Some(format!("{}<w:adjustLineHeightInTable/>{}", compat.get(..at)?, compat.get(at..)?));
+    };
+    let tag_end = start + compat.get(start..)?.find('>')? + 1;
+    let end = if compat.get(start..tag_end)?.ends_with("/>") { tag_end } else { tag_end + compat.get(tag_end..)?.find(CLOSE)? + CLOSE.len() };
+    // The original element is kept only when it switches the option on the way the model does.
+    let keep = wanted && !is_switched_off(compat.get(start..tag_end)?);
+    if keep {
+        return Some(compat);
     }
+    let replacement = if wanted { "<w:adjustLineHeightInTable/>" } else { "" };
+    Some(format!("{}{}{}", compat.get(..start)?, replacement, compat.get(end..)?))
+}
+
+/// Is an on/off element's start tag switched off? ST_OnOff (§22.9.2.7) reads `0`, `false` and `off`
+/// as off; an element with no `w:val` is on.
+fn is_switched_off(tag: &str) -> bool {
+    let Some(at) = tag.find("w:val=") else { return false };
+    let Some(rest) = tag.get(at + "w:val=".len()..) else { return false };
+    let Some(quote) = rest.chars().next().filter(|c| *c == '"' || *c == '\'') else { return false };
+    let value = rest.get(1..).and_then(|v| v.split(quote).next()).unwrap_or("");
+    matches!(value, "0" | "false" | "off")
 }
 
 /// The original `w:compat` with its `compatibilityMode` taken from the generated one.
@@ -439,6 +454,17 @@ mod tests {
             let off = String::from_utf8(merge(settings(&format!("{flag}<w:useFELayout/>")).as_bytes(), GEN.as_bytes()).unwrap()).unwrap();
             assert!(!off.contains("adjustLineHeightInTable") && off.contains("<w:useFELayout/>"), "{off}");
             assert!(off.contains("compatibilityMode"), "{off}");
+        }
+        // Explicitly off in the original, on in the model: the switch is replaced, not kept off.
+        for flag in [
+            r#"<w:adjustLineHeightInTable w:val="0"/>"#,
+            r#"<w:adjustLineHeightInTable w:val="false"/>"#,
+            "<w:adjustLineHeightInTable w:val='off'></w:adjustLineHeightInTable>",
+        ] {
+            let on = String::from_utf8(merge(settings(&format!("{flag}<w:useFELayout/>")).as_bytes(), gen_on.as_bytes()).unwrap()).unwrap();
+            assert_eq!(on.matches("<w:adjustLineHeightInTable").count(), 1, "{flag}: {on}");
+            assert!(on.contains("<w:adjustLineHeightInTable/><w:useFELayout/>"), "{flag}: {on}");
+            assert!(!on.contains("</w:adjustLineHeightInTable>"), "{flag}: {on}");
         }
         // Kept as it is when the original and the model agree.
         let kept = String::from_utf8(merge(settings("<w:adjustLineHeightInTable/>").as_bytes(), gen_on.as_bytes()).unwrap()).unwrap();
