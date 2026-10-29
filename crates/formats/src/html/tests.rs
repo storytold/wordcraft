@@ -1,5 +1,69 @@
 use super::*;
 
+fn relative_size_spans(html: &str) -> Vec<(String, Option<f32>)> {
+    parse(html)
+        .blocks
+        .iter()
+        .flat_map(|b| match b {
+            FBlock::Para(p) => p
+                .inlines
+                .iter()
+                .filter_map(|i| match i {
+                    Inline::Text(text, fmt) => Some((text.clone(), fmt.size)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            _ => Vec::new(),
+        })
+        .collect()
+}
+
+#[test]
+fn relative_css_font_sizes_use_the_enclosing_size() {
+    for (unit, size) in [("2em", 48.0), ("150%", 36.0), (".5EM", 12.0), ("+1.5e2%", 36.0)] {
+        let html = format!("<p style='font-size:24pt'>Parent<span style='font-size:{unit}'>Probe</span>After</p>");
+        assert_eq!(relative_size_spans(&html), [("Parent".into(), Some(24.0)), ("Probe".into(), Some(size)), ("After".into(), Some(24.0))], "{unit}");
+    }
+    assert_eq!(
+        relative_size_spans("<div style='font-size:24pt'><span style='font-size:150%'><span style='font-size:.5em'>Probe</span></span></div>"),
+        [("Probe".into(), Some(18.0))]
+    );
+}
+
+#[test]
+fn relative_css_font_sizes_keep_one_parent_for_all_declarations() {
+    for css in ["font-size:30pt;font-size:150%", "font-size:2em;font-size:150%", "font-size:150%;font-size:150%"] {
+        let html = format!("<p style='font-size:24pt'><span style='{css}'>Probe</span></p>");
+        assert_eq!(relative_size_spans(&html), [("Probe".into(), Some(36.0))], "{css}");
+    }
+    for tag in ["small", "big", "font size='7'"] {
+        let end = tag.split_whitespace().next().unwrap();
+        let html = format!("<p style='font-size:24pt'><{tag} style='font-size:2em'>Probe</{end}></p>");
+        assert_eq!(relative_size_spans(&html), [("Probe".into(), Some(48.0))], "{tag}");
+    }
+}
+
+#[test]
+fn relative_css_font_sizes_retain_other_units_and_bounds() {
+    for (value, size) in [
+        ("2rem", 24.0),
+        ("18pt", 18.0),
+        ("24px", 18.0),
+        ("large", 13.5),
+        ("-1em", 24.0),
+        ("NaNem", 24.0),
+        ("1e38em", 24.0),
+        ("0%", 24.0),
+        ("bogus", 24.0),
+        ("6825%", 1638.0),
+    ] {
+        let html = format!("<p style='font-size:24pt'><span style='font-size:{value}'>Probe</span></p>");
+        assert_eq!(relative_size_spans(&html), [("Probe".into(), Some(size))], "{value}");
+    }
+    assert_eq!(css_len_pt("2em"), Some(24.0), "context-free dimensions keep their existing basis");
+    assert_eq!(css_len_pt("150%"), Some(18.0));
+}
+
 #[test]
 fn numeric_entity_rejects_sign() {
     assert_eq!(unescape("a&#+65;b"), "a&#+65;b");

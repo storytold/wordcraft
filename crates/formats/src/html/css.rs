@@ -48,6 +48,7 @@ fn strip_important(v: &str) -> &str {
 pub(super) fn apply_style(
     css: &str,
     f: &mut Fmt,
+    parent_size: f32,
     align: &mut Option<Align>,
     preserve: &mut bool,
     page_break: &mut bool,
@@ -84,7 +85,11 @@ pub(super) fn apply_style(
                 }
             }
             "font-size" => {
-                if let Some(p) = css_len_pt(v).filter(|p| *p >= 1.0 && *p <= 1638.0) {
+                // CSS font-size ems and percentages refer to the enclosing element, not an
+                // earlier declaration on this element. Other lengths keep their existing basis.
+                let relative = lv.ends_with('%') || lv.ends_with("em") && !lv.ends_with("rem");
+                let size = css_len_pt(v).map(|p| if relative { p * (parent_size / 12.0) } else { p });
+                if let Some(p) = size.filter(|p| *p >= 1.0 && *p <= 1638.0) {
                     f.size = Some(p);
                 }
             }
