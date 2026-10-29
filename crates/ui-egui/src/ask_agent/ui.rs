@@ -46,7 +46,7 @@ const ROW: f32 = 28.0;
 
 /// The chip just under the selection, on its left edge, where the bubble opens; true when clicked.
 pub fn chip(ctx: &egui::Context, anchor: Rect) -> bool {
-    egui::Area::new("ask_agent_chip".into())
+    egui::Area::new(egui::Id::unique("ask_agent_chip"))
         .order(egui::Order::Foreground)
         .fixed_pos(origin(ctx, anchor, 140.0))
         .constrain(true)
@@ -59,7 +59,7 @@ pub fn chip(ctx: &egui::Context, anchor: Rect) -> bool {
                     ui.label(RichText::new(tr(ctx, "Ask Agent")).strong());
                 })
             });
-            let response = ui.interact(inner.response.rect, ui.id().with("chip"), egui::Sense::click());
+            let response = ui.interact(inner.response.rect, ui.scope_id().with("chip"), egui::Sense::click());
             response.on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
         })
         .inner
@@ -70,13 +70,15 @@ pub fn chip(ctx: &egui::Context, anchor: Rect) -> bool {
 pub fn bubble(ctx: &egui::Context, anchor: Rect, view: &View, draft: &mut String, picked: &mut Option<String>) -> Option<Action> {
     let mut action = None;
     // True on the first pass the bubble shows after at least one pass without it.
-    let (id, pass) = (egui::Id::new("ask_agent_bubble_pass"), ctx.cumulative_pass_nr());
+    let (id, pass) = (egui::Id::unique("ask_agent_bubble_pass"), ctx.cumulative_pass_nr());
     let last = ctx.data(|d| d.get_temp::<u64>(id));
     ctx.data_mut(|d| d.insert_temp(id, pass));
     let opened = last.is_none_or(|last| last + 1 < pass);
-    egui::Area::new("ask_agent_bubble".into()).order(egui::Order::Foreground).fixed_pos(origin(ctx, anchor, WIDTH + 40.0)).constrain(true).show(
-        ctx,
-        |ui| {
+    egui::Area::new(egui::Id::unique("ask_agent_bubble"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(origin(ctx, anchor, WIDTH + 40.0))
+        .constrain(true)
+        .show(ctx, |ui| {
             egui::Frame::popup(ui.style()).corner_radius(12.0).inner_margin(egui::Margin::symmetric(16, 14)).show(ui, |ui| {
                 ui.set_width(WIDTH);
                 let spacing = ui.spacing_mut();
@@ -187,8 +189,7 @@ pub fn bubble(ctx: &egui::Context, anchor: Rect, view: &View, draft: &mut String
                     });
                 }
             });
-        },
-    );
+        });
     action
 }
 
@@ -239,7 +240,7 @@ fn picker(ui: &mut egui::Ui, agents: &[String], picked: &mut Option<String>) {
     if agents.len() < 2 {
         return;
     }
-    egui::ComboBox::from_id_salt("ask_agent_picker").selected_text(picked.as_deref().unwrap_or(tr(ui.ctx(), "Any"))).show_ui(ui, |ui| {
+    craft_ui::ComboBox::from_id_salt("ask_agent_picker").selected_text(picked.as_deref().unwrap_or(tr(ui.ctx(), "Any"))).show_ui(ui, |ui| {
         ui.selectable_value(picked, None, tr(ui.ctx(), "Any"));
         for name in agents {
             ui.selectable_value(picked, Some(name.clone()), name);

@@ -1035,6 +1035,19 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
     PagePaintOutput { rects, visible_tile_keys, rendered }
 }
 
+/// Ask Agent: the ranges an agent holds, outlined in its colour.
+fn paint_held_ranges(app: &WordApp, painter: &egui::Painter, layout: &std::sync::Arc<DocLayout>, rects: &[Rect], scale: f32) {
+    for (a, b, [r, g, bl]) in crate::ask_agent::held_ranges(app) {
+        for (pi, hr) in layout.selection_rects(&app.session.doc, &a, &b, app.session.page_hint) {
+            if let Some(pr) = rects.get(pi) {
+                let scale = layout.pages.get(pi).map_or(scale, |page| page_screen_scale(*pr, page, scale));
+                let sr = Rect::from_min_size(pos2(pr.min.x + hr.x * scale, pr.min.y + hr.y * scale), vec2(hr.w * scale, hr.h * scale));
+                painter.rect_stroke(sr.expand(1.0), 2.0, Stroke::new(1.5, Color32::from_rgb(r, g, bl)), egui::StrokeKind::Outside);
+            }
+        }
+    }
+}
+
 fn paint_read_aloud_highlight(
     app: &mut WordApp,
     painter: &egui::Painter,
@@ -1436,15 +1449,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         app.ask_agent.selection = screen_rects.iter().filter(|r| r.intersects(visible_clip)).copied().reduce(Rect::union);
         app.canvas.mini_anchor = crate::mini_toolbar::visible_anchor(screen_rects, visible_clip);
         // Ask Agent: text an agent is working on, outlined in its colour.
-        for (a, b, [r, g, bl]) in crate::ask_agent::held_ranges(app) {
-            for (pi, hr) in layout.selection_rects(&app.session.doc, &a, &b, app.session.page_hint) {
-                if let Some(pr) = rects.get(pi) {
-                    let scale = layout.pages.get(pi).map_or(geo.scale, |page| page_screen_scale(*pr, page, geo.scale));
-                    let sr = Rect::from_min_size(pos2(pr.min.x + hr.x * scale, pr.min.y + hr.y * scale), vec2(hr.w * scale, hr.h * scale));
-                    painter.rect_stroke(sr.expand(1.0), 2.0, Stroke::new(1.5, Color32::from_rgb(r, g, bl)), egui::StrokeKind::Outside);
-                }
-            }
-        }
+        paint_held_ranges(app, &painter, &layout, &rects, geo.scale);
         // Content controls: the frame of the one the caret is in (all of them in Design Mode).
         crate::content_controls::paint(app, &painter, &t, &layout, &rects, geo.scale);
         paint_read_aloud_highlight(app, &painter, &layout, &rects, &geo, &t);

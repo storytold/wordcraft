@@ -348,7 +348,11 @@ impl Backend for Remote {
     }
 
     fn describe(&self) -> String {
-        format!("connected to the WordCraft app at {}", self.addr)
+        if self.connected {
+            format!("connected to the WordCraft app at {}", self.addr)
+        } else {
+            format!("will connect to the WordCraft app at {} when it opens", self.addr)
+        }
     }
 
     fn set_client(&mut self, name: &str) {
@@ -386,18 +390,6 @@ impl Remote {
         } else {
             let error = v.get("error").and_then(Value::as_str).unwrap_or("unknown error");
             Err(v.get("errorCode").and_then(Value::as_str).map_or_else(|| error.to_string(), |code| format!("{code}: {error}")))
-        }
-    }
-
-    fn has_ui(&self) -> bool {
-        true
-    }
-
-    fn describe(&self) -> String {
-        if self.connected {
-            format!("connected to the WordCraft app at {}", self.addr)
-        } else {
-            format!("will connect to the WordCraft app at {} when it opens", self.addr)
         }
     }
 }
