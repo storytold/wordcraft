@@ -31,9 +31,10 @@ finish-args:
   # line, Open Recent, "Save" next to the original) work in the usual places.
   - --filesystem=xdg-documents
   - --filesystem=xdg-pictures
-  # Deliberately not granted: network (the optional --control server listens on 127.0.0.1 in
-  # the sandbox; `flatpak override --user --share=network ai.storyteller.wordcraft` exposes it to
-  # host agents) and home/host filesystem access.
+  # Network: update checks reach GitHub. Shared host network namespace, so the optional
+  # --control server's 127.0.0.1 listener is reachable from the host as well.
+  - --share=network
+  # Deliberately not granted: home/host filesystem access.
 build-options:
   append-path: /usr/lib/sdk/rust-stable/bin
 modules:

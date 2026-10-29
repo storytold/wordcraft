@@ -34,35 +34,40 @@ fn translations(code: &str) -> Vec<String> {
 #[test]
 fn system_locales_map_to_languages() {
     needs_catalogs!();
-    assert_eq!(lang_from_tag("zh_CN.UTF-8"), Some(lang("zh-hans")));
-    assert_eq!(lang_from_tag("zh-CN"), Some(lang("zh-hans")));
-    assert_eq!(lang_from_tag("zh"), Some(lang("zh-hans")));
-    assert_eq!(lang_from_tag("zh-SG"), Some(lang("zh-hans")));
-    assert_eq!(lang_from_tag("zh-Hans-HK"), Some(lang("zh-hans")), "a script beats the region");
-    assert_eq!(lang_from_tag("zh_TW.UTF-8"), Some(lang("zh-hant")));
-    assert_eq!(lang_from_tag("zh-HK"), Some(lang("zh-hant")));
-    assert_eq!(lang_from_tag("zh-Hant"), Some(lang("zh-hant")));
-    assert_eq!(lang_from_tag("ja-JP"), Some(lang("ja")));
-    assert_eq!(lang_from_tag("ja_JP.eucJP@euro"), Some(lang("ja")));
-    assert_eq!(lang_from_tag("ko-KR"), Some(lang("ko")));
-    assert_eq!(lang_from_tag("ko_KR.UTF-8"), Some(lang("ko")));
-    assert_eq!(lang_from_tag("en-GB"), Some(Lang::EN));
-    assert_eq!(lang_from_tag("C"), Some(Lang::EN));
-    assert_eq!(lang_from_tag("POSIX"), Some(Lang::EN));
-    assert_eq!(lang_from_tag("fr-FR"), Some(lang("fr")));
-    assert_eq!(lang_from_tag(UNSUPPORTED), None);
-    assert_eq!(lang_from_tag(""), None);
-    assert_eq!(lang_from_tag("_"), None);
-    assert_eq!(lang_from_tag("sr"), Some(lang("sr")), "Cyrillic is the default script");
-    assert_eq!(lang_from_tag("sr-RS"), Some(lang("sr")));
-    assert_eq!(lang_from_tag("sr-Cyrl-RS"), Some(lang("sr")));
-    assert_eq!(lang_from_tag("sr-Latn-RS"), Some(lang("sr-latn")));
-    assert_eq!(lang_from_tag("sr-Latn"), Some(lang("sr-latn")));
-    assert_eq!(lang_from_tag("de"), Some(lang("de")));
-    assert_eq!(lang_from_tag("de-DE"), Some(lang("de")));
-    assert_eq!(lang_from_tag("de_AT.UTF-8"), Some(lang("de")));
-    assert_eq!(lang_from_tag("de-CH"), Some(lang("de")));
-    assert_eq!(lang_from_tag("DE_de.UTF-8@euro"), Some(lang("de")));
+    let cases = [
+        ("zh_CN.UTF-8", Some(lang("zh-hans"))),
+        ("zh-CN", Some(lang("zh-hans"))),
+        ("zh", Some(lang("zh-hans"))),
+        ("zh-SG", Some(lang("zh-hans"))),
+        ("zh-Hans-HK", Some(lang("zh-hans"))),
+        ("zh_TW.UTF-8", Some(lang("zh-hant"))),
+        ("zh-HK", Some(lang("zh-hant"))),
+        ("zh-Hant", Some(lang("zh-hant"))),
+        ("ja-JP", Some(lang("ja"))),
+        ("ja_JP.eucJP@euro", Some(lang("ja"))),
+        ("ko-KR", Some(lang("ko"))),
+        ("ko_KR.UTF-8", Some(lang("ko"))),
+        ("en-GB", Some(Lang::EN)),
+        ("C", Some(Lang::EN)),
+        ("POSIX", Some(Lang::EN)),
+        ("fr-FR", Some(lang("fr"))),
+        (UNSUPPORTED, None),
+        ("", None),
+        ("_", None),
+        ("sr", Some(lang("sr"))),
+        ("sr-RS", Some(lang("sr"))),
+        ("sr-Cyrl-RS", Some(lang("sr"))),
+        ("sr-Latn-RS", Some(lang("sr-latn"))),
+        ("sr-Latn", Some(lang("sr-latn"))),
+        ("de", Some(lang("de"))),
+        ("de-DE", Some(lang("de"))),
+        ("de_AT.UTF-8", Some(lang("de"))),
+        ("de-CH", Some(lang("de"))),
+        ("DE_de.UTF-8@euro", Some(lang("de"))),
+    ];
+    for (tag, expected) in cases {
+        assert_eq!(lang_from_tag(tag), expected, "locale {tag}");
+    }
 }
 
 /// A language tag no catalog will ever have: `qaa`–`qtz` are reserved for local use (ISO 639-2),
