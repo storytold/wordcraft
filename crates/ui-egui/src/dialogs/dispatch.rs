@@ -348,7 +348,7 @@ fn paragraph_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
 }
 
 fn find_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
-    let Dialog::Find { query, replace, match_case, whole_word, regex, extra, tab, goto_what, goto_target, message, focus } = d else {
+    let Dialog::Find { query, replace, match_case, whole_word, regex, extra, tab, goto_what, goto_target, message, notice, focus } = d else {
         return false;
     };
     const FIND_TABS: [(FindTab, &str); 3] = [(FindTab::Find, "Find"), (FindTab::Replace, "Replace"), (FindTab::GoTo, "Go To")];
@@ -439,12 +439,18 @@ fn find_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     if !message.is_empty() {
         ui.label(egui::RichText::new(message.as_str()).weak());
     }
+    // Enter and Escape belong to the message box while it is open above the dialog.
+    let keys = notice.is_none();
     let mut close = false;
     ui.horizontal(|ui| {
         if replace_mode {
             if ui.button(tl!("Replace All")).clicked() {
                 match app.run("edit.replaceAll", opts.clone()) {
-                    Ok(r) => *message = format!("All done. We made {} replacements.", r["replaced"]),
+                    Ok(r) => {
+                        message.clear();
+                        let count = r["replaced"].as_u64().unwrap_or(0).to_string();
+                        *notice = Some(crate::i18n::fmt(tl!("All done. We made {count} replacements."), &[("count", &count)]));
+                    }
                     Err(e) => *message = e,
                 }
             }
@@ -452,14 +458,18 @@ fn find_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 let _ = app.run("edit.replace", opts.clone());
             }
         }
-        if ui.button(tl!("Find Next")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+        if ui.button(tl!("Find Next")).clicked() || (keys && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
             // One step per click: `edit.find` would select a match itself, and the step after it skip one.
             match app.run("edit.findNext", opts.clone()) {
-                Ok(r) => *message = format!("Match {} of {}", r["index"].as_u64().unwrap_or(0) + 1, r["count"]),
+                Ok(r) => {
+                    let n = (r["index"].as_u64().unwrap_or(0) + 1).to_string();
+                    let total = r["count"].as_u64().unwrap_or(0).to_string();
+                    *message = crate::i18n::fmt(tl!("Match {n} of {total}"), &[("n", &n), ("total", &total)]);
+                }
                 Err(e) => *message = e,
             }
         }
-        if ui.button(tl!("Close")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if ui.button(tl!("Close")).clicked() || (keys && ui.input(|i| i.key_pressed(egui::Key::Escape))) {
             close = true;
         }
     });

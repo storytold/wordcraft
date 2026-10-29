@@ -906,6 +906,44 @@ fn replace_all_with_regex_groups_from_the_dialog() {
     }
 }
 
+/// #4414: Replace All reports its count in a message box over the dialog, as in Word, not as
+/// faint text in it. OK, Enter or Escape closes the box only: the dialog stays open, and the key
+/// doesn't also run Find Next or Close.
+#[test]
+fn replace_all_reports_in_a_message_box() {
+    use egui_kittest::kittest::Queryable;
+    // Found by its wording; the count itself is checked on the notice below.
+    let done = |h: &egui_kittest::Harness<'static, WordApp>| h.query_by_label_contains("All done. We made").is_some();
+    for dismiss in ["ok", "enter", "escape"] {
+        let mut h = app_harness(app_with("cat and cat"));
+        h.state_mut().run("ui.dialog", json!({"name": "replace"})).unwrap();
+        h.run_steps(2);
+        if let Some(Dialog::Find { query, replace, .. }) = h.state_mut().dialog.as_mut() {
+            *query = "cat".into();
+            *replace = "dog".into();
+        } else {
+            panic!("Replace opens the Find and Replace dialog");
+        }
+        h.run_steps(2);
+        h.get_by_label("Replace All").click();
+        h.run_steps(2);
+        assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "dog and dog");
+        assert!(done(&h), "{dismiss}: the count is shown in a message box");
+        let Some(Dialog::Find { notice: Some(text), .. }) = &h.state().dialog else { panic!("{dismiss}: no notice") };
+        assert!(text.contains('2') && !text.contains("{count}"), "{dismiss}: {text:?}");
+        let caret = h.state().session.sel.clone();
+        match dismiss {
+            "ok" => h.get_by_label("OK").click(),
+            "enter" => h.key_press(egui::Key::Enter),
+            _ => h.key_press(egui::Key::Escape),
+        }
+        h.run_steps(2);
+        assert!(!done(&h), "{dismiss} closes the message box");
+        assert!(matches!(&h.state().dialog, Some(Dialog::Find { notice: None, .. })), "{dismiss} leaves the dialog open");
+        assert_eq!(h.state().session.sel, caret, "{dismiss} doesn't also run Find Next");
+    }
+}
+
 fn app_harness(app: WordApp) -> egui_kittest::Harness<'static, WordApp> {
     egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {

@@ -152,6 +152,8 @@ pub enum Dialog {
         /// Go To's box: a page number (`+2`, `-1` move from the current page) or a bookmark.
         goto_target: String,
         message: String,
+        /// Replace All's result, in a message box over the dialog until OK, as in Word (#4414).
+        notice: Option<String>,
         /// Put the caret in Find what on the first frame, so typing searches (#772).
         focus: bool,
     },
@@ -673,6 +675,7 @@ impl Dialog {
                 goto_what: GoToWhat::Page,
                 goto_target: String::new(),
                 message: String::new(),
+                notice: None,
                 focus: true,
             },
             "insertTable" => Dialog::InsertTable { rows: 2, cols: 5 },

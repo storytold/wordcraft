@@ -138,6 +138,12 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         ui.set_min_width(340.0);
         close = body(app, ui, &mut d);
     });
+    // Replace All's result, above the dialog (drawn after it, so the dialog saw its keys as taken).
+    if let Dialog::Find { notice: notice @ Some(_), .. } = &mut d
+        && replace_all_notice(ctx, notice.as_deref().unwrap_or_default())
+    {
+        *notice = None;
+    }
     if let Some(shown) = &shown {
         if let Dialog::SaveChanges { name, message, .. } = &d {
             let question = crate::i18n::fmt(tl!("Do you want to save changes to {name}?"), &[("name", name)]);
@@ -167,6 +173,23 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
 /// Cancel key for dialogs: Escape everywhere, plus ⌘. (Command+Period) on macOS.
 pub(crate) fn cancel_key_pressed(ui: &Ui) -> bool {
     ui.input(|i| i.key_pressed(egui::Key::Escape) || (cfg!(target_os = "macos") && i.modifiers.command && i.key_pressed(egui::Key::Period)))
+}
+
+/// Replace All's result in a message box centred over the Find and Replace dialog, as in Word
+/// (#4414). True once OK, Enter or Escape dismisses it.
+fn replace_all_notice(ctx: &egui::Context, text: &str) -> bool {
+    let resp = egui::Modal::new(egui::Id::unique("wordcraft.replaceAllNotice")).show(ctx, |ui| {
+        ui.set_max_width(320.0);
+        ui.label(text);
+        ui.add_space(10.0);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let ok = ui.add(crate::widgets::primary_button(ui, tl!("OK")));
+            ok.request_focus();
+            ok.clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter))
+        })
+        .inner
+    });
+    resp.inner || resp.should_close()
 }
 
 /// Lays out an OK and a Cancel button right-to-left, in the platform's order:
