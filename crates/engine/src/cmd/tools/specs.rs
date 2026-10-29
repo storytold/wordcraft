@@ -205,6 +205,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 blocks: lines.iter().map(|l| Block::Para(Paragraph::with_text(l, CharProps::default()).styled("NoSpacing"))).collect(),
                 ..Default::default()
             };
+            super::super::outline::open_for_insert(s, &at, frag.blocks.len());
             let end = s.doc.insert_fragment(&at, &frag)?;
             s.sel = Selection::caret(end);
             sel_result(s)

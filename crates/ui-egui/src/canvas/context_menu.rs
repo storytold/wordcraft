@@ -1,10 +1,22 @@
-use super::{Ui, WordApp, json};
+use super::folds::folds_headings;
+use super::{StoryRef, Ui, WordApp, json};
 
 /// The spelling suggestions and synonyms the context menu offers for the selection or the word
 /// at the caret.
 pub(super) fn context_suggestions(app: &mut WordApp) {
     app.canvas.context_issue = app.session.run("review.suggestions", &json!({})).ok().filter(|v| !v.is_null());
     app.canvas.context_synonyms = app.session.run("review.thesaurus", &json!({})).ok().and_then(|v| v.get("synonyms").cloned());
+}
+
+/// Whether the caret is in a body heading (a top-level paragraph with an outline level) in a view
+/// that folds headings (not Outline view, which has its own expand and collapse).
+fn caret_in_heading(app: &WordApp) -> bool {
+    let s = &app.session;
+    let at = &s.sel.focus;
+    folds_headings(app)
+        && at.story == StoryRef::Body
+        && at.path.0.len() == 1
+        && s.doc.para_at(at).is_some_and(|p| s.doc.styles.resolve_para(&p.props).outline_level.filter(|l| *l < 9).is_some())
 }
 
 /// Right-click inside an equation: its structures' actions, display and conversion.
@@ -110,6 +122,15 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
     }
     item(ui, app, "Font…", "ui.dialog", json!({"name": "font"}));
     item(ui, app, "Paragraph…", "ui.dialog", json!({"name": "paragraph"}));
+    // On a heading: fold it, or every heading (#1745; Word for Windows has this submenu).
+    if caret_in_heading(app) {
+        ui.menu_button(tl!("Expand or Collapse Heading"), |ui| {
+            item(ui, app, "Expand Heading", "outline.expandHeading", json!({}));
+            item(ui, app, "Collapse Heading", "outline.collapseHeading", json!({}));
+            item(ui, app, "Expand All Headings", "outline.expandAllHeadings", json!({}));
+            item(ui, app, "Collapse All Headings", "outline.collapseAllHeadings", json!({}));
+        });
+    }
     item(ui, app, "Link…", "ui.dialog", json!({"name": "link"}));
     item(ui, app, "New Comment", "review.newComment", json!({}));
     if !wordcraft_engine::cmd::fields::selected(&app.session).is_empty() {

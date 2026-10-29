@@ -32,7 +32,10 @@ pub fn specs() -> Vec<CommandSpec> {
             .key(super::mac_or("End / Mod+Right", "End"))
             .params(EXTEND)
             .pure(),
-        CommandSpec::new("caret.paraUp", "Paragraph Up", "Navigation", |s, v| mv(s, v, para_up)).key("Mod+Up / Alt+Up").params(EXTEND).pure(),
+        CommandSpec::new("caret.paraUp", "Paragraph Up", "Navigation", |s, v| mv_to(s, v, para_up, true))
+            .key("Mod+Up / Alt+Up")
+            .params(EXTEND)
+            .pure(),
         CommandSpec::new("caret.paraDown", "Paragraph Down", "Navigation", |s, v| mv(s, v, para_down))
             .key("Mod+Down / Alt+Down")
             .params(EXTEND)
@@ -85,12 +88,54 @@ fn apply(s: &mut Session, to: Pos, ext: bool) {
 }
 
 fn mv(s: &mut Session, v: &Value, f: fn(&mut Session, &Pos) -> Pos) -> CmdResult {
+    mv_to(s, v, f, false)
+}
+
+/// [`mv`]; a move back onto a collapsed heading lands on its start with `start` (Ctrl+Up goes to
+/// paragraph starts), else on its end.
+fn mv_to(s: &mut Session, v: &Value, f: fn(&mut Session, &Pos) -> Pos, start: bool) -> CmdResult {
     let ext = extend(v);
     s.goal_x = None;
     let from = s.sel.focus.clone();
     let to = f(s, &from);
+    let to = shown_pos(s, &from, to, start);
     apply(s, to, ext);
     sel_result(s)
+}
+
+/// `to`, reached by a move from `from`, taken off text a collapsed heading hides (#1745): forward
+/// to the start of the next block shown, back onto the heading (its start with `start`, else its
+/// end). Word for Mac's Right arrow from the end of a collapsed
+/// heading goes to the start of the next heading shown.
+pub(crate) fn shown_pos(s: &Session, from: &Pos, to: Pos, start: bool) -> Pos {
+    if to.story != StoryRef::Body {
+        return to;
+    }
+    let folded = super::outline::folded(s);
+    let Some(top) = to.path.0.first().map(|b| *b as usize) else { return to };
+    let hidden = |i: usize| folded.get(i).copied().unwrap_or(false);
+    if !hidden(top) {
+        return to;
+    }
+    let paths = s.doc.para_paths(StoryRef::Body);
+    let first = |path: &wordcraft_doc::Path| path.0.first().map_or(0, |b| *b as usize);
+    let back = |start: bool| {
+        (0..top).rev().find(|i| !hidden(*i)).and_then(|j| paths.iter().rfind(|p| first(p) == j)).map(|path| {
+            let len = s.doc.para(StoryRef::Body, path).map_or(0, |p| p.len());
+            Pos::new(StoryRef::Body, path.clone(), if start { 0 } else { len })
+        })
+    };
+    let found = if to > *from {
+        (top..s.doc.body.len())
+            .find(|i| !hidden(*i))
+            .and_then(|j| paths.iter().find(|p| first(p) >= j))
+            .map(|path| Pos::new(StoryRef::Body, path.clone(), 0))
+            // Nothing shown after the fold (the last heading is collapsed): the end of what shows.
+            .or_else(|| back(false))
+    } else {
+        back(start)
+    };
+    found.unwrap_or_else(|| from.clone())
 }
 
 /// Does the caret's paragraph read right to left?
@@ -147,6 +192,7 @@ fn visual_lr(s: &mut Session, v: &Value, is_left: bool) -> CmdResult {
         None if is_left => left(s, &from),
         None => right(s, &from),
     };
+    let to = shown_pos(s, &from, to, false);
     apply(s, to, ext);
     sel_result(s)
 }
@@ -223,7 +269,8 @@ fn vert(s: &mut Session, v: &Value, dir: i32) -> CmdResult {
         }
         None => {
             // Top/bottom of the story: go to its start/end.
-            if dir < 0 { s.doc.start_of(from.story) } else { s.doc.end_of(from.story) }
+            let end = if dir < 0 { s.doc.start_of(from.story) } else { s.doc.end_of(from.story) };
+            shown_pos(s, &from, end, dir < 0)
         }
     };
     if let Some(c) = l.caret_on(&to, s.page_hint) {

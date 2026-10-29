@@ -67,6 +67,22 @@ pub(super) fn tog(s: &mut Session, v: &Value, get: fn(&ParaProps) -> Option<bool
 
 /// Asian Typography (the Paragraph dialog's tab): sets the given flags on every selected
 /// paragraph and returns the resolved flags at the caret.
+/// "Collapsed by default" (#1745): the stored flag, on the selected headings only.
+pub(super) fn collapsed(s: &mut Session, v: &Value) -> CmdResult {
+    let on = p::bool(v, "value").unwrap_or_else(|| !cur(s).collapsed);
+    let story = s.sel.focus.story;
+    for path in super::super::selected_paths(s) {
+        if !s.doc.para(story, &path).is_some_and(|p| s.doc.styles.resolve_para(&p.props).outline_level.is_some()) {
+            continue;
+        }
+        let para = s.doc.para_mut(story, &path)?;
+        para.props.collapsed = Some(on);
+        para.touch();
+    }
+    super::super::outline::keep_caret_shown(s);
+    sel_result(s)
+}
+
 pub(super) fn asian_typography(s: &mut Session, v: &Value) -> CmdResult {
     let flag = |k: &str| p::bool(v, k);
     let (kinsoku, word_wrap, overflow, top_line, de, dn) =

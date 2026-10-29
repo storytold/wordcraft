@@ -1,5 +1,8 @@
 use super::{BTreeSet, Dialog, MeasureExt, Ui, Value, WordApp, json};
 
+/// The Paragraph dialog's outline level for body text (the model's `outline_level` 9).
+pub(super) const BODY_LEVEL: u8 = 9;
+
 /// The Paragraph dialog as one paragraph's formatting fills it, on page `tab`.
 pub(super) fn paragraph_dialog(rp: &wordcraft_doc::resolve::ResolvedPara, tab: u8) -> Dialog {
     let line = match rp.line_spacing {
@@ -24,6 +27,8 @@ pub(super) fn paragraph_dialog(rp: &wordcraft_doc::resolve::ResolvedPara, tab: u
         tab,
         asian: [rp.kinsoku, rp.word_wrap, rp.overflow_punct, rp.top_line_punct, rp.auto_space_de, rp.auto_space_dn],
         opts: [rp.mirror_indents, rp.contextual_spacing, rp.suppress_line_numbers, rp.suppress_hyphens],
+        outline: rp.outline_level.unwrap_or(BODY_LEVEL).min(BODY_LEVEL),
+        collapsed: rp.collapsed,
         start: serde_json::Map::new(),
         mixed: BTreeSet::new(),
     }
@@ -32,7 +37,25 @@ pub(super) fn paragraph_dialog(rp: &wordcraft_doc::resolve::ResolvedPara, tab: u
 /// The Paragraph dialog's fields as `para.set` takes them: `align`, `left` and `right` as seen
 /// on the page (its `onPage`), the rest as paragraph properties, line spacing as a multiple.
 pub(super) fn para_fields(d: &Dialog) -> serde_json::Map<String, Value> {
-    let Dialog::Paragraph { rtl, align, left, right, first, before, after, line, keep_next, keep_lines, page_break, widow, asian, opts, .. } = d
+    let Dialog::Paragraph {
+        rtl,
+        align,
+        left,
+        right,
+        first,
+        before,
+        after,
+        line,
+        keep_next,
+        keep_lines,
+        page_break,
+        widow,
+        asian,
+        opts,
+        outline,
+        collapsed,
+        ..
+    } = d
     else {
         return serde_json::Map::new();
     };
@@ -45,6 +68,7 @@ pub(super) fn para_fields(d: &Dialog) -> serde_json::Map<String, Value> {
         "keepNext": keep_next, "keepLines": keep_lines, "pageBreakBefore": page_break, "widowControl": widow,
         "mirrorIndents": mirror, "contextualSpacing": contextual, "suppressLineNumbers": no_numbers, "suppressHyphens": no_hyphens,
         "kinsoku": kinsoku, "wordWrap": word_wrap, "overflowPunct": overflow, "topLinePunct": top_line, "autoSpaceDE": de, "autoSpaceDN": dn,
+        "outlineLevel": outline, "collapsed": collapsed,
     });
     match fields {
         Value::Object(m) => m,
@@ -103,10 +127,12 @@ pub(super) fn apply_paragraph(app: &mut WordApp, d: &Dialog) {
     let Dialog::Paragraph { start, mixed, .. } = d else { return };
     let fields = para_fields(d);
     let turned = !mixed.contains("bidi") && fields.get("bidi") != start.get("bidi");
+    // "Collapsed by default" is greyed for body text: what it shows isn't sent then (#1745).
+    let body_text = fields.get("outlineLevel").and_then(Value::as_u64).is_none_or(|l| l >= u64::from(BODY_LEVEL));
     let (mut props, mut page) = (serde_json::Map::new(), serde_json::Map::new());
     for (k, v) in fields {
         let on_page = matches!(k.as_str(), "align" | "left" | "right");
-        if mixed.contains(&k) || (start.get(&k) == Some(&v) && !(turned && on_page)) {
+        if mixed.contains(&k) || (start.get(&k) == Some(&v) && !(turned && on_page)) || (k == "collapsed" && body_text) {
             continue;
         }
         if on_page {

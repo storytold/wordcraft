@@ -1,4 +1,5 @@
 use super::balloons::over_balloon;
+use super::folds::{fold_arrow_min_side, folds_headings};
 use super::links::{field_showing_code, is_followable_link, is_generated_bookmark_link, link_under};
 use super::navigation::page_at;
 use super::story::{enters_header_footer, in_text_box, part_kind, text_box_host};
@@ -102,7 +103,8 @@ pub(super) fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[
     };
     let Some((page, x, y)) = page_at(rects, layout, scale, p) else { return };
     let story = app.session.sel.focus.story;
-    handle_page_pointer(app, PagePointer { ui, resp, layout, p, page, x, y, story });
+    let fold_min = fold_arrow_min_side(rects, layout, page, scale);
+    handle_page_pointer(app, PagePointer { ui, resp, layout, p, page, x, y, story, fold_min });
 }
 
 fn route_pointer_targets(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layout: &DocLayout, scale: f32) -> Option<Pos2> {
@@ -140,6 +142,8 @@ struct PagePointer<'a> {
     x: f32,
     y: f32,
     story: StoryRef,
+    /// The smallest fold arrow hit target on `page`, in page points ([`fold_arrow_min_side`]).
+    fold_min: f32,
 }
 
 fn handle_page_pointer(app: &mut WordApp, pointer: PagePointer<'_>) {
@@ -228,7 +232,7 @@ fn handle_primary_press(
     hf_zone: Option<(Option<StoryRef>, bool)>,
     hf_enter: bool,
 ) {
-    let PagePointer { ui, layout, p, page, x, y, story, .. } = *pointer;
+    let PagePointer { ui, layout, p, page, x, y, story, fold_min, .. } = *pointer;
     let now = ui.input(|i| i.time);
     let (delay, dist) = ui.ctx().options(|o| (o.input_options.max_double_click_delay, o.input_options.max_click_dist));
     let clicks = press_count(app.canvas.last_press, now, p, delay, dist);
@@ -280,6 +284,16 @@ fn handle_primary_press(
     }
     if app.session.math.is_some() {
         let _ = app.run("equation.exit", json!({}));
+    }
+    // A heading's fold arrow in the left margin (#1745) expands or collapses it.
+    if story == StoryRef::Body
+        && !mods.shift
+        && !mods.alt
+        && folds_headings(app)
+        && let Some(block) = layout.fold_arrow_at(page, x, y, fold_min)
+    {
+        let _ = app.run("outline.toggleHeading", json!({ "block": block }));
+        return;
     }
     // The selection bar (the left margin beside body text, #856): a click selects the line,
     // a double-click the paragraph, a triple-click or Ctrl/⌘+click the document; Shift+click
@@ -382,7 +396,8 @@ fn pointer_story(app: &WordApp, layout: &DocLayout, page: usize, x: f32, y: f32,
 }
 
 fn handle_completed_click(app: &mut WordApp, pointer: &PagePointer<'_>) -> bool {
-    let PagePointer { resp, layout, page, x, y, story, .. } = *pointer;
+    let PagePointer { ui, resp, layout, page, x, y, story, fold_min, .. } = *pointer;
+    let mods = ui.input(|i| i.modifiers);
     // The press already selected the word or paragraph (and a drag may have grown it).
     let released_clicks = if resp.triple_clicked() {
         3
@@ -405,6 +420,10 @@ fn handle_completed_click(app: &mut WordApp, pointer: &PagePointer<'_>) -> bool 
     };
     let hf_enter = enters_header_footer(app, story, hf_zone);
     if resp.double_clicked() {
+        // The second press on a heading's fold arrow already toggled it: its release selects nothing.
+        if story == StoryRef::Body && !mods.shift && !mods.alt && folds_headings(app) && layout.fold_arrow_at(page, x, y, fold_min).is_some() {
+            return true;
+        }
         // Its first press already moved into the header/footer and placed the caret.
         if app.canvas.hf_press_switched {
             return true;

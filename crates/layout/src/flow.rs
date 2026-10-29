@@ -857,7 +857,7 @@ fn space_after_kept(ctx: &Ctx, block: usize, rp: &wordcraft_doc::resolve::Resolv
     if after <= 0.0 {
         return 0.0;
     }
-    if let Some(Block::Para(next)) = ctx.doc.body.get(block + 1).map(|b| &**b) {
+    if let Some(Block::Para(next)) = ctx.next_shown(block).and_then(|b| ctx.doc.body.get(b)).map(|b| &**b) {
         let nrp = ctx.doc.styles.resolve_para(&next.props);
         if nrp.style == rp.style && rp.contextual_spacing {
             return 0.0;
@@ -876,7 +876,8 @@ fn space_after_kept(ctx: &Ctx, block: usize, rp: &wordcraft_doc::resolve::Resolv
 /// kept with the next too (a chain moves together in Word). Word carries a kept heading over
 /// when the paragraph after it cannot start on the page (#966).
 fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counters: &mut Counters) -> f32 {
-    match ctx.doc.body.get(block + 1).map(|b| &**b) {
+    let Some(next) = ctx.next_shown(block) else { return 0.0 };
+    match ctx.doc.body.get(next).map(|b| &**b) {
         Some(Block::Para(p)) => {
             // Keep list indents and label metrics without consuming the document counters.
             let rp = ctx.doc.styles.resolve_para(&p.props);
@@ -909,10 +910,11 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counte
             };
             // Its border room, unless it joins the paragraph before (or after) in one box.
             let own = Edges::own(&pl, 0, pl.lines.len());
-            let top = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block), None) { 0.0 } else { own.top };
+            let top = if joined(ctx.doc, &ctx.doc.body, next, Some(block), None) { 0.0 } else { own.top };
             if pl.rp.keep_next && depth < 8 {
-                let bottom = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block + 2), None) { 0.0 } else { own.bottom };
-                pl.rp.space_before + top + pl.height + bottom + pl.rp.space_after + next_first_line(ctx, block + 1, width, depth + 1, counters)
+                let after = ctx.next_shown(next);
+                let bottom = if joined(ctx.doc, &ctx.doc.body, next, after, None) { 0.0 } else { own.bottom };
+                pl.rp.space_before + top + pl.height + bottom + pl.rp.space_after + next_first_line(ctx, next, width, depth + 1, counters)
             } else {
                 // The room this one needs to start on the page with the kept paragraph before
                 // it (#966).

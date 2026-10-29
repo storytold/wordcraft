@@ -1,3 +1,4 @@
+use super::paragraph::BODY_LEVEL;
 use super::*;
 use wordcraft_doc::Pos;
 use wordcraft_doc::props::Align;
@@ -1583,4 +1584,92 @@ fn the_custom_properties_dialog_leaves_imported_non_text_properties_alone() {
     h.run_steps(4);
     let kinds: Vec<(&str, &str)> = h.state().session.doc.custom_props.iter().map(|p| (p.name.as_str(), p.kind.as_str())).collect();
     assert_eq!(kinds, [("Status", "lpwstr"), ("Count", "i4")], "Cancel leaves the imported property as it was");
+}
+
+/// #1745: Indents and Spacing › General has the outline level and, beside it, "Collapsed by
+/// default" (greyed for body text): a collapsed heading hides what is under it.
+#[test]
+fn paragraph_dialog_sets_outline_level_and_collapsed_by_default() {
+    let mut app = app_with("Intro\nBody\nMore");
+    let _ = app.run("caret.docStart", json!({}));
+    let _ = app.run("para.style", json!({"style": "Heading 1"}));
+    app.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(1, 0));
+    let Some(Dialog::Paragraph { outline, collapsed, .. }) = Dialog::open("paragraph", &mut app) else { panic!() };
+    assert_eq!((outline, collapsed), (BODY_LEVEL, false), "body text");
+    ok_unchanged(&mut app);
+    assert_eq!(para_props(&app, 1).outline_level, None, "an unchanged OK sets no level");
+    ok_edit(&mut app, |d| {
+        if let Dialog::Paragraph { outline, .. } = d {
+            *outline = 1;
+        }
+    });
+    assert_eq!(para_props(&app, 1).outline_level, Some(1), "Level 2");
+    app.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(0, 0));
+    let Some(Dialog::Paragraph { outline, collapsed, .. }) = Dialog::open("paragraph", &mut app) else { panic!() };
+    assert_eq!((outline, collapsed), (0, false), "Heading 1");
+    ok_edit(&mut app, |d| {
+        if let Dialog::Paragraph { collapsed, .. } = d {
+            *collapsed = true;
+        }
+    });
+    assert_eq!(para_props(&app, 0).collapsed, Some(true));
+    let shown = |app: &mut WordApp, i: usize| app.session.layout().index.contains_key(&(wordcraft_doc::StoryRef::Body, wordcraft_doc::Path::top(i)));
+    assert!(shown(&mut app, 0) && !shown(&mut app, 1) && !shown(&mut app, 2));
+    // The box is greyed for body text: ticking it and choosing Body Text sends no flag.
+    app.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(0, 0));
+    let _ = app.run("para.collapsed", json!({"value": false}));
+    ok_edit(&mut app, |d| {
+        if let Dialog::Paragraph { outline, collapsed, .. } = d {
+            *outline = BODY_LEVEL;
+            *collapsed = true;
+        }
+    });
+    assert_eq!((para_props(&app, 0).outline_level, para_props(&app, 0).collapsed), (Some(BODY_LEVEL), Some(false)));
+}
+
+/// #1745: the same through the dialog's controls: pick a heading level in the Outline level
+/// box, which enables "Collapsed by default", tick it and press OK.
+#[test]
+fn paragraph_dialog_controls_set_outline_level_and_collapsed() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut app = app_with("Intro\nBody\nMore");
+    app.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(0, 0));
+    app.dialog = Dialog::open("paragraph", &mut app);
+    let depth = app.session.undo_depth();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    let steps = |h: &mut egui_kittest::Harness<'_, WordApp>| {
+        for _ in 0..4 {
+            h.step();
+        }
+    };
+    steps(&mut h);
+    assert!(h.get_by_label("Collapsed by default").accesskit_node().is_disabled(), "greyed for body text");
+    let outline_box = h
+        .query_all_by_role(egui::accesskit::Role::ComboBox)
+        .find(|n| n.accesskit_node().value().as_deref() == Some("Body Text"))
+        .expect("the outline level box");
+    outline_box.click();
+    steps(&mut h);
+    h.get_by_label("Level 1").click();
+    steps(&mut h);
+    assert!(!h.get_by_label("Collapsed by default").accesskit_node().is_disabled(), "a heading level enables it");
+    h.get_by_label("Collapsed by default").click();
+    steps(&mut h);
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "OK").click();
+    steps(&mut h);
+    let app = h.state_mut();
+    assert!(app.dialog.is_none(), "OK closes the dialog");
+    let p = para_props(app, 0);
+    assert_eq!((p.outline_level, p.collapsed), (Some(0), Some(true)));
+    assert_eq!(app.session.undo_depth(), depth + 1, "one undo step");
+    let _ = app.run("edit.undo", json!({}));
+    let p = para_props(app, 0);
+    assert_eq!((p.outline_level, p.collapsed), (None, None), "undo takes both back");
 }

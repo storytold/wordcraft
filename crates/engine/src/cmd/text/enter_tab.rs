@@ -2,7 +2,7 @@ use super::autoformat::{
     EnterAutoFormat, apply_border_line, apply_heading_line, apply_table_line, border_line, heading_line, table_line, typing_options,
 };
 use super::unicode::ins_char;
-use super::{CmdError, CmdResult, NumRef, Pos, Selection, Session, Value, delete_selection, sel_result, split_para, type_text};
+use super::{CmdError, CmdResult, NumRef, Pos, Selection, Session, StoryRef, Value, delete_selection, sel_result, split_para, type_text};
 
 /// Exact sample-text formulas; bounded counts keep typed input from allocating without limit.
 fn sample_text(s: &Session) -> Option<String> {
@@ -54,6 +54,16 @@ fn sample_text(s: &Session) -> Option<String> {
         text.push('\r');
     }
     Some(text)
+}
+
+/// Whether the caret is at the end of a body heading that hides what follows it (#1745).
+pub(super) fn fold_at_end(s: &Session) -> bool {
+    let f = &s.sel.focus;
+    f.story == StoryRef::Body
+        && f.path.0.len() == 1
+        && s.doc.para_at(f).is_some_and(|p| f.off >= p.len())
+        && crate::cmd::outline::folds(s, f.path.last())
+        && crate::cmd::outline::folded(s).get(f.path.last().saturating_add(1)).copied().unwrap_or(false)
 }
 
 /// `text.newParagraph`: Enter, unless the selection is in a control that takes no paragraph break.
@@ -108,6 +118,11 @@ fn enter(s: &mut Session, undo_step: bool) -> Result<(), CmdError> {
         let end = s.sel.focus.clone();
         s.sel = Selection { anchor: Pos { off: 0, ..end.clone() }, focus: end };
         return type_text(s, &text);
+    }
+    // Enter at the end of a collapsed heading only expands it (Word for Mac, #1745).
+    if s.sel.is_collapsed() && fold_at_end(s) {
+        crate::cmd::outline::expand_heading(s, s.sel.focus.path.last());
+        return Ok(());
     }
     let mut at = delete_selection(s)?;
     let auto = border_line(s, &at)

@@ -4798,3 +4798,56 @@ fn the_view_key_changes_when_a_drag_takes_an_object_off_the_page() {
     assert_ne!(hidden, view_key(&app, false, None), "the page without the dragged object is rendered again");
     assert_eq!(hidden, view_key(&app, false, Some(&object)), "the same drag keeps the key: no re-render every frame");
 }
+
+/// #1745: clicking the fold arrow in the left margin beside a heading collapses it (what is
+/// under it disappears), and clicking it again expands it; the caret doesn't move into the
+/// margin's line selection.
+#[test]
+fn fold_arrow_beside_a_heading_toggles_it() {
+    use egui::{Event, PointerButton};
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("text.insert", json!({"text": "Intro\rBody one\rNext"})).unwrap();
+    for i in [0, 2] {
+        a.session.sel = wordcraft_engine::Selection::caret(Pos::body(i, 0));
+        a.run("para.style", json!({"style": "Heading 1"})).unwrap();
+    }
+    a.run("view.commentsPane", json!({"value": false})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    let click = |h: &mut egui_kittest::Harness<'_, WordApp>| {
+        let arrow = h.state_mut().session.layout().fold_arrows(0).into_iter().find(|a| a.block == 0).expect("an arrow beside Intro");
+        let at = page_to_screen(h.state_mut(), 0, arrow.rect.x + arrow.rect.w / 2.0, arrow.rect.y + arrow.rect.h / 2.0).expect("on screen");
+        h.event(Event::PointerMoved(at));
+        h.step();
+        for pressed in [true, false] {
+            h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Default::default() });
+            h.step();
+        }
+        for _ in 0..3 {
+            h.step();
+        }
+    };
+    let shown = |h: &mut egui_kittest::Harness<'_, WordApp>| {
+        let l = h.state_mut().session.layout();
+        (0..3).filter(|i| l.index.contains_key(&(StoryRef::Body, wordcraft_doc::Path::top(*i)))).collect::<Vec<_>>()
+    };
+    assert_eq!(shown(&mut h), [0, 1, 2]);
+    click(&mut h);
+    assert_eq!(shown(&mut h), [0, 2], "collapsed");
+    assert!(h.state().session.sel.is_collapsed(), "no line selected");
+    // A quick second click on the arrow (a double-click) only toggles again; its release
+    // doesn't select the word under the pointer.
+    let sel = h.state().session.sel.clone();
+    click(&mut h);
+    assert_eq!(shown(&mut h), [0, 1, 2], "expanded again");
+    assert_eq!(h.state().session.sel, sel, "the arrow's double-click doesn't change the selection");
+}

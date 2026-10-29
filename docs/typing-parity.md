@@ -45,6 +45,27 @@ formatting use the existing editing primitives. Tests: `sample_text_formulas_exp
 `sample_text_invalid_parameters_use_defaults`, `sample_text_requires_an_exact_paragraph_and_caret_at_end`,
 `sample_text_preserves_typing_and_paragraph_formatting`, `sample_text_replacement_tracks_changes`.
 
+## Collapsed headings (#1745)
+
+A heading (a paragraph with an outline level) can be "Collapsed by default" (Paragraph dialog,
+`para.collapsed`, the fold arrow beside it, or the heading context menu): it then hides everything
+after it up to the next heading of its level or higher. Word-checked in Word for Mac 16.113.4
+(2026-10-15 and 2026-10-16) unless marked.
+
+| Keys | Word's result | Test |
+|---|---|---|
+| End, Right at the end of a collapsed heading, then `X` | the caret goes to the start of the next heading shown: `XNext` | `arrows_skip_what_a_collapsed_heading_hides` |
+| Left at the start of that heading; Down/Up, Ctrl+Down/Up, Word Right, Shift+Right across the fold | skip the hidden text both ways, Left landing at the heading's end even when the last hidden paragraph is empty (WordCraft; Word for Mac checked for Right only) | `arrows_skip_what_a_collapsed_heading_hides`, `left_across_a_collapsed_heading_fold_ending_in_an_empty_paragraph_lands_at_its_end` |
+| Typing at the end of a collapsed heading | the heading stays collapsed | `typing_at_the_end_of_a_collapsed_heading_keeps_it_collapsed` |
+| Enter at the end of a collapsed heading | only expands it: no new paragraph, the caret stays at the heading's end; the next Enter splits as usual | `enter_at_the_end_of_a_collapsed_heading_only_expands_it` |
+| Delete at the end of a collapsed heading | the first press only expands it; the second joins the next paragraph | `delete_at_the_end_of_a_collapsed_heading_first_expands_it` |
+| Backspace at the start of the paragraph after a fold | the first press only expands the heading; the second joins | `backspace_after_a_collapsed_heading_first_expands_it` |
+| Find landing in hidden text | expands the heading to show the match. WordCraft does the same for Go To, `select.text` and `caret.set` (not checked in Word); Undo folds it again (Word's Undo doesn't restore the folded display; ours does) | `find_and_selection_commands_open_a_collapsed_heading` |
+| Pasting paragraphs at the end of a collapsed heading | WordCraft: the heading opens first, so the pasted text and the caret show (not checked in Word) | `pasting_paragraphs_into_a_collapsed_heading_opens_it` |
+| Select All, Delete | deletes the hidden text too | — |
+
+Outline view shows collapsed headings expanded, as in Word.
+
 ## Lists
 
 Bullets and Numbering decide whether to toggle off from the selected paragraphs' effective numbering, including numbering inherited from a paragraph style or its `basedOn` chain. An explicit `numId=0` override remains unlisted until a list is applied. The effective list level and any level override determine the list kind, including an explicitly requested gallery kind. Toggling preserves custom styles, including a ListParagraph style that supplies numbering, list definitions and paragraphs outside the selection. A directly applied list still clears the automatic ListParagraph style. Original command and DOCX round-trip tests cover this narrow case related to #3459; it is not a new Word UI measurement. Tests: `toggle_style_inherited_list_off_preserves_other_paragraphs_and_round_trips`, `explicit_list_off_override_is_not_toggled_off_again`, `list_toggle_uses_effective_level_and_override`, `list_paragraph_style_survives_inherited_toggle_off`, `direct_list_toggle_still_clears_the_automatic_list_paragraph_style`.
@@ -524,6 +545,8 @@ again.
 | 2026-10-16 | trivial | Smart quotes in Hebrew follow logical order; ” (not gershayim) in acronyms, as Word does (#1670) |
 | 2026-10-15 | trivial | Paste: plain text from another program pastes as Keep Text Only does. Every line takes the formatting of the paragraph it lands in (a right-to-left paragraph stays right-to-left), and empty lines stay empty paragraphs |
 | 2026-10-15 | trivial | Spelling as you type: the word being typed, apostrophes and hyphens included, is not marked until the caret leaves it; F7 and the Spelling pane still report it (#1552) |
+| 2026-10-16 | minor | Collapsed headings Word-checked (#1745 fix round 1): Enter, Delete and Backspace next to a fold only expand it first; Find (and Go To, `select.text`, `caret.set`, paste) opens the fold |
+| 2026-10-16 | minor | Collapsed headings (#1745): Right from the end of a collapsed heading goes to the next heading shown (Word for Mac); the arrows skip the hidden text both ways; typing at the heading's end doesn't expand it; Enter in it expands it (WordCraft's choice) |
 | 2026-10-14 | trivial | Shift+Delete cuts the selection, and does nothing without one, on macOS and Linux too, as in Word for Windows (#1669); Shift+Backspace already erased (#707) |
 | 2026-10-13 | trivial | Select All then Delete or Backspace removes a table the document starts with (#1198) |
 | 2026-10-12 | trivial | Editing keys: Down and Up from the start of a line beside a table go into it instead of skipping it (#1007) |

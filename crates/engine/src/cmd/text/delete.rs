@@ -1,4 +1,4 @@
-use super::enter_tab::tab_indent_on;
+use super::enter_tab::{fold_at_end, tab_indent_on};
 use super::{Block, CmdResult, NumRef, Pos, Selection, Session, StoryRef, Value, delete_selection, delete_selection_effect, sel_result};
 
 pub(super) fn backspace(s: &mut Session, v: &Value) -> CmdResult {
@@ -62,6 +62,15 @@ fn backspace_inner(s: &mut Session, _: &Value) -> CmdResult {
         return sel_result(s);
     }
     // At the start of a paragraph.
+    // Just after a fold, the first press only expands it (Word for Mac, #1745).
+    if f.story == StoryRef::Body
+        && f.path.0.len() == 1
+        && let Some(prev) = f.path.last().checked_sub(1)
+        && crate::cmd::outline::folded(s).get(prev).copied().unwrap_or(false)
+    {
+        crate::cmd::outline::show_block(s, prev);
+        return sel_result(s);
+    }
     if let Some(n) = para.props.numbering.filter(|n| n.num != 0) {
         return remove_number(s, &f, n);
     }
@@ -153,6 +162,11 @@ fn delete_inner(s: &mut Session, _: &Value) -> CmdResult {
             transformed: false,
             selection_changed: false,
         });
+        return sel_result(s);
+    }
+    // At the end of a collapsed heading, the first press only expands it (Word for Mac, #1745).
+    if fold_at_end(s) {
+        crate::cmd::outline::expand_heading(s, f.path.last());
         return sel_result(s);
     }
     // At the end: join with the next paragraph in the same container.

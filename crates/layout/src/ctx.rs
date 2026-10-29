@@ -54,6 +54,8 @@ pub(crate) struct Ctx<'a> {
     /// Cache-key hashes of the table-style text formatting cells were laid out with
     /// ([`Ctx::table_key`]).
     pub(crate) table_keys: Vec<(para::CellText, u64)>,
+    /// Body blocks collapsed headings hide ([`outline::folded`]; empty when none are hidden).
+    pub(crate) folded: Vec<bool>,
     /// While a header or footer with tables is laid out: its page, for floats in its cells placed
     /// on the page (see [`with_pin`]).
     pub(crate) pin: Option<Pin>,
@@ -213,6 +215,20 @@ impl Ctx<'_> {
             .filter(|n| n.num != 0)
             .is_some_and(|n| self.doc.numbering.shows_label(n.num, n.level))
     }
+    /// Whether body block `block` is hidden by a collapsed heading.
+    pub(crate) fn is_folded(&self, block: usize) -> bool {
+        self.folded.get(block).copied().unwrap_or(false)
+    }
+
+    /// The body block shown after `block` (skipping what collapsed headings hide), if any.
+    pub(crate) fn next_shown(&self, block: usize) -> Option<usize> {
+        let next = block.checked_add(1)?;
+        if self.folded.is_empty() {
+            return Some(next);
+        }
+        (next..self.doc.body.len()).find(|b| !self.is_folded(*b))
+    }
+
     pub(crate) fn next_label(&mut self, p: &Paragraph) -> Option<(String, Level)> {
         let n = p.props.numbering.or_else(|| self.doc.styles.resolve_para(&p.props).numbering).filter(|n| n.num != 0)?;
         self.counters.next_label(&self.doc.numbering, n.num, n.level)

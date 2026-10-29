@@ -124,6 +124,7 @@ pub(super) fn quick_parts(s: &mut Session, v: &Value, gallery: &str) -> CmdResul
             }
         };
         let at = delete_selection(s)?;
+        super::super::outline::open_for_insert(s, &at, frag.blocks.len());
         let end = s.doc.insert_fragment(&at, &frag)?;
         s.sel = Selection::caret(end);
     }

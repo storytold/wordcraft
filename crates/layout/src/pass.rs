@@ -10,8 +10,8 @@ use super::page::{PageBuilder, body_top_for, foot_top_for, item_bottom};
 use super::placed::Placed;
 use super::table_flow::place_table;
 use super::{
-    Arc, Block, Counters, DocLayout, Document, FieldCtx, HashMap, LayoutOptions, Page, Path, SectionProps, SectionStart, StoryRef, TextDirection,
-    ViewMode, balloons, para, vertical,
+    Arc, Block, Counters, DocLayout, Document, FieldCtx, HashMap, HashSet, InlineObject, LayoutOptions, Page, Path, SectionProps, SectionStart,
+    StoryRef, TextDirection, ViewMode, balloons, outline, para, vertical,
 };
 
 /// How the view lays the document out: `web` for the continuous views, `reflow` for those and
@@ -102,6 +102,7 @@ fn new_ctx<'a>(
         stacked_marks: Vec::new(),
         mirror: false,
         table_keys: Vec::new(),
+        folded: Vec::new(),
         fitted: HashMap::new(),
         header_tables: HashMap::new(),
         footer_wraps: HashMap::new(),
@@ -202,11 +203,30 @@ fn new_page_builder<'p>(sect: &'p SectionProps, early: &'p EarlyFloats, web: boo
 /// Endnotes in document order, with the section of their reference; placed at the end of a
 /// section that keeps them there, else at the end of the document.
 fn endnote_queue(ctx: &Ctx) -> VecDeque<(u32, usize)> {
+    // Endnotes referenced only from text collapsed headings hide are left out, as their
+    // footnotes are (#1745).
+    let mut folded_notes = HashSet::new();
+    let mut visible_notes = HashSet::new();
+    if !ctx.folded.is_empty() {
+        ctx.doc.objects_in_reading_order_by_block(&mut |block, p, k| {
+            if let Some(InlineObject::NoteRef { id, .. }) = p.objects.get(k) {
+                if ctx.is_folded(block) {
+                    folded_notes.insert(*id);
+                } else {
+                    visible_notes.insert(*id);
+                }
+            }
+            true
+        });
+    }
     let mut ids: Vec<(u32, u32, usize)> = ctx
         .fields
         .notes
         .iter()
-        .filter(|(id, _)| ctx.doc.parts.get(id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::Endnote))
+        .filter(|(id, _)| {
+            ctx.doc.parts.get(id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::Endnote)
+                && (!folded_notes.contains(*id) || visible_notes.contains(*id))
+        })
         .map(|(id, n)| (n.order, *id, n.section))
         .collect();
     ids.sort();
@@ -311,6 +331,14 @@ fn prepare_section_end(pb: &mut PageBuilder, sections: &[(usize, &SectionProps)]
 
 fn place_block(ctx: &mut Ctx, pb: &mut PageBuilder, outline: &Option<OutlinePass>, block: usize, body_top: f32) {
     let Some(b) = ctx.doc.body.get(block) else { return };
+    // A block a collapsed heading hides (#1745) takes no room and draws nothing, though its list
+    // numbers still count (folding doesn't renumber the list).
+    if ctx.is_folded(block) {
+        if let Block::Para(p) = &**b {
+            let _ = ctx.next_label(p);
+        }
+        return;
+    }
     match (&**b, outline) {
         (Block::Para(p), Some(o)) => place_outline_para(ctx, pb, p, block, o),
         (Block::Table(_), Some(o)) if o.hidden.get(block).copied().unwrap_or(false) => {}
@@ -477,6 +505,11 @@ pub(crate) fn layout_pass(
     ctx.mirror = doc.settings.mirror_margins && !mode.reflow;
     (ctx.stacked_marks, ctx.quiet_marks) = section_marks(doc, opts, sections);
     let outline = (opts.view == ViewMode::Outline).then(|| OutlinePass::new(doc, opts.outline.clone().unwrap_or_default()));
+    // Outline view collapses headings its own way (view state); the other views hide what
+    // "Collapsed by default" headings fold.
+    if outline.is_none() {
+        ctx.folded = outline::folded(doc);
+    }
     let default_sect = SectionProps::default();
     let first_sect = sections.first().map_or(&default_sect, |(_, s)| *s);
     let web_sect = mode.reflow.then(|| reflow_sect(first_sect, opts));
@@ -612,11 +645,10 @@ fn balance_pass<'a>(
     pb.balance = Some((page, h));
     pb.cap_columns();
     for block in first..end {
-        match ctx.doc.body.get(block).map(|b| &**b) {
-            Some(Block::Para(p)) => place_para(ctx, pb, p, block, body_top),
-            Some(Block::Table(t)) => place_table(ctx, pb, t, block, body_top),
-            None => break,
+        if ctx.doc.body.get(block).is_none() {
+            break;
         }
+        place_block(ctx, pb, &None, block, body_top);
         // Spilled onto another page: too short (and no need to lay out the rest).
         if pb.pages.len() > page + 1 {
             break;

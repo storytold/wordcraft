@@ -5,7 +5,7 @@ use super::font::{apply_font, preview_size};
 use super::forms::{cell_margins_dialog, custom_properties, table_properties};
 use super::mailings::{ADDRESS_PARTS, recipient_list, rule_params};
 use super::page_setup::{page_layout_commands, page_paper_group, page_valign_combo, page_valign_value, run_as_one_step};
-use super::paragraph::{ParaNumber, apply_paragraph, para_check, para_number};
+use super::paragraph::{BODY_LEVEL, ParaNumber, apply_paragraph, para_check, para_number};
 use super::styles::manage_styles;
 use super::{Dialog, MeasureExt, Tokens, Ui, Value, WordApp, json, semibold, vec2};
 
@@ -243,6 +243,8 @@ fn paragraph_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         tab,
         asian,
         opts,
+        outline,
+        collapsed,
         mixed,
         ..
     } = d
@@ -281,6 +283,25 @@ fn paragraph_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                     }
                 });
                 combo.response.labelled_by(align_label.id);
+            });
+            // Outline level, and "Collapsed by default" beside it: greyed for body text,
+            // as in Word (#1745).
+            ui.horizontal(|ui| {
+                let outline_label = ui.label(format!("{}:", tl!("Outline level")));
+                let name = |l: u8| {
+                    if l >= BODY_LEVEL { tl!("Body Text").to_string() } else { crate::i18n::fmt(tl!("Level {n}"), &[("n", &(l + 1).to_string())]) }
+                };
+                let shown = if mixed.contains("outlineLevel") { String::new() } else { name(*outline) };
+                let combo = craft_ui::ComboBox::from_id_salt("para_outline").selected_text(shown).show_ui(ui, |ui| {
+                    for l in std::iter::once(BODY_LEVEL).chain(0..BODY_LEVEL) {
+                        if ui.selectable_value(outline, l, name(l)).clicked() {
+                            mixed.remove("outlineLevel");
+                        }
+                    }
+                });
+                combo.response.labelled_by(outline_label.id);
+                let heading = *outline < BODY_LEVEL && !mixed.contains("outlineLevel");
+                ui.add_enabled_ui(heading, |ui| para_check(ui, collapsed, tl!("Collapsed by default"), "collapsed", mixed));
             });
             ui.label(egui::RichText::new(tl!("Indentation")).font(semibold(12.5)));
             // Mirrored indents are the inside and outside ones (they swap on even pages).

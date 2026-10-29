@@ -301,6 +301,11 @@ pub struct ParaProps {
     /// 0..=8 = Level 1..9; 9 = body text.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outline_level: Option<u8>,
+    /// "Collapsed by default" ([MS-DOCX] `w15:collapsed`): a heading (a paragraph with an outline
+    /// level) hides what is under it, up to the next heading of its level or higher. Ignored on
+    /// body text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub collapsed: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub numbering: Option<NumRef>,
     /// Tab stops (replaces the inherited list; `TabAlign::Clear` stops remove inherited ones).
@@ -378,7 +383,7 @@ impl ParaProps {
     }
 
     fn overlay_pagination(&mut self, patch: &ParaProps) {
-        overlay_fields!(self, patch; keep_next, keep_lines, page_break_before, widow_control, outline_level, numbering, suppress_hyphens, suppress_line_numbers,
+        overlay_fields!(self, patch; keep_next, keep_lines, page_break_before, widow_control, outline_level, collapsed, numbering, suppress_hyphens, suppress_line_numbers,
             drop_cap, drop_cap_margin, drop_cap_distance, drop_cap_font, frame, snap_to_grid);
     }
 
