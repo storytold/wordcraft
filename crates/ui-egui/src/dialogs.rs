@@ -331,6 +331,26 @@ pub enum Dialog {
         #[serde(default)]
         message: String,
     },
+    /// A save to RTF or ODT of a document with features that format drops (#1316): what would be
+    /// lost, then Continue (save in that format), save as a Word document instead, or Cancel
+    /// (`ui.formatLosses`). `save` is the `file.save` params; `then` the command a Save Changes
+    /// prompt held back, run once the document is saved; `document` the one it asked about.
+    FormatLosses {
+        name: String,
+        losses: Vec<String>,
+        #[serde(skip)]
+        save: Value,
+        #[serde(skip)]
+        then: Option<(String, Value)>,
+        /// Asked from the AutoSave switch's Save As: saving a Word document instead turns AutoSave on.
+        #[serde(skip)]
+        autosave: bool,
+        /// Asked from File › Export: Continue says "Exported" once the file is written.
+        #[serde(skip)]
+        export: bool,
+        #[serde(skip)]
+        document: u64,
+    },
     /// Mailings › Select Recipients / Edit Recipient List: a table of recipients to type or
     /// edit (field names on top), or a file to load instead (#240).
     RecipientList {
@@ -508,6 +528,7 @@ impl Dialog {
             Dialog::PasteSpecial { .. } => "pasteSpecial",
             Dialog::About { .. } => "about",
             Dialog::SaveChanges { .. } => "saveChanges",
+            Dialog::FormatLosses { .. } => "formatLosses",
             Dialog::DiscardRecovery { .. } => "discardRecovery",
             Dialog::RecipientList { .. } => "recipientList",
             Dialog::SelectTable { .. } => "selectTable",

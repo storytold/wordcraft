@@ -48,6 +48,9 @@ pub enum AutoSaveBlock {
     Unsaved,
     /// A file in a format that can't keep everything (Markdown, plain text, HTML…), by file name.
     Format { name: String },
+    /// An RTF or ODT file that can't keep everything this document has (comments, tracked
+    /// changes…), by file name (#1316).
+    Losses { name: String },
     /// A file that was opened but not yet saved in this session.
     NotSavedHere,
 }
@@ -62,6 +65,10 @@ impl AutoSaveBlock {
             AutoSaveBlock::Unsaved => tl!("Save the document to turn on AutoSave").to_string(),
             AutoSaveBlock::Format { name } => i18n::fmt(
                 tl!("AutoSave only keeps .docx, .odt and .rtf files; {name} can't keep all formatting. Save as .docx to turn on AutoSave."),
+                &[("name", name)],
+            ),
+            AutoSaveBlock::Losses { name } => i18n::fmt(
+                tl!("AutoSave is off: {name} can't keep everything in this document. Save as .docx to turn on AutoSave."),
                 &[("name", name)],
             ),
             AutoSaveBlock::NotSavedHere => {

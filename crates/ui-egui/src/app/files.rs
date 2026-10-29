@@ -7,7 +7,7 @@ impl WordApp {
     /// Answer the Save Changes prompt: Save (through Save As for a new document) and carry on,
     /// carry on without saving, or cancel. A failed or cancelled save cancels too.
     pub(super) fn answer_save_changes(&mut self, choice: SaveChoice) -> Result<Value, String> {
-        let Some(dialogs::Dialog::SaveChanges { then, params, document, .. }) = self.dialog.take() else {
+        let Some(dialogs::Dialog::SaveChanges { mut then, params, document, .. }) = self.dialog.take() else {
             return Err("no Save Changes prompt is open".into());
         };
         if document != self.session.document_id() {
@@ -35,18 +35,27 @@ impl WordApp {
                     file_dialogs::Asked::Busy => Ok(json!({"done": false})),
                 };
             }
-            SaveChoice::Save => match self.save_for_prompt() {
-                Ok(PromptSave::Saved) => true,
-                Ok(PromptSave::NotSaved) => false,
-                // The browser's picker finishes later: the command waits for it (#1315).
-                Ok(PromptSave::Later(ticket)) => {
-                    let rev = self.session.rev();
-                    self.awaiting_save = Some(AwaitingSave { ticket, then, params, document, rev });
-                    self.status(tl!("Waiting for the save to finish…"));
-                    return Ok(json!({"pending": "save"}));
+            SaveChoice::Save => {
+                // Saving to an RTF or ODT file that can't keep everything asks first (#1316).
+                let mut held = Some((then, params));
+                if let Some(r) = self.ask_format_losses("file.save", &json!({}), &mut held) {
+                    return r;
                 }
-                Err(error) => return Err(self.save_failed(&error, then, params, document)),
-            },
+                let Some(held) = held else { return Ok(json!({"done": false})) };
+                (then, params) = held;
+                match self.save_for_prompt() {
+                    Ok(PromptSave::Saved) => true,
+                    Ok(PromptSave::NotSaved) => false,
+                    // The browser's picker finishes later: the command waits for it (#1315).
+                    Ok(PromptSave::Later(ticket)) => {
+                        let rev = self.session.rev();
+                        self.awaiting_save = Some(AwaitingSave { ticket, then, params, document, rev });
+                        self.status(tl!("Waiting for the save to finish…"));
+                        return Ok(json!({"pending": "save"}));
+                    }
+                    Err(error) => return Err(self.save_failed(&error, then, params, document)),
+                }
+            }
         };
         if !go {
             return Ok(json!({"done": false}));
@@ -362,6 +371,103 @@ impl WordApp {
         self.session.path.is_some() && self.session.path == self.autosave_path
     }
 
+    /// Before the user's Save or Save As writes RTF or ODT: when the document has features that
+    /// format drops ([`wordcraft_engine::losses::format_losses`]), show what would be lost and
+    /// ask (Continue / Save as Word Document / Cancel, answered by `ui.formatLosses`), returning
+    /// the pending answer. `then` is the command a Save Changes prompt held back; the prompt takes
+    /// it. `None`: nothing would be lost, go ahead.
+    pub(crate) fn ask_format_losses(&mut self, id: &str, params: &Value, then: &mut Option<(String, Value)>) -> Option<Result<Value, String>> {
+        if !matches!(id, "file.save" | "file.saveAs") {
+            return None;
+        }
+        let path = match params.get("path").and_then(Value::as_str) {
+            Some(p) => p.to_string(),
+            // In the browser Save downloads under the name Save would suggest (a Word name).
+            None if id == "file.save" && self.services.download.is_some() => self.default_save_name(),
+            None if id == "file.save" => self.session.path.as_ref()?.to_string_lossy().to_string(),
+            None => return None,
+        };
+        let losses = wordcraft_engine::losses::format_losses(&self.session.doc, &path);
+        if losses.is_empty() {
+            return None;
+        }
+        let name = std::path::Path::new(&path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.clone());
+        let mut save = params.as_object().cloned().unwrap_or_default();
+        save.insert("path".into(), json!(path));
+        let ids: Vec<String> = losses.iter().map(|l| l.id().to_string()).collect();
+        self.dialog = Some(dialogs::Dialog::FormatLosses {
+            name,
+            losses: ids.clone(),
+            save: Value::Object(save),
+            then: then.take(),
+            autosave: false,
+            export: false,
+            document: self.session.document_id(),
+        });
+        Some(Ok(json!({"pending": "formatLosses", "losses": ids})))
+    }
+
+    /// Answer the "may lose features" warning (`ui.formatLosses`): `continue` saves in the RTF
+    /// or ODT format anyway (the document counts as saved, as in Word), `docx` asks where to save
+    /// a Word document instead, `cancel` saves nothing. A command a Save Changes prompt held back
+    /// runs once the document is saved.
+    pub(super) fn answer_format_losses(&mut self, answer: &str) -> Result<Value, String> {
+        if !matches!(answer, "continue" | "docx" | "cancel") {
+            return Err("`answer` must be continue, docx or cancel".into());
+        }
+        let Some(dialogs::Dialog::FormatLosses { save, then, document, autosave, export, .. }) = self.dialog.take() else {
+            return Err("no format warning is open".into());
+        };
+        if document != self.session.document_id() {
+            return Err("the document the warning asked about has been replaced".into());
+        }
+        match answer {
+            "continue" => {
+                let path = save.get("path").and_then(Value::as_str).unwrap_or_default().to_string();
+                let r = self.execute("file.save", save);
+                let saved = r.as_ref().is_ok_and(|v| v.get("saved").and_then(Value::as_bool) == Some(true) || v.get("downloaded").is_some());
+                if saved {
+                    self.ui.backstage = false;
+                    self.canvas.want_focus = true;
+                    if export {
+                        self.status(i18n::fmt(tl!("Exported {path}"), &[("path", &path)]));
+                    }
+                }
+                let Some((then, params)) = then else { return r };
+                // A failed save puts the Save Changes prompt back with the reason and the held
+                // command, like the other ways into this save.
+                if let Err(error) = &r {
+                    return Err(self.save_failed(error, then, params, document));
+                }
+                if !self.safely_saved(saved) {
+                    return Ok(json!({"done": false}));
+                }
+                self.execute_user(&then, params).map(|r| json!({"done": true, "result": r}))
+            }
+            "docx" => {
+                let path = save.get("path").and_then(Value::as_str).unwrap_or_default();
+                let stem = std::path::Path::new(path).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| self.title_stem());
+                let name = format!("{stem}.docx");
+                let after = match then {
+                    Some((then, params)) => file_dialogs::AfterSave::Continue { then, params, document },
+                    // Save As from the AutoSave switch: AutoSave comes on once the Word document is saved.
+                    None if autosave => file_dialogs::AfterSave::AutoSave,
+                    None => file_dialogs::AfterSave::Nothing,
+                };
+                // In the browser a save is a download under that name.
+                if self.services.download.is_some() {
+                    return self.finish_pick(file_dialogs::AfterPick::SaveAs { after, document: self.session.document_id() }, Some(name));
+                }
+                match self.save_as_named(name, after) {
+                    file_dialogs::Asked::Done(r) => r,
+                    file_dialogs::Asked::Pending => Ok(json!({"pending": "saveAs"})),
+                    file_dialogs::Asked::Busy => Ok(json!({"saved": false})),
+                }
+            }
+            _ => Ok(json!({"saved": false})),
+        }
+    }
+
     /// Why AutoSave can't cover the document, or `None` when it can: it writes only a file the
     /// user saved to in this session, in a format that keeps everything, and never in the browser
     /// (a page can't write to the user's files; saving there is a download, #176).
@@ -374,10 +480,33 @@ impl WordApp {
             let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
             return Some(AutoSaveBlock::Format { name });
         }
+        // RTF and ODT can't keep everything in some documents: AutoSave doesn't quietly drop it (#1316).
+        if self.would_lose(path) {
+            let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            return Some(AutoSaveBlock::Losses { name });
+        }
         if !self.saved_here() {
             return Some(AutoSaveBlock::NotSavedHere);
         }
         None
+    }
+
+    /// Whether saving the document to `path` (the document's own file) would lose something
+    /// ([`wordcraft_engine::losses::format_losses`]), remembered until the document changes.
+    fn would_lose(&self, path: &std::path::Path) -> bool {
+        let key = (self.session.document_id(), self.session.rev());
+        if let Ok(cache) = self.losses_cache.try_borrow()
+            && let Some((doc, rev, p, lose)) = cache.as_ref()
+            && (*doc, *rev) == key
+            && p == path
+        {
+            return *lose;
+        }
+        let lose = !wordcraft_engine::losses::format_losses(&self.session.doc, &path.to_string_lossy()).is_empty();
+        if let Ok(mut cache) = self.losses_cache.try_borrow_mut() {
+            *cache = Some((key.0, key.1, path.to_path_buf(), lose));
+        }
+        lose
     }
 
     /// Whether AutoSave covers the document: it is on and nothing blocks it ([`Self::autosave_block`]).
@@ -401,7 +530,8 @@ impl WordApp {
     /// AutoSave: write a saved document a couple of seconds after the last change. A failure is
     /// shown in the status bar and turns AutoSave off for the file until the user saves it again.
     pub(crate) fn autosave_tick(&mut self, now: f64) {
-        if self.autosaves() && self.session.dirty && now - self.last_autosave > 2500.0 && now - self.canvas.caret_visible_since > 1500.0 {
+        // The cheap checks first: `autosaves` may look through the document (#1316).
+        if self.session.dirty && now - self.last_autosave > 2500.0 && now - self.canvas.caret_visible_since > 1500.0 && self.autosaves() {
             self.last_autosave = now;
             if let Err(e) = self.session.run("file.save", &json!({})) {
                 log::warn!("AutoSave failed: {e}");

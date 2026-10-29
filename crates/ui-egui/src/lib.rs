@@ -590,6 +590,9 @@ pub struct WordApp {
     saves_in_flight: Vec<SaveInFlight>,
     /// Web: the command a Save Changes prompt held back until its picker save ends (#1315).
     awaiting_save: Option<AwaitingSave>,
+    /// [`WordApp::autosave_block`]'s last loss check: (document id, revision, path) and whether
+    /// that RTF/ODT file would lose something. Asked several times a frame (#1316).
+    losses_cache: std::cell::RefCell<Option<(u64, u64, std::path::PathBuf, bool)>>,
     /// The file dialog the host is showing, and what its answer is for ([`file_dialogs`]).
     file_dialog: Option<file_dialogs::PendingDialog>,
     /// The built-in file browser, when it is open, and the folder it showed last (#576).

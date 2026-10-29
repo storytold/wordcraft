@@ -58,6 +58,10 @@ impl WordApp {
             });
             return Ok(json!({"pending": "saveChanges"}));
         }
+        // A save to RTF or ODT that would drop some of the document says what first (#1316).
+        if let Some(r) = self.ask_format_losses(id, &params, &mut None) {
+            return r;
+        }
         // The ribbon and context-menu Paste commands send no text: read the system clipboard's, as
         // Ctrl+V's paste event carries it (#584), and its HTML and RTF, which egui's paste event
         // doesn't carry (#687).
@@ -157,6 +161,11 @@ impl WordApp {
                 if matches!(id, "file.save" | "file.saveAs") { self.session.password.as_ref().map(wordcraft_engine::Password::as_str) } else { None };
             let opts = wordcraft_engine::cmd::file::export_options(&self.session, &params);
             let bytes = wordcraft_engine::io::save_bytes_with(&name, &self.session.doc, password, &opts)?;
+            // What an RTF or ODT download leaves out, as file.save reports it (#1316).
+            let losses = name
+                .rsplit_once('.')
+                .filter(|(_, ext)| ext.eq_ignore_ascii_case("rtf") || ext.eq_ignore_ascii_case("odt"))
+                .map(|_| wordcraft_engine::losses::format_losses(&self.session.doc, &name));
             // A ticket left over from an earlier call isn't this save's.
             let saves = self.services.async_saves.clone();
             if let Some(saves) = &saves {
@@ -193,9 +202,13 @@ impl WordApp {
             if let Some(ticket) = saves.as_ref().and_then(async_saves::AsyncSaves::take_started) {
                 let document = self.session.document_id();
                 self.saves_in_flight.push(SaveInFlight { ticket, name: name.clone(), document, marked_saved });
-                return Ok(json!({"downloaded": name, "bytes": bytes.len(), "pendingSave": ticket}));
+                let mut r = json!({"downloaded": name, "bytes": bytes.len(), "pendingSave": ticket});
+                add_losses(&mut r, losses);
+                return Ok(r);
             }
-            return Ok(json!({"downloaded": name, "bytes": bytes.len()}));
+            let mut r = json!({"downloaded": name, "bytes": bytes.len()});
+            add_losses(&mut r, losses);
+            return Ok(r);
         }
         let document = self.session.document_id();
         let body_epoch = self.session.ime_body_epoch();
@@ -694,6 +707,9 @@ impl WordApp {
                 };
                 return Some(self.answer_save_changes(choice));
             }
+            "ui.formatLosses" => {
+                return Some(self.answer_format_losses(s("answer").unwrap_or("")));
+            }
             "ui.openFileDialog" => {
                 self.open_dialog();
                 json!({})
@@ -1046,4 +1062,11 @@ fn flushes_comment_drafts(id: &str, params: &Value) -> bool {
 /// replace only an untouched blank document, which has nothing to lose).
 pub(crate) fn discards_document(id: &str, _params: &Value) -> bool {
     id == "file.close"
+}
+
+/// Put the ids of what a save left out into its result as `losses`.
+fn add_losses(result: &mut Value, losses: Option<Vec<wordcraft_engine::losses::Loss>>) {
+    if let (Some(losses), Some(o)) = (losses, result.as_object_mut()) {
+        o.insert("losses".into(), json!(losses.iter().map(|l| l.id()).collect::<Vec<_>>()));
+    }
 }
