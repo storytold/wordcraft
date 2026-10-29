@@ -353,5 +353,27 @@ thread_local! {
     static WRAP_RELAYS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// Pair each character with one bookmark object without rescanning text prefixes.
+fn only_bookmarks(p: &Paragraph) -> bool {
+    let mut objects = p.objects.iter();
+    for c in p.text.chars() {
+        if c != wordcraft_doc::para::OBJ || !matches!(objects.next(), Some(InlineObject::BookmarkStart { .. } | InlineObject::BookmarkEnd { .. })) {
+            return false;
+        }
+    }
+
+    objects.next().is_none()
+}
+
+fn empty_break_page(pb: &page::PageBuilder) -> bool {
+    pb.after_break_mark
+        && pb.at_top()
+        && pb.notes.is_empty()
+        && pb.pages.len() > 1
+        && pb.pages.last().is_some_and(|p| p.items.len() == pb.page_items_start)
+}
+
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_section_marks;

@@ -11232,6 +11232,20 @@ fn caret_height_ignores_line_spacing() {
     }
 }
 
+#[test]
+fn section_mark_after_break() {
+    use wordcraft_doc::section::SectionProps;
+    for text in ["", "Section boundary"] {
+        let mut d = Document::from_text(&format!("Before\n\u{000C}\n{text}\nAfter"));
+        d.para_mut(StoryRef::Body, &Path::top(2)).unwrap().section = Some(Box::new(SectionProps::default()));
+        let l = lay(&d);
+        let empty = text.is_empty();
+        assert_eq!(l.pages.len(), if empty { 2 } else { 3 }, "section text: {text:?}");
+        assert_eq!(l.caret(&Pos::body(3, 0)).unwrap().page, if empty { 1 } else { 2 });
+        assert_eq!(l.caret(&Pos::body(2, 0)).unwrap().page, if empty { 0 } else { 1 });
+    }
+}
+
 /// #2048: a picture anchored in a later paragraph but placed higher up the page (fixed on the
 /// page, or moved up from its paragraph) keeps the text of the paragraphs above its anchor clear
 /// too, as in Word, not just its own paragraph's.

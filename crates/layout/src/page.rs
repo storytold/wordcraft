@@ -3,7 +3,7 @@ use super::ctx::{Ctx, with_pin};
 use super::floats::{EarlyFloats, WrapArea};
 use super::notes::{NOTE_SEP, NOTE_SEP_W, NoteBox, NoteSeps, v_span};
 use super::placed::Placed;
-use super::{Block, Border, FloatAlign, Page, ParaLayout, Rect, SectionProps, StoryRef};
+use super::{Block, Border, FloatAlign, Page, ParaLayout, Path, Rect, SectionProps, StoryRef};
 
 #[derive(Clone)]
 pub(crate) struct PageBuilder<'a> {
@@ -33,6 +33,10 @@ pub(crate) struct PageBuilder<'a> {
     /// The previous paragraph ended with a page break (its mark stayed with the break): the next
     /// paragraph, first on the new page, gets no space before (Word).
     pub(crate) after_break_mark: bool,
+    /// Column geometry of the preceding explicit page break.
+    pub(super) break_column: Option<(f32, f32)>,
+    /// Paragraph path and terminal line of the break's placed fragment.
+    pub(super) break_line: Option<(Path, usize)>,
     /// The next section starts on a new page: this section's closing mark, when empty, needs no
     /// room (Word leaves it on a full page rather than starting a page for it).
     pub(crate) next_starts_page: bool,
@@ -264,12 +268,7 @@ impl PageBuilder<'_> {
     /// that follows (a next-page section) doesn't leave it blank: Word keeps the break's mark on
     /// the page before, and starts one page.
     pub(crate) fn take_back_break_page(&mut self) -> bool {
-        let empty = self.after_break_mark
-            && self.at_top()
-            && self.notes.is_empty()
-            && self.pages.len() > 1
-            && self.pages.last().is_some_and(|p| p.items.len() == self.page_items_start);
-        if !empty {
+        if !super::empty_break_page(self) {
             return false;
         }
         self.pages.pop();
