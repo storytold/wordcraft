@@ -12,6 +12,8 @@ workspace = true
 log = { workspace = true }
 miniz_oxide = "0.9"
 unicode-normalization = "0.1"
+# Thai word segmentation, word list (CC0) and spelling suggestions; no_std, nothing to install.
+kham-core = "=0.8.2"
 
 [dev-dependencies]
 proptest = { workspace = true }

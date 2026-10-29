@@ -751,6 +751,12 @@ fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec
         found.sort_unstable();
         found.dedup();
     }
+    // Thai has no spaces between words: wrap between words found by the Thai word list.
+    if wordcraft_proof::th::has_thai(text) {
+        found.extend(wordcraft_proof::th::break_offsets(text));
+        found.sort_unstable();
+        found.dedup();
+    }
     // Asian typography: kinsoku and breaking Latin words anywhere.
     crate::kinsoku::apply(text, &mut found, rp.kinsoku, rp.word_wrap);
     found

@@ -49,6 +49,10 @@ pub enum ProofLang {
     /// `id_ID` dictionary, dictionary-driven suggestions and generic checks with Indonesian
     /// messages. Hyphenation keeps the fallback English patterns.
     Id,
+    /// Thai (`th`, `th-TH`; also ISO 639-2 `tha`): spelling and suggestions from the Thai word list
+    /// built into `kham-core` (CC0; nothing to install), line breaking between words
+    /// ([`crate::th`]). Thai is never hyphenated. No grammar rules yet.
+    Th,
     /// Spanish of Spain (`es`, `es-ES`, and every region not listed for [`ProofLang::EsMx`],
     /// [`ProofLang::Es419`] or [`ProofLang::EsUy`]; also ISO 639-2 `spa`): the installed
     /// Hunspell `es_ES` dictionary (or a generic Spanish one), dictionary-driven suggestions and
@@ -79,7 +83,7 @@ pub enum ProofLang {
 
 impl ProofLang {
     /// Every language with a spelling dictionary, in display order.
-    pub const PROOFED: [ProofLang; 15] = [
+    pub const PROOFED: [ProofLang; 16] = [
         ProofLang::En,
         ProofLang::EnGb,
         ProofLang::EnCa,
@@ -95,6 +99,7 @@ impl ProofLang {
         ProofLang::EsMx,
         ProofLang::Es419,
         ProofLang::EsUy,
+        ProofLang::Th,
     ];
 
     /// The proofing language of a BCP 47 tag (`pl-PL`, `en_GB`, `PL`…). The primary subtag
@@ -124,6 +129,8 @@ impl ProofLang {
             ProofLang::Cs
         } else if primary.eq_ignore_ascii_case("id") || primary.eq_ignore_ascii_case("ind") || primary.eq_ignore_ascii_case("in") {
             ProofLang::Id
+        } else if primary.eq_ignore_ascii_case("th") || primary.eq_ignore_ascii_case("tha") {
+            ProofLang::Th
         } else if primary.eq_ignore_ascii_case("es") || primary.eq_ignore_ascii_case("spa") {
             ProofLang::spanish(tag)
         } else if ["de", "deu", "ger"].iter().any(|c| primary.eq_ignore_ascii_case(c)) {
@@ -167,7 +174,7 @@ impl ProofLang {
         matches!(self, ProofLang::Es | ProofLang::EsMx | ProofLang::Es419 | ProofLang::EsUy)
     }
 
-    /// The primary language subtag (`en`, `pl`, `bg`, `tr`, `ru`, `cs`, `id`, `de`, `es`); empty for [`ProofLang::Other`].
+    /// The primary language subtag (`en`, `pl`, `bg`, `tr`, `ru`, `cs`, `id`, `th`, `de`, `es`); empty for [`ProofLang::Other`].
     pub fn code(self) -> &'static str {
         match self {
             ProofLang::En | ProofLang::EnGb | ProofLang::EnCa => "en",
@@ -180,6 +187,7 @@ impl ProofLang {
             ProofLang::Ru => "ru",
             ProofLang::Cs => "cs",
             ProofLang::Id => "id",
+            ProofLang::Th => "th",
             ProofLang::Es | ProofLang::EsMx | ProofLang::Es419 | ProofLang::EsUy => "es",
             ProofLang::De => "de",
             ProofLang::Other => "",
@@ -292,6 +300,11 @@ mod tests {
         assert_eq!(ProofLang::Cs.code(), "cs");
         assert!(ProofLang::Cs.is_proofed() && ProofLang::PROOFED.contains(&ProofLang::Cs));
         assert_eq!(ProofLang::Id.code(), "id");
+        for t in ["th", "th-TH", "TH-th", "th_TH", "th_TH.UTF-8", " th-TH ", "tha"] {
+            assert_eq!(ProofLang::from_tag(Some(t)), ProofLang::Th, "{t}");
+        }
+        assert_eq!(ProofLang::Th.code(), "th");
+        assert!(ProofLang::Th.is_proofed() && ProofLang::PROOFED.contains(&ProofLang::Th));
         assert!(ProofLang::Id.is_proofed() && ProofLang::PROOFED.contains(&ProofLang::Id));
     }
 
@@ -335,6 +348,14 @@ mod tests {
         assert_tags(&["de", "de-DE", "de-CH", "DE_at", "deu", "ger"], ProofLang::De);
         assert_tags(&["ru", "ru-RU", "RU-ru", "ru_RU", "ru_RU.UTF-8", " ru-RU ", "rus"], ProofLang::Ru);
         assert!(!ProofLang::De.is_proofed());
+        for t in ["fr-FR", "dex", "x-none", "ja-JP", "plx", "bgx", "trx", "csx", "idx", "inx", "thx", "esx", "spax", "e", "-"] {
+            assert_eq!(ProofLang::from_tag(Some(t)), ProofLang::Other, "{t}");
+        }
+        assert_eq!(ProofLang::from_tag(None), ProofLang::En);
+        assert_eq!(ProofLang::from_tag(Some("")), ProofLang::En);
+        assert_eq!(ProofLang::from_tag(Some("  ")), ProofLang::En);
+        assert!(ProofLang::Pl.is_proofed() && !ProofLang::Other.is_proofed());
+        // Bulgarian has hyphenation only: no spelling or grammar marks.
         assert!(!ProofLang::Bg.is_proofed());
         assert_eq!(ProofLang::Bg.code(), "bg");
         assert!(ProofLang::Pt.is_proofed() && !ProofLang::Other.is_proofed());
@@ -350,10 +371,6 @@ mod tests {
         assert_eq!(ProofLang::Hr.code(), "hr");
         assert_eq!(ProofLang::Tr.code(), "tr");
         assert!(ProofLang::PROOFED.contains(&ProofLang::Pt), "every proofed language is listed");
-        assert_eq!(ProofLang::from_tag(None), ProofLang::En);
-        assert_eq!(ProofLang::from_tag(Some("")), ProofLang::En);
-        assert_eq!(ProofLang::from_tag(Some("  ")), ProofLang::En);
-        assert!(ProofLang::Pl.is_proofed() && !ProofLang::Other.is_proofed());
     }
 
     #[test]

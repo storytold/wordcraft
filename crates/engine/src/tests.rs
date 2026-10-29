@@ -8192,6 +8192,35 @@ fn indonesian_proofing_through_the_review_commands() {
     assert_eq!(left[0]["lang"], "id");
 }
 
+/// Thai proofing through the same commands as Review, F7, Change and Add to Dictionary: the
+/// word list is built in, a sentence without spaces is checked word by word, and only the
+/// unknown word is marked.
+#[test]
+fn thai_proofing_through_the_review_commands() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "ฉันไปโรงเรียนวันนี้สวัดดีครับ"}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "review.language", json!({"lang": "th-TH", "default": true}));
+    assert_eq!(s.doc.styles.default_chr.lang.as_deref(), Some("th-TH"));
+    assert_eq!(run(&mut s, "format.state", json!({}))["lang"], "th-TH");
+    let issues = run(&mut s, "review.issues", json!({}));
+    let arr = issues.as_array().unwrap();
+    assert_eq!(arr.len(), 1, "{issues}");
+    assert!(arr[0]["text"] == "สวัดดี" && arr[0]["kind"] == "spelling" && arr[0]["lang"] == "th", "{issues}");
+    assert_eq!(arr[0]["suggestions"][0], "สวัสดี", "{issues}");
+    run(&mut s, "caret.docStart", json!({}));
+    assert_eq!(run(&mut s, "review.spelling", json!({}))["text"], "สวัดดี");
+    run(&mut s, "review.applySuggestion", json!({"text": "สวัสดี"}));
+    assert_eq!(text(&s), "ฉันไปโรงเรียนวันนี้สวัสดีครับ");
+    assert!(run(&mut s, "review.issues", json!({})).as_array().unwrap().is_empty());
+    // Add to Dictionary: a name the list lacks is accepted afterwards.
+    run(&mut s, "document.setText", json!({"text": "ฉันชื่อฟฟฟฟ"}));
+    assert_eq!(run(&mut s, "review.issues", json!({})).as_array().unwrap().len(), 1);
+    run(&mut s, "review.addToDictionary", json!({"word": "ฟฟฟฟ"}));
+    assert!(run(&mut s, "review.issues", json!({})).as_array().unwrap().is_empty());
+    wordcraft_proof::remove_word("ฟฟฟฟ");
+}
+
 /// The spelling issues of the document: each word with its first suggestion.
 fn spelling_with_first_suggestion(s: &mut Session) -> Vec<(String, String)> {
     let issues = run(s, "review.issues", json!({}));

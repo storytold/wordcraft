@@ -2825,6 +2825,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "kham-core"
+version = "0.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b660bf383de3120f9fd00c0baa4a1829d5e2d17616a559a7750692fcfb0b1cc2"
+dependencies = [
+ "miniz_oxide 0.8.9",
+]
+
+[[package]]
 name = "khronos-egl"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6888,6 +6897,7 @@ dependencies = [
 name = "wordcraft-proof"
 version = "0.12.0"
 dependencies = [
+ "kham-core",
  "log",
  "miniz_oxide 0.9.1",
  "proptest",

@@ -15,6 +15,8 @@
 //!
 //! **Bulgarian**: the Bulgarian syllable rules ([`crate::bg`]); no pattern file or word list.
 //!
+//! **Thai**: never hyphenated (lines break between words, [`crate::th::break_offsets`]).
+//!
 //! **German**: the TeX German patterns for the reformed spelling ([`Patterns::de`]), also for
 //! Swiss text, whose `ss` the patterns split like any double consonant (`Stras-se`).
 //!
@@ -214,6 +216,10 @@ pub fn word_breaks(word: &str) -> (Vec<usize>, Source) {
 /// handling case, apostrophes (`don't`, `’s`), surrounding punctuation and compounds (each letter
 /// run is hyphenated separately). No break is ever placed next to an apostrophe or non-letter.
 pub fn word_breaks_in(word: &str, lang: ProofLang) -> (Vec<usize>, Source) {
+    // Thai is not hyphenated: its words are found by the word list, and lines break between them.
+    if lang == ProofLang::Th || crate::th::has_thai(word) {
+        return (Vec::new(), Source::None);
+    }
     let chars: Vec<char> = word.chars().collect();
     let mut out = Vec::new();
     let mut src = Source::None;
@@ -880,6 +886,16 @@ mod tests {
                 assert_eq!(hyphen_points_in(w, &Limits::default(), lang), hyphen_points(w, &Limits::default()), "{w}");
             }
         }
+    }
+
+    #[test]
+    fn thai_is_never_hyphenated() {
+        for lang in [ProofLang::Th, ProofLang::Other, ProofLang::En] {
+            for w in ["สวัสดีครับ", "โรงเรียนมัธยม", "Helloสวัสดี"] {
+                assert!(hyphen_points_in(w, &Limits::default(), lang).is_empty(), "{w} {lang:?}");
+            }
+        }
+        assert_eq!(hyphenate_word_in("สวัสดี", &Limits::default(), ProofLang::Th), "สวัสดี");
     }
 
     #[test]

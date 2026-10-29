@@ -291,3 +291,58 @@ fn khmer_ignores_the_ligature_setting() {
     assert_eq!(gids(Some(hd)), gids(None));
     assert_eq!(gids(Ligatures::from_ooxml("none")), gids(None));
 }
+
+#[test]
+fn thai_without_spaces_wraps_between_words() {
+    // ฉัน | ไป | โรงเรียน | วันนี้: UAX #14 finds no break inside Thai; the word list does.
+    let text = "ฉันไปโรงเรียนวันนี้เด็กกินข้าวกับปลา".repeat(60);
+    let l = lay(&Document::from_text(&text));
+    let pl = para_layout(&l, 0);
+    assert!(pl.lines.len() > 1, "a long Thai paragraph wraps");
+    let breaks = wordcraft_proof::th::break_offsets(&text);
+    assert!(!breaks.is_empty());
+    // A line may end exactly where the word list says, and nowhere else.
+    for c in &pl.clusters {
+        assert_eq!(c.break_after, breaks.contains(&c.end), "break after {}", c.end);
+    }
+    // Every line starts at a word, so no word is split across lines.
+    for line in pl.lines.iter().skip(1) {
+        let start = pl.clusters[line.c0].start;
+        assert!(breaks.contains(&start), "line starts at word {start}");
+    }
+    // Lines are full: a word break, not an emergency break after one cluster.
+    assert!(pl.lines[0].c1 - pl.lines[0].c0 > 10);
+}
+
+#[test]
+fn thai_mixed_with_latin_keeps_latin_words_whole() {
+    let text = "ฉันไปโรงเรียนวันนี้ internationalization กับ 12345 สวัสดีครับ ".repeat(20);
+    let l = lay(&Document::from_text(&text));
+    let pl = para_layout(&l, 0);
+    assert!(pl.lines.len() > 1);
+    let breaks = wordcraft_proof::th::break_offsets(&text);
+    for b in &breaks {
+        let before = text.get(..*b).and_then(|t| t.chars().next_back());
+        let after = text.get(*b..).and_then(|t| t.chars().next());
+        assert!(before.is_some_and(wordcraft_proof::th::is_thai_char) && after.is_some_and(wordcraft_proof::th::is_thai_char), "{b}");
+    }
+    // No line starts inside "internationalization" (a break there would be the emergency kind).
+    for line in pl.lines.iter().skip(1) {
+        let start = pl.clusters[line.c0].start;
+        let after = text.get(start..).unwrap_or("");
+        assert!(!after.starts_with("nternational") && !after.starts_with("ternational"), "{start}");
+    }
+}
+
+#[test]
+fn thai_layout_is_fast_and_survives_hostile_text() {
+    let long = "ฉันไปโรงเรียนวันนี้".repeat(2_000);
+    let t = std::time::Instant::now();
+    let l = lay(&Document::from_text(&long));
+    assert!(para_layout(&l, 0).lines.len() > 10);
+    assert!(t.elapsed().as_secs_f64() < 10.0, "{:?}", t.elapsed());
+    for s in ["\u{0E31}\u{0E31}\u{0E31}", "เ", "ๆๆๆ", "ก\u{0E48}\u{0E48}\u{0E48}ข", "\u{0E3A}"] {
+        let l = lay(&Document::from_text(&s.repeat(300)));
+        let _ = para_layout(&l, 0);
+    }
+}

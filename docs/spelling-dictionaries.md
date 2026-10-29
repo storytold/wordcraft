@@ -35,6 +35,8 @@ WordCraft looks for the first of these file names (each name means a `<name>.aff
 | Spanish (Latin America, and the other Spanish regions of the Americas) | `es_419`, `es-419`, `es_ANY`, `es`, `es_US`, `es_MX`, `es_AR`, `es-AR` | LibreOffice `dict-es` (RLA-ES) |
 | Spanish (Uruguay) | `es_UY`, `es-UY`, `es_AR`, `es-AR`, `es_419`, `es-419`, `es_ANY`, `es` | LibreOffice `dict-es` (RLA-ES) |
 
+Thai needs no file: its word list is part of the `kham-core` crate built into WordCraft (CC0), so Thai is checked out of the box, on the web too, and the status bar never shows *(no dictionary)* for it.
+
 Every Portuguese region uses the same `pt_BR` dictionary, so text marked *Português (Portugal)*
 is checked with it too.
 
