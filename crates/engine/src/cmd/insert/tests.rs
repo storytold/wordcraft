@@ -354,3 +354,38 @@ fn date_pictures() {
     assert_eq!(date_picture(r#"TIME \@ HH:mm"#).as_deref(), Some("HH:mm"));
     assert_eq!(date_picture("DATE"), None);
 }
+
+/// #1707: Insert ▸ Date & Time and DATE/TIME fields use the local civil date, time and
+/// weekday, not UTC's.
+#[test]
+fn format_date_uses_the_local_offset() {
+    // Noon on Saturday 31 October in New Zealand (UTC+13) is 2026-10-30T23:00:00Z.
+    assert_eq!(format_date_at("dddd, MMMM d, yyyy h:mm am/pm", 1_793_401_200, 13 * 3600), "Saturday, October 31, 2026 12:00 PM");
+    assert_eq!(format_date_at("M/d/yyyy H:mm", 1_793_498_400, -5 * 3600), "10/31/2026 21:00");
+    assert_eq!(format_date_at("M/d/yyyy H:mm", 1_793_401_200, 0), "10/30/2026 23:00");
+}
+
+#[test]
+fn local_civil_date_follows_the_utc_offset() {
+    let pic = "dddd d MMMM yyyy HH:mm";
+    let show = |unix: u64, off: i64| {
+        let (y, m, d, hms, days) = crate::cmd::local_civil(unix, off);
+        format_date_parts(pic, y, m as usize, d, hms, days)
+    };
+    // 2026-10-30T23:00:00Z in New Zealand (UTC+13) is Saturday 31 October, noon.
+    assert_eq!(show(1_793_401_200, 13 * 3600), "Saturday 31 October 2026 12:00");
+    // 2026-11-01T02:00:00Z at UTC-5 is still Saturday 31 October, 21:00.
+    assert_eq!(show(1_793_498_400, -5 * 3600), "Saturday 31 October 2026 21:00");
+    // Offset 0 is UTC.
+    assert_eq!(show(1_793_401_200, 0), "Friday 30 October 2026 23:00");
+    // Near the epoch with a negative offset: the day before 1970, no overflow.
+    assert_eq!(show(0, -3600), "Wednesday 31 December 1969 23:00");
+    // Hostile values never panic.
+    let _ = crate::cmd::local_civil(u64::MAX, i64::MAX);
+    let _ = crate::cmd::local_civil(u64::MAX, i64::MIN);
+    let _ = crate::cmd::local_civil(0, i64::MIN);
+    // The machine's zone is a real offset (within ±26 h) and asking never panics.
+    for unix in [0, 1_793_401_200, u64::MAX] {
+        assert!(crate::cmd::local_offset_secs(unix).abs() <= 26 * 3600);
+    }
+}

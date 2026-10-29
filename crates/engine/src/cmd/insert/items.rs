@@ -61,14 +61,16 @@ pub(super) fn date_time(s: &mut Session, v: &Value) -> CmdResult {
 
 /// Format today's date with a Word picture (`M/d/yyyy`, `MMMM d, yyyy`, `yyyy-MM-dd`, `dddd`…).
 pub fn format_date(fmt: &str) -> String {
-    let iso = crate::cmd::now_iso();
-    let y: i64 = iso.get(0..4).and_then(|x| x.parse().ok()).unwrap_or(2026);
-    let m: usize = iso.get(5..7).and_then(|x| x.parse().ok()).unwrap_or(1);
-    let d: u32 = iso.get(8..10).and_then(|x| x.parse().ok()).unwrap_or(1);
-    let hh: u32 = iso.get(11..13).and_then(|x| x.parse().ok()).unwrap_or(0);
-    let mm: u32 = iso.get(14..16).and_then(|x| x.parse().ok()).unwrap_or(0);
-    let ss: u32 = iso.get(17..19).and_then(|x| x.parse().ok()).unwrap_or(0);
-    format_date_parts(fmt, y, m, d, (hh, mm, ss), (crate::cmd::now_unix() / 86_400) as i64)
+    // Word shows the computer's local date and time (#1707), not UTC's.
+    let now = crate::cmd::now_unix();
+    format_date_at(fmt, now, crate::cmd::local_offset_secs(now))
+}
+
+/// Format the instant `unix` (seconds since the epoch, UTC) with a Word picture, in the zone
+/// `offset_secs` east of UTC.
+pub fn format_date_at(fmt: &str, unix: u64, offset_secs: i64) -> String {
+    let (y, m, d, hms, days) = crate::cmd::local_civil(unix, offset_secs);
+    format_date_parts(fmt, y, m as usize, d, hms, days)
 }
 
 /// Format a date and time with a Word picture; `days_since` (days since 1970-01-01) gives the weekday.
