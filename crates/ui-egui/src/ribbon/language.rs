@@ -57,6 +57,7 @@ pub(crate) fn language_name(tag: Option<&str>) -> String {
             wordcraft_engine::proof::ProofLang::Tr => "Turkish".into(),
             wordcraft_engine::proof::ProofLang::Ru => "Russian".into(),
             wordcraft_engine::proof::ProofLang::Cs => "Czech".into(),
+            wordcraft_engine::proof::ProofLang::Ro => "Romanian".into(),
             wordcraft_engine::proof::ProofLang::Id => "Indonesian".into(),
             wordcraft_engine::proof::ProofLang::Es => "Spanish (Spain)".into(),
             wordcraft_engine::proof::ProofLang::De => "German (Germany)".into(),

@@ -1,9 +1,9 @@
 # Installing spelling dictionaries
 
-> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-10-23 · **Change:** minor (ISO 8859-9 Turkish dictionaries are read, #3692; previously minor: Spanish: `es_ES`, `es_MX`, `es_419` and `es_UY` with their fallbacks, #3360, #3553; previously trivial: every Hunspell language shows (no dictionary), not only Polish and Portuguese, and Indonesian is listed, #3150; previously trivial: ISO 8859-1 dictionaries are read, #2824)
+> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-10-29 · **Change:** minor (Narrow Romanian contextual diacritics for court phrases; manual suggestions and synthetic regressions; estimates unchanged)
 
 English spelling works out of the box. Polish, Russian, Portuguese, Czech, Italian, Croatian,
-Turkish, Indonesian and Spanish spelling use a standard **Hunspell** dictionary (an `.aff` and a `.dic` file) that
+Turkish, Indonesian, Spanish and Romanian spelling use a standard **Hunspell** dictionary (an `.aff` and a `.dic` file) that
 WordCraft reads at runtime. These dictionaries are not bundled: they are large, and several are
 GPL or LGPL licensed. Without one, the language isn't checked. The status bar then shows the
 language with **(no dictionary)**, for example *Português (Brasil) (no dictionary)*.
@@ -26,6 +26,7 @@ WordCraft looks for the first of these file names (each name means a `<name>.aff
 | Russian | `ru_RU`, `ru-RU`, `ru` | LibreOffice `dict-ru` |
 | Portuguese (Brazil and Portugal) | `pt_BR`, `pt-BR`, `pt` | VERO (LibreOffice `dict-pt-BR`) |
 | Czech | `cs_CZ`, `cs-CZ`, `cs` | LibreOffice `dict-cs` |
+| Romanian | `ro_RO`, `ro-RO`, `ro_MD`, `ro` | [Rospell via the LibreOffice dictionary collection](https://github.com/LibreOffice/dictionaries/tree/master/ro) |
 | Italian | `it_IT`, `it_CH`, `it-IT`, `it` | LibreOffice `dict-it` |
 | Croatian | `hr_HR`, `hr-HR`, `hr` | LibreOffice `dict-hr` |
 | Turkish | `tr_TR`, `tr-TR`, `tr` | LibreOffice `dict-tr` |
@@ -136,10 +137,49 @@ from the LibreOffice repository (for example `it_IT/it_IT.aff`; the Spanish ones
 
 Never commit dictionary files to this repository: they stay on the user's system.
 
+## Romanian
+
+Place `ro_RO.aff` and `ro_RO.dic` together in the Dictionaries folder, then choose
+**Review > Language > Set Proofing Language > Romanian** (`ro-RO`). The same folder can
+be supplied to the CLI with `WORDCRAFT_DICTIONARIES`. Keep the upstream licence files next
+to a downloaded dictionary; no Rospell data is shipped in WordCraft.
+
+With a Romanian interface and no explicit saved language default, new blank documents and
+opened plain text use `ro-RO`. Existing document languages and a saved default take precedence.
+
+F7, suggestion application and the user dictionary work in Romanian. Old cedilla `ş`/`ţ`
+are recognized as comma-below `ș`/`ț` for lookup only. Checking does not normalize or replace
+the document text. Suggestions are choices, not automatic rewrites. Typed low opening quotes such
+as `,,citat"` are not treated as duplicate commas or spaces-before-punctuation errors.
+Explicit whole-compound exclusions cannot be bypassed by checking the parts separately.
+
+This is spelling plus basic punctuation/capitalization checking, not full grammatical or
+legal review. A spelling dictionary accepts some ambiguous forms: for example, the tested
+Rospell 3.3.10 data derives `instanta` from its `instantă/A` entry. Spelling alone therefore
+cannot choose `instanța`. A separate grammar suggestion now handles only these adjacent cues:
+
+- `instanta` / `instantei` followed by `de judecată`, `de apel` or `de recurs`;
+- `instantei` after `pe rolul` or `în fața`;
+- `parat` after `calitate de` or `calitatea de`;
+- `paratul` after `contradictoriu cu` or `reclamantul și`, or before `a depus întâmpinare`;
+- `paratului` after `citarea`, `obligarea` or `audierea`.
+
+Cues accept missing diacritics, old cedilla forms and decomposed Unicode for lookup only.
+Punctuation, hard line/paragraph breaks and non-space separators stop a phrase. Immediately
+quoted words, identifiers with mixed capitals or adjacent literal markers are left alone.
+The replacement preserves lower/title/all-capital case; a missing sentence capital is combined
+with the diacritic fix in one suggestion. The `review.ignoreAll` command and custom-dictionary entries opt out.
+These are manual suggestions, even without an installed spelling dictionary; querying never
+changes the document. `a parat lovitura`, words mentioned without these cues, and valid
+unaccented words such as `fata` are not forced into another word. Other contexts, broader
+inflections (including ambiguous feminine forms), and Romanian hyphenation remain unsupported.
+
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-29 | minor | Narrow Romanian contextual diacritics for court phrases; manual suggestions and synthetic regressions; estimates unchanged |
+| 2026-10-28 | minor | Romanian proofing adapted from #2565: runtime ro_RO spelling and diacritic-aware suggestions; NOSUGGEST honored; contextual grammar guesses left alone; picker, status, F7, Romanian-interface editing defaults and DOCX persistence checks; estimates unchanged |
 | 2026-10-22 | minor | Spanish (#3360, #3553): the file names for Spain, Mexico, Latin America and Uruguay and their fallbacks |
 | 2026-10-22 | trivial | Italian, Croatian, Turkish, Russian, Czech and Indonesian without a dictionary now show **(no dictionary)** (or **(dictionary unreadable)**) too, as this page already said; before, only Polish and Portuguese did. Indonesian is listed with its file names (#3150) |
 | 2026-10-23 | trivial | ISO 8859-9 (`SET ISO8859-9`) dictionaries are read, so an older Turkish `tr_TR` loads without converting it to UTF-8; the Turkish dictionary is read through the same size-capped reader and `SET` decoding as the others (#3692) |

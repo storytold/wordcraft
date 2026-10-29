@@ -49,6 +49,9 @@ pub enum ProofLang {
     /// `id_ID` dictionary, dictionary-driven suggestions and generic checks with Indonesian
     /// messages. Hyphenation keeps the fallback English patterns.
     Id,
+    /// Romanian (`ro`, `ro-RO`, `ro-MD`): the installed Hunspell dictionary (`ro_RO`, when there
+    /// is one) and the Romanian grammar rules. Hyphenation keeps the fallback English patterns.
+    Ro,
     /// Spanish of Spain (`es`, `es-ES`, and every region not listed for [`ProofLang::EsMx`],
     /// [`ProofLang::Es419`] or [`ProofLang::EsUy`]; also ISO 639-2 `spa`): the installed
     /// Hunspell `es_ES` dictionary (or a generic Spanish one), dictionary-driven suggestions and
@@ -79,7 +82,7 @@ pub enum ProofLang {
 
 impl ProofLang {
     /// Every language with a spelling dictionary, in display order.
-    pub const PROOFED: [ProofLang; 15] = [
+    pub const PROOFED: [ProofLang; 16] = [
         ProofLang::En,
         ProofLang::EnGb,
         ProofLang::EnCa,
@@ -91,6 +94,7 @@ impl ProofLang {
         ProofLang::Ru,
         ProofLang::Cs,
         ProofLang::Id,
+        ProofLang::Ro,
         ProofLang::Es,
         ProofLang::EsMx,
         ProofLang::Es419,
@@ -124,6 +128,9 @@ impl ProofLang {
             ProofLang::Cs
         } else if primary.eq_ignore_ascii_case("id") || primary.eq_ignore_ascii_case("ind") || primary.eq_ignore_ascii_case("in") {
             ProofLang::Id
+        } else if ["ro", "ron", "rum", "mo", "mol"].iter().any(|p| primary.eq_ignore_ascii_case(p)) {
+            // `mo`/`mol` are the withdrawn Moldovan tags, Romanian since 2008.
+            ProofLang::Ro
         } else if primary.eq_ignore_ascii_case("es") || primary.eq_ignore_ascii_case("spa") {
             ProofLang::spanish(tag)
         } else if ["de", "deu", "ger"].iter().any(|c| primary.eq_ignore_ascii_case(c)) {
@@ -167,7 +174,7 @@ impl ProofLang {
         matches!(self, ProofLang::Es | ProofLang::EsMx | ProofLang::Es419 | ProofLang::EsUy)
     }
 
-    /// The primary language subtag (`en`, `pl`, `bg`, `tr`, `ru`, `cs`, `id`, `de`, `es`); empty for [`ProofLang::Other`].
+    /// The primary language subtag (`en`, `pl`, `bg`, `tr`, `ru`, `cs`, `id`, `ro`, `de`, `es`); empty for [`ProofLang::Other`].
     pub fn code(self) -> &'static str {
         match self {
             ProofLang::En | ProofLang::EnGb | ProofLang::EnCa => "en",
@@ -180,6 +187,7 @@ impl ProofLang {
             ProofLang::Ru => "ru",
             ProofLang::Cs => "cs",
             ProofLang::Id => "id",
+            ProofLang::Ro => "ro",
             ProofLang::Es | ProofLang::EsMx | ProofLang::Es419 | ProofLang::EsUy => "es",
             ProofLang::De => "de",
             ProofLang::Other => "",
@@ -260,6 +268,16 @@ pub fn normalize_tag(tag: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    /// Romanian tags, including legacy document metadata, select the same proofing tools.
+    #[test]
+    fn romanian_tags_select_romanian_proofing() {
+        for tag in ["ro", "ro-RO", "RO_ro", "ro-MD", "ro_RO.UTF-8", " ro-RO ", "ron", "rum", "mo", "mol"] {
+            assert_eq!(ProofLang::from_tag(Some(tag)), ProofLang::Ro, "{tag}");
+        }
+        assert!(ProofLang::Ro.is_proofed());
+        assert_eq!(ProofLang::Ro.code(), "ro");
+    }
+
     use super::*;
 
     #[test]

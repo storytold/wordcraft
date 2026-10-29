@@ -123,7 +123,7 @@ pub static LANGUAGES: [LangInfo; 27] = [
     // Danish; `da`, `da-DK` and `da_DK.UTF-8` resolve here.
     LangInfo { code: "da", prefer_hans: false, editing_lang: None },
     // Romanian; `ro`, `ro-RO`, `ro_RO.UTF-8` and `ro-MD` resolve here.
-    LangInfo { code: "ro", prefer_hans: false, editing_lang: None },
+    LangInfo { code: "ro", prefer_hans: false, editing_lang: Some("ro-RO") },
     // Slovenian; `sl`, `sl-SI` and `sl_SI.UTF-8` resolve here.
     LangInfo { code: "sl", prefer_hans: false, editing_lang: None },
 ];

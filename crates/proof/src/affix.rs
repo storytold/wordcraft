@@ -742,6 +742,24 @@ impl AffixDict {
         self.check_excluding(w, self.forbidden | self.no_suggest)
     }
 
+    /// Does a listed spelling forbid compound fallback, including mixed-case variants?
+    pub(crate) fn excludes_spelling(&self, word: &str) -> bool {
+        self.excludes_variant(word, self.forbidden)
+    }
+
+    /// Does a listed spelling forbid suggestion fallback, including mixed-case variants?
+    pub(crate) fn excludes_suggestions(&self, word: &str) -> bool {
+        self.excludes_variant(word, self.forbidden | self.no_suggest)
+    }
+
+    fn excludes_variant(&self, word: &str, mask: u128) -> bool {
+        if mask == 0 {
+            return false;
+        }
+        let excluded = |form: &str| self.check_excluding(form, 0) && !self.check_excluding(form, mask);
+        excluded(word) || (matches!(casing(word), Casing::Mixed) && excluded(&word.to_lowercase()))
+    }
+
     fn check_excluding(&self, w: &str, excluded: u128) -> bool {
         if self.contains_excluding(w, excluded) {
             return true;
@@ -1115,6 +1133,25 @@ pub(crate) mod tests {
         for aff in ["", "NOSUGGEST N\n"] {
             let ordinary = AffixDict::from_hunspell(aff, "2\nmixCase\nhidden/N\n", &[]).unwrap();
             assert!(suggest(&ordinary, "MIXCASX", 8).contains(&"MIXCASE".into()));
+        }
+    }
+
+    /// Compound guards honor exclusions in mixed case without rejecting ordinary words.
+    #[test]
+    fn excluded_listing_includes_case_and_affixed_forms() {
+        let d =
+            AffixDict::from_hunspell("NOSUGGEST N\nFORBIDDENWORD F\nSFX A Y 1\nSFX A 0 s .\n", "3\nsecret/NA\nbanned/FA\nordinary/A\n", &[]).unwrap();
+        for word in ["secret", "Secrets", "SeCrEt"] {
+            assert!(!d.excludes_spelling(word), "NOSUGGEST is correct: {word}");
+            assert!(d.excludes_suggestions(word), "{word}");
+        }
+        for word in ["banned", "BANNEDS", "BanNeD"] {
+            assert!(d.excludes_spelling(word), "{word}");
+            assert!(d.excludes_suggestions(word), "{word}");
+        }
+        for word in ["unknown", "ordinary", "OrDiNaRy"] {
+            assert!(!d.excludes_spelling(word), "{word}");
+            assert!(!d.excludes_suggestions(word), "{word}");
         }
     }
 

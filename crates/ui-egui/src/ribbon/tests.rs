@@ -697,3 +697,23 @@ fn shape_and_chart_formats_leave_out_of_range_sizes_alone() {
     assert_eq!(before.0, Some((20.0, 2500.0)));
     assert_eq!(shown(a), before, "Chart Design shown, the chart untouched");
 }
+
+/// Romanian is reachable without growing the already full quick-language menu.
+#[test]
+fn romanian_proofing_language_is_selectable_and_named() {
+    assert!(crate::dialogs_layout::LANGUAGES.contains(&("ro-RO", "Romanian")));
+    for tag in ["ro-RO", "ro", "ron", "rum", "mo", "mol"] {
+        assert_eq!(language_name(Some(tag)), "Romanian", "{tag}");
+    }
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text sintetic.")), crate::Services::default());
+    app.run("select.all", json!({})).unwrap();
+    app.run("review.language", json!({"lang":"ro-RO"})).unwrap();
+    app.run("ui.dialog", json!({"name":"language"})).unwrap();
+    let Some(crate::dialogs::Dialog::Layout(dialog)) = app.dialog.as_ref() else {
+        panic!("the language picker must open");
+    };
+    let crate::dialogs_layout::LayoutDialog::Language(form) = dialog.as_ref() else {
+        panic!("expected the language picker");
+    };
+    assert_eq!(form.lang, "ro-RO");
+}
