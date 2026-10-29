@@ -7,12 +7,19 @@ use super::{CharProps, Document, Paragraph, ResolvedChar};
 pub struct ProofRun {
     pub range: std::ops::Range<usize>,
     pub lang: wordcraft_proof::ProofLang,
+    /// The language tag as the document gives it (an external checker is asked in it).
+    pub tag: Option<String>,
     pub skip: bool,
 }
 
 impl ProofRun {
     pub(super) fn of(range: std::ops::Range<usize>, rc: &ResolvedChar) -> ProofRun {
-        ProofRun { range, lang: wordcraft_proof::ProofLang::from_tag(rc.lang.as_deref()), skip: rc.no_proof || rc.hidden || rc.link.is_some() }
+        ProofRun {
+            range,
+            lang: wordcraft_proof::ProofLang::from_tag(rc.lang.as_deref()),
+            tag: rc.lang.clone(),
+            skip: rc.no_proof || rc.hidden || rc.link.is_some(),
+        }
     }
 }
 
@@ -47,6 +54,21 @@ pub fn paragraph_issues(
     let text = proof_text(p);
     let spans: Vec<(std::ops::Range<usize>, wordcraft_proof::ProofLang)> = runs.iter().map(|r| (r.range.clone(), r.lang)).collect();
     let skip = |a: usize, b: usize| runs.iter().any(|r| r.skip && r.range.start < b && a < r.range.end);
+    // The external checker's result for this text when it has one (#575), each issue in the
+    // language of the run it is in; grammar marks only with `grammar`.
+    // A paragraph mixing languages is stored under all of them (#763).
+    let external_language = external_language_of(&text, runs);
+    if let Some(found) = wordcraft_proof::check_external(&text, &external_language) {
+        let lang_at = |at: usize| spans.iter().find(|(r, _)| r.contains(&at)).map(|(_, l)| *l).unwrap_or_default();
+        return found
+            .into_iter()
+            .filter(|i| !skip(i.start, i.end) && (grammar || i.kind != wordcraft_proof::IssueKind::Grammar))
+            .filter(|i| {
+                i.kind != wordcraft_proof::IssueKind::Spelling || !wordcraft_proof::spelling_ignored_by_options(&text, i.start, i.end, spelling)
+            })
+            .map(|i| wordcraft_proof::Issue { lang: lang_at(i.start), ..i })
+            .collect();
+    }
     wordcraft_proof::check_text_with(&text, &spans, spelling, grammar, list_item).into_iter().filter(|i| !skip(i.start, i.end)).collect()
 }
 
@@ -70,9 +92,25 @@ pub(super) fn proof_issues(
         .collect()
 }
 
+/// The language an external checker's result for `p` is stored under: the setting, or the
+/// language of its runs, all of them when they differ (#763). `table` is the cell's
+/// table-style character formatting, as for [`proof_runs`].
+pub fn external_language(doc: &Document, p: &Paragraph, table: Option<&CharProps>) -> String {
+    external_language_of(&proof_text(p), &proof_runs(doc, p, table))
+}
+
+fn external_language_of(text: &str, runs: &[ProofRun]) -> String {
+    let tagged: Vec<(std::ops::Range<usize>, Option<&str>)> = runs.iter().map(|r| (r.range.clone(), r.tag.as_deref())).collect();
+    wordcraft_proof::external::signature(&wordcraft_proof::external::language_spans(text, &tagged, wordcraft_proof::external::wanted))
+}
+
 /// Text for proofing with the same byte offsets: inline objects and tracked deletions become
 /// U+0001 bytes (neither words nor spaces).
 pub fn proof_text(p: &wordcraft_doc::Paragraph) -> String {
+    // Nothing to blank: the text as it is (the usual case, and no per-character work).
+    if !p.text.contains(wordcraft_doc::para::OBJ) && p.runs.iter().all(|r| r.props.del.is_none()) {
+        return p.text.clone();
+    }
     let mut out = String::with_capacity(p.text.len());
     // The run holding each character ([`Paragraph::props_of_char`]), found by walking the runs
     // along with the text rather than from the first run for every character.

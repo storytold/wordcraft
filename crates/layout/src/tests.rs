@@ -11655,6 +11655,47 @@ fn layout_cache_invalidates_on_changed_filepath() {
     assert_eq!(text_b, "/path/two/a.docx", "second layout with same cache shows /path/two/a.docx");
 }
 
+/// #763: a paragraph mixing languages gets its external checker's result once it arrives, even
+/// when layout cached it before: the cache key and the lookup use the same stored language.
+#[test]
+fn mixed_language_paragraph_takes_the_external_result_after_it_arrives() {
+    let text = "Zebra quokka wombat bonjour tout le monde";
+    let mut d = Document::from_text(text);
+    let fr = text.find("bonjour").unwrap();
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, fr), &|c| c.lang = Some("en-US".into())).unwrap();
+    d.format_range(&Pos::body(0, fr), &Pos::body(0, text.len()), &|c| c.lang = Some("fr-FR".into())).unwrap();
+    /// Puts the process-wide language setting back to its default, even when the test panics.
+    struct ResetMode;
+    impl Drop for ResetMode {
+        fn drop(&mut self) {
+            wordcraft_proof::external::set_mode("auto");
+        }
+    }
+    let _reset = ResetMode;
+    wordcraft_proof::external::set_mode("document");
+    let p = d.para(StoryRef::Body, &Path::top(0)).unwrap();
+    let language = para::external_language(&d, p, None);
+    assert_eq!(language, format!("en-US@0-{fr},fr-FR@{fr}-{}", text.len()));
+    let opts = LayoutOptions { proofing: true, ..LayoutOptions::default() };
+    let mut c = LayoutCache::new();
+    let issues = |l: &DocLayout| {
+        l.pages[0].items.iter().find_map(|i| if let Placed::Lines { para, .. } = i { Some(para.issues.clone()) } else { None }).unwrap_or_default()
+    };
+    let before = issues(&layout(&d, &mut c, &opts));
+    assert!(!before.contains(&(0, 5, false)));
+    let issue = wordcraft_proof::Issue {
+        start: 0,
+        end: 5,
+        kind: wordcraft_proof::IssueKind::Spelling,
+        message: String::new(),
+        suggestions: Vec::new(),
+        lang: wordcraft_proof::ProofLang::En,
+    };
+    wordcraft_proof::external::put(text, &language, vec![issue]);
+    let after = issues(&layout(&d, &mut c, &opts));
+    assert_eq!(after, vec![(0, 5, false)]);
+}
+
 /// Keep with next takes the same 0.01 pt of slack as the other fit checks: a kept paragraph and
 /// the next one's first line that fill the page to within it stay on the page.
 #[test]
