@@ -590,14 +590,15 @@ fn formatting_marks(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
 }
 
 fn draw_rubies(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
-    let (pl, line, opts, x, base, alpha) = (ctx.pl, ctx.line, ctx.opts, ctx.x, ctx.base, ctx.alpha);
+    let (pl, line, opts, x, alpha) = (ctx.pl, ctx.line, ctx.opts, ctx.x, ctx.alpha);
     for r in pl.rubies.iter().filter(|r| (line.c0..line.c1).contains(&r.cluster)) {
         let Some(bst) = pl.clusters.get(r.cluster).and_then(|c| pl.styles.get(c.style as usize)) else { continue };
         if bst.rc.del.is_some() && !opts.markup {
             continue;
         }
         let cx = x + line.cl_left(r.cluster).unwrap_or(0.0);
-        let y = base - bst.shift - r.raise;
+        // The ruby follows its base's baseline, shifted with it under `w:textAlignment`.
+        let y = ctx.base + line.shift_at(r.cluster) - bst.shift - r.raise;
         let mut i = 0;
         while let Some(&(style, _)) = r.glyphs.get(i) {
             let n = r.glyphs.get(i..).map_or(0, |g| g.iter().take_while(|(s, _)| *s == style).count()).max(1);
@@ -762,7 +763,8 @@ fn enclosures(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
         }
         let (Some(cluster), Some(left)) = (ctx.pl.clusters.get(*k), ctx.line.cl_left(*k)) else { continue };
         let Some(style) = ctx.pl.styles.get(cluster.style as usize) else { continue };
-        let rect = Rect::new(ctx.x + left + enclosure.x, ctx.base - style.shift - enclosure.top, enclosure.w, enclosure.h);
+        let base = ctx.base + ctx.line.shift_at(*k);
+        let rect = Rect::new(ctx.x + left + enclosure.x, base - style.shift - enclosure.top, enclosure.w, enclosure.h);
         out.push(Draw::Shape {
             rect,
             kind: enclosure.kind,

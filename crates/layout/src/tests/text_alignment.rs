@@ -223,3 +223,62 @@ fn a_text_box_in_a_cell_keeps_the_grid_whatever_the_cells_own_text_does() {
     assert!(!cell_on.is_empty() && cell_on.iter().all(on_pitch), "cell lines snap with the flag: {cell_on:?}");
     assert!(!boxed_on.is_empty() && boxed_on.iter().all(on_pitch), "the text box keeps the grid: {boxed_on:?}");
 }
+
+/// An enclosed character (or a ruby base) after a 60 pt picture on one line, aligned `align`: the
+/// text's glyph baseline and the annotation's y (the enclosure's top, or the ruby text's baseline).
+fn annotated_line(align: TextAlignment, ruby: bool) -> (f32, f32) {
+    use wordcraft_doc::eq::{EncloseShape, EncloseStyle, Enclosure};
+    use wordcraft_doc::para::RubyAlign;
+    let mut d = Document::from_text("");
+    let at = Pos::body(0, 0);
+    d.format_paragraphs(&at, &at, &|p: &mut ParaProps| p.text_alignment = Some(align)).unwrap();
+    let item = if ruby {
+        InlineObject::Ruby {
+            base: "b".into(),
+            ruby: "x".into(),
+            align: RubyAlign::Center,
+            size: 6.0,
+            raise: 12.0,
+            base_size: 12.0,
+            lang: String::new(),
+            props: Default::default(),
+        }
+    } else {
+        let e = Enclosure { shape: EncloseShape::Circle, style: EncloseStyle::Shrink, text: "A".into() };
+        InlineObject::Field { instr: e.instr(), result: "A".into(), locked: false, dirty: false, code: false, form: String::new() }
+    };
+    d.insert_object(&Pos::body(0, 0), item, &Default::default()).unwrap();
+    let pic = InlineObject::Image { media: "m".into(), w: 30.0, h: 60.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None };
+    d.insert_object(&Pos::body(0, 0), pic, &Default::default()).unwrap();
+    let l = lay(&d);
+    let items = display::page_display(&d, &l.pages[0], &Default::default());
+    let glyph_y = |want: &str| {
+        items
+            .iter()
+            .find_map(|i| match i {
+                display::Draw::Glyphs { text, glyphs, .. } if text == want => glyphs.first().map(|g| g.2),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{want} drawn: {items:?}"))
+    };
+    if ruby {
+        (glyph_y("b"), glyph_y("x"))
+    } else {
+        let shape_y = items
+            .iter()
+            .find_map(|i| if let display::Draw::Shape { rect, .. } = i { Some(rect.y) } else { None })
+            .unwrap_or_else(|| panic!("the enclosure drawn: {items:?}"));
+        (glyph_y("A"), shape_y)
+    }
+}
+
+#[test]
+fn enclosures_and_ruby_move_with_their_text_under_text_alignment() {
+    for ruby in [false, true] {
+        let auto = annotated_line(TextAlignment::Auto, ruby);
+        let top = annotated_line(TextAlignment::Top, ruby);
+        assert!(top.0 < auto.0 - 0.01, "the text rises under Top (ruby {ruby}): {top:?} vs {auto:?}");
+        let (gap_auto, gap_top) = (auto.1 - auto.0, top.1 - top.0);
+        assert!((gap_auto - gap_top).abs() < 0.01, "the annotation moves with its text (ruby {ruby}): {gap_auto} vs {gap_top}");
+    }
+}
