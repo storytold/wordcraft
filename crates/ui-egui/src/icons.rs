@@ -1469,9 +1469,10 @@ fn paint_file_and_tools(pen: &Pen, name: &str) -> bool {
         }
         "outlineExpand" | "outlineCollapse" => {
             pen.fcircle(10.0, 10.0, 6.5, c);
-            pen.line_c(&[(6.5, 10.0), (13.5, 10.0)], Color32::WHITE);
+            // Mid-gray, not white: white is invisible on the document's white page.
+            pen.line_c(&[(6.5, 10.0), (13.5, 10.0)], Color32::from_gray(160));
             if name == "outlineExpand" {
-                pen.line_c(&[(10.0, 6.5), (10.0, 13.5)], Color32::WHITE);
+                pen.line_c(&[(10.0, 6.5), (10.0, 13.5)], Color32::from_gray(160));
             }
         }
         "closeOutline" => {
