@@ -1,6 +1,6 @@
 use super::common::{mi, mi_icon, stack};
 use super::language::mi_check;
-use super::{Ui, WordApp, big, group, json, menu_button, small};
+use super::{Ui, WordApp, big, big_toggle, group, json, menu_button, small};
 
 pub(super) fn insert(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Pages", None, app, |ui, app| {
@@ -122,6 +122,7 @@ pub(super) fn insert(app: &mut WordApp, ui: &mut Ui) {
                 mi(ui, app, "Format Page Numbers…", "ui.dialog", json!({"name": "pageNumbers"}));
             },
         );
+        big_toggle(ui, app, "link", "Link to\nPrevious", "layout.linkToPrevious", wordcraft_engine::cmd::page::is_hf_linked(&app.session));
     });
     group(ui, "Text", None, app, |ui, app| {
         big(ui, app, "textBox", "Text\nBox", "insert.textBox", json!({}), false);

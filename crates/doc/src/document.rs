@@ -399,10 +399,9 @@ impl Document {
         self.sections().iter().position(|(end, _)| block <= *end).unwrap_or(0)
     }
 
-    /// Mutable section properties for the section containing body block `block`.
-    pub fn section_mut(&mut self, block: usize) -> &mut SectionProps {
+    /// Mutable section properties for the section at index `idx` in `sections()`.
+    pub fn section_mut_at(&mut self, idx: usize) -> &mut SectionProps {
         let ends: Vec<usize> = self.sections().iter().map(|(e, _)| *e).collect();
-        let idx = ends.iter().position(|e| block <= *e).unwrap_or(ends.len().saturating_sub(1));
         if idx + 1 < ends.len()
             && let Some(e) = ends.get(idx)
             && let Some(Block::Para(p)) = self.body.get_mut(*e).map(Arc::make_mut)
@@ -411,6 +410,13 @@ impl Document {
             return s;
         }
         &mut self.last_section
+    }
+
+    /// Mutable section properties for the section containing body block `block`.
+    pub fn section_mut(&mut self, block: usize) -> &mut SectionProps {
+        let ends: Vec<usize> = self.sections().iter().map(|(e, _)| *e).collect();
+        let idx = ends.iter().position(|e| block <= *e).unwrap_or(ends.len().saturating_sub(1));
+        self.section_mut_at(idx)
     }
 
     /// Remove the section break on the mark of top-level body paragraph `block`: its section

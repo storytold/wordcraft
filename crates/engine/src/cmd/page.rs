@@ -247,6 +247,42 @@ pub fn section_index_of_focus(s: &Session) -> usize {
     }
 }
 
+/// The section index for header/footer operations, taking into account the page being edited.
+pub fn section_index_for_hf(s: &Session) -> usize {
+    if s.sel.focus.story == wordcraft_doc::StoryRef::Body {
+        let block = s.sel.focus.path.0.first().copied().unwrap_or(0) as usize;
+        return s.doc.section_index_of(block);
+    }
+    s.current_layout().and_then(|l| l.pages.get(s.page_hint).map(|pg| pg.section)).unwrap_or_else(|| section_index_of_focus(s))
+}
+
+/// Whether the current section's header or footer is linked to previous.
+pub fn is_hf_linked(s: &Session) -> bool {
+    let si = section_index_for_hf(s);
+    if si == 0 {
+        return false;
+    }
+    let header = match s.sel.focus.story {
+        wordcraft_doc::StoryRef::Part(id) => s.doc.parts.get(&id).map(|p| !matches!(p.kind, wordcraft_doc::PartKind::Footer)).unwrap_or(true),
+        _ => true,
+    };
+    let sections = s.doc.sections();
+    let Some((_, sp)) = sections.get(si) else { return false };
+    let slot = s
+        .current_layout()
+        .and_then(|l| {
+            let page = if s.sel.focus.story == wordcraft_doc::StoryRef::Body { l.page_of(&s.sel.focus).unwrap_or(s.page_hint) } else { s.page_hint };
+            l.pages.get(page).map(|pg| pg.hf_slot)
+        })
+        .unwrap_or(if sp.title_page { wordcraft_layout::HfSlot::First } else { wordcraft_layout::HfSlot::Default });
+    let set = if header { &sp.headers } else { &sp.footers };
+    match slot {
+        wordcraft_layout::HfSlot::First => set.first.is_none(),
+        wordcraft_layout::HfSlot::Even => set.even.is_none(),
+        wordcraft_layout::HfSlot::Default => set.default.is_none(),
+    }
+}
+
 pub fn sect(s: &Session) -> SectionProps {
     let i = section_index_of_focus(s);
     s.doc.sections().get(i).map(|(_, x)| (*x).clone()).unwrap_or_default()
@@ -738,6 +774,8 @@ fn breaks(s: &mut Session, v: &Value) -> CmdResult {
     let next_block = new.path.last();
     para.section = Some(Box::new(props.clone()));
     props.start = start;
+    props.headers = Default::default();
+    props.footers = Default::default();
     *s.doc.section_mut(next_block) = props;
     // The selection keeps its text, which now starts the new section.
     let first = Pos { off: 0, ..new };
