@@ -232,7 +232,7 @@ pub fn specs() -> Vec<CommandSpec> {
             s.push_ui_request(json!({"open": "manageStyles"}));
             Ok(list)
         })
-        .params(r#"{"sort"?: "recommended|alphabetical"} → [{id, name, type: "paragraph|character|linked|table", builtIn, inGallery, hidden, basedOn, priority, format}]"#)
+        .params(r#"{"sort"?: "recommended|alphabetical"} → [{id, name, type: "paragraph|character|linked|table", builtIn, inGallery, hidden, basedOn, priority, format, props: {chr: CharProps, para: ParaProps}}]"#)
         .pure(),
         CommandSpec::new("styles.setVisibility", "Show or Hide Style", "Home › Styles", set_visibility)
             .params(r#"{"style": string, "gallery"?: bool (Styles gallery, w:qFormat), "hidden"?: bool (hidden from style lists, w:semiHidden)}"#),

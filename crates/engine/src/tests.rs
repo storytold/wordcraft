@@ -6457,6 +6457,75 @@ fn asian_typography_sets_flags_on_selected_paragraphs_and_undoes() {
 }
 
 #[test]
+fn manage_styles_reports_own_typed_properties_for_reapplication() {
+    use wordcraft_doc::props::{CharProps, ParaProps};
+    let mut s = s();
+    run(&mut s, "styles.create", json!({"name": "Own", "basedOn": "Heading1", "fromSelection": false}));
+    run(&mut s, "styles.create", json!({"name": "Copy", "fromSelection": false}));
+    run(&mut s, "styles.modify", json!({"style": "Copy", "chr": {"font": "Destination Font"}}));
+    let own =
+        |s: &mut Session, id: &str| run(s, "styles.manage", json!({})).as_array().unwrap().iter().find(|st| st["id"] == id).unwrap()["props"].clone();
+    assert_eq!(own(&mut s, "Own"), json!({"chr": {}, "para": {}}), "inherited properties stay absent");
+    for (rule, value) in [("exactly", 20.0), ("atLeast", 18.0), ("multiple", 1.25)] {
+        run(
+            &mut s,
+            "styles.modify",
+            json!({"style": "Own", "chr": {"bold": false, "underline": "double", "strike": true, "spacing": 0.0},
+                "para": {"keepNext": true, "keepLines": false, "pageBreakBefore": true, "widowControl": false,
+                    "lineSpacing": {"rule": rule, "value": value}, "outlineLevel": 0,
+                    "numbering": {"num": 0, "level": 0}, "tabs": [{"pos": 0.0, "align": "clear"}],
+                    "borders": {"bottom": {"style": "single", "width": 0.75, "color": "1F3A5F"}},
+                    "shading": "EEEEEE", "contextualSpacing": false, "spaceBefore": 72.0, "spaceBeforeAuto": true}}),
+        );
+        let props = own(&mut s, "Own");
+        assert_eq!(props["chr"]["bold"], false);
+        assert_eq!(props["chr"]["underline"], "double");
+        assert_eq!(props["chr"]["spacing"], 0.0);
+        assert!(props["chr"].get("font").is_none(), "do not resolve the base style");
+        assert_eq!(props["para"]["keepLines"], false);
+        assert_eq!(props["para"]["outlineLevel"], 0);
+        assert_eq!(props["para"]["spaceBeforeAuto"], true);
+        assert_eq!(props["para"]["lineSpacing"], json!({"rule": rule, "value": value}));
+        assert_eq!(props["para"]["shading"], json!([238, 238, 238]));
+        assert_eq!(props["para"]["borders"]["bottom"]["color"], json!([31, 58, 95]));
+        let source = s.doc.styles.get("Own").unwrap().clone();
+        assert_eq!(serde_json::from_value::<CharProps>(props["chr"].clone()).unwrap(), source.chr);
+        assert_eq!(serde_json::from_value::<ParaProps>(props["para"].clone()).unwrap(), source.para);
+        let mut patch = props;
+        patch["style"] = json!("Copy");
+        run(&mut s, "styles.modify", patch);
+        let copy = s.doc.styles.get("Copy").unwrap();
+        let mut chr = copy.chr.clone();
+        assert_eq!(chr.font.take().as_deref(), Some("Destination Font"), "an omitted destination property survives");
+        assert_eq!((chr, &copy.para), (source.chr, &source.para));
+        run(&mut s, "edit.undo", json!({}));
+        let before = s.doc.clone();
+        let depth = s.undo_depth();
+        let selection = s.sel.clone();
+        for sort in ["recommended", "alphabetical"] {
+            let rows = run(&mut s, "styles.manage", json!({"sort": sort}));
+            for row in rows.as_array().unwrap() {
+                let st = s.doc.styles.get(row["id"].as_str().unwrap()).unwrap();
+                assert_eq!(serde_json::from_value::<CharProps>(row["props"]["chr"].clone()).unwrap(), st.chr);
+                assert_eq!(serde_json::from_value::<ParaProps>(row["props"]["para"].clone()).unwrap(), st.para);
+            }
+        }
+        assert_eq!(s.doc, before, "querying does not edit the document");
+        assert_eq!(s.sel, selection);
+        assert_eq!(s.undo_depth(), depth);
+        run(&mut s, "edit.redo", json!({}));
+        let mut expected = own(&mut s, "Own");
+        expected["chr"]["font"] = json!("Destination Font");
+        assert_eq!(own(&mut s, "Copy"), expected, "queries preserve redo and the destination-only property");
+    }
+    let copy = ParaProps { style: Some("Copy".into()), ..Default::default() };
+    run(&mut s, "styles.modify", json!({"style": "Copy", "para": {"spaceBefore": 84.0}}));
+    assert_eq!(s.doc.styles.resolve_para(&copy).space_before, 14.0, "automatic spacing still takes precedence");
+    run(&mut s, "styles.modify", json!({"style": "Copy", "para": {"spaceBeforeAuto": false}}));
+    assert_eq!(s.doc.styles.resolve_para(&copy).space_before, 84.0, "disable automatic spacing to use the point value");
+}
+
+#[test]
 fn manage_styles_lists_paragraph_character_linked_and_table_styles() {
     let mut s = s();
     let list = run(&mut s, "styles.manage", json!({"sort": "alphabetical"}));

@@ -161,12 +161,16 @@ The acceptance test `crates/mcp/src/tests.rs` writes a formatted document using 
 
 ## Character and paragraph properties
 
+`styles.manage` returns each listed style's own properties as `props: {"chr": CharProps, "para": ParaProps}`, beside the short `format` description. `props` uses the typed schema below, including tagged line spacing, borders, shading, tabs and explicit false or zero values. Inherited properties stay absent; this is not resolved formatting or a complete style definition. The returned objects can be passed as `chr` and `para` to `styles.modify`. That command applies a patch: properties left out keep their destination values. Style metadata, the other half of a linked pair and conditional table-style parts are not included in `props`. The legacy `format` summary is not a property patch.
+
 `format.set {"props": CharProps}`, `para.set {"props": ParaProps}`,
 `styles.modify {"style": …, "chr"?: CharProps, "para"?: ParaProps}` and the `para` of
 `table.newStyle` / `table.modifyStyle` take these two objects. Every field is optional: a field
 left out keeps what the style chain gives. A field name the object doesn't know is ignored, not
 refused, so check the spelling. Lengths are points. A colour is a hex string `"RRGGBB"` or
-`"#RRGGBB"`, or `[r, g, b]` (three numbers 0–255); it reads back as `[r, g, b]` (#865).
+`"#RRGGBB"`, or `[r, g, b]` (three numbers 0–255). `Rgb` values read back as `[r, g, b]` (#865).
+`CharProps.color` is a `TextColor`: it reads back as `"Auto"` or `{"Rgb": [r, g, b]}`. Both
+serialized forms are also accepted as input.
 
 ```json
 {"command": "styles.modify", "params": {"style": "Heading1",
@@ -222,6 +226,7 @@ the distance from the text). Missing fields are `none`, 0, no colour and 0, so a
 | `indentFirst` | number | first-line indent, points; negative = hanging |
 | `indentLeftChars`, `indentRightChars`, `indentFirstChars` | number | the same indents in characters; a non-zero value wins over the one in points, 0 cancels an inherited one |
 | `spaceBefore`, `spaceAfter` | number | points |
+| `spaceBeforeAuto`, `spaceAfterAuto` | bool | automatic spacing instead of the corresponding value in points |
 | `lineSpacing` | object | `{"rule": "multiple", "value": 1.15}` (1 = single, 2 = double), `{"rule": "atLeast", "value": pt}`, `{"rule": "exactly", "value": pt}` |
 | `contextualSpacing` | bool | ignore space before/after between paragraphs of the same style |
 | `mirrorIndents` | bool | left and right indents swap on even pages |
@@ -237,6 +242,10 @@ the distance from the text). Missing fields are `none`, 0, no colour and 0, so a
 | `kinsoku`, `wordWrap`, `overflowPunct`, `autoSpaceDE`, `autoSpaceDN`, `snapToGrid` | bool | East Asian typography; unset = on |
 | `topLinePunct` | bool | East Asian typography; unset = off |
 | `numChange`, `fmtChange` | | Track Changes bookkeeping |
+
+An enabled automatic-spacing flag takes precedence over its corresponding `spaceBefore` or
+`spaceAfter` value. To use explicit spacing in a `styles.modify` patch, also set the matching
+`spaceBeforeAuto` or `spaceAfterAuto` flag to `false`.
 
 `para.set` also takes `"onPage": {"align"?: "left|center|right|justify|distribute", "left"?: pt,
 "right"?: pt}`: the alignment and indents as seen on the page, which each selected paragraph turns

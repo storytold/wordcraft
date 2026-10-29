@@ -134,6 +134,7 @@ pub fn manage_list(s: &Session, alphabetical: bool) -> Value {
                     "basedOn": st.based_on.as_deref().and_then(|b| sheet.get(b)).map(|b| b.name.clone()),
                     "priority": st.priority,
                     "format": own_format(st),
+                    "props": {"chr": st.chr, "para": st.para},
                 })
             })
             .collect(),
