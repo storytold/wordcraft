@@ -1,6 +1,6 @@
 use super::{
     Exporter, FaceRef, Fill, FillRule, GlyphId, KrillaGlyph, Point, Rgb, Stroke, Surface, Transform, baseline, cluster_ends, fill, glyph_outlines,
-    left_to_right, norm, ok, paint_of, rgb, split_clusters, visual_order,
+    left_to_right, norm, ok, paint_of, rgbc, split_clusters, visual_order,
 };
 
 /// How a run of glyphs is painted: its colour, opacity and synthetic bold and italic.
@@ -137,7 +137,7 @@ impl Exporter<'_> {
         }
         s.set_fill(Some(fill(color, alpha)));
         s.set_stroke(if bold {
-            Some(Stroke { paint: rgb::Color::new(color.0, color.1, color.2).into(), width: size * 0.03, opacity: norm(alpha), ..Default::default() })
+            Some(Stroke { paint: rgbc(color.0, color.1, color.2).into(), width: size * 0.03, opacity: norm(alpha), ..Default::default() })
         } else {
             None
         });

@@ -1,5 +1,5 @@
 use super::state::DefaultApp;
-use super::{FileDialogAnswer, FileDialogRequest, async_saves, paste_picture, printing};
+use super::{FileDialogAnswer, FileDialogRequest, async_saves, network_print, paste_picture, printing};
 
 /// Platform services injected by the host (file dialogs, file I/O).
 #[derive(Default)]
@@ -8,6 +8,9 @@ pub struct Services {
     pub printers: Option<printing::Discover>,
     /// Desktop: submit the PDF with the chosen settings on a worker.
     pub print_native: Option<printing::Submit>,
+    /// Desktop: print to a network printer by address (WS-Print or IPP). Without it the Print page
+    /// has no network destination. Nothing connects until a printer is queried or a job confirmed.
+    pub print_network: Option<network_print::NetworkPrint>,
     /// Pick a file to open; the argument says what for (`document`, `picture`).
     pub pick_open: Option<Box<dyn Fn(&str) -> Option<String>>>,
     /// Pick a path to save to, given a suggested name.

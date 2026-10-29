@@ -127,7 +127,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .pure(),
         CommandSpec::new("file.printPdf", "Print to PDF", "File › Print", crate::print::print_pdf_to_file)
             .params(
-                r#"{"path": string, "range"?: "all" | "current" | "selection" (the pages the selection touches) | "custom", "pages"?: "1-3,5" (implies custom), "parity"?: "all" | "odd" | "even", "copies"?: 1-999, "collate"?: bool (default true), "paper"?: "none" | "Letter" | "Legal" | "A4" | … (a Layout › Size name: scale every page to this paper, centred; the document keeps its size)}"#,
+                r#"{"path": string, "range"?: "all" | "current" | "selection" (the pages the selection touches) | "custom", "pages"?: "1-3,5" (implies custom), "parity"?: "all" | "odd" | "even", "copies"?: 1-999, "collate"?: bool (default true), "grayscale"?: bool (pages in gray, Rec. 709), "annotations"?: bool (default true: links stay clickable in the saved file; false leaves them out, as a print job does), "paper"?: "none" | "Letter" | "Legal" | "A4" | … (a Layout › Size name: scale every page to this paper, centred; the document keeps its size)}"#,
             )
             .pure(),
         CommandSpec::new("file.print", "Print", "File", |s, _| {

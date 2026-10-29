@@ -6,8 +6,8 @@ use super::state::{AutoSaveBlock, DefaultApp, PromptSave, SaveChoice, keeps_ever
 use super::{
     AwaitingSave, ControlRequest, DEFAULT_TAB, MAX_DICTIONARY, MAX_RECENT, QUIT, SaveInFlight, Session, UiState, Value, WordApp, applied_font,
     async_saves, backstage, canvas, chrome, colors, content_controls, crop, desktop_theme, dialogs, dialogs_table_style, documents, file_dialogs,
-    i18n, json, keys, keytips, options, panes, paste_picture, printing, push_recent_font, read_aloud, recent_fonts_from, ribbon, scroll,
-    system_clipboard, table_pen, theme, updates_ui, widgets, window_ui, windows, zotero,
+    i18n, json, keys, keytips, network_print, options, panes, paste_picture, printing, push_recent_font, read_aloud, recent_fonts_from, ribbon,
+    scroll, system_clipboard, table_pen, theme, updates_ui, widgets, window_ui, windows, zotero,
 };
 
 mod commands;
@@ -97,6 +97,8 @@ impl WordApp {
             },
             services,
             printing: Default::default(),
+            net_print: Default::default(),
+            net_print_page_pass: 0,
             print_feedback_seen: None,
             integrated_titlebar: false,
             mac_titlebar: chrome::MacTitleBar::default(),
@@ -209,6 +211,7 @@ impl WordApp {
 
     /// Terminal feedback also reaches the normal window when printing starts through control.
     pub fn poll_printing(&mut self, ctx: &egui::Context) {
+        network_print::poll(self, ctx);
         self.printing.poll(ctx);
         self.print_feedback();
     }

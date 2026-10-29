@@ -153,7 +153,9 @@ and check `status`/`detail`. The browser keeps its own print hook. PDF export re
 `ui.printSubmit` / `ui.print` also accept the upstream PDF page settings (`range`, `pages`,
 `parity`, `copies`, `collate`). Native printing renders the selected pages once and passes
 copies/collation to the spooler; the browser and `file.printPdf` keep copies in the PDF.
-Omitting native `copies` uses the configured `ui.printSettings` value. `collate` defaults to
+Omitting native `copies` uses the configured `ui.printSettings` value. With a network printer
+chosen on the Print page, `copies` sets that job's copies (within the printer's maximum; one copy
+when it takes no copies setting) and the section keeps its own; the page limit counts them. `collate` defaults to
 File › Print's setting; invalid ranges submit no job. `paper` (`none`, or a Layout › Size name
 such as `Letter`, `Legal`, `A4`) is Scale to paper size (#2108): every page is scaled onto that
 paper and centred, and native jobs ask the spooler for that `media`; the document's page size is

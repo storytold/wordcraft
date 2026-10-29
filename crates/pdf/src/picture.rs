@@ -1,5 +1,5 @@
 use super::exporter::Exporter;
-use super::paint::{append_path, norm};
+use super::paint::{append_path, is_gray, norm, rgbc};
 use super::{
     Arc, Fill, FillRule, Image, LineCap, LineJoin, NormalizedF32, Path, PathBuilder, Picture, PlacedItem, Rect, Size, Stroke, Surface, Transform, rgb,
 };
@@ -20,13 +20,21 @@ pub(crate) fn build_vector(bytes: &[u8]) -> Option<Vector> {
     if !pic.has_size() {
         return None;
     }
-    let images = pic.items.iter_mut().map(|it| it.take_pixels().map(|(w, h, px)| Image::from_rgba8(px, w, h))).collect();
+    let images = pic.items.iter_mut().map(|it| it.take_pixels().map(|(w, h, px)| Image::from_rgba8(gray_pixels(px), w, h))).collect();
     Some(Vector { pic, images })
+}
+
+/// RGBA pixels, turned gray when a grayscale export is running (alpha is kept).
+fn gray_pixels(mut px: Vec<u8>) -> Vec<u8> {
+    if is_gray() {
+        wordcraft_geom::gray_rgba_in_place(&mut px);
+    }
+    px
 }
 
 /// A straight RGBA colour as a krilla colour and opacity.
 pub(crate) fn paint_of(c: [u8; 4]) -> (rgb::Color, NormalizedF32) {
-    (rgb::Color::new(c[0], c[1], c[2]), norm(f32::from(c[3]) / 255.0))
+    (rgbc(c[0], c[1], c[2]), norm(f32::from(c[3]) / 255.0))
 }
 
 /// Narrowest metafile stroke in points. Cosmetic (width 0) pens get it rather than PDF's 0-width
@@ -136,8 +144,8 @@ pub(crate) fn load_image_within(data: &Arc<Vec<u8>>, budget: u64) -> Option<Imag
     if w == 0 || h == 0 || w > MAX_IMAGE_SIDE || h > MAX_IMAGE_SIDE {
         return None;
     }
-    if fmt == image::ImageFormat::Jpeg && matches!(dec.color(), image::ColorType::L8 | image::ColorType::Rgb8) {
+    if !is_gray() && fmt == image::ImageFormat::Jpeg && matches!(dec.color(), image::ColorType::L8 | image::ColorType::Rgb8) {
         return Image::from_jpeg(data.clone().into(), true).ok();
     }
-    Some(Image::from_rgba8(dec.into_rgba8().into_raw(), w, h))
+    Some(Image::from_rgba8(gray_pixels(dec.into_rgba8().into_raw()), w, h))
 }

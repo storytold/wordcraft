@@ -183,7 +183,10 @@ impl WordApp {
     /// The window's close button (or the system) asked to quit. Returns true to let the window
     /// close; with unsaved changes it asks first and returns false.
     pub fn close_requested(&mut self) -> bool {
-        if self.printing.busy() {
+        // A network job still being sent has an unknown outcome if the process ends now; once the
+        // printer has accepted it, following it is only for the status line.
+        let sending = matches!(self.net_print.draft.job, craft_ui::printing::network::JobView::Running { .. });
+        if self.printing.busy() || sending {
             self.status(tl!("Wait for the print job to finish submitting before closing."));
             return false;
         }

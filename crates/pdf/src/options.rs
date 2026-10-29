@@ -37,6 +37,14 @@ pub struct PdfOptions {
     /// is scaled to fit and centred, the paper turned to the page's orientation (Scale to paper
     /// size, #2108). `None` keeps the document's page sizes.
     pub paper: Option<(f32, f32)>,
+    /// Grayscale output: every colour (text, shapes, gradients, pictures) is converted to gray with
+    /// Rec. 709 weights, the same as the Print page's grayscale preview, so a printer that ignores
+    /// a monochrome request still prints gray.
+    pub grayscale: bool,
+    /// Write the link annotations (URLs, internal links). Printing turns this off: an annotation
+    /// is clickable, not printed, and a print path that refits pages to the paper cannot move
+    /// one. The links' look (colour, underline) is page content, so it stays either way.
+    pub annotations: bool,
     /// How [`export`] shows digits (the Numeral setting; callers resolve `System`, see
     /// [`NumeralMode::resolve`]). [`export_layout`] keeps the layout it is given.
     pub numeral: NumeralMode,
@@ -53,6 +61,8 @@ impl Default for PdfOptions {
             comments: false,
             compress: true,
             paper: None,
+            grayscale: false,
+            annotations: true,
             numeral: NumeralMode::Arabic,
         }
     }

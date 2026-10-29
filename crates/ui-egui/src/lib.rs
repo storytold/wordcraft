@@ -45,6 +45,7 @@ pub mod keys;
 pub mod keytips;
 mod local_time;
 pub mod mini_toolbar;
+pub mod network_print;
 pub mod objects;
 pub mod options;
 pub mod panes;
@@ -457,6 +458,10 @@ pub struct WordApp {
     pub ui: UiState,
     pub services: Services,
     pub printing: printing::State,
+    /// The Print page's network printer destination (address, query, options, confirmation, job).
+    pub net_print: craft_ui::printing::network::State,
+    /// The pass the Print page was last drawn in, to notice it opening (which clears the confirmation).
+    net_print_page_pass: u64,
     print_feedback_seen: Option<printing::Feedback>,
     pub canvas: canvas::CanvasState,
     /// Content control frames, check boxes and lists on the page.

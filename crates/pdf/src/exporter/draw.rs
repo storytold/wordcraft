@@ -1,7 +1,7 @@
 use super::text::GlyphPaint;
 use super::{
     Draw, Exporter, Fill, FillRule, LineCap, LineJoin, LineStyle, PathBuilder, Rect, Rgb, ShapeKind, Size, Stroke, StrokeDash, Surface, Transform,
-    append_path, fill, grown, krilla, norm, ok, paint_fill, pdf_line_cap, rect_path, rgb, shape_effects, shape_path, vector_picture,
+    append_path, fill, grown, krilla, norm, ok, paint_fill, pdf_line_cap, rect_path, rgbc, shape_effects, shape_path, vector_picture,
 };
 
 impl Exporter<'_> {
@@ -50,7 +50,7 @@ impl Exporter<'_> {
                 let Some(p) = pb.finish() else { return };
                 s.set_fill(f.as_ref().map(paint_fill));
                 s.set_stroke(stroke.map(|c| Stroke {
-                    paint: rgb::Color::new(c.0, c.1, c.2).into(),
+                    paint: rgbc(c.0, c.1, c.2).into(),
                     // Width 0 (or none) is a hairline.
                     width: if stroke_width.is_finite() && *stroke_width > 0.0 { stroke_width.clamp(0.25, 200.0) } else { 0.75 },
                     dash: (!dash.is_empty()).then(|| StrokeDash { array: dash.clone(), offset: 0.0 }),
@@ -83,7 +83,7 @@ impl Exporter<'_> {
                 let Some(p) = pb.finish() else { return };
                 s.set_fill(None);
                 s.set_stroke(Some(Stroke {
-                    paint: rgb::Color::new(color.0, color.1, color.2).into(),
+                    paint: rgbc(color.0, color.1, color.2).into(),
                     width: if width.is_finite() { width.clamp(0.25, 200.0) } else { 1.0 },
                     opacity: norm(*alpha),
                     line_cap: LineCap::Round,
@@ -115,7 +115,7 @@ impl Exporter<'_> {
                 }
                 s.set_fill(f.as_ref().filter(|_| can_fill).map(paint_fill));
                 s.set_stroke(stroke.map(|c| Stroke {
-                    paint: rgb::Color::new(c.0, c.1, c.2).into(),
+                    paint: rgbc(c.0, c.1, c.2).into(),
                     width: if stroke_width.is_finite() { stroke_width.clamp(0.25, 200.0) } else { 0.75 },
                     dash: (!dash.is_empty()).then(|| StrokeDash { array: dash.clone(), offset: 0.0 }),
                     line_cap: pdf_line_cap(*cap),
@@ -193,7 +193,7 @@ impl Exporter<'_> {
             return;
         }
         let w = if width.is_finite() { width.clamp(0.1, 100.0) } else { 0.5 };
-        let paint: krilla::paint::Paint = rgb::Color::new(c.0, c.1, c.2).into();
+        let paint: krilla::paint::Paint = rgbc(c.0, c.1, c.2).into();
         let stroke = |width: f32, dash: Option<StrokeDash>, cap: LineCap| Stroke {
             paint: paint.clone(),
             width,

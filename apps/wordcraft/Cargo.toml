@@ -73,7 +73,9 @@ windows = { version = "0.62", features = ["UI_ViewManagement", "System_UserProfi
 clipboard-win = { version = "5.4", features = ["std"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-craft-print = { git = "https://github.com/storytold/craft-libs", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0" }
+craft-print = { workspace = true }
+# The network printer destination's model types (printing::network); the widgets are drawn by wordcraft-ui-egui.
+craft-ui = { workspace = true }
 rfd = { workspace = true }
 # Waits for an `rfd::AsyncFileDialog` on a background thread (the dialogs don't block the UI, #94);
 # rfd itself already depends on it.
@@ -86,3 +88,7 @@ getrandom = "0.3"
 
 [target.'cfg(windows)'.dependencies]
 craft-update = { workspace = true }
+
+[dev-dependencies]
+# An in-memory WS-Print printer (`craft_print::wsd::testing`) for the network print worker's tests. Never in a shipped binary.
+craft-print = { workspace = true, features = ["testing"] }

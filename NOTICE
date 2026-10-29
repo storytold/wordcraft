@@ -108,6 +108,15 @@ cleanup. WordCraft enables only writing; PDF import and its image decoders are n
 
 No Microsoft, Adobe, Avid or Autodesk icons, images, templates or artwork are included.
 
+Windows printing
+
+WordCraft's Windows builds print through craft-print (storytold/craft-libs), which uses winprint
+(https://github.com/ArcticLampyrid/winprint.rs; storytold's fork https://github.com/storytold/winprint.rs keeps its
+licence unchanged), BSD-3-Clause, Copyright (c) 2021 - 2024, alampy.com. The licence text is retained in
+licenses/winprint/LICENSE-BSD-3-Clause.txt: redistributions in source or binary form must reproduce that notice,
+the conditions and the disclaimer, and the names of the copyright holder and contributors may not be used to
+endorse products derived from it without written permission.
+
 Bundled egui font icons
 
 The canonical egui0.37 dependency includes egui-icons.ttf (a small subset of emoji-icon-font)

@@ -25,8 +25,42 @@ pub(crate) fn norm(v: f32) -> NormalizedF32 {
     NormalizedF32::new(if v.is_finite() { v.clamp(0.0, 1.0) } else { 1.0 }).unwrap_or(NormalizedF32::ONE)
 }
 
+thread_local! {
+    /// Set while a grayscale export runs: every colour made by [`rgbc`] and every decoded picture is gray.
+    static GRAY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Restores [`GRAY`] when an export ends, however it ends.
+pub(crate) struct GrayGuard(bool);
+
+impl GrayGuard {
+    pub(crate) fn set(on: bool) -> Self {
+        GrayGuard(GRAY.replace(on))
+    }
+}
+
+impl Drop for GrayGuard {
+    fn drop(&mut self) {
+        GRAY.set(self.0);
+    }
+}
+
+pub(crate) fn is_gray() -> bool {
+    GRAY.get()
+}
+
+/// A krilla colour; gray (Rec. 709) during a grayscale export.
+pub(crate) fn rgbc(r: u8, g: u8, b: u8) -> rgb::Color {
+    if is_gray() {
+        let y = wordcraft_geom::gray_of(r, g, b);
+        rgb::Color::new(y, y, y)
+    } else {
+        rgb::Color::new(r, g, b)
+    }
+}
+
 pub(crate) fn fill(c: Rgb, alpha: f32) -> Fill {
-    Fill { paint: rgb::Color::new(c.0, c.1, c.2).into(), opacity: norm(alpha), rule: FillRule::NonZero }
+    Fill { paint: rgbc(c.0, c.1, c.2).into(), opacity: norm(alpha), rule: FillRule::NonZero }
 }
 
 /// A fill in paint `p`: a colour with its opacity, or a gradient whose stops carry theirs.
@@ -107,7 +141,7 @@ pub(crate) fn shape_effects(
             && let Some(p) = shape_path(kind, &grown(rect, 0.0, dx, dy), corner)
         {
             s.set_fill(None);
-            s.set_stroke(Some(Stroke { paint: rgb::Color::new(c.0, c.1, c.2).into(), width: sw + 2.0 * g, opacity: norm(a), ..Default::default() }));
+            s.set_stroke(Some(Stroke { paint: rgbc(c.0, c.1, c.2).into(), width: sw + 2.0 * g, opacity: norm(a), ..Default::default() }));
             s.draw_path(&p);
         }
     };

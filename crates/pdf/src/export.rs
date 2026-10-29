@@ -1,7 +1,7 @@
 use super::exporter::Exporter;
 use super::metadata::metadata;
 use super::options::{PdfError, PdfOptions};
-use super::paint::{clamp_side, ok};
+use super::paint::{GrayGuard, clamp_side, ok};
 use super::{
     DocLayout, Document, HashMap, HashSet, KrillaError, LayoutCache, LayoutOptions, Page, PageSettings, Size, Transform, WriteError, Writer, krilla,
     layout, write,
@@ -61,6 +61,7 @@ enum Attempt {
 }
 
 fn write_attempt(doc: &Document, lay: &DocLayout, opts: &PdfOptions, pages: &[usize], outlined: &HashSet<u32>) -> Result<Attempt, PdfError> {
+    let _gray = GrayGuard::set(opts.grayscale);
     let settings = krilla::SerializeSettings { compress_content_streams: opts.compress, enable_tagging: opts.tagged, ..Default::default() };
     let language = doc.styles.default_chr.lang.clone().filter(|l| !l.is_empty() && l.is_ascii());
     let mut writer = Writer::new_with_language(settings, metadata(doc, opts), language);
@@ -104,8 +105,10 @@ fn write_attempt(doc: &Document, lay: &DocLayout, opts: &PdfOptions, pages: &[us
             s.pop();
         }
         s.finish();
-        for a in ex.annotations(fit) {
-            kp.add_annotation(a);
+        if opts.annotations {
+            for a in ex.annotations(fit) {
+                kp.add_annotation(a);
+            }
         }
         kp.finish();
     }
