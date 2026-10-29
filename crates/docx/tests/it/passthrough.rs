@@ -357,3 +357,89 @@ fn extended_properties_are_kept_without_words_counts_and_personal_ones_follow_th
     assert!(!private.contains("Company") && !private.contains("Manager"), "{private}");
     assert!(private.contains("<Template>Normal.dotm</Template>"));
 }
+
+/// `name` with its letters' case flipped by the bits of `i`.
+fn spelling(name: &str, i: u32) -> String {
+    let mut bit = 0;
+    name.chars()
+        .map(|c| {
+            if !c.is_ascii_alphabetic() {
+                return c;
+            }
+            bit += 1;
+            if i >> (bit - 1) & 1 == 1 { c.to_ascii_uppercase() } else { c.to_ascii_lowercase() }
+        })
+        .collect()
+}
+
+#[test]
+fn a_part_reached_under_many_spellings_is_kept_and_written_once() {
+    // Part names are case-insensitive (ECMA-376 Part 2 §6.2.2.3): 64 relationships naming one picture
+    // and one unmodelled part in 64 casings are two parts, not 128 copies on save (#3704).
+    let ns = r#"xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture""#;
+    let n = 64;
+    let mut body = String::new();
+    let mut doc_rels = Vec::new();
+    for i in 0..n {
+        body.push_str(&format!(
+            r#"<w:p><w:r><w:drawing><wp:inline {ns}><wp:extent cx="9525" cy="9525"/><wp:docPr id="{}" name="p"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:blipFill><a:blip r:embed="rIdP{i}"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#,
+            i + 1
+        ));
+        doc_rels.push((format!("rIdP{i}"), format!("{REL}/image"), spelling("media/image1.png", i)));
+        doc_rels.push((format!("rIdU{i}"), "urn:example:future-relationship".to_string(), spelling("unknownPart.xml", i)));
+    }
+    let doc_rels: Vec<(&str, &str, &str)> = doc_rels.iter().map(|(a, b, c)| (a.as_str(), b.as_str(), c.as_str())).collect();
+    let picture = format!("\u{89}PNG\r\n\u{1a}\n{}", "0".repeat(64 * 1024));
+    let unknown = format!(r#"<x:thing xmlns:x="urn:example:future">{}</x:thing>"#, "x".repeat(64 * 1024));
+    let ct = CT.replace("<Default Extension=\"jpeg\"", "<Default Extension=\"png\" ContentType=\"image/png\"/><Default Extension=\"jpeg\"");
+    let bytes =
+        package(&body, &doc_rels, &[], &[("[Content_Types].xml", &ct), ("word/media/image1.png", &picture), ("word/unknownPart.xml", &unknown)]);
+    let doc = wordcraft_docx::read(&bytes).unwrap();
+    assert_eq!(doc.media.len(), 1, "{:?}", doc.media.keys());
+    let files = save(&doc);
+    let named = |s: &str| files.keys().filter(|k| k.to_ascii_lowercase().contains(s)).count();
+    assert_eq!(named("unknownpart"), 1, "{:?}", files.keys());
+    assert_eq!(files.keys().filter(|k| k.starts_with("word/media/")).count(), 1, "{:?}", files.keys());
+    let written: usize = files.values().map(Vec::len).sum();
+    assert!(written < 4 * 64 * 1024, "{written} bytes written");
+}
+
+#[test]
+fn embedded_fonts_load_and_save_when_the_package_spells_the_font_table_in_capitals() {
+    // Part names are case-insensitive: a package storing `WORD/FONTTABLE.XML` and its fonts in
+    // capitals, related in lower case, loaded no fonts, and a save dropped the table and every
+    // font (review of #3872).
+    let table = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?><w:fonts xmlns:w="{W}" xmlns:r="{R_NS}"><w:font w:name="Quill Sans"><w:embedRegular r:id="rId1"/></w:font></w:fonts>"#
+    );
+    let table_rels = rels(&[("rId1", &format!("{REL}/font"), "fonts/font1.odttf")]);
+    let font_bytes = vec![9u8; 2048];
+    let ct = CT.replace(
+        "<Default Extension=\"jpeg\"",
+        "<Default Extension=\"odttf\" ContentType=\"application/vnd.openxmlformats-officedocument.obfuscatedFont\"/><Default Extension=\"jpeg\"",
+    );
+    let mut entries: Vec<(&str, Vec<u8>)> = vec![
+        ("_rels/.rels", rels(&[("rIdMain", &format!("{REL}/officeDocument"), "word/document.xml")])),
+        ("[Content_Types].xml", ct.into_bytes()),
+        (
+            "word/document.xml",
+            format!(r#"<w:document xmlns:w="{W}"><w:body><w:p><w:r><w:t>Body</w:t></w:r></w:p></w:body></w:document>"#).into_bytes(),
+        ),
+        ("word/_rels/document.xml.rels", rels(&[("rId1", &format!("{REL}/fontTable"), "fontTable.xml")])),
+    ];
+    entries.push(("WORD/FONTTABLE.XML", table.into_bytes()));
+    entries.push(("WORD/_RELS/FONTTABLE.XML.RELS", table_rels));
+    entries.push(("WORD/FONTS/FONT1.ODTTF", font_bytes.clone()));
+    let doc = wordcraft_docx::read(&zip(&entries)).unwrap();
+    let fonts = wordcraft_docx::embedded_fonts(&doc);
+    assert_eq!(fonts.len(), 1, "the font loads");
+    assert_eq!(fonts[0].data, font_bytes);
+    // And through a save and a reopen.
+    let saved = wordcraft_docx::write(&doc).unwrap();
+    let files = unzip(&saved);
+    assert!(files.keys().any(|k| k.to_ascii_lowercase().ends_with("fonttable.xml")), "{:?}", files.keys());
+    let again = wordcraft_docx::read(&saved).unwrap();
+    let fonts = wordcraft_docx::embedded_fonts(&again);
+    assert_eq!(fonts.len(), 1, "the font survives a save: {:?}", files.keys());
+    assert_eq!(fonts[0].data, font_bytes);
+}
