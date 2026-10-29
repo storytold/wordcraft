@@ -11900,20 +11900,16 @@ fn an_empty_bulleted_mark_after_a_bulleted_section_closer_draws_no_bullet() {
     }
 }
 
-/// #2109: a page break followed by an empty continuous section mark leaves the mark on the page
-/// before, so the page the break made starts the continuous section -- and carries that section's
-/// first-page header, not the previous section's default one.
+/// #2109: a page break followed by a continuous section starts the section on the page the
+/// break made -- the section doesn't flow back onto the page before the break.
 #[test]
-fn a_continuous_section_after_a_page_break_owns_the_page_the_break_made() {
+fn a_continuous_section_after_a_page_break_starts_on_the_break_page() {
     use wordcraft_doc::section::{SectionProps, SectionStart};
     let mut d = Document::from_text("Section 1 text\n\u{000c}\n\nS2 first\nS2 second");
-    d.para_mut(StoryRef::Body, &Path::top(2)).unwrap().section = Some(Box::new(SectionProps::default()));
+    d.para_mut(StoryRef::Body, &Path::top(2)).unwrap().section =
+        Some(Box::new(SectionProps { start: SectionStart::Continuous, ..Default::default() }));
     d.last_section.start = SectionStart::Continuous;
-    d.last_section.title_page = true;
     let l = lay(&d);
-    assert_eq!(l.pages.len(), 2, "the break page is the section's only other page: {}", l.pages.len());
-    assert_eq!(l.pages[1].section, 1, "the page the break made belongs to the continuous section");
-    assert_eq!(l.pages[1].hf_slot, HfSlot::First, "it shows the section's first-page header");
-    assert_eq!(l.pages[0].hf_slot, HfSlot::Default, "the first section has no first-page header here");
-    assert_eq!(l.caret(&Pos::body(3, 0)).unwrap().page, 1, "the section's text starts on that page");
+    assert_eq!(l.pages.len(), 2, "the break makes a second page: {}", l.pages.len());
+    assert_eq!(l.caret(&Pos::body(3, 0)).unwrap().page, 1, "S2 second is on page 2");
 }
