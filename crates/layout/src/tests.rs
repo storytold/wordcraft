@@ -2877,7 +2877,45 @@ fn character_border_draws_one_box_around_run() {
     assert_eq!(horiz.len(), 2);
     assert_eq!(vert.len(), 2);
     assert!(horiz.iter().any(|h| (h.1 - top).abs() < 0.01) && horiz.iter().any(|h| (h.1 - bottom).abs() < 0.01), "{lines:?}");
-    assert!(horiz.iter().all(|h| (h.0 - gx0).abs() < 0.01 && (h.2 - gx1).abs() < 0.01), "{lines:?} {gx0} {gx1}");
+    // Top and bottom run on over half the 0.5 pt side lines, closing the corners.
+    assert!(horiz.iter().all(|h| (h.0 - (gx0 - 0.25)).abs() < 0.01 && (h.2 - (gx1 + 0.25)).abs() < 0.01), "{lines:?} {gx0} {gx1}");
+}
+
+#[test]
+fn words_underline_draws_one_line_per_word() {
+    let mut d = Document::from_text("ab cd");
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, 5), &|c| c.underline = Some(wordcraft_doc::props::Underline::Words)).unwrap();
+    assert_eq!(border_lines(&d).len(), 2, "{:?}", border_lines(&d));
+    // A space condensed to no width still parts the words.
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, 5), &|c| c.spacing = Some(-4.0)).unwrap();
+    assert_eq!(border_lines(&d).len(), 2, "{:?}", border_lines(&d));
+}
+
+#[test]
+fn paragraph_border_lines_meet_in_square_corners() {
+    use wordcraft_doc::props::{Border, Borders};
+    let mut d = Document::from_text("Boxed");
+    let (thick, thin) = (Some(Border::single(3.0)), Some(Border::single(1.0)));
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().props.borders = Some(Borders { top: thick, left: thin, bottom: thick, ..Borders::default() });
+    let lines = border_lines(&d);
+    let [left] = lines.iter().filter(|l| l.0 == l.2).collect::<Vec<_>>()[..] else { panic!("{lines:?}") };
+    let horiz: Vec<_> = lines.iter().filter(|l| l.1 == l.3).collect();
+    assert_eq!(horiz.len(), 2, "{lines:?}");
+    // Word: the 3 pt lines run on over half the 1 pt left line, and end half their own width past
+    // the right edge, where there is no line (docxide-pdf's samtale and english_town_council_report).
+    let right = d.last_section.page_w - d.last_section.margin_right;
+    for h in &horiz {
+        assert!((h.0 - (left.0 - 0.5)).abs() < 0.01 && (h.2 - (right + 1.5)).abs() < 0.01, "{lines:?} {right}");
+    }
+    // The left line runs on to the top and bottom lines' outer edges; with no top line it ends square.
+    assert!((left.1 - (horiz[0].1.min(horiz[1].1) - 1.5)).abs() < 0.01 && (left.3 - (horiz[0].1.max(horiz[1].1) + 1.5)).abs() < 0.01, "{lines:?}");
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().props.borders = Some(Borders { left: thin, bottom: thick, ..Borders::default() });
+    let lines = border_lines(&d);
+    let [left] = lines.iter().filter(|l| l.0 == l.2).collect::<Vec<_>>()[..] else { panic!("{lines:?}") };
+    let [bottom] = lines.iter().filter(|l| l.1 == l.3).collect::<Vec<_>>()[..] else { panic!("{lines:?}") };
+    assert!((left.3 - (bottom.1 + 1.5)).abs() < 0.01, "{lines:?}");
+    let first = lay(&d).pages[0].items.iter().find_map(|i| if let Placed::Lines { y, .. } = i { Some(*y) } else { None }).unwrap();
+    assert!((left.1 - (first - 0.5)).abs() < 0.01, "{lines:?} {first}");
 }
 
 #[test]

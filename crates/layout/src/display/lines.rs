@@ -323,16 +323,29 @@ fn draw_glyph_runs(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
                 let uy = base - st.shift + st.size * 0.12;
                 let ucolor = rc.underline_color.unwrap_or(color);
                 if underline == Underline::Words {
+                    // One line per word: flat-ended lines per letter would show seams where they meet.
+                    let mut words: Vec<(f32, f32)> = Vec::new();
+                    // A space ends a word even when condensed spacing leaves it no width.
+                    let mut apart = true;
                     for kk in run_start..end_k {
                         let Some(c) = pl.clusters.get(kk) else { continue };
                         if c.kind != ClKind::Text {
+                            apart = true;
                             continue;
                         }
                         let a = x + line.cl_left(kk).unwrap_or(0.0);
                         let b = x + line.cl_right(kk).unwrap_or(a - x);
                         if a < x0 - 0.01 || b > x1 + 0.01 {
+                            apart = true;
                             continue; // drawn with its own span
                         }
+                        match words.last_mut() {
+                            Some(w) if !apart && a <= w.1 + 0.01 && b >= w.0 - 0.01 => *w = (w.0.min(a), w.1.max(b)),
+                            _ => words.push((a, b)),
+                        }
+                        apart = false;
+                    }
+                    for (a, b) in words {
                         out.push(Draw::Line { x0: a, y0: uy, x1: b, y1: uy, width: thick, color: ucolor, stroke: Stroke::Solid, alpha, text_bg });
                     }
                 } else {

@@ -7,7 +7,7 @@ use super::placed::Placed;
 use super::table_flow::below;
 use super::{
     Anchor, Arc, Block, Blocks, Border, Document, Float, FloatAlign, HashMap, ParaLayout, Paragraph, Path, Rect, SectionProps, StoryRef, TableFloat,
-    TextDirection, Wrap, WrapText, para, table,
+    TextDirection, Wrap, WrapText, display, para, table,
 };
 
 /// Cell identity is independent of optional table-style formatting.
@@ -307,6 +307,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                 if below {
                     edges.bottom = 0.0;
                 }
+                edges.joined = [above, below];
                 let lead = pl.lines.first().map_or(0.0, |l| l.top.max(0.0)) + edges.top;
                 if above {
                     edges.up = (y + lead - prev_end).max(0.0);
@@ -584,19 +585,26 @@ fn border_room(b: Option<Border>) -> f32 {
 /// How a piece of a paragraph meets the paragraphs around it: the room taken by its top and
 /// bottom borders (0: none drawn there — the paragraph goes on from or into one of its border
 /// group, or it is split there) and how far its shading and side borders reach up to join the
-/// paragraph above in its group.
+/// paragraph above in its group, and whether it goes on from the paragraph above and into the one
+/// below in that group (its side lines don't run on past those ends).
 #[derive(Clone, Copy, Default)]
 pub(crate) struct Edges {
     pub(crate) top: f32,
     pub(crate) bottom: f32,
     pub(crate) up: f32,
+    pub(crate) joined: [bool; 2],
 }
 
 impl Edges {
     /// A paragraph on its own: its top and bottom borders at its ends.
     pub(crate) fn own(pl: &ParaLayout, l0: usize, l1: usize) -> Edges {
         let b = pl.rp.borders.unwrap_or_default();
-        Edges { top: if l0 == 0 { border_room(b.top) } else { 0.0 }, bottom: if l1 >= pl.lines.len() { border_room(b.bottom) } else { 0.0 }, up: 0.0 }
+        Edges {
+            top: if l0 == 0 { border_room(b.top) } else { 0.0 },
+            bottom: if l1 >= pl.lines.len() { border_room(b.bottom) } else { 0.0 },
+            up: 0.0,
+            joined: [false; 2],
+        }
     }
 }
 
@@ -630,20 +638,34 @@ pub(crate) fn push_para(
         let sp = |o: &Option<Border>| o.map(|b| b.space).unwrap_or(0.0);
         let (lx, rx) = (left - sp(&b.left), right + sp(&b.right));
         // The top and bottom lines lie beyond their distance from the text.
-        if let Some(t) = b.top.filter(|t| e.top > 0.0 && t.is_visible()) {
-            let ty = y - t.space - t.width / 2.0;
-            items.push(Placed::Rule { x0: lx, y0: ty, x1: rx, y1: ty, border: t });
-        }
-        if let Some(t) = b.bottom.filter(|t| e.bottom > 0.0 && t.is_visible()) {
-            let by = y + h + t.space + t.width / 2.0;
-            items.push(Placed::Rule { x0: lx, y0: by, x1: rx, y1: by, border: t });
-        }
-        if let Some(t) = b.left.filter(Border::is_visible) {
-            items.push(Placed::Rule { x0: lx, y0: top, x1: lx, y1: bottom, border: t });
-        }
-        if let Some(t) = b.right.filter(Border::is_visible) {
-            items.push(Placed::Rule { x0: rx, y0: top, x1: rx, y1: bottom, border: t });
-        }
+        let tb = b.top.filter(|t| e.top > 0.0 && t.is_visible());
+        let bb = b.bottom.filter(|t| e.bottom > 0.0 && t.is_visible());
+        let ty = tb.map_or(top, |t| y - t.space - t.width / 2.0);
+        let by = bb.map_or(bottom, |t| y + h + t.space + t.width / 2.0);
+        box_rules(items, (lx, ty, rx, by), [tb, bb, b.left, b.right], e.joined);
     }
     y + h
+}
+
+/// The visible lines of a border box with corners `(x0, y0)` and `(x1, y1)` (`[top, bottom, left,
+/// right]`), ending square as Word draws them: a top or bottom line runs on over half the side
+/// line it meets, or half its own width where there is none, so single-line boxes close at the
+/// corners; a side line runs on to the outer edge of the top or bottom line it meets, or by half
+/// its own width where there is none, unless the box goes on there (`joined`: at the top, at the
+/// bottom).
+pub(crate) fn box_rules(items: &mut Vec<Placed>, (x0, y0, x1, y1): (f32, f32, f32, f32), sides: [Option<Border>; 4], joined: [bool; 2]) {
+    let [top, bottom, left, right] = sides.map(|b| b.filter(Border::is_visible));
+    let half = |t: &Border| display::rule_width(t) / 2.0;
+    for (t, y) in [(top, y0), (bottom, y1)] {
+        if let Some(t) = t {
+            let over = |side: Option<Border>| half(&side.unwrap_or(t));
+            items.push(Placed::Rule { x0: x0 - over(left), y0: y, x1: x1 + over(right), y1: y, border: t });
+        }
+    }
+    for (t, x) in [(left, x0), (right, x1)] {
+        if let Some(t) = t {
+            let end = |o: Option<Border>, joined: bool| if joined { 0.0 } else { half(&o.unwrap_or(t)) };
+            items.push(Placed::Rule { x0: x, y0: y0 - end(top, joined[0]), x1: x, y1: y1 + end(bottom, joined[1]), border: t });
+        }
+    }
 }
