@@ -18,6 +18,7 @@ pub(crate) mod locale;
 pub mod math_gallery;
 pub(crate) mod prefs;
 pub mod print;
+mod print_fields;
 pub mod recovery;
 pub mod ribbon;
 pub mod sample;

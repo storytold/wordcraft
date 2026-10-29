@@ -2,7 +2,7 @@ use super::balloons::over_balloon;
 use super::links::{field_showing_code, is_followable_link, is_generated_bookmark_link, link_under};
 use super::navigation::page_at;
 use super::story::{enters_header_footer, in_text_box, part_kind, text_box_host};
-use super::{CanvasState, DocLayout, PartKind, Pos, Pos2, Rect, StoryRef, Ui, WordApp, json};
+use super::{CanvasState, DocLayout, PartKind, Pos, Pos2, Rect, SelectionMode, StoryRef, Ui, WordApp, json};
 
 /// Drag-select auto-scroll (#688): the pointer within this many points of the viewport's edge
 /// starts scrolling, like Word.
@@ -85,7 +85,7 @@ pub(super) fn clamped_scroll(before: egui::Vec2, delta: egui::Vec2, max: egui::V
 /// Routes pointer input: pen or eraser ink, object and crop drags, table border, selection and move
 /// handles, then page hit testing, outlines, headers and footers, equations, selection and caret
 /// interaction.
-pub(super) fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layout: &DocLayout, scale: f32) {
+pub(super) fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layout: &std::sync::Arc<DocLayout>, scale: f32) {
     let Some(pointer) = route_pointer_targets(app, ui, resp, rects, layout, scale) else {
         return;
     };
@@ -134,7 +134,7 @@ fn route_pointer_targets(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rect
 struct PagePointer<'a> {
     ui: &'a Ui,
     resp: &'a egui::Response,
-    layout: &'a DocLayout,
+    layout: &'a std::sync::Arc<DocLayout>,
     p: Pos2,
     page: usize,
     x: f32,
@@ -198,13 +198,14 @@ fn handle_page_pointer(app: &mut WordApp, pointer: PagePointer<'_>) {
             app.canvas.caret_visible_since = crate::now_ms();
         }
     } else if app.canvas.dragging && ui.input(|i| i.pointer.primary_down()) {
-        // Through the command, so from one table cell into another the drag takes whole cells
-        // (Word); straight to the session, as the app's `run` would scroll on every frame.
-        if let Some(pos) = layout.hit(page, x, y, story)
-            && pos != app.session.sel_ends().focus
+        // Through the command, so from one table cell into another the drag takes whole cells.
+        if let Some(target) = layout.hit_visual(page, x, y, story)
+            && !app.session.visual_matches(&target)
         {
-            let pj = serde_json::to_value(&pos).unwrap_or_default();
-            let _ = app.session.run("caret.set", &json!({"pos": pj, "extend": true}));
+            let pj = serde_json::to_value(target.position()).unwrap_or_default();
+            if app.session.run("caret.set", &json!({"pos": pj, "extend": true})).is_ok() {
+                retain_pointer_hit(app, (page, x, y), story);
+            }
             app.session.page_hint = page;
             app.canvas.caret_visible_since = crate::now_ms();
         }
@@ -318,7 +319,8 @@ fn handle_primary_press(
         app.canvas.dragging = true;
         return;
     }
-    let Some(pos) = layout.hit(page, x, y, story) else { return };
+    let Some(target) = layout.hit_visual(page, x, y, story) else { return };
+    let pos = target.position().clone();
     // Ctrl/⌘+click follows a hyperlink.
     if mods.command
         && let Some(link) = link_under(app, layout, page, x, y, &pos)
@@ -335,17 +337,16 @@ fn handle_primary_press(
         }
         return;
     }
-    let pj = serde_json::to_value(&pos).unwrap_or_default();
     // Alt+drag selects a column (block) of text.
     if mods.alt && !mods.shift && !mods.command {
-        let _ = app.run("caret.set", json!({"pos": pj}));
+        set_visual_caret(app, target.clone(), SelectionMode::Replace, (page, x, y));
         app.session.page_hint = page;
         app.canvas.column_drag = Some(((page, x, y), (page, x, y)));
         app.canvas.dragging = true;
         return;
     }
     app.canvas.column_drag = None;
-    let _ = app.run("caret.set", json!({"pos": pj, "extend": mods.shift}));
+    set_visual_caret(app, target, if mods.shift { SelectionMode::Extend } else { SelectionMode::Replace }, (page, x, y));
     // Double-click selects a word, triple-click a paragraph, Ctrl/⌘+click a sentence; holding
     // the button and dragging then extends by whole units (Word, #549).
     let unit = match clicks {
@@ -487,5 +488,21 @@ fn show_hover_link(app: &WordApp, pointer: &PagePointer<'_>) {
         egui::Tooltip::always_open(ui.ctx().clone(), ui.layer_id(), egui::Id::unique("link_tip"), egui::PopupAnchor::Pointer).show(|ui| {
             ui.label(tip);
         });
+    }
+}
+
+fn set_visual_caret(app: &mut WordApp, target: wordcraft_layout::VisualPos, mode: SelectionMode, point: (usize, f32, f32)) {
+    let story = target.position().story;
+    let pos = serde_json::to_value(target.position()).unwrap_or_default();
+    if app.run("caret.set", json!({"pos": pos, "extend": mode == SelectionMode::Extend})).is_ok() {
+        retain_pointer_hit(app, point, story);
+    }
+}
+
+fn retain_pointer_hit(app: &mut WordApp, (page, x, y): (usize, f32, f32), story: StoryRef) {
+    // The command may end typing. Hit the final layout without reusing an old owner.
+    let layout = app.session.layout();
+    if let Some(target) = layout.hit_visual(page, x, y, story) {
+        app.session.retain_visual(target);
     }
 }

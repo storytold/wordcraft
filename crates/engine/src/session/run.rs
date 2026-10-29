@@ -1,7 +1,7 @@
 use super::doc_state::{ColumnBlock, Selection};
 use super::ime_state::ImeCaretState;
 use super::snapshot_types::RunSnapshot;
-use super::{CharProps, CmdError, Document, Fragment, ImeEditOutcome, Pos, Session, StoryRef, Value, document_id_mark};
+use super::{Arc, CharProps, CmdError, DocLayout, Document, Fragment, ImeEditOutcome, Pos, Session, StoryRef, Value, VisualPos, document_id_mark};
 use crate::CommandSpec;
 
 struct SuccessContext<'a> {
@@ -177,6 +177,7 @@ impl Session {
         {
             self.pending_move = None;
         }
+        let visual_before = (self.visual_anchor.clone(), self.visual_focus.clone());
         let sel_before = self.sel.clone();
         // A rejected command must not persist a new proofing default, including a rejection
         // by the protected-region check after its handler has succeeded. Undo stays document-only.
@@ -272,7 +273,61 @@ impl Session {
                 self.status = e.to_string();
             }
         }
+        self.restore_failed_visual(&result, visual_before);
         result
+    }
+
+    fn restore_failed_visual(&mut self, result: &Result<Value, CmdError>, before: (Option<VisualPos>, Option<VisualPos>)) {
+        if result.is_ok() {
+            return;
+        }
+        self.visual_anchor = before.0.filter(|hint| hint.position() == &self.sel.anchor);
+        self.visual_focus = before.1.filter(|hint| hint.position() == &self.sel.focus);
+    }
+
+    /// Geometry for a session endpoint, including valid transient visual affinity.
+    /// Preview layouts and stale hints fall back to canonical position geometry.
+    pub fn caret_geometry(&self, layout: &Arc<DocLayout>, pos: &Pos) -> Option<wordcraft_layout::hit::Caret> {
+        let hint = if *pos == self.sel.focus {
+            self.visual_focus.as_ref()
+        } else if *pos == self.sel.anchor {
+            self.visual_anchor.as_ref()
+        } else {
+            None
+        };
+        layout.caret_visual(pos, hint, self.page_hint)
+    }
+
+    /// Whether a pointer target is already the current visual insertion point.
+    pub fn visual_matches(&self, target: &VisualPos) -> bool {
+        target.position() == &self.sel.focus && self.visual_focus.as_ref() == Some(target)
+    }
+
+    /// Attach an opaque hit after a successful caret command. Source selection is authoritative.
+    /// Stale snapshot owners are rejected when geometry is resolved.
+    pub fn retain_visual(&mut self, target: VisualPos) {
+        if target.position() != &self.sel.focus {
+            return;
+        }
+        if self.sel.is_collapsed() && self.visual_anchor.is_none() {
+            self.visual_anchor = Some(target.clone());
+        }
+        self.visual_focus = Some(target);
+    }
+
+    pub(crate) fn visual_hint(&self) -> Option<&VisualPos> {
+        self.visual_focus.as_ref().filter(|hint| hint.position() == &self.sel.focus)
+    }
+
+    pub(crate) fn drop_visual(&mut self, mode: crate::cmd::caret::SelectionMode) {
+        if mode == crate::cmd::caret::SelectionMode::Extend {
+            if self.sel.is_collapsed() && self.visual_anchor.is_none() {
+                self.visual_anchor = self.visual_focus.clone();
+            }
+        } else {
+            self.visual_anchor = None;
+        }
+        self.visual_focus = None;
     }
 
     fn finish_success(&mut self, context: SuccessContext<'_>) {
@@ -392,6 +447,10 @@ impl Session {
             self.also_selected.clear();
         }
         self.note_typing(id, before_doc.as_ref().map(|b| &b.0), sel_before);
+        if (!id.starts_with("caret.") && self.sel != *sel_before) || matches!(id, "edit.undo" | "edit.undoTo" | "edit.redo") {
+            self.visual_anchor = None;
+            self.visual_focus = None;
+        }
     }
 
     /// The end of [`Session::run`] for a command that ended up in another document than it
