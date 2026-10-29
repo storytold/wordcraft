@@ -336,12 +336,7 @@ impl Reader {
                 _ => {}
             }
         }
-        if !matches!(word, "footnote" | "annotation")
-            || !self.marks_on
-            || self.hf.is_some()
-            || self.sub.is_some()
-            || self.st.dest != Dest::Body
-        {
+        if !matches!(word, "footnote" | "annotation") || !self.marks_on || self.hf.is_some() || self.sub.is_some() || self.st.dest != Dest::Body {
             return false;
         }
         self.start_sub(word == "annotation");
