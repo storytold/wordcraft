@@ -346,6 +346,10 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                 }
                 qat_end = ui.min_rect().max.x;
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // The room left of the account button and its space, less the spaces between the
+                    // three controls and a gap from the Quick Access Toolbar.
+                    let room = ui.available_width() - control_h - 8.0 - 3.0 * ui.spacing().item_spacing.x - 8.0;
+                    let fit = TitleBarFit::new(room, app.ui.show_discord, control_h);
                     // Account / community.
                     let (r, resp) = ui.allocate_exact_size(vec2(control_h, control_h), Sense::click());
                     ui.painter().circle_filled(r.center(), control_h / 2.0 - 1.0, t.accent);
@@ -357,22 +361,26 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                     }
                     ui.add_space(8.0);
                     if app.ui.show_discord {
-                        let (r, resp) = ui.allocate_exact_size(vec2(84.0, 22.0), Sense::click());
+                        let (r, resp) = ui.allocate_exact_size(vec2(if fit.discord_label { 84.0 } else { 22.0 }, 22.0), Sense::click());
                         ui.painter().rect_filled(r, 11.0, if resp.hovered() { t.accent_text } else { t.accent });
+                        let icon_x = if fit.discord_label { r.min.x + 13.0 } else { r.center().x };
                         icons::paint(
                             ui.painter(),
-                            Rect::from_center_size(pos2(r.min.x + 13.0, r.center().y), vec2(14.0, 14.0)),
+                            Rect::from_center_size(pos2(icon_x, r.center().y), vec2(14.0, 14.0)),
                             "discord",
                             t.on_accent,
                             t.on_accent,
                         );
-                        ui.painter().text(pos2(r.min.x + 24.0, r.center().y), Align2::LEFT_CENTER, tl!("Discord"), medium(11.5), t.on_accent);
+                        if fit.discord_label {
+                            ui.painter().text(pos2(r.min.x + 24.0, r.center().y), Align2::LEFT_CENTER, tl!("Discord"), medium(11.5), t.on_accent);
+                        }
+                        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Discord")));
                         if resp.on_hover_text(tl!("Join the ArtCraft community on Discord")).clicked() {
                             let _ = app.run("ui.discord", json!({}));
                         }
                         ui.add_space(8.0);
                     }
-                    search_box(app, ui, control_h);
+                    search_box(app, ui, control_h, fit.search);
                     right_start = ui.min_rect().min.x;
                 });
             });
@@ -426,26 +434,63 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
         });
 }
 
-/// Search ("Tell me"): a box that opens command search. In the title bar, and in the Commands bar
-/// of Full Screen (#1678).
-fn search_box(app: &mut WordApp, ui: &mut Ui, control_h: f32) {
+/// How the title bar's controls on the right fit a narrow window (#4850): the search box gives up
+/// width first, then Discord its label, then the search box its text.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TitleBarFit {
+    /// The search box's width; a square shows the magnifier alone.
+    search: f32,
+    discord_label: bool,
+}
+
+impl TitleBarFit {
+    /// The search box's width when there is room for it.
+    const SEARCH: f32 = 260.0;
+    /// The narrowest search box that still shows its text.
+    const SEARCH_TEXT: f32 = 160.0;
+
+    /// The fit in `room`, the width left of the account button; `discord` when its button shows.
+    fn new(room: f32, discord: bool, control_h: f32) -> TitleBarFit {
+        for discord_label in [true, false] {
+            let discord_w = match (discord, discord_label) {
+                (false, _) => 0.0,
+                (true, true) => 84.0 + 8.0,
+                (true, false) => 22.0 + 8.0,
+            };
+            let search = room - discord_w;
+            if search >= Self::SEARCH_TEXT {
+                return TitleBarFit { search: search.min(Self::SEARCH), discord_label };
+            }
+        }
+        TitleBarFit { search: control_h, discord_label: false }
+    }
+}
+
+/// Search ("Tell me"): a box `width` wide that opens command search, its text shortened to fit
+/// and left out of a square box. In the title bar, and in the Commands bar of Full Screen (#1678).
+fn search_box(app: &mut WordApp, ui: &mut Ui, control_h: f32, width: f32) {
     let t = Tokens::get(ui.ctx());
-    let (r, resp) = ui.allocate_exact_size(vec2(260.0, control_h), Sense::click());
+    let (r, resp) = ui.allocate_exact_size(vec2(width.max(control_h), control_h), Sense::click());
     let ph = tl!("Search commands and help");
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, ph));
     ui.painter().rect(r, 6.0, if resp.hovered() { t.input } else { t.ribbon }, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
-    icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 16.0, r.center().y), vec2(16.0, 16.0)), "search", t.text_dim, t.accent);
+    let icon_only = r.width() < TitleBarFit::SEARCH_TEXT;
+    let icon_x = if icon_only { r.center().x } else { r.min.x + 16.0 };
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(icon_x, r.center().y), vec2(16.0, 16.0)), "search", t.text_dim, t.accent);
     let pfont = TypeRung::Control.regular();
     let ptrack = TypeRung::Control.tracking();
-    paint_text(
-        ui.painter(),
-        pos2(r.min.x + 30.0, r.center().y - TypeRung::Control.line_height() / 2.0),
-        Align2::LEFT_TOP,
-        ph,
-        &pfont,
-        ptrack,
-        t.text_dim,
-    );
+    if !icon_only {
+        let shown = fit_text(ui.painter(), ph, &pfont, ptrack, t.text_dim, r.width() - 38.0);
+        paint_text(
+            ui.painter(),
+            pos2(r.min.x + 30.0, r.center().y - TypeRung::Control.line_height() / 2.0),
+            Align2::LEFT_TOP,
+            &shown,
+            &pfont,
+            ptrack,
+            t.text_dim,
+        );
+    }
     if app.ui.keytips == crate::keytips::Phase::Tabs {
         app.keytip_rects.push((r, crate::keytips::SEARCH_LETTER.to_string()));
     }
@@ -514,7 +559,7 @@ pub fn screen_bar(app: &mut WordApp, ui: &mut Ui, screen: Screen) {
             }
         } else {
             ui.scope_builder(egui::UiBuilder::new().max_rect(Rect::from_center_size(full.center(), vec2(260.0, 22.0))), |ui| {
-                search_box(app, ui, 22.0);
+                search_box(app, ui, 22.0, TitleBarFit::SEARCH);
             });
         }
     });
@@ -566,18 +611,28 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                 } else {
                     l.caret_on(&app.session.sel.focus, app.session.page_hint).map(|c| c.page + 1).unwrap_or(1)
                 };
-                let st = |ui: &mut Ui, s: &str| {
+                // The texts on the left stop before the controls on the right (#4850). Those are
+                // laid out after the texts, so their width from the right edge is kept from the
+                // pass before, which is redone when it changes: in a narrow window a text that
+                // doesn't fit before them is left out, not drawn over them.
+                let row_right = ui.max_rect().right();
+                let controls_id = ui.scope_id().with("status_controls_width");
+                let controls_w = ui.data(|d| d.get_temp::<f32>(controls_id));
+                let edge = controls_w.map_or(f32::INFINITY, |w| row_right - w);
+                let st = |ui: &mut Ui, s: &str| -> Option<egui::Response> {
                     let font = TypeRung::Caption.regular();
                     let track = TypeRung::Caption.tracking();
                     let w = text_width(ui.painter(), s, &font, track, t.text_dim);
+                    if ui.cursor().min.x + w + 1.0 > edge - ui.spacing().item_spacing.x {
+                        return None;
+                    }
                     let (r, resp) = ui.allocate_exact_size(vec2(w + 1.0, TypeRung::Caption.line_height()), Sense::click());
                     paint_text(ui.painter(), pos2(r.min.x, r.min.y), Align2::LEFT_TOP, s, &font, track, t.text_dim);
                     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, s));
-                    resp
+                    Some(resp)
                 };
                 if st(ui, &crate::i18n::fmt(tl!("Page {page} of {pages}"), &[("page", &page.to_string()), ("pages", &l.pages.len().to_string())]))
-                    .on_hover_text(tl!("Go To (⌘⌥G)"))
-                    .clicked()
+                    .is_some_and(|r| r.on_hover_text(tl!("Go To (⌘⌥G)")).clicked())
                 {
                     let _ = app.run("ui.dialog", json!({"name": "goto"}));
                 }
@@ -589,7 +644,7 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     let sw = wordcraft_doc::count_words(&app.session.selected_text());
                     crate::i18n::fmt(tl!("{selected} of {words} words"), &[("selected", &sw.to_string()), ("words", &words.to_string())])
                 };
-                if st(ui, &wtxt).clicked() {
+                if st(ui, &wtxt).is_some_and(|r| r.clicked()) {
                     let _ = app.run("ui.dialog", json!({"name": "wordCount"}));
                 }
                 if app.session.sel.focus.story != StoryRef::Body && !crate::canvas::in_text_box(app) {
@@ -598,7 +653,7 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                         Some(PartKind::Endnote) => tl!("Editing endnote"),
                         _ => tl!("Editing header/footer"),
                     };
-                    st(ui, label);
+                    let _ = st(ui, label);
                 }
                 // The language at the caret; a click sets the proofing language (Review › Language).
                 let lang = crate::ribbon::caret_language(app);
@@ -612,15 +667,19 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     lang.clone()
                 };
                 let tip = dictionary_problem(&lang, &unreadable, missing).unwrap_or_else(|| tl!("Language").to_string());
-                let resp = st(ui, &shown).on_hover_text(tip);
-                egui::Popup::menu(&resp).show(|ui| {
-                    ui.set_min_width(200.0);
-                    crate::ribbon::language_menu(ui, app);
-                });
-                if app.session.doc.settings.track_changes {
-                    st(ui, tl!("Track Changes: On"));
+                if let Some(resp) = st(ui, &shown) {
+                    let resp = resp.on_hover_text(tip);
+                    egui::Popup::menu(&resp).show(|ui| {
+                        ui.set_min_width(200.0);
+                        crate::ribbon::language_menu(ui, app);
+                    });
                 }
-                if app.session.prefs.overtype && st(ui, tl!("Overtype")).on_hover_text(tl!("Click to switch back to inserting")).clicked() {
+                if app.session.doc.settings.track_changes {
+                    let _ = st(ui, tl!("Track Changes: On"));
+                }
+                if app.session.prefs.overtype
+                    && st(ui, tl!("Overtype")).is_some_and(|r| r.on_hover_text(tl!("Click to switch back to inserting")).clicked())
+                {
                     let _ = app.run("text.overtype", json!({"value": false}));
                 }
                 // The message is drawn where the row is now; the controls on the right are laid
@@ -718,6 +777,12 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                         let _ = app.run("view.focus", json!({}));
                     }
                 });
+                // The controls' width from the right edge, for the texts of the next pass.
+                let width = row_right - controls_left;
+                if width.is_finite() && controls_w.is_none_or(|w| (w - width).abs() > 0.5) {
+                    ui.data_mut(|d| d.insert_temp(controls_id, width));
+                    ui.ctx().request_discard("the status bar's controls moved");
+                }
                 if let Some((msg, at)) = &app.status_msg
                     && crate::now_ms() - at < 6000.0
                 {

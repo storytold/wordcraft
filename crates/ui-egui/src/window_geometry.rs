@@ -52,8 +52,10 @@ impl RawWindowState {
     }
 }
 
-/// The smallest window restored: the desktop app's minimum inner size.
-pub const MIN_SIZE: egui::Vec2 = egui::vec2(760.0, 480.0);
+/// The desktop app's minimum inner size, and the smallest window restored. 600 pt wide (#4850):
+/// two windows side by side on a 1280 pt wide screen, and the widest dialogs that fitted 760 pt
+/// (Organizer, Define New Multilevel List) still fit.
+pub const MIN_SIZE: egui::Vec2 = egui::vec2(600.0, 480.0);
 /// Larger saved sizes are corrupt. eframe also shrinks the start size to the largest monitor.
 const MAX_SIZE: egui::Vec2 = egui::vec2(16384.0, 16384.0);
 /// Saved positions farther from the origin than this are corrupt.
@@ -463,7 +465,7 @@ mod tests {
         let again = WindowGeometry { position: Some([48.0, 48.0]), width: 1424.0, height: 729.0, ..saved() };
         assert_eq!(again.fit_on_monitor(&opened(egui::pos2(48.0, 48.0), egui::vec2(1424.0, 729.0), laptop)), None);
         // Never smaller than the minimum size, and never off the top-left corner.
-        let tiny = egui::vec2(800.0, 600.0);
+        let tiny = egui::vec2(MIN_SIZE.x + 40.0, 600.0);
         assert_eq!(system.fit_on_monitor(&opened(at, start, tiny)), Some((egui::pos2(12.0, 40.5), MIN_SIZE)));
         // Maximized, full screen or minimized, or the monitor not known yet: nothing to do.
         let mut i = opened(at, egui::vec2(1440.0, 864.0), laptop);

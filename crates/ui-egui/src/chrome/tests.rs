@@ -307,3 +307,72 @@ fn clicking_the_autosave_label_toggles_autosave() {
     assert!(h.state().autosaves(), "and clicking it again turns it back on");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// #4850: in a narrow window the title bar's search box gives up width first, then Discord its
+/// label, then the search box its text; a wide window keeps them as they were.
+#[test]
+fn the_title_bar_controls_fit_a_narrow_window() {
+    let fit = |room| TitleBarFit::new(room, true, 26.0);
+    assert_eq!(fit(1000.0), TitleBarFit { search: 260.0, discord_label: true });
+    assert_eq!(fit(300.0), TitleBarFit { search: 208.0, discord_label: true });
+    assert_eq!(fit(200.0), TitleBarFit { search: 170.0, discord_label: false });
+    assert_eq!(fit(120.0), TitleBarFit { search: 26.0, discord_label: false });
+    assert_eq!(TitleBarFit::new(200.0, false, 26.0).search, 200.0, "without Discord the search box has its room");
+}
+
+/// The labelled controls drawn by `draw` in a window `width` wide: (label, left, right).
+fn labelled(a: &mut WordApp, width: f32, draw: fn(&mut WordApp, &mut Ui)) -> Vec<(String, f64, f64)> {
+    let ctx = ctx();
+    ctx.enable_accesskit();
+    let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(width, 700.0))), ..Default::default() };
+    let mut out = ctx.run_ui(input, |ui| draw(a, ui));
+    out.textures_delta.clear();
+    let update = out.platform_output.accesskit_update.take().unwrap();
+    update
+        .nodes
+        .iter()
+        .filter_map(|(_, node)| Some((node.label()?.to_string(), node.bounds()?)))
+        .filter(|(_, b)| b.width() > 0.0)
+        .map(|(l, b)| (l, b.x0, b.x1))
+        .collect()
+}
+
+/// #4850: down to the new minimum width the title bar's controls don't overlap: the search box
+/// narrows instead of covering the Quick Access Toolbar.
+#[test]
+fn title_bar_controls_never_overlap_in_a_narrow_window() {
+    for width in [crate::window_geometry::MIN_SIZE.x, 680.0, 760.0, 1440.0] {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        a.ui.show_discord = true;
+        let nodes = labelled(&mut a, width, title_bar);
+        assert!(nodes.iter().any(|(l, ..)| l == "Search commands and help"), "{width}: {nodes:?}");
+        for (i, (la, a0, a1)) in nodes.iter().enumerate() {
+            assert!(*a1 <= f64::from(width) + 0.5, "{width}: {la} runs off the window");
+            for (lb, b0, b1) in nodes.iter().skip(i + 1) {
+                assert!(a1 <= b0 || b1 <= a0, "{width}: {la} ({a0}–{a1}) overlaps {lb} ({b0}–{b1})");
+            }
+        }
+    }
+}
+
+/// #4850: the status bar's texts stop before its controls on the right; in a narrow window the
+/// ones that don't fit are left out instead of being drawn over Focus, the views and the zoom.
+#[test]
+fn status_bar_texts_stop_before_the_controls_in_a_narrow_window() {
+    let controls = ["Focus", "Read Mode", "Print Layout", "Web Layout", "Zoom Out", "Zoom", "Zoom In"];
+    for width in [crate::window_geometry::MIN_SIZE.x, 680.0, 760.0, 1440.0] {
+        let mut a =
+            WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Several words here")), crate::Services::default());
+        a.run("review.trackChanges", json!({"value": true})).unwrap();
+        a.run("select.all", json!({})).unwrap();
+        let nodes = labelled(&mut a, width, status_bar);
+        let focus = nodes.iter().find(|(l, ..)| l == "Focus").unwrap_or_else(|| panic!("{width}: Focus is drawn")).1;
+        assert!(nodes.iter().any(|(l, ..)| l == "Page 1 of 1"), "{width}: the page is always shown: {nodes:?}");
+        for (label, _, right) in nodes.iter().filter(|(l, ..)| !controls.contains(&l.as_str()) && !l.ends_with('%')) {
+            assert!(*right <= focus, "{width}: {label} ends at {right}, past the controls at {focus}");
+        }
+        if width >= 1000.0 {
+            assert!(nodes.iter().any(|(l, ..)| l == "Track Changes: On"), "a wide window shows everything: {nodes:?}");
+        }
+    }
+}

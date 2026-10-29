@@ -110,7 +110,7 @@ impl Windows {
             recent: vec![1],
             focus: None,
             menu: WindowMenu::default(),
-            builder: egui::ViewportBuilder::default().with_inner_size([1440.0, 920.0]).with_min_inner_size([760.0, 480.0]),
+            builder: egui::ViewportBuilder::default().with_inner_size([1440.0, 920.0]).with_min_inner_size(crate::window_geometry::MIN_SIZE),
             input_plugin: false,
             driven: false,
         }
