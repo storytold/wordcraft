@@ -571,9 +571,19 @@ pub fn font_definitions_language(prefer_hans: bool, prefer_korean: bool, system_
         // The same static bytes the document fonts use: one copy in the binary.
         add_cjk(&mut fonts, format!("{} {}", f.family, f.style), FontData::from_static(f.bytes));
     }
-    // Georgian has no glyphs in Inter, Source Sans or the CJK faces: the craft-fonts Geor face.
-    for f in wordcraft_fonts::georgian_fonts() {
+    // Georgian and Hebrew have no glyphs in Inter, Source Sans or the CJK faces: the craft-fonts
+    // Geor and Hebr faces, with an installed Hebrew fallback when built without craft-fonts.
+    for f in wordcraft_fonts::georgian_fonts().chain(wordcraft_fonts::ui_hebrew_fonts()) {
         add_cjk(&mut fonts, format!("{} {}", f.family, f.style), FontData::from_static(f.bytes));
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if system_cjk
+        && wordcraft_fonts::ui_hebrew_fonts().next().is_none()
+        && let Some(f) = system_hebrew_font()
+    {
+        let mut data = FontData::from_static(&f.bytes);
+        data.index = f.index;
+        add_cjk(&mut fonts, format!("system {}", f.family), data);
     }
     // The embedded faces leave interface characters without a glyph (a build without craft-fonts,
     // without its Chinese face, #241, or with faces lacking catalog characters, #486): an
@@ -588,6 +598,13 @@ pub fn font_definitions_language(prefer_hans: bool, prefer_korean: bool, system_
     let _ = system_cjk;
     // Symbols and emoji fall back to egui's defaults (kept in the families).
     fonts
+}
+
+/// The installed Hebrew interface font when built without `craft-fonts`, chosen once.
+#[cfg(not(target_arch = "wasm32"))]
+fn system_hebrew_font() -> Option<&'static wordcraft_fonts::SystemUiFont> {
+    static HE: std::sync::OnceLock<Option<wordcraft_fonts::SystemUiFont>> = std::sync::OnceLock::new();
+    HE.get_or_init(wordcraft_fonts::system_hebrew_ui_font).as_ref()
 }
 
 /// The installed CJK interface font for a Chinese (`hans`) or other interface, chosen once:
@@ -750,6 +767,7 @@ pub fn apply(ctx: &egui::Context, appearance: Appearance) {
     ctx.set_visuals_of(egui::Theme::Light, visuals(&Tokens::light()));
     ctx.set_visuals_of(egui::Theme::Dark, visuals(&Tokens::dark()));
     ctx.all_styles_mut(|s| {
+        s.right_to_left = crate::i18n::current().rtl();
         s.spacing.item_spacing = egui::vec2(6.0, 4.0);
         s.spacing.button_padding = egui::vec2(8.0, 3.0);
         s.spacing.interact_size = egui::vec2(24.0, 22.0);

@@ -51,16 +51,107 @@ fn substitutes_by_name(family: &str) -> (&'static [&'static str], bool) {
     // headings and screens. Open fonts with full Persian coverage first.
     const NASKH: &[&str] = &["Noto Naskh Arabic", "XB Zar", "XB Niloofar", "Amiri", "Vazirmatn", "Noto Sans Arabic", "DejaVu Sans", "Source Serif 4"];
     const ARABIC_SANS: &[&str] = &["Vazirmatn", "Sahel", "Shabnam", "Samim", "Noto Sans Arabic", "Noto Naskh Arabic", "DejaVu Sans", "Source Sans 3"];
-    // Hebrew document fonts: platform-specific fonts first, then common open source fallbacks.
-    // Windows: Microsoft Office fonts (David, Miriam) are common; Segoe UI is standard.
-    // macOS: Helvetica has good Hebrew support; Geeza Pro is included by default.
-    // Linux: Noto Sans Hebrew is the best option.
+    // Hebrew document fonts: platform-specific fonts and open OFL Hebrew families first, then
+    // common open source fallbacks.
     #[cfg(windows)]
-    const HEBREW: &[&str] = &["Noto Sans Hebrew", "David", "Miriam", "Segoe UI", "Arial", "Tahoma", "DejaVu Sans", "Source Sans 3"];
+    const HEBREW: &[&str] = &[
+        "Noto Sans Hebrew",
+        "Miriam Libre",
+        "Rubik",
+        "Heebo",
+        "Assistant",
+        "Alef",
+        "David Libre",
+        "Frank Ruhl Libre",
+        "Noto Serif Hebrew",
+        "David",
+        "Miriam",
+        "Segoe UI",
+        "Arial",
+        "Tahoma",
+        "DejaVu Sans",
+        "Source Sans 3",
+    ];
     #[cfg(target_os = "macos")]
-    const HEBREW: &[&str] = &["Helvetica", "Noto Sans Hebrew", "Arial", "Tahoma", "Geeza Pro", "DejaVu Sans", "Source Sans 3"];
+    const HEBREW: &[&str] = &[
+        "SF Hebrew",
+        "Arial Hebrew",
+        "Helvetica",
+        "Noto Sans Hebrew",
+        "Miriam Libre",
+        "Rubik",
+        "Heebo",
+        "Assistant",
+        "Alef",
+        "David Libre",
+        "Frank Ruhl Libre",
+        "Noto Serif Hebrew",
+        "Arial",
+        "Tahoma",
+        "Geeza Pro",
+        "DejaVu Sans",
+        "Source Sans 3",
+    ];
     #[cfg(not(any(windows, target_os = "macos")))]
-    const HEBREW: &[&str] = &["Noto Sans Hebrew", "Segoe UI", "Arial", "Tahoma", "DejaVu Sans", "Source Sans 3"];
+    const HEBREW: &[&str] = &[
+        "Noto Sans Hebrew",
+        "Miriam Libre",
+        "Rubik",
+        "Heebo",
+        "Assistant",
+        "Alef",
+        "David Libre",
+        "Frank Ruhl Libre",
+        "Noto Serif Hebrew",
+        "Segoe UI",
+        "Arial",
+        "Tahoma",
+        "DejaVu Sans",
+        "Source Sans 3",
+    ];
+    #[cfg(windows)]
+    const HEBREW_SERIF: &[&str] = &[
+        "David",
+        "David Libre",
+        "Frank Ruhl Libre",
+        "Noto Serif Hebrew",
+        "Noto Rashi Hebrew",
+        "Noto Sans Hebrew",
+        "Miriam",
+        "Segoe UI",
+        "Arial",
+        "Tahoma",
+        "DejaVu Sans",
+        "Source Serif 4",
+    ];
+    #[cfg(target_os = "macos")]
+    const HEBREW_SERIF: &[&str] = &[
+        "David Libre",
+        "Frank Ruhl Libre",
+        "Noto Serif Hebrew",
+        "Noto Rashi Hebrew",
+        "SF Hebrew",
+        "Arial Hebrew",
+        "Helvetica",
+        "Noto Sans Hebrew",
+        "Arial",
+        "Tahoma",
+        "DejaVu Sans",
+        "Source Serif 4",
+    ];
+    #[cfg(not(any(windows, target_os = "macos")))]
+    const HEBREW_SERIF: &[&str] = &[
+        "David Libre",
+        "Frank Ruhl Libre",
+        "Noto Serif Hebrew",
+        "Noto Rashi Hebrew",
+        "Noto Sans Hebrew",
+        "Segoe UI",
+        "Arial",
+        "Tahoma",
+        "DejaVu Sans",
+        "Source Serif 4",
+    ];
     // Thai document fonts (TH Sarabun New, Cordia New, the UPC families…): Thai faces, every one
     // with Thai letters; [`substitute`] prefers one with Latin letters and digits too, so a run
     // mixing Thai and Latin keeps one font at one size, as Word substitutes Cordia New for the
@@ -113,6 +204,9 @@ fn substitutes_by_name(family: &str) -> (&'static [&'static str], bool) {
     }
     if is_thai(&f) {
         return (THAI, true);
+    }
+    if is_hebrew_serif(&f) {
+        return (HEBREW_SERIF, true);
     }
     if is_hebrew(&f) {
         return (HEBREW, true);
@@ -333,10 +427,55 @@ fn is_khmer(f: &str) -> bool {
         || matches!(f, "daunpenh" | "moolboran" | "limon" | "battambang" | "bokor" | "content" | "dangrek" | "angkor")
 }
 
+/// Serif Hebrew document fonts (David, FrankRuehl, Narkisim, Culmus CLM serif families, SBL
+/// Hebrew, Ezra SIL, Noto Serif Hebrew…).
+fn is_hebrew_serif(f: &str) -> bool {
+    const NAMES: &[&str] = &[
+        "david",
+        "david clm",
+        "david libre",
+        "frankruehl",
+        "frank ruehl clm",
+        "frank ruhl libre",
+        "narkisim",
+        "hadassah friedlaender",
+        "guttman drogolin",
+        "sbl hebrew",
+        "ezra sil",
+        "taamey frank clm",
+        "noto serif hebrew",
+        "noto rashi hebrew",
+        "times new roman (hebrew)",
+    ];
+    NAMES.contains(&f) || (f.contains("hebrew") && (f.contains("serif") || f.contains("rashi")))
+}
+
 /// Hebrew document fonts.
 fn is_hebrew(f: &str) -> bool {
-    const NAMES: &[&str] = &["david", "miriam", "noto sans hebrew", "arial hebrew", "calibri hebrew"];
-    NAMES.contains(&f) || f.contains("hebrew")
+    const NAMES: &[&str] = &[
+        "david",
+        "miriam",
+        "miriam fixed",
+        "miriam clm",
+        "miriam libre",
+        "nachlieli clm",
+        "simple clm",
+        "aharoni",
+        "aharoni clm",
+        "rod",
+        "guttman yad-brush",
+        "stam ashkenaz clm",
+        "stam sefarad clm",
+        "noto sans hebrew",
+        "arial hebrew",
+        "calibri hebrew",
+        "sf hebrew",
+        "rubik",
+        "heebo",
+        "assistant",
+        "alef",
+    ];
+    NAMES.contains(&f) || is_hebrew_serif(f) || f.contains("hebrew") || f.starts_with("guttman ")
 }
 
 /// The first installed substitute for a missing `family`. For a Thai font, the first with Latin
@@ -580,15 +719,33 @@ mod tests {
         assert!(r.synth_bold && r.synth_italic);
     }
 
+    /// Verifies that Hebrew font families substitute appropriate serif or sans Hebrew faces.
     #[test]
     fn hebrew_fonts_substitute_hebrew_faces() {
-        for f in ["David", "Miriam", "Arial Hebrew", "Calibri Hebrew", "Noto Sans Hebrew"] {
+        for f in [
+            "David",
+            "FrankRuehl",
+            "Narkisim",
+            "Miriam",
+            "Miriam Fixed",
+            "Aharoni",
+            "Guttman Yad-Brush",
+            "Arial Hebrew",
+            "Calibri Hebrew",
+            "Noto Sans Hebrew",
+            "Noto Serif Hebrew",
+        ] {
             assert!(substitutes(f).contains(&"Noto Sans Hebrew"), "{f}");
             // David is a Windows font; only the Windows list offers it.
             if cfg!(target_os = "windows") {
                 assert!(substitutes(f).contains(&"David") || f == "David", "{f}");
             }
         }
+        // Serif Hebrew document families prefer serif Hebrew faces before sans ones.
+        let pos = |family: &str, name: &str| substitutes(family).iter().position(|s| *s == name).unwrap_or(usize::MAX);
+        assert!(pos("David", "David Libre") < pos("David", "Noto Sans Hebrew"));
+        assert!(pos("FrankRuehl", "Frank Ruhl Libre") < pos("FrankRuehl", "Noto Sans Hebrew"));
+        assert!(pos("Miriam", "Noto Sans Hebrew") < pos("Miriam", "David Libre"));
         // Generic names with "Hebrew" in them also get Hebrew substitutions
         assert!(substitutes("SomeFont Hebrew").contains(&"Noto Sans Hebrew"));
     }

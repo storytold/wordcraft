@@ -92,6 +92,7 @@ pub trait MeasureExt {
 }
 
 impl MeasureExt for egui::DragValue<'_> {
+    /// Formats and parses this drag value in `unit` using the active locale's decimal separator.
     fn measure(self, unit: Unit) -> Self {
         let sep = decimal();
         self.suffix(unit_suffix(unit))
@@ -101,6 +102,7 @@ impl MeasureExt for egui::DragValue<'_> {
             })
             .custom_parser(move |text| parse_length(text, unit))
     }
+    /// Formats this drag value as blank until edited, then parses the typed length in `unit`.
     fn measure_blank(self, unit: Unit) -> Self {
         self.custom_formatter(|_, _| String::new()).custom_parser(move |text| parse_length(text, unit))
     }
@@ -108,8 +110,10 @@ impl MeasureExt for egui::DragValue<'_> {
 
 /// Regions offered in File › Options › Advanced › Region (any locale tag works through
 /// `file.options`): Letter and A4 countries, decimal point and decimal comma.
-const REGIONS: [&str; 16] =
-    ["en-US", "en-CA", "en-GB", "en-AU", "en-IN", "es-MX", "es-ES", "pt-BR", "fr-FR", "de-DE", "it-IT", "pl-PL", "ru-RU", "ja-JP", "zh-CN", "ko-KR"];
+const REGIONS: [&str; 17] = [
+    "en-US", "en-CA", "en-GB", "en-AU", "en-IN", "es-MX", "es-ES", "pt-BR", "fr-FR", "de-DE", "it-IT", "pl-PL", "ru-RU", "he-IL", "ja-JP", "zh-CN",
+    "ko-KR",
+];
 
 /// The units offered, with their names.
 pub const UNITS: [(Unit, &str); 5] = [
@@ -137,11 +141,13 @@ fn pane_label(id: &str) -> &'static str {
 /// The Options page.
 pub fn page(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
+    let rtl = crate::i18n::current().rtl();
+    let col_layout = egui::Layout::top_down(if rtl { egui::Align::Max } else { egui::Align::Min });
     ui.label(RichText::new(tl!("Options")).font(semibold(26.0)));
     ui.add_space(16.0);
     let current = if PANES.contains(&app.ui.options_pane.as_str()) { app.ui.options_pane.clone() } else { "general".to_string() };
     ui.horizontal_top(|ui| {
-        ui.vertical(|ui| {
+        ui.allocate_ui_with_layout(vec2(170.0, ui.available_height()), col_layout, |ui| {
             ui.set_width(170.0);
             for id in PANES {
                 let label = tl!(pane_label(id));
@@ -154,8 +160,9 @@ pub fn page(app: &mut WordApp, ui: &mut Ui) {
                     ui.painter().rect_filled(r, 4.0, t.hover);
                 }
                 let font = if active { semibold(14.0) } else { crate::theme::regular(14.0) };
+                let (tx, align) = if rtl { (r.max.x - 12.0, egui::Align2::RIGHT_CENTER) } else { (r.min.x + 12.0, egui::Align2::LEFT_CENTER) };
                 // Long translations stay inside the row; WidgetInfo above keeps the full name.
-                ui.painter().with_clip_rect(r).text(egui::pos2(r.min.x + 12.0, r.center().y), egui::Align2::LEFT_CENTER, label, font, t.text);
+                ui.painter().with_clip_rect(r).text(egui::pos2(tx, r.center().y), align, label, font, t.text);
                 if resp.clicked() {
                     app.ui.options_pane = id.to_string();
                 }
@@ -165,7 +172,7 @@ pub fn page(app: &mut WordApp, ui: &mut Ui) {
         let (line, _) = ui.allocate_exact_size(vec2(1.0, 420.0), egui::Sense::hover());
         ui.painter().rect_filled(line, 0.0, t.border);
         ui.add_space(20.0);
-        ui.vertical(|ui| {
+        ui.allocate_ui_with_layout(vec2(640.0, ui.available_height()), col_layout, |ui| {
             ui.set_max_width(640.0);
             match current.as_str() {
                 "display" => display(app, ui),

@@ -555,7 +555,9 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
             if !app.has_document() {
                 return;
             }
-            ui.horizontal_centered(|ui| {
+            let rtl = crate::i18n::current().rtl();
+            let row_layout = if rtl { egui::Layout::right_to_left(egui::Align::Center) } else { egui::Layout::left_to_right(egui::Align::Center) };
+            ui.with_layout(row_layout, |ui| {
                 ui.spacing_mut().item_spacing = vec2(14.0, 0.0);
                 let l = app.session.layout();
                 let page = if let Some(p) = app.canvas.viewed_page {
@@ -623,13 +625,17 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                 if app.session.prefs.overtype && st(ui, tl!("Overtype")).on_hover_text(tl!("Click to switch back to inserting")).clicked() {
                     let _ = app.run("text.overtype", json!({"value": false}));
                 }
-                // The message is drawn where the row is now; the controls on the right are laid
+                // The message is drawn where the row is now; the controls on the opposite side are laid
                 // out first, so the message can be shortened to the space they leave (#2402): a
                 // long one (the path of a file that isn't there) must not be drawn over the
                 // Focus and view buttons.
                 let msg_at = ui.cursor().min;
+                let msg_right = ui.cursor().max.x;
                 let mut controls_left = f32::INFINITY;
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let mut controls_right = f32::NEG_INFINITY;
+                let controls_layout =
+                    if rtl { egui::Layout::left_to_right(egui::Align::Center) } else { egui::Layout::right_to_left(egui::Align::Center) };
+                ui.with_layout(controls_layout, |ui| {
                     ui.spacing_mut().item_spacing = vec2(4.0, 0.0);
                     let reading = app.session.view.read_mode;
                     let z = (if reading { app.session.view.read_zoom } else { app.canvas.scale / crate::canvas::PX_PER_PT } * 100.0).round();
@@ -695,9 +701,9 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     let focus = tl!("Focus");
                     let focus_w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(focus.to_string(), regular(11.5), t.text_dim).size().x);
                     let (r, resp) = ui.allocate_exact_size(vec2((focus_w + 26.0).max(56.0), 20.0), Sense::click());
-                    // The Focus button is the last of the controls, so it is the leftmost one: the
-                    // message has to stop before it (#2402).
+                    // The Focus button is the last of the controls: the message has to stop before it (#2402).
                     controls_left = r.min.x;
+                    controls_right = r.max.x;
                     if resp.hovered() {
                         ui.painter().rect_filled(r, 3.0, t.hover);
                     }
@@ -724,11 +730,16 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     let font = TypeRung::Caption.regular();
                     let track = TypeRung::Caption.tracking();
                     // The room the message has: what is left between here and the controls.
-                    let room = controls_left - ui.spacing().item_spacing.x - msg_at.x;
+                    let room = if rtl {
+                        msg_right - ui.spacing().item_spacing.x - controls_right
+                    } else {
+                        controls_left - ui.spacing().item_spacing.x - msg_at.x
+                    };
                     let msg_shown = fit_text(ui.painter(), msg, &font, track, t.accent_text, room);
                     if !msg_shown.is_empty() {
                         let w = text_width(ui.painter(), &msg_shown, &font, track, t.accent_text);
-                        let rect = Rect::from_min_size(msg_at, vec2(w + 1.0, TypeRung::Caption.line_height()));
+                        let min_pos = if rtl { pos2(msg_right - (w + 1.0), msg_at.y) } else { msg_at };
+                        let rect = Rect::from_min_size(min_pos, vec2(w + 1.0, TypeRung::Caption.line_height()));
                         // The whole message is in the tooltip; the bar only has room for the
                         // beginning of it (#2402).
                         let _ = ui.interact(rect, status_message_id(), Sense::hover()).on_hover_text(msg.clone());

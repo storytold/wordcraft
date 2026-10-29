@@ -171,6 +171,11 @@ impl Lang {
         self.i18n().name(self.lang)
     }
 
+    /// Is the interface written right-to-left?
+    pub fn rtl(self) -> bool {
+        self.i18n().rtl(self.lang)
+    }
+
     pub fn prefers_hans(self) -> bool {
         self.info().is_some_and(|l| l.prefer_hans)
     }

@@ -97,10 +97,30 @@ pub fn icon_menu_item(ui: &mut Ui, icon: &str, text: &str, shortcut: &str, min_w
     ui.painter().rect_filled(r, ui.visuals().widgets.inactive.corner_radius, st.fill);
     let (line, accent) = if ui.is_enabled() { (t.icon, t.accent) } else { (t.text_disabled, t.text_disabled) };
     let text_c = if ui.is_enabled() { st.text } else { t.text_disabled };
-    icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + pad.x + icon_w / 2.0, r.center().y), vec2(icon_w, icon_w)), icon, line, accent);
-    ui.painter().galley(pos2(r.min.x + pad.x + icon_w + 6.0, r.center().y - galley.size().y / 2.0), galley, text_c);
-    if let Some(g) = sc {
-        ui.painter().galley(pos2(r.max.x - pad.x - g.size().x, r.center().y - g.size().y / 2.0), g, t.text_disabled);
+    if ui.style().right_to_left {
+        icons::paint(
+            ui.painter(),
+            Rect::from_center_size(pos2(r.max.x - pad.x - icon_w / 2.0, r.center().y), vec2(icon_w, icon_w)),
+            icon,
+            line,
+            accent,
+        );
+        ui.painter().galley(pos2(r.max.x - pad.x - icon_w - 6.0 - galley.size().x, r.center().y - galley.size().y / 2.0), galley, text_c);
+        if let Some(g) = sc {
+            ui.painter().galley(pos2(r.min.x + pad.x, r.center().y - g.size().y / 2.0), g, t.text_disabled);
+        }
+    } else {
+        icons::paint(
+            ui.painter(),
+            Rect::from_center_size(pos2(r.min.x + pad.x + icon_w / 2.0, r.center().y), vec2(icon_w, icon_w)),
+            icon,
+            line,
+            accent,
+        );
+        ui.painter().galley(pos2(r.min.x + pad.x + icon_w + 6.0, r.center().y - galley.size().y / 2.0), galley, text_c);
+        if let Some(g) = sc {
+            ui.painter().galley(pos2(r.max.x - pad.x - g.size().x, r.center().y - g.size().y / 2.0), g, t.text_disabled);
+        }
     }
     resp
 }

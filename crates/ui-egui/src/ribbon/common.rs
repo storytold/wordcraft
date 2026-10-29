@@ -66,7 +66,8 @@ pub(super) fn esc_cancelled(ui: &Ui, r: &egui::Response, id: egui::Id) -> bool {
 }
 
 pub(super) fn stack(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
-    ui.vertical(|ui| {
+    let col_layout = egui::Layout::top_down(if ui.layout().prefer_right_to_left() { egui::Align::Max } else { egui::Align::Min });
+    ui.with_layout(col_layout, |ui| {
         ui.spacing_mut().item_spacing = vec2(1.0, 0.0);
         add(ui);
     });

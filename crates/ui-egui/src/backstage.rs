@@ -39,13 +39,15 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         app.ui.backstage_page = "home".into();
     }
     let mac = app.integrated_titlebar;
-    egui::Panel::left("backstage_nav")
+    let rtl = crate::i18n::current().rtl();
+    let nav_panel = if rtl { egui::Panel::right("backstage_nav") } else { egui::Panel::left("backstage_nav") };
+    nav_panel
         .exact_size(200.0)
         // Fixed width, as in Word: without this egui shows a resize handle that does nothing (#502).
         .resizable(false)
-        .frame(egui::Frame::NONE.fill(t.nav).inner_margin(egui::Margin { left: 0, right: 0, top: if mac { 0 } else { 12 }, bottom: 12 }))
+        .frame(egui::Frame::NONE.fill(t.nav).inner_margin(egui::Margin { left: 0, right: 0, top: if mac && !rtl { 0 } else { 12 }, bottom: 12 }))
         .show(ui, |ui| {
-            let back = if mac {
+            let back = if mac && !rtl {
                 // macOS (#222): the Backstage covers the title bar, so its top band is the title
                 // bar: the back button sits beside the traffic lights, centred with them and as far
                 // from them as the title bar's own controls, and the rest of the band drags the window.
@@ -63,9 +65,11 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 // the row reads as plain sidebar background next to it, so clicking there must
                 // not also close the File page, same as the macOS chevron fix (#2972) below.
                 let (r, _) = ui.allocate_exact_size(vec2(200.0, 40.0), Sense::hover());
-                let c = pos2(r.min.x + 26.0, r.center().y);
+                let x = if rtl { r.max.x - 26.0 } else { r.min.x + 26.0 };
+                let c = pos2(x, r.center().y);
                 let resp = ui.interact(Rect::from_center_size(c, vec2(22.0, r.height())), ui.scope_id().with("backstage_back"), Sense::click());
-                icons::paint(ui.painter(), Rect::from_center_size(c, vec2(18.0, 18.0)), "chevronLeft", egui::Color32::WHITE, egui::Color32::WHITE);
+                let chevron = if rtl { "chevronRight" } else { "chevronLeft" };
+                icons::paint(ui.painter(), Rect::from_center_size(c, vec2(18.0, 18.0)), chevron, egui::Color32::WHITE, egui::Color32::WHITE);
                 resp
             };
             // Escape in the built-in file browser closes only the browser.
@@ -86,14 +90,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     ui.painter().rect_filled(r, 0.0, egui::Color32::from_white_alpha(26));
                 }
                 let ink = if on { egui::Color32::WHITE } else { egui::Color32::from_white_alpha(110) };
-                icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 31.0, r.center().y), vec2(18.0, 18.0)), icon, ink, ink);
-                ui.painter().text(
-                    pos2(r.min.x + 52.0, r.center().y),
-                    Align2::LEFT_CENTER,
-                    tl!(label),
-                    if active { semibold(14.0) } else { medium(14.0) },
-                    ink,
-                );
+                let (icon_x, text_x, text_align) =
+                    if rtl { (r.max.x - 31.0, r.max.x - 52.0, Align2::RIGHT_CENTER) } else { (r.min.x + 31.0, r.min.x + 52.0, Align2::LEFT_CENTER) };
+                icons::paint(ui.painter(), Rect::from_center_size(pos2(icon_x, r.center().y), vec2(18.0, 18.0)), icon, ink, ink);
+                ui.painter().text(pos2(text_x, r.center().y), text_align, tl!(label), if active { semibold(14.0) } else { medium(14.0) }, ink);
                 if resp.clicked() {
                     match id {
                         // A document without a file goes to the Save As page (as in Word) instead
@@ -130,7 +130,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     if resp.hovered() {
                         ui.painter().rect_filled(r, 0.0, egui::Color32::from_white_alpha(26));
                     }
-                    ui.painter().text(pos2(r.min.x + 22.0, r.center().y), Align2::LEFT_CENTER, tl!(label), regular(13.0), egui::Color32::WHITE);
+                    let (bx, balign) = if rtl { (r.max.x - 22.0, Align2::RIGHT_CENTER) } else { (r.min.x + 22.0, Align2::LEFT_CENTER) };
+                    ui.painter().text(pos2(bx, r.center().y), balign, tl!(label), regular(13.0), egui::Color32::WHITE);
                     if resp.clicked() {
                         if id == "discord" {
                             let _ = app.run("ui.discord", json!({}));
@@ -142,21 +143,24 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             });
         });
     egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.ribbon).inner_margin(egui::Margin::symmetric(40, 30))).show(ui, |ui| {
+        let body_layout = egui::Layout::top_down(if rtl { egui::Align::Max } else { egui::Align::Min });
         // The Print page fills the pane and scrolls its settings and its preview itself (#1156).
         if app.ui.backstage_page == "print" {
-            export_page(app, ui);
+            ui.with_layout(body_layout, |ui| export_page(app, ui));
             return;
         }
-        egui::ScrollArea::vertical().show(ui, |ui| match app.ui.backstage_page.as_str() {
-            "home" => home_page(app, ui),
-            "new" => new_page(app, ui),
-            "open" => open_page(app, ui),
-            "saveAs" => save_as_page(app, ui),
-            "info" => info_page(app, ui),
-            "recover" => recovery_page(app, ui),
-            "print" | "export" => export_page(app, ui),
-            "options" => crate::options::page(app, ui),
-            _ => home_page(app, ui),
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            ui.with_layout(body_layout, |ui| match app.ui.backstage_page.as_str() {
+                "home" => home_page(app, ui),
+                "new" => new_page(app, ui),
+                "open" => open_page(app, ui),
+                "saveAs" => save_as_page(app, ui),
+                "info" => info_page(app, ui),
+                "recover" => recovery_page(app, ui),
+                "print" | "export" => export_page(app, ui),
+                "options" => crate::options::page(app, ui),
+                _ => home_page(app, ui),
+            });
         });
     });
 }
@@ -228,7 +232,8 @@ fn heading(ui: &mut Ui, s: &str) {
 /// region-aware page preview, and creates a document from the template on click.
 fn template_tile(ui: &mut Ui, app: &mut WordApp, label: &str, template: &str) {
     let t = Tokens::get(ui.ctx());
-    ui.vertical(|ui| {
+    let col_layout = egui::Layout::top_down(if ui.layout().prefer_right_to_left() { egui::Align::Max } else { egui::Align::Min });
+    ui.with_layout(col_layout, |ui| {
         // The thumbnail and its caption are one button named by the caption, so a screen reader
         // announces "Blank document, button" rather than unnamed text (#3176); the caption opens
         // the template too, as in Word.
@@ -267,7 +272,8 @@ fn template_tile(ui: &mut Ui, app: &mut WordApp, label: &str, template: &str) {
         if let Some(h) = tex {
             ui.painter().image(h.id(), r.shrink(1.0), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), egui::Color32::WHITE);
         }
-        ui.painter().galley(pos2(r.min.x, r.max.y), galley, ui.visuals().text_color());
+        let gx = if ui.style().right_to_left { (r.max.x - galley.size().x).max(tile.min.x) } else { r.min.x };
+        ui.painter().galley(pos2(gx, r.max.y), galley, ui.visuals().text_color());
         if resp.clicked() {
             let _ = app.run("file.new", json!({"template": template}));
             app.ui.backstage = false;

@@ -85,6 +85,22 @@ pub fn script_fallbacks(c: char) -> &'static [&'static str] {
         Script::Bengali => &["Nirmala UI", "Vrinda", "Kohinoor Bangla", "Noto Sans Bengali", "Noto Serif Bengali", "Lohit Bengali"],
         Script::Thai => &["Leelawadee UI", "Leelawadee", "Tahoma", "Thonburi", "Noto Sans Thai", "Noto Serif Thai"],
         Script::Lao => &["Leelawadee UI", "Lao UI", "Noto Sans Lao", "Noto Serif Lao", "Lao Sangam MN"],
+        Script::Hebrew => &[
+            "Noto Sans Hebrew",
+            "Noto Serif Hebrew",
+            "David Libre",
+            "Frank Ruhl Libre",
+            "Rubik",
+            "Heebo",
+            "Assistant",
+            "Alef",
+            "SF Hebrew",
+            "Arial Hebrew",
+            "David",
+            "Miriam",
+            "Segoe UI",
+            "Arial",
+        ],
         Script::Tamil | Script::Telugu | Script::Kannada | Script::Malayalam | Script::Gujarati | Script::Gurmukhi | Script::Oriya => &["Nirmala UI"],
         _ => &[],
     }
@@ -171,6 +187,7 @@ mod tests {
         assert_eq!(script_runs(""), vec![0..0]);
     }
 
+    /// Verifies that complex scripts rank dedicated script fonts ahead of generic system fonts.
     #[test]
     fn complex_scripts_prefer_their_own_fonts() {
         assert!(needs_layout_tables('မ') && needs_layout_tables('ក') && needs_layout_tables('क'));
@@ -178,6 +195,8 @@ mod tests {
         assert_eq!(fallback_rank('မ', "Myanmar Text"), 0);
         assert!(fallback_rank('မ', "Noto Sans Myanmar") < fallback_rank('မ', "Myanmar Sangam MN"));
         assert!(fallback_rank('த', "Noto Sans Tamil") < fallback_rank('த', "Arial"));
+        assert!(fallback_rank('א', "Noto Sans Hebrew") < fallback_rank('א', "Arial"));
+        assert!(fallback_rank('א', "David Libre") < fallback_rank('א', "Segoe UI"));
         assert_eq!(fallback_rank('a', "Arial"), fallback_rank('a', "Noto Sans"));
     }
 

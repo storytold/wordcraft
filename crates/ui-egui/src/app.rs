@@ -218,6 +218,10 @@ impl WordApp {
         updates_ui::tick(self, ctx);
         let lang = i18n::Lang::from_pref(&self.ui.language);
         i18n::set_current(lang);
+        let rtl = lang.rtl();
+        if ctx.global_style().right_to_left != rtl {
+            ctx.all_styles_mut(|s| s.right_to_left = rtl);
+        }
         // New documents are written in the interface's language when WordCraft can proof it
         // (a Polish interface: Polish spelling, grammar and hyphenation from the first word).
         // An English interface writes the region's English (English (UK) on a British system,

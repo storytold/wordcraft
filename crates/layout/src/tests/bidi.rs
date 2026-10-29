@@ -109,6 +109,7 @@ fn ltr_paragraph_with_embedded_persian_word() {
     assert!(h < mim && mim < sin && sin < w, "the Persian word reads right to left between the English ones: {h} {mim} {sin} {w}");
 }
 
+/// Verifies that numbers and Latin words embedded inside a Persian RTL paragraph keep LTR order.
 #[test]
 fn numbers_and_latin_inside_persian_keep_their_order() {
     // "Price 250 toman" in Persian, with a Latin product name and Persian punctuation.
@@ -128,6 +129,41 @@ fn numbers_and_latin_inside_persian_keep_their_order() {
     for n in 0..s.chars().count() - 1 {
         assert!(dot <= x(n) + 0.01, "the full stop is leftmost (char {n})");
     }
+}
+
+/// Verifies that mixed Hebrew, English and numeric runs in an RTL paragraph lay out in UAX #9 visual order.
+#[test]
+fn hebrew_with_english_and_numbers_lays_out_bidi_correctly() {
+    // Hebrew RTL paragraph mixing Hebrew words, an English product name, and numbers.
+    let s = "מסמך WordCraft גרסה 12 בשנת 2026.";
+    let d = doc_of(&[(s, true)]);
+    let l = lay(&d);
+    let right = 612.0 - 72.0;
+    assert!((caret_x(&l, 0, 0) - right).abs() < 0.5, "Hebrew RTL paragraph starts at the right margin");
+    let x = |n: usize| cluster_x(&l, 0, at(s, n));
+    // Hebrew letters inside "מסמך" (chars 0..4) run right to left.
+    assert!(x(0) > x(1) && x(1) > x(2) && x(2) > x(3), "Hebrew word reads right to left");
+    // "WordCraft" (chars 5..14) reads left to right, to the left of "מסמך".
+    assert!(x(5) < x(6) && x(6) < x(7), "WordCraft reads left to right");
+    assert!(x(0) > x(5), "first Hebrew word is to the right of WordCraft");
+    // " גרסה " (chars 15..19) is to the left of "WordCraft", and "12" (chars 20..22) reads left to right.
+    assert!(x(5) > x(15), "WordCraft is to the right of גרסה");
+    assert!(x(20) < x(21), "12 reads left to right");
+    // "2026" (chars 28..32) reads left to right, and the final period is leftmost.
+    assert!(x(28) < x(29) && x(29) < x(30) && x(30) < x(31), "2026 reads left to right");
+    let dot = x(s.chars().count() - 1);
+    for n in 0..s.chars().count() - 1 {
+        assert!(dot <= x(n) + 0.01, "final period is leftmost (char {n})");
+    }
+
+    // Left-to-right paragraph with an embedded Hebrew phrase.
+    let ltr = "Hello שלום world";
+    let d_ltr = doc_of(&[(ltr, false)]);
+    let l_ltr = lay(&d_ltr);
+    let (h, shin, mem, w) =
+        (cluster_x(&l_ltr, 0, 0), cluster_x(&l_ltr, 0, at(ltr, 6)), cluster_x(&l_ltr, 0, at(ltr, 9)), cluster_x(&l_ltr, 0, at(ltr, 11)));
+    assert!((h - 72.0).abs() < 0.5, "LTR paragraph starts at the left margin");
+    assert!(h < mem && mem < shin && shin < w, "embedded Hebrew word reads right to left between English words: {h} {mem} {shin} {w}");
 }
 
 #[test]
