@@ -419,8 +419,8 @@ impl<'a> Flow<'a> {
     /// text doesn't fit it goes to the next page, blank page and all.
     fn stays_at_bottom(&self, pb: &PageBuilder, l: &para::Line) -> bool {
         let p = self.p;
-        let mark_only_after = l.end == LineEnd::PageBreak
-            && self.pl.lines.get(self.l0 + 1..).is_some_and(|rest| rest.iter().all(|m| only_markers(p, m.start..m.stop)));
+        let mark_only_after =
+            l.end == LineEnd::PageBreak && self.pl.lines.get(self.l0 + 1..).is_some_and(|rest| rest.iter().all(|m| only_markers(p, m.start..m.stop)));
         let only_break = matches!(l.end, LineEnd::PageBreak | LineEnd::ColumnBreak)
             && !mark_only_after
             && p.text
