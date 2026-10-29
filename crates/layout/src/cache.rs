@@ -18,6 +18,9 @@ pub(crate) struct Key {
     pub(crate) excl: u64,
     pub(crate) eq: u32,
     pub(crate) read_spacing: Option<u32>,
+    /// The external checker's result shown in this paragraph ([`wordcraft_proof::external`]):
+    /// a new result redraws only its own paragraph.
+    pub(crate) proof: u64,
     pub(crate) grid: (u32, u32, u32, bool),
     pub(crate) fit: bool,
     /// Heights of the paragraph's inline boxes that resize to fit their text.

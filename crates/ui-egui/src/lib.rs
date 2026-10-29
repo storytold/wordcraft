@@ -43,6 +43,7 @@ pub mod icons;
 pub mod ink;
 pub mod keys;
 pub mod keytips;
+pub mod languagetool;
 mod local_time;
 pub mod mini_toolbar;
 pub mod objects;
@@ -208,6 +209,8 @@ pub struct UiState {
     /// Digits entered for a multi-key Quick Access Toolbar badge; never persisted.
     #[serde(skip)]
     pub keytip_prefix: String,
+    /// LanguageTool checking (File › Options › Proofing, #575): off by default.
+    pub language_tool: wordcraft_languagetool::Settings,
     /// Keytips (Alt) state; not persisted, it resets each session.
     #[serde(skip)]
     pub keytips: crate::keytips::Phase,
@@ -323,6 +326,7 @@ impl Default for UiState {
             read_aloud_skip_citations: true,
             keytips_enabled: true,
             keytip_prefix: String::new(),
+            language_tool: wordcraft_languagetool::Settings::default(),
             keytips: crate::keytips::Phase::Off,
             alt_pressed: false,
             alt_chord_used: false,
@@ -574,6 +578,8 @@ pub struct WordApp {
     pub(crate) outline_prev_tab: Option<String>,
     /// Zotero commands in flight (`ui.zotero.*`).
     pub zotero: zotero::ZoteroLink,
+    /// LanguageTool checking in flight (`ui.languageTool`, #575).
+    pub language_tool: languagetool::LtLink,
     /// The egui context, once the first frame has run (background work wakes the UI with it).
     pub(crate) ctx: Option<egui::Context>,
     /// Whether the current command was entered by an input method's own transaction. The engine
