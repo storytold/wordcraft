@@ -275,6 +275,12 @@ impl MacTitleBar {
     }
 }
 
+/// Where the AutoSave switch's knob sits in its track `r`: on at the right and off at the left,
+/// mirrored in a right-to-left interface (on at the left).
+fn autosave_knob_x(rtl: bool, on: bool, r: Rect) -> f32 {
+    crate::rtl::lead_x(rtl != on, r, 8.0)
+}
+
 /// Draws the title bar with window dragging, AutoSave, quick access, account, community and search
 /// controls, and the centred clickable document title.
 pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
@@ -326,7 +332,7 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                         (None, false) => (t.input, t.border_strong, t.text_dim),
                     };
                     ui.painter().rect(r, 8.0, fill, Stroke::new(1.0, stroke), egui::StrokeKind::Inside);
-                    let knob = crate::rtl::lead_x(rtl == on, r, 8.0);
+                    let knob = autosave_knob_x(rtl, on, r);
                     ui.painter().circle_filled(pos2(knob, r.center().y), 5.0, knob_fill);
                     let tip = block
                         .as_ref()
