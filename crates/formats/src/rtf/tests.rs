@@ -552,6 +552,9 @@ fn a_page_field_result_is_only_what_fldrslt_holds() {
     let d = import(br"{\rtf1\ansi\pard p{\field{\*\fldinst PAGE}{\b  }{\fldrslt 7}}\par}").unwrap();
     assert_eq!(fields_of(&d.body).0, [("PAGE".to_string(), "7".to_string())]);
     assert_eq!(field_props(&d.body).bold, None, "the bold space is not the result");
+    // Nor is a group after the result.
+    let d = import(br"{\rtf1\ansi\pard p{\field{\*\fldinst PAGE}{\fldrslt 7}{\b x}}\par}").unwrap();
+    assert_eq!(fields_of(&d.body).0, [("PAGE".to_string(), "7".to_string())]);
 }
 
 #[test]
@@ -569,6 +572,15 @@ fn page_fields_keep_their_tracked_changes() {
         let cp = field_props(&d.body);
         assert_eq!(author(&d, cp.ins).as_deref(), ins, "{body}");
         assert_eq!(author(&d, cp.del).as_deref(), del, "{body}");
+    }
+    // A field whose formatting was changed (made bold, with `\oldcprops` saying it was not)
+    // keeps that formatting change, like the text around it.
+    for body in [r"{\crauth1\b{\*\oldcprops\plain} p{\field{\*\fldinst PAGE}{\fldrslt 7}}}", r"{\crauth1\b{\*\oldcprops\plain} p\chpgn}"] {
+        let d = import(format!(r"{{\rtf1\ansi{tbl}\pard {body}\par}}").as_bytes()).unwrap();
+        let cp = field_props(&d.body);
+        assert_eq!(cp.bold, Some(true), "{body}");
+        let change = cp.fmt_change.as_ref().unwrap_or_else(|| panic!("no formatting change: {body}"));
+        assert_eq!(author(&d, Some(change.rev)).as_deref(), Some("Alice"), "{body}");
     }
 }
 

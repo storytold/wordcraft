@@ -18,6 +18,8 @@ pub(super) struct PageField {
     /// The depth of the `\fldrslt` group once it opens: only text within it is the result, not
     /// text between the code and the result.
     pub(super) result_depth: Option<usize>,
+    /// The `\fldrslt` group has closed: the result is complete.
+    pub(super) result_done: bool,
 }
 
 /// Whether field code `instr` is a page number (`PAGE \* Arabic`, `NUMPAGES`…).
@@ -307,21 +309,31 @@ impl Reader {
         if self.page_field.as_ref().is_some_and(|f| self.depth() < f.depth) {
             self.end_page_field();
         }
-        if closing == Dest::FldInst && prev.dest == Dest::Body && self.page_field.is_none() {
-            let instr = field.and_then(|i| self.fields.get(i)).map_or("", |s| s.trim());
-            if is_page_field(instr) {
-                let fmt = self.with_rev(prev.fmt.clone(), prev.rev);
-                self.page_field = Some(PageField {
-                    depth: self.depth(),
-                    instr: instr.to_string(),
-                    result: String::new(),
-                    fmt,
-                    from_result: false,
-                    result_depth: None,
-                });
-            }
+        let depth = self.depth();
+        if let Some(f) = &mut self.page_field
+            && f.result_depth.is_some_and(|d| depth < d)
+        {
+            // The result group closed: text in a later group of the field is not its result.
+            f.result_done = true;
         }
+        let page_instr = (closing == Dest::FldInst && prev.dest == Dest::Body && self.page_field.is_none())
+            .then(|| field.and_then(|i| self.fields.get(i)).map_or("", |s| s.trim()))
+            .filter(|instr| is_page_field(instr))
+            .map(str::to_string);
         self.st = prev;
+        if let Some(instr) = page_instr {
+            // The field takes the formatting of the group it is in, as text there would.
+            let fmt = self.text_fmt();
+            self.page_field = Some(PageField {
+                depth: self.depth(),
+                instr,
+                result: String::new(),
+                fmt,
+                from_result: false,
+                result_depth: None,
+                result_done: false,
+            });
+        }
         if self.hf.as_ref().is_some_and(|(d, _, _)| self.depth() < *d) {
             self.end_header_footer();
         }
@@ -354,7 +366,7 @@ impl Reader {
 
     /// `\chpgn`: the page number, as a `PAGE` field.
     pub(super) fn page_number(&mut self) {
-        let fmt = self.with_rev(self.st.fmt.clone(), self.st.rev);
+        let fmt = self.text_fmt();
         self.para.inlines.push(Inline::Field { instr: "PAGE".to_string(), result: String::new(), fmt });
         self.para_has = true;
     }
