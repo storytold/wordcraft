@@ -305,7 +305,13 @@ impl<'a> Flow<'a> {
     /// the space before applied (`before`, or what is left of it at the top of the next column).
     fn keep_together(&self, ctx: &mut Ctx, pb: &mut PageBuilder, rooms: Rooms, before: f32) -> f32 {
         let rp = &self.pl.rp;
-        let height = self.pl.height + rooms.top + rooms.bottom;
+        // A terminal page-break mark stays with the break and draws no bottom border there.
+        let break_mark = !pb.web
+            && self.pl.lines.len() >= 2
+            && self.pl.lines.get(self.pl.lines.len() - 2).is_some_and(|line| {
+                line.end == LineEnd::PageBreak && self.pl.lines.last().is_some_and(|mark| only_markers(self.p, mark.start..mark.stop))
+            });
+        let height = self.pl.height + rooms.top + if break_mark { 0.0 } else { rooms.bottom };
         if !(rp.keep_lines || (rp.keep_next && pb.y + height <= pb.bottom + 0.01)) {
             return before;
         }

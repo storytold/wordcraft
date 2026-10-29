@@ -578,7 +578,10 @@ pub(crate) fn joined(doc: &Document, blocks: &Blocks, i: usize, j: Option<usize>
 /// The room a paragraph's top or bottom border takes in the text flow: its distance from the
 /// text plus its width (Word).
 fn border_room(b: Option<Border>) -> f32 {
-    b.filter(Border::is_visible).map_or(0.0, |b| b.space + b.width)
+    b.filter(Border::is_visible).map_or(0.0, |b| {
+        let extent = b.space + b.width;
+        if extent.is_finite() { extent.max(0.0) } else { 0.0 }
+    })
 }
 
 /// How a piece of a paragraph meets the paragraphs around it: the room taken by its top and
