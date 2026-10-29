@@ -1,6 +1,6 @@
 use super::date::dttm_to_iso;
 use super::parse::column_grid;
-use super::state::{CellDef, Dest, HeaderFooter, MAX_GROUPS, MAX_REV_AUTHORS, MAX_SECTIONS, Output, PageGeom, SecFmt, St};
+use super::state::{CellDef, Dest, HeaderFooter, MAX_GROUPS, MAX_REV_AUTHORS, MAX_SECTIONS, Output, PageGeom, RevSt, SecFmt, St};
 use super::styles::{StyleDef, drop_style_formatting, style_fmt};
 use super::{Arc, Cell, FBlock, FTable, Fmt, HashMap, Inline, Kind, Meta, Para, Rgb, model};
 
@@ -15,6 +15,9 @@ pub(super) struct PageField {
     /// The formatting of the field's group, then of its result's first text.
     pub(super) fmt: Fmt,
     pub(super) from_result: bool,
+    /// The depth of the `\fldrslt` group once it opens: only text within it is the result, not
+    /// text between the code and the result.
+    pub(super) result_depth: Option<usize>,
 }
 
 /// Whether field code `instr` is a page number (`PAGE \* Arabic`, `NUMPAGES`…).
@@ -307,8 +310,15 @@ impl Reader {
         if closing == Dest::FldInst && prev.dest == Dest::Body && self.page_field.is_none() {
             let instr = field.and_then(|i| self.fields.get(i)).map_or("", |s| s.trim());
             if is_page_field(instr) {
-                let fmt = prev.fmt.clone();
-                self.page_field = Some(PageField { depth: self.depth(), instr: instr.to_string(), result: String::new(), fmt, from_result: false });
+                let fmt = self.with_rev(prev.fmt.clone(), prev.rev);
+                self.page_field = Some(PageField {
+                    depth: self.depth(),
+                    instr: instr.to_string(),
+                    result: String::new(),
+                    fmt,
+                    from_result: false,
+                    result_depth: None,
+                });
             }
         }
         self.st = prev;
@@ -329,6 +339,34 @@ impl Reader {
     pub(super) fn rev_mark(&self, i: i32, dttm: u32) -> model::RevMark {
         let author = usize::try_from(i).ok().and_then(|i| self.rev_authors.get(i)).cloned().unwrap_or_else(|| "Unknown".to_string());
         model::RevMark { author, date: dttm_to_iso(dttm).unwrap_or_default(), id: None }
+    }
+
+    /// `fmt` with the tracked insertion and deletion that revision state `r` marks.
+    pub(super) fn with_rev(&self, mut fmt: Fmt, r: RevSt) -> Fmt {
+        if r.ins {
+            fmt.ins = Some(self.rev_mark(r.auth, r.dttm));
+        }
+        if r.del {
+            fmt.del = Some(self.rev_mark(r.authdel, r.dttmdel));
+        }
+        fmt
+    }
+
+    /// `\chpgn`: the page number, as a `PAGE` field.
+    pub(super) fn page_number(&mut self) {
+        let fmt = self.with_rev(self.st.fmt.clone(), self.st.rev);
+        self.para.inlines.push(Inline::Field { instr: "PAGE".to_string(), result: String::new(), fmt });
+        self.para_has = true;
+    }
+
+    /// `\fldrslt` opens: the page field being read takes its result from this group on.
+    pub(super) fn start_page_field_result(&mut self) {
+        let depth = self.depth();
+        if let Some(f) = &mut self.page_field
+            && f.result_depth.is_none()
+        {
+            f.result_depth = Some(depth);
+        }
     }
 
     /// The page field being read ends: it goes into the paragraph.

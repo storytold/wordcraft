@@ -1,6 +1,6 @@
 use super::state::{CellDef, Dest, FmtRevSt, HeaderFooter, HfPages, MAX_OLD_WORDS, RevSt, St};
 use super::styles::{StyleDef, is_char_format_word, is_format_word};
-use super::{Align, Fmt, Inline, Reader, VAlign, model};
+use super::{Align, Fmt, Reader, VAlign, model};
 
 impl Reader {
     pub(super) fn word(&mut self, w: &str, p: Option<i32>, starred: bool, first_in_group: bool) {
@@ -53,8 +53,7 @@ impl Reader {
         match w {
             "par" => self.end_para_mark(),
             "chpgn" if self.st.dest == Dest::Body && !self.st.hidden && self.page_field.is_none() => {
-                self.para.inlines.push(Inline::Field { instr: "PAGE".to_string(), result: String::new(), fmt: self.st.fmt.clone() });
-                self.para_has = true;
+                self.page_number();
             }
             "sect" => self.end_section(),
             "cell" => self.end_cell(),
@@ -259,6 +258,7 @@ impl Reader {
             }
             "field" => self.start_field(),
             "fldrslt" => {
+                self.start_page_field_result();
                 let link = self.st.field.and_then(|i| self.fields.get(i)).and_then(|s| hyperlink(s));
                 if link.is_some() {
                     self.st.fmt.link = link.as_deref().and_then(model::kept_link);

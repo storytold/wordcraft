@@ -241,7 +241,9 @@ impl<'a> Builder<'a> {
                 }
                 Inline::Field { instr, result, fmt } => {
                     let (instr, result) = (clean_text(instr.trim()), clean_text(result));
-                    let cp = self.budget(char_props(fmt));
+                    let mut cp = self.budget(char_props(fmt));
+                    cp.ins = fmt.ins.as_ref().map(|m| self.revision(RevisionKind::Insert, m));
+                    cp.del = fmt.del.as_ref().map(|m| self.revision(RevisionKind::Delete, m));
                     // A field without a code is only its cached text.
                     if instr.is_empty() {
                         append(&mut out, &result, &cp, None);

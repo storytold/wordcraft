@@ -528,6 +528,50 @@ fn page_number_fields_stay_fields() {
     assert_eq!(fields_of(&d.body), (vec![("PAGE".to_string(), "7".to_string())], "1/2/2026 p\u{FFFC}".to_string()));
 }
 
+/// The properties of the run holding the first paragraph's first field.
+fn field_props(blocks: &[std::sync::Arc<wordcraft_doc::Block>]) -> wordcraft_doc::CharProps {
+    let Some(wordcraft_doc::Block::Para(p)) = blocks.first().map(|b| &**b) else { panic!("no paragraph") };
+    let mark = p.text.find('\u{FFFC}').expect("no field");
+    let mut end = 0;
+    p.runs
+        .iter()
+        .find(|r| {
+            end += r.len;
+            end > mark
+        })
+        .map(|r| r.props.clone())
+        .unwrap()
+}
+
+#[test]
+fn a_page_field_result_is_only_what_fldrslt_holds() {
+    // The specification's own spacing: a space between the code and result groups. It is neither
+    // part of the cached result nor where the field takes its formatting from.
+    let d = import(br"{\rtf1\ansi\pard p{\field{\*\fldinst PAGE} {\fldrslt 7}}\par}").unwrap();
+    assert_eq!(fields_of(&d.body), (vec![("PAGE".to_string(), "7".to_string())], "p\u{FFFC}".to_string()));
+    let d = import(br"{\rtf1\ansi\pard p{\field{\*\fldinst PAGE}{\b  }{\fldrslt 7}}\par}").unwrap();
+    assert_eq!(fields_of(&d.body).0, [("PAGE".to_string(), "7".to_string())]);
+    assert_eq!(field_props(&d.body).bold, None, "the bold space is not the result");
+}
+
+#[test]
+fn page_fields_keep_their_tracked_changes() {
+    // A field inserted by Alice, a field in text deleted by Bob, and `\chpgn` inserted by Alice:
+    // each field is marked like the text around it.
+    let author = |d: &Document, i: Option<u32>| i.and_then(|i| d.revisions.get(i as usize)).map(|r| r.author.clone());
+    let tbl = r"{\*\revtbl {Unknown;}{Alice;}{Bob;}}";
+    for (body, ins, del) in [
+        (r"{\revised\revauth1 p{\field{\*\fldinst PAGE}{\fldrslt 7}}}", Some("Alice"), None),
+        (r"{\deleted\revauthdel2 p{\field{\*\fldinst PAGE}}}", None, Some("Bob")),
+        (r"{\revised\revauth1 p\chpgn}", Some("Alice"), None),
+    ] {
+        let d = import(format!(r"{{\rtf1\ansi{tbl}\pard {body}\par}}").as_bytes()).unwrap();
+        let cp = field_props(&d.body);
+        assert_eq!(author(&d, cp.ins).as_deref(), ins, "{body}");
+        assert_eq!(author(&d, cp.del).as_deref(), del, "{body}");
+    }
+}
+
 #[test]
 fn hostile_page_fields_never_panic() {
     // Unclosed, nested and empty fields, and a field that is all switch: each still imports.

@@ -167,9 +167,17 @@ impl Reader {
                 if self.st.hidden {
                     return;
                 }
-                if let Some(field) = &mut self.page_field {
+                if self.page_field.is_some() {
+                    let depth = self.depth();
+                    let fmt = self.with_rev(self.st.fmt.clone(), self.st.rev);
+                    let Some(field) = &mut self.page_field else { return };
+                    // Text outside `\fldrslt` (a space between the code and result groups) is
+                    // not part of the result.
+                    if field.result_depth.is_none_or(|d| depth < d) {
+                        return;
+                    }
                     if !field.from_result {
-                        field.fmt = self.st.fmt.clone();
+                        field.fmt = fmt;
                         field.from_result = true;
                     }
                     if field.result.len() < 4096 {
@@ -177,14 +185,7 @@ impl Reader {
                     }
                     return;
                 }
-                let mut f = self.st.fmt.clone();
-                let r = self.st.rev;
-                if r.ins {
-                    f.ins = Some(self.rev_mark(r.auth, r.dttm));
-                }
-                if r.del {
-                    f.del = Some(self.rev_mark(r.authdel, r.dttmdel));
-                }
+                let mut f = self.with_rev(self.st.fmt.clone(), self.st.rev);
                 let c = &self.st.chg_c;
                 if let Some(words) = c.old.clone() {
                     let mark = self.rev_mark(c.auth, c.date);
