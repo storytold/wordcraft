@@ -1236,3 +1236,22 @@ fn arabic_lookups_keep_typing_order() {
     set_current(Lang::EN);
     assert_eq!(location("Home › Font"), "Home › Font");
 }
+
+/// File names and paths shown in a right-to-left line are set apart and marked: the name in its
+/// own isolate with its extension kept left to right, a path as a left-to-right isolate with a
+/// mark after every separator so neighbouring Arabic folders do not swap. Other languages get
+/// the text untouched.
+#[test]
+fn names_and_paths_are_isolated_in_a_right_to_left_interface() {
+    set_current(Lang::EN);
+    assert_eq!(isolate("تقرير 2.docx"), "تقرير 2.docx");
+    assert_eq!(isolate_path("C:/ملفات/تقرير.docx"), "C:/ملفات/تقرير.docx");
+    let ar = fixture_lang("ar", "\tHome\tالرئيسية\n");
+    set_current(ar);
+    assert_eq!(isolate("تقرير 2.docx"), "\u{2068}تقرير 2\u{200E}.docx\u{2069}");
+    assert_eq!(isolate("ملاحظات"), "\u{2068}ملاحظات\u{2069}", "no extension, no mark");
+    assert_eq!(isolate("v1.2 تقرير"), "\u{2068}v1.2 تقرير\u{2069}", "a dot that is not an extension");
+    assert_eq!(isolate_path(r"C:\ملفات\تقرير.docx"), "\u{2066}C:\\\u{200E}ملفات\\\u{200E}تقرير\u{200E}.docx\u{2069}");
+    assert_eq!(isolate_path("C:/ملفات/تقرير.docx"), "\u{2066}C:/\u{200E}ملفات/\u{200E}تقرير\u{200E}.docx\u{2069}");
+    set_current(Lang::EN);
+}

@@ -385,9 +385,16 @@ fn body(ui: &mut Ui, b: &mut FileBrowser, t: &Tokens) -> Option<Option<PathBuf>>
                     } else if resp.hovered() {
                         ui.painter().rect_filled(r, 2.0, t.hover);
                     }
-                    let icon = Rect::from_center_size(pos2(r.min.x + 14.0, r.center().y), vec2(18.0, 18.0));
+                    let rtl = crate::rtl::on();
+                    let icon = Rect::from_center_size(pos2(crate::rtl::lead_x(rtl, r, 14.0), r.center().y), vec2(18.0, 18.0));
                     icons::paint(ui.painter(), icon, if e.dir { "folder" } else { "file" }, t.icon, t.accent);
-                    ui.painter().with_clip_rect(r).text(pos2(r.min.x + 30.0, r.center().y), Align2::LEFT_CENTER, &e.name, regular(13.0), t.text);
+                    ui.painter().with_clip_rect(r).text(
+                        pos2(crate::rtl::lead_x(rtl, r, 30.0), r.center().y),
+                        crate::rtl::lead_center(rtl),
+                        crate::i18n::isolate(&e.name),
+                        regular(13.0),
+                        t.text,
+                    );
                     if resp.double_clicked() {
                         if e.dir {
                             go = Some(e.path.clone());

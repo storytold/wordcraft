@@ -1,6 +1,6 @@
 //! File tab (Backstage): Home/New, Open, Info, Save As, Print, Export, Close, Options, About.
 
-use egui::{Align2, Rect, Sense, Stroke, Ui, pos2, vec2};
+use egui::{Rect, Sense, Stroke, Ui, pos2, vec2};
 use serde_json::json;
 
 use crate::theme::{Tokens, medium, regular, semibold};
@@ -560,9 +560,19 @@ fn open_list(app: &mut WordApp, ui: &mut Ui) {
         if resp.hovered() {
             ui.painter().rect_filled(r, 4.0, t.hover);
         }
-        icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 18.0, r.center().y), vec2(22.0, 22.0)), "printLayout", t.icon, t.accent);
-        ui.painter().text(pos2(r.min.x + 40.0, r.min.y + 13.0), Align2::LEFT_CENTER, name, medium(13.0), t.text);
-        ui.painter().text(pos2(r.min.x + 40.0, r.min.y + 29.0), Align2::LEFT_CENTER, p, regular(11.0), t.text_dim);
+        // Names and paths are set apart (a right-to-left line would scramble their marks and
+        // folders) and the row starts at the side reading starts from.
+        let rtl = crate::rtl::on();
+        icons::paint(
+            ui.painter(),
+            Rect::from_center_size(pos2(crate::rtl::lead_x(rtl, r, 18.0), r.center().y), vec2(22.0, 22.0)),
+            "printLayout",
+            t.icon,
+            t.accent,
+        );
+        let side = crate::rtl::lead_center(rtl);
+        ui.painter().text(pos2(crate::rtl::lead_x(rtl, r, 40.0), r.min.y + 13.0), side, crate::i18n::isolate(name), medium(13.0), t.text);
+        ui.painter().text(pos2(crate::rtl::lead_x(rtl, r, 40.0), r.min.y + 29.0), side, crate::i18n::isolate_path(p), regular(11.0), t.text_dim);
         if resp.clicked() {
             let failed = open_recent(app, p).err();
             ui.ctx().data_mut(|d| d.insert_temp(open_error_id(), failed.unwrap_or_default()));

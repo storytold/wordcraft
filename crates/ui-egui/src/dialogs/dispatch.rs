@@ -187,10 +187,19 @@ fn font_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 }
             }
         }
+        // The grid is drawn left to right even in a right-to-left interface, so there the unit comes
+        // first: read from the right, the number is then followed by "points and above".
         ui.horizontal(|ui| {
-            let points = ui.add_enabled(*kern == Some(true), egui::DragValue::new(kern_at).speed(0.5).range(1.0..=1638.0).max_decimals(1));
-            let points_label = ui.label(tl!("Points and above"));
-            points.labelled_by(points_label.id);
+            let enabled = *kern == Some(true);
+            let field = egui::DragValue::new(kern_at).speed(0.5).range(1.0..=1638.0).max_decimals(1);
+            if crate::rtl::on() {
+                let points_label = ui.label(tl!("Points and above"));
+                ui.add_enabled(enabled, field).labelled_by(points_label.id);
+            } else {
+                let points = ui.add_enabled(enabled, field);
+                let points_label = ui.label(tl!("Points and above"));
+                points.labelled_by(points_label.id);
+            }
         });
         ui.end_row();
     });
