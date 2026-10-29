@@ -224,59 +224,7 @@ pub(super) fn write_comment_ids(
 }
 
 pub(super) fn theme_xml(doc: &Document) -> Vec<u8> {
-    let s = &doc.settings;
-    let names = ["dk1", "lt1", "dk2", "lt2", "accent1", "accent2", "accent3", "accent4", "accent5", "accent6", "hlink", "folHlink"];
-    let mut w = W::new();
-    let name = if s.theme_name.is_empty() { "Craft" } else { s.theme_name.as_str() };
-    w.open("a:theme", &[("xmlns:a", "http://schemas.openxmlformats.org/drawingml/2006/main"), ("name", name)]);
-    w.open("a:themeElements", &[]);
-    w.open("a:clrScheme", &[("name", name)]);
-    for (i, n) in names.iter().enumerate() {
-        let c = s.theme_colors.get(i).or_else(|| wordcraft_doc::THEME_COLORS.get(i)).copied().unwrap_or_default();
-        w.open(&format!("a:{n}"), &[]);
-        w.empty("a:srgbClr", &[("val", &c.hex())]);
-        w.close(&format!("a:{n}"));
-    }
-    w.close("a:clrScheme");
-    w.open("a:fontScheme", &[("name", name)]);
-    for (tag, face) in [("a:majorFont", &s.major_font), ("a:minorFont", &s.minor_font)] {
-        w.open(tag, &[]);
-        w.empty("a:latin", &[("typeface", face)]);
-        w.empty("a:ea", &[("typeface", "")]);
-        w.empty("a:cs", &[("typeface", "")]);
-        w.close(tag);
-    }
-    w.close("a:fontScheme");
-    // A minimal format scheme (three entries per list, as the schema requires).
-    w.open("a:fmtScheme", &[("name", name)]);
-    w.open("a:fillStyleLst", &[]);
-    for _ in 0..3 {
-        w.raw("<a:solidFill><a:schemeClr val=\"phClr\"/></a:solidFill>");
-    }
-    w.close("a:fillStyleLst");
-    w.open("a:lnStyleLst", &[]);
-    for width in ["6350", "12700", "19050"] {
-        w.raw(&format!(
-            "<a:ln w=\"{width}\" cap=\"flat\" cmpd=\"sng\" algn=\"ctr\"><a:solidFill><a:schemeClr val=\"phClr\"/></a:solidFill><a:prstDash val=\"solid\"/><a:miter lim=\"800000\"/></a:ln>"
-        ));
-    }
-    w.close("a:lnStyleLst");
-    w.open("a:effectStyleLst", &[]);
-    for _ in 0..3 {
-        w.raw("<a:effectStyle><a:effectLst/></a:effectStyle>");
-    }
-    w.close("a:effectStyleLst");
-    w.open("a:bgFillStyleLst", &[]);
-    for _ in 0..3 {
-        w.raw("<a:solidFill><a:schemeClr val=\"phClr\"/></a:solidFill>");
-    }
-    w.close("a:bgFillStyleLst");
-    w.close("a:fmtScheme");
-    w.close("a:themeElements");
-    w.empty("a:objectDefaults", &[]);
-    w.empty("a:extraClrSchemeLst", &[]);
-    w.close("a:theme");
-    w.into_bytes()
+    crate::theme::theme_xml(&crate::theme::Theme::of(doc))
 }
 
 /// The author the saved file gives a comment or tracked change when the document removes personal

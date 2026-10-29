@@ -58,6 +58,7 @@ pub(super) fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         Dialog::Organizer { form } => crate::dialogs_templates::organizer(app, ui, form),
         Dialog::CustomProperties(form) => custom_properties(app, ui, form),
         Dialog::Layout(d) => crate::dialogs_layout::body(app, ui, d),
+        Dialog::Themes(d) => crate::dialogs_themes::body(app, ui, d),
         Dialog::FindRecipient { .. } => find_recipient_dialog(app, ui, d),
         Dialog::MergeRecords { .. } => merge_records_dialog(app, ui, d),
         Dialog::MergeRule { .. } => merge_rule_dialog(app, ui, d),

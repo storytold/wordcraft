@@ -432,6 +432,9 @@ impl WordApp {
                 "exportPng" => self.export_dialog("png"),
                 "insertPicture" => self.pick_picture(),
                 "addFont" => self.pick_font(),
+                // Design › Themes › Save Current Theme… and Browse for Themes… (#1869).
+                "saveTheme" => self.pick_theme(true),
+                "browseTheme" => self.pick_theme(false),
                 "loadSystemFonts" => self.load_system_fonts(),
                 "print" => {
                     self.ui.backstage = true;
@@ -968,6 +971,9 @@ fn input_dialog_other(id: &str, params: &Value) -> Option<&'static str> {
         "tools.autocorrect" if no_settings(params) => Some("autoCorrect"),
         "tools.templates" => Some("templates"),
         "styles.organizer" if !has_value(params, "path") => Some("organizer"),
+        // Design › Colors › Customize Colors… and Fonts › Customize Fonts… (#1869).
+        "design.customColors" if !has_value(params, "colors") => Some("customizeColors"),
+        "design.customFonts" if !has_value(params, "heading") => Some("customizeFonts"),
         "developer.properties" if no_settings(params) => Some("controlProperties"),
         _ => None,
     }

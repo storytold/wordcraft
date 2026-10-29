@@ -7,7 +7,8 @@ pub(crate) fn color_menu(ui: &mut Ui, theme: &[wordcraft_doc::Rgb], value: &mut 
 }
 
 /// A colour field: a swatch and a drop-down with `none_label` (which sets `none_value`), the
-/// colour grid, Recent Colors and More Colors… (#606). `value` is hex or `none_value`.
+/// colour grid, Recent Colors and More Colors… (#606). `value` is hex or `none_value`. An empty
+/// `none_label` leaves the none option out: the field always holds a colour (#1869).
 pub(crate) fn color_field(ui: &mut Ui, theme: &[wordcraft_doc::Rgb], value: &mut String, none_label: &str, none_value: &str) {
     ui.horizontal(|ui| {
         let id = ui.scope_id().with("colorField");
@@ -24,9 +25,9 @@ pub(crate) fn color_field(ui: &mut Ui, theme: &[wordcraft_doc::Rgb], value: &mut
             }
         }
         ui.painter().rect_stroke(r, 2.0, egui::Stroke::new(1.0, t.border_strong), egui::StrokeKind::Inside);
-        let label = if c.is_some() { value.clone() } else { tl!(none_label).to_string() };
+        let label = if c.is_some() || none_label.is_empty() { value.clone() } else { tl!(none_label).to_string() };
         ui.menu_button(label, |ui| {
-            if ui.button(tl!(none_label)).clicked() {
+            if !none_label.is_empty() && ui.button(tl!(none_label)).clicked() {
                 *value = none_value.to_string();
                 ui.close();
             }
@@ -131,6 +132,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::Organizer { .. } => "Organizer",
         Dialog::CustomProperties { .. } => "Custom Document Properties",
         Dialog::Layout(d) => d.title(),
+        Dialog::Themes(d) => d.title(),
     };
     let id = egui::Id::unique(("dialog", title));
     let window = crate::window_close::window(ctx, egui::Window::new(tl!(title)).id(id).collapsible(false).resizable(false));

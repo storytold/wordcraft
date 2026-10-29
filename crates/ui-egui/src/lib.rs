@@ -91,6 +91,7 @@ pub use dialogs::dialogs_ribbon;
 pub use dialogs::dialogs_smart_art;
 pub use dialogs::dialogs_table_style;
 pub use dialogs::dialogs_templates;
+pub use dialogs::dialogs_themes;
 pub use file_dialogs::{FileDialogAnswer, FileDialogRequest, open_filters};
 
 mod app;

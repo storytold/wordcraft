@@ -6140,6 +6140,43 @@ fn a_font_picked_on_the_web_is_added_listed_and_kept() {
     assert!(!a.previews.families().iter().any(|f| f == FAMILY));
 }
 
+/// Web: Browse for Themes… and Save Current Theme… can't pick theme files there (#1869); run
+/// from command search they say so instead of doing nothing, and no picker opens.
+#[test]
+fn theme_files_on_the_web_say_why_not() {
+    let mut a = typed();
+    let asked = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
+    let seen = asked.clone();
+    a.services.open_async = Some(Box::new(move |purpose| *seen.borrow_mut() = purpose.to_string()));
+    for cmd in ["design.openTheme", "design.saveTheme"] {
+        a.status_msg = None;
+        a.run(cmd, json!({})).unwrap();
+        assert!(a.status_msg.as_ref().is_some_and(|(m, _)| m.contains("browser")), "{cmd}: {:?}", a.status_msg);
+    }
+    assert!(asked.borrow().is_empty(), "no picker: {}", asked.borrow());
+}
+
+/// Save Current Theme… suggests the theme's name as the file name only when it is one (a
+/// received document's theme may be named anything).
+#[test]
+fn save_theme_suggests_a_usable_file_name() {
+    let asked = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+    let seen = asked.clone();
+    let services = Services {
+        pick_save: Some(Box::new(move |name: &str| {
+            seen.borrow_mut().push(name.to_string());
+            None
+        })),
+        ..Default::default()
+    };
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), services);
+    for name in ["../../etc/passwd", "CON", "Craft", "Harbour"] {
+        a.session.doc.settings.theme_name = name.into();
+        let _ = a.run("design.saveTheme", json!({}));
+    }
+    assert_eq!(*asked.borrow(), vec!["Theme1.thmx", "Theme1.thmx", "Theme1.thmx", "Harbour.thmx"]);
+}
+
 /// Web: the picked file arrives through the inbox and loads as recipients, even as .txt; a
 /// CSV dropped on the page does too. Anything else afterwards opens as before.
 #[test]

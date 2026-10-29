@@ -241,6 +241,8 @@ impl Session {
             go_back_step: _,
             // Shared by every open document.
             user_dict_path: _,
+            themes_dir: _,
+            custom_themes: _,
             clipboard: _,
             clipboard_text: _,
             clipboard_html: _,
