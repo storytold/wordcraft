@@ -661,6 +661,10 @@ fn start_screen_shows_file_home_and_esc_leaves_no_document() {
     let refused = a.run("ui.zotero.status", json!({})).unwrap_err();
     assert!(refused.contains("No document is open"), "refused before it runs: {refused}");
     assert!(works_without_document("font.add"), "a font file dropped on the empty window is added");
+    // #4585: File › Options › Proofing › AutoCorrect Options edits a user setting, not the document.
+    a.run("tools.autocorrect", json!({})).unwrap();
+    assert_eq!(a.dialog.as_ref().map(|d| d.name()), Some("autoCorrect"));
+    a.dialog = None;
     // Neither keys nor commands reach the hidden placeholder.
     assert!(a.run("text.insert", json!({"text": "Hello"})).is_err());
     assert!(a.execute("format.bold", json!({})).is_err());
@@ -2519,7 +2523,26 @@ fn user_name_survives_restart() {
 
     // A later rename is what gets saved next, not the name loaded at startup.
     second.run("file.setAuthor", json!({"name": "Grace Hopper"})).unwrap();
-    assert_eq!(second.prefs().author, "Grace Hopper");
+    assert_eq!(second.prefs().author.as_deref(), Some("Grace Hopper"));
+}
+
+/// #4368: a user name cleared in File › Options stays empty after a restart.
+#[test]
+fn blank_user_name_survives_restart() {
+    let mut first = app();
+    first.session.author.clear();
+    let saved = serde_json::to_vec(&first.prefs()).unwrap();
+
+    let mut second = app();
+    assert!(!second.session.author.is_empty());
+    second.apply_prefs(serde_json::from_slice(&saved).unwrap());
+    assert_eq!(second.session.author, "");
+
+    // A name of only spaces is not a name: the default stays.
+    let default = app().session.author;
+    let mut third = app();
+    third.apply_prefs(serde_json::from_str(r#"{"author": "   "}"#).unwrap());
+    assert_eq!(third.session.author, default);
 }
 
 const UNSAVED: &str = "My unsaved novel chapter";
@@ -3942,6 +3965,37 @@ fn escape_selects_a_wordart_box_and_delete_removes_it() {
     h.run_steps(2);
     let s = &h.state().session;
     assert!(s.sel.is_collapsed() && s.sel.focus.story == wordcraft_doc::StoryRef::Body, "a second Escape leaves a caret in the body");
+}
+
+/// #4061: a WordArt picked from a style gallery has its text selected and the page gets the
+/// keyboard back, so typing replaces the placeholder text at once. The gallery's cells ran
+/// their command without handing focus back, so the first keystrokes went nowhere.
+#[test]
+fn picking_a_wordart_style_hands_the_keyboard_back_to_the_page() {
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(400.0, 300.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            // The first pass installs the fonts the gallery's cells are drawn in.
+            if ctx.cumulative_pass_nr() > 1 {
+                crate::wordart_menus::style_gallery(ui, app, "insert.wordArt");
+            }
+        },
+        app(),
+    );
+    h.run_steps(3);
+    h.state_mut().canvas.want_focus = false;
+    // The first cell, "Solid Accent": a click on its middle (the cells carry no label here).
+    let at = egui::pos2(30.0, 30.0);
+    let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    h.event(egui::Event::PointerMoved(at));
+    h.run_steps(1);
+    h.event(button(true));
+    h.run_steps(1);
+    h.event(button(false));
+    h.run_steps(2);
+    assert!(canvas::in_text_box(h.state()), "the WordArt's text is selected");
+    assert!(h.state().canvas.want_focus, "the page takes the keyboard back");
 }
 
 /// #1218: Ctrl+Q resets the paragraph formatting and nothing else; it also closed the window
