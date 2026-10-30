@@ -333,8 +333,16 @@ pub fn is_thai_family(family: &str) -> bool {
 /// no GSUB rule to do it automatically.  Use this predicate to decide whether the render path
 /// should emit those PUA codepoints instead of the standard Unicode ones.
 pub fn is_wtt2_thai_font(family: &str) -> bool {
+    is_dedicated_wtt2_thai_font(family) || is_general_wtt2_thai_font(family)
+}
+
+/// The dedicated Microsoft WTT 2.0 Thai families (Cordia New, the UPC families, …).
+/// These are Thai-only fonts that exist *solely* to carry Thai text; they always ship with the
+/// full WTT 2.0 PUA short-tail glyphs (U+F700/U+F70F) regardless of platform.
+/// Use this — not [`is_wtt2_thai_font`] — when deciding whether to trust a name-based check
+/// as a proxy for PUA glyph presence (skrifa cannot read the old TrueType PUA cmap subtable).
+pub fn is_dedicated_wtt2_thai_font(family: &str) -> bool {
     const NAMES: &[&str] = &[
-        // Dedicated Microsoft WTT 2.0 Thai families
         "cordia new",
         "cordiaupc",
         "angsana new",
@@ -348,12 +356,15 @@ pub fn is_wtt2_thai_font(family: &str) -> bool {
         "jasmineupc",
         "kodchiangupc",
         "lilyupc",
-        // Microsoft general-purpose fonts that shipped with WTT 2.0 Thai PUA glyphs
-        "tahoma",
-        "microsoft sans serif",
-        "arial unicode ms",
     ];
     NAMES.contains(&family.to_ascii_lowercase().as_str())
+}
+
+/// General-purpose Microsoft fonts that shipped with WTT 2.0 Thai PUA glyphs on Windows but
+/// do NOT necessarily carry them on macOS or Linux.  Use [`face.covers`] to confirm before
+/// emitting PUA codepoints — do not rely on the name alone.
+fn is_general_wtt2_thai_font(family: &str) -> bool {
+    matches!(family.to_ascii_lowercase().as_str(), "tahoma" | "microsoft sans serif" | "arial unicode ms")
 }
 
 /// Khmer document fonts: the Khmer OS family, Khmer Mool1 and the like, Windows' and the Mac's
