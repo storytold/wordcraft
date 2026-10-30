@@ -92,30 +92,29 @@ fn is_below_or_phinthu(c: char) -> bool {
 ///
 /// Two rules:
 ///
-/// 1. **Short-tail ฐ/ญ** (WTT 2.0 fonts only) — ฐ (U+0E10) and ญ (U+0E0D) have descending
-///    tails that collide with below-vowels (◌ุ ◌ู) and phinthu (◌ฺ).  When immediately
-///    followed by one of those marks, swap to PUA short-tail forms U+F700 / U+F70F.
-///    Both the *requested* font name and the *actual rendering face* family must be WTT 2.0
-///    ([`wordcraft_fonts::word::is_wtt2_thai_font`]).  When a WTT 2.0 font is not installed
-///    the rendering face is an OpenType substitute (Thonburi, Noto Serif Thai, …) whose
-///    family name is not in the WTT 2.0 list; that substitute handles short-tails via GSUB
-///    automatically, so emitting PUA codepoints would produce .notdef glyphs.
-///    Checking the face family name avoids the unreliable `face.covers(U+F700)` cmap path.
+/// 1. **Short-tail ฐ/ญ** — ฐ (U+0E10) and ญ (U+0E0D) have descending tails that collide with
+///    below-vowels (◌ุ ◌ู) and phinthu (◌ฺ).  When immediately followed by one of those marks,
+///    swap to PUA short-tail forms U+F700 / U+F70F.  Applied only when the rendering face
+///    actually carries those glyphs (`face.covers`).  OpenType Thai fonts (Thonburi, Noto Sans
+///    Thai, …) handle short-tails via GSUB `blws` automatically and do not carry the PUA
+///    codepoints, so this branch never fires for them.
 ///
 /// 2. **RU/LU + Sara_AA → LAKKHANGYAO** — ฤ (U+0E24) and ฦ (U+0E26) followed by sara aa
 ///    (า U+0E32) render sara aa as lakkhangyao (ๅ U+0E45).  Applied for all Thai fonts.
-fn thai_short_tail(text: &str, font: &str, face: &wordcraft_fonts::FaceRef) -> Option<String> {
-    // Both the requested font and the actual rendering face must be known WTT 2.0 families,
-    // AND the face must actually carry the PUA short-tail glyphs.  The three-way check is:
-    // 1. Requested font is WTT 2.0 by name (rc.font).
-    // 2. Rendering face is WTT 2.0 by family name (not an OpenType substitute like Thonburi).
-    // 3. Face actually contains U+F700 — if the glyph is absent, substituting produces .notdef.
-    // The segmentation fix (bdd592d3) keeps WTT 2.0 faces in place so check 2 now reliably
-    // points at the real face rather than a fallback.
-    let wtt2_base = wordcraft_fonts::word::is_wtt2_thai_font(font)
-                 && wordcraft_fonts::word::is_wtt2_thai_font(&face.family);
-    let has_f700 = wtt2_base && face.covers('\u{F700}');
-    let has_f70f = wtt2_base && face.covers('\u{F70F}');
+fn thai_short_tail(text: &str, face: &wordcraft_fonts::FaceRef) -> Option<String> {
+    // Emit PUA short-tail codepoints when the rendering face carries them.
+    //
+    // Dedicated WTT 2.0 Thai fonts (Cordia New, Angsana New, the UPC family…): skrifa may fail
+    // to find F700/F70F in their old TrueType PUA cmap subtable, so `face.covers(F700)` gives a
+    // false negative.  For these fonts alone we trust the family name as a proxy — they are
+    // Thai-only faces that always ship the full WTT 2.0 PUA glyph set.
+    //
+    // General-purpose fonts (Tahoma, Microsoft Sans Serif…): they carry F700 on Windows but
+    // not on macOS/Linux.  Trust `face.covers(F700)` only; the name-proxy is unreliable
+    // across platforms.
+    let dedicated_wtt2 = wordcraft_fonts::word::is_dedicated_wtt2_thai_font(&face.family);
+    let has_f700 = face.covers('\u{F700}') || dedicated_wtt2;
+    let has_f70f = face.covers('\u{F70F}') || dedicated_wtt2;
     let needs_short_tail = (has_f700 && text.contains('\u{0E10}'))
                         || (has_f70f && text.contains('\u{0E0D}'));
     let has_lakkhangyao = face.covers('\u{0E45}');
@@ -743,11 +742,18 @@ fn caps_expands(c: char) -> bool {
     c.to_uppercase().nth(1).is_some()
 }
 
-/// Combining marks and joiners (bidi classes NSM, BN: harakat, ZWNJ, ZWJ) belong to the
-/// character before them: same font, same shaping run, so Arabic joining isn't broken.
+/// Combining marks and joiners belong to the character before them: same font, same shaping
+/// run, so Arabic joining and Thai mark stacking work correctly.
+///
+/// Two separate reasons a character is a mark:
+/// - BiDi NSM/BN: Arabic harakat, Hebrew nikud, joiners (ZWNJ/ZWJ).
+/// - Thai combining marks: above/below vowels, tone marks, karan, nikhahit, phinthu.
+///   Thai is not a BiDi script — these are detected by Unicode block range, not BiDi class.
 fn is_mark(c: char) -> bool {
     use unicode_bidi::BidiClass::{BN, NSM};
-    matches!(unicode_bidi::bidi_class(c), NSM | BN) && !c.is_control()
+    let bidi_mark = matches!(unicode_bidi::bidi_class(c), NSM | BN) && !c.is_control();
+    let thai_mark = matches!(c as u32, 0x0E31 | 0x0E34..=0x0E3A | 0x0E47..=0x0E4E);
+    bidi_mark || thai_mark
 }
 
 /// A digit Word's Numeral modes substitute: ASCII or Arabic-Indic (U+0660–U+0669).
@@ -1093,12 +1099,15 @@ impl<'a> Builder<'a> {
                     // Other scripts: name-based heuristic (not in the preferred list).
                     // A missing Thai font keeps its one substitute face for the run (#1549).
                     if matches!(u32::from(dc), 0x0E00..=0x0E7F) {
-                        // Never fall back for known WTT 2.0 fonts: skrifa may fail to find
-                        // U+F700 in their cmap (old TrueType PUA subtable), causing a false
-                        // negative from has_thai_short_tail_support.  Keeping the WTT 2.0 face
-                        // lets the render path apply the PUA substitution and HarfBuzz shape it.
                         let cs_font = rc_cs.as_ref().map_or(rc.font.as_str(), |r| r.font.as_str());
-                        !(resolved_cs.as_ref().map_or(resolved.substituted, |r| r.substituted) && wordcraft_fonts::word::is_thai_family(cs_font))
+                        let substituted = resolved_cs.as_ref().map_or(resolved.substituted, |r| r.substituted);
+                        // Never fall back when the user explicitly chose a Thai font — whether it
+                        // handles short-tails natively or not, honour their choice (TH Sarabun New,
+                        // Thonburi, Noto Sans Thai, …).  Also never fall back for WTT 2.0 fonts:
+                        // the render path applies the PUA substitution; skrifa may falsely report
+                        // no F700 coverage due to the old TrueType PUA cmap subtable.
+                        let explicit_thai = wordcraft_fonts::word::is_thai_family(cs_font) && !substituted;
+                        !explicit_thai
                             && !wordcraft_fonts::word::is_wtt2_thai_font(cs_font)
                             && !wordcraft_fonts::has_thai_short_tail_support(prim.get())
                     } else {
@@ -1174,7 +1183,7 @@ impl<'a> Builder<'a> {
             let shape_text = if substituted { mapped.as_str() } else { sub };
             // Render-only: swap ญ/ฐ for their short-tail PUA forms when followed by a below-vowel.
             let short_tail_buf;
-            let shape_text = if let Some(buf) = thai_short_tail(shape_text, &rc.font, &st.face) {
+            let shape_text = if let Some(buf) = thai_short_tail(shape_text, &st.face) {
                 short_tail_buf = buf;
                 short_tail_buf.as_str()
             } else {
@@ -3623,7 +3632,8 @@ mod tests {
                 _ => None,
             };
             assert_eq!(strong_rtl(c), strong, "{:04x}", c as u32);
-            assert_eq!(is_mark(c), matches!(class, NSM | BN) && !c.is_control(), "{:04x}", c as u32);
+            let thai_mark = matches!(c as u32, 0x0E31 | 0x0E34..=0x0E3A | 0x0E47..=0x0E4E);
+            assert_eq!(is_mark(c), (matches!(class, NSM | BN) && !c.is_control()) || thai_mark, "{:04x}", c as u32);
         }
     }
 

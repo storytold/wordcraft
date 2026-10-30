@@ -334,7 +334,14 @@ fn text_glyphs(doc: &Document, r: Rect, it: &GraphicItem, alpha: f32, k: f32) ->
 /// Chinese label doesn't mix serif and sans glyphs), else each character its own fallback. Spaces
 /// and combining marks stay in the run before them; a character no face has stays in `primary`.
 fn face_runs(text: &str, primary: FaceRef, bold: bool) -> Vec<(FaceRef, &str)> {
-    let joins = |c: char| c.is_whitespace() || wordcraft_doc::math_linear::is_combining(c);
+    let joins = |c: char| {
+        c.is_whitespace()
+            || wordcraft_doc::math_linear::is_combining(c)
+            // Thai combining marks (Mn): mai hunakat, above/below vowels, phinthu, tone marks,
+            // karan, nikhahit, yamakkan.  Must stay in the same shape run as their base consonant;
+            // splitting them causes HarfBuzz to insert a dotted-circle placeholder.
+            || matches!(c as u32, 0x0E31 | 0x0E34..=0x0E3A | 0x0E47..=0x0E4E)
+    };
     // (start, end, drawn by `primary`)
     let mut spans: Vec<(usize, usize, bool)> = Vec::new();
     for (i, c) in text.char_indices() {
