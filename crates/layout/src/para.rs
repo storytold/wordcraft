@@ -757,6 +757,35 @@ fn strong_rtl(c: char) -> Option<bool> {
     }
 }
 
+
+/// Thai/Lao stacking marks that combine above or below a consonant in a TCB.
+/// Sara aa (า U+0E32) and trailing vowels are NOT included.
+fn is_thai_stacking(c: char) -> bool {
+    matches!(c,
+        // Thai above/below vowels and tone marks (U+0E31, U+0E33-U+0E3A, U+0E47-U+0E4B)
+        '\u{0E31}' | '\u{0E33}'..='\u{0E3A}' | '\u{0E47}'..='\u{0E4B}'
+        // Lao equivalent range
+        | '\u{0EB1}' | '\u{0EB3}'..='\u{0EBB}' | '\u{0EC8}'..='\u{0ECB}'
+    )
+}
+
+/// Byte length of the first Thai/Lao Character Block (TCB) in `text`.
+/// A TCB = the first consonant (or leading vowel) plus all immediately following
+/// stacking vowels and tone marks.  Leading vowels (เ แ โ ใ ไ / Lao) stand alone.
+fn thai_lao_tcb_byte_len(text: &str) -> usize {
+    let mut chars = text.chars();
+    let Some(first) = chars.next() else { return 0 };
+    // Leading vowels stand alone in the TCB.
+    if matches!(first, '\u{0E40}'..='\u{0E44}' | '\u{0EC0}'..='\u{0EC4}') {
+        return first.len_utf8();
+    }
+    let mut len = first.len_utf8();
+    for c in chars {
+        if is_thai_stacking(c) { len += c.len_utf8(); } else { break; }
+    }
+    len
+}
+
 /// Bidi embedding levels per byte of `text` (UAX #9 rules up to I2), or empty when the
 /// paragraph is left to right and has no right-to-left characters.
 pub fn bidi_levels(text: &str, rtl_para: bool) -> Vec<u8> {
@@ -1508,12 +1537,20 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let mut has_page_fields = false;
     let mut notes = Vec::new();
     let mut obj_index = 0usize;
-    // Drop cap: the first character, sized so its capital spans `lines` lines.
-    let drop_first = (rp.drop_cap > 0)
+    // Drop cap: the first TCB/character, sized so its capital spans `lines` lines.
+    // For Thai/Lao the TCB may span multiple chars (consonant + stacking vowels/tones).
+    let drop_first: Option<usize> = (rp.drop_cap > 0)
         .then(|| p.text.chars().next())
         .flatten()
         .filter(|c| !matches!(*c, '\t' | LINE_BREAK | PAGE_BREAK | COLUMN_BREAK | OBJ | '\r' | ' '))
-        .filter(|c| p.text.len() > c.len_utf8());
+        .filter(|c| p.text.len() > c.len_utf8())
+        .map(|c| {
+            if wordcraft_doc::cluster::is_thai_lao(c) {
+                thai_lao_tcb_byte_len(&p.text)
+            } else {
+                c.len_utf8()
+            }
+        });
     let mut drop_cap = None;
     let mut drop_cap_w = 0.0;
     let mut maths = Vec::new();
@@ -1574,17 +1611,21 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         }
         let mut seg = 0;
         if range.start == 0
-            && let Some(c) = drop_first
-            && let Some(first) = text.get(..c.len_utf8())
+            && let Some(drop_len) = drop_first
+            && let Some(first) = text.get(..drop_len)
         {
             let line_h = (rc.size * 1.2).max(1.0);
             let lines = rp.drop_cap as f32;
-            // Capital height is ~0.7 em: the letter's cap spans from line 1's caps to line N's baseline.
+            let is_thai_lao_cap = first.chars().next().is_some_and(wordcraft_doc::cluster::is_thai_lao);
+            // Cap height: Thai/Lao glyphs ~0.85 em; Latin caps ~0.70 em.
+            let cap_h = if is_thai_lao_cap { 0.85_f32 } else { 0.70_f32 };
             let mut big = (*rc).clone();
-            // `clamp` would panic here when the text itself is larger than 1000 pt.
-            big.size = (((lines - 1.0) * line_h + rc.size * 0.7) / 0.7).min(1000.0).max(rc.size);
+            big.size = (((lines - 1.0) * line_h + rc.size * cap_h) / cap_h).min(1000.0).max(rc.size);
+            // Thai/Lao shaping uses size_cs (via rc.complex()); keep it in sync.
+            if is_thai_lao_cap { big.size_cs = big.size; }
             if let Some(f) = &rp.drop_cap_font {
                 big.font = f.clone();
+                if is_thai_lao_cap { big.font_cs = f.clone(); }
             }
             let before = b.clusters.len();
             b.shape(first, 0, &Arc::new(big), None);
@@ -1598,7 +1639,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
             for c in b.clusters.iter_mut().skip(before) {
                 c.adv = 0.0;
             }
-            seg = c.len_utf8();
+            seg = drop_len;
         }
         for (i, c) in text.char_indices() {
             if i < seg {
@@ -3508,8 +3549,8 @@ mod tests {
                 L => Some(false),
                 _ => None,
             };
-            assert_eq!(bidi::strong_rtl(c), strong, "{:04x}", c as u32);
-            assert_eq!(chars::is_mark(c), matches!(class, NSM | BN) && !c.is_control(), "{:04x}", c as u32);
+            assert_eq!(strong_rtl(c), strong, "{:04x}", c as u32);
+            assert_eq!(is_mark(c), matches!(class, NSM | BN) && !c.is_control(), "{:04x}", c as u32);
         }
     }
 
