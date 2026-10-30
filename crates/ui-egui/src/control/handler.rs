@@ -341,6 +341,13 @@ pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> O
             ok(json!({}))
         }
         "app.quit" => {
+            // #3274: quitting must not silently discard unsaved work. Same predicate as the
+            // window's close button (documents, unconfirmed saves, comment drafts); only a real
+            // boolean true forces it, matching file.close.
+            let force = p.get("force").and_then(Value::as_bool) == Some(true);
+            if !force && app.has_unsaved_documents() {
+                return err(UNSAVED);
+            }
             app.quit_requested = true;
             ok(json!({}))
         }

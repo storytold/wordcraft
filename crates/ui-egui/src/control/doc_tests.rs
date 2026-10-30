@@ -120,3 +120,30 @@ fn closing_an_addressed_document_keeps_unsaved_work_unless_forced() {
     assert!(!a.session.is_open(clean) && a.session.is_open(second));
     assert_eq!(a.session.document_id(), active);
 }
+
+/// #3274: quitting the app through the control channel keeps unsaved work unless forced, exactly
+/// as the window's close button and `file.close` do; `{"force": true}` discards it.
+#[test]
+fn quitting_the_app_keeps_unsaved_work_unless_forced() {
+    let mut a = app();
+    assert_eq!(exec(&mut a, "text.insert", json!({"text": "DIRTY"}))["ok"], true);
+
+    for params in [json!({}), json!({"force": "true"}), json!({"force": 1})] {
+        let r = send(&mut a, "app.quit", params);
+        assert_eq!(r["ok"], false, "{r}");
+        let e = r["error"].as_str().unwrap_or("");
+        assert!(e.contains("unsaved") && e.contains("force"), "{e}");
+        assert!(!a.quit_requested, "a refused quit must not set the flag");
+        assert_eq!(body(&a).trim(), "DIRTY");
+    }
+
+    let r = send(&mut a, "app.quit", json!({"force": true}));
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(a.quit_requested);
+
+    // A clean document quits with no force at all.
+    let mut clean = app();
+    let r = send(&mut clean, "app.quit", json!({}));
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(clean.quit_requested);
+}
