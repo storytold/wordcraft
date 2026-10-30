@@ -837,11 +837,18 @@ impl AffixDict {
                         continue;
                     }
                     let Some(base) = form.strip_suffix(&*r.strip) else { continue };
+                    if base.is_empty() && !self.full_strip {
+                        continue;
+                    }
                     let next = format!("{base}{}", r.add);
                     if r.cont != 0 && queued.insert((next.clone(), r.cont)) {
                         chain.push((next.clone(), r.cont));
                     }
-                    out.push(next);
+                    // A circumfix suffix or one that needs another affix is no word on its own,
+                    // but a form it ends can still carry further suffixes.
+                    if r.cont & (self.circumfix | self.need_affix) == 0 {
+                        out.push(next);
+                    }
                     if out.len() >= MAX_FORMS {
                         return out;
                     }
@@ -1494,5 +1501,35 @@ pub(crate) mod tests {
         assert_eq!(forms, ["nestromy", "strom", "stromz"]);
         let back = AffixDict::from_bytes(&d.to_bytes()).unwrap();
         assert!(back.contains("nestromy") && !back.contains("stromy") && !back.contains("nestrom"));
+    }
+
+    /// A chained suffix form is listed only when the checker accepts it: not when its last suffix
+    /// needs another affix or is a circumfix one, and not when it would replace a whole stem
+    /// without `FULLSTRIP`.
+    #[test]
+    fn chained_forms_follow_needaffix_circumfix_and_fullstrip() {
+        let chain = |aff: &str, dic: &str, stem: &str| {
+            let d = AffixDict::from_hunspell(aff, dic, &[]).unwrap();
+            let mut forms = d.forms(stem);
+            forms.sort();
+            forms.dedup();
+            for f in &forms {
+                assert!(d.contains(f), "{stem} → {f}");
+            }
+            (d, forms)
+        };
+        let (d, forms) = chain("SET UTF-8\nNEEDAFFIX N\nSFX A Y 1\nSFX A 0 able/B .\nSFX B Y 1\nSFX B 0 s/N .\n", "1\nwork/A\n", "work");
+        assert_eq!(forms, ["work", "workable"]);
+        assert!(!d.contains("workables"), "its last suffix needs another affix");
+        let (d, forms) = chain("SET UTF-8\nCIRCUMFIX c\nSFX A Y 1\nSFX A 0 able/B .\nSFX B Y 1\nSFX B 0 s/c .\n", "1\nwork/A\n", "work");
+        assert_eq!(forms, ["work", "workable"]);
+        assert!(!d.contains("workables"), "its last suffix is a circumfix one");
+        let aff = "SFX A Y 1\nSFX A 0 y/B .\nSFX B Y 1\nSFX B xy z .\n";
+        let (d, forms) = chain(&format!("SET UTF-8\n{aff}"), "1\nx/A\n", "x");
+        assert_eq!(forms, ["x", "xy"]);
+        assert!(!d.contains("z"), "a whole stem is replaced only with FULLSTRIP");
+        let (d, forms) = chain(&format!("SET UTF-8\nFULLSTRIP\n{aff}"), "1\nx/A\n", "x");
+        assert_eq!(forms, ["x", "xy", "z"]);
+        assert!(d.contains("z"));
     }
 }
