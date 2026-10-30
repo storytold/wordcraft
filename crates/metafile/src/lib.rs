@@ -1,5 +1,5 @@
 //! WordCraft metafiles: reads Windows Metafiles (WMF) and Enhanced Metafiles (EMF) into a neutral
-//! vector model of filled and stroked paths and RGBA bitmaps, in a picture frame with y down.
+//! vector model of filled and stroked paths, RGBA bitmaps and text runs, in a picture frame with y down.
 //!
 //! The reader is pure Rust over byte slices (no file system), so it builds for wasm. Every read is
 //! bounds-checked and every count is capped; hostile input yields a shorter picture or an [`Error`],
@@ -21,9 +21,9 @@ mod wmf;
 mod tests;
 
 use bytes::Bytes;
-use canvas::Raw;
+use canvas::{Raw, RawText};
 use geom::{Op, P};
-pub use place::{MAX_BITMAP_SIDE, PlacedItem};
+pub use place::{MAX_BITMAP_SIDE, PlacedItem, TextLayout, crop_window};
 
 /// Items kept from one file. Past the cap the parse stops and keeps what it has.
 pub(crate) const MAX_ITEMS: usize = 200_000;
@@ -60,6 +60,46 @@ pub enum Item {
     },
     /// A bitmap stretched into `rect` = `[x, y, w, h]` (picture units), RGBA8 rows top-down.
     Bitmap { rect: [f32; 4], width: u32, height: u32, rgba: Vec<u8> },
+    /// A run of text; the renderers shape it with the named font (see [`Text::layout`]).
+    Text(Text),
+}
+
+/// A text run, in picture units.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Text {
+    pub text: String,
+    /// The reference point that `halign` and `valign` refer to.
+    pub x: f32,
+    pub y: f32,
+    /// Font height: the em size, or the cell height (ascent + descent) when `cell` is set.
+    pub size: f32,
+    pub cell: bool,
+    pub font: String,
+    pub bold: bool,
+    pub italic: bool,
+    pub color: [u8; 4],
+    /// Baseline direction in radians, clockwise from +x (y down).
+    pub angle: f32,
+    pub halign: HAlign,
+    pub valign: VAlign,
+    /// Advance of each character along the baseline; empty when the font's own advances apply.
+    pub dx: Vec<f32>,
+}
+
+/// Where the reference point sits along the run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HAlign {
+    Left,
+    Center,
+    Right,
+}
+
+/// Where the reference point sits across the run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VAlign {
+    Top,
+    Baseline,
+    Bottom,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -137,9 +177,43 @@ fn build(raw: Vec<Raw>, frame: Option<Frame>) -> Picture {
             let rect = [f(x)?, f(y)?, f(r[2] * sx)?, f(r[3] * sy)?];
             Some(Item::Bitmap { rect, width: img.w as u32, height: img.h as u32, rgba: img.px })
         }
+        Raw::Text(t) => text_item(t, tf, sx, sy),
     });
     let items = items.collect();
     Picture { width: f(size.0).unwrap_or(0.0), height: f(size.1).unwrap_or(0.0), items }
+}
+
+/// A device-space text run mapped into the picture: the reference point through `tf`, lengths by the
+/// frame scale. TA_* flags become the alignment.
+fn text_item(t: RawText, tf: impl Fn(P) -> P, sx: f64, sy: f64) -> Option<Item> {
+    let (x, y) = tf(t.origin);
+    let halign = match t.align & 6 {
+        2 => HAlign::Right,
+        6 => HAlign::Center,
+        _ => HAlign::Left,
+    };
+    let valign = match t.align & 24 {
+        8 => VAlign::Bottom,
+        24 => VAlign::Baseline,
+        _ => VAlign::Top,
+    };
+    let dx = t.dx.iter().map(|d| f(d * sx.abs())).collect::<Option<Vec<f32>>>()?;
+    let size = f(t.size * sy.abs()).filter(|s| *s > 0.0)?;
+    Some(Item::Text(Text {
+        text: t.text,
+        x: f(x)?,
+        y: f(y)?,
+        size,
+        cell: t.cell,
+        font: t.font,
+        bold: t.bold,
+        italic: t.italic,
+        color: t.color,
+        angle: f(t.angle).unwrap_or(0.0),
+        halign,
+        valign,
+        dx,
+    }))
 }
 
 fn f(v: f64) -> Option<f32> {
@@ -201,6 +275,7 @@ fn bbox(raw: &[Raw]) -> Option<[f64; 4]> {
                 grow((rect[0], rect[1]));
                 grow((rect[0] + rect[2], rect[1] + rect[3]));
             }
+            Raw::Text(t) => grow(t.origin),
         }
     }
     b
