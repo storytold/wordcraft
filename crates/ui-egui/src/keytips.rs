@@ -704,10 +704,12 @@ use crate::keys;
 
 /// Keytips are suppressed while the Backstage (except for its own badges, Alt, F) or a modal dialog is open, or while a text field
 /// (not the canvas) has focus; the canvas lets Alt open keytips and `canvas_events` swallows
-/// typing while they show.
+/// typing while they show. The Backstage's badges end with it (its back chevron, a mouse Save),
+/// so the next letter is typed and never picks a page that is no longer there.
 pub fn suppressed(app: &WordApp, ctx: &egui::Context) -> bool {
     !app.ui.keytips_enabled
         || (app.ui.backstage && app.ui.keytips != Phase::Backstage)
+        || (!app.ui.backstage && app.ui.keytips == Phase::Backstage)
         || app.dialog.is_some()
         || (ctx.egui_wants_keyboard_input() && !app.canvas.focused)
 }

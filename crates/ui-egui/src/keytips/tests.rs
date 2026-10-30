@@ -586,3 +586,40 @@ fn file_keytips_reach_the_backstage_pages() {
     assert_eq!(crate::backstage::keytip_page("V"), Some("print"));
     assert_eq!(crate::backstage::keytip_page("R"), None);
 }
+
+/// #4981 review: the Backstage closed while its badges show (the back chevron, a mouse Save)
+/// ends them. The next letter is typed, and never picks a page with the Backstage gone: C used
+/// to close the document and S to save it.
+#[test]
+fn closing_the_backstage_ends_its_keytips() {
+    let mut a = app();
+    a.canvas.focused = true;
+    a.canvas.want_focus = true;
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    let key = |key| key_event(key, true, egui::Modifiers::NONE);
+    h.input_mut().events.push(key(egui::Key::F10));
+    h.step();
+    assert_eq!(h.state().ui.keytips, Phase::Tabs);
+    h.input_mut().events.extend([key(egui::Key::F), egui::Event::Text("f".into())]);
+    h.step();
+    assert_eq!((h.state().ui.backstage, h.state().ui.keytips), (true, Phase::Backstage));
+    // What the back chevron does.
+    h.state_mut().ui.backstage = false;
+    h.state_mut().canvas.want_focus = true;
+    h.run_steps(2);
+    assert_eq!(h.state().ui.keytips, Phase::Off, "the badges end with the Backstage");
+    h.input_mut().events.extend([key(egui::Key::C), egui::Event::Text("c".into())]);
+    h.run_steps(2);
+    assert_eq!(h.state().ui.keytips, Phase::Off);
+    assert!(h.state().has_document(), "C does not close the document");
+    assert!(!h.state().ui.backstage);
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim(), "c", "C is typed");
+}
