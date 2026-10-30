@@ -809,9 +809,9 @@ dependencies = [
 
 [[package]]
 name = "clipboard-win"
-version = "5.4.1"
+version = "5.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bde03770d3df201d4fb868f2c9c59e66a3e4e2bd06692a0fe701e7103c7e84d4"
+checksum = "39ed3668f121a65e4ce95efeba22ad1f8ad6c6628397a5dd773118514a5e1804"
 dependencies = [
  "error-code",
 ]
