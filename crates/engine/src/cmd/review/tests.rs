@@ -1095,6 +1095,22 @@ mod spelling_navigation_tests {
                 std::mem::swap(&mut s.sel.anchor, &mut s.sel.focus);
             }
             assert_eq!(s.run("review.suggestions", &json!({})).unwrap(), selected);
+            let before_lookup = s.sel.clone();
+            let focus = s.sel.focus.off;
+            let explicit = s.run("review.suggestions", &json!({"pos": {"block": 0, "off": focus}})).unwrap();
+            assert_eq!(explicit["kind"], "grammar", "an explicit focus is a point lookup in either selection direction");
+            assert_eq!(explicit["text"], "sentense sentense");
+            assert_eq!(explicit["start"]["off"], 2);
+            assert_eq!(explicit["end"]["off"], 19);
+            assert_eq!(s.sel, before_lookup, "suggestion lookups do not move the selection");
+            for pos in [serde_json::Value::Null, json!({"off": "invalid"})] {
+                assert_eq!(
+                    s.run("review.suggestions", &json!({"pos": pos})).unwrap(),
+                    selected,
+                    "unparseable positions preserve implicit selection lookup"
+                );
+            }
+            assert_eq!(s.run("review.suggestions", &json!({})).unwrap(), selected);
             let elsewhere = s.run("review.suggestions", &json!({"pos": {"block": 0, "off": 5}})).unwrap();
             assert_eq!(elsewhere["kind"], "spelling");
             assert_eq!(elsewhere["start"]["off"], 2, "an explicit other position keeps point lookup");
