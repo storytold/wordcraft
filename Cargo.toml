@@ -59,7 +59,8 @@ brotli-decompressor = "5"
 vello_cpu = "0.2"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp", "tiff"] }
 craft-pdf = { git = "https://github.com/storytold/craft-libs", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0", version = "=0.1.0", default-features = false, features = ["write"] }
-craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0", features = ["egui"] }
+# craft-update: app-specific pretend versions apply to startup and manual checks.
+craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "04aa1703b32d299e54f78fcde4182f2b393a9116", features = ["egui"] }
 quick-xml = "0.41"
 zip = { version = "3", default-features = false, features = ["deflate"] }
 # zlib streams (compressed metafile pictures in `.doc` drawings); already in the lock as a dependency of other crates.
