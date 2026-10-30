@@ -187,3 +187,7 @@ sync_github_name = true
 
 [people.dylanmtaylor]
 sync_github_name = true
+
+[people.marcwgls]
+real_name = "Marc"
+sync_github_name = true

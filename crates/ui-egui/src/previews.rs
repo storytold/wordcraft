@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use egui::{Rect, Response, Sense, Stroke, TextureHandle, Ui, pos2, vec2};
 use serde_json::{Value, json};
-use wordcraft_doc::props::CharProps;
+use wordcraft_doc::props::{CharProps, ParaProps};
 use wordcraft_doc::{Block, Document, Paragraph, Table, para_block};
 
 use crate::WordApp;
@@ -544,6 +544,8 @@ pub fn style_gallery(app: &mut WordApp, ui: &mut Ui, state: &Value) {
         let dark_page = app.session.view.dark_mode;
         let key = format!("style:{id}:{skey}:{ppp}:{lang}:{dark_page}");
         let doc = &app.session.doc;
+        // A right-to-left style's sample stands at the picture's right edge (#4944).
+        let rtl = doc.styles.resolve_para(&ParaProps { style: Some(id.clone()), ..Default::default() }).bidi;
         let tex = app.previews.get_or(ui.ctx(), &key, || {
             // Sample letters in the interface's script (`АаБбВвГг` in Russian).
             let mut p = Paragraph::with_text(tl!("AaBbCcDd"), CharProps::default()).styled(id);
@@ -559,7 +561,9 @@ pub fn style_gallery(app: &mut WordApp, ui: &mut Ui, state: &Value) {
         if let Some(h) = tex {
             let sz = h.size_vec2() / ppp;
             let ir = Rect::from_min_size(pos2(r.min.x + 3.0, r.min.y + 4.0), sz.min(vec2(68.0, 32.0)));
-            let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2((ir.width() / sz.x).min(1.0), (ir.height() / sz.y).min(1.0)));
+            let uw = (ir.width() / sz.x).min(1.0);
+            let u0 = if rtl { 1.0 - uw } else { 0.0 };
+            let uv = Rect::from_min_max(pos2(u0, 0.0), pos2(u0 + uw, (ir.height() / sz.y).min(1.0)));
             ui.painter().with_clip_rect(r).image(h.id(), ir, uv, preview_tint(&t, dark_page));
         }
         let mut job = egui::text::LayoutJob::single_section(name.clone(), egui::TextFormat::simple(regular(10.5), t.text));
