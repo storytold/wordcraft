@@ -166,6 +166,31 @@ fn grid_advance_is_the_size_plus_the_adjustment() {
 }
 
 #[test]
+fn east_asian_hint_sets_ambiguous_punctuation_in_the_east_asian_font() {
+    // Bundled faces stand in for a Latin and an East Asian font, so every machine agrees: with
+    // `w:hint="eastAsia"` the curly quotes and the dash take the East Asian font, the Latin letter
+    // keeps the run's font; without it everything stays in the run's font.
+    let face_of = |hint: Option<bool>, ch: char| {
+        let text = "“x—”";
+        let mut d = Document::from_text(text);
+        if let Some(Block::Para(p)) = d.body.first_mut().map(std::sync::Arc::make_mut) {
+            p.runs[0].props.font = Some("Source Serif 4".into());
+            p.runs[0].props.font_ea = Some("Source Sans 3".into());
+            p.runs[0].props.hint_ea = hint;
+        }
+        let g = first_para(&lay(&d));
+        let k = g.clusters.iter().position(|c| text.get(c.start..).and_then(|t| t.chars().next()) == Some(ch)).unwrap();
+        g.styles[g.clusters[k].style as usize].face.id()
+    };
+    let latin = face_of(Some(true), 'x');
+    assert_ne!(face_of(Some(true), '“'), latin, "hinted quote in the Latin font");
+    assert_ne!(face_of(Some(true), '—'), latin, "hinted dash in the Latin font");
+    assert_eq!(face_of(Some(true), '“'), face_of(Some(true), '”'));
+    assert_eq!(face_of(None, '“'), face_of(None, 'x'), "unhinted quote left the run's font");
+    assert_eq!(face_of(Some(false), '—'), face_of(Some(false), 'x'));
+}
+
+#[test]
 fn character_grid_places_east_asian_text_on_the_pitch() {
     let text = "日本語の文書abc";
     // The default font size plus 2.5 pt: a pitch unlike any font's advance.

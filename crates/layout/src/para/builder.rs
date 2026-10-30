@@ -3,7 +3,7 @@ use super::chars::{
     SegKey, caps_expands, context_digit_dirs, is_khmer, is_mark, is_numeral_digit, ligature_features, lookup_family, remap_range, thai_run_face,
     upper_char,
 };
-use super::grid::east_asian;
+use super::grid::{east_asian, hint_ambiguous};
 use super::model::{ClKind, Cluster, Enclosed, Glyph, ParaEnv, RubyLayout, StyleRun, SymbolRun};
 use super::{Arc, Document, FaceRef, NumeralMode, ResolvedChar, RubyAlign, SOFT_HYPHEN};
 
@@ -64,7 +64,7 @@ impl<'a> Builder<'a> {
             let primary = if complex { primary_cs.unwrap_or(primary) } else { primary };
             let face = match cur {
                 Some(k) if mark => k.face,
-                _ if !complex && east_asian(c) && primary_ea.is_some_and(|f| f.covers(c)) => primary_ea,
+                _ if !complex && (east_asian(c) || (rc.hint_ea && hint_ambiguous(c))) && primary_ea.is_some_and(|f| f.covers(c)) => primary_ea,
                 _ if !c.is_control() && c != SOFT_HYPHEN && run_face.is_some_and(|f| f.covers(dc)) => run_face,
                 _ if primary.covers(dc) || c.is_whitespace() || c.is_control() || c == SOFT_HYPHEN => None,
                 Some(SegKey { face: Some(face), .. }) if face.covers(dc) => Some(face),
@@ -170,14 +170,17 @@ impl<'a> Builder<'a> {
         let show = |c: char| sym.map_or(c, |m| m.show(c));
         let primary_cs = rc_cs.as_ref().map(|r| wordcraft_fonts::word::resolve(lookup_family(self.env.doc, &r.font), r.bold, r.italic).face);
         // Chinese, Japanese and Korean characters use the run's East Asian font (`w:eastAsia`) when
-        // it is installed and has them.
+        // it is installed and has them, or a substitute chosen for it by name (仿宋_GB2312 drawn in
+        // an installed FangSong, not in whatever CJK face comes first); with `w:hint="eastAsia"`,
+        // characters of ambiguous script (curly quotes, dashes, ellipses) too.
         let primary_ea = rc
             .font_ea
             .as_ref()
-            .filter(|f| !f.eq_ignore_ascii_case(&rc.font) && text.chars().any(east_asian))
-            .map(|f| wordcraft_fonts::word::resolve(f, rc.bold, rc.italic))
-            .filter(|r| !r.substituted)
-            .map(|r| r.face);
+            .filter(|f| !f.eq_ignore_ascii_case(&rc.font) && text.chars().any(|c| east_asian(c) || (rc.hint_ea && hint_ambiguous(c))))
+            .and_then(|f| {
+                let r = wordcraft_fonts::word::resolve(f, rc.bold, rc.italic);
+                (!r.substituted || wordcraft_fonts::word::has_named_substitutes(f)).then_some(r.face)
+            });
         // The levels by byte of `text`, from `lbase` on.
         let (levels, lbase): (&[u8], usize) = match dir {
             Dir::Para => (&self.levels, base),
