@@ -282,6 +282,14 @@ fn indonesian_has_a_name_in_the_language_menu() {
     }
 }
 
+#[test]
+fn latvian_has_a_name_in_the_language_menu() {
+    assert!(PROOFING_LANGUAGES.contains(&("lv-LV", "Latvian")));
+    for tag in ["lv", "lv-LV", "LV-lv", "lav"] {
+        assert_eq!(language_name(Some(tag)), "Latvian", "{tag}");
+    }
+}
+
 /// #3360, #3553: the Spanishes WordCraft proofs are in the menu, checked by their tags; other
 /// Spanish regions show by name, and a bare `es` is Spain's.
 #[test]

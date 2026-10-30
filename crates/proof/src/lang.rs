@@ -49,6 +49,10 @@ pub enum ProofLang {
     /// `id_ID` dictionary, dictionary-driven suggestions and generic checks with Indonesian
     /// messages. Hyphenation keeps the fallback English patterns.
     Id,
+    /// Latvian (`lv`, `lv-LV`): the installed Hunspell `lv_LV` dictionary, dictionary-driven
+    /// suggestions and generic checks with Latvian messages. Hyphenation keeps the fallback
+    /// English patterns.
+    Lv,
     /// Spanish of Spain (`es`, `es-ES`, and every region not listed for [`ProofLang::EsMx`],
     /// [`ProofLang::Es419`] or [`ProofLang::EsUy`]; also ISO 639-2 `spa`): the installed
     /// Hunspell `es_ES` dictionary (or a generic Spanish one), dictionary-driven suggestions and
@@ -79,7 +83,7 @@ pub enum ProofLang {
 
 impl ProofLang {
     /// Every language with a spelling dictionary, in display order.
-    pub const PROOFED: [ProofLang; 15] = [
+    pub const PROOFED: [ProofLang; 16] = [
         ProofLang::En,
         ProofLang::EnGb,
         ProofLang::EnCa,
@@ -91,6 +95,7 @@ impl ProofLang {
         ProofLang::Ru,
         ProofLang::Cs,
         ProofLang::Id,
+        ProofLang::Lv,
         ProofLang::Es,
         ProofLang::EsMx,
         ProofLang::Es419,
@@ -124,6 +129,8 @@ impl ProofLang {
             ProofLang::Cs
         } else if primary.eq_ignore_ascii_case("id") || primary.eq_ignore_ascii_case("ind") || primary.eq_ignore_ascii_case("in") {
             ProofLang::Id
+        } else if primary.eq_ignore_ascii_case("lv") || primary.eq_ignore_ascii_case("lav") {
+            ProofLang::Lv
         } else if primary.eq_ignore_ascii_case("es") || primary.eq_ignore_ascii_case("spa") {
             ProofLang::spanish(tag)
         } else if ["de", "deu", "ger"].iter().any(|c| primary.eq_ignore_ascii_case(c)) {
@@ -180,6 +187,7 @@ impl ProofLang {
             ProofLang::Ru => "ru",
             ProofLang::Cs => "cs",
             ProofLang::Id => "id",
+            ProofLang::Lv => "lv",
             ProofLang::Es | ProofLang::EsMx | ProofLang::Es419 | ProofLang::EsUy => "es",
             ProofLang::De => "de",
             ProofLang::Other => "",
@@ -289,6 +297,9 @@ mod tests {
         assert_tags(&["it", "it-IT", "IT_it", "it-CH", "it-CH.UTF-8", " it-IT ", "ita"], ProofLang::It);
         assert_tags(&["cs", "cs-CZ", "CS-cz", "cs_CZ", " ces ", "CES", "cze", "CZE"], ProofLang::Cs);
         assert_tags(&["id", "id-ID", "ID-id", "id_ID", "id_ID.UTF-8", " id-ID ", "ind", "in", "in_ID"], ProofLang::Id);
+        assert_tags(&["lv", "lv-LV", "LV-lv", "lv_LV", "lv_LV.UTF-8", " lv-LV ", "lav"], ProofLang::Lv);
+        assert_eq!(ProofLang::Lv.code(), "lv");
+        assert!(ProofLang::Lv.is_proofed() && ProofLang::PROOFED.contains(&ProofLang::Lv));
         assert_eq!(ProofLang::Cs.code(), "cs");
         assert!(ProofLang::Cs.is_proofed() && ProofLang::PROOFED.contains(&ProofLang::Cs));
         assert_eq!(ProofLang::Id.code(), "id");
