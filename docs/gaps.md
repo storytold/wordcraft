@@ -132,6 +132,10 @@ The Language dialog reads effective character formatting, including document def
 
 Footer page-table height and body wrapping are corrected. Other pagination gaps remain open.
 
+Eligible direct floating rectangles no longer enlarge or paint inside supported auto-fit textboxes (#2533). Square wrapping still displaces text. Unsupported classes and the inherited TallInline geometry delta remain open; see [textbox-float-policy.md](textbox-float-policy.md). No gap estimate changes.
+
+Static outer floating fit probes reuse completed extents or saved-height fallback while their fitted-cache prefix is unchanged (#2533). Linked, dynamic and nested inputs retain fresh probes; no cache-memory or universal once-per-pass bound. Fitting and own-paint policy, unsupported classes and native limits are unchanged. No gap estimate changes.
+
 Small follow-ups from the 2026-10-25 field, table and AutoFormat batch (#4232):
 
 - Convert Table to Text has no "Convert nested tables" check box; nested tables always stay tables, which is Word's default (#4155).
@@ -154,6 +158,8 @@ Recipient label generation (#4880) now includes all selected recipients across a
 |---|---|---|
 | 2026-10-29 | trivial | Recipient labels continue across product-sized sheets instead of stopping after the first sheet (#4880). Filtered/sorted order, product geometry and single-label mode retained; readiness estimates unchanged. |
 | 2026-10-22 | trivial | View windows: several open documents and Switch Windows in the engine |
+| 2026-10-21 | trivial | Static outer floating fit probes reuse completed extents or saved-height fallback while their fitted-cache prefix is unchanged (#2533). Linked, dynamic and nested inputs retain fresh probes; no cache-memory or universal once-per-pass bound. |
+| 2026-10-21 | trivial | Bounded floating-rectangle fitting and own-paint policy (#2533); matched-reader TallInline retains its inherited native geometry delta. |
 | 2026-10-25 | trivial | egui 0.37 migration: interface catalogs remain pinned by `craft-i18n.rev` (`9205108…`; 27 languages, English fallback); IME surrounding deletions and composition resets are implemented with regressions, but managed CI passed; native IME acceptance and native-speaker catalog review remain open; no gap or readiness change |
 | 2026-10-17 | trivial | Gap 9 narrowed: Standard (Word 2007, AES-ECB) encrypted packages open with a password under any Word extension; AES headers in Word 97-2003 files are outside the public spec and refused with a clear message; estimate 3–5 → 0 h, since the remaining AES-in-`.doc` case is refused by design |
 | 2026-10-25 | trivial | Small follow-ups from the field, table and AutoFormat batch (#4232) |
