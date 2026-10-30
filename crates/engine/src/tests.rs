@@ -11,6 +11,7 @@ use crate::{Session, cmd};
 
 mod bidi;
 mod documents;
+mod font_sizes;
 mod fonts;
 mod ime_noop;
 mod revision_checks;
@@ -1943,6 +1944,291 @@ fn tables_commands() {
     assert!(s.run("table.merge", &json!({})).is_err());
 }
 
+/// A 2×2 table "A1 B1 / A2 B2" after an "Intro" paragraph, the caret in its first cell.
+fn table_doc() -> Session {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Intro"}));
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    for (i, t) in ["A1", "B1", "A2", "B2"].iter().enumerate() {
+        if i > 0 {
+            run(&mut s, "text.tab", json!({}));
+        }
+        run(&mut s, "text.insert", json!({"text": t}));
+    }
+    s
+}
+
+fn body_table_cells(s: &Session) -> Vec<Vec<String>> {
+    s.doc
+        .body
+        .iter()
+        .filter_map(|b| b.as_table())
+        .map(|t| {
+            t.rows
+                .iter()
+                .flat_map(|r| r.cells.iter())
+                .map(|c| c.blocks.iter().filter_map(|b| b.as_para()).map(|p| p.plain_text()).collect::<String>())
+                .collect()
+        })
+        .collect()
+}
+
+/// #1744: Select Table → Copy → Paste outside the table pastes a copy of the whole table.
+#[test]
+fn copy_whole_table_pastes_a_table() {
+    let mut s = table_doc();
+    run(&mut s, "table.selectTable", json!({}));
+    let r = run(&mut s, "edit.copy", json!({}));
+    assert!(r["text"].as_str().unwrap().contains("A1\tB1"), "clipboard text is tab separated: {r}");
+    assert!(matches!(s.clipboard.as_ref().unwrap().blocks.as_slice(), [wordcraft_doc::Block::Table(_)]), "the copy is the table");
+    run(&mut s, "caret.docStart", json!({}));
+    run(&mut s, "edit.paste", json!({}));
+    let want = vec!["A1".to_string(), "B1".into(), "A2".into(), "B2".into()];
+    assert_eq!(body_table_cells(&s), vec![want.clone(), want]);
+}
+
+/// #1744: Select Table → Cut removes the whole table, and one Undo brings it back.
+#[test]
+fn cut_whole_table_removes_it_and_undoes() {
+    let mut s = table_doc();
+    run(&mut s, "table.selectTable", json!({}));
+    run(&mut s, "edit.cut", json!({}));
+    assert!(body_table_cells(&s).is_empty(), "the table is gone");
+    assert!(s.sel.focus.path.cell().is_none(), "the caret left the table");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(body_table_cells(&s), vec![vec!["A1".to_string(), "B1".into(), "A2".into(), "B2".into()]]);
+    // Paste puts it back as a table.
+    run(&mut s, "table.selectTable", json!({}));
+    run(&mut s, "edit.cut", json!({}));
+    run(&mut s, "edit.paste", json!({}));
+    assert_eq!(body_table_cells(&s).len(), 1);
+}
+
+/// A 3×3 table "A1 B1 C1 / A2 B2 C2 / A3 B3 C3" after an "Intro" paragraph (#1744).
+fn table3_doc() -> Session {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Intro"}));
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "insert.table", json!({"rows": 3, "cols": 3}));
+    for (i, t) in ["A1", "B1", "C1", "A2", "B2", "C2", "A3", "B3", "C3"].iter().enumerate() {
+        if i > 0 {
+            run(&mut s, "text.tab", json!({}));
+        }
+        run(&mut s, "text.insert", json!({"text": t}));
+    }
+    s
+}
+
+/// Select whole cells of the body's table: rows and grid columns, both inclusive.
+fn select_table_cells(s: &mut Session, rows: (usize, usize), cols: (usize, usize)) {
+    let tp = wordcraft_doc::Path(vec![1]);
+    crate::cmd::table::select_range(s, StoryRef::Body, &tp, rows, cols).unwrap();
+    assert_eq!(s.cell_range().map(|r| (r.rows, r.cols)), Some((rows, cols)));
+}
+
+fn row_cells(texts: &[&str]) -> Vec<String> {
+    texts.iter().map(|t| t.to_string()).collect()
+}
+
+/// #1744 (Word check A): copying whole rows, two cells of a row, or a block of cells over
+/// several rows, then pasting outside the table, pastes a table of just those cells.
+#[test]
+fn copy_rows_and_cells_pastes_a_table_of_them() {
+    let full = row_cells(&["A1", "B1", "C1", "A2", "B2", "C2", "A3", "B3", "C3"]);
+    for (rows, cols, want) in [
+        ((1, 1), (0, 2), row_cells(&["A2", "B2", "C2"])),
+        ((0, 0), (0, 1), row_cells(&["A1", "B1"])),
+        ((1, 2), (1, 2), row_cells(&["B2", "C2", "B3", "C3"])),
+    ] {
+        let mut s = table3_doc();
+        select_table_cells(&mut s, rows, cols);
+        run(&mut s, "edit.copy", json!({}));
+        let Some([wordcraft_doc::Block::Table(t)]) = s.clipboard.as_ref().map(|f| f.blocks.as_slice()) else {
+            panic!("{rows:?} {cols:?}: the copy is a table, not {:?}", s.clipboard_text);
+        };
+        assert_eq!(t.rows.len(), rows.1 - rows.0 + 1, "{rows:?} {cols:?}");
+        assert_eq!(t.grid.len(), cols.1 - cols.0 + 1, "{rows:?} {cols:?}: the grid has the copied columns");
+        run(&mut s, "caret.docStart", json!({}));
+        run(&mut s, "edit.paste", json!({}));
+        assert_eq!(body_table_cells(&s), vec![want, full.clone()], "{rows:?} {cols:?}");
+    }
+}
+
+/// #1744 (Word check A): Cut of whole rows, or of some cells, clears their text and leaves
+/// the rows and cells; the clipboard still gets a table of them. One Undo brings the text back.
+#[test]
+fn cut_rows_and_cells_clears_their_text() {
+    let full = row_cells(&["A1", "B1", "C1", "A2", "B2", "C2", "A3", "B3", "C3"]);
+    for (rows, cols, left, copied) in [
+        ((1, 1), (0, 2), row_cells(&["A1", "B1", "C1", "", "", "", "A3", "B3", "C3"]), row_cells(&["A2", "B2", "C2"])),
+        ((0, 0), (0, 1), row_cells(&["", "", "C1", "A2", "B2", "C2", "A3", "B3", "C3"]), row_cells(&["A1", "B1"])),
+        ((1, 2), (1, 2), row_cells(&["A1", "B1", "C1", "A2", "", "", "A3", "", ""]), row_cells(&["B2", "C2", "B3", "C3"])),
+    ] {
+        let mut s = table3_doc();
+        select_table_cells(&mut s, rows, cols);
+        run(&mut s, "edit.cut", json!({}));
+        assert_eq!(body_table_cells(&s), vec![left.clone()], "{rows:?} {cols:?}: rows and cells stay");
+        assert!(s.sel.is_collapsed(), "{rows:?} {cols:?}");
+        run(&mut s, "edit.undo", json!({}));
+        assert_eq!(body_table_cells(&s), vec![full.clone()], "{rows:?} {cols:?}: one undo step");
+        select_table_cells(&mut s, rows, cols);
+        run(&mut s, "edit.cut", json!({}));
+        run(&mut s, "caret.docStart", json!({}));
+        run(&mut s, "edit.paste", json!({}));
+        assert_eq!(body_table_cells(&s), vec![copied, left], "{rows:?} {cols:?}: the cut pastes as a table");
+    }
+}
+
+/// #1744 review: Cut clears every cell Copy takes: a cell merged across the selected columns
+/// widens them, so the cell below the merge's second column is copied and cleared too.
+#[test]
+fn cut_clears_the_cells_a_merged_cell_widens_the_copy_to() {
+    let mut s = table3_doc();
+    select_table_cells(&mut s, (0, 0), (0, 1));
+    run(&mut s, "table.merge", json!({}));
+    select_table_cells(&mut s, (0, 1), (0, 0));
+    run(&mut s, "edit.copy", json!({}));
+    run(&mut s, "edit.cut", json!({}));
+    let cells = body_table_cells(&s).remove(0);
+    assert_eq!(cells.len(), 8, "one merged cell and seven others: {cells:?}");
+    assert_eq!(cells[1], "C1");
+    assert!(cells[2..4].iter().all(String::is_empty), "A2 and B2 are cleared: {cells:?}");
+    assert_eq!(cells[4..], ["C2", "A3", "B3", "C3"], "the rest stays");
+}
+
+/// #1744 review: an empty cell's selection enables Cut but not the Spike, which takes text only.
+#[test]
+fn spike_stays_disabled_on_an_empty_cell_selection() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Intro"}));
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    select_table_cells(&mut s, (0, 0), (0, 0));
+    let r = s.run("edit.spike", &json!({}));
+    assert!(matches!(r, Err(crate::CmdError::Disabled(_))), "{r:?}");
+}
+
+fn clip_is_table(s: &Session) -> bool {
+    matches!(s.clipboard.as_ref().map(|f| f.blocks.as_slice()), Some([wordcraft_doc::Block::Table(_)]))
+}
+
+/// The body table's cells as they read with every change accepted.
+fn body_table_final(s: &Session) -> Vec<String> {
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).expect("a table");
+    t.rows.iter().flat_map(|r| r.cells.iter()).map(|c| c.blocks.iter().filter_map(|b| b.as_para()).map(|p| p.final_text()).collect()).collect()
+}
+
+/// #1744 review: an empty table or cell selected whole still copies, and Cut of the empty
+/// table removes it, as in Word.
+#[test]
+fn copy_and_cut_of_an_empty_table_or_cell() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Intro"}));
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 1}));
+    run(&mut s, "table.selectTable", json!({}));
+    run(&mut s, "edit.copy", json!({}));
+    assert!(clip_is_table(&s), "an empty 1×1 table copies: {:?}", s.clipboard);
+    run(&mut s, "edit.cut", json!({}));
+    assert!(body_table_cells(&s).is_empty(), "Cut removes the empty table");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(body_table_cells(&s), vec![vec![String::new()]]);
+
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "document.setText", json!({"text": "Intro"}));
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    select_table_cells(&mut s, (0, 0), (0, 0));
+    run(&mut s, "edit.copy", json!({}));
+    assert!(clip_is_table(&s), "an empty cell copies as a one-cell table");
+    run(&mut s, "edit.cut", json!({}));
+    assert_eq!(body_table_cells(&s).len(), 1, "Cut of an empty cell leaves the table");
+}
+
+/// #1744 review: a text selection over exactly a whole table (no whole-cell record) copies the
+/// table; so does one over exactly a table nested in a cell. Other users of the copied range
+/// read it as a table too: the selected text is tab separated, a Quick Part saved from it
+/// inserts a table.
+#[test]
+fn text_selection_of_a_whole_table_copies_the_table() {
+    let mut s = table_doc();
+    let at = |path: Vec<u32>, off: usize| json!({"story": "body", "path": path, "off": off});
+    run(&mut s, "select.range", json!({"anchor": at(vec![1, 0, 0, 0], 0), "focus": at(vec![1, 1, 1, 0], 2)}));
+    assert!(s.cell_range().is_none(), "a text selection");
+    assert_eq!(s.selected_text(), "A1\tB1\nA2\tB2");
+    run(&mut s, "edit.copy", json!({}));
+    assert!(clip_is_table(&s));
+    run(&mut s, "insert.quickParts", json!({"save": "grid"}));
+    run(&mut s, "caret.docStart", json!({}));
+    run(&mut s, "insert.quickParts", json!({"insert": "grid"}));
+    assert_eq!(body_table_cells(&s).len(), 2, "the Quick Part is a table");
+
+    // A table nested in cell A1: selecting its text whole copies just it.
+    let mut s = table_doc();
+    run(&mut s, "select.range", json!({"anchor": at(vec![1, 0, 0, 0], 2), "focus": at(vec![1, 0, 0, 0], 2)}));
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 1}));
+    run(&mut s, "text.insert", json!({"text": "N1"}));
+    run(&mut s, "text.tab", json!({}));
+    run(&mut s, "text.insert", json!({"text": "N2"}));
+    let (inner, _, _) = s.sel.focus.path.cell().unwrap();
+    assert_eq!(inner.0.len(), 4, "nested in a cell");
+    let first = [inner.0.clone(), vec![0, 0, 0]].concat();
+    let last = [inner.0.clone(), vec![1, 0, 0]].concat();
+    run(&mut s, "select.range", json!({"anchor": at(first, 0), "focus": at(last, 2)}));
+    assert!(s.cell_range().is_none(), "a text selection");
+    run(&mut s, "edit.copy", json!({}));
+    let Some([wordcraft_doc::Block::Table(t)]) = s.clipboard.as_ref().map(|f| f.blocks.as_slice()) else { panic!("{:?}", s.clipboard_text) };
+    assert_eq!(t.rows.len(), 2, "the nested table, not the outer one");
+}
+
+/// #1744 review: with Track Changes on, Cut of the whole table or of a row marks the text
+/// deleted and keeps the table; one Undo takes the marks back.
+#[test]
+fn tracked_cut_of_a_table_or_row_marks_text_deleted() {
+    let full = row_cells(&["A1", "B1", "C1", "A2", "B2", "C2", "A3", "B3", "C3"]);
+    let mut s = table3_doc();
+    s.doc.settings.track_changes = true;
+    run(&mut s, "table.selectTable", json!({}));
+    run(&mut s, "edit.cut", json!({}));
+    assert!(clip_is_table(&s));
+    assert_eq!(body_table_cells(&s), vec![full.clone()], "the table and its text stay, marked");
+    assert!(body_table_final(&s).iter().all(String::is_empty), "{:?}", body_table_final(&s));
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(body_table_final(&s), full);
+
+    select_table_cells(&mut s, (1, 1), (0, 2));
+    run(&mut s, "edit.cut", json!({}));
+    assert!(clip_is_table(&s));
+    assert_eq!(body_table_cells(&s), vec![full.clone()]);
+    assert_eq!(body_table_final(&s), row_cells(&["A1", "B1", "C1", "", "", "", "A3", "B3", "C3"]));
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(body_table_final(&s), full);
+}
+
+/// #1744 review: Cut of a table, or of cells, holding a content control locked against deletion
+/// is refused and changes nothing in the document; the copy is made first, so the clipboard
+/// holds the table, as for any refused Cut.
+#[test]
+fn cut_of_cells_with_a_locked_control_is_refused() {
+    for whole in [true, false] {
+        let mut s = table3_doc();
+        run(&mut s, "edit.find", json!({"text": "B2"}));
+        run(&mut s, "developer.richText", json!({"tag": "keep"}));
+        run(&mut s, "developer.properties", json!({"control": "keep", "lockDelete": true}));
+        if whole {
+            run(&mut s, "table.selectTable", json!({}));
+        } else {
+            select_table_cells(&mut s, (1, 1), (0, 2));
+        }
+        let before = s.doc.clone();
+        assert!(s.run("edit.cut", &json!({})).is_err(), "whole table: {whole}");
+        assert_eq!(s.doc, before, "whole table: {whole}");
+        assert!(s.status.contains("can't be deleted"), "{}", s.status);
+        assert!(clip_is_table(&s), "whole table: {whole}");
+    }
+}
+
 #[test]
 fn inserting_a_column_keeps_cell_widths_in_step_with_the_grid() {
     let mut s = s();
@@ -2430,6 +2716,79 @@ fn table_properties_apply_in_one_step() {
     run(&mut s, "table.properties", json!({"rowHeight": null}));
     assert_eq!(s.doc.body.iter().find_map(|b| b.as_table()).unwrap().rows[0].props.height_rule, HeightRule::Auto);
     assert!(s.run("table.properties", &json!({"valign": "middle"})).is_err());
+}
+
+/// #4857: Table Properties' row settings apply to every selected row (the whole table, say), the
+/// column width to every selected column and the cell settings to every selected cell, as in
+/// Word, in one undo step; with nothing selected, to the caret's alone.
+#[test]
+fn table_properties_apply_to_the_selected_rows_columns_and_cells() {
+    use wordcraft_doc::props::VAlign;
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 3, "cols": 2}));
+    let table = |s: &Session| s.doc.body.iter().find_map(|b| b.as_table()).unwrap().clone();
+    let cant_split = |s: &Session| table(s).rows.iter().map(|r| r.props.cant_split).collect::<Vec<_>>();
+    run(&mut s, "table.properties", json!({"allowBreak": false}));
+    assert_eq!(cant_split(&s), [true, false, false], "the caret's row alone");
+    run(&mut s, "edit.undo", json!({}));
+    let before = table(&s);
+    run(&mut s, "table.selectTable", json!({}));
+    run(&mut s, "table.properties", json!({"allowBreak": false, "rowHeight": 30.0, "columnWidth": 100.0, "cellWidth": 90.0, "valign": "center"}));
+    let t = table(&s);
+    assert_eq!(cant_split(&s), [true, true, true], "every selected row");
+    assert!(t.rows.iter().all(|r| r.props.height == Some(30.0)));
+    assert_eq!(t.grid, [100.0, 100.0], "every selected column");
+    assert!(t.rows.iter().flat_map(|r| &r.cells).all(|c| c.props.width == Some(90.0) && c.props.valign == Some(VAlign::Center)));
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(table(&s), before, "one undo step");
+    // A selected row: that row alone; a selected column: that column alone.
+    run(&mut s, "caret.docStart", json!({}));
+    run(&mut s, "text.tab", json!({}));
+    run(&mut s, "text.tab", json!({}));
+    run(&mut s, "table.selectRow", json!({}));
+    run(&mut s, "table.properties", json!({"allowBreak": false}));
+    assert_eq!(cant_split(&s), [false, true, false]);
+    run(&mut s, "caret.docStart", json!({}));
+    run(&mut s, "text.tab", json!({}));
+    run(&mut s, "table.selectColumn", json!({}));
+    run(&mut s, "table.properties", json!({"columnWidth": 150.0}));
+    assert_eq!(table(&s).grid.get(1), Some(&150.0));
+    assert_ne!(table(&s).grid.first(), Some(&150.0));
+}
+
+/// #4857: a tall row across a page break moves to the next page whole once the whole table is
+/// selected and "Allow row to break across pages" is turned off.
+#[test]
+fn a_selected_table_kept_from_breaking_moves_its_row_whole() {
+    // Lines above the table until its 12-line second row starts across the page break.
+    let found = (0..80u32).find_map(|above| {
+        let mut s = s();
+        for k in 0..above {
+            run(&mut s, "text.insert", json!({"text": format!("Line {k}")}));
+            run(&mut s, "text.newParagraph", json!({}));
+        }
+        run(&mut s, "insert.table", json!({"rows": 3, "cols": 1}));
+        run(&mut s, "text.insert", json!({"text": "Kiln"}));
+        run(&mut s, "text.tab", json!({}));
+        for i in 0..12 {
+            run(&mut s, "text.insert", json!({"text": format!("Press note {i}")}));
+            run(&mut s, "text.newParagraph", json!({}));
+        }
+        (row_pages(&mut s, above).len() == 2).then_some((s, above))
+    });
+    let (mut s, table) = found.expect("the row starts across the page break");
+    run(&mut s, "table.selectTable", json!({}));
+    run(&mut s, "table.properties", json!({"allowBreak": false}));
+    assert_eq!(row_pages(&mut s, table), [1], "the row moves to the next page whole");
+}
+
+/// The pages the second row of the table at body block `table` has lines on.
+fn row_pages(s: &mut Session, table: u32) -> Vec<usize> {
+    let row = [table, 1];
+    let on_page = |p: &wordcraft_layout::Page| {
+        p.items.iter().any(|it| matches!(it, wordcraft_layout::Placed::Lines { path, .. } if path.0.get(..2) == Some(&row[..])))
+    };
+    s.layout().pages.iter().enumerate().filter(|(_, p)| on_page(p)).map(|(i, _)| i).collect()
 }
 
 /// Table Layout › Text Direction (#226) cycles the selected cells' text through horizontal,
@@ -4594,7 +4953,7 @@ fn word_count_with_an_object_selected_counts_the_document() {
 fn custom_properties_delete_legacy_names_but_new_names_keep_the_limit() {
     let mut s = s();
     let long = "x".repeat(crate::cmd::file::MAX_CUSTOM_NAME + 1);
-    s.doc.custom_props.push(wordcraft_doc::CustomProp { name: long.clone(), kind: "raw".into(), value: "<data/>".into() });
+    s.doc.custom_props.push(wordcraft_doc::CustomProp { name: long.clone(), kind: "raw".into(), value: "<data/>".into(), ..Default::default() });
     let mut custom = serde_json::Map::new();
     custom.insert(long.clone(), serde_json::Value::Null);
     run(&mut s, "file.properties", json!({"custom": custom}));
@@ -4629,6 +4988,36 @@ fn custom_properties_case_only_rename_keeps_the_new_spelling() {
     run(&mut s, "file.properties", json!({"custom": {"Status": "draft", "status": null}}));
     let props: Vec<(&str, &str)> = s.doc.custom_props.iter().map(|p| (p.name.as_str(), p.value.as_str())).collect();
     assert_eq!(props, [("Status", "draft")], "the property keeps the new spelling and its value");
+}
+
+/// Linked text objects carry rename metadata explicitly and retain the existing input bounds.
+#[test]
+fn custom_properties_linked_values_are_typed_bounded_and_atomic() {
+    let mut s = s();
+    s.doc.set_custom_prop("Status", "draft");
+    s.doc.custom_props[0].link_target = Some("OriginalBookmark".into());
+    let before = s.doc.clone();
+    let depth = s.undo_depth();
+    let max = crate::cmd::file::MAX_CUSTOM_VALUE;
+    for value in [
+        json!({"value": "changed", "linkTarget": 7}),
+        json!({"value": 7, "linkTarget": "OriginalBookmark"}),
+        json!({"value": "changed", "linkTarget": "OriginalBookmark", "kind": "raw"}),
+        json!({"value": "x".repeat(max + 1), "linkTarget": "OriginalBookmark"}),
+        json!({"value": "changed", "linkTarget": "x".repeat(max + 1)}),
+    ] {
+        assert!(s.run("file.properties", &json!({"title": "must roll back", "custom": {"Status": null, "Renamed": value}})).is_err());
+        assert_eq!(s.doc, before);
+        assert_eq!(s.undo_depth(), depth);
+    }
+    run(&mut s, "file.properties", json!({"custom": {"Status": {"value": "final", "linkTarget": "OriginalBookmark"}}}));
+    run(&mut s, "file.properties", json!({"custom": {"Status": "string edit"}}));
+    assert_eq!(s.doc.custom_props[0].link_target.as_deref(), Some("OriginalBookmark"));
+    for value in [json!({"value": "unlinked", "linkTarget": null}), json!({"value": "unlinked"})] {
+        s.doc.custom_props[0].link_target = Some("OriginalBookmark".into());
+        run(&mut s, "file.properties", json!({"custom": {"Status": value}}));
+        assert_eq!(s.doc.custom_props[0].link_target, None);
+    }
 }
 
 /// #2982: what the Custom Properties dialog saves (through `file.properties`) survives a .docx
