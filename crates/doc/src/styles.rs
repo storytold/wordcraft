@@ -245,6 +245,8 @@ pub struct PartFormat {
     pub align: Option<Align>,
     /// Vertical alignment in the cells (`w:tcPr/w:vAlign`).
     pub v_align: Option<VAlign>,
+    /// Cell-level Fit Text (`w:tcFitText`); unset inherits.
+    pub fit_text: Option<bool>,
 }
 
 impl PartFormat {
@@ -264,6 +266,7 @@ impl PartFormat {
         };
         self.align = patch.align.or(self.align);
         self.v_align = patch.v_align.or(self.v_align);
+        self.fit_text = patch.fit_text.or(self.fit_text);
     }
 }
 
@@ -317,11 +320,17 @@ impl TableStyleParts {
             borders,
             align: extra.align,
             v_align: extra.v_align,
+            fit_text: extra.fit_text,
         };
         match p {
-            TablePart::WholeTable => {
-                PartFormat { chr: CharProps::default(), fill: self.fill, borders: self.borders, align: None, v_align: extra.v_align }
-            }
+            TablePart::WholeTable => PartFormat {
+                chr: CharProps::default(),
+                fill: self.fill,
+                borders: self.borders,
+                align: None,
+                v_align: extra.v_align,
+                fit_text: extra.fit_text,
+            },
             TablePart::FirstRow => named(&self.header_chr, self.header_fill, self.header_borders),
             TablePart::LastRow => {
                 // The built-in top rule is the region's top edge unless its borders set one.
@@ -345,13 +354,13 @@ impl TableStyleParts {
     /// Replace part `p`'s formatting (for the whole table only its fill, borders and vertical
     /// alignment: [`Style::set_table_part`] stores the rest).
     pub fn set_part(&mut self, p: TablePart, f: PartFormat) {
-        let align_only = PartFormat { align: f.align, v_align: f.v_align, ..PartFormat::default() };
+        let align_only = PartFormat { align: f.align, v_align: f.v_align, fit_text: f.fit_text, ..PartFormat::default() };
         let PartFormat { chr, fill, borders, .. } = f.clone();
         let rest = match p {
             TablePart::WholeTable => {
                 self.fill = fill;
                 self.borders = borders;
-                PartFormat { v_align: f.v_align, ..PartFormat::default() }
+                PartFormat { v_align: f.v_align, fit_text: f.fit_text, ..PartFormat::default() }
             }
             TablePart::FirstRow => {
                 (self.header_chr, self.header_fill, self.header_borders) = (chr, fill, borders);

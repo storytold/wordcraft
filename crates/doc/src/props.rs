@@ -28,7 +28,8 @@ pub use char_props::{
 pub use color::{Rgb, TextColor};
 pub use para_props::{Align, Border, BorderStyle, Borders, LineSpacing, NumRef, ParaProps, TAB_POS_EPS, TabAlign, TabLeader, TabStop, TextFrame};
 pub use table_props::{
-    CellProps, HeightRule, RowProps, TableFloat, TableLook, TableProps, TextDirection, TextVert, VAlign, VMerge, anchor_ooxml, valign_from_anchor,
+    CellProps, CellSpacing, CellSpacingKind, HeightRule, RowProps, TableFloat, TableLook, TableProps, TextDirection, TextVert, VAlign, VMerge,
+    anchor_ooxml, valign_from_anchor,
 };
 
 #[cfg(test)]

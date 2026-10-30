@@ -217,6 +217,7 @@ impl Reader<'_> {
                     "bottom" => VAlign::Bottom,
                     _ => VAlign::Top,
                 }),
+                fit_text: tc.and_then(|p| props::tcpr(&self.pc, p).0.fit_text),
             };
             if part == TablePart::WholeTable {
                 // The whole table's paragraph and run properties are the style's own; its
@@ -231,8 +232,8 @@ impl Reader<'_> {
                 if let Some(b) = c.child("w:tblPr").and_then(|p| p.child("w:tblBorders")) {
                     t.borders = Some(props::borders(b));
                 }
-                if f.v_align.is_some() {
-                    t.regions.insert(part, PartFormat { v_align: f.v_align, ..PartFormat::default() });
+                if f.v_align.is_some() || f.fit_text.is_some() {
+                    t.regions.insert(part, PartFormat { v_align: f.v_align, fit_text: f.fit_text, ..PartFormat::default() });
                 }
             } else {
                 t.set_part(part, f);

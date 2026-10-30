@@ -660,6 +660,28 @@ fn table_style_whole_table_shading_and_margins() {
     assert_eq!(merged.parts.cell_margins, Some([1.0, 14.4, 0.0, 14.4]), "from Base");
 }
 
+#[test]
+fn cell_fit_text_survives_table_style_and_direct_properties() {
+    let styles = format!(
+        r#"<w:styles {W_NS}><w:style w:type="table" w:styleId="Fit"><w:name w:val="Fit"/><w:tblStylePr w:type="firstRow"><w:tcPr><w:tcFitText/></w:tcPr></w:tblStylePr><w:tblStylePr w:type="band1Horz"><w:tcPr><w:tcFitText w:val="0"/></w:tcPr></w:tblStylePr></w:style></w:styles>"#
+    );
+    let body = r#"<w:tbl><w:tblPr><w:tblStyle w:val="Fit"/></w:tblPr><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcFitText w:val="0"/></w:tcPr><w:p/></w:tc><w:tc><w:tcPr/><w:p/></w:tc></w:tr></w:tbl><w:p/>"#;
+    let mut bytes =
+        wordcraft_docx::write(&wordcraft_docx::read(&docx(body, &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &styles)])).unwrap())
+            .unwrap();
+    for _ in 0..2 {
+        let d = wordcraft_docx::read(&bytes).unwrap();
+        let table = d.body.iter().find_map(|b| b.as_table()).unwrap();
+        assert_eq!(table.rows[0].cells[0].props.fit_text, Some(false));
+        assert_eq!(table.rows[0].cells[1].props.fit_text, None);
+        let style = d.styles.get("Fit").unwrap().table.as_ref().unwrap();
+        assert_eq!(style.part(wordcraft_doc::styles::TablePart::FirstRow).fit_text, Some(true));
+        assert_eq!(style.part(wordcraft_doc::styles::TablePart::Band1Horz).fit_text, Some(false));
+        assert!(serde_json::to_string(&d).unwrap().contains("fitText"));
+        bytes = wordcraft_docx::write(&d).unwrap();
+    }
+}
+
 fn gallery_ids(styles: &str) -> Vec<String> {
     let bytes = docx("<w:p/>", &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", styles)]);
     let d = wordcraft_docx::read(&bytes).unwrap();

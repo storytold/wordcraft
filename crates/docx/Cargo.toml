@@ -34,4 +34,5 @@ getrandom = { workspace = true, features = ["wasm_js"] }
 wordcraft-doc = { workspace = true, features = ["test-support"] }
 proptest = { workspace = true }
 image = { workspace = true }
+serde_json = { workspace = true }
 zip = { workspace = true }

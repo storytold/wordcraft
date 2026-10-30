@@ -192,6 +192,7 @@ fn every_para_prop_round_trips() {
         borders: Some(Borders { top: Some(b), left: Some(Border::single(0.5)), bottom: Some(b), right: None, between: Some(b), inside_v: None }),
         suppress_hyphens: Some(true),
         suppress_line_numbers: Some(true),
+        suppress_overlap: Some(false),
         bidi: Some(false),
         drop_cap: None,
         drop_cap_margin: None,
@@ -617,6 +618,7 @@ fn every_table_style_part_round_trips() {
             }),
             align: aligns.get(i % 3).copied(),
             v_align: valigns.get(i % 3).copied(),
+            fit_text: (i % 2 == 0).then_some(i % 3 != 0),
         };
         st.set_table_part(part, f);
     }

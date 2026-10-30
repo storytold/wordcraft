@@ -25,6 +25,47 @@ pub enum TextDirection {
     Up,
 }
 
+/// Width and measurement type of table cell spacing (`w:tblCellSpacing`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CellSpacing {
+    /// The OOXML width value (twips for `dxa`, fiftieths of a percent for `pct`).
+    pub width: u32,
+    /// The OOXML width measurement.
+    pub kind: CellSpacingKind,
+}
+
+/// Supported `w:tblCellSpacing/@w:type` values.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CellSpacingKind {
+    Dxa,
+    Pct,
+    Auto,
+    Nil,
+}
+
+impl CellSpacingKind {
+    pub fn from_ooxml(value: &str) -> Option<Self> {
+        match value {
+            "dxa" => Some(Self::Dxa),
+            "pct" => Some(Self::Pct),
+            "auto" => Some(Self::Auto),
+            "nil" => Some(Self::Nil),
+            _ => None,
+        }
+    }
+
+    pub fn ooxml(self) -> &'static str {
+        match self {
+            Self::Dxa => "dxa",
+            Self::Pct => "pct",
+            Self::Auto => "auto",
+            Self::Nil => "nil",
+        }
+    }
+}
+
 impl TextDirection {
     /// The direction an OOXML `ST_TextDirection` value names (transitional and strict names).
     /// The East Asian vertical layouts turn like `Down`; unknown values are horizontal.
@@ -136,6 +177,9 @@ pub struct TableProps {
     pub borders: Option<Borders>,
     /// Default cell margins (top, left, bottom, right), points.
     pub cell_margins: Option<[f32; 4]>,
+    /// Spacing between table cells (`w:tblCellSpacing`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cell_spacing: Option<CellSpacing>,
     /// Fixed column widths (no auto-fit).
     pub fixed: bool,
     /// Table style options ("look"): header row, total row, banded rows, first column, last
@@ -287,6 +331,9 @@ pub struct CellProps {
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub text_direction_set: bool,
     pub no_wrap: bool,
+    /// Fit text in the cell by condensing it (`w:tcFitText`); unset inherits.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fit_text: Option<bool>,
     /// The cell's last paragraph takes no room when it is empty (`w:hideMark`): a row of such
     /// empty cells shrinks to its borders.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
