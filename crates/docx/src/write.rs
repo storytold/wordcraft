@@ -1,6 +1,7 @@
 //! [`Document`] → DOCX.
 
 mod bidi;
+mod complex_script;
 mod embed;
 mod glossary;
 mod settings_merge;
