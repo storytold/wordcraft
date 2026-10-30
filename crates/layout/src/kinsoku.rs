@@ -8,6 +8,8 @@
 //! - Word wrap off: Latin words may break at any character.
 //! - Automatic spacing (`autoSpaceDE`, `autoSpaceDN`): which neighbouring characters get room
 //!   between Asian text and Latin text or digits ([`auto_space`]).
+//! - Punctuation compression (`w:characterSpacingControl`): which neighbouring punctuation marks
+//!   share one blank half ([`compresses`]).
 //!
 //! Only East Asian characters are in the lists, and the extra breaks need letters on both sides,
 //! so text with no East Asian characters breaks exactly as before unless word wrap is off.
@@ -23,6 +25,39 @@ const NO_START: &str = "、。，．・：；？！゛゜ヽヾゝゞ々〻〉�
 /// East Asian characters a line may not end with: opening brackets and quotes (the curly “ ‘
 /// too, as for [`NO_START`]), currency signs.
 const NO_END: &str = "〈《「『【〔〖〘〚〝（［｛｟｢＄￡￥“‘﹙﹛";
+
+/// Full-width opening brackets and quotes: ink on the right half of the em, the left half blank.
+const OPENING: &str = "（〔［｛〈《「『【〘〖〚〝｟“‘";
+
+/// Full-width closing brackets and quotes, and the comma and full stop: ink on the left half of
+/// the em, the right half blank (Japanese, and Simplified Chinese, W3C clreq §3.1.6). Colons,
+/// semicolons and question and exclamation marks are left out: they sit centred in Japanese
+/// fonts.
+const CLOSING: &str = "）〕］｝〉》」』】〙〗〛〞〟｠”’、。，．";
+
+/// Which mark gives up the blank half of its em when East Asian punctuation is compressed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Compress {
+    /// The first mark's trailing blank half.
+    First,
+    /// The second mark's leading blank half.
+    Second,
+}
+
+/// Whether punctuation compression (`compressPunctuation`) closes up `a` and the `b` right
+/// after it, and whose blank half goes: only one blank half stays between two marks whose blank
+/// halves meet or stand between their ink (`”“` `。”` `）、` `《“`), as JIS X 4051 and W3C clreq
+/// set them. The caller checks that the mark is full-width in its font.
+pub fn compresses(a: char, b: char) -> Option<Compress> {
+    let (open_b, close_b) = (OPENING.contains(b), CLOSING.contains(b));
+    if CLOSING.contains(a) && (open_b || close_b) {
+        Some(Compress::First)
+    } else if OPENING.contains(a) && open_b {
+        Some(Compress::Second)
+    } else {
+        None
+    }
+}
 
 /// Whether `c` is East Asian text: CJK ideographs, kana, bopomofo, CJK punctuation, and
 /// fullwidth/halfwidth forms (not spaces, not combining sound marks).
@@ -115,7 +150,18 @@ fn is_hangul(c: char) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{AsianSide, apply, auto_space};
+    use super::{AsianSide, Compress, apply, auto_space, compresses};
+
+    #[test]
+    fn compression_pairs() {
+        for (a, b) in [('”', '“'), ('。', '”'), ('）', '、'), ('，', '《'), ('」', '。')] {
+            assert_eq!(compresses(a, b), Some(Compress::First), "{a}{b}");
+        }
+        assert_eq!(compresses('《', '“'), Some(Compress::Second));
+        for (a, b) in [('（', '）'), ('“', '好'), ('好', '”'), ('：', '“'), ('"', '('), ('A', '。')] {
+            assert_eq!(compresses(a, b), None, "{a}{b}");
+        }
+    }
 
     #[test]
     fn auto_space_pairs() {

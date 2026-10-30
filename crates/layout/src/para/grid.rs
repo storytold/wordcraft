@@ -73,21 +73,24 @@ pub(super) fn snap_chars(b: &mut Builder, text: &str, grid: &Grid) {
     }
 }
 
-/// Automatic spacing (`w:autoSpaceDE`, `w:autoSpaceDN`): a quarter of the Asian character's font
-/// size between Asian text and Latin text or digits that touch, across runs. Measured on Word's
-/// PDF of a Chinese document at 16 pt (#2358), as JIS X 4051 asks. A field or note number is
-/// classed by the text it shows. The room goes after the first of the two characters; returns it
-/// by cluster index.
-pub(super) fn auto_space(b: &mut Builder, text: &str, de: bool, dn: bool) -> Vec<(usize, f32)> {
+/// One side of two text clusters that touch: the cluster's index, the character at the touching
+/// side, its font size, and whether the cluster is that one character.
+#[derive(Clone, Copy)]
+struct Side {
+    k: usize,
+    ch: char,
+    size: f32,
+    single: bool,
+}
+
+/// The pairs of text clusters that touch, across runs: the first's last character and the
+/// second's first. A field or note number is classed by the text it shows; any other cluster
+/// (a space, tab, object or break) separates them.
+fn touching(b: &Builder, text: &str) -> Vec<(Side, Side)> {
     let mut out = Vec::new();
-    if !de && !dn {
-        return out;
-    }
     let mut shown = b.shown.iter().map(|s| (s.0, s.1.as_str())).peekable();
-    // The previous text cluster: index, its last character, its font size.
-    let mut prev: Option<(usize, char, f32)> = None;
-    for k in 0..b.clusters.len() {
-        let Some(c) = b.clusters.get(k) else { break };
+    let mut prev: Option<Side> = None;
+    for (k, c) in b.clusters.iter().enumerate() {
         match c.kind {
             ClKind::Text => {}
             ClKind::Marker if c.adv == 0.0 => continue,
@@ -105,20 +108,55 @@ pub(super) fn auto_space(b: &mut Builder, text: &str, de: bool, dn: bool) -> Vec
             prev = None;
             continue;
         };
+        let single = s.chars().nth(1).is_none();
         let size = b.styles.get(c.style as usize).map_or(0.0, |st| st.size);
-        if let Some((pk, pc, psize)) = prev
-            && let Some(side) = crate::kinsoku::auto_space(pc, first, de, dn)
-        {
-            let asian = if side == crate::kinsoku::AsianSide::Left { psize } else { size };
-            let gap = if asian.is_finite() { (asian / 4.0).clamp(0.0, 400.0) } else { 0.0 };
-            if let Some(pc) = b.clusters.get_mut(pk) {
-                pc.adv += gap;
-                out.push((pk, gap));
-            }
+        if let Some(p) = prev {
+            out.push((p, Side { k, ch: first, size, single }));
         }
-        prev = Some((k, last, size));
+        prev = Some(Side { k, ch: last, size, single });
     }
     out
+}
+
+/// Automatic spacing (`w:autoSpaceDE`, `w:autoSpaceDN`): a quarter of the Asian character's font
+/// size between Asian text and Latin text or digits that touch, across runs. Measured on Word's
+/// PDF of a Chinese document at 16 pt (#2358), as JIS X 4051 asks. A field or note number is
+/// classed by the text it shows. The room goes after the first of the two characters; returns it
+/// by cluster index.
+pub(super) fn auto_space(b: &mut Builder, text: &str, de: bool, dn: bool) -> Vec<(usize, f32)> {
+    let mut out = Vec::new();
+    if !de && !dn {
+        return out;
+    }
+    for (p, n) in touching(b, text) {
+        let Some(side) = crate::kinsoku::auto_space(p.ch, n.ch, de, dn) else { continue };
+        let asian = if side == crate::kinsoku::AsianSide::Left { p.size } else { n.size };
+        let gap = if asian.is_finite() { (asian / 4.0).clamp(0.0, 400.0) } else { 0.0 };
+        if let Some(pc) = b.clusters.get_mut(p.k) {
+            pc.adv += gap;
+            out.push((p.k, gap));
+        }
+    }
+    out
+}
+
+/// Punctuation compression (`w:characterSpacingControl` other than `doNotCompress`): where two
+/// full-width East Asian punctuation marks touch with blank halves between their ink, one blank
+/// half goes ([`crate::kinsoku::compresses`]), half the em of the mark that gives it up. The
+/// first cluster's advance shrinks, so the second and everything after move closer. A mark is
+/// full-width when its advance is at least 0.9 em; a proportional (Latin) quote keeps its width.
+pub(super) fn compress_punct(b: &mut Builder, text: &str) {
+    for (p, n) in touching(b, text) {
+        let Some(who) = crate::kinsoku::compresses(p.ch, n.ch) else { continue };
+        let mark = if who == crate::kinsoku::Compress::First { p } else { n };
+        let adv = b.clusters.get(mark.k).map_or(0.0, |c| c.adv);
+        if !mark.single || !mark.size.is_finite() || mark.size <= 0.0 || adv < 0.9 * mark.size {
+            continue;
+        }
+        if let Some(pc) = b.clusters.get_mut(p.k) {
+            pc.adv = (pc.adv - (mark.size / 2.0).min(400.0)).max(0.0);
+        }
+    }
 }
 
 /// An area text wraps around.

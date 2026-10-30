@@ -1,7 +1,7 @@
 use super::bidi::{Dir, bidi_levels, visual_order};
 use super::builder::{Builder, left_out, overstrike};
 use super::chars::caps_char;
-use super::grid::{auto_space, snap_chars};
+use super::grid::{auto_space, compress_punct, snap_chars};
 use super::justify::hyphenation_points;
 use super::lines::break_lines;
 use super::model::{ClKind, Cluster, Enclosed, Glyph, Label, LabelRun, ParaEnv, RubyLayout, undrawable_bullet};
@@ -569,8 +569,11 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         snap_chars(&mut sh.b, &p.text, &env.grid);
     }
     // Text on a character grid keeps to its cells.
-    let auto_space =
-        if rp.snap_to_grid && env.grid.chars.is_some() { Vec::new() } else { auto_space(&mut sh.b, &p.text, rp.auto_space_de, rp.auto_space_dn) };
+    let on_grid = rp.snap_to_grid && env.grid.chars.is_some();
+    if !on_grid && doc.settings.char_spacing.compresses_punctuation() {
+        compress_punct(&mut sh.b, &p.text);
+    }
+    let auto_space = if on_grid { Vec::new() } else { auto_space(&mut sh.b, &p.text, rp.auto_space_de, rp.auto_space_dn) };
     let mut skip = sh.left.clone();
     skip.extend(sh.bare.iter().cloned());
     let bt = BreakText::new(&p.text, skip);
