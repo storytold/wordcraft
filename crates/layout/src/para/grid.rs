@@ -35,13 +35,9 @@ impl Grid {
     /// glyphs into one, which is why titles usually turn `snapToGrid` off).
     pub fn cells(&self, size: f32) -> f32 {
         let base = self.font_size.max(1.0);
-        if size.is_finite() { (size / base - 0.01).ceil().clamp(1.0, 64.0) } else { 1.0 }
-    }
-    /// The width of one character, points, for indents given in characters (`w:firstLineChars`
-    /// and friends) in a paragraph whose mark is `size` points: whole grid cells on a character
-    /// grid, `None` without one (the font size is the unit then).
-    pub fn char_unit(&self, size: f32) -> Option<f32> {
-        self.chars.map(|pitch| self.cells(size) * pitch)
+        // The tolerance only absorbs rounding in the size (16.000001 pt on a 16 pt grid); 54.5 pt
+        // on a 54 pt grid takes two cells.
+        if size.is_finite() { (size / base - 1e-4).ceil().clamp(1.0, 64.0) } else { 1.0 }
     }
     /// `h` rounded up to whole line pitches (unchanged without a line grid).
     pub fn snap_height(&self, h: f32) -> f32 {

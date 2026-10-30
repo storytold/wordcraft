@@ -100,7 +100,7 @@ fn character_indents_count_grid_cells() {
     // `w:firstLineChars="200"` on a character grid is two cells, not two font sizes: on a pitch
     // under the font size the first line must not lose a character to the indent.
     let text = "中".repeat(400);
-    let (mut d, _, pitch) = tight_grid(&text);
+    let (mut d, size, pitch) = tight_grid(&text);
     if let Some(Block::Para(p)) = d.body.first_mut().map(std::sync::Arc::make_mut) {
         p.props.indent_first_chars = Some(2.0);
     }
@@ -115,7 +115,19 @@ fn character_indents_count_grid_cells() {
         p.props.snap_to_grid = Some(false);
     }
     let g = first_para(&lay(&off));
-    assert!(((g.lines[0].xs[0] - g.lines[1].xs[0]) - 2.0 * pitch).abs() > 0.1);
+    let indent = g.lines[0].xs[0] - g.lines[1].xs[0];
+    assert!((indent - 2.0 * size).abs() < 0.01, "indent {indent} for size {size}");
+}
+
+#[test]
+fn grid_cells_round_up_only_past_a_whole_cell() {
+    let grid = |font_size: f32| para::Grid { line: None, chars: Some(font_size), font_size, snap_all: false };
+    assert_eq!(grid(16.0).cells(16.0), 1.0);
+    assert_eq!(grid(16.0).cells(16.000_001), 1.0, "rounding noise");
+    assert_eq!(grid(16.0).cells(12.0), 1.0);
+    assert_eq!(grid(16.0).cells(22.0), 2.0);
+    assert_eq!(grid(54.0).cells(54.5), 2.0, "half a point past the cell");
+    assert_eq!(grid(16.0).cells(f32::NAN), 1.0);
 }
 
 #[test]
