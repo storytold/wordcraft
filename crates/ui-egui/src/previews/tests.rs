@@ -122,6 +122,7 @@ fn a_right_to_left_style_previews_its_sample_text() {
             _ => None,
         })
         .expect("the preview is painted");
+    assert!(u0 > 0.0 && (u1 - 1.0).abs() < 1e-3, "the tile shows uv {u0}..{u1}, not the picture's right end");
     let shown = ((u0 * w as f32) as usize).min(w)..((u1 * w as f32).ceil() as usize).min(w);
     let ink = inked.get(shown.clone()).map_or(0, |c| c.iter().filter(|&&i| i).count());
     assert!(ink > 20, "the tile shows columns {shown:?} of the preview, which have {ink} inked columns");
