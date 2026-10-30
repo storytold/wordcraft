@@ -3798,10 +3798,7 @@ fn a_nested_cell_cut_by_the_page_bottom_keeps_its_rest() {
     assert_eq!(Some(lines), total);
 }
 
-/// A row of a minimum ("at least") height taller than its text that splits across pages keeps
-/// its height over them: the continuation holds the rest of the row, not just the rest of the
-/// text (no public Word reference crosses a page with such a row; this keeps the earlier
-/// behaviour).
+/// A minimum taller than a page retains its aggregate height across fragments.
 #[test]
 fn a_split_at_least_row_keeps_its_height() {
     let mut d = Document::from_text("Filler");
@@ -3836,6 +3833,7 @@ fn split_row_rejects_a_hostile_cut() {
     };
     let line = |y: f32| Placed::Lines { story, path: path.clone(), para: para.clone(), l0: 0, l1: 1, x: 0.0, y, turn: TextDirection::Horizontal };
     let row = |height: f32, bottom: f32| RowLayout {
+        min_height: 0.0,
         edge: 0.0,
         height,
         items: vec![line(0.0), line(150.0)],
@@ -6958,6 +6956,7 @@ fn a_split_row_moves_shading_below_the_cut_with_it() {
     let fill = |y: f32, h: f32| Placed::Fill { rect: wordcraft_geom::Rect::new(0.0, y, 100.0, h), color: wordcraft_doc::props::Rgb(200, 0, 0) };
     // The row's own shading (from its top) and a nested cell's shading starting below the cut.
     let row = RowLayout {
+        min_height: 0.0,
         edge: 0.0,
         height: 200.0,
         items: vec![line_row(0.0), line_row(150.0), fill(0.0, 200.0), fill(150.0, 50.0)],
@@ -6968,7 +6967,8 @@ fn a_split_row_moves_shading_below_the_cut_with_it() {
     let fills = |r: &RowLayout| {
         r.items.iter().filter_map(|i| if let Placed::Fill { rect, .. } = i { Some((rect.y, rect.h)) } else { None }).collect::<Vec<_>>()
     };
-    assert_eq!(fills(&a), vec![(0.0, 100.0)], "only the row's shading above the cut stays");
+    assert!(a.height < 100.0, "the first fragment ends with its fitted content");
+    assert_eq!(fills(&a), vec![(0.0, a.height)], "shading covers the first fragment");
     let moved = fills(&b);
     assert_eq!(moved.first().map(|f| f.0), Some(0.0), "the row's shading starts the continuation: {moved:?}");
     let nested = moved.get(1).copied().unwrap_or_default();
@@ -10215,6 +10215,7 @@ fn split_cell_moves_image_frame() {
         kept.translate(0.0, top - 150.0);
         let row = RowLayout {
             height: 200.0,
+            min_height: 0.0,
             bottom: 4.0,
             edge: 0.0,
             items: vec![kept, image, frame],
@@ -11702,6 +11703,492 @@ fn a_row_leaves_room_for_the_border_below_it() {
                 .filter_map(|it| if let Placed::Cell { rect, .. } = it { Some(rect.bottom()) } else { None })
                 .fold(0.0f32, f32::max);
             assert!(end + border <= bottom + 0.02, "border {border}, {fill} filler lines: the last row ends at {end}, the margin at {bottom}");
+        }
+    }
+}
+
+/// Word retains an at-least row height on its continuation, even when few lines remain.
+#[test]
+fn split_row_retains_minimum() {
+    use wordcraft_doc::props::{HeightRule, LineSpacing};
+    let mut d = Document::new();
+    d.last_section.page_h = 360.0;
+    d.last_section.margin_top = 36.0;
+    d.last_section.margin_bottom = 36.0;
+    let mut t = Table::new(2, 1, 400.0);
+    t.rows[0].props.height = Some(200.0);
+    t.rows[0].props.height_rule = HeightRule::AtLeast;
+    let mut p = wordcraft_doc::Paragraph::with_text(&["Line"; 35].join("\n"), Default::default());
+    p.props.line_spacing = Some(LineSpacing::Exactly(10.0));
+    p.props.space_before = Some(0.0);
+    p.props.space_after = Some(0.0);
+    p.props.widow_control = Some(false);
+    t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(p)];
+    t.rows[1].props.height = Some(100.0);
+    t.rows[1].props.height_rule = HeightRule::AtLeast;
+    d.body = vec![std::sync::Arc::new(Block::Table(t))];
+    let l = lay(&d);
+    assert_eq!(l.pages.len(), 3, "the continuation keeps its minimum, leaving too little room for the next row");
+    let continuation = l.pages[1]
+        .items
+        .iter()
+        .find_map(|it| match it {
+            Placed::Cell { rect, row: 0, .. } => Some(*rect),
+            _ => None,
+        })
+        .unwrap();
+    // The default top border adds 0.5pt to the specified minimum.
+    assert!((continuation.h - 200.5).abs() < 0.05, "{continuation:?}");
+    let next = l.pages.iter().position(|page| page.items.iter().any(|it| matches!(it, Placed::Cell { row: 1, .. })));
+    assert_eq!(next, Some(2));
+}
+
+// These geometry controls add no new native Word comparison.
+#[test]
+fn minimum_insets_move_rows() {
+    use wordcraft_doc::props::{HeightRule, LineSpacing};
+    let body = 648.0;
+    for (minimum, inset, room, count, start) in [
+        (Some(200.0), 0.0, 205.0, 35, 0),
+        (Some(200.0), 10.0, 205.0, 35, 1),
+        (None, 10.0, 205.0, 35, 0),
+        (Some(200.0), 10.0, 225.0, 35, 0),
+        (Some(640.0), 10.0, 645.0, 80, 1),
+        (Some(640.0), 10.0, body, 80, 0),
+    ] {
+        let plain = ParaProps {
+            line_spacing: Some(LineSpacing::Exactly(10.0)),
+            space_before: Some(0.0),
+            space_after: Some(0.0),
+            widow_control: Some(false),
+            keep_lines: Some(false),
+            keep_next: Some(false),
+            ..Default::default()
+        };
+        let mut d = Document::from_text("Filler");
+        d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().props =
+            ParaProps { line_spacing: Some(LineSpacing::Exactly(body - room)), ..plain.clone() };
+        let mut table = Table::new(1, 1, 400.0);
+        table.props.style = None;
+        table.props.cell_margins = Some([inset, 0.0, inset, 0.0]);
+        table.rows[0].props.height = minimum;
+        table.rows[0].props.height_rule = HeightRule::AtLeast;
+        let mut p = Paragraph::with_text(&vec!["Line"; count].join("\n"), Default::default());
+        p.props = plain;
+        table.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(p)];
+        if room == body {
+            d.body.clear();
+        }
+        d.body.push(Arc::new(Block::Table(table)));
+        let l = lay(&d);
+        let parts: Vec<_> = l
+            .pages
+            .iter()
+            .enumerate()
+            .flat_map(|(page, p)| {
+                p.items.iter().filter_map(move |it| match it {
+                    Placed::Cell { row: 0, rect, .. } => Some((page, *rect)),
+                    _ => None,
+                })
+            })
+            .collect();
+        assert_eq!(parts.first().map(|p| p.0), Some(start), "minimum={minimum:?}, inset={inset}, room={room}: {parts:?}");
+        assert!(l.pages.len() <= 4, "pagination must finish: {parts:?}");
+        assert!(parts.iter().all(|(_, r)| r.bottom() <= 720.01), "parts stay in the body: {parts:?}");
+        let lines: Vec<usize> = l
+            .pages
+            .iter()
+            .flat_map(|p| &p.items)
+            .flat_map(|it| match it {
+                Placed::Lines { path, l0, l1, .. } if path.0.len() == 4 => *l0..*l1,
+                _ => 0..0,
+            })
+            .collect();
+        assert_eq!(lines, (0..count).collect::<Vec<_>>(), "every row line survives once and in order");
+        if let Some(minimum) = minimum.filter(|m| m + 2.0 * inset <= body) {
+            let floor = minimum + 2.0 * inset;
+            assert!(parts.iter().skip(1).all(|(_, r)| r.h >= floor - 0.01), "continuations retain {floor}: {parts:?}");
+        }
+    }
+}
+
+#[test]
+fn split_border_follows_content() {
+    use wordcraft_doc::props::{HeightRule, LineSpacing};
+    let mut d = Document::new();
+    d.last_section.page_h = 360.0;
+    d.last_section.margin_top = 36.0;
+    d.last_section.margin_bottom = 36.0;
+    let mut t = Table::new(2, 1, 300.0);
+    t.rows[0].props.height = Some(200.0);
+    t.rows[0].props.height_rule = HeightRule::AtLeast;
+    let mut p = wordcraft_doc::Paragraph::with_text(&["Line"; 35].join("\n"), Default::default());
+    p.props.line_spacing = Some(LineSpacing::Exactly(10.0));
+    p.props.space_before = Some(0.0);
+    p.props.space_after = Some(0.0);
+    p.props.widow_control = Some(false);
+    t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(p)];
+    t.rows[1].props.height = Some(100.0);
+    t.rows[1].props.height_rule = HeightRule::AtLeast;
+    d.body = vec![std::sync::Arc::new(Block::Table(t))];
+    let l = lay(&d);
+    let first = l.pages[0]
+        .items
+        .iter()
+        .find_map(|it| match it {
+            Placed::Cell { rect, row: 0, .. } => Some(*rect),
+            _ => None,
+        })
+        .unwrap();
+    // Word closes after the28 fitting10pt lines and existing top border.
+    assert!((first.h - 280.5).abs() < 0.05, "{first:?}");
+    assert_eq!(l.pages.len(), 3);
+}
+
+#[test]
+fn split_frame_keeps_flow_bottom() {
+    use crate::table::{CellPart, RowLayout, split_row};
+    use wordcraft_doc::para::Wrap;
+    use wordcraft_doc::props::Rgb;
+    const CUT: f32 = 100.0;
+    const BOTTOM: f32 = 4.0;
+    const FLOW_BOTTOM: f32 = 20.0;
+    const FRAME_BOTTOM: f32 = 80.0;
+    let frame = Rect::new(5.0, 40.0, 20.0, FRAME_BOTTOM - 40.0);
+    let image = |y| Placed::Image {
+        rect: Rect::new(5.0, y, 20.0, 10.0),
+        media: "synthetic".into(),
+        crop: [0.1, 0.2, 0.3, 0.4],
+        story: StoryRef::Body,
+        path: Path::top(0),
+        off: if y < CUT { 3 } else { 6 },
+        spin: Default::default(),
+    };
+    for wrap in [Wrap::BehindText, Wrap::InFrontOfText, Wrap::Square, Wrap::Tight, Wrap::Through, Wrap::TopAndBottom, Wrap::Inline] {
+        for min_height in [0.0, 90.0] {
+            let rect = Rect::new(0.0, 0.0, 100.0, 200.0);
+            let border = Border { width: BOTTOM, style: BorderStyle::Single, ..Default::default() };
+            let items = vec![
+                image(FLOW_BOTTOM - 10.0),
+                image(150.0),
+                Placed::Object {
+                    rect: frame,
+                    spin: Default::default(),
+                    story: StoryRef::Body,
+                    path: Path::top(0),
+                    off: 0,
+                    text_box: None,
+                    wrap,
+                    origin: wordcraft_geom::Point::new(3.0, 35.0),
+                },
+                Placed::Fill { rect, color: Rgb(200, 0, 0) },
+                Placed::Cell { rect, covered: false, table: Path::top(0), row: 0, cell: 0, story: StoryRef::Body, clip: false },
+                Placed::Rule { x0: 0.0, y0: 200.0, x1: 100.0, y1: 200.0, border },
+                Placed::Rule { x0: 0.0, y0: 0.0, x1: 0.0, y1: 200.0, border },
+            ];
+            let row = RowLayout {
+                min_height,
+                edge: 0.0,
+                height: 200.0,
+                bottom: BOTTOM,
+                cells: vec![CellPart { top: 2.0, items: 0..items.len(), end: Some(160.0) }],
+                items,
+            };
+            let (first, rest) = split_row(&row, CUT).unwrap();
+            let content_bottom = if wrap == Wrap::BehindText { FLOW_BOTTOM } else { FRAME_BOTTOM };
+            let expected = (content_bottom + BOTTOM).max(min_height);
+            assert!((first.height - expected).abs() < 0.01, "{wrap:?}, minimum {min_height}: {} vs {expected}", first.height);
+            let frames: Vec<_> = first
+                .items
+                .iter()
+                .chain(&rest.items)
+                .filter_map(|it| match it {
+                    Placed::Object { rect, origin, wrap: actual, .. } => Some((*rect, *origin, *actual)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(frames, vec![(frame, wordcraft_geom::Point::new(3.0, 35.0), wrap)], "frame geometry and identity survive once");
+            assert!(first.items.iter().any(|it| matches!(it, Placed::Object { .. })), "the fitting frame stays in the first fragment");
+            let cells: Vec<_> = first
+                .items
+                .iter()
+                .filter_map(|it| match it {
+                    Placed::Cell { rect, .. } => Some(*rect),
+                    _ => None,
+                })
+                .collect();
+            let fills: Vec<_> = first
+                .items
+                .iter()
+                .filter_map(|it| match it {
+                    Placed::Fill { rect, .. } => Some(*rect),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(cells, vec![Rect::new(0.0, 0.0, 100.0, expected)]);
+            assert_eq!(fills, cells, "shading exactly covers the retained cell");
+            assert_eq!(first.items.iter().filter(|it| matches!(it, Placed::Rule { .. })).count(), 2);
+            for item in &first.items {
+                match item {
+                    Placed::Cell { rect, clip, .. } => {
+                        assert!(!clip);
+                        assert!((rect.bottom() - expected).abs() < 0.01, "cell {rect:?}");
+                    }
+                    Placed::Fill { rect, .. } => assert!((rect.bottom() - expected).abs() < 0.01, "fill {rect:?}"),
+                    Placed::Rule { x0, y0, x1, y1, .. } if x0 != x1 => {
+                        assert!((*y0 - expected).abs() < 0.01 && (*y1 - expected).abs() < 0.01, "closing rule {item:?}");
+                    }
+                    _ => {}
+                }
+            }
+            let images = |part: &RowLayout| {
+                part.items
+                    .iter()
+                    .filter_map(|it| match it {
+                        Placed::Image { rect, crop, media, .. } => Some((*rect, *crop, media.clone())),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(images(&first), vec![(Rect::new(5.0, 10.0, 20.0, 10.0), [0.1, 0.2, 0.3, 0.4], String::from("synthetic"))]);
+            assert_eq!(images(&rest), vec![(Rect::new(5.0, 2.0, 20.0, 10.0), [0.1, 0.2, 0.3, 0.4], String::from("synthetic"))]);
+        }
+    }
+}
+
+mod behind_owner {
+    use super::*;
+    use wordcraft_doc::para::{Anchor, CanvasStyle, Float, GroupChild, Wrap};
+    use wordcraft_doc::props::LineSpacing;
+
+    #[derive(Clone, Copy, Debug)]
+    enum Kind {
+        Image,
+        Shape,
+        Graphic,
+        Canvas,
+    }
+
+    fn frame_model(kind: Kind, wrap: Option<Wrap>) -> DocLayout {
+        let mut doc = Document::new();
+        doc.styles.default_chr.font = Some("Source Sans 3".into());
+        doc.last_section.page_h = 140.0;
+        doc.last_section.margin_top = 20.0;
+        doc.last_section.margin_bottom = 20.0;
+        let mut table = Table::new(1, 1, 200.0);
+        let mut first = Paragraph::with_text("First", Default::default());
+        first.props = ParaProps {
+            line_spacing: Some(LineSpacing::Exactly(20.0)),
+            space_before: Some(0.0),
+            space_after: Some(0.0),
+            widow_control: Some(false),
+            ..Default::default()
+        };
+        if let Some(wrap) = wrap {
+            let float = Float { wrap, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, y: 40.0, ..Default::default() };
+            let object = match kind {
+                Kind::Image => InlineObject::Image {
+                    media: "ownership-control".into(),
+                    w: 20.0,
+                    h: 40.0,
+                    alt: String::new(),
+                    float,
+                    crop: [0.1, 0.2, 0.3, 0.4],
+                    ole: None,
+                },
+                Kind::Shape => rect_shape(20.0, 40.0, float),
+                Kind::Graphic => InlineObject::Graphic {
+                    w: 20.0,
+                    h: 40.0,
+                    alt: String::new(),
+                    float,
+                    graphic: Arc::new(wordcraft_doc::graphic::Graphic { w: 20.0, h: 40.0, ..Default::default() }),
+                },
+                Kind::Canvas => InlineObject::Group {
+                    w: 20.0,
+                    h: 40.0,
+                    float,
+                    ch_w: 20.0,
+                    ch_h: 40.0,
+                    children: vec![GroupChild { x: 0.0, y: 0.0, obj: rect_shape(20.0, 40.0, Default::default()) }],
+                    canvas: Some(CanvasStyle::default()),
+                },
+            };
+            first.insert_object(0, object, &Default::default()).unwrap();
+        }
+        let mut second = Paragraph::with_text("Second", Default::default());
+        second.props = ParaProps {
+            line_spacing: Some(LineSpacing::Exactly(10.0)),
+            space_before: Some(130.0),
+            space_after: Some(0.0),
+            widow_control: Some(false),
+            ..Default::default()
+        };
+        table.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(first), wordcraft_doc::para_block(second)];
+        doc.body = vec![Arc::new(Block::Table(table))];
+        lay(&doc)
+    }
+
+    fn cell_rects(layout: &DocLayout) -> Vec<Rect> {
+        layout
+            .pages
+            .iter()
+            .flat_map(|page| &page.items)
+            .filter_map(|item| match item {
+                Placed::Cell { rect, .. } => Some(*rect),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn assert_frame_flow(kind: Kind) {
+        let plain = frame_model(kind, None);
+        let behind = frame_model(kind, Some(Wrap::BehindText));
+        let foreground = frame_model(kind, Some(Wrap::InFrontOfText));
+        assert_eq!(plain.pages.len(), 2);
+        assert_eq!(behind.pages.len(), 2);
+        let frame = behind.pages[0]
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Placed::Object { rect, wrap: Wrap::BehindText, story, path, off, .. } => Some((*rect, *story, path, *off)),
+                _ => None,
+            })
+            .unwrap();
+        let owned = |item: &Placed| match item {
+            Placed::Image { rect, story, path, off, .. } | Placed::Graphic { rect, story, path, off, .. } => {
+                *rect == frame.0 && *story == frame.1 && path == frame.2 && *off == frame.3
+            }
+            Placed::Shape { rect, object: Some(pos), .. } => *rect == frame.0 && pos.story == frame.1 && &pos.path == frame.2 && pos.off == frame.3,
+            _ => false,
+        };
+        assert!(behind.pages[0].items.iter().any(owned), "{kind:?}: the actual drawable matches its behind-text marker");
+        if matches!(kind, Kind::Canvas) {
+            assert!(
+                behind.pages[0].items.iter().any(|item| matches!(item, Placed::Clip { rect, items, .. }
+                if *rect == frame.0 && !items.is_empty() && items.iter().all(owned))),
+                "the actual canvas clip members share the owner's identity"
+            );
+        }
+        let lines = |layout: &DocLayout| {
+            layout
+                .pages
+                .iter()
+                .enumerate()
+                .flat_map(|(page, laid)| {
+                    laid.items.iter().filter_map(move |item| match item {
+                        Placed::Lines { story: StoryRef::Body, path, l0, l1, .. } if path.0.len() == 4 => Some((page, path.0[3], *l0, *l1)),
+                        _ => None,
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(lines(&behind), vec![(0, 0, 0, 1), (1, 1, 0, 1)], "both paragraphs survive exactly once on their flow pages");
+        assert_eq!(lines(&behind), lines(&plain));
+        assert!(cell_rects(&foreground)[0].h > cell_rects(&plain)[0].h, "foreground retains the existing flow-bottom policy");
+        assert_eq!(cell_rects(&behind), cell_rects(&plain), "{kind:?}: behind-text ink must not enlarge the retained row fragment");
+    }
+
+    #[test]
+    fn image_flow() {
+        assert_frame_flow(Kind::Image);
+    }
+    #[test]
+    fn shape_flow() {
+        assert_frame_flow(Kind::Shape);
+    }
+    #[test]
+    fn graphic_flow() {
+        assert_frame_flow(Kind::Graphic);
+    }
+    #[test]
+    fn canvas_flow() {
+        assert_frame_flow(Kind::Canvas);
+    }
+    #[test]
+    fn unrelated_ink_keeps_flow() {
+        use crate::table::{CellPart, RowLayout, split_row};
+        let image = |off, y, height| Placed::Image {
+            rect: Rect::new(5.0, y, 20.0, height),
+            media: "ownership-control".into(),
+            crop: [0.0; 4],
+            story: StoryRef::Body,
+            path: Path::top(0),
+            off,
+            spin: Default::default(),
+        };
+        let shape = |object| Placed::Shape {
+            rect: Rect::new(5.0, 40.0, 20.0, 40.0),
+            kind: wordcraft_doc::para::ShapeKind::Rectangle,
+            fill: None,
+            stroke: None,
+            stroke_width: 1.0,
+            freeform: None,
+            effects: Default::default(),
+            spin: Default::default(),
+            extra: Default::default(),
+            object,
+            alt: String::new(),
+        };
+        let owner = wordcraft_doc::Pos::body(0, 0);
+        let clip = |items| Placed::Clip { rect: Rect::new(5.0, 40.0, 20.0, 40.0), spin: Default::default(), items };
+        let mut foreign_story = image(0, 40.0, 40.0);
+        if let Placed::Image { story, .. } = &mut foreign_story {
+            *story = StoryRef::Part(1);
+        }
+        let mut foreign_path = image(0, 40.0, 40.0);
+        if let Placed::Image { path, .. } = &mut foreign_path {
+            *path = Path::top(1);
+        }
+        let cases = vec![
+            ("matching", image(0, 40.0, 40.0), 24.0),
+            ("other offset", image(9, 40.0, 40.0), 84.0),
+            ("other story", foreign_story, 84.0),
+            ("other path", foreign_path, 84.0),
+            ("anonymous shape", shape(None), 84.0),
+            ("owned clip", clip(vec![shape(Some(owner.clone()))]), 24.0),
+            ("empty clip", clip(Vec::new()), 84.0),
+            ("mixed clip", clip(vec![shape(Some(owner)), shape(Some(wordcraft_doc::Pos::body(0, 3)))]), 84.0),
+        ];
+        for (case, ink, expected) in cases {
+            let rect = Rect::new(0.0, 0.0, 100.0, 200.0);
+            let items = vec![
+                image(3, 10.0, 10.0),
+                image(6, 150.0, 10.0),
+                ink,
+                Placed::Object {
+                    rect: Rect::new(5.0, 40.0, 20.0, 40.0),
+                    spin: Default::default(),
+                    story: StoryRef::Body,
+                    path: Path::top(0),
+                    off: 0,
+                    text_box: None,
+                    wrap: Wrap::BehindText,
+                    origin: Default::default(),
+                },
+                Placed::Cell { rect, covered: false, table: Path::top(0), row: 0, cell: 0, story: StoryRef::Body, clip: false },
+            ];
+            let row = RowLayout {
+                height: 200.0,
+                min_height: 0.0,
+                bottom: 4.0,
+                edge: 0.0,
+                cells: vec![CellPart { top: 2.0, items: 0..items.len(), end: Some(160.0) }],
+                items,
+            };
+            let (first, rest) = split_row(&row, 100.0).unwrap();
+            assert_eq!(first.height, expected, "{case}: only a confirmed behind-text owner suppresses ink bounds");
+            let images = |part: &RowLayout| {
+                part.items
+                    .iter()
+                    .filter_map(|item| match item {
+                        Placed::Image { rect, off: 3 | 6, .. } => Some(*rect),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(images(&first), vec![Rect::new(5.0, 10.0, 20.0, 10.0)], "{case}: unrelated fitting image survives");
+            assert_eq!(images(&rest), vec![Rect::new(5.0, 2.0, 20.0, 10.0)], "{case}: unrelated continuation image survives");
         }
     }
 }
