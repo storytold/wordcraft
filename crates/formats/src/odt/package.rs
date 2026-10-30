@@ -2,7 +2,7 @@ use super::writer::{NS, Writer, pt, x};
 use super::{Columns, Cursor, Document, FBlock, Meta, SectionProps, SectionStart, Write, model};
 
 /// `style:columns` (ODF 1.3 §17.12) of equal columns with their gap and, when on, the line between.
-fn columns_xml(c: &Columns) -> String {
+pub(super) fn columns_xml(c: &Columns) -> String {
     let sep = if c.separator { "<style:column-sep style:width=\"0.5pt\" style:style=\"solid\" style:color=\"#000000\"/>" } else { "" };
     format!("<style:columns fo:column-count=\"{}\" fo:column-gap=\"{}\">{sep}</style:columns>", c.count.clamp(1, 45), pt(c.space))
 }
@@ -97,8 +97,8 @@ fn flow_sections(blocks: &[FBlock], last: &SectionProps) -> Vec<(SectionProps, s
     out
 }
 
-/// Write an `.odt` package.
-pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
+/// Write an `.odt` package from the exchange flow of `doc`, keeping its tracked changes.
+pub(super) fn export_flow(doc: &Document) -> Result<Vec<u8>, String> {
     let flow = model::from_doc_tracked(doc);
     let mut w = Writer::default();
     let mut body = String::new();

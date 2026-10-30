@@ -843,6 +843,14 @@ fn tracked_changes_round_trip_through_export() {
 }
 
 #[test]
+fn ruby_reads_as_its_base_text() {
+    let body = "<text:p>a<text:ruby><text:ruby-base>漢字</text:ruby-base><text:ruby-text>かんじ</text:ruby-text></text:ruby>b</text:p>";
+    let doc = import(&tracked("", body)).unwrap();
+    let text: String = rev_runs(&doc).iter().flat_map(|(r, _)| r.iter().map(|(t, _)| t.clone())).collect();
+    assert_eq!(text, "a漢字b");
+}
+
+#[test]
 fn an_inserted_ruby_keeps_its_tracked_insertion() {
     // ODF has no ruby: its base text is written as text, and the insertion on the ruby must
     // still be a change range around that text, not plain untracked text.
