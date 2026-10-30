@@ -71,6 +71,8 @@ pub(crate) struct Reader<'p> {
     /// Move ranges (`w:moveFromRangeStart` …) seen so far.
     pub moves: MoveCtx,
     media_by_path: HashMap<String, String>,
+    /// Last allocated suffix for colliding basenames. Media only grows during this read.
+    media_suffixes: HashMap<String, usize>,
     hf_by_path: HashMap<String, u32>,
     /// Header/footer parts being read right now (see [`MAX_HF_DEPTH`]).
     hf_depth: usize,
@@ -154,6 +156,7 @@ pub(crate) fn read_opened(pkg: &Package) -> Result<Document, DocxError> {
         revs: HashMap::new(),
         moves: MoveCtx::default(),
         media_by_path: HashMap::new(),
+        media_suffixes: HashMap::new(),
         hf_by_path: HashMap::new(),
         hf_depth: 0,
         footnotes: HashMap::new(),

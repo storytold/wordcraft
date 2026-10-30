@@ -153,6 +153,7 @@ pub fn write_as(doc: &Document, flavor: Flavor) -> Result<Vec<u8>, DocxError> {
 impl Writer<'_> {
     fn assign_media(&mut self) {
         let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut suffixes: HashMap<String, usize> = HashMap::new();
         for (key, bytes) in &self.doc.media {
             let clean: String = key.chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')).take(80).collect();
             let has_known_ext = clean.rsplit_once('.').is_some_and(|(s, _)| !s.is_empty()) && content_type_for(&clean) != "application/octet-stream";
@@ -164,10 +165,15 @@ impl Writer<'_> {
                 format!("{stem}.{}", sniff(bytes))
             };
             let (stem, ext) = base.rsplit_once('.').map(|(s, e)| (s.to_string(), e.to_string())).unwrap_or((base.clone(), "bin".into()));
-            let mut i = 1;
+            let name = base.to_ascii_lowercase();
+            let mut i = suffixes.get(&name).copied().unwrap_or(1);
             while used.contains(&base.to_ascii_lowercase()) {
                 i += 1;
                 base = format!("{stem}_{i}.{ext}");
+            }
+            // Names are only added, so a later collision can resume after this suffix.
+            if i > 1 {
+                suffixes.insert(name, i);
             }
             used.insert(base.to_ascii_lowercase());
             self.media_files.insert(key.clone(), base);

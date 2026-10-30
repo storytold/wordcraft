@@ -101,13 +101,16 @@ impl Reader<'_> {
             rel.target.rsplit('/').next().unwrap_or("image").chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')).collect();
         let base = if base.is_empty() || base.starts_with('.') { format!("image{base}") } else { base };
         let mut key = base.clone();
-        let mut n = 1;
+        let mut n = self.media_suffixes.get(&base).copied().unwrap_or(1);
         while self.doc.media.contains_key(&key) {
             n += 1;
             key = match base.rsplit_once('.') {
                 Some((stem, ext)) => format!("{stem}_{n}.{ext}"),
                 None => format!("{base}_{n}"),
             };
+        }
+        if n > 1 {
+            self.media_suffixes.insert(base, n);
         }
         self.doc.media.insert(key.clone(), bytes.clone());
         self.media_by_path.insert(rel.target.clone(), key.clone());
