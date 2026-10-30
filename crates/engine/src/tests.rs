@@ -3616,6 +3616,24 @@ fn document_text_drops_hidden_text_in_tables() {
     assert!(out.contains("Cell note") && out.contains("After."), "{out}");
 }
 
+#[test]
+fn select_text_skips_hidden_occurrences() {
+    // get_text omits hidden runs; select.text must count the same visible text, or an edit
+    // aimed at what the agent read lands in a hidden run instead.
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "foo foo"}));
+    run(&mut s, "select.text", json!({"text": "foo", "occurrence": 1}));
+    run(&mut s, "format.hidden", json!({"value": true}));
+    // The first "foo" is hidden now: the default search selects the visible one.
+    run(&mut s, "select.text", json!({"text": "foo"}));
+    run(&mut s, "text.insert", json!({"text": "bar"}));
+    assert_eq!(run(&mut s, "document.text", json!({}))["text"], " bar");
+    // includeHidden finds the hidden occurrence explicitly.
+    run(&mut s, "select.text", json!({"text": "foo", "occurrence": 1, "includeHidden": true}));
+    run(&mut s, "text.insert", json!({"text": "X"}));
+    assert_eq!(text(&s), "X bar");
+}
+
 /// The author of the revision `rid` points to.
 fn author_of(s: &Session, rid: Option<u32>) -> Option<String> {
     rid.and_then(|r| s.doc.revisions.get(r as usize)).map(|r| r.author.clone())

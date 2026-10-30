@@ -60,7 +60,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(r#"{"unit": "word|sentence|line|paragraph|document", "start": Pos, "end": Pos, "pos": Pos}"#)
             .pure(),
         CommandSpec::new("select.line", "Select Line", "Navigation", select_line).params(r#"{"pos"?: Pos}"#).pure(),
-        CommandSpec::new("select.text", "Select Text", "Navigation", select_text).params(r#"{"text": string, "occurrence"?: n}"#).pure(),
+        CommandSpec::new("select.text", "Select Text", "Navigation", select_text).params(r#"{"text": string, "occurrence"?: n, "includeHidden"?: bool} (occurrences inside hidden runs are skipped by default, matching document.text; includeHidden counts them)"#).pure(),
         CommandSpec::new("select.collapse", "Collapse Selection", "Navigation", |s, v| {
             let to_end = p::bool(v, "end").unwrap_or(false);
             let (a, b) = s.sel.ordered();
@@ -480,11 +480,23 @@ fn select_text(s: &mut Session, v: &Value) -> CmdResult {
     if needle.is_empty() {
         return Err(CmdError::Params("`text` is empty".into()));
     }
+    // Occurrences inside hidden runs are skipped, so an agent selects the text it reads back
+    // from document.text (which omits hidden runs too); `includeHidden` finds them anyway.
+    let include_hidden = p::bool(v, "includeHidden").unwrap_or(false);
     let mut count = 0;
     let story = super::story_param(s, v);
     for path in s.doc.para_paths(story) {
         let Some(p) = s.doc.para(story, &path) else { continue };
+        let hidden: Vec<std::ops::Range<usize>> = if include_hidden {
+            Vec::new()
+        } else {
+            let style = p.props.style.as_deref();
+            p.run_ranges().filter(|(r, c)| !r.is_empty() && s.doc.styles.resolve_char(style, c).hidden).map(|(r, _)| r).collect()
+        };
         for (i, _) in p.text.match_indices(needle) {
+            if hidden.iter().any(|h| h.start < i + needle.len() && i < h.end) {
+                continue;
+            }
             count += 1;
             if count == n {
                 s.sel =

@@ -302,6 +302,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 - 2026-10-31: Keytips reach the Backstage: Alt, F badges its pages with Word's letters, and Alt, F, P (or V) opens Print (#4960).
 - **2026-10-31 (#3398):** General Options offers persistent Document background / Soft green / Warm cream / Soft gray screen paper. The view.paperColor command reaches the same setting headlessly. Document page colors and pictures, saves, printing and exports retain their own styling; the screen raster/tile cache and page backing share the selected color. Read Mode None uses the preset; explicit Sepia/Inverse keep priority. Parity counts and readiness estimates unchanged.
 - **2026-10-31 (#3693, editing extension):** Delete Previous Sentence is a headless registry command and Mod+Shift+Backspace shortcut, using existing sentence boundaries and deletion/undo/protection paths. Paragraph and cell boundaries are preserved. Additional WordCraft behavior; Word-parity counts and estimates unchanged.
+- 2026-10-30: `get_text` (`document.text`) omits hidden runs — hidden directly, through the character style, or inside table cells — and `select.text` skips hidden occurrences unless `includeHidden`, so an agent edits the text it read back. Inspect Document (`file.inspect`) stays the hidden-text audit and removal path.
 - 2026-10-29: Documents with hyperlinks or a table of contents print again on the desktop (#4734). The print job scales each page to the paper, and the spooler refused a page with link annotations ("flatten page annotations before using shrink-to-fit"); the PDF sent to the printer now omits link annotations, which print nothing; the link and table-of-contents text stays on the page. Exported PDFs and Save these pages as PDF (`file.printPdf`) keep the annotations.
 - 2026-10-28: Word count counts each Chinese and Japanese character as a word, as Word does, in the status bar, the Word Count dialog and NUMWORDS fields. Unspaced Chinese text used to count as one word per run of text; Korean, which is written with spaces, still counts by words. (#4547)
 - 2026-10-28: Aligned-copy review fixes keep the document axis locked through middle-button scrolling and let Ctrl/Command+Shift start on a secondary selected object. Plain Ctrl and Shift clicks keep their existing behavior (#4764).
@@ -1432,6 +1433,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-02 | trivial | Progress log: ODT checked against LibreOffice's templates (gap 19) |
 | 2026-11-01 | trivial | Progress log: ODT at ~90% (gap 19) |
 | 2026-10-29 | trivial | Progress log: corporate authors in bibliographies (#4848) |
+| 2026-10-30 | trivial | get_text omits hidden runs; select.text skips hidden occurrences unless includeHidden (PR #4993) |
 | 2026-10-29 | trivial | Progress log: Table Properties follows the selection (#4857) |
 | 2026-11-01 | trivial | Progress log: a list inside a Markdown block quote stays quoted |
 | 2026-10-29 | trivial | Progress log: citation source and bibliography-number lookups (#4888) |
