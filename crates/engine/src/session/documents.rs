@@ -241,6 +241,9 @@ impl Session {
             go_back_step: _,
             // Shared by every open document.
             user_dict_path: _,
+            normal_store: _,
+            pending_template: _,
+            run_depth: _,
             clipboard: _,
             clipboard_text: _,
             clipboard_html: _,
@@ -529,7 +532,7 @@ impl Session {
                 self.remove_parked(id);
             }
             None => {
-                let mut doc = crate::cmd::file::normal_document(self);
+                let mut doc = self.normal_document();
                 doc.ensure_nonempty();
                 self.untitled_count = self.untitled_count.saturating_add(1);
                 let mut view = self.view.clone();

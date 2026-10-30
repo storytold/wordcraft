@@ -276,7 +276,7 @@ fn controls(tab: &str) -> Vec<Control> {
             m("Theme Fonts", "design.themeFonts"),
             m("Paragraph Spacing", "design.paragraphSpacing"),
             c("Effects", "design.effects"),
-            c("Set as Default", "design.setDefault"),
+            d("Set as Default", "designSetDefault"),
             m("Watermark", "design.watermark"),
             m("Page Color", "design.pageColor"),
             m("Page Borders", "design.pageBorders"),
