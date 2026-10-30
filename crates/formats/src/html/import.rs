@@ -10,7 +10,20 @@ pub fn parse(s: &str) -> Flow {
 
 /// [`parse`], loading pictures that aren't `data:` URIs through `images`.
 pub fn parse_with(s: &str, images: ImageLoader) -> Flow {
-    let mut lx = Lexer { s, pos: 0 };
+    // HTML normalizes input newlines before tokenization, not after decoding character references.
+    let normalized = if s.contains('\r') {
+        let mut out = String::with_capacity(s.len());
+        let mut chunks = s.split('\r');
+        out.push_str(chunks.next().unwrap_or_default());
+        for chunk in chunks {
+            out.push('\n');
+            out.push_str(chunk.strip_prefix('\n').unwrap_or(chunk));
+        }
+        std::borrow::Cow::Owned(out)
+    } else {
+        std::borrow::Cow::Borrowed(s)
+    };
+    let mut lx = Lexer { s: &normalized, pos: 0 };
     let mut b = Builder::new(images);
     let mut guard = 0usize;
     while let Some(t) = lx.next() {

@@ -316,6 +316,7 @@ impl WordApp {
             };
         }
         let retry = (id == "file.open").then(|| params.clone());
+        let retry_path = retry.clone();
         let r = self.execute(id, params);
         if let (Err(e), Some(params)) = (&r, retry)
             && wordcraft_engine::io::needs_password(e)
@@ -324,6 +325,22 @@ impl WordApp {
             let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string());
             self.dialog = Some(dialogs::Dialog::Password { name, params, password: Default::default(), message: String::new() });
             return Ok(json!({"pending": "password"}));
+        }
+        // Whoever asked, a failed open names the file and the cause (#1103).
+        if let (Err(e), Some(params)) = (&r, retry_path) {
+            let path = params.get("path").and_then(Value::as_str).unwrap_or("");
+            self.report_open_failure(path, e);
+        }
+        r
+    }
+
+    /// [`WordApp::execute_user`] for a command a prompt or a finished save held back. A failed
+    /// open also leaves Backstage, whose list isn't where that failure gets shown (#1103); a
+    /// direct open from Recent keeps File open and reports there instead (#2938).
+    pub(crate) fn execute_held_back(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        let r = self.execute_user(id, params);
+        if r.is_err() && id == "file.open" {
+            self.ui.backstage = false;
         }
         r
     }
@@ -975,7 +992,8 @@ fn input_dialog_other(id: &str, params: &Value) -> Option<&'static str> {
 
 /// Commands that work while no document is open (#1129): opening or creating one, closing the
 /// window, Help, adding fonts (a font file dropped on the empty window), and the settings (File ›
-/// Options, the view and interface preferences it sets, Customize Ribbon and Keyboard).
+/// Options, the view and interface preferences it sets, AutoCorrect Options, Customize Ribbon and
+/// Keyboard).
 /// Everything else needs a document, `ui.*` included: only the interface commands listed here
 /// (tabs, Backstage, dialogs, appearance, opening files) work without one.
 pub(crate) fn works_without_document(id: &str) -> bool {
@@ -993,6 +1011,7 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "font.remove"
             | "readAloud.speed"
             | "readAloud.skipCitations"
+            | "tools.autocorrect"
             | "tools.customizeKeyboard"
             | "tools.customizeRibbon"
             | "view.darkMode"
