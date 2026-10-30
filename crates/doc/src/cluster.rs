@@ -316,7 +316,7 @@ mod tests {
     }
 
     /// Ideographic Variation Sequences: base + VS (U+E0100..) is one UAX #29 grapheme.
-    /// WordCraft stores the bytes; it does not yet select UVS glyphs (see docs/cjk-typography-audit.md).
+    /// This pins cluster boundaries only; variation-glyph selection is not verified (see docs/cjk-typography-audit.md).
     #[test]
     fn ideographic_variation_sequence_is_one_grapheme_cluster() {
         // U+8FBA (辺) + VS17 (U+E0100) — a common IVS example shape.

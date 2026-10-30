@@ -14,7 +14,7 @@ fn run(s: &mut Session, id: &str, v: serde_json::Value) {
     s.run(id, &v).unwrap_or_else(|e| panic!("{id}: {e}"));
 }
 
-/// Type like a person: one `text.insert` per Unicode scalar (IME commits land the same way).
+/// Type one `text.insert` per Unicode scalar. This does not exercise the IME composition/commit path.
 fn typ(s: &mut Session, keys: &str) {
     for c in keys.chars() {
         match c {
@@ -104,7 +104,7 @@ fn supplementary_plane_ideograph_types_and_deletes_as_one_character() {
 }
 
 /// IVS (base + variation selector) is one caret/Backspace unit (UAX #29 Extend).
-/// Glyph selection for IVS is not implemented; this only pins text editing behaviour.
+/// Variation-glyph selection is not verified here; this only pins text editing behaviour.
 #[test]
 fn ideographic_variation_sequence_edits_as_one_grapheme() {
     let ivs = "\u{8FBA}\u{E0100}";

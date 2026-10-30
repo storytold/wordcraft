@@ -14,7 +14,7 @@ The product target is Word parity (observed behaviour plus ECMA-376 / ISO 29500)
 | A supplementary-plane ideograph (U+20000…) is one cluster and one Backspace | Verified | `supplementary_plane_ideograph_is_one_cluster`; engine `supplementary_plane_ideograph_types_and_deletes_as_one_character` |
 | An ideographic variation sequence (base + U+E0100…) is one caret/Backspace unit | Verified | `ideographic_variation_sequence_is_one_grapheme_cluster`; engine `ideographic_variation_sequence_edits_as_one_grapheme` |
 | IVS and supplementary characters survive shaping as addressable layout clusters | Verified | `layout/tests/cjk.rs::supplementary_and_ivs_codepoints_survive_layout` |
-| No IVS/variation-selector logic beyond storing the text; glyph choice is left to the font | Verified (absence in non-test code) | — |
+| No IVS-specific logic in non-test code; the text is passed to the shaper, but no test checks glyph IDs from a font with a variation mapping, so variation-glyph selection is unverified | Verified (absence of code); behaviour Hypothesis | — |
 | `Document::clamp` forces char boundaries only, so a programmatic selection may sit inside a multi-scalar grapheme until the next caret move | Hypothesis | — |
 | Ctrl+arrow word motion uses alphanumeric runs (`bidi::is_word_char`), so unspaced Japanese is one "word"; there is no CJK word segmentation | Hypothesis (read, not exercised) | — |
 | IME delete-surrounding counts scalars, not clusters | Hypothesis (read, not exercised) | `doc/src/ime_text.rs` |
