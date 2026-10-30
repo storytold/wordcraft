@@ -227,7 +227,7 @@ WordCraft keeps 2,54 cm).
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-30 | trivial | Right-to-left styles show their sample text in the Home › Styles gallery (#4944): the tile paints the right end of the preview picture, where a right-to-left paragraph is laid out; left-to-right tiles are unchanged; regression test `a_right_to_left_style_previews_its_sample_text`; estimates unchanged |
+| 2026-11-01 | trivial | Right-to-left styles show their sample text in the Home › Styles gallery (#4944): the tile paints the right end of the preview picture, where a right-to-left paragraph is laid out; left-to-right tiles are unchanged; regression test `a_right_to_left_style_previews_its_sample_text`; estimates unchanged |
 | 2026-10-28 | trivial | Traditional Chinese interface: an installed Traditional Chinese font (PingFang TC, Microsoft JhengHei, Noto Sans CJK TC; the TC face of a pan-CJK collection) goes before the embedded Noto Sans CJK SC, whose mainland glyph shapes looked wrong to Taiwan readers; native only, wasm unchanged; estimates unchanged |
 | 2026-10-24 | minor | Preserved “Delete Around Caret in Equation” in all 27 shared WordCraft catalogs; the native/release pin and Flatpak source advance together. |
 | 2026-10-23 | minor | Interface catalogs moved to storytold/craft-i18n (`locales/<locale>/wordcraft.tsv`), looked up through craft-libs' `craft-i18n` crate and embedded from the pinned commit (`craft-i18n.rev`); strings other Crafting Apps already translate in the shared catalog now show translated; the "Open" paragraph-spacing preset no longer shows the file verb |

@@ -688,7 +688,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 
 ## Revision history
 
-> 2026-10-30 · Right-to-left styles show their sample text in the Home › Styles gallery (#4944): the tile paints the right end of the preview picture, where a right-to-left paragraph is laid out; left-to-right tiles are unchanged; regression test `a_right_to_left_style_previews_its_sample_text`.
+> 2026-11-01 · Right-to-left styles show their sample text in the Home › Styles gallery (#4944): the tile paints the right end of the preview picture, where a right-to-left paragraph is laid out; left-to-right tiles are unchanged; regression test `a_right_to_left_style_previews_its_sample_text`.
 >
 > 2026-10-30 · Technical synchronization: retain the Proofing pane and command/selection/undo contracts on main `3b7f7ed`; new-SHA validation pending, readiness unchanged.
 >
