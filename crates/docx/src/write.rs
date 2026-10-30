@@ -31,8 +31,8 @@ mod settings;
 mod styles;
 
 pub(crate) use bibliography::from_source_type;
-pub(crate) use parts::write_parts;
 use parts::{content_type_for, push_part, sniff};
+pub(crate) use parts::{write_parts, write_parts_report};
 use settings::note_id_base;
 pub(crate) use settings::{ANONYMOUS_AUTHOR, ANONYMOUS_INITIALS, annotation_author, durable_id_ok};
 use styles::{numbering_xml, styles_xml};
@@ -147,7 +147,20 @@ pub fn write(doc: &Document) -> Result<Vec<u8>, DocxError> {
 
 /// Write a package of the given flavour (`.docx`, `.docm`, `.dotx`, `.dotm`).
 pub fn write_as(doc: &Document, flavor: Flavor) -> Result<Vec<u8>, DocxError> {
-    zip_entries(&write_parts(doc, flavor)?)
+    write_as_with_report(doc, flavor).map(|(bytes, _)| bytes)
+}
+
+/// [`write`], with what the package couldn't carry of the document's embedded objects.
+pub fn write_with_report(doc: &Document) -> Result<(Vec<u8>, Vec<crate::Loss>), DocxError> {
+    write_as_with_report(doc, Flavor::Document)
+}
+
+/// [`write_as`], with what the package couldn't carry of the document's embedded objects (a part
+/// missing or over a limit, an object left out). Relationships to parts not written are never
+/// written.
+pub fn write_as_with_report(doc: &Document, flavor: Flavor) -> Result<(Vec<u8>, Vec<crate::Loss>), DocxError> {
+    let (parts, losses) = write_parts_report(doc, flavor)?;
+    Ok((zip_entries(&parts)?, losses))
 }
 
 impl Writer<'_> {

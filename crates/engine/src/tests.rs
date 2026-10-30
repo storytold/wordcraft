@@ -10533,6 +10533,67 @@ fn vertical_align_command_sets_justified() {
     }
 }
 
+/// Issue #1343: a chart whose workbook the file lacks opens with an `incomplete` note, and saving
+/// it says what was dropped instead of reporting a clean save.
+#[test]
+fn incomplete_embedded_object_is_reported_on_open_and_save() {
+    use std::io::Write;
+    let ns = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main""#;
+    let body = r#"<w:p><w:r><w:drawing><wp:inline><wp:extent cx="2743200" cy="1371600"/><wp:docPr id="1" name="Chart 1"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" r:id="rId7"/></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#;
+    let rels = |list: &[(&str, &str, &str)]| {
+        let mut s = String::from(r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#);
+        for (id, ty, target) in list {
+            s.push_str(&format!(
+                r#"<Relationship Id="{id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/{ty}" Target="{target}"/>"#
+            ));
+        }
+        s + "</Relationships>"
+    };
+    let entries = [
+        ("_rels/.rels", rels(&[("rId1", "officeDocument", "word/document.xml")])),
+        ("word/document.xml", format!("<w:document {ns}><w:body>{body}</w:body></w:document>")),
+        ("word/_rels/document.xml.rels", rels(&[("rId7", "chart", "charts/chart1.xml")])),
+        ("word/charts/chart1.xml", r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"/>"#.to_string()),
+        ("word/charts/_rels/chart1.xml.rels", rels(&[("rId1", "package", "../embeddings/book.xlsx")])),
+    ];
+    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, text) in &entries {
+        z.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
+        z.write_all(text.as_bytes()).unwrap();
+    }
+    let bytes = z.finish().unwrap().into_inner();
+
+    let dir = std::env::temp_dir().join(format!("wordcraft-engine-1343-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("chart.docx");
+    std::fs::write(&path, &bytes).unwrap();
+    let mut s = s();
+    let opened = run(&mut s, "file.open", json!({"path": path.to_string_lossy()}));
+    let incomplete = opened["incomplete"].as_array().unwrap_or_else(|| panic!("no incomplete in {opened}"));
+    assert!(incomplete.iter().any(|l| l["part"] == "word/charts/chart1.xml" && l["reason"].as_str().unwrap().contains("book.xlsx")), "{opened}");
+
+    let out = dir.join("saved.docx");
+    let saved = run(&mut s, "file.saveAs", json!({"path": out.to_string_lossy()}));
+    assert_eq!(saved["saved"], true);
+    let dropped = saved["dropped"].as_array().unwrap_or_else(|| panic!("no dropped in {saved}"));
+    assert!(dropped.iter().any(|l| l["kind"] == "missingPart" && l["reason"].as_str().unwrap().contains("book.xlsx")), "{saved}");
+    assert!(incomplete.iter().all(|l| l["kind"].is_string()), "{opened}");
+    // Save as Template writes the same package, so it says the same.
+    let template = run(&mut s, "file.saveTemplate", json!({"path": dir.join("chart.dotx").to_string_lossy()}));
+    assert!(template["dropped"].as_array().is_some_and(|d| !d.is_empty()), "{template}");
+
+    // A complete document reports neither.
+    let mut clean = Session::new(wordcraft_doc::Document::new());
+    run(&mut clean, "text.insert", json!({"text": "Hello"}));
+    let plain = dir.join("plain.docx");
+    let saved = run(&mut clean, "file.save", json!({"path": plain.to_string_lossy()}));
+    assert!(saved.get("dropped").is_none(), "{saved}");
+    let opened = run(&mut clean, "file.open", json!({"path": plain.to_string_lossy()}));
+    assert!(opened.get("incomplete").is_none(), "{opened}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// #1876 review: only Web Layout wraps to the window's `web_width`. Draft and Outline keep a fixed
 /// 800 pt column, also after a visit to a wide Web Layout, and the window width is never serialized.
 #[test]

@@ -118,7 +118,7 @@ files it was given rather than guarding against other software on the computer.
 | `execute` | run one command: `{command: "insert.table", params: {rows: 3, cols: 4}}` |
 | `batch` | run several commands in order |
 | `new_document` | blank, sample, letter, resume, report; opens beside the open documents |
-| `open_document` / `save_document` | docx, doc (open only), odt, rtf, html, md, tex, txt, json; save also pdf, png |
+| `open_document` / `save_document` | docx, doc (open only), odt, rtf, html, md, tex, txt, json; save also pdf, png. A Word file's embedded objects (charts, diagrams, OLE objects) that the file doesn't hold whole come back as `incomplete` on open, and what a save couldn't carry as `dropped`: `[{part, kind, reason}]` (#1343) |
 | `list_documents` | the open documents: `id`, `title`, `path`, `dirty`, `active` |
 | `type_text` | type at the caret (`paragraphs: true` splits lines into paragraphs: one undo
   step; each break is the Enter it stands for, so AutoFormat and AutoCorrect run and a

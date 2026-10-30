@@ -133,10 +133,14 @@ pub fn specs() -> Vec<CommandSpec> {
             let path = p::req_str(v, "path")?;
             // A .dotm keeps its name (#2852); anything else becomes a .dotx.
             let path = if crate::cmd::user_templates::is_template_name(path) { path.to_string() } else { format!("{path}.dotx") };
-            crate::io::save_path(std::path::Path::new(&path), &s.doc).map_err(CmdError::Failed)?;
-            Ok(json!({"path": path}))
+            let losses = crate::io::save_path_report(std::path::Path::new(&path), &s.doc, None, &Default::default()).map_err(CmdError::Failed)?;
+            let mut out = json!({"path": path});
+            if !losses.is_empty() {
+                out["dropped"] = crate::cmd::file::losses_json(&losses);
+            }
+            Ok(out)
         })
-        .params(r#"{"path": string}"#)
+        .params(r#"{"path": string} → {path, "dropped"?: [{part, kind, reason}] (as file.save)}"#)
         .pure(),
         CommandSpec::new("file.autosave", "AutoSave", "Quick Access Toolbar", |s, v| {
             s.autosave = p::bool(v, "value").unwrap_or(!s.autosave);

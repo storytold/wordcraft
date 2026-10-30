@@ -11,6 +11,11 @@ use super::{
 /// The parts of the package [`write_as`] zips, in order, `[Content_Types].xml` first: (part name
 /// without the leading `/`, bytes).
 pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String, Vec<u8>)>, DocxError> {
+    write_parts_report(doc, flavor).map(|(parts, _)| parts)
+}
+
+/// [`write_parts`], with what the embedded objects lost (see [`write_as_with_report`]).
+pub(crate) fn write_parts_report(doc: &Document, flavor: Flavor) -> Result<(Vec<(String, Vec<u8>)>, Vec<crate::Loss>), DocxError> {
     // A range field must be whole in the file: drop markers that lost their partner in editing.
     let balanced;
     let doc = if doc.has_unbalanced_field_ranges() {
@@ -276,7 +281,7 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
     }
     w.close("Types");
     entries.insert(0, ("[Content_Types].xml".into(), w.into_bytes()));
-    Ok(entries)
+    Ok((entries, std::mem::take(&mut wr.embeds.losses)))
 }
 
 fn write_document_body(doc: &Document, wr: &mut Writer<'_>, rels: &mut PartRels, ns_refs: &[(&str, &str)]) -> Vec<u8> {
