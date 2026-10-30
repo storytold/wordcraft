@@ -161,6 +161,7 @@ impl WordApp {
         if !self.styled
             || lang.prefers_hans() != self.fonts_hans
             || lang.prefers_korean() != self.fonts_korean
+            || lang.prefers_hant() != self.fonts_hant
             || system_cjk != self.fonts_system_cjk
             || system_arabic != self.fonts_system_arabic
         {
@@ -173,9 +174,18 @@ impl WordApp {
                     }
                 }
             }
-            theme::install_fonts_language_arabic(ctx, lang.prefers_hans(), lang.prefers_korean(), system_cjk, system_arabic, &faces);
+            theme::install_fonts_language_arabic(
+                ctx,
+                lang.prefers_hans(),
+                lang.prefers_korean(),
+                lang.prefers_hant(),
+                system_cjk,
+                system_arabic,
+                &faces,
+            );
             self.fonts_hans = lang.prefers_hans();
             self.fonts_korean = lang.prefers_korean();
+            self.fonts_hant = lang.prefers_hant();
             self.fonts_system_cjk = system_cjk;
             self.fonts_system_arabic = system_arabic;
             // Mod with -, = and 0 are Word shortcuts (optional hyphen, subscript, paragraph spacing);

@@ -325,9 +325,16 @@ fn symbol_button(ui: &mut Ui, app: &mut WordApp, c: char, t: &Tokens) -> bool {
     let nodes = vec![wordcraft_doc::math::MNode::Run(wordcraft_doc::math::MRun { text: s.clone(), lit: true, ..Default::default() })];
     paint_math(app, ui, MathPreview { rect: r, key: &format!("sym:{s}"), linear: &s, nodes: Some(nodes), display: false, points: 11.0 });
     let display = math_placeholder(ui, &s);
-    let name =
-        wordcraft_doc::math_symbols::name_of(c).map(|n| format!("{display}  \\{n}")).unwrap_or_else(|| format!("{display}  U+{:04X}", c as u32));
-    resp.on_hover_text(name).clicked()
+    resp.on_hover_text(symbol_tooltip(c, &display)).clicked()
+}
+
+/// Append the symbol name or codepoint only when the display is the glyph itself.
+fn symbol_tooltip(c: char, display: &str) -> String {
+    if display != c.to_string() {
+        // Missing glyphs already display their linear name or codepoint.
+        return display.to_owned();
+    }
+    wordcraft_doc::math_symbols::name_of(c).map(|n| format!("{display}  \\{n}")).unwrap_or_else(|| format!("{display}  U+{:04X}", c as u32))
 }
 
 /// The Equation tab.
@@ -461,6 +468,17 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
 
 #[cfg(test)]
 mod placeholder_tests {
+    /// Named and unnamed missing glyphs appear once; covered glyphs retain their suffix.
+    #[test]
+    fn symbol_tooltips_do_not_repeat_missing_glyph_fallbacks() {
+        for c in ['α', '\u{0378}'] {
+            let display = super::math_placeholder_with(&c.to_string(), |_| false);
+            assert_eq!(super::symbol_tooltip(c, &display), display);
+        }
+        assert_eq!(super::symbol_tooltip('α', "α"), "α  \\alpha");
+        assert_eq!(super::symbol_tooltip('\u{0378}', "\u{0378}"), "\u{0378}  U+0378");
+    }
+
     /// `∁` falls back to `\complement` in the placeholder while covered `x+y` is unchanged.
     #[test]
     fn a_missing_math_glyph_has_a_readable_linear_placeholder() {

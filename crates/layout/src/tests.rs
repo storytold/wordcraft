@@ -6226,6 +6226,50 @@ fn graphic_text_in_a_degenerate_rectangle_is_not_drawn() {
     assert!(!draws.iter().any(|x| matches!(x, display::Draw::Glyphs { text, .. } if text == "Q1")));
 }
 
+#[test]
+fn chart_text_the_font_lacks_is_drawn_in_a_fallback_face() {
+    // #4720: a Chinese legend in a chart drawn in the body font (which has no Chinese) showed boxes.
+    use wordcraft_doc::graphic::{Graphic, GraphicItem, GraphicKind, TextAlign};
+    use wordcraft_doc::props::Rgb;
+    if wordcraft_fonts::FontDb::global().fallback_for('销', 0).is_none() {
+        eprintln!("skipped: no Chinese font installed");
+        return;
+    }
+    let label = "Sales 销售额 2024";
+    let items = vec![GraphicItem::Text {
+        rect: [0.0, 100.0, 216.0, 20.0],
+        text: label.into(),
+        size: 10.0,
+        color: Rgb::BLACK,
+        bold: false,
+        align: TextAlign::Center,
+        font: None,
+    }];
+    let graphic = Graphic { kind: GraphicKind::Chart, items, ..Default::default() };
+    let obj = InlineObject::Graphic { w: 216.0, h: 144.0, alt: String::new(), float: Default::default(), graphic: Arc::new(graphic) };
+    let mut d = Document::from_text("Chart");
+    d.insert_object(&Pos::body(0, 0), obj, &Default::default()).unwrap();
+    let draws = flat(display::page_display(&d, &lay(&d).pages[0], &Default::default()));
+    let runs: Vec<_> = draws
+        .iter()
+        .filter_map(|x| if let display::Draw::Glyphs { face, text, glyphs, .. } = x { Some((*face, text.as_str(), glyphs)) } else { None })
+        .filter(|(_, text, _)| label.contains(*text) && text.trim() != "")
+        .collect();
+    // The label is drawn whole, in reading order, each character in a face that has it.
+    assert_eq!(runs.iter().map(|(_, t, _)| *t).collect::<String>(), label);
+    for (face, text, glyphs) in &runs {
+        for c in text.chars().filter(|c| !c.is_whitespace()) {
+            assert!(face.covers(c), "{c} in {}", face.family);
+        }
+        assert!(glyphs.iter().all(|g| g.0 != 0), "no missing glyphs in {text:?}");
+    }
+    // The Chinese takes one face, and the runs follow each other along the line.
+    assert_eq!(runs.iter().filter(|(_, t, _)| t.contains('销')).count(), 1);
+    assert!(runs.iter().any(|(_, t, _)| t.contains("销售额")), "{:?}", runs.iter().map(|r| r.1).collect::<Vec<_>>());
+    let xs: Vec<f32> = runs.iter().flat_map(|(_, _, g)| g.iter().map(|g| g.1)).collect();
+    assert!(xs.windows(2).all(|w| w[0] <= w[1]), "{xs:?}");
+}
+
 /// The draws with figures opened up.
 fn flat(draws: Vec<display::Draw>) -> Vec<display::Draw> {
     draws.into_iter().flat_map(|x| if let display::Draw::Figure { draws, .. } = x { draws } else { vec![x] }).collect()
@@ -11230,6 +11274,114 @@ fn caret_height_ignores_line_spacing() {
         let wide = caret_height(Some(spacing));
         assert!((single - wide).abs() < 0.01, "{spacing:?}: single {single}, wide {wide}");
     }
+}
+
+enum SpanWidth {
+    Preferred,
+    Automatic,
+    TextOnly,
+}
+
+fn banner_layout(width: SpanWidth) -> DocLayout {
+    let widths = [150.0, 100.0, 25.0, 25.0];
+    let mut d = Document::new();
+    let mut t = Table::new(2, widths.len(), 300.0);
+    t.grid = widths.to_vec();
+    t.props.width = match width {
+        SpanWidth::Preferred => Some(300.0),
+        SpanWidth::Automatic | SpanWidth::TextOnly => None,
+    };
+    t.props.cell_margins = Some([0.0; 4]);
+    t.rows[0].cells.truncate(1);
+    t.rows[0].cells[0].props.span = 4;
+    t.rows[0].cells[0].props.width = t.props.width;
+    let mut banner = wordcraft_doc::Paragraph::new();
+    if !matches!(width, SpanWidth::TextOnly) {
+        banner.insert_object(0, picture(300.0, 30.0, Default::default()), &Default::default()).unwrap();
+    }
+    t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(banner)];
+    for (i, cell) in t.rows[1].cells.iter_mut().enumerate() {
+        cell.props.width = match width {
+            SpanWidth::Preferred => Some(widths[i]),
+            SpanWidth::Automatic | SpanWidth::TextOnly => None,
+        };
+        cell.blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("A", Default::default()))];
+    }
+    d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+    lay(&d)
+}
+
+#[test]
+fn spanning_banner_uses_weights() {
+    let text = banner_layout(SpanWidth::TextOnly);
+    let minimum = text.pages[0]
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Placed::Cell { rect, row: 1, .. } => Some(rect.w),
+            _ => None,
+        })
+        .unwrap();
+    let widths = [150.0 - minimum, 100.0 - minimum / 3.0, 25.0 + 2.0 * minimum / 3.0, 25.0 + 2.0 * minimum / 3.0];
+    let l = banner_layout(SpanWidth::Preferred);
+    let actual: Vec<_> =
+        l.pages[0].items.iter().filter_map(|it| if let Placed::Cell { rect, row: 1, .. } = it { Some(rect.w) } else { None }).collect();
+    assert_eq!(actual.len(), widths.len());
+    for (got, want) in actual.iter().zip(widths) {
+        assert!((got - want).abs() < 0.01, "spanning banner changed columns: {actual:?}");
+    }
+}
+
+#[test]
+fn automatic_banner_shares_width() {
+    let l = banner_layout(SpanWidth::Automatic);
+    let widths: Vec<_> =
+        l.pages[0].items.iter().filter_map(|it| if let Placed::Cell { rect, row: 1, .. } = it { Some(rect.w) } else { None }).collect();
+    assert_eq!(widths.len(), 4);
+    assert!(widths.iter().all(|w| (w - 75.0).abs() < 0.01), "automatic widths: {widths:?}");
+}
+
+#[test]
+fn nested_spans_use_grid_weights() {
+    const NESTED_WIDTH: f32 = 40.0;
+    const IMAGE_WIDTH: f32 = 50.0;
+    const OUTER_WIDTH: f32 = 51.0;
+    let widths: Vec<_> = [0.0, 4.0]
+        .into_iter()
+        .map(|first| {
+            let mut nested = Table::new(2, 3, NESTED_WIDTH);
+            nested.props.style = None;
+            nested.props.width = Some(NESTED_WIDTH);
+            nested.props.cell_margins = Some([0.0; 4]);
+            nested.grid = vec![first, 100.0, 100.0];
+            for (index, row) in nested.rows.iter_mut().enumerate() {
+                row.cells.truncate(1);
+                row.props.grid_before = index as u32;
+                row.cells[0].props.span = 2;
+                row.cells[0].props.width = None;
+                let mut p = Paragraph::new();
+                p.insert_object(0, picture(IMAGE_WIDTH, 10.0, Default::default()), &Default::default()).unwrap();
+                row.cells[0].blocks = vec![wordcraft_doc::para_block(p)];
+            }
+            let mut outer = Table::new(1, 1, OUTER_WIDTH);
+            outer.props.style = None;
+            outer.props.width = Some(OUTER_WIDTH);
+            outer.props.cell_margins = Some([0.0; 4]);
+            outer.rows[0].cells[0].blocks = vec![Arc::new(Block::Table(nested))];
+            let mut d = Document::new();
+            d.body = vec![Arc::new(Block::Table(outer))];
+            lay(&d).pages[0]
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    Placed::Cell { rect, table, .. } if table.0 == [0] => Some(rect.w),
+                    _ => None,
+                })
+                .unwrap()
+        })
+        .collect();
+    assert!(widths[1] > OUTER_WIDTH + 0.5, "overlapping spans must expand the outer table: {widths:?}");
+    assert!((widths[0] - widths[1]).abs() < 0.01, "equivalent nested grids changed outer fitting: {widths:?}");
 }
 
 /// #2048: a picture anchored in a later paragraph but placed higher up the page (fixed on the
