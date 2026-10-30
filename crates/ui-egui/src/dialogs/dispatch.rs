@@ -914,7 +914,7 @@ fn new_style_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
 }
 
 fn modify_style_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
-    let Dialog::ModifyStyle { back, resume, id, name, font, size, bold, italic, color, before, after, new_documents } = d else {
+    let Dialog::ModifyStyle { back, resume, id, name, font, size, bold, italic, color, before, after, new_documents, start } = d else {
         return false;
     };
     egui::Grid::new("ms").num_columns(2).show(ui, |ui| {
@@ -956,39 +956,35 @@ fn modify_style_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     });
     let (ok, cancel) = buttons(ui, tl!("OK"));
     if ok {
-        // Only what was changed: the dialog shows the style's resolved formatting, and sending it
-        // all would give the style a font and size of its own, in this document and, saved for
-        // new documents, in those (#4237 review).
-        let was = match Dialog::modify_style(app, id) {
-            Some(Dialog::ModifyStyle { font, size, bold, italic, color, before, after, .. }) => {
-                Some((font, size, bold, italic, color, before, after))
-            }
-            _ => None,
-        };
-        let w = was.as_ref();
+        // Only what was changed since the dialog opened: it shows the style's resolved
+        // formatting, and sending it all would give the style a font and size of its own, in this
+        // document and, saved for new documents, in those; and a change made meanwhile (an agent)
+        // stays on the fields the user left alone (#4237 review).
+        let w = start.as_deref();
         let mut chr = serde_json::Map::new();
-        if w.is_none_or(|w| w.0 != *font) {
+        if w.is_none_or(|w| w.font != *font) {
             chr.insert("font".into(), json!(font));
         }
-        if w.is_none_or(|w| w.1 != *size) {
+        if w.is_none_or(|w| w.size != *size) {
             chr.insert("size".into(), json!(*size));
         }
-        if w.is_none_or(|w| w.2 != *bold) {
+        if w.is_none_or(|w| w.bold != *bold) {
             chr.insert("bold".into(), json!(*bold));
         }
-        if w.is_none_or(|w| w.3 != *italic) {
+        if w.is_none_or(|w| w.italic != *italic) {
             chr.insert("italic".into(), json!(*italic));
         }
-        if w.is_none_or(|w| w.4 != *color)
-            && let Some(c) = wordcraft_doc::Rgb::parse(color)
+        // Automatic too, as the Font dialog sends it.
+        if w.is_none_or(|w| w.color != *color)
+            && let Some(c) = wordcraft_doc::TextColor::parse(color).and_then(|c| serde_json::to_value(c).ok())
         {
-            chr.insert("color".into(), json!({"Rgb": [c.0, c.1, c.2]}));
+            chr.insert("color".into(), c);
         }
         let mut para = serde_json::Map::new();
-        if w.is_none_or(|w| w.5 != *before) {
+        if w.is_none_or(|w| w.before != *before) {
             para.insert("spaceBefore".into(), json!(*before));
         }
-        if w.is_none_or(|w| w.6 != *after) {
+        if w.is_none_or(|w| w.after != *after) {
             para.insert("spaceAfter".into(), json!(*after));
         }
         let modified = app.run("styles.modify", json!({"style": id, "name": name, "chr": chr, "para": para}));

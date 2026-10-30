@@ -2025,3 +2025,81 @@ fn modify_style_saves_only_what_was_changed() {
         assert_eq!(r.size, sheet.resolve_char(Some("Heading1"), &Default::default()).size, "{what}: bold in a heading keeps its size");
     }
 }
+
+/// Opens Modify Style on `style` in `h`, applies `edit`, ticks "New documents based on this
+/// template" and presses OK.
+fn modify_style_for_new_documents(h: &mut egui_kittest::Harness<'static, WordApp>, style: &str, edit: impl FnOnce(&mut Dialog)) {
+    use egui_kittest::kittest::Queryable;
+    let mut d = Dialog::modify_style(h.state(), style).expect("the style");
+    edit(&mut d);
+    h.state_mut().dialog = Some(d);
+    h.run_steps(3);
+    h.get_by_label("New documents based on this template").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+}
+
+/// #4237 review (as on #4456): Modify Style sets a red style's colour back to automatic, in the
+/// document and for new documents.
+#[test]
+fn modify_style_sets_colour_back_to_automatic() {
+    let (mut h, store) = normal_template_harness("modifyStyle", |_| {});
+    h.state_mut().dialog = None;
+    h.state_mut().run("styles.modify", json!({"style": "Strong", "chr": {"color": "FF0000"}})).unwrap();
+    modify_style_for_new_documents(&mut h, "Strong", |d| {
+        if let Dialog::ModifyStyle { color, .. } = d {
+            *color = "auto".into();
+        }
+    });
+    for (what, sheet) in [("the open document", h.state().session.doc.styles.clone()), ("new documents", restarted(&store).styles)] {
+        let st = sheet.get("Strong").expect("Strong");
+        assert_eq!(st.chr.color, Some(wordcraft_doc::TextColor::Auto), "{what}");
+    }
+}
+
+/// #4237 review: each field Modify Style changes is sent: size, colour, spacing before and after,
+/// and bold turned off.
+#[test]
+fn modify_style_sends_each_changed_field() {
+    let (mut h, store) = normal_template_harness("modifyStyle", |_| {});
+    h.state_mut().dialog = None;
+    h.state_mut().run("styles.modify", json!({"style": "Heading1", "chr": {"bold": true}})).unwrap();
+    modify_style_for_new_documents(&mut h, "Heading1", |d| {
+        if let Dialog::ModifyStyle { size, bold, color, before, after, .. } = d {
+            *size = 23.0;
+            *bold = false;
+            *color = "00FF00".into();
+            *before = 7.0;
+            *after = 9.0;
+        }
+    });
+    for (what, sheet) in [("the open document", h.state().session.doc.styles.clone()), ("new documents", restarted(&store).styles)] {
+        let st = sheet.get("Heading1").expect("Heading1");
+        assert_eq!(st.chr.size, Some(23.0), "{what}");
+        assert_eq!(st.chr.bold, Some(false), "{what}");
+        assert_eq!(st.chr.color, Some(wordcraft_doc::TextColor::Rgb(wordcraft_doc::Rgb(0, 255, 0))), "{what}");
+        assert_eq!((st.para.space_before, st.para.space_after), (Some(7.0), Some(9.0)), "{what}");
+    }
+}
+
+/// #4237 review: Modify Style compares with the style as it was when the dialog opened, so a
+/// change made meanwhile (an agent over the control channel) survives on the fields the user
+/// left alone.
+#[test]
+fn modify_style_keeps_changes_made_while_it_is_open() {
+    use egui_kittest::kittest::Queryable;
+    let (mut h, _) = normal_template_harness("modifyStyle", |_| {});
+    let mut d = Dialog::modify_style(h.state(), "Strong").expect("Strong");
+    if let Dialog::ModifyStyle { italic, .. } = &mut d {
+        *italic = true;
+    }
+    h.state_mut().dialog = Some(d);
+    h.run_steps(3);
+    h.state_mut().run("styles.modify", json!({"style": "Strong", "chr": {"size": 30.0}})).unwrap();
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let st = h.state().session.doc.styles.get("Strong").cloned().expect("Strong");
+    assert_eq!(st.chr.italic, Some(true));
+    assert_eq!(st.chr.size, Some(30.0), "the size set meanwhile stays");
+}

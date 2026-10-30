@@ -49,23 +49,8 @@ pub(super) fn manage_styles(app: &mut WordApp, ui: &mut Ui, alphabetical: &mut b
                 }
                 if r.double_clicked() {
                     *selected = id;
-                    if let Some(Dialog::ModifyStyle { id, name, font, size, bold, italic, color, before, after, .. }) =
-                        Dialog::modify_style(app, selected)
-                    {
-                        app.dialog = Some(Dialog::ModifyStyle {
-                            back: true,
-                            resume: None,
-                            id,
-                            name,
-                            font,
-                            size,
-                            bold,
-                            italic,
-                            color,
-                            before,
-                            after,
-                            new_documents: false,
-                        });
+                    if let Some(d) = Dialog::modify_style(app, selected) {
+                        app.dialog = Some(d.back_to_manage_styles());
                     }
                 }
             }
@@ -100,22 +85,9 @@ pub(super) fn manage_styles(app: &mut WordApp, ui: &mut Ui, alphabetical: &mut b
     ui.horizontal(|ui| {
         // Table styles are edited from Table Design.
         if ui.add_enabled(ty != "table", egui::Button::new(tl!("Modify…"))).clicked()
-            && let Some(Dialog::ModifyStyle { id, name, font, size, bold, italic, color, before, after, .. }) = Dialog::modify_style(app, selected)
+            && let Some(d) = Dialog::modify_style(app, selected)
         {
-            app.dialog = Some(Dialog::ModifyStyle {
-                back: true,
-                resume: None,
-                id,
-                name,
-                font,
-                size,
-                bold,
-                italic,
-                color,
-                before,
-                after,
-                new_documents: false,
-            });
+            app.dialog = Some(d.back_to_manage_styles());
         }
         if ui.button(tl!("New Style…")).clicked() {
             app.dialog = Some(Dialog::NewStyle { name: "Style1".into(), based_on: str_of(&cur, "name"), back: true });
