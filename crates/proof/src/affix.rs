@@ -297,6 +297,11 @@ fn cap_try(s: &str) -> String {
     out
 }
 
+/// `form`, unless it is empty: no word is, and `FULLSTRIP` can strip a stem down to nothing.
+fn non_empty(form: String) -> Option<String> {
+    Some(form).filter(|f| !f.is_empty())
+}
+
 /// `0` means empty in Hunspell's strip and append fields.
 fn zero_empty(s: &str) -> String {
     if s == "0" { String::new() } else { s.to_string() }
@@ -655,7 +660,7 @@ impl AffixDict {
                     .rules
                     .iter()
                     .filter_map(|&i| self.suffixes.get(i as usize))
-                    .filter(|r| r.cont & flags != 0 && r.cond_matches(&root, true))
+                    .filter(|r| r.cont & flags != 0 && r.cont & self.circumfix == 0 && r.cond_matches(&root, true))
                     .fold(0u128, |m, r| m | r.bit);
                 if inner != 0 && self.form_has_flag(&root, inner, depth - 1, excluded) {
                     return true;
@@ -805,11 +810,15 @@ impl AffixDict {
                 continue;
             }
             let form = format!("{base}{}", r.add);
+            if form.is_empty() {
+                continue;
+            }
             let circ = r.cont & self.circumfix != 0;
             if r.cross {
                 cross_sfx.push((form.clone(), circ));
             }
-            if r.cont != 0 && queued.insert((form.clone(), r.cont)) {
+            // A circumfix suffix needs its prefix, so what it ends is never chained without one.
+            if r.cont != 0 && !circ && queued.insert((form.clone(), r.cont)) {
                 chain.push((form.clone(), r.cont));
             }
             // A circumfix suffix or one that needs another affix is no word on its own.
@@ -841,6 +850,9 @@ impl AffixDict {
                         continue;
                     }
                     let next = format!("{base}{}", r.add);
+                    if next.is_empty() {
+                        continue;
+                    }
                     if r.cont != 0 && queued.insert((next.clone(), r.cont)) {
                         chain.push((next.clone(), r.cont));
                     }
@@ -865,7 +877,7 @@ impl AffixDict {
             }
             let circ = r.cont & self.circumfix != 0;
             if !circ && r.cont & self.need_affix == 0 {
-                out.push(format!("{}{rest}", r.add));
+                out.extend(non_empty(format!("{}{rest}", r.add)));
             }
             if r.cross {
                 // Every suffix form looked at counts against the work budget, matching or not.
@@ -878,7 +890,7 @@ impl AffixDict {
                         continue;
                     }
                     if let Some(rest) = s.strip_prefix(&*r.strip) {
-                        out.push(format!("{}{rest}", r.add));
+                        out.extend(non_empty(format!("{}{rest}", r.add)));
                     }
                 }
             }
@@ -1535,5 +1547,34 @@ pub(crate) mod tests {
         let (d, forms) = chain(&format!("SET UTF-8\nFULLSTRIP\n{aff}"), "1\nx/A\n", "x");
         assert_eq!(forms, ["x", "xy", "z"]);
         assert!(d.contains("z"));
+    }
+
+    /// `forms()` never lists an empty form, which `FULLSTRIP` can produce when a suffix replaces
+    /// the whole stem with nothing, at the first suffix or further along a chain.
+    #[test]
+    fn forms_never_list_an_empty_word() {
+        let aff = "SET UTF-8\nFULLSTRIP\nSFX A Y 2\nSFX A x 0 .\nSFX A 0 y/B .\nSFX B Y 1\nSFX B xy 0 .\n";
+        let d = AffixDict::from_hunspell(aff, "1\nx/A\n", &[]).unwrap();
+        let mut forms = d.forms("x");
+        forms.sort();
+        assert_eq!(forms, ["x", "xy"]);
+        assert!(!d.contains(""));
+    }
+
+    /// A circumfix suffix in the middle of a suffix chain still needs its prefix: `workable`
+    /// carries the circumfix, so neither it nor `workables` is a word without `ne`.
+    #[test]
+    fn circumfix_suffix_inside_a_chain_still_needs_its_prefix() {
+        let aff = "SET UTF-8\nCIRCUMFIX c\nPFX P Y 1\nPFX P 0 ne/c .\nSFX A Y 1\nSFX A 0 able/Bc .\nSFX B Y 1\nSFX B 0 s .\n";
+        let d = AffixDict::from_hunspell(aff, "1\nwork/AP\n", &[]).unwrap();
+        let mut forms = d.forms("work");
+        forms.sort();
+        assert_eq!(forms, ["neworkable", "work"]);
+        for f in &forms {
+            assert!(d.contains(f), "{f}");
+        }
+        for w in ["workable", "workables", "nework"] {
+            assert!(!d.contains(w), "{w}");
+        }
     }
 }
