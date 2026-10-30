@@ -3586,6 +3586,36 @@ fn document_text_drops_tracked_deletions() {
     assert_eq!(run(&mut s, "document.text", json!({}))["text"], "Signed by Bob Jones, Director.");
 }
 
+#[test]
+fn document_text_drops_hidden_text() {
+    // Hidden runs (w:vanish) are not body text: an agent reading get_text must not see what a
+    // reader does not see. Inspect Document still reports them.
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Approved budget: 100."}));
+    run(&mut s, "select.text", json!({"text": "100"}));
+    run(&mut s, "format.hidden", json!({"value": true}));
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "text.insert", json!({"text": " Paid: yes."}));
+    assert_eq!(run(&mut s, "document.text", json!({}))["text"], "Approved budget: . Paid: yes.");
+    assert_eq!(run(&mut s, "file.inspect", json!({}))["found"]["hiddenText"], json!(true));
+}
+
+#[test]
+fn document_text_drops_hidden_text_in_tables() {
+    // Hidden runs inside table cells follow the same rule as body paragraphs.
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Before. "}));
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 1}));
+    run(&mut s, "text.insert", json!({"text": "Cell note 42"}));
+    run(&mut s, "select.text", json!({"text": "42"}));
+    run(&mut s, "format.hidden", json!({"value": true}));
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "text.insert", json!({"text": "After."}));
+    let out = run(&mut s, "document.text", json!({}))["text"].as_str().unwrap().to_string();
+    assert!(!out.contains("42"), "hidden table text leaked: {out}");
+    assert!(out.contains("Cell note") && out.contains("After."), "{out}");
+}
+
 /// The author of the revision `rid` points to.
 fn author_of(s: &Session, rid: Option<u32>) -> Option<String> {
     rid.and_then(|r| s.doc.revisions.get(r as usize)).map(|r| r.author.clone())

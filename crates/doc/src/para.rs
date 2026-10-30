@@ -140,6 +140,20 @@ impl Paragraph {
     pub fn final_text(&self) -> String {
         self.text_without(&self.deleted_ranges())
     }
+    /// [`Self::final_text`] — and without hidden runs, hidden directly or through their
+    /// character style: the text as it prints by default. Inspect Document's hidden-text
+    /// detection uses the same resolved formatting, so nothing it would report rides into
+    /// [`Self::final_visible_text`].
+    pub fn final_visible_text(&self, styles: &crate::styles::StyleSheet) -> String {
+        let mut dropped = self.deleted_ranges();
+        let style = self.props.style.as_deref();
+        for (r, c) in self.run_ranges() {
+            if !r.is_empty() && styles.resolve_char(style, c).hidden {
+                dropped.push(r);
+            }
+        }
+        self.text_without(&dropped)
+    }
     /// The byte ranges of the tracked deletions.
     pub fn deleted_ranges(&self) -> Vec<std::ops::Range<usize>> {
         self.run_ranges().filter(|(_, c)| c.del.is_some()).map(|(r, _)| r).collect()

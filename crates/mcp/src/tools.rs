@@ -141,7 +141,13 @@ pub fn tool_definitions() -> Value {
             with_doc(obj(json!({"text": s("Text to find"), "occurrence": n("1-based")}), &["text"])),
             false
         ),
-        tool("get_text", "Document text", "Body text with tracked deletions omitted.", with_doc(obj(json!({}), &[])), true),
+        tool(
+            "get_text",
+            "Document text",
+            "Body text with tracked deletions and hidden text omitted (hidden = what Inspect Document reports); nothing invisible to a reader rides into the agent's context.",
+            with_doc(obj(json!({}), &[])),
+            true
+        ),
         tool(
             "inspect_document",
             "Inspect document",
