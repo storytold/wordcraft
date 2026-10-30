@@ -7,6 +7,7 @@ use wordcraft_doc::{Pos, Table};
 mod autospace;
 mod bidi;
 mod budget;
+mod cjk;
 mod complex;
 mod grid;
 mod ligature;
