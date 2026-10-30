@@ -513,6 +513,7 @@ pub struct WordApp {
     fonts_hans: bool,
     /// Whether the installed UI fonts use the Korean CJK face order.
     fonts_korean: bool,
+    fonts_hant: bool,
     /// Whether the installed UI fonts include an installed CJK fallback font (#241).
     fonts_system_cjk: bool,
     /// CJK text is (about to be) on screen in a non-CJK interface, e.g. the language names in

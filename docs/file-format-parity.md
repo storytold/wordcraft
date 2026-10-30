@@ -139,6 +139,13 @@ Double-clicking a document, Open With, and making WordCraft the default app (#29
 register WordCraft for these types but never take over a default; File › Options › General has
 **Make WordCraft the default for Word documents…** where the system allows it.
 
+Arguments macOS adds when it launches an app (`-psn_…`, `-NS…`/`-Apple…` options with their
+values) are dropped before the rest are opened as files, and a file that fails to open, whether it
+came from the command line, a macOS open event or a drop on the window, names the file and the
+real cause on the status bar and in the log (#1103). The report of "file is corrupt" after
+choosing "Always open with" could not be reproduced on 0.7.0 in a Mac check; these two
+hardenings are what the code supports.
+
 | Platform | Registered types | Default app | Notes |
 |---|---|---|---|
 | Windows (MSI) | `.docx` `.docm` `.dotx` `.dotm` `.doc` `.dot` `.rtf` `.odt`; `.md` `.txt` under Open With only | Options button opens Settings › Default apps on WordCraft's page | One ProgId per type, `OpenWithProgids`, Capabilities + `RegisteredApplications` (`packaging/windows/wordcraft.wxs`). Not yet tried on a real install |
@@ -264,6 +271,7 @@ Repeated DOCX style IDs use the last complete definition. The original regressio
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-17 | trivial | macOS launch arguments (`-psn_*`, `-NS*`, `-Apple*`) are no longer opened as files; a file that fails to open (command line, open event, drop) names the file and the cause on the status bar and in the log (#1103) |
 | 2026-10-17 | trivial | Encryption rows: Standard (Word 2007, AES-ECB) encrypted packages open with a password, also when named `.doc`/`.dot`; AES headers in Word 97-2003 files are outside the public spec and refused (gap 9). The duplicate combined `.docx`/`.doc` row is removed; the `.doc` row reads 🟡 ~60% (it opens XOR/RC4/RC4 CryptoAPI); hours 2–4 → 1–2 and 4–6 → 1–2 (left: checks against Word-written files); total re-summed from the rows, 175–287 h |
 | 2026-10-25 | trivial | Repeated DOCX style IDs: repeated save/reopen regression for whole-definition replacement. |
 | 2026-10-25 | trivial | Arabic list labels: `arabicAlpha` and `arabicAbjad` draw the 28 Arabic letters (alphabetical and abjad order), doubling past the last letter; Hebrew, Hindi, Thai and Vietnamese still show decimal (`doc::section::tests::arabic_letters_count_in_both_orders`) |
