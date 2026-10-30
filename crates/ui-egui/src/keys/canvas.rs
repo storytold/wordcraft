@@ -248,6 +248,8 @@ fn prefilter(app: &mut WordApp, ctx: &egui::Context, e: &egui::Event, alt_codes:
     // Paste through `edit.paste`, which reads the picture through the host like the ribbon's
     // Paste; the event's own pixels are left alone.
     if let egui::Event::PasteImage(_) = &e {
+        // Pasted here: a V release, if a platform still sends one, mustn't paste again.
+        app.canvas.pasted = true;
         if app.session.math.is_none() && app.services.clipboard_picture.is_some() {
             let _ = app.run("edit.paste", json!({}));
         }
