@@ -1,5 +1,5 @@
 use super::select::{edit_float, min_size, movable_story, obj_size, select_object, selected, with_obj};
-use super::*;
+use super::{CmdError, CmdResult, Float, InlineObject, Pos, Selection, Session, StoryRef, Value, Wrap, json, p};
 
 /// Largest object offset or move, points.
 pub(super) const MAX_OFFSET: f32 = 4000.0;

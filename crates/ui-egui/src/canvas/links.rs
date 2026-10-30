@@ -1,4 +1,4 @@
-use super::*;
+use super::{DocLayout, Pos, WordApp};
 
 /// The simple field at or just before `pos` when it shows its code (View › Field Codes, or its
 /// own toggle): where it is.

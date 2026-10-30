@@ -1,7 +1,7 @@
 use super::block::{Block, Blocks};
 use super::parts::PartKind;
 use super::position::Path;
-use super::*;
+use super::{InlineObject, Numbering, numbering, para, section, styles};
 
 /// Words in `s` (tokens separated by whitespace that contain at least one alphanumeric char).
 pub fn count_words(s: &str) -> usize {

@@ -2,7 +2,10 @@ use super::cache::{Key, LayoutCache, Totals, has_page_fields, has_total_fields, 
 use super::floats::{EarlyFloats, WrapArea};
 use super::headers::HfLinks;
 use super::placed::Placed;
-use super::*;
+use super::{
+    Anchor, Arc, Block, CharProps, Counters, DocLayout, Document, FieldCtx, Float, HashMap, HashSet, HideDeleted, InlineObject, LayoutOptions, Level,
+    ParaLayout, Paragraph, Rect, Rgb, SectionProps, StoryRef, ViewMode, Wrap, contour, math, para, styleref, textbox,
+};
 
 /// A layout pass: finished, or to be done again with the page totals it found, or with the
 /// floats placed above their anchors it found ([`EarlyFloats`]).
@@ -43,6 +46,9 @@ pub(crate) struct Ctx<'a> {
     /// Empty body paragraphs with hidden marks or continuous section breaks, in order:
     /// they take no room (see [`place_para`]).
     pub(crate) quiet_marks: Vec<usize>,
+    /// Empty paragraphs closing a continuous section right after another section's mark, in
+    /// order: each takes its line while it fits, then stays at the page's bottom (#3907).
+    pub(crate) stacked_marks: Vec<usize>,
     /// Whether even pages are mirrored (mirrored margins, on pages): see [`mirror_even_pages`].
     pub(crate) mirror: bool,
     /// Cache-key hashes of the table-style text formatting cells were laid out with
@@ -63,6 +69,16 @@ pub(crate) struct Ctx<'a> {
     pub(crate) hf: Arc<HfLinks<'a>>,
     /// Pictures' transparency, decoded for Tight and Through wrapping ([`Ctx::wrap_outline`]).
     pub(crate) alphas: contour::Alphas,
+}
+
+struct ParaEnvInput<'a> {
+    width: f32,
+    label: Option<(String, Level)>,
+    table: Option<&'a para::CellText>,
+    exclusions: &'a [para::Exclusion],
+    eq_number: u32,
+    typing_word: Option<(usize, usize)>,
+    fitted: &'a [(usize, f32)],
 }
 
 /// A header or footer (`story`) laid out for page `number` of a section (`sect`, `mirror`): its
@@ -221,9 +237,45 @@ impl Ctx<'_> {
         }
         self.cache.misses += 1;
         let typing = key.typing;
-        let pl = Arc::new(para::layout_para(p, &self.para_env(width, label, table, exclusions, eq_number, typing, &fitted)));
+        let pl = Arc::new(para::layout_para(
+            p,
+            &self.para_env(ParaEnvInput { width, label, table, exclusions, eq_number, typing_word: typing, fitted: &fitted }),
+        ));
         self.cache.paras.insert(key, pl.clone());
         pl
+    }
+
+    /// `p` laid out on its own, as the paragraph after a kept one is measured before it is placed
+    /// (no wrap areas, proofing, typed word or resized text boxes), through the cache when
+    /// [`Ctx::para_labelled`] would lay it out with those same inputs: it is then not laid out a
+    /// second time when it is placed. Counts nothing (list labels, equation numbers, page totals).
+    /// `None` when the inputs differ.
+    pub(crate) fn para_ahead(&mut self, p: &Paragraph, width: f32, label: Option<(String, Level)>) -> Option<Arc<ParaLayout>> {
+        let resized = p
+            .objects
+            .iter()
+            .any(|o| matches!(o, InlineObject::Shape { story: Some(_), float, .. } if float.wrap == Wrap::Inline && float.rot == 0.0));
+        if self.opts.proofing || self.boxes.inside() || resized || self.hide_deleted != self.opts.hides_deleted(StoryRef::Body) {
+            return None;
+        }
+        let kept = (self.eq_count, self.uses_totals);
+        let (key, eq_number) = self.para_key(p, width, None, &[], label.as_ref(), &[]);
+        (self.eq_count, self.uses_totals) = kept;
+        if key.typing.is_some() {
+            return None;
+        }
+        self.cache.used.insert(key.clone());
+        if let Some(pl) = self.cache.paras.get(&key) {
+            self.cache.hits += 1;
+            return Some(pl.clone());
+        }
+        self.cache.misses += 1;
+        let pl = Arc::new(para::layout_para(
+            p,
+            &self.para_env(ParaEnvInput { width, label, table: None, exclusions: &[], eq_number, typing_word: None, fitted: &[] }),
+        ));
+        self.cache.paras.insert(key, pl.clone());
+        Some(pl)
     }
 
     /// What `measure` reads from `p` laid out as [`Ctx::para_labelled`] would, remembering only
@@ -246,7 +298,10 @@ impl Ctx<'_> {
         }
         self.cache.misses += 1;
         let typing = key.typing;
-        let m = measure(&para::layout_para(p, &self.para_env(width, label, table, &[], eq_number, typing, &fitted)));
+        let m = measure(&para::layout_para(
+            p,
+            &self.para_env(ParaEnvInput { width, label, table, exclusions: &[], eq_number, typing_word: typing, fitted: &fitted }),
+        ));
         self.cache.measures.insert(key, m);
         m
     }
@@ -338,16 +393,8 @@ impl Ctx<'_> {
         h
     }
 
-    fn para_env<'b>(
-        &'b self,
-        width: f32,
-        label: Option<(String, Level)>,
-        table: Option<&'b para::CellText>,
-        exclusions: &'b [para::Exclusion],
-        eq_number: u32,
-        typing_word: Option<(usize, usize)>,
-        fitted: &'b [(usize, f32)],
-    ) -> para::ParaEnv<'b> {
+    fn para_env<'b>(&'b self, input: ParaEnvInput<'b>) -> para::ParaEnv<'b> {
+        let ParaEnvInput { width, label, table, exclusions, eq_number, typing_word, fitted } = input;
         para::ParaEnv {
             doc: self.doc,
             width,

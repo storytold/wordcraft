@@ -1,5 +1,7 @@
 use super::shell::{Next, go};
-use super::*;
+#[cfg(not(target_arch = "wasm32"))]
+use super::{AfterPick, Asked, FileDialogRequest};
+use super::{RefsDialog, Serialize, Source, Tokens, Ui, Value, WordApp, buttons, json, vec2};
 
 // ---------------------------------------------------------------------------------------------
 // Sources
@@ -109,6 +111,7 @@ pub(super) fn field_mut<'a>(s: &'a mut Source, key: &str) -> Option<&'a mut Stri
         "doi" => &mut s.doi,
         "accessed" => &mut s.accessed,
         "tag" => &mut s.tag,
+        "corporate" => &mut s.corporate,
         _ => return None,
     })
 }
@@ -125,11 +128,31 @@ pub struct SourceForm {
     pub cite: bool,
     /// Opened from the Source Manager, which comes back when this closes.
     pub back: bool,
+    /// Corporate Author is checked: the Author box holds one organisation's name (#4848).
+    pub corporate: bool,
 }
 
 impl SourceForm {
     pub fn new(cite: bool, back: bool) -> SourceForm {
-        SourceForm { source: Source { kind: "book".into(), ..Default::default() }, show_all: false, edit: false, cite, back }
+        SourceForm::of(Source { kind: "book".into(), ..Default::default() }, false, cite, back)
+    }
+
+    /// The form for `source`; Corporate Author starts checked when the source has one.
+    pub fn of(source: Source, edit: bool, cite: bool, back: bool) -> SourceForm {
+        let corporate = !source.corporate.trim().is_empty();
+        SourceForm { source, show_all: false, edit, cite, back, corporate }
+    }
+
+    /// The source as OK adds it: the person authors or the corporate author, whichever box is
+    /// shown, never both.
+    pub fn finished(&self) -> Source {
+        let mut src = self.source.clone();
+        if self.corporate {
+            src.author.clear();
+        } else {
+            src.corporate.clear();
+        }
+        src
     }
 
     /// The fields shown: the type's own, or every field.
@@ -158,7 +181,10 @@ pub(super) fn source_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SourceForm) -> N
         combo.response.labelled_by(kind_label.id);
         ui.end_row();
         let edit = f.edit;
+        let corporate = f.corporate;
         for (key, label) in f.fields() {
+            // Corporate Author swaps the Author box for one organisation's name (#4848).
+            let (key, label) = if key == "author" && corporate { ("corporate", "Corporate Author") } else { (key, label) };
             let field_label = ui.label(format!("{}:", tl!(label)));
             if let Some(v) = field_mut(&mut f.source, key) {
                 let hint = match key {
@@ -170,12 +196,17 @@ pub(super) fn source_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SourceForm) -> N
                     .labelled_by(field_label.id);
             }
             ui.end_row();
+            if matches!(key, "author" | "corporate") {
+                ui.label("");
+                ui.checkbox(&mut f.corporate, tl!("Corporate Author"));
+                ui.end_row();
+            }
         }
     });
     ui.checkbox(&mut f.show_all, tl!("Show every bibliography field"));
     let (ok, cancel) = buttons(ui, tl!("OK"));
     if ok {
-        let src = serde_json::to_value(&f.source).unwrap_or(Value::Null);
+        let src = serde_json::to_value(f.finished()).unwrap_or(Value::Null);
         let r = if f.cite { app.run("references.citation", json!({"source": src})) } else { app.run("references.sources", json!({"add": src})) };
         if let Err(e) = r {
             app.status(e);
@@ -197,7 +228,8 @@ pub(super) fn sources_ui(app: &mut WordApp, ui: &mut Ui, selected: &mut Option<u
         .sources
         .iter()
         .map(|s| {
-            let parts: Vec<&str> = [s.author.as_str(), s.title.as_str(), s.year.as_str()].into_iter().filter(|x| !x.is_empty()).collect();
+            let who = if s.corporate.trim().is_empty() { s.author.as_str() } else { s.corporate.trim() };
+            let parts: Vec<&str> = [who, s.title.as_str(), s.year.as_str()].into_iter().filter(|x| !x.is_empty()).collect();
             format!("{} — {}", s.tag, parts.join("; "))
         })
         .collect();
@@ -233,7 +265,7 @@ pub(super) fn sources_ui(app: &mut WordApp, ui: &mut Ui, selected: &mut Option<u
         if ui.add_enabled(src.is_some(), egui::Button::new(tl!("Edit…"))).clicked()
             && let Some(s) = &src
         {
-            next = go(RefsDialog::Source(Box::new(SourceForm { source: s.clone(), show_all: false, edit: true, cite: false, back: true })));
+            next = go(RefsDialog::Source(Box::new(SourceForm::of(s.clone(), true, false, true))));
         }
         if ui.add_enabled(src.is_some(), egui::Button::new(tl!("Delete"))).clicked()
             && let Some(s) = &src

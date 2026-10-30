@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    Arc, Blocks, ContentTypes, DocxError, El, MAX_FONT_NAME, MAX_HF_DEPTH, MAX_PARTS, MAX_TABLE_FONTS, MAX_VBA_RELATED, PartKind, Reader, Rels,
+    Revision, RevisionKind, Rgb, StoryCtx, VBA_PROJECT_PART, VBA_RELATED, props, shape_style,
+};
 
 impl Reader<'_> {
     /// Keep the parts the VBA project at `project` relates to, with their relationship types and

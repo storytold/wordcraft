@@ -178,6 +178,7 @@ impl WordApp {
             styled: _,
             fonts_hans: _,
             fonts_korean: _,
+            fonts_hant: _,
             fonts_system_cjk: _,
             want_system_cjk: _,
             recent_fonts_for: _,

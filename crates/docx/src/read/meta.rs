@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    Arc, BTreeMap, Blocks, Comment, DocxError, El, HashMap, HashSet, MAX_PARTS, MAX_SOURCES, MAX_TEMPLATE_PATH, NoteKind, NumFormat, Paragraph,
+    PartKind, Reader, Rels, Seen, StoryCtx, Zoom, ZoomFit, int, math, on_off, para_block, props, tw, u32_of,
+};
 
 impl Reader<'_> {
     pub(super) fn read_settings(&mut self, path: &str) -> Result<(), DocxError> {
