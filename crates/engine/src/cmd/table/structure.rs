@@ -1,18 +1,27 @@
 use super::cells::{cell, selected_cells};
 use super::clear::{cell_prefix, guard_delete, text_spans};
 use super::layout::{fix_caret, sync_cell_widths};
-use super::{Block, CmdError, CmdResult, Paragraph, Pos, Selection, Session, Value, json, p, sel_result};
+use super::{Block, CmdError, CmdResult, Paragraph, Pos, RevisionKind, Selection, Session, Value, json, p, sel_result};
 
 /// Insert Above / Below: rows like the caret's, as many as the selection spans; the caret goes into the first.
+/// With Track Changes on, the new rows are a tracked row insertion (`w:trPr/w:ins`), as in Word.
 pub(in crate::cmd) fn row(s: &mut Session, below: bool) -> CmdResult {
     let (tp, r, c) = cell(s)?;
     let cells = selected_cells(s);
     let n = cells.iter().map(|x| x.0).collect::<std::collections::BTreeSet<_>>().len().max(1);
+    let at = if below { r + 1 } else { r };
+    let rid = s.doc.settings.track_changes.then(|| crate::cmd::new_revision(s, RevisionKind::Insert));
     let t = s.doc.table_mut(s.sel.focus.story, &tp)?;
+    let before = t.rows.len();
     for _ in 0..n {
-        t.insert_row(if below { r + 1 } else { r }, r);
+        t.insert_row(at, r);
     }
-    fix_caret(s, &tp, if below { r + 1 } else { r }, c)
+    // Fewer than `n` when the table is at its row limit.
+    let added = t.rows.len() - before;
+    for row in t.rows.iter_mut().skip(at).take(added) {
+        row.props.ins = rid;
+    }
+    fix_caret(s, &tp, at, c)
 }
 
 /// Insert Left / Right: a column beside the caret's cell; the caret goes into it.
@@ -44,7 +53,8 @@ pub(super) fn del_row(s: &mut Session, _: &Value) -> CmdResult {
     }
     let prefixes: Vec<Vec<u32>> = rows.iter().map(|rr| tp.0.iter().copied().chain([*rr as u32]).collect()).collect();
     let spans = text_spans(s, story, &prefixes);
-    if let Some(done) = guard_delete(s, &spans)? {
+    let marked: Vec<_> = rows.iter().map(|rr| (tp.clone(), *rr)).collect();
+    if let Some(done) = guard_delete(s, &spans, &marked)? {
         return Ok(done);
     }
     let t = s.doc.table_mut(story, &tp)?;
@@ -88,7 +98,7 @@ pub(super) fn del_col(s: &mut Session, _: &Value) -> CmdResult {
         }
     }
     let spans = text_spans(s, story, &prefixes);
-    if let Some(done) = guard_delete(s, &spans)? {
+    if let Some(done) = guard_delete(s, &spans, &[])? {
         return Ok(done);
     }
     let t = s.doc.table_mut(story, &tp)?;
@@ -106,7 +116,8 @@ pub(super) fn del_table(s: &mut Session, _: &Value) -> CmdResult {
     let (tp, _, _) = cell(s)?;
     let story = s.sel.focus.story;
     let spans = text_spans(s, story, std::slice::from_ref(&tp.0));
-    if let Some(done) = guard_delete(s, &spans)? {
+    let marked: Vec<_> = (0..s.doc.table(story, &tp).map_or(0, |t| t.rows.len())).map(|r| (tp.clone(), r)).collect();
+    if let Some(done) = guard_delete(s, &spans, &marked)? {
         return Ok(done);
     }
     s.doc.remove_block(story, &tp)?;

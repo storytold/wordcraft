@@ -316,6 +316,12 @@ impl Reader<'_> {
                 let old = ch.child("w:trPr").map(trpr).unwrap_or_default();
                 row.props.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, ch), old);
             }
+            if let Some(i) = tr.child("w:trPr").and_then(|p| p.child("w:ins")) {
+                row.props.ins = Some(self.revision(RevisionKind::Insert, i));
+            }
+            if let Some(d) = tr.child("w:trPr").and_then(|p| p.child("w:del")) {
+                row.props.del = Some(self.revision(RevisionKind::Delete, d));
+            }
             let mut tcs = Vec::new();
             collect(tr, "w:tc", &mut tcs, &mut Vec::new(), 0);
             for (tc, cell_controls) in tcs.into_iter().take(MAX_COLS) {
