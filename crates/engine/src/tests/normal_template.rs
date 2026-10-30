@@ -418,3 +418,89 @@ fn a_failing_macro_saves_no_default() {
     run(&mut s, "tools.macros", json!({"run": "ok"}));
     assert_eq!(body_font(&session(&store).normal_document()).0, "Georgia");
 }
+
+/// Review of #4449–#4458: with formatting limited to the document's styles, a Set As Default
+/// that changes the open document is refused as Modify Style is, whatever its scope, and saves
+/// nothing.
+#[test]
+fn set_as_default_obeys_limit_formatting() {
+    let store = MemoryStore::new();
+    let mut s = session(&store);
+    run(&mut s, "text.insert", json!({"text": "Hello"}));
+    run(&mut s, "review.restrict", json!({"mode": "none", "formatting": true}));
+    let before = s.doc.styles.clone();
+    assert!(s.run("styles.modify", &json!({"style": "Normal", "chr": {"font": "Georgia"}})).is_err(), "Modify Style is refused");
+    for scope in ["document", "new"] {
+        assert!(s.run("format.setDefault", &json!({"props": {"font": "Georgia"}, "scope": scope})).is_err(), "font, {scope}");
+        assert!(s.run("para.setDefault", &json!({"props": {"spaceAfter": 30.0}, "scope": scope})).is_err(), "paragraph, {scope}");
+    }
+    assert_eq!(s.doc.styles, before, "the document is unchanged");
+    assert!(store.get().is_none(), "and nothing is saved");
+}
+
+/// Review of #4449–#4458: a numbered style saved for new documents brings its list, so a new
+/// document's headings keep their numbers, and the first list made there is a list of its own.
+#[test]
+fn numbered_styles_keep_their_list_in_new_documents() {
+    for command in ["design.setDefault", "styles.setDefault"] {
+        let store = MemoryStore::new();
+        let mut s = session(&store);
+        let num = s.doc.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+        s.doc.styles.get_mut("Heading1").unwrap().para.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
+        run(&mut s, command, json!({"style": "Heading1"}));
+        let mut fresh = session(&store);
+        run(&mut fresh, "file.new", json!({}));
+        let heading = fresh.doc.styles.get("Heading1").and_then(|h| h.para.numbering).expect("still numbered");
+        assert!(fresh.doc.numbering.num(heading.num).is_some(), "{command}: its list came too");
+        run(&mut fresh, "text.insert", json!({"text": "Item"}));
+        run(&mut fresh, "para.numbering", json!({}));
+        let item = fresh.doc.para_at(&fresh.sel.focus).and_then(|p| p.props.numbering).expect("a list");
+        assert_ne!(item.num, heading.num, "{command}: the new list doesn't take the heading's over");
+        assert_eq!(fresh.doc.styles.get("Heading1").and_then(|h| h.para.numbering), Some(heading));
+    }
+}
+
+/// Review of #4449–#4458: every page setup Page Setup accepts comes back as saved: the
+/// template is read like any document, with no checks of its own to disagree with.
+#[test]
+fn page_defaults_keep_every_page_setup_page_setup_accepts() {
+    // (width, height, left and right, top and bottom): the largest page, margins leaving just
+    // the room for text, and a page the size of a label.
+    for (w, h, side, end) in [(1584.0, 1584.0, 0.0, 0.0), (612.0, 792.0, 288.0, 378.0), (1584.0, 1584.0, 774.0, 774.0), (40.0, 40.0, 2.0, 2.0)] {
+        let store = MemoryStore::new();
+        let mut s = session(&store);
+        run(&mut s, "layout.margins", json!({"left": 0.0, "right": 0.0, "top": 0.0, "bottom": 0.0}));
+        run(&mut s, "layout.size", json!({"width": w, "height": h}));
+        run(&mut s, "layout.margins", json!({"left": side, "right": side, "top": end, "bottom": end}));
+        run(&mut s, "layout.setDefault", json!({}));
+        let sp = session(&store).normal_document().last_section;
+        assert_eq!((sp.page_w, sp.page_h), (w, h));
+        assert_eq!((sp.margin_left, sp.margin_right, sp.margin_top, sp.margin_bottom), (side, side, end, end), "{w}×{h}");
+    }
+}
+
+/// Review of #4449–#4458: Set As Default saves only what was set, on the Normal template's own
+/// styles: the open document's other formatting (here a justified Normal from its .docx) stays
+/// out of new documents.
+#[test]
+fn set_as_default_saves_only_what_was_set() {
+    let store = MemoryStore::new();
+    let mut theirs = Document::from_text("Theirs");
+    if let Some(n) = theirs.styles.get_mut("Normal") {
+        n.para.align = Some(wordcraft_doc::Align::Justify);
+        n.chr.italic = Some(true);
+    }
+    theirs.styles.default_para.space_before = Some(40.0);
+    let docx = crate::io::save_bytes("x.docx", &theirs).unwrap();
+    let mut s = session(&store);
+    run(&mut s, "file.open", json!({"path": "theirs.docx", "data": crate::cmd::insert::base64_encode(&docx)}));
+    run(&mut s, "format.setDefault", json!({"props": {"font": "Georgia"}}));
+    run(&mut s, "para.setDefault", json!({"props": {"spaceAfter": 9.0}}));
+    let d = session(&store).normal_document();
+    let rp = d.styles.resolve_para(&wordcraft_doc::ParaProps { style: Some("Normal".into()), ..Default::default() });
+    assert_eq!(body_font(&d).0, "Georgia");
+    assert_eq!(rp.space_after, 9.0);
+    assert_ne!(rp.align, wordcraft_doc::Align::Justify, "the open document's Normal isn't saved");
+    assert_ne!(rp.space_before, 40.0, "nor its defaults");
+    assert!(!d.styles.resolve_char(Some("Normal"), &Default::default()).italic);
+}
