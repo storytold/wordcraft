@@ -24,6 +24,7 @@ impl WordApp {
         if cfg!(target_os = "macos") {
             control_click_as_secondary(&mut raw.events, &mut self.control_click);
         }
+        ensure_presses_are_preceded_by_moves(&mut raw.events);
         if self.synthetic_pending || self.synthetic.is_empty() || self.fonts_frames < 2 || !self.control_input_is_roots(ctx) {
             return;
         }
@@ -141,6 +142,31 @@ impl WordApp {
     }
 }
 
+/// A touch press can arrive without a preceding pointer move — eframe's web backend pushes the
+/// press alone, unlike `egui_winit`, which moves the pointer to the touch first ("First move
+/// the pointer to the right location"). egui takes the pass's `interact_pos` from the pointer's
+/// previous position, so without the move the press pass hit-tests nowhere and the click, when
+/// the release synthesizes it, finds no widget: taps would do nothing on a touch screen. Give
+/// every press a move to its own position, as [`WordApp::peek_synthetic`] does for control input.
+fn ensure_presses_are_preceded_by_moves(events: &mut Vec<egui::Event>) {
+    let mut last_pos: Option<egui::Pos2> = None;
+    let mut out = Vec::with_capacity(events.len() + 1);
+    for event in events.drain(..) {
+        match &event {
+            egui::Event::PointerMoved(p) => last_pos = Some(*p),
+            egui::Event::PointerButton { pos, pressed: true, .. } if last_pos != Some(*pos) => {
+                out.push(egui::Event::PointerMoved(*pos));
+                last_pos = Some(*pos);
+            }
+            egui::Event::PointerButton { pos, .. } => last_pos = Some(*pos),
+            egui::Event::PointerGone => last_pos = None,
+            _ => {}
+        }
+        out.push(event);
+    }
+    *events = out;
+}
+
 /// macOS reads a Control-click as the right-click (winit reports the primary button with Control
 /// held), so menus open on it as on a two-finger click. The release follows its press even if
 /// Control was let go in between.
@@ -157,5 +183,65 @@ pub(crate) fn control_click_as_secondary(events: &mut [egui::Event], held: &mut 
                 *held = false;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ensure_presses_are_preceded_by_moves;
+    use egui::{Event, Pos2};
+
+    fn press(x: f32, y: f32) -> Event {
+        Event::PointerButton { pos: Pos2::new(x, y), button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() }
+    }
+
+    fn moves(events: &[Event]) -> Vec<Option<Pos2>> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                Event::PointerMoved(p) => Some(Some(*p)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_press_without_a_move_gets_one_to_its_own_position() {
+        let mut events = vec![press(30.0, 25.0)];
+        ensure_presses_are_preceded_by_moves(&mut events);
+        assert_eq!(moves(&events), vec![Some(Pos2::new(30.0, 25.0))]);
+        assert!(matches!(events.get(1), Some(Event::PointerButton { pressed: true, .. })));
+    }
+
+    #[test]
+    fn a_press_after_a_move_to_the_same_place_is_left_alone() {
+        let mut events = vec![Event::PointerMoved(Pos2::new(30.0, 25.0)), press(30.0, 25.0)];
+        ensure_presses_are_preceded_by_moves(&mut events);
+        assert_eq!(moves(&events), vec![Some(Pos2::new(30.0, 25.0))]);
+    }
+
+    #[test]
+    fn a_press_after_the_pointer_left_gets_a_move_again() {
+        // A tap: press, release, the pointer gone; then another tap elsewhere — the web backend
+        // sends no move for the second touch.
+        let mut events = vec![
+            press(30.0, 25.0),
+            Event::PointerButton { pos: Pos2::new(30.0, 25.0), button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() },
+            Event::PointerGone,
+            press(140.0, 254.0),
+        ];
+        ensure_presses_are_preceded_by_moves(&mut events);
+        assert_eq!(moves(&events), vec![Some(Pos2::new(30.0, 25.0)), Some(Pos2::new(140.0, 254.0))]);
+    }
+
+    #[test]
+    fn other_events_pass_through_untouched() {
+        let mut events = vec![
+            Event::Text("a".into()),
+            Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() },
+        ];
+        let before = events.clone();
+        ensure_presses_are_preceded_by_moves(&mut events);
+        assert_eq!(events, before);
     }
 }
