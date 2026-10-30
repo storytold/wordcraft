@@ -149,8 +149,13 @@ pub(super) fn compress_punct(b: &mut Builder, text: &str) {
     for (p, n) in touching(b, text) {
         let Some(who) = crate::kinsoku::compresses(p.ch, n.ch) else { continue };
         let mark = if who == crate::kinsoku::Compress::First { p } else { n };
-        let adv = b.clusters.get(mark.k).map_or(0.0, |c| c.adv);
-        if !mark.single || !mark.size.is_finite() || mark.size <= 0.0 || adv < 0.9 * mark.size {
+        // The mark that gives up its blank half is full-width, and so is the first cluster, whose
+        // advance shrinks: a proportional quote before a full-width bracket keeps its width.
+        let full = |m: Side| {
+            let adv = b.clusters.get(m.k).map_or(0.0, |c| c.adv);
+            m.single && m.size.is_finite() && m.size > 0.0 && adv >= 0.9 * m.size
+        };
+        if !full(mark) || !full(p) {
             continue;
         }
         if let Some(pc) = b.clusters.get_mut(p.k) {

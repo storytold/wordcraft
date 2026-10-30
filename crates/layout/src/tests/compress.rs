@@ -65,6 +65,26 @@ fn nothing_changes_without_compression_or_between_other_characters() {
 }
 
 #[test]
+fn a_proportional_mark_keeps_its_width() {
+    // A Latin “ (proportional, in the run's Latin font) before a full-width 《: nothing to take.
+    let (got, _) = changes("A“《书》", CharSpacing::CompressPunctuation, &[]);
+    assert_eq!(got.get(1).copied(), Some(0.0), "{got:?}");
+}
+
+#[test]
+fn changing_the_setting_relays_out_cached_paragraphs() {
+    let mut d = Document::from_text("他说：“你好。”（再见）、《书》");
+    let mut cache = LayoutCache::new();
+    let opts = LayoutOptions::default();
+    let advs = |l: &DocLayout| first_para(l).clusters.iter().map(|c| c.adv).collect::<Vec<f32>>();
+    let before = advs(&layout(&d, &mut cache, &opts));
+    d.settings.char_spacing = CharSpacing::CompressPunctuation;
+    assert_eq!(advs(&layout(&d, &mut cache, &opts)), advs(&lay(&d)), "a reused cache lays out like a fresh one");
+    d.settings.char_spacing = CharSpacing::DoNotCompress;
+    assert_eq!(advs(&layout(&d, &mut cache, &opts)), before);
+}
+
+#[test]
 fn text_on_a_character_grid_keeps_its_cells() {
     let text = "“你好。”（再见）";
     let grid = |d: &mut Document| {

@@ -167,7 +167,7 @@ pub struct Settings {
 }
 
 /// Which East Asian characters give up the blank half of their em (`w:characterSpacingControl`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum CharSpacing {
     /// Every character keeps its full advance; ECMA-376's default when the element is absent.
