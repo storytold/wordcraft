@@ -29,6 +29,20 @@ impl Grid {
     pub fn key(&self) -> (u32, u32, u32, bool) {
         (self.line.map_or(0, f32::to_bits), self.chars.map_or(0, f32::to_bits), self.font_size.to_bits(), self.snap_all)
     }
+    /// Cells an East Asian character of `size` points takes on the character grid: one at the
+    /// default size or below, and as many as a larger size needs, never fewer than its size
+    /// (Word spaces large text on a character grid out to whole cells rather than squeezing
+    /// glyphs into one, which is why titles usually turn `snapToGrid` off).
+    pub fn cells(&self, size: f32) -> f32 {
+        let base = self.font_size.max(1.0);
+        if size.is_finite() { (size / base - 0.01).ceil().clamp(1.0, 64.0) } else { 1.0 }
+    }
+    /// The width of one character, points, for indents given in characters (`w:firstLineChars`
+    /// and friends) in a paragraph whose mark is `size` points: whole grid cells on a character
+    /// grid, `None` without one (the font size is the unit then).
+    pub fn char_unit(&self, size: f32) -> Option<f32> {
+        self.chars.map(|pitch| self.cells(size) * pitch)
+    }
     /// `h` rounded up to whole line pitches (unchanged without a line grid).
     pub fn snap_height(&self, h: f32) -> f32 {
         match self.line {
@@ -49,7 +63,8 @@ pub fn is_east_asian(c: char) -> bool {
 
 /// Character grid: East Asian characters (all text with `snapToChars`) take whole cells of the
 /// pitch, the glyph centred in them. A character at the default size takes one cell, a larger one
-/// as many as its size needs; Latin text stays proportional unless everything snaps.
+/// as many as its size needs ([`Grid::cells`]); Latin text stays proportional unless everything
+/// snaps.
 pub(super) fn snap_chars(b: &mut Builder, text: &str, grid: &Grid) {
     let Some(pitch) = grid.chars else { return };
     let base = grid.font_size.max(1.0);
@@ -63,7 +78,7 @@ pub(super) fn snap_chars(b: &mut Builder, text: &str, grid: &Grid) {
             continue;
         }
         let size = b.styles.get(c.style as usize).map_or(base, |st| st.size);
-        let cells = if east_asian { (size / base).round() } else { (c.adv / pitch - 0.01).ceil() }.clamp(1.0, 64.0);
+        let cells = if east_asian { grid.cells(size) } else { (c.adv / pitch - 0.01).ceil().clamp(1.0, 64.0) };
         let adv = cells * pitch;
         let shift = (adv - c.adv) / 2.0;
         for g in b.glyphs.get_mut(c.g0 as usize..c.g1 as usize).into_iter().flatten() {

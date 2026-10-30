@@ -95,9 +95,13 @@ fn paragraph_props(p: &Paragraph, env: &ParaEnv) -> ResolvedPara {
     if let Some(spacing) = env.read_line_spacing.filter(|s| s.is_finite() && (1.0..=2.0).contains(s)) {
         rp.line_spacing = wordcraft_doc::props::LineSpacing::Multiple(spacing);
     }
-    // Indents in characters are measured in the paragraph mark's font size.
+    // Indents in characters are measured in the paragraph mark's font size, or in grid cells when
+    // the paragraph sits on a character grid (two characters of indent are two cells, so a
+    // 28-character grid line holds 26 after a two-character first-line indent).
     if rp.indent_chars.iter().any(|c| *c != 0.0) {
-        rp.set_char_unit(doc.styles.resolve_char_in(p.props.style.as_deref(), env.table.map(|t| &t.chr), &p.mark).size);
+        let size = doc.styles.resolve_char_in(p.props.style.as_deref(), env.table.map(|t| &t.chr), &p.mark).size;
+        let unit = if rp.snap_to_grid { env.grid.char_unit(size) } else { None };
+        rp.set_char_unit(unit.unwrap_or(size));
     }
     list_indents(&mut rp, p, env);
     rp

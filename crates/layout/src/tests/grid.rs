@@ -63,6 +63,61 @@ fn line_grid_snaps_line_heights_and_fixes_lines_per_page() {
     assert_eq!(lines(&lay(&off)).1[0], lines(&lay(&plain)).1[0]);
 }
 
+/// A grid whose pitch is a little under the default size, as a 28-characters-a-line Chinese
+/// official document has (16 pt text on a 15.79 pt pitch): (document, default size, pitch).
+fn tight_grid(text: &str) -> (Document, f32, f32) {
+    let lines = wordcraft_doc::SectionProps { doc_grid: Some(DocGrid { kind: DocGridType::Lines, ..Default::default() }), ..Default::default() };
+    let size = para::Grid::of(&Document::from_text(""), &lines).font_size;
+    let d = with_grid(text, DocGridType::LinesAndChars, DocGrid::char_space_for(size - 0.2, size));
+    let pitch = d.last_section.grid_char_pitch(size).unwrap();
+    (d, size, pitch)
+}
+
+fn first_para(l: &DocLayout) -> std::sync::Arc<para::ParaLayout> {
+    l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para.clone()) } else { None }).unwrap()
+}
+
+#[test]
+fn larger_east_asian_text_takes_whole_cells_and_never_overlaps() {
+    // A title at 1.375 times the default size (22 pt over a 16 pt grid): two cells a character,
+    // not one cell narrower than the glyph.
+    let (mut d, size, pitch) = tight_grid("关于通知");
+    if let Some(Block::Para(p)) = d.body.first_mut().map(std::sync::Arc::make_mut) {
+        p.runs[0].props.size = Some(size * 1.375);
+    }
+    let g = first_para(&lay(&d));
+    for c in &g.clusters {
+        assert!((c.adv - 2.0 * pitch).abs() < 0.01, "advance {} for pitch {pitch}", c.adv);
+        assert!(c.adv >= size * 1.375, "a cell narrower than its glyph");
+    }
+    // Text at the default size keeps one cell, even on a pitch a little under that size.
+    let (d, _, pitch) = tight_grid("关于通知");
+    assert!(first_para(&lay(&d)).clusters.iter().all(|c| (c.adv - pitch).abs() < 0.01));
+}
+
+#[test]
+fn character_indents_count_grid_cells() {
+    // `w:firstLineChars="200"` on a character grid is two cells, not two font sizes: on a pitch
+    // under the font size the first line must not lose a character to the indent.
+    let text = "中".repeat(400);
+    let (mut d, _, pitch) = tight_grid(&text);
+    if let Some(Block::Para(p)) = d.body.first_mut().map(std::sync::Arc::make_mut) {
+        p.props.indent_first_chars = Some(2.0);
+    }
+    let g = first_para(&lay(&d));
+    let (first, second) = (&g.lines[0], &g.lines[1]);
+    assert!(((first.xs[0] - second.xs[0]) - 2.0 * pitch).abs() < 0.01, "indent {} for pitch {pitch}", first.xs[0] - second.xs[0]);
+    let count = |l: &para::Line| l.c1 - l.c0;
+    assert_eq!(count(first) + 2, count(second), "first line {} cells, full line {}", count(first), count(second));
+    // Off the grid (`snapToGrid` off) the font size stays the unit.
+    let mut off = d.clone();
+    if let Some(Block::Para(p)) = off.body.first_mut().map(std::sync::Arc::make_mut) {
+        p.props.snap_to_grid = Some(false);
+    }
+    let g = first_para(&lay(&off));
+    assert!(((g.lines[0].xs[0] - g.lines[1].xs[0]) - 2.0 * pitch).abs() > 0.1);
+}
+
 #[test]
 fn character_grid_places_east_asian_text_on_the_pitch() {
     let text = "日本語の文書abc";
