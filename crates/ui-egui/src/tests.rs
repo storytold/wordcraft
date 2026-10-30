@@ -582,6 +582,25 @@ fn caret_animation_is_a_ui_command_and_survives_a_restart() {
     assert_eq!(a.run("ui.caretAnimation", json!({"value": true})).unwrap()["caretAnimation"], true);
 }
 
+/// The blur under the ribbon is a UI command, off by default and kept between runs.
+#[test]
+fn ribbon_blur_is_a_ui_command_and_survives_a_restart() {
+    let mut a = app();
+    assert_eq!(a.run("ui.ribbonBlur", json!({})).unwrap(), json!({"ribbonBlur": false}), "off by default");
+    assert_eq!(a.run("ui.ribbonBlur", json!({"value": true})).unwrap(), json!({"ribbonBlur": true}));
+    for junk in [json!({"value": "yes"}), json!({"value": 1}), json!({"value": null})] {
+        assert!(a.run("ui.ribbonBlur", junk).is_err());
+    }
+    assert!(a.ui.ribbon_blur, "a rejected value keeps the setting");
+    let saved = serde_json::to_string(&a.prefs()).unwrap();
+    assert!(saved.contains(r#""ribbonBlur":true"#), "{saved}");
+    let mut b = app();
+    b.apply_prefs(serde_json::from_str(&saved).unwrap());
+    assert!(b.ui.ribbon_blur);
+    let old: UiState = serde_json::from_str(r#"{"tab":"Insert"}"#).unwrap();
+    assert!(!old.ribbon_blur);
+}
+
 /// #1945: showing or hiding the Quick Access Toolbar is a UI command (no value toggles it),
 /// kept between runs; settings saved before it existed show the toolbar; it works with no
 /// document open, like the other interface settings.
@@ -619,6 +638,24 @@ fn harness(a: WordApp) -> egui_kittest::Harness<'static, WordApp> {
         },
         a,
     )
+}
+
+/// With the blur on, the ribbon is drawn over a strip made from the pages; it is off
+/// where the ribbon has no page behind it (no document, File, Read Mode).
+#[test]
+fn ribbon_blur_draws_only_over_the_editor() {
+    let mut a = app();
+    a.run("text.insert", json!({"text": "Hello"})).unwrap();
+    a.run("ui.ribbonBlur", json!({"value": true})).unwrap();
+    assert!(a.ribbon_glass());
+    let mut h = harness(a);
+    h.run_steps(6);
+    assert!(ribbon_blur::strip_size(&h.ctx).is_some(), "the strip was made");
+    h.state_mut().run("ui.backstage", json!({"open": true})).unwrap();
+    assert!(!h.state().ribbon_glass(), "File covers the window");
+    h.state_mut().run("ui.backstage", json!({"open": false})).unwrap();
+    h.state_mut().run("ui.ribbonBlur", json!({"value": false})).unwrap();
+    assert!(!h.state().ribbon_glass(), "off is solid");
 }
 
 /// #766: started with nothing to open, the app shows File › Home (the Start screen) as Word

@@ -105,6 +105,41 @@ pub fn icon_menu_item(ui: &mut Ui, icon: &str, text: &str, shortcut: &str, min_w
     resp
 }
 
+/// A dialog section: space above, then a soft rounded panel. The panel
+/// holds the heading and, indented under it, the settings. An empty title
+/// gives a panel with no heading. A section inside another keeps the fill
+/// of its parent and shows only the border.
+pub fn section<R>(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let t = Tokens::get(ui.ctx());
+    let key = egui::Id::unique("dialog_section_fill");
+    let parent: Option<Color32> = ui.data(|d| d.get_temp(key));
+    let fill = parent.unwrap_or_else(|| ui.visuals().window_fill.lerp_to_gamma(t.text, 0.04));
+    ui.data_mut(|d| d.insert_temp(key, fill));
+    ui.add_space((f32::from(ui.spacing().window_margin.left) - ui.spacing().item_spacing.y).max(0.0));
+    let out = egui::Frame::new()
+        .fill(fill)
+        .stroke(Stroke::new(1.0, t.border.gamma_multiply(0.6)))
+        .corner_radius(CornerRadius::same(6))
+        .inner_margin(egui::Margin::symmetric(10, 8))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            if title.is_empty() {
+                return add(ui);
+            }
+            ui.label(egui::RichText::new(title).font(crate::theme::semibold(12.5)));
+            ui.add_space(2.0);
+            egui::Frame::new().inner_margin(egui::Margin { left: 12, ..egui::Margin::ZERO }).show(ui, add).inner
+        })
+        .inner;
+    ui.data_mut(|d| match parent {
+        Some(p) => {
+            d.insert_temp(key, p);
+        }
+        None => d.remove::<Color32>(key),
+    });
+    out
+}
+
 /// A strip of dialog tabs. The active tab joins the page below it.
 /// Returns the index of the tab the user clicked.
 pub fn dialog_tabs(ui: &mut Ui, labels: &[String], selected: usize) -> Option<usize> {

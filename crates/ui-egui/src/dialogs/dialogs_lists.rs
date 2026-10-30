@@ -505,61 +505,62 @@ const MOVE_TO_MARKS: &[(&str, &str)] = &[
 /// Track Changes Options. Returns true to close.
 pub fn track_options(app: &mut WordApp, ui: &mut Ui, f: &mut TrackForm) -> bool {
     let theme = app.session.doc.settings.theme_colors.clone();
-    let heading = |ui: &mut Ui, s: &str| {
-        ui.add_space(4.0);
-        ui.label(egui::RichText::new(tl!(s)).font(semibold(12.5)));
-    };
-    heading(ui, "Show");
-    egui::Grid::new("tco_show").num_columns(2).spacing(vec2(16.0, 4.0)).show(ui, |ui| {
-        ui.checkbox(&mut f.comments, tl!("Comments"));
-        ui.checkbox(&mut f.ink, tl!("Ink"));
-        ui.end_row();
-        ui.checkbox(&mut f.insertions_deletions, tl!("Insertions and Deletions"));
-        ui.checkbox(&mut f.formatting, tl!("Formatting"));
-        ui.end_row();
+    crate::widgets::section(ui, tl!("Show"), |ui| {
+        egui::Grid::new("tco_show").num_columns(2).spacing(vec2(16.0, 4.0)).show(ui, |ui| {
+            ui.checkbox(&mut f.comments, tl!("Comments"));
+            ui.checkbox(&mut f.ink, tl!("Ink"));
+            ui.end_row();
+            ui.checkbox(&mut f.insertions_deletions, tl!("Insertions and Deletions"));
+            ui.checkbox(&mut f.formatting, tl!("Formatting"));
+            ui.end_row();
+        });
     });
-    heading(ui, "Balloons");
-    for (v, l) in [
-        ("revisions", "Show revisions in balloons"),
-        ("inline", "Show all revisions inline"),
-        ("commentsAndFormatting", "Show only comments and formatting in balloons"),
-    ] {
-        ui.radio_value(&mut f.balloons, v.to_string(), tl!(l));
-    }
-    heading(ui, "Comments");
-    for (v, l) in [("margin", "In the margin"), ("selected", "Only for the selected text")] {
-        ui.radio_value(&mut f.comment_display, v.to_string(), tl!(l));
-    }
-    heading(ui, "Advanced");
-    egui::Grid::new("tco_advanced").num_columns(3).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
-        ui.label(tl!("Insertions:"));
-        choice(ui, "tco_ins", &mut f.insert_mark, INSERT_MARKS);
-        color(ui, &theme, &mut f.insert_color, "By author", None);
-        ui.end_row();
-        ui.label(tl!("Deletions:"));
-        choice(ui, "tco_del", &mut f.delete_mark, DELETE_MARKS);
-        color(ui, &theme, &mut f.delete_color, "By author", None);
-        ui.end_row();
-        ui.label(tl!("Changed lines:"));
-        choice(
-            ui,
-            "tco_bar",
-            &mut f.changed_lines,
-            &[("outside", "Outside border"), ("left", "Left border"), ("right", "Right border"), ("none", "None")],
-        );
-        color(ui, &theme, &mut f.changed_lines_color, "Automatic", Some(wordcraft_layout::display::CHANGE_BAR));
-        ui.end_row();
+    crate::widgets::section(ui, tl!("Balloons"), |ui| {
+        for (v, l) in [
+            ("revisions", "Show revisions in balloons"),
+            ("inline", "Show all revisions inline"),
+            ("commentsAndFormatting", "Show only comments and formatting in balloons"),
+        ] {
+            ui.radio_value(&mut f.balloons, v.to_string(), tl!(l));
+        }
     });
-    heading(ui, "Moves");
-    egui::Grid::new("tco_moves").num_columns(3).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
-        ui.label(tl!("Moved from:"));
-        choice(ui, "tco_move_from", &mut f.move_from_mark, DELETE_MARKS);
-        ui.push_id("tco_move_from_color", |ui| color(ui, &theme, &mut f.move_from_color, "By author", None));
-        ui.end_row();
-        ui.label(tl!("Moved to:"));
-        choice(ui, "tco_move_to", &mut f.move_to_mark, MOVE_TO_MARKS);
-        ui.push_id("tco_move_to_color", |ui| color(ui, &theme, &mut f.move_to_color, "By author", None));
-        ui.end_row();
+    crate::widgets::section(ui, tl!("Comments"), |ui| {
+        for (v, l) in [("margin", "In the margin"), ("selected", "Only for the selected text")] {
+            ui.radio_value(&mut f.comment_display, v.to_string(), tl!(l));
+        }
+    });
+    crate::widgets::section(ui, tl!("Advanced"), |ui| {
+        egui::Grid::new("tco_advanced").num_columns(3).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+            ui.label(tl!("Insertions:"));
+            choice(ui, "tco_ins", &mut f.insert_mark, INSERT_MARKS);
+            color(ui, &theme, &mut f.insert_color, "By author", None);
+            ui.end_row();
+            ui.label(tl!("Deletions:"));
+            choice(ui, "tco_del", &mut f.delete_mark, DELETE_MARKS);
+            color(ui, &theme, &mut f.delete_color, "By author", None);
+            ui.end_row();
+            ui.label(tl!("Changed lines:"));
+            choice(
+                ui,
+                "tco_bar",
+                &mut f.changed_lines,
+                &[("outside", "Outside border"), ("left", "Left border"), ("right", "Right border"), ("none", "None")],
+            );
+            color(ui, &theme, &mut f.changed_lines_color, "Automatic", Some(wordcraft_layout::display::CHANGE_BAR));
+            ui.end_row();
+        });
+    });
+    crate::widgets::section(ui, tl!("Moves"), |ui| {
+        egui::Grid::new("tco_moves").num_columns(3).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+            ui.label(tl!("Moved from:"));
+            choice(ui, "tco_move_from", &mut f.move_from_mark, DELETE_MARKS);
+            ui.push_id("tco_move_from_color", |ui| color(ui, &theme, &mut f.move_from_color, "By author", None));
+            ui.end_row();
+            ui.label(tl!("Moved to:"));
+            choice(ui, "tco_move_to", &mut f.move_to_mark, MOVE_TO_MARKS);
+            ui.push_id("tco_move_to_color", |ui| color(ui, &theme, &mut f.move_to_color, "By author", None));
+            ui.end_row();
+        });
     });
     ui.add_space(4.0);
     ui.checkbox(&mut f.track_formatting, tl!("Track formatting"));

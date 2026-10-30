@@ -45,11 +45,10 @@ impl WordApp {
     }
 
     /// Draw the File page, the empty-window chrome, or the normal document window.
-    pub(super) fn paint_window(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, t: theme::Tokens) {
-        let window = self.windows.shown();
+    pub(super) fn paint_window(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, t: theme::Tokens, enter: f32, window: u64) {
         let moved = |app: &WordApp| app.windows.shown() != window;
-        if self.ui.backstage {
-            backstage::show(self, ui);
+        if self.ui.backstage && enter >= 1.0 {
+            backstage::show(self, ui, enter);
         } else if !self.has_document() {
             // No document open (#1129): the ribbon greyed out but for Help, and no page.
             chrome::title_bar(self, ui);
@@ -58,18 +57,31 @@ impl WordApp {
             egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |_| {});
         } else {
             let screen = chrome::Screen::of(&self.session.view);
+            let mut glass = None;
             // Focus and Full Screen (#1678) take the whole screen, with only their slim bar.
             self.focus_ribbon &= screen == chrome::Screen::Focus;
             if screen != chrome::Screen::Normal {
                 chrome::screen_bar(self, ui, screen);
             } else {
+                // The blur is painted after the page, into a slot kept under the title bar and ribbon.
+                let before = ui.available_rect_before_wrap();
+                glass = self.ribbon_glass().then(|| (ui.painter().add(egui::Shape::Noop), before));
                 chrome::title_bar(self, ui);
-                if moved(self) {
-                    return;
+                crate::ribbon_blur::set_drawing(ctx, self.ribbon_glass());
+                let menu_fill = ctx.global_style().visuals.window_fill;
+                if glass.is_some() {
+                    ctx.global_style_mut(|s| s.visuals.window_fill = crate::ribbon_blur::menu_glass(menu_fill, s.visuals.dark_mode));
                 }
                 ribbon::show(self, ui);
-                if moved(self) {
-                    return;
+                if glass.is_some() {
+                    ctx.global_style_mut(|s| s.visuals.window_fill = menu_fill);
+                }
+                crate::ribbon_blur::set_drawing(ctx, false);
+                if let Some((_, r)) = glass.as_mut() {
+                    r.max.y = ui.available_rect_before_wrap().min.y;
+                    if moved(self) {
+                        return;
+                    }
                 }
                 chrome::status_bar(self, ui);
                 panes::show(self, ui);
@@ -81,17 +93,22 @@ impl WordApp {
             egui::CentralPanel::default().frame(egui::Frame::NONE.fill(fill)).show(ui, |ui| {
                 canvas::show(self, ui);
             });
+            if let Some((slot, rect)) = glass {
+                crate::ribbon_blur::paint(self, ui, slot, rect, self.canvas.view_top);
+            }
             if self.focus_ribbon && !moved(self) {
                 chrome::focus_ribbon(self, ctx);
             }
         }
     }
 
-    /// Dialogs, panes and other overlays drawn over the window. A command that brings another
-    /// window's state in ends the drawing: the rest would be the other window's.
-    pub(super) fn show_overlays(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        let window = self.windows.shown();
+    /// Dialogs, panes and other overlays drawn over the window.
+    pub(super) fn show_overlays(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, enter: f32, window: u64) {
         let moved = |app: &WordApp| app.windows.shown() != window;
+        if enter > 0.0 && enter < 1.0 {
+            let mut over = ui.new_child(egui::UiBuilder::new().max_rect(ctx.content_rect()));
+            backstage::show(self, &mut over, enter);
+        }
         content_controls::popup(self, ctx);
         dialogs::show(self, ctx);
         if moved(self) {

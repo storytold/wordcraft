@@ -1,4 +1,4 @@
-use super::common::{LEADERS, choice, heading, leader_char, sample};
+use super::common::{LEADERS, choice, leader_char, sample};
 use super::shell::{Next, go};
 use super::{FieldCode, RefsDialog, Serialize, Ui, Value, WordApp, buttons, json, vec2};
 
@@ -152,38 +152,41 @@ impl MarkForm {
 /// Draws the index-entry fields and page, cross-reference or bookmark-range options, with Mark
 /// and Mark All running `references.markEntry`.
 pub(super) fn mark_ui(app: &mut WordApp, ui: &mut Ui, f: &mut MarkForm) -> Next {
-    heading(ui, "Index");
-    egui::Grid::new("xe").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
-        let entry_label = ui.label(tl!("Main entry:"));
-        ui.add(egui::TextEdit::singleline(&mut f.entry).desired_width(220.0)).labelled_by(entry_label.id);
-        ui.end_row();
-        let subentry_label = ui.label(tl!("Subentry:"));
-        ui.add(egui::TextEdit::singleline(&mut f.subentry).desired_width(220.0)).labelled_by(subentry_label.id);
-        ui.end_row();
-    });
-    heading(ui, "Options");
-    ui.horizontal(|ui| {
-        let see_label = ui.radio_value(&mut f.option, "see".to_string(), tl!("Cross-reference:"));
-        ui.add_enabled(f.option == "see", egui::TextEdit::singleline(&mut f.see).desired_width(160.0)).labelled_by(see_label.id);
-    });
-    ui.radio_value(&mut f.option, "page".to_string(), tl!("This page"));
-    ui.horizontal(|ui| {
-        let bookmark_label =
-            ui.add_enabled_ui(!f.bookmarks.is_empty(), |ui| ui.radio_value(&mut f.option, "range".to_string(), tl!("Pages of bookmark:"))).inner;
-        ui.add_enabled_ui(f.option == "range", |ui| {
-            let opts: Vec<(String, &str)> = f.bookmarks.iter().map(|b| (b.clone(), b.as_str())).collect();
-            let combo = craft_ui::ComboBox::from_id_salt("xe_bm").selected_text(f.bookmark.clone()).width(140.0).show_ui(ui, |ui| {
-                for (v, l) in &opts {
-                    ui.selectable_value(&mut f.bookmark, v.clone(), *l);
-                }
-            });
-            combo.response.labelled_by(bookmark_label.id);
+    crate::widgets::section(ui, tl!("Index"), |ui| {
+        egui::Grid::new("xe").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+            let entry_label = ui.label(tl!("Main entry:"));
+            ui.add(egui::TextEdit::singleline(&mut f.entry).desired_width(220.0)).labelled_by(entry_label.id);
+            ui.end_row();
+            let subentry_label = ui.label(tl!("Subentry:"));
+            ui.add(egui::TextEdit::singleline(&mut f.subentry).desired_width(220.0)).labelled_by(subentry_label.id);
+            ui.end_row();
         });
     });
-    heading(ui, "Page number style");
-    ui.horizontal(|ui| {
-        ui.checkbox(&mut f.bold, tl!("Bold"));
-        ui.checkbox(&mut f.italic, tl!("Italic"));
+    crate::widgets::section(ui, tl!("Options"), |ui| {
+        ui.horizontal(|ui| {
+            let see_label = ui.radio_value(&mut f.option, "see".to_string(), tl!("Cross-reference:"));
+            ui.add_enabled(f.option == "see", egui::TextEdit::singleline(&mut f.see).desired_width(160.0)).labelled_by(see_label.id);
+        });
+        ui.radio_value(&mut f.option, "page".to_string(), tl!("This page"));
+        ui.horizontal(|ui| {
+            let bookmark_label =
+                ui.add_enabled_ui(!f.bookmarks.is_empty(), |ui| ui.radio_value(&mut f.option, "range".to_string(), tl!("Pages of bookmark:"))).inner;
+            ui.add_enabled_ui(f.option == "range", |ui| {
+                let opts: Vec<(String, &str)> = f.bookmarks.iter().map(|b| (b.clone(), b.as_str())).collect();
+                let combo = craft_ui::ComboBox::from_id_salt("xe_bm").selected_text(f.bookmark.clone()).width(140.0).show_ui(ui, |ui| {
+                    for (v, l) in &opts {
+                        ui.selectable_value(&mut f.bookmark, v.clone(), *l);
+                    }
+                });
+                combo.response.labelled_by(bookmark_label.id);
+            });
+        });
+    });
+    crate::widgets::section(ui, tl!("Page number style"), |ui| {
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut f.bold, tl!("Bold"));
+            ui.checkbox(&mut f.italic, tl!("Italic"));
+        });
     });
     if !f.message.is_empty() {
         ui.label(egui::RichText::new(&f.message).small());

@@ -221,6 +221,14 @@ fn general(app: &mut WordApp, ui: &mut Ui) {
     {
         let _ = app.run("view.darkMode", json!({"value": dark_page}));
     }
+    let mut blur = app.ui.ribbon_blur;
+    if ui
+        .checkbox(&mut blur, tl!("Blur the page under the ribbon"))
+        .on_hover_text(tl!("On: the page scrolling up under the ribbon shows through it as a soft blur. Off: the ribbon is solid."))
+        .changed()
+    {
+        let _ = app.run("ui.ribbonBlur", json!({"value": blur}));
+    }
     ui.checkbox(&mut app.ui.show_discord, tl!("Show the community button in the title bar"));
     default_app_button(app, ui);
     ui.add_space(8.0);
