@@ -73,6 +73,82 @@ pub(super) fn link(s: &mut Session, v: &Value) -> CmdResult {
     sel_result(s)
 }
 
+/// The contiguous same-target link at the caret, within its paragraph. At a boundary the
+/// character to the right wins; the preceding character supplies a link when the right isn't
+/// linked (including the end of the paragraph). Character formatting does not split a link.
+fn caret_link(s: &Session) -> Option<(Pos, Pos)> {
+    let at = &s.sel.focus;
+    let p = s.doc.para_at(at)?;
+    if !p.text.is_char_boundary(at.off) {
+        return None;
+    }
+    let off = if at.off < p.len() && p.props_of_char(at.off).link.is_some() { at.off } else { p.text.get(..at.off)?.char_indices().next_back()?.0 };
+    let target = p.props_of_char(off).link.as_deref()?;
+    let (mut start, mut end) = (0, None);
+    for (range, props) in p.run_ranges() {
+        if props.link.as_deref() == Some(target) {
+            if range.end > off {
+                end = Some(range.end);
+            }
+        } else if end.is_some() {
+            break;
+        } else {
+            start = range.end;
+        }
+    }
+    Some((Pos { off: start, ..at.clone() }, Pos { off: end?, ..at.clone() }))
+}
+
+/// Whether the selection contains a hyperlink, or the collapsed caret is on one.
+pub fn has_link(s: &Session) -> bool {
+    // A column edits its row pieces, not the stream between its selection corners.
+    if let Some(segs) = s.column_segments() {
+        return segs.iter().any(|(a, b)| {
+            let (a, b) = (s.doc.clamp(a), s.doc.clamp(b));
+            if a == b || a.path != b.path || a.story != b.story {
+                return false;
+            }
+            let Some(p) = s.doc.para_at(&a) else { return false };
+            let (from, to) = (a.off.min(b.off), a.off.max(b.off));
+            p.run_ranges().any(|(r, c)| r.end > from && r.start < to && c.link.is_some())
+        });
+    }
+    if s.sel.is_collapsed() {
+        return caret_link(s).is_some();
+    }
+    let (a, b) = s.sel.ordered();
+    s.doc.paths_between(&a, &b).into_iter().any(|path| {
+        let Some(p) = s.doc.para(a.story, &path) else { return false };
+        let from = if path == a.path { a.off } else { 0 };
+        let to = if path == b.path { b.off } else { p.len() };
+        p.run_ranges().any(|(r, c)| r.end > from && r.start < to && c.link.is_some())
+    })
+}
+
+pub(super) fn remove_link(s: &mut Session, _: &Value) -> CmdResult {
+    let unlink = |c: &mut CharProps| {
+        c.link = None;
+        if c.style.as_deref() == Some("Hyperlink") {
+            c.style = None;
+        }
+    };
+    if s.sel.is_collapsed() {
+        if let Some((a, b)) = caret_link(s) {
+            // Check the expanded link, including any locked content beyond the caret's word.
+            super::super::controls::check_edit(s, &a, &b)?;
+            s.doc.format_range(&a, &b, &unlink)?;
+            if let Some(pending) = &mut s.pending {
+                unlink(pending);
+            }
+            return sel_result(s);
+        }
+    } else {
+        let (a, b) = s.sel.ordered();
+        super::super::controls::check_edit(s, &a, &b)?;
+    }
+    super::super::format::apply(s, &unlink)
+}
+
 /// Whether `name` can name a bookmark: starts with a letter or underscore, contains only alphanumeric characters
 /// or underscores, and is at most 40 characters (#3491). Word allows leading underscores for hidden bookmarks (_Toc, _Ref).
 pub fn bookmark_name_ok(name: &str) -> bool {
