@@ -89,6 +89,8 @@ fn every_char_prop_round_trips() {
         caps: Some(true),
         small_caps: Some(false),
         hidden: Some(true),
+        web_hidden: Some(true),
+        snap_to_grid: Some(false),
         spacing: Some(1.5),
         scale: Some(150.0),
         position: Some(3.0),
