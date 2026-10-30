@@ -424,10 +424,26 @@ fn hhea_line(ascender: i16, descender: i16, line_gap: i16) -> (f64, f64) {
     (f64::from(ascender) + f64::from(line_gap.max(0)), f64::from(descender).abs())
 }
 
+/// The line (ascent, descent) in units of an `upem` em that Word gives the classic PostScript
+/// families: their Windows counterparts' spacing, though Apple's own Times and Courier are one em
+/// tall (hhea 0.75 / -0.25, no gap). Measured in Word for Mac on synthetic documents (single
+/// spacing, 11 and 20 pt): Times lines lie exactly as far apart as Times New Roman's (hhea 1825 /
+/// -443, gap 87 per 2048), Courier's as Courier New's (1705 / -615, no gap). On Windows, Word
+/// draws a "Times" document in Times New Roman anyway.
+fn borrowed_line(family: &str, upem: f64) -> Option<(f64, f64)> {
+    let (a, d) = match family.trim().to_ascii_lowercase().as_str() {
+        "times" => hhea_line(1825, -443, 87),
+        "courier" => hhea_line(1705, -615, 0),
+        _ => return None,
+    };
+    Some((a * upem / 2048.0, d * upem / 2048.0))
+}
+
 /// Line metrics for a face in font units: (ascent, descent), both positive, the way word
 /// processors measure single line spacing: the hhea values with the line gap above the ascent
 /// (Word puts the first baseline that far below the line top), falling back to OS/2
-/// usWinAscent/usWinDescent.
+/// usWinAscent/usWinDescent; Times and Courier borrow their Windows counterparts' (see
+/// [`borrowed_line`]).
 pub fn line_metrics(face: &crate::FontFace) -> (f64, f64) {
     static CACHE: OnceLock<Mutex<HashMap<u32, (f64, f64)>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
@@ -435,7 +451,9 @@ pub fn line_metrics(face: &crate::FontFace) -> (f64, f64) {
         return *v;
     }
     let mut v = (face.ascent.max(1.0), face.descent.abs());
-    if let Some(f) = face.skrifa() {
+    if let Some(m) = borrowed_line(&face.family, face.upem) {
+        v = m;
+    } else if let Some(f) = face.skrifa() {
         // hhea ascender + descender + line gap (Word on macOS), the gap above the ascent; OS/2
         // win metrics only when the hhea values are missing, and never more than twice the em.
         let hhea = f.hhea().ok().map(|h| hhea_line(h.ascender().to_i16(), h.descender().to_i16(), h.line_gap().to_i16()));
@@ -464,6 +482,18 @@ mod tests {
         // A negative gap adds nothing; the most negative descender doesn't overflow.
         assert_eq!(hhea_line(1000, -300, -50), (1000.0, 300.0));
         assert_eq!(hhea_line(1000, i16::MIN, 0), (1000.0, 32768.0));
+    }
+
+    #[test]
+    fn times_and_courier_take_their_windows_counterparts_line() {
+        // Apple's Times has 2048 units to the em, Times New Roman's line is 1.15 em.
+        assert_eq!(borrowed_line("Times", 2048.0), Some((1912.0, 443.0)));
+        assert_eq!(borrowed_line(" times ", 1000.0), Some((1912.0 / 2.048, 443.0 / 2.048)));
+        assert_eq!(borrowed_line("Courier", 2048.0), Some((1705.0, 615.0)));
+        // Only those two: the Windows fonts themselves, and other Mac fonts, keep their own.
+        for family in ["Times New Roman", "Courier New", "Helvetica", "Hoefler Text", "Palatino", ""] {
+            assert_eq!(borrowed_line(family, 2048.0), None, "{family}");
+        }
     }
 
     #[test]

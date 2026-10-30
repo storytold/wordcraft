@@ -11,9 +11,18 @@ pub enum Align {
     Right,
     Justify,
     Distribute,
+    /// Word's Thai Distributed alignment: distribute additional width across Thai and Khmer clusters.
+    ThaiDistribute,
+    /// Khmer Justify: stretch spaces, word boundaries, then orthographic syllables.
+    KhmerJustify,
 }
 
 impl Align {
+    /// Whether this alignment expands wrapped lines to both margins.
+    pub fn stretches(self) -> bool {
+        matches!(self, Align::Justify | Align::Distribute | Align::ThaiDistribute | Align::KhmerJustify)
+    }
+
     /// Alignment is logical (`Left` is the start edge, ISO 29500 `start`): the alignment as seen
     /// on the page, or the logical one for a visual choice, in a paragraph that reads right to
     /// left when `rtl` (Left and Right swap; the swap is its own inverse).
@@ -274,6 +283,12 @@ pub struct ParaProps {
     pub space_before: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub space_after: Option<f32>,
+    /// Space before the paragraph in lines (`w:beforeLines`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub space_before_lines: Option<f32>,
+    /// Space after the paragraph in lines (`w:afterLines`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub space_after_lines: Option<f32>,
     /// HTML-style automatic space before (`w:beforeAutospacing`): 14 pt, none at the top of the
     /// document or of a table cell, and collapsing with the space after the paragraph above.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -374,7 +389,7 @@ impl ParaProps {
 
     fn overlay_layout(&mut self, patch: &ParaProps) {
         overlay_fields!(self, patch; style, align, indent_left, indent_right, indent_first, indent_left_chars, indent_right_chars, indent_first_chars,
-            space_before, space_after, space_before_auto, space_after_auto, line_spacing, contextual_spacing, mirror_indents, tabs, shading, borders);
+            space_before, space_after, space_before_lines, space_after_lines, space_before_auto, space_after_auto, line_spacing, contextual_spacing, mirror_indents, tabs, shading, borders);
     }
 
     fn overlay_pagination(&mut self, patch: &ParaProps) {

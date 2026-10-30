@@ -395,6 +395,9 @@ fn read_mode_page_color_sets_the_reading_paper() {
     // With Switch Modes on, Read Mode's paper still follows the Page color: None is white and Sepia is sepia.
     a.session.view.dark_mode = true;
     a.run("view.readMode", json!({})).unwrap();
+    assert!(page_render_options(&a, false).dark, "the selected Read Mode page color is retained on re-entry");
+    assert_eq!(paper(&a), Rgb(wordcraft_render::DARK_PAPER, wordcraft_render::DARK_PAPER, wordcraft_render::DARK_PAPER));
+    a.run("view.readPageColor", json!({"value": "none"})).unwrap();
     assert!(!page_render_options(&a, false).dark);
     assert_eq!(paper(&a), Rgb::WHITE);
     a.run("view.readPageColor", json!({"value": "sepia"})).unwrap();
@@ -3907,8 +3910,8 @@ fn space_and_enter_on_the_canvas_do_not_interrupt_ime() {
 /// chain. Draw a stand-in for exactly those characters; every other missing glyph still panics.
 fn kana_test_glyphs(ctx: &egui::Context) {
     ctx.add_glyph_rasterizer(egui::GlyphRasterizer::new("wordcraft::canvas::tests::kana", |req| {
-        let kana =
-            *req.family == egui::FontFamily::Proportional && !req.cluster.is_empty() && req.cluster.chars().all(|c| matches!(c, 'に' | 'ほ' | 'ん'));
+        let family = *req.family == egui::FontFamily::Proportional || *req.family == crate::theme::composition_family();
+        let kana = family && !req.cluster.is_empty() && req.cluster.chars().all(|c| matches!(c, 'に' | 'ほ' | 'ん'));
         kana.then(|| egui::RasterizedGlyph {
             bitmap: egui::GlyphBitmap {
                 image: egui::ColorImage::new([1, 1], vec![egui::Color32::WHITE]),

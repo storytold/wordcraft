@@ -389,7 +389,9 @@ impl WordApp {
     /// Ask where to save, save there, then do `after`.
     pub(crate) fn save_as(&mut self, after: AfterSave) -> Asked {
         let name = self.default_save_name();
-        self.ask_file(FileDialogRequest::Save { name, dir: None }, AfterPick::SaveAs { after, document: self.session.document_id() })
+        // Start in the open file's folder (#4143); a document never saved has none.
+        let dir = self.session.path.as_deref().and_then(std::path::Path::parent).map(|d| d.to_string_lossy().into_owned());
+        self.ask_file(FileDialogRequest::Save { name, dir }, AfterPick::SaveAs { after, document: self.session.document_id() })
     }
 
     /// The user templates folder (#2852): the one File › Options names, else the app's own.

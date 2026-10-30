@@ -46,6 +46,8 @@ pub struct ColumnBlock {
     /// Set when the block is whole table cells (Select Cell, Row, Column or Table, or the mouse in
     /// a table's selection areas): one segment per paragraph of the cells.
     pub cells: Option<CellRange>,
+    /// Disjoint text ranges, sorted and apart, when this block represents a separate selection.
+    pub pieces: Option<Vec<(Pos, Pos)>>,
 }
 
 /// Whole table cells selected: rows `rows.0..=rows.1` and every cell of them that reaches into

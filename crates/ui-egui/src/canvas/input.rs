@@ -26,6 +26,25 @@ pub(super) struct UnitDrag {
     last: Pos,
 }
 
+/// Ctrl/⌘ selection drag, which adds a separate range to the selection in progress.
+pub(super) struct MultiDrag {
+    sel: wordcraft_engine::Selection,
+    column: Option<wordcraft_engine::ColumnBlock>,
+    start: Pos,
+    at: Pos2,
+    last: Pos,
+    added: bool,
+    clicks: u8,
+}
+
+impl MultiDrag {
+    fn restore(&self, s: &mut wordcraft_engine::Session) {
+        let sel = wordcraft_engine::Selection { anchor: s.doc.clamp(&self.sel.anchor), focus: s.doc.clamp(&self.sel.focus) };
+        s.column = if sel == self.sel { self.column.clone() } else { None };
+        s.sel = sel;
+    }
+}
+
 /// After a whole-document selection from a press (not a line, so it can't grow): holds the press
 /// so its release isn't a caret click.
 pub(crate) fn hold_document_selection(app: &mut WordApp, clicks: u8) {
@@ -176,6 +195,23 @@ fn handle_page_pointer(app: &mut WordApp, pointer: PagePointer<'_>) {
         handle_primary_press(app, &pointer, mods, hf_zone, hf_enter);
     } else if app.canvas.dragging
         && ui.input(|i| i.pointer.primary_down())
+        && let Some(drag) = app.canvas.multi_drag.as_mut()
+    {
+        let dist = ui.ctx().options(|o| o.input_options.max_click_dist);
+        if drag.clicks == 1
+            && let Some(pos) = layout.hit(page, x, y, drag.start.story)
+            && pos != drag.last
+            && (drag.added || (p - drag.at).length() > dist)
+        {
+            drag.last = pos.clone();
+            drag.added = true;
+            drag.restore(&mut app.session);
+            let _ = app.session.run("select.add", &json!({"anchor": drag.start, "focus": pos}));
+            app.session.page_hint = page;
+            app.canvas.caret_visible_since = crate::now_ms();
+        }
+    } else if app.canvas.dragging
+        && ui.input(|i| i.pointer.primary_down())
         && let Some((from, last)) = app.canvas.column_drag
     {
         if last != (page, x, y) {
@@ -222,6 +258,14 @@ fn handle_page_pointer(app: &mut WordApp, pointer: PagePointer<'_>) {
         app.canvas.dragging = false;
         app.canvas.column_drag = None;
         app.canvas.unit_drag = None;
+        match app.canvas.multi_drag.as_ref() {
+            Some(drag) if !drag.added => {
+                let pj = serde_json::to_value(&drag.start).unwrap_or_default();
+                let _ = app.run("caret.set", json!({"pos": pj}));
+                let _ = app.run("select.sentence", json!({}));
+            }
+            _ => app.canvas.multi_drag = None,
+        }
         apply_format_painter(app);
     }
     show_hover_link(app, &pointer);
@@ -240,6 +284,7 @@ fn handle_primary_press(
     let clicks = press_count(app.canvas.last_press, now, p, delay, dist);
     app.canvas.last_press = Some((now, p, clicks));
     app.canvas.unit_drag = None;
+    let prev_multi = app.canvas.multi_drag.take();
     if clicks <= 1 {
         app.canvas.hf_press_switched = false;
     }
@@ -342,7 +387,30 @@ fn handle_primary_press(
         return;
     }
     let pj = serde_json::to_value(&pos).unwrap_or_default();
-    // Alt+drag selects a column (block) of text.
+    // With an existing selection, Ctrl/⌘+drag adds a disjoint range. A click alone selects
+    // a sentence; Ctrl/⌘+double-click adds a word and preserves the previous selection.
+    if mods.command && !mods.shift && !mods.alt && !hf_switch {
+        if clicks == 2
+            && let Some(mut drag) = prev_multi
+        {
+            drag.restore(&mut app.session);
+            let _ = app.run("select.add", json!({"word": pj}));
+            drag.clicks = 2;
+            drag.added = true;
+            app.canvas.multi_drag = Some(drag);
+            app.session.page_hint = page;
+            app.canvas.dragging = true;
+            return;
+        }
+        if clicks == 1 && (!app.session.sel.is_collapsed() || app.session.selection_pieces().is_some()) {
+            let (sel, column) = (app.session.sel.clone(), app.session.column.clone());
+            app.canvas.multi_drag = Some(MultiDrag { sel, column, start: pos.clone(), at: p, last: pos, added: false, clicks: 1 });
+            app.canvas.column_drag = None;
+            app.session.page_hint = page;
+            app.canvas.dragging = true;
+            return;
+        }
+    } // Alt+drag selects a column (block) of text.
     if mods.alt && !mods.shift && !mods.command {
         let _ = app.run("caret.set", json!({"pos": pj}));
         app.session.page_hint = page;
@@ -405,7 +473,11 @@ fn handle_completed_click(app: &mut WordApp, pointer: &PagePointer<'_>) -> bool 
         apply_format_painter(app);
         return true;
     }
-    // Double-click in the header/footer area edits it (creating it when the page has none, #960);
+    if released_clicks > 0 && app.canvas.multi_drag.as_ref().is_some_and(|m| m.clicks == released_clicks) {
+        app.canvas.multi_drag = None;
+        app.canvas.dragging = false;
+        return true;
+    } // Double-click in the header/footer area edits it (creating it when the page has none, #960);
     // double-click in the body leaves it. Print Layout only: the other views show no margins.
     let hf_zone = if app.session.view.mode == wordcraft_layout::ViewMode::Print && !app.session.view.read_mode {
         layout.header_footer_zone(page, y)

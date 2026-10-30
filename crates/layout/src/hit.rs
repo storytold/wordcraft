@@ -7,7 +7,7 @@ use wordcraft_doc::props::TextDirection;
 use wordcraft_doc::{Document, Path, Pos, StoryRef};
 use wordcraft_geom::{Point, Rect};
 
-use crate::para::{PARA_MARK_WIDTH, ParaLayout};
+use crate::para::{PARA_MARK_WIDTH, ParaLayout, StyleRun};
 use crate::{DocLayout, Page, Placed};
 
 /// Caret geometry on a page: a bar from (`x`, `top`) to (`x + width`, `top + height`). It is
@@ -317,11 +317,11 @@ fn between(a: &Path, b: &Path, l: &Path) -> bool {
 }
 
 /// The position in turned text (a table cell's text direction) of `story` under page point
-/// (x, y), if there is turned text there.
-fn turned_hit(page: &Page, story: StoryRef, x: f32, y: f32) -> Option<Pos> {
+/// (x, y), if there is turned text there in a paragraph `skip` doesn't leave out.
+fn turned_hit(page: &Page, story: StoryRef, x: f32, y: f32, skip: &dyn Fn(&Path) -> bool) -> Option<Pos> {
     items_of(page, story).find_map(|it| {
         let Placed::Lines { story: s, path, para, l0, l1, x: ox, y: oy, turn } = it else { return None };
-        if *s != story || !it.turned_bounds()?.expand(2.0).contains(Point::new(x, y)) {
+        if *s != story || skip(path) || !it.turned_bounds()?.expand(2.0).contains(Point::new(x, y)) {
             return None;
         }
         let (u, v) = crate::unturn_point(*turn, *ox, *oy, x, y);
@@ -395,38 +395,46 @@ impl DocLayout {
     /// The position nearest to (x, y) on `page`, in `story`.
     pub fn hit(&self, page: usize, x: f32, y: f32, story: StoryRef) -> Option<Pos> {
         let p = self.pages.get(page)?;
-        if let Some(pos) = turned_hit(p, story, x, y) {
-            return Some(pos);
-        }
         // Like Word, a click outside a floating table doesn't land in its cells while there's
         // other text on the page: below one, it goes to the text beside or after it (#2038).
         let floats = if story == StoryRef::Body { float_table_areas(p) } else { Vec::new() };
         let away = |path: &Path| floats.iter().any(|(t, r)| path.0.len() > t.0.len() && path.0.starts_with(&t.0) && !r.contains(Point::new(x, y)));
+        // Turned cell text takes a click up to 2pt outside it, so outside a floating table too.
+        if let Some(pos) = turned_hit(p, story, x, y, &away) {
+            return Some(pos);
+        }
         let lines = page_lines(p, story);
         if lines.is_empty() {
             // A page of turned text (a vertical section): the nearest turned line.
             return nearest_turned(p, story, x, y, &away).or_else(|| nearest_turned(p, story, x, y, &|_: &Path| false));
         }
         let nearest = |a: &&LineHit, b: &&LineHit| score(a, x, y).total_cmp(&score(b, x, y));
-        let best = lines.iter().filter(|l| !away(l.path)).min_by(nearest).or_else(|| lines.iter().min_by(nearest))?;
-        let off = best.para.off_at_x(best.li, x - best.x);
-        Some(Pos { story: best.story, path: best.path.clone(), off })
+        let at = |l: &LineHit| Pos { story: l.story, path: l.path.clone(), off: l.para.off_at_x(l.li, x - l.x) };
+        if let Some(best) = lines.iter().filter(|l| !away(l.path)).min_by(nearest) {
+            return Some(at(best));
+        }
+        // Only a floating table's upright cells are left: other turned text first, then turned
+        // text under the point (the table's too), then the nearest of those cells.
+        nearest_turned(p, story, x, y, &away)
+            .or_else(|| turned_hit(p, story, x, y, &|_: &Path| false))
+            .or_else(|| lines.iter().min_by(nearest).map(at))
     }
 
     /// The story whose text is under a point (body, footnotes, endnotes, text boxes; not
-    /// headers/footers). A text box wins inside its area, except one behind the text, which only
-    /// wins where no body text is.
+    /// headers/footers). A text box wins inside its area (its rotated area when it is turned, as
+    /// [`DocLayout::object_at`] takes it), except one behind the text, which only wins where no
+    /// body text is.
     pub fn story_at(&self, page: usize, x: f32, y: f32) -> Option<StoryRef> {
         let p = self.pages.get(page)?;
         let text_box = |behind: bool| {
-            objects(p, page).find(|o| o.behind() == behind && o.text_box.is_some() && o.rect.contains(Point::new(x, y))).and_then(|o| o.text_box)
+            objects(p, page).find(|o| o.behind() == behind && o.text_box.is_some() && o.rect.contains(o.unspin(x, y))).and_then(|o| o.text_box)
         };
         text_box(false).map(StoryRef::Part).or_else(|| text_at(p, page, x, y)).or_else(|| text_box(true).map(StoryRef::Part))
     }
 
     /// The object a press at (x, y) grabs: a picture or shape anywhere on it, a text box on its
-    /// border (within `edge` points either side; inside is its text). Topmost first; objects
-    /// behind the text only where there's no text.
+    /// border (within `edge` points either side; inside is its text, whatever lies under the
+    /// box). Topmost first; objects behind the text only where there's no text.
     pub fn object_at(&self, page: usize, x: f32, y: f32, edge: f32) -> Option<ObjectHit> {
         self.object_at_in(page, x, y, edge, StoryRef::Body)
     }
@@ -449,11 +457,17 @@ impl DocLayout {
             StoryRef::Body => text_at(p, page, x, y).is_some(),
             StoryRef::Part(id) => hf_text_at(p, id, x, y),
         };
-        cands
-            .iter()
-            .find(|o| !o.behind() && grabs(o))
-            .or_else(|| if text_here { None } else { cands.iter().find(|o| o.behind() && grabs(o)) })
-            .cloned()
+        // Inside a text box is its text: a press there grabs nothing, not an object under the box
+        // (a form scanned as a picture, with text boxes laid over it to fill in). The same holds
+        // among the objects behind the text.
+        let inside_text_box = |o: &ObjectHit| o.text_box.is_some() && !grabs(o) && o.rect.contains(o.unspin(x, y));
+        let topmost = |behind: bool| cands.iter().find(|o| o.behind() == behind && (grabs(o) || inside_text_box(o)));
+        match topmost(false) {
+            Some(o) if inside_text_box(o) => None,
+            Some(o) => Some(o.clone()),
+            None if text_here => None,
+            None => topmost(true).filter(|o| !inside_text_box(o)).cloned(),
+        }
     }
 
     /// The text box in the header or footer at (x, y) on `page`.
@@ -625,6 +639,30 @@ impl DocLayout {
             let ctop = (base - asc).max(top);
             let r = crate::turn_rect(*turn, *x, *y, Rect::new(cx, ctop, 0.0, (base + desc - ctop).max(4.0)));
             return Some(Caret { page: pi, x: r.x, top: r.y, height: r.h, width: r.w });
+        }
+        None
+    }
+
+    /// The style run text typed at `pos` would take (the character's before it, or at the start
+    /// of a paragraph the first character's) and the baseline it sits on, on the page: `pos`'s
+    /// line's, raised or lowered by the run's shift (superscript, `w:position`). An input method's
+    /// composition is drawn with them, as Word draws it in the text's own font and size. `None` in
+    /// turned text, whose lines aren't horizontal.
+    pub fn typing_style(&self, pos: &Pos, page_hint: usize) -> Option<(StyleRun, f32)> {
+        for (_, it) in self.pieces(pos.story, &pos.path, page_hint) {
+            let Placed::Lines { para, l0, l1, y, turn, .. } = it else { continue };
+            let li = para.line_of(pos.off);
+            if li < *l0 || li >= *l1 {
+                continue;
+            }
+            if *turn != TextDirection::Horizontal {
+                return None;
+            }
+            let first = para.lines.get(*l0)?;
+            let line = para.lines.get(li)?;
+            let at = |off: usize| para.clusters.iter().find(|c| c.start <= off && off < c.end).and_then(|c| para.styles.get(c.style as usize));
+            let run = pos.off.checked_sub(1).and_then(at).or_else(|| at(pos.off)).or_else(|| para.styles.first())?;
+            return Some((run.clone(), y + line.baseline - first.top - run.shift));
         }
         None
     }

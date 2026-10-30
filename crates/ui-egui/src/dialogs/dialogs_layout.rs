@@ -23,12 +23,15 @@ use crate::options::MeasureExt;
 use crate::theme::semibold;
 
 mod page;
+mod position;
 mod print;
 mod table;
 mod text;
 
 pub use page::{PageNumbersForm, SizeForm};
 use page::{page_numbers_ui, size_ui};
+use position::position_ui;
+pub use position::{AxisForm, PositionForm};
 #[cfg(test)]
 pub(crate) use print::envelope_label;
 #[cfg(test)]
@@ -57,6 +60,7 @@ pub enum LayoutDialog {
     TextToTable(TextToTableForm),
     TableToText(TableToTextForm),
     Size(SizeForm),
+    Position(Box<PositionForm>),
     PageNumbers(PageNumbersForm),
 }
 
@@ -75,6 +79,7 @@ impl LayoutDialog {
             LayoutDialog::TextToTable(_) => "textToTable",
             LayoutDialog::TableToText(_) => "tableToText",
             LayoutDialog::Size(_) => "pictureSize",
+            LayoutDialog::Position(_) => "layoutPosition",
             LayoutDialog::PageNumbers(_) => "pageNumbers",
         }
     }
@@ -94,6 +99,7 @@ impl LayoutDialog {
             LayoutDialog::TextToTable(_) => "Convert Text to Table",
             LayoutDialog::TableToText(_) => "Convert to Text",
             LayoutDialog::Size(_) => "Size",
+            LayoutDialog::Position(_) => "Layout",
             LayoutDialog::PageNumbers(_) => "Page Number Format",
         }
     }
@@ -114,6 +120,7 @@ pub fn open(name: &str, app: &mut WordApp) -> Option<LayoutDialog> {
         "textToTable" => LayoutDialog::TextToTable(TextToTableForm::read(app)?),
         "tableToText" => LayoutDialog::TableToText(TableToTextForm::read(app)?),
         "pictureSize" => LayoutDialog::Size(SizeForm::read(app)?),
+        "layoutPosition" => LayoutDialog::Position(Box::new(PositionForm::read(app)?)),
         "pageNumbers" => LayoutDialog::PageNumbers(PageNumbersForm::read(app)),
         _ => return None,
     })
@@ -134,6 +141,7 @@ pub fn body(app: &mut WordApp, ui: &mut Ui, d: &mut LayoutDialog) -> bool {
         LayoutDialog::TextToTable(f) => text_to_table_ui(app, ui, f),
         LayoutDialog::TableToText(f) => table_to_text_ui(app, ui, f),
         LayoutDialog::Size(f) => size_ui(app, ui, f),
+        LayoutDialog::Position(f) => position_ui(app, ui, f),
         LayoutDialog::PageNumbers(f) => page_numbers_ui(app, ui, f),
     }
 }

@@ -33,6 +33,8 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("para.alignRight", "Align Right", "Home › Paragraph", |s, _| align(s, Align::Right)).key("Mod+R"),
         CommandSpec::new("para.justify", "Justify", "Home › Paragraph", |s, _| align(s, Align::Justify)).key("Mod+J"),
         CommandSpec::new("para.distribute", "Distributed", "Home › Paragraph", |s, _| align(s, Align::Distribute)).key("Mod+Shift+J"),
+        CommandSpec::new("para.thaiDistribute", "Thai Distributed", "Home › Paragraph", |s, _| align(s, Align::ThaiDistribute)),
+        CommandSpec::new("para.khmerJustify", "Khmer Justify", "Home › Paragraph", |s, _| align(s, Align::KhmerJustify)).key("Mod+Alt+J"),
         CommandSpec::new("para.align", "Alignment", "Home › Paragraph", |s, v| {
             let a = match p::req_str(v, "value")? {
                 "left" => Align::Left,
@@ -40,6 +42,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 "right" => Align::Right,
                 "justify" | "both" => Align::Justify,
                 "distribute" => Align::Distribute,
+                "thaiDistribute" => Align::ThaiDistribute,
+                "khmerJustify" => Align::KhmerJustify,
                 // Logical edges, whatever the paragraph's direction.
                 "start" => return fmt(s, &|p| p.align = Some(Align::Left)),
                 "end" => return fmt(s, &|p| p.align = Some(Align::Right)),
@@ -48,7 +52,7 @@ pub fn specs() -> Vec<CommandSpec> {
             // An explicit value sets it (no toggling back to the start edge like the buttons).
             set_align(s, a)
         })
-        .params(r#"{"value": "left|center|right|justify|distribute (as seen on the page) | start|end (reading direction)"}"#),
+        .params(r#"{"value": "left|center|right|justify|distribute|thaiDistribute|khmerJustify (as seen on the page) | start|end (reading direction)"}"#),
         CommandSpec::new("para.rtl", "Right-to-Left Text Direction", "Home › Paragraph", |s, v| direction(s, v, true))
             .params(r#"{"value"?: bool (false = left to right)}"#),
         CommandSpec::new("para.ltr", "Left-to-Right Text Direction", "Home › Paragraph", |s, v| direction(s, v, false))
@@ -113,7 +117,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 if let Some(on) = a_auto {
                     p.space_after_auto = Some(on);
                 }
-            })
+            })?;
+            cancel_line_spacing(s, b.is_some(), a.is_some())
         })
         .params(r#"{"before"?: pt, "after"?: pt, "beforeAuto"?: bool, "afterAuto"?: bool (automatic, HTML-style spacing: 14 pt)}"#),
         CommandSpec::new("para.addSpaceBefore", "Add Space Before Paragraph", "Home › Paragraph › Line Spacing", |s, _| {
@@ -124,7 +129,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 if rp.before_auto {
                     p.space_before_auto = Some(false);
                 }
-            })
+            })?;
+            cancel_line_spacing(s, true, false)
         })
         .key("Mod+0"),
         CommandSpec::new("para.removeSpaceAfter", "Remove Space After Paragraph", "Home › Paragraph › Line Spacing", |s, _| {
@@ -135,7 +141,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 if rp.after_auto {
                     p.space_after_auto = Some(false);
                 }
-            })
+            })?;
+            cancel_line_spacing(s, false, true)
         }),
         // Back to the paragraph style: direct indents, spacing, alignment… go; the style, list
         // membership and drop cap stay. ⌘Q quits on macOS, so Word for Mac uses ⌃Q.
@@ -212,7 +219,7 @@ pub fn specs() -> Vec<CommandSpec> {
             fmt(s, &|p| p.outline_level = l)
         }),
         CommandSpec::new("para.set", "Set Paragraph Formatting", "Home › Paragraph › Paragraph", set_props).params(
-            r#"{"props": ParaProps, "onPage"?: {"align"?: "left|center|right|justify|distribute", "left"?: pt, "right"?: pt} (alignment and indents as seen on the page: each paragraph's own direction, after `props`, says which edge is its start)}"#,
+            r#"{"props": ParaProps, "onPage"?: {"align"?: "left|center|right|justify|distribute|thaiDistribute|khmerJustify", "left"?: pt, "right"?: pt} (alignment and indents as seen on the page: each paragraph's own direction, after `props`, says which edge is its start)}"#,
         ),
         CommandSpec::new("para.dialog", "Paragraph Settings", "Home › Paragraph", |s, _| {
             s.push_ui_request(json!({"open": "paragraph"}));
@@ -262,4 +269,25 @@ pub fn specs() -> Vec<CommandSpec> {
             sel_result(s)
         }),
     ]
+}
+
+/// Explicit point spacing replaces automatic before/after spacing in Word. Clear the matching
+/// line-based value so it cannot keep overriding the newly entered point value.
+fn cancel_line_spacing(s: &mut Session, before: bool, after: bool) -> CmdResult {
+    let story = s.sel.focus.story;
+    for path in super::selected_paths(s) {
+        let Some(para) = s.doc.para(story, &path) else { continue };
+        let [before_lines, after_lines] = s.doc.styles.resolve_para(&para.props).space_lines;
+        let (clear_before, clear_after) = (before && before_lines != 0.0, after && after_lines != 0.0);
+        if clear_before || clear_after {
+            let props = &mut s.doc.para_mut(story, &path)?.props;
+            if clear_before {
+                props.space_before_lines = Some(0.0);
+            }
+            if clear_after {
+                props.space_after_lines = Some(0.0);
+            }
+        }
+    }
+    sel_result(s)
 }

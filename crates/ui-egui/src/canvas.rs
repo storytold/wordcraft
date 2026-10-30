@@ -44,7 +44,7 @@ use geometry::{collapse_white_space, columns_for, place_pages};
 use geometry::{floating_comments, on_page_gap, on_visible_page, white_space_hidden};
 #[cfg(test)]
 use input::{EDGE_MARGIN, EDGE_MAX_DT, EDGE_SPEED_MAX};
-use input::{UnitDrag, clamped_scroll, edge_scroll, mouse, wheel_hovered};
+use input::{MultiDrag, UnitDrag, clamped_scroll, edge_scroll, mouse, wheel_hovered};
 pub(crate) use input::{hold_document_selection, press_count};
 #[cfg(test)]
 use links::{field_link, is_followable_link, is_generated_bookmark_link};
@@ -131,6 +131,8 @@ pub struct CanvasState {
     /// A drag after a double-click, triple-click or Ctrl/⌘+click: the unit it extends by, the
     /// unit first selected, and the last position the pointer hit.
     unit_drag: Option<UnitDrag>,
+    /// Ctrl/⌘+press with text selected: adding a separate piece to the selection (#788).
+    multi_drag: Option<MultiDrag>,
     pub last_highlight: String,
     pub last_font_color: String,
     pub last_shading: String,
@@ -159,6 +161,8 @@ pub struct CanvasState {
     /// Document faces added to the interface fonts so the input method's composition (#565) and a
     /// file name in the window caption can be drawn.
     pub(crate) ime_faces: Vec<std::sync::Arc<wordcraft_fonts::FontFace>>,
+    /// The document face the input method composition is drawn in.
+    pub(crate) ime_face: Option<wordcraft_fonts::FaceRef>,
     pub want_focus: bool,
     pub context_issue: Option<serde_json::Value>,
     pub context_synonyms: Option<serde_json::Value>,
@@ -278,7 +282,39 @@ pub struct CanvasState {
     table_preview_layout: Option<(TablePreviewKey, wordcraft_doc::Document, wordcraft_engine::Selection, std::sync::Arc<DocLayout>)>,
 }
 
+fn prepare_ime_preedit(app: &mut WordApp, ui: &Ui, layout: &DocLayout, cursor_width: f32) -> Option<(wordcraft_layout::para::StyleRun, f32)> {
+    if !app.want_system_cjk && app.canvas.ime_preedit.chars().any(wordcraft_fonts::is_cjk) {
+        app.want_system_cjk = true;
+        ui.ctx().request_repaint();
+    }
+    let new = crate::theme::faces_for_preedit(&app.canvas.ime_preedit, &app.canvas.ime_faces, crate::theme::caption_char_covered, |c| {
+        wordcraft_fonts::FontDb::global().fallback_for(c, u32::MAX)
+    });
+    let typing = if cursor_width == 0.0 { layout.typing_style(&app.session.sel.focus, app.session.page_hint) } else { None };
+    let face = typing.as_ref().map(|(run, _)| run.requested_face);
+    if !new.is_empty() || face != app.canvas.ime_face {
+        app.canvas.ime_faces.extend(new);
+        app.canvas.ime_face = face;
+        crate::theme::install_fonts_language_extra(
+            ui.ctx(),
+            app.fonts_hans,
+            app.fonts_korean,
+            app.fonts_hant,
+            app.fonts_system_cjk,
+            &app.canvas.ime_faces,
+            app.canvas.ime_face,
+        );
+        ui.ctx().request_repaint();
+    }
+    typing
+}
+
 type TablePreviewKey = ((usize, usize, u64, u64, wordcraft_engine::Selection), std::sync::Arc<DocLayout>);
+/// Whether page content is drawn dark: Read Mode uses its page color; other views use Switch Modes.
+pub(crate) fn dark_page(app: &WordApp) -> bool {
+    use wordcraft_engine::cmd::view::ReadPageColor;
+    if app.session.view.read_mode { app.session.view.read_page_color == ReadPageColor::Inverse } else { app.session.view.dark_mode }
+}
 
 impl CanvasState {
     /// Another document is shown in the window: everything about the page that was shown (drags,
@@ -312,6 +348,7 @@ impl CanvasState {
         self.dragging = false;
         self.column_drag = None;
         self.unit_drag = None;
+        self.multi_drag = None;
     }
 
     /// The object a drag has taken off its page: which page, and which object. `None` unless an
@@ -358,6 +395,7 @@ impl Default for CanvasState {
             last_press: None,
             hf_press_switched: false,
             unit_drag: None,
+            multi_drag: None,
             last_highlight: "yellow".into(),
             last_font_color: "C00000".into(),
             last_shading: "FFF2CC".into(),
@@ -373,6 +411,7 @@ impl Default for CanvasState {
             ime_preedit: String::new(),
             ime_preedit_range: None,
             ime_faces: Vec::new(),
+            ime_face: None,
             want_focus: true,
             context_issue: None,
             context_synonyms: None,
@@ -1532,31 +1571,24 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             let mut preedit_color = None;
             let mut ime_dx = 0.0;
             if focused && !app.canvas.ime_preedit.is_empty() {
-                // The composition is interface text, but it may be in a script the interface fonts lack
-                // (Bangla, Thai ...): borrow the document fonts' fallback faces, or it draws as boxes (#565).
-                let new = crate::theme::faces_for_preedit(
-                    &app.canvas.ime_preedit,
-                    &app.canvas.ime_faces,
-                    |c| (c as u32) < 0x250,
-                    |c| wordcraft_fonts::FontDb::global().fallback_for(c, u32::MAX),
-                );
-                if !new.is_empty() {
-                    app.canvas.ime_faces.extend(new);
-                    crate::theme::install_fonts_language_extra(
-                        ui.ctx(),
-                        app.fonts_hans,
-                        app.fonts_korean,
-                        app.fonts_hant,
-                        app.fonts_system_cjk,
-                        &app.canvas.ime_faces,
-                    );
-                    ui.ctx().request_repaint();
-                }
+                let typing = prepare_ime_preedit(app, ui, &layout, c.width);
                 let color = caret_color(app);
-                let g = painter.layout_no_wrap(app.canvas.ime_preedit.clone(), regular(c.height * scale * 0.8), Color32::PLACEHOLDER);
+                let family = crate::theme::composition_family();
+                let bound = ui.ctx().fonts(|f| f.definitions().families.contains_key(&family));
+                let most = (max_tex / 4.0).min(1024.0) / ppp;
+                let size = |s: f32| s.min(most).max(1.0);
+                let (font, base) = match &typing {
+                    Some((run, base)) if bound && run.size.is_finite() && run.size > 0.0 => {
+                        (egui::FontId::new(size(run.size * scale), family), Some(pr.min.y + base * scale))
+                    }
+                    _ => (regular(size(c.height * scale * 0.8)), None),
+                };
+                let g = painter.layout_no_wrap(app.canvas.ime_preedit.clone(), font, Color32::PLACEHOLDER);
                 let at = preedit_cursor_chars(&app.canvas.ime_preedit, app.canvas.ime_preedit_range.as_ref());
                 ime_dx = g.pos_from_cursor(egui::text::CCursor::new(at)).min.x;
-                let r = Rect::from_min_size(pos2(x, y1 - g.size().y), g.size());
+                let baseline = g.rows.first().and_then(|r| r.glyphs.first().map(|gl| r.pos.y + gl.pos.y)).unwrap_or(g.size().y);
+                let top = base.map_or(y1 - g.size().y, |b| b - baseline);
+                let r = Rect::from_min_size(pos2(x, top), g.size());
                 painter.galley(r.min, g, color);
                 painter.line_segment([pos2(r.min.x, r.max.y), pos2(r.max.x, r.max.y)], Stroke::new(1.0, color));
                 preedit_color = Some(color);

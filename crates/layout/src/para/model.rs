@@ -67,6 +67,8 @@ pub(super) fn undrawable_bullet(text: &str, lvl: &Level, rc: &ResolvedChar) -> b
 #[derive(Clone, Debug)]
 pub struct StyleRun {
     pub face: FaceRef,
+    /// Primary font requested by the run, before a fallback face was chosen for a missing glyph.
+    pub requested_face: FaceRef,
     pub size: f32,
     pub synth_bold: bool,
     pub synth_italic: bool,
@@ -100,20 +102,6 @@ pub struct Glyph {
     pub dy: f32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ClKind {
-    Text,
-    Space,
-    Tab,
-    LineBreak,
-    PageBreak,
-    ColumnBreak,
-    /// Inline object with its index in `Paragraph::objects`.
-    Object(usize),
-    /// Zero-width marker (bookmark, comment anchor) or hidden text.
-    Marker,
-}
-
 /// One drawing segment of a grapheme cluster (or object, tab, break).
 /// Font/style changes may split its drawing; paragraph edit/wrap boundaries keep it atomic.
 #[derive(Clone, Debug)]
@@ -135,6 +123,22 @@ pub struct Cluster {
     pub obj_d: f32,
     /// The cluster is a decimal separator (decimal tabs align on it).
     pub dot: bool,
+    /// A visible inline drawing eligible for picture-only leading.
+    pub(crate) picture: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClKind {
+    Text,
+    Space,
+    Tab,
+    LineBreak,
+    PageBreak,
+    ColumnBreak,
+    /// Inline object with its index in `Paragraph::objects`.
+    Object(usize),
+    /// Zero-width marker (bookmark, comment anchor) or hidden text.
+    Marker,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

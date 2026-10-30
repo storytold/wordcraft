@@ -190,6 +190,8 @@ fn style_set(s: &mut Session, v: &Value) -> CmdResult {
     sel_result(s)
 }
 
+/// Design › Paragraph Spacing: a named preset sets the document defaults' space before, space
+/// after and line spacing, replacing any defaults' spacing in lines.
 fn para_spacing(s: &mut Session, v: &Value) -> CmdResult {
     let (before, after, line) = match p::req_str(v, "value")? {
         "none" => (0.0, 0.0, 1.0),
@@ -202,6 +204,7 @@ fn para_spacing(s: &mut Session, v: &Value) -> CmdResult {
     };
     s.doc.styles.default_para.space_before = Some(before);
     s.doc.styles.default_para.space_after = Some(after);
+    (s.doc.styles.default_para.space_before_lines, s.doc.styles.default_para.space_after_lines) = (None, None);
     s.doc.styles.default_para.line_spacing = Some(LineSpacing::Multiple(line));
     sel_result(s)
 }
@@ -278,7 +281,7 @@ fn page_borders(s: &mut Session, v: &Value) -> CmdResult {
     };
     let blocks: Vec<usize> = match p::str(v, "applyTo") {
         Some("document") => s.doc.sections().iter().map(|(end, _)| *end).collect(),
-        Some("section") | None => vec![s.sel.focus.path.0.first().copied().unwrap_or(0) as usize],
+        Some("section") | None => vec![super::page::section_end_of_focus(s)],
         Some(x) => return Err(CmdError::Params(format!("unknown `applyTo` `{x}`"))),
     };
     for block in blocks {

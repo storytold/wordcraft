@@ -450,13 +450,17 @@ impl<'e> Breaker<'e> {
     fn measure(&self, pl: &ParaLayout, range: (usize, usize)) -> Measure {
         let rp = &self.rp;
         let Extents { mut asc, mut desc, obj_asc } = self.extents(pl, range);
+        let label_here = pl.label.is_some() && (self.first || (self.lines.len() == 1 && self.lines[0].end == LineEnd::PageBreak));
+        let picture_only = matches!(rp.line_spacing, LineSpacing::Multiple(m) if m >= 1.0)
+            && self.grid.is_none()
+            && obj_asc > asc
+            && !label_here
+            && picture_clusters_only(pl, range.0, range.1);
         let text_natural = asc + desc;
         let (text_asc, text_desc) = (asc.max(obj_asc), desc);
         let text_pictures = if obj_asc > asc { obj_asc + desc } else { 0.0 };
         let mut label_extra = 0.0;
-        if self.first
-            && let Some(lab) = &pl.label
-        {
+        if label_here && let Some(lab) = &pl.label {
             if !matches!(rp.line_spacing, LineSpacing::Exactly(_)) {
                 // Automatic/minimum spacing keeps text descent. Only the label's ascent
                 // overflow adds room, unscaled by the automatic spacing multiplier.
@@ -480,7 +484,10 @@ impl<'e> Breaker<'e> {
         let (height, centred) = match (rp.line_spacing, grid) {
             (LineSpacing::Multiple(m), Some(g)) => ((g.snap_height(natural) * m).max(g.snap_height(pictures)), true),
             (LineSpacing::AtLeast(v), Some(g)) => (g.snap_height(natural.max(pictures)).max(v), true),
-            (LineSpacing::Multiple(m), None) => ((text_natural * m + label_extra).max(text_pictures), false),
+            (LineSpacing::Multiple(m), None) => {
+                let floor = if picture_only { obj_asc + text_natural * (m - 1.0).max(0.0) } else { text_pictures };
+                ((text_natural * m + label_extra).max(floor), false)
+            }
             (LineSpacing::AtLeast(v), None) => (natural.max(text_pictures).max(v), false),
             (LineSpacing::Exactly(v), _) => (v, false),
         };
@@ -488,7 +495,8 @@ impl<'e> Breaker<'e> {
             let up = asc.max(obj_asc);
             self.top + ((height - up - desc) / 2.0).max(0.0) + up
         } else {
-            self.top + baseline_offset(rp.line_spacing, asc, height, desc).max(obj_asc.min(height - desc))
+            let cap = if picture_only { height } else { height - desc };
+            self.top + baseline_offset(rp.line_spacing, asc, height, desc).max(obj_asc.min(cap))
         };
         Measure { height, baseline, text_asc, text_desc }
     }
@@ -511,7 +519,11 @@ impl<'e> Breaker<'e> {
             _ => 0.0,
         };
         if shift > 0.0 && slack > 0.0 {
-            for v in sc.xs.iter_mut().skip(align_from - c0) {
+            // Ordinary tabs move with paragraph alignment; positional tabs, labels and RTL text
+            // keep their measured start edge.
+            let whole_line = display.is_none() && pl.label.is_none() && !self.rtl_para && !pl.ptabs.iter().any(|(ci, ..)| *ci >= c0 && *ci < c1);
+            let shift_from = if whole_line { c0 } else { align_from };
+            for v in sc.xs.iter_mut().skip(shift_from - c0) {
                 *v += shift;
             }
             // After a tab the label stays, as the text before the tab does.
@@ -523,11 +535,49 @@ impl<'e> Breaker<'e> {
         }
         // A line ending in a manual line break is stretched too, unless `doNotExpandShiftReturn` says not to.
         let stretch_end = sc.end == LineEnd::Wrap || (sc.end == LineEnd::LineBreak && self.expand_break);
-        let justify = display.is_none() && ((rp.align == Align::Justify && stretch_end) || rp.align == Align::Distribute);
+        let khmer_mode = matches!(rp.align, Align::ThaiDistribute | Align::KhmerJustify);
+        let justify = display.is_none() && (((rp.align == Align::Justify || khmer_mode) && stretch_end) || rp.align == Align::Distribute);
         // A line that only fits with shrunk spaces is shrunk, the last line of the paragraph too.
         let shrink = display.is_none() && self.shrink_spaces && slack < 0.0 && last_tab.is_none();
         if shrink {
             shrink_line_spaces(pl, &mut sc.xs, c0, c1, content_end, slack);
+        } else if justify && slack > 0.0 && khmer_mode {
+            // Thai and Khmer do not use ordinary spaces between words; distribute slack between
+            // text clusters by script-specific gap weights, preserving leading/trailing blanks.
+            let mode = if rp.align == Align::KhmerJustify { crate::khmer_just::Mode::Tiered } else { crate::khmer_just::Mode::Even };
+            let blank = |k: usize| {
+                pl.clusters.get(k).is_some_and(|c| {
+                    matches!(c.kind, ClKind::Space | ClKind::Marker | ClKind::LineBreak | ClKind::PageBreak | ClKind::ColumnBreak)
+                        || (matches!(c.kind, ClKind::Object(_)) && c.adv == 0.0 && c.obj_h == 0.0)
+                })
+            };
+            let first = (align_from..c1).find(|k| !blank(*k)).unwrap_or(c1);
+            let last = (align_from..c1).rev().find(|k| !blank(*k));
+            let slots: Vec<usize> = match last {
+                Some(last) if last > first => (first..last).collect(),
+                _ => Vec::new(),
+            };
+            let gaps: Vec<(wordcraft_doc::khmer::Gap, f32)> = slots
+                .iter()
+                .map(|&k| {
+                    let em = pl.clusters.get(k).and_then(|c| pl.styles.get(c.style as usize)).map_or(12.0, |style| style.size);
+                    (pl.gaps.get(k).copied().unwrap_or(wordcraft_doc::khmer::Gap::None), em)
+                })
+                .collect();
+            let adds = crate::khmer_just::distribute(mode, slack, &gaps);
+            let mut add = 0.0;
+            let mut slots = slots.iter().zip(adds.iter()).peekable();
+            for k in align_from..c1 {
+                if let Some(x) = sc.xs.get_mut(k - c0) {
+                    *x += add;
+                }
+                if let Some((_, amount)) = slots.next_if(|(slot, _)| **slot == k) {
+                    add += *amount;
+                }
+            }
+            if let Some(x) = sc.xs.last_mut() {
+                *x += add;
+            }
         } else if justify && slack > 0.0 {
             justify_line(pl, &mut sc.xs, (c0, c1, align_from), (content_end, slack), rp.align == Align::Distribute);
         }
@@ -567,6 +617,12 @@ impl<'e> Breaker<'e> {
         };
         let (width, x0) = (self.width, rp.indent_left);
         let (x0, left, right) = if self.rtl_para { (width - x0, width - self.base_right, width - x0) } else { (x0, x0, self.base_right) };
+        let slack = (self.base_right - rp.indent_left).max(0.0);
+        let shift = match rp.align {
+            Align::Center => slack / 2.0,
+            Align::Right => slack,
+            _ => 0.0,
+        };
         self.lines.push(Line {
             top: self.top,
             height: h,
@@ -575,7 +631,7 @@ impl<'e> Breaker<'e> {
             text_desc: desc,
             c0: self.n,
             c1: self.n,
-            xs: vec![x0],
+            xs: vec![if self.rtl_para { x0 - shift } else { x0 + shift }],
             leaders: Vec::new(),
             end: LineEnd::Para,
             start: pl.text_len,
@@ -599,8 +655,11 @@ impl<'e> Breaker<'e> {
         let short = lines.len() < dl as usize;
         let dy = if short { (dl as f32 - 1.0) * l0.height } else { ln.baseline - l0.baseline };
         let lead = self.first_x0.unwrap_or(0.0) - self.first_left.max(rp.indent_left);
-        // In margin, the letter's right edge stays the distance away from the text's edge.
-        let dx = if rp.drop_cap_margin { lead.max(0.0) + pl.drop_cap_w + rp.drop_cap_distance } else { dw.min(lead) };
+        // In margin, hang from the paragraph column edge (or a first line that hangs farther
+        // left), regardless of text alignment or a positive first-line indent.
+        let edge = self.first_left.min(rp.indent_left);
+        let in_margin = (self.first_x0.unwrap_or(0.0) - edge).max(0.0) + pl.drop_cap_w + rp.drop_cap_distance;
+        let dx = if rp.drop_cap_margin { in_margin } else { dw.min(lead) };
         // Toward the start edge: left, or right (and from the letter's right edge) when mirrored.
         let dx = if self.rtl_para { pl.drop_cap_w - dx } else { dx };
         if short {
@@ -665,16 +724,27 @@ fn content_end(pl: &ParaLayout, sc: &Scan, c1: usize) -> f32 {
 /// Stretch the line to its right edge: its spaces widen by `slack` between them, or all its
 /// clusters by an equal share when `distribute` (or there are no spaces).
 fn justify_line(pl: &ParaLayout, xs: &mut [f32], (c0, c1, align_from): (usize, usize, usize), (content_end, slack): (f32, f32), distribute: bool) {
-    // Spaces inside the content (after the last tab).
-    let spaces: Vec<usize> = (align_from..c1)
+    let blank = |k: usize| {
+        pl.clusters.get(k).is_some_and(|c| {
+            matches!(c.kind, ClKind::Space | ClKind::Marker | ClKind::LineBreak | ClKind::PageBreak | ClKind::ColumnBreak)
+                || (matches!(c.kind, ClKind::Object(_)) && c.adv == 0.0 && c.obj_h == 0.0)
+        })
+    };
+    // Leading blanks do not become wider as justification is applied.
+    let content_from = (align_from..c1).find(|k| !blank(*k)).unwrap_or(c1);
+    let spaces: Vec<usize> = (content_from..c1)
         .filter(|k| pl.clusters.get(*k).is_some_and(|c| c.kind == ClKind::Space) && xs.get(k - c0).copied().unwrap_or(f32::MAX) < content_end - 0.01)
         .collect();
     if distribute || spaces.is_empty() {
-        let cnt = (c1 - align_from).saturating_sub(1).max(1) as f32;
+        // A trailing manual break is part of the line's source range, but is not a
+        // character gap. Count only the gaps between visible content clusters so
+        // the last character reaches the margin in a distributed line.
+        let content_to = (content_from..c1).rev().find(|k| !blank(*k)).map_or(content_from, |k| k + 1);
+        let cnt = (content_to - content_from).saturating_sub(1).max(1) as f32;
         if distribute {
             let per = slack / cnt;
-            for (q, v) in xs.iter_mut().enumerate().skip(align_from - c0) {
-                let k = (q + c0 - align_from) as f32;
+            for (q, v) in xs.iter_mut().enumerate().skip(content_from - c0) {
+                let k = (q + c0 - content_from) as f32;
                 *v += per * k.min(cnt);
             }
         }
@@ -683,7 +753,7 @@ fn justify_line(pl: &ParaLayout, xs: &mut [f32], (c0, c1, align_from): (usize, u
     let per = slack / spaces.len() as f32;
     let mut add = 0.0;
     let mut si = 0;
-    for k in align_from..c1 {
+    for k in content_from..c1 {
         if let Some(v) = xs.get_mut(k - c0) {
             *v += add;
         }
@@ -977,6 +1047,17 @@ fn baseline_offset(spacing: LineSpacing, asc: f32, height: f32, desc: f32) -> f3
 /// The spans of a row at `top` (about `h` tall) between `lo` and `hi` that text can use around
 /// the exclusions, left to right (Square wrapping uses both sides of an object). `Err(y)`: none
 /// here, try again at `y` (below what's in the way).
+fn picture_clusters_only(pl: &ParaLayout, c0: usize, c1: usize) -> bool {
+    pl.clusters.get(c0..c1).is_some_and(|cs| {
+        cs.iter().enumerate().all(|(i, c)| match c.kind {
+            ClKind::Object(_) => c.picture || (c.adv == 0.0 && c.obj_h == 0.0),
+            ClKind::Space | ClKind::Tab | ClKind::Marker => true,
+            ClKind::LineBreak => i + 1 == cs.len() && c.adv == 0.0 && c.obj_h == 0.0 && c.obj_d == 0.0 && c.g0 == c.g1,
+            _ => false,
+        })
+    })
+}
+
 fn row_spans(exclusions: &[Exclusion], top: f32, h: f32, table_h: f32, lo: f32, hi: f32) -> Result<VecDeque<(f32, f32)>, f32> {
     let here: Vec<&Exclusion> = exclusions.iter().filter(|e| e.intersects_row(top, h, table_h, lo, hi)).collect();
     if let Some(below) = here.iter().filter(|e| e.top_bottom).map(|e| e.bottom).reduce(f32::max) {

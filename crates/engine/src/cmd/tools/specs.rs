@@ -234,7 +234,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"csv"?: string}"#),
         CommandSpec::new("layout.linkToPrevious", "Link to Previous", "Header & Footer › Navigation", |s, v| {
             let header = p::bool(v, "footer").map(|f| !f).unwrap_or(true);
-            let block = s.sel.focus.path.0.first().copied().unwrap_or(0) as usize;
+            let block = crate::cmd::page::section_end_of_focus(s);
             let sect = s.doc.section_mut(block);
             if header {
                 sect.headers = Default::default();
@@ -249,7 +249,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("hf.previous", "Previous Section", "Header & Footer › Navigation", |s, _| hf_nav(s, -1)).pure(),
         CommandSpec::new("hf.position", "Header/Footer Position", "Header & Footer › Position", |s, v| {
             let (h, f) = (p::f32(v, "header"), p::f32(v, "footer"));
-            let block = s.sel.focus.path.0.first().copied().unwrap_or(0) as usize;
+            let block = crate::cmd::page::section_end_of_focus(s);
             let sect = s.doc.section_mut(block);
             if let Some(h) = h {
                 sect.header = h.clamp(0.0, 300.0);

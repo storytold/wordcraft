@@ -125,6 +125,8 @@ Windows/Linux keys are given first, macOS second.
 
 | Keys | Word's result | Test |
 |---|---|---|
+| Enter (Return) on a selected picture or shape, inline or floating | nothing: the object stays, still selected, and no paragraph is added, however many times it is pressed (Word for Mac, observed 2026-10-24; #4126). On a selected text box, Enter puts the caret in its text | `enter_on_a_selected_picture_does_nothing` |
+| Shift+Enter (⇧Return), Insert › Page Break (⌘Return) on a selected picture or shape | the break goes in front of it (in front of a content control around it) and the object stays selected: each Shift+Enter moves an inline picture down a line (with a floating picture, the text after its anchor), and a page break moves it to the next page (Word for Mac, observed 2026-10-24; #4126). A column break does the same (not observed) | `a_break_on_a_selected_picture_goes_in_front_of_it`, `a_break_on_a_picture_in_a_picture_control_keeps_the_picture_selected` |
 | select text right to left (from its end), type | the new text takes the first selected character's formatting (font, size…), as with a selection made left to right; not the text's before it (#2879) | `typing_over_backward_selection_keeps_its_font` |
 | Down / Up (↓ / ↑) from a line beside a table | into the table's nearest row: the cell under the caret, or the nearest one when the caret is left or right of the cells' text (the start of the line above a table is left of the first cell's text); never past the table to the paragraph beyond it | `down_and_up_from_a_line_start_beside_a_table_go_into_it` |
 | Alt+Shift+Up / Down (⌃⇧↑ / ⌃⇧↓) | the paragraphs the selection touches swap with the paragraph above / below, keeping style and list membership; the selection moves with them; one undo step. A selection ending at the start of a paragraph doesn't take it along. Refused at the top or bottom of the story or cell, next to a table and across a section break | `alt_shift_down_then_up_moves_a_paragraph_and_back_and_undoes` |
@@ -146,8 +148,8 @@ at paragraph start without creating a list. It respects AutoCorrect preferences,
 entries and undo. The existing `-> ` paragraph-start arrow bullet is unchanged.
 
 Applied when a word is finished by a space, punctuation **or Enter** (`enter_finishes_a_word_for_autocorrect`).
-The word starts after the last white-space character before it, also when that is a no-break space or an
-ideographic space (`autocorrect_finds_the_word_after_a_wide_space`):
+The word starts after the last white-space character before it, also when that is a no-break space, a narrow
+no-break space, a figure space or an ideographic space (`autocorrect_finds_the_word_after_a_wide_space`):
 
 - First letter of a sentence (paragraph or list item start, after `. ! ?`) is capitalised; not
   after abbreviations (`e.g.`, `Dr.`, …) or initials (`J.`), and not for mixed-case words
@@ -228,27 +230,47 @@ ideographic space (`autocorrect_finds_the_word_after_a_wide_space`):
 - With Track Changes on, the border-line and table AutoFormats below mark the characters
   deleted, so Reject All brings them back; characters the same author inserted are removed.
   The border is a tracked formatting change, at the top of a story too
-  (`a_tracked_border_line_is_a_deletion_and_a_formatting_change`); the table is inserted
+  (`a_tracked_border_line_is_a_deletion_and_a_formatting_change`), and at the top it replaces
+  another author's earlier formatting change on the paragraph
+  (`a_tracked_border_line_at_the_top_supersedes_another_authors_formatting`); the table is inserted
   untracked, as Insert › Table inserts one
   (`a_tracked_table_line_keeps_its_characters_as_a_deletion`). A line holding a tracked
   deletion stays as it is, so Enter after the deleted characters is a plain Enter. This is
   WordCraft's own rule.
+- With formatting left out of the Track Changes markup, the border at the top of a story is not
+  a formatting change and Reject All keeps it
+  (`a_border_line_at_the_top_with_formatting_markup_off_is_not_a_formatting_change`); the
+  author's own earlier formatting change on that paragraph stays the one change, holding the
+  formatting from before it (`a_border_line_at_the_top_keeps_the_authors_own_earlier_formatting_change`).
+  Reject All keeps the table of a `+---+` line. The border-line and table AutoFormats delete
+  their characters as Backspace does, tracked or not, so where a content control's lock refuses
+  Backspace, Enter is refused too and the line stays as it is
+  (`a_border_line_the_content_control_locks_refuse_to_delete_stays_as_backspace_leaves_it`).
 - Enter after `---` `===` `***` `___` `~~~` `###` → a bottom border on the paragraph above
   (single, double, dotted, thick, wave, triple) (`border_line_autoformat`). ⌘Z right after brings the
   characters back and removes the border; the Enter stays (one undo step) ¹
   (`undo_right_after_a_border_line_brings_the_characters_back`).
-- Built-in Heading styles (`tools.autocorrect {"headingStyles": true}`, off by default): Enter
+- Built-in Heading styles (`tools.autocorrect {"headingStyles": true}`, off by default,
+  `built_in_heading_styles_are_off_by_default`): Enter
   twice after a line of five or fewer words that does not end with punctuation makes the line
   Heading 1; one or two tabs before it make it Heading 2 or 3, and the tabs are removed ¹
   (`two_enters_after_a_short_line_make_it_a_heading`). The rest is WordCraft's own rule: the
   line is a Normal paragraph of the main text (not in a list, a table, a header or a text box)
-  and ends in a letter or digit; the caret stays in the empty paragraph after the heading; ⌘Z
+  with no outline level, and ends in a letter or digit
+  (`a_line_that_is_not_a_short_line_of_body_text_stays_as_it_is`); the caret stays in the
+  empty paragraph after the heading; ⌘Z
   right after brings back the tabs and the Normal style, and the second Enter stays
   (`undo_right_after_a_heading_autoformat_keeps_the_enter`); with Track Changes on, the tabs are
   marked deleted (or removed, when the same author inserted them) and the style change is a
   tracked formatting change, and a line holding a tracked deletion stays as it is
-  (`a_tracked_heading_autoformat_can_be_rejected`); a heading style locked by formatting
-  restrictions is not applied (`a_locked_heading_style_is_not_applied_as_you_type`).
+  (`a_tracked_heading_autoformat_can_be_rejected`); the formatting change is this author's and
+  replaces another author's earlier formatting change on the line, so rejecting it brings back
+  the line as that author left it
+  (`a_tracked_heading_autoformat_supersedes_another_authors_formatting`); a heading style
+  locked by formatting restrictions is not applied
+  (`a_locked_heading_style_is_not_applied_as_you_type`); in a read-only document, Enter in an
+  editable region right after a protected short line breaks the paragraph and leaves that line
+  as it is (`enter_in_an_editable_region_after_a_protected_short_line_breaks_the_paragraph`).
 - `+---+------+` Enter (plus signs around runs of hyphens, the whole paragraph) → a one-row
   table across the text width, each column as wide as its share of the hyphens; the caret goes
   into the first cell. ⌘Z right after brings the characters back. More than 63 columns stay
@@ -261,7 +283,10 @@ ideographic space (`autocorrect_finds_the_word_after_a_wide_space`):
   paragraph's own left indent one tab stop at a time. An empty paragraph and Tab inside a line
   still take a tab character. While formatting is limited to the document's styles, Tab and
   Backspace work as with the option off ¹ (`tab_and_backspace_at_a_paragraph_start_set_its_indents`,
-  `tab_before_a_later_line_of_a_paragraph_indents_the_whole_paragraph`).
+  `tab_before_a_later_line_of_a_paragraph_indents_the_whole_paragraph`). In a table cell Tab
+  still moves to the next cell (`with_tab_indents_on_tab_in_a_table_cell_moves_to_the_next_cell`).
+  With the option off, Backspace at the start of a paragraph with its own left indent joins it to
+  the paragraph before (`with_tab_indents_off_backspace_before_an_indented_paragraph_joins_it`).
 - Smileys `:)` `:-)` `:(` `:-(` `:|` → ☺ ☹ 😐, also straight after a word (`ok:)` → `ok☺`) ¹
   (`smileys_are_replaced_inside_words_too`).
 
@@ -485,6 +510,9 @@ again.
 - Moving paragraphs with Track Changes on isn't recorded as a tracked move; whole table rows
   don't move yet (a selection across cells is refused). Go Back's places aren't mapped through
   later edits (they are clamped to the document).
+- A no-break space typed after a word (`text.nbsp`, Mod+Shift+Space) does not finish the word for
+  AutoCorrect: only a space, punctuation or Enter does, so `teh` stays `teh`. What Word does here
+  has not been compared.
 - Not yet compared: keystroke-by-keystroke comparison of Correct TWo INitial CApitals, cAPS LOCK
   and table-cell capitals (implemented from Word's AutoCorrect options; Word's exception list
   not compared); the rows marked ¹ above.
@@ -522,6 +550,10 @@ this correction; native Windows interaction and Microsoft Word remain untested.
 | 2026-10-29 | trivial | Relative font-size commands preserve mixed sizes in the selection (#4903); existing button steps and one-point shortcuts are unchanged; readiness estimates unchanged |
 | 2026-10-28 | trivial | Highlighting at a caret leaves the word alone and sets the colour for what is typed next (#4086). |
 | 2026-10-28 | trivial | Arabic Backspace removes one combining mark and keeps its base letter (#4757); stored mark order, caret/forward-Delete and other-script behavior retained; original synthetic command/history/protection/save-reopen checks, no native Word comparison; readiness estimates unchanged |
+| 2026-10-24 | trivial | Enter on a selected picture or shape does nothing, and Shift+Enter, page and column breaks go in front of it, instead of deleting it (#4126) |
+| 2026-10-24 | trivial | AutoCorrect: a word typed after a no-break space or an ideographic space is corrected as after a plain space |
+| 2026-10-25 | trivial | AutoFormat: a tracked heading, and a tracked border line at the top of a story, replace another author's formatting change on the paragraph instead of keeping it |
+| 2026-10-25 | trivial | Tests and notes: border lines with formatting markup off, after the author's own formatting change and in a locked content control; Reject All keeps a `+---+` table; Tab in a table cell with tab indents on; Backspace before an indented paragraph with them off; narrow no-break and figure spaces before an AutoCorrect word; a no-break space typed after a word listed as a known gap |
 | 2026-10-25 | trivial | Highlight decisions include fully selected paragraph marks in whole cells and ordinary ranges, including empty paragraphs; partial text columns exclude unselected marks (#4085). |
 | 2026-10-25 | trivial | Highlight toggle checks the full target beyond 10,000 runs without collecting resolved formatting; mixed and inherited tails and Undo/Redo covered (#4085). |
 | 2026-10-24 | trivial | Input methods: reject queued old-composition replacements before mutation after body/equation target replacement (new regression validation pending); equation `DeleteSurrounding` is one transactional command whose checked revision proves a receipt; a caret-only step in a mixed request refuses the whole deletion, and an over-cap request clears the painted pre-edit and the previous replacement join; a refused byte-counted equation deletion drops only the immediately adjacent stale replacement, never a later direct commit; a tracked own-insertion shifts the following range; a body deletion maps signed placeholder growth/shrink, keeps control markers outside the range and scopes its replacement undo join to the matching `text.insert`; refusals clear the painted pre-edit and joins; AutoCorrect/AutoFormat classification compares the paragraph as typed; equation replacement interrupts the composition |

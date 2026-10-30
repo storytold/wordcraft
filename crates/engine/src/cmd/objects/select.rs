@@ -140,7 +140,7 @@ pub fn min_size(o: &InlineObject) -> f32 {
 }
 
 /// Select the object whose character is at `pos`.
-pub(super) fn select_object(s: &mut Session, pos: &Pos) {
+pub(crate) fn select_object(s: &mut Session, pos: &Pos) {
     s.sel = Selection { anchor: pos.clone(), focus: Pos { off: pos.off + wordcraft_doc::para::OBJ.len_utf8(), ..pos.clone() } };
 }
 

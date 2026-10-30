@@ -54,7 +54,7 @@ fn imported_word_save_asks_for_docx_and_preserves_the_original() {
         let revision = a.session.rev();
         let result = a.run("file.save", json!({})).unwrap();
         assert_eq!(result["pending"], "saveAs");
-        assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "contract.docx".into(), dir: None });
+        assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "contract.docx".into(), dir: Some(dir.to_string_lossy().into_owned()) });
         answer(&shown, None);
         assert_eq!(a.poll_file_dialog().unwrap().unwrap()["saved"], false);
         assert_eq!(a.session.doc, draft);
@@ -204,7 +204,7 @@ fn imported_word_save_controls_ask_for_docx() {
     h.get_by_label("Save").click();
     h.run_steps(3);
     assert!(h.state().file_dialog_open(), "the Save button asks for a supported target");
-    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "contract.docx".into(), dir: None });
+    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "contract.docx".into(), dir: Some(dir.to_string_lossy().into_owned()) });
     answer(&shown, None);
     h.run_steps(3);
 
@@ -215,7 +215,7 @@ fn imported_word_save_controls_ask_for_docx() {
     h.event(egui::Event::Key { key: egui::Key::S, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND });
     h.run_steps(3);
     assert!(h.state().file_dialog_open(), "the focused editor's Mod+S asks too");
-    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "contract.docx".into(), dir: None });
+    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "contract.docx".into(), dir: Some(dir.to_string_lossy().into_owned()) });
     answer(&shown, None);
     h.run_steps(3);
     assert!(h.state().session.dirty);
@@ -353,7 +353,7 @@ fn save_as_with_a_new_filename_saves_under_it() {
     let r = a.run("file.saveAs", json!({})).unwrap();
     assert_eq!(r, json!({"saved": false}));
     assert!(a.file_dialog_open(), "F12's saveAs request opens the dialog");
-    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "two.docx".into(), dir: None });
+    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "two.docx".into(), dir: Some(dir.join("sub").to_string_lossy().into_owned()) });
     let _ = std::fs::remove_dir_all(&dir);
 }
 

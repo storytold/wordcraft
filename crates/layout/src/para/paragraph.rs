@@ -10,6 +10,7 @@ use super::{
     Arc, COLUMN_BREAK, CharProps, Document, FIELD_SHADING, InlineObject, LINE_BREAK, NoteKind, OBJ, PAGE_BREAK, PTabAlign, PTabBase, ParaLayout,
     Paragraph, ResolvedChar, ResolvedPara, TabLeader, field_code_text, field_text_on, reference_link,
 };
+use wordcraft_doc::props::Align;
 
 /// A run's formatting resolved in the paragraph's style and table.
 struct Resolver<'a> {
@@ -58,6 +59,7 @@ impl Slot {
             obj_h,
             obj_d,
             dot: false,
+            picture: false,
         }
     }
 }
@@ -98,6 +100,10 @@ fn paragraph_props(p: &Paragraph, env: &ParaEnv) -> ResolvedPara {
     // Indents in characters are measured in the paragraph mark's font size.
     if rp.indent_chars.iter().any(|c| *c != 0.0) {
         rp.set_char_unit(doc.styles.resolve_char_in(p.props.style.as_deref(), env.table.map(|t| &t.chr), &p.mark).size);
+    }
+    // Paragraph spacing measured in lines uses the section grid's pitch when present.
+    if rp.space_lines.iter().any(|l| *l != 0.0) {
+        rp.set_line_unit(env.grid.line.unwrap_or(wordcraft_doc::resolve::LINE_UNIT));
     }
     list_indents(&mut rp, p, env);
     rp
@@ -249,6 +255,8 @@ impl<'a> Shaped<'a> {
         big.size = (((lines - 1.0) * line_h + rc.size * 0.7) / 0.7).min(1000.0).max(rc.size);
         if let Some(f) = &rp.drop_cap_font {
             big.font = f.clone();
+            big.font_cs = f.clone();
+            big.font_ea = Some(f.clone());
         }
         let before = self.b.clusters.len();
         self.b.shape(first, 0, &Arc::new(big), None);
@@ -333,6 +341,11 @@ impl<'a> Shaped<'a> {
             let [el, et, er, eb] = float.effect_extent();
             let (px, py) = float.spin_pad(w * s, h * s);
             self.push(slot, ClKind::Object(k), w * s + el + er + 2.0 * px, h * s + et + eb + 2.0 * py);
+            if let Some(cluster) = self.b.clusters.last_mut() {
+                // A text box carries text as well as a drawing frame. Unlike picture-only
+                // lines, its line must retain the anchor font's descent below the box.
+                cluster.picture = !matches!(o, InlineObject::Shape { kind: wordcraft_doc::para::ShapeKind::TextBox, .. });
+            }
         } else {
             self.push(slot, ClKind::Object(k), 0.0, 0.0);
         }
@@ -578,6 +591,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let label = list_label(&cx, &mut sh.b, mark_style);
     let joined_cluster_starts = joined_cluster_starts(p, &sh.b.clusters);
     let Shaped { b, has_page_fields, notes, drop_cap, drop_cap_w, maths, enclosures, rubies, displays, ptabs, left, runs, .. } = sh;
+    let gaps = if matches!(rp.align, Align::ThaiDistribute | Align::KhmerJustify) { super::cluster_gaps(&p.text, &b.clusters) } else { Vec::new() };
     let mut pl = ParaLayout {
         rp,
         styles: b.styles,
@@ -603,6 +617,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         left_out: Vec::new(),
         enclosures,
         auto_space,
+        gaps,
     };
     let auto = env.doc.settings.auto_hyphenation && !pl.rp.suppress_hyphens;
     pl.hyph_after = hyphenation_points(&bt.text, |i| bt.to_para(i), &pl, auto, env.doc.settings.hyphenate_caps, &runs);

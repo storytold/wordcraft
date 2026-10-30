@@ -28,11 +28,25 @@ impl Reader<'_> {
                         props.drop_cap_distance = first.props.drop_cap_distance;
                         // A letter in a font of its own: the drop cap's font, the letter itself
                         // in the text's (so taking the drop cap away gives the letter its font back).
-                        let cap_font = first.runs.first().and_then(|r| r.props.font.clone());
-                        let text_font = p.runs.first().and_then(|r| r.props.font.clone());
+                        // Bookmark/comment markers are object runs and can precede the first text
+                        // run. Find the font from the first actual text in each paragraph.
+                        let text_run = |para: &Paragraph| {
+                            let mut start = 0;
+                            para.runs.iter().position(|r| {
+                                let end = start + r.len;
+                                let has_text = para.text.get(start..end).is_some_and(|part| part.chars().any(|c| c != wordcraft_doc::para::OBJ));
+                                start = end;
+                                has_text
+                            })
+                        };
+                        let cap_run = text_run(&first);
+                        let cap_font = cap_run.and_then(|i| first.runs.get(i)).and_then(|r| r.props.font.clone());
+                        let text_font = text_run(&p).and_then(|i| p.runs.get(i)).and_then(|r| r.props.font.clone());
                         if cap_font.is_some() && cap_font != text_font {
-                            for r in &mut first.runs {
-                                r.props.font = text_font.clone();
+                            if let Some(i) = cap_run.and_then(|i| first.runs.get_mut(i)) {
+                                // The frame's font belongs to the initial letter only. Other
+                                // explicitly formatted letters in the same paragraph keep theirs.
+                                i.props.font = text_font.clone();
                             }
                             props.drop_cap_font = cap_font;
                         }

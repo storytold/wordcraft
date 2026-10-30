@@ -6,7 +6,46 @@ use super::select::{
     has_sizable, obj_size, objects_list, selected, with_float, with_obj,
 };
 use super::shape::{NO_TEXT_BOX, can_link, has_text_box, link_text_box, set_text_body, shape_effects, text_box_target};
-use super::{CmdError, CommandSpec, InlineObject, Pos, Rgb, Selection, Spin, TextVert, VAlign, Wrap, WrapText, json, p, sel_result};
+use super::{CmdError, CommandSpec, InlineObject, Pos, Rgb, Selection, Spin, TextVert, VAlign, Value, Wrap, WrapText, json, p, sel_result};
+
+/// Apply one axis from the Layout dialog's Position tab. `relativeTo` names match its form model.
+fn position_axis(v: &Value, horizontal: bool) -> Result<(wordcraft_doc::para::Anchor, Option<wordcraft_doc::para::FloatAlign>, f32), CmdError> {
+    use wordcraft_doc::para::{Anchor, FloatAlign};
+    let rel = p::str(v, "relativeTo").ok_or_else(|| CmdError::Params("`relativeTo` is required".into()))?;
+    let anchor = match rel {
+        "margin" => Anchor::Margin,
+        "page" => Anchor::Page,
+        "column" if horizontal => Anchor::Column,
+        "paragraph" if !horizontal => Anchor::Paragraph,
+        "leftMargin" if horizontal => Anchor::LeftMargin,
+        "rightMargin" if horizontal => Anchor::RightMargin,
+        "topMargin" if !horizontal => Anchor::TopMargin,
+        "bottomMargin" if !horizontal => Anchor::BottomMargin,
+        "insideMargin" => Anchor::InsideMargin,
+        "outsideMargin" => Anchor::OutsideMargin,
+        _ => return Err(CmdError::Params(format!("unknown {} position reference `{rel}`", if horizontal { "horizontal" } else { "vertical" }))),
+    };
+    let align = if let Some(name) = p::str(v, "align") {
+        let align = match name {
+            "left" if horizontal => FloatAlign::Start,
+            "right" if horizontal => FloatAlign::End,
+            "top" if !horizontal => FloatAlign::Start,
+            "bottom" if !horizontal => FloatAlign::End,
+            "center" => FloatAlign::Center,
+            "inside" => FloatAlign::Inside,
+            "outside" => FloatAlign::Outside,
+            _ => return Err(CmdError::Params(format!("unknown {} alignment `{name}`", if horizontal { "horizontal" } else { "vertical" }))),
+        };
+        Some(align)
+    } else {
+        None
+    };
+    let offset = if horizontal { p::f32(v, "x") } else { p::f32(v, "y") };
+    if align.is_some() == offset.is_some() {
+        return Err(CmdError::Params("provide exactly one of `align` or the axis offset".into()));
+    }
+    Ok((anchor, align, offset.unwrap_or(0.0).clamp(-MAX_OFFSET, MAX_OFFSET)))
+}
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -223,6 +262,30 @@ pub fn specs() -> Vec<CommandSpec> {
             })
         })
         .params(r#"{"preset"?: "topLeft|topCenter|topRight|middleLeft|middleCenter|middleRight|bottomLeft|bottomCenter|bottomRight", "x"?: pt, "y"?: pt}"#)
+        .when(has_movable),
+        CommandSpec::new("arrange.positionOptions", "Position Options", "Layout › Arrange", |s, v| {
+            let h = v.get("horizontal").filter(|a| a.is_object()).map(|a| position_axis(a, true)).transpose()?;
+            let vert = v.get("vertical").filter(|a| a.is_object()).map(|a| position_axis(a, false)).transpose()?;
+            if h.is_none() && vert.is_none() {
+                return Ok(Value::Null);
+            }
+            with_float(s, |f| {
+                if f.wrap == Wrap::Inline {
+                    f.wrap = Wrap::Square;
+                }
+                if let Some((rel, align, offset)) = h {
+                    f.h_rel = rel;
+                    f.h_align = align;
+                    f.x = offset;
+                }
+                if let Some((rel, align, offset)) = vert {
+                    f.v_rel = rel;
+                    f.v_align = align;
+                    f.y = offset;
+                }
+            })
+        })
+        .params(r#"{"horizontal"?: {"align": "left|center|right|inside|outside", "relativeTo": "margin|page|column|leftMargin|rightMargin|insideMargin|outsideMargin"} | {"x": pt, "relativeTo": "margin|page|column|leftMargin|rightMargin|insideMargin|outsideMargin"}, "vertical"?: {"align": "top|center|bottom|inside|outside", "relativeTo": "margin|page|paragraph|topMargin|bottomMargin|insideMargin|outsideMargin"} | {"y": pt, "relativeTo": "margin|page|paragraph|topMargin|bottomMargin|insideMargin|outsideMargin"}} (an In Line with Text object becomes Square-wrapped when positioned)"#)
         .when(has_movable),
         CommandSpec::new("arrange.bringForward", "Bring Forward", "Layout › Arrange", |s, _| with_float(s, |f| f.wrap = Wrap::InFrontOfText)).when(has_movable),
         CommandSpec::new("arrange.sendBackward", "Send Backward", "Layout › Arrange", |s, _| with_float(s, |f| f.wrap = Wrap::BehindText)).when(has_movable),

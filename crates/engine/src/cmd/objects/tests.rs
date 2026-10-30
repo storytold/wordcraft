@@ -402,6 +402,28 @@ fn picture_pipeline() {
     assert!(s.run("picture.crop", &json!({"left": 0.1})).is_err());
 }
 
+#[test]
+fn position_options_aligns_and_offsets_each_axis() {
+    use wordcraft_doc::para::{Anchor, FloatAlign, Wrap};
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    let data = super::super::insert::base64_encode(&png(20, 10));
+    s.run("insert.picture", &json!({"data": data})).unwrap();
+    s.run(
+        "arrange.positionOptions",
+        &json!({
+            "horizontal": {"align": "right", "relativeTo": "page"},
+            "vertical": {"y": 24, "relativeTo": "paragraph"}
+        }),
+    )
+    .unwrap();
+    let (_, object) = selected(&s).unwrap();
+    let float = object.frame().unwrap().2;
+    assert_eq!(float.wrap, Wrap::Square);
+    assert_eq!((float.h_rel, float.h_align), (Anchor::Page, Some(FloatAlign::End)));
+    assert_eq!((float.v_rel, float.v_align, float.y), (Anchor::Paragraph, None, 24.0));
+    assert!(s.run("arrange.positionOptions", &json!({"horizontal": {"align": "top", "relativeTo": "page"}})).is_err());
+}
+
 /// A `sharpen` too small to be a normal blur width must not reach the blur, which asserts on it.
 #[test]
 fn a_tiny_sharpen_value_does_not_panic() {

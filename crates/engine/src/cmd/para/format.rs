@@ -136,7 +136,10 @@ pub(super) fn set_props(s: &mut Session, v: &Value) -> CmdResult {
         }
         para.touch();
     }
-    sel_result(s)
+    // Point spacing from the Paragraph dialog wins over spacing in lines, unless that same
+    // submission supplies the corresponding line value. Leave other sides and fields alone.
+    let points_only = |points: Option<f32>, lines: Option<f32>| points.is_some() && lines.is_none();
+    super::cancel_line_spacing(s, points_only(props.space_before, props.space_before_lines), points_only(props.space_after, props.space_after_lines))
 }
 
 pub fn indent(s: &mut Session, _: &Value) -> CmdResult {

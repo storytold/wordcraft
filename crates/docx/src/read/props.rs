@@ -374,6 +374,14 @@ impl PropCtx {
                     if let Some(v) = tw(k, "w:after") {
                         p.space_after = Some(v.max(0.0));
                     }
+                    // Line units (hundredths of a line), which win when non-zero.
+                    let lines = |a: &str| k.attr(a).and_then(int).map(|v| v.clamp(0, 13_200) as f32 / 100.0);
+                    if let Some(v) = lines("w:beforeLines") {
+                        p.space_before_lines = Some(v);
+                    }
+                    if let Some(v) = lines("w:afterLines") {
+                        p.space_after_lines = Some(v);
+                    }
                     // HTML-style automatic spacing; "0" switches an inherited one off.
                     let auto = |name| k.attr(name).map(|v| matches!(v.trim(), "1" | "true" | "on"));
                     if let Some(a) = auto("w:beforeAutospacing") {
@@ -419,7 +427,12 @@ impl PropCtx {
                         _ => {}
                     }
                 }
-                "w:jc" => p.align = k.attr("w:val").map(align),
+                "w:jc" => {
+                    p.align = k.attr("w:val").map(|v| match (v, k.attr("wc:khmer")) {
+                        ("thaiDistribute", Some("1" | "true")) => Align::KhmerJustify,
+                        _ => align(v),
+                    })
+                }
                 "w:outlineLvl" => p.outline_level = k.attr("w:val").and_then(u32_of).map(|v| v.min(9) as u8),
                 "w:rPr" => mark = self.rpr(k),
                 _ => {}
@@ -434,7 +447,8 @@ pub fn align(v: &str) -> Align {
         "center" => Align::Center,
         "right" | "end" => Align::Right,
         "both" | "justify" | "lowKashida" | "mediumKashida" | "highKashida" => Align::Justify,
-        "distribute" | "thaiDistribute" => Align::Distribute,
+        "distribute" => Align::Distribute,
+        "thaiDistribute" => Align::ThaiDistribute,
         _ => Align::Left,
     }
 }
@@ -851,5 +865,18 @@ fn east_asian_layout(e: &El) -> EastAsianLayout {
         combine_brackets: e.attr("w:combineBrackets").and_then(|v| CombineBrackets::from_ooxml(v.trim())),
         vert: flag("w:vert"),
         vert_compress: flag("w:vertCompress"),
+    }
+}
+
+#[cfg(test)]
+mod khmer_tests {
+    use super::*;
+
+    /// A file written by Word has no `wc:khmer` mark: its Thai Distributed stays Thai Distributed.
+    #[test]
+    fn word_thai_distributed_reads_as_thai_distributed() {
+        assert_eq!(align("thaiDistribute"), Align::ThaiDistribute);
+        assert_eq!(align("distribute"), Align::Distribute);
+        assert_eq!(align("both"), Align::Justify);
     }
 }

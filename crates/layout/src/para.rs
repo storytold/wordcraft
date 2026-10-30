@@ -94,6 +94,66 @@ pub struct ParaLayout {
     /// Room after a cluster between Asian text and Latin text or digits ([`auto_space`]), by
     /// cluster index, sorted. It is part of the cluster's advance, but takes no room at a line's end.
     pub auto_space: Vec<(usize, f32)>,
+    /// Thai Distributed and Khmer Justify: for each cluster, what the gap after it is (a space, a
+    /// word boundary, a syllable boundary, or nothing to stretch). Empty for other alignments.
+    pub gaps: Vec<wordcraft_doc::khmer::Gap>,
+}
+
+/// Assign Thai and Khmer expansion opportunities to the cluster after each boundary.
+pub(crate) fn cluster_gaps(text: &str, clusters: &[Cluster]) -> Vec<wordcraft_doc::khmer::Gap> {
+    use wordcraft_doc::khmer::{self, Gap};
+    let slice = |c: &Cluster| text.get(c.start..c.end).unwrap_or("");
+    let mut out = vec![Gap::None; clusters.len()];
+    let mut k = 0;
+    while let Some(c) = clusters.get(k) {
+        k += 1;
+        let t = slice(c);
+        if c.kind == ClKind::Space {
+            if let Some(g) = out.get_mut(k - 1) {
+                *g = Gap::Space;
+            }
+            continue;
+        }
+        if c.kind != ClKind::Text {
+            continue;
+        }
+        let Some(before) = t.chars().next_back() else { continue };
+        let mut j = k;
+        let mut zwsp = false;
+        while let Some(n) = clusters.get(j) {
+            let marker = slice(n);
+            let zwsp_text = n.kind == ClKind::Text && !marker.is_empty() && marker.chars().all(khmer::is_zero_width_space);
+            if n.kind != ClKind::Marker && !zwsp_text {
+                break;
+            }
+            zwsp |= zwsp_text || (!marker.is_empty() && marker.chars().all(khmer::is_zero_width_space));
+            j += 1;
+        }
+        let Some(next) = clusters.get(j).filter(|n| n.kind == ClKind::Text) else { continue };
+        let Some(after) = slice(next).chars().next() else { continue };
+        if khmer::is_zero_width_space(before) {
+            continue;
+        }
+        let gap =
+            match (khmer::is_khmer(before) || khmer::is_khmer(after), wordcraft_doc::thai::is_thai(before) || wordcraft_doc::thai::is_thai(after)) {
+                (true, _) => khmer::gap_between(before, after, zwsp),
+                (false, true) => wordcraft_doc::thai::gap_between(before, after),
+                _ if zwsp => Gap::Word,
+                _ => Gap::None,
+            };
+        if let Some(g) = out.get_mut(j - 1) {
+            *g = gap;
+        }
+    }
+    out
+}
+
+// Share the visible label line between line measurement and drawing.
+fn label_line_index(lines: &[Line], clusters: &[Cluster]) -> usize {
+    usize::from(lines.first().is_some_and(|l| {
+        l.end == LineEnd::PageBreak
+            && clusters.get(l.c0..l.c1).is_some_and(|cs| cs.iter().all(|c| matches!(c.kind, ClKind::PageBreak | ClKind::Marker)))
+    }))
 }
 
 impl ParaLayout {
@@ -127,12 +187,7 @@ impl ParaLayout {
     /// The line the list label is drawn on: the first, unless the paragraph opens with a page
     /// break, when Word draws it with the text on the next page.
     pub fn label_line(&self) -> usize {
-        let opens_with_break = self.lines.len() > 1
-            && self.lines.first().is_some_and(|l| {
-                l.end == LineEnd::PageBreak
-                    && self.clusters.get(l.c0..l.c1).is_some_and(|cs| cs.iter().all(|c| matches!(c.kind, ClKind::PageBreak | ClKind::Marker)))
-            });
-        usize::from(opens_with_break)
+        if self.lines.len() > 1 { label_line_index(&self.lines, &self.clusters) } else { 0 }
     }
     /// x of byte offset `off` within line `li` (clamped to the line).
     pub fn x_of(&self, li: usize, off: usize) -> Option<f32> {

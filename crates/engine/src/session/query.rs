@@ -41,6 +41,11 @@ impl Session {
         self.column.as_ref().filter(|c| c.sel == self.sel && !c.cells.as_ref().is_some_and(|r| r.stream)).map(|c| c.segments.as_slice())
     }
 
+    /// The separate ranges selected by Ctrl+drag or `select.add`, if the selection has not moved.
+    pub fn selection_pieces(&self) -> Option<&[(Pos, Pos)]> {
+        self.column.as_ref().filter(|c| c.sel == self.sel).and_then(|c| c.pieces.as_deref())
+    }
+
     /// The whole table cells selected, if the selection is that (see [`CellRange`]).
     pub fn cell_range(&self) -> Option<&CellRange> {
         self.column.as_ref().filter(|c| c.sel == self.sel).and_then(|c| c.cells.as_ref())
