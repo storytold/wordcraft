@@ -1,5 +1,5 @@
 use super::chrome::buttons;
-use super::*;
+use super::{Sense, Tokens, Ui, WordApp, json, vec2};
 
 /// The innermost bookmark around the caret, which the Bookmark dialog opens on (as Word does);
 /// empty when the caret is in none.

@@ -49,6 +49,16 @@ const OFFSCREEN_SLACK: f32 = 48.0;
 /// The caret's bar: its two ends.
 pub type Bar = [Pos2; 2];
 
+/// Caller-owned geometry and blink state for one caret frame.
+pub struct LookRequest<'a> {
+    pub content_origin: Pos2,
+    pub geometry: &'a Geometry,
+    pub target: Bar,
+    pub shown: bool,
+    pub since_ms: f64,
+    pub on: bool,
+}
+
 /// What the canvas knows about the caret in one frame.
 #[derive(Clone, Copy, Debug)]
 pub struct Frame {
@@ -349,7 +359,8 @@ fn view_key(app: &WordApp, geo: &Geometry) -> u64 {
 /// it is drawn at all, `since_ms` how long ago its blink was restarted and `on` what the plain
 /// on-and-off blink says. Returns where and how strongly to draw it. `content_origin` is the scrolled
 /// content's top-left on screen.
-pub fn look(app: &WordApp, ui: &Ui, content_origin: Pos2, geo: &Geometry, target: Bar, shown: bool, since_ms: f64, on: bool) -> Look {
+pub fn look(app: &WordApp, ui: &Ui, request: LookRequest<'_>) -> Look {
+    let LookRequest { content_origin, geometry: geo, target, shown, since_ms, on } = request;
     // Turned off in Options, Animation effects off (the setting, or the system's under "Use system
     // setting"), or egui's own switch for "no animations": the caret jumps and blinks on and off.
     if !app.ui.caret_animation || !app.animations_on() || ui.style().animation_time <= 0.0 || glide_secs() <= 0.0 {

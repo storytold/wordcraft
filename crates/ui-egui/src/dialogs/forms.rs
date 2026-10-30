@@ -1,5 +1,5 @@
 use super::chrome::buttons;
-use super::*;
+use super::{MeasureExt, Sense, Serialize, Tokens, Ui, Value, WordApp, json, semibold, vec2};
 
 /// The Custom tab of File › Info › Properties › Advanced Properties (#2982): the document's
 /// custom properties, edited as a working copy. OK sends the whole difference from what the
@@ -392,7 +392,7 @@ pub(super) fn table_properties(ui: &mut Ui, f: &mut TableForm) {
         ui.horizontal(|ui| {
             ui.add_enabled(f.row_height_on, len(&mut f.row_height, 0.02, unit));
             ui.add_enabled_ui(f.row_height_on, |ui| {
-                egui::ComboBox::from_id_salt("tp_rule").selected_text(tl!(if f.row_exact { "Exactly" } else { "At least" })).show_ui(ui, |ui| {
+                craft_ui::ComboBox::from_id_salt("tp_rule").selected_text(tl!(if f.row_exact { "Exactly" } else { "At least" })).show_ui(ui, |ui| {
                     ui.selectable_value(&mut f.row_exact, false, tl!("At least"));
                     ui.selectable_value(&mut f.row_exact, true, tl!("Exactly"));
                 });

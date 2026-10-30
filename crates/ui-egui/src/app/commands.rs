@@ -1,4 +1,8 @@
-use super::*;
+use super::{
+    DefaultApp, MAX_RECENT, SaveChoice, SaveInFlight, Value, WordApp, applied_font, async_saves, chrome, colors, crop, dialogs, dialogs_table_style,
+    file_dialogs, i18n, json, keeps_everything, keytips, now_ms, options, panes, paste_picture, printing, push_recent_font, system_clipboard,
+    table_pen, theme, widgets, zotero,
+};
 
 impl WordApp {
     /// `run` for a command a mouse drag on a table sends: the view stays where it is.
@@ -108,19 +112,9 @@ impl WordApp {
     /// Run a command for a script or an agent (control channel, MCP bridge): never asks first.
     /// UI-level commands (`ui.*`) are handled here, the rest by the engine.
     pub fn execute(&mut self, id: &str, params: Value) -> Result<Value, String> {
-        // A pending Change Picture only survives until the next action (#147).
-        if !matches!(id, "ui.changePicture" | "picture.change" | "insert.picture") {
-            self.change_picture_target = None;
-        }
-        if !matches!(id, "ui.openRecipientList" | "mailings.recipients") {
-            self.recipient_list_pending = false;
-        }
-        // No document open (#1129): only the commands that open or create one, Help, and the
-        // settings work.
-        if !self.has_document() && !works_without_document(id) {
-            let e = tl!("No document is open. Create a document or open one first.").to_string();
-            self.status(e.clone());
-            return Err(e);
+        self.clear_command_targets(id);
+        if let Some(error) = self.document_required_error(id) {
+            return Err(error);
         }
         if let Some(r) = self.ui_command(id, &params) {
             return r;
@@ -322,6 +316,7 @@ impl WordApp {
             };
         }
         let retry = (id == "file.open").then(|| params.clone());
+        let retry_path = retry.clone();
         let r = self.execute(id, params);
         if let (Err(e), Some(params)) = (&r, retry)
             && wordcraft_engine::io::needs_password(e)
@@ -330,6 +325,22 @@ impl WordApp {
             let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string());
             self.dialog = Some(dialogs::Dialog::Password { name, params, password: Default::default(), message: String::new() });
             return Ok(json!({"pending": "password"}));
+        }
+        // Whoever asked, a failed open names the file and the cause (#1103).
+        if let (Err(e), Some(params)) = (&r, retry_path) {
+            let path = params.get("path").and_then(Value::as_str).unwrap_or("");
+            self.report_open_failure(path, e);
+        }
+        r
+    }
+
+    /// [`WordApp::execute_user`] for a command a prompt or a finished save held back. A failed
+    /// open also leaves Backstage, whose list isn't where that failure gets shown (#1103); a
+    /// direct open from Recent keeps File open and reports there instead (#2938).
+    pub(crate) fn execute_held_back(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        let r = self.execute_user(id, params);
+        if r.is_err() && id == "file.open" {
+            self.ui.backstage = false;
         }
         r
     }
@@ -851,6 +862,26 @@ impl WordApp {
         }
         r
     }
+
+    fn clear_command_targets(&mut self, id: &str) {
+        // A pending Change Picture only survives until the next action (#147).
+        if !matches!(id, "ui.changePicture" | "picture.change" | "insert.picture") {
+            self.change_picture_target = None;
+        }
+        if !matches!(id, "ui.openRecipientList" | "mailings.recipients") {
+            self.recipient_list_pending = false;
+        }
+    }
+
+    fn document_required_error(&mut self, id: &str) -> Option<String> {
+        // No document open (#1129): only the commands that open or create one, Help, and settings.
+        if self.has_document() || works_without_document(id) {
+            return None;
+        }
+        let error = tl!("No document is open. Create a document or open one first.").to_string();
+        self.status(error.clone());
+        Some(error)
+    }
 }
 
 /// The dialog a user-run command opens when it lacks the input it needs (scripts and agents get
@@ -860,100 +891,109 @@ impl WordApp {
 /// Documents without records, Table Properties without settings, Symbol and Field without a
 /// character or code, and Enclose Characters without a shape.
 fn input_dialog(id: &str, params: &Value) -> Option<&'static str> {
-    let has = |k: &str| params.get(k).is_some_and(|v| !v.is_null());
-    let rule = params.get("rule").and_then(Value::as_str).map(str::to_ascii_uppercase);
+    input_dialog_mailings(id, params)
+        .or_else(|| input_dialog_insert(id, params))
+        .or_else(|| input_dialog_table(id, params))
+        .or_else(|| input_dialog_references(id, params))
+        .or_else(|| input_dialog_other(id, params))
+}
+
+fn has_value(params: &Value, key: &str) -> bool {
+    params.get(key).is_some_and(|value| !value.is_null())
+}
+
+fn no_settings(params: &Value) -> bool {
+    params.as_object().is_none_or(|fields| fields.is_empty())
+}
+
+fn input_dialog_mailings(id: &str, params: &Value) -> Option<&'static str> {
     match id {
-        "file.rename" if !has("name") => Some("renameDocument"),
-        "mailings.rules" if !has("field") => match rule.as_deref() {
+        "mailings.rules" if !has_value(params, "field") => match params.get("rule").and_then(Value::as_str).map(str::to_ascii_uppercase).as_deref() {
             None | Some("IF") => Some("ruleIf"),
             Some("SKIPIF") => Some("ruleSkipIf"),
             _ => None,
         },
-        "mailings.recipients" if !["csv", "path", "data", "rows"].into_iter().any(has) => Some("recipientList"),
-        "mailings.editRecipients" if !has("rows") => Some("recipientList"),
-        "mailings.insertField" if !has("field") => Some("insertMergeField"),
-        "mailings.findRecipient" if !has("text") => Some("findRecipient"),
-        // Finish & Merge and Print Documents without records ask which (#3028).
-        "mailings.finish" if !["path", "records", "from", "to"].into_iter().any(has) => Some("mergeRecords"),
-        "mailings.printDocuments" if !["records", "from", "to"].into_iter().any(has) => Some("printRecords"),
-        // Symbol without a character and Field without a code show their dialogs (#321).
-        "insert.symbol" if !has("char") => Some("symbol"),
-        "insert.field" if !has("instr") => Some("field"),
-        // Edit Field Code shows the selected field's code (#339).
-        "fields.setCode" if !has("code") => Some("editFieldCode"),
-        // SmartArt without a layout or items shows the layout picker.
-        "insert.smartArt" if !has("layout") && !has("items") => Some("insertSmartArt"),
-        // Chart without a type shows the gallery; Change Chart Type and Edit Data their dialogs.
-        "insert.chart" if !has("type") && !has("data") => Some("insertChart"),
-        "chart.type" if !has("type") => Some("changeChartType"),
-        "chart.editData" if !["data", "categories", "series"].into_iter().any(has) => Some("chartData"),
-        // Table Properties without settings shows the dialog (with settings it applies them).
-        "table.properties" if params.as_object().is_none_or(|m| m.is_empty()) => Some("tableProperties"),
-        // Cell Margins without settings shows the dialog; values continue through the same command.
-        "table.cellMargins" if params.as_object().is_none_or(|m| m.is_empty()) => Some("tableCellMargins"),
-        // Size without a size (Picture Format › Size's launcher) shows the Size dialog (#2573).
-        "picture.size" if params.as_object().is_none_or(|m| m.is_empty()) => Some("pictureSize"),
-        // Formula without one asks for it, suggested from the numbers next to the cell (#1201).
-        "table.formula" if !has("formula") => Some("tableFormula"),
-        // Sort without settings asks for the column, order and header row (#1200).
-        "table.sort" if params.as_object().is_none_or(|m| m.is_empty()) => Some("tableSort"),
-        // Split Cells and Convert Text to Table without settings ask for them (#2592).
-        "table.split" if params.as_object().is_none_or(|m| m.is_empty()) => Some("splitCells"),
-        "table.fromText" if params.as_object().is_none_or(|m| m.is_empty()) => Some("textToTable"),
-        // Convert to Text without a separator asks for one.
-        "table.toText" if params.as_object().is_none_or(|m| m.is_empty()) => Some("tableToText"),
-        // Tabs, Borders and Shading, and Page Borders without settings show their dialogs (#320).
-        "para.tabs" if params.as_object().is_none_or(|m| m.is_empty()) => Some("tabs"),
-        "para.borders" if params.as_object().is_none_or(|m| m.is_empty()) => Some("borders"),
-        "design.pageBorders" if params.as_object().is_none_or(|m| m.is_empty()) => Some("pageBorders"),
-        // `null` is an answer here: it removes the password.
-        "file.encrypt" if params.get("password").is_none() => Some("encryptPassword"),
-        // Define New Multilevel List and Track Changes Options without settings show their dialogs.
-        "list.define" if params.get("levels").is_none() => Some("defineList"),
-        "review.trackingOptions" if params.as_object().is_none_or(|m| m.is_empty()) => Some("trackChangesOptions"),
-        // Compare / Combine without a revised document, AutoCorrect Options without settings and
-        // Restrict Editing without settings show their dialogs or pane (#412).
-        "review.compare" if !has("path") && !has("text") => Some("compare"),
-        "review.combine" if !has("path") && !has("text") => Some("combine"),
-        "tools.autocorrect" if params.as_object().is_none_or(|m| m.is_empty()) => Some("autoCorrect"),
-        "review.restrict" | "file.protect" if params.as_object().is_none_or(|m| m.is_empty()) => Some("restrictEditing"),
-        "insert.bookmark" | "insert.deleteBookmark" if !has("name") => Some("bookmark"),
-        // Word Count from the keyboard or command search shows its dialog, as the ribbon does.
-        "review.wordCount" if params.as_object().is_none_or(|m| m.is_empty()) => Some("wordCount"),
-        // Content control Properties without settings shows the dialog.
-        "developer.properties" if params.as_object().is_none_or(|m| m.is_empty()) => Some("controlProperties"),
-        // Enclose Characters without a shape (null is one: it takes the enclosure away).
+        "mailings.recipients" if !["csv", "path", "data", "rows"].into_iter().any(|key| has_value(params, key)) => Some("recipientList"),
+        "mailings.editRecipients" if !has_value(params, "rows") => Some("recipientList"),
+        "mailings.insertField" if !has_value(params, "field") => Some("insertMergeField"),
+        "mailings.findRecipient" if !has_value(params, "text") => Some("findRecipient"),
+        "mailings.finish" if !["path", "records", "from", "to"].into_iter().any(|key| has_value(params, key)) => Some("mergeRecords"),
+        "mailings.printDocuments" if !["records", "from", "to"].into_iter().any(|key| has_value(params, key)) => Some("printRecords"),
+        "mailings.envelopes" if no_settings(params) => Some("envelopes"),
+        "mailings.labels" if no_settings(params) => Some("labels"),
+        _ => None,
+    }
+}
+
+fn input_dialog_insert(id: &str, params: &Value) -> Option<&'static str> {
+    match id {
+        "insert.symbol" if !has_value(params, "char") => Some("symbol"),
+        "insert.field" if !has_value(params, "instr") => Some("field"),
+        "insert.smartArt" if !has_value(params, "layout") && !has_value(params, "items") => Some("insertSmartArt"),
+        "insert.chart" if !has_value(params, "type") && !has_value(params, "data") => Some("insertChart"),
+        "chart.type" if !has_value(params, "type") => Some("changeChartType"),
+        "chart.editData" if !["data", "categories", "series"].into_iter().any(|key| has_value(params, key)) => Some("chartData"),
+        "insert.bookmark" | "insert.deleteBookmark" if !has_value(params, "name") => Some("bookmark"),
         "format.enclose" if params.get("shape").is_none() => Some("enclose"),
-        // Footnote and Endnote without settings shows its dialog (#385).
-        "references.noteOptions" if params.as_object().is_none_or(|m| m.is_empty()) => Some("noteOptions"),
-        // References dialogs (#402): Insert Caption, Insert Index, Insert Table of Figures (#3013),
-        // Mark Entry, Manage Sources and Insert Citation without a source.
-        "references.caption" | "references.index" | "references.tableOfFigures" if params.as_object().is_none_or(|m| m.is_empty()) => {
-            Some(match id {
-                "references.caption" => "caption",
-                "references.index" => "index",
-                _ => "tableOfFigures",
-            })
-        }
-        "references.markEntry" if !has("entry") => Some("markEntry"),
-        // Cross-reference without a target shows its dialog (#916); scripts get the target list.
-        "insert.crossReference" if !has("target") => Some("crossReference"),
-        "references.sources" if params.as_object().is_none_or(|m| m.is_empty()) => Some("sourceManager"),
-        "references.citation" if !has("tag") && !has("source") => Some("createSource"),
-        // Templates and Add-ins, and the Organizer without a file to list (#377).
+        "insert.crossReference" if !has_value(params, "target") => Some("crossReference"),
+        _ => None,
+    }
+}
+
+fn input_dialog_table(id: &str, params: &Value) -> Option<&'static str> {
+    match id {
+        "table.properties" if no_settings(params) => Some("tableProperties"),
+        "table.cellMargins" if no_settings(params) => Some("tableCellMargins"),
+        "table.formula" if !has_value(params, "formula") => Some("tableFormula"),
+        "table.sort" if no_settings(params) => Some("tableSort"),
+        "table.split" if no_settings(params) => Some("splitCells"),
+        "table.fromText" if no_settings(params) => Some("textToTable"),
+        "table.toText" if no_settings(params) => Some("tableToText"),
+        "para.tabs" if no_settings(params) => Some("tabs"),
+        "para.borders" if no_settings(params) => Some("borders"),
+        "design.pageBorders" if no_settings(params) => Some("pageBorders"),
+        _ => None,
+    }
+}
+
+fn input_dialog_references(id: &str, params: &Value) -> Option<&'static str> {
+    match id {
+        "references.noteOptions" if no_settings(params) => Some("noteOptions"),
+        "references.caption" if no_settings(params) => Some("caption"),
+        "references.index" if no_settings(params) => Some("index"),
+        "references.tableOfFigures" if no_settings(params) => Some("tableOfFigures"),
+        "references.markEntry" if !has_value(params, "entry") => Some("markEntry"),
+        "references.sources" if no_settings(params) => Some("sourceManager"),
+        "references.citation" if !has_value(params, "tag") && !has_value(params, "source") => Some("createSource"),
+        _ => None,
+    }
+}
+
+fn input_dialog_other(id: &str, params: &Value) -> Option<&'static str> {
+    match id {
+        "file.rename" if !has_value(params, "name") => Some("renameDocument"),
+        "file.encrypt" if params.get("password").is_none() => Some("encryptPassword"),
+        "file.protect" | "review.restrict" if no_settings(params) => Some("restrictEditing"),
+        "fields.setCode" if !has_value(params, "code") => Some("editFieldCode"),
+        "picture.size" if no_settings(params) => Some("pictureSize"),
+        "list.define" if params.get("levels").is_none() => Some("defineList"),
+        "review.trackingOptions" if no_settings(params) => Some("trackChangesOptions"),
+        "review.compare" if !has_value(params, "path") && !has_value(params, "text") => Some("compare"),
+        "review.combine" if !has_value(params, "path") && !has_value(params, "text") => Some("combine"),
+        "review.wordCount" if no_settings(params) => Some("wordCount"),
+        "review.language" if no_settings(params) => Some("language"),
+        "tools.autocorrect" if no_settings(params) => Some("autoCorrect"),
         "tools.templates" => Some("templates"),
-        "styles.organizer" if !has("path") => Some("organizer"),
-        // Language, Envelopes and Labels without settings show their dialogs (#407).
-        "review.language" if params.as_object().is_none_or(|m| m.is_empty()) => Some("language"),
-        "mailings.envelopes" if params.as_object().is_none_or(|m| m.is_empty()) => Some("envelopes"),
-        "mailings.labels" if params.as_object().is_none_or(|m| m.is_empty()) => Some("labels"),
+        "styles.organizer" if !has_value(params, "path") => Some("organizer"),
+        "developer.properties" if no_settings(params) => Some("controlProperties"),
         _ => None,
     }
 }
 
 /// Commands that work while no document is open (#1129): opening or creating one, closing the
 /// window, Help, adding fonts (a font file dropped on the empty window), and the settings (File ›
-/// Options, the view and interface preferences it sets, Customize Ribbon and Keyboard).
+/// Options, the view and interface preferences it sets, AutoCorrect Options, Customize Ribbon and
+/// Keyboard).
 /// Everything else needs a document, `ui.*` included: only the interface commands listed here
 /// (tabs, Backstage, dialogs, appearance, opening files) work without one.
 pub(crate) fn works_without_document(id: &str) -> bool {
@@ -971,6 +1011,7 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "font.remove"
             | "readAloud.speed"
             | "readAloud.skipCitations"
+            | "tools.autocorrect"
             | "tools.customizeKeyboard"
             | "tools.customizeRibbon"
             | "view.darkMode"

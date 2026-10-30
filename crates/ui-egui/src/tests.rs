@@ -48,6 +48,54 @@ fn window_title_is_sent_only_when_it_changes() {
     assert_eq!(titles(&mut app), 1);
 }
 
+/// #3634: a NUL in the document title never reaches the window title (X11 needs a C string)
+/// or the suggested file name.
+#[test]
+fn window_title_with_nul_is_safe_for_x11() {
+    let ctx = egui::Context::default();
+    let mut app = app();
+    let fallback = app.title_stem();
+    app.run("file.properties", json!({"title": "\u{0}"})).unwrap();
+    let mut titles = Vec::new();
+    for _ in 0..4 {
+        let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.logic(ui.ctx());
+            app.ui(ui);
+        });
+        for command in out.viewport_output.values().flat_map(|v| &v.commands) {
+            if let egui::ViewportCommand::Title(title) = command {
+                titles.push(title.clone());
+            }
+        }
+        out.drop_without_applying_deltas();
+    }
+    assert!(!titles.is_empty());
+    for title in &titles {
+        assert!(std::ffi::CString::new(title.as_str()).is_ok(), "X11 needs a title without NUL: {title:?}");
+    }
+    assert_eq!(app.title_stem(), fallback);
+    assert_eq!(app.default_save_name(), format!("{fallback}.docx"));
+    assert_eq!(app.session.doc.core.title, "\u{0}");
+}
+
+/// #3634: every source of the title (path, file name, document title) drops NUL.
+#[test]
+fn title_stem_omits_nul_from_each_title_source() {
+    let mut app = app();
+    let fallback = app.title_stem();
+    for title in ["Résumé\u{0} notes", "\u{0}"] {
+        let expected = if title == "\u{0}" { fallback.as_str() } else { "Résumé notes" };
+        app.session.doc.core.title = title.into();
+        assert_eq!(app.title_stem(), expected);
+        app.session.file_name = Some(title.into());
+        assert_eq!(app.title_stem(), expected);
+        app.session.path = Some(std::path::PathBuf::from(format!("{title}.docx")));
+        assert_eq!(app.title_stem(), expected);
+        app.session.path = None;
+        app.session.file_name = None;
+    }
+}
+
 /// #1678: Focus and Full Screen View put the window in full screen, asked of the system once
 /// per change (switching between the two keeps it), and the usual window comes back after.
 #[test]
@@ -613,6 +661,10 @@ fn start_screen_shows_file_home_and_esc_leaves_no_document() {
     let refused = a.run("ui.zotero.status", json!({})).unwrap_err();
     assert!(refused.contains("No document is open"), "refused before it runs: {refused}");
     assert!(works_without_document("font.add"), "a font file dropped on the empty window is added");
+    // #4585: File › Options › Proofing › AutoCorrect Options edits a user setting, not the document.
+    a.run("tools.autocorrect", json!({})).unwrap();
+    assert_eq!(a.dialog.as_ref().map(|d| d.name()), Some("autoCorrect"));
+    a.dialog = None;
     // Neither keys nor commands reach the hidden placeholder.
     assert!(a.run("text.insert", json!({"text": "Hello"})).is_err());
     assert!(a.execute("format.bold", json!({})).is_err());
@@ -721,6 +773,44 @@ fn templates_and_files_open_from_the_start_screen() {
     b.run("file.open", json!({"path": path.to_string_lossy()})).unwrap();
     assert!(b.has_document());
     assert!(body_text(&b).contains("Signed copy"));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// #1103: a file that fails to open names the file and the real cause on the status bar.
+#[test]
+fn a_file_that_wont_open_says_which_file_and_why() {
+    let dir = scratch("open-failure");
+    let bad = dir.join("broken.docx");
+    std::fs::write(&bad, b"PK\x03\x04 this is not really a zip").unwrap();
+    let mut a = app();
+    let path = bad.to_string_lossy().to_string();
+    let error = a.run("file.open", json!({"path": path})).unwrap_err();
+    assert!(error.contains("zip") || error.contains("Word"), "the engine names the cause: {error}");
+    let msg = a.report_open_failure(&path, &error);
+    assert!(msg.contains(&path) && msg.contains(&error), "{msg}");
+    assert_eq!(a.status_msg.as_ref().map(|(m, _)| m.as_str()), Some(msg.as_str()));
+
+    let missing = dir.join("gone.docx").to_string_lossy().to_string();
+    let error = a.run("file.open", json!({"path": missing})).unwrap_err();
+    let msg = a.report_open_failure(&missing, &error);
+    assert!(msg.contains("gone.docx") && (msg.to_lowercase().contains("no such file") || msg.contains("os error")), "{msg}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A failed open of a file, with unsaved typing in the window, still names the file and the
+/// cause (#1103). (An open no longer waits on "Save changes?": the file opens in its own window.)
+#[test]
+fn failed_open_with_unsaved_work_names_the_file() {
+    let dir = scratch("open-over-unsaved");
+    let bad = dir.join("broken.docx").to_string_lossy().to_string();
+    std::fs::write(&bad, b"PK\x03\x04 not really a zip").unwrap();
+    let mut a = typed();
+    a.ui.backstage = true;
+    assert!(a.execute_held_back("file.open", json!({"path": bad})).is_err());
+    let shown = a.status_msg.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
+    assert!(shown.contains("broken.docx"), "{shown}");
+    assert!(!a.ui.backstage, "Backstage hides the status bar");
+    assert!(body_text(&a).contains(UNSAVED), "the document is untouched");
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -1236,28 +1326,18 @@ fn reading_mode_keys_turn_columns() {
 /// Print Layout without editing or changing the document's page setup.
 #[test]
 fn reading_mode_columns_wheel_turns_and_navigation() {
-    let ctx = egui::Context::default();
     let mut a = app();
     a.run("text.insert", json!({"text": "One readable paragraph in many narrow columns. ".repeat(300)})).unwrap();
     a.run("caret.set", json!({"pos": wordcraft_doc::Pos::body(0, 0)})).unwrap();
     let original = a.session.doc.settings.clone();
     let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 740.0));
-    let mut t = 0.0;
-    let mut frame = |a: &mut WordApp, events: Vec<egui::Event>, screen| {
-        t += 1.0 / 60.0;
-        let input = egui::RawInput { events, time: Some(t), screen_rect: Some(screen), ..Default::default() };
-        ctx.run_ui(input, |ui| {
-            a.logic(ui.ctx());
-            a.ui(ui);
-        })
-        .drop_without_applying_deltas();
-    };
+    let mut d = FrameDriver { ctx: egui::Context::default(), t: 0.0 };
     for _ in 0..3 {
-        frame(&mut a, vec![], screen);
+        d.frame(&mut a, vec![], screen);
     }
     a.run("view.readMode", json!({})).unwrap();
     for _ in 0..3 {
-        frame(&mut a, vec![], screen);
+        d.frame(&mut a, vec![], screen);
     }
     let rects = &a.canvas.page_rects;
     assert!(rects.len() > 5, "reading should reflow: {}", rects.len());
@@ -1267,32 +1347,63 @@ fn reading_mode_columns_wheel_turns_and_navigation() {
     // Full height, less the top gap and the page-turn bar's strip at the bottom (#1772).
     assert!((rects[0].height() - (a.canvas.canvas_rect.unwrap().height() - 62.0)).abs() < 2.0);
     let initial_width = a.session.view.read_width;
+    read_mode_click_and_caret_keep_scroll(&mut d, &mut a, screen);
+    let x = read_mode_wheel_turns(&mut d, &mut a, screen);
+    read_mode_heading_navigation_aligns_column(&mut d, &mut a, screen, x);
+    read_mode_resize_reflows(&mut d, &mut a, initial_width, &original);
+}
+
+/// Runs egui frames over the app with a steady clock.
+struct FrameDriver {
+    ctx: egui::Context,
+    t: f64,
+}
+
+impl FrameDriver {
+    fn frame(&mut self, a: &mut WordApp, events: Vec<egui::Event>, screen: egui::Rect) {
+        self.t += 1.0 / 60.0;
+        let input = egui::RawInput { events, time: Some(self.t), screen_rect: Some(screen), ..Default::default() };
+        self.ctx
+            .run_ui(input, |ui| {
+                a.logic(ui.ctx());
+                a.ui(ui);
+            })
+            .drop_without_applying_deltas();
+    }
+}
+
+/// A simple mouse click in a later column, and a caret move outside the visible columns.
+fn read_mode_click_and_caret_keep_scroll(d: &mut FrameDriver, a: &mut WordApp, screen: egui::Rect) {
     // A simple mouse click in a later visible column must neither pull that column
     // to the leading edge nor select text under the stationary, held pointer.
     let click = a.canvas.page_rects[2].center();
     assert!(a.canvas.canvas_rect.unwrap().contains(click));
     let initial_scroll = a.canvas.scroll_offset.x;
     let button = |pressed| egui::Event::PointerButton { pos: click, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
-    frame(&mut a, vec![egui::Event::PointerMoved(click), button(true)], screen);
+    d.frame(a, vec![egui::Event::PointerMoved(click), button(true)], screen);
     assert_eq!(a.session.layout().caret_on(&a.session.sel.focus, a.session.page_hint).unwrap().page, 2);
-    frame(&mut a, vec![], screen); // mouse is still held at the same coordinates
+    d.frame(a, vec![], screen); // mouse is still held at the same coordinates
     assert!((a.canvas.scroll_offset.x - initial_scroll).abs() < 0.5, "click must not scroll a later column to the left");
     assert!(a.session.sel.is_collapsed(), "stationary click must not create a selection");
-    frame(&mut a, vec![button(false)], screen);
-    frame(&mut a, vec![], screen);
+    d.frame(a, vec![button(false)], screen);
+    d.frame(a, vec![], screen);
     assert!((a.canvas.scroll_offset.x - initial_scroll).abs() < 0.5);
     assert!(a.session.sel.is_collapsed());
     // An explicit caret move outside the visible columns must still reveal its destination.
     a.run("caret.set", json!({"pos": wordcraft_doc::Pos::body(0, 5000)})).unwrap();
-    frame(&mut a, vec![], screen);
+    d.frame(a, vec![], screen);
     assert!(a.canvas.scroll_offset.x > initial_scroll + a.session.view.read_width * a.canvas.scale);
     a.run("caret.set", json!({"pos": wordcraft_doc::Pos::body(0, 0)})).unwrap();
-    frame(&mut a, vec![], screen);
+    d.frame(a, vec![], screen);
     assert!((a.canvas.scroll_offset.x - initial_scroll).abs() < 0.5);
+}
+
+/// A wheel turn animates exactly one column; returns the settled scroll offset.
+fn read_mode_wheel_turns(d: &mut FrameDriver, a: &mut WordApp, screen: egui::Rect) -> f32 {
     let over = a.canvas.canvas_rect.unwrap().center();
-    frame(&mut a, vec![egui::Event::PointerMoved(over)], screen);
-    frame(
-        &mut a,
+    d.frame(a, vec![egui::Event::PointerMoved(over)], screen);
+    d.frame(
+        a,
         vec![egui::Event::MouseWheel {
             unit: egui::MouseWheelUnit::Point,
             delta: egui::vec2(0.0, -65.0),
@@ -1305,19 +1416,23 @@ fn reading_mode_columns_wheel_turns_and_navigation() {
     let step = a.session.view.read_width * a.canvas.scale + 18.0;
     assert!(a.canvas.scroll_offset.x > 0.0 && a.canvas.scroll_offset.x < step, "a wheel turn animates instead of jumping");
     let first = a.canvas.scroll_offset.x;
-    frame(&mut a, vec![], screen);
+    d.frame(a, vec![], screen);
     assert!(a.canvas.scroll_offset.x > first, "smooth motion continues after the wheel event");
     for _ in 0..23 {
-        frame(&mut a, vec![], screen);
+        d.frame(a, vec![], screen);
     }
     assert!((a.canvas.scroll_offset.x - step).abs() < 1.0, "animation settles exactly on column boundary");
     assert_eq!(a.canvas.scroll_offset.y, 0.0);
-    canvas::turn_read_page(&mut a, 1.0);
+    canvas::turn_read_page(a, 1.0);
     for _ in 0..25 {
-        frame(&mut a, vec![], screen);
+        d.frame(a, vec![], screen);
     }
     assert!((a.canvas.scroll_offset.x - 2.0 * step).abs() < 1.0);
-    let x = a.canvas.scroll_offset.x;
+    a.canvas.scroll_offset.x
+}
+
+/// Heading navigation positions its column at the leading edge.
+fn read_mode_heading_navigation_aligns_column(d: &mut FrameDriver, a: &mut WordApp, screen: egui::Rect, x: f32) {
     // A heading navigation request must position its column at the leading edge,
     // not wherever egui's generic scroll_to_rect decides the caret is visible.
     let target = wordcraft_doc::Pos::body(0, 5000);
@@ -1325,22 +1440,26 @@ fn reading_mode_columns_wheel_turns_and_navigation() {
     a.run("caret.set", json!({"pos": target})).unwrap();
     a.canvas.nav_to_caret = true;
     a.canvas.scroll_to_caret = false;
-    frame(&mut a, vec![], screen);
+    d.frame(a, vec![], screen);
     let page = a.session.layout().caret_on(&a.session.sel.focus, a.session.page_hint).unwrap().page;
     let step = a.session.view.read_width * a.canvas.scale + 18.0;
     assert!((a.canvas.scroll_offset.x - (page as f32 * step)).abs() < 1.0, "heading must align its column beside the navigation pane");
     assert!(a.canvas.scroll_offset.x != x);
+}
+
+/// Resizing reflows the content, not the zoom or the print paper width.
+fn read_mode_resize_reflows(d: &mut FrameDriver, a: &mut WordApp, initial_width: f32, original: &wordcraft_doc::Settings) {
     // Resizing changes the content width (reflow), not the zoom or the print paper width.
     let narrow = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(850.0, 630.0));
     let before_resize = a.canvas.scroll_offset.x;
     let before_layout = a.session.layout();
     let anchor = a.canvas.read_first_visible.clone().unwrap();
-    frame(&mut a, vec![], narrow);
+    d.frame(a, vec![], narrow);
     assert!(std::sync::Arc::ptr_eq(&before_layout, &a.session.layout()), "resize frames reuse cached pagination");
     assert!((a.canvas.scroll_offset.x - before_resize).abs() < 1.0, "no jump while resize is in progress");
     assert_eq!(a.session.view.read_width, initial_width, "expensive repagination is deferred during resizing");
     for _ in 0..15 {
-        frame(&mut a, vec![], narrow);
+        d.frame(a, vec![], narrow);
     }
     assert_ne!(a.session.view.read_width, initial_width);
     assert!(!std::sync::Arc::ptr_eq(&before_layout, &a.session.layout()), "stable viewport commits one repagination");
@@ -1352,17 +1471,17 @@ fn reading_mode_columns_wheel_turns_and_navigation() {
     );
     assert!((a.canvas.scale - canvas::PX_PER_PT).abs() < 0.01);
     a.run("view.readColumnWidth", json!({"value": "page"})).unwrap();
-    frame(&mut a, vec![], narrow);
+    d.frame(a, vec![], narrow);
     assert!(a.session.view.read_width <= 612.0);
     a.run("view.readTextSize", json!({"value": 125})).unwrap();
-    frame(&mut a, vec![], narrow);
+    d.frame(a, vec![], narrow);
     assert!((a.canvas.scale / canvas::PX_PER_PT - 1.25).abs() < 0.01);
     // The Edit Document button works even when the navigation pane owns focus.
     a.run("view.printLayout", json!({})).unwrap();
-    frame(&mut a, vec![], narrow);
+    d.frame(a, vec![], narrow);
     assert!(!a.session.view.read_mode);
     assert_eq!(a.session.view.mode, wordcraft_layout::ViewMode::Print);
-    assert_eq!(a.session.doc.settings, original);
+    assert_eq!(&a.session.doc.settings, original);
 }
 
 /// An app whose host reports the system's animation setting as `system` holds it.
@@ -2404,7 +2523,26 @@ fn user_name_survives_restart() {
 
     // A later rename is what gets saved next, not the name loaded at startup.
     second.run("file.setAuthor", json!({"name": "Grace Hopper"})).unwrap();
-    assert_eq!(second.prefs().author, "Grace Hopper");
+    assert_eq!(second.prefs().author.as_deref(), Some("Grace Hopper"));
+}
+
+/// #4368: a user name cleared in File › Options stays empty after a restart.
+#[test]
+fn blank_user_name_survives_restart() {
+    let mut first = app();
+    first.session.author.clear();
+    let saved = serde_json::to_vec(&first.prefs()).unwrap();
+
+    let mut second = app();
+    assert!(!second.session.author.is_empty());
+    second.apply_prefs(serde_json::from_slice(&saved).unwrap());
+    assert_eq!(second.session.author, "");
+
+    // A name of only spaces is not a name: the default stays.
+    let default = app().session.author;
+    let mut third = app();
+    third.apply_prefs(serde_json::from_str(r#"{"author": "   "}"#).unwrap());
+    assert_eq!(third.session.author, default);
 }
 
 const UNSAVED: &str = "My unsaved novel chapter";
@@ -3827,6 +3965,37 @@ fn escape_selects_a_wordart_box_and_delete_removes_it() {
     h.run_steps(2);
     let s = &h.state().session;
     assert!(s.sel.is_collapsed() && s.sel.focus.story == wordcraft_doc::StoryRef::Body, "a second Escape leaves a caret in the body");
+}
+
+/// #4061: a WordArt picked from a style gallery has its text selected and the page gets the
+/// keyboard back, so typing replaces the placeholder text at once. The gallery's cells ran
+/// their command without handing focus back, so the first keystrokes went nowhere.
+#[test]
+fn picking_a_wordart_style_hands_the_keyboard_back_to_the_page() {
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(400.0, 300.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            // The first pass installs the fonts the gallery's cells are drawn in.
+            if ctx.cumulative_pass_nr() > 1 {
+                crate::wordart_menus::style_gallery(ui, app, "insert.wordArt");
+            }
+        },
+        app(),
+    );
+    h.run_steps(3);
+    h.state_mut().canvas.want_focus = false;
+    // The first cell, "Solid Accent": a click on its middle (the cells carry no label here).
+    let at = egui::pos2(30.0, 30.0);
+    let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    h.event(egui::Event::PointerMoved(at));
+    h.run_steps(1);
+    h.event(button(true));
+    h.run_steps(1);
+    h.event(button(false));
+    h.run_steps(2);
+    assert!(canvas::in_text_box(h.state()), "the WordArt's text is selected");
+    assert!(h.state().canvas.want_focus, "the page takes the keyboard back");
 }
 
 /// #1218: Ctrl+Q resets the paragraph formatting and nothing else; it also closed the window

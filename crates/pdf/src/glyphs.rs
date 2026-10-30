@@ -1,5 +1,5 @@
 use super::paint::append_path;
-use super::*;
+use super::{FaceRef, HashMap, Path, PathBuilder};
 
 /// A shaped glyph id as krilla takes it. Shaping gives 32-bit ids (a format-12 cmap can map to
 /// any), but krilla's font subsetting takes 16-bit ones and panics on a larger id (#3674): one
@@ -124,6 +124,10 @@ pub(crate) fn visual_order(
 
 /// The y most of a run's glyphs share: its baseline, which raised or lowered marks leave.
 pub(crate) fn baseline(glyphs: &[(u32, f32, f32)]) -> Option<f32> {
+    let &(_, _, first) = glyphs.first()?;
+    if glyphs.iter().all(|g| g.2.to_bits() == first.to_bits()) {
+        return Some(first);
+    }
     let mut counts: HashMap<u32, usize> = HashMap::new();
     for (_, _, y) in glyphs {
         *counts.entry(y.to_bits()).or_insert(0) += 1;

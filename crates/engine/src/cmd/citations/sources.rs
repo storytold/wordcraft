@@ -1,7 +1,7 @@
 use super::generated::update_generated;
 use super::render::{authors, cite};
 use super::styles::{CiteStyle, Order, style};
-use super::*;
+use super::{CmdError, CmdResult, Document, InlineObject, Selection, Session, Source, StoryRef, Value, delete_selection, json, p, sort_key};
 
 /// The tag a new source gets, as Word makes it: the first three letters of the first author's
 /// name and the last two digits of the year (`Smi20`), with `1`, `2`… added while it is taken.

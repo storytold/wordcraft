@@ -192,8 +192,9 @@ pub struct UiState {
     #[serde(skip)]
     pub nav_collapsed: std::collections::HashSet<wordcraft_doc::Path>,
     pub show_discord: bool,
-    /// User name (File › Options) for comments and tracked changes; empty keeps the default.
-    pub author: String,
+    /// User name (File › Options) for comments and tracked changes. `None` (no saved name) keeps
+    /// the default; a saved empty name stays empty (#4368).
+    pub author: Option<String>,
     /// Desktop: the main window's size and position, restored at the next launch.
     pub window: Option<window_geometry::WindowGeometry>,
     /// Interface language: `auto` (follow the system) or a code from [`i18n::LANGUAGES`].
@@ -315,7 +316,7 @@ impl Default for UiState {
             pane_order: Vec::new(),
             nav_collapsed: Default::default(),
             show_discord: true,
-            author: String::new(),
+            author: None,
             window: None,
             language: i18n::AUTO.into(),
             editing: wordcraft_engine::Prefs::default(),
@@ -513,6 +514,7 @@ pub struct WordApp {
     fonts_hans: bool,
     /// Whether the installed UI fonts use the Korean CJK face order.
     fonts_korean: bool,
+    fonts_hant: bool,
     /// Whether the installed UI fonts include an installed CJK fallback font (#241).
     fonts_system_cjk: bool,
     /// CJK text is (about to be) on screen in a non-CJK interface, e.g. the language names in
