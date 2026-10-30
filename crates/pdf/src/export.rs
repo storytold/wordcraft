@@ -79,6 +79,7 @@ fn write_attempt(doc: &Document, lay: &DocLayout, opts: &PdfOptions, pages: &[us
         vectors: HashMap::new(),
         tags: Vec::new(),
         tag_index: HashMap::new(),
+        objects: crate::exporter::ObjectLookup::new(doc),
         links: Vec::new(),
         bookmarks: std::cell::OnceCell::new(),
     };

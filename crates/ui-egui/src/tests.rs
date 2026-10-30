@@ -4943,6 +4943,94 @@ fn autosave_is_unavailable_in_the_browser() {
     assert!(err.contains("browser"), "{err}");
 }
 
+/// #3307: an opened file isn't rewritten until the user says so, but the switch says so
+/// without Save As: turning it on lets AutoSave write the file.
+#[test]
+fn turning_autosave_on_covers_a_file_only_opened_here() {
+    let dir = scratch("autosave-opened");
+    let path = dir.join("report.docx");
+    let mut a = typed();
+    a.run("file.save", json!({"path": path.to_string_lossy()})).unwrap();
+    let mut b = app();
+    b.run("file.open", json!({"path": path.to_string_lossy()})).unwrap();
+    assert_eq!(b.autosave_block(), Some(AutoSaveBlock::NotSavedHere));
+    b.run("text.insert", json!({"text": "Opened "})).unwrap();
+    b.autosave_tick(now_ms() + 10_000.0);
+    assert!(b.session.dirty, "opening alone never rewrites the file");
+    assert!(b.run("file.autosave", json!({"value": "false"})).is_err());
+    assert!(!b.autosaves(), "a value that isn't a bool grants nothing");
+    assert_eq!(b.run("file.autosave", json!({})).unwrap(), json!({"value": true}));
+    assert!(b.autosaves());
+    b.autosave_tick(now_ms() + 20_000.0);
+    assert!(!b.session.dirty, "AutoSave wrote the opened file");
+    assert!(b.run("file.autosave", json!({"value": false})).is_ok());
+    assert!(!b.autosaves());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `file.open` with `data` only names the file: the switch mustn't let AutoSave write a file of
+/// that name, which may hold something else entirely.
+#[test]
+fn the_autosave_switch_refuses_a_document_opened_from_bytes() {
+    let dir = scratch("autosave-bytes");
+    let path = dir.join("other.docx");
+    let mut a = typed();
+    a.run("file.save", json!({"path": path.to_string_lossy()})).unwrap();
+    let on_disk = std::fs::read(&path).unwrap();
+    let mut b = app();
+    let data = wordcraft_engine::cmd::insert::base64_encode(&on_disk);
+    b.execute("file.open", json!({"path": path.to_string_lossy(), "data": data})).unwrap();
+    assert_eq!(b.autosave_block(), Some(AutoSaveBlock::NotSavedHere));
+    assert!(b.run("file.autosave", json!({"value": true})).is_err());
+    assert!(b.run("file.autosave", json!({})).is_err(), "the switch refuses too");
+    b.run("text.insert", json!({"text": "Bytes "})).unwrap();
+    b.autosave_tick(now_ms() + 10_000.0);
+    assert!(b.session.dirty);
+    assert_eq!(std::fs::read(&path).unwrap(), on_disk, "the named file is untouched");
+    // Open without a path only asks for the picker: it isn't a read of the shown file.
+    b.services.pick_open = Some(Box::new(|_| None));
+    b.run("file.open", json!({"path": null})).unwrap();
+    assert!(b.run("file.autosave", json!({"value": true})).is_err(), "the picker request grants nothing");
+    // A `data` that isn't a string is ignored and the file is read from disk.
+    let mut c = app();
+    c.run("file.open", json!({"path": path.to_string_lossy(), "data": null})).unwrap();
+    assert!(c.run("file.autosave", json!({"value": true})).is_ok(), "read from disk");
+    // Saving is still the way: then AutoSave covers the file.
+    b.run("file.save", json!({})).unwrap();
+    assert!(b.autosaves());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// AutoSave turned off in one document stays off there when another document turns it on: the
+/// preference is shared, but each document's go-ahead is its own.
+#[test]
+fn autosave_turned_off_stays_off_when_another_document_turns_it_on() {
+    let dir = scratch("autosave-two");
+    let (first_path, second_path) = (dir.join("first.docx"), dir.join("second.docx"));
+    let mut c = typed();
+    c.run("file.save", json!({"path": second_path.to_string_lossy()})).unwrap();
+    let mut a = typed();
+    a.run("file.save", json!({"path": first_path.to_string_lossy()})).unwrap();
+    let first = a.session.document_id();
+    let saved = std::fs::read(&first_path).unwrap();
+    assert!(a.autosaves());
+    a.run("file.autosave", json!({"value": false})).unwrap();
+    a.run("file.open", json!({"path": second_path.to_string_lossy()})).unwrap();
+    assert_ne!(a.session.document_id(), first, "the second file opens beside the first");
+    a.run("file.autosave", json!({"value": true})).unwrap();
+    assert!(a.autosaves());
+    a.show_document(first).unwrap();
+    assert!(!a.autosaves(), "the first document's switch is still off");
+    a.run("text.insert", json!({"text": "Later "})).unwrap();
+    a.autosave_tick(now_ms() + 10_000.0);
+    assert!(a.session.dirty);
+    assert_eq!(std::fs::read(&first_path).unwrap(), saved, "the first file is untouched");
+    // Turned back on, it covers the file it was saved to without another save.
+    a.run("file.autosave", json!({"value": true})).unwrap();
+    assert!(a.autosaves());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Cancelling the Open picker (Mod+O) left the document as it was but turned AutoSave off.
 #[test]
 fn cancelling_open_keeps_autosave() {

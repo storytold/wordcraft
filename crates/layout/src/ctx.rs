@@ -69,6 +69,9 @@ pub(crate) struct Ctx<'a> {
     pub(crate) hf: Arc<HfLinks<'a>>,
     /// Pictures' transparency, decoded for Tight and Through wrapping ([`Ctx::wrap_outline`]).
     pub(crate) alphas: contour::Alphas,
+    /// Items re-placed as repeated table header rows so far, in the whole layout (see
+    /// [`MAX_HEADER_ITEMS`]).
+    pub(crate) header_repeats: usize,
 }
 
 struct ParaEnvInput<'a> {
@@ -134,10 +137,14 @@ pub(crate) fn with_pin<T>(ctx: &mut Ctx, id: u32, sect: &SectionProps, number: u
 /// an address names the same bytes only while their allocation lives: the weak reference keeps
 /// it (not the bytes in it), so a picture loaded later can't be given a freed picture's address
 /// and length and be taken for it.
-pub(crate) type Outlines = HashMap<(String, usize, usize, [u32; 4]), (std::sync::Weak<Vec<u8>>, Option<Arc<Vec<(f32, f32)>>>)>;
+///
+/// Each also holds the pixels its picture took of a layout's decoding budget, which a layout
+/// finding the entry charges as if it had decoded the picture ([`contour::Alphas::charge`]).
+pub(crate) type Outlines = HashMap<(String, usize, usize, [u32; 4]), (std::sync::Weak<Vec<u8>>, Option<Arc<Vec<(f32, f32)>>>, u64)>;
 
 /// Picture `bytes`'s outline within `crop`, kept in `outlines` under `key`. One refused for this
 /// layout's decoding budget wraps as its rectangle and isn't kept: a later layout may decode it.
+/// One kept from before is charged to the budget as if decoded now.
 pub(crate) fn picture_outline(
     outlines: &mut Outlines,
     alphas: &mut contour::Alphas,
@@ -145,14 +152,17 @@ pub(crate) fn picture_outline(
     bytes: &Arc<Vec<u8>>,
     crop: [f32; 4],
 ) -> Option<Arc<Vec<(f32, f32)>>> {
-    if let Some((_, o)) = outlines.get(&key) {
+    if let Some((_, o, cost)) = outlines.get(&key) {
+        // Kept from an earlier layout, but it still costs this one's budget: the same pictures
+        // get outlines whatever the cache holds.
+        alphas.charge(bytes, *cost).ok()?;
         return o.clone();
     }
     let outline = alphas.outline(bytes, crop).ok()?.map(Arc::new);
     if outlines.len() >= 256 {
         outlines.clear();
     }
-    outlines.insert(key, (Arc::downgrade(bytes), outline.clone()));
+    outlines.insert(key, (Arc::downgrade(bytes), outline.clone(), alphas.cost(bytes)));
     outline
 }
 

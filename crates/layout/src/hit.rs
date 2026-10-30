@@ -414,19 +414,20 @@ impl DocLayout {
     }
 
     /// The story whose text is under a point (body, footnotes, endnotes, text boxes; not
-    /// headers/footers). A text box wins inside its area, except one behind the text, which only
-    /// wins where no body text is.
+    /// headers/footers). A text box wins inside its area (its rotated area when it is turned, as
+    /// [`DocLayout::object_at`] takes it), except one behind the text, which only wins where no
+    /// body text is.
     pub fn story_at(&self, page: usize, x: f32, y: f32) -> Option<StoryRef> {
         let p = self.pages.get(page)?;
         let text_box = |behind: bool| {
-            objects(p, page).find(|o| o.behind() == behind && o.text_box.is_some() && o.rect.contains(Point::new(x, y))).and_then(|o| o.text_box)
+            objects(p, page).find(|o| o.behind() == behind && o.text_box.is_some() && o.rect.contains(o.unspin(x, y))).and_then(|o| o.text_box)
         };
         text_box(false).map(StoryRef::Part).or_else(|| text_at(p, page, x, y)).or_else(|| text_box(true).map(StoryRef::Part))
     }
 
     /// The object a press at (x, y) grabs: a picture or shape anywhere on it, a text box on its
-    /// border (within `edge` points either side; inside is its text). Topmost first; objects
-    /// behind the text only where there's no text.
+    /// border (within `edge` points either side; inside is its text, whatever lies under the
+    /// box). Topmost first; objects behind the text only where there's no text.
     pub fn object_at(&self, page: usize, x: f32, y: f32, edge: f32) -> Option<ObjectHit> {
         self.object_at_in(page, x, y, edge, StoryRef::Body)
     }
@@ -449,11 +450,17 @@ impl DocLayout {
             StoryRef::Body => text_at(p, page, x, y).is_some(),
             StoryRef::Part(id) => hf_text_at(p, id, x, y),
         };
-        cands
-            .iter()
-            .find(|o| !o.behind() && grabs(o))
-            .or_else(|| if text_here { None } else { cands.iter().find(|o| o.behind() && grabs(o)) })
-            .cloned()
+        // Inside a text box is its text: a press there grabs nothing, not an object under the box
+        // (a form scanned as a picture, with text boxes laid over it to fill in). The same holds
+        // among the objects behind the text.
+        let inside_text_box = |o: &ObjectHit| o.text_box.is_some() && !grabs(o) && o.rect.contains(o.unspin(x, y));
+        let topmost = |behind: bool| cands.iter().find(|o| o.behind() == behind && (grabs(o) || inside_text_box(o)));
+        match topmost(false) {
+            Some(o) if inside_text_box(o) => None,
+            Some(o) => Some(o.clone()),
+            None if text_here => None,
+            None => topmost(true).filter(|o| !inside_text_box(o)).cloned(),
+        }
     }
 
     /// The text box in the header or footer at (x, y) on `page`.
@@ -606,6 +613,7 @@ impl DocLayout {
         self.caret_on(pos, 0)
     }
 
+    /// Caret geometry on the hinted occurrence of a repeating or continued story.
     pub fn caret_on(&self, pos: &Pos, page_hint: usize) -> Option<Caret> {
         for (pi, it) in self.pieces(pos.story, &pos.path, page_hint) {
             let Placed::Lines { para, l0, l1, x, y, turn, .. } = it else { continue };
@@ -629,12 +637,32 @@ impl DocLayout {
         None
     }
 
+    /// Lines available to arrow navigation. A repeated table heading is drawn on later pages,
+    /// but its original line is the editable position; a split paragraph's new lines remain.
+    fn navigation_lines(&self, page: usize, story: StoryRef) -> Vec<LineHit<'_>> {
+        let Some(p) = self.pages.get(page) else { return Vec::new() };
+        page_lines(p, story)
+            .into_iter()
+            .filter(|line| {
+                if story != StoryRef::Body || line.path.cell().is_none() {
+                    return true;
+                }
+                if let Some(&(original_page, item)) = self.index.get(&(story, line.path.clone())).and_then(|pieces| pieces.first())
+                    && original_page < page
+                    && let Some(Placed::Lines { l0, l1, .. }) = self.pages.get(original_page).and_then(|p| p.items.get(item))
+                {
+                    return !(*l0..*l1).contains(&line.li);
+                }
+                true
+            })
+            .collect()
+    }
+
     /// The position one line up (`dir < 0`) or down from `pos`, keeping `goal_x` (page x).
     pub fn vertical(&self, pos: &Pos, goal_x: Option<f32>, dir: i32, page_hint: usize) -> Option<(Pos, f32)> {
         let c = self.caret_on(pos, page_hint)?;
         let gx = goal_x.unwrap_or(c.x);
-        let page = self.pages.get(c.page)?;
-        let lines = page_lines(page, pos.story);
+        let lines = self.navigation_lines(c.page, pos.story);
         let cur_mid = c.top + c.height / 2.0;
         let cands: Vec<&LineHit> = lines
             .iter()
@@ -669,9 +697,9 @@ impl DocLayout {
         }
         // Next/previous page.
         let np = if dir < 0 { c.page.checked_sub(1)? } else { c.page + 1 };
-        let p = self.pages.get(np)?;
-        let lines = page_lines(p, pos.story);
-        let l = if dir < 0 { lines.iter().max_by(|a, b| a.top.total_cmp(&b.top))? } else { lines.iter().min_by(|a, b| a.top.total_cmp(&b.top))? };
+        let lines = self.navigation_lines(np, pos.story);
+        let candidates: Vec<&LineHit> = lines.iter().collect();
+        let l = in_row(&candidates, gx, dir)?;
         let off = l.para.off_at_x(l.li, gx - l.x);
         Some((Pos { story: l.story, path: l.path.clone(), off }, gx))
     }
@@ -952,6 +980,7 @@ impl DocLayout {
     }
 }
 
+/// Distance from a page point to a line, preferring a nearby line whose horizontal span contains it.
 fn score(l: &LineHit, x: f32, y: f32) -> f32 {
     let dy = if y < l.top {
         l.top - y

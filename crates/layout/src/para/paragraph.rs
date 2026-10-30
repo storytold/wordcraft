@@ -614,7 +614,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let gone = mark_left_out && (p.text.is_empty() || left.first() == Some(&(0..p.text.len())));
     pl.left_out = left;
     keep_graphemes_whole(&mut pl);
-    break_lines(&mut pl, env, mark_style, env.label.as_ref().map(|(_, l)| l));
+    break_lines(&mut pl, &p.text, env, mark_style, env.label.as_ref().map(|(_, l)| l));
     if gone {
         collapse(&mut pl);
     }

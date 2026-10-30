@@ -134,9 +134,23 @@ fn index_field(s: &Session) -> Option<(usize, String)> {
     })
 }
 
+/// Whether an INDEX field sits in a nested paragraph (a table cell or text box) of the body.
+fn nested_index(s: &Session) -> bool {
+    s.doc
+        .para_paths(StoryRef::Body)
+        .iter()
+        .filter(|path| path.0.len() > 1)
+        .filter_map(|path| s.doc.para(StoryRef::Body, path))
+        .any(|p| p.objects.iter().any(|o| matches!(o, InlineObject::Field { instr, .. } if FieldCode::parse(instr).name == "INDEX")))
+}
+
 fn insert_index(s: &mut Session, v: &Value) -> CmdResult {
     let instr = index_instr(v);
-    match index_field(s) {
+    let found = index_field(s);
+    if found.is_none() && nested_index(s) {
+        return Err(CmdError::Failed("the index is inside a table or text box; move it into the main text to change it".into()));
+    }
+    match found {
         Some((i, _)) => {
             // Settings for the index that is there: a new field code, then rebuild it.
             let para = s.doc.para_mut(StoryRef::Body, &Path::top(i))?;
@@ -440,5 +454,40 @@ mod tests {
         s.run("references.updateIndex", &json!({})).unwrap();
         let (i, _) = index_field(&s).unwrap();
         assert_eq!(s.doc.body[i + 2].as_para().unwrap().props.tabs.as_ref().unwrap()[0].leader, TabLeader::Hyphen);
+    }
+
+    /// #3670: an INDEX field inside a table cell (as imported documents have it) is found, so
+    /// Insert Index doesn't add a second index at the caret.
+    #[test]
+    fn index_in_a_table_cell_is_not_duplicated() {
+        let mut s = Session::new(wordcraft_doc::Document::from_text("Kilns are hot.\nEnd."));
+        s.run("select.text", &json!({"text": "Kilns"})).unwrap();
+        s.run("references.markEntry", &json!({})).unwrap();
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("insert.table", &json!({"rows": 1, "cols": 1})).unwrap();
+        let count = |s: &Session| {
+            s.doc
+                .para_paths(StoryRef::Body)
+                .iter()
+                .filter_map(|path| s.doc.para(StoryRef::Body, path))
+                .flat_map(|p| p.objects.iter())
+                .filter(|o| matches!(o, InlineObject::Field { instr, .. } if FieldCode::parse(instr).name == "INDEX"))
+                .count()
+        };
+        let cell = s.doc.para_paths(StoryRef::Body).into_iter().find(|path| path.depth() > 0).unwrap();
+        let field = InlineObject::Field {
+            instr: "INDEX \\h \"A\"".into(),
+            result: String::new(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+        };
+        s.doc.insert_object(&Pos { story: StoryRef::Body, path: cell, off: 0 }, field, &CharProps::default()).unwrap();
+        assert_eq!(count(&s), 1);
+        s.run("caret.docEnd", &json!({})).unwrap();
+        let r = s.run("references.index", &json!({"columns": 2}));
+        assert!(r.is_err(), "a nested index is reported: {r:?}");
+        assert_eq!(count(&s), 1, "INDEX fields after references.index");
     }
 }
