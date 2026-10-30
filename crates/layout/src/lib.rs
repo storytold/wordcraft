@@ -66,6 +66,9 @@ pub use floats::{is_floating, shape_figure_alt};
 use floats::{left_out_objects, wrap_area};
 #[cfg(test)]
 use headers::MAX_HEADER_ITEMS;
+#[cfg(test)]
+use headers::placed_cost;
+use headers::placed_cost_by;
 pub use notes::DECOR_STORY;
 pub(crate) use notes::NOTE_SEP_W;
 use notes::{MAX_NOTE_PASSES, footnote_pages};

@@ -109,10 +109,63 @@ impl Linked {
 /// Header rows are re-placed on every page a table spills onto, so a table is O(header items ×
 /// pages) placed items — and an exact-height header row keeps all its overflowing text without
 /// growing, so a few KB of document could otherwise fill memory. Once this many items (a row
-/// counts at least one) have been repeated across a table, later pages carry no header rows;
+/// counts at least one) have been repeated across the whole layout (every table together), later pages carry no header rows;
 /// pagination still finishes. Far above any real table (three ordinary header rows over some
 /// 5 000 pages).
 pub(crate) const MAX_HEADER_ITEMS: usize = 500_000;
+
+#[cfg(test)]
+thread_local! {
+    /// A smaller [`MAX_HEADER_ITEMS`] for tests, so a short table can reach it.
+    pub(crate) static HEADER_ITEMS_CAP: std::cell::Cell<usize> = const { std::cell::Cell::new(MAX_HEADER_ITEMS) };
+}
+
+/// [`MAX_HEADER_ITEMS`], or the test cap ([`HEADER_ITEMS_CAP`]) in tests.
+pub(crate) fn header_items_cap() -> usize {
+    #[cfg(test)]
+    return HEADER_ITEMS_CAP.with(|c| c.get());
+    #[cfg(not(test))]
+    MAX_HEADER_ITEMS
+}
+
+/// What re-placing `it` costs against [`MAX_HEADER_ITEMS`] (and laying it out against
+/// [`textbox::MAX_FLOW_WORK`]): one, and for a clipped group (a floating Drawing Canvas) every
+/// member below it, nested groups included, as placing clones them all. Counted with an explicit
+/// stack, and counting stops once the total passes `limit` (the result is then just over it), so
+/// neither deep nesting nor a huge group makes the count itself costly.
+pub(crate) fn placed_cost(it: &Placed, limit: usize) -> usize {
+    placed_cost_by(it, limit, |_| 1)
+}
+
+/// [`placed_cost`] with each item (the group itself and every member) costing `cost` of it.
+pub(crate) fn placed_cost_by(it: &Placed, limit: usize, cost: impl Fn(&Placed) -> usize) -> usize {
+    let mut count = 0usize;
+    let mut stack: Vec<std::slice::Iter<Placed>> = Vec::new();
+    let mut next = Some(it);
+    loop {
+        let cur = match next.take() {
+            Some(c) => c,
+            None => loop {
+                match stack.last_mut() {
+                    None => return count,
+                    Some(iter) => match iter.next() {
+                        Some(c) => break c,
+                        None => {
+                            stack.pop();
+                        }
+                    },
+                }
+            },
+        };
+        count = count.saturating_add(cost(cur));
+        if count > limit {
+            return count;
+        }
+        if let Placed::Clip { items, .. } = cur {
+            stack.push(items.iter());
+        }
+    }
+}
 
 /// Header tables can displace a non-overlapping body table. Page-positioned drawings keep
 /// their own wrapping rules, so only table areas are retained from the header layout.
