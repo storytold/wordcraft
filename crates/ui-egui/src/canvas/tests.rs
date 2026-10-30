@@ -1053,6 +1053,49 @@ fn an_armed_format_painter_changes_the_pointer() {
     assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default, "the selection bar keeps its arrow");
 }
 
+/// #4410: with the Format Painter armed, a double-click on a word paints that word, and the
+/// painter goes off again (it was only dragging across the text that painted it).
+#[test]
+fn double_clicking_a_word_with_the_format_painter_paints_it() {
+    use egui::{Event, PointerButton};
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("text.insert", json!({"text": "Bold source then target words"})).unwrap();
+    a.run("view.commentsPane", json!({"value": false})).unwrap();
+    a.run("select.text", json!({"text": "Bold"})).unwrap();
+    a.run("format.bold", json!({})).unwrap();
+    a.run("edit.formatPainter", json!({})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    assert!(h.state().session.painter.is_some(), "armed");
+    let word_off = "Bold source then ".len() + 2;
+    let c = h.state_mut().session.layout().caret(&Pos::body(0, word_off)).expect("caret");
+    let at = page_to_screen(h.state_mut(), c.page, c.x, c.top + c.height / 2.0).expect("on screen");
+    h.event(Event::PointerMoved(at));
+    for _ in 0..2 {
+        h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Default::default() });
+        h.step();
+        h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Default::default() });
+        h.step();
+    }
+    for _ in 0..3 {
+        h.step();
+    }
+    let s = &h.state().session;
+    let para = s.doc.para_at(&Pos::body(0, 0)).expect("paragraph");
+    assert_eq!(para.props_of_char("Bold source then t".len()).bold, Some(true), "the double-clicked word is painted");
+    assert_ne!(para.props_of_char("Bold source ".len()).bold, Some(true), "the other words are not");
+    assert!(s.painter.is_none(), "the painter is used up");
+}
+
 /// #1085: a selected balloon's buttons work (pressing them is not a click on the page that
 /// leaves the balloon): a new comment with no text resolves and deletes from its balloon.
 #[test]

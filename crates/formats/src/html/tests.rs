@@ -51,6 +51,26 @@ fn borderless_tables_export_without_cell_borders() {
 }
 
 #[test]
+fn input_newlines_preserve_preformatted_lines() {
+    for newline in ["\n", "\r\n", "\r"] {
+        let f = parse(&format!("<pre>{newline}  Alpha{newline}  <b>Beta</b>{newline}{newline}  Gamma</pre>"));
+        assert_eq!(texts(&f), ["CodeNone:  Alpha", "CodeNone:  Beta", "CodeNone:", "CodeNone:  Gamma"], "{newline:?}");
+        let FBlock::Para(p) = &f.blocks[1] else { panic!() };
+        assert!(matches!(p.inlines.last(), Some(Inline::Text(t, f)) if t == "Beta" && f.bold));
+    }
+}
+
+#[test]
+fn input_newlines_are_normalized_before_character_references() {
+    let f = parse("<p style='white-space:pre'>A&#13;B\r\nC\rD</p><p>A\r\nB\rC</p>");
+    assert_eq!(texts(&f), ["NormalNone:A\rB\nC\nD", "NormalNone:A B C"]);
+    let f = parse("<p style='white-space:pre-wrap'>α\r\r\nβ&#13;γ</p><a href='https://example.test/a\r\nb\rc&#13;d'>link</a>");
+    assert_eq!(texts(&f), ["NormalNone:α\n\nβ\rγ", "NormalNone:link"]);
+    let FBlock::Para(p) = &f.blocks[1] else { panic!() };
+    assert!(matches!(p.inlines.first(), Some(Inline::Text(_, f)) if f.link.as_deref() == Some("https://example.test/a\nb\nc\rd")));
+}
+
+#[test]
 fn css_preformatted_paragraphs_keep_edge_spaces() {
     // #439: `white-space:pre` keeps leading and trailing spaces like `<pre>`; normal
     // paragraphs still collapse.
@@ -473,4 +493,24 @@ fn many_formatted_leading_breaks_trim_quickly() {
     assert!(t.elapsed() < std::time::Duration::from_secs(20), "{:?}", t.elapsed());
     let texts: Vec<String> = f.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p.text()) } else { None }).collect();
     assert_eq!(texts, ["x"]);
+}
+
+#[test]
+fn font_size_at_the_integer_limits_does_not_overflow() {
+    // `<font size>` offsets were added to 3 unchecked, so the extreme values panicked in debug builds.
+    for size in ["+2147483647", "--2147483648", "-2147483647", "+99999999999"] {
+        let f = parse(&format!("<font size=\"{size}\">x</font>"));
+        assert!(texts(&f).iter().any(|t| t.ends_with(":x")), "size={size}");
+    }
+    // The offsets saturate, then clamp to the 1..=7 scale: 7 is 36 pt, 1 is 7.5 pt.
+    let size = |html: &str| match &parse(html).blocks[0] {
+        FBlock::Para(p) => p.inlines.iter().find_map(|i| match i {
+            Inline::Text(_, fmt) => fmt.size,
+            _ => None,
+        }),
+        _ => None,
+    };
+    assert_eq!(size("<font size=\"+2147483647\">x</font>"), Some(36.0));
+    assert_eq!(size("<font size=\"--2147483648\">x</font>"), Some(36.0));
+    assert_eq!(size("<font size=\"-2147483647\">x</font>"), Some(7.5));
 }

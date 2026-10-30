@@ -795,7 +795,9 @@ impl Document {
                 p.kind = "lpwstr".into();
                 p.value = value.to_string();
             }
-            None => self.custom_props.push(CustomProp { name: name.to_string(), kind: "lpwstr".into(), value: value.to_string() }),
+            None => {
+                self.custom_props.push(CustomProp { name: name.to_string(), kind: "lpwstr".into(), value: value.to_string(), ..Default::default() })
+            }
         }
     }
 
