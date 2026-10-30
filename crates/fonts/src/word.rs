@@ -35,8 +35,24 @@ pub fn has_named_substitutes(family: &str) -> bool {
     substitutes_by_name(charset_base_family(family)).1
 }
 
+/// Named substitutes supplied by the embedding application, consulted before the built-in lists:
+/// given a requested family, the families to try in order, or `None` to fall through.
+pub type SubstituteProvider = fn(&str) -> Option<&'static [&'static str]>;
+
+static SUBSTITUTE_PROVIDER: OnceLock<SubstituteProvider> = OnceLock::new();
+
+/// Install the application's [`SubstituteProvider`] (for example regional document fonts such as
+/// 仿宋_GB2312 → FangSong). Set it before the first [`resolve`]: resolutions are cached. Only the
+/// first call takes effect; it returns whether this one did.
+pub fn set_substitute_provider(provider: SubstituteProvider) -> bool {
+    SUBSTITUTE_PROVIDER.set(provider).is_ok()
+}
+
 /// [`substitutes`], and whether they were chosen for this family by name.
 fn substitutes_by_name(family: &str) -> (&'static [&'static str], bool) {
+    if let Some(list) = SUBSTITUTE_PROVIDER.get().and_then(|provider| provider(family)) {
+        return (list, true);
+    }
     const SANS: &[&str] = &["Carlito", "Helvetica Neue", "Arial", "Liberation Sans", "Noto Sans", "DejaVu Sans", "Source Sans 3"];
     const SERIF: &[&str] = &["Caladea", "Times New Roman", "Liberation Serif", "Georgia", "Noto Serif", "DejaVu Serif", "Source Serif 4"];
     const MONO: &[&str] = &["Courier New", "Liberation Mono", "Menlo", "Consolas", "DejaVu Sans Mono", "JetBrains Mono"];
