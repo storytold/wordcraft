@@ -1997,3 +1997,31 @@ fn modify_style_for_new_documents_and_reset() {
     h.run_steps(3);
     assert!(store.get().is_none(), "Reset deletes it");
 }
+
+/// Review of #4449–#4458: Modify Style keeps only what was changed. Strong made italic for new
+/// documents gets no font or size of its own (the dialog shows the resolved ones), so bold text
+/// in a heading keeps the heading's font and size.
+#[test]
+fn modify_style_saves_only_what_was_changed() {
+    use egui_kittest::kittest::Queryable;
+    let (mut h, store) = normal_template_harness("modifyStyle", |_| {});
+    let strong = Dialog::modify_style(h.state(), "Strong").map(|mut d| {
+        if let Dialog::ModifyStyle { italic, .. } = &mut d {
+            *italic = true;
+        }
+        d
+    });
+    h.state_mut().dialog = strong;
+    h.run_steps(3);
+    h.get_by_label("New documents based on this template").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    for (what, sheet) in [("the open document", h.state().session.doc.styles.clone()), ("new documents", restarted(&store).styles)] {
+        let st = sheet.get("Strong").expect("Strong");
+        assert_eq!((st.chr.bold, st.chr.italic), (Some(true), Some(true)), "{what}");
+        assert_eq!((st.chr.font.as_deref(), st.chr.size), (None, None), "{what}: no font or size of its own");
+        let r = sheet.resolve_char(Some("Heading1"), &wordcraft_doc::CharProps { style: Some("Strong".into()), ..Default::default() });
+        assert_eq!(r.size, sheet.resolve_char(Some("Heading1"), &Default::default()).size, "{what}: bold in a heading keeps its size");
+    }
+}

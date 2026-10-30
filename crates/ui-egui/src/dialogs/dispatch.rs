@@ -956,12 +956,42 @@ fn modify_style_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     });
     let (ok, cancel) = buttons(ui, tl!("OK"));
     if ok {
-        let mut chr = json!({"font": font, "size": *size, "bold": *bold, "italic": *italic});
-        if let Some(c) = wordcraft_doc::Rgb::parse(color) {
-            chr["color"] = json!({"Rgb": [c.0, c.1, c.2]});
+        // Only what was changed: the dialog shows the style's resolved formatting, and sending it
+        // all would give the style a font and size of its own, in this document and, saved for
+        // new documents, in those (#4237 review).
+        let was = match Dialog::modify_style(app, id) {
+            Some(Dialog::ModifyStyle { font, size, bold, italic, color, before, after, .. }) => {
+                Some((font, size, bold, italic, color, before, after))
+            }
+            _ => None,
+        };
+        let w = was.as_ref();
+        let mut chr = serde_json::Map::new();
+        if w.is_none_or(|w| w.0 != *font) {
+            chr.insert("font".into(), json!(font));
         }
-        let modified =
-            app.run("styles.modify", json!({"style": id, "name": name, "chr": chr, "para": {"spaceBefore": *before, "spaceAfter": *after}}));
+        if w.is_none_or(|w| w.1 != *size) {
+            chr.insert("size".into(), json!(*size));
+        }
+        if w.is_none_or(|w| w.2 != *bold) {
+            chr.insert("bold".into(), json!(*bold));
+        }
+        if w.is_none_or(|w| w.3 != *italic) {
+            chr.insert("italic".into(), json!(*italic));
+        }
+        if w.is_none_or(|w| w.4 != *color)
+            && let Some(c) = wordcraft_doc::Rgb::parse(color)
+        {
+            chr.insert("color".into(), json!({"Rgb": [c.0, c.1, c.2]}));
+        }
+        let mut para = serde_json::Map::new();
+        if w.is_none_or(|w| w.5 != *before) {
+            para.insert("spaceBefore".into(), json!(*before));
+        }
+        if w.is_none_or(|w| w.6 != *after) {
+            para.insert("spaceAfter".into(), json!(*after));
+        }
+        let modified = app.run("styles.modify", json!({"style": id, "name": name, "chr": chr, "para": para}));
         if modified.is_ok()
             && *new_documents
             && let Err(e) = app.run("styles.setDefault", json!({"style": id, "scope": "new"}))
