@@ -216,6 +216,19 @@ fn mod_v_within_one_frame_pastes_the_clipboard_picture() {
     assert_eq!(pictures(&mut a), 1);
 }
 
+/// egui-winit 0.37 keeps both the Mod+V press and its release, and sends `PasteImage` when the
+/// clipboard holds a picture and no text (Windows, macOS, X11): that pastes the picture, once.
+#[test]
+fn paste_image_event_pastes_the_clipboard_picture() {
+    let ctx = egui::Context::default();
+    let mut a = picture_app();
+    let ctrl = Modifiers { ctrl: true, command: true, ..Default::default() };
+    let image = egui::Event::PasteImage(std::sync::Arc::new(egui::ColorImage::filled([4, 4], egui::Color32::WHITE)));
+    mods_frame(&ctx, &mut a, ctrl, vec![key_event(Key::ControlLeft, true, ctrl), image]);
+    mods_frame(&ctx, &mut a, Modifiers::NONE, vec![key_event(Key::ControlLeft, false, Modifiers::NONE)]);
+    assert_eq!(pictures(&mut a), 1);
+}
+
 /// A V release keeps its own modifiers unless Mod went up first and no V press arrived.
 #[test]
 fn paste_release_modifiers_fall_back_to_those_held_with_mod() {
