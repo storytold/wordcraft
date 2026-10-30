@@ -1248,7 +1248,7 @@ fn ungroup_refuses_a_group_holding_word_ink_and_the_ink_survives_saving() {
     assert_eq!(xml.matches("<w14:contentPart").count(), 1, "{xml}");
     assert!(xml.contains("<mc:Fallback>"), "{xml}");
     assert_eq!(bytes, before, "the refused ungroup leaves the document unchanged");
-    let names: Vec<String> = z.file_names().map(String::from).collect();
+    let names: Vec<String> = z.file_names().map(|n| n.unwrap().into_owned()).collect();
     assert_eq!(names.iter().filter(|n| n.starts_with("word/ink/")).count(), 1, "{names:?}");
     let mut rels = String::new();
     z.by_name("word/_rels/document.xml.rels").unwrap().read_to_string(&mut rels).unwrap();

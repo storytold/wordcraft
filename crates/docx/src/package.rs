@@ -229,7 +229,13 @@ impl Package {
             if f.is_dir() {
                 continue;
             }
-            let name = f.name().trim_start_matches('/').to_string();
+            let name = match f.name() {
+                Ok(name) => name.trim_start_matches('/').to_string(),
+                Err(e) => {
+                    log::warn!("docx: skipping zip entry {i} with an unreadable name: {e}");
+                    continue;
+                }
+            };
             if f.size() > max_part {
                 return Err(DocxError::Limit(format!("part {name} declares {} bytes", f.size())));
             }

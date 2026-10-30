@@ -8768,7 +8768,7 @@ fn smart_art_round_trips_through_docx() {
     let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     for i in 0..zip.len() {
         let mut f = zip.by_index(i).unwrap();
-        let name = f.name().to_string();
+        let name = f.name().unwrap().to_string();
         let mut buf = Vec::new();
         f.read_to_end(&mut buf).unwrap();
         if name.ends_with("data1.xml") {

@@ -1496,7 +1496,7 @@ fn unzip(bytes: &[u8]) -> std::collections::BTreeMap<String, Vec<u8>> {
         let mut f = z.by_index(i).unwrap();
         let mut b = Vec::new();
         f.read_to_end(&mut b).unwrap();
-        out.insert(f.name().to_string(), b);
+        out.insert(f.name().unwrap().to_string(), b);
     }
     out
 }
@@ -2270,7 +2270,7 @@ fn includepicture_keeps_its_embedded_picture() {
                 let mut f = z.by_index(i).unwrap();
                 let mut v = Vec::new();
                 std::io::Read::read_to_end(&mut f, &mut v).unwrap();
-                entries.push((f.name().to_string(), v));
+                entries.push((f.name().unwrap().to_string(), v));
             }
             entries.push(("word/media/picture.png".into(), png.to_vec()));
             zip(&entries.iter().map(|(n, v)| (n.as_str(), v.as_slice())).collect::<Vec<_>>())
@@ -3674,14 +3674,14 @@ fn hyperlink_with_empty_target_is_no_link() {
             let mut f = zr.by_index(i).unwrap();
             let mut buf = Vec::new();
             std::io::Read::read_to_end(&mut f, &mut buf).unwrap();
-            if f.name() == "word/_rels/document.xml.rels" {
+            if f.name().unwrap() == "word/_rels/document.xml.rels" {
                 buf = String::from_utf8(buf)
                     .unwrap()
                     .replace("Target=\"https://x\"", "Target=\"\"")
                     .replace("a@example.com\"", "a@example.com\" TargetMode=\"External\"")
                     .into_bytes();
             }
-            entries.push((f.name().to_string(), buf));
+            entries.push((f.name().unwrap().to_string(), buf));
         }
         let refs: Vec<(&str, &[u8])> = entries.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
         zip(&refs)
