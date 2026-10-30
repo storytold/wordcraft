@@ -339,6 +339,17 @@ fn table_column_widths_survive_a_round_trip() {
 }
 
 #[test]
+fn narrow_table_columns_keep_their_width() {
+    // Columns of a few points stay as the file gives them, so the table stays as wide as its source.
+    let content = format!(
+        r##"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="Table1.A" style:family="table-column"><style:table-column-properties style:column-width="3pt"/></style:style><style:style style:name="Table1.B" style:family="table-column"><style:table-column-properties style:column-width="100pt"/></style:style></office:automatic-styles><office:body><office:text><table:table><table:table-column table:style-name="Table1.A"/><table:table-column table:style-name="Table1.B"/><table:table-row><table:table-cell><text:p>A</text:p></table:table-cell><table:table-cell><text:p>B</text:p></table:table-cell></table:table-row></table:table></office:text></office:body></office:document-content>"##
+    );
+    let doc = import(&package(&content, None)).unwrap();
+    let grid = doc.body.iter().find_map(|b| if let wordcraft_doc::Block::Table(t) = &**b { Some(t.grid.clone()) } else { None });
+    assert_eq!(grid, Some(vec![3.0, 100.0]));
+}
+
+#[test]
 fn table_without_column_widths_keeps_the_equal_split() {
     let content = format!(
         r##"<office:document-content {NS_T}><office:body><office:text><table:table><table:table-column table:number-columns-repeated="2"/><table:table-row><table:table-cell><text:p>A</text:p></table:table-cell><table:table-cell><text:p>B</text:p></table:table-cell></table:table-row></table:table></office:text></office:body></office:document-content>"##
