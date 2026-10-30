@@ -8,6 +8,60 @@ use super::model::{ClKind, Cluster, Glyph, Label, LabelRun, ParaEnv, undrawable_
 use super::proof::{ProofRun, is_list_item, proof_issues};
 use super::*;
 
+/// Whether `c` is a Thai above/below vowel or tone mark (TCB follower).
+fn is_thai_following(c: char) -> bool {
+    use wordcraft_doc::thai_char::{MAICHATTAWA, MAIEK, MAITAIKHU, NIKHAHIT, PHINTHU, SARA_AM, SARA_I, THANTHAKHAT, YAMAKKAN};
+    matches!(c,
+        SARA_AM
+        | SARA_I..=PHINTHU
+        | MAITAIKHU
+        | MAIEK..=MAICHATTAWA
+        | THANTHAKHAT
+        | NIKHAHIT
+        | YAMAKKAN
+    )
+}
+
+/// Whether `c` is a Lao above/below vowel or tone mark (Lao TCB follower).
+fn is_lao_following(c: char) -> bool {
+    // Below vowels: ຸ ູ (U+0EB8–U+0EB9)
+    // Above vowels: ິ ີ ຶ ື ົ ຺ ຼ (U+0EB4–U+0EB7, U+0EBA–U+0EBC)
+    // Tone marks: ່ ້ ໊ ໋ ໌ (U+0EC8–U+0ECC)
+    matches!(c, '\u{0EB4}'..='\u{0EB9}' | '\u{0EBA}'..='\u{0EBC}' | '\u{0EC8}'..='\u{0ECC}')
+}
+
+/// Byte length of the Thai/Lao TCB (Thai Character Block) starting at the beginning of `text`.
+/// A Thai or Lao leading vowel counts alone; otherwise base consonant + following vowels/tones.
+/// Returns 0 if `text` doesn't start with a Thai or Lao character.
+fn thai_lao_tcb_byte_len(text: &str) -> usize {
+    use wordcraft_doc::cluster::is_thai_lao;
+    use wordcraft_doc::thai_char::{MAIMALAI, SARA_E};
+    let mut chars = text.chars();
+    let first = match chars.next() {
+        Some(c) if is_thai_lao(c) => c,
+        _ => return 0,
+    };
+    let len = first.len_utf8();
+    // Thai leading vowels (เ แ โ ใ ไ, U+0E40–U+0E44) stand alone as drop cap.
+    if matches!(first, SARA_E..=MAIMALAI) {
+        return len;
+    }
+    // Lao leading vowels (ເ ແ ໂ ໃ ໄ, U+0EC0–U+0EC4) stand alone as drop cap.
+    if matches!(first, '\u{0EC0}'..='\u{0EC4}') {
+        return len;
+    }
+    // Base consonant: consume any following vowels/tones.
+    let mut total = len;
+    for c in chars {
+        if is_thai_following(c) || is_lao_following(c) {
+            total += c.len_utf8();
+        } else {
+            break;
+        }
+    }
+    total
+}
+
 /// Lay out one paragraph.
 pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let doc = env.doc;
@@ -52,12 +106,20 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let mut has_page_fields = false;
     let mut notes = Vec::new();
     let mut obj_index = 0usize;
-    // Drop cap: the first character, sized so its capital spans `lines` lines.
-    let drop_first = (rp.drop_cap > 0)
+    // Drop cap: the first character or Thai/Lao TCB cluster, sized so its capital spans `lines` lines.
+    // Stored as the byte length of the drop-cap sequence (≥1 char for Thai TCB).
+    let drop_first: Option<usize> = (rp.drop_cap > 0)
         .then(|| p.text.chars().next())
         .flatten()
         .filter(|c| !matches!(*c, '\t' | LINE_BREAK | PAGE_BREAK | COLUMN_BREAK | OBJ | '\r' | ' '))
-        .filter(|c| p.text.len() > c.len_utf8());
+        .map(|c| {
+            if wordcraft_doc::cluster::is_thai_lao(c) {
+                thai_lao_tcb_byte_len(&p.text)
+            } else {
+                c.len_utf8()
+            }
+        })
+        .filter(|&nbytes| p.text.len() > nbytes);
     let mut drop_cap = None;
     let mut drop_cap_w = 0.0;
     let mut maths = Vec::new();
@@ -118,31 +180,44 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         }
         let mut seg = 0;
         if range.start == 0
-            && let Some(c) = drop_first
-            && let Some(first) = text.get(..c.len_utf8())
+            && let Some(nbytes) = drop_first
         {
-            let line_h = (rc.size * 1.2).max(1.0);
-            let lines = rp.drop_cap as f32;
-            // Capital height is ~0.7 em: the letter's cap spans from line 1's caps to line N's baseline.
-            let mut big = (*rc).clone();
-            // `clamp` would panic here when the text itself is larger than 1000 pt.
-            big.size = (((lines - 1.0) * line_h + rc.size * 0.7) / 0.7).min(1000.0).max(rc.size);
-            if let Some(f) = &rp.drop_cap_font {
-                big.font = f.clone();
+            // If the TCB spans a run boundary, fall back to just the base consonant so
+            // the drop cap still renders rather than silently vanishing.
+            let end = if nbytes <= text.len() {
+                nbytes
+            } else {
+                text.chars().next().map_or(0, |c| c.len_utf8())
+            };
+            if let Some(first) = text.get(..end) {
+                let line_h = (rc.size * 1.2).max(1.0);
+                let lines = rp.drop_cap as f32;
+                // Capital height: ~0.70 em for Latin, ~0.85 em for Thai/Lao (consonants are taller).
+                let is_thai = first.chars().next().map(wordcraft_doc::cluster::is_thai_lao).unwrap_or(false);
+                let cap_h = if is_thai { 0.85 } else { 0.70 };
+                let mut big = (*rc).clone();
+                // `clamp` would panic here when the text itself is larger than 1000 pt.
+                big.size = (((lines - 1.0) * line_h + rc.size * cap_h) / cap_h).min(1000.0).max(rc.size);
+                // Sync complex-script size so Thai shaping uses the enlarged size.
+                big.size_cs = big.size;
+                if let Some(f) = &rp.drop_cap_font {
+                    big.font = f.clone();
+                    big.font_cs = f.clone();
+                }
+                let before = b.clusters.len();
+                b.shape(first, 0, &Arc::new(big), None);
+                let w: f32 = b.clusters.get(before..).map(|c| c.iter().map(|c| c.adv).sum()).unwrap_or(0.0);
+                // Dropped: the first lines step aside by the letter and its distance from the text.
+                // In margin: they keep their indent and the letter hangs left of them.
+                let indent = if rp.drop_cap_margin { 0.0 } else { w + rp.drop_cap_distance };
+                drop_cap = Some((b.clusters.len() - before, rp.drop_cap, indent));
+                drop_cap_w = w;
+                // The letter hangs beside the text; lines flow at the indent `break_lines` adds.
+                for c in b.clusters.iter_mut().skip(before) {
+                    c.adv = 0.0;
+                }
+                seg = end;
             }
-            let before = b.clusters.len();
-            b.shape(first, 0, &Arc::new(big), None);
-            let w: f32 = b.clusters.get(before..).map(|c| c.iter().map(|c| c.adv).sum()).unwrap_or(0.0);
-            // Dropped: the first lines step aside by the letter and its distance from the text.
-            // In margin: they keep their indent and the letter hangs left of them.
-            let indent = if rp.drop_cap_margin { 0.0 } else { w + rp.drop_cap_distance };
-            drop_cap = Some((b.clusters.len() - before, rp.drop_cap, indent));
-            drop_cap_w = w;
-            // The letter hangs beside the text; lines flow at the indent `break_lines` adds.
-            for c in b.clusters.iter_mut().skip(before) {
-                c.adv = 0.0;
-            }
-            seg = c.len_utf8();
         }
         for (i, c) in text.char_indices() {
             if i < seg {
