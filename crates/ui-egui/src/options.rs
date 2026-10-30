@@ -726,6 +726,7 @@ fn language_picker(app: &mut WordApp, ui: &mut Ui) {
     use crate::i18n::{AUTO, Lang};
     // The language names are in their own scripts: fonts for them load from the next frame.
     app.want_system_cjk = true;
+    app.want_language_name_fonts = true;
     let system = crate::i18n::system_lang();
     let auto_label = crate::i18n::fmt(tl!("Automatic ({language})"), &[("language", system.name())]);
     let current = if app.ui.language == AUTO { auto_label.clone() } else { Lang::from_pref(&app.ui.language).name().to_string() };

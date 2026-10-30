@@ -511,10 +511,35 @@ pub fn caption_char_covered(c: char) -> bool {
     (c as u32) < 0x250 || wordcraft_fonts::is_cjk(c)
 }
 
+/// A letter the embedded interface faces draw (Inter covers Latin, Greek and Cyrillic), or CJK,
+/// which has its own interface fallback. Symbols count as covered: the catalogs share them with
+/// English, letterlike ones (the equation gallery's `xⁿ`) included. Interface text in another
+/// script (Hebrew) borrows a document face instead.
+pub fn interface_char_covered(c: char) -> bool {
+    static INTER: std::sync::OnceLock<Arc<wordcraft_fonts::FontFace>> = std::sync::OnceLock::new();
+    let symbol = !c.is_alphabetic() || ('\u{2000}'..='\u{2BFF}').contains(&c);
+    symbol || caption_char_covered(c) || INTER.get_or_init(|| wordcraft_fonts::FontDb::global().face("Inter", "Regular")).covers(c)
+}
+
 /// Document faces needed to draw `text` (the input method's composition, or a file name in the
 /// window caption), one for each character the interface fonts cannot draw, skipping faces in
 /// `have` (#565). Characters of the embedded interface fonts are not looked up; very large faces
 /// (system CJK collections) are left to the CJK fallback.
+/// Sans-serif interface faces the interface borrows first for right-to-left letters its own
+/// faces lack. The document fonts' fallback puts book faces first for Hebrew (David, Miriam, #1052),
+/// which suit a page but not menus and the ribbon; other scripts keep the document fallback.
+const INTERFACE_RTL_FACES: &[&str] = &["Segoe UI", "Noto Sans Hebrew", "Noto Sans Arabic", "Arial", "Tahoma", "DejaVu Sans"];
+
+/// The face the interface borrows for `c` ([`faces_for_preedit`]'s lookup): an installed
+/// sans-serif interface face for a right-to-left letter, else the document fonts' fallback.
+pub fn interface_fallback(c: char) -> Option<Arc<wordcraft_fonts::FontFace>> {
+    let db = wordcraft_fonts::FontDb::global();
+    let rtl = wordcraft_fonts::is_rtl(c);
+    rtl.then(|| INTERFACE_RTL_FACES.iter().filter(|f| db.has_family(f)).map(|f| db.face(f, "Regular")).find(|face| face.covers(c)))
+        .flatten()
+        .or_else(|| db.fallback_for(c, u32::MAX))
+}
+
 pub fn faces_for_preedit(
     text: &str,
     have: &[Arc<wordcraft_fonts::FontFace>],
@@ -958,6 +983,21 @@ mod tests {
     /// which uses the semibold face. egui paints a missing glyph as `?`, so the caption borrows
     /// one document fallback face. CJK stays with the CJK UI font: those files are too large to
     /// add here.
+    /// Menus and the ribbon borrow a sans-serif interface face for Hebrew letters, not the
+    /// document fallback's book face (David on Windows, #1052); other scripts keep that fallback.
+    #[test]
+    fn the_interface_borrows_a_sans_serif_face_for_hebrew() {
+        let db = wordcraft_fonts::FontDb::global();
+        let Some(want) = super::INTERFACE_RTL_FACES.iter().find(|f| db.has_family(f) && db.face(f, "Regular").covers('ש')) else {
+            eprintln!("no interface face with Hebrew letters installed: skipped");
+            return;
+        };
+        let face = super::interface_fallback('ש').expect("a face with Hebrew letters");
+        assert!(face.family.eq_ignore_ascii_case(want), "{} instead of {want}", face.family);
+        let thai = |f: Option<std::sync::Arc<wordcraft_fonts::FontFace>>| f.map(|f| f.family.clone());
+        assert_eq!(thai(super::interface_fallback('ก')), thai(db.fallback_for('ก', u32::MAX)));
+    }
+
     #[test]
     fn caption_borrows_one_fallback_face_for_hebrew() {
         let face = wordcraft_fonts::FontDb::global().face("Source Sans 3", "Regular");

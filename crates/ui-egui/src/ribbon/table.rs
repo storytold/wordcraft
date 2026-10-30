@@ -292,6 +292,12 @@ pub(super) fn table_layout(app: &mut WordApp, ui: &mut Ui) {
                 [("centerLeft", "Align Center Left"), ("center", "Align Center"), ("centerRight", "Align Center Right")],
                 [("bottomLeft", "Align Bottom Left"), ("bottomCenter", "Align Bottom Center"), ("bottomRight", "Align Bottom Right")],
             ] {
+                // The grid is a map of the cell: in a mirrored interface its right column stays
+                // the one that aligns right.
+                let mut row = row;
+                if crate::widgets::mirrored() {
+                    row.reverse();
+                }
                 for (v, tip) in row {
                     small(ui, app, "cellAlign", None, tip, crate::widgets::ButtonAction::new("table.cellAlign", json!({"value": v}), false));
                 }

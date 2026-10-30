@@ -179,6 +179,9 @@ impl WordApp {
             fonts_system_cjk: _,
             want_system_cjk: _,
             recent_fonts_for: _,
+            fonts_lang: _,
+            want_language_name_fonts: _,
+            fonts_language_names: _,
             // File › Recover lists the copies of every window's documents.
             recover_fonts_for: _,
             fonts_frames: _,

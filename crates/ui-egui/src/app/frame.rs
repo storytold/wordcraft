@@ -1,9 +1,10 @@
 #[cfg(not(target_arch = "wasm32"))]
 use super::file_browser;
 use super::{
-    WordApp, backstage, canvas, chrome, colors, content_controls, dialogs, documents, keys, now_ms, panes, read_aloud, ribbon, theme, updates_ui,
-    zotero,
+    WordApp, backstage, canvas, chrome, colors, content_controls, dialogs, documents, i18n, keys, now_ms, panes, read_aloud, ribbon, theme,
+    updates_ui, zotero,
 };
+use crate::mirror;
 
 impl WordApp {
     pub fn status(&mut self, s: impl Into<String>) {
@@ -36,6 +37,7 @@ impl WordApp {
     pub(super) fn paint_window(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, t: theme::Tokens) {
         let window = self.windows.shown();
         let moved = |app: &WordApp| app.windows.shown() != window;
+        self.canvas.view_rect = None;
         if self.ui.backstage {
             backstage::show(self, ui);
         } else if !self.has_document() {
@@ -80,6 +82,29 @@ impl WordApp {
     pub(super) fn show_overlays(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let window = self.windows.shown();
         let moved = |app: &WordApp| app.windows.shown() != window;
+        // A right-to-left interface is mirrored as it is painted, each window on its own; the page
+        // and the popups placed from it move without flipping.
+        // The context menu opens from a point; the selection bar (centred on the selection), the
+        // content control's list (under its field) and the ink replay bar (centred on the page)
+        // stay where they are.
+        let anchored: Vec<(egui::Id, mirror::Anchor)> = self
+            .canvas
+            .context_menu_id
+            .map(|id| (id, mirror::Anchor::Edge))
+            .into_iter()
+            .chain(
+                [
+                    ("wc_mini_toolbar", mirror::Anchor::InPlace),
+                    ("content_control_popup", mirror::Anchor::InPlace),
+                    ("ink_replay_bar", mirror::Anchor::InPlace),
+                ]
+                .map(|(name, anchor)| (egui::Id::unique(name), anchor)),
+            )
+            .collect();
+        // Floating comment cards are painted over the page, outside any area egui sizes.
+        let overlays: Vec<egui::Rect> =
+            if self.canvas.balloons_float { self.canvas.balloon_rects.iter().map(|(_, r)| *r).collect() } else { Vec::new() };
+        mirror::configure(ctx, i18n::current().rtl(), self.canvas.view_rect, &anchored, &overlays);
         content_controls::popup(self, ctx);
         dialogs::show(self, ctx);
         if moved(self) {

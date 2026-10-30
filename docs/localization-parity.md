@@ -22,7 +22,7 @@ native-speaker review (human).
 ## What WordCraft ships (measured)
 
 - **27 interface languages**: English plus `zh-hans`, `zh-hant`, `ja`, Korean `ko` (#1216), `uk`, `es`, `pt-br`,
-  Serbian `sr`/`sr-latn` (#250), Estonian `et`, Turkish `tr`, Russian `ru`, Italian `it` (#594), German `de` (#574), Polish `pl`, Czech `cs`, Hungarian `hu`, French `fr`, Bulgarian `bg`, Vietnamese `vi` (#1434), Swedish `sv` (#1219), Croatian `hr` (#1271), Romanian `ro`, Slovenian `sl`, Dutch `nl` and Danish `da` (#2722). Catalogs have 2,061–2,674 entries
+  Serbian `sr`/`sr-latn` (#250), Estonian `et`, Turkish `tr`, Russian `ru`, Italian `it` (#594), German `de` (#574), Polish `pl`, Czech `cs`, Hungarian `hu`, French `fr`, Bulgarian `bg`, Vietnamese `vi` (#1434), Swedish `sv` (#1219), Croatian `hr` (#1271), Romanian `ro`, Slovenian `sl`, Dutch `nl` and Danish `da` (#2722); Hebrew `he`, with a mirrored right-to-left interface. Catalogs have 2,061–2,674 entries
   each; Polish has every key of every other catalog, including the built-in style names and the equation gallery, except the citation style names only Hungarian, Bulgarian, Swedish, Romanian and Slovenian translate so far. A missing translation falls back to English and never fails a test or
   build. `cargo xtask i18n-report`, part of `cargo xtask ci`, prints per language the interface
   strings its catalog lacks: everything the interface audit saw looked up, the ribbon tabs, command
@@ -86,6 +86,19 @@ Turkish works the same way (`tr-TR` and `tr-CY` system locales, `{"value":"tr"}`
 entries, the same keys as the Russian catalog. Command search folds the Turkish dotted and dotless I (`italik` finds İtalik, `YAZI TİPİ`
 finds Yazı Tipi) while English labels and ASCII command ids keep their usual matching. Turkish
 proofing is not included; terminology and checks: [`localization-tr.md`](localization-tr.md).
+Hebrew (`he-IL` system locales, `{"value":"he"}`) is offered from craft-i18n's catalog
+(`locales/he/`, in the pinned commit). The embedded interface faces have no Hebrew letters, so a Hebrew interface (and
+the Options language list) borrows an installed sans-serif face that has them, as a Hebrew file
+name in the caption does. The egui fork lays interface text out right to left itself, so the
+catalog stays in logical order like every other. The interface is mirrored as it is painted
+(`mirror.rs`, an egui plugin): every shape of the frame flips about the window's centre and the
+pointer flips back, so the ribbon, menus, dialogs, panes and status bar run right to left; text
+moves as a block and keeps its glyphs, and icon letters keep their order (`x²`). The document
+canvas moves without flipping, the text field being edited moves with its text, caret and
+selection together. The context menu opens leftwards from its point; the selection bar, a content
+control's list and the ink replay bar stay over the page, moved with it; and floating comments
+flip with the interface, the pointer with them. Each window
+is mirrored on its own. Hebrew proofing is not included.
 Bulgarian (`bg-BG` system locales, `{"value":"bg"}`) has 2,419 entries: every key of the reference
 catalog, the equation gallery's labels and everything the interface audit finds. Counts use count-neutral wording (`Думи: 21`). Bulgarian text is
 hyphenated by the Bulgarian syllable rules (#826); Bulgarian spelling and grammar are not included.
@@ -253,6 +266,7 @@ WordCraft keeps 2,54 cm).
 | 2026-10-12 | minor | Italian proofing: it-IT spelling from the installed Hunspell dictionary (system `it_IT`, never bundled — upstream is GPL), accent-first suggestions, conservative grammar with Italian messages, TeX Italian hyphenation patterns (MIT option); Review › Language already offered Italian; an `it` interface writes it-IT documents |
 | 2026-10-13 | minor | Interface audit back in CI (#1128): Envelopes, Labels and Layout › Size labels go through translated patterns with the region's decimal separator (the old fixed-format paper rows, dead since #838, removed); 20 strings added to all 18 catalogs (status-bar messages, Reading Mode toolbar, Go To, Search's Suggested); citation style names and `bad parameters:` errors exempt; the Read Aloud player no longer draws a speech error before the frame has polled it, the audit's rare failure under load |
 | 2026-10-12 | minor | Russian proofing: spelling against an installed `ru_RU` Hunspell dictionary (also KOI8-R and Windows-1251), suggestions, grammar rules with Russian messages and Russian word division |
+| 2026-10-26 | minor | Hebrew interface (`he`, catalog in craft-i18n): `he-IL` locale selection, saved preference; an installed face draws Hebrew labels; mirrored right-to-left interface per window on the egui fork's bidi layout |
 | 2026-10-11 | minor | Turkish interface catalog completed (2,325 entries, the same keys as Russian): equation gallery, built-in style names, watermarks, paper sizes and preview tiles; the interface audit checks Turkish too (#774) |
 | 2026-10-12 | trivial | Region conventions: File › Options › Advanced › Region (saved) and an Automatic units entry; Unix `LC_PAPER`/`LC_MEASUREMENT`/`LC_NUMERIC` each decide their own convention; the web reads the browser's locale; `WORDCRAFT_NO_PREFS` runs stay en-US; where the decimal separator comes from (#838 review) |
 | 2026-10-12 | minor | New blank documents follow the system region: A4 outside the Letter territories, centimetres outside the US, the region's decimal separator in length fields; explicit Measurement units choice wins (#838) |

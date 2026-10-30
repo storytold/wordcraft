@@ -1159,3 +1159,64 @@ fn the_flatpak_manifest_pins_the_craft_i18n_rev() {
     assert_eq!(commit.trim().trim_matches(['\'', '"']), rev);
     assert!(manifest.contains("CRAFT_I18N_DIR: /run/build/wordcraft/craft-i18n"), "the build embeds the catalogs");
 }
+
+/// Hebrew, from the pinned catalogs: its locales and the saved setting pick it, and it is the one
+/// language written right to left.
+#[test]
+fn hebrew_locales_and_saved_preference_work_without_changing_the_document() {
+    needs_catalogs!();
+    let he = Lang::from_code("he").expect("the catalogs craft-i18n.rev pins have Hebrew");
+    for tag in ["he", "he-IL", "he_IL.UTF-8", "HE-il", "he-Hebr-IL"] {
+        assert_eq!(lang_from_tag(tag), Some(he), "{tag}");
+    }
+    assert_eq!(first_supported([UNSUPPORTED, "he-IL", "en-US"]), Some(he));
+    let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    let before = serde_json::to_value(&app.session.doc).unwrap();
+    let result = app.run("ui.language", serde_json::json!({"value": "HE"})).unwrap();
+    assert_eq!(result["effective"], "he");
+    assert_eq!(app.ui.language, "he");
+    assert!(result["available"].as_array().unwrap().iter().any(|l| l["code"] == "he" && l["name"] == "עברית"));
+    assert_eq!(serde_json::to_value(&app.session.doc).unwrap(), before);
+    let saved = serde_json::to_string(&app.ui).unwrap();
+    let restored: crate::UiState = serde_json::from_str(&saved).unwrap();
+    assert_eq!(Lang::from_pref(&restored.language), he);
+    assert!(he.rtl());
+    assert!(!he.uses_cjk());
+    assert!(Lang::all().filter(|l| l.code() != "he").all(|l| !l.rtl()), "only Hebrew is mirrored");
+}
+
+/// The embedded interface faces have no Hebrew letters: a Hebrew interface borrows an installed
+/// face that has them, as a Hebrew file name in the caption does, instead of drawing boxes.
+#[test]
+fn a_hebrew_interface_borrows_a_face_for_its_letters() {
+    let letter = 'ק';
+    assert!(!crate::theme::interface_char_covered(letter), "Inter has no Hebrew");
+    assert!(crate::theme::interface_char_covered('Ж'), "Inter draws Cyrillic itself");
+    needs_catalogs!();
+    let lookup = |c| wordcraft_fonts::FontDb::global().fallback_for(c, u32::MAX);
+    for other in Lang::all().filter(|l| !l.uses_cjk() && l.code() != "he") {
+        for text in other.catalog_texts() {
+            let faces = crate::theme::faces_for_preedit(text, &[], crate::theme::interface_char_covered, lookup);
+            assert!(faces.is_empty(), "{} is drawn by the embedded faces", other.code());
+        }
+    }
+    if Lang::from_code("he").is_none() {
+        eprintln!("skipped: no Hebrew catalog embedded");
+        return;
+    }
+    let ctx = egui::Context::default();
+    let frame = |app: &mut crate::WordApp| {
+        ctx.run_ui(egui::RawInput::default(), |ui| app.logic(ui.ctx())).drop_without_applying_deltas();
+    };
+    let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    frame(&mut app);
+    app.run("ui.language", serde_json::json!({"value": "he"})).unwrap();
+    frame(&mut app);
+    if wordcraft_fonts::FontDb::global().fallback_for(letter, u32::MAX).is_some_and(|f| f.data().len() <= 16 << 20) {
+        assert!(app.canvas.ime_faces.iter().any(|f| f.covers(letter)), "the interface borrows a face with Hebrew letters");
+    }
+    let n = app.canvas.ime_faces.len();
+    frame(&mut app);
+    assert_eq!(app.canvas.ime_faces.len(), n, "the face is added once");
+    set_current(Lang::EN);
+}

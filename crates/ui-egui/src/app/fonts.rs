@@ -10,6 +10,9 @@ impl WordApp {
             return;
         }
         self.font_generation = generation;
+        // A face added since may have the interface language's letters: look for them again.
+        self.fonts_lang = None;
+        self.fonts_language_names = false;
         self.session.relayout();
         self.previews.fonts_changed(ctx, db.user_fonts().iter().flat_map(|f| f.families()));
         ctx.request_repaint();
@@ -24,9 +27,7 @@ impl WordApp {
         if stem.chars().any(wordcraft_fonts::is_cjk) {
             self.want_system_cjk = true;
         }
-        let new = theme::faces_for_preedit(&stem, &self.canvas.ime_faces, theme::caption_char_covered, |c| {
-            wordcraft_fonts::FontDb::global().fallback_for(c, u32::MAX)
-        });
+        let new = theme::faces_for_preedit(&stem, &self.canvas.ime_faces, theme::caption_char_covered, theme::interface_fallback);
         if !new.is_empty() {
             self.canvas.ime_faces.extend(new);
             // Fonts are already installed for this frame's language; load the new faces too.
@@ -54,9 +55,30 @@ impl WordApp {
             self.want_system_cjk = true;
         }
         let text: String = chars.into_iter().collect();
-        let new = theme::faces_for_preedit(&text, &self.canvas.ime_faces, theme::caption_char_covered, |c| {
-            wordcraft_fonts::FontDb::global().fallback_for(c, u32::MAX)
-        });
+        let new = theme::faces_for_preedit(&text, &self.canvas.ime_faces, theme::caption_char_covered, theme::interface_fallback);
+        if !new.is_empty() {
+            self.canvas.ime_faces.extend(new);
+            self.styled = false;
+        }
+    }
+
+    /// An interface language in a script the interface faces lack (Hebrew) would draw as boxes.
+    /// Borrow the document fonts' fallback faces for its catalog, as the caption does for a file
+    /// name, once per language; and for the language names when File ▸ Options lists them.
+    pub(super) fn ensure_language_fonts(&mut self, lang: i18n::Lang) {
+        let mut text = String::new();
+        if self.fonts_lang != Some(lang.code()) {
+            self.fonts_lang = Some(lang.code());
+            text.extend(lang.catalog_texts());
+        }
+        if self.want_language_name_fonts && !self.fonts_language_names {
+            self.fonts_language_names = true;
+            text.extend(i18n::Lang::all().map(i18n::Lang::name));
+        }
+        if text.is_empty() {
+            return;
+        }
+        let new = theme::faces_for_preedit(&text, &self.canvas.ime_faces, theme::interface_char_covered, theme::interface_fallback);
         if !new.is_empty() {
             self.canvas.ime_faces.extend(new);
             self.styled = false;

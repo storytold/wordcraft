@@ -6,8 +6,8 @@ use super::*;
 fn font_menu_entries_leave_installed_families_unloaded() {
     let db = wordcraft_fonts::FontDb::global();
     let ink = |img: &egui::ColorImage| img.pixels.iter().filter(|p| p.r() < 128).count();
-    assert!(ink(&font_entry_image("Source Sans 3", 1.0)) > 20, "the bundled face draws");
-    assert!(ink(&font_entry_image("No Such Font 848", 1.0)) > 20, "an unknown font shows in the default face");
+    assert!(ink(&font_entry_image("Source Sans 3", None, 1.0)) > 20, "the bundled face draws");
+    assert!(ink(&font_entry_image("No Such Font 848", None, 1.0)) > 20, "an unknown font shows in the default face");
     // Tests running alongside share this database and may load a fallback (a math font for
     // an equation, a font for a script) at any time: leave the math fonts out, and allow a
     // stray load or two. Before #848 every family previewed was loaded.
@@ -15,13 +15,40 @@ fn font_menu_entries_leave_installed_families_unloaded() {
     let unloaded: Vec<String> = db.families().into_iter().filter(|f| !db.is_loaded(f) && !shared(f)).take(25).collect();
     let mut loaded = Vec::new();
     for f in &unloaded {
-        let img = font_entry_image(f, 1.0);
+        let img = font_entry_image(f, None, 1.0);
         assert_eq!(img.size, [244, 22]);
         if db.is_loaded(f) {
             loaded.push(f.clone());
         }
     }
     assert!(loaded.len() <= 2, "previewing loaded {loaded:?}");
+}
+
+/// In the Hebrew interface a font with Hebrew letters shows a Hebrew sample beside its name,
+/// as Word does: the name at the left, the sample at the right. A font without them, or no
+/// sample, keeps the plain entry.
+#[test]
+fn font_entries_show_a_hebrew_sample_for_hebrew_fonts() {
+    let sample = crate::i18n::fixture_lang("he", "\tFile\tקובץ\n").font_sample();
+    assert!(sample.is_some());
+    let db = wordcraft_fonts::FontDb::global();
+    let hebrew = |f: &str| db.preview_face(f).is_some_and(|x| ['א', 'ש', 'A', 'a'].iter().all(|&c| x.covers(c)));
+    let Some(fam) = ["Arial", "Noto Sans Hebrew", "DejaVu Sans", "Heebo"].into_iter().find(|f| hebrew(f)) else {
+        eprintln!("no Hebrew font installed: skipped");
+        return;
+    };
+    // Ink in columns [a, b) points of a 1-pixel-per-point entry.
+    let ink = |img: &egui::ColorImage, a: usize, b: usize| {
+        (0..img.size[1]).flat_map(|y| (a..b).map(move |x| (x, y))).filter(|&(x, y)| img.pixels[y * img.size[0] + x].r() < 128).count()
+    };
+    let plain = font_entry_image(fam, None, 1.0);
+    assert_eq!(ink(&plain, 180, 244), 0, "{fam}: a short name ends well before the far end");
+    let with = font_entry_image(fam, sample, 1.0);
+    assert_eq!(with.size, [244, 22]);
+    assert!(ink(&with, 180, 244) > 20, "{fam}: the sample at the right");
+    assert!(ink(&with, 0, 30) > 20, "{fam}: the name at the left");
+    let no_hebrew = font_entry_image("Source Sans 3", sample, 1.0);
+    assert_eq!(no_hebrew.pixels, font_entry_image("Source Sans 3", None, 1.0).pixels, "no Hebrew letters, no sample");
 }
 
 /// A window whose Styles gallery lists `style` first: runs the gallery for a few frames and
@@ -380,4 +407,27 @@ fn font_menu_entries_take_the_theme_text_colour() {
         }
         assert_eq!(images, 1, "{theme:?}: the entry draws its rendered name");
     }
+}
+
+/// A font added again redraws its entries in every language's sample, not only the current
+/// language's: switching back to Hebrew after reinstalling a font in English doesn't show the
+/// entry drawn before the font was removed.
+#[test]
+fn a_changed_font_redraws_its_entries_in_every_language() {
+    let Some(sample) = crate::i18n::Lang::all().find_map(|l| l.font_sample()) else {
+        eprintln!("skipped: no language with a font sample embedded");
+        return;
+    };
+    let ctx = egui::Context::default();
+    let mut previews = Previews::default();
+    let keys = [entry_key("Reinstalled", None), entry_key("Reinstalled", Some(sample)), entry_key("Untouched", Some(sample))];
+    for key in &keys {
+        let tex = ctx.load_texture(key, egui::ColorImage::filled([1, 1], egui::Color32::WHITE), egui::TextureOptions::LINEAR);
+        ctx.data_mut(|d| d.insert_temp(egui::Id::unique(key), tex));
+    }
+    previews.fonts_changed(&ctx, ["Reinstalled".to_string()].into_iter());
+    let cached = |key: &String| ctx.data(|d| d.get_temp::<TextureHandle>(egui::Id::unique(key))).is_some();
+    assert!(!cached(&keys[0]), "the plain entry is redrawn");
+    assert!(!cached(&keys[1]), "the entry with another language's sample is redrawn too");
+    assert!(cached(&keys[2]), "another family's entry is kept");
 }

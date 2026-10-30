@@ -116,6 +116,9 @@ impl WordApp {
             want_system_cjk: false,
             recover_fonts_for: None,
             recent_fonts_for: Vec::new(),
+            fonts_lang: None,
+            want_language_name_fonts: false,
+            fonts_language_names: false,
             fonts_frames: 0,
             applied_theme: None,
             native_scale: 1.0,
@@ -241,6 +244,7 @@ impl WordApp {
         // in this frame (dialog, drop, control channel) is picked up again at the end.
         self.ensure_caption_fonts();
         self.ensure_comment_fonts();
+        self.ensure_language_fonts(lang);
         self.ensure_recover_fonts();
         self.ensure_recent_fonts();
         self.ensure_find_fonts();
@@ -345,6 +349,7 @@ impl WordApp {
         // The open above may have changed the file name the caption draws.
         self.ensure_caption_fonts();
         self.ensure_comment_fonts();
+        self.ensure_language_fonts(lang);
         self.ensure_recover_fonts();
         self.ensure_recent_fonts();
         self.ensure_find_fonts();

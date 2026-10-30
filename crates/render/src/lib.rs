@@ -401,7 +401,7 @@ pub fn render_text_line(face: &wordcraft_fonts::FontFace, text: &str, size: f32,
     let baseline = (h as f64 + cap * k) / 2.0;
     let mut x = margin;
     let colour = face.has_color_glyphs();
-    for g in wordcraft_fonts::shape(face, text, &[], |c| c) {
+    for g in wordcraft_fonts::shape_visual(face, text, &[], |c| c) {
         let at = view * Affine::translate((x + g.x_offset as f64 * k, baseline - g.y_offset as f64 * k)) * Affine::scale(k);
         if colour && let Some(d) = color_glyph::drawable(face, g.gid, size * scale as f64, false) {
             color_glyph::draw(&mut ctx, &d, at, upem, color(Rgb(0, 0, 0), 1.0), 1.0);
@@ -422,6 +422,13 @@ pub fn render_text_line(face: &wordcraft_fonts::FontFace, text: &str, size: f32,
         ctx.render(pm, &mut res);
     }
     Rendered { width: w16 as u32, height: h16 as u32, pixels }
+}
+
+/// How wide [`render_text_line`] draws `text` in `face` at `size` points, in points.
+pub fn text_line_width(face: &wordcraft_fonts::FontFace, text: &str, size: f32) -> f32 {
+    let upem = if face.upem.is_finite() && face.upem > 0.0 { face.upem } else { 1000.0 };
+    let units: f64 = wordcraft_fonts::shape_visual(face, text, &[], |c| c).iter().map(|g| f64::from(g.x_advance)).sum();
+    (units * f64::from(size) / upem) as f32
 }
 
 fn draw_watermark(ctx: &mut RenderContext, view: Affine, page: &Page, wm: &wordcraft_doc::Watermark, opts: &RenderOptions) {

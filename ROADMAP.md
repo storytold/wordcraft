@@ -122,6 +122,8 @@ Also shipped: Traditional Chinese (`zh-hant`), Ukrainian (`uk`), Serbian (`sr`, 
 system-locale selection and a saved language choice (Italian also has 51 strings none of the others had yet); Estonian proofing is not included. Hungarian (`hu`) has a
 complete 2,419-entry catalog, also without proofing. Vietnamese (`vi`, #1434) has a complete
 2,448-entry catalog, also without proofing. Croatian (`hr`, #1271) has a complete catalog.
+Hebrew (`he`) has a mirrored right-to-left interface from craft-i18n's catalog; Hebrew proofing is
+not included.
 Proofing: English, Polish, Portuguese, Italian, Croatian, Turkish and Russian (spelling, grammar; hyphenation except Croatian), plus Czech, Indonesian and Spanish (system Hunspell spelling, generic checks; Spanish per variety: Spain, Mexico, Latin America, Uruguay), chosen per run from its language; Bulgarian and German hyphenation only. Word ships
 30 interface languages and proofing for ~50. Detail: [docs/localization-parity.md](docs/localization-parity.md).
 
@@ -604,6 +606,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 | 2026-10-11 | Word's common keyboard shortcuts (#330): 101 → 125 of ~250 |
 | 2026-10-15 | Slovenian (`sl`) interface: 2,614 catalog entries (every key of every other catalog, including native print settings), `sl-SI` system locales and a saved language choice; locale, catalog and bundled-font tests; no Slovenian proofing resources |
 | 2026-10-13 | Swedish (`sv`) interface: 2,504 catalog entries (every key of the reference catalog, the equation gallery, everything the interface audit finds, and 44 newer strings no catalog had yet, among them the native print settings), `sv-SE`/`sv-FI` system locales and a saved language choice; locale, catalog and bundled-font tests; AI-assisted, terminology and the running app reviewed by a native speaker; no Swedish proofing resources |
+| 2026-10-26 | Hebrew (`he`) interface: `he-IL` system locales and a saved language choice once craft-i18n has the catalog; Hebrew labels borrow an installed sans-serif face (the embedded interface fonts have none); the whole interface is mirrored as it is painted (ribbon, menus, dialogs, panes), each window on its own, the document canvas excepted; text keeps the egui fork's right-to-left layout; no Hebrew proofing resources |
 | 2026-10-12 | Bulgarian (`bg`) interface: 2,419 catalog entries (every key of the reference catalog, the equation gallery and everything the interface audit finds), `bg-BG` system locales and a saved language choice; locale, catalog and bundled-font tests; no Bulgarian proofing resources |
 | 2026-10-13 | Croatian (`hr`) interface: 2,507 catalog entries (every key of the reference catalog, built-in style names and the equation gallery), `hr-*` system locales and a saved language choice; locale, catalog and bundled-font tests; no Croatian proofing yet |
 | 2026-10-11 | Hungarian (`hu`) interface: all 2,419 catalog entries, built-in style names translated, `hu-HU` system locales and a saved language choice; locale, catalog and bundled-font tests; no Hungarian proofing resources |
@@ -967,6 +970,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-11 | trivial | Word's common keyboard shortcuts (#330): 125 of ~250 |
 | 2026-10-11 | trivial | Collapsed duplicate rows left by parallel merges |
 | 2026-10-13 | trivial | Swedish interface (`sv`): progress log and shipped languages |
+| 2026-10-19 | trivial | Hebrew interface (`he`): progress log and shipped languages |
 | 2026-10-12 | trivial | Bulgarian interface (`bg`): progress log and shipped languages |
 | 2026-10-13 | trivial | Croatian interface (`hr`): progress log and shipped languages |
 | 2026-10-11 | trivial | Hungarian interface (`hu`): progress log and shipped languages |

@@ -15,18 +15,27 @@ fn err(e: impl std::fmt::Display) -> Outcome {
 }
 
 pub fn inspect(app: &mut WordApp, ctx: &egui::Context) -> Value {
-    let r = ctx.input_for(app.active_viewport(), |i| i.content_rect());
-    let caret = crate::canvas::caret_screen(app).map(|(p, h)| json!({"x": p.x, "y": p.y, "h": h}));
+    let viewport = app.active_viewport();
+    let r = ctx.input_for(viewport, |i| i.content_rect());
+    // Where they are drawn (a right-to-left interface draws the page moved): what ui.click takes.
+    let drawn = |r: egui::Rect| crate::mirror::page_to_window(ctx, viewport, r);
+    // Balloons in the margin move with the page; floating comments flip with the interface.
+    let float = app.canvas.balloons_float;
+    let balloon = |r: egui::Rect| if float { crate::mirror::interface_to_window(ctx, viewport, r) } else { drawn(r) };
+    let caret = crate::canvas::caret_screen(app).map(|(p, h)| {
+        let p = drawn(egui::Rect::from_min_size(p, egui::Vec2::ZERO)).min;
+        json!({"x": p.x, "y": p.y, "h": h})
+    });
     json!({
         "ui": app.prefs(),
         "view": app.session.view,
         "dialog": app.dialog.as_ref().map(|d| serde_json::to_value(d).unwrap_or_default()),
         "window": [r.width(), r.height()],
-        "canvasRect": app.canvas.canvas_rect.map(|c| [c.left(), c.top(), c.width(), c.height()]),
-        "pages": app.canvas.page_rects.iter().map(|r| [r.left(), r.top(), r.width(), r.height()]).collect::<Vec<_>>(),
+        "canvasRect": app.canvas.canvas_rect.map(drawn).map(|c| [c.left(), c.top(), c.width(), c.height()]),
+        "pages": app.canvas.page_rects.iter().map(|r| drawn(*r)).map(|r| [r.left(), r.top(), r.width(), r.height()]).collect::<Vec<_>>(),
         "scale": app.canvas.scale,
         "caret": caret,
-        "balloons": app.canvas.balloon_rects.iter().map(|(id, r)| json!({"id": id, "rect": [r.left(), r.top(), r.width(), r.height()]})).collect::<Vec<_>>(),
+        "balloons": app.canvas.balloon_rects.iter().map(|(id, r)| (id, balloon(*r))).map(|(id, r)| json!({"id": id, "rect": [r.left(), r.top(), r.width(), r.height()]})).collect::<Vec<_>>(),
         "balloon": app.canvas.balloon,
         "focused": app.canvas.focused,
         "title": app.title_stem(),
@@ -233,6 +242,8 @@ pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> O
             let page = p.get("page").and_then(Value::as_u64).unwrap_or(0) as usize;
             let (Some(x), Some(y)) = (f("x"), f("y")) else { return err("missing x/y") };
             let Some(pos) = crate::canvas::page_to_screen(app, page, x, y) else { return err("page not on screen") };
+            // Clicked where it is drawn, like ui.click: the mirror maps it back once.
+            let pos = crate::mirror::page_to_window(ctx, app.active_viewport(), egui::Rect::from_min_size(pos, egui::Vec2::ZERO)).min;
             let count = p.get("count").and_then(Value::as_u64).unwrap_or(1);
             click_events(app, pos, egui::PointerButton::Primary, count, mods(p));
             ok(json!({"screen": [pos.x, pos.y]}))

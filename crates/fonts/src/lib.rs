@@ -185,6 +185,35 @@ pub fn shape(face: &FontFace, text: &str, features: &[Feature], map: impl Fn(cha
     out
 }
 
+/// [`shape`] in visual order for a one-line, left-to-right label drawn without the line layout
+/// (a font list entry): direction runs left to right, a right-to-left run's glyphs in the order
+/// they're drawn, so a Hebrew name doesn't come out backwards. The runs are the Unicode bidi
+/// algorithm's for a left-to-right line, so numbers in a Hebrew name keep their digits in order.
+pub fn shape_visual(face: &FontFace, text: &str, features: &[Feature], map: impl Fn(char) -> char) -> Vec<ShapedGlyph> {
+    let mut out = Vec::with_capacity(text.len());
+    let info = unicode_bidi::BidiInfo::new(text, Some(unicode_bidi::Level::ltr()));
+    for para in &info.paragraphs {
+        let (levels, runs) = info.visual_runs(para, para.range.clone());
+        for r in runs {
+            let Some(sub) = text.get(r.clone()) else { continue };
+            let rtl = levels[r.start].is_rtl();
+            let mut g = shape_dir(face, sub, features, &map, rtl);
+            for x in &mut g {
+                x.cluster += r.start;
+            }
+            if rtl {
+                // Drawn last character first: each script run comes back that way from the
+                // shaper, but the runs themselves (a Hebrew word, then an Arabic one) in text order.
+                let mut groups = cluster_groups(g);
+                groups.sort_by_key(|grp| std::cmp::Reverse(grp.first().map_or(0, |f| f.cluster)));
+                g = groups.into_iter().flatten().collect();
+            }
+            out.extend(g);
+        }
+    }
+    out
+}
+
 /// Shape `text` as one run in a known direction (the caller ran the bidi algorithm: `rtl` is an
 /// odd embedding level). Right-to-left runs get Arabic joining, mirrored brackets and right-to-left
 /// mark positioning. Glyphs come back in logical order like [`shape`]: clusters in text order,
@@ -195,6 +224,13 @@ pub fn shape_run(face: &FontFace, text: &str, features: &[Feature], map: impl Fn
         return g;
     }
     // Visual (clusters descending) → logical, cluster by cluster.
+    let mut groups = cluster_groups(g);
+    groups.sort_by_key(|grp| grp.first().map_or(0, |f| f.cluster));
+    groups.into_iter().flatten().collect()
+}
+
+/// `g` split into its clusters, each cluster's glyphs kept in the shaper's order.
+fn cluster_groups(g: Vec<ShapedGlyph>) -> Vec<Vec<ShapedGlyph>> {
     let mut groups: Vec<Vec<ShapedGlyph>> = Vec::new();
     for x in g {
         match groups.last_mut() {
@@ -202,8 +238,7 @@ pub fn shape_run(face: &FontFace, text: &str, features: &[Feature], map: impl Fn
             _ => groups.push(vec![x]),
         }
     }
-    groups.sort_by_key(|grp| grp.first().map_or(0, |f| f.cluster));
-    groups.into_iter().flatten().collect()
+    groups
 }
 
 fn shape_dir(face: &FontFace, text: &str, features: &[Feature], map: &impl Fn(char) -> char, rtl: bool) -> Vec<ShapedGlyph> {
@@ -346,6 +381,21 @@ mod tests {
         for s in ["Regular", "Italic", "Bold", "Semibold"] {
             assert!(styles.iter().any(|x| x == s), "{s} in {styles:?}");
         }
+    }
+
+    /// A one-line label is drawn in the order `shape_visual` returns: a Hebrew run comes back
+    /// right to left (last letter first), Latin around it left to right.
+    #[test]
+    fn visual_shaping_draws_hebrew_right_to_left() {
+        let face = FontDb::global().face(DEFAULT_FAMILY, "Regular");
+        let clusters = |t: &str| shape_visual(&face, t, &[], |c| c).iter().map(|g| g.cluster).collect::<Vec<_>>();
+        assert_eq!(clusters("Ab"), vec![0, 1]);
+        assert_eq!(clusters("אבג"), vec![4, 2, 0]);
+        assert_eq!(clusters("A אב"), vec![0, 1, 4, 2]);
+        // A number in a Hebrew name keeps its digits in order, at the left of the letters.
+        assert_eq!(clusters("אב 12"), vec![5, 6, 4, 2, 0]);
+        // Hebrew then Arabic, one right-to-left run in two scripts: the Hebrew word at the right.
+        assert_eq!(clusters("אב عرب"), vec![9, 7, 5, 4, 2, 0]);
     }
 
     #[test]

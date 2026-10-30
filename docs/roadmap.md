@@ -62,7 +62,7 @@ partial rows are fidelity gaps (beta work), not broken workflows. WordCraft stay
 | M12 | Formats breadth (PDF, ODT, RTF, HTML, MD, TXT, LaTeX, `.doc` import) | done (first versions); `.doc` write, encryption, minor formats missing | 60–100 h |
 | M13 | Performance budgets | on track (1.4 ms relayout); large real-world documents unmeasured | 10–20 h |
 | M14 | 1.0 polish, packaging, signing | releases v0.1.0–v0.4.0 published (signed macOS, Windows MSI x64/x86/arm64, Linux, FreeBSD, web) | — |
-| M15 | Localization (12 key languages, RTL interface, proofing languages) | 27 UI languages from the shared catalogs pinned by `craft-i18n.rev` (`9205108c…`); proofing: English, Polish, Portuguese, Italian, Croatian, Turkish, Russian, Czech, Indonesian and Spanish, plus Bulgarian and German hyphenation only; native-speaker review and native IME acceptance (#155–#164) remain open | 70–115 h |
+| M15 | Localization (12 key languages, RTL interface, proofing languages) | 28 UI languages from the shared catalogs pinned by `craft-i18n.rev` (`1935849…`), Hebrew with a mirrored right-to-left interface; proofing: English, Polish, Portuguese, Italian, Croatian, Turkish, Russian, Czech, Indonesian and Spanish, plus Bulgarian and German hyphenation only; native-speaker review and native IME acceptance (#155–#164) remain open | 70–115 h |
 | M16 | Right-to-left and East Asian typography | RTL paragraphs done (#207) | 30–45 h |
 
 ## Next after beta

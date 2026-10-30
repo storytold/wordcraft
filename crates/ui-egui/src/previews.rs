@@ -211,13 +211,20 @@ impl Previews {
     }
 
     /// Fonts were added or removed: list the families again and redraw the entries of
-    /// `families` (an entry drawn before its font was added shows the fallback face).
+    /// `families` (an entry drawn before its font was added shows the fallback face), with
+    /// every language's sample: one drawn in another interface language comes back with it.
     pub fn fonts_changed(&mut self, ctx: &egui::Context, families: impl Iterator<Item = String>) {
         self.families = None;
         self.east_asian = None;
+        let mut samples: Vec<Option<&str>> = crate::i18n::Lang::all().map(|l| l.font_sample()).collect();
+        samples.push(None);
+        samples.sort_unstable();
+        samples.dedup();
         ctx.data_mut(|d| {
             for f in families {
-                d.remove::<TextureHandle>(egui::Id::unique(format!("font:{f}")));
+                for &sample in &samples {
+                    d.remove::<TextureHandle>(egui::Id::unique(entry_key(&f, sample)));
+                }
             }
         });
     }
@@ -225,7 +232,8 @@ impl Previews {
     /// A closure drawing a font-menu entry in its own face.
     pub fn font_preview_fn(&mut self) -> Box<dyn Fn(&mut Ui, &str) -> Response> {
         Box::new(|ui: &mut Ui, name: &str| {
-            let key = format!("font:{name}");
+            let lang = crate::i18n::current();
+            let key = entry_key(name, lang.font_sample());
             let tex: Option<TextureHandle> = ui.ctx().data(|d| d.get_temp::<TextureHandle>(egui::Id::unique(&key)));
             let (r, resp) = ui.allocate_exact_size(vec2(260.0, crate::widgets::COMBO_PREVIEW_ROW_H), Sense::click());
             resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), name));
@@ -249,7 +257,7 @@ impl Previews {
                     return None;
                 }
                 let ppp = ui.ctx().pixels_per_point();
-                let mut img = font_entry_image(name, ppp);
+                let mut img = font_entry_image(name, lang.font_sample(), ppp);
                 ink_mask(&mut img);
                 let h = ui.ctx().load_texture(&key, img, egui::TextureOptions::LINEAR);
                 ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique(&key), h.clone()));
@@ -403,14 +411,52 @@ pub fn ink_mask(img: &mut egui::ColorImage) {
 /// and dropped (#848): browsing the list used to load every family shown for good, so each trip
 /// through the Font box grew memory by tens of megabytes. A name the font has no glyphs for (a
 /// symbol font's), or a font that can't be read, shows in the default face.
-pub fn font_entry_image(name: &str, ppp: f32) -> egui::ColorImage {
+///
+/// A font that has the `sample` letters (the interface's script, [`crate::i18n::Lang::font_sample`])
+/// also shows them in its face at the far end of the entry, as Word does, so a Hebrew font looks
+/// like Hebrew and not only like its Latin name: the name at the left, the sample at the right,
+/// in the mirrored interface too.
+pub fn font_entry_image(name: &str, sample: Option<&str>, ppp: f32) -> egui::ColorImage {
+    const W: f32 = 244.0;
+    const SIZE: f32 = 13.0;
     let db = wordcraft_fonts::FontDb::global();
-    let face = db
-        .preview_face(name)
-        .filter(|f| name.chars().filter(|c| !c.is_whitespace()).all(|c| f.covers(c)))
-        .unwrap_or_else(|| db.face(wordcraft_fonts::FALLBACK_FAMILY, "Regular"));
-    let img = wordcraft_render::render_text_line(&face, name, 13.0, 244.0, 22.0, 2.0, ppp);
-    egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &img.to_straight())
+    let covers = |f: &wordcraft_fonts::FontFace, s: &str| s.chars().filter(|c| !c.is_whitespace()).all(|c| f.covers(c));
+    let own = db.preview_face(name);
+    let name_face = own.clone().filter(|f| covers(f, name)).unwrap_or_else(|| db.face(wordcraft_fonts::FALLBACK_FAMILY, "Regular"));
+    let line = |face: &wordcraft_fonts::FontFace, text: &str, w: f32| {
+        let img = wordcraft_render::render_text_line(face, text, SIZE, w, 22.0, 2.0, ppp);
+        egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &img.to_straight())
+    };
+    let Some((sample, face)) = sample.zip(own).filter(|(s, f)| covers(f, s)) else {
+        return line(&name_face, name, W);
+    };
+    let sample_w = wordcraft_render::text_line_width(&face, sample, SIZE) + 4.0;
+    let name_room = (W - sample_w - 12.0).max(1.0);
+    let name_w = (wordcraft_render::text_line_width(&name_face, name, SIZE) + 4.0).min(name_room);
+    let mut img = line(&name_face, "", W);
+    blit(&mut img, &line(&name_face, name, name_w), 0.0, ppp);
+    blit(&mut img, &line(&face, sample, sample_w), W - sample_w, ppp);
+    img
+}
+
+/// The texture id of a font list entry drawn with `sample` ([`font_entry_image`]).
+fn entry_key(name: &str, sample: Option<&str>) -> String {
+    match sample {
+        Some(s) => format!("font:{name}\u{1f}{s}"),
+        None => format!("font:{name}"),
+    }
+}
+
+/// Copy `src` into `dst` `x` points from the left, clipped to `dst`.
+fn blit(dst: &mut egui::ColorImage, src: &egui::ColorImage, x: f32, ppp: f32) {
+    let x0 = (x * ppp).round().max(0.0) as usize;
+    let [dw, dh] = dst.size;
+    let [sw, sh] = src.size;
+    for y in 0..sh.min(dh) {
+        for sx in 0..sw.min(dw.saturating_sub(x0)) {
+            dst.pixels[y * dw + x0 + sx] = src.pixels[y * sw + sx];
+        }
+    }
 }
 
 /// Lay out `para` (with `base`'s styles) in a `w`×`h` pt box and rasterise it.

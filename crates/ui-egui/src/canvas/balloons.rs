@@ -12,6 +12,7 @@ pub(super) fn balloons(app: &mut WordApp, ui: &mut Ui, painter: &egui::Painter, 
     app.canvas.balloon_rects.clear();
     let mw = markup_width(app);
     let float = floating_comments(app);
+    app.canvas.balloons_float = float;
     if app.canvas.balloon.is_some_and(|id| (mw <= 0.0 && !float) || !app.session.doc.comments.contains_key(&id)) {
         deselect_balloon(app);
     }
