@@ -57,7 +57,6 @@ shared items below.
 
 | Language | Code | UI strings translated | Dialogs / tooltips / help | Script support | Native review | Status | Hours to full |
 |---|---|---|---|---|---|---|---|
-| 2026-10-30 | trivial | Right-to-left styles show their sample text in the Home › Styles gallery (#4944): the tile paints the right end of the preview picture, where a right-to-left paragraph is laid out; left-to-right tiles are unchanged; regression test `a_right_to_left_style_previews_its_sample_text`; estimates unchanged |
 | English | en | source (100%) | ✅ | Latin ✅ | yes | **full** | 0 |
 | Simplified Chinese (Mandarin) | zh-hans | 929 entries; 98% of extracted, ~95% of visible | most; newer panes English | CJK ✅, IME ✅; Windows UI font fixed (#248); interface font chain covers every catalog character, installed CJK font after the embedded ones when it doesn't, PingFang found on macOS 12 (#486); font list by Chinese names (宋体, 微软雅黑, #505); no vertical text | no | partial | 3–5 |
 | Spanish | es | ~930; 98% / ~95% | most | Latin ✅ | no | partial | 1–2 |
@@ -228,6 +227,7 @@ WordCraft keeps 2,54 cm).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-30 | trivial | Right-to-left styles show their sample text in the Home › Styles gallery (#4944): the tile paints the right end of the preview picture, where a right-to-left paragraph is laid out; left-to-right tiles are unchanged; regression test `a_right_to_left_style_previews_its_sample_text`; estimates unchanged |
 | 2026-10-28 | trivial | Traditional Chinese interface: an installed Traditional Chinese font (PingFang TC, Microsoft JhengHei, Noto Sans CJK TC; the TC face of a pan-CJK collection) goes before the embedded Noto Sans CJK SC, whose mainland glyph shapes looked wrong to Taiwan readers; native only, wasm unchanged; estimates unchanged |
 | 2026-10-24 | minor | Preserved “Delete Around Caret in Equation” in all 27 shared WordCraft catalogs; the native/release pin and Flatpak source advance together. |
 | 2026-10-23 | minor | Interface catalogs moved to storytold/craft-i18n (`locales/<locale>/wordcraft.tsv`), looked up through craft-libs' `craft-i18n` crate and embedded from the pinned commit (`craft-i18n.rev`); strings other Crafting Apps already translate in the shared catalog now show translated; the "Open" paragraph-spacing preset no longer shows the file verb |
