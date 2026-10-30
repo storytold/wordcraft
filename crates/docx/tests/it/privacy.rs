@@ -23,7 +23,7 @@ fn unzip(bytes: &[u8]) -> BTreeMap<String, String> {
         let mut f = z.by_index(i).unwrap();
         let mut s = String::new();
         if f.read_to_string(&mut s).is_ok() {
-            parts.insert(f.name().to_string(), s);
+            parts.insert(f.name().unwrap().to_string(), s);
         }
     }
     parts
