@@ -326,6 +326,13 @@ impl FontFace {
         use skrifa::raw::TableProvider;
         self.skrifa().is_some_and(|f| f.gsub().is_ok())
     }
+    /// Does the face carry an Apple AAT `morx` (extended glyph metamorphosis) table?
+    /// Thonburi, Sathu and other Apple Thai fonts use `morx` instead of OpenType GSUB for
+    /// contextual shaping (short-tail substitution, mark stacking).  HarfBuzz applies `morx`
+    /// automatically, so these faces render Thai correctly without any GSUB feature.
+    pub fn has_morx(&self) -> bool {
+        self.skrifa().is_some_and(|f| f.table_data(skrifa::raw::types::Tag::new(b"morx")).is_some())
+    }
     /// Does the face's GSUB table contain `feature_tag` under `script_tag`'s default LangSys?
     ///
     /// Used to detect whether a font handles complex-script features natively (e.g. `blws` for
