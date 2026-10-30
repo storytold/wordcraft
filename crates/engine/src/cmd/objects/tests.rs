@@ -993,6 +993,75 @@ fn header_pictures_can_be_resized_and_dragged() {
     assert!((u.rect.x - 200.0).abs() < 1.0 && (u.rect.y - 60.0).abs() < 1.0, "{:?}", u.rect);
 }
 
+/// #1893: `shape.editText` puts the caret in a shape's text (a shape with none gets an empty,
+/// centred one), typing lands there, and it is one undo step. Lines, connectors and pictures
+/// have no text to edit.
+#[test]
+fn edit_text_enters_a_shape_s_text() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("insert.shape", &json!({"kind": "rectangle"})).unwrap();
+    let obj = |s: &Session| selected(s).map(|(_, o)| o);
+    assert!(matches!(obj(&s), Some(InlineObject::Shape { story: None, .. })));
+    s.run("shape.editText", &json!({})).unwrap();
+    let StoryRef::Part(id) = s.sel.focus.story else { panic!("caret not in a part: {:?}", s.sel.focus) };
+    assert_eq!(s.doc.parts.get(&id).map(|p| (p.kind, p.body.anchor)), Some((wordcraft_doc::PartKind::TextBox, VAlign::Center)));
+    s.run("text.insert", &json!({"text": "Hi"})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Part(id)), "Hi");
+    assert_eq!(s.doc.plain_text(StoryRef::Body).trim_matches('\u{FFFC}'), "");
+    // Entering again keeps the text (and adds no second story).
+    s.run("select.range", &json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 3)})).unwrap();
+    s.run("shape.editText", &json!({})).unwrap();
+    assert_eq!(s.sel.focus.story, StoryRef::Part(id));
+    assert_eq!(s.doc.plain_text(StoryRef::Part(id)), "Hi");
+    // Entering text that exists is no edit: no undo step, not marked modified.
+    let (steps, rev) = (s.undo_history().len(), s.rev());
+    s.run("shape.editText", &json!({"pos": Pos::body(0, 0)})).unwrap();
+    assert_eq!((s.undo_history().len(), s.rev()), (steps, rev));
+    // Typing undoes first, then the story's creation.
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Part(id)), "");
+    s.run("edit.undo", &json!({})).unwrap();
+    assert!(matches!(obj(&s), Some(InlineObject::Shape { story: None, .. })));
+    assert!(!s.doc.parts.contains_key(&id));
+    // `pos` works with the caret elsewhere and nothing selected.
+    let at = Pos::body(0, 0);
+    s.sel = Selection::caret(Pos::body(0, 0));
+    s.run("shape.editText", &json!({"pos": at})).unwrap();
+    assert!(matches!(s.sel.focus.story, StoryRef::Part(_)));
+    // Lines and connectors have none; nothing selected is an error, never a panic.
+    for kind in ["line", "straightConnector"] {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("insert.shape", &json!({"kind": kind})).unwrap();
+        assert!(s.run("shape.editText", &json!({})).is_err(), "{kind}");
+    }
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    assert!(s.run("shape.editText", &json!({})).is_err());
+    assert!(s.run("shape.editText", &json!({"pos": {"bogus": 1}})).is_err());
+}
+
+/// #1893 round 2: `shape.editText` is pure, but giving a shape its first story edits the
+/// document, so Restrict Editing refuses it (nothing changes); entering a story that exists
+/// stays allowed.
+#[test]
+fn edit_text_respects_restrict_editing() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("insert.textBox", &json!({"text": "kept"})).unwrap();
+    s.sel = Selection::caret(Pos::body(0, 0));
+    s.run("insert.shape", &json!({"kind": "rectangle"})).unwrap();
+    let before = (s.doc.clone(), s.undo_history().len(), s.rev());
+    s.doc.settings.protection = Some("readOnly".into());
+    let sel = Selection::caret(Pos::body(0, 0));
+    s.sel = sel.clone();
+    assert!(s.run("shape.editText", &json!({"pos": Pos::body(0, 0)})).is_err(), "no story yet: refused");
+    assert_eq!(s.sel, sel, "selection untouched");
+    assert_eq!((s.undo_history().len(), s.rev()), (before.1, before.2));
+    assert_eq!(s.doc.parts.len(), before.0.parts.len(), "no story added");
+    // The text box already has one: entering it is only a caret move.
+    let at = s.layout().find_object(0, |o| o.text_box.is_some()).map(|o| o.pos()).unwrap();
+    s.run("shape.editText", &json!({"pos": at})).unwrap();
+    assert!(matches!(s.sel.focus.story, StoryRef::Part(_)));
+}
+
 /// Shape Format › Text (#369): direction and alignment on the box the caret is in, then
 /// Create Link to an empty box and Break Link, each one undo step.
 #[test]

@@ -5,7 +5,7 @@ use super::select::{
     all_objects, alt_text, can_group, edit_obj, has_floating, has_group, has_movable, has_object, has_picture, has_shape, has_shape_or_canvas,
     has_sizable, obj_size, objects_list, selected, with_float, with_obj,
 };
-use super::shape::{NO_TEXT_BOX, can_link, has_text_box, link_text_box, set_text_body, shape_effects, text_box_target};
+use super::shape::{NO_TEXT_BOX, can_link, edit_shape_text, has_text_box, link_text_box, set_text_body, shape_effects, text_box_target};
 use super::{CmdError, CommandSpec, InlineObject, Pos, Rgb, Selection, Spin, TextVert, VAlign, Wrap, WrapText, json, p, sel_result};
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -340,6 +340,11 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"anchor": "t|ctr|b"}  (top, middle, bottom of the box: for turned text, from the side its lines start on)"#)
         .when(has_text_box),
+        CommandSpec::new("shape.editText", "Edit Text", "Shape Format › Text", edit_shape_text)
+            .params(r#"{"pos"?: Pos}  (the shape or text box at `pos`, else the selected one: the caret goes into its text, a shape with none gets an empty centred paragraph; not for lines and connectors)"#)
+            // Entering text that exists only moves the caret: no undo step, the document isn't
+            // edited. Giving a shape its first (empty) story takes its own checkpoint below.
+            .pure(),
         CommandSpec::new("shape.link", "Create Link", "Shape Format › Text", link_text_box)
             .params(r#"{"target": Pos | n}  (the empty text box the selected box's text continues in: its position, or its Selection Pane index)"#)
             .when(can_link),

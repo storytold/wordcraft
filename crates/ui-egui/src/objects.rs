@@ -232,6 +232,10 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
             app.canvas.obj_drag = Some(d);
         } else {
             drop(app, &d);
+            // Double-click a shape (the press that began this click already selected it).
+            if resp.double_clicked() && !d.drag.moved && d.drag.grab == Grab::Move {
+                edit_text(app, layout, pages, scale, at, &d.object);
+            }
         }
         return true;
     }
@@ -266,6 +270,10 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
     // Double-click a SmartArt graphic (selected by the first click) to edit its text.
     if resp.double_clicked() && wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session).is_some() {
         let _ = app.run("smartArt.textPane", json!({"value": true}));
+        return true;
+    }
+    if resp.double_clicked() && grab == Grab::Move {
+        edit_text(app, layout, pages, scale, at, &object);
         return true;
     }
     // Shift/Ctrl+click adds an object to the selected ones (or takes it out), for Group.
@@ -745,6 +753,23 @@ pub fn key(app: &mut WordApp, key: egui::Key, m: egui::Modifiers) -> bool {
     };
     // Inline objects move with the text: arrows move the caret as usual.
     app.run("arrange.nudge", json!({"dx": dx, "dy": dy})).is_ok()
+}
+
+/// Double-click on a shape or text box: the caret goes into its text. Lines, connectors, pictures
+/// and charts have none, so nothing happens to them.
+fn edit_text(app: &mut WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at: Pos2, object: &ObjectHit) {
+    // A text box that already has text hands the double-click to the text (select the word
+    // under the pointer), even when it is so small that its whole area counts as the frame.
+    if let Some(id) = object.text_box
+        && !app.session.doc.plain_text(StoryRef::Part(id)).is_empty()
+        && let Some((page, x, y)) = crate::canvas::page_at(pages, layout, scale, at)
+        && let Some(pos) = layout.hit(page, x, y, StoryRef::Part(id))
+    {
+        let _ = app.run("caret.set", json!({"pos": pos}));
+        let _ = app.run("select.word", json!({}));
+        return;
+    }
+    let _ = app.run("shape.editText", json!({"pos": object.pos()}));
 }
 
 /// With a text box selected, put the caret at the end of its text (typing goes there).
