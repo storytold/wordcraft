@@ -1414,6 +1414,78 @@ fn indic_and_khmer_backspace_removes_one_character() {
     assert_eq!(paras(&s)[0].0, "a");
 }
 
+/// Arabic vowel and Quranic marks are individually editable without retyping their base (#4757).
+#[test]
+fn arabic_backspace_removes_one_mark_and_keeps_the_base() {
+    for mark in [
+        '\u{0610}',
+        '\u{064B}',
+        '\u{064C}',
+        '\u{064D}',
+        '\u{064E}',
+        '\u{064F}',
+        '\u{0650}',
+        '\u{0651}',
+        '\u{0652}',
+        '\u{065F}',
+        '\u{0670}',
+        '\u{06D6}',
+        '\u{06DF}',
+        '\u{06E7}',
+        '\u{06EA}',
+        '\u{0897}',
+        '\u{089F}',
+        '\u{08CA}',
+        '\u{08E1}',
+        '\u{08E3}',
+        '\u{08FF}',
+        '\u{10EFA}',
+        '\u{10EFF}',
+    ] {
+        let original = format!("Λ ب{mark}");
+        let mut s = typed(&original);
+        typ(&mut s, "\u{8}");
+        assert_eq!(paras(&s)[0].0, "Λ ب", "mark U+{:04X}", u32::from(mark));
+        assert_eq!(s.sel.focus.off, "Λ ب".len());
+        run(&mut s, "edit.undo", json!({}));
+        assert_eq!(paras(&s)[0].0, original);
+        run(&mut s, "edit.redo", json!({}));
+        typ(&mut s, "\u{0650}");
+        assert_eq!(paras(&s)[0].0, "Λ ب\u{0650}");
+    }
+}
+
+#[test]
+fn arabic_backspace_uses_stored_mark_order_but_delete_keeps_the_cluster() {
+    for marks in ["\u{0651}\u{064E}", "\u{064E}\u{0651}"] {
+        let mut s = typed(&format!("ب{marks}"));
+        typ(&mut s, "\u{8}");
+        assert_eq!(paras(&s)[0].0, format!("ب{}", marks.chars().next().unwrap()));
+        typ(&mut s, "\u{8}");
+        assert_eq!(paras(&s)[0].0, "ب");
+        typ(&mut s, "\u{8}");
+        assert!(paras(&s)[0].0.is_empty());
+        let original = format!("ب{marks}ت");
+        let mut s = typed(&original);
+        // Arabic arrows move visually. They still visit only whole-cluster boundaries.
+        let boundaries = [0, original.len() - "ت".len(), original.len()];
+        let mut visited = vec![s.sel.focus.off];
+        for command in ["caret.right", "caret.right", "caret.left", "caret.left"] {
+            run(&mut s, command, json!({}));
+            assert!(boundaries.contains(&s.sel.focus.off));
+            visited.push(s.sel.focus.off);
+        }
+        assert!(boundaries.iter().all(|off| visited.contains(off)));
+        s.sel = crate::Selection::caret(Pos::body(0, 0));
+        run(&mut s, "text.delete", json!({}));
+        assert_eq!(paras(&s)[0].0, "ت");
+    }
+    for cluster in ["e\u{0301}", "👩‍💻", "👍🏽", "🇵🇱", "ב\u{05B7}"] {
+        let s = typed(&format!("a{cluster}\u{8}"));
+        assert_eq!(paras(&s)[0].0, "a", "unchanged grapheme {cluster}");
+    }
+}
+
 /// Press a shortcut the way the keyboard does: run the command bound to it.
 fn press(s: &mut Session, combo: &str) -> Result<serde_json::Value, crate::CmdError> {
     let id = s.registry.by_shortcut(combo).map(|c| c.id).unwrap_or_else(|| panic!("nothing bound to {combo}"));
@@ -3124,6 +3196,37 @@ fn highlight_toggle_handles_mixed_inherited_and_pending_formatting() {
     assert_eq!(serde_json::to_value(&s.doc).unwrap(), before);
 }
 
+/// #4086: a caret inside a word highlights what is typed next, not the word; Bold still
+/// formats the word.
+#[test]
+fn highlight_at_a_caret_leaves_the_word_alone() {
+    let mut s = typed("Alpha Beta");
+    run(&mut s, "caret.docStart", json!({}));
+    run(&mut s, "caret.right", json!({}));
+    run(&mut s, "format.highlight", json!({"color":"yellow"}));
+    assert!(s.doc.body[0].as_para().unwrap().runs.iter().all(|r| r.props.highlight.is_none()));
+    assert_eq!(s.pending.as_ref().unwrap().highlight, Some(wordcraft_doc::props::Highlight::Yellow));
+    run(&mut s, "text.insert", json!({"text":"X"}));
+    run(&mut s, "select.text", json!({"text":"X"}));
+    assert_eq!(s.run("format.state", &json!({})).unwrap()["highlight"], json!("FFFF00"));
+    run(&mut s, "select.text", json!({"text":"Beta"}));
+    assert_eq!(s.run("format.state", &json!({})).unwrap()["highlight"], serde_json::Value::Null);
+    // The toggle reads the pending colour, not the word's: a second press turns it off.
+    run(&mut s, "caret.docStart", json!({}));
+    run(&mut s, "caret.right", json!({}));
+    run(&mut s, "format.highlight", json!({}));
+    assert_eq!(s.pending.as_ref().unwrap().highlight, Some(wordcraft_doc::props::Highlight::Yellow));
+    run(&mut s, "format.highlight", json!({}));
+    assert_eq!(s.pending.as_ref().unwrap().highlight, Some(wordcraft_doc::props::Highlight::None));
+    // Bold after Highlight formats the word and keeps both for what is typed next.
+    run(&mut s, "format.highlight", json!({}));
+    run(&mut s, "format.bold", json!({}));
+    run(&mut s, "text.insert", json!({"text":"Y"}));
+    run(&mut s, "select.text", json!({"text":"Y"}));
+    let state = s.run("format.state", &json!({})).unwrap();
+    assert_eq!((state["highlight"].clone(), state["bold"].clone()), (json!("FFFF00"), json!(true)));
+}
+
 /// A differently coloured final paragraph must remain visible to the shortcut beyond
 /// the formatting-state query limit, including a style-inherited tail and Undo/Redo.
 #[cfg(not(target_os = "macos"))]
@@ -3385,4 +3488,52 @@ fn double_space_adds_a_period_when_asked() {
     run(&mut t, "tools.autocorrect", json!({"doubleSpacePeriod": true, "enabled": false}));
     typ(&mut t, "Hello  world");
     assert_eq!(text(&t), "Hello  world");
+}
+
+#[test]
+fn backspace_after_a_floating_shape_anchor_joins_paragraphs_and_keeps_the_shape() {
+    let mut s = typed("Line one\nLine two");
+    run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [1], "off": 0}}));
+    run(&mut s, "insert.textBox", json!({"text": "Box"}));
+    let (a, f) = (Pos::body(1, 0), Pos::body(1, 3));
+    run(&mut s, "select.range", json!({"anchor": a, "focus": f}));
+    run(&mut s, "arrange.wrap", json!({"wrap": "inFrontOfText"}));
+    let objects = |s: &Session| s.doc.para_at(&Pos::body(1, 0)).map(|p| p.object_offsets().len());
+    assert_eq!(objects(&s), Some(1));
+    run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [1], "off": 3}}));
+    run(&mut s, "text.backspace", json!({}));
+    assert_eq!(s.doc.body.iter().filter(|b| b.as_para().is_some()).count(), 1);
+    assert_eq!(objects(&s), None);
+    assert_eq!(
+        s.doc.para_at(&Pos::body(0, 0)).map(|p| (p.text.replace('\u{FFFC}', ""), p.object_offsets().len())),
+        Some(("Line oneLine two".to_string(), 1))
+    );
+}
+
+#[test]
+fn backspace_after_marker_and_floating_anchors_still_joins_paragraphs() {
+    let mut s = typed("Line one\nLine two");
+    run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [1], "off": 0}}));
+    run(&mut s, "insert.textBox", json!({"text": "Box"}));
+    let (a, f) = (Pos::body(1, 0), Pos::body(1, 3));
+    run(&mut s, "select.range", json!({"anchor": a, "focus": f}));
+    run(&mut s, "arrange.wrap", json!({"wrap": "inFrontOfText"}));
+    s.doc.insert_object(&Pos::body(1, 0), wordcraft_doc::InlineObject::BookmarkStart { name: "anchor".into() }, &Default::default()).unwrap();
+    s.doc.insert_object(&Pos::body(1, 0), wordcraft_doc::InlineObject::CommentStart { id: 1 }, &Default::default()).unwrap();
+    run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [1], "off": 9}}));
+    run(&mut s, "text.backspace", json!({}));
+    assert_eq!(s.doc.body.iter().filter(|b| b.as_para().is_some()).count(), 1);
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).map(|p| p.text.replace('\u{FFFC}', "")), Some("Line oneLine two".to_string()));
+}
+
+#[test]
+fn backspace_cannot_join_into_locked_content_control() {
+    let mut s = typed("Above\nInside");
+    run(&mut s, "select.range", json!({"anchor": {"story": "body", "path": [1], "off": 0}, "focus": {"story": "body", "path": [1], "off": 6}}));
+    run(&mut s, "developer.richText", json!({"tag": "locked"}));
+    run(&mut s, "developer.properties", json!({"control": "locked", "lockEdit": true}));
+    run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [1], "off": 0}}));
+    let before = s.doc.clone();
+    assert!(s.run("text.backspace", &json!({})).is_err());
+    assert_eq!(s.doc, before);
 }
