@@ -20,6 +20,7 @@ pub(super) use cells::grid_cols;
 pub use cells::selected_cells;
 use cells::{cell, with_cells, with_table};
 pub(crate) use cells::{cell_text, row_ends};
+pub(super) use clear::clear_range_cells;
 pub(crate) use clear::{backspace_cells, clear_cells};
 use clear::{cell_prefix, guard_delete, text_spans};
 use convert::{formula, from_text, quick_table, sort_table, to_text};
@@ -31,6 +32,7 @@ use select::{select_cells, select_column};
 pub use structure::split_targets;
 pub(super) use structure::{col, row};
 use structure::{del_col, del_row, del_table, merge, split, split_table};
+pub(super) use structure::{delete_table_at, selected_table};
 
 fn in_table(s: &Session) -> Option<&'static str> {
     if s.sel.focus.path.cell().is_some() { None } else { Some("the cursor isn't in a table") }
