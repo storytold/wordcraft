@@ -1998,6 +1998,42 @@ fn modify_style_for_new_documents_and_reset() {
     assert!(store.get().is_none(), "Reset deletes it");
 }
 
+/// #4621 review: Modify Style for new documents with a template that can't be saved changes
+/// nothing (style, undo, template) and keeps the dialog open with the user's edits.
+#[test]
+fn modify_style_for_new_documents_with_a_read_only_template() {
+    use egui_kittest::kittest::Queryable;
+    struct ReadOnly;
+    impl wordcraft_engine::normal_template::NormalStore for ReadOnly {
+        fn load(&self) -> Result<Option<Vec<u8>>, String> {
+            Ok(None)
+        }
+        fn save(&self, _: &[u8]) -> Result<(), String> {
+            Err("read-only".into())
+        }
+        fn reset(&self) -> Result<(), String> {
+            Err("read-only".into())
+        }
+    }
+    let (mut h, _) = normal_template_harness("modifyStyle", |d| {
+        if let Dialog::ModifyStyle { italic, .. } = d {
+            *italic = true;
+        }
+    });
+    h.state_mut().session.normal_store = Some(std::sync::Arc::new(ReadOnly));
+    let styles = h.state().session.doc.styles.clone();
+    let undo = h.state().session.undo_labels();
+    h.run_steps(3);
+    h.get_by_label("New documents based on this template").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(h.state().session.doc.styles, styles, "the style is unchanged");
+    assert_eq!(h.state().session.undo_labels(), undo, "no undo step");
+    let Some(Dialog::ModifyStyle { italic, new_documents, .. }) = &h.state().dialog else { panic!("the dialog stays open") };
+    assert!(*italic && *new_documents, "with the user's edits");
+}
+
 /// Review of #4449–#4458: Modify Style keeps only what was changed. Strong made italic for new
 /// documents gets no font or size of its own (the dialog shows the resolved ones), so bold text
 /// in a heading keeps the heading's font and size.

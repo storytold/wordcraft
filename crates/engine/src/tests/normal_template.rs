@@ -419,6 +419,49 @@ fn a_failing_macro_saves_no_default() {
     assert_eq!(body_font(&session(&store).normal_document()).0, "Georgia");
 }
 
+/// #4621 review: Reset in a macro takes its place among the macro's Set As Defaults, starting
+/// from a saved template: a Set As Default before it is undone by it, one after it is all that's
+/// left.
+#[test]
+fn reset_in_a_macro_keeps_its_order() {
+    let store = MemoryStore::new();
+    let mut s = session(&store);
+    run(&mut s, "format.setDefault", json!({"props": {"font": "Georgia", "size": 14.0}}));
+    let builtin = body_font(&session(&MemoryStore::new()).normal_document());
+    let steps = json!([
+        {"command": "format.setDefault", "params": {"props": {"font": "Garamond"}}},
+        {"command": "defaults.reset", "params": {}},
+    ]);
+    run(&mut s, "tools.macros", json!({"define": {"name": "then-reset", "steps": steps}}));
+    run(&mut s, "tools.macros", json!({"run": "then-reset"}));
+    assert!(store.get().is_none(), "Reset came last: no template");
+
+    run(&mut s, "format.setDefault", json!({"props": {"font": "Georgia", "size": 14.0}}));
+    let steps = json!([
+        {"command": "defaults.reset", "params": {}},
+        {"command": "format.setDefault", "params": {"props": {"font": "Garamond"}}},
+    ]);
+    run(&mut s, "tools.macros", json!({"define": {"name": "reset-then", "steps": steps}}));
+    run(&mut s, "tools.macros", json!({"run": "reset-then"}));
+    assert_eq!(body_font(&session(&store).normal_document()), ("Garamond".into(), builtin.1), "Georgia's 14 pt was reset");
+}
+
+/// #4621 review: a macro that resets and then fails leaves the saved template alone.
+#[test]
+fn a_failing_macro_does_not_reset() {
+    let store = MemoryStore::new();
+    let mut s = session(&store);
+    run(&mut s, "format.setDefault", json!({"props": {"font": "Georgia"}}));
+    let saved = store.get();
+    let steps = json!([
+        {"command": "defaults.reset", "params": {}},
+        {"command": "no.such.command", "params": {}},
+    ]);
+    run(&mut s, "tools.macros", json!({"define": {"name": "m", "steps": steps}}));
+    assert!(s.run("tools.macros", &json!({"run": "m"})).is_err());
+    assert_eq!(store.get(), saved, "the template is unchanged");
+}
+
 /// Review of #4449–#4458: with formatting limited to the document's styles, a Set As Default
 /// that changes the open document is refused as Modify Style is, whatever its scope, and saves
 /// nothing.
