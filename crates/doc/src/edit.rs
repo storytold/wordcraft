@@ -8,8 +8,8 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::para::{InlineObject, Run};
-use crate::props::{CharProps, ParaProps};
-use crate::{Block, Blocks, DocError, Document, Paragraph, Part, PartKind, Path, Pos, Result, para_block};
+use crate::props::{CharProps, ParaProps, VMerge};
+use crate::{Block, Blocks, Cell, DocError, Document, Paragraph, Part, PartKind, Path, Pos, Result, Row, para_block};
 use crate::{Table, table::MAX_TABLE_DEPTH};
 
 /// A copied piece of a document: blocks, where the first and last paragraphs may be partial.
@@ -819,6 +819,129 @@ impl Document {
         out
     }
 
+    /// The part of one table a selection running across its cells copies: the rectangle of cells
+    /// from `a` to `b`, with the grid cut to match, so the copy is still a table. `None` when the
+    /// two ends are not in cells of one table, or are in the same cell (the paragraph path copies
+    /// that). Word selects whole cells once a selection leaves one, and this follows it.
+    ///
+    /// The column window is in **grid** columns, not cell indices. A cell index is only a grid
+    /// column while every cell spans one: `Table::grid` has an entry per grid column and
+    /// `Row::cells` one per cell, so a merged heading row above the data makes the two disagree,
+    /// and each row would then pick different columns. Cells are kept whole, as Word keeps them,
+    /// so the window widens to swallow any cell it would otherwise cut in half.
+    fn table_slice(&self, a: &Pos, b: &Pos) -> Option<Block> {
+        let common = a.path.0.iter().zip(&b.path.0).take_while(|(x, y)| x == y).count();
+        // The deepest table holding both ends: the row and the cell follow its path.
+        let at = (0..=common).rev().find(|&p| a.path.0.get(..p).is_some_and(|q| self.table(a.story, &Path(q.to_vec())).is_some()))?;
+        let t = self.table(a.story, &Path(a.path.0.get(..at)?.to_vec()))?;
+        let cell = |p: &Path| Some((*p.0.get(at)? as usize, *p.0.get(at + 1)? as usize));
+        let ((r0, c0), (r1, c1)) = (cell(&a.path)?, cell(&b.path)?);
+        if (r0, c0) == (r1, c1) {
+            return None;
+        }
+        let rows = (r0.min(r1), r0.max(r1).min(t.rows.len().saturating_sub(1)));
+        // Each end as the grid columns its own cell covers, then the union of the two.
+        let covers = |r: usize, c: usize| {
+            let g = t.grid_col(r, c);
+            (g, g + t.rows.get(r).and_then(|row| row.cells.get(c)).map_or(1, Cell::span))
+        };
+        let (a_cols, b_cols) = (covers(r0, c0), covers(r1, c1));
+        let (mut lo, mut hi) = (a_cols.0.min(b_cols.0), a_cols.1.max(b_cols.1));
+        // Widen until no cell in the rows being copied straddles an edge: half a cell is not a
+        // cell, and leaving one out would make the copy ragged. Only a cell boundary can widen the
+        // window, and a pass that widens it at all gains at least one grid column, so the cells in
+        // those rows bound the number of passes.
+        //
+        // Each row's walk starts at `first_grid()`, the `w:gridBefore` columns a jagged row leaves
+        // empty, because that is where `Table::grid_col` starts and the window came from it. A gap
+        // is not a cell, so an edge inside one straddles nothing.
+        let cells = t.rows.get(rows.0..=rows.1).map_or(0, |rs| rs.iter().map(|r| r.cells.len()).sum::<usize>());
+        for _ in 0..=cells {
+            let before = (lo, hi);
+            for row in t.rows.get(rows.0..=rows.1).unwrap_or_default() {
+                let mut x = row.first_grid();
+                for c in &row.cells {
+                    let end = x + c.span();
+                    if x < hi && end > lo {
+                        lo = lo.min(x);
+                        hi = hi.max(end);
+                    }
+                    x = end;
+                }
+            }
+            if (lo, hi) == before {
+                break;
+            }
+        }
+        let mut out = t.clone();
+        out.grid = t.grid.get(lo..hi.min(t.grid.len()))?.to_vec();
+        out.rows = t
+            .rows
+            .get(rows.0..=rows.1)?
+            .iter()
+            .map(|row| {
+                let mut kept = Row { props: row.props.clone(), cells: Vec::new(), controls: row.controls.clone() };
+                let (mut x, mut span) = (row.first_grid(), None::<(usize, usize)>);
+                for c in &row.cells {
+                    let end = x + c.span();
+                    // Whole cells only, which the widening above has already made the same set as
+                    // the cells overlapping the window.
+                    if x >= lo && end <= hi {
+                        kept.cells.push(c.clone());
+                        span = Some((span.map_or(x, |(s, _)| s), end));
+                    }
+                    x = end;
+                }
+                // The copy's own gaps: a jagged row keeps the empty columns that fall inside the
+                // window, and loses the ones outside it. Without this the row would claim the
+                // original's `gridBefore` against a narrower grid and sit off to the right.
+                let (before, after) = span.map_or((0, 0), |(s, e)| (s - lo, hi - e));
+                kept.props.grid_before = before.try_into().unwrap_or(0);
+                kept.props.grid_after = after.try_into().unwrap_or(0);
+                kept
+            })
+            .collect();
+        // The copy is a table in its own right, not a window on the original: a vertical merge
+        // that ran into it from above starts at the first row kept, and a `Restart` with nothing
+        // continuing it (the merge ran out of the bottom, or the copy is one row) is not a merge.
+        // `Table::insert_row` already clears a copied `Restart` for the same reason.
+        let merges: Vec<Vec<VMerge>> = out
+            .rows
+            .iter()
+            .enumerate()
+            .map(|(r, row)| {
+                row.cells
+                    .iter()
+                    .enumerate()
+                    .map(|(i, c)| {
+                        let g = out.grid_col(r, i);
+                        let continued = out
+                            .cell_at_grid(r + 1, g)
+                            .and_then(|j| out.rows.get(r + 1)?.cells.get(j))
+                            .is_some_and(|below| below.props.vmerge == VMerge::Continue);
+                        match c.props.vmerge {
+                            VMerge::Continue if r == 0 => {
+                                if continued {
+                                    VMerge::Restart
+                                } else {
+                                    VMerge::None
+                                }
+                            }
+                            VMerge::Restart if !continued => VMerge::None,
+                            v => v,
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
+        for (row, want) in out.rows.iter_mut().zip(merges) {
+            for (c, v) in row.cells.iter_mut().zip(want) {
+                c.props.vmerge = v;
+            }
+        }
+        Some(Block::Table(out))
+    }
+
     fn copy_blocks(&self, a: &Pos, b: &Pos) -> Vec<Block> {
         let (a, b) = order(a, b);
         let mut out = Vec::new();
@@ -845,6 +968,12 @@ impl Document {
                 }
             }
             return out;
+        }
+        // A selection running from one cell into another copies that part of the table, so the
+        // cells stay cells (#2398). Falling through would flatten them to loose paragraphs, and a
+        // paste then puts every cell on its own line in the first cell of the target row.
+        if let Some(t) = self.table_slice(&a, &b) {
+            return vec![t];
         }
         for p in self.paths_between(&a, &b) {
             if let Some(para) = self.para(a.story, &p) {
