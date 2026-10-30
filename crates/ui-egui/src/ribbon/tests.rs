@@ -1,5 +1,32 @@
+use super::arrange::group_menu_command;
 use super::*;
 use wordcraft_engine::Session;
+
+/// #4412: the Shading button's bar is the colour a click applies (the last one picked), as
+/// the Font Color and Text Highlight Color buttons' bars are, not always the icon's yellow.
+#[test]
+fn the_shading_button_shows_the_last_picked_colour() {
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+    a.run("view.commentsPane", json!({"value": false})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    let ribbon_bars = |h: &egui_kittest::Harness<'_, WordApp>, hex: &str| {
+        let want = crate::theme::c32(wordcraft_doc::Rgb::parse(hex).unwrap());
+        h.output().shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.fill == want && r.rect.height() < 4.0 && r.rect.width() > 10.0))
+    };
+    h.run_steps(6);
+    assert!(ribbon_bars(&h, "FFF2CC"), "the default colour");
+    h.state_mut().canvas.last_shading = "00B0F0".into();
+    h.run_steps(3);
+    assert!(ribbon_bars(&h, "00B0F0"), "the picked colour");
+    assert!(!ribbon_bars(&h, "FFF2CC"), "and not the old one");
+}
 
 /// Two clicks arm and disarm the painter; the double-click handling then leaves it sticky (#2785).
 #[test]
@@ -115,6 +142,34 @@ fn menu_buttons_follow_their_command() {
     for id in ["table.selectTable", "table.deleteTable", "table.autofit"] {
         assert!(menu_enabled(&a, id), "{id} is on inside a table");
     }
+}
+
+/// #4229: with a group selected the Group button stays on, so Ungroup in its menu can be
+/// reached; with nothing selected it is off, and with two objects it offers Group.
+#[test]
+fn the_group_menu_stays_on_for_a_selected_group() {
+    use crate::widgets::{enabled, menu_enabled};
+    let mut a = crate::WordApp::new(
+        Session::new(wordcraft_doc::Document::from_text(
+            "one
+two
+three",
+        )),
+        crate::Services::default(),
+    );
+    assert!(!menu_enabled(&a, group_menu_command(&a)), "nothing selected");
+    a.run("insert.shape", json!({"kind": "rectangle", "width": 80, "height": 40})).unwrap();
+    a.run("arrange.bounds", json!({"page": 0, "x": 100, "y": 150})).unwrap();
+    a.run("select.collapse", json!({"end": true})).unwrap();
+    a.run("insert.shape", json!({"kind": "ellipse", "width": 80, "height": 40})).unwrap();
+    a.run("arrange.bounds", json!({"page": 0, "x": 300, "y": 150})).unwrap();
+    a.run("select.addObject", json!({"index": 0})).unwrap();
+    assert_eq!(group_menu_command(&a), "arrange.group");
+    assert!(menu_enabled(&a, group_menu_command(&a)), "two objects to group");
+    a.run("arrange.group", json!({})).unwrap();
+    assert!(!enabled(&a, "arrange.group"), "one group: nothing to group");
+    assert_eq!(group_menu_command(&a), "arrange.ungroup");
+    assert!(menu_enabled(&a, group_menu_command(&a)), "the menu reaches Ungroup");
 }
 
 /// #1206: Margins, Orientation, Size and Columns mark the caret section's setting, as Word
