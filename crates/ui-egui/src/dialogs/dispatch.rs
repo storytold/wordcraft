@@ -4,7 +4,7 @@ use super::find::{FindTab, SEARCH_SUGGESTIONS, command_matches, find_in_navigati
 use super::font::{apply_font, default_font_props, preview_size};
 use super::forms::{cell_margins_dialog, custom_properties, table_properties};
 use super::mailings::{ADDRESS_PARTS, recipient_list, rule_params};
-use super::page_setup::{apply_page_setup, page_paper_group, page_valign_combo};
+use super::page_setup::{apply_page_setup, page_paper_group, page_valign_combo, run_as_one_step};
 use super::paragraph::{ParaNumber, apply_paragraph, default_para_props, para_check, para_number};
 use super::styles::manage_styles;
 use super::{Dialog, MeasureExt, Tokens, Ui, Value, WordApp, json, semibold, vec2};
@@ -954,7 +954,7 @@ fn modify_style_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         ui.radio_value(new_documents, false, tl!("Only in this document"));
         ui.radio_value(new_documents, true, tl!("New documents based on this template"));
     });
-    let (ok, cancel) = buttons(ui, tl!("OK"));
+    let (mut ok, cancel) = buttons(ui, tl!("OK"));
     if ok {
         // Only what was changed since the dialog opened: it shows the style's resolved
         // formatting, and sending it all would give the style a font and size of its own, in this
@@ -987,12 +987,15 @@ fn modify_style_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         if w.is_none_or(|w| w.after != *after) {
             para.insert("spaceAfter".into(), json!(*after));
         }
-        let modified = app.run("styles.modify", json!({"style": id, "name": name, "chr": chr, "para": para}));
-        if modified.is_ok()
-            && *new_documents
-            && let Err(e) = app.run("styles.setDefault", json!({"style": id, "scope": "new"}))
-        {
-            app.status(e.to_string());
+        // New documents too: in the same step, so a template that can't be saved changes nothing
+        // here either and the dialog stays open with the user's edits (#4237 review).
+        let mut commands = vec![("styles.modify", json!({"style": id, "name": name, "chr": chr, "para": para}))];
+        if *new_documents {
+            commands.push(("styles.setDefault", json!({"style": id, "scope": "new"})));
+        }
+        if let Err(e) = run_as_one_step(app, commands) {
+            app.status(e);
+            ok = false;
         }
     }
     if (ok || cancel) && *back {

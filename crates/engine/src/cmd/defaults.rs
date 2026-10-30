@@ -75,6 +75,9 @@ pub(crate) enum TemplateEdit {
     Design(Box<Document>),
     /// The style with this id, from this document.
     Style(Box<Document>, String),
+    /// Reset: back to the built-in formatting. Queued like the others, so a macro's edits keep
+    /// their order around it and a failed macro leaves the saved template alone (#4237 review).
+    Reset,
 }
 
 /// Queue `edit` for the template; refused when the session has none.
@@ -86,8 +89,14 @@ fn queue(s: &mut Session, edit: TemplateEdit) -> Result<(), CmdError> {
     Ok(())
 }
 
-/// Write the queued `edits` into the template, in one read-modify-write.
+/// Write the queued `edits` into the template, in one read-modify-write; ending on a Reset deletes
+/// it instead.
 pub(crate) fn commit_template(s: &mut Session, edits: Vec<TemplateEdit>) -> Result<(), CmdError> {
+    if matches!(edits.last(), Some(TemplateEdit::Reset)) {
+        let store =
+            s.normal_store.clone().ok_or_else(|| CmdError::Failed("this session has no Normal template (headless or without preferences)".into()))?;
+        return store.reset().map_err(|e| CmdError::Failed(format!("the Normal template couldn't be deleted: {e}")));
+    }
     update_template(s, |t| {
         for e in edits {
             match e {
@@ -113,6 +122,7 @@ pub(crate) fn commit_template(s: &mut Session, edits: Vec<TemplateEdit>) -> Resu
                     crate::cmd::templates::copy_styles(t, &doc, std::slice::from_ref(&id));
                     nt::mark(t, Part::Styles);
                 }
+                TemplateEdit::Reset => *t = nt::empty(),
             }
         }
     })
@@ -293,11 +303,13 @@ fn style_default(s: &mut Session, v: &Value) -> CmdResult {
     done(s, v)
 }
 
-/// File › Options › Advanced › Reset: delete the template.
+/// File › Options › Advanced › Reset: delete the template, once the command (or the macro it is
+/// in) has succeeded.
 fn reset(s: &mut Session, _: &Value) -> CmdResult {
-    let store =
-        s.normal_store.clone().ok_or_else(|| CmdError::Failed("this session has no Normal template (headless or without preferences)".into()))?;
-    store.reset().map_err(|e| CmdError::Failed(format!("the Normal template couldn't be deleted: {e}")))?;
+    if s.normal_store.is_none() {
+        return Err(CmdError::Failed("this session has no Normal template (headless or without preferences)".into()));
+    }
+    s.pending_template.push(TemplateEdit::Reset);
     s.status = "New documents will use WordCraft's built-in formatting.".into();
     Ok(json!({"reset": true}))
 }
