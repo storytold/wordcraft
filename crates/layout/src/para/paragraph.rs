@@ -8,59 +8,7 @@ use super::model::{ClKind, Cluster, Glyph, Label, LabelRun, ParaEnv, undrawable_
 use super::proof::{ProofRun, is_list_item, proof_issues};
 use super::*;
 
-/// Whether `c` is a Thai above/below vowel or tone mark (TCB follower).
-fn is_thai_following(c: char) -> bool {
-    use wordcraft_doc::thai_char::{MAICHATTAWA, MAIEK, MAITAIKHU, NIKHAHIT, PHINTHU, SARA_AM, SARA_I, THANTHAKHAT, YAMAKKAN};
-    matches!(c,
-        SARA_AM
-        | SARA_I..=PHINTHU
-        | MAITAIKHU
-        | MAIEK..=MAICHATTAWA
-        | THANTHAKHAT
-        | NIKHAHIT
-        | YAMAKKAN
-    )
-}
-
-/// Whether `c` is a Lao above/below vowel or tone mark (Lao TCB follower).
-fn is_lao_following(c: char) -> bool {
-    // Below vowels: ຸ ູ (U+0EB8–U+0EB9)
-    // Above vowels: ິ ີ ຶ ື ົ ຺ ຼ (U+0EB4–U+0EB7, U+0EBA–U+0EBC)
-    // Tone marks: ່ ້ ໊ ໋ ໌ (U+0EC8–U+0ECC)
-    matches!(c, '\u{0EB4}'..='\u{0EB9}' | '\u{0EBA}'..='\u{0EBC}' | '\u{0EC8}'..='\u{0ECC}')
-}
-
-/// Byte length of the Thai/Lao TCB (Thai Character Block) starting at the beginning of `text`.
-/// A Thai or Lao leading vowel counts alone; otherwise base consonant + following vowels/tones.
-/// Returns 0 if `text` doesn't start with a Thai or Lao character.
-fn thai_lao_tcb_byte_len(text: &str) -> usize {
-    use wordcraft_doc::cluster::is_thai_lao;
-    use wordcraft_doc::thai_char::{MAIMALAI, SARA_E};
-    let mut chars = text.chars();
-    let first = match chars.next() {
-        Some(c) if is_thai_lao(c) => c,
-        _ => return 0,
-    };
-    let len = first.len_utf8();
-    // Thai leading vowels (เ แ โ ใ ไ, U+0E40–U+0E44) stand alone as drop cap.
-    if matches!(first, SARA_E..=MAIMALAI) {
-        return len;
-    }
-    // Lao leading vowels (ເ ແ ໂ ໃ ໄ, U+0EC0–U+0EC4) stand alone as drop cap.
-    if matches!(first, '\u{0EC0}'..='\u{0EC4}') {
-        return len;
-    }
-    // Base consonant: consume any following vowels/tones.
-    let mut total = len;
-    for c in chars {
-        if is_thai_following(c) || is_lao_following(c) {
-            total += c.len_utf8();
-        } else {
-            break;
-        }
-    }
-    total
-}
+use wordcraft_doc::thai_fn::{is_lao_following, is_thai_following, thai_lao_tcb_byte_len};
 
 /// Lay out one paragraph.
 pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
