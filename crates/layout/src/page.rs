@@ -1,4 +1,4 @@
-use super::boxes::{BoxInput, layout_box};
+use super::boxes::{BoxInput, Joint, layout_box};
 use super::ctx::{Ctx, with_pin};
 use super::floats::{EarlyFloats, WrapArea};
 use super::notes::{NOTE_SEP, NOTE_SEP_W, NoteBox, NoteSeps, v_span};
@@ -33,6 +33,8 @@ pub(crate) struct PageBuilder<'a> {
     /// The previous paragraph ended with a page break (its mark stayed with the break): the next
     /// paragraph, first on the new page, gets no space before (Word).
     pub(crate) after_break_mark: bool,
+    /// Where the last paragraph, whose mark is hidden, ended: the next one goes on from there.
+    pub(crate) joint: Option<Joint>,
     /// The next section starts on a new page: this section's closing mark, when empty, needs no
     /// room (Word leaves it on a full page rather than starting a page for it).
     pub(crate) next_starts_page: bool,
@@ -209,6 +211,16 @@ impl PageBuilder<'_> {
         if let Some(pg) = self.pages.last() {
             let behind = self.behind.last().copied().unwrap_or(0);
             self.block_marks.push(pg.items.len().saturating_sub(behind));
+        }
+    }
+    /// Takes back the mark of a block that has placed nothing yet: it goes on from the line of
+    /// the block before (#3986), and justified vertical alignment keeps the two together.
+    pub(crate) fn unmark_block(&mut self) {
+        if let Some(pg) = self.pages.last() {
+            let behind = self.behind.last().copied().unwrap_or(0);
+            if self.block_marks.last() == Some(&pg.items.len().saturating_sub(behind)) {
+                self.block_marks.pop();
+            }
         }
     }
     /// Justified vertical alignment: share the room left below the page's text out equally

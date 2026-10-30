@@ -226,14 +226,15 @@ fn gradient(app: &mut WordApp, ui: &mut Ui, theme: &[Rgb], g: &Gradient) {
         });
         ui.end_row();
 
-        ui.label(tl!("Type"));
+        let type_label = ui.label(tl!("Type"));
         let t = type_of(&g.kind);
         let mut pick = t;
-        craft_ui::ComboBox::from_id_salt("format_shape.type").selected_text(tl!(TYPES[t].0)).show_ui(ui, |ui| {
+        let combo = craft_ui::ComboBox::from_id_salt("format_shape.type").selected_text(tl!(TYPES[t].0)).show_ui(ui, |ui| {
             for (i, (label, _)) in TYPES.iter().enumerate() {
                 ui.selectable_value(&mut pick, i, tl!(label));
             }
         });
+        combo.response.labelled_by(type_label.id);
         if pick != t {
             let (angle, focus) = match g.kind {
                 GradientKind::Linear { angle, .. } => (angle, [50.0; 4]),
@@ -258,8 +259,10 @@ fn gradient(app: &mut WordApp, ui: &mut Ui, theme: &[Rgb], g: &Gradient) {
 
         if let GradientKind::Linear { angle, scaled } = g.kind {
             ui.label(tl!("Angle"));
+            // Not `clamp_existing_to_range`: egui would clamp a document's 359.95° to 359.9° and
+            // report it as a change, rewriting the fill unasked.
             let mut a = angle;
-            let r = ui.add(egui::DragValue::new(&mut a).range(0.0..=359.9).suffix("°").speed(1.0));
+            let r = ui.add(egui::DragValue::new(&mut a).range(0.0..=359.9).clamp_existing_to_range(false).suffix("°").speed(1.0));
             if r.changed() {
                 apply(app, ui, Some(&with(g, |g| g.kind = GradientKind::Linear { angle: a, scaled })), Some(&r));
             }
@@ -527,6 +530,32 @@ mod tests {
         h.run_steps(3);
         assert_eq!(fill(h.state()), None);
         assert_eq!(h.state().session.undo_depth(), depth + 2);
+    }
+
+    /// Showing the pane leaves a linear angle the Angle field can't type (359.95°) alone: no
+    /// edit, no undo step.
+    #[test]
+    fn format_shape_pane_leaves_an_angle_outside_the_field_alone() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("insert.shape", json!({"kind": "rectangle"})).unwrap();
+        let stops = json!([{"pos": 0, "color": "FFFFFF"}, {"pos": 100, "color": "156082"}]);
+        a.run("shape.fill", json!({"gradient": {"stops": stops, "angle": 359.95}})).unwrap();
+        a.run("view.formatShapePane", json!({"value": true})).unwrap();
+        let (doc, depth) = (a.session.doc.clone(), a.session.undo_depth());
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.run_steps(6);
+        assert!(h.query_by_label("Angle").is_some(), "the pane shows the gradient's fields");
+        let Some(Fill::Gradient(g)) = fill(h.state()) else { panic!("{:?}", fill(h.state())) };
+        assert_eq!(g.kind, wordcraft_doc::fill::GradientKind::Linear { angle: 359.95, scaled: false });
+        assert!(h.state().session.doc == doc);
+        assert_eq!(h.state().session.undo_depth(), depth);
     }
 }
 

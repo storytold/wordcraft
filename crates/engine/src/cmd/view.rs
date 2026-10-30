@@ -177,11 +177,11 @@ fn full_screen_available(_: &Session) -> Option<&'static str> {
 
 fn mode(s: &mut Session, m: ViewMode, read: bool) -> CmdResult {
     if read && !s.view.read_mode {
-        // Reading controls are session-only, and reset on each entry to the view.
+        // Reading controls are session-only, and reset on each entry to the view, except the
+        // Page color, which stays as it was last set.
         s.view.read_column_width = None;
         s.view.read_zoom = 1.0;
         s.view.read_line_spacing = None;
-        s.view.read_page_color = ReadPageColor::None;
     }
     s.view.mode = m;
     s.view.read_mode = read;
