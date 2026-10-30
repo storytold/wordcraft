@@ -30,9 +30,9 @@ use canvas::{Rect, clip_text, legend, text};
 #[cfg(test)]
 use format::{civil, excel_stamp, format_value};
 use model::{Axis, Grouping, Kind, Pos, Series};
+use parse::{TitleStyle, read_series, text_size, title_of, title_style};
 #[cfg(test)]
 use parse::{axis, category_text, labels, numbers};
-use parse::{read_series, text_size, title_of};
 #[cfg(test)]
 use plot::{Scale, narrow, nice_scale};
 use plot::{backdrop, cartesian};
@@ -87,7 +87,7 @@ pub(crate) fn chart_items(space: &El, theme: &[Rgb], w: f32, h: f32) -> Vec<Grap
     backdrop(&mut out, space, theme, w, h);
     let mut area = Rect { x: PAD, y: PAD, w: (w - 2.0 * PAD).max(1.0), h: (h - 2.0 * PAD).max(1.0) };
     if let Some(t) = &chart.title {
-        area = title_block(&mut out, t, area);
+        area = title_block(&mut out, t, chart.title_style, area, w, h);
     }
     if let Some(pos) = chart.legend {
         // Word lists bar series in the order they are drawn: reversed for clustered horizontal bars
@@ -108,10 +108,18 @@ pub(crate) fn chart_items(space: &El, theme: &[Rgb], w: f32, h: f32) -> Vec<Grap
     out
 }
 
-/// The title at the top of `area`; returns the room left under it.
-fn title_block(out: &mut Vec<GraphicItem>, t: &str, area: Rect) -> Rect {
-    let lh = TITLE_SIZE * LINE;
-    text(out, Rect { x: area.x, y: area.y, w: area.w, h: lh }, t, TITLE_SIZE, TextAlign::Center, true);
+/// The title at the top of `area`, or where the file's manual layout puts it in the `w` x `h`
+/// chart (a doughnut's title in its hole); returns the room left under the top line either way,
+/// as Word keeps it for a title that doesn't overlay the plot.
+fn title_block(out: &mut Vec<GraphicItem>, t: &str, style: TitleStyle, area: Rect, w: f32, h: f32) -> Rect {
+    let size = style.size.unwrap_or(TITLE_SIZE);
+    let lh = size * LINE;
+    let (rect, align) = match style.at {
+        Some((x, y)) => (Rect { x: x * w, y: y * h, w: (text_w(t, size) + 4.0).min(w), h: lh }, TextAlign::Left),
+        None => (Rect { x: area.x, y: area.y, w: area.w, h: lh }, TextAlign::Center),
+    };
+    let (color, bold) = (style.color.unwrap_or(TEXT), style.bold.unwrap_or(true));
+    out.push(GraphicItem::Text { rect: rect.arr(), text: t.to_string(), size, color, bold, align, font: None });
     Rect { y: area.y + lh + PAD, h: (area.h - lh - PAD).max(1.0), ..area }
 }
 
@@ -130,7 +138,7 @@ fn placeholder(out: &mut Vec<GraphicItem>, space: &El, theme: &[Rgb], w: f32, h:
     out.push(GraphicItem::Shape { rect: [0.0, 0.0, w, h], kind: ShapeKind::Rectangle, fill: None, stroke: Some(AXIS), stroke_width: 0.75 });
     let mut area = Rect { x: PAD, y: PAD, w: (w - 2.0 * PAD).max(1.0), h: (h - 2.0 * PAD).max(1.0) };
     if let Some(t) = title_of(chart, &read_series(ty, false, theme)) {
-        area = title_block(out, &t, area);
+        area = title_block(out, &t, title_style(chart, theme), area, w, h);
     }
     let size = text_size(space);
     let lh = size * LINE;
@@ -176,6 +184,7 @@ struct Chart {
     series: Vec<Series>,
     accents: Vec<Rgb>,
     title: Option<String>,
+    title_style: TitleStyle,
     legend: Option<Pos>,
     /// Category axis (scatter: the x axis).
     cat: Axis,

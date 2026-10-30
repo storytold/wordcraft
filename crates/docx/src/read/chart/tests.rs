@@ -528,3 +528,34 @@ fn negative_sections_and_scientific_numbers() {
     assert_eq!(format_value(0.0, "0.00E+00", 1.0), "0.00E+00");
     assert_eq!(format_value(-12345.0, "0.0E-00", 1.0), "-1.2E04");
 }
+
+fn titled_doughnut(title: &str) -> Vec<GraphicItem> {
+    let plot =
+        format!(r#"<c:doughnutChart><c:varyColors val="1"/>{}<c:holeSize val="90"/></c:doughnutChart>"#, ser(0, "S", None, &["A", "B"], &["9", "1"]));
+    let x = format!(r#"<c:chartSpace {NS}><c:chart>{title}<c:autoTitleDeleted val="0"/><c:plotArea>{plot}</c:plotArea></c:chart></c:chartSpace>"#);
+    chart_items(&crate::xml::parse(x.as_bytes()).unwrap(), &theme(), 80.0, 110.0)
+}
+
+fn title_item(items: &[GraphicItem]) -> ([f32; 4], f32, Rgb, bool, TextAlign) {
+    items
+        .iter()
+        .find_map(|it| match it {
+            GraphicItem::Text { rect, text, size, color, bold, align, .. } if text == "90%" => Some((*rect, *size, *color, *bold, *align)),
+            _ => None,
+        })
+        .expect("title drawn")
+}
+
+#[test]
+fn a_manually_placed_title_is_drawn_where_the_file_puts_it() {
+    // A CV template's language ring: the percentage is the title, placed in the hole, white 12 pt.
+    let manual = r#"<c:title><c:tx><c:rich><a:bodyPr/><a:p><a:r><a:rPr sz="1200" b="0"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:rPr><a:t>90%</a:t></a:r></a:p></c:rich></c:tx><c:layout><c:manualLayout><c:xMode val="edge"/><c:yMode val="edge"/><c:x val="0.3"/><c:y val="0.5"/></c:manualLayout></c:layout><c:overlay val="0"/></c:title>"#;
+    let (rect, size, color, bold, align) = title_item(&titled_doughnut(manual));
+    assert_eq!((rect[0], rect[1]), (24.0, 55.0), "top-left at 30 % / 50 % of the 80 x 110 chart");
+    assert_eq!((size, color, bold, align), (12.0, Rgb(0xFF, 0xFF, 0xFF), false, TextAlign::Left));
+
+    // Without a manual layout (or in factor mode) the title stays centred on top in the default style.
+    let plain = r#"<c:title><c:tx><c:rich><a:p><a:r><a:t>90%</a:t></a:r></a:p></c:rich></c:tx><c:layout><c:manualLayout><c:x val="0.3"/><c:y val="0.5"/></c:manualLayout></c:layout></c:title>"#;
+    let (rect, size, color, bold, align) = title_item(&titled_doughnut(plain));
+    assert_eq!((rect[1], size, color, bold, align), (PAD, TITLE_SIZE, TEXT, true, TextAlign::Center));
+}

@@ -71,6 +71,7 @@ impl Chart {
             n,
             cats,
             title: title_of(chart, &series),
+            title_style: title_style(chart, theme),
             series,
             accents: (4..10).map(|i| slot(theme, i)).collect(),
             legend: legend_pos(chart),
@@ -303,6 +304,34 @@ pub(super) fn axis(a: Option<&El>) -> Axis {
             .and_then(|f| f.attr("formatCode"))
             .filter(|f| f.len() <= MAX_FORMAT_CODE)
             .map(str::to_string),
+    }
+}
+
+/// How the file draws the title: where `c:layout/c:manualLayout` puts its top-left corner (edge
+/// mode only, as fractions of the chart's width and height) and its first run's size, weight and
+/// colour. Anything the file leaves out keeps the default.
+#[derive(Clone, Copy, Default)]
+pub(super) struct TitleStyle {
+    pub(super) at: Option<(f32, f32)>,
+    pub(super) size: Option<f32>,
+    pub(super) bold: Option<bool>,
+    pub(super) color: Option<Rgb>,
+}
+
+pub(super) fn title_style(chart: &El, theme: &[Rgb]) -> TitleStyle {
+    let Some(t) = chart.child("c:title") else { return TitleStyle::default() };
+    let at = t.child("c:layout").and_then(|l| l.child("c:manualLayout")).and_then(|m| {
+        let edge = |mode: &str| m.child(mode).and_then(|e| e.attr("val")) == Some("edge");
+        let frac = |name: &str| m.child(name).and_then(|e| e.attr("val")).and_then(|v| v.trim().parse::<f32>().ok()).filter(|v| v.is_finite());
+        (edge("c:xMode") && edge("c:yMode")).then_some(())?;
+        Some((frac("c:x")?.clamp(0.0, 1.0), frac("c:y")?.clamp(0.0, 1.0)))
+    });
+    let rpr = t.child("c:tx").and_then(|tx| tx.find("a:rPr")).or_else(|| t.find("a:defRPr"));
+    TitleStyle {
+        at,
+        size: rpr.and_then(|r| r.attr("sz")).and_then(int).map(|v| (v as f32 / 100.0).clamp(6.0, 72.0)),
+        bold: rpr.and_then(|r| r.attr("b")).map(truthy),
+        color: rpr.and_then(|r| fill_colour(r, theme)),
     }
 }
 
