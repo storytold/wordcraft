@@ -13,6 +13,8 @@ use super::{
 
 mod draw;
 mod nav;
+mod objects;
+pub(crate) use objects::ObjectLookup;
 mod text;
 
 pub(crate) struct Exporter<'a> {
@@ -32,6 +34,9 @@ pub(crate) struct Exporter<'a> {
     pub(crate) vectors: HashMap<String, Option<Arc<Vector>>>,
     pub(crate) tags: Vec<TagEntry>,
     pub(crate) tag_index: HashMap<(StoryRef, DocPath), usize>,
+    /// Object offsets of paragraphs whose floating figures are tagged, shared across pages for
+    /// this export only. Repeated `object_at` calls would recount each paragraph prefix.
+    pub(crate) objects: ObjectLookup<'a>,
     /// Link rectangles on the current page: (x0, y0, x1, y1, target).
     pub(crate) links: Vec<(f32, f32, f32, f32, String)>,
     /// Bookmark positions by name (the first of a name wins), gathered once: looking each internal
@@ -234,7 +239,7 @@ impl Exporter<'_> {
                     }
                 }
                 Placed::Image { story, path, off, .. } => {
-                    let obj = self.doc.para(*story, path).and_then(|p| p.object_at(*off));
+                    let obj = self.objects.get(*story, path, *off);
                     let role = if obj.is_some_and(InlineObject::is_decorative) { Role::Artifact(ArtifactType::Other) } else { Role::Figure };
                     let alt = match obj {
                         Some(InlineObject::Image { alt, .. }) => alt.clone(),
@@ -253,7 +258,7 @@ impl Exporter<'_> {
                     }
                 }),
                 Placed::Graphic { story, path, off, graphic, .. } => {
-                    let alt = match self.doc.para(*story, path).and_then(|p| p.object_at(*off)) {
+                    let alt = match self.objects.get(*story, path, *off) {
                         Some(InlineObject::Graphic { alt, .. }) => graphic_alt(alt, graphic.kind).to_string(),
                         _ => graphic.kind.noun().to_string(),
                     };

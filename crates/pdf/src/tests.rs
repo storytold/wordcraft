@@ -1369,6 +1369,7 @@ fn bookmark_destination_is_the_page_of_its_start() {
         vectors: HashMap::new(),
         tags: Vec::new(),
         tag_index: HashMap::new(),
+        objects: crate::exporter::ObjectLookup::new(&d),
         links: Vec::new(),
         bookmarks: std::cell::OnceCell::new(),
     };
@@ -2487,4 +2488,186 @@ fn baseline_is_the_most_shared_y() {
     assert_eq!(baseline(&[(1, 0.0, 7.5), (2, 3.0, 4.0), (3, 6.0, 7.5)]), Some(7.5));
     assert_eq!(baseline(&[(1, 0.0, 9.0), (2, 3.0, 4.0)]), Some(4.0));
     assert_eq!(baseline(&[(1, 0.0, -0.0), (2, 3.0, 0.0)]), Some(0.0));
+}
+
+/// #3614: tagging separately placed pictures must not count every preceding object again.
+#[test]
+fn figure_tag_lookups_do_not_rescan_long_paragraphs() {
+    use wordcraft_doc::para::{AltText, Float, OBJ, Run};
+    use wordcraft_geom::{Rect, Spin};
+    let fixture = |n: usize| {
+        let mut d = Document::new();
+        let media = d.add_media(png(), "png");
+        let mut p = Paragraph::new();
+        // Invisible markers dominate the paragraph, not drawing or PDF compression work.
+        p.text = OBJ.to_string().repeat(16 * n);
+        p.objects = (0..16 * n).map(|_| InlineObject::BookmarkEnd { name: "absent".into() }).collect();
+        let mut items = Vec::new();
+        for i in 0..n {
+            let off = p.len();
+            p.text.push(OBJ);
+            p.objects.push(InlineObject::Image {
+                media: media.clone(),
+                w: 1.0,
+                h: 1.0,
+                alt: format!("Figure {i}"),
+                float: Float { alt: AltText { decorative: i % 2 == 0, ..Default::default() }, ..Default::default() },
+                crop: [0.0; 4],
+                ole: None,
+            });
+            items.push(Placed::Image {
+                rect: Rect::new(72.0, 72.0, 1.0, 1.0),
+                media: media.clone(),
+                crop: [0.0; 4],
+                story: StoryRef::Body,
+                path: DocPath::top(0),
+                off,
+                spin: Spin::default(),
+            });
+        }
+        p.runs = vec![Run { len: p.len(), props: CharProps::default() }];
+        // Reuse a real empty page to isolate PDF export from pagination cost.
+        let mut lay = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+        lay.pages[0].items = items;
+        d.body = vec![para_block(p)];
+        (d, lay)
+    };
+    let ((small, small_lay), (big, big_lay)) = (fixture(1_000), fixture(8_000));
+    let opts = PdfOptions { compress: false, tagged: true, ..Default::default() };
+    let (t1, t8, ratio) = cost_ratio(
+        8,
+        || {
+            std::hint::black_box(export_layout(&small, &small_lay, &opts).unwrap());
+        },
+        || {
+            std::hint::black_box(export_layout(&big, &big_lay, &opts).unwrap());
+        },
+    );
+    eprintln!("figure tagging n {t1:.4}s, 8n {t8:.4}s, ratio {ratio:.2}");
+    assert!(ratio < 24.0, "8x the figures cost {ratio:.2}x CPU ({t1:.4}s -> {t8:.4}s)");
+    let raw = String::from_utf8_lossy(&export_layout(&small, &small_lay, &opts).unwrap()).into_owned();
+    assert_eq!(raw.matches("/Alt(").count(), 500);
+    assert!(raw.contains("/Alt(Figure 1)"));
+    assert!(!raw.contains("/Alt(Figure 0)"));
+}
+
+/// The lookup key includes the story and table path; selected/repeated pages retain each alt.
+#[test]
+fn figure_tags_keep_story_paths_and_reordered_pages() {
+    use wordcraft_doc::graphic::{Graphic, GraphicKind};
+    use wordcraft_doc::para::{AltText, Float};
+    use wordcraft_doc::{Part, PartKind};
+    use wordcraft_geom::{Rect, Spin};
+    let mut d = Document::new();
+    let media = d.add_media(png(), "png");
+    let image = |alt: &str, decorative: bool| InlineObject::Image {
+        media: media.clone(),
+        w: 5.0,
+        h: 5.0,
+        alt: alt.into(),
+        float: Float { alt: AltText { decorative, ..Default::default() }, ..Default::default() },
+        crop: [0.0; 4],
+        ole: None,
+    };
+    let para = |object| {
+        let mut p = Paragraph::with_text("é", CharProps::default());
+        p.insert_object(2, object, &Default::default()).unwrap();
+        p
+    };
+    let mut lay = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let mut body = para(image("Body picture", false));
+    body.insert_object(body.len(), image("Decorative", true), &Default::default()).unwrap();
+    let graphic = Arc::new(Graphic { kind: GraphicKind::Diagram, ..Default::default() });
+    let mut table = Table::new(1, 1, 200.0);
+    table.rows[0].cells[0].blocks = vec![para_block(para(InlineObject::Graphic {
+        w: 5.0,
+        h: 5.0,
+        alt: "Cell diagram".into(),
+        float: Default::default(),
+        graphic: graphic.clone(),
+    }))];
+    d.body = vec![para_block(body), Arc::new(Block::Table(table))];
+    d.parts.insert(7, Part { kind: PartKind::Endnote, blocks: vec![para_block(para(image("Part picture", false)))], ..Default::default() });
+    let placed = |story, path, off| Placed::Image {
+        rect: Rect::new(72.0, 72.0, 5.0, 5.0),
+        media: media.clone(),
+        crop: [0.0; 4],
+        story,
+        path,
+        off,
+        spin: Spin::default(),
+    };
+    lay.pages[0].items = vec![
+        placed(StoryRef::Body, DocPath::top(0), 5),
+        Placed::Graphic {
+            rect: Rect::new(80.0, 72.0, 5.0, 5.0),
+            graphic,
+            story: StoryRef::Body,
+            path: DocPath(vec![1, 0, 0, 0]),
+            off: 2,
+            spin: Spin::default(),
+        },
+        placed(StoryRef::Body, DocPath::top(0), 2),
+    ];
+    let mut second = lay.pages[0].clone();
+    second.items = vec![placed(StoryRef::Part(7), DocPath::top(0), 2), placed(StoryRef::Body, DocPath::top(0), 2)];
+    lay.pages.push(second);
+    use hayro_syntax::content::ops::TypedInstruction;
+    use hayro_syntax::object::{Array, Dict, Name, String as PdfString};
+    // Read serialized structure elements rather than inferring their role from an alt string.
+    fn described<'a>(dict: Dict<'a>, out: &mut Vec<Dict<'a>>) {
+        if dict.get::<PdfString<'_>>(b"Alt").is_some() {
+            out.push(dict.clone());
+        }
+        if let Some(kids) = dict.get::<Array<'_>>(b"K") {
+            for child in kids.iter::<Dict<'_>>() {
+                described(child, out);
+            }
+        }
+    }
+    for tagged in [true, false] {
+        let bytes = export_layout(&d, &lay, &PdfOptions { tagged, compress: false, pages: Some(vec![1, 0, 1]), ..Default::default() }).unwrap();
+        let raw = String::from_utf8_lossy(&bytes);
+        assert_eq!(hayro_syntax::Pdf::new(bytes.clone()).unwrap().pages().len(), 3);
+        assert_eq!(raw.matches("/Alt(Body picture)").count(), if tagged { 3 } else { 0 });
+        assert_eq!(raw.matches("/Alt(Part picture)").count(), if tagged { 2 } else { 0 });
+        assert_eq!(raw.matches("/Alt(Cell diagram)").count(), usize::from(tagged));
+        assert!(!raw.contains("/Alt(Decorative)"));
+        let pdf = hayro_syntax::Pdf::new(bytes.clone()).unwrap();
+        let catalog = pdf.xref().get::<Dict<'_>>(pdf.xref().root_id()).unwrap();
+        let tree = catalog.get::<Dict<'_>>(b"StructTreeRoot");
+        assert_eq!(tree.is_some(), tagged);
+        let mut figures = Vec::new();
+        if let Some(tree) = tree {
+            described(tree, &mut figures);
+        }
+        let expected = [["Part picture", "Body picture"], ["Cell diagram", "Body picture"], ["Part picture", "Body picture"]];
+        for (i, page) in pdf.pages().iter().enumerate() {
+            let alts: Vec<_> = figures
+                .iter()
+                .filter(|f| f.get::<Dict<'_>>(b"Pg").as_ref() == Some(page.raw()))
+                .map(|f| {
+                    assert_eq!(f.get::<Name<'_>>(b"S").as_deref(), Some(b"Figure".as_slice()), "described image/graphic role");
+                    pdf_text_string(f.get::<PdfString<'_>>(b"Alt").unwrap().as_bytes())
+                })
+                .collect();
+            assert_eq!(alts, if tagged { expected[i].to_vec() } else { Vec::new() }, "output page {i} alt sequence");
+            let mut marked = Vec::new();
+            let mut pictures = Vec::new();
+            let mut ops = page.typed_operations();
+            while let Some(op) = ops.next() {
+                match op {
+                    TypedInstruction::BeginMarkedContent(bmc) => marked.push(bmc.0.as_ref() == b"Artifact"),
+                    TypedInstruction::BeginMarkedContentWithProperties(bdc) => marked.push(bdc.0.as_ref() == b"Artifact"),
+                    TypedInstruction::EndMarkedContent(_) => {
+                        marked.pop();
+                    }
+                    TypedInstruction::XObject(_) => pictures.push(marked.contains(&true)),
+                    _ => {}
+                }
+            }
+            // Only output page 1 has the cached decorative picture, painted before the body figure.
+            assert_eq!(pictures, vec![tagged && i == 1, false], "cached picture Artifact roles on output page {i}");
+        }
+    }
 }
