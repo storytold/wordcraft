@@ -259,6 +259,24 @@ fn json_round_trip() {
 }
 
 #[test]
+fn textbox_tight_wrap_survives_native_json() {
+    let mut d = Document::from_text("text");
+    let para = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    para.props.textbox_tight_wrap = Some(props::TextboxTightWrap::AllLines);
+    para.props.style = Some("TightWrap".into());
+    d.styles.upsert(Style {
+        id: "TightWrap".into(),
+        name: "Tight Wrap".into(),
+        para: props::ParaProps { textbox_tight_wrap: Some(props::TextboxTightWrap::FirstAndLastLine), ..Default::default() },
+        ..Default::default()
+    });
+    let json = serde_json::to_string(&d).unwrap();
+    let back: Document = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.para(StoryRef::Body, &Path::top(0)).unwrap().props.textbox_tight_wrap, Some(props::TextboxTightWrap::AllLines));
+    assert_eq!(back.styles.get("TightWrap").unwrap().para.textbox_tight_wrap, Some(props::TextboxTightWrap::FirstAndLastLine));
+}
+
+#[test]
 fn ensure_nonempty_repairs() {
     let mut d = Document::new();
     d.body.clear();

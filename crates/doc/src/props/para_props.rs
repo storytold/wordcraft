@@ -38,6 +38,40 @@ pub enum LineSpacing {
     Exactly(f32),
 }
 
+/// Tight wrapping for text boxes (`w:textboxTightWrap`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TextboxTightWrap {
+    None,
+    AllLines,
+    FirstAndLastLine,
+    FirstLineOnly,
+    LastLineOnly,
+}
+
+impl TextboxTightWrap {
+    pub fn from_ooxml(value: &str) -> Option<Self> {
+        match value {
+            "none" => Some(Self::None),
+            "allLines" => Some(Self::AllLines),
+            "firstAndLastLine" => Some(Self::FirstAndLastLine),
+            "firstLineOnly" => Some(Self::FirstLineOnly),
+            "lastLineOnly" => Some(Self::LastLineOnly),
+            _ => None,
+        }
+    }
+
+    pub const fn ooxml(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::AllLines => "allLines",
+            Self::FirstAndLastLine => "firstAndLastLine",
+            Self::FirstLineOnly => "firstLineOnly",
+            Self::LastLineOnly => "lastLineOnly",
+        }
+    }
+}
+
 impl Default for LineSpacing {
     fn default() -> Self {
         LineSpacing::Multiple(1.0)
@@ -283,6 +317,9 @@ pub struct ParaProps {
     pub space_after_auto: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub line_spacing: Option<LineSpacing>,
+    /// Paragraph text box tight-wrap mode. `None` means inherit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub textbox_tight_wrap: Option<TextboxTightWrap>,
     /// Ignore space before/after between paragraphs of the same style.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub contextual_spacing: Option<bool>,
@@ -374,7 +411,7 @@ impl ParaProps {
 
     fn overlay_layout(&mut self, patch: &ParaProps) {
         overlay_fields!(self, patch; style, align, indent_left, indent_right, indent_first, indent_left_chars, indent_right_chars, indent_first_chars,
-            space_before, space_after, space_before_auto, space_after_auto, line_spacing, contextual_spacing, mirror_indents, tabs, shading, borders);
+            space_before, space_after, space_before_auto, space_after_auto, line_spacing, textbox_tight_wrap, contextual_spacing, mirror_indents, tabs, shading, borders);
     }
 
     fn overlay_pagination(&mut self, patch: &ParaProps) {

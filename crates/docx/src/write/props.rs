@@ -257,6 +257,9 @@ pub fn ppr_inner(w: &mut W, p: &ParaProps, framed: bool, num_change: Option<&Cha
     toggle(w, "w:pageBreakBefore", p.page_break_before);
     write_frame(w, p, framed);
     toggle(w, "w:widowControl", p.widow_control);
+    if let Some(mode) = p.textbox_tight_wrap {
+        w.val("w:textboxTightWrap", mode.ooxml());
+    }
     if let Some(nr) = p.numbering {
         w.open("w:numPr", &[]);
         w.val("w:ilvl", &n(nr.level.min(8) as i64));

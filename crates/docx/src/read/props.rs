@@ -5,8 +5,8 @@ use std::collections::HashMap;
 use wordcraft_doc::para::cap_alt;
 use wordcraft_doc::props::{
     Align, Border, BorderStyle, Borders, CellProps, CharProps, CombineBrackets, EastAsianLayout, HeightRule, Highlight, LineSpacing, NumRef,
-    ParaProps, Rgb, RowProps, TabAlign, TabLeader, TabStop, TableFloat, TableLook, TableProps, TextColor, TextDirection, Underline, VAlign, VMerge,
-    VertAlign,
+    ParaProps, Rgb, RowProps, TabAlign, TabLeader, TabStop, TableFloat, TableLook, TableProps, TextColor, TextDirection, TextboxTightWrap, Underline,
+    VAlign, VMerge, VertAlign,
 };
 use wordcraft_doc::section::{
     Columns, DocGrid, DocGridType, LineNumberRestart, LineNumbering, MAX_CHAR_SPACE, MAX_GRID_PITCH, NotePos, NoteProps, NoteRestart, NumFormat,
@@ -326,6 +326,7 @@ impl PropCtx {
                 "w:keepLines" => p.keep_lines = Some(on_off(k)),
                 "w:pageBreakBefore" => p.page_break_before = Some(on_off(k)),
                 "w:widowControl" => p.widow_control = Some(on_off(k)),
+                "w:textboxTightWrap" => p.textbox_tight_wrap = k.attr("w:val").and_then(TextboxTightWrap::from_ooxml),
                 "w:contextualSpacing" => p.contextual_spacing = Some(on_off(k)),
                 "w:mirrorIndents" => p.mirror_indents = Some(on_off(k)),
                 "w:suppressAutoHyphens" => p.suppress_hyphens = Some(on_off(k)),

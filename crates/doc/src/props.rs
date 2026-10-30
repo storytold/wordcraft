@@ -26,7 +26,9 @@ pub use char_props::{
     CharProps, CombineBrackets, DEFAULT_FONT_SIZE, EastAsianLayout, Highlight, Ligatures, NumChange, PropChange, Underline, VertAlign,
 };
 pub use color::{Rgb, TextColor};
-pub use para_props::{Align, Border, BorderStyle, Borders, LineSpacing, NumRef, ParaProps, TAB_POS_EPS, TabAlign, TabLeader, TabStop, TextFrame};
+pub use para_props::{
+    Align, Border, BorderStyle, Borders, LineSpacing, NumRef, ParaProps, TAB_POS_EPS, TabAlign, TabLeader, TabStop, TextFrame, TextboxTightWrap,
+};
 pub use table_props::{
     CellProps, HeightRule, RowProps, TableFloat, TableLook, TableProps, TextDirection, TextVert, VAlign, VMerge, anchor_ooxml, valign_from_anchor,
 };
