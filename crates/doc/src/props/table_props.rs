@@ -1,4 +1,5 @@
 use super::char_props::PropChange;
+use super::cnf_style::CnfStyle;
 use super::color::Rgb;
 use super::para_props::{Align, Borders};
 use super::{Deserialize, Serialize};
@@ -216,6 +217,9 @@ pub enum HeightRule {
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct RowProps {
+    /// Explicit conditional table-style flags (`w:cnfStyle`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cnf_style: Option<CnfStyle>,
     /// Points (meaning depends on `height_rule`).
     pub height: Option<f32>,
     pub height_rule: HeightRule,
@@ -262,6 +266,9 @@ pub enum VMerge {
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct CellProps {
+    /// Explicit conditional table-style flags (`w:cnfStyle`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cnf_style: Option<CnfStyle>,
     /// Preferred width, points.
     pub width: Option<f32>,
     /// Preferred width as a percentage of the table's (`w:tcW w:type="pct"`).

@@ -1,8 +1,8 @@
 //! Property writers, in ECMA-376 schema element order.
 
 use wordcraft_doc::props::{
-    Align, Border, BorderStyle, Borders, CellProps, CharProps, EastAsianLayout, HeightRule, Highlight, LineSpacing, ParaProps, RowProps, TabAlign,
-    TabLeader, TableFloat, TableLook, TableProps, TextColor, VAlign, VMerge, VertAlign,
+    Align, Border, BorderStyle, Borders, CellProps, CharProps, CnfStyle, EastAsianLayout, HeightRule, Highlight, LineSpacing, ParaProps, RowProps,
+    TabAlign, TabLeader, TableFloat, TableLook, TableProps, TextColor, VAlign, VMerge, VertAlign,
 };
 
 use crate::units::{n, twips};
@@ -16,6 +16,35 @@ fn toggle(w: &mut W, name: &str, v: Option<bool>) {
     }
 }
 
+fn cnf_style(w: &mut W, c: &CnfStyle) {
+    let mut attrs: Vec<(&str, String)> = Vec::new();
+    if let Some(v) = &c.val
+        && let Some(v) = CnfStyle::bounded_val(v)
+    {
+        attrs.push(("w:val", v));
+    }
+    for (name, value) in [
+        ("w:firstRow", c.first_row),
+        ("w:lastRow", c.last_row),
+        ("w:firstColumn", c.first_column),
+        ("w:lastColumn", c.last_column),
+        ("w:oddVBand", c.odd_v_band),
+        ("w:evenVBand", c.even_v_band),
+        ("w:oddHBand", c.odd_h_band),
+        ("w:evenHBand", c.even_h_band),
+        ("w:firstRowFirstColumn", c.first_row_first_column),
+        ("w:firstRowLastColumn", c.first_row_last_column),
+        ("w:lastRowFirstColumn", c.last_row_first_column),
+        ("w:lastRowLastColumn", c.last_row_last_column),
+    ] {
+        if let Some(value) = value {
+            attrs.push((name, if value { "1" } else { "0" }.to_owned()));
+        }
+    }
+    let attrs: Vec<(&str, &str)> = attrs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    w.empty("w:cnfStyle", &attrs);
+}
+
 fn round(v: f32) -> i64 {
     let v = wordcraft_geom::finite(v);
     v.round().clamp(-1e9, 1e9) as i64
@@ -23,6 +52,9 @@ fn round(v: f32) -> i64 {
 
 /// `w:rPr` content (without the wrapper). Link and revision marks are not run properties.
 pub fn rpr_inner(w: &mut W, c: &CharProps) {
+    if let Some(v) = &c.cnf_style {
+        cnf_style(w, v);
+    }
     if let Some(s) = &c.style {
         w.val("w:rStyle", s);
     }
@@ -249,6 +281,9 @@ pub fn borders(w: &mut W, tag: &str, b: &Borders, inner: Option<&str>, extra: &[
 /// `w:pPr` content (without the wrapper); `num_change` are the attributes of a tracked list
 /// numbering change (`w:numberingChange`, written in `w:numPr`).
 pub fn ppr_inner(w: &mut W, p: &ParaProps, framed: bool, num_change: Option<&ChangeAttrs>) {
+    if let Some(v) = &p.cnf_style {
+        cnf_style(w, v);
+    }
     if let Some(s) = &p.style {
         w.val("w:pStyle", s);
     }
@@ -545,7 +580,7 @@ pub fn trpr(w: &mut W, r: &RowProps, change: Option<&ChangeAttrs>) {
     }
     let change = change.zip(r.fmt_change.as_ref());
     let gaps = r.grid_before > 0 || r.grid_after > 0 || r.w_before.is_some() || r.w_after.is_some();
-    if r.height.is_none() && !r.header && !r.cant_split && !gaps && change.is_none() {
+    if r.height.is_none() && !r.header && !r.cant_split && !gaps && r.cnf_style.is_none() && change.is_none() {
         return;
     }
     w.open("w:trPr", &[]);
@@ -586,6 +621,9 @@ fn tblprex(w: &mut W, t: &TableProps) {
 }
 
 fn trpr_inner(w: &mut W, r: &RowProps) {
+    if let Some(v) = &r.cnf_style {
+        cnf_style(w, v);
+    }
     // The grid gaps go first, in the schema's order (as Word writes them).
     if r.grid_before > 0 {
         w.val("w:gridBefore", &n(r.grid_before.into()));
@@ -625,6 +663,9 @@ pub fn tcpr(w: &mut W, c: &CellProps, change: Option<&ChangeAttrs>) {
 }
 
 fn tcpr_inner(w: &mut W, c: &CellProps) {
+    if let Some(v) = &c.cnf_style {
+        cnf_style(w, v);
+    }
     match (c.width, c.width_pct) {
         (Some(v), _) => w.empty("w:tcW", &[("w:w", &twips(v.max(0.0))), ("w:type", "dxa")]),
         (None, Some(p)) => w.empty("w:tcW", &[("w:w", &n((p.clamp(0.0, 100.0) * 50.0).round() as i64)), ("w:type", "pct")]),

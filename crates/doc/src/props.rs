@@ -18,6 +18,7 @@ macro_rules! drop_same_fields {
 }
 
 mod char_props;
+mod cnf_style;
 mod color;
 mod para_props;
 mod table_props;
@@ -25,6 +26,7 @@ mod table_props;
 pub use char_props::{
     CharProps, CombineBrackets, DEFAULT_FONT_SIZE, EastAsianLayout, Highlight, Ligatures, NumChange, PropChange, Underline, VertAlign,
 };
+pub use cnf_style::CnfStyle;
 pub use color::{Rgb, TextColor};
 pub use para_props::{Align, Border, BorderStyle, Borders, LineSpacing, NumRef, ParaProps, TAB_POS_EPS, TabAlign, TabLeader, TabStop, TextFrame};
 pub use table_props::{

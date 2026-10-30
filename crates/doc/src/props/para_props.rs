@@ -1,4 +1,5 @@
 use super::char_props::{NumChange, PropChange};
+use super::cnf_style::CnfStyle;
 use super::color::Rgb;
 use super::{Deserialize, Serialize};
 
@@ -245,6 +246,9 @@ pub struct TextFrame {
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ParaProps {
+    /// Explicit conditional table-style flags (`w:cnfStyle`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cnf_style: Option<CnfStyle>,
     /// Paragraph style id.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub style: Option<String>,
@@ -370,6 +374,9 @@ impl ParaProps {
         self.overlay_layout(patch);
         self.overlay_pagination(patch);
         self.overlay_script_layout(patch);
+        if let Some(p) = &patch.cnf_style {
+            self.cnf_style.get_or_insert_with(Default::default).overlay(p);
+        }
     }
 
     fn overlay_layout(&mut self, patch: &ParaProps) {

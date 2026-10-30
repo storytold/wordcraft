@@ -4,9 +4,9 @@ use std::collections::HashMap;
 
 use wordcraft_doc::para::cap_alt;
 use wordcraft_doc::props::{
-    Align, Border, BorderStyle, Borders, CellProps, CharProps, CombineBrackets, EastAsianLayout, HeightRule, Highlight, LineSpacing, NumRef,
-    ParaProps, Rgb, RowProps, TabAlign, TabLeader, TabStop, TableFloat, TableLook, TableProps, TextColor, TextDirection, Underline, VAlign, VMerge,
-    VertAlign,
+    Align, Border, BorderStyle, Borders, CellProps, CharProps, CnfStyle, CombineBrackets, EastAsianLayout, HeightRule, Highlight, LineSpacing,
+    NumRef, ParaProps, Rgb, RowProps, TabAlign, TabLeader, TabStop, TableFloat, TableLook, TableProps, TextColor, TextDirection, Underline, VAlign,
+    VMerge, VertAlign,
 };
 use wordcraft_doc::section::{
     Columns, DocGrid, DocGridType, LineNumberRestart, LineNumbering, MAX_CHAR_SPACE, MAX_GRID_PITCH, NotePos, NoteProps, NoteRestart, NumFormat,
@@ -15,6 +15,32 @@ use wordcraft_doc::section::{
 
 use super::drawing_color::adjust_lum;
 use crate::units::{int, line_multiple, measure, on_off, tw, u32_of};
+
+fn cnf_style(e: &El) -> Option<CnfStyle> {
+    let flag = |name: &str| {
+        e.attr(name).and_then(|v| match v.trim() {
+            "1" | "true" | "on" | "True" | "TRUE" => Some(true),
+            "0" | "false" | "off" | "False" | "FALSE" => Some(false),
+            _ => None,
+        })
+    };
+    let c = CnfStyle {
+        val: e.attr("w:val").and_then(CnfStyle::bounded_val),
+        first_row: flag("w:firstRow"),
+        last_row: flag("w:lastRow"),
+        first_column: flag("w:firstColumn"),
+        last_column: flag("w:lastColumn"),
+        odd_v_band: flag("w:oddVBand"),
+        even_v_band: flag("w:evenVBand"),
+        odd_h_band: flag("w:oddHBand"),
+        even_h_band: flag("w:evenHBand"),
+        first_row_first_column: flag("w:firstRowFirstColumn"),
+        first_row_last_column: flag("w:firstRowLastColumn"),
+        last_row_first_column: flag("w:lastRowFirstColumn"),
+        last_row_last_column: flag("w:lastRowLastColumn"),
+    };
+    (c != CnfStyle::default()).then_some(c)
+}
 
 /// A text frame (`w:framePr` without a drop cap, ECMA-376 §17.3.1.11), sizes and offsets in
 /// points (clamped), names kept as OOXML writes them.
@@ -225,6 +251,7 @@ impl PropCtx {
         let mut c = CharProps::default();
         for k in e.els() {
             match k.name.as_str() {
+                "w:cnfStyle" => c.cnf_style = cnf_style(k),
                 "w:rStyle" => c.style = k.attr("w:val").filter(|v| !v.is_empty()).map(|v| self.style_id(v)),
                 "w:rFonts" => {
                     // A theme font supersedes the fixed font beside it (`w:asciiTheme` over
@@ -321,6 +348,7 @@ impl PropCtx {
         let mut mark = CharProps::default();
         for k in e.els() {
             match k.name.as_str() {
+                "w:cnfStyle" => p.cnf_style = cnf_style(k),
                 "w:pStyle" => p.style = k.attr("w:val").filter(|v| !v.is_empty()).map(|v| self.style_id(v)),
                 "w:keepNext" => p.keep_next = Some(on_off(k)),
                 "w:keepLines" => p.keep_lines = Some(on_off(k)),
@@ -591,6 +619,7 @@ pub fn trpr(e: &El) -> RowProps {
     let mut r = RowProps::default();
     for k in e.els() {
         match k.name.as_str() {
+            "w:cnfStyle" => r.cnf_style = cnf_style(k),
             "w:trHeight" => {
                 r.height = tw(k, "w:val").map(|v| v.abs());
                 r.height_rule = match k.attr("w:hRule").map(str::to_ascii_lowercase).as_deref() {
@@ -625,6 +654,7 @@ pub fn tcpr(pc: &PropCtx, e: &El) -> (CellProps, bool) {
     let mut hcont = false;
     for k in e.els() {
         match k.name.as_str() {
+            "w:cnfStyle" => c.cnf_style = cnf_style(k),
             "w:tcW" => match k.attr("w:type") {
                 None | Some("dxa") => c.width = tw(k, "w:w").filter(|v| *v > 0.0),
                 Some("pct") => {

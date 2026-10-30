@@ -70,6 +70,7 @@ fn tiny_png() -> Vec<u8> {
 #[test]
 fn every_char_prop_round_trips() {
     let all = CharProps {
+        cnf_style: None,
         style: Some("Strong".into()),
         font: Some("Georgia".into()),
         // The symbol's own font: the run is written as `w:sym` characters (#2036).
@@ -160,6 +161,7 @@ fn every_char_prop_round_trips() {
 fn every_para_prop_round_trips() {
     let b = Border { style: BorderStyle::Double, width: 0.75, color: Some(Rgb(9, 8, 7)), space: 4.0 };
     let pp = ParaProps {
+        cnf_style: None,
         style: Some("Heading1".into()),
         align: Some(Align::Justify),
         indent_left: Some(36.0),
