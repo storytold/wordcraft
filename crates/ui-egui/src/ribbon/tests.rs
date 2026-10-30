@@ -697,3 +697,68 @@ fn shape_and_chart_formats_leave_out_of_range_sizes_alone() {
     assert_eq!(before.0, Some((20.0, 2500.0)));
     assert_eq!(shown(a), before, "Chart Design shown, the chart untouched");
 }
+
+/// Fit's padding (negative crop) survives the Picture Format tab: its crop boxes show it
+/// without clamping it to 0, and drawing them changes nothing and adds no undo step.
+#[test]
+fn picture_format_keeps_a_padded_crop() {
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    app.run("insert.picture", json!({"data": png_data()})).unwrap();
+    app.run("picture.crop", json!({"left": -0.25, "top": -0.5, "bottom": -0.5})).unwrap();
+    let crop = |app: &WordApp| match crate::objects::selected(app) {
+        Some((_, wordcraft_doc::para::InlineObject::Image { crop, .. })) => *crop,
+        other => panic!("expected a picture, got {other:?}"),
+    };
+    assert_eq!(crop(&app), [-0.25, -0.5, 0.0, -0.5]);
+    let depth = app.session.undo_depth();
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1600.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    h.state_mut().run("ui.tab", json!({"tab": "Picture Format"})).unwrap();
+    h.run_steps(4);
+    assert_eq!(crop(h.state()), [-0.25, -0.5, 0.0, -0.5], "the padding is kept");
+    assert_eq!(h.state().session.undo_depth(), depth, "no undo step");
+}
+
+/// The Crop menu's items work through their accessible controls: Aspect Ratio › 1:1 crops
+/// the 2:1 picture square and leaves it in crop mode, Crop to Shape › Oval outlines it, and
+/// Fit pads it back to the whole picture.
+#[test]
+fn crop_menu_items_crop_the_picture() {
+    use egui_kittest::kittest::Queryable;
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    app.run("insert.picture", json!({"data": png_data()})).unwrap();
+    let picture = |app: &WordApp| match crate::objects::selected(app) {
+        Some((_, wordcraft_doc::para::InlineObject::Image { w, h, crop, shape, .. })) => (*w, *h, *crop, shape.as_ref().map(|s| s.kind)),
+        other => panic!("expected a picture, got {other:?}"),
+    };
+    let (w0, h0, _, _) = picture(&app);
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(vec2(600.0, 800.0))
+        .build_ui_state(|ui, app: &mut WordApp| super::picture::crop_menu(ui, app), app);
+    h.run();
+    h.get_by_label("Aspect Ratio").click();
+    h.run();
+    h.get_by_label("1:1").click();
+    h.run();
+    let (w, ht, crop, _) = picture(h.state());
+    assert!((w - h0).abs() < 1e-3 && (ht - h0).abs() < 1e-3, "square at the kept height: {w}×{ht} (was {w0}×{h0})");
+    assert!(crop.iter().zip([0.25, 0.0, 0.25, 0.0]).all(|(a, b)| (a - b).abs() < 1e-4), "{crop:?}");
+    assert!(crate::crop::active(h.state()).is_some(), "left in crop mode");
+    h.get_by_label("Crop to Shape").click();
+    h.run();
+    // A command item's label ends in its (here empty) shortcut text.
+    h.get_by(|n| n.label().as_deref().map(str::trim) == Some("Oval")).click();
+    h.run();
+    assert_eq!(picture(h.state()).3, Some(wordcraft_doc::para::ShapeKind::Ellipse));
+    h.get_by(|n| n.label().as_deref().map(str::trim) == Some("Fit")).click();
+    h.run();
+    let (_, _, crop, shape) = picture(h.state());
+    assert!(crop.iter().zip([0.0, -0.5, 0.0, -0.5]).all(|(a, b)| (a - b).abs() < 1e-4), "Fit pads the square box: {crop:?}");
+    assert_eq!(shape, Some(wordcraft_doc::para::ShapeKind::Ellipse), "the outline stays");
+}

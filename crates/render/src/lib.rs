@@ -773,20 +773,25 @@ fn draw_mark_text(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
 }
 
 fn draw_image(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
-    let Draw::Image { rect, media, crop, alpha, .. } = it else { return };
+    let Draw::Image { rect, media, crop, alpha, shape, .. } = it else { return };
     let (doc, view) = (fr.doc, fr.view);
     let r = kurbo_rect(rect);
     if !r.overlaps(*fr.visible) {
         return;
     }
+    // Crop to Shape: the picture shows inside the shape's outline only.
+    let clip = match shape {
+        Some(k) => shape_path(*k, r, None),
+        None => r.to_path(0.1),
+    };
     if let Some(v) = vector_for(doc, media) {
-        draw_vector(ctx, &v, &r, crop, *alpha, view);
+        draw_vector(ctx, &v, &r, crop, *alpha, view, &clip);
         return;
     }
     let Some(pm) = pixmap_for(doc, media) else {
         ctx.set_transform(view);
         ctx.set_paint(color(fr.opts.ink(Rgb(0xD0, 0xD0, 0xD0)), 1.0));
-        ctx.fill_rect(&r);
+        ctx.fill_path(&clip);
         return;
     };
     let (pw, ph) = (pm.width().max(1) as f64, pm.height().max(1) as f64);
@@ -804,8 +809,19 @@ fn draw_image(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
         image: vello_cpu::ImageSource::Pixmap(pm),
         sampler: peniko::ImageSampler::default().with_quality(peniko::ImageQuality::Medium),
     });
-    ctx.set_paint_transform(Affine::translate((r.x0 - cl * pw * sx, r.y0 - ct * ph * sy)) * Affine::scale_non_uniform(sx, sy));
-    ctx.fill_rect(&r);
+    let (x0, y0) = (r.x0 - cl * pw * sx, r.y0 - ct * ph * sy);
+    ctx.set_paint_transform(Affine::translate((x0, y0)) * Affine::scale_non_uniform(sx, sy));
+    // The source's own area within the frame (smaller than it when padded).
+    let src = r.intersect(kurbo::Rect::new(x0, y0, x0 + pw * sx, y0 + ph * sy));
+    if shape.is_some() {
+        ctx.push_clip_layer(&clip);
+    }
+    if src.width() > 0.0 && src.height() > 0.0 {
+        ctx.fill_rect(&src);
+    }
+    if shape.is_some() {
+        ctx.pop_layer();
+    }
     ctx.reset_paint_transform();
     if faded {
         ctx.pop_layer();

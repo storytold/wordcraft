@@ -43,7 +43,7 @@ impl Exporter<'_> {
                 }
             }
             Draw::Line { x0, y0, x1, y1, width, color, stroke, alpha, .. } => self.line(s, (*x0, *y0, *x1, *y1), *width, *color, *stroke, *alpha),
-            Draw::Image { rect, media, crop, alpha, .. } => self.picture(s, rect, media, crop, *alpha),
+            Draw::Image { rect, media, crop, alpha, shape, .. } => self.picture(s, rect, media, crop, *alpha, *shape),
             Draw::Path { segs, fill: f, stroke, stroke_width, dash, cap } => {
                 let mut pb = PathBuilder::new();
                 append_path(&mut pb, &wordcraft_layout::display::seg_path(segs));
@@ -293,7 +293,7 @@ impl Exporter<'_> {
                 while y < h {
                     let mut x = 0.0;
                     while x < w {
-                        self.picture(s, &Rect::new(x, y, tw, th), &pic.media, &[0.0; 4], 1.0);
+                        self.picture(s, &Rect::new(x, y, tw, th), &pic.media, &[0.0; 4], 1.0, None);
                         x += tw;
                     }
                     y += th;
@@ -301,11 +301,29 @@ impl Exporter<'_> {
                 return;
             }
         }
-        self.picture(s, &Rect::new(0.0, 0.0, w, h), &pic.media, &[0.0; 4], 1.0);
+        self.picture(s, &Rect::new(0.0, 0.0, w, h), &pic.media, &[0.0; 4], 1.0, None);
     }
 
-    fn picture(&mut self, s: &mut Surface, rect: &Rect, media: &str, crop: &[f32; 4], alpha: f32) {
-        let Some(clip) = rect_path(rect) else { return };
+    fn picture(&mut self, s: &mut Surface, rect: &Rect, media: &str, crop: &[f32; 4], alpha: f32, shape: Option<ShapeKind>) {
+        // A shaped picture is also clipped to its frame: an outline reaching past the frame
+        // can't draw outside it.
+        let frame = shape.and_then(|_| rect_path(rect));
+        if let Some(f) = &frame {
+            s.push_clip_path(f, &FillRule::NonZero);
+        }
+        self.picture_in(s, rect, media, crop, alpha, shape);
+        if frame.is_some() {
+            s.pop();
+        }
+    }
+
+    fn picture_in(&mut self, s: &mut Surface, rect: &Rect, media: &str, crop: &[f32; 4], alpha: f32, shape: Option<ShapeKind>) {
+        // Crop to Shape: the picture shows inside the shape's outline only.
+        let clip = match shape {
+            Some(k) => shape_path(k, rect, None),
+            None => rect_path(rect),
+        };
+        let Some(clip) = clip else { return };
         if let Some(v) = self.vector(media) {
             vector_picture(self, s, &v, rect, crop, &clip, alpha);
             return;

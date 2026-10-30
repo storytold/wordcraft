@@ -20,7 +20,7 @@ mod run;
 
 pub use float::{AltText, Anchor, Float, FloatAlign, MAX_ALT_TEXT, Wrap, WrapText, cap_alt};
 pub use inline_kinds::{NoteKind, PTabAlign, PTabBase, RubyAlign, ShapeKind, ruby_offset, ruby_raise};
-pub use inline_object::{CanvasStyle, GroupChild, InlineObject, MAX_GROUP_CHILDREN};
+pub use inline_object::{CanvasStyle, GroupChild, InlineObject, MAX_CROP, MAX_GROUP_CHILDREN, MIN_CROP, PictureShape};
 pub use run::{COLUMN_BREAK, LINE_BREAK, NB_HYPHEN, NBSP, OBJ, PAGE_BREAK, Run, SOFT_HYPHEN, next_rev};
 
 /// A paragraph.

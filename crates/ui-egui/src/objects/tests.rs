@@ -267,8 +267,16 @@ fn an_inline_picture_drags_to_the_insertion_cursor_and_stays_inline() {
         Default::default(),
     );
     a.run("view.commentsPane", json!({"value": false})).unwrap();
-    let picture =
-        InlineObject::Image { media: String::new(), w: 80.0, h: 40.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None };
+    let picture = InlineObject::Image {
+        media: String::new(),
+        w: 80.0,
+        h: 40.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        ole: None,
+        shape: None,
+    };
     a.session.doc.insert_object(&Pos::body(1, 0), picture, &Default::default()).unwrap();
     a.session.touch();
     let mut h: H = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(0.25).build_ui_state(
@@ -547,6 +555,7 @@ fn rotation_drag_turns_picture_pixels_live_and_commits_once_or_cancels() {
             float: wordcraft_doc::para::Float { wrap: Wrap::InFrontOfText, x: 150.0, y: 180.0, rot: initial, flip_h, flip_v, ..Default::default() },
             crop: [0.0; 4],
             ole: None,
+            shape: None,
         };
         let (mut app, _) = app_with(picture);
         app.session.doc.media.insert("rotation-test".into(), Arc::new(bytes));

@@ -80,6 +80,8 @@ pub enum Draw {
         media: String,
         crop: [f32; 4],
         alpha: f32,
+        /// Crop to Shape: the outline the picture is clipped to (None: `rect`).
+        shape: Option<ShapeKind>,
         /// The picture's alt text (empty for a floating or diagram picture, which tag themselves).
         alt: String,
         /// Marked decorative (Alt Text › Mark as decorative): an artifact in tagged PDF, which

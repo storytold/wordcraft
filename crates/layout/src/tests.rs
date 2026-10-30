@@ -10196,6 +10196,7 @@ fn split_cell_moves_image_frame() {
             rect,
             media: "synthetic".into(),
             crop: [0.1, 0.2, 0.3, 0.4],
+            shape: None,
             story: StoryRef::Body,
             path: Path::top(0),
             off: 0,

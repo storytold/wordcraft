@@ -883,10 +883,11 @@ fn picture_crop_with_size_is_one_undo_step() {
     assert_eq!(image(&s), (150.0, 90.0, [0.25, 0.0, 0.0, 0.1]));
     s.run("edit.undo", &json!({})).unwrap();
     assert_eq!(image(&s), (200.0, 100.0, [0.0; 4]));
-    // Clamps: each side at most 0.95; hostile sizes are ignored or clamped, never applied raw.
+    // Clamps: each side at most 0.95 (negative pads); hostile sizes are ignored or clamped,
+    // never applied raw.
     s.run("picture.crop", &json!({"left": 9.0, "right": -3.0, "width": "x", "height": -5.0})).unwrap();
     let (w, h, crop) = image(&s);
-    assert_eq!(crop, [0.95, 0.0, 0.0, 0.0]);
+    assert_eq!(crop, [0.95, 0.0, -3.0, 0.0]);
     assert_eq!(w, 200.0);
     assert!(h >= 1.0, "{h}");
 }
@@ -1273,4 +1274,214 @@ fn only_ink_members_pin_a_group() {
         }
     }
     assert!(!holds_ink(&group), "a group of charts is not pinned");
+}
+
+/// The selected picture's display size, crop and Crop to Shape outline.
+fn cropped(s: &Session) -> (f32, f32, [f32; 4], Option<wordcraft_doc::para::ShapeKind>) {
+    match selected(s) {
+        Some((_, InlineObject::Image { w, h, crop, shape, .. })) => (w, h, crop, shape.map(|s| s.kind)),
+        other => panic!("expected image, got {other:?}"),
+    }
+}
+
+/// A 20 × 10 px picture (aspect 2:1) shown `w` × `h` points.
+fn picture_at(w: f32, h: f32) -> Session {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    let data = super::super::insert::base64_encode(&png(20, 10));
+    s.run("insert.picture", &json!({"data": data})).unwrap();
+    s.run("picture.size", &json!({"width": w, "height": h, "lockAspect": false})).unwrap();
+    s
+}
+
+fn close(a: [f32; 4], b: [f32; 4]) -> bool {
+    a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-4)
+}
+
+/// Crop to Shape clips the picture to a shape's outline, keeping its crop and size;
+/// a rectangle takes the outline off. Open shapes, text boxes, freeforms and junk are refused.
+#[test]
+fn crop_to_shape_sets_the_outline_and_rectangle_removes_it() {
+    use wordcraft_doc::para::ShapeKind;
+    let mut s = picture_at(200.0, 100.0);
+    s.run("picture.crop", &json!({"left": 0.1})).unwrap();
+    s.run("picture.cropToShape", &json!({"shape": "ellipse"})).unwrap();
+    assert_eq!(cropped(&s), (200.0, 100.0, [0.1, 0.0, 0.0, 0.0], Some(ShapeKind::Ellipse)));
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(cropped(&s).3, None, "one undo step");
+    s.run("picture.cropToShape", &json!({"shape": "heart"})).unwrap();
+    assert_eq!(cropped(&s).3, Some(ShapeKind::Heart));
+    for bad in [
+        json!({}),
+        json!({"shape": "line"}),
+        json!({"shape": "straightConnector"}),
+        json!({"shape": "textBox"}),
+        json!({"shape": "freeform"}),
+        json!({"shape": "nonsense"}),
+        json!({"shape": 5}),
+    ] {
+        assert!(s.run("picture.cropToShape", &bad).is_err(), "{bad}");
+        assert_eq!(cropped(&s).3, Some(ShapeKind::Heart), "{bad} leaves it");
+    }
+    s.run("picture.cropToShape", &json!({"shape": "rectangle"})).unwrap();
+    assert_eq!(cropped(&s), (200.0, 100.0, [0.1, 0.0, 0.0, 0.0], None));
+}
+
+/// Crop to Shape replaces an outline read from a file (its own preset name and adjust
+/// values) with WordCraft's own shape: nothing of the old preset is kept.
+#[test]
+fn crop_to_shape_drops_the_files_own_preset() {
+    use wordcraft_doc::para::{PictureShape, ShapeKind};
+    let mut s = picture_at(200.0, 100.0);
+    let (pos, _) = selected(&s).unwrap();
+    let cloud = PictureShape { kind: ShapeKind::Ellipse, prst: "cloud".into(), av: vec![("adj".into(), "val 5".into())] };
+    edit_obj(&mut s, &pos, |o| {
+        if let InlineObject::Image { shape, .. } = o {
+            *shape = Some(cloud.clone());
+        }
+    })
+    .unwrap();
+    s.run("picture.cropToShape", &json!({"shape": "ellipse"})).unwrap();
+    let shape = match selected(&s) {
+        Some((_, InlineObject::Image { shape, .. })) => shape,
+        other => panic!("expected image, got {other:?}"),
+    };
+    assert_eq!(shape, Some(PictureShape::new(ShapeKind::Ellipse)));
+}
+
+/// Aspect Ratio crops the visible picture, centred, to the largest rectangle of the ratio
+/// that fits inside it (as Word does, never enlarging): a tall picture keeps its width, a
+/// wide one its height; the box takes the cropped size.
+#[test]
+fn crop_aspect_keeps_the_side_that_fits_and_never_enlarges() {
+    let near = |s: &Session, w: f32, h: f32, c: [f32; 4]| {
+        let (bw, bh, bc, _) = cropped(s);
+        assert!((bw - w).abs() < 1e-2 && (bh - h).abs() < 1e-2, "{bw} x {bh}, wanted {w} x {h}");
+        assert!(close(bc, c), "{bc:?}, wanted {c:?}");
+    };
+    // Tall (1:3): the width is kept.
+    for (ratio, h, cut) in [("1:1", 100.0, 1.0 / 3.0), ("16:9", 56.25, 1.0 / 2.0 * (1.0 - 56.25 / 300.0)), ("2:3", 150.0, 0.25)] {
+        let mut s = picture_at(100.0, 300.0);
+        s.run("picture.cropAspect", &json!({"ratio": ratio})).unwrap();
+        near(&s, 100.0, h, [0.0, cut, 0.0, cut]);
+    }
+    // Wide (3:1): the height is kept.
+    for (ratio, w, cut) in [("1:1", 100.0, 1.0 / 3.0), ("3:4", 75.0, 0.375), ("16:9", 177.777_78, 1.0 / 2.0 * (1.0 - 177.777_78 / 300.0))] {
+        let mut s = picture_at(300.0, 100.0);
+        s.run("picture.cropAspect", &json!({"ratio": ratio})).unwrap();
+        near(&s, w, 100.0, [cut, 0.0, cut, 0.0]);
+    }
+    // One undo step.
+    let mut s = picture_at(300.0, 100.0);
+    s.run("picture.cropAspect", &json!({"ratio": "1:1"})).unwrap();
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(cropped(&s), (300.0, 100.0, [0.0; 4], None));
+    // Relative to what is visible: a crop already there is kept and added to.
+    let mut s = picture_at(200.0, 100.0);
+    s.run("picture.crop", &json!({"left": 0.2})).unwrap();
+    s.run("picture.cropAspect", &json!({"ratio": "4:3"})).unwrap();
+    near(&s, 133.333_33, 100.0, [0.2 + 0.8 / 3.0 / 2.0, 0.0, 0.8 / 3.0 / 2.0, 0.0]);
+    // A file's crop beyond what the dialog allows (sides up to 1, padding) is kept as it is;
+    // only the new cut is added. A non-finite side counts as uncropped.
+    for (from, want) in [
+        ([0.7, 0.6, 0.0, 0.1], [0.8, 0.6, 0.1, 0.1]),
+        ([-0.5, 0.0, -0.5, 0.0], [-0.5 + 2.0 / 3.0, 0.0, -0.5 + 2.0 / 3.0, 0.0]),
+        ([f32::NAN, 0.0, f32::INFINITY, 0.0], [1.0 / 3.0, 0.0, 1.0 / 3.0, 0.0]),
+    ] {
+        let mut s = picture_at(300.0, 100.0);
+        let (pos, _) = selected(&s).unwrap();
+        edit_obj(&mut s, &pos, |o| {
+            if let InlineObject::Image { crop, .. } = o {
+                *crop = from;
+            }
+        })
+        .unwrap();
+        s.run("picture.cropAspect", &json!({"ratio": "1:1"})).unwrap();
+        near(&s, 100.0, 100.0, want);
+    }
+    // Word's list only: no 9:16 or 10:16, and junk is refused without a change.
+    let before = cropped(&s);
+    for bad in [
+        json!({}),
+        json!({"ratio": "9:16"}),
+        json!({"ratio": "10:16"}),
+        json!({"ratio": "0:1"}),
+        json!({"ratio": "1:0"}),
+        json!({"ratio": "7:2"}),
+        json!({"ratio": "abc"}),
+        json!({"ratio": 1.5}),
+    ] {
+        assert!(s.run("picture.cropAspect", &bad).is_err(), "{bad}");
+    }
+    assert_eq!(cropped(&s), before, "refused ratios change nothing");
+    for ok in ["1:1", "2:3", "3:4", "3:5", "4:5", "3:2", "4:3", "5:3", "5:4", "16:9", "16:10"] {
+        s.run("picture.cropAspect", &json!({"ratio": ok})).unwrap();
+    }
+}
+
+/// Fill and Fit start from the whole picture: a manual crop is discarded, the box kept.
+#[test]
+fn crop_fill_and_fit_discard_a_manual_crop() {
+    for cmd in ["picture.cropFill", "picture.cropFit"] {
+        let mut s = picture_at(100.0, 100.0);
+        let whole = {
+            s.run(cmd, &json!({})).unwrap();
+            cropped(&s)
+        };
+        s.run("picture.crop", &json!({"left": 0.1, "top": 0.2, "right": 0.05, "bottom": 0.3})).unwrap();
+        s.run(cmd, &json!({})).unwrap();
+        assert_eq!(cropped(&s), whole, "{cmd} ignores the manual crop");
+        assert_eq!((whole.0, whole.1), (100.0, 100.0));
+    }
+}
+
+/// Fill crops the whole picture to cover its box (centred); Fit shows all of it inside the
+/// box, padding the short side (negative crop) equally. Both keep the box.
+#[test]
+fn crop_fill_and_fit_follow_the_box() {
+    let mut s = picture_at(100.0, 100.0);
+    s.run("picture.crop", &json!({"top": 0.3})).unwrap();
+    s.run("picture.cropFill", &json!({})).unwrap();
+    let (w, h, c, _) = cropped(&s);
+    assert_eq!((w, h), (100.0, 100.0));
+    assert!(close(c, [0.25, 0.0, 0.25, 0.0]), "fill: {c:?}");
+    s.run("picture.cropFit", &json!({})).unwrap();
+    let (w, h, c, _) = cropped(&s);
+    assert_eq!((w, h), (100.0, 100.0));
+    assert!(close(c, [0.0, -0.5, 0.0, -0.5]), "fit: {c:?}");
+    s.run("edit.undo", &json!({})).unwrap();
+    assert!(close(cropped(&s).2, [0.25, 0.0, 0.25, 0.0]), "one undo step");
+    // A box narrower than the picture: its sides cropped (Fill), its top and bottom padded (Fit).
+    let mut s = picture_at(50.0, 200.0);
+    s.run("picture.cropFill", &json!({})).unwrap();
+    assert!(close(cropped(&s).2, [0.4375, 0.0, 0.4375, 0.0]), "{:?}", cropped(&s).2);
+    s.run("picture.cropFit", &json!({})).unwrap();
+    assert!(close(cropped(&s).2, [0.0, -3.5, 0.0, -3.5]), "{:?}", cropped(&s).2);
+    // A box wider than the picture: Fit pads its sides.
+    let mut s = picture_at(400.0, 100.0);
+    s.run("picture.cropFit", &json!({})).unwrap();
+    assert!(close(cropped(&s).2, [-0.5, 0.0, -0.5, 0.0]), "{:?}", cropped(&s).2);
+}
+
+/// A picture too unlike its box for the padding the model keeps is refused, not stretched.
+#[test]
+fn crop_fit_refuses_an_extreme_aspect_without_changing_anything() {
+    let mut s = picture_at(1.0, 4000.0);
+    let before = cropped(&s);
+    assert!(s.run("picture.cropFit", &json!({})).is_err());
+    assert_eq!(cropped(&s), before);
+    let mut s = picture_at(4000.0, 1.0);
+    let before = cropped(&s);
+    assert!(s.run("picture.cropFit", &json!({})).is_err());
+    assert_eq!(cropped(&s), before);
+}
+
+/// `picture.crop` takes negative sides (padding, as a Fit picture has), within limits.
+#[test]
+fn picture_crop_takes_padding_within_limits() {
+    let mut s = picture_at(100.0, 100.0);
+    s.run("picture.crop", &json!({"left": -0.5, "top": -0.25})).unwrap();
+    assert_eq!(cropped(&s).2, [-0.5, -0.25, 0.0, 0.0]);
+    s.run("picture.crop", &json!({"left": -1e9, "right": f64::MAX})).unwrap();
+    let c = cropped(&s).2;
+    assert_eq!(c, [-100.0, 0.0, 0.0, 0.0], "padding at most 100 times the picture");
 }

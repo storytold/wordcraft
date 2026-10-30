@@ -1,7 +1,7 @@
 use super::arrange::{align_menu, group_menu, rotate_menu, rotation_field, wrap_menu};
 use super::common::{esc_cancelled, mi, stack};
 use super::shape::alt_text_group;
-use super::{MeasureExt, Target, Ui, WordApp, big, group, json, menu_button, small};
+use super::{MeasureExt, Target, Ui, WordApp, big, group, json, menu_button, small, split};
 
 /// Draws the Picture Format tab's Adjust, Picture Styles, Accessibility (Alt Text), Arrange and
 /// Size groups.
@@ -167,17 +167,25 @@ pub(super) fn picture_format(app: &mut WordApp, ui: &mut Ui) {
             ui.add_space(2.0);
             crate::widgets::row(ui, |ui| {
                 let cropping = crate::crop::active(app).is_some();
-                small(ui, app, "crop", Some("Crop"), "Crop", crate::widgets::ButtonAction::new("ui.crop", json!({}), cropping));
+                // Crop's split button: crop mode, or Crop to Shape, Aspect Ratio, Fill and Fit.
+                split(ui, app, "crop", "Crop", crate::widgets::ButtonAction::new("ui.crop", json!({}), cropping), None, crop_menu);
                 for (i, side) in ["L", "T", "R", "B"].iter().enumerate() {
                     ui.label(egui::RichText::new(tl!(side)).small());
                     let mut v = crop0[i] * 100.0;
-                    let r = ui.add(egui::DragValue::new(&mut v).speed(0.5).range(0.0..=95.0).suffix("%"));
+                    // Negative is Fit's padding: shown as it is, never clamped to 0 by drawing it.
+                    let r = ui.add(
+                        egui::DragValue::new(&mut v)
+                            .speed(0.5)
+                            .range(wordcraft_doc::para::MIN_CROP * 100.0..=95.0)
+                            .clamp_existing_to_range(false)
+                            .suffix("%"),
+                    );
                     if r.changed() {
                         if r.dragged() && !r.drag_started() {
                             app.session.join_next_undo();
                         }
                         let mut c = crop0;
-                        c[i] = (v / 100.0).clamp(0.0, 0.95);
+                        c[i] = (v / 100.0).clamp(wordcraft_doc::para::MIN_CROP, 0.95);
                         // The two sides of an axis keep 5% of the source between them.
                         let other = c[if i < 2 { i + 2 } else { i - 2 }];
                         c[i] = c[i].min((0.95 - other).max(0.0));
@@ -210,4 +218,43 @@ pub(super) fn picture_format(app: &mut WordApp, ui: &mut Ui) {
             });
         });
     });
+}
+
+/// Picture Format › Size › Crop's menu: crop mode, Crop to Shape, Aspect Ratio, Fill and Fit.
+pub(super) fn crop_menu(ui: &mut egui::Ui, app: &mut WordApp) {
+    mi(ui, app, "Crop", "ui.crop", json!({}));
+    ui.menu_button(tl!("Crop to Shape"), |ui| {
+        for (l, k) in [
+            ("Rectangle", "rectangle"),
+            ("Rounded Rectangle", "roundedRectangle"),
+            ("Oval", "ellipse"),
+            ("Triangle", "triangle"),
+            ("Right Triangle", "rightTriangle"),
+            ("Diamond", "diamond"),
+            ("Arrow", "arrow"),
+            ("Star", "star"),
+            ("Heart", "heart"),
+        ] {
+            mi(ui, app, l, "picture.cropToShape", json!({"shape": k}));
+        }
+    });
+    ui.menu_button(tl!("Aspect Ratio"), |ui| {
+        let on = crate::widgets::enabled(app, "picture.cropAspect");
+        for (i, group) in [&["1:1"][..], &["2:3", "3:4", "3:5", "4:5"], &["3:2", "4:3", "5:3", "5:4", "16:9", "16:10"]].into_iter().enumerate() {
+            if i > 0 {
+                ui.separator();
+            }
+            for r in group {
+                if ui.add_enabled(on, egui::Button::new(*r).min_size(egui::vec2(120.0, 0.0))).clicked() {
+                    // As in Word: the picture is left in crop mode to adjust what shows.
+                    if app.run("picture.cropAspect", json!({"ratio": r})).is_ok() && crate::crop::active(app).is_none() {
+                        let _ = crate::crop::toggle(app);
+                    }
+                    ui.close();
+                }
+            }
+        }
+    });
+    mi(ui, app, "Fill", "picture.cropFill", json!({}));
+    mi(ui, app, "Fit", "picture.cropFit", json!({}));
 }

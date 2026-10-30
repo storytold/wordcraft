@@ -1,12 +1,12 @@
 use super::select::{obj_size, selected, with_obj};
-use super::{CmdError, CmdResult, InlineObject, Rgb, Session, Value, Wrap, p};
+use super::{CmdError, CmdResult, InlineObject, MAX_CROP, MIN_CROP, PictureShape, Rgb, Session, ShapeKind, Value, Wrap, json, p};
 
 /// `picture.crop`: the crop, and optionally the new display size, as one edit. With a size, a
 /// floating picture positioned by offsets moves by what the crop on its left/top side on the page
 /// trims (or restores) — for a flipped picture that's the source's right/bottom — so what stays
 /// visible keeps its place on the page: a crop handle drop is one command.
 pub(super) fn crop(s: &mut Session, v: &Value) -> CmdResult {
-    let mut c = [p::f32(v, "left"), p::f32(v, "top"), p::f32(v, "right"), p::f32(v, "bottom")].map(|x| x.unwrap_or(0.0).clamp(0.0, 0.95));
+    let mut c = [p::f32(v, "left"), p::f32(v, "top"), p::f32(v, "right"), p::f32(v, "bottom")].map(|x| x.unwrap_or(0.0).clamp(MIN_CROP, MAX_CROP));
     // The two sides of an axis keep at least 5% of the source between them, as the renderer
     // draws it: the second side stops where the first one already left less than that.
     c[2] = c[2].min(0.95 - c[0]);
@@ -31,6 +31,105 @@ pub(super) fn crop(s: &mut Session, v: &Value) -> CmdResult {
                 }
                 *h = nh;
             }
+            *crop = c;
+        }
+    })
+}
+
+/// The ratios Picture Format › Crop › Aspect Ratio offers (width:height).
+const ASPECT_RATIOS: [&str; 11] = ["1:1", "2:3", "3:2", "3:4", "4:3", "3:5", "5:3", "4:5", "5:4", "16:9", "16:10"];
+
+/// `picture.cropToShape`: clip the picture to a closed shape's outline (rectangle: none).
+pub(super) fn crop_to_shape(s: &mut Session, v: &Value) -> CmdResult {
+    let name = p::req_str(v, "shape")?;
+    let refuse = || CmdError::Params(format!("`shape`: a closed shape such as ellipse, star or heart, not `{name}`"));
+    let kind: ShapeKind = serde_json::from_value(json!(name)).map_err(|_| refuse())?;
+    if kind.is_open() || matches!(kind, ShapeKind::TextBox | ShapeKind::Freeform) {
+        return Err(refuse());
+    }
+    let outline = (kind != ShapeKind::Rectangle).then(|| PictureShape::new(kind));
+    with_obj(s, |o| {
+        if let InlineObject::Image { shape, .. } = o {
+            *shape = outline.clone();
+        }
+    })
+}
+
+/// A crop side within what the model keeps.
+fn crop_side(v: f32) -> f32 {
+    if v.is_finite() { v.clamp(MIN_CROP, MAX_CROP) } else { 0.0 }
+}
+
+/// `picture.cropAspect`: crop what shows, centred, to the largest rectangle of `ratio` that fits
+/// inside it (the longer side cropped equally on both ends, never enlarging) and make the box
+/// that size, keeping its top-left corner.
+pub(super) fn crop_aspect(s: &mut Session, v: &Value) -> CmdResult {
+    let name = p::req_str(v, "ratio")?;
+    let parsed = ASPECT_RATIOS
+        .contains(&name)
+        .then(|| name.split_once(':'))
+        .flatten()
+        .and_then(|(a, b)| Some((a.parse::<f32>().ok()?, b.parse::<f32>().ok()?)));
+    let Some((a, b)) = parsed.filter(|(a, b)| *a > 0.0 && *b > 0.0) else {
+        return Err(CmdError::Params(format!("`ratio`: one of {}, not `{name}`", ASPECT_RATIOS.join(", "))));
+    };
+    let ratio = a / b;
+    with_obj(s, |o| {
+        if let InlineObject::Image { crop, w, h, .. } = o {
+            // The crop there is (a file's may go past what the dialog allows) is kept as it is;
+            // only the cut added here is limited: never negative, at most half of what shows (so
+            // part of the source always stays visible; padding may take more than `MAX_CROP`).
+            let mut c = crop.map(|v| if v.is_finite() { v } else { 0.0 });
+            let (bw, bh) = (wordcraft_geom::finite(*w).clamp(1.0, 4000.0), wordcraft_geom::finite(*h).clamp(1.0, 4000.0));
+            let shown = bw / bh;
+            let (lo, hi, keep) = if shown > ratio { (0, 2, ratio / shown) } else { (1, 3, shown / ratio) };
+            // Keep `keep` of the visible length, cropping both ends equally.
+            let visible = wordcraft_geom::finite(1.0 - c[lo] - c[hi]).max(0.0);
+            let cut = wordcraft_geom::finite(visible * (1.0 - keep) / 2.0).clamp(0.0, visible / 2.0);
+            c[lo] += cut;
+            c[hi] += cut;
+            *crop = c;
+            // Keep the side that fits: a shown picture wider than the ratio keeps its height.
+            let (nw, nh) = if shown > ratio { (bh * ratio, bh) } else { (bw, bw / ratio) };
+            *w = nw.clamp(1.0, 4000.0);
+            *h = nh.clamp(1.0, 4000.0);
+        }
+    })
+}
+
+/// The width / height of a picture's source (pixels, or a metafile's frame).
+fn source_aspect(s: &Session, media: &str) -> Option<f32> {
+    let bytes = s.doc.media.get(media)?;
+    let (w, h) = match wordcraft_render::image_size(bytes) {
+        Some((w, h)) => (w as f32, h as f32),
+        None => wordcraft_render::metafile_size(bytes).map(|(w, h, _)| (w, h))?,
+    };
+    let a = w / h;
+    (w > 0.0 && h > 0.0 && a.is_finite() && a > 0.0).then_some(a)
+}
+
+/// `picture.cropFill` (`fit` false): crop the whole picture, centred, so it covers its box;
+/// `picture.cropFit` (`fit` true): show all of it inside the box, padding the rest (negative
+/// crop). Both keep the box and the picture's proportions.
+pub(super) fn crop_to_box(s: &mut Session, fit: bool) -> CmdResult {
+    let (_, o) = selected(s).ok_or_else(|| CmdError::Disabled("no picture".into()))?;
+    let InlineObject::Image { media, w, h, .. } = o else { return Err(CmdError::Disabled("not a picture".into())) };
+    let pic = source_aspect(s, &media).ok_or_else(|| CmdError::Failed("the picture's size can't be read".into()))?;
+    let boxed = wordcraft_geom::finite(w).clamp(1.0, 4000.0) / wordcraft_geom::finite(h).clamp(1.0, 4000.0);
+    // Filling with a wider picture, or fitting a taller one, works on its width.
+    let c = if (pic > boxed) != fit {
+        let cut = (1.0 - boxed / pic) / 2.0;
+        [cut, 0.0, cut, 0.0]
+    } else {
+        let cut = (1.0 - pic / boxed) / 2.0;
+        [0.0, cut, 0.0, cut]
+    };
+    // A side the model would clamp stretches the picture: refuse, changing nothing.
+    if c.iter().any(|v| !v.is_finite() || crop_side(*v) != *v) {
+        return Err(CmdError::Failed("the picture's shape is too different from its box to fit it".into()));
+    }
+    with_obj(s, |o| {
+        if let InlineObject::Image { crop, .. } = o {
             *crop = c;
         }
     })
