@@ -868,10 +868,14 @@ impl AffixDict {
                 out.push(format!("{}{rest}", r.add));
             }
             if r.cross {
-                for (s, _) in cross_sfx.iter().filter(|(_, c)| *c == circ) {
+                // Every suffix form looked at counts against the work budget, matching or not.
+                for (s, s_circ) in &cross_sfx {
                     work += 1;
                     if out.len() >= MAX_FORMS || work > MAX_FORMS_WORK {
                         return out;
+                    }
+                    if *s_circ != circ {
+                        continue;
                     }
                     if let Some(rest) = s.strip_prefix(&*r.strip) {
                         out.push(format!("{}{rest}", r.add));
