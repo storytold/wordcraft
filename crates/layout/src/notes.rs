@@ -102,7 +102,7 @@ pub(crate) type SepBox = (Vec<Placed>, f32);
 
 /// The document's own footnote or endnote separators and continuation notice, laid out (`None`:
 /// the defaults).
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct NoteSeps {
     pub(crate) sep: Option<SepBox>,
     pub(crate) cont: Option<SepBox>,
@@ -164,7 +164,7 @@ fn separator_rules(blocks: &Blocks, items: &[Placed]) -> Vec<Placed> {
 pub(crate) const MAX_NOTE_PAGES: usize = 10_000;
 
 /// A footnote waiting for the bottom of a page: its items laid out from y = 0, and its height.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct NoteBox {
     pub(crate) id: u32,
     pub(crate) items: Vec<Placed>,
