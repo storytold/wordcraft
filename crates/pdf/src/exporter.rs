@@ -6,9 +6,9 @@ use super::picture::{Vector, build_vector, load_image, paint_of, vector_picture}
 use super::tags::{Role, TagEntry, figure_alt, graphic_alt, holds_picture};
 use super::{
     Annotation, Arc, Artifact, ArtifactType, ClKind, ContentTag, DisplayOptions, DocLayout, DocPath, Document, Draw, FaceRef, Fill, FillRule, Font,
-    GlyphId, HashMap, HashSet, Identifier, Image, InlineObject, ItemDisplay, KrillaGlyph, LineCap, LineEnd, LineJoin, LineStyle, LinkAnnotation,
-    Node, NonZeroU16, Outline, OutlineNode, Page, PathBuilder, Placed, Point, Rect, Rgb, ShapeKind, Size, SpanTag, StoryRef, Stroke, StrokeDash,
-    Surface, Tag, TagGroup, TagKind, TagTree, Target, Transform, WriteError, XyzDestination, krilla, rgb, write,
+    HashMap, HashSet, Identifier, Image, InlineObject, ItemDisplay, KrillaGlyph, LineCap, LineEnd, LineJoin, LineStyle, LinkAnnotation, Node,
+    NonZeroU16, Outline, OutlineNode, Page, PathBuilder, Placed, Point, Rect, Rgb, ShapeKind, Size, SpanTag, StoryRef, Stroke, StrokeDash, Surface,
+    Tag, TagGroup, TagKind, TagTree, Target, Transform, WriteError, XyzDestination, krilla, rgb, write,
 };
 
 mod draw;

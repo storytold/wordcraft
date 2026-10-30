@@ -1,5 +1,5 @@
 use super::paint::append_path;
-use super::{FaceRef, HashMap, Path, PathBuilder};
+use super::{FaceRef, GlyphId, HashMap, Path, PathBuilder};
 
 /// A shaped glyph id as krilla takes it. Shaping gives 32-bit ids (a format-12 cmap can map to
 /// any), but krilla's font subsetting takes 16-bit ones and panics on a larger id (#3674): one

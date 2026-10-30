@@ -1,5 +1,5 @@
 use super::{
-    Exporter, FaceRef, Fill, FillRule, GlyphId, KrillaGlyph, Point, Rgb, Stroke, Surface, Transform, baseline, cluster_ends, fill, glyph_outlines,
+    Exporter, FaceRef, Fill, FillRule, KrillaGlyph, Point, Rgb, Stroke, Surface, Transform, baseline, cluster_ends, fill, glyph_id, glyph_outlines,
     left_to_right, norm, ok, paint_of, rgb, split_clusters, visual_order,
 };
 
