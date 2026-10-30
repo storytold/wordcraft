@@ -84,27 +84,7 @@ impl Session {
         if spec.mutates && self.doc.settings.protection.as_deref() == Some("trackedChanges") {
             self.doc.settings.track_changes = true;
         }
-        // Macro recording and Repeat.
-        // Set As Default and Reset change the Normal template, not the document: Repeat or a macro
-        // replaying one would rewrite the person's defaults unasked (#4237 review).
-        let template_command = id.ends_with(".setDefault") || id == "defaults.reset";
-        let record = !matches!(id, "tools.recordMacro" | "tools.macros" | "edit.undo" | "edit.redo" | "edit.repeat")
-            && !template_command
-            && (spec.mutates || id.starts_with("caret.") || id.starts_with("select."));
-        // A password never lands in a recorded macro or Repeat.
-        let kept = || {
-            let mut p = params.clone();
-            if let Some(m) = p.as_object_mut() {
-                m.remove("password");
-            }
-            p
-        };
-        if record && let Some((_, steps)) = self.recording.as_mut() {
-            steps.push((id.to_string(), kept()));
-        }
-        if spec.mutates && !template_command && !matches!(id, "edit.undo" | "edit.redo" | "edit.repeat") {
-            self.last_command = Some((id.to_string(), kept()));
-        }
+        self.note_for_macro_and_repeat(id, spec.mutates, params);
         // Typing, caret movement and selection outside the equation commands leave the equation.
         self.leave_math_for_command(id);
         // The undo stacks are snapshotted whole, not as a length: commands run nested commands,
@@ -223,15 +203,8 @@ impl Session {
         // post-check; a failed write fails the command, which then rolls the document back. A
         // nested command's queue goes to the command that ran it. Reading and merging the stored
         // template is input-driven, so it runs under the same panic guard as the command.
-        let template = std::mem::replace(&mut self.pending_template, template_before);
-        if result.is_ok() && !template.is_empty() {
-            if self.run_depth > 0 {
-                self.pending_template.extend(template);
-            } else if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::cmd::defaults::commit_template(self, template)))
-                .unwrap_or_else(|_| Err(CmdError::Failed(format!("{id}: the Normal template could not be updated"))))
-            {
-                result = Err(e);
-            }
+        if let Err(e) = self.settle_template(id, template_before, result.is_ok()) {
+            result = Err(e);
         }
         match &result {
             Ok(_) => self.finish_success(SuccessContext {
@@ -299,6 +272,47 @@ impl Session {
             }
         }
         result
+    }
+
+    /// Macro recording and Repeat: notes the command for both, with no password.
+    fn note_for_macro_and_repeat(&mut self, id: &str, mutates: bool, params: &Value) {
+        // Macro recording and Repeat.
+        // Set As Default and Reset change the Normal template, not the document: Repeat or a macro
+        // replaying one would rewrite the person's defaults unasked (#4237 review).
+        let template_command = id.ends_with(".setDefault") || id == "defaults.reset";
+        let record = !matches!(id, "tools.recordMacro" | "tools.macros" | "edit.undo" | "edit.redo" | "edit.repeat")
+            && !template_command
+            && (mutates || id.starts_with("caret.") || id.starts_with("select."));
+        // A password never lands in a recorded macro or Repeat.
+        let kept = || {
+            let mut p = params.clone();
+            if let Some(m) = p.as_object_mut() {
+                m.remove("password");
+            }
+            p
+        };
+        if record && let Some((_, steps)) = self.recording.as_mut() {
+            steps.push((id.to_string(), kept()));
+        }
+        if mutates && !template_command && !matches!(id, "edit.undo" | "edit.redo" | "edit.repeat") {
+            self.last_command = Some((id.to_string(), kept()));
+        }
+    }
+
+    /// After a command: restores the queue it started with (`before`), then, if it succeeded,
+    /// hands its queued Normal template change up to the command that ran it or, at the outermost
+    /// command, writes it (#4237). A failed command's queue is dropped.
+    fn settle_template(&mut self, id: &str, before: Vec<crate::cmd::defaults::TemplateEdit>, succeeded: bool) -> Result<(), CmdError> {
+        let template = std::mem::replace(&mut self.pending_template, before);
+        if !succeeded || template.is_empty() {
+            return Ok(());
+        }
+        if self.run_depth > 0 {
+            self.pending_template.extend(template);
+            return Ok(());
+        }
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::cmd::defaults::commit_template(self, template)))
+            .unwrap_or_else(|_| Err(CmdError::Failed(format!("{id}: the Normal template could not be updated"))))
     }
 
     fn finish_success(&mut self, context: SuccessContext<'_>) {
