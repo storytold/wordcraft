@@ -504,3 +504,16 @@ fn set_as_default_saves_only_what_was_set() {
     assert_ne!(rp.space_before, 40.0, "nor its defaults");
     assert!(!d.styles.resolve_char(Some("Normal"), &Default::default()).italic);
 }
+
+/// #4237 review (as on #4456): Font › Set As Default sets the colour back to automatic for new
+/// documents.
+#[test]
+fn font_default_colour_goes_back_to_automatic() {
+    let store = MemoryStore::new();
+    let mut s = session(&store);
+    run(&mut s, "format.setDefault", json!({"props": {"color": "FF0000"}}));
+    let colour = |store: &Arc<MemoryStore>| session(store).normal_document().styles.resolve_char(Some("Normal"), &Default::default()).color;
+    assert_eq!(colour(&store), wordcraft_doc::TextColor::Rgb(wordcraft_doc::Rgb(255, 0, 0)));
+    run(&mut s, "format.setDefault", json!({"props": {"color": "Auto"}}));
+    assert_eq!(colour(&store), wordcraft_doc::TextColor::Auto);
+}
