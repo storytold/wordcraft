@@ -9,7 +9,7 @@ impl Reader {
         self.finish_multibyte();
         let on = p != Some(0);
         let pv = p.unwrap_or(0);
-        if self.skip_destination_word(w, pv) {
+        if self.skip_destination_word(w, pv, first_in_group, starred) {
             return;
         }
         if w == "shppict" || self.start_header_footer_word(w) {
@@ -265,16 +265,17 @@ impl Reader {
     }
 
     fn destination_for_word(&mut self, w: &str) -> Option<Dest> {
+        let info = self.st.dest == Dest::InfoContainer && self.in_info();
         match w {
             "fonttbl" => Some(Dest::FontTbl),
             "colortbl" => Some(Dest::ColorTbl),
             "stylesheet" => Some(Dest::StyleSheet),
-            "info" => Some(Dest::Skip),
-            "title" if self.st.dest == Dest::Skip && self.in_info() => Some(Dest::Info(1)),
-            "author" if self.in_info() => Some(Dest::Info(2)),
-            "subject" if self.in_info() => Some(Dest::Info(3)),
-            "keywords" if self.in_info() => Some(Dest::Info(4)),
-            "doccomm" if self.in_info() => Some(Dest::Info(5)),
+            "info" => Some(Dest::InfoContainer),
+            "title" if info => Some(Dest::Info(1)),
+            "author" if info => Some(Dest::Info(2)),
+            "subject" if info => Some(Dest::Info(3)),
+            "keywords" if info => Some(Dest::Info(4)),
+            "doccomm" if info => Some(Dest::Info(5)),
             "listtable" => Some(Dest::ListTable),
             "revtbl" => Some(Dest::RevTbl),
             "oldcprops" => Some(Dest::OldProps(false)),
@@ -290,7 +291,7 @@ impl Reader {
             | "nofwords" | "nofchars" | "edmins" | "vern" | "themedata" | "colorschememapping" | "latentstyles" | "datastore" | "xmlnstbl"
             | "rsidtbl" | "generator" | "mmathPr" | "pgdsctbl" | "filetbl" | "listpicture" | "userprops" | "docvar" | "objdata" | "fontemb"
             | "fontfile" | "panose" | "falt" | "mhtmltag" | "htmltag" | "pnseclvl" | "background" | "sp" | "pn" | "pgptbl" => Some(Dest::Skip),
-            "creatim" if self.in_info() => {
+            "creatim" if info => {
                 self.in_creatim = true;
                 Some(Dest::Skip)
             }
@@ -326,6 +327,7 @@ impl Reader {
 
     fn destination_word(&mut self, word: &str, param: Option<i32>, on: bool, value: i32) -> bool {
         match self.st.dest {
+            Dest::InfoContainer => word != "uc",
             Dest::Skip => {
                 if self.in_creatim {
                     self.record_created_part(word, value);
@@ -461,9 +463,17 @@ impl Reader {
         }
     }
 
-    fn skip_destination_word(&mut self, word: &str, value: i32) -> bool {
+    fn skip_destination_word(&mut self, word: &str, value: i32, first_in_group: bool, starred: bool) -> bool {
         let kept_info = self.in_info() && matches!(word, "title" | "author" | "subject" | "keywords" | "doccomm" | "creatim");
-        if self.st.dest != Dest::Skip || kept_info {
+        if self.st.dest == Dest::InfoContainer && !kept_info && word != "uc" {
+            // An unselected upr wrapper leaves its ANSI fallback in this container.
+            // Other child destinations are ignored, including nested Unicode alternatives.
+            if first_in_group && (word != "upr" || starred) {
+                self.st.dest = Dest::Skip;
+            }
+            return true;
+        }
+        if self.st.dest != Dest::Skip {
             return false;
         }
         if self.in_creatim {

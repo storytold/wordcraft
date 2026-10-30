@@ -16,6 +16,8 @@ pub(super) const MAX_SECTIONS: usize = 10_000;
 pub(super) enum Dest {
     Body,
     Skip,
+    /// Metadata container, retained through transparent Unicode alternative wrappers.
+    InfoContainer,
     FontTbl,
     ColorTbl,
     StyleSheet,

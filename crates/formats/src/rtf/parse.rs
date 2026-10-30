@@ -1,5 +1,5 @@
 use super::reader::Reader;
-use super::state::{Dest, HeaderFooter, HfPages, MAX_PICT, PageGeom};
+use super::state::{Dest, HeaderFooter, HfPages, MAX_GROUPS, MAX_PICT, PageGeom};
 use super::{Cell, Document, FBlock, Flow, Para, model};
 
 /// Parse RTF bytes into the flow model.
@@ -33,6 +33,7 @@ fn parse_full(bytes: &[u8]) -> Result<Parsed, String> {
     let mut i = start;
     let mut first_in_group = false;
     let mut starred = false;
+    let mut alternative_ends = AlternativeGroups::default();
     while let Some(&c) = bytes.get(i) {
         match c {
             b'{' => {
@@ -104,7 +105,22 @@ fn parse_full(bytes: &[u8]) -> Result<Parsed, String> {
                         i = end;
                         continue;
                     }
-                    if word == "info" {
+                    if word == "upr"
+                        && first_in_group
+                        && !starred
+                        && let Some(content) = alternative_ends.select(bytes, i, r.st.dest)?
+                    {
+                        // The ANSI branch must have no reader side effects, including metadata
+                        // and destination commits. Open only the selected Unicode subgroup;
+                        // its ud wrapper is transparent to the enclosing destination.
+                        r.finish_multibyte();
+                        r.open();
+                        i = content;
+                        first_in_group = false;
+                        starred = false;
+                        continue;
+                    }
+                    if word == "info" && r.st.dest == Dest::Body {
                         r.info_depth = Some(r.depth());
                     }
                     if r.skip_chars > 0
@@ -197,6 +213,150 @@ fn parse_full(bytes: &[u8]) -> Result<Parsed, String> {
         }
     }
     Ok(finalize(r))
+}
+
+/// Select the second subgroup of an RTF 1.9.1 Unicode alternative (Unicode RTF, pp. 15–16).
+/// A missing, unrecognised or truncated Unicode group leaves the existing ANSI fallback path in place.
+/// Scan the discarded group without recursion; escaped braces and bin payloads
+/// cannot close it. The selected content is read by the ordinary parser, not a second reader.
+fn unicode_alternative(bytes: &[u8], mut at: usize, ends: &mut AlternativeGroups) -> Option<usize> {
+    while bytes.get(at).is_some_and(u8::is_ascii_whitespace) {
+        at += 1;
+    }
+    if bytes.get(at) != Some(&b'{') {
+        return None;
+    }
+    at = alternative_group_end(bytes, at, ends, true)?;
+    while bytes.get(at).is_some_and(u8::is_ascii_whitespace) {
+        at += 1;
+    }
+    let unicode_start = at;
+    // CR/LF line breaks are ignored between RTF tokens, including the header tokens.
+    for token in [b"{".as_slice(), b"\\*", b"\\ud"] {
+        while bytes.get(at).is_some_and(|b| matches!(b, b'\r' | b'\n' | 0)) {
+            at += 1;
+        }
+        let end = at.checked_add(token.len())?;
+        if bytes.get(at..end)? != token {
+            return None;
+        }
+        at = end;
+    }
+    if bytes.get(at).is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'-') {
+        return None;
+    }
+    if bytes.get(at) == Some(&b' ') {
+        at += 1;
+    }
+    if unicode_start >= ends.unicode_end {
+        // Check closure without consuming the discarded branch's cache or nesting budget.
+        // Every nested group before this boundary is already complete, so later selections
+        // inside it need no additional scan. The parser cursor only advances.
+        ends.unicode_end = alternative_group_end(bytes, unicode_start, ends, false)?;
+    }
+    Some(at)
+}
+
+/// Keep the boundaries found during lookahead: if an outer pair is malformed and falls back
+/// to its first branch, nested pairs must not rescan that branch's bytes. Both closed and
+/// truncated discarded groups are cached, using storage proportional to their groups.
+/// Selected-group validation uses a depth counter without allocating entries or an open stack.
+fn alternative_group_end(bytes: &[u8], mut at: usize, ends: &mut AlternativeGroups, cache: bool) -> Option<usize> {
+    if cache && let Some(end) = ends.ends.get(&at) {
+        return *end;
+    }
+    let mut open = Vec::new();
+    let mut depth = 0usize;
+    let result = (|| {
+        loop {
+            match *bytes.get(at)? {
+                b'{' => {
+                    depth = depth.checked_add(1)?;
+                    if cache {
+                        if open.len() >= MAX_GROUPS {
+                            ends.limited = true;
+                            return None;
+                        }
+                        open.push(at);
+                    }
+                }
+                b'}' => {
+                    depth = depth.checked_sub(1)?;
+                    if cache {
+                        ends.remember(open.pop()?, Some(at + 1))?;
+                    }
+                    if depth == 0 {
+                        return Some(at + 1);
+                    }
+                }
+                b'\\' => {
+                    at += 1;
+                    let start = at;
+                    if bytes.get(at)?.is_ascii_alphabetic() {
+                        while bytes.get(at).is_some_and(u8::is_ascii_alphabetic) {
+                            at += 1;
+                        }
+                        if bytes.get(start..at) == Some(b"bin") {
+                            let number = at;
+                            while bytes.get(at).is_some_and(u8::is_ascii_digit) {
+                                at += 1;
+                            }
+                            let size = std::str::from_utf8(bytes.get(number..at)?).ok()?.parse::<usize>().ok()?;
+                            if bytes.get(at) == Some(&b' ') {
+                                at += 1;
+                            }
+                            at = at.checked_add(size)?;
+                            if at > bytes.len() {
+                                return None;
+                            }
+                        }
+                        continue;
+                    }
+                    // A control symbol, including an escaped brace or backslash.
+                }
+                _ => {}
+            }
+            at += 1;
+        }
+    })();
+    if ends.limited {
+        return None;
+    }
+    for start in open {
+        ends.remember(start, None)?;
+    }
+    result
+}
+
+/// Bound memory before the ordinary reader sees a discarded branch. Exceeding either budget
+/// refuses import instead of silently substituting ANSI for the intended Unicode content.
+#[derive(Default)]
+struct AlternativeGroups {
+    ends: std::collections::HashMap<usize, Option<usize>>,
+    limited: bool,
+    unicode_end: usize,
+}
+
+impl AlternativeGroups {
+    fn select(&mut self, bytes: &[u8], at: usize, dest: Dest) -> Result<Option<usize>, String> {
+        // InfoContainer retains its context through transparent selected wrappers.
+        // Genuinely ignored destinations keep ordinary processing without lookahead.
+        if dest == Dest::Skip {
+            return Ok(None);
+        }
+        let content = unicode_alternative(bytes, at, self);
+        if self.limited { Err("RTF Unicode alternative lookahead limit exceeded".into()) } else { Ok(content) }
+    }
+
+    fn remember(&mut self, start: usize, end: Option<usize>) -> Option<()> {
+        const MAX_ENTRIES: usize = 1 << 16;
+        if self.ends.len() >= MAX_ENTRIES && !self.ends.contains_key(&start) {
+            self.limited = true;
+            return None;
+        }
+        self.ends.insert(start, end);
+        Some(())
+    }
 }
 
 fn finalize(mut r: Reader) -> Parsed {

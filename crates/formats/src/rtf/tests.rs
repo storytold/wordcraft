@@ -1,5 +1,172 @@
 use super::*;
 
+#[test]
+fn unicode_alternatives_keep_info_unicode_skip_counts() {
+    let rtf = br"{\rtf1{\info{\upr{\title ANSI}{\*\ud\uc0{\title \u915X}}}{\subject \u915?X}}Visible\u915?X\par}";
+    let f = parse(rtf).unwrap();
+    assert_eq!(f.meta.title, "ΓX");
+    assert_eq!(f.meta.subject, "ΓX");
+    assert_eq!(texts(&f), ["Normal:VisibleΓX"]);
+}
+
+#[test]
+fn unicode_alternatives_in_ignored_info_fields_do_not_scan() {
+    let pair = format!("{{\\upr{{{}}}{{\\*\\ud hidden}}}}", "{}".repeat(1 << 16));
+    for field in ["title", "author", "subject", "keywords", "doccomm", "creatim"] {
+        let rtf = format!("{{\\rtf1{{\\info{{\\*\\unknown{{\\{field}{pair}}}}}}}Visible\\par}}");
+        let f = parse(rtf.as_bytes()).unwrap();
+        assert_eq!(texts(&f), ["Normal:Visible"]);
+        assert_eq!((&*f.meta.title, &*f.meta.author, &*f.meta.subject, &*f.meta.keywords, &*f.meta.description), ("", "", "", "", ""));
+    }
+}
+
+#[test]
+fn unicode_alternatives_keep_nested_info_context() {
+    let rtf = br"{\rtf1{\info{\author Original}{\upr{}{\*\ud{\upr{\title ANSI}{\*\ud{\subject Unicode \u915?}}}{\keywords Kept}}}}Visible\par}";
+    let f = parse(rtf).unwrap();
+    assert_eq!(f.meta.title, "");
+    assert_eq!(f.meta.author, "Original");
+    assert_eq!(f.meta.subject, "Unicode Γ");
+    assert_eq!(f.meta.keywords, "Kept");
+    assert_eq!(texts(&f), ["Normal:Visible"]);
+}
+
+#[test]
+fn unicode_alternatives_keep_ansi_for_truncated_unicode() {
+    for rtf in [
+        br"{\rtf1{\upr{Complete ANSI}{\*\ud partial".as_slice(),
+        br"{\rtf1{\upr{Complete ANSI}{\*\ud partial\}".as_slice(),
+        br"{\rtf1{\upr{Complete ANSI}{\*\ud \bin4 ab".as_slice(),
+    ] {
+        assert_eq!(texts(&parse(rtf).unwrap()), ["Normal:Complete ANSI"]);
+    }
+    // The selected subgroup can be complete even when its enclosing groups are truncated.
+    assert_eq!(texts(&parse(br"{\rtf1{\upr{ANSI}{\*\ud Unicode}").unwrap()), ["Normal:Unicode"]);
+}
+
+#[test]
+fn unicode_alternatives_validate_selected_groups_without_ansi_budgets() {
+    for unicode in [format!("{}Unicode{}", "{".repeat(513), "}".repeat(513)), format!("{}Unicode", "{}".repeat(1 << 16))] {
+        let rtf = format!("{{\\rtf1{{\\upr{{ANSI}}{{\\*\\ud {unicode}}}}}}}");
+        assert_eq!(texts(&parse(rtf.as_bytes()).unwrap()), ["Normal:Unicode"]);
+    }
+    let rtf = format!("{{\\rtf1{}Unicode{}}}", "{\\upr{ANSI}{\\*\\ud ".repeat(1_000), "}}".repeat(1_000));
+    assert_eq!(texts(&parse(rtf.as_bytes()).unwrap()), ["Normal:Unicode"]);
+}
+
+#[test]
+fn unicode_alternatives_discard_ansi_metadata_in_info() {
+    let rtf = br"{\rtf1{\info{\author Original}{\upr{\title Discarded}{\*\ud{\subject Selected \u915?}}}}Visible\par}";
+    let f = parse(rtf).unwrap();
+    assert_eq!(f.meta.title, "");
+    assert_eq!(f.meta.subject, "Selected Γ");
+    assert_eq!(f.meta.author, "Original");
+    assert_eq!(texts(&f), ["Normal:Visible"]);
+}
+
+#[test]
+fn unicode_alternatives_in_info_keep_lookahead_limits() {
+    let rtf = format!("{{\\rtf1{{\\info{{\\upr{{{}}}{{\\*\\ud{{\\title Selected}}}}}}}}Visible\\par}}", "{}".repeat(1 << 16));
+    assert!(parse(rtf.as_bytes()).is_err(), "selected metadata must not silently import ANSI on budget exhaustion");
+}
+
+#[test]
+fn unicode_alternatives_do_not_scan_nested_ignored_info() {
+    let pair = format!("{{\\upr{{{}}}{{\\*\\ud hidden}}}}", "{}".repeat(1 << 16));
+    for ignored in [
+        format!("{{\\info{{\\*\\unknown{pair}}}}}"),
+        format!("{{\\*\\unknown{{\\info{pair}}}}}"),
+        format!("{{\\info{{\\*\\upr{pair}}}}}"),
+        format!("{{\\info{{\\upr{{}}{{\\*\\ud{{\\*\\unknown{pair}}}}}}}}}"),
+    ] {
+        let rtf = format!("{{\\rtf1{ignored}Visible\\par}}");
+        assert_eq!(texts(&parse(rtf.as_bytes()).unwrap()), ["Normal:Visible"]);
+    }
+}
+
+#[test]
+fn unicode_alternatives_do_not_scan_ignored_destinations() {
+    let rtf = format!("{{\\rtf1{{\\*\\unknown{{\\upr{{{}}}{{\\*\\ud hidden}}}}}}Visible\\par}}", "{}".repeat(1 << 16));
+    assert_eq!(texts(&parse(rtf.as_bytes()).unwrap()), ["Normal:Visible"]);
+}
+
+#[test]
+fn unicode_alternatives_refuse_excessive_lookahead_depth() {
+    let nested = format!("{}{}", "{".repeat(512), "}".repeat(512));
+    let rtf = format!("{{\\rtf1{{\\upr{{{nested}}}{{\\*\\ud Unicode}}}}}}");
+    assert!(parse(rtf.as_bytes()).is_err(), "over-budget Unicode lookahead must not silently import ANSI");
+}
+
+#[test]
+fn unicode_alternatives_refuse_excessive_boundary_cache() {
+    let rtf = format!("{{\\rtf1{{\\upr{{{}}}{{\\*\\ud Unicode}}}}}}", "{}".repeat(1 << 16));
+    assert!(parse(rtf.as_bytes()).is_err(), "over-budget Unicode lookahead must not silently import ANSI");
+}
+
+#[test]
+fn unicode_alternatives_accept_lookahead_at_its_limits() {
+    for ansi in [format!("{}{}", "{".repeat(511), "}".repeat(511)), "{}".repeat((1 << 16) - 1)] {
+        let rtf = format!("{{\\rtf1{{\\upr{{{ansi}}}{{\\*\\ud Unicode}}}}}}");
+        assert_eq!(texts(&parse(rtf.as_bytes()).unwrap()), ["Normal:Unicode"]);
+    }
+}
+
+#[test]
+fn unicode_alternatives_keep_body_text_and_formatting() {
+    let f = parse(br"{\rtf1\ansi before {\upr{wrong}{\*\ud \b Greek \u915? and \u-10179?\u-8704?}} after\par}").unwrap();
+    assert_eq!(texts(&f), ["Normal:before Greek Γ and 😀 after"]);
+    let FBlock::Para(p) = &f.blocks[0] else { panic!() };
+    assert!(p.inlines.iter().any(|i| matches!(i, Inline::Text(t, fmt) if t == "Greek Γ and 😀" && fmt.bold)));
+    assert!(p.inlines.iter().any(|i| matches!(i, Inline::Text(t, fmt) if t == " after" && !fmt.bold)));
+}
+
+#[test]
+fn unicode_alternatives_accept_line_wrapped_headers() {
+    for header in ["{\r\n\\*\\ud ", "{\\*\r\n\\ud ", "{\\*\\ud\r\n"] {
+        let rtf = format!("{{\\rtf1{{\\upr{{G}}{header}\\u915?}}}} tail\\par}}");
+        assert_eq!(texts(&parse(rtf.as_bytes()).unwrap()), ["Normal:Γ tail"], "{header:?}");
+    }
+}
+
+#[test]
+fn unicode_alternatives_keep_destination_names_and_metadata() {
+    let rtf = br"{\rtf1\ansi{\info{\upr{\title Wrong}{\*\ud{\title R\u233?sum\u233?}}}}
+{\upr{\*\bkmkstart fallback}{\*\ud{\*\bkmkstart mark\u915?}}}text\par}";
+    let d = import(rtf).unwrap();
+    assert_eq!(d.core.title, "Résumé");
+    assert_eq!(d.bookmarks().iter().map(|(name, _)| name.as_str()).collect::<Vec<_>>(), ["markΓ"]);
+}
+
+#[test]
+fn unicode_alternatives_skip_nested_escaped_and_binary_ansi_content() {
+    // The three raw bytes after bin3 are structural-looking binary data, not group delimiters.
+    let rtf = br"{\rtf1\ansi{\upr{bad {\b nested}\{\}\\\bin3 }{\}{\*\ud Good {\upr{bad}{\*\ud \u20013?}}}} tail\par}";
+    assert_eq!(texts(&parse(rtf).unwrap()), ["Normal:Good 中 tail"]);
+}
+
+#[test]
+fn unicode_alternatives_leave_ignored_and_unpaired_destinations_ignored() {
+    let rtf = br"{\rtf1\ansi{\*\unknown{\upr{bad}{\*\ud hidden}}}{\*\ud hidden}
+{\upr{fallback}{\*\unknown hidden}}{\upr{only fallback}} tail\par}";
+    assert_eq!(texts(&parse(rtf).unwrap()), ["Normal:fallbackonly fallback tail"]);
+    let f = parse(br"{\rtf1{\info{\title Original}}{\upr{{\info{\title Wrong}}bad}{\*\ud Good}}\par}").unwrap();
+    assert_eq!(f.meta.title, "Original");
+    assert_eq!(texts(&f), ["Normal:Good"]);
+}
+
+#[test]
+fn unicode_alternatives_keep_nested_fallbacks_and_truncated_groups() {
+    // Every outer pair lacks a Unicode branch. Its first branch can still contain a valid pair.
+    // A long payload makes repeated lookahead expensive unless group boundaries are reused.
+    let payload = "x".repeat(64 * 1024);
+    let prefix = "{\\upr{".repeat(200);
+    let suffix = "}}".repeat(200);
+    let rtf = format!("{{\\rtf1{prefix}{payload}{{\\upr{{G}}{{\\*\\ud \\u915?}}}}{suffix} tail\\par}}");
+    assert_eq!(texts(&parse(rtf.as_bytes()).unwrap()), [format!("Normal:{payload}Γ tail")]);
+    let truncated = format!("{{\\rtf1{prefix}{payload}");
+    assert_eq!(texts(&parse(truncated.as_bytes()).unwrap()), [format!("Normal:{payload}")]);
+}
+
 fn texts(f: &Flow) -> Vec<String> {
     f.blocks
         .iter()

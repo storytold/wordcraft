@@ -258,7 +258,7 @@ impl Reader {
                     }
                 }
             }
-            Dest::Skip | Dest::ListTable | Dest::ListOverride | Dest::OldProps(_) => {}
+            Dest::Skip | Dest::InfoContainer | Dest::ListTable | Dest::ListOverride | Dest::OldProps(_) => {}
         }
     }
 
