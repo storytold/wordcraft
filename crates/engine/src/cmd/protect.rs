@@ -38,7 +38,7 @@ pub fn state(s: &Session) -> Value {
         "lockedStyles": s.doc.styles.styles.iter().filter(|x| x.locked).map(|x| x.id.clone()).collect::<Vec<_>>(),
         "exceptions": regions.len(),
         "regions": regions,
-        "formFields": s.doc.fillable_controls(),
+        "formFields": s.doc.fillable_controls() + crate::cmd::form_fields::fillable_spans(&s.doc).len(),
     })
 }
 
@@ -307,7 +307,11 @@ pub(crate) fn greyed_out(s: &Session, id: &str, facts: impl FnOnce() -> Facts) -
     let tracked = matches!(id, "review.accept" | "review.reject" | "review.acceptAll" | "review.rejectAll" | "review.trackChanges");
     match mode {
         "readOnly" => (!facts().exceptions).then_some("the document is protected (read only)"),
-        "forms" => (facts().fillable == 0).then_some("the document is protected (read only)"),
+        // A form of legacy form fields alone (#3603) takes filling them in and nothing else, so
+        // what the after-check doesn't compare (page colour, settings, lists) stays locked too.
+        // The fields are walked only for that one command, so other commands cost no more.
+        "forms" => (facts().fillable == 0 && !(id == "developer.fillFormField" && crate::cmd::form_fields::any_fillable(&s.doc)))
+            .then_some("the document is protected (read only)"),
         "comments" if !comment_ok => (!facts().exceptions).then_some("only comments are allowed in this document"),
         "trackedChanges" if tracked => Some("changes to this document are tracked"),
         _ => None,
@@ -361,7 +365,8 @@ pub(crate) fn check_before(s: &Session, id: &str, params: &Value) -> Result<bool
         check_formatting(s, id, params)?;
     }
     // Not refused outright: read only and comments mode have an exception this author may edit,
-    // forms mode has fillable controls. Comments are always allowed in comments mode.
+    // forms mode has fillable controls or legacy form fields. Comments are always allowed in
+    // comments mode.
     let comment_ok = id.starts_with("review.") && (id.contains("Comment") || id == "review.reply");
     match mode {
         "comments" if comment_ok => Ok(false),
@@ -419,7 +424,7 @@ fn check_formatting(s: &Session, id: &str, params: &Value) -> Result<(), CmdErro
 
 /// Which parts of a protected document stay editable: the `w:permStart` ranges `author` may
 /// edit (readOnly, comments), or — filling in forms — the interiors of the content controls
-/// whose `w:lock` allows editing them.
+/// whose `w:lock` allows editing them, and the values of enabled legacy form fields.
 enum HoleMode {
     Perms(String),
     Controls,
@@ -478,7 +483,8 @@ fn sections(doc: &Document) -> Vec<&wordcraft_doc::SectionProps> {
 #[derive(PartialEq, Debug)]
 enum Piece {
     Text(String, CharProps),
-    Object(Option<InlineObject>),
+    /// An object with its run's formatting.
+    Object(Box<(Option<InlineObject>, CharProps)>),
     Mark(Box<wordcraft_doc::ParaProps>, CharProps),
     /// Tables nested deeper than the paragraph walk reaches, compared as a whole.
     Deep(String),
@@ -563,7 +569,10 @@ fn outside(doc: &Document, mode: &HoleMode) -> Vec<Piece> {
                         }
                         if !boundary && !in_hole(&open, &fillable) {
                             flush(&mut out, &mut piece, props, false);
-                            out.push(Piece::Object(obj.cloned()));
+                            // A legacy form field outside any control, or in one that allows editing, may
+                            // have its value filled in (#3603).
+                            let fill = matches!(mode, HoleMode::Controls) && fillable.last() != Some(&false);
+                            out.push(Piece::Object(Box::new((obj.map(|o| fixed_part(o, fill)), props.clone()))));
                         }
                         continue;
                     }
@@ -626,6 +635,25 @@ fn structure(blocks: &Blocks, prefix: &mut Vec<u32>, protected: &HashSet<Vec<u32
     }
 }
 
+/// What filling in forms may not change about an object: all of it, except, where `fill`, a
+/// fillable legacy form field's value (a text field's result, a check box's state, a drop-down's
+/// choice). Its kind, name, definition and formatting stay protected, and deleting it is still a
+/// change.
+fn fixed_part(o: &InlineObject, fill: bool) -> InlineObject {
+    match o {
+        InlineObject::Field { form, .. } if fill && crate::cmd::form_fields::fillable_field(o) => {
+            let mut fixed = o.clone();
+            if let InlineObject::Field { result, form: f, dirty, .. } = &mut fixed {
+                result.clear();
+                *f = wordcraft_doc::legacy_form::definition(form);
+                *dirty = false;
+            }
+            fixed
+        }
+        _ => o.clone(),
+    }
+}
+
 fn flush(out: &mut Vec<Piece>, piece: &mut String, props: &CharProps, in_hole: bool) {
     if !piece.is_empty() && !in_hole {
         out.push(Piece::Text(std::mem::take(piece), props.clone()));
@@ -669,12 +697,14 @@ pub(crate) fn typing_pos(s: &Session, p: &Pos) -> Pos {
 }
 
 /// The first position in an editable range after `from` (wrapping round), for Find Next Region
-/// I Can Edit; with it, the range's end. Filling in forms: the next fillable control's content.
+/// I Can Edit; with it, the range's end. Filling in forms: the next fillable control's content
+/// or enabled legacy form field.
 pub fn next_region(s: &Session, from: &Pos) -> Option<(Pos, Pos)> {
     if s.doc.settings.protection.as_deref() == Some("forms") {
         let stories = std::iter::once(StoryRef::Body).chain(s.doc.parts.keys().map(|k| StoryRef::Part(*k)));
         let mut ranges: Vec<(Pos, Pos)> =
             stories.flat_map(|story| s.doc.control_ranges(story)).filter(|r| r.control.lock.can_edit()).map(|r| (r.content_start(), r.end)).collect();
+        ranges.extend(crate::cmd::form_fields::fillable_spans(&s.doc));
         ranges.sort_by(|a, b| a.0.cmp(&b.0));
         let next = ranges.iter().find(|r| r.0 > *from).or_else(|| ranges.first())?;
         return Some((next.0.clone(), next.1.clone()));

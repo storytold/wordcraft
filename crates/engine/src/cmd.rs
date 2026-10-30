@@ -17,6 +17,7 @@ pub mod file;
 pub mod find_pattern;
 pub mod fmt_revisions;
 pub mod font;
+pub mod form_fields;
 pub mod format;
 pub mod index;
 pub mod ink_shape;
@@ -104,6 +105,7 @@ pub fn registry() -> Registry {
     v.extend(protect::specs());
     v.extend(speech::specs());
     v.extend(controls::specs());
+    v.extend(form_fields::specs());
     Registry::new(v)
 }
 
