@@ -165,7 +165,7 @@ fn remove_anchors(s: &mut Session, ids: &BTreeSet<u32>) -> Result<(), CmdError> 
 
 /// The comment and every reply below it, replies to replies included (#1345). A parent cycle
 /// from a hostile file ends the walk instead of looping.
-fn thread_of(s: &Session, id: u32) -> Vec<u32> {
+pub(super) fn thread_of(s: &Session, id: u32) -> Vec<u32> {
     let mut children: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
     for (k, c) in &s.doc.comments {
         if let Some(parent) = c.parent {

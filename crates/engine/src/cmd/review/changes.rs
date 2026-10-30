@@ -157,6 +157,22 @@ pub fn move_changes(s: &Session) -> Vec<(Pos, String, bool)> {
     out
 }
 
+/// The comments with a mark (start or end) somewhere in the document.
+fn anchored_comments(s: &Session) -> BTreeSet<u32> {
+    let mut out = BTreeSet::new();
+    let stories: Vec<StoryRef> = std::iter::once(StoryRef::Body).chain(s.doc.parts.keys().map(|k| StoryRef::Part(*k))).collect();
+    for story in stories {
+        for path in s.doc.para_paths(story) {
+            for o in s.doc.para(story, &path).map(|p| p.objects.as_slice()).unwrap_or_default() {
+                if let InlineObject::CommentStart { id } | InlineObject::CommentEnd { id } = o {
+                    out.insert(*id);
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Accept or reject the tracked text and paragraph marks of the top-level paragraphs in a block
 /// list that is not a story (a note separator).
 fn resolve_loose_blocks(blocks: &mut wordcraft_doc::Blocks, accept: bool) -> Result<(), CmdError> {
@@ -180,6 +196,7 @@ fn resolve_loose_blocks(blocks: &mut wordcraft_doc::Blocks, accept: bool) -> Res
 }
 
 fn resolve_all(s: &mut Session, accept: bool) -> CmdResult {
+    let anchored = anchored_comments(s);
     let stories: Vec<StoryRef> = std::iter::once(StoryRef::Body).chain(s.doc.parts.keys().map(|k| StoryRef::Part(*k))).collect();
     for st in stories {
         for path in s.doc.para_paths(st).into_iter().rev() {
@@ -189,10 +206,27 @@ fn resolve_all(s: &mut Session, accept: bool) -> CmdResult {
     }
     // Tables, rows, cells and sections.
     fmt_revisions::resolve_containers(&mut s.doc.body, accept, 0);
+    resolve_rows(&mut s.doc.body, accept, 0);
     for part in s.doc.parts.values_mut() {
         fmt_revisions::resolve_containers(&mut part.blocks, accept, 0);
+        resolve_rows(&mut part.blocks, accept, 0);
     }
+    s.doc.ensure_nonempty();
     fmt_revisions::resolve_section(&mut s.doc.last_section, accept);
+    // A comment whose marks went with the text around them goes too (its replies with it, except
+    // a reply that still has marks of its own), not left as a comment on nothing.
+    let left = anchored_comments(s);
+    let gone: BTreeSet<u32> = anchored.difference(&left).flat_map(|id| super::comments::thread_of(s, *id)).filter(|k| !left.contains(k)).collect();
+    for id in &gone {
+        if let Some(c) = s.doc.comments.remove(id) {
+            s.doc.parts.remove(&c.part);
+        }
+    }
+    for c in s.doc.comments.values_mut() {
+        if c.parent.is_some_and(|p| gone.contains(&p)) {
+            c.parent = None;
+        }
+    }
     // The note separators are block lists of their own, not stories; they must not keep ids of
     // revisions that are about to be dropped.
     for sep in [&mut s.doc.footnote_separators, &mut s.doc.endnote_separators] {
@@ -203,6 +237,68 @@ fn resolve_all(s: &mut Session, accept: bool) -> CmdResult {
     s.doc.revisions.clear();
     s.clamp_selection();
     sel_result(s)
+}
+
+/// Accept or reject the insertion or deletion of the table row the paragraph at `path` is in: an
+/// accepted deletion or a rejected insertion removes the row (and a table left without rows),
+/// any other is cleared. Returns whether the row had one.
+fn resolve_row_at(s: &mut Session, story: StoryRef, path: &wordcraft_doc::Path, accept: bool) -> Result<bool, CmdError> {
+    let Some((tp, r, _)) = path.cell() else { return Ok(false) };
+    resolve_row(s, story, &tp, r, accept)
+}
+
+/// The table rows a paragraph at `path` is in, outermost first: (table path, row).
+fn row_chain(path: &wordcraft_doc::Path) -> Vec<(wordcraft_doc::Path, usize)> {
+    (4..=path.0.len())
+        .step_by(3)
+        .filter_map(|n| {
+            let tp = path.0.get(..n - 3)?.to_vec();
+            let r = *path.0.get(n - 3)? as usize;
+            Some((wordcraft_doc::Path(tp), r))
+        })
+        .collect()
+}
+
+/// [`resolve_row_at`] for row `r` of the table at `tp`.
+fn resolve_row(s: &mut Session, story: StoryRef, tp: &wordcraft_doc::Path, r: usize, accept: bool) -> Result<bool, CmdError> {
+    let marks = s.doc.table(story, tp).and_then(|t| t.rows.get(r)).map(|row| (row.props.ins, row.props.del));
+    let Some((ins, del)) = marks.filter(|m| *m != (None, None)) else { return Ok(false) };
+    let t = s.doc.table_mut(story, tp)?;
+    if (accept && del.is_some()) || (!accept && ins.is_some()) {
+        if r < t.rows.len() {
+            t.rows.remove(r);
+        }
+        if t.rows.is_empty() {
+            s.doc.remove_block(story, tp)?;
+            s.doc.ensure_nonempty();
+        }
+    } else if let Some(row) = t.rows.get_mut(r) {
+        row.props.ins = None;
+        row.props.del = None;
+    }
+    Ok(true)
+}
+
+/// Accept or reject the inserted and deleted table rows in `blocks`: an accepted deletion or a
+/// rejected insertion removes the row, and a table left without rows goes too.
+fn resolve_rows(blocks: &mut wordcraft_doc::Blocks, accept: bool, depth: usize) {
+    if depth > fmt_revisions::MAX_DEPTH {
+        return;
+    }
+    let has = |b: &wordcraft_doc::Block| matches!(b, wordcraft_doc::Block::Table(_));
+    for b in blocks.iter_mut().filter(|b| has(b)) {
+        if let wordcraft_doc::Block::Table(t) = std::sync::Arc::make_mut(b) {
+            t.rows.retain(|r| !((accept && r.props.del.is_some()) || (!accept && r.props.ins.is_some())));
+            for r in &mut t.rows {
+                r.props.ins = None;
+                r.props.del = None;
+                for c in &mut r.cells {
+                    resolve_rows(&mut c.blocks, accept, depth + 1);
+                }
+            }
+        }
+    }
+    blocks.retain(|b| !matches!(&**b, wordcraft_doc::Block::Table(t) if t.rows.is_empty()));
 }
 
 /// Accept or Reject All; with `stopTracking`, Track Changes is turned off as well.
@@ -281,7 +377,9 @@ fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
                 (a.clone(), a)
             }
             None => {
-                if resolve_cell(s, a.story, &a.path, accept)? {
+                // `|` (not `||`): the cell's changes and its row's insertion or deletion both.
+                if resolve_cell(s, a.story, &a.path, accept)? | resolve_row_at(s, a.story, &a.path, accept)? {
+                    s.clamp_selection();
                     return if next { select_next_unresolved(s) } else { sel_result(s) };
                 }
                 return nav_change(s, 1);
@@ -292,7 +390,9 @@ fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
     };
     // Moves with an end in the range: their other ends go with them.
     let moves = crate::cmd::moves::names_in(s, &a, &b, caret_mark.as_ref());
-    for path in s.doc.paths_between(&a, &b).into_iter().rev() {
+    let paths = s.doc.paths_between(&a, &b);
+    for (i, path) in paths.iter().enumerate().rev() {
+        let path = path.clone();
         let len = s.doc.para(a.story, &path).map(|p| p.len()).unwrap_or(0);
         let from = if path == a.path { a.off } else { 0 };
         let to = if path == b.path { b.off } else { len };
@@ -302,6 +402,15 @@ fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
         resolve_para(s, a.story, &path, (from, to), (mark, props), accept)?;
         if ranged {
             resolve_cell(s, a.story, &path, accept)?;
+        }
+        // Leaving table rows (going back): their own insertions or deletions go with their cells',
+        // innermost first, each row once. Done here, before anything earlier changes, so the
+        // tables' paths still hold.
+        let before = i.checked_sub(1).and_then(|k| paths.get(k)).map(row_chain).unwrap_or_default();
+        for (tp, r) in row_chain(&path).into_iter().rev() {
+            if !before.contains(&(tp.clone(), r)) {
+                resolve_row(s, a.story, &tp, r, accept)?;
+            }
         }
     }
     crate::cmd::moves::resolve(s, &moves, accept)?;
@@ -329,6 +438,13 @@ fn changes(s: &Session) -> Vec<Change> {
             ];
             for (rev, props) in found.into_iter().flatten() {
                 out.push(Change::format(mk(&path, 0), mk(&path, 0), rev, props));
+            }
+            // The row's own insertion or deletion, at its first cell.
+            if let Some(x) = row.filter(|_| c == 0) {
+                let kind = run_kind(&s.doc, x.props.ins, x.props.del);
+                if !kind.is_empty() {
+                    out.push(Change { a: mk(&path, 0), b: mk(&path, p.len()), kind, rev: x.props.ins.or(x.props.del), props: Vec::new() });
+                }
             }
         }
         if let Some(ch) = &p.props.fmt_change {
