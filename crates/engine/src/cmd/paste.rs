@@ -329,6 +329,7 @@ pub fn merge_formatting(s: &Session, frag: &mut Fragment) {
                     run.props.strike = Some(true);
                 }
                 run.props.link = src.link;
+                run.props.link_tooltip = src.link_tooltip;
                 // Tracked changes are not formatting: text deleted in the source stays deleted.
                 run.props.ins = src.ins;
                 run.props.del = src.del;

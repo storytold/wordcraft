@@ -58,6 +58,7 @@ pub(super) fn link(s: &mut Session, v: &Value) -> CmdResult {
         let text = p::str(v, "text").unwrap_or(&label).to_string();
         let mut props = s.typing_props();
         props.link = Some(url.clone());
+        props.link_tooltip = None;
         props.style = style;
         let at = s.sel.focus.clone();
         let end = s.doc.insert_text(&at, &text, &props)?;
@@ -66,6 +67,9 @@ pub(super) fn link(s: &mut Session, v: &Value) -> CmdResult {
     } else {
         let (a, b) = s.sel.ordered();
         s.doc.format_range(&a, &b, &|c| {
+            if c.link.as_deref() != Some(url.as_str()) {
+                c.link_tooltip = None;
+            }
             c.link = Some(url.clone());
             c.style = style.clone();
         })?;

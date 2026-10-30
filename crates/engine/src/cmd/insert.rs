@@ -57,6 +57,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("link.targets", "Link", "Insert › Links", link_targets).pure(),
         CommandSpec::new("insert.removeLink", "Remove Hyperlink", "Insert › Links", |s, _| super::format::apply(s, &|c| {
             c.link = None;
+            c.link_tooltip = None;
             if c.style.as_deref() == Some("Hyperlink") {
                 c.style = None;
             }

@@ -186,7 +186,7 @@ impl Writer<'_> {
             }
         }
 
-        let mut open_link: Option<String> = None;
+        let mut open_link: Option<(&str, Option<&str>)> = None;
         let mut i = 0;
         while i < pieces.len() {
             let Some((piece, props)) = pieces.get(i) else { break };
@@ -208,20 +208,23 @@ impl Writer<'_> {
                 continue;
             }
             // Hyperlink grouping.
-            if props.link != open_link {
+            let link = props.link.as_deref().filter(|l| !l.is_empty()).map(|l| (l, props.link_tooltip.as_deref()));
+            if link != open_link {
                 if open_link.is_some() {
                     w.close("w:hyperlink");
                 }
-                open_link = None;
-                if let Some(l) = props.link.as_deref().filter(|l| !l.is_empty()) {
-                    if let Some(anchor) = l.strip_prefix('#') {
-                        w.open("w:hyperlink", &[("w:anchor", anchor), ("w:history", "1")]);
-                    } else {
-                        let id = rels.add(rt::HYPERLINK, l, true);
-                        w.open("w:hyperlink", &[("r:id", &id), ("w:history", "1")]);
+                if let Some((target, tip)) = link {
+                    let (key, value) = match target.strip_prefix('#') {
+                        Some(anchor) => ("w:anchor", anchor.to_string()),
+                        None => ("r:id", rels.add(rt::HYPERLINK, target, true)),
+                    };
+                    let mut attrs = vec![(key, value.as_str()), ("w:history", "1")];
+                    if let Some(tip) = tip {
+                        attrs.push(("w:tooltip", tip));
                     }
-                    open_link = Some(l.to_string());
+                    w.open("w:hyperlink", &attrs);
                 }
+                open_link = link;
             }
             match piece {
                 Piece::Obj(o, _) => {

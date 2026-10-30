@@ -532,7 +532,10 @@ impl Bridge {
             for blk in &mut text.blocks {
                 if let wordcraft_doc::Block::Para(p) = blk {
                     let n = p.len();
-                    let _ = p.format(0, n, &|c| c.link = None);
+                    let _ = p.format(0, n, &|c| {
+                        c.link = None;
+                        c.link_tooltip = None;
+                    });
                 }
             }
             let at = s.doc.delete_range(&a, &b).map_err(|e| e.to_string())?;

@@ -253,7 +253,11 @@ impl Session {
         let props = p.props_at(f.off);
         // As in Word, text typed at either end of a hyperlink isn't part of it; only typing
         // inside the link extends it.
-        let inside_link = props.link.is_some() && f.off > 0 && f.off < p.len() && p.props_of_char(f.off).link == props.link;
+        let inside_link = props.link.is_some()
+            && f.off > 0
+            && f.off < p.len()
+            && p.props_of_char(f.off).link == props.link
+            && p.props_of_char(f.off).link_tooltip == props.link_tooltip;
         // Text typed next to a symbol is in the text's font, not the symbol's (`w:sym`).
         let mut out = (if props.link.is_some() && !inside_link { props.unlinked() } else { props.clone() }).without_symbol();
         // A footnote or endnote number is raised by its character style; text typed after it is body text.

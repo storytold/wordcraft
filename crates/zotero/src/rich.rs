@@ -36,6 +36,7 @@ fn style_props(base: &CharProps, src: &CharProps) -> CharProps {
     }
     if src.link.is_some() {
         p.link = src.link.clone();
+        p.link_tooltip = src.link_tooltip.clone();
     }
     p
 }

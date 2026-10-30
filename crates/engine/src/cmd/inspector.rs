@@ -137,6 +137,7 @@ fn clear(s: &mut Session, v: &Value) -> CmdResult {
                 *c = CharProps {
                     style: c.style.clone(),
                     link: c.link.clone(),
+                    link_tooltip: c.link_tooltip.clone(),
                     ins: c.ins,
                     del: c.del,
                     lang: c.lang.clone(),

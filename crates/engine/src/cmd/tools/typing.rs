@@ -123,12 +123,14 @@ pub fn autocorrect_word(s: &mut Session, on_enter: bool) -> Result<(), CmdError>
         let url_end = start + url.len();
         s.doc.format_range(&at(start), &at(url_end), &|c| {
             c.link = Some(href.clone());
+            c.link_tooltip = None;
             c.style = Some("Hyperlink".into());
         })?;
         // Typing after the link isn't part of it (but keeps the text's other formatting, or
         // the formatting outside a `*bold*` or `_italic_` span).
         let mut after = outside.unwrap_or_else(|| s.doc.para_at(&f).map(|p| p.props_of_char(start).clone()).unwrap_or_default());
         after.link = None;
+        after.link_tooltip = None;
         after.style = None;
         s.pending = Some(after);
         return Ok(());

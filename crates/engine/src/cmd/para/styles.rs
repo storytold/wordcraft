@@ -96,6 +96,7 @@ pub(super) fn create_style(s: &mut Session, v: &Value) -> CmdResult {
         st.chr = para.props_at(s.sel.focus.off).clone().without_symbol();
         st.chr.style = None;
         st.chr.link = None;
+        st.chr.link_tooltip = None;
         st.chr.ins = None;
         st.chr.del = None;
         st.chr.fmt_change = None;

@@ -5,6 +5,8 @@ use wordcraft_doc::Document;
 #[cfg(not(target_arch = "wasm32"))]
 mod safe_save;
 
+mod native_json;
+
 /// Formats WordCraft opens.
 pub const OPEN_EXTS: &[&str] = &[
     "docx",
@@ -384,7 +386,7 @@ pub fn save_bytes_opts(name: &str, doc: &Document, opts: &ExportOptions) -> Resu
             let bytes = wordcraft_formats::txt::export(doc);
             Ok(if opts.markup && opts.comments { wordcraft_formats::comments::append("txt", doc, bytes) } else { bytes })
         }
-        "json" => serde_json::to_vec_pretty(doc).map_err(|e| e.to_string()),
+        "json" => native_json::save(doc, MAX_READ_FILE),
         other => match crate::io_ext::save(other, doc, opts) {
             Some(r) => r,
             None => Err(format!("{name}: can't save as `.{other}`")),

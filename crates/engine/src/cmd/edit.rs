@@ -849,8 +849,10 @@ fn paste_format(s: &mut Session, _: &Value) -> CmdResult {
     } else {
         s.doc.format_range(&a, &b, &|c| {
             let link = c.link.clone();
+            let tip = c.link_tooltip.clone();
             *c = c.cleared().overlaid(&chr);
             c.link = link;
+            c.link_tooltip = tip;
         })?;
         if a.path != b.path || a.off == 0 {
             s.doc.format_paragraphs(&a, &b, &|p| *p = para.clone())?;

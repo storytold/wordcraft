@@ -188,7 +188,7 @@ fn ensure_placeholder_style(s: &mut Session) {
 /// Formatting for placeholder text based on `base`.
 fn placeholder_props(s: &mut Session, base: &CharProps) -> CharProps {
     ensure_placeholder_style(s);
-    CharProps { style: Some(placeholder_style_id(&s.doc)), link: None, ..base.clone() }
+    CharProps { style: Some(placeholder_style_id(&s.doc)), link: None, link_tooltip: None, ..base.clone() }
 }
 
 /// `base` without the placeholder style (for real content), whatever its localized id.

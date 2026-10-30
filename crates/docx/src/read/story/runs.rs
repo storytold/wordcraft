@@ -20,12 +20,16 @@ impl Reader<'_> {
                 let mut c = ctx.clone();
                 let url = k.attr("r:id").and_then(|id| rels.by_id(id)).map(|r| r.target.trim().to_string()).filter(|u| !u.is_empty());
                 let anchor = k.attr("w:anchor").filter(|a| !a.is_empty());
+                let has_target = url.is_some() || anchor.is_some();
                 c.link = match (url, anchor) {
                     (Some(u), Some(a)) => Some(format!("{u}#{a}")),
                     (Some(u), None) => Some(u),
                     (None, Some(a)) => Some(format!("#{a}")),
                     (None, None) => ctx.link.clone(),
                 };
+                if has_target {
+                    c.link_tooltip = k.attr("w:tooltip").map(Into::into);
+                }
                 self.read_inline_children(sc, pb, k, rels, &c, depth + 1);
             }
             "w:ins" | "w:moveTo" => {
@@ -117,6 +121,7 @@ impl Reader<'_> {
     fn run_props(&mut self, rpr: &El, ctx: &RunCtx) -> CharProps {
         let mut p = self.pc.rpr(rpr);
         p.link = ctx.link.clone();
+        p.link_tooltip = ctx.link_tooltip.clone();
         p.ins = ctx.ins;
         p.del = ctx.del;
         p.fmt_change = self.rpr_change(rpr);
@@ -124,7 +129,7 @@ impl Reader<'_> {
     }
 
     fn run_props_none(&self, ctx: &RunCtx) -> CharProps {
-        CharProps { link: ctx.link.clone(), ins: ctx.ins, del: ctx.del, ..Default::default() }
+        CharProps { link: ctx.link.clone(), link_tooltip: ctx.link_tooltip.clone(), ins: ctx.ins, del: ctx.del, ..Default::default() }
     }
 
     fn read_run(&mut self, sc: &mut StoryCtx, pb: &mut PB, r: &El, rels: &Rels, ctx: &RunCtx, depth: usize) {
@@ -333,7 +338,7 @@ impl Reader<'_> {
         let (base, base_props) = part("w:rubyBase");
         let (ruby, ruby_props) = part("w:rt");
         let mut bp = base_props.unwrap_or_default();
-        (bp.link, bp.ins, bp.del) = (props.link.clone(), props.ins, props.del);
+        (bp.link, bp.link_tooltip, bp.ins, bp.del) = (props.link.clone(), props.link_tooltip.clone(), props.ins, props.del);
         if base.is_empty() {
             return;
         }
