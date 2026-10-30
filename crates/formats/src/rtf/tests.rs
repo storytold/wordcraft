@@ -186,6 +186,25 @@ fn page_size_and_margins() {
 }
 
 #[test]
+fn narrow_grid_columns_keep_their_width() {
+    // Rows' edges a few points apart, as in a form exported from a spreadsheet. The table stays as
+    // wide as its source, through an export and back too.
+    let rtf = br"{\rtf1\ansi
+\trowd\cellx400\cellx800 \pard\intbl a\cell b\cell\row
+\trowd\cellx80\cellx480\cellx800 \pard\intbl c\cell d\cell e\cell\row
+\pard after\par}";
+    let table = |doc: &Document| match doc.body.iter().find_map(|b| if let wordcraft_doc::Block::Table(t) = &**b { Some(t.clone()) } else { None }) {
+        Some(t) => t,
+        None => panic!("no table"),
+    };
+    let doc = import(rtf).unwrap();
+    let t = table(&doc);
+    assert_eq!(t.grid, [4.0, 16.0, 4.0, 16.0]);
+    assert_eq!(t.rows[0].cells.iter().map(|c| c.props.width).collect::<Vec<_>>(), [Some(20.0), Some(20.0)]);
+    assert_eq!(table(&import(export(&doc).as_bytes()).unwrap()).grid, t.grid);
+}
+
+#[test]
 fn table_grid_from_cell_edges_and_borders() {
     // Rows whose cells don't line up share one grid: edges 2000, 3000, 9000.
     let rtf = br"{\rtf1\ansi
