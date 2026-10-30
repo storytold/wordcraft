@@ -313,6 +313,8 @@ pub(super) fn axis(a: Option<&El>) -> Axis {
 #[derive(Clone, Copy, Default)]
 pub(super) struct TitleStyle {
     pub(super) at: Option<(f32, f32)>,
+    /// `c:overlay`: the title is drawn over the plot and takes no room from it.
+    pub(super) overlay: bool,
     pub(super) size: Option<f32>,
     pub(super) bold: Option<bool>,
     pub(super) color: Option<Rgb>,
@@ -326,9 +328,11 @@ pub(super) fn title_style(chart: &El, theme: &[Rgb]) -> TitleStyle {
         (edge("c:xMode") && edge("c:yMode")).then_some(())?;
         Some((frac("c:x")?.clamp(0.0, 1.0), frac("c:y")?.clamp(0.0, 1.0)))
     });
-    let rpr = t.child("c:tx").and_then(|tx| tx.find("a:rPr")).or_else(|| t.find("a:defRPr"));
+    // The first run's properties, else the paragraph defaults: never a later run's.
+    let rpr = t.child("c:tx").and_then(|tx| tx.find("a:r")).and_then(|r| r.child("a:rPr")).or_else(|| t.find("a:defRPr"));
     TitleStyle {
         at,
+        overlay: t.child("c:overlay").and_then(|o| o.attr("val")).is_some_and(truthy),
         size: rpr.and_then(|r| r.attr("sz")).and_then(int).map(|v| (v as f32 / 100.0).clamp(6.0, 72.0)),
         bold: rpr.and_then(|r| r.attr("b")).map(truthy),
         color: rpr.and_then(|r| fill_colour(r, theme)),
