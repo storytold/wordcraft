@@ -1150,3 +1150,18 @@ fn a_later_default_style_without_a_font_keeps_the_default_font() {
     styles.read(without.as_bytes(), false);
     assert_eq!(styles.doc_font().as_deref(), Some("DejaVu Serif"));
 }
+
+#[test]
+fn a_later_monospaced_default_style_keeps_the_proportional_default_font() {
+    // #4501 follow-up: a monospaced default font is rejected and must not wipe the earlier one.
+    let mut styles = styles::Styles::default();
+    let with_font = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:text-properties style:font-name="DejaVu Serif"/></style:default-style></office:styles></office:document-styles>"#
+    );
+    let mono = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:text-properties style:font-name="Courier New"/></style:default-style></office:styles></office:document-styles>"#
+    );
+    styles.read(with_font.as_bytes(), false);
+    styles.read(mono.as_bytes(), false);
+    assert_eq!(styles.doc_font().as_deref(), Some("DejaVu Serif"));
+}

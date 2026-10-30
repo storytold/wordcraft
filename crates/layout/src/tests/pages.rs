@@ -632,3 +632,38 @@ fn a_sections_header_is_measured_without_the_previous_sections_grid() {
     assert!(plain > 72.0, "the header reaches past the top margin: {plain}");
     assert_eq!(body_top(Some(grid)), plain, "section 1's grid leaked into section 2's header");
 }
+
+#[test]
+fn a_sections_header_is_measured_with_its_own_section_page_count() {
+    // #4501 follow-up: section 1 has one page ("one"), section 2 twenty-three ("twenty-three").
+    // Section 2's header room is measured with its own SECTIONPAGES, so its body starts below it.
+    // (The total in the body makes layout run again with the page totals found.)
+    let mut d = Document::from_text(&format!("First section\n{}", "Second section\n".repeat(22)));
+    for i in 1..d.body.len() {
+        d.para_mut(StoryRef::Body, &Path::top(i)).unwrap().props.page_break_before = Some(i > 1);
+    }
+    let field = InlineObject::Field {
+        instr: r"SECTIONPAGES \* CardText".into(),
+        result: String::new(),
+        locked: false,
+        dirty: true,
+        code: false,
+        form: String::new(),
+    };
+    let first_para = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    first_para.insert_object(first_para.len(), field.clone(), &Default::default()).unwrap();
+    let mut header = Paragraph::new();
+    for _ in 0..60 {
+        header.insert_object(header.len(), field.clone(), &Default::default()).unwrap();
+    }
+    let id = d.add_part(PartKind::Header, vec![para_block(header)]);
+    d.last_section.headers.default = Some(id);
+    let first = SectionProps { headers: Default::default(), ..d.last_section.clone() };
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().section = Some(Box::new(first));
+    let l = lay(&d);
+    assert_eq!(l.pages.len(), 24);
+    let p = &l.pages[1];
+    let (_, header_bottom) = extent(&p.header, StoryRef::Part(id)).unwrap();
+    assert!(header_bottom > 72.0, "the header reaches past the top margin: {header_bottom}");
+    assert!(header_bottom <= p.body.y + 0.01, "the body starts at {} inside the header ending at {header_bottom}", p.body.y);
+}
