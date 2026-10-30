@@ -22,6 +22,20 @@ pub(crate) struct Parked {
 }
 
 impl WordApp {
+    /// A failed background write belongs to its captured document, including while parked.
+    /// A closed or replaced document must not dirty the document now shown.
+    pub(crate) fn invalidate_autosave(&mut self, document: u64) {
+        if document == self.session.document_id() {
+            self.autosave_path = None;
+            self.session.dirty = true;
+        } else {
+            if let Some(parked) = self.parked.get_mut(&document) {
+                parked.autosave_path = None;
+            }
+            let _ = self.session.with_document(document, |s| s.dirty = true);
+        }
+    }
+
     /// Follow the session's active document. When it isn't the one the window last showed, the
     /// shown document's own state is put aside (or dropped, if it was closed or replaced), the
     /// new one's comes back, and the window's state about the page that was shown starts afresh

@@ -44,6 +44,10 @@ impl WordApp {
             self.dialog = dialogs::Dialog::open(name, self);
             return Ok(json!({"pending": name}));
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        if discards_document(id, &params) && !self.finish_pending_autosave() {
+            return Err(tl!("Wait for AutoSave to finish before replacing or closing the document.").into());
+        }
         if (self.session.dirty || self.save_unconfirmed() || refused.is_some())
             && discards_document(id, &params)
             && !self.closes_only_its_window(id, &params)
@@ -112,6 +116,11 @@ impl WordApp {
     /// Run a command for a script or an agent (control channel, MCP bridge): never asks first.
     /// UI-level commands (`ui.*`) are handled here, the rest by the engine.
     pub fn execute(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        // Drain older writes before a newer save, rename, or close can overtake them.
+        #[cfg(not(target_arch = "wasm32"))]
+        if (matches!(id, "file.save" | "file.saveAs" | "file.rename") || discards_document(id, &params)) && !self.finish_pending_autosave() {
+            return Err(tl!("Wait for AutoSave to finish before saving or closing the document.").into());
+        }
         self.clear_command_targets(id);
         if let Some(error) = self.document_required_error(id) {
             return Err(error);

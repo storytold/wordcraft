@@ -191,6 +191,10 @@ impl WordApp {
             self.status(tl!("Wait for the print job to finish submitting before closing."));
             return false;
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        if !self.finish_pending_autosave() {
+            return false;
+        }
         if self.quit_requested {
             return true;
         }
@@ -407,17 +411,103 @@ impl WordApp {
         Ok(json!({"value": on}))
     }
 
-    /// AutoSave: write a saved document a couple of seconds after the last change. A failure is
-    /// shown in the status bar and turns AutoSave off for the file until the user saves it again.
+    /// AutoSave: write a saved document a couple of seconds after the last change. The write
+    /// itself happens off the UI thread ([`crate::autosave_worker`]): the document is stamped and
+    /// copied here, and its outcome is applied by [`Self::settle_autosave`]. A failure is shown
+    /// in the status bar and turns AutoSave off for the file until the user saves it again.
     pub(crate) fn autosave_tick(&mut self, now: f64) {
-        if self.autosaves() && self.session.dirty && now - self.last_autosave > 2500.0 && now - self.canvas.caret_visible_since > 1500.0 {
-            self.last_autosave = now;
-            if let Err(e) = self.session.run("file.save", &json!({})) {
-                log::warn!("AutoSave failed: {e}");
-                self.autosave_path = None;
-                self.status(i18n::fmt(tl!("AutoSave failed: {error}. Save the document to turn AutoSave back on."), &[("error", &e.to_string())]));
+        if !self.autosaves() || !self.session.dirty || now - self.last_autosave <= 2500.0 || now - self.canvas.caret_visible_since <= 1500.0 {
+            return;
+        }
+        // One write at a time: while one is in flight, a later frame's tick tries again with
+        // the then-current document.
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.autosave_worker.as_ref().is_some_and(|w| w.is_busy()) {
+            return;
+        }
+        match self.autosave_write() {
+            Ok(()) => self.last_autosave = now,
+            Err(e) => self.autosave_failure(e, Some(self.session.document_id())),
+        }
+    }
+
+    /// Prepare the document for AutoSave and start its write: stamp and copy on the UI thread,
+    /// then hand the copy to the worker (or write inline when there is none, e.g. the web
+    /// build). The captured state counts as saved; later edits dirty the document again.
+    fn autosave_write(&mut self) -> Result<(), String> {
+        let Some(path) = self.session.path.clone() else { return Err("no file path".into()) };
+        let prepared = wordcraft_engine::cmd::file::prepare_save(&mut self.session, &path, &json!({}))?;
+        self.session.dirty = false;
+        #[cfg(not(target_arch = "wasm32"))]
+        let prepared = if let Some(w) = &mut self.autosave_worker {
+            match w.submit(prepared) {
+                None => {
+                    self.autosave_pending_document = Some(self.session.document_id());
+                    return Ok(());
+                }
+                Some(prepared) => {
+                    self.autosave_worker = None;
+                    self.autosave_pending_document = None;
+                    prepared
+                }
+            }
+        } else {
+            prepared
+        };
+        if let Err(e) = wordcraft_engine::cmd::file::write_prepared(&prepared) {
+            self.session.dirty = true;
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    /// Wait (bounded) for a background AutoSave to finish. Returns false on timeout: the
+    /// caller must defer saving, replacing or closing while the older write can still land.
+    /// A completed failure restores unsaved state before the caller proceeds.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn finish_pending_autosave(&mut self) -> bool {
+        self.wait_for_autosave(std::time::Duration::from_secs(5))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn wait_for_autosave(&mut self, timeout: std::time::Duration) -> bool {
+        let Some(w) = &mut self.autosave_worker else { return true };
+        let outcome = w.settle(timeout);
+        let finished = !w.is_busy();
+        if let Some((_, result)) = outcome {
+            let document = self.autosave_pending_document.take();
+            if let Err(e) = result {
+                self.autosave_failure(e, document);
             }
         }
+        if !finished {
+            self.status(tl!("Wait for AutoSave to finish before saving or closing the document."));
+        }
+        finished
+    }
+
+    /// Apply the background write's outcome even after editing or switching documents.
+    /// A failure restores unsaved state only on the document the snapshot came from.
+    pub(crate) fn settle_autosave(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(w) = &mut self.autosave_worker
+            && let Some((_, result)) = w.poll()
+        {
+            let document = self.autosave_pending_document.take();
+            if let Err(e) = result {
+                self.autosave_failure(e, document);
+            }
+        }
+    }
+
+    /// AutoSave failed: put the document back to unsaved and turn AutoSave off for the file
+    /// until the user saves it again.
+    fn autosave_failure(&mut self, error: String, document: Option<u64>) {
+        log::warn!("AutoSave failed: {error}");
+        if let Some(document) = document {
+            self.invalidate_autosave(document);
+        }
+        self.status(i18n::fmt(tl!("AutoSave failed: {error}. Save the document to turn AutoSave back on."), &[("error", &error)]));
     }
 
     /// Files that arrived asynchronously (web picker, drops): documents open, pictures insert,

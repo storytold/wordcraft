@@ -332,6 +332,44 @@ fn encrypt(s: &mut Session, v: &Value) -> CmdResult {
     Ok(json!({"encrypted": s.password.is_some()}))
 }
 
+/// A document prepared to be written to disk: `file.save` writes it right away, and the
+/// desktop AutoSave hands it to a worker thread so typing never waits for the disk. Plain
+/// data (the document is an owned copy already stamped), so it can cross a thread.
+pub struct PreparedSave {
+    /// Where the document is written.
+    pub path: std::path::PathBuf,
+    /// The stamped document: a header/footer just made and left empty isn't saved (#960).
+    pub doc: Document,
+    /// Like Word, a document opened with a password is saved with it again.
+    pub password: Option<crate::io::Password>,
+    /// Print Markup and Word 2003 options, as `file.save` would apply them.
+    pub opts: crate::io::ExportOptions,
+}
+
+/// Stamp and copy the document for a save to `path`, everything `file.save` does to it before
+/// the bytes are written: save metadata (`Session::stamp_save`), export options (Print Markup
+/// from `v` or the settings; for an `.xml` file, Word 2003 when that is what the file holds)
+/// and the empty-header cleanup. Writing is [`write_prepared`].
+pub fn prepare_save(s: &mut Session, path: &std::path::Path, v: &Value) -> Result<PreparedSave, String> {
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    let mut opts = export_options(s, v);
+    if v.get("format").filter(|f| !f.is_null()).is_none() && ext == "xml" {
+        // Saving over a Word 2003 XML file (one opened as such, say) keeps its format.
+        opts.word2003 = is_word_2003_file(path);
+    }
+    s.stamp_save();
+    let password = s.password.clone();
+    // A header/footer just made and left empty isn't saved (#960).
+    let copy = super::insert::saved_copy(s);
+    Ok(PreparedSave { path: path.into(), doc: copy.unwrap_or_else(|| s.doc.clone()), password, opts })
+}
+
+/// Write a [`PreparedSave`] to disk: the sibling-temp-file safe save, encrypted when the
+/// document has a password. Thread-safe: takes only plain data, so a worker thread can run it.
+pub fn write_prepared(save: &PreparedSave) -> Result<(), String> {
+    crate::io::save_path_with(&save.path, &save.doc, save.password.as_ref().map(|p| p.as_str()), &save.opts)
+}
+
 fn save(s: &mut Session, v: &Value) -> CmdResult {
     let path = match p::str(v, "path").map(std::path::PathBuf::from).or_else(|| s.path.clone()) {
         Some(p) => p,
@@ -352,33 +390,23 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
         s.password = Some(crate::io::Password::new(pw));
     }
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
-    let mut opts = export_options(s, v);
     match v.get("format").filter(|f| !f.is_null()) {
-        None => {
-            // Saving over a Word 2003 XML file (one opened as such, say) keeps its format.
-            opts.word2003 = ext == "xml" && is_word_2003_file(&path);
-        }
+        None => {}
         Some(f) if matches!(f.as_str(), Some(FORMAT_WORD_2003 | FORMAT_FLAT_OPC)) && ext == "xml" => {}
         Some(_) => {
             return Err(CmdError::Params(format!("`format` is \"{FORMAT_WORD_2003}\" or \"{FORMAT_FLAT_OPC}\", and only for an .xml file")));
         }
     }
-    // Undone below if the write fails: a failed save (no permission, disk full, a bad path)
-    // must not leave the document's own save stamps — zoom, modified/created, author, revision —
-    // changed, or a later save would persist them for a write that never actually happened.
+    // Restore metadata if writing fails: a failed save must not leave successful-save stamps.
     let before_stamp =
         (s.doc.settings.zoom, s.doc.core.last_modified_by.clone(), s.doc.core.created.clone(), s.doc.core.modified.clone(), s.doc.core.revision);
-    s.stamp_save();
-    let password = s.password.as_ref().map(crate::io::Password::as_str);
-    // A header/footer just made and left empty isn't saved (#960).
-    let copy = super::insert::saved_copy(s);
-    if let Err(e) = crate::io::save_path_with(&path, copy.as_ref().unwrap_or(&s.doc), password, &opts) {
+    let prepared = prepare_save(s, &path, v).map_err(CmdError::Failed)?;
+    if let Err(e) = write_prepared(&prepared) {
         (s.doc.settings.zoom, s.doc.core.last_modified_by, s.doc.core.created, s.doc.core.modified, s.doc.core.revision) = before_stamp;
         return Err(CmdError::Failed(e));
     }
-    let encrypted = password.is_some() && crate::io::can_encrypt(&path.to_string_lossy());
-    // A save in a format that doesn't keep everything (plain text, Markdown, a page image) is a
-    // copy, except over the document's own file: a note.txt opened and saved is saved (#2376).
+    let encrypted = prepared.password.is_some() && crate::io::can_encrypt(&path.to_string_lossy());
+    // Saving over the document's own file counts even for a format that loses formatting.
     let own_file = s.path.as_deref() == Some(path.as_path());
     if own_file || ["docx", "docm", "dotx", "dotm", "odt", "rtf", "json", "xml"].contains(&ext.as_str()) {
         s.path = Some(path.clone());

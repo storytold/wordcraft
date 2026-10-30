@@ -135,6 +135,10 @@ impl WordApp {
             ime_origin: false,
             read_aloud_error: None,
             autosave_path: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            autosave_worker: Some(crate::autosave_worker::AutoSaveWorker::spawn()),
+            #[cfg(not(target_arch = "wasm32"))]
+            autosave_pending_document: None,
             saves_in_flight: Vec::new(),
             font_generation: wordcraft_fonts::FontDb::global().generation(),
             recovery_seen: false,
@@ -236,6 +240,7 @@ impl WordApp {
         }
         options::sync(self);
         self.settle_async_saves();
+        self.settle_autosave();
         // Chinese text wants the Chinese face before the Japanese one (one glyph style per line).
         // An installed CJK font is read only once CJK text is shown (#241): a CJK interface, the
         // language names in Options, or a file name the caption is drawing. A file opened later
@@ -368,6 +373,10 @@ impl WordApp {
         self.clear_stale_change_picture();
         let _ = self.poll_file_dialog();
         self.autosave_tick(now_ms());
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.autosave_worker.as_ref().is_some_and(|w| w.is_busy()) {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
         if self.autosaves() && self.session.dirty {
             ctx.request_repaint_after(std::time::Duration::from_millis(1000));
         }
