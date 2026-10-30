@@ -170,6 +170,8 @@ pub fn format_switch(instr: &str) -> Option<NumFormat> {
                 v if v.eq_ignore_ascii_case("ChineseNum2") => NumFormat::ChineseLegalSimplified,
                 v if v.eq_ignore_ascii_case("ChineseNum3") => NumFormat::IdeographDigital,
                 v if v.eq_ignore_ascii_case("BahtText") => NumFormat::BahtText,
+                v if v.eq_ignore_ascii_case("thaiNumbers") => NumFormat::ThaiNumbers,
+                v if v.eq_ignore_ascii_case("thaiCounting") => NumFormat::ThaiCounting,
                 _ => continue,
             };
             return Some(fmt);
@@ -602,5 +604,20 @@ mod tests {
         assert_eq!(field_text("PAGEREF \\h", "9", &ctx), ("9".into(), false));
         assert_eq!(field_text("PAGEREF", "9", &ctx), ("9".into(), false));
         assert_eq!(field_text("PAGEREF End_1", "9", &FieldCtx::default()), ("9".into(), false));
+    }
+
+    /// `\* thaiNumbers` and `\* thaiCounting` work on all field names (PAGE, NUMPAGES, SEQ, `=`, …).
+    #[test]
+    fn thai_number_format_switches() {
+        let ctx = FieldCtx { page: 22, pages: 100, ..Default::default() };
+        let text = |instr: &str| field_text(instr, "", &ctx).0;
+        assert_eq!(text(r"PAGE \* thaiNumbers"),      "๒๒");
+        assert_eq!(text(r"PAGE \* THAINUMBERS"),      "๒๒", "case-insensitive");
+        assert_eq!(text(r"NUMPAGES \* thaiCounting"), "หนึ่งร้อย");
+        assert_eq!(field_text(r"= 22 \* thaiNumbers",  "", &ctx).0, "๒๒");
+        assert_eq!(field_text(r"= 22 \* thaiCounting", "", &ctx).0, "ยี่สิบสอง");
+        assert_eq!(field_text(r"22 \* thaiNumbers",    "", &ctx).0, "๒๒");
+        assert_eq!(field_text(r"22 \* thaiCounting",   "", &ctx).0, "ยี่สิบสอง");
+        assert_eq!(field_text(r"SEQ x \* thaiNumbers", "5", &ctx).0, "๕");
     }
 }
