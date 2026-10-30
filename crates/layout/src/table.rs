@@ -139,6 +139,9 @@ const EMPTY_TEXT: f32 = 12.0;
 fn measure_para(p: &wordcraft_doc::Paragraph, env: &crate::para::ParaEnv) -> (f32, f32) {
     use crate::para::ClKind;
     let pl = crate::para::layout_para(p, env);
+    if let Some(widths) = hanging_content(&pl) {
+        return widths;
+    }
     let rp = &pl.rp;
     let indents = rp.indent_left.max(0.0) + rp.indent_right.max(0.0) + rp.indent_first.max(0.0);
     let (mut word, mut min) = (0.0f32, 0.0f32);
@@ -1286,6 +1289,9 @@ const UNBOUNDED: f32 = 100_000.0;
 
 /// A paragraph's longest word and longest line (between line breaks), indents included.
 fn para_content(pl: &ParaLayout) -> (f32, f32) {
+    if let Some(widths) = hanging_content(pl) {
+        return widths;
+    }
     let indents = pl.rp.indent_left.max(0.0) + pl.rp.indent_right.max(0.0) + pl.rp.indent_first.max(0.0);
     let (mut word, mut line, mut spaces) = (0.0f32, 0.0f32, 0.0f32);
     let (mut lo, mut hi) = (0.0f32, 0.0f32);
@@ -1314,6 +1320,81 @@ fn para_content(pl: &ParaLayout) -> (f32, f32) {
         }
     }
     (lo.max(word) + indents, hi.max(line) + indents)
+}
+
+/// Intrinsic widths when the first line starts somewhere other than the positive left indent.
+/// A short label can fit entirely on that line. For longer text, try each break opportunity:
+/// the prefix stays at the first-line origin and the remaining words need the later-line origin.
+/// Numbered paragraphs and positional tabs retain their existing measurement; positional stops
+/// depend on the measuring width, so their advances cannot bound a fixed content prefix.
+fn hanging_content(pl: &ParaLayout) -> Option<(f32, f32)> {
+    let rp = &pl.rp;
+    if (rp.indent_left >= 0.0 && rp.indent_first >= 0.0) || pl.label.is_some() || rp.numbering.is_some_and(|n| n.num != 0) || !pl.ptabs.is_empty() {
+        return None;
+    }
+    let left = rp.indent_left.max(0.0);
+    let first = (rp.indent_left + rp.indent_first).max(0.0);
+    let right = rp.indent_right.max(0.0);
+    // Only the first explicit line can use the first-line origin. Its breakable fragments
+    // store (width, end of prefix); a reverse pass considers all splits in linear time.
+    let mut words = Vec::new();
+    let (mut word, mut line, mut spaces) = (0.0f32, 0.0f32, 0.0f32);
+    let (mut later_min, mut tab_min, mut max) = (0.0f32, 0.0f32, 0.0f32);
+    let mut first_line = true;
+    let clusters = pl.clusters.iter().map(|c| (c.kind, c.adv, c.break_after));
+    for (kind, adv, break_after) in clusters.chain(std::iter::once((ClKind::LineBreak, 0.0, false))) {
+        let adv = if adv.is_finite() { adv.clamp(0.0, UNBOUNDED) } else { 0.0 };
+        let hard_break = matches!(kind, ClKind::LineBreak | ClKind::PageBreak | ClKind::ColumnBreak);
+        let boundary = match kind {
+            ClKind::Space => {
+                spaces += adv;
+                true
+            }
+            ClKind::Tab => {
+                // A tab endpoint occupies the prefix even when no text follows it.
+                line += spaces + adv;
+                spaces = 0.0;
+                if first_line {
+                    // A fixed tab bounds the whole prefix, independently of word splits.
+                    tab_min = tab_min.max(line + first);
+                } else if !first_line {
+                    later_min = later_min.max(line + left);
+                }
+                true
+            }
+            ClKind::Marker => false,
+            ClKind::LineBreak | ClKind::PageBreak | ClKind::ColumnBreak => true,
+            _ => {
+                word += adv;
+                line += spaces + adv;
+                spaces = 0.0;
+                break_after
+            }
+        };
+        if boundary && word > 0.0 {
+            if first_line {
+                words.push((word, line));
+            } else {
+                later_min = later_min.max(word + left);
+            }
+            word = 0.0;
+        }
+        if hard_break {
+            if line > 0.0 {
+                max = max.max(line + if first_line { first } else { left });
+            }
+            (line, spaces) = (0.0, 0.0);
+            first_line = false;
+        }
+    }
+    let mut min = words.last().map_or(0.0, |&(_, end)| end + first);
+    let mut remaining = 0.0f32;
+    for (a, b) in words.iter().zip(words.iter().skip(1)).rev() {
+        remaining = remaining.max(b.0 + left);
+        min = min.min((a.1 + first).max(remaining));
+    }
+    let min = min.max(later_min).max(tab_min);
+    Some((min + right, max.max(min) + right))
 }
 
 /// Whether nothing in `t` asks for a width (its own or any cell's): its columns then follow
