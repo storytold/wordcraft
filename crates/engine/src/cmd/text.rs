@@ -141,6 +141,38 @@ fn insert(s: &mut Session, v: &Value) -> CmdResult {
     let smart_quote = if raw { None } else { autoformat(s, text) };
     let text_to_type = smart_quote.as_deref().unwrap_or(text);
     let was_collapsed = s.sel.is_collapsed();
+    // Multi-character all-Thai-combining input: macOS sends some keys as a 2-char event,
+    // e.g. the Nikhahit (ํ) key delivers ิ (sara_i U+0E34) + ํ (U+0E4D).  The count==1
+    // guard below would skip sequence checking for both; instead, process each char in
+    // sequence so vowel-upgrade rules (ิ+ํ → ึ) fire correctly between characters.
+    if !raw
+        && s.sel.is_collapsed()
+        && !s.doc.settings.track_changes
+        && text_to_type.chars().count() > 1
+        && {
+            use wordcraft_doc::thai_input::{ThaiCharClass, thai_char_class};
+            text_to_type.chars().all(|c| {
+                matches!(
+                    thai_char_class(c),
+                    ThaiCharClass::UpperVowel
+                        | ThaiCharClass::LowerVowel
+                        | ThaiCharClass::Tone
+                        | ThaiCharClass::Diacritic
+                        | ThaiCharClass::Karan
+                        | ThaiCharClass::PaliMark
+                        | ThaiCharClass::SaraAm
+                )
+            })
+        }
+    {
+        // Process each combining char individually (depth is bounded: each recursive
+        // call has count==1 and takes the normal single-char path).
+        for ch in text_to_type.chars().collect::<Vec<_>>() {
+            let v = serde_json::json!({ "text": ch.to_string() });
+            insert(s, &v)?;
+        }
+        return sel_result(s);
+    }
     // Thai input sequence checking: a single Thai combining character (vowel, tone, diacritic)
     // may replace an existing character in the current TCB rather than append.
     // Skip when the selection is not collapsed (non-collapsed selection must go through type_text

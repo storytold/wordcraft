@@ -3677,3 +3677,20 @@ fn thai_tcb_delete_then_append_reorders_vowel_tone_am() {
         "sara_i must be deleted and ำ appended after ่ to give canonical cons+tone+sara_am"
     );
 }
+
+/// macOS Thai keyboard sends Nikhahit (◌ํ) as a two-character event: ิ (U+0E34 sara_i) +
+/// ํ (U+0E4D nikhahit).  The multi-char Thai path must process them in sequence so the
+/// vowel-upgrade rule (ิ followed by ํ → replace sara_i with ึ sara_ue, discard nikhahit)
+/// fires.  Stored text: ฐ + ึ  (U+0E10 + U+0E36).  NOT ฐ + ิ + ํ.
+#[test]
+fn thai_macos_nikhahit_two_char_event() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "\u{0E10}"})); // ฐ tho thahan
+    // Simulate the macOS Nikhahit key: 2-char insert event ิ+ํ
+    run(&mut s, "text.insert", json!({"text": "\u{0E34}\u{0E4D}"}));
+    assert_eq!(
+        s.doc.plain_text(StoryRef::Body),
+        "\u{0E10}\u{0E36}",
+        "macOS Nikhahit 2-char event (ิ+ํ) must produce ฐ+ึ via vowel-upgrade, not ฐ+ิ+ํ"
+    );
+}
