@@ -235,7 +235,7 @@ impl PageNumbersForm {
             section: wordcraft_engine::cmd::page::section_index_of_focus(&app.session),
             format: sp.page_num_format.ooxml().to_string(),
             cont: sp.page_num_start.is_none(),
-            start: sp.page_num_start.unwrap_or(1).clamp(1, 100_000),
+            start: sp.page_num_start.unwrap_or(1).min(100_000),
         }
     }
 
@@ -270,7 +270,7 @@ pub(super) fn page_numbers_ui(app: &mut WordApp, ui: &mut Ui, f: &mut PageNumber
     ui.radio_value(&mut f.cont, true, tl!("Continue from previous section"));
     ui.horizontal(|ui| {
         ui.radio_value(&mut f.cont, false, tl!("Start at:"));
-        ui.add_enabled(!f.cont, egui::DragValue::new(&mut f.start).range(1..=100_000));
+        ui.add_enabled(!f.cont, egui::DragValue::new(&mut f.start).range(0..=100_000));
     });
     let (ok, cancel) = buttons(ui, "OK", true);
     if ok {

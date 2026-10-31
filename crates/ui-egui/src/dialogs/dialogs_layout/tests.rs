@@ -91,6 +91,39 @@ fn page_numbers_dialog_sets_the_format_and_start() {
     assert_eq!((f.section, f.format.as_str(), f.start), (1, "lowerRoman", 9));
 }
 
+/// #4911: zero is an explicit start, distinct from continuing the previous section.
+#[test]
+fn page_numbers_dialog_preserves_zero_and_continue() {
+    let mut a = app();
+    a.run("ui.dialog", json!({"name": "pageNumbers"})).unwrap();
+    let LayoutDialog::PageNumbers(f) = form(&mut a) else { panic!("page numbers") };
+    assert!(f.cont);
+    assert_eq!(f.start, 1, "unspecified numbering still defaults to one");
+    for start in [0, 1, 100_000] {
+        a.run("layout.pageNumberFormat", json!({"start": start})).unwrap();
+        assert_eq!(a.session.doc.last_section.page_num_start, Some(start));
+        a.run("ui.dialog", json!({"name": "pageNumbers"})).unwrap();
+        let LayoutDialog::PageNumbers(f) = form(&mut a) else { panic!("page numbers") };
+        assert!(!f.cont);
+        assert_eq!(f.start, start);
+        assert_eq!(f.params()["start"], json!(start));
+        a.run("layout.pageNumberFormat", f.params()).unwrap();
+        assert_eq!(a.session.doc.last_section.page_num_start, Some(start));
+        a.run("ui.dialog", json!({"name": "pageNumbers"})).unwrap();
+        let LayoutDialog::PageNumbers(mut f) = form(&mut a) else { panic!("page numbers") };
+        assert!(!f.cont);
+        assert_eq!(f.start, start, "reopening preserves the explicit start");
+        f.cont = true;
+        assert_eq!(f.params()["start"], serde_json::Value::Null);
+        a.run("layout.pageNumberFormat", f.params()).unwrap();
+        assert_eq!(a.session.doc.last_section.page_num_start, None);
+        a.run("ui.dialog", json!({"name": "pageNumbers"})).unwrap();
+        let LayoutDialog::PageNumbers(f) = form(&mut a) else { panic!("page numbers") };
+        assert!(f.cont);
+        assert_eq!(f.start, 1, "continuing does not become an explicit zero");
+    }
+}
+
 /// #755: the Line Numbers "From text" distance and the Hyphenation zone follow the
 /// File › Options unit (centimeters here); `params` sends points whatever the unit.
 #[test]
