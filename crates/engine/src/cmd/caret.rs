@@ -237,21 +237,52 @@ fn vert(s: &mut Session, v: &Value, dir: i32) -> CmdResult {
 
 fn line(s: &mut Session, v: &Value, home: bool) -> CmdResult {
     let ext = extend(v);
+    let from = if ext { line_focus(s) } else { s.sel.focus.clone() };
     let l = s.layout();
-    let from = s.sel.focus.clone();
     let to = match l.line_bounds(&from, s.page_hint) {
         Some((a, b)) => {
             if home {
                 a
+            } else if ext {
+                past_mark(s, b)
             } else {
                 b
             }
         }
-        None => from,
+        None => s.sel.focus.clone(),
     };
     s.goal_x = None;
     apply(s, to, ext);
     sel_result(s)
+}
+
+/// Where Shift+Home and Shift+End measure the line from. A selection running forward to a
+/// paragraph's start ends with the mark of the paragraph before (as after Shift+End or Shift+Down
+/// from a line start): Word counts that as the end of that paragraph's last line, so Shift+End
+/// leaves it and Shift+Home goes to that line's start.
+fn line_focus(s: &Session) -> Pos {
+    let f = &s.sel.focus;
+    if s.sel.anchor < *f
+        && f.off == 0
+        && let Some(i) = f.path.last().checked_sub(1)
+    {
+        let prev = f.path.with_last(i);
+        if let Some(p) = s.doc.para(f.story, &prev) {
+            return Pos { story: f.story, path: prev, off: p.len() };
+        }
+    }
+    f.clone()
+}
+
+/// Shift+End on a paragraph's last line takes in its mark, as in Word: the selection runs to the
+/// start of the next paragraph in the same container. With none (the last paragraph of a story
+/// or a cell, or a table next) it stops at the end of the text.
+fn past_mark(s: &Session, end: Pos) -> Pos {
+    let next = end.path.with_last(end.path.last() + 1);
+    match (s.doc.para(end.story, &end.path), s.doc.para(end.story, &next)) {
+        (Some(p), Some(_)) if end.off == p.len() => Pos { story: end.story, path: next, off: 0 },
+        _ => end,
+    }
 }
 
 fn page(s: &mut Session, v: &Value, dir: i32) -> CmdResult {
