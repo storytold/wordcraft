@@ -474,6 +474,19 @@ again.
   cap, a commit at 64 KiB): larger hostile events are ignored rather than painted or inserted
   (`oversized_ime_events_are_ignored`).
 
+## Equations
+
+| Keys | Word's result | Test |
+|---|---|---|
+| in an equation, `1/2` Space `x^2` Space | ½x²: what follows a built fraction, root, script or bar is its own item, not part of the denominator ⁴ | `text_after_a_built_fraction_stays_outside_it`, `a_trailing_operand_keeps_the_item_after_it` |
+| in an equation, `y`, then a stacked fraction 1 over 2, then `+3` Space | y·½+3: text before an inserted fraction or pre-script stays outside it, not part of the numerator or base. The linear form writes a space in front (`y 1/2+3`) | `text_before_an_inserted_fraction_stays_outside_it`, `any_two_items_read_back_as_written` |
+| in an equation, type, ← (or any arrow), type, ⌘Z | Undo takes back only the typing after the arrow, as a caret move or selection does in body text (#419); not re-observed in Word inside an equation | `moving_the_equation_caret_ends_the_typing_step` |
+| in an equation, type until it builds up, ⌘Z | Undo takes back only the build-up: the text comes back as typed with the caret after it, and the next ⌘Z removes the typing before it | `undo_takes_back_one_build_up_at_a_time`, `text_typed_after_a_build_up_in_one_command_joins_its_undo_step`, `one_command_with_several_build_ups_undoes_them_one_at_a_time`, `autocorrect_and_build_up_on_one_space_undo_separately` |
+
+⁴ Reported by a user comparing with Word for Windows side by side; not re-observed on the
+Mac reference here. The linear form writes such a structure with a space after it
+(`1/2 x^2`) so it reads back the same.
+
 ## Known gaps
 
 - Web (#1480): Chrome has been seen moving the caret of eframe's hidden text field to its
@@ -522,6 +535,9 @@ this correction; native Windows interaction and Microsoft Word remain untested.
 | 2026-10-29 | trivial | Relative font-size commands preserve mixed sizes in the selection (#4903); existing button steps and one-point shortcuts are unchanged; readiness estimates unchanged |
 | 2026-10-28 | trivial | Highlighting at a caret leaves the word alone and sets the colour for what is typed next (#4086). |
 | 2026-10-28 | trivial | Arabic Backspace removes one combining mark and keeps its base letter (#4757); stored mark order, caret/forward-Delete and other-script behavior retained; original synthetic command/history/protection/save-reopen checks, no native Word comparison; readiness estimates unchanged |
+| 2026-10-28 | trivial | Equations: an arrow key ends the typing undo step, so ⌘Z after typing in a fraction's denominator takes back that typing only, not the numerator's too. |
+| 2026-10-28 | trivial | Equations: `y`, an inserted fraction 1 over 2, then `+3` Space keeps `y` outside the fraction instead of reading back (y1)/2 (#4733). |
+| 2026-10-28 | trivial | Equations: `1/2` Space `x^2` Space gives ½x², not 1/(2x²); Undo right after a build-up takes back only the build-up and puts the caret back. |
 | 2026-10-25 | trivial | Highlight decisions include fully selected paragraph marks in whole cells and ordinary ranges, including empty paragraphs; partial text columns exclude unselected marks (#4085). |
 | 2026-10-25 | trivial | Highlight toggle checks the full target beyond 10,000 runs without collecting resolved formatting; mixed and inherited tails and Undo/Redo covered (#4085). |
 | 2026-10-24 | trivial | Input methods: reject queued old-composition replacements before mutation after body/equation target replacement (new regression validation pending); equation `DeleteSurrounding` is one transactional command whose checked revision proves a receipt; a caret-only step in a mixed request refuses the whole deletion, and an over-cap request clears the painted pre-edit and the previous replacement join; a refused byte-counted equation deletion drops only the immediately adjacent stale replacement, never a later direct commit; a tracked own-insertion shifts the following range; a body deletion maps signed placeholder growth/shrink, keeps control markers outside the range and scopes its replacement undo join to the matching `text.insert`; refusals clear the painted pre-edit and joins; AutoCorrect/AutoFormat classification compares the paragraph as typed; equation replacement interrupts the composition |
