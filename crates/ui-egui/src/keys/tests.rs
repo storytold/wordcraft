@@ -1233,3 +1233,145 @@ fn typing_with_smart_art_selected_types_into_an_item() {
     let g = wordcraft_engine::cmd::smart_art::selected_smart_art(&a.session).expect("still there");
     assert_eq!(g.items[0].text, "Ada", "one undo step for the typing");
 }
+
+/// A system shortcut with the Super (Win / Logo) key held, such as Win+Space to switch
+/// input methods, must not type a space or any other character into the document.
+#[test]
+fn super_space_does_not_type_space() {
+    let doc_text = |a: &WordApp| a.session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+    let ctx = egui::Context::default();
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let none = Modifiers::NONE;
+    let key = |key, pressed, modifiers| egui::Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers };
+    let frame = |a: &mut WordApp, events: Vec<egui::Event>| {
+        ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
+            crate::keytips::logic(a, ui.ctx());
+            canvas_events(a, ui.ctx());
+        })
+        .drop_without_applying_deltas();
+    };
+
+    // Same-frame test: Super-down, Space-down, Text(" "), Space-up, Super-up all in one frame.
+    frame(
+        &mut a,
+        vec![
+            key(Key::SuperLeft, true, none),
+            key(Key::Space, true, none),
+            egui::Event::Text(" ".into()),
+            key(Key::Space, false, none),
+            key(Key::SuperLeft, false, none),
+        ],
+    );
+    assert_eq!(doc_text(&a), "", "Win+Space within a single frame must not type a space into the document");
+
+    // Wayland event sequence: Super-down, ModifiersChanged(none), Space-down, Text(" "), Space-up, Super-up.
+    // An empty modifier event following a Super press must not clear super_key_held.
+    frame(
+        &mut a,
+        vec![
+            key(Key::SuperLeft, true, none),
+            egui::Event::ModifiersChanged(none),
+            key(Key::Space, true, none),
+            egui::Event::Text(" ".into()),
+            key(Key::Space, false, none),
+            key(Key::SuperLeft, false, none),
+        ],
+    );
+    assert_eq!(doc_text(&a), "", "Win+Space with empty ModifiersChanged after Super press must not type space");
+
+    // Cross-frame release: Super down in frame 1; Space-down, Text(" "), Space-up, and Super-up in frame 2.
+    // In egui, `ctx.input(|i| i.key_down(Key::SuperLeft))` is false in frame 2 because it is released
+    // within frame 2; the prior-frame state in app.canvas.super_held must preserve it until the release event.
+    frame(&mut a, vec![key(Key::SuperLeft, true, none)]);
+    frame(&mut a, vec![key(Key::Space, true, none), egui::Event::Text(" ".into()), key(Key::Space, false, none), key(Key::SuperLeft, false, none)]);
+    assert_eq!(doc_text(&a), "", "Space before Super-up in the next frame must not type a space into the document");
+
+    // Across multiple frames: Super down in frame 1, Space+Text in frame 2, Super up in frame 3.
+    frame(&mut a, vec![key(Key::SuperLeft, true, none)]);
+    frame(&mut a, vec![key(Key::Space, true, none), egui::Event::Text(" ".into()), key(Key::Space, false, none)]);
+    frame(&mut a, vec![key(Key::SuperLeft, false, none)]);
+    assert_eq!(doc_text(&a), "", "Win+Space across frames must not type a space into the document");
+
+    // Normal typing after releasing Super still works.
+    frame(&mut a, vec![key(Key::A, true, none), egui::Event::Text("a".into()), key(Key::A, false, none)]);
+    assert_eq!(doc_text(&a).trim_end(), "a", "regular typing after Super release works");
+
+    // Compositor swallows Super-up: ModifiersChanged(none) clears super_held.
+    frame(&mut a, vec![key(Key::SuperLeft, true, none)]);
+    // Compositor consumes Super release, sends ModifiersChanged with no modifiers.
+    frame(&mut a, vec![egui::Event::ModifiersChanged(none)]);
+    frame(&mut a, vec![key(Key::B, true, none), egui::Event::Text("b".into()), key(Key::B, false, none)]);
+    assert_eq!(doc_text(&a).trim_end(), "ab", "typing works after swallowed Super release cleared by ModifiersChanged");
+
+    // Super held while Shift is pressed and released: ModifiersChanged(none) from Shift release
+    // must not clear super_key_held; subsequent Super+Space must not type a space.
+    let shift = egui::Modifiers { shift: true, ..Default::default() };
+    frame(&mut a, vec![key(Key::SuperLeft, true, none)]);
+    frame(&mut a, vec![egui::Event::ModifiersChanged(shift)]);
+    frame(&mut a, vec![egui::Event::ModifiersChanged(none)]);
+    frame(&mut a, vec![key(Key::Space, true, none), egui::Event::Text(" ".into()), key(Key::Space, false, none)]);
+    assert_eq!(doc_text(&a).trim_end(), "ab", "releasing Shift while Super is held must not allow Super+Space to type space");
+    // Same-frame Shift press and release while Super is held.
+    frame(
+        &mut a,
+        vec![
+            egui::Event::ModifiersChanged(shift),
+            egui::Event::ModifiersChanged(none),
+            key(Key::Space, true, none),
+            egui::Event::Text(" ".into()),
+            key(Key::Space, false, none),
+        ],
+    );
+    assert_eq!(doc_text(&a).trim_end(), "ab", "same-frame Shift release while Super is held must not type space");
+    // Releasing Super allows typing again.
+    frame(&mut a, vec![key(Key::SuperLeft, false, none)]);
+    frame(&mut a, vec![key(Key::C, true, none), egui::Event::Text("c".into()), key(Key::C, false, none)]);
+    assert_eq!(doc_text(&a).trim_end(), "abc", "typing resumes after Super is released");
+}
+
+/// A Super release occurring while canvas_events is skipped must drop stale super_held rather
+/// than permanently swallow typing. Also verify prepare_layout's unfocused branch clears super_held.
+#[test]
+fn super_release_while_canvas_events_skipped_does_not_block_typing() {
+    let doc_text = |a: &WordApp| a.session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+    let ctx = egui::Context::default();
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let none = Modifiers::NONE;
+    let key = |key, pressed, modifiers| egui::Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers };
+
+    // Frame 1: Press Super in canvas -> super_held becomes true.
+    ctx.run_ui(egui::RawInput { events: vec![key(Key::SuperLeft, true, none)], ..Default::default() }, |ui| {
+        canvas_events(&mut a, ui.ctx());
+    })
+    .drop_without_applying_deltas();
+    assert!(a.canvas.super_held, "super_held recorded");
+
+    // Frame 2: canvas_events is skipped (e.g. unfocused canvas or Save Changes dialog).
+    // Super is released during this period.
+    ctx.run_ui(egui::RawInput { events: vec![key(Key::SuperLeft, false, none)], ..Default::default() }, |_ui| {
+        // canvas_events not called
+    })
+    .drop_without_applying_deltas();
+
+    // Frame 3: Canvas receives focus and normal key event.
+    // Because egui reports Super is not down now and no Super release is in this frame,
+    // canvas_events must drop the stale super_held and allow typing.
+    ctx.run_ui(
+        egui::RawInput { events: vec![key(Key::X, true, none), egui::Event::Text("x".into()), key(Key::X, false, none)], ..Default::default() },
+        |ui| {
+            canvas_events(&mut a, ui.ctx());
+        },
+    )
+    .drop_without_applying_deltas();
+    assert_eq!(doc_text(&a).trim_end(), "x", "typing must not be blocked by stale super_held");
+
+    // Also verify prepare_layout clears super_held when canvas is not focused.
+    a.canvas.super_held = true;
+    a.canvas.focused = false;
+    ctx.run_ui(egui::RawInput::default(), |ui| {
+        let full = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        crate::canvas::prepare_layout(&mut a, ui, full);
+    })
+    .drop_without_applying_deltas();
+    assert!(!a.canvas.super_held, "prepare_layout clears super_held when canvas is unfocused");
+}

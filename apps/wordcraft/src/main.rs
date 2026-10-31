@@ -366,6 +366,229 @@ fn open_non_unicode(app: &mut WordApp, path: &std::path::Path) {
     }
 }
 
+#[cfg(all(unix, not(target_os = "macos")))]
+/// Whether an engine identifier represents a non-Latin IBus input engine.
+fn is_non_latin_engine_name(engine: &str) -> bool {
+    let trimmed = engine.trim().trim_matches(|c| c == '\'' || c == '"').trim();
+    !trimmed.is_empty() && !trimmed.starts_with("xkb:") && !trimmed.contains(' ')
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+/// Parses a dconf string array like "['engine1', 'engine2']" into individual engine names.
+fn parse_dconf_engines(output: &str) -> Vec<String> {
+    let trimmed = output.trim();
+    if trimmed.starts_with('[') && trimmed.ends_with(']') {
+        let inner = &trimmed[1..trimmed.len() - 1];
+        inner.split(',').map(|item| item.trim().trim_matches(|c| c == '\'' || c == '"').trim().to_string()).filter(|s| !s.is_empty()).collect()
+    } else {
+        Vec::new()
+    }
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+/// Whether the dconf preload-engines list contains a non-Latin input engine.
+fn has_non_latin_in_dconf(output: &str) -> bool {
+    parse_dconf_engines(output).iter().any(|item| is_non_latin_engine_name(item))
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+/// Whether the engines-order list contains a non-Latin engine that is also present in preload-engines.
+/// IBus filters saved orderings against preload-engines, retaining engines removed from active configuration.
+fn has_non_latin_in_engines_order(order_output: &str, preload_output: &str) -> bool {
+    let preload = parse_dconf_engines(preload_output);
+    parse_dconf_engines(order_output).iter().any(|engine| preload.contains(engine) && is_non_latin_engine_name(engine))
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+/// Whether the GNOME desktop input-sources list contains an IBus engine.
+fn has_non_latin_in_gsettings(output: &str) -> bool {
+    output.contains("'ibus'") || output.contains("\"ibus\"")
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+/// Runs a probe command with a timeout deadline. If the child process exceeds the timeout,
+/// it is terminated and reaped to avoid hanging startup or leaving zombie processes.
+fn run_probe_with_timeout(program: &str, args: &[&str], timeout: std::time::Duration) -> Option<String> {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    use std::time::Instant;
+
+    let mut child = Command::new(program).args(args).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
+
+    let start = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break None;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+        }
+    };
+
+    if let Some(status) = status
+        && status.success()
+        && let Some(mut stream) = child.stdout.take()
+    {
+        let mut stdout = Vec::new();
+        if stream.read_to_end(&mut stdout).is_ok() {
+            return Some(String::from_utf8_lossy(&stdout).into_owned());
+        }
+    }
+    None
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+/// Runs a probe command with the default startup timeout (200ms).
+fn run_bounded_probe(program: &str, args: &[&str]) -> Option<String> {
+    run_probe_with_timeout(program, args, std::time::Duration::from_millis(200))
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+/// Checks whether a non-Latin IBus input engine (e.g. OpenBangla, Mozc, Libpinyin) is active or configured.
+/// GNOME Wayland sessions run ibus-daemon by default even for Latin-only users, so running ibus-daemon
+/// alone does not imply non-Latin IME usage.
+fn has_non_latin_ibus_engine() -> bool {
+    // 1. Check IBus's live GlobalEngine directly via `ibus engine`.
+    if let Some(output) = run_bounded_probe("ibus", &["engine"])
+        && is_non_latin_engine_name(&output)
+    {
+        return true;
+    }
+
+    // 2. Check dconf preload-engines and engines-order lists.
+    // Entries in engines-order count as active only when they also appear in the configured
+    // preload-engines list; engines-order can retain engines that were removed from configuration.
+    let preload_output = run_bounded_probe("dconf", &["read", "/desktop/ibus/general/preload-engines"]);
+    if let Some(ref preload) = preload_output
+        && has_non_latin_in_dconf(preload)
+    {
+        return true;
+    }
+
+    if let Some(ref preload) = preload_output
+        && let Some(order_output) = run_bounded_probe("dconf", &["read", "/desktop/ibus/general/engines-order"])
+        && has_non_latin_in_engines_order(&order_output, preload)
+    {
+        return true;
+    }
+
+    // 3. Check GNOME desktop input-sources.
+    if let Some(output) = run_bounded_probe("gsettings", &["get", "org.gnome.desktop.input-sources", "sources"])
+        && has_non_latin_in_gsettings(&output)
+    {
+        return true;
+    }
+
+    false
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+/// Whether an input method daemon (IBus or Fcitx) is active for the current user's session.
+fn has_active_ime() -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    let env_mentions = |needle: &str| {
+        ["GTK_IM_MODULE", "QT_IM_MODULE", "XMODIFIERS"]
+            .iter()
+            .any(|var| std::env::var_os(var).is_some_and(|v| v.to_string_lossy().to_ascii_lowercase().contains(needle)))
+    };
+    // Fcitx is installed on purpose, so its variables are a reliable signal.
+    if env_mentions("fcitx") {
+        return true;
+    }
+
+    // Check process ownership so processes from other users or sessions on multi-user systems are ignored.
+    let current_uid = std::fs::metadata(format!("/proc/{}", std::process::id())).map(|m| m.uid()).ok();
+
+    let mut non_latin_ibus: Option<bool> = None;
+    let mut is_non_latin_ibus = || *non_latin_ibus.get_or_insert_with(has_non_latin_ibus_engine);
+
+    // GNOME sets the IBus variables for Latin-only users too, so they only count with a non-Latin engine.
+    if env_mentions("ibus") && is_non_latin_ibus() {
+        return true;
+    }
+
+    // 1. Check ~/.config/ibus/bus for an active ibus-daemon PID file for this user's session.
+    // Verify that /proc/<pid>/comm equals "ibus-daemon" (to guard against stale PID files with reused PIDs)
+    // and verify that a non-Latin input engine is configured before treating IBus as active.
+    if let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) {
+        let bus_dir = home.join(".config/ibus/bus");
+        if let Ok(entries) = std::fs::read_dir(&bus_dir) {
+            for entry in entries.flatten() {
+                if let Ok(ft) = entry.file_type()
+                    && ft.is_file()
+                    && !ft.is_symlink()
+                    && let Ok(meta) = entry.metadata()
+                    && meta.len() <= 4096
+                    && let Ok(f) = std::fs::File::open(entry.path())
+                {
+                    use std::io::Read;
+                    let mut content = String::new();
+                    if f.take(4096).read_to_string(&mut content).is_ok() {
+                        for line in content.lines() {
+                            if let Some(pid_str) = line.strip_prefix("IBUS_DAEMON_PID=") {
+                                let pid = pid_str.trim();
+                                if pid.chars().all(|c| c.is_ascii_digit()) && !pid.is_empty() {
+                                    let pid_path = format!("/proc/{pid}");
+                                    if let Ok(p_meta) = std::fs::metadata(&pid_path)
+                                        && (current_uid.is_none() || current_uid == Some(p_meta.uid()))
+                                        && let Ok(comm) = std::fs::read_to_string(format!("/proc/{pid}/comm"))
+                                        && comm.trim() == "ibus-daemon"
+                                        && is_non_latin_ibus()
+                                    {
+                                        return true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Scan /proc for an active IME daemon owned by the current user.
+    // Fcitx (fcitx5/fcitx) is explicitly installed and run for IME composition.
+    // ibus-daemon runs by default on GNOME, so we only treat it as active if a non-Latin engine is configured.
+    if let Ok(entries) = std::fs::read_dir("/proc") {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if name.to_string_lossy().chars().all(|c| c.is_ascii_digit())
+                && let Ok(meta) = entry.metadata()
+                && (current_uid.is_none() || current_uid == Some(meta.uid()))
+            {
+                let comm_path = entry.path().join("comm");
+                if let Ok(comm) = std::fs::read_to_string(comm_path) {
+                    let trimmed = comm.trim();
+                    if trimmed == "fcitx5" || trimmed == "fcitx" {
+                        return true;
+                    }
+                    if trimmed == "ibus-daemon" && is_non_latin_ibus() {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+/// Whether to force the X11 backend on Unix.
+fn should_use_x11(has_display: bool, has_wayland_display: bool, force_wayland: bool, force_x11: bool, has_ime: impl FnOnce() -> bool) -> bool {
+    has_display && !force_wayland && (!has_wayland_display || force_x11 || !has_ime())
+}
+
 /// Parses the command line, installs logging and the panic hook, restores preferences and window
 /// geometry, opens requested documents or the Start screen, starts the control server when
 /// asked, and runs the eframe event loop.
@@ -462,8 +685,17 @@ fn main() -> eframe::Result {
     #[cfg(all(unix, not(target_os = "macos")))]
     // winit has no file drag-and-drop on Wayland (only on X11), so dropping files from the file
     // manager showed a "no" cursor. Run through XWayland when it's there; WORDCRAFT_WAYLAND=1
-    // keeps the native Wayland backend.
-    if std::env::var_os("DISPLAY").is_some() && std::env::var_os("WORDCRAFT_WAYLAND").is_none() {
+    // keeps the native Wayland backend. But on Wayland desktops where an input method (IBus,
+    // Fcitx) is active, forcing XWayland disconnects the Wayland text-input protocol and leaves
+    // the app unable to connect to the IME, preventing non-Latin typing (Bangla, CJK...).
+    // In that case, keep the native Wayland backend unless WORDCRAFT_X11=1 explicitly forces X11.
+    if should_use_x11(
+        std::env::var_os("DISPLAY").is_some(),
+        std::env::var_os("WAYLAND_DISPLAY").is_some(),
+        std::env::var_os("WORDCRAFT_WAYLAND").is_some(),
+        std::env::var_os("WORDCRAFT_X11").is_some(),
+        has_active_ime,
+    ) {
         options.event_loop_builder = Some(Box::new(|b| {
             use winit::platform::x11::EventLoopBuilderExtX11;
             b.with_x11();
@@ -611,6 +843,138 @@ mod tests {
             assert!(app.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("kept"), "{p:?}");
         }
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn ibus_engine_parsing_logic() {
+        use super::{
+            has_non_latin_in_dconf, has_non_latin_in_engines_order, has_non_latin_in_gsettings, is_non_latin_engine_name, parse_dconf_engines,
+        };
+        // Engine name checks
+        assert!(!is_non_latin_engine_name("xkb:us::eng"));
+        assert!(!is_non_latin_engine_name("xkb:gb::eng"));
+        assert!(!is_non_latin_engine_name(""));
+        assert!(!is_non_latin_engine_name("No engine is set."));
+        assert!(is_non_latin_engine_name("OpenBangla"));
+        assert!(is_non_latin_engine_name("libpinyin"));
+        assert!(is_non_latin_engine_name("mozc-jp"));
+        assert!(is_non_latin_engine_name("'OpenBangla'"));
+        assert!(is_non_latin_engine_name("\"libpinyin\""));
+
+        // Dconf engine array parsing
+        assert_eq!(parse_dconf_engines("['xkb:us::eng', 'OpenBangla']"), vec!["xkb:us::eng", "OpenBangla"]);
+        assert_eq!(parse_dconf_engines("[]"), Vec::<String>::new());
+        assert_eq!(parse_dconf_engines(""), Vec::<String>::new());
+
+        // Latin-only IBus configurations
+        assert!(!has_non_latin_in_dconf("['xkb:us::eng']"));
+        assert!(!has_non_latin_in_dconf("['xkb:gb::eng', 'xkb:fr::fra']"));
+        assert!(!has_non_latin_in_dconf("[]"));
+        assert!(!has_non_latin_in_dconf(""));
+        assert!(!has_non_latin_in_gsettings("@a(ss) []"));
+        assert!(!has_non_latin_in_gsettings("[('xkb', 'us')]"));
+
+        // Non-Latin IBus configurations
+        assert!(has_non_latin_in_dconf("['xkb:us::eng', 'OpenBangla']"));
+        assert!(has_non_latin_in_dconf("['libpinyin']"));
+        assert!(has_non_latin_in_dconf("['xkb:us::eng', 'mozc-jp']"));
+        assert!(has_non_latin_in_gsettings("[('xkb', 'us'), ('ibus', 'openbangla-keyboard')]"));
+        assert!(has_non_latin_in_gsettings("[('ibus', 'libpinyin')]"));
+
+        // engines-order filtering against active preload-engines
+        // Active non-Latin engine present in both lists
+        assert!(has_non_latin_in_engines_order("['hangul', 'xkb:us::eng']", "['xkb:us::eng', 'hangul']"));
+        // Stale non-Latin engine retained in engines-order but removed from preload-engines must not count
+        assert!(!has_non_latin_in_engines_order("['hangul', 'xkb:us::eng']", "['xkb:us::eng']"));
+        // Latin-only in both
+        assert!(!has_non_latin_in_engines_order("['xkb:us::eng']", "['xkb:us::eng']"));
+        // Empty lists
+        assert!(!has_non_latin_in_engines_order("[]", "[]"));
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn probe_timeout_handling() {
+        use super::run_probe_with_timeout;
+        use std::time::Duration;
+
+        // Successful command executes and returns output
+        let out = run_probe_with_timeout("echo", &["test_probe"], Duration::from_millis(500));
+        assert_eq!(out.as_deref().map(str::trim), Some("test_probe"));
+
+        // Non-zero exit code returns None
+        let out = run_probe_with_timeout("false", &[], Duration::from_millis(500));
+        assert_eq!(out, None);
+
+        // Missing command returns None
+        let out = run_probe_with_timeout("non_existent_command_xyz_404", &[], Duration::from_millis(500));
+        assert_eq!(out, None);
+
+        // Hanging command is killed and reaped within timeout
+        let start = std::time::Instant::now();
+        let out = run_probe_with_timeout("sleep", &["10"], Duration::from_millis(50));
+        assert_eq!(out, None);
+        assert!(start.elapsed() < Duration::from_millis(500));
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn active_ime_detection_does_not_panic() {
+        // Must be safe and return a boolean without panicking under any environment.
+        let _ = super::has_active_ime();
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn x11_backend_routing_logic() {
+        use super::should_use_x11;
+        // No DISPLAY -> never force X11
+        assert!(!should_use_x11(false, false, false, false, || false));
+        assert!(!should_use_x11(false, true, false, false, || false));
+
+        // Pure X11 desktop (DISPLAY set, no WAYLAND_DISPLAY) -> force X11
+        assert!(should_use_x11(true, false, false, false, || false));
+        assert!(should_use_x11(true, false, false, false, || true));
+
+        // Wayland session without an active IME -> force X11 for file drag-and-drop (#220)
+        assert!(should_use_x11(true, true, false, false, || false));
+
+        // Wayland session with an active IME -> keep native Wayland (do not force X11)
+        assert!(!should_use_x11(true, true, false, false, || true));
+
+        // Explicit overrides take precedence
+        assert!(should_use_x11(true, true, false, true, || true), "WORDCRAFT_X11 forces X11 even with IME");
+        assert!(!should_use_x11(true, false, true, false, || false), "WORDCRAFT_WAYLAND skips X11");
+
+        // IME detection is evaluated lazily only when backend selection depends on it
+        let mut called = false;
+        assert!(!should_use_x11(false, true, false, false, || {
+            called = true;
+            true
+        }));
+        assert!(!called, "has_ime callback must not be invoked when DISPLAY is absent");
+
+        called = false;
+        assert!(should_use_x11(true, false, false, false, || {
+            called = true;
+            false
+        }));
+        assert!(!called, "has_ime callback must not be invoked when WAYLAND_DISPLAY is absent");
+
+        called = false;
+        assert!(!should_use_x11(true, true, true, false, || {
+            called = true;
+            false
+        }));
+        assert!(!called, "has_ime callback must not be invoked when WORDCRAFT_WAYLAND is set");
+
+        called = false;
+        assert!(should_use_x11(true, true, false, true, || {
+            called = true;
+            true
+        }));
+        assert!(!called, "has_ime callback must not be invoked when WORDCRAFT_X11 is set");
     }
 }
 

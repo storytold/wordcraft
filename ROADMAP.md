@@ -140,6 +140,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
+- 2026-10-25: Input methods & Linux Wayland: system shortcuts with Super held (such as Win+Space) do not type characters into the document across platforms, and swallowed Super key releases are cleared upon receiving an empty modifier state (#3967). Wayland sessions automatically retain the native Wayland backend when non-Latin IBus or Fcitx input engines are active so the Wayland text-input protocol delivers composed text, while Latin-only GNOME sessions retain XWayland to preserve file drag-and-drop (#220); WORDCRAFT_WAYLAND and WORDCRAFT_X11 provide manual overrides.
 - 2026-10-31: Keytips reach the Backstage: Alt, F badges its pages with Word's letters, and Alt, F, P (or V) opens Print (#4960).
 - 2026-10-29: Documents with hyperlinks or a table of contents print again on the desktop (#4734). The print job scales each page to the paper, and the spooler refused a page with link annotations ("flatten page annotations before using shrink-to-fit"); the PDF sent to the printer now omits link annotations, which print nothing; the link and table-of-contents text stays on the page. Exported PDFs and Save these pages as PDF (`file.printPdf`) keep the annotations.
 - 2026-10-28: Word count counts each Chinese and Japanese character as a word, as Word does, in the status bar, the Word Count dialog and NUMWORDS fields. Unspaced Chinese text used to count as one word per run of text; Korean, which is written with spaces, still counts by words. (#4547)

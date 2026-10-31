@@ -220,6 +220,10 @@ pub struct CanvasState {
     pub(crate) v_pressed: bool,
     /// The modifiers last held with Mod, for a Mod+V whose Mod is released before V.
     pub(crate) paste_mods: Option<egui::Modifiers>,
+    /// A Super / Windows / Command key is held down across frames.
+    pub(crate) super_held: bool,
+    /// Last seen modifiers, preserved across frames so modifier transitions can distinguish releases.
+    pub(crate) modifiers: egui::Modifiers,
     /// Draw Table or Eraser is on (`table_pen`): presses draw instead of moving the caret.
     pub table_tool: Option<crate::table_pen::TableTool>,
     /// The Draw Table stroke (or eraser press) in progress.
@@ -391,6 +395,8 @@ impl Default for CanvasState {
             pasted: false,
             v_pressed: false,
             paste_mods: None,
+            super_held: false,
+            modifiers: egui::Modifiers::default(),
             swallow_text: false,
             ime_join_text: None,
             ime_reset: false,
@@ -708,13 +714,15 @@ fn configure_scroll_area(app: &mut WordApp, ui: &Ui, view: &CanvasView, motion: 
     scroll_area
 }
 
-fn prepare_layout(app: &mut WordApp, ui: &Ui, full: Rect) -> std::sync::Arc<DocLayout> {
+pub(crate) fn prepare_layout(app: &mut WordApp, ui: &Ui, full: Rect) -> std::sync::Arc<DocLayout> {
     let now = ui.input(|i| i.time);
     let reflow_anchor = update_viewport(app, ui, full, now);
     if app.canvas.focused && !matches!(app.dialog, Some(crate::dialogs::Dialog::SaveChanges { .. })) {
         crate::keys::canvas_events(app, ui.ctx());
     } else {
         app.canvas.alt_code.clear();
+        app.canvas.super_held = false;
+        app.canvas.modifiers = egui::Modifiers::default();
     }
     crate::ink::replay_tick(app, ui.ctx());
     let layout = shown_layout(app);

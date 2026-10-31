@@ -40,16 +40,27 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
     // an earlier event can do it below). Its already queued IME replacement belongs to the old
     // target. This is separate from the outgoing interrupt, which is observed after mutation.
     // Keep the quarantine local to this batch: a later untagged commit can be fresh input.
-    // Mod held since an earlier frame (its ModifiersChanged went by then).
+    // Super (Win / Logo / Cmd) held since an earlier frame, updated in event order below.
+    let super_down_now = ctx.input(|i| i.key_down(Key::SuperLeft) || i.key_down(Key::SuperRight));
+    let super_up_this_frame = events.iter().any(|e| matches!(e, egui::Event::Key { key: Key::SuperLeft | Key::SuperRight, pressed: false, .. }));
+    // A Super release can go by while this handler doesn't run (canvas unfocused, keytips,
+    // Read Mode): drop a stale flag rather than swallow all typing.
+    let super_key_held = app.canvas.super_held && (super_down_now || super_up_this_frame);
+    let mac_cmd_held = ctx.input(|i| i.modifiers.mac_cmd);
+    let input_mods = ctx.input(|i| i.modifiers);
+    let held = if input_mods.is_none() { app.canvas.modifiers } else { input_mods };
+    if held.command {
+        app.canvas.paste_mods = Some(held);
+    }
     let mut batch = Batch {
         drop_equation_replacement: EquationReplacementDrop::None,
         interrupted_preedit: std::mem::take(&mut app.canvas.ime_interrupted_preedit),
         interrupted_replacement: EquationReplacementDrop::None,
+        super_key_held,
+        super_pressed_in_batch: false,
+        mac_cmd_held,
+        current_mods: held,
     };
-    let held = ctx.input(|i| i.modifiers);
-    if held.command {
-        app.canvas.paste_mods = Some(held);
-    }
     for e in events {
         // A key closed the window (Mod+W) or brought another forward: the frame's other keys
         // were typed in this one and are dropped.
@@ -59,7 +70,7 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
         if stale_composition(app, &e, &mut batch) {
             continue;
         }
-        note_key_state(app, &e);
+        note_key_state(app, &e, &mut batch);
         if drop_refused_replacement(app, &e, &mut batch)
             || prefilter(app, ctx, &e, alt_codes)
             || paste_release(app, &e)
@@ -67,8 +78,10 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
         {
             continue;
         }
-        handle_event(app, ctx, e);
+        handle_event(app, ctx, e, &batch);
     }
+    app.canvas.super_held = batch.super_key_held;
+    app.canvas.modifiers = batch.current_mods;
 }
 
 /// State carried across the events of one raw batch.
@@ -76,6 +89,16 @@ struct Batch {
     drop_equation_replacement: EquationReplacementDrop,
     interrupted_preedit: bool,
     interrupted_replacement: EquationReplacementDrop,
+    super_key_held: bool,
+    super_pressed_in_batch: bool,
+    mac_cmd_held: bool,
+    current_mods: Modifiers,
+}
+
+impl Batch {
+    fn super_held(&self) -> bool {
+        self.super_key_held || self.mac_cmd_held
+    }
 }
 
 /// Read Mode is for navigation and selection, not typing into the document.
@@ -155,10 +178,37 @@ fn stale_composition(app: &mut WordApp, e: &egui::Event, b: &mut Batch) -> bool 
 }
 
 /// Which presses reached the canvas, and the modifiers held with Mod, in event order.
-fn note_key_state(app: &mut WordApp, e: &egui::Event) {
+fn note_key_state(app: &mut WordApp, e: &egui::Event, b: &mut Batch) {
+    // Track Super and Command state in event order so same-frame shortcuts are detected.
+    match e {
+        egui::Event::Key { key: Key::SuperLeft | Key::SuperRight, pressed, modifiers, .. } => {
+            b.super_key_held = *pressed;
+            b.super_pressed_in_batch = *pressed;
+            b.mac_cmd_held = modifiers.mac_cmd;
+            b.current_mods = *modifiers;
+        }
+        egui::Event::Key { modifiers, .. } => {
+            b.current_mods = *modifiers;
+        }
+        egui::Event::ModifiersChanged(m) => {
+            b.mac_cmd_held = m.mac_cmd;
+            let had_other_mods = b.current_mods.shift || b.current_mods.ctrl || b.current_mods.alt;
+            b.current_mods = *m;
+            if m.is_none() && !had_other_mods && !b.super_pressed_in_batch {
+                b.super_key_held = false;
+            }
+        }
+        egui::Event::WindowFocused(false) => {
+            b.super_key_held = false;
+            b.super_pressed_in_batch = false;
+            b.mac_cmd_held = false;
+            b.current_mods = egui::Modifiers::default();
+        }
+        _ => {}
+    }
     // Which presses reached the canvas, and the modifiers held with Mod, in event order: Mod
     // can go down and up within one frame, leaving the frame's modifiers without it.
-    match &e {
+    match e {
         egui::Event::ModifiersChanged(m) if m.command => app.canvas.paste_mods = Some(*m),
         egui::Event::Key { key: Key::V | Key::Paste, pressed: true, .. } => app.canvas.v_pressed = true,
         egui::Event::Key { key, pressed: true, modifiers, .. } if !is_modifier_key(*key) => {
@@ -289,7 +339,7 @@ fn equation_event(app: &mut WordApp, ctx: &egui::Context, e: &egui::Event, b: &m
             egui::Event::Text(t) => {
                 let m = ctx.input(|i| i.modifiers);
                 let is_cmd = if cfg!(target_os = "macos") { m.command } else { (m.command || m.ctrl) && !m.alt };
-                if !is_cmd && !t.is_empty() && t.chars().all(|c| !c.is_control()) {
+                if !is_cmd && !b.super_held() && !t.is_empty() && t.chars().all(|c| !c.is_control()) {
                     let _ = app.run("equation.type", json!({"text": t}));
                 } else {
                     // Ignored text is not the replacement a deletion promised.
@@ -470,12 +520,12 @@ fn key_press(app: &mut WordApp, ctx: &egui::Context, key: Key, modifiers: Modifi
 }
 
 /// Everything else: typed text, IME, clipboard and key presses.
-fn handle_event(app: &mut WordApp, ctx: &egui::Context, e: egui::Event) {
+fn handle_event(app: &mut WordApp, ctx: &egui::Context, e: egui::Event, b: &Batch) {
     match e {
         egui::Event::Text(t) => {
             let m = ctx.input(|i| i.modifiers);
             let is_cmd = if cfg!(target_os = "macos") { m.command } else { (m.command || m.ctrl) && !m.alt };
-            if is_cmd {
+            if is_cmd || b.super_held() {
                 return;
             }
             if t.chars().all(|c| !c.is_control()) && !t.is_empty() {
