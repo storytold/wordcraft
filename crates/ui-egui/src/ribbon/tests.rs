@@ -229,6 +229,33 @@ fn page_setup_menus_mark_the_current_setting() {
     assert_eq!(first_words, ["Narrow", "Landscape", "A4", "Right"], "{checked:?}");
 }
 
+/// Change List Level › draws a tile per level, named "Level 1" to "Level 9" with the caret's
+/// level marked; a click moves the paragraph to that level.
+#[test]
+fn change_list_level_tiles_name_mark_and_set_the_level() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("One\nTwo")), crate::Services::default());
+    app.run("para.bullets", json!({"kind": "▪"})).unwrap();
+    app.run("para.listLevel", json!({"level": 1})).unwrap();
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(vec2(260.0, 400.0))
+        .build_ui_state(|ui, app: &mut WordApp| super::home::list_level_tiles(ui, app), app);
+    h.run_steps(2);
+    let toggled = |h: &egui_kittest::Harness<'_, WordApp>, n: usize| h.get_by_label(&format!("Level {n}")).accesskit_node().toggled();
+    for n in 1..=9 {
+        let want = if n == 2 { egui::accesskit::Toggled::True } else { egui::accesskit::Toggled::False };
+        assert_eq!(toggled(&h, n), Some(want), "Level {n}");
+    }
+    h.get_by_label("Level 4").click();
+    h.run_steps(2);
+    let level = |app: &WordApp| {
+        let doc = &app.session.doc;
+        doc.para_at(&app.session.sel.focus).and_then(|p| p.props.numbering).map(|n| n.level)
+    };
+    assert_eq!(level(h.state()), Some(3), "the paragraph moved to level 4");
+    assert_eq!(toggled(&h, 4), Some(egui::accesskit::Toggled::True), "the tile now marks level 4");
+}
+
 /// #860 review: a tag the language list doesn't have shows by language and region, not as
 /// the tag; Portuguese (Angola) isn't Brazil's, and no name shows twice in the menu.
 #[test]

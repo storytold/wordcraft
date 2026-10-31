@@ -38,6 +38,7 @@ pub(crate) use chrome::{buttons, cancel_key_pressed, color_menu, ok_cancel_respo
 pub use find::{FindExtra, FindTab, GoToWhat};
 #[cfg(test)]
 use find::{command_matches, goto_page, swallow_shortcut_text};
+pub use font::font_for_bullet;
 #[cfg(test)]
 use font::{apply_font, preview_size};
 use font::{east_asian_char, font_props};
@@ -93,6 +94,11 @@ pub enum Dialog {
         /// alone stays as it is.
         #[serde(skip)]
         start: serde_json::Map<String, Value>,
+        /// Formatting a bullet for Define New Bullet (#2786): OK hands the font, size, bold,
+        /// italic and colour back to that dialog instead of formatting the text, and Cancel goes
+        /// back to it unchanged.
+        #[serde(skip)]
+        bullet: Option<Box<crate::dialogs_bullet::DefineBulletForm>>,
     },
     Paragraph {
         /// Right-to-left reading order (Direction in Word's Paragraph dialog).
@@ -478,6 +484,18 @@ pub enum Dialog {
 }
 
 impl Dialog {
+    /// The Define New Bullet form a Font or Symbol dialog opened from it carries (#2786).
+    fn bullet_form(&mut self) -> Option<crate::dialogs_bullet::DefineBulletForm> {
+        match self {
+            Dialog::Font { bullet, .. } => bullet.take().map(|b| *b),
+            Dialog::Insert(i) => match i.as_mut() {
+                crate::dialogs_insert::InsertDialog::Symbol(f) => f.bullet.take().map(|b| *b),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     pub fn name(&self) -> &'static str {
         match self {
             Dialog::RenameDocument { .. } => "renameDocument",
@@ -606,6 +624,7 @@ impl Dialog {
                     kern: kern.map(|k| k > 0.0),
                     kern_at: kern.filter(|k| *k > 0.0).unwrap_or(12.0) as f32,
                     start: serde_json::Map::new(),
+                    bullet: None,
                 };
                 let props = font_props(&d);
                 if let Dialog::Font { start, .. } = &mut d {
@@ -872,6 +891,7 @@ impl Dialog {
     }
 }
 
+pub mod dialogs_bullet;
 pub mod dialogs_chart;
 pub mod dialogs_controls;
 pub mod dialogs_insert;

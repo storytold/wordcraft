@@ -155,13 +155,27 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
             });
         }
         count_dialog_frame(ctx, id);
-        close |= crate::window_close::show(ctx, &shown.response, &Tokens::get(ctx));
+        if crate::window_close::show(ctx, &shown.response, &Tokens::get(ctx)) && !close {
+            close = true;
+            // The title bar's close box is Cancel: a dialog opened from Define New Bullet goes
+            // back to it, as its Cancel button does (#2786).
+            if back_to_bullet(app, &mut d) {
+                return;
+            }
+        }
     }
     if close {
         app.canvas.want_focus = true;
     } else {
         app.dialog = Some(d);
     }
+}
+
+/// Back to Define New Bullet from a Font or Symbol dialog it opened, when `d` is one (#2786).
+fn back_to_bullet(app: &mut WordApp, d: &mut Dialog) -> bool {
+    let Some(form) = d.bullet_form() else { return false };
+    app.dialog = Some(Dialog::Insert(Box::new(crate::dialogs_insert::InsertDialog::DefineBullet(form))));
+    true
 }
 
 /// Cancel key for dialogs: Escape everywhere, plus ⌘. (Command+Period) on macOS.

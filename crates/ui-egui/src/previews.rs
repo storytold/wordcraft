@@ -462,6 +462,32 @@ fn snippet_blocks(base: &Document, blocks: Vec<Block>, options: SnippetOptions) 
     Some(egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &px))
 }
 
+/// One character formatted by `chr` (at its size, or fitted to `r` without one), centred in `r`
+/// and drawn with `tint`:
+/// laid out like document text, so symbol fonts show what the page will (Define New Bullet, #2786).
+pub fn glyph(app: &mut WordApp, ui: &mut Ui, r: Rect, ch: &str, chr: &CharProps, tint: egui::Color32) {
+    let ppp = ui.ctx().pixels_per_point();
+    let key = format!("glyph:{ch}:{chr:?}:{ppp}:{}x{}", r.width(), r.height());
+    let tex = app.previews.get_or(ui.ctx(), &key, || {
+        let chr = CharProps { size: Some(chr.size.unwrap_or(r.height() * 0.7)), ..chr.clone() };
+        let mut p = Paragraph::with_text(ch, chr);
+        p.props.align = Some(wordcraft_doc::props::Align::Center);
+        p.props.space_before = Some(0.0);
+        p.props.space_after = Some(0.0);
+        snippet_blocks(
+            &Document::new(),
+            vec![Block::Para(p)],
+            SnippetOptions { width: r.width(), height: r.height(), pixels_per_point: ppp, margin: 0.0, paper: None, dark: false },
+        )
+    });
+    if let Some(hd) = tex {
+        let sz = hd.size_vec2() / ppp;
+        let ir = Rect::from_min_size(r.min, sz.min(r.size()));
+        let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2((ir.width() / sz.x).min(1.0), (ir.height() / sz.y).min(1.0)));
+        ui.painter().with_clip_rect(r).image(hd.id(), ir, uv, tint);
+    }
+}
+
 /// Manage Styles' preview of one style (`ty`: the `styles.manage` type), `size` points wide and
 /// tall: a line of sample text, or a small table for a table style.
 pub fn style_preview(app: &mut WordApp, ui: &mut Ui, id: &str, ty: &str, size: egui::Vec2) {
