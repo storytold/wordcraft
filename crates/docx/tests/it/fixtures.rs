@@ -2475,6 +2475,79 @@ fn vml_lines_and_rectangles() {
     ));
 }
 
+/// A `v:stroke` that is switched off or fully transparent leaves the shape without an outline:
+/// Google Docs writes its horizontal rules as such rectangles, which Word doesn't show. Its `on`
+/// wins over the shape's `stroked`, in both directions, as in Word.
+#[test]
+fn vml_invisible_strokes_draw_no_outline() {
+    let red = Some(Rgb(0xC0, 0, 0));
+    for (attrs, stroke, want) in [
+        ("", r##"<v:stroke color="#000000" filltype="solid" opacity="0" weight="1.0pt"/>"##, None),
+        ("", r#"<v:stroke on="f"/>"#, None),
+        ("", "", Some(Rgb::BLACK)),
+        (r##" stroked="t" strokecolor="#c00000""##, r#"<v:stroke on="f"/>"#, None),
+        (r##" stroked="f" strokecolor="#c00000""##, r#"<v:stroke on="t"/>"#, red),
+        // The stroke's own colour wins over the shape's `strokecolor`, as in Word.
+        (r##" strokecolor="#0000ff""##, r##"<v:stroke color="#c00000"/>"##, red),
+        (r##" stroked="f" strokecolor="#0000ff""##, r##"<v:stroke on="t" color="#c00000"/>"##, red),
+    ] {
+        let body = format!(
+            r#"<w:p><w:r><w:pict><v:rect style="width:475.5pt;height:.05pt" alt="" o:hr="f" o:hrstd="t" o:hralign="center"{attrs}>{stroke}</v:rect></w:pict></w:r></w:p>"#
+        );
+        let d = read_body(&body);
+        let InlineObject::Shape { kind: ShapeKind::Rectangle, stroke: got, .. } = &paras(&d)[0].objects[0] else { panic!("{body}") };
+        assert_eq!(*got, want, "{body}");
+        let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+        let InlineObject::Shape { stroke: saved, .. } = &paras(&again)[0].objects[0] else { panic!("{body}") };
+        assert_eq!(saved, got, "{body}");
+    }
+    // A freeform's outline is switched off the same way.
+    let freeform = r##"<w:p><w:r><w:pict><v:shape style="width:200pt;height:40pt" coordsize="200,40" path="m0,0l200,0,200,40,0,40xe" fillcolor="#ffffcc" strokecolor="#c00000"><v:stroke on="f"/></v:shape></w:pict></w:r></w:p>"##;
+    let d = read_body(freeform);
+    let InlineObject::Shape { kind: ShapeKind::Freeform, stroke, .. } = &paras(&d)[0].objects[0] else { panic!("{freeform}") };
+    assert_eq!(*stroke, None);
+}
+
+/// Word resolves each stroke property separately: the shape's own `v:stroke`, then the shape's
+/// attribute, then the same two on its shapetype, so a shapetype's stroke switched off or made
+/// transparent still applies to a shape whose own `v:stroke` only sets a dash (checked in Word).
+#[test]
+fn vml_stroke_properties_inherit_one_by_one() {
+    let green = Some(Rgb(0, 0x80, 0));
+    let blue = Some(Rgb(0, 0, 0xFF));
+    for (shapetype, shape, want) in [
+        (r#"<v:stroke on="f"/>"#, r##"strokecolor="#008000"><v:stroke dashstyle="dash"/>"##, None),
+        (r#"<v:stroke opacity="0"/>"#, r##"strokecolor="#008000"><v:stroke dashstyle="dash"/>"##, None),
+        (r#"<v:stroke on="f"/>"#, r##"stroked="t" strokecolor="#008000">"##, green),
+        (r##"<v:stroke color="#c00000"/>"##, r##"strokecolor="#0000ff">"##, blue),
+    ] {
+        let body = format!(
+            r##"<w:p><w:r><w:pict><v:shapetype id="st" coordsize="21600,21600" o:spt="1" path="m,l,21600r21600,l21600,xe">{shapetype}</v:shapetype><v:shape type="#st" style="width:100pt;height:30pt" {shape}</v:shape></w:pict></w:r></w:p>"##
+        );
+        let d = read_body(&body);
+        let InlineObject::Shape { stroke, .. } = &paras(&d)[0].objects[0] else { panic!("{body}") };
+        assert_eq!(*stroke, want, "{body}");
+    }
+    // An inherited transparent stroke also clears a freeform's outline alpha.
+    let freeform = r##"<w:p><w:r><w:pict><v:shapetype id="st"><v:stroke opacity="0"/></v:shapetype><v:shape type="#st" style="width:200pt;height:40pt" coordsize="200,40" path="m0,0l200,0,200,40,0,40xe" fillcolor="#ffffcc"/></w:pict></w:r></w:p>"##;
+    let d = read_body(freeform);
+    let InlineObject::Shape { kind: ShapeKind::Freeform, freeform: Some(f), .. } = &paras(&d)[0].objects[0] else { panic!("{freeform}") };
+    assert_eq!(f.alpha, 0.0);
+}
+
+/// A line whose stroke is fully transparent stays in the document without an outline, as Word
+/// keeps it, and is saved that way instead of being dropped.
+#[test]
+fn vml_transparent_line_is_kept() {
+    let body = r##"<w:p><w:r><w:pict><v:line from="0,0" to="200pt,0" strokecolor="#000000"><v:stroke opacity="0"/></v:line></w:pict></w:r></w:p>"##;
+    let d = read_body(body);
+    let InlineObject::Shape { kind: ShapeKind::Line, stroke: None, .. } = &paras(&d)[0].objects[0] else { panic!("{:?}", paras(&d)[0].objects) };
+    let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    let InlineObject::Shape { kind: ShapeKind::Line, stroke: None, .. } = &paras(&again)[0].objects[0] else {
+        panic!("{:?}", paras(&again)[0].objects)
+    };
+}
+
 /// The right arrow's shapetype as Word writes it (ECMA-376 Part 4 `v:shapetype`, `o:spt` 13).
 const VML_RIGHT_ARROW_TYPE: &str = r#"<v:shapetype id="_x0000_t13" coordsize="21600,21600" o:spt="13" adj="16200,5400" path="m@0,l@0@1,0@1,0@2@0@2@0,21600,21600,10800xe"><v:stroke joinstyle="miter"/><v:formulas><v:f eqn="val #0"/><v:f eqn="val #1"/></v:formulas><v:path o:connecttype="custom"/></v:shapetype>"#;
 
