@@ -18,6 +18,10 @@ fn convert(input: &std::path::Path, out: &std::path::Path, report: bool) -> std:
     if report {
         cmd.arg("--report");
     }
+    // The sidecar assertions below assume no epoch is in effect; a build machine
+    // may export one for the whole build, so the child never inherits it. The
+    // epoch case sets it explicitly in its own test.
+    cmd.env_remove("SOURCE_DATE_EPOCH");
     cmd.output().unwrap()
 }
 
@@ -37,6 +41,44 @@ fn convert_report_writes_the_sidecar() {
     assert_eq!(report["requestedFonts"], serde_json::json!(["Source Sans 3"]));
     let embedded = report["embeddedFonts"].as_array().unwrap();
     assert!(embedded.iter().any(|f| f == "Source Sans 3"), "embedded fonts: {embedded:?}");
+}
+
+#[test]
+fn convert_report_records_the_epoch_in_effect() {
+    let (dir, input) = doc_with_named_font("epoch");
+    let out = dir.join("epoch.pdf");
+    let run = Command::new(env!("CARGO_BIN_EXE_wordcraft-cli"))
+        .arg("convert")
+        .arg(&input)
+        .arg(&out)
+        .arg("--report")
+        .env("SOURCE_DATE_EPOCH", "1700000000")
+        .output()
+        .unwrap();
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+    let report: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.join("epoch.pdf.report.json")).unwrap()).unwrap();
+    assert_eq!(report["sourceDateEpoch"], 1_700_000_000);
+}
+
+#[test]
+fn convert_report_names_an_unembeddable_font_as_requested_only() {
+    let dir = std::env::temp_dir().join(format!("wc-cli-report-missing-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut doc = Document::new();
+    doc.body = vec![para_block(Paragraph::with_text(
+        "Set in a font this machine does not have",
+        CharProps { font: Some("Fictional Display Pro".into()), ..Default::default() },
+    ))];
+    let input = dir.join("in.json");
+    std::fs::write(&input, serde_json::to_vec(&doc).unwrap()).unwrap();
+    let out = dir.join("out.pdf");
+    let run = convert(&input, &out, true);
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+    let report: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.join("out.pdf.report.json")).unwrap()).unwrap();
+    assert_eq!(report["requestedFonts"], serde_json::json!(["Fictional Display Pro"]));
+    let embedded = report["embeddedFonts"].as_array().unwrap();
+    assert!(!embedded.iter().any(|f| f == "Fictional Display Pro"), "embedded fonts: {embedded:?}");
+    assert!(!embedded.is_empty(), "a substitute font is embedded in its place");
 }
 
 #[test]

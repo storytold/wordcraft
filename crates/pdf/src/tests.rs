@@ -2558,7 +2558,8 @@ fn pdf_version_comes_from_the_header() {
 
 /// `export_with_report` reports the export it actually made: the sample document is
 /// two pages (the second starts with a page break), its text is set in the bundled
-/// fonts, and with no epoch in the environment none is reported.
+/// fonts, and the epoch it reports is the one in effect in the environment the
+/// test runs in (none, ordinarily).
 #[test]
 fn export_with_report_describes_the_export() {
     let d = sample();
@@ -2568,7 +2569,7 @@ fn export_with_report_describes_the_export() {
     assert_eq!(pdf_version(&bytes), report.pdf_version);
     assert!(report.tagged);
     assert!(!report.pdf_ua, "tagging is best effort; the report must not claim PDF/UA");
-    assert_eq!(report.source_date_epoch, None);
+    assert_eq!(report.source_date_epoch, source_date_epoch());
     assert!(!report.embedded_fonts.is_empty(), "no fonts reported: {report:?}");
 }
 

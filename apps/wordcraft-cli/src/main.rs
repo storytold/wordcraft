@@ -231,14 +231,15 @@ fn convert(rest: &[String], open: &impl Fn(&str, Option<&str>) -> Result<Session
 /// what the session knows: the file names and the fonts the document's runs request.
 ///
 /// The document is exported a second time to build the report, with the options
-/// this command has (markup as passed, the rest at their defaults). The first save
-/// has already stamped the session document, so its creation date is fixed, and the
-/// exporter hashes content for its file IDs: in the ordinary case the second export
-/// is the same bytes. A session whose numeral mode differs from the default could
-/// in principle lay the copy out differently; threading the report up through
-/// `file.save` instead of re-exporting is the follow-up.
+/// built by the same constructor the save command used (`cmd::file::export_options`
+/// over this session, with the markup this command was passed), so the report
+/// describes the export that was written, not a near copy of it. The first save
+/// has already stamped the session document, so its creation date is fixed, and
+/// the exporter hashes content for its file IDs: the second export is the same
+/// bytes. Threading the report up through `file.save` instead of re-exporting
+/// remains the follow-up.
 fn write_report(s: &Session, source: &str, target: &str, markup: bool) -> Result<(), String> {
-    let opts = wordcraft_engine::io::ExportOptions { markup, ..Default::default() };
+    let opts = wordcraft_engine::cmd::file::export_options(s, &json!({ "markup": markup }));
     let (_, report) = wordcraft_engine::io::export_pdf(&s.doc, &opts)?;
     let value = json!({
         "source": source,
@@ -260,9 +261,10 @@ fn write_report(s: &Session, source: &str, target: &str, markup: bool) -> Result
 }
 
 /// The font names the document's runs ask for, sorted: body paragraphs and table
-/// cells. A run with no font of its own names none — it takes its style's font,
-/// which this does not resolve, so such text shows only under `embeddedFonts`.
-/// Header and footer stories are not walked in this first version.
+/// cells, with tables nested inside cells walked as well. A run with no font of
+/// its own names none — it takes its style's font, which this does not resolve,
+/// so such text shows only under `embeddedFonts`. Header and footer stories are
+/// not walked in this first version.
 fn requested_fonts(doc: &wordcraft_doc::Document) -> Vec<String> {
     fn collect(p: &wordcraft_doc::Paragraph, fonts: &mut std::collections::BTreeSet<String>) {
         for (_, c) in p.run_ranges() {
@@ -271,23 +273,22 @@ fn requested_fonts(doc: &wordcraft_doc::Document) -> Vec<String> {
             }
         }
     }
-    let mut fonts = std::collections::BTreeSet::new();
-    for b in &doc.body {
-        match &**b {
-            wordcraft_doc::Block::Para(p) => collect(p, &mut fonts),
-            wordcraft_doc::Block::Table(t) => {
-                for row in &t.rows {
-                    for cell in &row.cells {
-                        for cb in &cell.blocks {
-                            if let Some(p) = cb.as_para() {
-                                collect(p, &mut fonts);
-                            }
+    fn walk<B: std::borrow::Borrow<wordcraft_doc::Block>>(blocks: &[B], fonts: &mut std::collections::BTreeSet<String>) {
+        for b in blocks {
+            match b.borrow() {
+                wordcraft_doc::Block::Para(p) => collect(p, fonts),
+                wordcraft_doc::Block::Table(t) => {
+                    for row in &t.rows {
+                        for cell in &row.cells {
+                            walk(&cell.blocks, fonts);
                         }
                     }
                 }
             }
         }
     }
+    let mut fonts = std::collections::BTreeSet::new();
+    walk(&doc.body, &mut fonts);
     fonts.into_iter().collect()
 }
 
