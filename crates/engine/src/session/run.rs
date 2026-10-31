@@ -30,6 +30,21 @@ struct ElsewhereContext {
 }
 
 impl Session {
+    fn validate_search_story_command(&self, id: &str, params: &Value) -> Result<(), CmdError> {
+        if params.get("story").is_some() {
+            match id {
+                "edit.find" | "select.text" => {
+                    crate::cmd::search_story_param(self, params)?;
+                }
+                "edit.replace" | "edit.replaceAll" => {
+                    return Err(CmdError::Params("`story` is not supported for replacement".into()));
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
     fn leave_math_for_command(&mut self, id: &str) {
         if self.math.is_some()
             && (id.starts_with("text.") || id.starts_with("caret.") || id.starts_with("select.") || id.starts_with("edit.paste"))
@@ -59,6 +74,8 @@ impl Session {
         // Every dispatch starts from an unclassified outcome. Early returns (unknown, disabled,
         // protected) leave it at the default.
         self.ime_edit_outcome = ImeEditOutcome::default();
+        // A rejected search selector must not enter a macro, replace Repeat or consume a join.
+        self.validate_search_story_command(id, params)?;
         // A rolled-back transaction must not leave a successful application-change signal from a
         // nested command that ran before the failure.
         let pending_application_change_before = self.pending_ime_application_change;

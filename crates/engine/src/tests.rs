@@ -1040,6 +1040,43 @@ fn search_story_replacement_rejects_scope_before_mutating_state() {
 }
 
 #[test]
+fn search_story_rejection_keeps_repeat_and_recorded_macros() {
+    for command in ["edit.replace", "edit.replaceAll", "select.text", "edit.find"] {
+        let selectors = if command.starts_with("edit.replace") {
+            vec![json!("body"), json!({"part": 1}), json!(null), json!("invalid")]
+        } else {
+            vec![json!({"part": 999}), json!(null), json!("invalid")]
+        };
+        for story in selectors {
+            let mut s = s();
+            run(&mut s, "text.insert", json!({"text": "seed"}));
+            run(&mut s, "edit.find", json!({"text": "seed"}));
+            run(&mut s, "caret.docEnd", json!({}));
+            run(&mut s, "tools.recordMacro", json!({"name": "story-refusal"}));
+            run(&mut s, "text.insert", json!({"text": "z"}));
+            let last_command = s.last_command.clone();
+            let recording = s.recording.clone();
+            let doc = serde_json::to_value(&s.doc).unwrap();
+            let selection = s.sel.clone();
+            let find = serde_json::to_value(&s.find).unwrap();
+            let depth = s.undo_depth();
+            let error = s.run(command, &json!({"text": "seed", "with": "changed", "story": story})).unwrap_err();
+            assert!(error.to_string().contains("`story`"), "{command}: {error}");
+            assert_eq!(s.last_command, last_command, "{command}: rejected selectors must not replace Repeat");
+            assert_eq!(s.recording, recording, "{command}: rejected selectors must not enter a macro");
+            assert_eq!(serde_json::to_value(&s.doc).unwrap(), doc);
+            assert_eq!(s.sel, selection);
+            assert_eq!(serde_json::to_value(&s.find).unwrap(), find);
+            assert_eq!(s.undo_depth(), depth);
+            assert_eq!(run(&mut s, "tools.recordMacro", json!({}))["steps"], 1);
+            run(&mut s, "edit.repeat", json!({}));
+            assert_eq!(run(&mut s, "tools.macros", json!({"run": "story-refusal"}))["steps"], 1);
+            assert_eq!(text(&s), "seedzzz");
+        }
+    }
+}
+
+#[test]
 fn find_replace_special_codes() {
     // ^p finds paragraph marks across paragraphs; Replace All with ^p splits paragraphs and is one undo step.
     let mut s = s();

@@ -66,6 +66,7 @@ without moving the caret, use `edit.advancedFind {"text":"Main","in":"main"}` in
 
 `edit.replace` and `edit.replaceAll` operate on the caret's story and reject `story`.
 To replace in another story, first select a match there with `select.text` or `edit.find`.
+Rejected story selectors do not replace the last Repeat command or enter a recorded macro.
 
 ## Tracked changes by an agent
 
