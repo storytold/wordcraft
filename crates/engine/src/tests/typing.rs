@@ -3537,3 +3537,85 @@ fn backspace_cannot_join_into_locked_content_control() {
     assert!(s.run("text.backspace", &json!({})).is_err());
     assert_eq!(s.doc, before);
 }
+
+// #3693 is an additional editing shortcut, not a claim of Word's default key behaviour.
+#[test]
+fn delete_previous_sentence_respects_caret_boundaries_and_unicode() {
+    for (text, before, expected) in [
+        ("First sentence. Second sentence.", "First sentence. Second sentence.", "First sentence. "),
+        ("First sentence. Second sentence.", "First sentence. Sec", "First sentence. ond sentence."),
+        ("First sentence. Second sentence.", "First sentence. ", "Second sentence."),
+        ("Grüße! Überall café.", "Grüße! Überall café.", "Grüße! "),
+        ("No punctuation here", "No punctuation", " here"),
+        ("One. Two.", "", "One. Two."),
+        ("", "", ""),
+    ] {
+        let mut s = s();
+        run(&mut s, "text.insert", json!({"text": text, "raw": true}));
+        let mut pos = s.sel.focus.clone();
+        pos.off = before.len();
+        s.sel = crate::Selection::caret(pos);
+        run(&mut s, "text.deleteSentenceBack", json!({}));
+        assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, expected, "{text:?} at {before:?}");
+        if expected != text {
+            run(&mut s, "edit.undo", json!({}));
+            assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, text);
+            run(&mut s, "edit.redo", json!({}));
+            assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, expected);
+        }
+    }
+}
+
+#[test]
+fn delete_previous_sentence_keeps_paragraph_boundaries_and_deletes_selections() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "First.\nSecond sentence.", "raw": true, "paragraphs": true}));
+    let end = s.sel.focus.clone();
+    s.sel = crate::Selection::caret(Pos { off: 0, ..end.clone() });
+    let count = s.doc.body.len();
+    run(&mut s, "text.deleteSentenceBack", json!({}));
+    assert_eq!(s.doc.body.len(), count);
+    assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, "Second sentence.");
+    s.sel = crate::Selection { anchor: Pos { off: 0, ..end.clone() }, focus: Pos { off: 6, ..end } };
+    run(&mut s, "text.deleteSentenceBack", json!({}));
+    assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, " sentence.");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, "Second sentence.");
+}
+
+#[test]
+fn delete_previous_sentence_tracks_changes_and_respects_read_only() {
+    for accept in [true, false] {
+        let mut s = s();
+        run(&mut s, "text.insert", json!({"text": "One. Two.", "raw": true}));
+        run(&mut s, "review.trackChanges", json!({"value": true}));
+        run(&mut s, "text.deleteSentenceBack", json!({}));
+        let changes = s.run("review.changes", &json!({})).unwrap();
+        assert!(changes.as_array().unwrap().iter().any(|c| c["kind"] == "delete"));
+        run(&mut s, if accept { "review.acceptAll" } else { "review.rejectAll" }, json!({}));
+        assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, if accept { "One. " } else { "One. Two." });
+    }
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Keep this.", "raw": true}));
+    run(&mut s, "review.restrict", json!({"mode": "readOnly"}));
+    assert!(s.run("text.deleteSentenceBack", &json!({})).is_err());
+    assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, "Keep this.");
+}
+
+#[test]
+fn delete_previous_sentence_does_not_cross_a_table_cell_boundary() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 2}));
+    run(&mut s, "text.insert", json!({"text": "First cell.", "raw": true}));
+    run(&mut s, "text.tab", json!({}));
+    run(&mut s, "text.insert", json!({"text": "Second cell.", "raw": true}));
+    let end = s.sel.focus.clone();
+    s.sel = crate::Selection::caret(Pos { off: 0, ..end.clone() });
+    let before = s.doc.plain_text(StoryRef::Body);
+    run(&mut s, "text.deleteSentenceBack", json!({}));
+    assert_eq!(s.doc.plain_text(StoryRef::Body), before);
+    s.sel = crate::Selection::caret(end);
+    run(&mut s, "text.deleteSentenceBack", json!({}));
+    assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, "");
+    assert!(s.doc.plain_text(StoryRef::Body).contains("First cell."));
+}

@@ -1233,3 +1233,24 @@ fn typing_with_smart_art_selected_types_into_an_item() {
     let g = wordcraft_engine::cmd::smart_art::selected_smart_art(&a.session).expect("still there");
     assert_eq!(g.items[0].text, "Ada", "one undo step for the typing");
 }
+
+#[test]
+fn delete_previous_sentence_shortcut_dispatches_and_can_be_reassigned() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    app.run("text.insert", json!({"text": "First. Second sentence.", "raw": true})).unwrap();
+    let mods = if cfg!(target_os = "macos") {
+        Modifiers { mac_cmd: true, command: true, shift: true, ..Default::default() }
+    } else {
+        Modifiers { ctrl: true, command: true, shift: true, ..Default::default() }
+    };
+    assert!(dispatch(&mut app, Key::Backspace, mods));
+    assert_eq!(app.session.doc.para_at(&app.session.sel.focus).unwrap().text, "First. ");
+    app.run("edit.undo", json!({})).unwrap();
+    assert!(dispatch(&mut app, Key::Backspace, Modifiers { shift: false, ..mods }));
+    assert_eq!(app.session.doc.para_at(&app.session.sel.focus).unwrap().text, "First. Second ");
+    app.run("edit.undo", json!({})).unwrap();
+    app.session.keymap = wordcraft_engine::keymap::KeyMap::from_value(&json!({"assigned": {"Mod+Shift+Backspace": "select.all"}}));
+    assert!(dispatch(&mut app, Key::Backspace, mods));
+    assert!(!app.session.sel.is_collapsed());
+    assert_eq!(app.session.doc.para_at(&app.session.sel.focus).unwrap().text, "First. Second sentence.");
+}

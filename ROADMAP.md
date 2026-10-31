@@ -1,5 +1,6 @@
 # WordCraft roadmap
 
+> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-10-31 · **Change:** minor (#3693: additional Delete Previous Sentence command and shortcut; Word-parity estimates unchanged)
 > **Highlight update:** 2026-10-25 · Highlight shortcut toggles the last chosen colour off when the whole selection has it; explicit colour commands remain setters (#4085). Readiness estimates unchanged.
 
 **Stage: alpha** · next: beta, ~15 points (60% → 75% ready for real work) and ~150–230 h away
@@ -139,6 +140,8 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
    (20–30 h).
 
 ## Progress log
+
+- **2026-10-31 (#3693, editing extension):** Delete Previous Sentence is a headless registry command and Mod+Shift+Backspace shortcut, using existing sentence boundaries and deletion/undo/protection paths. Paragraph and cell boundaries are preserved. Additional WordCraft behavior; Word-parity counts and estimates unchanged.
 
 - 2026-10-28: Aligned-copy review fixes keep the document axis locked through middle-button scrolling and let Ctrl/Command+Shift start on a secondary selected object. Plain Ctrl and Shift clicks keep their existing behavior (#4764).
 
@@ -675,6 +678,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-31 | minor | #3693: Delete Previous Sentence command and keyboard dispatch, with sentence/paragraph/cell, selection, undo and tracking regressions. Additional WordCraft behavior; Word-parity estimates unchanged. |
 | 2026-10-28 | trivial | Aligned copies retain their locked document coordinate during middle-button scrolling and can start on secondary selected objects; existing Ctrl and Shift selection behavior stays (#4764) |
 | 2026-10-28 | trivial | Ctrl/Command+Shift drags a selected floating object into an axis-aligned copy (#4764); synthetic Linux interaction and persistence controls, native desktop and Word untested; gap/readiness estimates unchanged |
 | 2026-10-28 | trivial | Connector object lookups retain the typed column-selection inputs on current main (#3631); readiness estimates unchanged |
