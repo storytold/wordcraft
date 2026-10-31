@@ -289,6 +289,26 @@ impl<'a> Builder<'a> {
         nid
     }
 
+    /// The list each item of `group` belongs to when a nested level mixes kinds: `top` for the
+    /// top-level items, one new list for each run of consecutive nested items.
+    fn nested_run_lists(&mut self, group: &[ListInfo], top: u32) -> Vec<u32> {
+        let mut ids = Vec::with_capacity(group.len());
+        let mut at = 0;
+        while let Some(item) = group.get(at) {
+            if item.level == 0 {
+                ids.push(top);
+                at += 1;
+                continue;
+            }
+            let end = group.get(at..).unwrap_or(&[]).iter().position(|g| g.level == 0).map_or(group.len(), |n| at + n);
+            let run = group.get(at..end).unwrap_or(&[]);
+            let id = self.new_list(run);
+            ids.extend(std::iter::repeat_n(id, run.len()));
+            at = end;
+        }
+        ids
+    }
+
     fn blocks(&mut self, blocks: &[FBlock], depth: usize) -> Blocks {
         let mut out = Blocks::new();
         let mut i = 0;
@@ -312,9 +332,18 @@ impl<'a> Builder<'a> {
                         j += 1;
                     }
                     let num = self.new_list(&group);
-                    for q in blocks.get(i..j).unwrap_or(&[]) {
+                    // One list holds one kind per level, so a level with both numbered and
+                    // bulleted items (a numbered list nested under one item, a bulleted one under
+                    // the next) gives each nested run its own list: it keeps its kind, numbering
+                    // restarts for it, and the top-level items go on in `num`.
+                    let mixed = (1..9).any(|l| {
+                        let mut kinds = group.iter().filter(|g| g.level.min(8) as usize == l).map(|g| g.ordered);
+                        kinds.next().is_some_and(|first| kinds.any(|k| k != first))
+                    });
+                    let lists: Vec<u32> = if mixed { self.nested_run_lists(group.as_slice(), num) } else { vec![num; group.len()] };
+                    for (q, id) in blocks.get(i..j).unwrap_or(&[]).iter().zip(lists) {
                         if let FBlock::Para(q) = q {
-                            let para = self.para(q, Some(num));
+                            let para = self.para(q, Some(id));
                             out.push(para_block(para));
                         }
                     }
