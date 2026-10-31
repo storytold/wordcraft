@@ -138,7 +138,10 @@ pub fn tool_definitions() -> Value {
             "select_text",
             "Select text",
             "Select the n-th occurrence of some text.",
-            with_doc(obj(json!({"text": s("Text to find"), "occurrence": n("1-based")}), &["text"])),
+            with_doc(obj(
+                json!({"text": s("Text to find"), "occurrence": n("1-based"), "includeHidden": {"type": "boolean", "description": "Count occurrences inside hidden runs (default false: the search sees the same text get_text returns)"}}),
+                &["text"]
+            )),
             false
         ),
         tool(
@@ -326,7 +329,11 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, a: &Value) -> ToolResult {
         "select_text" => wrap(exec(
             b,
             "select.text",
-            json!({"text": st("text").unwrap_or(""), "occurrence": a.get("occurrence").cloned().unwrap_or(json!(1))}),
+            json!({
+                "text": st("text").unwrap_or(""),
+                "occurrence": a.get("occurrence").cloned().unwrap_or(json!(1)),
+                "includeHidden": a.get("includeHidden").cloned().unwrap_or(json!(false)),
+            }),
             doc,
         )),
         "get_text" => wrap(exec(b, "document.text", json!({}), doc)),

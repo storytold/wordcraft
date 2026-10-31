@@ -480,27 +480,40 @@ fn select_text(s: &mut Session, v: &Value) -> CmdResult {
     if needle.is_empty() {
         return Err(CmdError::Params("`text` is empty".into()));
     }
-    // Occurrences inside hidden runs are skipped, so an agent selects the text it reads back
-    // from document.text (which omits hidden runs too); `includeHidden` finds them anyway.
+    // The search runs over each paragraph's visible projection — the text document.text returns —
+    // so an agent selects the text it read back, and a match that exists only in the projection
+    // (hidden characters inside or before it) is still found. `includeHidden` searches the raw
+    // paragraph text and counts occurrences inside hidden runs too. A projection match may span
+    // hidden characters between the visible ones; replacing the selection rewrites both.
     let include_hidden = p::bool(v, "includeHidden").unwrap_or(false);
     let mut count = 0;
     let story = super::story_param(s, v);
     for path in s.doc.para_paths(story) {
         let Some(p) = s.doc.para(story, &path) else { continue };
-        let hidden: Vec<std::ops::Range<usize>> = if include_hidden {
-            Vec::new()
-        } else {
-            let style = p.props.style.as_deref();
-            p.run_ranges().filter(|(r, c)| !r.is_empty() && s.doc.styles.resolve_char(style, c).hidden).map(|(r, _)| r).collect()
-        };
-        for (i, _) in p.text.match_indices(needle) {
-            if hidden.iter().any(|h| h.start < i + needle.len() && i < h.end) {
-                continue;
+        let style = p.props.style.as_deref();
+        let mut visible = String::with_capacity(p.text.len());
+        // map[visible byte offset] = paragraph byte offset, for 0..=visible.len(): each visible
+        // character maps its bytes to the paragraph's, and the final boundary to its end.
+        let mut map: Vec<usize> = Vec::with_capacity(p.text.len() + 1);
+        let mut last_end = 0;
+        for (r, c) in p.run_ranges() {
+            let hidden = !include_hidden && !r.is_empty() && s.doc.styles.resolve_char(style, c).hidden;
+            for (i, ch) in p.text[r.clone()].char_indices() {
+                if hidden {
+                    continue;
+                }
+                let o = r.start + i;
+                visible.push(ch);
+                map.extend(o..o + ch.len_utf8());
+                last_end = o + ch.len_utf8();
             }
+        }
+        map.push(last_end);
+        for (vi, _) in visible.match_indices(needle) {
             count += 1;
             if count == n {
-                s.sel =
-                    Selection { anchor: Pos { story, path: path.clone(), off: i }, focus: Pos { story, path: path.clone(), off: i + needle.len() } };
+                let (start, end) = (map[vi], map[vi + needle.len()]);
+                s.sel = Selection { anchor: Pos { story, path: path.clone(), off: start }, focus: Pos { story, path: path.clone(), off: end } };
                 // Formatting picked for the old caret doesn't carry over (as `select.word`): what
                 // replaces the selection takes its formatting.
                 s.pending = None;
