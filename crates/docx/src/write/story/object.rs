@@ -195,7 +195,7 @@ impl Writer<'_> {
         if ink && !direct_ink {
             Self::ink_transform(&mut root, (graphic.w, graphic.h), (*gw, *gh), float, 0);
         }
-        // Native ink, or an Office 2016 chart (`cx:chart`) with its fallback picture.
+        // Native ink, or an Office 2016 chart (`cx:chart`) or 3D model with its fallback picture.
         let alternate = (root.name == "mc:AlternateContent").then_some(&root);
         let fallback = alternate.and_then(|e| e.child("mc:Fallback"));
         let choice = alternate.and_then(|e| e.child("mc:Choice"));
@@ -203,7 +203,7 @@ impl Writer<'_> {
         if alternate.is_some() && native.is_none() {
             return;
         }
-        // A chart's picture gets the chart's current frame too; ink's VML preview is resized in place.
+        // A chart's or model's picture gets its current frame too; ink's VML preview is resized in place.
         let picture = if ink { None } else { fallback.and_then(|e| e.find("a:graphic")) };
         self.rev_open(w, props);
         w.open("w:r", &[]);
@@ -221,6 +221,7 @@ impl Writer<'_> {
                 wordcraft_doc::graphic::GraphicKind::Chart => format!("Chart {docpr}"),
                 wordcraft_doc::graphic::GraphicKind::Diagram => format!("Diagram {docpr}"),
                 wordcraft_doc::graphic::GraphicKind::Ink => format!("Ink {docpr}"),
+                wordcraft_doc::graphic::GraphicKind::Model3d => format!("3D Model {docpr}"),
             };
             let z = self.z;
             self.graphic_frame(w, DrawingInfo { float, size: (*gw, *gh), docpr: &docpr, name: &name, alt }, native.unwrap_or(&root));

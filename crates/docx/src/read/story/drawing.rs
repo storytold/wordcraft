@@ -1,7 +1,8 @@
 use super::{
     AltText, Anchor, Arc, Blocks, CHARTEX_URI, ConnEnd, ContentTypes, El, Embedded, Float, FloatAlign, Glow, Graphic, GraphicItem, GraphicKind,
     INK_REL, INK_URI, InlineObject, MAX_STORY_DEPTH, Node, PartKind, Reader, Rels, Rgb, Shadow, ShapeEffects, ShapeExtra, ShapeKind, StoryCtx,
-    TextWarp, Wrap, WrapText, cap_alt, children_of_choice, int, measure, on_off_attr, own_fill, preset_kind, rt, shape_paint, u32_of,
+    TextWarp, Wrap, WrapText, cap_alt, children_of_choice, choice_understood, int, measure, on_off_attr, own_fill, preset_kind, rt, shape_paint,
+    u32_of,
 };
 
 impl Reader<'_> {
@@ -49,7 +50,7 @@ impl Reader<'_> {
             }
             // The renderer's existing missing-picture box marks ink without a usable preview.
             // InkML stays opaque: no approximation of its strokes or conversion to freeforms.
-            let items = vec![GraphicItem::Image { rect: [0.0, 0.0, w, h], media: String::new() }];
+            let items = vec![GraphicItem::Image { rect: [0.0, 0.0, w, h], media: String::new(), crop: [0.0; 4] }];
             let graphic = Arc::new(Graphic { kind: GraphicKind::Ink, items, w, h, source: Some(source), ..Default::default() });
             return Some(InlineObject::Graphic { w, h, alt, float, graphic });
         }
@@ -64,7 +65,7 @@ impl Reader<'_> {
             // Kept so saving writes the chart or diagram back: the frame around it is written
             // from the object's (possibly moved or resized) size and position.
             let extra: Vec<String> = match kind {
-                GraphicKind::Chart | GraphicKind::Ink => Vec::new(),
+                GraphicKind::Chart | GraphicKind::Ink | GraphicKind::Model3d => Vec::new(),
                 GraphicKind::Diagram => self.diagram_drawing_rel(gd, rels).into_iter().collect(),
             };
             let source = c.child("a:graphic").and_then(|g| self.keep_embedded(g, rels, &extra));
@@ -132,7 +133,7 @@ impl Reader<'_> {
         if let InlineObject::Graphic { w, h, graphic, .. } = &mut object {
             let graphic = Arc::make_mut(graphic);
             if let Some(InlineObject::Image { media, .. }) = preview {
-                graphic.items = vec![GraphicItem::Image { rect: [0.0, 0.0, *w, *h], media }];
+                graphic.items = vec![GraphicItem::Image { rect: [0.0, 0.0, *w, *h], media, crop: [0.0; 4] }];
             }
             if let Some(fallback) = fallback {
                 let kept =
@@ -146,26 +147,37 @@ impl Reader<'_> {
         Some(object)
     }
 
-    /// An Office 2016 chart (`cx:chart`: waterfall, sunburst, box & whisker…) drawn from its
-    /// fallback picture, keeping both branches so saving writes the chart back rather than only
-    /// the picture. `None` (read the fallback alone) when it can't be kept whole.
-    pub(super) fn read_chartex_alternate(&mut self, sc: &mut StoryCtx, ac: &El, rels: &Rels) -> Option<InlineObject> {
-        let choice = ac
-            .children("mc:Choice")
-            .find(|c| c.child("w:drawing").and_then(|d| d.find("a:graphicData")).and_then(|g| g.attr("uri")) == Some(CHARTEX_URI))?;
+    /// An Office 2016 chart (`cx:chart`: waterfall, sunburst, box & whisker…) or a 3D model
+    /// (`am3d:model3d`) drawn from its fallback picture, keeping both branches so saving writes
+    /// the chart or model back rather than only the picture. `None` (read the fallback alone)
+    /// when it can't be kept whole.
+    pub(super) fn read_kept_alternate(&mut self, sc: &mut StoryCtx, ac: &El, rels: &Rels) -> Option<InlineObject> {
         // A requirement in a namespace we can't name couldn't be written back.
-        let requires = choice.attr("Requires").unwrap_or("");
-        if requires.split_whitespace().next().is_none() || requires.split_whitespace().any(|p| p == "?") {
-            return None;
-        }
+        let keepable = |c: &El| {
+            let requires = c.attr("Requires").unwrap_or("");
+            requires.split_whitespace().next().is_some() && requires.split_whitespace().all(|p| p != "?")
+        };
+        let kind_of = |c: &El| {
+            let gd = c.child("w:drawing").and_then(|d| d.find("a:graphicData"))?;
+            if gd.attr("uri") == Some(CHARTEX_URI) {
+                Some(GraphicKind::Chart)
+            } else if gd.child("am3d:model3d").is_some() {
+                Some(GraphicKind::Model3d)
+            } else {
+                None
+            }
+        };
+        // The first Choice a reader would take; `children_of_choice` reads it unless it's kept.
+        let choice = ac.children("mc:Choice").find(|c| choice_understood(c) || (keepable(c) && kind_of(c).is_some()))?;
+        let kind = kind_of(choice).filter(|_| keepable(choice))?;
         let fallback = ac.child("mc:Fallback")?;
         let kept = El { name: "mc:AlternateContent".into(), attrs: Vec::new(), kids: vec![Node::El(choice.clone()), Node::El(fallback.clone())] };
         let source = self.keep_embedded(&kept, rels, &[])?;
-        let Some(InlineObject::Image { media, w, h, alt, float, .. }) = self.read_drawing(sc, fallback.child("w:drawing")?, rels) else {
+        let Some(InlineObject::Image { media, w, h, alt, float, crop, .. }) = self.read_drawing(sc, fallback.child("w:drawing")?, rels) else {
             return None;
         };
-        let items = vec![GraphicItem::Image { rect: [0.0, 0.0, w, h], media }];
-        let graphic = Arc::new(Graphic { kind: GraphicKind::Chart, items, w, h, source: Some(source), ..Default::default() });
+        let items = vec![GraphicItem::Image { rect: [0.0, 0.0, w, h], media, crop }];
+        let graphic = Arc::new(Graphic { kind, items, w, h, source: Some(source), ..Default::default() });
         Some(InlineObject::Graphic { w, h, alt, float, graphic })
     }
 
@@ -211,7 +223,7 @@ impl Reader<'_> {
         let part = match kind {
             GraphicKind::Chart => gd.child("c:chart").and_then(|c| c.attr("r:id")).and_then(|id| crate::read::part_of(rels, id, rt::CHART)),
             GraphicKind::Diagram => self.diagram_part(gd, rels),
-            GraphicKind::Ink => None,
+            GraphicKind::Ink | GraphicKind::Model3d => None,
         };
         let Some(path) = part else { return Arc::new(Graphic { kind, items: Vec::new(), w, h, source, chart: None, smart_art: None }) };
         let key = (kind, path, w.to_bits(), h.to_bits());
@@ -244,7 +256,7 @@ impl Reader<'_> {
                 None => Vec::new(),
             },
             GraphicKind::Diagram => self.diagram_drawing(path, w, h),
-            GraphicKind::Ink => Vec::new(),
+            GraphicKind::Ink | GraphicKind::Model3d => Vec::new(),
         }
     }
 
@@ -389,7 +401,7 @@ impl Reader<'_> {
                 let mut float = float;
                 float.set_spin(xfrm_spin(e.child("w14:xfrm")));
                 // As drawing-level ink: its fallback picture, else the missing-picture box.
-                let items = vec![GraphicItem::Image { rect: [0.0, 0.0, w, h], media: preview.unwrap_or_default() }];
+                let items = vec![GraphicItem::Image { rect: [0.0, 0.0, w, h], media: preview.unwrap_or_default(), crop: [0.0; 4] }];
                 let graphic = Arc::new(Graphic { kind: GraphicKind::Ink, items, w, h, source: Some(source), ..Default::default() });
                 Some(InlineObject::Graphic { w, h, alt: alt.clone(), float, graphic })
             } else if e.name == "pic:pic" {
