@@ -8,9 +8,9 @@ Opus 5.5 agent wall-clock.
 
 ## Current focus (toward beta, ~150–230 h)
 
-1. **Merge or close the ~45 open PRs** before starting overlapping work: many close catalog gaps
-   (Clipboard pane #264, Manage Styles #270, Group #267), fix field bugs (Hebrew RTL #20, IME
-   fixes #155–#164) or add languages (nb, nn, he). Owner review needed.
+1. **Merge or close the open PRs** before starting overlapping work: 794 were open on 2026-10-25,
+   593 of them conflicting with main. Some compete for the same work, such as four Hebrew
+   interface PRs (#20, #1303, #3306, #3607); Norwegian (#210) is still open. Owner review needed.
 2. **DOCX real-world corpus** (gap #1, 30–50 h): collect openly licensed real-world .docx files,
    open/render/round-trip them, compare with Word locally, fix what breaks. Omitted/empty
    paragraph defaults now have synthetic save/reopen coverage; the corpus gate remains open.
@@ -61,7 +61,7 @@ partial rows are fidelity gaps (beta work), not broken workflows. WordCraft stay
 | M11 | Draw and objects | text wrap, text boxes, canvas handles, rotation (#332), ink pens and eraser (#307), contour wrap (#354), lasso, Add Pen, Ink to Shape and Ink Replay (#395) done; Ink to Math, grouping missing | 35–55 h |
 | M12 | Formats breadth (PDF, ODT, RTF, HTML, MD, TXT, LaTeX, `.doc` import) | done (first versions); `.doc` write, encryption, minor formats missing | 60–100 h |
 | M13 | Performance budgets | on track (1.4 ms relayout); large real-world documents unmeasured | 10–20 h |
-| M14 | 1.0 polish, packaging, signing | releases v0.1.0–v0.4.0 published (signed macOS, Windows MSI x64/x86/arm64, Linux, FreeBSD, web) | — |
+| M14 | 1.0 polish, packaging, signing | releases v0.1.0 to v0.12.0 published (signed macOS, Windows MSI x64/x86/arm64, Linux, FreeBSD, web) | — |
 | M15 | Localization (12 key languages, RTL interface, proofing languages) | 27 UI languages from the shared catalogs pinned by `craft-i18n.rev` (`9205108c…`); proofing: English, Polish, Portuguese, Italian, Croatian, Turkish, Russian, Czech, Indonesian and Spanish, plus Bulgarian and German hyphenation only; native-speaker review and native IME acceptance (#155–#164) remain open | 70–115 h |
 | M16 | Right-to-left and East Asian typography | RTL paragraphs done (#207) | 30–45 h |
 
@@ -75,6 +75,7 @@ languages, screen-reader access, ecosystem decisions (VBA, add-ins, cloud), an i
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-29 | trivial | HTML import keeps preformatted lines with CR, CRLF or LF input newlines (#4810); numeric character references retain their separate meaning; readiness estimates unchanged. |
+| 2026-10-29 | trivial | Current focus item 1: 794 open PRs on 2026-10-25, 593 conflicting (GitHub's mergeable state); of the PRs the old item named (#264, #267, #270, #20, #155 to #164), all but Hebrew #20 are merged or closed. M14: releases v0.1.0 to v0.12.0 |
 | 2026-10-25 | trivial | egui 0.37 migration: 27 interface languages remain pinned by `craft-i18n.rev` (9205108…); input-method surrounding-delete and commit handling has synthetic regressions only, with managed CI passing; native acceptance (#155–#164) and native-speaker review remain open |
 | 2026-10-18 | trivial | M6: Manage Sources imports Word's `Sources.xml` (#2640) |
 | 2026-10-12 | minor | Czech proofing review: short-word splits rank after deletion, NOSUGGEST excludes suggestions while accepting typed forms, affix comments apply only to headers, ratios keep spaces and repeated-word messages use Czech quotes; synthetic engine end-to-end and latency checks |
