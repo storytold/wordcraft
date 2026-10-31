@@ -375,6 +375,13 @@ pub fn save_bytes(name: &str, doc: &Document) -> Result<Vec<u8>, String> {
     save_bytes_opts(name, doc, &ExportOptions::default())
 }
 
+/// Export a document as PDF bytes, with the export's report (pages, version, tagged
+/// state, embedded fonts, the epoch in effect): the record a headless conversion can
+/// hand back as its receipt.
+pub fn export_pdf(doc: &Document, opts: &ExportOptions) -> Result<(Vec<u8>, wordcraft_pdf::ExportReport), String> {
+    crate::io_ext::export_pdf(doc, opts)
+}
+
 /// [`save_bytes`] with export options (Print Markup).
 pub fn save_bytes_opts(name: &str, doc: &Document, opts: &ExportOptions) -> Result<Vec<u8>, String> {
     let ext = ext_of(name);

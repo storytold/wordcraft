@@ -17,13 +17,16 @@ const USAGE: &str = "\
 wordcraft-cli — WordCraft from the command line
 
 USAGE:
-  wordcraft-cli convert <in> <out> [--markup] [--update-fields] [--format wordml2003|flatopc]
+  wordcraft-cli convert <in> <out> [--markup] [--update-fields] [--format wordml2003|flatopc] [--report]
                                               convert between formats (docx, doc [read], pdf, odt, rtf, html, md, tex, txt, json, png,
                                               xml); --update-fields refreshes unlocked fields before saving;
                                               an .xml file is a Word XML Document (Flat OPC), or with
                                               --format wordml2003 a Word 2003 XML Document;
                                               --markup (Print Markup): comments beside each page and
-                                              tracked changes in pdf/png, a comment list in html/md/txt
+                                              tracked changes in pdf/png, a comment list in html/md/txt;
+                                              --report (pdf only) also writes <out>.report.json:
+                                              pages, pdf version, tagged state, the fonts the
+                                              document requests and the fonts embedded
   wordcraft-cli info <file>                   pages, words, paragraphs, properties (JSON)
   wordcraft-cli text <file>                   plain text
   wordcraft-cli inspect <file>                document structure (JSON)
@@ -183,6 +186,111 @@ fn listed_text(doc: &wordcraft_doc::Document) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&bytes).replace("\r\n", "\n"))
 }
 
+/// `convert <in> <out> [options]`: one conversion, plus the `--report` sidecar for
+/// PDF output. An arm of the dispatch in a function of its own: `run` sits at the
+/// workspace's cognitive-complexity limit, and a conversion is a procedure of its own.
+/// The opener is `run`'s closure, passed in: it opens the file by its real name,
+/// which the text arguments may have lost, with the password of a protected document.
+fn convert(rest: &[String], open: &impl Fn(&str, Option<&str>) -> Result<Session, String>) -> Result<(), Failure> {
+    validate_options("convert", rest, CONVERT_OPTIONS)?;
+    // `--format wordml2003` (or `flatopc`) picks the kind of `.xml` file; its value isn't a path.
+    let format = arg_value(rest, "--format");
+    let paths = positionals(rest, CONVERT_OPTIONS);
+    let (i, o) = (paths.first().ok_or_else(missing_argument)?.to_string(), paths.get(1).ok_or_else(missing_argument)?.to_string());
+    let markup = rest.iter().any(|a| a == "--markup");
+    let report = rest.iter().any(|a| a == "--report");
+    if report && !o.to_ascii_lowercase().ends_with(".pdf") {
+        return Err("--report is only for PDF output".into());
+    }
+    let password = password_from(rest)?;
+    let mut s = open(&i, password.as_deref())?;
+    if rest.iter().any(|a| a == "--update-fields") {
+        s.run("references.updateFields", &json!({})).map_err(|e| e.to_string())?;
+    }
+    let r = if o.to_ascii_lowercase().ends_with(".png") {
+        s.run("file.exportPng", &json!({"path": o, "page": 1, "markup": markup}))
+    } else {
+        let mut params = json!({"path": o, "markup": markup});
+        if let Some(f) = format {
+            params["format"] = json!(f);
+        }
+        s.run("file.save", &params)
+    };
+    r.map_err(|e| e.to_string())?;
+    eprintln!("wrote {o}");
+    if report {
+        write_report(&s, &i, &o, markup)?;
+    }
+    Ok(())
+}
+
+/// `convert --report`: the sidecar JSON for a PDF conversion, written next to the
+/// output as `<out>.report.json` (the name LibreOffice's export report uses). The
+/// split follows that change: the pdf layer reports what the writer knows — pages,
+/// version, tagged state, embedded fonts, the epoch in effect — and this layer adds
+/// what the session knows: the file names and the fonts the document's runs request.
+///
+/// The document is exported a second time to build the report, with the options
+/// this command has (markup as passed, the rest at their defaults). The first save
+/// has already stamped the session document, so its creation date is fixed, and the
+/// exporter hashes content for its file IDs: in the ordinary case the second export
+/// is the same bytes. A session whose numeral mode differs from the default could
+/// in principle lay the copy out differently; threading the report up through
+/// `file.save` instead of re-exporting is the follow-up.
+fn write_report(s: &Session, source: &str, target: &str, markup: bool) -> Result<(), String> {
+    let opts = wordcraft_engine::io::ExportOptions { markup, ..Default::default() };
+    let (_, report) = wordcraft_engine::io::export_pdf(&s.doc, &opts)?;
+    let value = json!({
+        "source": source,
+        "target": target,
+        "format": "pdf",
+        "pages": report.pages,
+        "pdfVersion": report.pdf_version,
+        "tagged": report.tagged,
+        "pdfUa": report.pdf_ua,
+        "sourceDateEpoch": report.source_date_epoch,
+        "requestedFonts": requested_fonts(&s.doc),
+        "embeddedFonts": report.embedded_fonts,
+    });
+    let sidecar = format!("{target}.report.json");
+    let text = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
+    std::fs::write(&sidecar, text).map_err(|e| format!("{sidecar}: {e}"))?;
+    eprintln!("wrote {sidecar}");
+    Ok(())
+}
+
+/// The font names the document's runs ask for, sorted: body paragraphs and table
+/// cells. A run with no font of its own names none — it takes its style's font,
+/// which this does not resolve, so such text shows only under `embeddedFonts`.
+/// Header and footer stories are not walked in this first version.
+fn requested_fonts(doc: &wordcraft_doc::Document) -> Vec<String> {
+    fn collect(p: &wordcraft_doc::Paragraph, fonts: &mut std::collections::BTreeSet<String>) {
+        for (_, c) in p.run_ranges() {
+            if let Some(f) = c.font.as_deref().filter(|f| !f.trim().is_empty()) {
+                fonts.insert(f.to_string());
+            }
+        }
+    }
+    let mut fonts = std::collections::BTreeSet::new();
+    for b in &doc.body {
+        match &**b {
+            wordcraft_doc::Block::Para(p) => collect(p, &mut fonts),
+            wordcraft_doc::Block::Table(t) => {
+                for row in &t.rows {
+                    for cell in &row.cells {
+                        for cb in &cell.blocks {
+                            if let Some(p) = cb.as_para() {
+                                collect(p, &mut fonts);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    fonts.into_iter().collect()
+}
+
 /// `--author NAME`: the author recorded on tracked changes and comments (`file.setAuthor`).
 /// The command also checks whether the open document is protected: this name determines which
 /// named editing exceptions the session can use, so the flag must not bypass that check.
@@ -299,6 +407,7 @@ const CONVERT_OPTIONS: &[OptionSpec] = &[
     OptionSpec { name: "--markup", takes_value: false },
     OptionSpec { name: "--format", takes_value: true },
     OptionSpec { name: "--update-fields", takes_value: false },
+    OptionSpec { name: "--report", takes_value: false },
     OptionSpec { name: "--password", takes_value: true },
     OptionSpec { name: "--password-file", takes_value: true },
 ];
@@ -427,31 +536,7 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
         return write_stdout(|o| write!(o, "{USAGE}"));
     }
     match cmd {
-        "convert" => {
-            validate_options("convert", &rest, CONVERT_OPTIONS)?;
-            // `--format wordml2003` (or `flatopc`) picks the kind of `.xml` file; its value isn't a path.
-            let format = arg_value(&rest, "--format");
-            let paths = positionals(&rest, CONVERT_OPTIONS);
-            let (i, o) = (paths.first().ok_or_else(missing_argument)?.to_string(), paths.get(1).ok_or_else(missing_argument)?.to_string());
-            let markup = rest.iter().any(|a| a == "--markup");
-            let password = password_from(&rest)?;
-            let mut s = open(&i, password.as_deref())?;
-            if rest.iter().any(|a| a == "--update-fields") {
-                s.run("references.updateFields", &json!({})).map_err(|e| e.to_string())?;
-            }
-            let r = if o.to_ascii_lowercase().ends_with(".png") {
-                s.run("file.exportPng", &json!({"path": o, "page": 1, "markup": markup}))
-            } else {
-                let mut params = json!({"path": o, "markup": markup});
-                if let Some(f) = format {
-                    params["format"] = json!(f);
-                }
-                s.run("file.save", &params)
-            };
-            r.map_err(|e| e.to_string())?;
-            eprintln!("wrote {o}");
-            Ok(())
-        }
+        "convert" => convert(&rest, &open),
         "info" => {
             validate_options("info", &rest, PASSWORD_OPTIONS)?;
             let paths = positionals(&rest, PASSWORD_OPTIONS);

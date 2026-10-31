@@ -2545,3 +2545,37 @@ fn a_dated_document_exports_byte_identical_twice() {
     let b = export(&d, &PdfOptions::default()).unwrap();
     assert_eq!(a, b);
 }
+
+/// The version is read from the finished file's header; anything else is "unknown".
+#[test]
+fn pdf_version_comes_from_the_header() {
+    assert_eq!(pdf_version(b"%PDF-1.7\n"), "1.7");
+    assert_eq!(pdf_version(b"%PDF-2.0\n"), "2.0");
+    assert_eq!(pdf_version(b"%PDF-"), "unknown");
+    assert_eq!(pdf_version(b"not a pdf"), "unknown");
+    assert_eq!(pdf_version(b""), "unknown");
+}
+
+/// `export_with_report` reports the export it actually made: the sample document is
+/// two pages (the second starts with a page break), its text is set in the bundled
+/// fonts, and with no epoch in the environment none is reported.
+#[test]
+fn export_with_report_describes_the_export() {
+    let d = sample();
+    let (bytes, report) = export_with_report(&d, &PdfOptions::default()).unwrap();
+    assert_eq!(report.pages, 2);
+    assert_eq!(report.pdf_version, "1.7");
+    assert_eq!(pdf_version(&bytes), report.pdf_version);
+    assert!(report.tagged);
+    assert!(!report.pdf_ua, "tagging is best effort; the report must not claim PDF/UA");
+    assert_eq!(report.source_date_epoch, None);
+    assert!(!report.embedded_fonts.is_empty(), "no fonts reported: {report:?}");
+}
+
+/// With tagging off the report says so; the field tracks the option, not a guess.
+#[test]
+fn export_report_tagged_follows_the_option() {
+    let d = sample();
+    let (_, report) = export_with_report(&d, &PdfOptions { tagged: false, ..Default::default() }).unwrap();
+    assert!(!report.tagged);
+}
