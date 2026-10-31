@@ -408,6 +408,7 @@ fn preferred_grid(t: &Table, avail: f32) -> Vec<f32> {
         vec![avail / ncols as f32; ncols]
     };
     apply_cell_widths(t, &mut grid);
+    apply_pct_widths(t, &mut grid, avail);
     grid
 }
 
@@ -1344,6 +1345,46 @@ fn apply_cell_widths(t: &Table, grid: &mut [f32]) {
         return;
     }
     grid.copy_from_slice(&widths);
+}
+
+/// Word sizes each column by the percentage its cells ask for, whichever rows ask: cells without a
+/// preferred width take no part, so a header row of percentages sizes the automatic rows below it.
+/// The percentages are shares of the table's width, scaled up when they come short of 100%; a
+/// table without a width of its own takes `avail`. Measured in Word, autofit and fixed alike.
+/// Columns some cell leaves unsized, conflicting percentages, spans and absolute widths keep the
+/// grid.
+fn apply_pct_widths(t: &Table, grid: &mut [f32], avail: f32) {
+    let mut pcts: Vec<Option<f32>> = vec![None; grid.len()];
+    for row in &t.rows {
+        let mut g = row.first_grid();
+        for cell in &row.cells {
+            if cell.props.width.is_some() {
+                return;
+            }
+            if let Some(p) = cell.props.width_pct {
+                if cell.span() != 1 || !p.is_finite() || p <= 0.0 {
+                    return;
+                }
+                let Some(slot) = pcts.get_mut(g) else { return };
+                if slot.is_some_and(|q| (q - p).abs() > 0.01) {
+                    return;
+                }
+                *slot = Some(p);
+            }
+            g = g.saturating_add(cell.span());
+        }
+    }
+    let Some(pcts) = pcts.into_iter().collect::<Option<Vec<f32>>>() else { return };
+    let sum: f32 = pcts.iter().sum();
+    let own_width = t.props.width_pct.is_some_and(|p| p > 0.0) || t.props.width.is_some_and(|w| w > 0.0);
+    // A table with its own width is scaled to it afterwards; any positive total will do.
+    let total = if own_width { grid.iter().sum() } else { avail };
+    if !sum.is_finite() || sum <= 0.0 || !total.is_finite() || total <= 0.0 {
+        return;
+    }
+    for (w, p) in grid.iter_mut().zip(&pcts) {
+        *w = total * (p / sum);
+    }
 }
 
 /// Word's autofit for a table whose widths may follow its content (`tblLayout` not fixed).

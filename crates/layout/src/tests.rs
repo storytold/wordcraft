@@ -9726,6 +9726,82 @@ fn cell_widths_override_grid() {
 }
 
 #[test]
+fn percentage_cell_widths_size_the_columns_whichever_rows_ask() {
+    // Measured in Word (A4, 451.3 pt between the margins; 468 pt here): a 40/10/10/40 header row
+    // over rows without cell widths lays out 40/10/10/40 of the table, from the grid
+    // 107.3/37.2/32/283.9 pt a document saved. The same with the row in the middle, in a fixed
+    // table, with the table 100% wide or without a width; 144 pt for 40% of a 360 pt table; and
+    // 20/5/5/20 scaled up to fill the table.
+    let starts = |t: Table| {
+        let mut d = Document::from_text("After");
+        d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+        let l = lay(&d);
+        let x: Vec<f32> = (0..4)
+            .map(|c| {
+                let [(x, _, _)] = para_at(&l, &[0, 2, c, 0])[..] else { panic!("cell {c} missing") };
+                x
+            })
+            .collect();
+        x.iter().map(|v| v - x[0]).collect::<Vec<_>>()
+    };
+    let table = |pct_row: usize, pcts: [f32; 4]| {
+        let mut t = Table::new(4, 4, 460.3);
+        t.grid = vec![107.3, 37.2, 31.95, 283.85];
+        for (r, row) in t.rows.iter_mut().enumerate() {
+            for (cell, p) in row.cells.iter_mut().zip(pcts) {
+                cell.props.width = None;
+                cell.props.width_pct = (r == pct_row).then_some(p);
+                cell.blocks = vec![wordcraft_doc::para_block(Paragraph::with_text("A", Default::default()))];
+            }
+        }
+        t
+    };
+    let near = |got: Vec<f32>, want: [f32; 4]| {
+        assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() < 0.01), "columns start at {got:?}, not {want:?}");
+    };
+    let of = |w: f32| [0.0, w * 0.4, w * 0.5, w * 0.6];
+    near(starts(table(0, [40.0, 10.0, 10.0, 40.0])), of(468.0));
+    near(starts(table(1, [40.0, 10.0, 10.0, 40.0])), of(468.0));
+    near(starts(table(0, [20.0, 5.0, 5.0, 20.0])), of(468.0));
+    let mut fixed = table(0, [40.0, 10.0, 10.0, 40.0]);
+    fixed.props.fixed = true;
+    near(starts(fixed), of(468.0));
+    let mut full = table(0, [40.0, 10.0, 10.0, 40.0]);
+    full.props.width_pct = Some(100.0);
+    near(starts(full), of(468.0));
+    let mut narrow = table(0, [20.0, 5.0, 5.0, 20.0]);
+    narrow.props.width = Some(360.0);
+    near(starts(narrow), of(360.0));
+    // A row that starts one column in gives its percentages to the columns it covers: 10/10/40
+    // there agree with the header row's 10/10/40 over the last three columns.
+    let mut shifted = table(0, [40.0, 10.0, 10.0, 40.0]);
+    shifted.rows[1].props.grid_before = 1;
+    shifted.rows[1].cells.remove(0);
+    for (cell, p) in shifted.rows[1].cells.iter_mut().zip([10.0, 10.0, 40.0]) {
+        cell.props.width_pct = Some(p);
+    }
+    near(starts(shifted), of(468.0));
+    // A column no cell sizes, percentages that disagree, a span over two columns and an absolute
+    // width alongside keep the grid.
+    let grid = [0.0, 107.3, 144.5, 176.45];
+    let mut unsized_column = table(0, [40.0, 10.0, 10.0, 40.0]);
+    unsized_column.rows[0].cells[3].props.width_pct = None;
+    let mut disagreeing = table(0, [40.0, 10.0, 10.0, 40.0]);
+    disagreeing.rows[1].cells[0].props.width_pct = Some(10.0);
+    let mut spanned = table(0, [40.0, 10.0, 10.0, 40.0]);
+    spanned.rows[0].cells.remove(2);
+    spanned.rows[0].cells[1].props.span = 2;
+    spanned.rows[0].cells[1].props.width_pct = Some(20.0);
+    let mut absolute = table(0, [40.0, 10.0, 10.0, 40.0]);
+    absolute.rows[1].cells[0].props.width = Some(100.0);
+    for t in [unsized_column, disagreeing, spanned, absolute] {
+        let got = starts(t);
+        let k = got[3] / grid[3];
+        near(got, grid.map(|g| g * k));
+    }
+}
+
+#[test]
 fn ambiguous_widths_keep_grid() {
     let mut t = Table::new(2, 3, 450.0);
     t.grid = vec![40.0, 175.0, 235.0];
