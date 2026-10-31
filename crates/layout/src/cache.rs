@@ -51,6 +51,20 @@ pub struct LayoutCache {
 }
 
 impl LayoutCache {
+    /// Bound obsolete geometry as well as entry count. Current-pass layouts are always kept:
+    /// a large document can itself exceed this soft retention budget without losing cache hits.
+    pub(crate) fn prune_unused(&mut self, buffer_budget: usize) {
+        let mut bytes = 0usize;
+        let over_budget = self.paras.values().any(|p| {
+            bytes = bytes.saturating_add(p.owned_buffer_bytes());
+            bytes > buffer_budget
+        });
+        if over_budget || self.paras.len() + self.measures.len() > 4 * self.used.len().max(1024) {
+            self.paras.retain(|k, _| self.used.contains(k));
+            self.measures.retain(|k, _| self.used.contains(k));
+        }
+    }
+
     pub fn new() -> Self {
         Self::default()
     }

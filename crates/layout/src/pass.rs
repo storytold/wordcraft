@@ -436,12 +436,7 @@ fn fill_headers_footers(
 
 /// Evict paragraph layouts that weren't used this pass if the cache grew large.
 fn evict_unused(cache: &mut LayoutCache) {
-    if cache.paras.len() + cache.measures.len() > 4 * cache.used.len().max(1024) {
-        let used = std::mem::take(&mut cache.used);
-        cache.paras.retain(|k, _| used.contains(k));
-        cache.measures.retain(|k, _| used.contains(k));
-        cache.used = used;
-    }
+    cache.prune_unused(64 * 1024 * 1024);
 }
 
 fn index_lines(pages: &[Page]) -> HashMap<(StoryRef, Path), Vec<(usize, usize)>> {
