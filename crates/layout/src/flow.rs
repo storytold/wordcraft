@@ -306,10 +306,25 @@ impl<'a> Flow<'a> {
     fn keep_together(&self, ctx: &mut Ctx, pb: &mut PageBuilder, rooms: Rooms, before: f32) -> f32 {
         let rp = &self.pl.rp;
         let height = self.pl.height + rooms.top + rooms.bottom;
-        if !(rp.keep_lines || (rp.keep_next && pb.y + height <= pb.bottom + 0.01)) {
+        // The last line on the page may leave its leading in the bottom margin, as `fit_height`
+        // lets it when that line is placed: this paragraph's own, or that of the last line kept
+        // with it.
+        let at_margin = pb.bottom >= pb.sect.page_h - pb.sect.margin_bottom - 0.01 && pb.notes.is_empty();
+        let own_leading = match (rp.line_spacing, self.pl.lines.last()) {
+            (wordcraft_doc::props::LineSpacing::Multiple(m), Some(l)) if m > 1.0 && at_margin && rooms.bottom == 0.0 => leading_below(l),
+            _ => 0.0,
+        };
+        if !(rp.keep_lines || (rp.keep_next && pb.y + height - own_leading <= pb.bottom + 0.01)) {
             return before;
         }
-        let need = height + if rp.keep_next { next_first_line(ctx, self.block, self.width, 0, &mut ctx.counters.clone()) } else { 0.0 };
+        // The next paragraph starts below this one's space after (what of it is left there).
+        let gap = if matches!(ctx.doc.body.get(self.block + 1).map(|b| &**b), Some(Block::Para(_))) {
+            space_after_kept(ctx, self.block, rp, self.label.is_some())
+        } else {
+            0.0
+        };
+        let (next, leading) = if rp.keep_next { next_first_line(ctx, self.block, self.width, 0, &mut ctx.counters.clone()) } else { (0.0, 0.0) };
+        let need = height + if rp.keep_next { gap + next - if at_margin { leading } else { 0.0 } } else { -own_leading };
         // (Against the whole column: balanced columns grow to hold it.)
         // With the 0.01 pt of slack the other fit checks take.
         if pb.y + need > pb.bottom + 0.01 && !pb.fresh() && need <= pb.next_room(self.body_top) {
@@ -633,9 +648,15 @@ fn fit_height(pb: &PageBuilder, l: &para::Line, rp: &wordcraft_doc::resolve::Res
     let at_margin = pb.bottom >= pb.sect.page_h - pb.sect.margin_bottom - 0.01;
     match rp.line_spacing {
         // `baseline` is from the paragraph's top; the text ends a descent below it.
-        wordcraft_doc::props::LineSpacing::Multiple(m) if m > 1.0 && at_margin && free => (l.baseline - l.top + l.text_desc).clamp(0.0, l.height),
+        wordcraft_doc::props::LineSpacing::Multiple(m) if m > 1.0 && at_margin && free => l.height - leading_below(l),
         _ => l.height,
     }
+}
+
+/// The leading of a multiple-spaced line below its text: what `fit_height` lets run into the
+/// bottom margin.
+fn leading_below(l: &para::Line) -> f32 {
+    (l.height - (l.baseline - l.top + l.text_desc)).clamp(0.0, l.height)
 }
 
 /// Notes too long for the rest of the page continue on the next one: the line still fits if the
@@ -874,8 +895,9 @@ fn space_after_kept(ctx: &Ctx, block: usize, rp: &wordcraft_doc::resolve::Resolv
 /// doesn't leave a single line at the bottom of a page; it moves over whole instead), or all
 /// of it under keep lines together — or all of it and what it keeps with in turn when it is
 /// kept with the next too (a chain moves together in Word). Word carries a kept heading over
-/// when the paragraph after it cannot start on the page (#966).
-fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counters: &mut Counters) -> f32 {
+/// when the paragraph after it cannot start on the page (#966). With it, the leading below the
+/// text of the last of those lines, which may run into the bottom margin (`fit_height`).
+fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counters: &mut Counters) -> (f32, f32) {
     match ctx.doc.body.get(block + 1).map(|b| &**b) {
         Some(Block::Para(p)) => {
             // Keep list indents and label metrics without consuming the document counters.
@@ -912,7 +934,8 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counte
             let top = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block), None) { 0.0 } else { own.top };
             if pl.rp.keep_next && depth < 8 {
                 let bottom = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block + 2), None) { 0.0 } else { own.bottom };
-                pl.rp.space_before + top + pl.height + bottom + pl.rp.space_after + next_first_line(ctx, block + 1, width, depth + 1, counters)
+                let (next, leading) = next_first_line(ctx, block + 1, width, depth + 1, counters);
+                (pl.rp.space_before + top + pl.height + bottom + pl.rp.space_after + next, leading)
             } else {
                 // The room this one needs to start on the page with the kept paragraph before
                 // it (#966).
@@ -920,18 +943,23 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counte
                     (Some(first), Some(last)) => last.top + last.height - first.top,
                     _ => 0.0,
                 };
-                pl.rp.space_before
-                    + top
-                    + if pl.rp.keep_lines {
-                        pl.height
-                    } else if pl.rp.widow_control && pl.lines.len() >= 2 {
-                        to(1)
-                    } else {
-                        to(0)
-                    }
+                let last = if pl.rp.keep_lines {
+                    pl.lines.len().saturating_sub(1)
+                } else if pl.rp.widow_control && pl.lines.len() >= 2 {
+                    1
+                } else {
+                    0
+                };
+                let need = if pl.rp.keep_lines { pl.height } else { to(last) };
+                // The leading below the text of that last line (`fit_height`).
+                let leading = match (pl.rp.line_spacing, pl.lines.get(last)) {
+                    (wordcraft_doc::props::LineSpacing::Multiple(m), Some(l)) if m > 1.0 => leading_below(l),
+                    _ => 0.0,
+                };
+                (pl.rp.space_before + top + need, leading)
             }
         }
-        Some(Block::Table(_)) => 24.0,
-        None => 0.0,
+        Some(Block::Table(_)) => (24.0, 0.0),
+        None => (0.0, 0.0),
     }
 }
