@@ -313,7 +313,10 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
             if drag.drag_started() {
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
             }
-            note_title_drag(ui.ctx(), full);
+            // Elsewhere the system's own title bar above this one moves the window.
+            if mac {
+                note_title_drag(ui.ctx(), full);
+            }
             if drag.double_clicked() {
                 let max = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!max));

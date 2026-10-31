@@ -1933,23 +1933,29 @@ fn window_drags(h: &mut egui_kittest::Harness<WordApp>, at: egui::Pos2) -> usize
     drags
 }
 
-/// #5124: behind a modal dialog the window still moves by its title bar, as in Word for Mac.
+/// #5124: behind a modal dialog the window still moves by its title bar, as in Word for Mac, where
+/// WordCraft draws it; elsewhere the system's title bar does, and WordCraft's bar under it doesn't.
 #[test]
 fn the_window_moves_by_its_title_bar_behind_a_modal_dialog() {
-    let mut h = app_harness(WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default()));
-    h.run_steps(6);
-    let font = Dialog::open("font", h.state_mut());
-    h.state_mut().dialog = font;
-    h.run_steps(4);
-    assert_eq!(window_drags(&mut h, egui::pos2(300.0, 12.0)), 1, "one drag of the window");
-    assert!(matches!(h.state().dialog, Some(Dialog::Font { .. })) && !h.state().ui.backstage, "Font stays, nothing behind it opened");
+    for mac in [true, false] {
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        a.integrated_titlebar = mac;
+        let mut h = app_harness(a);
+        h.run_steps(6);
+        let font = Dialog::open("font", h.state_mut());
+        h.state_mut().dialog = font;
+        h.run_steps(4);
+        assert_eq!(window_drags(&mut h, egui::pos2(300.0, 12.0)), usize::from(mac), "macOS: {mac}");
+        assert!(matches!(h.state().dialog, Some(Dialog::Font { .. })) && !h.state().ui.backstage, "Font stays, nothing behind it opened");
+    }
 }
 
 /// #5124: where a dialog reaches over the title bar (a short window), a drag on the dialog is the
 /// dialog's own and doesn't move the window.
 #[test]
 fn a_drag_on_a_dialog_over_the_title_bar_doesnt_move_the_window() {
-    let a = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.integrated_titlebar = true;
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 420.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
@@ -1965,5 +1971,7 @@ fn a_drag_on_a_dialog_over_the_title_bar_doesnt_move_the_window() {
     let rect = h.ctx.memory(|m| m.area_rect(egui::Id::unique(("dialog", "Font")))).expect("the dialog is open");
     let at = egui::pos2(rect.center().x, rect.top() + 8.0);
     assert!(at.y < 30.0, "the dialog reaches over the title bar: {rect:?}");
-    assert_eq!(window_drags(&mut h, at), 0);
+    assert_eq!(window_drags(&mut h, at), 0, "a drag on its title");
+    let rect = h.ctx.memory(|m| m.area_rect(egui::Id::unique(("dialog", "Font")))).expect("the dialog is open");
+    assert_eq!(window_drags(&mut h, egui::pos2(rect.center().x, rect.top() + 1.0)), 0, "nor just inside its edge");
 }
