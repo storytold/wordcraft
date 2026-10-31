@@ -161,6 +161,7 @@ impl WordApp {
             font_generation: _,
             integrated_titlebar: _,
             mac_titlebar: _,
+            frameless: _,
             control_rx: _,
             updates_rt: _,
             // The control channel's screenshots and input go to the active window, whichever it is.

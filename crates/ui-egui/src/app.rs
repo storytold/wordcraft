@@ -99,6 +99,7 @@ impl WordApp {
             printing: Default::default(),
             print_feedback_seen: None,
             integrated_titlebar: false,
+            frameless: false,
             mac_titlebar: chrome::MacTitleBar::default(),
             updates_rt: updates_ui::Runtime::default(),
             control_rx: None,
@@ -437,6 +438,7 @@ impl WordApp {
         if !moved(self) {
             self.sync_title_and_frame(&ctx, t0);
         }
+        caption_buttons::resize_edges(self, &ctx);
         // The synthetic step this frame took is done even when drawing ended early.
         self.flush_shot_and_synthetic(&ctx);
     }

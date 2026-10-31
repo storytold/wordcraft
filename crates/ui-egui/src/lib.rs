@@ -26,6 +26,7 @@ pub mod a11y;
 pub mod a11y_pane;
 pub mod async_saves;
 pub mod autoscroll;
+pub mod caption_buttons;
 pub mod backstage;
 pub mod canvas;
 pub mod caret_glide;
@@ -74,6 +75,7 @@ pub mod table_ruler;
 pub mod theme;
 pub mod updates_ui;
 pub mod widgets;
+pub(crate) mod window_chrome;
 pub mod window_close;
 pub mod window_geometry;
 mod window_ui;
@@ -626,6 +628,8 @@ pub struct WordApp {
     parked: std::collections::HashMap<u64, documents::Parked>,
     /// The open windows ([`windows`]).
     pub(crate) windows: windows::Windows,
+    /// Linux: the native title bar is replaced by the app's own caption controls.
+    pub frameless: bool,
     /// The document the last print job was for: its window reports how the job went.
     print_document: Option<u64>,
 }
