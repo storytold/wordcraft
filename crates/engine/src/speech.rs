@@ -802,9 +802,9 @@ impl SystemSpeaker {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-/// The Read Aloud worker loop; it owns the system speaker for one reading. It drops the speaker
-/// before clearing `running`, so a new reading cannot start a second host while this one is still
-/// shutting down.
+/// The Read Aloud worker loop; it owns the system speaker for one reading. While the speaker
+/// shuts down it keeps `running` set, so a new reading cannot start a second host, but it
+/// releases the state lock so UI reads are not blocked by the bounded host shutdown.
 fn worker(shared: &(Mutex<Shared>, Condvar), backend: Backend) {
     let (m, cv) = shared;
     let mut speaker = SystemSpeaker::new();
@@ -816,16 +816,22 @@ fn worker(shared: &(Mutex<Shared>, Condvar), backend: Backend) {
                 s = cv.wait(s).unwrap_or_else(PoisonError::into_inner);
             }
             if s.state == State::Stopped {
-                drop(speaker);
-                s.running = false;
+                if let Some(now) = finish_worker(m, s, speaker) {
+                    reading = now;
+                    speaker = SystemSpeaker::new();
+                    continue;
+                }
                 return;
             }
             match s.queue.get(s.index) {
                 Some(u) => (u.text.clone(), u.lang.clone(), s.generation, s.rate, s.reading),
                 None => {
                     s.state = State::Stopped;
-                    drop(speaker);
-                    s.running = false;
+                    if let Some(now) = finish_worker(m, s, speaker) {
+                        reading = now;
+                        speaker = SystemSpeaker::new();
+                        continue;
+                    }
                     return;
                 }
             }
@@ -857,8 +863,11 @@ fn worker(shared: &(Mutex<Shared>, Condvar), backend: Backend) {
                 s.index += 1;
                 if s.index >= s.queue.len() {
                     s.state = State::Stopped;
-                    drop(speaker);
-                    s.running = false;
+                    if let Some(now) = finish_worker(m, s, speaker) {
+                        reading = now;
+                        speaker = SystemSpeaker::new();
+                        continue;
+                    }
                     return;
                 }
             }
@@ -866,11 +875,31 @@ fn worker(shared: &(Mutex<Shared>, Condvar), backend: Backend) {
             Spoken::Failed(e) => {
                 s.state = State::Stopped;
                 s.error = Some(e);
-                drop(speaker);
-                s.running = false;
+                if let Some(now) = finish_worker(m, s, speaker) {
+                    reading = now;
+                    speaker = SystemSpeaker::new();
+                    continue;
+                }
                 return;
             }
         }
+    }
+}
+
+/// Finish this worker without holding the state lock while the speaker shuts down. `running`
+/// stays set, so `ensure_worker` cannot start a second worker during the bounded host shutdown.
+/// Returns the latest reading when a new one started meanwhile, so the worker can keep it with a
+/// fresh speaker; otherwise clears `running` and returns `None`.
+#[cfg(not(target_arch = "wasm32"))]
+fn finish_worker(m: &Mutex<Shared>, s: MutexGuard<Shared>, speaker: SystemSpeaker) -> Option<u64> {
+    drop(s);
+    drop(speaker);
+    let mut state = lock(m);
+    if state.state == State::Playing && !state.queue.is_empty() {
+        Some(state.reading)
+    } else {
+        state.running = false;
+        None
     }
 }
 

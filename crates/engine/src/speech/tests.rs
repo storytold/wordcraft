@@ -224,6 +224,38 @@ fn a_new_reading_bumps_the_speaker_generation() {
 }
 
 #[test]
+#[cfg(not(target_arch = "wasm32"))]
+/// A reading started while the old host shuts down keeps the worker and its `running` flag.
+fn finishing_a_worker_keeps_a_reading_started_during_shutdown() {
+    let utterance = Utterance { text: "One.".into(), start: Pos::body(0, 0), end: Pos::body(0, 4), lang: None };
+    let new_reading = std::sync::Mutex::new(Shared {
+        queue: vec![utterance],
+        index: 0,
+        state: State::Playing,
+        rate: 1.0,
+        generation: 0,
+        reading: 7,
+        error: None,
+        running: true,
+    });
+    assert_eq!(finish_worker(&new_reading, lock(&new_reading), SystemSpeaker::new()), Some(7));
+    assert!(lock(&new_reading).running, "the worker keeps the new reading");
+
+    let stopped = std::sync::Mutex::new(Shared {
+        queue: Vec::new(),
+        index: 0,
+        state: State::Stopped,
+        rate: 1.0,
+        generation: 0,
+        reading: 7,
+        error: None,
+        running: true,
+    });
+    assert_eq!(finish_worker(&stopped, lock(&stopped), SystemSpeaker::new()), None);
+    assert!(!lock(&stopped).running);
+}
+
+#[test]
 fn languages_are_detected_from_the_script() {
     for (text, tag) in [
         ("Привет как твои дела?", "ru"),
