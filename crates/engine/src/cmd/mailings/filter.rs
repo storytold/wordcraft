@@ -1,6 +1,6 @@
 use super::merge::refresh;
 use super::recipients::cell;
-use super::*;
+use super::{CmdError, CmdResult, MergeState, Session, Value, json, p};
 
 /// A Filter Recipients comparison.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

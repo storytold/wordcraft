@@ -1,4 +1,4 @@
-use super::*;
+use super::{Fill, FillRule, LineCap, NormalizedF32, Paint, Path, PathBuilder, Rect, Rgb, ShapeKind, Stroke, Surface, Transform, krilla, rgb};
 
 /// Largest page side we write (200", the PDF limit).
 const MAX_SIDE: f32 = 14_400.0;
@@ -89,13 +89,10 @@ pub(crate) fn grown(r: &Rect, g: f32, dx: f32, dy: f32) -> Rect {
 /// blur as the raster renderer, see [`wordcraft_doc::effects::bands`]).
 pub(crate) fn shape_effects(
     s: &mut Surface,
-    kind: ShapeKind,
-    corner: Option<u32>,
+    (kind, corner): (ShapeKind, Option<u32>),
     rect: &Rect,
     fx: &wordcraft_doc::effects::ShapeEffects,
-    filled: bool,
-    stroked: bool,
-    sw: f32,
+    (filled, stroked, sw): (bool, bool, f32),
 ) {
     let sw = if sw.is_finite() { sw.clamp(0.25, 200.0) } else { 0.75 };
     let silhouette = |s: &mut Surface, c: Rgb, a: f32, g: f32, dx: f32, dy: f32| {

@@ -1,5 +1,5 @@
 use super::xml::{Attrs, Ev, events, get, length, local};
-use super::*;
+use super::{Align, Arc, Columns, Fmt, HashMap, Kind, Rgb, VAlign, model};
 
 // ---------------------------------------------------------------------------------------------
 // Import
@@ -86,6 +86,58 @@ pub(super) fn column_sep(a: &Attrs) -> bool {
     get(a, "style:style") != Some("none")
 }
 
+fn default_font(a: &Attrs) -> Option<String> {
+    let family = get(a, "fo:font-family").or_else(|| get(a, "style:font-name"))?;
+    let family = family.split(',').next().unwrap_or("").trim().trim_matches(['\'', '"']);
+    (!family.is_empty() && !model::is_mono(family)).then(|| family.to_string())
+}
+
+fn text_properties(a: &Attrs, style: &mut StyleInfo) {
+    let fmt = &mut style.fmt;
+    let is_bold = |weight: &str| {
+        let weight = weight.trim();
+        weight.eq_ignore_ascii_case("bold") || weight.parse::<u32>().is_ok_and(|n| n >= 600)
+    };
+    // Latin attributes take precedence; Asian and complex-script attributes are fallbacks.
+    if let Some(weight) = get(a, "fo:font-weight").or_else(|| get(a, "style:font-weight-asian")).or_else(|| get(a, "style:font-weight-complex")) {
+        fmt.bold = Some(is_bold(weight));
+    }
+    let is_italic = |value: &str| value.trim().eq_ignore_ascii_case("italic") || value.trim().eq_ignore_ascii_case("oblique");
+    if let Some(value) = get(a, "fo:font-style").or_else(|| get(a, "style:font-style-asian")).or_else(|| get(a, "style:font-style-complex")) {
+        fmt.italic = Some(is_italic(value));
+    }
+    let is_not_none = |value: &str| !value.trim().eq_ignore_ascii_case("none");
+    if let Some(value) = get(a, "style:text-underline-style").or_else(|| get(a, "style:text-underline-type")) {
+        fmt.underline = Some(is_not_none(value));
+    }
+    if let Some(value) = get(a, "style:text-line-through-style").or_else(|| get(a, "style:text-line-through-type")) {
+        fmt.strike = Some(is_not_none(value));
+    }
+    if let Some(value) = get(a, "style:text-position") {
+        let first = value.split_whitespace().next().unwrap_or("");
+        let pct = first.trim_end_matches('%').parse::<f32>().unwrap_or(0.0);
+        fmt.sup = Some(first.eq_ignore_ascii_case("super") || pct > 0.0);
+        fmt.sub = Some(first.eq_ignore_ascii_case("sub") || pct < 0.0);
+    }
+    if let Some(color) = get(a, "fo:color").and_then(model::parse_color) {
+        fmt.color = Some(color);
+    }
+    if let Some(color) = get(a, "fo:background-color").and_then(model::parse_color) {
+        fmt.background = Some(color);
+    }
+    if let Some(size) = get(a, "fo:font-size").and_then(length).filter(|size| (1.0..=1638.0).contains(size)) {
+        fmt.size = Some(size);
+    }
+    if let Some(family) = get(a, "fo:font-family").or_else(|| get(a, "style:font-name")) {
+        let family = family.split(',').next().unwrap_or("").trim().trim_matches(['\'', '"']).to_string();
+        if model::is_mono(&family) || get(a, "style:font-pitch").is_some_and(|pitch| pitch.trim().eq_ignore_ascii_case("fixed")) {
+            fmt.code = Some(true);
+        } else if !family.is_empty() {
+            fmt.font = model::kept_font(&family);
+        }
+    }
+}
+
 #[derive(Default)]
 pub(super) struct Styles {
     map: HashMap<String, StyleInfo>,
@@ -118,70 +170,11 @@ impl Styles {
                 }
                 "default-style" if q.starts_with("style:") => in_default = get(&a, "style:family") == Some("paragraph"),
                 "text-properties" if in_default && cur.is_none() => {
-                    if let Some(fam) = get(&a, "fo:font-family").or_else(|| get(&a, "style:font-name")) {
-                        let fam = fam.split(',').next().unwrap_or("").trim().trim_matches(['\'', '"']);
-                        if !fam.is_empty() && !model::is_mono(fam) {
-                            self.default_font = Some(fam.to_string());
-                        }
-                    }
+                    self.default_font = default_font(&a);
                 }
                 "text-properties" => {
                     if let Some((_, s)) = &mut cur {
-                        let d = &mut s.fmt;
-                        let is_bold = |w: &str| {
-                            let w = w.trim();
-                            w.eq_ignore_ascii_case("bold") || w.parse::<u32>().is_ok_and(|n| n >= 600)
-                        };
-                        // The fo: value governs Latin text; the Asian and complex-script values
-                        // stand in only when a style sets nothing else.
-                        let weight =
-                            get(&a, "fo:font-weight").or_else(|| get(&a, "style:font-weight-asian")).or_else(|| get(&a, "style:font-weight-complex"));
-                        if let Some(w) = weight {
-                            d.bold = Some(is_bold(w));
-                        }
-                        let is_italic = |v: &str| {
-                            let v = v.trim();
-                            v.eq_ignore_ascii_case("italic") || v.eq_ignore_ascii_case("oblique")
-                        };
-                        let style =
-                            get(&a, "fo:font-style").or_else(|| get(&a, "style:font-style-asian")).or_else(|| get(&a, "style:font-style-complex"));
-                        if let Some(v) = style {
-                            d.italic = Some(is_italic(v));
-                        }
-                        let is_not_none = |v: &str| !v.trim().eq_ignore_ascii_case("none");
-                        // The line style decides; the line type counts only when no style is given.
-                        let ul = get(&a, "style:text-underline-style").or_else(|| get(&a, "style:text-underline-type"));
-                        if let Some(v) = ul {
-                            d.underline = Some(is_not_none(v));
-                        }
-                        let strike = get(&a, "style:text-line-through-style").or_else(|| get(&a, "style:text-line-through-type"));
-                        if let Some(v) = strike {
-                            d.strike = Some(is_not_none(v));
-                        }
-                        if let Some(v) = get(&a, "style:text-position") {
-                            let v = v.trim();
-                            let first = v.split_whitespace().next().unwrap_or("");
-                            let pct = first.trim_end_matches('%').parse::<f32>().unwrap_or(0.0);
-                            d.sup = Some(first.eq_ignore_ascii_case("super") || pct > 0.0);
-                            d.sub = Some(first.eq_ignore_ascii_case("sub") || pct < 0.0);
-                        }
-                        if let Some(c) = get(&a, "fo:color").and_then(model::parse_color) {
-                            d.color = Some(c);
-                        }
-                        if let Some(c) = get(&a, "fo:background-color").and_then(model::parse_color) {
-                            d.background = Some(c);
-                        }
-                        if let Some(sz) = get(&a, "fo:font-size").and_then(length).filter(|v| *v >= 1.0 && *v <= 1638.0) {
-                            d.size = Some(sz);
-                        }
-                        if let Some(fam) = get(&a, "fo:font-family").or_else(|| get(&a, "style:font-name")) {
-                            let fam = fam.split(',').next().unwrap_or("").trim().trim_matches(['\'', '"']).to_string();
-                            if model::is_mono(&fam) || get(&a, "style:font-pitch").is_some_and(|p| p.trim().eq_ignore_ascii_case("fixed")) {
-                                d.code = Some(true);
-                            } else if !fam.is_empty() {
-                                d.font = model::kept_font(&fam);
-                            }
-                        }
+                        text_properties(&a, s);
                     }
                 }
                 "table-properties" => {
