@@ -255,7 +255,7 @@ impl NumFormat {
     pub fn from_ooxml(s: &str) -> NumFormat {
         NumFormat::ALL.into_iter().find(|f| f.ooxml() == s).unwrap_or(NumFormat::Decimal)
     }
-    /// Format `n` (1-based). Formats WordCraft doesn't draw yet (Hebrew, Hindi, Thai,
+    /// Format `n` (1-based). Formats WordCraft doesn't draw yet (Hebrew, Hindi,
     /// Vietnamese, text amounts) show decimal, as do values past a sequence's end
     /// (the 21st item of ①…⑳).
     pub fn format(self, n: u32) -> String {
@@ -315,12 +315,24 @@ impl NumFormat {
             | NumFormat::HindiNumbers
             | NumFormat::HindiCounting
             | NumFormat::ThaiLetters
-            | NumFormat::ThaiNumbers
-            | NumFormat::ThaiCounting
-            | NumFormat::BahtText
             | NumFormat::DollarText => n.to_string(),
+            NumFormat::ThaiNumbers => crate::thai_numbers::thai_digits(n),
+            NumFormat::ThaiCounting => crate::thai_numbers::thai_counting_int(n),
+            NumFormat::BahtText => crate::thai_numbers::baht_text_int(n),
         }
     }
+}
+
+/// Thai Baht words for a floating-point amount (used by the `{ BAHTTEXT … }` field).
+/// Returns `None` for non-finite values.
+pub fn baht_text_f64(x: f64) -> Option<String> {
+    crate::thai_numbers::baht_text_f64(x)
+}
+
+/// Parse a decimal token (e.g. `"1.005"`) directly from the field instruction text,
+/// rounding to satang (2 d.p.) at the string boundary to avoid f64 precision loss.
+pub fn parse_baht_token(s: &str) -> Option<f64> {
+    crate::thai_numbers::parse_baht_token(s)
 }
 
 /// Chicago Manual of Style note marks: *, †, ‡, §, then doubled (**, ††, …) and so on.
