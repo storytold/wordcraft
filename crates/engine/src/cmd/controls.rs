@@ -7,7 +7,9 @@
 //! typing and deleting commands.
 
 use serde_json::{Value, json};
-use wordcraft_doc::control::{ContentControl, ControlKind, ControlLock, ControlRange, ListItem, MAX_CONTROL_TEXT, MAX_LIST_ITEMS};
+use wordcraft_doc::control::{
+    ContentControl, ControlKind, ControlLock, ControlRange, ListItem, MAX_CONTROL_NESTING, MAX_CONTROL_TEXT, MAX_LIST_ITEMS,
+};
 use wordcraft_doc::para::OBJ;
 use wordcraft_doc::props::{CharProps, Rgb, TextColor};
 use wordcraft_doc::styles::{Style, StyleKind};
@@ -419,6 +421,15 @@ pub fn restore_placeholder(s: &mut Session) -> Result<(), CmdError> {
 // ---------------------------------------------------------------------------------------------
 // Insert
 
+/// Refuse `adds` new controls around `a..b` when the deepest nesting there would pass the limit
+/// (a `.docx` holding them wouldn't reopen, #3618).
+fn check_nesting(s: &Session, a: &Pos, b: &Pos, adds: usize) -> Result<(), CmdError> {
+    if s.doc.control_nesting(a, b).saturating_add(adds) > MAX_CONTROL_NESTING {
+        return Err(CmdError::Failed(format!("content controls can't nest more than {MAX_CONTROL_NESTING} deep")));
+    }
+    Ok(())
+}
+
 fn insert(s: &mut Session, v: &Value, kind: ControlKind) -> CmdResult {
     let mut ctl = ContentControl::new(kind);
     ctl.id = Some(new_id(s));
@@ -459,6 +470,7 @@ fn insert(s: &mut Session, v: &Value, kind: ControlKind) -> CmdResult {
     let wraps = a != b && a.path == b.path && matches!(ctl.kind, ControlKind::RichText | ControlKind::Text { .. } | ControlKind::Picture);
     let base = s.doc.para_at(&a).map(|p| content_props(&s.doc, &p.props_of_char(a.off).clone())).unwrap_or_default();
     if wraps {
+        check_nesting(s, &a, &b, 1)?;
         s.doc.insert_object(&b, InlineObject::ControlEnd, &base)?;
         let start = a.clone();
         s.doc.insert_object(&start, InlineObject::ControlStart { control: Box::new(ctl) }, &base)?;
@@ -468,6 +480,7 @@ fn insert(s: &mut Session, v: &Value, kind: ControlKind) -> CmdResult {
     }
     let at = delete_selection(s)?;
     let at = s.doc.typing_pos(&at);
+    check_nesting(s, &at, &at, 1)?;
     let (text, props) = match &mut ctl.kind {
         ControlKind::CheckBox { checked, checked_char, unchecked_char, .. } => {
             ((if *checked { *checked_char } else { *unchecked_char }).to_string(), base.clone())
@@ -505,6 +518,8 @@ fn insert_block(s: &mut Session, mut ctl: ContentControl, a: &Pos, b: &Pos) -> C
         i.id = ctl.id.map(|x| x + 1);
         i
     });
+    let last_len = s.doc.para(story, &last).map(|p| p.len()).unwrap_or(0);
+    check_nesting(s, &Pos::new(story, a.path.clone(), 0), &Pos::new(story, last.clone(), last_len), 1 + usize::from(item.is_some()))?;
     if empty && !ctl.placeholder_shown().is_empty() {
         ctl.showing_placeholder = true;
         let props = placeholder_props(s, &base);
@@ -800,9 +815,10 @@ mod tests {
 #[cfg(test)]
 mod editing_tests {
     use serde_json::json;
-    use wordcraft_doc::StoryRef;
-    use wordcraft_doc::control::ControlKind;
+    use wordcraft_doc::control::{ControlKind, MAX_CONTROL_NESTING};
+    use wordcraft_doc::{Block, Blocks, InlineObject, StoryRef};
 
+    use crate::Selection;
     use crate::Session;
 
     fn run(s: &mut Session, id: &str, v: serde_json::Value) -> serde_json::Value {
@@ -1021,5 +1037,114 @@ mod editing_tests {
             assert!(kinds.contains(&k), "{k:?} in {kinds:?}");
         }
         assert_eq!(doc.plain_text(StoryRef::Body), s.doc.plain_text(StoryRef::Body));
+    }
+
+    /// Control start markers in a block list, at any table depth (`walk_controls` stops at 16).
+    fn starts(bl: &Blocks) -> usize {
+        bl.iter()
+            .map(|b| match &**b {
+                Block::Para(p) => p.objects.iter().filter(|o| matches!(o, InlineObject::ControlStart { .. })).count(),
+                Block::Table(t) => t.rows.iter().flat_map(|r| r.cells.iter()).map(|c| starts(&c.blocks)).sum(),
+            })
+            .sum()
+    }
+    fn controls(d: &wordcraft_doc::Document) -> usize {
+        starts(&d.body) + d.parts.values().map(|p| starts(&p.blocks)).sum::<usize>()
+    }
+    /// Save as .docx and reopen; the reopened document's control count.
+    fn reopened(s: &Session) -> usize {
+        let doc = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap_or_else(|e| panic!("reopen: {e}"));
+        controls(&doc)
+    }
+    fn whole_body(s: &Session) -> usize {
+        s.doc.control_nesting(&s.doc.start_of(StoryRef::Body), &s.doc.end_of(StoryRef::Body))
+    }
+
+    /// Nested controls stop at the limit, so the .docx reopens: 126 used to fail with "XML nesting
+    /// too deep" (#3618). A refused insert leaves the document as it was.
+    #[test]
+    fn nested_controls_stop_where_a_docx_still_reopens() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        for _ in 0..MAX_CONTROL_NESTING {
+            run(&mut s, "developer.plainText", json!({}));
+        }
+        let before = s.doc.clone();
+        let e = s.run("developer.plainText", &json!({})).unwrap_err();
+        assert!(e.to_string().contains("can't nest more than 64"), "{e}");
+        assert_eq!(s.doc, before);
+        assert_eq!(reopened(&s), MAX_CONTROL_NESTING);
+
+        // Block controls around the whole document, each outside the last; a repeating section
+        // adds two.
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        run(&mut s, "text.insert", json!({"text": "Form"}));
+        for _ in 0..MAX_CONTROL_NESTING - 1 {
+            run(&mut s, "select.all", json!({}));
+            run(&mut s, "developer.richText", json!({}));
+        }
+        run(&mut s, "select.all", json!({}));
+        assert!(s.run("developer.repeatingSection", &json!({})).is_err());
+        run(&mut s, "select.all", json!({}));
+        run(&mut s, "developer.richText", json!({}));
+        run(&mut s, "select.all", json!({}));
+        assert!(s.run("developer.richText", &json!({})).is_err());
+        assert_eq!(reopened(&s), MAX_CONTROL_NESTING);
+        assert_eq!(text(&s), "Form");
+    }
+
+    /// Tables and the text box around a control count too: 24 nested tables leave room for 88
+    /// controls in a .docx, and a text box's content is written inside the controls around it.
+    #[test]
+    fn nesting_counts_controls_around_tables_and_text_boxes() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        for _ in 0..24 {
+            run(&mut s, "insert.table", json!({"rows": 1, "cols": 1}));
+        }
+        for _ in 0..MAX_CONTROL_NESTING {
+            run(&mut s, "developer.plainText", json!({}));
+        }
+        assert!(s.run("developer.plainText", &json!({})).is_err());
+        assert_eq!(reopened(&s), MAX_CONTROL_NESTING);
+
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        for _ in 0..40 {
+            run(&mut s, "developer.richText", json!({}));
+        }
+        run(&mut s, "insert.textBox", json!({"text": "Box"}));
+        assert!(matches!(s.sel.focus.story, StoryRef::Part(_)));
+        for _ in 0..MAX_CONTROL_NESTING - 40 {
+            run(&mut s, "developer.plainText", json!({}));
+        }
+        assert!(s.run("developer.plainText", &json!({})).is_err());
+        assert_eq!(reopened(&s), MAX_CONTROL_NESTING);
+    }
+
+    /// Pasting nested controls into nested controls keeps the text and drops only the markers
+    /// past the limit; 64 inside 64 used to save a .docx that wouldn't reopen.
+    #[test]
+    fn pasted_controls_past_the_limit_keep_their_text() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        run(&mut s, "text.insert", json!({"text": "Deep"}));
+        run(&mut s, "text.newParagraph", json!({}));
+        let first = |s: &Session| {
+            let start = s.doc.start_of(StoryRef::Body);
+            let len = s.doc.para_at(&start).map(|p| p.len()).unwrap_or(0);
+            Selection { anchor: start.clone(), focus: wordcraft_doc::Pos { off: len, ..start } }
+        };
+        for _ in 0..MAX_CONTROL_NESTING {
+            s.sel = first(&s);
+            run(&mut s, "developer.richText", json!({}));
+        }
+        s.sel = first(&s);
+        run(&mut s, "edit.copy", json!({}));
+        s.sel = Selection::caret(s.doc.end_of(StoryRef::Body));
+        for _ in 0..MAX_CONTROL_NESTING - 10 {
+            run(&mut s, "developer.plainText", json!({}));
+        }
+        run(&mut s, "edit.paste", json!({}));
+        assert_eq!(text(&s).matches("Deep").count(), 2, "{}", text(&s));
+        assert_eq!(whole_body(&s), MAX_CONTROL_NESTING);
+        assert_eq!(controls(&s.doc), 2 * MAX_CONTROL_NESTING);
+        assert_eq!(reopened(&s), 2 * MAX_CONTROL_NESTING);
     }
 }
