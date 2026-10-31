@@ -309,10 +309,22 @@ fn paint_clipboard_to_insert(pen: &Pen, name: &str) -> bool {
         }
         "bangla" | "bengali" => {
             pen.rect(2.0, 3.0, 18.0, 17.0, c);
-            pen.text(10.0, 10.0, 11.0, "অ", a, true);
+            // 'ক' drawn as strokes, like 'あ' in translate: the interface fonts need not carry
+            // Bengali, and a letter without a glyph causes missing glyph panics or empty boxes.
+            pen.line_c(&[(6.0, 7.5), (14.0, 7.5)], a);
+            pen.line_c(&[(12.5, 7.5), (12.5, 14.5)], a);
+            pen.line_c(&[(12.5, 10.5), (7.5, 10.5)], a);
+            pen.line_c(&[(7.5, 10.5), (10.0, 14.5)], a);
+            pen.line_c(&[(10.0, 14.5), (12.5, 10.5)], a);
         }
         "banglaConverter" => {
-            pen.text(6.0, 8.0, 8.0, "অ", a, true);
+            // 'ক' drawn as strokes at top-left:
+            pen.line_c(&[(4.0, 6.0), (9.0, 6.0)], a);
+            pen.line_c(&[(8.0, 6.0), (8.0, 11.0)], a);
+            pen.line_c(&[(8.0, 8.5), (5.0, 8.5)], a);
+            pen.line_c(&[(5.0, 8.5), (6.5, 11.0)], a);
+            pen.line_c(&[(6.5, 11.0), (8.0, 8.5)], a);
+            // 'A' at bottom-right and diagonal transition line:
             pen.text(14.0, 12.0, 8.0, "A", c, true);
             pen.line_c(&[(6.0, 14.0), (14.0, 6.0)], a);
         }

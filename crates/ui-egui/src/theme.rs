@@ -1098,7 +1098,9 @@ mod tests {
                 || file.starts_with("canvas/")
                 || file == "lib.rs"
                 || file == "theme.rs"
-                || file.starts_with("dialogs/") =>
+                || file.starts_with("dialogs/")
+                || file == "tests.rs"
+                || file.starts_with("tests/") =>
             {
                 c == '\u{0964}' || c == '\u{0965}' || ('\u{0980}'..='\u{09ff}').contains(&c)
             }
