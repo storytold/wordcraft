@@ -6747,6 +6747,28 @@ fn a_drop_before_font_warm_up_is_not_lost() {
     let _ = std::fs::remove_file(&path);
 }
 
+/// #3859: a file dropped while a modal dialog is open does nothing: it would insert a picture or
+/// open a document behind the dialog, and an opened document closed the dialog.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_drop_behind_a_modal_dialog_does_nothing() {
+    let (mut app, ctx) = (app(), egui::Context::default());
+    app.dialog = dialogs::Dialog::open("font", &mut app);
+    let path = std::env::temp_dir().join(format!("wordcraft-drop-modal-{}.txt", std::process::id()));
+    std::fs::write(&path, b"dropped text").expect("write the dropped document");
+    let mut raw = shot_raw(egui::vec2(640.0, 480.0), false);
+    raw.dropped_files.push(std::sync::Arc::new(DroppedText(path.clone())));
+    app.raw_input_hook(&ctx, &mut raw);
+    ctx.run_ui(raw, |ui| {
+        app.logic(ui.ctx());
+        app.ui(ui);
+    })
+    .drop_without_applying_deltas();
+    assert_eq!(app.session.doc.plain_text(wordcraft_doc::StoryRef::Body), "", "nothing opened behind the dialog");
+    assert!(matches!(app.dialog, Some(dialogs::Dialog::Font { .. })), "the dialog stays");
+    let _ = std::fs::remove_file(&path);
+}
+
 /// Wayland may leave `ViewportInfo::inner_rect` unknown: capture geometry then uses the same
 /// RawInput frame's screen rect and rounds logical points to physical pixels.
 #[test]
