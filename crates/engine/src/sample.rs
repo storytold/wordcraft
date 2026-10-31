@@ -1,7 +1,7 @@
 //! Built-in sample documents and templates (original text, generated in code).
 
 use wordcraft_doc::para::InlineObject;
-use wordcraft_doc::props::{Align, Border, BorderStyle, Borders, CharProps, NumRef, Rgb, TabAlign, TabLeader, TabStop, TextColor};
+use wordcraft_doc::props::{Align, Border, BorderStyle, Borders, CharProps, LineSpacing, NumRef, Rgb, TabAlign, TabLeader, TabStop, TextColor};
 use wordcraft_doc::{Block, Document, ListKind, Paragraph, PartKind, Table, para_block};
 
 fn para(text: &str) -> Paragraph {
@@ -207,6 +207,123 @@ pub fn report() -> Document {
     d
 }
 
+/// Times New Roman at 14 pt — the typeface GOST R 7.0.97 recommends for reports.
+fn gost_body() -> CharProps {
+    CharProps { font: Some("Times New Roman".into()), size: Some(14.0), ..Default::default() }
+}
+
+/// A GOST body paragraph: one-and-a-half spacing at the given alignment.
+fn gost_para(text: &str, align: Align) -> Paragraph {
+    let mut p = Paragraph::with_text(text, gost_body());
+    p.props.align = Some(align);
+    p.props.line_spacing = Some(LineSpacing::Multiple(1.5));
+    p
+}
+
+/// A justified GOST body paragraph with the standard 1.25 cm first-line indent.
+fn gost_indented(text: &str) -> Paragraph {
+    let mut p = gost_para(text, Align::Justify);
+    p.props.indent_first = Some(1.25 * 72.0 / 25.4);
+    p
+}
+
+/// A structural-element heading (РЕФЕРАТ, СОДЕРЖАНИЕ, ВВЕДЕНИЕ, …): centred, bold, in
+/// capital letters, one-and-a-half spacing, from a new page as GOST 7.32 requires.
+fn gost_heading(text: &str) -> Paragraph {
+    let mut p = Paragraph::with_text(text, CharProps { style: Some("Heading1".into()), bold: Some(true), size: Some(14.0), ..gost_body() });
+    p.props.align = Some(Align::Center);
+    p.props.line_spacing = Some(LineSpacing::Multiple(1.5));
+    p.props.page_break_before = Some(true);
+    p
+}
+
+/// A numbered section or subsection heading (GOST 7.32-2017 §6.2.3): from the paragraph
+/// indent, after the number, in bold with an initial capital — not centred (that is for
+/// structural elements), no trailing dot. Sections start on a new page (§6.2.1),
+/// subsections flow on.
+fn gost_section(text: &str, level: &str, new_page: bool) -> Paragraph {
+    let mut p = Paragraph::with_text(text, CharProps { style: Some(level.into()), bold: Some(true), size: Some(14.0), ..gost_body() });
+    p.props.line_spacing = Some(LineSpacing::Multiple(1.5));
+    p.props.indent_first = Some(1.25 * 72.0 / 25.4);
+    p.props.page_break_before = Some(new_page);
+    p
+}
+
+/// A numbered research report per GOST 7.32-2017: A4 with 30/15/20/20 mm margins, a title
+/// page, then the abstract (РЕФЕРАТ), contents, introduction, numbered sections,
+/// conclusion and sources, with centred page numbers in the footer.
+pub fn gost_report() -> Document {
+    const MM: f32 = 72.0 / 25.4;
+    let mut d = Document::new();
+    d.core.title = "Отчёт о научно-исследовательской работе".into();
+    let mut b: Vec<Block> = vec![Block::Para(gost_para("НАИМЕНОВАНИЕ ОРГАНИЗАЦИИ", Align::Center)), Block::Para(para(""))];
+    // Title page: the report type in the middle, the city and year at the bottom.
+    b.push(Block::Para(gost_para("ОТЧЁТ", Align::Center)));
+    b.push(Block::Para(gost_para("О НАУЧНО-ИССЛЕДОВАТЕЛЬСКОЙ РАБОТЕ", Align::Center)));
+    b.push(Block::Para(gost_para("на тему: «Наименование темы»", Align::Center)));
+    for _ in 0..3 {
+        b.push(Block::Para(para("")));
+    }
+    b.push(Block::Para(gost_para("Научный руководитель ________________ И. О. Фамилия", Align::Right)));
+    b.push(Block::Para(gost_para("Исполнитель ________________ И. О. Фамилия", Align::Right)));
+    for _ in 0..3 {
+        b.push(Block::Para(para("")));
+    }
+    b.push(Block::Para(gost_para("Город", Align::Center)));
+    b.push(Block::Para(gost_para(&crate::cmd::insert::format_date("yyyy"), Align::Center)));
+    // РЕФЕРАТ: what the report holds, the keywords, then the abstract itself.
+    b.push(Block::Para(gost_heading("РЕФЕРАТ")));
+    b.push(Block::Para(gost_indented("Отчёт содержит N с., N рис., N табл., N источников, N прил.")));
+    b.push(Block::Para(gost_indented("Перечислите от пяти до пятнадцати ключевых слов или словосочетаний из текста отчёта прописными буквами.")));
+    b.push(Block::Para(gost_indented("Объект исследования — опишите, что изучается.")));
+    b.push(Block::Para(gost_indented("Цель работы — сформулируйте, что должно быть достигнуто.")));
+    b.push(Block::Para(gost_indented("Методы работы — перечислите применённые методы и средства.")));
+    b.push(Block::Para(gost_indented("Результаты — кратко изложите полученные результаты и область их применения.")));
+    // СОДЕРЖАНИЕ.
+    b.push(Block::Para(gost_heading("СОДЕРЖАНИЕ")));
+    b.push(Block::Para(gost_indented("Перечислите разделы, подразделы и приложения отчёта с номерами страниц.")));
+    // ВВЕДЕНИЕ.
+    b.push(Block::Para(gost_heading("ВВЕДЕНИЕ")));
+    b.push(Block::Para(gost_indented("Обоснуйте актуальность темы и современное состояние вопроса.")));
+    b.push(Block::Para(gost_indented("Сформулируйте цель и задачи работы, объект и методы исследования.")));
+    // Numbered sections with a subsection: headings from the paragraph indent, with an
+    // initial capital (§6.2.3), unlike the centred structural elements.
+    b.push(Block::Para(gost_section("1 Методы исследования", "Heading1", true)));
+    b.push(Block::Para(gost_indented("Опишите применённые методы, оборудование и материалы.")));
+    b.push(Block::Para(gost_section("1.1 Методика измерений", "Heading2", false)));
+    b.push(Block::Para(gost_indented("Изложите методику измерений и условия их проведения.")));
+    b.push(Block::Para(gost_section("2 Результаты и их обсуждение", "Heading1", true)));
+    b.push(Block::Para(gost_indented("Изложите полученные результаты и сопоставьте их с известными.")));
+    // ЗАКЛЮЧЕНИЕ and the sources.
+    b.push(Block::Para(gost_heading("ЗАКЛЮЧЕНИЕ")));
+    b.push(Block::Para(gost_indented("Подведите итоги: краткие выводы, оценка полноты решения задач, рекомендации.")));
+    b.push(Block::Para(gost_heading("СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ")));
+    b.push(Block::Para(gost_indented("1. Автор, И. О. Название работы. — Город : Издательство, год. — N с.")));
+    b.push(Block::Para(gost_indented("2. Автор, И. О. Название статьи // Название журнала. — Год. — № N. — С. N–N.")));
+    d.body = b.into_iter().map(std::sync::Arc::new).collect();
+    // A4 with GOST margins: 30 mm on the left for binding, 15 mm on the right, 20 mm top and bottom.
+    let s = &mut d.last_section;
+    // The title page counts in the page numbering but carries no number (§6.3.1).
+    s.title_page = true;
+    s.page_w = 210.0 * MM;
+    s.page_h = 297.0 * MM;
+    s.margin_top = 20.0 * MM;
+    s.margin_bottom = 20.0 * MM;
+    s.margin_left = 30.0 * MM;
+    s.margin_right = 15.0 * MM;
+    // Footer: centred page number.
+    let mut f = Paragraph::new().styled("Footer");
+    f.props.align = Some(Align::Center);
+    let _ = f.insert_object(
+        0,
+        InlineObject::Field { instr: "PAGE".into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new() },
+        &CharProps::default(),
+    );
+    let fid = d.add_part(PartKind::Footer, vec![para_block(f)]);
+    d.last_section.footers.default = Some(fid);
+    d
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,7 +331,7 @@ mod tests {
     #[test]
     fn samples_are_valid() {
         assert_eq!(sample_document().word_count(), 361);
-        for d in [sample_document(), letter(), resume(), report()] {
+        for d in [sample_document(), letter(), resume(), report(), gost_report()] {
             assert!(d.word_count() > 5);
             let l = wordcraft_layout::layout(&d, &mut wordcraft_layout::LayoutCache::new(), &Default::default());
             assert!(!l.pages.is_empty());

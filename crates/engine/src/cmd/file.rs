@@ -219,6 +219,7 @@ fn new(s: &mut Session, v: &Value) -> CmdResult {
         "letter" => crate::sample::letter(),
         "resume" => crate::sample::resume(),
         "report" => crate::sample::report(),
+        "gost-report" => crate::sample::gost_report(),
         _ => normal_document(s),
     };
     s.add_document(doc);
