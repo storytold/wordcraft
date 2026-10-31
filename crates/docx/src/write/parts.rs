@@ -429,13 +429,15 @@ fn write_comments(
                 ("xmlns:mc", "http://schemas.openxmlformats.org/markup-compatibility/2006"),
             ],
         );
-        let pid_of = |cid: u32| comment_paras.iter().find(|(c, _)| *c == cid).map(|(_, p)| p.clone());
+        // Assigned in BTreeMap comment-ID order above, including gaps for missing parts.
+        let pid_of =
+            |cid: u32| comment_paras.binary_search_by_key(&cid, |(c, _)| *c).ok().and_then(|i| comment_paras.get(i)).map(|(_, p)| p.as_str());
         for (cid, c) in &doc.comments {
             let Some(pid) = pid_of(*cid) else { continue };
             let done = if c.resolved { "1" } else { "0" };
             match c.parent.and_then(pid_of) {
-                Some(parent) => w.empty("w15:commentEx", &[("w15:paraId", &pid), ("w15:paraIdParent", &parent), ("w15:done", done)]),
-                None => w.empty("w15:commentEx", &[("w15:paraId", &pid), ("w15:done", done)]),
+                Some(parent) => w.empty("w15:commentEx", &[("w15:paraId", pid), ("w15:paraIdParent", parent), ("w15:done", done)]),
+                None => w.empty("w15:commentEx", &[("w15:paraId", pid), ("w15:done", done)]),
             }
         }
         w.close("w15:commentsEx");

@@ -349,10 +349,40 @@ fn chinese_interface_fonts_load_and_cover_simplified_hanzi() {
 }
 
 #[test]
+fn traditional_chinese_interface_puts_an_installed_traditional_font_first() {
+    needs_catalogs!();
+    assert!(Lang::all().filter(|l| l.prefers_hant()).map(Lang::code).eq(["zh-hant"]));
+    assert!(lang("zh-hant").prefers_hans());
+    assert!(Lang::hant_font_chars().contains(&'說'));
+    let order = |hant: bool, system_cjk: bool| {
+        crate::theme::font_definitions_language(true, false, hant, system_cjk).families[&egui::FontFamily::Proportional].clone()
+    };
+    let is_hant = |n: &String| n.starts_with("system hant ");
+    let hant = order(true, true);
+    assert!(!order(false, true).iter().any(is_hant));
+    assert!(!order(true, false).iter().any(is_hant));
+    let Some(installed) = wordcraft_fonts::system_hant_ui_font(&[]) else {
+        assert_eq!(hant, order(false, true), "no Traditional Chinese font installed: the Simplified Chinese order");
+        return;
+    };
+    let at = hant.iter().position(is_hant).unwrap();
+    assert_eq!(hant[at], format!("system hant {}", installed.family));
+    for f in wordcraft_fonts::ui_cjk_fonts(true) {
+        let embedded = hant.iter().position(|n| *n == format!("{} {}", f.family, f.style)).unwrap();
+        assert!(at < embedded, "{} comes before {}", hant[embedded], hant[at]);
+    }
+    assert!(hant.iter().position(|n| n == "Inter").is_some_and(|i| i < at), "{hant:?}");
+    let ctx = egui::Context::default();
+    ctx.set_fonts(crate::theme::font_definitions_language(true, false, true, true));
+    ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();
+    assert!(ctx.fonts_mut(|f| f.has_glyphs(&egui::FontId::proportional(14.0), "說這為戶")));
+}
+
+#[test]
 fn korean_interface_fonts_load_and_cover_hangul() {
     needs_catalogs!();
     let ctx = egui::Context::default();
-    ctx.set_fonts(crate::theme::font_definitions_language(false, true, true));
+    ctx.set_fonts(crate::theme::font_definitions_language(false, true, false, true));
     ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();
     let covered = ctx.fonts_mut(|f| f.has_glyphs(&egui::FontId::proportional(14.0), "한글"));
     let (catalogs, names) = Lang::cjk_font_text_for(false, true);
@@ -380,7 +410,7 @@ fn cjk_catalogs_are_covered_by_the_embedded_interface_faces() {
     for code in ["zh-hans", "zh-hant", "ja", "ko"] {
         let l = lang(code);
         let ctx = egui::Context::default();
-        ctx.set_fonts(crate::theme::font_definitions_language(l.prefers_hans(), l.prefers_korean(), false));
+        ctx.set_fonts(crate::theme::font_definitions_language(l.prefers_hans(), l.prefers_korean(), l.prefers_hant(), false));
         ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();
         let entries = translations(code);
         let chars: std::collections::BTreeSet<char> =
