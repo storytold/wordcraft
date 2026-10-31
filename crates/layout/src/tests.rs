@@ -8172,6 +8172,32 @@ fn east_asian_text_takes_the_asian_font_and_latin_text_the_latin_font() {
     }
 }
 
+#[test]
+fn japanese_text_takes_a_font_made_for_japanese() {
+    // On macOS, Japanese text in a Latin font fell back to PingFang HK, a Chinese font, though
+    // Hiragino was installed: some kanji took their Chinese forms. Text with kana, and kanji
+    // alone in a run in Japanese (`w:lang w:eastAsia`), now take a Japanese font when one is
+    // installed.
+    let installed = wordcraft_fonts::FontDb::global().families();
+    if !installed.iter().any(|f| wordcraft_fonts::is_japanese_family(f)) {
+        eprintln!("skipped: no Japanese font installed");
+        return;
+    }
+    let mut d = Document::from_text("鳥取\nとっとり");
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, "鳥取".len()), &|c| c.lang_ea = Some("ja-JP".into())).unwrap();
+    let l = lay(&d);
+    let paras: Vec<_> =
+        l.pages.iter().flat_map(|p| p.items.iter()).filter_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).collect();
+    assert_eq!(paras.len(), 2);
+    for (para, text) in paras.into_iter().zip(["鳥取", "とっとり"]) {
+        for c in &para.clusters {
+            let ch = text.get(c.start..c.end).unwrap_or_default();
+            let family = &para.styles[c.style as usize].face.get().family;
+            assert!(wordcraft_fonts::is_japanese_family(family), "{ch:?} in {family}");
+        }
+    }
+}
+
 /// A page total in the footer ("Page X of Y") is filled in after pagination, so it doesn't make
 /// the body lay out a second time; one in the body still does.
 #[test]

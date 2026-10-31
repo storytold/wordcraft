@@ -68,6 +68,9 @@ pub struct ResolvedChar {
     /// East Asian font (Chinese, Japanese and Korean text), when one is set.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub font_ea: Option<String>,
+    /// The language of East Asian text (`w:lang w:eastAsia`, e.g. `ja-JP`), when one is set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lang_ea: Option<String>,
     pub size_cs: f32,
     pub bold_cs: bool,
     pub italic_cs: bool,
@@ -113,6 +116,7 @@ impl ResolvedChar {
             cs: c.cs.unwrap_or(false),
             font_cs: c.font_cs.clone().or_else(|| c.font.clone()).unwrap_or_else(|| crate::styles::BODY_FONT.to_string()),
             font_ea: c.font_ea.clone(),
+            lang_ea: c.lang_ea.clone(),
             size_cs: c.size_cs.or(c.size).unwrap_or(crate::props::DEFAULT_FONT_SIZE).clamp(1.0, 1638.0),
             bold_cs: c.bold_cs.or(c.bold).unwrap_or(false),
             italic_cs: c.italic_cs.or(c.italic).unwrap_or(false),
