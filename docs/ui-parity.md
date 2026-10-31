@@ -330,3 +330,7 @@ labels unambiguous. Those extra-number assignments have not been compared with W
 | 2026-10-25 | trivial | Customize Ribbon, Quick Access Toolbar and Customize Keyboard pickers: filter-as-you-type command search across all commands (label or id, case-insensitive); clearing restores the category scope (#1845) |
 | 2026-10-29 | trivial | Table Properties: the Row, Column and Cell settings apply to every selected row, column and cell, as in Word, not to the caret's alone, so selecting the whole table and unticking Allow row to break across pages keeps every row whole; Allow row to break and Repeat as header row show as mixed when the selected rows differ and change nothing until clicked; the row-height rule box has an accessible name (#4857) |
 | 2026-10-27 | trivial | File › Options › Proofing › AutoCorrect Options opens its dialog with no document open (Start screen); it did nothing there (#4585) |
+
+### Format Painter integration refresh, 2026-10-30
+
+Single-click release applies the armed painter to the target word without trailing spaces and disarms it. Explicit selections retain their scope (#1455, partial). Source and UI regressions are retained after the canvas/input module split. Earlier Windows pointer and browser qualification are historical; current-head hosted validation is pending, and native shortcut/Mint qualification is not newly claimed.
