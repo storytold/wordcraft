@@ -1552,6 +1552,7 @@ fn alt_shift_left_and_right_promote_and_demote_headings_and_list_items() {
     assert_eq!(paras(&s), vec![para("One", Some(0)), para("Two", Some(0))]);
 }
 
+/// Vertical arrows enter the adjacent table from the line beside it.
 #[test]
 fn down_and_up_from_a_line_start_beside_a_table_go_into_it() {
     let mut s = typed("Intro line\n");
@@ -1580,6 +1581,56 @@ fn down_and_up_from_a_line_start_beside_a_table_go_into_it() {
     assert_eq!(s.sel.focus.path, cell(0, 1));
 }
 
+/// #3591: arrows cross a repeated table header without returning to the first row.
+#[test]
+fn table_page_arrows_keep_the_column_and_document_unchanged() {
+    let mut doc = wordcraft_doc::Document::from_text("before\nafter");
+    doc.last_section.page_h = 300.0;
+    doc.last_section.margin_top = 30.0;
+    doc.last_section.margin_bottom = 30.0;
+    let mut table = wordcraft_doc::Table::new(24, 3, 468.0);
+    table.rows[0].props.header = true;
+    for (r, row) in table.rows.iter_mut().enumerate() {
+        for (c, cell) in row.cells.iter_mut().enumerate() {
+            cell.blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&format!("Row {r} Col {c}"), Default::default()))];
+        }
+    }
+    doc.insert_block(StoryRef::Body, &wordcraft_doc::Path::top(1), wordcraft_doc::Block::Table(table)).unwrap();
+    let mut session = Session::new(doc);
+    let layout = session.layout();
+    assert!(layout.pages.len() >= 2, "pages: {}", layout.pages.len());
+    let (_, path) = layout.pages[0]
+        .items
+        .iter()
+        .filter_map(|it| {
+            if let wordcraft_layout::Placed::Lines { path, y, .. } = it { (path.0.len() == 4 && path.0[2] == 1).then_some((*y, path)) } else { None }
+        })
+        .max_by(|a, b| a.0.total_cmp(&b.0))
+        .unwrap();
+    let from = Pos { story: StoryRef::Body, path: path.clone(), off: 0 };
+    let expected = wordcraft_doc::Path(vec![1, path.0[1] + 1, 1, 0]);
+    let before = serde_json::to_value(&session.doc).unwrap();
+    let rev = session.rev();
+    let dirty = session.dirty;
+    run(&mut session, "caret.set", json!({"pos": from}));
+    press(&mut session, "Down").unwrap();
+    assert_eq!(session.sel.focus.path, expected);
+    assert_eq!(session.page_hint, 1);
+    assert!(session.sel.is_collapsed());
+    press(&mut session, "Up").unwrap();
+    assert_eq!(session.sel.focus.path, from.path);
+    assert_eq!(session.page_hint, 0);
+    run(&mut session, "caret.set", json!({"pos": from}));
+    run(&mut session, "caret.down", json!({"extend": true}));
+    assert_eq!(session.sel.anchor.path, from.path);
+    assert_eq!(session.sel.focus.path, expected);
+    assert_eq!(session.page_hint, 1);
+    assert_eq!(serde_json::to_value(&session.doc).unwrap(), before);
+    assert_eq!(session.rev(), rev);
+    assert_eq!(session.dirty, dirty);
+}
+
+/// Alt+X converts a Unicode character to its hexadecimal code and back.
 #[test]
 fn alt_x_toggles_between_a_character_and_its_code() {
     if !cfg!(target_os = "macos") {
