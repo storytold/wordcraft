@@ -4113,7 +4113,8 @@ fn update_toc_clears_stale_field_result_for_docx_span() {
         s
     };
     let b = xml.find(r#"w:fldCharType="begin""#).expect("TOC begin marker present");
-    let e = xml.find(r#"w:fldCharType="end""#).expect("TOC end marker present");
+    // The TOC's end is the last one: the entries' page numbers are `PAGEREF` fields inside it.
+    let e = xml.rfind(r#"w:fldCharType="end""#).expect("TOC end marker present");
     assert!(b < e, "begin marker precedes end marker");
     let inside_field = &xml[b..e];
     let after_field = &xml[e..];
@@ -4296,6 +4297,50 @@ fn toc_page_numbers_follow_headings() {
     for (name, page) in [("Alpha", 2), ("Bravo", 3), ("Charlie", 4)] {
         assert!(t.contains(&format!("{name}\t{page}")), "{name} should be on page {page}: {t}");
     }
+}
+
+/// A hyperlinked TOC's page numbers are `PAGEREF` fields to the headings' bookmarks, as Word
+/// writes them, so updating them in Word follows the headings; they survive a save and reopen.
+#[test]
+fn toc_page_numbers_are_pageref_fields() {
+    let mut s = s();
+    run(&mut s, "references.toc", json!({}));
+    run(&mut s, "caret.docEnd", json!({}));
+    for name in ["Alpha", "Bravo"] {
+        run(&mut s, "text.pageBreak", json!({}));
+        run(&mut s, "text.insert", json!({"text": name}));
+        run(&mut s, "para.heading1", json!({}));
+        run(&mut s, "text.newParagraph", json!({}));
+    }
+    run(&mut s, "references.updateToc", json!({}));
+    let fields: Vec<(String, String)> = s
+        .doc
+        .body
+        .iter()
+        .filter_map(|b| b.as_para())
+        .filter(|p| p.props.style.as_deref() == Some("TOC1"))
+        .flat_map(|p| p.objects.iter())
+        .filter_map(|o| match o {
+            wordcraft_doc::para::InlineObject::Field { instr, result, .. } => Some((instr.clone(), result.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(fields.len(), 2, "{fields:?}");
+    for ((instr, result), page) in fields.iter().zip(["2", "3"]) {
+        let mark = instr.strip_prefix("PAGEREF ").and_then(|r| r.strip_suffix(" \\h")).unwrap_or_else(|| panic!("{instr}"));
+        assert!(mark.starts_with("_Toc") && s.doc.bookmarks().iter().any(|(n, _)| n == mark), "{instr}");
+        assert_eq!(result, page);
+    }
+    let expected = text(&s);
+    assert!(expected.contains("Alpha\t2") && expected.contains("Bravo\t3"), "{expected}");
+    let bytes = crate::io::save_bytes("toc.docx", &s.doc).unwrap();
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut z.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert_eq!(xml.matches("PAGEREF _Toc").count(), 2, "{xml}");
+    let mut s = Session::new(crate::io::open_bytes("toc.docx", &bytes).unwrap());
+    run(&mut s, "references.updateFields", json!({}));
+    assert_eq!(text(&s), expected);
 }
 
 /// Headings numbered through a list carry their numbers, and the level's separator, into the
