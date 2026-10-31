@@ -300,6 +300,10 @@ impl Reader<'_> {
                 table.props.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, ch), old);
             }
         }
+        // No `w:tblStyle`: the default table style formats the table (#5056).
+        if table.props.style.is_none() {
+            table.props.style.clone_from(&self.default_table_style);
+        }
         if let Some(g) = t.child("w:tblGrid") {
             table.grid = g
                 .children("w:gridCol")

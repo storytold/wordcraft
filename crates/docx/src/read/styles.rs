@@ -42,6 +42,25 @@ pub(crate) fn ui_style_name(n: &str) -> String {
     n.to_string()
 }
 
+/// The default style of its kind (`w:default`, an on/off value).
+fn is_default(s: &El) -> bool {
+    s.attr("w:default").is_some_and(|v| matches!(v.trim(), "1" | "true" | "on"))
+}
+
+/// The longest default table style id given to tables without `w:tblStyle`: every such table
+/// gets a copy, so a hostile one megabyte id doesn't become gigabytes (#5056).
+const MAX_DEFAULT_TABLE_STYLE_ID: usize = 256;
+
+/// Normal Table as Word writes it: nothing but 0.08" left and right cell margins, which an
+/// unstyled table already has here. `s` is the style with its based-on chain merged.
+fn plain_normal_table(s: &wordcraft_doc::styles::TableStyleProps) -> bool {
+    let word_margins = |m: [f32; 4]| m.iter().zip([0.0, 5.4, 0.0, 5.4]).all(|(a, b)| (a - b).abs() < 0.01);
+    let p = &s.parts;
+    s.para == Default::default()
+        && s.chr == Default::default()
+        && *p == TableStyleParts { cell_margins: p.cell_margins.filter(|m| word_margins(*m)), ..Default::default() }
+}
+
 /// The outline level (0 for Heading 1) of Word's built-in style named `heading 1` … `heading 9`.
 fn builtin_heading_level(name: &str) -> Option<u8> {
     let name = name.trim();
@@ -57,9 +76,7 @@ impl Reader<'_> {
         // The default paragraph style must be called `Normal` in our model.
         let has_normal = root.children("w:style").any(|s| s.attr("w:styleId") == Some("Normal"));
         if !has_normal
-            && let Some(def) = root
-                .children("w:style")
-                .find(|s| s.attr("w:type") == Some("paragraph") && s.attr("w:default").is_some_and(|v| v == "1" || v == "true"))
+            && let Some(def) = root.children("w:style").find(|s| s.attr("w:type") == Some("paragraph") && is_default(s))
             && let Some(id) = def.attr("w:styleId")
         {
             self.pc.alias.insert(id.to_string(), "Normal".into());
@@ -125,7 +142,7 @@ impl Reader<'_> {
                 builtin: !s.attr("w:customStyle").is_some_and(|v| matches!(v.trim(), "1" | "true" | "on")),
                 locked: flag(s, "w:locked").unwrap_or(false),
                 // Only where the writer couldn't tell from the id (it flags the English ids).
-                default: s.attr("w:default").is_some_and(|v| v == "1" || v == "true")
+                default: is_default(s)
                     && !matches!(
                         (kind, id.as_str()),
                         (StyleKind::Paragraph, "Normal")
@@ -186,6 +203,17 @@ impl Reader<'_> {
         if !sheet.styles.iter().any(|s| s.quick) {
             sheet.add_default_gallery();
         }
+        // A table with no `w:tblStyle` takes the default table style, as in Word (#5056); the
+        // `default` flag above leaves `TableNormal` out. Word's plain Normal Table is skipped: an
+        // unstyled table is that already, and saving writes it as the default.
+        self.default_table_style = root
+            .children("w:style")
+            .take(10_000)
+            .find(|s| s.attr("w:type") == Some("table") && is_default(s))
+            .and_then(|s| s.attr("w:styleId"))
+            .filter(|id| id.len() <= MAX_DEFAULT_TABLE_STYLE_ID)
+            .map(|id| self.pc.style_id(id))
+            .filter(|id| sheet.table_style(id).is_some_and(|t| !(id == "TableNormal" && plain_normal_table(&t))));
         self.doc.styles = sheet;
         Ok(())
     }
