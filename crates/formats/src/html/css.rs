@@ -1,5 +1,115 @@
 use super::{Align, Fmt, model, parse_color};
 
+/// Consume an escape after its backslash, retaining the source spelling for the colour reader.
+/// Decoding is only used to recognise URL identifiers, not to add new colour syntax.
+fn background_escape(chars: &mut std::iter::Peekable<std::str::Chars<'_>>, raw: &mut String) -> Option<char> {
+    let first = chars.next()?;
+    raw.push(first);
+    if !first.is_ascii_hexdigit() {
+        return Some(first);
+    }
+    let mut code = first.to_digit(16).unwrap_or(0);
+    for _ in 1..6 {
+        let Some(c) = chars.peek().copied().filter(char::is_ascii_hexdigit) else { break };
+        chars.next();
+        raw.push(c);
+        code = code * 16 + c.to_digit(16).unwrap_or(0);
+    }
+    if let Some(c) = chars.peek().copied().filter(char::is_ascii_whitespace) {
+        chars.next();
+        raw.push(c);
+        if c == '\r' && chars.peek() == Some(&'\n') {
+            chars.next();
+            raw.push('\n');
+        }
+    }
+    Some(char::from_u32(code).filter(|c| *c != '\0').unwrap_or('\u{fffd}'))
+}
+
+/// Find a supported background colour without splitting function arguments or quoted strings.
+/// Images and gradients remain unsupported; their contents aren't separate colour values.
+fn background_color(value: &str) -> Option<wordcraft_doc::Rgb> {
+    let mut depth = 0usize;
+    let mut url_depth = None;
+    let mut quote = None;
+    let mut token = String::new();
+    let mut name = String::new();
+    let mut chars = value.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            token.push(c);
+            let decoded = background_escape(&mut chars, &mut token);
+            if quote.is_none()
+                && let Some(c) = decoded
+            {
+                name.push(c);
+            }
+            continue;
+        }
+        // Comments separate tokens but aren't syntax, even inside a colour function.
+        // A quoted URL can contain the same characters literally.
+        if quote.is_none() && url_depth.is_none() && c == '/' && chars.peek() == Some(&'*') {
+            chars.next();
+            let mut star = false;
+            for c in chars.by_ref() {
+                if star && c == '/' {
+                    break;
+                }
+                star = c == '*';
+            }
+            if depth == 0 {
+                if let Some(color) = parse_color(&token) {
+                    return Some(color);
+                }
+                token.clear();
+            } else {
+                token.push(' ');
+            }
+            name.clear();
+            continue;
+        }
+        if let Some(q) = quote {
+            if c == q {
+                quote = None;
+            }
+        } else {
+            match c {
+                '\'' | '"' => {
+                    quote = Some(c);
+                    name.clear();
+                }
+                '(' => {
+                    depth = depth.saturating_add(1);
+                    if name.eq_ignore_ascii_case("url") {
+                        // Even an unquoted URL keeps literal /* bytes (CSS Syntax §4.3.6).
+                        url_depth = Some(depth);
+                    }
+                    name.clear();
+                }
+                ')' => {
+                    depth = depth.saturating_sub(1);
+                    if url_depth.is_some_and(|start| depth < start) {
+                        url_depth = None;
+                    }
+                    name.clear();
+                }
+                _ if depth == 0 && c.is_ascii_whitespace() => {
+                    if let Some(color) = parse_color(&token) {
+                        return Some(color);
+                    }
+                    token.clear();
+                    name.clear();
+                    continue;
+                }
+                _ if c.is_alphanumeric() || c >= '\u{80}' || matches!(c, '_' | '-') => name.push(c),
+                _ => name.clear(),
+            }
+        }
+        token.push(c);
+    }
+    parse_color(&token)
+}
+
 /// A CSS length (or font-size keyword) in points; `None` when it is not one.
 pub fn css_len_pt(v: &str) -> Option<f32> {
     let v = v.trim().to_ascii_lowercase();
@@ -79,7 +189,7 @@ pub(super) fn apply_style(
                 }
             }
             "background-color" | "background" => {
-                if let Some(c) = v.split_whitespace().find_map(parse_color) {
+                if let Some(c) = background_color(v) {
                     f.background = Some(c);
                 }
             }
