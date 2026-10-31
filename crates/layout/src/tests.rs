@@ -1608,6 +1608,54 @@ fn right_tab_whose_text_does_not_fit_moves_to_the_next_line_with_it() {
     }
 }
 
+/// A TOC entry with a right indent and its right tab at the margin, past the indent (Word's TOC
+/// styles): the page number may end past the indent, up to the stop. Like Word, the number stays
+/// on the text's line whenever it fits between the text and the stop, also when the text ends
+/// less than a digit short of the indent; when it doesn't fit there, the tab and the number go
+/// to the next line as before.
+#[test]
+fn right_tab_past_the_right_indent_takes_its_number_up_to_the_stop() {
+    use wordcraft_doc::props::{TabAlign, TabLeader, TabStop};
+    let stop = 72.0 + 468.0;
+    let mut close = 0;
+    for indent in [28.35f32, 6.0] {
+        let edge = stop - indent;
+        for m in 20..40 {
+            for r in 2..7 {
+                let text = format!("{}{}\t104", "abc ".repeat(m), "y".repeat(r));
+                let n = text.chars().count();
+                let tab = n - 4;
+                let mut d = Document::from_text(&text);
+                d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| {
+                    p.indent_right = Some(indent);
+                    p.tabs = Some(vec![TabStop { pos: 468.0, align: TabAlign::Right, leader: TabLeader::Dot }]);
+                })
+                .unwrap();
+                let l = lay(&d);
+                let Some(para) = l.pages[0].items.iter().find_map(|i| if let Placed::Lines { para, .. } = i { Some(para.clone()) } else { None })
+                else {
+                    panic!("no lines")
+                };
+                let line_of = |k: usize| para.lines.iter().position(|l| l.c0 <= k && k < l.c1).unwrap();
+                // Where the text ends and how wide the number is (the text's last letter and the number
+                // are each on one line; the last two letters are both a "y").
+                let last = l.caret(&Pos::body(0, tab - 1)).unwrap().x;
+                let text_end = last + (last - l.caret(&Pos::body(0, tab - 2)).unwrap().x);
+                let end = l.caret(&Pos::body(0, n)).unwrap().x;
+                let number = end - l.caret(&Pos::body(0, n - 3)).unwrap().x;
+                assert!((end - stop).abs() < 0.5, "indent {indent}, {m} words + {r}: number ends at {end}");
+                assert_eq!(line_of(tab), line_of(n - 1), "indent {indent}, {m} words + {r}: the tab and its number are on different lines");
+                let same = line_of(tab) == line_of(tab - 1);
+                assert_eq!(same, text_end + number <= stop + 0.01, "indent {indent}, {m} words + {r}: text ends at {text_end}, number {number} wide");
+                if same && text_end > edge - number / 3.0 {
+                    close += 1;
+                }
+            }
+        }
+    }
+    assert!(close > 0, "no entry whose text ends within a digit of the indent");
+}
+
 /// A left tab whose only stop is past the right indent wraps; on the next line it still can't
 /// reach that stop, so it takes no room there and its text starts at the indent instead of
 /// going to a line of its own.
