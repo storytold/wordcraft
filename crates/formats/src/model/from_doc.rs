@@ -139,12 +139,21 @@ fn rich_inlines(doc: &Document, o: &InlineObject, f: &Fmt, opts: FlowOpts) -> Op
             let endnote = *kind == wordcraft_doc::para::NoteKind::Endnote;
             vec![Inline::Note { endnote, custom: custom.clone(), blocks }]
         }
-        // The comment, then its replies, which have no place of their own.
+        // The comment, then the replies in its thread (replies to replies too, each answering the
+        // comment that starts the thread), which have no place of their own.
         InlineObject::CommentStart { id } if opts.comments => {
             let Some(c) = doc.comments.get(id) else { return Some(Vec::new()) };
             let mut out = vec![Inline::Comment { id: *id, comment: Box::new(flow_comment(doc, c, None, opts)) }];
-            for (rid, r) in doc.comments.iter().filter(|(_, r)| r.parent == Some(*id)) {
-                out.push(Inline::Comment { id: *rid, comment: Box::new(flow_comment(doc, r, Some(*id), opts)) });
+            let mut thread = std::collections::BTreeSet::from([*id]);
+            let mut k = 0;
+            while let Some(Inline::Comment { id: at, .. }) = out.get(k) {
+                let at = *at;
+                k += 1;
+                for (rid, r) in doc.comments.iter().filter(|(_, r)| r.parent == Some(at)) {
+                    if thread.insert(*rid) {
+                        out.push(Inline::Comment { id: *rid, comment: Box::new(flow_comment(doc, r, Some(*id), opts)) });
+                    }
+                }
             }
             out
         }

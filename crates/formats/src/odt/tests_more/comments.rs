@@ -168,3 +168,20 @@ fn unmatched_and_hostile_comments_do_not_panic() {
         }
     }
 }
+
+#[test]
+fn a_reply_to_a_reply_is_kept() {
+    let xml = concat!(
+        r#"<text:p><office:annotation office:name="a"><dc:creator>A</dc:creator><text:p>Root</text:p></office:annotation>x<office:annotation-end office:name="a"/>"#,
+        r#"<office:annotation office:name="b" loext:parent-name="a"><dc:creator>B</dc:creator><text:p>Reply</text:p></office:annotation>"#,
+        r#"<office:annotation loext:parent-name="b"><dc:creator>C</dc:creator><text:p>Reply to reply</text:p></office:annotation></text:p>"#,
+    );
+    let d = import(&body(xml)).unwrap();
+    assert_eq!(d.comments.len(), 3);
+    // LibreOffice's threads are flat: every reply answers the comment that starts them.
+    let back = import(&export(&d).unwrap()).unwrap();
+    let got = comments(&back);
+    assert_eq!(got.len(), 3, "{got:?}");
+    assert_eq!(got[2].4.as_deref(), Some("Root"));
+    assert_eq!(got[2].5, "Reply to reply");
+}
