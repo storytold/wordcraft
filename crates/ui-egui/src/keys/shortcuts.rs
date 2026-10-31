@@ -115,11 +115,71 @@ pub(super) fn ui_shortcut(key: Key, m: Modifiers) -> Option<(&'static str, Value
     }
 }
 
+/// Windows Word's Brazilian Portuguese keyboard layout. The English registry stays unchanged:
+/// only the desktop UI remaps these keys, and scripts/agents retain stable command IDs.
+/// Word for Mac keeps its platform shortcuts. Ctrl+C/X/V/Z and other unaffected keys remain.
+use wordcraft_engine::keymap::PT_BR_WORD_KEYS;
+
+pub(crate) fn pt_br_word_keys(language: &str) -> bool {
+    !cfg!(target_os = "macos")
+        && (language.eq_ignore_ascii_case("pt-br")
+            || (language.eq_ignore_ascii_case(crate::i18n::AUTO) && crate::i18n::system_lang().code() == "pt-br"))
+}
+
+/// Resolve a key using the UI locale. Explicit user assignments and removals always win.
+/// Built-in English keys displaced by the pt-BR layout do not trigger their old commands.
+pub(crate) fn localized_resolve<'a>(reg: &'a wordcraft_engine::Registry, user: &wordcraft_engine::keymap::KeyMap, language: &str, key: &str) -> Option<&'a wordcraft_engine::CommandSpec> {
+    let key = wordcraft_engine::keymap::normalize(key)?;
+    if let Some(id) = user.assigned.get(&key) {
+        if let Some(spec) = reg.get(id) {
+            return Some(spec);
+        }
+    }
+    if user.removed.contains(&key) {
+        return None;
+    }
+    if pt_br_word_keys(language)
+        && user.removed_localized.get("pt-br").is_some_and(|keys| keys.contains(&key))
+    {
+        return None;
+    }
+    if pt_br_word_keys(language)
+        && let Some((_, id)) = PT_BR_WORD_KEYS.iter().find(|(k, _)| *k == key)
+    {
+        return reg.get(id);
+    }
+    user.resolve(reg, &key)
+}
+
+/// The effective keys for tooltips and Customize Keyboard, not the English registry defaults.
+/// Keep non-conflicting default keys (e.g. F12) and explicitly customized assignments.
+pub(crate) fn localized_keys_for(reg: &wordcraft_engine::Registry, user: &wordcraft_engine::keymap::KeyMap, language: &str, id: &str) -> Vec<String> {
+    let mut keys = Vec::new();
+    if pt_br_word_keys(language) {
+        for (key, owner) in PT_BR_WORD_KEYS {
+            if *owner == id && localized_resolve(reg, user, language, key).is_some_and(|s| s.id == id) {
+                keys.push((*key).to_string());
+            }
+        }
+    }
+    for key in user.keys_for(reg, id) {
+        if !keys.contains(&key) && localized_resolve(reg, user, language, &key).is_some_and(|s| s.id == id) {
+            keys.push(key);
+        }
+    }
+    for (key, owner) in &user.assigned {
+        if owner == id && !keys.contains(key) && localized_resolve(reg, user, language, key).is_some_and(|s| s.id == id) {
+            keys.push(key.clone());
+        }
+    }
+    keys
+}
+
 /// Find and run the command bound to this key. Returns true if handled.
 pub(super) fn dispatch(app: &mut WordApp, key: Key, m: Modifiers) -> bool {
     let reg = app.session.registry.clone();
     let name = key_name(key);
-    let bound = name.and_then(|n| app.session.keymap.resolve(&reg, &combo(m, n, true)));
+    let bound = name.and_then(|n| localized_resolve(&reg, &app.session.keymap, &app.ui.language, &combo(m, n, true)));
     // Ctrl+F1 collapses the ribbon only when the user hasn't given it to a command (#1678); the
     // other interface shortcuts (Alt+Q, ⌘⌥R) keep their place ahead of the keymap.
     if let Some((id, params)) = ui_shortcut(key, m).filter(|_| key != Key::F1 || bound.is_none()) {
@@ -138,7 +198,7 @@ pub(super) fn dispatch(app: &mut WordApp, key: Key, m: Modifiers) -> bool {
     let Some(name) = name else { return false };
     // Shift extends caret movement; Shift+Backspace still erases (#707).
     if m.shift
-        && let Some(spec) = app.session.keymap.resolve(&reg, &combo(m, name, false))
+        && let Some(spec) = localized_resolve(&reg, &app.session.keymap, &app.ui.language, &combo(m, name, false))
         && let Some(params) = shift_variant_params(spec.id)
     {
         let _ = app.run(spec.id, params);
