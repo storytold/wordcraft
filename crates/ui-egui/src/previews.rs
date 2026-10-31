@@ -28,30 +28,34 @@ pub struct Previews {
     budget: std::cell::Cell<u32>,
     frame: u64,
     /// The Equation tab's pictures, packed into one texture (#1002).
-    math: MathAtlas,
+    math: PreviewAtlas,
+    /// The font menus' entries, packed the same way (#5105); shared with the closures
+    /// [`Previews::font_preview_fn`] hands out.
+    fonts: Arc<egui::mutex::Mutex<PreviewAtlas>>,
 }
 
-/// Side of each square texture page the equation pictures share, in pixels.
-const MATH_ATLAS: usize = 2048;
+/// Side of each square texture page the pictures of a [`PreviewAtlas`] share, in pixels.
+const ATLAS: usize = 2048;
 /// At most this many pages: enough for a frame's pictures at a high display scale (the 22
 /// built-in equations alone take two pages at 3×), still a handful of textures in all.
-const MATH_ATLAS_PAGES: usize = 4;
+const ATLAS_PAGES: usize = 4;
 /// Transparent pixels between pictures, so linear filtering never bleeds one into the next.
-const MATH_ATLAS_GAP: usize = 2;
+const ATLAS_GAP: usize = 2;
 
-/// Every equation picture (gallery tiles, structure buttons, symbols) packed into a few shared
-/// textures ("pages"), row by row, and drawn as a part of one (#1002).
+/// Small pictures packed into a few shared textures ("pages"), row by row, and drawn as a part
+/// of one: every equation picture (gallery tiles, structure buttons, symbols, #1002), and in an
+/// atlas of their own the font menus' entries (#5105).
 ///
-/// They used to be a texture each: hundreds of small textures, created as galleries opened and
-/// all freed at once when the preview cache filled. On Windows (DirectX 12) the tiles then
-/// showed other textures' memory: inverted pictures, red and teal fills, and even damaged
-/// interface letters. A texture written in place is what egui does for its own glyphs; the
-/// atlas creates at most [`MATH_ATLAS_PAGES`] textures and frees none while galleries are
+/// They used to be a texture each: hundreds of small textures, created as galleries and font
+/// menus were browsed and freed again. On Windows (DirectX 12) the pictures then showed other
+/// textures' memory: inverted pictures (font names on black strips in light mode, white ones in
+/// dark mode), red and teal fills, and even damaged interface letters. A texture written in place is what egui does for its own glyphs; the
+/// atlas creates at most [`ATLAS_PAGES`] textures and frees none while galleries are
 /// browsed. When every page is full, the page least recently drawn from starts over, but never
 /// one drawn from in the current frame (its pictures are already on screen): a frame whose
 /// pictures don't fit shows the rest as linear text.
 #[derive(Default)]
-struct MathAtlas {
+struct PreviewAtlas {
     pages: Vec<AtlasPage>,
     /// Picture key → its page and part of that page's texture (UV coordinates).
     uv: HashMap<String, (usize, Rect)>,
@@ -73,19 +77,19 @@ struct AtlasPage {
 impl AtlasPage {
     /// A free spot for a `w`×`h` picture, or `None` when the page is full or it can't fit.
     fn place(&mut self, w: usize, h: usize) -> Option<[usize; 2]> {
-        if w == 0 || h == 0 || w > MATH_ATLAS || h > MATH_ATLAS {
+        if w == 0 || h == 0 || w > ATLAS || h > ATLAS {
             return None;
         }
         let (mut x, mut y, mut row_h) = (self.x, self.y, self.row_h);
-        if x.saturating_add(w) > MATH_ATLAS {
+        if x.saturating_add(w) > ATLAS {
             x = 0;
-            y = y.saturating_add(row_h).saturating_add(MATH_ATLAS_GAP);
+            y = y.saturating_add(row_h).saturating_add(ATLAS_GAP);
             row_h = 0;
         }
-        if y.saturating_add(h) > MATH_ATLAS {
+        if y.saturating_add(h) > ATLAS {
             return None;
         }
-        self.x = x.saturating_add(w).saturating_add(MATH_ATLAS_GAP);
+        self.x = x.saturating_add(w).saturating_add(ATLAS_GAP);
         self.y = y;
         self.row_h = row_h.max(h);
         Some([x, y])
@@ -97,12 +101,12 @@ impl AtlasPage {
         self.y = 0;
         self.row_h = 0;
         if let Some(tex) = &mut self.tex {
-            tex.set(egui::ColorImage::filled([MATH_ATLAS, MATH_ATLAS], egui::Color32::TRANSPARENT), egui::TextureOptions::LINEAR);
+            tex.set(egui::ColorImage::filled([ATLAS, ATLAS], egui::Color32::TRANSPARENT), egui::TextureOptions::LINEAR);
         }
     }
 }
 
-impl MathAtlas {
+impl PreviewAtlas {
     /// The picture stored under `key`, marking its page as drawn from in `frame`.
     fn get(&mut self, frame: u64, key: &str) -> Option<(egui::TextureId, Rect)> {
         let (page, uv) = *self.uv.get(key)?;
@@ -116,11 +120,11 @@ impl MathAtlas {
     /// this frame without wiping pictures already handed out in it.
     fn add(&mut self, ctx: &egui::Context, frame: u64, key: &str, img: egui::ColorImage) -> Option<(egui::TextureId, Rect)> {
         let [w, h] = img.size;
-        if w == 0 || h == 0 || w > MATH_ATLAS || h > MATH_ATLAS {
+        if w == 0 || h == 0 || w > ATLAS || h > ATLAS {
             return None;
         }
         let mut spot = self.pages.iter_mut().enumerate().find_map(|(i, p)| p.place(w, h).map(|at| (i, at)));
-        if spot.is_none() && self.pages.len() < MATH_ATLAS_PAGES {
+        if spot.is_none() && self.pages.len() < ATLAS_PAGES {
             let mut p = AtlasPage::default();
             spot = p.place(w, h).map(|at| (self.pages.len(), at));
             self.pages.push(p);
@@ -138,18 +142,23 @@ impl MathAtlas {
         let p = self.pages.get_mut(i)?;
         let tex = p.tex.get_or_insert_with(|| {
             ctx.load_texture(
-                format!("math_atlas_{i}"),
-                egui::ColorImage::filled([MATH_ATLAS, MATH_ATLAS], egui::Color32::TRANSPARENT),
+                format!("preview_atlas_{i}"),
+                egui::ColorImage::filled([ATLAS, ATLAS], egui::Color32::TRANSPARENT),
                 egui::TextureOptions::LINEAR,
             )
         });
         tex.set_partial(at, img, egui::TextureOptions::LINEAR);
         p.used = frame;
-        let s = MATH_ATLAS as f32;
+        let s = ATLAS as f32;
         let uv = Rect::from_min_max(pos2(at[0] as f32 / s, at[1] as f32 / s), pos2((at[0] + w) as f32 / s, (at[1] + h) as f32 / s));
         self.uv.insert(key.to_string(), (i, uv));
         Some((tex.id(), uv))
     }
+}
+
+/// A font menu entry's key in the fonts' atlas: its display scale and family.
+fn font_key(name: &str, ppp: f32) -> String {
+    format!("{ppp}:{name}")
 }
 
 impl Previews {
@@ -212,28 +221,29 @@ impl Previews {
 
     /// Fonts were added or removed: list the families again and redraw the entries of
     /// `families` (an entry drawn before its font was added shows the fallback face).
-    pub fn fonts_changed(&mut self, ctx: &egui::Context, families: impl Iterator<Item = String>) {
+    pub fn fonts_changed(&mut self, families: impl Iterator<Item = String>) {
         self.families = None;
         self.east_asian = None;
-        ctx.data_mut(|d| {
-            for f in families {
-                d.remove::<TextureHandle>(egui::Id::unique(format!("font:{f}")));
-            }
-        });
+        let families: std::collections::HashSet<String> = families.collect();
+        self.fonts.lock().uv.retain(|key, _| key.split_once(':').is_none_or(|(_, name)| !families.contains(name)));
     }
 
-    /// A closure drawing a font-menu entry in its own face.
+    /// A closure drawing a font-menu entry in its own face, from the fonts' atlas.
     pub fn font_preview_fn(&mut self) -> Box<dyn Fn(&mut Ui, &str) -> Response> {
-        Box::new(|ui: &mut Ui, name: &str| {
-            let key = format!("font:{name}");
-            let tex: Option<TextureHandle> = ui.ctx().data(|d| d.get_temp::<TextureHandle>(egui::Id::unique(&key)));
+        let atlas = Arc::clone(&self.fonts);
+        Box::new(move |ui: &mut Ui, name: &str| {
+            let ppp = ui.ctx().pixels_per_point();
+            let frame = ui.ctx().cumulative_frame_nr();
+            let key = font_key(name, ppp);
             let (r, resp) = ui.allocate_exact_size(vec2(260.0, crate::widgets::COMBO_PREVIEW_ROW_H), Sense::click());
             resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), name));
             let t = Tokens::get(ui.ctx());
             if resp.hovered() {
                 ui.painter().rect_filled(r, 3.0, t.hover);
             }
-            let tex = tex.or_else(|| {
+            // The atlas lock is never held while the Context's is, nor the other way round.
+            let hit = atlas.lock().get(frame, &key);
+            let hit = hit.or_else(|| {
                 // Context accessors share a lock: read input before taking the data write lock.
                 let now = ui.input(|i| i.time);
                 let n = ui.ctx().data_mut(|d| {
@@ -248,22 +258,14 @@ impl Previews {
                     ui.ctx().request_repaint();
                     return None;
                 }
-                let ppp = ui.ctx().pixels_per_point();
                 let mut img = font_entry_image(name, ppp);
                 ink_mask(&mut img);
-                let h = ui.ctx().load_texture(&key, img, egui::TextureOptions::LINEAR);
-                ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique(&key), h.clone()));
-                Some(h)
+                atlas.lock().add(ui.ctx(), frame, &key, img)
             });
-            match tex {
-                Some(h) => {
-                    let sz = h.size_vec2() / ui.ctx().pixels_per_point();
-                    ui.painter().image(
-                        h.id(),
-                        Rect::from_min_size(pos2(r.min.x + 6.0, r.center().y - sz.y / 2.0), sz),
-                        Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-                        t.text,
-                    );
+            match hit {
+                Some((id, uv)) => {
+                    let sz = uv.size() * ATLAS as f32 / ppp;
+                    ui.painter().image(id, Rect::from_min_size(pos2(r.min.x + 6.0, r.center().y - sz.y / 2.0), sz), uv, t.text);
                 }
                 None => {
                     ui.painter().text(pos2(r.min.x + 8.0, r.center().y), egui::Align2::LEFT_CENTER, name, regular(12.0), t.text);
@@ -316,7 +318,7 @@ impl Previews {
 
 /// An equation rasterised for a gallery tile or a button (`pt`: font size; `size`: the tile in
 /// points), with its empty slots shown: the shared texture and the picture's UV rectangle in it
-/// ([`MathAtlas`]). An ink mask, drawn tinted with the theme's text colour. `None` while waiting
+/// ([`PreviewAtlas`]). An ink mask, drawn tinted with the theme's text colour. `None` while waiting
 /// for this frame's rendering budget.
 pub fn math_texture(
     app: &mut WordApp,

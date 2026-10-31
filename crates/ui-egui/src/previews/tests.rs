@@ -121,10 +121,10 @@ fn font_menu_previews_render_defer_and_reuse_without_deadlocking() {
     let (tx, rx) = std::sync::mpsc::channel();
     let worker = std::thread::spawn(move || {
         let ctx = egui::Context::default();
-        let preview = Previews::default().font_preview_fn();
+        let mut previews = Previews::default();
+        let preview = previews.font_preview_fn();
         let budget_id = egui::Id::unique("font_preview_budget");
-        let sans_id = egui::Id::unique("font:Source Sans 3");
-        let inter_id = egui::Id::unique("font:Inter");
+        let (sans, inter) = (font_key("Source Sans 3", 1.0), font_key("Inter", 1.0));
         ctx.data_mut(|d| d.insert_temp(budget_id, (1.0_f64, 11_u32)));
 
         for time in [1.0, 2.0, 3.0] {
@@ -134,16 +134,16 @@ fn font_menu_previews_render_defer_and_reuse_without_deadlocking() {
                 preview(ui, "Inter");
             })
             .drop_without_applying_deltas();
-            ctx.data(|d| {
-                assert!(d.get_temp::<TextureHandle>(sans_id).is_some());
-                if time == 1.0 {
-                    assert!(d.get_temp::<TextureHandle>(inter_id).is_none(), "over-budget entry should defer");
-                    assert_eq!(d.get_temp::<(f64, u32)>(budget_id), Some((1.0, 13)));
-                } else {
-                    assert!(d.get_temp::<TextureHandle>(inter_id).is_some(), "deferred entry should render next frame");
-                    assert_eq!(d.get_temp::<(f64, u32)>(budget_id), Some((2.0, 1)), "cached entries should not consume budget");
-                }
-            });
+            let drawn = |key: &str| previews.fonts.lock().uv.contains_key(key);
+            assert!(drawn(&sans));
+            let budget = ctx.data(|d| d.get_temp::<(f64, u32)>(budget_id));
+            if time == 1.0 {
+                assert!(!drawn(&inter), "over-budget entry should defer");
+                assert_eq!(budget, Some((1.0, 13)));
+            } else {
+                assert!(drawn(&inter), "deferred entry should render next frame");
+                assert_eq!(budget, Some((2.0, 1)), "cached entries should not consume budget");
+            }
         }
         tx.send(()).unwrap();
     });
@@ -262,12 +262,12 @@ fn equation_pictures_share_one_texture() {
 fn math_atlas_packs_rows() {
     let mut a = AtlasPage::default();
     assert_eq!(a.place(100, 40), Some([0, 0]));
-    assert_eq!(a.place(100, 20), Some([100 + MATH_ATLAS_GAP, 0]));
-    assert_eq!(a.place(MATH_ATLAS, 10), Some([0, 40 + MATH_ATLAS_GAP]), "a new row under the tallest");
-    assert_eq!(a.place(MATH_ATLAS + 1, 10), None);
+    assert_eq!(a.place(100, 20), Some([100 + ATLAS_GAP, 0]));
+    assert_eq!(a.place(ATLAS, 10), Some([0, 40 + ATLAS_GAP]), "a new row under the tallest");
+    assert_eq!(a.place(ATLAS + 1, 10), None);
     assert_eq!(a.place(10, 0), None);
-    assert_eq!(a.place(10, MATH_ATLAS), None, "full");
-    assert_eq!(a.place(10, 10), Some([0, 40 + MATH_ATLAS_GAP + 10 + MATH_ATLAS_GAP]), "still room after a refusal");
+    assert_eq!(a.place(10, ATLAS), None, "full");
+    assert_eq!(a.place(10, 10), Some([0, 40 + ATLAS_GAP + 10 + ATLAS_GAP]), "still room after a refusal");
 }
 
 /// #1002: a page is never wiped in a frame that handed out one of its pictures (they are
@@ -275,16 +275,16 @@ fn math_atlas_packs_rows() {
 #[test]
 fn math_atlas_never_wipes_a_page_drawn_from_this_frame() {
     let ctx = egui::Context::default();
-    let img = || egui::ColorImage::filled([MATH_ATLAS, MATH_ATLAS], egui::Color32::TRANSPARENT);
+    let img = || egui::ColorImage::filled([ATLAS, ATLAS], egui::Color32::TRANSPARENT);
     let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
-        let mut a = MathAtlas::default();
-        let first: Vec<_> = (0..MATH_ATLAS_PAGES).map(|i| a.add(ui.ctx(), 1, &format!("p{i}"), img())).collect();
+        let mut a = PreviewAtlas::default();
+        let first: Vec<_> = (0..ATLAS_PAGES).map(|i| a.add(ui.ctx(), 1, &format!("p{i}"), img())).collect();
         assert!(first.iter().all(Option::is_some), "a page each");
         let ids: std::collections::HashSet<_> = first.iter().flatten().map(|(id, _)| *id).collect();
-        assert_eq!(ids.len(), MATH_ATLAS_PAGES);
+        assert_eq!(ids.len(), ATLAS_PAGES);
         assert!(a.add(ui.ctx(), 1, "more", img()).is_none(), "every page was drawn from this frame");
         assert_eq!(a.wipes, 0);
-        assert!(a.uv.len() == MATH_ATLAS_PAGES, "nothing forgotten");
+        assert!(a.uv.len() == ATLAS_PAGES, "nothing forgotten");
         // Next frame: page 0 is drawn from again, so the one drawn longest ago is page 1.
         assert_eq!(a.get(2, "p0"), first.first().copied().flatten());
         let (id, _) = a.add(ui.ctx(), 2, "more", img()).expect("a page starts over");
@@ -345,6 +345,63 @@ fn ink_mask_keeps_the_ink_and_drops_the_paper() {
     assert_eq!(img.pixels[0].a(), 0, "paper becomes transparent");
     assert_eq!(img.pixels[1], egui::Color32::from_white_alpha(255), "full ink stays opaque");
     assert_eq!(img.pixels[2].a(), 127, "antialiased ink keeps its coverage");
+}
+
+/// #5105: on Windows, font menu entries showed on black strips in light mode and on white or
+/// red ones in dark mode: each entry was a texture of its own, and browsing the list created
+/// and freed hundreds of them, the DirectX 12 texture mix-up of #1002. Entries are now drawn
+/// from a few shared pages written in place: scrolling through a long font list, at a high
+/// display scale too, creates at most [`ATLAS_PAGES`] textures and frees none; fonts added
+/// later redraw only their own entries.
+#[test]
+fn font_menu_entries_share_a_few_textures_and_free_none() {
+    for ppp in [1.0, 3.0] {
+        let ctx = egui::Context::default();
+        ctx.set_pixels_per_point(ppp);
+        let mut previews = Previews::default();
+        let preview = previews.font_preview_fn();
+        let names: Vec<String> = (0..300).map(|i| format!("Font {i}")).collect();
+        let (mut created, mut freed, mut ids) = (std::collections::HashSet::new(), 0, std::collections::HashSet::new());
+        // A menu shows about fifteen entries a frame; scroll it through the list twice.
+        for (frame, rows) in names.chunks(15).chain(names.chunks(15)).enumerate() {
+            let input = egui::RawInput { time: Some(frame as f64), ..Default::default() };
+            let mut out = ctx.run_ui(input, |ui| {
+                for name in rows {
+                    preview(ui, name);
+                }
+            });
+            created.extend(
+                out.textures_delta
+                    .set
+                    .iter()
+                    .filter(|(id, ds)| **id != egui::TextureId::default() && ds.iter().any(|d| d.pos.is_none()))
+                    .map(|(id, _)| *id),
+            );
+            freed += out.textures_delta.free.len();
+            for s in &out.shapes {
+                if let egui::Shape::Mesh(m) = &s.shape
+                    && m.texture_id != egui::TextureId::default()
+                {
+                    ids.insert(m.texture_id);
+                }
+            }
+            out.textures_delta.clear();
+        }
+        assert!(!created.is_empty() && created.len() <= ATLAS_PAGES, "{ppp}: {} textures created", created.len());
+        assert_eq!(freed, 0, "{ppp}: no texture is freed while the list is browsed");
+        assert!(ids.len() <= ATLAS_PAGES, "{ppp}: entries drawn from {} textures", ids.len());
+        // An entry is drawn from the atlas, not as plain text.
+        ctx.run_ui(egui::RawInput { time: Some(1000.0), ..Default::default() }, |ui| {
+            preview(ui, "Font 298");
+            preview(ui, "Font 299");
+        })
+        .drop_without_applying_deltas();
+        assert!(previews.fonts.lock().uv.contains_key(&font_key("Font 299", ppp)));
+        // A font added later redraws only its own entries.
+        previews.fonts_changed(["Font 299".to_string()].into_iter());
+        let atlas = previews.fonts.lock();
+        assert!(!atlas.uv.contains_key(&font_key("Font 299", ppp)) && atlas.uv.contains_key(&font_key("Font 298", ppp)));
+    }
 }
 
 /// #535: font menu entries drew on a white strip in dark mode. They are now tinted with the
