@@ -295,6 +295,22 @@ impl Reader<'_> {
         }
         let kind = kind?;
         let mut extra = ShapeExtra { cap, ..Default::default() };
+        // A horizontal rule (`o:hr`, a pasted `<hr>`): across `o:hrpct` tenths of a percent of its
+        // line, or its own width (`o:hrpct="0"`); a width of 0 with no percentage is the whole
+        // line. `o:hralign` places a shorter one (Word, measured: 50 % centred, left, right).
+        // Only a rule in the text, shown: a positioned or hidden one stays a plain shape, which
+        // keeps its placement and visibility when saved.
+        if attr("o:hr").is_some_and(|v| matches!(v.trim(), "t" | "true" | "1")) && float.wrap == Wrap::Inline && !float.hidden {
+            let tenths = attr("o:hrpct").and_then(|v| v.trim().parse::<f32>().ok()).filter(|p| p.is_finite() && *p > 0.0);
+            let pct = tenths.map_or(if w > 0.0 { 0.0 } else { 100.0 }, |t| (t / 10.0).min(100.0));
+            let align = match attr("o:hralign").map(|a| a.trim().to_ascii_lowercase()).as_deref() {
+                Some("center") => wordcraft_doc::props::Align::Center,
+                Some("right") => wordcraft_doc::props::Align::Right,
+                _ => wordcraft_doc::props::Align::Left,
+            };
+            let standard = attr("o:hrstd").is_some_and(|v| matches!(v.trim(), "t" | "true" | "1"));
+            extra.hr = Some(wordcraft_doc::connector::HorizontalRule { pct, align, standard });
+        }
         if kind == ShapeKind::Line {
             // Arrowheads (`v:stroke` startarrow / endarrow): any but `none` is drawn.
             let arrow = |name: &str| shape.child("v:stroke").and_then(|s| s.attr(name)).is_some_and(|v| v != "none");

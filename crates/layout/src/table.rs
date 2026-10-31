@@ -1282,7 +1282,7 @@ fn list_level(ctx: &Ctx, p: &Paragraph) -> Option<wordcraft_doc::numbering::Leve
 }
 
 /// A width to lay a paragraph out in so that only its own line breaks end lines.
-const UNBOUNDED: f32 = 100_000.0;
+pub(crate) const UNBOUNDED: f32 = 100_000.0;
 
 /// A paragraph's longest word and longest line (between line breaks), indents included.
 fn para_content(pl: &ParaLayout) -> (f32, f32) {

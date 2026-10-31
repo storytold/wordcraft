@@ -115,6 +115,9 @@ impl Writer<'_> {
             // ink keep their original source and related parts.
             InlineObject::Graphic { .. } => self.write_graphic(w, o, props, rels, depth),
             InlineObject::Image { .. } => self.write_image(w, o, props, rels, depth),
+            InlineObject::Shape { extra, float, .. } if extra.hr.is_some() && float.wrap == Wrap::Inline && !float.hidden => {
+                self.write_hr(w, o, props)
+            }
             InlineObject::Shape { .. } => self.write_shape(w, o, props, rels, depth),
             InlineObject::Group { .. } => self.write_group(w, o, props, rels, depth),
             InlineObject::Ruby { base, ruby, align, size, raise, base_size, lang, props: ruby_props } => {
@@ -273,6 +276,55 @@ impl Writer<'_> {
         w.close("a:graphic");
         w.close(if float.wrap == Wrap::Inline { "wp:inline" } else { "wp:anchor" });
         w.close("w:drawing");
+        w.close("w:r");
+        self.rev_close(w, props);
+    }
+
+    /// A horizontal rule goes back as the VML rule it was read from: DrawingML has none, and a
+    /// fixed-size shape would lose its line-wide width.
+    fn write_hr(&mut self, w: &mut W, o: &InlineObject, props: &CharProps) {
+        let InlineObject::Shape { w: sw, h: sh, fill, stroke, stroke_width, extra, .. } = o else { return };
+        let Some(hr) = extra.hr else { return };
+        let align = match hr.align {
+            wordcraft_doc::props::Align::Center => "center",
+            wordcraft_doc::props::Align::Right => "right",
+            _ => "left",
+        };
+        let width = if hr.pct > 0.0 { "0".to_string() } else { format!("{:.2}pt", sw.max(0.0)) };
+        let style = format!("width:{width};height:{:.2}pt", sh.max(0.0));
+        let pct = format!("{}", (hr.pct * 10.0).round().max(0.0) as u32);
+        let fill_hex = fill.as_ref().map(|f| format!("#{}", f.main_color().hex()));
+        let stroke_hex = stroke.map(|c| format!("#{}", c.hex()));
+        let weight = format!("{stroke_width:.2}pt");
+        let mut attrs: Vec<(&str, &str)> = vec![
+            ("xmlns:v", "urn:schemas-microsoft-com:vml"),
+            ("xmlns:o", "urn:schemas-microsoft-com:office:office"),
+            ("style", &style),
+            ("o:hrpct", &pct),
+            ("o:hralign", align),
+            ("o:hr", "t"),
+        ];
+        if hr.standard {
+            attrs.push(("o:hrstd", "t"));
+        }
+        if let Some(f) = &fill_hex {
+            attrs.push(("fillcolor", f));
+        } else {
+            attrs.push(("filled", "f"));
+        }
+        match &stroke_hex {
+            Some(s) => {
+                attrs.push(("strokecolor", s));
+                attrs.push(("strokeweight", &weight));
+            }
+            None => attrs.push(("stroked", "f")),
+        }
+        self.rev_open(w, props);
+        w.open("w:r", &[]);
+        self.rpr(w, props);
+        w.open("w:pict", &[]);
+        w.empty("v:rect", &attrs);
+        w.close("w:pict");
         w.close("w:r");
         self.rev_close(w, props);
     }
