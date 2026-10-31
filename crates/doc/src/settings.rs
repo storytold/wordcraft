@@ -64,6 +64,38 @@ pub struct CoreProps {
     pub revision: u32,
 }
 
+/// Document-level East Asian character compression (`w:characterSpacingControl`).
+/// Unknown values are kept so opening and saving a newer document does not discard them.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CharacterSpacingControl {
+    #[default]
+    DoNotCompress,
+    CompressPunctuation,
+    CompressPunctuationAndJapaneseKana,
+    Unknown(String),
+}
+
+impl CharacterSpacingControl {
+    pub fn from_ooxml(value: &str) -> Self {
+        match value {
+            "doNotCompress" => Self::DoNotCompress,
+            "compressPunctuation" => Self::CompressPunctuation,
+            "compressPunctuationAndJapaneseKana" => Self::CompressPunctuationAndJapaneseKana,
+            other => Self::Unknown(other.into()),
+        }
+    }
+
+    pub fn ooxml(&self) -> &str {
+        match self {
+            Self::DoNotCompress => "doNotCompress",
+            Self::CompressPunctuation => "compressPunctuation",
+            Self::CompressPunctuationAndJapaneseKana => "compressPunctuationAndJapaneseKana",
+            Self::Unknown(value) => value,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
@@ -130,6 +162,14 @@ pub struct Settings {
     /// natural spacing; by default Word stretches it to the margin like a wrapped line.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub do_not_expand_shift_return: bool,
+    /// `w:balanceSingleByteDoubleByteWidth`: keep fullwidth tracking twice halfwidth tracking.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub balance_single_byte_double_byte_width: bool,
+    /// Character-level punctuation and kana compression; absent in OOXML means no compression.
+    pub character_spacing_control: CharacterSpacingControl,
+    /// Apply strict East Asian first/last character restrictions (`w:strictFirstAndLastChars`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub strict_first_and_last_chars: bool,
     /// Keep contextual paragraph spacing inside legacy table cells (`allowSpaceOfSameStyleInTable`).
     /// Word ignores the layout override in compatibility mode 15, but the flag still round-trips.
     pub allow_space_of_same_style_in_table: bool,
@@ -297,6 +337,9 @@ impl Default for Settings {
             roman_fonts: Vec::new(),
             sum_paragraph_spacing: false,
             do_not_expand_shift_return: false,
+            balance_single_byte_double_byte_width: false,
+            character_spacing_control: CharacterSpacingControl::default(),
+            strict_first_and_last_chars: false,
             allow_space_of_same_style_in_table: false,
             grid_h: DEFAULT_GRID,
             grid_v: DEFAULT_GRID,

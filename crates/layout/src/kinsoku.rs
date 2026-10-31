@@ -22,6 +22,36 @@ const NO_START: &str = "、。，．・：；？！゛゜ヽヾゝゞ々〻〉�
 /// East Asian characters a line may not end with: opening brackets and quotes, currency signs.
 const NO_END: &str = "〈《「『【〔〖〘〚〝（［｛｟｢＄￡￥";
 
+/// Standard Japanese kinsoku permits a small kana at the start of a line; strict mode does not.
+/// Keep opening punctuation attached to the character that follows it.
+pub(crate) fn standard_japanese_kana_break(previous: char, next: char) -> bool {
+    is_east_asian(previous)
+        && !NO_END.contains(previous)
+        && ("ぁぃぅぇぉっゃゅょゎゕゖァィゥェォッャュョヮヵヶ".contains(next) || matches!(next as u32, 0x31F0..=0x31FF))
+}
+
+/// The language-specific hanging punctuation sets in [MS-OI29500] §2.1.52.
+/// Without a language, only the common East Asian closing forms qualify; ordinary
+/// Latin punctuation keeps its existing word-breaking behavior.
+pub(crate) fn hanging_punctuation(c: char, lang: Option<&str>) -> bool {
+    let lang = lang.unwrap_or("");
+    let language = lang.split(['-', '_']).next().unwrap_or("");
+    let set = if language.eq_ignore_ascii_case("ja") {
+        ",.’”、。」』〗），．］｝｡､"
+    } else if language.eq_ignore_ascii_case("ko") {
+        "!%),.:;?]}¢°’”′″℃〉》」』〗〕！％），．：；？］｝￠"
+    } else if language.eq_ignore_ascii_case("zh") {
+        if lang.split(['-', '_']).any(|s| ["Hant", "TW", "HK", "MO"].iter().any(|t| s.eq_ignore_ascii_case(t))) {
+            "!),.:;?]}’”′、。〉》」』〗〕〞﹚﹜﹞！），．：；？］｝"
+        } else {
+            "!%),.:;>?]}¢°·ˇ’”‰′″℃∶、。〃〉》」』〗〕〗〞﹚﹜﹞！＂％＇），．：；？］｝￠"
+        }
+    } else {
+        "、。」』〗），．］｝｡､"
+    };
+    set.contains(c)
+}
+
 /// Whether `c` is East Asian text: CJK ideographs, kana, bopomofo, CJK punctuation, and
 /// fullwidth/halfwidth forms (not spaces, not combining sound marks).
 pub fn is_east_asian(c: char) -> bool {

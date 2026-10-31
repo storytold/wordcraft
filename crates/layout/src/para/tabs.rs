@@ -1,4 +1,3 @@
-use super::model::Cluster;
 use super::{PTabAlign, PTabBase, ParaLayout, TabAlign, TabLeader, TabStop};
 
 /// Next tab stop after `x` (column coordinates): explicit stops, the hanging-indent implicit stop,
@@ -38,8 +37,18 @@ pub(super) fn ptab_stop(align: PTabAlign, base: PTabBase, leader: TabLeader, wid
     TabStop { pos, align, leader }
 }
 
-pub(super) fn pl_text_at(c: &Cluster) -> bool {
-    c.dot
+/// First decimal separator and its distance from the tab, through cluster `j` inclusive.
+/// Returning both avoids rescanning the segment when provisional compression is applied.
+pub(super) fn decimal_position(pl: &ParaLayout, tj: usize, j: usize) -> Option<(usize, f32)> {
+    let mut w = 0.0;
+    for k in tj.checked_add(1)?..=j {
+        let cc = pl.clusters.get(k)?;
+        if cc.dot {
+            return Some((k, w));
+        }
+        w += cc.adv;
+    }
+    None
 }
 
 pub(super) fn resolve_tab(pl: &mut ParaLayout, pending: &mut Option<(usize, TabStop, f32)>, xs: &mut [f32], c0: usize, x: f32, xo: &mut f32) {
@@ -47,7 +56,12 @@ pub(super) fn resolve_tab(pl: &mut ParaLayout, pending: &mut Option<(usize, TabS
     let Some((tj, stop, tx)) = pending.take() else { return };
     let seg = x - tx - pl.clusters.get(tj).map(|c| c.adv).unwrap_or(0.0);
     let want = match stop.align {
-        TabAlign::Right | TabAlign::Decimal => stop.pos - tx - seg,
+        TabAlign::Right => stop.pos - tx - seg,
+        TabAlign::Decimal => {
+            let decimal =
+                c0.checked_add(xs.len()).and_then(|end| end.checked_sub(1)).and_then(|end| decimal_position(pl, tj, end).map(|(_, width)| width));
+            stop.pos - tx - decimal.unwrap_or(seg)
+        }
         TabAlign::Center => stop.pos - tx - seg / 2.0,
         _ => return,
     }

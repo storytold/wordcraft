@@ -104,6 +104,9 @@ pub(crate) fn env_hash(doc: &Document, opts: &LayoutOptions) -> u64 {
     opts.proof.hash(&mut h);
     wordcraft_proof::dictionary_generation().hash(&mut h);
     hyphenation_key(doc).hash(&mut h);
+    doc.settings.balance_single_byte_double_byte_width.hash(&mut h);
+    doc.settings.character_spacing_control.hash(&mut h);
+    doc.settings.strict_first_and_last_chars.hash(&mut h);
     outline.hash(&mut h);
     opts.filename.hash(&mut h);
     opts.filepath.hash(&mut h);
@@ -187,3 +190,27 @@ impl Totals {
 /// The most extra layout passes for page totals in the body: a total that changes the page
 /// count (its digits pushing text to another page) is tried again, this many times at most.
 pub(crate) const MAX_TOTAL_PASSES: usize = 3;
+
+#[cfg(test)]
+mod character_spacing_tests {
+    use super::*;
+    use wordcraft_doc::CharacterSpacingControl;
+
+    #[test]
+    fn compression_policy_changes_the_layout_environment() {
+        let mut doc = Document::new();
+        let opts = LayoutOptions::default();
+        let original = env_hash(&doc, &opts);
+        doc.settings.character_spacing_control = CharacterSpacingControl::CompressPunctuation;
+        assert_ne!(original, env_hash(&doc, &opts));
+    }
+
+    #[test]
+    fn strict_line_break_setting_changes_the_layout_environment() {
+        let mut doc = Document::new();
+        let opts = LayoutOptions::default();
+        let original = env_hash(&doc, &opts);
+        doc.settings.strict_first_and_last_chars = true;
+        assert_ne!(original, env_hash(&doc, &opts));
+    }
+}

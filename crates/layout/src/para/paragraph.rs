@@ -451,10 +451,39 @@ impl<'a> BreakText<'a> {
 }
 
 /// Mark the clusters a line may break after.
-fn mark_break_opportunities(clusters: &mut [Cluster], bt: &BreakText, rp: &ResolvedPara) {
+fn mark_break_opportunities(
+    clusters: &mut [Cluster],
+    styles: &[super::model::StyleRun],
+    bt: &BreakText,
+    source: &str,
+    rp: &ResolvedPara,
+    strict: bool,
+) {
     let opps: std::collections::HashSet<usize> = break_positions(&bt.text, rp).into_iter().filter_map(|i| bt.to_para(i)).collect();
-    for c in clusters {
+    for c in clusters.iter_mut() {
         c.break_after = opps.contains(&c.end) || matches!(c.kind, ClKind::Object(_) | ClKind::Tab);
+    }
+    if strict && rp.kinsoku {
+        return;
+    }
+    for i in 1..clusters.len() {
+        let Some((previous, next)) = clusters.get(i - 1).zip(clusters.get(i)) else { continue };
+        if previous.end != next.start || !matches!(previous.kind, ClKind::Text) || !matches!(next.kind, ClKind::Text) {
+            continue;
+        }
+        let lang = styles.get(next.style as usize).and_then(|s| s.rc.lang_ea.as_deref().or(s.rc.lang.as_deref()));
+        // An untagged small-kana boundary uses Japanese standard kinsoku. Explicit
+        // non-Japanese language tags retain their existing Unicode break rules.
+        if lang.is_some_and(|s| !s.split(['-', '_']).next().is_some_and(|v| v.eq_ignore_ascii_case("ja"))) {
+            continue;
+        }
+        let before = source.get(..previous.end).and_then(|s| s.chars().next_back());
+        let after = source.get(next.start..).and_then(|s| s.chars().next());
+        if before.zip(after).is_some_and(|(a, b)| crate::kinsoku::standard_japanese_kana_break(a, b))
+            && let Some(previous) = clusters.get_mut(i - 1)
+        {
+            previous.break_after = true;
+        }
     }
 }
 
@@ -574,7 +603,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let mut skip = sh.left.clone();
     skip.extend(sh.bare.iter().cloned());
     let bt = BreakText::new(&p.text, skip);
-    mark_break_opportunities(&mut sh.b.clusters, &bt, &rp);
+    mark_break_opportunities(&mut sh.b.clusters, &sh.b.styles, &bt, &p.text, &rp, env.doc.settings.strict_first_and_last_chars);
     let label = list_label(&cx, &mut sh.b, mark_style);
     let joined_cluster_starts = joined_cluster_starts(p, &sh.b.clusters);
     let Shaped { b, has_page_fields, notes, drop_cap, drop_cap_w, maths, enclosures, rubies, displays, ptabs, left, runs, .. } = sh;
@@ -614,7 +643,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let gone = mark_left_out && (p.text.is_empty() || left.first() == Some(&(0..p.text.len())));
     pl.left_out = left;
     keep_graphemes_whole(&mut pl);
-    break_lines(&mut pl, env, mark_style, env.label.as_ref().map(|(_, l)| l));
+    break_lines(&mut pl, &p.text, env, mark_style, env.label.as_ref().map(|(_, l)| l));
     if gone {
         collapse(&mut pl);
     }
