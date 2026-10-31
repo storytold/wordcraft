@@ -3,6 +3,7 @@
 use std::io::{BufReader, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::Path;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -21,6 +22,82 @@ pub trait Backend {
     fn has_ui(&self) -> bool;
     /// Short human description ("headless", "connected to 127.0.0.1:7981").
     fn describe(&self) -> String;
+    /// The MCP client's name (`initialize`'s `clientInfo.name`): an app backend names the agent
+    /// with it, so its Ask Agent edits are tracked as `Agent (name)`.
+    fn set_client(&mut self, _name: &str) {}
+}
+
+/// Most Ask Agent requests the bridge keeps open at once (older ones are forgotten).
+const MAX_OPEN: usize = 16;
+
+/// What the bridge knows about Ask Agent: its client's name and the requests it took and hasn't
+/// closed, oldest first. While one is open, the bridge's `engine.execute` calls carry its id
+/// (`request`), so the app records those edits as the agent's tracked changes; `agent.listen`
+/// carries the client's name. Shared by the bridge's connections (`--channel` listens on its own).
+#[derive(Default, Debug)]
+pub struct AgentState {
+    client: Option<String>,
+    open: Vec<u64>,
+}
+
+impl AgentState {
+    /// The request ids taken and not yet closed, oldest first.
+    pub fn open(&self) -> &[u64] {
+        &self.open
+    }
+
+    fn before(&self, method: &str, params: &mut Value) {
+        let Some(p) = params.as_object_mut() else { return };
+        match method {
+            "agent.listen" if !p.contains_key("agent") => {
+                if let Some(c) = &self.client {
+                    p.insert("agent".into(), json!(c));
+                }
+            }
+            "engine.execute" if !p.contains_key("request") => {
+                if let Some(id) = self.open.first() {
+                    p.insert("request".into(), json!(id));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn after(&mut self, method: &str, params: &Value, result: &Result<Value, String>) {
+        match method {
+            "agent.listen" => {
+                if let Ok(id) = result.as_ref().map(|v| v.get("id").and_then(Value::as_u64)) {
+                    self.open.extend(id);
+                    if self.open.len() > MAX_OPEN {
+                        self.open.remove(0);
+                    }
+                }
+            }
+            "agent.reply" => {
+                let id = params.get("id").and_then(Value::as_u64);
+                let done = params.get("done").and_then(Value::as_bool).unwrap_or(true);
+                let cancelled = result.as_ref().is_ok_and(|v| v.get("cancelled").and_then(Value::as_bool) == Some(true));
+                if done || cancelled || result.is_err() {
+                    self.open.retain(|o| Some(*o) != id);
+                }
+            }
+            // The app refused an edit because the request is over (cancelled, answered, gone):
+            // later calls go without it.
+            "engine.execute" => {
+                if let (Err(e), Some(id)) = (result, params.get("request").and_then(Value::as_u64))
+                    && (e.starts_with("NO_REQUEST:")
+                        || e.starts_with("READ_ONLY_REQUEST:")
+                        || e.starts_with("NOT_OWNER:")
+                        || e.contains(&format!("Ask Agent request {id} "))
+                        || e.starts_with("no Ask Agent request"))
+                    && !e.contains("asks for an answer only")
+                {
+                    self.open.retain(|o| *o != id);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Looks up the control key for an address (`HOST:PORT`).
@@ -38,6 +115,8 @@ pub struct Remote {
     /// The control key, looked up once per connection (the app picks a new one at every start).
     key: Option<String>,
     find_key: KeyFinder,
+    /// Ask Agent: the client's name and the requests taken ([`AgentState`]).
+    agent: Arc<Mutex<AgentState>>,
 }
 
 /// The control key: `env` (`WORDCRAFT_CONTROL_KEY`) when set, else the app's key file for
@@ -111,7 +190,16 @@ impl Remote {
     }
 
     fn connect_with(addr: &str, find_key: KeyFinder) -> std::io::Result<Self> {
-        let mut r = Self { addr: addr.to_string(), conn: None, next_id: 1, connected: false, send_key: false, key: None, find_key };
+        let mut r = Self {
+            addr: addr.to_string(),
+            conn: None,
+            next_id: 1,
+            connected: false,
+            send_key: false,
+            key: None,
+            find_key,
+            agent: Default::default(),
+        };
         r.reconnect()?;
         if let Some(w) = r.key_warning() {
             log::warn!("{w}");
@@ -122,12 +210,36 @@ impl Remote {
     /// A remote that connects on first use: the app may start after the MCP server, and a
     /// server that exits at once reads as failed for the client's whole session (#4078).
     pub fn lazy(addr: &str) -> Self {
-        Self { addr: addr.to_string(), conn: None, next_id: 1, connected: false, send_key: false, key: None, find_key: Box::new(find_key) }
+        Self {
+            addr: addr.to_string(),
+            conn: None,
+            next_id: 1,
+            connected: false,
+            send_key: false,
+            key: None,
+            find_key: Box::new(find_key),
+            agent: Default::default(),
+        }
     }
 
     /// The address the app is reached at, as given.
     pub fn addr(&self) -> &str {
         &self.addr
+    }
+
+    /// This connection's Ask Agent state, to share with another connection of the same bridge.
+    pub fn agent_state(&self) -> Arc<Mutex<AgentState>> {
+        self.agent.clone()
+    }
+
+    /// Share display/tagging state only. This does not transfer a server claim; use SharedRemote for channel ownership.
+    pub fn sharing(mut self, state: Arc<Mutex<AgentState>>) -> Self {
+        self.agent = state;
+        self
+    }
+
+    fn agent(&self) -> std::sync::MutexGuard<'_, AgentState> {
+        self.agent.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Why requests go without the control key (the address is not the app's 127.0.0.1), if they
@@ -198,45 +310,60 @@ impl Remote {
         }
     }
 
-    /// One request and its reply, with one retry on a new connection (the app may have
-    /// restarted; a new connection also reads the key again).
+    /// One request and its reply. A lost response is ambiguous and is never replayed.
     fn exchange(&mut self, id: u64, method: &str, params: &Value) -> Result<Value, String> {
         let unreachable = |addr: &str, e: std::io::Error, connected: bool| {
             let retry = if connected { String::new() } else { "; will retry on each call".to_string() };
             format!("WordCraft app at {addr} is not reachable: {e}{retry}")
         };
-        let mut first = true;
-        let reply = loop {
-            let tried = if self.conn.is_some() { Ok(()) } else { self.reconnect() };
-            let result = match tried {
-                Ok(()) => {
-                    let line = self.request_line(id, method, params)?;
-                    self.roundtrip(&line)
-                }
-                Err(e) => Err(e),
-            };
-            match result {
-                Ok(r) => break r,
-                Err(e) => {
-                    self.conn = None;
-                    // A reply that arrived but can't be read (too long, not UTF-8): the app has
-                    // run the request, so sending it again could run a state-changing one twice.
-                    if e.kind() == std::io::ErrorKind::InvalidData {
-                        return Err(format!("bad reply from app: {e}"));
-                    }
-                    if !first {
-                        return Err(unreachable(&self.addr, e, self.connected));
-                    }
-                    first = false;
-                }
+        if self.conn.is_none() {
+            self.reconnect().map_err(|e| unreachable(&self.addr, e, self.connected))?;
+        }
+        let line = self.request_line(id, method, params)?;
+        let reply = self.roundtrip(&line).map_err(|e| {
+            self.conn = None;
+            // A reply that arrived but can't be read (too long, not UTF-8): the app has run the
+            // request, so it must not be sent again.
+            if e.kind() == std::io::ErrorKind::InvalidData {
+                format!("bad reply from app: {e}")
+            } else {
+                format!("AMBIGUOUS_RESPONSE: request was not replayed; reconnect and inspect: {e}")
             }
-        };
+        })?;
         serde_json::from_str(reply.trim()).map_err(|e| format!("bad reply from app: {e}"))
     }
 }
 
 impl Backend for Remote {
     fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        let mut params = params;
+        self.agent().before(method, &mut params);
+        let r = self.call_app(method, &params);
+        self.agent().after(method, &params, &r);
+        r
+    }
+
+    fn has_ui(&self) -> bool {
+        true
+    }
+
+    fn describe(&self) -> String {
+        if self.connected {
+            format!("connected to the WordCraft app at {}", self.addr)
+        } else {
+            format!("will connect to the WordCraft app at {} when it opens", self.addr)
+        }
+    }
+
+    fn set_client(&mut self, name: &str) {
+        self.agent().client = Some(name.chars().filter(|c| !c.is_control()).take(64).collect());
+    }
+}
+
+impl Remote {
+    /// One method call to the app; `Ok` carries the `result`.
+    fn call_app(&mut self, method: &str, params: &Value) -> Result<Value, String> {
+        let params = params.clone();
         let id = self.next_id;
         self.next_id += 1;
         let unauthorized = |v: &Value| v.get("error").and_then(Value::as_str) == Some("unauthorized");
@@ -261,19 +388,8 @@ impl Backend for Remote {
                 |w| format!("unauthorized: {w}"),
             ))
         } else {
-            Err(v.get("error").and_then(Value::as_str).unwrap_or("unknown error").to_string())
-        }
-    }
-
-    fn has_ui(&self) -> bool {
-        true
-    }
-
-    fn describe(&self) -> String {
-        if self.connected {
-            format!("connected to the WordCraft app at {}", self.addr)
-        } else {
-            format!("will connect to the WordCraft app at {} when it opens", self.addr)
+            let error = v.get("error").and_then(Value::as_str).unwrap_or("unknown error");
+            Err(v.get("errorCode").and_then(Value::as_str).map_or_else(|| error.to_string(), |code| format!("{code}: {error}")))
         }
     }
 }
@@ -466,7 +582,7 @@ mod tests {
         assert_eq!(r.call("document.inspect", json!({})).unwrap(), json!(1));
         assert_eq!(reads.load(Ordering::SeqCst), 2);
 
-        // The app quits mid-session (connection closed): the retry reads the key again.
+        // An ambiguous lost response is never replayed. The next explicit call reconnects.
         let (port, seen) = fake_app(|req| if req["id"] == 2 { None } else { Some((json!({"ok": true, "result": 1}), false)) });
         let reads = Arc::new(AtomicUsize::new(0));
         let n = reads.clone();
@@ -476,7 +592,10 @@ mod tests {
         r.call("document.inspect", json!({})).unwrap_err();
         let keys: Vec<Value> = seen.try_iter().map(|v| v["key"].clone()).collect();
         assert_eq!(keys.first(), Some(&json!("key-0")), "{keys:?}");
-        assert_eq!(keys.last(), Some(&json!("key-1")), "{keys:?}");
+        assert_eq!(keys.len(), 2, "the failed call was sent exactly once");
+        assert_eq!(keys.last(), Some(&json!("key-0")), "{keys:?}");
+        assert_eq!(r.call("document.inspect", json!({})).unwrap(), json!(1));
+        assert_eq!(seen.recv_timeout(WAIT).unwrap()["key"], "key-1");
     }
 
     #[test]
@@ -497,5 +616,49 @@ mod tests {
         let e = r.call("document.inspect", json!({})).unwrap_err();
         assert!(e.contains("not the app's address") && e.contains("not sent"), "{e}");
         assert!(seen.recv_timeout(WAIT).unwrap().get("key").is_none());
+    }
+
+    /// Ask Agent: the bridge names its agent on `agent.listen`, tags its edits with the open
+    /// request until it is answered, and stops when the app says the request is over.
+    #[test]
+    fn edits_carry_the_open_request_until_it_is_closed() {
+        let (port, seen) = fake_app(|req| {
+            let method = req["method"].as_str().unwrap_or("");
+            let reply = match method {
+                "agent.listen" => json!({"ok": true, "result": {"id": 5, "instruction": "shorten"}}),
+                "engine.execute" if req["params"]["request"] == 6 => {
+                    json!({"ok": false, "errorCode": "NO_REQUEST", "error": "no Ask Agent request 6"})
+                }
+                "agent.reply" => json!({"ok": true, "result": {"id": req["params"]["id"], "shown": true}}),
+                _ => json!({"ok": true, "result": {}}),
+            };
+            Some((reply, false))
+        });
+        let mut r = Remote::connect_with(&format!("127.0.0.1:{port}"), fixed_key("k")).unwrap();
+        r.set_client("test-client\u{7}");
+        r.call("engine.execute", json!({"command": "text.insert", "params": {"text": "a"}})).unwrap();
+        assert!(seen.recv_timeout(WAIT).unwrap()["params"].get("request").is_none(), "no request open yet");
+        r.call("agent.listen", json!({"timeoutMs": 10})).unwrap();
+        assert_eq!(seen.recv_timeout(WAIT).unwrap()["params"]["agent"], "test-client", "named after the MCP client");
+        r.call("engine.execute", json!({"command": "text.insert", "params": {"text": "b"}})).unwrap();
+        assert_eq!(seen.recv_timeout(WAIT).unwrap()["params"]["request"], 5, "edits carry the open request");
+        // A progress note keeps it open; the answer closes it.
+        r.call("agent.reply", json!({"id": 5, "text": "half way", "done": false})).unwrap();
+        let _ = seen.recv_timeout(WAIT);
+        assert_eq!(r.agent_state().lock().unwrap().open(), &[5]);
+        r.call("agent.reply", json!({"id": 5, "text": "Done."})).unwrap();
+        let _ = seen.recv_timeout(WAIT);
+        r.call("engine.execute", json!({"command": "text.insert", "params": {"text": "c"}})).unwrap();
+        assert!(seen.recv_timeout(WAIT).unwrap()["params"].get("request").is_none(), "closed: plain edits again");
+        // The person cancelled: the app refuses, and the bridge lets the request go.
+        r.agent_state().lock().unwrap().open.push(6);
+        assert!(r.call("engine.execute", json!({"command": "text.insert", "params": {"text": "d"}})).unwrap_err().contains("NO_REQUEST"));
+        let _ = seen.recv_timeout(WAIT);
+        assert!(r.agent_state().lock().unwrap().open().is_empty());
+        // Another connection of the same bridge (`--channel`) shares the state.
+        let other = Remote::connect_with(&format!("127.0.0.1:{port}"), fixed_key("k")).unwrap().sharing(r.agent_state());
+        other.agent_state().lock().unwrap().open.push(7);
+        r.call("engine.execute", json!({"command": "text.insert", "params": {"text": "e"}})).unwrap();
+        assert_eq!(seen.recv_timeout(WAIT).unwrap()["params"]["request"], 7);
     }
 }

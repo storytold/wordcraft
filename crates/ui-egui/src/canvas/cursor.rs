@@ -5,8 +5,14 @@ use super::{Color32, DocLayout, Hash, Hasher, Pos, Pos2, WordApp};
 
 /// Caret position on screen.
 pub fn caret_screen(app: &mut WordApp) -> Option<(Pos2, f32)> {
+    let focus = app.session.sel.focus.clone();
+    pos_screen(app, &focus)
+}
+
+/// Where a caret at `pos` would be on screen: its top and height.
+pub fn pos_screen(app: &mut WordApp, pos: &Pos) -> Option<(Pos2, f32)> {
     let l = app.session.layout();
-    let c = l.caret_on(&app.session.sel.focus, app.session.page_hint)?;
+    let c = l.caret_on(pos, app.session.page_hint)?;
     let p = page_to_screen(app, c.page, c.x, c.top)?;
     let scale = app
         .canvas

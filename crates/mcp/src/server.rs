@@ -25,7 +25,8 @@ parameters with list_commands and run them with execute (or several with batch).
 execute format.bold → inspect_document to verify → render_page to look at the result → save {path:\"out.docx\"}. \
 Several documents can be open: new_document and open_document open another one and make it active; \
 list_documents gives their ids, and `doc` on execute, batch and the other document tools works on one \
-without switching.";
+without switching. \
+Ask Agent: wait_for_request waits for an instruction from the WordCraft window; reply_to_request answers.";
 
 /// Resource URIs.
 pub const DOC_URI: &str = "wordcraft://document";
@@ -178,6 +179,9 @@ impl Server {
     fn request(&mut self, method: &str, params: &Value) -> Result<Value, (i64, String)> {
         match method {
             "initialize" => {
+                if let Some(name) = params.pointer("/clientInfo/name").and_then(Value::as_str) {
+                    self.backend.set_client(name);
+                }
                 let asked = params.get("protocolVersion").and_then(Value::as_str).unwrap_or(PROTOCOL_VERSION);
                 let version = if SUPPORTED_VERSIONS.contains(&asked) { asked } else { PROTOCOL_VERSION };
                 Ok(json!({

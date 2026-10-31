@@ -21,6 +21,16 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
         read_mode_events(app, ctx, &events, window);
         return;
     }
+    // Typing in the document puts away an Ask Agent bubble that has sent its request.
+    let typed = |e: &egui::Event| match e {
+        egui::Event::Text(t) => !t.is_empty(),
+        egui::Event::Paste(_) | egui::Event::Ime(egui::ImeEvent::Commit(_)) => true,
+        egui::Event::Key { key: Key::Backspace | Key::Delete | Key::Enter, pressed: true, modifiers, .. } => !modifiers.command,
+        _ => false,
+    };
+    if events.iter().any(typed) {
+        crate::ask_agent::typing_resumed(app);
+    }
     let alt_codes = alt_codes_supported(ctx);
     // The erased text's formatting is carried only for a replacement in this raw batch. The
     // undo join belongs to the deletion transaction instead: the engine's scoped

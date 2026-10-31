@@ -1,7 +1,7 @@
 use super::{
-    DefaultApp, MAX_RECENT, SaveChoice, SaveInFlight, Value, WordApp, applied_font, async_saves, chrome, colors, crop, dialogs, dialogs_table_style,
-    file_dialogs, i18n, json, keeps_everything, keytips, now_ms, options, panes, paste_picture, printing, push_recent_font, system_clipboard,
-    table_pen, theme, widgets, zotero,
+    DefaultApp, MAX_RECENT, SaveChoice, SaveInFlight, Value, WordApp, applied_font, ask_agent, async_saves, chrome, colors, crop, dialogs,
+    dialogs_table_style, file_dialogs, i18n, json, keeps_everything, keytips, now_ms, options, panes, paste_picture, printing, push_recent_font,
+    system_clipboard, table_pen, theme, widgets, zotero,
 };
 
 impl WordApp {
@@ -28,6 +28,10 @@ impl WordApp {
     /// Close, Envelopes, Labels and Finish & Merge on a document with unsaved changes first ask
     /// Save / Don't Save / Cancel, and the command runs once that is answered (`ui.saveChanges`).
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        if let Some(why) = ask_agent::held(self, id) {
+            self.status(why.clone());
+            return Err(why);
+        }
         // Comment text still being typed is written first, so a save or export has it and a
         // close, New or Open counts it as a change (#1348). A draft the document refuses is not
         // part of it: saving and exporting go on without it (the refusal stays on the status
@@ -748,6 +752,9 @@ impl WordApp {
                         .into(),
                 ));
             }
+            // Ask Agent… (Help › Agents, the context menu, Ctrl+Shift+O): an agent connected to the
+            // control channel takes the request (`ask_agent`).
+            "ui.askAgent" => return Some(ask_agent::command(self, p)),
             "ui.discord" => {
                 self.canvas.open_url = Some("https://discord.gg/artcraft".into());
                 json!({})
