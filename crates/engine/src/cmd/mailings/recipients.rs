@@ -1,8 +1,18 @@
 use super::filter::refresh_shown;
 use super::{CmdError, CmdResult, Session, Value, json, p};
 
-/// The field separator: whichever of `,` `;` and tab the first record (outside quotes) uses most.
+/// The field separator: whichever of `,` `;` and tab the first non-blank record (outside quotes) uses most.
 fn csv_separator(text: &str) -> char {
+    // Skip leading blank lines (LF, CRLF or bare CR line ends).
+    let mut start = 0;
+    for (i, c) in text.char_indices() {
+        if c == '\n' || c == '\r' {
+            start = i + 1;
+        } else if !c.is_whitespace() {
+            break;
+        }
+    }
+    let text = text.get(start..).unwrap_or(text);
     let mut quoted = false;
     let mut unquoted = String::new();
     // A quoted header may span physical lines; infer from the first complete record.
