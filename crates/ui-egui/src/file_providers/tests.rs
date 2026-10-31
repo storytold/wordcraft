@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 use super::{Capture, Command, Host, Resource};
 use serde_json::json;
 
