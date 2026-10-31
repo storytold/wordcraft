@@ -8,7 +8,7 @@ pub(super) fn view_key(app: &WordApp, dim_body: bool, hidden: Option<&Pos>) -> u
     let mut h = std::collections::hash_map::DefaultHasher::new();
     let v = &app.session.view;
     (v.marks, app.session.prefs.marks, v.show_markup, v.dark_mode, wordcraft_render::DARK_PAPER, v.hide_ink, v.draw.replay).hash(&mut h);
-    (v.read_mode, v.read_page_color).hash(&mut h);
+    (v.read_mode, v.read_page_color, app.session.prefs.paper_color).hash(&mut h);
     app.session.prefs.markup.hash(&mut h);
     dim_body.hash(&mut h);
     format!("{:?}{:?}{:?}", app.session.doc.settings.page_color, app.session.doc.settings.page_picture, app.session.doc.settings.watermark)
@@ -233,12 +233,18 @@ pub(super) fn page_render_options(app: &WordApp, dim_body: bool) -> wordcraft_re
     opts.display.revisions = app.session.prefs.markup.clone();
     opts.dark = app.session.view.dark_mode;
     opts.dark_paper = wordcraft_render::DARK_PAPER;
+    if !opts.dark {
+        opts.paper = app.session.prefs.paper_color.color();
+    }
     // In Read Mode the Page color sets the paper and the dark page, and Switch Modes is ignored.
     if app.session.view.read_mode {
         use wordcraft_engine::cmd::view::ReadPageColor;
         let color = app.session.view.read_page_color;
-        opts.read_paper = Some(if color == ReadPageColor::Sepia { wordcraft_render::SEPIA_PAPER } else { wordcraft_doc::props::Rgb::WHITE });
+        opts.read_paper = Some(if color == ReadPageColor::Sepia { wordcraft_render::SEPIA_PAPER } else { app.session.prefs.paper_color.color() });
         opts.dark = color == ReadPageColor::Inverse;
+        if opts.dark {
+            opts.read_paper = Some(wordcraft_doc::props::Rgb::WHITE);
+        }
     }
     opts.display.dim_header = !dim_body;
     opts.display.dim_body = dim_body;
