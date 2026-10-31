@@ -270,15 +270,23 @@ pub struct CanvasState {
     /// The rows and columns hovered in Insert › Table's grid this frame: the page shows that
     /// table where it would go (#3931). Set by the grid each frame, taken by [`show`].
     pub(crate) table_preview: Option<(usize, usize)>,
+    /// A command (id, params) the page shows run on the selection, without running it: the
+    /// formatting button the floating mini toolbar is hovered over. Set each frame, taken by [`show`].
+    pub(crate) command_preview: Option<(String, serde_json::Value)>,
+    /// The command preview the page last drew, so the bar repaints only when its hover changes.
+    pub(crate) command_previewed: Option<(String, serde_json::Value)>,
+    /// The scroll offset held while a command preview is shown, so the page does not move as
+    /// the previewed text reflows.
+    pub(crate) preview_scroll: Option<egui::Vec2>,
     /// The last previewed table's layout, the copy of the document it was laid out from and the
     /// copy's selection, with
-    /// what it was laid out for (rows, columns, document id, revision, selection, and the
+    /// what it was laid out for (command, params, document id, revision, selection, and the
     /// document's own layout, which a view change replaces), so a still pointer doesn't lay the
     /// document out every frame. Set only while the page shows the preview.
     table_preview_layout: Option<(TablePreviewKey, wordcraft_doc::Document, wordcraft_engine::Selection, std::sync::Arc<DocLayout>)>,
 }
 
-type TablePreviewKey = ((usize, usize, u64, u64, wordcraft_engine::Selection), std::sync::Arc<DocLayout>);
+type TablePreviewKey = ((String, serde_json::Value, u64, u64, wordcraft_engine::Selection), std::sync::Arc<DocLayout>);
 
 impl CanvasState {
     /// Another document is shown in the window: everything about the page that was shown (drags,
@@ -423,6 +431,9 @@ impl Default for CanvasState {
             tab_drag: None,
             drawn_ibeam: crate::ibeam::DRAWN,
             table_preview: None,
+            command_preview: None,
+            command_previewed: None,
+            preview_scroll: None,
             table_preview_layout: None,
         }
     }
@@ -1309,12 +1320,53 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
 /// Lays out and paints the document pages for print, Read and Web views, settles viewports, draw
 /// rulers and overlays, anchors zoom and scrolling, and routes pointer, selection, IME and caret
 /// input.
+/// While the page shows a command preview the view stays where it was when the preview began:
+/// no scrolling to the caret, and the offset is held against the previewed text's reflow.
+fn hold_scroll_for_preview(app: &mut WordApp) -> bool {
+    if app.canvas.command_previewed.is_none() {
+        app.canvas.preview_scroll = None;
+        return false;
+    }
+    let at = *app.canvas.preview_scroll.get_or_insert(app.canvas.scroll_offset);
+    app.canvas.scroll_request = Some(at);
+    true
+}
+
+/// The live selection's rects on screen, from the document's own layout rather than a command
+/// preview's, which can move the lines (Align Right) from under the mini toolbar's pointer.
+fn live_selection_screen_rects(app: &mut WordApp, rects: &[Rect], scale: f32) -> Vec<Rect> {
+    let layout = app.session.layout();
+    let selected: Vec<_> = if crate::objects::selected(app).is_some() {
+        Vec::new()
+    } else if let Some(range) = app.session.cell_range() {
+        wordcraft_engine::cmd::table_mouse::cell_rects(&layout, &app.session.doc, range)
+    } else if !app.session.sel.is_collapsed() {
+        match app.session.column_segments() {
+            Some(segs) => segs.iter().flat_map(|(a, b)| layout.selection_rects(&app.session.doc, a, b, app.session.page_hint)).collect(),
+            None => {
+                let (a, b) = app.session.sel.ordered();
+                wordcraft_engine::cmd::table_mouse::selection_rects(&layout, &app.session.doc, &a, &b, app.session.page_hint)
+            }
+        }
+    } else {
+        Vec::new()
+    };
+    selected
+        .into_iter()
+        .filter_map(|(pi, r)| {
+            let pr = rects.get(pi)?;
+            let scale = layout.pages.get(pi).map_or(scale, |page| page_screen_scale(*pr, page, scale));
+            Some(Rect::from_min_size(pos2(pr.min.x + r.x * scale, pr.min.y + r.y * scale), vec2(r.w * scale, r.h * scale)))
+        })
+        .collect()
+}
+
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let full = ui.available_rect_before_wrap();
     let layout = prepare_layout(app, ui, full);
     let view = prepare_view(app, ui, full, &layout);
-    let scroll_target = update_caret_scroll(app, &view);
+    let scroll_target = if hold_scroll_for_preview(app) { None } else { update_caret_scroll(app, &view) };
     let motion = scroll_motion(app, ui, full, &view);
     let scroll_area = configure_scroll_area(app, ui, &view, motion);
     let CanvasView { area, hruler, vruler, dark_page, sepia_page, geo, dim_body, grid_story, caret, .. } = view;
@@ -1430,7 +1482,11 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         // Anchor only to visible selection geometry. A selection can span pages, and its
         // document-first line may be scrolled offscreen; using it would pin the toolbar to an
         // old screen position unrelated to the visible selection.
-        app.canvas.mini_anchor = crate::mini_toolbar::visible_anchor(screen_rects, visible_clip);
+        // Alignment previews can move the selected text while the pointer is still over a mini
+        // toolbar button. Keep the bar anchored to the live selection until the preview ends, or
+        // it can move out from under the pointer and flicker between preview and live layouts.
+        let anchor_rects = if app.canvas.command_previewed.is_some() { live_selection_screen_rects(app, &rects, geo.scale) } else { screen_rects };
+        app.canvas.mini_anchor = crate::mini_toolbar::visible_anchor(anchor_rects, visible_clip);
         // Content controls: the frame of the one the caret is in (all of them in Design Mode).
         crate::content_controls::paint(app, &painter, &t, &layout, &rects, geo.scale);
         paint_read_aloud_highlight(app, &painter, &layout, &rects, &geo, &t);

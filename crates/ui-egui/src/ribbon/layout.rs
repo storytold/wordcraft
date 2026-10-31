@@ -121,7 +121,7 @@ pub(super) fn layout(app: &mut WordApp, ui: &mut Ui) {
         });
     });
     group(ui, "Paragraph", Some("para.dialog"), app, |ui, app| {
-        let rp = app.session.doc.para_at(&app.session.sel.focus).map(|p| app.session.doc.styles.resolve_para(&p.props));
+        let rp = app.session.doc.para_at(&app.session.sel.focus).map(|_| wordcraft_engine::cmd::para::selection_para(&app.session));
         let Some(rp) = rp else { return };
         // #654: header + two rows of 20 px fields fit the content height above the group title
         // (1.5 pt between rows; 3 ran 2.5 pt into it); labels and fields sit on shared columns,

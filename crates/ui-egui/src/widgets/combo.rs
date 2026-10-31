@@ -39,6 +39,44 @@ pub fn color_grid(ui: &mut Ui, theme: &[wordcraft_doc::Rgb]) -> Option<String> {
     picked
 }
 
+fn hover_key() -> egui::Id {
+    egui::Id::unique("wc_pick_hover")
+}
+
+/// Records the list entry or colour the pointer is over in this pass (one per pass; the last
+/// drawn wins). [`take_hover`] reads it.
+pub(crate) fn note_hover(ctx: &egui::Context, value: String) {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|d| d.insert_temp(hover_key(), (pass, value)));
+}
+
+/// The entry noted by [`note_hover`] in this pass, if any; it is read once. Callers take before
+/// drawing a list too, to drop what another widget noted.
+pub(crate) fn take_hover(ctx: &egui::Context) -> Option<String> {
+    let pass = ctx.cumulative_pass_nr();
+    let seen = ctx.data_mut(|d| d.remove_temp::<(u64, String)>(hover_key()));
+    seen.filter(|(p, _)| *p == pass).map(|(_, v)| v)
+}
+
+fn current_key() -> egui::Id {
+    egui::Id::unique("wc_pick_current")
+}
+
+/// The colour (hex, or a name the menu uses) a palette marks as the one in effect; `None` marks
+/// nothing. The caller sets it before drawing a menu and clears it after.
+pub(crate) fn set_current_pick(ctx: &egui::Context, current: Option<String>) {
+    ctx.data_mut(|d| match current {
+        Some(c) => {
+            d.insert_temp(current_key(), c);
+        }
+        None => d.remove::<String>(current_key()),
+    });
+}
+
+pub(crate) fn current_pick(ctx: &egui::Context) -> Option<String> {
+    ctx.data(|d| d.get_temp::<String>(current_key()))
+}
+
 pub(crate) fn swatch(ui: &mut Ui, c: wordcraft_doc::Rgb) -> bool {
     let (r, resp) = ui.allocate_exact_size(vec2(15.0, 15.0), Sense::click());
     ui.painter().rect_filled(r, 0.0, Color32::from_rgb(c.0, c.1, c.2));
@@ -49,6 +87,12 @@ pub(crate) fn swatch(ui: &mut Ui, c: wordcraft_doc::Rgb) -> bool {
         Stroke::new(if resp.hovered() { 1.5 } else { 0.5 }, if resp.hovered() { t.accent } else { t.border_strong }),
         egui::StrokeKind::Inside,
     );
+    if resp.hovered() {
+        note_hover(ui.ctx(), c.hex());
+    }
+    if current_pick(ui.ctx()).is_some_and(|cur| cur.eq_ignore_ascii_case(&c.hex())) {
+        ui.painter().rect_stroke(r.expand(1.0), 0.0, Stroke::new(2.0, t.accent), egui::StrokeKind::Outside);
+    }
     resp.on_hover_text(format!("#{}", c.hex())).clicked()
 }
 
@@ -326,11 +370,22 @@ fn combo_impl(ui: &mut Ui, options: ComboOptions<'_>) -> Option<String> {
         menu_field.rect = resp.rect.union(ar);
         let menu = craft_ui::combo::Menu::new(ui, &menu_field).close_behavior(close).height(420.0);
         let row_h = if preview.is_some() { COMBO_PREVIEW_ROW_H } else { ui.spacing().interact_size.y };
+        // The recent section keeps its order while the list stays open: a pick moves the family to
+        // the top for the next time the list opens, not under the pointer.
+        let frozen_id = search_id.with("recent_frozen");
+        let menu_recent: Vec<String> = ui.data(|d| d.get_temp(frozen_id)).unwrap_or_else(|| recent.to_vec());
         let item = |k: usize| items.get(k);
-        let row = |k: usize| section_row(k, recent, &item);
-        let total = section_rows(recent.len(), items.len());
+        let row = |k: usize| section_row(k, &menu_recent, &item);
+        let total = section_rows(menu_recent.len(), items.len());
         let list = |ui: &mut Ui, range: std::ops::Range<usize>, ()| {
-            draw_rows(ui, RowDrawOptions { width, current, range, row: &row, highlight: None, preview, row_height: row_h })
+            let picked = draw_rows(
+                ui,
+                RowDrawOptions { width, current, range, row: &row, highlight: None, preview, row_height: row_h, recent_rows: menu_recent.len() },
+            );
+            if picked.is_some() {
+                ui.close();
+            }
+            picked
         };
         let footer = |ui: &mut Ui| {
             let mut picked = None;
@@ -351,6 +406,13 @@ fn combo_impl(ui: &mut Ui, options: ComboOptions<'_>) -> Option<String> {
         } else {
             menu.show_rows_with_header(|_| (), row_h, |()| total, list)
         };
+        ui.data_mut(|d| {
+            if picked.is_some() {
+                d.insert_temp(frozen_id, menu_recent.clone());
+            } else {
+                d.remove::<Vec<String>>(frozen_id);
+            }
+        });
         if let Some(v) = picked.flatten() {
             out = Some(v);
         }
@@ -374,7 +436,10 @@ fn combo_impl(ui: &mut Ui, options: ComboOptions<'_>) -> Option<String> {
                     .show(ui, |ui| {
                         let item = |k: usize| matches.get(k).and_then(|&i| items.get(i));
                         let row = |k: usize| section_row(k, recent_shown, &item);
-                        list_rows(ui, RowListOptions { width, current, n, row: &row, highlight: Some(lit), scroll, preview })
+                        list_rows(
+                            ui,
+                            RowListOptions { width, current, n, row: &row, highlight: Some(lit), scroll, preview, recent_rows: recent_shown.len() },
+                        )
                     })
                     .inner
             });
@@ -416,7 +481,20 @@ pub const COMBO_PREVIEW_ROW_H: f32 = 24.0;
 /// family and each preview loads that font, so building all rows loaded every font on the system
 /// (gigabytes on large font collections) and froze the app (#121).
 pub fn combo_list(ui: &mut Ui, width: f32, current: &str, items: &[String], preview: Option<&dyn Fn(&mut Ui, &str) -> Response>) -> Option<String> {
-    list_rows(ui, RowListOptions { width, current, n: items.len(), row: &|k| items.get(k).map(Row::Item), highlight: None, scroll: None, preview }).0
+    list_rows(
+        ui,
+        RowListOptions {
+            width,
+            current,
+            n: items.len(),
+            row: &|k| items.get(k).map(Row::Item),
+            highlight: None,
+            scroll: None,
+            preview,
+            recent_rows: 0,
+        },
+    )
+    .0
 }
 
 /// A row of a combo's list: a dim section heading nothing picks, or an entry.
@@ -485,13 +563,19 @@ struct RowDrawOptions<'rows, 'text> {
     highlight: Option<usize>,
     preview: Option<&'rows dyn Fn(&mut Ui, &str) -> Response>,
     row_height: f32,
+    /// How many recent families head the list (0 without the section).
+    recent_rows: usize,
 }
 
 fn draw_rows(ui: &mut Ui, options: RowDrawOptions<'_, '_>) -> Option<String> {
-    let RowDrawOptions { width, current, range, row, highlight, preview, row_height: row_h } = options;
+    let RowDrawOptions { width, current, range, row, highlight, preview, row_height: row_h, recent_rows } = options;
     let mut out = None;
-    let fill = Tokens::get(ui.ctx()).checked;
+    let tokens = Tokens::get(ui.ctx());
+    let (fill, accent) = (tokens.checked, tokens.accent);
     ui.set_min_width(width + 60.0);
+    // A family in Recently Used is marked there only: marked again under All Fonts it would look as
+    // if two were chosen.
+    let current_is_recent = (1..=recent_rows).any(|k| matches!(row(k), Some(Row::Item(r)) if r == current));
     for k in range {
         let it = match row(k) {
             Some(Row::Item(it)) => it,
@@ -508,9 +592,25 @@ fn draw_rows(ui: &mut Ui, options: RowDrawOptions<'_, '_>) -> Option<String> {
                     let r = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), row_h));
                     ui.painter().rect_filled(r, 3.0, fill);
                 }
-                p(ui, it).clicked()
+                let in_all_fonts = recent_rows > 0 && k > recent_rows.saturating_add(1);
+                if it == current && !(in_all_fonts && current_is_recent) {
+                    let r = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), row_h));
+                    ui.painter().rect_filled(r, 3.0, fill);
+                    ui.painter().rect_filled(Rect::from_min_size(r.min, vec2(3.0, row_h)), 1.5, accent);
+                }
+                let resp = p(ui, it);
+                if resp.hovered() {
+                    note_hover(ui.ctx(), it.clone());
+                }
+                resp.clicked()
             }
-            None => ui.selectable_label(if highlight.is_some() { lit } else { it == current }, it.as_str()).clicked(),
+            None => {
+                let resp = ui.selectable_label(if highlight.is_some() { lit } else { it == current }, it.as_str());
+                if resp.hovered() {
+                    note_hover(ui.ctx(), it.clone());
+                }
+                resp.clicked()
+            }
         };
         if clicked {
             out = Some(it.clone());
@@ -530,10 +630,11 @@ struct RowListOptions<'rows, 'text> {
     highlight: Option<usize>,
     scroll: Option<(f32, f32)>,
     preview: Option<&'rows dyn Fn(&mut Ui, &str) -> Response>,
+    recent_rows: usize,
 }
 
 fn list_rows(ui: &mut Ui, options: RowListOptions<'_, '_>) -> (Option<String>, f32, f32) {
-    let RowListOptions { width, current, n, row, highlight, scroll, preview } = options;
+    let RowListOptions { width, current, n, row, highlight, scroll, preview, recent_rows } = options;
     let mut out = None;
     let row_h = if preview.is_some() { COMBO_PREVIEW_ROW_H } else { ui.spacing().interact_size.y };
     let desired_h = (n as f32 * (row_h + ui.spacing().item_spacing.y)).min(420.0);
@@ -556,7 +657,7 @@ fn list_rows(ui: &mut Ui, options: RowListOptions<'_, '_>) -> (Option<String>, f
         area = area.vertical_scroll_offset(offset.max(0.0));
     }
     let shown = area.show_rows(ui, row_h, n, |ui, range| {
-        if let Some(v) = draw_rows(ui, RowDrawOptions { width, current, range, row, highlight, preview, row_height: row_h }) {
+        if let Some(v) = draw_rows(ui, RowDrawOptions { width, current, range, row, highlight, preview, row_height: row_h, recent_rows }) {
             out = Some(v);
         }
     });
