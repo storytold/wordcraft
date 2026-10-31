@@ -1700,26 +1700,27 @@ fn lists_get_labels_and_indent() {
 }
 
 #[test]
-fn a_none_level_draws_its_literal_label() {
-    // #4985: numFmt none with the level text `RESPONSE:` and a one-inch hanging indent; Word
-    // draws `RESPONSE:` at the margin and the text an inch in.
-    let mut d = Document::from_text("X");
-    let id = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
-    let level = wordcraft_doc::numbering::Level {
-        format: wordcraft_doc::section::NumFormat::None,
-        text: "RESPONSE:".into(),
-        indent: 72.0,
-        hanging: 72.0,
-        ..Default::default()
-    };
-    if let Some(num) = d.numbering.nums.iter_mut().find(|n| n.id == id) {
-        num.level_overrides = vec![(0, level)];
+fn a_none_format_label_shows_its_text_and_tabs_to_the_indent() {
+    // #4985: Word draws a "none" level's literal text ("RESPONSE:"), and an empty one still tabs
+    // the text to a hanging indent, as a numbered item's. An empty label already at the left indent
+    // takes no tab (Word's Chapter 1 list: Heading 2 starts at the margin, not at 0.5").
+    use wordcraft_doc::section::NumFormat;
+    for (text, indent, hanging, want) in [("RESPONSE:", 72.0, 72.0, 144.0), ("", 72.0, 72.0, 144.0), ("", 0.0, 0.0, 72.0), ("", 50.0, 0.0, 122.0)] {
+        let mut d = Document::from_text("X");
+        let id = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+        for a in &mut d.numbering.abstracts {
+            if let Some(l) = a.levels.first_mut() {
+                l.format = NumFormat::None;
+                l.text = text.into();
+                (l.indent, l.hanging) = (indent, hanging);
+            }
+        }
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 1), &|p| p.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 })).unwrap();
+        let l = lay(&d);
+        assert_eq!(labels(&l), [text]);
+        let x = l.caret(&Pos::body(0, 0)).unwrap().x;
+        assert!((x - want).abs() < 0.5, "{text:?} at {indent}/{hanging}: {x}, not {want}");
     }
-    d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 1), &|p| p.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 })).unwrap();
-    let l = lay(&d);
-    assert_eq!(labels(&l), vec!["RESPONSE:"]);
-    let x = l.caret(&Pos::body(0, 0)).unwrap().x;
-    assert!((x - 144.0).abs() < 0.5, "the text starts an inch in: {x}");
 }
 
 #[test]

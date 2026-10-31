@@ -228,7 +228,7 @@ impl Numbering {
     /// Whether a paragraph in list `num` at `level` gets a label ([`Counters::next_label`] gives
     /// one), without counting it.
     pub fn shows_label(&self, num: u32, level: u8) -> bool {
-        self.abstract_of(num).is_some() && self.level(num, level.min(8)).is_some_and(|d| d.format != NumFormat::None || has_literal_text(&d.text))
+        self.abstract_of(num).is_some() && self.level(num, level.min(8)).is_some()
     }
     pub fn level(&self, num: u32, level: u8) -> Option<&Level> {
         if let Some((_, l)) = self.num(num)?.level_overrides.iter().find(|(i, _)| *i == level) {
@@ -317,47 +317,40 @@ impl Counters {
         let lv = (level as usize).min(8);
         // This list's own definition of a level wins over its abstract list's.
         let level_def = |k: usize| numbering.level(num, k as u8);
+        // A "none" level (Word's numFmt none) still counts and restarts the levels below it; only
+        // its number reads as nothing, so its literal text ("RESPONSE:") shows (#4985).
         let def = level_def(lv)?.clone();
-        // A "none" level (Word's numFmt none) shows no number of its own, only the rest of its
-        // text (`RESPONSE:`, #4985), and no label at all when that is nothing. It doesn't count.
-        let none = def.format == NumFormat::None;
-        if none && !has_literal_text(&def.text) {
-            return None;
+        let st = self.state.entry(abs.id).or_insert([0; 9]);
+        let fl = self.flags.entry(abs.id).or_default();
+        // Only this level's override, not the num's others: the counters are shared by every
+        // num of the abstract list, so restarting its other levels here would renumber
+        // paragraphs of the other nums. A heading style can use one num for levels 1-4 and
+        // another, with start overrides on every level, for 5-9; its first level-5 heading
+        // must not restart the chapter count.
+        if let std::collections::hash_map::Entry::Vacant(e) = self.seen.entry((num, lv as u8)) {
+            e.insert(true);
+            if let Some((_, start)) = n.start_overrides.iter().find(|(l, _)| *l as usize == lv)
+                && let (Some(s), Some(f)) = (st.get_mut(lv), fl.get_mut(lv))
+            {
+                *s = 0;
+                *f = LevelFlags { started: false, first: Some(*start) };
+            }
         }
-        let (vals, started) = if none {
-            (self.state.get(&abs.id).copied().unwrap_or([0; 9]), self.flags.get(&abs.id).copied().unwrap_or_default())
-        } else {
-            let st = self.state.entry(abs.id).or_insert([0; 9]);
-            let fl = self.flags.entry(abs.id).or_default();
-            // Only this level's override, not the num's others: the counters are shared by every
-            // num of the abstract list, so restarting its other levels here would renumber
-            // paragraphs of the other nums. A heading style can use one num for levels 1-4 and
-            // another, with start overrides on every level, for 5-9; its first level-5 heading
-            // must not restart the chapter count.
-            if let std::collections::hash_map::Entry::Vacant(e) = self.seen.entry((num, lv as u8)) {
-                e.insert(true);
-                if let Some((_, start)) = n.start_overrides.iter().find(|(l, _)| *l as usize == lv)
-                    && let (Some(s), Some(f)) = (st.get_mut(lv), fl.get_mut(lv))
-                {
-                    *s = 0;
-                    *f = LevelFlags { started: false, first: Some(*start) };
-                }
+        if let (Some(v), Some(f)) = (st.get_mut(lv), fl.get_mut(lv)) {
+            *v = if f.started { v.saturating_add(1) } else { f.first.unwrap_or(def.start) };
+            *f = LevelFlags { started: true, first: None };
+        }
+        // Deeper levels restart, unless they never restart or only restart after a level above
+        // this one (Word's lvlRestart).
+        for (d, (deeper, f)) in st.iter_mut().zip(fl.iter_mut()).enumerate().skip(lv + 1) {
+            let restarts = level_def(d).is_none_or(|l| l.restart && l.restart_after.is_none_or(|k| lv < k as usize));
+            if restarts {
+                *deeper = 0;
+                *f = LevelFlags::default();
             }
-            if let (Some(v), Some(f)) = (st.get_mut(lv), fl.get_mut(lv)) {
-                *v = if f.started { v.saturating_add(1) } else { f.first.unwrap_or(def.start) };
-                *f = LevelFlags { started: true, first: None };
-            }
-            // Deeper levels restart, unless they never restart or only restart after a level above
-            // this one (Word's lvlRestart).
-            for (d, (deeper, f)) in st.iter_mut().zip(fl.iter_mut()).enumerate().skip(lv + 1) {
-                let restarts = level_def(d).is_none_or(|l| l.restart && l.restart_after.is_none_or(|k| lv < k as usize));
-                if restarts {
-                    *deeper = 0;
-                    *f = LevelFlags::default();
-                }
-            }
-            (*st, *fl)
-        };
+        }
+        let vals = *st;
+        let started = *fl;
         if def.format == NumFormat::Bullet {
             return Some((def.text.clone(), def));
         }
@@ -370,16 +363,13 @@ impl Counters {
             {
                 chars.next();
                 let k = (d as usize).saturating_sub(1).min(8);
-                if none && k == lv {
-                    continue;
-                }
                 let val = vals.get(k).copied().unwrap_or(0);
                 let counted = started.get(k).is_some_and(|f| f.started);
                 let val = if counted { val } else { level_def(k).map(|l| l.start).unwrap_or(1) };
                 // Legal numbering (w:isLgl) shows every level in Arabic digits, whatever its own
-                // format (二 of a Chinese outline becomes 2 in "2.1").
+                // format (二 of a Chinese outline becomes 2 in "2.1"); a "none" level stays empty.
                 let fmt = match level_def(k).map(|l| l.format).unwrap_or(NumFormat::Decimal) {
-                    NumFormat::DecimalZero => NumFormat::DecimalZero,
+                    f @ (NumFormat::DecimalZero | NumFormat::None) => f,
                     _ if def.legal => NumFormat::Decimal,
                     f => f,
                 };
@@ -393,19 +383,6 @@ impl Counters {
         }
         Some((label, def))
     }
-}
-
-/// Whether a level's text has anything besides its `%1`…`%9` placeholders: the text a "none"
-/// level still shows.
-fn has_literal_text(text: &str) -> bool {
-    let mut chars = text.chars().take(MAX_LEVEL_TEXT).peekable();
-    while let Some(c) = chars.next() {
-        if c != '%' || !chars.peek().is_some_and(char::is_ascii_digit) {
-            return true;
-        }
-        chars.next();
-    }
-    false
 }
 
 /// Longest level text (in characters) expanded into a list label.
@@ -453,28 +430,24 @@ mod tests {
     }
 
     #[test]
-    fn a_none_level_shows_its_literal_text() {
-        // #4985: Word shows `RESPONSE:` for a level with numFmt none and that text; a none level
-        // with only placeholders shows nothing, and its own number is never shown.
+    fn a_none_level_shows_its_text_and_still_counts() {
+        // As Word shows them (#4985): a "none" level's literal text is its label, its own number
+        // reads as nothing (also in legal numbering), and it restarts the levels below it.
         let mut n = Numbering::default();
         let id = n.add_list(ListKind::Numbered);
         let lvl = |format, text: &str| Level { format, text: text.into(), ..Level::default() };
+        let legal = Level { legal: true, ..lvl(NumFormat::Decimal, "%2.%3") };
         if let Some(num) = n.nums.iter_mut().find(|x| x.id == id) {
-            num.level_overrides = vec![
-                (1, lvl(NumFormat::None, "RESPONSE:")),
-                (2, lvl(NumFormat::None, "%3")),
-                (3, lvl(NumFormat::None, "")),
-                (4, lvl(NumFormat::None, "%1.%5 note")),
-            ];
+            num.level_overrides = vec![(0, lvl(NumFormat::None, "RESPONSE:")), (1, lvl(NumFormat::None, "[%2]")), (2, legal)];
         }
-        assert!(n.shows_label(id, 1) && n.shows_label(id, 4));
-        assert!(!n.shows_label(id, 2) && !n.shows_label(id, 3));
+        assert!(n.shows_label(id, 0));
         let mut c = Counters::default();
-        assert_eq!(c.next_label(&n, id, 0).unwrap().0, "1.");
-        assert_eq!(c.next_label(&n, id, 1).unwrap().0, "RESPONSE:");
-        assert!(c.next_label(&n, id, 2).is_none());
-        assert!(c.next_label(&n, id, 3).is_none());
-        assert_eq!(c.next_label(&n, id, 4).unwrap().0, "1. note", "the level above's number, not its own");
+        assert_eq!(c.next_label(&n, id, 0).unwrap().0, "RESPONSE:");
+        assert_eq!(c.next_label(&n, id, 1).unwrap().0, "[]");
+        assert_eq!(c.next_label(&n, id, 2).unwrap().0, ".1");
+        assert_eq!(c.next_label(&n, id, 2).unwrap().0, ".2");
+        assert_eq!(c.next_label(&n, id, 1).unwrap().0, "[]");
+        assert_eq!(c.next_label(&n, id, 2).unwrap().0, ".1");
     }
 
     #[test]
