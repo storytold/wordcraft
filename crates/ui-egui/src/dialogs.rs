@@ -34,7 +34,7 @@ use bookmarks::bookmark_at_caret;
 #[cfg(test)]
 use bookmarks::bookmark_names;
 pub use chrome::show;
-pub(crate) use chrome::{buttons, cancel_key_pressed, color_menu, ok_cancel_responses};
+pub(crate) use chrome::{block_behind, buttons, cancel_key_pressed, color_menu, forget_nudge, ok_cancel_responses, release_keyboard};
 pub use find::{FindExtra, FindTab, GoToWhat};
 #[cfg(test)]
 use find::{command_matches, goto_page, swallow_shortcut_text};
@@ -482,6 +482,19 @@ pub enum Dialog {
 }
 
 impl Dialog {
+    /// Whether the dialog blocks the rest of the window while it is open. As in Word for Mac
+    /// (16.114.1, #3859), all are but those you keep working beside.
+    pub fn is_modal(&self) -> bool {
+        use crate::dialogs_insert::InsertDialog;
+        use crate::dialogs_refs::RefsDialog;
+        match self {
+            Dialog::Find { .. } | Dialog::InsertMergeField { .. } => false,
+            Dialog::Insert(d) => !matches!(**d, InsertDialog::Symbol(_)),
+            Dialog::Refs(d) => !matches!(**d, RefsDialog::MarkEntry(_) | RefsDialog::CrossRef(_)),
+            _ => true,
+        }
+    }
+
     pub fn name(&self) -> &'static str {
         match self {
             Dialog::RenameDocument { .. } => "renameDocument",

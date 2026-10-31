@@ -711,7 +711,9 @@ fn configure_scroll_area(app: &mut WordApp, ui: &Ui, view: &CanvasView, motion: 
 fn prepare_layout(app: &mut WordApp, ui: &Ui, full: Rect) -> std::sync::Arc<DocLayout> {
     let now = ui.input(|i| i.time);
     let reflow_anchor = update_viewport(app, ui, full, now);
-    if app.canvas.focused && !matches!(app.dialog, Some(crate::dialogs::Dialog::SaveChanges { .. })) {
+    // While a modal dialog ("Save changes?" too) is up, keys answer it rather than edit the
+    // document behind it, also in the frame it opens, before the canvas has given up focus.
+    if app.canvas.focused && !app.modal_open() {
         crate::keys::canvas_events(app, ui.ctx());
     } else {
         app.canvas.alt_code.clear();
@@ -791,10 +793,12 @@ fn update_canvas_focus(app: &mut WordApp, ui: &mut Ui, resp: &egui::Response, im
     if focus_click {
         ui.memory_mut(|memory| memory.interrupt_ime());
     }
-    if focus_click || (app.canvas.want_focus && !resp.has_focus()) {
+    // Not while a modal dialog is open: it has the keyboard, and the page takes it when it closes.
+    let wants = app.canvas.want_focus && !app.modal_open();
+    if focus_click || (wants && !resp.has_focus()) {
         resp.request_focus();
     }
-    if focus_click || app.canvas.want_focus {
+    if focus_click || wants {
         app.canvas.want_focus = false;
     }
     app.canvas.widget_id = Some((resp.id, ui.ctx().cumulative_pass_nr()));
@@ -1369,14 +1373,16 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         if floating_comments(app) {
             // Its own layer, so presses on the card never reach the canvas under it.
             let ctx = ui.ctx().clone();
-            egui::Area::new(egui::Id::unique("floating_comment")).order(egui::Order::Foreground).fixed_pos(Pos2::ZERO).sense(Sense::hover()).show(
-                &ctx,
-                |aui| {
+            egui::Area::new(egui::Id::unique("floating_comment"))
+                .order(egui::Order::Foreground)
+                .interactable(!app.modal_open())
+                .fixed_pos(Pos2::ZERO)
+                .sense(Sense::hover())
+                .show(&ctx, |aui| {
                     aui.set_clip_rect(view_rect);
                     let ap = aui.painter().clone();
                     balloons(app, aui, &ap, &rects, &layout, geo.scale, view_rect);
-                },
-            );
+                });
         } else {
             balloons(app, ui, &painter, &rects, &layout, geo.scale, view_rect);
         }
