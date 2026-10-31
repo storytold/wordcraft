@@ -284,16 +284,18 @@ fn read_pages(xml: &[u8]) -> Pages {
         let Some(Layout { attrs: a, columns: cols, header: hb, footer: fb }) = layouts.get(&layout) else { continue };
         let mut sec = SectionProps::default();
         apply_layout(a, &mut sec);
-        // ODF starts a header at the page margin and the text after the header's height and
-        // spacing; Word measures the header's distance and the text's margin from the edge.
+        // ODF starts a header at the page margin and the text after the header's band; Word
+        // measures the header's distance and the text's margin from the edge. The band's height
+        // takes in its spacing (as LibreOffice draws it: a 2 cm header with 1 cm spacing puts
+        // the text 2 cm below the margin), so the spacing counts only past the height.
         let limit = sec.page_w.max(sec.page_h);
         if header {
             sec.header = sec.margin_top;
-            sec.margin_top = (sec.margin_top + hb.height + hb.spacing).min(limit);
+            sec.margin_top = (sec.margin_top + hb.height.max(hb.spacing)).min(limit);
         }
         if footer {
             sec.footer = sec.margin_bottom;
-            sec.margin_bottom = (sec.margin_bottom + fb.height + fb.spacing).min(limit);
+            sec.margin_bottom = (sec.margin_bottom + fb.height.max(fb.spacing)).min(limit);
         }
         // A one-column layout keeps the default columns (and their gap).
         if let Some(c) = cols.as_ref().filter(|c| c.count > 1) {

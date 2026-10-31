@@ -118,8 +118,9 @@ fn cm(v: f32) -> f32 {
 
 #[test]
 fn a_header_starts_at_the_page_margin_and_the_text_after_it() {
-    // ODF puts the header at the page margin and the text below the header's height and spacing;
-    // Word measures both from the page edge.
+    // ODF puts the header at the page margin and the text below the header's band, whose height
+    // takes in its spacing (LibreOffice: a 2 cm header with 1 cm spacing puts the text 2 cm
+    // below the margin); Word measures both from the page edge.
     let content = format!(
         r#"<office:document-content {}><office:body><office:text><text:p>x</text:p></office:text></office:body></office:document-content>"#,
         crate::odt::tests::NS_T
@@ -130,8 +131,8 @@ fn a_header_starts_at_the_page_margin_and_the_text_after_it() {
     );
     let s = import(&with).unwrap().last_section;
     let near = |a: f32, b: f32| (a - b).abs() < 0.05;
-    assert!(near(s.header, cm(2.0)) && near(s.margin_top, cm(2.75)), "{} {}", s.header, s.margin_top);
-    assert!(near(s.footer, cm(1.5)) && near(s.margin_bottom, cm(3.0)), "{} {}", s.footer, s.margin_bottom);
+    assert!(near(s.header, cm(2.0)) && near(s.margin_top, cm(2.5)), "{} {}", s.header, s.margin_top);
+    assert!(near(s.footer, cm(1.5)) && near(s.margin_bottom, cm(2.5)), "{} {}", s.footer, s.margin_bottom);
     // No header (or a hidden one): the page margins are the text's.
     let without =
         crate::odt::tests::package(&content, Some(&styles_with_header(r#"<style:header style:display="false"><text:p>H</text:p></style:header>"#)));
