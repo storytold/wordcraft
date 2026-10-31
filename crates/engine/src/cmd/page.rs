@@ -221,6 +221,8 @@ fn manual_hyphenation(s: &mut Session, v: &Value) -> CmdResult {
     Ok(best.map(|(_, v)| v).unwrap_or_else(|| json!({"done": true})))
 }
 
+/// Section that owns a header/footer, or the body anchor of a note reference.
+/// Nested table and text-box references use the document's bounded object walk.
 pub(crate) fn section_of_part(s: &Session, id: u32) -> usize {
     let sections = s.doc.sections();
     for (i, (_, sp)) in sections.iter().enumerate() {
@@ -228,16 +230,16 @@ pub(crate) fn section_of_part(s: &Session, id: u32) -> usize {
             return i;
         }
     }
-    for (bi, block) in s.doc.body.iter().enumerate() {
-        if let wordcraft_doc::Block::Para(p) = &**block {
-            for o in &p.objects {
-                if matches!(o, wordcraft_doc::para::InlineObject::NoteRef { id: nid, .. } if *nid == id) {
-                    return s.doc.section_index_of(bi);
-                }
-            }
+    // The document walker visits notes inside body tables and nested cells, with its
+    // existing text-box budget. Its block index stays at the body's anchor section.
+    let mut found = None;
+    s.doc.objects_in_reading_order_by_block(&mut |bi, p, k| {
+        if matches!(p.objects.get(k), Some(wordcraft_doc::para::InlineObject::NoteRef { id: nid, .. }) if *nid == id) {
+            found.get_or_insert_with(|| s.doc.section_index_of(bi));
         }
-    }
-    0
+        found.is_none()
+    });
+    found.unwrap_or(0)
 }
 
 pub fn section_index_of_focus(s: &Session) -> usize {

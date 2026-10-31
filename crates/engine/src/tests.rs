@@ -11595,6 +11595,30 @@ fn paragraph_spacing_query_matches_header_footer_layout_and_nonactive_note_secti
 }
 
 #[test]
+fn note_inside_nested_body_table_uses_its_anchor_section_grid() {
+    use std::sync::Arc;
+    use wordcraft_doc::para::{InlineObject, NoteKind};
+    use wordcraft_doc::section::{DocGrid, DocGridType};
+    use wordcraft_doc::{Block, Document, PartKind, Table};
+
+    let mut doc = Document::from_text("First section\nSecond section");
+    doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().section = Some(Default::default());
+    doc.last_section.doc_grid = Some(DocGrid { kind: DocGridType::Lines, line_pitch: 20.0, char_space: 0 });
+    doc.styles.default_para.space_after_lines = Some(0.5);
+    let note = doc.add_part(PartKind::Footnote, vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Note", Default::default()))]);
+    let mut p = wordcraft_doc::Paragraph::with_text("In nested cell", Default::default());
+    p.insert_object(0, InlineObject::NoteRef { kind: NoteKind::Footnote, id: note, custom: String::new() }, &Default::default()).unwrap();
+    let mut inner = Table::new(1, 1, 220.0);
+    inner.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(p)];
+    let mut outer = Table::new(1, 1, 240.0);
+    outer.rows[0].cells[0].blocks = vec![Arc::new(Block::Table(inner))];
+    doc.body.push(Arc::new(Block::Table(outer)));
+    let s = Session::new(doc);
+    let queried = s.resolved_para_at(&s.doc.start_of(StoryRef::Part(note))).unwrap();
+    assert_eq!(queried.space_after, 10.0);
+}
+
+#[test]
 fn paragraph_spacing_query_inherits_nearest_table_style_like_layout() {
     use std::sync::Arc;
     use wordcraft_doc::props::ParaProps;

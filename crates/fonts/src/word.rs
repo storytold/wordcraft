@@ -53,6 +53,9 @@ fn substitutes_by_name(family: &str) -> (&'static [&'static str], bool) {
     // MS Mincho requests must remain in a Japanese Mincho face when the original is absent.
     // A generic Latin serif often has no Japanese glyphs, and generic sans loses the strokes.
     const MS_MINCHO: &[&str] = &["BIZ UDMincho", "Shippori Mincho", "Hiragino Mincho ProN", "Noto Serif CJK JP", "Yu Mincho"];
+    const MS_PMINCHO: &[&str] = &["Shippori Mincho", "Hiragino Mincho ProN", "BIZ UDMincho", "Noto Serif CJK JP", "Yu Mincho"];
+    const YU_MINCHO: &[&str] = &["Hiragino Mincho ProN", "Shippori Mincho", "BIZ UDMincho", "Noto Serif CJK JP"];
+    const YU_GOTHIC: &[&str] = &["Hiragino Kaku Gothic ProN", "Noto Sans JP", "BIZ UDGothic", "BIZ UDPGothic", "Meiryo"];
     // Generic Japanese Mincho names in older forms need Japanese coverage. Measurements of
     // Word's rendering of this name favour BIZ UDMincho when it is available; retain system
     // and other open Mincho faces as fallbacks.
@@ -147,6 +150,9 @@ fn substitutes_by_name(family: &str) -> (&'static [&'static str], bool) {
         "ms gothic" | "ms ゴシック" | "ｍｓ ゴシック" | "ｍｓ　ゴシック" => (MS_GOTHIC, true),
         "ms pgothic" | "ms ｐゴシック" | "ｍｓ ｐゴシック" | "ｍｓ　ｐゴシック" => (MS_PGOTHIC, true),
         "ms mincho" | "ms 明朝" | "ｍｓ 明朝" | "ｍｓ　明朝" => (MS_MINCHO, true),
+        "ms pmincho" | "ms ｐ明朝" | "ｍｓ ｐ明朝" | "ｍｓ　ｐ明朝" => (MS_PMINCHO, true),
+        "yu mincho" | "游明朝" => (YU_MINCHO, true),
+        "yu gothic" | "游ゴシック" => (YU_GOTHIC, true),
         "明朝体" | "明朝" => (GENERIC_MINCHO, true),
         "palatino linotype" | "book antiqua" | "palatino" => (PALATINO, true),
         "arial" | "helvetica" | "arial nova" => (ARIAL, true),
@@ -684,6 +690,20 @@ mod tests {
         assert!(has_named_substitutes("明朝体"));
         assert!(r.face.covers('◎') && r.face.covers('※'));
         assert!(matches!(r.face.family.as_str(), "Hiragino Mincho ProN" | "Shippori Mincho" | "BIZ UDMincho" | "Noto Serif CJK JP" | "Yu Mincho"));
+    }
+
+    #[test]
+    fn missing_named_japanese_families_keep_their_script_and_serif_style() {
+        for name in ["MS PMincho", "ＭＳ Ｐ明朝", "MS Ｐ明朝", "ＭＳ　Ｐ明朝", "Yu Mincho", "游明朝"] {
+            assert!(has_named_substitutes(name), "{name}");
+            assert!(substitutes(name).iter().all(|face| face.contains("Mincho") || face == &"Noto Serif CJK JP"), "{name}");
+            assert_ne!(first_installed_substitute(name, |_| true), Some("Carlito"));
+        }
+        for name in ["Yu Gothic", "游ゴシック"] {
+            assert!(has_named_substitutes(name), "{name}");
+            assert!(substitutes(name).iter().all(|face| face.contains("Gothic") || face == &"Noto Sans JP" || face == &"Meiryo"), "{name}");
+            assert_ne!(first_installed_substitute(name, |_| true), Some("Carlito"));
+        }
     }
 
     #[test]

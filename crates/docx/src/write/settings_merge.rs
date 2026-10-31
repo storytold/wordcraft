@@ -257,6 +257,9 @@ fn merge_compat(orig: &str, generated: &str) -> Option<String> {
 /// children are preserved from an imported settings part.
 fn merge_balance_switch(orig: &str, generated: &str) -> Option<String> {
     const NAME: &str = "w:balanceSingleByteDoubleByteWidth";
+    // CT_Compat's six preceding switches (ECMA-376 §17.15.1.21).
+    const BEFORE: &[&str] =
+        &["w:useSingleBorderforContiguousCells", "w:wpJustification", "w:noTabHangInd", "w:noLeading", "w:spaceForUL", "w:noColumnBalance"];
     let generated_children = match children(generated, "w:compat") {
         Some((_, _, children)) => children,
         None if generated.trim_end().ends_with("/>") => Vec::new(),
@@ -275,31 +278,26 @@ fn merge_balance_switch(orig: &str, generated: &str) -> Option<String> {
     };
     let mut out = String::with_capacity(orig.len() + replacement.map_or(0, str::len));
     out.push_str(orig.get(..open)?);
-    let mut inserted = false;
+    // Insert after the last preserved predecessor. An unknown extension before that
+    // predecessor must not push the switch ahead of it.
+    let insert_at = children.iter().rposition(|c| BEFORE.contains(&c.name.as_str())).map_or(0, |i| i + 1);
     let mut cursor = open;
-    for child in children {
+    for (i, child) in children.iter().enumerate() {
         // Preserve whitespace and comments between children byte for byte.
         out.push_str(orig.get(cursor..child.start)?);
-        if child.name == NAME {
-            if !inserted {
-                if let Some(value) = replacement {
-                    out.push_str(value);
-                }
-                inserted = true;
-            }
-        } else {
-            // A newly enabled switch precedes the parameterized compatibility settings.
-            if !inserted && child.name == "w:compatSetting" {
-                if let Some(value) = replacement {
-                    out.push_str(value);
-                }
-                inserted = true;
-            }
+        if i == insert_at
+            && let Some(value) = replacement
+        {
+            out.push_str(value);
+        }
+        if child.name != NAME {
             out.push_str(orig.get(child.start..child.end)?);
         }
         cursor = child.end;
     }
-    if !inserted && let Some(value) = replacement {
+    if insert_at == children.len()
+        && let Some(value) = replacement
+    {
         out.push_str(value);
     }
     out.push_str(orig.get(cursor..)?);
@@ -431,6 +429,36 @@ mod tests {
         assert!(out.contains("<w:useFELayout/>") && out.contains("compatibilityMode"), "{out}");
         assert!(has_unowned(orig.as_bytes()));
         assert!(!has_unowned(GEN.as_bytes()));
+    }
+
+    #[test]
+    fn balancing_switch_follows_the_ct_compat_sequence_without_losing_other_children() {
+        let enabled = "<w:compat><w:balanceSingleByteDoubleByteWidth/></w:compat>";
+        for original in [
+            "<w:compat><w:spaceForUL/><w:noColumnBalance/><w:noExtraLineSpacing/><w:useFELayout/><w:compatSetting w:name=\"other\"/></w:compat>",
+            "<w:compat><w:spaceForUL/><w:noColumnBalance/><w:balanceSingleByteDoubleByteWidth/><w:noExtraLineSpacing/><w:balanceSingleByteDoubleByteWidth/><w:useFELayout/></w:compat>",
+            "<w:compat><w:unknownExtension/><w:spaceForUL/><w:noColumnBalance/><w:noExtraLineSpacing/><w:useFELayout/></w:compat>",
+        ] {
+            let merged = merge_balance_switch(original, enabled).unwrap();
+            let at = |name| merged.find(name).unwrap();
+            assert!(at("spaceForUL") < at("noColumnBalance"));
+            assert!(at("noColumnBalance") < at("balanceSingleByteDoubleByteWidth"));
+            assert!(at("balanceSingleByteDoubleByteWidth") < at("noExtraLineSpacing"));
+            assert!(at("noExtraLineSpacing") < at("useFELayout"));
+            assert_eq!(merged.matches("<w:balanceSingleByteDoubleByteWidth").count(), 1);
+            assert!(merged.contains("<w:compatSetting") || !original.contains("<w:compatSetting"));
+            let disabled = merge_balance_switch(&merged, "<w:compat/>").unwrap();
+            assert!(!disabled.contains("balanceSingleByteDoubleByteWidth"));
+            assert!(disabled.contains("<w:spaceForUL/>") && disabled.contains("<w:useFELayout/>"));
+            if original.contains("unknownExtension") {
+                assert!(at("unknownExtension") < at("spaceForUL"));
+                assert!(disabled.contains("<w:unknownExtension/>"));
+            }
+        }
+        let later_only = "<w:compat><!--keep--><w:noExtraLineSpacing/><w:useFELayout/></w:compat>";
+        let merged = merge_balance_switch(later_only, enabled).unwrap();
+        assert!(merged.find("balanceSingleByteDoubleByteWidth").unwrap() < merged.find("noExtraLineSpacing").unwrap());
+        assert!(merged.contains("<!--keep-->"));
     }
 
     #[test]

@@ -12,8 +12,8 @@ pub(super) struct Builder<'a> {
     /// Apply the natural-line policy only outside the section's active line grid.
     pub(super) natural_japanese_metrics: bool,
     pub(super) styles: Vec<StyleRun>,
-    /// Hash of a style's format → (index in `styles`, small caps), see `style`.
-    pub(super) style_index: std::collections::HashMap<u64, Vec<(u32, bool)>>,
+    /// Hash of a style's format → (index, small caps, face override), see `style`.
+    pub(super) style_index: std::collections::HashMap<u64, Vec<(u32, bool, bool)>>,
     pub(super) glyphs: Vec<Glyph>,
     pub(super) clusters: Vec<Cluster>,
     /// Bidi level per byte of the paragraph text (empty: all left to right).
@@ -107,15 +107,17 @@ impl<'a> Builder<'a> {
         let key = {
             use std::hash::{Hash, Hasher};
             let mut h = std::collections::hash_map::DefaultHasher::new();
-            (face.id(), small, &rc.font, rc.size.to_bits(), rc.bold, rc.italic, rc.color, rc.highlight, rc.shading).hash(&mut h);
+            (face.id(), face_override.is_some(), small, &rc.font, rc.size.to_bits(), rc.bold, rc.italic, rc.color, rc.highlight, rc.shading)
+                .hash(&mut h);
             (rc.underline_color, rc.strike, rc.double_strike, &rc.link, rc.ins, rc.del, rc.hidden).hash(&mut h);
             h.finish()
         };
         let bucket = self.style_index.entry(key).or_default();
         // Formats that never compare equal (a NaN from a hostile file) get their own styles; a capped
         // scan keeps such a bucket from turning quadratic.
-        for &(i, s) in bucket.iter().rev().take(64) {
+        for &(i, s, overridden) in bucket.iter().rev().take(64) {
             if s == small
+                && overridden == face_override.is_some()
                 && let Some(st) = self.styles.get(i as usize)
                 && st.face.id() == face.id()
                 && (Arc::ptr_eq(&st.rc, rc) || *st.rc == **rc)
@@ -196,7 +198,7 @@ impl<'a> Builder<'a> {
         // hold in memory, so every format keeps its own style.
         let i = u32::try_from(self.styles.len()).unwrap_or(u32::MAX);
         self.styles.push(st);
-        self.style_index.entry(key).or_default().push((i, small));
+        self.style_index.entry(key).or_default().push((i, small, face_override.is_some()));
         i
     }
 
@@ -741,4 +743,67 @@ impl Builder<'_> {
 /// tracked deletions in the final text. It takes no room, draws nothing and is no place to break.
 pub(crate) fn left_out(doc: &Document, rc: &ResolvedChar, show_hidden: bool, hide_deleted: crate::HideDeleted) -> bool {
     (rc.hidden && !show_hidden) || hide_deleted.hides(doc, rc.del)
+}
+
+#[cfg(test)]
+mod style_cache_tests {
+    use super::*;
+    use crate::FieldCtx;
+    use crate::para::Grid;
+    use wordcraft_doc::CharProps;
+
+    #[test]
+    fn same_face_override_keeps_separate_metric_styles_in_either_creation_order() {
+        let doc = Document::new();
+        let fields = FieldCtx::default();
+        let env = ParaEnv {
+            doc: &doc,
+            fields: &fields,
+            width: 500.0,
+            label: None,
+            show_hidden: false,
+            hide_deleted: Default::default(),
+            table: None,
+            proofing: None,
+            typing_word: None,
+            field_codes: false,
+            grid: Grid::default(),
+            exclusions: &[],
+            eq_number: 0,
+            numeral: Default::default(),
+            read_line_spacing: None,
+            fit_objects: false,
+            fitted: &[],
+        };
+        let rc = Arc::new(
+            doc.styles
+                .resolve_char(None, &CharProps { font: Some("Source Serif 4".into()), font_ea: Some("MS Mincho".into()), ..Default::default() }),
+        );
+        let face = wordcraft_fonts::word::resolve(&rc.font, rc.bold, rc.italic).face;
+        for overridden_first in [false, true] {
+            let mut builder = Builder {
+                env: &env,
+                natural_japanese_metrics: true,
+                styles: Vec::new(),
+                style_index: Default::default(),
+                glyphs: Vec::new(),
+                clusters: Vec::new(),
+                levels: Vec::new(),
+                shown: Vec::new(),
+            };
+            let first = builder.style(&rc, overridden_first.then_some(face), false);
+            let second = builder.style(&rc, (!overridden_first).then_some(face), false);
+            assert_ne!(first, second);
+            assert_eq!(builder.styles[first as usize].face.id(), builder.styles[second as usize].face.id());
+            assert_eq!(builder.style(&rc, overridden_first.then_some(face), false), first);
+            assert_eq!(builder.style(&rc, (!overridden_first).then_some(face), false), second);
+            for (index, overridden) in [(first, overridden_first), (second, !overridden_first)] {
+                let family = if overridden { rc.font_ea.as_deref().unwrap_or(&rc.font) } else { &rc.font };
+                assert_eq!(
+                    builder.styles[index as usize].grid_size,
+                    wordcraft_fonts::word::japanese_grid_height_for_style(family, rc.size, rc.bold, rc.italic),
+                );
+            }
+        }
+    }
 }
