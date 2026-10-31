@@ -1916,3 +1916,54 @@ fn the_page_waits_for_the_keyboard_until_a_modal_dialog_closes() {
     h.run_steps(2);
     assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "!", "the page has it after the dialog");
 }
+
+/// Drags from `at` to 30 points right in `h`, and counts the window drags the app asked for.
+fn window_drags(h: &mut egui_kittest::Harness<WordApp>, at: egui::Pos2) -> usize {
+    let mut drags = 0;
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    let events = [egui::Event::PointerMoved(at), button(at, true)]
+        .into_iter()
+        .chain([10.0, 20.0, 30.0].map(|dx| egui::Event::PointerMoved(at + vec2(dx, 0.0))))
+        .chain([button(at + vec2(30.0, 0.0), false)]);
+    for e in events {
+        h.event(e);
+        h.step();
+        drags += h.output().viewport_output.values().flat_map(|v| &v.commands).filter(|c| matches!(c, egui::ViewportCommand::StartDrag)).count();
+    }
+    drags
+}
+
+/// #5124: behind a modal dialog the window still moves by its title bar, as in Word for Mac.
+#[test]
+fn the_window_moves_by_its_title_bar_behind_a_modal_dialog() {
+    let mut h = app_harness(WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default()));
+    h.run_steps(6);
+    let font = Dialog::open("font", h.state_mut());
+    h.state_mut().dialog = font;
+    h.run_steps(4);
+    assert_eq!(window_drags(&mut h, egui::pos2(300.0, 12.0)), 1, "one drag of the window");
+    assert!(matches!(h.state().dialog, Some(Dialog::Font { .. })) && !h.state().ui.backstage, "Font stays, nothing behind it opened");
+}
+
+/// #5124: where a dialog reaches over the title bar (a short window), a drag on the dialog is the
+/// dialog's own and doesn't move the window.
+#[test]
+fn a_drag_on_a_dialog_over_the_title_bar_doesnt_move_the_window() {
+    let a = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 420.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(6);
+    let font = Dialog::open("font", h.state_mut());
+    h.state_mut().dialog = font;
+    h.run_steps(4);
+    let rect = h.ctx.memory(|m| m.area_rect(egui::Id::unique(("dialog", "Font")))).expect("the dialog is open");
+    let at = egui::pos2(rect.center().x, rect.top() + 8.0);
+    assert!(at.y < 30.0, "the dialog reaches over the title bar: {rect:?}");
+    assert_eq!(window_drags(&mut h, at), 0);
+}
