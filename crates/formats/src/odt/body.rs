@@ -516,6 +516,7 @@ impl Body<'_> {
             "note"
             | "annotation"
             | "text-box"
+            | "ruby-text"
             | "sequence-decls"
             | "forms"
             | "variable-decls"
@@ -827,6 +828,8 @@ impl Body<'_> {
             }
             "tab" => self.push_text("\t"),
             "line-break" => self.push_text("\n"),
+            // ODF ruby: the base text is read, the annotation (`ruby-text`) is skipped with the notes.
+            "ruby" | "ruby-base" => {}
             "bookmark" | "bookmark-start" => {
                 if let Some(name) = get(a, "text:name") {
                     if self.para.is_none() {
