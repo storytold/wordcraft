@@ -12,10 +12,10 @@ pub(super) fn graphic_draws(doc: &Document, g: &Graphic, rect: Rect, alpha: f32)
     let mut out = Vec::with_capacity(g.items.len());
     for it in &g.items {
         match it {
-            GraphicItem::Shape { rect: r, kind, fill, stroke, stroke_width } => out.push(Draw::Shape {
+            GraphicItem::Shape { rect: r, kind, fill, stroke, stroke_width, alpha: fa } => out.push(Draw::Shape {
                 rect: inside(r),
                 kind: *kind,
-                fill: fill.map(Paint::solid),
+                fill: fill.map(|c| Paint::Solid(c, *fa)),
                 stroke: *stroke,
                 stroke_width: stroke_width * k,
                 effects: Default::default(),

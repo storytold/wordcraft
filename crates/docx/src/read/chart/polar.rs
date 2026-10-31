@@ -96,7 +96,7 @@ pub(super) fn radar(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
         for (i, p) in ring.iter().enumerate() {
             if c.radar_marks && s.values.get(i).copied().flatten().is_some() {
                 let rect = [p.0 as f32 - MARKER / 2.0, p.1 as f32 - MARKER / 2.0, MARKER, MARKER];
-                out.push(GraphicItem::Shape { rect, kind: ShapeKind::Ellipse, fill: Some(col), stroke: None, stroke_width: 0.0 });
+                out.push(GraphicItem::Shape { rect, kind: ShapeKind::Ellipse, fill: Some(col), stroke: None, stroke_width: 0.0, alpha: 1.0 });
             }
             if let Some(text) = label_of(s, i) {
                 labels.push(DataLabel { x: p.0 as f32, y: p.1 as f32, text, inside: false });

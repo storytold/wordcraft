@@ -6172,6 +6172,7 @@ fn graphic_items_draw_inside_the_object() {
             fill: Some(Rgb::BLACK),
             stroke: None,
             stroke_width: 0.0,
+            alpha: 1.0,
         },
         GraphicItem::Path {
             segs: vec![PathSeg::Move(1.0, 2.0), PathSeg::Line(30.0, 40.0), PathSeg::Close],
@@ -6331,6 +6332,7 @@ fn graphic_items_scale_with_their_frame() {
         fill: None,
         stroke: Some(Rgb::BLACK),
         stroke_width: 4.0,
+        alpha: 1.0,
     }];
     let graphic = Graphic { kind: GraphicKind::Chart, items, w: 1000.0, h: 500.0, source: None, chart: None, smart_art: None };
     let obj = InlineObject::Graphic { w: 500.0, h: 250.0, alt: String::new(), float: Default::default(), graphic: Arc::new(graphic) };
