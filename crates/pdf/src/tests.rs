@@ -2488,3 +2488,39 @@ fn baseline_is_the_most_shared_y() {
     assert_eq!(baseline(&[(1, 0.0, 9.0), (2, 3.0, 4.0)]), Some(4.0));
     assert_eq!(baseline(&[(1, 0.0, -0.0), (2, 3.0, 0.0)]), Some(0.0));
 }
+
+/// `SOURCE_DATE_EPOCH` parsing: a plain non-negative integer of seconds, nothing else.
+/// (1700000000 is 2023-11-14T22:13:20Z, the value the reproducible-PDF tests use.)
+#[test]
+fn source_date_epoch_parsing() {
+    assert_eq!(parse_source_date_epoch(Some("1700000000")), Some(1_700_000_000));
+    assert_eq!(parse_source_date_epoch(Some(" 1700000000 ")), Some(1_700_000_000));
+    assert_eq!(parse_source_date_epoch(Some("0")), Some(0));
+    assert_eq!(parse_source_date_epoch(Some("-1")), None);
+    assert_eq!(parse_source_date_epoch(Some("bogus")), None);
+    assert_eq!(parse_source_date_epoch(Some("1700000000.5")), None);
+    assert_eq!(parse_source_date_epoch(Some("")), None);
+    assert_eq!(parse_source_date_epoch(None), None);
+}
+
+/// With an epoch in effect it, not the document's own creation date, is written; without
+/// one the document's date stands. The sample document's created is 2024-05-06T07:08:09Z.
+#[test]
+fn epoch_overrides_the_documents_creation_date() {
+    let d = sample();
+    let epoch = DateTime::new(2023).month(11).day(14).hour(22).minute(13).second(20).utc_offset_hour(0).utc_offset_minute(0);
+    assert_eq!(metadata_at(&d, &PdfOptions::default(), Some(1_700_000_000)).created, Some(epoch));
+    let own = DateTime::new(2024).month(5).day(6).hour(7).minute(8).second(9).utc_offset_hour(0).utc_offset_minute(0);
+    assert_eq!(metadata_at(&d, &PdfOptions::default(), None).created, Some(own));
+}
+
+/// A document carrying a creation date exports the same bytes twice: the dates come
+/// from the document and the file IDs hash the content, so nothing in the file knows
+/// what day the export ran.
+#[test]
+fn a_dated_document_exports_byte_identical_twice() {
+    let d = sample();
+    let a = export(&d, &PdfOptions::default()).unwrap();
+    let b = export(&d, &PdfOptions::default()).unwrap();
+    assert_eq!(a, b);
+}
