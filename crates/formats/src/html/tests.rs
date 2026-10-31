@@ -290,6 +290,16 @@ fn leading_space_survives_round_trip() {
     assert_eq!(back.plain_text(Default::default()).replace('\u{a0}', " "), " lead");
 }
 
+#[test]
+fn double_space_across_a_run_boundary_survives_round_trip() {
+    let bold = Fmt { bold: true, ..Fmt::default() };
+    let inlines = vec![Inline::Text("one ".into(), Fmt::default()), Inline::Text(" two".into(), bold)];
+    let html = inlines_html(&inlines);
+    assert_eq!(html, "one <strong>&nbsp;two</strong>");
+    let back = parse(&format!("<p>{html}</p>"));
+    assert_eq!(texts(&back).iter().map(|t| t.replace('\u{a0}', " ")).collect::<Vec<_>>(), ["NormalNone:one  two"]);
+}
+
 /// A document that reads "I read " then a phonetic guide over `base`, then " daily.".
 fn ruby_doc(base: &str, ruby: &str) -> Document {
     let props = wordcraft_doc::CharProps::default();
