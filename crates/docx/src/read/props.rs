@@ -4,9 +4,9 @@ use std::collections::HashMap;
 
 use wordcraft_doc::para::cap_alt;
 use wordcraft_doc::props::{
-    Align, Border, BorderStyle, Borders, CellProps, CharProps, CombineBrackets, EastAsianLayout, HeightRule, Highlight, LineSpacing, NumRef,
-    ParaProps, Rgb, RowProps, TabAlign, TabLeader, TabStop, TableFloat, TableLook, TableProps, TextColor, TextDirection, Underline, VAlign, VMerge,
-    VertAlign,
+    Align, Border, BorderStyle, Borders, CellProps, CharProps, CombineBrackets, EastAsianLayout, EmphasisMark, HeightRule, Highlight, LineSpacing,
+    NumRef, ParaProps, Rgb, RowProps, TabAlign, TabLeader, TabStop, TableFloat, TableLook, TableProps, TextColor, TextDirection, Underline, VAlign,
+    VMerge, VertAlign,
 };
 use wordcraft_doc::section::{
     Columns, DocGrid, DocGridType, LineNumberRestart, LineNumbering, MAX_CHAR_SPACE, MAX_GRID_PITCH, NotePos, NoteProps, NoteRestart, NumFormat,
@@ -260,6 +260,7 @@ impl PropCtx {
                 "w:vanish" => c.hidden = Some(on_off(k)),
                 "w:webHidden" => c.web_hidden = Some(on_off(k)),
                 "w:snapToGrid" => c.snap_to_grid = Some(on_off(k)),
+                "w:em" => c.emphasis_mark = EmphasisMark::from_ooxml(k.attr("w:val").unwrap_or("dot")),
                 "w:rtl" => c.rtl = Some(on_off(k)),
                 "w:color" => {
                     c.color = match (self.theme_color(k, "w:themeColor", "w:themeTint", "w:themeShade"), k.attr("w:val")) {

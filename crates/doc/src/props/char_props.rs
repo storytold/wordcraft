@@ -110,6 +110,38 @@ pub enum VertAlign {
     Subscript,
 }
 
+/// East Asian emphasis mark (`w:em`). `None` at the property level inherits; this enum's
+/// `None` variant explicitly disables the mark.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum EmphasisMark {
+    Dot,
+    Comma,
+    Circle,
+    UnderDot,
+    None,
+}
+
+impl EmphasisMark {
+    pub const ALL: [EmphasisMark; 5] = [Self::Dot, Self::Comma, Self::Circle, Self::UnderDot, Self::None];
+
+    /// OOXML `w:em/@w:val` value.
+    pub fn ooxml(self) -> &'static str {
+        match self {
+            Self::Dot => "dot",
+            Self::Comma => "comma",
+            Self::Circle => "circle",
+            Self::UnderDot => "underDot",
+            Self::None => "none",
+        }
+    }
+
+    /// The mark for a schema value, or `None` when the value is unknown.
+    pub fn from_ooxml(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|mark| mark.ooxml() == s)
+    }
+}
+
 /// Word's 16 highlighter colours (plus none).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -273,6 +305,9 @@ pub struct CharProps {
     pub small_caps: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hidden: Option<bool>,
+    /// East Asian emphasis mark (`w:em`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub emphasis_mark: Option<EmphasisMark>,
     /// Hidden in Web Layout (`w:webHidden`); distinct from `w:vanish` (`hidden`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub web_hidden: Option<bool>,
@@ -466,7 +501,7 @@ impl CharProps {
     }
 
     fn minus_run_visibility(&mut self, base: &CharProps) {
-        drop_same_fields!(self, base; web_hidden, snap_to_grid);
+        drop_same_fields!(self, base; web_hidden, snap_to_grid, emphasis_mark);
     }
 
     fn minus_script_style(&mut self, base: &CharProps) {
@@ -497,7 +532,7 @@ impl CharProps {
     }
 
     fn overlay_run_visibility(&mut self, patch: &CharProps) {
-        overlay_fields!(self, patch; web_hidden, snap_to_grid);
+        overlay_fields!(self, patch; web_hidden, snap_to_grid, emphasis_mark);
     }
 
     fn overlay_script_style(&mut self, patch: &CharProps) {

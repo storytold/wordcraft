@@ -108,6 +108,9 @@ pub fn rpr_inner(w: &mut W, c: &CharProps) {
     }
     toggle(w, "w:rtl", c.rtl);
     toggle(w, "w:cs", c.cs);
+    if let Some(mark) = c.emphasis_mark {
+        w.val("w:em", mark.ooxml());
+    }
     let mut lang_attrs: Vec<(&str, &str)> = Vec::with_capacity(3);
     if let Some(l) = &c.lang {
         lang_attrs.push(("w:val", l));
