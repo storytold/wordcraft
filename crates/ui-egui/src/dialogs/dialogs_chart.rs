@@ -351,24 +351,19 @@ pub fn data_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ChartDataForm) -> bool {
     }
 }
 
-/// The names a screen reader hears for a row or column of the Edit Data grid: each header's text,
-/// `blank` and its number when empty ("Category 2"), and `numbered` with its number after a
-/// text another header has too ("Q1 (Category 3)"), so no two value cells share a name.
+/// The names a screen reader hears for a row or column of the Edit Data grid, never two alike, so
+/// no two value cells share a name: each header's text, or `blank` and its number when empty
+/// ("Category 2"); a name two headers would share gets `numbered` and its number ("Q1 (Category
+/// 3)"); and if one still repeats (a header typed as another's name), every name gets its number,
+/// which no two places share.
 fn grid_headers(texts: &[String], blank: &str, numbered: &str) -> Vec<String> {
-    texts
-        .iter()
-        .enumerate()
-        .map(|(i, text)| {
-            let text = text.trim();
-            if text.is_empty() {
-                format!("{blank} {}", i + 1)
-            } else if texts.iter().filter(|t| t.trim() == text).count() > 1 {
-                format!("{text} ({numbered} {})", i + 1)
-            } else {
-                text.to_string()
-            }
-        })
-        .collect()
+    let numbered_all = |names: &[String]| names.iter().enumerate().map(|(i, n)| format!("{n} ({numbered} {})", i + 1)).collect::<Vec<_>>();
+    let repeats = |names: &[String], name: &String| names.iter().filter(|n| *n == name).count() > 1;
+    let base: Vec<String> =
+        texts.iter().enumerate().map(|(i, t)| if t.trim().is_empty() { format!("{blank} {}", i + 1) } else { t.trim().to_string() }).collect();
+    let names: Vec<String> =
+        base.iter().enumerate().map(|(i, n)| if repeats(&base, n) { format!("{n} ({numbered} {})", i + 1) } else { n.clone() }).collect();
+    if names.iter().any(|n| repeats(&names, n)) { numbered_all(&base) } else { names }
 }
 
 /// A numeric chart-data cell. `RIGHT_TOP` preserves the old deprecated
@@ -446,5 +441,17 @@ mod tests {
         assert_eq!(grid_headers(&texts(&["Q1", "", "Q2"]), "Category", "Category"), ["Q1", "Category 2", "Q2"]);
         assert_eq!(grid_headers(&texts(&["Q1", "Q2", " Q1 "]), "Category", "Category"), ["Q1 (Category 1)", "Q2", "Q1 (Category 3)"]);
         assert_eq!(grid_headers(&texts(&["Sales", "Sales"]), "Series name", "Series"), ["Sales (Series 1)", "Sales (Series 2)"]);
+        // A header typed as the name a blank one gets.
+        assert_eq!(grid_headers(&texts(&["Category 2", ""]), "Category", "Category"), ["Category 2 (Category 1)", "Category 2 (Category 2)"]);
+        // And one typed as the name a repeated one gets: then every name has its number.
+        assert_eq!(
+            grid_headers(&texts(&["Q1", "Q1", "Q1 (Category 1)"]), "Category", "Category"),
+            ["Q1 (Category 1)", "Q1 (Category 2)", "Q1 (Category 1) (Category 3)"]
+        );
+        for list in [&["", "Category 1", "Category 1 (Category 1)", ""][..], &["A", "A (Category 2)", "A", "", "Category 4"]] {
+            let names = grid_headers(&texts(list), "Category", "Category");
+            let unique: std::collections::HashSet<&String> = names.iter().collect();
+            assert_eq!(unique.len(), names.len(), "{list:?} gives {names:?}");
+        }
     }
 }
