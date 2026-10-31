@@ -10,8 +10,22 @@ use wordcraft_doc::{Block, Pos, StoryRef};
 use super::sel_result;
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 
+mod segments;
+
+/// Validate the same segment boundary used by the command before offering Create in the dialog.
+pub fn page_segment_start(s: &mut Session, from_page: bool) -> Result<Pos, CmdError> {
+    segments::start_position(s, from_page)
+}
+
+/// The page-numbering section, including the actual page of a linked header/footer.
+pub fn numbering_section(s: &mut Session) -> usize {
+    segments::focus_section(s)
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
+        CommandSpec::new("layout.pageSegment", "Page Label Segment", "Insert › Header & Footer › Page Number", segments::apply)
+            .params(r#"{"label": {"name"?: string, "mode"?: "hidden|text|number|textNumber", "text"?: string, "separator"?: string, "zeroLabel"?: string}, "format"?: "decimal|lowerRoman|upperRoman|lowerLetter|upperLetter", "start"?: 0..100000 | null, "section"?: index, "new"?: bool, "from"?: "page|cursor"} — named section, custom page labels; new starts at the current page or body cursor; text is literal, limited to 256 characters (separator 16)"#),
         CommandSpec::new("layout.margins", "Margins", "Layout › Page Setup", margins).params(
             r#"{"preset"?: "normal|narrow|moderate|wide|mirrored|office2003", "top"?: pt, "bottom"?: pt, "left"?: pt, "right"?: pt, "gutter"?: pt, "mirror"?: bool}"#,
         ),
@@ -247,6 +261,59 @@ pub fn section_index_of_focus(s: &Session) -> usize {
     }
 }
 
+/// Resolve a text-box caret to its enclosing story without following cyclic anchors forever.
+pub fn hf_story(s: &Session) -> StoryRef {
+    let mut story = s.sel.focus.story;
+    let mut seen = std::collections::BTreeSet::new();
+    while let StoryRef::Part(id) = story {
+        if !seen.insert(id) || !s.doc.parts.get(&id).is_some_and(|part| part.kind == wordcraft_doc::PartKind::TextBox) {
+            break;
+        }
+        let Some(anchor) = s.doc.text_box_anchor(id) else { break };
+        story = anchor.story;
+    }
+    story
+}
+
+/// The section index for header/footer operations, taking into account the page being edited.
+pub fn section_index_for_hf(s: &Session) -> usize {
+    if s.sel.focus.story == wordcraft_doc::StoryRef::Body {
+        let block = s.sel.focus.path.0.first().copied().unwrap_or(0) as usize;
+        return s.doc.section_index_of(block);
+    }
+    let StoryRef::Part(id) = hf_story(s) else { return section_index_of_focus(s) };
+    s.current_layout()
+        .and_then(|l| l.pages.get(s.page_hint).filter(|pg| pg.header_story == Some(id) || pg.footer_story == Some(id)).map(|pg| pg.section))
+        .unwrap_or_else(|| section_of_part(s, id))
+}
+
+/// Whether the current section's header or footer is linked to previous.
+pub fn is_hf_linked(s: &Session) -> bool {
+    let si = section_index_for_hf(s);
+    if si == 0 {
+        return false;
+    }
+    let header = match hf_story(s) {
+        wordcraft_doc::StoryRef::Part(id) => s.doc.parts.get(&id).map(|p| !matches!(p.kind, wordcraft_doc::PartKind::Footer)).unwrap_or(true),
+        _ => true,
+    };
+    let sections = s.doc.sections();
+    let Some((_, sp)) = sections.get(si) else { return false };
+    let slot = s
+        .current_layout()
+        .and_then(|l| {
+            let page = if s.sel.focus.story == wordcraft_doc::StoryRef::Body { l.page_of(&s.sel.focus).unwrap_or(s.page_hint) } else { s.page_hint };
+            l.pages.get(page).map(|pg| pg.hf_slot)
+        })
+        .unwrap_or(if sp.title_page { wordcraft_layout::HfSlot::First } else { wordcraft_layout::HfSlot::Default });
+    let set = if header { &sp.headers } else { &sp.footers };
+    match slot {
+        wordcraft_layout::HfSlot::First => set.first.is_none(),
+        wordcraft_layout::HfSlot::Even => set.even.is_none(),
+        wordcraft_layout::HfSlot::Default => set.default.is_none(),
+    }
+}
+
 pub fn sect(s: &Session) -> SectionProps {
     let i = section_index_of_focus(s);
     s.doc.sections().get(i).map(|(_, x)| (*x).clone()).unwrap_or_default()
@@ -409,6 +476,9 @@ pub fn columns_preset_at(s: &Session) -> Option<&'static str> {
 /// Line Numbers, Footnotes and Page Borders: a non-finite number or margins that leave no room
 /// for text is an error; the rest is clamped to the ranges those commands use.
 fn validate_section(x: &mut SectionProps) -> Result<(), CmdError> {
+    if let Some(label) = &x.page_label {
+        label.validate().map_err(|e| CmdError::Params(e.into()))?;
+    }
     let bad = |what: &str| CmdError::Params(format!("section: {what} must be a finite number"));
     let finite = [x.page_w, x.page_h, x.margin_top, x.margin_bottom, x.margin_left, x.margin_right, x.header, x.footer, x.gutter, x.columns.space];
     if finite.iter().any(|n| !n.is_finite()) {
@@ -738,6 +808,8 @@ fn breaks(s: &mut Session, v: &Value) -> CmdResult {
     let next_block = new.path.last();
     para.section = Some(Box::new(props.clone()));
     props.start = start;
+    props.headers = Default::default();
+    props.footers = Default::default();
     *s.doc.section_mut(next_block) = props;
     // The selection keeps its text, which now starts the new section.
     let first = Pos { off: 0, ..new };

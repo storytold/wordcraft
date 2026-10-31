@@ -29,6 +29,7 @@ pub mod objects;
 pub mod options;
 pub mod outline;
 pub mod page;
+pub(crate) mod page_labels;
 pub mod para;
 pub mod paste;
 pub mod phonetic;

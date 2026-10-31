@@ -7,6 +7,8 @@
 //! end). Such orphans are harmless in the model and in layout; writers call
 //! [`Document::balance_field_ranges`] so a saved file always has whole fields.
 
+pub mod number;
+
 use crate::para::OBJ;
 use crate::{Block, Blocks, Document, InlineObject, Path, Pos, StoryRef};
 

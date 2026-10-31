@@ -46,6 +46,8 @@ pub(crate) fn footer_table_wraps(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<WrapAre
     let grid = std::mem::take(&mut ctx.grid);
     let track = std::mem::replace(&mut ctx.track_totals, false);
     ctx.fields.page = page.number;
+    ctx.fields.page_format = sect.page_num_format;
+    ctx.fields.page_label = sect.page_label.clone();
     let areas = again(ctx, 0, |ctx| {
         with_pct_base(ctx, base, |ctx| {
             let story = StoryRef::Part(id);

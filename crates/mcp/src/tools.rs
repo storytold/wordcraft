@@ -131,7 +131,7 @@ pub fn tool_definitions() -> Value {
         tool(
             "inspect_document",
             "Inspect document",
-            "Structure: blocks with text, styles, formatting runs, lists, tables, sections, parts, selection, pages.",
+            "Structure: blocks with text, styles, formatting runs, lists, tables, sections, parts (headers, footers, notes: their text and simple fields; a field with perPage true, such as PAGE, NUMPAGES or STYLEREF, can resolve differently during layout; use render_page to check rendered values; fieldsTruncated means the 200-field or 8-level table depth limit was reached), selection, pages.",
             with_doc(obj(json!({}), &[])),
             true
         ),

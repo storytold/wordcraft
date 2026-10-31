@@ -1,5 +1,7 @@
 # MCP server
 
+> **Last updated:** 2026-10-31 · Simple-field cache metadata in document inspection (#4467).
+
 WordCraft speaks the [Model Context Protocol](https://modelcontextprotocol.io) over stdio, so
 Claude and other agents can write and edit documents.
 
@@ -125,7 +127,7 @@ files it was given rather than guarding against other software on the computer.
   one-line control refuses; at most 10,000 lines — the cap is `text.insert`'s own, so a
   control-channel or CLI call is held to it too) |
 | `select_text` | select the n-th occurrence of some text |
-| `get_text` / `inspect_document` | read the document back (verify without screenshots) |
+| `get_text` / `inspect_document` | read the document back (verify without screenshots); a header or footer's simple `fields` mark those with `perPage` (PAGE, NUMPAGES, STYLEREF…), whose stored result isn't what every page shows (`render_page` shows that); `fieldsTruncated` reports the 200-field or 8-level table depth limit |
 | `render_page` | a page as PNG |
 | `parity` | feature coverage |
 | `screenshot`, `click`, `key`, `ui_inspect` | app only (`--connect`) |
@@ -242,3 +244,9 @@ the distance from the text). Missing fields are `none`, 0, no colour and 0, so a
 "right"?: pt}`: the alignment and indents as seen on the page, which each selected paragraph turns
 into its own start and end once `props` (a `bidi` in it, say) is applied. The Paragraph dialog sends
 only the fields that changed this way, as one command and so one undo step.
+
+## Revision history
+
+| Date | Change | Summary |
+|---|---|---|
+| 2026-10-31 | trivial | Document inspection lists simple-field codes and cached results, marks page-dependent field types and reports field-count/table-depth truncation. |

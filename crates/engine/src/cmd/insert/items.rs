@@ -3,6 +3,37 @@ use super::{
     Align, Block, CharProps, CmdError, CmdResult, InlineObject, Paragraph, Rgb, Selection, Session, StoryRef, TabAlign, TabStop, TextColor, Value,
     delete_selection, json, p, para_block, sel_result, type_text,
 };
+use std::collections::BTreeSet;
+use wordcraft_doc::PartKind;
+
+pub(crate) fn story_has_page_field(doc: &wordcraft_doc::Document, story: StoryRef) -> bool {
+    let Some(blocks) = doc.story(story) else { return false };
+    let mut seen = BTreeSet::from([story]);
+    let mut pending: Vec<&Block> = blocks.iter().map(|b| &**b).collect();
+    while let Some(block) = pending.pop() {
+        let para = match block {
+            Block::Para(para) => para,
+            Block::Table(table) => {
+                pending.extend(table.rows.iter().flat_map(|r| &r.cells).flat_map(|c| &c.blocks).map(|b| &**b));
+                continue;
+            }
+        };
+        for object in &para.objects {
+            if matches!(object, InlineObject::Field { instr, .. } | InlineObject::FieldStart { instr, .. } if instr.split_whitespace().next().is_some_and(|name| name.eq_ignore_ascii_case("PAGE")))
+            {
+                return true;
+            }
+            for id in object.text_boxes() {
+                if let Some(part) = doc.parts.get(&id).filter(|part| part.kind == PartKind::TextBox)
+                    && seen.insert(StoryRef::Part(id))
+                {
+                    pending.extend(part.blocks.iter().map(|b| &**b));
+                }
+            }
+        }
+    }
+    false
+}
 
 pub(super) fn page_number(s: &mut Session, v: &Value) -> CmdResult {
     let position = p::str(v, "position").unwrap_or("bottom");
@@ -22,23 +53,63 @@ pub(super) fn page_number(s: &mut Session, v: &Value) -> CmdResult {
     }
     let header = position == "top";
     let id = hf_part(s, header);
-    let mut para = Paragraph::new().styled(if header { "Header" } else { "Footer" });
+    let story = StoryRef::Part(id);
+    if story_has_page_field(&s.doc, story) {
+        return Ok(json!({"story": id}));
+    }
+    let style = if header { "Header" } else { "Footer" };
+    let mut para = Paragraph::new().styled(style);
     para.props.align = Some(align);
     para.props.tabs = Some(vec![TabStop { pos: 0.0, align: TabAlign::Clear, leader: Default::default() }]);
     if x_of_y {
-        para.insert_text(0, "Page  of ", &CharProps::default())?;
-        para.insert_object(5, field, &CharProps { bold: Some(true), ..Default::default() })?;
+        let langs = [s.doc.styles.default_chr.lang.as_deref(), s.editing_lang.as_deref()];
+        let (page, of) = langs.into_iter().flatten().find_map(page_of_words).unwrap_or(("Page", "of"));
+        para.insert_text(0, &format!("{page} "), &CharProps::default())?;
+        para.insert_object(para.len(), field, &CharProps::default())?;
+        para.insert_text(para.len(), &format!(" {of} "), &CharProps::default())?;
         let end = para.len();
         para.insert_object(
             end,
             InlineObject::Field { instr: "NUMPAGES".into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new() },
-            &CharProps { bold: Some(true), ..Default::default() },
+            &CharProps::default(),
         )?;
     } else {
         para.insert_object(0, field, &CharProps::default())?;
     }
-    s.doc.set_story(StoryRef::Part(id), vec![para_block(para)])?;
+    let blocks = s.doc.story_mut(story)?;
+    // Reuse only the untouched placeholder; empty paragraphs may carry intentional formatting.
+    if blocks.as_slice() == [para_block(Paragraph::new().styled(style))] {
+        blocks.clear();
+    }
+    blocks.push(para_block(para));
     Ok(json!({"story": id}))
+}
+
+fn page_of_words(lang: &str) -> Option<(&'static str, &'static str)> {
+    Some(match wordcraft_doc::collate::language(Some(lang)).as_str() {
+        "en" => ("Page", "of"),
+        "it" => ("Pagina", "di"),
+        "fr" => ("Page", "sur"),
+        "de" => ("Seite", "von"),
+        "es" | "pt" => ("Página", "de"),
+        "ca" => ("Pàgina", "de"),
+        "gl" => ("Páxina", "de"),
+        "nl" => ("Pagina", "van"),
+        "ro" => ("Pagina", "din"),
+        "pl" => ("Strona", "z"),
+        "cs" | "sk" => ("Strana", "z"),
+        "sl" => ("Stran", "od"),
+        // Serbian is written in Cyrillic unless the tag says Latin (`sr-Latn`), as the interface does.
+        "sr" if !lang.split(['-', '_']).any(|t| t.eq_ignore_ascii_case("latn")) => ("Страница", "од"),
+        "hr" | "bs" | "sr" => ("Stranica", "od"),
+        "sv" => ("Sida", "av"),
+        "da" => ("Side", "af"),
+        "nb" | "nn" | "no" => ("Side", "av"),
+        "ru" => ("Страница", "из"),
+        "uk" => ("Сторінка", "з"),
+        "el" => ("Σελίδα", "από"),
+        _ => return None,
+    })
 }
 
 pub(super) fn date_time(s: &mut Session, v: &Value) -> CmdResult {

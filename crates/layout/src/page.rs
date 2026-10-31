@@ -414,9 +414,13 @@ pub(crate) fn body_top_for(ctx: &mut Ctx, sect: &SectionProps, header: Option<u3
     // Placed as `headers_footers` draws it, so page-relative floats wrap the same way.
     let frame = PageFrame { sect, origin: (sect.margin_left + sect.gutter, sect.header), number: 1, mirror: ctx.mirror };
     let track = std::mem::replace(&mut ctx.track_totals, false);
+    let format = std::mem::replace(&mut ctx.fields.page_format, sect.page_num_format);
+    let label = std::mem::replace(&mut ctx.fields.page_label, sect.page_label.clone());
     let (h, ..) =
         with_pin(ctx, id, sect, 1, |ctx| layout_box(ctx, BoxInput::other(StoryRef::Part(id), &blocks, sect.text_width(), 0, Some(frame))).height);
     ctx.track_totals = track;
+    ctx.fields.page_format = format;
+    ctx.fields.page_label = label;
     // Word starts the body right below a header that reaches past the top margin, no gap.
     sect.margin_top.max(sect.header + h)
 }
@@ -428,8 +432,12 @@ pub(crate) fn foot_top_for(ctx: &mut Ctx, sect: &SectionProps, footer: Option<u3
     // A page total in the footer is filled in after pagination, like the header's: it doesn't
     // make the body lay out again.
     let track = std::mem::replace(&mut ctx.track_totals, false);
+    let format = std::mem::replace(&mut ctx.fields.page_format, sect.page_num_format);
+    let label = std::mem::replace(&mut ctx.fields.page_label, sect.page_label.clone());
     let (laid, ..) = with_pin(ctx, id, sect, 1, |ctx| layout_box(ctx, BoxInput::other(StoryRef::Part(id), &blocks, sect.text_width(), 0, None)));
     ctx.track_totals = track;
+    ctx.fields.page_format = format;
+    ctx.fields.page_label = label;
     let top = sect.page_h - sect.footer - laid.height;
     // Flow-table strokes extend above their cell boxes. Floating decorations keep their wrap rules.
     let flow_cells: Vec<_> = laid

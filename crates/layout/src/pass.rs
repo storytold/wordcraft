@@ -251,6 +251,8 @@ fn begin_section_state<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, sec: &Sec<'p
     }
     ctx.fields.section = u32::try_from(si).unwrap_or(u32::MAX).saturating_add(1);
     ctx.fields.section_pages = totals.section(si);
+    ctx.fields.page_format = sect.page_num_format;
+    ctx.fields.page_label = sect.page_label.clone();
     ctx.grid = para::Grid::of(doc, sect);
     if sect.line_numbers.as_ref().is_some_and(|l| l.restart == wordcraft_doc::section::LineNumberRestart::Section) {
         pb.line_no = 0;
@@ -275,7 +277,17 @@ fn start_section_page<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, hf: &HfLinks<
         pb.take_back_break_page();
     }
     let s = &ctx.doc.settings;
-    let (filler, restart) = section_side(sec.start, sec.sect.page_num_start, pb.number, pb.pages.len(), s.even_odd_headers, s.mirror_margins);
+    let mut start = sec.sect.page_num_start;
+    if start.is_none() && sec.sect.page_label.as_ref().is_some_and(|label| label.counts()) {
+        start = Some(
+            pb.pages
+                .iter()
+                .rev()
+                .find(|page| hf.sections.get(page.section).is_some_and(|(_, section)| section.page_label.as_ref().is_none_or(|label| label.counts())))
+                .map_or(1, |page| page.number.saturating_add(1)),
+        );
+    }
+    let (filler, restart) = section_side(sec.start, start, pb.number, pb.pages.len(), s.even_odd_headers, s.mirror_margins);
     if filler && !mode.web {
         end_previous_section(ctx, pb, hf, sec.si, block);
         pb.sect = sec.sect;

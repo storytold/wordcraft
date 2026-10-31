@@ -153,6 +153,8 @@ wordcraft-cli run --script job.json                 # the same from a file: comm
 
 Web: `cd apps/wordcraft-web && trunk serve`, then open <http://127.0.0.1:8771/?sample>.
 
+Book layouts: [page-label segments](docs/page-label-segments.md) · [Deutsche Anleitung](docs/page-label-segments-de.md).
+
 ## For agents: CLI and MCP
 
 WordCraft was designed to be driven by people *and* by AI agents.

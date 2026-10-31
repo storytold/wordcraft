@@ -64,6 +64,10 @@ const MAX_BIBLIOGRAPHY_PARTS: usize = 64;
 const MAX_TEMPLATE_PATH: usize = 32 * 1024;
 
 pub(crate) struct Reader<'p> {
+    page_label_metadata: crate::page_labels::Import,
+    page_label_edits: bool,
+    preserve_page_label_content: bool,
+    hf_page_labels: HashMap<u32, wordcraft_doc::page_label::PageLabel>,
     pkg: &'p Package,
     pub doc: Document,
     pub pc: PropCtx,
@@ -136,6 +140,10 @@ pub(crate) fn read_package(bytes: &[u8]) -> Result<Document, DocxError> {
 /// Read a package whose parts are already unpacked (from a zip, a Flat OPC file or a converted
 /// Word 2003 XML document).
 pub(crate) fn read_opened(pkg: &Package) -> Result<Document, DocxError> {
+    read_opened_with_recovery(pkg, true)
+}
+
+fn read_opened_with_recovery(pkg: &Package, recover: bool) -> Result<Document, DocxError> {
     let root_rels = pkg.rels("");
     let main = root_rels.by_type(rt::OFFICE_DOC).filter(|r| !r.external).map(|r| r.target.clone()).unwrap_or_else(|| "word/document.xml".to_string());
     let Some(root) = pkg.xml_strict(&main)? else {
@@ -147,7 +155,19 @@ pub(crate) fn read_opened(pkg: &Package) -> Result<Document, DocxError> {
     let rels = pkg.rels(&main);
     let mut doc = Document::new();
     doc.body.clear();
+    if let Some(c) = root_rels.by_type(rt::CUSTOM).filter(|r| !r.external)
+        && let Ok(Some(x)) = pkg.xml(&c.target)
+    {
+        doc.custom_props = crate::custom::read(&x);
+    }
+    let page_label_metadata = crate::page_labels::Import::read(&doc.custom_props);
+    doc.custom_props.retain(|p| !page_label_metadata.owns(&p.name));
+    let page_label_edits = recover && page_label_metadata.has_edits(&root, 0);
     let mut r = Reader {
+        page_label_metadata,
+        hf_page_labels: HashMap::new(),
+        page_label_edits,
+        preserve_page_label_content: !recover,
         pkg,
         doc,
         pc: PropCtx::default(),
@@ -294,11 +314,6 @@ pub(crate) fn read_opened(pkg: &Package) -> Result<Document, DocxError> {
     if let Some(app) = root_rels.by_type(rt::APP).map(|x| x.target.clone()) {
         r.read_app(&app);
     }
-    if let Some(c) = root_rels.by_type(rt::CUSTOM)
-        && let Ok(Some(x)) = r.xml(&c.target)
-    {
-        r.doc.custom_props = crate::custom::read(&x);
-    }
     // A macro project and every part it relates to (VBA data, signatures…) ride along as opaque
     // bytes, never parsed or run, so a .docm/.dotm saved again carries exactly what the file had.
     // Only the relationships and content types are read.
@@ -321,7 +336,21 @@ pub(crate) fn read_opened(pkg: &Package) -> Result<Document, DocxError> {
     if r.shape_ids {
         keep_glued_ids(&mut r.doc, &r.glued);
     }
+    if recover && r.page_label_edits {
+        // Preserve every fallback together; recovering siblings would otherwise strip their labels.
+        drop(r);
+        drop(root);
+        return read_opened_with_recovery(pkg, false);
+    }
     let mut doc = r.doc;
+    if recover {
+        crate::page_labels::restore_inherited_sections(&mut doc, &r.hf_page_labels);
+    } else {
+        let ends: Vec<_> = doc.sections().iter().map(|(end, _)| *end).collect();
+        for end in ends {
+            doc.section_mut(end).page_label = None;
+        }
+    }
     doc.ensure_nonempty();
     Ok(doc)
 }

@@ -10,7 +10,7 @@ pub(crate) struct Key {
     pub(crate) rev: u64,
     pub(crate) width: u32,
     pub(crate) label: Option<String>,
-    pub(crate) page: Option<(u32, u32, u32, u32, u64, wordcraft_doc::section::NumFormat)>,
+    pub(crate) page: Option<(u32, u32, u32, u32, u64, wordcraft_doc::section::NumFormat, u64)>,
     /// The pages a split paragraph's fields are on after its first (`FieldCtx::page_from`).
     pub(crate) page_from: u64,
     pub(crate) table: u64,

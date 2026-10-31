@@ -742,6 +742,9 @@ pub struct SectionProps {
     pub title_page: bool,
     pub page_num_start: Option<u32>,
     pub page_num_format: NumFormat,
+    /// Optional named segment and complete page-label rule.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page_label: Option<crate::page_label::PageLabel>,
     /// The file carries a `w:pgNumType` element that sets nothing else (no start, decimal
     /// format), so saving writes it back rather than dropping it.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -795,6 +798,7 @@ impl Default for SectionProps {
             title_page: false,
             page_num_start: None,
             page_num_format: NumFormat::Decimal,
+            page_label: None,
             page_num_set: false,
             line_numbers: None,
             valign: PageVAlign::Top,
@@ -816,6 +820,11 @@ fn is_horizontal(d: &crate::props::TextDirection) -> bool {
 }
 
 impl SectionProps {
+    /// Visible page label, retaining the legacy section format when no segment is configured.
+    pub fn page_label(&self, number: u32) -> String {
+        self.page_label.as_ref().map_or_else(|| self.page_num_format.format(number), |label| label.format(self.page_num_format, number))
+    }
+
     /// Join the section before this one into it, as when the break between them is deleted:
     /// this section's setup stays, as in Word, and the headers and footers it leaves out (linked
     /// to the previous section) are taken from `before`, so its text keeps showing them.

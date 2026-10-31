@@ -26,12 +26,24 @@ impl Writer<'_> {
     }
 
     pub fn sectpr(&mut self, w: &mut W, s: &SectionProps, rels: &mut PartRels) {
-        w.open("w:sectPr", &[]);
+        let label = s.page_label.as_ref().and_then(|label| serde_json::to_string(label).ok());
+        let attrs = label
+            .as_ref()
+            .map(|label| vec![("xmlns:wc", "https://wordcraft.app/ns/page-label/1"), ("mc:Ignorable", "wc"), ("wc:pageLabel", label.as_str())])
+            .unwrap_or_default();
+        w.open("w:sectPr", &attrs);
         let headers = self.watermark_headers(s);
-        for (set, footer) in [(&headers, false), (&s.footers, true)] {
+        self.linked_footers.default = s.footers.default.or(self.linked_footers.default);
+        self.linked_footers.first = s.footers.first.or(self.linked_footers.first);
+        self.linked_footers.even = s.footers.even.or(self.linked_footers.even);
+        // A linked part can have different fallback text in each section. Give each label
+        // context its own exported part, including sections inheriting an earlier story.
+        let (headers, footers) = if self.has_page_labels { (self.linked_headers, self.linked_footers) } else { (headers, s.footers) };
+        let context = s.page_label.clone().map(|label| (label, s.page_num_format, s.page_num_start.unwrap_or(1)));
+        for (set, footer) in [(&headers, false), (&footers, true)] {
             for (kind, id) in [("default", set.default), ("first", set.first), ("even", set.even)] {
                 let Some(id) = id else { continue };
-                if let Some(rid) = self.hf_rel(id, footer, rels) {
+                if let Some(rid) = self.hf_rel(id, footer, context.clone(), rels) {
                     w.empty(if footer { "w:footerReference" } else { "w:headerReference" }, &[("w:type", kind), ("r:id", &rid)]);
                 }
             }

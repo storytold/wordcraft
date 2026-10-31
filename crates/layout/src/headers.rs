@@ -152,6 +152,8 @@ pub(crate) fn header_table_areas(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<Rect> {
     let grid = std::mem::take(&mut ctx.grid);
     let track = std::mem::replace(&mut ctx.track_totals, false);
     ctx.fields.page = page.number;
+    ctx.fields.page_format = sect.page_num_format;
+    ctx.fields.page_label = sect.page_label.clone();
     let mut areas = again(ctx, 0, |ctx| {
         with_pct_base(ctx, base, |ctx| layout_box(ctx, BoxInput::other(StoryRef::Part(id), &blocks, sect.text_width(), 0, Some(frame)))).table_areas
     });
@@ -224,7 +226,7 @@ pub(crate) fn bookmark_pages(doc: &Document, pages: &[Page], sections: &[(usize,
                 if !(*l0..*l1).contains(&li) {
                     return true;
                 }
-                out.insert(std::mem::take(name), (page.number, format));
+                out.insert(std::mem::take(name), (page.number, format, sections.get(page.section).and_then(|(_, sec)| sec.page_label.clone())));
                 false
             });
             if marks.is_empty() {
@@ -281,6 +283,7 @@ pub(crate) fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(us
         };
         ctx.fields.page = page.number;
         ctx.fields.page_format = sect.page_num_format;
+        ctx.fields.page_label = sect.page_label.clone();
         ctx.fields.pages = total;
         ctx.fields.section_pages = totals.section(page.section);
         ctx.fields.section = page.section as u32 + 1;
