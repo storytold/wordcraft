@@ -639,7 +639,9 @@ fn regrid(t: &mut Table, cols: &[f32], rows: &[(usize, Vec<f32>)]) -> Result<(),
             cell.props.span = span;
         }
     }
-    t.props.width = None;
+    // The new total becomes the table's own width, as in Word: the table keeps it, past the
+    // margin when the columns were widened (see `set_widths`).
+    t.props.width = Some(t.grid.iter().filter(|w| w.is_finite()).sum());
     t.props.width_pct = None;
     super::table::sync_cell_widths(t);
     Ok(())
@@ -650,12 +652,13 @@ fn drawn_left(l: &DocLayout, page: usize, target: &ResizeTarget) -> Option<f32> 
     cell_boxes(l, page).iter().filter(|b| b.story == target.story && b.table == target.table).map(|b| b.rect.x).min_by(f32::total_cmp)
 }
 
-/// Make `widths` (one per grid column) the table's column widths, as drawn: no preferred table
-/// width scales them again.
+/// Make `widths` (one per grid column) the table's column widths, as drawn. Their total becomes
+/// the table's own width, as Word records it after a column is resized (a table widened past the
+/// margin keeps its width there rather than being fitted back into the text column).
 pub(crate) fn set_widths(t: &mut Table, widths: Vec<f32>) {
     if widths.len() == t.cols() {
         t.grid = widths;
-        t.props.width = None;
+        t.props.width = Some(t.grid.iter().filter(|w| w.is_finite()).sum());
         t.props.width_pct = None;
         super::table::sync_cell_widths(t);
     }

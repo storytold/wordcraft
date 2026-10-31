@@ -501,6 +501,45 @@ fn table_look_bitmask_and_legacy_merges() {
     assert!(!l.header_row && l.total_row && l.first_column && !l.last_column && !l.banded_rows && l.banded_columns);
 }
 
+/// A table without `w:tblGrid` (template libraries leave it out) gets its grid from the cells'
+/// preferred widths, as Word rebuilds it on opening: the widest `w:tcW` among the cells that
+/// occupy a column alone, a spanning cell's width shared among the columns no cell sizes, and an
+/// inch for a column nothing sizes. A row after `w:gridBefore` starts at its own column.
+#[test]
+fn a_table_without_a_grid_takes_its_columns_from_the_cells() {
+    let body = r#"
+<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="auto"/></w:tblPr>
+ <w:tr><w:tc><w:tcPr><w:tcW w:w="6000" w:type="dxa"/></w:tcPr><w:p/></w:tc><w:tc><w:tcPr><w:tcW w:w="24000" w:type="dxa"/></w:tcPr><w:p/></w:tc></w:tr>
+ <w:tr><w:tc><w:tcPr><w:tcW w:w="30000" w:type="dxa"/><w:gridSpan w:val="2"/></w:tcPr><w:p/></w:tc></w:tr>
+</w:tbl>
+<w:tbl><w:tblPr/>
+ <w:tr><w:tc><w:tcPr><w:tcW w:w="1000" w:type="dxa"/></w:tcPr><w:p/></w:tc><w:tc><w:tcPr><w:tcW w:w="5000" w:type="dxa"/><w:gridSpan w:val="2"/></w:tcPr><w:p/></w:tc></w:tr>
+ <w:tr><w:tc><w:p/></w:tc><w:tc><w:p/></w:tc><w:tc><w:p/></w:tc></w:tr>
+</w:tbl>
+<w:tbl><w:tblPr/><w:tr><w:tc><w:p/></w:tc><w:tc><w:p/></w:tc></w:tr></w:tbl>
+<w:tbl><w:tblPr/>
+ <w:tr><w:tc><w:tcPr><w:tcW w:w="1440" w:type="dxa"/></w:tcPr><w:p/></w:tc><w:tc><w:tcPr><w:tcW w:w="2880" w:type="dxa"/></w:tcPr><w:p/></w:tc></w:tr>
+ <w:tr><w:trPr><w:gridBefore w:val="1"/></w:trPr><w:tc><w:tcPr><w:tcW w:w="4320" w:type="dxa"/></w:tcPr><w:p/></w:tc></w:tr>
+</w:tbl>
+<w:tbl><w:tblPr/>
+ <w:tr><w:tc><w:tcPr><w:tcW w:w="10" w:type="dxa"/></w:tcPr><w:p/></w:tc><w:tc><w:tcPr><w:tcW w:w="3000" w:type="dxa"/></w:tcPr><w:p/></w:tc></w:tr>
+</w:tbl>
+<w:p/>"#;
+    let d = read_body(body);
+    let Block::Table(t) = &*d.body[0] else { panic!() };
+    assert_eq!(t.grid, vec![300.0, 1200.0]);
+    let Block::Table(t) = &*d.body[1] else { panic!() };
+    assert_eq!(t.grid, vec![50.0, 125.0, 125.0]);
+    let Block::Table(t) = &*d.body[2] else { panic!() };
+    assert_eq!(t.grid, vec![72.0, 72.0]);
+    // A row after `w:gridBefore` starts at its own column: its cell sizes the second one.
+    let Block::Table(t) = &*d.body[3] else { panic!() };
+    assert_eq!(t.grid, vec![72.0, 216.0]);
+    // A tiny width is kept down to Word's narrowest column, 26 twips (measured), not 4 pt.
+    let Block::Table(t) = &*d.body[4] else { panic!() };
+    assert_eq!(t.grid, vec![1.3, 150.0]);
+}
+
 #[test]
 fn styles_numbering_settings_notes_comments_from_parts() {
     let styles = format!(
