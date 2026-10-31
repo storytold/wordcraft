@@ -9,6 +9,10 @@ use super::{
 };
 use wordcraft_doc::Paragraph;
 
+#[cfg(test)]
+#[path = "comment_tests.rs"]
+mod comment_tests;
+
 /// Append display items for the half-open line range `l0..l1` of a laid-out paragraph.
 /// `(x, y)` positions the paragraph's left origin and the first selected line's top; later lines
 /// retain their layout offsets. Includes glyphs, inline objects, decorations and requested markup.
@@ -353,10 +357,10 @@ fn comment_backgrounds(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
     let Some(para) = ctx.para.filter(|_| ctx.opts.markup && ctx.opts.revisions.comments) else { return };
     let mut open: Option<usize> = None;
     let mut ranges = Vec::new();
-    for off in para.object_offsets() {
-        match para.object_at(off) {
-            Some(InlineObject::CommentStart { .. }) => open = open.or(Some(off)),
-            Some(InlineObject::CommentEnd { .. }) => ranges.push((open.take().unwrap_or(0), off)),
+    for (off, object) in para.objects_with_offsets() {
+        match object {
+            InlineObject::CommentStart { .. } => open = open.or(Some(off)),
+            InlineObject::CommentEnd { .. } => ranges.push((open.take().unwrap_or(0), off)),
             _ => {}
         }
     }
