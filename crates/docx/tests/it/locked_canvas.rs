@@ -99,6 +99,29 @@ fn a_locked_canvas_reads_as_a_group_of_its_members() {
     }
 }
 
+/// A text shape as a member of the canvas (`a:txSp`, text with no shape of its own) is a text box
+/// at its own rectangle. Runs take their paragraph's own defaults (`a:pPr/a:defRPr`) before the
+/// list style's for the paragraph's level.
+#[test]
+fn a_locked_canvas_text_shape_and_paragraph_defaults() {
+    let text = r#"<a:txSp><a:txBody><a:bodyPr/><a:lstStyle><a:lvl1pPr><a:defRPr sz="1400" i="1"/></a:lvl1pPr><a:lvl2pPr><a:defRPr sz="2000"/></a:lvl2pPr></a:lstStyle><a:p><a:pPr><a:defRPr sz="3200"/></a:pPr><a:r><a:rPr lang="en-US"/><a:t>Own</a:t></a:r></a:p><a:p><a:pPr lvl="1"/><a:r><a:rPr lang="en-US"/><a:t>Level</a:t></a:r></a:p><a:p><a:r><a:rPr lang="en-US"/><a:t>First</a:t></a:r></a:p></a:txBody><a:useSpRect/><a:xfrm><a:off x="635000" y="381000"/><a:ext cx="1270000" cy="508000"/></a:xfrm></a:txSp>"#;
+    let d = wordcraft_docx::read(&docx(&drawing(text))).unwrap();
+    for d in [&d, &wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap()] {
+        let (_, _, children) = group(d);
+        let [shape] = &children[..] else { panic!("{children:?}") };
+        assert_eq!((shape.x, shape.y), (40.0, 20.0));
+        let InlineObject::Shape { kind: ShapeKind::TextBox, w: 100.0, h: 40.0, fill: None, stroke: None, story: Some(id), .. } = &shape.obj else {
+            panic!("{:?}", shape.obj)
+        };
+        assert_eq!(d.plain_text(StoryRef::Part(*id)).trim_end(), "Own\nLevel\nFirst");
+        let blocks = &d.parts.get(id).unwrap().blocks;
+        let run = |i: usize| blocks[i].as_para().unwrap().runs[0].props.clone();
+        assert_eq!((run(0).size, run(0).italic), (Some(32.0), Some(true)), "the paragraph's own size, the level's italic");
+        assert_eq!((run(1).size, run(1).italic), (Some(20.0), None), "level 2's");
+        assert_eq!((run(2).size, run(2).italic), (Some(14.0), Some(true)), "level 1's");
+    }
+}
+
 /// Before #5060 only the canvas's first picture showed: the shapes and their text were dropped.
 #[test]
 fn a_locked_canvas_is_not_read_as_its_picture_alone() {

@@ -48,13 +48,17 @@ pub struct ItemDisplay<'a> {
     page: &'a Page,
     authors: Authors<'a>,
     clips: Clips,
+    /// The page's warped text boxes ([`warped_boxes`]): their text is drawn bent, with their
+    /// first line, as the page draws it, though their frame is another item.
+    warps: Vec<(u32, Rect, wordcraft_doc::wordart::TextWarp)>,
 }
 
 impl<'a> ItemDisplay<'a> {
     pub fn new(doc: &'a Document, page: &'a Page) -> Self {
         let cells: Vec<Placed> =
             page.header.iter().chain(&page.footer).chain(&page.items).filter(|c| matches!(c, Placed::Cell { clip: true, .. })).cloned().collect();
-        ItemDisplay { doc, page, authors: Authors::new(doc), clips: clipped_cells(&cells) }
+        let warps = [&page.header, &page.footer, &page.items].into_iter().flat_map(|items| warped_boxes(doc, items)).collect();
+        ItemDisplay { doc, page, authors: Authors::new(doc), clips: clipped_cells(&cells), warps }
     }
 
     /// The draw items of `it` alone, as [`page_display`] gives them for a page holding just it
@@ -63,6 +67,27 @@ impl<'a> ItemDisplay<'a> {
         let mut out = Vec::new();
         let items = std::slice::from_ref(it);
         let (_, ba) = dimming(opts);
+        if let Placed::Lines { story: StoryRef::Part(id), .. } = it
+            && let Some((_, rect, warp)) = self.warps.iter().find(|(w, ..)| w == id)
+        {
+            // A warped text box's lines are drawn together, bent, with its first one.
+            let page = self.page;
+            let lines: Vec<&Placed> = [&page.header, &page.footer, &page.items]
+                .into_iter()
+                .flatten()
+                .filter(|i| matches!(i, Placed::Lines { story: StoryRef::Part(s), .. } if s == id))
+                .collect();
+            match lines.iter().position(|l| std::ptr::eq(*l, it)) {
+                Some(0) => {
+                    warped_text(WarpedText { doc: self.doc, lines: &lines, rect: *rect, warp, opts, authors: &self.authors, alpha: ba }, &mut out)
+                }
+                Some(_) => {}
+                // Not one of the page's own items: drawn on its own, as before.
+                None => stories_display(self.doc, &[items], Some(&self.clips), opts, &self.authors, ba, &mut out),
+            }
+            body_change_bars(self.doc, self.page, items, opts, ba, &mut out);
+            return out;
+        }
         stories_display(self.doc, &[items], Some(&self.clips), opts, &self.authors, ba, &mut out);
         body_change_bars(self.doc, self.page, items, opts, ba, &mut out);
         out

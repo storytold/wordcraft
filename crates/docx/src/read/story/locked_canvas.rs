@@ -26,6 +26,7 @@ fn members(g: &El, theme: &[Rgb], depth: usize) -> Vec<Node> {
             "a:sp" => Some(shape(e, theme)),
             "a:cxnSp" => Some(connector(e)),
             "a:pic" => Some(picture(e)),
+            "a:txSp" => Some(text_shape(e, theme)),
             _ => None,
         })
         .map(Node::El)
@@ -48,13 +49,33 @@ fn shape(sp: &El, theme: &[Rgb]) -> El {
     // The text sits in the shape's own rectangle (`a:useSpRect`); a text rectangle of its own
     // (`a:txSp/a:xfrm`) is not kept apart.
     if let Some(body) = sp.child("a:txSp").and_then(|t| t.child("a:txBody")) {
-        let content = el("w:txbxContent", Vec::new(), paragraphs(body, theme));
-        kids.push(Node::El(el("wps:txbx", Vec::new(), vec![Node::El(content)])));
-        if let Some(bp) = body.child("a:bodyPr") {
-            kids.push(Node::El(renamed(bp, "wps:bodyPr")));
-        }
+        kids.extend(text_box(body, theme));
     }
     el("wps:wsp", Vec::new(), kids)
+}
+
+/// A group's text shape (`a:txSp` as a member, text with no shape of its own) as a `wps:wsp` text
+/// box without fill or outline at its own rectangle (`a:xfrm`).
+fn text_shape(tx: &El, theme: &[Rgb]) -> El {
+    let none = || Node::El(el("a:noFill", Vec::new(), Vec::new()));
+    let geometry = el("a:prstGeom", attrs(&[("prst", "rect")]), vec![Node::El(el("a:avLst", Vec::new(), Vec::new()))]);
+    let mut sp_pr: Vec<Node> = tx.child("a:xfrm").map(|x| Node::El(x.clone())).into_iter().collect();
+    sp_pr.extend([Node::El(geometry), none(), Node::El(el("a:ln", Vec::new(), vec![none()]))]);
+    let mut kids = vec![Node::El(el("wps:cNvSpPr", attrs(&[("txBox", "1")]), Vec::new())), Node::El(el("wps:spPr", Vec::new(), sp_pr))];
+    if let Some(body) = tx.child("a:txBody") {
+        kids.extend(text_box(body, theme));
+    }
+    el("wps:wsp", Vec::new(), kids)
+}
+
+/// DrawingML text body `body` as a text box's content and body properties.
+fn text_box(body: &El, theme: &[Rgb]) -> Vec<Node> {
+    let content = el("w:txbxContent", Vec::new(), paragraphs(body, theme));
+    let mut kids = vec![Node::El(el("wps:txbx", Vec::new(), vec![Node::El(content)]))];
+    if let Some(bp) = body.child("a:bodyPr") {
+        kids.push(Node::El(renamed(bp, "wps:bodyPr")));
+    }
+    kids
 }
 
 /// `a:cxnSp` as a `wps:wsp` line. Its glued ends name shapes by the canvas's own ids, which
@@ -79,12 +100,19 @@ fn picture(pic: &El) -> El {
 /// or after a paragraph and single lines, so each says so rather than taking the document's
 /// defaults.
 fn paragraphs(body: &El, theme: &[Rgb]) -> Vec<Node> {
-    let defaults = body.child("a:lstStyle").and_then(|l| l.child("a:lvl1pPr")).and_then(|p| p.child("a:defRPr"));
     body.children("a:p")
         .map(|p| {
+            // A run's properties default to its paragraph's own (`a:pPr/a:defRPr`), then to the
+            // list style's for the paragraph's level (`lvl`, 0–8), property by property.
+            let ppr_el = p.child("a:pPr");
+            let level = ppr_el.and_then(|pp| pp.attr("lvl")).and_then(|v| v.trim().parse::<u8>().ok()).filter(|l| *l <= 8).unwrap_or(0);
+            let level_style = body.child("a:lstStyle").and_then(|l| l.child(&format!("a:lvl{}pPr", level + 1)));
+            let defaults: Vec<&El> =
+                [ppr_el.and_then(|pp| pp.child("a:defRPr")), level_style.and_then(|l| l.child("a:defRPr"))].into_iter().flatten().collect();
+            let defaults = defaults.as_slice();
             let mut ppr =
                 vec![Node::El(el("w:spacing", attrs(&[("w:before", "0"), ("w:after", "0"), ("w:line", "240"), ("w:lineRule", "auto")]), Vec::new()))];
-            let jc = match p.child("a:pPr").and_then(|pp| pp.attr("algn")) {
+            let jc = match ppr_el.and_then(|pp| pp.attr("algn")) {
                 Some("ctr") => Some("center"),
                 Some("r") => Some("right"),
                 Some("just") => Some("both"),
@@ -117,11 +145,12 @@ fn paragraphs(body: &El, theme: &[Rgb]) -> Vec<Node> {
         .collect()
 }
 
-/// A DrawingML run's properties (`a:rPr`, falling back on the list style's `a:defRPr`) as
-/// `w:rPr`: font, size, bold, italic, underline, strikethrough, caps, baseline and colour.
-fn run_props(rpr: Option<&El>, defaults: Option<&El>, theme: &[Rgb]) -> El {
-    let get = |n: &str| rpr.and_then(|r| r.attr(n)).or_else(|| defaults.and_then(|d| d.attr(n)));
-    let child = |n: &str| rpr.and_then(|r| r.child(n)).or_else(|| defaults.and_then(|d| d.child(n)));
+/// A DrawingML run's properties (`a:rPr`, each falling back on the first of `defaults`, the
+/// `a:defRPr`s in order, that gives it) as `w:rPr`: font, size, bold, italic, underline,
+/// strikethrough, caps, baseline and colour.
+fn run_props(rpr: Option<&El>, defaults: &[&El], theme: &[Rgb]) -> El {
+    let get = |n: &str| rpr.and_then(|r| r.attr(n)).or_else(|| defaults.iter().find_map(|d| d.attr(n)));
+    let child = |n: &str| rpr.and_then(|r| r.child(n)).or_else(|| defaults.iter().find_map(|d| d.child(n)));
     let on = |n: &str| get(n).is_some_and(|v| v == "1" || v == "true");
     let mut kids = Vec::new();
     let mut push = |name: &str, a: &[(&str, &str)]| kids.push(Node::El(el(name, attrs(a), Vec::new())));

@@ -297,7 +297,8 @@ fn inline_box_that_resizes_to_fit_takes_its_texts_height() {
 const FILLER: usize = 22;
 
 /// #5060: a warped text box inside a group (WordArt in a Word 2007 locked canvas) is drawn bent
-/// and stretched over its frame, as one on its own is; without the warp its text is plain.
+/// and stretched over its frame, as one on its own is, by the PDF export too (it draws the page
+/// one item at a time); without the warp its text is plain.
 #[test]
 fn a_warped_text_box_in_a_group_is_drawn_bent() {
     use kurbo::Shape as _;
@@ -330,17 +331,26 @@ fn a_warped_text_box_in_a_group_is_drawn_bent() {
         };
         d.insert_object(&Pos::body(0, 0), group, &Default::default()).unwrap();
         let l = lay(&d);
-        crate::display::page_display(&d, &l.pages[0], &Default::default())
-            .into_iter()
-            .filter_map(|i| match i {
-                crate::display::Draw::Art { path, .. } => Some(path.bounding_box()),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
+        let page = &l.pages[0];
+        let arts = |draws: Vec<crate::display::Draw>| {
+            draws
+                .into_iter()
+                .filter_map(|i| match i {
+                    crate::display::Draw::Art { path, .. } => Some(path.bounding_box()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        // The page as drawn on screen, and one item at a time as the PDF export draws it.
+        let shown = crate::display::ItemDisplay::new(&d, page);
+        let opts = Default::default();
+        let per_item = page.header.iter().chain(&page.footer).chain(&page.items).flat_map(|it| shown.draws(it, &opts)).collect();
+        (arts(crate::display::page_display(&d, page, &opts)), arts(per_item))
     };
-    let bent = drawn(wordcraft_doc::wordart::TextWarp::new("textChevron"));
+    let (bent, per_item) = drawn(wordcraft_doc::wordart::TextWarp::new("textChevron"));
     let [art] = bent.as_slice() else { panic!("one bent text: {bent:?}") };
     // Stretched over the 200 pt frame inside its 7.2 pt margins.
     assert!((art.width() - 185.6).abs() < 2.0, "{art:?}");
-    assert!(drawn(None).is_empty(), "plain text without a warp");
+    assert_eq!(per_item, bent, "the PDF export draws it bent too");
+    assert_eq!(drawn(None), (Vec::new(), Vec::new()), "plain text without a warp");
 }
