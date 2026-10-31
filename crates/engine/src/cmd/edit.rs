@@ -2,7 +2,7 @@
 
 use serde_json::{Value, json};
 use wordcraft_doc::edit::Fragment;
-use wordcraft_doc::{Pos, StoryRef};
+use wordcraft_doc::{Path, Pos, StoryRef};
 
 use super::{delete_selection, find_pattern, pos_json, sel_result};
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
@@ -27,8 +27,14 @@ fn undo_to(s: &mut Session, v: &Value) -> CmdResult {
     Ok(r)
 }
 
-fn has_sel(s: &Session) -> Option<&'static str> {
+/// Something the Spike can collect: text (it doesn't take empty cells).
+fn has_text_sel(s: &Session) -> Option<&'static str> {
     if s.sel.is_collapsed() { Some("nothing is selected") } else { None }
+}
+
+/// Something to cut: text, or whole table cells (an empty cell's selection has no length, #1744).
+fn has_sel(s: &Session) -> Option<&'static str> {
+    if s.sel.is_collapsed() && s.cell_range().is_none() { Some("nothing is selected") } else { None }
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -61,6 +67,18 @@ pub fn specs() -> Vec<CommandSpec> {
         .pure(),
         CommandSpec::new("edit.cut", "Cut", "Home › Clipboard", cut).key("Mod+X").when(has_sel),
         CommandSpec::new("edit.copy", "Copy", "Home › Clipboard", copy).key("Mod+C / Mod+Insert").pure(),
+        // Word's Spike (Ctrl+F3, Ctrl+Shift+F3; ⌘ on the Mac): the AutoText entry "Spike", so Quick
+        // Parts and AutoText insert it without emptying it, as in Word.
+        CommandSpec::new("edit.spike", "Spike", "Editing", spike).key("Mod+F3").when(has_text_sel),
+        CommandSpec::new("edit.insertSpike", "Insert Spike", "Editing", insert_spike).key("Mod+Shift+F3").when(|s| {
+            if s.math.is_some() {
+                Some("leave the equation first")
+            } else if s.building_blocks.contains_key(SPIKE) {
+                None
+            } else {
+                Some("the Spike is empty")
+            }
+        }),
         CommandSpec::new("edit.paste", "Paste", "Home › Clipboard", paste).key("Mod+V / Shift+Insert").params(r#"{"text"?: string, "html"?: string, "rtf"?: string}"#),
         CommandSpec::new("edit.pasteText", "Paste: Keep Text Only", "Home › Clipboard › Paste", paste_text)
             .params(r#"{"text"?: string}"#)
@@ -122,7 +140,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 t @ ("find" | "replace" | "goto") => t,
                 other => return Err(CmdError::Params(format!("`tab` is find, replace or goto, not `{other}`"))),
             };
-            s.ui_requests.push(json!({"open": tab}));
+            s.push_ui_request(json!({"open": tab}));
             Ok(json!({"open": tab}))
         })
         // Word for Mac's own key is ⌃H.
@@ -130,7 +148,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"tab"?: "find|replace|goto" (default replace)}"#)
         .pure(),
         CommandSpec::new("edit.replaceAll", "Replace All", "Home › Editing › Replace", replace_all)
-            .params(r#"{"text": string, "with": string (^p ^t ^& ^c …; \\1 with wildcards), …options of edit.find}"#),
+            .params(r#"{"text": string, "with": string (^p ^t ^& ^c …; \\1 with wildcards; with regex also $1 ${n} ${name} $0 $$ \\1 \\n (paragraph mark) \\t), …options of edit.find}"#),
         CommandSpec::new("edit.goto", "Go To", "Home › Editing › Find", goto)
             .key("Mod+Alt+G / F5")
             .params(r#"{"page"?: n, "pageBy"?: int (pages forward, negative back, from the caret's page), "bookmark"?: string (selects its text), "paragraph"?: n}; none opens Find and Replace on its Go To tab"#)
@@ -155,11 +173,25 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 fn copy(s: &mut Session, _: &Value) -> CmdResult {
+    let whole = super::table::selected_table(s);
+    copy_with(s, whole.as_ref())
+}
+
+/// Copy, `whole` being the table the selection covers whole, if it does.
+fn copy_with(s: &mut Session, whole: Option<&Path>) -> CmdResult {
     let (a, b) = s.sel.ordered();
-    if a == b {
-        return Ok(json!({"text": ""}));
-    }
-    let f = s.doc.copy_range(&a, &b);
+    // Whole table cells selected copy as a table, even empty ones (their selection has no
+    // length): the whole table, or a table of just the selected rows or cells (#1744).
+    let table = match (whole, s.cell_range()) {
+        (Some(tp), _) => s.doc.copy_block(a.story, tp),
+        (None, Some(r)) => s.doc.copy_table_cells(r.story, &r.table, r.rows, r.cols),
+        (None, None) => None,
+    };
+    let f = match table {
+        Some(f) => f,
+        None if a == b => return Ok(json!({"text": ""})),
+        None => s.doc.copy_range(&a, &b),
+    };
     s.clipboard_text = f.clipboard_text();
     s.clip_history.push(&f, &s.clipboard_text);
     s.clipboard = Some(f);
@@ -167,17 +199,47 @@ fn copy(s: &mut Session, _: &Value) -> CmdResult {
 }
 
 /// What Copy and Cut return: the clipboard's text, and the copy as HTML (equations as MathML,
-/// #816) for the host to put on the system clipboard too, so other programs keep the formatting.
+/// #816) for the host to put on the system clipboard too, so other programs keep the formatting;
+/// and for a copy of one equation alone, its MathML (#1297).
 pub(crate) fn copy_result(s: &mut Session) -> Value {
     s.clipboard_html = match &s.clipboard {
         Some(f) => wordcraft_formats::html::export_fragment(&f.to_document()),
         None => String::new(),
     };
-    if s.clipboard_html.is_empty() { json!({"text": s.clipboard_text}) } else { json!({"text": s.clipboard_text, "html": s.clipboard_html}) }
+    let mut r = json!({"text": s.clipboard_text});
+    if !s.clipboard_html.is_empty() {
+        r["html"] = json!(s.clipboard_html);
+    }
+    // A copy of one equation alone, as MathML for the clipboard formats equation editors read
+    // ("MathML" on Windows, `public.mathml.presentation` on macOS; #1297). Word looks for them
+    // before anything else when it pastes; a copy with text around the equation doesn't offer
+    // them, so pasting it keeps the text.
+    if let Some((linear, display)) = s.clipboard.as_ref().and_then(|f| f.sole_equation()) {
+        r["mathml"] = json!(wordcraft_formats::mathml::linear_to_mathml(linear, display));
+    }
+    r
 }
 
-fn cut(s: &mut Session, v: &Value) -> CmdResult {
-    let r = copy(s, v)?;
+fn cut(s: &mut Session, _: &Value) -> CmdResult {
+    let whole = super::table::selected_table(s);
+    let r = copy_with(s, whole.as_ref())?;
+    // A whole table selected: Cut removes the table, as Delete Table does (#1744). With Track
+    // Changes on, the cut below marks its text deleted (a tracked cut may become a move).
+    if !s.doc.settings.track_changes
+        && let Some(tp) = &whole
+    {
+        super::table::delete_table_at(s, tp)?;
+        super::controls::restore_placeholder(s)?;
+        return Ok(r);
+    }
+    // Whole rows or some cells: their text goes, the rows and cells stay, as in Word.
+    if whole.is_none()
+        && let Some(range) = s.cell_range().cloned()
+    {
+        super::table::clear_range_cells(s, &range)?;
+        super::controls::restore_placeholder(s)?;
+        return Ok(r);
+    }
     // A tracked cut of a paragraph or sentence may become a move when pasted.
     if !super::moves::cut_tracked(s)? {
         delete_selection(s)?;
@@ -186,11 +248,42 @@ fn cut(s: &mut Session, v: &Value) -> CmdResult {
     Ok(r)
 }
 
-/// Paste keeps the source formatting: our own copy while the system clipboard still holds it,
-/// else another program's HTML or RTF (#687), else the system clipboard's text.
-fn paste(s: &mut Session, v: &Value) -> CmdResult {
-    let frag = super::paste::paste_fragment(s, v)?;
+/// The AutoText entry the Spike collects into.
+const SPIKE: &str = "Spike";
+
+/// Ctrl+F3: cut the selection to the end of the Spike. The clipboard is left alone.
+fn spike(s: &mut Session, _: &Value) -> CmdResult {
+    let (a, b) = s.sel.ordered();
+    // Column selection collapses the selection before the command runs.
+    if a == b {
+        return Err(CmdError::Disabled("edit.spike: nothing is selected".into()));
+    }
+    let piece = s.doc.copy_range(&a, &b);
+    if piece.blocks.is_empty() {
+        return Err(CmdError::Disabled("edit.spike: this selection can't be collected".into()));
+    }
+    delete_selection(s)?;
+    super::controls::restore_placeholder(s)?;
+    s.building_blocks.entry(SPIKE.to_string()).or_default().append_piece(piece);
+    sel_result(s)
+}
+
+/// Ctrl+Shift+F3: insert everything the Spike collected, in order, and empty it.
+fn insert_spike(s: &mut Session, _: &Value) -> CmdResult {
+    let frag = s.building_blocks.get(SPIKE).cloned().ok_or_else(|| CmdError::Disabled("edit.insertSpike: the Spike is empty".into()))?;
     super::paste::insert(s, frag)?;
+    s.building_blocks.remove(SPIKE);
+    sel_result(s)
+}
+
+/// Paste keeps the source formatting: our own copy while the system clipboard still holds it,
+/// else another program's HTML or RTF (#687). The system clipboard's text has none, so it pastes
+/// as Keep Text Only does.
+fn paste(s: &mut Session, v: &Value) -> CmdResult {
+    match super::paste::paste_content(s, v)? {
+        super::paste::Pasted::Fragment(frag) => super::paste::insert(s, frag)?,
+        super::paste::Pasted::Text(text) => super::paste::insert_text(s, &text)?,
+    }
     sel_result(s)
 }
 
@@ -404,7 +497,10 @@ pub(crate) fn search_full(s: &Session, story: StoryRef, with_rep: bool) -> Resul
         .configure(meta::Config::new().nfa_size_limit(Some(1 << 20)))
         .build(&c.pattern)
         .map_err(|e| CmdError::Params(format!("bad pattern: {e}")))?;
-    let pieces = with_rep.then(|| find_pattern::parse_replace(&f.replace, &opts));
+    let pieces = with_rep.then(|| {
+        let index = |name: &str| re.group_info().to_index(regex_automata::PatternID::ZERO, name);
+        find_pattern::resolve_names(find_pattern::parse_replace(&f.replace, &opts), &index)
+    });
     let paths = s.doc.para_paths(story);
     // Paragraphs read as one text: consecutive siblings when the pattern spans paragraphs.
     let mut chunks: Vec<std::ops::Range<usize>> = Vec::new();
@@ -548,7 +644,7 @@ fn find(s: &mut Session, v: &Value) -> CmdResult {
         // Word's Ctrl+F: the Navigation pane with its search box ready to type in (#712); the
         // Find and Replace dialog is Advanced Find.
         s.view.nav_pane = true;
-        s.ui_requests.push(json!({"focus": "navSearch"}));
+        s.push_ui_request(json!({"focus": "navSearch"}));
         return Ok(json!({"count": s.find.results.len()}));
     }
     let story = s.sel.focus.story;
@@ -569,7 +665,7 @@ fn find(s: &mut Session, v: &Value) -> CmdResult {
 /// Find in the classic dialog: every match in the body or the selection, optionally highlighted while you read.
 fn advanced_find(s: &mut Session, v: &Value) -> CmdResult {
     if p::str(v, "text").is_none() && v.get("highlight").is_none() {
-        s.ui_requests.push(json!({"open": "find"}));
+        s.push_ui_request(json!({"open": "find"}));
         return Ok(json!({"count": s.find.results.len()}));
     }
     read_opts(s, v);
@@ -615,7 +711,17 @@ fn step(s: &mut Session, dir: i64) -> CmdResult {
     Ok(json!({"index": idx, "count": n}))
 }
 
+/// Replace needs something to look for: the `text` given, or the last search's (Find then Replace
+/// with just a `with`). Neither is a call that would silently replace nothing (a misspelt `text`).
+fn need_query(s: &Session, v: &Value) -> Result<(), CmdError> {
+    if p::str(v, "text").is_none() && s.find.query.is_empty() {
+        return Err(CmdError::Params("`text` (string) is required".into()));
+    }
+    Ok(())
+}
+
 fn replace(s: &mut Session, v: &Value) -> CmdResult {
+    need_query(s, v)?;
     read_opts(s, v);
     let story = s.sel.focus.story;
     let results = search_full(s, story, true)?;
@@ -631,6 +737,7 @@ fn replace(s: &mut Session, v: &Value) -> CmdResult {
 /// Every match replaced, last first so earlier positions stay valid (one undo step). A `\r` in
 /// the replacement (`^p`) splits the paragraph.
 fn replace_all(s: &mut Session, v: &Value) -> CmdResult {
+    need_query(s, v)?;
     read_opts(s, v);
     let story = s.sel.focus.story;
     let results = search_full(s, story, true)?;
@@ -644,7 +751,8 @@ fn replace_all(s: &mut Session, v: &Value) -> CmdResult {
             super::paste_text(s, &with)?;
             continue;
         }
-        let props = s.doc.para_at(&a).map(|p| p.props_of_char(a.off).clone()).unwrap_or_default();
+        // Replacing a symbol gives the new text the symbol's formatting, not its own font.
+        let props = s.doc.para_at(&a).map(|p| p.props_of_char(a.off).clone().without_symbol()).unwrap_or_default();
         let mut at = s.doc.delete_range(&a, &b)?;
         for (k, part) in with.split(['\r', '\u{2029}']).enumerate() {
             if k > 0 {
@@ -681,7 +789,7 @@ fn goto(s: &mut Session, v: &Value) -> CmdResult {
             s.sel = Selection::caret(t);
             s.page_hint = idx;
         }
-        s.ui_requests.push(json!({"scrollTo": "caret"}));
+        s.push_ui_request(json!({"scrollTo": "caret"}));
         return sel_result(s);
     }
     if let Some(name) = p::str(v, "bookmark") {
@@ -702,13 +810,14 @@ fn goto(s: &mut Session, v: &Value) -> CmdResult {
         }
         return sel_result(s);
     }
-    s.ui_requests.push(json!({"open": "goto"}));
+    s.push_ui_request(json!({"open": "goto"}));
     sel_result(s)
 }
 
 fn painter_pick(s: &mut Session) {
     let f = s.sel.ordered().0;
-    let chr = s.doc.para_at(&f).map(|p| p.props_of_char(f.off).clone()).unwrap_or_default();
+    // A symbol's own font isn't formatting to paint onto text.
+    let chr = s.doc.para_at(&f).map(|p| p.props_of_char(f.off).clone().without_symbol()).unwrap_or_default();
     let para = s.doc.para_at(&f).map(|p| p.props.clone()).unwrap_or_default();
     s.painter = Some((chr, para, false));
 }

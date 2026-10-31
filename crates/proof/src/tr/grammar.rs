@@ -132,6 +132,12 @@ const CONJUNCTIONS_NO_POST_COMMA: &[&str] = &["ve", "veya", "yahut", "veyahut", 
 
 /// Check grammar and punctuation in a Turkish text block.
 pub fn check(text: &str) -> Vec<Issue> {
+    check_with(text, true)
+}
+
+/// [`check`] where `capital_first` says whether the text's first word must start a sentence with a capital
+/// (false for a list item, which may be a fragment).
+pub fn check_with(text: &str, capital_first: bool) -> Vec<Issue> {
     let mut v = Vec::new();
     let ws = words(text);
 
@@ -240,7 +246,8 @@ pub fn check(text: &str) -> Vec<Issue> {
     for (i, &(w_start, w_end)) in ws.iter().enumerate() {
         if i == 0 {
             // First word in paragraph
-            if let Some(w) = text.get(w_start..w_end)
+            if capital_first
+                && let Some(w) = text.get(w_start..w_end)
                 && w.chars().next().is_some_and(char::is_lowercase)
             {
                 let cap = turkish_capitalize(w);

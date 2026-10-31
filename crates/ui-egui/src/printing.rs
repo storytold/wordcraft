@@ -9,7 +9,7 @@ pub type Submit = Box<dyn Fn(Vec<u8>, Settings, bool, Vec<(String, String)>) -> 
 pub fn commands(app: &crate::WordApp) -> Vec<serde_json::Value> {
     use serde_json::json;
     let enabled = if app.services.print_native.is_some() { app.printing.ready() } else { app.services.print.is_some() };
-    let submit_params = "range?: all|current|selection|custom; pages?: string (1-3,5); parity?: all|odd|even; copies?: integer 1..999; collate?: bool; orientation?: auto|portrait|landscape. Native uses the selected printer, duplex and grayscale from ui.printSettings; omitted copies/collation use current settings. Browser printing opens its dialog. Submits only when explicitly executed.";
+    let submit_params = "range?: all|current|selection|custom; pages?: string (1-3,5); parity?: all|odd|even; copies?: integer 1..999; collate?: bool; orientation?: auto|portrait|landscape; paper?: none|Letter|Legal|A4|… (Layout › Size names: Scale to paper size, every page scaled onto that paper and centred; the document is unchanged). Native uses the selected printer, duplex and grayscale from ui.printSettings; omitted copies/collation use current settings. Browser printing opens its dialog. Submits only when explicitly executed.";
     vec![
         json!({"id":"ui.printSettings", "label":"Print settings", "location":"File › Print", "shortcut":null,
             "params":"printer?: discovered name; copies?: integer 1..999; duplex?: printerDefault|off|longEdge|shortEdge|null; grayscale?: bool; refresh?: bool. Empty params inspect printer/copies/duplex/grayscale, printers, busy/discovering/ready and status/detail. Updates are atomic; refresh discovers only on native hosts. Never submits or opens a dialog.",
@@ -19,6 +19,8 @@ pub fn commands(app: &crate::WordApp) -> Vec<serde_json::Value> {
     ]
 }
 
+/// Builds translated print labels, draws the shared print-settings panel, and shows the current
+/// feedback message.
 pub fn show(state: &mut State, ui: &mut egui::Ui, discover: &Discover, translate: impl Fn(&str) -> String) {
     let labels = Labels {
         printer: &translate("Printer"),
@@ -32,7 +34,7 @@ pub fn show(state: &mut State, ui: &mut egui::Ui, discover: &Discover, translate
         short_edge: &translate("Two-sided: short edge"),
         grayscale: &translate("Grayscale"),
     };
-    state.show(ui, egui::Id::new("wordcraft_print_settings"), discover, &labels);
+    state.show(ui, egui::Id::unique("wordcraft_print_settings"), discover, &labels);
     if let Some(message) = &state.message {
         ui.label(feedback(message, translate));
     }
@@ -101,6 +103,13 @@ pub fn settings(state: &mut State, params: &serde_json::Value, discover: Option<
     }))
 }
 
+const SPOOLED: &str = "Print job submitted: spooled {count} sheet(s)";
+
+/// The sheet count of the Windows backend's English receipt `spooled N sheet(s)`.
+fn spooled_sheets(receipt: &str) -> Option<usize> {
+    receipt.trim().strip_prefix("spooled ")?.strip_suffix(" sheet(s)")?.parse().ok()
+}
+
 pub fn feedback(message: &Feedback, translate: impl Fn(&str) -> String) -> String {
     match message {
         Feedback::FindingPrinters => translate("Finding printers…"),
@@ -108,10 +117,33 @@ pub fn feedback(message: &Feedback, translate: impl Fn(&str) -> String) -> Strin
         Feedback::DiscoveryFailed => translate("Printer discovery failed."),
         Feedback::Submitting => translate("Submitting print job…"),
         Feedback::Submitted(receipt) if receipt.trim().is_empty() => translate("Print job submitted."),
+        Feedback::Submitted(receipt) if spooled_sheets(receipt).is_some_and(|_| translate(SPOOLED) != SPOOLED) => {
+            let count = spooled_sheets(receipt).unwrap_or_default();
+            translate(SPOOLED).replace("{count}", &count.to_string())
+        }
         Feedback::Submitted(receipt) => translate("Print job submitted: {receipt}").replace("{receipt}", receipt),
         Feedback::Failed(error) => translate("Print failed: {error}").replace("{error}", error),
         Feedback::WorkerStopped => translate("Print failed: the printing worker stopped."),
     }
+}
+
+/// The IPP/PWG 5101.1 media name of a Layout › Size paper (the spooler's `media` option).
+pub fn pwg_media(paper: &str) -> Option<&'static str> {
+    Some(match paper {
+        "Letter" => "na_letter_8.5x11in",
+        "Legal" => "na_legal_8.5x14in",
+        "Executive" => "na_executive_7.25x10.5in",
+        "A3" => "iso_a3_297x420mm",
+        "A4" => "iso_a4_210x297mm",
+        "A5" => "iso_a5_148x210mm",
+        "B4 (JIS)" => "jis_b4_257x364mm",
+        "B5 (JIS)" => "jis_b5_182x257mm",
+        "Tabloid" => "na_ledger_11x17in",
+        "Statement" => "na_invoice_5.5x8.5in",
+        "Envelope #10" => "na_number-10_4.125x9.5in",
+        "Envelope DL" => "iso_dl_110x220mm",
+        _ => return None,
+    })
 }
 
 /// Build the upstream page-range/markup PDF and hand it to the chosen host print flow.
@@ -137,7 +169,7 @@ pub fn submit(app: &mut crate::WordApp, params: &serde_json::Value) -> Result<se
         object.insert("copies".into(), json!(1));
     }
     if app.ui.update_fields_before_print
-        && let Err(error) = app.session.run("references.updateFields", &json!({}))
+        && let Err(error) = app.session.run("references.updateFields", &json!({"all": true}))
     {
         log::warn!("updating fields before printing: {error}");
     }
@@ -166,6 +198,10 @@ pub fn submit(app: &mut crate::WordApp, params: &serde_json::Value) -> Result<se
                 let lay = app.session.export_layout();
                 lay.pages.first().is_some_and(|p| p.w > p.h)
             };
+            // Scale to paper size: ask the printer for that paper too, so it takes it from the right tray.
+            if let Some(media) = wordcraft_engine::print::paper(params).ok().flatten().and_then(|(name, _, _)| pwg_media(name)) {
+                print_options.push(("media".into(), media.into()));
+            }
             if is_landscape {
                 print_options.push(("orientation-requested".into(), "4".into()));
                 print_options.push(("landscape".into(), "true".into()));
@@ -190,5 +226,18 @@ pub fn submit(app: &mut crate::WordApp, params: &serde_json::Value) -> Result<se
             app.status(msg.clone());
             Err(msg)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Every Layout › Size paper has a printer media name (#2108) the spooler accepts as a keyword.
+    #[test]
+    fn every_paper_size_has_a_media_name() {
+        for (name, _, _) in wordcraft_geom::PAPER_SIZES {
+            let media = super::pwg_media(name).unwrap_or_else(|| panic!("{name} has no media name"));
+            assert!(media.len() <= 64 && media.bytes().all(|b| b.is_ascii_graphic() && !matches!(b, b'/' | b':' | b'=' | b'"')), "{media}");
+        }
+        assert_eq!(super::pwg_media("Quarto"), None);
     }
 }

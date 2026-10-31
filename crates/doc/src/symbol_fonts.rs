@@ -22,7 +22,7 @@
 /// The symbol fonts this module knows, by lowercase family name.
 fn table(family: &str) -> Option<&'static [u32; 224]> {
     let f = family.trim();
-    if f.eq_ignore_ascii_case("symbol") {
+    if f.eq_ignore_ascii_case("symbol") || f.eq_ignore_ascii_case("symbol (pcl6)") {
         Some(&SYMBOL)
     } else if f.eq_ignore_ascii_case("wingdings") {
         Some(&WINGDINGS)
@@ -241,6 +241,21 @@ mod tests {
                 assert_eq!(symbol_char(f, pua), symbol_char(f, plain), "{f} {code:#X}");
             }
         }
+    }
+
+    #[test]
+    fn pcl6_symbol_encoding() {
+        for family in ["Symbol (PCL6)", " symbol (pcl6) "] {
+            assert!(is_symbol_font(family));
+            for code in 0x20..=0xFF {
+                let c = char::from_u32(code).unwrap();
+                assert_eq!(symbol_char(family, c), symbol_char("Symbol", c));
+                let pua = char::from_u32(0xF000 + code).unwrap();
+                assert_eq!(symbol_char(family, pua), symbol_char("Symbol", pua));
+            }
+            assert_eq!(symbol_char(family, '\u{F0B3}'), Some('≥'));
+        }
+        assert!(!is_symbol_font("Symbol (unknown)"));
     }
 
     #[test]

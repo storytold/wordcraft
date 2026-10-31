@@ -20,16 +20,23 @@ use crate::WordApp;
 /// A file dialog the app asks the host to show ([`Services::file_dialog`](crate::Services::file_dialog)).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FileDialogRequest {
-    /// Pick a file to open; `purpose` says what for (`document`, `picture`, `recipients`, `font`), as for
-    /// `pick_open`.
+    /// Pick a file to open; `purpose` says what for (`document`, `picture`, `recipients`, `font`,
+    /// `sources`), as for `pick_open`.
     Open { purpose: String },
-    /// Pick a path to save to, given a suggested file name.
-    Save { name: String },
+    /// Pick one or more files (Add Font…); the answer lists every one picked.
+    OpenMany { purpose: String },
+    /// Pick a path to save to, given a suggested file name and, if it matters, the folder to
+    /// start in (Save as Word Template starts in the user templates folder, #2852).
+    Save { name: String, dir: Option<String> },
 }
 
-/// The host's answer to a [`FileDialogRequest`]: the picked path, `Ok(None)` when the user
-/// cancelled, or an error when no system dialog could be shown (the app then shows its own).
-pub type FileDialogAnswer = Result<Option<String>, String>;
+/// The host's answer to a [`FileDialogRequest`]: the picked paths (one for everything but
+/// [`FileDialogRequest::OpenMany`]), empty when the user cancelled, or an error when no system
+/// dialog could be shown (the app then shows its own).
+pub type FileDialogAnswer = Result<Vec<String>, String>;
+
+/// Most font files one Add Font pick tries; the rest of a bigger selection is skipped.
+const MAX_FONTS_PER_PICK: usize = 2000;
 
 const PICTURES: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "wmf", "emf"];
 const DOCUMENTS: &[&str] = &["docx", "docm", "dotx", "dotm", "doc", "dot", "odt", "rtf", "txt", "md", "html", "htm", "tex", "json", "xml"];
@@ -41,6 +48,7 @@ pub fn open_filters(purpose: &str) -> &'static [(&'static str, &'static [&'stati
     match purpose {
         "picture" => &[("Pictures", PICTURES)],
         "font" => &[("Fonts", wordcraft_fonts::FONT_FILE_EXTS)],
+        "sources" => &[("Word sources", &["xml"]), ("All files", &["*"])],
         "recipients" => &[("Recipient lists", wordcraft_engine::cmd::mailings::RECIPIENT_EXTENSIONS), ("All files", &["*"])],
         _ => &[("Documents", DOCUMENTS), ("Word document", &["docx"]), ("All files", &["*"])],
     }
@@ -48,20 +56,24 @@ pub fn open_filters(purpose: &str) -> &'static [(&'static str, &'static [&'stati
 
 /// What to do with the path picked in a dialog.
 pub(crate) enum AfterPick {
-    /// Open the picked document.
-    OpenDocument,
+    /// Open the picked document from the window showing `document` ([`WordApp::open_file`]).
+    OpenDocument { document: u64 },
     /// Insert the picked picture, or replace the pending Change Picture target.
     Picture,
     /// Save the document there, then carry on.
-    SaveAs(AfterSave),
+    SaveAs { after: AfterSave, document: u64 },
     /// Save a copy there in this format (`pdf`, `docx`, `png`…).
     Export { ext: String },
     /// Write the PDF of these print settings there (File › Print › Save these pages as PDF).
     PrintPdf { settings: Value },
     /// Load the picked CSV/TSV/text file or spreadsheet as the mail-merge recipients (#240, #334).
     Recipients,
-    /// Add the picked font file (#582).
+    /// Add every picked font file (#582, #1789).
     Font,
+    /// Import the picked Word bibliography file (`b:Sources`: Word's `Sources.xml`) into the
+    /// document through Manage Sources (#2640).
+    #[cfg(not(target_arch = "wasm32"))]
+    Sources,
     /// Hand the picked path to the open dialog (`WordApp::dialog_pick`): Templates and Add-ins,
     /// Organizer (#377).
     ForDialog,
@@ -131,8 +143,10 @@ impl WordApp {
             return self.poll_file_dialog().map_or(Asked::Pending, Asked::Done);
         }
         let picked = match &req {
-            FileDialogRequest::Open { purpose } => self.services.pick_open.as_ref().and_then(|f| f(purpose)),
-            FileDialogRequest::Save { name } => self.services.pick_save.as_ref().and_then(|f| f(name)),
+            FileDialogRequest::Open { purpose } | FileDialogRequest::OpenMany { purpose } => {
+                self.services.pick_open.as_ref().and_then(|f| f(purpose))
+            }
+            FileDialogRequest::Save { name, .. } => self.services.pick_save.as_ref().and_then(|f| f(name)),
         };
         Asked::Done(self.finish_pick(after, picked))
     }
@@ -144,11 +158,11 @@ impl WordApp {
             None | Some(Err(TryRecvError::Empty)) => return None,
             Some(Ok(answer)) => answer,
             // The host dropped the dialog without an answer: as good as cancelled.
-            Some(Err(TryRecvError::Disconnected)) => Ok(None),
+            Some(Err(TryRecvError::Disconnected)) => Ok(Vec::new()),
         };
         let d = self.file_dialog.take()?;
         match answer {
-            Ok(picked) => Some(self.finish_pick(d.after, picked)),
+            Ok(picked) => Some(self.finish_picks(d.after, picked)),
             Err(reason) => {
                 log::warn!("no system file dialog ({reason}); showing the built-in file browser");
                 self.dialog_unavailable(d.req, d.after)
@@ -178,12 +192,59 @@ impl WordApp {
         Some(self.finish_pick(after, None))
     }
 
+    /// Do what the dialog was for with the picked paths (none: the user cancelled). Only Add Font
+    /// takes more than one; the others use the first.
+    fn finish_picks(&mut self, after: AfterPick, picked: Vec<String>) -> Result<Value, String> {
+        match after {
+            AfterPick::Font if !picked.is_empty() => self.add_fonts(picked),
+            after => self.finish_pick(after, picked.into_iter().next()),
+        }
+    }
+
+    /// Add each picked font file, going on past the ones that fail, and say how it went in one
+    /// status line (#1789). One file keeps `font.add`'s own result and message.
+    fn add_fonts(&mut self, mut paths: Vec<String>) -> Result<Value, String> {
+        if paths.len() == 1 {
+            return self.run("font.add", json!({"path": paths.remove(0)}));
+        }
+        let skipped = paths.len().saturating_sub(MAX_FONTS_PER_PICK);
+        paths.truncate(MAX_FONTS_PER_PICK);
+        let (mut added, mut failed) = (0usize, Vec::new());
+        for path in paths {
+            match self.run("font.add", json!({"path": path})) {
+                Ok(_) => added += 1,
+                Err(e) => {
+                    log::warn!("couldn't add font {path}: {e}");
+                    let name = std::path::Path::new(&path).file_name().map_or(path.clone(), |n| n.to_string_lossy().into_owned());
+                    failed.push(name);
+                }
+            }
+        }
+        let n = added.to_string();
+        let mut msg = if added == 1 { tl!("Added 1 font").to_string() } else { crate::i18n::fmt(tl!("Added {n} fonts"), &[("n", &n)]) };
+        if !failed.is_empty() {
+            let count = failed.len().to_string();
+            let mut names = failed.iter().take(3).cloned().collect::<Vec<_>>().join(", ");
+            if failed.len() > 3 {
+                let more = (failed.len() - 3).to_string();
+                names = crate::i18n::fmt(tl!("{names} and {n} more"), &[("names", &names), ("n", &more)]);
+            }
+            msg = crate::i18n::fmt(tl!("{added}; {count} couldn't be read: {names}"), &[("added", &msg), ("count", &count), ("names", &names)]);
+        }
+        if skipped > 0 {
+            let (n, max) = (skipped.to_string(), MAX_FONTS_PER_PICK.to_string());
+            msg = crate::i18n::fmt(tl!("{added}; {n} skipped (limit {max})"), &[("added", &msg), ("n", &n), ("max", &max)]);
+        }
+        self.status(msg);
+        Ok(json!({"added": added, "failed": failed, "skipped": skipped}))
+    }
+
     /// Do what the dialog was for with the picked path (`None`: the user cancelled).
     pub(crate) fn finish_pick(&mut self, after: AfterPick, picked: Option<String>) -> Result<Value, String> {
         match after {
-            AfterPick::OpenDocument => {
+            AfterPick::OpenDocument { document } => {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
-                let r = self.run("file.open", json!({"path": path}));
+                let r = self.open_file(&path, Some(document));
                 self.ui.backstage = false;
                 r
             }
@@ -196,7 +257,23 @@ impl WordApp {
             }
             AfterPick::Font => {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
-                self.run("font.add", json!({"path": path}))
+                self.add_fonts(vec![path])
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            AfterPick::Sources => {
+                let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
+                let before = self.session.doc.sources.len();
+                let r = self.run("references.sources", json!({"import": path}));
+                if r.is_ok() {
+                    let added = self.session.doc.sources.len().saturating_sub(before);
+                    let msg = match added {
+                        0 => tl!("No new sources in that file").to_string(),
+                        1 => tl!("Imported 1 source").to_string(),
+                        n => crate::i18n::fmt(tl!("Imported {n} sources"), &[("n", &n.to_string())]),
+                    };
+                    self.status(msg);
+                }
+                r
             }
             AfterPick::ForDialog => {
                 let picked = picked.filter(|p| !p.is_empty());
@@ -237,19 +314,38 @@ impl WordApp {
                 }
                 r
             }
-            AfterPick::SaveAs(after) => {
-                // The save's error, kept for the Save Changes prompt to explain (#1445).
+            AfterPick::SaveAs { after, document } => {
+                // The document it was for may wait behind another one: it is shown and saved.
+                if document != self.session.document_id() {
+                    if !self.session.is_open(document) {
+                        return Err("the document for this save has been closed".into());
+                    }
+                    self.show_document(document)?;
+                }
+                // The save's error, kept for the Save Changes prompt to explain (#1445). A plain
+                // Save As (Backstage's Browse…, AutoSave) has no prompt to carry it to, so it was
+                // otherwise dropped: a failed write (no permission, disk full, a bad path) left the
+                // Save As page sitting there with nothing to say why, since its own render loop
+                // skips the status bar while Backstage is open. `fail_save_as` reaches both.
                 let result = picked.map(|path| self.run("file.save", json!({"path": path})));
                 let saved = matches!(&result, Some(Ok(v)) if v.get("saved").and_then(Value::as_bool) == Some(true) || v.get("downloaded").is_some());
                 if saved {
                     self.ui.backstage = false;
                     self.canvas.want_focus = true;
+                    self.clear_save_as_error();
                 }
                 match after {
-                    AfterSave::Nothing => Ok(json!({"saved": saved})),
+                    AfterSave::Nothing => {
+                        if let Some(Err(error)) = &result {
+                            self.fail_save_as(error);
+                        }
+                        Ok(json!({"saved": saved}))
+                    }
                     AfterSave::AutoSave => {
                         if saved {
                             self.autosave = true;
+                        } else if let Some(Err(error)) = &result {
+                            self.fail_save_as(error);
                         }
                         Ok(json!({"saved": saved}))
                     }
@@ -260,7 +356,7 @@ impl WordApp {
                         if !self.safely_saved(saved) || document != self.session.document_id() {
                             return Ok(json!({"done": false}));
                         }
-                        self.execute_user(&then, params).map(|r| json!({"done": true, "result": r}))
+                        self.execute_held_back(&then, params).map(|r| json!({"done": true, "result": r}))
                     }
                 }
             }
@@ -272,17 +368,73 @@ impl WordApp {
         let _ = self.save_as(AfterSave::Nothing);
     }
 
+    /// A plain Save As (Backstage's Browse…, AutoSave) failed to write: say so on the status bar,
+    /// and, if the Save As page is what's showing, there too — its own render loop skips the
+    /// status bar while Backstage is open, so that page was otherwise left with nothing to explain
+    /// a failed write (no permission, disk full, a bad path).
+    fn fail_save_as(&mut self, error: &str) {
+        self.status(error.to_string());
+        if let Some(ctx) = self.ctx.clone() {
+            ctx.data_mut(|d| d.insert_temp(crate::backstage::save_as_error_id(), error.to_string()));
+        }
+    }
+
+    /// Drop a Save As page error once a later attempt has actually saved.
+    fn clear_save_as_error(&mut self) {
+        if let Some(ctx) = self.ctx.clone() {
+            crate::backstage::forget_save_as_error(&ctx);
+        }
+    }
+
     /// Ask where to save, save there, then do `after`.
     pub(crate) fn save_as(&mut self, after: AfterSave) -> Asked {
         let name = self.default_save_name();
-        self.ask_file(FileDialogRequest::Save { name }, AfterPick::SaveAs(after))
+        self.ask_file(FileDialogRequest::Save { name, dir: None }, AfterPick::SaveAs { after, document: self.session.document_id() })
+    }
+
+    /// The user templates folder (#2852): the one File › Options names, else the app's own.
+    /// `None` on the web, which has no folders.
+    pub fn user_templates_dir(&self) -> Option<std::path::PathBuf> {
+        // The saved folder is checked again (the settings file may have been edited, the folder
+        // removed): a network folder is never looked at, and one that's gone gives way to the
+        // app's own.
+        let saved = self.session.prefs.user_templates_folder.as_deref().map(str::trim).filter(|f| !f.is_empty());
+        match saved {
+            Some(f) if wordcraft_engine::cmd::user_templates::check_dir(f).is_ok() && std::path::Path::new(f).is_dir() => {
+                Some(std::path::PathBuf::from(f))
+            }
+            Some(f) => {
+                log::debug!("user templates folder {f:?} isn't usable; using the app's own");
+                self.services.templates_dir.clone()
+            }
+            None => self.services.templates_dir.clone(),
+        }
+    }
+
+    /// File › Save As › Save as Word Template (#2852): ask where to save a `.dotx`, starting in
+    /// the user templates folder (the app's own is made on first use), then save there as Save As
+    /// does. Returns the folder the dialog starts in.
+    pub(crate) fn save_as_template_dialog(&mut self) -> Option<String> {
+        let dir = self.user_templates_dir();
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(d) = &dir
+            && !d.is_dir()
+            && let Err(e) = std::fs::create_dir_all(d)
+        {
+            log::warn!("couldn't make the templates folder {}: {e}", d.display());
+        }
+        let dir = dir.filter(|d| d.is_dir()).map(|d| d.to_string_lossy().into_owned());
+        let name = format!("{}.dotx", self.title_stem());
+        let after = AfterPick::SaveAs { after: AfterSave::Nothing, document: self.session.document_id() };
+        let _ = self.ask_file(FileDialogRequest::Save { name, dir: dir.clone() }, after);
+        dir
     }
 
     /// File › Export: ask where to save a copy in this format, then write it.
     pub(crate) fn export_dialog(&mut self, ext: &str) {
         let file_ext = if ext == crate::print_page::EXPORT_WORD_2003 { "xml" } else { ext };
         let name = format!("{}.{file_ext}", self.title_stem());
-        let _ = self.ask_file(FileDialogRequest::Save { name }, AfterPick::Export { ext: ext.to_string() });
+        let _ = self.ask_file(FileDialogRequest::Save { name, dir: None }, AfterPick::Export { ext: ext.to_string() });
     }
 
     /// File › Print › Save these pages as PDF: ask where, then write the pages the print
@@ -290,7 +442,7 @@ impl WordApp {
     pub(crate) fn print_pdf_dialog(&mut self) {
         let name = format!("{}.pdf", self.title_stem());
         let settings = self.ui.print.params();
-        let _ = self.ask_file(FileDialogRequest::Save { name }, AfterPick::PrintPdf { settings });
+        let _ = self.ask_file(FileDialogRequest::Save { name, dir: None }, AfterPick::PrintPdf { settings });
     }
 
     pub(crate) fn open_dialog(&mut self) {
@@ -298,7 +450,8 @@ impl WordApp {
             f("document");
             return;
         }
-        let _ = self.ask_file(FileDialogRequest::Open { purpose: "document".into() }, AfterPick::OpenDocument);
+        let _ =
+            self.ask_file(FileDialogRequest::Open { purpose: "document".into() }, AfterPick::OpenDocument { document: self.session.document_id() });
     }
 
     pub(crate) fn pick_picture(&mut self) {
@@ -315,7 +468,7 @@ impl WordApp {
             f("font");
             return;
         }
-        let _ = self.ask_file(FileDialogRequest::Open { purpose: "font".into() }, AfterPick::Font);
+        let _ = self.ask_file(FileDialogRequest::OpenMany { purpose: "font".into() }, AfterPick::Font);
     }
 
     /// Request loading local system installed fonts (web: queryLocalFonts).
@@ -329,258 +482,4 @@ impl WordApp {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::cell::RefCell;
-    use std::rc::Rc;
-    use std::sync::mpsc::{Sender, channel};
-
-    use super::*;
-    use crate::Services;
-    use wordcraft_engine::Session;
-
-    const UNSAVED: &str = "My unsaved novel chapter";
-
-    /// Dialogs the fake host was asked to show, each with the channel its answer goes through.
-    type Shown = Rc<RefCell<Vec<(FileDialogRequest, Sender<FileDialogAnswer>)>>>;
-
-    /// An app whose host shows dialogs asynchronously: nothing is answered until the test does.
-    fn async_app() -> (WordApp, Shown) {
-        let shown: Shown = Rc::default();
-        let log = shown.clone();
-        let services = Services {
-            file_dialog: Some(Box::new(move |req| {
-                let (tx, rx) = channel();
-                log.borrow_mut().push((req, tx));
-                rx
-            })),
-            ..Default::default()
-        };
-        (WordApp::new(Session::new(wordcraft_doc::Document::new()), services), shown)
-    }
-
-    /// Answer the dialog the host is showing (the last one asked for).
-    fn answer(shown: &Shown, picked: Option<&str>) {
-        let (_, tx) = shown.borrow_mut().pop().unwrap();
-        tx.send(Ok(picked.map(str::to_string))).unwrap();
-    }
-
-    fn typed(a: &mut WordApp) {
-        a.run("text.insert", json!({"text": UNSAVED})).unwrap();
-        assert!(a.session.dirty);
-    }
-
-    fn body_text(a: &WordApp) -> String {
-        a.session.doc.plain_text(wordcraft_doc::StoryRef::Body)
-    }
-
-    fn scratch(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("wordcraft-ui-dialogs-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    fn saved_text(path: &std::path::Path) -> String {
-        wordcraft_engine::io::open_path(path).unwrap().plain_text(wordcraft_doc::StoryRef::Body)
-    }
-
-    /// Save As returns at once (the UI keeps running); the frame loop saves once the answer arrives.
-    #[test]
-    fn save_as_answer_arriving_later_is_saved() {
-        let dir = scratch("later");
-        let path = dir.join("novel.docx");
-        let (mut a, shown) = async_app();
-        typed(&mut a);
-        a.save_as_dialog();
-        assert!(a.file_dialog_open());
-        assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "Document1.docx".into() });
-        let ctx = egui::Context::default();
-        let frame = |a: &mut WordApp| ctx.run_ui(egui::RawInput::default(), |ui| a.logic(ui.ctx())).drop_without_applying_deltas();
-        frame(&mut a);
-        assert!(a.session.dirty, "nothing saved before the user answers");
-        answer(&shown, Some(&path.to_string_lossy()));
-        frame(&mut a);
-        assert!(!a.file_dialog_open());
-        assert!(!a.session.dirty);
-        assert!(saved_text(&path).contains(UNSAVED));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// #689: Save As honours the filename typed in the dialog, not just the folder: a document
-    /// opened as `a/one.docx` and saved as `b/two.docx` is written there and takes that path.
-    #[test]
-    fn save_as_with_a_new_filename_saves_under_it() {
-        let dir = scratch("rename");
-        let opened = dir.join("one.docx");
-        let picked = dir.join("sub").join("two.docx");
-        std::fs::create_dir_all(dir.join("sub")).unwrap();
-        wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("original"))
-            .run("file.save", &json!({"path": opened.to_string_lossy()}))
-            .unwrap();
-        let (mut a, shown) = async_app();
-        a.run("file.open", json!({"path": opened.to_string_lossy()})).unwrap();
-        assert_eq!(a.session.path.as_deref(), Some(opened.as_path()));
-        a.save_as_dialog();
-        answer(&shown, Some(&picked.to_string_lossy()));
-        let r = a.poll_file_dialog().unwrap().unwrap();
-        assert_eq!(r, json!({"saved": true}), "the save-as succeeded");
-        assert_eq!(a.session.path.as_deref(), Some(picked.as_path()), "the picked filename is the document's path");
-        assert!(picked.is_file(), "the file is written under the picked name");
-        assert!(saved_text(&picked).contains("original"));
-        // F12 (file.saveAs without a path) lands in the same dialog, suggesting the new name.
-        let r = a.run("file.saveAs", json!({})).unwrap();
-        assert_eq!(r, json!({"saved": false}));
-        assert!(a.file_dialog_open(), "F12's saveAs request opens the dialog");
-        assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "two.docx".into() });
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// While a dialog is open, more Save As / Open / Export / Picture clicks don't open a second one.
-    #[test]
-    fn a_second_dialog_while_one_is_open_is_ignored() {
-        let (mut a, shown) = async_app();
-        a.save_as_dialog();
-        a.save_as_dialog();
-        a.open_dialog();
-        a.export_dialog("pdf");
-        a.pick_picture();
-        assert_eq!(shown.borrow().len(), 1, "only the first dialog was shown");
-        answer(&shown, None);
-        a.poll_file_dialog();
-        assert!(!a.file_dialog_open());
-        a.open_dialog();
-        assert_eq!(shown.borrow().len(), 1, "a new dialog once the first was answered");
-        assert_eq!(shown.borrow()[0].0, FileDialogRequest::Open { purpose: "document".into() });
-    }
-
-    /// #1445: "Save changes?" → Save on a new document while another file dialog is still open:
-    /// nothing can be asked, so nothing happens, and the status bar says why.
-    #[test]
-    fn save_changes_while_a_file_dialog_is_open_says_so() {
-        let (mut a, shown) = async_app();
-        typed(&mut a);
-        a.open_dialog();
-        assert_eq!(shown.borrow().len(), 1);
-        a.run("file.close", json!({})).unwrap();
-        a.status_msg = None;
-        let r = a.run("ui.saveChanges", json!({"answer": "save"})).unwrap();
-        assert_eq!(r["done"], false);
-        assert!(!a.quit_requested);
-        assert!(a.session.dirty && body_text(&a).contains(UNSAVED));
-        let msg = a.status_msg.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
-        assert!(msg.contains("file dialog is already open"), "the status bar says why: {msg:?}");
-    }
-
-    /// "Save changes?" → Save on a new document: the held-back Close runs only once the later
-    /// Save As has actually saved; a cancelled Save As cancels the held-back New.
-    #[test]
-    fn save_changes_waits_for_the_save_as_answer() {
-        let dir = scratch("prompt");
-        let path = dir.join("novel.docx");
-        let (mut a, shown) = async_app();
-        typed(&mut a);
-        a.run("file.new", json!({})).unwrap();
-        a.run("ui.saveChanges", json!({"answer": "save"})).unwrap();
-        answer(&shown, None);
-        a.poll_file_dialog();
-        assert!(body_text(&a).contains(UNSAVED), "cancelled Save As keeps the document");
-        assert!(a.session.dirty);
-
-        a.run("file.close", json!({})).unwrap();
-        let r = a.run("ui.saveChanges", json!({"answer": "save"})).unwrap();
-        assert_eq!(r["pending"], "saveAs");
-        a.poll_file_dialog();
-        assert!(!a.quit_requested, "nothing closes before the save");
-        answer(&shown, Some(&path.to_string_lossy()));
-        a.poll_file_dialog();
-        assert!(a.quit_requested, "closed once saved");
-        assert!(saved_text(&path).contains(UNSAVED));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// Desktop (#240 on #94): Use an Existing List… asks the host's file dialog for a recipient
-    /// list and, once the answer arrives, loads it as the mail-merge recipients, not as a document.
-    #[test]
-    fn a_recipient_list_picked_later_loads_recipients() {
-        let dir = scratch("recipients");
-        let csv = dir.join("people.csv");
-        std::fs::write(&csv, "First Name,City\nAda,London\nAlan,Wilmslow\n").unwrap();
-        let (mut a, shown) = async_app();
-        typed(&mut a);
-        a.run("ui.openRecipientList", json!({})).unwrap();
-        assert_eq!(shown.borrow()[0].0, FileDialogRequest::Open { purpose: "recipients".into() });
-        assert!(a.file_dialog_open());
-        answer(&shown, Some(&csv.to_string_lossy()));
-        a.poll_file_dialog().unwrap().unwrap();
-        assert_eq!(a.session.merge.headers, vec!["First Name", "City"]);
-        assert_eq!(a.session.merge.rows.len(), 2);
-        assert!(body_text(&a).contains(UNSAVED), "the document stays open");
-        // Cancelling loads nothing.
-        a.run("ui.openRecipientList", json!({})).unwrap();
-        answer(&shown, None);
-        assert_eq!(a.poll_file_dialog().unwrap().unwrap(), json!({"cancelled": true}));
-        assert_eq!(a.session.merge.rows.len(), 2);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// A workbook with several sheets (#334) shows Select Table; its answer loads that sheet.
-    #[test]
-    fn a_workbook_with_several_sheets_asks_which_one() {
-        use std::io::Write;
-        let dir = scratch("workbook");
-        let book = dir.join("people.ods");
-        let table = |name: &str, cells: &[&str]| {
-            let cells: String = cells
-                .iter()
-                .map(|c| {
-                    format!(
-                        r#"<table:table-row><table:table-cell office:value-type="string"><text:p>{c}</text:p></table:table-cell></table:table-row>"#
-                    )
-                })
-                .collect();
-            format!(r#"<table:table table:name="{name}">{cells}</table:table>"#)
-        };
-        let content = format!(
-            r#"<office:document-content xmlns:office="o" xmlns:table="t" xmlns:text="x"><office:body><office:spreadsheet>{}{}</office:spreadsheet></office:body></office:document-content>"#,
-            table("Notes", &["n"]),
-            table("Guests", &["Name", "Ada", "Alan"])
-        );
-        let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-        for (name, body) in [("mimetype", "application/vnd.oasis.opendocument.spreadsheet"), ("content.xml", content.as_str())] {
-            z.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-            z.write_all(body.as_bytes()).unwrap();
-        }
-        std::fs::write(&book, z.finish().unwrap().into_inner()).unwrap();
-        let (mut a, shown) = async_app();
-        a.run("ui.openRecipientList", json!({})).unwrap();
-        answer(&shown, Some(&book.to_string_lossy()));
-        a.poll_file_dialog().unwrap().unwrap();
-        let Some(crate::dialogs::Dialog::SelectTable { sheets, params, headers: true, .. }) = &a.dialog else { panic!("Select Table expected") };
-        assert_eq!(sheets, &["Notes", "Guests"]);
-        assert!(a.session.merge.headers.is_empty(), "nothing loads before a sheet is chosen");
-        let mut p = params.clone();
-        p["sheet"] = json!(2);
-        a.load_recipients(p).unwrap();
-        assert_eq!(a.session.merge.headers, vec!["Name"]);
-        assert_eq!(a.session.merge.rows.len(), 2);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn load_system_fonts_runs_hook_when_present() {
-        use std::cell::Cell;
-        let called = Rc::new(Cell::new(false));
-        let called2 = called.clone();
-        let services = Services { load_system_fonts: Some(Box::new(move || called2.set(true))), ..Default::default() };
-        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), services);
-        a.run("font.loadSystem", json!({})).unwrap();
-        assert!(called.get());
-    }
-
-    #[test]
-    fn load_system_fonts_without_hook_reports_status() {
-        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
-        a.run("font.loadSystem", json!({})).unwrap();
-        assert_eq!(a.status_msg.as_ref().map(|(s, _)| s.as_str()), Some("All system fonts are already available."));
-    }
-}
+mod tests;

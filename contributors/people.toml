@@ -125,6 +125,7 @@ display_name = "The Legend Of MTS Dev"
 
 [people.dotCooCoo]
 real_name = "Robert Lee"
+sync_github_name = true
 
 
 
@@ -137,3 +138,57 @@ sync_github_name = false
 real_name = "Andrej Škvorc"
 display_name = "Andrej Škvorc"
 sync_github_name = false
+
+[people.olekkut]
+real_name = "Aleksander Kutycki"
+display_name = "Aleksander Kutycki"
+sync_github_name = true
+
+[people.marcoarnulfo]
+real_name = "Marco Arnulfo"
+display_name = "Marco Arnulfo"
+sync_github_name = false
+
+[people.rem5411]
+real_name = "Vivien Janny"
+sync_github_name = true
+
+[people.C00kieMonsta]
+real_name = "Antoine Boxho"
+sync_github_name = true
+
+[people.matteo-andreuzza]
+sync_github_name = true
+
+[people.lucAmbr0]
+sync_github_name = true
+
+[people.maxm11]
+real_name = "Max Murphy"
+
+[people.SlavenDj]
+sync_github_name = true
+
+[people.asystemoffields]
+display_name = "asystemoffields"
+
+[people.dmim2502-commits]
+display_name = "Mulai"
+
+[people.Bortlesboat]
+real_name = "Andrew Barnes"
+
+[people.matstrange]
+sync_github_name = true
+
+[people.pakiat]
+display_name = "OtorO"
+
+[people.TobyWu666]
+display_name = "tobywu"
+
+[people.Bra1nZ]
+sync_github_name = true
+
+[people.dylanmtaylor]
+sync_github_name = true

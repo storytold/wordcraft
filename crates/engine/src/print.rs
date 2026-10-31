@@ -39,7 +39,11 @@ pub fn parse_page_range(spec: &str, total: usize) -> Result<Vec<usize>, String> 
             continue;
         }
         let page = |t: &str| -> Result<usize, String> {
-            let n: usize = t.parse().map_err(|_| format!("`{item}` isn't a page or a range like 2-4"))?;
+            let not_a_page = || format!("`{item}` isn't a page or a range like 2-4");
+            if !t.bytes().all(|b| b.is_ascii_digit()) {
+                return Err(not_a_page());
+            }
+            let n: usize = t.parse().map_err(|_| not_a_page())?;
             if n == 0 || n > total {
                 return Err(format!("page {n} doesn't exist; the document has {total} page{}", if total == 1 { "" } else { "s" }));
             }
@@ -127,6 +131,21 @@ pub fn plan(v: &Value, total: usize, current: (usize, usize)) -> Result<PrintPla
     Ok(PrintPlan { pages: out, chosen, copies })
 }
 
+/// The `paper` param of a print job: the standard paper (see [`wordcraft_geom::PAPER_SIZES`]) to
+/// scale every page to (Scale to paper size, #2108), or `None` to print the document's own page
+/// sizes (absent, null, `""`, `none` or `document`). Any other value is an error.
+pub fn paper(v: &Value) -> Result<Option<(&'static str, f32, f32)>, CmdError> {
+    match v.get("paper") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(name)) if name.trim().is_empty() || ["none", "document"].contains(&name.trim().to_ascii_lowercase().as_str()) => Ok(None),
+        Some(Value::String(name)) => wordcraft_geom::paper_by_name(name).map(Some).ok_or_else(|| {
+            let names: Vec<&str> = wordcraft_geom::PAPER_SIZES.iter().map(|(n, _, _)| *n).collect();
+            CmdError::Params(format!("unknown paper `{}`; use none or one of {}", name.chars().take(40).collect::<String>(), names.join(", ")))
+        }),
+        Some(_) => Err(CmdError::Params("paper must be a paper size name or none".into())),
+    }
+}
+
 impl Session {
     /// The pages the caret (or selection) is on, in the output layout: (first, last).
     pub fn current_pages(&self, lay: &DocLayout) -> (usize, usize) {
@@ -143,12 +162,14 @@ impl Session {
         let markup = crate::cmd::file::export_options(self, v);
         let lay = self.export_layout_with(markup.markup);
         let plan = plan(v, lay.pages.len(), self.current_pages(&lay))?;
+        let paper = paper(v)?.map(|(_, w, h)| (w, h));
         let opts = wordcraft_pdf::PdfOptions {
             pages: Some(plan.pages.clone()),
             // Repeated pages would repeat the structure tree's entries too.
             tagged: plan.copies <= 1,
             include_markup: markup.markup,
             comments: markup.comments,
+            paper,
             ..Default::default()
         };
         let bytes = wordcraft_pdf::export_layout(&self.doc, &lay, &opts).map_err(|e| CmdError::Failed(e.to_string()))?;
@@ -177,7 +198,7 @@ mod tests {
         assert_eq!(parse_page_range("5,1-2,2", 6), Ok(vec![0, 1, 4]), "document order, no repeats");
         assert_eq!(parse_page_range("4-", 6), Ok(vec![3, 4, 5]));
         assert_eq!(parse_page_range("-2", 6), Ok(vec![0, 1]));
-        for bad in ["", " , ", "0", "7", "3-1", "a", "1-2-3", "99999999999999999999999", "-", "1..3", &"1,".repeat(400)] {
+        for bad in ["", " , ", "0", "7", "3-1", "a", "1-2-3", "99999999999999999999999", "-", "1..3", "+3", "1-+3", "+2-+4", &"1,".repeat(400)] {
             assert!(parse_page_range(bad, 6).is_err(), "`{bad}` is refused");
         }
         assert!(parse_page_range("1", 0).is_err());
@@ -215,6 +236,38 @@ mod tests {
         assert!(s.print_pdf(&json!({"pages": "9999"})).is_err());
         let r = s.run("file.printPdf", &json!({})).is_err();
         assert!(r, "printPdf needs a path");
+    }
+
+    /// Scale to paper size (#2108): the PDF goes on the chosen paper; the document keeps its size.
+    #[test]
+    fn print_pdf_scales_to_the_chosen_paper() {
+        // Page dictionaries are written uncompressed: `/MediaBox[0 0 w h]`.
+        let media = |bytes: &[u8]| {
+            let raw = String::from_utf8_lossy(bytes).into_owned();
+            raw.split("/MediaBox[")
+                .skip(1)
+                .filter_map(|r| r.split(']').next())
+                .map(|r| r.split_whitespace().filter_map(|n| n.parse::<f32>().ok()).collect::<Vec<_>>())
+                .map(|n| (n[2].round(), n[3].round()))
+                .collect::<Vec<_>>()
+        };
+        let s = Session::new(crate::sample::sample_document());
+        let (w, h) = (s.doc.last_section.page_w, s.doc.last_section.page_h);
+        let rev = s.rev();
+        let (own, _) = s.print_pdf(&json!({"range": "current"})).unwrap();
+        assert_eq!(media(&own), vec![(w.round(), h.round())]);
+        for (name, want) in [("A4", (595.0, 842.0)), ("letter", (612.0, 792.0)), ("Legal", (612.0, 1008.0))] {
+            let (bytes, _) = s.print_pdf(&json!({"range": "current", "paper": name})).unwrap();
+            assert_eq!(media(&bytes), vec![want], "{name}");
+        }
+        for none in [json!(null), json!(""), json!("none"), json!("Document")] {
+            let (bytes, _) = s.print_pdf(&json!({"range": "current", "paper": none})).unwrap();
+            assert_eq!(media(&bytes), media(&own));
+        }
+        for bad in [json!("Quarto"), json!(5), json!({"w": 1}), json!("x".repeat(10_000))] {
+            assert!(s.print_pdf(&json!({"paper": bad})).is_err(), "{bad}");
+        }
+        assert_eq!((s.doc.last_section.page_w, s.doc.last_section.page_h, s.rev()), (w, h, rev), "the document is unchanged");
     }
 
     /// `file.printPdf` writes only inside the automation write root when there is one (#769).

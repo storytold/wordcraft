@@ -27,7 +27,7 @@ fn u32_at(bytes: &[u8], offset: usize) -> Option<u32> {
 }
 
 fn parse(bytes: &[u8]) -> Option<CoreProps> {
-    if bytes.get(..2)? != [0xfe, 0xff] || bytes.get(28..44)? != SUMMARY_FMTID || u32_at(bytes, 24)? != 1 {
+    if bytes.get(..2)? != [0xfe, 0xff] || bytes.get(28..44)? != SUMMARY_FMTID || u32_at(bytes, 24)? < 1 {
         return None;
     }
     if u16::from_le_bytes(bytes.get(2..4)?.try_into().ok()?) > 1 {
@@ -65,12 +65,14 @@ fn parse(bytes: &[u8]) -> Option<CoreProps> {
             .min(set.len());
         set.get(start..end)
     };
-    let cp = property(1)?;
-    if u32_at(cp, 0)? != 2 {
-        return None;
-    } // VT_I2
-    let codepage = u16::from_le_bytes(cp.get(4..6)?.try_into().ok()?);
+    let codepage = property(1)
+        .and_then(|cp| {
+            let vt = u32_at(cp, 0)?;
+            if vt == 2 || vt == 3 { Some(u16::from_le_bytes(cp.get(4..6)?.try_into().ok()?)) } else { None }
+        })
+        .unwrap_or(1252);
     let get = |id| property(id).and_then(|value| text(value, codepage)).unwrap_or_default();
+    let get_filetime = |id| property(id).and_then(filetime_iso).unwrap_or_default();
     Some(CoreProps {
         title: get(2),
         subject: get(3),
@@ -79,8 +81,53 @@ fn parse(bytes: &[u8]) -> Option<CoreProps> {
         description: get(6),
         last_modified_by: get(8),
         revision: get(9).parse().unwrap_or_default(),
+        created: get_filetime(12),
+        modified: get_filetime(13),
         ..Default::default()
     })
+}
+
+/// A `VT_FILETIME` property value as an ISO-8601 UTC string (`YYYY-MM-DDTHH:MM:SSZ`), or `None`
+/// if it is not a FILETIME, is zero, or predates the 1601 FILETIME epoch.
+fn filetime_iso(value: &[u8]) -> Option<String> {
+    let kind = u32_at(value, 0)?;
+    if kind != 64 {
+        return None;
+    }
+    let ft_low = u32_at(value, 4)? as u64;
+    let ft_high = u32_at(value, 8)? as u64;
+    let ft = (ft_high << 32) | ft_low;
+    if ft == 0 {
+        return None;
+    }
+    const EPOCH_DIFFERENCE: u64 = 116_444_736_000_000_000;
+    let unix_100ns = ft.checked_sub(EPOCH_DIFFERENCE)?;
+    let unix_secs = i64::try_from(unix_100ns / 10_000_000).ok()?;
+    let (days, sod) = (unix_secs.div_euclid(86_400), unix_secs.rem_euclid(86_400));
+    let (h, mi, s) = (sod / 3600, sod / 60 % 60, sod % 60);
+    let (y, m, d) = civil(days);
+    // `{y:04}` rather than `%Y`, which writes a `+` before years past 9999.
+    Some(format!("{y:04}-{m:02}-{d:02}T{h:02}:{mi:02}:{s:02}Z"))
+}
+
+/// Days since 1970-01-01 → proleptic Gregorian (year, month, day).
+///
+/// A FILETIME can land past `NaiveDate`'s ±262143-year range, where the old hand-rolled converter
+/// still produced a date; dropping to `None` there would change the output. The Gregorian calendar
+/// repeats every 400 years (146_097 days), so chrono converts the day within one cycle and whole
+/// cycles go back into the year (an `i128` so the extremes can't overflow), keeping chrono as the
+/// only calendar logic and reproducing the old result exactly. 1970-01-01 is `num_days_from_ce` 719_163.
+fn civil(days: i64) -> (i64, u32, u32) {
+    use chrono::Datelike;
+    let (cycles, rest) = (days.div_euclid(146_097), days.rem_euclid(146_097));
+    // `rest + 719_163` is 719_163..865_259, always a valid CE day.
+    match i32::try_from(rest + 719_163).ok().and_then(chrono::NaiveDate::from_num_days_from_ce_opt) {
+        Some(d) => {
+            let y = i128::from(d.year()) + i128::from(cycles) * 400;
+            (i64::try_from(y).unwrap_or(if y < 0 { i64::MIN } else { i64::MAX }), d.month(), d.day())
+        }
+        None => (1970, 1, 1), // unreachable
+    }
 }
 
 fn text(value: &[u8], codepage: u16) -> Option<String> {
@@ -110,5 +157,37 @@ fn text(value: &[u8], codepage: u16) -> Option<String> {
         } else {
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::filetime_iso;
+
+    /// A `FILETIME` property (VT_FILETIME = 64) as `YYYY-MM-DDTHH:MM:SSZ`. The values are pinned
+    /// to what the old hand-rolled `civil` produced.
+    fn value(ft: u64) -> Vec<u8> {
+        let mut v = 64u32.to_le_bytes().to_vec();
+        v.extend_from_slice(&((ft & 0xffff_ffff) as u32).to_le_bytes());
+        v.extend_from_slice(&((ft >> 32) as u32).to_le_bytes());
+        v
+    }
+
+    #[test]
+    fn filetime_to_iso() {
+        // 2020-01-01T00:00:00Z and the same day at 13:45:09.
+        assert_eq!(filetime_iso(&value(132_223_104_000_000_000)).as_deref(), Some("2020-01-01T00:00:00Z"));
+        assert_eq!(filetime_iso(&value(132_223_599_090_000_000)).as_deref(), Some("2020-01-01T13:45:09Z"));
+        // Year 10000 keeps the plain zero-padded year (no leading `+` that chrono's `%Y` would add).
+        assert_eq!(filetime_iso(&value(2_650_467_744_000_000_000)).as_deref(), Some("10000-01-01T00:00:00Z"));
+        // The largest FILETIME (u64::MAX) lands in year 60056: past year 9999 (so the plain year
+        // matters) and the old `civil` converted it without ever dropping to the epoch. chrono's
+        // own range (year 262143) isn't reachable here — a u64 FILETIME caps at unix seconds
+        // ~1.83e12 — but the 400-year cycle keeps the result exact regardless.
+        assert_eq!(filetime_iso(&value(u64::MAX)).as_deref(), Some("60056-05-28T05:36:10Z"));
+        // Zero, a non-FILETIME kind and times before the 1601 epoch are rejected, not a panic.
+        assert_eq!(filetime_iso(&value(0)), None);
+        assert_eq!(filetime_iso(&[2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]), None);
+        assert_eq!(filetime_iso(&value(1)), None);
     }
 }

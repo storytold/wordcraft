@@ -12,6 +12,12 @@
 //! thread first checks that one of them is there and otherwise answers with an error, and the app
 //! shows its built-in file browser. `WORDCRAFT_FILE_DIALOG=builtin` always uses the built-in one.
 //!
+//! On Linux and the BSDs, rfd reports a portal that failed to show its dialog as a cancel (#2999).
+//! There a cancel quicker than anyone could dismiss a dialog is taken as that failure: the dialog
+//! is asked for once more without a parent window, and if that also comes back at once the
+//! built-in browser shows. Windows and macOS always show their dialog, so a quick cancel there is
+//! the person's and is answered as one.
+//!
 //! [`Services::file_dialog`]: wordcraft_ui_egui::Services::file_dialog
 
 use std::future::Future;
@@ -27,7 +33,7 @@ type Request = (FileDialogRequest, Sender<FileDialogAnswer>);
 pub type Hook = Box<dyn Fn(FileDialogRequest) -> Receiver<FileDialogAnswer>>;
 
 /// A picker's answer, waited for off the UI thread.
-type Picking = Pin<Box<dyn Future<Output = Option<rfd::FileHandle>> + Send>>;
+type Picking = Pin<Box<dyn Future<Output = Vec<rfd::FileHandle>> + Send>>;
 
 /// Shows the dialogs the app queued; lives in the eframe app, which has the window.
 pub struct Launcher {
@@ -54,23 +60,22 @@ impl Launcher {
     pub fn show(&self, parent: &eframe::Frame) {
         while let Ok((req, answer)) = self.queue.try_recv() {
             // Built here, on the UI thread: macOS shows the panel as a sheet on the window now.
-            let dialog = rfd::AsyncFileDialog::new().set_parent(parent);
-            let picking: Picking = match req {
-                FileDialogRequest::Open { purpose } => Box::pin(open_filters(dialog, &purpose).pick_file()),
-                FileDialogRequest::Save { name } => {
-                    let mut dialog = dialog.set_file_name(name.clone());
-                    for (label, exts) in save_filters(&name) {
-                        dialog = dialog.add_filter(label, &exts);
-                    }
-                    Box::pin(dialog.save_file())
-                }
-            };
+            let picking = picker(rfd::AsyncFileDialog::new().set_parent(parent), &req);
+            #[cfg(all(unix, not(target_os = "macos")))]
+            let unparented = picker(rfd::AsyncFileDialog::new(), &req);
             let ctx = self.ctx.clone();
             let waiting = std::thread::Builder::new().name("file dialog".into()).spawn(move || {
-                // The picker only starts when first polled: without a system dialog it never does.
+                // The pickers only start when first polled: without a system dialog they never do.
                 let picked = match no_system_dialog() {
                     Some(reason) => Err(reason),
-                    None => Ok(pollster::block_on(picking).map(|f| f.path().to_string_lossy().to_string())),
+                    None => {
+                        // Only the portal folds a failure into "cancelled" (#2999).
+                        #[cfg(all(unix, not(target_os = "macos")))]
+                        let picked = pick(picking, unparented, TOO_QUICK);
+                        #[cfg(not(all(unix, not(target_os = "macos"))))]
+                        let picked: Result<_, String> = Ok(pollster::block_on(picking));
+                        picked.map(|f| f.iter().map(|f| f.path().to_string_lossy().to_string()).collect())
+                    }
                 };
                 let _ = answer.send(picked);
                 ctx.request_repaint();
@@ -80,6 +85,57 @@ impl Launcher {
                 log::error!("couldn't wait for the file dialog: {e}");
             }
         }
+    }
+}
+
+/// The picker for `req` on `dialog`.
+fn picker(dialog: rfd::AsyncFileDialog, req: &FileDialogRequest) -> Picking {
+    match req.clone() {
+        FileDialogRequest::Open { purpose } => Box::pin(async move { open_filters(dialog, &purpose).pick_file().await.into_iter().collect() }),
+        FileDialogRequest::OpenMany { purpose } => Box::pin(async move { open_filters(dialog, &purpose).pick_files().await.unwrap_or_default() }),
+        FileDialogRequest::Save { name, dir } => {
+            let mut dialog = dialog.set_file_name(name.clone());
+            // Save as Word Template starts in the user templates folder (#2852).
+            if let Some(dir) = dir.filter(|d| std::path::Path::new(d).is_dir()) {
+                dialog = dialog.set_directory(dir);
+            }
+            for (label, exts) in save_filters(&name) {
+                dialog = dialog.add_filter(label, &exts);
+            }
+            Box::pin(async move { dialog.save_file().await.into_iter().collect() })
+        }
+    }
+}
+
+/// Quicker than anyone can see a dialog and dismiss it.
+// ponytail: a timing heuristic, as rfd folds the portal's failure code into "cancelled". A portal
+// failing slower than this still reads as a cancel; ask rfd for the response code if it matters.
+#[cfg(all(unix, not(target_os = "macos")))]
+const TOO_QUICK: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// Wait for `picking`. Nothing picked within `too_quick` is a portal that failed to show its
+/// dialog (#2999), not a person cancelling: try `unparented`, as a portal may fail on the parent
+/// window; if that too comes back at once, an error, so the app shows its built-in browser.
+/// Linux and the BSDs only (built everywhere for its test).
+#[cfg(any(test, all(unix, not(target_os = "macos"))))]
+fn pick<T>(
+    picking: impl Future<Output = Vec<T>>,
+    unparented: impl Future<Output = Vec<T>>,
+    too_quick: std::time::Duration,
+) -> Result<Vec<T>, String> {
+    fn timed<T>(f: impl Future<Output = Vec<T>>, too_quick: std::time::Duration) -> (Vec<T>, bool) {
+        let start = std::time::Instant::now();
+        let picked = pollster::block_on(f);
+        let quick = picked.is_empty() && start.elapsed() < too_quick;
+        (picked, quick)
+    }
+    match timed(picking, too_quick) {
+        (_, true) => log::warn!("the system file dialog closed at once; asking again without a parent window"),
+        (picked, false) => return Ok(picked),
+    }
+    match timed(unparented, too_quick) {
+        (_, true) => Err("the system file dialog closed at once".into()),
+        (picked, false) => Ok(picked),
     }
 }
 
@@ -151,8 +207,8 @@ fn on_path(program: &str) -> bool {
 fn save_exts(name: &str) -> Vec<String> {
     let suggested = std::path::Path::new(name)
         .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
+        .and_then(std::ffi::OsStr::to_str)
+        .map(str::to_ascii_lowercase)
         .filter(|e| wordcraft_engine::io::SAVE_EXTS.contains(&e.as_str()))
         .unwrap_or_else(|| "docx".to_string());
     let mut exts: Vec<String> = Vec::with_capacity(wordcraft_engine::io::SAVE_EXTS.len());
@@ -193,7 +249,26 @@ fn format_name(ext: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{save_exts, save_filters};
+    use super::{pick, save_exts, save_filters};
+    use std::time::Duration;
+
+    /// #2999: a dialog that "cancels" at once is a portal that failed: asked again without a
+    /// parent, then the built-in browser. A pick, or a cancel after a while, is the answer.
+    #[test]
+    fn an_instant_cancel_retries_then_falls_back() {
+        let quick = Duration::from_millis(200);
+        let slow_cancel = || async {
+            // The test polls this future by hand, with no async runtime, so a blocking sleep
+            // models a slow portal response.
+            std::thread::sleep(Duration::from_millis(250)); // NOSONAR
+            Vec::<u8>::new()
+        };
+        assert_eq!(pick(async { vec![1u8] }, async { vec![2] }, quick), Ok(vec![1]));
+        assert_eq!(pick(async { vec![] }, async { vec![2u8] }, quick), Ok(vec![2]), "asked again without a parent");
+        assert!(pick(async { Vec::<u8>::new() }, async { vec![] }, quick).is_err(), "the built-in browser");
+        assert_eq!(pick(slow_cancel(), async { vec![2u8] }, quick), Ok(vec![]), "a real cancel isn't asked again");
+        assert_eq!(pick(async { vec![] }, slow_cancel(), quick), Ok(vec![]), "the second dialog cancelled for real");
+    }
 
     /// #1399: the Save dialog's type list has one named entry per format, the suggested one first,
     /// every savable extension exactly once.
