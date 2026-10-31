@@ -81,6 +81,11 @@ pub struct FontDb {
     /// Counts the font folder scans, so the coverage index notices a rescan.
     #[cfg(not(target_arch = "wasm32"))]
     catalog_gen: AtomicU32,
+    /// The families whose own installed faces a lookup has tried to load over a claimant
+    /// ([`FontDb::load_cataloged_owner`]), for the scan they were cataloged in: a file that
+    /// can't be read is tried once per scan, not on every lookup.
+    #[cfg(not(target_arch = "wasm32"))]
+    owner_tried: Mutex<(u32, std::collections::HashSet<String>)>,
 }
 
 impl FontDb {
@@ -123,6 +128,8 @@ impl FontDb {
             coverage: Mutex::new(CoverageIndex::default()),
             #[cfg(not(target_arch = "wasm32"))]
             catalog_gen: AtomicU32::new(0),
+            #[cfg(not(target_arch = "wasm32"))]
+            owner_tried: Mutex::new((0, std::collections::HashSet::new())),
         }
     }
 

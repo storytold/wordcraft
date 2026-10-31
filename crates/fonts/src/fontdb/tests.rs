@@ -202,6 +202,53 @@ fn faces_are_found_by_their_legacy_family_name() {
 }
 
 #[test]
+fn a_font_naming_another_family_as_its_typographic_family_is_not_that_family() {
+    // TH SarabunIT๙ gives "TH SarabunPSK" as its typographic family (name ID 16) and "TH
+    // SarabunIT๙" as its own (name ID 1). Word finds fonts by name ID 1: TH SarabunPSK is
+    // TH SarabunPSK's file whichever loaded first, and IT๙ is found by its own name.
+    let db = FontDb::with_font_dirs(vec![]);
+    db.set_system_fallback(false);
+    let face = |bytes: &'static [u8], style: &str, legacy: &str| {
+        Arc::new(make_face(FontBytes::Static(bytes), 0, "Test SansPSK".into(), style.into(), legacy.into(), Vec::new()).unwrap())
+    };
+    let impostor = face(BUNDLED[0], "Regular", "Test SansIT9");
+    let impostor_bold = face(BUNDLED[0], "Bold", "Test SansIT9");
+    let own = face(BUNDLED[1], "Regular", "Test SansPSK");
+    let light = face(BUNDLED[1], "Light", "Test SansPSK Light");
+    // Loaded in that order, as the installed files sort ("C:\Users\…\THSarabunIT9-Regular.ttf"
+    // before "C:\Windows\Fonts\THSarabun.ttf"): the family's own Regular face is still added.
+    assert_eq!(catalog::push_new_faces(&mut db.faces.write().unwrap(), vec![impostor.clone(), impostor_bold.clone(), own.clone(), light.clone()]), 4);
+    // The same face again (one font in two folders) is not.
+    assert_eq!(catalog::push_new_faces(&mut db.faces.write().unwrap(), vec![face(BUNDLED[1], "Regular", "Test SansPSK")]), 0);
+    assert_eq!(db.face("Test SansPSK", "Regular").id(), own.id());
+    assert_eq!(db.face("test sanspsk", "Regular").id(), own.id());
+    // A style named after the family stays one of its faces.
+    assert_eq!(db.face("Test SansPSK", "Light").id(), light.id());
+    assert_eq!(db.face("Test SansIT9", "Regular").id(), impostor.id());
+    // A variable instance made from the impostor (asked for by its own name, as `instance` keeps
+    // it) is not what the family gets: the family's own face is used instead.
+    let claimed = face(BUNDLED[0], "Regular {wght:500}", "Test SansIT9");
+    db.faces.write().unwrap().push(claimed.clone());
+    assert_ne!(db.face("Test SansPSK", "Regular {wght:500}").id(), claimed.id());
+    assert_eq!(db.face("Test SansPSK", "Regular {wght:500}").legacy_family, "Test SansPSK");
+    assert_eq!(db.face("Test SansIT9", "Regular {wght:500}").id(), claimed.id());
+    // The style list offers what `face` chooses among: not the impostor's Bold.
+    let styles = db.styles("Test SansPSK");
+    assert!(styles.iter().any(|s| s == "Regular") && styles.iter().any(|s| s == "Light") && !styles.iter().any(|s| s == "Bold"), "{styles:?}");
+    assert!(db.styles("Test SansIT9").iter().any(|s| s == "Bold"));
+    // With no face of its own a family lists the styles of the faces that claim it, each once.
+    let only = FontDb::with_font_dirs(vec![]);
+    only.set_system_fallback(false);
+    catalog::push_new_faces(&mut only.faces.write().unwrap(), vec![impostor.clone(), face(BUNDLED[1], "Regular", "Test SansNew")]);
+    assert_eq!(only.styles("Test SansPSK"), ["Regular"]);
+    // With no face of its own, the family's name still finds the only face that has it.
+    let alone = FontDb::with_font_dirs(vec![]);
+    alone.set_system_fallback(false);
+    alone.faces.write().unwrap().push(impostor.clone());
+    assert_eq!(alone.face("Test SansPSK", "Regular").id(), impostor.id());
+}
+
+#[test]
 fn a_legacy_named_instance_with_axis_settings_is_made_once() {
     let db = FontDb::with_font_dirs(vec![]);
     let a = db.face("Inter Medium", "Medium {wght:520}");
