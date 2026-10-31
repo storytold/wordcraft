@@ -173,14 +173,41 @@ pub(crate) fn cancel_key_pressed(ui: &Ui) -> bool {
 /// Lays out an OK and a Cancel button right-to-left, in the platform's order:
 /// macOS puts Cancel left of the default OK button; Windows and Linux put OK left of Cancel.
 /// Returns `(ok, cancel)` responses. Call inside a right-to-left layout.
+///
+/// Tab goes through widgets in the order they are added, and a right-to-left layout adds the
+/// right button first, so on Windows Tab reached Cancel before OK (Word: OK, then Cancel). The
+/// right button's place is kept free with its size from the frame before, the left button is
+/// added, then the right one is drawn into that place: Tab goes left to right, as they read.
 pub(crate) fn ok_cancel_responses(ui: &mut Ui, draw_ok: impl FnOnce(&mut Ui) -> egui::Response, cancel: &str) -> (egui::Response, egui::Response) {
-    if cfg!(target_os = "macos") {
-        let okb = draw_ok(ui);
-        (okb, ui.button(cancel))
-    } else {
-        let cancelb = ui.button(cancel);
-        (draw_ok(ui), cancelb)
-    }
+    let mac = cfg!(target_os = "macos");
+    let size_id = ui.scope_id().with("ok_cancel_right_size");
+    let slot = ui.data(|d| d.get_temp::<egui::Vec2>(size_id)).map(|size| ui.allocate_space(size).1);
+    // A child that takes no room of its own: the place is already allocated above.
+    let in_slot = |ui: &mut Ui, slot: egui::Rect| {
+        ui.new_child(egui::UiBuilder::new().id_salt("ok_cancel_right").max_rect(slot).layout(egui::Layout::right_to_left(egui::Align::Center)))
+    };
+    let (okb, cancelb) = match (mac, slot) {
+        (true, Some(slot)) => {
+            let cancelb = ui.button(cancel);
+            (draw_ok(&mut in_slot(ui, slot)), cancelb)
+        }
+        (false, Some(slot)) => {
+            let okb = draw_ok(ui);
+            (okb, in_slot(ui, slot).button(cancel))
+        }
+        // The first frame, before the right button's size is known.
+        (true, None) => {
+            let okb = draw_ok(ui);
+            (okb, ui.button(cancel))
+        }
+        (false, None) => {
+            let cancelb = ui.button(cancel);
+            (draw_ok(ui), cancelb)
+        }
+    };
+    let right = if mac { okb.rect } else { cancelb.rect };
+    ui.data_mut(|d| d.insert_temp(size_id, right.size()));
+    (okb, cancelb)
 }
 
 pub(crate) fn buttons(ui: &mut Ui, ok: &str) -> (bool, bool) {
