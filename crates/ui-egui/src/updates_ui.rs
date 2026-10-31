@@ -122,9 +122,11 @@ pub(crate) fn show(app: &mut WordApp, ctx: &egui::Context) {
             .collapsible(false)
             .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .show(ctx, |ui| {
-                if let Some(msg) = &app.updates_rt.status_message {
-                    ui.label(msg);
-                }
+                crate::rtl::root(ui, |ui| {
+                    if let Some(msg) = &app.updates_rt.status_message {
+                        ui.label(msg);
+                    }
+                })
             });
         if !open {
             app.updates_rt.manual_window_open = false;

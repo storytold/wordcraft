@@ -581,3 +581,237 @@ fn disabled_reasons() -> std::collections::BTreeSet<String> {
     }
     reasons
 }
+
+/// One frame at a given window width; returns the left edge of every text drawn.
+fn frame_at(ctx: &egui::Context, app: &mut WordApp, width: f32) -> Vec<(String, f32)> {
+    fn collect(shape: &egui::Shape, out: &mut Vec<(String, f32)>) {
+        match shape {
+            egui::Shape::Text(t) => out.push((t.galley.text().to_string(), t.pos.x)),
+            egui::Shape::Vec(v) => v.iter().for_each(|s| collect(s, out)),
+            _ => {}
+        }
+    }
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 900.0));
+    let mut drawn = Vec::new();
+    for _ in 0..4 {
+        TIME.set(TIME.get() + 0.1);
+        let input = egui::RawInput { screen_rect: Some(screen), time: Some(TIME.get()), ..Default::default() };
+        let mut out = ctx.run_ui(input, |ui| {
+            app.logic(ui.ctx());
+            app.ui(ui);
+        });
+        drawn.clear();
+        for s in &out.shapes {
+            collect(&s.shape, &mut drawn);
+        }
+        out.textures_delta.clear();
+    }
+    drawn
+}
+
+/// The Arabic interface is mirrored: reading starts at the right. And nothing in it can panic:
+/// every tab (wide, and narrow enough to scroll), File page, dialog, pane, context menu and
+/// ribbon control is laid out right to left. egui's `Grid` asserts against right-to-left parents,
+/// so a grid that is not wrapped in `rtl::grid` fails here.
+#[test]
+fn the_arabic_interface_is_mirrored_and_never_panics() {
+    // Arabic comes from the craft-i18n catalogs: a build without them (English only) has nothing to mirror.
+    let Some(ar) = super::Lang::from_code("ar") else {
+        eprintln!("skipped: built without the craft-i18n Arabic catalog (set CRAFT_I18N_DIR to a checkout)");
+        return;
+    };
+    let start = |ctx: &egui::Context| {
+        let mut app = fresh_app(ctx);
+        app.ui.language = "ar".into();
+        frame(ctx, &mut app);
+        app
+    };
+    let ctx = egui::Context::default();
+    let mut app = start(&ctx);
+    assert!(crate::rtl::on());
+    let x_of = |drawn: &[(String, f32)], english: &str| {
+        let label = super::tr(ar, english);
+        drawn.iter().find(|(t, _)| t == label).map(|(_, x)| *x).unwrap_or_else(|| panic!("{english} is not drawn"))
+    };
+    // Tabs run from the right: File, Home, Insert … and the Share button is at the far left.
+    let drawn = frame_at(&ctx, &mut app, 1600.0);
+    let (file, home, insert, share) = (x_of(&drawn, "File"), x_of(&drawn, "Home"), x_of(&drawn, "Insert"), x_of(&drawn, "Share"));
+    assert!(file > home && home > insert && insert > 800.0, "tabs: {file} {home} {insert}");
+    assert!(share < 200.0, "Share: {share}");
+    // Ribbon groups too: Clipboard is right of Font, which is right of Styles.
+    assert!(x_of(&drawn, "Clipboard") > x_of(&drawn, "Font") && x_of(&drawn, "Font") > x_of(&drawn, "Styles"));
+    // The status bar starts at the right, and a narrow window still shows the ribbon's first group.
+    let page = drawn.iter().find(|(t, _)| t.contains(super::tr(ar, "Editing"))).map(|(_, x)| *x);
+    assert!(page.is_some());
+    let narrow = frame_at(&ctx, &mut app, 700.0);
+    let clipboard = x_of(&narrow, "Clipboard");
+    assert!((350.0..700.0).contains(&clipboard), "the narrow ribbon starts at its right end: {clipboard}");
+    // Side panes swap sides: Navigation is on the right.
+    let _ = app.run("view.navigationPane", json!({"value": true}));
+    let drawn = frame_at(&ctx, &mut app, 1600.0);
+    assert!(x_of(&drawn, "Navigation") > 1300.0);
+    let _ = app.run("view.navigationPane", json!({"value": false}));
+    // English stays as it was.
+    {
+        let ctx = egui::Context::default();
+        let mut app = fresh_app(&ctx);
+        let drawn = frame_at(&ctx, &mut app, 1600.0);
+        let x = |label: &str| drawn.iter().find(|(t, _)| t == label).map(|(_, x)| *x).unwrap();
+        assert!(x("File") < x("Home") && x("Home") < x("Insert") && x("Insert") < 400.0 && x("Share") > 1400.0);
+        assert!(x("Clipboard") < x("Font") && x("Font") < x("Styles"));
+        assert!(x("Cut") < 200.0, "ribbon buttons keep their icon on the left and start at the left");
+        assert!(!crate::rtl::on());
+        super::set_current(ar);
+    }
+    // Everything else: no panic at any width.
+    let tabs: Vec<&str> = crate::ribbon::TABS.iter().copied().filter(|t| *t != "File").collect();
+    for tab in &tabs {
+        let _ = app.run("ui.tab", json!({"tab": tab}));
+        for width in [2560.0, 1100.0, 420.0] {
+            frame_at(&ctx, &mut app, width);
+        }
+    }
+    let _ = app.run("ui.tab", json!({"tab": "Home"}));
+    // Reading Mode's toolbar is mirrored too: its far-side button ("Edit Document") is at the left.
+    let _ = app.run("view.readMode", json!({}));
+    let drawn = frame_at(&ctx, &mut app, 1600.0);
+    let edit = x_of(&drawn, "Edit Document");
+    assert!(edit < 400.0, "Reading Mode: Edit Document at {edit}");
+    let _ = app.run("view.printLayout", json!({}));
+    // File › Print: the settings are on the right and the preview on the left, not over each other.
+    let _ = app.run("ui.backstage", json!({"value": true, "page": "print"}));
+    for width in [1600.0, 1100.0] {
+        let drawn = frame_at(&ctx, &mut app, width);
+        let settings = x_of(&drawn, "Save these pages as PDF…");
+        let indicator = super::tr(ar, "Page {page} of {pages}").split('{').next().unwrap_or_default();
+        // (The status bar's page count is drawn under the page too, at the right: take the leftmost.)
+        let preview = drawn.iter().filter(|(t, _)| t.starts_with(indicator)).map(|(_, x)| *x).fold(f32::MAX, f32::min);
+        assert!(preview < f32::MAX, "the preview's page indicator is drawn");
+        assert!(preview + 100.0 < settings, "print page at {width}: settings {settings}, preview {preview}");
+    }
+    for page in ["home", "new", "open", "info", "export", "print", "options"] {
+        let _ = app.run("ui.backstage", json!({"value": true, "page": page}));
+        frame(&ctx, &mut app);
+        frame_at(&ctx, &mut app, 500.0);
+    }
+    let _ = app.run("ui.backstage", json!({"value": false}));
+    // A dialog's columns start at the right too: Go To's list of targets is right of its input.
+    let _ = app.run("ui.dialog", json!({"name": "goto"}));
+    let drawn = frame_at(&ctx, &mut app, 1600.0);
+    let (targets, input) = (x_of(&drawn, "Go to what:"), x_of(&drawn, "Enter page number:"));
+    assert!(targets > input, "Go To: targets {targets}, input {input}");
+    app.dialog = None;
+    let dialogs = [
+        "font",
+        "paragraph",
+        "tabs",
+        "goto",
+        "insertTable",
+        "pageSetup",
+        "link",
+        "bookmark",
+        "wordCount",
+        "zoom",
+        "watermark",
+        "phonetic",
+        "newStyle",
+        "manageStyles",
+        "newTableStyle",
+        "modifyTableStyle",
+        "commands",
+        "icons",
+        "tableProperties",
+        "enclose",
+        "pasteSpecial",
+        "about",
+        "contributors",
+        "models",
+        "insertMergeField",
+        "findRecipient",
+        "fieldCode",
+        "encryptPassword",
+        "defineList",
+        "trackChangesOptions",
+        "customizeKeyboard",
+        "customizeRibbon",
+        "customizeQuickAccess",
+        "noteOptions",
+        "caption",
+        "index",
+        "markEntry",
+        "toc",
+        "sourceManager",
+        "createSource",
+        "lineNumbers",
+        "hyphenation",
+        "language",
+        "envelopes",
+        "labels",
+        "find",
+        "replace",
+        "symbol",
+        "field",
+        "columns",
+        "borders",
+        "pageBorders",
+        "newRecipientList",
+        "editRecipientList",
+        "rules",
+        "matchFields",
+        "dropCap",
+        "dateTime",
+        "crossReference",
+    ];
+    for name in dialogs {
+        let _ = app.run("ui.dialog", json!({"name": name}));
+        frame(&ctx, &mut app);
+        app.dialog = None;
+    }
+    let panes: Vec<String> =
+        app.session.registry.all().iter().map(|c| c.id.to_string()).filter(|id| id.starts_with("view.") && id.ends_with("Pane")).collect();
+    for pane in &panes {
+        let _ = app.run(pane, json!({"value": true}));
+        frame(&ctx, &mut app);
+        frame_at(&ctx, &mut app, 600.0);
+        let _ = app.run(pane, json!({"value": false}));
+    }
+    frames(&ctx, &mut app, click(egui::pos2(1280.0, 520.0), egui::PointerButton::Secondary));
+    frames(&ctx, &mut app, escape());
+    let _ = app.run("insert.table", json!({"rows": 2, "cols": 2}));
+    for tab in ["Table Design", "Table Layout"] {
+        let _ = app.run("ui.tab", json!({"tab": tab}));
+        frame(&ctx, &mut app);
+        frame_at(&ctx, &mut app, 600.0);
+    }
+    let _ = app.run("insert.equation", json!({}));
+    let _ = app.run("ui.tab", json!({"tab": "Equation"}));
+    frame(&ctx, &mut app);
+    // Every ribbon control on every tab, hovered and clicked: its tooltip, menu or dialog.
+    let contextual = ["Table Design", "Table Layout", "Equation"];
+    let open = |tab: &str| {
+        let ctx = egui::Context::default();
+        let mut app = start(&ctx);
+        match tab {
+            "Table Design" | "Table Layout" => drop(app.run("insert.table", json!({"rows": 2, "cols": 2}))),
+            "Equation" => drop(app.run("insert.equation", json!({}))),
+            _ => {}
+        }
+        let _ = app.run("ui.tab", json!({"tab": tab}));
+        frame(&ctx, &mut app);
+        (ctx, app)
+    };
+    for tab in tabs.iter().chain(&contextual) {
+        let (ctx, mut app) = open(tab);
+        for at in ribbon_controls(&ctx) {
+            frames(&ctx, &mut app, vec![vec![egui::Event::PointerMoved(at)]; 2]);
+            frames(&ctx, &mut app, click(at, egui::PointerButton::Primary));
+            frames(&ctx, &mut app, escape());
+            app.dialog = None;
+            app.ui.backstage = false;
+            if app.ui.tab != *tab {
+                (_, app) = open(tab);
+            }
+        }
+    }
+    super::set_current(super::Lang::EN);
+}

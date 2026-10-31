@@ -497,14 +497,14 @@ fn body(ui: &mut Ui, d: &mut ColorsDialog) -> Option<bool> {
     });
     ui.separator();
     ui.horizontal(|ui| {
-        ui.vertical(|ui| {
+        crate::rtl::vertical(ui, |ui| {
             ui.set_width(330.0);
             match d.tab {
                 ColorsTab::Standard => standard(ui, d),
                 ColorsTab::Custom => custom(ui, d),
             }
         });
-        ui.vertical(|ui| {
+        crate::rtl::vertical(ui, |ui| {
             ui.add_space(110.0);
             preview(ui, d, &t);
         });
@@ -512,7 +512,7 @@ fn body(ui: &mut Ui, d: &mut ColorsDialog) -> Option<bool> {
     let mut out = None;
     ui.add_space(8.0);
     ui.horizontal(|ui| {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
             let (okb, cancelb) = crate::dialogs::ok_cancel_responses(ui, |ui| ui.add(crate::widgets::primary_button(ui, tl!("OK"))), tl!("Cancel"));
             if cancelb.clicked() {
                 out = Some(false);
@@ -670,7 +670,7 @@ fn custom(ui: &mut Ui, d: &mut ColorsDialog) {
         ui.add_space(8.0);
     });
     ui.add_space(8.0);
-    egui::Grid::new("colors_custom").num_columns(2).spacing(vec2(10.0, 5.0)).show(ui, |ui| {
+    crate::rtl::grid(ui, egui::Grid::new("colors_custom").num_columns(2).spacing(vec2(10.0, 5.0)), |ui| {
         ui.label(tl!("Color model:"));
         craft_ui::ComboBox::from_id_salt("colors_model")
             .selected_text(match d.model {

@@ -116,7 +116,7 @@ fn gallery_pen(ui: &mut Ui, app: &mut WordApp, i: usize, pen: wordcraft_engine::
     if resp.clicked() {
         let _ = app.run(pen_command(pen.kind), json!({"color": pen.color.hex(), "width": pen.width}));
     }
-    resp.context_menu(|ui| {
+    crate::rtl::context_menu(&resp, |ui| {
         if ui.button(tl!("Remove Pen")).clicked() {
             let _ = app.run("draw.removePen", json!({"index": i}));
             ui.close();

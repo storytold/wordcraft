@@ -68,7 +68,7 @@ pub(super) fn index_ui(app: &mut WordApp, ui: &mut Ui, f: &mut IndexForm) -> Nex
     };
     sample(ui, &lines, f.right_align, leader_char(&f.leader));
     ui.add_space(6.0);
-    egui::Grid::new("idx").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+    crate::rtl::grid(ui, egui::Grid::new("idx").num_columns(2).spacing(vec2(10.0, 6.0)), |ui| {
         ui.label(tl!("Type:"));
         ui.horizontal(|ui| {
             ui.radio_value(&mut f.kind, "indented".to_string(), tl!("Indented"));
@@ -153,7 +153,7 @@ impl MarkForm {
 /// and Mark All running `references.markEntry`.
 pub(super) fn mark_ui(app: &mut WordApp, ui: &mut Ui, f: &mut MarkForm) -> Next {
     heading(ui, "Index");
-    egui::Grid::new("xe").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+    crate::rtl::grid(ui, egui::Grid::new("xe").num_columns(2).spacing(vec2(10.0, 6.0)), |ui| {
         let entry_label = ui.label(tl!("Main entry:"));
         ui.add(egui::TextEdit::singleline(&mut f.entry).desired_width(220.0)).labelled_by(entry_label.id);
         ui.end_row();
@@ -191,7 +191,7 @@ pub(super) fn mark_ui(app: &mut WordApp, ui: &mut Ui, f: &mut MarkForm) -> Next 
     let mut close = false;
     ui.add_space(8.0);
     ui.horizontal(|ui| {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
             if ui.button(tl!("Close")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                 close = true;
             }

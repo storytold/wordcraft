@@ -28,7 +28,7 @@ pub(super) fn smart_art_design(app: &mut WordApp, ui: &mut Ui) {
     });
     group(ui, "Layouts", None, app, |ui, app| {
         let t = Tokens::get(ui.ctx());
-        egui::Grid::new("smart_art_layout_gallery").spacing(vec2(2.0, 2.0)).show(ui, |ui| {
+        crate::rtl::grid(ui, egui::Grid::new("smart_art_layout_gallery").spacing(vec2(2.0, 2.0)), |ui| {
             for (k, layout) in SmartArtLayout::ALL.into_iter().enumerate() {
                 let (r, resp) = ui.allocate_exact_size(vec2(46.0, 31.0), Sense::click());
                 let on = g.layout == layout;

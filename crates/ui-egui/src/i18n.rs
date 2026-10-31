@@ -70,7 +70,7 @@ pub struct LangInfo {
 
 /// The languages WordCraft offers, when their catalogs are embedded. English first: it is the
 /// fallback and the source language.
-pub static LANGUAGES: [LangInfo; 27] = [
+pub static LANGUAGES: [LangInfo; 28] = [
     LangInfo { code: "en", prefer_hans: false, editing_lang: None },
     // Simplified Chinese; `zh`, `zh-CN`, `zh-SG` and `zh-Hans-*` resolve here (the crate's matching).
     LangInfo { code: "zh-hans", prefer_hans: true, editing_lang: None },
@@ -124,9 +124,17 @@ pub static LANGUAGES: [LangInfo; 27] = [
     LangInfo { code: "da", prefer_hans: false, editing_lang: None },
     // Romanian; `ro`, `ro-RO`, `ro_RO.UTF-8` and `ro-MD` resolve here.
     LangInfo { code: "ro", prefer_hans: false, editing_lang: None },
+    // Arabic (Modern Standard); `ar` and every `ar-*` locale (`ar-MA`, `ar-EG`, `ar-SA` …) resolve
+    // here. Right to left: see [`RTL_LANGUAGES`] and [`Lang::rtl`].
+    LangInfo { code: "ar", prefer_hans: false, editing_lang: None },
     // Slovenian; `sl`, `sl-SI` and `sl_SI.UTF-8` resolve here.
     LangInfo { code: "sl", prefer_hans: false, editing_lang: None },
 ];
+
+/// Interface languages written right to left. Their catalogs are written in typing order and
+/// egui's text layout orders each line itself, so the lookups return them as they are; the window
+/// is mirrored ([`crate::rtl`]).
+const RTL_LANGUAGES: [&str; 1] = ["ar"];
 
 /// A language the UI can be shown in: English, or an offered language whose catalogs are embedded.
 #[derive(Clone, Copy)]
@@ -169,6 +177,12 @@ impl Lang {
     /// The language's name in itself (its `@id language.name` row), shown in the Options dropdown.
     pub fn name(self) -> &'static str {
         self.i18n().name(self.lang)
+    }
+
+    /// Whether the interface is written right to left. Its translations come back from the lookups
+    /// as written, in typing order (see [`RTL_LANGUAGES`]).
+    pub fn rtl(self) -> bool {
+        RTL_LANGUAGES.contains(&self.code())
     }
 
     pub fn prefers_hans(self) -> bool {
@@ -400,6 +414,46 @@ pub fn tr(lang: Lang, s: &str) -> &str {
     lang.i18n().t(lang.lang, s)
 }
 
+/// Left-to-right mark: it keeps what it touches from joining a right-to-left run next to it.
+const LRM: char = '\u{200E}';
+
+/// `name` with a left-to-right mark before its extension (`ملف 2.docx`), which a right-to-left
+/// line would otherwise draw as `ملف docx.2`.
+fn mark_extension(name: &str) -> String {
+    match name.rfind('.') {
+        Some(dot)
+            if dot > 0 && name.get(dot + 1..).is_some_and(|e| !e.is_empty() && e.len() <= 8 && e.bytes().all(|b| b.is_ascii_alphanumeric())) =>
+        {
+            format!("{}{LRM}{}", &name[..dot], &name[dot..])
+        }
+        _ => name.to_string(),
+    }
+}
+
+/// `name` (a file or folder name, a document's name) set apart from the right-to-left text around
+/// it, so its own direction and its neutral marks (`(`, `.`, `-`) keep their places. Only in a
+/// right-to-left interface; elsewhere the text as it is. Display only: never for text that is saved.
+pub fn isolate(name: &str) -> String {
+    if current().rtl() { format!("\u{2068}{}\u{2069}", mark_extension(name)) } else { name.to_string() }
+}
+
+/// [`isolate`] for a path or a web address, which always reads left to right: its folders keep
+/// their order even where neighbouring ones are Arabic (a mark after every separator keeps two
+/// right-to-left names from joining into one run that swaps them).
+pub fn isolate_path(path: &str) -> String {
+    if !current().rtl() {
+        return path.to_string();
+    }
+    let mut out = String::with_capacity(path.len() + 8);
+    for c in mark_extension(path).chars() {
+        out.push(c);
+        if matches!(c, '/' | '\\') {
+            out.push(LRM);
+        }
+    }
+    format!("\u{2066}{out}\u{2069}")
+}
+
 /// A style's name as the interface shows it: built-in styles (`Normal`, `Heading 2`, `TOC 3`) in
 /// the current language, styles the author made exactly as named. Display only: the document,
 /// commands and saved files keep the English name.
@@ -425,9 +479,11 @@ pub fn builtin_style_name(name: &str) -> String {
     name.to_string()
 }
 
-/// A ribbon location (`Home › Font`) in the current language, segment by segment.
+/// A ribbon location (`Home › Font`) in the current language, segment by segment. A
+/// right-to-left language reads it from the right, so the mark points left.
 pub fn location(loc: &str) -> String {
-    loc.split(" › ").map(t).collect::<Vec<_>>().join(" › ")
+    let segments: Vec<&str> = loc.split(" › ").map(t).collect();
+    segments.join(if current().rtl() { " ‹ " } else { " › " })
 }
 
 /// A label with an action after a fixed English prefix, e.g. `Undo Typing`: both parts translated

@@ -1,4 +1,4 @@
-use super::state::{SavedDock, labels, move_before, open, pane_state};
+use super::state::{SavedDock, labels, mirrored, move_before, open, pane_state};
 use super::{Edge, Pane, PaneHost, PaneRequest, PaneState, Place, SidePolicy, Stroke, Tokens, Ui, Value, WordApp, json};
 
 pub(super) struct Content<'a> {
@@ -74,7 +74,7 @@ pub(crate) fn apply(app: &mut WordApp, request: PaneRequest<Pane>) {
     match request {
         PaneRequest::Close(pane) => close(app, pane),
         PaneRequest::Place(Pane::Styles, place) => {
-            let dock = match place {
+            let dock = match mirrored(place) {
                 Place::Docked(Edge::Start) => "left",
                 Place::Docked(Edge::End) => "right",
                 Place::Floating => "float",
@@ -85,7 +85,7 @@ pub(crate) fn apply(app: &mut WordApp, request: PaneRequest<Pane>) {
         PaneRequest::Resize(Pane::Styles, width) => app.ui.styles_pane_width = Some(width),
         PaneRequest::FloatRect(Pane::Styles, rect) => app.ui.styles_pane_float = Some(rect),
         PaneRequest::Place(pane, place) => {
-            let dock = match place {
+            let dock = match mirrored(place) {
                 Place::Docked(Edge::Start) => "left",
                 Place::Docked(Edge::End) => "right",
                 Place::Floating => "float",
@@ -138,7 +138,7 @@ pub(crate) fn dock_command(app: &mut WordApp, p: &Value) -> Result<Value, String
     if let Some(dock) = dock {
         app.ui.pane_places.entry(key.into()).or_default().dock = Some(dock);
     }
-    let name = match pane_state(app, pane).place {
+    let name = match mirrored(pane_state(app, pane).place) {
         Place::Docked(Edge::Start) => "left",
         Place::Floating => "float",
         Place::Docked(_) => "right",

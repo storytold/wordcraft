@@ -61,6 +61,9 @@ pub(super) enum ParaNumber {
     Lines,
 }
 
+/// The right-to-left mark.
+const RLM: char = '\u{200F}';
+
 /// A Paragraph dialog number box for the field `key`. While the selected paragraphs differ in
 /// it, it shows nothing, not even the unit, until a value is typed or dragged in.
 pub(super) fn para_number(ui: &mut Ui, value: &mut f32, kind: ParaNumber, key: &str, mixed: &mut BTreeSet<String>, label: &egui::Response) {
@@ -76,6 +79,9 @@ pub(super) fn para_number(ui: &mut Ui, value: &mut f32, kind: ParaNumber, key: &
         ParaNumber::Length if blank => field.measure_blank(unit),
         ParaNumber::Length => field.measure(unit),
         _ if blank => field.custom_formatter(|_, _| String::new()),
+        // Right to left, the unit's space goes after the word and a right-to-left mark closes it: a
+        // plain leading space between the digits and an Arabic unit is drawn with no width.
+        ParaNumber::Points if crate::rtl::on() => field.suffix(format!("{} {RLM}", tl!("pt"))),
         ParaNumber::Points => field.suffix(format!(" {}", tl!("pt"))),
         ParaNumber::Lines => field,
     };

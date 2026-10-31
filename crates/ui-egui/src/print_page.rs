@@ -156,10 +156,15 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let current = app.session.current_pages(&lay);
     app.ui.print.preview = app.ui.print.preview.min(total.saturating_sub(1));
 
-    ui.horizontal_top(|ui| {
-        ui.vertical(|ui| {
-            ui.set_width(380.0);
+    let settings = |app: &mut WordApp, ui: &mut Ui| {
+        {
+            ui.set_width(SETTINGS_WIDTH);
             // The settings scroll on their own: the preview beside them keeps the whole height (#1156).
+            // egui draws the bar at the right edge, over the right-aligned controls of a mirrored
+            // column: a solid bar there takes its own gutter instead of floating over them.
+            if crate::rtl::flows(ui) {
+                ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
+            }
             egui::ScrollArea::vertical().id_salt("print_settings").show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 8.0;
                 let native = app.services.print_native.is_some();
@@ -198,7 +203,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
 
                 if native {
                     if app.ui.print.copies > 1 {
-                        ui.add_enabled(!app.printing.busy(), egui::Checkbox::new(&mut app.ui.print.collate, tl!("Collate copies")));
+                        ui.add_enabled_ui(!app.printing.busy(), |ui| ui.checkbox(&mut app.ui.print.collate, tl!("Collate copies")));
                     }
                 } else {
                     let copies_label = ui.label(egui::RichText::new(tl!("Copies")).font(medium(13.0)));
@@ -255,11 +260,36 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 }
                 export_formats(app, ui);
             });
-        });
-        ui.add_space(24.0);
-        ui.vertical(|ui| preview(app, ui, &lay, total));
+        }
+    };
+    // A right-to-left interface splits the room by hand, settings on the side reading starts from:
+    // a `horizontal_top` row there lays the preview over the settings.
+    if crate::rtl::flows(ui) {
+        let room = ui.available_rect_before_wrap();
+        let split = (room.max.x - SETTINGS_WIDTH).max(room.min.x);
+        let settings_rect = Rect::from_min_max(pos2(split, room.min.y), room.max);
+        let preview_rect = Rect::from_min_max(room.min, pos2((split - SETTINGS_GAP).max(room.min.x), room.max.y));
+        let layout = egui::Layout::top_down(egui::Align::Max);
+        ui.scope_builder(egui::UiBuilder::new().max_rect(settings_rect).layout(layout), |ui| settings(app, ui));
+        // A window too narrow for a usable preview shows the settings alone.
+        if preview_rect.width() >= MIN_PREVIEW_WIDTH {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(preview_rect).layout(layout), |ui| preview(app, ui, &lay, total));
+        }
+        ui.allocate_rect(room, Sense::hover());
+        return;
+    }
+    crate::rtl::horizontal_top(ui, |ui| {
+        crate::rtl::vertical(ui, |ui| settings(app, ui));
+        ui.add_space(SETTINGS_GAP);
+        crate::rtl::vertical(ui, |ui| preview(app, ui, &lay, total));
     });
 }
+
+/// The settings column's width, and the space between it and the preview.
+const SETTINGS_WIDTH: f32 = 380.0;
+const SETTINGS_GAP: f32 = 24.0;
+/// The narrowest preview pane worth drawing when the layout is mirrored.
+const MIN_PREVIEW_WIDTH: f32 = 200.0;
 
 /// Room around the page inside the preview pane.
 const PREVIEW_MARGIN: f32 = 10.0;
@@ -301,6 +331,7 @@ fn preview(app: &mut WordApp, ui: &mut Ui, lay: &DocLayout, total: usize) {
             ui.painter().image(tex.id(), on_sheet, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), egui::Color32::WHITE);
         }
     });
+    let rtl = crate::rtl::flows(ui);
     ui.horizontal(|ui| {
         ui.set_height(PREVIEW_BAR);
         let nav = |ui: &mut Ui, icon: &str, tip: &str, enabled: bool| {
@@ -313,14 +344,14 @@ fn preview(app: &mut WordApp, ui: &mut Ui, lay: &DocLayout, total: usize) {
             icons::paint(ui.painter(), r.shrink(4.0), icon, col, col);
             enabled && resp.on_hover_text(tip).clicked()
         };
-        if nav(ui, "chevronLeft", tl!("Previous Page"), page > 0) {
+        if nav(ui, if rtl { "chevronRight" } else { "chevronLeft" }, tl!("Previous Page"), page > 0) {
             app.ui.print.preview = page - 1;
         }
         ui.label(egui::RichText::new(&label).font(regular(13.0)));
-        if nav(ui, "chevronRight", tl!("Next Page"), page + 1 < total) {
+        if nav(ui, if rtl { "chevronLeft" } else { "chevronRight" }, tl!("Next Page"), page + 1 < total) {
             app.ui.print.preview = page + 1;
         }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
             let z = scale / crate::canvas::PX_PER_PT;
             if nav(ui, "onePage", tl!("One Page"), true) {
                 app.ui.print.zoom = None;

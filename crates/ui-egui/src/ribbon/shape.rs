@@ -21,7 +21,7 @@ pub(crate) fn gradient_menu(ui: &mut Ui, app: &mut WordApp, fill: Option<&wordcr
     }
     for (title, tiles) in ["Light Variations", "Dark Variations"].into_iter().zip(shape_fill::variations(main)) {
         ui.label(egui::RichText::new(tl!(title)).small().weak());
-        egui::Grid::new(title).spacing(vec2(4.0, 4.0)).show(ui, |ui| {
+        crate::rtl::grid(ui, egui::Grid::new(title).spacing(vec2(4.0, 4.0)), |ui| {
             for (i, (f, name)) in tiles.iter().enumerate() {
                 if crate::format_shape::swatch(ui, f, name) {
                     let _ = app.run("shape.fill", shape_fill::params(Some(f)));

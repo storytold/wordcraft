@@ -343,7 +343,7 @@ pub fn table_grid_picker(ui: &mut Ui, app: &mut WordApp) {
     });
     let mut new_hover = (0, 0);
     let mut clicked = None;
-    egui::Grid::new("tgp").spacing(vec2(2.0, 2.0)).show(ui, |ui| {
+    crate::rtl::grid(ui, egui::Grid::new("tgp").spacing(vec2(2.0, 2.0)), |ui| {
         for r in 1..=8 {
             for c in 1..=10 {
                 let (rect, resp) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::click());
@@ -390,7 +390,7 @@ pub(super) fn table_properties(ui: &mut Ui, f: &mut TableForm) {
         ui.label(egui::RichText::new(tl!(s)).font(semibold(12.5)));
     };
     heading(ui, "Table");
-    egui::Grid::new("tp_table").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+    crate::rtl::grid(ui, egui::Grid::new("tp_table").num_columns(2).spacing(vec2(10.0, 6.0)), |ui| {
         ui.checkbox(&mut f.width_on, tl!("Preferred width:"));
         ui.add_enabled(f.width_on, len(&mut f.width, 0.1, unit));
         ui.end_row();
@@ -412,7 +412,7 @@ pub(super) fn table_properties(ui: &mut Ui, f: &mut TableForm) {
         ui.end_row();
     });
     heading(ui, "Row");
-    egui::Grid::new("tp_row").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+    crate::rtl::grid(ui, egui::Grid::new("tp_row").num_columns(2).spacing(vec2(10.0, 6.0)), |ui| {
         let specify = ui.checkbox(&mut f.row_height_on, tl!("Specify height:"));
         ui.horizontal(|ui| {
             ui.add_enabled(f.row_height_on, len(&mut f.row_height, 0.02, unit));
@@ -433,13 +433,13 @@ pub(super) fn table_properties(ui: &mut Ui, f: &mut TableForm) {
     super::paragraph::para_check(ui, &mut f.allow_break, tl!("Allow row to break across pages"), "allowBreak", &mut f.mixed);
     super::paragraph::para_check(ui, &mut f.header_row, tl!("Repeat as header row on each page"), "headerRow", &mut f.mixed);
     heading(ui, "Column");
-    egui::Grid::new("tp_col").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+    crate::rtl::grid(ui, egui::Grid::new("tp_col").num_columns(2).spacing(vec2(10.0, 6.0)), |ui| {
         ui.label(tl!("Preferred width:"));
         ui.add(len(&mut f.column_width, 0.1, unit));
         ui.end_row();
     });
     heading(ui, "Cell");
-    egui::Grid::new("tp_cell").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+    crate::rtl::grid(ui, egui::Grid::new("tp_cell").num_columns(2).spacing(vec2(10.0, 6.0)), |ui| {
         ui.checkbox(&mut f.cell_width_on, tl!("Preferred width:"));
         ui.add_enabled(f.cell_width_on, len(&mut f.cell_width, 0.1, unit));
         ui.end_row();
@@ -456,7 +456,7 @@ pub(super) fn table_properties(ui: &mut Ui, f: &mut TableForm) {
 pub(super) fn cell_margins_dialog(ui: &mut Ui, f: &mut CellMarginsForm) {
     let unit = crate::options::unit();
     let max = 144.0 / unit.pt_per_unit();
-    egui::Grid::new("cell_margins").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+    crate::rtl::grid(ui, egui::Grid::new("cell_margins").num_columns(2).spacing(vec2(10.0, 6.0)), |ui| {
         for (label, value) in [("Top:", &mut f.top), ("Left:", &mut f.left), ("Bottom:", &mut f.bottom), ("Right:", &mut f.right)] {
             ui.label(tl!(label));
             ui.add(egui::DragValue::new(value).speed(0.01).range(0.0..=max).measure(unit).max_decimals(2));
@@ -512,7 +512,7 @@ pub(super) fn custom_properties(app: &mut WordApp, ui: &mut Ui, f: &mut CustomPr
         }
     });
     ui.separator();
-    egui::Grid::new("custom_props_form").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+    crate::rtl::grid(ui, egui::Grid::new("custom_props_form").num_columns(2).spacing(vec2(10.0, 6.0)), |ui| {
         let name = ui.label(tl!("Name:"));
         ui.add(egui::TextEdit::singleline(&mut f.name).desired_width(300.0).char_limit(wordcraft_engine::cmd::file::MAX_CUSTOM_NAME))
             .labelled_by(name.id);

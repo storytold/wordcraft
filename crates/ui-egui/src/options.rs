@@ -140,8 +140,9 @@ pub fn page(app: &mut WordApp, ui: &mut Ui) {
     ui.label(RichText::new(tl!("Options")).font(semibold(26.0)));
     ui.add_space(16.0);
     let current = if PANES.contains(&app.ui.options_pane.as_str()) { app.ui.options_pane.clone() } else { "general".to_string() };
-    ui.horizontal_top(|ui| {
-        ui.vertical(|ui| {
+    let rtl = crate::rtl::on();
+    let body = |ui: &mut Ui| {
+        crate::rtl::vertical(ui, |ui| {
             ui.set_width(170.0);
             for id in PANES {
                 let label = tl!(pane_label(id));
@@ -155,7 +156,13 @@ pub fn page(app: &mut WordApp, ui: &mut Ui) {
                 }
                 let font = if active { semibold(14.0) } else { crate::theme::regular(14.0) };
                 // Long translations stay inside the row; WidgetInfo above keeps the full name.
-                ui.painter().with_clip_rect(r).text(egui::pos2(r.min.x + 12.0, r.center().y), egui::Align2::LEFT_CENTER, label, font, t.text);
+                ui.painter().with_clip_rect(r).text(
+                    egui::pos2(crate::rtl::lead_x(rtl, r, 12.0), r.center().y),
+                    crate::rtl::lead_center(rtl),
+                    label,
+                    font,
+                    t.text,
+                );
                 if resp.clicked() {
                     app.ui.options_pane = id.to_string();
                 }
@@ -165,7 +172,7 @@ pub fn page(app: &mut WordApp, ui: &mut Ui) {
         let (line, _) = ui.allocate_exact_size(vec2(1.0, 420.0), egui::Sense::hover());
         ui.painter().rect_filled(line, 0.0, t.border);
         ui.add_space(20.0);
-        ui.vertical(|ui| {
+        crate::rtl::vertical(ui, |ui| {
             ui.set_max_width(640.0);
             match current.as_str() {
                 "display" => display(app, ui),
@@ -178,7 +185,13 @@ pub fn page(app: &mut WordApp, ui: &mut Ui) {
                 _ => general(app, ui),
             }
         });
-    });
+    };
+    // Right to left the pane list is on the right and the settings fill in from it.
+    if rtl {
+        ui.with_layout(crate::rtl::row_layout(ui, egui::Align::Min), body)
+    } else {
+        crate::rtl::horizontal_top(ui, body)
+    };
 }
 
 fn section(ui: &mut Ui, title: &str) {
@@ -237,7 +250,7 @@ fn general(app: &mut WordApp, ui: &mut Ui) {
     }
     ui.add_space(8.0);
     section(ui, "Personalize");
-    egui::Grid::new("options_user").num_columns(2).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
+    crate::rtl::grid(ui, egui::Grid::new("options_user").num_columns(2).spacing(vec2(8.0, 6.0)), |ui| {
         let user_label = ui.label(tl!("User name:"));
         let mut n = app.session.author.clone();
         let protected = wordcraft_engine::cmd::protect::enforced(&app.session.doc);
@@ -442,7 +455,7 @@ fn save(app: &mut WordApp, ui: &mut Ui) {
     // The browser can't write to the user's files, so AutoSave can't be turned on there (#176).
     let browser = app.autosave_block() == Some(crate::AutoSaveBlock::Browser);
     let mut autosave = app.autosave && !browser;
-    let r = ui.add_enabled(!browser, egui::Checkbox::new(&mut autosave, tl!("AutoSave documents you have saved in WordCraft")));
+    let r = ui.add_enabled_ui(!browser, |ui| ui.checkbox(&mut autosave, tl!("AutoSave documents you have saved in WordCraft"))).inner;
     if browser {
         r.on_disabled_hover_text(crate::AutoSaveBlock::Browser.reason());
     } else if r.changed() {
@@ -528,7 +541,7 @@ fn advanced(app: &mut WordApp, ui: &mut Ui) {
     }
     ui.add_space(8.0);
     section(ui, "Display");
-    egui::Grid::new("options_display").num_columns(2).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
+    crate::rtl::grid(ui, egui::Grid::new("options_display").num_columns(2).spacing(vec2(8.0, 6.0)), |ui| {
         let recent_label = ui.label(tl!("Recent documents to show:"));
         let mut n = app.ui.recent_shown();
         if ui.add(egui::DragValue::new(&mut n).range(0..=crate::MAX_RECENT).speed(0.2)).labelled_by(recent_label.id).changed() {
@@ -669,7 +682,10 @@ fn interface_size_picker(app: &mut WordApp, ui: &mut Ui) {
     use crate::theme::InterfaceSize;
     let size = app.ui.interface_size;
     let native = ui.ctx().native_pixels_per_point().unwrap_or(1.0);
-    let auto = crate::i18n::fmt(tl!("Auto ({percent}%)"), &[("percent", &InterfaceSize::AUTO.drawn_percent(native).to_string())]);
+    // The template keeps the percent sign outside its placeholder, so `fmt` isolates the number
+    // without it and a right-to-left line draws "(%200)": the sign goes inside the isolate.
+    let auto = crate::i18n::fmt(tl!("Auto ({percent}%)"), &[("percent", &InterfaceSize::AUTO.drawn_percent(native).to_string())])
+        .replace("\u{2069}%", "%\u{2069}");
     let selected = size.percent().map_or_else(|| auto.clone(), |pct| format!("{pct}%"));
     ui.horizontal(|ui| {
         let label = ui.label(tl!("Interface size:"));

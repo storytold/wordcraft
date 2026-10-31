@@ -62,7 +62,7 @@ pub(super) fn drop_cap_ui(app: &mut WordApp, ui: &mut Ui, f: &mut DropCapForm) -
     let preview = app.previews.font_preview_fn();
     let unit = crate::options::unit();
     ui.add_enabled_ui(f.position != "none", |ui| {
-        egui::Grid::new("dropcap").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+        crate::rtl::grid(ui, egui::Grid::new("dropcap").num_columns(2).spacing(vec2(10.0, 6.0)), |ui| {
             ui.label(tl!("Font:"));
             if let Some(v) = crate::widgets::font_combo(ui, "dropcap_font", 190.0, &f.font, &fams, Some(&*preview))
                 && v != crate::widgets::ADD_FONT
@@ -380,11 +380,11 @@ pub(super) fn columns_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ColumnsForm) ->
     });
     ui.add_space(6.0);
     ui.label(egui::RichText::new(tl!("Width and spacing")).font(semibold(12.5)));
-    ui.horizontal_top(|ui| {
-        ui.vertical(|ui| {
+    crate::rtl::horizontal_top(ui, |ui| {
+        crate::rtl::vertical(ui, |ui| {
             let mut changed = None;
             egui::ScrollArea::vertical().id_salt("columns_widths").max_height(130.0).show(ui, |ui| {
-                egui::Grid::new("columns_grid").num_columns(3).spacing(vec2(12.0, 4.0)).show(ui, |ui| {
+                crate::rtl::grid(ui, egui::Grid::new("columns_grid").num_columns(3).spacing(vec2(12.0, 4.0)), |ui| {
                     ui.label(tl!("Col #:"));
                     ui.label(tl!("Width:"));
                     ui.label(tl!("Spacing:"));
@@ -416,7 +416,7 @@ pub(super) fn columns_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ColumnsForm) ->
                 f.rebalance(i);
             }
             let mut equal = f.equal;
-            if ui.add_enabled(f.count > 1, egui::Checkbox::new(&mut equal, tl!("Equal column width"))).changed() {
+            if ui.add_enabled_ui(f.count > 1, |ui| ui.checkbox(&mut equal, tl!("Equal column width"))).inner.changed() {
                 f.equal = equal;
                 if equal {
                     f.even_out();
@@ -424,7 +424,7 @@ pub(super) fn columns_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ColumnsForm) ->
             }
         });
         ui.add_space(8.0);
-        ui.vertical(|ui| {
+        crate::rtl::vertical(ui, |ui| {
             ui.label(tl!("Preview"));
             columns_preview(ui, f, &t);
         });
