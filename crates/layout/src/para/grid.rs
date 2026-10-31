@@ -163,13 +163,16 @@ pub(super) fn east_asian(c: char) -> bool {
     crate::kinsoku::is_east_asian(c) || matches!(u32::from(c), 0x1100..=0x11FF | 0x3130..=0x318F | 0xAC00..=0xD7AF)
 }
 
-/// Characters both Latin and East Asian text use, whose font `w:hint="eastAsia"` decides
-/// (ECMA-376 §17.3.2.26): curly quotes, dashes, ellipses and other general punctuation, the middle
-/// dot, degree, section and multiplication signs, letterlike symbols, Roman numerals, arrows,
-/// circled numbers and geometric shapes. Letters and digits are never ambiguous.
+/// Characters Word sets in the East Asian font under `w:hint="eastAsia"` whatever the run's
+/// language (ECMA-376 §17.3.2.26, block table in [MS-OI29500] §2.1.88): some Latin-1 signs,
+/// spacing modifiers and combining marks, Greek, Cyrillic, U+2000–27BF (general punctuation
+/// through dingbats: curly quotes, dashes, arrows, box drawing, circled numbers, shapes), CJK
+/// radicals, the private use area and the Latin ligatures. The rows that also depend on a Chinese
+/// run language (accented Latin letters for pinyin) are not applied.
 pub(super) fn hint_ambiguous(c: char) -> bool {
     matches!(u32::from(c),
-        0x00A7 | 0x00A8 | 0x00B0 | 0x00B1 | 0x00B7 | 0x00D7 | 0x00F7
-        | 0x2010..=0x2027 | 0x2030..=0x2044 | 0x2100..=0x214F | 0x2160..=0x217F | 0x2190..=0x21FF
-        | 0x2460..=0x24FF | 0x25A0..=0x25FF | 0x2600..=0x26FF)
+        0x00A1 | 0x00A4 | 0x00A7..=0x00A8 | 0x00AA | 0x00AD | 0x00AF | 0x00B0..=0x00B4
+        | 0x00B6..=0x00BA | 0x00BC..=0x00BF | 0x00D7 | 0x00F7
+        | 0x02B0..=0x03CF | 0x0400..=0x04FF | 0x2000..=0x27BF | 0x2E80..=0x2EFF
+        | 0xE000..=0xF8FF | 0xFB00..=0xFB1C)
 }

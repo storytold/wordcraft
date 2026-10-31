@@ -168,10 +168,11 @@ fn grid_advance_is_the_size_plus_the_adjustment() {
 #[test]
 fn east_asian_hint_sets_ambiguous_punctuation_in_the_east_asian_font() {
     // Bundled faces stand in for a Latin and an East Asian font, so every machine agrees: with
-    // `w:hint="eastAsia"` the curly quotes and the dash take the East Asian font, the Latin letter
-    // keeps the run's font; without it everything stays in the run's font.
+    // `w:hint="eastAsia"` the curly quotes, the dash, Greek, Cyrillic and the hinted Latin-1 signs
+    // take the East Asian font, the Latin letter keeps the run's font; without it everything stays
+    // in the run's font.
     let face_of = |hint: Option<bool>, ch: char| {
-        let text = "“x—”";
+        let text = "“x—α¡ж½”";
         let mut d = Document::from_text(text);
         if let Some(Block::Para(p)) = d.body.first_mut().map(std::sync::Arc::make_mut) {
             p.runs[0].props.font = Some("Source Serif 4".into());
@@ -185,6 +186,10 @@ fn east_asian_hint_sets_ambiguous_punctuation_in_the_east_asian_font() {
     let latin = face_of(Some(true), 'x');
     assert_ne!(face_of(Some(true), '“'), latin, "hinted quote in the Latin font");
     assert_ne!(face_of(Some(true), '—'), latin, "hinted dash in the Latin font");
+    for c in ['α', '¡', 'ж', '½'] {
+        assert_ne!(face_of(Some(true), c), latin, "hinted {c} in the Latin font");
+        assert_eq!(face_of(None, c), latin, "unhinted {c} left the run's font");
+    }
     assert_eq!(face_of(Some(true), '“'), face_of(Some(true), '”'));
     assert_eq!(face_of(None, '“'), face_of(None, 'x'), "unhinted quote left the run's font");
     assert_eq!(face_of(Some(false), '—'), face_of(Some(false), 'x'));
