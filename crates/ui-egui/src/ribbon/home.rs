@@ -48,6 +48,7 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
                 let font = st.get("font").and_then(Value::as_str).unwrap_or("").to_string();
                 let font = app.previews.font_shown(&font);
                 let fams = app.previews.families();
+                let monospaced = app.previews.monospaced_families();
                 let recent: Vec<String> = app.ui.recent_fonts.iter().map(|f| app.previews.font_shown(f)).collect();
                 let prev = app.previews.font_preview_fn();
                 if let Some(f) = crate::widgets::font_combo_with_recent_hint(
@@ -58,6 +59,7 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
                         current: &font,
                         items: &fams,
                         recent: &recent,
+                        monospaced: &monospaced,
                         preview: Some(&*prev),
                         tip: tl!("Font"),
                     },

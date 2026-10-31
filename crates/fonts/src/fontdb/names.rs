@@ -14,6 +14,13 @@ pub(super) fn east_asian_font(f: &skrifa::FontRef<'_>) -> bool {
     }
 }
 
+/// Is `f` a monospaced font: does its `post` table say its glyphs share one advance
+/// (`isFixedPitch`)?
+pub(super) fn monospaced_font(f: &skrifa::FontRef<'_>) -> bool {
+    use skrifa::raw::TableProvider;
+    f.post().is_ok_and(|post| post.is_fixed_pitch() != 0)
+}
+
 /// A family name in another language, from a font's `name` table.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LocalName {
@@ -55,6 +62,8 @@ pub(super) struct CatalogEntry {
     pub(super) local: Vec<LocalName>,
     /// A Chinese, Japanese or Korean font ([`FontFace::is_east_asian`]).
     pub(super) east_asian: bool,
+    /// A monospaced font ([`FontFace::is_monospaced`]).
+    pub(super) monospaced: bool,
     pub(super) path: std::path::PathBuf,
 }
 
@@ -168,7 +177,19 @@ pub(super) fn file_face_names(path: &std::path::Path) -> Vec<Found> {
             tables.push((*b"name", name));
             // A font holding just those tables, to read them as the font itself would.
             let font = mini_font(&tables);
-            Some(font_faces(&skrifa::FontRef::new(&font).ok()?, 0))
+            let mut faces = font_faces(&skrifa::FontRef::new(&font).ok()?, 0);
+            // `post` can be large (glyph names): only its header, which holds `isFixedPitch`
+            // (bytes 12..16), is read, so the monospaced flag is taken from it directly.
+            let fixed = records
+                .as_chunks::<16>()
+                .0
+                .iter()
+                .find(|r| r.starts_with(b"post"))
+                .and_then(|rec| read_at(be32(rec, 8)?.into(), 16))
+                .and_then(|head| be32(&head, 12))
+                .is_some_and(|v| v != 0);
+            faces.iter_mut().for_each(|f| f.monospaced = fixed);
+            Some(faces)
         })
         .flatten()
         .collect()
@@ -258,6 +279,9 @@ pub(super) struct Found {
     /// A Chinese, Japanese or Korean font ([`FontFace::is_east_asian`]); the scan's catalog keeps it.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(super) east_asian: bool,
+    /// A monospaced font ([`FontFace::is_monospaced`]); the scan's catalog keeps it.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(super) monospaced: bool,
     /// Variable fonts: the named instance's axis settings.
     pub(super) coords: Vec<([u8; 4], f32)>,
 }
@@ -268,6 +292,7 @@ pub(super) fn font_faces(f: &skrifa::FontRef<'_>, index: u32) -> Vec<Found> {
     let Some((family, style, id1)) = face_names(f) else { return vec![] };
     let local = local_names(f, &family, id1.as_deref());
     let east_asian = east_asian_font(f);
+    let monospaced = monospaced_font(f);
     let axes = f.axes();
     let mut named: Vec<Found> = Vec::new();
     // At most one more than a file may add, so a caller can tell there are more (#3716).
@@ -281,7 +306,7 @@ pub(super) fn font_faces(f: &skrifa::FontRef<'_>, index: u32) -> Vec<Found> {
         let legacy = legacy_family(&family, &style);
         // Name ID 1 names the default instance only: keep the names of the whole family.
         let local = local.iter().filter(|n| n.english.eq_ignore_ascii_case(&family)).cloned().collect();
-        named.push(Found { index, family: family.clone(), style, legacy, full_name: None, postscript: None, local, east_asian, coords });
+        named.push(Found { index, family: family.clone(), style, legacy, full_name: None, postscript: None, local, east_asian, monospaced, coords });
     }
     if !named.is_empty() {
         return named;
@@ -296,6 +321,7 @@ pub(super) fn font_faces(f: &skrifa::FontRef<'_>, index: u32) -> Vec<Found> {
         postscript: name(f, &[StringId::POSTSCRIPT_NAME]),
         local,
         east_asian,
+        monospaced,
         coords: Vec::new(),
     }]
 }

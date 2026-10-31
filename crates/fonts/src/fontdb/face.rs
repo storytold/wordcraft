@@ -1,4 +1,4 @@
-use super::names::{LocalName, east_asian_font};
+use super::names::{LocalName, east_asian_font, monospaced_font};
 use super::{
     Arc, AtomicU32, BezPath, DrawSettings, Engine, GlyphId, Hinting, HintingInstance, HintingOptions, Location, LocationRef, MetadataProvider,
     Ordering, OutlinePen, RwLock, Size, Target,
@@ -352,6 +352,10 @@ impl FontFace {
     /// Word applies such a font to East Asian text too (`w:eastAsia`).
     pub fn is_east_asian(&self) -> bool {
         self.skrifa().is_some_and(|f| east_asian_font(&f))
+    }
+    /// Is this a monospaced font: does its `post` table mark it fixed pitch (#4398)?
+    pub fn is_monospaced(&self) -> bool {
+        self.skrifa().is_some_and(|f| monospaced_font(&f))
     }
 }
 
