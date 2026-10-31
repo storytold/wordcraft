@@ -1,6 +1,6 @@
 use super::reader::Reader;
-use super::state::{Dest, HeaderFooter, HfPages, MAX_PICT, PageGeom};
-use super::{Cell, Document, FBlock, Flow, Para, model};
+use super::state::{CommentData, Dest, HeaderFooter, HfPages, MARK_CLOSE, MARK_OPEN, MAX_PICT, NoteData, PageGeom};
+use super::{Arc, Block, Blocks, Cell, Document, FBlock, Flow, HashMap, InlineObject, Para, Paragraph, model};
 
 /// Parse RTF bytes into the flow model.
 pub fn parse(bytes: &[u8]) -> Result<Flow, String> {
@@ -10,7 +10,7 @@ pub fn parse(bytes: &[u8]) -> Result<Flow, String> {
 /// The flow, the page, and the default font (`\deff`, font 0 when the file names none), which
 /// is the font of all text that doesn't select one.
 fn parse_with_page(bytes: &[u8]) -> Result<(Flow, PageGeom, Option<String>), String> {
-    parse_full(bytes).map(|r| (r.flow, r.page, r.default_font))
+    parse_full(bytes, false).map(|r| (r.flow, r.page, r.default_font))
 }
 
 /// Everything an import takes from an RTF file.
@@ -22,14 +22,19 @@ struct Parsed {
     default_font: Option<String>,
     /// Each section's headers and footers, in order, the last section's last.
     headers_footers: Vec<Vec<(HeaderFooter, Vec<FBlock>)>>,
+    notes: Vec<NoteData>,
+    comments: Vec<CommentData>,
 }
 
-fn parse_full(bytes: &[u8]) -> Result<Parsed, String> {
+/// `marks`: also read footnotes, endnotes and comments (as place markers in the flow's text, for
+/// [`import`] to turn into objects); without it they are skipped.
+fn parse_full(bytes: &[u8], marks: bool) -> Result<Parsed, String> {
     let start = bytes.iter().position(|b| !b.is_ascii_whitespace()).unwrap_or(0);
     if !bytes.get(start..).is_some_and(|b| b.starts_with(b"{\\rtf")) {
         return Err("not an RTF document (it doesn't start with {\\rtf)".into());
     }
     let mut r = Reader::default();
+    r.marks_on = marks;
     let mut i = start;
     let mut first_in_group = false;
     let mut starred = false;
@@ -108,7 +113,7 @@ fn parse_full(bytes: &[u8]) -> Result<Parsed, String> {
                         r.info_depth = Some(r.depth());
                     }
                     if r.skip_chars > 0
-                        && matches!(r.st.dest, Dest::Body | Dest::Info(_) | Dest::FldInst | Dest::Bookmark | Dest::FontTbl)
+                        && matches!(r.st.dest, Dest::Body | Dest::Info(_) | Dest::FldInst | Dest::Bookmark | Dest::FontTbl | Dest::Atn(_))
                         && !matches!(word, "par" | "pard" | "cell" | "row")
                     {
                         r.skip_chars -= 1;
@@ -200,8 +205,10 @@ fn parse_full(bytes: &[u8]) -> Result<Parsed, String> {
 }
 
 fn finalize(mut r: Reader) -> Parsed {
-    // A header or footer left open by a truncated file ends here, and so does a multibyte run.
+    // A multibyte run ends here, and so does a note, comment, header or footer left open by a
+    // truncated file.
     r.finish_multibyte();
+    r.end_sub();
     r.end_header_footer();
     if r.para_has || !r.para.inlines.is_empty() {
         r.end_para(false);
@@ -228,7 +235,7 @@ fn finalize(mut r: Reader) -> Parsed {
         blocks.push(FBlock::Para(Para::default()));
     }
     let default_font = r.fonts.get(&r.deff).filter(|n| !model::is_mono(n)).map(|n| n.to_string());
-    Parsed { flow: Flow { blocks, meta: r.meta }, page: r.page, last_section, default_font, headers_footers }
+    Parsed { flow: Flow { blocks, meta: r.meta }, page: r.page, last_section, default_font, headers_footers, notes: r.notes, comments: r.comments }
 }
 
 /// The column grid of a table from its rows' cell right edges: every distinct edge starts a grid
@@ -271,7 +278,7 @@ pub(super) fn column_grid(rows: &mut [Vec<Cell>], rights: &[Vec<i32>]) -> Vec<f3
 /// Parse RTF bytes into a document.
 pub fn import(bytes: &[u8]) -> Result<Document, String> {
     model::begin_import();
-    let Parsed { flow, last_section, default_font, headers_footers, .. } = parse_full(bytes)?;
+    let Parsed { flow, last_section, default_font, headers_footers, notes, comments, .. } = parse_full(bytes, true)?;
     let mut doc = model::to_doc_in(&flow, last_section);
     // Each section's own headers and footers; those it leaves out stay linked to the previous.
     let mut sets = Vec::with_capacity(headers_footers.len());
@@ -303,6 +310,7 @@ pub fn import(bytes: &[u8]) -> Result<Document, String> {
     if let Some((h, f)) = sets.next() {
         (doc.last_section.headers, doc.last_section.footers) = (h, f);
     }
+    place_notes_and_comments(&mut doc, notes, comments);
     // RTF's paragraph defaults are single spacing and no space around paragraphs; what a file
     // wants beyond that it states on each paragraph.
     let dp = &mut doc.styles.default_para;
@@ -313,4 +321,128 @@ pub fn import(bytes: &[u8]) -> Result<Document, String> {
         doc.styles.default_chr.font = default_font;
     }
     Ok(doc)
+}
+
+/// Turn the place markers the reader left in the text into note references and comment ranges,
+/// and add the notes' and comments' stories to `doc`.
+fn place_notes_and_comments(doc: &mut Document, notes: Vec<NoteData>, comments: Vec<CommentData>) {
+    use wordcraft_doc::para::NoteKind;
+    use wordcraft_doc::{Comment, PartKind};
+    if notes.is_empty() && comments.is_empty() {
+        return;
+    }
+    // (kind, part id) per note, by index.
+    let mut note_parts: Vec<(NoteKind, u32)> = Vec::new();
+    for n in notes {
+        let (pk, nk, style) =
+            if n.endnote { (PartKind::Endnote, NoteKind::Endnote, "EndnoteText") } else { (PartKind::Footnote, NoteKind::Footnote, "FootnoteText") };
+        let mut blocks = model::part_blocks(doc, &n.blocks);
+        for b in &mut blocks {
+            if let Block::Para(p) = Arc::make_mut(b)
+                && p.props.style.is_none()
+            {
+                p.props.style = Some(style.to_string());
+            }
+        }
+        note_parts.push((nk, doc.add_part(pk, blocks)));
+    }
+    // RTF range id to the comment's id in the document.
+    let mut by_rtf: HashMap<i64, u32> = HashMap::new();
+    for (k, c) in comments.into_iter().enumerate() {
+        let id = k as u32;
+        let blocks = model::part_blocks(doc, &c.blocks);
+        let part = doc.add_part(PartKind::Comment, blocks);
+        doc.comments
+            .insert(id, Comment { author: c.author, initials: c.initials, date: c.date, parent: None, resolved: false, part, ..Default::default() });
+        by_rtf.insert(i64::from(c.rtf_id), id);
+    }
+    let ctx = Placer { note_parts, by_rtf };
+    let mut body = std::mem::take(&mut doc.body);
+    ctx.blocks(&mut body, None, 0);
+    doc.body = body;
+    let ids: Vec<u32> = doc.parts.keys().copied().collect();
+    for id in ids {
+        let Some(part) = doc.parts.get_mut(&id) else { continue };
+        let own = ctx.note_parts.iter().find(|(_, p)| *p == id).copied();
+        ctx.blocks(&mut part.blocks, own, 0);
+        // A note starts with its own number, as Word's do.
+        if let Some((kind, pid)) = own
+            && let Some(first) = part.blocks.first_mut()
+            && let Block::Para(p) = Arc::make_mut(first)
+            && !p.objects.iter().any(|o| matches!(o, InlineObject::NoteRef { id, .. } if *id == pid))
+        {
+            let props = Placer::ref_props(kind);
+            if p.insert_object(0, InlineObject::NoteRef { kind, id: pid, custom: String::new() }, &props).is_err() {
+                // The paragraph can't take it; the note simply has no number mark.
+            }
+        }
+    }
+}
+
+struct Placer {
+    note_parts: Vec<(wordcraft_doc::para::NoteKind, u32)>,
+    by_rtf: HashMap<i64, u32>,
+}
+
+impl Placer {
+    fn ref_props(kind: wordcraft_doc::para::NoteKind) -> wordcraft_doc::CharProps {
+        let style = if kind == wordcraft_doc::para::NoteKind::Endnote { "EndnoteReference" } else { "FootnoteReference" };
+        wordcraft_doc::CharProps { style: Some(style.into()), ..Default::default() }
+    }
+
+    fn blocks(&self, bl: &mut Blocks, own: Option<(wordcraft_doc::para::NoteKind, u32)>, depth: usize) {
+        for b in bl.iter_mut() {
+            let needs = match &**b {
+                Block::Para(p) => p.text.contains(MARK_OPEN),
+                Block::Table(_) => depth < 8,
+            };
+            if !needs {
+                continue;
+            }
+            match Arc::make_mut(b) {
+                Block::Para(p) => self.para(p, own),
+                Block::Table(t) => {
+                    for r in &mut t.rows {
+                        for c in &mut r.cells {
+                            self.blocks(&mut c.blocks, own, depth + 1);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn para(&self, p: &mut Paragraph, own: Option<(wordcraft_doc::para::NoteKind, u32)>) {
+        // Every pass removes one marker, so this ends; the bound is only a seat belt.
+        for _ in 0..100_000 {
+            let Some(a) = p.text.find(MARK_OPEN) else { return };
+            let Some(len) = p.text.get(a..).and_then(|t| t.find(MARK_CLOSE)) else { return };
+            let end = a + len + MARK_CLOSE.len_utf8();
+            let inner = p.text.get(a + MARK_OPEN.len_utf8()..a + len).unwrap_or("").to_string();
+            let mut chars = inner.chars();
+            let tag = chars.next().unwrap_or(' ');
+            let n = chars.as_str().parse::<i64>().unwrap_or(i64::MIN);
+            let (obj, props) = match tag {
+                'N' => match usize::try_from(n).ok().and_then(|i| self.note_parts.get(i)) {
+                    Some(&(kind, id)) => (Some(InlineObject::NoteRef { kind, id, custom: String::new() }), Self::ref_props(kind)),
+                    None => (None, Default::default()),
+                },
+                'S' => match own {
+                    Some((kind, id)) => (Some(InlineObject::NoteRef { kind, id, custom: String::new() }), Self::ref_props(kind)),
+                    None => (None, Default::default()),
+                },
+                'B' => (self.by_rtf.get(&n).map(|&id| InlineObject::CommentStart { id }), Default::default()),
+                'E' => (self.by_rtf.get(&n).map(|&id| InlineObject::CommentEnd { id }), Default::default()),
+                _ => (None, Default::default()),
+            };
+            if p.delete(a, end).is_err() {
+                return;
+            }
+            if let Some(o) = obj
+                && p.insert_object(a, o, &props).is_err()
+            {
+                return;
+            }
+        }
+    }
 }

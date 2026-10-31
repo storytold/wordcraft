@@ -5,6 +5,15 @@ pub(super) const MAX_GROUPS: usize = 512;
 
 /// Largest picture we decode (bytes).
 pub(super) const MAX_PICT: usize = 64 << 20;
+/// Most notes, and most comments, one file may bring in.
+pub(super) const MAX_NOTES: usize = 5_000;
+/// Most blocks kept of one note's or comment's text.
+pub(super) const MAX_NOTE_BLOCKS: usize = 500;
+/// Brackets of a place marker in text: a note reference or a comment range end travels through the
+/// flow model as `OPEN tag number CLOSE` (private-use characters, which both the reader and the
+/// writer keep out of real text) and becomes an inline object once the document exists.
+pub(super) const MARK_OPEN: char = '\u{F8F0}';
+pub(super) const MARK_CLOSE: char = '\u{F8F1}';
 
 /// Most sections we read (`\sect`); later breaks end paragraphs only.
 pub(super) const MAX_SECTIONS: usize = 10_000;
@@ -25,11 +34,37 @@ pub(super) enum Dest {
     FldInst,
     Pict,
     Bookmark,
+    /// A comment's text-valued word: 1 `\atrfstart`, 2 `\atrfend`, 3 `\atnid`, 4 `\atnauthor`,
+    /// 5 `\atndate`/`\atntime`, 6 `\atnref`.
+    Atn(u8),
     /// The author table of tracked changes (`\revtbl`).
     RevTbl,
     /// Formatting before a tracked change (`\oldpprops` when true, else `\oldcprops`): read
     /// into the group's own state, which the group's end keeps as the change's old formatting.
     OldProps(bool),
+}
+
+/// A footnote, endnote or comment group being read into an output of its own.
+pub(super) struct Sub {
+    pub(super) depth: usize,
+    pub(super) comment: bool,
+    pub(super) endnote: bool,
+    pub(super) saved: Box<Output>,
+}
+
+/// A note read: its kind and text.
+pub(super) struct NoteData {
+    pub(super) endnote: bool,
+    pub(super) blocks: Vec<FBlock>,
+}
+
+/// A comment read: the id its range markers carry, who wrote it and when, and its text.
+pub(super) struct CommentData {
+    pub(super) rtf_id: i32,
+    pub(super) author: String,
+    pub(super) initials: String,
+    pub(super) date: String,
+    pub(super) blocks: Vec<FBlock>,
 }
 
 /// A tracked formatting change being read (`\crauth`/`\crdate` with `\oldcprops`,
