@@ -514,3 +514,12 @@ fn font_size_at_the_integer_limits_does_not_overflow() {
     assert_eq!(size("<font size=\"--2147483648\">x</font>"), Some(36.0));
     assert_eq!(size("<font size=\"-2147483647\">x</font>"), Some(7.5));
 }
+
+#[test]
+fn trailing_space_survives_round_trip() {
+    for text in ["Total: ", "a b "] {
+        let doc = Document::from_text(text);
+        let back = import(&export(&doc));
+        assert_eq!(back.plain_text(Default::default()).replace('\u{a0}', " "), text);
+    }
+}

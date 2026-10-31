@@ -28,10 +28,13 @@ fn align_css(a: Option<Align>) -> Option<&'static str> {
     }
 }
 
-fn text_html(t: &str, at_start: bool) -> String {
+/// `at_start`/`at_end`: `t` begins/ends the paragraph's visible text, where HTML would drop a
+/// plain space.
+fn text_html(t: &str, at_start: bool, at_end: bool) -> String {
     let mut o = String::new();
     let mut prev_space = at_start;
-    for c in t.chars() {
+    let mut chars = t.chars().peekable();
+    while let Some(c) = chars.next() {
         match c {
             '\n' => {
                 o.push_str("<br>");
@@ -39,7 +42,7 @@ fn text_html(t: &str, at_start: bool) -> String {
                 continue;
             }
             '\t' => o.push_str("<span style=\"white-space:pre\">\t</span>"),
-            ' ' if prev_space => o.push_str("&nbsp;"),
+            ' ' if prev_space || matches!(chars.peek(), Some('\n')) || (at_end && chars.peek().is_none()) => o.push_str("&nbsp;"),
             _ => o.push_str(&esc(&c.to_string())),
         }
         prev_space = c == ' ';
@@ -104,13 +107,15 @@ fn fmt_tags(f: &Fmt) -> (String, Vec<&'static str>) {
 /// Inline spans → HTML.
 pub fn inlines_html(inlines: &[Inline]) -> String {
     let mut o = String::new();
-    for i in inlines.iter() {
+    for (n, i) in inlines.iter().enumerate() {
+        // Nothing visible follows (a bookmark is empty): a trailing space here would be dropped.
+        let at_end = inlines.get(n + 1..).unwrap_or_default().iter().all(|i| matches!(i, Inline::Anchor(_)));
         match i {
             Inline::Text(t, f) => {
                 let (open, close) = fmt_tags(f);
                 let at_start = o.is_empty();
                 o.push_str(&open);
-                o.push_str(&text_html(t, at_start));
+                o.push_str(&text_html(t, at_start, at_end));
                 for c in close.iter().rev() {
                     o.push_str(c);
                 }
@@ -121,7 +126,7 @@ pub fn inlines_html(inlines: &[Inline]) -> String {
                 let (open, close) = fmt_tags(fmt);
                 let at_start = o.is_empty();
                 o.push_str(&open);
-                o.push_str(&format!("<ruby>{}<rt>{}</rt></ruby>", text_html(base, at_start), text_html(ruby, false)));
+                o.push_str(&format!("<ruby>{}<rt>{}</rt></ruby>", text_html(base, at_start, at_end), text_html(ruby, false, false)));
                 for c in close.iter().rev() {
                     o.push_str(c);
                 }
