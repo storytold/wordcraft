@@ -893,6 +893,8 @@ fn worker(shared: &(Mutex<Shared>, Condvar), backend: Backend) {
 #[cfg(not(target_arch = "wasm32"))]
 fn finish_worker(m: &Mutex<Shared>, s: MutexGuard<Shared>, speaker: SystemSpeaker) -> Option<u64> {
     drop(s);
+    // Off Windows `SystemSpeaker` has no fields, so this drop is an intentional no-op.
+    #[allow(clippy::drop_non_drop)]
     drop(speaker);
     let mut state = lock(m);
     if state.state == State::Playing && !state.queue.is_empty() {
