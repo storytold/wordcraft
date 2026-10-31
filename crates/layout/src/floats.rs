@@ -113,8 +113,8 @@ pub(crate) fn align_in((start, extent): (f32, f32), offset: f32, size: f32, alig
 pub(crate) type WrapArea = (Rect, bool, Option<Arc<contour::Contour>>, WrapText, bool);
 
 /// Wrap areas a page starts with (#2048): by page index, the floating objects (block, object
-/// index) placed above the top of their anchor paragraph, with text before it on the page, and
-/// their areas. Layout places a float only when it reaches its anchor, so the text above that
+/// index; a table uses `usize::MAX`) placed above their anchor, with text before it on the page,
+/// and their areas. Layout places a float only when it reaches its anchor, so the text above that
 /// was laid out without it: the pass is done again with these known from the page's start.
 pub(crate) type EarlyFloats = HashMap<usize, Vec<(usize, usize, WrapArea)>>;
 
@@ -567,10 +567,15 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
 /// touch its lines and are left out.
 pub(crate) fn continued_exclusions(rel: &[para::Exclusion], excl: &[WrapArea], x0: f32, y: f32, t: f32, width: f32) -> Vec<para::Exclusion> {
     let before = rel.iter().filter(|e| e.top < t).map(|e| para::Exclusion { bottom: e.bottom.min(t), ..e.clone() });
-    let here = rel_exclusions(excl, x0, y - t)
-        .into_iter()
-        .filter(|e| e.bottom > t && e.right > -width && e.left < 2.0 * width)
-        .map(|e| if e.top < t && e.contour.is_none() { para::Exclusion { top: t, ..e } } else { e });
+    let here = rel_exclusions(excl, x0, y - t).into_iter().filter(|e| e.bottom > t && e.right > -width && e.left < 2.0 * width).map(|e| {
+        if e.top <= t && e.contour.is_none() {
+            // The line ending at `t` was placed on the previous page. A table's inclusive
+            // top-contact rule must not move that line while reflowing this page's tail.
+            para::Exclusion { top: t + if e.table { 0.02 } else { 0.0 }, ..e }
+        } else {
+            e
+        }
+    });
     before.chain(here).collect()
 }
 

@@ -323,7 +323,7 @@ impl<'a> Flow<'a> {
     /// The lines going into a new column (or page) were broken around the wrap areas where the
     /// paragraph started: break them again around this column's (the lines before stay as they
     /// were, and so do the paragraph's own floating objects), when they differ (#1374).
-    fn relay_wrap(&mut self, ctx: &mut Ctx, pb: &PageBuilder) {
+    fn relay_wrap(&mut self, ctx: &mut Ctx, pb: &mut PageBuilder) {
         if self.l0 == 0 || pb.web || self.wrap_relays >= MAX_WRAP_RELAYS {
             return;
         }
@@ -337,11 +337,15 @@ impl<'a> Flow<'a> {
         #[cfg(test)]
         WRAP_RELAYS.with(|c| c.set(c.get() + 1));
         let relaid = self.relay(ctx, &here);
-        // Only if the rest still starts at the same line, at the same height (an outline
-        // reaching above it could move the lines before down, and the column's areas with them).
+        // A full-width float on the new page can push the continued line down. Keep the
+        // lines already placed unchanged, then carry that displacement into this page's
+        // origin; subtracting the new first line's top while emitting would otherwise lose it.
         if let Some(k) = relaid.lines.iter().position(|l| l.start == resume)
-            && relaid.lines.get(k).is_some_and(|l| (l.top - t).abs() < 0.01)
+            && k == self.l0
+            && relaid.lines.iter().take(k).zip(&self.pl.lines).all(|(a, b)| a.start == b.start && a.stop == b.stop && (a.top - b.top).abs() < 0.01)
+            && let Some(top) = relaid.lines.get(k).map(|l| l.top).filter(|top| *top >= t - 0.01)
         {
+            pb.y += (top - t).max(0.0);
             (self.pl, self.rel, self.l0) = (relaid, here, k);
         }
     }
