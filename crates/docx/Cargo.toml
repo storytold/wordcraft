@@ -35,3 +35,4 @@ wordcraft-doc = { workspace = true, features = ["test-support"] }
 proptest = { workspace = true }
 image = { workspace = true }
 zip = { workspace = true }
+serde_json = { workspace = true }

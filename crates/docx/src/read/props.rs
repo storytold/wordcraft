@@ -537,6 +537,8 @@ impl PropCtx {
                 "w:tblLayout" => t.fixed = k.attr("w:type") == Some("fixed"),
                 "w:bidiVisual" => t.bidi_visual = on_off(k),
                 "w:tblCellMar" => t.cell_margins = Some(margins(k)),
+                "w:tblStyleRowBandSize" => t.band_size = k.attr("w:val").and_then(u32_of).map(|n| n.min(1000)),
+                "w:tblStyleColBandSize" => t.col_band_size = k.attr("w:val").and_then(u32_of).map(|n| n.min(1000)),
                 "w:tblLook" => t.look = look(k),
                 "w:tblpPr" => t.float = Some(table_float(k)),
                 "w:tblOverlap" => {

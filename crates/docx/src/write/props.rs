@@ -527,6 +527,12 @@ fn tblpr_inner(w: &mut W, t: &TableProps) {
     if let Some(m) = &t.cell_margins {
         margins(w, "w:tblCellMar", m);
     }
+    if let Some(n) = t.band_size {
+        w.val("w:tblStyleRowBandSize", &n.min(1000).to_string());
+    }
+    if let Some(n) = t.col_band_size {
+        w.val("w:tblStyleColBandSize", &n.min(1000).to_string());
+    }
     let look = look_attrs(&t.look);
     let refs: Vec<(&str, &str)> = look.iter().map(|(k, v)| (*k, v.as_str())).collect();
     w.empty("w:tblLook", &refs);
@@ -545,7 +551,7 @@ pub fn trpr(w: &mut W, r: &RowProps, change: Option<&ChangeAttrs>) {
     }
     let change = change.zip(r.fmt_change.as_ref());
     let gaps = r.grid_before > 0 || r.grid_after > 0 || r.w_before.is_some() || r.w_after.is_some();
-    if r.height.is_none() && !r.header && !r.cant_split && !gaps && change.is_none() {
+    if r.height.is_none() && !r.header && !r.cant_split && !gaps && r.exceptions.is_none() && change.is_none() {
         return;
     }
     w.open("w:trPr", &[]);
@@ -581,6 +587,12 @@ fn tblprex(w: &mut W, t: &TableProps) {
     }
     if let Some(m) = &t.cell_margins {
         margins(w, "w:tblCellMar", m);
+    }
+    if let Some(n) = t.band_size {
+        w.val("w:tblStyleRowBandSize", &n.min(1000).to_string());
+    }
+    if let Some(n) = t.col_band_size {
+        w.val("w:tblStyleColBandSize", &n.min(1000).to_string());
     }
     w.close("w:tblPrEx");
 }
