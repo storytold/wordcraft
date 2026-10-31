@@ -32,6 +32,7 @@ pub(crate) struct Ctx<'a> {
     pub(crate) chains: textbox::Chains,
     /// The current section's document grid (body text only: none for headers and footers).
     pub(crate) grid: para::Grid,
+    pub(crate) vertical_text_box: bool,
     /// Whether tracked deletions are left out in the story being laid out
     /// ([`LayoutOptions::hides_deleted`]): the body's, or the story of the [`layout_box`] at work.
     pub(crate) hide_deleted: HideDeleted,
@@ -195,6 +196,7 @@ impl Ctx<'_> {
             eq_number: 0,
             read_line_spacing: None,
             grid: para::Grid::default(),
+            vertical_text_box: false,
             fit_objects: false,
             fitted: &[],
         };
@@ -369,6 +371,7 @@ impl Ctx<'_> {
             eq: if eq_here > 0 { eq_number } else { 0 },
             read_spacing: if self.opts.view == ViewMode::Read { self.opts.read_line_spacing.map(f32::to_bits) } else { None },
             grid: self.grid.key(),
+            vertical_text_box: self.vertical_text_box,
             fit: self.boxes.inside(),
             fitted: if fitted.is_empty() { 0 } else { hash_of(&format!("{fitted:?}")) },
             hide_deleted: self.hide_deleted,
@@ -411,6 +414,7 @@ impl Ctx<'_> {
             eq_number,
             read_line_spacing: if self.opts.view == ViewMode::Read { self.opts.read_line_spacing } else { None },
             grid: self.grid,
+            vertical_text_box: self.vertical_text_box,
             fit_objects: self.boxes.inside(),
             fitted,
         }

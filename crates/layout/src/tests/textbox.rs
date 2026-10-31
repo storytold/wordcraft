@@ -2,6 +2,7 @@
 
 #[allow(unused_imports)]
 use crate::*;
+use std::sync::Arc;
 use wordcraft_doc::props::{TextVert, VAlign};
 use wordcraft_doc::{PartKind, Pos, TextBody, para_block};
 
@@ -78,6 +79,202 @@ fn align_text_and_text_direction_place_the_text_in_the_box() {
     let l = lay(&d);
     let (.., l0, l1) = lines(&l, id)[0];
     assert_eq!(l1 - l0, 2, "two letters, two lines");
+}
+
+#[test]
+fn rotated_text_box_turns_kanji_while_east_asian_vertical_keeps_it_upright() {
+    let glyphs_stood_up = |vert| {
+        let mut d = Document::from_text("");
+        text_box(&mut d, 0, "日本", 144.0, 144.0, TextBody { vert, ..Default::default() });
+        let l = lay(&d);
+        let draws = display::page_display(&d, &l.pages[0], &display::DisplayOptions::default());
+        draws.iter().any(|draw| match draw {
+            display::Draw::Turned { items, .. } => items.iter().any(|item| matches!(item, display::Draw::Rotated { .. })),
+            _ => false,
+        })
+    };
+    assert!(!glyphs_stood_up(TextVert::Vert), "DrawingML vert turns the whole line, as on the checked envelope");
+    assert!(glyphs_stood_up(TextVert::EaVert), "eaVert stands ideographs up after turning the line");
+}
+
+#[test]
+fn missing_east_asian_faces_keep_three_rotated_columns_legible() {
+    use wordcraft_doc::props::LineSpacing;
+
+    for family in ["MS Mincho", "Missing East Asian Test Face", "Inter"] {
+        let requested = wordcraft_fonts::word::resolve(family, false, false);
+        if !requested.substituted && requested.face.covers('日') {
+            continue;
+        }
+        let mut d = Document::from_text("x");
+        let id = text_box(&mut d, 0, "", 135.0, 300.0, TextBody { vert: TextVert::Vert, ..Default::default() });
+        let char_props =
+            wordcraft_doc::props::CharProps { font: Some(family.into()), font_ea: Some(family.into()), size: Some(24.0), ..Default::default() };
+        d.parts.get_mut(&id).unwrap().blocks = (0..3)
+            .map(|_| {
+                let mut p = Paragraph::with_text("日本語", char_props.clone());
+                p.props.snap_to_grid = Some(false);
+                p.props.space_before = Some(0.0);
+                p.props.space_after = Some(0.0);
+                para_block(p)
+            })
+            .collect();
+        let positions: Vec<_> = lines(&lay(&d), id).into_iter().map(|(x, ..)| x).collect();
+        assert_eq!(positions.len(), 3, "all three columns remain visible with {family}: {positions:?}");
+        for pair in positions.windows(2) {
+            let gap = pair[0] - pair[1];
+            assert!((gap - 34.5).abs() < 4.0, "a 24 pt fallback follows the inherited 1.15 line spacing with {family}: {gap}");
+        }
+
+        for block in &mut d.parts.get_mut(&id).unwrap().blocks {
+            if let Block::Para(p) = Arc::make_mut(block) {
+                p.props.line_spacing = Some(LineSpacing::Exactly(18.0));
+                p.touch();
+            }
+        }
+        let explicit: Vec<_> = lines(&lay(&d), id).into_iter().map(|(x, ..)| x).collect();
+        assert_eq!(explicit.len(), 3);
+        for pair in explicit.windows(2) {
+            assert!((pair[0] - pair[1] - 18.0).abs() < 3.0, "explicit 18 pt spacing wins with {family}: {explicit:?}");
+        }
+    }
+}
+
+#[test]
+fn turned_text_and_fields_share_size_relative_spacing() {
+    let advance = |text: &str, family: &str, field: bool, size: f32, automatic: bool| {
+        let mut d = Document::from_text("x");
+        let id = text_box(&mut d, 0, "", 220.0, 2400.0, TextBody { vert: TextVert::Vert, ..Default::default() });
+        let props =
+            wordcraft_doc::props::CharProps { font: Some(family.into()), font_ea: Some(family.into()), size: Some(size), ..Default::default() };
+        let mut p = if field { Paragraph::new() } else { Paragraph::with_text(text, props.clone()) };
+        if field {
+            p.insert_object(
+                0,
+                InlineObject::Field {
+                    instr: "MERGEFIELD address".into(),
+                    result: text.into(),
+                    locked: false,
+                    dirty: false,
+                    code: false,
+                    form: String::new(),
+                },
+                &props,
+            )
+            .unwrap();
+        }
+        p.props.snap_to_grid = Some(false);
+        p.props.auto_space_de = Some(automatic);
+        p.props.auto_space_dn = Some(automatic);
+        d.parts.get_mut(&id).unwrap().blocks = vec![para_block(p)];
+        let laid = lay(&d);
+        let para = laid.pages[0].items.iter().find_map(|item| match item {
+            Placed::Lines { story: StoryRef::Part(story), para, .. } if *story == id => Some(para),
+            _ => None,
+        });
+        let line = para.and_then(|p| p.lines.first()).expect("text-box line");
+        let para = para.unwrap();
+        let origins: Vec<f32> = para
+            .clusters
+            .iter()
+            .enumerate()
+            .flat_map(|(i, c)| {
+                let x = line.cl_left(i).unwrap_or(0.0);
+                para.glyphs[c.g0 as usize..c.g1 as usize].iter().map(move |g| x + g.dx)
+            })
+            .collect();
+        (line.xs.last().copied().unwrap_or(0.0) - line.xs.first().copied().unwrap_or(0.0), origins)
+    };
+
+    for family in ["MS Mincho", "Inter"] {
+        for automatic in [false, true] {
+            for text in [
+                "日2本",
+                "日38本",
+                "日３８本",
+                "会館3階",
+                "〒577-0845　日本2丁目5番18号",
+                "日  本",
+                "日　　本",
+                "日  38  本",
+                "日　　38　　本",
+                "「日本（東京）」、「案内（概要）」",
+            ] {
+                let (reference_width, reference_origins) = advance(text, family, false, 24.0, automatic);
+                for size in [9.0, 10.0, 16.0, 24.0, 36.0, 48.0] {
+                    let (plain_width, plain_origins) = advance(text, family, false, size, automatic);
+                    let (field_width, field_origins) = advance(text, family, true, size, automatic);
+                    assert!((plain_width - field_width).abs() < 0.01, "field width: {family}, {text}, {size}, automatic={automatic}");
+                    assert_eq!(plain_origins.len(), field_origins.len());
+                    for (plain, field) in plain_origins.iter().zip(&field_origins) {
+                        assert!((plain - field).abs() < 0.01, "field glyph origin: {family}, {text}, {size}, automatic={automatic}");
+                    }
+                    assert!((plain_width / size - reference_width / 24.0).abs() < 0.01, "width scales with size");
+                    for (scaled, reference) in plain_origins.iter().zip(&reference_origins) {
+                        assert!((scaled / size - reference / 24.0).abs() < 0.01, "glyph origin scales with size");
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn small_leading_adjustments_keep_the_last_rotated_column_visible() {
+    use wordcraft_doc::props::LineSpacing;
+    let r = wordcraft_fonts::word::resolve("MS Mincho", false, false);
+    if !r.substituted && r.face.covers('日') {
+        return;
+    }
+    for size in [9.0, 12.0, 24.0, 36.0] {
+        let mut d = Document::from_text("");
+        d.styles.default_para.line_spacing = Some(LineSpacing::Multiple(1.0));
+        let body = TextBody { vert: TextVert::Vert, ..Default::default() };
+        let [left, _, right, _] = body.insets_pt();
+        let id = text_box(&mut d, 0, "", 3.0 * size * 1.28 + left + right + 0.1, 400.0, body);
+        d.parts.get_mut(&id).unwrap().blocks = (0..3)
+            .map(|_| {
+                let mut p = Paragraph::with_text(
+                    "日本語",
+                    wordcraft_doc::props::CharProps { font: Some("MS Mincho".into()), size: Some(size), ..Default::default() },
+                );
+                p.props.snap_to_grid = Some(false);
+                p.props.space_before = Some(0.0);
+                p.props.space_after = Some(0.0);
+                para_block(p)
+            })
+            .collect();
+        assert_eq!(lines(&lay(&d), id).len(), 3, "a small leading adjustment must not clip the last {size} pt column");
+    }
+}
+
+#[test]
+fn turned_line_spacing_preserves_the_typographic_centre() {
+    let metrics = |vert, multiple| {
+        let mut d = Document::from_text("x");
+        let id = text_box(&mut d, 0, "", 220.0, 300.0, TextBody { vert, ..Default::default() });
+        let mut p =
+            Paragraph::with_text("Text 38", wordcraft_doc::props::CharProps { font: Some("Inter".into()), size: Some(24.0), ..Default::default() });
+        p.props.snap_to_grid = Some(false);
+        p.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(multiple));
+        d.parts.get_mut(&id).unwrap().blocks = vec![para_block(p)];
+        let laid = lay(&d);
+        laid.pages[0]
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Placed::Lines { story: StoryRef::Part(s), para, .. } if *s == id => para.lines.first().map(|l| (l.baseline - l.top, l.height)),
+                _ => None,
+            })
+            .unwrap()
+    };
+    let (base, height) = metrics(TextVert::Vert, 1.0);
+    let (compressed, short) = metrics(TextVert::Vert, 0.8);
+    assert!((base - compressed - (height - short) / 2.0).abs() < 0.01);
+    let (expanded, tall) = metrics(TextVert::Vert, 1.2);
+    assert!((expanded - base - (tall - height) / 2.0).abs() < 0.01);
+    let (horizontal, _) = metrics(TextVert::Horz, 0.8);
+    assert!((horizontal - base * 0.8).abs() < 0.01, "horizontal baseline behaviour stays unchanged");
 }
 
 #[test]

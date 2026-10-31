@@ -41,6 +41,7 @@ struct Breaker<'e> {
     /// The document grid's line pitch, for paragraphs that snap to it.
     grid: Option<Grid>,
     bidi: bool,
+    vertical_text_box: bool,
     est_h: f32,
     table_h: f32,
     first_x0: Option<f32>,
@@ -194,6 +195,7 @@ impl<'e> Breaker<'e> {
             rtl_para: rp.bidi,
             grid: Some(env.grid).filter(|g| g.line.is_some() && rp.snap_to_grid),
             bidi: rp.bidi || !pl.bidi_levels.is_empty(),
+            vertical_text_box: env.vertical_text_box,
             est_h,
             // Exact spacing fixes the table-contact boundary even when the mark has other metrics.
             // Keep the existing estimate for shapes and for non-exact spacing.
@@ -487,6 +489,8 @@ impl<'e> Breaker<'e> {
         let baseline = if centred {
             let up = asc.max(obj_asc);
             self.top + ((height - up - desc) / 2.0).max(0.0) + up
+        } else if self.vertical_text_box && matches!(rp.line_spacing, LineSpacing::Multiple(_)) {
+            self.top + (asc + (height - natural) / 2.0).max(obj_asc.min(height - desc))
         } else {
             self.top + baseline_offset(rp.line_spacing, asc, height, desc).max(obj_asc.min(height - desc))
         };

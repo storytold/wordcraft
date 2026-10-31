@@ -19,6 +19,7 @@ pub(crate) struct Key {
     pub(crate) eq: u32,
     pub(crate) read_spacing: Option<u32>,
     pub(crate) grid: (u32, u32, u32, bool),
+    pub(crate) vertical_text_box: bool,
     pub(crate) fit: bool,
     /// Heights of the paragraph's inline boxes that resize to fit their text.
     pub(crate) fitted: u64,

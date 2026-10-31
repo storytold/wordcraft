@@ -66,6 +66,8 @@ pub enum TextVert {
     Horz,
     /// Turned 90° clockwise (`vert`).
     Vert,
+    /// East Asian vertical text: ideographs remain upright (`eaVert`).
+    EaVert,
     /// Turned 270° (`vert270`).
     Vert270,
     /// Upright letters stacked one above the other (`wordArtVert`).
@@ -73,11 +75,11 @@ pub enum TextVert {
 }
 
 impl TextVert {
-    /// The direction an `ST_TextVerticalType` value names; the East Asian and Mongolian vertical
-    /// layouts turn like `vert`, unknown values are horizontal.
+    /// The direction an `ST_TextVerticalType` value names; unknown values are horizontal.
     pub fn from_ooxml(v: &str) -> TextVert {
         match v {
-            "vert" | "eaVert" | "mongolianVert" => TextVert::Vert,
+            "vert" => TextVert::Vert,
+            "eaVert" | "mongolianVert" => TextVert::EaVert,
             "vert270" => TextVert::Vert270,
             "wordArtVert" | "wordArtVertRtl" => TextVert::Stacked,
             _ => TextVert::Horz,
@@ -87,6 +89,7 @@ impl TextVert {
         match self {
             TextVert::Horz => "horz",
             TextVert::Vert => "vert",
+            TextVert::EaVert => "eaVert",
             TextVert::Vert270 => "vert270",
             TextVert::Stacked => "wordArtVert",
         }
@@ -94,7 +97,7 @@ impl TextVert {
     /// How its lines turn on the page (stacked text stays upright).
     pub fn turn(self) -> TextDirection {
         match self {
-            TextVert::Vert => TextDirection::Down,
+            TextVert::Vert | TextVert::EaVert => TextDirection::Down,
             TextVert::Vert270 => TextDirection::Up,
             TextVert::Horz | TextVert::Stacked => TextDirection::Horizontal,
         }

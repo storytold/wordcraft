@@ -79,6 +79,11 @@ pub(super) fn snap_chars(b: &mut Builder, text: &str, grid: &Grid) {
 /// classed by the text it shows. The room goes after the first of the two characters; returns it
 /// by cluster index.
 pub(super) fn auto_space(b: &mut Builder, text: &str, de: bool, dn: bool) -> Vec<(usize, f32)> {
+    auto_space_range(b, text, 0, 0, de, dn)
+}
+
+/// Space adjacent characters inside an atomic field result before merging its clusters.
+pub(super) fn auto_space_range(b: &mut Builder, text: &str, base: usize, from: usize, de: bool, dn: bool) -> Vec<(usize, f32)> {
     let mut out = Vec::new();
     if !de && !dn {
         return out;
@@ -86,7 +91,7 @@ pub(super) fn auto_space(b: &mut Builder, text: &str, de: bool, dn: bool) -> Vec
     let mut shown = b.shown.iter().map(|s| (s.0, s.1.as_str())).peekable();
     // The previous text cluster: index, its last character, its font size.
     let mut prev: Option<(usize, char, f32)> = None;
-    for k in 0..b.clusters.len() {
+    for k in from..b.clusters.len() {
         let Some(c) = b.clusters.get(k) else { break };
         match c.kind {
             ClKind::Text => {}
@@ -99,7 +104,7 @@ pub(super) fn auto_space(b: &mut Builder, text: &str, de: bool, dn: bool) -> Vec
         while shown.next_if(|s| s.0 < k).is_some() {}
         let s = match shown.peek() {
             Some(&(i, t)) if i == k => t,
-            _ => text.get(c.start..c.end).unwrap_or(""),
+            _ => c.start.checked_sub(base).zip(c.end.checked_sub(base)).and_then(|(a, z)| text.get(a..z)).unwrap_or(""),
         };
         let (Some(first), Some(last)) = (s.chars().next(), s.chars().next_back()) else {
             prev = None;

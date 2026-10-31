@@ -333,6 +333,7 @@ mod label_spacing_tests {
             typing_word: None,
             field_codes: false,
             grid: Grid::default(),
+            vertical_text_box: false,
             exclusions: &[],
             eq_number: 0,
             numeral: crate::NumeralMode::default(),

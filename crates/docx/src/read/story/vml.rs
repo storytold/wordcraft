@@ -221,6 +221,11 @@ impl Reader<'_> {
         {
             let id = self.read_textbox(sc, t, rels);
             if let Some(part) = self.doc.parts.get_mut(&id) {
+                // VML's `layout-flow:vertical` is the fallback for DrawingML `vert`: the
+                // whole line turns, including East Asian glyphs. It is distinct from `eaVert`.
+                if vml_style(tb.attr("style").unwrap_or(""), "layout-flow") == Some("vertical") {
+                    part.body.vert = wordcraft_doc::props::TextVert::Vert;
+                }
                 // Internal margins `inset="l,t,r,b"` (ECMA-376 Part 4 §19.1.2.22), each one left
                 // out keeping Word's default; a bare number is in EMUs, VML's base unit.
                 // `o:insetmode="auto"` leaves them to the application.
