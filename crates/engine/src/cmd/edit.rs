@@ -467,6 +467,41 @@ pub(crate) fn search(s: &Session, story: StoryRef) -> Result<Vec<(Pos, Pos)>, Cm
     Ok(search_full(s, story, false)?.into_iter().map(|f| (f.a, f.b)).collect())
 }
 
+/// What find-style commands address from the caret search with no `story` selector: the
+/// caret's story, and the main text too when the caret is elsewhere — from a footnote the
+/// body is searched as well, the way Word's Find reaches it (#3270). A `story` parameter
+/// searches only that story.
+pub(crate) fn search_reach(s: &Session, v: &Value) -> Result<Vec<(Pos, Pos)>, CmdError> {
+    search_stories(s, &reach_stories(s, v))
+}
+
+/// The stories a find-style command with its params searches (#3270): the caret's story; from
+/// a footnote or an endnote the main text too, the way Word's Find reaches it. A `story`
+/// parameter searches only that story, and a header, footer, comment or text box is searched
+/// alone: their reach is the explicit `story` value.
+pub(crate) fn reach_stories(s: &Session, v: &Value) -> Vec<StoryRef> {
+    let story = super::story_param(s, v);
+    let mut stories = vec![story];
+    if v.get("story").is_none()
+        && story != StoryRef::Body
+        && let StoryRef::Part(id) = story
+        && s.doc.parts.get(&id).is_some_and(|p| matches!(p.kind, wordcraft_doc::PartKind::Footnote | wordcraft_doc::PartKind::Endnote))
+    {
+        stories.push(StoryRef::Body);
+    }
+    stories
+}
+
+/// [`search`] over the given stories at once, in document order.
+fn search_stories(s: &Session, stories: &[StoryRef]) -> Result<Vec<(Pos, Pos)>, CmdError> {
+    let mut out = Vec::new();
+    for story in stories {
+        out.extend(search(s, *story)?);
+    }
+    out.sort();
+    Ok(out)
+}
+
 fn find_opts(f: &crate::session::FindState) -> find_pattern::Opts {
     find_pattern::Opts {
         match_case: f.match_case,
@@ -647,8 +682,8 @@ fn find(s: &mut Session, v: &Value) -> CmdResult {
         s.push_ui_request(json!({"focus": "navSearch"}));
         return Ok(json!({"count": s.find.results.len()}));
     }
-    let story = s.sel.focus.story;
-    s.find.results = search(s, story)?;
+    s.find.scope = Some(reach_stories(s, v));
+    s.find.results = search_reach(s, v)?;
     // Select the first match after the caret.
     let caret = s.sel.focus.clone();
     let idx = s.find.results.iter().position(|(a, _)| *a >= caret).unwrap_or(0);
@@ -687,13 +722,23 @@ fn advanced_find(s: &mut Session, v: &Value) -> CmdResult {
     let n = found.len();
     let matches: Vec<Value> = found.iter().take(200).map(|(a, b)| json!({"start": pos_json(a), "end": pos_json(b)})).collect();
     s.find.current = 0;
+    // Advanced Find owns the scope it just searched (#3270): Find Next keeps following it after
+    // its query changes, instead of a `edit.find` scope that may be stale by now.
+    s.find.scope = Some(vec![story]);
     s.find.results = found;
     Ok(json!({"count": n, "matches": matches, "highlight": s.find.highlight}))
 }
 
 fn step(s: &mut Session, dir: i64) -> CmdResult {
-    let story = s.sel.focus.story;
-    s.find.results = search(s, story)?;
+    // Find Next/Previous keep the scope of the last `edit.find`: an explicit `story` search
+    // stays in that story, a reach search from a note also covers the body (#3270). With no
+    // Find of its own, a Find Next searches the caret's story only, as before.
+    step_in(s, dir, &s.find.scope.clone().unwrap_or(vec![s.sel.focus.story]))
+}
+
+/// Find Next/Previous over the given stories, in document order.
+fn step_in(s: &mut Session, dir: i64, stories: &[StoryRef]) -> CmdResult {
+    s.find.results = search_stories(s, stories)?;
     let n = s.find.results.len();
     if n == 0 {
         return Err(CmdError::Failed("no matches".into()));
@@ -730,7 +775,9 @@ fn replace(s: &mut Session, v: &Value) -> CmdResult {
     if let Some(f) = results.into_iter().find(|f| f.a == a && f.b == b) {
         super::paste_text(s, &f.rep.unwrap_or_default())?;
     }
-    let _ = step(s, 1);
+    // Replace keeps the caret's story: its stepping (Word's Replace All covers every story,
+    // a separate tracked matter) must not cross into the scope a Find last searched (#3300).
+    let _ = step_in(s, 1, &[story]);
     Ok(json!({"remaining": search(s, story)?.len()}))
 }
 

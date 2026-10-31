@@ -915,6 +915,108 @@ fn find_replace() {
 }
 
 #[test]
+fn find_and_select_reach_the_body_from_a_note() {
+    // #3270: `references.footnote` leaves the caret in the note; a search for text that exists
+    // only in the body must still find it, the way Word's Find covers the main text. Replace
+    // keeps the caret's story (its scope is a separate, already-tracked matter).
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Main sentence. Catalogue here."}));
+    run(&mut s, "references.footnote", json!({"text": "Footnote text."}));
+    assert_ne!(s.sel.focus.story, StoryRef::Body, "the footnote leaves the caret in the note");
+
+    // `edit.find` finds the body text and moves the selection into the body.
+    let r = run(&mut s, "edit.find", json!({"text": "Main sentence"}));
+    assert!(r["count"].as_u64().unwrap() >= 1, "the body is searched from a note: {r}");
+    assert_eq!(s.sel.focus.story, StoryRef::Body, "the first body match becomes the selection");
+
+    // `select.text` finds it too, from the other note.
+    run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [0], "off": 0}}));
+    run(&mut s, "references.footnote", json!({"text": "Second note."}));
+    let r = run(&mut s, "select.text", json!({"text": "Main sentence"}));
+    assert_eq!(s.sel.focus.story, StoryRef::Body, "select.text: {r}");
+
+    // An explicit `story` searches only that story.
+    run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [0], "off": 0}}));
+    run(&mut s, "references.footnote", json!({"text": "Third note."}));
+    run(&mut s, "select.text", json!({"text": "Main sentence", "story": "body"}));
+    assert_eq!(s.sel.focus.story, StoryRef::Body);
+    assert!(s.run("select.text", &json!({"text": "Third note.", "story": "body"})).is_err(), "an explicit story searches only that story");
+
+    // Replace replaces in the caret's story only: from a fresh note the body stays untouched.
+    run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [0], "off": 0}}));
+    run(&mut s, "references.footnote", json!({"text": "Fourth note."}));
+    let before = s.doc.plain_text(StoryRef::Body);
+    let r = run(&mut s, "edit.replaceAll", json!({"text": "Main sentence", "with": "Replaced"}));
+    assert_eq!(r["replaced"], 0, "replace stays on the caret's story");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), before);
+}
+
+#[test]
+fn find_next_keeps_the_scope_of_the_last_search() {
+    // #3270: Find Next/Previous keep the scope of the last `edit.find` - an explicit `story`
+    // stays in that story, a reach search from the note also covers the body - while Replace
+    // keeps stepping inside its own story however wide Find's scope was (#3300).
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Main needle."}));
+    run(&mut s, "references.footnote", json!({"text": "Note needle."}));
+
+    // An explicit `story` search keeps Find Next in that story, wherever the caret moved.
+    run(&mut s, "edit.find", json!({"text": "needle", "story": {"part": 1}}));
+    run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [0], "off": 0}}));
+    run(&mut s, "edit.findNext", json!({}));
+    assert_eq!(s.sel.focus.story, StoryRef::Part(1), "Find Next stays in the story of the last search");
+
+    // A reach search from the note counts the body and the note together, in document order.
+    run(&mut s, "caret.set", json!({"pos": {"story": {"part": 1}, "path": [0], "off": 5}}));
+    let r = run(&mut s, "edit.find", json!({"text": "needle"}));
+    assert_eq!(r["count"], 2, "from the note the body is searched too: {r}");
+    run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [0], "off": 12}}));
+    let r = run(&mut s, "edit.findNext", json!({}));
+    assert_eq!(r["count"], 2, "the stored scope covers the note too: {r}");
+    assert_eq!(s.sel.focus.story, StoryRef::Part(1), "the next scope match wraps into the note");
+
+    // Occurrence numbers count in document order, the way Find reports matches: behind the
+    // caret the body's own match comes first, the note's own second, wherever the caret sat.
+    run(&mut s, "select.text", json!({"text": "needle"}));
+    assert_eq!(s.sel.focus.story, StoryRef::Body, "occurrence 1 is the body match in document order");
+    run(&mut s, "caret.set", json!({"pos": {"story": {"part": 1}, "path": [0], "off": 5}}));
+    run(&mut s, "select.text", json!({"text": "needle", "occurrence": 2}));
+    assert_eq!(s.sel.focus.story, StoryRef::Part(1), "occurrence 2 is the note's own match");
+
+    // Replace replaces in its own story and only steps there, so pressing it past the note's
+    // last match cannot drift into the body just because Find last searched a wider scope.
+    run(&mut s, "select.text", json!({"text": "needle", "story": {"part": 1}}));
+    for _ in 0..4 {
+        let r = run(&mut s, "edit.replace", json!({"text": "needle", "with": "FOUND"}));
+        assert_eq!(s.sel.focus.story, StoryRef::Part(1), "Replace steps within its own story: {r}");
+    }
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Main needle.", "the body is untouched by Replace");
+
+    // From a header nothing reaches the body: a header, footer, comment or text box is
+    // searched alone, only the explicit `story` value widens to it.
+    let hdr = s.doc.add_part(
+        wordcraft_doc::PartKind::Header,
+        vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Header needle.", Default::default()))],
+    );
+    run(&mut s, "caret.set", json!({"pos": {"story": {"part": hdr}, "path": [0], "off": 0}}));
+    let r = run(&mut s, "edit.find", json!({"text": "Main needle"}));
+    assert_eq!(r["count"], 0, "no body reach from a header: {r}");
+    run(&mut s, "caret.set", json!({"pos": {"story": {"part": 1}, "path": [0], "off": 5}}));
+    let r = run(&mut s, "edit.find", json!({"text": "Main needle"}));
+    assert_eq!(r["count"], 1, "from the footnote the body is still reached: {r}");
+
+    // Advanced Find owns the scope of its own query: after it rewrites the results with a
+    // selection-scoped search, Find Next follows it, not the stale body-only one.
+    run(&mut s, "edit.find", json!({"text": "Main", "story": "body"}));
+    run(&mut s, "select.text", json!({"text": "FOUND", "story": {"part": 1}}));
+    let r = run(&mut s, "edit.advancedFind", json!({"text": "FOUND", "in": "selection"}));
+    assert_eq!(r["count"], 1, "advanced find: {r}");
+    let r = run(&mut s, "edit.findNext", json!({}));
+    assert_eq!(r["count"], 1, "Find Next follows Advanced Find's scope: {r}");
+    assert_eq!(s.sel.focus.story, StoryRef::Part(1));
+}
+
+#[test]
 fn find_replace_special_codes() {
     // ^p finds paragraph marks across paragraphs; Replace All with ^p splits paragraphs and is one undo step.
     let mut s = s();
