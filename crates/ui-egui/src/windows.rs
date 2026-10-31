@@ -297,20 +297,22 @@ impl WordApp {
         (viewport, crate::control::SurfaceGeometry::from_viewport(&info, screen_rect, max_texture_side, ctx))
     }
 
-    /// The desktop's monitors, in points like the windows' rectangles; empty when unknown.
-    fn monitors(&self, ctx: &egui::Context) -> Vec<egui::Rect> {
-        let pixels_per_point = ctx.pixels_per_point();
-        self.services.monitors.as_ref().map(|ask| ask().into_iter().map(|m| m / pixels_per_point).collect()).unwrap_or_default()
-    }
-
     /// A window opened since the last frame cascades on the monitor of the window before it.
     /// The driver, left to itself, guesses that monitor from the window's top-left corner, which
     /// on Windows is a few pixels outside a maximized window's monitor: it took the monitor up
     /// and to the left, one that needn't exist, and the new window opened off screen.
+    ///
+    /// Each window's rectangle is in points of its own scale, so the monitor is picked in physical
+    /// pixels, and the bounds go back to the points of the window the cascade starts from.
     fn bound_new_window(&self, ctx: &egui::Context, list: &WindowList<u64>, viewports: &mut Viewports) -> Option<WindowId> {
         let newest = list.ids().last();
         if newest != self.windows.newest {
-            let monitor = list.cascade_origin(newest).and_then(|w| window_geometry::monitor_of(w.into(), &self.monitors(ctx)));
+            let origin = list.recent().filter(|id| Some(*id) != newest).find_map(|id| Some((id, list.outer_rect(id)?)));
+            let monitor = origin.and_then(|(id, rect)| {
+                let scale = ctx.input_for(viewports.viewport_id(id), |i| i.pixels_per_point());
+                let ask = self.services.monitors.as_ref()?;
+                Some(window_geometry::monitor_of(egui::Rect::from(rect) * scale, &ask())? / scale)
+            });
             viewports.set_bounds(monitor.map(Into::into));
         }
         newest
