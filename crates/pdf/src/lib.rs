@@ -54,6 +54,7 @@ use wordcraft_metafile::{Picture, PlacedItem};
 
 mod export;
 mod exporter;
+mod forms;
 mod glyphs;
 mod metadata;
 mod options;

@@ -1,4 +1,5 @@
 use super::exporter::Exporter;
+use super::forms;
 use super::metadata::metadata;
 use super::options::{PdfError, PdfOptions};
 use super::paint::{clamp_side, ok};
@@ -41,7 +42,7 @@ fn export_layout_inner(doc: &Document, lay: &DocLayout, opts: &PdfOptions) -> Re
     let mut outlined = HashSet::new();
     loop {
         match write_attempt(doc, lay, opts, &pages, &outlined)? {
-            Attempt::Done(bytes) => return Ok(bytes),
+            Attempt::Done(bytes) => return add_form_fields(doc, lay, opts, &pages, bytes),
             Attempt::BadFont(id, msg) if outlined.len() < MAX_OUTLINED_FONTS && outlined.insert(id) => {
                 log::warn!("PDF: {msg}; its text is drawn as outlines");
             }
@@ -58,6 +59,40 @@ enum Attempt {
     Done(Vec<u8>),
     /// The face with this id could not be embedded (and why).
     BadFont(u32, String),
+}
+
+/// `pdf` with the fillable fields `opts` asks for, on the exported `pages` (layout indexes).
+fn add_form_fields(doc: &Document, lay: &DocLayout, opts: &PdfOptions, pages: &[usize], pdf: Vec<u8>) -> Result<Vec<u8>, PdfError> {
+    // Fields sit where layout put them: none when a page is drawn scaled or moved (Print
+    // Markup's comments beside it, another paper size).
+    let as_laid_out = pages.iter().all(|&i| {
+        lay.pages.get(i).is_some_and(|pg| {
+            let f = Fit::of(pg, opts.paper);
+            (f.k - 1.0).abs() < 1e-6 && f.dx.abs() < 1e-6 && f.dy.abs() < 1e-6
+        })
+    });
+    if !opts.form_fields || !as_laid_out {
+        return Ok(pdf);
+    }
+    // Layout pages to output pages: a field on every page it is printed on (a page listed twice
+    // has its fields twice, unique names keeping them apart); fields on pages left out go too.
+    let mut fields: Vec<forms::FormField> = forms::collect(doc, lay)
+        .into_iter()
+        .flat_map(|f| {
+            pages
+                .iter()
+                .enumerate()
+                .filter(|&(_, &p)| p == f.page)
+                .map(|(i, _)| {
+                    let mut copy = f.clone();
+                    copy.page = i;
+                    copy
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    forms::unique_names(&mut fields);
+    forms::add_acroform(pdf, &fields).map_err(|e| PdfError::Write(format!("form fields: {e}")))
 }
 
 fn write_attempt(doc: &Document, lay: &DocLayout, opts: &PdfOptions, pages: &[usize], outlined: &HashSet<u32>) -> Result<Attempt, PdfError> {
