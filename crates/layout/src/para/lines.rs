@@ -107,7 +107,7 @@ fn has_content(pl: &ParaLayout, c0: usize, j: usize) -> bool {
 /// control's start, a bookmark) and floating objects' anchors take no room and don't count (Word:
 /// a picture a little wider than the line, after an anchor, stays on the first line rather than
 /// leaving the anchor a line of its own).
-fn takes_room(c: &Cluster) -> bool {
+pub(crate) fn takes_room(c: &Cluster) -> bool {
     c.kind != ClKind::Marker && !(matches!(c.kind, ClKind::Object(_)) && c.adv == 0.0 && c.obj_h == 0.0)
 }
 
