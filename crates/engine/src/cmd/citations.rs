@@ -20,10 +20,10 @@ mod styles;
 
 use cross_refs::cross_ref;
 pub use cross_refs::{caption_labels, ref_targets};
-#[cfg(test)]
-use generated::ENTRY_STYLE;
 pub(crate) use generated::generated_list;
 use generated::table_of_figures;
+#[cfg(test)]
+use generated::{ENTRY_STYLE, list_kind};
 pub use generated::{figures_instr, update_generated};
 pub use render::{cite, entry};
 pub use sources::update_citations;
