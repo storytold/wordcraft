@@ -75,7 +75,7 @@ pub(super) fn nav(app: &mut WordApp, ui: &mut Ui) {
                 d.insert_temp(seen, current);
                 last != Some(current)
             });
-            for (i, (a, b)) in results.iter().enumerate().take(500) {
+            for (i, (a, b)) in results.iter().enumerate().skip(results_window(results.len(), current).start).take(MAX_RESULT_ROWS) {
                 let Some(p) = app.session.doc.para_at(a) else { continue };
                 let from = p.clamp(a.off.saturating_sub(30));
                 let to = p.clamp((b.off + 40).min(p.len()));
@@ -177,6 +177,19 @@ fn result_button(ui: &mut Ui, icon: &str, name: &str) -> egui::Response {
 }
 
 /// The search result the selection is on, if it is one.
+/// Most search results the Results list shows at once.
+const MAX_RESULT_ROWS: usize = 500;
+
+/// The results the Results list shows, of `len`: the first [`MAX_RESULT_ROWS`], or as many around
+/// `current` when it is past them, so the result the arrows are on is always listed and marked.
+pub(super) fn results_window(len: usize, current: Option<usize>) -> std::ops::Range<usize> {
+    let start = match current {
+        Some(c) if c >= MAX_RESULT_ROWS => c.saturating_sub(MAX_RESULT_ROWS / 2).min(len.saturating_sub(MAX_RESULT_ROWS)),
+        _ => 0,
+    };
+    start..len.min(start.saturating_add(MAX_RESULT_ROWS))
+}
+
 fn current_result(app: &WordApp) -> Option<usize> {
     let sel = app.session.sel.ordered();
     app.session.find.results.iter().position(|r| *r == sel)

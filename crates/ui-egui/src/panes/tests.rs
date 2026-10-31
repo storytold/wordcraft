@@ -415,6 +415,24 @@ fn built_in_styles_grey_out_delete_in_the_styles_pane() {
     assert!(!delete_is_disabled("Callout"), "the custom style's Delete stays enabled");
 }
 
+/// #5019: the Results list shows 500 results at most; once the arrows go past them, it shows the
+/// 500 around the current result, so that result is listed, marked and scrolled to.
+#[test]
+fn the_results_list_always_holds_the_current_result() {
+    use super::nav::results_window;
+    assert_eq!(results_window(30, None), 0..30);
+    assert_eq!(results_window(30, Some(29)), 0..30);
+    assert_eq!(results_window(2000, None), 0..500);
+    assert_eq!(results_window(2000, Some(499)), 0..500, "the list doesn't move while the result is in the first 500");
+    assert_eq!(results_window(2000, Some(500)), 250..750);
+    assert_eq!(results_window(2000, Some(1200)), 950..1450);
+    assert_eq!(results_window(2000, Some(1999)), 1500..2000, "the last result: the last 500");
+    for (len, current) in [(501, 500), (2000, 777), (usize::MAX, usize::MAX - 1)] {
+        let w = results_window(len, Some(current));
+        assert!(w.contains(&current) && w.len() <= 500, "{len}, {current}: {w:?}");
+    }
+}
+
 /// #5019: the Navigation pane counts the search result the selection is on, and its arrows, and
 /// Enter / Shift+Enter in its search box, go to the next and previous results, round at the ends.
 #[test]
