@@ -1,7 +1,7 @@
 use egui_kittest::kittest::Queryable;
 use serde_json::json;
 
-use super::{HOME_TEMPLATES, TEMPLATES, matching_templates};
+use super::{HOME_TEMPLATES, TEMPLATES, greeting, matching_templates};
 use crate::{Services, WordApp};
 
 /// #1714: every side-menu item has its own icon, a drawn one (an unknown name would fall back
@@ -1053,4 +1053,21 @@ fn backstage_save_as_sidebar_opens_save_as_page() {
     h.get_by_label("Save As").click();
     h.run_steps(4);
     assert_eq!(h.state().ui.backstage_page, "saveAs");
+}
+
+/// #4870: the greeting goes by the hour on the user's own clock: morning until noon, afternoon
+/// until six, evening after, and an hour of 10 in Brazil is morning (it was 13 by the UTC clock).
+#[test]
+fn the_greeting_follows_the_hour_of_the_day() {
+    for (hour, want) in [
+        (0, "Good morning"),
+        (10, "Good morning"),
+        (11, "Good morning"),
+        (12, "Good afternoon"),
+        (17, "Good afternoon"),
+        (18, "Good evening"),
+        (23, "Good evening"),
+    ] {
+        assert_eq!(greeting(hour), want, "hour {hour}");
+    }
 }
