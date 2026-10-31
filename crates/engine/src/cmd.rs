@@ -340,19 +340,19 @@ pub(crate) struct InsertEffect {
 
 /// Insert typed text at the caret (replacing the selection), with pending formatting and track changes.
 pub fn type_text(s: &mut Session, text: &str) -> Result<(), CmdError> {
-    insert_text(s, text, true).map(|_| ())
+    insert_text(s, text, true, None).map(|_| ())
 }
 
 /// [`type_text`] with the effect the insertion had.
 pub(crate) fn type_text_effect(s: &mut Session, text: &str) -> Result<InsertEffect, CmdError> {
-    insert_text(s, text, true)
+    insert_text(s, text, true, None)
 }
 
 /// Insert pasted plain text like [`type_text`], except that its paragraph separators are text
 /// being transferred, not Enter key presses: an empty list item between them stays (Enter on
 /// one would end the list).
 pub fn paste_text(s: &mut Session, text: &str) -> Result<(), CmdError> {
-    insert_text(s, text, false).map(|_| ())
+    insert_text(s, text, false, None).map(|_| ())
 }
 
 /// Inserts typed or pasted text at the caret: resolves field ends and content-control placeholders,
@@ -361,7 +361,12 @@ pub fn paste_text(s: &mut Session, text: &str) -> Result<(), CmdError> {
 /// text; a one-line control suppresses typed breaks only. It gives an otherwise undirected paragraph
 /// right-to-left direction when its first strong letter is RTL, and returns whether content or state
 /// changed.
-fn insert_text(s: &mut Session, text: &str, enter: bool) -> Result<InsertEffect, CmdError> {
+/// Insert typed text in a chosen language without losing caret formatting or tracked changes.
+pub fn type_text_with_lang(s: &mut Session, text: &str, language: Option<&str>) -> Result<(), CmdError> {
+    insert_text(s, text, true, language).map(|_| ())
+}
+
+fn insert_text(s: &mut Session, text: &str, enter: bool, language: Option<&str>) -> Result<InsertEffect, CmdError> {
     let mut props = s.typing_props();
     if s.sel.is_collapsed() {
         s.sel = crate::Selection::caret(s.doc.past_field_ends(&s.sel.focus));
@@ -376,6 +381,7 @@ fn insert_text(s: &mut Session, text: &str, enter: bool) -> Result<InsertEffect,
     if !enter {
         props = props.without_symbol();
     }
+    if let Some(language) = language { props.lang = Some(language.to_string()); }
     let deletion = delete_selection_effect(s)?;
     // Typed text is new: never deleted, and not a formatting change of the text around it.
     props.fmt_change = None;

@@ -186,9 +186,9 @@ pub(super) fn insert(app: &mut WordApp, ui: &mut Ui) {
             );
         });
         stack(ui, |ui| {
-            small(ui, app, "signature", None, "Signature Line", crate::widgets::ButtonAction::new("insert.signatureLine", json!({}), false));
-            small(ui, app, "dateTime", None, "Date & Time", crate::widgets::ButtonAction::new("insert.dateTime", json!({}), false));
-            small(ui, app, "object", None, "Object", crate::widgets::ButtonAction::new("insert.object", json!({}), false));
+            small(ui, app, "signature", None, "Signature Line", "insert.signatureLine", json!({}), false);
+            small(ui, app, "dateTime", None, "Date & Time", "ui.dialog", json!({"name": "dateTime"}), false);
+            small(ui, app, "object", None, "Object", "insert.object", json!({}), false);
         });
     });
     group(ui, "Symbols", None, app, |ui, app| {
