@@ -78,17 +78,20 @@ fn first_para(l: &DocLayout) -> std::sync::Arc<para::ParaLayout> {
 }
 
 #[test]
-fn larger_east_asian_text_takes_whole_cells_and_never_overlaps() {
-    // A title at 1.375 times the default size (22 pt over a 16 pt grid): two cells a character,
-    // not one cell narrower than the glyph.
-    let (mut d, size, pitch) = tight_grid("关于通知");
-    if let Some(Block::Para(p)) = d.body.first_mut().map(std::sync::Arc::make_mut) {
-        p.runs[0].props.size = Some(size * 1.375);
-    }
-    let g = first_para(&lay(&d));
-    for c in &g.clusters {
-        assert!((c.adv - 2.0 * pitch).abs() < 0.01, "advance {} for pitch {pitch}", c.adv);
-        assert!(c.adv >= size * 1.375, "a cell narrower than its glyph");
+fn east_asian_text_of_any_size_keeps_its_size_plus_the_grid_adjustment() {
+    // A title at 1.375 times the default size (22 pt over a 16 pt grid) advances its own size
+    // plus the pitch's difference from the default size, not whole cells, and smaller text too:
+    // WPS gives 22 pt text 21.8 pt and 12 pt text 11.8 pt on a 15.8 pt grid for 16 pt.
+    for scale in [1.375, 0.75] {
+        let (mut d, size, pitch) = tight_grid("关于通知");
+        if let Some(Block::Para(p)) = d.body.first_mut().map(std::sync::Arc::make_mut) {
+            p.runs[0].props.size = Some(size * scale);
+        }
+        let g = first_para(&lay(&d));
+        for c in &g.clusters {
+            let want = size * scale + pitch - size;
+            assert!((c.adv - want).abs() < 0.01, "advance {} for {} pt on pitch {pitch}", c.adv, size * scale);
+        }
     }
     // Text at the default size keeps one cell, even on a pitch a little under that size.
     let (d, _, pitch) = tight_grid("关于通知");
@@ -149,14 +152,17 @@ fn character_indents_ignore_the_paragraph_mark_size_on_a_grid() {
 }
 
 #[test]
-fn grid_cells_round_up_only_past_a_whole_cell() {
-    let grid = |font_size: f32| para::Grid { line: None, chars: Some(font_size), font_size, snap_all: false };
-    assert_eq!(grid(16.0).cells(16.0), 1.0);
-    assert_eq!(grid(16.0).cells(16.000_001), 1.0, "rounding noise");
-    assert_eq!(grid(16.0).cells(12.0), 1.0);
-    assert_eq!(grid(16.0).cells(22.0), 2.0);
-    assert_eq!(grid(54.0).cells(54.5), 2.0, "half a point past the cell");
-    assert_eq!(grid(16.0).cells(f32::NAN), 1.0);
+fn grid_advance_is_the_size_plus_the_adjustment() {
+    let grid = |pitch: f32| para::Grid { line: None, chars: Some(pitch), font_size: 16.0, snap_all: false };
+    let near = |a: Option<f32>, b: f32| a.is_some_and(|a| (a - b).abs() < 1e-4);
+    assert!(near(grid(15.8).advance(16.0), 15.8));
+    assert!(near(grid(15.8).advance(22.0), 21.8));
+    assert!(near(grid(15.8).advance(54.5), 54.3));
+    assert!(near(grid(15.8).advance(12.0), 11.8));
+    assert!(near(grid(18.0).advance(16.0), 18.0), "a wider pitch adds space");
+    assert!(near(grid(15.8).advance(f32::NAN), 15.8), "an unreadable size takes the pitch");
+    assert!(near(grid(2.0).advance(4.0), 0.0), "never negative");
+    assert_eq!(para::Grid { line: None, chars: None, font_size: 16.0, snap_all: false }.advance(16.0), None);
 }
 
 #[test]
