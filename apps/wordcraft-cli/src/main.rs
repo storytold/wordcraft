@@ -27,6 +27,8 @@ USAGE:
   wordcraft-cli info <file>                   pages, words, paragraphs, properties (JSON)
   wordcraft-cli text <file>                   plain text
   wordcraft-cli inspect <file>                document structure (JSON)
+  wordcraft-cli audit <file>                  report hidden information in a .docx file (JSON);
+                                              exits 1 when findings exist, 2 when the audit cannot run
   wordcraft-cli render <file> <out.png> [--page N] [--scale S]
   wordcraft-cli run [--file F | --template T] [--script FILE|-] --cmd 'id={json}' [--cmd …]
                     [--save OUT] [--print] [--author NAME]
@@ -71,7 +73,7 @@ same output on every machine.
 ";
 
 /// The subcommands, in `USAGE` order; `--help` or `-h` after any of them prints `USAGE` (#968).
-const SUBCOMMANDS: &[&str] = &["convert", "info", "text", "inspect", "render", "run", "commands", "parity", "mcp", "zotero"];
+const SUBCOMMANDS: &[&str] = &["convert", "info", "text", "inspect", "audit", "render", "run", "commands", "parity", "mcp", "zotero"];
 
 fn wants_help(cmd: &str, rest: &[String]) -> bool {
     SUBCOMMANDS.contains(&cmd) && rest.iter().any(|a| a == "--help" || a == "-h")
@@ -98,9 +100,24 @@ fn open(path: &Path, password: Option<&str>) -> Result<Session, String> {
     Ok(s)
 }
 
+/// Report hidden information in a `.docx` file as JSON on stdout.
+///
+/// Exit contract: `Ok(())` (exit 0) when the file is clean, `Failure::Findings`
+/// (exit 1) when findings exist so scripts and CI can gate on it, and
+/// `Failure::AuditError` (exit 2) when the audit itself cannot run.
+fn audit(path: &Path) -> Result<(), Failure> {
+    let bytes = std::fs::read(path).map_err(|e| Failure::AuditError(format!("audit: cannot read {}: {e}", path.display())))?;
+    let report = wordcraft_audit::audit_report(&bytes).map_err(|e| Failure::AuditError(format!("audit: {}: {e}", path.display())))?;
+    let findings = &report.findings;
+    let json = serde_json::json!({ "file": path.display().to_string(), "findings": findings, "count": findings.len(), "scanned": report.scanned, "not_scanned": report.not_scanned });
+    let text = serde_json::to_string_pretty(&json).unwrap_or_default();
+    write_stdout(|o| writeln!(o, "{text}"))?;
+    if findings.is_empty() { Ok(()) } else { Err(Failure::Findings(findings.len())) }
+}
+
 /// The commands that open a file, and which of their arguments not starting with `--` it is (as
 /// `pos` counts). `run` opens the value of `--file`.
-const OPENS_FILE: &[(&str, usize)] = &[("convert", 0), ("info", 0), ("text", 0), ("inspect", 0), ("render", 0), ("zotero", 1)];
+const OPENS_FILE: &[(&str, usize)] = &[("convert", 0), ("info", 0), ("text", 0), ("inspect", 0), ("audit", 0), ("render", 0), ("zotero", 1)];
 
 /// The arguments as text. Only the file the command opens may have a name that isn't valid Unicode,
 /// such as a Latin-1 one (#1440): it comes back as the path to open, and lossy among the arguments.
@@ -339,6 +356,10 @@ enum Failure {
     /// Whoever read stdout closed it (`wordcraft-cli commands --json | head`): there is nobody left
     /// to write to, so stop quietly and exit 0 like other command-line tools.
     StdoutClosed,
+    /// `audit` found hidden information: reported on stdout, exits 1 so scripts and CI can gate.
+    Findings(usize),
+    /// `audit` could not run at all (unreadable file, unparsable package): exits 2.
+    AuditError(String),
 }
 
 impl fmt::Display for Failure {
@@ -346,6 +367,8 @@ impl fmt::Display for Failure {
         match self {
             Failure::Error(e) => f.write_str(e),
             Failure::StdoutClosed => f.write_str("stdout closed"),
+            Failure::Findings(n) => write!(f, "audit: {n} finding(s)"),
+            Failure::AuditError(e) => f.write_str(e),
         }
     }
 }
@@ -475,6 +498,17 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             let mut s = open(paths.first().ok_or_else(missing_argument)?, password.as_deref())?;
             let tree = serde_json::to_string_pretty(&s.run("document.inspect", &json!({})).map_err(|e| e.to_string())?).unwrap_or_default();
             write_stdout(|o| writeln!(o, "{tree}"))
+        }
+        "audit" => {
+            // Usage errors mean the audit could not run (exit 2), never
+            // "findings present" (exit 1): a CI gate must not read a typo as
+            // hidden information.
+            validate_options("audit", &rest, &[]).map_err(Failure::AuditError)?;
+            let paths = positionals(&rest, &[]);
+            let text = paths.first().ok_or_else(|| Failure::AuditError(format!("missing argument\n\n{USAGE}")))?;
+            // The preserved OS path: `text` may have lost a non-UTF-8 file
+            // name (#1440), exactly like the `open` closure above.
+            audit(file.as_deref().unwrap_or(Path::new(text)))
         }
         "render" => {
             validate_options("render", &rest, RENDER_OPTIONS)?;
@@ -760,9 +794,16 @@ fn main() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     match run(&args) {
         Ok(()) | Err(Failure::StdoutClosed) => ExitCode::SUCCESS,
+        // `audit`: findings present — a deliberate non-error signal for CI gates.
+        Err(Failure::Findings(_)) => ExitCode::FAILURE,
         Err(Failure::Error(e)) => {
             eprintln!("wordcraft-cli: {e}");
             ExitCode::FAILURE
+        }
+        // `audit` could not run: distinct from "found something".
+        Err(Failure::AuditError(e)) => {
+            eprintln!("wordcraft-cli: {e}");
+            ExitCode::from(2)
         }
     }
 }
