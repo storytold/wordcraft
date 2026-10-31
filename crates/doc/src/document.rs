@@ -355,6 +355,7 @@ impl Document {
         self.story_text(s, TextMode::Final)
     }
 
+    /// The story's text in `mode`: [`Self::plain_text`], [`Self::shown_text`] or [`Self::final_text`].
     fn story_text(&self, s: StoryRef, mode: TextMode) -> String {
         let mut out = String::new();
         if let Some(bl) = self.story(s) {

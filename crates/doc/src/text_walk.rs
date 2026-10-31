@@ -137,6 +137,9 @@ pub(crate) enum TextMode {
     Final,
 }
 
+/// The blocks' text in `mode`, one paragraph per line and a table row per tab-separated line
+/// (nested cells flatten onto their row's line at `depth`); `Final` reads the visible
+/// projection — the text the `document.text` command returns.
 pub(crate) fn text_of(bl: &Blocks, out: &mut String, depth: usize, mode: TextMode, styles: &crate::styles::StyleSheet) {
     if depth > 16 {
         return;

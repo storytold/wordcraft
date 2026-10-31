@@ -3673,6 +3673,23 @@ fn select_text_counts_occurrences_of_the_visible_projection() {
     assert_eq!(run(&mut s, "document.text", json!({}))["text"], "aaY");
 }
 
+#[test]
+fn select_text_ends_the_match_before_hidden_text() {
+    // "fooSECRET bar" with "SECRET" hidden reads "foo bar"; selecting "foo" ends the match
+    // at the end of the visible "o" (raw offset 3), so an edit rewrites only "foo" and the
+    // hidden run stays in the paragraph.
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "fooSECRET bar"}));
+    run(&mut s, "select.text", json!({"text": "SECRET"}));
+    run(&mut s, "format.hidden", json!({"value": true}));
+    run(&mut s, "select.text", json!({"text": "foo"}));
+    run(&mut s, "text.insert", json!({"text": "X"}));
+    assert_eq!(run(&mut s, "document.text", json!({}))["text"], "X bar");
+    let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+    let runs: Vec<String> = p.run_ranges().map(|(r, _)| p.text[r].to_string()).collect();
+    assert!(runs.iter().any(|t| t == "SECRET"), "{runs:?}");
+}
+
 /// The author of the revision `rid` points to.
 fn author_of(s: &Session, rid: Option<u32>) -> Option<String> {
     rid.and_then(|r| s.doc.revisions.get(r as usize)).map(|r| r.author.clone())

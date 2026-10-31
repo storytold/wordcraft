@@ -492,10 +492,12 @@ fn select_text(s: &mut Session, v: &Value) -> CmdResult {
         let Some(p) = s.doc.para(story, &path) else { continue };
         let style = p.props.style.as_deref();
         let mut visible = String::with_capacity(p.text.len());
-        // map[visible byte offset] = paragraph byte offset, for 0..=visible.len(): each visible
-        // character maps its bytes to the paragraph's, and the final boundary to its end.
-        let mut map: Vec<usize> = Vec::with_capacity(p.text.len() + 1);
-        let mut last_end = 0;
+        // Per visible character: (its byte offset in `visible`, its raw start, its raw end).
+        // A match maps to the first matched character's raw start and the last matched
+        // character's raw end, so the selection never reaches past the match into hidden
+        // text sitting before the next visible character.
+        let mut chars: Vec<(usize, usize, usize)> = Vec::with_capacity(p.text.len());
+        let mut v = 0;
         for (r, c) in p.run_ranges() {
             let hidden = !include_hidden && !r.is_empty() && s.doc.styles.resolve_char(style, c).hidden;
             for (i, ch) in p.text[r.clone()].char_indices() {
@@ -503,16 +505,20 @@ fn select_text(s: &mut Session, v: &Value) -> CmdResult {
                     continue;
                 }
                 let o = r.start + i;
+                chars.push((v, o, o + ch.len_utf8()));
                 visible.push(ch);
-                map.extend(o..o + ch.len_utf8());
-                last_end = o + ch.len_utf8();
+                v += ch.len_utf8();
             }
         }
-        map.push(last_end);
         for (vi, _) in visible.match_indices(needle) {
             count += 1;
             if count == n {
-                let (start, end) = (map[vi], map[vi + needle.len()]);
+                // match_indices lands on character boundaries, so `vi` opens a visible
+                // character and `vi + needle.len()` closes the last matched one.
+                let at = chars.partition_point(|&(cv, _, _)| cv < vi);
+                let start = chars.get(at).map(|&(_, rs, _)| rs);
+                let end = chars.partition_point(|&(cv, _, _)| cv < vi + needle.len()).checked_sub(1).and_then(|k| chars.get(k)).map(|&(_, _, re)| re);
+                let (Some(start), Some(end)) = (start, end) else { continue };
                 s.sel = Selection { anchor: Pos { story, path: path.clone(), off: start }, focus: Pos { story, path: path.clone(), off: end } };
                 // Formatting picked for the old caret doesn't carry over (as `select.word`): what
                 // replaces the selection takes its formatting.

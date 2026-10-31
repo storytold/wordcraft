@@ -1434,6 +1434,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-01 | trivial | Progress log: ODT at ~90% (gap 19) |
 | 2026-10-29 | trivial | Progress log: corporate authors in bibliographies (#4848) |
 | 2026-10-30 | trivial | get_text omits hidden runs; select.text skips hidden occurrences unless includeHidden (PR #4993) |
+| 2026-10-31 | trivial | select.text ends a projection match at the last matched visible character, so an edit never reaches into hidden text before the next visible one (PR #4993) |
 | 2026-10-29 | trivial | Progress log: Table Properties follows the selection (#4857) |
 | 2026-11-01 | trivial | Progress log: a list inside a Markdown block quote stays quoted |
 | 2026-10-29 | trivial | Progress log: citation source and bibliography-number lookups (#4888) |
