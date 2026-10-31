@@ -958,6 +958,28 @@ fn turned_cell_text_exports_as_text() {
 }
 
 #[test]
+fn tate_chu_yoko_cluster_extracts_once() {
+    // 縦中横 draws a cluster shaped to several glyphs as one text item whose glyphs share its
+    // range: the PDF's text layer must hold the cluster once, not repeat it per glyph.
+    let text = "a1\u{301}b";
+    let start = text.find('1').expect("a digit");
+    let end = start + '1'.len_utf8() + '\u{301}'.len_utf8();
+    let mut d = Document::from_text(text);
+    d.last_section.text_direction = wordcraft_doc::props::TextDirection::Down;
+    d.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0))
+        .unwrap()
+        .format(start, end, &|c: &mut CharProps| {
+            c.font = Some("Source Sans 3".into());
+            c.east_asian_layout = Some(wordcraft_doc::props::EastAsianLayout { vert: Some(true), ..Default::default() });
+        })
+        .unwrap();
+    let extracted = extract_text(&export(&d, &PdfOptions::default()).unwrap()).concat();
+    // The cluster's text must be held once, not once per glyph.
+    let cluster = "1\u{301}";
+    assert_eq!(extracted.matches(cluster).count(), 1, "the cluster extracts once: {extracted:?}");
+}
+
+#[test]
 fn inline_chart_is_a_figure_with_its_text_inside_it() {
     use wordcraft_doc::graphic::{Graphic, GraphicItem, GraphicKind, TextAlign};
     use wordcraft_doc::props::Rgb;
