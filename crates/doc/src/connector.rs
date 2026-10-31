@@ -83,6 +83,11 @@ pub struct ShapeExtra {
     /// main colour (the shape's `stroke`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outline_fill: Option<crate::fill::Fill>,
+    /// An ActiveX control read from a file (`w:object` holding a `w:control`): the shape is its
+    /// placeholder, and saving writes the control back with its parts. See
+    /// [`crate::graphic::Embedded`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ole: Option<std::sync::Arc<crate::graphic::Embedded>>,
 }
 
 fn is_zero(v: &u32) -> bool {

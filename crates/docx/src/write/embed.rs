@@ -399,7 +399,20 @@ impl super::Writer<'_> {
         }
         set_rel_ids(&mut root, &ids, 0);
         if let Some((w, h, float, alt)) = resize {
-            self.resize_object(&mut root, w, h, float, alt, 0);
+            // An ActiveX control resizes only the VML shape the reader chose: the one it names by
+            // `w:shapeid`, else the first. Any other object resizes whole.
+            match root.child("w:control").map(|c| c.attr("w:shapeid").map(str::to_string)) {
+                Some(id) => {
+                    let shape = root.kids.iter_mut().find_map(|k| match k {
+                        xml::Node::El(c) if c.name == "v:shape" && id.as_deref().is_none_or(|id| c.attr("id") == Some(id)) => Some(c),
+                        _ => None,
+                    });
+                    if let Some(shape) = shape {
+                        self.resize_object(shape, w, h, float, alt, 0);
+                    }
+                }
+                None => self.resize_object(&mut root, w, h, float, alt, 0),
+            }
         }
         Some(root)
     }

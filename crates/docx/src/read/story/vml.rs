@@ -342,14 +342,60 @@ impl Reader<'_> {
     pub(super) fn read_object(&mut self, sc: &mut StoryCtx, obj: &El, rels: &Rels) -> Option<InlineObject> {
         let mut o = match self.read_vml(sc, obj, rels) {
             Some(o) => o,
-            None => {
-                let d = obj.child("w:drawing")?;
-                self.read_drawing(sc, d, rels)?
-            }
+            None => match obj.child("w:drawing").and_then(|d| self.read_drawing(sc, d, rels)) {
+                Some(o) => o,
+                None => return self.read_control(sc, obj, rels),
+            },
         };
+        // A control with no picture can come back as a plain VML shape (a recognised preset): keep
+        // the control, not that shape, so saving writes its markup and parts back.
+        if obj.child("w:control").is_some()
+            && !matches!(o, InlineObject::Image { .. })
+            && let Some(c) = self.read_control(sc, obj, rels)
+        {
+            return Some(c);
+        }
         if let InlineObject::Image { ole, .. } = &mut o {
             *ole = self.keep_embedded(obj, rels, &[]);
+            if ole.is_none() && obj.child("w:control").is_some() {
+                log::warn!("docx: an ActiveX control's parts can't be kept; its image is kept without the control");
+            }
         }
+        Some(o)
+    }
+
+    /// An ActiveX control (`w:object` with a `w:control`, ECMA-376 §17.3.3.19): usually it has no
+    /// picture, so it is drawn as an empty box of its VML shape's size, and kept whole so saving
+    /// writes the control and its `activeX` parts back.
+    fn read_control(&mut self, sc: &mut StoryCtx, obj: &El, rels: &Rels) -> Option<InlineObject> {
+        let control = obj.child("w:control")?;
+        // The shape the control names by `w:shapeid`; the first one when it names none.
+        let id = control.attr("w:shapeid");
+        let Some(shape) = obj.children("v:shape").find(|s| id.is_none_or(|id| s.attr("id") == Some(id))) else {
+            log::warn!("docx: an ActiveX control has no VML shape; it is left out");
+            return None;
+        };
+        let style = shape.attr("style").unwrap_or("");
+        let len = |k: &str| vml_style(style, k).and_then(|v| measure(v, 1.0)).unwrap_or(0.0).clamp(0.0, crate::units::MAX_LEN_PT);
+        let Some(ole) = self.keep_embedded(obj, rels, &[]) else {
+            log::warn!("docx: an ActiveX control's parts can't be kept; it is left out");
+            return None;
+        };
+        let mut o = InlineObject::Shape {
+            kind: ShapeKind::Rectangle,
+            w: len("width"),
+            h: len("height"),
+            fill: Some(wordcraft_doc::fill::Fill::solid(Rgb::WHITE)),
+            stroke: Some(Rgb::BLACK),
+            stroke_width: 0.75,
+            float: vml_float(shape, style, sc.in_hf),
+            story: None,
+            freeform: None,
+            effects: Default::default(),
+            extra: ShapeExtra { ole: Some(ole), ..Default::default() },
+        };
+        // The control's description (its VML shape's alt text) stays on the placeholder.
+        o.set_alt_text(shape.attr("alt").unwrap_or(""));
         Some(o)
     }
 
