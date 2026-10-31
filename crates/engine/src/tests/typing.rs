@@ -3838,11 +3838,6 @@ fn issues_1281_1045_english_dialects_proof_typed_text() {
     assert_eq!(words, ["21th"]);
 }
 
-/// An empty session (for tests that bind a `Session` to the name `s`).
-fn empty() -> Session {
-    s()
-}
-
 /// A session holding `text` in one paragraph with the caret at `off`.
 fn caret_in(text: &str, off: usize) -> Session {
     let mut s = s();
@@ -3857,7 +3852,7 @@ fn caret_page(s: &mut Session) -> Option<usize> {
     s.layout().page_of(&at)
 }
 
-/// Word for Mac and Windows (user-checked on Mac): a page break gets a paragraph of its own, and
+/// Word for Mac (user-checked; the Windows run agrees): a page break gets a paragraph of its own, and
 /// the caret goes on in the paragraph after it, on the new page, so the first Enter adds a line
 /// there and not one beside the break on the page before.
 #[test]
@@ -3909,12 +3904,12 @@ fn a_page_break_gets_a_paragraph_of_its_own() {
 #[test]
 fn a_page_break_stays_in_a_table_cell_and_a_one_line_control() {
     let brk = wordcraft_doc::para::PAGE_BREAK;
-    let mut s = empty();
+    let mut s = Session::new(wordcraft_doc::Document::new());
     run(&mut s, "insert.table", json!({"rows": 1, "cols": 1}));
     typ(&mut s, "a");
     run(&mut s, "text.pageBreak", json!({}));
     assert_eq!(s.doc.para_at(&s.sel.focus).map(|p| p.text.clone()), Some(format!("a{brk}")));
-    let mut s = empty();
+    let mut s = Session::new(wordcraft_doc::Document::new());
     run(&mut s, "developer.plainText", json!({}));
     typ(&mut s, "a");
     run(&mut s, "text.pageBreak", json!({}));
@@ -3924,7 +3919,7 @@ fn a_page_break_stays_in_a_table_cell_and_a_one_line_control() {
     let (inside, after) = (1 + w + 1, 1 + 2 * w + 2);
     for (a, b, expect) in [(0, inside, vec![brk.to_string(), format!("{obj}b{obj}y")]), (inside, after, vec![format!("x{obj}a{brk}{obj}y")])] {
         for (anchor, focus) in [(a, b), (b, a)] {
-            let mut s = empty();
+            let mut s = Session::new(wordcraft_doc::Document::new());
             typ(&mut s, "x");
             run(&mut s, "developer.plainText", json!({}));
             typ(&mut s, "ab");
@@ -3971,4 +3966,85 @@ fn backspace_and_delete_by_a_page_break_join_paragraphs_as_usual() {
     assert_eq!(paras(&s)[2], ("two".into(), None, false));
     run(&mut s, "text.backspace", json!({}));
     assert_eq!(texts(&s), ["one".to_string(), format!("{brk}two")]);
+}
+
+/// A selection is replaced by the break from its start: selecting a paragraph's first word leaves
+/// nothing to split off before the break, and a reversed selection acts the same.
+#[test]
+fn a_page_break_over_a_selection_goes_where_the_selection_starts() {
+    let brk = wordcraft_doc::para::PAGE_BREAK.to_string();
+    for (anchor, focus) in [(0, 3), (3, 0)] {
+        let mut s = caret_in("one two", 0);
+        s.sel = crate::Selection { anchor: Pos::body(0, anchor), focus: Pos::body(0, focus) };
+        run(&mut s, "text.pageBreak", json!({}));
+        assert_eq!(texts(&s), [brk.as_str(), " two"], "{anchor}..{focus}");
+        assert_eq!(s.sel.focus, Pos::body(1, 0), "{anchor}..{focus}");
+    }
+    for (anchor, focus) in [(4, 7), (7, 4)] {
+        let mut s = caret_in("one two", 0);
+        s.sel = crate::Selection { anchor: Pos::body(0, anchor), focus: Pos::body(0, focus) };
+        run(&mut s, "text.pageBreak", json!({}));
+        assert_eq!(texts(&s), ["one ", brk.as_str(), ""], "{anchor}..{focus}");
+    }
+}
+
+/// Layout › Breaks › Page is the same break as Ctrl+Enter.
+#[test]
+fn layout_break_page_gets_a_paragraph_of_its_own() {
+    let brk = wordcraft_doc::para::PAGE_BREAK.to_string();
+    let mut s = caret_in("onetwo", 3);
+    run(&mut s, "layout.break", json!({"kind": "page"}));
+    assert_eq!(texts(&s), ["one", brk.as_str(), "two"]);
+    assert_eq!(s.sel.focus, Pos::body(2, 0));
+}
+
+/// A break in a header (or any story but the body) stays inside its paragraph.
+#[test]
+fn a_page_break_in_a_header_stays_in_its_paragraph() {
+    let mut s = s();
+    let hid = s.doc.add_part(
+        wordcraft_doc::PartKind::Header,
+        vec![std::sync::Arc::new(wordcraft_doc::Block::Para(wordcraft_doc::Paragraph::with_text("head", Default::default())))],
+    );
+    s.doc.last_section.headers.default = Some(hid);
+    s.sel = crate::Selection::caret(Pos { story: StoryRef::Part(hid), path: wordcraft_doc::Path::top(0), off: 2 });
+    run(&mut s, "text.pageBreak", json!({}));
+    let head = s.doc.para(StoryRef::Part(hid), &wordcraft_doc::Path::top(0)).map(|p| p.text.clone());
+    assert_eq!(head, Some(format!("he{}ad", wordcraft_doc::para::PAGE_BREAK)));
+    assert_eq!(s.doc.container(StoryRef::Part(hid), &wordcraft_doc::Path::default()).map(|c| c.len()), Some(1));
+}
+
+/// Not compared with Word: the paragraphs a break splits off keep the paragraph's formatting, as
+/// Enter does, so a break in a heading or a list item sits in a paragraph of that heading or list.
+#[test]
+fn a_page_break_in_a_heading_or_list_item_splits_it_like_enter() {
+    let brk = wordcraft_doc::para::PAGE_BREAK.to_string();
+    let mut s = caret_in("onetwo", 3);
+    run(&mut s, "para.heading1", json!({}));
+    run(&mut s, "text.pageBreak", json!({}));
+    assert_eq!(texts(&s), ["one", brk.as_str(), "two"]);
+    let style = |s: &Session, i: usize| s.doc.body.get(i).and_then(|b| b.as_para()).and_then(|p| p.props.style.clone());
+    assert!((0..3).all(|i| style(&s, i) == style(&s, 0) && style(&s, i).is_some()), "{:?}", (0..3).map(|i| style(&s, i)).collect::<Vec<_>>());
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    typ(&mut s, "1. onetwo");
+    s.sel = crate::Selection::caret(Pos::body(0, 3));
+    run(&mut s, "text.pageBreak", json!({}));
+    assert_eq!(texts(&s), ["one", brk.as_str(), "two"]);
+    assert_eq!(paras(&s).iter().map(|p| p.1.is_some()).collect::<Vec<_>>(), [true, true, true]);
+}
+
+/// Tracked, the break and the paragraph marks around it are all insertions, and one undo takes
+/// the whole break back.
+#[test]
+fn a_tracked_page_break_is_one_undo_step() {
+    let brk = wordcraft_doc::para::PAGE_BREAK.to_string();
+    let mut s = caret_in("onetwo", 3);
+    s.doc.settings.track_changes = true;
+    run(&mut s, "text.pageBreak", json!({}));
+    assert_eq!(texts(&s), ["one", brk.as_str(), "two"]);
+    let para = |s: &Session, i: usize| s.doc.body.get(i).and_then(|b| b.as_para()).cloned();
+    assert!(para(&s, 0).is_some_and(|p| p.mark.ins.is_some()));
+    assert!(para(&s, 1).is_some_and(|p| p.mark.ins.is_some() && p.props_of_char(0).ins.is_some()));
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(texts(&s), ["onetwo"]);
 }
