@@ -92,6 +92,15 @@ config works across the suite) keep the agent to the folders you give it:
 - A refused path is an ordinary tool error the agent can read and correct, for example
   `automation path rejected: outside the write root /work/project/out: /etc/x.docx` or
   `automation filesystem access is not granted: write authority is absent: /work/project/out/x.docx`.
+  The server also writes it to standard error, which MCP clients keep as the server's log, with
+  the path as resolved, so you can review what the agent tried to reach (#4396):
+  `wordcraft-cli: automation path rejected: outside the read root /work/project: /work/project/../secret.txt (resolved: /work/secret.txt)`.
+  A refused write through a link also names the entry it would replace (`…, entry /elsewhere/link.docx`).
+  A refusal for a missing root (no write root, say) shows the path as given only: it is refused
+  before the path is looked up, and the log doesn't look it up either.
+  Control characters and bidi marks in a path are shown as `\u{…}` escapes, and a line longer
+  than 4 KiB is cut short with the number of bytes left out. A folder listing that
+  skips an entry outside the root logs nothing, and no other warnings are written.
 - The roots must be existing folders; a missing one stops the server with an error. Each flag is
   given once (`--flag <dir>` or `--flag=<dir>`).
 

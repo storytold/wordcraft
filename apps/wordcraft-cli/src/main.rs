@@ -190,6 +190,51 @@ fn set_author(s: &mut Session, name: &str) -> Result<(), String> {
     s.run("file.setAuthor", &json!({"name": name})).map(|_| ()).map_err(|e| format!("--author: {e}"))
 }
 
+/// The MCP server's log of paths the automation roots refuse (#4396), on standard error, which MCP
+/// clients keep as the server's log (stdout carries the protocol). Only the engine's `automation`
+/// records: other warnings quote document content and stay unlogged here, as before.
+struct StderrLog;
+
+impl log::Log for StderrLog {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        metadata.target() == "automation" && metadata.level() <= log::Level::Warn
+    }
+
+    fn log(&self, record: &log::Record) {
+        if self.enabled(record.metadata()) {
+            let line = log_line(&record.args().to_string());
+            // Not `eprintln!`, which panics when standard error is gone.
+            let _ = writeln!(std::io::stderr().lock(), "wordcraft-cli: {line}");
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+/// Sends refused automation paths to standard error; a logger already installed is kept.
+fn install_refusal_log() {
+    if log::set_logger(&StderrLog).is_ok() {
+        log::set_max_level(log::LevelFilter::Warn);
+    }
+}
+
+/// The most a logged line may take: a path can be as long as the agent likes.
+const MAX_LOG_LINE: usize = 4096;
+
+/// A refusal as one terminal line: the path comes from the agent, so it must not end the line or
+/// drive the terminal, and a huge one is cut short.
+fn log_line(message: &str) -> String {
+    let mut line = String::new();
+    for (i, c) in message.char_indices() {
+        if line.len() >= MAX_LOG_LINE {
+            line.push_str(&format!("… ({} more bytes)", message.len() - i));
+            break;
+        }
+        if breaks_line(c) { line.extend(c.escape_unicode()) } else { line.push(c) }
+    }
+    line
+}
+
 fn arg_value(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
 }
@@ -596,6 +641,7 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             }
         }
         "mcp" => {
+            install_refusal_log();
             let (roots, rest) = automation_roots("mcp", &rest)?;
             validate_options("mcp", &rest, MCP_OPTIONS)?;
             let author = arg_value(&rest, "--author");
@@ -721,13 +767,17 @@ fn escape_peer(s: &str) -> String {
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
-            c if c.is_control() || matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{2028}'..='\u{202e}' | '\u{2066}'..='\u{2069}') => {
-                out.extend(c.escape_unicode())
-            }
+            c if breaks_line(c) => out.extend(c.escape_unicode()),
             c => out.push(c),
         }
     }
     out
+}
+
+/// A character that could end a diagnostic line, drive the terminal or reorder the line: control
+/// characters (newline, escape, C1…), line separators and bidi marks and overrides.
+fn breaks_line(c: char) -> bool {
+    c.is_control() || matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{2028}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
 }
 
 fn parity_markdown(p: &Value) -> String {
