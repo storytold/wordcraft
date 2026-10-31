@@ -326,8 +326,11 @@ fn type_text(s: &mut Session, v: &Value) -> CmdResult {
                     pos = p;
                     changed = true;
                 }
-                if let Some(p) = me::build_up(&mut math.nodes, &pos, latex) {
-                    pos = p;
+                // As in Word, `\int` + Space leaves ∫ waiting for its limits: `_a^b` and then
+                // Space, or Space alone, builds the operator (#4917).
+                let waits = changed && c == ' ' && me::nary_before(&math.nodes, &pos);
+                if !waits && let Some(p) = me::build_up(&mut math.nodes, &pos, latex) {
+                    pos = me::into_empty_operand(&math.nodes, &p);
                     changed = true;
                 }
                 if changed {
@@ -335,6 +338,14 @@ fn type_text(s: &mut Session, v: &Value) -> CmdResult {
                 }
                 if c == ' ' && changed {
                     continue;
+                }
+            } else if !style.nor && !latex && !c.is_alphanumeric() {
+                // Word corrects `\name` on any character that can't continue it (`\int_`,
+                // `\alpha+`), keeps that character and builds nothing up yet. LaTeX input keeps
+                // its commands (`\sqrt{`).
+                if let Some(p) = me::autocorrect(&mut math.nodes, &pos) {
+                    pos = p;
+                    transformed = true;
                 }
             }
             pos = me::insert_text(&mut math.nodes, &pos, &c.to_string(), style);

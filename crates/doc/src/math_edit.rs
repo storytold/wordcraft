@@ -769,6 +769,22 @@ pub fn autocorrect(root: &mut Arg, pos: &MathPos) -> Option<MathPos> {
     Some(MathPos { path: pos.path, off: pos.off - name.chars().count() })
 }
 
+/// The character just before the caret is an n-ary operator (∫, ∑…) in plain math text, as
+/// AutoCorrect leaves `\int` or `\sum`.
+pub fn nary_before(root: &Arg, pos: &MathPos) -> bool {
+    let pos = clamp(root, pos);
+    let Some(a) = arg_at(root, &pos.path) else { return false };
+    let (i, k) = match locate(a, pos.off) {
+        Loc::Inside(i, k) => (i, k),
+        Loc::Before(i) => match i.checked_sub(1).and_then(|i| a.get(i).map(|n| (i, node_units(n)))) {
+            Some(at) => at,
+            None => return false,
+        },
+    };
+    let Some(MNode::Run(r)) = a.get(i) else { return false };
+    !r.nor && !r.lit && k.checked_sub(1).and_then(|k| r.text.chars().nth(k)).is_some_and(crate::math::is_nary_char)
+}
+
 /// Characters that make typed linear text build up into structures.
 fn builds(s: &str) -> bool {
     s.chars().any(|c| {
@@ -870,6 +886,28 @@ pub fn build_up(root: &mut Arg, pos: &MathPos, latex: bool) -> Option<MathPos> {
     let out = MathPos { path: pos.path, off: before + new_units };
     tidy(root);
     Some(clamp(root, &out))
+}
+
+/// Typing that just built an n-ary operator without its operand (`∫_0^1` then Space) goes on in
+/// the empty operand, as after inserting one from the gallery, so what is typed next is
+/// integrated or summed (#4917). An operator whose operand ends with another (`∫∫`) leads to the
+/// innermost one. Other carets, and moves or Enter that build up, stay put.
+pub fn into_empty_operand(root: &Arg, pos: &MathPos) -> MathPos {
+    let mut path = pos.path.clone();
+    let mut off = pos.off;
+    while path.len() < MAX_DEPTH
+        && let Some(a) = arg_at(root, &path)
+        && let Loc::Before(i) = locate(a, off)
+        && let Some(k) = i.checked_sub(1)
+        && let Some(MNode::Nary { e, .. }) = a.get(k)
+    {
+        path.push((k, 2));
+        if e.is_empty() {
+            return MathPos { path, off: 0 };
+        }
+        off = units(e);
+    }
+    pos.clone()
 }
 
 /// A top-level `#` numbers the equation: wrap it as a one-row equation array.

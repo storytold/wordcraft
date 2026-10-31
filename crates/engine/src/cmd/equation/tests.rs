@@ -530,3 +530,100 @@ fn equation_delete_surrounding_moves_the_caret_for_a_one_step_delete() {
     assert_eq!(linear(&s), "bc");
     assert_eq!(s.math.as_ref().unwrap().pos, MathPos::new(Vec::new(), 0));
 }
+
+/// The n-ary operator in the equation, with its limits (shown or not) and operand as text.
+fn nary_of(s: &Session) -> Option<(char, Option<String>, Option<String>, String)> {
+    nodes_of(s, &s.math.as_ref()?.at)?.iter().find_map(|n| match n {
+        MNode::Nary { chr, sub_hide, sup_hide, sub, sup, e, .. } => {
+            Some((*chr, (!sub_hide).then(|| to_linear(sub)), (!sup_hide).then(|| to_linear(sup)), to_linear(e)))
+        }
+        _ => None,
+    })
+}
+
+#[test]
+fn an_autocorrected_operator_waits_for_its_limits() {
+    // #4917: as in Word, `\int` + Space gives a ∫ that `_x^y` then Space decorates; the
+    // operand typed next goes inside the operator.
+    let typed = |keys: &[&str]| {
+        let mut s = session();
+        s.run("insert.equation", &json!({})).unwrap();
+        for t in keys {
+            s.run("equation.type", &json!({"text": t})).unwrap();
+        }
+        s
+    };
+    let s = typed(&[r"\int", " "]);
+    assert_eq!(linear(&s), "∫", "the operator waits, not yet built");
+    assert!(nary_of(&s).is_none());
+    let s = typed(&[r"\int", " ", "_x^y", " ", "f"]);
+    assert_eq!(nary_of(&s), Some(('∫', Some("x".into()), Some("y".into()), "f".into())));
+    let s = typed(&[r"\sum", " ", "_(k=1)^n", " ", "k"]);
+    assert_eq!(nary_of(&s), Some(('∑', Some("k=1".into()), Some("n".into()), "k".into())));
+    // Only a lower limit.
+    let s = typed(&[r"\prod", " ", "_i", " ", "a"]);
+    assert_eq!(nary_of(&s), Some(('∏', Some("i".into()), None, "a".into())));
+    // Space alone builds it without limits, the caret in its operand.
+    let s = typed(&[r"\int", " ", " ", "x"]);
+    assert_eq!(nary_of(&s), Some(('∫', None, None, "x".into())));
+    // Typing the operand straight after it, as before.
+    let s = typed(&[r"\int", " ", "x", " "]);
+    assert_eq!(nary_of(&s), Some(('∫', None, None, "x".into())));
+    // Enter builds the operator and leaves the caret after it; Right builds it and, at the
+    // equation's end, leaves the equation, both as before.
+    let mut s = typed(&[r"\int", " ", "_0^1"]);
+    s.run("equation.enter", &json!({})).unwrap();
+    assert_eq!(nary_of(&s), Some(('∫', Some("0".into()), Some("1".into()), String::new())));
+    assert_eq!(s.math.as_ref().unwrap().pos, MathPos::new(Vec::new(), 1));
+    let mut s = typed(&[r"\int", " ", "_0^1"]);
+    let at = s.math.as_ref().unwrap().at.clone();
+    s.run("equation.move", &json!({"dir": "right"})).unwrap();
+    assert!(s.math.is_none(), "Right at the end leaves the equation");
+    assert!(matches!(nodes_of(&s, &at).as_deref(), Some([MNode::Nary { e, .. }]) if e.is_empty()));
+    // One undo step takes the whole typing away, leaving the empty equation.
+    let mut s = typed(&[r"\int", " ", "_0^1", " ", "t"]);
+    let at = s.math.as_ref().unwrap().at.clone();
+    s.run("equation.exit", &json!({})).unwrap();
+    s.run("edit.undo", &json!({})).unwrap();
+    let left = s.doc.para_at(&at).and_then(|p| p.object_at(at.off)).map(|o| o.plain_text().to_string());
+    assert_eq!(left.as_deref(), Some(""), "the equation is there, empty");
+    // An operator ending another one's operand (`∫∫`) takes what is typed next.
+    let s = typed(&[r"\int", " ", r"\int", " ", " ", "f"]);
+    let inner = nary_of(&s).and_then(|_| {
+        nodes_of(&s, &s.math.as_ref()?.at)?.iter().find_map(|n| match n {
+            MNode::Nary { e, .. } => match e.as_slice() {
+                [MNode::Nary { e, .. }] => Some(to_linear(e)),
+                _ => None,
+            },
+            _ => None,
+        })
+    });
+    assert_eq!(inner.as_deref(), Some("f"), "f is the inner operator's operand");
+}
+
+#[test]
+fn a_math_name_is_corrected_by_any_character_that_cannot_continue_it() {
+    // Observed in Word for Windows (#4938): `\int_0^1` typed in one go gives ∫ as soon as `_` is
+    // typed, so Space then builds the integral with its limits; `\alpha` + `+` gives α+, and a
+    // letter or digit leaves the name as typed.
+    let typed = |keys: &[&str]| {
+        let mut s = session();
+        s.run("insert.equation", &json!({})).unwrap();
+        for t in keys {
+            s.run("equation.type", &json!({"text": t})).unwrap();
+        }
+        s
+    };
+    let s = typed(&[r"\int_0^1", " ", "x"]);
+    assert_eq!(nary_of(&s), Some(('∫', Some("0".into()), Some("1".into()), "x".into())));
+    let s = typed(&[r"\alpha+\beta\gamma1"]);
+    assert_eq!(linear(&s), r"α+β\gamma1");
+    let s = typed(&[r"\alpha(x)"]);
+    assert_eq!(linear(&s), "α(x)");
+    // LaTeX input keeps its commands until they are built up.
+    let mut s = session();
+    s.run("equation.inputFormat", &json!({"format": "latex"})).unwrap();
+    s.run("insert.equation", &json!({})).unwrap();
+    s.run("equation.type", &json!({"text": r"\alpha+"})).unwrap();
+    assert_eq!(linear(&s), r"\alpha+");
+}

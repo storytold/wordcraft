@@ -192,6 +192,20 @@ pub fn charset_base_family(family: &str) -> &str {
         .map_or(family, str::trim_end)
 }
 
+/// Whether `family` (or the font its charset name stands for) has substitutes of its own: Times
+/// New Roman, Book Antiqua, Courier New, the symbol, Hebrew and Persian fonts… rather than the
+/// generic list a font we don't know gets.
+pub fn has_own_substitutes(family: &str) -> bool {
+    substitutes(charset_base_family(family)) != substitutes("")
+}
+
+/// Whether `family` has substitutes of its own ([`has_own_substitutes`]) and one of them is
+/// installed, so [`resolve`] draws it in a face chosen for it rather than the generic fallback.
+pub fn has_installed_substitute(family: &str) -> bool {
+    let base = charset_base_family(family);
+    has_own_substitutes(base) && substitute(FontDb::global(), base).is_some()
+}
+
 /// Naskh-style Persian/Arabic document fonts (the "B …" family names come from the common
 /// Persian font packs; matched by name only).
 fn is_persian_naskh(f: &str) -> bool {
@@ -507,6 +521,41 @@ mod tests {
         assert_eq!(charset_base_family("Cyr"), "Cyr");
         assert_eq!(charset_base_family("Calibri"), "Calibri");
         assert_eq!(substitutes(charset_base_family("Times New Roman Cyr")), substitutes("Times New Roman"));
+    }
+
+    /// #2702 review: an alternate counts as drawable only when one of its own substitutes is
+    /// installed; a font without a list of its own never does.
+    #[test]
+    fn installed_substitutes_are_the_fonts_own_and_installed() {
+        let db = FontDb::global();
+        for f in ["Times New Roman", "Wingdings", "Courier New", "Book Antiqua"] {
+            let any = substitutes(f).iter().any(|s| db.has_family(s));
+            assert_eq!(has_installed_substitute(f), any, "{f}");
+        }
+        for f in ["No Such Brand Font", ""] {
+            assert!(!has_installed_substitute(f), "{f}");
+        }
+    }
+
+    #[test]
+    fn fonts_known_by_name_have_their_own_substitutes() {
+        for f in [
+            "Times New Roman",
+            "times",
+            "Times New Roman Cyr",
+            "Book Antiqua",
+            "Palatino Linotype",
+            "Courier New",
+            "Arial",
+            "Georgia",
+            "Wingdings",
+            "David",
+        ] {
+            assert!(has_own_substitutes(f), "{f}");
+        }
+        for f in ["No Such Brand Font", "NewCenturySchlbk", ""] {
+            assert!(!has_own_substitutes(f), "{f}");
+        }
     }
 
     #[test]
