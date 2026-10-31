@@ -1,0 +1,45 @@
+Spellbook 0.4.2 — Michael Davis and Spellbook contributors
+Upstream: https://github.com/helix-editor/spellbook
+Source release: https://crates.io/crates/spellbook/0.4.2
+Upstream .crate SHA-256: 0d204abcbdf8e88729306a8d0ca01a79d8a49969fe1f84696909d6dbc4321c1a
+License: Mozilla Public License 2.0 (LICENSE).
+
+WordCraft changes (2026-10-18, 2026-10-19 and 2026-10-25):
+- src/checker.rs: apply a signed Hungarian syllable-count modifier with
+  saturating_add_signed instead of casting a negative i16 to usize. The original
+  addition overflowed in debug builds for e.g. "árvíztűrő"; release overflow also
+  depended on platform arithmetic. An independent synthetic regression lives in
+  src/checker.rs; WordCraft also tests its real dictionary in crates/proof/src/hu/mod.rs.
+- src/aff.rs: upper_char_at handles a missing character or invalid UTF-8
+  boundary instead of panicking (suggesting for "A" exposed the end-index case).
+  src/aff.rs tests end indices, empty input, invalid boundaries and case expansion.
+- Cargo.toml: retain only the library's runtime dependencies; constrain hashbrown
+  to 0.16 and foldhash to 0.2, already present in WordCraft's lockfile. The
+  upstream dev tooling, examples and test dictionaries are not redistributed.
+- src/checker.rs: evaluate chained-affix conditions after removing each affix;
+  compare distinct preceding code points for SIMPLIFIEDTRIPLE compounds; use
+  prefix continuation flags for suffix-plus-two-prefix checks.
+- src/suggester/ngram.rs: preserve the suffix when expanding cross-product
+  suggestions. Targeted synthetic regression tests cover these fixes.
+- src/test_fixture.rs: original, small MPL-2.0 WordCraft test data replaces the
+  absent, separately GPL-licensed upstream English test dictionary. It tests
+  mechanisms, not general English dictionary coverage. Test-only LazyLock uses
+  the Rust standard library rather than once_cell; doctests use inline data.
+  The complete vendored unit-test and doctest targets can run independently
+  and are included in cargo xtask ci. PATCHES.txt maps the original five fixes and subsequent safety/loading changes to
+  their independent regressions and lists the separate packaging/test changes.
+
+- Safe Box storage replaces raw memory handling; fallible affix conversion and
+  checked UTF-8 edits replace panic paths. The crate forbids unsafe code and
+  enforces the production never-crash lints in CI.
+- DictionaryBuilder parses in batches for responsive native and browser UIs.
+  The synchronous constructor uses the same parser and error handling. A parse
+  failure stays terminal even when a caller retries advance before finish.
+
+- Numeric flags honor AF aliases, matching upstream fix
+  119625e5b6fb374e818e2372c8860aa7202e16bb, with a synthetic regression.
+
+The modified source files remain MPL-2.0. This directory contains the source
+corresponding to WordCraft's bundled copy. Distributors of compiled WordCraft
+must make this source (including modifications) available under its MPL notice,
+and tell recipients how to obtain it. Dictionary assets have separate notices.
