@@ -192,3 +192,19 @@ fn a_subset_font_word_embeds_lays_out_text_set_in_its_table_name() {
     let x = end_x(&docx_embedding(FAMILY, Some((&subset, "{6A0E3B57-1C2D-4E8F-9A7B-3D5C1E0F2B64}")), TEXT));
     assert!((x - mono).abs() < 0.01, "measured with the embedded subset: {x} vs {mono} (missing {missing})");
 }
+
+#[test]
+fn import_report_preserves_embedded_docx_font_loading() {
+    const TEXT: &str = "illicit little lilies fill tiny jill";
+    const FAMILY: &str = "JetBrains Rept";
+    let end_x = |doc| Session::new(doc).layout().caret_on(&Pos::body(0, TEXT.len()), 0).unwrap().x;
+    let mono = end_x(crate::io::open_bytes("mono.docx", &docx_embedding("JetBrains Mono", None, TEXT)).unwrap());
+    let missing = crate::io::open_bytes_report("missing.docx", &docx_embedding(FAMILY, None, TEXT), None).unwrap();
+    assert!((end_x(missing.doc) - mono).abs() > 1.0, "the test family must initially use a fallback");
+    let font = renamed("JetBrainsMono-Regular.ttf", "JetBrains Mono", FAMILY);
+    let bytes = docx_embedding(FAMILY, Some((&font, "{00000000-0000-0000-0000-000000000000}")), TEXT);
+    let opened = crate::io::open_bytes_report("embedded.docx", &bytes, None).unwrap();
+    assert!(opened.pdf.is_none(), "a DOCX must not become a PDF conversion");
+    assert!(!opened.encrypted);
+    assert!((end_x(opened.doc) - mono).abs() < 0.01, "the report-based open path must load the embedded font");
+}

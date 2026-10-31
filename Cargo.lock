@@ -6873,6 +6873,8 @@ dependencies = [
  "craft-pdf",
  "hayro-cmap",
  "hayro-interpret",
+ "hayro-jbig2",
+ "hayro-jpeg2000",
  "hayro-syntax",
  "image",
  "js-sys",
