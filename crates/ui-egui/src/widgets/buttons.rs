@@ -172,23 +172,68 @@ pub fn split(
     swatch: Option<Color32>,
     menu: impl FnOnce(&mut Ui, &mut WordApp),
 ) {
+    split_button(ui, app, icon, tip, action, SplitLook { swatch, labeled: false }, menu);
+}
+
+/// A [`split`] button with its label beside the icon and the arrow on the same row, also in a
+/// vertical ribbon stack (Table Design › Shading, #1726). A compact group shows only the icon.
+pub fn split_labeled(
+    ui: &mut Ui,
+    app: &mut WordApp,
+    icon: &str,
+    label: &str,
+    action: ButtonAction<'_>,
+    swatch: Option<Color32>,
+    menu: impl FnOnce(&mut Ui, &mut WordApp),
+) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        split_button(ui, app, icon, label, action, SplitLook { swatch, labeled: true }, menu);
+    });
+}
+
+/// A split button's look beyond its icon: the colour bar under it, and its name beside it.
+struct SplitLook {
+    swatch: Option<Color32>,
+    labeled: bool,
+}
+
+fn split_button(
+    ui: &mut Ui,
+    app: &mut WordApp,
+    icon: &str,
+    tip: &str,
+    action: ButtonAction<'_>,
+    look: SplitLook,
+    menu: impl FnOnce(&mut Ui, &mut WordApp),
+) {
     let ButtonAction { id, params, checked } = action;
     let tip = tl!(tip);
     let t = Tokens::get(ui.ctx());
-    let (r, resp) = ui.allocate_exact_size(vec2(24.0, 22.0), Sense::click());
+    let on = enabled(app, id);
+    // A compact group (#662) shows only the icon, as `small` does; the tooltip keeps the name.
+    let label = (look.labeled && !crate::ribbon_fit::compact(ui.ctx()))
+        .then(|| ui.painter().layout_no_wrap(tip.to_string(), regular(11.5), if on { t.text } else { t.text_disabled }));
+    let text_w = label.as_ref().map_or(0.0, |g| g.size().x + 6.0);
+    // What a compact group gives back, so the ribbon can plan it before drawing it compact.
+    crate::ribbon_fit::add_saving(ui.ctx(), text_w);
+    let (r, resp) = ui.allocate_exact_size(vec2(24.0 + text_w, 22.0), Sense::click());
     keytip_badge(ui, r, id, tip);
     let (ar, aresp) = ui.allocate_exact_size(vec2(11.0, 22.0), Sense::click());
-    let on = enabled(app, id);
     bg(ui, r, &resp, checked, &t);
     bg(ui, ar, &aresp, false, &t);
-    let ic = Rect::from_center_size(r.center(), vec2(17.0, 17.0));
+    let ic = Rect::from_center_size(pos2(r.min.x + 12.0, r.center().y), vec2(17.0, 17.0));
     let (c, a) = if on { (t.icon, t.accent) } else { (t.text_disabled, t.text_disabled) };
     icons::paint(ui.painter(), ic, icon, c, a);
-    if let Some(sw) = swatch {
+    if let Some(sw) = look.swatch {
         let sw = if on { sw } else { t.text_disabled };
-        let bar = Rect::from_min_max(pos2(r.min.x + 4.0, r.max.y - 5.0), pos2(r.max.x - 4.0, r.max.y - 2.0));
+        let bar = Rect::from_min_max(pos2(r.min.x + 4.0, r.max.y - 5.0), pos2(r.min.x + 20.0, r.max.y - 2.0));
         ui.painter().rect_filled(bar, 0.0, sw);
         ui.painter().rect_stroke(bar, 0.0, Stroke::new(0.5, t.border), egui::StrokeKind::Inside);
+    }
+    if let Some(g) = label {
+        let y = r.center().y - g.size().y / 2.0;
+        ui.painter().galley(pos2(r.min.x + 24.0, y), g, t.text);
     }
     icons::paint(ui.painter(), Rect::from_center_size(ar.center(), vec2(DROPDOWN, DROPDOWN)), "dropdown", c, a);
     let resp = tooltip(app, resp, tip, id);

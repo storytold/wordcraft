@@ -1,5 +1,5 @@
 use super::common::{mi, stack};
-use super::{MeasureExt, Remember, Target, Ui, WordApp, big, group, json, menu_button, small, split, vec2};
+use super::{MeasureExt, Remember, Target, Ui, WordApp, big, group, json, menu_button, small, vec2};
 
 pub(super) fn table_design(app: &mut WordApp, ui: &mut Ui) {
     let look = app.session.sel.focus.path.cell().and_then(|(tp, _, _)| app.session.doc.table(app.session.sel.focus.story, &tp).map(|t| t.props.look));
@@ -79,7 +79,8 @@ pub(super) fn table_design(app: &mut WordApp, ui: &mut Ui) {
                 },
             );
             let sw = wordcraft_doc::Rgb::parse(&app.canvas.last_shading).map(crate::theme::c32);
-            split(
+            // Labelled, with its arrow on the same row (#1726).
+            crate::widgets::split_labeled(
                 ui,
                 app,
                 "shadingNoBar",
