@@ -340,7 +340,7 @@ impl<'a> Shaped<'a> {
 
     /// A field: a legacy form field, its code in braces, or its result.
     fn field(&mut self, cx: &Cx, (k, o): (usize, &InlineObject), slot: Slot, rc: &Arc<ResolvedChar>) {
-        let InlineObject::Field { instr, result, code, .. } = o else { return };
+        let InlineObject::Field { instr, result, code, locked, .. } = o else { return };
         let env = cx.env;
         let form = if env.field_codes != *code { None } else { o.legacy_form() };
         if let Some(wordcraft_doc::legacy_form::LegacyForm::CheckBox { size, .. }) = form {
@@ -355,6 +355,9 @@ impl<'a> Shaped<'a> {
                 shaded.shading = Some(FIELD_SHADING);
             }
             self.b.shape_atomic(&field_code_text(instr), slot.start, slot.end, &Arc::new(shaded));
+        } else if *locked && crate::fields::field_name(instr) == "PAGEREF" {
+            // A locked page reference keeps its result, as Word prints and exports it.
+            self.b.shape_atomic(result, slot.start, slot.end, &linked(rc, instr));
         } else {
             self.field_result(cx, (instr, result), slot, rc);
         }

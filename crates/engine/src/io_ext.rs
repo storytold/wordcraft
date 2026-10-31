@@ -46,7 +46,12 @@ pub fn save(ext: &str, doc: &Document, opts: &crate::io::ExportOptions) -> Optio
 /// Render page `page` as PNG at `scale` px/pt. With Print Markup's comments the page has its
 /// markup area with the comments in balloons (page images always show tracked changes).
 pub fn render_png(doc: &Document, page: usize, scale: f32, opts: &crate::io::ExportOptions) -> Result<Vec<u8>, String> {
-    let lo = wordcraft_layout::LayoutOptions { comment_balloons: opts.markup && opts.comments, numeral: opts.numeral, ..Default::default() };
+    let lo = wordcraft_layout::LayoutOptions {
+        comment_balloons: opts.markup && opts.comments,
+        numeral: opts.numeral,
+        output_page_refs: true,
+        ..Default::default()
+    };
     let l = wordcraft_layout::layout(doc, &mut wordcraft_layout::LayoutCache::new(), &lo);
     let p = l.pages.get(page).ok_or_else(|| format!("no page {}", page + 1))?;
     let img = wordcraft_render::render_page(doc, p, scale, &Default::default());

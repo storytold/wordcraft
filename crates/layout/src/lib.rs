@@ -56,7 +56,7 @@ mod table_flow;
 use boxes::{BOX_INSET_X, BOX_INSET_Y};
 use boxes::{BoxInput, BoxLayout, Edges, fit_box, layout_box, push_para};
 pub use cache::LayoutCache;
-use cache::{MAX_TOTAL_PASSES, Totals};
+use cache::{MAX_PAGE_REF_PASSES, MAX_TOTAL_PASSES, Totals};
 #[cfg(test)]
 use ctx::picture_outline;
 use ctx::{Ctx, Pass};
@@ -210,6 +210,10 @@ pub struct LayoutOptions {
     pub filename: Option<Arc<str>>,
     /// Document full path for FILENAME \p fields ([`FieldCtx::filepath`]).
     pub filepath: Option<Arc<str>>,
+    /// Output (PDF, print, page images): `PAGEREF` fields in the body show the page their
+    /// bookmark is on, as Word fills them in when it prints or exports. The editor leaves this
+    /// off: there a body `PAGEREF` keeps its result until fields are updated, as in Word.
+    pub output_page_refs: bool,
 }
 
 /// The word being typed ([`LayoutOptions::typing_word`]): the paragraph by its revision
@@ -318,8 +322,13 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
     let mut totals = Totals::first_guess(doc.sections().len());
     let mut passes = 0;
     let (mut early, mut rewraps) = (EarlyFloats::new(), 0);
+    // Output's body `PAGEREF`s ([`LayoutOptions::output_page_refs`]) show the pages the pass
+    // before found for their bookmarks, until those hold (bounded, like the totals).
+    let page_refs = opts.output_page_refs && headers::body_refers_to_pages(doc);
+    let mut marks = Arc::new(fields::BookmarkPages::new());
+    let mut mark_passes = 0;
     let mut l = loop {
-        match layout_pass(doc, cache, opts, &note_pages, &totals, passes < MAX_TOTAL_PASSES, (&early, rewraps < MAX_REWRAP_PASSES)) {
+        match layout_pass(doc, cache, opts, (&note_pages, &marks), &totals, passes < MAX_TOTAL_PASSES, (&early, rewraps < MAX_REWRAP_PASSES)) {
             Pass::Again(t) => {
                 totals = t;
                 passes += 1;
@@ -335,6 +344,14 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
                     if placed != note_pages {
                         note_pages = placed;
                         note_passes += 1;
+                        continue;
+                    }
+                }
+                if page_refs && mark_passes < MAX_PAGE_REF_PASSES {
+                    let found = headers::bookmark_pages(doc, &l.pages, &doc.sections());
+                    if found != *marks {
+                        marks = Arc::new(found);
+                        mark_passes += 1;
                         continue;
                     }
                 }

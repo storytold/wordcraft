@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 
 use super::cache::{LayoutCache, Totals, env_hash, hash_of};
 use super::ctx::{Ctx, Pass, with_pct_base};
+use super::fields::BookmarkPages;
 use super::floats::{EarlyFloats, WrapArea, early_covered};
 use super::flow::{OutlinePass, place_outline_para, place_para};
 use super::headers::{HfLinks, bookmark_pages, headers_footers, headers_footers_refer_to_pages, marks_key, mirror_even_pages, section_side};
@@ -58,12 +59,13 @@ fn reset_cache(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) {
     cache.used.clear();
 }
 
-/// The walk state at the start of a pass, with the note references the body shows.
+/// The walk state at the start of a pass, with the note references the body shows and the pages
+/// of the bookmarks its `PAGEREF`s show (empty unless output asks for them).
 fn new_ctx<'a>(
     doc: &'a Document,
     cache: &'a mut LayoutCache,
     opts: &'a LayoutOptions,
-    (note_pages, totals): (&HashMap<u32, usize>, &Totals),
+    (note_pages, marks, totals): (&HashMap<u32, usize>, &Arc<BookmarkPages>, &Totals),
 ) -> Ctx<'a> {
     let notes = note_info(doc, opts.hides_deleted(StoryRef::Body), note_pages);
     let notes_hash = hash_of(&{
@@ -87,6 +89,8 @@ fn new_ctx<'a>(
             author: doc.core.creator.as_str().into(),
             filename: opts.filename.clone().unwrap_or_else(|| "".into()),
             filepath: opts.filepath.clone().unwrap_or_else(|| "".into()),
+            bookmark_pages: Arc::clone(marks),
+            bookmarks_key: marks_key(marks),
             ..Default::default()
         },
         notes_hash,
@@ -457,20 +461,21 @@ fn index_lines(pages: &[Page]) -> HashMap<(StoryRef, Path), Vec<(usize, usize)>>
 }
 
 /// One layout pass, numbering footnotes restarted on each page by `note_pages` ([`note_info`]),
-/// with `totals` assumed for the page totals in the body. With `may_repeat`, a pass whose body
-/// shows totals that turn out different asks to be done again. Pages start with the wrap areas
-/// of the `early` floats; with `may_rewrap`, a pass that finds others asks to be done again.
+/// with `totals` assumed for the page totals in the body and `marks` for the pages its `PAGEREF`s
+/// show. With `may_repeat`, a pass whose body shows totals that turn out different asks to be
+/// done again. Pages start with the wrap areas of the `early` floats; with `may_rewrap`, a pass
+/// that finds others asks to be done again.
 pub(crate) fn layout_pass(
     doc: &Document,
     cache: &mut LayoutCache,
     opts: &LayoutOptions,
-    note_pages: &HashMap<u32, usize>,
+    (note_pages, marks): (&HashMap<u32, usize>, &Arc<BookmarkPages>),
     totals: &Totals,
     may_repeat: bool,
     (early, may_rewrap): (&EarlyFloats, bool),
 ) -> Pass {
     reset_cache(doc, cache, opts);
-    let mut ctx = new_ctx(doc, cache, opts, (note_pages, totals));
+    let mut ctx = new_ctx(doc, cache, opts, (note_pages, marks, totals));
     let hf = Arc::clone(&ctx.hf);
     let sections = &hf.sections;
     let mode = Mode::of(opts.view);

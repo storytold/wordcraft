@@ -187,3 +187,7 @@ impl Totals {
 /// The most extra layout passes for page totals in the body: a total that changes the page
 /// count (its digits pushing text to another page) is tried again, this many times at most.
 pub(crate) const MAX_TOTAL_PASSES: usize = 3;
+
+/// The most extra layout passes for output's body `PAGEREF`s: a page number whose digits move a
+/// bookmark to another page is tried again, this many times at most.
+pub(crate) const MAX_PAGE_REF_PASSES: usize = 3;

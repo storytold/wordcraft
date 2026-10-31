@@ -337,6 +337,61 @@ fn page_references_in_footers_show_their_bookmarks_page() {
     assert_eq!(texts, ["9"]);
 }
 
+/// Output (PDF, print, page images) shows each body `PAGEREF` its bookmark's page, counted from
+/// the section's restart, as Word fills them in when it prints or exports; the editor keeps the
+/// stored result until fields are updated, and a locked reference keeps it in output too.
+/// Measured in Word for Microsoft 365: references stored as "9" to a heading on the third page
+/// print and export as 3, or 2 when the second page starts a section numbered from 1; a locked
+/// one stays 9, in the body and in a footer.
+#[test]
+fn page_references_in_the_body_show_their_bookmarks_page_in_output() {
+    let field = |instr: &str, locked: bool| InlineObject::Field {
+        instr: instr.into(),
+        result: "9".into(),
+        locked,
+        dirty: false,
+        code: false,
+        form: String::new(),
+    };
+    let mut d = Document::from_text("See page \nLocked \nBlank\nHeading");
+    for (i, instr, locked) in [(0, "PAGEREF _Toc1 \\h", false), (1, "PAGEREF _Toc1", true)] {
+        let p = d.para_mut(StoryRef::Body, &Path::top(i)).unwrap();
+        let n = p.len();
+        p.insert_object(n, field(instr, locked), &Default::default()).unwrap();
+    }
+    for i in [2, 3] {
+        d.para_mut(StoryRef::Body, &Path::top(i)).unwrap().props.page_break_before = Some(true);
+    }
+    let heading = d.para_mut(StoryRef::Body, &Path::top(3)).unwrap();
+    heading.insert_object(0, InlineObject::BookmarkStart { name: "_Toc1".into() }, &Default::default()).unwrap();
+    let refs = |l: &DocLayout| -> Vec<String> {
+        l.pages[0]
+            .items
+            .iter()
+            .flat_map(|it| if let Placed::Lines { para, .. } = it { para.shown.iter().map(|s| s.1.clone()).collect() } else { vec![] })
+            .collect()
+    };
+    let output = LayoutOptions { output_page_refs: true, ..Default::default() };
+    let l = lay(&d);
+    assert_eq!(l.pages.len(), 3);
+    assert_eq!(refs(&l), ["9", "9"]);
+    assert_eq!(refs(&layout(&d, &mut LayoutCache::new(), &output)), ["3", "9"]);
+    // The second page starts a section that numbers its pages from 1.
+    let first = d.last_section.clone();
+    d.para_mut(StoryRef::Body, &Path::top(1)).unwrap().section = Some(Box::new(first));
+    d.last_section.page_num_start = Some(1);
+    let l = layout(&d, &mut LayoutCache::new(), &output);
+    assert_eq!(l.pages.iter().map(|p| p.number).collect::<Vec<_>>(), [1, 1, 2]);
+    assert_eq!(refs(&l), ["2", "9"]);
+    assert_eq!(refs(&lay(&d)), ["9", "9"]);
+    // A footer's references: the unlocked one shows the page, the locked one keeps its result.
+    let mut fp = Paragraph::new();
+    fp.insert_object(0, field("PAGEREF _Toc1", false), &Default::default()).unwrap();
+    fp.insert_object(fp.len(), field("PAGEREF _Toc1", true), &Default::default()).unwrap();
+    d.last_section.footers.default = Some(d.add_part(PartKind::Footer, vec![para_block(fp)]));
+    assert_eq!(footer_shown(&lay(&d)).last().map(String::as_str), Some("2/9"));
+}
+
 /// The fields' text in each page's footer, joined with "/".
 fn footer_shown(l: &DocLayout) -> Vec<String> {
     l.pages
