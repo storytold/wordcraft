@@ -4895,3 +4895,30 @@ fn a_long_comment_balloon_shows_ten_lines_and_keeps_the_next_one_in_view() {
         assert!(balloon_rect(&h, second).is_some_and(|r| r.max.y < 900.0), "the next balloon is in view");
     }
 }
+
+/// #3382: a long comment's balloon that isn't selected paints its first ten rows inside the
+/// card's clip and none of the rows after them, in either reading direction.
+#[test]
+fn a_long_comment_balloon_paints_only_its_first_ten_rows() {
+    for line in [(|i| format!("Line {i}")) as fn(usize) -> String, |i| format!("سطر {i}")] {
+        let (mut h, first, _) = long_comment_balloons(line);
+        h.step();
+        let body = (1..=200).map(line).collect::<Vec<_>>().join("\n");
+        let card = balloon_rect(&h, first).expect("the long balloon");
+        let (clip, rows) = h
+            .output()
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) if text.galley.text() == body => {
+                    Some((clipped.clip_rect, text.galley.rows.iter().map(|r| r.rect().translate(text.pos.to_vec2())).collect::<Vec<_>>()))
+                }
+                _ => None,
+            })
+            .expect("the long comment's body is painted");
+        assert!(card.contains_rect(clip), "the body is clipped to its card: {clip:?} in {card:?}");
+        let (shown, hidden) = rows.split_at(crate::panes::COMMENT_ROWS);
+        assert!(shown.iter().all(|r| r.max.y <= clip.max.y + 0.5), "the first ten rows are inside the clip: {shown:?}, clip {clip:?}");
+        assert!(hidden.iter().all(|r| r.min.y >= clip.max.y - 0.5), "the rows after the tenth are cut off: {:?}, clip {clip:?}", hidden.first());
+    }
+}
