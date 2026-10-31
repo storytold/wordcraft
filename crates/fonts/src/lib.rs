@@ -19,7 +19,7 @@ pub use fontdb::{
     base_style, bundled, decode_font_file, is_font_file_name, name_language_matches, sniff, system_font_dirs,
 };
 pub use harfrust::Feature;
-use harfrust::{Direction, ShapeOptions, ShapePlan, ShapePlanKey, Shaper, Tag, UnicodeBuffer};
+use harfrust::{Buffer, Direction, ShapeOptions, ShapePlan, ShapePlanKey, ShaperFont, Tag};
 pub use kurbo::BezPath;
 pub use script::{fallback_rank, is_emoji, needs_layout_tables, script_fallbacks};
 use skrifa::MetadataProvider;
@@ -208,44 +208,47 @@ pub fn shape_run(face: &FontFace, text: &str, features: &[Feature], map: impl Fn
 
 fn shape_dir(face: &FontFace, text: &str, features: &[Feature], map: &impl Fn(char) -> char, rtl: bool) -> Vec<ShapedGlyph> {
     let mut out = Vec::with_capacity(text.len());
-    let shaped = face.hb().map(|hb| {
-        let shaper = face.shaper.shaper(&hb).instance(face.instance.as_ref()).build();
-        // One script per shaping call: the shaper picks its script engine (Myanmar, Khmer,
-        // Indic, USE reordering…) from the run's script, so "Hi မြန်မာ" in one face must not be
-        // shaped as Latin. Runs come in text order; right-to-left callers regroup by cluster.
-        for r in script::script_runs(text) {
-            let Some(sub) = text.get(r.clone()) else { continue };
-            let mut buf = UnicodeBuffer::new();
-            for (i, c) in sub.char_indices() {
-                buf.add(map(c), (r.start + i) as u32);
-            }
-            buf.guess_segment_properties();
-            buf.set_direction(if rtl { Direction::RightToLeft } else { Direction::LeftToRight });
-            let plan = shape_plan(face, &shaper, &buf, features);
-            let gb = shaper.shape(buf, ShapeOptions::new().plan(plan.as_deref()).features(features));
-            for (info, pos) in gb.glyph_infos().iter().zip(gb.glyph_positions()) {
-                out.push(ShapedGlyph {
-                    gid: info.glyph_id,
-                    cluster: info.cluster as usize,
-                    x_advance: pos.x_advance,
-                    x_offset: pos.x_offset,
-                    y_offset: pos.y_offset,
-                });
-            }
+    let sf = ShaperFont::new(&face.hb);
+    // One script per shaping call: the shaper picks its script engine (Myanmar, Khmer,
+    // Indic, USE reordering…) from the run's script, so "Hi မြန်မာ" in one face must not be
+    // shaped as Latin. Runs come in text order; right-to-left callers regroup by cluster.
+    for r in script::script_runs(text) {
+        let Some(sub) = text.get(r.clone()) else { continue };
+        let mut buf = Buffer::new();
+        for (i, c) in sub.char_indices() {
+            buf.push(map(c) as u32, (r.start + i) as u32);
         }
-    });
-    if shaped.is_none()
-        && let Some(f) = face.skrifa()
-    {
-        let cmap = f.charmap();
-        let gm = f.glyph_metrics(Size::unscaled(), face.location());
-        for (i, c) in text.char_indices() {
-            let g = cmap.map(map(c)).unwrap_or_default();
-            let adv = gm.advance_width(g).unwrap_or(face.upem as f32 * 0.5);
-            out.push(ShapedGlyph { gid: g.to_u32(), cluster: i, x_advance: adv.round() as i32, x_offset: 0, y_offset: 0 });
+        buf.guess_segment_properties();
+        buf.set_direction(if rtl { Direction::RightToLeft } else { Direction::LeftToRight });
+        let plan = shape_plan(face, &buf, features);
+        // A run that exhausts the shaper's budget returns Ok with an incomplete buffer.
+        if harfrust::shape(&sf, &mut buf, ShapeOptions::new().plan(plan.as_deref()).features(features)).is_err() || !buf.allocation_successful() {
+            cmap_glyphs(face, sub, r.start, map, &mut out);
+            continue;
+        }
+        for (info, pos) in buf.glyph_infos().iter().zip(buf.glyph_positions()) {
+            out.push(ShapedGlyph {
+                gid: info.glyph_id,
+                cluster: info.cluster as usize,
+                x_advance: pos.x_advance,
+                x_offset: pos.x_offset,
+                y_offset: pos.y_offset,
+            });
         }
     }
     out
+}
+
+/// One glyph per character straight from the cmap, for a run the shaper could not do.
+fn cmap_glyphs(face: &FontFace, text: &str, base: usize, map: &impl Fn(char) -> char, out: &mut Vec<ShapedGlyph>) {
+    let Some(f) = face.skrifa() else { return };
+    let cmap = f.charmap();
+    let gm = f.glyph_metrics(Size::unscaled(), face.location());
+    for (i, c) in text.char_indices() {
+        let g = cmap.map(map(c)).unwrap_or_default();
+        let adv = gm.advance_width(g).unwrap_or(face.upem as f32 * 0.5);
+        out.push(ShapedGlyph { gid: g.to_u32(), cluster: base + i, x_advance: adv.round() as i32, x_offset: 0, y_offset: 0 });
+    }
 }
 
 /// How many shape plans each thread keeps: the oldest is dropped to make room, so a thread never
@@ -281,22 +284,22 @@ thread_local! {
 /// oldest dropped past [`MAX_SHAPE_PLANS`]). A kept plan is used only for the same face and when
 /// harfrust's own [`ShapePlanKey::matches`] accepts it (script, direction, language, the face's
 /// variation instance and the features). `None` leaves making it to the shaper.
-fn shape_plan(face: &FontFace, shaper: &Shaper, buf: &UnicodeBuffer, features: &[Feature]) -> Option<std::rc::Rc<ShapePlan>> {
+fn shape_plan(face: &FontFace, buf: &Buffer, features: &[Feature]) -> Option<std::rc::Rc<ShapePlan>> {
     // The buffer's script is unset when it reads as unknown: the guess never sets that.
-    let script = Some(buf.script()).filter(|s| *s != harfrust::script::UNKNOWN);
+    let script = buf.script().filter(|s| *s != harfrust::Script::UNKNOWN);
     let language = buf.language();
     let direction = buf.direction();
     if direction == Direction::Invalid {
         return None;
     }
-    let key = ShapePlanKey::new(script, direction).language(language.as_ref()).instance(face.instance.as_ref()).features(features);
+    let key = ShapePlanKey::new(&face.hb, script, direction).language(language).features(features);
     let of = PlanFace::of(face);
     SHAPE_PLANS.with(|cell| {
         let mut plans = cell.try_borrow_mut().ok()?;
         if let Some((_, plan)) = plans.iter().find(|(f, plan)| *f == of && key.matches(plan)) {
             return Some(plan.clone());
         }
-        let plan = std::rc::Rc::new(ShapePlan::new(shaper, direction, script, language.as_ref(), features));
+        let plan = std::rc::Rc::new(ShapePlan::new(&face.hb, direction, script, language, features));
         if plans.len() >= MAX_SHAPE_PLANS {
             plans.remove(0);
         }
@@ -361,14 +364,14 @@ mod tests {
     #[test]
     fn kept_shape_plans_shape_as_fresh_ones() {
         let fresh = |face: &FontFace, text: &str, features: &[Feature], rtl: bool| -> Vec<(u32, u32, i32, i32, i32)> {
-            let Some(hb) = face.hb() else { return Vec::new() };
-            let shaper = face.shaper.shaper(&hb).instance(face.instance.as_ref()).build();
-            let mut buf = UnicodeBuffer::new();
+            let mut buf = Buffer::new();
             buf.push_str(text);
             buf.guess_segment_properties();
             buf.set_direction(if rtl { Direction::RightToLeft } else { Direction::LeftToRight });
-            let gb = shaper.shape(buf, ShapeOptions::new().features(features));
-            gb.glyph_infos().iter().zip(gb.glyph_positions()).map(|(i, p)| (i.glyph_id, i.cluster, p.x_advance, p.x_offset, p.y_offset)).collect()
+            if harfrust::shape(&ShaperFont::new(&face.hb), &mut buf, ShapeOptions::new().features(features)).is_err() {
+                return Vec::new();
+            }
+            buf.glyph_infos().iter().zip(buf.glyph_positions()).map(|(i, p)| (i.glyph_id, i.cluster, p.x_advance, p.x_offset, p.y_offset)).collect()
         };
         let kept = |face: &FontFace, text: &str, features: &[Feature], rtl: bool| -> Vec<(u32, u32, i32, i32, i32)> {
             shape_dir(face, text, features, &|c| c, rtl).iter().map(|g| (g.gid, g.cluster as u32, g.x_advance, g.x_offset, g.y_offset)).collect()
@@ -394,14 +397,14 @@ mod tests {
     fn kept_shape_plans_are_bounded() {
         let face = FontDb::global().face(DEFAULT_FAMILY, "Regular");
         let fresh = |features: &[Feature], rtl: bool| -> Vec<(u32, i32)> {
-            let Some(hb) = face.hb() else { return Vec::new() };
-            let shaper = face.shaper.shaper(&hb).instance(face.instance.as_ref()).build();
-            let mut buf = UnicodeBuffer::new();
+            let mut buf = Buffer::new();
             buf.push_str("office");
             buf.guess_segment_properties();
             buf.set_direction(if rtl { Direction::RightToLeft } else { Direction::LeftToRight });
-            let gb = shaper.shape(buf, ShapeOptions::new().features(features));
-            gb.glyph_infos().iter().zip(gb.glyph_positions()).map(|(i, p)| (i.glyph_id, p.x_advance)).collect()
+            if harfrust::shape(&ShaperFont::new(&face.hb), &mut buf, ShapeOptions::new().features(features)).is_err() {
+                return Vec::new();
+            }
+            buf.glyph_infos().iter().zip(buf.glyph_positions()).map(|(i, p)| (i.glyph_id, p.x_advance)).collect()
         };
         for n in 0..3 * MAX_SHAPE_PLANS as u32 {
             let features = [feature_value(b"kern", n % 2), feature_value(b"liga", n)];
@@ -411,6 +414,17 @@ mod tests {
             assert!(kept_shape_plans() <= MAX_SHAPE_PLANS, "{}", kept_shape_plans());
         }
         assert_eq!(kept_shape_plans(), MAX_SHAPE_PLANS);
+    }
+
+    /// The cmap fallback for a failed run gives one glyph per character, its clusters offset by
+    /// where the run starts in the text.
+    #[test]
+    fn cmap_fallback_keeps_cluster_offsets() {
+        let face = FontDb::global().face(DEFAULT_FAMILY, "Regular");
+        let mut out = Vec::new();
+        cmap_glyphs(&face, "ab", 5, &|c| c, &mut out);
+        assert_eq!(out.iter().map(|g| g.cluster).collect::<Vec<_>>(), [5, 6]);
+        assert!(out.iter().all(|g| g.gid != 0 && g.x_advance > 0));
     }
 
     #[test]

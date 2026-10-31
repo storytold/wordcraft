@@ -352,10 +352,12 @@ pub(super) fn make_face(
     let location = if coords.is_empty() { Location::default() } else { f.axes().location(settings.iter().copied()) };
     let m = f.metrics(Size::unscaled(), &location);
     let a = f.attributes();
-    let hb = harfrust::FontRef::from_index(data, index).ok()?;
-    let shaper = harfrust::ShaperData::new(&hb);
-    let instance = (!coords.is_empty())
-        .then(|| harfrust::ShaperInstance::from_variations(&hb, settings.iter().map(|(t, v)| harfrust::Variation { tag: *t, value: *v })));
+    let source: harfrust::font::Source = match &bytes {
+        FontBytes::Static(b) => (*b).into(),
+        FontBytes::Owned(v) => (v.clone() as Arc<dyn AsRef<[u8]> + Send + Sync>).into(),
+    };
+    let hb = harfrust::Font::new(source, index)?;
+    let hb = if coords.is_empty() { hb } else { hb.instance_builder().variations(coords.iter().map(|(t, v)| (harfrust::Tag::new(t), *v))).build() };
     let axis = |tag: &[u8; 4]| coords.iter().find(|(t, _)| t == tag).map(|(_, v)| *v);
     // Old releases of heavy faces (Arial Black in the core fonts) claim weight 400 where current
     // ones say 900, which Word doesn't embolden: a family named for its weight is that heavy.
@@ -379,10 +381,9 @@ pub(super) fn make_face(
         descent: -(m.descent as f64),
         cap_height: m.cap_height.map(|v| v as f64).filter(|v| *v > 0.0).unwrap_or(m.ascent as f64 * 0.72),
         x_height: m.x_height.map(|v| v as f64).filter(|v| *v > 0.0).unwrap_or(m.ascent as f64 * 0.5),
-        shaper,
+        hb,
         coords,
         location,
-        instance,
         bytes,
         index,
         bmp: std::sync::OnceLock::new(),
