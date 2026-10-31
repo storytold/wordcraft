@@ -303,7 +303,8 @@ impl<'a> Flow<'a> {
         } else {
             0.0
         };
-        let (next, leading) = if rp.keep_next { next_first_line(ctx, self.block, self.width, 0, &mut ctx.counters.clone()) } else { (0.0, 0.0) };
+        let (next, leading) =
+            if rp.keep_next { next_first_line(ctx, self.block, self.width, 0, &mut ctx.counters.clone(), pb.web) } else { (0.0, 0.0) };
         let need = height + if rp.keep_next { gap + next - if at_margin { leading } else { 0.0 } } else { -own_leading };
         // (Against the whole column: balanced columns grow to hold it.)
         // With the 0.01 pt of slack the other fit checks take.
@@ -927,7 +928,7 @@ fn space_after_kept(ctx: &Ctx, block: usize, rp: &wordcraft_doc::resolve::Resolv
 /// kept with the next too (a chain moves together in Word). Word carries a kept heading over
 /// when the paragraph after it cannot start on the page (#966). With it, the leading below the
 /// text of the last of those lines, which may run into the bottom margin (`fit_height`).
-fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counters: &mut Counters) -> (f32, f32) {
+fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counters: &mut Counters, web: bool) -> (f32, f32) {
     match ctx.doc.body.get(block + 1).map(|b| &**b) {
         Some(Block::Para(p)) => {
             // Keep list indents and label metrics without consuming the document counters.
@@ -965,8 +966,10 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counte
             let top = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block), None) { 0.0 } else { own.top };
             if pl.rp.keep_next && depth < 8 {
                 let bottom = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block + 2), None) { 0.0 } else { own.bottom };
-                let (next, leading) = next_first_line(ctx, block + 1, width, depth + 1, counters);
+                let (next, leading) = next_first_line(ctx, block + 1, width, depth + 1, counters, web);
                 let gap = kept_gap_adjustment(ctx, block + 1, &pl.rp, listed);
+                // Any note in the kept prefix removes the margin-leading allowance too.
+                let leading = if !web && has_lookahead_footnote(ctx.doc, p, &pl, pl.lines.len().saturating_sub(1)) { 0.0 } else { leading };
                 (pl.rp.space_before + top + pl.height + bottom + gap + next, leading)
             } else {
                 // The room this one needs to start on the page with the kept paragraph before
@@ -984,9 +987,14 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counte
                     0
                 };
                 let need = if pl.rp.keep_lines { pl.height } else { to(last) };
-                // The leading below the text of that last line (`fit_height`).
+                // Placement requires the full line height when its candidate range has notes;
+                // only note-free multiple-spacing leading may extend into the bottom margin.
                 let leading = match (pl.rp.line_spacing, pl.lines.get(last)) {
-                    (wordcraft_doc::props::LineSpacing::Multiple(m), Some(l)) if m > 1.0 => leading_below(l),
+                    (wordcraft_doc::props::LineSpacing::Multiple(m), Some(l))
+                        if m > 1.0 && (web || !has_lookahead_footnote(ctx.doc, p, &pl, last)) =>
+                    {
+                        leading_below(l)
+                    }
                     _ => 0.0,
                 };
                 (pl.rp.space_before + top + need, leading)
@@ -995,4 +1003,14 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counte
         Some(Block::Table(_)) => (24.0, 0.0),
         None => (0.0, 0.0),
     }
+}
+
+/// Whether the looked-ahead lines through `last` bring a footnote onto the page, including
+/// references inside inline text boxes. Endnotes do not occupy the page's footnote area.
+fn has_lookahead_footnote(doc: &Document, p: &Paragraph, pl: &ParaLayout, last: usize) -> bool {
+    pl.lines.first().zip(pl.lines.get(last)).is_some_and(|(first, last)| {
+        para_notes(doc, p, pl)
+            .iter()
+            .any(|(ci, id)| *ci >= first.c0 && *ci < last.c1 && doc.parts.get(id).is_some_and(|part| part.kind == wordcraft_doc::PartKind::Footnote))
+    })
 }
