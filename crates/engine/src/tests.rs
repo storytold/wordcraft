@@ -4113,7 +4113,8 @@ fn update_toc_clears_stale_field_result_for_docx_span() {
         s
     };
     let b = xml.find(r#"w:fldCharType="begin""#).expect("TOC begin marker present");
-    let e = xml.find(r#"w:fldCharType="end""#).expect("TOC end marker present");
+    // The TOC's end is the last one: the entries' page numbers are `PAGEREF` fields inside it.
+    let e = xml.rfind(r#"w:fldCharType="end""#).expect("TOC end marker present");
     assert!(b < e, "begin marker precedes end marker");
     let inside_field = &xml[b..e];
     let after_field = &xml[e..];
@@ -4296,6 +4297,50 @@ fn toc_page_numbers_follow_headings() {
     for (name, page) in [("Alpha", 2), ("Bravo", 3), ("Charlie", 4)] {
         assert!(t.contains(&format!("{name}\t{page}")), "{name} should be on page {page}: {t}");
     }
+}
+
+/// A hyperlinked TOC's page numbers are `PAGEREF` fields to the headings' bookmarks, as Word
+/// writes them, so updating them in Word follows the headings; they survive a save and reopen.
+#[test]
+fn toc_page_numbers_are_pageref_fields() {
+    let mut s = s();
+    run(&mut s, "references.toc", json!({}));
+    run(&mut s, "caret.docEnd", json!({}));
+    for name in ["Alpha", "Bravo"] {
+        run(&mut s, "text.pageBreak", json!({}));
+        run(&mut s, "text.insert", json!({"text": name}));
+        run(&mut s, "para.heading1", json!({}));
+        run(&mut s, "text.newParagraph", json!({}));
+    }
+    run(&mut s, "references.updateToc", json!({}));
+    let fields: Vec<(String, String)> = s
+        .doc
+        .body
+        .iter()
+        .filter_map(|b| b.as_para())
+        .filter(|p| p.props.style.as_deref() == Some("TOC1"))
+        .flat_map(|p| p.objects.iter())
+        .filter_map(|o| match o {
+            wordcraft_doc::para::InlineObject::Field { instr, result, .. } => Some((instr.clone(), result.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(fields.len(), 2, "{fields:?}");
+    for ((instr, result), page) in fields.iter().zip(["2", "3"]) {
+        let mark = instr.strip_prefix("PAGEREF ").and_then(|r| r.strip_suffix(" \\h")).unwrap_or_else(|| panic!("{instr}"));
+        assert!(mark.starts_with("_Toc") && s.doc.bookmarks().iter().any(|(n, _)| n == mark), "{instr}");
+        assert_eq!(result, page);
+    }
+    let expected = text(&s);
+    assert!(expected.contains("Alpha\t2") && expected.contains("Bravo\t3"), "{expected}");
+    let bytes = crate::io::save_bytes("toc.docx", &s.doc).unwrap();
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut z.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert_eq!(xml.matches("PAGEREF _Toc").count(), 2, "{xml}");
+    let mut s = Session::new(crate::io::open_bytes("toc.docx", &bytes).unwrap());
+    run(&mut s, "references.updateFields", json!({}));
+    assert_eq!(text(&s), expected);
 }
 
 /// Headings numbered through a list carry their numbers, and the level's separator, into the
@@ -11474,4 +11519,63 @@ fn scale_font_sizes_reaches_char_table_and_cs_sizes_and_unset_default() {
     let grid = st.styles.iter().find(|x| x.id == "Grid").and_then(|x| x.table.as_ref()).unwrap();
     assert_eq!(grid.header_chr.size, Some(16.0));
     assert_eq!(grid.regions.get(&TablePart::Band2Horz).unwrap().chr.size, Some(10.0));
+}
+
+/// #3676: a 1-based page parameter becomes a 0-based index without wrapping.
+/// On 32-bit and wasm the old cast truncated 2^32 to 0 and `0 - 1` panicked.
+#[test]
+fn page_index_saturates_instead_of_wrapping_to_page_one() {
+    assert_eq!(crate::p::page_index(0), 0);
+    assert_eq!(crate::p::page_index(1), 0);
+    assert_eq!(crate::p::page_index(2), 1);
+    assert_ne!(crate::p::page_index(1u64 << 32), 0, "2^32 must not wrap to page 1");
+    assert_eq!(crate::p::page_index(u64::MAX), usize::MAX - 1);
+}
+
+/// #3676: absolute page numbers that cannot be an index are rejected, not silently
+/// turned into page 1. `edit.goto` clamps to the last page, as it does past the end.
+#[test]
+fn hostile_absolute_pages_never_land_on_page_one() {
+    let mut s = s();
+    for i in 0..5 {
+        if i > 0 {
+            run(&mut s, "insert.pageBreak", json!({}));
+        }
+        run(&mut s, "text.insert", json!({"text": format!("Page {}", i + 1)}));
+    }
+    let page = |s: &mut Session| s.layout().caret_on(&s.sel.focus, s.page_hint).unwrap().page + 1;
+    run(&mut s, "edit.goto", json!({"page": 1u64 << 32}));
+    assert_eq!(page(&mut s), 5, "an out-of-range page lands on the last page");
+    run(&mut s, "edit.goto", json!({"page": u64::MAX}));
+    assert_eq!(page(&mut s), 5, "u64::MAX lands on the last page");
+    run(&mut s, "edit.goto", json!({"page": 0}));
+    assert_eq!(page(&mut s), 1, "page 0 is the first page");
+}
+
+/// #3676: `caret.set` takes a 0-based page; an oversized page is rejected instead of
+/// truncating to page 0 on 32-bit and wasm.
+#[test]
+fn caret_set_rejects_a_page_number_that_does_not_fit() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Hello"}));
+    let r = s.run("caret.set", &json!({"page": 1u64 << 32, "x": 100.0, "y": 100.0}));
+    assert!(matches!(r, Err(crate::CmdError::Params(_))), "page 2^32: {r:?}");
+}
+
+/// #3676: `file.exportPng` rejects a page number that cannot be an index instead of
+/// exporting page 1 (the 32-bit truncation) and writing it to the requested path.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn export_png_rejects_a_page_number_that_does_not_fit() {
+    let dir = scratch_dir("export-png-hostile-page");
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Hello"}));
+    let target = dir.join("page.png");
+    let r = s.run("file.exportPng", &json!({"path": target.to_string_lossy(), "page": 1u64 << 32}));
+    assert!(matches!(r, Err(crate::CmdError::Params(_))), "page 2^32: {r:?}");
+    assert!(!target.exists(), "no file is written for an invalid page");
+    let r = s.run("file.exportPng", &json!({"path": target.to_string_lossy(), "page": u64::MAX}));
+    assert!(matches!(r, Err(crate::CmdError::Params(_))), "page u64::MAX: {r:?}");
+    assert!(!target.exists(), "no file is written for an invalid page");
+    let _ = std::fs::remove_dir_all(&dir);
 }
