@@ -11475,3 +11475,62 @@ fn scale_font_sizes_reaches_char_table_and_cs_sizes_and_unset_default() {
     assert_eq!(grid.header_chr.size, Some(16.0));
     assert_eq!(grid.regions.get(&TablePart::Band2Horz).unwrap().chr.size, Some(10.0));
 }
+
+/// #3676: a 1-based page parameter becomes a 0-based index without wrapping.
+/// On 32-bit and wasm the old cast truncated 2^32 to 0 and `0 - 1` panicked.
+#[test]
+fn page_index_saturates_instead_of_wrapping_to_page_one() {
+    assert_eq!(crate::p::page_index(0), 0);
+    assert_eq!(crate::p::page_index(1), 0);
+    assert_eq!(crate::p::page_index(2), 1);
+    assert_ne!(crate::p::page_index(1u64 << 32), 0, "2^32 must not wrap to page 1");
+    assert_eq!(crate::p::page_index(u64::MAX), usize::MAX - 1);
+}
+
+/// #3676: absolute page numbers that cannot be an index are rejected, not silently
+/// turned into page 1. `edit.goto` clamps to the last page, as it does past the end.
+#[test]
+fn hostile_absolute_pages_never_land_on_page_one() {
+    let mut s = s();
+    for i in 0..5 {
+        if i > 0 {
+            run(&mut s, "insert.pageBreak", json!({}));
+        }
+        run(&mut s, "text.insert", json!({"text": format!("Page {}", i + 1)}));
+    }
+    let page = |s: &mut Session| s.layout().caret_on(&s.sel.focus, s.page_hint).unwrap().page + 1;
+    run(&mut s, "edit.goto", json!({"page": 1u64 << 32}));
+    assert_eq!(page(&mut s), 5, "an out-of-range page lands on the last page");
+    run(&mut s, "edit.goto", json!({"page": u64::MAX}));
+    assert_eq!(page(&mut s), 5, "u64::MAX lands on the last page");
+    run(&mut s, "edit.goto", json!({"page": 0}));
+    assert_eq!(page(&mut s), 1, "page 0 is the first page");
+}
+
+/// #3676: `caret.set` takes a 0-based page; an oversized page is rejected instead of
+/// truncating to page 0 on 32-bit and wasm.
+#[test]
+fn caret_set_rejects_a_page_number_that_does_not_fit() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Hello"}));
+    let r = s.run("caret.set", &json!({"page": 1u64 << 32, "x": 100.0, "y": 100.0}));
+    assert!(matches!(r, Err(crate::CmdError::Params(_))), "page 2^32: {r:?}");
+}
+
+/// #3676: `file.exportPng` rejects a page number that cannot be an index instead of
+/// exporting page 1 (the 32-bit truncation) and writing it to the requested path.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn export_png_rejects_a_page_number_that_does_not_fit() {
+    let dir = scratch_dir("export-png-hostile-page");
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Hello"}));
+    let target = dir.join("page.png");
+    let r = s.run("file.exportPng", &json!({"path": target.to_string_lossy(), "page": 1u64 << 32}));
+    assert!(matches!(r, Err(crate::CmdError::Params(_))), "page 2^32: {r:?}");
+    assert!(!target.exists(), "no file is written for an invalid page");
+    let r = s.run("file.exportPng", &json!({"path": target.to_string_lossy(), "page": u64::MAX}));
+    assert!(matches!(r, Err(crate::CmdError::Params(_))), "page u64::MAX: {r:?}");
+    assert!(!target.exists(), "no file is written for an invalid page");
+    let _ = std::fs::remove_dir_all(&dir);
+}
