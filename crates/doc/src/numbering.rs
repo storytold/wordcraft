@@ -228,7 +228,7 @@ impl Numbering {
     /// Whether a paragraph in list `num` at `level` gets a label ([`Counters::next_label`] gives
     /// one), without counting it.
     pub fn shows_label(&self, num: u32, level: u8) -> bool {
-        self.abstract_of(num).is_some() && self.level(num, level.min(8)).is_some_and(|d| d.format != NumFormat::None)
+        self.abstract_of(num).is_some() && self.level(num, level.min(8)).is_some()
     }
     pub fn level(&self, num: u32, level: u8) -> Option<&Level> {
         if let Some((_, l)) = self.num(num)?.level_overrides.iter().find(|(i, _)| *i == level) {
@@ -317,11 +317,9 @@ impl Counters {
         let lv = (level as usize).min(8);
         // This list's own definition of a level wins over its abstract list's.
         let level_def = |k: usize| numbering.level(num, k as u8);
+        // A "none" level (Word's numFmt none) still counts and restarts the levels below it; only
+        // its number reads as nothing, so its literal text ("RESPONSE:") shows (#4985).
         let def = level_def(lv)?.clone();
-        // A "none" level shows no label at all (Word's numFmt none) — not even its text.
-        if def.format == NumFormat::None {
-            return None;
-        }
         let st = self.state.entry(abs.id).or_insert([0; 9]);
         let fl = self.flags.entry(abs.id).or_default();
         // Only this level's override, not the num's others: the counters are shared by every
@@ -369,9 +367,9 @@ impl Counters {
                 let counted = started.get(k).is_some_and(|f| f.started);
                 let val = if counted { val } else { level_def(k).map(|l| l.start).unwrap_or(1) };
                 // Legal numbering (w:isLgl) shows every level in Arabic digits, whatever its own
-                // format (二 of a Chinese outline becomes 2 in "2.1").
+                // format (二 of a Chinese outline becomes 2 in "2.1"); a "none" level stays empty.
                 let fmt = match level_def(k).map(|l| l.format).unwrap_or(NumFormat::Decimal) {
-                    NumFormat::DecimalZero => NumFormat::DecimalZero,
+                    f @ (NumFormat::DecimalZero | NumFormat::None) => f,
                     _ if def.legal => NumFormat::Decimal,
                     f => f,
                 };
@@ -429,6 +427,27 @@ mod tests {
         // Levels it doesn't define still come from the abstract list.
         assert_eq!(c.next_label(&n, id, 0).unwrap().0, "1.");
         assert_eq!(n.level(id, 2).map(|l| l.format), Some(NumFormat::DecimalZero));
+    }
+
+    #[test]
+    fn a_none_level_shows_its_text_and_still_counts() {
+        // As Word shows them (#4985): a "none" level's literal text is its label, its own number
+        // reads as nothing (also in legal numbering), and it restarts the levels below it.
+        let mut n = Numbering::default();
+        let id = n.add_list(ListKind::Numbered);
+        let lvl = |format, text: &str| Level { format, text: text.into(), ..Level::default() };
+        let legal = Level { legal: true, ..lvl(NumFormat::Decimal, "%2.%3") };
+        if let Some(num) = n.nums.iter_mut().find(|x| x.id == id) {
+            num.level_overrides = vec![(0, lvl(NumFormat::None, "RESPONSE:")), (1, lvl(NumFormat::None, "[%2]")), (2, legal)];
+        }
+        assert!(n.shows_label(id, 0));
+        let mut c = Counters::default();
+        assert_eq!(c.next_label(&n, id, 0).unwrap().0, "RESPONSE:");
+        assert_eq!(c.next_label(&n, id, 1).unwrap().0, "[]");
+        assert_eq!(c.next_label(&n, id, 2).unwrap().0, ".1");
+        assert_eq!(c.next_label(&n, id, 2).unwrap().0, ".2");
+        assert_eq!(c.next_label(&n, id, 1).unwrap().0, "[]");
+        assert_eq!(c.next_label(&n, id, 2).unwrap().0, ".1");
     }
 
     #[test]
