@@ -204,7 +204,11 @@ pub(super) fn customize_keyboard(s: &mut Session, v: &Value) -> CmdResult {
     if let Some(r) = v.get("remove") {
         asked = true;
         let (id, key) = pair(r)?;
-        let locale = p::str(v, "locale");
+        let locale = match v.get("locale") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(locale)) => Some(locale.as_str()),
+            Some(_) => return Err(CmdError::Params("locale must be a string".into())),
+        };
         let removed = match locale {
             None => s.keymap.remove(&reg, &id, &key),
             Some("pt-br") => s.keymap.remove_for_locale(&reg, "pt-br", &id, &key),
