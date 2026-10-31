@@ -141,34 +141,24 @@ impl Reader<'_> {
         let type_id = shape.attr("type").map(|t| t.trim().trim_start_matches('#'));
         let shapetype = type_id.and_then(|id| pict.els().find(|e| e.name == "v:shapetype" && e.attr("id") == Some(id)));
         let attr = |name: &str| shape.attr(name).or_else(|| shapetype.and_then(|t| t.attr(name)));
-        let on = |name: &str| {
-            attr(name).is_none_or(|v| {
-                let t = v.trim();
-                !t.eq_ignore_ascii_case("f") && !t.eq_ignore_ascii_case("false") && t != "0"
-            })
-        };
-        // A `v:stroke` switches the outline on or off (`on`, which Word lets override the shape's
-        // `stroked`) and can make it fully transparent (`opacity`), as Google Docs writes its
-        // invisible horizontal rules (ECMA-376 Part 4 §19.1.2.21). Freeforms keep the stroke's
-        // opacity themselves (below).
-        let stroke_el = shape.child("v:stroke").or_else(|| shapetype.and_then(|t| t.child("v:stroke")));
-        let enabled = match stroke_el.and_then(|s| s.attr("on")) {
-            Some(v) => {
-                let t = v.trim();
-                !(t.eq_ignore_ascii_case("f") || t.eq_ignore_ascii_case("false") || t == "0")
-            }
-            None => on("stroked"),
-        };
-        let freeform_stroke = enabled.then(|| attr("strokecolor").map_or(Some(Rgb::BLACK), vml_color)).flatten();
-        let transparent = stroke_el.and_then(|s| s.attr("opacity")).and_then(vml_opacity) == Some(0.0);
+        // A `v:stroke` switches the outline on or off (`on`), colours it (`color`) and can make it
+        // fully transparent (`opacity`), as Google Docs writes its invisible horizontal rules
+        // (ECMA-376 Part 4 §19.1.2.21). Word resolves each of these per property: the shape's own
+        // `v:stroke`, then the shape's attribute (`stroked`, `strokecolor`), then the same two on
+        // its shapetype. Freeforms keep the stroke's opacity themselves (below).
+        let stroke_prop = |name: &str, shape_attr: Option<&str>| vml_stroke_prop(shape, shapetype, name, shape_attr);
+        let enabled = stroke_prop("on", Some("stroked")).is_none_or(|v| {
+            let t = v.trim();
+            !(t.eq_ignore_ascii_case("f") || t.eq_ignore_ascii_case("false") || t == "0")
+        });
+        let freeform_stroke = enabled.then(|| stroke_prop("color", Some("strokecolor")).map_or(Some(Rgb::BLACK), vml_color)).flatten();
+        let stroke_opacity = stroke_prop("opacity", None).and_then(vml_opacity).unwrap_or(1.0);
+        // A fully transparent outline is kept as a shape without one, as Word keeps it.
+        let transparent = stroke_opacity == 0.0;
         let stroke = freeform_stroke.filter(|_| !transparent);
         let stroke_width = attr("strokeweight").and_then(|v| measure(v, 1.0)).unwrap_or(0.75).clamp(0.0, 100.0);
         let fill = vml_fill(shape, shapetype);
-        let endcap = shape
-            .child("v:stroke")
-            .and_then(|s| s.attr("endcap"))
-            .or_else(|| shapetype.and_then(|t| t.child("v:stroke")).and_then(|s| s.attr("endcap")));
-        let cap = match endcap {
+        let cap = match stroke_prop("endcap", None) {
             Some("square") => wordcraft_doc::connector::LineCap::Square,
             Some("round") => wordcraft_doc::connector::LineCap::Round,
             _ => wordcraft_doc::connector::LineCap::Flat,
@@ -292,7 +282,7 @@ impl Reader<'_> {
                 return None;
             }
             let mut f = vp.freeform;
-            f.alpha = opacity("v:stroke");
+            f.alpha = stroke_opacity;
             return Some(InlineObject::Shape {
                 kind: ShapeKind::Freeform,
                 w,
@@ -333,7 +323,7 @@ impl Reader<'_> {
             float.flip_h ^= x1 < x0;
             float.flip_v ^= y1 < y0;
         }
-        if stroke.is_none() && (fill.is_none() || kind == ShapeKind::Line) {
+        if stroke.is_none() && !transparent && (fill.is_none() || kind == ShapeKind::Line) {
             return None;
         }
         Some(InlineObject::Shape {
@@ -625,6 +615,13 @@ fn vml_watermark(shape: &El) -> Option<wordcraft_doc::Watermark> {
 /// A VML `opacity`, 0..=1.
 fn vml_opacity(v: &str) -> Option<f32> {
     vml_fraction(v).map(|f| f.clamp(0.0, 1.0))
+}
+
+/// One stroke property as Word resolves it: the shape's own `v:stroke` attribute `name`, then the
+/// shape's attribute `shape_attr` (`stroked`, `strokecolor`), then the same two on its shapetype.
+fn vml_stroke_prop<'a>(shape: &'a El, shapetype: Option<&'a El>, name: &str, shape_attr: Option<&str>) -> Option<&'a str> {
+    let level = move |e: &'a El| e.child("v:stroke").and_then(|s| s.attr(name)).or_else(move || shape_attr.and_then(|a| e.attr(a)));
+    level(shape).or_else(|| shapetype.and_then(level))
 }
 
 /// A VML shape's turn: `rotation` in degrees, or 65536ths of one with an `fd` suffix; `flip`: `x`
