@@ -2209,6 +2209,18 @@ fn right_click_on_a_picture_offers_wrap_text() {
         h.step();
     }
     assert!(h.query_by_label_contains("Fix Position on Page").is_some(), "the anchoring choices are offered");
+    // To a screen reader the styles are a choice of menu items, the current one checked (#4977).
+    {
+        use egui::accesskit::{Role, Toggled};
+        use egui_kittest::kittest::NodeT;
+        let toggled = |label: &str| h.get_by_role_and_label(Role::MenuItemRadio, label).accesskit_node().toggled();
+        assert_eq!(toggled("In Line with Text"), Some(Toggled::True), "the picture is in line with the text");
+        assert_eq!(toggled("Square"), Some(Toggled::False));
+        // Two choices: the seven styles, and the two ways to anchor the object.
+        let group = |label: &str| h.get_by_role_and_label(Role::MenuItemRadio, label).accesskit_node().data().radio_group().len();
+        assert_eq!(group("Square"), 7, "the styles are a choice");
+        assert_eq!(group("Fix Position on Page"), 2, "and anchoring another");
+    }
     h.get_by_label_contains("Square").click();
     for _ in 0..3 {
         h.step();
@@ -2528,6 +2540,404 @@ fn control_click_on_macos_opens_the_context_menu() {
         h.step();
     }
     assert_eq!(h.state().session.doc.plain_text(StoryRef::Body), "The quick brown fox");
+}
+
+/// #4977: from the keyboard, Right on a submenu's item opens the submenu and goes into it,
+/// Left comes back to the item, Enter goes in too, Escape closes only the submenu (the menu
+/// stays, its item has the keyboard), and Enter on a submenu's entry runs it, as in Word.
+#[test]
+fn the_context_menu_from_the_keyboard_enters_its_submenus() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut h = table_window();
+    let focused = |h: &H| h.query_by(|n| n.role() == Role::MenuItem && n.is_focused()).map(|n| n.accesskit_node().label().unwrap_or_default());
+    let key = |h: &mut H, key: egui::Key| {
+        h.key_press(key);
+        steps(h, 4);
+    };
+    let to_insert = |h: &mut H| {
+        h.state_mut().run("ui.contextMenu", json!({})).unwrap();
+        steps(h, 4);
+        for _ in 0..20 {
+            if focused(h).as_deref() == Some("Insert") {
+                break;
+            }
+            key(h, egui::Key::ArrowDown);
+        }
+        assert_eq!(focused(h).as_deref(), Some("Insert"), "Down reaches the Insert submenu's item");
+    };
+    let submenu_open = |h: &H| h.query_by_role_and_label(Role::MenuItem, "Insert Columns to the Left ").is_some();
+    // To a screen reader the item has a submenu, collapsed or expanded ("Insert, collapsed").
+    let expanded = |h: &H| h.get_by_role_and_label(Role::MenuItem, "Insert").accesskit_node().data().is_expanded();
+    to_insert(&mut h);
+    assert_eq!(expanded(&h), Some(false), "the submenu's item says it is collapsed");
+    key(&mut h, egui::Key::ArrowRight);
+    assert_eq!(focused(&h).as_deref(), Some("Insert Columns to the Left "), "Right goes into the submenu");
+    assert_eq!(expanded(&h), Some(true), "and its item that it is expanded");
+    key(&mut h, egui::Key::ArrowDown);
+    assert_eq!(focused(&h).as_deref(), Some("Insert Columns to the Right "), "Down moves in the submenu");
+    key(&mut h, egui::Key::ArrowLeft);
+    assert_eq!(focused(&h).as_deref(), Some("Insert"), "Left comes back to the submenu's item");
+    key(&mut h, egui::Key::Enter);
+    assert_eq!(focused(&h).as_deref(), Some("Insert Columns to the Left "), "Enter goes into the submenu too");
+    key(&mut h, egui::Key::Escape);
+    assert!(h.state().canvas.context_menu_open, "Escape in the submenu leaves the menu open");
+    assert!(!submenu_open(&h), "and closes the submenu");
+    assert_eq!(focused(&h).as_deref(), Some("Insert"), "its item has the keyboard");
+    assert_eq!(expanded(&h), Some(false), "collapsed again");
+    key(&mut h, egui::Key::Escape);
+    assert!(!h.state().canvas.context_menu_open, "a second Escape closes the menu");
+    assert!(h.state().canvas.focused, "and the page has the keyboard again");
+
+    to_insert(&mut h);
+    key(&mut h, egui::Key::ArrowRight);
+    key(&mut h, egui::Key::ArrowDown);
+    let cols = |h: &H| h.state().session.doc.body.iter().find_map(|b| b.as_table()).map(|t| t.cols());
+    let before = cols(&h);
+    key(&mut h, egui::Key::Enter);
+    assert_eq!(cols(&h), before.map(|c| c + 1), "Enter on Insert Columns to the Right inserts a column");
+    assert!(!h.state().canvas.context_menu_open, "and closes the menu");
+    assert!(h.state().canvas.focused, "the page has the keyboard again");
+}
+
+#[test]
+fn the_context_menu_from_the_keyboard_gives_the_keyboard_back_where_it_belongs() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    let new = || {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("text.insert", json!({"text": "The quick brown fox\nA second line"})).unwrap();
+        a.session.sel = wordcraft_engine::Selection::caret(Pos::body(0, 4));
+        a.canvas.want_focus = true;
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        for _ in 0..4 {
+            h.step();
+        }
+        h
+    };
+    let run = |h: &mut egui_kittest::Harness<'static, WordApp>| {
+        for _ in 0..4 {
+            h.step();
+        }
+    };
+    let item_focused = |h: &egui_kittest::Harness<'static, WordApp>| h.query_by(|n| n.role() == Role::MenuItem && n.is_focused()).is_some();
+    let text = |h: &egui_kittest::Harness<'static, WordApp>| h.state().session.doc.plain_text(StoryRef::Body);
+
+    // A key typed in the frames before the page loses the focus goes to the menu, not the text.
+    let mut h = new();
+    let before = text(&h);
+    h.state_mut().run("ui.contextMenu", json!({})).unwrap();
+    h.step();
+    h.event(egui::Event::Text("x".into()));
+    run(&mut h);
+    assert_eq!(text(&h), before, "nothing is typed behind the menu");
+
+    // A right click over the menu opened from the keyboard reopens it for the mouse: the page has
+    // the keyboard, no item.
+    let mut h = new();
+    h.state_mut().run("ui.contextMenu", json!({})).unwrap();
+    run(&mut h);
+    assert!(item_focused(&h), "the menu has the keyboard");
+    let c = h.state_mut().session.layout().caret(&Pos::body(0, 12)).expect("laid out");
+    let at = page_to_screen(h.state_mut(), c.page, c.x, c.top + c.height / 2.0).expect("on screen");
+    h.event(egui::Event::PointerMoved(at));
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() });
+        h.step();
+    }
+    run(&mut h);
+    assert!(h.state().canvas.context_menu_open, "the right click opens the menu");
+    assert!(!item_focused(&h), "no item has the keyboard");
+    assert!(h.state().canvas.focused, "the page has it");
+
+    // A click on the ribbon's font box closes the menu and leaves the keyboard to the box.
+    let mut h = new();
+    h.state_mut().run("ui.contextMenu", json!({})).unwrap();
+    run(&mut h);
+    assert!(item_focused(&h), "the menu has the keyboard");
+    // The ribbon's, at the top: the mini toolbar over the menu has one too.
+    h.get_all_by_role_and_label(Role::TextInput, "Font")
+        .min_by(|a, b| a.rect().min.y.total_cmp(&b.rect().min.y))
+        .expect("the ribbon has a font box")
+        .click();
+    run(&mut h);
+    assert!(!h.state().canvas.context_menu_open, "the click closes the menu");
+    assert!(!h.state().canvas.focused, "the page doesn't take the keyboard back");
+    let font = h
+        .get_all_by_role_and_label(Role::TextInput, "Font")
+        .min_by(|a, b| a.rect().min.y.total_cmp(&b.rect().min.y))
+        .expect("the ribbon has a font box");
+    assert!(font.is_focused(), "the font box has it");
+}
+
+/// #4977: the menu Shift+F10 opens takes the keyboard, as Word's does. Its first item has the
+/// focus, even when it is off (Cut, with nothing selected), and says it is unavailable; Enter
+/// there does nothing. Down and Up go through the items, round from the last to the first, and End
+/// and Home to the last and the first, all without moving the caret behind it; the items are menu
+/// items to a screen reader; Escape closes the menu and the page has the keyboard again; Enter
+/// runs an item and closes the menu.
+#[test]
+fn the_context_menu_from_the_keyboard_takes_the_keyboard() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("text.insert", json!({"text": "The quick brown fox\nA second line"})).unwrap();
+    a.session.sel = wordcraft_engine::Selection::caret(Pos::body(0, 4));
+    a.canvas.want_focus = true;
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    let run = |h: &mut egui_kittest::Harness<'static, WordApp>| {
+        for _ in 0..4 {
+            h.step();
+        }
+    };
+    run(&mut h);
+    let caret = h.state().session.sel.clone();
+    h.state_mut().run("ui.contextMenu", json!({})).unwrap();
+    run(&mut h);
+    assert!(h.state().canvas.context_menu_open, "Shift+F10 opens the menu");
+    let focused = |h: &egui_kittest::Harness<'static, WordApp>| {
+        h.query_by(|n| n.role() == Role::MenuItem && n.is_focused()).map(|n| n.accesskit_node().label().unwrap_or_default())
+    };
+    let first = focused(&h).expect("an item of the menu has the keyboard");
+    let items: Vec<String> = h.query_all_by_role(Role::MenuItem).map(|n| n.accesskit_node().label().unwrap_or_default()).collect();
+    assert_eq!(items.first(), Some(&first), "the first item has it");
+    assert!(items.len() > 2, "the menu has several items: {items:?}");
+    assert!(first.starts_with("Cut"), "the first item is Cut: {first}");
+    let off = |h: &egui_kittest::Harness<'static, WordApp>| {
+        h.query_by(|n| n.role() == Role::MenuItem && n.is_focused()).is_some_and(|n| n.accesskit_node().is_disabled())
+    };
+    assert!(off(&h), "Cut is off with nothing selected, and says so");
+    let text = h.state().session.doc.plain_text(StoryRef::Body);
+    h.key_press(egui::Key::Enter);
+    run(&mut h);
+    assert!(h.state().canvas.context_menu_open, "Enter on an item that is off leaves the menu open");
+    assert_eq!(h.state().session.doc.plain_text(StoryRef::Body), text, "and does nothing");
+    assert_eq!(focused(&h), Some(first.clone()), "the item keeps the keyboard");
+    // Each item knows its place, and the menu the number of items (those that are off too).
+    let all = h.query_all_by_role(Role::MenuItem).count();
+    let places: Vec<Option<usize>> = h.query_all_by_role(Role::MenuItem).map(|n| n.accesskit_node().position_in_set()).collect();
+    assert_eq!(places, (0..all).map(Some).collect::<Vec<_>>(), "the items are numbered in order");
+    assert_eq!(h.get_by_role(Role::Menu).accesskit_node().size_of_set(), Some(all), "the menu knows how many items it has");
+    h.key_press(egui::Key::ArrowDown);
+    run(&mut h);
+    assert_eq!(focused(&h).as_ref(), items.get(1), "Down goes to the next item");
+    h.key_press(egui::Key::ArrowUp);
+    run(&mut h);
+    assert_eq!(focused(&h), Some(first.clone()), "Up goes back");
+    h.key_press(egui::Key::ArrowUp);
+    run(&mut h);
+    assert_eq!(focused(&h).as_ref(), items.last(), "Up from the first item goes round to the last");
+    h.key_press(egui::Key::ArrowDown);
+    run(&mut h);
+    assert_eq!(focused(&h), Some(first.clone()), "and Down from the last to the first");
+    h.key_press(egui::Key::End);
+    run(&mut h);
+    assert_eq!(focused(&h).as_ref(), items.last(), "End goes to the last item");
+    h.key_press(egui::Key::Home);
+    run(&mut h);
+    assert_eq!(focused(&h), Some(first), "Home to the first");
+    assert_eq!(h.state().session.sel, caret, "the arrows never moved the caret behind the menu");
+    assert!(h.state().canvas.context_menu_open, "the menu is still open");
+    h.key_press(egui::Key::Escape);
+    run(&mut h);
+    assert!(!h.state().canvas.context_menu_open, "Escape closes it");
+    assert!(h.state().canvas.focused, "the page has the keyboard again");
+    h.key_press(egui::Key::ArrowDown);
+    run(&mut h);
+    assert_ne!(h.state().session.sel, caret, "and the arrows move the caret again");
+
+    // Enter on an item runs it and closes the menu: Cut, with a word selected.
+    h.state_mut().run("select.text", json!({"text": "quick"})).unwrap();
+    h.state_mut().run("ui.contextMenu", json!({})).unwrap();
+    run(&mut h);
+    assert!(focused(&h).is_some_and(|l| l.starts_with("Cut")), "Cut has the keyboard: {:?}", focused(&h));
+    h.key_press(egui::Key::Enter);
+    run(&mut h);
+    assert!(!h.state().session.doc.plain_text(StoryRef::Body).contains("quick"), "Enter cut the word");
+    assert!(!h.state().canvas.context_menu_open, "and closed the menu");
+    assert!(h.state().canvas.focused, "the page has the keyboard again");
+}
+
+/// #4977: an item of the menu Shift+F10 opens that opens a dialog (Font…) gives the keyboard to
+/// the dialog's first control, and Tab goes on through the dialog, not the ribbon; the Enter that
+/// chose the item doesn't also press the dialog's OK.
+#[test]
+fn an_item_of_the_keyboard_menu_gives_its_dialog_the_keyboard() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("text.insert", json!({"text": "The quick brown fox"})).unwrap();
+    a.session.sel = wordcraft_engine::Selection::caret(Pos::body(0, 4));
+    a.canvas.want_focus = true;
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    let run = |h: &mut egui_kittest::Harness<'static, WordApp>| {
+        for _ in 0..4 {
+            h.step();
+        }
+    };
+    let focused = |h: &egui_kittest::Harness<'static, WordApp>| {
+        h.query_by(|n| n.role() == Role::MenuItem && n.is_focused()).map(|n| n.accesskit_node().label().unwrap_or_default())
+    };
+    run(&mut h);
+    h.state_mut().run("ui.contextMenu", json!({})).unwrap();
+    run(&mut h);
+    for _ in 0..30 {
+        if focused(&h).is_some_and(|l| l.starts_with("Font")) {
+            break;
+        }
+        h.key_press(egui::Key::ArrowDown);
+        run(&mut h);
+    }
+    assert!(focused(&h).is_some_and(|l| l.starts_with("Font")), "Font… has the keyboard: {:?}", focused(&h));
+    h.key_press(egui::Key::Enter);
+    run(&mut h);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("font"), "Enter opened the Font dialog");
+    let in_font_dialog = |h: &egui_kittest::Harness<'static, WordApp>| {
+        h.query_by(|n| n.is_focused()).is_some_and(|n| {
+            std::iter::successors(n.accesskit_node().parent(), |p| p.parent())
+                .any(|p| matches!(p.role(), Role::Window | Role::Dialog) && p.label().as_deref() == Some("Font"))
+        })
+    };
+    assert!(in_font_dialog(&h), "a control of the dialog has the keyboard");
+    assert!(!h.state().canvas.focused, "not the page");
+    let first = h.ctx.memory(|m| m.focused());
+    h.key_press(egui::Key::Tab);
+    run(&mut h);
+    assert_ne!(h.ctx.memory(|m| m.focused()), first, "Tab moves on");
+    assert!(in_font_dialog(&h), "within the dialog");
+}
+
+/// A dialog opened with its shortcut (Ctrl+D, Font) gives the keyboard to its first control, as
+/// Word's dialogs do: the page kept it, so screen readers said nothing and Tab typed a tab behind
+/// the dialog. Tab goes on through the dialog, and Escape gives the page the keyboard back.
+#[test]
+fn a_dialog_opened_from_the_keyboard_takes_the_keyboard() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("text.insert", json!({"text": "The quick brown fox"})).unwrap();
+    a.session.sel = wordcraft_engine::Selection::caret(Pos::body(0, 4));
+    a.canvas.want_focus = true;
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    let run = |h: &mut egui_kittest::Harness<'static, WordApp>| {
+        for _ in 0..4 {
+            h.step();
+        }
+    };
+    run(&mut h);
+    assert!(h.state().canvas.focused, "the page has the keyboard");
+    let text = h.state().session.doc.plain_text(StoryRef::Body);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::D);
+    run(&mut h);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("font"), "Ctrl+D opened the Font dialog");
+    let in_font_dialog = |h: &egui_kittest::Harness<'static, WordApp>| {
+        h.query_by(|n| n.is_focused()).is_some_and(|n| {
+            std::iter::successors(n.accesskit_node().parent(), |p| p.parent())
+                .any(|p| matches!(p.role(), Role::Window | Role::Dialog) && p.label().as_deref() == Some("Font"))
+        })
+    };
+    assert!(in_font_dialog(&h), "a control of the dialog has the keyboard");
+    assert!(!h.state().canvas.focused, "not the page");
+    let first = h.ctx.memory(|m| m.focused());
+    h.key_press(egui::Key::Tab);
+    run(&mut h);
+    assert_ne!(h.ctx.memory(|m| m.focused()), first, "Tab moves on");
+    assert!(in_font_dialog(&h), "within the dialog");
+    assert_eq!(h.state().session.doc.plain_text(StoryRef::Body), text, "and types nothing on the page");
+    h.key_press(egui::Key::Escape);
+    run(&mut h);
+    assert!(h.state().dialog.is_none(), "Escape closes the dialog");
+    assert!(h.state().canvas.focused, "and the page has the keyboard again");
+}
+
+/// The app with `text` on the page, which has the keyboard, in a harness of a desktop window.
+fn page_with_keyboard(text: &str) -> egui_kittest::Harness<'static, WordApp> {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("text.insert", json!({"text": text})).unwrap();
+    a.session.sel = wordcraft_engine::Selection::caret(Pos::body(0, 0));
+    a.canvas.want_focus = true;
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    assert!(h.state().canvas.focused, "the page has the keyboard");
+    h
+}
+
+/// #4977: the first control of a dialog that has just opened sees itself gain the keyboard, so a
+/// number box selects its value and typing replaces it, as in Word: Insert Table's Number of
+/// columns took a typed 3 after its 5 (53). Enter is then OK, but Enter on Cancel cancels: it was
+/// OK too, so Insert Table inserted the table it was told not to.
+#[test]
+fn a_dialog_number_box_that_takes_the_keyboard_replaces_its_value() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut h = page_with_keyboard("Lanterns");
+    let open = |h: &mut egui_kittest::Harness<'static, WordApp>| {
+        let d = crate::dialogs::Dialog::open("insertTable", h.state_mut());
+        h.state_mut().dialog = d;
+        h.run_steps(4);
+    };
+    open(&mut h);
+    h.key_press(egui::Key::Num3);
+    h.event(egui::Event::Text("3".into()));
+    h.run_steps(2);
+    assert!(
+        matches!(h.state().dialog, Some(crate::dialogs::Dialog::InsertTable { cols: 3, .. })),
+        "the typed 3 replaces the 5 columns: {:?}",
+        h.state().dialog
+    );
+    h.key_press(egui::Key::Enter);
+    h.run_steps(4);
+    let tables = |h: &egui_kittest::Harness<'static, WordApp>| h.state().session.doc.body.iter().filter(|b| b.as_table().is_some()).count();
+    assert!(h.state().dialog.is_none(), "Enter in the box is OK");
+    assert_eq!(tables(&h), 1, "and inserts the table");
+
+    open(&mut h);
+    for _ in 0..6 {
+        if h.query_by(|n| n.is_focused()).and_then(|n| n.accesskit_node().label()).as_deref() == Some("Cancel") {
+            break;
+        }
+        h.key_press(egui::Key::Tab);
+        h.run_steps(2);
+    }
+    assert_eq!(h.query_by(|n| n.is_focused()).and_then(|n| n.accesskit_node().label()).as_deref(), Some("Cancel"), "Tab reaches Cancel");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(4);
+    assert!(h.state().dialog.is_none(), "Enter on Cancel closes the dialog");
+    assert_eq!(tables(&h), 1, "and inserts no table");
 }
 
 /// #3340: review.spelling (the Review tab's Spelling & Grammar button and the Home tab's
@@ -2972,6 +3382,20 @@ fn the_context_menu_in_a_table_follows_the_selection() {
     assert_eq!(h.state().session.sel.focus.path.cell().map(|(_, r, c)| (r, c)), Some((1, 2)), "the caret moved to the cell");
     assert_menu(&h, &["Insert", "Delete", "Split Cells", "Text Direction", "Table Properties…"], true);
     assert_menu(&h, &["Merge Cells", "Distribute Rows", "AutoFit", "Select", "Cell Alignment"], false);
+    // A submenu's items have their place in it, and it the number of them (#4977).
+    {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::{NodeT, Queryable};
+        let at = menu_entry(&h, "Insert").expect("Insert");
+        h.event(egui::Event::PointerMoved(at));
+        steps(&mut h, 2);
+        // Named as egui names a button with a shortcut: these have none, so a space ends them.
+        let place = |label: &str| h.get_by_role_and_label(Role::MenuItem, &format!("{label} ")).accesskit_node().position_in_set();
+        assert_eq!(place("Insert Columns to the Left"), Some(0));
+        assert_eq!(place("Insert Rows Below"), Some(3));
+        let sizes: Vec<Option<usize>> = h.query_all_by_role(Role::Menu).map(|n| n.accesskit_node().size_of_set()).collect();
+        assert!(sizes.contains(&Some(4)), "the Insert submenu has 4 items: {sizes:?}");
+    }
     let depth = h.state().session.undo_depth();
     pick(&mut h, &["Insert", "Insert Rows Below"]);
     assert_eq!(h.state().session.doc.body.iter().find_map(|b| b.as_table()).map(|t| t.rows.len()), Some(3));

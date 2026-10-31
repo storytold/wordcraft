@@ -232,6 +232,12 @@ pub(super) fn language_checks(current: &str, listed: impl Fn(&str) -> bool) -> L
 
 /// A menu item with a check mark when `checked` (the current choice of several).
 pub(super) fn mi_check(ui: &mut Ui, app: &mut WordApp, label: &str, checked: bool, id: &str, params: Value) {
+    let _ = mi_check_response(ui, app, label, checked, id, params);
+}
+
+/// [`mi_check`], giving back the item's response (the page's context menu names its items for
+/// screen readers).
+pub(super) fn mi_check_response(ui: &mut Ui, app: &mut WordApp, label: &str, checked: bool, id: &str, params: Value) -> egui::Response {
     // A vector mark needs no font glyph; the empty atom keeps labels aligned.
     let mark = egui::Atom::paint(vec2(14.0, 14.0), move |ui, args| {
         if checked {
@@ -246,4 +252,5 @@ pub(super) fn mi_check(ui: &mut Ui, app: &mut WordApp, label: &str, checked: boo
         crate::widgets::run_from_ribbon(app, id, params);
         ui.close();
     }
+    resp
 }

@@ -1,5 +1,5 @@
 use super::common::mi;
-use super::language::mi_check;
+use super::language::{mi_check, mi_check_response};
 use super::{Ui, WordApp, json, menu_button};
 
 /// Word's text wrapping styles in menu order: label, model value, `arrange.wrap` parameter.
@@ -18,19 +18,25 @@ pub(crate) const WRAP_STYLES: [(&str, wordcraft_doc::para::Wrap, &str); 7] = {
 
 /// The Wrap Text menu for the selected picture, shape or text box: the seven styles (the
 /// current one checked), then Move with Text / Fix Position on Page for a floating one. The
-/// canvas context menu shows it; the ribbon's Wrap Text button can share it.
-pub(crate) fn wrap_text_items(ui: &mut Ui, app: &mut WordApp) {
+/// canvas context menu shows it; the ribbon's Wrap Text button can share it. Each item comes
+/// back with its name and whether it is checked, for the context menu to name it.
+pub(crate) fn wrap_text_items(ui: &mut Ui, app: &mut WordApp) -> Vec<(egui::Response, String, bool)> {
     use wordcraft_engine::cmd::objects::{moves_with_text, selected};
     let state = selected(&app.session).and_then(|(_, o)| o.frame().map(|(_, _, f)| (f.wrap, moves_with_text(f))));
     let wrap = state.map(|(w, _)| w);
+    let mut items = Vec::new();
+    let mut item = |ui: &mut Ui, app: &mut WordApp, label: &str, checked: bool, id: &str, params| {
+        items.push((mi_check_response(ui, app, label, checked, id, params), tl!(label).to_string(), checked));
+    };
     for (label, w, v) in WRAP_STYLES {
-        mi_check(ui, app, label, wrap == Some(w), "arrange.wrap", json!({"wrap": v}));
+        item(ui, app, label, wrap == Some(w), "arrange.wrap", json!({"wrap": v}));
     }
     ui.separator();
     // An inline object is neither: it's part of the text.
     let with_text = state.filter(|(w, _)| *w != wordcraft_doc::para::Wrap::Inline).map(|(_, m)| m);
-    mi_check(ui, app, "Move with Text", with_text == Some(true), "arrange.moveWithText", json!({"value": true}));
-    mi_check(ui, app, "Fix Position on Page", with_text == Some(false), "arrange.moveWithText", json!({"value": false}));
+    item(ui, app, "Move with Text", with_text == Some(true), "arrange.moveWithText", json!({"value": true}));
+    item(ui, app, "Fix Position on Page", with_text == Some(false), "arrange.moveWithText", json!({"value": false}));
+    items
 }
 
 /// Arrange › Rotate: turn 90° either way or flip (the angle and mirroring, not the pixels).

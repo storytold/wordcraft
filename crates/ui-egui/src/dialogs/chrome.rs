@@ -40,6 +40,11 @@ fn dialog_top_key() -> egui::Id {
     egui::Id::unique("dialog_top")
 }
 
+/// The control a dialog that has just opened gives the keyboard to, in its next frame.
+fn first_control_key() -> egui::Id {
+    egui::Id::unique("dialog_first_control")
+}
+
 /// Frames a dialog stays centred: the first one measures it, the second centres that size.
 const DIALOG_CENTRED_FRAMES: u8 = 2;
 
@@ -72,7 +77,11 @@ fn count_dialog_frame(ctx: &egui::Context, id: egui::Id) {
 /// alert-dialog role.
 pub fn show(app: &mut WordApp, ctx: &egui::Context) {
     let Some(mut d) = app.dialog.take() else {
-        ctx.data_mut(|d| d.remove::<(egui::Id, u8)>(dialog_top_key()));
+        ctx.data_mut(|d| {
+            d.remove::<(egui::Id, u8)>(dialog_top_key());
+            d.remove::<egui::Id>(first_control_key());
+        });
+        app.canvas.dialog_focus_first = false;
         return;
     };
     let mut close = false;
@@ -134,12 +143,36 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::Layout(d) => d.title(),
     };
     let id = egui::Id::unique(("dialog", title));
+    // A dialog that has just opened gives the keyboard to its first control, as Word's do, however
+    // it was opened (Ctrl+D left it on the page, which then took Tab and the arrows behind the
+    // dialog, and screen readers said nothing).
+    if ctx.data(|d| d.get_temp::<(egui::Id, u8)>(dialog_top_key())).is_none_or(|(open, _)| open != id) {
+        app.canvas.dialog_focus_first = true;
+    }
+    // The control picked in the last frame takes the keyboard before the body is drawn, so it sees
+    // itself gain it: a number box (Insert Table's Number of columns) then selects its value, and
+    // typing replaces it, as in Word.
+    let first = ctx.data_mut(|d| {
+        let first = d.get_temp::<egui::Id>(first_control_key());
+        d.remove::<egui::Id>(first_control_key());
+        first
+    });
+    if let Some(first) = first {
+        ctx.memory_mut(|m| m.request_focus(first));
+    }
     let window = crate::window_close::window(ctx, egui::Window::new(tl!(title)).id(id).collapsible(false).resizable(false));
+    let mut body_rect = None;
     let shown = place_dialog(ctx, id, window).show(ctx, |ui| {
         ui.set_min_width(340.0);
         close = body(app, ui, &mut d);
+        body_rect = Some(ui.min_rect());
     });
     if let Some(shown) = &shown {
+        if app.canvas.dialog_focus_first
+            && let Some(body) = body_rect
+        {
+            app.canvas.dialog_focus_first = !focus_first_control(ctx, shown.response.layer_id, body);
+        }
         if let Dialog::SaveChanges { name, message, .. } = &d {
             let question = crate::i18n::fmt(tl!("Do you want to save changes to {name}?"), &[("name", name)]);
             let mut description = tl!("Your changes will be lost if you don't save them.").to_string();
@@ -160,9 +193,34 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
     }
     if close {
         app.canvas.want_focus = true;
+        app.canvas.dialog_focus_first = false;
     } else {
         app.dialog = Some(d);
     }
+}
+
+/// Gives the keyboard to the first control in a dialog's body (`body`, on the window's `layer`),
+/// as Word's dialogs do when they open, unless one of the dialog's own controls took it already.
+/// The page lets go of it now and the control takes it before it is next drawn (`show`): given
+/// after its drawing, it never saw itself gain the keyboard. False while the window has no
+/// control to give it to yet (its sizing pass draws them hidden).
+fn focus_first_control(ctx: &egui::Context, layer: egui::LayerId, body: egui::Rect) -> bool {
+    let focused = ctx.memory(|m| m.focused());
+    let (taken, first) = ctx.viewport(|v| {
+        let widgets = &v.this_pass.widgets;
+        let taken = focused.and_then(|id| widgets.get(id)).is_some_and(|w| w.layer_id == layer);
+        let first = widgets.get_layer(layer).find(|w| w.enabled && w.visible && w.sense.is_focusable() && body.contains_rect(w.rect)).map(|w| w.id);
+        (taken, first)
+    });
+    if taken {
+        return true;
+    }
+    let Some(first) = first else { return false };
+    if let Some(page) = focused {
+        ctx.memory_mut(|m| m.surrender_focus(page));
+    }
+    ctx.data_mut(|d| d.insert_temp(first_control_key(), first));
+    true
 }
 
 /// Cancel key for dialogs: Escape everywhere, plus ⌘. (Command+Period) on macOS.
@@ -194,7 +252,9 @@ pub(crate) fn buttons(ui: &mut Ui, ok: &str) -> (bool, bool) {
             if cancelb.clicked() || (keys && cancel_key_pressed(ui)) {
                 r.1 = true;
             }
-            if okb.clicked() || (keys && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
+            // Enter is OK from anywhere in the dialog but Cancel, which Enter presses, as in Word:
+            // a dialog with the keyboard in it is now reached with Tab (#4977).
+            if okb.clicked() || (keys && !cancelb.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
                 r.0 = true;
             }
         });
