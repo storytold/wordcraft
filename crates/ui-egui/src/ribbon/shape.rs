@@ -1,7 +1,7 @@
 use super::arrange::{align_menu, rotate_menu, rotation_field, wrap_menu};
 use super::common::{mi, stack};
 use super::language::mi_check;
-use super::{Target, Ui, WordApp, big, group, json, menu_button, small, vec2};
+use super::{MeasureExt, Target, Ui, WordApp, big, group, json, menu_button, small, vec2};
 
 /// Shape Fill › Gradient: No Gradient, Light and Dark Variations of the shape's colour, More
 /// Gradients… (the Format Shape pane).
@@ -137,11 +137,13 @@ pub(super) fn shape_format(app: &mut WordApp, ui: &mut Ui) {
         stack(ui, |ui| {
             crate::widgets::row(ui, |ui| {
                 for (label, key, v0) in [("W:", "width", w0), ("H:", "height", h0)] {
-                    ui.label(egui::RichText::new(tl!(label)).small());
+                    let label = ui.label(egui::RichText::new(tl!(label)).small());
                     let mut v = v0;
                     // `picture.size`'s own range; a size outside it (a thin line) is shown as it
                     // is (clamped, egui would report a change and resize the shape unasked).
-                    let r = ui.add(egui::DragValue::new(&mut v).speed(1.0).range(1.0..=4000.0).clamp_existing_to_range(false).suffix(" pt"));
+                    let r = ui
+                        .add(egui::DragValue::new(&mut v).speed(1.0).range(1.0..=4000.0).clamp_existing_to_range(false).points())
+                        .labelled_by(label.id);
                     if r.changed() && v != v0 {
                         if r.dragged() && !r.drag_started() {
                             app.session.join_next_undo();

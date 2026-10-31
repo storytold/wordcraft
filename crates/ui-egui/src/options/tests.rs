@@ -2,7 +2,7 @@ use egui_kittest::kittest::{NodeT, Queryable};
 use serde_json::json;
 use wordcraft_geom::Unit;
 
-use super::{decimal, length, parse_length, unit};
+use super::{decimal, length, parse_length, parse_with_sign, unit};
 
 use crate::theme::Appearance;
 use crate::{Services, UiState, WordApp};
@@ -476,4 +476,23 @@ fn length_units_follow_the_interface_language() {
     h.state_mut().run("ui.language", json!({"value": "en"})).unwrap();
     h.run_steps(4);
     assert_eq!(length(72.0), "25,4 mm", "English keeps the English names");
+}
+
+/// #3172: a number box's text carries its unit, so an edit can land after it: "2,54 cm0" is
+/// 2,540 cm and "9°0" is 90°, where both were refused and the box kept its old value.
+#[test]
+fn number_box_text_parses_around_its_unit() {
+    let cm = |t: &str| parse_length(t, Unit::Centimeters).map(|v| (v * 1000.0).round() / 1000.0);
+    assert_eq!(cm("2,54 cm"), Some(2.54));
+    assert_eq!(cm("2,54 cm0"), Some(2.54), "a digit after the unit");
+    assert_eq!(cm("2,5 cm4"), Some(2.54));
+    assert_eq!(cm("10 mm"), Some(1.0), "another unit still converts");
+    assert_eq!(parse_length("12 pt", Unit::Points), Some(12.0));
+    assert_eq!(parse_length("12 pts", Unit::Points), Some(12.0), "a longer name of the unit stays whole");
+    assert_eq!(parse_length("2 picas", Unit::Picas), Some(2.0));
+    assert_eq!(parse_with_sign("9°0", "°"), Some(90.0), "a digit after the sign");
+    assert_eq!(parse_with_sign("9°", "°"), Some(9.0));
+    assert_eq!(parse_with_sign("50 %", "%"), Some(50.0));
+    assert_eq!(parse_with_sign("1,5", ""), Some(1.5), "either separator");
+    assert_eq!(parse_with_sign("abc", "%"), None);
 }

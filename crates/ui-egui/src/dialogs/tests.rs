@@ -573,6 +573,29 @@ fn paragraph_dialog_sets_a_mixed_check_box_for_all() {
     assert_eq!(p[0].line_spacing, Some(wordcraft_doc::props::LineSpacing::Multiple(6.0)), "line spacing untouched");
 }
 
+/// #3172: a blank box (the selected paragraphs differ in it) reads what is typed as the box it
+/// stands for does: "1,5" in the line spacing, with the region's decimal comma, where the blank box
+/// had egui's plain parser and refused it.
+#[test]
+fn a_blank_paragraph_box_reads_a_typed_number_as_the_box_does() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    let mut app = mixed_selection();
+    app.run("file.options", json!({"region": "it-IT"})).unwrap();
+    app.dialog = Dialog::open("paragraph", &mut app);
+    let mut h = app_harness(app);
+    h.run_steps(4);
+    const SPACING: &str = "Line spacing:";
+    assert_eq!(h.get_by_role_and_label(Role::SpinButton, SPACING).value().as_deref(), Some(""), "blank: the paragraphs differ");
+    h.get_by_role_and_label(Role::SpinButton, SPACING).click();
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::SpinButton, SPACING).type_text("1,5");
+    h.run_steps(2);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(2);
+    assert_eq!(h.get_by_role_and_label(Role::SpinButton, SPACING).value().as_deref(), Some("1,5"), "taken, for every paragraph");
+}
+
 #[test]
 fn paragraph_dialog_sets_only_the_options_that_changed() {
     // #512: mirror indents, same-style spacing, suppress line numbers, don't hyphenate.
@@ -1692,4 +1715,44 @@ fn the_custom_properties_dialog_leaves_imported_non_text_properties_alone() {
     h.run_steps(4);
     let kinds: Vec<(&str, &str)> = h.state().session.doc.custom_props.iter().map(|p| (p.name.as_str(), p.kind.as_str())).collect();
     assert_eq!(kinds, [("Status", "lpwstr"), ("Count", "i4")], "Cancel leaves the imported property as it was");
+}
+
+/// #3172: a number box writes its unit in its text, as Word's do ("0 cm", "8 pt"), with the
+/// region's decimal separator ("1,15", not "1.15"), so a screen reader hears it while the box is
+/// edited too: a box that has the keyboard is being edited, and egui's suffix, shown only before,
+/// left NVDA saying "0,0" on Tab. The boxes are named by their labels, where the suffix was their
+/// name ("cm"), as in Table Properties.
+#[test]
+fn number_boxes_say_their_unit_while_edited() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut app = app_with("Some text");
+    app.run("file.options", json!({"region": "it-IT", "units": "centimeters"})).unwrap();
+    app.dialog = Dialog::open("paragraph", &mut app);
+    let mut h = app_harness(app);
+    h.run_steps(4);
+    let value = |h: &egui_kittest::Harness<'static, WordApp>, label: &str| h.get_by_role_and_label(Role::SpinButton, label).value();
+    assert_eq!(value(&h, "Left:").as_deref(), Some("0 cm"));
+    assert_eq!(value(&h, "Before:").as_deref(), Some("0 pt"));
+    assert_eq!(value(&h, "After:").as_deref(), Some("8 pt"));
+    assert_eq!(value(&h, "Line spacing:").as_deref(), Some("1,15"), "the region's decimal comma");
+    h.get_by_role_and_label(Role::SpinButton, "After:").click();
+    h.run_steps(2);
+    let after = h.get_by_role_and_label(Role::SpinButton, "After:");
+    assert!(after.is_focused(), "a click edits the box");
+    assert_eq!(after.value().as_deref(), Some("8 pt"), "and its text keeps the unit");
+    after.type_text("12");
+    h.run_steps(2);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(2);
+    assert_eq!(value(&h, "After:").as_deref(), Some("12 pt"), "a number typed alone is in the box's unit");
+
+    let mut app = app_with("");
+    app.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+    app.run("table.properties", json!({})).unwrap();
+    let mut h = app_harness(app);
+    h.run_steps(4);
+    let names: Vec<String> = h.query_all_by_role(Role::SpinButton).filter_map(|n| n.accesskit_node().label()).collect();
+    assert!(names.iter().any(|n| n == "Indent from left:"), "named by their labels: {names:?}");
+    assert!(names.iter().all(|n| !n.ends_with("cm") && !n.ends_with('"')), "not by their unit: {names:?}");
 }
