@@ -51,6 +51,8 @@ pub(super) fn decimal_position(pl: &ParaLayout, tj: usize, j: usize) -> Option<(
     None
 }
 
+/// Finalize a centre/right/decimal tab using committed cluster advances.
+/// Move its following positions and the line end together to retain the selected anchor.
 pub(super) fn resolve_tab(pl: &mut ParaLayout, pending: &mut Option<(usize, TabStop, f32)>, xs: &mut [f32], c0: usize, x: f32, xo: &mut f32) {
     // Finish a centre/right/decimal tab: its text (possibly empty) ends at `x`.
     let Some((tj, stop, tx)) = pending.take() else { return };
