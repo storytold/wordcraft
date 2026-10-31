@@ -434,6 +434,64 @@ fn ribbon_groups_fit_above_their_labels() {
     assert!(tall.is_empty(), "groups taller than the ribbon: {tall:#?}");
 }
 
+/// Collapsing and restoring the ribbon from its tabs, as in Word for Mac: a double-click on a
+/// tab collapses it, a single click on any tab brings it back and keeps it open, and a
+/// double-click on a tab of a collapsed ribbon leaves it collapsed (the first click opens it,
+/// the double-click closes it again).
+#[test]
+fn tab_clicks_collapse_and_restore_the_ribbon() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+    // 1/60 s frames: a double-click is two clicks within 0.3 s, and the default 0.25 s step
+    // would let a frame or two run the clicks apart.
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1280.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    // Half a second between gestures, so one never extends the last into a double-click.
+    let settle = |h: &mut egui_kittest::Harness<WordApp>| h.run_steps(30);
+    let double_click = |h: &mut egui_kittest::Harness<WordApp>, tab: &str| {
+        let node = h.get_by_label(tl!(tab));
+        node.click();
+        node.click();
+        settle(h);
+    };
+    // The tab on the strip (not a group or command with the same label). egui reports a tab's
+    // active state to accessibility as `toggled`.
+    let selected = |h: &egui_kittest::Harness<WordApp>, tab: &str| {
+        h.query_all_by_label(tl!(tab))
+            .find(|n| n.rect().top() < 60.0)
+            .and_then(|n| n.accesskit_node().toggled().map(|t| t == egui::accesskit::Toggled::True))
+    };
+    settle(&mut h);
+    assert!(!h.state().ui.ribbon_collapsed);
+    assert_eq!(selected(&h, "Home"), Some(true), "the active tab is selected while the ribbon is shown");
+
+    double_click(&mut h, "Home");
+    assert!(h.state().ui.ribbon_collapsed, "a double-click on a tab collapses the ribbon");
+    assert_eq!(selected(&h, "Home"), Some(false), "no tab is active while the ribbon is minimized");
+
+    h.get_by_label(tl!("Insert")).click();
+    settle(&mut h);
+    assert_eq!(h.state().ui.tab, "Insert");
+    assert!(!h.state().ui.ribbon_collapsed, "one click on a tab shows the ribbon and keeps it open");
+    assert_eq!(selected(&h, "Insert"), Some(true), "the clicked tab is active again");
+    assert_eq!(selected(&h, "Home"), Some(false));
+
+    double_click(&mut h, "Layout");
+    assert!(h.state().ui.ribbon_collapsed, "a double-click on an expanded ribbon's tab collapses it");
+    assert_eq!(h.state().ui.tab, "Layout");
+    // Starting collapsed: the first click opens the ribbon and the double-click closes it again.
+    double_click(&mut h, "Layout");
+    assert!(h.state().ui.ribbon_collapsed, "a double-click on a collapsed ribbon's tab leaves it minimized");
+    assert_eq!(selected(&h, "Layout"), Some(false), "and no tab is active");
+    assert_eq!(h.state().ui.tab, "Layout");
+}
+
 /// #897: the tabs that didn't fit were drawn under Comments / Editing / Share, so at 1280 pt
 /// in Polish the table tabs were out of reach. They stay on the strip and a click opens them.
 #[test]

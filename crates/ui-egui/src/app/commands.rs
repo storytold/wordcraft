@@ -511,8 +511,10 @@ impl WordApp {
                 if tab == "File" {
                     self.ui.backstage = true;
                 } else {
+                    // Word: a click on any tab shows a collapsed ribbon and keeps it open.
                     self.ui.tab = tab;
                     self.ui.backstage = false;
+                    self.ui.ribbon_collapsed = false;
                 }
                 json!({"tab": self.ui.tab})
             }

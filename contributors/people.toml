@@ -179,6 +179,10 @@ sync_github_name = true
 [people.pakiat]
 display_name = "OtorO"
 
+[people.i-rme]
+real_name = "Raúl Martínez (RME)"
+display_name = "RME"
+
 [people.TobyWu666]
 display_name = "tobywu"
 
