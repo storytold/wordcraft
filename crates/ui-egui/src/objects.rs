@@ -190,7 +190,7 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
             }
             let pos = d.object.pos();
             let end = Pos { off: pos.off + OBJ.len_utf8(), ..pos.clone() };
-            let _ = app.run("select.range", json!({"anchor": pos, "focus": end}));
+            let _ = app.run_keep_view("select.range", json!({"anchor": pos, "focus": end}));
             // The text click path has been tracking the pointer until it became a drag.
             app.canvas.cancel_text_drag();
             d.pending_behind = false;
@@ -206,7 +206,7 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
                 && let Some((_, (x, y))) = d.end
             {
                 let key = if which { "end" } else { "start" };
-                let _ = app.run("shape.connect", json!({key: {"x": x, "y": y, "page": d.object.page}}));
+                let _ = app.run_keep_view("shape.connect", json!({key: {"x": x, "y": y, "page": d.object.page}}));
             }
             return true;
         }
@@ -274,7 +274,7 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
     let Some((object, grab)) = grabbed else { return false };
     // Double-click a SmartArt graphic (selected by the first click) to edit its text.
     if resp.double_clicked() && wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session).is_some() {
-        let _ = app.run("smartArt.textPane", json!({"value": true}));
+        let _ = app.run_keep_view("smartArt.textPane", json!({"value": true}));
         return true;
     }
     // Shift/Ctrl+click adds an object to the selected ones (or takes it out), for Group.
@@ -286,7 +286,7 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
             && wordcraft_engine::cmd::objects::picked_objects(&app.session).contains(&object.pos()));
     let shift_only = ui.input(|i| i.modifiers.shift && !i.modifiers.command);
     if pressed && adding && grab == Grab::Move && selected(app).is_some() && (shift_only || !again) {
-        let _ = app.run("select.addObject", json!({"pos": object.pos()}));
+        let _ = app.run_keep_view("select.addObject", json!({"pos": object.pos()}));
         return true;
     }
     if pressed && grab == Grab::Move && object.behind() && behind_draggable(app, &object) {
@@ -312,7 +312,9 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
     if pressed {
         let pos = object.pos();
         let end = Pos { off: pos.off + OBJ.len_utf8(), ..pos.clone() };
-        let _ = app.run("select.range", json!({"anchor": pos, "focus": end}));
+        // The view stays: the selection's caret is the object's anchor, which can be far from
+        // the object (#4929). So do every command the pointer sends an object.
+        let _ = app.run_keep_view("select.range", json!({"anchor": pos, "focus": end}));
         let (min, picture) = match selected(app) {
             Some((_, o)) => (wordcraft_engine::cmd::objects::min_size(o), matches!(o, InlineObject::Image { .. })),
             None => return true,
@@ -432,8 +434,8 @@ fn link_click(app: &mut WordApp, layout: &DocLayout, pages: &[Rect], scale: f32,
         return;
     };
     let end = Pos { off: from.off + OBJ.len_utf8(), ..from.clone() };
-    let _ = app.run("select.range", json!({"anchor": from, "focus": end}));
-    if let Err(e) = app.run("shape.link", json!({"target": target.pos()})) {
+    let _ = app.run_keep_view("select.range", json!({"anchor": from, "focus": end}));
+    if let Err(e) = app.run_keep_view("shape.link", json!({"target": target.pos()})) {
         app.status(e);
     }
 }
@@ -449,7 +451,7 @@ pub fn select_at(app: &mut WordApp, layout: &DocLayout, pages: &[Rect], scale: f
     // Already selected (alone or among several picked for Group): keep the selection.
     if !wordcraft_engine::cmd::objects::picked_objects(&app.session).contains(&pos) {
         let end = Pos { off: pos.off + OBJ.len_utf8(), ..pos.clone() };
-        let _ = app.run("select.range", json!({"anchor": pos, "focus": end}));
+        let _ = app.run_keep_view("select.range", json!({"anchor": pos, "focus": end}));
     }
     true
 }
@@ -558,12 +560,12 @@ fn drop(app: &mut WordApp, d: &ObjectDrag) {
     let r = d.drag.rect;
     // A chart or SmartArt takes a new size, never a new place.
     if matches!(d.drag.grab, Grab::Resize(_)) && size_only(app, &d.object) {
-        let _ = app.run("picture.size", json!({"width": r.w, "height": r.h, "lockAspect": false}));
+        let _ = app.run_keep_view("picture.size", json!({"width": r.w, "height": r.h, "lockAspect": false}));
         return;
     }
     let params = match d.drag.grab {
         Grab::Rotate => {
-            let _ = app.run("arrange.rotation", json!({"degrees": d.drag.deg}));
+            let _ = app.run_keep_view("arrange.rotation", json!({"degrees": d.drag.deg}));
             return;
         }
         // An In Line with Text object stays in the text, at the insertion cursor; dropped on
@@ -573,14 +575,14 @@ fn drop(app: &mut WordApp, d: &ObjectDrag) {
             let pos = d.object.pos();
             let on_itself = to.story == pos.story && to.path == pos.path && (to.off == pos.off || to.off == pos.off + OBJ.len_utf8());
             if d.copy {
-                let _ = app.run("arrange.copyTo", json!({"to": to}));
+                let _ = app.run_keep_view("arrange.copyTo", json!({"to": to}));
             } else if !on_itself {
-                let _ = app.run("arrange.bounds", json!({"to": to}));
+                let _ = app.run_keep_view("arrange.bounds", json!({"to": to}));
             }
             return;
         }
         Grab::Move if d.copy => {
-            let _ = app.run("arrange.copyTo", json!({"page": d.drag.to_page, "x": r.x, "y": r.y}));
+            let _ = app.run_keep_view("arrange.copyTo", json!({"page": d.drag.to_page, "x": r.x, "y": r.y}));
             return;
         }
         Grab::Move => json!({"page": d.drag.to_page, "x": r.x, "y": r.y}),
@@ -590,7 +592,7 @@ fn drop(app: &mut WordApp, d: &ObjectDrag) {
         }
         Grab::Resize(_) => json!({"width": r.w, "height": r.h}),
     };
-    let _ = app.run("arrange.bounds", params);
+    let _ = app.run_keep_view("arrange.bounds", params);
 }
 
 /// Draw the frame of the active object, or the drag preview.
@@ -760,8 +762,9 @@ pub fn key(app: &mut WordApp, key: egui::Key, m: egui::Modifiers) -> bool {
         egui::Key::Enter => return enter_text_box(app),
         _ => return false,
     };
-    // Inline objects move with the text: arrows move the caret as usual.
-    app.run("arrange.nudge", json!({"dx": dx, "dy": dy})).is_ok()
+    // Inline objects move with the text: arrows move the caret as usual. The view stays, as for
+    // a drag: the caret is the anchor, not the object (#4929).
+    app.run_keep_view("arrange.nudge", json!({"dx": dx, "dy": dy})).is_ok()
 }
 
 /// With a text box selected, put the caret at the end of its text (typing goes there).

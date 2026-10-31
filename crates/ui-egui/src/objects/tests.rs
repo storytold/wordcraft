@@ -390,12 +390,89 @@ fn dropping_a_shape_on_another_page_keeps_the_view_where_it_is() {
         h.step();
     }
     h.state_mut().canvas.scroll_to_caret = false;
+    let view = h.state().canvas.scroll_offset;
     h.event(button(to, false));
     h.step();
     h.step();
     let landed = h.state_mut().session.layout().object_at(1, 200.0, 300.0, 0.0).is_some();
     assert!(landed, "the shape landed on page 2");
-    assert!(!h.state().canvas.scroll_to_caret, "the drop scrolled to the caret");
+    // The scroll offset, not `scroll_to_caret`: every frame clears that flag once it has acted.
+    assert_eq!(h.state().canvas.scroll_offset, view, "the drop kept the view");
+}
+
+/// #4929: zoomed in on a floating shape near the bottom of page 1, anchored in the page's first
+/// line. Clicking it, nudging it with an arrow and dragging it leave the view where it is; each
+/// used to scroll to the caret, which is the anchor, a page away from the shape.
+#[test]
+fn clicking_nudging_and_dragging_a_shape_keep_the_view() {
+    use egui::{Event, PointerButton};
+    let mut a = WordApp::new(wordcraft_engine::Session::new(Document::new()), crate::Services::default());
+    a.run("view.commentsPane", json!({"value": false})).unwrap();
+    a.run("insert.shape", json!({"kind": "rectangle", "width": 100, "height": 50})).unwrap();
+    a.run("arrange.bounds", json!({"page": 0, "x": 200, "y": 640})).unwrap();
+    let end = Pos::body(0, OBJ.len_utf8());
+    a.run("caret.set", json!({"pos": end})).unwrap();
+    a.run("text.insert", json!({"text": "First line"})).unwrap();
+    a.run("view.zoom", json!({"value": 300})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    let shape = |h: &mut egui_kittest::Harness<'_, WordApp>| h.state_mut().session.layout().object(&Pos::body(0, 0), 0).unwrap().rect;
+    // Scroll the shape to the middle of the view; the first line, where the caret is, is out of it.
+    let r = shape(&mut h);
+    let mid = crate::canvas::page_to_screen(h.state_mut(), 0, r.x + r.w / 2.0, r.y + r.h / 2.0).unwrap();
+    let vp = h.state().canvas.viewport.expect("the canvas's viewport");
+    let to = h.state().canvas.scroll_offset + (mid - vp.center());
+    h.state_mut().canvas.scroll_request = Some(to);
+    for _ in 0..4 {
+        h.step();
+    }
+    let view = h.state().canvas.scroll_offset;
+    let top = crate::canvas::page_to_screen(h.state_mut(), 0, r.x, 72.0).unwrap();
+    assert!(top.y < vp.top(), "the first line is above the view");
+    let button = |at: Pos2, pressed: bool| Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Default::default() };
+    // A click on the shape's left edge selects it.
+    let edge = crate::canvas::page_to_screen(h.state_mut(), 0, r.x, r.y + r.h / 2.0).unwrap();
+    h.event(Event::PointerMoved(edge));
+    h.event(button(edge, true));
+    h.step();
+    h.event(button(edge, false));
+    for _ in 0..3 {
+        h.step();
+    }
+    assert!(selected(h.state()).is_some(), "the click selected the shape");
+    assert_eq!(h.state().canvas.scroll_offset, view, "the click kept the view");
+    // Down arrow nudges it.
+    h.key_press(egui::Key::ArrowDown);
+    for _ in 0..3 {
+        h.step();
+    }
+    assert!(shape(&mut h).y > r.y, "nudged down");
+    assert_eq!(h.state().canvas.scroll_offset, view, "the nudge kept the view");
+    // A drag to the right moves it.
+    let r = shape(&mut h);
+    let from = crate::canvas::page_to_screen(h.state_mut(), 0, r.x + r.w / 2.0, r.y + r.h / 2.0).unwrap();
+    h.event(Event::PointerMoved(from));
+    h.event(button(from, true));
+    h.step();
+    for k in 1..=4 {
+        h.event(Event::PointerMoved(from + egui::vec2(15.0 * k as f32, 0.0)));
+        h.step();
+    }
+    h.event(button(from + egui::vec2(60.0, 0.0), false));
+    for _ in 0..3 {
+        h.step();
+    }
+    assert!(shape(&mut h).x > r.x, "dragged right");
+    assert_eq!(h.state().canvas.scroll_offset, view, "the drop kept the view");
 }
 
 /// A floating rectangle shape, `w` × `h`.
