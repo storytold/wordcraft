@@ -5,7 +5,7 @@ use super::notes::{NOTE_SEP, NOTE_SEP_W, NoteBox, NoteSeps, v_span};
 use super::placed::Placed;
 use super::{Block, Border, FloatAlign, Page, ParaLayout, Rect, SectionProps, StoryRef};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct PageBuilder<'a> {
     pub(crate) pages: Vec<Page>,
     pub(crate) sect: &'a SectionProps,
@@ -397,6 +397,88 @@ impl PageBuilder<'_> {
     }
     pub(crate) fn page(&mut self) -> Option<&mut Page> {
         self.pages.last_mut()
+    }
+    /// This builder with its section and early floats borrowed from elsewhere: a builder is kept
+    /// from one layout to the next borrowing nothing, and given the next pass's ([`crate::resume`]).
+    pub(crate) fn with_refs<'b>(self, sect: &'b SectionProps, early: &'b EarlyFloats) -> PageBuilder<'b> {
+        let PageBuilder {
+            pages,
+            sect: _,
+            sect_idx,
+            col,
+            cols,
+            y,
+            top,
+            page_top,
+            bottom,
+            number,
+            web,
+            notes,
+            carry,
+            orig_bottom,
+            prev,
+            after_break_mark,
+            next_starts_page,
+            restart_at,
+            excl,
+            float_tables,
+            line_no,
+            page_items_start,
+            block_marks,
+            page_valign,
+            seps,
+            para_end,
+            behind,
+            max_y,
+            content_bottom,
+            balance,
+            col_break_page,
+            sect_beneath,
+            beneath,
+            foot_top,
+            early: _,
+            seeded,
+            settle,
+        } = self;
+        PageBuilder {
+            pages,
+            sect,
+            sect_idx,
+            col,
+            cols,
+            y,
+            top,
+            page_top,
+            bottom,
+            number,
+            web,
+            notes,
+            carry,
+            orig_bottom,
+            prev,
+            after_break_mark,
+            next_starts_page,
+            restart_at,
+            excl,
+            float_tables,
+            line_no,
+            page_items_start,
+            block_marks,
+            page_valign,
+            seps,
+            para_end,
+            behind,
+            max_y,
+            content_bottom,
+            balance,
+            col_break_page,
+            sect_beneath,
+            beneath,
+            foot_top,
+            early,
+            seeded,
+            settle,
+        }
     }
 }
 

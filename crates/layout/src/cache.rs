@@ -9,7 +9,8 @@ use super::{
 pub(crate) struct Key {
     pub(crate) rev: u64,
     pub(crate) width: u32,
-    pub(crate) label: Option<String>,
+    /// The list label and a hash of its level's formatting (`Ctx::level_key`).
+    pub(crate) label: Option<(String, u64)>,
     pub(crate) page: Option<(u32, u32, u32, u32, u64, wordcraft_doc::section::NumFormat)>,
     /// The pages a split paragraph's fields are on after its first (`FieldCtx::page_from`).
     pub(crate) page_from: u64,
@@ -46,6 +47,9 @@ pub struct LayoutCache {
     /// (shared, so an edited block is a different pointer) and `env` (styles and numbering). Kept
     /// while both are unchanged, so headers using STYLEREF don't rebuild it on every pass.
     pub(crate) styleref: Option<(Blocks, u64, Arc<styleref::StyleIndex>)>,
+    /// Where the last first pass was at the top of each page, for the next to start again from the
+    /// page an edit is on ([`crate::resume`]).
+    pub(crate) resume: Option<Box<crate::resume::Resume>>,
     pub hits: u64,
     pub misses: u64,
 }
@@ -65,6 +69,7 @@ impl LayoutCache {
         self.measures.clear();
         self.outlines.clear();
         self.styleref = None;
+        self.resume = None;
     }
 
     /// The STYLEREF style index for `doc`, rebuilt only when the body or the styles changed.
