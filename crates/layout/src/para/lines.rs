@@ -60,6 +60,10 @@ struct Breaker<'e> {
     skipped: usize,
     /// A left tab past the right indent that wrapped to start the next line.
     wrapped_tab: Option<usize>,
+    /// Before Word 2013 mode, tabs keep counting their stops behind a float (see `Scan::tab`).
+    tabs_behind_floats: bool,
+    /// Where tabs that ran behind a float left the text: the next span's line starts there.
+    carry: Option<f32>,
 }
 
 /// One line being broken: where it is, and what has been put on it.
@@ -95,6 +99,10 @@ struct Scan {
     has_tab: bool,
     /// The first word doesn't fit a span narrowed by a floating object: it moves on whole.
     skip: bool,
+    /// Where tabs behind a float had left the text when this line began.
+    line_carry: Option<f32>,
+    /// Where a tab that ran behind a float went.
+    behind_float: Option<f32>,
 }
 
 /// Whether anything but markers (a bookmark, say) is among the clusters `c0..j`: an empty line
@@ -210,6 +218,8 @@ impl<'e> Breaker<'e> {
             row_first: 0,
             skipped: 0,
             wrapped_tab: None,
+            tabs_behind_floats: settings.compat_mode < wordcraft_doc::COMPAT_MODE_CURRENT,
+            carry: None,
         }
     }
 
@@ -254,10 +264,19 @@ impl<'e> Breaker<'e> {
 
     /// The start of a line: its span, and the list label if it is the first.
     fn begin_line(&mut self, pl: &mut ParaLayout) -> Scan {
-        let beside = !self.row_rest.is_empty() && self.lines.len() > self.row_first;
         let row_lo = if self.first { self.first_left } else { self.rp.indent_left };
-        let (left, right_edge, narrowed) = self.next_span(pl);
-        let x = if self.first { self.place_label(pl, left) } else { left };
+        // A span that ends before the carried place is passed over: the text goes to the row's next
+        // span. On the row's last one (spaces after the last tab can carry past its end) it starts at
+        // the span's left instead of past the margin; not compared with Word.
+        let (beside, (left, right_edge, narrowed)) = loop {
+            let beside = !self.row_rest.is_empty() && self.lines.len() > self.row_first;
+            let span = self.next_span(pl);
+            if !(self.carry.is_some_and(|c| c >= span.1 - 0.01) && !self.row_rest.is_empty()) {
+                break (beside, span);
+            }
+        };
+        let line_carry = self.carry.take();
+        let x = if self.first { self.place_label(pl, left) } else { line_carry.filter(|c| *c < right_edge - 0.01).map_or(left, |c| c.max(left)) };
         Scan {
             left,
             right_edge,
@@ -279,6 +298,8 @@ impl<'e> Breaker<'e> {
             space_w: 0.0,
             has_tab: false,
             skip: false,
+            line_carry,
+            behind_float: None,
         }
     }
 
@@ -312,6 +333,8 @@ impl<'e> Breaker<'e> {
     fn skip_row(&mut self, sc: &Scan) {
         self.skipped += 1;
         if !self.row_rest.is_empty() {
+            // The word goes on to the row's next span, still from the carried place.
+            self.carry = sc.line_carry;
             return;
         }
         self.top = if self.lines.len() > self.row_first {
@@ -330,6 +353,9 @@ impl<'e> Breaker<'e> {
     /// Finish the line scanned: lay out its clusters, measure and align it, and add it.
     /// Returns how it ends.
     fn close_line(&mut self, pl: &mut ParaLayout, mut sc: Scan) -> LineEnd {
+        if let Some(bx) = sc.behind_float.filter(|_| sc.end == LineEnd::Wrap) {
+            self.carry = Some(sc.x.max(bx));
+        }
         if sc.end == LineEnd::Para || sc.end == LineEnd::Wrap {
             let xc = sc.x;
             resolve_tab(pl, &mut sc.pending_tab, &mut sc.xs, sc.c0, xc, &mut sc.x);
@@ -739,6 +765,27 @@ impl Scan {
         }
         self.xs.push(self.x);
         if ptab.is_none() && stop.pos > self.right_edge + 0.01 && stop.align == TabAlign::Left {
+            if self.right_edge < bk.base_right - 0.01
+                && bk.tabs_behind_floats
+                && bk.row_rest.back().is_some_and(|s| stop.pos < s.1 - 0.01)
+                // Something that takes room comes before it (not just a float's anchor).
+                && (self.c0..j).any(|k| pl.clusters.get(k).is_some_and(takes_room))
+            {
+                // A float cuts the line short before the stop and the row goes on past
+                // it, and past the stop. Before Word 2013 mode the tab still goes to its
+                // stop, behind the float, and the text after it goes on in the next span,
+                // from there at the earliest; in Word 2013 mode it starts the next span
+                // and goes to the first stop there (below). One Word PDF for each mode; the
+                // mode deciding it is inferred (they also differ in header against body).
+                if let Some(c) = pl.clusters.get_mut(j) {
+                    c.adv = 0.0;
+                }
+                self.x = stop.pos.max(self.x);
+                self.behind_float = Some(self.x);
+                self.last_break = Some(j);
+                self.j += 1;
+                return false;
+            }
             // Not when only markers (a bookmark, say) are before it: the line is empty.
             if has_content(pl, self.c0, j) {
                 // Tab past the right indent wraps: like Word, it starts the next line
