@@ -785,3 +785,118 @@ fn gost_numbers_follow_its_name_or_title_sort() {
     assert_eq!(find_style("Harvard - Anglia 2008").map(|x| x.name), Some("Harvard (Anglia)"));
     assert!(find_style("").is_none() && find_style("Vancouver").is_none());
 }
+
+fn lookup_session(tags: &[&str]) -> Session {
+    let mut p = Paragraph::new();
+    for tag in tags {
+        p.insert_object(
+            p.len(),
+            InlineObject::Field {
+                instr: format!("CITATION {tag}"),
+                result: "Original cache".into(),
+                locked: false,
+                dirty: true,
+                code: false,
+                form: String::new(),
+            },
+            &CharProps::default(),
+        )
+        .unwrap();
+    }
+    let mut doc = Document::new();
+    doc.body = vec![wordcraft_doc::para_block(p)];
+    Session::new(doc)
+}
+
+#[test]
+fn citation_source_lookups_keep_first_duplicates_case_and_style_order() {
+    let mut s = lookup_session(&["A", "B", "missing", "a", "B"]);
+    s.doc.sources = [
+        ("B", "Zed, Zo", "Zulu"),
+        ("A", "Able, Ann", "Alpha"),
+        ("B", "Baker, Ben", "Beta duplicate"),
+        ("a", "Middle, May", "Middle"),
+        ("unused", "Other, One", "Unused"),
+    ]
+    .into_iter()
+    .map(|(tag, author, title)| Source { tag: tag.into(), author: author.into(), title: title.into(), year: "2024".into(), ..Default::default() })
+    .collect();
+    let original = s.doc.clone();
+    for st in &STYLES {
+        s.bib_style = st.name.into();
+        let expected = if st.order == Order::Cited { vec![1, 0, 3] } else { vec![1, 2, 3, 0] };
+        assert_eq!(sources::bib_order(&s.doc, st, None), expected, "{}", st.name);
+        update_citations(&mut s).unwrap();
+        let p = s.doc.para(StoryRef::Body, &Path::top(0)).unwrap();
+        for (k, (source, number)) in [(1, 1), (0, 2), (usize::MAX, 0), (3, 3), (0, 2)].into_iter().enumerate() {
+            let InlineObject::Field { instr, result, locked, dirty, code, form } = &p.objects[k] else { panic!() };
+            let InlineObject::Field { instr: before, .. } = &original.para(StoryRef::Body, &Path::top(0)).unwrap().objects[k] else { panic!() };
+            assert_eq!(instr, before);
+            let expected = original.sources.get(source).map(|x| cite(x, st.name, number, "")).unwrap_or_else(|| "Original cache".into());
+            assert_eq!(result, &expected, "{}: {instr}", st.name);
+            assert!(!locked && *dirty && !code && form.is_empty());
+        }
+        assert_eq!(s.doc.sources, original.sources);
+    }
+    // Without citations even duplicate and unused source records remain in the bibliography.
+    s.doc.body.clear();
+    assert_eq!(sources::bib_order(&s.doc, style("IEEE"), None), vec![0, 1, 2, 3, 4]);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn citation_refresh_source_lookup_work_scales_with_document_size() {
+    fn doc(n: usize) -> Session {
+        let mut p = Paragraph::new();
+        p.text = wordcraft_doc::para::OBJ.to_string().repeat(n);
+        p.runs = vec![wordcraft_doc::Run { len: p.text.len(), props: CharProps::default() }];
+        p.objects = (0..n)
+            .rev()
+            .map(|i| InlineObject::Field {
+                instr: format!("CITATION T{i}"),
+                result: String::new(),
+                locked: false,
+                dirty: false,
+                code: false,
+                form: String::new(),
+            })
+            .collect();
+        let mut d = Document::new();
+        d.body = vec![wordcraft_doc::para_block(p)];
+        d.sources = (0..n).map(|i| Source { tag: format!("T{i}"), ..Default::default() }).collect();
+        let mut s = Session::new(d);
+        s.bib_style = "IEEE".into();
+        s
+    }
+    // Use the running thread's CPU time on Linux; scheduler pauses are not lookup work.
+    fn cost(f: &mut impl FnMut()) -> f64 {
+        let ran = || std::fs::read_to_string("/proc/thread-self/schedstat").ok()?.split_whitespace().next()?.parse::<u64>().ok();
+        let (t, before) = (std::time::Instant::now(), ran());
+        f();
+        match (before, ran()) {
+            (Some(a), Some(b)) if b > a => (b - a) as f64 * 1e-9,
+            _ => t.elapsed().as_secs_f64(),
+        }
+    }
+    const SCALE: usize = 8;
+    let (mut small, mut big) = (doc(2_000), doc(SCALE * 2_000));
+    update_citations(&mut small).unwrap();
+    update_citations(&mut big).unwrap();
+    let (mut a, mut b) = (f64::INFINITY, f64::INFINITY);
+    for _ in 0..5 {
+        a = a.min(
+            cost(&mut || {
+                for _ in 0..SCALE {
+                    update_citations(&mut small).unwrap();
+                }
+            }) / SCALE as f64,
+        );
+        b = b.min(cost(&mut || {
+            update_citations(&mut big).unwrap();
+        }));
+    }
+    let ratio = b / a.max(1e-9);
+    assert!(ratio < 32.0, "citation refresh: {a:.6}s -> {b:.6}s, {ratio:.1}x for {SCALE}x input");
+    let p = big.doc.para(StoryRef::Body, &Path::top(0)).unwrap();
+    assert!(p.objects.iter().enumerate().all(|(i, o)| matches!(o, InlineObject::Field { result, .. } if result == &format!("[{}]", i + 1))));
+}
