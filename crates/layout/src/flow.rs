@@ -5,6 +5,7 @@ use super::floats::{FloatAnchor, ObjFrame, ObjectPlacement, anchor_floats, body_
 use super::notes::{DECOR_STORY, NoteBox, para_notes};
 use super::page::{PageBuilder, PageFrame, item_bottom};
 use super::placed::Placed;
+use super::table_flow::table_start_need;
 use super::{
     Arc, Block, Counters, Document, HashMap, InlineObject, Level, LineEnd, Page, ParaLayout, Paragraph, Path, Rect, StoryRef, TextDirection,
     ViewMode, outline, para,
@@ -306,10 +307,15 @@ impl<'a> Flow<'a> {
     fn keep_together(&self, ctx: &mut Ctx, pb: &mut PageBuilder, rooms: Rooms, before: f32) -> f32 {
         let rp = &self.pl.rp;
         let height = self.pl.height + rooms.top + rooms.bottom;
-        if !(rp.keep_lines || (rp.keep_next && pb.y + height <= pb.bottom + 0.01)) {
+        // It fits by itself where its last line does, that line's leading past its text in the bottom
+        // margin (Word moves a kept double-spaced caption whose text ends above the margin).
+        let own = self.pl.lines.last().map_or(height, |l| height - l.height + fit_height(pb, l, rp, pb.notes.is_empty()));
+        if !(rp.keep_lines || (rp.keep_next && pb.y + own <= pb.bottom + 0.01)) {
             return before;
         }
-        let need = height + if rp.keep_next { next_first_line(ctx, self.block, self.width, 0, &mut ctx.counters.clone()) } else { 0.0 };
+        // A table starts below the paragraph's space after.
+        let gap = if matches!(ctx.doc.body.get(self.block + 1).map(|b| &**b), Some(Block::Table(_))) { rp.space_after } else { 0.0 };
+        let need = height + if rp.keep_next { gap + next_first_line(ctx, self.block, self.width, 0, &mut ctx.counters.clone()) } else { 0.0 };
         // (Against the whole column: balanced columns grow to hold it.)
         // With the 0.01 pt of slack the other fit checks take.
         if pb.y + need > pb.bottom + 0.01 && !pb.fresh() && need <= pb.next_room(self.body_top) {
@@ -931,6 +937,7 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counte
                     }
             }
         }
+        Some(Block::Table(t)) if t.props.float.is_none() => table_start_need(ctx, t, block + 1, width),
         Some(Block::Table(_)) => 24.0,
         None => 0.0,
     }
