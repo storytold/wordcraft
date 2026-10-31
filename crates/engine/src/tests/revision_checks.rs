@@ -250,15 +250,12 @@ fn tracked_unlink_keeps_the_result_as_plain_text() {
 
 #[test]
 fn tracked_delete_table_removes_a_table_with_no_live_text() {
-    // Delete, Accept All (an empty grid is left), Delete again: the table goes.
+    // Delete, then Accept All: the table goes (every row was a tracked deletion).
     let mut s = table_session();
     run(&mut s, "review.trackChanges", json!({"value": true}));
     run(&mut s, "table.deleteTable", json!({}));
     run(&mut s, "review.acceptAll", json!({}));
-    assert!(table(&s).is_some());
-    caret_in(&mut s, 0, 0, 0);
-    run(&mut s, "table.deleteTable", json!({}));
-    assert!(table(&s).is_none(), "an empty table can't be deleted under Track Changes");
+    assert!(table(&s).is_none());
     assert!(s.doc.revisions.is_empty(), "no unused revision");
     // A fresh empty table too.
     let mut s = Session::new(wordcraft_doc::Document::new());
@@ -471,4 +468,96 @@ fn new_tracked_change_does_not_alias_separator_revision() {
         let p = separator_para(&mut s, slot);
         assert!(p.run_ranges().all(|(_, c)| c.ins.is_none() && c.del.is_none()), "{slot:?}");
     }
+}
+
+fn row_del(s: &Session) -> Vec<bool> {
+    table(s).map(|t| t.rows.iter().map(|r| r.props.del.is_some()).collect()).unwrap_or_default()
+}
+
+#[test]
+fn tracked_delete_rows_and_table_mark_the_rows_deleted_like_word() {
+    let mut s = table_session();
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    caret_in(&mut s, 1, 0, 0);
+    run(&mut s, "table.deleteRow", json!({}));
+    assert_eq!(row_del(&s), [false, true]);
+    // Word writes `<w:trPr><w:del/></w:trPr>` on the row, and it survives a save and reopen.
+    let bytes = wordcraft_docx::write(&s.doc).unwrap();
+    let back = wordcraft_docx::read(&bytes).unwrap();
+    let t = back.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert_eq!(t.rows.iter().map(|r| r.props.del.is_some()).collect::<Vec<_>>(), [false, true]);
+    // Reject keeps the row; Accept removes it.
+    let mut rejected = Session::new(back.clone());
+    run(&mut rejected, "review.rejectAll", json!({}));
+    assert_eq!((row_del(&rejected), cells(&rejected).len()), ([false, false].to_vec(), 2));
+    let mut accepted = Session::new(back);
+    run(&mut accepted, "review.acceptAll", json!({}));
+    assert_eq!(cells(&accepted), [["A1", "B1"]]);
+
+    let mut s = table_session();
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "table.deleteTable", json!({}));
+    assert_eq!(row_del(&s), [true, true]);
+    run(&mut s, "review.acceptAll", json!({}));
+    assert!(table(&s).is_none(), "accepting a deleted table removes it");
+}
+
+#[test]
+fn accepting_a_partial_first_cell_selection_does_not_accept_row_deletion() {
+    let mut s = table_session();
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    caret_in(&mut s, 1, 0, 0);
+    run(&mut s, "table.deleteRow", json!({}));
+    s.sel = Selection {
+        anchor: Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![0, 1, 0, 0]), off: 0 },
+        focus: Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![0, 1, 0, 0]), off: 1 },
+    };
+    run(&mut s, "review.accept", json!({}));
+    assert_eq!(row_del(&s), [false, true]);
+}
+
+#[test]
+fn accepting_a_deleted_row_from_any_cell_removes_it() {
+    let mut s = table_session();
+    let b2 = wordcraft_doc::Path(vec![0, 1, 1, 0]);
+    s.sel = Selection { anchor: Pos { story: StoryRef::Body, path: b2.clone(), off: 0 }, focus: Pos { story: StoryRef::Body, path: b2, off: 2 } };
+    run(&mut s, "text.delete", json!({}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    caret_in(&mut s, 1, 0, 0);
+    run(&mut s, "table.deleteRow", json!({}));
+    caret_in(&mut s, 1, 1, 0);
+    run(&mut s, "review.accept", json!({}));
+    assert_eq!(cells(&s), [["A1", "B1"]]);
+}
+
+#[test]
+fn accepting_a_full_row_selection_accepts_its_row_deletion() {
+    let mut s = table_session();
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    caret_in(&mut s, 1, 0, 0);
+    run(&mut s, "table.deleteRow", json!({}));
+    let start = wordcraft_doc::Path(vec![0, 1, 0, 0]);
+    let end = wordcraft_doc::Path(vec![0, 1, 1, 0]);
+    let end_off = s.doc.para(StoryRef::Body, &end).unwrap().len();
+    s.sel = Selection { anchor: Pos { story: StoryRef::Body, path: start, off: 0 }, focus: Pos { story: StoryRef::Body, path: end, off: end_off } };
+    run(&mut s, "review.accept", json!({}));
+    assert_eq!(row_del(&s), [false]);
+    assert_eq!(cells(&s), [["A1", "B1"]]);
+}
+
+#[test]
+fn accepting_the_only_deleted_row_removes_its_table_and_keeps_a_valid_selection() {
+    let mut s = table_session();
+    caret_in(&mut s, 0, 0, 0);
+    run(&mut s, "table.deleteRow", json!({}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    caret_in(&mut s, 0, 0, 0);
+    run(&mut s, "table.deleteRow", json!({}));
+    let start = wordcraft_doc::Path(vec![0, 0, 0, 0]);
+    let end = wordcraft_doc::Path(vec![0, 0, 1, 0]);
+    let end_off = s.doc.para(StoryRef::Body, &end).unwrap().len();
+    s.sel = Selection { anchor: Pos { story: StoryRef::Body, path: start, off: 0 }, focus: Pos { story: StoryRef::Body, path: end, off: end_off } };
+    run(&mut s, "review.accept", json!({}));
+    assert!(table(&s).is_none());
+    assert!(s.doc.para_at(&s.sel.focus).is_some());
 }

@@ -129,11 +129,11 @@ pub(super) fn text_spans(s: &Session, story: StoryRef, prefixes: &[Vec<u32>]) ->
 /// Before a table deletion removes the text `spans`: refuse when that deletes a content control
 /// locked against deletion or edits content locked against editing (#1329). With Track Changes
 /// on, text not yet deleted is marked deleted instead and the structure stays (like Word deleting
-/// a table with tracking on; the model has no tracked row or column deletion), returning the
-/// result. With no text at all (an empty table, or one whose deletion was accepted) there is
+/// a table with tracking on), returning the result; `rows` (a table path and row indices, for
+/// Delete Rows and Delete Table) are marked as deleted rows too (`w:trPr/w:del`). With no text at all (an empty table, or one whose deletion was accepted) there is
 /// nothing for Reject All to restore and the structure goes as without tracking; with only text
 /// already marked deleted, nothing changes (removing it would lose what Reject All restores).
-pub(super) fn guard_delete(s: &mut Session, spans: &[(Pos, Pos)]) -> Result<Option<Value>, CmdError> {
+pub(super) fn guard_delete(s: &mut Session, spans: &[(Pos, Pos)], rows: &[(wordcraft_doc::Path, usize)]) -> Result<Option<Value>, CmdError> {
     for (a, b) in spans {
         crate::cmd::controls::check_delete(s, a, b)?;
     }
@@ -151,6 +151,13 @@ pub(super) fn guard_delete(s: &mut Session, spans: &[(Pos, Pos)]) -> Result<Opti
     let rid = crate::cmd::new_revision(s, RevisionKind::Delete);
     for (a, b) in spans.iter().rev() {
         crate::cmd::track_delete_as(s, a, b, rid)?;
+    }
+    for (tp, r) in rows {
+        // The story is the spans' (a table is in one story).
+        let Some((a, _)) = spans.first() else { break };
+        if let Some(row) = s.doc.table_mut(a.story, tp)?.rows.get_mut(*r) {
+            row.props.del = Some(rid);
+        }
     }
     if let Some((a, _)) = spans.first() {
         s.sel = Selection::caret(s.doc.clamp(a));

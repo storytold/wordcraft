@@ -69,12 +69,19 @@ fn resolve_para(
 
 /// Accept or reject the changes of the table cell `path` is in: the table's, its row's and the
 /// cell's own. Returns whether there were any.
-fn resolve_cell(s: &mut Session, story: StoryRef, path: &wordcraft_doc::Path, accept: bool) -> Result<bool, CmdError> {
+fn resolve_cell(
+    s: &mut Session,
+    story: StoryRef,
+    path: &wordcraft_doc::Path,
+    accept: bool,
+    resolve_row_deletion: bool,
+    caret_in_row: bool,
+) -> Result<bool, CmdError> {
     let Some((tp, r, c)) = path.cell() else { return Ok(false) };
     let has = s.doc.table(story, &tp).is_some_and(|t| {
         let row = t.rows.get(r);
         t.props.fmt_change.is_some()
-            || row.is_some_and(|x| x.props.fmt_change.is_some())
+            || row.is_some_and(|x| x.props.fmt_change.is_some() || (resolve_row_deletion && x.props.del.is_some()))
             || row.and_then(|x| x.cells.get(c)).is_some_and(|x| x.props.fmt_change.is_some())
     });
     if !has {
@@ -87,8 +94,39 @@ fn resolve_cell(s: &mut Session, story: StoryRef, path: &wordcraft_doc::Path, ac
         if let Some(cell) = row.cells.get_mut(c) {
             fmt_revisions::resolve_cell(cell, accept);
         }
+        // Rejecting keeps the row. Accepting removes it below, on its first cell's turn: a range
+        // resolves its cells last to first, so the row's other cells are done by then.
+        if !accept && resolve_row_deletion {
+            row.props.del = None;
+        }
+    }
+    let delete_row = resolve_row_deletion && accept && (c == 0 || caret_in_row) && t.rows.get(r).is_some_and(|x| x.props.del.is_some());
+    let delete_table = delete_row && t.rows.len() == 1;
+    if delete_table {
+        s.doc.remove_block(story, &tp)?;
+        s.sel = Selection::caret(s.doc.clamp(&Pos { story, path: tp, off: 0 }));
+        return Ok(true);
+    }
+    if delete_row {
+        t.delete_row(r);
     }
     Ok(true)
+}
+
+/// Whether a selection covers every paragraph in a row, including both cell boundaries.
+fn range_covers_row(s: &Session, story: StoryRef, path: &wordcraft_doc::Path, a: &Pos, b: &Pos) -> bool {
+    let Some((table, row, _)) = path.cell() else { return false };
+    let mut first = None;
+    let mut last = None;
+    for p in s.doc.para_paths(story) {
+        if p.cell().is_some_and(|(t, r, _)| t == table && r == row) {
+            first.get_or_insert_with(|| p.clone());
+            last = Some(p);
+        }
+    }
+    let (Some(first), Some(last)) = (first, last) else { return false };
+    let end = s.doc.para(story, &last).map(|p| p.len()).unwrap_or(0);
+    (&a.path, a.off) <= (&first, 0) && (&b.path, b.off) >= (&last, end)
 }
 
 /// A tracked change, for navigation and the Reviewing Pane: its range, kind (`insert`,
@@ -281,7 +319,7 @@ fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
                 (a.clone(), a)
             }
             None => {
-                if resolve_cell(s, a.story, &a.path, accept)? {
+                if resolve_cell(s, a.story, &a.path, accept, true, true)? {
                     return if next { select_next_unresolved(s) } else { sel_result(s) };
                 }
                 return nav_change(s, 1);
@@ -292,6 +330,17 @@ fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
     };
     // Moves with an end in the range: their other ends go with them.
     let moves = crate::cmd::moves::names_in(s, &a, &b, caret_mark.as_ref());
+    let mut row_coverage = Vec::new();
+    if ranged {
+        for path in s.doc.paths_between(&a, &b) {
+            let Some((table, row, _)) = path.cell() else { continue };
+            if row_coverage.iter().any(|(seen_table, seen_row, _)| *seen_table == table && *seen_row == row) {
+                continue;
+            }
+            let covered = range_covers_row(s, a.story, &path, &a, &b);
+            row_coverage.push((table, row, covered));
+        }
+    }
     for path in s.doc.paths_between(&a, &b).into_iter().rev() {
         let len = s.doc.para(a.story, &path).map(|p| p.len()).unwrap_or(0);
         let from = if path == a.path { a.off } else { 0 };
@@ -301,7 +350,10 @@ fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
         let props = (ranged && (path != b.path || to > from)) || caret_props.as_ref() == Some(&path);
         resolve_para(s, a.story, &path, (from, to), (mark, props), accept)?;
         if ranged {
-            resolve_cell(s, a.story, &path, accept)?;
+            let resolve_row_deletion = path.cell().is_some_and(|(table, row, _)| {
+                row_coverage.iter().any(|(covered_table, covered_row, covered)| *covered && *covered_table == table && *covered_row == row)
+            });
+            resolve_cell(s, a.story, &path, accept, resolve_row_deletion, false)?;
         }
     }
     crate::cmd::moves::resolve(s, &moves, accept)?;
