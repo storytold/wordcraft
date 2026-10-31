@@ -985,6 +985,7 @@ fn t_def_table(edges: &[i16]) -> Vec<u8> {
     v
 }
 
+/// Cell and row-end marks assemble into a 2x2 table whose grid and widths come from the row's edges.
 #[test]
 fn table_assembled_from_marks() {
     // A 2×2 table: "a\x07 b\x07|ttp  c\x07 d\x07|ttp" then a normal paragraph.
@@ -1026,12 +1027,176 @@ fn table_assembled_from_marks() {
     assert_eq!(last.text, "tail");
 }
 
+/// A .doc row has its own cell edges: a cell takes the width between them, and a row of two wide
+/// cells under a row of four narrow ones spans two grid columns per cell instead of landing in
+/// the first two columns.
+#[test]
+fn rows_with_their_own_edges_share_one_grid() {
+    // Row 1: four cells, 1000 twips (50 pt) each. Row 2: two cells, 2000 twips (100 pt) each.
+    let wide = t_def_table(&[0, 1000, 2000, 3000, 4000]);
+    let narrow = t_def_table(&[0, 2000, 4000]);
+    let text = "a\u{7}b\u{7}c\u{7}d\u{7}e\u{7}f\u{7}tail\r";
+    let in_tbl = grpprl(&[(0x2416, &[0x01])]);
+    let ttp = |def: Vec<u8>| -> Vec<u8> { [grpprl(&[(0x2416, &[0x01]), (0x2417, &[0x01])]), def].concat() };
+    let spec = StructSpec {
+        text,
+        header_stories: vec![],
+        sections: vec![(text.chars().count() as u32, Vec::new())],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![
+            (0, 0, in_tbl.clone()),
+            (2, 0, in_tbl.clone()),
+            (4, 0, in_tbl.clone()),
+            (6, 0, ttp(wide)),
+            (8, 0, in_tbl),
+            (10, 0, ttp(narrow)),
+            (12, 0, Vec::new()),
+        ],
+        plf_lst: Vec::new(),
+        plf_lfo: Vec::new(),
+        note_stories: vec![],
+        endnote_stories: vec![],
+        extra_pairs: Vec::new(),
+        data_stream: Vec::new(),
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let tbl = doc.body.iter().find_map(|b| b.as_table()).expect("table");
+    assert_eq!(tbl.grid, vec![50.0; 4]);
+    assert_eq!(tbl.rows.len(), 2);
+    let widths = |r: usize| tbl.rows[r].cells.iter().map(|c| c.props.width).collect::<Vec<_>>();
+    let spans = |r: usize| tbl.rows[r].cells.iter().map(|c| c.props.span).collect::<Vec<_>>();
+    assert_eq!(widths(0), vec![Some(50.0); 4]);
+    assert_eq!(spans(0), vec![1; 4]);
+    assert_eq!(widths(1), vec![Some(100.0); 2]);
+    assert_eq!(spans(1), vec![2; 2]);
+    assert_eq!((tbl.rows[1].props.grid_before, tbl.rows[1].props.grid_after), (0, 0));
+}
+
+/// A merged cell is as wide as the cells it spans. When one of them has only a percentage width the
+/// sum of point widths is unavailable, so the width comes from the row's outer cell edges.
+#[test]
+fn merged_cell_with_a_percentage_neighbour_takes_the_edge_width() {
+    let text = "a\u{7}b\u{7}tail\r";
+    let in_tbl = grpprl(&[(0x2416, &[0x01])]);
+    // Cells 0..2 merged; cell 1 has only a 50% width. Edges 0, 50 pt, 100 pt.
+    let pct = [1u8, 2, 2, 0xC4, 0x09];
+    let ttp = [grpprl(&[(0x2416, &[0x01]), (0x2417, &[0x01]), (0x5624, &[0, 2])]), t_def_edges(&[0, 1000, 2000]), sprm_cb(0xD635, &pct)].concat();
+    let spec = StructSpec {
+        text,
+        papx_entries: vec![(0, 0, in_tbl), (2, 0, ttp), (4, 0, Vec::new())],
+        ..structured_spec(text, text.chars().count() as u32)
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let tbl = doc.body.iter().find_map(|b| b.as_table()).expect("table");
+    let cells = &tbl.rows[0].cells;
+    assert_eq!(cells.len(), 1, "the two cells are merged");
+    assert_eq!(cells[0].props.span, 2);
+    assert_eq!(cells[0].props.width, Some(100.0), "the merged cell is not left at its first cell's 50 pt");
+}
+
+/// A row's merges name the cells before any of them is merged. A merge drains only the cells after
+/// its first one, so applying them rightmost first keeps the earlier ones' indices valid: with
+/// merges (0, 2) and (3, 5), the second still joins the fourth and fifth cell.
+#[test]
+fn merges_in_one_row_use_the_original_cell_indices() {
+    let text = "a\u{7}b\u{7}c\u{7}d\u{7}e\u{7}f\u{7}tail\r";
+    let in_tbl = grpprl(&[(0x2416, &[0x01])]);
+    // Six cells of 50, 50, 50, 50, 100 and 25 pt; the fifth has only a 50% width.
+    let pct = [4u8, 5, 2, 0xC4, 0x09];
+    let ttp = [
+        grpprl(&[(0x2416, &[0x01]), (0x2417, &[0x01]), (0x5624, &[0, 2]), (0x5624, &[3, 5])]),
+        t_def_edges(&[0, 1000, 2000, 3000, 4000, 6000, 6500]),
+        sprm_cb(0xD635, &pct),
+    ]
+    .concat();
+    let spec = StructSpec {
+        text,
+        papx_entries: vec![
+            (0, 0, in_tbl.clone()),
+            (2, 0, in_tbl.clone()),
+            (4, 0, in_tbl.clone()),
+            (6, 0, in_tbl.clone()),
+            (8, 0, in_tbl),
+            (10, 0, ttp),
+            (12, 0, Vec::new()),
+        ],
+        ..structured_spec(text, text.chars().count() as u32)
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let tbl = doc.body.iter().find_map(|b| b.as_table()).expect("table");
+    let cells = &tbl.rows[0].cells;
+    assert_eq!(cells.iter().map(|c| c.props.span).collect::<Vec<_>>(), [2, 1, 2, 1]);
+    assert_eq!(cells.iter().map(|c| c.props.width).collect::<Vec<_>>(), [Some(100.0), Some(50.0), Some(150.0), Some(25.0)]);
+}
+
+/// Rows whose edges only partly coincide (a boundary at 100 pt in one and not in the other) share
+/// a grid of every row's boundaries, and each cell spans the columns between its own edges.
+#[test]
+fn rows_with_partly_matching_edges_share_a_union_grid() {
+    let text = "a\u{7}b\u{7}c\u{7}d\u{7}e\u{7}tail\r";
+    let in_tbl = grpprl(&[(0x2416, &[0x01])]);
+    let end_row = grpprl(&[(0x2416, &[0x01]), (0x2417, &[0x01])]);
+    // Row 1: 50, 100 and 50 pt cells. Row 2: two 100 pt cells; its middle boundary isn't row 1's.
+    let three = [end_row.clone(), t_def_edges(&[0, 1000, 3000, 4000])].concat();
+    let two = [end_row, t_def_edges(&[0, 2000, 4000])].concat();
+    let spec = StructSpec {
+        text,
+        papx_entries: vec![(0, 0, in_tbl.clone()), (2, 0, in_tbl.clone()), (4, 0, three), (6, 0, in_tbl), (8, 0, two), (10, 0, Vec::new())],
+        ..structured_spec(text, text.chars().count() as u32)
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let tbl = doc.body.iter().find_map(|b| b.as_table()).expect("table");
+    assert_eq!(tbl.grid, vec![50.0, 50.0, 50.0, 50.0]);
+    let spans = |r: usize| tbl.rows[r].cells.iter().map(|c| c.props.span).collect::<Vec<_>>();
+    let widths = |r: usize| tbl.rows[r].cells.iter().map(|c| c.props.width).collect::<Vec<_>>();
+    assert_eq!(spans(0), [1, 2, 1]);
+    assert_eq!(spans(1), [2, 2]);
+    assert_eq!(widths(0), [Some(50.0), Some(100.0), Some(50.0)]);
+    assert_eq!(widths(1), [Some(100.0), Some(100.0)]);
+}
+
+/// A row with no `sprmTDefTable` of its own can't be mapped onto a finer grid, so the grid and every
+/// row's spans stay as they were rather than leaving that row in the first columns of a new grid.
+#[test]
+fn a_row_without_edges_keeps_the_previous_grid() {
+    let text = "a\u{7}b\u{7}c\u{7}d\u{7}e\u{7}f\u{7}g\u{7}h\u{7}tail\r";
+    let in_tbl = grpprl(&[(0x2416, &[0x01])]);
+    let end_row = grpprl(&[(0x2416, &[0x01]), (0x2417, &[0x01])]);
+    let two = [end_row.clone(), t_def_edges(&[0, 2000, 4000])].concat();
+    let four = [end_row.clone(), t_def_edges(&[0, 1000, 2000, 3000, 4000])].concat();
+    let spec = StructSpec {
+        text,
+        papx_entries: vec![
+            (0, 0, in_tbl.clone()),
+            (2, 0, two),
+            (4, 0, in_tbl.clone()),
+            (6, 0, in_tbl.clone()),
+            (8, 0, in_tbl.clone()),
+            (10, 0, four),
+            (12, 0, in_tbl),
+            (14, 0, end_row), // no edges
+            (16, 0, Vec::new()),
+        ],
+        ..structured_spec(text, text.chars().count() as u32)
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let tbl = doc.body.iter().find_map(|b| b.as_table()).expect("table");
+    assert_eq!(tbl.rows.len(), 3);
+    assert_eq!(tbl.grid, vec![100.0; 2], "the grid the first row defined");
+    for row in &tbl.rows {
+        assert!(row.cells.iter().all(|c| c.props.span == 1), "no row was remapped");
+        assert_eq!((row.props.grid_before, row.props.grid_after), (0, 0));
+    }
+}
+
+/// A horizontal merge, table borders, cell shading and a vertical-merge restart are all read from
+/// the row properties.
 #[test]
 fn table_merges_borders_shading() {
     // Two rows: the first "a\x07 b\x07 c\x07" with cells 0-1 horizontally merged; the second
     // "d\x07 e\x07" with table borders, a shaded first cell and a vertical-merge restart.
     let def3 = t_def_table(&[0, 1920, 3840, 5760]);
-    let def2 = t_def_table(&[0, 2880, 5760]);
+    let def2 = t_def_table(&[0, 3840, 5760]); // its boundary 3840 is one of row 1's, so the rows share a grid
     let borders = {
         // sprmTTableBorders80: cb = 0x18, then 6 × Brc80 (width 4/8pt, single, ico 1, space 0).
         let brc = [4u8, 1, 1, 0];
