@@ -39,7 +39,10 @@ pub(crate) fn metadata_at(doc: &Document, opts: &PdfOptions, epoch: Option<i64>)
 /// own date or the wall clock, so the same document converts to the same bytes on any
 /// day; the file IDs hash the content, so they follow the dates. Unset, empty, negative
 /// or non-numeric values mean no epoch is in effect — the fallback the LibreOffice change
-/// for the same variable (tdf#174246) takes, so the two tools agree on a bad value.
+/// for the same variable (tdf#174246) takes, so the two tools agree on a bad value. A
+/// value past the last second a PDF date can name (9999-12-31T23:59:59Z) counts as out
+/// of range on the same rule: writing it would clamp to a different date than the one
+/// asked for, where falling back writes the document's own.
 pub(crate) fn source_date_epoch() -> Option<i64> {
     // The browser has no environment; its exports keep the document's dates.
     #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
@@ -55,7 +58,7 @@ pub(crate) fn source_date_epoch() -> Option<i64> {
 /// The pure parse behind [`source_date_epoch`], so the tests never touch the environment.
 pub(crate) fn parse_source_date_epoch(raw: Option<&str>) -> Option<i64> {
     let secs: i64 = raw?.trim().parse().ok()?;
-    (secs >= 0).then_some(secs)
+    (0..=253_402_300_799).contains(&secs).then_some(secs)
 }
 
 type Civil = (i64, u8, u8, u8, u8, u8);
