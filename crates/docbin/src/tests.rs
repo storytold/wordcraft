@@ -1026,6 +1026,50 @@ fn table_assembled_from_marks() {
     assert_eq!(last.text, "tail");
 }
 
+/// A paragraph whose properties don't fit a PAPX holds only `sprmPHugePapx`: the offset of the real
+/// properties in the Data stream, as a byte count and then the sprms.
+#[test]
+fn huge_papx_reads_the_paragraph_properties_from_the_data_stream() {
+    let text = "indented\r";
+    let real = grpprl(&[(0x845E, &720u16.to_le_bytes())]);
+    let mut data = vec![0u8; 8]; // something before them, so the offset isn't zero
+    let at = data.len() as u32;
+    data.extend_from_slice(&(real.len() as u16).to_le_bytes());
+    data.extend_from_slice(&real);
+    let spec = StructSpec {
+        text,
+        papx_entries: vec![(0, 0, grpprl(&[(0x6646, &at.to_le_bytes())]))],
+        data_stream: data,
+        ..structured_spec(text, text.chars().count() as u32)
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let p = doc.body.first().and_then(|b| b.as_para()).expect("paragraph");
+    assert_eq!(p.props.indent_left, Some(36.0), "720 twips from the Data stream");
+}
+
+/// A table row whose end mark is a huge PAPX (its `sprmTDefTable` is in the Data stream) still ends
+/// the row, with the cell widths its edges give, rather than leaving its cells to the next row.
+#[test]
+fn a_table_row_end_in_a_huge_papx_still_ends_the_row() {
+    let text = "a\u{7}b\u{7}tail\r";
+    let in_tbl = grpprl(&[(0x2416, &[0x01])]);
+    let real = [grpprl(&[(0x2416, &[0x01]), (0x2417, &[0x01])]), t_def_edges(&[0, 2000, 4000])].concat();
+    let mut data = Vec::new();
+    data.extend_from_slice(&(real.len() as u16).to_le_bytes());
+    data.extend_from_slice(&real);
+    let spec = StructSpec {
+        text,
+        papx_entries: vec![(0, 0, in_tbl), (2, 0, grpprl(&[(0x6646, &0u32.to_le_bytes())])), (4, 0, Vec::new())],
+        data_stream: data,
+        ..structured_spec(text, text.chars().count() as u32)
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let tbl = doc.body.iter().find_map(|b| b.as_table()).expect("table");
+    assert_eq!(tbl.rows.len(), 1);
+    assert_eq!(tbl.rows[0].cells.len(), 2);
+    assert_eq!(tbl.grid, vec![100.0, 100.0]);
+}
+
 #[test]
 fn table_merges_borders_shading() {
     // Two rows: the first "a\x07 b\x07 c\x07" with cells 0-1 horizontally merged; the second
