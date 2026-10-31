@@ -656,6 +656,9 @@ fn enter_on_search_find_in_the_document_searches_the_document() {
     h.run_steps(2);
     assert!(h.state().dialog.is_none(), "the box closes");
     assert_eq!(h.state().ui.nav_tab, "results", "the Navigation pane shows the results");
+    let query = h.ctx.data(|d| d.get_temp::<String>(h.state().window_id("nav_query"))).unwrap_or_default();
+    assert_eq!(query, "table", "of the text typed in the box");
+    assert_eq!(h.state().session.find.results.len(), 1, "found in the document");
     assert!(h.state().session.doc.body.iter().all(|b| b.as_table().is_none()), "and no command ran");
 }
 
