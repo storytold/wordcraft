@@ -78,7 +78,7 @@ impl ResolvedChar {
         ResolvedChar {
             // A symbol character is shown in its own font (`w:sym`), whatever the run's font.
             font: c.shown_font().map(str::to_string).unwrap_or_else(|| crate::styles::BODY_FONT.to_string()),
-            size: c.size.unwrap_or(11.0).clamp(1.0, 1638.0),
+            size: c.size.unwrap_or(crate::props::DEFAULT_FONT_SIZE).clamp(1.0, 1638.0),
             bold: c.bold.unwrap_or(false),
             italic: c.italic.unwrap_or(false),
             underline: c.underline.unwrap_or_default(),
@@ -113,7 +113,7 @@ impl ResolvedChar {
             cs: c.cs.unwrap_or(false),
             font_cs: c.font_cs.clone().or_else(|| c.font.clone()).unwrap_or_else(|| crate::styles::BODY_FONT.to_string()),
             font_ea: c.font_ea.clone(),
-            size_cs: c.size_cs.or(c.size).unwrap_or(11.0).clamp(1.0, 1638.0),
+            size_cs: c.size_cs.or(c.size).unwrap_or(crate::props::DEFAULT_FONT_SIZE).clamp(1.0, 1638.0),
             bold_cs: c.bold_cs.or(c.bold).unwrap_or(false),
             italic_cs: c.italic_cs.or(c.italic).unwrap_or(false),
         }
@@ -270,7 +270,12 @@ impl ResolvedPara {
             drop_cap_margin: p.drop_cap_margin.unwrap_or(false),
             drop_cap_distance: p.drop_cap_distance.filter(|d| d.is_finite()).unwrap_or(0.0).clamp(0.0, MAX_DROP_CAP_DISTANCE),
             drop_cap_font: p.drop_cap_font.clone().filter(|f| !f.trim().is_empty()),
-            frame: p.frame.clone().filter(|_| p.drop_cap.unwrap_or(0) == 0),
+            // Explicit zero dimensions cancel a frame; omitted dimensions still fit its text.
+            frame: p.frame.clone().filter(|f| p.drop_cap.unwrap_or(0) == 0 && (f.w != Some(0.0) || f.h != Some(0.0))).map(|mut f| {
+                f.w = f.w.filter(|v| *v != 0.0);
+                f.h = f.h.filter(|v| *v != 0.0);
+                f
+            }),
             suppress_hyphens: p.suppress_hyphens.unwrap_or(false),
             suppress_line_numbers: p.suppress_line_numbers.unwrap_or(false),
             kinsoku: p.kinsoku.unwrap_or(true),

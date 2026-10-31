@@ -57,7 +57,7 @@ pub(crate) fn show(ctx: &egui::Context, window: &Response, t: &Tokens) -> bool {
     // Pointer-only, like a caption button: Tab never lands on it.
     let r = ui.interact(rect, id.with("hit"), Sense::CLICK | Sense::DRAG);
     let label = tl!("Close");
-    r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
     let r = r.on_hover_text(label);
     let down = r.is_pointer_button_down_on() && r.contains_pointer();
     let hot = down || r.hovered();
@@ -144,14 +144,14 @@ mod tests {
         for _ in 0..4 {
             h.step();
         }
-        click_close_box(&mut h, egui::Id::new("read-aloud-player"));
+        click_close_box(&mut h, egui::Id::unique("read-aloud-player"));
         assert!(!h.state().session.read_aloud.open, "the player stops and closes");
         let _ = h.state_mut().run("ui.fileBrowser", json!({"purpose": "document"}));
         for _ in 0..4 {
             h.step();
         }
         assert!(h.state().file_browser.open.is_some(), "the browser opened");
-        click_close_box(&mut h, egui::Id::new("builtin_file_browser"));
+        click_close_box(&mut h, egui::Id::unique("builtin_file_browser"));
         assert!(h.state().file_browser.open.is_none(), "the browser is cancelled");
     }
 
@@ -165,7 +165,7 @@ mod tests {
         for _ in 0..4 {
             h.step();
         }
-        let hit = egui::Id::new(("dialog", "Word Count")).with("close_box").with("hit");
+        let hit = egui::Id::unique(("dialog", "Word Count")).with("close_box").with("hit");
         let r = h.ctx.read_response(hit).expect("the close box is a widget");
         assert!(r.sense.senses_click() && !r.sense.is_focusable(), "pointer-only: {:?}", r.sense);
         for _ in 0..12 {

@@ -378,8 +378,33 @@ fn select_sentence(s: &mut Session, _: &Value) -> CmdResult {
     select_unit(s, Unit::Sentence)
 }
 
-fn select_paragraph(s: &mut Session, _: &Value) -> CmdResult {
-    select_unit(s, Unit::Paragraph)
+/// A triple-click (`cell: true`) on the last paragraph of a table cell selects the cell (Word
+/// takes its end mark too, which shades it), so its borders then move on their own
+/// (`table.resizeDrag`). Without `cell` (the ribbon's Select Paragraph) only the paragraph is selected.
+fn select_paragraph(s: &mut Session, v: &Value) -> CmdResult {
+    let r = select_unit(s, Unit::Paragraph);
+    if v.get("cell").and_then(Value::as_bool) != Some(true) {
+        return r;
+    }
+    let (a, b) = (s.sel.anchor.clone(), s.sel.focus.clone());
+    let n = a.path.0.len();
+    if a.story == b.story
+        && a.path.0.len() == b.path.0.len()
+        && let Some(tp) = a.path.0.get(..n.saturating_sub(3))
+        && !tp.is_empty()
+        && a.path.0.get(..n.saturating_sub(1)) == b.path.0.get(..n.saturating_sub(1))
+        && let (Some(&row), Some(&cell)) = (a.path.0.get(n.saturating_sub(3)), a.path.0.get(n.saturating_sub(2)))
+    {
+        let tp = wordcraft_doc::Path(tp.to_vec());
+        let (row, cell) = (row as usize, cell as usize);
+        let last = s.doc.table(a.story, &tp).and_then(|t| t.rows.get(row)?.cells.get(cell)).map(|c| c.blocks.len().saturating_sub(1));
+        let only = last.is_some_and(|l| a.path.0.last().is_some_and(|&i| i as usize == l));
+        let grid = s.doc.table(a.story, &tp).map(|t| super::table::grid_cols(t, row, cell));
+        if let (true, Some(cols)) = (only, grid) {
+            return super::table::select_range(s, a.story, &tp, (row, row), cols);
+        }
+    }
+    r
 }
 
 /// A click in the selection bar (#856): the whole line at `pos` (default: the caret's), its

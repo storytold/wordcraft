@@ -34,8 +34,16 @@ use crate::affix::AffixDict;
 
 pub use suggest::suggest;
 
-/// The Russian dictionary: `None` until first use, then the installed one (or an empty one).
-static DICT: RwLock<Option<Arc<AffixDict>>> = RwLock::new(None);
+/// The Russian dictionary and whether it came from [`install_dictionary`] rather than a file on
+/// disk (it then has no file of its own to report from [`installed_path`], even if a matching
+/// file also happens to exist): one lock, so a reload and an install can't interleave their two
+/// fields into an inconsistent combination.
+static DICT: RwLock<DictState> = RwLock::new(DictState { dict: None, in_memory: false });
+
+struct DictState {
+    dict: Option<Arc<AffixDict>>,
+    in_memory: bool,
+}
 
 /// File names of a Russian Hunspell dictionary.
 const NAMES: &[&str] = &["ru_RU", "ru-RU", "ru"];
@@ -44,21 +52,22 @@ const NAMES: &[&str] = &["ru_RU", "ru-RU", "ru"];
 /// [`install_dictionary`], or an empty one when none is available (Russian spelling is off then;
 /// see [`has_dictionary`]).
 pub fn dictionary() -> Arc<AffixDict> {
-    if let Some(d) = DICT.read().unwrap_or_else(|e| e.into_inner()).as_ref() {
+    if let Some(d) = DICT.read().unwrap_or_else(std::sync::PoisonError::into_inner).dict.as_ref() {
         return d.clone();
     }
     let loaded = Arc::new(load_installed());
-    let mut slot = DICT.write().unwrap_or_else(|e| e.into_inner());
+    let mut slot = DICT.write().unwrap_or_else(std::sync::PoisonError::into_inner);
     // Another thread (or an install) may have filled it meanwhile: that one wins.
-    slot.get_or_insert(loaded).clone()
+    slot.dict.get_or_insert(loaded).clone()
 }
 
 fn load_installed() -> AffixDict {
     let Some((aff, dic)) = crate::hunspell::find(NAMES) else {
+        crate::hunspell::clear_load_error(NAMES[0]);
         log::info!("Russian spelling: no Hunspell ru_RU dictionary installed");
         return AffixDict::default();
     };
-    crate::hunspell::load(&aff, &dic).unwrap_or_else(|e| {
+    crate::hunspell::note_load(NAMES[0], &dic, crate::hunspell::load(&aff, &dic)).unwrap_or_else(|e| {
         log::warn!("Russian spelling: {e}");
         AffixDict::default()
     })
@@ -68,14 +77,29 @@ fn load_installed() -> AffixDict {
 /// for example one the user picked. On error the current dictionary stays.
 pub fn install_dictionary(aff: &str, dic: &str) -> Result<(), String> {
     let d = AffixDict::from_hunspell(aff, dic, &[])?;
-    *DICT.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(d));
+    let mut slot = DICT.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+    slot.dict = Some(Arc::new(d));
+    slot.in_memory = true;
     Ok(())
 }
 
 /// Forget the loaded dictionary, so the next check looks for an installed one again (after
 /// [`crate::hunspell::set_dictionary_dir`] or a dictionary was installed).
 pub fn reload_dictionary() {
-    *DICT.write().unwrap_or_else(|e| e.into_inner()) = None;
+    let mut slot = DICT.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+    slot.dict = None;
+    slot.in_memory = false;
+}
+
+/// The `.dic` file of the installed Russian dictionary, searching the dictionaries folder and
+/// the system locations now (File › Options › Proofing shows it, #3226); `None` when there is
+/// none. A dictionary given with [`install_dictionary`] has no file and isn't reported, even if a
+/// matching file also happens to exist.
+pub fn installed_path() -> Option<std::path::PathBuf> {
+    if DICT.read().unwrap_or_else(std::sync::PoisonError::into_inner).in_memory {
+        return None;
+    }
+    crate::hunspell::find(NAMES).map(|(_, dic)| dic)
 }
 
 /// Is a Russian dictionary available (spelling is checked)?
@@ -85,7 +109,7 @@ pub fn has_dictionary() -> bool {
 
 /// Is `c` a letter of the Cyrillic script (the only one the Russian dictionary covers)?
 pub(crate) fn is_cyrillic(c: char) -> bool {
-    matches!(c, '\u{0400}'..='\u{04FF}' | '\u{0500}'..='\u{052F}')
+    matches!(c, '\u{0400}'..='\u{052F}')
 }
 
 /// Particles joined to a word with a hyphen (`кто-то`, `где-нибудь`, `давай-ка`, `всё-таки`,

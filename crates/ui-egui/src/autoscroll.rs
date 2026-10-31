@@ -137,7 +137,7 @@ impl AutoScroll {
         vec2(0.0, scroll_delta(displacement, dt))
     }
 
-    /// Draw a marker at the anchor, above the pages, and the up-down cursor. Run after the
+    /// Draw a marker at the anchor, above the pages, and the cursor. Run after the
     /// canvas has set its own cursor.
     pub(crate) fn paint(&self, ui: &egui::Ui, viewport: egui::Rect) {
         let Some(anchor) = self.anchor else { return };
@@ -152,7 +152,9 @@ impl AutoScroll {
                 Stroke::NONE,
             ));
         }
-        ui.ctx().set_cursor_icon(CursorIcon::ResizeVertical);
+        // No pointer position (outside the window) counts as the dead zone: `update` cancels the gesture then.
+        let displacement = ui.ctx().input(|i| i.pointer.hover_pos()).map_or(0.0, |p| p.y - anchor.y);
+        ui.ctx().set_cursor_icon(cursor_icon(displacement));
     }
 }
 
@@ -168,6 +170,18 @@ fn scroll_delta(displacement: f32, dt: f32) -> f32 {
     // Pointer below the anchor scrolls down: the content moves up. A stalled frame (an idle or
     // hidden window) mustn't jump pages.
     -displacement.signum() * speed * dt.clamp(0.0, 0.05)
+}
+
+/// The cursor for a pointer `displacement` points (positive = below) from the anchor: the
+/// up-down arrow while it rests in the dead zone, otherwise an arrow towards the scroll direction.
+fn cursor_icon(displacement: f32) -> CursorIcon {
+    if !displacement.is_finite() || displacement.abs() <= DEAD_ZONE {
+        CursorIcon::ResizeVertical
+    } else if displacement < 0.0 {
+        CursorIcon::ResizeNorth
+    } else {
+        CursorIcon::ResizeSouth
+    }
 }
 
 #[cfg(test)]
@@ -190,6 +204,18 @@ mod tests {
         for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
             assert_eq!(scroll_delta(invalid, 0.016), 0.0);
             assert_eq!(scroll_delta(1000.0, invalid), 0.0);
+        }
+    }
+
+    #[test]
+    fn cursor_follows_the_scroll_direction_outside_the_dead_zone() {
+        for y in [-15.0, -1.0, 0.0, 1.0, 15.0] {
+            assert_eq!(cursor_icon(y), CursorIcon::ResizeVertical);
+        }
+        assert_eq!(cursor_icon(-16.0), CursorIcon::ResizeNorth);
+        assert_eq!(cursor_icon(16.0), CursorIcon::ResizeSouth);
+        for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert_eq!(cursor_icon(invalid), CursorIcon::ResizeVertical);
         }
     }
 }

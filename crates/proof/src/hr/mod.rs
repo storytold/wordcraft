@@ -25,11 +25,11 @@ const NAMES: &[&str] = &["hr_HR", "hr-HR", "hr"];
 /// [`install_dictionary`], or an empty one when none is available (Croatian spelling is off
 /// then; see [`has_dictionary`]).
 pub fn dictionary() -> Arc<AffixDict> {
-    if let Some(d) = DICT.read().unwrap_or_else(|e| e.into_inner()).as_ref() {
+    if let Some(d) = DICT.read().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref() {
         return d.clone();
     }
     let loaded = Arc::new(load_installed());
-    let mut slot = DICT.write().unwrap_or_else(|e| e.into_inner());
+    let mut slot = DICT.write().unwrap_or_else(std::sync::PoisonError::into_inner);
     // Another thread (or an install) may have filled it meanwhile: that one wins.
     slot.get_or_insert(loaded).clone()
 }
@@ -51,14 +51,14 @@ fn load_installed() -> AffixDict {
 /// UTF-8), for example one the user picked. On error the current dictionary stays.
 pub fn install_dictionary(aff: &str, dic: &str) -> Result<(), String> {
     let d = AffixDict::from_hunspell(aff, dic, &[])?;
-    *DICT.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(d));
+    *DICT.write().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::new(d));
     Ok(())
 }
 
 /// Forget the loaded dictionary, so the next check looks for an installed one again (after
 /// [`crate::hunspell::set_dictionary_dir`] or a dictionary was installed).
 pub fn reload_dictionary() {
-    *DICT.write().unwrap_or_else(|e| e.into_inner()) = None;
+    *DICT.write().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
 }
 
 /// The `.dic` file of the Hunspell `hr_HR` dictionary found in the dictionaries folder or the
@@ -85,18 +85,30 @@ pub fn is_correct(word: &str) -> bool {
     is_correct_with(&dictionary(), word)
 }
 
+/// [`is_correct`] with the File › Options › Proofing choices: with Ignore words in UPPERCASE off,
+/// short words in capitals are checked against the dictionary too, and with Ignore words that
+/// contain numbers off, so are words with digits.
+pub fn is_correct_with_options(word: &str, opts: &crate::Options) -> bool {
+    check(&dictionary(), word, opts)
+}
+
 /// [`is_correct`] against a given dictionary (an empty one accepts everything).
 pub fn is_correct_with(d: &AffixDict, word: &str) -> bool {
+    check(d, word, &crate::Options::default())
+}
+
+/// [`is_correct_with_options`] against a given dictionary.
+fn check(d: &AffixDict, word: &str, opts: &crate::Options) -> bool {
     if d.is_empty() {
         return true; // no Croatian dictionary installed: no spelling marks
     }
     let w = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'' && c != '’');
     let w = w.trim_matches(['\'', '’']);
     let n = w.chars().count();
-    if n <= 1 || w.chars().any(|c| c.is_ascii_digit()) || !w.chars().any(char::is_alphabetic) {
+    if n <= 1 || (opts.ignore_numbers && w.chars().any(|c| c.is_ascii_digit())) || !w.chars().any(char::is_alphabetic) {
         return true;
     }
-    if w.chars().all(|c| !c.is_lowercase()) && n <= 6 {
+    if opts.ignore_uppercase && w.chars().all(|c| !c.is_lowercase()) && n <= 6 {
         return true;
     }
     if !w.chars().any(is_latin_letter) {
@@ -146,5 +158,23 @@ mod tests {
     #[test]
     fn missing_dictionary_is_silent() {
         assert!(is_correct_with(&AffixDict::default(), "nepostojećariječ"));
+    }
+
+    /// With Ignore words in UPPERCASE or Ignore words that contain numbers off, Croatian checks
+    /// those words against the dictionary instead of accepting them.
+    #[test]
+    fn proofing_options_reach_the_croatian_check() {
+        test_dict::install();
+        let lang = crate::ProofLang::Hr;
+        let defaults = crate::Options::default();
+        let check_caps = crate::Options { ignore_uppercase: false, ..defaults };
+        let check_digits = crate::Options { ignore_numbers: false, ..defaults };
+        assert!(crate::is_correct_in_with("ŠKOLLA", lang, &defaults), "short capitals are acronyms by default");
+        assert!(!crate::is_correct_in_with("ŠKOLLA", lang, &check_caps));
+        assert!(crate::is_correct_in_with("ŠKOLA", lang, &check_caps));
+        assert!(crate::is_correct_in_with("školla2", lang, &defaults));
+        assert!(!crate::is_correct_in_with("školla2", lang, &check_digits));
+        assert!(crate::is_correct_in_with("2026", lang, &check_digits), "numbers alone stay correct");
+        assert!(is_correct("ŠKOLLA"), "direct checks keep the defaults");
     }
 }

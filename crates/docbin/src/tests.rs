@@ -856,7 +856,7 @@ fn struct_doc(spec: &StructSpec) -> Vec<u8> {
     let stsh = stsh_bytes(&[std_bytes(1, 0x0FFF, "Normal", &Vec::new(), &Vec::new())]);
     let stsh_at = table.len();
     table.extend_from_slice(&stsh);
-    let ffn = ffn_bytes(&["Times New Roman"]);
+    let ffn = ffn_bytes(&["Times New Roman", "Wingdings"]);
     let ffn_at = table.len();
     table.extend_from_slice(&ffn);
     let lst_at = table.len();
@@ -1355,6 +1355,22 @@ fn fields_and_hyperlinks() {
 }
 
 #[test]
+fn hyperlink_target_sublocation_and_quotes() {
+    assert_eq!(super::hyperlink_target(r#"HYPERLINK "http://example.com" \l "heading""#), Some("http://example.com#heading".into()));
+    assert_eq!(super::hyperlink_target(r#"HYPERLINK \l "heading""#), Some("#heading".into()));
+    assert_eq!(super::hyperlink_target(r#"Hyperlink "http://example.com/a path""#), Some("http://example.com/a path".into()));
+    assert_eq!(super::hyperlink_target(r#"HYPERLINK "http://example.com" \o "Help text""#), Some("http://example.com".into()));
+    assert_eq!(super::hyperlink_target(r#"HYPERLINK \l "bm" \o "tip""#), Some("#bm".into()));
+}
+
+/// A field whose name only starts with HYPERLINK is not a hyperlink.
+#[test]
+fn hyperlink_target_needs_the_whole_field_name() {
+    assert_eq!(super::hyperlink_target(r#"HYPERLINKS "x""#), None);
+    assert_eq!(super::hyperlink_target(r#"HYPERLINK	"http://example.com""#), Some("http://example.com".into()));
+}
+
+#[test]
 fn bookmarks_become_objects() {
     let text = "Hello world\r";
     let ccp = text.chars().count() as u32;
@@ -1716,9 +1732,9 @@ fn picture_bytes_are_capped_per_document() {
     let data: Vec<u8> = [a.clone(), b].concat();
     let mut pics = crate::media::Pictures::default();
     pics.limit = 1000;
-    let first = pics.get(&data, 0).expect("first fits");
+    let first = pics.get(&data, 0).cloned().expect("first fits");
     // Same location again: no new bytes.
-    assert_eq!(pics.get(&data, 0).map(|p| p.key), Some(first.key.clone()));
+    assert_eq!(pics.get(&data, 0).map(|p| p.key.clone()), Some(first.key.clone()));
     // A second distinct picture would exceed the cap.
     assert!(pics.get(&data, a.len() as u32).is_none());
     assert_eq!(pics.media.len(), 1);
@@ -1738,8 +1754,8 @@ fn rejected_inline_pictures_are_not_read_again() {
     assert!(pics.get(&small, 0).is_none());
     // The rejected picture took nothing off the cap, and anchors sharing a picture share it.
     let at = big.len() as u32;
-    let fits = pics.get(&data, at).expect("fits");
-    assert_eq!(pics.get(&data, at).map(|p| p.key), Some(fits.key));
+    let fits = pics.get(&data, at).cloned().expect("fits");
+    assert_eq!(pics.get(&data, at).map(|p| p.key.clone()), Some(fits.key));
     assert_eq!(pics.media.len(), 1);
     // Filling the cap exactly works; after that, a place never tried before isn't read.
     let rest = picf_with_png(700);
@@ -2329,4 +2345,225 @@ fn sprm_t_cell_width_twips_and_percentage() {
     assert_eq!(table.rows[0].cells[0].props.width, Some(72.0));
     assert_eq!(table.rows[0].cells[1].props.width, Some(72.0));
     assert_eq!(table.rows[0].cells[2].props.width_pct, Some(50.0));
+}
+
+// ---------------------------------------------------------------------------------------------
+// #1767: symbol runs and paragraph borders.
+
+/// Word stores a symbol character (Insert › Symbol) as the placeholder U+0028 plus
+/// `sprmCSymbol` (0x6A09), which carries the font table index and the character code
+/// ([MS-DOC] §2.6.1 CSymbolOperand); the text stream alone would read "(".
+#[test]
+fn symbol_runs_read_the_character_and_font_from_sprm_c_symbol() {
+    let text = "(\r";
+    // ftc = 1 (Wingdings), xchar = F071: the box Word draws for Wingdings 0x71.
+    let sym = [1u16.to_le_bytes(), 0xF071u16.to_le_bytes()].concat();
+    let spec = StructSpec { text, chpx_runs: vec![(0, grpprl(&[(0x6A09, &sym)]))], ..structured_spec(text, text.chars().count() as u32) };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let p = doc.body.first().and_then(|b| b.as_para()).expect("paragraph");
+    assert_eq!(p.text, "\u{F071}", "the symbol, not the placeholder");
+    assert_eq!(p.props_of_char(0).font.as_deref(), Some("Wingdings"), "its font from the font table");
+}
+
+/// Paragraph borders around a block are read from both storage forms: the Word 97 Brc80
+/// (palette colour) and the Word 2000+ BrcOperand (cb + Brc with a full colour).
+#[test]
+fn paragraph_borders_read_from_both_forms() {
+    let b80 = [8u8, 0x01, 0x06, 0x01]; // 1 pt single line, palette red (6), 1 pt from the text
+    let brc = [8u8, 0xFF, 0x00, 0x00, 0x00, 8, 0x01, 0x02, 0x00]; // cb 8, red COLORREF, 1 pt single, space 2
+    let text = "boxed\r\r";
+    let spec = StructSpec {
+        text,
+        papx_entries: vec![
+            (0, 0, grpprl(&[(0x6424, &b80), (0x6425, &b80), (0x6426, &b80), (0x6427, &b80), (0x6428, &b80)])),
+            (6, 0, grpprl(&[(0xC64E, &brc)])),
+        ],
+        ..structured_spec(text, text.chars().count() as u32)
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let p0 = doc.body.first().and_then(|b| b.as_para()).expect("first paragraph");
+    let b = p0.props.borders.expect("borders");
+    let top = b.top.expect("top border");
+    assert_eq!((top.style, top.width, top.space), (wordcraft_doc::props::BorderStyle::Single, 1.0, 1.0));
+    assert_eq!(top.color, Some(wordcraft_doc::Rgb(0xFF, 0, 0)));
+    assert!(b.left.is_some() && b.bottom.is_some() && b.right.is_some() && b.between.is_some());
+    let p1 = doc.body.get(1).and_then(|b| b.as_para()).expect("second paragraph");
+    let top = p1.props.borders.expect("borders").top.expect("top border");
+    assert_eq!((top.style, top.width, top.space), (wordcraft_doc::props::BorderStyle::Single, 1.0, 2.0));
+    assert_eq!(top.color, Some(wordcraft_doc::Rgb(0xFF, 0, 0)));
+}
+
+/// #3642: a small compound file whose DIFAT names one FAT sector thousands of times made `cfb`
+/// build a FAT of hundreds of megabytes before checking it. The precheck refuses it first.
+#[test]
+fn a_difat_repeating_one_fat_sector_is_refused_before_cfb_builds_the_fat() {
+    let f = wordcraft_doc::cfb_guard::repeating_difat_sample();
+    // The precheck's own error is the proof that it ran before cfb (no clock to skew).
+    assert!(matches!(read(&f), Err(super::DocbinError::Container(e)) if e.contains("FAT sectors in a file of")));
+    assert!(!super::is_encrypted(&f));
+    // A file cfb wrote itself passes.
+    assert!(wordcraft_doc::cfb_guard::check(&cfb_file(&[("WordDocument", &[0u8; 4096])])).is_ok());
+}
+
+/// A compound file `cfb` writes in `version`: `streams` at its root, then `extra` streams under
+/// an `ObjectPool` storage (where Word keeps embedded objects).
+fn cfb_file_in(version: cfb::Version, streams: &[(&str, &[u8])], extra: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut comp = cfb::CompoundFile::create_with_version(version, std::io::Cursor::new(Vec::new())).expect("cfb create");
+    for (name, data) in streams {
+        comp.create_stream(format!("/{name}")).expect("cfb stream").write_all(data).expect("cfb write");
+    }
+    comp.create_storage("/ObjectPool").expect("cfb storage");
+    for (name, data) in extra {
+        comp.create_stream(format!("/ObjectPool/{name}")).expect("cfb stream").write_all(data).expect("cfb write");
+    }
+    comp.into_inner().into_inner()
+}
+
+/// #3642 review: valid compound files pass the guard and open, so it refuses only the hostile
+/// ones. The repository keeps no files Word made, so these are written by the `cfb` crate in
+/// the shape of Word 97–2003 files: the WordDocument and table streams of a .doc these tests
+/// build, with the summary, Data and embedded-object streams Word adds, in 512-byte sectors
+/// (version 3, Word's own) and 4096-byte ones (version 4); and one with a Data stream of 8 MB,
+/// past what the header's 109 FAT sector slots map in 512-byte sectors (109 × 128 sectors,
+/// about 7 MB), so its FAT sectors are listed in a DIFAT chain too, which the guard walks.
+#[test]
+fn valid_doc_shaped_compound_files_pass_the_guard_and_open() {
+    let doc = struct_doc(&structured_spec("Hello world\r", 12));
+    let mut comp = cfb::CompoundFile::open(std::io::Cursor::new(doc.as_slice())).expect("cfb open");
+    // The table stream is 1Table or 0Table, as the FIB's fWhichTblStm says: kept under its name.
+    let table_name = if comp.is_stream("/1Table") { "1Table" } else { "0Table" };
+    let mut stream = |name: &str| {
+        let mut v = Vec::new();
+        std::io::Read::read_to_end(&mut comp.open_stream(name).expect("stream"), &mut v).expect("read");
+        v
+    };
+    let (word, table) = (stream("/WordDocument"), stream(&format!("/{table_name}")));
+    let summary = vec![0xFEu8; 4096];
+    let data = |n: usize| (0..n).map(|i| (i % 251) as u8).collect::<Vec<u8>>();
+    let small = data(200_000);
+    let big = data(8 << 20);
+    let ole = data(70_000);
+    let files = [
+        ("as built", doc.clone()),
+        (
+            "version 3",
+            cfb_file_in(
+                cfb::Version::V3,
+                &[("WordDocument", &word), (table_name, &table), ("Data", &small), ("\u{5}SummaryInformation", &summary)],
+                &[("_1234567890", &ole)],
+            ),
+        ),
+        ("version 4", cfb_file_in(cfb::Version::V4, &[("WordDocument", &word), (table_name, &table), ("Data", &small)], &[("_1", &ole)])),
+        ("with a DIFAT chain", cfb_file_in(cfb::Version::V3, &[("WordDocument", &word), (table_name, &table), ("Data", &big)], &[])),
+    ];
+    let difat_sectors = |f: &[u8]| f.get(0x48..0x4C).map_or(0, |b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+    assert!(difat_sectors(&files[3].1) > 0, "the 8 MB file lists FAT sectors past the header's");
+    for (what, f) in &files {
+        assert_eq!(wordcraft_doc::cfb_guard::check(f), Ok(()), "{what}");
+        let doc = read(f).unwrap_or_else(|e| panic!("{what}: {e}"));
+        assert_eq!(body_texts(&doc).first().map(String::as_str), Some("Hello world"), "{what}");
+    }
+}
+
+/// #3708: a long HYPERLINK target over a long result was copied (and compared) once per result
+/// character. It is now copied once per run.
+#[test]
+fn a_long_hyperlink_over_a_long_result_is_one_linked_run() {
+    let n = 250_000;
+    let target = "x".repeat(n);
+    let text: &'static str = Box::leak(format!("\u{13}HYPERLINK \"http://{target}\"\u{14}{}\u{15}\r", "y".repeat(n)).into_boxed_str());
+    let spec = structured_spec(text, text.chars().count() as u32);
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let p0 = doc.body.first().and_then(|b| b.as_para()).expect("para");
+    let linked: Vec<_> = p0.runs.iter().filter(|r| r.props.link.is_some()).collect();
+    assert_eq!(linked.len(), 1);
+    assert_eq!(linked.first().map(|r| r.len), Some(n));
+    // One copy of the target for the one run, not one per character (~2.5 s here): counted by
+    // what the copies charge to the work budget, which a busy machine can't skew.
+    let result = vec![('y', wordcraft_doc::props::CharProps::default()); n];
+    let f = super::FieldBuild { depth: 1, instr: format!("HYPERLINK \"http://{target}\""), sep: Some(result) };
+    let work = super::Work::new(u64::MAX);
+    super::finish_field(&mut super::ParaBuild::default(), f, &work);
+    assert_eq!(u64::MAX - work.left.get(), ("http://".len() + n) as u64, "one copy of the target");
+}
+
+/// #3708: a result whose formatting changes every character pays for a target copy per run
+/// out of the work budget; past it the text stays, unlinked.
+#[test]
+fn hyperlink_target_copies_are_charged_to_the_work_budget() {
+    use wordcraft_doc::props::CharProps;
+    let bold = CharProps { bold: Some(true), ..Default::default() };
+    let result: Vec<(char, CharProps)> = (0..1000).map(|i| ('a', if i % 2 == 0 { bold.clone() } else { CharProps::default() })).collect();
+    let f = super::FieldBuild { depth: 1, instr: format!("HYPERLINK \"{}\"", "u".repeat(100)), sep: Some(result) };
+    let mut pb = super::ParaBuild::default();
+    let budget = super::Work::new(10_000);
+    super::finish_field(&mut pb, f, &budget);
+    assert_eq!(pb.text.len(), 1000, "all text kept");
+    let linked: usize = pb.runs.iter().filter_map(|r| r.props.link.as_ref()).map(|l| l.len()).sum();
+    assert!(linked <= 10_000, "linked bytes {linked}");
+    assert_eq!(pb.runs.iter().filter(|r| r.props.link.is_some()).count(), 100);
+    assert_eq!(budget.left.get(), 0);
+    assert_eq!(budget.dropped(), [super::Cost::LinkTarget], "the unlinked text is noted, to be logged");
+}
+
+/// #3871 review: what the work budget leaves out is noted once per kind, in a fixed order, and
+/// logged once per kind when the document has been read; nothing is noted while it lasts.
+#[test]
+fn the_work_budget_notes_each_kind_it_leaves_out_once() {
+    use super::Cost::*;
+    let work = super::Work::new(10);
+    assert!(work.charge(10, AltText));
+    assert!(work.dropped().is_empty(), "spent to the last byte, nothing left out");
+    assert!(work.charge(0, LinkTarget), "a free copy is never refused");
+    for _ in 0..3 {
+        assert!(!work.charge(1, FloatingObject));
+    }
+    assert!(!work.charge(1, AltText));
+    assert_eq!(work.dropped(), [AltText, FloatingObject]);
+    work.log();
+    assert_eq!(super::LAST_DROPPED.with(|d| d.borrow().clone()), [AltText, FloatingObject]);
+    // A document within the budget leaves nothing out.
+    read(&struct_doc(&structured_spec("Hello\r", 6))).expect("opens");
+    assert!(super::LAST_DROPPED.with(|d| d.borrow().is_empty()));
+}
+
+/// #3692: a piece's Prm grpprl (a Prc of up to 64 KB) was re-interpreted for every character.
+/// It is now resolved once per formatting change.
+#[test]
+fn a_large_prc_is_interpreted_once_per_formatting_change() {
+    let prc = grpprl(&vec![(0x0835u16, &[0x01u8][..]); 21_000]);
+    let text: &'static str = Box::leak(format!("{}\r", "a".repeat(100_000)).into_boxed_str());
+    let spec = RichSpec {
+        text,
+        styles: vec![(1, 0x0FFF, "Normal", Vec::new(), Vec::new())],
+        fonts: vec!["Times New Roman"],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![(0, 0, Vec::new())],
+    };
+    let bytes = rich_doc_with(&spec, &RichExtra { prcs: vec![prc], prm: 0x0001, ..Default::default() });
+    let t = std::time::Instant::now();
+    let doc = read(&bytes).expect("opens");
+    // About 60 ms on a loaded machine; interpreting the Prc per character took 88 s.
+    assert!(t.elapsed().as_secs() < 10, "opened in {:?}", t.elapsed());
+    let p = para0(&doc);
+    assert_eq!(p.runs.len(), 1);
+    assert_eq!(p.runs.first().and_then(|r| r.props.bold), Some(true));
+}
+
+/// #3692: Prm grpprls are charged to a document-wide work budget; once it is spent the Prm
+/// is skipped (the text keeps its CHPX formatting).
+#[test]
+fn prm_grpprls_past_the_work_budget_are_skipped() {
+    use wordcraft_doc::props::CharProps;
+    let g = grpprl(&[(0x0835, &[0x01])]);
+    let work = super::Work::new(g.len() as u64 + 1);
+    let base = CharProps::default();
+    let mut first = CharProps::default();
+    super::apply_prm(&mut first, crate::piece::PrmRef::Grpprl(Some(&g)), &[], &base, &work);
+    assert_eq!(first.bold, Some(true));
+    let mut second = CharProps::default();
+    super::apply_prm(&mut second, crate::piece::PrmRef::Grpprl(Some(&g)), &[], &base, &work);
+    assert_eq!(second.bold, None);
+    assert_eq!(work.left.get(), 1);
+    assert_eq!(work.dropped(), [super::Cost::Formatting]);
 }
