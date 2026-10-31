@@ -3093,6 +3093,23 @@ fn layout_size_when_focus_is_in_header_updates_correct_section() {
     assert_eq!((s0.page_w, s0.page_h), (612.0, 792.0));
 }
 
+#[test]
+fn page_borders_with_caret_in_header_changes_that_section() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "section 1"}));
+    run(&mut s, "layout.break", json!({"kind": "nextPage"}));
+    run(&mut s, "text.insert", json!({"text": "section 2"}));
+    let hid = s.doc.add_part(
+        wordcraft_doc::PartKind::Header,
+        vec![std::sync::Arc::new(wordcraft_doc::Block::Para(wordcraft_doc::Paragraph::with_text("header text", Default::default())))],
+    );
+    s.doc.last_section.headers.default = Some(hid);
+    s.sel = crate::Selection::caret(s.doc.start_of(wordcraft_doc::StoryRef::Part(hid)));
+    run(&mut s, "design.pageBorders", json!({}));
+    let has: Vec<bool> = s.doc.sections().iter().map(|(_, x)| x.page_borders.is_some()).collect();
+    assert_eq!(has, [false, true]);
+}
+
 /// #1433: the smallest page there can be (0.1" wide, no margins, set straight through Page
 /// Setup's section) still lays out and exports text, a table and two columns.
 #[test]
