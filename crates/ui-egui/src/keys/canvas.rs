@@ -434,7 +434,7 @@ fn key_press(app: &mut WordApp, ctx: &egui::Context, key: Key, modifiers: Modifi
     if crate::objects::key(app, key, modifiers) {
         return;
     }
-    // Shift+F10, Windows' keyboard way to the context menu (#821).
+    // Shift+F10 or the Menu key, Windows' keyboard ways to the context menu (#821, #4977).
     if is_context_menu_key(key, modifiers) {
         app.canvas.context_menu_from_keys = true;
         return;

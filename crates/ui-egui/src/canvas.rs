@@ -164,7 +164,7 @@ pub struct CanvasState {
     pub context_synonyms: Option<serde_json::Value>,
     /// The right-click context menu is open (the mini toolbar stands down while it is).
     pub context_menu_open: bool,
-    /// Shift+F10 (or `ui.contextMenu`) asked for the context menu at the caret (#821).
+    /// Shift+F10, the Menu key (or `ui.contextMenu`) asked for the context menu at the caret (#821).
     pub context_menu_from_keys: bool,
     /// The context menu was opened from the keyboard: its items have the keyboard, and the page
     /// takes it back when the menu closes (#4977).
@@ -1191,7 +1191,8 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
     }
     let secondary_clicked = resp.secondary_clicked() && !middle_gesture;
     handle_secondary_selection(app, &resp, &rects, layout, geo, secondary_clicked);
-    // Shift+F10 opens the same menu below the caret, for the selection or the word there (#821).
+    // Shift+F10 or the Menu key opens the same menu below the caret, for the selection or the word
+    // there (#821).
     let from_keys = std::mem::take(&mut app.canvas.context_menu_from_keys);
     // A click on the equation frame's options strip opens the equation's menu below the strip.
     let eq_strip = app.canvas.eq_options.map(|f| f.strip).filter(|r| resp.clicked() && resp.interact_pointer_pos().is_some_and(|p| r.contains(p)));
