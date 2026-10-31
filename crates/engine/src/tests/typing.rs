@@ -3537,3 +3537,44 @@ fn backspace_cannot_join_into_locked_content_control() {
     assert!(s.run("text.backspace", &json!({})).is_err());
     assert_eq!(s.doc, before);
 }
+
+/// Type into a new equation one key at a time, as the keyboard does inside an equation; returns
+/// its linear and LaTeX forms.
+fn typed_equation(keys: &str, latex_input: bool) -> (String, String) {
+    let mut s = s();
+    run(&mut s, "insert.equation", json!({}));
+    if latex_input {
+        run(&mut s, "equation.inputFormat", json!({"format": "latex"}));
+    }
+    for c in keys.chars() {
+        run(&mut s, "equation.type", json!({"text": c.to_string()}));
+    }
+    let got = s.run("equation.get", &json!({})).unwrap();
+    (got["linear"].as_str().unwrap_or_default().to_string(), got["latex"].as_str().unwrap_or_default().to_string())
+}
+
+/// #4255: a `\name` becomes its symbol as soon as a character that can't continue it follows, as
+/// in Word; a letter or digit keeps it open. Left as `\sqrt` it stayed literal text inside the
+/// fraction, and the backslash stopped the next build-up altogether. A space that finishes a name
+/// only replaces it, so the radicand is typed after `√` instead of next to an empty radical.
+#[test]
+fn equation_names_finish_where_a_name_cannot_continue() {
+    // The report's equations: the fraction holds a radical, not the text `\sqrt(13)`.
+    for (keys, linear, latex) in
+        [("a=64\\sqrt(13)/13 ", "a=(64√13)/13", "a=\\frac{64\\sqrt{13}}{13}"), ("b=16\\sqrt(13)/13 ", "b=(16√13)/13", "b=\\frac{16\\sqrt{13}}{13}")]
+    {
+        assert_eq!(typed_equation(keys, false), (linear.to_string(), latex.to_string()), "{keys}");
+    }
+    // `\sqrt` then Space: √ to type after, not an empty radical with the radicand beside it.
+    for keys in ["\\sqrt x ", "\\sqrt (x) "] {
+        assert_eq!(typed_equation(keys, false), ("√x".to_string(), "\\sqrt{x}".to_string()), "{keys}");
+    }
+    assert_eq!(typed_equation("\\alpha+\\beta ", false).0, "α+β");
+    // The backslash of the next name finishes the one before.
+    assert_eq!(typed_equation("\\alpha\\beta ", false).0, "αβ");
+    // A name followed by a letter or digit is still being typed.
+    assert_eq!(typed_equation("\\alphax", false).0, "\\alphax");
+    assert_eq!(typed_equation("\\alpha1", false).0, "\\alpha1");
+    // LaTeX input keeps its control words for its own parser.
+    assert_eq!(typed_equation("\\sqrt{2} ", true).0, "√2");
+}
