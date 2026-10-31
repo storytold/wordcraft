@@ -343,6 +343,18 @@ pub fn type_text(s: &mut Session, text: &str) -> Result<(), CmdError> {
     insert_text(s, text, true).map(|_| ())
 }
 
+/// Type a page break. In the main text it gets a paragraph of its own, as in Word: the paragraph
+/// is split before and after it, and the caret goes on at the top of the next page. At the start
+/// of a paragraph there is nothing to split off before it. In a table cell, where a break starts
+/// no page, and in a one-line control, which refuses Enter, it stays inside the paragraph.
+pub fn type_page_break(s: &mut Session) -> Result<(), CmdError> {
+    let (at, _) = s.sel.ordered();
+    if at.story != StoryRef::Body || at.path.depth() != 0 || controls::refuses_paragraph(s) {
+        return type_text(s, "\u{000C}");
+    }
+    type_text(s, if at.off == 0 { "\u{000C}\r" } else { "\r\u{000C}\r" })
+}
+
 /// [`type_text`] with the effect the insertion had.
 pub(crate) fn type_text_effect(s: &mut Session, text: &str) -> Result<InsertEffect, CmdError> {
     insert_text(s, text, true)

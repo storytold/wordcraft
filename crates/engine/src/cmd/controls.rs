@@ -341,9 +341,10 @@ pub fn prepare_edit(s: &mut Session) -> Result<Option<CharProps>, CmdError> {
     Ok(Some(props))
 }
 
-/// Enter in a one-line plain text control does nothing.
+/// Enter in a one-line plain text control does nothing. A selection is replaced from its start,
+/// so that is where it counts, whichever way the selection was made.
 pub fn refuses_paragraph(s: &Session) -> bool {
-    s.doc.control_at(&s.sel.focus).is_some_and(|r| {
+    s.doc.control_at(&s.sel.ordered().0).is_some_and(|r| {
         matches!(r.control.kind, ControlKind::Text { multi_line: false } | ControlKind::CheckBox { .. } | ControlKind::DropDown { .. })
     })
 }
