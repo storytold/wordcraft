@@ -184,28 +184,29 @@ impl Remote {
         Ok(req.to_string())
     }
 
-    /// Send one line and read the reply line. A failure before the whole line (with its newline)
-    /// reached the socket is [`Failure::NotSent`]: the app cannot have run it. Any failure after
-    /// that is [`Failure::Unknown`]: the app may have run the request and lost the reply.
+    /// Send one line and read its reply. Once a write is attempted, any failure leaves the
+    /// outcome unknown: even a failed write may have delivered a complete request at EOF.
     fn roundtrip(&mut self, line: &str) -> Result<String, Failure> {
         let Some((reader, writer)) = self.conn.as_mut() else {
             return Err(Failure::NotSent(std::io::Error::new(std::io::ErrorKind::NotConnected, "not connected")));
         };
-        let mut out = Vec::with_capacity(line.len() + 1);
-        out.extend_from_slice(line.as_bytes());
-        out.push(b'\n');
-        writer.write_all(&out).and_then(|()| writer.flush()).map_err(Failure::NotSent)?;
-        match read_bounded_line(reader, MAX_REPLY_LINE).map_err(Failure::Unknown)? {
-            BoundedLine::Line(reply) => Ok(reply),
-            BoundedLine::Eof => Err(Failure::Unknown(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "control channel closed"))),
-            BoundedLine::TooLong => Err(Failure::Unknown(std::io::Error::new(std::io::ErrorKind::InvalidData, "reply from app too long"))),
-        }
+        roundtrip_io(reader, writer, line)
     }
 
     /// One request and its reply. A request that was not sent, or one that only reads, is tried
     /// once more on a new connection (the app may have restarted; a new connection also reads
     /// the key again). A mutation whose outcome is unknown is never sent again: it may have run.
     fn exchange(&mut self, id: u64, method: &str, params: &Value) -> Result<Value, String> {
+        self.exchange_with(id, method, params, Self::roundtrip)
+    }
+
+    fn exchange_with(
+        &mut self,
+        id: u64,
+        method: &str,
+        params: &Value,
+        mut roundtrip: impl FnMut(&mut Self, &str) -> Result<String, Failure>,
+    ) -> Result<Value, String> {
         let unreachable = |addr: &str, e: std::io::Error, connected: bool| {
             let retry = if connected { String::new() } else { "; will retry on each call".to_string() };
             format!("WordCraft app at {addr} is not reachable: {e}{retry}")
@@ -216,7 +217,7 @@ impl Remote {
             let result = match tried {
                 Ok(()) => {
                     let line = self.request_line(id, method, params)?;
-                    self.roundtrip(&line)
+                    roundtrip(self, &line)
                 }
                 Err(e) => Err(e),
             };
@@ -232,10 +233,10 @@ impl Remote {
                         return Err(format!("bad reply from app: {e}"));
                     }
                     if let Failure::Unknown(e) = &f
-                        && !is_read_only(method)
+                        && !is_read_only(method, params)
                     {
                         return Err(format!(
-                            "outcome unknown: the connection to the WordCraft app at {} failed after `{method}` was sent ({e}); it may have been executed, so it is not sent again. Inspect the document to check",
+                            "outcome unknown: the connection to the WordCraft app at {} failed while sending `{method}` or waiting for its reply ({e}); it may have been executed, so it is not sent again. Inspect the document to check",
                             self.addr
                         ));
                     }
@@ -250,9 +251,22 @@ impl Remote {
     }
 }
 
+/// Shared socket exchange, also used with a writer that fails after partial delivery in tests.
+fn roundtrip_io(reader: &mut impl std::io::BufRead, writer: &mut impl Write, line: &str) -> Result<String, Failure> {
+    let mut out = Vec::with_capacity(line.len() + 1);
+    out.extend_from_slice(line.as_bytes());
+    out.push(b'\n');
+    writer.write_all(&out).and_then(|()| writer.flush()).map_err(Failure::Unknown)?;
+    match read_bounded_line(reader, MAX_REPLY_LINE).map_err(Failure::Unknown)? {
+        BoundedLine::Line(reply) => Ok(reply),
+        BoundedLine::Eof => Err(Failure::Unknown(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "control channel closed"))),
+        BoundedLine::TooLong => Err(Failure::Unknown(std::io::Error::new(std::io::ErrorKind::InvalidData, "reply from app too long"))),
+    }
+}
+
 /// Why a round trip failed.
 enum Failure {
-    /// Before the whole request reached the socket: the app did not run it.
+    /// No write was attempted: the app did not run it.
     NotSent(std::io::Error),
     /// After the request was sent: the app may have run it.
     Unknown(std::io::Error),
@@ -267,8 +281,12 @@ impl Failure {
 }
 
 /// Methods that only read: sending them twice does no harm.
-fn is_read_only(method: &str) -> bool {
-    matches!(method, "document.inspect" | "engine.commands" | "ui.inspect" | "ui.parity" | "ui.render" | "ui.screenshot")
+fn is_read_only(method: &str, params: &Value) -> bool {
+    match method {
+        "document.inspect" | "engine.commands" | "ui.inspect" | "ui.parity" => true,
+        "ui.render" | "ui.screenshot" => params.get("path").and_then(Value::as_str).is_none(),
+        _ => false,
+    }
 }
 
 impl Backend for Remote {
@@ -555,6 +573,71 @@ mod tests {
         let mut r = Remote::connect_with(&format!("127.0.0.1:{port}"), fixed_key("k")).unwrap();
         assert_eq!(r.call("document.inspect", json!({})).unwrap(), json!(3));
         assert_eq!(seen.try_iter().count(), 2);
+    }
+
+    #[test]
+    fn a_failed_write_after_delivering_json_never_replays_a_mutation() {
+        // Deliver a complete request, then fail either its newline write or its flush. The
+        // stand-in, like the production server, accepts a complete JSON body at EOF.
+        struct FailingWriter<'a> {
+            socket: &'a mut TcpStream,
+            fail_flush: bool,
+            wrote: bool,
+        }
+        impl Write for FailingWriter<'_> {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                if self.wrote {
+                    return Err(std::io::ErrorKind::BrokenPipe.into());
+                }
+                self.wrote = true;
+                let len = buf.len() - usize::from(!self.fail_flush);
+                self.socket.write_all(&buf[..len])?;
+                self.socket.shutdown(std::net::Shutdown::Write)?;
+                Ok(len)
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Err(std::io::ErrorKind::BrokenPipe.into())
+            }
+        }
+        for fail_flush in [false, true] {
+            let (port, seen) = fake_app(|_| None);
+            let mut r = Remote::connect_with(&format!("127.0.0.1:{port}"), fixed_key("k")).unwrap();
+            let mut attempts = 0;
+            let e = r
+                .exchange_with(1, "engine.execute", &json!({"command": "text.insert", "params": {"text": "once"}}), |r, line| {
+                    attempts += 1;
+                    let (reader, socket) = r.conn.as_mut().unwrap();
+                    roundtrip_io(reader, &mut FailingWriter { socket, fail_flush, wrote: false }, line)
+                })
+                .unwrap_err();
+            assert!(e.contains("outcome unknown"), "{e}");
+            assert_eq!(attempts, 1, "a failed write must not trigger another exchange");
+            assert_eq!(seen.recv_timeout(WAIT).unwrap()["params"]["params"]["text"], "once");
+            assert!(seen.try_recv().is_err());
+        }
+    }
+
+    #[test]
+    fn image_exports_with_a_lost_reply_are_not_replayed_but_in_memory_reads_are() {
+        for method in ["ui.render", "ui.screenshot"] {
+            for path in [json!("out.png"), json!(""), Value::Null] {
+                let count = Arc::new(AtomicUsize::new(0));
+                let n = count.clone();
+                let (port, seen) =
+                    fake_app(move |_| if n.fetch_add(1, Ordering::SeqCst) == 0 { None } else { Some((json!({"ok": true, "result": 3}), false)) });
+                let mut r = Remote::connect_with(&format!("127.0.0.1:{port}"), fixed_key("k")).unwrap();
+                let result = r.call(method, json!({"path": path}));
+                if path.is_string() {
+                    assert!(result.unwrap_err().contains("outcome unknown"));
+                    assert_eq!(count.load(Ordering::SeqCst), 1);
+                } else {
+                    assert_eq!(result.unwrap(), json!(3));
+                    assert_eq!(count.load(Ordering::SeqCst), 2);
+                }
+                assert_eq!(seen.try_iter().count(), if path.is_string() { 1 } else { 2 });
+            }
+            assert!(is_read_only(method, &json!({})), "no path means PNG in the reply");
+        }
     }
 
     #[test]

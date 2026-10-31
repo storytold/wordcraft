@@ -367,3 +367,24 @@ fn render_page_rejects_a_page_number_that_does_not_fit() {
     let r = call(&mut s, 31, "tools/call", json!({"name": "render_page", "arguments": {"page": 1, "scale": 0.5}}));
     assert_eq!(r["result"]["isError"], false, "page 1 still renders: {r}");
 }
+
+#[test]
+fn invalid_utf8_does_not_change_arguments_or_stop_later_requests() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    tool(&mut s, "new_document", json!({}));
+    let mut input = br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"type_text","arguments":{"text":"bad"}}}"#.to_vec();
+    let pos = input.windows(3).position(|w| w == b"bad").unwrap();
+    input[pos] = 0xff;
+    input.push(b'\n');
+    input.extend_from_slice(
+        b"{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"type_text\",\"arguments\":{\"text\":\"good\"}}}\n",
+    );
+    let mut out = Vec::new();
+    s.serve(std::io::Cursor::new(input), &mut out).unwrap();
+    let replies: Vec<Value> = String::from_utf8(out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(replies.len(), 2);
+    assert_eq!(replies[0]["error"]["code"], -32700);
+    assert_eq!(replies[1]["id"], 2);
+    assert_eq!(replies[1]["result"]["isError"], false);
+    assert_eq!(tool(&mut s, "get_text", json!({}))["text"], "good", "malformed text must never reach the backend");
+}

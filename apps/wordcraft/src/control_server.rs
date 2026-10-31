@@ -70,6 +70,15 @@ impl KeyFile {
 /// cannot be bound or there is no random key (the control channel is off); the key file is
 /// `None` when it could not be written (requests are then refused).
 pub fn start(port: u16, ctx: egui::Context, settings: Option<&Path>) -> Option<(Receiver<ControlRequest>, Option<KeyFile>)> {
+    start_with(port, ctx, settings, |listener, ctx, key| serve_on(listener, ctx, key, FIRST_REQUEST))
+}
+
+fn start_with(
+    port: u16,
+    ctx: egui::Context,
+    settings: Option<&Path>,
+    serve: impl FnOnce(TcpListener, egui::Context, String) -> std::io::Result<Receiver<ControlRequest>>,
+) -> Option<(Receiver<ControlRequest>, Option<KeyFile>)> {
     let listener = match TcpListener::bind(("127.0.0.1", port)) {
         Ok(l) => l,
         Err(e) => {
@@ -100,11 +109,21 @@ pub fn start(port: u16, ctx: egui::Context, settings: Option<&Path>) -> Option<(
             None
         }
     };
+    let rx = match serve(listener, ctx, key) {
+        Ok(rx) => rx,
+        Err(e) => {
+            if let Some(f) = &key_file {
+                f.remove();
+            }
+            log::error!("control server off: cannot start the accept thread ({e})");
+            return None;
+        }
+    };
     match &key_file {
         Some(f) => log::info!("control server listening on 127.0.0.1:{port}, key in {}", f.path().display()),
         None => log::info!("control server listening on 127.0.0.1:{port}"),
     }
-    Some((serve_on(listener, ctx, key, FIRST_REQUEST), key_file))
+    Some((rx, key_file))
 }
 
 /// A new key: 32 random bytes from the operating system, as hex.
@@ -136,7 +155,7 @@ fn keys_match(given: &str, key: &str) -> bool {
     !b.is_empty() && a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
-fn serve_on(listener: TcpListener, ctx: egui::Context, key: String, first: Duration) -> Receiver<ControlRequest> {
+fn serve_on(listener: TcpListener, ctx: egui::Context, key: String, first: Duration) -> std::io::Result<Receiver<ControlRequest>> {
     serve_with(listener, ctx, key, Limits { first, wait: REPLY_WAIT, max_unauthenticated: MAX_UNAUTHENTICATED })
 }
 
@@ -148,7 +167,17 @@ struct Limits {
     max_unauthenticated: usize,
 }
 
-fn serve_with(listener: TcpListener, ctx: egui::Context, key: String, limits: Limits) -> Receiver<ControlRequest> {
+fn serve_with(listener: TcpListener, ctx: egui::Context, key: String, limits: Limits) -> std::io::Result<Receiver<ControlRequest>> {
+    serve_with_spawner(listener, ctx, key, limits, |accept| std::thread::Builder::new().name("control-accept".into()).spawn(accept).map(|_| ()))
+}
+
+fn serve_with_spawner(
+    listener: TcpListener,
+    ctx: egui::Context,
+    key: String,
+    limits: Limits,
+    spawn: impl FnOnce(Box<dyn FnOnce() + Send>) -> std::io::Result<()>,
+) -> std::io::Result<Receiver<ControlRequest>> {
     let (tx, rx) = channel::<ControlRequest>();
     let key: Arc<str> = key.into();
     let unauthenticated = Arc::new(AtomicUsize::new(0));
@@ -165,10 +194,8 @@ fn serve_with(listener: TcpListener, ctx: egui::Context, key: String, limits: Li
             }
         }
     };
-    if let Err(e) = std::thread::Builder::new().name("control-accept".into()).spawn(accept) {
-        log::error!("control server: cannot start the accept thread: {e}");
-    }
-    rx
+    spawn(Box::new(accept))?;
+    Ok(rx)
 }
 
 /// The read side of a connection with an optional overall deadline: each read waits only for
@@ -323,7 +350,7 @@ mod tests {
     fn boot_with(first: Duration) -> (u16, Receiver<ControlRequest>) {
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
-        (port, serve_on(listener, egui::Context::default(), KEY.to_string(), first))
+        (port, serve_on(listener, egui::Context::default(), KEY.to_string(), first).unwrap())
     }
 
     fn boot() -> (u16, Receiver<ControlRequest>) {
@@ -576,6 +603,40 @@ mod tests {
     }
 
     #[test]
+    fn an_accept_thread_spawn_failure_aborts_start_and_removes_the_key() {
+        let dir = temp_dir("spawn-failure");
+        let path = wordcraft_control_key::key_path(&dir, 0);
+        let mut bound = None;
+        let result = start_with(0, egui::Context::default(), Some(&dir), |listener, ctx, key| {
+            bound = Some(listener.local_addr().unwrap());
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), key, "startup wrote the key before spawning");
+            serve_with_spawner(listener, ctx, key, small(150, 8), |accept| {
+                drop(accept);
+                Err(std::io::Error::other("injected accept thread spawn failure"))
+            })
+        });
+        assert!(result.is_none(), "a server without its accept thread must not report success");
+        assert!(!path.exists(), "failed startup must remove its published key");
+        let _listener = TcpListener::bind(bound.unwrap()).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_complete_json_request_at_eof_can_reach_the_ui() {
+        // This is why a bridge write failure before the newline is outcome-unknown.
+        let (port, rx) = boot();
+        let mut c = Conn::open(port);
+        let body = json!({"id": 1, "key": KEY, "method": "engine.execute", "params": {"command": "text.insert", "params": {"text": "once"}}});
+        c.1.write_all(body.to_string().as_bytes()).unwrap();
+        c.1.shutdown(std::net::Shutdown::Write).unwrap();
+        let req = answer(&rx);
+        assert_eq!(req.params["params"]["text"], "once");
+        assert_eq!(c.recv()["ok"], true);
+        assert!(c.closed());
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
     fn a_stale_key_file_is_replaced() {
         let dir = temp_dir("stale");
         std::fs::create_dir_all(&dir).unwrap();
@@ -599,7 +660,7 @@ mod tests {
     fn boot_limits(limits: Limits) -> (u16, Receiver<ControlRequest>) {
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
-        (port, serve_with(listener, egui::Context::default(), KEY.to_string(), limits))
+        (port, serve_with(listener, egui::Context::default(), KEY.to_string(), limits).unwrap())
     }
 
     fn small(wait_ms: u64, max_unauthenticated: usize) -> Limits {
