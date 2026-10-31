@@ -238,6 +238,9 @@ impl KeyMap {
         if let Some(assigned) = self.assigned.get(&key) {
             if assigned != id { return Ok(false); }
             self.assigned.remove(&key);
+            // Removing another custom command must not also remove the
+            // localized built-in that happens to use the same key.
+            if *owner != id { return Ok(true); }
         } else if *owner != id || self.removed.contains(&key) {
             return Ok(false);
         }
