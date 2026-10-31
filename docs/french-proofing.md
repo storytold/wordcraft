@@ -1,6 +1,6 @@
 # Shipping and improving French proofing
 
-> **Last reviewed:** 2026-10-20 · **Last updated:** 2026-10-28 · **Change:** minor (French dictionary reload, regional language choices and dictionary-respecting suggestion casing); previously minor (French uppercase/number proofing options and review-record corrections); previously minor (integration with current main, shared NFC lookup and external interface catalogs); previously minor (French spelling keeps attached combining marks and checks compound boundaries); previously minor (French proofing region parser respects extension boundaries); previously minor (French dictionary recovery and regional labels); previously trivial (French hyphenation CI path coverage); previously minor (historical affix compatibility gates and pinned French CI toolchain); previously major (French integration and regression gates, based on #1660)
+> **Last reviewed:** 2026-10-20 · **Last updated:** 2026-10-31 · **Change:** trivial (technical integration with main e6a5cd0; French behavior and shared test fixtures retained); previously minor (French dictionary reload, regional language choices and dictionary-respecting suggestion casing); previously minor (French uppercase/number proofing options and review-record corrections); previously minor (integration with current main, shared NFC lookup and external interface catalogs); previously minor (French spelling keeps attached combining marks and checks compound boundaries); previously minor (French proofing region parser respects extension boundaries); previously minor (French dictionary recovery and regional labels); previously trivial (French hyphenation CI path coverage); previously minor (historical affix compatibility gates and pinned French CI toolchain); previously major (French integration and regression gates, based on #1660)
 
 ## Shared-engine compatibility and reproducible CI
 
@@ -14,6 +14,12 @@ inputs retain their revision and byte checksums. Changes to
 including changes to that pattern file alone.
 
 ## Baseline for review
+
+The technical integration baseline is upstream main
+[`e6a5cd0`](https://github.com/storytold/wordcraft/commit/e6a5cd05f045e4caf25a28660bfeb622f25b5129).
+Upstream document, word-count, PDF and printing fixes remain in place; the French
+dictionary fixture shared by Review and the folder-reload test is unchanged.
+This source baseline does not substitute for the exact revision’s required checks or reviews.
 
 This series rebases the French work in [#1660](https://github.com/storytold/wordcraft/pull/1660)
 onto current main, retaining the original author's commits. It preserves Indonesian proofing
@@ -99,6 +105,7 @@ before proposing a suggestion/ranking change. Keep follow-ups independently revi
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-31 | trivial | Technical integration with main e6a5cd0 preserves upstream fixes, French behavior and the shared Review/folder dictionary fixture; validation remains tied to the exact revision |
 | 2026-10-28 | minor | French dictionary loading is serialized with cache invalidation; both pickers offer Canada explicitly; extension keys do not select a region; final suggestion casing respects dictionary restrictions |
 | 2026-10-26 | minor | French dispatch honours the uppercase and number ignore options; regressions cover both regions, independent choices and original UTF-8 issue ranges; progress records aligned with the current integration |
 | 2026-10-25 | minor | Integration with current main preserves shared NFC lookup, other proofing languages, dictionary diagnostics and external interface catalogs |
