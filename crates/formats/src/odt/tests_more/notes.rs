@@ -1,0 +1,122 @@
+//! Footnotes and endnotes (ODF 1.3 §6.3 `text:note`): read into note stories, written back.
+
+use crate::odt::tests::{NS_T, package};
+use crate::odt::{export, import};
+use wordcraft_doc::para::{InlineObject, NoteKind, OBJ};
+use wordcraft_doc::{Document, PartKind};
+
+fn body(xml: &str) -> Vec<u8> {
+    package(
+        &format!(r#"<office:document-content {NS_T}><office:body><office:text>{xml}</office:text></office:body></office:document-content>"#),
+        None,
+    )
+}
+
+/// Every note referenced from the body, in order: (kind, custom mark, the note's text).
+fn notes(d: &Document) -> Vec<(NoteKind, String, String)> {
+    let mut out = Vec::new();
+    for b in d.body.iter() {
+        let Some(p) = b.as_para() else { continue };
+        for o in &p.objects {
+            if let InlineObject::NoteRef { kind, id, custom } = o {
+                let part = d.parts.get(id).expect("the note's story");
+                assert_eq!(part.kind, if *kind == NoteKind::Footnote { PartKind::Footnote } else { PartKind::Endnote });
+                let text = part.blocks.iter().filter_map(|b| b.as_para()).map(|p| p.text.replace(OBJ, "")).collect::<Vec<_>>().join("|");
+                out.push((*kind, custom.clone(), text.trim().to_string()));
+            }
+        }
+    }
+    out
+}
+
+const NOTES: &str = concat!(
+    r#"<text:p>Text<text:note text:id="ftn1" text:note-class="footnote"><text:note-citation>1</text:note-citation><text:note-body><text:p text:style-name="Footnote">The footnote body.</text:p></text:note-body></text:note>"#,
+    r#" and<text:note text:id="ftn2" text:note-class="endnote"><text:note-citation>i</text:note-citation><text:note-body><text:p>End one.</text:p><text:p>End two.</text:p></text:note-body></text:note>"#,
+    r#" a mark<text:note text:id="ftn3" text:note-class="footnote"><text:note-citation text:label="*">*</text:note-citation><text:note-body><text:p>Starred.</text:p></text:note-body></text:note>.</text:p>"#,
+    "<text:p>After.</text:p>"
+);
+
+#[test]
+fn notes_open_as_note_stories() {
+    let d = import(&body(NOTES)).unwrap();
+    assert_eq!(
+        notes(&d),
+        [
+            (NoteKind::Footnote, String::new(), "The footnote body.".to_string()),
+            (NoteKind::Endnote, String::new(), "End one.|End two.".to_string()),
+            (NoteKind::Footnote, "*".to_string(), "Starred.".to_string()),
+        ]
+    );
+    // The citation numbers are not text; the paragraph goes on after each note.
+    let p = d.body[0].as_para().unwrap();
+    assert_eq!(p.text.replace(OBJ, "#"), "Text# and# a mark#.");
+    assert_eq!(d.body[1].as_para().unwrap().text, "After.");
+    // As Word's: the reference is in the reference style, the note's text in the note style and
+    // starts with its own mark.
+    let first = d.parts.values().find(|p| p.kind == PartKind::Footnote).unwrap();
+    let np = first.blocks[0].as_para().unwrap();
+    assert_eq!(np.props.style.as_deref(), Some("FootnoteText"));
+    assert!(matches!(np.objects.first(), Some(InlineObject::NoteRef { .. })));
+    assert_eq!(p.runs.iter().filter(|r| r.props.style.as_deref() == Some("FootnoteReference")).count(), 2);
+}
+
+#[test]
+fn notes_round_trip() {
+    let d = import(&body(NOTES)).unwrap();
+    let back = import(&export(&d).unwrap()).unwrap();
+    assert_eq!(notes(&back), notes(&d));
+    assert_eq!(back.body[0].as_para().unwrap().text, d.body[0].as_para().unwrap().text);
+    // Saving again changes nothing more.
+    assert_eq!(notes(&import(&export(&back).unwrap()).unwrap()), notes(&d));
+}
+
+#[test]
+fn a_note_keeps_formatting_and_the_text_around_it() {
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="B" style:family="text"><style:text-properties fo:font-weight="bold"/></style:style></office:automatic-styles><office:body><office:text><text:list><text:list-item><text:p><text:span text:style-name="B">bold<text:note text:note-class="footnote"><text:note-citation>1</text:note-citation><text:note-body><text:p>in <text:span text:style-name="B">note</text:span></text:p></text:note-body></text:note> still bold</text:span></text:p></text:list-item></text:list></office:text></office:body></office:document-content>"#
+    );
+    let d = import(&package(&content, None)).unwrap();
+    let p = d.body[0].as_para().unwrap();
+    assert!(p.props.numbering.is_some(), "the list survives the note");
+    let tail = p.runs.last().unwrap();
+    assert_eq!(tail.props.bold, Some(true));
+    assert_eq!(p.text.replace(OBJ, "#"), "bold# still bold");
+    let note = d.parts.values().find(|p| p.kind == PartKind::Footnote).unwrap().blocks[0].as_para().unwrap().clone();
+    assert!(note.runs.iter().any(|r| r.props.bold == Some(true)));
+    assert!(note.props.numbering.is_none(), "the body's list doesn't reach into the note");
+}
+
+#[test]
+fn hostile_notes_do_not_panic() {
+    let deep = "<text:note><text:note-body><text:p>".repeat(200);
+    for xml in [
+        "<text:p>a<text:note>".to_string(),
+        "<text:p>a<text:note><text:note-body><text:p>b".to_string(),
+        "<text:p><text:note><text:note-body><text:p>x<text:note><text:note-body><text:p>y</text:p></text:note-body></text:note></text:p></text:note-body></text:note></text:p>".to_string(),
+        format!("<text:p>{deep}</text:p>"),
+        "<text:note><text:note-body><text:p>outside a paragraph</text:p></text:note-body></text:note>".to_string(),
+        "<text:p><text:note><text:note-citation text:label=\"a very long label that goes on and on\">x</text:note-citation></text:note></text:p>".to_string(),
+    ] {
+        let d = import(&body(&xml)).unwrap();
+        let _ = export(&d).unwrap();
+    }
+}
+
+#[test]
+fn a_note_inside_a_table_cell_is_kept() {
+    let xml = r#"<table:table><table:table-column/><table:table-row><table:table-cell><text:p>cell<text:note text:note-class="endnote"><text:note-citation>i</text:note-citation><text:note-body><text:p>cell note</text:p></text:note-body></text:note></text:p></table:table-cell></table:table-row></table:table>"#;
+    let d = import(&body(xml)).unwrap();
+    let back = import(&export(&d).unwrap()).unwrap();
+    let ends: Vec<_> = back.parts.values().filter(|p| p.kind == PartKind::Endnote).collect();
+    assert_eq!(ends.len(), 1);
+    assert_eq!(ends[0].blocks[0].as_para().unwrap().text.replace(OBJ, "").trim(), "cell note");
+}
+
+#[test]
+fn citations_number_footnotes_and_endnotes_apart() {
+    let d = import(&body(NOTES)).unwrap();
+    let xml = crate::odt::tests::content_of(&export(&d).unwrap());
+    let citations: Vec<&str> =
+        xml.split("<text:note-citation").skip(1).filter_map(|c| c.split_once('>')).map(|(_, rest)| rest.split('<').next().unwrap_or("")).collect();
+    assert_eq!(citations, ["1", "i", "*"]);
+}

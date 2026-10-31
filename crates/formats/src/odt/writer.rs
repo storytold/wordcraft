@@ -45,6 +45,12 @@ type SecStart = (String, Option<u32>);
 
 #[derive(Default)]
 pub(super) struct Writer {
+    /// Notes written so far (their ids), and footnotes and endnotes among them (their numbers).
+    notes: usize,
+    footnotes: u32,
+    endnotes: u32,
+    /// Paragraph style that plain paragraphs get: the note style inside a note.
+    note_parent: Option<&'static str>,
     /// Prefix of every name it makes (styles, lists, tables, pictures): headers and footers are
     /// written by a second writer whose styles go in `styles.xml`, apart from the body's.
     pub(super) prefix: &'static str,
@@ -184,7 +190,10 @@ impl Writer {
     /// The paragraph style of `p`; `start` makes it begin a page of that master page (ODF 1.3
     /// §19.471 `style:master-page-name`), restarting page numbering where asked (§20.322).
     fn para_style_at(&mut self, p: &Para, start: Option<&SecStart>) -> String {
-        let parent = parent_style(p.kind).to_string();
+        let parent = match (p.kind, self.note_parent) {
+            (Kind::Normal, Some(n)) => n.to_string(),
+            _ => parent_style(p.kind).to_string(),
+        };
         let mut props = String::new();
         match p.align {
             Some(Align::Center) => props.push_str(" fo:text-align=\"center\""),
@@ -422,6 +431,10 @@ impl Writer {
                     prev_space = false;
                 }
                 Inline::Anchor(a) => out.push_str(&format!("<text:bookmark text:name=\"{}\"/>", x(a))),
+                Inline::Note { endnote, custom, blocks } => {
+                    self.note(*endnote, custom, blocks, out);
+                    prev_space = false;
+                }
                 Inline::Field { instr, result, fmt } => match super::fields::element(instr, &x(result)) {
                     Some(el) => {
                         match self.text_style(&Fmt { link: None, ..fmt.clone() }) {
@@ -440,6 +453,41 @@ impl Writer {
                 Inline::Ruby { .. } => {}
                 Inline::Figure(_) | Inline::Equation { .. } => {}
             }
+        }
+    }
+
+    /// A footnote or endnote (ODF 1.3 §6.3): its citation (the number LibreOffice shows until it
+    /// renumbers, or the custom mark) and its content. The paragraph being written is put aside
+    /// meanwhile, and an insertion open around the note ends before it and goes on after it.
+    fn note(&mut self, endnote: bool, custom: &str, blocks: &[FBlock], out: &mut String) {
+        let reopen = self.open_ins.as_ref().map(|(m, _)| m.clone());
+        self.close_ins(out);
+        self.notes += 1;
+        let id = format!("{}ftn{}", self.prefix, self.notes);
+        let (class, parent) = if endnote { ("endnote", "Endnote") } else { ("footnote", "Footnote") };
+        let saved = (std::mem::take(&mut self.cur_style), std::mem::take(&mut self.chain), self.part, self.note_parent.replace(parent));
+        let mut body = String::new();
+        self.blocks(blocks, &mut body, 1);
+        self.close_ins(&mut body);
+        (self.cur_style, self.chain, self.part, self.note_parent) = saved;
+        if body.is_empty() {
+            body.push_str(&format!("<text:p text:style-name=\"{parent}\"/>"));
+        }
+        // The number LibreOffice shows by default (footnotes 1, 2, 3; endnotes i, ii, iii) until it
+        // renumbers them itself.
+        let number = if endnote {
+            self.endnotes = self.endnotes.saturating_add(1);
+            wordcraft_doc::section::roman(self.endnotes)
+        } else {
+            self.footnotes = self.footnotes.saturating_add(1);
+            self.footnotes.to_string()
+        };
+        let (label, citation) = if custom.is_empty() { (String::new(), number) } else { (format!(" text:label=\"{}\"", x(custom)), x(custom)) };
+        out.push_str(&format!(
+            "<text:note text:id=\"{id}\" text:note-class=\"{class}\"><text:note-citation{label}>{citation}</text:note-citation><text:note-body>{body}</text:note-body></text:note>"
+        ));
+        if let Some(m) = reopen {
+            self.open_ins(&m, out);
         }
     }
 

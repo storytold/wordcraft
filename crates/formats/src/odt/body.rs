@@ -159,6 +159,29 @@ pub(super) struct Body<'a> {
     active_ins: Vec<(String, RevMark)>,
     /// The text field being read.
     field: Option<OpenField>,
+    /// The note being read.
+    note: Option<OpenNote>,
+}
+
+/// A footnote or endnote being read (ODF 1.3 §6.3): what it is, and the reader state of the
+/// paragraph it sits in, put aside while its content is read into a container of its own.
+struct OpenNote {
+    /// The `text:note` element's depth.
+    depth: usize,
+    endnote: bool,
+    /// The citation's `text:label` (a custom mark).
+    custom: String,
+    para: Option<Para>,
+    fmt: Vec<Fmt>,
+    xml_space_end: bool,
+    para_cont: bool,
+    lists: Vec<(Option<String>, bool)>,
+    item_used: Vec<bool>,
+    /// Stack heights when the note began: what the note opens and leaves open goes with it.
+    containers: usize,
+    tables: usize,
+    cells: usize,
+    lists_saved: usize,
 }
 
 /// A text field being read ([`super::fields`]).
@@ -211,6 +234,7 @@ impl<'a> Body<'a> {
             del: None,
             active_ins: Vec::new(),
             field: None,
+            note: None,
         }
     }
 
@@ -523,7 +547,7 @@ impl Body<'_> {
         if self.tracked_context(q, a) {
             return;
         }
-        if self.start_inline(q, a) {
+        if self.start_inline(q, a) || self.start_note_part(q, a) {
             return;
         }
         match local(q) {
@@ -885,6 +909,98 @@ impl Body<'_> {
         true
     }
 
+    /// A note or its citation starting: true when handled. A note inside a note (allowed by the
+    /// schema, never written by Word or LibreOffice), or one in deleted text or a frame, is left
+    /// out with its content.
+    fn start_note_part(&mut self, q: &str, a: &Attrs) -> bool {
+        if !q.starts_with("text:") {
+            return false;
+        }
+        match local(q) {
+            "note" if self.note.is_none() && self.del.is_none() && !self.in_tc && self.frame.is_none() => self.start_note(a),
+            // The citation's text is LibreOffice's number: only a custom mark is kept.
+            "note-citation" => {
+                if let Some(n) = &mut self.note {
+                    n.custom = get(a, "text:label").map(|l| l.chars().filter(|c| !c.is_control()).take(10).collect()).unwrap_or_default();
+                }
+                self.skip = 1;
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// Begin reading a note: put the paragraph it is in aside and read its content into a
+    /// container of its own, outside any list.
+    fn start_note(&mut self, a: &Attrs) {
+        let note = OpenNote {
+            depth: self.depth,
+            endnote: get(a, "text:note-class").is_some_and(|c| c.trim() == "endnote"),
+            custom: String::new(),
+            para: self.para.take(),
+            fmt: std::mem::take(&mut self.fmt),
+            xml_space_end: std::mem::take(&mut self.xml_space_end),
+            para_cont: std::mem::take(&mut self.para_cont),
+            lists: std::mem::take(&mut self.lists),
+            item_used: std::mem::take(&mut self.item_used),
+            containers: self.containers.len(),
+            tables: self.tables.len(),
+            cells: self.cells.len(),
+            lists_saved: self.lists_saved.len(),
+        };
+        self.containers.push(Vec::new());
+        self.note = Some(note);
+    }
+
+    /// End the note being read: its content becomes an [`Inline::Note`] in the paragraph put
+    /// aside, which goes on. Tables and cells the note left open (malformed) are dropped.
+    fn end_note(&mut self) {
+        self.end_para();
+        let Some(n) = self.note.take() else { return };
+        self.tables.truncate(n.tables);
+        self.cells.truncate(n.cells);
+        self.lists_saved.truncate(n.lists_saved);
+        self.containers.truncate(n.containers + 1);
+        let blocks = if self.containers.len() > n.containers { self.containers.pop().unwrap_or_default() } else { Vec::new() };
+        self.para = n.para;
+        self.fmt = n.fmt;
+        self.xml_space_end = n.xml_space_end;
+        self.para_cont = n.para_cont;
+        self.lists = n.lists;
+        self.item_used = n.item_used;
+        if self.para.is_none() {
+            self.start_para(None, None);
+        }
+        if let Some(p) = &mut self.para {
+            p.inlines.push(Inline::Note { endnote: n.endnote, custom: n.custom, blocks });
+        }
+    }
+
+    /// An element ending at the current depth, for an open note or field: true when that was all
+    /// there was to it.
+    fn end_note_or_field(&mut self, q: &str) -> bool {
+        if self.note.as_ref().is_some_and(|n| self.depth < n.depth) {
+            // The note's own end, or (malformed) an outer element ending first: the note ends,
+            // then that element.
+            self.end_field();
+            self.end_note();
+            if local(q) == "note" {
+                return true;
+            }
+        }
+        // Everything inside a field was its text: only the field's own end does anything. An
+        // outer element ending first (malformed) ends the field, then itself.
+        if let Some(f) = &self.field {
+            if self.depth >= f.depth {
+                return true;
+            }
+            let own = f.name == q;
+            self.end_field();
+            return own;
+        }
+        false
+    }
+
     /// Put the field read so far into the paragraph.
     fn end_field(&mut self) {
         let Some(OpenField { instr, result, mut fmt, .. }) = self.field.take() else { return };
@@ -900,20 +1016,14 @@ impl Body<'_> {
 
     fn end(&mut self, q: &str) {
         self.depth = self.depth.saturating_sub(1);
-        // Everything inside a field was its text: only the field's own end does anything. An
-        // outer element ending first (malformed) ends the field, then itself.
-        if let Some(f) = &self.field {
-            if self.depth >= f.depth {
-                return;
-            }
-            let own = f.name == q;
-            self.end_field();
-            if own {
-                return;
-            }
+        if self.end_note_or_field(q) {
+            return;
         }
         if q == "office:text" {
             self.end_field();
+            if self.note.is_some() {
+                self.end_note();
+            }
             if self.del.is_some() {
                 // Unclosed deleted content (hostile): drop it.
                 self.close_deletion();

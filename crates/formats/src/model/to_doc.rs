@@ -162,6 +162,43 @@ impl<'a> Builder<'a> {
         cp
     }
 
+    /// A note story holding `blocks`, as Word's: its paragraphs in the note text style, the first
+    /// starting with the note's mark and a space. The reference to put in the text, or `None`
+    /// when the document has no room for another story.
+    fn note(&mut self, endnote: bool, custom: &str, blocks: &[FBlock]) -> Option<InlineObject> {
+        use wordcraft_doc::para::NoteKind;
+        let (kind, part, text, mark) = if endnote {
+            (NoteKind::Endnote, wordcraft_doc::PartKind::Endnote, "EndnoteText", "EndnoteReference")
+        } else {
+            (NoteKind::Footnote, wordcraft_doc::PartKind::Footnote, "FootnoteText", "FootnoteReference")
+        };
+        let custom: String = clean_text(custom).chars().filter(|c| !c.is_control()).take(10).collect();
+        let id = self.doc.try_add_part(part, Vec::new()).ok()?;
+        let mut story = self.blocks(blocks, 1);
+        if story.is_empty() {
+            story.push(para_block(Paragraph::new()));
+        }
+        for (i, b) in story.iter_mut().enumerate() {
+            if let Block::Para(p) = Arc::make_mut(b) {
+                if p.props.style.is_none() {
+                    p.props.style = Some(text.into());
+                }
+                if i == 0 {
+                    let starts_blank = p.text.starts_with([' ', '\t']);
+                    let reference = InlineObject::NoteRef { kind, id, custom: custom.clone() };
+                    if p.insert_object(0, reference, &CharProps { style: Some(mark.into()), ..Default::default() }).is_ok() && !starts_blank {
+                        let at = p.text.len().min(wordcraft_doc::para::OBJ.len_utf8());
+                        let _ = p.insert_text(at, " ", &CharProps::default());
+                    }
+                }
+            }
+        }
+        if let Some(part) = self.doc.parts.get_mut(&id) {
+            part.blocks = story;
+        }
+        Some(InlineObject::NoteRef { kind, id, custom })
+    }
+
     fn para(&mut self, p: &Para, list_num: Option<u32>) -> Paragraph {
         let mut out = Paragraph::new();
         out.props = para_props(p, list_num);
@@ -218,6 +255,12 @@ impl<'a> Builder<'a> {
                     append(&mut out, "", &CharProps::default(), Some(InlineObject::BookmarkEnd { name: name.clone() }));
                 }
                 Inline::Figure(_) => {}
+                Inline::Note { endnote, custom, blocks } => {
+                    if let Some(obj) = self.note(*endnote, custom, blocks) {
+                        let style = if *endnote { "EndnoteReference" } else { "FootnoteReference" };
+                        append(&mut out, "", &CharProps { style: Some(style.into()), ..Default::default() }, Some(obj));
+                    }
+                }
                 Inline::Field { instr, result, fmt } => {
                     let cp = self.budget(char_props(fmt));
                     let (instr, result) = (clean_text(instr), clean_text(result));

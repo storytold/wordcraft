@@ -1135,3 +1135,9 @@ fn meta_creation_date_timezones_and_fallbacks() {
     assert_eq!(m2.created, "2024-03-05T13:45:00Z");
     assert_eq!(m2.author, "Solo Creator");
 }
+
+/// The `content.xml` of a package.
+pub(super) fn content_of(bytes: &[u8]) -> String {
+    let mut z = archive(bytes);
+    String::from_utf8(read_entry(&mut z, "content.xml").unwrap()).unwrap()
+}

@@ -38,7 +38,7 @@ fn page_parts(doc: &Document, sec: &SectionProps, w: &mut Writer) -> PageParts {
             }
             let mut body = String::new();
             if let Some(part) = id.and_then(|i| doc.parts.get(&i)) {
-                let blocks = model::part_flow(doc, &part.blocks, model::FlowOpts { tracked: false, fields: true });
+                let blocks = model::part_flow(doc, &part.blocks, model::FlowOpts { fields: true, ..Default::default() });
                 w.blocks(&blocks, &mut body, 0);
             }
             if body.is_empty() {
@@ -84,6 +84,12 @@ fn styles_xml(
     s.push_str("<style:style style:name=\"Title\" style:family=\"paragraph\" style:parent-style-name=\"Standard\" style:class=\"chapter\"><style:text-properties fo:font-size=\"28pt\"/></style:style>");
     s.push_str("<style:style style:name=\"Quotations\" style:family=\"paragraph\" style:parent-style-name=\"Standard\" style:class=\"html\"><style:paragraph-properties fo:margin-left=\"36pt\" fo:margin-right=\"36pt\"/><style:text-properties fo:font-style=\"italic\" fo:color=\"#404040\"/></style:style>");
     s.push_str(&format!("<style:style style:name=\"Preformatted_20_Text\" style:display-name=\"Preformatted Text\" style:family=\"paragraph\" style:parent-style-name=\"Standard\" style:class=\"html\"><style:paragraph-properties fo:margin-top=\"0pt\" fo:margin-bottom=\"0pt\"/><style:text-properties fo:font-family=\"'{}'\" style:font-family-generic=\"modern\" style:font-pitch=\"fixed\" fo:font-size=\"10pt\"/></style:style>", model::MONO_FONT));
+    // The note text styles, as WordCraft's Footnote Text and Endnote Text: 10 pt, no spacing.
+    for (name, class) in [("Footnote", "extra"), ("Endnote", "extra")] {
+        s.push_str(&format!(
+            "<style:style style:name=\"{name}\" style:family=\"paragraph\" style:parent-style-name=\"Standard\" style:class=\"{class}\"><style:paragraph-properties fo:margin-top=\"0pt\" fo:margin-bottom=\"0pt\" fo:line-height=\"100%\"/><style:text-properties fo:font-size=\"10pt\"/></style:style>"
+        ));
+    }
     s.push_str("</office:styles><office:automatic-styles>");
     s.push_str(part_styles);
     let none = PageParts::default();
@@ -181,7 +187,7 @@ fn flow_sections(blocks: &[FBlock], last: &SectionProps) -> Vec<(SectionProps, s
 
 /// Write an `.odt` package.
 pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
-    let flow = model::from_doc_with(doc, model::FlowOpts { tracked: true, fields: true });
+    let flow = model::from_doc_with(doc, model::FlowOpts { tracked: true, fields: true, notes: true });
     let mut w = Writer::default();
     let mut body = String::new();
     let sections = flow_sections(&flow.blocks, &doc.last_section);

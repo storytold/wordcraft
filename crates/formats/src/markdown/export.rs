@@ -135,6 +135,7 @@ fn inlines_md_impl(inlines: &[Inline], in_table: bool) -> String {
             Inline::Figure(alt) => pieces.push((String::new(), Fmt::default(), Some(format!("![{}]()", escape(alt))))),
             Inline::Equation { .. } => {}
             Inline::Field { result, fmt, .. } => pieces.push((result.clone(), fmt.clone(), None)),
+            Inline::Note { .. } => {}
             // Read as its base text by `ruby_as_text` above.
             Inline::Ruby { .. } => {}
         }

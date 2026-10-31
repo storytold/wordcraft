@@ -173,6 +173,14 @@ pub enum Inline {
         result: String,
         fmt: Fmt,
     },
+    /// A footnote or endnote: its custom mark (empty: numbered) and its content, without the
+    /// note's own mark. Only flows asked for notes ([`FlowOpts::notes`]) hold them; formats
+    /// without notes leave them out.
+    Note {
+        endnote: bool,
+        custom: String,
+        blocks: Vec<FBlock>,
+    },
 }
 
 /// What [`super::from_doc_with`] keeps besides text and formatting.
@@ -182,6 +190,8 @@ pub struct FlowOpts {
     pub tracked: bool,
     /// Fields as [`Inline::Field`] (otherwise their result is text).
     pub fields: bool,
+    /// Footnotes and endnotes as [`Inline::Note`] (otherwise left out).
+    pub notes: bool,
 }
 
 /// Base text size (points) a phonetic guide falls back to when the source states none: the
@@ -290,7 +300,7 @@ impl Para {
                 Inline::Text(t, _) | Inline::Equation { linear: t, .. } | Inline::Ruby { base: t, .. } | Inline::Field { result: t, .. } => {
                     s.push_str(t)
                 }
-                Inline::Image(_) | Inline::Anchor(_) | Inline::Figure(_) => {}
+                Inline::Image(_) | Inline::Anchor(_) | Inline::Figure(_) | Inline::Note { .. } => {}
             }
         }
         s
@@ -306,7 +316,7 @@ impl Para {
                     _ => s.push_str(t),
                 },
                 Inline::Equation { linear: t, .. } | Inline::Ruby { base: t, .. } | Inline::Field { result: t, .. } => s.push_str(t),
-                Inline::Image(_) | Inline::Anchor(_) | Inline::Figure(_) => {}
+                Inline::Image(_) | Inline::Anchor(_) | Inline::Figure(_) | Inline::Note { .. } => {}
             }
         }
         s

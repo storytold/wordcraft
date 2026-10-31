@@ -251,6 +251,19 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
                     // attributes (alignment, size, raise) stay in the document model.
                     out.inlines.push(Inline::Ruby { base: base.clone(), ruby: ruby.clone(), fmt: f.clone() });
                 }
+                Some(InlineObject::NoteRef { kind, id, custom }) if opts.notes => {
+                    if !buf.is_empty() {
+                        out.push_text(&std::mem::take(&mut buf), &f);
+                    }
+                    // The note's content without its own mark (a note holds no notes).
+                    let story = doc.parts.get(id).map(|part| &part.blocks);
+                    let mut blocks = story.map(|b| flow_blocks(doc, b, 0, FlowOpts { notes: false, ..opts })).unwrap_or_default();
+                    if let Some(FBlock::Para(first)) = blocks.first_mut() {
+                        first.trim_with(&[' ', '\t'], &[]);
+                    }
+                    let endnote = *kind == wordcraft_doc::para::NoteKind::Endnote;
+                    out.inlines.push(Inline::Note { endnote, custom: custom.clone(), blocks });
+                }
                 Some(InlineObject::Field { instr, result, .. }) if opts.fields => {
                     if !buf.is_empty() {
                         out.push_text(&std::mem::take(&mut buf), &f);
