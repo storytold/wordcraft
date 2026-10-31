@@ -352,6 +352,18 @@ mod tests {
     }
 
     #[test]
+    fn malformed_keyboard_locale_cannot_remove_global_shortcut() {
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        for locale in [json!(5), json!(["pt-br"]), json!({"language": "pt-br"})] {
+            let result = a.run("tools.customizeKeyboard", json!({
+                "locale": locale, "remove": {"command": "file.new", "key": "Mod+N"}
+            }));
+            assert!(result.is_err(), "invalid locale must not fall back to global removal");
+            assert!(a.session.keymap.is_empty());
+        }
+    }
+
+    #[test]
     fn brazilian_keyboard_removal_survives_restart_without_changing_english() {
         let app = || WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
         let mut a = app();
@@ -368,7 +380,6 @@ mod tests {
         assert_eq!(b.run("tools.customizeKeyboard", json!({"reset": true})).unwrap()["custom"]["removedLocalized"], serde_json::Value::Null);
     }
 
-    /// #1905: a command with no shortcut shows (none) instead of a blank keys box.
     /// #1905: a command with no shortcut shows (none) instead of a blank keys box.
     #[test]
     fn keys_list_without_shortcuts_says_none() {
