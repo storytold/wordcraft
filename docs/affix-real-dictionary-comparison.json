@@ -1,0 +1,117 @@
+{
+  "platform": "Windows x86_64; Rust 1.98.1",
+  "status": "all three sampled outputs byte-identical; separate local check, not a CI matrix result",
+  "lookup_observations": 267429,
+  "sampled_stems_per_language": 1000,
+  "max_forms_per_stem_for_lookup_probes": 256,
+  "results": [
+    {
+      "language": "pt_BR",
+      "revision": "67032ee957631908098a72edf48dc81cac27e369",
+      "files": [
+        {
+          "name": "pt_BR.aff",
+          "url": "https://raw.githubusercontent.com/LibreOffice/dictionaries/67032ee957631908098a72edf48dc81cac27e369/pt_BR/pt_BR.aff",
+          "bytes": 979792,
+          "sha256": "21d8ad2a769a60e17e2b5ea4ef11d4d593a58b9e2a82d642ef82d6a4c5523865"
+        },
+        {
+          "name": "pt_BR.dic",
+          "url": "https://raw.githubusercontent.com/LibreOffice/dictionaries/67032ee957631908098a72edf48dc81cac27e369/pt_BR/pt_BR.dic",
+          "bytes": 4477695,
+          "sha256": "a38bfb26b68ece2834e79fe83e48d5792652970ace12db89d1b9674bf9933183"
+        }
+      ],
+      "decode": "utf-8-sig to UTF-8; no rule or stem changes",
+      "old": {
+        "revision": "e6c5a701ddff5be16e266028168c70658aae39d9",
+        "exit_code": 0,
+        "summary": "stems=312295 rules=25829 sampled_stems=1000 observations=59683",
+        "error": "",
+        "bytes": 2952080,
+        "sha256": "07ccceb109bec5fa93da266dcd707fb0c686bc3b74540e0ded504c8c48654a84"
+      },
+      "french": {
+        "revision": "7ddce854c89b7a2a330727438293bc0a8733256f",
+        "exit_code": 0,
+        "summary": "stems=312295 rules=25829 sampled_stems=1000 observations=59683",
+        "error": "",
+        "bytes": 2952080,
+        "sha256": "07ccceb109bec5fa93da266dcd707fb0c686bc3b74540e0ded504c8c48654a84"
+      },
+      "identical_accepted_output": true
+    },
+    {
+      "language": "it_IT",
+      "revision": "67032ee957631908098a72edf48dc81cac27e369",
+      "files": [
+        {
+          "name": "it_IT.aff",
+          "url": "https://raw.githubusercontent.com/LibreOffice/dictionaries/67032ee957631908098a72edf48dc81cac27e369/it_IT/it_IT.aff",
+          "bytes": 70054,
+          "sha256": "951afaa19272f13555b8823e8bcf9ccf78f8fe1a07835bdfb912ab3e4d537c2b"
+        },
+        {
+          "name": "it_IT.dic",
+          "url": "https://raw.githubusercontent.com/LibreOffice/dictionaries/67032ee957631908098a72edf48dc81cac27e369/it_IT/it_IT.dic",
+          "bytes": 1295083,
+          "sha256": "bae1e3501dcd2a923669592493b3fde6c02aae7c7aab83bf5e5b49077e73dd64"
+        }
+      ],
+      "decode": "utf-8-sig to UTF-8; no rule or stem changes",
+      "old": {
+        "revision": "e6c5a701ddff5be16e266028168c70658aae39d9",
+        "exit_code": 0,
+        "summary": "stems=95346 rules=3173 sampled_stems=1000 observations=155034",
+        "error": "",
+        "bytes": 14033199,
+        "sha256": "1c4fb66b89088a7ea8dd980f73d9b353b369c2adb5f8c9b3e0884ce1d36e5518"
+      },
+      "french": {
+        "revision": "7ddce854c89b7a2a330727438293bc0a8733256f",
+        "exit_code": 0,
+        "summary": "stems=95346 rules=3173 sampled_stems=1000 observations=155034",
+        "error": "",
+        "bytes": 14033199,
+        "sha256": "1c4fb66b89088a7ea8dd980f73d9b353b369c2adb5f8c9b3e0884ce1d36e5518"
+      },
+      "identical_accepted_output": true
+    },
+    {
+      "language": "pl_PL",
+      "revision": "67032ee957631908098a72edf48dc81cac27e369",
+      "files": [
+        {
+          "name": "pl_PL.aff",
+          "url": "https://raw.githubusercontent.com/LibreOffice/dictionaries/67032ee957631908098a72edf48dc81cac27e369/pl_PL/pl_PL.aff",
+          "bytes": 257542,
+          "sha256": "82973651651aa930335c865b339b98db376ca3dbf3a661b70b9eeb71fdf41dca"
+        },
+        {
+          "name": "pl_PL.dic",
+          "url": "https://raw.githubusercontent.com/LibreOffice/dictionaries/67032ee957631908098a72edf48dc81cac27e369/pl_PL/pl_PL.dic",
+          "bytes": 5252096,
+          "sha256": "c0848440599eb88e5aca500418d5f389e562ec2c157b63dbe39d354658ffba49"
+        }
+      ],
+      "decode": "iso8859-2 to UTF-8; no rule or stem changes",
+      "old": {
+        "revision": "e6c5a701ddff5be16e266028168c70658aae39d9",
+        "exit_code": 0,
+        "summary": "stems=348901 rules=7410 sampled_stems=1000 observations=52712",
+        "error": "",
+        "bytes": 2294124,
+        "sha256": "6628fe455cce70f0ef3632df5bb528577dd33a9c635c50c0b93cb61a7e278a2e"
+      },
+      "french": {
+        "revision": "7ddce854c89b7a2a330727438293bc0a8733256f",
+        "exit_code": 0,
+        "summary": "stems=348901 rules=7410 sampled_stems=1000 observations=52712",
+        "error": "",
+        "bytes": 2294124,
+        "sha256": "6628fe455cce70f0ef3632df5bb528577dd33a9c635c50c0b93cb61a7e278a2e"
+      },
+      "identical_accepted_output": true
+    }
+  ]
+}

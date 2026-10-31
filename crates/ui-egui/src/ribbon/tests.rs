@@ -241,7 +241,7 @@ fn other_regions_show_by_name_once() {
     assert_eq!(language_name(Some("en-ZZ")), "English (ZZ)");
     assert_eq!(language_name(Some("xx-YY")), "xx-YY");
     let exact = |cur: &'static str| move |t: &str| t.eq_ignore_ascii_case(cur);
-    for tag in ["fr-CA", "pt-AO", "en-SG"] {
+    for tag in ["fr-BE", "pt-AO", "en-SG"] {
         let c = language_checks(tag, exact(tag));
         let name = c.extra.expect("shown above the list");
         assert!(!PROOFING_LANGUAGES.iter().any(|(_, n)| *n == name), "{name} is listed once");
@@ -251,6 +251,45 @@ fn other_regions_show_by_name_once() {
     let c = language_checks("PT-br-x-test", |_| false);
     assert_eq!(c.extra, None);
     assert_eq!(c.listed, PROOFING_LANGUAGES.map(|(t, _)| t == "pt-BR"));
+}
+
+/// Both French regions are selectable; a bare French tag still names France and Canada is
+/// checked as its own listed entry rather than duplicated above the short list.
+#[test]
+fn french_regions_are_in_both_language_pickers() {
+    let french = [("fr-FR", "French (France)"), ("fr-CA", "French (Canada)")];
+    for languages in [PROOFING_LANGUAGES.as_slice(), crate::dialogs_layout::LANGUAGES.as_slice()] {
+        let start = languages.iter().position(|(tag, _)| *tag == "fr-FR").unwrap();
+        assert_eq!(languages.get(start..start + 2), Some(french.as_slice()));
+    }
+    assert_eq!(language_name(Some("fr")), "French (France)");
+    assert_eq!(language_name(Some("fr-CA")), "French (Canada)");
+    let checks = language_checks("FR-ca", |tag| tag.eq_ignore_ascii_case("fr-CA"));
+    assert_eq!(checks.extra, None);
+    assert_eq!(checks.listed, PROOFING_LANGUAGES.map(|(tag, _)| tag == "fr-CA"));
+}
+
+/// A Unicode or private extension cannot turn French's calendar key into the Canadian region.
+#[test]
+fn language_extensions_do_not_change_the_french_region() {
+    for tag in ["fr", "fr-u-ca-gregory", "fr-Latn-u-ca-gregory", "fr-x-ca", "FR_u_CA_gregory", "FR_latn_u_CA_gregory", "FR_x_CA", "fr_FR.UTF-8"] {
+        assert_eq!(language_name(Some(tag)), "French (France)", "{tag}");
+        assert_eq!(wordcraft_engine::proof::ProofLang::from_tag(Some(tag)), wordcraft_engine::proof::ProofLang::Fr, "{tag}");
+        let checks = language_checks(tag, |_| false);
+        assert_eq!(checks.extra, None, "{tag}");
+        assert_eq!(checks.listed, PROOFING_LANGUAGES.map(|(t, _)| t == "fr-FR"), "{tag}");
+    }
+    for tag in ["fr-CA", "fr-Latn-CA", "fr-CA-u-ca-gregory", "fr-Latn-CA-x-fr", "FR_ca", "FR_latn_ca_u_CA_gregory", "fr_CA.UTF-8"] {
+        assert_eq!(language_name(Some(tag)), "French (Canada)", "{tag}");
+        assert_eq!(wordcraft_engine::proof::ProofLang::from_tag(Some(tag)), wordcraft_engine::proof::ProofLang::FrCa, "{tag}");
+        let checks = language_checks(tag, |_| false);
+        assert_eq!(checks.extra, None, "{tag}");
+        assert_eq!(checks.listed, PROOFING_LANGUAGES.map(|(t, _)| t == "fr-CA"), "{tag}");
+    }
+    for (tag, name) in [("fr-BE", "French (Belgium)"), ("EN_latn_GB_u_ca_gregory", "English (United Kingdom)"), ("pt-BR-x-ca", "Portuguese (Brazil)")]
+    {
+        assert_eq!(language_name(Some(tag)), name, "{tag}");
+    }
 }
 
 /// The Englishes WordCraft proofs differently are in the menu, checked by their tags, and
@@ -586,7 +625,8 @@ fn language_menu_reaches_every_language() {
     let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Bonjour")), crate::Services::default());
     let mut h = egui_kittest::Harness::builder().with_size(vec2(400.0, 600.0)).build_ui_state(|ui, app: &mut WordApp| language_menu(ui, app), app);
     h.run();
-    assert!(h.query(item("French (France)")).is_none(), "the short list only, on an English document");
+    assert!(h.query(item("German (Germany)")).is_none(), "the short list only, on an English document");
+    assert!(h.query(item("French (France)")).is_some(), "French is in the short list (WordCraft proofs it)");
     assert!(!h.get(item("Set Proofing Language…")).accesskit_node().is_disabled(), "never greyed out on a fresh document");
     assert!(!h.get(item("English (United States)")).accesskit_node().is_disabled());
     h.get(item("Set Proofing Language…")).click();
@@ -594,10 +634,28 @@ fn language_menu_reaches_every_language() {
     assert_eq!(h.state().dialog.as_ref().map(crate::dialogs::Dialog::name), Some("language"));
     h.state_mut().dialog = None;
     // French for the whole document: the menu and the status bar name it.
-    h.state_mut().run("review.language", json!({"lang": "fr-FR", "default": true})).unwrap();
+    h.state_mut().run("select.all", json!({})).unwrap();
     h.run();
+    h.get(item("French (France)")).click();
+    h.run();
+    let paragraph = h.state().session.doc.para(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert_eq!(paragraph.text, "Bonjour", "choosing a language keeps the selected text");
+    let french_bytes: usize = paragraph.runs.iter().filter(|r| r.props.lang.as_deref() == Some("fr-FR")).map(|r| r.len).sum();
+    assert_eq!(french_bytes, paragraph.text.len(), "French applies to every selected character, not only the caret");
     assert_eq!(caret_language(h.state()), "French (France)");
-    assert!(h.query(item("French (France)")).is_some(), "the current language is listed (only while it is the current one)");
+    assert!(h.query(item("French (France)")).is_some(), "the current language is listed and checked");
+    assert_eq!(language_name(Some("fr-CA")), "French (Canada)");
+    assert_eq!(language_name(Some("fr")), "French (France)");
+    h.get(item("French (Canada)")).click();
+    h.run();
+    let paragraph = h.state().session.doc.para(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert_eq!(paragraph.text, "Bonjour");
+    let canadian_bytes: usize = paragraph.runs.iter().filter(|r| r.props.lang.as_deref() == Some("fr-CA")).map(|r| r.len).sum();
+    assert_eq!(canadian_bytes, paragraph.text.len(), "Canada applies to every selected character");
+    assert_eq!(caret_language(h.state()), "French (Canada)");
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    h.run();
+    assert_eq!(h.state_mut().session.run("format.state", &json!({})).unwrap()["lang"], "fr-FR", "one undo restores France");
     h.get(item("Language Preferences…")).click();
     h.run();
     assert!(h.state().ui.backstage, "File › Options opened");

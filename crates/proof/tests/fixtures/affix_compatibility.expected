@@ -1,0 +1,497 @@
+pl: conditional strip, prefix cross products, diacritics
+len=4 rules=5
+try="aeoiułkr" key="" map=[['a', 'ą'], ['o', 'ó', 'u']] rep=[("ż", "rz"), ("u", "ó")] comments=["original compatibility fixture"]
+forms "Warszawa": ["Warszawa", "Warszawą"]
+forms "kot": ["kot", "kotem", "koty", "niekot", "niekotem", "niekoty"]
+forms "krowa": ["krowa", "krową"]
+forms "piesek": ["piesek", "piesekem", "pieseky", "pieska"]
+"": contains=false check=false suggest=false raw_suggest=false
+"KOT": contains=false check=true suggest=true raw_suggest=false
+"KOTEM": contains=false check=true suggest=true raw_suggest=false
+"KOTY": contains=false check=true suggest=true raw_suggest=false
+"KOTĄ": contains=false check=false suggest=false raw_suggest=false
+"KROWA": contains=false check=true suggest=true raw_suggest=false
+"KROWY": contains=false check=false suggest=false raw_suggest=false
+"KROWĄ": contains=false check=true suggest=true raw_suggest=false
+"Kot": contains=false check=true suggest=true raw_suggest=false
+"Kotem": contains=false check=true suggest=true raw_suggest=false
+"Koty": contains=false check=true suggest=true raw_suggest=false
+"Kotą": contains=false check=false suggest=false raw_suggest=false
+"Krowa": contains=false check=true suggest=true raw_suggest=false
+"Krowy": contains=false check=false suggest=false raw_suggest=false
+"Krową": contains=false check=true suggest=true raw_suggest=false
+"NIE": contains=false check=false suggest=false raw_suggest=false
+"NIEKOT": contains=false check=true suggest=true raw_suggest=false
+"NIEKOTEM": contains=false check=true suggest=true raw_suggest=false
+"NIEKOTY": contains=false check=true suggest=true raw_suggest=false
+"NIEPIESKA": contains=false check=false suggest=false raw_suggest=false
+"Nie": contains=false check=false suggest=false raw_suggest=false
+"Niekot": contains=false check=true suggest=true raw_suggest=false
+"Niekotem": contains=false check=true suggest=true raw_suggest=false
+"Niekoty": contains=false check=true suggest=true raw_suggest=false
+"Niepieska": contains=false check=false suggest=false raw_suggest=false
+"PIESEK": contains=false check=true suggest=true raw_suggest=false
+"PIESEKA": contains=false check=false suggest=false raw_suggest=false
+"PIESEKEM": contains=false check=true suggest=true raw_suggest=false
+"PIESEKY": contains=false check=true suggest=true raw_suggest=false
+"PIESKA": contains=false check=true suggest=true raw_suggest=false
+"Piesek": contains=false check=true suggest=true raw_suggest=false
+"Pieseka": contains=false check=false suggest=false raw_suggest=false
+"Piesekem": contains=false check=true suggest=true raw_suggest=false
+"Pieseky": contains=false check=true suggest=true raw_suggest=false
+"Pieska": contains=false check=true suggest=true raw_suggest=false
+"WARSZAWA": contains=false check=true suggest=true raw_suggest=false
+"WARSZAWĄ": contains=false check=true suggest=true raw_suggest=false
+"Warszawa": contains=true check=true suggest=true raw_suggest=true
+"Warszawą": contains=true check=true suggest=true raw_suggest=true
+"kot": contains=true check=true suggest=true raw_suggest=true
+"kotem": contains=true check=true suggest=true raw_suggest=true
+"koty": contains=true check=true suggest=true raw_suggest=true
+"kotą": contains=false check=false suggest=false raw_suggest=false
+"krowa": contains=true check=true suggest=true raw_suggest=true
+"krowy": contains=false check=false suggest=false raw_suggest=false
+"krową": contains=true check=true suggest=true raw_suggest=true
+"nie": contains=false check=false suggest=false raw_suggest=false
+"niekot": contains=true check=true suggest=true raw_suggest=true
+"niekotem": contains=true check=true suggest=true raw_suggest=true
+"niekoty": contains=true check=true suggest=true raw_suggest=true
+"niepieska": contains=false check=false suggest=false raw_suggest=false
+"piesek": contains=true check=true suggest=true raw_suggest=true
+"pieseka": contains=false check=false suggest=false raw_suggest=false
+"piesekem": contains=true check=true suggest=true raw_suggest=true
+"pieseky": contains=true check=true suggest=true raw_suggest=true
+"pieska": contains=true check=true suggest=true raw_suggest=true
+"warszawa": contains=false check=false suggest=false raw_suggest=false
+"warszawą": contains=false check=false suggest=false raw_suggest=false
+pt: UTF-8 flags, forbidden words, two suffixes
+len=4 rules=3
+try="aeiouçãõ" key="" map=[] rep=[] comments=["original compatibility fixture"]
+forms "bonito": ["bonita", "bonitas", "bonito", "bonitos"]
+forms "casa": ["casa", "casas"]
+forms "fazer": ["fazer", "refazer"]
+forms "imundo": []
+"BONITA": contains=false check=true suggest=true raw_suggest=false
+"BONITAS": contains=false check=true suggest=true raw_suggest=false
+"BONITASS": contains=false check=false suggest=false raw_suggest=false
+"BONITO": contains=false check=true suggest=true raw_suggest=false
+"BONITOS": contains=false check=true suggest=true raw_suggest=false
+"Bonita": contains=false check=true suggest=true raw_suggest=false
+"Bonitas": contains=false check=true suggest=true raw_suggest=false
+"Bonitass": contains=false check=false suggest=false raw_suggest=false
+"Bonito": contains=false check=true suggest=true raw_suggest=false
+"Bonitos": contains=false check=true suggest=true raw_suggest=false
+"CASA": contains=false check=true suggest=true raw_suggest=false
+"CASAA": contains=false check=false suggest=false raw_suggest=false
+"CASAS": contains=false check=true suggest=true raw_suggest=false
+"Casa": contains=false check=true suggest=true raw_suggest=false
+"Casaa": contains=false check=false suggest=false raw_suggest=false
+"Casas": contains=false check=true suggest=true raw_suggest=false
+"FAZER": contains=false check=true suggest=true raw_suggest=false
+"Fazer": contains=false check=true suggest=true raw_suggest=false
+"IMUNDO": contains=false check=false suggest=false raw_suggest=false
+"IMUNDOS": contains=false check=false suggest=false raw_suggest=false
+"Imundo": contains=false check=false suggest=false raw_suggest=false
+"Imundos": contains=false check=false suggest=false raw_suggest=false
+"RECASAS": contains=false check=false suggest=false raw_suggest=false
+"REFAZER": contains=false check=true suggest=true raw_suggest=false
+"Recasas": contains=false check=false suggest=false raw_suggest=false
+"Refazer": contains=false check=true suggest=true raw_suggest=false
+"bonita": contains=true check=true suggest=true raw_suggest=true
+"bonitas": contains=true check=true suggest=true raw_suggest=true
+"bonitass": contains=false check=false suggest=false raw_suggest=false
+"bonito": contains=true check=true suggest=true raw_suggest=true
+"bonitos": contains=true check=true suggest=true raw_suggest=true
+"casa": contains=true check=true suggest=true raw_suggest=true
+"casaa": contains=false check=false suggest=false raw_suggest=false
+"casas": contains=true check=true suggest=true raw_suggest=true
+"fazer": contains=true check=true suggest=true raw_suggest=true
+"imundo": contains=false check=false suggest=false raw_suggest=false
+"imundos": contains=false check=false suggest=false raw_suggest=false
+"recasas": contains=false check=false suggest=false raw_suggest=false
+"refazer": contains=true check=true suggest=true raw_suggest=true
+it: stripping, non-crossing suffix, proper-name casing
+len=4 rules=3
+try="" key="" map=[] rep=[] comments=["original compatibility fixture"]
+forms "Roma": ["Roma"]
+forms "casa": ["casa", "case", "ricasa"]
+forms "fare": ["fare", "rifare"]
+forms "libro": ["libri", "libro"]
+"": contains=false check=false suggest=false raw_suggest=false
+"CASA": contains=false check=true suggest=true raw_suggest=false
+"CASE": contains=false check=true suggest=true raw_suggest=false
+"Casa": contains=false check=true suggest=true raw_suggest=false
+"Case": contains=false check=true suggest=true raw_suggest=false
+"FARE": contains=false check=true suggest=true raw_suggest=false
+"Fare": contains=false check=true suggest=true raw_suggest=false
+"LIBRI": contains=false check=true suggest=true raw_suggest=false
+"LIBRO": contains=false check=true suggest=true raw_suggest=false
+"LIBROS": contains=false check=false suggest=false raw_suggest=false
+"Libri": contains=false check=true suggest=true raw_suggest=false
+"Libro": contains=false check=true suggest=true raw_suggest=false
+"Libros": contains=false check=false suggest=false raw_suggest=false
+"R ILIBRI": contains=false check=false suggest=false raw_suggest=false
+"R ilibri": contains=false check=false suggest=false raw_suggest=false
+"RICAS A": contains=false check=false suggest=false raw_suggest=false
+"RICASA": contains=false check=true suggest=true raw_suggest=false
+"RICASE": contains=false check=false suggest=false raw_suggest=false
+"RIFARE": contains=false check=true suggest=true raw_suggest=false
+"ROMA": contains=false check=true suggest=true raw_suggest=false
+"Ricas a": contains=false check=false suggest=false raw_suggest=false
+"Ricasa": contains=false check=true suggest=true raw_suggest=false
+"Ricase": contains=false check=false suggest=false raw_suggest=false
+"Rifare": contains=false check=true suggest=true raw_suggest=false
+"Roma": contains=true check=true suggest=true raw_suggest=true
+"casa": contains=true check=true suggest=true raw_suggest=true
+"case": contains=true check=true suggest=true raw_suggest=true
+"fare": contains=true check=true suggest=true raw_suggest=true
+"libri": contains=true check=true suggest=true raw_suggest=true
+"libro": contains=true check=true suggest=true raw_suggest=true
+"libros": contains=false check=false suggest=false raw_suggest=false
+"r ilibri": contains=false check=false suggest=false raw_suggest=false
+"ricas a": contains=false check=false suggest=false raw_suggest=false
+"ricasa": contains=true check=true suggest=true raw_suggest=true
+"ricase": contains=false check=false suggest=false raw_suggest=false
+"rifare": contains=true check=true suggest=true raw_suggest=true
+"roma": contains=false check=false suggest=false raw_suggest=false
+cs: negated conditions and shared Unicode stems
+len=4 rules=3
+try="" key="" map=[] rep=[] comments=["original compatibility fixture"]
+forms "mladý": ["mladý", "nemladý"]
+forms "strom": ["nestrom", "nestromy", "strom", "stromy"]
+forms "y": ["y"]
+forms "žena": ["žena", "ženě"]
+"MLADÝ": contains=false check=true suggest=true raw_suggest=false
+"MLADÝY": contains=false check=false suggest=false raw_suggest=false
+"Mladý": contains=false check=true suggest=true raw_suggest=false
+"Mladýy": contains=false check=false suggest=false raw_suggest=false
+"NEMLADÝ": contains=false check=true suggest=true raw_suggest=false
+"NESTROM": contains=false check=true suggest=true raw_suggest=false
+"NESTROMY": contains=false check=true suggest=true raw_suggest=false
+"NEŽENĚ": contains=false check=false suggest=false raw_suggest=false
+"Nemladý": contains=false check=true suggest=true raw_suggest=false
+"Nestrom": contains=false check=true suggest=true raw_suggest=false
+"Nestromy": contains=false check=true suggest=true raw_suggest=false
+"Neženě": contains=false check=false suggest=false raw_suggest=false
+"STROM": contains=false check=true suggest=true raw_suggest=false
+"STROMY": contains=false check=true suggest=true raw_suggest=false
+"Strom": contains=false check=true suggest=true raw_suggest=false
+"Stromy": contains=false check=true suggest=true raw_suggest=false
+"Y": contains=false check=true suggest=true raw_suggest=false
+"YY": contains=false check=false suggest=false raw_suggest=false
+"Yy": contains=false check=false suggest=false raw_suggest=false
+"mladý": contains=true check=true suggest=true raw_suggest=true
+"mladýy": contains=false check=false suggest=false raw_suggest=false
+"nemladý": contains=true check=true suggest=true raw_suggest=true
+"nestrom": contains=true check=true suggest=true raw_suggest=true
+"nestromy": contains=true check=true suggest=true raw_suggest=true
+"neženě": contains=false check=false suggest=false raw_suggest=false
+"strom": contains=true check=true suggest=true raw_suggest=true
+"stromy": contains=true check=true suggest=true raw_suggest=true
+"y": contains=true check=true suggest=true raw_suggest=true
+"yy": contains=false check=false suggest=false raw_suggest=false
+"ŽENA": contains=false check=true suggest=true raw_suggest=false
+"ŽENY": contains=false check=false suggest=false raw_suggest=false
+"ŽENĚ": contains=false check=true suggest=true raw_suggest=false
+"Žena": contains=false check=true suggest=true raw_suggest=false
+"Ženy": contains=false check=false suggest=false raw_suggest=false
+"Ženě": contains=false check=true suggest=true raw_suggest=false
+"žena": contains=true check=true suggest=true raw_suggest=true
+"ženy": contains=false check=false suggest=false raw_suggest=false
+"ženě": contains=true check=true suggest=true raw_suggest=true
+ru: Cyrillic flags and suggestions exclusion
+len=4 rules=2
+try="" key="" map=[['е', 'ё']] rep=[] comments=["original compatibility fixture"]
+forms "дом": ["дом", "домы"]
+forms "запрет": []
+forms "кот": ["кот", "коты", "некот", "некоты"]
+forms "тайна": ["тайна", "тайнаы"]
+"ДОМ": contains=false check=true suggest=true raw_suggest=false
+"ДОМЫ": contains=false check=true suggest=true raw_suggest=false
+"Дом": contains=false check=true suggest=true raw_suggest=false
+"Домы": contains=false check=true suggest=true raw_suggest=false
+"ЗАПРЕТ": contains=false check=false suggest=false raw_suggest=false
+"ЗАПРЕТЫ": contains=false check=false suggest=false raw_suggest=false
+"Запрет": contains=false check=false suggest=false raw_suggest=false
+"Запреты": contains=false check=false suggest=false raw_suggest=false
+"КОТ": contains=false check=true suggest=true raw_suggest=false
+"КОТЫ": contains=false check=true suggest=true raw_suggest=false
+"КОт": contains=false check=false suggest=false raw_suggest=false
+"Кот": contains=false check=true suggest=true raw_suggest=false
+"Коты": contains=false check=true suggest=true raw_suggest=false
+"НЕДОМЫ": contains=false check=false suggest=false raw_suggest=false
+"НЕКОТ": contains=false check=true suggest=true raw_suggest=false
+"НЕКОТЫ": contains=false check=true suggest=true raw_suggest=false
+"Недомы": contains=false check=false suggest=false raw_suggest=false
+"Некот": contains=false check=true suggest=true raw_suggest=false
+"Некоты": contains=false check=true suggest=true raw_suggest=false
+"ТАЙНА": contains=false check=true suggest=false raw_suggest=false
+"ТАЙНАЫ": contains=false check=true suggest=false raw_suggest=false
+"Тайна": contains=false check=true suggest=false raw_suggest=false
+"Тайнаы": contains=false check=true suggest=false raw_suggest=false
+"дом": contains=true check=true suggest=true raw_suggest=true
+"домы": contains=true check=true suggest=true raw_suggest=true
+"запрет": contains=false check=false suggest=false raw_suggest=false
+"запреты": contains=false check=false suggest=false raw_suggest=false
+"кОт": contains=false check=false suggest=false raw_suggest=false
+"кот": contains=true check=true suggest=true raw_suggest=true
+"коты": contains=true check=true suggest=true raw_suggest=true
+"недомы": contains=false check=false suggest=false raw_suggest=false
+"некот": contains=true check=true suggest=true raw_suggest=true
+"некоты": contains=true check=true suggest=true raw_suggest=true
+"тайна": contains=true check=true suggest=false raw_suggest=false
+"тайнаы": contains=true check=true suggest=false raw_suggest=false
+id: continuation and NOSUGGEST through derivations
+len=3 rules=3
+try="abcdeikn" key="qwerty|asdf" map=[] rep=[("dj", "j")] comments=["original compatibility fixture"]
+forms "baca": ["baca", "bacakan", "bacakanlah"]
+forms "main": ["bermain", "bermainkan", "main", "mainkan", "mainkanlah"]
+forms "rahasia": ["rahasia", "rahasiakan", "rahasiakanlah"]
+"BACA": contains=false check=true suggest=true raw_suggest=false
+"BACAKAN": contains=false check=true suggest=true raw_suggest=false
+"BACAKANLAH": contains=false check=true suggest=true raw_suggest=false
+"BERBACA": contains=false check=false suggest=false raw_suggest=false
+"BERMAIN": contains=false check=true suggest=true raw_suggest=false
+"BERMAINKAN": contains=false check=true suggest=true raw_suggest=false
+"BERMAINKANLAH": contains=false check=false suggest=false raw_suggest=false
+"Baca": contains=false check=true suggest=true raw_suggest=false
+"Bacakan": contains=false check=true suggest=true raw_suggest=false
+"Bacakanlah": contains=false check=true suggest=true raw_suggest=false
+"Berbaca": contains=false check=false suggest=false raw_suggest=false
+"Bermain": contains=false check=true suggest=true raw_suggest=false
+"Bermainkan": contains=false check=true suggest=true raw_suggest=false
+"Bermainkanlah": contains=false check=false suggest=false raw_suggest=false
+"MAIN": contains=false check=true suggest=true raw_suggest=false
+"MAINKAN": contains=false check=true suggest=true raw_suggest=false
+"MAINKANLAH": contains=false check=true suggest=true raw_suggest=false
+"MAINKANLAHLAH": contains=false check=false suggest=false raw_suggest=false
+"MAINLAH": contains=false check=false suggest=false raw_suggest=false
+"Main": contains=false check=true suggest=true raw_suggest=false
+"Mainkan": contains=false check=true suggest=true raw_suggest=false
+"Mainkanlah": contains=false check=true suggest=true raw_suggest=false
+"Mainkanlahlah": contains=false check=false suggest=false raw_suggest=false
+"Mainlah": contains=false check=false suggest=false raw_suggest=false
+"RAHASIA": contains=false check=true suggest=false raw_suggest=false
+"RAHASIAKAN": contains=false check=true suggest=false raw_suggest=false
+"RAHASIAKANLAH": contains=false check=true suggest=false raw_suggest=false
+"Rahasia": contains=false check=true suggest=false raw_suggest=false
+"Rahasiakan": contains=false check=true suggest=false raw_suggest=false
+"Rahasiakanlah": contains=false check=true suggest=false raw_suggest=false
+"baca": contains=true check=true suggest=true raw_suggest=true
+"bacakan": contains=true check=true suggest=true raw_suggest=true
+"bacakanlah": contains=true check=true suggest=true raw_suggest=true
+"berbaca": contains=false check=false suggest=false raw_suggest=false
+"bermain": contains=true check=true suggest=true raw_suggest=true
+"bermainkan": contains=true check=true suggest=true raw_suggest=true
+"bermainkanlah": contains=false check=false suggest=false raw_suggest=false
+"main": contains=true check=true suggest=true raw_suggest=true
+"mainkan": contains=true check=true suggest=true raw_suggest=true
+"mainkanlah": contains=true check=true suggest=true raw_suggest=true
+"mainkanlahlah": contains=false check=false suggest=false raw_suggest=false
+"mainlah": contains=false check=false suggest=false raw_suggest=false
+"rahasia": contains=true check=true suggest=false raw_suggest=false
+"rahasiakan": contains=true check=true suggest=false raw_suggest=false
+"rahasiakanlah": contains=true check=true suggest=false raw_suggest=false
+pt-sized: 70 distinct flags across the old u128 boundary
+len=2 rules=70
+try="" key="" map=[] rep=[] comments=["original compatibility fixture"]
+forms "outro": ["outro", "outroõ"]
+forms "verbo": ["verbo", "verbo1", "verbo2", "verbo3", "verbo4", "verbo5", "verbo6", "verbo7", "verbo8", "verbo9", "verboA", "verboB", "verboC", "verboD", "verboE", "verboF", "verboG", "verboH", "verboI", "verboJ", "verboK", "verboL", "verboM", "verboN", "verboO", "verboP", "verboQ", "verboR", "verboS", "verboT", "verboU", "verboV", "verboW", "verboX", "verboY", "verboZ", "verboa", "verbob", "verboc", "verbod", "verboe", "verbof", "verbog", "verboh", "verboi", "verboj", "verbok", "verbol", "verbom", "verbon", "verboo", "verbop", "verboq", "verbor", "verbos", "verbot", "verbou", "verbov", "verbow", "verbox", "verboy", "verboz", "verboá", "verboã", "verboç", "verboé", "verboí", "verboó", "verboõ", "verboú"]
+"OUTRO": contains=false check=true suggest=true raw_suggest=false
+"OUTROA": contains=false check=false suggest=false raw_suggest=false
+"OUTROÕ": contains=false check=true suggest=true raw_suggest=false
+"Outro": contains=false check=true suggest=true raw_suggest=false
+"Outroa": contains=false check=false suggest=false raw_suggest=false
+"Outroõ": contains=false check=true suggest=true raw_suggest=false
+"VERBO": contains=false check=true suggest=true raw_suggest=false
+"VERBO0": contains=false check=false suggest=false raw_suggest=false
+"VERBO1": contains=false check=true suggest=true raw_suggest=false
+"VERBO2": contains=false check=true suggest=true raw_suggest=false
+"VERBO3": contains=false check=true suggest=true raw_suggest=false
+"VERBO4": contains=false check=true suggest=true raw_suggest=false
+"VERBO5": contains=false check=true suggest=true raw_suggest=false
+"VERBO6": contains=false check=true suggest=true raw_suggest=false
+"VERBO7": contains=false check=true suggest=true raw_suggest=false
+"VERBO8": contains=false check=true suggest=true raw_suggest=false
+"VERBO9": contains=false check=true suggest=true raw_suggest=false
+"VERBOA": contains=false check=true suggest=true raw_suggest=false
+"VERBOB": contains=false check=true suggest=true raw_suggest=false
+"VERBOC": contains=false check=true suggest=true raw_suggest=false
+"VERBOD": contains=false check=true suggest=true raw_suggest=false
+"VERBOE": contains=false check=true suggest=true raw_suggest=false
+"VERBOF": contains=false check=true suggest=true raw_suggest=false
+"VERBOG": contains=false check=true suggest=true raw_suggest=false
+"VERBOH": contains=false check=true suggest=true raw_suggest=false
+"VERBOI": contains=false check=true suggest=true raw_suggest=false
+"VERBOJ": contains=false check=true suggest=true raw_suggest=false
+"VERBOK": contains=false check=true suggest=true raw_suggest=false
+"VERBOL": contains=false check=true suggest=true raw_suggest=false
+"VERBOM": contains=false check=true suggest=true raw_suggest=false
+"VERBON": contains=false check=true suggest=true raw_suggest=false
+"VERBOO": contains=false check=true suggest=true raw_suggest=false
+"VERBOP": contains=false check=true suggest=true raw_suggest=false
+"VERBOQ": contains=false check=true suggest=true raw_suggest=false
+"VERBOR": contains=false check=true suggest=true raw_suggest=false
+"VERBOS": contains=false check=true suggest=true raw_suggest=false
+"VERBOSS": contains=false check=false suggest=false raw_suggest=false
+"VERBOT": contains=false check=true suggest=true raw_suggest=false
+"VERBOU": contains=false check=true suggest=true raw_suggest=false
+"VERBOV": contains=false check=true suggest=true raw_suggest=false
+"VERBOW": contains=false check=true suggest=true raw_suggest=false
+"VERBOX": contains=false check=true suggest=true raw_suggest=false
+"VERBOY": contains=false check=true suggest=true raw_suggest=false
+"VERBOZ": contains=false check=true suggest=true raw_suggest=false
+"VERBOÁ": contains=false check=true suggest=true raw_suggest=false
+"VERBOÃ": contains=false check=true suggest=true raw_suggest=false
+"VERBOÇ": contains=false check=true suggest=true raw_suggest=false
+"VERBOÉ": contains=false check=true suggest=true raw_suggest=false
+"VERBOÍ": contains=false check=true suggest=true raw_suggest=false
+"VERBOÓ": contains=false check=true suggest=true raw_suggest=false
+"VERBOÕ": contains=false check=true suggest=true raw_suggest=false
+"VERBOÚ": contains=false check=true suggest=true raw_suggest=false
+"Verbo": contains=false check=true suggest=true raw_suggest=false
+"Verbo0": contains=false check=false suggest=false raw_suggest=false
+"Verbo1": contains=false check=true suggest=true raw_suggest=false
+"Verbo2": contains=false check=true suggest=true raw_suggest=false
+"Verbo3": contains=false check=true suggest=true raw_suggest=false
+"Verbo4": contains=false check=true suggest=true raw_suggest=false
+"Verbo5": contains=false check=true suggest=true raw_suggest=false
+"Verbo6": contains=false check=true suggest=true raw_suggest=false
+"Verbo7": contains=false check=true suggest=true raw_suggest=false
+"Verbo8": contains=false check=true suggest=true raw_suggest=false
+"Verbo9": contains=false check=true suggest=true raw_suggest=false
+"VerboA": contains=false check=false suggest=false raw_suggest=false
+"VerboB": contains=false check=false suggest=false raw_suggest=false
+"VerboC": contains=false check=false suggest=false raw_suggest=false
+"VerboD": contains=false check=false suggest=false raw_suggest=false
+"VerboE": contains=false check=false suggest=false raw_suggest=false
+"VerboF": contains=false check=false suggest=false raw_suggest=false
+"VerboG": contains=false check=false suggest=false raw_suggest=false
+"VerboH": contains=false check=false suggest=false raw_suggest=false
+"VerboI": contains=false check=false suggest=false raw_suggest=false
+"VerboJ": contains=false check=false suggest=false raw_suggest=false
+"VerboK": contains=false check=false suggest=false raw_suggest=false
+"VerboL": contains=false check=false suggest=false raw_suggest=false
+"VerboM": contains=false check=false suggest=false raw_suggest=false
+"VerboN": contains=false check=false suggest=false raw_suggest=false
+"VerboO": contains=false check=false suggest=false raw_suggest=false
+"VerboP": contains=false check=false suggest=false raw_suggest=false
+"VerboQ": contains=false check=false suggest=false raw_suggest=false
+"VerboR": contains=false check=false suggest=false raw_suggest=false
+"VerboS": contains=false check=false suggest=false raw_suggest=false
+"VerboT": contains=false check=false suggest=false raw_suggest=false
+"VerboU": contains=false check=false suggest=false raw_suggest=false
+"VerboV": contains=false check=false suggest=false raw_suggest=false
+"VerboW": contains=false check=false suggest=false raw_suggest=false
+"VerboX": contains=false check=false suggest=false raw_suggest=false
+"VerboY": contains=false check=false suggest=false raw_suggest=false
+"VerboZ": contains=false check=false suggest=false raw_suggest=false
+"Verboa": contains=false check=true suggest=true raw_suggest=false
+"Verbob": contains=false check=true suggest=true raw_suggest=false
+"Verboc": contains=false check=true suggest=true raw_suggest=false
+"Verbod": contains=false check=true suggest=true raw_suggest=false
+"Verboe": contains=false check=true suggest=true raw_suggest=false
+"Verbof": contains=false check=true suggest=true raw_suggest=false
+"Verbog": contains=false check=true suggest=true raw_suggest=false
+"Verboh": contains=false check=true suggest=true raw_suggest=false
+"Verboi": contains=false check=true suggest=true raw_suggest=false
+"Verboj": contains=false check=true suggest=true raw_suggest=false
+"Verbok": contains=false check=true suggest=true raw_suggest=false
+"Verbol": contains=false check=true suggest=true raw_suggest=false
+"Verbom": contains=false check=true suggest=true raw_suggest=false
+"Verbon": contains=false check=true suggest=true raw_suggest=false
+"Verboo": contains=false check=true suggest=true raw_suggest=false
+"Verbop": contains=false check=true suggest=true raw_suggest=false
+"Verboq": contains=false check=true suggest=true raw_suggest=false
+"Verbor": contains=false check=true suggest=true raw_suggest=false
+"Verbos": contains=false check=true suggest=true raw_suggest=false
+"Verbot": contains=false check=true suggest=true raw_suggest=false
+"Verbou": contains=false check=true suggest=true raw_suggest=false
+"Verbov": contains=false check=true suggest=true raw_suggest=false
+"Verbow": contains=false check=true suggest=true raw_suggest=false
+"Verbox": contains=false check=true suggest=true raw_suggest=false
+"Verboy": contains=false check=true suggest=true raw_suggest=false
+"Verboz": contains=false check=true suggest=true raw_suggest=false
+"Verboß": contains=false check=false suggest=false raw_suggest=false
+"Verboá": contains=false check=true suggest=true raw_suggest=false
+"Verboã": contains=false check=true suggest=true raw_suggest=false
+"Verboç": contains=false check=true suggest=true raw_suggest=false
+"Verboé": contains=false check=true suggest=true raw_suggest=false
+"Verboí": contains=false check=true suggest=true raw_suggest=false
+"Verboó": contains=false check=true suggest=true raw_suggest=false
+"Verboõ": contains=false check=true suggest=true raw_suggest=false
+"Verboú": contains=false check=true suggest=true raw_suggest=false
+"outro": contains=true check=true suggest=true raw_suggest=true
+"outroa": contains=false check=false suggest=false raw_suggest=false
+"outroõ": contains=true check=true suggest=true raw_suggest=true
+"verbo": contains=true check=true suggest=true raw_suggest=true
+"verbo0": contains=false check=false suggest=false raw_suggest=false
+"verbo1": contains=true check=true suggest=true raw_suggest=true
+"verbo2": contains=true check=true suggest=true raw_suggest=true
+"verbo3": contains=true check=true suggest=true raw_suggest=true
+"verbo4": contains=true check=true suggest=true raw_suggest=true
+"verbo5": contains=true check=true suggest=true raw_suggest=true
+"verbo6": contains=true check=true suggest=true raw_suggest=true
+"verbo7": contains=true check=true suggest=true raw_suggest=true
+"verbo8": contains=true check=true suggest=true raw_suggest=true
+"verbo9": contains=true check=true suggest=true raw_suggest=true
+"verboA": contains=true check=true suggest=true raw_suggest=true
+"verboB": contains=true check=true suggest=true raw_suggest=true
+"verboC": contains=true check=true suggest=true raw_suggest=true
+"verboD": contains=true check=true suggest=true raw_suggest=true
+"verboE": contains=true check=true suggest=true raw_suggest=true
+"verboF": contains=true check=true suggest=true raw_suggest=true
+"verboG": contains=true check=true suggest=true raw_suggest=true
+"verboH": contains=true check=true suggest=true raw_suggest=true
+"verboI": contains=true check=true suggest=true raw_suggest=true
+"verboJ": contains=true check=true suggest=true raw_suggest=true
+"verboK": contains=true check=true suggest=true raw_suggest=true
+"verboL": contains=true check=true suggest=true raw_suggest=true
+"verboM": contains=true check=true suggest=true raw_suggest=true
+"verboN": contains=true check=true suggest=true raw_suggest=true
+"verboO": contains=true check=true suggest=true raw_suggest=true
+"verboP": contains=true check=true suggest=true raw_suggest=true
+"verboQ": contains=true check=true suggest=true raw_suggest=true
+"verboR": contains=true check=true suggest=true raw_suggest=true
+"verboS": contains=true check=true suggest=true raw_suggest=true
+"verboT": contains=true check=true suggest=true raw_suggest=true
+"verboU": contains=true check=true suggest=true raw_suggest=true
+"verboV": contains=true check=true suggest=true raw_suggest=true
+"verboW": contains=true check=true suggest=true raw_suggest=true
+"verboX": contains=true check=true suggest=true raw_suggest=true
+"verboY": contains=true check=true suggest=true raw_suggest=true
+"verboZ": contains=true check=true suggest=true raw_suggest=true
+"verboa": contains=true check=true suggest=true raw_suggest=true
+"verbob": contains=true check=true suggest=true raw_suggest=true
+"verboc": contains=true check=true suggest=true raw_suggest=true
+"verbod": contains=true check=true suggest=true raw_suggest=true
+"verboe": contains=true check=true suggest=true raw_suggest=true
+"verbof": contains=true check=true suggest=true raw_suggest=true
+"verbog": contains=true check=true suggest=true raw_suggest=true
+"verboh": contains=true check=true suggest=true raw_suggest=true
+"verboi": contains=true check=true suggest=true raw_suggest=true
+"verboj": contains=true check=true suggest=true raw_suggest=true
+"verbok": contains=true check=true suggest=true raw_suggest=true
+"verbol": contains=true check=true suggest=true raw_suggest=true
+"verbom": contains=true check=true suggest=true raw_suggest=true
+"verbon": contains=true check=true suggest=true raw_suggest=true
+"verboo": contains=true check=true suggest=true raw_suggest=true
+"verbop": contains=true check=true suggest=true raw_suggest=true
+"verboq": contains=true check=true suggest=true raw_suggest=true
+"verbor": contains=true check=true suggest=true raw_suggest=true
+"verbos": contains=true check=true suggest=true raw_suggest=true
+"verbot": contains=true check=true suggest=true raw_suggest=true
+"verbou": contains=true check=true suggest=true raw_suggest=true
+"verbov": contains=true check=true suggest=true raw_suggest=true
+"verbow": contains=true check=true suggest=true raw_suggest=true
+"verbox": contains=true check=true suggest=true raw_suggest=true
+"verboy": contains=true check=true suggest=true raw_suggest=true
+"verboz": contains=true check=true suggest=true raw_suggest=true
+"verboß": contains=false check=false suggest=false raw_suggest=false
+"verboá": contains=true check=true suggest=true raw_suggest=true
+"verboã": contains=true check=true suggest=true raw_suggest=true
+"verboç": contains=true check=true suggest=true raw_suggest=true
+"verboé": contains=true check=true suggest=true raw_suggest=true
+"verboí": contains=true check=true suggest=true raw_suggest=true
+"verboó": contains=true check=true suggest=true raw_suggest=true
+"verboõ": contains=true check=true suggest=true raw_suggest=true
+"verboú": contains=true check=true suggest=true raw_suggest=true

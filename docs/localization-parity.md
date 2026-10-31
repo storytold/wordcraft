@@ -8,7 +8,7 @@ the clean-room rule live in [storytold/craft-i18n](https://github.com/storytold/
 (`locales/<locale>/wordcraft.tsv` and the shared `common.tsv`).
 
 **Dimension: ~29% (estimated; 28% before Italian proofing, 27% before Portuguese proofing, 25% before Polish and per-run proofing languages), 70–115 h to full
-for the twelve key languages** plus ~45 h for the other ~17 languages Word ships, plus
+for the thirteen key languages** plus ~45 h for the other ~17 languages Word ships, plus
 native-speaker review (human).
 
 ## What Word ships (measured by listing the bundle)
@@ -40,16 +40,15 @@ native-speaker review (human).
   Read Aloud) aren't wrapped in `tl!` yet, so they show in English in every
   language: the true share of visible strings is **~93–95%** (estimated).
 - Pending PRs: Norwegian Bokmål (#208) and Nynorsk (#210), Hebrew with RTL (#20).
-- **Proofing: English, Polish, Portuguese, Italian, Russian, Czech, Indonesian and Spanish**, chosen per run from its language (`w:lang`, resolved through
+- **Proofing: English, Polish, Portuguese, Italian, Croatian, Turkish, Russian, Czech, Indonesian, Spanish and French (fr-FR/fr-CA)**, chosen per run from its language (`w:lang`, resolved through
   the styles; Review › Language and the status bar set it: a short list, plus Set Proofing
   Language… for any of 38 languages and Set As Default for the document and future blank documents). Languages without proofing tools get
-  the styles; Review › Language and the status bar set it). Languages without proofing tools get
   no spelling or grammar marks (as in Word without the language's tools) instead of being flagged
   as English. Detail in [Proofing per language](#proofing-per-language).
 - Document scripts: shaping via HarfRust (HarfBuzz port) for every script; bidi (UAX #9) and Arabic
   shaping tested (#207); IME on all desktop platforms (winit fixes pending, #155–#164).
 
-## The twelve key languages
+## The thirteen key languages
 
 Status: `full` = every user-visible string translated and the script renders and edits correctly;
 `partial`; `menus only`; `none`. Hours are to `full`, Opus 5.5 agent wall-clock, excluding the
@@ -62,7 +61,7 @@ shared items below.
 | Spanish | es | ~930; 98% / ~95% | most | Latin ✅ | no | partial | 1–2 |
 | Hindi | hi | 0 | ❌ | Devanagari shaping via HarfRust, untested; no hyphenation | no | none | 4–6 |
 | Arabic | ar | 0 | ❌ | shaping, joining, lam-alef, bidi ✅ (#207); no kashida; **no mirrored UI** | no | none | 6–8 |
-| French | fr | 2,615 entries (complete catalog) | all | Latin ✅ | no | partial (no proofing) | 1–2 (proofing) |
+| French | fr | 2,615 entries (complete catalog); French spelling, typography and hyphenation | all | Latin ✅ | no | partial (no agreement/conjugation) | follow-up grammar work |
 | Portuguese | pt-br (pt-PT none) | ~930; 98% / ~95% (pt-BR) | most | Latin ✅ | no | partial | 2–4 (pt-BR finish + pt-PT) |
 | Indonesian | id | 0 | ❌ | Latin ✅ | no | none | 3–4 |
 | Japanese | ja | ~930; 98% / ~95% | most | CJK ✅, IME ✅; ruby (Phonetic Guide) over its base text, kept by HTML export/import (#1681); word count counts each Han ideograph and kana as a word, not punctuation (#4547); no vertical text or document grid | no | partial | 3–5 |
@@ -71,8 +70,8 @@ shared items below.
 | Vietnamese | vi | 2,448 entries; every key of the reference catalogs (#1434); 98% of extracted, ~95% of visible | most | Latin ✅ | no | partial | 0–1 (review) |
 | Romanian | ro | 2,674 entries; every key of the other catalogs; AI-assisted draft | most | Latin ✅ (ă â î ș ț in the bundled faces) | no | partial | 0–1 (review) |
 
-Other shipped languages: **20** — Traditional Chinese (`zh-hant`), Ukrainian (`uk`), Serbian
-Cyrillic and Latin (`sr`, `sr-latn`, #250), Estonian (`et`), Turkish (`tr`), Russian (`ru`), Italian (`it`, #594), Polish (`pl`), Czech (`cs`), Hungarian (`hu`), French (`fr`), Bulgarian (`bg`), Vietnamese (`vi`, #1434), Swedish (`sv`, #1219), Croatian (`hr`, #1271), Romanian (`ro`), Slovenian (`sl`), Dutch (`nl`) and Danish (`da`, #2722), all partial.
+Other shipped languages: **19** — Traditional Chinese (`zh-hant`), Ukrainian (`uk`), Serbian
+Cyrillic and Latin (`sr`, `sr-latn`, #250), Estonian (`et`), Turkish (`tr`), Russian (`ru`), Italian (`it`, #594), Polish (`pl`), Czech (`cs`), Hungarian (`hu`), Bulgarian (`bg`), Vietnamese (`vi`, #1434), Swedish (`sv`, #1219), Croatian (`hr`, #1271), Romanian (`ro`), Slovenian (`sl`), Dutch (`nl`) and Danish (`da`, #2722), all partial.
 Swedish (`sv-SE` and `sv-FI` system locales, `{"value":"sv"}`) has 2,504 entries. Counts use
 count-neutral wording (`{words} ord`: the noun is the same in the singular and the plural). The
 catalog is an AI-assisted draft whose terminology and running app were reviewed by a native
@@ -105,8 +104,9 @@ Russian and Spanish catalogs, including built-in style names and numbered famili
 gallery, watermarks, paper sizes and preview tiles. Counts use count-neutral wording
 (`Počet slov: 21`). Czech proofing is not included.
 
-When no saved proofing-language default exists, Polish, Portuguese and Czech interfaces write
-new documents and opened TXT/Markdown text in their proofing languages (`pl-PL`, `pt-BR`, `cs-CZ`).
+When no saved proofing-language default exists, French, Polish, Portuguese and Czech interfaces
+write new documents and opened TXT/Markdown text in their proofing languages (`fr-FR` or the
+French system region, `pl-PL`, `pt-BR`, `cs-CZ`).
 A Spanish interface writes them in the region's Spanish: `es-` plus the system region when that
 region's language is Spanish (`es-UY` on a Uruguayan system, `es-MX` on a Mexican one), else
 Spain's `es-ES` (#3360).
@@ -137,6 +137,7 @@ Set Proofing Language › Set As Default keeps the chosen language in user prefe
 | Turkish (`tr`, any region) | The Hunspell `tr_TR` dictionary installed on the system (same places as Polish; not bundled), read at runtime; proper nouns capitalized, apostrophe suffixes (`Ankara'da`, `WordCraft'ta`) and hyphenated compounds | missing diacritics / ASCII restoration first (`turkce` → `Türkçe`, `isik` → `ışık`), common confusion table (`yalnış` → `yanlış`, `herşey` → `her şey`), detached suffixes (`bende` → `ben de`, `geldinmi` → `geldi mi`), one typo | Turkish messages: repeated word (idiomatic reduplications allowed: `yavaş yavaş`), space before punctuation, double space, sentence capital (knows `vb.`, `vs.`, `prof.`, `dr.`), no comma before/after conjunctions (`ve`, `veya`, `de`), doubled punctuation | Turkish syllable rules (TDK rules); no external pattern file or word list needed |
 | German (`de`, any region) | — (no marks yet, #1564) | — | — | TeX German patterns for the reformed spelling (Trennmustermannschaft; MIT), no exception words; Swiss text uses them too. The patterns leave ambiguous compound joints unbroken on purpose (`Staubecken`, `Urinstinkt`), so German text can hyphenate a little less than in Word |
 | Indonesian (`id`, `id-ID`, `ind`, legacy `in`) | The system Hunspell `id_ID` dictionary, read at runtime (Debian/Ubuntu: `hunspell-id`; LibreOffice's `dict-id`; the same system, LibreOffice, Dictionaries folder and `WORDCRAFT_DICTIONARIES` search paths as Polish). No dictionary data is bundled; without an installed dictionary spelling stays off. Hyphenated reduplication is accepted whole (`kupu-kupu`) or by parts (`anak-anak`); hyphenated clitics after capitals and abbreviations (`KTP-nya`, `se-Indonesia`) are accepted | the same dictionary-driven ranking as Czech: MAP/REP/TRY/KEY tables of the loaded dictionary, missing spaces and a stem scan; nothing Indonesian hard-coded | Indonesian messages for repeated words (offering the hyphenated reduplication `anak-anak` first, then the single word), space before punctuation and double spaces only; no Indonesian-specific grammar rules | existing English fallback, as for `Other`; no Indonesian patterns bundled |
+| French (`fr`, any region) | The Hunspell French dictionary installed on the system — `fr_FR`, else `fr`, `fr_BE`, `fr_CA`, `fr_CH`, `fr_LU` or `fr_MC` (Dicollecte/Grammalecte as Linux packages ship it, Homebrew, LibreOffice, or the `WORDCRAFT_DICTIONARIES` folder; not bundled — the upstream files are MPL 2.0), read at runtime by the same affix engine, which reads its `FLAG long` flags (~180), `NEEDAFFIX`, `KEEPCASE`, `FULLSTRIP` and `ICONV`; elisions come from the dictionary (`l'arbre`, `qu'elle`, `jusqu'à`; `’` and `'` alike), compounds it doesn't list part by part (`va-t-il`) | missing accents first (`ecole` → `école`), the dictionary's confusion table (`soeur` → `sœur`), missing space (`pourmoi` → `pour moi`), one typo, then an accent-folding stem scan; elided words corrected whole, the writer's apostrophe kept | French messages: a missing space before `;` `!` `?` (suggests narrow U+202F) and `:` (U+00A0) and inside `« »` — an ordinary space is accepted until a French AutoFormat types the non-breaking one; Quebec French (`fr-CA`) wants none before `;` `!` `?` — straight quotes → `« »`, repeated word (`nous nous`, `vous vous` allowed), sentence capital (knows `etc.`, `M.`, `p.`, `cf.`, dialogue and inversions), missing elision (`de avoir` → `d’avoir`; mute-`h` words only, never aspirated ones); no agreement or conjugation rules | TeX French patterns (Flipo, Gaulle, Reutenauer; MIT), 1,145 patterns, no exception words |
 | Spanish (`es`, `spa`; by region: Spain and no region, `es-MX`, `es-UY`, and `es-419` with the other countries of the Americas) | The system Hunspell dictionary of each variety, read at runtime, the first file name found in this order: Spain `es_ES`, `es_ANY`, `es`; Mexico `es_MX`, `es_419`, `es_ANY`, `es`; Latin America `es_419`, `es_ANY`, `es`, then the ones LibreOffice ships (it has no `es_419`): `es_US`, `es_MX`, `es_AR`; Uruguay `es_UY`, the Rioplatense `es_AR`, `es_419`, `es_ANY`, `es` (each regional name also with a hyphen, `es-MX`); LibreOffice's `dict-es` and Debian/Ubuntu's `hunspell-es` have them (RLA-ES). No dictionary data is bundled; without one the status bar says the variety has no dictionary. The RLA-ES files load since their `☎️` flag is read (#2164). Hyphenated compounds are checked part by part (`teórico-práctico`). Uruguayan Spanish also accepts the `vos` forms of every verb in the dictionary: imperatives (`vení`, `tené`, `andá`), with pronouns (`decime`, `fijate`, `decímelo`) and the present (`tenés`, `querés`) | the same dictionary-driven ranking as Czech, from the variety's dictionary (its MAP restores accents and `ñ` first: `tambien` → `también`; the regional REP tables carry `vosotros` → `ustedes`); in Uruguay a `vos` form typed without its accent gets it back first (`veni` → `vení`) | Spanish messages for repeated words, space before punctuation and double spaces; a closing `?` or `!` without its opening `¿` or `¡` (the sentence with the mark is offered; `¡…?` pairs, `(?)` and `(!)` are allowed) and a space after an opening mark | existing English fallback, as for `Other`; no Spanish patterns bundled |
 | Any other | — (no marks) | — | — | the English patterns, as before |
 
@@ -220,14 +221,27 @@ WordCraft keeps 2,54 cm).
 | Wrap the remaining English literals in `tl!` and translate them in every catalog | 4–6 | Makes the six partial languages full except script items |
 | Mirrored (right-to-left) interface for Arabic and Hebrew | 15–25 | Ribbon, panes, dialogs, rulers |
 | Vertical text, ruby, document grid (Chinese, Japanese, Korean) | counted in [layout-parity.md](layout-parity.md) | |
-| Proofing dictionaries, grammar and hyphenation for the 11 non-English key languages | 20–40 | Open dictionaries only (licence check per dictionary); issues #25, #40, #100. Per-run languages, the Hunspell-style affix engine and the TeX pattern reader landed with Polish, so a language with an open Hunspell dictionary and hyphenation patterns is mostly data plus grammar rules |
+| Proofing dictionaries, grammar and hyphenation for the 12 non-English key languages | 20–40 | Open dictionaries only (licence check per dictionary); issues #25, #40, #100. Per-run languages, the Hunspell-style affix engine and the TeX pattern reader landed with Polish, so a language with an open Hunspell dictionary and hyphenation patterns is mostly data plus grammar rules |
 | Native-speaker review of every catalog | human | Swedish: terminology and the running app reviewed (2026-10-13); Italian reviewed (2026-10-14); the others not yet |
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-31 | trivial | French proofing synchronized with pinned main eecbb8f; upstream changes and French behavior preserved; readiness estimates unchanged |
+| 2026-10-30 | trivial | Key-language counts corrected to thirteen (twelve non-English); French removed from the nineteen other-language entries; readiness estimates unchanged |
+| 2026-10-30 | trivial | French proofing synchronized with pinned main 3b7f7ed; upstream changes and French behavior preserved; readiness estimates unchanged |
 | 2026-10-28 | trivial | Traditional Chinese interface: an installed Traditional Chinese font (PingFang TC, Microsoft JhengHei, Noto Sans CJK TC; the TC face of a pan-CJK collection) goes before the embedded Noto Sans CJK SC, whose mainland glyph shapes looked wrong to Taiwan readers; native only, wasm unchanged; estimates unchanged |
+| 2026-10-26 | minor | French spelling honours the uppercase/number ignore options in both regions; regressions preserve defaults, missing-dictionary behavior and UTF-8 issue ranges (#3185) |
+| 2026-10-26 | minor | French proofing synchronized with current main; bounded/grouped affix expansion retains 512-flag support and NEEDAFFIX/FULLSTRIP behavior, with a continuation regression beyond flag 128 (#3185) |
+| 2026-10-25 | minor | French proofing reconciled with current main: Spanish and English variants, German hyphenation, shared NFC lookup, dictionary diagnostics and external interface catalogs are preserved (#3185) |
+| 2026-10-20 | minor | Attached Unicode marks keep their original spelling ranges; French compound fallback rejects empty internal components while preserving explicit dictionary entries |
+| 2026-10-20 | minor | French proofing reads Canada only from the region after the language/optional script; Unicode calendar and private-use extension subtags do not select Quebec typography; production-parser regressions |
+| 2026-10-20 | minor | French dictionary replacement clears stale load errors only after successful parsing; Canadian French keeps its own Options label |
+| 2026-10-20 | trivial | French hyphenation pattern asset included in both workflow path filters so pattern-only changes run the proofing regressions |
+| 2026-10-20 | minor | Frozen pre-French affix outputs and legacy compact dictionaries agree; French CI pins Rust 1.98.1 and checks formatting on all three desktop systems |
+| 2026-10-20 | trivial | French elision keeps la hiérarchie and de hiérarchie unchanged (aspirated h); the language-menu regression verifies the whole selected text is French |
+| 2026-10-20 | minor | French proofing rebased onto current main: runtime Hunspell spelling, suggestions, typography, conservative grammar and hyphenation (fr-FR/fr-CA); agreement and conjugation remain unsupported; readiness estimates unchanged |
 | 2026-10-24 | minor | Preserved “Delete Around Caret in Equation” in all 27 shared WordCraft catalogs; the native/release pin and Flatpak source advance together. |
 | 2026-10-23 | minor | Interface catalogs moved to storytold/craft-i18n (`locales/<locale>/wordcraft.tsv`), looked up through craft-libs' `craft-i18n` crate and embedded from the pinned commit (`craft-i18n.rev`); strings other Crafting Apps already translate in the shared catalog now show translated; the "Open" paragraph-spacing preset no longer shows the file verb |
 | 2026-10-23 | trivial | Lookup, context, template, style-name and command-search tests use inline fixture catalogs or the pseudo-language; tests that asserted one language's catalog wording removed |

@@ -6893,6 +6893,8 @@ dependencies = [
  "log",
  "miniz_oxide 0.9.1",
  "proptest",
+ "tempfile",
+ "unicode-general-category",
  "unicode-normalization",
 ]
 

@@ -225,7 +225,7 @@ impl WordApp {
         // #1045), a Spanish one the region's Spanish (Spanish (Uruguay) on a Uruguayan system,
         // Spain's elsewhere, #3360).
         let editing = match lang.editing_lang() {
-            Some(t) => Some(t.to_string()),
+            Some(_) => lang.editing_lang_in(i18n::system_locales()),
             None if lang.code() == "en" => self.session.region_english(),
             None if lang.code() == "es" => Some(self.session.region_spanish()),
             None => None,

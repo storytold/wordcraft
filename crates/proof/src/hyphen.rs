@@ -13,6 +13,9 @@
 //! Kołodziejska, Bogusław Jackowski and Marek Ryćko, MIT licence option), then a Polish syllable
 //! heuristic for words with letters outside the Polish alphabet (`é`, `ü`…).
 //!
+//! **Portuguese**, **Italian** and **French**: the language's hyph-utf8 TeX patterns
+//! ([`Patterns::pt`], [`Patterns::it`], [`Patterns::fr`]), then the generic heuristic.
+//!
 //! **Bulgarian**: the Bulgarian syllable rules ([`crate::bg`]); no pattern file or word list.
 //!
 //! **German**: the TeX German patterns for the reformed spelling ([`Patterns::de`]), also for
@@ -39,6 +42,8 @@ static PT_PAT: &str = include_str!("../../../assets/hyphenation/pt.pat");
 /// hyph-utf8's `hyph-it.tex`, unmodified (offered under MIT or LPPL; WordCraft uses MIT, whose
 /// notice is in the file's header).
 static IT_PAT: &str = include_str!("../../../assets/hyphenation/it.pat");
+/// hyph-utf8's `hyph-fr.tex`, unmodified (MIT; its notice is in the file's header).
+static FR_PAT: &str = include_str!("../../../assets/hyphenation/fr.pat");
 /// hyph-utf8's `hyph-de-1996.tex` (reformed spelling), unmodified (MIT; the notice is in the
 /// file's header).
 static DE_PAT: &str = include_str!("../../../assets/hyphenation/de.pat");
@@ -82,6 +87,12 @@ impl Patterns {
     pub fn it() -> &'static Patterns {
         static P: OnceLock<Patterns> = OnceLock::new();
         P.get_or_init(|| Patterns::parse(IT_PAT))
+    }
+
+    /// The bundled French patterns (parsed on first use).
+    pub fn fr() -> &'static Patterns {
+        static P: OnceLock<Patterns> = OnceLock::new();
+        P.get_or_init(|| Patterns::parse(FR_PAT))
     }
 
     /// The bundled German patterns (parsed on first use; the file has no exception words).
@@ -146,6 +157,7 @@ fn core_breaks(core: &[char], lang: ProofLang) -> (Vec<usize>, Source) {
         ProofLang::Pt => return core_breaks_patterns(Patterns::pt(), core),
         ProofLang::It => return core_breaks_patterns(Patterns::it(), core),
         ProofLang::De => return core_breaks_patterns(Patterns::de(), core),
+        ProofLang::Fr | ProofLang::FrCa => return core_breaks_patterns(Patterns::fr(), core),
         _ => {}
     }
     if lang == ProofLang::Ru && core.iter().all(|&c| crate::ru::is_cyrillic(c)) {
@@ -190,7 +202,7 @@ fn core_breaks_pl(core: &[char]) -> (Vec<usize>, Source) {
     (heuristic_points_pl(core), Source::Heuristic)
 }
 
-/// [`core_breaks_pl`] for a language with bundled patterns (Portuguese, Italian, German): its
+/// [`core_breaks_pl`] for a language with bundled patterns (Portuguese, Italian, German, French): its
 /// exception words, the patterns, then the generic heuristic.
 fn core_breaks_patterns(pats: &Patterns, core: &[char]) -> (Vec<usize>, Source) {
     let s: String = core.iter().collect();
@@ -796,6 +808,42 @@ mod tests {
             assert_eq!(it(w), want, "{w}");
         }
         assert_eq!(word_breaks_in("famiglia", ProofLang::It).1, Source::Patterns);
+    }
+
+    fn fr(w: &str) -> String {
+        hyphenate_word_in(w, &Limits::default(), ProofLang::Fr)
+    }
+
+    #[test]
+    fn french_patterns_load() {
+        let p = Patterns::fr();
+        assert_eq!(p.len(), 1145);
+        // The file has no exception words.
+        assert_eq!(p.exception_count(), 0);
+    }
+
+    #[test]
+    fn french_words_hyphenate_by_french_rules() {
+        for (w, want) in [
+            ("maison", "mai-son"),
+            ("ordinateur", "or-di-na-teur"),
+            ("chocolat", "cho-co-lat"),
+            ("question", "ques-tion"),
+            ("développement", "dé-ve-lop-pe-ment"),
+            ("bibliothèque", "bi-blio-thèque"),
+            ("anticonstitutionnellement", "an-ti-cons-ti-tu-tion-nel-le-ment"),
+            ("parfaitement", "par-fai-te-ment"),
+            ("Montréal", "Mont-réal"),
+            // Elision: no break next to the apostrophe.
+            ("l'ordinateur", "l'or-di-na-teur"),
+            ("aujourd'hui", "au-jour-d'hui"),
+            // Under five letters (`Limits::min_word`): no break.
+            ("chat", "chat"),
+            ("été", "été"),
+        ] {
+            assert_eq!(fr(w), want, "{w}");
+        }
+        assert_eq!(word_breaks_in("ordinateur", ProofLang::Fr).1, Source::Patterns);
     }
 
     #[test]
