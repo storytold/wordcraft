@@ -21,6 +21,19 @@ impl Writer<'_> {
                         r.props.font = Some(f.clone());
                     }
                 }
+                // The letter is written at the size the layout draws it, `lines` text lines tall:
+                // Word draws a framed drop cap's letter at its run's `w:sz`, so the text's own
+                // size would come out small there (#3000). Each script's size is enlarged from its
+                // resolved one, so an inherited `w:szCs` grows too and differing sizes stay apart.
+                if let Some(letter) = head.runs.first() {
+                    let text = self.doc.styles.resolve_char_in(p.props.style.as_deref(), None, &letter.props);
+                    let big = wordcraft_doc::resolve::drop_cap_size(text.size, lines);
+                    let big_cs = wordcraft_doc::resolve::drop_cap_size(text.size_cs, lines);
+                    for r in &mut head.runs {
+                        r.props.size = Some(big);
+                        r.props.size_cs = Some(big_cs);
+                    }
+                }
                 head.section = None;
                 self.para_inner(w, &head, rels, false, depth, true);
                 tail.props.drop_cap = None;

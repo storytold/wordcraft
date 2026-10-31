@@ -1558,8 +1558,42 @@ fn hyperlink_field_targets() {
     assert_eq!(hyperlink(r#"HYPERLINK "http://example.com" \l "heading""#), Some("http://example.com#heading".into()));
     assert_eq!(hyperlink(r#"HYPERLINK \l "heading""#), Some("#heading".into()));
     assert_eq!(hyperlink(r#"Hyperlink "http://example.com""#), Some("http://example.com".into()));
-    assert_eq!(hyperlink(r#"HYPERLINK "http://example.com/path\latest""#), Some("http://example.com/path\\latest".into()));
+    assert_eq!(hyperlink(r#"HYPERLINK "http://example.com/path\latest""#), Some("http://example.com/pathlatest".into()));
     assert_eq!(hyperlink(r#"HYPERLINK "http://example.com" \o "Help text""#), Some("http://example.com".into()));
+    // A tooltip or frame before the address, a longer field name, escapes and the writer's `%22`.
+    assert_eq!(hyperlink(r#"HYPERLINK \o "tip" \t "_blank" "http://example.com""#), Some("http://example.com".into()));
+    assert_eq!(hyperlink(r#"HYPERLINKX "http://example.com""#), None);
+    assert_eq!(hyperlink(r#"HYPERLINK "C:\\Docs\\f.rtf""#), Some(r"C:\Docs\f.rtf".into()));
+    assert_eq!(hyperlink(r#"HYPERLINK "http://example.com/a%22b""#), Some(r#"http://example.com/a"b"#.into()));
+}
+
+/// A link with a quote in it survives export and import: the writer stores it as `%22`.
+#[test]
+fn a_quote_in_a_link_round_trips() {
+    let rtf = br#"{\rtf1\ansi{\field{\*\fldinst{HYPERLINK "http://a.b/x%22y"}}{\fldrslt{link}}}\par}"#;
+    let link = |d: &Document| d.body.iter().find_map(|b| b.as_para()?.runs.iter().find_map(|r| r.props.link.clone()));
+    let d = import(rtf).unwrap();
+    assert_eq!(link(&d).as_deref(), Some(r#"http://a.b/x"y"#));
+    let exported = export(&d);
+    assert!(exported.contains("x%22y"), "{exported}");
+    assert_eq!(link(&import(exported.as_bytes()).unwrap()).as_deref(), Some(r#"http://a.b/x"y"#));
+}
+
+/// Backslashes in a link survive export and import, a trailing one and two in a row too.
+#[test]
+fn backslashes_in_a_link_round_trip() {
+    let link = |d: &Document| d.body.iter().find_map(|b| b.as_para()?.runs.iter().find_map(|r| r.props.link.clone()));
+    for target in [r"docs\", r"a\\b", r"..\up\f.doc"] {
+        let mut d = import(br#"{\rtf1\ansi{\field{\*\fldinst{HYPERLINK "x"}}{\fldrslt{link}}}\par}"#).unwrap();
+        for b in d.body.iter_mut() {
+            if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b) {
+                p.runs.iter_mut().filter(|r| r.props.link.is_some()).for_each(|r| r.props.link = Some(target.into()));
+            }
+        }
+        assert_eq!(link(&d).as_deref(), Some(target));
+        let exported = export(&d);
+        assert_eq!(link(&import(exported.as_bytes()).unwrap()).as_deref(), Some(target), "{exported}");
+    }
 }
 
 #[test]

@@ -2099,6 +2099,47 @@ fn theme_colour_wins_over_the_fixed_colour() {
     assert!(near(Some(TextColor::Rgb(fill)), Rgb(0xFB, 0xE4, 0xD5)), "{fill:?}");
 }
 
+/// `w:shd w:val="nil"` paints nothing despite its fill: a CV template's red cell showed over the name.
+#[test]
+fn nil_shading_paints_no_fill() {
+    let body = r#"
+<w:tbl><w:tblGrid><w:gridCol w:w="200"/><w:gridCol w:w="2000"/></w:tblGrid><w:tr>
+ <w:tc><w:tcPr><w:shd w:val="nil" w:color="auto" w:fill="C00000"/></w:tcPr><w:p/></w:tc>
+ <w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="C00000"/></w:tcPr><w:p/></w:tc></w:tr></w:tbl>
+<w:p><w:pPr><w:shd w:val="nil" w:fill="C00000" w:themeFill="accent2"/></w:pPr><w:r><w:rPr><w:shd w:val="nil" w:color="C00000" w:fill="C00000"/></w:rPr><w:t>x</w:t></w:r></w:p>"#;
+    let d = read_body(body);
+    let Block::Table(t) = &*d.body[0] else { panic!("table first") };
+    assert_eq!(t.rows[0].cells[0].props.shading, None);
+    assert_eq!(t.rows[0].cells[1].props.shading, Some(Rgb(0xC0, 0, 0)));
+    let p = paras(&d);
+    assert_eq!(p[0].props.shading, None);
+    assert_eq!(p[0].props_of_char(0).shading, None);
+}
+
+/// A border's theme colour wins over its stale `w:color`: a template's white rule showed as black.
+#[test]
+fn border_theme_colour_wins_over_the_fixed_colour() {
+    let body = r#"
+<w:p><w:pPr><w:pBdr><w:top w:val="single" w:sz="4" w:color="000000" w:themeColor="background1"/><w:left w:val="single" w:sz="4" w:color="FF0000"/></w:pBdr></w:pPr><w:r><w:rPr><w:bdr w:val="single" w:sz="4" w:color="auto" w:themeColor="accent2"/></w:rPr><w:t>x</w:t></w:r></w:p>
+<w:tbl><w:tblPr><w:tblBorders><w:top w:val="single" w:sz="4" w:color="000000" w:themeColor="accent1"/></w:tblBorders></w:tblPr><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcBorders><w:left w:val="single" w:sz="4" w:color="000000" w:themeColor="accent6" w:themeShade="BF"/></w:tcBorders></w:tcPr><w:p/></w:tc></w:tr></w:tbl>
+<w:p/>
+<w:sectPr><w:pgBorders><w:top w:val="single" w:sz="4" w:color="000000" w:themeColor="text2"/></w:pgBorders></w:sectPr>"#;
+    let styles = r#"<w:style w:type="table" w:styleId="T"><w:name w:val="T"/><w:tblPr><w:tblBorders><w:bottom w:val="single" w:sz="4" w:color="000000" w:themeColor="accent3"/></w:tblBorders></w:tblPr></w:style>"#;
+    let d = themed_docx(body, styles, None);
+    let p = paras(&d);
+    let pb = p[0].props.borders.unwrap();
+    assert_eq!(pb.top.and_then(|b| b.color), Some(Rgb(0xFF, 0xFF, 0xFF)));
+    assert_eq!(pb.left.and_then(|b| b.color), Some(Rgb(0xFF, 0, 0)), "no theme colour keeps the fixed one");
+    assert_eq!(p[0].props_of_char(0).border.and_then(|b| b.color), Some(Rgb(0xED, 0x7D, 0x31)));
+    let Block::Table(t) = &*d.body[1] else { panic!("table second") };
+    assert_eq!(t.props.borders.and_then(|b| b.top).and_then(|b| b.color), Some(Rgb(0x44, 0x72, 0xC4)));
+    let cell = t.rows[0].cells[0].props.borders.and_then(|b| b.left).and_then(|b| b.color);
+    assert!(near(cell.map(TextColor::Rgb), Rgb(0x53, 0x81, 0x35)), "{cell:?}");
+    assert_eq!(d.last_section.page_borders.and_then(|b| b.top).and_then(|b| b.color), Some(Rgb(0x44, 0x54, 0x6A)));
+    let st = d.styles.get("T").and_then(|s| s.table.as_ref()).and_then(|t| t.borders);
+    assert_eq!(st.and_then(|b| b.bottom).and_then(|b| b.color), Some(Rgb(0xA5, 0xA5, 0xA5)));
+}
+
 #[test]
 fn theme_colours_follow_the_colour_scheme_mapping() {
     // Styles are read before settings; the mapping still applies to them.
@@ -3489,6 +3530,89 @@ fn text_frames_read_and_round_trip() {
     assert_eq!(q[0].props.frame, p[0].props.frame);
     assert_eq!(q[1].props.frame, p[1].props.frame);
     assert!(q.iter().any(|x| x.props.drop_cap == Some(2) && x.props.frame.is_none()));
+}
+
+/// #3000: Word writes the drop cap's letter in its framed paragraph at the enlarged size the
+/// dialog computed for it. The merge gives the letter back the text's size — the layout sizes a
+/// dropped letter from the text around it, so keeping the file's size would render the
+/// enlargement twice, a letter twice as tall as the lines it drops through.
+#[test]
+fn a_word_drop_caps_letter_takes_the_texts_size_back() {
+    let body = r#"<w:p><w:r><w:t>Relationship with Myself</w:t></w:r></w:p>
+        <w:p><w:pPr><w:framePr w:dropCap="drop" w:lines="3" w:hSpace="141" w:wrap="around" w:vAnchor="text" w:hAnchor="text"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Lucida Calligraphy" w:hAnsi="Lucida Calligraphy"/><w:sz w:val="88"/><w:szCs w:val="88"/></w:rPr><w:t>B</w:t></w:r></w:p>
+        <w:p><w:r><w:rPr><w:sz w:val="24"/><w:szCs w:val="24"/></w:rPr><w:t>efore we start</w:t></w:r></w:p>"#;
+    let d = read_body(body);
+    let p = paras(&d);
+    assert_eq!(p.len(), 2);
+    assert_eq!(p[1].text, "Before we start");
+    assert_eq!(p[1].props.drop_cap, Some(3));
+    assert_eq!(p[1].props.drop_cap_font.as_deref(), Some("Lucida Calligraphy"));
+    assert_eq!(p[1].runs.len(), 1, "the letter and the text share a run once sized alike");
+    assert_eq!((p[1].runs[0].props.size, p[1].runs[0].props.size_cs), (Some(12.0), Some(12.0)), "the letter keeps the text's size");
+    // Without a size of its own in the text, the letter inherits the paragraph's.
+    let plain = read_body(
+        r#"<w:p><w:pPr><w:framePr w:dropCap="drop" w:lines="2" w:wrap="around" w:vAnchor="text" w:hAnchor="text"/></w:pPr><w:r><w:rPr><w:sz w:val="72"/></w:rPr><w:t>D</w:t></w:r></w:p>
+        <w:p><w:r><w:t>rop cap text</w:t></w:r></w:p>"#,
+    );
+    let q = paras(&plain);
+    assert_eq!(q.len(), 1);
+    assert_eq!((q[0].runs[0].props.size, q[0].runs[0].props.size_cs), (None, None));
+    // Saved, the letter carries the size the layout draws it at — Word draws a framed letter at
+    // its run's own `w:sz` — here 3 lines of 12 pt text, (2*14.4 + 8.4)/0.7 = 53.14 pt → 106.
+    // Reading that back gives the document the first read gave: the letter at the text's size.
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let xml = text(&unzip(&bytes), "word/document.xml");
+    assert!(xml.contains(r#"w:sz w:val="106""#), "the drawn size on the letter's run: {xml}");
+    let again = wordcraft_docx::read(&bytes).unwrap();
+    let r = paras(&again);
+    assert_eq!((r.len(), r[1].text.as_str(), r[1].runs.len()), (2, "Before we start", 1));
+    assert_eq!((r[1].props.drop_cap, r[1].props.drop_cap_font.as_deref()), (Some(3), Some("Lucida Calligraphy")));
+    assert_eq!((r[1].runs[0].props.size, r[1].runs[0].props.size_cs), (Some(12.0), Some(12.0)));
+}
+
+/// #3000: a bookmark opening the text after a drop cap is a run of its own with no size; the
+/// letter still takes the size of the text, not the marker's.
+#[test]
+fn a_drop_caps_letter_skips_a_leading_bookmark_for_the_texts_size() {
+    let d = read_body(
+        r#"<w:p><w:pPr><w:framePr w:dropCap="drop" w:lines="3" w:wrap="around" w:vAnchor="text" w:hAnchor="text"/></w:pPr><w:r><w:rPr><w:sz w:val="88"/></w:rPr><w:t>B</w:t></w:r></w:p>
+        <w:p><w:bookmarkStart w:id="1" w:name="start"/><w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:t>efore we start</w:t></w:r><w:bookmarkEnd w:id="1"/></w:p>"#,
+    );
+    let p = paras(&d);
+    assert_eq!(p.len(), 1);
+    assert_eq!(p[0].plain_text(), "Before we start");
+    assert_eq!(p[0].props.drop_cap, Some(3));
+    let letter = p[0].run_ranges().find(|(range, _)| p[0].text.get(range.clone()) == Some("B")).map(|(_, props)| props.size);
+    assert_eq!(letter, Some(Some(12.0)), "the letter keeps the text's size, not the bookmark's: {:?}", p[0].runs);
+}
+
+/// #3000: a run in the drop cap's frame with a size of its own keeps it; only the runs at the
+/// letter's enlarged size take the text's size back.
+#[test]
+fn a_drop_cap_frames_other_sizes_are_kept() {
+    let d = read_body(
+        r#"<w:p><w:pPr><w:framePr w:dropCap="drop" w:lines="3" w:wrap="around" w:vAnchor="text" w:hAnchor="text"/></w:pPr><w:r><w:rPr><w:sz w:val="88"/></w:rPr><w:t>B</w:t></w:r><w:r><w:rPr><w:sz w:val="20"/></w:rPr><w:t>e</w:t></w:r></w:p>
+        <w:p><w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:t>fore we start</w:t></w:r></w:p>"#,
+    );
+    let p = paras(&d);
+    assert_eq!(p.len(), 1);
+    let size = |s: &str| p[0].run_ranges().find(|(range, _)| p[0].text.get(range.clone()) == Some(s)).map(|(_, props)| props.size);
+    assert_eq!(size("B"), Some(Some(12.0)), "{:?}", p[0].runs);
+    assert_eq!(size("e"), Some(Some(10.0)), "{:?}", p[0].runs);
+}
+
+/// #3000: a bookmark opening the drop cap's own frame is a sizeless run before the letter; the
+/// letter is still recognised by its enlarged size and takes the text's size back.
+#[test]
+fn a_drop_caps_letter_after_a_bookmark_in_its_frame_takes_the_texts_size() {
+    let d = read_body(
+        r#"<w:p><w:pPr><w:framePr w:dropCap="drop" w:lines="3" w:wrap="around" w:vAnchor="text" w:hAnchor="text"/></w:pPr><w:bookmarkStart w:id="2" w:name="cap"/><w:r><w:rPr><w:sz w:val="88"/></w:rPr><w:t>B</w:t></w:r><w:bookmarkEnd w:id="2"/></w:p>
+        <w:p><w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:t>efore we start</w:t></w:r></w:p>"#,
+    );
+    let p = paras(&d);
+    assert_eq!(p.len(), 1);
+    let letter = p[0].run_ranges().find(|(range, _)| p[0].text.get(range.clone()) == Some("B")).map(|(_, props)| props.size);
+    assert_eq!(letter, Some(Some(12.0)), "the letter takes the text's size, not its enlarged one: {:?}", p[0].runs);
 }
 
 /// #2360: a `w:framePr` in the document defaults, the sizeless top-left one Apple Pages writes,

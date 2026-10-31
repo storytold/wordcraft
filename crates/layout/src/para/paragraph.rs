@@ -241,12 +241,10 @@ impl<'a> Shaped<'a> {
         let rp = cx.rp;
         let Some(c) = cx.drop_first.filter(|_| start == 0) else { return 0 };
         let Some(first) = text.get(..c.len_utf8()) else { return 0 };
-        let line_h = (rc.size * 1.2).max(1.0);
-        let lines = rp.drop_cap as f32;
-        // Capital height is ~0.7 em: the letter's cap spans from line 1's caps to line N's baseline.
         let mut big = (**rc).clone();
-        // `clamp` would panic here when the text itself is larger than 1000 pt.
-        big.size = (((lines - 1.0) * line_h + rc.size * 0.7) / 0.7).min(1000.0).max(rc.size);
+        big.size = wordcraft_doc::resolve::drop_cap_size(rc.size, rp.drop_cap);
+        // An Arabic or other complex-script letter is shaped at `size_cs`.
+        big.size_cs = wordcraft_doc::resolve::drop_cap_size(rc.size_cs, rp.drop_cap);
         if let Some(f) = &rp.drop_cap_font {
             big.font = f.clone();
         }
