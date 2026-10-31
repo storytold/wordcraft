@@ -395,6 +395,15 @@ pub fn check_edit(s: &mut Session, a: &Pos, b: &Pos) -> Result<(), CmdError> {
     if refused { Err(locked(s, CANT_EDIT)) } else { Ok(()) }
 }
 
+/// Before inserting at `at` outside typing (an integration such as Zotero): refuse inside a
+/// control whose content can't be edited.
+pub fn check_insert(s: &mut Session, at: &Pos) -> Result<(), CmdError> {
+    match s.doc.control_at(at) {
+        Some(r) if !r.control.lock.can_edit() || !r.control.kind.takes_typing() => Err(locked(s, CANT_EDIT)),
+        _ => Ok(()),
+    }
+}
+
 /// After the user deleted something: a control left empty shows its placeholder again.
 pub fn restore_placeholder(s: &mut Session) -> Result<(), CmdError> {
     let at = s.sel.focus.clone();
@@ -954,6 +963,18 @@ mod editing_tests {
         run(&mut s, "select.all", json!({}));
         run(&mut s, "text.delete", json!({}));
         assert!(s.doc.control_ranges(StoryRef::Body).is_empty());
+    }
+
+    #[test]
+    fn integration_inserts_are_refused_inside_a_check_box() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        run(&mut s, "developer.checkBox", json!({"tag": "ok"}));
+        let r = s.doc.control_ranges(StoryRef::Body)[0].clone();
+        let inside = r.content_start();
+        assert!(crate::cmd::controls::check_insert(&mut s, &inside).is_err());
+        // Beside the control is fine.
+        let outside = wordcraft_doc::Pos::body(0, 0);
+        assert!(crate::cmd::controls::check_insert(&mut s, &outside).is_ok());
     }
 
     fn replacement_control() -> Session {

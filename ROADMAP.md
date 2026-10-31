@@ -314,6 +314,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 | 2026-10-15 | Web: typing in Cyrillic or another non-Latin script no longer repeats text. WordCraft now honours the input method's request to erase around the caret before retyping (#1480). Chrome can still move the hidden text field's caret, so later letters may still land out of order. That cause is still open |
 | 2026-10-16 | Drawing dispatch uses the direct graphic-data child so nested pictures keep their text boxes. |
 | 2026-10-15 | Equations: typing `V_dd` or `x^ab` and pressing Space keeps `dd` and `ab` whole in the subscript or superscript, like `V_(dd)`, as Word for Mac does; Linear format shows the bare form |
+| 2026-10-16 | Zotero's edits obey Restrict Editing, content-control locks and Track Changes (#1323): a protected document refuses citation inserts, refreshes, unlinks, deletions and bibliography-style changes outside its editable regions, and with Track Changes on their text changes are revisions that Reject undoes; hidden citation-code changes are not tracked and can survive Reject All |
 | 2026-10-15 | Plain text pasted from another program keeps the formatting of the paragraph it lands in: Paste inserts it as Keep Text Only does, so every pasted line, empty lines too, becomes a paragraph with that paragraph's direction, style, alignment, indents and list, and the text after the caret keeps them. The lines after the first had default formatting, so pasting several lines into a right-to-left paragraph turned all but the first left-to-right |
 | 2026-10-14 | Add Font… imports every file selected in the file chooser (#1789), not just the first: the desktop dialog and the web picker are multi-select, each file is added, a bad file is reported ("Added 11 fonts; 1 couldn't be read: X.ttf") without stopping the rest, and one pick adds at most 2,000 (the status line counts the skipped). On the web each font is added and reported on its own, with no single summary line. The built-in file browser still picks one file. |
 | 2026-10-15 | Additive paragraph spacing retains the full before-space after a section page break; ordinary overlapping spacing is unchanged. |
@@ -824,6 +825,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-14 | trivial | Progress log: RTF export writes sections (gap 19) |
 | 2026-10-15 | trivial | Progress log: multi-letter equation scripts (#1609) |
 | 2026-10-15 | trivial | Progress log: plain-text paste keeps the paragraph formatting where it lands |
+| 2026-10-16 | trivial | Progress log: Zotero obeys document protection and Track Changes (#1323) |
 | 2026-10-14 | trivial | Progress log: Add Font imports every selected font file (#1789) |
 | 2026-10-15 | trivial | Additive paragraph spacing retains the full before-space after a section page break; ordinary overlapping spacing is unchanged. |
 | 2026-10-15 | trivial | Exact line spacing keeps the run font baseline around tall equations; automatic and minimum spacing still grow for math. |
