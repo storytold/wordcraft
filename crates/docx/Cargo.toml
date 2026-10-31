@@ -12,6 +12,7 @@ workspace = true
 wordcraft-doc = { workspace = true }
 wordcraft-geom = { workspace = true }
 quick-xml = { workspace = true }
+roxmltree = { workspace = true }
 zip = { workspace = true }
 thiserror = { workspace = true }
 log = { workspace = true }
@@ -33,5 +34,6 @@ getrandom = { workspace = true, features = ["wasm_js"] }
 [dev-dependencies]
 wordcraft-doc = { workspace = true, features = ["test-support"] }
 proptest = { workspace = true }
+serde_json = { workspace = true }
 image = { workspace = true }
 zip = { workspace = true }

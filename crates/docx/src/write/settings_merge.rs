@@ -9,8 +9,8 @@
 //! byte for byte; owned children come from the generated part (or go, when the model turned
 //! them off); owned children the original lacks are inserted at their CT_Settings position; in
 //! `w:compat` only the `compatibilityMode` setting is replaced. Kept children that refer to a
-//! relationship (`r:id`, e.g. a mail merge data source) are dropped: their relationships aren't
-//! carried. Anything unexpected returns `None`, and the generated part is written as before.
+//! relationship are dropped unless owned: mail merge is regenerated with remapped external
+//! sources by `mail_merge`. Anything unexpected returns `None`, and the generated part is written as before.
 
 /// Children of `w:settings` the model writes (`super::settings_xml`).
 const OWNED: &[&str] = &[
@@ -19,6 +19,7 @@ const OWNED: &[&str] = &[
     "w:displayBackgroundShape",
     "w:mirrorMargins",
     "w:attachedTemplate",
+    "w:mailMerge",
     "w:linkStyles",
     "w:trackRevisions",
     "w:doNotTrackMoves",
@@ -257,6 +258,14 @@ fn merge_compat(orig: &str, generated: &str) -> Option<String> {
 pub fn has_unowned(original: &[u8]) -> bool {
     let Some(xml) = std::str::from_utf8(original).ok() else { return false };
     let Some((_, _, kids)) = children(xml, "w:settings") else { return false };
+    if kids.iter().any(|child| child.name == "w:mailMerge") {
+        let Some(parsed) = crate::xml::parse(original).ok() else { return false };
+        if kids.len() == parsed.els().count()
+            && kids.iter().zip(parsed.els()).any(|(child, element)| child.name == "w:mailMerge" && element.name != "w:mailMerge")
+        {
+            return true;
+        }
+    }
     kids.iter().any(|k| match k.name.as_str() {
         "w:zoom" => false,
         // Anything in `w:compat` beyond its own tag and the compatibility mode.
@@ -272,8 +281,22 @@ pub fn has_unowned(original: &[u8]) -> bool {
 pub fn merge(original: &[u8], generated: &[u8]) -> Option<Vec<u8>> {
     let orig = std::str::from_utf8(original).ok()?;
     let gen_s = std::str::from_utf8(generated).ok()?;
-    let (o_open, o_close, o_kids) = children(orig, "w:settings")?;
+    let (o_open, o_close, mut o_kids) = children(orig, "w:settings")?;
     let (_, _, g_kids) = children(gen_s, "w:settings")?;
+    // Mail merge is regenerated from the namespace-aware tree. Recognise the same children
+    // here, including local/default aliases, so an unreferenced original is not kept beside it.
+    // Keep every other child's existing byte-preserving merge policy.
+    if g_kids.iter().chain(&o_kids).any(|child| child.name == "w:mailMerge") {
+        let parsed = crate::xml::parse(original).ok()?;
+        if parsed.els().count() != o_kids.len() {
+            return None;
+        }
+        for (child, element) in o_kids.iter_mut().zip(parsed.els()) {
+            if element.name == "w:mailMerge" || child.name == "w:mailMerge" {
+                child.name.clone_from(&element.name);
+            }
+        }
+    }
     // Prefixes the generated children use must be declared by the original root.
     let root_tag = orig.get(..o_open)?;
     for p in ["w", "m", "r"] {
@@ -281,7 +304,36 @@ pub fn merge(original: &[u8], generated: &[u8]) -> Option<Vec<u8>> {
             return None;
         }
     }
-    let g_text = |k: &Child| gen_s.get(k.start..k.end).map(str::to_string);
+    let mut reader = quick_xml::NsReader::from_str(root_tag);
+    let strict = loop {
+        let (namespace, event) = reader.read_resolved_event().ok()?;
+        match event {
+            quick_xml::events::Event::Start(_) => {
+                break matches!(namespace, quick_xml::name::ResolveResult::Bound(ns) if ns.as_ref() == b"http://purl.oclc.org/ooxml/wordprocessingml/main");
+            }
+            quick_xml::events::Event::Eof => return None,
+            _ => {}
+        }
+    };
+    let g_text = |k: &Child| {
+        let text = gen_s.get(k.start..k.end)?;
+        // Only this generated child declares its own canonical aliases. Match the retained
+        // settings root; a fallback to the generated part keeps its Transitional declarations.
+        if strict && k.name == "w:mailMerge" {
+            Some(
+                text.replace(
+                    r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main""#,
+                    r#"xmlns:w="http://purl.oclc.org/ooxml/wordprocessingml/main""#,
+                )
+                .replace(
+                    r#"xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships""#,
+                    r#"xmlns:r="http://purl.oclc.org/ooxml/officeDocument/relationships""#,
+                ),
+            )
+        } else {
+            Some(text.to_string())
+        }
+    };
     let mut used = vec![false; g_kids.len()];
     let mark = |name: &str, used: &mut Vec<bool>| -> Option<usize> {
         let gi = g_kids.iter().enumerate().position(|(i, g)| g.name == name && !used.get(i).copied().unwrap_or(true))?;

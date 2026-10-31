@@ -111,6 +111,9 @@ pub const CUSTOM_XML_ROOTS: &str = "wordcraft:customXml.roots";
 /// The original `word/settings.xml` when it holds settings the model doesn't (merged into on
 /// save by `write::settings_merge`). Not a package part: WordCraft's own bookkeeping.
 pub const SETTINGS_ORIG: &str = "wordcraft:settings.orig";
+/// Original settings relationships for a mail-merge main document. Referenced external sources
+/// and one internal recipient-data leaf are emitted on save; external sources are never opened.
+pub const MAIL_MERGE_RELS: &str = "wordcraft:settings.mailMerge.rels";
 /// Extended properties (`docProps/app.xml`) the model doesn't hold but a save keeps
 /// ([`APP_KEPT_PROPS`]): `name\tvalue` lines. Not a package part: WordCraft's own bookkeeping.
 pub const APP_KEPT: &str = "wordcraft:app.kept";
@@ -204,6 +207,8 @@ pub struct Package {
     /// Lowercased part name → its stored spelling (the first in name order): part names are
     /// case-insensitive (ECMA-376 Part 2 §6.2.2.3), so every spelling is one part.
     lower: HashMap<String, String>,
+    /// Case-colliding stored parts with more than one relationship-named spelling.
+    ambiguous_targets: HashSet<String>,
 }
 
 impl Package {
@@ -270,26 +275,39 @@ impl Package {
             }
         }
         if !collides {
-            return Package { files, lower };
+            return Package { files, lower, ambiguous_targets: HashSet::new() };
         }
         // Entries whose names differ only in case are one part, so every spelling of the name
         // reaches the same stored entry (#3704). The spelling kept is the one a relationship
         // names, so the part the document points at is the one read; the first in byte order only
         // when no relationship names any of them.
         let named = rel_targets(&files);
+        let mut named_lower = HashSet::new();
+        let mut ambiguous_targets = HashSet::new();
         for name in files.keys().rev().filter(|n| named.contains(n.as_str())) {
-            lower.insert(name.to_ascii_lowercase(), name.clone());
+            let folded = name.to_ascii_lowercase();
+            if !named_lower.insert(folded.clone()) {
+                ambiguous_targets.insert(folded.clone());
+            }
+            lower.insert(folded, name.clone());
         }
         let before = files.len();
         files.retain(|name, _| lower.get(&name.to_ascii_lowercase()) == Some(name));
         let dropped = before.saturating_sub(files.len());
         log::warn!("docx: {dropped} zip entries are other spellings of parts already read; they are left out");
-        Package { files, lower }
+        Package { files, lower, ambiguous_targets }
     }
 
     /// The stored spelling of part `name` (leading `/` ignored; case-insensitive).
     pub fn canonical(&self, name: &str) -> Option<&str> {
         self.lower.get(&name.trim_start_matches('/').to_ascii_lowercase()).map(String::as_str)
+    }
+
+    /// Do relationships name multiple stored case spellings of this part?
+    /// Retainers that must not substitute bytes can reject this ambiguity, while ordinary
+    /// package lookup keeps its deterministic handling of malformed case collisions.
+    pub fn has_ambiguous_spelling(&self, name: &str) -> bool {
+        self.ambiguous_targets.contains(&name.trim_start_matches('/').to_ascii_lowercase())
     }
 
     /// Part bytes by name (leading `/` ignored; case-insensitive fallback).

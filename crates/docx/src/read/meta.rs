@@ -1,15 +1,71 @@
 use super::{
-    Arc, BTreeMap, Blocks, Comment, DocxError, El, HashMap, HashSet, MAX_PARTS, MAX_SOURCES, MAX_TEMPLATE_PATH, NoteKind, NumFormat, Paragraph,
-    PartKind, Reader, Rels, Seen, StoryCtx, Zoom, ZoomFit, int, math, on_off, para_block, props, tw, u32_of,
+    Arc, BTreeMap, Blocks, Comment, ContentTypes, DocxError, El, HashMap, HashSet, MAX_PARTS, MAX_SOURCES, MAX_TEMPLATE_PATH, NoteKind, NumFormat,
+    Paragraph, PartKind, Reader, Rels, Seen, StoryCtx, Zoom, ZoomFit, int, math, on_off, para_block, props, tw, u32_of,
 };
 
 impl Reader<'_> {
+    /// Keep only the referenced recipient leaf. Invalid or unkeepable inputs remain openable,
+    /// but the writer will refuse them rather than lose their recipient choices.
+    fn keep_recipient_data(&mut self, path: &str, settings: &El) -> bool {
+        let Some(odso) = settings.child("w:mailMerge").and_then(|m| m.child("w:odso")) else { return true };
+        let mut refs = odso.children("w:recipientData");
+        let Some(reference) = refs.next() else { return true };
+        let Some(id) = reference.attr("r:id") else { return false };
+        if refs.next().is_some() {
+            return false;
+        }
+        let rels_path = |part: &str| match part.rsplit_once('/') {
+            Some((dir, file)) => format!("{dir}/_rels/{file}.rels"),
+            None => format!("_rels/{part}.rels"),
+        };
+        let Ok(Some(rels)) = self.pkg.xml(&rels_path(path)) else { return false };
+        let mut matches = rels.els().filter(|r| r.local() == "Relationship" && r.attr("Id") == Some(id));
+        let Some(rel) = matches.next() else { return false };
+        if matches.next().is_some()
+            || !crate::mail_merge::recipient_kind(rel.attr("Type").unwrap_or(""))
+            || rel.attr("TargetMode").is_some_and(|m| !m.eq_ignore_ascii_case("Internal"))
+        {
+            return false;
+        }
+        // Inspect the raw URI before generic relationship resolution can erase a bad traversal.
+        // Match the package spelling used by resolved relationships and retained-part keys.
+        let Some(target) = rel
+            .attr("Target")
+            .and_then(|t| crate::mail_merge::recipient_target(path, t))
+            .filter(|target| !self.pkg.has_ambiguous_spelling(target))
+            .and_then(|target| self.pkg.canonical(&target).map(str::to_owned))
+        else {
+            return false;
+        };
+        if self.pkg.get(&rels_path(&target)).is_some() {
+            return false; // Recipient data is a leaf, never an arbitrary dependent part graph.
+        }
+        let Some(bytes) = self.pkg.get(&target) else { return false };
+        let pkg = self.pkg;
+        let Some(ct) = self.content_types.get_or_insert_with(|| ContentTypes::read(pkg)).of(&target) else { return false };
+        crate::mail_merge::validate_recipient(bytes, ct).is_ok() && self.keep_part(&target)
+    }
+
     pub(super) fn read_settings(&mut self, path: &str) -> Result<(), DocxError> {
         let Some(root) = self.xml(path)? else { return Ok(()) };
-        if let Some(b) = self.pkg.get(path).filter(|b| crate::write::settings_has_unowned(b)) {
+        let mail_merge = root.child("w:mailMerge").is_some();
+        if let Some(b) = self.pkg.get(path).filter(|b| mail_merge || crate::write::settings_has_unowned(b)) {
             self.doc.passthrough.insert(crate::package::SETTINGS_ORIG.into(), Arc::new(b.to_vec()));
         }
         let rels = self.pkg.rels(path);
+        if mail_merge {
+            // Relationship limits must not stop import of the owned settings below.
+            match crate::write::mail_merge_rels(&rels) {
+                Ok(kept) => {
+                    self.doc.passthrough.insert(crate::package::MAIL_MERGE_RELS.into(), Arc::new(kept));
+                }
+                Err(e) => log::warn!("docx: not keeping mail merge relationships: {e}"),
+            }
+            if !self.keep_recipient_data(path, &root) {
+                // Do not let another kept root make an invalid raw recipient URI saveable.
+                self.doc.passthrough.remove(crate::package::MAIL_MERGE_RELS);
+            }
+        }
         let s = &mut self.doc.settings;
         for k in root.els() {
             match k.name.as_str() {
