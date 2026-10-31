@@ -632,8 +632,8 @@ fn notes_limit(pb: &PageBuilder, new_notes: &[NoteBox], line_notes: &[NoteBox]) 
 fn fit_height(pb: &PageBuilder, l: &para::Line, rp: &wordcraft_doc::resolve::ResolvedPara, free: bool) -> f32 {
     let at_margin = pb.bottom >= pb.sect.page_h - pb.sect.margin_bottom - 0.01;
     match rp.line_spacing {
-        // `baseline` is from the paragraph's top; the text ends a descent below it.
-        wordcraft_doc::props::LineSpacing::Multiple(m) if m > 1.0 && at_margin && free => (l.baseline - l.top + l.text_desc).clamp(0.0, l.height),
+        // The text (or a taller picture) ends `leading` above the line's bottom.
+        wordcraft_doc::props::LineSpacing::Multiple(m) if m > 1.0 && at_margin && free => (l.height - l.leading).clamp(0.0, l.height),
         _ => l.height,
     }
 }
