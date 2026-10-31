@@ -38,6 +38,9 @@ impl Session {
         }
         self.reset_history();
         self.clear_versions();
+        self.lint_findings.clear();
+        self.export_check_commands.clear();
+        crate::hooks::run_on_document_loaded(self);
         self.touch();
         self.dirty = false;
         self.made_rev = self.rev;
@@ -161,6 +164,9 @@ impl Session {
             // Go Back's places, like the caret history: not part of the document.
             edit_marks: _,
             go_back_step: _,
+            lint_findings: _,
+            export_check_commands: _,
+            module_en: _,
         } = self;
         let head = if history.len() + SNAPSHOT_HEAD > MAX_UNDO { history.iter().take(SNAPSHOT_HEAD).cloned().collect() } else { Vec::new() };
         EditSnapshot {

@@ -162,6 +162,11 @@ pub struct Settings {
     /// comments and tracked changes are saved without `w:date`.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub remove_date_time: bool,
+    /// Document variables (`w:docVars`, ECMA-376 §17.15.1.20): name/value pairs that Word and other
+    /// readers keep with the document. WordCraft also stores per-section properties that have no
+    /// `w:sectPr` slot here (see [`section::PAGE_NUM_PREFIX_DOCVAR`]); those are consumed on read.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub doc_vars: Vec<(String, String)>,
 }
 
 /// A saved zoom: a percentage, or a fit mode (the percentage it last came to).
@@ -307,6 +312,7 @@ impl Default for Settings {
             zoom: None,
             remove_personal_info: false,
             remove_date_time: false,
+            doc_vars: Vec::new(),
         }
     }
 }

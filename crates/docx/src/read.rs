@@ -288,6 +288,9 @@ pub(crate) fn read_opened(pkg: &Package) -> Result<Document, DocxError> {
             wm.size = None;
         }
     }
+    // Document variables can carry per-section properties (`w:sectPr` has no extension slot), so
+    // apply them once every section is known.
+    props::apply_section_doc_vars(&mut r.doc);
 
     let core = root_rels.by_type(rt::CORE).map(|x| x.target.clone()).unwrap_or_else(|| "docProps/core.xml".into());
     r.read_core(&core);

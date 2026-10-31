@@ -191,6 +191,11 @@ impl WordApp {
             self.status(tl!("Wait for the print job to finish submitting before closing."));
             return false;
         }
+        // An add-in's options page saves what it has pending first; when it can't, the window
+        // stays open and the page shows why.
+        if !self.leave_addin_page() {
+            return false;
+        }
         if self.quit_requested {
             return true;
         }

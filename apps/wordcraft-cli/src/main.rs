@@ -68,6 +68,9 @@ Paper: documents created here, and HTML, Markdown and text files (which give no 
 the system region's paper (A4, or Letter in the US and other Letter regions), read from
 LC_ALL / LC_PAPER / LANG or the platform. Set WORDCRAFT_REGION=en-US (or another tag) for the
 same output on every machine.
+
+LawCraft (court profiles, `law.profiles.*`) is an opt-in module: its commands are there when the
+app's options turn it on (law.enabled), or with WORDCRAFT_LAW=1 for one run. See docs/law.md.
 ";
 
 /// The subcommands, in `USAGE` order; `--help` or `-h` after any of them prints `USAGE` (#968).
@@ -181,6 +184,50 @@ fn system_region() -> wordcraft_engine::Region {
 fn listed_text(doc: &wordcraft_doc::Document) -> Result<String, String> {
     let bytes = wordcraft_engine::io::save_bytes("out.txt", doc)?;
     Ok(String::from_utf8_lossy(&bytes).replace("\r\n", "\n"))
+}
+
+/// Whether the LawCraft module (`law.*` commands) is on: the user's setting (`law.enabled` in the
+/// saved preferences, the same one the app writes), or `WORDCRAFT_LAW=1` for one headless run.
+/// Off by default; a run that saves no preferences (`WORDCRAFT_NO_PREFS`) only takes the flag.
+fn law_enabled() -> bool {
+    if std::env::var_os("WORDCRAFT_LAW").is_some_and(|v| !v.is_empty() && v != "0") {
+        return true;
+    }
+    if std::env::var_os("WORDCRAFT_NO_PREFS").is_some() {
+        return false;
+    }
+    let Some(dir) = wordcraft_control_key::settings_dir() else { return false };
+    let Ok(bytes) = std::fs::read(dir.join("ui.json")) else { return false };
+    let Ok(saved) = serde_json::from_slice::<serde_json::Value>(&bytes) else { return false };
+    saved.pointer("/editing/modules/law").and_then(serde_json::Value::as_bool) == Some(true)
+}
+
+/// Turn the LawCraft module on for a headless session, when it is on.
+fn with_law(mut s: Session) -> Session {
+    enable_law(&mut s);
+    s
+}
+
+/// [`with_law`] for a session that already exists (the MCP bridge's headless backend).
+fn enable_law(s: &mut Session) {
+    if law_enabled() {
+        // Runs without preferences (`WORDCRAFT_NO_PREFS`) keep profiles in memory only.
+        let dir = if std::env::var_os("WORDCRAFT_NO_PREFS").is_some() { None } else { wordcraft_law::settings_dir() };
+        wordcraft_law::set_profiles_dir(dir);
+        // A headless session keeps no saved preferences, so the flag or the setting decides here.
+        s.prefs.modules.insert(wordcraft_law::MODULE.into(), true);
+        wordcraft_law::install(s);
+    }
+}
+
+/// Print an export's check findings (an applied court profile's, say) to standard error, one per
+/// line; the export itself still went through.
+fn report_findings(r: &serde_json::Value) {
+    for f in r.get("findings").and_then(serde_json::Value::as_array).into_iter().flatten() {
+        let severity = f.get("severity").and_then(serde_json::Value::as_str).unwrap_or("note");
+        let message = f.get("message").and_then(serde_json::Value::as_str).unwrap_or("");
+        eprintln!("{severity}: {message}");
+    }
 }
 
 /// `--author NAME`: the author recorded on tracked changes and comments (`file.setAuthor`).
@@ -435,7 +482,8 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             let (i, o) = (paths.first().ok_or_else(missing_argument)?.to_string(), paths.get(1).ok_or_else(missing_argument)?.to_string());
             let markup = rest.iter().any(|a| a == "--markup");
             let password = password_from(&rest)?;
-            let mut s = open(&i, password.as_deref())?;
+            // With LawCraft on, the applied court profile's checks run on the export, as in the app.
+            let mut s = with_law(open(&i, password.as_deref())?);
             if rest.iter().any(|a| a == "--update-fields") {
                 s.run("references.updateFields", &json!({})).map_err(|e| e.to_string())?;
             }
@@ -448,7 +496,8 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
                 }
                 s.run("file.save", &params)
             };
-            r.map_err(|e| e.to_string())?;
+            let r = r.map_err(|e| e.to_string())?;
+            report_findings(&r);
             eprintln!("wrote {o}");
             Ok(())
         }
@@ -486,8 +535,9 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             let (i, o) = (i.to_string(), o.to_string());
             let page = parse_page_arg("render", &rest)?.unwrap_or(1);
             let scale = parse_scale_arg("render", &rest)?.unwrap_or(2.0);
-            let mut s = open(&i, password.as_deref())?;
+            let mut s = with_law(open(&i, password.as_deref())?);
             let r = s.run("file.exportPng", &json!({"path": o, "page": page, "scale": scale})).map_err(|e| e.to_string())?;
+            report_findings(&r);
             write_stdout(|o| writeln!(o, "{r}"))
         }
         "run" => {
@@ -498,12 +548,12 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             let script = load_run_script(&rest, script_path.as_deref())?;
             let (from_file, from_template) = run_source_paths(&rest, script.as_ref());
             let mut s = match (from_file, from_template) {
-                (Some(f), _) => open(&f, password.as_deref())?,
+                (Some(f), _) => with_law(open(&f, password.as_deref())?),
                 // Both go through `file.new`, which puts a blank document on the region's paper (#3152).
                 // `file.new` opens beside the session's first document, which is then closed: the
                 // run starts with one open document.
                 (None, t) => {
-                    let mut s = session(wordcraft_doc::Document::new());
+                    let mut s = with_law(session(wordcraft_doc::Document::new()));
                     let first = s.document_id();
                     let params = t.map_or_else(|| json!({}), |t| json!({"template": t}));
                     s.run("file.new", &params).map_err(|e| e.to_string())?;
@@ -572,7 +622,7 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
         }
         "commands" => {
             validate_options("commands", &rest, COMMANDS_OPTIONS)?;
-            let s = session(wordcraft_doc::Document::new());
+            let s = with_law(session(wordcraft_doc::Document::new()));
             if rest.iter().any(|a| a == "--json") {
                 let list = serde_json::to_string_pretty(&s.registry.describe()).unwrap_or_default();
                 write_stdout(|o| writeln!(o, "{list}"))
@@ -636,6 +686,7 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
                 }
                 None => {
                     let mut headless = wordcraft_mcp::Headless::default();
+                    enable_law(&mut headless.session);
                     if let Some(roots) = roots {
                         // Every thread of this process, not only the server's: nothing reaches past the roots.
                         wordcraft_engine::file_access::confine_process(roots.clone());

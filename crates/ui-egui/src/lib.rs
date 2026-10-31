@@ -24,6 +24,7 @@ macro_rules! tl {
 
 pub mod a11y;
 pub mod a11y_pane;
+pub mod addins;
 pub mod async_saves;
 pub mod autoscroll;
 pub mod backstage;
@@ -603,6 +604,13 @@ pub struct WordApp {
     awaiting_save: Option<AwaitingSave>,
     /// The file dialog the host is showing, and what its answer is for ([`file_dialogs`]).
     file_dialog: Option<file_dialogs::PendingDialog>,
+    /// The add-ins the host gave the app ([`addins`]), in File › Options › Add-ins order.
+    addins: Vec<Box<dyn addins::AddIn>>,
+    /// Add-ins taken out of `addins` while one of their calls runs ([`WordApp::with_addin`]).
+    addins_out: Vec<&'static str>,
+    /// Files picked for an add-in while it was out (a host that answers at once): (add-in, tag,
+    /// path), handed to it once it is back.
+    addin_picks: Vec<(&'static str, String, Option<String>)>,
     /// The built-in file browser, when it is open, and the folder it showed last (#576).
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) file_browser: file_browser::State,

@@ -32,7 +32,9 @@ impl WordApp {
         // close, New or Open counts it as a change (#1348). A draft the document refuses is not
         // part of it: saving and exporting go on without it (the refusal stays on the status
         // line), and replacing the document asks Save / Don't Save / Cancel about it.
-        let refused = if flushes_comment_drafts(id, &params) { panes::flush_comment_drafts(self).err() } else { None };
+        // A module's command that opens a new document in place of this one counts it too.
+        let replaces = self.session.registry.get(id).is_some_and(|c| c.replaces_document);
+        let refused = if replaces || flushes_comment_drafts(id, &params) { panes::flush_comment_drafts(self).err() } else { None };
         if id == "file.recover" && params.as_object().is_none_or(|p| p.is_empty()) {
             self.ui.backstage = true;
             self.ui.backstage_page = "recover".into();
@@ -44,8 +46,11 @@ impl WordApp {
             self.dialog = dialogs::Dialog::open(name, self);
             return Ok(json!({"pending": name}));
         }
+        if let Some(what) = self.addin_input_dialog(id, &params) {
+            return Ok(json!({"pending": what}));
+        }
         if (self.session.dirty || self.save_unconfirmed() || refused.is_some())
-            && discards_document(id, &params)
+            && (replaces || discards_document(id, &params))
             && !self.closes_only_its_window(id, &params)
         {
             let name = self.prompt_name();
@@ -110,8 +115,23 @@ impl WordApp {
     }
 
     /// Run a command for a script or an agent (control channel, MCP bridge): never asks first.
-    /// UI-level commands (`ui.*`) are handled here, the rest by the engine.
+    /// UI-level commands (`ui.*`) are handled here, the rest by the engine. Turning an add-in on
+    /// or off (`file.options {"modules": …}`) applies it here, for scripts and the interface
+    /// alike: one being turned off first saves what its options page has pending.
     pub fn execute(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        if id == "file.options" && params.get("modules").is_some() {
+            self.guard_addin_off(id, &params)?;
+            let r = self.execute_inner(id, params);
+            if r.is_ok() {
+                self.sync_addins();
+            }
+            return r;
+        }
+        self.execute_inner(id, params)
+    }
+
+    /// [`WordApp::execute`] apart from turning add-ins on or off.
+    fn execute_inner(&mut self, id: &str, params: Value) -> Result<Value, String> {
         self.clear_command_targets(id);
         if let Some(error) = self.document_required_error(id) {
             return Err(error);
@@ -439,6 +459,12 @@ impl WordApp {
         if req.get("toggle").and_then(Value::as_str) == Some("interfaceTheme") {
             self.ui.theme = if self.ui_is_dark() { theme::Appearance::Light } else { theme::Appearance::Dark };
         }
+        // An add-in's own window: the add-in opens it (`{"addin": id, "open": what}`).
+        if let Some(id) = req.get("addin").and_then(Value::as_str) {
+            let what = req.get("open").and_then(Value::as_str).unwrap_or("");
+            self.with_addin(id, |a, _| a.open(what));
+            return;
+        }
         if let Some(what) = req.get("open").and_then(Value::as_str) {
             match what {
                 "openFile" => self.open_dialog(),
@@ -457,7 +483,9 @@ impl WordApp {
                 "options" => {
                     self.ui.backstage = true;
                     self.ui.backstage_page = "options".into();
-                    if let Some(pane) = req.get("pane").and_then(Value::as_str) {
+                    if let Some(pane) = req.get("pane").and_then(Value::as_str)
+                        && (pane == self.ui.options_pane || self.leave_addin_page())
+                    {
                         self.ui.options_pane = pane.into();
                     }
                 }
@@ -510,19 +538,31 @@ impl WordApp {
                 let tab = s("tab").unwrap_or("Home").to_string();
                 if tab == "File" {
                     self.ui.backstage = true;
-                } else {
+                } else if !self.ui.backstage || self.leave_addin_page() {
+                    // Leaving File from an add-in's options page lets it save first; when it
+                    // can't, File stays open.
                     self.ui.tab = tab;
                     self.ui.backstage = false;
                 }
                 json!({"tab": self.ui.tab})
             }
             "ui.backstage" => {
-                self.ui.backstage = p.get("value").and_then(Value::as_bool).unwrap_or(!self.ui.backstage);
-                if let Some(pg) = s("page") {
-                    self.ui.backstage_page = pg.into();
-                }
-                if let Some(pane) = s("pane") {
-                    self.ui.options_pane = pane.into();
+                let want = p.get("value").and_then(Value::as_bool).unwrap_or(!self.ui.backstage);
+                let page = s("page").map(str::to_string);
+                let pane = s("pane").map(str::to_string);
+                // Leaving an add-in's options page (closing File, another page or pane) lets it
+                // save first; when it can't, it stays.
+                let leaving = !want
+                    || page.as_deref().is_some_and(|p| p != self.ui.backstage_page)
+                    || pane.as_deref().is_some_and(|p| p != self.ui.options_pane);
+                if !leaving || self.leave_addin_page() {
+                    self.ui.backstage = want;
+                    if let Some(pg) = page {
+                        self.ui.backstage_page = pg;
+                    }
+                    if let Some(pane) = pane {
+                        self.ui.options_pane = pane;
+                    }
                 }
                 json!({"backstage": self.ui.backstage})
             }
