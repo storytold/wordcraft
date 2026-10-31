@@ -613,6 +613,7 @@ fn para0(doc: &wordcraft_doc::Document) -> wordcraft_doc::Paragraph {
     doc.body.first().and_then(|b| b.as_para().cloned()).unwrap_or_default()
 }
 
+/// Direct character formatting (bold, text colour) lands on exactly the runs it covers.
 #[test]
 fn character_formatting_applied() {
     let spec = RichSpec {
@@ -636,6 +637,44 @@ fn character_formatting_applied() {
     assert!(p.runs.first().is_some_and(|r| r.props.bold.is_none()));
 }
 
+/// `sprmCHighlight` carries an `Ico` index ([MS-DOC] §2.9.135): yellow is 7 and dark blue is 9.
+/// It used to be read in highlighter-row order, which turned yellow highlights dark blue.
+#[test]
+fn highlight_operand_is_an_ico_index() {
+    use wordcraft_doc::props::Highlight;
+    let cases = [
+        (1u8, Highlight::Black),
+        (2, Highlight::Blue),
+        (3, Highlight::Turquoise),
+        (4, Highlight::BrightGreen),
+        (5, Highlight::Pink),
+        (6, Highlight::Red),
+        (7, Highlight::Yellow),
+        (8, Highlight::White),
+        (9, Highlight::DarkBlue),
+        (10, Highlight::Teal),
+        (11, Highlight::Green),
+        (12, Highlight::Violet),
+        (13, Highlight::DarkRed),
+        (14, Highlight::DarkYellow),
+        (15, Highlight::Gray50),
+        (16, Highlight::Gray25),
+    ];
+    for (ico, want) in cases {
+        let spec = RichSpec {
+            text: "marked\r",
+            styles: vec![(1, 0x0FFF, "Normal", Vec::new(), Vec::new())],
+            fonts: vec!["Arial"],
+            chpx_runs: vec![(0, grpprl(&[(0x2A0C, &[ico])]))],
+            papx_entries: vec![(0, 0, Vec::new())],
+        };
+        let doc = read(&rich_doc(&spec)).expect("opens");
+        let p = para0(&doc);
+        assert_eq!(p.runs.first().and_then(|r| r.props.highlight), Some(want), "ico {ico}: {:?}", p.runs);
+    }
+}
+
+/// A font and size come from a style's character formatting, and a run's own font overrides it.
 #[test]
 fn font_and_size_from_style_and_direct() {
     let spec = RichSpec {
