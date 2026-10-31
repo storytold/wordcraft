@@ -2804,6 +2804,40 @@ fn right_clicking_a_link_hides_the_hover_tooltip() {
     assert_eq!(tips(&h), 0, "the link tooltip is gone, so it can't cover the menu");
 }
 
+/// #4501 follow-up: a press the canvas handles (here Ctrl+click following a link) is done with
+/// the pointer, so the link tooltip stands down that frame; plain hovering shows it again.
+#[test]
+fn a_handled_press_skips_the_link_tooltip() {
+    use egui::{Event, Modifiers, PointerButton};
+    use egui_kittest::kittest::Queryable;
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("See here")), Default::default());
+    a.run("select.text", json!({"text": "here"})).unwrap();
+    a.run("insert.link", json!({"url": "https://example.com/"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    steps(&mut h, 6);
+    let c = h.state_mut().session.layout().caret(&Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 5 }).unwrap();
+    let at = screen(&mut h, c.x, c.top + c.height / 2.0);
+    h.event(Event::PointerMoved(at));
+    steps(&mut h, 2);
+    let tips = |h: &egui_kittest::Harness<'_, WordApp>| h.query_all_by_label_contains("Click to follow link").count();
+    assert!(tips(&h) > 0, "hovering the link shows its target");
+    h.event(Event::ModifiersChanged(Modifiers::COMMAND));
+    h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::COMMAND });
+    h.step();
+    assert_eq!(tips(&h), 0, "the Ctrl+click was handled: no tooltip that frame");
+    h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::COMMAND });
+    h.event(Event::ModifiersChanged(Modifiers::NONE));
+    steps(&mut h, 2);
+    assert!(tips(&h) > 0, "hovering again shows the tooltip");
+}
+
 /// #688: the drag auto-scroll waits in the middle, ramps in from both edges and never leaves
 /// the scrollable range.
 #[test]
