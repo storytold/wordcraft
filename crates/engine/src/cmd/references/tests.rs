@@ -100,6 +100,91 @@ fn docx_styleref_header_shows_each_page_s_chapter() {
     assert!(instr.is_some_and(|i| i.contains(r#"STYLEREF  "heading 1""#)));
 }
 
+/// #4535: a heading edited under Track Changes gets the entry it reads with the change accepted,
+/// not its deleted text as well ("Defined terms and interpretationDefined terms").
+#[test]
+fn toc_entries_leave_out_tracked_deletions() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Intro\nDefined terms\nBody"));
+    s.run("select.text", &json!({"text": "Defined terms"})).unwrap();
+    s.run("styles.apply", &json!({"style": "Heading 1"})).unwrap();
+    s.run("caret.docEnd", &json!({})).unwrap();
+    s.run("references.toc", &json!({})).unwrap();
+    s.run("review.trackChanges", &json!({"value": true})).unwrap();
+    // The heading comes before the TOC, so it is the first match.
+    s.run("select.text", &json!({"text": "Defined terms"})).unwrap();
+    s.run("text.insert", &json!({"text": "Defined terms and interpretation"})).unwrap();
+    s.run("references.updateToc", &json!({})).unwrap();
+    let entries: Vec<String> =
+        s.doc.body.iter().filter_map(|b| b.as_para()).filter(|p| p.props.style.as_deref() == Some("TOC1")).map(|p| p.plain_text()).collect();
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert!(entries[0].starts_with("Defined terms and interpretation\t") && !entries[0].contains("interpretationDefined"), "{entries:?}");
+}
+
+/// #4535: a numbered heading deleted as a whole (text and paragraph mark) under Track Changes gets
+/// no entry and takes no number, so the next heading's entry is numbered as it is once accepted.
+#[test]
+fn toc_skips_a_heading_deleted_as_a_whole() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Intro\nGone\nNext\nBody"));
+    for t in ["Gone", "Next"] {
+        s.run("select.text", &json!({"text": t})).unwrap();
+        s.run("styles.apply", &json!({"style": "Heading 1"})).unwrap();
+    }
+    let num = s.doc.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+    for b in s.doc.body.iter_mut() {
+        if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b)
+            && p.props.style.as_deref() == Some("Heading1")
+        {
+            p.props.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
+        }
+    }
+    s.run("caret.docEnd", &json!({})).unwrap();
+    s.run("references.toc", &json!({})).unwrap();
+    s.run("review.trackChanges", &json!({"value": true})).unwrap();
+    s.run("select.range", &json!({"anchor": {"block": 1, "off": 0}, "focus": {"block": 2, "off": 0}})).unwrap();
+    s.run("text.delete", &json!({})).unwrap();
+    let gone = s.doc.body[1].as_para().unwrap();
+    assert!(gone.mark.del.is_some() && gone.final_text().is_empty(), "the heading is tracked-deleted as a whole");
+    s.run("references.updateToc", &json!({})).unwrap();
+    let entries: Vec<String> =
+        s.doc.body.iter().filter_map(|b| b.as_para()).filter(|p| p.props.style.as_deref() == Some("TOC1")).map(|p| p.plain_text()).collect();
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert!(entries[0].starts_with("1.\tNext\t"), "{entries:?}");
+}
+
+/// #4535: a TC field in tracked-deleted text adds no entry (`\f`), whether its heading is deleted
+/// as a whole or only the field's run is.
+#[test]
+fn toc_skips_tc_fields_in_tracked_deletions() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Intro\nGone\nKept\nBody"));
+    s.run("select.text", &json!({"text": "Gone"})).unwrap();
+    s.run("styles.apply", &json!({"style": "Heading 1"})).unwrap();
+    for (t, entry) in [("Gone", "Alpha mark"), ("Kept", "Beta mark")] {
+        s.run("select.text", &json!({"text": t})).unwrap();
+        s.run("caret.end", &json!({})).unwrap();
+        s.run("insert.field", &json!({"instr": format!("TC \"{entry}\" \\l 1")})).unwrap();
+    }
+    s.run("caret.docEnd", &json!({})).unwrap();
+    s.run("references.toc", &json!({"tcFields": true})).unwrap();
+    let entries = |s: &Session| -> Vec<String> {
+        s.doc.body.iter().filter_map(|b| b.as_para()).filter(|p| p.props.style.as_deref() == Some("TOC1")).map(|p| p.plain_text()).collect()
+    };
+    let before = entries(&s);
+    assert!(before.iter().any(|e| e.contains("Alpha mark")) && before.iter().any(|e| e.contains("Beta mark")), "{before:?}");
+    s.run("review.trackChanges", &json!({"value": true})).unwrap();
+    // The heading with its TC field and paragraph mark, then only the field in "Kept".
+    s.run("select.range", &json!({"anchor": {"block": 1, "off": 0}, "focus": {"block": 2, "off": 0}})).unwrap();
+    s.run("text.delete", &json!({})).unwrap();
+    // The TOC bookmarked the paragraph, so the TC field is not its first object.
+    let field = s.doc.body[2].as_para().unwrap().objects_with_offsets().find(|(_, o)| matches!(o, InlineObject::Field { .. })).unwrap().0;
+    let end = field + wordcraft_doc::para::OBJ.len_utf8();
+    s.run("select.range", &json!({"anchor": {"block": 2, "off": field}, "focus": {"block": 2, "off": end}})).unwrap();
+    s.run("text.delete", &json!({})).unwrap();
+    assert!(s.doc.body[2].as_para().unwrap().deleted_ranges().iter().any(|r| r.contains(&field)), "the field's run is tracked-deleted");
+    s.run("references.updateToc", &json!({})).unwrap();
+    let after = entries(&s);
+    assert!(!after.iter().any(|e| e.contains("Alpha mark") || e.contains("Beta mark")), "{after:?}");
+}
+
 /// #402: Custom Table of Contents settings become TOC switches, and updating honours them:
 /// levels (`\o`), a style with a level (`\t`), no hyperlinks, page numbers after a space
 /// (`\p`), or none at all (`\n`).

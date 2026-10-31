@@ -109,11 +109,14 @@ fn toc_entries(s: &Session, f: &FieldCode) -> Vec<TocEntry> {
     let mut counters = Counters::default();
     for path in s.doc.para_paths(StoryRef::Body) {
         let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };
+        // A paragraph deleted as a whole under Track Changes is gone once accepted: it takes no
+        // number, so the headings after it keep theirs (#4535).
+        let gone = p.mark.del.is_some() && p.final_text().is_empty();
         let number = p
             .props
             .numbering
             .or_else(|| s.doc.styles.resolve_para(&p.props).numbering)
-            .filter(|n| n.num != 0)
+            .filter(|n| n.num != 0 && !gone)
             .and_then(|n| counters.next_label(&s.doc.numbering, n.num, n.level))
             .filter(|(label, def)| !label.is_empty() && !matches!(def.format, NumFormat::Bullet | NumFormat::None))
             .map(|(label, def)| match def.suffix {
@@ -142,14 +145,20 @@ fn toc_entries(s: &Session, f: &FieldCode) -> Vec<TocEntry> {
             (a..=b).contains(&l).then_some(l)
         });
         if let Some(l) = by_style.or(by_outline).or(if hidden { None } else { by_heading }) {
-            let t = p.plain_text().replace(['\u{000C}', '\n', '\t'], " ").trim().to_string();
+            // The heading as it reads with its tracked changes accepted (#4535).
+            let t = p.final_text().replace(['\u{000C}', '\n', '\t'], " ").trim().to_string();
             if !t.is_empty() {
                 let text = number.map_or_else(|| t.clone(), |n| format!("{n}{t}"));
                 v.push(TocEntry { path: path.clone(), level: l - 1, text, lead });
             }
         }
         if let Some(id) = &tc {
+            // A TC field in tracked-deleted text is gone once accepted, like the text (#4535).
+            let deleted = p.deleted_ranges();
             for off in p.object_offsets() {
+                if deleted.iter().any(|r| r.contains(&off)) {
+                    continue;
+                }
                 let Some(InlineObject::Field { instr, .. }) = p.object_at(off) else { continue };
                 let c = FieldCode::parse(instr);
                 if c.name != "TC" {
