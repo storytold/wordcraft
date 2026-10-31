@@ -32,6 +32,9 @@ pub(crate) struct StandardFonts {
     pub(crate) bidi: Option<u16>,
 }
 
+/// `StshiLsd.cbLSD`: the size of a latent style's `LSD` ([MS-DOC] `StshiLsd`).
+const LSD_SIZE: u16 = 4;
+
 /// The [`StandardFonts`] in the header (`Stshi`) of the `STSH` at `table[fc..fc+lcb]`: Word 365
 /// writes Aptos there while the font table's first entry is still Times New Roman (#5066).
 pub(crate) fn standard_fonts(table: &[u8], fc: u32, lcb: u32) -> StandardFonts {
@@ -41,7 +44,15 @@ pub(crate) fn standard_fonts(table: &[u8], fc: u32, lcb: u32) -> StandardFonts {
     // Stshif: cstd, cbSTDBaseInFile, flags, stiMaxWhenSaved, istdMaxFixedWhenSaved,
     // nVerBuiltInNamesWhenSaved (2 bytes each), then rgftcStandardChpStsh (3 × 2); ftcBi follows.
     let at = |o: usize| stshi.get(o..o + 2).map(|b| u16::from_le_bytes([b[0], b[1]]));
-    StandardFonts { ascii: at(12), east_asian: at(14), other: at(16), bidi: at(18) }
+    // ftcBi is optional, and the latent style data (`StshiLsd`, whose `cbLSD` MUST be 4) follows
+    // it: a 4 right after it says it is there, a 4 in its place and none after says it was left
+    // out. Otherwise the field is taken as there (a header that ends after it, as Word 97's).
+    let bidi = match (at(18), at(20)) {
+        (b, Some(LSD_SIZE)) => b,
+        (Some(LSD_SIZE), _) => None,
+        (b, _) => b,
+    };
+    StandardFonts { ascii: at(12), east_asian: at(14), other: at(16), bidi }
 }
 
 /// Parse the `STSH` at `table[fc..fc+lcb]`.

@@ -700,6 +700,32 @@ fn the_default_font_is_the_stylesheets_standard_font() {
     }
 }
 
+/// #5066: `ftcBi` is optional in the stylesheet header, and the latent style data (`cbLSD`, 4,
+/// then the LSDs) follows it: a header that leaves it out doesn't make `cbLSD` the complex-script
+/// font.
+#[test]
+fn the_complex_script_standard_font_is_read_only_when_present() {
+    let header = |tail: &[u16]| -> Vec<u8> {
+        // cstd, cbSTDBaseInFile, flags, stiMaxWhenSaved, istdMaxFixedWhenSaved,
+        // nVerBuiltInNamesWhenSaved; ASCII, East Asian, other.
+        let words = [&[0u16, 10, 0, 1, 0, 0, 3, 4, 3][..], tail].concat();
+        let stshi: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+        [(stshi.len() as u16).to_le_bytes().to_vec(), stshi].concat()
+    };
+    let bidi = |tail: &[u16]| {
+        let b = header(tail);
+        crate::stsh::standard_fonts(&b, 0, b.len() as u32).bidi
+    };
+    assert_eq!(bidi(&[2]), Some(2), "a header that ends with it (Word 97)");
+    assert_eq!(bidi(&[2, 4, 0, 0]), Some(2), "followed by the latent style data");
+    assert_eq!(bidi(&[4, 4, 0, 0]), Some(4), "font 4, followed by the latent style data");
+    assert_eq!(bidi(&[4, 0, 0]), None, "left out: cbLSD is in its place");
+    assert_eq!(bidi(&[]), None, "a header too short for it");
+    let b = header(&[4, 0, 0]);
+    let fonts = crate::stsh::standard_fonts(&b, 0, b.len() as u32);
+    assert_eq!((fonts.ascii, fonts.east_asian, fonts.other), (Some(3), Some(4), Some(3)), "the other fonts are read all the same");
+}
+
 #[test]
 fn paragraph_props_and_heading_style() {
     let spec = RichSpec {
