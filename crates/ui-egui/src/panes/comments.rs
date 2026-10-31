@@ -119,16 +119,17 @@ pub(crate) fn comment_editor(app: &mut WordApp, ui: &mut Ui, id: u32, font: Opti
     let mut text = draft.unwrap_or_else(|| app.session.doc.plain_text(StoryRef::Part(part)));
     // Read-only where comments can't change (a protected document), so nothing is typed in vain.
     let editable = crate::widgets::enabled(app, "review.editComment");
+    let field = field_id(app, ui, "comment_edit", id);
     let mut edit = egui::TextEdit::multiline(&mut text)
-        .id(field_id(app, ui, "comment_edit", id))
+        .id(field)
         .interactive(editable)
         .desired_rows(1)
         .desired_width(f32::INFINITY)
         .hint_text(tl!("Add a comment"));
-    if let Some(f) = font {
-        edit = edit.font(f);
+    if let Some(f) = &font {
+        edit = edit.font(f.clone());
     }
-    let r = ui.add(edit);
+    let r = capped_field(ui, field.with("scroll"), font.as_ref(), edit);
     if focus {
         r.request_focus();
     }
@@ -146,8 +147,24 @@ pub(crate) fn comment_editor(app: &mut WordApp, ui: &mut Ui, id: u32, font: Opti
     }
 }
 
-/// A comment field's widget id, per document: egui's own state for the field (its cursor and
-/// undo history) never carries over to another document's comment with the same id.
+/// Lines of a comment's text that its card or balloon shows; longer text scrolls in its field and
+/// is cut off in a balloon that isn't selected (#3382).
+pub(crate) const COMMENT_ROWS: usize = 10;
+
+/// The height a text field's frame and padding add to its text, in points.
+const FIELD_FRAME: f32 = 4.0;
+
+/// A comment or reply field at most [`COMMENT_ROWS`] lines tall. Longer text scrolls inside it,
+/// and the field keeps its caret in view.
+fn capped_field(ui: &mut Ui, scroll_id: egui::Id, font: Option<&egui::FontId>, edit: egui::TextEdit<'_>) -> egui::Response {
+    let font = font.cloned().unwrap_or_else(|| egui::FontSelection::Default.resolve(ui.style()));
+    let row = ui.fonts_mut(|f| f.row_height(&font));
+    let max = row * COMMENT_ROWS as f32 + FIELD_FRAME;
+    egui::ScrollArea::vertical().id_salt(scroll_id).max_height(max).auto_shrink([false, true]).show(ui, |ui| ui.add(edit)).inner
+}
+
+/// A comment field's widget id, per document: egui's own state for the field (its cursor, undo
+/// history and scroll position) never carries over to another document's comment with the same id.
 fn field_id(app: &WordApp, ui: &Ui, kind: &str, id: u32) -> egui::Id {
     ui.scope_id().with((kind, app.session.document_id(), id))
 }
@@ -179,16 +196,17 @@ fn thread_root(app: &WordApp, id: u32) -> u32 {
 pub(crate) fn reply_editor(app: &mut WordApp, ui: &mut Ui, id: u32, font: Option<egui::FontId>, focus: bool) -> bool {
     let mut text = drafts(app).replies.get(&id).cloned().unwrap_or_default();
     let editable = crate::widgets::enabled(app, "review.reply");
+    let field = field_id(app, ui, "comment_reply", id);
     let mut edit = egui::TextEdit::multiline(&mut text)
-        .id(field_id(app, ui, "comment_reply", id))
+        .id(field)
         .interactive(editable)
         .desired_rows(1)
         .desired_width(f32::INFINITY)
         .hint_text(tl!("Write a reply"));
-    if let Some(f) = font {
-        edit = edit.font(f);
+    if let Some(f) = &font {
+        edit = edit.font(f.clone());
     }
-    let r = ui.add(edit);
+    let r = capped_field(ui, field.with("scroll"), font.as_ref(), edit);
     if focus {
         r.request_focus();
     }
