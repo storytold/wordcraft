@@ -302,8 +302,8 @@ impl Body<'_> {
 
     fn start_para(&mut self, style: Option<&str>, heading: Option<u8>) {
         self.end_para();
-        let (mut kind, align, mut pb, rule, keep_next, base) =
-            style.map(|s| self.styles.para(s)).unwrap_or((Kind::Normal, None, false, false, false, Fmt::default()));
+        let (mut kind, align, spacing, mut pb, rule, keep_next, base) =
+            style.map(|s| self.styles.para(s)).unwrap_or((Kind::Normal, None, model::Spacing::default(), false, false, false, Fmt::default()));
         // The section break starts the new page; no page break besides.
         if let Some(next) = style.and_then(|s| self.page_section(s))
             && self.break_section(next)
@@ -313,7 +313,7 @@ impl Body<'_> {
         if let Some(h) = heading {
             kind = Kind::Heading(h.clamp(1, 6));
         }
-        let mut p = Para { kind, align, page_break: pb, keep_next, ..Default::default() };
+        let mut p = Para { kind, align, spacing, page_break: pb, keep_next, ..Default::default() };
         if rule && kind == Kind::Normal {
             p.kind = Kind::Rule;
         }

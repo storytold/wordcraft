@@ -47,6 +47,10 @@ struct StyleInfo {
     auto: bool,
     fmt: FmtDelta,
     align: Option<Align>,
+    /// `fo:margin-top`, `fo:margin-bottom` and `fo:line-height` (or `style:line-height-at-least`)
+    /// of the paragraph (ODF 1.3 §20.207, §20.235, §20.355): space before and after, in points,
+    /// and line spacing.
+    spacing: model::Spacing,
     page_break: bool,
     /// `fo:keep-with-next`: `Some(true)` for "always", `Some(false)` for "auto".
     keep_next: Option<bool>,
@@ -144,6 +148,65 @@ pub(super) struct Styles {
     pub(super) lists: HashMap<String, Vec<bool>>,
     /// Font of `style:default-style` for paragraphs (the document default, ODF 1.3 §16.4).
     default_font: Option<String>,
+    /// Space before/after and line spacing of `style:default-style` for paragraphs.
+    default_spacing: model::Spacing,
+}
+
+/// What a paragraph style's `style:paragraph-properties` says: spacing, alignment, page break,
+/// keep-with-next, page numbering and the bottom rule.
+fn paragraph_properties(a: &Attrs, s: &mut StyleInfo) {
+    vertical_spacing(a, &mut s.spacing);
+    s.align = match get(a, "fo:text-align").map(|v| v.trim().to_ascii_lowercase()).as_deref() {
+        Some("center") => Some(Align::Center),
+        Some("end") | Some("right") => Some(Align::Right),
+        Some("justify") => Some(Align::Justify),
+        Some("start") | Some("left") => Some(Align::Left),
+        _ => s.align,
+    };
+    if get(a, "fo:break-before").is_some_and(|b| b.trim().eq_ignore_ascii_case("page")) {
+        s.page_break = true;
+    }
+    match get(a, "fo:keep-with-next") {
+        Some("always") => s.keep_next = Some(true),
+        Some("auto") => s.keep_next = Some(false),
+        _ => {}
+    }
+    if let Some(v) = get(a, "style:page-number") {
+        s.page_number = Some(v.trim().parse::<u32>().ok().map(|n| n.min(32_767)));
+    }
+    if get(a, "fo:border-bottom").is_some_and(|b| !b.trim().eq_ignore_ascii_case("none")) {
+        s.border_bottom = true;
+    }
+}
+
+/// Reads the vertical spacing of a `style:paragraph-properties` element into `sp`: space
+/// before (`fo:margin-top`) and after (`fo:margin-bottom`) in points, and the line spacing
+/// (`fo:line-height` as a percentage, `normal` or a length; `style:line-height-at-least`).
+/// An attribute that is absent leaves its value alone; one that can't be read, too.
+fn vertical_spacing(a: &Attrs, sp: &mut model::Spacing) {
+    use wordcraft_doc::props::LineSpacing;
+    // Nothing past the tallest page (22in) is a document's own.
+    let space = |v: &str| length(v).filter(|v| (0.0..=1584.0).contains(v));
+    if let Some(v) = get(a, "fo:margin-top").and_then(space) {
+        sp.before = Some(v);
+    }
+    if let Some(v) = get(a, "fo:margin-bottom").and_then(space) {
+        sp.after = Some(v);
+    }
+    if let Some(v) = get(a, "fo:line-height") {
+        let v = v.trim();
+        if v.eq_ignore_ascii_case("normal") {
+            sp.line = Some(LineSpacing::Multiple(1.0));
+        } else if let Some(pc) = v.strip_suffix('%') {
+            if let Some(m) = pc.trim().parse::<f32>().ok().filter(|m| m.is_finite() && (1.0..=13200.0).contains(m)) {
+                sp.line = Some(LineSpacing::Multiple(m / 100.0));
+            }
+        } else if let Some(l) = space(v).filter(|l| *l > 0.0) {
+            sp.line = Some(LineSpacing::Exactly(l));
+        }
+    } else if let Some(l) = get(a, "style:line-height-at-least").and_then(space).filter(|l| *l > 0.0) {
+        sp.line = Some(LineSpacing::AtLeast(l));
+    }
 }
 
 impl Styles {
@@ -208,27 +271,9 @@ impl Styles {
                 }
                 "paragraph-properties" => {
                     if let Some((_, s)) = &mut cur {
-                        s.align = match get(&a, "fo:text-align").map(|v| v.trim().to_ascii_lowercase()).as_deref() {
-                            Some("center") => Some(Align::Center),
-                            Some("end") | Some("right") => Some(Align::Right),
-                            Some("justify") => Some(Align::Justify),
-                            Some("start") | Some("left") => Some(Align::Left),
-                            _ => s.align,
-                        };
-                        if get(&a, "fo:break-before").is_some_and(|b| b.trim().eq_ignore_ascii_case("page")) {
-                            s.page_break = true;
-                        }
-                        match get(&a, "fo:keep-with-next") {
-                            Some("always") => s.keep_next = Some(true),
-                            Some("auto") => s.keep_next = Some(false),
-                            _ => {}
-                        }
-                        if let Some(v) = get(&a, "style:page-number") {
-                            s.page_number = Some(v.trim().parse::<u32>().ok().map(|n| n.min(32_767)));
-                        }
-                        if get(&a, "fo:border-bottom").is_some_and(|b| !b.trim().eq_ignore_ascii_case("none")) {
-                            s.border_bottom = true;
-                        }
+                        paragraph_properties(&a, s);
+                    } else if in_default {
+                        vertical_spacing(&a, &mut self.default_spacing);
                     }
                 }
                 "columns" if q.starts_with("style:") => {
@@ -274,6 +319,21 @@ impl Styles {
             },
             Ev::Text(_) => {}
         });
+    }
+
+    /// The document's default paragraph spacing: the Standard paragraph style's, else the default
+    /// style's, else ODF's own defaults (no space before or after, single line spacing, ODF 1.3
+    /// §20.207, §20.235, §20.355), which are not Word's (8pt after, 1.15 lines).
+    pub(super) fn doc_spacing(&self) -> model::Spacing {
+        use wordcraft_doc::props::LineSpacing;
+        let standard = self.map.get("Standard").filter(|s| !s.auto).map(|s| s.spacing).unwrap_or_default();
+        let d = self.default_spacing;
+        model::Spacing {
+            before: standard.before.or(d.before).or(Some(0.0)),
+            after: standard.after.or(d.after).or(Some(0.0)),
+            line: standard.line.or(d.line).or(Some(LineSpacing::Multiple(1.0))),
+            ..model::Spacing::default()
+        }
     }
 
     /// The document's default font: the Standard paragraph style's, else the default style's.
@@ -335,12 +395,12 @@ impl Styles {
         self.chain(name).iter().find_map(|(_, s)| s.cell_valign)
     }
 
-    /// Paragraph kind, alignment, page break, rule, keep-with-next and base formatting. The text formatting of
+    /// Paragraph kind, alignment, spacing, page break, rule, keep-with-next and base formatting. The text formatting of
     /// every style in the chain applies (automatic and common, ODF 1.3 §16.2 inheritance), except
     /// the style that gives the paragraph its kind and that style's ancestors: their formatting
     /// is the kind's own look (a heading's size and colour), not direct formatting. `Standard`,
     /// the default paragraph style, holds document defaults and is left out too.
-    pub(super) fn para(&self, name: &str) -> (Kind, Option<Align>, bool, bool, bool, Fmt) {
+    pub(super) fn para(&self, name: &str) -> (Kind, Option<Align>, model::Spacing, bool, bool, bool, Fmt) {
         let chain = self.chain(name);
         let mut kind = Kind::Normal;
         let mut kind_at = chain.len();
@@ -377,6 +437,16 @@ impl Styles {
         }
         // Like the text formatting, the kind style's own `fo:keep-with-next` (a heading's) is the kind's look, not direct formatting.
         let keep_next = chain.iter().take(kind_at).find_map(|(_, s)| s.keep_next).unwrap_or(false);
-        (kind, align, pb, rule, keep_next, f)
+        // Space before/after and line spacing, the nearest style's in the chain, the same way.
+        // `Standard` holds the document defaults (`doc_spacing`); a paragraph that sets nothing
+        // of its own follows them.
+        let own = || chain.iter().take(kind_at).filter(|(n, s)| s.auto || *n != "Standard");
+        let spacing = model::Spacing {
+            before: own().find_map(|(_, s)| s.spacing.before),
+            after: own().find_map(|(_, s)| s.spacing.after),
+            line: own().find_map(|(_, s)| s.spacing.line),
+            ..model::Spacing::default()
+        };
+        (kind, align, spacing, pb, rule, keep_next, f)
     }
 }
