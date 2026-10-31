@@ -24,6 +24,7 @@ macro_rules! tl {
 
 pub mod a11y;
 pub mod a11y_pane;
+mod announce;
 pub mod async_saves;
 pub mod autoscroll;
 pub mod backstage;
@@ -590,6 +591,8 @@ pub struct WordApp {
     /// Whether the current command was entered by an input method's own transaction. The engine
     /// uses it to keep IME commits from setting the application-change signal.
     pub(crate) ime_origin: bool,
+    /// What the last formatting shortcut did, for screen readers ("Bold On"), while it is fresh.
+    pub(crate) announcement: Option<announce::Announcement>,
     /// Read Aloud: the start of the sentence the caret was last moved to, and the last error shown.
     pub(crate) read_aloud_at: Option<wordcraft_engine::doc::Pos>,
     pub(crate) read_aloud_error: Option<String>,
