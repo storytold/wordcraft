@@ -233,6 +233,7 @@ pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Docume
         Some((f, l)) => stsh::parse(&table, f, l)?,
         None => Vec::new(),
     };
+    let standard_fonts = fib.pair(fib::pair::STSHF).map(|(f, l)| stsh::standard_fonts(&table, f, l)).unwrap_or_default();
     let chpx_bins = match fib.pair(fib::pair::PLCF_BTE_CHPX) {
         Some((f, l)) => Bins::parse(&table, f, l)?,
         None => Bins::parse(&[], 0, 0)?,
@@ -247,7 +248,7 @@ pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Docume
         doc.core = core;
     }
     doc.body.clear();
-    doc.styles = fmt::stylesheet(&raw_styles, &fonts);
+    doc.styles = fmt::stylesheet(&raw_styles, &fonts, standard_fonts);
     doc.numbering = list::parse(&table, &fib, &fonts);
     let sheet: StyleSheet = doc.styles.clone();
     let sects = sections::parse(&word, &table, &fib);
