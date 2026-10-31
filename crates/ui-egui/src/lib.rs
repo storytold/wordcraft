@@ -532,6 +532,7 @@ pub struct WordApp {
     /// The document (id, revision) whose comment text [`WordApp::ensure_comment_fonts`] last
     /// looked at.
     comment_fonts_for: Option<(u64, u64)>,
+    caption_fonts_for: Option<String>,
     /// The Recover list's document names [`WordApp::ensure_recover_fonts`] last looked at.
     recover_fonts_for: Option<u64>,
     /// The list of recent document paths [`WordApp::ensure_recent_fonts`] last looked at.

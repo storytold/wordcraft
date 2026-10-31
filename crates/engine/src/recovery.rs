@@ -36,6 +36,15 @@ impl Session {
         }
         Vec::new()
     }
+    /// Whether any unheld recovery documents are available.
+    pub fn has_recovery_documents(&self) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(r) = &self.recovery {
+            let held = |id: &str| self.recovery_slots().any(|(_, _, s)| s.id.as_deref() == Some(id)) || r.closing().any(|c| c == id);
+            return r.documents.iter().any(|d| !held(&d.id));
+        }
+        false
+    }
     pub fn recovery_ready(&self) -> bool {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(r) = &self.recovery {
