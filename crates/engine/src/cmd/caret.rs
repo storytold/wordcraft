@@ -237,7 +237,7 @@ fn vert(s: &mut Session, v: &Value, dir: i32) -> CmdResult {
 
 fn line(s: &mut Session, v: &Value, home: bool) -> CmdResult {
     let ext = extend(v);
-    let from = if ext { line_focus(s) } else { s.sel.focus.clone() };
+    let from = line_from(s, ext, home);
     let l = s.layout();
     let to = match l.line_bounds(&from, s.page_hint) {
         Some((a, b)) => {
@@ -249,29 +249,38 @@ fn line(s: &mut Session, v: &Value, home: bool) -> CmdResult {
                 b
             }
         }
-        None => s.sel.focus.clone(),
+        None => from,
     };
     s.goal_x = None;
     apply(s, to, ext);
     sel_result(s)
 }
 
-/// Where Shift+Home and Shift+End measure the line from. A selection running forward to a
-/// paragraph's start ends with the mark of the paragraph before (as after Shift+End or Shift+Down
-/// from a line start): Word counts that as the end of that paragraph's last line, so Shift+End
-/// leaves it and Shift+Home goes to that line's start.
-fn line_focus(s: &Session) -> Pos {
-    let f = &s.sel.focus;
-    if s.sel.anchor < *f
-        && f.off == 0
-        && let Some(i) = f.path.last().checked_sub(1)
+/// Where Home and End measure the line from, as in Word. With Shift, from the focus. Without
+/// Shift a selection collapses: Home goes to the start of the line where the selection starts,
+/// End to the end of the line where it ends. A selection end at a paragraph's start, after the
+/// mark of the paragraph before (as after Shift+End, or Shift+Down from a line start), counts as
+/// the end of that paragraph's last line: Shift+End leaves it, and Shift+Home and End go to that
+/// line's start and end.
+fn line_from(s: &Session, ext: bool, home: bool) -> Pos {
+    let (start, end) = s.sel.ordered();
+    if !ext && home {
+        return start;
+    }
+    let forward = s.sel.anchor < s.sel.focus;
+    if ext && !forward {
+        return s.sel.focus.clone();
+    }
+    if start != end
+        && end.off == 0
+        && let Some(i) = end.path.last().checked_sub(1)
     {
-        let prev = f.path.with_last(i);
-        if let Some(p) = s.doc.para(f.story, &prev) {
-            return Pos { story: f.story, path: prev, off: p.len() };
+        let prev = end.path.with_last(i);
+        if let Some(p) = s.doc.para(end.story, &prev) {
+            return Pos { story: end.story, path: prev, off: p.len() };
         }
     }
-    f.clone()
+    end
 }
 
 /// Shift+End on a paragraph's last line takes in its mark, as in Word: the selection runs to the

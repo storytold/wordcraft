@@ -3637,3 +3637,22 @@ fn typing_or_deleting_over_a_selection_that_ends_with_a_mark_keeps_the_paragraph
     assert_eq!(first.map(|p| p.mark.del), Some(None), "the mark isn't deleted");
     assert_eq!(para_texts(&s).len(), 3);
 }
+
+#[test]
+fn home_and_end_collapse_a_selection_as_in_word() {
+    // Measured in Word for Windows (Microsoft 365): Home goes to the start of the line where the
+    // selection starts, End to the end of the line where it ends, whichever way it was made. An
+    // end after a paragraph mark counts as the end of the line before it.
+    let three = ["Uno corto.", "Due corto.", "Tre corto."].join("\n");
+    let cases =
+        [((0, 3), (1, 0), (0, 10)), ((0, 0), (1, 0), (0, 10)), ((0, 3), (2, 0), (1, 10)), ((2, 0), (0, 3), (1, 10)), ((0, 3), (1, 3), (1, 10))];
+    for ((pa, oa), (pf, of), (pe, oe)) in cases {
+        for (key, want) in [("caret.home", Pos::body(0, 0)), ("caret.end", Pos::body(pe, oe))] {
+            let mut s = typed(&three);
+            run(&mut s, "select.range", json!({"anchor": Pos::body(pa, oa), "focus": Pos::body(pf, of)}));
+            run(&mut s, key, json!({}));
+            assert!(s.sel.is_collapsed(), "{key} from ({pa}, {oa})..({pf}, {of})");
+            assert_eq!(s.sel.focus, want, "{key} from ({pa}, {oa})..({pf}, {of})");
+        }
+    }
+}
