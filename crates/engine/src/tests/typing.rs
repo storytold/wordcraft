@@ -3490,6 +3490,34 @@ fn double_space_adds_a_period_when_asked() {
     assert_eq!(text(&t), "Hello  world");
 }
 
+/// Ctrl+Right and Ctrl+Left run through a bookmark inside a word, as in Word: no stop at either
+/// of its marks. Ctrl+Delete before a bookmarked word keeps the bookmark (#3173).
+#[test]
+fn ctrl_arrows_run_through_a_bookmark_inside_a_word() {
+    let mut s = typed("Hello world again");
+    run(&mut s, "select.text", json!({"text": "llo wo"}));
+    run(&mut s, "insert.bookmark", json!({"name": "Inside"}));
+    // He·llo wo·rld again, each mark three bytes.
+    assert_eq!(paras(&s)[0].0, "He\u{FFFC}llo wo\u{FFFC}rld again");
+    run(&mut s, "caret.docStart", json!({}));
+    let mut stops = vec![s.sel.focus.off];
+    for _ in 0..3 {
+        run(&mut s, "caret.wordRight", json!({}));
+        stops.push(s.sel.focus.off);
+    }
+    assert_eq!(stops, [0, 9, 18, 23]);
+    for want in [18, 9, 0] {
+        run(&mut s, "caret.wordLeft", json!({}));
+        assert_eq!(s.sel.focus.off, want);
+    }
+    let mut s = typed("Hello world");
+    run(&mut s, "select.text", json!({"text": "world"}));
+    run(&mut s, "insert.bookmark", json!({"name": "Word"}));
+    run(&mut s, "caret.docStart", json!({}));
+    run(&mut s, "text.deleteWordForward", json!({}));
+    assert_eq!(paras(&s)[0].0, "\u{FFFC}world\u{FFFC}", "the bookmark's start stays");
+}
+
 #[test]
 fn backspace_after_a_floating_shape_anchor_joins_paragraphs_and_keeps_the_shape() {
     let mut s = typed("Line one\nLine two");
