@@ -4918,7 +4918,10 @@ fn a_long_comment_balloon_paints_only_its_first_ten_rows() {
             .expect("the long comment's body is painted");
         assert!(card.contains_rect(clip), "the body is clipped to its card: {clip:?} in {card:?}");
         let (shown, hidden) = rows.split_at(crate::panes::COMMENT_ROWS);
-        assert!(shown.iter().all(|r| r.max.y <= clip.max.y + 0.5), "the first ten rows are inside the clip: {shown:?}, clip {clip:?}");
+        assert!(
+            shown.iter().all(|r| r.min.y >= clip.min.y - 0.5 && r.max.y <= clip.max.y + 0.5),
+            "the first ten rows are inside the clip: {shown:?}, clip {clip:?}"
+        );
         assert!(hidden.iter().all(|r| r.min.y >= clip.max.y - 0.5), "the rows after the tenth are cut off: {:?}, clip {clip:?}", hidden.first());
     }
 }
