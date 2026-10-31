@@ -44,11 +44,7 @@ pub fn autocorrect_word(s: &mut Session, on_enter: bool) -> Result<(), CmdError>
     // The word's language (run, paragraph style, document default) picks the replacement list
     // (#835) and the case mapping (#1923). Text with no language at all is in the editing
     // language (a Polish interface writes Polish), else English.
-    let lang: Option<String> = s.doc.para_at(&f).and_then(|p| {
-        let rc = s.doc.styles.resolve_char(p.props.style.as_deref(), p.props_of_char(start));
-        rc.lang.clone()
-    });
-    let lang = lang.or_else(|| s.editing_lang.clone());
+    let lang = text_lang(s, &f, start);
     let turkic = is_turkic(lang.as_deref());
     // TWo INitial CApitals and cAPS LOCK come first, so "TEh" is still a replacement's typo.
     if let Some((at, reps)) = case_fix(&ac, &word, turkic) {
@@ -84,6 +80,7 @@ pub fn autocorrect_word(s: &mut Session, on_enter: bool) -> Result<(), CmdError>
     // A whole-word replacement, else "wait..." → "wait…". Proofing decides what is English the
     // same way (#835); every English (en-GB, en-CA…) counts (#1281).
     let english = s.doc.para_at(&f).is_none_or(|_| wordcraft_proof::ProofLang::from_tag(lang.as_deref()).is_english());
+    let german = is_german(lang.as_deref());
     let found = if ac.replace_text { ac.replacement_in(&word, english) } else { None };
     let (from, rep) = match found {
         Some(r) => (start, Some(r)),
@@ -137,7 +134,11 @@ pub fn autocorrect_word(s: &mut Session, on_enter: bool) -> Result<(), CmdError>
     let before_word = text.get(..start - usize::from(opened)).unwrap_or("");
     // The first word in a table cell follows its own option; other sentences the sentence one.
     let sentence_on = if before_word.trim().is_empty() && f.path.cell().is_some() { ac.cap_cells } else { ac.cap_sentences };
-    let exceptions = ac.exception_list();
+    let mut exceptions = ac.exception_list();
+    if german {
+        let removed = |a: &&&str| ac.exceptions_removed.iter().any(|r| r.eq_ignore_ascii_case(a));
+        exceptions.extend(GERMAN_NOT_SENTENCE_END.iter().filter(|a| !removed(a)).map(|a| a.to_string()));
+    }
     // A replacement of several words ("brb" → "be right back") is capitalised by its first.
     let first = word.split_whitespace().next().unwrap_or("");
     let next = if first.len() < word.len() {
@@ -147,7 +148,11 @@ pub fn autocorrect_word(s: &mut Session, on_enter: bool) -> Result<(), CmdError>
     } else {
         last
     };
-    let mut sentence = sentence_on && starts_sentence(before_word, &exceptions) && should_capitalize(first, next);
+    // German text capitalises a sentence's first word inside its quotes (`„hallo“` → `„Hallo“`);
+    // English keeps the quoted word as typed until Word's behaviour is observed.
+    let lead = if german { first.len() - first.trim_start_matches(|c: char| SENTENCE_QUOTES_OPEN.contains(c)).len() } else { 0 };
+    let bare = if german { first[lead..].trim_end_matches(|c: char| SENTENCE_QUOTES_CLOSE.contains(c)) } else { first };
+    let mut sentence = sentence_on && starts_sentence(before_word, &exceptions, german) && should_capitalize(bare, next);
     let prev = if sentence { prev_token(before_word) } else { String::new() };
     // Typing the word again after backspacing an automatic capital: the user doesn't want it
     // (Word's "Automatically add words to list"); an exception, so no capital this time either.
@@ -159,14 +164,15 @@ pub fn autocorrect_word(s: &mut Session, on_enter: bool) -> Result<(), CmdError>
         s.prefs.autocorrect.add_exception(prev.clone());
         sentence = false;
     }
-    let day = ac.cap_days && DAYS.contains(&first);
+    let day = ac.cap_days && DAYS.contains(&bare);
     if sentence || day {
         let para = s.doc.para_mut(f.story, &f.path)?;
-        if let Some(c) = word.chars().next() {
+        if let Some(c) = word[lead..].chars().next() {
             let up = upper_char(c, turkic);
-            let props = para.props_of_char(start).clone().without_symbol();
-            para.delete(start, start + c.len_utf8())?;
-            para.insert_text(start, &up, &props)?;
+            let at = start + lead;
+            let props = para.props_of_char(at).clone().without_symbol();
+            para.delete(at, at + c.len_utf8())?;
+            para.insert_text(at, &up, &props)?;
             let off = (caret + up.len()).saturating_sub(c.len_utf8());
             s.sel = Selection::caret(Pos { off, ..f.clone() });
             if sentence && !prev.is_empty() && !replaced {
@@ -185,12 +191,12 @@ pub fn autocorrect_word(s: &mut Session, on_enter: bool) -> Result<(), CmdError>
 /// The lowercase token before a word that starts a sentence ("there." in "there. world"), as
 /// [`starts_sentence`] reads it; empty at the start of a paragraph.
 fn prev_token(before: &str) -> String {
-    let t = before.trim_end().trim_end_matches(|c: char| "\"'”’)]".contains(c));
+    let t = before.trim_end().trim_end_matches(|c: char| CLOSING_QUOTES.contains(c));
     // Only full stops: Word's exception was observed with "there." (`there?` isn't added).
     if !t.ends_with('.') {
         return String::new();
     }
-    t.rsplit(char::is_whitespace).next().unwrap_or("").trim_start_matches(|c: char| "\"'“‘([".contains(c)).to_lowercase()
+    t.rsplit(char::is_whitespace).next().unwrap_or("").trim_start_matches(|c: char| OPENING_QUOTES.contains(c)).to_lowercase()
 }
 
 /// Turkish, Azerbaijani (and Crimean Tatar) map `i`/`İ` and `ı`/`I` as pairs (#1923).
@@ -238,7 +244,7 @@ fn case_fix(caps: &AutoCorrectPrefs, word: &str, turkic: bool) -> Option<(usize,
     let rest = word.get(at..)?;
     let letters = rest.get(..rest.find(|c: char| !c.is_alphabetic()).unwrap_or(rest.len()))?;
     let tail = rest.get(letters.len()..)?;
-    if !word.get(..at)?.chars().all(|c| "\"'“‘([".contains(c)) || !tail.chars().all(|c| "\"'”’)]".contains(c)) {
+    if !word.get(..at)?.chars().all(|c| OPENING_QUOTES.contains(c)) || !tail.chars().all(|c| CLOSING_QUOTES.contains(c)) {
         return None;
     }
     let cs: Vec<char> = letters.chars().collect();
@@ -369,12 +375,45 @@ pub(super) const NOT_SENTENCE_END: &[&str] = &[
     "ltd.", "co.", "vol.", "a.m.", "p.m.",
 ];
 
+/// German abbreviations whose full stop doesn't end a sentence, used in German text on top of
+/// the list above (#735): `z.B. das`, `vgl. die`, `bzw. eine` keep their lowercase word.
+pub(super) const GERMAN_NOT_SENTENCE_END: &[&str] = &[
+    "abb.", "abs.", "allg.", "anm.", "bd.", "bspw.", "bzgl.", "bzw.", "d.h.", "evtl.", "geb.", "ggf.", "hrsg.", "i.d.r.", "inkl.", "insb.", "jh.",
+    "lt.", "mio.", "mrd.", "nr.", "o.ä.", "o.g.", "prof.", "s.", "s.o.", "s.u.", "sog.", "str.", "tel.", "u.a.", "u.ä.", "u.u.", "usw.", "v.a.",
+    "vgl.", "z.b.", "z.t.", "zzgl.",
+];
+
+/// The language of the text at byte `off` of the paragraph at `f`: the run's, else its paragraph
+/// style's, else the document default's (#835). Text with no language at all is in the editing
+/// language (a Polish interface writes Polish); `None` means none of these is set (English).
+/// AutoCorrect, smart quotes and proofing decide the text's language the same way.
+pub(crate) fn text_lang(s: &Session, f: &Pos, off: usize) -> Option<String> {
+    let lang = s.doc.para_at(f).and_then(|p| s.doc.styles.resolve_char(p.props.style.as_deref(), p.props_of_char(off)).lang);
+    lang.or_else(|| s.editing_lang.clone())
+}
+
+/// German in any region (`de`, `de-DE`, `de-AT`, `de-CH`, the ISO 639-2 codes `deu`/`ger`).
+pub(crate) fn is_german(tag: Option<&str>) -> bool {
+    let primary = tag.unwrap_or("").split(['-', '_']).next().unwrap_or("");
+    ["de", "deu", "ger"].iter().any(|d| primary.eq_ignore_ascii_case(d))
+}
+
 /// Names of days, capitalised as you type (Capitalize names of days).
 const DAYS: [&str; 7] = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
 
+/// What may follow a sentence's full stop (`„Hallo.“ Danach`) or precede its last word: brackets
+/// and the quotes of English, German (“ ‘ close) and Swiss German (» › close), either way round.
+const CLOSING_QUOTES: &str = "\"'”’“‘»›«‹)]";
+const OPENING_QUOTES: &str = "\"'“‘„‚«»‹›([";
+/// Quotes around the first word of a German sentence, which is then capitalised inside them. No
+/// brackets, and no straight apostrophe before the word.
+const SENTENCE_QUOTES_OPEN: &str = "\"“‘„‚«»‹›";
+const SENTENCE_QUOTES_CLOSE: &str = "\"'”’“‘»›«‹";
+
 /// Does a word typed after `before` (the paragraph text up to the word) begin a sentence?
-/// `exceptions` are the lowercase abbreviations whose full stop doesn't end one.
-fn starts_sentence(before: &str, exceptions: &[String]) -> bool {
+/// `exceptions` are the lowercase abbreviations whose full stop doesn't end one; with
+/// `ordinals`, neither does a number's (German `am 3. oktober`, `die 2. auflage`).
+fn starts_sentence(before: &str, exceptions: &[String], ordinals: bool) -> bool {
     let t = before.trim_end();
     if t.is_empty() {
         return true;
@@ -382,15 +421,16 @@ fn starts_sentence(before: &str, exceptions: &[String]) -> bool {
     if t.len() == before.len() {
         return false; // no space between the previous text and the word
     }
-    let t = t.trim_end_matches(|c: char| "\"'”’)]".contains(c));
+    let t = t.trim_end_matches(|c: char| CLOSING_QUOTES.contains(c));
     if !t.ends_with(['.', '!', '?']) || t.ends_with("..") || t.ends_with('…') {
         return false;
     }
-    let prev = t.rsplit(char::is_whitespace).next().unwrap_or(t).trim_start_matches(|c: char| "\"'“‘([".contains(c));
+    let prev = t.rsplit(char::is_whitespace).next().unwrap_or(t).trim_start_matches(|c: char| OPENING_QUOTES.contains(c));
     let lower = prev.to_lowercase();
     // "J." (an initial) or a known abbreviation.
     let initial = prev.chars().count() == 2 && prev.chars().next().is_some_and(char::is_uppercase);
-    !initial && !exceptions.contains(&lower)
+    let ordinal = ordinals && prev.strip_suffix('.').is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()));
+    !initial && !ordinal && !exceptions.contains(&lower)
 }
 
 /// Only plain lowercase words are capitalised (not "iPhone", "x2", file names or addresses).
