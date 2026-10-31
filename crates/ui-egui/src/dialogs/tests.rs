@@ -203,6 +203,17 @@ fn ui_dialog(app: &mut WordApp, name: &str) {
     let _ = app.run("ui.dialog", json!({"name": name}));
 }
 
+/// Insert › Field showing one kind of field's options (`codes`: Field Codes, the code typed in).
+fn field_dialog(app: &mut WordApp, name: &str, codes: bool) {
+    ui_dialog(app, "field");
+    if let Some(Dialog::Insert(d)) = &mut app.dialog
+        && let crate::dialogs_insert::InsertDialog::Field(f) = d.as_mut()
+    {
+        f.select(name);
+        f.codes = codes;
+    }
+}
+
 fn with_chart(app: &mut WordApp) {
     app.run("insert.chart", json!({"type": "doughnut"})).unwrap();
 }
@@ -218,6 +229,22 @@ const REACHED: &[Reached] = &[
         },
         click: &[],
     },
+    // Each kind of field shows its own options (the Date kind opens by name).
+    Reached { name: "field › a number", open: |a| field_dialog(a, "PAGE", false), click: &[] },
+    Reached {
+        name: "field › a bookmark",
+        open: |a| {
+            a.run("insert.bookmark", json!({"name": "Here"})).unwrap();
+            field_dialog(a, "REF", false);
+        },
+        click: &[],
+    },
+    Reached { name: "field › a sequence", open: |a| field_dialog(a, "SEQ", false), click: &[] },
+    Reached { name: "field › a merge field", open: |a| field_dialog(a, "MERGEFIELD", false), click: &[] },
+    Reached { name: "field › a table of contents", open: |a| field_dialog(a, "TOC", false), click: &[] },
+    Reached { name: "field › a style reference", open: |a| field_dialog(a, "STYLEREF", false), click: &[] },
+    Reached { name: "field › a plain field", open: |a| field_dialog(a, "AUTHOR", false), click: &[] },
+    Reached { name: "field › Field Codes", open: |a| field_dialog(a, "PAGE", true), click: &[] },
     Reached { name: "captionNumbering", open: |a| ui_dialog(a, "caption"), click: &["Numbering…"] },
     Reached { name: "newLabel", open: |a| ui_dialog(a, "caption"), click: &["New Label…"] },
     Reached { name: "tocOptions", open: |a| ui_dialog(a, "toc"), click: &["Options…"] },
