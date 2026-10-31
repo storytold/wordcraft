@@ -358,7 +358,7 @@ Recipient label generation (#4880) now includes all selected recipients across a
 | 2026-10-10 | trivial | #6: desktop File › Print opens the system PDF viewer (#286) |
 | 2026-10-10 | trivial | Table Properties dialog landed (#44); removed from the dialog-depth list |
 | 2026-10-10 | trivial | Merged main: landed features removed from the feature-gap list |
-| 2026-10-10 | minor | Beta note restated: full number back to the additive ~60% (method aligned with the standard, no new evidence) |
+| 2026-10-10 | minor | Beta note restated: full number back to the additive ~60% (no new evidence) |
 | 2026-10-11 | trivial | #491: vertical sections landed; vertical text removed from the East Asian gap |
 | 2026-10-10 | major | First version, from the full re-measure: 29 ranked gaps with evidence, impact and hours |
 | 2026-10-10 | trivial | #307: Draw tab pens, eraser and Hide Ink landed; ink gap narrowed |
