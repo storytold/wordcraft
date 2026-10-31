@@ -195,6 +195,8 @@ impl WordApp {
             quit_requested: _,
             autosave: _,
             zotero: _,
+            // GeenioAI: one connection and one request in flight for the app; it polls in any window.
+            assistant: _,
             ctx: _,
             read_aloud_error: _,
             saves_in_flight: _,
@@ -284,6 +286,8 @@ impl WordApp {
             print_backgrounds: _,
             update_fields_before_print: _,
             dictionary: _,
+            assistant_language: _,
+            assistant_model: _,
             // Where each task pane sits, and their order.
             styles_pane_dock: _,
             styles_pane_float: _,

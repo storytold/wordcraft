@@ -1,6 +1,6 @@
 # WordCraft architecture
 
-> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-28 · **Change:** major (crate and layer inventory, source counts, proofing languages and module boundaries re-measured from this checkout; previously minor: `proof` is per language: English and Polish; previously major: first committed version; `plan/architecture.md` is local-only) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-28 · **Change:** major (crate and layer inventory, source counts, proofing languages and module boundaries re-measured from this checkout; previously minor: new L5 crate `assistant`: GeenioAI's agent loop over the MCP tools; previously minor: `proof` is per language: English and Polish; previously major: first committed version; `plan/architecture.md` is local-only) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 How WordCraft is built today. The longer design notes in
 `plan/architecture.md` are gitignored and local to the original author's machine; this file is the
@@ -13,7 +13,8 @@ On 2026-10-28, `find crates apps xtask -type f -name '*.rs' -print0 | xargs -0 w
 members with `crates/*`, `apps/*` and `xtask`; `cargo xtask layers` verified 20 workspace packages
 (16 crates, 3 apps and `xtask`) and no layering violations. The layer and line counts below are
 from that command and per-directory `find ... -name '*.rs' ... | wc -l` counts on that date. Each
-crate name links to its source tree.
+crate name links to its source tree. GeenioAI adds two L5 crates, `fantastico` and `assistant`, counted the same
+way on 2026-10-30 (18 crates, 22 workspace packages).
 
 | Layer | Crate | Lines | Job |
 |---|---|---|---|
@@ -32,9 +33,11 @@ crate name links to its source tree.
 | L4 | [`engine`](../crates/engine/src) | 72,851 | `Session` and editing state; command registry in `cmd/`; file dispatch in `io`; catalog, keymap, recovery, ribbon model, speech and view state |
 | L5 | [`mcp`](../crates/mcp/src) | 1,822 | MCP server exposing commands as tools; headless or bridged to the running app |
 | L5 | [`zotero`](../crates/zotero/src) | 2,372 | Zotero word-processor integration protocol answered against a `Session` |
+| L5 | [`fantastico`](../crates/fantastico/src) | 396 | GeenioAI's model endpoint on a FANTASTICO account, with streaming replies (native only: a blocking HTTP transport under `fantastico-sdk`; `Class::Native`, left out of the wasm check) |
+| L5 | [`assistant`](../crates/assistant/src) | 865 | GeenioAI's agent loop over the MCP tools (`get_text`, `type_text`, `execute`…) against any backend; the model comes from the host as a `Provider`, no network code ([assistant.md](assistant.md)) |
 | L6 | [`ui-egui`](../crates/ui-egui/src) | 81,759 | Front end: ribbon, keytips, mini-toolbar, Backstage, canvas, rulers, panes, dialogs, i18n, themes, control channel and headless `ui_shot` example |
-| apps | [`wordcraft`](../apps/wordcraft/src) | 3,740 | Desktop app (eframe + wgpu; logging, window geometry and file associations) |
-| apps | [`wordcraft-cli`](../apps/wordcraft-cli/src) | 1,901 | `convert`, `text`, `inspect`, `run`, `commands`, `parity`, `mcp` and `zotero` |
+| apps | [`wordcraft`](../apps/wordcraft/src) | 3,740 | Desktop app (eframe + wgpu; logging, window geometry and file associations; GeenioAI's FANTASTICO host and key store) |
+| apps | [`wordcraft-cli`](../apps/wordcraft-cli/src) | 1,901 | `convert`, `text`, `inspect`, `run`, `commands`, `parity`, `mcp`, `zotero` and `ask` |
 | apps | [`wordcraft-web`](../apps/wordcraft-web/src) | 1,159 | Browser build (eframe web runner, WebGPU with WebGL2 fallback) |
 | tooling | [`xtask`](../xtask/src) | 1,488 | Workspace maintenance and quality-gate commands, including `layers` |
 
@@ -70,5 +73,7 @@ crate name links to its source tree.
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-28 | major | Recounted workspace crates, layers and Rust source lines; refreshed proofing languages and documented current engine/layout module boundaries and source links |
+| 2026-10-18 | minor | New native L5 crate `fantastico` (streaming provider); `Class::Native` for crates that don't build for the web |
+| 2026-10-18 | minor | New L5 crate `assistant` (agent loop over the MCP tools, no network code); the desktop app hosts it on a FANTASTICO account, the CLI gains `ask` |
 | 2026-10-10 | minor | `proof`: proofing languages (English, Polish), affix engine, Polish patterns; layout and engine route each run by its language |
 | 2026-10-10 | major | First committed architecture doc, from the crates' sources and `AGENTS.md` |

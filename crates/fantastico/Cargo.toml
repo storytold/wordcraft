@@ -1,0 +1,17 @@
+[package]
+name = "wordcraft-fantastico"
+description = "GeenioAI's model endpoint: a FANTASTICO account as a streaming `Provider` (native only)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+wordcraft-assistant = { workspace = true }
+fantastico-sdk = { workspace = true }
+# The streaming transport: the same blocking HTTP stack the SDK's own transport uses.
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+serde_json = { workspace = true }
+log = { workspace = true }

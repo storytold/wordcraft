@@ -24,6 +24,7 @@ macro_rules! tl {
 
 pub mod a11y;
 pub mod a11y_pane;
+pub mod assistant;
 pub mod async_saves;
 pub mod autoscroll;
 pub mod backstage;
@@ -280,6 +281,10 @@ pub struct UiState {
     pub update_fields_before_print: bool,
     /// The custom dictionary (File › Options › Proofing, Add to Dictionary), kept between runs.
     pub dictionary: Vec<String>,
+    /// GeenioAI (AI assistant) settings: the reply language (`auto`, `interface`, `en`) and the chosen
+    /// model (empty: the account's suggestion). The assistant owns them while running.
+    pub assistant_language: String,
+    pub assistant_model: String,
 }
 
 /// The ribbon tab the app opens on, and the one it falls back to when the tab that was showing
@@ -355,6 +360,8 @@ impl Default for UiState {
             print_backgrounds: false,
             update_fields_before_print: false,
             dictionary: Vec::new(),
+            assistant_language: "auto".into(),
+            assistant_model: String::new(),
         }
     }
 }
@@ -585,6 +592,8 @@ pub struct WordApp {
     pub(crate) outline_prev_tab: Option<String>,
     /// Zotero commands in flight (`ui.zotero.*`).
     pub zotero: zotero::ZoteroLink,
+    /// GeenioAI, the AI assistant pane and margin icon ([`assistant`]).
+    pub assistant: assistant::Assistant,
     /// The egui context, once the first frame has run (background work wakes the UI with it).
     pub(crate) ctx: Option<egui::Context>,
     /// Whether the current command was entered by an input method's own transaction. The engine

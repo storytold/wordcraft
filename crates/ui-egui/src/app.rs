@@ -131,6 +131,7 @@ impl WordApp {
             quit_requested: false,
             autosave: true,
             zotero: zotero::ZoteroLink::default(),
+            assistant: crate::assistant::Assistant::default(),
             ctx: None,
             ime_origin: false,
             read_aloud_error: None,
@@ -363,6 +364,7 @@ impl WordApp {
                 self.print_feedback();
             }
         }
+        crate::assistant::tick(self, ctx);
         zotero::poll(self, ctx);
         read_aloud::poll(self, ctx);
         self.clear_stale_change_picture();

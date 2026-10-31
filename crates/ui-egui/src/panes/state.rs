@@ -49,6 +49,7 @@ pub fn open(app: &WordApp) -> Vec<Pane> {
         (Pane::FormatShape, v.format_shape_pane),
         (Pane::RestrictEditing, app.restrict.open),
         (Pane::Comments, v.comments_pane),
+        (Pane::Assistant, app.assistant.open),
     ]
     .into_iter()
     .filter_map(|(pane, shown)| shown.then_some(pane))

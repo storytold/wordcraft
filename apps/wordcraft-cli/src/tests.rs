@@ -543,3 +543,111 @@ fn script_parse_resolves_paths_against_the_base() {
     assert_eq!(s.save, vec!["o.docx".to_string()]);
     assert_eq!(s.commands.len(), 1);
 }
+
+/// Neither failure hides the other.
+#[test]
+fn ask_reports_both_the_turn_and_the_save_when_both_fail() {
+    let both = ask_result(Err("the model failed".into()), Some(Err("out.docx: disk full".into()))).unwrap_err();
+    assert!(both.contains("the model failed") && both.contains("disk full"), "{both}");
+    assert_eq!(ask_result(Err("t".into()), Some(Ok("out.docx".into()))), Err("t".into()));
+    assert_eq!(ask_result(Ok(()), Some(Err("s".into()))), Err("s".into()));
+    assert_eq!(ask_result(Ok(()), Some(Ok("out.docx".into()))), Ok(()));
+    assert_eq!(ask_result(Ok(()), None), Ok(()));
+}
+
+/// `ask … | head -1`: the reader leaves, the document is still written.
+#[test]
+fn ask_saves_even_when_stdout_is_closed() {
+    let mut saved = false;
+    let r = finish_ask(
+        Ok("hi".into()),
+        "",
+        |_| Err(Failure::StdoutClosed),
+        || {
+            saved = true;
+            Some(Ok("out.docx".into()))
+        },
+    );
+    assert!(saved);
+    assert_eq!(r, Err(Failure::StdoutClosed));
+    // A failed save is the error worth reporting, not the closed stdout.
+    let r = finish_ask(Ok("hi".into()), "", |_| Err(Failure::StdoutClosed), || Some(Err("out.docx: disk full".into())));
+    assert_eq!(r, Err(Failure::Error("out.docx: disk full".into())));
+    // What was streamed isn't printed again; what wasn't follows on its own line.
+    let mut shown = Vec::new();
+    for (reply, streamed) in [("hi", "hi"), ("hi there", "hi")] {
+        let print = |t: &str| {
+            shown.push(t.to_string());
+            Ok(())
+        };
+        finish_ask(Ok(reply.into()), streamed, print, || None).unwrap();
+    }
+    assert_eq!(shown, ["", "\nhi there"]);
+}
+
+/// A bad output is caught before any work (`run`, and `ask` before the model is asked).
+#[test]
+fn outputs_are_checked_before_the_work() {
+    let doc = wordcraft_doc::Document::new();
+    let dir = std::env::temp_dir();
+    let e = check_output(&dir.join("no-such-folder-wc").join("out.docx").to_string_lossy(), &doc).unwrap_err();
+    assert!(e.contains("does not exist"), "{e}");
+    assert!(check_output(&dir.to_string_lossy(), &doc).unwrap_err().contains("folder"));
+    assert!(check_output(&dir.join("out.nosuchformat").to_string_lossy(), &doc).is_err());
+    assert!(check_output(&dir.join("out.docx").to_string_lossy(), &doc).is_ok());
+    assert!(check_output(&dir.join("out.png").to_string_lossy(), &doc).is_ok());
+}
+
+/// `ask`'s assistant reaches no file without a root, and only the root's files with one.
+#[test]
+fn the_ask_assistant_touches_no_file_outside_its_roots() {
+    use wordcraft_mcp::Backend;
+    let dir = std::env::temp_dir().join(format!("wordcraft-cli-ask-roots-{}", std::process::id()));
+    let inside = dir.join("in");
+    std::fs::create_dir_all(&inside).unwrap();
+    let mut doc = Session::new(wordcraft_doc::Document::new());
+    doc.run("text.insert", &json!({"text": "hi"})).unwrap();
+    let file = inside.join("a.txt");
+    doc.run("file.save", &json!({"path": file.to_string_lossy()})).unwrap();
+    let open = json!({"command": "file.open", "params": {"path": file.to_string_lossy()}});
+    let e = ask_backend(None).call("engine.execute", open.clone()).unwrap_err();
+    assert!(e.contains("not granted"), "{e}");
+    let save = json!({"command": "file.save", "params": {"path": dir.join("out.txt").to_string_lossy()}});
+    assert!(ask_backend(None).call("engine.execute", save.clone()).is_err());
+    let (roots, left) = automation_roots("ask", &args(&["p", "--automation-read-root", &inside.to_string_lossy()])).unwrap();
+    assert_eq!(left, ["p"]);
+    let mut confined = ask_backend(roots);
+    assert!(confined.call("engine.execute", open).is_ok());
+    assert!(confined.call("engine.execute", save).is_err(), "no write root, no writing");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn ask_takes_one_prompt_and_options() {
+    let a =
+        parse_ask_args(&args(&["draft a letter", "--template", "letter", "--model", "m", "--max-steps", "5", "--yes", "--save", "o.docx"])).unwrap();
+    assert_eq!(a.prompt, "draft a letter");
+    assert!(a.yes);
+    assert_eq!((a.template.as_deref(), a.model.as_deref(), a.max_steps, a.save.as_deref()), (Some("letter"), Some("m"), Some(5), Some("o.docx")));
+    assert!(validate_options("ask", &args(&["p", "--file", "in.docx", "--author", "Claude"]), ASK_OPTIONS).is_ok());
+    for bad in [
+        &[][..],
+        &["  "],
+        &["a", "b"],
+        &["p", "--model"],
+        &["p", "--model", "--yes"],
+        &["p", "--max-steps", "0"],
+        &["p", "--max-steps", "99999999999999999999999"],
+        &["p", "--max-steps", "-1"],
+        &["p", "--file", "a.docx", "--template", "letter"],
+        &["p", "--frobnicate"],
+    ] {
+        assert!(parse_ask_args(&args(bad)).is_err(), "{bad:?}");
+    }
+    // Without a key nothing is sent and the error says where the key goes.
+    let had = std::env::var_os("FANTASTICO_KEY");
+    if had.is_none() {
+        let e = run(&args(&["ask", "hello"])).unwrap_err().to_string();
+        assert!(e.contains("FANTASTICO_KEY"), "{e}");
+    }
+}

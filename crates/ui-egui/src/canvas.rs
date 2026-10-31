@@ -32,9 +32,9 @@ use balloons::balloon_text;
 use balloons::{balloons, dashed, over_balloon};
 pub use balloons::{deselect_balloon, select_balloon};
 use context_menu::{context_menu, context_suggestions};
+pub use cursor::{assistant_anchor, caret_screen, pos_from_screen};
 use cursor::{caret_color_at, preedit_cursor_chars};
 pub(crate) use cursor::{caret_color_on, caret_contrast};
-pub use cursor::{caret_screen, pos_from_screen};
 pub(crate) use geometry::SEAM;
 #[cfg(test)]
 pub(crate) use geometry::WHITE_SPACE_PAD;
@@ -1277,6 +1277,8 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
     {
         crate::mini_toolbar::show(app, ui.ctx(), sel, out.inner_rect);
     }
+    // The AI Assistant's icon in the margin beside the caret's paragraph, as Word's Copilot icon.
+    crate::assistant::floating_icon(app, ui.ctx(), area);
     if app.session.view.read_mode {
         // Fixed navigation chrome, independent of the horizontally moving columns.
         let step = app.session.view.read_width * app.canvas.scale + GAP;

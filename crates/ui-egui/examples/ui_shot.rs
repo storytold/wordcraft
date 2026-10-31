@@ -9,9 +9,46 @@
 //! background work such as a Zotero session). The window is 1440×900 pt at 2× and opens the sample
 //! document unless the first line is `{"empty": true}`; `{"empty": true, "startScreen": true}`
 //! starts the way the desktop app does with nothing to open (File › Home, #766).
+//! `{"assistant": "demo"}` on the first line attaches a stand-in account to GeenioAI, the AI assistant (a
+//! key set, a model that answers every request with one sentence), so the pane and the margin
+//! icon can be looked at without a FANTASTICO account.
 
 use wordcraft_engine::Session;
+use wordcraft_ui_egui::assistant::{Account, AssistantEvent, AssistantHost, ModelInfo, Service};
 use wordcraft_ui_egui::{ControlRequest, Services, WordApp};
+
+/// GeenioAI's stand-in account for screenshots.
+struct DemoHost;
+
+impl AssistantHost for DemoHost {
+    fn service(&self) -> Service {
+        Service { name: "Demo accounts".into(), url: "https://example.org/".into(), key_prefix: "ck-fant-".into() }
+    }
+    fn has_key(&self) -> bool {
+        true
+    }
+    fn connect(&self, _: String) -> Result<Account, String> {
+        Err("the demo account can't be changed".into())
+    }
+    fn change_key(&self, _: String) -> Result<Account, String> {
+        Err("the demo account can't be changed".into())
+    }
+    fn account(&self) -> Option<Account> {
+        Some(Account { conto_id: "demo".into(), model: "demo/model".into(), remaining_usd: Some(12.5) })
+    }
+    fn models(&self) -> Result<Vec<ModelInfo>, String> {
+        Ok(vec![ModelInfo { id: "demo/model".into(), name: Some("Demo model".into()), output_usd_per_million: Some(3.0) }])
+    }
+    fn provider(&self) -> Result<(Box<dyn wordcraft_assistant::Provider + Send>, String), String> {
+        let replies =
+            std::iter::repeat_n(wordcraft_assistant::text_reply("This is the demo model: I read the request and would carry it out here."), 50);
+        Ok((Box::new(wordcraft_assistant::Scripted::new(replies)), "demo/model".into()))
+    }
+    fn balance(&self) -> Option<f64> {
+        Some(12.5)
+    }
+    fn event(&self, _: &AssistantEvent) {}
+}
 
 static READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -28,6 +65,9 @@ fn main() {
     };
     let mut app = WordApp::new(Session::new(doc), Services::default()).with_control(rx);
     app.integrated_titlebar = true;
+    if lines.first().and_then(|l| l.get("assistant")).and_then(|v| v.as_str()) == Some("demo") {
+        app.assistant.set_host(std::sync::Arc::new(DemoHost));
+    }
     if lines.first().is_some_and(|l| l.get("startScreen").is_some()) {
         app.start_screen();
     }
