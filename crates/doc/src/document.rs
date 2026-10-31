@@ -131,6 +131,9 @@ impl Document {
     /// that changed was copied and has another address. Comparing them by value would walk
     /// the whole document, and this is asked after every command.
     ///
+    /// Styles and numbering are shared the same way: one `Arc` held by both documents is equal
+    /// without a walk, and distinct `Arc`s still compare by content.
+    ///
     /// Every field is listed, so a new one does not build until someone decides whether a
     /// change to it counts (the same rule the session's edit snapshot follows).
     pub fn same_content(&self, other: &Document) -> bool {
@@ -175,8 +178,8 @@ impl Document {
         same_blocks(body, other_body)
             && same_parts(parts, other_parts)
             && last_section == other_section
-            && styles == other_styles
-            && numbering == other_numbering
+            && (Arc::ptr_eq(styles, other_styles) || styles == other_styles)
+            && (Arc::ptr_eq(numbering, other_numbering) || numbering == other_numbering)
             && comments == other_comments
             && revisions == other_revisions
             && settings == other_settings

@@ -82,9 +82,10 @@ fn word_count_includes_numbered_labels_with_nothing_suffix() {
 #[test]
 fn word_count_keeps_a_cjk_list_label_one_word() {
     let mut d = Document::new();
-    let num_id = d.numbering.add_list(ListKind::Numbered);
-    let aid = d.numbering.num(num_id).expect("list num exists").abstract_id;
-    let a = d.numbering.abstracts.iter_mut().find(|a| a.id == aid).expect("abstract num exists");
+    let numbering = Arc::make_mut(&mut d.numbering);
+    let num_id = numbering.add_list(ListKind::Numbered);
+    let aid = numbering.num(num_id).expect("list num exists").abstract_id;
+    let a = numbering.abstracts.iter_mut().find(|a| a.id == aid).expect("abstract num exists");
     a.levels[0].format = section::NumFormat::ChineseCounting;
     a.levels[0].text = "第%1章".into();
     a.levels[0].start = 12;
@@ -212,6 +213,22 @@ fn clone_is_shallow() {
     assert!(Arc::ptr_eq(&d.body[0], &e.body[0]));
     assert!(!Arc::ptr_eq(&d.body[1], &e.body[1]));
     assert_eq!(d.plain_text(StoryRef::Body), "a\nb");
+}
+
+/// Shared `Arc`s compare equal by address; distinct `Arc`s with equal contents compare equal by value.
+#[test]
+fn same_content_shared_and_distinct_arcs() {
+    let d = Document::from_text("Hello");
+    let shared = d.clone();
+    assert!(Arc::ptr_eq(&d.styles, &shared.styles) && Arc::ptr_eq(&d.numbering, &shared.numbering));
+    assert!(d.same_content(&shared), "documents sharing the same Arcs");
+    let mut distinct = d.clone();
+    distinct.styles = Arc::new((*d.styles).clone());
+    distinct.numbering = Arc::new((*d.numbering).clone());
+    assert!(!Arc::ptr_eq(&d.styles, &distinct.styles) && !Arc::ptr_eq(&d.numbering, &distinct.numbering));
+    assert!(d.same_content(&distinct), "equal contents in distinct Arcs");
+    Arc::make_mut(&mut distinct.styles).get_mut("Normal").unwrap().chr.bold = Some(true);
+    assert!(!d.same_content(&distinct), "different contents still differ");
 }
 
 /// [`Document::same_content`] is what tells the engine that a command changed nothing: it
