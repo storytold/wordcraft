@@ -25,7 +25,8 @@ wordcraft-fonts = { workspace = true }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # `wgpu` pulls egui-wgpu's defaults: WebGPU plus the WebGL2 fallback.
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit"] }
-rfd = { workspace = true }
+# `file-handle-inner` gives the picked `File`, whose size is checked before it is read (#1333).
+rfd = { workspace = true, features = ["file-handle-inner"] }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"

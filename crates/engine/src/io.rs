@@ -429,9 +429,23 @@ pub fn open_path_in(path: &std::path::Path, password: Option<&str>, region: &wor
     open_bytes_in(&name, &bytes, password, region)
 }
 
+/// The most bytes of a document (or any file opened by path) that is read into memory.
+pub const MAX_OPEN_BYTES: u64 = 2 << 30;
+
+/// `max` for an error message: whole gigabytes (when exact), else megabytes, else bytes.
+pub fn limit_text(max: u64) -> String {
+    if max >= 1 << 30 && max.is_multiple_of(1 << 30) {
+        format!("{} GB", max >> 30)
+    } else if max >= 1 << 20 {
+        format!("{} MB", max >> 20)
+    } else {
+        format!("{max} bytes")
+    }
+}
+
 /// Largest document file opened by path.
 #[cfg(not(target_arch = "wasm32"))]
-const MAX_DOCUMENT: u64 = 2 << 30;
+const MAX_DOCUMENT: u64 = MAX_OPEN_BYTES;
 
 /// The bytes of the document at `path`, read as `file.open` reads a path: inside the automation
 /// read root, and only a regular file of at most 2 GB. A named pipe would block the open and a
@@ -789,4 +803,88 @@ pub fn save_path_with(path: &std::path::Path, _doc: &Document, _password: Option
 /// [`wordcraft_formats::txt::decode`]).
 pub fn decode_text(b: &[u8]) -> String {
     wordcraft_formats::txt::decode(b)
+}
+
+#[cfg(all(test, unix))]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod ingress_tests {
+    use super::*;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    /// Runs `f` on a thread and fails (instead of hanging the run) if it does not finish.
+    fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(f());
+        });
+        rx.recv_timeout(Duration::from_secs(5)).expect("read blocked on a non-regular file")
+    }
+
+    /// A scratch folder that is removed when the test ends, pass or fail.
+    struct Scratch(std::path::PathBuf);
+
+    impl std::ops::Deref for Scratch {
+        type Target = std::path::Path;
+        fn deref(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn scratch(name: &str) -> Scratch {
+        let dir = std::env::temp_dir().join(format!("wc1333-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        Scratch(dir)
+    }
+
+    fn fifo(dir: &std::path::Path) -> Option<std::path::PathBuf> {
+        let p = dir.join("pipe.docx");
+        std::process::Command::new("mkfifo").arg(&p).status().ok()?.success().then_some(p)
+    }
+
+    #[test]
+    fn open_path_in_rejects_a_directory() {
+        let dir = scratch("dir");
+        let d = dir.to_path_buf();
+        let r = within(move || open_path_in(&d, None, &wordcraft_geom::Region::default()));
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn open_path_in_rejects_a_fifo_without_blocking() {
+        let dir = scratch("fifo-open");
+        let Some(p) = fifo(&dir) else { return };
+        let r = within(move || open_path_in(&p, None, &wordcraft_geom::Region::default()));
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn read_file_capped_rejects_a_fifo_without_blocking() {
+        let dir = scratch("fifo-capped");
+        let Some(p) = fifo(&dir) else { return };
+        let r = within(move || read_file_capped(&p.to_string_lossy(), 1 << 20, "font"));
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn read_file_head_rejects_a_fifo_without_blocking() {
+        let dir = scratch("fifo-head");
+        let Some(p) = fifo(&dir) else { return };
+        let r = within(move || read_file_head(&p.to_string_lossy(), 16));
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn limits_read_in_the_largest_whole_unit() {
+        assert_eq!(limit_text(2 << 30), "2 GB");
+        assert_eq!(limit_text(200 << 20), "200 MB");
+        assert_eq!(limit_text(10), "10 bytes");
+    }
 }
