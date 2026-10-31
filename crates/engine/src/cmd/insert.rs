@@ -17,8 +17,8 @@ pub(crate) use header_footer::saved_copy;
 use header_footer::{create_hf, edit_hf, header_footer, new_empty_headers, strip_headers};
 pub use items::{DropCapState, drop_cap_state, format_date, format_date_parts};
 use items::{cover_page, date_time, drop_cap, drop_cap_off, field, page_number, symbol};
-use links::{bookmark, delete_bookmark, link, link_targets};
-pub use links::{bookmark_name_ok, bookmark_range, bookmark_span};
+pub use links::{LinkSpan, bookmark_name_ok, bookmark_range, bookmark_span, link_at_selection};
+use links::{bookmark, delete_bookmark, edit_link, link, link_targets};
 pub use objects::{base64_decode, base64_encode};
 use objects::{icon, shape, table, text_box};
 pub(crate) use objects::{image_ext, picture};
@@ -53,6 +53,9 @@ pub fn specs() -> Vec<CommandSpec> {
             }),
         CommandSpec::new("insert.link", "Link", "Insert › Links", link).key("Mod+K").params(
             r#"{"url": string} | {"bookmark": name} | {"heading": block (see link.targets)} | {"top": true}, "text"?: string (Place in This Document: a bookmark, a heading or the top of the document)"#,
+        ),
+        CommandSpec::new("insert.editLink", "Edit Hyperlink", "Insert › Links", edit_link).params(
+            r#"{"url": string} | {"bookmark": name} | {"heading": block (see link.targets)} | {"top": true}, "text"?: string (empty shows the target)"#,
         ),
         CommandSpec::new("link.targets", "Link", "Insert › Links", link_targets).pure(),
         CommandSpec::new("insert.removeLink", "Remove Hyperlink", "Insert › Links", |s, _| super::format::apply(s, &|c| {

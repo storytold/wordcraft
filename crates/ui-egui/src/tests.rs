@@ -1005,6 +1005,42 @@ fn find_shortcut_focuses_find_what() {
     assert!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).is_empty(), "nothing was typed into the document");
 }
 
+/// #4974: on a link, the dialog holds that link, and OK changes it instead of adding another.
+#[test]
+fn hyperlink_shortcut_on_a_link_edits_it() {
+    let ctx = egui::Context::default();
+    let mut a = app();
+    a.run("text.insert", json!({"text": "See Kiln here"})).unwrap();
+    a.run("select.text", json!({"text": "Kiln"})).unwrap();
+    a.run("insert.link", json!({"url": "https://old.example"})).unwrap();
+    a.run("select.text", json!({"text": "il"})).unwrap();
+    a.session.sel = wordcraft_engine::Selection::caret(a.session.sel.focus.clone());
+    let frame = |a: &mut WordApp, events: Vec<egui::Event>| {
+        ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
+            a.logic(ui.ctx());
+            a.ui(ui);
+        })
+        .drop_without_applying_deltas();
+    };
+    for _ in 0..3 {
+        frame(&mut a, Vec::new());
+    }
+    let key = |key, modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
+    frame(&mut a, vec![key(egui::Key::K, egui::Modifiers::COMMAND)]);
+    for _ in 0..2 {
+        frame(&mut a, Vec::new());
+    }
+    let Some(dialogs::Dialog::Link { url, text, edit, .. }) = &a.dialog else { panic!("no Link dialog") };
+    assert_eq!((url.as_str(), text.as_str(), *edit), ("https://old.example", "Kiln", true));
+    frame(&mut a, vec![egui::Event::Paste("https://new.example".into())]);
+    frame(&mut a, vec![key(egui::Key::Enter, egui::Modifiers::NONE)]);
+    frame(&mut a, Vec::new());
+    assert!(a.dialog.is_none(), "OK closes the dialog");
+    assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body), "See Kiln here");
+    let found = wordcraft_engine::cmd::insert::link_at_selection(&a.session).unwrap();
+    assert_eq!((found.url.as_str(), found.text.as_str()), ("https://new.example", "Kiln"));
+}
+
 /// #1610: opening a hyperlink must direct typing and paste into its address.
 #[test]
 fn hyperlink_shortcut_focuses_address_and_preserves_document() {

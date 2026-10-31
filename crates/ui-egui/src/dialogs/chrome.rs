@@ -85,6 +85,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::Find { .. } => "Find and Replace",
         Dialog::InsertTable { .. } => "Insert Table",
         Dialog::PageSetup { .. } => "Page Setup",
+        Dialog::Link { edit: true, .. } => "Edit Hyperlink",
         Dialog::Link { .. } => "Insert Hyperlink",
         Dialog::Bookmark { .. } => "Bookmark",
         Dialog::WordCount { .. } => "Word Count",
