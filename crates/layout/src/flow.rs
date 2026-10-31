@@ -266,36 +266,15 @@ impl<'a> Flow<'a> {
     }
 
     /// `before`, the space before the paragraph, with the previous paragraph (`prev`) taken into account.
-    fn merge_gap(&self, ctx: &Ctx, pb: &mut PageBuilder, mut before: f32, prev: (String, bool, f32, bool, bool)) -> f32 {
-        let (style, ctxl, mut after, after_auto, listed) = prev;
-        let rp = &self.pl.rp;
-        // Contextual spacing suppresses each paragraph's own side of the gap.
-        if style == rp.style {
-            if ctxl {
-                pb.y -= after;
-                before = (before - after).max(0.0);
-                after = 0.0;
-            }
-            if rp.contextual_spacing {
-                before = 0.0;
-            }
-        }
-        // Automatic spacing: none between two list items (as in an HTML list; measured in Word:
-        // any two items, of one list or two, at any level).
-        if listed && self.label.is_some() {
-            if after_auto {
-                pb.y -= after;
-                after = 0.0;
-            }
-            if rp.before_auto {
-                before = 0.0;
-            }
-        }
-        // The space between two paragraphs is the larger of the first's space after and the
-        // second's space before, not their sum.
-        if before > 0.0 && after > 0.0 && !ctx.doc.settings.sum_paragraph_spacing {
-            before = (before - after).max(0.0);
-        }
+    fn merge_gap(&self, ctx: &Ctx, pb: &mut PageBuilder, before: f32, prev: (String, bool, f32, bool, bool)) -> f32 {
+        let (after, before) = paragraph_gap(
+            ctx.doc.settings.sum_paragraph_spacing,
+            before,
+            &self.pl.rp,
+            self.label.is_some(),
+            (&prev.0, prev.1, prev.2, prev.3, prev.4),
+        );
+        pb.y -= prev.2 - after;
         before
     }
 
@@ -317,9 +296,10 @@ impl<'a> Flow<'a> {
         if !(rp.keep_lines || (rp.keep_next && pb.y + height - own_leading <= pb.bottom + 0.01)) {
             return before;
         }
-        // The next paragraph starts below this one's space after (what of it is left there).
+        // Lookahead already includes the next paragraph's before-space. Adjust it to the same
+        // collapsed, contextual or automatic gap that actual placement will leave between them.
         let gap = if matches!(ctx.doc.body.get(self.block + 1).map(|b| &**b), Some(Block::Para(_))) {
-            space_after_kept(ctx, self.block, rp, self.label.is_some())
+            kept_gap_adjustment(ctx, self.block, rp, self.label.is_some())
         } else {
             0.0
         };
@@ -868,6 +848,55 @@ fn mirror_shift(rp: &wordcraft_doc::resolve::ResolvedPara, number: u32, web: boo
     right - left
 }
 
+/// The after-space retained from the previous paragraph and the before-space applied to this
+/// one. Placement and keep-with-next lookahead must use the same spacing rules.
+fn paragraph_gap(
+    sum: bool,
+    mut before: f32,
+    rp: &wordcraft_doc::resolve::ResolvedPara,
+    listed: bool,
+    (style, contextual, mut after, after_auto, previous_listed): (&str, bool, f32, bool, bool),
+) -> (f32, f32) {
+    if style == rp.style.as_str() {
+        if contextual {
+            before = (before - after).max(0.0);
+            after = 0.0;
+        }
+        if rp.contextual_spacing {
+            before = 0.0;
+        }
+    }
+    // Automatic spacing disappears between list items, including different lists or levels.
+    if previous_listed && listed {
+        if after_auto {
+            after = 0.0;
+        }
+        if rp.before_auto {
+            before = 0.0;
+        }
+    }
+    if before > 0.0 && after > 0.0 && !sum {
+        before = (before - after).max(0.0);
+    }
+    (after, before)
+}
+
+/// Replace the next paragraph's raw before-space (already included by `next_first_line`)
+/// with the effective gap on both sides. The adjustment may be negative when spacing is
+/// suppressed. Non-paragraph boundaries keep the existing chained after-space contract.
+fn kept_gap_adjustment(ctx: &Ctx, block: usize, rp: &wordcraft_doc::resolve::ResolvedPara, listed: bool) -> f32 {
+    let Some(Block::Para(next)) = ctx.doc.body.get(block + 1).map(|b| &**b) else { return rp.space_after };
+    let next_rp = ctx.doc.styles.resolve_para(&next.props);
+    let (after, before) = paragraph_gap(
+        ctx.doc.settings.sum_paragraph_spacing,
+        next_rp.space_before,
+        &next_rp,
+        ctx.has_label(next),
+        (&rp.style, rp.contextual_spacing, rp.space_after, rp.after_auto, listed),
+    );
+    after + before - next_rp.space_before
+}
+
 /// The space after body paragraph `block` (resolved as `rp`) that is really left below it: none
 /// when contextual spacing or automatic spacing between list items drops it before the next
 /// paragraph. Same tests as the spacing between paragraphs in `place_para_in_flow`: contextual
@@ -905,6 +934,7 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counte
             let rp = ctx.doc.styles.resolve_para(&p.props);
             let label =
                 p.props.numbering.or(rp.numbering).filter(|n| n.num != 0).and_then(|n| counters.next_label(&ctx.doc.numbering, n.num, n.level));
+            let listed = label.is_some();
             let pl = match ctx.para_ahead(p, width, label.clone()) {
                 Some(pl) => pl,
                 None => {
@@ -936,7 +966,8 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counte
             if pl.rp.keep_next && depth < 8 {
                 let bottom = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block + 2), None) { 0.0 } else { own.bottom };
                 let (next, leading) = next_first_line(ctx, block + 1, width, depth + 1, counters);
-                (pl.rp.space_before + top + pl.height + bottom + pl.rp.space_after + next, leading)
+                let gap = kept_gap_adjustment(ctx, block + 1, &pl.rp, listed);
+                (pl.rp.space_before + top + pl.height + bottom + gap + next, leading)
             } else {
                 // The room this one needs to start on the page with the kept paragraph before
                 // it (#966).
