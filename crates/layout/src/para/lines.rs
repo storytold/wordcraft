@@ -3,7 +3,7 @@ use super::grid::{Exclusion, Grid};
 use super::justify::{HYPHENATION_ZONE, hyphen_glyph, shrink_line_spaces, space_room};
 use super::model::{ClKind, Cluster, Line, LineEnd, ParaEnv};
 use super::paragraph::word_widths;
-use super::tabs::{decimal_position, next_tab, ptab_stop, resolve_tab};
+use super::tabs::{next_tab, ptab_stop, resolve_tab};
 use super::{Align, Arc, Level, LevelSuffix, LineSpacing, MathJc, ParaLayout, TabAlign, TabLeader, TabStop, VecDeque, WrapText};
 
 /// Narrow cells and float spans must retain their usable width.
@@ -94,6 +94,10 @@ struct Scan {
     j: usize,
     /// Tab cluster, stop, and x where the tab started.
     pending_tab: Option<(usize, TabStop, f32)>,
+    /// Uncompressed width before the first decimal separator in the pending segment.
+    decimal_prefix: f32,
+    /// First decimal separator and its uncompressed preceding width.
+    decimal_dot: Option<(usize, f32)>,
     /// The width of the spaces so far on this line.
     space_w: f32,
     has_tab: bool,
@@ -389,6 +393,8 @@ impl<'e> Breaker<'e> {
             end: LineEnd::Para,
             j: self.i,
             pending_tab: None,
+            decimal_prefix: 0.0,
+            decimal_dot: None,
             space_w: 0.0,
             has_tab: false,
             compressed: Vec::new(),
@@ -963,6 +969,8 @@ impl Scan {
             }
             _ => self.pending_tab = Some((j, stop, self.x)),
         }
+        self.decimal_prefix = 0.0;
+        self.decimal_dot = None;
         if stop.leader != TabLeader::None {
             self.leaders.push((j, stop.leader));
         }
@@ -978,9 +986,8 @@ impl Scan {
             TabAlign::Right => stop.pos - tx - seg,
             TabAlign::Center => stop.pos - tx - seg / 2.0,
             TabAlign::Decimal => {
-                let width = decimal_position(pl, tj, self.j)
-                    .map(|(dot, width)| width - decimal_compression(&self.compressed, tj, Some(dot), extra))
-                    .unwrap_or(seg);
+                let dot = self.decimal_dot.or_else(|| pl.clusters.get(self.j).filter(|c| c.dot).map(|_| (self.j, self.decimal_prefix)));
+                let width = dot.map(|(dot, width)| width - decimal_compression(&self.compressed, tj, Some(dot), extra)).unwrap_or(seg);
                 stop.pos - tx - width
             }
             _ => return None,
@@ -1064,6 +1071,7 @@ impl Scan {
             self.space_w += c.adv;
         }
         self.shift_pending_tab(pl);
+        self.note_decimal_cluster(c);
         if is_display {
             self.end_display(pl, bk.n);
             return true;
@@ -1080,6 +1088,39 @@ impl Scan {
     fn finish_pending_tab(&mut self, pl: &mut ParaLayout) {
         self.shift_pending_tab(pl);
         self.pending_tab = None;
+        self.decimal_dot = None;
+        self.decimal_prefix = 0.0;
+    }
+
+    /// The scan keeps original advances; provisional compression is subtracted only when
+    /// predicting a tab width, exactly as in the former segment scan.
+    fn note_decimal_cluster(&mut self, c: &Cluster) {
+        if self.pending_tab.is_some_and(|(_, stop, _)| stop.align == TabAlign::Decimal) && self.decimal_dot.is_none() {
+            if c.dot {
+                self.decimal_dot = Some((self.j, self.decimal_prefix));
+            } else {
+                self.decimal_prefix += c.adv;
+            }
+        }
+    }
+
+    /// A wrap can discard clusters after its chosen break. Restore the anchor to the
+    /// retained prefix before any later scan or finalization uses it.
+    fn restore_decimal_anchor(&mut self, pl: &ParaLayout) {
+        self.decimal_prefix = 0.0;
+        self.decimal_dot = None;
+        if let Some((tj, stop, _)) = self.pending_tab
+            && stop.align == TabAlign::Decimal
+        {
+            for k in tj.saturating_add(1)..self.j {
+                let Some(c) = pl.clusters.get(k) else { break };
+                if c.dot {
+                    self.decimal_dot = Some((k, self.decimal_prefix));
+                    break;
+                }
+                self.decimal_prefix += c.adv;
+            }
+        }
     }
 
     /// Text after a decimal/centre/right tab shifts as it grows.
@@ -1147,6 +1188,7 @@ impl Scan {
         } else {
             self.break_long_word(bk, pl);
         }
+        self.restore_decimal_anchor(pl);
     }
 
     /// The text after a right, centre or decimal tab doesn't fit: like Word, the tab goes to the
@@ -1159,6 +1201,8 @@ impl Scan {
         {
             self.last_break = Some(tj - 1);
             self.pending_tab = None;
+            self.decimal_dot = None;
+            self.decimal_prefix = 0.0;
             self.leaders.retain(|(k, _)| *k < tj);
         }
     }
@@ -1326,6 +1370,7 @@ mod kana_glyph_tests {
                 sc.xs = vec![0.0, tab_width, tab_width + 6.0, tab_width + 8.0];
                 sc.x = tab_width + 13.0;
                 sc.j = 4;
+                sc.restore_decimal_anchor(&pl);
                 if ending.is_some() {
                     sc.step(&mut bk, &mut pl);
                     assert!((sc.xs[2] - tab_width - 6.0).abs() < 0.001, "{align:?} {ending:?}: separator moved at segment end");
@@ -1337,6 +1382,81 @@ mod kana_glyph_tests {
                 assert!((bk.lines[0].xs[2] - tab_width - 6.0).abs() < 0.001, "{align:?} {ending:?}: final separator moved");
             }
         }
+    }
+
+    #[test]
+    fn decimal_anchor_tracks_long_marker_segment_and_restores_after_backtrack() {
+        use super::super::tabs::decimal_position;
+        use super::super::{ClKind, Grid, ParaEnv, layout_para};
+        use super::{Breaker, TabAlign, TabStop};
+        use wordcraft_doc::{Document, Paragraph};
+
+        let doc = Document::new();
+        let fields = Default::default();
+        let env = ParaEnv {
+            doc: &doc,
+            fields: &fields,
+            width: 300.0,
+            label: None,
+            show_hidden: false,
+            hide_deleted: Default::default(),
+            table: None,
+            proofing: None,
+            typing_word: None,
+            field_codes: false,
+            grid: Grid::default(),
+            exclusions: &[],
+            eq_number: 0,
+            numeral: Default::default(),
+            read_line_spacing: None,
+            fit_objects: false,
+            fitted: &[],
+        };
+        let p = Paragraph::with_text("\t12.3", Default::default());
+        let mut pl = layout_para(&p, &env);
+        assert_eq!(pl.clusters.len(), 5);
+        let mark_style = pl.clusters[0].style;
+        let mut bk = Breaker::new(&pl, (&env, &[]), mark_style, None);
+        let mut sc = bk.begin_line(&mut pl);
+        pl.clusters[0].adv = 0.0;
+        pl.clusters[1].adv = 2.0;
+        pl.clusters[2].adv = 3.0;
+        pl.clusters[3].dot = true;
+        let mut marker = pl.clusters[1].clone();
+        marker.kind = ClKind::Marker;
+        marker.adv = 0.0;
+        marker.dot = false;
+        marker.start = marker.end;
+        let tail = pl.clusters.split_off(2);
+        pl.clusters.extend(std::iter::repeat_n(marker, 12_000));
+        pl.clusters.extend(tail);
+        let dot = 12_003;
+        sc.pending_tab = Some((0, TabStop { pos: 100.0, align: TabAlign::Decimal, leader: Default::default() }, 0.0));
+
+        // Every marker is examined once while the pending tab remains unresolved.
+        for j in 1..=dot {
+            sc.j = j;
+            let (_, _, width) = sc.pending_tab_width(&pl, 0.0, None).unwrap();
+            assert_eq!(width, if j == dot { 95.0 } else { 100.0 });
+            sc.note_decimal_cluster(&pl.clusters[j]);
+        }
+        assert_eq!(sc.decimal_dot, decimal_position(&pl, 0, dot));
+        sc.j = dot + 1;
+        assert_eq!(sc.pending_tab_width(&pl, 0.0, None).unwrap().2, 95.0);
+
+        sc.j = 2;
+        sc.restore_decimal_anchor(&pl);
+        assert_eq!(sc.decimal_dot, None);
+        assert_eq!(sc.decimal_prefix, 2.0);
+        assert_eq!(sc.pending_tab_width(&pl, 0.0, None).unwrap().2, 100.0);
+        sc.j = dot;
+        sc.restore_decimal_anchor(&pl);
+        assert_eq!(sc.pending_tab_width(&pl, 0.0, None).unwrap().2, 95.0);
+        sc.compressed.push((1, 1.0, 0.0));
+        assert_eq!(sc.pending_tab_width(&pl, 0.0, None).unwrap().2, 96.0);
+        sc.j = dot + 1;
+        sc.restore_decimal_anchor(&pl);
+        assert_eq!(sc.pending_tab_width(&pl, 0.0, None).unwrap().2, 96.0);
     }
 
     #[test]

@@ -272,7 +272,7 @@ layout suite are pending; this is not a new Word/native-IME acceptance claim.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-01 | minor | PR #5083 review: document fit-text read/write support separately from manual fitting layout and explain committed tab finalization; preserve main progress entries. |
+| 2026-11-01 | minor | PR #5083 review: document fit-text read/write support separately from manual fitting layout and explain committed tab finalization; track decimal anchors incrementally and restore them on backtracking, with a 12,000-marker regression; preserve main progress entries. |
 | 2026-10-31 | minor | Preserve DOCX compression and strict-kinsoku settings; fit eligible punctuation/kana and pending right/decimal tabs consistently. Synthetic 21-size, settings, language, split-run, backtracking and provisional-tab finalization controls; prior combined Word comparisons do not establish universal pixel parity. |
 | 2026-10-30 | trivial | Keep with next: a kept heading before a three-line paragraph under widow/orphan control needs room for all three lines, since that paragraph can only move over whole; with room for two, the heading goes to the next page with it instead of staying alone at the bottom, as in Word for Mac 16.93. `layout::tests::keep_with_next_carries_the_heading_when_a_three_line_paragraph_moves_whole` |
 | 2026-10-28 | trivial | Connector object lookups retain the typed column-selection inputs on current main (#3631); readiness estimates unchanged |

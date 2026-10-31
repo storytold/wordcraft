@@ -152,7 +152,7 @@ Recipient label generation (#4880) now includes all selected recipients across a
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-01 | minor | PR #5083 review: document fit-text read/write support separately from manual fitting layout and explain committed tab finalization; preserve main progress entries. |
+| 2026-11-01 | minor | PR #5083 review: document fit-text read/write support separately from manual fitting layout and explain committed tab finalization; track decimal anchors incrementally and restore them on backtracking, with a 12,000-marker regression; preserve main progress entries. |
 | 2026-10-31 | minor | Preserve DOCX compression and strict-kinsoku settings; fit eligible punctuation/kana and pending right/decimal tabs consistently. Synthetic 21-size, settings, language, split-run, backtracking and provisional-tab finalization controls; prior combined Word comparisons do not establish universal pixel parity. |
 | 2026-10-30 | trivial | Only the PDF sent to the printer omits link annotations; File › Print › Save these pages as PDF (`file.printPdf`) keeps them, like Export (#4734); no ranked gap changed; readiness estimates unchanged |
 | 2026-10-29 | trivial | The print job's PDF omits link annotations, which the spooler refused to fit to the paper, so documents with links reach the printer (#4734); physical printer output remains to be validated; no ranked gap changed; readiness estimates unchanged |

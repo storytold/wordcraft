@@ -679,7 +679,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-01 | minor | PR #5083 review: document fit-text read/write support separately from manual fitting layout and explain committed tab finalization; preserve main progress entries. |
+| 2026-11-01 | minor | PR #5083 review: document fit-text read/write support separately from manual fitting layout and explain committed tab finalization; track decimal anchors incrementally and restore them on backtracking, with a 12,000-marker regression; preserve main progress entries. |
 | 2026-10-31 | minor | Preserve DOCX compression and strict-kinsoku settings; fit eligible punctuation/kana and pending right/decimal tabs consistently. Synthetic 21-size, settings, language, split-run and backtracking controls; prior combined Word comparisons do not establish universal pixel parity. |
 | 2026-10-31 | trivial | Progress log: Backstage keytips, Alt, F, P prints (#4960) |
 | 2026-10-30 | trivial | Progress log: only the PDF sent to the printer leaves out link annotations; Save these pages as PDF keeps them (#4734) |
