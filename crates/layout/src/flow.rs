@@ -878,60 +878,84 @@ fn space_after_kept(ctx: &Ctx, block: usize, rp: &wordcraft_doc::resolve::Resolv
 fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counters: &mut Counters) -> f32 {
     match ctx.doc.body.get(block + 1).map(|b| &**b) {
         Some(Block::Para(p)) => {
-            // Keep list indents and label metrics without consuming the document counters.
+            // Keep list indents and label metrics without consuming the document counters
+            // (the caller passes a copy). Memoised like paragraph layouts: headings keep with
+            // next, so every pass asks for these. The key mustn't count the paragraph's
+            // equations: it is laid out again for real.
             let rp = ctx.doc.styles.resolve_para(&p.props);
             let label =
                 p.props.numbering.or(rp.numbering).filter(|n| n.num != 0).and_then(|n| counters.next_label(&ctx.doc.numbering, n.num, n.level));
-            let pl = match ctx.para_ahead(p, width, label.clone()) {
-                Some(pl) => pl,
-                None => {
-                    let env = para::ParaEnv {
-                        doc: ctx.doc,
-                        width,
-                        label,
-                        fields: &ctx.fields,
-                        show_hidden: ctx.opts.show_hidden,
-                        field_codes: ctx.opts.field_codes,
-                        hide_deleted: ctx.opts.hides_deleted(StoryRef::Body),
-                        table: None,
-                        proofing: None,
-                        typing_word: None,
-                        numeral: ctx.opts.numeral,
-                        exclusions: &[],
-                        eq_number: ctx.eq_count,
-                        read_line_spacing: if ctx.opts.view == ViewMode::Read { ctx.opts.read_line_spacing } else { None },
-                        grid: ctx.grid,
-                        fit_objects: false,
-                        fitted: &[],
-                    };
-                    Arc::new(para::layout_para(p, &env))
-                }
-            };
-            // Its border room, unless it joins the paragraph before (or after) in one box.
-            let own = Edges::own(&pl, 0, pl.lines.len());
-            let top = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block), None) { 0.0 } else { own.top };
-            if pl.rp.keep_next && depth < 8 {
-                let bottom = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block + 2), None) { 0.0 } else { own.bottom };
-                pl.rp.space_before + top + pl.height + bottom + pl.rp.space_after + next_first_line(ctx, block + 1, width, depth + 1, counters)
+            let kept = (ctx.eq_count, ctx.uses_totals);
+            let (key, _) = ctx.para_key(p, width, None, &[], label.as_ref(), &[]);
+            (ctx.eq_count, ctx.uses_totals) = kept;
+            // Cached per paragraph: (the room it needs to start on the page, whole height with
+            // spacing, keep with next, border room above and below). A chain is summed from
+            // these, so an edit to a later paragraph can't leave a stale total behind. Whether
+            // the borders count depends on the neighbours, so it is decided below.
+            let cached = ctx.cache.lookahead.get(&key).copied();
+            let (start, whole, keep, own_top, own_bottom) = if let Some(v) = cached {
+                v
             } else {
+                // Through the cache when the paragraph is laid out later with these same inputs.
+                let pl = match ctx.para_ahead(p, width, label.clone()) {
+                    Some(pl) => pl,
+                    None => {
+                        let env = para::ParaEnv {
+                            doc: ctx.doc,
+                            width,
+                            label,
+                            fields: &ctx.fields,
+                            show_hidden: ctx.opts.show_hidden,
+                            field_codes: ctx.opts.field_codes,
+                            hide_deleted: ctx.opts.hides_deleted(StoryRef::Body),
+                            table: None,
+                            proofing: None,
+                            typing_word: None,
+                            numeral: ctx.opts.numeral,
+                            exclusions: &[],
+                            eq_number: ctx.eq_count,
+                            read_line_spacing: if ctx.opts.view == ViewMode::Read { ctx.opts.read_line_spacing } else { None },
+                            grid: ctx.grid,
+                            fit_objects: false,
+                            fitted: &[],
+                        };
+                        Arc::new(para::layout_para(p, &env))
+                    }
+                };
+                let own = Edges::own(&pl, 0, pl.lines.len());
                 // The room this one needs to start on the page with the kept paragraph before
                 // it (#966).
                 let to = |k: usize| match (pl.lines.first(), pl.lines.get(k)) {
                     (Some(first), Some(last)) => last.top + last.height - first.top,
                     _ => 0.0,
                 };
-                pl.rp.space_before
-                    + top
+                let start = pl.rp.space_before
                     + if pl.rp.keep_lines {
                         pl.height
                     } else if pl.rp.widow_control && pl.lines.len() >= 2 {
                         to(1)
                     } else {
                         to(0)
-                    }
+                    };
+                let v = (start, pl.rp.space_before + pl.height + pl.rp.space_after, pl.rp.keep_next, own.top, own.bottom);
+                if ctx.cache.lookahead.len() >= MAX_LOOKAHEAD {
+                    ctx.cache.lookahead.clear();
+                }
+                ctx.cache.lookahead.insert(key, v);
+                v
+            };
+            // Its border room, unless it joins the paragraph before (or after) in one box.
+            let top = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block), None) { 0.0 } else { own_top };
+            if keep && depth < 8 {
+                let bottom = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block + 2), None) { 0.0 } else { own_bottom };
+                whole + top + bottom + next_first_line(ctx, block + 1, width, depth + 1, counters)
+            } else {
+                start + top
             }
         }
         Some(Block::Table(_)) => 24.0,
         None => 0.0,
     }
 }
+/// Bound on [`LayoutCache::lookahead`] (entries are small; it starts over past this).
+const MAX_LOOKAHEAD: usize = 1 << 16;

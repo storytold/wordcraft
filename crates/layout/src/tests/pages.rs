@@ -507,6 +507,153 @@ fn widow_control_moves_a_three_line_paragraph_whole() {
 }
 
 #[test]
+fn a_long_typing_session_keeps_the_paragraph_cache_bounded() {
+    // #1284: incremental passes evict the edited paragraph's earlier layouts too.
+    let mut d = Document::from_text(&"Body line\n".repeat(90));
+    let mut c = LayoutCache::new();
+    let opts = LayoutOptions::default();
+    let first = layout(&d, &mut c, &opts);
+    assert!(first.pages.len() >= 2);
+    let last = d.body.len() - 1;
+    let mut most = 0;
+    for i in 0..4500 {
+        d.body[last] = para_block(Paragraph::with_text(&format!("Typed {i}"), Default::default()));
+        let l = layout(&d, &mut c, &opts);
+        assert!(l.blocks_placed < d.body.len(), "pass {i} laid out incrementally");
+        most = most.max(c.len());
+    }
+    assert!(most <= 4 * 1024 + 1, "the cache grew to {most} paragraph layouts");
+    assert!(c.len() < 4500);
+}
+
+/// The pages as text, for comparing an incremental layout with a full one.
+fn pages_dump(l: &DocLayout) -> Vec<String> {
+    l.pages.iter().map(|p| format!("{:?}|{:?}|{:?}|{:?}|{}|{}", p.items, p.body, p.header, p.footer, p.number, p.first_block)).collect()
+}
+
+/// `cache`'s (incremental) layout of `d` is the one a fresh full layout gives.
+#[track_caller]
+fn assert_same_as_full(d: &Document, cache: &mut LayoutCache, what: &str) -> DocLayout {
+    let inc = layout(d, cache, &LayoutOptions::default());
+    let full = lay(d);
+    assert_eq!(inc.pages.len(), full.pages.len(), "{what}: page count");
+    for (i, (x, y)) in pages_dump(&inc).iter().zip(&pages_dump(&full)).enumerate() {
+        assert!(x == y, "{what}: page {} differs from a full layout", i + 1);
+    }
+    assert_eq!(inc.text_boxes, full.text_boxes, "{what}: text boxes");
+    inc
+}
+
+#[test]
+fn a_note_separator_edited_in_place_is_laid_out_again() {
+    // #1284: the pass holds the document's note separators too, so a separator changed in
+    // place is a different block, not stale pages.
+    let mut d = Document::from_text(&"Body text line.\n".repeat(150));
+    for (i, text) in [(3, "A footnote".to_string()), (60, "A long footnote that runs on and on. ".repeat(100)), (120, "A footnote".into())] {
+        let id = d.add_part(PartKind::Footnote, vec![para_block(Paragraph::with_text(&text, Default::default()))]);
+        d.insert_object(&Pos::body(i, 4), InlineObject::NoteRef { kind: NoteKind::Footnote, id, custom: String::new() }, &Default::default())
+            .unwrap();
+    }
+    let id = d.add_part(PartKind::Endnote, paras("Endnote paragraph", 40));
+    d.insert_object(&Pos::body(140, 4), InlineObject::NoteRef { kind: NoteKind::Endnote, id, custom: String::new() }, &Default::default()).unwrap();
+    let sep = |text: &str| {
+        let mut p = Paragraph::with_text(text, Default::default());
+        p.props.space_after = Some(0.0);
+        Some(vec![para_block(p)])
+    };
+    for seps in [&mut d.footnote_separators, &mut d.endnote_separators] {
+        seps.separator = sep("Notes");
+        seps.continuation_separator = sep("More notes");
+        seps.continuation_notice = sep("Continued");
+    }
+    let mut c = LayoutCache::new();
+    let first = layout(&d, &mut c, &LayoutOptions::default());
+    assert!(first.pages.len() >= 4);
+    let edit = |seps: &mut wordcraft_doc::NoteSeparators| {
+        for blocks in [&mut seps.separator, &mut seps.continuation_separator, &mut seps.continuation_notice].into_iter().flatten() {
+            if let Some(Block::Para(p)) = blocks.first_mut().map(Arc::make_mut) {
+                p.props.space_before = Some(p.props.space_before.unwrap_or(0.0) + 30.0);
+                p.touch();
+            }
+        }
+    };
+    edit(&mut d.footnote_separators);
+    let l = assert_same_as_full(&d, &mut c, "the footnote separators changed in place");
+    assert_ne!(pages_dump(&l), pages_dump(&first), "the edit shows");
+    edit(&mut d.endnote_separators);
+    let m = assert_same_as_full(&d, &mut c, "the endnote separators changed in place");
+    assert_ne!(pages_dump(&m), pages_dump(&l), "the edit shows");
+}
+
+/// Two sections, the first with a ten-line footer and the second with a four-line one (changed
+/// by `last`), and a long endnote at the end. An edit in the first section converges there and
+/// takes the rest of the pages from the previous pass; the endnotes after the last block must
+/// then be placed as a full layout places them, in the last section.
+#[track_caller]
+fn endnotes_after_a_splice(what: &str, last: impl FnOnce(&mut Document, u32, u32)) {
+    let mut d = Document::from_text(&"Body text line.\n".repeat(150));
+    let tall = d.add_part(PartKind::Footer, paras("Tall footer line", 10));
+    let short = d.add_part(PartKind::Footer, paras("Footer line", 4));
+    let first = SectionProps { footers: wordcraft_doc::section::HeaderSet { default: Some(tall), ..Default::default() }, ..d.last_section.clone() };
+    d.para_mut(StoryRef::Body, &Path::top(90)).unwrap().section = Some(Box::new(first));
+    d.last_section.footers.default = Some(short);
+    let id = d.add_part(PartKind::Endnote, paras("Endnote paragraph", 120));
+    d.insert_object(&Pos::body(0, 4), InlineObject::NoteRef { kind: NoteKind::Endnote, id, custom: String::new() }, &Default::default()).unwrap();
+    last(&mut d, short, id);
+    let mut c = LayoutCache::new();
+    let before = layout(&d, &mut c, &LayoutOptions::default());
+    assert!(before.pages.len() >= 6, "{what}: {} pages", before.pages.len());
+    // The same text again, a new block: nothing moves, and the walk converges in section 1.
+    // Twice: the second pass resumes from the first one's spliced end.
+    for round in 0..2 {
+        d.body[10 + round] = para_block(Paragraph::with_text("Body text line.", Default::default()));
+        let l = assert_same_as_full(&d, &mut c, &format!("{what}, edit {round}"));
+        assert!(l.blocks_placed < 90, "{what}: converged in the first section: {} blocks placed", l.blocks_placed);
+    }
+}
+
+#[test]
+fn endnotes_after_a_splice_take_the_last_sections_page_geometry() {
+    // #1284: with the last section's footer room, not the edited section's.
+    endnotes_after_a_splice("footer room", |_, _, _| {});
+    // The footer is measured without the section's line grid, as the section loop measures it.
+    endnotes_after_a_splice("a line grid", |d, _, _| {
+        use wordcraft_doc::section::{DocGrid, DocGridType};
+        d.last_section.doc_grid = Some(DocGrid { kind: DocGridType::Lines, line_pitch: 30.0, char_space: 0 });
+    });
+}
+
+#[test]
+fn endnotes_after_a_splice_number_on_from_where_a_full_layout_does() {
+    // #1284: the last section's footer, numbered and holding a text box, is laid out again for
+    // its room after a splice; that must not count its list items and text box twice.
+    endnotes_after_a_splice("a numbered footer with a text box", |d, footer, note| {
+        let list = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+        let num = Some(wordcraft_doc::props::NumRef { num: list, level: 0 });
+        for story in [StoryRef::Part(footer), StoryRef::Part(note)] {
+            let (start, end) = (d.start_of(story), d.end_of(story));
+            d.format_paragraphs(&start, &end, &|p| p.numbering = num).unwrap();
+        }
+        let tb = d.add_part(PartKind::TextBox, paras("Boxed", 1));
+        let shape = InlineObject::Shape {
+            kind: wordcraft_doc::para::ShapeKind::TextBox,
+            w: 60.0,
+            h: 20.0,
+            fill: None,
+            stroke: None,
+            stroke_width: 0.75,
+            float: Default::default(),
+            story: Some(tb),
+            freeform: None,
+            effects: Default::default(),
+            extra: Default::default(),
+        };
+        let at = d.start_of(StoryRef::Part(footer));
+        d.insert_object(&at, shape, &Default::default()).unwrap();
+    });
+}
+
+#[test]
 fn footer_border_limits_body() {
     use wordcraft_doc::props::{Border, Borders, HeightRule};
     let mut d = Document::from_text(&"Body line\n".repeat(40));
@@ -567,6 +714,27 @@ fn a_roman_page_number_in_the_footer_stays_roman_with_the_page_count_in_the_body
         let glyphs: usize = p.footer.iter().map(|it| if let Placed::Lines { para, .. } = it { para.glyphs.len() } else { 0 }).sum();
         let want = wordcraft_doc::section::NumFormat::LowerRoman.format(p.number);
         assert_eq!(glyphs, want.chars().count(), "page {}: the footer should show {want}", p.number);
+    }
+}
+
+#[test]
+fn a_bordered_group_split_by_a_page_break_resumes_like_a_full_layout() {
+    // #1284 (review): the paragraph before a checkpoint ends on its page; the border of the one
+    // after it that joins it draws up to that end, resumed or not.
+    use wordcraft_doc::props::{Border, Borders};
+    let mut d = Document::from_text(&"Boxed text that runs over a few lines of the page, again and again. ".repeat(30).replace(". ", ".\n"));
+    let n = d.body.len();
+    for i in 0..n {
+        if let Ok(p) = d.para_mut(StoryRef::Body, &Path::top(i)) {
+            p.props.borders = Some(Borders::all(Border::single(1.0)));
+        }
+    }
+    let mut c = LayoutCache::new();
+    let first = assert_same_as_full(&d, &mut c, "first layout");
+    assert!(first.pages.len() >= 2);
+    for at in [n - 2, n / 2, n / 3, 1] {
+        d.insert_text(&Pos::body(at, 0), "Edit ", &Default::default()).unwrap();
+        assert_same_as_full(&d, &mut c, &format!("edit in paragraph {at}"));
     }
 }
 
