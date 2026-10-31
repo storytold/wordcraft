@@ -75,8 +75,11 @@ pub fn tool_definitions() -> Value {
         tool(
             "execute",
             "Run a command",
-            "Run one command by id with params, e.g. {command:\"format.bold\"} or {command:\"insert.table\", params:{rows:3, cols:4}}. Commands work on the active document, or on the open document `doc` names. file.new and file.open open another document beside the open ones and make it active; view.switchWindows {id} makes another one active and file.closeDocument {id, force?} closes one.",
-            with_doc(obj(json!({"command": s("Command id"), "params": {"type": "object", "description": "Command parameters"}}), &["command"])),
+            "Run one command by id with params, e.g. {command:\"format.bold\"} or {command:\"insert.table\", params:{rows:3, cols:4}}. Commands work on the active document, or on the open document `doc` names. file.new and file.open open another document beside the open ones and make it active; view.switchWindows {id} makes another one active and file.closeDocument {id, force?} closes one. `author` signs this command's comments and tracked changes, so an agent's edits are told apart from the person's.",
+            with_doc(obj(
+                json!({"command": s("Command id"), "params": {"type": "object", "description": "Command parameters"}, "author": s("Name that signs this command's comments and tracked changes (the document's author when absent)")}),
+                &["command"]
+            )),
             false
         ),
         tool(
@@ -235,7 +238,13 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, a: &Value) -> ToolResult {
             }
         }
         "execute" => match st("command") {
-            Some(c) => wrap(exec(b, c, a.get("params").cloned().unwrap_or(json!({})), doc)),
+            Some(c) => {
+                let mut call = json!({"command": c, "params": a.get("params").cloned().unwrap_or(json!({}))});
+                if let (Some(author), Some(o)) = (a.get("author"), call.as_object_mut()) {
+                    o.insert("author".into(), author.clone());
+                }
+                wrap(b.call("engine.execute", addressed(call, doc)))
+            }
             None => ToolResult::error("missing `command`"),
         },
         "batch" => {

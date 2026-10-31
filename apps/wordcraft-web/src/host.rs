@@ -19,11 +19,15 @@
 //!     Export Page as PNG: `false`. They are copies; the document's file stays the same.
 //! - `wordcraft:dirty` (to the parent): `{ dirty }` whenever unsaved changes appear or go away.
 //! - `wordcraft:failed` (to the parent): `{ error }` when the app couldn't start.
+//! - `wordcraft:request` (from the parent): `{ id, method, params }`, one of [`HOST_METHODS`] of
+//!   the control protocol (`docs/control-protocol.md`), run on the open document as an agent's
+//!   request is. `wordcraft:response` (to the parent) answers it: `{ id, reply }`, where `reply`
+//!   is the protocol's `{ ok, result }` or `{ ok: false, error }`.
 //!
 //! Only the parent window on the page's own origin is heard or answered. In host mode the parent
 //! guards leaving the page, and `?author=` names the user for comments and tracked changes.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use wasm_bindgen::JsCast as _;
@@ -33,6 +37,13 @@ use wordcraft_ui_egui::{Inbox, Services, WordApp};
 
 /// The longest user name taken from `?author=`.
 const MAX_AUTHOR_CHARS: usize = 200;
+
+/// The control-protocol methods a host page may call: the document's commands and state, not
+/// the window's input, screenshots or quitting.
+pub const HOST_METHODS: &[&str] = &["engine.execute", "engine.commands", "document.inspect", "ui.inspect"];
+
+/// A host request waiting for the next frame: its id, method and parameters.
+pub type Requests = Rc<RefCell<Vec<(JsValue, String, serde_json::Value)>>>;
 
 #[derive(Clone)]
 pub struct Bridge {
@@ -65,8 +76,8 @@ impl Bridge {
 
     /// Hand saved and exported files to the parent instead of downloading them, report unsaved
     /// changes to it, and hear the files it sends.
-    pub fn connect(&self, services: &mut Services, inbox: Inbox, ctx: egui::Context) {
-        self.listen(inbox, ctx);
+    pub fn connect(&self, services: &mut Services, inbox: Inbox, requests: Requests, ctx: egui::Context) {
+        self.listen(inbox, requests, ctx);
         let bridge = self.clone();
         services.host_save = Some(Box::new(move |name: &str, bytes: &[u8], save_as: bool| bridge.post_save(name, bytes, save_as)));
         // Anything else that would download goes to the parent too.
@@ -115,8 +126,15 @@ impl Bridge {
             .map_err(|e| e.as_string().unwrap_or_else(|| format!("{e:?}")))
     }
 
-    /// Hear `wordcraft:open` from the parent and queue the file like a dropped one.
-    fn listen(&self, inbox: Inbox, ctx: egui::Context) {
+    /// Answer a `wordcraft:request` with the control protocol's reply.
+    pub fn post_response(&self, id: &JsValue, reply: &serde_json::Value) {
+        let reply = js_sys::JSON::parse(&reply.to_string()).unwrap_or(JsValue::NULL);
+        self.send(&[("type", "wordcraft:response".into()), ("id", id.clone()), ("reply", reply)]);
+    }
+
+    /// Hear `wordcraft:open` from the parent and queue the file like a dropped one, and queue
+    /// `wordcraft:request` for the next frame, which runs it on the app.
+    fn listen(&self, inbox: Inbox, requests: Requests, ctx: egui::Context) {
         let parent = self.parent.clone();
         let origin = self.origin.clone();
         let on_message = Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |event: web_sys::MessageEvent| {
@@ -124,6 +142,19 @@ impl Bridge {
                 return;
             }
             let data = event.data();
+            if string(&data, "type").as_deref() == Some("wordcraft:request") {
+                let id = js_sys::Reflect::get(&data, &JsValue::from_str("id")).unwrap_or(JsValue::NULL);
+                let method = string(&data, "method").unwrap_or_default();
+                let params = js_sys::Reflect::get(&data, &JsValue::from_str("params"))
+                    .ok()
+                    .and_then(|p| js_sys::JSON::stringify(&p).ok())
+                    .and_then(|s| s.as_string())
+                    .and_then(|s| serde_json::from_str(&s).ok())
+                    .unwrap_or(serde_json::Value::Null);
+                requests.borrow_mut().push((id, method, params));
+                ctx.request_repaint();
+                return;
+            }
             if string(&data, "type").as_deref() != Some("wordcraft:open") {
                 return;
             }

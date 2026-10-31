@@ -71,7 +71,8 @@ fn answer_on(session: &mut Session, method: &str, params: Value) -> Result<Value
         "engine.execute" | "command" => {
             let id = params.get("command").and_then(Value::as_str).ok_or("missing `command`")?.to_string();
             let p = params.get("params").cloned().filter(|v| !v.is_null()).unwrap_or(json!({}));
-            session.run(&id, &p).map_err(|e| e.to_string())
+            let author = Session::request_author(&params)?;
+            session.as_author(author, |s| s.run(&id, &p)).map_err(|e| e.to_string())
         }
         "engine.commands" => Ok(session.registry.describe()),
         "document.inspect" => session.run("document.inspect", &params).map_err(|e| e.to_string()),

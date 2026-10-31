@@ -158,7 +158,11 @@ fn handle_in(app: &mut WordApp, doc: u64, method: &str, p: &Value) -> Outcome {
                     Err(e) => err(e),
                 };
             }
-            let r = app.session.with_document(doc, |s| s.run(id, &params));
+            let author = match wordcraft_engine::Session::request_author(p) {
+                Ok(author) => author,
+                Err(e) => return err(e),
+            };
+            let r = app.session.with_document(doc, |s| s.as_author(author, |s| s.run(id, &params)));
             // UI requests the command made carry `document`, so the window can tell they aren't
             // about the document it shows.
             for req in std::mem::take(&mut app.session.ui_requests) {
@@ -190,7 +194,17 @@ pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> O
             if let Some(e) = close_refused(app, id, &params) {
                 return err(e);
             }
-            match app.execute(id, params) {
+            let author = match wordcraft_engine::Session::request_author(p) {
+                Ok(author) => author,
+                Err(e) => return err(e),
+            };
+            // `author` signs only this command: the app signs with its own name again after it.
+            let own = author.map(|author| app.session.sign_as(author));
+            let r = app.execute(id, params);
+            if let Some(own) = own {
+                app.session.restore_signature(own);
+            }
+            match r {
                 Ok(v) => ok(v),
                 Err(e) => err(e),
             }

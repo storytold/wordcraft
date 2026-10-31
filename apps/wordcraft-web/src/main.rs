@@ -10,7 +10,8 @@
 //! URL flags: `?webgl` forces WebGL2; `?sample` opens the sample document.
 //! `?host=parent` (inside an `<iframe>`) talks to a same-origin parent page instead: it sends the
 //! document to open and stores what WordCraft saves (`host`), and `&author=` names the user for
-//! comments and tracked changes.
+//! comments and tracked changes. The parent page can also run control-protocol requests on the
+//! open document (commands, inspection), so an agent edits it while the person does.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 #[cfg(any(target_arch = "wasm32", test))]

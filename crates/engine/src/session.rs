@@ -239,4 +239,50 @@ pub struct Session {
 impl Session {
     /// File name of the persisted custom dictionary inside the settings folder.
     pub const USER_DICT_FILE: &str = "custom-dictionary.txt";
+
+    /// The longest author name a command request may give; a longer one is cut.
+    pub const MAX_REQUEST_AUTHOR_CHARS: usize = 200;
+
+    /// The author a command request names in `author`, trimmed and cut to
+    /// [`Self::MAX_REQUEST_AUTHOR_CHARS`]: `None` when it's absent, null or blank.
+    pub fn request_author(params: &Value) -> Result<Option<String>, String> {
+        match params.get("author") {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::String(name)) => {
+                let name: String = name.trim().chars().take(Self::MAX_REQUEST_AUTHOR_CHARS).collect();
+                Ok((!name.is_empty()).then_some(name))
+            }
+            Some(_) => Err("`author` must be a string".to_string()),
+        }
+    }
+
+    /// Signs what follows with `author`: comments and tracked changes carry that name, and the
+    /// initials drawn from it. Returns the session's own signature for [`Self::restore_signature`].
+    pub fn sign_as(&mut self, author: String) -> Signature {
+        Signature { author: std::mem::replace(&mut self.author, author), initials: std::mem::take(&mut self.initials) }
+    }
+
+    /// Puts back the signature [`Self::sign_as`] replaced.
+    pub fn restore_signature(&mut self, own: Signature) {
+        self.author = own.author;
+        self.initials = own.initials;
+    }
+
+    /// Runs `f` signed by `author` (see [`Self::sign_as`]), then restores the session's own
+    /// signature whatever `f` returns; `None` runs `f` as the session's author.
+    pub fn as_author<T>(&mut self, author: Option<String>, f: impl FnOnce(&mut Self) -> T) -> T {
+        let Some(author) = author else { return f(self) };
+        let own = self.sign_as(author);
+        let result = f(self);
+        self.restore_signature(own);
+        result
+    }
+}
+
+/// The author name and comment initials a session signs with, kept aside while a request signs
+/// as someone else.
+#[derive(Debug, Clone)]
+pub struct Signature {
+    author: String,
+    initials: String,
 }

@@ -69,8 +69,9 @@ pub fn start() {
                     session.system_region = region;
                     let messages = Rc::new(RefCell::new(Vec::new()));
                     let mut services = services(inbox.clone(), cc.egui_ctx.clone(), dirty, saves.clone(), messages.clone());
+                    let requests = crate::host::Requests::default();
                     if let Some(bridge) = &app_bridge {
-                        bridge.connect(&mut services, inbox.clone(), cc.egui_ctx.clone());
+                        bridge.connect(&mut services, inbox.clone(), requests.clone(), cc.egui_ctx.clone());
                     }
                     let mut app = WordApp::new(session, services);
                     // Pasted pictures wait apart from dropped files: the app inserts one only when the page is the edit target (#1349).
@@ -99,7 +100,7 @@ pub fn start() {
                         crate::host::Bridge::set_author(&mut app, &author);
                         prefs.keep_own_author(&app.session.author, &own);
                     }
-                    Ok(Box::new(WebShell { app, inbox, messages, prefs }))
+                    Ok(Box::new(WebShell { app, inbox, messages, prefs, bridge: app_bridge.clone(), requests }))
                 }),
             )
             .await;
@@ -134,6 +135,9 @@ struct WebShell {
     inbox: Inbox,
     messages: Rc<RefCell<Vec<String>>>,
     prefs: crate::prefs::PrefsSync,
+    /// The host page in `?host=parent` mode, and its requests waiting for this frame.
+    bridge: Option<crate::host::Bridge>,
+    requests: crate::host::Requests,
 }
 
 fn local_storage() -> Option<web_sys::Storage> {
@@ -153,6 +157,27 @@ impl eframe::App for WebShell {
         let msgs = std::mem::take(&mut *self.messages.borrow_mut());
         for msg in msgs {
             self.app.status(msg);
+        }
+        // The host's requests run between frames, as the desktop app's control channel does.
+        let requests = std::mem::take(&mut *self.requests.borrow_mut());
+        if !requests.is_empty()
+            && let Some(bridge) = &self.bridge
+        {
+            for (id, method, params) in requests {
+                let reply = if crate::host::HOST_METHODS.contains(&method.as_str()) {
+                    let (request, _) = wordcraft_ui_egui::ControlRequest::new(method, params);
+                    match wordcraft_ui_egui::control::handle(&mut self.app, ctx, &request) {
+                        wordcraft_ui_egui::control::Outcome::Done(reply) => reply,
+                        wordcraft_ui_egui::control::Outcome::Screenshot { .. } => {
+                            serde_json::json!({"ok": false, "error": "screenshots are not available to the host page"})
+                        }
+                    }
+                } else {
+                    serde_json::json!({"ok": false, "error": format!("the host page cannot call `{method}`")})
+                };
+                bridge.post_response(&id, &reply);
+            }
+            ctx.request_repaint();
         }
         self.app.logic(ctx);
         // Store changed preferences straight away: a reload or closed tab runs no exit code (#2132).

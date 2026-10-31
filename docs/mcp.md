@@ -115,7 +115,7 @@ files it was given rather than guarding against other software on the computer.
 | Tool | What it does |
 |---|---|
 | `list_commands` | every command (filter with `query`) — over 270 of them |
-| `execute` | run one command: `{command: "insert.table", params: {rows: 3, cols: 4}}` |
+| `execute` | run one command: `{command: "insert.table", params: {rows: 3, cols: 4}}`; `author` signs its comments and tracked changes (see [Signing a command](control-protocol.md#signing-a-command)) |
 | `batch` | run several commands in order |
 | `new_document` | blank, sample, letter, resume, report; opens beside the open documents |
 | `open_document` / `save_document` | docx, doc (open only), odt, rtf, html, md, tex, txt, json; save also pdf, png |

@@ -355,3 +355,20 @@ fn tools_address_an_open_document_by_id() {
     assert_eq!(tool(&mut s, "get_text", json!({}))["text"].as_str().unwrap().trim(), "Second");
     assert_eq!(tool(&mut s, "get_text", json!({"doc": first}))["text"].as_str().unwrap().trim(), "First more again");
 }
+
+#[test]
+fn an_agent_signs_its_tracked_changes_with_author() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    tool(&mut s, "new_document", json!({}));
+    tool(&mut s, "execute", json!({"command": "review.trackChanges", "params": {"value": true}}));
+    tool(&mut s, "execute", json!({"command": "text.insert", "params": {"text": "person "}}));
+    tool(&mut s, "execute", json!({"command": "text.insert", "params": {"text": "agent"}, "author": "Drafting assistant"}));
+    tool(&mut s, "execute", json!({"command": "text.insert", "params": {"text": " person again"}}));
+    let changes = tool(&mut s, "execute", json!({"command": "review.changes"}));
+    let authors: Vec<&str> = changes.as_array().unwrap().iter().filter_map(|c| c["author"].as_str()).collect();
+    assert!(authors.contains(&"Drafting assistant"), "{changes}");
+    assert_eq!(authors.iter().filter(|a| **a == "Drafting assistant").count(), 1, "only the signed command: {changes}");
+    let bad =
+        call(&mut s, 14, "tools/call", json!({"name": "execute", "arguments": {"command": "text.insert", "params": {"text": "x"}, "author": 7}}));
+    assert_eq!(bad["result"]["isError"], true, "{bad}");
+}
