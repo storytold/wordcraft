@@ -1,6 +1,6 @@
 # Localization parity with Microsoft Word
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-03 · **Change:** minor (Arabic `ar` interface: craft-i18n catalog, mirrored shell, font fallback, #1195; 28 languages); previously trivial (Language packs: language-packs-2 is published and pinned: 75 packs, adding Danish, German (Germany, Austria, Switzerland), Esperanto, Estonian, Persian, Croatian, Hungarian, Norwegian (Bokmål, Nynorsk), Dutch and Swedish (Sweden, Finland)); previously trivial (Language packs: language-packs-1 is published and pinned, 61 packs; the language requests it covers); previously minor (Language packs: languages beyond English install their spelling dictionary and hyphenation as a pack from File › Options › Language or the missing-pack bar; the default build embeds English Language data only) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-03 · **Change:** minor (text is shaped in its language, so fonts draw their forms for it: Serbian and Macedonian italic б, г, д, п, т, #5068; previously minor: Arabic `ar` interface: craft-i18n catalog, mirrored shell, font fallback, #1195; 28 languages); previously trivial (Language packs: language-packs-2 is published and pinned: 75 packs, adding Danish, German (Germany, Austria, Switzerland), Esperanto, Estonian, Persian, Croatian, Hungarian, Norwegian (Bokmål, Nynorsk), Dutch and Swedish (Sweden, Finland)); previously trivial (Language packs: language-packs-1 is published and pinned, 61 packs; the language requests it covers); previously minor (Language packs: languages beyond English install their spelling dictionary and hyphenation as a pack from File › Options › Language or the missing-pack bar; the default build embeds English Language data only) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 Interface languages, script support and proofing per language. How translation works (adding a
 language, the embedded catalogs): `crates/ui-egui/src/i18n.rs`. The catalogs, their format and
@@ -49,7 +49,10 @@ native-speaker review (human).
   no spelling or grammar marks (as in Word without the language's tools) instead of being flagged
   as English. Detail in [Proofing per language](#proofing-per-language).
 - Document scripts: shaping via HarfRust (HarfBuzz port) for every script; bidi (UAX #9) and Arabic
-  shaping tested (#207); IME on all desktop platforms (winit fixes pending, #155–#164).
+  shaping tested (#207); IME on all desktop platforms (winit fixes pending, #155–#164). Text is
+  shaped in its run's language (`w:lang`), so a font draws its forms for that language (OpenType
+  `locl`), as Word does: e.g. Serbian and Macedonian italic б, г, д, п, т (#5068). Complex-script
+  text doesn't use its own language yet (`w:lang w:bidi`).
 
 ## The twelve key languages
 
@@ -256,6 +259,7 @@ WordCraft keeps 2,54 cm).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | minor | Text is shaped in its run's language (`w:lang`): fonts' forms for the language (OpenType `locl`) are drawn, e.g. Serbian italic б, г, д, п, т instead of the Russian ones, also in the bundled Source Serif 4 (#5068) |
 | 2026-11-03 | minor | Arabic (`ar`) interface: ~2,730 catalog rows from craft-i18n, `ar-*` locales, mirrored shell (ribbon, panes, File page, dialogs, menus), Arabic UI font fallback, document canvas independent (#1195); 28 languages; Hebrew UI still open |
 | 2026-11-03 | trivial | Language packs: language-packs-2 published and pinned, 75 packs, with Danish, German, Dutch, Swedish, Norwegian, Hungarian, Estonian, Croatian, Persian and Esperanto |
 | 2026-11-02 | trivial | Language packs (CP4.4): language-packs-1 published and pinned, 61 packs; Lithuanian, Romanian, Catalan, French, Greek, Slovak, Serbian and Latvian available; Dutch, German and the other compounding languages wait on craft-proof; Basque, Ukrainian and Uyghur excluded |
