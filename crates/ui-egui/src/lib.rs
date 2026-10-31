@@ -135,6 +135,58 @@ struct AwaitingSave {
     rev: u64,
 }
 
+/// File › Options › Advanced › Linux display server (#2184, `ui.displayServer`): how the desktop
+/// app connects on Linux and the BSDs. It's read before the window opens, so a change applies at
+/// the next launch; `WORDCRAFT_WAYLAND` overrides it. An unknown saved value reads as Automatic.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "String", into = "String")]
+pub enum DisplayServer {
+    /// The app's own choice: XWayland whenever there's an X server, for file drag-and-drop.
+    #[default]
+    Auto,
+    Wayland,
+    X11,
+}
+
+impl DisplayServer {
+    /// In menu order.
+    pub const ALL: [DisplayServer; 3] = [DisplayServer::Auto, DisplayServer::Wayland, DisplayServer::X11];
+
+    /// The value used in `ui.json` and by the `ui.displayServer` command.
+    pub fn code(self) -> &'static str {
+        match self {
+            DisplayServer::Auto => "auto",
+            DisplayServer::Wayland => "wayland",
+            DisplayServer::X11 => "x11",
+        }
+    }
+
+    pub fn from_code(code: &str) -> Option<DisplayServer> {
+        DisplayServer::ALL.into_iter().find(|d| d.code().eq_ignore_ascii_case(code.trim()))
+    }
+
+    /// The English label; only Automatic is translated, the others are names.
+    pub fn label(self) -> &'static str {
+        match self {
+            DisplayServer::Auto => "Automatic",
+            DisplayServer::Wayland => "Wayland",
+            DisplayServer::X11 => "X11 (XWayland)",
+        }
+    }
+}
+
+impl From<String> for DisplayServer {
+    fn from(s: String) -> Self {
+        DisplayServer::from_code(&s).unwrap_or_default()
+    }
+}
+
+impl From<DisplayServer> for String {
+    fn from(d: DisplayServer) -> Self {
+        d.code().to_string()
+    }
+}
+
 /// UI state that persists between runs (and that agents can read and set).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -280,6 +332,9 @@ pub struct UiState {
     pub update_fields_before_print: bool,
     /// The custom dictionary (File › Options › Proofing, Add to Dictionary), kept between runs.
     pub dictionary: Vec<String>,
+    /// File › Options › Advanced › Linux display server (#2184): read by the desktop app before
+    /// the window opens.
+    pub display_server: DisplayServer,
 }
 
 /// The ribbon tab the app opens on, and the one it falls back to when the tab that was showing
@@ -355,6 +410,7 @@ impl Default for UiState {
             print_backgrounds: false,
             update_fields_before_print: false,
             dictionary: Vec::new(),
+            display_server: DisplayServer::Auto,
         }
     }
 }

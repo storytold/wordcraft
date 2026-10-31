@@ -582,6 +582,25 @@ fn caret_animation_is_a_ui_command_and_survives_a_restart() {
     assert_eq!(a.run("ui.caretAnimation", json!({"value": true})).unwrap()["caretAnimation"], true);
 }
 
+/// #2184: the Linux display server is a UI command, kept in `ui.json` for the desktop app to
+/// read at the next launch; junk is refused, and an unknown saved value reads as Automatic.
+#[test]
+fn display_server_is_a_ui_command_and_survives_a_restart() {
+    let mut a = app();
+    assert_eq!(a.run("ui.displayServer", json!({})).unwrap(), json!({"displayServer": "auto"}), "automatic by default; no value reads it");
+    assert_eq!(a.run("ui.displayServer", json!({"value": " X11 "})).unwrap(), json!({"displayServer": "x11"}));
+    for junk in [json!({"value": "mir"}), json!({"value": 1}), json!({"value": null}), json!({"value": ["wayland"]})] {
+        assert!(a.run("ui.displayServer", junk).is_err());
+    }
+    assert_eq!(a.ui.display_server, DisplayServer::X11, "a rejected value keeps the setting");
+    let saved = serde_json::to_string(&a.prefs()).unwrap();
+    assert!(saved.contains(r#""displayServer":"x11""#), "{saved}");
+    assert_eq!(UiState::from_json(saved.as_bytes()).unwrap().display_server, DisplayServer::X11);
+    for old in [r#"{"tab":"Insert"}"#, r#"{"displayServer":"mir"}"#, r#"{"displayServer":7}"#] {
+        assert_eq!(UiState::from_json(old.as_bytes()).unwrap().display_server, DisplayServer::Auto, "{old}");
+    }
+}
+
 /// #1945: showing or hiding the Quick Access Toolbar is a UI command (no value toggles it),
 /// kept between runs; settings saved before it existed show the toolbar; it works with no
 /// document open, like the other interface settings.
