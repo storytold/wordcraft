@@ -523,6 +523,16 @@ fn formatting_marks(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
                 (Some(r), None) => Some(m.insert_color.unwrap_or_else(|| by_author(r))),
                 _ => None,
             });
+            // Match Word: the paragraph mark's own font colour takes precedence
+            // over the generic formatting-mark colour, except for tracked revisions.
+            let color = color.or_else(|| {
+                // The first style was resolved for the paragraph mark, including
+                // table character formatting, before laying out the text runs.
+                match &pl.styles.first()?.rc.color {
+                    TextColor::Rgb(c) => Some(*c),
+                    TextColor::Auto => None,
+                }
+            });
             // The last paragraph of a section ends in a section break instead of a plain ¶.
             if let Some(start) = section_break_after(doc, story, path) {
                 let (x0, x1) = if line.rtl { (x + line.left, ex - 2.0) } else { (ex + 2.0, x + line.right) };
