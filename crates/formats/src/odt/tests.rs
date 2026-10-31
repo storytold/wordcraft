@@ -1229,3 +1229,36 @@ fn own_odt_export_keeps_its_paragraph_spacing_on_reopen() {
     let again = import(&bytes).unwrap();
     assert_eq!(again.styles.default_para.space_after, Some(8.0));
 }
+
+#[test]
+fn automatic_style_on_a_parentless_no_spacing_style_keeps_its_zero_spacing() {
+    // A common LibreOffice layout (seen in a real-world document: 9 pages in LibreOffice, 14 before this fix): Standard sets 0.139in
+    // after and 115% lines, but most paragraphs use automatic styles that only change the font and
+    // whose parent is "No Spacing", a common style with no parent of its own that sets 0 / 0 /
+    // 100%. Those paragraphs must take No Spacing's values, not Standard's document defaults.
+    use wordcraft_doc::props::LineSpacing;
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles>
+        <style:style style:name="Standard" style:family="paragraph" style:class="text"><style:paragraph-properties fo:margin-top="0in" fo:margin-bottom="0.139in" fo:line-height="115%"/></style:style>
+        <style:style style:name="No_20_Spacing" style:display-name="No Spacing" style:family="paragraph"><style:paragraph-properties fo:margin-top="0in" fo:margin-bottom="0in" fo:line-height="100%"/></style:style>
+        </office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:automatic-styles>
+        <style:style style:name="P1" style:family="paragraph" style:parent-style-name="No_20_Spacing"><style:text-properties fo:font-size="12pt" fo:font-weight="bold"/></style:style>
+        <style:style style:name="P2" style:family="paragraph" style:parent-style-name="No_20_Spacing"><style:text-properties fo:font-size="12pt"/></style:style>
+        </office:automatic-styles><office:body><office:text>
+        <text:p text:style-name="P1">Heading line</text:p><text:p text:style-name="P2">Body line</text:p>
+        <text:p text:style-name="No_20_Spacing">Plain no spacing</text:p><text:p>Default</text:p>
+        </office:text></office:body></office:document-content>"#
+    );
+    let flow = parse(&package(&content, Some(&styles))).unwrap();
+    let got: Vec<_> = paras(&flow).iter().map(|p| (p.spacing.before, p.spacing.after, p.spacing.line)).collect();
+    let zero = (Some(0.0), Some(0.0), Some(LineSpacing::Multiple(1.0)));
+    assert_eq!(got, vec![zero, zero, zero, (None, None, None)]);
+    // The paragraph with no style falls to Standard's spacing as the document default.
+    let doc = import(&package(&content, Some(&styles))).unwrap();
+    let d = &doc.styles.default_para;
+    assert!(d.space_after.is_some_and(|a| (a - 0.139 * 72.0).abs() < 1e-3), "{:?}", d.space_after);
+    assert!(matches!(d.line_spacing, Some(LineSpacing::Multiple(m)) if (m - 1.15).abs() < 1e-6));
+}
