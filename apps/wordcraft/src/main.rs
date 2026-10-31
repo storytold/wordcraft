@@ -524,7 +524,7 @@ fn main() -> eframe::Result {
             // on File › Home, as Word does (#766), unless the Start screen option is off. Files
             // macOS hands over later open on top of it and close it (`apple_events`).
             if files.is_empty() && other_files.is_empty() && !sample && control_port.is_none() {
-                app.start_screen();
+                if !app.restore_document_tabs() { app.start_screen(); }
             }
             for f in files {
                 if let Err(e) = app.run("file.open", serde_json::json!({"path": f})) {

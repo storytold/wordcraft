@@ -81,6 +81,8 @@ impl WordApp {
         } = window_ui::WindowUi::new(session.document_id());
         WordApp {
             session,
+            document_tab_order: Vec::new(),
+            dragging_document_tab: None,
             ui: UiState {
                 tab,
                 backstage,

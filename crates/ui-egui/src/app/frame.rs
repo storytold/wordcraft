@@ -53,6 +53,7 @@ impl WordApp {
         } else if !self.has_document() {
             // No document open (#1129): the ribbon greyed out but for Help, and no page.
             chrome::title_bar(self, ui);
+            document_tabs::bar(self, ui);
             ribbon::show(self, ui);
             chrome::status_bar(self, ui);
             egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |_| {});
@@ -64,6 +65,7 @@ impl WordApp {
                 chrome::screen_bar(self, ui, screen);
             } else {
                 chrome::title_bar(self, ui);
+                document_tabs::bar(self, ui);
                 if moved(self) {
                     return;
                 }
