@@ -1,7 +1,7 @@
-use super::arrange::{align_menu, group_menu, rotate_menu, wrap_menu};
+use super::arrange::{align_menu, group_menu, position_menu, rotate_menu, wrap_menu};
 use super::common::{mi, size_menu, stack};
 use super::language::mi_check;
-use super::{MeasureExt, Ui, WordApp, big, group, json, menu_button, small, vec2};
+use super::{MeasureExt, Ui, WordApp, group, json, menu_button, small, vec2};
 
 // Layout › Margins, Orientation, Size and Columns: the caret section's setting has a check
 // mark, as Text Direction's does (#1206).
@@ -169,7 +169,7 @@ pub(super) fn layout(app: &mut WordApp, ui: &mut Ui) {
         });
     });
     group(ui, "Arrange", None, app, |ui, app| {
-        big(ui, app, "position", "Position", "arrange.position", json!({}), false);
+        position_menu(ui, app);
         wrap_menu(ui, app);
         stack(ui, |ui| {
             small(

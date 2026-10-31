@@ -1,16 +1,18 @@
 use super::filter::refresh_shown;
 use super::{CmdError, CmdResult, Session, Value, json, p};
 
-/// Parse CSV (RFC 4180-ish: quotes, doubled quotes, commas/semicolons/tabs).
-/// The field separator: whichever of `,` `;` and tab the first line (outside quotes) uses most.
+/// The field separator: whichever of `,` `;` and tab the first record (outside quotes) uses most.
 fn csv_separator(text: &str) -> char {
-    let first = text.lines().next().unwrap_or("");
     let mut quoted = false;
     let mut unquoted = String::new();
-    for c in first.chars() {
+    // A quoted header may span physical lines; infer from the first complete record.
+    for c in text.chars() {
         if c == '"' {
             quoted = !quoted;
         } else if !quoted {
+            if c == '\n' || c == '\r' {
+                break;
+            }
             unquoted.push(c);
         }
     }
@@ -26,6 +28,7 @@ fn push_csv_row(rows: &mut Vec<Vec<String>>, row: &mut Vec<String>) {
     }
 }
 
+/// Parse CSV (RFC 4180-ish: quotes, doubled quotes, commas/semicolons/tabs).
 pub fn parse_csv(text: &str) -> Vec<Vec<String>> {
     let sep = csv_separator(text);
     let mut rows = Vec::new();

@@ -146,6 +146,7 @@ impl Session {
             merge,
             ui_requests: Vec::new(),
             math,
+            math_left: false,
             math_latex: false,
             math_normal_text: false,
             also_selected,

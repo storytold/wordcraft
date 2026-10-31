@@ -60,6 +60,74 @@ fn structures_symbols_and_navigation() {
 }
 
 #[test]
+fn left_and_right_step_into_an_equation_next_to_the_caret() {
+    let mut s = session();
+    s.run("document.setText", &json!({"text": "ab\ncd"})).unwrap();
+    let p0 = s.doc.start_of(s.sel.focus.story);
+    let p1 = Pos { path: s.doc.next_para(p0.story, &p0.path).unwrap(), ..p0.clone() };
+    // An equation between "a" and "b", and another one between "c" and "d".
+    for p in [&p0, &p1] {
+        s.run("caret.set", &json!({"pos": Pos { off: 1, ..p.clone() }})).unwrap();
+        s.run("insert.equation", &json!({"linear": "x+y", "edit": false})).unwrap();
+    }
+    let after = 1 + OBJ.len_utf8();
+    let editing = |s: &Session| s.math.as_ref().map(|m| (m.at.path.clone(), m.at.off, m.pos.clone()));
+
+    // Right from "a|" enters the equation at its start.
+    s.run("caret.set", &json!({"pos": Pos { off: 1, ..p0.clone() }})).unwrap();
+    s.run("caret.right", &json!({})).unwrap();
+    assert_eq!(editing(&s), Some((p0.path.clone(), 1, MathPos::default())));
+    // Leaving it to the right, the next Right goes on to the text, not back in.
+    for _ in 0..10 {
+        if s.math.is_none() {
+            break;
+        }
+        s.run("equation.move", &json!({"dir": "right"})).unwrap();
+    }
+    assert_eq!((s.math.is_none(), s.sel.focus.off), (true, after));
+    s.run("caret.right", &json!({})).unwrap();
+    assert_eq!((s.math.is_none(), s.sel.focus.off), (true, after + 1));
+
+    // Left from just after the equation in the second paragraph enters it at its end.
+    s.run("caret.set", &json!({"pos": Pos { off: after, ..p1.clone() }})).unwrap();
+    s.run("caret.left", &json!({})).unwrap();
+    let end = MathPos::new(Vec::new(), me::units(&nodes_of(&s, &Pos { off: 1, ..p1.clone() }).unwrap()));
+    assert_eq!(editing(&s), Some((p1.path.clone(), 1, end)));
+    for _ in 0..10 {
+        if s.math.is_none() {
+            break;
+        }
+        s.run("equation.move", &json!({"dir": "left"})).unwrap();
+    }
+    assert_eq!((s.math.is_none(), s.sel.focus.off), (true, 1));
+    s.run("caret.left", &json!({})).unwrap();
+    assert_eq!((s.math.is_none(), s.sel.focus.off), (true, 0));
+
+    // Shift+Right selects over the equation, as before.
+    s.run("caret.set", &json!({"pos": Pos { off: 1, ..p0.clone() }})).unwrap();
+    s.run("caret.right", &json!({"extend": true})).unwrap();
+    assert_eq!((s.math.is_none(), s.sel.anchor.off, s.sel.focus.off), (true, 1, after));
+
+    // caret.left/right sent while editing (the arrow keys go to equation.move instead) leave
+    // the equation and move on, as before, rather than opening the equation they land next to.
+    s.run("caret.set", &json!({"pos": Pos { off: after, ..p0.clone() }})).unwrap();
+    s.run("equation.edit", &json!({})).unwrap();
+    s.run("caret.left", &json!({})).unwrap();
+    assert_eq!((s.math.is_none(), s.sel.focus.off), (true, 1));
+    // With two equations side by side, Right from the first goes on past the second.
+    s.run("caret.set", &json!({"pos": Pos { off: after, ..p1.clone() }})).unwrap();
+    s.run("insert.equation", &json!({"linear": "z", "edit": false})).unwrap();
+    s.run("caret.set", &json!({"pos": Pos { off: 1, ..p1.clone() }})).unwrap();
+    s.run("equation.edit", &json!({})).unwrap();
+    s.run("caret.right", &json!({})).unwrap();
+    assert_eq!((s.math.is_none(), s.sel.focus.off), (true, after + OBJ.len_utf8()));
+    // That holds only for the command that left the equation: the next Right opens one again.
+    s.run("caret.set", &json!({"pos": Pos { off: 1, ..p0.clone() }})).unwrap();
+    s.run("caret.right", &json!({})).unwrap();
+    assert_eq!(editing(&s), Some((p0.path.clone(), 1, MathPos::default())));
+}
+
+#[test]
 fn numbering_conversion_and_display() {
     let mut s = session();
     s.run("insert.equation", &json!({"linear": "E=mc^2"})).unwrap();

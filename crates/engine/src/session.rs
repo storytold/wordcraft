@@ -199,6 +199,9 @@ pub struct Session {
     pub editing_lang: Option<String>,
     /// Editing inside an equation: which one and the caret in it.
     pub math: Option<MathEdit>,
+    /// The running command left the equation being edited before it ran (see [`Session::run`]),
+    /// so Left/Right don't open the equation the caret now sits next to (#4138).
+    pub(crate) math_left: bool,
     /// Equations are typed in LaTeX rather than the linear format.
     pub math_latex: bool,
     /// Text typed into equations is normal (non-math) text.
