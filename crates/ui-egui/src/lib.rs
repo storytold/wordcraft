@@ -1914,7 +1914,6 @@ impl WordApp {
                 }
                 json!({"shapeTool": kind.and_then(|k| serde_json::to_value(k).ok())})
             }
-            }
             "ui.quickAccessToolbar" => {
                 // Hide Quick Access Toolbar (its menu) and Show Quick Access Toolbar (the ribbon's
                 // right-click menu, Customize Ribbon), #1945: `value` true shows the toolbar in

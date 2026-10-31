@@ -33,7 +33,7 @@ pub fn selected_canvas(s: &Session) -> Option<(Pos, &InlineObject)> {
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("insert.canvas", "Drawing Canvas", "Insert › Illustrations", insert)
-            .params(r#"{"width"?: pt (default 432 = 6"), "height"?: pt (default 216 = 3"), "fill"?: "RRGGBB", "outline"?: "RRGGBB"}  (in line with text at the caret; it stays selected, so the next Pictures, Shapes or Text Box goes inside it)"#)
+            .params(r#"{"width"?: pt (default 432 = 6"), "height"?: pt (default 216 = 3"), "fill"?: "RRGGBB", "outline"?: "RRGGBB", "x"?: pt, "y"?: pt, "page"?: n, "wrap"?: "square|inline|inFrontOfText|behindText"}  (x/y/page: where the canvas goes, as dragging one out on the page; with none it goes in line at the caret; it stays selected, so the next Pictures, Shapes or Text Box goes inside it)"#)
             .when(|s| {
                 matches!(s.sel.focus.story, StoryRef::Part(id) if s.doc.parts.get(&id).is_some_and(|p| p.kind == PartKind::TextBox))
                     .then_some("a drawing canvas can't go inside a text box")
@@ -62,9 +62,21 @@ fn insert(s: &mut Session, v: &Value) -> CmdResult {
         stroke: p::str(v, "outline").and_then(wordcraft_doc::props::Rgb::parse),
         stroke_width: 0.75,
     };
+    let obj = InlineObject::Group {
+        w,
+        h,
+        float: Float { wrap: super::insert::dragged_wrap(v), ..Float::default() },
+        ch_w: w,
+        ch_h: h,
+        children: Vec::new(),
+        canvas: Some(style),
+    };
+    // Dragged out on the page: where the pointer put it.
+    if super::insert::place_dragged(s, v, obj.clone())? {
+        return sel_result(s);
+    }
     let props = s.typing_props();
     let at = delete_selection(s)?;
-    let obj = InlineObject::Group { w, h, float: Float::default(), ch_w: w, ch_h: h, children: Vec::new(), canvas: Some(style) };
     let end = s.doc.insert_object(&at, obj, &props)?;
     s.sel = Selection { anchor: at, focus: end };
     sel_result(s)

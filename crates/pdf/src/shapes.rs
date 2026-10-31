@@ -251,22 +251,22 @@ pub(crate) fn shape_path(kind: ShapeKind, r: &Rect, corner: Option<u32>) -> Opti
             pb.line_to(x1, y1);
         }
         ShapeKind::DoubleArrow => {
-            let ah = h * 0.4;
-            poly(
-                &mut pb,
-                &[
-                    (x0 + ah, y0),
-                    (x0, cy),
-                    (x0 + ah, y1),
-                    (x0 + ah, cy + h * 0.15),
-                    (x1 - ah, cy + h * 0.15),
-                    (x1 - ah, y1),
-                    (x1, cy),
-                    (x1 - ah, y0),
-                    (x1 - ah, cy - h * 0.15),
-                    (x0 + ah, cy - h * 0.15),
-                ],
-            );
+            // A line with a head at each end, not a block arrow (see the screen painter).
+            pb.move_to(x0, y0);
+            pb.line_to(x1, y1);
+            let (dx, dy) = (x1 - x0, y1 - y0);
+            let len = (dx * dx + dy * dy).sqrt();
+            if len > 1.0 {
+                let (ux, uy) = (dx / len, dy / len);
+                let head = 8.0_f32.min(len / 2.0);
+                let (nx, ny) = (-uy * head * 0.45, ux * head * 0.45);
+                for (tip, dir) in [((x0, y0), (ux, uy)), ((x1, y1), (-ux, -uy))] {
+                    let (bx, by) = (tip.0 + dir.0 * head, tip.1 + dir.1 * head);
+                    pb.move_to(bx + nx, by + ny);
+                    pb.line_to(tip.0, tip.1);
+                    pb.line_to(bx - nx, by - ny);
+                }
+            }
         }
         ShapeKind::ElbowConnector | ShapeKind::ElbowArrow | ShapeKind::ElbowDoubleArrow => {
             pb.move_to(x0, y0);

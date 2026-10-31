@@ -1101,7 +1101,7 @@ impl Writer<'_> {
                 if ink {
                     w.empty("a:round", &[]);
                 }
-                arrow_ends(w, extra);
+                arrow_ends(w, extra, *kind);
                 w.close("a:ln");
             }
             None => {
@@ -1575,12 +1575,17 @@ fn line_dash(w: &mut W, dash: &wordcraft_doc::line_dash::LineDash) {
 }
 
 /// A shape's `a:effectLst` (ECMA-376 Part 1 §20.1.8.26), children in schema order.
-/// A line's arrowheads (`a:headEnd`, `a:tailEnd`, ECMA-376 §20.1.8.38 / §20.1.8.57).
-fn arrow_ends(w: &mut W, extra: &wordcraft_doc::connector::ShapeExtra) {
-    if extra.arrow_start {
+/// A line's arrowheads (`a:headEnd`, `a:tailEnd`, ECMA-376 §20.1.8.38 / §20.1.8.57). The arrow
+/// variants of lines and connectors carry their heads in the kind too (a `DoubleArrow`, an
+/// `ElbowArrow`), so they are written from it: the preset alone doesn't tell them apart on read.
+fn arrow_ends(w: &mut W, extra: &wordcraft_doc::connector::ShapeExtra, kind: ShapeKind) {
+    let both = matches!(kind, ShapeKind::DoubleArrow | ShapeKind::ElbowDoubleArrow | ShapeKind::CurvedDoubleArrow);
+    let start = extra.arrow_start || both;
+    let end = extra.arrow_end || both || matches!(kind, ShapeKind::ElbowArrow | ShapeKind::CurvedArrow);
+    if start {
         w.empty("a:headEnd", &[("type", "triangle")]);
     }
-    if extra.arrow_end {
+    if end {
         w.empty("a:tailEnd", &[("type", "triangle")]);
     }
 }

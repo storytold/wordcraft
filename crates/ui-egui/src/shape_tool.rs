@@ -86,7 +86,8 @@ pub fn finish_drag(app: &mut WordApp, kind: ShapeKind, st: ShapeDrawing) {
     app.canvas.shape_drawing = None;
     app.canvas.shape_tool = None;
 
-    let (dw, dh) = ((st.to.0 - st.from.0).abs(), (st.to.1 - st.from.1).abs());
+    let (dx, dy) = (st.to.0 - st.from.0, st.to.1 - st.from.1);
+    let (dw, dh) = (dx.abs(), dy.abs());
     let (w, h, ox, oy) = if dw < DRAG_SLOP && dh < DRAG_SLOP {
         let (def_w, def_h) = if kind.is_line_like() { (108.0, 1.0) } else { (108.0, 72.0) };
         (def_w, def_h, st.from.0.max(0.0), st.from.1.max(0.0))
@@ -97,9 +98,11 @@ pub fn finish_drag(app: &mut WordApp, kind: ShapeKind, st: ShapeDrawing) {
         let oy = st.from.1.min(st.to.1).max(0.0);
         (w, h, ox, oy)
     };
+    // A line drag's slope: the frame is the same for both diagonals, so the flips carry it.
+    let (flip_h, flip_v) = (dx < 0.0, dy < 0.0);
     let res = match kind {
-        ShapeKind::DrawingCanvas => app.run("insert.canvas", json!({ "width": w, "height": h })),
-        ShapeKind::TextBox => app.run("insert.textBox", json!({ "width": w, "height": h })),
+        ShapeKind::DrawingCanvas => app.run("insert.canvas", json!({ "width": w, "height": h, "page": st.page, "x": ox, "y": oy, "wrap": "square" })),
+        ShapeKind::TextBox => app.run("insert.textBox", json!({ "width": w, "height": h, "page": st.page, "x": ox, "y": oy, "wrap": "square" })),
         _ => {
             let kind_val = serde_json::to_value(kind).unwrap_or_else(|_| json!("rectangle"));
             let wrap_val = if kind.is_line_like() { "inFrontOfText" } else { "square" };
@@ -111,7 +114,9 @@ pub fn finish_drag(app: &mut WordApp, kind: ShapeKind, st: ShapeDrawing) {
                     "height": h,
                     "x": ox,
                     "y": oy,
-                    "anchor": "page",
+                    "page": st.page,
+                    "flipH": flip_h,
+                    "flipV": flip_v,
                     "wrap": wrap_val,
                 }),
             )
@@ -139,9 +144,18 @@ pub fn paint(app: &WordApp, painter: &egui::Painter, t: &Tokens, layout: &DocLay
 
     // Preview contours inside the rectangle
     let inner = r.shrink(1.0);
+    // A line drag's slope, as the finished shape carries it.
+    let (flip_h, flip_v) = (st.to.0 < st.from.0, st.to.1 < st.from.1);
     if big && inner.width() > 2.0 && inner.height() > 1.0 {
         for (closed, pts) in wordcraft_render::shape_preview_contours(kind, inner.width(), inner.height()) {
-            let pts: Vec<Pos2> = pts.into_iter().map(|(x, y)| pos2(inner.min.x + x, inner.min.y + y)).collect();
+            let pts: Vec<Pos2> = pts
+                .into_iter()
+                .map(|(x, y)| {
+                    let (x, y) = if kind.is_line_like() && flip_h { (inner.width() - x, y) } else { (x, y) };
+                    let (x, y) = if kind.is_line_like() && flip_v { (x, inner.height() - y) } else { (x, y) };
+                    pos2(inner.min.x + x, inner.min.y + y)
+                })
+                .collect();
             let stroke = Stroke::new(1.2, t.accent);
             if closed && !kind.is_line_like() {
                 painter.add(egui::Shape::closed_line(pts, stroke));

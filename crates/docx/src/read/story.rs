@@ -1569,6 +1569,8 @@ impl Reader<'_> {
         let arrow = |tag: &str| ln.and_then(|l| l.child(tag)).and_then(|e| e.attr("type")).is_some_and(|t| t != "none");
         extra.arrow_start = arrow("a:headEnd");
         extra.arrow_end = arrow("a:tailEnd");
+        // The kind's arrow variant (a Double Arrow line, an elbow arrow) from its heads.
+        kind = kind.with_arrowheads(extra.arrow_start, extra.arrow_end);
         // A connector's glued ends (ECMA-376 §20.1.2.2.36, §20.1.2.2.13).
         if let Some(cn) = wsp.child("wps:cNvCnPr") {
             let end = |tag: &str| {

@@ -324,19 +324,25 @@ pub fn shape_path(kind: ShapeKind, r: kurbo::Rect, corner: Option<u32>) -> BezPa
             p
         }
         ShapeKind::DoubleArrow => {
-            let ah = h * 0.4;
-            poly(&[
-                (x0 + ah, y0),
-                (x0, cy),
-                (x0 + ah, y1),
-                (x0 + ah, cy + h * 0.15),
-                (x1 - ah, cy + h * 0.15),
-                (x1 - ah, y1),
-                (x1, cy),
-                (x1 - ah, y0),
-                (x1 - ah, cy - h * 0.15),
-                (x0 + ah, cy - h * 0.15),
-            ])
+            // A line with a head at each end (Office's Lines › Double Arrow), not a block arrow:
+            // sized in points so the heads show even on the default 1 pt-tall drag frame.
+            let mut p = BezPath::new();
+            p.move_to((x0, y0));
+            p.line_to((x1, y1));
+            let (dx, dy) = (x1 - x0, y1 - y0);
+            let len = (dx * dx + dy * dy).sqrt();
+            if len > 1.0 {
+                let (ux, uy) = (dx / len, dy / len);
+                let head = 8.0_f64.min(len / 2.0);
+                let (nx, ny) = (-uy * head * 0.45, ux * head * 0.45);
+                for (tip, dir) in [((x0, y0), (ux, uy)), ((x1, y1), (-ux, -uy))] {
+                    let (bx, by) = (tip.0 + dir.0 * head, tip.1 + dir.1 * head);
+                    p.move_to((bx + nx, by + ny));
+                    p.line_to(tip);
+                    p.line_to((bx - nx, by - ny));
+                }
+            }
+            p
         }
         ShapeKind::ElbowConnector | ShapeKind::ElbowArrow | ShapeKind::ElbowDoubleArrow => {
             let mut p = BezPath::new();

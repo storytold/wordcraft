@@ -1178,6 +1178,39 @@ fn shapes_textboxes_equations_dropcaps_round_trip() {
     assert_eq!(got[1].props, dc.props);
 }
 
+/// Every preset shape keeps its kind through a save and reopen, so a gallery shape the user
+/// picked doesn't turn into a different one on the next save. Kinds with no DrawingML preset of
+/// their own (a freeform, a scribble, the drawing canvas) are written as the nearest preset and
+/// read back as that one, so they are left out.
+#[test]
+fn every_shape_kind_round_trips() {
+    for &kind in ShapeKind::ALL {
+        if matches!(kind, ShapeKind::Freeform | ShapeKind::Scribble | ShapeKind::DrawingCanvas) {
+            continue;
+        }
+        let obj = InlineObject::Shape {
+            kind,
+            w: 80.0,
+            h: 60.0,
+            fill: Some(Fill::solid(Rgb(0x15, 0x60, 0x82))),
+            stroke: Some(Rgb(0, 0, 0)),
+            stroke_width: 1.0,
+            float: Float::default(),
+            story: None,
+            freeform: None,
+            effects: Default::default(),
+            extra: Default::default(),
+        };
+        let mut p = Paragraph::with_text("shape", CharProps::default());
+        p.insert_object(0, obj, &CharProps::default()).expect("insert the shape");
+        let back = rt(&doc_with(vec![p]));
+        match &paras(&back)[0].objects[0] {
+            InlineObject::Shape { kind: got, .. } => assert_eq!(*got, kind, "{kind:?} came back as {got:?}"),
+            o => panic!("{kind:?} came back as {o:?}"),
+        }
+    }
+}
+
 /// A group of a picture, a shape and a text box (`wpg:wgp`) comes back as it was saved: its
 /// size, placement and members' space, and each member's offset, size and content.
 #[test]

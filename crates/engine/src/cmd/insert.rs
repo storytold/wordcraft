@@ -1,7 +1,7 @@
 //! Insert tab: pages, tables, pictures, shapes, links, bookmarks, headers/footers, text, symbols.
 
 use serde_json::{Value, json};
-use wordcraft_doc::para::{Float, InlineObject, ShapeKind, Wrap};
+use wordcraft_doc::para::{Float, InlineObject, OBJ, ShapeKind, Wrap};
 use wordcraft_doc::props::{Align, Border, Borders, CharProps, Rgb, TabAlign, TabStop, TextColor};
 use wordcraft_doc::{Block, Paragraph, PartKind, Path, Pos, StoryRef, Table, para_block};
 
@@ -28,9 +28,9 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("insert.icon", "Icons", "Insert › Illustrations", icon)
             .params(r#"{"id"?: string (omit to list the library), "color"?: "RRGGBB", "size"?: pt, "query"?: string, "category"?: string}"#),
         CommandSpec::new("insert.shape", "Shapes", "Insert › Illustrations", shape)
-            .params(r#"{"kind": string, "width"?: pt, "height"?: pt, "fill"?: "RRGGBB", "stroke"?: "RRGGBB", "arrow"?: "none"|"start"|"end"|"both", "x"?: pt, "y"?: pt, "anchor"?: "margin|page|paragraph", "wrap"?: "square|inline|inFrontOfText|behindText"}"#),
+            .params(r#"{"kind": string, "width"?: pt, "height"?: pt, "fill"?: "RRGGBB", "stroke"?: "RRGGBB", "arrow"?: "none"|"start"|"end"|"both", "x"?: pt, "y"?: pt, "page"?: n, "flipH"?: bool, "flipV"?: bool, "anchor"?: "margin|page|paragraph", "wrap"?: "square|inline|inFrontOfText|behindText"}  (x/y: the top-left; with page, anchored to that 0-based page's text as the canvas drag does; flipH/flipV tell a line's two slopes apart)"#),
         CommandSpec::new("insert.textBox", "Text Box", "Insert › Text", text_box)
-            .params(r#"{"text"?: string, "width"?: pt, "height"?: pt}"#)
+            .params(r#"{"text"?: string, "width"?: pt, "height"?: pt, "x"?: pt, "y"?: pt, "page"?: n, "wrap"?: "square|inline|inFrontOfText|behindText"}  (x/y/page: where the box goes, as dragging one out on the page; with none it goes in line at the caret)"#)
             .when(|s| {
                 // As in Word: no text box inside a text box.
                 matches!(s.sel.focus.story, StoryRef::Part(id) if s.doc.parts.get(&id).is_some_and(|p| p.kind == PartKind::TextBox))
@@ -316,6 +316,37 @@ fn icon(s: &mut Session, v: &Value) -> CmdResult {
     Ok(r)
 }
 
+/// Where a canvas drag puts an object: the 0-based `page` and `x`/`y` from its top-left on it.
+/// `None` when no page is given (the object goes where it would without a drag).
+fn drag_target(v: &Value) -> Result<Option<(u64, f32, f32)>, CmdError> {
+    match (p::u64(v, "page"), p::f32(v, "x"), p::f32(v, "y")) {
+        (None, _, _) => Ok(None),
+        (Some(page), Some(x), Some(y)) if x.is_finite() && y.is_finite() => Ok(Some((page, x, y))),
+        _ => Err(CmdError::Params("`page` needs finite `x` and `y`".into())),
+    }
+}
+
+/// The wrapping a drag gives a text box or canvas: `square` unless the caller says otherwise;
+/// in line with text when it isn't dragged onto a page.
+pub(crate) fn dragged_wrap(v: &Value) -> Wrap {
+    match p::str(v, "wrap") {
+        Some(w) => serde_json::from_value::<Wrap>(json!(w)).unwrap_or(Wrap::Square),
+        None if v.get("page").is_some() => Wrap::Square,
+        None => Wrap::Inline,
+    }
+}
+
+/// Place `obj` at a drag's page point and select it, as the shape, text box and canvas tools do.
+pub(crate) fn place_dragged(s: &mut Session, v: &Value, obj: InlineObject) -> Result<bool, CmdError> {
+    let Some((page, x, y)) = drag_target(v)? else { return Ok(false) };
+    let layout = s.layout();
+    let page = usize::try_from(page).ok().filter(|i| *i < layout.pages.len()).ok_or_else(|| CmdError::Params(format!("no page {page}")))?;
+    let at = super::draw::place(s, &layout, obj, page, (x, y), (x, y))?;
+    let end = Pos { off: at.off.saturating_add(OBJ.len_utf8()), ..at.clone() };
+    s.sel = Selection { anchor: at, focus: end };
+    Ok(true)
+}
+
 fn shape(s: &mut Session, v: &Value) -> CmdResult {
     let kind: ShapeKind = match v.get("kind") {
         Some(Value::String(k_str)) => serde_json::from_value(Value::String(k_str.clone())).unwrap_or_else(|_| ShapeKind::from_ooxml_prst(k_str)),
@@ -361,6 +392,13 @@ fn shape(s: &mut Session, v: &Value) -> CmdResult {
             }
         }
     };
+    // A line's direction: a drag from bottom-right to top-left mirrors it (the frame is the
+    // same for both slopes, so the flips are what tell them apart).
+    let (mut float, flip_h, flip_v) = (float, p::bool(v, "flipH") == Some(true), p::bool(v, "flipV") == Some(true));
+    if kind.is_line_like() || kind.is_connector() {
+        float.flip_h = flip_h;
+        float.flip_v = flip_v;
+    }
     let stroke = p::str(v, "stroke").and_then(Rgb::parse).or(Some(Rgb(0x0E, 0x40, 0x5A)));
     let obj = InlineObject::Shape {
         kind,
@@ -377,6 +415,10 @@ fn shape(s: &mut Session, v: &Value) -> CmdResult {
     };
     // A selected Drawing Canvas takes it in (and stays selected for the next one).
     if super::canvas::add_member(s, obj.clone())?.is_some() {
+        return sel_result(s);
+    }
+    // Drawn on the page (the shape tool): anchored under the pointer's page point.
+    if place_dragged(s, v, obj.clone())? {
         return sel_result(s);
     }
     // Word draws a new shape beside what is selected and never deletes it: the shape just
@@ -401,7 +443,7 @@ fn text_box(s: &mut Session, v: &Value) -> CmdResult {
         fill: Some(wordcraft_doc::fill::Fill::solid(Rgb::WHITE)),
         stroke: Some(Rgb::BLACK),
         stroke_width: 0.75,
-        float: Float::default(),
+        float: Float { wrap: dragged_wrap(v), ..Float::default() },
         story: Some(id),
         freeform: None,
         effects: Default::default(),
@@ -409,9 +451,12 @@ fn text_box(s: &mut Session, v: &Value) -> CmdResult {
     };
     // A selected Drawing Canvas takes it in; otherwise it goes at the caret.
     if super::canvas::add_member(s, obj.clone())?.is_none() {
-        let props = s.typing_props();
-        let at = delete_selection(s)?;
-        s.doc.insert_object(&at, obj, &props)?;
+        // Dragged out on the page: where the pointer put it.
+        if !place_dragged(s, v, obj.clone())? {
+            let props = s.typing_props();
+            let at = delete_selection(s)?;
+            s.doc.insert_object(&at, obj, &props)?;
+        }
     }
     // Like Word, type straight into the new box.
     s.sel = Selection::caret(s.doc.end_of(StoryRef::Part(id)));

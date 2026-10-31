@@ -17,39 +17,10 @@ use crate::xml::El;
 const THEME_LINE_WIDTHS: [f32; 3] = [0.5, 1.0, 1.5];
 
 /// The shape kind drawn for DrawingML preset geometry `prst` (ECMA-376 Part 1 §20.1.10.56).
-/// Presets WordCraft has no shape for are drawn as the nearest one it has: callouts as the box,
-/// round or cloud they point from, flowchart boxes as rectangles.
+/// Presets WordCraft has no shape for are drawn as the nearest one it has (the fallback in
+/// [`ShapeKind::from_ooxml_prst`]).
 pub(crate) fn preset_kind(prst: &str) -> ShapeKind {
-    match prst {
-        "roundRect"
-        | "round1Rect"
-        | "round2SameRect"
-        | "round2DiagRect"
-        | "snipRoundRect"
-        | "wedgeRoundRectCallout"
-        | "flowChartAlternateProcess"
-        | "flowChartTerminator"
-        | "plaque" => ShapeKind::RoundedRectangle,
-        "ellipse" | "wedgeEllipseCallout" | "cloudCallout" | "cloud" | "flowChartConnector" | "donut" | "flowChartOnlineStorage" => {
-            ShapeKind::Ellipse
-        }
-        "flowChartOr" => ShapeKind::FlowchartOr,
-        "triangle" | "flowChartExtract" | "flowChartMerge" => ShapeKind::Triangle,
-        "rtTriangle" => ShapeKind::RightTriangle,
-        "diamond" | "flowChartDecision" => ShapeKind::Diamond,
-        "line" | "lineInv" => ShapeKind::Line,
-        "straightConnector1" => ShapeKind::StraightConnector,
-        "bentConnector2" | "bentConnector3" | "bentConnector4" | "bentConnector5" => ShapeKind::ElbowConnector,
-        "curvedConnector2" | "curvedConnector3" | "curvedConnector4" | "curvedConnector5" => ShapeKind::CurvedConnector,
-        "rightArrow" | "leftRightArrow" | "upDownArrow" | "notchedRightArrow" | "stripedRightArrow" => ShapeKind::Arrow,
-        "leftArrow" => ShapeKind::ArrowLeft,
-        "upArrow" => ShapeKind::ArrowUp,
-        "downArrow" => ShapeKind::ArrowDown,
-        "star4" | "star5" | "star6" | "star7" | "star8" | "star10" | "star12" | "star16" | "star24" | "star32" => ShapeKind::Star,
-        "heart" => ShapeKind::Heart,
-        "wedgeRectCallout" => ShapeKind::Rectangle,
-        _ => ShapeKind::from_ooxml_prst(prst),
-    }
+    ShapeKind::from_ooxml_prst(prst)
 }
 
 /// The shape kind drawn for a legacy VML preset shape type `spt` (`o:spt`, the MSOSPT numbers of
@@ -462,13 +433,15 @@ mod tests {
     }
 
     #[test]
-    fn presets_map_to_the_nearest_shape() {
+    fn presets_keep_their_own_shape() {
         assert_eq!(preset_kind("straightConnector1"), ShapeKind::StraightConnector);
         assert_eq!(preset_kind("bentConnector3"), ShapeKind::ElbowConnector);
-        assert_eq!(preset_kind("wedgeRoundRectCallout"), ShapeKind::RoundedRectangle);
-        assert_eq!(preset_kind("wedgeEllipseCallout"), ShapeKind::Ellipse);
-        assert_eq!(preset_kind("wedgeRectCallout"), ShapeKind::Rectangle);
-        assert_eq!(preset_kind("flowChartDecision"), ShapeKind::Diamond);
+        assert_eq!(preset_kind("wedgeRoundRectCallout"), ShapeKind::RoundedRectangularCallout);
+        assert_eq!(preset_kind("wedgeEllipseCallout"), ShapeKind::OvalCallout);
+        assert_eq!(preset_kind("wedgeRectCallout"), ShapeKind::RectangularCallout);
+        assert_eq!(preset_kind("flowChartDecision"), ShapeKind::FlowchartDecision);
+        // A preset with no kind of its own still gets the nearest one.
+        assert_eq!(preset_kind("notAPreset"), ShapeKind::Rectangle);
     }
 
     /// #3919: Word's up, down and left block arrows were all read as the right-pointing arrow.

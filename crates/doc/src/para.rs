@@ -901,7 +901,9 @@ impl ShapeKind {
 
             ShapeKind::Line => "line",
             ShapeKind::Arrow => "rightArrow",
-            ShapeKind::DoubleArrow => "leftRightArrow",
+            // A line with a head at each end (Office's Lines › Double Arrow), not the block
+            // `leftRightArrow` preset: the arrowheads are the `a:headEnd`/`a:tailEnd` we write.
+            ShapeKind::DoubleArrow => "line",
             ShapeKind::StraightConnector => "straightConnector1",
             ShapeKind::ElbowConnector => "bentConnector2",
             ShapeKind::ElbowArrow => "bentConnector3",
@@ -910,8 +912,10 @@ impl ShapeKind {
             ShapeKind::CurvedArrow => "curvedConnector3",
             ShapeKind::CurvedDoubleArrow => "curvedConnector4",
             ShapeKind::Curve => "curvedConnector5",
-            ShapeKind::Freeform => "freeform",
-            ShapeKind::Scribble => "scribble",
+            // No DrawingML preset exists for these: with custom geometry they are written as
+            // `a:custGeom`, and without it a curve keeps the shape visible and the file readable
+            // (a `prst="freeform"` makes Word report unreadable content).
+            ShapeKind::Freeform | ShapeKind::Scribble => "curvedConnector3",
 
             ShapeKind::ArrowLeft => "leftArrow",
             ShapeKind::ArrowUp => "upArrow",
@@ -972,8 +976,8 @@ impl ShapeKind {
             ShapeKind::FlowchartDirectAccessStorage => "flowChartMagneticDrum",
             ShapeKind::FlowchartDisplay => "flowChartDisplay",
 
-            ShapeKind::Explosion1 => "star8",
-            ShapeKind::Explosion2 => "star14",
+            ShapeKind::Explosion1 => "irregularSeal1",
+            ShapeKind::Explosion2 => "irregularSeal2",
             ShapeKind::Star4 => "star4",
             ShapeKind::Star => "star5",
             ShapeKind::Star6 => "star6",
@@ -1066,7 +1070,10 @@ impl ShapeKind {
             "rightArrow" => ShapeKind::Arrow,
             "straightConnector1" => ShapeKind::StraightConnector,
             "bentConnector2" | "bentConnector3" | "bentConnector4" | "bentConnector5" => ShapeKind::ElbowConnector,
-            "curvedConnector2" | "curvedConnector3" | "curvedConnector4" | "curvedConnector5" => ShapeKind::CurvedConnector,
+            // `curvedConnector5` is what we write for a Curve, so it reads back as one and a
+            // curve keeps its kind through a save and reopen.
+            "curvedConnector2" | "curvedConnector3" | "curvedConnector4" => ShapeKind::CurvedConnector,
+            "curvedConnector5" => ShapeKind::Curve,
             "freeform" => ShapeKind::Freeform,
             "scribble" => ShapeKind::Scribble,
 
@@ -1129,6 +1136,8 @@ impl ShapeKind {
             "flowChartMagneticDrum" => ShapeKind::FlowchartDirectAccessStorage,
             "flowChartDisplay" => ShapeKind::FlowchartDisplay,
 
+            "irregularSeal1" => ShapeKind::Explosion1,
+            "irregularSeal2" => ShapeKind::Explosion2,
             "star4" => ShapeKind::Star4,
             "star5" => ShapeKind::Star,
             "star6" => ShapeKind::Star6,
@@ -1162,6 +1171,33 @@ impl ShapeKind {
             "lineCallout4AccentBar" => ShapeKind::LineCallout4AccentBar,
 
             _ => ShapeKind::Rectangle,
+        }
+    }
+
+    /// This kind with the arrowheads a file gives it (`a:headEnd` / `a:tailEnd`, ECMA-376
+    /// §20.1.8.38 / §20.1.8.57): a line with a head at each end is a [`ShapeKind::DoubleArrow`],
+    /// and an elbow or curved connector becomes its arrow variant, so the kind survives a save
+    /// and reopen (the arrowheads alone don't tell the kinds apart otherwise).
+    pub fn with_arrowheads(self, start: bool, end: bool) -> ShapeKind {
+        match self {
+            ShapeKind::Line | ShapeKind::DoubleArrow => {
+                if start && end {
+                    ShapeKind::DoubleArrow
+                } else {
+                    ShapeKind::Line
+                }
+            }
+            ShapeKind::ElbowConnector | ShapeKind::ElbowArrow | ShapeKind::ElbowDoubleArrow => match (start, end) {
+                (false, false) => ShapeKind::ElbowConnector,
+                (false, true) => ShapeKind::ElbowArrow,
+                _ => ShapeKind::ElbowDoubleArrow,
+            },
+            ShapeKind::CurvedConnector | ShapeKind::CurvedArrow | ShapeKind::CurvedDoubleArrow => match (start, end) {
+                (false, false) => ShapeKind::CurvedConnector,
+                (false, true) => ShapeKind::CurvedArrow,
+                _ => ShapeKind::CurvedDoubleArrow,
+            },
+            other => other,
         }
     }
 }

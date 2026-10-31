@@ -358,7 +358,7 @@ pub fn ink_at(s: &mut Session, page: usize, x: f32, y: f32) -> Option<Pos> {
     })
 }
 
-fn page_param(s: &mut Session, v: &Value) -> Result<(usize, Arc<DocLayout>), CmdError> {
+pub(crate) fn page_param(s: &mut Session, v: &Value) -> Result<(usize, Arc<DocLayout>), CmdError> {
     let page = p::u64(v, "page").ok_or_else(|| CmdError::Params("`page` (0-based) is required".into()))?;
     let layout = s.layout();
     let page = usize::try_from(page).ok().filter(|i| *i < layout.pages.len()).ok_or_else(|| CmdError::Params(format!("no page {page}")))?;
@@ -486,7 +486,14 @@ fn stroke(s: &mut Session, v: &Value) -> CmdResult {
 /// Insert floating `obj` with its top-left at `(x, y)` on `page`, anchored to the body paragraph
 /// under `anchor` (positioned from its column and top), or, where no paragraph starts on the
 /// page, to the nearest line and positioned on the page. Returns where its character went.
-fn place(s: &mut Session, layout: &DocLayout, obj: InlineObject, page: usize, (x, y): (f32, f32), anchor: (f32, f32)) -> Result<Pos, CmdError> {
+pub(crate) fn place(
+    s: &mut Session,
+    layout: &DocLayout,
+    obj: InlineObject,
+    page: usize,
+    (x, y): (f32, f32),
+    anchor: (f32, f32),
+) -> Result<Pos, CmdError> {
     let (at, on_page) = match super::objects::anchor_paragraph(&s.doc, layout, page, anchor, StoryRef::Body) {
         Some(path) => (Pos { story: StoryRef::Body, path, off: 0 }, false),
         None => (
@@ -510,7 +517,7 @@ fn place(s: &mut Session, layout: &DocLayout, obj: InlineObject, page: usize, (x
         (Anchor::Paragraph, origin)
     };
     let para = s.doc.para_mut(at.story, &at.path)?;
-    if let Some(InlineObject::Shape { float, .. }) = para.object_at_mut(at.off) {
+    if let Some(float) = para.object_at_mut(at.off).and_then(InlineObject::float_mut) {
         float.h_rel = if on_page { Anchor::Page } else { Anchor::Column };
         float.v_rel = rel;
         float.x = x - origin.x;
