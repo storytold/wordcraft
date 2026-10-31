@@ -159,6 +159,9 @@ pub struct CanvasState {
     /// Document faces added to the interface fonts so the input method's composition (#565) and a
     /// file name in the window caption can be drawn.
     pub(crate) ime_faces: Vec<std::sync::Arc<wordcraft_fonts::FontFace>>,
+    /// The document face the composition is drawn in, as last installed
+    /// ([`crate::theme::composition_family`]).
+    pub(crate) ime_face: Option<wordcraft_fonts::FaceRef>,
     pub want_focus: bool,
     pub context_issue: Option<serde_json::Value>,
     pub context_synonyms: Option<serde_json::Value>,
@@ -373,6 +376,7 @@ impl Default for CanvasState {
             ime_preedit: String::new(),
             ime_preedit_range: None,
             ime_faces: Vec::new(),
+            ime_face: None,
             want_focus: true,
             context_issue: None,
             context_synonyms: None,
@@ -1532,33 +1536,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             let mut preedit_color = None;
             let mut ime_dx = 0.0;
             if focused && !app.canvas.ime_preedit.is_empty() {
-                // The composition is interface text, but it may be in a script the interface fonts lack
-                // (Bangla, Thai ...): borrow the document fonts' fallback faces, or it draws as boxes (#565).
-                let new = crate::theme::faces_for_preedit(
-                    &app.canvas.ime_preedit,
-                    &app.canvas.ime_faces,
-                    |c| (c as u32) < 0x250,
-                    |c| wordcraft_fonts::FontDb::global().fallback_for(c, u32::MAX),
-                );
-                if !new.is_empty() {
-                    app.canvas.ime_faces.extend(new);
-                    crate::theme::install_fonts_language_extra(
-                        ui.ctx(),
-                        app.fonts_hans,
-                        app.fonts_korean,
-                        app.fonts_hant,
-                        app.fonts_system_cjk,
-                        &app.canvas.ime_faces,
-                    );
-                    ui.ctx().request_repaint();
-                }
                 let color = caret_color(app);
-                let g = painter.layout_no_wrap(app.canvas.ime_preedit.clone(), regular(c.height * scale * 0.8), Color32::PLACEHOLDER);
-                let at = preedit_cursor_chars(&app.canvas.ime_preedit, app.canvas.ime_preedit_range.as_ref());
-                ime_dx = g.pos_from_cursor(egui::text::CCursor::new(at)).min.x;
-                let r = Rect::from_min_size(pos2(x, y1 - g.size().y), g.size());
-                painter.galley(r.min, g, color);
-                painter.line_segment([pos2(r.min.x, r.max.y), pos2(r.max.x, r.max.y)], Stroke::new(1.0, color));
+                let at = CompositionAt { pr: *pr, scale, x, y1, height: c.height, turned: c.width > 0.0, color, max_tex, ppp };
+                ime_dx = paint_composition(app, ui.ctx(), &painter, &layout, &at);
                 preedit_color = Some(color);
             }
             let x = x + ime_dx;
@@ -1600,6 +1580,85 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         CanvasFinish { app, ui, layout: &layout, geo: &geo, caret, ime_geometry, ime_interrupt, area, dim_body, hruler, vruler },
         out,
     );
+}
+
+/// Where [`paint_composition`] draws an input method's composition: from the caret at `x` on the
+/// page drawn at `pr` (`scale` screen points to the point), whose bottom is at `y1` and whose
+/// height is `height` points, across the page in turned text. `max_tex` and `ppp` are the
+/// texture side and pixels per point the composition's glyphs must fit.
+struct CompositionAt {
+    pr: Rect,
+    scale: f32,
+    x: f32,
+    y1: f32,
+    height: f32,
+    turned: bool,
+    color: Color32,
+    max_tex: f32,
+    ppp: f32,
+}
+
+/// Draw the input method's composition and return how far into it the input method's cursor
+/// lies, in screen points.
+fn paint_composition(app: &mut WordApp, ctx: &egui::Context, painter: &egui::Painter, layout: &DocLayout, at: &CompositionAt) -> f32 {
+    // The composition is interface text, but it may be in a script the interface fonts lack
+    // (Bangla, Thai ...): borrow the document fonts' fallback faces, or it draws as boxes (#565).
+    // CJK uses the CJK UI font, as the window caption does: the faces a document falls back
+    // to for it are mostly too large to borrow (Microsoft YaHei on Windows is 19 MB), and a
+    // build without craft-fonts has no CJK interface face of its own.
+    if !app.want_system_cjk && app.canvas.ime_preedit.chars().any(wordcraft_fonts::is_cjk) {
+        app.want_system_cjk = true;
+        ctx.request_repaint();
+    }
+    let new = crate::theme::faces_for_preedit(&app.canvas.ime_preedit, &app.canvas.ime_faces, crate::theme::caption_char_covered, |c| {
+        wordcraft_fonts::FontDb::global().fallback_for(c, u32::MAX)
+    });
+    // Word draws the composition in the font and size of the text it goes into: take the
+    // face, size and baseline the layout gives text typed here (not in turned text). The
+    // face is the one the run's font asks for, not a fallback face that drew the
+    // character before the caret (a Chinese character in a Latin font).
+    let typing = if at.turned { None } else { layout.typing_style(&app.session.sel.focus, app.session.page_hint) };
+    let face = typing.as_ref().map(|(run, _)| run.requested_face);
+    if !new.is_empty() || face != app.canvas.ime_face {
+        app.canvas.ime_faces.extend(new);
+        app.canvas.ime_face = face;
+        crate::theme::install_fonts_language_extra(
+            ctx,
+            app.fonts_hans,
+            app.fonts_korean,
+            app.fonts_hant,
+            app.fonts_system_cjk,
+            &app.canvas.ime_faces,
+            app.canvas.ime_face,
+        );
+        ctx.request_repaint();
+    }
+    // New fonts apply from the next frame; until the composition family is bound (or
+    // without a style run) the composition is drawn as before, in the interface font.
+    let family = crate::theme::composition_family();
+    let bound = ctx.fonts(|f| f.definitions().families.contains_key(&family));
+    // egui draws each glyph into its font atlas and panics on one wider than the atlas
+    // (1,638-point text at 500% is about 11,000 points): keep the composition's glyphs
+    // within a quarter of the atlas side, and at most 1,024 pixels, as each glyph stays
+    // in the atlas. Larger text gets a smaller composition.
+    let most = (at.max_tex / 4.0).min(1024.0) / at.ppp;
+    let size = |s: f32| s.min(most).max(1.0);
+    let (font, base) = match &typing {
+        Some((run, base)) if bound && run.size.is_finite() && run.size > 0.0 => {
+            (egui::FontId::new(size(run.size * at.scale), family), Some(at.pr.min.y + base * at.scale))
+        }
+        _ => (regular(size(at.height * at.scale * 0.8)), None),
+    };
+    let g = painter.layout_no_wrap(app.canvas.ime_preedit.clone(), font, Color32::PLACEHOLDER);
+    let cursor = preedit_cursor_chars(&app.canvas.ime_preedit, app.canvas.ime_preedit_range.as_ref());
+    let dx = g.pos_from_cursor(egui::text::CCursor::new(cursor)).min.x;
+    // The galley's first baseline sits on the line's baseline, as typed text would.
+    let baseline = g.rows.first().and_then(|r| r.glyphs.first().map(|gl| r.pos.y + gl.pos.y)).unwrap_or(g.size().y);
+    let top = base.map_or(at.y1 - g.size().y, |b| b - baseline);
+    let r = Rect::from_min_size(pos2(at.x, top), g.size());
+    painter.galley(r.min, g, at.color);
+    painter.line_segment([pos2(r.min.x, r.max.y), pos2(r.max.x, r.max.y)], Stroke::new(1.0, at.color));
+    dx
 }
 
 #[cfg(test)]

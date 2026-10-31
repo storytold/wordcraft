@@ -3853,6 +3853,133 @@ fn hiding_white_space_stacks_page_bands_and_keeps_hit_testing() {
     let _ = collapse_white_space(&[], &[], 1.0, 1.0);
 }
 
+/// A Japanese, Chinese or Korean composition is drawn with the CJK UI font, as the window
+/// caption is. It borrowed a document face instead, but only one of 16 MB or less, and on
+/// Windows Japanese falls back to Microsoft YaHei (19 MB): without craft-fonts' CJK faces
+/// built in, the composition was a box until it was committed.
+#[test]
+fn a_cjk_composition_uses_the_cjk_ui_font() {
+    let app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    // The frame the composition arrives in draws it before the CJK UI font is installed.
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1440.0, 900.0))
+        .with_step_dt(1.0 / 60.0)
+        .with_context_setup(kana_test_glyphs)
+        .build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+    for _ in 0..8 {
+        h.step();
+    }
+    assert!(h.state().canvas.focused, "the canvas takes focus when the window opens");
+    assert!(!h.state().want_system_cjk, "nothing CJK on screen yet");
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "にほん".into(), active_range_chars: None }));
+    for _ in 0..3 {
+        h.step();
+    }
+    assert_eq!(h.state().canvas.ime_preedit, "にほん");
+    assert!(h.state().want_system_cjk, "kana ask for the CJK UI font");
+    assert!(h.state().fonts_system_cjk, "and the interface fonts are installed with it");
+    assert!(!h.state().canvas.ime_faces.iter().any(|f| f.covers('に')), "no document face is borrowed for it");
+}
+
+/// The composition is drawn in the font and size of the text it goes into, as Word draws it.
+/// It was drawn in the interface font at 0.8 of the line's height, which made Latin letters look
+/// larger and heavier than the same letters once committed.
+#[test]
+fn the_composition_takes_the_documents_font_and_size() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    app.run("document.setText", json!({"text": "Hello"})).unwrap();
+    app.run("select.all", json!({})).unwrap();
+    app.run("format.size", json!({"size": 20})).unwrap();
+    app.run("caret.docEnd", json!({})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    for _ in 0..8 {
+        h.step();
+    }
+    let layout = h.state_mut().session.layout();
+    let (run, base) = layout.typing_style(&h.state().session.sel.focus, 0).expect("the run text typed here takes");
+    assert_eq!(run.size, 20.0, "the size of the text before the caret");
+    let caret = layout.caret(&h.state().session.sel.focus).expect("a caret");
+    assert!(base > caret.top && base < caret.top + caret.height, "the baseline lies within the caret: {base} in {caret:?}");
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "tottori".into(), active_range_chars: None }));
+    for _ in 0..3 {
+        h.step();
+    }
+    assert!(h.state().canvas.ime_face == Some(run.requested_face), "the composition takes that face");
+    let first = h.ctx.fonts(|f| f.definitions().families.get(&crate::theme::composition_family()).and_then(|v| v.first().cloned()));
+    assert!(first.as_deref().is_some_and(|n| n.starts_with("composition ") && n.contains(run.requested_face.family.as_str())), "{first:?}");
+    // Every font set the interface installs binds the family, so drawing with it can't panic.
+    assert!(crate::theme::font_definitions(false, false).families.contains_key(&crate::theme::composition_family()));
+    // As drawn: at the text's size on screen, its first baseline on the line's. The caret's IME
+    // rectangle gives the caret's top and the page's scale on screen.
+    let ime = h.output().platform_output.ime.as_ref().map(|i| i.rect).expect("the caret's IME rectangle");
+    let scale = ime.height() / caret.height;
+    let drawn = h
+        .output()
+        .shapes
+        .iter()
+        .find_map(|c| match &c.shape {
+            egui::Shape::Text(t) if t.galley.text() == "tottori" => Some(t.clone()),
+            _ => None,
+        })
+        .expect("the composition is drawn");
+    let size = drawn.galley.job.sections.first().map(|s| s.format.font_id.size);
+    assert!(size.is_some_and(|s| (s - 20.0 * scale).abs() < 0.01), "{size:?} at scale {scale}");
+    let row = drawn.galley.rows.first().expect("a row");
+    let baseline = drawn.pos.y + row.pos.y + row.glyphs.first().expect("a glyph").pos.y;
+    let want = ime.min.y + (base - caret.top) * scale;
+    assert!((baseline - want).abs() < 0.5, "drawn baseline {baseline}, the line's {want}");
+    // A composition isn't text until it is committed.
+    assert_eq!(h.state().session.doc.plain_text(StoryRef::Body), "Hello");
+}
+
+/// The composition's size never panics egui, which draws each glyph into its font atlas and
+/// panics on one wider than the atlas. In 1,638-point text at 500% the text's size is about
+/// 11,000 points, so the composition is drawn smaller.
+#[test]
+fn a_composition_at_the_largest_size_and_zoom_is_drawn_smaller() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    app.run("document.setText", json!({"text": "W"})).unwrap();
+    app.run("select.all", json!({})).unwrap();
+    app.run("format.size", json!({"size": 1638})).unwrap();
+    app.run("caret.docEnd", json!({})).unwrap();
+    app.run("view.zoom", json!({"value": 500})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    for _ in 0..8 {
+        h.step();
+    }
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "WWW".into(), active_range_chars: None }));
+    for _ in 0..3 {
+        h.step();
+    }
+    let size = h.output().shapes.iter().find_map(|c| match &c.shape {
+        egui::Shape::Text(t) if t.galley.text() == "WWW" => t.galley.job.sections.first().map(|s| s.format.font_id.size),
+        _ => None,
+    });
+    let most = h.ctx.input(|i| i.max_texture_side) as f32 / 4.0 / h.ctx.pixels_per_point();
+    assert!(size.is_some_and(|s| s > 1.0 && s <= most), "{size:?}, at most {most}");
+}
+
 /// #1169: Space and Enter count as `Response::clicked` on the focused canvas, and
 /// `request_focus` always interrupts IME. On X11 that recreates the XIM context and
 /// fcitx drops every later key. Those keys still type, and they must not set
@@ -3904,11 +4031,13 @@ fn space_and_enter_on_the_canvas_do_not_interrupt_ime() {
 /// Kittest's `MissingGlyphPolicy::Panic` is right: a missing glyph is a bug. But the interface
 /// fonts need not carry Japanese (craft-fonts is optional, and a CI Linux runner has no
 /// Japanese system font), and these IME tests compose Japanese through the interface font
-/// chain. Draw a stand-in for exactly those characters; every other missing glyph still panics.
+/// chain, or the composition family (the document's face, then that chain). Draw a stand-in
+/// for exactly those characters; every other missing glyph still panics.
 fn kana_test_glyphs(ctx: &egui::Context) {
     ctx.add_glyph_rasterizer(egui::GlyphRasterizer::new("wordcraft::canvas::tests::kana", |req| {
-        let kana =
-            *req.family == egui::FontFamily::Proportional && !req.cluster.is_empty() && req.cluster.chars().all(|c| matches!(c, 'に' | 'ほ' | 'ん'));
+        let kana = (*req.family == egui::FontFamily::Proportional || *req.family == crate::theme::composition_family())
+            && !req.cluster.is_empty()
+            && req.cluster.chars().all(|c| matches!(c, 'に' | 'ほ' | 'ん'));
         kana.then(|| egui::RasterizedGlyph {
             bitmap: egui::GlyphBitmap {
                 image: egui::ColorImage::new([1, 1], vec![egui::Color32::WHITE]),
