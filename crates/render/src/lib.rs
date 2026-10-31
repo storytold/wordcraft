@@ -163,6 +163,11 @@ pub struct RenderOptions {
     /// Thicken glyphs slightly the way macOS draws text on screen ("font smoothing"), so pages
     /// look like they do in other Mac apps. For on-screen rasters only: exports stay exact.
     pub text_darkening: bool,
+    /// Hint text for the screen the way FreeType's `hintslight` does on Linux desktops: glyph
+    /// baselines sit on whole pixels and their horizontal edges (x-height, cap height) are moved
+    /// onto the pixel grid, so text looks as crisp as in other apps there. Nothing moves
+    /// sideways, so lines break as without it. For on-screen rasters only: exports stay exact.
+    pub hinting: bool,
     /// Dark page (View › Switch Modes): every colour but pictures has its lightness inverted, so
     /// white paper turns black and black text white while hues stay the same. Screen only.
     pub dark: bool,
@@ -259,6 +264,7 @@ impl Default for RenderOptions {
             paper: Rgb::WHITE,
             mark_color: Rgb(0x2B, 0x57, 0x9A),
             text_darkening: false,
+            hinting: false,
             dark: false,
             dark_paper: DARK_PAPER,
             read_paper: None,
@@ -459,6 +465,13 @@ fn draw_watermark(ctx: &mut RenderContext, view: Affine, page: &Page, wm: &wordc
         ctx.fill_path(&o);
         x += g.x_advance as f64 * k;
     }
+}
+
+/// Does `view` map page points to device pixels without rotation, skew or mirroring, scaling both
+/// axes alike? Only then do hinted outlines (made on the pixel grid) line up with the screen.
+fn is_upright(view: Affine) -> bool {
+    let [a, b, c, d, e, f] = view.as_coeffs();
+    [a, b, c, d, e, f].iter().all(|v| v.is_finite()) && b == 0.0 && c == 0.0 && a > 0.0 && (a - d).abs() <= a * 1e-6
 }
 
 /// How far, in device pixels, macOS-style font smoothing pushes each side of a glyph outline out
@@ -699,13 +712,19 @@ fn draw_glyphs(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
     let darken_px = if opts.text_darkening && *alpha >= 1.0 { stem_darkening(*size as f64 * px_per_pt) } else { 0.0 };
     let darken = if darken_px > 0.0 && k * px_per_pt > 0.0 { 2.0 * darken_px / (k * px_per_pt) } else { 0.0 };
     let outline_stroke = if *synth_bold { face.upem * 0.03 } else { 0.0 } + darken;
+    let join = if darken > 0.0 { kurbo::Join::Round } else { kurbo::Join::Miter };
     if outline_stroke > 0.0 {
-        let join = if darken > 0.0 { kurbo::Join::Round } else { kurbo::Join::Miter };
         ctx.set_stroke(kurbo::Stroke::new(outline_stroke).with_join(join));
     }
     // Emoji and other colour glyphs (#1269) are drawn from the font's colour data.
     let colour = face.has_color_glyphs();
     let ppem = *size as f64 * px_per_pt;
+    // Hinted outlines are in device pixels: only for an upright, unmirrored, evenly scaled
+    // view (not rotated text boxes), where the pixel grid lines up with the glyphs.
+    let hint_ppem = (opts.hinting && !colour && is_upright(view)).then_some(ppem as f32);
+    // The outline strokes in device pixels, for the hinted outlines.
+    let stroke_px = outline_stroke * k * px_per_pt;
+    let mut hinted_stroke = false;
     for (gid, x, y) in glyphs {
         let (gx, gy) = (*x as f64, *y as f64);
         // Written so a NaN position is skipped too.
@@ -719,6 +738,23 @@ fn draw_glyphs(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
             ctx.set_paint(color(opts.ink(*c), *alpha));
             continue;
         }
+        if let Some(o) = hint_ppem.and_then(|p| db.hinted_outline(face, *gid, p)) {
+            if o.elements().is_empty() {
+                continue;
+            }
+            // The baseline on a whole pixel, as the hinting assumes.
+            let at = view * kurbo::Point::new(gx, gy);
+            ctx.set_transform(Affine::translate((at.x, at.y.round())) * skew);
+            ctx.fill_path(&o);
+            if outline_stroke > 0.0 {
+                if !hinted_stroke {
+                    ctx.set_stroke(kurbo::Stroke::new(stroke_px).with_join(join));
+                    hinted_stroke = true;
+                }
+                ctx.stroke_path(&o);
+            }
+            continue;
+        }
         let o = db.outline(face, *gid);
         if o.elements().is_empty() {
             continue;
@@ -726,6 +762,10 @@ fn draw_glyphs(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
         ctx.set_transform(view * Affine::translate((gx, gy)) * skew * Affine::scale(k));
         ctx.fill_path(&o);
         if outline_stroke > 0.0 {
+            if hinted_stroke {
+                ctx.set_stroke(kurbo::Stroke::new(outline_stroke).with_join(join));
+                hinted_stroke = false;
+            }
             ctx.stroke_path(&o);
         }
     }

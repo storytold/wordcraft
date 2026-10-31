@@ -345,7 +345,7 @@ fn caret_contrasts_with_what_lies_under_it() {
     let at = |a: &mut WordApp, off: usize| {
         let layout = a.session.layout();
         let c = layout.caret_on(&Pos::body(0, off), 0).unwrap();
-        let view = view_key(a, false, None);
+        let view = view_key(a, false, None, true);
         caret_color_at(a, &layout, c.page, c.x, c.top + c.height / 2.0, view, false)
     };
     assert_eq!(at(&mut a, 2), Color32::BLACK, "white paper");
@@ -372,19 +372,19 @@ fn read_mode_page_color_sets_the_reading_paper() {
     a.run("design.pageColor", json!({"color": "#102040"})).unwrap();
     let paper = |a: &WordApp| page_render_options(a, false).paper_of(&a.session.doc);
     assert_eq!(paper(&a), Rgb(0x10, 0x20, 0x40), "Print Layout shows the page color");
-    let print_key = view_key(&a, false, None);
+    let print_key = view_key(&a, false, None, true);
     a.run("view.readMode", json!({})).unwrap();
     assert_eq!(paper(&a), Rgb::WHITE, "None: white, the page color ignored");
-    let none_key = view_key(&a, false, None);
+    let none_key = view_key(&a, false, None, true);
     a.run("view.readPageColor", json!({"value": "sepia"})).unwrap();
     assert_eq!(paper(&a), wordcraft_render::SEPIA_PAPER);
     assert!(!page_render_options(&a, false).dark, "Sepia keeps the text's colors");
-    let sepia_key = view_key(&a, false, None);
+    let sepia_key = view_key(&a, false, None, true);
     a.run("view.readPageColor", json!({"value": "inverse"})).unwrap();
     assert!(page_render_options(&a, false).dark);
     let d = wordcraft_render::DARK_PAPER;
     assert_eq!(paper(&a), Rgb(d, d, d));
-    let inverse_key = view_key(&a, false, None);
+    let inverse_key = view_key(&a, false, None, true);
     let keys = [print_key, none_key, sepia_key, inverse_key];
     for (i, k) in keys.iter().enumerate() {
         assert!(!keys[..i].contains(k), "each paper has its own view key");
@@ -4837,7 +4837,40 @@ fn the_view_key_changes_when_a_drag_takes_an_object_off_the_page() {
     let doc = wordcraft_doc::Document::from_text("Hello WordCraft");
     let app = WordApp::new(wordcraft_engine::Session::new(doc), Default::default());
     let object = Pos::body(0, 5);
-    let hidden = view_key(&app, false, Some(&object));
-    assert_ne!(hidden, view_key(&app, false, None), "the page without the dragged object is rendered again");
-    assert_eq!(hidden, view_key(&app, false, Some(&object)), "the same drag keeps the key: no re-render every frame");
+    let hidden = view_key(&app, false, Some(&object), true);
+    assert_ne!(hidden, view_key(&app, false, None, true), "the page without the dragged object is rendered again");
+    assert_eq!(hidden, view_key(&app, false, Some(&object), true), "the same drag keeps the key: no re-render every frame");
+}
+
+/// A zoom easing in (or a pinch) shows a new size every frame for a moment: those pages are
+/// drawn unhinted, so they fill no hint caches with sizes nobody rests on. The first frame
+/// without zooming draws the page hinted again, even at the size the last zoom frame drew.
+#[test]
+fn pages_are_hinted_again_once_a_zoom_stops() {
+    let platform = screen_render_options().hinting;
+    assert_eq!(hint_pages(1.0, false, true), platform, "at rest, as the platform draws text");
+    for zoom in [1.1, 0.9, 1.002, 0.998, f32::NAN, f32::INFINITY, 0.0] {
+        assert!(!hint_pages(zoom, true, true), "{zoom}: the scale changes under a gliding pointer zoom");
+        assert_eq!(hint_pages(zoom, false, true), platform, "{zoom}: at 10 % or 500 %, or over the ribbon: nothing changes");
+        assert_eq!(hint_pages(zoom, true, false), platform, "{zoom}: a wheel step with animation effects off lands finished");
+    }
+    assert_eq!(hint_pages(1.0, true, true), platform, "the Zoom dialog or slider, a fit zoom: hinted at once");
+    // The hinting is part of the page's key: the last zoom frame's raster is replaced.
+    let doc = wordcraft_doc::Document::from_text("Hello WordCraft");
+    let app = WordApp::new(wordcraft_engine::Session::new(doc), Default::default());
+    assert_ne!(view_key(&app, false, None, true), view_key(&app, false, None, false));
+}
+
+/// While a zoom goes on, a page raster stands in for one up to half again larger or smaller.
+#[test]
+fn a_raster_is_stretched_at_most_half_again_during_a_zoom() {
+    // A 612 pt page rendered 816 px wide (100 % at 1x): 1.333 px per point.
+    assert!(stretch_fits(816, 612.0, 816.0 / 612.0));
+    assert!(stretch_fits(816, 612.0, 1.9), "zoomed in 43 %");
+    assert!(!stretch_fits(816, 612.0, 2.1), "zoomed in 58 %: rendered again");
+    assert!(stretch_fits(816, 612.0, 0.95), "zoomed out to 71 %");
+    assert!(!stretch_fits(816, 612.0, 0.85), "zoomed out to 64 %: rendered again");
+    for hostile in [(0, 612.0, 1.0), (816, 0.0, 1.0), (816, 612.0, f32::NAN), (816, 612.0, f32::INFINITY), (816, f32::NAN, 1.0)] {
+        assert!(!stretch_fits(hostile.0, hostile.1, hostile.2), "{hostile:?}");
+    }
 }

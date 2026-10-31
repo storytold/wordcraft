@@ -60,8 +60,8 @@ use navigation::{scrollbar_page_tip, viewed_page};
 use pages::{DRAWING_GRID_MAX_LINES, DRAWING_GRID_MIN_PX};
 pub(crate) use pages::{PageKeys, page_doc, page_screen_scale, preview_sel, screen_render_options};
 use pages::{
-    drawing_grid, drawing_grid_step, gridline_cells, page_image, page_key, page_render_options, shown_layout, texel_aligned_rect, view_key,
-    visible_tiles,
+    drawing_grid, drawing_grid_step, gridline_cells, page_image, page_key, page_render_options, page_shows, shown_layout, texel_aligned_rect,
+    view_key, visible_tiles,
 };
 pub(crate) use reading::turn_read_page;
 #[cfg(test)]
@@ -89,7 +89,10 @@ const TILE_HEIGHT_PX: usize = 1024;
 const TEXTURE_KEEP_SCREENS: f32 = 3.0;
 
 pub struct CanvasState {
-    textures: HashMap<usize, (u64, TextureHandle)>,
+    /// Page rasters: (key, what the page showed, texture). The key ([`page_key`]) includes the
+    /// raster scale; what the page showed ([`page_shows`]) doesn't, so a zoom can tell whether
+    /// a raster may stand in for the page at another size.
+    textures: HashMap<usize, (u64, u64, TextureHandle)>,
     /// Visible full-resolution tiles of pages too tall for one GPU texture.
     tiles: HashMap<(usize, usize), (u64, TextureHandle)>,
     /// Page content fingerprints of the current layout, for the texture cache (#811).
@@ -146,6 +149,10 @@ pub struct CanvasState {
     pub viewed_page: Option<usize>,
     /// Effective scale (screen points per document point).
     pub scale: f32,
+    /// Whether this frame's pages were drawn hinted ([`hint_pages`]).
+    pub(crate) pages_hinted: bool,
+    /// Page rasters rendered so far (whole pages, not tiles), for tests.
+    pub(crate) rasters: u64,
     pub canvas_rect: Option<Rect>,
     pub focused: bool,
     /// The page's widget id and the pass that last drew it, so a click elsewhere can hand the
@@ -366,6 +373,8 @@ impl Default for CanvasState {
             scrollbar_page: None,
             viewed_page: None,
             scale: PX_PER_PT,
+            pages_hinted: screen_render_options().hinting,
+            rasters: 0,
             canvas_rect: None,
             focused: false,
             widget_id: None,
@@ -485,6 +494,10 @@ struct CanvasView {
     dark_page: bool,
     sepia_page: bool,
     animate: bool,
+    /// A pointer zoom is moving the scale over several frames ([`pointer_zoom`]).
+    zooming: bool,
+    /// Whether this frame draws the pages hinted ([`hint_pages`]).
+    hinted: bool,
     opts: egui::InputOptions,
     geo: Geometry,
     dim_body: bool,
@@ -534,9 +547,16 @@ fn prepare_view(app: &mut WordApp, ui: &Ui, full: Rect, layout: &DocLayout) -> C
     if read_mode {
         app.canvas.scroll_max = (geo.size - area.size()).max(egui::Vec2::ZERO);
     }
-    if (geo.scale - app.canvas.scale).abs() > 1e-6 {
+    let rescaled = (geo.scale - app.canvas.scale).abs() > 1e-6;
+    if rescaled {
         ui.ctx().request_repaint();
     }
+    // Does the zoom move over several frames? An eased wheel notch or a pinch does; with animation
+    // effects off a wheel step lands finished in its own frame (and is drawn so at once).
+    let gliding = animate || ui.input(|i| i.multi_touch().is_some() || i.events.iter().any(|e| matches!(e, egui::Event::Zoom(_))));
+    let zooming = pointer_zoom(zoom_delta, rescaled, gliding);
+    let hinted = hint_pages(zoom_delta, rescaled, gliding);
+    app.canvas.pages_hinted = hinted;
     app.canvas.scale = geo.scale;
     sync_fit_zoom(app, geo.scale);
     let anchored = if let Some((p, (page, x, y))) = zoom_anchor
@@ -564,7 +584,7 @@ fn prepare_view(app: &mut WordApp, ui: &Ui, full: Rect, layout: &DocLayout) -> C
     {
         app.session.page_hint = c.page;
     }
-    CanvasView { area, hruler, vruler, dark_page, sepia_page, animate, opts, geo, dim_body, grid_story, caret }
+    CanvasView { area, hruler, vruler, dark_page, sepia_page, animate, zooming, hinted, opts, geo, dim_body, grid_story, caret }
 }
 
 fn update_caret_scroll(app: &mut WordApp, view: &CanvasView) -> Option<Rect> {
@@ -832,6 +852,10 @@ struct PagePaint<'a> {
     sepia_page: bool,
     hidden: Option<(usize, Pos)>,
     view: u64,
+    /// The view without the hinting, which a stretched raster may differ in (see `stretched`).
+    shown_view: u64,
+    zooming: bool,
+    hinted: bool,
     content_origin: Pos2,
     ppp: f32,
     max_tex: f32,
@@ -842,6 +866,39 @@ struct PagePaintOutput {
     rects: Vec<Rect>,
     visible_tile_keys: HashSet<(usize, usize)>,
     rendered: usize,
+}
+
+/// Are pages drawn hinted this frame (as [`screen_render_options`] says)? Not while a pointer
+/// zoom moving over several frames ([`pointer_zoom`]) changes the scale: each such frame is a new
+/// size shown for a moment, and hinting every one would cost each page about 1.5 ms more and fill
+/// the hint caches with sizes nobody rests on, pushing out the one the zoom ends at. The first
+/// frame at rest draws the page hinted (the hinting is in the page's key). A zoom that leaves the
+/// scale as it is (at 10 % or 500 %, or over the ribbon) keeps the pages hinted, and other scale
+/// changes (the Zoom dialog or slider, a fit zoom following the window, a wheel step with
+/// animation effects off) are drawn hinted at once.
+fn hint_pages(zoom_delta: f32, rescaled: bool, gliding: bool) -> bool {
+    screen_render_options().hinting && !pointer_zoom(zoom_delta, rescaled, gliding)
+}
+
+/// Is a pointer zoom (Ctrl/⌘+wheel, a pinch: `zoom_delta` other than 1) changing the scale this
+/// frame (`rescaled`) on its way over several frames (`gliding`: easing in, or following the
+/// fingers)? Its frames are in-between sizes, each shown for a moment. A wheel step with
+/// animation effects off lands finished in its frame: not in between.
+fn pointer_zoom(zoom_delta: f32, rescaled: bool, gliding: bool) -> bool {
+    let gesture = zoom_delta.is_nan() || (zoom_delta - 1.0).abs() > 1e-3;
+    gesture && rescaled && gliding
+}
+
+/// A page raster is stretched at most this much (either way) during a pointer zoom before it is
+/// rendered again at the zoom's current size.
+const STRETCH_MAX: f32 = 1.5;
+
+/// Can a page raster `tex_w` pixels wide, of a page `page_w` points wide, stand in for one at
+/// `scale_px` pixels per point while a zoom goes on ([`STRETCH_MAX`])?
+fn stretch_fits(tex_w: usize, page_w: f32, scale_px: f32) -> bool {
+    let had = tex_w as f32 / page_w.max(1.0);
+    let ratio = scale_px / had;
+    ratio.is_finite() && (1.0 / STRETCH_MAX..=STRETCH_MAX).contains(&ratio)
 }
 
 fn draw_page_gridlines(app: &WordApp, painter: &egui::Painter, t: &Tokens, page: &Page, visual_sr: Rect, page_scale: f32) {
@@ -876,8 +933,26 @@ fn draw_page_gridlines(app: &WordApp, painter: &egui::Painter, t: &Tokens, page:
 }
 
 fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
-    let PagePaint { app, ui, layout, geo, t, painter, dim_body, dark_page, sepia_page, hidden, view, content_origin, ppp, max_tex, grid_story } =
-        pass;
+    let PagePaint {
+        app,
+        ui,
+        layout,
+        geo,
+        t,
+        painter,
+        dim_body,
+        dark_page,
+        sepia_page,
+        hidden,
+        view,
+        shown_view,
+        zooming,
+        hinted,
+        content_origin,
+        ppp,
+        max_tex,
+        grid_story,
+    } = pass;
     let mut visible_tile_keys = HashSet::new();
     let mut rendered = 0;
     let mut rects = Vec::with_capacity(geo.rects.len());
@@ -898,36 +973,48 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
         let cached = !tiled && app.canvas.textures.contains_key(&i);
         let key =
             if visible || cached { page_key(app, layout, i, view, scale_px) ^ if tiled { (tile_height_px as u64) << 32 } else { 0 } } else { 0 };
-        let mut fresh = cached && app.canvas.textures.get(&i).is_some_and(|(k, _)| *k == key);
+        let mut fresh = cached && app.canvas.textures.get(&i).is_some_and(|(k, _, _)| *k == key);
         // The page a drag took an object off: render it this frame whatever the budget, or the
         // raster with the object still on it shows for a frame.
         let forced = hidden.as_ref().is_some_and(|(page, _)| *page == i);
         // Render before placing the page: a page re-rendered in this frame (a zoom step, an
         // edit) then sits on the pixel grid in this frame too, rather than a frame later.
-        if visible && !tiled && !fresh && (forced || rendered < 2 || !app.canvas.textures.contains_key(&i) && rendered < 4) {
+        // During a pointer zoom the page's last raster is stretched to the new size instead of
+        // rendered at each in-between size (each shown for a frame, a few ms a page on a 4K
+        // screen): it is rendered once the zoom stops, or before stretching softens it too much.
+        // Only a raster of what the page shows now: a zoom that reflows the pages (Read Mode's
+        // text size, Web Layout's width) renders them anew.
+        let shows = if visible || cached { page_shows(app, layout, i, shown_view) } else { 0 };
+        let stretched = zooming
+            && !forced
+            && app.canvas.textures.get(&i).is_some_and(|(_, showed, tex)| *showed == shows && stretch_fits(tex.size()[0], page.w, scale_px));
+        if visible && !tiled && !fresh && !stretched && (forced || rendered < 2 || !app.canvas.textures.contains_key(&i) && rendered < 4) {
             let mut opts = page_render_options(app, dim_body);
+            opts.hinting &= hinted;
             // Only on the page it is on: the `Pos` can't match an object of another page.
             opts.display.hide_object = hidden.as_ref().filter(|(page, _)| *page == i).map(|(_, p)| p.clone());
             let img = wordcraft_render::render_page(page_doc(app), page, scale_px, &opts);
             let ci = page_image(&img);
             match app.canvas.textures.get_mut(&i) {
-                Some((k, tex)) => {
+                Some((k, showed, tex)) => {
                     tex.set(ci, egui::TextureOptions::LINEAR);
                     *k = key;
+                    *showed = shows;
                 }
                 None => {
                     let tex = ui.ctx().load_texture(format!("page{i}"), ci, egui::TextureOptions::LINEAR);
-                    app.canvas.textures.insert(i, (key, tex));
+                    app.canvas.textures.insert(i, (key, shows, tex));
                 }
             }
             rendered += 1;
+            app.canvas.rasters += 1;
             fresh = true;
         } else if visible && !tiled && !fresh {
             ui.ctx().request_repaint();
         }
         let current_scale = geo.scale * ppp;
         let visual_sr = if fresh && (scale_px - current_scale).abs() <= 0.0001_f32.max(current_scale.abs() * 0.0001) {
-            app.canvas.textures.get(&i).map_or(sr, |(_, tex)| texel_aligned_rect(sr, tex.size_vec2(), ppp))
+            app.canvas.textures.get(&i).map_or(sr, |(_, _, tex)| texel_aligned_rect(sr, tex.size_vec2(), ppp))
         } else {
             sr
         };
@@ -967,6 +1054,7 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
                 let fresh = app.canvas.tiles.get(&id).is_some_and(|(k, _)| *k == key);
                 if !fresh && rendered < 4 {
                     let mut opts = page_render_options(app, dim_body);
+                    opts.hinting &= hinted;
                     // Only on the page it is on: the `Pos` can't match an object of another page.
                     opts.display.hide_object = hidden.as_ref().filter(|(page, _)| *page == i).map(|(_, p)| p.clone());
                     // The tiny subtraction avoids a 1px overshoot from round-tripping f32
@@ -1001,7 +1089,7 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
                     painter.image(tex.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
                 }
             }
-        } else if let Some((_, tex)) = app.canvas.textures.get(&i) {
+        } else if let Some((_, _, tex)) = app.canvas.textures.get(&i) {
             painter.image(tex.id(), visual_sr, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         }
         let page_scale = page_screen_scale(visual_sr, page, geo.scale);
@@ -1317,7 +1405,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let scroll_target = update_caret_scroll(app, &view);
     let motion = scroll_motion(app, ui, full, &view);
     let scroll_area = configure_scroll_area(app, ui, &view, motion);
-    let CanvasView { area, hruler, vruler, dark_page, sepia_page, geo, dim_body, grid_story, caret, .. } = view;
+    let CanvasView { area, hruler, vruler, dark_page, sepia_page, zooming, hinted, geo, dim_body, grid_story, caret, .. } = view;
     let mut origin = area.min;
     let mut ui_area = ui.new_child(egui::UiBuilder::new().max_rect(area));
     let mut ime_geometry: Option<(Rect, Rect)> = None;
@@ -1334,7 +1422,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         let max_tex = ui.ctx().input(|i| i.max_texture_side).min(wordcraft_render::MAX_SIDE as usize).max(1) as f32;
         let content_origin = ui.min_rect().min;
         let hidden = app.canvas.dragged_off_page();
-        let page_view = view_key(app, dim_body, hidden.as_ref().map(|(_, p)| p));
+        let page_view = view_key(app, dim_body, hidden.as_ref().map(|(_, p)| p), hinted);
+        // The view without the hinting, which a stretched raster may differ in (see `stretched`).
+        let shown_view = view_key(app, dim_body, hidden.as_ref().map(|(_, p)| p), true);
         let t0 = crate::now_ms();
         let PagePaintOutput { rects, visible_tile_keys, rendered } = paint_pages(PagePaint {
             app,
@@ -1348,6 +1438,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             sepia_page,
             hidden,
             view: page_view,
+            shown_view,
+            zooming,
+            hinted,
             content_origin,
             ppp,
             max_tex,
