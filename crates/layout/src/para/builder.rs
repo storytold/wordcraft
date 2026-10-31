@@ -5,7 +5,7 @@ use super::chars::{
 };
 use super::grid::east_asian;
 use super::model::{ClKind, Cluster, Enclosed, Glyph, ParaEnv, RubyLayout, StyleRun, SymbolRun};
-use super::{Arc, Document, FaceRef, NumeralMode, ResolvedChar, RubyAlign, SOFT_HYPHEN};
+use super::{Arc, CombineBrackets, Document, FaceRef, NumeralMode, ResolvedChar, RubyAlign, SOFT_HYPHEN};
 
 pub(super) struct Builder<'a> {
     pub(super) env: &'a ParaEnv<'a>,
@@ -18,6 +18,9 @@ pub(super) struct Builder<'a> {
     pub(super) levels: Vec<u8>,
     /// Text drawn by clusters that stand for an object, by cluster index (see `ParaLayout::shown`).
     pub(super) shown: Vec<(usize, String, Vec<std::ops::Range<usize>>)>,
+    /// One face for 割注 text covering all of it, so its two sub-lines shape into glyphs of the
+    /// same font (the cluster draws with one face). `None` = per-character fallback.
+    pub(super) force_face: Option<FaceRef>,
 }
 
 struct SegmentInput<'a> {
@@ -64,6 +67,8 @@ impl<'a> Builder<'a> {
             let primary = if complex { primary_cs.unwrap_or(primary) } else { primary };
             let face = match cur {
                 Some(k) if mark => k.face,
+                // 割注: one face for the whole notation (it is drawn as one cluster, with one face).
+                _ if self.force_face.is_some_and(|f| f.covers(dc)) => self.force_face,
                 _ if !complex && east_asian(c) && primary_ea.is_some_and(|f| f.covers(c)) => primary_ea,
                 _ if !c.is_control() && c != SOFT_HYPHEN && run_face.is_some_and(|f| f.covers(dc)) => run_face,
                 _ if primary.covers(dc) || c.is_whitespace() || c.is_control() || c == SOFT_HYPHEN => None,
@@ -347,6 +352,7 @@ impl<'a> Builder<'a> {
                     obj_h: 0.0,
                     obj_d: 0.0,
                     dot: s == "." || s == ",",
+                    warichu: false,
                 });
             }
             if matches!(dir, Dir::Para) {
@@ -419,6 +425,7 @@ impl<'a> Builder<'a> {
                 obj_h: 0.0,
                 obj_d: 0.0,
                 dot: false,
+                warichu: false,
             });
             return;
         };
@@ -452,7 +459,176 @@ impl<'a> Builder<'a> {
         let style = first.style;
         let g1 = added.last().map(|c| c.g1).unwrap_or(g0);
         self.shown.push((self.clusters.len(), text.to_string(), ranges));
-        self.clusters.push(Cluster { start, end, adv: x, kind: ClKind::Text, style, g0, g1, break_after: false, obj_h: 0.0, obj_d: 0.0, dot: false });
+        self.clusters.push(Cluster {
+            start,
+            end,
+            adv: x,
+            kind: ClKind::Text,
+            style,
+            g0,
+            g1,
+            break_after: false,
+            obj_h: 0.0,
+            obj_d: 0.0,
+            dot: false,
+            warichu: false,
+        });
+    }
+
+    /// 割注 (`w:eastAsianLayout/@w:combine`, two lines in one): the run's text on two half-size
+    /// sub-lines inside one line. The first half (one grapheme more for an odd count) is the upper
+    /// sub-line, the rest the lower; brackets stand before the upper line and after the lower one,
+    /// so they enclose the two. Both sub-lines start after the opening bracket and the run takes
+    /// the width of one line, not of both end to end. It is one atomic cluster: the line cannot
+    /// break inside it, and the caret stops before and after it (not between its characters).
+    pub(super) fn shape_warichu(&mut self, text: &str, start: usize, rc: &Arc<ResolvedChar>, brackets: CombineBrackets) -> bool {
+        let starts: Vec<usize> = wordcraft_doc::cluster::cluster_starts(text);
+        // A one-grapheme run has no midpoint: it is all upper sub-line, the lower one empty.
+        // Empty text has nothing to set.
+        let Some(mid) = starts.get(starts.len().div_ceil(2)).copied().or_else(|| (!text.is_empty()).then_some(text.len())) else {
+            return false;
+        };
+        let (top, bottom) = text.split_at(mid);
+        let (open, close) = match brackets {
+            CombineBrackets::None => (None, None),
+            CombineBrackets::Round => (Some('（'), Some('）')),
+            CombineBrackets::Square => (Some('［'), Some('］')),
+            CombineBrackets::Angle => (Some('〈'), Some('〉')),
+            CombineBrackets::Curly => (Some('｛'), Some('｝')),
+        };
+        // The notation is drawn as one cluster, which has one face: shape it all in a single face
+        // that covers it, so no glyph is drawn with another font's glyph id. If no face covers it,
+        // the pieces below fall into different fallback faces and the run is kept as ordinary text
+        // (each character in its own face) rather than drawn with the upper line's face.
+        let primary = wordcraft_fonts::word::resolve(lookup_family(self.env.doc, &rc.font), rc.bold, rc.italic).face;
+        let chars: Vec<char> = text.chars().chain(open).chain(close).filter(|c| !c.is_whitespace() && !c.is_control()).collect();
+        self.force_face = (!chars.iter().all(|c| primary.covers(*c)))
+            .then(|| wordcraft_fonts::FontDb::global().fallback_for_run(&chars, primary.id(), rc.bold, rc.italic).map(|f| FaceRef::of(&f)))
+            .flatten();
+        let mut half_rc: ResolvedChar = (**rc).clone();
+        half_rc.size = (rc.size * 0.5).max(0.1);
+        // Complex-script text (Arabic, Persian, Hebrew…) is shaped through `ResolvedChar::complex`,
+        // which reads `size_cs`; halve it too so those glyphs sit on the half-size sub-lines.
+        half_rc.size_cs = (rc.size_cs * 0.5).max(0.1);
+        let half = Arc::new(half_rc);
+        // The line keeps the run's full-size height: Word does not grow the line for 割注.
+        let full_si = self.style(rc, None, false);
+        let (full_asc, full_desc) = self.styles.get(full_si as usize).map_or((rc.size, rc.size * 0.25), |st| (st.ascent, st.descent));
+        let g0 = self.glyphs.len() as u32;
+        let c0 = self.clusters.len();
+        // (kind, text, byte offset): 0 = opening bracket, 1 = upper line, 2 = lower line, 3 = close.
+        let mut parts: Vec<(u8, String, usize)> = Vec::new();
+        if let Some(c) = open {
+            parts.push((0, c.to_string(), start));
+        }
+        parts.push((1, top.to_string(), start));
+        if !bottom.is_empty() {
+            parts.push((2, bottom.to_string(), start + mid));
+        }
+        if let Some(c) = close {
+            parts.push((3, c.to_string(), start));
+        }
+        let mut pieces: Vec<(u8, usize, usize)> = Vec::new();
+        for (kind, part, at) in parts {
+            let before = self.clusters.len();
+            self.shape(&part, at, &half, None);
+            if self.clusters.len() > before {
+                pieces.push((kind, before, self.clusters.len()));
+            }
+        }
+        self.force_face = None;
+        // The combined cluster draws all its glyphs with the upper piece's style: one face and one
+        // size. Shaping a piece per character can still split it across faces (a symbol or a
+        // substituted numeral the run's face lacks, say) or sizes (complex-script text is shaped
+        // at `size_cs`, the rest at `size`). In either case drawing the cluster with the upper
+        // piece's style would use glyph ids from another font or the wrong size; give the run back
+        // to the ordinary path, where each character keeps its own face and size.
+        let draw_of = |b: &Self, k: usize| {
+            let st = b.clusters.get(k).and_then(|c| b.styles.get(c.style as usize))?;
+            Some((st.face.id(), st.size.to_bits(), st.rc.size.to_bits(), st.rc.size_cs.to_bits()))
+        };
+        if pieces.is_empty() || pieces.iter().flat_map(|(_, a, b)| *a..*b).any(|k| draw_of(self, k) != draw_of(self, pieces[0].1)) {
+            self.glyphs.truncate(g0 as usize);
+            self.clusters.truncate(c0);
+            return false;
+        }
+        let mut adv = [0.0f32; 4];
+        for (kind, a, b) in &pieces {
+            adv[*kind as usize] = self.clusters.get(*a..*b).into_iter().flatten().map(|c| c.adv).sum();
+        }
+        let (open_w, top_w, bottom_w, close_w) = (adv[0], adv[1], adv[2], adv[3]);
+        // The lower line starts under the upper one; the closing bracket follows it.
+        let x0 = open_w;
+        let total = (x0 + top_w).max(x0 + bottom_w + close_w);
+        // The two sub-lines fill the line box exactly: the upper one hangs its half ascent below
+        // the line's top, the lower one sits its half descent above the line's bottom.
+        let (v_up, v_down) = (full_asc * 0.5, full_desc * 0.5);
+        let mut ranges: Vec<std::ops::Range<usize>> = vec![0..0; self.glyphs.len().saturating_sub(g0 as usize)];
+        let mut placed_any = false;
+        for (kind, a, b) in &pieces {
+            let (x, dy) = match *kind {
+                0 => (0.0, v_up),
+                1 => (x0, v_up),
+                2 => (x0, -v_down),
+                _ => (x0 + bottom_w, -v_down),
+            };
+            let mut px = x;
+            for k in *a..*b {
+                let Some((cg0, cg1, cstart, cend, cadv)) = self.clusters.get(k).map(|c| (c.g0 as usize, c.g1 as usize, c.start, c.end, c.adv)) else {
+                    continue;
+                };
+                let rel = if *kind == 1 || *kind == 2 {
+                    let s = cstart.saturating_sub(start).min(text.len());
+                    s..cend.saturating_sub(start).min(text.len()).max(s)
+                } else {
+                    0..0
+                };
+                if cg1 <= cg0 {
+                    // A letter of a ligature with no glyph: its bytes belong to the glyph before it.
+                    if let Some(last) = ranges.iter_mut().rev().find(|r| r.start != r.end) {
+                        last.end = last.end.max(rel.end);
+                    }
+                } else {
+                    for gi in cg0..cg1 {
+                        if let Some(r) = ranges.get_mut(gi.saturating_sub(g0 as usize)) {
+                            *r = rel.clone();
+                        }
+                        if let Some(glyph) = self.glyphs.get_mut(gi) {
+                            glyph.dx += px;
+                            glyph.dy += dy;
+                            placed_any = true;
+                        }
+                    }
+                }
+                px += cadv;
+            }
+        }
+        if !placed_any {
+            return false;
+        }
+        let style = match pieces.iter().find(|(kind, _, _)| *kind == 1).and_then(|(_, a, _)| self.clusters.get(*a)) {
+            Some(c) => c.style,
+            None => self.style(&half, None, false),
+        };
+        self.clusters.truncate(c0);
+        let g1 = self.glyphs.len() as u32;
+        let index = self.clusters.len();
+        self.shown.push((index, text.to_string(), ranges));
+        self.clusters.push(Cluster {
+            start,
+            end: start + text.len(),
+            adv: total,
+            kind: ClKind::Text,
+            style,
+            g0,
+            g1,
+            break_after: false,
+            obj_h: full_asc,
+            obj_d: full_desc,
+            dot: false,
+            warichu: true,
+        });
+        true
     }
 
     /// Shape `texts` on top of one another as one cluster for `start..end`: each aligned within
@@ -502,7 +678,20 @@ impl<'a> Builder<'a> {
         if !text.is_empty() {
             self.shown.push((k, text, ranges));
         }
-        self.clusters.push(Cluster { start, end, adv, kind: ClKind::Text, style, g0, g1, break_after: false, obj_h: 0.0, obj_d: 0.0, dot: false });
+        self.clusters.push(Cluster {
+            start,
+            end,
+            adv,
+            kind: ClKind::Text,
+            style,
+            g0,
+            g1,
+            break_after: false,
+            obj_h: 0.0,
+            obj_d: 0.0,
+            dot: false,
+            warichu: false,
+        });
         Some(k)
     }
 }

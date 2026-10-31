@@ -4,7 +4,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::props::{
-    Align, Border, Borders, CharProps, Highlight, LineSpacing, NumRef, ParaProps, Rgb, TabAlign, TabStop, TextColor, Underline, VertAlign,
+    Align, Border, Borders, CharProps, CombineBrackets, Highlight, LineSpacing, NumRef, ParaProps, Rgb, TabAlign, TabStop, TextColor, Underline,
+    VertAlign,
 };
 use crate::styles::{StyleKind, StyleSheet};
 
@@ -71,6 +72,11 @@ pub struct ResolvedChar {
     pub size_cs: f32,
     pub bold_cs: bool,
     pub italic_cs: bool,
+    /// Two lines in one (`w:eastAsianLayout/@w:combine`, 割注): the run is set on two half-size
+    /// sub-lines inside one line, with these brackets around it. `None` = ordinary text. Word
+    /// shows round brackets when `combineBrackets` is not given (the dialog's default).
+    #[serde(default)]
+    pub combine: Option<CombineBrackets>,
 }
 
 impl ResolvedChar {
@@ -116,6 +122,7 @@ impl ResolvedChar {
             size_cs: c.size_cs.or(c.size).unwrap_or(crate::props::DEFAULT_FONT_SIZE).clamp(1.0, 1638.0),
             bold_cs: c.bold_cs.or(c.bold).unwrap_or(false),
             italic_cs: c.italic_cs.or(c.italic).unwrap_or(false),
+            combine: c.east_asian_layout.as_ref().filter(|l| l.combine == Some(true)).map(|l| l.combine_brackets.unwrap_or(CombineBrackets::Round)),
         }
     }
     /// The formatting complex-script text in this run is drawn with: the complex-script font,

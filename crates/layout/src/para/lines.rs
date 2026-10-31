@@ -419,7 +419,11 @@ impl<'e> Breaker<'e> {
             let Some(st) = pl.styles.get(c.style as usize) else { continue };
             // A picture sits on the baseline of its run: the line keeps that font's ascent
             // and descent, and grows above the baseline to fit a taller picture.
-            let (a, d) = if matches!(c.kind, ClKind::Object(_)) && c.obj_h > 0.0 {
+            let (a, d) = if c.warichu {
+                // 割注: its two half-size sub-lines sit in a normal line, which keeps the
+                // run's full-size height (Word does not grow the line for them).
+                (c.obj_h, c.obj_d)
+            } else if matches!(c.kind, ClKind::Object(_)) && c.obj_h > 0.0 {
                 if pl.maths.iter().any(|(k, _)| c.kind == ClKind::Object(*k)) {
                     // Exact spacing keeps the run's baseline; tall math may overflow the
                     // fixed line box without moving adjacent text up by its denominator.

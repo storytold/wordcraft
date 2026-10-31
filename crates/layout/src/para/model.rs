@@ -135,6 +135,10 @@ pub struct Cluster {
     pub obj_d: f32,
     /// The cluster is a decimal separator (decimal tabs align on it).
     pub dot: bool,
+    /// 割注 (`w:eastAsianLayout/@w:combine`): the run's text set on two half-size sub-lines in one
+    /// line. `obj_h`/`obj_d` hold the run's full-size line ascent and descent there, so the line
+    /// keeps its normal height; the line cannot break inside the cluster.
+    pub warichu: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
