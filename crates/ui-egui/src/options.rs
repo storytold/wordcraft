@@ -311,6 +311,25 @@ fn proofing(app: &mut WordApp, ui: &mut Ui) {
     flag(app, ui, "Check spelling as you type", "checkSpelling", spelling);
     ui.add_enabled_ui(app.session.view.proofing, |ui| flag(app, ui, "Mark grammar errors as you type", "markGrammar", pr.mark_grammar));
     ui.add_space(8.0);
+    // The open document's `file.proofingExceptions`: saved with it, and only the marks are hidden.
+    section(ui, "Exceptions for this document");
+    let settings = &app.session.doc.settings;
+    let rows = [
+        ("Hide spelling errors in this document only", "hideSpellingErrors", settings.hide_spelling_errors),
+        ("Hide grammar errors in this document only", "hideGrammarErrors", settings.hide_grammar_errors),
+    ];
+    // Off on the Start screen, where no document takes the setting.
+    ui.add_enabled_ui(app.has_document(), |ui| {
+        for (label, key, value) in rows {
+            let mut v = value;
+            if ui.checkbox(&mut v, tl!(label)).changed()
+                && let Err(e) = app.run("file.proofingExceptions", json!({ key: v }))
+            {
+                app.status(e);
+            }
+        }
+    });
+    ui.add_space(8.0);
     section(ui, "Custom dictionary");
     custom_dictionary(app, ui);
     ui.add_space(8.0);
@@ -458,14 +477,17 @@ fn save(app: &mut WordApp, ui: &mut Ui) {
         ("Remove my name from comments, changes and file properties when saving", "removePersonalInfo", settings.remove_personal_info),
         ("Leave out the date and time of comments and tracked changes when saving", "removeDateTime", settings.remove_date_time),
     ];
-    for (label, key, value) in rows {
-        let mut v = value;
-        if ui.checkbox(&mut v, tl!(label)).changed()
-            && let Err(e) = app.run("file.privacyOptions", json!({ key: v }))
-        {
-            app.status(e);
+    // Off on the Start screen, where no document takes the setting.
+    ui.add_enabled_ui(app.has_document(), |ui| {
+        for (label, key, value) in rows {
+            let mut v = value;
+            if ui.checkbox(&mut v, tl!(label)).changed()
+                && let Err(e) = app.run("file.privacyOptions", json!({ key: v }))
+            {
+                app.status(e);
+            }
         }
-    }
+    });
     note(ui, "The document you are editing keeps the names and dates; only the saved file leaves them out.");
 }
 

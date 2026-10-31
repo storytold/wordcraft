@@ -6426,6 +6426,8 @@ fn saving_and_exporting_keep_the_view_where_it_is() {
     keeps_view(&mut a, "file.rename", json!({"name": "renamed"}));
     keeps_view(&mut a, "file.privacyOptions", json!({"removeDateTime": true}));
     keeps_view(&mut a, "file.privacy", json!({}));
+    keeps_view(&mut a, "file.proofingExceptions", json!({"hideGrammarErrors": true}));
+    keeps_view(&mut a, "file.proofing", json!({}));
     keeps_view(&mut a, "file.setAuthor", json!({"name": "Ada"}));
     keeps_view(&mut a, "file.compatibility", json!({}));
     keeps_view(&mut a, "file.share", json!({}));

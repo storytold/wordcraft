@@ -51,7 +51,7 @@ fn mark_flags() -> [(&'static str, fn(&mut wordcraft_layout::display::Formatting
     [("tabs", |m| &mut m.tabs), ("spaces", |m| &mut m.spaces), ("paragraphs", |m| &mut m.paragraphs), ("hidden", |m| &mut m.hidden)]
 }
 
-fn bool_param(v: &Value, k: &str) -> Result<Option<bool>, CmdError> {
+pub(super) fn bool_param(v: &Value, k: &str) -> Result<Option<bool>, CmdError> {
     match v.get(k) {
         None | Some(Value::Null) => Ok(None),
         Some(Value::Bool(b)) => Ok(Some(*b)),

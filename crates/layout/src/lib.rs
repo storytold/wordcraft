@@ -226,12 +226,14 @@ pub struct TypingWord {
 pub struct ProofOptions {
     /// Mark grammar errors as you type.
     pub grammar: bool,
+    /// Mark spelling errors as you type: off when the document hides its spelling errors.
+    pub spelling_marks: bool,
     pub spelling: wordcraft_proof::Options,
 }
 
 impl Default for ProofOptions {
     fn default() -> Self {
-        ProofOptions { grammar: true, spelling: wordcraft_proof::Options::default() }
+        ProofOptions { grammar: true, spelling_marks: true, spelling: wordcraft_proof::Options::default() }
     }
 }
 

@@ -43,7 +43,8 @@ pub(super) fn word_count(s: &mut Session, v: &Value) -> CmdResult {
 }
 
 /// Issues (spelling + grammar) in one paragraph as positions, each in its run's language and
-/// skipping text left unchecked — the same issues the layout underlines.
+/// skipping text left unchecked. The list includes grammar issues and issues the layout leaves
+/// unmarked because the user's options or the document's proofing exceptions hide them.
 fn para_issues(s: &Session, story: StoryRef, path: &wordcraft_doc::Path) -> Vec<(Pos, Pos, wordcraft_proof::Issue)> {
     let Some(p) = s.doc.para(story, path) else { return Vec::new() };
     let runs = wordcraft_layout::para::proof_runs(&s.doc, p, None);

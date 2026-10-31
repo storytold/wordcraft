@@ -236,7 +236,7 @@ fn always_allowed(id: &str, params: &Value) -> bool {
         return false;
     }
     match id {
-        "file.privacyOptions" | "file.properties" => false,
+        "file.privacyOptions" | "file.proofingExceptions" | "file.properties" => false,
         // The user name says who may edit the document and who the revisions belong to: it is
         // checked like any other change, not waved through.
         "file.setAuthor" => false,
@@ -337,7 +337,7 @@ pub(crate) fn check_before(s: &Session, id: &str, params: &Value) -> Result<bool
     if id == "developer.properties" && (params.get("lockEdit").is_some() || params.get("lockDelete").is_some()) {
         return Err(CmdError::Disabled(format!("{id}: stop protection before changing a content control's locks")));
     }
-    // The document's properties and its privacy options are document-wide state, and they aren't
+    // The document's properties, privacy options and proofing exceptions are document-wide state, and they aren't
     // tracked: a document that tracks changes would take them with no revision to show for it, and
     // the revision trail would say nothing about them. They're refused while the document is
     // protected, as the content control's properties are (#3278 follow-up).
@@ -350,6 +350,9 @@ pub(crate) fn check_before(s: &Session, id: &str, params: &Value) -> Result<bool
         match id {
             "file.properties" => return Err(CmdError::Disabled(format!("{id}: stop protection before changing the document's properties"))),
             "file.privacyOptions" => return Err(CmdError::Disabled(format!("{id}: stop protection before changing the privacy options"))),
+            "file.proofingExceptions" => {
+                return Err(CmdError::Disabled(format!("{id}: stop protection before hiding or showing the document's proofing errors")));
+            }
             "file.inspect" => return Err(CmdError::Disabled(format!("{id}: stop protection before removing content with the inspector"))),
             _ => {}
         }

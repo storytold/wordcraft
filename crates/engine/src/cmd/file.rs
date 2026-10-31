@@ -157,8 +157,8 @@ pub fn specs() -> Vec<CommandSpec> {
         // Changing them is a document change (undoable, refused on a protected document); reading
         // them is `file.privacy`, which changes nothing.
         CommandSpec::new("file.privacyOptions", "Privacy Options", "File › Options › Save", |s, v| {
-            let personal = p::bool(v, "removePersonalInfo");
-            let date_time = p::bool(v, "removeDateTime");
+            let personal = super::options::bool_param(v, "removePersonalInfo")?;
+            let date_time = super::options::bool_param(v, "removeDateTime")?;
             if personal.is_none() && date_time.is_none() {
                 return Err(CmdError::Params("give removePersonalInfo or removeDateTime (file.privacy reads them)".into()));
             }
@@ -173,6 +173,28 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"removePersonalInfo"?: bool (save comment and revision authors as "Author", no creator or last-modified-by), "removeDateTime"?: bool (save comments and tracked changes without dates)} — at least one; the open document keeps its real names and dates"#),
         CommandSpec::new("file.privacy", "Privacy Settings", "File › Options › Save", |s, _| Ok(privacy(s)))
             .params(r#"{} → {"removePersonalInfo": bool, "removeDateTime": bool} (file.privacyOptions changes them)"#)
+            .pure(),
+        // Options › Proofing › Exceptions for: the document's `w:hideSpellingErrors` and
+        // `w:hideGrammaticalErrors` settings, saved with it. They hide the squiggles only;
+        // Spelling & Grammar and `review.issues` still find the errors. Changing them is a
+        // document change, as the privacy options are; reading them is `file.proofing`.
+        CommandSpec::new("file.proofingExceptions", "Proofing Exceptions", "File › Options › Proofing", |s, v| {
+            let spelling = super::options::bool_param(v, "hideSpellingErrors")?;
+            let grammar = super::options::bool_param(v, "hideGrammarErrors")?;
+            if spelling.is_none() && grammar.is_none() {
+                return Err(CmdError::Params("give hideSpellingErrors or hideGrammarErrors (file.proofing reads them)".into()));
+            }
+            if let Some(on) = spelling {
+                s.doc.settings.hide_spelling_errors = on;
+            }
+            if let Some(on) = grammar {
+                s.doc.settings.hide_grammar_errors = on;
+            }
+            Ok(proofing(s))
+        })
+        .params(r#"{"hideSpellingErrors"?: bool (no squiggles under spelling errors in this document), "hideGrammarErrors"?: bool (no marks under grammar errors in this document)}; at least one, saved with the document"#),
+        CommandSpec::new("file.proofing", "Proofing Exception Settings", "File › Options › Proofing", |s, _| Ok(proofing(s)))
+            .params(r#"{} → {"hideSpellingErrors": bool, "hideGrammarErrors": bool} (file.proofingExceptions changes them)"#)
             .pure(),
         CommandSpec::new("document.inspect", "Inspect Document", "Agents", inspect).params(r#"{"text"?: bool}"#).pure(),
         CommandSpec::new("document.text", "Document Text", "Agents", |s, v| {
@@ -209,6 +231,11 @@ pub fn specs() -> Vec<CommandSpec> {
 /// The document's privacy settings, as `file.privacy` and `file.privacyOptions` return them.
 fn privacy(s: &Session) -> Value {
     json!({"removePersonalInfo": s.doc.settings.remove_personal_info, "removeDateTime": s.doc.settings.remove_date_time})
+}
+
+/// The document's proofing exceptions, as `file.proofing` and `file.proofingExceptions` return them.
+fn proofing(s: &Session) -> Value {
+    json!({"hideSpellingErrors": s.doc.settings.hide_spelling_errors, "hideGrammarErrors": s.doc.settings.hide_grammar_errors})
 }
 
 /// Open a new document beside the open ones and make it active: a blank one in the saved

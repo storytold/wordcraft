@@ -66,7 +66,7 @@ pub(super) fn proof_issues(
     paragraph_issues(p, runs, &opts.spelling, opts.grammar, list_item)
         .into_iter()
         .map(|i| (i.start, i.end, i.kind == wordcraft_proof::IssueKind::Grammar))
-        .filter(|&(a, b, grammar)| grammar || !typing.is_some_and(|(s, e)| a < e && s < b))
+        .filter(|&(a, b, grammar)| grammar || (opts.spelling_marks && !typing.is_some_and(|(s, e)| a < e && s < b)))
         .collect()
 }
 

@@ -162,6 +162,13 @@ pub struct Settings {
     /// comments and tracked changes are saved without `w:date`.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub remove_date_time: bool,
+    /// Hide spelling errors in this document only (`w:hideSpellingErrors`): no squiggles under
+    /// misspelled words. Spelling & Grammar (F7) still finds them.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub hide_spelling_errors: bool,
+    /// Hide grammar errors in this document only (`w:hideGrammaticalErrors`).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub hide_grammar_errors: bool,
 }
 
 /// A saved zoom: a percentage, or a fit mode (the percentage it last came to).
@@ -307,6 +314,8 @@ impl Default for Settings {
             zoom: None,
             remove_personal_info: false,
             remove_date_time: false,
+            hide_spelling_errors: false,
+            hide_grammar_errors: false,
         }
     }
 }

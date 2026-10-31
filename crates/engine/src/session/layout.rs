@@ -67,7 +67,11 @@ impl Session {
             comment_balloons: false,
             field_codes: shown.1,
             outline: outline.clone(),
-            proof: wordcraft_layout::ProofOptions { grammar: self.prefs.mark_grammar, spelling: self.prefs.spelling() },
+            proof: wordcraft_layout::ProofOptions {
+                grammar: self.prefs.mark_grammar && !self.doc.settings.hide_grammar_errors,
+                spelling_marks: !self.doc.settings.hide_spelling_errors,
+                spelling: self.prefs.spelling(),
+            },
             typing_word: typing,
             filename: filename.clone(),
             filepath: filepath.clone(),

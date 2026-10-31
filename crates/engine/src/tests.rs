@@ -2360,6 +2360,74 @@ fn preview_layout_keeps_the_word_being_typed_unmarked() {
     assert_eq!(marks(&preview, &copy), ["helo"]);
 }
 
+/// Options › Proofing › Exceptions for: "Hide spelling errors in this document only" and "Hide
+/// grammar errors in this document only" hide the marks on the page, each kind on its own, and
+/// are saved with the document. Spelling & Grammar still finds the errors.
+#[test]
+fn proofing_exceptions_hide_the_marks_of_this_document() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Helo, the the cat sat."));
+    s.view.proofing = true;
+    // (marked text, is grammar) of every mark on the first paragraph.
+    let marks = |s: &mut Session| -> Vec<(String, bool)> {
+        let text = s.doc.para(StoryRef::Body, &wordcraft_doc::Path(vec![0])).unwrap().text.clone();
+        s.layout().pages[0]
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                wordcraft_layout::Placed::Lines { para, path, .. } if path.0 == [0] => {
+                    Some(para.issues.iter().map(|i| (text[i.0..i.1].to_string(), i.2)).collect::<Vec<_>>())
+                }
+                _ => None,
+            })
+            .flatten()
+            .collect()
+    };
+    let all = marks(&mut s);
+    assert!(all.iter().any(|(w, g)| w == "Helo" && !g), "a spelling mark: {all:?}");
+    assert!(all.iter().any(|(_, g)| *g), "a grammar mark: {all:?}");
+    let issues = run(&mut s, "review.issues", json!({})).as_array().map_or(0, Vec::len);
+
+    let on = run(&mut s, "file.proofingExceptions", json!({"hideSpellingErrors": true}));
+    assert_eq!(on, json!({"hideSpellingErrors": true, "hideGrammarErrors": false}));
+    let left = marks(&mut s);
+    assert!(left.iter().all(|(_, g)| *g) && !left.is_empty(), "only grammar marks: {left:?}");
+    assert_eq!(run(&mut s, "review.issues", json!({})).as_array().map_or(0, Vec::len), issues, "the check still finds them");
+
+    run(&mut s, "file.proofingExceptions", json!({"hideGrammarErrors": true}));
+    assert_eq!(marks(&mut s), Vec::<(String, bool)>::new());
+    assert_eq!(run(&mut s, "file.proofing", json!({})), json!({"hideSpellingErrors": true, "hideGrammarErrors": true}));
+
+    run(&mut s, "file.proofingExceptions", json!({"hideSpellingErrors": false}));
+    let back = marks(&mut s);
+    assert!(back.iter().any(|(w, g)| w == "Helo" && !g) && back.iter().all(|(_, g)| !g), "only spelling marks: {back:?}");
+
+    // Saved with the document, and read back.
+    run(&mut s, "file.proofingExceptions", json!({"hideSpellingErrors": true}));
+    let xml = wordcraft_docx::write(&s.doc).unwrap();
+    let opened = wordcraft_docx::read(&xml).unwrap();
+    assert!(opened.settings.hide_spelling_errors && opened.settings.hide_grammar_errors);
+    // Undoable like any document change.
+    run(&mut s, "edit.undo", json!({}));
+    assert!(!s.doc.settings.hide_spelling_errors);
+}
+
+/// `file.proofing` changes nothing, and `file.proofingExceptions` without a setting is refused.
+#[test]
+fn reading_proofing_exceptions_is_side_effect_free() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Draft"}));
+    s.dirty = false;
+    let undo = s.undo_depth();
+    assert_eq!(run(&mut s, "file.proofing", json!({})), json!({"hideSpellingErrors": false, "hideGrammarErrors": false}));
+    assert!(s.run("file.proofingExceptions", &json!({})).is_err());
+    assert!(s.run("file.proofingExceptions", &json!({"hideSpellingErrors": "yes"})).is_err());
+    // A malformed field refuses the whole call: the valid one beside it is not applied.
+    assert!(s.run("file.proofingExceptions", &json!({"hideSpellingErrors": true, "hideGrammarErrors": "yes"})).is_err());
+    assert!(!s.doc.settings.hide_spelling_errors);
+    assert_eq!(s.undo_depth(), undo, "no undo step");
+    assert!(!s.dirty, "no unsaved changes");
+}
+
 #[test]
 fn delete_row_on_a_merge_start_promotes_the_cell_below() {
     use wordcraft_doc::props::VMerge;
@@ -3468,6 +3536,9 @@ fn reading_privacy_options_is_side_effect_free() {
     assert_eq!(run(&mut s, "file.privacy", json!({})), json!({"removePersonalInfo": false, "removeDateTime": false}));
     assert!(s.run("file.privacyOptions", &json!({})).is_err());
     assert!(s.run("file.privacyOptions", &json!({"removePersonalInfo": "yes"})).is_err());
+    // A malformed field refuses the whole call: the valid one beside it is not applied.
+    assert!(s.run("file.privacyOptions", &json!({"removePersonalInfo": true, "removeDateTime": "yes"})).is_err());
+    assert!(!s.doc.settings.remove_personal_info);
     assert_eq!(s.undo_depth(), undo, "no undo step");
     assert!(!s.dirty, "no unsaved changes");
     s.doc.settings.protection = Some("readOnly".into());
