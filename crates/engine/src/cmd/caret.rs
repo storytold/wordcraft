@@ -63,7 +63,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("select.collapse", "Collapse Selection", "Navigation", |s, v| {
             let to_end = p::bool(v, "end").unwrap_or(false);
             let (a, b) = s.sel.ordered();
-            s.sel = Selection::caret(if to_end { b } else { a });
+            collapse(s, if to_end { b } else { a });
             sel_result(s)
         })
         .key("Escape")
@@ -75,13 +75,25 @@ fn extend(v: &Value) -> bool {
     p::bool(v, "extend").unwrap_or(false)
 }
 
-fn apply(s: &mut Session, to: Pos, ext: bool) {
+/// Move the caret (with `ext`, the selection's focus) to `to`. With `line_end`, where a line wraps
+/// after text at `to` the caret is at the end of that line, not the start of the next
+/// ([`Session::at_line_end`]).
+fn apply(s: &mut Session, to: Pos, ext: bool, line_end: bool) {
     if ext {
         s.sel.focus = to;
     } else {
         s.sel = Selection::caret(to);
     }
+    s.set_at_line_end(line_end);
     s.pending = None;
+}
+
+/// Collapse the selection to the caret at `to`, which stays at the end of its line if the
+/// selection's focus was there ([`Session::at_line_end`]).
+fn collapse(s: &mut Session, to: Pos) {
+    let line_end = to == s.sel.focus && s.at_line_end(&to);
+    s.sel = Selection::caret(to);
+    s.set_at_line_end(line_end);
 }
 
 fn mv(s: &mut Session, v: &Value, f: fn(&mut Session, &Pos) -> Pos) -> CmdResult {
@@ -89,7 +101,7 @@ fn mv(s: &mut Session, v: &Value, f: fn(&mut Session, &Pos) -> Pos) -> CmdResult
     s.goal_x = None;
     let from = s.sel.focus.clone();
     let to = f(s, &from);
-    apply(s, to, ext);
+    apply(s, to, ext, false);
     sel_result(s)
 }
 
@@ -110,14 +122,24 @@ fn lr(s: &mut Session, v: &Value, is_left: bool) -> CmdResult {
         let (a, b) = s.sel.ordered();
         // The left edge of a selection in right-to-left text is its logical end.
         let to_start = is_left != rtl_para(s);
-        s.sel = Selection::caret(if to_start { a } else { b });
+        collapse(s, if to_start { a } else { b });
         s.goal_x = None;
         return sel_result(s);
     }
     if bidi_para(s) {
         return visual_lr(s, v, is_left);
     }
-    mv(s, v, if is_left { left } else { right })
+    if is_left {
+        return mv(s, v, left);
+    }
+    // Right past the last character of a line that wraps after text stays at that line's end,
+    // rather than showing the caret at the start of the next line (the same text position).
+    let r = mv(s, v, right)?;
+    let to = s.sel.focus.clone();
+    if s.layout().is_wrap_end(&to, s.page_hint) {
+        s.set_at_line_end(true);
+    }
+    Ok(r)
 }
 
 /// Left/Right in bidirectional text: one caret position to the left or right on the screen.
@@ -147,7 +169,7 @@ fn visual_lr(s: &mut Session, v: &Value, is_left: bool) -> CmdResult {
         None if is_left => left(s, &from),
         None => right(s, &from),
     };
-    apply(s, to, ext);
+    apply(s, to, ext, false);
     sel_result(s)
 }
 
@@ -216,21 +238,21 @@ fn vert(s: &mut Session, v: &Value, dir: i32) -> CmdResult {
     let ext = extend(v);
     let l = s.layout();
     let from = s.sel.focus.clone();
-    let to = match l.vertical(&from, s.goal_x, dir, s.page_hint) {
-        Some((p, gx)) => {
+    let (to, line_end) = match l.vertical_at(&from, s.goal_x, dir, s.page_hint, s.at_line_end(&from)) {
+        Some((p, gx, line_end)) => {
             s.goal_x = Some(gx);
-            p
+            (p, line_end)
         }
         None => {
             // Top/bottom of the story: go to its start/end.
-            if dir < 0 { s.doc.start_of(from.story) } else { s.doc.end_of(from.story) }
+            (if dir < 0 { s.doc.start_of(from.story) } else { s.doc.end_of(from.story) }, false)
         }
     };
-    if let Some(c) = l.caret_on(&to, s.page_hint) {
+    if let Some(c) = l.caret_at(&to, s.page_hint, line_end) {
         s.page_hint = c.page;
     }
     let gx = s.goal_x;
-    apply(s, to, ext);
+    apply(s, to, ext, line_end);
     s.goal_x = gx;
     sel_result(s)
 }
@@ -239,18 +261,18 @@ fn line(s: &mut Session, v: &Value, home: bool) -> CmdResult {
     let ext = extend(v);
     let l = s.layout();
     let from = s.sel.focus.clone();
-    let to = match l.line_bounds(&from, s.page_hint) {
-        Some((a, b)) => {
+    let (to, line_end) = match l.line_bounds(&from, s.page_hint, s.at_line_end(&from)) {
+        Some((a, b, wraps)) => {
             if home {
-                a
+                (a, false)
             } else {
-                b
+                (b, wraps)
             }
         }
-        None => from,
+        None => (from, false),
     };
     s.goal_x = None;
-    apply(s, to, ext);
+    apply(s, to, ext, line_end);
     sel_result(s)
 }
 
@@ -258,29 +280,29 @@ fn page(s: &mut Session, v: &Value, dir: i32) -> CmdResult {
     let ext = extend(v);
     let l = s.layout();
     let from = s.sel.focus.clone();
-    let Some(c) = l.caret_on(&from, s.page_hint) else { return sel_result(s) };
+    let Some(c) = l.caret_at(&from, s.page_hint, s.at_line_end(&from)) else { return sel_result(s) };
     let np = if dir < 0 { c.page.saturating_sub(1) } else { (c.page + 1).min(l.pages.len().saturating_sub(1)) };
-    let to = l.hit(np, c.x, c.top + 1.0, from.story).unwrap_or(from);
+    let (to, line_end) = l.hit_at(np, c.x, c.top + 1.0, from.story).unwrap_or((from, false));
     s.page_hint = np;
-    apply(s, to, ext);
+    apply(s, to, ext, line_end);
     sel_result(s)
 }
 
 fn set(s: &mut Session, v: &Value) -> CmdResult {
     let ext = extend(v);
-    let to = if let Some(pv) = v.get("pos") {
-        parse_pos(pv).ok_or_else(|| CmdError::Params("bad `pos`".into()))?
+    let (to, line_end) = if let Some(pv) = v.get("pos") {
+        (parse_pos(pv).ok_or_else(|| CmdError::Params("bad `pos`".into()))?, false)
     } else if let (Some(pg), Some(x), Some(y)) = (p::u64(v, "page"), p::f32(v, "x"), p::f32(v, "y")) {
         let story = super::story_param(s, v);
         let l = s.layout();
         s.page_hint = pg as usize;
-        l.hit(pg as usize, x, y, story).ok_or_else(|| CmdError::Params("no text on that page".into()))?
+        l.hit_at(pg as usize, x, y, story).ok_or_else(|| CmdError::Params("no text on that page".into()))?
     } else {
         return Err(CmdError::Params("`pos` or `page`/`x`/`y` required".into()));
     };
     let to = s.doc.clamp(&to);
     s.goal_x = None;
-    apply(s, to, ext);
+    apply(s, to, ext, line_end);
     sel_result(s)
 }
 
@@ -338,6 +360,10 @@ impl Unit {
 /// includes its mark (it ends at the start of the next paragraph in the same container, when
 /// there is one), and so does its last line.
 pub fn unit_range(s: &mut Session, at: &Pos, unit: Unit) -> (Pos, Pos) {
+    // The caret at the end of a line that wraps after text is after that line's last character:
+    // the word, sentence or line is the one that character is in, not the next line's.
+    let back = s.at_line_end(at).then(|| s.doc.para_at(at).map(|p| p.prev_boundary(at.off))).flatten();
+    let at = &back.map_or_else(|| at.clone(), |off| Pos { off, ..at.clone() });
     let Some(p) = s.doc.para_at(at) else { return (at.clone(), at.clone()) };
     let len = p.len();
     let mark_end = |s: &Session| match s.doc.next_para(at.story, &at.path) {

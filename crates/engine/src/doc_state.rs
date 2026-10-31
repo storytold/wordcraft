@@ -41,6 +41,9 @@ pub struct ColumnBlock {
     /// Page x of the anchor and focus corners (points); the block spans the range between.
     pub anchor_x: f32,
     pub focus_x: f32,
+    /// The anchor corner is at the end of its line where that line wraps after text
+    /// ([`crate::Session::at_line_end`]), so growing the block keeps that line.
+    pub anchor_line_end: bool,
     /// One `(start, end)` per line, in document order, each inside one paragraph.
     pub segments: Vec<(Pos, Pos)>,
     /// Set when the block is whole table cells (Select Cell, Row, Column or Table, or the mouse in

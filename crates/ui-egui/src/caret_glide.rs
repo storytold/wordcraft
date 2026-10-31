@@ -336,11 +336,12 @@ fn state_id() -> egui::Id {
     egui::Id::unique("caret_glide")
 }
 
-/// What puts the caret where it is: the document's revision and the caret's position in it.
+/// What puts the caret where it is: the document's revision and the caret's position in it (at a
+/// soft wrap, at the end of one line or the start of the next).
 fn cause_key(app: &WordApp) -> u64 {
     let s = &app.session;
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    (s.rev(), &s.sel.focus).hash(&mut h);
+    (s.rev(), &s.sel.focus, s.at_line_end(&s.sel.focus)).hash(&mut h);
     if let Some(m) = &s.math {
         format!("{:?}", m.pos).hash(&mut h);
     }

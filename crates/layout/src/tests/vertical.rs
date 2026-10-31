@@ -167,3 +167,24 @@ fn a_click_outside_a_floating_table_in_a_vertical_section_skips_its_cells() {
     // Inside the table a click still lands in a cell.
     assert!(l.hit(0, cx, cy, StoryRef::Body).unwrap().path.0.len() > 1);
 }
+
+/// In Chinese running down the page, a click below the last character of a line that wraps there
+/// lands at the end of that line, and the caret stays on it rather than going to the head of the
+/// next line (the same position in the text).
+#[test]
+fn a_click_below_the_end_of_a_wrapped_vertical_line_stays_on_it() {
+    let mut d = Document::from_text(&"春风拂过山岗溪水绕着村庄静静流淌".repeat(12));
+    d.last_section.text_direction = TextDirection::Down;
+    let l = lay(&d);
+    let wrap = l.index.get(&(StoryRef::Body, Path::top(0))).map(|v| v[0]).unwrap();
+    let Placed::Lines { para, .. } = &l.pages[wrap.0].items[wrap.1] else { panic!() };
+    assert!(para.lines.len() >= 2);
+    let stop = para.lines[0].stop;
+    assert!(para.is_wrap_end(0, stop));
+    let first = l.caret(&Pos::body(0, 0)).unwrap();
+    let end = l.caret_at(&Pos::body(0, stop), 0, true).unwrap();
+    let next = l.caret_at(&Pos::body(0, stop), 0, false).unwrap();
+    assert!((end.x - first.x).abs() < 0.5 && next.x < first.x - 1.0, "end {end:?}, next {next:?}, first {first:?}");
+    let bottom = l.pages[0].body.bottom() - 1.0;
+    assert_eq!(l.hit_at(0, first.x + first.width / 2.0, bottom, StoryRef::Body), Some((Pos::body(0, stop), true)));
+}

@@ -69,6 +69,7 @@ impl Session {
         // The body replacement promise is likewise scoped: only the `text.insert` at the
         // selection the deletion left may consume it.
         let ime_text_join = self.ime_text_join.take();
+        self.drop_stale_line_end();
         let reg = self.registry.clone();
         let Some(spec) = reg.get(id) else { return Err(CmdError::Unknown(id.to_string())) };
         let join = join

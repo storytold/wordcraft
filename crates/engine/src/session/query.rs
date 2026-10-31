@@ -53,6 +53,28 @@ impl Session {
         self.widened.as_ref().filter(|w| w.sel == self.sel).map_or(&self.sel, |w| &w.ends)
     }
 
+    /// Whether the caret at `pos` is at the end of a line that wraps after text, rather than at
+    /// the start of the next line (the same position in the text): End, Right onto the line's
+    /// end, Up/Down, Page Up/Down or a click past its last character put it there
+    /// ([`Self::caret_line_end`]). Only the selection's focus can be.
+    pub fn at_line_end(&self, pos: &Pos) -> bool {
+        self.caret_line_end.as_ref().is_some_and(|(rev, sel)| *rev == self.rev && *sel == self.sel && sel.focus == *pos)
+    }
+
+    /// Where a line wraps after text at the caret (the selection's focus), put it at the end of
+    /// that line, or (`false`) at the start of the next ([`Self::at_line_end`]).
+    pub fn set_at_line_end(&mut self, line_end: bool) {
+        self.caret_line_end = line_end.then(|| (self.rev, self.sel.clone()));
+    }
+
+    /// Forget a line end the caret has left (an edit, another selection), so it can't come back
+    /// when the same selection does. `Session::run` calls this before every command.
+    pub(crate) fn drop_stale_line_end(&mut self) {
+        if self.caret_line_end.as_ref().is_some_and(|(rev, sel)| *rev != self.rev || *sel != self.sel) {
+            self.caret_line_end = None;
+        }
+    }
+
     pub fn selects_whole_story(&self) -> bool {
         let st = self.sel.focus.story;
         let (a, b) = self.sel.ordered();

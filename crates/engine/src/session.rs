@@ -76,6 +76,11 @@ pub struct Session {
     pub find: FindState,
     /// Page x the caret tries to keep on Up/Down.
     pub goal_x: Option<f32>,
+    /// The caret is at the end of a line that wraps after text, not at the start of the next
+    /// line, which is the same position in the text: the revision and selection it was put there
+    /// with (see [`Session::at_line_end`]). It holds only while both stay as they were: the next
+    /// command after an edit or another selection drops it.
+    pub caret_line_end: Option<(u64, Selection)>,
     /// Page the caret was last on (headers/footers repeat on many pages).
     pub page_hint: usize,
     pub registry: Arc<Registry>,

@@ -2435,6 +2435,47 @@ fn caret_after_hanging_spaces_stays_at_the_margin() {
     }
 }
 
+/// Where a line wraps after text (Chinese, a word wider than the line) rather than at a space, the
+/// end of the line and the start of the next are the same position in the text. The caret there
+/// is at the end of the line with `line_end` and at the start of the next without it; a click on
+/// the right half of the line's last character lands at the end of the line, and End goes there.
+#[test]
+fn the_caret_at_a_soft_wrap_can_be_at_either_line() {
+    for text in ["春风拂过山岗，溪水绕着村庄静静流淌。", "Lanternsdriftingoverquietharbours"] {
+        let mut d = Document::new();
+        d.last_section.page_w = 200.0;
+        d.last_section.margin_left = 20.0;
+        d.last_section.margin_right = 20.0;
+        d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&text.repeat(4), Default::default()))];
+        let l = lay(&d);
+        let (para, y) =
+            l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, y, .. } = it { Some((para.clone(), *y)) } else { None }).unwrap();
+        assert!(para.lines.len() > 2, "{text}");
+        for li in 0..para.lines.len() - 1 {
+            let (line, next) = (&para.lines[li], &para.lines[li + 1]);
+            let last = para.clusters[line.c1 - 1].start;
+            assert!(para.is_wrap_end(li, line.stop), "{text}: line {li} wraps after text");
+            assert!(!para.is_wrap_end(li, last) && !para.is_wrap_end(li + 1, line.stop));
+            let at = |off| Pos::body(0, off);
+            let (start, before) = (l.caret(&at(line.start)).unwrap(), l.caret(&at(last)).unwrap());
+            let end = l.caret_at(&at(line.stop), 0, true).unwrap();
+            assert_eq!(end.top, start.top, "{text}: the caret at the end of line {li} is on it");
+            assert!(end.x > before.x && end.x <= d.last_section.page_w - d.last_section.margin_right + 0.5, "{text}: {end:?} after {before:?}");
+            let below = l.caret_at(&at(line.stop), 0, false).unwrap();
+            assert_eq!(below, l.caret(&at(next.start)).unwrap());
+            assert!(below.top > end.top, "{text}: without line_end the caret starts line {}", li + 1);
+            let mid = y + line.top - para.lines[0].top + line.height / 2.0;
+            let click = before.x + (end.x - before.x) * 0.75;
+            assert_eq!(l.hit_at(0, click, mid, StoryRef::Body), Some((at(line.stop), true)), "{text}: click on line {li}");
+            let next_mid = mid + next.top - line.top;
+            assert_eq!(l.hit_at(0, below.x + 0.5, next_mid, StoryRef::Body), Some((at(line.stop), false)), "{text}: click on line {}", li + 1);
+            assert_eq!(l.line_bounds(&at(line.start), 0, false), Some((at(line.start), at(line.stop), true)));
+            assert_eq!(l.line_bounds(&at(line.stop), 0, true), Some((at(line.start), at(line.stop), true)));
+            assert_eq!(l.line_bounds(&at(line.stop), 0, false).map(|b| b.0), Some(at(next.start)));
+        }
+    }
+}
+
 #[test]
 fn tall_first_page_header_pushes_body_down() {
     let mut d = Document::from_text(&"para\n".repeat(120));
@@ -2526,12 +2567,46 @@ fn column_segments_take_the_same_x_range_on_every_line() {
     let left = l.caret(&Pos::body(0, 2)).unwrap().x;
     let right = l.caret(&Pos::body(0, 4)).unwrap().x;
     let (start, end) = (Pos::body(2, 2), Pos::body(0, 2));
-    let segs = l.column_segments(&d, hit::ColumnSelection { start: &start, end: &end, left: right, right: left, page_hint: 0, max_lines: 100 });
+    let segs = l.column_segments(
+        &d,
+        hit::ColumnSelection {
+            start: &start,
+            end: &end,
+            start_line_end: false,
+            end_line_end: false,
+            left: right,
+            right: left,
+            page_hint: 0,
+            max_lines: 100,
+        },
+    );
     let offs: Vec<(u32, usize, usize)> = segs.iter().map(|(a, b)| (a.path.0[0], a.off, b.off)).collect();
     assert_eq!(offs, vec![(0, 2, 4), (1, 2, 4), (2, 2, 2)]);
     // Capped, and junk x gives nothing.
-    assert_eq!(l.column_segments(&d, hit::ColumnSelection { start: &start, end: &end, left, right, page_hint: 0, max_lines: 2 }).len(), 2);
-    assert!(l.column_segments(&d, hit::ColumnSelection { start: &start, end: &end, left: f32::NAN, right, page_hint: 0, max_lines: 100 }).is_empty());
+    assert_eq!(
+        l.column_segments(
+            &d,
+            hit::ColumnSelection { start: &start, end: &end, start_line_end: false, end_line_end: false, left, right, page_hint: 0, max_lines: 2 }
+        )
+        .len(),
+        2
+    );
+    assert!(
+        l.column_segments(
+            &d,
+            hit::ColumnSelection {
+                start: &start,
+                end: &end,
+                start_line_end: false,
+                end_line_end: false,
+                left: f32::NAN,
+                right,
+                page_hint: 0,
+                max_lines: 100
+            }
+        )
+        .is_empty()
+    );
 }
 
 #[test]

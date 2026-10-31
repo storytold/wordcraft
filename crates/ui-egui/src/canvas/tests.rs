@@ -4841,3 +4841,49 @@ fn the_view_key_changes_when_a_drag_takes_an_object_off_the_page() {
     assert_ne!(hidden, view_key(&app, false, None), "the page without the dragged object is rendered again");
     assert_eq!(hidden, view_key(&app, false, Some(&object)), "the same drag keeps the key: no re-render every frame");
 }
+
+/// A click on the right half of the last character of a line that wraps after text (Chinese)
+/// puts the caret after it at that line's end, and it is drawn there, not at the start of the
+/// next line (the same position in the text). A click on the left half of the next line's first
+/// character puts it at the next line's start.
+#[test]
+fn a_click_after_the_last_character_of_a_wrapped_line_keeps_the_caret_on_it() {
+    use egui::{Event, PointerButton};
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("text.insert", json!({"text": "春风拂过山岗，溪水绕着村庄静静流淌。".repeat(6)})).unwrap();
+    a.run("view.commentsPane", json!({"value": false})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    let l = h.state_mut().session.layout();
+    let para = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para.clone()) } else { None }).unwrap();
+    assert!(para.lines.len() > 1);
+    let (line, next) = (&para.lines[0], &para.lines[1]);
+    let last = l.caret(&Pos::body(0, para.clusters[line.c1 - 1].start)).unwrap();
+    let end = l.caret_at(&Pos::body(0, line.stop), 0, true).unwrap();
+    let start = l.caret(&Pos::body(0, next.start)).unwrap();
+    let mid = |c: wordcraft_layout::hit::Caret| c.top + c.height / 2.0;
+    for (x, y, line_end, row) in [(last.x + (end.x - last.x) * 0.75, mid(last), true, end), (start.x + 0.5, mid(start), false, start)] {
+        let at = page_to_screen(h.state_mut(), 0, x, y).expect("on screen");
+        h.event(Event::PointerMoved(at));
+        h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Default::default() });
+        h.step();
+        h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Default::default() });
+        for _ in 0..40 {
+            h.step();
+        }
+        let s = &h.state().session;
+        assert_eq!((s.sel.focus.clone(), s.at_line_end(&s.sel.focus)), (Pos::body(0, line.stop), line_end));
+        let (drawn, _) = caret_screen(h.state_mut()).expect("caret on screen");
+        let want = page_to_screen(h.state_mut(), 0, row.x, row.top).expect("on screen");
+        assert!((drawn - want).length() < 0.5, "line end {line_end}: the caret is drawn at {drawn:?}, not {want:?}");
+    }
+}

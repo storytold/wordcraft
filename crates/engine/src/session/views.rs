@@ -17,6 +17,7 @@ pub struct WindowView {
     view: ViewState,
     pending: Option<CharProps>,
     goal_x: Option<f32>,
+    caret_line_end: Option<(u64, Selection)>,
     page_hint: usize,
     hf_return: Option<Selection>,
     typing_open: bool,
@@ -63,6 +64,7 @@ impl Session {
             view: take(&mut self.view),
             pending: self.pending.take(),
             goal_x: self.goal_x.take(),
+            caret_line_end: self.caret_line_end.take(),
             page_hint: take(&mut self.page_hint),
             hf_return: self.hf_return.take(),
             typing_open: take(&mut self.typing_open),
@@ -87,6 +89,7 @@ impl Session {
             view: self.view.clone(),
             pending: self.pending.clone(),
             goal_x: self.goal_x,
+            caret_line_end: self.caret_line_end.clone(),
             page_hint: self.page_hint,
             hf_return: self.hf_return.clone(),
             // The new window hasn't typed: its first key starts an undo step of its own.
@@ -117,6 +120,7 @@ impl Session {
             view,
             pending,
             goal_x,
+            caret_line_end,
             page_hint,
             hf_return,
             typing_open,
@@ -150,6 +154,7 @@ impl Session {
             self.also_selected = also_selected;
             self.column = column;
             self.widened = widened;
+            self.caret_line_end = caret_line_end;
             return;
         }
         self.hf_return = hf_return.map(|s| Selection { anchor: self.doc.clamp(&s.anchor), focus: self.doc.clamp(&s.focus) });
@@ -162,6 +167,7 @@ impl Session {
         self.column = None;
         self.widened = None;
         self.goal_x = None;
+        self.caret_line_end = None;
         self.clamp_selection();
     }
 }

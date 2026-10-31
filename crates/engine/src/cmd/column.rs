@@ -64,7 +64,7 @@ fn select_column(s: &mut Session, v: &Value) -> CmdResult {
         let l = s.layout();
         let xa = l.caret_on(&a, s.page_hint).map(|c| c.x).ok_or_else(|| CmdError::Failed("`anchor` isn't laid out".into()))?;
         let xb = l.caret_on(&b, s.page_hint).map(|c| c.x).ok_or_else(|| CmdError::Failed("`focus` isn't laid out".into()))?;
-        make(s, a, b, xa, xb);
+        make(s, (a, false), (b, false), xa, xb);
         return result(s);
     }
     if let (Some(fv), Some(tv)) = (v.get("from"), v.get("to")) {
@@ -72,10 +72,11 @@ fn select_column(s: &mut Session, v: &Value) -> CmdResult {
         let (tp, tx, ty) = point(tv, "to")?;
         let story = super::story_param(s, v);
         let l = s.layout();
-        let a = l.hit(fp, fx, fy, story).ok_or_else(|| CmdError::Params("no text at `from`".into()))?;
-        let b = l.hit(tp, tx, ty, story).ok_or_else(|| CmdError::Params("no text at `to`".into()))?;
+        let (a, a_end) = l.hit_at(fp, fx, fy, story).ok_or_else(|| CmdError::Params("no text at `from`".into()))?;
+        let (b, b_end) = l.hit_at(tp, tx, ty, story).ok_or_else(|| CmdError::Params("no text at `to`".into()))?;
         s.page_hint = tp;
-        make(s, a, b, fx, tx);
+        make(s, (a, a_end), (b, b_end), fx, tx);
+        s.set_at_line_end(b_end);
         return result(s);
     }
     // Ctrl+Shift+F8: toggle the mode; the block starts at the caret.
@@ -83,8 +84,10 @@ fn select_column(s: &mut Session, v: &Value) -> CmdResult {
     s.column_mode = on;
     if on {
         let f = s.sel.focus.clone();
-        let x = s.layout().caret_on(&f, s.page_hint).map(|c| c.x).unwrap_or(0.0);
-        make(s, f.clone(), f, x, x);
+        let line_end = s.at_line_end(&f);
+        let x = s.layout().caret_at(&f, s.page_hint, line_end).map(|c| c.x).unwrap_or(0.0);
+        make(s, (f.clone(), line_end), (f, line_end), x, x);
+        s.set_at_line_end(line_end);
         s.status = "Column selection: the arrow keys extend the block, Esc ends it".into();
     } else {
         s.status.clear();
@@ -92,14 +95,18 @@ fn select_column(s: &mut Session, v: &Value) -> CmdResult {
     result(s)
 }
 
-/// Make the block between corners `a` and `b` whose page x are `xa` and `xb`.
-fn make(s: &mut Session, a: Pos, b: Pos, xa: f32, xb: f32) {
+/// Make the block between corners `a` and `b` whose page x are `xa` and `xb`; each corner with
+/// whether it is at the end of its line where that line wraps after text ([`Session::at_line_end`]).
+fn make(s: &mut Session, (a, a_end): (Pos, bool), (b, b_end): (Pos, bool), xa: f32, xb: f32) {
     let (xa, xb) = (if xa.is_finite() { xa } else { 0.0 }, if xb.is_finite() { xb } else { 0.0 });
     let (left, right) = (xa.min(xb), xa.max(xb));
     let l = s.layout();
-    let segments = l.column_segments(&s.doc, ColumnSelection { start: &a, end: &b, left, right, page_hint: s.page_hint, max_lines: MAX_LINES });
+    let segments = l.column_segments(
+        &s.doc,
+        ColumnSelection { start: &a, end: &b, start_line_end: a_end, end_line_end: b_end, left, right, page_hint: s.page_hint, max_lines: MAX_LINES },
+    );
     s.sel = Selection { anchor: a, focus: b };
-    s.column = Some(ColumnBlock { sel: s.sel.clone(), anchor_x: xa, focus_x: xb, segments, cells: None });
+    s.column = Some(ColumnBlock { sel: s.sel.clone(), anchor_x: xa, focus_x: xb, anchor_line_end: a_end, segments, cells: None });
     s.pending = None;
 }
 
@@ -107,11 +114,13 @@ fn make(s: &mut Session, a: Pos, b: Pos, xa: f32, xb: f32) {
 /// Up/Down).
 fn extend_to(s: &mut Session, to: Pos) {
     let Some(block) = s.column.clone() else { return };
+    let line_end = s.at_line_end(&to);
     let x = match s.goal_x {
         Some(gx) => gx,
-        None => s.layout().caret_on(&to, s.page_hint).map(|c| c.x).unwrap_or(block.focus_x),
+        None => s.layout().caret_at(&to, s.page_hint, line_end).map(|c| c.x).unwrap_or(block.focus_x),
     };
-    make(s, block.sel.anchor, to, block.anchor_x, x);
+    make(s, (block.sel.anchor, block.anchor_line_end), (to, line_end), block.anchor_x, x);
+    s.set_at_line_end(line_end);
 }
 
 /// Run a command with the column block in mind (called by `Session::run` for every command).

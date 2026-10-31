@@ -196,6 +196,19 @@ impl ParaLayout {
         };
         Some(end.unwrap_or(l.left).max(l.right))
     }
+    /// Whether `off` is the end of left-to-right line `li` where the line wraps right after text
+    /// (Chinese, a word broken because it is wider than the line), not at a space or a break: the
+    /// same position in the text as the next line's start, so the caret can be shown on either
+    /// line. Zero-width markers (bookmarks, comment anchors) after the text don't count.
+    pub fn is_wrap_end(&self, li: usize, off: usize) -> bool {
+        let Some(l) = self.lines.get(li) else { return false };
+        let last = self.clusters.get(l.c0..l.c1).and_then(|cs| cs.iter().rev().find(|c| c.kind != ClKind::Marker));
+        l.end == LineEnd::Wrap
+            && l.stop == off
+            && l.vis.is_empty()
+            && self.lines.get(li + 1).is_some_and(|n| n.start == off)
+            && last.is_some_and(|c| !matches!(c.kind, ClKind::Space | ClKind::Tab | ClKind::LineBreak | ClKind::PageBreak | ClKind::ColumnBreak))
+    }
     /// The line holding offset `off` (a position at a wrap point belongs to the next line).
     pub fn line_of(&self, off: usize) -> usize {
         for (i, l) in self.lines.iter().enumerate() {
@@ -210,6 +223,18 @@ impl ParaLayout {
             }
         }
         self.lines.len().saturating_sub(1)
+    }
+    /// The line the caret at `off` is on: [`Self::line_of`], except that with `line_end` a
+    /// position where a line wraps after text ([`Self::is_wrap_end`]) is at the end of that line.
+    pub fn caret_line(&self, off: usize, line_end: bool) -> usize {
+        let li = self.line_of(off);
+        if line_end && li > 0 && self.is_wrap_end(li - 1, off) { li - 1 } else { li }
+    }
+    /// The automatic space ([`auto_space`]) after the last character of line `li`: it goes with
+    /// the wrap, so the caret at the end of the line stands before it. 0 without one.
+    pub fn trailing_auto_space(&self, li: usize) -> f32 {
+        let Some(l) = self.lines.get(li) else { return 0.0 };
+        (l.c0..l.c1).rev().find(|&k| self.clusters.get(k).is_some_and(|c| c.kind != ClKind::Marker)).map_or(0.0, |k| self.auto_space_after(k))
     }
     /// Caret x on a bidirectional line: the leading edge of the cluster after `off` (the right
     /// edge of right-to-left text), except where `off` leaves an embedded run (the cluster before
@@ -256,7 +281,7 @@ impl ParaLayout {
             (l.c0..l.c1).filter_map(|k| self.clusters.get(k).filter(|c| self.is_edit_boundary(c.start)).map(|c| c.start)).collect();
         let last_break =
             l.c1 > l.c0 && self.clusters.get(l.c1 - 1).is_some_and(|c| matches!(c.kind, ClKind::LineBreak | ClKind::PageBreak | ClKind::ColumnBreak));
-        let wrapped = l.c1 > l.c0 && l.end == LineEnd::Wrap && self.lines.get(li + 1).is_some();
+        let wrapped = l.c1 > l.c0 && l.end == LineEnd::Wrap && self.lines.get(li + 1).is_some() && !self.is_wrap_end(li, l.stop);
         if !last_break && !wrapped || l.c1 == l.c0 {
             v.push(l.stop);
         }
@@ -290,10 +315,13 @@ impl ParaLayout {
                 if lastc.is_some_and(|c| matches!(c.kind, ClKind::LineBreak | ClKind::PageBreak | ClKind::ColumnBreak)) {
                     continue;
                 }
-                if l.end == LineEnd::Wrap && self.lines.get(li + 1).is_some() {
+                if l.end == LineEnd::Wrap && self.lines.get(li + 1).is_some() && !self.is_wrap_end(li, l.stop) {
                     continue;
                 }
             }
+            // The automatic space after the last character goes with the wrap: the line's end is
+            // before it, where the caret is drawn ([`Self::trailing_auto_space`]).
+            let cx = if k == l.c1 && self.is_wrap_end(li, l.stop) { cx - self.trailing_auto_space(li) } else { *cx };
             let d = (cx - x).abs();
             if d < bestd {
                 bestd = d;

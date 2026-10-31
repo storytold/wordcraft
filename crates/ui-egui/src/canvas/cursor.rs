@@ -3,10 +3,18 @@ use super::pages::{page_render_options, page_screen_scale};
 use super::story::dims_body;
 use super::{Color32, DocLayout, Hash, Hasher, Pos, Pos2, WordApp};
 
+/// Put the caret at a position [`wordcraft_layout::DocLayout::hit_at`] found, at the end of its
+/// line where that line wraps after text if the hit was.
+pub(crate) fn caret_to_hit(app: &mut WordApp, (pos, line_end): (Pos, bool)) {
+    app.session.sel = wordcraft_engine::Selection::caret(pos);
+    app.session.set_at_line_end(line_end);
+}
+
 /// Caret position on screen.
 pub fn caret_screen(app: &mut WordApp) -> Option<(Pos2, f32)> {
     let l = app.session.layout();
-    let c = l.caret_on(&app.session.sel.focus, app.session.page_hint)?;
+    let focus = &app.session.sel.focus;
+    let c = l.caret_at(focus, app.session.page_hint, app.session.at_line_end(focus))?;
     let p = page_to_screen(app, c.page, c.x, c.top)?;
     let scale = app
         .canvas

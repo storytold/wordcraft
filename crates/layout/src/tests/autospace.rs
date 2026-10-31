@@ -128,3 +128,70 @@ fn the_space_takes_no_room_at_the_end_of_a_justified_line() {
     let end = line.xs[k - line.c0] + plain;
     assert!((end - line.right).abs() < 0.01, "the 1 ends at {end}, the line at {}", line.right);
 }
+
+/// The caret at the end of a line that wraps after a character with an automatic space (before
+/// Latin text or digits on the next line) is drawn right after that character: the space goes
+/// with the wrap, so it neither moves the caret off the character nor carries it past the margin.
+#[test]
+fn the_caret_at_the_end_of_a_line_leaves_out_the_space() {
+    let text = "abcdef 1漢漢漢";
+    let mut d = Document::from_text(text);
+    let pl = first_para(&lay(&d));
+    let line = &pl.lines[0];
+    let k = pl.clusters.iter().position(|c| c.start == text.find('1').unwrap()).unwrap();
+    let gap = gaps(&d)[k];
+    assert!(gap > 0.0);
+    // Room for the 1 and a quarter of the space after it: the space overflows the line.
+    let right = line.xs[k - line.c0] + pl.clusters[k].adv - gap + gap / 4.0;
+    para0(&mut d).props.indent_right = Some(line.right - right);
+    let l = lay(&d);
+    let (pl, x) =
+        l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, x, .. } = it { Some((para.clone(), *x)) } else { None }).unwrap();
+    let line = &pl.lines[0];
+    assert_eq!(line.c1 - 1, k, "the 1 ends the first line");
+    let end = line.xs[k + 1 - line.c0] - gap;
+    assert!(end < line.right && line.xs[k + 1 - line.c0] > line.right, "the space after the 1 overflows the line");
+    let c = l.caret_at(&wordcraft_doc::Pos::body(0, line.stop), 0, true).unwrap();
+    assert!((c.x - (x + end)).abs() < 0.01, "the caret at {} is after the 1 at {}", c.x, x + end);
+}
+
+/// A click on the right half of a line's last character, where the automatic space after it goes
+/// with the wrap, puts the caret at the end of that line, where `caret_at` draws it: the space is
+/// left out of the line end's x for hits too. Latin before Chinese (`1` then `漢`) and Chinese
+/// before Latin (`漢` then `a`), with every alignment.
+#[test]
+fn a_click_on_the_last_character_before_an_automatic_space_reaches_the_line_end() {
+    let cases = [("abcdef 1漢漢漢", '漢'), ("漢漢漢漢漢漢漢a漢", 'a')];
+    for ((text, next), align) in cases.into_iter().flat_map(|c| [Align::Left, Align::Center, Align::Right, Align::Justify].map(|a| (c, a))) {
+        // The last character is the one before the first `next`.
+        let at = text.char_indices().take_while(|(_, c)| *c != next).last().unwrap().0;
+        let last = &text[at..text.find(next).unwrap()];
+        let mut d = Document::from_text(text);
+        let pl = first_para(&lay(&d));
+        let line = &pl.lines[0];
+        let k = pl.clusters.iter().position(|c| c.start == at).unwrap();
+        let gap = gaps(&d)[k];
+        assert!(gap > 0.0, "{text}: an automatic space after {last}");
+        // The line ends after `last`; its automatic space overflows the line.
+        let right = line.xs[k - line.c0] + pl.clusters[k].adv - gap + gap / 4.0;
+        para0(&mut d).props.indent_right = Some(line.right - right);
+        para0(&mut d).props.align = Some(align);
+        let l = lay(&d);
+        let (pl, x, y) = l.pages[0]
+            .items
+            .iter()
+            .find_map(|it| if let Placed::Lines { para, x, y, .. } = it { Some((para.clone(), *x, *y)) } else { None })
+            .unwrap();
+        let line = &pl.lines[0];
+        assert_eq!(line.c1 - 1, k, "{text}, {align:?}: {last} ends the first line");
+        let (x0, x1) = (x + line.xs[k - line.c0], x + line.xs[k + 1 - line.c0] - gap);
+        let mid = y + line.top - pl.lines[0].top + line.height / 2.0;
+        for f in [0.55, 0.6, 0.7, 0.8, 0.9, 1.0] {
+            let hx = x0 + (x1 - x0) * f;
+            let (pos, end) = l.hit_at(0, hx, mid, StoryRef::Body).unwrap();
+            assert_eq!((pos.off, end), (line.stop, true), "{text}, {align:?}: a click at {f} of {last} goes after it");
+        }
+        let (pos, end) = l.hit_at(0, x0 + (x1 - x0) * 0.4, mid, StoryRef::Body).unwrap();
+        assert_eq!((pos.off, end), (at, false), "{text}, {align:?}: a click on the left of {last} goes before it");
+    }
+}

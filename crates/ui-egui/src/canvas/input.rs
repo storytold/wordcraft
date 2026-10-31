@@ -1,4 +1,5 @@
 use super::balloons::over_balloon;
+use super::cursor::caret_to_hit;
 use super::links::{field_showing_code, is_followable_link, is_generated_bookmark_link, link_under};
 use super::navigation::page_at;
 use super::story::{enters_header_footer, in_text_box, part_kind, text_box_host};
@@ -194,7 +195,11 @@ fn handle_page_pointer(app: &mut WordApp, pointer: PagePointer<'_>) {
         let target = match d.unit {
             "line" => layout.body_line_at(page, y),
             "document" => None,
-            _ => layout.hit(page, x, y, story),
+            // Past the last character of a line that wraps after text, that character's word.
+            _ => layout.hit_at(page, x, y, story).map(|(pos, line_end)| match app.session.doc.para_at(&pos) {
+                Some(p) if line_end => Pos { off: p.prev_boundary(pos.off), ..pos },
+                _ => pos,
+            }),
         };
         if let Some(pos) = target
             && pos != d.last
@@ -208,11 +213,12 @@ fn handle_page_pointer(app: &mut WordApp, pointer: PagePointer<'_>) {
     } else if app.canvas.dragging && ui.input(|i| i.pointer.primary_down()) {
         // Through the command, so from one table cell into another the drag takes whole cells
         // (Word); straight to the session, as the app's `run` would scroll on every frame.
-        if let Some(pos) = layout.hit(page, x, y, story)
-            && pos != app.session.sel_ends().focus
+        if let Some((pos, line_end)) = layout.hit_at(page, x, y, story)
+            && (pos != app.session.sel_ends().focus || line_end != app.session.at_line_end(&pos))
         {
             let pj = serde_json::to_value(&pos).unwrap_or_default();
             let _ = app.session.run("caret.set", &json!({"pos": pj, "extend": true}));
+            app.session.set_at_line_end(line_end);
             app.session.page_hint = page;
             app.canvas.caret_visible_since = crate::now_ms();
         }
@@ -262,8 +268,8 @@ fn handle_primary_press(
         let id = if header { "insert.editHeader" } else { "insert.editFooter" };
         if app.run(id, json!({ "page": page })).is_ok() {
             let to = app.session.sel.focus.story;
-            if let Some(pos) = app.session.layout().hit(page, x, y, to) {
-                app.session.sel = wordcraft_engine::Selection::caret(pos);
+            if let Some(hit) = app.session.layout().hit_at(page, x, y, to) {
+                caret_to_hit(app, hit);
             }
             app.session.page_hint = page;
         }
@@ -324,7 +330,7 @@ fn handle_primary_press(
         app.canvas.dragging = true;
         return;
     }
-    let Some(pos) = layout.hit(page, x, y, story) else { return };
+    let Some((pos, line_end)) = layout.hit_at(page, x, y, story) else { return };
     // Ctrl/⌘+click follows a hyperlink.
     if mods.command
         && let Some(link) = link_under(app, layout, page, x, y, &pos)
@@ -352,6 +358,8 @@ fn handle_primary_press(
     }
     app.canvas.column_drag = None;
     let _ = app.run("caret.set", json!({"pos": pj, "extend": mods.shift}));
+    // Past the last character of a line that wraps after text, the caret stays on that line.
+    app.session.set_at_line_end(line_end);
     // Double-click selects a word, triple-click a paragraph, Ctrl/⌘+click a sentence; holding
     // the button and dragging then extends by whole units (Word, #549).
     let unit = match clicks {
@@ -423,16 +431,16 @@ fn handle_completed_click(app: &mut WordApp, pointer: &PagePointer<'_>) -> bool 
         {
             let id = if header { "insert.editHeader" } else { "insert.editFooter" };
             if app.run(id, json!({ "page": page })).is_ok()
-                && let Some(pos) = app.session.layout().hit(page, x, y, app.session.sel.focus.story)
+                && let Some(hit) = app.session.layout().hit_at(page, x, y, app.session.sel.focus.story)
             {
-                app.session.sel = wordcraft_engine::Selection::caret(pos);
+                caret_to_hit(app, hit);
             }
             return true;
         }
         if matches!(story, StoryRef::Part(_)) && !in_text_box(app) && hf_zone.is_none() {
             let _ = app.run("insert.closeHeader", json!({}));
-            if let Some(pos) = layout.hit(page, x, y, StoryRef::Body) {
-                app.session.sel = wordcraft_engine::Selection::caret(pos);
+            if let Some(hit) = layout.hit_at(page, x, y, StoryRef::Body) {
+                caret_to_hit(app, hit);
             }
             return true;
         }
