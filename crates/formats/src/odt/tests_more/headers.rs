@@ -1,0 +1,154 @@
+//! Headers and footers written to the master pages (ODF 1.3 §16.10), read back by the reader
+//! that already opens them.
+
+use crate::odt::{export, import};
+use wordcraft_doc::para::InlineObject;
+use wordcraft_doc::props::CharProps;
+use wordcraft_doc::{Document, Paragraph, Part, PartKind, para_block};
+
+fn text_para(s: &str, props: CharProps) -> std::sync::Arc<wordcraft_doc::Block> {
+    let mut p = Paragraph::new();
+    p.text = s.into();
+    p.runs = vec![wordcraft_doc::para::Run { len: s.len(), props }];
+    para_block(p)
+}
+
+fn page_field_para(before: &str) -> std::sync::Arc<wordcraft_doc::Block> {
+    let mut p = Paragraph::new();
+    p.text = format!("{before}{}", wordcraft_doc::para::OBJ);
+    p.objects.push(InlineObject::Field { instr: "PAGE".into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new() });
+    p.runs = vec![wordcraft_doc::para::Run { len: p.text.len(), props: Default::default() }];
+    para_block(p)
+}
+
+fn part(kind: PartKind, blocks: Vec<std::sync::Arc<wordcraft_doc::Block>>) -> Part {
+    Part { kind, blocks, body: Default::default() }
+}
+
+fn part_text(d: &Document, id: Option<u32>) -> String {
+    id.and_then(|i| d.parts.get(&i))
+        .map(|p| p.blocks.iter().filter_map(|b| b.as_para()).map(|p| p.text.clone()).collect::<Vec<_>>().join("|"))
+        .unwrap_or_default()
+}
+
+#[test]
+fn headers_and_footers_are_written_and_read_back() {
+    let mut d = Document::new();
+    d.body = vec![text_para("Body", Default::default())];
+    d.parts.insert(1, part(PartKind::Header, vec![text_para("Bold header", CharProps { bold: Some(true), ..Default::default() })]));
+    d.parts.insert(2, part(PartKind::Footer, vec![page_field_para("Page ")]));
+    d.parts.insert(3, part(PartKind::Header, vec![text_para("First page header", Default::default())]));
+    d.last_section.headers.default = Some(1);
+    d.last_section.footers.default = Some(2);
+    d.last_section.headers.first = Some(3);
+    d.last_section.title_page = true;
+    let back = import(&export(&d).unwrap()).unwrap();
+    let s = &back.last_section;
+    assert_eq!(part_text(&back, s.headers.default), "Bold header");
+    assert_eq!(part_text(&back, s.headers.first), "First page header");
+    assert!(s.title_page);
+    assert_eq!(part_text(&back, s.footers.default).replace(wordcraft_doc::para::OBJ, "#"), "Page #");
+    // The header's text keeps its formatting; the footer its page field.
+    let h = back.parts.get(&s.headers.default.unwrap()).unwrap().blocks[0].as_para().unwrap();
+    assert_eq!(h.runs[0].props.bold, Some(true));
+    let f = back.parts.get(&s.footers.default.unwrap()).unwrap().blocks[0].as_para().unwrap();
+    assert!(matches!(&f.objects[..], [InlineObject::Field { instr, .. }] if instr == "PAGE"));
+}
+
+#[test]
+fn even_page_headers_are_left_page_headers() {
+    let mut d = Document::new();
+    d.body = vec![text_para("Body", Default::default())];
+    d.parts.insert(1, part(PartKind::Header, vec![text_para("Odd", Default::default())]));
+    d.parts.insert(2, part(PartKind::Header, vec![text_para("Even", Default::default())]));
+    d.last_section.headers.default = Some(1);
+    d.last_section.headers.even = Some(2);
+    d.settings.even_odd_headers = true;
+    let back = import(&export(&d).unwrap()).unwrap();
+    assert!(back.settings.even_odd_headers);
+    assert_eq!(part_text(&back, back.last_section.headers.default), "Odd");
+    assert_eq!(part_text(&back, back.last_section.headers.even), "Even");
+}
+
+#[test]
+fn each_section_keeps_its_own_header() {
+    let mut d = Document::new();
+    let mut first = Paragraph::new();
+    first.text = "One".into();
+    first.runs = vec![wordcraft_doc::para::Run { len: 3, props: Default::default() }];
+    let mut sec = d.last_section.clone();
+    sec.headers.default = Some(1);
+    first.section = Some(Box::new(sec));
+    d.body = vec![para_block(first), text_para("Two", Default::default())];
+    d.parts.insert(1, part(PartKind::Header, vec![text_para("H1", Default::default())]));
+    d.parts.insert(2, part(PartKind::Header, vec![text_para("H2", Default::default())]));
+    d.last_section.headers.default = Some(2);
+    let back = import(&export(&d).unwrap()).unwrap();
+    let firsts: Vec<_> = back.body.iter().filter_map(|b| b.as_para()).filter_map(|p| p.section.as_ref()).collect();
+    assert_eq!(firsts.len(), 1);
+    assert_eq!(part_text(&back, firsts[0].headers.default), "H1");
+    assert_eq!(part_text(&back, back.last_section.headers.default), "H2");
+}
+
+#[test]
+fn header_styles_do_not_clash_with_body_styles() {
+    // The header's automatic styles live in styles.xml, the body's in content.xml: their names
+    // must differ so neither reader takes one for the other.
+    let mut d = Document::new();
+    d.body = vec![text_para("Italic body", CharProps { italic: Some(true), ..Default::default() })];
+    d.parts.insert(1, part(PartKind::Header, vec![text_para("Bold header", CharProps { bold: Some(true), ..Default::default() })]));
+    d.last_section.headers.default = Some(1);
+    let back = import(&export(&d).unwrap()).unwrap();
+    let body = back.body[0].as_para().unwrap();
+    assert_eq!((body.runs[0].props.italic, body.runs[0].props.bold), (Some(true), None));
+    let h = back.parts.get(&back.last_section.headers.default.unwrap()).unwrap().blocks[0].as_para().unwrap();
+    assert_eq!((h.runs[0].props.bold, h.runs[0].props.italic), (Some(true), None));
+}
+
+fn styles_with_header(header: &str) -> String {
+    format!(
+        r#"<office:document-styles {}><office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="21cm" fo:page-height="29.7cm" fo:margin-top="2cm" fo:margin-bottom="1.5cm" fo:margin-left="2cm" fo:margin-right="2cm"/><style:header-style><style:header-footer-properties fo:min-height="0.5cm" fo:margin-bottom="0.25cm"/></style:header-style><style:footer-style><style:header-footer-properties fo:min-height="1cm" fo:margin-top="0.5cm"/></style:footer-style></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1">{header}</style:master-page></office:master-styles></office:document-styles>"#,
+        crate::odt::tests::NS_T
+    )
+}
+
+fn cm(v: f32) -> f32 {
+    v * 72.0 / 2.54
+}
+
+#[test]
+fn a_header_starts_at_the_page_margin_and_the_text_after_it() {
+    // ODF puts the header at the page margin and the text below the header's height and spacing;
+    // Word measures both from the page edge.
+    let content = format!(
+        r#"<office:document-content {}><office:body><office:text><text:p>x</text:p></office:text></office:body></office:document-content>"#,
+        crate::odt::tests::NS_T
+    );
+    let with = crate::odt::tests::package(
+        &content,
+        Some(&styles_with_header("<style:header><text:p>H</text:p></style:header><style:footer><text:p>F</text:p></style:footer>")),
+    );
+    let s = import(&with).unwrap().last_section;
+    let near = |a: f32, b: f32| (a - b).abs() < 0.05;
+    assert!(near(s.header, cm(2.0)) && near(s.margin_top, cm(2.75)), "{} {}", s.header, s.margin_top);
+    assert!(near(s.footer, cm(1.5)) && near(s.margin_bottom, cm(3.0)), "{} {}", s.footer, s.margin_bottom);
+    // No header (or a hidden one): the page margins are the text's.
+    let without =
+        crate::odt::tests::package(&content, Some(&styles_with_header(r#"<style:header style:display="false"><text:p>H</text:p></style:header>"#)));
+    let s = import(&without).unwrap().last_section;
+    assert!(near(s.margin_top, cm(2.0)) && near(s.margin_bottom, cm(1.5)), "{} {}", s.margin_top, s.margin_bottom);
+}
+
+#[test]
+fn header_and_footer_distances_round_trip() {
+    let mut d = Document::new();
+    d.body = vec![text_para("Body", Default::default())];
+    d.parts.insert(1, part(PartKind::Header, vec![text_para("H", Default::default())]));
+    d.parts.insert(2, part(PartKind::Footer, vec![text_para("F", Default::default())]));
+    d.last_section.headers.default = Some(1);
+    d.last_section.footers.default = Some(2);
+    (d.last_section.header, d.last_section.margin_top, d.last_section.footer, d.last_section.margin_bottom) = (30.0, 80.0, 20.0, 70.0);
+    let s = import(&export(&d).unwrap()).unwrap().last_section;
+    let near = |a: f32, b: f32| (a - b).abs() < 0.05;
+    assert!(near(s.header, 30.0) && near(s.margin_top, 80.0) && near(s.footer, 20.0) && near(s.margin_bottom, 70.0), "{s:?}");
+}

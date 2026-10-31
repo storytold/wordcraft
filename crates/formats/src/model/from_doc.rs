@@ -1,4 +1,4 @@
-use super::types::{Cell, FBlock, FTable, Flow, Fmt, FmtChange, Img, Inline, Kind, ListInfo, MAX_DEPTH, Meta, Para, RevMark, Spacing};
+use super::types::{Cell, FBlock, FTable, Flow, FlowOpts, Fmt, FmtChange, Img, Inline, Kind, ListInfo, MAX_DEPTH, Meta, Para, RevMark, Spacing};
 use super::{
     Arc, Block, Blocks, CharProps, Document, InlineObject, NumFormat, OBJ, PAGE_BREAK, ParaProps, Paragraph, StyleKind, Table, TextColor, Underline,
     VMerge, VertAlign,
@@ -131,12 +131,13 @@ fn direct_spacing(p: &wordcraft_doc::props::ParaProps) -> Spacing {
 /// A document paragraph as flow paragraphs: a page break character inside the text ends the
 /// paragraph, and the text after it starts a new one that carries `page_break`.
 pub fn flow_paras(doc: &Document, p: &Paragraph) -> Vec<Para> {
-    flow_paras_in(doc, p, false)
+    flow_paras_in(doc, p, FlowOpts::default())
 }
 
 /// [`flow_paras`]; `tracked` keeps tracked changes: deleted text stays, and text carries its
 /// insertion and deletion marks.
-fn flow_paras_in(doc: &Document, p: &Paragraph, tracked: bool) -> Vec<Para> {
+fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
+    let tracked = opts.tracked;
     let (kind, list) = para_kind(doc, p);
     let mut done: Vec<Para> = Vec::new();
     let borders = if kind == Kind::Rule { None } else { p.props.borders.filter(|b| b.any_visible()) };
@@ -250,6 +251,12 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, tracked: bool) -> Vec<Para> {
                     // attributes (alignment, size, raise) stay in the document model.
                     out.inlines.push(Inline::Ruby { base: base.clone(), ruby: ruby.clone(), fmt: f.clone() });
                 }
+                Some(InlineObject::Field { instr, result, .. }) if opts.fields => {
+                    if !buf.is_empty() {
+                        out.push_text(&std::mem::take(&mut buf), &f);
+                    }
+                    out.inlines.push(Inline::Field { instr: instr.clone(), result: result.clone(), fmt: f.clone() });
+                }
                 Some(InlineObject::BookmarkStart { name }) if name != "_GoBack" => {
                     if !buf.is_empty() {
                         out.push_text(&std::mem::take(&mut buf), &f);
@@ -281,7 +288,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, tracked: bool) -> Vec<Para> {
     done
 }
 
-fn flow_blocks(doc: &Document, bl: &Blocks, depth: usize, tracked: bool) -> Vec<FBlock> {
+fn flow_blocks(doc: &Document, bl: &Blocks, depth: usize, tracked: FlowOpts) -> Vec<FBlock> {
     let mut out = Vec::new();
     for b in bl {
         match &**b {
@@ -299,7 +306,7 @@ fn flow_blocks(doc: &Document, bl: &Blocks, depth: usize, tracked: bool) -> Vec<
     out
 }
 
-fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: bool) -> FTable {
+fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: FlowOpts) -> FTable {
     let mut rows = Vec::new();
     for (ri, r) in t.rows.iter().enumerate() {
         let header = r.props.header || (ri == 0 && t.props.look.header_row && t.rows.len() > 1);
@@ -338,16 +345,26 @@ fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: bool) -> FTable 
 
 /// The document body as a flow.
 pub fn from_doc(doc: &Document) -> Flow {
-    flow_of(doc, false)
+    flow_of(doc, FlowOpts::default())
 }
 
 /// [`from_doc`] keeping tracked changes: deleted text stays, and text carries its insertion and
 /// deletion marks ([`Fmt::ins`], [`Fmt::del`]), for formats that can write revisions (RTF).
 pub fn from_doc_tracked(doc: &Document) -> Flow {
-    flow_of(doc, true)
+    flow_of(doc, FlowOpts { tracked: true, ..Default::default() })
 }
 
-fn flow_of(doc: &Document, tracked: bool) -> Flow {
+/// [`from_doc`] keeping what `opts` asks for.
+pub fn from_doc_with(doc: &Document, opts: FlowOpts) -> Flow {
+    flow_of(doc, opts)
+}
+
+/// `blocks` of `doc` (a header, footer or note) as flow blocks, keeping what `opts` asks for.
+pub fn part_flow(doc: &Document, blocks: &Blocks, opts: FlowOpts) -> Vec<FBlock> {
+    flow_blocks(doc, blocks, 0, opts)
+}
+
+fn flow_of(doc: &Document, tracked: FlowOpts) -> Flow {
     let c = &doc.core;
     Flow {
         blocks: flow_blocks(doc, &doc.body, 0, tracked),

@@ -218,6 +218,16 @@ impl<'a> Builder<'a> {
                     append(&mut out, "", &CharProps::default(), Some(InlineObject::BookmarkEnd { name: name.clone() }));
                 }
                 Inline::Figure(_) => {}
+                Inline::Field { instr, result, fmt } => {
+                    let cp = self.budget(char_props(fmt));
+                    let (instr, result) = (clean_text(instr), clean_text(result));
+                    if instr.trim().is_empty() {
+                        append(&mut out, &result, &cp, None);
+                    } else {
+                        let obj = InlineObject::Field { instr, result, locked: false, dirty: false, code: false, form: String::new() };
+                        append(&mut out, "", &cp, Some(obj));
+                    }
+                }
                 Inline::Equation { linear, display } => {
                     let linear = clean_text(linear);
                     if !linear.is_empty() {

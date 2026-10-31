@@ -1,5 +1,5 @@
 use super::import::Pages;
-use super::limits::{MAX_INFO_CHARS, MAX_OPEN_INSERTIONS, MAX_REGIONS, MAX_SECTIONS, MAX_XML_DEPTH};
+use super::limits::{MAX_FIELD_RESULT, MAX_INFO_CHARS, MAX_OPEN_INSERTIONS, MAX_REGIONS, MAX_SECTIONS, MAX_XML_DEPTH};
 use super::styles::Styles;
 use super::xml::{Attrs, Ev, events, get, length, local};
 use super::{Cell, FBlock, FTable, Fmt, HashMap, Inline, Kind, ListInfo, Para, RevMark, RevisionKind, SectionProps, SectionStart, make_img, model};
@@ -157,6 +157,21 @@ pub(super) struct Body<'a> {
     del: Option<DelState>,
     /// Insertions open in the body: (region id, revision).
     active_ins: Vec<(String, RevMark)>,
+    /// The text field being read.
+    field: Option<OpenField>,
+}
+
+/// A text field being read ([`super::fields`]).
+struct OpenField {
+    /// Its Word field code.
+    instr: String,
+    /// Its shown text so far.
+    result: String,
+    /// Its element's name and depth.
+    name: String,
+    depth: usize,
+    /// The formatting it is in.
+    fmt: Fmt,
 }
 
 impl<'a> Body<'a> {
@@ -195,6 +210,7 @@ impl<'a> Body<'a> {
             info_field: None,
             del: None,
             active_ins: Vec::new(),
+            field: None,
         }
     }
 
@@ -437,6 +453,22 @@ impl Body<'_> {
         if self.in_desc {
             if let Some(fr) = &mut self.frame {
                 fr.3.push_str(t);
+            }
+            return;
+        }
+        if let Some(OpenField { result, .. }) = &mut self.field {
+            // A field's shown text, its XML whitespace collapsed; bounded like any one text run.
+            for c in t.chars() {
+                if result.len() >= MAX_FIELD_RESULT {
+                    break;
+                }
+                if matches!(c, ' ' | '\t' | '\n' | '\r') {
+                    if !result.ends_with(' ') {
+                        result.push(' ');
+                    }
+                } else {
+                    result.push(c);
+                }
             }
             return;
         }
@@ -805,6 +837,17 @@ impl Body<'_> {
     }
 
     fn start_inline(&mut self, q: &str, a: &Attrs) -> bool {
+        // Inside a field everything is its shown text.
+        if self.field.is_some() {
+            return true;
+        }
+        if q.starts_with("text:")
+            && self.frame.is_none()
+            && let Some(instr) = super::fields::instr_of(local(q), a)
+        {
+            self.field = Some(OpenField { instr, result: String::new(), name: q.to_string(), depth: self.depth, fmt: self.cur_fmt() });
+            return true;
+        }
         match local(q) {
             "span" => {
                 let base = self.cur_fmt();
@@ -842,9 +885,35 @@ impl Body<'_> {
         true
     }
 
+    /// Put the field read so far into the paragraph.
+    fn end_field(&mut self) {
+        let Some(OpenField { instr, result, mut fmt, .. }) = self.field.take() else { return };
+        fmt.ins = self.open_insertion();
+        if self.para.is_none() {
+            self.start_para(None, None);
+        }
+        if let Some(p) = &mut self.para {
+            p.inlines.push(Inline::Field { instr, result: result.trim().to_string(), fmt });
+        }
+        self.xml_space_end = false;
+    }
+
     fn end(&mut self, q: &str) {
         self.depth = self.depth.saturating_sub(1);
+        // Everything inside a field was its text: only the field's own end does anything. An
+        // outer element ending first (malformed) ends the field, then itself.
+        if let Some(f) = &self.field {
+            if self.depth >= f.depth {
+                return;
+            }
+            let own = f.name == q;
+            self.end_field();
+            if own {
+                return;
+            }
+        }
         if q == "office:text" {
+            self.end_field();
             if self.del.is_some() {
                 // Unclosed deleted content (hostile): drop it.
                 self.close_deletion();

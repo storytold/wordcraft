@@ -45,6 +45,9 @@ type SecStart = (String, Option<u32>);
 
 #[derive(Default)]
 pub(super) struct Writer {
+    /// Prefix of every name it makes (styles, lists, tables, pictures): headers and footers are
+    /// written by a second writer whose styles go in `styles.xml`, apart from the body's.
+    pub(super) prefix: &'static str,
     /// Automatic text styles: properties XML → name.
     text_styles: Vec<(String, String)>,
     /// Automatic paragraph styles: (parent, properties XML, master page) → name.
@@ -156,6 +159,11 @@ fn parent_style(k: Kind) -> &'static str {
 }
 
 impl Writer {
+    /// A writer whose names all start with `prefix`.
+    pub(super) fn with_prefix(prefix: &'static str) -> Self {
+        Writer { prefix, ..Default::default() }
+    }
+
     fn text_style(&mut self, f: &Fmt) -> Option<String> {
         let props = text_props(f);
         if props.is_empty() {
@@ -164,7 +172,7 @@ impl Writer {
         if let Some((_, n)) = self.text_styles.iter().find(|(p, _)| *p == props) {
             return Some(n.clone());
         }
-        let n = format!("T{}", self.text_styles.len() + 1);
+        let n = format!("{}T{}", self.prefix, self.text_styles.len() + 1);
         self.text_styles.push((props, n.clone()));
         Some(n)
     }
@@ -208,14 +216,14 @@ impl Writer {
         if let Some((_, n)) = self.para_styles.iter().find(|(k, _)| *k == key) {
             return n.clone();
         }
-        let n = format!("P{}", self.para_styles.len() + 1);
+        let n = format!("{}P{}", self.prefix, self.para_styles.len() + 1);
         self.para_styles.push((key, n.clone()));
         n
     }
 
     fn picture(&mut self, img: &model::Img) -> String {
         let ext = if img.ext == "jpeg" { "jpg".to_string() } else { img.ext.clone() };
-        let name = format!("Pictures/image{}.{}", self.pictures.len() + 1, ext);
+        let name = format!("Pictures/{}image{}.{}", self.prefix, self.pictures.len() + 1, ext);
         self.pictures.push((name.clone(), img.data.clone(), mime_of(&img.ext).to_string()));
         name
     }
@@ -402,7 +410,8 @@ impl Writer {
                     let href = self.picture(img);
                     let n = self.pictures.len();
                     out.push_str(&format!(
-                        "<draw:frame draw:name=\"Image{n}\" text:anchor-type=\"as-char\" svg:width=\"{}\" svg:height=\"{}\" draw:z-index=\"0\"><draw:image xlink:href=\"{href}\" xlink:type=\"simple\" xlink:show=\"embed\" xlink:actuate=\"onLoad\"/>",
+                        "<draw:frame draw:name=\"{}Image{n}\" text:anchor-type=\"as-char\" svg:width=\"{}\" svg:height=\"{}\" draw:z-index=\"0\"><draw:image xlink:href=\"{href}\" xlink:type=\"simple\" xlink:show=\"embed\" xlink:actuate=\"onLoad\"/>",
+                        self.prefix,
                         pt(img.w),
                         pt(img.h)
                     ));
@@ -413,6 +422,20 @@ impl Writer {
                     prev_space = false;
                 }
                 Inline::Anchor(a) => out.push_str(&format!("<text:bookmark text:name=\"{}\"/>", x(a))),
+                Inline::Field { instr, result, fmt } => match super::fields::element(instr, &x(result)) {
+                    Some(el) => {
+                        match self.text_style(&Fmt { link: None, ..fmt.clone() }) {
+                            Some(n) => out.push_str(&format!("<text:span text:style-name=\"{n}\">{el}</text:span>")),
+                            None => out.push_str(&el),
+                        }
+                        prev_space = false;
+                    }
+                    // No ODF field for it: what it shows, as text.
+                    None => {
+                        self.plain_inlines(&[Inline::Text(result.clone(), fmt.clone())], out);
+                        prev_space = result.ends_with(' ');
+                    }
+                },
                 // Read as its base text by `ruby_as_text` above.
                 Inline::Ruby { .. } => {}
                 Inline::Figure(_) | Inline::Equation { .. } => {}
@@ -440,7 +463,7 @@ impl Writer {
             }
         };
         let tracked = paras.len() > 1
-            || p.inlines.iter().any(|i| matches!(i, Inline::Text(_, f) | Inline::Ruby { fmt: f, .. } if f.ins.is_some() || f.del.is_some()));
+            || p.inlines.iter().any(|i| matches!(i, Inline::Text(_, f) | Inline::Ruby { fmt: f, .. } | Inline::Field { fmt: f, .. } if f.ins.is_some() || f.del.is_some()));
         if tracked {
             let mut items = Vec::new();
             for (k, q) in paras.iter().enumerate() {
@@ -503,7 +526,7 @@ impl Writer {
                         i += 1;
                     }
                     self.list_styles.push(kinds);
-                    let lname = format!("L{}", self.list_styles.len());
+                    let lname = format!("{}L{}", self.prefix, self.list_styles.len());
                     // Open lists: per level, whether a list-item is open.
                     let mut stack: Vec<bool> = Vec::new();
                     for (qi, q) in blocks.get(start..i).unwrap_or(&[]).iter().enumerate() {
@@ -523,7 +546,7 @@ impl Writer {
                                 *top = true;
                             }
                             if stack.is_empty() {
-                                let id = format!("lst{}", self.list_styles.len());
+                                let id = format!("{}lst{}", self.prefix, self.list_styles.len());
                                 // A list cut by a section boundary goes on numbering: continue-list names the
                                 // preceding list by its xml:id, whatever its style name (ODF 1.3 §19.743).
                                 let prev = self.last_list.clone();
@@ -577,7 +600,7 @@ impl Writer {
                 self.cell_styles.len() - 1
             }
         };
-        format!("Cell{}", k + 1)
+        format!("{}Cell{}", self.prefix, k + 1)
     }
 
     fn table(&mut self, t: &FTable, out: &mut String, depth: usize) {
@@ -590,7 +613,7 @@ impl Writer {
         };
         self.tables.push(widths);
         self.table_starts.push(self.master.take());
-        let tn = self.tables.len();
+        let tn = format!("{}{}", self.prefix, self.tables.len());
         out.push_str(&format!("<table:table table:name=\"Table{tn}\" table:style-name=\"Table{tn}\">"));
         for c in 0..cols {
             out.push_str(&format!("<table:table-column table:style-name=\"Table{tn}.C{}\"/>", c + 1));
@@ -642,7 +665,12 @@ impl Writer {
     }
 
     pub(super) fn automatic_styles(&self) -> String {
-        let mut s = String::from("<office:automatic-styles>");
+        format!("<office:automatic-styles>{}</office:automatic-styles>", self.style_defs())
+    }
+
+    /// The automatic styles made so far, without their `office:automatic-styles` element.
+    pub(super) fn style_defs(&self) -> String {
+        let mut s = String::new();
         for (props, n) in &self.text_styles {
             s.push_str(&format!("<style:style style:name=\"{n}\" style:family=\"text\"><style:text-properties{props}/></style:style>"));
         }
@@ -653,7 +681,7 @@ impl Writer {
             ));
         }
         for (i, kinds) in self.list_styles.iter().enumerate() {
-            s.push_str(&format!("<text:list-style style:name=\"L{}\">", i + 1));
+            s.push_str(&format!("<text:list-style style:name=\"{}L{}\">", self.prefix, i + 1));
             for (l, ordered) in kinds.iter().enumerate() {
                 let lv = l + 1;
                 let props = format!(
@@ -674,7 +702,7 @@ impl Writer {
             s.push_str("</text:list-style>");
         }
         for (i, widths) in self.tables.iter().enumerate() {
-            let tn = i + 1;
+            let tn = format!("{}{}", self.prefix, i + 1);
             let total: f32 = widths.iter().sum();
             let (master, number) = match self.table_starts.get(i).and_then(Option::as_ref) {
                 Some((m, n)) => {
@@ -703,14 +731,14 @@ impl Writer {
                 None => "",
             };
             s.push_str(&format!(
-                "<style:style style:name=\"Cell{}\" style:family=\"table-cell\"><style:table-cell-properties fo:padding=\"4pt\" fo:border=\"0.5pt solid #000000\"{bg}{va_str}/></style:style>",
+                "<style:style style:name=\"{}Cell{}\" style:family=\"table-cell\"><style:table-cell-properties fo:padding=\"4pt\" fo:border=\"0.5pt solid #000000\"{bg}{va_str}/></style:style>",
+                self.prefix,
                 i + 1
             ));
         }
         for st in &self.section_styles {
             s.push_str(st);
         }
-        s.push_str("</office:automatic-styles>");
         s
     }
 }
@@ -726,7 +754,7 @@ impl Item<'_> {
     /// Its tracked insertion and deletion.
     fn marks(&self) -> (Option<&RevMark>, Option<&RevMark>) {
         match self {
-            Item::Inl(Inline::Text(_, f) | Inline::Ruby { fmt: f, .. }) => (f.ins.as_ref(), f.del.as_ref()),
+            Item::Inl(Inline::Text(_, f) | Inline::Ruby { fmt: f, .. } | Inline::Field { fmt: f, .. }) => (f.ins.as_ref(), f.del.as_ref()),
             Item::Inl(_) => (None, None),
             Item::Mark(p) => (p.mark_ins.as_deref(), p.mark_del.as_deref()),
         }

@@ -199,49 +199,102 @@ pub(super) struct Pages {
     pub(super) first_name: Option<String>,
 }
 
+/// A page layout's header or footer area (`style:header-style`/`style:footer-style`, ODF 1.3
+/// §16.6–16.7): its minimum height and its spacing from the text, in points.
+#[derive(Clone, Copy, Default)]
+struct Band {
+    height: f32,
+    spacing: f32,
+}
+
+/// A page layout read from `styles.xml`: its properties, columns, and header and footer areas.
+#[derive(Default)]
+struct Layout {
+    attrs: Attrs,
+    columns: Option<Columns>,
+    header: Band,
+    footer: Band,
+}
+
 fn read_pages(xml: &[u8]) -> Pages {
-    let mut layouts: HashMap<String, (Attrs, Option<Columns>)> = HashMap::new();
+    let mut layouts: HashMap<String, Layout> = HashMap::new();
     let mut cur: Option<String> = None;
-    let mut masters: Vec<(String, String)> = Vec::new();
+    // Inside a layout's footer style (else its header style).
+    let mut in_footer = false;
+    // Master pages: name, layout, whether a header and a footer show.
+    let mut masters: Vec<(String, String, bool, bool)> = Vec::new();
+    let mut in_master = false;
     events(xml, |ev| match ev {
         Ev::Start(q, a) => match local(&q) {
             "page-layout" if q.starts_with("style:") => cur = get(&a, "style:name").map(String::from),
+            "header-style" => in_footer = false,
+            "footer-style" => in_footer = true,
+            "header-footer-properties" => {
+                if let Some(l) = cur.as_ref().and_then(|n| layouts.get_mut(n)) {
+                    let len = |k: &str| get(&a, k).and_then(length).filter(|v| *v >= 0.0).map(|v| v.min(1584.0));
+                    let band = if in_footer { &mut l.footer } else { &mut l.header };
+                    band.height = len("fo:min-height").or_else(|| len("svg:height")).unwrap_or(0.0);
+                    band.spacing = len(if in_footer { "fo:margin-top" } else { "fo:margin-bottom" }).unwrap_or(0.0);
+                }
+            }
             "page-layout-properties" => {
                 if let Some(n) = &cur
                     && layouts.len() < MAX_SECTIONS
                 {
-                    layouts.insert(n.clone(), (a, None));
+                    layouts.insert(n.clone(), Layout { attrs: a, ..Default::default() });
                 }
             }
             "columns" if q.starts_with("style:") => {
                 if let Some(l) = cur.as_ref().and_then(|n| layouts.get_mut(n)) {
-                    l.1 = Some(columns_of(&a));
+                    l.columns = Some(columns_of(&a));
                 }
             }
             "column-sep" => {
-                if let Some(c) = cur.as_ref().and_then(|n| layouts.get_mut(n)).and_then(|l| l.1.as_mut()) {
+                if let Some(c) = cur.as_ref().and_then(|n| layouts.get_mut(n)).and_then(|l| l.columns.as_mut()) {
                     c.separator = column_sep(&a);
                 }
             }
             "master-page" if masters.len() < MAX_SECTIONS => {
+                in_master = false;
                 if let (Some(n), Some(l)) = (get(&a, "style:name"), get(&a, "style:page-layout-name")) {
-                    masters.push((n.to_string(), l.to_string()));
+                    masters.push((n.to_string(), l.to_string(), false, false));
+                    in_master = true;
+                }
+            }
+            "header" | "footer" if in_master && q.starts_with("style:") && get(&a, "style:display") != Some("false") => {
+                if let Some(m) = masters.last_mut() {
+                    if local(&q) == "header" {
+                        m.2 = true;
+                    } else {
+                        m.3 = true;
+                    }
                 }
             }
             _ => {}
         },
-        Ev::End(q) => {
-            if local(&q) == "page-layout" {
-                cur = None;
-            }
-        }
+        Ev::End(q) => match local(&q) {
+            "page-layout" => cur = None,
+            "master-page" => in_master = false,
+            _ => {}
+        },
         Ev::Text(_) => {}
     });
     let mut pages = Pages::default();
-    for (name, layout) in masters {
-        let Some((a, cols)) = layouts.get(&layout) else { continue };
+    for (name, layout, header, footer) in masters {
+        let Some(Layout { attrs: a, columns: cols, header: hb, footer: fb }) = layouts.get(&layout) else { continue };
         let mut sec = SectionProps::default();
         apply_layout(a, &mut sec);
+        // ODF starts a header at the page margin and the text after the header's height and
+        // spacing; Word measures the header's distance and the text's margin from the edge.
+        let limit = sec.page_w.max(sec.page_h);
+        if header {
+            sec.header = sec.margin_top;
+            sec.margin_top = (sec.margin_top + hb.height + hb.spacing).min(limit);
+        }
+        if footer {
+            sec.footer = sec.margin_bottom;
+            sec.margin_bottom = (sec.margin_bottom + fb.height + fb.spacing).min(limit);
+        }
         // A one-column layout keeps the default columns (and their gap).
         if let Some(c) = cols.as_ref().filter(|c| c.count > 1) {
             sec.columns = c.clone();

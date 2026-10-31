@@ -9,8 +9,62 @@ fn columns_xml(c: &Columns) -> String {
 
 /// One master page per entry of `pages` (name, setup), each with its own page layout `pm1`, `pm2`…
 /// (§16.5, §16.9); the first is the default one, "Standard".
-/// `defaults` is the spacing of the document's Normal paragraphs, written as the default style's.
-fn styles_xml(pages: &[(String, wordcraft_doc::SectionProps)], body_font: &str, defaults: &model::Spacing) -> String {
+/// A master page's headers and footers (ODF 1.3 §16.10), written.
+#[derive(Default)]
+struct PageParts {
+    /// The `style:header…`/`style:footer…` elements.
+    xml: String,
+    header: bool,
+    footer: bool,
+}
+
+/// The headers and footers section `sec` shows, written by `w` (its styles go in `styles.xml`):
+/// the default one for every page, the even one as left pages' when the document has different
+/// odd and even pages, the first one with a different first page. A slot Word leaves empty is an
+/// empty element, so the page shows nothing there rather than the default one.
+fn page_parts(doc: &Document, sec: &SectionProps, w: &mut Writer) -> PageParts {
+    let mut out = PageParts::default();
+    let even = doc.settings.even_odd_headers;
+    for (set, name) in [(&sec.headers, "header"), (&sec.footers, "footer")] {
+        let wanted = set.default.is_some() || (even && set.even.is_some()) || (sec.title_page && set.first.is_some());
+        if !wanted {
+            continue;
+        }
+        for (id, el, on) in
+            [(set.default, name.to_string(), true), (set.even, format!("{name}-left"), even), (set.first, format!("{name}-first"), sec.title_page)]
+        {
+            if !on {
+                continue;
+            }
+            let mut body = String::new();
+            if let Some(part) = id.and_then(|i| doc.parts.get(&i)) {
+                let blocks = model::part_flow(doc, &part.blocks, model::FlowOpts { tracked: false, fields: true });
+                w.blocks(&blocks, &mut body, 0);
+            }
+            if body.is_empty() {
+                body.push_str("<text:p/>");
+            }
+            out.xml.push_str(&format!("<style:{el}>{body}</style:{el}>"));
+        }
+        if name == "header" {
+            out.header = true;
+        } else {
+            out.footer = true;
+        }
+    }
+    out
+}
+
+/// `defaults` is the spacing of the document's Normal paragraphs, written as the default style's;
+/// `parts` the headers and footers of each page in `pages` and `part_styles` their automatic
+/// styles.
+fn styles_xml(
+    pages: &[(String, wordcraft_doc::SectionProps)],
+    parts: &[PageParts],
+    part_styles: &str,
+    body_font: &str,
+    defaults: &model::Spacing,
+) -> String {
     let mut s = format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-styles {NS}><office:styles>");
     s.push_str(&format!(
         "<style:default-style style:family=\"paragraph\"><style:paragraph-properties{}/><style:text-properties fo:font-family=\"'{}'\" fo:font-size=\"12pt\"/></style:default-style>",
@@ -31,16 +85,41 @@ fn styles_xml(pages: &[(String, wordcraft_doc::SectionProps)], body_font: &str, 
     s.push_str("<style:style style:name=\"Quotations\" style:family=\"paragraph\" style:parent-style-name=\"Standard\" style:class=\"html\"><style:paragraph-properties fo:margin-left=\"36pt\" fo:margin-right=\"36pt\"/><style:text-properties fo:font-style=\"italic\" fo:color=\"#404040\"/></style:style>");
     s.push_str(&format!("<style:style style:name=\"Preformatted_20_Text\" style:display-name=\"Preformatted Text\" style:family=\"paragraph\" style:parent-style-name=\"Standard\" style:class=\"html\"><style:paragraph-properties fo:margin-top=\"0pt\" fo:margin-bottom=\"0pt\"/><style:text-properties fo:font-family=\"'{}'\" style:font-family-generic=\"modern\" style:font-pitch=\"fixed\" fo:font-size=\"10pt\"/></style:style>", model::MONO_FONT));
     s.push_str("</office:styles><office:automatic-styles>");
+    s.push_str(part_styles);
+    let none = PageParts::default();
     for (i, (_, sec)) in pages.iter().enumerate() {
+        let pp = parts.get(i).unwrap_or(&none);
         // A page of several columns carries them in its layout.
         let cols = if sec.columns.count > 1 { columns_xml(&sec.columns) } else { String::new() };
+        // Word measures the header from the page edge and the text from the page edge; ODF
+        // starts the header at the page margin and the text after the header's height. So with
+        // a header the page margin is the header's distance, and the header is tall enough to
+        // reach the text (it grows with its content, as Word's pushes the text down).
+        let (top, header_h) = if pp.header { (sec.header, (sec.margin_top - sec.header).max(0.0)) } else { (sec.margin_top, 0.0) };
+        let (bottom, footer_h) = if pp.footer { (sec.footer, (sec.margin_bottom - sec.footer).max(0.0)) } else { (sec.margin_bottom, 0.0) };
+        let header = if pp.header {
+            format!(
+                "<style:header-style><style:header-footer-properties fo:min-height=\"{}\" fo:margin-bottom=\"0pt\"/></style:header-style>",
+                pt(header_h)
+            )
+        } else {
+            String::new()
+        };
+        let footer = if pp.footer {
+            format!(
+                "<style:footer-style><style:header-footer-properties fo:min-height=\"{}\" fo:margin-top=\"0pt\"/></style:footer-style>",
+                pt(footer_h)
+            )
+        } else {
+            String::new()
+        };
         s.push_str(&format!(
-            "<style:page-layout style:name=\"pm{}\"><style:page-layout-properties fo:page-width=\"{}\" fo:page-height=\"{}\" fo:margin-top=\"{}\" fo:margin-bottom=\"{}\" fo:margin-left=\"{}\" fo:margin-right=\"{}\" style:print-orientation=\"{}\">{cols}</style:page-layout-properties></style:page-layout>",
+            "<style:page-layout style:name=\"pm{}\"><style:page-layout-properties fo:page-width=\"{}\" fo:page-height=\"{}\" fo:margin-top=\"{}\" fo:margin-bottom=\"{}\" fo:margin-left=\"{}\" fo:margin-right=\"{}\" style:print-orientation=\"{}\">{cols}</style:page-layout-properties>{header}{footer}</style:page-layout>",
             i + 1,
             pt(sec.page_w),
             pt(sec.page_h),
-            pt(sec.margin_top),
-            pt(sec.margin_bottom),
+            pt(top),
+            pt(bottom),
             pt(sec.margin_left),
             pt(sec.margin_right),
             if sec.page_w > sec.page_h { "landscape" } else { "portrait" }
@@ -48,7 +127,8 @@ fn styles_xml(pages: &[(String, wordcraft_doc::SectionProps)], body_font: &str, 
     }
     s.push_str("</office:automatic-styles><office:master-styles>");
     for (i, (name, _)) in pages.iter().enumerate() {
-        s.push_str(&format!("<style:master-page style:name=\"{}\" style:page-layout-name=\"pm{}\"/>", x(name), i + 1));
+        let xml = parts.get(i).map(|p| p.xml.as_str()).unwrap_or("");
+        s.push_str(&format!("<style:master-page style:name=\"{}\" style:page-layout-name=\"pm{}\">{xml}</style:master-page>", x(name), i + 1));
     }
     s.push_str("</office:master-styles></office:document-styles>\n");
     s
@@ -101,7 +181,7 @@ fn flow_sections(blocks: &[FBlock], last: &SectionProps) -> Vec<(SectionProps, s
 
 /// Write an `.odt` package.
 pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
-    let flow = model::from_doc_tracked(doc);
+    let flow = model::from_doc_with(doc, model::FlowOpts { tracked: true, fields: true });
     let mut w = Writer::default();
     let mut body = String::new();
     let sections = flow_sections(&flow.blocks, &doc.last_section);
@@ -166,7 +246,10 @@ pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
         right: Some(normal.indent_right),
         first: Some(normal.indent_first),
     };
-    let styles = styles_xml(&pages, &body_font, &defaults);
+    let mut hw = Writer::with_prefix("M");
+    let parts: Vec<PageParts> = pages.iter().map(|(_, sec)| page_parts(doc, sec, &mut hw)).collect();
+    let styles = styles_xml(&pages, &parts, &hw.style_defs(), &body_font, &defaults);
+    w.pictures.append(&mut hw.pictures);
     let meta = meta_xml(&flow.meta);
     let mut manifest = String::from(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<manifest:manifest xmlns:manifest=\"urn:oasis:names:tc:opendocument:xmlns:manifest:1.0\" manifest:version=\"1.3\">\n<manifest:file-entry manifest:full-path=\"/\" manifest:version=\"1.3\" manifest:media-type=\"application/vnd.oasis.opendocument.text\"/>\n<manifest:file-entry manifest:full-path=\"content.xml\" manifest:media-type=\"text/xml\"/>\n<manifest:file-entry manifest:full-path=\"styles.xml\" manifest:media-type=\"text/xml\"/>\n<manifest:file-entry manifest:full-path=\"meta.xml\" manifest:media-type=\"text/xml\"/>\n",

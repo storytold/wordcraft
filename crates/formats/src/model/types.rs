@@ -164,6 +164,24 @@ pub enum Inline {
         ruby: String,
         fmt: Fmt,
     },
+    /// A field (page number, date, document property, cross-reference): its Word field code
+    /// (`PAGE`, `REF name \h`…) and the result it last showed, in its run's formatting. Only
+    /// flows asked for fields ([`FlowOpts::fields`]) hold them; formats without fields write the
+    /// result as text.
+    Field {
+        instr: String,
+        result: String,
+        fmt: Fmt,
+    },
+}
+
+/// What [`super::from_doc_with`] keeps besides text and formatting.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FlowOpts {
+    /// Tracked changes: deleted text stays, and text carries its insertion and deletion marks.
+    pub tracked: bool,
+    /// Fields as [`Inline::Field`] (otherwise their result is text).
+    pub fields: bool,
 }
 
 /// Base text size (points) a phonetic guide falls back to when the source states none: the
@@ -269,7 +287,9 @@ impl Para {
         let mut s = String::new();
         for i in &self.inlines {
             match i {
-                Inline::Text(t, _) | Inline::Equation { linear: t, .. } | Inline::Ruby { base: t, .. } => s.push_str(t),
+                Inline::Text(t, _) | Inline::Equation { linear: t, .. } | Inline::Ruby { base: t, .. } | Inline::Field { result: t, .. } => {
+                    s.push_str(t)
+                }
                 Inline::Image(_) | Inline::Anchor(_) | Inline::Figure(_) => {}
             }
         }
@@ -285,7 +305,7 @@ impl Para {
                     Some(font) if wordcraft_doc::symbol_fonts::is_symbol_font(font) => s.push_str(&wordcraft_doc::symbol_fonts::map_text(font, t)),
                     _ => s.push_str(t),
                 },
-                Inline::Equation { linear: t, .. } | Inline::Ruby { base: t, .. } => s.push_str(t),
+                Inline::Equation { linear: t, .. } | Inline::Ruby { base: t, .. } | Inline::Field { result: t, .. } => s.push_str(t),
                 Inline::Image(_) | Inline::Anchor(_) | Inline::Figure(_) => {}
             }
         }

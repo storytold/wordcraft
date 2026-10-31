@@ -30,6 +30,7 @@ use wordcraft_doc::{Align, Document, RevisionKind, Rgb, SectionProps};
 use crate::model::{self, Cell, FBlock, FTable, Flow, Fmt, Inline, Kind, ListInfo, Meta, Para, RevMark, make_img, mime_of};
 
 mod body;
+mod fields;
 mod import;
 mod limits;
 mod package;
