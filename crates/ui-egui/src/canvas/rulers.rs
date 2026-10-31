@@ -1,6 +1,6 @@
 use super::margins::{MarginEdge, margin_handle};
 use super::pages::page_screen_scale;
-use super::{DocLayout, Pos2, Rect, Sense, Stroke, Tokens, Ui, WordApp, json, pos2, regular, vec2};
+use super::{DocLayout, Pos2, Rect, Sense, Stroke, Tokens, Ui, WordApp, json, move_level, picked_level, pos2, regular, vec2};
 
 /// Horizontal and vertical rulers for the caret's page and paragraph. Each spans that page's
 /// rect on screen at the page's own scale and is clipped to its strip, whatever the layout
@@ -25,6 +25,11 @@ pub(super) fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[
     let text = Rect::from_min_max(pos2(x0 + page.body.x * scale, bar.min.y), pos2(x0 + page.body.right() * scale, bar.max.y));
     hp.rect_filled(text, 0.0, t.ruler);
     let rp = app.session.doc.para_at(&app.session.sel.focus).map(|para| app.session.doc.styles.resolve_para(&para.props));
+    // A click on a number or bullet picked its list level (#4282): the level's own indents are
+    // what the markers then stand for and what a drag changes, the paragraph's own before that.
+    let picked = picked_level(app);
+    let level = picked.as_ref().and_then(|l| app.session.doc.numbering.level(l.num, l.level).cloned());
+    let (lvl_left, lvl_first) = level.as_ref().map_or((None, None), |l| (Some(l.indent), Some(-l.hanging)));
     // Graduations in the File › Options unit.
     let (unit, div, step) = ruler_scale(app.session.units());
     // The caret paragraph's reading direction anchors the whole scale (#692): for a right-to-left
@@ -46,7 +51,8 @@ pub(super) fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[
     // The markers the numbers keep clear of (#1878): the indents, the tab stops, a table's columns.
     let mut keep_clear: Vec<Rect> = Vec::new();
     if let Some(rp) = &rp {
-        let [first, left, right] = [rp.indent_left + rp.indent_first, rp.indent_left, w - rp.indent_right].map(px);
+        let (left0, first0) = (lvl_left.unwrap_or(rp.indent_left), lvl_first.unwrap_or(rp.indent_first));
+        let [first, left, right] = [left0 + first0, left0, w - rp.indent_right].map(px);
         keep_clear.extend(indent_marker_rects(first, left, right, bar));
         keep_clear.extend(crate::ruler_tabs::marker_rects(app, bar, &px, &rp.tabs));
     }
@@ -65,10 +71,13 @@ pub(super) fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[
     ] {
         margin_handle(app, ui, edge, zone, |p| (p.x - x0) / scale, &sect, mirrored);
     }
-    // Indent markers for the caret's paragraph.
+    // The indent markers for the caret's paragraph. A number or bullet clicked on the page picks
+    // its list level (#4282): the markers then stand for the level's indents and move every item
+    // at it, not the caret's paragraph alone.
     if let Some(rp) = rp {
-        let first = px(rp.indent_left + rp.indent_first);
-        let left = px(rp.indent_left);
+        let (left0, first0) = (lvl_left.unwrap_or(rp.indent_left), lvl_first.unwrap_or(rp.indent_first));
+        let first = px(left0 + first0);
+        let left = px(left0);
         let right = px(w - rp.indent_right);
         let c = t.text_dim;
         hp.add(egui::Shape::convex_polygon(
@@ -113,18 +122,32 @@ pub(super) fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[
             if !r.drag_started() {
                 app.session.join_next_undo();
             }
-            let _ = app.run("para.indents", json!({"left": snapped}));
+            match &picked {
+                // A list level picked by its number: the label keeps its distance from the text,
+                // so the whole level (every item at it) shifts (#4282).
+                Some(l) => move_level(app, l, json!({"indentAt": snapped, "alignedAt": snapped + first0})),
+                None => {
+                    let _ = app.run("para.indents", json!({"left": snapped}));
+                }
+            }
         }
         let fr = Rect::from_center_size(pos2(first, bar.min.y + 3.0), vec2(12.0, 10.0));
         let r = ui.interact(fr, ui.scope_id().with("ruler_first"), Sense::click_and_drag());
         if r.dragged()
             && let Some(pp) = r.interact_pointer_pos()
         {
-            let pt = dist_at(pp.x) - rp.indent_left;
+            let pt = dist_at(pp.x) - left0;
+            let snapped = (pt / 4.5).round() * 4.5;
             if !r.drag_started() {
                 app.session.join_next_undo();
             }
-            let _ = app.run("para.indents", json!({"firstLine": (pt / 4.5).round() * 4.5}));
+            match &picked {
+                // The first-line marker moves the level's numbers alone; the text stays put.
+                Some(l) => move_level(app, l, json!({"alignedAt": left0 + snapped})),
+                None => {
+                    let _ = app.run("para.indents", json!({"firstLine": snapped}));
+                }
+            }
         }
         let rr = Rect::from_center_size(pos2(right, bar.max.y - 3.0), vec2(12.0, 12.0));
         let r = ui.interact(rr, ui.scope_id().with("ruler_right"), Sense::click_and_drag());
