@@ -2091,6 +2091,11 @@ fn an_agent_cannot_close_the_document_over_a_pending_comment_draft() {
     assert!(crate::control::close_refused(h.state(), "file.close", &json!({})).is_some());
     assert!(crate::control::close_refused(h.state(), "file.close", &json!({"force": true})).is_none());
     assert!(crate::control::close_refused(h.state(), "text.insert", &json!({"text": "x"})).is_none());
+    // The same for the command that names the document it closes (#3274).
+    let doc = h.state().session.document_id();
+    assert!(crate::control::close_refused(h.state(), "file.closeDocument", &json!({})).is_some());
+    assert!(crate::control::close_refused(h.state(), "file.closeDocument", &json!({"id": doc})).is_some());
+    assert!(crate::control::close_refused(h.state(), "file.closeDocument", &json!({"force": true})).is_none());
 }
 
 /// #1348: a comment edit typed, then refused (the document became read-only).

@@ -128,16 +128,33 @@ an operation that depends on it; do not replay an edit simply because its effect
 
 ### Closing the document
 
-`engine.execute` with `file.close` never shows the Save / Don't Save / Cancel prompt. On a
-document with unsaved changes it replies with an error (the app keeps running and the edits
-stay); save first (`file.save`), or pass `{"force": true}` to discard the changes and close.
-The bare form `{"method": "file.close", "force": true}` (a method name that is a command id) is
-guarded the same way, and only a boolean `true` counts as `force`. A document without unsaved
-changes closes at once (#1268). Closing closes the document and its window, and the window
-focused before it becomes the active one. The last window stays open with no page, and
-`file.new` or `file.open` goes on from there (#1712); closing it doesn't quit the app. With
+`engine.execute` never shows the Save / Don't Save / Cancel prompt, so a command that would
+discard unsaved work is **refused with an error** (the app keeps running and the edits stay);
+save first (`file.save`), or pass `{"force": true}` to discard the changes and go ahead.
+
+`file.close` closes the shown document, so it is refused while that document has unsaved
+changes; the bare form `{"method": "file.close", "force": true}` (a method name that is a
+command id) is guarded the same way, and only a boolean `true` counts as `force`. A document
+without unsaved changes closes at once (#1268). Closing closes the document and its window, and
+the window focused before it becomes the active one. The last window stays open with no page,
+and `file.new` or `file.open` goes on from there (#1712); closing it doesn't quit the app. With
 `doc` naming a document in the background, `file.close` closes that document and its window under
 the same rule (unsaved changes need `{"force": true}`), and the active window stays active.
+
+`file.new`, `file.open`, `file.recover` (with `restore`) and the mailings merges open their
+result as **another document beside** the open ones and leave the unsaved one alone, so they
+lose nothing and are never refused.
+
+`file.closeDocument` closes the document its `id` names (the active one when the `id` is
+absent), so it is refused while that document has unsaved work: changes that aren't written to
+a file, a save the browser's picker hasn't finished, or a comment still being typed. Pass
+`{"force": true}` to discard that work and close the document; only a boolean `true` counts as
+`force`. The refusal and the Save Changes prompt ask about the same work, so they cannot
+disagree (#3274).
+
+`app.quit` closes every open document, so it is refused while any of them has unsaved changes:
+the app keeps running and the work stays. Save first, or pass `{"force": true}` to discard the
+changes and quit. Only a boolean `true` counts as `force`.
 
 ### Native printing
 

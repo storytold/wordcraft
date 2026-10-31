@@ -4571,6 +4571,20 @@ fn web_close_while_a_picker_save_is_in_flight_asks_first() {
     assert!(body_text(&a).contains(UNSAVED), "nothing was replaced");
 }
 
+/// #3274: a save the browser's picker hasn't finished yet isn't written to a file, so a
+/// programmatic `file.closeDocument` refuses it as unsaved work.
+#[test]
+fn programmatic_close_document_keeps_a_save_the_picker_hasnt_finished() {
+    let (mut a, _saves, _last) = web_picker_app();
+    a.execute("file.save", json!({})).unwrap();
+    a.session.dirty = false;
+    let r = control_execute(&mut a, json!({"command": "file.closeDocument"}));
+    assert_eq!(r["ok"], json!(false), "{r}");
+    let e = r["error"].as_str().unwrap_or("");
+    assert!(e.contains("unsaved") && e.contains("force"), "{e}");
+    assert!(a.session.is_open(a.session.document_id()), "the document stays open");
+}
+
 /// #1315: a save that ends after another document is shown neither runs the held-back Close
 /// on that document nor marks it unsaved.
 #[test]
@@ -4687,6 +4701,108 @@ fn programmatic_close_guard_covers_every_form() {
     let r = send(&mut a, "file.close", json!({"force": true}));
     assert_eq!(r["ok"], json!(true), "{r}");
     assert!(!a.has_document() && !a.quit_requested);
+}
+
+/// A programmatic `app.quit` closes every open document, so unsaved work needs the same
+/// explicit `force` as `file.close` rather than going silently (#3274).
+#[test]
+fn programmatic_quit_keeps_unsaved_work() {
+    let ctx = egui::Context::default();
+    let send = |a: &mut WordApp, params: Value| match control::handle(a, &ctx, &ControlRequest::new("app.quit", params).0) {
+        control::Outcome::Done(v) => v,
+        _ => json!({"ok": false, "error": "not a reply"}),
+    };
+
+    let mut a = typed();
+    let r = send(&mut a, json!({}));
+    assert_eq!(r["ok"], json!(false), "{r}");
+    let e = r["error"].as_str().unwrap_or("");
+    assert!(e.contains("unsaved") && e.contains("force"), "{e}");
+    assert!(!a.quit_requested, "the app keeps running");
+    assert!(body_text(&a).contains(UNSAVED), "the work stays");
+
+    // Only a real boolean true counts as `force`.
+    for force in [json!("yes"), json!(1)] {
+        let mut a = typed();
+        let r = send(&mut a, json!({"force": force}));
+        assert_eq!(r["ok"], json!(false), "{force}: {r}");
+        assert!(!a.quit_requested, "{force}");
+        assert!(body_text(&a).contains(UNSAVED), "{force}");
+    }
+
+    let r = send(&mut a, json!({"force": true}));
+    assert_eq!(r["ok"], json!(true), "{r}");
+    assert!(a.quit_requested);
+
+    // A clean document quits straight away, without a `force`.
+    let mut clean = app();
+    let r = send(&mut clean, json!({}));
+    assert_eq!(r["ok"], json!(true), "{r}");
+    assert!(clean.quit_requested);
+}
+
+/// Unsaved work in a document that isn't the active one is work a quit would lose too.
+#[test]
+fn programmatic_quit_keeps_the_work_of_a_background_document() {
+    let ctx = egui::Context::default();
+    let mut a = typed();
+    let first = a.session.document_id();
+    assert_eq!(control_execute(&mut a, json!({"command": "file.new"}))["ok"], json!(true));
+    assert_ne!(a.session.document_id(), first);
+    let r = match control::handle(&mut a, &ctx, &ControlRequest::new("app.quit", json!({})).0) {
+        control::Outcome::Done(v) => v,
+        _ => json!({"ok": false, "error": "not a reply"}),
+    };
+    assert_eq!(r["ok"], json!(false), "{r}");
+    assert!(!a.quit_requested);
+    assert!(a.session.is_open(first), "the background document stays open");
+}
+
+/// #3274: `file.closeDocument` closes a document without a prompt, so the unsaved work in the
+/// document it names needs the same explicit `force` as `file.close` rather than going
+/// silently.
+#[test]
+fn programmatic_close_document_keeps_unsaved_work() {
+    let mut a = typed();
+    let first = a.session.document_id();
+
+    let r = control_execute(&mut a, json!({"command": "file.closeDocument"}));
+    assert_eq!(r["ok"], json!(false), "{r}");
+    let e = r["error"].as_str().unwrap_or("");
+    assert!(e.contains("unsaved") && e.contains("force"), "{e}");
+    assert!(a.session.is_open(first), "the document stays open");
+    assert!(body_text(&a).contains(UNSAVED), "the work stays");
+
+    // Only a real boolean true counts as `force`.
+    for force in [json!("yes"), json!(1)] {
+        let mut a = typed();
+        let r = control_execute(&mut a, json!({"command": "file.closeDocument", "params": {"force": force}}));
+        assert_eq!(r["ok"], json!(false), "{force}: {r}");
+        assert!(a.session.is_open(a.session.document_id()), "{force}");
+    }
+
+    let r = control_execute(&mut a, json!({"command": "file.closeDocument", "params": {"force": true}}));
+    assert_eq!(r["ok"], json!(true), "{r}");
+}
+
+/// #3274: `file.closeDocument` names the document it closes, so unsaved work in a document in
+/// the background is refused too, and `force` closes it.
+#[test]
+fn programmatic_close_document_keeps_the_work_of_a_background_document() {
+    let mut a = typed();
+    let first = a.session.document_id();
+    assert_eq!(control_execute(&mut a, json!({"command": "file.new"}))["ok"], json!(true));
+    assert_ne!(a.session.document_id(), first);
+
+    let r = control_execute(&mut a, json!({"command": "file.closeDocument", "params": {"id": first}}));
+    assert_eq!(r["ok"], json!(false), "{r}");
+    let e = r["error"].as_str().unwrap_or("");
+    assert!(e.contains("unsaved") && e.contains("force"), "{e}");
+    assert!(a.session.is_open(first), "the background document stays open");
+
+    let r = control_execute(&mut a, json!({"command": "file.closeDocument", "params": {"id": first, "force": true}}));
+    assert_eq!(r["ok"], json!(true), "{r}");
+    assert!(!a.session.is_open(first), "the background document is closed");
 }
 
 const MAILINGS: [&str; 4] = ["mailings.envelopes", "mailings.labels", "mailings.finish", "mailings.printDocuments"];
