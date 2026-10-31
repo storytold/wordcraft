@@ -139,21 +139,85 @@ pub(super) fn set_props(s: &mut Session, v: &Value) -> CmdResult {
     sel_result(s)
 }
 
+/// A list level change takes its new indents instead of keeping a direct ruler override (#4287).
+pub(super) fn drop_direct_indents(p: &mut ParaProps) {
+    p.indent_left = None;
+    p.indent_first = None;
+    p.indent_left_chars = None;
+    p.indent_first_chars = None;
+}
+
+/// Change an effective list level, including numbering inherited through a paragraph style.
+pub(super) fn list_level(s: &mut Session, v: &Value) -> CmdResult {
+    let level = p::u64(v, "level").unwrap_or(0).min(8) as u8;
+    let story = s.sel.focus.story;
+    for path in crate::cmd::selected_paths(s) {
+        let Some(number) = s.doc.para(story, &path).and_then(|p| s.doc.styles.resolve_para(&p.props).numbering).filter(|n| n.num != 0) else {
+            continue;
+        };
+        if number.level != level {
+            let para = s.doc.para_mut(story, &path)?;
+            para.props.numbering = Some(NumRef { num: number.num, level });
+            drop_direct_indents(&mut para.props);
+            para.touch();
+        }
+    }
+    sel_result(s)
+}
+
+/// Resolve the command's indent origin as layout does: character units use the paragraph
+/// mark's size, and an explicit list cancellation drops inherited list-style indents.
+fn indent_props(s: &Session, p: &wordcraft_doc::Paragraph) -> (Option<NumRef>, f32, f32) {
+    let mut resolved = s.doc.styles.resolve_para(&p.props);
+    if resolved.indent_chars.iter().any(|c| *c != 0.0) {
+        resolved.set_char_unit(s.doc.styles.resolve_char(p.props.style.as_deref(), &p.mark).size);
+    }
+    if p.props.numbering.is_some_and(|n| n.num == 0) {
+        if p.props.indent_left.is_none() && !p.props.indent_left_chars.is_some_and(|c| c != 0.0) {
+            resolved.indent_left = 0.0;
+        }
+        if p.props.indent_first.is_none() && !p.props.indent_first_chars.is_some_and(|c| c != 0.0) {
+            resolved.indent_first = 0.0;
+        }
+    }
+    (resolved.numbering, resolved.indent_left, resolved.indent_first)
+}
+
+/// Move the leading text edge to the adjacent default tab stop while retaining a hanging
+/// first-line offset. Outdent stops with that edge at the text margin.
+fn adjacent_tab_indent(left: f32, first: f32, tab: f32, increase: bool) -> f32 {
+    let hanging = first.min(0.0);
+    let origin = left + hanging;
+    let target = if increase { ((origin / tab).floor() + 1.0) * tab } else { (((origin / tab).ceil() - 1.0) * tab).max(0.0) };
+    target - hanging
+}
+
+/// Indent effective list numbering by one level, or advance an ordinary paragraph to a tab stop.
+/// A cancelled list remains unnumbered and follows ordinary paragraph indentation.
 pub fn indent(s: &mut Session, _: &Value) -> CmdResult {
     let a = s.sel.ordered().0;
     let paths = crate::cmd::selected_paths(s);
     let tab = s.doc.settings.default_tab.max(1.0);
     for path in paths {
-        let (num, left) = {
+        let (num, left, first) = {
             let Some(p) = s.doc.para(a.story, &path) else { continue };
-            (p.props.numbering.filter(|n| n.num != 0), s.doc.styles.resolve_para(&p.props).indent_left)
+            indent_props(s, p)
         };
         let para = s.doc.para_mut(a.story, &path)?;
         match num {
-            Some(n) => para.props.numbering = Some(NumRef { num: n.num, level: n.level.saturating_add(1).min(8) }),
+            Some(n) => {
+                let level = n.level.saturating_add(1).min(8);
+                if level != n.level {
+                    para.props.numbering = Some(NumRef { num: n.num, level });
+                    drop_direct_indents(&mut para.props);
+                }
+            }
             None => {
-                para.props.indent_left = Some(((left / tab).floor() + 1.0) * tab);
-                para.props.cancel_char_indents(true, false, false);
+                let target = adjacent_tab_indent(left, first, tab, true);
+                if target != left {
+                    para.props.indent_left = Some(target);
+                    para.props.cancel_char_indents(true, false, false);
+                }
             }
         }
         para.touch();
@@ -161,21 +225,32 @@ pub fn indent(s: &mut Session, _: &Value) -> CmdResult {
     sel_result(s)
 }
 
+/// Outdent effective list numbering by one level, or retreat an ordinary paragraph to a tab stop.
+/// A cancelled list retains its cancellation override while its text remains indentable.
 pub fn outdent(s: &mut Session, _: &Value) -> CmdResult {
     let a = s.sel.ordered().0;
     let paths = crate::cmd::selected_paths(s);
     let tab = s.doc.settings.default_tab.max(1.0);
     for path in paths {
-        let (num, left) = {
+        let (num, left, first) = {
             let Some(p) = s.doc.para(a.story, &path) else { continue };
-            (p.props.numbering.filter(|n| n.num != 0), s.doc.styles.resolve_para(&p.props).indent_left)
+            indent_props(s, p)
         };
         let para = s.doc.para_mut(a.story, &path)?;
         match num {
-            Some(n) => para.props.numbering = Some(NumRef { num: n.num, level: n.level.saturating_sub(1) }),
+            Some(n) => {
+                let level = n.level.saturating_sub(1);
+                if level != n.level {
+                    para.props.numbering = Some(NumRef { num: n.num, level });
+                    drop_direct_indents(&mut para.props);
+                }
+            }
             None => {
-                para.props.indent_left = Some((((left / tab).ceil() - 1.0) * tab).max(0.0));
-                para.props.cancel_char_indents(true, false, false);
+                let target = adjacent_tab_indent(left, first, tab, false);
+                if target != left {
+                    para.props.indent_left = Some(target);
+                    para.props.cancel_char_indents(true, false, false);
+                }
             }
         }
         para.touch();
