@@ -3,7 +3,7 @@ use super::grid::{Exclusion, Grid};
 use super::justify::{HYPHENATION_ZONE, hyphen_glyph, shrink_line_spaces, space_room};
 use super::model::{ClKind, Cluster, Line, LineEnd, ParaEnv};
 use super::paragraph::word_widths;
-use super::tabs::{next_tab, pl_text_at, ptab_stop, resolve_tab};
+use super::tabs::{decimal_position, next_tab, ptab_stop, resolve_tab};
 use super::{Align, Arc, Level, LevelSuffix, LineSpacing, MathJc, ParaLayout, TabAlign, TabLeader, TabStop, VecDeque, WrapText};
 
 /// Narrow cells and float spans must retain their usable width.
@@ -34,6 +34,10 @@ struct Breaker<'e> {
     /// every row it is tried on, and measuring it again costs a lookup rather than another pass
     /// over the word (#18).
     widths: Vec<f32>,
+    /// A single punctuation character may extend past the text edge (`w:overflowPunct`).
+    hanging_punctuation: Vec<bool>,
+    /// Measured removable room and ink shift of eligible punctuation, by cluster.
+    punctuation_room: Vec<PunctuationCompression>,
     /// A right-to-left paragraph is laid out from its start edge, as if mirrored: indents, tabs,
     /// the list label and alignment are measured from the right. Lines are mirrored back (and
     /// bidirectional text reordered) once broken; floating objects are mirrored in.
@@ -93,8 +97,17 @@ struct Scan {
     /// The width of the spaces so far on this line.
     space_w: f32,
     has_tab: bool,
+    /// Provisional compressed advances; only clusters kept on this line are committed.
+    compressed: Vec<(usize, f32, f32)>,
     /// The first word doesn't fit a span narrowed by a floating object: it moves on whole.
     skip: bool,
+}
+
+#[derive(Clone, Copy, Default)]
+struct PunctuationCompression {
+    room: f32,
+    ink_shift: f32,
+    opening: bool,
 }
 
 /// Whether anything but markers (a bookmark, say) is among the clusters `c0..j`: an empty line
@@ -109,19 +122,6 @@ fn has_content(pl: &ParaLayout, c0: usize, j: usize) -> bool {
 /// leaving the anchor a line of its own).
 fn takes_room(c: &Cluster) -> bool {
     c.kind != ClKind::Marker && !(matches!(c.kind, ClKind::Object(_)) && c.adv == 0.0 && c.obj_h == 0.0)
-}
-
-/// The width up to the first '.' of the text after the tab at `tj`, up to cluster `j`.
-fn width_to_decimal(pl: &ParaLayout, tj: usize, j: usize) -> Option<f32> {
-    let mut w = 0.0;
-    for k in tj + 1..=j {
-        let cc = pl.clusters.get(k)?;
-        if pl_text_at(cc) {
-            return Some(w);
-        }
-        w += cc.adv;
-    }
-    None
 }
 
 /// The objects' exclusions mirrored across a line of `width`, for a right-to-left paragraph.
@@ -143,13 +143,124 @@ fn mirrored_exclusions(exclusions: &[Exclusion], width: f32) -> Vec<Exclusion> {
         .collect()
 }
 
+/// Whether shaping found one full-width glyph (rather than the font's missing glyph).
+fn fullwidth_kana_glyph(shaped: &[wordcraft_fonts::ShapedGlyph], upem: f32) -> bool {
+    matches!(shaped, [g] if g.gid != 0 && (g.x_advance as f32 / upem.max(1.0) - 1.0).abs() < 0.001)
+}
+
+/// Provisional width removed between this tab and its first decimal separator.
+fn decimal_compression(compressed: &[(usize, f32, f32)], tab: usize, dot: Option<usize>, extra: Option<(usize, f32)>) -> f32 {
+    let in_segment = |k| dot.is_some_and(|d| k > tab && k < d);
+    let saved: f32 = compressed.iter().filter(|(k, _, _)| in_segment(*k)).map(|(_, amount, _)| amount).sum();
+    saved + extra.filter(|(k, _)| in_segment(*k)).map_or(0.0, |(_, amount)| amount)
+}
+
 /// Break a paragraph into lines, measure each line, apply the paragraph's alignment and place
 /// the list label. Fills `pl.lines`, `pl.height` and the label's position.
-pub(super) fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Option<&Level>) {
+pub(super) fn break_lines(pl: &mut ParaLayout, text: &str, env: &ParaEnv, mark_style: u32, level: Option<&Level>) {
     let width = env.width.max(MIN_LINE_WIDTH);
     let mirrored = pl.rp.bidi.then(|| mirrored_exclusions(env.exclusions, width));
     let exclusions = mirrored.as_deref().unwrap_or(env.exclusions);
     let mut bk = Breaker::new(pl, (env, exclusions), mark_style, level);
+    if bk.rp.overflow_punct {
+        bk.hanging_punctuation = pl
+            .clusters
+            .iter()
+            .map(|c| {
+                if c.kind != ClKind::Text {
+                    return false;
+                }
+                let Some(s) = text.get(c.start..c.end) else { return false };
+                let mut chars = s.chars();
+                let Some(ch) = chars.next() else { return false };
+                let lang = pl.styles.get(c.style as usize).and_then(|s| s.rc.lang_ea.as_deref().or(s.rc.lang.as_deref()));
+                chars.next().is_none() && crate::kinsoku::hanging_punctuation(ch, lang)
+            })
+            .collect();
+    }
+    if bk.rp.align == Align::Justify
+        && matches!(
+            env.doc.settings.character_spacing_control,
+            wordcraft_doc::CharacterSpacingControl::CompressPunctuation | wordcraft_doc::CharacterSpacingControl::CompressPunctuationAndJapaneseKana
+        )
+    {
+        let mut feature_cache = std::collections::HashMap::new();
+        let mut fullwidth_kana_cache = std::collections::HashMap::new();
+        bk.punctuation_room = pl
+            .clusters
+            .iter()
+            .map(|c| {
+                // Restrict the eligible characters to forms observed independently in Word.
+                let Some(s) = text.get(c.start..c.end) else { return PunctuationCompression::default() };
+                let mut chars = s.chars();
+                let Some(ch) = chars.next() else { return PunctuationCompression::default() };
+                let opening = "「『（".contains(ch);
+                let closing = "、。，．」』）".contains(ch);
+                let kana = matches!(ch as u32, 0x3041..=0x3096 | 0x30A1..=0x30FA)
+                    && matches!(
+                        env.doc.settings.character_spacing_control,
+                        wordcraft_doc::CharacterSpacingControl::CompressPunctuationAndJapaneseKana
+                    );
+                if c.kind != ClKind::Text || chars.next().is_some() || !(opening || closing || kana) {
+                    return PunctuationCompression::default();
+                }
+                let Some(st) = pl.styles.get(c.style as usize) else { return PunctuationCompression::default() };
+                if st.rc.fit_text.is_some_and(|f| f.width > 0.0) {
+                    return PunctuationCompression::default();
+                }
+                let em = st.size * st.rc.scale / 100.0;
+                let spacing = st.rc.spacing * if env.doc.settings.balance_single_byte_double_byte_width { 2.0 } else { 1.0 };
+                if kana {
+                    // Apply this rule only to one full-width glyph from the resolved face.
+                    let fullwidth = *fullwidth_kana_cache.entry((st.face.id(), ch)).or_insert_with(|| {
+                        let shaped = wordcraft_fonts::shape(&st.face, &ch.to_string(), &[wordcraft_fonts::feature_value(b"kern", 0)], |c| c);
+                        fullwidth_kana_glyph(&shaped, st.face.upem as f32)
+                    });
+                    if !fullwidth {
+                        return PunctuationCompression::default();
+                    }
+                    // At 72pt Word admits 1/16 em of overrun but not 0.0632 em.
+                    // Do not remove tracking or compression already applied by a grid.
+                    let full_room = em / 16.0;
+                    let room = (c.adv - (em - full_room + spacing).max(0.0)).min(full_room);
+                    return if room.is_finite() && room > 0.0 {
+                        PunctuationCompression { room, ink_shift: 0.0, opening: false }
+                    } else {
+                        PunctuationCompression::default()
+                    };
+                }
+                let (feature_room, feature_shift) = *feature_cache.entry((st.face.id(), ch)).or_insert_with(|| {
+                    let text = ch.to_string();
+                    let normal = wordcraft_fonts::shape(&st.face, &text, &[wordcraft_fonts::feature_value(b"kern", 0)], |c| c);
+                    let alt = wordcraft_fonts::shape(
+                        &st.face,
+                        &text,
+                        &[wordcraft_fonts::feature_value(b"kern", 0), wordcraft_fonts::feature_value(b"palt", 1)],
+                        |c| c,
+                    );
+                    match (normal.as_slice(), alt.as_slice()) {
+                        ([a], [b]) if a.gid == b.gid && a.x_advance > b.x_advance => {
+                            let upem = st.face.upem.max(1.0) as f32;
+                            ((a.x_advance - b.x_advance) as f32 / upem, (b.x_offset - a.x_offset) as f32 / upem)
+                        }
+                        // The observed full-width comma bound is half an em when no palt
+                        // is available. Opening marks also require a measured ink position.
+                        _ if ch == '、' => (0.5, 0.0),
+                        _ => (0.0, 0.0),
+                    }
+                });
+                // Keep at least half an em plus the run's explicit tracking: a compressed grid or
+                // earlier punctuation kerning must not remove the same bearing a second time.
+                let full_room = (em * feature_room).clamp(0.0, em.max(0.0));
+                let room = (c.adv - (em - full_room + spacing).max(0.0)).min(full_room);
+                if room.is_finite() && room > 0.0 && full_room > 0.0 {
+                    PunctuationCompression { room, ink_shift: em * feature_shift * room / full_room, opening }
+                } else {
+                    PunctuationCompression::default()
+                }
+            })
+            .collect();
+    }
     loop {
         let mut sc = bk.begin_line(pl);
         sc.scan(&mut bk, pl);
@@ -157,7 +268,7 @@ pub(super) fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, l
             bk.skip_row(&sc);
             continue;
         }
-        let end = bk.close_line(pl, sc);
+        let end = bk.close_line(pl, sc, text);
         if bk.next_line(pl, end) {
             break;
         }
@@ -191,6 +302,8 @@ impl<'e> Breaker<'e> {
             zone: Some(settings.hyphenation_zone).filter(|z| z.is_finite() && *z >= 0.0).unwrap_or(HYPHENATION_ZONE).min(1584.0),
             hyph_limit: settings.consecutive_hyphen_limit as usize,
             widths: word_widths(&pl.clusters, &pl.hyph_after),
+            hanging_punctuation: Vec::new(),
+            punctuation_room: Vec::new(),
             rtl_para: rp.bidi,
             grid: Some(env.grid).filter(|g| g.line.is_some() && rp.snap_to_grid),
             bidi: rp.bidi || !pl.bidi_levels.is_empty(),
@@ -278,6 +391,7 @@ impl<'e> Breaker<'e> {
             pending_tab: None,
             space_w: 0.0,
             has_tab: false,
+            compressed: Vec::new(),
             skip: false,
         }
     }
@@ -329,7 +443,19 @@ impl<'e> Breaker<'e> {
 
     /// Finish the line scanned: lay out its clusters, measure and align it, and add it.
     /// Returns how it ends.
-    fn close_line(&mut self, pl: &mut ParaLayout, mut sc: Scan) -> LineEnd {
+    fn close_line(&mut self, pl: &mut ParaLayout, mut sc: Scan, text: &str) -> LineEnd {
+        // A scan can backtrack to an earlier break or abandon a float span. Keep only the
+        // compression of clusters that actually made it onto this line.
+        for &(index, amount, shift) in &sc.compressed {
+            if index < sc.j
+                && let Some(cluster) = pl.clusters.get_mut(index)
+            {
+                cluster.adv = (cluster.adv - amount).max(0.0);
+                for glyph in pl.glyphs.get_mut(cluster.g0 as usize..cluster.g1 as usize).into_iter().flatten() {
+                    glyph.dx += shift;
+                }
+            }
+        }
         if sc.end == LineEnd::Para || sc.end == LineEnd::Wrap {
             let xc = sc.x;
             resolve_tab(pl, &mut sc.pending_tab, &mut sc.xs, sc.c0, xc, &mut sc.x);
@@ -339,7 +465,7 @@ impl<'e> Breaker<'e> {
         }
         let (c1, j, hyphen) = self.settle_clusters(pl, &mut sc);
         let v = self.measure(pl, (sc.c0, c1));
-        self.align(pl, &mut sc, c1);
+        self.align(pl, &mut sc, c1, text);
         let start = pl.clusters.get(sc.c0).map(|c| c.start).unwrap_or(pl.text_len);
         let stop = if c1 > sc.c0 { pl.clusters.get(c1 - 1).map(|c| c.end).unwrap_or(pl.text_len) } else { start };
         if self.first_x0.is_none() {
@@ -494,12 +620,29 @@ impl<'e> Breaker<'e> {
     }
 
     /// Alignment / justification of the line (trailing spaces hang).
-    fn align(&mut self, pl: &mut ParaLayout, sc: &mut Scan, c1: usize) {
+    fn align(&mut self, pl: &mut ParaLayout, sc: &mut Scan, c1: usize, text: &str) {
         let rp = &self.rp;
         let c0 = sc.c0;
-        let content_end = content_end(pl, sc, c1);
-        let slack = sc.right_edge - content_end;
+        let mut content_end = content_end(pl, sc, c1);
         let last_tab = (c0..c1).rev().find(|k| pl.clusters.get(*k).is_some_and(|c| c.kind == ClKind::Tab));
+        // Word distributes the reserved right/decimal tab gap over the following text on
+        // a justified wrapped line. Other tab kinds keep their stop unchanged.
+        if rp.align == Align::Justify
+            && sc.end == LineEnd::Wrap
+            && let Some(tj) = last_tab
+            && !pl.ptabs.iter().any(|p| p.0 == tj)
+            && let Some(&origin) = sc.xs.get(tj - c0)
+            && matches!(next_tab(origin, &rp.tabs, self.default_tab, self.hanging_at).align, TabAlign::Right | TabAlign::Decimal)
+            && let Some(tab) = pl.clusters.get_mut(tj)
+        {
+            let released = tab.adv.max(0.0);
+            tab.adv -= released;
+            for x in sc.xs.iter_mut().skip(tj + 1 - c0) {
+                *x -= released;
+            }
+            content_end -= released;
+        }
+        let slack = sc.right_edge - content_end;
         let align_from = last_tab.map(|k| k + 1).unwrap_or(c0);
         let display = pl.displays.iter().find(|(ci, _)| *ci >= c0 && *ci < c1).map(|d| d.1);
         let shift = match (display, rp.align) {
@@ -523,13 +666,17 @@ impl<'e> Breaker<'e> {
         }
         // A line ending in a manual line break is stretched too, unless `doNotExpandShiftReturn` says not to.
         let stretch_end = sc.end == LineEnd::Wrap || (sc.end == LineEnd::LineBreak && self.expand_break);
-        let justify = display.is_none() && ((rp.align == Align::Justify && stretch_end) || rp.align == Align::Distribute);
+        // Without hanging punctuation Word leaves a line that used punctuation compression at
+        // its compact width. With hanging enabled it still distributes the remaining space.
+        let compressed_without_hanging = !rp.overflow_punct && sc.compressed.iter().any(|(index, _, _)| *index >= c0 && *index < c1);
+        let justify =
+            display.is_none() && !compressed_without_hanging && ((rp.align == Align::Justify && stretch_end) || rp.align == Align::Distribute);
         // A line that only fits with shrunk spaces is shrunk, the last line of the paragraph too.
         let shrink = display.is_none() && self.shrink_spaces && slack < 0.0 && last_tab.is_none();
         if shrink {
             shrink_line_spaces(pl, &mut sc.xs, c0, c1, content_end, slack);
         } else if justify && slack > 0.0 {
-            justify_line(pl, &mut sc.xs, (c0, c1, align_from), (content_end, slack), rp.align == Align::Distribute);
+            justify_line(pl, &mut sc.xs, (c0, c1, align_from), (content_end, slack), rp.align == Align::Distribute, text);
         }
     }
 
@@ -662,32 +809,69 @@ fn content_end(pl: &ParaLayout, sc: &Scan, c1: usize) -> f32 {
     content_end
 }
 
-/// Stretch the line to its right edge: its spaces widen by `slack` between them, or all its
-/// clusters by an equal share when `distribute` (or there are no spaces).
-fn justify_line(pl: &ParaLayout, xs: &mut [f32], (c0, c1, align_from): (usize, usize, usize), (content_end, slack): (f32, f32), distribute: bool) {
-    // Spaces inside the content (after the last tab).
-    let spaces: Vec<usize> = (align_from..c1)
-        .filter(|k| pl.clusters.get(*k).is_some_and(|c| c.kind == ClKind::Space) && xs.get(k - c0).copied().unwrap_or(f32::MAX) < content_end - 0.01)
-        .collect();
-    if distribute || spaces.is_empty() {
+/// Stretch spaces and legal East Asian character boundaries to the right edge. Latin words
+/// remain whole; distributed alignment instead stretches every cluster boundary.
+fn justify_line(
+    pl: &ParaLayout,
+    xs: &mut [f32],
+    (c0, c1, align_from): (usize, usize, usize),
+    (content_end, slack): (f32, f32),
+    distribute: bool,
+    text: &str,
+) {
+    if distribute {
         let cnt = (c1 - align_from).saturating_sub(1).max(1) as f32;
-        if distribute {
-            let per = slack / cnt;
-            for (q, v) in xs.iter_mut().enumerate().skip(align_from - c0) {
-                let k = (q + c0 - align_from) as f32;
-                *v += per * k.min(cnt);
-            }
+        let per = slack / cnt;
+        for (q, v) in xs.iter_mut().enumerate().skip(align_from - c0) {
+            let k = (q + c0 - align_from) as f32;
+            *v += per * k.min(cnt);
         }
         return;
     }
-    let per = slack / spaces.len() as f32;
+    let mut gaps = Vec::new();
+    let mut previous: Option<(usize, char)> = None;
+    for k in align_from..c1 {
+        let Some(c) = pl.clusters.get(k) else { break };
+        match c.kind {
+            ClKind::Space => {
+                // Trailing spaces hang outside justification, as they do outside wrapping.
+                if xs.get(k - c0).copied().unwrap_or(f32::MAX) < content_end - 0.01 {
+                    gaps.push(k);
+                }
+                previous = None;
+            }
+            ClKind::Text => {
+                let shown = pl.shown.binary_search_by_key(&k, |s| s.0).ok().and_then(|i| pl.shown.get(i)).map(|s| s.1.as_str());
+                let shown = shown.or_else(|| text.get(c.start..c.end)).unwrap_or("");
+                let (Some(first), Some(last)) = (shown.chars().next(), shown.chars().next_back()) else {
+                    previous = None;
+                    continue;
+                };
+                if let Some((pk, last)) = previous
+                    && (crate::kinsoku::is_east_asian(last) || crate::kinsoku::is_east_asian(first))
+                    && pl.clusters.get(pk).is_some_and(|p| p.break_after)
+                {
+                    // Reuse the paragraph's break rules: no gap after an opening bracket,
+                    // before closing punctuation, or inside a Latin word / atomic cluster.
+                    gaps.push(pk);
+                }
+                previous = Some((k, last));
+            }
+            ClKind::Marker if c.adv == 0.0 => {}
+            _ => previous = None,
+        }
+    }
+    if gaps.is_empty() {
+        return;
+    }
+    let per = slack / gaps.len() as f32;
     let mut add = 0.0;
     let mut si = 0;
     for k in align_from..c1 {
         if let Some(v) = xs.get_mut(k - c0) {
             *v += add;
         }
-        if spaces.get(si) == Some(&k) {
+        if gaps.get(si) == Some(&k) {
             add += per;
             si += 1;
         }
@@ -784,16 +968,32 @@ impl Scan {
         }
     }
 
-    /// Whether text after a right/centre tab grows leftwards into the tab's space first.
-    fn absorbs(&self, pl: &ParaLayout, advance: f32) -> bool {
-        self.pending_tab.is_some_and(|(tj, stop, _)| {
-            let room = pl.clusters.get(tj).map(|t| t.adv).unwrap_or(0.0);
-            match stop.align {
-                TabAlign::Right | TabAlign::Decimal => room >= advance,
-                TabAlign::Center => room >= advance / 2.0 && self.x + advance / 2.0 <= self.right_edge + 0.01,
-                _ => false,
+    /// Width reserved for a pending tab after adding `advance`, including provisional
+    /// compression. Fitting and placement must use the same decimal anchor and tab width.
+    fn pending_tab_width(&self, pl: &ParaLayout, advance: f32, extra: Option<(usize, f32)>) -> Option<(usize, f32, f32)> {
+        let (tj, stop, tx) = self.pending_tab?;
+        let old = pl.clusters.get(tj).map_or(0.0, |c| c.adv);
+        let seg = self.x + advance - tx - old;
+        let width = match stop.align {
+            TabAlign::Right => stop.pos - tx - seg,
+            TabAlign::Center => stop.pos - tx - seg / 2.0,
+            TabAlign::Decimal => {
+                let width = decimal_position(pl, tj, self.j)
+                    .map(|(dot, width)| width - decimal_compression(&self.compressed, tj, Some(dot), extra))
+                    .unwrap_or(seg);
+                stop.pos - tx - width
             }
-        })
+            _ => return None,
+        };
+        Some((tj, old, width.max(0.0)))
+    }
+
+    /// Resolve a pending tab virtually, including provisional line-end compression.
+    fn predicted_end(&self, pl: &ParaLayout, advance: f32, extra: Option<(usize, f32)>) -> f32 {
+        match self.pending_tab_width(pl, advance, extra) {
+            Some((_, old, width)) => self.x + advance + width - old,
+            None => self.x + advance,
+        }
     }
 
     /// A text or object cluster. True when the line ends before or at it.
@@ -808,14 +1008,47 @@ impl Scan {
         // A grapheme can have several drawing segments; fit it as one unit while keeping
         // each segment's font, glyphs and position for painting.
         let advance = pl.atomic_advance(j);
-        let absorbs = self.absorbs(pl, advance);
         let shrink = if bk.shrink_spaces && !self.has_tab {
             space_room(self.space_w, self.x + advance - pl.auto_space_after(j) - self.word_from)
         } else {
             0.0
         };
-        let fits = absorbs
-            || self.x + advance - pl.auto_space_after(j) <= self.right_edge + shrink + 0.01
+        // A positional tab can target the page margin beyond the paragraph indent.
+        let edge = self
+            .pending_tab
+            .filter(|(tj, _, _)| pl.ptabs.iter().any(|p| p.0 == *tj))
+            .map_or(self.right_edge, |(_, stop, _)| self.right_edge.max(stop.pos));
+        let limit = edge + shrink + pl.auto_space_after(j);
+        let end = self.predicted_end(pl, advance, None);
+        // A fit at the compression limit needs only floating-point rounding tolerance;
+        // a hundredth of a point would admit a measurably wider glyph at small sizes.
+        let fit_epsilon = f32::EPSILON * limit.abs().max(1.0) * 8.0;
+        let candidate = bk.punctuation_room.get(j).copied().unwrap_or_default();
+        let compressed = if !candidate.opening
+            && candidate.room > 0.0
+            && end > limit + 0.01
+            && self.predicted_end(pl, advance - candidate.room, Some((j, candidate.room))) <= limit + fit_epsilon
+        {
+            candidate.room
+        } else {
+            0.0
+        };
+        // A preceding mark can release its bearing when the following character fits.
+        if compressed == 0.0 && end > limit + 0.01 && j > c0 && c.kind == ClKind::Text {
+            let previous = bk.punctuation_room.get(j - 1).copied().unwrap_or_default();
+            if previous.room > 0.0
+                && !self.compressed.iter().any(|(k, _, _)| *k == j - 1)
+                && self.predicted_end(pl, advance - previous.room, Some((j - 1, previous.room))) <= limit + fit_epsilon
+            {
+                self.x -= previous.room;
+                self.compressed.push((j - 1, previous.room, previous.ink_shift));
+            }
+        }
+        let fits = self.predicted_end(pl, advance, None) <= limit + 0.01
+            || compressed > 0.0
+            // Only the punctuation itself may overflow: its starting pen must still
+            // be inside the text extent. A second character cannot hang after it.
+            || (!self.has_tab && self.x <= self.right_edge + 0.01 && bk.hanging_punctuation.get(j) == Some(&true))
             || c.kind == ClKind::Space
             || c.kind == ClKind::Marker;
         if !fits && pl.is_edit_boundary(c.start) && (c0..j).any(|k| pl.clusters.get(k).is_some_and(takes_room)) {
@@ -823,7 +1056,10 @@ impl Scan {
             return true;
         }
         self.xs.push(self.x);
-        self.x += c.adv;
+        self.x += c.adv - compressed;
+        if compressed > 0.0 {
+            self.compressed.push((j, compressed, candidate.ink_shift));
+        }
         if c.kind == ClKind::Space {
             self.space_w += c.adv;
         }
@@ -841,17 +1077,7 @@ impl Scan {
 
     /// Text after a decimal/centre/right tab shifts as it grows.
     fn shift_pending_tab(&mut self, pl: &mut ParaLayout) {
-        let Some((tj, stop, tx)) = self.pending_tab else { return };
-        let seg_w = self.x - tx;
-        let shift = match stop.align {
-            TabAlign::Right => stop.pos - tx - seg_w,
-            TabAlign::Center => stop.pos - tx - seg_w / 2.0,
-            // Width up to the first '.' in the segment.
-            TabAlign::Decimal => stop.pos - tx - width_to_decimal(pl, tj, self.j).unwrap_or(seg_w),
-            _ => 0.0,
-        };
-        let shift = shift.max(0.0);
-        let old = pl.clusters.get(tj).map(|c| c.adv).unwrap_or(0.0);
+        let Some((tj, old, shift)) = self.pending_tab_width(pl, 0.0, None) else { return };
         if (shift - old).abs() > 0.001 {
             let delta = shift - old;
             if let Some(c) = pl.clusters.get_mut(tj) {
@@ -909,7 +1135,8 @@ impl Scan {
             self.xs.truncate(b + 1 - c0);
             self.j = b + 1;
             // Recompute x for the kept clusters.
-            self.x = self.xs.last().copied().unwrap_or(self.line_start_x) + pl.clusters.get(b).map(|c| c.adv).unwrap_or(0.0);
+            let compressed = self.compressed.iter().find(|(k, _, _)| *k == b).map_or(0.0, |(_, amount, _)| *amount);
+            self.x = self.xs.last().copied().unwrap_or(self.line_start_x) + pl.clusters.get(b).map(|c| c.adv).unwrap_or(0.0) - compressed;
         } else {
             self.break_long_word(bk, pl);
         }
@@ -1021,4 +1248,27 @@ fn row_spans(exclusions: &[Exclusion], top: f32, h: f32, table_h: f32, lo: f32, 
         return Err(taken.iter().map(|t| t.2).reduce(f32::min).unwrap_or(top));
     }
     Ok(spans.into())
+}
+
+#[cfg(test)]
+mod kana_glyph_tests {
+    use super::{decimal_compression, fullwidth_kana_glyph};
+
+    #[test]
+    fn decimal_tab_ignores_compression_from_an_earlier_segment() {
+        // The comma at index 1 precedes the tab at 3; only index 4 precedes the
+        // decimal point in this tab's own segment. A candidate at 6 is after it.
+        let compressed = [(1, 4.0, 0.0), (4, 1.0, 0.0), (6, 2.0, 0.0)];
+        assert_eq!(decimal_compression(&compressed, 3, Some(5), None), 1.0);
+        assert_eq!(decimal_compression(&compressed, 3, Some(5), Some((1, 3.0))), 1.0);
+        assert_eq!(decimal_compression(&compressed, 3, Some(5), Some((4, 0.5))), 1.5);
+        assert_eq!(decimal_compression(&compressed, 3, None, None), 0.0);
+    }
+
+    #[test]
+    fn missing_glyph_with_fullwidth_advance_is_not_compressed() {
+        let missing = wordcraft_fonts::ShapedGlyph { gid: 0, cluster: 0, x_advance: 1000, x_offset: 0, y_offset: 0 };
+        assert!(!fullwidth_kana_glyph(&[missing], 1000.0));
+        assert!(fullwidth_kana_glyph(&[wordcraft_fonts::ShapedGlyph { gid: 1, ..missing }], 1000.0));
+    }
 }

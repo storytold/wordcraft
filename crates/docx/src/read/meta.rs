@@ -22,6 +22,12 @@ impl Reader<'_> {
                         .filter(|t| !t.is_empty() && t.len() <= MAX_TEMPLATE_PATH);
                 }
                 "w:linkStyles" => s.link_styles = on_off(k),
+                "w:strictFirstAndLastChars" => s.strict_first_and_last_chars = on_off(k),
+                "w:characterSpacingControl" => {
+                    if let Some(value) = k.attr("w:val") {
+                        s.character_spacing_control = wordcraft_doc::CharacterSpacingControl::from_ooxml(value);
+                    }
+                }
                 "w:removePersonalInformation" => s.remove_personal_info = on_off(k),
                 "w:removeDateAndTime" => s.remove_date_time = on_off(k),
                 "w:compat" => {
@@ -39,6 +45,7 @@ impl Reader<'_> {
                     }
                     s.sum_paragraph_spacing = k.children("w:doNotUseHTMLParagraphAutoSpacing").any(on_off);
                     s.do_not_expand_shift_return = k.children("w:doNotExpandShiftReturn").any(on_off);
+                    s.balance_single_byte_double_byte_width = k.children("w:balanceSingleByteDoubleByteWidth").any(on_off);
                 }
                 "w:trackRevisions" => s.track_changes = on_off(k),
                 "w:doNotTrackMoves" => s.track_moves = !on_off(k),

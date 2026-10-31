@@ -37,6 +37,8 @@ pub struct ResolvedChar {
     pub hidden: bool,
     pub spacing: f32,
     pub scale: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fit_text: Option<crate::props::FitText>,
     pub position: f32,
     /// Kerning: the smallest font size, in points, that is kerned (`w:kern`); 0 = never kerned.
     #[serde(default)]
@@ -59,6 +61,9 @@ pub struct ResolvedChar {
     pub fmt: Option<u32>,
     pub no_proof: bool,
     pub lang: Option<String>,
+    /// Language of East Asian text, resolved through the same style cascade.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lang_ea: Option<String>,
     /// Right-to-left run (`w:rtl`).
     pub rtl: bool,
     /// The whole run uses the complex-script properties (`w:cs`).
@@ -95,6 +100,7 @@ impl ResolvedChar {
             hidden: c.hidden.unwrap_or(false),
             spacing: c.spacing.unwrap_or(0.0).clamp(-100.0, 100.0),
             scale: c.scale.unwrap_or(100.0).clamp(1.0, 600.0),
+            fit_text: c.fit_text.filter(|f| f.width.is_finite()).map(|f| crate::props::FitText { width: f.width.clamp(0.0, 1584.0), ..f }),
             position: c.position.unwrap_or(0.0).clamp(-800.0, 800.0),
             kern: c.kern.filter(|k| k.is_finite()).unwrap_or(0.0).clamp(0.0, 1638.0),
             ligatures: c.ligatures,
@@ -109,6 +115,7 @@ impl ResolvedChar {
             fmt: c.fmt_change.as_ref().map(|f| f.rev),
             no_proof: c.no_proof.unwrap_or(false),
             lang: c.lang.clone(),
+            lang_ea: c.lang_ea.clone(),
             rtl: c.rtl.unwrap_or(false),
             cs: c.cs.unwrap_or(false),
             font_cs: c.font_cs.clone().or_else(|| c.font.clone()).unwrap_or_else(|| crate::styles::BODY_FONT.to_string()),

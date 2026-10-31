@@ -93,6 +93,7 @@ fn every_char_prop_round_trips() {
         snap_to_grid: Some(false),
         spacing: Some(1.5),
         scale: Some(150.0),
+        fit_text: Some(wordcraft_doc::props::FitText { width: 321.0, id: Some(-1467784952) }),
         position: Some(3.0),
         kern: Some(8.0),
         ligatures: Some(wordcraft_doc::props::Ligatures { standard: true, historical: true, ..Default::default() }),
@@ -2803,4 +2804,67 @@ fn drop_cap_options_round_trip() {
         (b.props.drop_cap, b.props.drop_cap_margin, b.props.drop_cap_distance, b.props.drop_cap_font.as_deref()),
         (Some(4), Some(true), None, None)
     );
+}
+
+#[test]
+fn character_spacing_policy_survives_open_and_save() {
+    let settings = |bytes: &[u8]| {
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut xml = String::new();
+        std::io::Read::read_to_string(&mut zip.by_name("word/settings.xml").unwrap(), &mut xml).unwrap();
+        xml
+    };
+    let plain = wordcraft_docx::write(&Document::new()).unwrap();
+    for policy in [None, Some("doNotCompress"), Some("compressPunctuation"), Some("compressPunctuationAndJapaneseKana"), Some("futurePolicy")] {
+        let child = policy.map_or_else(String::new, |v| format!(r#"<w:characterSpacingControl w:val="{v}"/>"#));
+        // Deliberately only model-owned children: retaining a non-default value must not depend
+        // on an unrelated unmodelled setting causing the original XML to be kept.
+        let original = format!(
+            r#"<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">{child}</w:settings>"#
+        );
+        let file = replace_part(&plain, "word/settings.xml", original.as_bytes());
+        let read = wordcraft_docx::read(&file).unwrap();
+        let expected = policy.unwrap_or("doNotCompress");
+        assert_eq!(read.settings.character_spacing_control.ooxml(), expected);
+        let written = wordcraft_docx::write(&read).unwrap();
+        let xml = settings(&written);
+        assert!(xml.contains(&format!(r#"<w:characterSpacingControl w:val="{expected}"/>"#)), "{policy:?}: {xml}");
+        assert_eq!(xml.matches("<w:characterSpacingControl").count(), 1, "{policy:?}: {xml}");
+    }
+}
+
+#[test]
+fn strict_first_last_characters_round_trip_and_override_preserved_settings() {
+    let base = wordcraft_docx::write(&Document::new()).unwrap();
+    for child in [
+        "",
+        "<w:strictFirstAndLastChars/>",
+        r#"<w:strictFirstAndLastChars w:val="1"/>"#,
+        r#"<w:strictFirstAndLastChars w:val="0"/>"#,
+        r#"<w:strictFirstAndLastChars w:val="false"/>"#,
+    ] {
+        for preserve in [false, true] {
+            let extra = if preserve { r#"<w:rsids><w:rsidRoot w:val="00112233"/></w:rsids>"# } else { "" };
+            let original = format!(
+                r#"<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">{child}{extra}</w:settings>"#
+            );
+            let file = replace_part(&base, "word/settings.xml", original.as_bytes());
+            let mut doc = wordcraft_docx::read(&file).unwrap();
+            let enabled = child.contains("strictFirstAndLastChars") && !child.contains("\"0\"") && !child.contains("\"false\"");
+            assert_eq!(doc.settings.strict_first_and_last_chars, enabled, "{child}");
+            for requested in [enabled, !enabled] {
+                doc.settings.strict_first_and_last_chars = requested;
+                let bytes = wordcraft_docx::write(&doc).unwrap();
+                let read = wordcraft_docx::read(&bytes).unwrap();
+                assert_eq!(read.settings.strict_first_and_last_chars, requested, "{child}");
+                let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+                let mut xml = String::new();
+                std::io::Read::read_to_string(&mut zip.by_name("word/settings.xml").unwrap(), &mut xml).unwrap();
+                assert_eq!(xml.matches("<w:strictFirstAndLastChars").count(), usize::from(requested), "{child}: {xml}");
+                if preserve {
+                    assert!(xml.contains(r#"<w:rsidRoot w:val="00112233"/>"#), "{xml}");
+                }
+            }
+        }
+    }
 }
