@@ -66,6 +66,11 @@ fn on(e: &El) -> bool {
     }
 }
 
+/// An on/off property `name` in the properties element `pr`: `None` when the file doesn't say.
+fn opt_prop(pr: Option<&El>, name: &str) -> Option<bool> {
+    pr.and_then(|p| p.child(name)).map(on)
+}
+
 /// An on/off property `name` in the properties element `pr` (absent = `default`).
 fn prop(pr: Option<&El>, name: &str, default: bool) -> bool {
     pr.and_then(|p| p.child(name)).map(on).unwrap_or(default)
@@ -151,7 +156,7 @@ fn node(k: &El, depth: usize, out: &mut Arg) {
             out.push(MNode::Nary {
                 chr,
                 lim_loc,
-                grow: prop(pr, "m:grow", false),
+                grow: opt_prop(pr, "m:grow"),
                 sub_hide: prop(pr, "m:subHide", false),
                 sup_hide: prop(pr, "m:supHide", false),
                 sub: sub_arg(k, "m:sub", d),

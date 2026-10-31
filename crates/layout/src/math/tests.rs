@@ -224,7 +224,7 @@ fn characters_the_math_font_lacks_fall_back() {
     };
     let x = || vec![MNode::Run(MRun::new("x"))];
     let nodes = [
-        MNode::Nary { chr: c, lim_loc: None, grow: false, sub_hide: true, sup_hide: true, sub: vec![], sup: vec![], e: x() },
+        MNode::Nary { chr: c, lim_loc: None, grow: None, sub_hide: true, sup_hide: true, sub: vec![], sup: vec![], e: x() },
         MNode::Delim { beg: Some(c), end: Some(c), sep: None, grow: true, shp_match: false, elems: vec![x()] },
         MNode::Acc { chr: c, e: x() },
         MNode::GroupChr { chr: c, top: true, e: x() },
@@ -371,7 +371,7 @@ fn hostile_trees_never_panic() {
     let _ = layout_equation(&Math { nodes: n, ..Default::default() }, "", &rc(), true, 400.0, &MathProps::default(), &mut 0);
     // Empty everything.
     let empty = vec![
-        MNode::Nary { chr: '\0', lim_loc: None, grow: true, sub_hide: false, sup_hide: false, sub: vec![], sup: vec![], e: vec![] },
+        MNode::Nary { chr: '\0', lim_loc: None, grow: Some(true), sub_hide: false, sup_hide: false, sub: vec![], sup: vec![], e: vec![] },
         MNode::Delim { beg: Some('\u{10FFFF}'), end: None, sep: None, grow: true, shp_match: false, elems: vec![] },
         MNode::Matrix { rows: vec![vec![]], col_jc: vec![] },
         MNode::EqArr { rows: vec![] },
@@ -399,4 +399,154 @@ fn a_long_text_run_lays_out_in_linear_time() {
     let eq = |n: usize| Math { nodes: vec![MNode::Run(MRun { nor: true, ..MRun::new("a".repeat(n)) })], ..Default::default() };
     let lay = |m: &Math| drop(std::hint::black_box(lay_in(m, "", false, 1e6, &MathProps::default())));
     assert_linear_steps("math text run", 400, eq, lay);
+}
+
+/// #3208: a math font can lack `MathVariants` vertical-construction data for some n-ary
+/// operator (not every open-source math font catalogs size variants for every one) while
+/// still having the base glyph itself. The "no variant found" fallback used `want` (the
+/// *target* size) standing in for the glyph's own natural size, which made the scale factor
+/// `want / want` — always exactly 1.0 — silently undoing the "scale the nearest one" the
+/// comment above it says it does, so the operator stayed at its plain, un-enlarged size in
+/// display mode. It should instead scale from the glyph's own measured height.
+#[test]
+fn a_nary_operator_without_a_cataloged_size_variant_still_grows_in_display_mode() {
+    let (face, table) = wordcraft_fonts::math::resolve_math("Cambria Math");
+    let Some(t) = table else { return }; // no math font installed in this environment
+    // Simulate a font whose MATH table has no vertical variants for this operator at all
+    // (everything else about the table, including `display_operator_min_height`, stays real).
+    let mut bare = (*t).clone();
+    bare.vert = Default::default();
+    let mut cx = Ctx {
+        face,
+        t: Some(Arc::new(bare)),
+        upem: face.upem.max(1.0) as f32,
+        base: 12.0,
+        color: Rgb::BLACK,
+        text_font: String::new(),
+        nodes: 0,
+        path: Vec::new(),
+        node_stack: Vec::new(),
+    };
+    let n = MNode::Nary {
+        chr: '∫',
+        lim_loc: None,
+        grow: None,
+        sub_hide: true,
+        sup_hide: true,
+        sub: vec![],
+        sup: vec![],
+        e: vec![MNode::Run(MRun::new("x"))],
+    };
+    let display_st = St { level: 0, display: true, cramped: false, upright: false };
+    let display_op = &cx.op_atoms(&n, display_st, 0)[0];
+    let display_h = display_op.a + display_op.d;
+    let inline_st = St { display: false, ..display_st };
+    let inline_op = &cx.op_atoms(&n, inline_st, 0)[0];
+    let inline_h = inline_op.a + inline_op.d;
+    // `want` is itself capped around 1.2em (real variants are picked to be "about 1.2 em
+    // tall", matching Word), so even a successful fallback grows only modestly, not
+    // dramatically — the bug was that it didn't grow *at all* (exactly 1.0x, every time).
+    assert!(
+        display_h > inline_h * 1.03,
+        "display {display_h} should be measurably taller than inline {inline_h} even with no cataloged size variant for this operator"
+    );
+}
+
+/// #3208: real Word grows a display n-ary operator to match a taller operand (here, a
+/// stacked fraction) even when the file has no `m:grow` on it at all — verified against
+/// Word itself on a file this project's own `wordcraft-cli` wrote, where `m:grow` is never
+/// written. (Also verified against Word for ∑ with the same operand shape, not asserted
+/// here: the substitute math font this test environment resolves to only catalogs two very
+/// far apart vertical size variants for ∑, no glyph assembly, so even its *non-grown*
+/// display size already lands on the bigger of the two — there's no room left in this
+/// particular font's data to show further growth for it specifically.) Measures the
+/// operator's own glyph height directly, not the whole equation's: that also includes the
+/// operand and so grows with a taller operand either way — the bug was that the *operator
+/// itself* stayed small regardless.
+#[test]
+fn a_display_operator_grows_to_match_a_tall_operand_without_an_explicit_grow() {
+    let (face, table) = wordcraft_fonts::math::resolve_math("Cambria Math");
+    let Some(t) = table else { return }; // no math font installed in this environment
+    let op_height = |e: Vec<MNode>| {
+        let mut cx = Ctx {
+            face,
+            t: Some(t.clone()),
+            upem: face.upem.max(1.0) as f32,
+            base: 12.0,
+            color: Rgb::BLACK,
+            text_font: String::new(),
+            nodes: 0,
+            path: Vec::new(),
+            node_stack: Vec::new(),
+        };
+        let n = MNode::Nary { chr: '∫', lim_loc: None, grow: None, sub_hide: true, sup_hide: true, sub: vec![], sup: vec![], e };
+        let st = St { level: 0, display: true, cramped: false, upright: false };
+        let op = &cx.op_atoms(&n, st, 0)[0];
+        op.a + op.d
+    };
+    let small = op_height(vec![MNode::Run(MRun::new("x"))]);
+    let tall = op_height(vec![MNode::Frac { kind: FracKind::Bar, num: vec![MNode::Run(MRun::new("a"))], den: vec![MNode::Run(MRun::new("b"))] }]);
+    assert!(
+        tall > small * 1.3,
+        "operator height with a fraction operand {tall} should clearly exceed its height with a plain letter operand {small}"
+    );
+}
+
+/// #3217 review: an explicit `m:grow="0"` keeps a display operator at its own size beside a tall
+/// operand; only a file that doesn't say gets Word's display default.
+#[test]
+fn an_explicit_no_grow_keeps_a_display_operator_small_beside_a_tall_operand() {
+    let (face, table) = wordcraft_fonts::math::resolve_math("Cambria Math");
+    let Some(t) = table else { return }; // no math font installed in this environment
+    let op_height = |grow: Option<bool>| {
+        let mut cx = Ctx {
+            face,
+            t: Some(t.clone()),
+            upem: face.upem.max(1.0) as f32,
+            base: 12.0,
+            color: Rgb::BLACK,
+            text_font: String::new(),
+            nodes: 0,
+            path: Vec::new(),
+            node_stack: Vec::new(),
+        };
+        let e = vec![MNode::Frac { kind: FracKind::Bar, num: vec![MNode::Run(MRun::new("a"))], den: vec![MNode::Run(MRun::new("b"))] }];
+        let n = MNode::Nary { chr: '∫', lim_loc: None, grow, sub_hide: true, sup_hide: true, sub: vec![], sup: vec![], e };
+        let st = St { level: 0, display: true, cramped: false, upright: false };
+        let op = &cx.op_atoms(&n, st, 0)[0];
+        op.a + op.d
+    };
+    let (unsaid, off, on) = (op_height(None), op_height(Some(false)), op_height(Some(true)));
+    assert!(off < unsaid * 0.8, "explicit off {off} stays smaller than the default {unsaid}");
+    assert!((unsaid - on).abs() < 0.01, "a file that doesn't say grows like an explicit on: {unsaid} vs {on}");
+}
+
+/// `scaled_fallback`'s target can be smaller than a glyph's own natural size (e.g. a tiny
+/// `display_operator_min_height` on an unusual font): it must not shrink the glyph below
+/// that natural size to chase the target down, only ever grow toward a *larger* one.
+#[test]
+fn scaled_fallback_never_shrinks_a_glyph_below_its_natural_size() {
+    let (face, table) = wordcraft_fonts::math::resolve_math("Cambria Math");
+    let Some(t) = table else { return }; // no math font installed in this environment
+    let cx = Ctx {
+        face,
+        t: Some(t),
+        upem: face.upem.max(1.0) as f32,
+        base: 12.0,
+        color: Rgb::BLACK,
+        text_font: String::new(),
+        nodes: 0,
+        path: Vec::new(),
+        node_stack: Vec::new(),
+    };
+    let gid = face.glyph_for('∫');
+    let size = 12.0;
+    let natural = cx.glyph_id(gid, size, cx.color);
+    let shrunk = cx.scaled_fallback(gid, 0.1, size);
+    assert!(
+        shrunk.a + shrunk.d >= natural.a + natural.d - 0.01,
+        "a target far smaller than the glyph's natural size should not shrink it: {} vs natural {}",
+        shrunk.a + shrunk.d,
+        natural.a + natural.d
+    );
 }
