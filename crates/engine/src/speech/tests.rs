@@ -462,6 +462,11 @@ fn a_chosen_voice_reads_its_own_language() {
     let gb = Voice { id: "gmw/en".into(), name: "English".into(), lang: "en-gb".into(), kind: VoiceKind::Espeak };
     assert_eq!(voice_for(Some(&gb), Some("en-US"), "Hello"), Some(&gb));
     assert_eq!(voice_for(None, Some("hu"), "Szia"), None);
+}
+
+#[test]
+fn text_in_another_script_keeps_its_own_voice() {
+    let hu = Voice { id: "urj/hu".into(), name: "Hungarian".into(), lang: "hu".into(), kind: VoiceKind::Espeak };
     // Text in another script than the voice's keeps its language's voice, either way round.
     let ru = Voice { id: "Milena".into(), name: "Milena".into(), lang: "ru_RU".into(), kind: VoiceKind::Mac };
     assert_eq!(voice_for(Some(&ru), Some("ru"), "Привет"), Some(&ru));
@@ -478,6 +483,10 @@ fn a_chosen_voice_reads_its_own_language() {
     assert_eq!(voice_for(Some(&hi), Some("en-US"), "Hello"), None, "a Hindi voice doesn't read English");
     let ka = Voice { id: "ccs/ka".into(), name: "Georgian".into(), lang: "ka".into(), kind: VoiceKind::Espeak };
     assert_eq!(voice_for(Some(&ka), Some("en-US"), "Hello"), None);
+}
+
+#[test]
+fn latin_text_is_told_by_its_letters() {
     assert!(is_latin_text("Árvíztűrő tükörfúrógép, Ñandú, Łódź 123"));
     assert!(!is_latin_text("Hello мир"));
     // Symbols, ligatures, modifier letters and a stray Greek letter don't make text foreign.
@@ -486,6 +495,12 @@ fn a_chosen_voice_reads_its_own_language() {
     assert!(is_latin_text("Hawaiʻi és Oʼahu szigete"));
     assert!(is_latin_text("Az α-részecskék pályáját mérték a kísérletben."));
     assert!(!is_latin_text("123 – !"), "no letters: not Latin text");
+}
+
+#[test]
+fn numbers_and_latin_text_keep_the_chosen_voice_where_their_tag_allows() {
+    let hu = Voice { id: "urj/hu".into(), name: "Hungarian".into(), lang: "hu".into(), kind: VoiceKind::Espeak };
+    let gb = Voice { id: "gmw/en".into(), name: "English".into(), lang: "en-gb".into(), kind: VoiceKind::Espeak };
     // A number in a Japanese, Russian or Hindi document keeps the voice of its tag; in a
     // document tagged with a Latin-script language it keeps the chosen voice.
     assert_eq!(voice_for(Some(&gb), Some("ja"), "2026"), None);

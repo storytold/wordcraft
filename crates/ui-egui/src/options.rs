@@ -574,7 +574,7 @@ fn voice_picker(app: &mut WordApp, ui: &mut Ui) {
     let mut pick: Option<Option<String>> = None;
     ui.horizontal(|ui| {
         let name = ui.label(tl!("Voice"));
-        let list = egui::ComboBox::from_id_salt("read-aloud-voice").selected_text(shown).width(260.0).show_ui(ui, |ui| {
+        let list = craft_ui::ComboBox::from_id_salt("read-aloud-voice").selected_text(shown).width(260.0).show_ui(ui, |ui| {
             if ui.selectable_label(chosen.is_none(), tl!("Automatic")).clicked() {
                 pick = Some(None);
             }
