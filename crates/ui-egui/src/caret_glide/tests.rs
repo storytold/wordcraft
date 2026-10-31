@@ -30,6 +30,7 @@ impl Rig {
             keys: false,
             pointer: false,
             since_blink: 0.0,
+            composing: false,
         };
         let mut rig = Rig { glide: CaretGlide::with_secs(GLIDE_SECS), f, restarted: 100.0 };
         assert_eq!(rig.glide.frame(rig.f), Look { bar: at, opacity: 1.0, moving: false }, "the first frame draws the caret in place");
@@ -125,6 +126,22 @@ fn a_key_move_glides_and_lands_exactly() {
     // 0.1 s at 60 Hz.
     assert!((5..=7).contains(&frames), "{frames} frames");
     assert_eq!(r.step(DT), Look { bar: bar(200.0, 90.0), opacity: 1.0, moving: false }, "then it rests");
+}
+
+/// A composition that starts while the caret is still gliding stops the glide: the caret is
+/// drawn at the input method's cursor at once, not carried there by the rest of the glide.
+#[test]
+fn a_composition_stops_a_glide_under_way() {
+    let mut r = Rig::new(bar(100.0, 50.0));
+    r.key_to(bar(200.0, 50.0));
+    r.step(DT);
+    assert!(r.glide.is_gliding());
+    // The input method's cursor sits inside the composition: same cause, new target.
+    r.f.composing = true;
+    r.f.target = bar(240.0, 50.0);
+    let look = r.step(DT);
+    assert!(!r.glide.is_gliding(), "the glide stops: {look:?}");
+    assert_eq!(look.bar, bar(240.0, 50.0));
 }
 
 #[test]
@@ -474,4 +491,59 @@ fn the_canvas_caret_glides_after_a_key() {
     h.state_mut().run("ui.caretAnimation", json!({"value": true})).unwrap();
     h.step();
     assert!(state(&h.ctx).drawn().is_some());
+}
+
+/// Committing an input method's composition puts the caret after the committed text at once.
+/// While composing, the caret is drawn at the input method's cursor inside the composition (which
+/// is drawn over the page in the interface font); the committed text has its own width, often
+/// much narrower (eight letters of pinyin for two Chinese characters), so a glide from there
+/// would slide the caret back over the text it just typed. A key after the commit still glides.
+#[test]
+fn an_input_method_commit_does_not_glide_from_the_composition() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("text.insert", json!({"text": "Some text "})).unwrap();
+    a.run("ui.animations", json!({"value": "on"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).with_step_dt(DT as f32).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.ctx.all_styles_mut(|s| s.animation_time = 0.1);
+    for _ in 0..30 {
+        h.step();
+    }
+    let before = state(&h.ctx).drawn().expect("the focused canvas draws a caret");
+    for (spelling, commit, lone) in [("zhongguo", "中国", false), ("shi", "是", false), ("nihao", "你好", true)] {
+        h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: spelling.into(), active_range_chars: None }));
+        for _ in 0..3 {
+            h.step();
+        }
+        let composing = state(&h.ctx).drawn().expect("the caret is drawn in the composition");
+        assert!(composing[0].x > before[0].x + 10.0, "{spelling}: the caret is at the composition's end");
+        // Some input methods clear the composition and commit in the same batch.
+        if lone {
+            h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: String::new(), active_range_chars: None }));
+        }
+        h.event(egui::Event::Ime(egui::ImeEvent::Commit(commit.into())));
+        h.step();
+        let mut drawn = Vec::new();
+        for _ in 0..20 {
+            h.step();
+            let s = state(&h.ctx);
+            assert!(!s.is_gliding(), "{spelling}: the caret glides from the composition: {drawn:?}");
+            drawn.push(s.drawn().expect("the caret stays drawn")[0].x);
+        }
+        let committed = h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+        assert!(committed.ends_with(commit), "{spelling}: committed: {committed:?}");
+        assert!(drawn.windows(2).all(|w| w[0] == w[1]), "{spelling}: the caret rests after the commit: {drawn:?}");
+    }
+    // An ordinary key still glides.
+    h.event(key(egui::Key::Home));
+    for _ in 0..3 {
+        h.step();
+    }
+    assert!(state(&h.ctx).is_gliding(), "Home after a commit glides as before");
 }

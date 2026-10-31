@@ -17,7 +17,10 @@
 //!
 //! What never glides: a caret that moved because the view changed (zoom, a resized window,
 //! scrolling, another document), one that wasn't drawn the frame before (a selection, the canvas
-//! unfocused), and moves that start or end off screen. Our choice; Word wasn't measured there.
+//! unfocused), moves that start or end off screen, and moves the input method makes: its
+//! composition is drawn over the page, so the caret's place in it is not a place in the text, and
+//! committing eight letters of pinyin as two Chinese characters would slide the caret back over
+//! them. Our choice; Word wasn't measured there.
 //!
 //! With animations off the caret jumps and blinks on and off, as it always did: File ▸ Options ▸
 //! Advanced ▸ Animation (the `ui.caretAnimation` command) turns them off, and so do egui's
@@ -82,6 +85,9 @@ pub struct Frame {
     pub pointer: bool,
     /// Seconds since the blink was restarted (by the last command or click).
     pub since_blink: f64,
+    /// The caret is drawn at the input method's cursor in a composition, or the input method
+    /// sent something this frame (it can end a composition and commit its text a frame apart).
+    pub composing: bool,
 }
 
 /// How to draw the caret this frame.
@@ -124,6 +130,8 @@ pub struct CaretGlide {
     /// at the end of a frame, so the move they make is seen one frame later.
     keys: bool,
     pointer: bool,
+    /// Last frame's [`Frame::composing`].
+    composing: bool,
     cause: u64,
     view: u64,
     frame_nr: u64,
@@ -148,6 +156,7 @@ impl CaretGlide {
             fade: None,
             keys: false,
             pointer: false,
+            composing: false,
             cause: 0,
             view: 0,
             frame_nr: 0,
@@ -163,11 +172,13 @@ impl CaretGlide {
         let same_view = f.view == self.view;
         let by_keys = f.keys || (self.keys && continuous);
         let by_pointer = f.pointer || (self.pointer && continuous);
+        let composing = f.composing || (self.composing && continuous);
         self.cause = f.cause;
         self.view = f.view;
         self.frame_nr = f.frame_nr;
         self.keys = f.keys;
         self.pointer = f.pointer;
+        self.composing = f.composing;
         let sane = is_finite(f.target) && f.now.is_finite();
         if !(f.shown && sane) {
             self.reset();
@@ -191,7 +202,7 @@ impl CaretGlide {
             self.fade = Some(FadeIn { from: was_opacity, started: f.now });
             self.glide = match heading {
                 // Keys glide, from where the caret was heading (not from where it has got to).
-                Some(from) if by_keys && !by_pointer && same_view => {
+                Some(from) if by_keys && !by_pointer && !composing && same_view => {
                     let seen = f.viewport.expand(OFFSCREEN_SLACK);
                     let on_screen = |b: Bar| seen.intersects(Rect::from_two_pos(b[0], b[1]));
                     (on_screen(from) && on_screen(f.target)).then_some(Glide { from, to: f.target, started: f.now })
@@ -202,6 +213,10 @@ impl CaretGlide {
             // A script moved it: it is simply there.
             self.glide = None;
             self.fade = None;
+        }
+        // A composition draws the caret at the input method's cursor: a glide under way stops.
+        if composing {
+            self.glide = None;
         }
         // The text shifted under a glide (pixel snapping while scrolling): carry the glide along.
         if let Some(g) = &mut self.glide
@@ -369,11 +384,12 @@ pub fn look(app: &WordApp, ui: &Ui, request: LookRequest<'_>) -> Look {
     }
     let off = content_origin.to_vec2();
     let since = since_ms / 1000.0;
-    let (keys, pointer, now) = ui.input(|i| {
+    let (keys, pointer, ime, now) = ui.input(|i| {
         let typed = |e: &egui::Event| {
             matches!(e, egui::Event::Key { pressed: true, .. } | egui::Event::Text(_) | egui::Event::Paste(_) | egui::Event::Ime(_))
         };
-        (i.events.iter().any(typed), i.pointer.any_down() || i.pointer.any_pressed() || i.pointer.any_released(), i.time)
+        let ime = i.events.iter().any(|e| matches!(e, egui::Event::Ime(_)));
+        (i.events.iter().any(typed), i.pointer.any_down() || i.pointer.any_pressed() || i.pointer.any_released(), ime, i.time)
     });
     let frame = Frame {
         target: [target[0] - off, target[1] - off],
@@ -386,6 +402,7 @@ pub fn look(app: &WordApp, ui: &Ui, request: LookRequest<'_>) -> Look {
         keys,
         pointer,
         since_blink: since,
+        composing: ime || !app.canvas.ime_preedit.is_empty(),
     };
     let (mut look, gliding, secs) = ui.ctx().data_mut(|d| {
         let state = d.get_temp_mut_or_default::<CaretGlide>(state_id());
