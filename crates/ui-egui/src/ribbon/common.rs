@@ -95,8 +95,8 @@ pub(crate) fn mi(ui: &mut Ui, app: &mut WordApp, label: &str, id: &str, params: 
     mi_text(ui, app, tl!(label), id, params);
 }
 
-/// [`mi`] with a drawn icon before the label.
-pub(super) fn mi_icon(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, params: Value) {
+/// [`mi`] with a drawn icon before the label. Returns whether it was clicked.
+pub(super) fn mi_icon(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, params: Value) -> bool {
     let sc = crate::widgets::shortcut_text(app, id);
     let enabled = crate::widgets::enabled(app, id);
     let resp = ui.add_enabled_ui(enabled, |ui| crate::widgets::icon_menu_item(ui, icon, tl!(label), &sc, 200.0)).inner;
@@ -104,6 +104,7 @@ pub(super) fn mi_icon(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, i
         crate::widgets::run_from_ribbon(app, id, params);
         ui.close();
     }
+    resp.clicked()
 }
 
 /// A menu item whose text is already in the interface language.

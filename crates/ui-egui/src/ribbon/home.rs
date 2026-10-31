@@ -1,4 +1,4 @@
-use super::common::{mi, mi_text, stack};
+use super::common::{mi, mi_icon, mi_text, stack};
 use super::underline::underline_menu;
 use super::{Remember, Stroke, Target, Tokens, Ui, Value, WordApp, big, group, json, menu_button, small, split, vec2};
 
@@ -24,6 +24,38 @@ pub(super) fn painter_double_click(app: &mut WordApp) {
         let _ = app.run("edit.formatPainter", json!({}));
     }
     let _ = app.run("edit.formatPainter", json!({"sticky": true}));
+}
+
+/// Home › Borders: the paragraph border kinds (`para.borders` kind), with their labels and icons.
+pub(super) const BORDER_KINDS: [(&str, &str, &str); 8] = [
+    ("Bottom Border", "bottom", "borderBottom"),
+    ("Top Border", "top", "borderTop"),
+    ("Left Border", "left", "borderLeft"),
+    ("Right Border", "right", "borderRight"),
+    ("No Border", "none", "borderNone"),
+    ("All Borders", "all", "borderAll"),
+    ("Outside Borders", "outside", "borderOutside"),
+    ("Inside Borders", "inside", "borderInside"),
+];
+
+/// The Borders button's icon and params: it applies the kind last picked from its menu, as Word's
+/// does, and shows that kind's icon (#2718). An unknown kind is Bottom, the default.
+pub(super) fn border_button(kind: &str) -> (&'static str, Value) {
+    let (_, k, icon) = BORDER_KINDS.iter().find(|(_, k, _)| *k == kind).copied().unwrap_or(BORDER_KINDS[0]);
+    (icon, json!({"kind": k}))
+}
+
+/// The Borders menu: each kind with its icon, remembered for the button when picked; then
+/// Horizontal Line and the dialog.
+pub(super) fn borders_items(ui: &mut Ui, app: &mut WordApp) {
+    for (l, k, icon) in BORDER_KINDS {
+        if mi_icon(ui, app, icon, l, "para.borders", json!({"kind": k})) {
+            app.canvas.last_border = k.to_string();
+        }
+    }
+    ui.separator();
+    mi(ui, app, "Horizontal Line", "insert.horizontalLine", json!({}));
+    mi(ui, app, "Borders and Shading…", "para.borders", json!({}));
 }
 
 pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
@@ -300,31 +332,8 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
                         crate::colors::menu(ui, app, &theme, Target::cmd("para.shading").remember(Remember::Shading));
                     },
                 );
-                split(
-                    ui,
-                    app,
-                    "borders",
-                    "Borders",
-                    crate::widgets::ButtonAction::new("para.borders", json!({"kind": "bottom"}), false),
-                    None,
-                    |ui, app| {
-                        for (l, k) in [
-                            ("Bottom Border", "bottom"),
-                            ("Top Border", "top"),
-                            ("Left Border", "left"),
-                            ("Right Border", "right"),
-                            ("No Border", "none"),
-                            ("All Borders", "all"),
-                            ("Outside Borders", "outside"),
-                            ("Inside Borders", "inside"),
-                        ] {
-                            mi(ui, app, l, "para.borders", json!({"kind": k}));
-                        }
-                        ui.separator();
-                        mi(ui, app, "Horizontal Line", "insert.horizontalLine", json!({}));
-                        mi(ui, app, "Borders and Shading…", "para.borders", json!({}));
-                    },
-                );
+                let (icon, params) = border_button(&app.canvas.last_border);
+                split(ui, app, icon, "Borders", crate::widgets::ButtonAction::new("para.borders", params, false), None, borders_items);
             });
         });
     });

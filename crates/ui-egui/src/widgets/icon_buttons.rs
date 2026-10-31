@@ -90,8 +90,11 @@ pub fn icon_menu_item(ui: &mut Ui, icon: &str, text: &str, shortcut: &str, min_w
     let pad = ui.spacing().button_padding;
     let icon_w = 16.0;
     let sc_w = sc.as_ref().map_or(0.0, |g| g.size().x + 3.0 * pad.x);
-    let w = (pad.x + icon_w + 6.0 + galley.size().x + sc_w + pad.x).max(min_w).max(ui.available_width());
-    let (r, resp) = ui.allocate_exact_size(vec2(w, galley.size().y.max(icon_w) + 2.0 * pad.y), Sense::click());
+    let w = (pad.x + icon_w + 6.0 + galley.size().x + sc_w + pad.x).max(min_w);
+    // At least as wide as its content; a menu's justified layout stretches it to the menu's width.
+    // Asking for the whole available width instead would widen a menu without a fixed width to
+    // the screen's (#2718).
+    let (r, resp) = ui.allocate_at_least(vec2(w, galley.size().y.max(icon_w) + 2.0 * pad.y), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), text));
     let st = drawn_state(ui, &resp, false);
     ui.painter().rect_filled(r, ui.visuals().widgets.inactive.corner_radius, st.fill);

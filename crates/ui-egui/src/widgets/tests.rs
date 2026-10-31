@@ -530,3 +530,24 @@ fn a_long_combo_list_builds_only_the_rows_in_view() {
     })
     .drop_without_applying_deltas();
 }
+
+/// #2718: a menu item with an icon is as wide as its content (or `min_w`), and a justified menu
+/// stretches it to the menu's width; it doesn't take the whole width on offer, which widened a
+/// drop-down without a fixed width to the screen's.
+#[test]
+fn an_icon_menu_item_does_not_take_the_whole_width_on_offer() {
+    let widths = std::rc::Rc::new(std::cell::Cell::new((0.0, 0.0)));
+    let out = widths.clone();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 300.0)).build_ui(move |ui| {
+        let plain = ui.vertical(|ui| icon_menu_item(ui, "borderTop", "Top Border", "", 200.0)).inner;
+        let justified = ui.with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
+            ui.set_max_width(300.0);
+            icon_menu_item(ui, "borderTop", "Top Border", "", 200.0)
+        });
+        out.set((plain.rect.width(), justified.inner.rect.width()));
+    });
+    h.run_steps(2);
+    let (plain, justified) = widths.get();
+    assert_eq!(plain, 200.0, "content width, at least min_w");
+    assert_eq!(justified, 300.0, "a justified menu's width");
+}

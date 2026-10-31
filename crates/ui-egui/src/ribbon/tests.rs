@@ -781,3 +781,42 @@ fn shape_and_chart_formats_leave_out_of_range_sizes_alone() {
     assert_eq!(before.0, Some((20.0, 2500.0)));
     assert_eq!(shown(a), before, "Chart Design shown, the chart untouched");
 }
+
+/// #2718: a kind picked from the Borders menu is applied and becomes the button's: the button
+/// shows that kind's icon and applies it. Bottom until a kind is picked; Horizontal Line isn't a
+/// kind and leaves the button alone; an unknown kind is Bottom.
+#[test]
+fn borders_button_applies_the_last_border_picked() {
+    use super::home::{border_button, borders_items};
+    use egui_kittest::kittest::Queryable;
+    let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+    assert_eq!(border_button(&app.canvas.last_border), ("borderBottom", json!({"kind": "bottom"})));
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(400.0, 600.0)).build_ui_state(borders_items, app);
+    h.run_steps(2);
+    h.get_by_label_contains("Top Border").click();
+    h.run_steps(2);
+    let top = |app: &WordApp| {
+        let b = app.session.doc.para_at(&app.session.sel.focus).and_then(|p| p.props.borders);
+        b.and_then(|b| b.top).is_some_and(|t| t.is_visible())
+    };
+    assert_eq!(h.state().canvas.last_border, "top");
+    assert!(top(h.state()), "the menu applies Top Border");
+    let (icon, params) = border_button(&h.state().canvas.last_border);
+    assert_eq!((icon, &params), ("borderTop", &json!({"kind": "top"})));
+    // The button runs the same command: a second Top Border takes it off, as in Word.
+    h.state_mut().run("para.borders", params).unwrap();
+    assert!(!top(h.state()));
+    h.get_by_label_contains("Horizontal Line").click();
+    h.run_steps(2);
+    assert_eq!(h.state().canvas.last_border, "top");
+    assert_eq!(border_button("junk").0, "borderBottom");
+}
+
+/// #2718: the kind last picked survives switching to another document, like the Shading colour.
+#[test]
+fn the_last_border_survives_showing_another_document() {
+    let mut canvas = crate::canvas::CanvasState::default();
+    canvas.last_border = "left".into();
+    canvas.show_other_document(false);
+    assert_eq!(canvas.last_border, "left");
+}
