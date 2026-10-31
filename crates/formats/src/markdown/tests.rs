@@ -695,3 +695,25 @@ fn exported_link_destinations_read_back_unchanged() {
     assert_eq!(md("https://example.com/a b"), "[x](<https://example.com/a b>)");
     assert_eq!(md("https://e.com/x\ny"), "[x](https://e.com/xy)");
 }
+
+#[test]
+fn heading_trailing_hash_survives_round_trip() {
+    let heading = |md: &str| {
+        let f = parse(md);
+        let Some(FBlock::Para(p)) = f.blocks.first() else { panic!("no paragraph in {md:?}") };
+        assert_eq!(p.kind, Kind::Heading(2), "{md:?}");
+        p.text()
+    };
+    for (src, text, want) in [
+        ("## Item \\#\n", "Item #", "## Item \\#\n"),
+        ("## Issue \\##\n", "Issue ##", "## Issue \\##\n"),
+        ("## \\#\n", "#", "## \\#\n"),
+        ("## C#\n", "C#", "## C#\n"),
+    ] {
+        assert_eq!(heading(src), text, "{src:?}");
+        let md = export(&import(src));
+        assert_eq!(md, want, "first export of {src:?}");
+        assert_eq!(heading(&md), text, "md was {md:?}");
+        assert_eq!(export(&import(&md)), want, "second export of {src:?}");
+    }
+}
