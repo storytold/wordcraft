@@ -57,6 +57,10 @@ pub struct Services {
     /// Asked every frame, so a change in the system's settings shows at once: the host answers
     /// from memory and does any slow asking elsewhere. Without the hook, animation effects stay on.
     pub animations_enabled: Option<Box<dyn Fn() -> Option<bool>>>,
+    /// Desktop: the monitors' rectangles on the desktop, in physical pixels. egui reports only the
+    /// size of the monitor a window is on, which can't tell where a window may go. Asked when a
+    /// window opens, not every frame. Without the hook, or with an empty list, nothing is known.
+    pub monitors: Option<Box<dyn Fn() -> Vec<egui::Rect>>>,
     /// Desktop: the text on the system clipboard, if any. Ctrl+V gets it from egui's paste event;
     /// the ribbon and context-menu Paste read it here (#584).
     pub clipboard_text: Option<Box<dyn Fn() -> Option<String>>>,

@@ -262,9 +262,20 @@ fn write_prefs(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
 /// Native file dialogs, shown without blocking the window (`file_dialogs`, #94), File › Print
 /// through the system spooler (`print`), the system clipboard's text, formatted copies,
 /// pictures and format names (`clipboard`, #45, #584, #687, #833), the system's animation setting
-/// (`animations`), and making WordCraft the default app for Word documents (`default_apps`, #295).
-fn services(file_dialog: file_dialogs::Hook, ctx: &egui::Context) -> Services {
+/// (`animations`), making WordCraft the default app for Word documents (`default_apps`, #295) and
+/// the desktop's monitors, which the window's handle can list.
+fn services(file_dialog: file_dialogs::Hook, cc: &eframe::CreationContext<'_>) -> Services {
+    let ctx = &cc.egui_ctx;
+    let window = cc.winit_window().map(std::sync::Arc::downgrade);
     Services {
+        monitors: Some(Box::new(move || {
+            let Some(window) = window.as_ref().and_then(std::sync::Weak::upgrade) else { return Vec::new() };
+            let monitors = window.available_monitors().map(|m| {
+                let (position, size) = (m.position(), m.size());
+                egui::Rect::from_min_size(egui::pos2(position.x as f32, position.y as f32), egui::vec2(size.width as f32, size.height as f32))
+            });
+            monitors.collect()
+        })),
         file_dialog: Some(file_dialog),
         printers: Some(print::discover()),
         print_native: Some(print::submit()),
@@ -486,7 +497,7 @@ fn main() -> eframe::Result {
             let (file_dialog, dialogs) = file_dialogs::hook(&cc.egui_ctx);
             let mut session = Session::new(doc);
             session.system_region = region;
-            let mut app = WordApp::new(session, services(file_dialog, &cc.egui_ctx));
+            let mut app = WordApp::new(session, services(file_dialog, cc));
             app.set_startup_update_check(true);
             load_prefs(&mut app);
             load_user_dictionary(&mut app);
