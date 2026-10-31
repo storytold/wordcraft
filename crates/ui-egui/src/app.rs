@@ -202,6 +202,15 @@ impl WordApp {
         self.ui.start_screen
     }
 
+    /// Whether the ribbon is drawn frosted over the page strip.
+    pub fn ribbon_glass(&self) -> bool {
+        self.ui.ribbon_blur
+            && self.has_document()
+            && !self.ui.backstage
+            && !self.session.view.read_mode
+            && chrome::Screen::of(&self.session.view) == chrome::Screen::Normal
+    }
+
     /// Whether a document is open: false from a Start screen launch until the user creates or
     /// opens one (#1129).
     pub fn has_document(&self) -> bool {
@@ -430,9 +439,11 @@ impl WordApp {
             backstage::forget_open_error(&ctx);
             backstage::forget_save_as_error(&ctx);
         }
-        self.paint_window(ui, &ctx, t);
+        let enter = ctx.animate_bool_responsive(egui::Id::unique("backstage_enter"), self.ui.backstage);
+        let enter = egui::emath::easing::cubic_out(enter);
+        self.paint_window(ui, &ctx, t, enter, window);
         if !moved(self) {
-            self.show_overlays(ui, &ctx);
+            self.show_overlays(ui, &ctx, enter, window);
         }
         if !moved(self) {
             self.sync_title_and_frame(&ctx, t0);

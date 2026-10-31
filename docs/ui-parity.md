@@ -85,6 +85,7 @@ Labels → New Document with “One label per recipient” includes all filtered
 ## Revision history
 
 | Date | Change | Summary |
+| 2026-10-26 | trivial | Ribbon: opt-in blur under the ribbon plus animated transitions and translucent chrome, building on #3131 and #3781 (#4019) |
 |---|---|---|
 | 2026-10-28 | trivial | Aligned copies retain their locked document coordinate during middle-button scrolling and can start on secondary selected objects; existing Ctrl and Shift selection behavior stays (#4764) |
 | 2026-10-28 | trivial | Ctrl/Command+Shift drags a selected floating object into an axis-aligned copy (#4764); synthetic Linux interaction and persistence controls, native desktop and Word untested; gap/readiness estimates unchanged |

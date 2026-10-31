@@ -1,6 +1,31 @@
 use super::*;
 use crate::table_resize::tests::{H, cell, screen, steps, table_window};
 
+#[test]
+fn backstage_blocks_typing_in_the_still_visible_canvas() {
+    for backstage in [false, true] {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        app.ui.backstage = backstage;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                app.logic(&ui.ctx().clone());
+                if app.fonts_frames < 2 {
+                    app.ui(ui);
+                    return;
+                }
+                app.canvas.focused = true;
+                show(app, ui);
+            },
+            app,
+        );
+        h.run_steps(4);
+        assert!(!h.state().session.dirty);
+        h.event(egui::Event::Text("Must not reach the hidden document".into()));
+        h.run_steps(2);
+        assert_eq!(h.state().session.dirty, !backstage, "typing belongs to the canvas only outside Backstage");
+    }
+}
+
 /// #3931: while Insert › Table's grid asks for a preview the page is laid out with that
 /// table; the document, its revision and undo history stay as they were, and without a
 /// request the page is the document's own again.
@@ -419,6 +444,23 @@ fn caret_colour_is_not_worked_out_while_the_caret_is_hidden() {
     );
     h.run_steps(4);
     assert!(h.state().canvas.caret_bg.is_none(), "no caret, no colour lookup");
+}
+
+/// Page thumbnails feed the ribbon blur only, so none are kept while it is off.
+#[test]
+fn no_page_thumbnails_are_made_while_the_ribbon_blur_is_off() {
+    let a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Hello WordCraft")), Default::default());
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    assert!(!h.state().canvas.textures.is_empty(), "the page was drawn");
+    assert!(h.state().canvas.thumbs.is_empty(), "no thumbnail without the blur");
 }
 
 /// #167: dragging a ruler's margin edge sets that margin, snapped, never negative, and
