@@ -17,7 +17,7 @@ pub(super) fn notes_part(doc: &Document, wr: &Writer<'_>, foot: bool) -> bool {
 
 /// `w:settings`, its children in the schema's order (CT_Settings is a sequence). `template_rel`
 /// is the id of the attached template's relationship, when there is one.
-pub(super) fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool, template_rel: Option<&str>) -> Vec<u8> {
+pub(super) fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool, template_rel: Option<&str>, mail_merge: Option<&str>) -> Vec<u8> {
     let s = &doc.settings;
     let s_notes = (&doc.footnote_separators, &doc.endnote_separators);
     let mut w = W::new();
@@ -55,6 +55,9 @@ pub(super) fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool, temp
     }
     if s.link_styles {
         w.empty("w:linkStyles", &[]);
+    }
+    if let Some(xml) = mail_merge {
+        w.raw(xml);
     }
     if s.track_changes {
         w.empty("w:trackRevisions", &[]);

@@ -69,7 +69,15 @@ const SETTINGS: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?
 <w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml" mc:Ignorable="w14 w15"><w:zoom w:percent="120"/><w:removePersonalInformation/><w:removeDateAndTime/><w:proofState w:spelling="clean" w:grammar="clean"/><w:mailMerge><w:mainDocumentType w:val="formLetters"/><w:dataSource r:id="rId9"/></w:mailMerge><w:trackRevisions/><w:defaultTabStop w:val="708"/><w:hyphenationZone w:val="425"/><w:characterSpacingControl w:val="doNotCompress"/><w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/><w:compatSetting w:name="overrideTableStyleFontSizeAndJustification" w:uri="http://schemas.microsoft.com/office/word" w:val="1"/><w:compatSetting w:name="enableOpenTypeFeatures" w:uri="http://schemas.microsoft.com/office/word" w:val="1"/></w:compat><w:docVars><w:docVar w:name="ClauseSet" w:val="B"/></w:docVars><w:rsids><w:rsidRoot w:val="00A1B2C3"/><w:rsid w:val="00A1B2C3"/></w:rsids><m:mathPr><m:mathFont m:val="Cambria Math"/><m:smallFrac m:val="0"/></m:mathPr><w:themeFontLang w:val="pl-PL"/><w:decimalSymbol w:val=","/><w:listSeparator w:val=";"/><w14:docId w14:val="1A2B3C4D"/></w:settings>"#;
 
 fn with_settings(settings: &str) -> Vec<u8> {
-    package("<w:p><w:r><w:t>Text</w:t></w:r></w:p>", &[("rId1", &format!("{REL}/settings"), "settings.xml")], &[], &[("word/settings.xml", settings)])
+    let sources = format!(
+        r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId9" Type="{REL}/mailMergeSource" Target="file:///__wordcraft_missing_source__/letters.xlsx" TargetMode="External"/></Relationships>"#
+    );
+    package(
+        "<w:p><w:r><w:t>Text</w:t></w:r></w:p>",
+        &[("rId1", &format!("{REL}/settings"), "settings.xml")],
+        &[],
+        &[("word/settings.xml", settings), ("word/_rels/settings.xml.rels", &sources)],
+    )
 }
 
 fn pos(s: &str, needle: &str) -> usize {
@@ -100,11 +108,12 @@ fn unmodelled_settings_survive_a_save_and_owned_ones_follow_the_model() {
     ] {
         assert!(s.contains(kept), "{kept} lost: {s}");
     }
-    // Owned: Track Changes was turned off; one compatibility mode; the mail merge source (a
-    // relationship that isn't carried) is dropped rather than left dangling.
+    // Owned: Track Changes was turned off; one compatibility mode. Mail merge now carries its
+    // source with newly allocated relationship IDs rather than leaving dangling references.
     assert!(!s.contains("trackRevisions"), "{s}");
     assert_eq!(s.matches("compatibilityMode").count(), 1, "{s}");
-    assert!(!s.contains("mailMerge") && !s.contains("rId9"), "{s}");
+    assert!(s.contains("mailMerge"), "{s}");
+    assert!(text(&files, "word/_rels/settings.xml.rels").contains("file:///__wordcraft_missing_source__/letters.xlsx"));
     // The privacy options are the model's (#1062): written once each, and gone when turned off.
     assert_eq!(s.matches("removePersonalInformation").count(), 1, "{s}");
     assert_eq!(s.matches("removeDateAndTime").count(), 1, "{s}");
