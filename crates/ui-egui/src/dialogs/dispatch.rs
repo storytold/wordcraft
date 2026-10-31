@@ -298,15 +298,22 @@ fn paragraph_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             });
             para_check(ui, &mut opts[0], tl!("Mirror indents"), "mirrorIndents", mixed);
             ui.label(egui::RichText::new(tl!("Spacing")).font(semibold(12.5)));
-            egui::Grid::new("sp").num_columns(4).show(ui, |ui| {
-                let before_label = ui.label(tl!("Before:"));
-                para_number(ui, before, ParaNumber::Points, "spaceBefore", mixed, &before_label);
-                let line_label = ui.label(tl!("Line spacing:"));
-                para_number(ui, line, ParaNumber::Lines, "lineSpacing", mixed, &line_label);
-                ui.end_row();
-                let after_label = ui.label(tl!("After:"));
-                para_number(ui, after, ParaNumber::Points, "spaceAfter", mixed, &after_label);
-                ui.end_row();
+            // Two grids side by side, not one of two rows: Tab goes down Before and After, then to
+            // Line spacing beside them, as in Word (a grid's Tab order is row by row).
+            ui.horizontal_top(|ui| {
+                egui::Grid::new("sp").num_columns(2).show(ui, |ui| {
+                    let before_label = ui.label(tl!("Before:"));
+                    para_number(ui, before, ParaNumber::Points, "spaceBefore", mixed, &before_label);
+                    ui.end_row();
+                    let after_label = ui.label(tl!("After:"));
+                    para_number(ui, after, ParaNumber::Points, "spaceAfter", mixed, &after_label);
+                    ui.end_row();
+                });
+                egui::Grid::new("sp_line").num_columns(2).show(ui, |ui| {
+                    let line_label = ui.label(tl!("Line spacing:"));
+                    para_number(ui, line, ParaNumber::Lines, "lineSpacing", mixed, &line_label);
+                    ui.end_row();
+                });
             });
             para_check(ui, &mut opts[1], tl!("Don't add space between paragraphs of the same style"), "contextualSpacing", mixed);
         }
