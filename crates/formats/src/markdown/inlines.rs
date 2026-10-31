@@ -16,7 +16,7 @@ enum Node {
     Delim { ch: char, orig: usize, left: usize, open: bool, close: bool, opens: Vec<Emph>, closes: Vec<Emph> },
 }
 
-fn is_punct(c: char) -> bool {
+pub(super) fn is_punct(c: char) -> bool {
     c.is_ascii_punctuation() || (!c.is_alphanumeric() && !c.is_whitespace() && !c.is_control())
 }
 
@@ -116,8 +116,8 @@ struct LinkScan<'a> {
     budget: usize,
 }
 
-impl LinkScan<'_> {
-    fn parse_at(&mut self, open: usize) -> Option<(String, Arc<str>, usize)> {
+impl<'a> LinkScan<'a> {
+    fn parse_at(&mut self, open: usize) -> Option<(&'a str, Arc<str>, usize)> {
         let bytes = self.text.as_bytes();
         let close = match self.known.get(&open).copied() {
             Some(found) => found,
@@ -136,19 +136,32 @@ impl LinkScan<'_> {
             let destination = link_dest(self.text, close + 1);
             self.budget = self.budget.saturating_sub(destination.as_ref().map_or(self.text.len(), |d| d.1).saturating_sub(close));
             let (destination, end) = destination?;
-            return Some((label_text.to_string(), Arc::from(destination), end));
+            return Some((label_text, Arc::from(destination), end));
         }
         // Full and shortcut reference links use definitions collected before inline parsing.
+        if self.refs.is_empty() {
+            return None;
+        }
         let (label, end) = match self.text.get(close + 1..).and_then(|rest| rest.strip_prefix('[')) {
             Some(rest) => {
-                let shut = rest.find(']')?;
+                let ahead = within(rest, self.budget);
+                let shut = ahead.find(']');
+                self.budget = self.budget.saturating_sub(shut.map_or(ahead.len(), |n| n + 1));
+                let shut = shut?;
                 let inner = rest.get(..shut)?;
                 let label = if inner.trim().is_empty() { label_text } else { inner };
                 (label, close + 2 + shut + 1)
             }
             None => (label_text, close + 1),
         };
-        Some((label_text.to_string(), self.refs.get(&ref_label(label))?.clone(), end))
+        // A cached bracket pair still costs a pass over its label. Without charging it,
+        // nested undefined references normalize every suffix again.
+        if label.len() > self.budget {
+            self.budget = 0;
+            return None;
+        }
+        self.budget -= label.len();
+        Some((label_text, self.refs.get(&ref_label(label))?.clone(), end))
     }
 }
 
@@ -257,10 +270,10 @@ fn tag_attr(tag: &str, name: &str) -> Option<String> {
 
 fn tokenize(s: &str, base: &Fmt, depth: usize, refs: &Refs) -> Vec<Node> {
     let mut nodes: Vec<Node> = Vec::new();
-    // Bytes the link and image scans below may look ahead in total. Each unmatched `[` or `![(`
-    // would otherwise rescan the rest of the text, which is quadratic on hostile input; once the
-    // budget is gone, further brackets are plain text. A scan pays for what it reads; brackets an
-    // earlier scan passed are looked up in `known` instead.
+    // Bytes the link/image scans and reference-label lookups may read in total. Unmatched
+    // brackets and nested undefined references would otherwise rescan the rest of the text,
+    // which is quadratic on hostile input. Once the budget is gone, further brackets are plain
+    // text. A scan pays for what it reads; earlier bracket matches are looked up in `known`.
     let ticks = Backticks::new(s);
     let mut links = LinkScan { text: s, refs, ticks: &ticks, known: HashMap::new(), budget: s.len().saturating_mul(8).saturating_add(8192) };
     let b = s.as_bytes();
@@ -324,7 +337,7 @@ fn tokenize(s: &str, base: &Fmt, depth: usize, refs: &Refs) -> Vec<Node> {
                 match parsed {
                     Some((inner, dest, end)) if img => {
                         flush!();
-                        let alt: String = parse_inlines(&inner, &Fmt::default(), depth + 1, refs)
+                        let alt: String = parse_inlines(inner, &Fmt::default(), depth + 1, refs)
                             .iter()
                             .filter_map(|x| if let Inline::Text(t, _) = x { Some(t.as_str()) } else { None })
                             .collect();
@@ -343,7 +356,7 @@ fn tokenize(s: &str, base: &Fmt, depth: usize, refs: &Refs) -> Vec<Node> {
                         if f.link.is_none() {
                             model::dropped(model::Dropped::Link);
                         }
-                        for x in parse_inlines(&inner, &f, depth + 1, refs) {
+                        for x in parse_inlines(inner, &f, depth + 1, refs) {
                             nodes.push(Node::Inl(x));
                         }
                         i = end;
