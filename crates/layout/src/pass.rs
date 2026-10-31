@@ -240,9 +240,12 @@ fn section_tops(ctx: &mut Ctx, hf: &HfLinks, (si, sect): (usize, &SectionProps),
     Tops { body, first, foot, first_foot }
 }
 
-/// Set up the walk state for a section: its grid, field values and footnote separators.
-fn begin_section_state<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, sec: &Sec<'p>, totals: &Totals, web: bool) {
-    let (doc, sect, si) = (ctx.doc, sec.sect, sec.si);
+/// Set up the walk state for a section before its header and footer room is measured: no grid yet
+/// (the previous section's must not leak into headers, footers and separators), the field values
+/// and the footnote separators.
+fn begin_section_state<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, (si, sect): (usize, &'p SectionProps), totals: &Totals, web: bool) {
+    let doc = ctx.doc;
+    ctx.grid = para::Grid::default();
     pb.sect = sect;
     pb.sect_idx = si;
     pb.sect_beneath = doc.note_options(sect, false).pos == wordcraft_doc::section::NotePos::BeneathText;
@@ -251,7 +254,11 @@ fn begin_section_state<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, sec: &Sec<'p
     }
     ctx.fields.section = u32::try_from(si).unwrap_or(u32::MAX).saturating_add(1);
     ctx.fields.section_pages = totals.section(si);
-    ctx.grid = para::Grid::of(doc, sect);
+}
+
+/// The section's own grid and line numbering, once its header and footer room is known.
+fn apply_section_grid(ctx: &mut Ctx, pb: &mut PageBuilder<'_>, sect: &SectionProps) {
+    ctx.grid = para::Grid::of(ctx.doc, sect);
     if sect.line_numbers.as_ref().is_some_and(|l| l.restart == wordcraft_doc::section::LineNumberRestart::Section) {
         pb.line_no = 0;
     }
@@ -495,10 +502,11 @@ pub(crate) fn layout_pass(
             _ if mode.reflow => sect_ref,
             _ => sect,
         };
+        begin_section_state(&mut ctx, &mut pb, (si, sect), totals, mode.web);
         let tops = section_tops(&mut ctx, &hf, (si, sect), mode.reflow || turn.is_turned());
+        apply_section_grid(&mut ctx, &mut pb, sect);
         let start = if si == 0 { SectionStart::NextPage } else { sect.start };
         let sec = Sec { si, sect, start, tops };
-        begin_section_state(&mut ctx, &mut pb, &sec, totals, mode.web);
         if mode.web && si > 0 {
             // one long page
         } else if pb.pages.is_empty() || start != SectionStart::Continuous || turn != prev_turn {

@@ -173,7 +173,9 @@ fn handle_page_pointer(app: &mut WordApp, pointer: PagePointer<'_>) {
         return;
     }
     if pressed {
-        handle_primary_press(app, &pointer, mods, hf_zone, hf_enter);
+        if handle_primary_press(app, &pointer, mods, hf_zone, hf_enter) {
+            return;
+        }
     } else if app.canvas.dragging
         && ui.input(|i| i.pointer.primary_down())
         && let Some((from, last)) = app.canvas.column_drag
@@ -227,13 +229,14 @@ fn handle_page_pointer(app: &mut WordApp, pointer: PagePointer<'_>) {
     show_hover_link(app, &pointer);
 }
 
+/// A press. `true` when it was handled and the pointer is done (no hover tooltip this frame).
 fn handle_primary_press(
     app: &mut WordApp,
     pointer: &PagePointer<'_>,
     mods: egui::Modifiers,
     hf_zone: Option<(Option<StoryRef>, bool)>,
     hf_enter: bool,
-) {
+) -> bool {
     let PagePointer { ui, layout, p, page, x, y, story, .. } = *pointer;
     let now = ui.input(|i| i.time);
     let (delay, dist) = ui.ctx().options(|o| (o.input_options.max_double_click_delay, o.input_options.max_click_dist));
@@ -267,14 +270,14 @@ fn handle_primary_press(
             }
             app.session.page_hint = page;
         }
-        return;
+        return true;
     }
     // A press in the header/footer area from the body leaves the caret where it is, as in
     // Word (#2103): moving it to the nearest body text scrolled the view there, away from the
     // footer the double-click was aiming at.
     if hf_switch && !mods.shift && hf_zone.is_some() && story == StoryRef::Body && app.session.sel.focus.story == StoryRef::Body {
         app.canvas.column_drag = None;
-        return;
+        return true;
     }
     if !mods.shift
         && let Some((at, inner)) = layout.equation_hit(page, x, y, story)
@@ -282,7 +285,7 @@ fn handle_primary_press(
         app.session.sel = wordcraft_engine::Selection::caret(at);
         let _ = app.run("equation.edit", json!({"pos": serde_json::to_value(&inner).unwrap_or_default()}));
         app.session.page_hint = page;
-        return;
+        return true;
     }
     if app.session.math.is_some() {
         let _ = app.run("equation.exit", json!({}));
@@ -322,9 +325,9 @@ fn handle_primary_press(
         };
         app.canvas.unit_drag = Some(UnitDrag { unit, clicks, start, end, last: line });
         app.canvas.dragging = true;
-        return;
+        return true;
     }
-    let Some(pos) = layout.hit(page, x, y, story) else { return };
+    let Some(pos) = layout.hit(page, x, y, story) else { return true };
     // Ctrl/⌘+click follows a hyperlink.
     if mods.command
         && let Some(link) = link_under(app, layout, page, x, y, &pos)
@@ -339,7 +342,7 @@ fn handle_primary_press(
         } else {
             app.status(tl!("Only web (http, https) and email (mailto) links can be followed"));
         }
-        return;
+        return true;
     }
     let pj = serde_json::to_value(&pos).unwrap_or_default();
     // Alt+drag selects a column (block) of text.
@@ -348,7 +351,7 @@ fn handle_primary_press(
         app.session.page_hint = page;
         app.canvas.column_drag = Some(((page, x, y), (page, x, y)));
         app.canvas.dragging = true;
-        return;
+        return true;
     }
     app.canvas.column_drag = None;
     let _ = app.run("caret.set", json!({"pos": pj, "extend": mods.shift}));
@@ -369,6 +372,7 @@ fn handle_primary_press(
     app.session.page_hint = page;
     app.canvas.dragging = true;
     // Format painter applies on mouse up
+    false
 }
 
 fn pointer_story(app: &WordApp, layout: &DocLayout, page: usize, x: f32, y: f32, story: StoryRef) -> StoryRef {

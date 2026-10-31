@@ -186,7 +186,7 @@ pub fn suggest_in(d: &AffixDict, word: &str, max: usize) -> Vec<String> {
     add_replacement_suggestions(&mut col, &input, d.rep());
     add_split_suggestions(&mut col, &input);
     add_keyboard_suggestions(&mut col, &chars, d.key());
-    add_typing_suggestions(&mut col, &chars, d.try_chars());
+    add_typing_suggestions(&mut col, &chars, (n, d.try_chars()));
     // 6. Further off: scan the stems that start like the word.
     if col.count_within(COST_MISTYPE) < max {
         scan(&mut col, &chars);
@@ -280,19 +280,21 @@ fn add_keyboard_suggestions(col: &mut Collector, chars: &[char], key_rows: &str)
     }
 }
 
-fn add_typing_suggestions(col: &mut Collector, chars: &[char], try_chars: &str) {
+/// One-letter edits, bounded by the word's letter count as typed (never past the lowercased text).
+fn add_typing_suggestions(col: &mut Collector, chars: &[char], (n, try_chars): (usize, &str)) {
+    let n = n.min(chars.len());
     let mut letters: Vec<char> = try_chars.chars().filter(|character| character.is_lowercase()).take(128).collect();
     letters.sort_unstable();
     letters.dedup();
     let word = |candidate: &[char]| candidate.iter().collect::<String>();
-    add_swap_suggestions(col, chars, &word);
-    add_drop_suggestions(col, chars, &word);
-    add_insert_suggestions(col, chars, &letters, &word);
-    add_mistype_suggestions(col, chars, &letters, &word);
+    add_swap_suggestions(col, chars, n, &word);
+    add_drop_suggestions(col, chars, n, &word);
+    add_insert_suggestions(col, chars, (n, &letters), &word);
+    add_mistype_suggestions(col, chars, (n, &letters), &word);
 }
 
-fn add_swap_suggestions(col: &mut Collector, chars: &[char], word: &impl Fn(&[char]) -> String) {
-    for index in 0..chars.len().saturating_sub(1) {
+fn add_swap_suggestions(col: &mut Collector, chars: &[char], n: usize, word: &impl Fn(&[char]) -> String) {
+    for index in 0..n.saturating_sub(1) {
         if chars.get(index) != chars.get(index + 1) {
             let mut candidate = chars.to_vec();
             candidate.swap(index, index + 1);
@@ -301,16 +303,16 @@ fn add_swap_suggestions(col: &mut Collector, chars: &[char], word: &impl Fn(&[ch
     }
 }
 
-fn add_drop_suggestions(col: &mut Collector, chars: &[char], word: &impl Fn(&[char]) -> String) {
-    for index in 0..chars.len() {
+fn add_drop_suggestions(col: &mut Collector, chars: &[char], n: usize, word: &impl Fn(&[char]) -> String) {
+    for index in 0..n {
         let mut candidate = chars.to_vec();
         candidate.remove(index);
         col.offer(&word(&candidate), COST_DROP_OR_ADD);
     }
 }
 
-fn add_insert_suggestions(col: &mut Collector, chars: &[char], letters: &[char], word: &impl Fn(&[char]) -> String) {
-    for index in 0..=chars.len() {
+fn add_insert_suggestions(col: &mut Collector, chars: &[char], (n, letters): (usize, &[char]), word: &impl Fn(&[char]) -> String) {
+    for index in 0..=n {
         for &letter in letters {
             let mut candidate = chars.to_vec();
             candidate.insert(index, letter);
@@ -319,8 +321,8 @@ fn add_insert_suggestions(col: &mut Collector, chars: &[char], letters: &[char],
     }
 }
 
-fn add_mistype_suggestions(col: &mut Collector, chars: &[char], letters: &[char], word: &impl Fn(&[char]) -> String) {
-    for index in 0..chars.len() {
+fn add_mistype_suggestions(col: &mut Collector, chars: &[char], (n, letters): (usize, &[char]), word: &impl Fn(&[char]) -> String) {
+    for index in 0..n {
         for &letter in letters {
             if chars.get(index) != Some(&letter) {
                 let mut candidate = chars.to_vec();
@@ -400,6 +402,15 @@ mod tests {
         let suggestions = suggest_in(&d, "počítačz", 8);
         assert_eq!(suggestions.first().map(String::as_str), Some("počítač"), "{suggestions:?}");
         assert!(suggestions.contains(&"počítač z".into()), "{suggestions:?}");
+    }
+
+    #[test]
+    fn a_letter_that_lowercases_to_two_chars_is_still_suggested_for() {
+        // #4501 follow-up: "İx" lowercases to three chars ("i", U+0307, "x") but has two typed
+        // letters; the one-letter edits stay in range and dropping the dot still finds "ix".
+        let d = AffixDict::from_hunspell("", "1\nix\n", &[]).unwrap();
+        let suggestions = suggest_in(&d, "İx", 4);
+        assert!(suggestions.contains(&"Ix".into()), "{suggestions:?}");
     }
 
     #[test]
