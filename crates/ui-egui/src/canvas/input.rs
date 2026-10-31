@@ -173,6 +173,10 @@ fn handle_page_pointer(app: &mut WordApp, pointer: PagePointer<'_>) {
         return;
     }
     if pressed {
+        app.ui.phonetic_buffer.clear();
+        app.ui.phonetic_rendered_len = 0;
+        app.ui.phonetic_candidates.clear();
+        app.ui.phonetic_expected_caret = None;
         handle_primary_press(app, &pointer, mods, hf_zone, hf_enter);
     } else if app.canvas.dragging
         && ui.input(|i| i.pointer.primary_down())

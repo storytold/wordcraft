@@ -255,6 +255,7 @@ impl Session {
             macros: _,
             building_blocks: _,
             ui_requests: _,
+            bangla_mode: _,
             read_aloud: _,
             prefs: _,
             system_region: _,

@@ -1,6 +1,7 @@
 use super::*;
 use egui_kittest::kittest::Queryable;
 
+mod bangla;
 mod perf;
 
 fn mod_key(key: egui::Key) -> egui::Event {
