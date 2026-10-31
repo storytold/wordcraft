@@ -196,6 +196,28 @@ fn east_asian_hint_sets_ambiguous_punctuation_in_the_east_asian_font() {
 }
 
 #[test]
+fn east_asian_hint_ignores_a_missing_named_font_with_no_installed_substitute() {
+    // A Khmer-named East Asian font has named substitutes (Khmer faces); where none is installed
+    // it resolves to the generic fallback, and the hinted quotes stay in the run's font. Machines
+    // with a Khmer-capable face have nothing to check.
+    let name = "Khmer Wc Missing";
+    let fallback = wordcraft_fonts::word::resolve(wordcraft_fonts::FALLBACK_FAMILY, false, false).face;
+    if wordcraft_fonts::word::resolve(name, false, false).face != fallback {
+        return;
+    }
+    let text = "“x”";
+    let mut d = Document::from_text(text);
+    if let Some(Block::Para(p)) = d.body.first_mut().map(std::sync::Arc::make_mut) {
+        p.runs[0].props.font = Some("Source Serif 4".into());
+        p.runs[0].props.font_ea = Some(name.into());
+        p.runs[0].props.hint_ea = Some(true);
+    }
+    let g = first_para(&lay(&d));
+    let faces: Vec<_> = g.clusters.iter().map(|c| g.styles[c.style as usize].face.id()).collect();
+    assert!(faces.iter().all(|f| *f == faces[1]), "{faces:?}");
+}
+
+#[test]
 fn character_grid_places_east_asian_text_on_the_pitch() {
     let text = "日本語の文書abc";
     // The default font size plus 2.5 pt: a pitch unlike any font's advance.

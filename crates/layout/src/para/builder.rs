@@ -179,7 +179,10 @@ impl<'a> Builder<'a> {
             .filter(|f| !f.eq_ignore_ascii_case(&rc.font) && text.chars().any(|c| east_asian(c) || (rc.hint_ea && hint_ambiguous(c))))
             .and_then(|f| {
                 let r = wordcraft_fonts::word::resolve(f, rc.bold, rc.italic);
-                (!r.substituted || wordcraft_fonts::word::has_named_substitutes(f)).then_some(r.face)
+                // A named family none of whose substitutes is installed resolves to the generic
+                // fallback, which stands in for nothing: the run's own fonts are used instead.
+                let fallback = || wordcraft_fonts::word::resolve(wordcraft_fonts::FALLBACK_FAMILY, rc.bold, rc.italic).face;
+                (!r.substituted || (wordcraft_fonts::word::has_named_substitutes(f) && r.face != fallback())).then_some(r.face)
             });
         // The levels by byte of `text`, from `lbase` on.
         let (levels, lbase): (&[u8], usize) = match dir {
