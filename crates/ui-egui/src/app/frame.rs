@@ -113,7 +113,7 @@ impl WordApp {
         }
         self.refocus_after_chrome_click(ctx);
         if let Some(url) = self.canvas.open_url.take() {
-            ctx.open_url(egui::OpenUrl::new_tab(url));
+            open_in_new_tab(ctx, url);
         }
     }
 
@@ -131,5 +131,37 @@ impl WordApp {
         self.frame_ms = now_ms() - t0;
         // Typing and formatting land here, after `logic` has reported.
         self.report_dirty();
+    }
+}
+
+/// Window features for a followed link on the web: the new page gets no `window.opener` back to
+/// WordCraft's tab and no referrer (#3733).
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+const NEW_TAB_FEATURES: &str = "noopener,noreferrer";
+
+/// Open a followed link in a new tab. On the web, eframe's `open_url` calls `window.open` without
+/// `noopener`, so a page the document links to could navigate WordCraft's tab (#3733); the
+/// desktop opens the system browser, which has no opener.
+fn open_in_new_tab(ctx: &egui::Context, url: String) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = ctx;
+        let window = js_sys::global();
+        if let Ok(open) = js_sys::Reflect::get(&window, &"open".into()) {
+            // A failed or blocked open is ignored, as eframe ignores it.
+            let _ = js_sys::Function::from(open).call3(&window, &url.into(), &"_blank".into(), &NEW_TAB_FEATURES.into());
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    ctx.open_url(egui::OpenUrl::new_tab(url));
+}
+
+#[cfg(test)]
+mod tests {
+    /// #3733: a followed link opens with no opener and no referrer.
+    #[test]
+    fn new_tab_features_cut_the_opener_and_referrer() {
+        let features: Vec<&str> = super::NEW_TAB_FEATURES.split(',').collect();
+        assert!(features.contains(&"noopener") && features.contains(&"noreferrer"), "{features:?}");
     }
 }
