@@ -1,5 +1,44 @@
 use super::*;
 
+#[test]
+fn binary_unicode_fallback_keeps_following_text() {
+    for rtf in [
+        br"{\rtf1 Before \u915\bin3 abcTail.\par}".as_slice(),
+        br"{\rtf1 Before \u915\bin3 }{\Tail.\par}",
+        br"{\rtf1\uc2 Before \u915\bin3 abc?Tail.\par}",
+        br"{\rtf1 Before \u915\bin0 Tail.\par}",
+    ] {
+        assert_eq!(texts(&parse(rtf).unwrap()), ["Normal:Before ΓTail."], "{rtf:?}");
+    }
+}
+
+#[test]
+fn binary_unicode_fallback_keeps_destination_suffixes() {
+    let rtf = br#"{\rtf1{\info{\title A\u233\bin1 ?Z}}{\*\bkmkstart mark\u915\bin1 ?Z}{\field{\*\fldinst{HYPERLINK "https://example.test/caf\u233\bin1 ?Z"}}{\fldrslt{Link}}}\par}"#;
+    let d = import(rtf).unwrap();
+    assert_eq!(d.core.title, "AéZ");
+    assert_eq!(d.bookmarks().iter().map(|(name, _)| name.as_str()).collect::<Vec<_>>(), ["markΓZ"]);
+    let f = parse(rtf).unwrap();
+    let FBlock::Para(p) = &f.blocks[0] else { panic!() };
+    assert!(p.inlines.iter().any(|i| matches!(i, Inline::Text(_, fmt) if fmt.link.as_deref() == Some("https://example.test/caféZ"))));
+}
+
+#[test]
+fn binary_unicode_fallback_preserves_other_binary_processing() {
+    for rtf in [
+        br"{\rtf1\uc2 Before \u915\bin3 abc\bin2 deTail.\par}".as_slice(),
+        br"{\rtf1 Before \bin3 }{\\u915?Tail.\par}",
+        br"{\rtf1\uc0 Before \u915\bin3 abcTail.\par}",
+        br"{\rtf1 Before {\u915\bin3 abc}Tail.\par}",
+    ] {
+        assert_eq!(texts(&parse(rtf).unwrap()), ["Normal:Before ΓTail."], "{rtf:?}");
+    }
+    assert_eq!(texts(&parse(br"{\rtf1 Before \u915\bin999 abc").unwrap()), ["Normal:Before Γ"]);
+    let f = parse(br"{\rtf1{\fonttbl{\f0\fnil Caf\u233\bin1 ? Sans;}}\f0 Text.\par}").unwrap();
+    let FBlock::Para(p) = &f.blocks[0] else { panic!() };
+    assert!(p.inlines.iter().any(|i| matches!(i, Inline::Text(_, fmt) if fmt.font.as_deref() == Some("Café Sans"))));
+}
+
 fn texts(f: &Flow) -> Vec<String> {
     f.blocks
         .iter()

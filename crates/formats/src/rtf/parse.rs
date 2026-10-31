@@ -93,6 +93,9 @@ fn parse_full(bytes: &[u8]) -> Result<Parsed, String> {
                     }
                     i = k;
                     if word == "bin" {
+                        // The control word and its entire payload are one Unicode fallback
+                        // character (RTF 1.9.1, Unicode RTF), not the text that follows them.
+                        r.skip_chars = r.skip_chars.saturating_sub(1);
                         let n = param.unwrap_or(0).max(0) as usize;
                         let end = i.saturating_add(n).min(bytes.len());
                         if r.st.dest == Dest::Pict
