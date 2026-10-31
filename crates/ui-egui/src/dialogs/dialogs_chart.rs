@@ -358,12 +358,21 @@ pub fn data_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ChartDataForm) -> bool {
 /// which no two places share.
 fn grid_headers(texts: &[String], blank: &str, numbered: &str) -> Vec<String> {
     let numbered_all = |names: &[String]| names.iter().enumerate().map(|(i, n)| format!("{n} ({numbered} {})", i + 1)).collect::<Vec<_>>();
-    let repeats = |names: &[String], name: &String| names.iter().filter(|n| *n == name).count() > 1;
     let base: Vec<String> =
         texts.iter().enumerate().map(|(i, t)| if t.trim().is_empty() { format!("{blank} {}", i + 1) } else { t.trim().to_string() }).collect();
-    let names: Vec<String> =
-        base.iter().enumerate().map(|(i, n)| if repeats(&base, n) { format!("{n} ({numbered} {})", i + 1) } else { n.clone() }).collect();
-    if names.iter().any(|n| repeats(&names, n)) { numbered_all(&base) } else { names }
+    // Counted once, not compared pair by pair: a chart has up to MAX_POINTS categories, and this
+    // runs every frame.
+    let mut counts = std::collections::HashMap::with_capacity(base.len());
+    for name in &base {
+        *counts.entry(name.as_str()).or_insert(0usize) += 1;
+    }
+    let names: Vec<String> = base
+        .iter()
+        .enumerate()
+        .map(|(i, n)| if counts.get(n.as_str()).is_some_and(|c| *c > 1) { format!("{n} ({numbered} {})", i + 1) } else { n.clone() })
+        .collect();
+    let mut seen = std::collections::HashSet::with_capacity(names.len());
+    if names.iter().any(|n| !seen.insert(n.as_str())) { numbered_all(&base) } else { names }
 }
 
 /// A numeric chart-data cell. `RIGHT_TOP` preserves the old deprecated
