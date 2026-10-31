@@ -1,0 +1,9 @@
+#!/bin/sh
+# The AppImage's entry point. `WordCraft.AppImage --cli ARGS` runs the bundled wordcraft-cli
+# (`--cli mcp` is the MCP server AI apps start); anything else starts WordCraft.
+HERE="$(dirname "$(readlink -f "$0")")"
+if [ "${1-}" = "--cli" ]; then
+  shift
+  exec "$HERE/usr/bin/wordcraft-cli" "$@"
+fi
+exec "$HERE/usr/bin/wordcraft" "$@"

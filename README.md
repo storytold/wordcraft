@@ -164,6 +164,9 @@ wordcraft --control 7981 &                                     # or drive the ru
 claude mcp add wordcraft-app -- wordcraft-cli mcp --connect 127.0.0.1:7981
 ```
 
+File › Options › Agents shows the server command for your install (AppImage, Flatpak, Windows),
+ready to copy; see [docs/mcp.md](docs/mcp.md#connecting-an-ai-app).
+
 Tools include `list_commands`, `execute`, `batch`, `type_text`, `select_text`, `inspect_document`,
 `render_page`, `save_document`, and, with a running app, `screenshot`, `click` and `key`. Agents
 can check their work through `inspect_document` without screenshots. See [docs/mcp.md](docs/mcp.md)
@@ -277,7 +280,7 @@ adapter. The log file records the choice (lines starting with
 
 | Format | x86_64 | aarch64 (ARM64) | Notes |
 |---|---|---|---|
-| AppImage | `wordcraft-<ver>-linux-x86_64.AppImage` | `wordcraft-<ver>-linux-aarch64.AppImage` | Runs anywhere; updates itself with [AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate) (`.zsync` files) |
+| AppImage | `wordcraft-<ver>-linux-x86_64.AppImage` | `wordcraft-<ver>-linux-aarch64.AppImage` | Runs anywhere; updates itself with [AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate) (`.zsync` files); `--cli` runs the bundled `wordcraft-cli` (`--cli mcp` for AI apps) |
 | Flatpak | `wordcraft-<ver>-linux-x86_64.flatpak` | `wordcraft-<ver>-linux-aarch64.flatpak` | Sandboxed; `flatpak install --user <file>` |
 | Debian/Ubuntu | `wordcraft-<ver>-linux-x86_64.deb` | `wordcraft-<ver>-linux-aarch64.deb` | |
 | Fedora/RHEL/openSUSE | `wordcraft-<ver>-linux-x86_64.rpm` | `wordcraft-<ver>-linux-aarch64.rpm` | |

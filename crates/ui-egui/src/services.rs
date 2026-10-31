@@ -92,6 +92,11 @@ pub struct Services {
     /// used while File › Options names none. File › New lists personal templates from it and Save
     /// as Word Template starts in it. `None` (web) hides personal templates.
     pub templates_dir: Option<std::path::PathBuf>,
+    /// Desktop: the program and arguments that start this installation's MCP server (the
+    /// wordcraft-cli next to the app with `mcp`, the AppImage unpacked with `--cli mcp`, `flatpak
+    /// run` for a Flatpak), which File › Options › Agents offers to AI apps. `None` when the app has
+    /// no command-line tool beside it (macOS) and on the web.
+    pub mcp_command: Option<Vec<String>>,
 }
 
 /// Files delivered asynchronously.
