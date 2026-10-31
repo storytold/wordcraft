@@ -110,11 +110,25 @@ pub fn parse(bytes: &[u8]) -> Result<Flow, String> {
 
 /// [`parse`], with the last section's properties (the others are on the paragraphs that end them).
 fn parse_full(bytes: &[u8]) -> Result<(Flow, SectionProps), String> {
-    parse_tracked(bytes).map(|(f, last, ..)| (f, last))
+    parse_tracked(bytes).map(|p| (p.flow, p.last))
 }
 
-/// [`parse_full`], plus whether change tracking is on (`None`: the document has no tracked changes).
-fn parse_tracked(bytes: &[u8]) -> Result<(Flow, SectionProps, Option<bool>, Option<String>, page_parts::Parts), String> {
+/// What [`parse_tracked`] reads besides the flow.
+struct Parsed {
+    flow: Flow,
+    /// The last section's properties.
+    last: SectionProps,
+    /// Whether change tracking is on (`None`: the document has no tracked changes).
+    track: Option<bool>,
+    /// The document's default font.
+    font: Option<String>,
+    /// The document's default paragraph spacing.
+    spacing: model::Spacing,
+    parts: page_parts::Parts,
+}
+
+/// [`parse_full`], plus what the document holds outside the flow.
+fn parse_tracked(bytes: &[u8]) -> Result<Parsed, String> {
     let mut z = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| format!("ODT: not a valid package ({e})"))?;
     if let Some(mt) = read_entry(&mut z, "mimetype") {
         let mt = String::from_utf8_lossy(&mt);
@@ -154,17 +168,20 @@ fn parse_tracked(bytes: &[u8]) -> Result<(Flow, SectionProps, Option<bool>, Opti
         blocks.push(FBlock::Para(Para::default()));
     }
     let track = body.track;
-    Ok((Flow { blocks, meta }, last, track, styles.doc_font(), parts))
+    Ok(Parsed { flow: Flow { blocks, meta }, last, track, font: styles.doc_font(), spacing: styles.doc_spacing(), parts })
 }
 
 /// Parse an `.odt` package into a document.
 pub fn import(bytes: &[u8]) -> Result<Document, String> {
     model::begin_import();
-    let (flow, last, track, font, parts) = parse_tracked(bytes)?;
+    let Parsed { flow, last, track, font, spacing, parts } = parse_tracked(bytes)?;
     let mut doc = model::to_doc(&flow);
     if font.is_some() {
         doc.styles.default_chr.font = font;
     }
+    let d = &mut doc.styles.default_para;
+    (d.space_before, d.space_after, d.line_spacing) = (spacing.before, spacing.after, spacing.line);
+    (d.indent_left, d.indent_right, d.indent_first) = (spacing.left, spacing.right, spacing.first);
     doc.last_section = last;
     page_parts::add(&mut doc, parts);
     if let Some(t) = track {

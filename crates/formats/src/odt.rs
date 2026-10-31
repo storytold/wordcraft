@@ -56,3 +56,6 @@ mod page_parts;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod tests_more;

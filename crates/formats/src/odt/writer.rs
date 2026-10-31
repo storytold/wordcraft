@@ -1,4 +1,5 @@
 use super::{Align, FBlock, FTable, Fmt, HashMap, Inline, Kind, Para, RevMark, Rgb, VAlign, mime_of, model};
+use wordcraft_doc::props::LineSpacing;
 
 // ---------------------------------------------------------------------------------------------
 // Export
@@ -115,6 +116,30 @@ fn text_props(f: &Fmt) -> String {
     p
 }
 
+/// `style:paragraph-properties` attributes for the spacing, indents and line spacing `sp` sets
+/// (ODF 1.3 §20.204–209, §20.225, §20.317).
+pub(super) fn spacing_props(sp: &model::Spacing) -> String {
+    let mut p = String::new();
+    for (k, v) in [
+        ("fo:margin-top", sp.before),
+        ("fo:margin-bottom", sp.after),
+        ("fo:margin-left", sp.left),
+        ("fo:margin-right", sp.right),
+        ("fo:text-indent", sp.first),
+    ] {
+        if let Some(v) = v.filter(|v| v.is_finite()) {
+            p.push_str(&format!(" {k}=\"{}\"", pt(v)));
+        }
+    }
+    match sp.line {
+        Some(LineSpacing::Multiple(m)) if m.is_finite() => p.push_str(&format!(" fo:line-height=\"{}%\"", (m * 100.0).round().max(1.0))),
+        Some(LineSpacing::Exactly(h)) if h.is_finite() => p.push_str(&format!(" fo:line-height=\"{}\"", pt(h))),
+        Some(LineSpacing::AtLeast(h)) if h.is_finite() => p.push_str(&format!(" style:line-height-at-least=\"{}\"", pt(h))),
+        _ => {}
+    }
+    p
+}
+
 fn parent_style(k: Kind) -> &'static str {
     match k {
         Kind::Heading(1) => "Heading_20_1",
@@ -171,6 +196,7 @@ impl Writer {
         if p.keep_next {
             props.push_str(" fo:keep-with-next=\"always\"");
         }
+        props.push_str(&spacing_props(&p.spacing));
         if p.kind == Kind::Rule {
             props.push_str(" fo:border-bottom=\"0.75pt solid #a0a0a0\" fo:padding-bottom=\"1pt\"");
         }

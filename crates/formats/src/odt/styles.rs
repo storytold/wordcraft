@@ -1,5 +1,7 @@
 use super::xml::{Attrs, Ev, events, get, length, local};
 use super::{Align, Arc, Columns, Fmt, HashMap, Kind, Rgb, VAlign, model};
+use crate::model::Spacing;
+use wordcraft_doc::props::LineSpacing;
 
 // ---------------------------------------------------------------------------------------------
 // Import
@@ -66,6 +68,73 @@ struct StyleInfo {
     page_number: Option<Option<u32>>,
     /// `style:columns` of a section style.
     columns: Option<Columns>,
+    /// Margins, first-line indent and line spacing of `style:paragraph-properties`.
+    spacing: Spacing,
+}
+
+/// Paragraph spacing, indents and line height of a `style:paragraph-properties` element (ODF 1.3
+/// §20.204–209, §20.225, §20.317–318) over `sp`. Percentages of the parent's margins aren't
+/// followed (left as they were); spacing is clamped to 0..=1584 pt, indents to ±1584 pt.
+fn paragraph_spacing(a: &Attrs, sp: &mut Spacing) {
+    let len = |k: &str| get(a, k).and_then(length);
+    let space = |k: &str| len(k).map(|v| v.clamp(0.0, MAX_LEN));
+    let indent = |k: &str| len(k).map(|v| v.clamp(-MAX_LEN, MAX_LEN));
+    if let Some(v) = get(a, "fo:margin").and_then(length) {
+        sp.before = Some(v.clamp(0.0, MAX_LEN));
+        sp.after = sp.before;
+        sp.left = Some(v.clamp(-MAX_LEN, MAX_LEN));
+        sp.right = sp.left;
+    }
+    sp.before = space("fo:margin-top").or(sp.before);
+    sp.after = space("fo:margin-bottom").or(sp.after);
+    sp.left = indent("fo:margin-left").or(sp.left);
+    sp.right = indent("fo:margin-right").or(sp.right);
+    sp.first = indent("fo:text-indent").or(sp.first);
+    if let Some(v) = get(a, "fo:line-height").map(str::trim) {
+        if v.eq_ignore_ascii_case("normal") {
+            sp.line = Some(LineSpacing::Multiple(1.0));
+        } else if let Some(pc) = v.strip_suffix('%').and_then(|n| n.trim().parse::<f32>().ok()).filter(|n| n.is_finite() && *n > 0.0) {
+            // Word's range: a sixteenth of a line up to 132 lines.
+            sp.line = Some(LineSpacing::Multiple((pc / 100.0).clamp(0.06, 132.0)));
+        } else if let Some(h) = length(v).filter(|h| *h > 0.0) {
+            sp.line = Some(LineSpacing::Exactly(h.clamp(0.7, MAX_LEN)));
+        }
+    }
+    if let Some(h) = len("style:line-height-at-least").filter(|h| *h >= 0.0) {
+        sp.line = Some(LineSpacing::AtLeast(h.clamp(0.7, MAX_LEN)));
+    }
+    // Leading (extra space between lines) has no WordCraft mode: as a multiple of a 12 pt line.
+    if let Some(l) = len("style:line-spacing").filter(|l| *l >= 0.0) {
+        sp.line = Some(LineSpacing::Multiple(((LEADING_LINE + l.min(MAX_LEN)) / LEADING_LINE).clamp(0.06, 132.0)));
+    }
+}
+
+/// Largest spacing or indent read, in points (22 inches, Word's page limit).
+const MAX_LEN: f32 = 1584.0;
+
+/// Height of the single line `style:line-spacing` leading is added to (12 pt text).
+const LEADING_LINE: f32 = 14.0;
+
+/// `over` laid on `base`: what `over` sets wins.
+fn overlay_spacing(base: &mut Spacing, over: &Spacing) {
+    base.before = over.before.or(base.before);
+    base.after = over.after.or(base.after);
+    base.line = over.line.or(base.line);
+    base.left = over.left.or(base.left);
+    base.right = over.right.or(base.right);
+    base.first = over.first.or(base.first);
+}
+
+/// How a paragraph style looks ([`Styles::para`]).
+#[derive(Clone, Debug, Default)]
+pub(super) struct ParaLook {
+    pub(super) kind: Kind,
+    pub(super) align: Option<Align>,
+    pub(super) page_break: bool,
+    pub(super) rule: bool,
+    pub(super) keep_next: bool,
+    pub(super) fmt: Fmt,
+    pub(super) spacing: Spacing,
 }
 
 /// Columns of a `style:columns` element (ODF 1.3 §17.12): count and gap, clamped as the RTF and
@@ -138,12 +207,40 @@ fn text_properties(a: &Attrs, style: &mut StyleInfo) {
     }
 }
 
+/// A paragraph style's `style:paragraph-properties` (ODF 1.3 §17.6) into `s`.
+fn paragraph_properties(a: &Attrs, s: &mut StyleInfo) {
+    s.align = match get(a, "fo:text-align").map(|v| v.trim().to_ascii_lowercase()).as_deref() {
+        Some("center") => Some(Align::Center),
+        Some("end") | Some("right") => Some(Align::Right),
+        Some("justify") => Some(Align::Justify),
+        Some("start") | Some("left") => Some(Align::Left),
+        _ => s.align,
+    };
+    if get(a, "fo:break-before").is_some_and(|b| b.trim().eq_ignore_ascii_case("page")) {
+        s.page_break = true;
+    }
+    match get(a, "fo:keep-with-next") {
+        Some("always") => s.keep_next = Some(true),
+        Some("auto") => s.keep_next = Some(false),
+        _ => {}
+    }
+    if let Some(v) = get(a, "style:page-number") {
+        s.page_number = Some(v.trim().parse::<u32>().ok().map(|n| n.min(32_767)));
+    }
+    if get(a, "fo:border-bottom").is_some_and(|b| !b.trim().eq_ignore_ascii_case("none")) {
+        s.border_bottom = true;
+    }
+    paragraph_spacing(a, &mut s.spacing);
+}
+
 #[derive(Default)]
 pub(super) struct Styles {
     map: HashMap<String, StyleInfo>,
     pub(super) lists: HashMap<String, Vec<bool>>,
     /// Font of `style:default-style` for paragraphs (the document default, ODF 1.3 §16.4).
     default_font: Option<String>,
+    /// Spacing of `style:default-style` for paragraphs.
+    default_spacing: Spacing,
 }
 
 impl Styles {
@@ -172,6 +269,7 @@ impl Styles {
                 "text-properties" if in_default && cur.is_none() => {
                     self.default_font = default_font(&a);
                 }
+                "paragraph-properties" if in_default && cur.is_none() => paragraph_spacing(&a, &mut self.default_spacing),
                 "text-properties" => {
                     if let Some((_, s)) = &mut cur {
                         text_properties(&a, s);
@@ -208,27 +306,7 @@ impl Styles {
                 }
                 "paragraph-properties" => {
                     if let Some((_, s)) = &mut cur {
-                        s.align = match get(&a, "fo:text-align").map(|v| v.trim().to_ascii_lowercase()).as_deref() {
-                            Some("center") => Some(Align::Center),
-                            Some("end") | Some("right") => Some(Align::Right),
-                            Some("justify") => Some(Align::Justify),
-                            Some("start") | Some("left") => Some(Align::Left),
-                            _ => s.align,
-                        };
-                        if get(&a, "fo:break-before").is_some_and(|b| b.trim().eq_ignore_ascii_case("page")) {
-                            s.page_break = true;
-                        }
-                        match get(&a, "fo:keep-with-next") {
-                            Some("always") => s.keep_next = Some(true),
-                            Some("auto") => s.keep_next = Some(false),
-                            _ => {}
-                        }
-                        if let Some(v) = get(&a, "style:page-number") {
-                            s.page_number = Some(v.trim().parse::<u32>().ok().map(|n| n.min(32_767)));
-                        }
-                        if get(&a, "fo:border-bottom").is_some_and(|b| !b.trim().eq_ignore_ascii_case("none")) {
-                            s.border_bottom = true;
-                        }
+                        paragraph_properties(&a, s);
                     }
                 }
                 "columns" if q.starts_with("style:") => {
@@ -279,6 +357,24 @@ impl Styles {
     /// The document's default font: the Standard paragraph style's, else the default style's.
     pub(super) fn doc_font(&self) -> Option<String> {
         self.map.get("Standard").filter(|s| !s.auto).and_then(|s| s.fmt.font.as_deref().map(str::to_string)).or_else(|| self.default_font.clone())
+    }
+
+    /// The document's default paragraph spacing: the default style's, with the Standard
+    /// paragraph style's over it, on ODF's initial values (no margins, single lines).
+    pub(super) fn doc_spacing(&self) -> Spacing {
+        let mut sp = Spacing {
+            before: Some(0.0),
+            after: Some(0.0),
+            line: Some(LineSpacing::Multiple(1.0)),
+            left: Some(0.0),
+            right: Some(0.0),
+            first: Some(0.0),
+        };
+        overlay_spacing(&mut sp, &self.default_spacing);
+        if let Some(s) = self.map.get("Standard").filter(|s| !s.auto) {
+            overlay_spacing(&mut sp, &s.spacing);
+        }
+        sp
     }
 
     fn chain<'a>(&'a self, name: &'a str) -> Vec<(&'a str, &'a StyleInfo)> {
@@ -340,7 +436,7 @@ impl Styles {
     /// the style that gives the paragraph its kind and that style's ancestors: their formatting
     /// is the kind's own look (a heading's size and colour), not direct formatting. `Standard`,
     /// the default paragraph style, holds document defaults and is left out too.
-    pub(super) fn para(&self, name: &str) -> (Kind, Option<Align>, bool, bool, bool, Fmt) {
+    pub(super) fn para(&self, name: &str) -> ParaLook {
         let chain = self.chain(name);
         let mut kind = Kind::Normal;
         let mut kind_at = chain.len();
@@ -372,11 +468,13 @@ impl Styles {
         let pb = chain.iter().take_while(|(_, s)| s.auto).any(|(_, s)| s.page_break);
         let rule = chain.iter().any(|(_, s)| s.border_bottom);
         let mut f = Fmt::default();
+        let mut spacing = Spacing::default();
         for (_, s) in chain.iter().take(kind_at).rev().filter(|(n, s)| s.auto || *n != "Standard") {
             s.fmt.apply(&mut f);
+            overlay_spacing(&mut spacing, &s.spacing);
         }
         // Like the text formatting, the kind style's own `fo:keep-with-next` (a heading's) is the kind's look, not direct formatting.
         let keep_next = chain.iter().take(kind_at).find_map(|(_, s)| s.keep_next).unwrap_or(false);
-        (kind, align, pb, rule, keep_next, f)
+        ParaLook { kind, align, page_break: pb, rule, keep_next, fmt: f, spacing }
     }
 }

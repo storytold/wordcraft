@@ -123,6 +123,11 @@ fn media_ext(key: &str, data: &[u8]) -> String {
     }
 }
 
+/// The spacing and indents a paragraph sets itself (its style's are not included).
+fn direct_spacing(p: &wordcraft_doc::props::ParaProps) -> Spacing {
+    Spacing { before: p.space_before, after: p.space_after, line: p.line_spacing, left: p.indent_left, right: p.indent_right, first: p.indent_first }
+}
+
 /// A document paragraph as flow paragraphs: a page break character inside the text ends the
 /// paragraph, and the text after it starts a new one that carries `page_break`.
 pub fn flow_paras(doc: &Document, p: &Paragraph) -> Vec<Para> {
@@ -142,7 +147,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, tracked: bool) -> Vec<Para> {
         page_break: p.props.page_break_before.unwrap_or(false),
         keep_next: p.props.keep_next.unwrap_or(false),
         inlines: Vec::new(),
-        spacing: Spacing::default(),
+        spacing: direct_spacing(&p.props),
         borders,
         section: None,
         mark_ins: None,
@@ -173,7 +178,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, tracked: bool) -> Vec<Para> {
                         page_break: true,
                         keep_next: p.props.keep_next.unwrap_or(false),
                         inlines: Vec::new(),
-                        spacing: Spacing::default(),
+                        spacing: direct_spacing(&p.props),
                         borders,
                         section: None,
                         mark_ins: None,
