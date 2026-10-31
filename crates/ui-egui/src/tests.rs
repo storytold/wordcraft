@@ -3737,6 +3737,42 @@ fn clicks_on_ribbon_and_status_bar_chrome_keep_typing_in_the_document() {
     assert_eq!(body_text(h.state()), before, "typing went into the font size box, not the page");
 }
 
+/// Screen readers read the status bar on request, as in Word (NVDA+End): they find it by its role
+/// or at the window's bottom-left corner, then read the names of its controls. The bottom panel is
+/// that status bar, and the page, word count and language are its controls (the containers between
+/// them are transparent to screen readers).
+#[test]
+fn screen_readers_find_the_status_bar_and_its_controls() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{By, NodeT, Queryable};
+    // The window is the area the app draws in (inside the harness's margin).
+    let window = std::rc::Rc::new(std::cell::Cell::new(egui::Rect::NOTHING));
+    let seen = window.clone();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        move |ui, app: &mut WordApp| {
+            seen.set(ui.max_rect());
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        typed(),
+    );
+    h.run_steps(4);
+    let bar = h.get(By::new().predicate(|n| n.role() == Role::Status));
+    assert_eq!(bar.accesskit_node().label().as_deref(), Some("Status Bar"));
+    let corner = window.get().left_bottom() + egui::vec2(0.5, -0.5);
+    assert!(bar.rect().contains(corner), "the window's bottom-left corner {corner:?} is on the status bar: {:?}", bar.rect());
+    let lang = crate::ribbon::caret_language(h.state());
+    for label in ["Page 1 of 1", "4 words", lang.as_str()] {
+        let item = bar.get_by_role_and_label(Role::Button, label);
+        let mut up = item.parent();
+        while let Some(node) = up.filter(|n| n.accesskit_node().id() != bar.accesskit_node().id()) {
+            assert_eq!(node.accesskit_node().role(), Role::GenericContainer, "{label} is one of the status bar's controls");
+            up = node.parent();
+        }
+    }
+}
+
 /// #2068: fonts applied from the font box or the mini toolbar (`format.font`) and from the
 /// Font dialog (`format.set`) join Recently Used Fonts, most recent first, once each, ten at
 /// most; the list is kept in `ui.json` and read back tidied.
