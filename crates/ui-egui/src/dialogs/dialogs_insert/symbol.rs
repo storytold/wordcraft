@@ -305,15 +305,16 @@ pub(super) fn symbol_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SymbolForm) -> b
                     pf(ui, name)
                 }
             };
-            if let Some(v) = crate::widgets::combo(ui, "symbol_font", 190.0, &shown, &items, Some(&preview)) {
+            // The field and its arrow are named "Font" for screen readers (its hover hint too).
+            if let Some(v) = crate::widgets::combo_hint(ui, "symbol_font", 190.0, &shown, &items, Some(&preview), tl!("Font")) {
                 f.font = if v == normal || v.trim().is_empty() { String::new() } else { v.trim().to_string() };
                 f.load();
             }
             ui.add_space(8.0);
-            ui.label(tl!("Subset:"));
+            let subset_label = ui.label(tl!("Subset:"));
             let current = f.selected.and_then(subset_of).unwrap_or("");
             let mut chosen = None;
-            craft_ui::ComboBox::from_id_salt("symbol_subset").selected_text(current).width(170.0).show_ui(ui, |ui| {
+            let subset = craft_ui::ComboBox::from_id_salt("symbol_subset").selected_text(current).width(170.0).show_ui(ui, |ui| {
                 for (name, a, b) in SUBSETS {
                     let i = f.chars.partition_point(|c| (*c as u32) < *a);
                     if f.chars.get(i).is_some_and(|c| (*c as u32) <= *b) && ui.selectable_label(*name == current, *name).clicked() {
@@ -321,6 +322,7 @@ pub(super) fn symbol_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SymbolForm) -> b
                     }
                 }
             });
+            subset.response.labelled_by(subset_label.id);
             if let Some(s) = chosen {
                 f.jump_to(s);
             }
@@ -390,7 +392,10 @@ pub(super) fn symbol_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SymbolForm) -> b
             ui.label(egui::RichText::new(name).font(semibold(12.0)));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(tl!("from Unicode (hex)"));
-                let resp = ui.add(egui::TextEdit::singleline(&mut f.code).desired_width(70.0).font(egui::TextStyle::Monospace));
+                // Drawn right to left: the label on its left comes after it, so it is named here.
+                let resp = ui
+                    .add(egui::TextEdit::singleline(&mut f.code).desired_width(70.0).font(egui::TextStyle::Monospace))
+                    .accessible_name(tl!("Character code:"));
                 if resp.changed() {
                     let code = f.code.clone();
                     f.select_code(&code);

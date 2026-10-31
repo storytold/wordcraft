@@ -370,9 +370,9 @@ pub(super) fn columns_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ColumnsForm) ->
     });
     ui.add_space(6.0);
     ui.horizontal(|ui| {
-        ui.label(tl!("Number of columns:"));
+        let label = ui.label(tl!("Number of columns:"));
         let mut n = f.count;
-        if ui.add(egui::DragValue::new(&mut n).range(1..=12)).changed() {
+        if ui.add(egui::DragValue::new(&mut n).range(1..=12)).labelled_by(label.id).changed() {
             f.set_count(n);
         }
         ui.add_space(16.0);
@@ -431,7 +431,7 @@ pub(super) fn columns_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ColumnsForm) ->
     });
     ui.add_space(4.0);
     ui.horizontal(|ui| {
-        ui.label(tl!("Apply to:"));
+        let label = ui.label(tl!("Apply to:"));
         let mut options = vec![("document", "Whole document"), ("forward", "This point forward")];
         if f.sections {
             options.insert(0, ("section", "This section"));
@@ -440,11 +440,16 @@ pub(super) fn columns_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ColumnsForm) ->
             options.push(("selection", "Selected text"));
         }
         let shown = options.iter().find(|(k, _)| *k == f.apply).map(|(_, l)| *l).unwrap_or("This section");
-        craft_ui::ComboBox::from_id_salt("columns_apply").selected_text(tl!(shown)).width(180.0).show_ui(ui, |ui| {
-            for (k, l) in &options {
-                ui.selectable_value(&mut f.apply, (*k).to_string(), tl!(l));
-            }
-        });
+        craft_ui::ComboBox::from_id_salt("columns_apply")
+            .selected_text(tl!(shown))
+            .width(180.0)
+            .show_ui(ui, |ui| {
+                for (k, l) in &options {
+                    ui.selectable_value(&mut f.apply, (*k).to_string(), tl!(l));
+                }
+            })
+            .response
+            .labelled_by(label.id);
     });
     let (ok, cancel) = buttons(ui, "OK", "Cancel", true);
     if ok {
