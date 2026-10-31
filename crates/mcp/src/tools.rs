@@ -131,7 +131,7 @@ pub fn tool_definitions() -> Value {
         tool(
             "inspect_document",
             "Inspect document",
-            "Structure: blocks with text, styles, formatting runs, lists, tables, sections, parts, selection, pages.",
+            "Structure: blocks with text, styles, formatting runs, lists, tables, sections, parts (headers, footers, notes: their text and fields; a field with perPage true, such as PAGE, NUMPAGES or STYLEREF, shows its own value on each page, so its stored result is not what every page shows: render_page shows it; fieldsTruncated means a part has more than the 200 fields listed), selection, pages.",
             with_doc(obj(json!({}), &[])),
             true
         ),

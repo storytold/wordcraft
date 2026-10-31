@@ -540,6 +540,45 @@ fn info(s: &mut Session, _: &Value) -> CmdResult {
     }))
 }
 
+/// Most fields [`story_fields`] lists for one story, and how deep it goes into nested tables.
+const MAX_STORY_FIELDS: usize = 200;
+const MAX_STORY_DEPTH: usize = 8;
+
+/// The fields of a story's paragraphs, tables included: the code, the result stored with it, and
+/// whether the page shows a value of its own (#4467). A header or footer's text carries the
+/// stored result of a page field (`1` for a PAGE, the page count when it was inserted for a
+/// NUMPAGES); each page shows its own, as the layout draws it. A STYLEREF counts too: the layout
+/// looks its text up from the page it lands on. False when a limit cut the list short.
+fn story_fields(blocks: &wordcraft_doc::Blocks, depth: usize, out: &mut Vec<Value>) -> bool {
+    if depth > MAX_STORY_DEPTH {
+        return false;
+    }
+    for b in blocks {
+        match &**b {
+            Block::Para(p) => {
+                for o in &p.objects {
+                    if let wordcraft_doc::para::InlineObject::Field { instr, result, .. } = o {
+                        if out.len() >= MAX_STORY_FIELDS {
+                            return false;
+                        }
+                        let name = wordcraft_layout::fields::field_name(instr);
+                        let per_page = matches!(name.as_str(), "PAGE" | "NUMPAGES" | "SECTIONPAGES" | "SECTION" | "PAGEREF" | "STYLEREF");
+                        out.push(json!({"code": instr.trim(), "result": result, "perPage": per_page}));
+                    }
+                }
+            }
+            Block::Table(t) => {
+                for cell in t.rows.iter().flat_map(|r| &r.cells) {
+                    if !story_fields(&cell.blocks, depth + 1, out) {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+    true
+}
+
 /// Structure for agents: blocks with text and formatting summary, selection, stats.
 fn inspect(s: &mut Session, v: &Value) -> CmdResult {
     let with_text = p::bool(v, "text").unwrap_or(true);
@@ -591,8 +630,23 @@ fn inspect(s: &mut Session, v: &Value) -> CmdResult {
         }
     }
     let l = s.layout();
-    let parts: Vec<Value> =
-        s.doc.parts.iter().map(|(id, p)| json!({"id": id, "kind": p.kind, "text": s.doc.plain_text(StoryRef::Part(*id))})).collect();
+    let parts: Vec<Value> = s
+        .doc
+        .parts
+        .iter()
+        .map(|(id, p)| {
+            let mut o = json!({"id": id, "kind": p.kind, "text": s.doc.plain_text(StoryRef::Part(*id))});
+            let mut fields = Vec::new();
+            let complete = story_fields(&p.blocks, 0, &mut fields);
+            if !fields.is_empty() {
+                o["fields"] = json!(fields);
+            }
+            if !complete {
+                o["fieldsTruncated"] = json!(true);
+            }
+            o
+        })
+        .collect();
     Ok(json!({
         "blocks": blocks,
         "parts": parts,
