@@ -7127,7 +7127,9 @@ checksum = "9440ea3e5aeabb0ac63af70daf835274065238cdd0cec83418f417eae38bacee"
 name = "xtask"
 version = "0.13.2"
 dependencies = [
+ "flate2",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]
