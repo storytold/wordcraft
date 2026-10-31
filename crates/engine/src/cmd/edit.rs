@@ -776,7 +776,7 @@ fn goto(s: &mut Session, v: &Value) -> CmdResult {
     });
     if let Some(pg) = rel.or_else(|| p::u64(v, "page")) {
         let l = s.layout();
-        let idx = (pg.max(1) as usize - 1).min(l.pages.len().saturating_sub(1));
+        let idx = crate::p::page_index(pg).min(l.pages.len().saturating_sub(1));
         let target = l.pages.get(idx).and_then(|page| {
             page.items.iter().find_map(|it| match it {
                 wordcraft_layout::Placed::Lines { story, path, para, l0, .. } if *story == StoryRef::Body => {
