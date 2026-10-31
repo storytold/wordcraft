@@ -166,10 +166,36 @@ fn enter(s: &mut Session, undo_step: bool) -> Result<(), CmdError> {
         crate::cmd::tools::autocorrect_word(s, true)?;
         s.autocap.take_if(|c| c.depth == u64::MAX);
         at = s.sel.focus.clone();
+        if let Some(styled) = super::autoformat::defined_style(s, &at) {
+            return define_style(s, &at, styled, undo_step);
+        }
     }
     let new = split_para(s, &at)?;
     s.sel = Selection::caret(new);
     s.goal_x = None;
+    Ok(())
+}
+
+/// Enter after a paragraph that looks like a heading, with Define styles based on your formatting
+/// on: the paragraph at `at` takes its heading style (`styled`), then Enter splits it, so the next
+/// paragraph takes the style's next style. With `undo_step` the plain Enter is its own undo step
+/// before the style change, as with the other AutoFormats.
+fn define_style(s: &mut Session, at: &Pos, styled: wordcraft_doc::Paragraph, undo_step: bool) -> Result<(), CmdError> {
+    let plain = if undo_step {
+        let (doc, sel) = (s.doc.clone(), s.sel.clone());
+        let new = split_para(s, at)?;
+        s.sel = Selection::caret(new);
+        Some((std::mem::replace(&mut s.doc, doc), std::mem::replace(&mut s.sel, sel)))
+    } else {
+        None
+    };
+    super::autoformat::apply_defined_style(s, at, styled)?;
+    let new = split_para(s, at)?;
+    s.sel = Selection::caret(new);
+    s.goal_x = None;
+    if let Some((plain_doc, plain_sel)) = plain {
+        s.push_undo("AutoFormat", plain_doc, plain_sel);
+    }
     Ok(())
 }
 

@@ -249,6 +249,23 @@ ideographic space (`autocorrect_finds_the_word_after_a_wide_space`):
   tracked formatting change, and a line holding a tracked deletion stays as it is
   (`a_tracked_heading_autoformat_can_be_rejected`); a heading style locked by formatting
   restrictions is not applied (`a_locked_heading_style_is_not_applied_as_you_type`).
+- Define styles based on your formatting (`tools.autocorrect {"defineStyles": true}`, off by
+  default): Word's AutoFormat as you type help describes the option as giving manually
+  formatted text the built-in style it is formatted like
+  (https://support.microsoft.com/en-us/word/autoformat-as-you-type), and Word 2003's help gives
+  it as off by default. The rest is WordCraft's own rule: Enter at the end of a Normal paragraph
+  of the main text whose characters are all formatted alike and look exactly like Heading 1, 2
+  or 3 (font, size, color and the other character formatting, alignment, indents and spacing)
+  gives it that heading style, removes the direct formatting the style now gives, and leaves its
+  look unchanged; the next paragraph takes the style's next style
+  (`enter_after_text_formatted_like_a_heading_gives_it_the_heading_style`). No new style is
+  created and no style is changed. A paragraph in a list, of another style, with a link, a tab
+  or an object, with mixed formatting, that looks like no heading or like two, Enter inside the
+  text, and formatting limited to the document's styles leave it as typed
+  (`text_that_does_not_look_exactly_like_a_heading_stays_as_typed`). ⌘Z right after brings back
+  the Normal style and the direct formatting, and the Enter stays
+  (`undo_right_after_define_styles_keeps_the_enter`); with Track Changes on, the change is a
+  tracked formatting change (`a_tracked_define_styles_change_can_be_rejected`).
 - `+---+------+` Enter (plus signs around runs of hyphens, the whole paragraph) → a one-row
   table across the text width, each column as wide as its share of the hyphens; the caret goes
   into the first cell. ⌘Z right after brings the characters back. More than 63 columns stay
