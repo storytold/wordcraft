@@ -57,9 +57,9 @@ impl EditSnapshot {
 pub(super) type RunSnapshot = (Document, Selection, Vec<Arc<Undo>>, Vec<Arc<Undo>>, bool, u64, Option<ColumnBlock>);
 
 /// A layout made and what it was made for: (revision, width, read height, view, read line
-/// spacing, layout, proofing, outline, (deletions left out, deletions marked Hidden, body
-/// deletions in balloons), numeral display, the word being typed, (hidden text shown, field
-/// codes shown)).
+/// spacing, layout, (proofing, Harper's results generation), outline, (deletions left out,
+/// deletions marked Hidden, body deletions in balloons), numeral display, the word being typed,
+/// (hidden text shown, field codes shown)).
 pub(super) type LayoutEntry = (
     u64,
     f32,
@@ -67,7 +67,7 @@ pub(super) type LayoutEntry = (
     ViewMode,
     Option<u32>,
     Arc<DocLayout>,
-    bool,
+    (bool, u64),
     Option<wordcraft_layout::outline::OutlineView>,
     (bool, wordcraft_layout::HideDeleted, bool),
     NumeralMode,

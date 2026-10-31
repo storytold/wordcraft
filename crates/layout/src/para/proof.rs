@@ -33,13 +33,15 @@ pub(super) fn lang_at(runs: &[ProofRun], off: usize) -> wordcraft_proof::ProofLa
 /// ([`wordcraft_proof::check_text_with`]: what spelling skips, and grammar only with `grammar`),
 /// and none touching a run left unchecked.
 ///
-/// `list_item` (see [`is_list_item`]) turns off the capital-first-word grammar rule.
+/// `list_item` (see [`is_list_item`]) turns off the capital-first-word grammar rule; `harper` adds
+/// Harper's English grammar issues once its background thread has checked the text.
 pub fn paragraph_issues(
     p: &Paragraph,
     runs: &[ProofRun],
     spelling: &wordcraft_proof::Options,
     grammar: bool,
     list_item: bool,
+    harper: bool,
 ) -> Vec<wordcraft_proof::Issue> {
     if p.text.trim().is_empty() || p.text.len() > 100_000 {
         return Vec::new();
@@ -47,7 +49,7 @@ pub fn paragraph_issues(
     let text = proof_text(p);
     let spans: Vec<(std::ops::Range<usize>, wordcraft_proof::ProofLang)> = runs.iter().map(|r| (r.range.clone(), r.lang)).collect();
     let skip = |a: usize, b: usize| runs.iter().any(|r| r.skip && r.range.start < b && a < r.range.end);
-    wordcraft_proof::check_text_with(&text, &spans, spelling, grammar, list_item).into_iter().filter(|i| !skip(i.start, i.end)).collect()
+    wordcraft_proof::check_text_with(&text, &spans, spelling, grammar, list_item, harper).into_iter().filter(|i| !skip(i.start, i.end)).collect()
 }
 
 /// Whether the paragraph is a list item: its own numbering, or its style's, names a list (not 0).
@@ -63,7 +65,7 @@ pub(super) fn proof_issues(
     typing: Option<(usize, usize)>,
     list_item: bool,
 ) -> Vec<(usize, usize, bool)> {
-    paragraph_issues(p, runs, &opts.spelling, opts.grammar, list_item)
+    paragraph_issues(p, runs, &opts.spelling, opts.grammar, list_item, opts.harper)
         .into_iter()
         .map(|i| (i.start, i.end, i.kind == wordcraft_proof::IssueKind::Grammar))
         .filter(|&(a, b, grammar)| grammar || !typing.is_some_and(|(s, e)| a < e && s < b))

@@ -189,6 +189,9 @@ pub struct Session {
     /// browser's locale on the web); headless sessions keep `en-US`. A region the user chose
     /// ([`Prefs::region`]) wins: read it with [`Session::region`].
     pub system_region: wordcraft_geom::Region,
+    /// Harper's English grammar checks may run on a background thread (#799); the desktop app
+    /// turns this on, headless sessions leave it off. [`Prefs::harper_grammar`] chooses.
+    pub harper: bool,
     /// Custom keyboard shortcuts (`tools.customizeKeyboard`); the front end saves them too.
     pub keymap: crate::KeyMap,
     /// Custom ribbon and Quick Access Toolbar (`tools.customizeRibbon`); the front end saves it too.

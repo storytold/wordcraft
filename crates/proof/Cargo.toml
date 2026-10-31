@@ -13,5 +13,9 @@ log = { workspace = true }
 miniz_oxide = "0.9"
 unicode-normalization = "0.1"
 
+# Harper's English grammar checks (#799) run on a background thread, which the web build lacks.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+harper-core = { version = "3.0.0", default-features = false }
+
 [dev-dependencies]
 proptest = { workspace = true }

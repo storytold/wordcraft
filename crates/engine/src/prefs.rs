@@ -46,6 +46,9 @@ pub struct Prefs {
     pub marks: wordcraft_layout::display::FormattingMarks,
     /// Mark grammar errors as you type (with Check spelling as you type on).
     pub mark_grammar: bool,
+    /// Add Harper's English grammar checks to the marks (#799), where the front end runs Harper
+    /// ([`crate::Session::harper`]).
+    pub harper_grammar: bool,
     /// Check spelling as you type (File › Options › Proofing). The live value is
     /// `ViewState::proofing`; this is the copy that is saved and restored (#1792).
     pub check_spelling: bool,
@@ -73,6 +76,7 @@ impl Default for Prefs {
             user_templates_folder: None,
             marks: Default::default(),
             mark_grammar: true,
+            harper_grammar: true,
             check_spelling: true,
             ignore_uppercase: true,
             ignore_numbers: true,

@@ -227,11 +227,14 @@ pub struct ProofOptions {
     /// Mark grammar errors as you type.
     pub grammar: bool,
     pub spelling: wordcraft_proof::Options,
+    /// Add Harper's English grammar marks as its background thread checks each paragraph
+    /// ([`wordcraft_proof::harper`], #799). Off unless the front end runs Harper.
+    pub harper: bool,
 }
 
 impl Default for ProofOptions {
     fn default() -> Self {
-        ProofOptions { grammar: true, spelling: wordcraft_proof::Options::default() }
+        ProofOptions { grammar: true, spelling: wordcraft_proof::Options::default(), harper: false }
     }
 }
 
@@ -308,6 +311,9 @@ pub struct DocLayout {
 /// Lay out the whole document.
 pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> DocLayout {
     let t0 = now_ms();
+    if opts.proofing && opts.proof.grammar && opts.proof.harper {
+        wordcraft_proof::harper::begin_pass();
+    }
     // Page totals shown in the body (`NUMPAGES`, `SECTIONPAGES`) are known only after
     // paginating: lay out again with the totals found until they hold (bounded). Footnotes
     // numbered again on each page likewise settle over a few more passes.
