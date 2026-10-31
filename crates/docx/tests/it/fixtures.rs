@@ -3,7 +3,7 @@
 use std::io::Write;
 
 use wordcraft_doc::fill::Fill;
-use wordcraft_doc::para::{Anchor, FloatAlign, NoteKind, ShapeKind, Wrap};
+use wordcraft_doc::para::{Anchor, Float, FloatAlign, NoteKind, ShapeKind, Wrap};
 use wordcraft_doc::props::{Align, Border, BorderStyle, Rgb, TextColor, Underline, VMerge};
 use wordcraft_doc::{Block, Document, InlineObject, Paragraph, RevisionKind};
 
@@ -3964,6 +3964,11 @@ fn turned_pictures_keep_words_effect_extent() {
             assert!((got - want).abs() <= 12_700, "{degrees}°: {saved}");
         }
     }
+    // An angle the file rounds to 45° is measured against the exchanged frame, as 45° is.
+    let pad = |rot: f32| Float { rot, ..Float::default() }.effect_spin_pad(254.0, 337.0);
+    let (near, at) = (pad(44.999_996), pad(45.0));
+    assert!((near.0 - at.0).abs() < 0.01 && (near.1 - at.1).abs() < 0.01, "{near:?} against {at:?}");
+    assert!((pad(44.99).0 - at.0).abs() > 1.0);
 }
 
 /// The math namespace, declared on the math element itself (the fixture root doesn't).
