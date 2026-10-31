@@ -106,8 +106,9 @@ pub static LANGUAGES: [LangInfo; 27] = [
     // Italian; `it-IT`, `it-CH` and `it-*` resolve here. New documents are written in
     // Italian: `wordcraft-proof` checks it (`ProofLang::It`).
     LangInfo { code: "it", prefer_hans: false, editing_lang: Some("it-IT") },
-    // Hungarian; `hu`, `hu-HU` and `hu_HU.UTF-8` resolve here.
-    LangInfo { code: "hu", prefer_hans: false, editing_lang: None },
+    // Hungarian; `hu`, `hu-HU` and `hu_HU.UTF-8` resolve here. New documents are written in
+    // Hungarian: `wordcraft-proof` checks it (`ProofLang::Hu`) when `hu_HU` is installed.
+    LangInfo { code: "hu", prefer_hans: false, editing_lang: Some("hu-HU") },
     // French; `fr`, `fr-FR`, `fr_CA` and other regions resolve here.
     LangInfo { code: "fr", prefer_hans: false, editing_lang: None },
     // Bulgarian; `bg`, `bg-BG` and `bg_BG.UTF-8` resolve here.
