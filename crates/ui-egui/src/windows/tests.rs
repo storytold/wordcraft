@@ -21,6 +21,8 @@ thread_local! {
     static UPLOADS: RefCell<usize> = const { RefCell::new(0) };
     /// Each viewport's last input-method output.
     static IME: RefCell<HashMap<ViewportId, Option<egui::output::IMEOutput>>> = RefCell::new(HashMap::new());
+    /// Where the app asked each viewport's window to open.
+    static PLACES: RefCell<HashMap<ViewportId, egui::Pos2>> = RefCell::new(HashMap::new());
 }
 
 fn input(id: ViewportId) -> RawInput {
@@ -53,6 +55,9 @@ fn backend() -> egui::Context {
     ctx.set_embed_viewports(false);
     egui::Context::set_immediate_viewport_renderer(|ctx, viewport| {
         let id = viewport.ids.this;
+        if let Some(place) = viewport.builder.position {
+            PLACES.with(|p| p.borrow_mut().insert(id, place));
+        }
         let mut raw = input(id);
         raw.viewports.entry(id).or_default().parent = Some(viewport.ids.parent);
         let mut cb = viewport.viewport_ui_cb;
@@ -107,6 +112,29 @@ fn text(a: &WordApp) -> String {
 
 fn prompt(a: &WordApp) -> Option<&'static str> {
     a.dialog.as_ref().map(|d| d.name())
+}
+
+/// A window that opens beside a maximized one, whose corner Windows puts a few pixels outside its
+/// monitor, stays on that monitor. It used to open on an imaginary monitor up and to the left, off
+/// screen, and quitting saved the place, so the next start opened there as well.
+#[test]
+fn a_window_opened_beside_a_maximized_one_stays_on_its_monitor() {
+    let ctx = backend();
+    let monitors = Box::new(|| vec![egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(3840.0, 1600.0))]);
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services { monitors: Some(monitors), ..Default::default() });
+    INFOS.with(|i| {
+        let mut i = i.borrow_mut();
+        let root = i.entry(ViewportId::ROOT).or_default();
+        root.outer_rect = Some(egui::Rect::from_min_size(egui::pos2(-8.0, -8.0), egui::vec2(3856.0, 1576.0)));
+        root.inner_rect = Some(egui::Rect::from_min_size(egui::pos2(0.0, 23.0), egui::vec2(3840.0, 1545.0)));
+        root.monitor_size = Some(egui::vec2(3840.0, 1600.0));
+    });
+    frames(&ctx, &mut a, 3);
+    a.run("file.new", json!({})).unwrap();
+    frames(&ctx, &mut a, 3);
+    let child = a.active_viewport();
+    assert_ne!(child, ViewportId::ROOT);
+    assert_eq!(PLACES.with(|p| p.borrow().get(&child).copied()), Some(egui::pos2(20.0, 20.0)));
 }
 
 /// New opens the document in a second native window, focused, with a fresh interface; the

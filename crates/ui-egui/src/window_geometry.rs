@@ -66,6 +66,16 @@ const MAX_COORD: f32 = 32768.0;
 /// which the monitor size (all egui reports) includes.
 const SYSTEM_BAR: egui::Vec2 = egui::vec2(48.0, 48.0);
 
+/// The monitor showing most of `window`. By area, not by a corner: on Windows a maximized window's
+/// corner is a few pixels outside its monitor.
+pub fn monitor_of(window: egui::Rect, monitors: &[egui::Rect]) -> Option<egui::Rect> {
+    let shown = |m: &egui::Rect| {
+        let overlap = window.intersect(*m);
+        if overlap.width() > 0.0 && overlap.height() > 0.0 { overlap.area() } else { 0.0 }
+    };
+    monitors.iter().copied().filter(|m| shown(m) > 0.0).max_by(|a, b| shown(a).total_cmp(&shown(b)))
+}
+
 /// The window as it was when the app last closed.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -394,6 +404,19 @@ mod tests {
         assert_eq!(WindowGeometry { position: None, ..saved() }.rescue_position(&raw(on, egui::vec2(1600.0, 900.0))), None);
         assert_eq!(WindowGeometry { maximized: true, ..saved() }.rescue_position(&raw(on, egui::vec2(1600.0, 900.0))), None);
         assert_eq!(saved().rescue_position(&RawWindowState::default()), None);
+    }
+
+    /// The monitor a window is on goes by area: a maximized window's corner is outside it.
+    #[test]
+    fn a_window_belongs_to_the_monitor_showing_most_of_it() {
+        let screen = |x, y, w, h| egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h));
+        let left = screen(-1920.0, 0.0, 1920.0, 1080.0);
+        let main = screen(0.0, 0.0, 3840.0, 1600.0);
+        assert_eq!(monitor_of(screen(-8.0, -8.0, 3856.0, 1576.0), &[left, main]), Some(main), "maximized on the main one");
+        assert_eq!(monitor_of(screen(-1928.0, -8.0, 1936.0, 1056.0), &[left, main]), Some(left), "maximized on the left one");
+        assert_eq!(monitor_of(screen(-100.0, 10.0, 1000.0, 500.0), &[left, main]), Some(main), "across both, mostly the main one");
+        assert_eq!(monitor_of(screen(-9000.0, 0.0, 1000.0, 500.0), &[left, main]), None, "on neither");
+        assert_eq!(monitor_of(screen(0.0, 0.0, 100.0, 100.0), &[]), None);
     }
 
     /// The rescue waits for a known monitor size, then runs once (moving when needed) and clears the
