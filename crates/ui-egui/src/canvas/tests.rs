@@ -1,3 +1,4 @@
+use super::rulers::{INDENT_BOX_DROP, INDENT_HEAD_H, INDENT_STEP, indent_marker_rects, indent_shapes, snapped_indent};
 use super::*;
 use crate::table_resize::tests::{H, cell, screen, steps, table_window};
 
@@ -4840,4 +4841,95 @@ fn the_view_key_changes_when_a_drag_takes_an_object_off_the_page() {
     let hidden = view_key(&app, false, Some(&object));
     assert_ne!(hidden, view_key(&app, false, None), "the page without the dragged object is rendered again");
     assert_eq!(hidden, view_key(&app, false, Some(&object)), "the same drag keeps the key: no re-render every frame");
+}
+
+/// #4284: a plain indent drag snaps to 4.5 pt, while Alt or both mouse buttons move it freely
+/// to the pointer; either gesture is one undo step.
+fn drag_left_indent(alt: bool, both: bool) -> (f32, usize) {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("A line of text.")), Default::default());
+    a.run("view.ruler", json!({"value": true})).unwrap();
+    a.run("caret.docStart", json!({})).unwrap();
+    let mut h: H = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(0.25).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(6);
+    let area = h.state().canvas.canvas_rect.expect("the canvas is shown");
+    let body = h.state_mut().session.layout().pages[0].body;
+    let start = pos2(screen(&mut h, body.x, 0.0).x, area.min.y - 3.0);
+    let end = pos2(screen(&mut h, body.x + 100.0, 0.0).x, area.min.y - 3.0);
+    let before = h.state().session.undo_depth();
+    h.event(egui::Event::PointerMoved(start));
+    h.run_steps(2);
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers { alt, ..Default::default() }));
+    h.event(egui::Event::PointerButton { pos: start, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+    h.step();
+    if both {
+        h.event(egui::Event::PointerButton { pos: start, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+        h.step();
+    }
+    for k in 1..=5 {
+        h.event(egui::Event::PointerMoved(start + (end - start) * (k as f32 / 5.0)));
+        h.step();
+    }
+    h.event(egui::Event::PointerButton { pos: end, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+    if both {
+        h.event(egui::Event::PointerButton { pos: end, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+    }
+    h.run_steps(3);
+    let focus = h.state().session.sel.focus.clone();
+    let v = h.state().session.doc.para_at(&focus).and_then(|p| p.props.indent_left).unwrap_or(0.0);
+    (v, h.state().session.undo_depth() - before)
+}
+
+#[test]
+fn alt_or_both_buttons_move_an_indent_marker_freely_and_the_gesture_is_one_undo_step() {
+    let (snapped, undo) = drag_left_indent(false, false);
+    assert_eq!(snapped, 99.0, "a plain drag snaps to 4.5 pt");
+    assert_eq!(undo, 1, "one undo step");
+
+    let (alt, undo) = drag_left_indent(true, false);
+    assert!((alt - 100.0).abs() < 1.0, "Alt follows the pointer ({alt})");
+    assert_ne!(alt, (alt / INDENT_STEP).round() * INDENT_STEP, "Alt is not snapped");
+    assert_eq!(undo, 1, "one undo step");
+
+    let (both, undo) = drag_left_indent(false, true);
+    assert!((both - 100.0).abs() < 1.0, "both buttons follow the pointer ({both})");
+    assert_ne!(both, (both / INDENT_STEP).round() * INDENT_STEP, "both buttons are not snapped");
+    assert_eq!(undo, 1, "one undo step");
+}
+
+/// #4284: the markers draw Word's L (hanging), J (first-line) and T (aligned) silhouettes, and
+/// the hit rects are the bounds of what is drawn.
+#[test]
+fn the_indent_markers_draw_word_shapes_and_their_rects_match() {
+    let bar = Rect::from_min_max(pos2(0.0, 100.0), pos2(600.0, 115.0));
+    let t = indent_shapes(200.0, 200.0, 500.0, bar);
+    assert_eq!(t.join[0].x, t.join[1].x, "aligned: a vertical stem");
+    assert_eq!(t.join[1], t.join[2], "aligned: no arm");
+    let l = indent_shapes(150.0, 200.0, 500.0, bar);
+    assert!(l.join[0].x == 150.0 && l.join[1].x == 150.0, "hanging: the stem drops at the first line");
+    assert_eq!(l.join[2], pos2(200.0, l.join[1].y), "hanging: an arm runs right to the left indent");
+    let j = indent_shapes(250.0, 200.0, 500.0, bar);
+    assert!(j.join[0].x == 250.0 && j.join[1].x == 250.0, "first-line: the stem drops at the first line");
+    assert_eq!(j.join[2], pos2(200.0, j.join[1].y), "first-line: an arm runs back to the left indent");
+
+    let rects = indent_marker_rects(250.0, 200.0, 500.0, bar);
+    let inside = |r: Rect, points: &[Pos2]| points.iter().all(|p| r.contains(*p));
+    assert!(inside(rects[0], &j.first), "the first-line rect covers its triangle");
+    assert!(inside(rects[1], &j.hanging), "the left rect covers the hanging triangle");
+    assert!(rects[1].contains(j.left_box.min) && rects[1].contains(j.left_box.max), "and its box");
+    assert!(inside(rects[2], &j.right), "the right rect covers its triangle");
+    assert_eq!((rects[0].min.y, rects[0].max.y), (bar.min.y, bar.min.y + INDENT_HEAD_H));
+    assert_eq!(rects[1].max.y, bar.max.y + INDENT_BOX_DROP);
+    assert!(inside(rects[1], &j.join), "the left rect covers the joining arm too");
+
+    assert_eq!(snapped_indent(100.0, false), 99.0);
+    assert_eq!(snapped_indent(100.0, true), 100.0, "free keeps the pointer's value");
+    assert_eq!(snapped_indent(108.0, false) - 100.0, 8.0, "the first-line offset snaps on the absolute ruler, not the offset");
+    assert_eq!(snapped_indent(f32::NAN, true), 0.0, "junk lands at the start");
 }
