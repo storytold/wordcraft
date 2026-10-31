@@ -923,7 +923,9 @@ impl SystemSpeaker {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-/// The Read Aloud worker loop; it owns the system speaker for one reading.
+/// The Read Aloud worker loop; it owns the system speaker for one reading. It drops the speaker
+/// before clearing `running`, so a new reading cannot start a second host while this one is still
+/// shutting down.
 fn worker(shared: &(Mutex<Shared>, Condvar), backend: Backend) {
     let (m, cv) = shared;
     let mut speaker = SystemSpeaker::new();
@@ -935,6 +937,7 @@ fn worker(shared: &(Mutex<Shared>, Condvar), backend: Backend) {
                 s = cv.wait(s).unwrap_or_else(PoisonError::into_inner);
             }
             if s.state == State::Stopped {
+                drop(speaker);
                 s.running = false;
                 return;
             }
@@ -942,6 +945,7 @@ fn worker(shared: &(Mutex<Shared>, Condvar), backend: Backend) {
                 Some(u) => (u.text.clone(), u.lang.clone(), s.generation, s.rate, s.readings),
                 None => {
                     s.state = State::Stopped;
+                    drop(speaker);
                     s.running = false;
                     return;
                 }
@@ -976,6 +980,7 @@ fn worker(shared: &(Mutex<Shared>, Condvar), backend: Backend) {
                 s.index += 1;
                 if s.index >= s.queue.len() {
                     s.state = State::Stopped;
+                    drop(speaker);
                     s.running = false;
                     return;
                 }
@@ -988,6 +993,7 @@ fn worker(shared: &(Mutex<Shared>, Condvar), backend: Backend) {
             Spoken::Failed(e) => {
                 s.state = State::Stopped;
                 s.error = Some(e);
+                drop(speaker);
                 s.running = false;
                 return;
             }
