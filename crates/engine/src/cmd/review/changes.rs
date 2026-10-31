@@ -91,13 +91,14 @@ fn resolve_cell(s: &mut Session, story: StoryRef, path: &wordcraft_doc::Path, ac
     Ok(true)
 }
 
-/// Accept or reject the style-definition changes when the selection starts at the start of the
-/// document (where they sit, as in Word). Returns whether there were any.
-fn resolve_styles_sel(s: &mut Session, a: &Pos, accept: bool) -> Result<bool, CmdError> {
-    if a != &s.doc.start_of(StoryRef::Body) {
+/// Accept or reject style-definition changes at their collapsed navigation anchor, or when the
+/// whole body is selected. A text range that merely begins at the document start must not resolve
+/// unrelated style revisions.
+fn resolve_styles_sel(s: &mut Session, selected: bool, accept: bool) -> Result<bool, CmdError> {
+    if !selected {
         return Ok(false);
     }
-    if !s.doc.styles.styles.iter().any(|st| st.fmt_change.is_some()) {
+    if !s.doc.styles.styles.iter().any(|st| st.para_change.is_some() || st.chr_change.is_some()) {
         return Ok(false);
     }
     for st in &mut s.doc.styles.styles {
@@ -277,6 +278,9 @@ fn revision_span(p: &Paragraph, off: usize) -> Option<std::ops::Range<usize>> {
 
 fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
     let (a, b) = s.sel.ordered();
+    // Capture this before text revisions are resolved: accepting a deletion or rejecting an
+    // insertion can change the body's end position.
+    let style_selection = a == s.doc.start_of(StoryRef::Body) && (a == b || b == s.doc.end_of(StoryRef::Body));
     // A caret right before a tracked paragraph mark (and no tracked text around it): that mark.
     let mut caret_mark = None;
     // A caret in a paragraph whose own formatting changed (and no tracked text around it).
@@ -299,7 +303,7 @@ fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
                 (a.clone(), a)
             }
             None => {
-                if resolve_styles_sel(s, &a, accept)? {
+                if resolve_styles_sel(s, style_selection, accept)? {
                     return sel_result(s);
                 }
                 if resolve_cell(s, a.story, &a.path, accept)? {
@@ -326,7 +330,7 @@ fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
         }
     }
     crate::cmd::moves::resolve(s, &moves, accept)?;
-    resolve_styles_sel(s, &a, accept)?;
+    resolve_styles_sel(s, style_selection, accept)?;
     s.sel = Selection::caret(a);
     s.clamp_selection();
     if next { select_next_unresolved(s) } else { sel_result(s) }
@@ -338,8 +342,8 @@ fn changes(s: &Session) -> Vec<Change> {
     // Style-definition changes sit at the start of the document, as Word shows them.
     let start = s.doc.start_of(StoryRef::Body);
     for st in &s.doc.styles.styles {
-        if let Some(ch) = &st.fmt_change {
-            out.push(Change::format(start.clone(), start.clone(), ch.rev, fmt_revisions::style_diff(st)));
+        for (rev, props) in fmt_revisions::style_diffs(st) {
+            out.push(Change::format(start.clone(), start.clone(), rev, props));
         }
     }
     for path in s.doc.para_paths(StoryRef::Body) {
@@ -413,7 +417,7 @@ pub fn has_format_changes(doc: &wordcraft_doc::Document) -> bool {
     if doc.last_section.fmt_change.is_some() {
         return true;
     }
-    if doc.styles.styles.iter().any(|st| st.fmt_change.is_some()) {
+    if doc.styles.styles.iter().any(|st| st.para_change.is_some() || st.chr_change.is_some()) {
         return true;
     }
     doc.para_paths(StoryRef::Body).iter().any(|path| {

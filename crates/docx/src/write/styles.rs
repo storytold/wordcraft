@@ -59,8 +59,8 @@ pub(super) fn styles_xml(wr: &mut Writer<'_>) -> Vec<u8> {
     w.into_bytes()
 }
 
-/// One `w:style` element: the definition, and after it the change of the definition
-/// (`w:stylePrChange`), the style as it was, with the revision.
+/// One `w:style` element. A tracked change of its paragraph/run properties is nested in the
+/// corresponding property element as `w:pPrChange` / `w:rPrChange`.
 fn style_xml(wr: &mut Writer<'_>, w: &mut W, st: &Style, flagged: &[StyleKind]) {
     let ty = match st.kind {
         StyleKind::Paragraph => "paragraph",
@@ -107,16 +107,7 @@ fn style_xml(wr: &mut Writer<'_>, w: &mut W, st: &Style, flagged: &[StyleKind]) 
     if st.locked {
         w.empty("w:locked", &[]);
     }
-    if !st.para.is_empty() && st.kind != StyleKind::Character {
-        w.open("w:pPr", &[]);
-        props::ppr_inner(w, &st.para, false, None);
-        w.close("w:pPr");
-    }
-    if props::has_rpr(&st.chr) && st.kind != StyleKind::Numbering {
-        w.open("w:rPr", &[]);
-        props::rpr_inner(w, &st.chr);
-        w.close("w:rPr");
-    }
+    style_property_xml(wr, w, st);
     if let Some(t) = &st.table {
         if t.borders.is_some() || t.cell_margins.is_some() || t.band_size.is_some() || t.col_band_size.is_some() {
             w.open("w:tblPr", &[]);
@@ -181,17 +172,37 @@ fn style_xml(wr: &mut Writer<'_>, w: &mut W, st: &Style, flagged: &[StyleKind]) 
             w.close("w:tblStylePr");
         }
     }
-    style_change_xml(wr, w, st, flagged);
     w.close("w:style");
 }
 
-/// A tracked change of the definition (§17.13.5.25): the style as it was, with the revision.
-fn style_change_xml(wr: &mut Writer<'_>, w: &mut W, st: &Style, flagged: &[StyleKind]) {
-    if let Some(ch) = &st.fmt_change {
-        let a = wr.change_attrs(ch.rev);
-        open_change(w, "w:stylePrChange", &a);
-        style_xml(wr, w, &ch.old, flagged);
-        w.close("w:stylePrChange");
+fn style_property_xml(wr: &mut Writer<'_>, w: &mut W, st: &Style) {
+    let para_change = st.para_change.as_deref().filter(|ch| ch.old.formatting() != st.para.formatting());
+    if (!st.para.is_empty() || para_change.is_some()) && st.kind != StyleKind::Character {
+        w.open("w:pPr", &[]);
+        props::ppr_inner(w, &st.para, false, None);
+        if let Some(ch) = para_change {
+            let a = wr.change_attrs(ch.rev);
+            open_change(w, "w:pPrChange", &a);
+            w.open("w:pPr", &[]);
+            props::ppr_inner(w, &ch.old, false, None);
+            w.close("w:pPr");
+            w.close("w:pPrChange");
+        }
+        w.close("w:pPr");
+    }
+    let run_change = st.chr_change.as_deref().filter(|ch| ch.old.formatting() != st.chr.formatting());
+    if (props::has_rpr(&st.chr) || run_change.is_some()) && st.kind != StyleKind::Numbering {
+        w.open("w:rPr", &[]);
+        props::rpr_inner(w, &st.chr);
+        if let Some(ch) = run_change {
+            let a = wr.change_attrs(ch.rev);
+            open_change(w, "w:rPrChange", &a);
+            w.open("w:rPr", &[]);
+            props::rpr_inner(w, &ch.old);
+            w.close("w:rPr");
+            w.close("w:rPrChange");
+        }
+        w.close("w:rPr");
     }
 }
 

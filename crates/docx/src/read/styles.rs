@@ -135,56 +135,49 @@ impl Reader<'_> {
                     ),
                 ..Default::default()
             };
+            let mut old_para = None;
+            let mut old_chr = None;
             if let Some(p) = s.child("w:pPr") {
                 st.para = self.pc.ppr(p).0;
+                if let Some(ch) = p.child("w:pPrChange") {
+                    let old = ch.child("w:pPr").map(|o| self.pc.ppr(o).0.formatting()).unwrap_or_default();
+                    old_para = Some((self.revision(RevisionKind::Format, ch), old));
+                }
             }
             // Word gives its built-in heading styles their outline level whether or not the file
             // writes `w:outlineLvl` (some producers leave it out): "heading 2" is level 2 in the
             // Navigation pane and the table of contents, whatever its id (#4696).
             if kind == StyleKind::Paragraph
                 && st.builtin
-                && st.para.outline_level.is_none()
                 && let Some(level) = s.child_val("w:name").and_then(builtin_heading_level)
             {
-                st.para.outline_level = Some(level);
+                if st.para.outline_level.is_none() {
+                    st.para.outline_level = Some(level);
+                }
+                if let Some((_, old)) = &mut old_para
+                    && old.outline_level.is_none()
+                {
+                    old.outline_level = Some(level);
+                }
             }
             if let Some(rp) = s.child("w:rPr") {
                 st.chr = self.pc.rpr(rp);
+                if let Some(ch) = rp.child("w:rPrChange") {
+                    let old = ch.child("w:rPr").map(|o| self.pc.rpr(o).formatting()).unwrap_or_default();
+                    old_chr = Some((self.revision(RevisionKind::Format, ch), old));
+                }
             }
             if kind == StyleKind::Table {
                 let parts = self.table_style_parts(s, &mut st);
                 st.table = (parts != TableStyleParts::default()).then_some(parts);
             }
-            // A tracked change of the style definition (§17.13.5.25): the style as it was.
-            if let Some(ch) = s.child("w:stylePrChange") {
-                let old = ch
-                    .child("w:style")
-                    .map(|o| {
-                        // The id is the enclosing style's, whatever the record says.
-                        let mut old = Style {
-                            id: id.clone(),
-                            name: o.child_val("w:name").map(ui_style_name).unwrap_or_else(|| id.clone()),
-                            kind,
-                            based_on: o.child_val("w:basedOn").filter(|v| !v.is_empty()).map(|v| self.pc.style_id(v)),
-                            next: o.child_val("w:next").filter(|v| !v.is_empty()).map(|v| self.pc.style_id(v)),
-                            linked: o.child_val("w:link").filter(|v| !v.is_empty()).map(|v| self.pc.style_id(v)),
-                            ..Default::default()
-                        };
-                        if let Some(p) = o.child("w:pPr") {
-                            old.para = self.pc.ppr(p).0;
-                        }
-                        if let Some(rp) = o.child("w:rPr") {
-                            old.chr = self.pc.rpr(rp);
-                        }
-                        // A table style's table formatting is part of what reject restores.
-                        if kind == StyleKind::Table {
-                            let parts = self.table_style_parts(o, &mut old);
-                            old.table = (parts != TableStyleParts::default()).then_some(parts);
-                        }
-                        old
-                    })
-                    .unwrap_or_default();
-                st.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, ch), old);
+            // CT_Style has no `stylePrChange`. Keep its two valid revision carriers separate: a
+            // foreign document may attribute paragraph and run changes to different authors.
+            if let Some((rev, old)) = old_para {
+                st.para_change = PropChange::boxed(rev, old);
+            }
+            if let Some((rev, old)) = old_chr {
+                st.chr_change = PropChange::boxed(rev, old);
             }
             // A style defined twice (some generators write their own Heading 1 after a
             // placeholder one) is the last definition, whole: Word drops the earlier one rather
@@ -209,6 +202,24 @@ impl Reader<'_> {
             .collect();
         for (s, n) in sheet.styles.iter_mut().zip(fixed) {
             s.para.numbering = n;
+        }
+        let old_fixed: Vec<Option<Option<wordcraft_doc::props::NumRef>>> = sheet
+            .styles
+            .iter()
+            .map(|s| {
+                s.para_change.as_ref().map(|ch| match ch.old.numbering {
+                    Some(n) if n.num == props::LEVEL_ONLY => {
+                        let base = s.based_on.as_deref().and_then(|b| props::chain_list(&sheet, b));
+                        base.map(|num| wordcraft_doc::props::NumRef { num, level: n.level })
+                    }
+                    other => other,
+                })
+            })
+            .collect();
+        for (s, n) in sheet.styles.iter_mut().zip(old_fixed) {
+            if let (Some(ch), Some(n)) = (&mut s.para_change, n) {
+                ch.old.numbering = n;
+            }
         }
         if sheet.default_para.numbering.is_some_and(|n| n.num == props::LEVEL_ONLY) {
             sheet.default_para.numbering = None;

@@ -264,7 +264,8 @@ fn styles_and_lists_round_trip() {
         locked: true,
         default: false,
         table: None,
-        fmt_change: None,
+        para_change: None,
+        chr_change: None,
     });
     d.styles.upsert(Style {
         id: "MyStyleChar".into(),
@@ -300,8 +301,8 @@ fn styles_and_lists_round_trip() {
     assert_eq!(paras(&r)[1].props.numbering, Some(NumRef { num: nums, level: 1 }));
 }
 
-/// A tracked change of a style definition (`w:stylePrChange`, #2697): the change, the style as
-/// it was and the revision survive the round trip.
+/// A tracked change of a style's paragraph/run properties (#2697): valid `w:pPrChange` and
+/// `w:rPrChange` elements carry the old properties and revision through the round trip.
 #[test]
 fn tracked_style_definition_change_round_trips() {
     let mut d = Document::new();
@@ -310,17 +311,29 @@ fn tracked_style_definition_change_round_trips() {
         id: "Mine".into(),
         name: "Mine".into(),
         kind: StyleKind::Paragraph,
+        para: ParaProps { align: Some(Align::Center), ..Default::default() },
         chr: CharProps { bold: Some(true), size: Some(14.0), ..Default::default() },
-        fmt_change: PropChange::boxed(0, Style { chr: CharProps { italic: Some(true), ..Default::default() }, ..Default::default() }),
+        para_change: PropChange::boxed(0, ParaProps { align: Some(Align::Right), ..Default::default() }),
+        chr_change: PropChange::boxed(0, CharProps { italic: Some(true), ..Default::default() }),
         ..Default::default()
     });
     d.body = vec![para_block(Paragraph::with_text("x", CharProps::default()))];
-    let r = rt(&d);
+    let bytes = wordcraft_docx::write(&d).expect("write");
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/styles.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains("<w:pPrChange") && xml.contains("<w:rPrChange"), "{xml}");
+    assert!(!xml.contains("stylePrChange"), "CT_Style has no such element: {xml}");
+    drop(zip);
+
+    let r = wordcraft_docx::read(&bytes).expect("read");
     let st = r.styles.get("Mine").expect("the style");
-    let ch = st.fmt_change.as_ref().expect("the change survives");
+    let para = st.para_change.as_ref().expect("the paragraph change survives");
+    let chr = st.chr_change.as_ref().expect("the run change survives");
+    assert_eq!((st.para.align, para.old.align), (Some(Align::Center), Some(Align::Right)));
     assert_eq!(st.chr.bold, Some(true));
-    assert_eq!((ch.old.chr.italic, ch.old.chr.bold), (Some(true), None), "the style as it was");
-    assert_eq!(r.revisions.get(ch.rev as usize).map(|x| (x.kind, x.author.as_str())), Some((RevisionKind::Format, "Ana")));
+    assert_eq!((chr.old.italic, chr.old.bold), (Some(true), None), "the style as it was");
+    assert_eq!(r.revisions.get(chr.rev as usize).map(|x| (x.kind, x.author.as_str())), Some((RevisionKind::Format, "Ana")));
 }
 
 #[test]

@@ -72,3 +72,39 @@ fn run_and_style_snap_to_grid_and_web_hidden_survive_two_saves() {
         doc = wordcraft_docx::read(&out).unwrap();
     }
 }
+
+#[test]
+fn style_paragraph_and_run_changes_keep_independent_authors() {
+    let styles = r#"
+        <w:style w:type="paragraph" w:styleId="Mine">
+          <w:name w:val="Mine"/>
+          <w:pPr><w:jc w:val="center"/><w:pPrChange w:id="1" w:author="Ana" w:date="2026-10-01T00:00:00Z"><w:pPr><w:jc w:val="right"/></w:pPr></w:pPrChange></w:pPr>
+          <w:rPr><w:b/><w:rPrChange w:id="2" w:author="Bo" w:date="2026-10-02T00:00:00Z"><w:rPr><w:i/></w:rPr></w:rPrChange></w:rPr>
+        </w:style>
+    "#;
+    let doc = wordcraft_docx::read(&docx("<w:p/>", styles)).unwrap();
+    let st = doc.styles.get("Mine").unwrap();
+    let p = st.para_change.as_ref().expect("paragraph revision");
+    let r = st.chr_change.as_ref().expect("run revision");
+    assert_eq!(doc.revisions[p.rev as usize].author, "Ana");
+    assert_eq!(doc.revisions[r.rev as usize].author, "Bo");
+
+    let out = wordcraft_docx::write(&doc).unwrap();
+    let xml = part(&out, "word/styles.xml");
+    let p_xml = xml.split("<w:pPrChange").nth(1).unwrap_or("").split("</w:pPrChange>").next().unwrap_or("");
+    let r_xml = xml.split("<w:rPrChange").nth(1).unwrap_or("").split("</w:rPrChange>").next().unwrap_or("");
+    assert!(p_xml.contains("w:author=\"Ana\"") && r_xml.contains("w:author=\"Bo\""), "{xml}");
+}
+
+#[test]
+fn old_style_paragraph_properties_get_heading_and_list_normalization() {
+    let styles = r#"
+        <w:style w:type="paragraph" w:styleId="Normal"><w:name w:val="Normal"/><w:pPr><w:numPr><w:numId w:val="7"/></w:numPr></w:pPr></w:style>
+        <w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:pPr><w:jc w:val="center"/><w:outlineLvl w:val="4"/><w:pPrChange w:id="3" w:author="Ana"><w:pPr><w:numPr><w:ilvl w:val="2"/></w:numPr></w:pPr></w:pPrChange></w:pPr></w:style>
+    "#;
+    let doc = wordcraft_docx::read(&docx("<w:p/>", styles)).unwrap();
+    let st = doc.styles.get("Heading1").unwrap();
+    let old = &st.para_change.as_ref().expect("paragraph revision").old;
+    assert_eq!((st.para.outline_level, old.outline_level), (Some(4), Some(0)));
+    assert_eq!(old.numbering.map(|n| (n.num, n.level)), Some((7, 2)), "the old list level follows the based-on style instead of leaking LEVEL_ONLY");
+}

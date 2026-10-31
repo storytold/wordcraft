@@ -46,10 +46,13 @@ pub struct Style {
     /// (`w:locked`).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub locked: bool,
-    /// A tracked change of the style definition (`w:stylePrChange`, ECMA-376 §17.13.5.25):
-    /// the style as it was before the change, and the revision that made it.
+    /// A tracked change of the style's paragraph properties (`w:pPrChange`).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub fmt_change: Option<Box<PropChange<Style>>>,
+    pub para_change: Option<Box<PropChange<ParaProps>>>,
+    /// A tracked change of the style's run properties (`w:rPrChange`). Kept separate because a
+    /// foreign DOCX can attribute the two property changes to different revisions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chr_change: Option<Box<PropChange<CharProps>>>,
     /// The default style of its kind (`w:default`), whatever its id: localized documents call
     /// the default character, table and list styles something other than the English ids.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -394,11 +397,6 @@ impl TableStyleParts {
 }
 
 impl Style {
-    /// The style definition without its tracked change record (`w:stylePrChange`).
-    pub fn formatting(&self) -> Style {
-        Style { fmt_change: None, ..self.clone() }
-    }
-
     /// Table style part `p` as this style alone sets it (the whole table's text formatting and
     /// paragraph alignment are the style's own).
     pub fn table_part(&self, p: TablePart) -> PartFormat {
