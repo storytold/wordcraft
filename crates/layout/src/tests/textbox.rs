@@ -140,6 +140,35 @@ fn missing_east_asian_faces_keep_three_rotated_columns_legible() {
     }
 }
 
+/// Each paragraph uses its own shaped line height when implicit vertical spacing is adjusted.
+#[test]
+fn rotated_fallback_spacing_tracks_each_paragraph() {
+    let mut d = Document::from_text("x");
+    let id = text_box(&mut d, 0, "", 160.0, 300.0, TextBody { vert: TextVert::Vert, ..Default::default() });
+    d.parts.get_mut(&id).unwrap().blocks = [12.0, 24.0, 36.0]
+        .into_iter()
+        .map(|size| {
+            let props = wordcraft_doc::props::CharProps {
+                font: Some("Missing East Asian Test Face".into()),
+                font_ea: Some("Missing East Asian Test Face".into()),
+                size: Some(size),
+                ..Default::default()
+            };
+            let mut p = Paragraph::with_text("日本語", props);
+            p.props.snap_to_grid = Some(false);
+            p.props.space_before = Some(0.0);
+            p.props.space_after = Some(0.0);
+            para_block(p)
+        })
+        .collect();
+    let positions: Vec<_> = lines(&lay(&d), id).into_iter().map(|(x, ..)| x).collect();
+    assert_eq!(positions.len(), 3, "{positions:?}");
+    for (pair, size) in positions.windows(2).zip([12.0, 24.0]) {
+        let gap = pair[0] - pair[1];
+        assert!((gap / size - 1.4375).abs() < 0.2, "size {size}, gap {gap}");
+    }
+}
+
 #[test]
 fn turned_text_and_fields_share_size_relative_spacing() {
     let advance = |text: &str, family: &str, field: bool, size: f32, automatic: bool| {

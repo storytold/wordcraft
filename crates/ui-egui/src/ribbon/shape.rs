@@ -172,6 +172,7 @@ fn shape_text_group(app: &mut WordApp, ui: &mut Ui) {
                     for (label, vert) in [
                         ("Horizontal", TextVert::Horz),
                         ("Rotate all text 90°", TextVert::Vert),
+                        ("East Asian vertical", TextVert::EaVert),
                         ("Rotate all text 270°", TextVert::Vert270),
                         ("Stacked", TextVert::Stacked),
                     ] {

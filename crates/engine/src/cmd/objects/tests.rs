@@ -1004,6 +1004,10 @@ fn text_direction_alignment_and_links() {
     s.run("shape.alignText", &json!({"anchor": "ctr"})).unwrap();
     let body = |s: &Session, id: u32| s.doc.parts.get(&id).unwrap().body;
     assert_eq!((body(&s, a).vert, body(&s, a).anchor), (TextVert::Vert270, VAlign::Center));
+    s.run("shape.textDirection", &json!({"dir": "eaVert"})).unwrap();
+    assert_eq!(body(&s, a).vert, TextVert::EaVert);
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(body(&s, a).vert, TextVert::Vert270);
     assert!(s.run("shape.textDirection", &json!({"dir": "sideways"})).is_err());
     assert_eq!(body(&s, a).vert, TextVert::Vert270, "a bad value changes nothing");
 

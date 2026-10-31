@@ -321,13 +321,14 @@ pub fn specs() -> Vec<CommandSpec> {
             let vert = match dir {
                 "horz" | "horizontal" => TextVert::Horz,
                 "vert" | "rotate90" => TextVert::Vert,
+                "eaVert" => TextVert::EaVert,
                 "vert270" | "rotate270" => TextVert::Vert270,
                 "wordArtVert" | "stacked" => TextVert::Stacked,
                 other => return Err(CmdError::Params(format!("unknown text direction `{other}`"))),
             };
             set_text_body(s, |b| b.vert = vert)
         })
-        .params(r#"{"dir": "horz|vert|vert270|wordArtVert"}  (horizontal, rotate all text 90°, 270°, stacked; the selected text box or the one the caret is in)"#)
+        .params(r#"{"dir": "horz|vert|eaVert|vert270|wordArtVert"}  (horizontal, rotate all text 90°, East Asian vertical, 270°, stacked; the selected text box or the one the caret is in)"#)
         .when(has_text_box),
         CommandSpec::new("shape.alignText", "Align Text", "Shape Format › Text", |s, v| {
             let anchor = match p::str(v, "anchor").unwrap_or("t") {

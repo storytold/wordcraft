@@ -77,6 +77,7 @@ fn lay(ctx: &mut Ctx, id: u32, blocks: &Blocks, len: f32, vert: TextVert, depth:
     items
 }
 
+/// Lay a story in its selected direction, adjusting implicit vertical fallback spacing.
 fn lay_in_direction(ctx: &mut Ctx, id: u32, blocks: &Blocks, len: f32, vert: TextVert, depth: usize) -> Vec<Placed> {
     let story = StoryRef::Part(id);
     if vert == TextVert::Stacked {
@@ -106,18 +107,25 @@ fn lay_in_direction(ctx: &mut Ctx, id: u32, blocks: &Blocks, len: f32, vert: Tex
     let natural = layout_box(ctx, BoxInput::other(story, blocks, len, depth + 1, None)).items;
     // A substitute can itself lack ideographs, so the shaping fallback may be a second font.
     // Measure the line *after shaping* rather than guessing from either font's hhea metrics.
+    let mut first_heights = vec![None; blocks.len()];
+    for item in &natural {
+        if let Placed::Lines { story: s, path, para, l0, .. } = item
+            && *s == story
+            && let [index] = path.0.as_slice()
+            && let Some(slot) = first_heights.get_mut(*index as usize)
+            && slot.is_none()
+            && let Some(line) = para.lines.get(*l0)
+        {
+            *slot = Some(line.height);
+        }
+    }
     let mut changed = false;
     let adjusted: Blocks = blocks
         .iter()
         .enumerate()
         .map(|(i, b)| match &**b {
             Block::Para(p) => {
-                let line_h = natural.iter().find_map(|it| match it {
-                    Placed::Lines { story: s, path, para, l0, .. } if *s == story && *path == Path::top(i) => {
-                        para.lines.get(*l0).map(|line| line.height)
-                    }
-                    _ => None,
-                });
+                let line_h = first_heights.get(i).copied().flatten();
                 match line_h.and_then(|h| fallback_vertical_spacing(ctx.doc, p, h)) {
                     Some(m) => {
                         changed = true;

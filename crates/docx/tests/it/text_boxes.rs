@@ -147,6 +147,8 @@ fn vml_text_boxes_keep_their_inset_fit_and_anchor() {
         shape("", r#"o:insetmode="auto" inset="0,0,0,0""#),
         // The VML fallback for a rotated DrawingML box carries the same text direction.
         shape("", r#"style="layout-flow:vertical""#),
+        shape("", r#"style="LAYOUT-FLOW:VeRtIcAl""#),
+        shape("", r#"style="layout-flow:horizontal""#),
         // In a group, a member's margins go with that member's text, not an empty box's before it.
         format!(r#"<w:p><w:r><w:pict><v:group style="width:100pt;height:40pt"><v:shape><v:textbox inset="9pt,9pt,9pt,9pt"/></v:shape><v:shape><v:textbox inset="0,0,0,0">{content}</v:textbox></v:shape></v:group></w:pict></w:r></w:p>"#),
     ]
@@ -157,14 +159,16 @@ fn vml_text_boxes_keep_their_inset_fit_and_anchor() {
     let rels = br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
     let d = wordcraft_docx::read(&zip(&[("_rels/.rels", rels), ("word/document.xml", doc.as_bytes())])).unwrap();
     let bodies: Vec<TextBody> = boxes(&d).iter().map(|id| d.parts[id].body).collect();
-    assert_eq!(bodies.len(), 7);
+    assert_eq!(bodies.len(), 9);
     assert_eq!(bodies[0].inset, Some([0, 0, 0, 0]));
     assert_eq!((bodies[1].inset, bodies[1].auto_fit, bodies[1].anchor), (Some([36_000, 45_720, 25_400, 45_720]), true, VAlign::Center));
     assert_eq!(bodies[2], TextBody::default());
     assert_eq!((bodies[3].inset, bodies[3].anchor), (Some([12_700, 45_720, 0, wordcraft_doc::MAX_TEXT_BOX_INSET]), VAlign::Bottom));
     assert_eq!(bodies[4].inset, None);
     assert_eq!(bodies[5].vert, TextVert::Vert);
-    assert_eq!(bodies[6].inset, Some([0, 0, 0, 0]));
+    assert_eq!(bodies[6].vert, TextVert::Vert);
+    assert_eq!(bodies[7].vert, TextVert::Horz);
+    assert_eq!(bodies[8].inset, Some([0, 0, 0, 0]));
     // Saved and read again, they stay.
     let back = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
     let again: Vec<TextBody> = boxes(&back).iter().map(|id| back.parts[id].body).collect();
