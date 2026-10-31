@@ -460,6 +460,10 @@ pub const HEADING_BLUE: Rgb = Rgb(0x0F, 0x47, 0x61);
 /// Default body/heading fonts (theme minor/major). Substituted by layout when not installed.
 pub const BODY_FONT: &str = "Aptos";
 pub const HEADING_FONT: &str = "Aptos Display";
+/// Microsoft serif and sans heading fonts: Heading 1 and Heading 3 are set in Cambria,
+/// Heading 2 in Aptos Display. Both are substituted by layout when not installed.
+pub const HEADING_SERIF_FONT: &str = "Cambria";
+pub const HEADING_SANS_FONT: &str = "Aptos Display";
 
 fn chr() -> CharProps {
     CharProps::default()
@@ -517,18 +521,18 @@ impl StyleSheet {
             quick: true,
             ..p_style()
         });
-        let heads: [(f32, f32, f32, Option<bool>, Rgb, &str); 9] = [
-            (20.0, 18.0, 4.0, None, HEADING_BLUE, HEADING_FONT),
-            (16.0, 8.0, 4.0, None, HEADING_BLUE, HEADING_FONT),
-            (14.0, 8.0, 4.0, None, HEADING_BLUE, BODY_FONT),
-            (12.0, 4.0, 2.0, Some(true), HEADING_BLUE, BODY_FONT),
-            (12.0, 4.0, 2.0, None, HEADING_BLUE, BODY_FONT),
-            (12.0, 2.0, 0.0, Some(true), Rgb(0x59, 0x59, 0x59), BODY_FONT),
-            (12.0, 2.0, 0.0, None, Rgb(0x59, 0x59, 0x59), BODY_FONT),
-            (12.0, 0.0, 0.0, Some(true), Rgb(0x27, 0x27, 0x27), BODY_FONT),
-            (12.0, 0.0, 0.0, None, Rgb(0x27, 0x27, 0x27), BODY_FONT),
+        let heads: [(f32, f32, f32, Option<bool>, Rgb, &str, bool); 9] = [
+            (24.0, 12.0, 6.0, None, HEADING_BLUE, HEADING_SERIF_FONT, true),
+            (16.0, 10.0, 6.0, None, HEADING_BLUE, HEADING_SANS_FONT, true),
+            (14.0, 7.0, 6.0, None, HEADING_BLUE, HEADING_SERIF_FONT, true),
+            (12.0, 4.0, 2.0, Some(true), HEADING_BLUE, BODY_FONT, false),
+            (12.0, 4.0, 2.0, None, HEADING_BLUE, BODY_FONT, false),
+            (12.0, 2.0, 0.0, Some(true), Rgb(0x59, 0x59, 0x59), BODY_FONT, false),
+            (12.0, 2.0, 0.0, None, Rgb(0x59, 0x59, 0x59), BODY_FONT, false),
+            (12.0, 0.0, 0.0, Some(true), Rgb(0x27, 0x27, 0x27), BODY_FONT, false),
+            (12.0, 0.0, 0.0, None, Rgb(0x27, 0x27, 0x27), BODY_FONT, false),
         ];
-        for (i, (size, before, after, italic, c, font)) in heads.into_iter().enumerate() {
+        for (i, (size, before, after, italic, c, font, bold)) in heads.into_iter().enumerate() {
             let n = i + 1;
             add(Style {
                 id: format!("Heading{n}"),
@@ -544,7 +548,7 @@ impl StyleSheet {
                     outline_level: Some(i as u8),
                     ..para()
                 },
-                chr: CharProps { font: Some(font.into()), size: Some(size), italic, color: color(c), ..chr() },
+                chr: CharProps { font: Some(font.into()), size: Some(size), italic, bold: bold.then_some(true), color: color(c), ..chr() },
                 priority: Some(9 + n as u32),
                 quick: n <= 3,
                 ..p_style()
