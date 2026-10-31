@@ -1349,8 +1349,9 @@ fn apply_cell_widths(t: &Table, grid: &mut [f32]) {
 
 /// Word sizes each column by the percentage its cells ask for, whichever rows ask: cells without a
 /// preferred width take no part, so a header row of percentages sizes the automatic rows below it.
-/// The percentages are shares of the table's width, scaled up when they come short of 100%; a
-/// table without a width of its own takes `avail`. Measured in Word, autofit and fixed alike.
+/// The percentages are shares of the table's width, scaled up when they come short of 100%; past
+/// 100% the last column takes what is left; a table without a width of its own takes `avail`.
+/// Measured in Word, autofit and fixed alike.
 /// Columns some cell leaves unsized, conflicting percentages, spans and absolute widths keep the
 /// grid.
 fn apply_pct_widths(t: &Table, grid: &mut [f32], avail: f32) {
@@ -1382,9 +1383,21 @@ fn apply_pct_widths(t: &Table, grid: &mut [f32], avail: f32) {
     if !sum.is_finite() || sum <= 0.0 || !total.is_finite() || total <= 0.0 {
         return;
     }
-    for (w, p) in grid.iter_mut().zip(&pcts) {
-        *w = total * (p / sum);
+    if sum <= 100.0 {
+        for (w, p) in grid.iter_mut().zip(&pcts) {
+            *w = total * (p / sum);
+        }
+        return;
     }
+    // Over 100%, every column but the last takes its share and the last gives up the overflow,
+    // down to nothing; autofit then widens it to its longest word at the others' expense.
+    let mut used = 0.0;
+    let last = grid.len() - 1;
+    for (w, p) in grid[..last].iter_mut().zip(&pcts) {
+        *w = total * p / 100.0;
+        used += *w;
+    }
+    grid[last] = (total - used).max(0.0);
 }
 
 /// Word's autofit for a table whose widths may follow its content (`tblLayout` not fixed).
