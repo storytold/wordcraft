@@ -581,6 +581,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let mut pl = ParaLayout {
         rp,
         styles: b.styles,
+        mark_style,
         glyphs: b.glyphs,
         clusters: b.clusters,
         shown: b.shown,

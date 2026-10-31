@@ -599,11 +599,38 @@ fn inline_objects(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
                     equation(&ml.items, cx, base, alpha, opts.placeholders, out);
                 }
             }
-            Some(o @ InlineObject::Field { .. }) => {
-                if let Some(wordcraft_doc::legacy_form::LegacyForm::CheckBox { checked, .. }) = o.legacy_form() {
-                    let color = pl.styles.get(c.style as usize).map_or(Rgb::BLACK, |st| text_color(&st.rc.color, None));
-                    let frame = Rect::new(cx, base - c.obj_h, c.adv, c.obj_h + c.obj_d);
-                    check_box(frame, checked, color, alpha, out);
+            // A deleted paragraph mark that isn't shown (no markup, or its mark is Hidden) draws no ¶.
+            let mark_gone =
+                para.is_some_and(|p| p.mark.del.is_some() && (!opts.markup || opts.revisions.hides_deletion(doc.move_name(p.mark.del).is_some())));
+            if line.end == LineEnd::Para && marks.paragraphs && !mark_gone {
+                // The mark follows the line's visual end, past every glyph, even where the
+                // logically last text runs against the paragraph's direction.
+                let ex = x + line.visual_end_x();
+                let size = pl.lines.first().map(|_| msize).unwrap_or(msize);
+                // A right-to-left paragraph's mark sits at its end, on the left.
+                let mx = if line.rtl { ex - 1.0 - size * 0.6 } else { ex + 1.0 };
+                // A tracked (inserted or deleted) paragraph mark is drawn in its author's colour.
+                let m = &opts.revisions;
+                let by_author = |r: u32| authors.color(r);
+                let color = para.filter(|_| opts.markup && m.insertions_deletions).and_then(|p| match (p.mark.ins, p.mark.del) {
+                    (_, Some(r)) if doc.move_name(Some(r)).is_some() => Some(m.move_from_color.unwrap_or_else(|| by_author(r))),
+                    (Some(r), None) if doc.move_name(Some(r)).is_some() => Some(m.move_to_color.unwrap_or_else(|| by_author(r))),
+                    (_, Some(r)) => Some(m.delete_color.unwrap_or_else(|| by_author(r))),
+                    (Some(r), None) => Some(m.insert_color.unwrap_or_else(|| by_author(r))),
+                    _ => None,
+                });
+                // Match Word: the paragraph mark uses its own resolved character colour,
+                // including table and paragraph-style formatting. Tracked revisions win.
+                let color = color.or_else(|| match &pl.styles.get(pl.mark_style as usize)?.rc.color {
+                    TextColor::Rgb(c) => Some(*c),
+                    TextColor::Auto => None,
+                });
+                // The last paragraph of a section ends in a section break instead of a plain ¶.
+                if let Some(start) = section_break_after(doc, story, path) {
+                    let (x0, x1) = if line.rtl { (x + line.left, ex - 2.0) } else { (ex + 2.0, x + line.right) };
+                    section_break_mark(start, x0, x1, base, size, alpha, out);
+                } else {
+                    out.push(Draw::Mark { x: mx, baseline: base, size, ch: '¶', color });
                 }
             }
             _ => {}

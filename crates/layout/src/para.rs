@@ -48,6 +48,8 @@ pub use proof::{ProofRun, is_list_item, paragraph_issues, proof_runs, proof_text
 pub struct ParaLayout {
     pub rp: ResolvedPara,
     pub styles: Vec<StyleRun>,
+    /// Resolved style index for the paragraph mark (including table character formatting).
+    pub mark_style: u32,
     pub glyphs: Vec<Glyph>,
     pub clusters: Vec<Cluster>,
     pub lines: Vec<Line>,
