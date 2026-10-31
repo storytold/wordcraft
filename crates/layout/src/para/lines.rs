@@ -892,7 +892,7 @@ impl Scan {
         let Some(c) = pl.clusters.get(self.j).cloned() else { return true };
         match c.kind {
             ClKind::LineBreak | ClKind::PageBreak | ClKind::ColumnBreak => {
-                resolve_tab(pl, &mut self.pending_tab, &mut self.xs, self.c0, self.x, &mut self.x);
+                self.finish_pending_tab(pl);
                 self.xs.push(self.x);
                 self.end = match c.kind {
                     ClKind::LineBreak => LineEnd::LineBreak,
@@ -911,7 +911,7 @@ impl Scan {
     fn tab(&mut self, bk: &mut Breaker, pl: &mut ParaLayout) -> bool {
         let j = self.j;
         self.has_tab = true;
-        resolve_tab(pl, &mut self.pending_tab, &mut self.xs, self.c0, self.x, &mut self.x);
+        self.finish_pending_tab(pl);
         let rp = &bk.rp;
         let ptab = pl.ptabs.iter().find(|t| t.0 == j).map(|&(_, a, b, l)| ptab_stop(a, b, l, bk.width, (rp.indent_left, rp.indent_right)));
         let stop = ptab.unwrap_or_else(|| next_tab(self.x, &rp.tabs, bk.default_tab, bk.hanging_at));
@@ -1073,6 +1073,13 @@ impl Scan {
         }
         self.j += 1;
         false
+    }
+
+    /// End a tab segment using the scan's still-provisional compressed advances.
+    /// Line finalization resolves committed advances separately, without applying them twice.
+    fn finish_pending_tab(&mut self, pl: &mut ParaLayout) {
+        self.shift_pending_tab(pl);
+        self.pending_tab = None;
     }
 
     /// Text after a decimal/centre/right tab shifts as it grows.
@@ -1263,6 +1270,73 @@ mod kana_glyph_tests {
         assert_eq!(decimal_compression(&compressed, 3, Some(5), Some((1, 3.0))), 1.0);
         assert_eq!(decimal_compression(&compressed, 3, Some(5), Some((4, 0.5))), 1.5);
         assert_eq!(decimal_compression(&compressed, 3, None, None), 0.0);
+    }
+
+    #[test]
+    fn pending_tabs_keep_provisional_compression_at_segment_endings() {
+        use super::super::{Grid, ParaEnv, layout_para};
+        use super::{Breaker, TabAlign, TabStop};
+        use wordcraft_doc::para::{COLUMN_BREAK, LINE_BREAK, PAGE_BREAK};
+        use wordcraft_doc::{Document, Paragraph};
+
+        let doc = Document::new();
+        let fields = Default::default();
+        let env = ParaEnv {
+            doc: &doc,
+            fields: &fields,
+            width: 300.0,
+            label: None,
+            show_hidden: false,
+            hide_deleted: Default::default(),
+            table: None,
+            proofing: None,
+            typing_word: None,
+            field_codes: false,
+            grid: Grid::default(),
+            exclusions: &[],
+            eq_number: 0,
+            numeral: Default::default(),
+            read_line_spacing: None,
+            fit_objects: false,
+            fitted: &[],
+        };
+        for align in [TabAlign::Decimal, TabAlign::Right, TabAlign::Center] {
+            for ending in [Some('\t'), Some(LINE_BREAK), Some(PAGE_BREAK), Some(COLUMN_BREAK), None] {
+                let text = ending.map_or_else(|| "\tA.B".to_string(), |ch| format!("\tA.B{ch}X"));
+                let mut p = Paragraph::with_text(&text, Default::default());
+                p.props.tabs = Some(vec![TabStop { pos: 160.0, align: TabAlign::Left, leader: Default::default() }]);
+                let mut pl = layout_para(&p, &env);
+                let mark_style = pl.clusters[0].style;
+                let mut bk = Breaker::new(&pl, (&env, &[]), mark_style, None);
+                let mut sc = bk.begin_line(&mut pl);
+                // Synthetic advances avoid depending on any installed CJK font. The scan
+                // has removed 4pt from A, while its stored advance remains uncommitted.
+                let tab_width = match align {
+                    TabAlign::Decimal => 94.0,
+                    TabAlign::Right => 87.0,
+                    _ => 93.5,
+                };
+                pl.clusters[0].adv = tab_width;
+                pl.clusters[1].adv = 10.0;
+                pl.clusters[2].adv = 2.0;
+                pl.clusters[3].adv = 5.0;
+                sc.pending_tab = Some((0, TabStop { pos: 100.0, align, leader: Default::default() }, 0.0));
+                sc.compressed = vec![(1, 4.0, 0.0)];
+                sc.has_tab = true;
+                sc.xs = vec![0.0, tab_width, tab_width + 6.0, tab_width + 8.0];
+                sc.x = tab_width + 13.0;
+                sc.j = 4;
+                if ending.is_some() {
+                    sc.step(&mut bk, &mut pl);
+                    assert!((sc.xs[2] - tab_width - 6.0).abs() < 0.001, "{align:?} {ending:?}: separator moved at segment end");
+                    assert!(sc.pending_tab.is_none(), "the completed tab must not be resolved again");
+                }
+                bk.close_line(&mut pl, sc, &text);
+                assert!((pl.clusters[0].adv - tab_width).abs() < 0.001, "{align:?} {ending:?}: tab advance changed");
+                assert!((pl.clusters[1].adv - 6.0).abs() < 0.001, "compression must be committed exactly once");
+                assert!((bk.lines[0].xs[2] - tab_width - 6.0).abs() < 0.001, "{align:?} {ending:?}: final separator moved");
+            }
+        }
     }
 
     #[test]
