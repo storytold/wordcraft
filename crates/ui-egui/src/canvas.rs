@@ -236,6 +236,8 @@ pub struct CanvasState {
     /// An automatic change (AutoCorrect, AutoFormat) altered the text around the caret: the
     /// input method is asked to start afresh (#1480).
     pub(crate) ime_reset: bool,
+    /// Where the input method was last told the caret is ([`crate::ime_spot`], #2932).
+    pub(crate) ime_spot: crate::ime_spot::ImeSpot,
     /// A replacement or an unsupported IME mutation means the next observation must interrupt
     /// the live composition, whatever the surrounding text looks like. Unlike [`Self::ime_reset`]
     /// this is not limited to the web text agent.
@@ -394,6 +396,7 @@ impl Default for CanvasState {
             swallow_text: false,
             ime_join_text: None,
             ime_reset: false,
+            ime_spot: Default::default(),
             ime_interrupt_now: false,
             ime_interrupted_preedit: false,
             ime_window_cache: None,
@@ -708,9 +711,24 @@ fn configure_scroll_area(app: &mut WordApp, ui: &Ui, view: &CanvasView, motion: 
     scroll_area
 }
 
+/// Every frame notes its keys and clicks for the input method's spot, also one that won't place
+/// the caret (#2932).
+fn note_ime_input(app: &mut WordApp, ctx: &egui::Context) {
+    let (keys, pointer) = ctx.input(|i| {
+        let keys = i.events.iter().any(|e| matches!(e, egui::Event::Key { .. } | egui::Event::Text(_) | egui::Event::Ime(_)));
+        let pointer = i
+            .events
+            .iter()
+            .any(|e| matches!(e, egui::Event::PointerButton { pressed: true, .. } | egui::Event::Touch { .. } | egui::Event::WindowFocused(true)));
+        (keys, pointer)
+    });
+    app.canvas.ime_spot.note(keys, pointer);
+}
+
 fn prepare_layout(app: &mut WordApp, ui: &Ui, full: Rect) -> std::sync::Arc<DocLayout> {
     let now = ui.input(|i| i.time);
     let reflow_anchor = update_viewport(app, ui, full, now);
+    note_ime_input(app, ui.ctx());
     if app.canvas.focused && !matches!(app.dialog, Some(crate::dialogs::Dialog::SaveChanges { .. })) {
         crate::keys::canvas_events(app, ui.ctx());
     } else {
@@ -806,7 +824,11 @@ fn update_canvas_focus(app: &mut WordApp, ui: &mut Ui, resp: &egui::Response, im
     app.canvas.focused = resp.has_focus();
     // One observation per viewport pass, after every event and command for the pass has been
     // applied: the owner, generation, bounded surrounding text and change cause all come from
-    // this same settled state.
+    // this same settled state. Over XIM typing doesn't move the spot ([`crate::ime_spot`], #2932).
+    let ime_geometry = ime_geometry.map(|(caret, _)| {
+        let spot = app.canvas.ime_spot.place(caret, app.services.xim);
+        (spot, spot)
+    });
     crate::keys::observe_ime(app, ui.ctx(), ime_geometry, ime_interrupt);
 }
 

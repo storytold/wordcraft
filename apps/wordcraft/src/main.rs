@@ -486,7 +486,16 @@ fn main() -> eframe::Result {
             let (file_dialog, dialogs) = file_dialogs::hook(&cc.egui_ctx);
             let mut session = Session::new(doc);
             session.system_region = region;
-            let mut app = WordApp::new(session, services(file_dialog, &cc.egui_ctx));
+            #[cfg_attr(not(all(unix, not(target_os = "macos"))), allow(unused_mut))]
+            let mut services = services(file_dialog, &cc.egui_ctx);
+            // On X11 input methods talk to the window over XIM, whose spot typing doesn't move
+            // (#2932).
+            #[cfg(all(unix, not(target_os = "macos")))]
+            {
+                use winit::raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
+                services.xim = matches!(cc.display_handle().map(|h| h.as_raw()), Ok(RawDisplayHandle::Xlib(_) | RawDisplayHandle::Xcb(_)));
+            }
+            let mut app = WordApp::new(session, services);
             app.set_startup_update_check(true);
             load_prefs(&mut app);
             load_user_dictionary(&mut app);
