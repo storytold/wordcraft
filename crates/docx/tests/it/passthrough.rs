@@ -299,6 +299,21 @@ fn localized_default_styles_keep_their_default_flag() {
     assert!(fresh.contains(r#"w:styleId="Normal" w:default="1""#) || fresh.contains(r#"w:default="1" w:styleId="Normal""#), "{fresh}");
 }
 
+/// A file that flags both a localized and an English style of one kind as the default keeps the
+/// flag on both, so Word picks the same one (the last) after a save.
+#[test]
+fn an_english_default_style_keeps_its_flag_beside_a_localized_one() {
+    let styles = r#"<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style><w:style w:type="character" w:default="1" w:styleId="Domylnaczcionkaakapitu"><w:name w:val="Default Paragraph Font"/></w:style><w:style w:type="character" w:default="1" w:styleId="DefaultParagraphFont"><w:name w:val="Default Paragraph Font"/></w:style><w:style w:type="table" w:styleId="TableNormal"><w:name w:val="Normal Table"/></w:style></w:styles>"#;
+    let bytes =
+        package("<w:p><w:r><w:t>x</w:t></w:r></w:p>", &[("rId1", &format!("{REL}/styles"), "styles.xml")], &[], &[("word/styles.xml", styles)]);
+    let s = text(&save(&wordcraft_docx::read(&bytes).unwrap()), "word/styles.xml");
+    let flagged = |id: &str| s.contains(&format!(r#"w:styleId="{id}" w:default="1""#));
+    assert!(flagged("Domylnaczcionkaakapitu") && flagged("DefaultParagraphFont") && flagged("Normal"), "{s}");
+    // The table style the file didn't flag stays the derived default, as before.
+    assert!(flagged("TableNormal"), "{s}");
+    assert_eq!(s.matches(r#"w:default="1""#).count(), 4, "{s}");
+}
+
 #[test]
 fn list_identities_survive_and_a_copied_definition_gets_none() {
     let numbering = r#"<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:abstractNum w:abstractNumId="0"><w:nsid w:val="1F2E3D4C"/><w:multiLevelType w:val="hybridMultilevel"/><w:tmpl w:val="0415000F"/><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/></w:lvl></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num></w:numbering>"#;

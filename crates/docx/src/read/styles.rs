@@ -101,6 +101,7 @@ impl Reader<'_> {
         }
         // Built-in styles' behaviour (gallery, priority, visibility), written back as is.
         sheet.latent_styles = root.child("w:latentStyles").map(|l| l.to_xml()).filter(|x| x.len() <= MAX_LATENT_STYLES_XML);
+        let mut english_defaults: Vec<String> = Vec::new();
         for s in root.children("w:style").take(10_000) {
             let Some(raw_id) = s.attr("w:styleId").filter(|i| !i.is_empty()) else { continue };
             let id = self.pc.style_id(raw_id);
@@ -124,15 +125,9 @@ impl Reader<'_> {
                 hidden: flag(s, "w:semiHidden").unwrap_or(false) || flag(s, "w:hidden").unwrap_or(false),
                 builtin: !s.attr("w:customStyle").is_some_and(|v| matches!(v.trim(), "1" | "true" | "on")),
                 locked: flag(s, "w:locked").unwrap_or(false),
-                // Only where the writer couldn't tell from the id (it flags the English ids).
-                default: s.attr("w:default").is_some_and(|v| v == "1" || v == "true")
-                    && !matches!(
-                        (kind, id.as_str()),
-                        (StyleKind::Paragraph, "Normal")
-                            | (StyleKind::Character, "DefaultParagraphFont")
-                            | (StyleKind::Table, "TableNormal")
-                            | (StyleKind::Numbering, "NoList")
-                    ),
+                // Only where the writer couldn't tell from the id (it flags the English ids), but
+                // see `english_defaults` below.
+                default: s.attr("w:default").is_some_and(|v| v == "1" || v == "true") && !english_default(kind, &id),
                 ..Default::default()
             };
             if let Some(p) = s.child("w:pPr") {
@@ -155,6 +150,9 @@ impl Reader<'_> {
                 let parts = self.table_style_parts(s, &mut st);
                 st.table = (parts != TableStyleParts::default()).then_some(parts);
             }
+            if english_default(kind, &id) && s.attr("w:default").is_some_and(|v| v == "1" || v == "true") {
+                english_defaults.push(id.clone());
+            }
             // A style defined twice (some generators write their own Heading 1 after a
             // placeholder one) is the last definition, whole: Word drops the earlier one rather
             // than merging the two (observed with synthetic documents).
@@ -162,6 +160,12 @@ impl Reader<'_> {
                 Some(earlier) => *earlier = st,
                 None => sheet.styles.push(st),
             }
+        }
+        // An English default the file flags beside a localized one of its kind keeps its flag:
+        // the writer would otherwise flag only the localized style, and Word takes the last one.
+        let flagged: Vec<StyleKind> = sheet.styles.iter().filter(|s| s.default).map(|s| s.kind).collect();
+        for st in sheet.styles.iter_mut().filter(|s| flagged.contains(&s.kind) && english_defaults.contains(&s.id)) {
+            st.default = true;
         }
         // Styles that give only a list level take the list from the style they are based on
         // (Heading 3: level 3 of Heading 2's outline list).
@@ -354,4 +358,15 @@ impl Reader<'_> {
 /// leaves the label at the paragraph's left edge, as Word shows it), no text.
 fn default_level(_i: usize) -> Level {
     Level { indent: 0.0, hanging: 0.0, text: String::new(), ..Level::default() }
+}
+
+/// The English id of the default style of its kind, which the writer flags on its own.
+fn english_default(kind: StyleKind, id: &str) -> bool {
+    matches!(
+        (kind, id),
+        (StyleKind::Paragraph, "Normal")
+            | (StyleKind::Character, "DefaultParagraphFont")
+            | (StyleKind::Table, "TableNormal")
+            | (StyleKind::Numbering, "NoList")
+    )
 }
