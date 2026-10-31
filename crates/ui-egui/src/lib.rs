@@ -239,6 +239,8 @@ pub struct UiState {
     /// View › Switch Modes: show pages dark (white text on black), kept between runs. Only the
     /// pages: the interface follows [`UiState::theme`] (#312).
     pub dark_page: bool,
+    /// File › Options › Advanced › Field shading, kept between runs (#4290).
+    pub field_shading: wordcraft_engine::FieldShading,
     /// File › Options › Proofing › Check spelling as you type, kept between runs (#1792).
     pub check_spelling: bool,
     /// File › Options › Advanced › Animation: the caret glides to its new place and its blink
@@ -339,6 +341,7 @@ impl Default for UiState {
             alt_key_down: false,
             alt_modifier_seen: false,
             dark_page: false,
+            field_shading: wordcraft_engine::FieldShading::default(),
             check_spelling: true,
             caret_animation: true,
             keyboard: wordcraft_engine::KeyMap::default(),
