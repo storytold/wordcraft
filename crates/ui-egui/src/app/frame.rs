@@ -19,6 +19,16 @@ impl WordApp {
         self.status_msg = Some((s.into(), now_ms()));
     }
 
+    /// Write the current preferences out through the host's hook, if it has one (#2716). The
+    /// desktop app saves them at exit; a change that should survive a crash, like taking a
+    /// document off the recent list, needs a save at the moment of the change.
+    pub(super) fn save_prefs_now(&mut self) {
+        let hook = self.services.save_prefs.as_ref();
+        if let Some(save) = hook {
+            save(self);
+        }
+    }
+
     /// Document title for the title bar (and the suggested file name). An untitled document is
     /// named in the interface language, as `Document1` is in English.
     pub fn title_stem(&self) -> String {

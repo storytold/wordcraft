@@ -508,6 +508,28 @@ fn personal_error_id() -> egui::Id {
     egui::Id::unique("backstage_personal_error")
 }
 
+/// How the × of a recent row is drawn (#2716): not at all while nothing is hovered, dimmed while
+/// the row is, and with the stronger fill only when the pointer is on the × itself.
+#[derive(Debug, PartialEq, Eq)]
+enum RemoveCue {
+    Hidden,
+    Dim,
+    Strong,
+}
+
+fn remove_cue(row_active: bool, x_active: bool) -> RemoveCue {
+    if x_active {
+        RemoveCue::Strong
+    } else if row_active {
+        RemoveCue::Dim
+    } else {
+        RemoveCue::Hidden
+    }
+}
+
+/// Width of the × that sits at the right end of a recent row (#2716).
+const REMOVE_W: f32 = 28.0;
+
 /// Draws the Recent documents list, distinguishes duplicate names by path for screen readers, and
 /// stores an open failure in this page's temporary state.
 fn open_list(app: &mut WordApp, ui: &mut Ui) {
@@ -526,7 +548,10 @@ fn open_list(app: &mut WordApp, ui: &mut Ui) {
     let file_name = |p: &str| std::path::Path::new(p).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(p.to_string());
     let names = shown.iter().map(|p| file_name(p)).collect::<Vec<_>>();
     for (p, name) in shown.iter().zip(&names) {
-        let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width().min(700.0), 40.0), Sense::click());
+        // #2716: each row carries its own Remove, as Word's context menu does. The × is a button
+        // of its own at the right end, so it never opens the document; clicking the rest of the
+        // row opens it as before.
+        let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width().min(700.0) - REMOVE_W, 40.0), Sense::click());
         // Two documents with the same file name are told apart by their path, as on screen.
         let spoken = if names.iter().filter(|n| *n == name).count() > 1 { format!("{name}, {p}") } else { name.clone() };
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &spoken));
@@ -536,10 +561,33 @@ fn open_list(app: &mut WordApp, ui: &mut Ui) {
         icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 18.0, r.center().y), vec2(22.0, 22.0)), "printLayout", t.icon, t.accent);
         ui.painter().text(pos2(r.min.x + 40.0, r.min.y + 13.0), Align2::LEFT_CENTER, name, medium(13.0), t.text);
         ui.painter().text(pos2(r.min.x + 40.0, r.min.y + 29.0), Align2::LEFT_CENTER, p, regular(11.0), t.text_dim);
+        let xr = Rect::from_min_max(pos2(r.max.x + 2.0, r.min.y + 4.0), pos2(r.max.x + REMOVE_W, r.max.y - 4.0));
+        let xresp = ui.interact(xr, ui.scope_id().with(("recent-remove", &p)), Sense::click());
+        xresp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tl!("Remove from list")));
+        // The × shows (dimmed) as soon as the row or the × is hovered or focused, so the Remove can
+        // be found; only the × itself gets the stronger fill and full-strength glyph.
+        match remove_cue(resp.hovered() || resp.has_focus(), xresp.hovered() || xresp.has_focus()) {
+            RemoveCue::Hidden => {}
+            RemoveCue::Dim => {
+                ui.painter().text(xr.center(), Align2::CENTER_CENTER, "×", medium(15.0), t.text_dim);
+            }
+            RemoveCue::Strong => {
+                ui.painter().rect_filled(xr, 4.0, t.hover);
+                ui.painter().text(xr.center(), Align2::CENTER_CENTER, "×", medium(15.0), t.text);
+            }
+        }
         if resp.clicked() {
             let failed = open_recent(app, p).err();
             ui.ctx().data_mut(|d| d.insert_temp(open_error_id(), failed.unwrap_or_default()));
         }
+        if xresp.clicked() {
+            let _ = app.run("ui.recentRemove", json!({"path": p}));
+        }
+    }
+    if app.ui.recent.iter().take(app.ui.recent_shown()).next().is_some()
+        && ui.add(egui::Button::new(egui::RichText::new(tl!("Clear all")).font(medium(13.0)))).clicked()
+    {
+        let _ = app.run("ui.recentClear", json!({}));
     }
 }
 

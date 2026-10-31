@@ -392,6 +392,9 @@ impl WordApp {
         for req in std::mem::take(&mut self.session.ui_requests) {
             self.handle_request(&req);
         }
+        // The open document goes to the front of the recent list after every command. The recent
+        // commands (`ui.recentRemove`, `ui.recentClear`) return from `ui_command` before this
+        // runs, so taking a document off the list is never undone by the re-add (#2716).
         if let Some(p) = self.session.path.as_ref().map(|p| p.to_string_lossy().to_string())
             && self.ui.recent.first() != Some(&p)
         {
@@ -782,6 +785,30 @@ impl WordApp {
                 }
                 json!({"startScreen": self.ui.start_screen})
             }
+            "ui.recentRemove" => {
+                // Backstage ▸ Home/Open ▸ Recent: take one document off the list (Word's context
+                // menu Remove). The path must be an entry that is on the list (#2716).
+                let Some(path) = p.get("path").and_then(Value::as_str) else {
+                    return Some(Err("`path` must name a document on the recent list".into()));
+                };
+                let before = self.ui.recent.len();
+                self.ui.recent.retain(|r| r != path);
+                if self.ui.recent.len() == before {
+                    return Some(Err(format!("`{path}` is not on the recent list")));
+                }
+                self.save_prefs_now();
+                let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(path.to_string());
+                self.status(i18n::fmt(tl!("Removed {name} from the recent list"), &[("name", &name)]));
+                json!({"removed": 1, "recent": self.ui.recent})
+            }
+            "ui.recentClear" => {
+                // Clear the whole list, as Word's registry clear does for recent documents (#2716).
+                let removed = self.ui.recent.len();
+                self.ui.recent.clear();
+                self.save_prefs_now();
+                self.status(i18n::fmt(tl!("Removed {count} documents from the recent list"), &[("count", &removed.to_string())]));
+                json!({"removed": removed, "recent": self.ui.recent})
+            }
             // Shape Format › Text › Create Link: the next click on an empty text box links the
             // selected box to it (`shape.link` with that box as the target); Esc cancels.
             // Picture Format › Size › Crop: crop mode on the selected picture, or off (`crop`).
@@ -1037,6 +1064,8 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.discord"
             | "ui.caretAnimation"
             | "ui.startScreen"
+            | "ui.recentRemove"
+            | "ui.recentClear"
             | "ui.checkForUpdates"
     ) || id.starts_with("help.")
 }
