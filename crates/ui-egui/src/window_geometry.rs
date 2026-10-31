@@ -1,8 +1,8 @@
 //! The main window's size, position and maximized state, saved with the UI preferences so the
 //! next launch opens the window where the user left it (#23).
 //!
-//! Sizes and positions are in egui points: what [`egui::ViewportInfo`] reports and what
-//! [`egui::ViewportBuilder`] takes.
+//! Saved sizes and positions are in the system's logical points, independent of interface zoom.
+//! The initial viewport opens before the app applies its interface size.
 
 use serde::{Deserialize, Serialize};
 
@@ -26,6 +26,17 @@ pub struct RawWindowState {
 }
 
 impl RawWindowState {
+    /// Remove the interface zoom from a fresh host frame before remembering its geometry.
+    /// Viewport commands issued during that frame must divide by the same factor.
+    pub fn in_system_points(mut self, zoom: f32) -> Self {
+        let zoom = usable_zoom(zoom);
+        self.inner_rect = self.inner_rect.map(|r| r * zoom);
+        self.outer_rect = self.outer_rect.map(|r| r * zoom);
+        self.screen_rect = self.screen_rect.map(|r| r * zoom);
+        self.monitor_size = self.monitor_size.map(|s| s * zoom);
+        self
+    }
+
     /// Copy the window state out of this frame's raw input.
     pub fn from_raw(raw: &egui::RawInput) -> Self {
         Self::from_viewport(raw.viewports.get(&raw.viewport_id), raw.screen_rect)
@@ -54,6 +65,38 @@ impl RawWindowState {
             .map(|r| r.size())
             .find(|s| s.is_finite() && s.x > 0.0 && s.y > 0.0)
     }
+}
+
+/// An absent or invalid interface zoom must not poison saved geometry or viewport commands.
+pub fn usable_zoom(zoom: f32) -> f32 {
+    if zoom.is_finite() && zoom > 0.0 { zoom } else { 1.0 }
+}
+
+/// Keep a saved maximized state through the hidden startup frame. X11 ignores a maximize
+/// request before the window is mapped, so request it only after the first UI pass, and keep
+/// the normal geometry until the host acknowledges it. After eight eligible frames, stop asking
+/// and track the window the host actually supplied, including hosts that never report a state.
+pub fn waiting_for_maximize(
+    saved: Option<WindowGeometry>,
+    painted: bool,
+    window: &mut RawWindowState,
+    attempts_left: &mut u8,
+) -> (bool, Option<egui::ViewportCommand>) {
+    let waiting = saved.is_some_and(WindowGeometry::maximizes_after_open) && window.maximized != Some(true);
+    if !waiting {
+        return (false, None);
+    }
+    if *attempts_left == 0 {
+        // Otherwise track() would keep the saved maximize flag when the host reports None,
+        // even though the request timed out and this normal rectangle should now be recorded.
+        window.maximized = Some(false);
+        return (false, None);
+    }
+    let eligible = painted && window.minimized != Some(true) && window.fullscreen != Some(true);
+    if eligible {
+        *attempts_left -= 1;
+    }
+    (true, eligible.then_some(egui::ViewportCommand::Maximized(true)))
 }
 
 /// The smallest window restored: the desktop app's minimum inner size.
@@ -92,7 +135,7 @@ impl WindowGeometry {
         // egui reads the maximized state on macOS only when the window opens (egui#3494), so a
         // window that opened zoomed would stay "maximized" for good. There the zoomed frame is
         // saved like any other size instead.
-        let maximized = window.maximized == Some(true) && !cfg!(target_os = "macos");
+        let maximized = window.maximized.unwrap_or_else(|| prev.is_some_and(|g| g.maximized)) && !cfg!(target_os = "macos");
         if maximized && let Some(prev) = prev {
             return Some(Self { maximized, ..prev });
         }
@@ -127,7 +170,7 @@ impl WindowGeometry {
     /// on and off about four times at start-up. There it opens at its normal size, hidden, and the
     /// first frame maximizes it ([`Self::maximize_after_open`]).
     pub fn maximizes_after_open(self) -> bool {
-        self.maximized && cfg!(windows)
+        self.maximized && !cfg!(target_os = "macos")
     }
 
     /// The command that maximizes the window after it opened, if [`Self::maximizes_after_open`].
@@ -178,6 +221,12 @@ impl WindowGeometry {
         let inner = window.inner_rect.filter(|r| r.is_finite())?;
         let outer = window.outer_rect.filter(|r| r.is_finite()).unwrap_or(inner);
         let frame = (outer.size() - inner.size()).max(egui::Vec2::ZERO);
+        // A size the user left on this monitor is already placed deliberately. Keep it when
+        // the complete frame fits, including windows close to the screen edges.
+        let same_monitor = self.monitor.is_some_and(|m| (egui::Vec2::from(m) - monitor).length() <= 1.0);
+        if self.position.is_some() && same_monitor && outer.width() <= monitor.x && outer.height() <= monitor.y {
+            return None;
+        }
         let room = monitor - 2.0 * SYSTEM_BAR;
         let too_big = outer.width() > room.x || outer.height() > room.y;
         let edge = monitor - SYSTEM_BAR;
@@ -249,8 +298,8 @@ mod tests {
         // Normal size and position either way, so un-maximizing returns to them.
         assert_eq!(b.inner_size, Some(egui::vec2(1200.0, 800.0)));
         assert_eq!(b.position, Some(egui::pos2(100.0, 50.0)));
-        if cfg!(windows) {
-            assert_eq!(b.maximized, Some(false), "winit would show the hidden window while creating it maximized");
+        if !cfg!(target_os = "macos") {
+            assert_eq!(b.maximized, Some(false), "open at the normal size before maximizing");
             assert_eq!(g.maximize_after_open(), Some(egui::ViewportCommand::Maximized(true)));
         } else {
             assert_eq!(b.maximized, Some(true));
@@ -281,6 +330,90 @@ mod tests {
         i.minimized = None;
         i.fullscreen = Some(true);
         assert_eq!(WindowGeometry::track(Some(saved()), &i), Some(saved()));
+    }
+
+    #[test]
+    fn interface_zoom_does_not_shrink_the_window_on_repeated_launches() {
+        for zoom in [0.75, 1.0, 1.25, 1.5, 2.0, 3.0] {
+            let mut geometry = saved();
+            for _ in 0..5 {
+                let rect = egui::Rect::from_min_size(egui::pos2(100.0, 50.0), egui::vec2(1200.0, 800.0));
+                let mut info = raw(rect / zoom, egui::vec2(1920.0, 1080.0) / zoom);
+                info.maximized = Some(false);
+                geometry = WindowGeometry::track(Some(geometry), &info.in_system_points(zoom)).unwrap();
+                assert_eq!(geometry, saved(), "interface zoom {zoom}");
+            }
+        }
+        for invalid in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            let info = raw(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)), egui::vec2(1920.0, 1080.0));
+            assert_eq!(info.in_system_points(invalid), info);
+        }
+    }
+
+    #[test]
+    fn maximize_waits_for_the_first_paint_and_keeps_the_restore_size() {
+        let geometry = WindowGeometry { maximized: true, ..saved() };
+        let mut window = raw(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)), egui::vec2(1920.0, 1080.0));
+        window.maximized = Some(false);
+        let mut attempts_left = 8;
+        if !cfg!(target_os = "macos") {
+            assert_eq!(waiting_for_maximize(Some(geometry), false, &mut window, &mut attempts_left), (true, None));
+            assert_eq!(attempts_left, 8);
+            assert_eq!(
+                waiting_for_maximize(Some(geometry), true, &mut window, &mut attempts_left),
+                (true, Some(egui::ViewportCommand::Maximized(true)))
+            );
+            window.minimized = Some(true);
+            assert_eq!(waiting_for_maximize(Some(geometry), true, &mut window, &mut attempts_left), (true, None), "startup must not undo a minimize");
+            assert_eq!(attempts_left, 7);
+            window.minimized = Some(false);
+            window.maximized = Some(true);
+            assert_eq!(waiting_for_maximize(Some(geometry), true, &mut window, &mut attempts_left), (false, None));
+            for _ in 0..100 {
+                assert_eq!(WindowGeometry::track(Some(geometry), &window), Some(geometry));
+            }
+            window.maximized = None;
+            assert_eq!(WindowGeometry::track(Some(geometry), &window), Some(geometry), "an unknown state is not a restore");
+            window.maximized = Some(false);
+            assert_eq!(WindowGeometry::track(Some(geometry), &window).map(|g| (g.width, g.height, g.maximized)), Some((1200.0, 800.0, false)));
+        }
+    }
+
+    #[test]
+    fn an_unacknowledged_maximize_stops_retrying_and_tracks_normal_geometry() {
+        if cfg!(target_os = "macos") {
+            return;
+        }
+        let geometry = WindowGeometry { maximized: true, ..saved() };
+        for reported in [Some(false), None] {
+            let mut window = raw(egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(1000.0, 600.0)), egui::vec2(1920.0, 1080.0));
+            let mut attempts_left = 8;
+            for _ in 0..8 {
+                window.maximized = reported;
+                assert_eq!(
+                    waiting_for_maximize(Some(geometry), true, &mut window, &mut attempts_left),
+                    (true, Some(egui::ViewportCommand::Maximized(true)))
+                );
+            }
+            for _ in 0..100 {
+                window.maximized = reported;
+                assert_eq!(waiting_for_maximize(Some(geometry), true, &mut window, &mut attempts_left), (false, None));
+                let tracked = WindowGeometry::track(Some(geometry), &window).unwrap();
+                assert_eq!((tracked.width, tracked.height, tracked.maximized), (1000.0, 600.0, false));
+            }
+        }
+    }
+
+    #[test]
+    fn a_restored_window_that_fits_its_monitor_keeps_the_users_size() {
+        let monitor = egui::vec2(2560.0, 1440.0);
+        let mut window = opened(egui::pos2(12.0, 12.0), egui::vec2(2530.0, 1370.0), monitor);
+        let saved = WindowGeometry { position: Some([12.0, 12.0]), width: 2530.0, height: 1370.0, maximized: false, monitor: Some(monitor.into()) };
+        assert_eq!(saved.fit_on_monitor(&window), None);
+        // A different monitor or a frame larger than the monitor still takes the safety path.
+        assert!(WindowGeometry { monitor: Some([1920.0, 1080.0]), ..saved }.fit_on_monitor(&window).is_some());
+        window.outer_rect = window.outer_rect.map(|r| r.expand(100.0));
+        assert!(saved.fit_on_monitor(&window).is_some());
     }
 
     /// With no position reported, the raw screen rectangle still supplies the size, and the restored
