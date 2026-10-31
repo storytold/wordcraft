@@ -333,19 +333,19 @@ fn border_stroke(s: BorderStyle) -> Stroke {
     }
 }
 
+/// The width a border is drawn at.
+fn rule_width(b: &Border) -> f32 {
+    if b.style == BorderStyle::Thick { b.width.max(1.5) } else { b.width.max(0.25) }
+}
+
+/// How far a drawn border reaches either side of its centre line.
+pub(crate) fn border_half_span(b: &Border) -> f32 {
+    border_stroke(b.style).half_span(rule_width(b))
+}
+
 /// A border line from `(x0, y0)` to `(x1, y1)` (paragraph rules and character borders).
 fn rule(x0: f32, y0: f32, x1: f32, y1: f32, b: &Border, alpha: f32) -> Draw {
-    Draw::Line {
-        x0,
-        y0,
-        x1,
-        y1,
-        width: if b.style == BorderStyle::Thick { b.width.max(1.5) } else { b.width.max(0.25) },
-        color: b.color.unwrap_or(Rgb::BLACK),
-        stroke: border_stroke(b.style),
-        alpha,
-        text_bg: None,
-    }
+    Draw::Line { x0, y0, x1, y1, width: rule_width(b), color: b.color.unwrap_or(Rgb::BLACK), stroke: border_stroke(b.style), alpha, text_bg: None }
 }
 
 /// Closed box around one line segment of a character-border group, widened by `space`.

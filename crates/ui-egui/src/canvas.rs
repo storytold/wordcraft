@@ -60,7 +60,7 @@ use navigation::{scrollbar_page_tip, viewed_page};
 use pages::{DRAWING_GRID_MAX_LINES, DRAWING_GRID_MIN_PX};
 pub(crate) use pages::{PageKeys, page_doc, page_screen_scale, preview_sel, screen_render_options};
 use pages::{
-    drawing_grid, drawing_grid_step, gridline_cells, page_image, page_key, page_render_options, shown_layout, texel_aligned_rect, view_key,
+    drawing_grid, drawing_grid_step, gridline_edges, page_image, page_key, page_render_options, shown_layout, texel_aligned_rect, view_key,
     visible_tiles,
 };
 pub(crate) use reading::turn_read_page;
@@ -1020,15 +1020,13 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
             }
         }
         draw_page_gridlines(app, &painter, t, page, visual_sr, page_scale);
-        // The current header/footer's cells have editing guides; explicit View Gridlines
-        // still outlines every table. Neither kind of guide is part of the document.
+        // View Gridlines outlines every table's cell edges that have no border; the current
+        // header/footer's cells have editing guides too (#2197). Neither kind of guide is
+        // part of the document, and both show on screen only.
         if app.session.view.table_gridlines || grid_story.is_some() {
-            for rect in gridline_cells(page, app.session.view.table_gridlines, grid_story) {
-                let r = Rect::from_min_size(
-                    pos2(visual_sr.min.x + rect.x * page_scale, visual_sr.min.y + rect.y * page_scale),
-                    vec2(rect.w * page_scale, rect.h * page_scale),
-                );
-                painter.rect_stroke(r, 0.0, Stroke::new(0.5, t.blue.linear_multiply(0.6)), egui::StrokeKind::Middle);
+            let at = |(x, y): (f32, f32)| pos2(visual_sr.min.x + x * page_scale, visual_sr.min.y + y * page_scale);
+            for [a, b] in gridline_edges(page, app.session.view.table_gridlines, grid_story) {
+                painter.line_segment([at(a), at(b)], Stroke::new(0.5, t.blue.linear_multiply(0.6)));
             }
         }
     }

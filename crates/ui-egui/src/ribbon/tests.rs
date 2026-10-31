@@ -635,6 +635,73 @@ fn resolve_tab_falls_back_when_contextual_tab_expires() {
     assert_eq!(resolve_tab("Home", &["Home"]), "Home");
 }
 
+/// #1740: Table Design › Borders has Line Style, Line Weight and Pen Color menus whose
+/// choices set the pen (the current one reported as toggled), and the Borders menu's sides
+/// draw with it on the caret's cell. A recorded macro keeps the line it drew.
+#[test]
+fn border_pen_menus_set_the_pen_and_the_borders_menu_draws_with_it() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    use wordcraft_doc::props::{Border, BorderStyle};
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.run("insert.table", json!({"rows": 3, "cols": 3})).unwrap();
+    a.run("table.borderColor", json!({"color": "C00000"})).unwrap();
+    a.run("ui.tab", json!({"tab": "Table Design"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    let open = |h: &mut egui_kittest::Harness<'_, WordApp>, menu: &str| {
+        h.get_by_role_and_label(egui::accesskit::Role::Button, menu).click();
+        h.run_steps(4);
+    };
+    let pick = |h: &mut egui_kittest::Harness<'_, WordApp>, menu: &str, item: &str| {
+        open(h, menu);
+        // Checked items carry the mark in their label; plain items a trailing space.
+        h.get_by(|n| n.role() == egui::accesskit::Role::Button && n.label().is_some_and(|l| l.trim_start_matches('✓').trim() == item)).click();
+        h.run_steps(4);
+    };
+    pick(&mut h, "Line Style", "Triple");
+    assert_eq!(h.state().session.table_pen.style, BorderStyle::Triple);
+    open(&mut h, "Line Style");
+    let toggled = |l: &str| {
+        h.get_by(|n| n.role() == egui::accesskit::Role::Button && n.label().as_deref() == Some(l)).accesskit_node().toggled()
+            == Some(egui::accesskit::Toggled::True)
+    };
+    assert!(toggled("Triple") && !toggled("Double"), "the current style is reported to screen readers");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(4);
+    pick(&mut h, "Line Weight", "1½ pt");
+    assert_eq!(h.state().session.table_pen.width, 1.5);
+    pick(&mut h, "Pen Color", "Automatic");
+    assert_eq!(h.state().session.table_pen.color, None);
+    h.state_mut().run("tools.recordMacro", json!({"name": "Rule"})).unwrap();
+    pick(&mut h, "Borders", "Bottom Border");
+    h.state_mut().run("tools.recordMacro", json!({})).unwrap();
+    let triple = Border { style: BorderStyle::Triple, width: 1.5, color: None, space: 0.0 };
+    let s = &h.state().session;
+    let (tp, r, c) = s.sel.focus.path.cell().unwrap();
+    let t = s.doc.table(s.sel.focus.story, &tp).unwrap();
+    assert_eq!((r, c), (0, 0));
+    assert_eq!(t.rows[0].cells[0].props.borders.and_then(|b| b.bottom), Some(triple));
+    assert_eq!(t.rows[1].cells[0].props.borders.and_then(|b| b.top), Some(triple), "the cell below shares the line");
+    assert!(t.rows[0].cells[1].props.borders.is_none() && t.props.borders.is_none(), "nothing else changes");
+    let steps = s.macros.get("Rule").cloned().unwrap_or_default();
+    assert_eq!(steps, [("table.borders".to_string(), json!({"kind": "bottom", "style": "triple", "width": 1.5, "color": null}))]);
+}
+
+/// #1740: the Line Weight menu writes Word's fractions.
+#[test]
+fn line_weights_are_written_as_fractions() {
+    use super::table::weight_label;
+    let labels: Vec<String> = wordcraft_engine::cmd::table::BORDER_WIDTHS.iter().map(|w| weight_label(*w)).collect();
+    assert_eq!(labels, ["¼ pt", "½ pt", "¾ pt", "1 pt", "1½ pt", "2¼ pt", "3 pt", "4½ pt", "6 pt"]);
+}
+
 /// #2573, #1901: Picture Format › Size's width shows the interface unit and takes a size typed
 /// in pixels. It applies once typed (Enter), not while typing, keeping the picture's proportions, as one
 /// undo step.

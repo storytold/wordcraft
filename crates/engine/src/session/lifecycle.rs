@@ -106,6 +106,7 @@ impl Session {
             author: "WordCraft User".into(),
             initials: String::new(),
             painter: None,
+            table_pen: Default::default(),
             status: String::new(),
             new_header_parts,
             hf_return,

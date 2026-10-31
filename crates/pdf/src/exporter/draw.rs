@@ -221,27 +221,18 @@ impl Exporter<'_> {
                 s.set_stroke(Some(stroke(w, Some(StrokeDash { array, offset: 0.0 }), LineCap::Butt)));
                 seg(s, 0.0, 0.0);
             }
-            LineStyle::Double => {
-                // Two thinner lines either side of the centre line.
+            LineStyle::Double | LineStyle::Triple => {
+                // Parallel lines either side of the centre line, as the screen draws them.
                 let (dx, dy) = (x1 - x0, y1 - y0);
                 let len = (dx * dx + dy * dy).sqrt().max(1e-3);
-                let (nx, ny) = (-dy / len * w * 0.9, dx / len * w * 0.9);
-                s.set_stroke(Some(stroke(w * 0.6, None, LineCap::Butt)));
-                seg(s, nx, ny);
-                seg(s, -nx, -ny);
-            }
-            LineStyle::Triple => {
-                // Three thin lines, spaced as a double's, across the line's direction.
-                let (dx, dy) = (x1 - x0, y1 - y0);
-                let len = (dx * dx + dy * dy).sqrt().max(1e-3);
-                let (nx, ny) = (-dy / len * w * 1.8, dx / len * w * 1.8);
-                s.set_stroke(Some(stroke(w * 0.6, None, LineCap::Butt)));
-                seg(s, nx, ny);
-                seg(s, 0.0, 0.0);
-                seg(s, -nx, -ny);
+                let (nx, ny) = (-dy / len, dx / len);
+                for (off, line_w) in style.parallel_lines(w) {
+                    s.set_stroke(Some(stroke(line_w, None, LineCap::Butt)));
+                    seg(s, nx * off, ny * off);
+                }
             }
             LineStyle::Wave => {
-                let amp = (w * 1.2).max(0.8);
+                let amp = LineStyle::wave_amplitude(w);
                 let step = amp * 2.0;
                 let (dx, dy) = (x1 - x0, y1 - y0);
                 let len = (dx * dx + dy * dy).sqrt();

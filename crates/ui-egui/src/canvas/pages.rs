@@ -1,4 +1,5 @@
 use super::{DocLayout, Hash, Hasher, Page, Placed, Pos, Pos2, Rect, StoryRef, WordApp, json, pos2};
+use std::collections::HashMap;
 
 /// Fingerprint of everything outside the layout that changes how pages render: the view's
 /// marks and markup, dark mode, the page colour and watermark, header/body dimming, the media,
@@ -159,6 +160,60 @@ pub(super) fn gridline_cells(page: &Page, all: bool, editing: Option<StoryRef>) 
         Placed::Cell { rect, covered: false, story, .. } if all || Some(*story) == editing => Some(*rect),
         _ => None,
     })
+}
+
+/// The pieces of cell edges View Gridlines draws on a page, in document points: each edge of
+/// [`gridline_cells`] less the parts a visible border line already covers, as Word shows
+/// gridlines only where a cell has no border (#1740).
+pub(super) fn gridline_edges(page: &Page, all: bool, editing: Option<StoryRef>) -> Vec<[(f32, f32); 2]> {
+    // Border lines bucketed by their position (quarter points): horizontal by y, vertical by x.
+    let key = |v: f32| (v * 4.0).round() as i64;
+    let (mut across, mut down): (HashMap<i64, Vec<(f32, f32, f32)>>, HashMap<i64, Vec<(f32, f32, f32)>>) = Default::default();
+    for it in page.items.iter().chain(&page.header).chain(&page.footer) {
+        if let Placed::Rule { x0, y0, x1, y1, border } = it
+            && border.is_visible()
+        {
+            if (y0 - y1).abs() < 0.05 {
+                across.entry(key(*y0)).or_default().push((*y0, x0.min(*x1), x0.max(*x1)));
+            } else if (x0 - x1).abs() < 0.05 {
+                down.entry(key(*x0)).or_default().push((*x0, y0.min(*y1), y0.max(*y1)));
+            }
+        }
+    }
+    let covering = |lines: &HashMap<i64, Vec<(f32, f32, f32)>>, at: f32| -> Vec<(f32, f32)> {
+        (key(at) - 1..=key(at) + 1).filter_map(|k| lines.get(&k)).flatten().filter(|l| (l.0 - at).abs() < 0.3).map(|l| (l.1, l.2)).collect()
+    };
+    let mut out = Vec::new();
+    for r in gridline_cells(page, all, editing) {
+        for y in [r.y, r.bottom()] {
+            out.extend(uncovered(r.x, r.right(), covering(&across, y)).into_iter().map(|(a, b)| [(a, y), (b, y)]));
+        }
+        for x in [r.x, r.right()] {
+            out.extend(uncovered(r.y, r.bottom(), covering(&down, x)).into_iter().map(|(a, b)| [(x, a), (x, b)]));
+        }
+    }
+    out
+}
+
+/// The parts of `a..b` that none of the intervals in `cover` overlaps.
+fn uncovered(a: f32, b: f32, mut cover: Vec<(f32, f32)>) -> Vec<(f32, f32)> {
+    cover.retain(|(s, e)| *e > a && *s < b);
+    cover.sort_by(|x, y| x.0.total_cmp(&y.0));
+    let mut out = Vec::new();
+    let mut at = a;
+    for (s, e) in cover {
+        if s > at + 0.05 {
+            out.push((at, s.min(b)));
+        }
+        at = at.max(e);
+        if at >= b {
+            return out;
+        }
+    }
+    if at < b - 0.05 {
+        out.push((at, b));
+    }
+    out
 }
 
 /// The drawing grid's spacing in points at a screen scale: the document's spacing (`w:drawingGrid*Spacing`;

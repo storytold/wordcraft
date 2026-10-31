@@ -23,7 +23,14 @@ pub fn selected_cells(s: &Session) -> Vec<(usize, usize)> {
         return range.cells(t);
     }
     let (a, b) = s.sel.ordered();
-    let (Some((ta, ra, ca)), Some((tb, rb, cb))) = (a.path.cell(), b.path.cell()) else { return Vec::new() };
+    let (ta, ra, ca, tb, rb, cb) = match (a.path.cell(), b.path.cell()) {
+        (Some((ta, ra, ca)), Some((tb, rb, cb))) => (ta, ra, ca, tb, rb, cb),
+        // One end outside the table: whole rows from the table's edge facing it to the other
+        // end's row, as Word widens such a selection.
+        (Some((ta, ra, _)), None) => return whole_rows(s, &ta, ra, usize::MAX),
+        (None, Some((tb, rb, _))) => return whole_rows(s, &tb, 0, rb),
+        (None, None) => return Vec::new(),
+    };
     if ta != tb {
         return vec![(rb, cb)];
     }
@@ -36,6 +43,12 @@ pub fn selected_cells(s: &Session) -> Vec<(usize, usize)> {
         }
     }
     v
+}
+
+/// Every cell of rows `r0 ..= r1` of the table at `tp`.
+fn whole_rows(s: &Session, tp: &Path, r0: usize, r1: usize) -> Vec<(usize, usize)> {
+    let Some(t) = s.doc.table(s.sel.focus.story, tp) else { return Vec::new() };
+    t.rows.iter().enumerate().skip(r0).take_while(|(r, _)| *r <= r1).flat_map(|(r, row)| (0..row.cells.len()).map(move |c| (r, c))).collect()
 }
 
 pub(super) fn with_cells(s: &mut Session, f: impl Fn(&mut wordcraft_doc::Cell)) -> CmdResult {

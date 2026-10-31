@@ -366,6 +366,9 @@ Table Design|Table Styles|New Table Style|table.newStyle
 Table Design|Table Styles|Modify Table Style|table.modifyStyle
 Table Design|Table Styles|Delete Table Style|table.deleteStyle
 Table Design|Table Styles|Shading|table.shading
+Table Design|Borders|Line Style|table.borderStyle
+Table Design|Borders|Line Weight|table.borderWidth
+Table Design|Borders|Pen Color|table.borderColor
 Table Design|Borders|Borders|table.borders
 Table Design|Borders|Border Painter|table.borderPainter
 Table Layout|Table|Select Table|table.selectTable
