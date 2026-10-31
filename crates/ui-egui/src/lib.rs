@@ -181,6 +181,9 @@ pub struct UiState {
     /// View › Navigation Pane: open or closed as the person left it, kept between runs (#2526).
     /// The session owns it while running (see [`WordApp::prefs`]).
     pub nav_pane: bool,
+    /// View › Show/Hide ¶ is a user preference, not a document edit.
+    #[serde(default)]
+    pub show_formatting_marks: bool,
     /// Where the Styles pane sits (#1756). The session owns it while running (see [`WordApp::prefs`]).
     #[serde(deserialize_with = "lenient_styles_pane_dock")]
     pub styles_pane_dock: wordcraft_engine::StylesPaneDock,
@@ -318,6 +321,7 @@ impl Default for UiState {
             legacy_dark: None,
             nav_tab: "headings".into(),
             nav_pane: false,
+            show_formatting_marks: false,
             styles_pane_dock: wordcraft_engine::StylesPaneDock::Right,
             styles_pane_float: None,
             styles_pane_width: None,

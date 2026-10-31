@@ -20,6 +20,7 @@ impl WordApp {
         ui.read_aloud_skip_citations = self.session.read_aloud.skip_citations;
         ui.dark_page = self.session.view.dark_mode;
         ui.nav_pane = self.session.view.nav_pane;
+        ui.show_formatting_marks = self.session.view.marks;
         ui.styles_pane_dock = self.session.view.styles_pane_dock;
         ui.check_spelling = self.session.view.proofing;
         ui.keyboard = self.session.keymap.clone();
@@ -71,6 +72,11 @@ impl WordApp {
         self.session.read_aloud.skip_citations = self.ui.read_aloud_skip_citations;
         self.session.view.dark_mode = self.ui.dark_page;
         self.session.view.nav_pane = self.ui.nav_pane;
+        // A preference shared by all documents, restored on every application launch.
+        if self.session.view.marks != self.ui.show_formatting_marks {
+            self.session.view.marks = self.ui.show_formatting_marks;
+            self.session.relayout();
+        }
         self.session.view.styles_pane_dock = self.ui.styles_pane_dock;
         self.session.view.proofing = self.ui.check_spelling;
         // Keys for commands this version doesn't have are dropped.
