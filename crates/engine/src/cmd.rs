@@ -385,7 +385,8 @@ fn insert_text(s: &mut Session, text: &str, enter: bool) -> Result<InsertEffect,
     let mut props = s.typing_props();
     if s.sel.is_collapsed() {
         s.sel = crate::Selection::caret(s.doc.past_field_ends(&s.sel.focus));
-    } else if enter {
+    } else if enter && !text.starts_with(['\r', '\u{2029}']) {
+        // A break first is Enter, which replaces the whole selection, mark included.
         keep_final_mark(s, true);
     }
     // Content controls: a placeholder is replaced, locked ones refuse.

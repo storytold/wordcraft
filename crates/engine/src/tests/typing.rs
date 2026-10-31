@@ -3627,6 +3627,19 @@ fn typing_or_deleting_over_a_selection_that_ends_with_a_mark_keeps_the_paragraph
     run(&mut s, "select.range", json!({"anchor": Pos::body(0, 10), "focus": Pos::body(1, 0)}));
     run(&mut s, "text.newParagraph", json!({}));
     assert_eq!(para_texts(&s), three);
+    // A paragraph break that `text.insert` starts with is that Enter: the mark goes too.
+    for (anchor, focus) in [(Pos::body(0, 10), Pos::body(1, 0)), (Pos::body(0, 3), Pos::body(1, 0))] {
+        let mut enter = typed(&three.join("\n"));
+        run(&mut enter, "select.range", json!({"anchor": anchor, "focus": focus}));
+        run(&mut enter, "text.newParagraph", json!({}));
+        for brk in ["\r", "\u{2029}"] {
+            let mut s = typed(&three.join("\n"));
+            run(&mut s, "select.range", json!({"anchor": anchor, "focus": focus}));
+            run(&mut s, "text.insert", json!({"text": brk}));
+            assert_eq!(para_texts(&s), para_texts(&enter), "{brk:?} over {anchor:?}..{focus:?}");
+            assert_eq!(s.sel, enter.sel, "{brk:?} over {anchor:?}..{focus:?}");
+        }
+    }
     // With Track Changes on, Shift+End and Delete mark only the text deleted.
     let mut s = typed(&three.join("\n"));
     s.doc.settings.track_changes = true;
