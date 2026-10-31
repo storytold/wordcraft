@@ -414,3 +414,59 @@ fn built_in_styles_grey_out_delete_in_the_styles_pane() {
     assert!(delete_is_disabled("Normal"), "the built-in style's Delete is greyed out");
     assert!(!delete_is_disabled("Callout"), "the custom style's Delete stays enabled");
 }
+
+/// #4753: the Styles pane's scroll bar has a column of its own, so with the pointer over it the
+/// "a" and "¶" markers at the right of each row stay clear of it; its handle still shows, light
+/// or dark.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn the_styles_pane_scroll_bar_leaves_the_style_markers_clear() {
+    use egui_kittest::kittest::Queryable;
+    for appearance in [crate::theme::Appearance::Light, crate::theme::Appearance::Dark] {
+        let app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Hello")), crate::Services::default());
+        let size = egui::vec2(240.0, 400.0);
+        let right = std::rc::Rc::new(std::cell::Cell::new(0.0));
+        let edge = right.clone();
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_size(size).build_ui_state(
+            move |ui, app: &mut crate::WordApp| {
+                if !fonts {
+                    crate::theme::install_fonts(ui.ctx());
+                    crate::theme::apply(ui.ctx(), appearance);
+                    fonts = true;
+                    return;
+                }
+                edge.set(ui.max_rect().right());
+                super::styles(app, ui);
+            },
+            app,
+        );
+        h.run_steps(4);
+        // On the bar, along the pane's right edge, where it is at its widest.
+        h.hover_at(egui::pos2(right.get() - 3.0, size.y - 60.0));
+        h.run_steps(20);
+        let markers: Vec<egui::Rect> = h.get_all_by_label("¶").chain(h.get_all_by_label("a")).map(|n| n.rect()).collect();
+        assert!(markers.len() > 5, "{appearance:?}: the list shows its markers: {markers:?}");
+        // Only a scroll bar is a narrow, tall filled rectangle along the list's right edge.
+        let bars: Vec<(egui::Rect, egui::Color32)> = h
+            .output()
+            .shapes
+            .iter()
+            .filter_map(|c| match &c.shape {
+                egui::Shape::Rect(r) if r.fill.a() > 0 && r.rect.width() < 20.0 && r.rect.height() > 3.0 * r.rect.width() => {
+                    Some((r.rect.intersect(c.clip_rect), r.fill))
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(bars.iter().any(|(b, _)| b.x_range().contains(right.get() - 3.0)), "{appearance:?}: the pointer is on the bar: {bars:?}");
+        let covered: Vec<_> = markers.iter().filter(|m| bars.iter().any(|(b, _)| b.intersects(**m))).collect();
+        assert!(covered.is_empty(), "{appearance:?}: the scroll bar {bars:?} covers markers {covered:?}");
+        // The track is the pane's field colour; the handle stands out from it.
+        let track = h.ctx.global_style().visuals.extreme_bg_color;
+        assert!(
+            bars.iter().any(|(_, fill)| fill.r().abs_diff(track.r()) > 60),
+            "{appearance:?}: the handle shows against the track {track:?}: {bars:?}"
+        );
+    }
+}
