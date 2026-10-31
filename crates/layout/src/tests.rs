@@ -5914,6 +5914,37 @@ fn no_line_break_right_after_a_slash() {
     assert!(lines > 10, "{lines} lines");
 }
 
+/// The text of every laid-out line.
+fn body_lines(l: &DocLayout, text: &str) -> Vec<String> {
+    l.pages
+        .iter()
+        .flat_map(|p| &p.items)
+        .filter_map(|it| {
+            if let Placed::Lines { para, l0, l1, .. } = it {
+                Some(para.lines[*l0..*l1].iter().map(|line| text[line.start..line.stop].to_string()))
+            } else {
+                None
+            }
+        })
+        .flatten()
+        .collect()
+}
+
+#[test]
+fn no_line_break_inside_a_query_address() {
+    // Word keeps "/?type=" and "/_back" whole (measured: a request address went to the next
+    // line whole, a long one breaking only where it no longer fits).
+    for addr in ["https://example.org/portal/_back/?type=objects_export&action=get", "https://example.org/portal/_back_office/reports/_export_all"] {
+        for k in 0..60 {
+            let text = format!("{}{addr} end", "a ".repeat(k));
+            let lines = body_lines(&lay(&Document::from_text(&text)), &text);
+            for (a, b) in lines.iter().zip(&lines[1..]) {
+                assert!(!a.ends_with('?') && !a.ends_with('/'), "{k}: a line ends inside the address: {a:?} / {b:?}");
+            }
+        }
+    }
+}
+
 /// #2963: a word after a slash ("caption /заполняется") wraps whole, as in Word. UAX #14 forbids a
 /// break between the space and the slash, and the break after the slash is dropped (Word keeps
 /// "and/or" whole), so the slash word had no break before it and split between two letters.

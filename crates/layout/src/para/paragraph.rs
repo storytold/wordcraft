@@ -706,10 +706,11 @@ fn break_text<'a>(source: &'a str, skip: &[std::ops::Range<usize>]) -> (std::bor
 fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec<usize> {
     let mut found = Vec::new();
     for (i, o) in unicode_linebreak::linebreaks(text) {
-        // Word keeps "and/or" and web addresses whole: no break right after a slash (a word
-        // too long for the line still breaks anywhere).
-        let after_slash =
-            text.get(..i).is_some_and(|t| t.ends_with('/')) && text.get(i..).and_then(|t| t.chars().next()).is_some_and(char::is_alphanumeric);
+        // Word keeps "and/or" and web addresses whole: no break right after a slash, or the question
+        // mark of a query ("/?type="), before a letter, digit or underscore ("/_back") (a word too
+        // long for the line still breaks anywhere).
+        let after_slash = text.get(..i).is_some_and(|t| t.ends_with(['/', '?']))
+            && text.get(i..).and_then(|t| t.chars().next()).is_some_and(|c| c.is_alphanumeric() || c == '_');
         if (o == unicode_linebreak::BreakOpportunity::Allowed || i < text.len()) && !after_slash {
             found.push(i);
         }
