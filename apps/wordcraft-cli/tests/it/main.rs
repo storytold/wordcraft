@@ -1,5 +1,6 @@
 #[cfg(unix)]
 mod closed_stdout;
+mod convert_epoch;
 mod convert_fields;
 mod convert_region;
 mod help;
