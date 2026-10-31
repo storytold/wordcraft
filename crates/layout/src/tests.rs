@@ -2703,6 +2703,34 @@ fn paragraphs_with_the_same_borders_join_in_one_shaded_box() {
 }
 
 #[test]
+fn side_borders_lie_beyond_their_distance_from_the_text() {
+    // #5036: a thick border at no distance covered the first letter, in the shading's colour.
+    let fill = wordcraft_doc::props::Rgb(0x4F, 0x81, 0xBD);
+    for space in [0.0, 4.0] {
+        let bar = Some(Border { color: Some(fill), space, ..Border::single(3.0) });
+        let mut d = Document::from_text("Requirements");
+        let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+        p.props.borders = Some(Borders { top: bar, left: bar, right: bar, ..Borders::default() });
+        p.props.shading = Some(fill);
+        let l = lay(&d);
+        let items = &l.pages[0].items;
+        let (text, end) = items
+            .iter()
+            .find_map(|i| if let Placed::Lines { x, para, .. } = i { para.lines.first().map(|l| (*x, *x + l.right)) } else { None })
+            .unwrap();
+        let shade = items.iter().find_map(|i| if let Placed::Fill { rect, .. } = i { Some(*rect) } else { None }).unwrap();
+        let rules: Vec<(f32, f32)> = items.iter().filter_map(|i| if let Placed::Rule { x0, x1, .. } = i { Some((*x0, *x1)) } else { None }).collect();
+        assert_eq!(rules.len(), 3, "{rules:?}");
+        let (above, left, right) = (rules[0], rules[1], rules[2]);
+        assert!((left.0 + 1.5 - (text - space)).abs() < 0.01, "{left:?} {text}");
+        assert!((right.0 - 1.5 - (end + space)).abs() < 0.01, "{right:?} {end}");
+        // The top line and the shading reach the outer edges, so nothing shows through the joins.
+        assert!((above.0 - (left.0 - 1.5)).abs() < 0.01 && (above.1 - (right.0 + 1.5)).abs() < 0.01, "{rules:?}");
+        assert!((shade.x - above.0).abs() < 0.01 && (shade.right() - above.1).abs() < 0.01, "{rules:?} {shade:?}");
+    }
+}
+
+#[test]
 fn space_between_paragraphs_is_the_larger_of_after_and_before() {
     // (space after the first, space before the second, contextual spacing on both) -> gap
     let gap = |after: f32, before: f32, contextual: bool| -> f32 {
