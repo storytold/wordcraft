@@ -134,6 +134,7 @@ impl WordApp {
             ctx: None,
             ime_origin: false,
             read_aloud_error: None,
+            voice_picker_open: false,
             autosave_path: None,
             saves_in_flight: Vec::new(),
             font_generation: wordcraft_fonts::FontDb::global().generation(),

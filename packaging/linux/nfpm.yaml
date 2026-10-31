@@ -24,7 +24,8 @@ description: |-
 
 # The binaries link only glibc and libgcc_s directly. Windowing (X11/Wayland, xkbcommon) and the
 # GPU (Vulkan, EGL/GL) are loaded at runtime, so they are dependencies/recommendations here
-# rather than ELF NEEDED entries.
+# rather than ELF NEEDED entries. Read Aloud speaks through espeak-ng (or Speech Dispatcher), a
+# program it starts, so that is a recommendation too.
 overrides:
   deb:
     depends:
@@ -41,6 +42,7 @@ overrides:
       - libxrandr2
       - mesa-vulkan-drivers
       - xdg-desktop-portal
+      - espeak-ng | speech-dispatcher
   rpm:
     depends:
       - libxkbcommon
@@ -53,6 +55,7 @@ overrides:
       - libXrandr
       - mesa-vulkan-drivers
       - xdg-desktop-portal
+      - espeak-ng
 
 contents:
   - src: ${STAGE}/usr/bin/wordcraft
