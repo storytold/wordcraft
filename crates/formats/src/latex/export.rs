@@ -430,6 +430,8 @@ pub fn escape_text(s: &str) -> String {
             '>' => o.push_str("\\textgreater{}"),
             '|' => o.push_str("\\textbar{}"),
             '\u{A0}' => o.push('~'),
+            // TeX collapses a run of spaces into one; a control space keeps each further one.
+            ' ' if prev == ' ' => o.push_str("\\ "),
             // An opening bracket here would become an optional item or line-break argument.
             '[' if !line_has_text => o.push_str("{[}"),
             // Keep TeX from joining `--`, ``` `` ``` and `''` into dashes and quotes.
