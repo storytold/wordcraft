@@ -1423,6 +1423,32 @@ fn center_and_right_alignment() {
 }
 
 #[test]
+fn caret_on_an_empty_line_after_a_break_follows_alignment() {
+    // "BAB I", Shift+Enter: the empty line's caret sits where its alignment puts it (#4283).
+    let text = format!("BAB I{}", wordcraft_doc::para::LINE_BREAK);
+    for rtl in [false, true] {
+        for (align, ltr_x) in [(Align::Left, 72.0), (Align::Center, 306.0), (Align::Right, 540.0), (Align::Justify, 72.0)] {
+            let mut d = Document::new();
+            d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&text, Default::default()))];
+            let at = Pos::body(0, 0);
+            d.format_paragraphs(&at, &at, &|p: &mut ParaProps| {
+                p.align = Some(align);
+                p.bidi = Some(rtl);
+            })
+            .unwrap();
+            let expected = if rtl { 612.0 - ltr_x } else { ltr_x };
+            let x = lay(&d).caret(&Pos::body(0, text.len())).unwrap().x;
+            assert!((x - expected).abs() < 1.0, "{align:?} rtl={rtl}: {x}, expected {expected}");
+        }
+    }
+    // An empty centred paragraph without a break was already centred.
+    let mut d = Document::from_text("");
+    d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.align = Some(Align::Center)).unwrap();
+    let x = lay(&d).caret(&Pos::body(0, 0)).unwrap().x;
+    assert!((x - 306.0).abs() < 1.0, "{x}");
+}
+
+#[test]
 fn tabs_land_on_default_stops() {
     let d = Document::from_text("a\tb");
     let l = lay(&d);
