@@ -305,12 +305,12 @@ pub fn import(bytes: &[u8]) -> Result<Document, String> {
     }
     // RTF's paragraph defaults are single spacing and no space around paragraphs; what a file
     // wants beyond that it states on each paragraph.
-    let dp = &mut doc.styles.default_para;
+    let dp = &mut Arc::make_mut(&mut doc.styles).default_para;
     dp.space_before = Some(0.0);
     dp.space_after = Some(0.0);
     dp.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(1.0));
     if default_font.is_some() {
-        doc.styles.default_chr.font = default_font;
+        Arc::make_mut(&mut doc.styles).default_chr.font = default_font;
     }
     Ok(doc)
 }

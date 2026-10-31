@@ -96,7 +96,7 @@ pub(crate) fn ensure_heading_style(s: &mut Session, n: u8) -> String {
             if s.doc.styles.get(&sid).is_none()
                 && let Some(st) = builtin.get(&sid).cloned()
             {
-                s.doc.styles.upsert(st);
+                Arc::make_mut(&mut s.doc.styles).upsert(st);
             }
         }
         touch_all(s);

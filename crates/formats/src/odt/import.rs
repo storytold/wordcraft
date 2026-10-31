@@ -163,7 +163,7 @@ pub fn import(bytes: &[u8]) -> Result<Document, String> {
     let (flow, last, track, font, parts) = parse_tracked(bytes)?;
     let mut doc = model::to_doc(&flow);
     if font.is_some() {
-        doc.styles.default_chr.font = font;
+        Arc::make_mut(&mut doc.styles).default_chr.font = font;
     }
     doc.last_section = last;
     page_parts::add(&mut doc, parts);

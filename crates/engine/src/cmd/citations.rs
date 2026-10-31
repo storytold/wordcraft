@@ -3,6 +3,7 @@
 //! of authorities, footnote options.
 
 use serde_json::{Value, json};
+use std::sync::Arc;
 use wordcraft_doc::collate::{SortKey, heading_letter, sort_key};
 use wordcraft_doc::para::InlineObject;
 use wordcraft_doc::props::{CharProps, TabAlign, TabLeader, TabStop};

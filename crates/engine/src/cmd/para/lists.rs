@@ -45,9 +45,9 @@ pub(super) fn list(s: &mut Session, v: &Value, default: ListKind) -> CmdResult {
         None => match kind {
             ListKind::Bullet | ListKind::BulletChar(_) => match s.doc.numbering.find_kind(kind) {
                 Some(n) => n,
-                None => s.doc.numbering.try_add_list(kind)?,
+                None => Arc::make_mut(&mut s.doc.numbering).try_add_list(kind)?,
             },
-            _ => s.doc.numbering.try_add_list(kind)?,
+            _ => Arc::make_mut(&mut s.doc.numbering).try_add_list(kind)?,
         },
     };
     fmt(s, &|p| {
@@ -68,7 +68,7 @@ pub(super) fn restart_numbering(s: &mut Session, _: &Value) -> CmdResult {
     let Some(n) = s.doc.para_at(&f).and_then(|p| p.props.numbering).filter(|n| n.num != 0) else {
         return Err(CmdError::Failed("not in a numbered list".into()));
     };
-    let new = s.doc.numbering.restart(n.num).ok_or_else(|| CmdError::Failed("bad list".into()))?;
+    let new = Arc::make_mut(&mut s.doc.numbering).restart(n.num).ok_or_else(|| CmdError::Failed("bad list".into()))?;
     // This paragraph and the following ones of the same list use the new instance.
     let paths: Vec<_> = s.doc.para_paths(f.story).into_iter().filter(|p| *p >= f.path).collect();
     for path in paths {

@@ -164,7 +164,7 @@ fn list_autoformat(s: &mut Session) -> Result<bool, CmdError> {
     let found = if kind.is_bullet() { s.doc.numbering.find_kind(kind) } else { None };
     let num = match found {
         Some(n) => n,
-        None => s.doc.numbering.try_add_list(kind)?,
+        None => Arc::make_mut(&mut s.doc.numbering).try_add_list(kind)?,
     };
     let para = s.doc.para_mut(f.story, &f.path)?;
     para.delete(0, f.off)?;

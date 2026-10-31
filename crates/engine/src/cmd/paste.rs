@@ -458,7 +458,7 @@ fn adopt(s: &mut Session, src: Document) -> Fragment {
     for (i, a) in src.numbering.abstracts.iter().enumerate() {
         let id = next_abs.saturating_add(i as u32);
         abs_map.insert(a.id, id);
-        s.doc.numbering.abstracts.push(wordcraft_doc::numbering::AbstractNum { id, ..a.clone() });
+        Arc::make_mut(&mut s.doc.numbering).abstracts.push(wordcraft_doc::numbering::AbstractNum { id, ..a.clone() });
     }
     let next_num = s.doc.numbering.nums.iter().map(|n| n.id.saturating_add(1)).max().unwrap_or(1).max(1);
     let mut num_map = BTreeMap::new();
@@ -466,11 +466,11 @@ fn adopt(s: &mut Session, src: Document) -> Fragment {
         let id = next_num.saturating_add(i as u32);
         num_map.insert(n.id, id);
         let abstract_id = abs_map.get(&n.abstract_id).copied().unwrap_or(n.abstract_id);
-        s.doc.numbering.nums.push(wordcraft_doc::numbering::Num { id, abstract_id, ..n.clone() });
+        Arc::make_mut(&mut s.doc.numbering).nums.push(wordcraft_doc::numbering::Num { id, abstract_id, ..n.clone() });
     }
     for st in &src.styles.styles {
         if s.doc.styles.get(&st.id).is_none() {
-            s.doc.styles.upsert(st.clone());
+            Arc::make_mut(&mut s.doc.styles).upsert(st.clone());
         }
     }
     // Tracked changes the source carries (RTF revisions) point at its own revisions: add them
