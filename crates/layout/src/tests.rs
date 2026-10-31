@@ -4469,6 +4469,62 @@ fn presses_grab_pictures_anywhere_and_text_boxes_by_their_border() {
     assert!(l.object_at(0, c.x, c.top + 2.0, 4.0).is_none());
 }
 
+#[test]
+fn a_press_inside_a_text_box_over_a_picture_goes_to_its_text() {
+    // A form scanned as a picture, with text boxes laid over it to fill in: a press inside a box
+    // grabbed the picture under it, so the box's text could not be reached.
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let float =
+        |wrap: Wrap, z: u32| Float { wrap, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 0.0, y: 0.0, dist: 0.0, z, ..Default::default() };
+    let form = |wrap: Wrap, picture_z: u32, rot: f32| {
+        let mut d = Document::from_text("Form");
+        let picture = InlineObject::Image {
+            media: "form".into(),
+            w: 300.0,
+            h: 400.0,
+            alt: String::new(),
+            float: float(wrap, picture_z),
+            crop: [0.0; 4],
+            ole: None,
+        };
+        d.insert_object(&Pos::body(0, 0), picture, &Default::default()).unwrap();
+        let id = text_box(&mut d, 0, "Name", 200.0, 100.0, Float { x: 50.0, y: 150.0, rot, ..float(wrap, 2) });
+        (lay(&d), id)
+    };
+    let (l, id) = form(Wrap::InFrontOfText, 1, 0.0);
+    let b = box_rect(&l, id);
+    let (cx, cy) = (b.x + b.w / 2.0, b.y + b.h / 2.0);
+    // Inside the box: its text, not the picture under it.
+    assert!(l.object_at(0, cx, cy, 4.0).is_none());
+    assert_eq!(l.story_at(0, cx, cy), Some(StoryRef::Part(id)));
+    // The box's border grabs the box; the picture around the box grabs the picture.
+    assert_eq!(l.object_at(0, b.x + 1.0, cy, 4.0).map(|o| o.text_box), Some(Some(id)));
+    assert_eq!(l.object_at(0, cx, b.y - 40.0, 4.0).map(|o| o.text_box), Some(None));
+    // A picture in front of the box still grabs where it covers it.
+    let (l, id) = form(Wrap::InFrontOfText, 3, 0.0);
+    let b = box_rect(&l, id);
+    assert_eq!(l.object_at(0, b.x + b.w / 2.0, b.y + b.h / 2.0, 4.0).map(|o| o.text_box), Some(None));
+    // A box turned a quarter covers a tall strip: a press in it, below its unturned frame, is its
+    // text for both the object and the story hit test.
+    let (l, id) = form(Wrap::InFrontOfText, 1, 90.0);
+    let b = box_rect(&l, id);
+    let (cx, y) = (b.x + b.w / 2.0, b.y + b.h / 2.0 + 80.0);
+    assert!(!b.contains(wordcraft_geom::Point::new(cx, y)), "{b:?}");
+    assert!(l.object_at(0, cx, y, 4.0).is_none());
+    assert_eq!(l.story_at(0, cx, y), Some(StoryRef::Part(id)));
+    assert_eq!(l.hit(0, cx, y, StoryRef::Part(id)).map(|p| p.story), Some(StoryRef::Part(id)));
+    // Both behind the text, away from the body text: the same, and a picture stacked above the
+    // box still grabs.
+    let (l, id) = form(Wrap::BehindText, 1, 0.0);
+    let b = box_rect(&l, id);
+    let (cx, cy) = (b.x + b.w / 2.0, b.y + b.h / 2.0);
+    assert!(l.object_at(0, cx, cy, 4.0).is_none());
+    assert_eq!(l.story_at(0, cx, cy), Some(StoryRef::Part(id)));
+    let (l, id) = form(Wrap::BehindText, 3, 0.0);
+    let b = box_rect(&l, id);
+    assert_eq!(l.object_at(0, b.x + b.w / 2.0, b.y + b.h / 2.0, 4.0).map(|o| o.text_box), Some(None));
+}
+
 /// (lines placed, lines laid out) of a text box's story, and its area.
 fn box_lines(l: &DocLayout, id: u32) -> (usize, usize, wordcraft_geom::Rect) {
     let mut shown = 0;
