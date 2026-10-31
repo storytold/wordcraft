@@ -187,7 +187,7 @@ fn flow_sections(blocks: &[FBlock], last: &SectionProps) -> Vec<(SectionProps, s
 
 /// Write an `.odt` package.
 pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
-    let flow = model::from_doc_with(doc, model::FlowOpts { tracked: true, fields: true, notes: true });
+    let flow = model::from_doc_with(doc, model::FlowOpts { tracked: true, fields: true, notes: true, comments: true });
     let mut w = Writer::default();
     let mut body = String::new();
     let sections = flow_sections(&flow.blocks, &doc.last_section);

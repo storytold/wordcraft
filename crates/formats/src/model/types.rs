@@ -181,6 +181,50 @@ pub enum Inline {
         custom: String,
         blocks: Vec<FBlock>,
     },
+    /// Where comment `id` (the flow's own number for it) starts, and the comment. A reply
+    /// ([`FComment::parent`]) has no range: it only follows its comment. Only flows asked for
+    /// comments ([`FlowOpts::comments`]) hold them.
+    Comment {
+        id: u32,
+        comment: Box<FComment>,
+    },
+    /// Where comment `id`'s range ends.
+    CommentEnd(u32),
+}
+
+/// `blocks` with each table replaced by the blocks of its cells, row by row (nested tables too),
+/// for places that hold paragraphs only.
+pub fn flatten_tables(blocks: &[FBlock]) -> Vec<FBlock> {
+    let mut out = Vec::new();
+    let mut stack: Vec<std::slice::Iter<'_, FBlock>> = vec![blocks.iter()];
+    while let Some(top) = stack.last_mut() {
+        match top.next() {
+            Some(FBlock::Para(p)) => out.push(FBlock::Para(p.clone())),
+            Some(FBlock::Table(t)) => {
+                // Cells in reverse so they come off the stack in order.
+                for c in t.rows.iter().rev().flat_map(|r| r.iter().rev()) {
+                    stack.push(c.blocks.iter());
+                }
+            }
+            None => {
+                stack.pop();
+            }
+        }
+    }
+    out
+}
+
+/// A comment in a flow ([`Inline::Comment`]).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FComment {
+    pub author: String,
+    pub initials: String,
+    /// ISO 8601; empty = unknown.
+    pub date: String,
+    pub resolved: bool,
+    /// The comment this one answers (its flow id).
+    pub parent: Option<u32>,
+    pub blocks: Vec<FBlock>,
 }
 
 /// What [`super::from_doc_with`] keeps besides text and formatting.
@@ -192,6 +236,8 @@ pub struct FlowOpts {
     pub fields: bool,
     /// Footnotes and endnotes as [`Inline::Note`] (otherwise left out).
     pub notes: bool,
+    /// Comments as [`Inline::Comment`] and [`Inline::CommentEnd`] (otherwise left out).
+    pub comments: bool,
 }
 
 /// Base text size (points) a phonetic guide falls back to when the source states none: the
@@ -300,7 +346,7 @@ impl Para {
                 Inline::Text(t, _) | Inline::Equation { linear: t, .. } | Inline::Ruby { base: t, .. } | Inline::Field { result: t, .. } => {
                     s.push_str(t)
                 }
-                Inline::Image(_) | Inline::Anchor(_) | Inline::Figure(_) | Inline::Note { .. } => {}
+                Inline::Image(_) | Inline::Anchor(_) | Inline::Figure(_) | Inline::Note { .. } | Inline::Comment { .. } | Inline::CommentEnd(_) => {}
             }
         }
         s
@@ -316,7 +362,7 @@ impl Para {
                     _ => s.push_str(t),
                 },
                 Inline::Equation { linear: t, .. } | Inline::Ruby { base: t, .. } | Inline::Field { result: t, .. } => s.push_str(t),
-                Inline::Image(_) | Inline::Anchor(_) | Inline::Figure(_) | Inline::Note { .. } => {}
+                Inline::Image(_) | Inline::Anchor(_) | Inline::Figure(_) | Inline::Note { .. } | Inline::Comment { .. } | Inline::CommentEnd(_) => {}
             }
         }
         s

@@ -112,6 +112,8 @@ struct Builder<'a> {
     revs: std::collections::HashMap<(u8, RevMark), u32>,
     /// Link and font bytes given to runs so far ([`MAX_RUN_STRINGS`]).
     run_strings: usize,
+    /// The document's comment for each flow comment id.
+    comments: std::collections::HashMap<u32, u32>,
 }
 
 fn rev_key(kind: RevisionKind) -> u8 {
@@ -131,7 +133,7 @@ impl<'a> Builder<'a> {
                 revs.entry((rev_key(r.kind), mark)).or_insert(i as u32);
             }
         }
-        Builder { doc, revs, run_strings: 0 }
+        Builder { doc, revs, run_strings: 0, comments: Default::default() }
     }
 
     /// The document revision for a tracked change, added the first time it is seen.
@@ -160,6 +162,35 @@ impl<'a> Builder<'a> {
             }
         }
         cp
+    }
+
+    /// Comment `c` (flow id `id`) added to the document with its text, as a reply when its parent
+    /// was added before it; its document id, or `None` when the document has no room for it or
+    /// the flow already used `id`.
+    fn comment(&mut self, id: u32, c: &super::types::FComment) -> Option<u32> {
+        if self.comments.contains_key(&id) {
+            return None;
+        }
+        let blocks = self.blocks(&c.blocks, 1);
+        let part = self.doc.try_add_part(wordcraft_doc::PartKind::Comment, blocks).ok()?;
+        let ids = &self.doc.comments;
+        let Some(doc_id) = wordcraft_doc::free_id(ids.keys().next_back().copied(), ids.keys().copied(), 0) else {
+            self.doc.parts.remove(&part);
+            return None;
+        };
+        let parent = c.parent.and_then(|p| self.comments.get(&p).copied());
+        let comment = wordcraft_doc::Comment {
+            author: clean_text(&c.author),
+            initials: clean_text(&c.initials),
+            date: clean_text(&c.date),
+            parent,
+            resolved: c.resolved,
+            part,
+            ..Default::default()
+        };
+        self.doc.comments.insert(doc_id, comment);
+        self.comments.insert(id, doc_id);
+        Some(doc_id)
     }
 
     /// A note story holding `blocks`, as Word's: its paragraphs in the note text style, the first
@@ -255,6 +286,19 @@ impl<'a> Builder<'a> {
                     append(&mut out, "", &CharProps::default(), Some(InlineObject::BookmarkEnd { name: name.clone() }));
                 }
                 Inline::Figure(_) => {}
+                Inline::Comment { id, comment } => {
+                    // A reply is the comment's, not the text's: it has no range.
+                    if let Some(doc_id) = self.comment(*id, comment)
+                        && comment.parent.is_none()
+                    {
+                        append(&mut out, "", &CharProps::default(), Some(InlineObject::CommentStart { id: doc_id }));
+                    }
+                }
+                Inline::CommentEnd(id) => {
+                    if let Some(doc_id) = self.comments.get(id) {
+                        append(&mut out, "", &CharProps::default(), Some(InlineObject::CommentEnd { id: *doc_id }));
+                    }
+                }
                 Inline::Note { endnote, custom, blocks } => {
                     if let Some(obj) = self.note(*endnote, custom, blocks) {
                         let style = if *endnote { "EndnoteReference" } else { "FootnoteReference" };

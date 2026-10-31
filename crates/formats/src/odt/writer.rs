@@ -32,6 +32,7 @@ pub(super) const NS: &str = concat!(
     "xmlns:dc=\"http://purl.org/dc/elements/1.1/\" ",
     "xmlns:meta=\"urn:oasis:names:tc:opendocument:xmlns:meta:1.0\" ",
     "xmlns:svg=\"urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0\" ",
+    "xmlns:loext=\"urn:org:documentfoundation:names:experimental:office:xmlns:loext:1.0\" ",
     "office:version=\"1.3\""
 );
 
@@ -147,6 +148,11 @@ pub(super) fn spacing_props(sp: &model::Spacing) -> String {
         _ => {}
     }
     p
+}
+
+/// The `office:name` of comment `id` written by a writer with names prefixed `prefix`.
+fn annotation_name(prefix: &str, id: u32) -> String {
+    format!("__Annotation__{prefix}{id}")
 }
 
 fn parent_style(k: Kind) -> &'static str {
@@ -435,6 +441,11 @@ impl Writer {
                     self.note(*endnote, custom, blocks, out);
                     prev_space = false;
                 }
+                Inline::Comment { id, comment } => {
+                    self.comment(*id, comment, out);
+                    prev_space = false;
+                }
+                Inline::CommentEnd(id) => out.push_str(&format!("<office:annotation-end office:name=\"{}\"/>", annotation_name(self.prefix, *id))),
                 Inline::Field { instr, result, fmt } => match super::fields::element(instr, &x(result)) {
                     Some(el) => {
                         match self.text_style(&Fmt { link: None, ..fmt.clone() }) {
@@ -453,6 +464,41 @@ impl Writer {
                 Inline::Ruby { .. } => {}
                 Inline::Figure(_) | Inline::Equation { .. } => {}
             }
+        }
+    }
+
+    /// A comment (ODF 1.3 §14.1): named, so its `office:annotation-end` closes its range, or for
+    /// a reply naming the comment it answers (LibreOffice's `loext:parent-name`); its author,
+    /// date, initials, resolved state (`loext:resolved`) and text.
+    fn comment(&mut self, id: u32, c: &model::FComment, out: &mut String) {
+        let reopen = self.open_ins.as_ref().map(|(m, _)| m.clone());
+        self.close_ins(out);
+        let mut attrs = match c.parent {
+            Some(p) => format!(" loext:parent-name=\"{}\"", annotation_name(self.prefix, p)),
+            None => format!(" office:name=\"{}\"", annotation_name(self.prefix, id)),
+        };
+        if c.resolved {
+            attrs.push_str(" loext:resolved=\"true\"");
+        }
+        let mut head = String::new();
+        if !c.author.is_empty() {
+            head.push_str(&format!("<dc:creator>{}</dc:creator>", x(&c.author)));
+        }
+        if !c.date.is_empty() {
+            head.push_str(&format!("<dc:date>{}</dc:date>", x(&c.date)));
+        }
+        if !c.initials.is_empty() {
+            head.push_str(&format!("<meta:creator-initials>{}</meta:creator-initials>", x(&c.initials)));
+        }
+        let saved = (std::mem::take(&mut self.cur_style), std::mem::take(&mut self.chain), self.part, self.note_parent.take());
+        let mut body = String::new();
+        // An annotation holds paragraphs and lists only: a table's text goes in as paragraphs.
+        self.blocks(&model::flatten_tables(&c.blocks), &mut body, 1);
+        self.close_ins(&mut body);
+        (self.cur_style, self.chain, self.part, self.note_parent) = saved;
+        out.push_str(&format!("<office:annotation{attrs}>{head}{body}</office:annotation>"));
+        if let Some(m) = reopen {
+            self.open_ins(&m, out);
         }
     }
 

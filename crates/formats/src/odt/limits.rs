@@ -10,6 +10,9 @@ pub(super) const MAX_SECTIONS: usize = 10_000;
 /// Longest shown text a field keeps, in bytes.
 pub(super) const MAX_FIELD_RESULT: usize = 64 << 10;
 
+/// Most comments read; later ones are left out.
+pub(super) const MAX_COMMENTS: usize = 100_000;
+
 /// Most `text:changed-region`s read (hostile input).
 pub(super) const MAX_REGIONS: usize = 10_000;
 

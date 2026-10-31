@@ -120,3 +120,12 @@ fn citations_number_footnotes_and_endnotes_apart() {
         xml.split("<text:note-citation").skip(1).filter_map(|c| c.split_once('>')).map(|(_, rest)| rest.split('<').next().unwrap_or("")).collect();
     assert_eq!(citations, ["1", "i", "*"]);
 }
+
+#[test]
+fn a_note_cut_off_by_the_end_of_the_file_keeps_its_paragraph() {
+    // Truncated XML: no end for the note, its paragraph or the body.
+    let content = format!(r#"<office:document-content {NS_T}><office:body><office:text><text:p>before<text:note><text:note-body><text:p>in note"#);
+    let d = import(&package(&content, None)).unwrap();
+    assert_eq!(d.body[0].as_para().unwrap().text.replace(OBJ, "#"), "before#");
+    assert_eq!(notes(&d), [(NoteKind::Footnote, String::new(), "in note".to_string())]);
+}

@@ -1,4 +1,6 @@
-use super::types::{Cell, FBlock, FTable, Flow, FlowOpts, Fmt, FmtChange, Img, Inline, Kind, ListInfo, MAX_DEPTH, Meta, Para, RevMark, Spacing};
+use super::types::{
+    Cell, FBlock, FComment, FTable, Flow, FlowOpts, Fmt, FmtChange, Img, Inline, Kind, ListInfo, MAX_DEPTH, Meta, Para, RevMark, Spacing,
+};
 use super::{
     Arc, Block, Blocks, CharProps, Document, InlineObject, NumFormat, OBJ, PAGE_BREAK, ParaProps, Paragraph, StyleKind, Table, TextColor, Underline,
     VMerge, VertAlign,
@@ -123,6 +125,51 @@ fn media_ext(key: &str, data: &[u8]) -> String {
     }
 }
 
+/// The flow inlines for a note reference, comment mark or field `o` of `doc`, when `opts` asks
+/// for them; `None` for other objects. `f` is the formatting of the run `o` is in.
+fn rich_inlines(doc: &Document, o: &InlineObject, f: &Fmt, opts: FlowOpts) -> Option<Vec<Inline>> {
+    Some(match o {
+        InlineObject::NoteRef { kind, id, custom } if opts.notes => {
+            // The note's content without its own mark (a note holds no notes).
+            let story = doc.parts.get(id).map(|part| &part.blocks);
+            let mut blocks = story.map(|b| flow_blocks(doc, b, 0, FlowOpts { notes: false, ..opts })).unwrap_or_default();
+            if let Some(FBlock::Para(first)) = blocks.first_mut() {
+                first.trim_with(&[' ', '\t'], &[]);
+            }
+            let endnote = *kind == wordcraft_doc::para::NoteKind::Endnote;
+            vec![Inline::Note { endnote, custom: custom.clone(), blocks }]
+        }
+        // The comment, then its replies, which have no place of their own.
+        InlineObject::CommentStart { id } if opts.comments => {
+            let Some(c) = doc.comments.get(id) else { return Some(Vec::new()) };
+            let mut out = vec![Inline::Comment { id: *id, comment: Box::new(flow_comment(doc, c, None, opts)) }];
+            for (rid, r) in doc.comments.iter().filter(|(_, r)| r.parent == Some(*id)) {
+                out.push(Inline::Comment { id: *rid, comment: Box::new(flow_comment(doc, r, Some(*id), opts)) });
+            }
+            out
+        }
+        InlineObject::CommentEnd { id } if opts.comments => {
+            if doc.comments.contains_key(id) {
+                vec![Inline::CommentEnd(*id)]
+            } else {
+                Vec::new()
+            }
+        }
+        InlineObject::Field { instr, result, .. } if opts.fields => {
+            vec![Inline::Field { instr: instr.clone(), result: result.clone(), fmt: f.clone() }]
+        }
+        _ => return None,
+    })
+}
+
+/// Comment `c` (a reply to `parent`) of `doc` as a flow comment: its text holds no comments or
+/// notes of its own.
+fn flow_comment(doc: &Document, c: &wordcraft_doc::Comment, parent: Option<u32>, opts: FlowOpts) -> FComment {
+    let story = doc.parts.get(&c.part).map(|p| &p.blocks);
+    let blocks = story.map(|b| flow_blocks(doc, b, 0, FlowOpts { notes: false, comments: false, ..opts })).unwrap_or_default();
+    FComment { author: c.author.clone(), initials: c.initials.clone(), date: c.date.clone(), resolved: c.resolved, parent, blocks }
+}
+
 /// The spacing and indents a paragraph sets itself (its style's are not included).
 fn direct_spacing(p: &wordcraft_doc::props::ParaProps) -> Spacing {
     Spacing { before: p.space_before, after: p.space_after, line: p.line_spacing, left: p.indent_left, right: p.indent_right, first: p.indent_first }
@@ -206,6 +253,13 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
             if hidden || obj.and_then(InlineObject::frame).is_some_and(|(_, _, f)| f.hidden) {
                 continue;
             }
+            if let Some(items) = obj.and_then(|o| rich_inlines(doc, o, &f, opts)) {
+                if !buf.is_empty() {
+                    out.push_text(&std::mem::take(&mut buf), &f);
+                }
+                out.inlines.extend(items);
+                continue;
+            }
             match obj {
                 Some(o @ InlineObject::Image { media, w, h, alt, .. }) => {
                     if !buf.is_empty() {
@@ -250,25 +304,6 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
                     // The base text and reading, in the run's formatting; the guide's own
                     // attributes (alignment, size, raise) stay in the document model.
                     out.inlines.push(Inline::Ruby { base: base.clone(), ruby: ruby.clone(), fmt: f.clone() });
-                }
-                Some(InlineObject::NoteRef { kind, id, custom }) if opts.notes => {
-                    if !buf.is_empty() {
-                        out.push_text(&std::mem::take(&mut buf), &f);
-                    }
-                    // The note's content without its own mark (a note holds no notes).
-                    let story = doc.parts.get(id).map(|part| &part.blocks);
-                    let mut blocks = story.map(|b| flow_blocks(doc, b, 0, FlowOpts { notes: false, ..opts })).unwrap_or_default();
-                    if let Some(FBlock::Para(first)) = blocks.first_mut() {
-                        first.trim_with(&[' ', '\t'], &[]);
-                    }
-                    let endnote = *kind == wordcraft_doc::para::NoteKind::Endnote;
-                    out.inlines.push(Inline::Note { endnote, custom: custom.clone(), blocks });
-                }
-                Some(InlineObject::Field { instr, result, .. }) if opts.fields => {
-                    if !buf.is_empty() {
-                        out.push_text(&std::mem::take(&mut buf), &f);
-                    }
-                    out.inlines.push(Inline::Field { instr: instr.clone(), result: result.clone(), fmt: f.clone() });
                 }
                 Some(InlineObject::BookmarkStart { name }) if name != "_GoBack" => {
                     if !buf.is_empty() {

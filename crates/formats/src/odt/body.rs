@@ -1,8 +1,10 @@
 use super::import::Pages;
-use super::limits::{MAX_FIELD_RESULT, MAX_INFO_CHARS, MAX_OPEN_INSERTIONS, MAX_REGIONS, MAX_SECTIONS, MAX_XML_DEPTH};
+use super::limits::{MAX_COMMENTS, MAX_FIELD_RESULT, MAX_INFO_CHARS, MAX_OPEN_INSERTIONS, MAX_REGIONS, MAX_SECTIONS, MAX_XML_DEPTH};
 use super::styles::Styles;
 use super::xml::{Attrs, Ev, events, get, length, local};
-use super::{Cell, FBlock, FTable, Fmt, HashMap, Inline, Kind, ListInfo, Para, RevMark, RevisionKind, SectionProps, SectionStart, make_img, model};
+use super::{
+    Cell, FBlock, FComment, FTable, Fmt, HashMap, Inline, Kind, ListInfo, Para, RevMark, RevisionKind, SectionProps, SectionStart, make_img, model,
+};
 
 /// An embedded ODF formula sub-document's `content.xml`, read for its `math:math` element
 /// (ODF 1.3 §10.4.3.2 wraps it in `office:document-content`/`office:body`/`office:math`, but
@@ -58,6 +60,52 @@ fn read_formula(xml: &[u8]) -> Option<(String, bool)> {
         }
     });
     crate::mathml::read(&math?)
+}
+
+/// Make every comment range in `blocks` close: an end before its comment (or of no comment) is
+/// dropped, and a comment whose end never comes covers nothing. Replies have no range.
+pub(super) fn balance_comments(blocks: &mut [FBlock]) {
+    fn each_para(blocks: &mut [FBlock], depth: usize, f: &mut dyn FnMut(&mut Para)) {
+        for b in blocks {
+            match b {
+                FBlock::Para(p) => f(p),
+                FBlock::Table(t) if depth < model::MAX_DEPTH => {
+                    for c in t.rows.iter_mut().flatten() {
+                        each_para(&mut c.blocks, depth + 1, f);
+                    }
+                }
+                FBlock::Table(_) => {}
+            }
+        }
+    }
+    let mut open = std::collections::HashSet::new();
+    each_para(blocks, 0, &mut |p| {
+        p.inlines.retain(|i| match i {
+            Inline::Comment { id, comment } if comment.parent.is_none() => {
+                open.insert(*id);
+                true
+            }
+            Inline::CommentEnd(id) => open.remove(id),
+            _ => true,
+        })
+    });
+    if open.is_empty() {
+        return;
+    }
+    each_para(blocks, 0, &mut |p| {
+        let mut k = 0;
+        while k < p.inlines.len() {
+            if let Some(Inline::Comment { id, comment }) = p.inlines.get(k)
+                && comment.parent.is_none()
+                && open.remove(id)
+            {
+                let id = *id;
+                p.inlines.insert(k + 1, Inline::CommentEnd(id));
+                k += 1;
+            }
+            k += 1;
+        }
+    });
 }
 
 struct TableB {
@@ -159,18 +207,42 @@ pub(super) struct Body<'a> {
     active_ins: Vec<(String, RevMark)>,
     /// The text field being read.
     field: Option<OpenField>,
-    /// The note being read.
+    /// The note or comment being read.
     note: Option<OpenNote>,
+    /// Comments by `office:name`: their flow ids; and the next flow id.
+    comment_names: HashMap<String, u32>,
+    next_comment: u32,
 }
 
-/// A footnote or endnote being read (ODF 1.3 §6.3): what it is, and the reader state of the
-/// paragraph it sits in, put aside while its content is read into a container of its own.
+/// A comment being read (ODF 1.3 §14.1): what `office:annotation` and its `dc:creator`,
+/// `dc:date` and `meta:creator-initials` say.
+#[derive(Default)]
+struct CommentInfo {
+    /// Its flow id.
+    id: u32,
+    /// Its `office:name`, which its `office:annotation-end` names.
+    named: bool,
+    /// The flow id of the comment it answers (`loext:parent-name`).
+    parent: Option<u32>,
+    resolved: bool,
+    author: String,
+    date: String,
+    initials: String,
+    /// The child whose text is being read: 0 author, 1 date, 2 initials.
+    field: Option<u8>,
+}
+
+/// A footnote, endnote or comment being read (ODF 1.3 §6.3, §14.1): what it is, and the
+/// reader state of the paragraph it sits in, put aside while its content is read into a
+/// container of its own.
 struct OpenNote {
-    /// The `text:note` element's depth.
+    /// The `text:note` or `office:annotation` element's depth.
     depth: usize,
     endnote: bool,
     /// The citation's `text:label` (a custom mark).
     custom: String,
+    /// Set for a comment.
+    comment: Option<CommentInfo>,
     para: Option<Para>,
     fmt: Vec<Fmt>,
     xml_space_end: bool,
@@ -235,6 +307,8 @@ impl<'a> Body<'a> {
             active_ins: Vec::new(),
             field: None,
             note: None,
+            comment_names: HashMap::new(),
+            next_comment: 0,
         }
     }
 
@@ -260,6 +334,11 @@ impl<'a> Body<'a> {
 
     /// The blocks read, with anything still open closed.
     pub(super) fn take_blocks(&mut self) -> Vec<FBlock> {
+        // What truncated XML left open: a field, a note or comment (its paragraph goes on).
+        self.end_field();
+        if self.note.is_some() {
+            self.end_note();
+        }
         self.end_para();
         while self.containers.len() > 1 {
             let c = self.containers.pop().unwrap_or_default();
@@ -271,6 +350,7 @@ impl<'a> Body<'a> {
                 blocks.push(FBlock::Table(t.finish()));
             }
         }
+        balance_comments(&mut blocks);
         blocks
     }
 }
@@ -478,6 +558,18 @@ impl Body<'_> {
             if let Some(fr) = &mut self.frame {
                 fr.3.push_str(t);
             }
+            return;
+        }
+        if let Some(c) = self.note.as_mut().and_then(|n| n.comment.as_mut())
+            && let Some(k) = c.field
+        {
+            let s = match k {
+                0 => &mut c.author,
+                1 => &mut c.date,
+                _ => &mut c.initials,
+            };
+            let room = MAX_INFO_CHARS.saturating_sub(s.chars().count());
+            s.extend(t.chars().take(room));
             return;
         }
         if let Some(OpenField { result, .. }) = &mut self.field {
@@ -913,13 +1005,28 @@ impl Body<'_> {
     /// schema, never written by Word or LibreOffice), or one in deleted text or a frame, is left
     /// out with its content.
     fn start_note_part(&mut self, q: &str, a: &Attrs) -> bool {
-        if !q.starts_with("text:") {
-            return false;
+        let free = self.note.is_none() && self.del.is_none() && !self.in_tc && self.frame.is_none();
+        if let Some(c) = self.note.as_mut().and_then(|n| n.comment.as_mut()) {
+            c.field = match q {
+                "dc:creator" => Some(0),
+                "dc:date" => Some(1),
+                "meta:creator-initials" => Some(2),
+                _ => None,
+            };
+            if c.field.is_some() {
+                return true;
+            }
         }
-        match local(q) {
-            "note" if self.note.is_none() && self.del.is_none() && !self.in_tc && self.frame.is_none() => self.start_note(a),
+        match q {
+            "office:annotation" if free && self.comment_names.len() < MAX_COMMENTS => self.start_comment(a),
+            "office:annotation-end" => {
+                if let Some(id) = get(a, "office:name").and_then(|n| self.comment_names.get(n)).copied() {
+                    self.push_inline(Inline::CommentEnd(id));
+                }
+            }
+            "text:note" if free => self.start_note(a),
             // The citation's text is LibreOffice's number: only a custom mark is kept.
-            "note-citation" => {
+            "text:note-citation" => {
                 if let Some(n) = &mut self.note {
                     n.custom = get(a, "text:label").map(|l| l.chars().filter(|c| !c.is_control()).take(10).collect()).unwrap_or_default();
                 }
@@ -930,6 +1037,34 @@ impl Body<'_> {
         true
     }
 
+    /// Begin reading a comment, as a note: its text in a container of its own.
+    fn start_comment(&mut self, a: &Attrs) {
+        let id = self.next_comment;
+        self.next_comment = self.next_comment.saturating_add(1);
+        let name = get(a, "office:name").filter(|n| !n.is_empty() && n.len() <= MAX_INFO_CHARS);
+        if let Some(n) = name {
+            // The first comment of a name keeps it.
+            self.comment_names.entry(n.to_string()).or_insert(id);
+        }
+        let parent = get(a, "loext:parent-name").and_then(|n| self.comment_names.get(n)).copied();
+        let resolved = get(a, "loext:resolved").is_some_and(|r| r.trim() == "true");
+        let info = CommentInfo { id, named: name.is_some(), parent, resolved, ..Default::default() };
+        self.start_note(a);
+        if let Some(n) = &mut self.note {
+            n.comment = Some(info);
+        }
+    }
+
+    /// `inline` at the end of the paragraph being read (a new one if none is).
+    fn push_inline(&mut self, inline: Inline) {
+        if self.para.is_none() {
+            self.start_para(None, None);
+        }
+        if let Some(p) = &mut self.para {
+            p.inlines.push(inline);
+        }
+    }
+
     /// Begin reading a note: put the paragraph it is in aside and read its content into a
     /// container of its own, outside any list.
     fn start_note(&mut self, a: &Attrs) {
@@ -937,6 +1072,7 @@ impl Body<'_> {
             depth: self.depth,
             endnote: get(a, "text:note-class").is_some_and(|c| c.trim() == "endnote"),
             custom: String::new(),
+            comment: None,
             para: self.para.take(),
             fmt: std::mem::take(&mut self.fmt),
             xml_space_end: std::mem::take(&mut self.xml_space_end),
@@ -968,23 +1104,51 @@ impl Body<'_> {
         self.para_cont = n.para_cont;
         self.lists = n.lists;
         self.item_used = n.item_used;
-        if self.para.is_none() {
-            self.start_para(None, None);
-        }
-        if let Some(p) = &mut self.para {
-            p.inlines.push(Inline::Note { endnote: n.endnote, custom: n.custom, blocks });
+        match n.comment {
+            Some(c) => {
+                // LibreOffice writes an empty date as all zeroes; a date without a zone is
+                // read as UTC, as the document's own dates are.
+                let date = c.date.trim();
+                let date = if date.is_empty() || date.starts_with("0000") {
+                    String::new()
+                } else if date.ends_with(['Z', 'z']) || date.rsplit_once('T').is_some_and(|(_, t)| t.contains(['+', '-'])) {
+                    date.to_string()
+                } else {
+                    format!("{date}Z")
+                };
+                let comment = FComment {
+                    author: c.author.trim().to_string(),
+                    initials: c.initials.trim().to_string(),
+                    date,
+                    resolved: c.resolved,
+                    parent: c.parent,
+                    blocks,
+                };
+                self.push_inline(Inline::Comment { id: c.id, comment: Box::new(comment) });
+                // A comment without a name has no end to wait for: it covers nothing.
+                if !c.named && c.parent.is_none() {
+                    self.push_inline(Inline::CommentEnd(c.id));
+                }
+            }
+            None => self.push_inline(Inline::Note { endnote: n.endnote, custom: n.custom, blocks }),
         }
     }
 
     /// An element ending at the current depth, for an open note or field: true when that was all
     /// there was to it.
     fn end_note_or_field(&mut self, q: &str) -> bool {
+        if let Some(c) = self.note.as_mut().and_then(|n| n.comment.as_mut())
+            && c.field.is_some()
+        {
+            c.field = None;
+            return true;
+        }
         if self.note.as_ref().is_some_and(|n| self.depth < n.depth) {
             // The note's own end, or (malformed) an outer element ending first: the note ends,
             // then that element.
             self.end_field();
             self.end_note();
-            if local(q) == "note" {
+            if q == "text:note" || q == "office:annotation" {
                 return true;
             }
         }
