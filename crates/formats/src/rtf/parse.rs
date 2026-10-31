@@ -66,11 +66,18 @@ fn parse_full(bytes: &[u8]) -> Result<Parsed, String> {
                         k += 1;
                     }
                     let d0 = k;
-                    while bytes.get(k).is_some_and(u8::is_ascii_digit) && k - d0 < 10 {
+                    // The run may be any length: consume all of it, and parse only the first
+                    // 15 significant digits (leading zeros skipped first: a zero-padded value
+                    // of 16+ digits must not lose the significant ones). Longer runs still
+                    // saturate to `i64::MAX` and clamp through the `i32` clamp below.
+                    while bytes.get(k).is_some_and(u8::is_ascii_digit) {
                         k += 1;
                     }
                     let param = if k > d0 {
-                        let v = std::str::from_utf8(bytes.get(d0..k).unwrap_or(b"0")).ok().and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+                        let digits = bytes.get(d0..k).unwrap_or_default();
+                        let sig = digits.get(digits.iter().take_while(|b| **b == b'0').count()..).unwrap_or_default();
+                        let v =
+                            if sig.len() > 15 { i64::MAX } else { std::str::from_utf8(sig).ok().and_then(|s| s.parse::<i64>().ok()).unwrap_or(0) };
                         let v = if neg { -v } else { v };
                         // A date (DTTM) is a 32-bit pattern some writers put unsigned.
                         let v = if matches!(word, "revdttm" | "revdttmdel" | "crdate" | "prdate")

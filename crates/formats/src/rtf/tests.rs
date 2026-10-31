@@ -1604,3 +1604,41 @@ fn rtf_backslash_space_and_special_breaks() {
     let p = doc.body.first().unwrap().as_para().unwrap();
     assert_eq!(p.text, "A\u{00A0}B\u{00A0}C\u{200B}D\nE\u{000C}F");
 }
+
+#[test]
+fn long_numeric_parameters_dont_leak_digits_into_text() {
+    // A parameter of 11+ digits used to split into a 10-digit value and
+    // leftover digits imported as literal text (e.g. `99` from \li999999999999).
+    for (rtf, expect) in [
+        (r"{\rtf1\ansi\li999999999999 x}", "x"),
+        (r"{\rtf1\ansi\sb9999999999999999 y}", "y"),
+        (r"{\rtf1\ansi\li-999999999999 z}", "z"),
+        (r"{\rtf1\ansi\li2147483647 w}", "w"),
+        (r"{\rtf1\ansi\li9999999999 v}", "v"),
+    ] {
+        let f = parse(rtf.as_bytes()).unwrap();
+        let all = texts(&f).join("|");
+        assert!(all.contains(expect), "{all}");
+        assert!(!all.contains('9'), "{all}");
+    }
+}
+
+#[test]
+fn bin_counts_of_any_length_consume_the_data() {
+    // A zero-padded binary count (12 digits) used to parse the first 10
+    // digits as 0, so the tail digits and the payload were imported as text.
+    let f = parse(br"{\rtf1\ansi\bin000000000001 X\par Y}").unwrap();
+    let all = texts(&f).join("|");
+    assert!(all.contains("Y"), "{all}");
+    assert!(!all.contains('0') && !all.contains('1') && !all.contains('X'), "{all}");
+}
+
+#[test]
+fn bin_count_padded_past_fifteen_digits() {
+    // With 16 digits the first 15 can all be zeros; parsing only the first
+    // 15 turned the count into 0 and the payload byte leaked as text.
+    let f = parse(br"{\rtf1\ansi\bin0000000000000001 X\par Y}").unwrap();
+    let all = texts(&f).join("|");
+    assert!(all.contains("Y"), "{all}");
+    assert!(!all.contains('X'), "the payload byte leaked as text: {all}");
+}
