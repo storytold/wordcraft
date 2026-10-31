@@ -15,7 +15,10 @@
 //! `text:change-start`/`text:change-end`, a deletion keeps the deleted paragraphs in its region
 //! and leaves a `text:change` point in the body. They map to `Document::revisions` and the
 //! `ins`/`del` marks of runs and paragraph marks; a deleted paragraph mark is a region of
-//! several paragraphs. Format changes are read as no change.
+//! several paragraphs. A format change (§5.5.6) records who changed the formatting and when, not
+//! the formatting before: text in its range opens with a formatting revision whose old formatting
+//! is the current one, and so does a paragraph whose mark is in it (as with an inserted mark).
+//! Export writes character changes as ranges over their text and paragraph changes over the mark.
 
 use std::collections::HashMap;
 use std::io::{Cursor, Read, Write};
@@ -27,7 +30,7 @@ use wordcraft_doc::props::VAlign;
 use wordcraft_doc::section::{Columns, SectionStart};
 use wordcraft_doc::{Align, Document, RevisionKind, Rgb, SectionProps};
 
-use crate::model::{self, Cell, FBlock, FTable, Flow, Fmt, Inline, Kind, ListInfo, Meta, Para, RevMark, make_img, mime_of};
+use crate::model::{self, Cell, FBlock, FTable, Flow, Fmt, FmtChange, Inline, Kind, ListInfo, Meta, Para, RevMark, make_img, mime_of};
 
 mod body;
 mod import;

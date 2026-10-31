@@ -71,6 +71,8 @@ pub(super) struct Writer {
     pub(super) regions: Vec<String>,
     /// The insertion open in the body, and its region id.
     open_ins: Option<(RevMark, String)>,
+    /// The format change over the last paragraph's mark, open until the next paragraph begins.
+    open_fmt: Option<(RevMark, String)>,
     /// Style of the paragraph being written.
     cur_style: String,
     /// Styles of the paragraphs joined into the one being written (deleted paragraph marks),
@@ -194,13 +196,14 @@ impl Writer {
         name
     }
 
-    /// A new `text:changed-region` of `kind` by `m` with `body` after its change info; its id.
+    /// A new `text:changed-region` of `kind` by `m` with `body` after its change info; its id
+    /// (`xml:id`, which ODF 1.3 requires, and the older `text:id`).
     fn region(&mut self, kind: &str, m: &RevMark, body: &str) -> String {
         let id = format!("ct{}", self.regions.len() + 1);
         // `dc:date` is required: a change without a date is dated now.
         let date = if m.date.trim().is_empty() { now_iso() } else { m.date.clone() };
         self.regions.push(format!(
-            "<text:changed-region text:id=\"{id}\"><text:{kind}><office:change-info><dc:creator>{}</dc:creator><dc:date>{}</dc:date></office:change-info>{body}</text:{kind}></text:changed-region>",
+            "<text:changed-region xml:id=\"{id}\" text:id=\"{id}\"><text:{kind}><office:change-info><dc:creator>{}</dc:creator><dc:date>{}</dc:date></office:change-info>{body}</text:{kind}></text:changed-region>",
             x(&m.author),
             x(&date)
         ));
@@ -224,8 +227,17 @@ impl Writer {
         self.open_ins = st;
     }
 
+    /// Close the insertion open in the body, and a format change left open over a paragraph mark.
     pub(super) fn close_ins(&mut self, out: &mut String) {
         ins_close(&mut self.open_ins, out);
+        ins_close(&mut self.open_fmt, out);
+    }
+
+    /// Start a format change by `m` in `out`; its region id.
+    fn fmt_start(&mut self, m: &RevMark, out: &mut String) -> String {
+        let ct = self.region("format-change", m, "");
+        out.push_str(&format!("<text:change-start text:change-id=\"{ct}\"/>"));
+        ct
     }
 
     /// Inlines with their insertions as change ranges kept in `st`.
@@ -253,6 +265,7 @@ impl Writer {
     fn deletion(&mut self, seg: &[Item<'_>], m: &RevMark, out: &mut String) {
         let mut body = String::new();
         let mut st: Option<(RevMark, String)> = None;
+        let mut fmt: Option<(RevMark, String)> = None;
         let mut start = 0;
         let mut first = true;
         loop {
@@ -263,11 +276,18 @@ impl Writer {
             first = false;
             let style = self.chain.get(self.part).cloned().unwrap_or_else(|| self.cur_style.clone());
             body.push_str(&format!("<text:p text:style-name=\"{style}\">"));
+            ins_close(&mut fmt, &mut body);
             self.ins_inlines(seg.get(start..end.unwrap_or(seg.len())).unwrap_or(&[]), &mut st, &mut body);
             // A deleted paragraph mark that had been inserted: the range runs on past it.
             match end.and_then(|e| seg.get(e)).and_then(|i| i.marks().0) {
                 Some(ins) => self.ins_open(&mut st, ins, &mut body),
                 None => ins_close(&mut st, &mut body),
+            }
+            // One whose paragraph formatting changed: a format change over it, as in `para_in`.
+            if let Some(Item::Mark(q)) = end.and_then(|e| seg.get(e))
+                && let Some(c) = q.fmt_change.as_deref()
+            {
+                fmt = Some((c.mark.clone(), self.fmt_start(&c.mark, &mut body)));
             }
             body.push_str("</text:p>");
             match end {
@@ -294,13 +314,32 @@ impl Writer {
                 (Some(ins), None) => {
                     self.open_ins(ins, out);
                     let inl: Vec<Inline> = seg.iter().filter_map(|i| i.inline().cloned()).collect();
-                    self.plain_inlines(&inl, out);
+                    self.fmt_inlines(&inl, out);
                 }
                 (None, None) => {
                     self.close_ins(out);
                     let inl: Vec<Inline> = seg.iter().filter_map(|i| i.inline().cloned()).collect();
-                    self.plain_inlines(&inl, out);
+                    self.fmt_inlines(&inl, out);
                 }
+            }
+            k = j;
+        }
+    }
+
+    /// Inlines with their formatting changes as `text:format-change` ranges.
+    fn fmt_inlines(&mut self, inl: &[Inline], out: &mut String) {
+        let mut k = 0;
+        while k < inl.len() {
+            let m = inl.get(k).and_then(fmt_mark);
+            let j = inl.iter().skip(k + 1).position(|i| fmt_mark(i) != m).map_or(inl.len(), |e| k + 1 + e);
+            let seg = inl.get(k..j).unwrap_or(&[]);
+            match m {
+                Some(m) => {
+                    let ct = self.fmt_start(m, out);
+                    self.plain_inlines(seg, out);
+                    out.push_str(&format!("<text:change-end text:change-id=\"{ct}\"/>"));
+                }
+                None => self.plain_inlines(seg, out),
             }
             k = j;
         }
@@ -413,6 +452,8 @@ impl Writer {
                 "</text:p>"
             }
         };
+        // A format change over the previous paragraph's mark ends where this paragraph begins.
+        ins_close(&mut self.open_fmt, out);
         let tracked = paras.len() > 1
             || p.inlines.iter().any(|i| matches!(i, Inline::Text(_, f) | Inline::Ruby { fmt: f, .. } if f.ins.is_some() || f.del.is_some()));
         if tracked {
@@ -426,12 +467,16 @@ impl Writer {
             self.items(&items, out);
         } else {
             self.close_ins(out);
-            self.plain_inlines(&p.inlines, out);
+            self.fmt_inlines(&p.inlines, out);
         }
         // An inserted paragraph mark: the insertion runs on past the paragraph's end.
         match paras.last().and_then(|q| q.mark_ins.as_deref()) {
             Some(m) => self.open_ins(m, out),
             None => self.close_ins(out),
+        }
+        // A paragraph formatting change is a format change over the mark, which holds paragraph formatting.
+        if let Some(c) = paras.last().and_then(|q| q.fmt_change.as_deref()) {
+            self.open_fmt = Some((c.mark.clone(), self.fmt_start(&c.mark, out)));
         }
         out.push_str(tag);
         self.chain.clear();
@@ -723,7 +768,15 @@ impl Item<'_> {
     }
 }
 
-/// Close the insertion open in `st`.
+/// The formatting change of a run of text.
+fn fmt_mark(i: &Inline) -> Option<&RevMark> {
+    match i {
+        Inline::Text(_, f) | Inline::Ruby { fmt: f, .. } => f.fmt_change.as_deref().map(|c| &c.mark),
+        _ => None,
+    }
+}
+
+/// Close the change range open in `st`.
 fn ins_close(st: &mut Option<(RevMark, String)>, out: &mut String) {
     if let Some((_, ct)) = st.take() {
         out.push_str(&format!("<text:change-end text:change-id=\"{ct}\"/>"));
