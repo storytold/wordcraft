@@ -16,6 +16,27 @@ pub(super) fn cur(s: &Session) -> wordcraft_doc::resolve::ResolvedPara {
     s.doc.styles.resolve_para(&props)
 }
 
+/// After setting the space before/after in points in the selected paragraphs: keep spacing in
+/// lines (each paragraph's own or inherited) from winning over it, as Word does
+/// (`w:beforeLines="0"`). Paragraphs without spacing in lines are left as they are.
+pub(super) fn cancel_line_spacing(s: &mut Session, before: bool, after: bool) -> CmdResult {
+    let story = s.sel.focus.story;
+    for path in crate::cmd::selected_paths(s) {
+        let Some(para) = s.doc.para(story, &path) else { continue };
+        let [b, a] = s.doc.styles.resolve_para(&para.props).space_lines;
+        let (b, a) = (before && b != 0.0, after && a != 0.0);
+        if b || a {
+            let props = &mut s.doc.para_mut(story, &path)?.props;
+            for (on, lines) in [(b, &mut props.space_before_lines), (a, &mut props.space_after_lines)] {
+                if on {
+                    *lines = Some(0.0);
+                }
+            }
+        }
+    }
+    sel_result(s)
+}
+
 pub fn fmt(s: &mut Session, f: &dyn Fn(&mut ParaProps)) -> CmdResult {
     let story = s.sel.focus.story;
     for path in crate::cmd::selected_paths(s) {
@@ -136,7 +157,10 @@ pub(super) fn set_props(s: &mut Session, v: &Value) -> CmdResult {
         }
         para.touch();
     }
-    sel_result(s)
+    // The space given in points (the dialog's Before/After) wins over spacing in lines, unless
+    // `props` gives the lines too.
+    let points_only = |pt: Option<f32>, lines: Option<f32>| pt.is_some() && lines.is_none();
+    cancel_line_spacing(s, points_only(props.space_before, props.space_before_lines), points_only(props.space_after, props.space_after_lines))
 }
 
 pub fn indent(s: &mut Session, _: &Value) -> CmdResult {
