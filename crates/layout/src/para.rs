@@ -91,9 +91,25 @@ pub struct ParaLayout {
     pub shown: Vec<(usize, String, Vec<std::ops::Range<usize>>)>,
     /// Shapes drawn around overstruck field text (enclosed characters, `EQ \o`), by cluster index.
     pub enclosures: Vec<(usize, Enclosed)>,
-    /// Room after a cluster between Asian text and Latin text or digits ([`auto_space`]), by
+    /// Room after a cluster between Asian text and Latin text or digits ([`auto_space`]), and the
+    /// blank half of a closing mark under punctuation compression ([`compress_punct`]), by
     /// cluster index, sorted. It is part of the cluster's advance, but takes no room at a line's end.
     pub auto_space: Vec<(usize, f32)>,
+    /// What each compressible mark may give up on a line that would otherwise overflow
+    /// ([`compress_punct`]), by cluster index, sorted. Empty unless punctuation is compressed.
+    pub squeeze: Vec<Squeeze>,
+}
+
+/// Room one side of a full-width punctuation mark may give up when its line is squeezed.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Squeeze {
+    /// Cluster index.
+    pub k: usize,
+    /// Points it may give up.
+    pub room: f32,
+    /// The blank is on the mark's left (an opening mark): the mark itself moves left. Else the
+    /// clusters after it do.
+    pub left: bool,
 }
 
 impl ParaLayout {
@@ -121,6 +137,11 @@ impl ParaLayout {
     }
 
     /// The automatic space in cluster `k`'s advance ([`auto_space`]), 0 without one.
+    /// The squeeze room of the clusters `c0..c1`.
+    fn squeeze_room(&self, c0: usize, c1: usize) -> f32 {
+        let from = self.squeeze.partition_point(|s| s.k < c0);
+        self.squeeze.get(from..).unwrap_or_default().iter().take_while(|s| s.k < c1).map(|s| s.room).sum()
+    }
     fn auto_space_after(&self, k: usize) -> f32 {
         self.auto_space.binary_search_by_key(&k, |a| a.0).ok().and_then(|i| self.auto_space.get(i)).map_or(0.0, |a| a.1)
     }
