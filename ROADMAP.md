@@ -1,5 +1,6 @@
 # WordCraft roadmap
 
+> **Keep-with-next validation:** 2026-10-31 · Build on #5095 (@dfgodvan): use the effective paragraph gap in lookahead. All eight headings in the synthetic A4 control now share the native Word reference pages; other controls retain baseline renders. Readiness estimates unchanged.
 > **Last reviewed:** 2026-10-31 · **Last updated:** 2026-10-31 · **Change:** minor (#3398: persistent screen paper colors; parity estimates unchanged); previously minor (#3693: additional Delete Previous Sentence command and shortcut; Word-parity estimates unchanged)
 > **CLI path update:** 2026-11-04 · Options before a non-Unicode input filename no longer make the CLI reject that filename; text option values still require Unicode; `run --file` and `run --script` retain native paths. No ranked gap or readiness estimate changes.
 > **Floating anchor row segments:** 2026-11-07 · A floating anchor after a manual page/column break counts visible content on the far side of the same wrapped row. Marker-only cover anchors retain their previous-page rule. Synthetic picture spacing, placement and history controls; no new native Word measurement. Readiness estimates unchanged.
@@ -546,6 +547,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 | 2026-10-17 | Non-overlapping body floating tables clear header tables. Original native controls distinguish never-overlap from allowed overlap. |
 | 2026-10-14 | Comment text being typed is no longer lost or misplaced (#1348): an edit or reply the document refuses (for example read-only protection) keeps the typed text in its field and says why on the status line; drafts belong to their document, so after New or Open a comment with the same number shows its own text; Save, Export, Print, Close, New and Open write pending comment text first; if the document refuses it, Save, Export and Print carry on with the stored comments and show why on the status line (a refused draft is dropped when Save is the only change), while Close, New and Open show the Save Changes prompt (Don't Save drops text the document refuses); Escape discards what was typed; in a document protected as read only or for forms the comment fields can't be typed in |
 |---|---|
+| 2026-10-31 | Kept headings count the effective spacing to the following paragraph (#5095, original leading fix by @dfgodvan). The synthetic A4 control moves headings 4 and 7 to the native pages 3 and 5; six portable controls cover collapsed/additive/contextual/list gaps and kept chains. |
 | 2026-10-12 | RTF reads and writes footnotes, endnotes and comments (author, initials, date, commented range), so they survive a round trip through RTF (#1053) |
 | 2026-11-07 | Page Setup also bounds the unfocused margin display after a long numeric paste; the accepted value is retained (#5650). |
 | 2026-11-05 | Page Setup's margin, paper-size and document-grid number boxes scroll long text inside the field instead of enlarging the dialog (#5650). Readiness estimates unchanged. |
@@ -1004,6 +1006,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-10-31 | trivial | Progress log: a list level above counts its first number at the first deeper item |
 | 2026-11-01 | trivial | Progress log: paragraph side borders lie outside the text (#5036) |
 | 2026-11-01 | trivial | Progress log: proofing moved to craft-proof (craft-libs) and its data to craft-i18n `language-data/` (CP1) |
+| 2026-10-31 | trivial | Adapt #5095 (@dfgodvan) to current main while retaining its three-line widow control; share effective-gap rules between placement and lookahead. Six additional spacing/list/chain controls and synthetic A4 Word Mac 16.114.3 reference validation; no general pagination-parity claim. |
 | 2026-11-01 | trivial | #3915: preserve guarded whole-line ordinary-tab alignment with current main. Existing controls retained; source checks only, primary qualification pending. |
 | 2026-11-01 | trivial | #2437: Preserve finite paragraph-border flow extents and terminal-break keep preflight with current-main changes. Recursive terminal-successor lookahead remains outside scope. Source checks only; primary qualification pending. |
 | 2026-10-31 | trivial | Progress log: a paragraph naming an undefined DOCX style is formatted as Normal (#5077) |
