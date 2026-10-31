@@ -88,7 +88,6 @@ pub(super) struct Reader {
     pub(super) def_cur: CellDef,
     pub(super) row_header: bool,
     pub(super) created: Option<(u32, u32, u32, u32, u32)>,
-    pub(super) in_creatim: bool,
     pub(super) rule_pending: bool,
     pub(super) info_depth: Option<usize>,
 }
@@ -237,17 +236,9 @@ impl Reader {
             Dest::FontTbl if !self.font_name.is_empty() => self.commit_font(),
             Dest::StyleSheet if !self.style_name.is_empty() => self.commit_style(),
             Dest::RevTbl if !self.rev_name.trim().is_empty() => self.commit_author(),
-            Dest::Info(k) => {
-                let t = std::mem::take(&mut self.info_text).trim().to_string();
-                match k {
-                    1 => self.meta.title = t,
-                    2 => self.meta.author = t,
-                    3 => self.meta.subject = t,
-                    4 => self.meta.keywords = t,
-                    5 => self.meta.description = t,
-                    _ => {}
-                }
-                self.in_creatim = false;
+            // Ordinary nested groups keep using the property's shared text buffer.
+            Dest::Info(k) if self.stack.last().is_none_or(|parent| parent.dest != closing) => {
+                self.commit_info(k);
             }
             _ => {}
         }
@@ -286,6 +277,30 @@ impl Reader {
         self.st = prev;
         if self.hf.as_ref().is_some_and(|(d, _, _)| self.depth() < *d) {
             self.end_header_footer();
+        }
+    }
+
+    /// Keep the accepted prefix of a property if EOF leaves its group open, including when
+    /// an ignored subgroup is the current destination.
+    pub(super) fn finish_metadata(&mut self) {
+        let active = std::iter::once(&self.st).chain(self.stack.iter().rev()).find_map(|s| match s.dest {
+            Dest::Info(k) => Some(k),
+            _ => None,
+        });
+        if let Some(k) = active {
+            self.commit_info(k);
+        }
+    }
+
+    fn commit_info(&mut self, k: u8) {
+        let t = std::mem::take(&mut self.info_text).trim().to_string();
+        match k {
+            1 => self.meta.title = t,
+            2 => self.meta.author = t,
+            3 => self.meta.subject = t,
+            4 => self.meta.keywords = t,
+            5 => self.meta.description = t,
+            _ => {}
         }
     }
 

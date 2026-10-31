@@ -16,6 +16,10 @@ pub(super) const MAX_SECTIONS: usize = 10_000;
 pub(super) enum Dest {
     Body,
     Skip,
+    /// The metadata container, whose supported child destinations are read.
+    InfoRoot,
+    /// Creation-date controls; ignored subgroups use `Skip` instead.
+    CreationTime,
     FontTbl,
     ColorTbl,
     StyleSheet,

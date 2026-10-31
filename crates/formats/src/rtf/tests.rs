@@ -13,6 +13,125 @@ fn texts(f: &Flow) -> Vec<String> {
 }
 
 #[test]
+fn metadata_ignores_scalar_statistics_without_changing_destination() {
+    for statistic in ["version", "nofpages", "nofwords", "nofchars", "edmins", "vern", "nofcharsws"] {
+        let rtf = format!(
+            r"{{\rtf1{{\info\{statistic}1{{\*\originalIgnored \{statistic}2{{\title Hidden}}{{\creatim\yr1999}}}}{{\title Before {{middle}} \{statistic}3 After}}{{\author Alice}}{{\subject Report}}{{\keywords Key}}{{\doccomm Description}}{{\creatim\yr2026\{statistic}4\mo1\dy2\hr3\min4}}}}Original {{\b body}}.\par}}"
+        );
+        let f = parse(rtf.as_bytes()).unwrap();
+        assert_eq!(f.meta.title, "Before middle After", "{statistic}");
+        assert_eq!(f.meta.author, "Alice", "{statistic}");
+        assert_eq!(f.meta.subject, "Report", "{statistic}");
+        assert_eq!(f.meta.keywords, "Key", "{statistic}");
+        assert_eq!(f.meta.description, "Description", "{statistic}");
+        assert_eq!(f.meta.created, "2026-01-02T03:04:00Z", "{statistic}");
+        assert_eq!(texts(&f), ["Normal:Original body."]);
+        let doc = import(rtf.as_bytes()).unwrap();
+        let again = import(export(&doc).as_bytes()).unwrap();
+        assert_eq!(again.core.title, doc.core.title);
+        assert_eq!(again.core.creator, doc.core.creator);
+        assert_eq!(again.core.subject, doc.core.subject);
+        assert_eq!(again.core.keywords, doc.core.keywords);
+        assert_eq!(again.core.description, doc.core.description);
+        assert_eq!(again.core.created, doc.core.created);
+    }
+}
+
+#[test]
+fn metadata_keeps_text_across_nested_groups() {
+    for (content, expected) in [
+        (r"Before Caf\u233? After", "Before Café After"),
+        (r"Before {\uc1 Caf\u233?} After", "Before Café After"),
+        (r"Before {middle {inner} tail} After", "Before middle inner tail After"),
+        (r"Before {} After", "Before  After"),
+        (r"Before {last}", "Before last"),
+        (r"Before {\*\originalIgnored ignored} After", "Before  After"),
+        (r"{\uc0 \u20013}\u25991?", "中文"),
+        (r"{one}{two}", "onetwo"),
+    ] {
+        let fields = ["title", "author", "subject", "keywords", "doccomm"];
+        let info: String = fields.iter().map(|field| format!("{{\\{field} {content}}}")).collect();
+        let rtf = format!(r"{{\rtf1\ansi\uc1{{\info{info}{{\creatim\yr2026\mo1\dy2\hr3\min4}}}}Original body.\par}}");
+        let f = parse(rtf.as_bytes()).unwrap();
+        for (field, value) in fields.iter().zip([&f.meta.title, &f.meta.author, &f.meta.subject, &f.meta.keywords, &f.meta.description]) {
+            assert_eq!(value, expected, "{field}: {content}");
+        }
+        assert_eq!(f.meta.created, "2026-01-02T03:04:00Z");
+        assert_eq!(texts(&f), ["Normal:Original body."]);
+        let doc = import(rtf.as_bytes()).unwrap();
+        let again = import(export(&doc).as_bytes()).unwrap();
+        assert_eq!(again.core.title, expected);
+        assert_eq!(again.core.creator, expected);
+        assert_eq!(again.core.subject, expected);
+        assert_eq!(again.core.keywords, expected);
+        assert_eq!(again.core.description, expected);
+        assert_eq!(again.core.created, doc.core.created);
+    }
+}
+
+#[test]
+fn unfinished_metadata_keeps_its_text_at_eof() {
+    for (suffix, expected) in
+        [(r"Before {middle}", "Before middle"), (r"Before {middle", "Before middle"), (r"Before {middle}{\*\ignored discarded", "Before middle")]
+    {
+        for field in ["title", "author", "subject", "keywords", "doccomm"] {
+            let rtf = format!(r"{{\rtf1{{\info{{\{field} {suffix}");
+            let f = parse(rtf.as_bytes()).unwrap();
+            let value = match field {
+                "title" => f.meta.title,
+                "author" => f.meta.author,
+                "subject" => f.meta.subject,
+                "keywords" => f.meta.keywords,
+                _ => f.meta.description,
+            };
+            assert_eq!(value, expected, "{field}: {suffix}");
+        }
+    }
+}
+
+#[test]
+fn creation_date_ends_with_its_group_before_nested_metadata() {
+    let rtf = br"{\rtf1{\info{\creatim\yr2026\mo1\dy2\hr3\min4}{\title {Name}{\*\ignored \yr1999}}}Body.\par}";
+    let f = parse(rtf).unwrap();
+    assert_eq!(f.meta.created, "2026-01-02T03:04:00Z");
+    assert_eq!(f.meta.title, "Name");
+    assert_eq!(texts(&f), ["Normal:Body."]);
+}
+
+#[test]
+fn creation_date_keeps_its_outer_scope_across_nested_creatim() {
+    let rtf = br"{\rtf1{\info{\creatim\yr2026{\creatim\mo2}\yr2027\dy3\hr4\min5}{\title Original title}}Original body.\par}";
+    let doc = import(rtf).unwrap();
+    assert_eq!(doc.core.created, "2027-02-03T04:05:00Z");
+    assert_eq!(doc.core.title, "Original title");
+    let again = import(export(&doc).as_bytes()).unwrap();
+    assert_eq!(again.core.created, doc.core.created);
+    assert_eq!(again.core.title, doc.core.title);
+}
+
+#[test]
+fn creation_date_ignores_other_destinations_and_resumes_outer_controls() {
+    for ignored in [
+        r"{\*\originalIgnored \yr1999\mo12\dy31\hr23\min59}",
+        r"{\comment \yr1999\mo12\dy31\hr23\min59}",
+        r"{\revtime\yr1999\mo12\dy31\hr23\min59}",
+        r"{\*\originalIgnored {\creatim\yr1999\mo12\dy31\hr23\min59}}",
+        r"{\comment {\creatim\yr1999\mo12\dy31\hr23\min59}}",
+    ] {
+        let rtf = format!(
+            r"{{\rtf1{{\info{{\creatim\yr2026\mo1\dy2\hr3\min4{{\title Original title}}{ignored}{{\creatim\mo2}}\dy3}}}}Original body.\par}}"
+        );
+        let doc = import(rtf.as_bytes()).unwrap();
+        assert_eq!(doc.core.created, "2026-02-03T03:04:00Z", "{ignored}");
+        assert_eq!(doc.core.title, "Original title");
+        let again = import(export(&doc).as_bytes()).unwrap();
+        assert_eq!(again.core.created, doc.core.created);
+        assert_eq!(again.core.title, doc.core.title);
+        assert_eq!(texts(&parse(export(&again).as_bytes()).unwrap()), ["Normal:Original body."]);
+    }
+}
+
+#[test]
 fn basic_reader() {
     let rtf = br#"{\rtf1\ansi{\fonttbl{\f0 Arial;}{\f1 Courier New;}}{\colortbl;\red255\green0\blue0;}{\stylesheet{\s0 Normal;}{\s1 heading 1;}}
 {\info{\title My Doc}{\author Ann}}

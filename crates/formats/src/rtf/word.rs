@@ -9,7 +9,7 @@ impl Reader {
         self.finish_multibyte();
         let on = p != Some(0);
         let pv = p.unwrap_or(0);
-        if self.skip_destination_word(w, pv) {
+        if self.st.dest == Dest::Skip {
             return;
         }
         if w == "shppict" || self.start_header_footer_word(w) {
@@ -271,8 +271,14 @@ impl Reader {
             "fonttbl" => Some(Dest::FontTbl),
             "colortbl" => Some(Dest::ColorTbl),
             "stylesheet" => Some(Dest::StyleSheet),
-            "info" => Some(Dest::Skip),
-            "title" if self.st.dest == Dest::Skip && self.in_info() => Some(Dest::Info(1)),
+            "info" => Some(Dest::InfoRoot),
+            // Scalar statistics leave the enclosing metadata destination readable.
+            "version" | "nofpages" | "nofwords" | "nofchars" | "edmins" | "vern"
+                if matches!(self.st.dest, Dest::InfoRoot | Dest::CreationTime | Dest::Info(_)) =>
+            {
+                None
+            }
+            "title" if matches!(self.st.dest, Dest::InfoRoot | Dest::CreationTime) && self.in_info() => Some(Dest::Info(1)),
             "author" if self.in_info() => Some(Dest::Info(2)),
             "subject" if self.in_info() => Some(Dest::Info(3)),
             "keywords" if self.in_info() => Some(Dest::Info(4)),
@@ -292,10 +298,7 @@ impl Reader {
             | "nofwords" | "nofchars" | "edmins" | "vern" | "themedata" | "colorschememapping" | "latentstyles" | "datastore" | "xmlnstbl"
             | "rsidtbl" | "generator" | "mmathPr" | "pgdsctbl" | "filetbl" | "listpicture" | "userprops" | "docvar" | "objdata" | "fontemb"
             | "fontfile" | "panose" | "falt" | "mhtmltag" | "htmltag" | "pnseclvl" | "background" | "sp" | "pn" | "pgptbl" => Some(Dest::Skip),
-            "creatim" if self.in_info() => {
-                self.in_creatim = true;
-                Some(Dest::Skip)
-            }
+            "creatim" if self.in_info() => Some(Dest::CreationTime),
             _ => None,
         }
     }
@@ -328,10 +331,9 @@ impl Reader {
 
     fn destination_word(&mut self, word: &str, param: Option<i32>, on: bool, value: i32) -> bool {
         match self.st.dest {
-            Dest::Skip => {
-                if self.in_creatim {
-                    self.record_created_part(word, value);
-                }
+            Dest::Skip | Dest::InfoRoot => true,
+            Dest::CreationTime => {
+                self.record_created_part(word, value);
                 true
             }
             Dest::FontTbl if !matches!(word, "u" | "uc") => {
@@ -469,17 +471,6 @@ impl Reader {
             "picscaley" => self.pict_sy = value.clamp(1, 1000) as f32,
             _ => {}
         }
-    }
-
-    fn skip_destination_word(&mut self, word: &str, value: i32) -> bool {
-        let kept_info = self.in_info() && matches!(word, "title" | "author" | "subject" | "keywords" | "doccomm" | "creatim");
-        if self.st.dest != Dest::Skip || kept_info {
-            return false;
-        }
-        if self.in_creatim {
-            self.record_created_part(word, value);
-        }
-        true
     }
 
     fn record_created_part(&mut self, word: &str, value: i32) {
