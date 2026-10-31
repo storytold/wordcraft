@@ -19,7 +19,7 @@ pub use fontdb::{
     base_style, bundled, decode_font_file, is_font_file_name, name_language_matches, sniff, system_font_dirs,
 };
 pub use harfrust::Feature;
-use harfrust::{Direction, ShapeOptions, ShapePlan, ShapePlanKey, Shaper, Tag, UnicodeBuffer};
+use harfrust::{Direction, Language, ShapeOptions, ShapePlan, ShapePlanKey, Shaper, Tag, UnicodeBuffer};
 pub use kurbo::BezPath;
 pub use script::{fallback_rank, is_emoji, needs_layout_tables, script_fallbacks};
 use skrifa::MetadataProvider;
@@ -170,13 +170,22 @@ fn direction_runs(text: &str) -> Vec<(std::ops::Range<usize>, bool)> {
 /// order: right-to-left runs are shaped right to left, then their clusters put back in text
 /// order (each cluster's glyphs keep the shaper's order); line layout reorders them visually.
 pub fn shape(face: &FontFace, text: &str, features: &[Feature], map: impl Fn(char) -> char) -> Vec<ShapedGlyph> {
+    shape_lang(face, text, features, map, None)
+}
+
+/// [`shape`] for text in the language `lang`, a BCP 47 tag such as `sr-Cyrl-RS` (a run's
+/// `w:lang`). The shaper then uses the font's forms for that language (OpenType `locl`), e.g. the
+/// Serbian and Macedonian italic б, г, д, п, т instead of the Russian ones (#5068). `None` or an
+/// empty tag shapes with the font's default forms, as [`shape`] does.
+pub fn shape_lang(face: &FontFace, text: &str, features: &[Feature], map: impl Fn(char) -> char, lang: Option<&str>) -> Vec<ShapedGlyph> {
+    let lang = language(lang);
     if !text.chars().any(is_rtl) {
-        return shape_dir(face, text, features, &map, false);
+        return shape_dir(face, text, features, &map, false, lang.as_ref());
     }
     let mut out = Vec::with_capacity(text.len());
     for (r, rtl) in direction_runs(text) {
         let Some(sub) = text.get(r.clone()) else { continue };
-        let mut g = shape_run(face, sub, features, &map, rtl);
+        let mut g = run_glyphs(face, sub, features, &map, rtl, lang.as_ref());
         for x in &mut g {
             x.cluster += r.start;
         }
@@ -190,7 +199,36 @@ pub fn shape(face: &FontFace, text: &str, features: &[Feature], map: impl Fn(cha
 /// mark positioning. Glyphs come back in logical order like [`shape`]: clusters in text order,
 /// each cluster's glyphs in the shaper's (visual) order.
 pub fn shape_run(face: &FontFace, text: &str, features: &[Feature], map: impl Fn(char) -> char, rtl: bool) -> Vec<ShapedGlyph> {
-    let g = shape_dir(face, text, features, &map, rtl);
+    shape_run_lang(face, text, features, map, rtl, None)
+}
+
+/// [`shape_run`] for text in the language `lang` (see [`shape_lang`]).
+pub fn shape_run_lang(
+    face: &FontFace,
+    text: &str,
+    features: &[Feature],
+    map: impl Fn(char) -> char,
+    rtl: bool,
+    lang: Option<&str>,
+) -> Vec<ShapedGlyph> {
+    run_glyphs(face, text, features, &map, rtl, language(lang).as_ref())
+}
+
+/// The shaper's language for a BCP 47 tag; `None` for no tag or a blank one.
+fn language(tag: Option<&str>) -> Option<Language> {
+    tag.map(str::trim).filter(|t| !t.is_empty()).and_then(|t| t.parse().ok())
+}
+
+/// [`shape_run_lang`] with the language already read.
+fn run_glyphs(
+    face: &FontFace,
+    text: &str,
+    features: &[Feature],
+    map: &impl Fn(char) -> char,
+    rtl: bool,
+    lang: Option<&Language>,
+) -> Vec<ShapedGlyph> {
+    let g = shape_dir(face, text, features, map, rtl, lang);
     if !rtl {
         return g;
     }
@@ -206,7 +244,10 @@ pub fn shape_run(face: &FontFace, text: &str, features: &[Feature], map: impl Fn
     groups.into_iter().flatten().collect()
 }
 
-fn shape_dir(face: &FontFace, text: &str, features: &[Feature], map: &impl Fn(char) -> char, rtl: bool) -> Vec<ShapedGlyph> {
+/// Shape `text` in one direction, one script run at a time, with the text's language `lang` (see
+/// [`shape_lang`]). Glyphs come in the shaper's order; a face without shaping tables gets one
+/// glyph per character from its cmap.
+fn shape_dir(face: &FontFace, text: &str, features: &[Feature], map: &impl Fn(char) -> char, rtl: bool, lang: Option<&Language>) -> Vec<ShapedGlyph> {
     let mut out = Vec::with_capacity(text.len());
     let shaped = face.hb().map(|hb| {
         let shaper = face.shaper.shaper(&hb).instance(face.instance.as_ref()).build();
@@ -220,6 +261,10 @@ fn shape_dir(face: &FontFace, text: &str, features: &[Feature], map: &impl Fn(ch
                 buf.add(map(c), (r.start + i) as u32);
             }
             buf.guess_segment_properties();
+            // The language picks the font's forms for it (`locl`); the kept plan is keyed on it.
+            if let Some(l) = lang {
+                buf.set_language(l.clone());
+            }
             buf.set_direction(if rtl { Direction::RightToLeft } else { Direction::LeftToRight });
             let plan = shape_plan(face, &shaper, &buf, features);
             let gb = shaper.shape(buf, ShapeOptions::new().plan(plan.as_deref()).features(features));
@@ -371,7 +416,10 @@ mod tests {
             gb.glyph_infos().iter().zip(gb.glyph_positions()).map(|(i, p)| (i.glyph_id, i.cluster, p.x_advance, p.x_offset, p.y_offset)).collect()
         };
         let kept = |face: &FontFace, text: &str, features: &[Feature], rtl: bool| -> Vec<(u32, u32, i32, i32, i32)> {
-            shape_dir(face, text, features, &|c| c, rtl).iter().map(|g| (g.gid, g.cluster as u32, g.x_advance, g.x_offset, g.y_offset)).collect()
+            shape_dir(face, text, features, &|c| c, rtl, None)
+                .iter()
+                .map(|g| (g.gid, g.cluster as u32, g.x_advance, g.x_offset, g.y_offset))
+                .collect()
         };
         let db = FontDb::global();
         let faces = [db.face(DEFAULT_FAMILY, "Regular"), db.face(DEFAULT_FAMILY, "Italic"), db.face("Source Sans 3", "Regular")];
@@ -406,7 +454,7 @@ mod tests {
         for n in 0..3 * MAX_SHAPE_PLANS as u32 {
             let features = [feature_value(b"kern", n % 2), feature_value(b"liga", n)];
             let rtl = n % 3 == 0;
-            let kept: Vec<(u32, i32)> = shape_dir(&face, "office", &features, &|c| c, rtl).iter().map(|g| (g.gid, g.x_advance)).collect();
+            let kept: Vec<(u32, i32)> = shape_dir(&face, "office", &features, &|c| c, rtl, None).iter().map(|g| (g.gid, g.x_advance)).collect();
             assert_eq!(kept, fresh(&features, rtl), "{n}");
             assert!(kept_shape_plans() <= MAX_SHAPE_PLANS, "{}", kept_shape_plans());
         }
@@ -420,6 +468,41 @@ mod tests {
         let off = shape(&face, "office", &[feature("-liga").unwrap()], |c| c);
         assert!(on.len() <= off.len());
         assert_eq!(off.len(), 6);
+    }
+
+    /// The text's language reaches the shaper, which then uses the font's forms for it (`locl`,
+    /// #5068). Source Serif 4 has Serbian and Macedonian forms: in italic for б, г, д, п, т, upright
+    /// for б. Russian, a blank tag and no language get the default forms. Shaping alternates
+    /// between languages, so a plan kept for one language must not serve another.
+    #[test]
+    fn language_picks_the_fonts_local_forms() {
+        let db = FontDb::global();
+        let gids =
+            |face: &FontFace, lang: Option<&str>| -> Vec<u32> { shape_lang(face, "бгдпт", &[], |c| c, lang).iter().map(|g| g.gid).collect() };
+        let italic = db.face(DEFAULT_FAMILY, "Italic");
+        let default = gids(&italic, None);
+        assert_eq!(default.len(), 5);
+        let serbian = gids(&italic, Some("sr-Cyrl-RS"));
+        assert_eq!(serbian.len(), 5);
+        assert!(serbian.iter().zip(&default).all(|(s, d)| s != d), "{serbian:?} {default:?}");
+        for _ in 0..2 {
+            for lang in [None, Some("ru-RU"), Some(""), Some("  ")] {
+                assert_eq!(gids(&italic, lang), default, "{lang:?}");
+            }
+            for lang in ["sr-Cyrl-RS", "sr", "mk-MK"] {
+                assert_eq!(gids(&italic, Some(lang)), serbian, "{lang}");
+            }
+        }
+        // Every entry point takes the language; `shape` and `shape_run` stay without one.
+        let run: Vec<u32> = shape_run_lang(&italic, "бгдпт", &[], |c| c, false, Some("sr-Cyrl-RS")).iter().map(|g| g.gid).collect();
+        assert_eq!(run, serbian);
+        assert_eq!(shape(&italic, "бгдпт", &[], |c| c).iter().map(|g| g.gid).collect::<Vec<_>>(), default);
+        assert_eq!(shape_run(&italic, "бгдпт", &[], |c| c, false).iter().map(|g| g.gid).collect::<Vec<_>>(), default);
+        // Upright, only б differs.
+        let regular = db.face(DEFAULT_FAMILY, "Regular");
+        let (d, s) = (gids(&regular, None), gids(&regular, Some("sr-Cyrl-RS")));
+        assert_ne!(s.first(), d.first());
+        assert_eq!(s.get(1..), d.get(1..));
     }
 
     #[test]
