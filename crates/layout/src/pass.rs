@@ -64,6 +64,7 @@ fn new_ctx<'a>(
     cache: &'a mut LayoutCache,
     opts: &'a LayoutOptions,
     (note_pages, totals): (&HashMap<u32, usize>, &Totals),
+    page_sections: Vec<(usize, &'a SectionProps)>,
 ) -> Ctx<'a> {
     let notes = note_info(doc, opts.hides_deleted(StoryRef::Body), note_pages);
     let notes_hash = hash_of(&{
@@ -107,7 +108,7 @@ fn new_ctx<'a>(
         footer_wraps: HashMap::new(),
         pin: None,
         floats_above: HashMap::new(),
-        hf: Arc::new(HfLinks::new(doc.sections())),
+        hf: Arc::new(HfLinks::new(page_sections)),
         alphas: Default::default(),
     }
 }
@@ -275,7 +276,7 @@ fn start_section_page<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, hf: &HfLinks<
         pb.take_back_break_page();
     }
     let s = &ctx.doc.settings;
-    let (filler, restart) = section_side(sec.start, sec.sect.page_num_start, pb.number, pb.pages.len(), s.even_odd_headers, s.mirror_margins);
+    let (filler, restart) = section_side(sec.start, sec.sect.page_num_start, pb.number, pb.pages.len(), s.even_odd_headers, s.mirrors());
     if filler && !mode.web {
         end_previous_section(ctx, pb, hf, sec.si, block);
         pb.sect = sec.sect;
@@ -428,7 +429,7 @@ fn fill_headers_footers(
         ctx.fields.bookmark_pages = Arc::new(marks);
     }
     headers_footers(ctx, pages, sections, &found);
-    if ctx.doc.settings.mirror_margins {
+    if ctx.doc.settings.mirrors() {
         mirror_even_pages(pages, sections);
     }
     None
@@ -470,11 +471,19 @@ pub(crate) fn layout_pass(
     (early, may_rewrap): (&EarlyFloats, bool),
 ) -> Pass {
     reset_cache(doc, cache, opts);
-    let mut ctx = new_ctx(doc, cache, opts, (note_pages, totals));
+    // 2 pages per sheet and Book fold lay each page out on half the sheet (#1836): the sections
+    // are laid out with the page size, and the pages carry it on to the renderer and the PDF.
+    let multiple = doc.settings.multiple_pages();
+    let sheet_sections = doc.sections();
+    let half_sections: Vec<SectionProps> =
+        if multiple.halves_page() { sheet_sections.iter().map(|(_, s)| s.for_multiple_pages(multiple)).collect() } else { Vec::new() };
+    let page_sections: Vec<(usize, &SectionProps)> =
+        if multiple.halves_page() { sheet_sections.iter().zip(&half_sections).map(|((end, _), s)| (*end, s)).collect() } else { sheet_sections };
+    let mut ctx = new_ctx(doc, cache, opts, (note_pages, totals), page_sections);
     let hf = Arc::clone(&ctx.hf);
     let sections = &hf.sections;
     let mode = Mode::of(opts.view);
-    ctx.mirror = doc.settings.mirror_margins && !mode.reflow;
+    ctx.mirror = doc.settings.mirrors() && !mode.reflow;
     (ctx.stacked_marks, ctx.quiet_marks) = section_marks(doc, opts, sections);
     let outline = (opts.view == ViewMode::Outline).then(|| OutlinePass::new(doc, opts.outline.clone().unwrap_or_default()));
     let default_sect = SectionProps::default();

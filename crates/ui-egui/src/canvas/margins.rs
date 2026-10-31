@@ -28,6 +28,12 @@ impl MarginEdge {
     }
 }
 
+/// The section `i` as the rulers show and drag it: its laid-out page, which is half the sheet
+/// under 2 pages per sheet and Book fold (#1836).
+pub(super) fn ruler_sect(doc: &wordcraft_doc::Document, i: usize) -> wordcraft_doc::section::SectionProps {
+    doc.laid_out_sections().into_iter().nth(i).map(|(_, s)| s).unwrap_or_default()
+}
+
 /// The least text width (or height) a margin drag leaves: one inch, in points.
 pub(super) const MIN_TEXT: f32 = 72.0;
 

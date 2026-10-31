@@ -1,4 +1,5 @@
 use super::{MeasureExt, Ui, Value, WordApp, json, semibold};
+use wordcraft_doc::section::MultiplePages;
 
 /// Labels of Page Setup's paper size (#1433), in one place in case Word's wording differs.
 pub(crate) const PAPER_LABELS: PaperLabels =
@@ -21,28 +22,44 @@ pub(crate) fn paper_entry(paper: (f32, f32)) -> Option<&'static str> {
     wordcraft_geom::paper_name(paper.0 * ppu, paper.1 * ppu)
 }
 
+/// The Sheets per booklet list, 0 being All: All and 4 to 40 in fours, as Word for Mac 16.113.4
+/// offers (user-checked). Word's "Auto" entry is left out: what it writes is unknown. A
+/// document's own count (1-40) is listed too, so it can be kept.
+pub(super) fn booklet_sheet_choices(current: u16) -> Vec<u16> {
+    let mut v: Vec<u16> = std::iter::once(0).chain((4..=wordcraft_doc::MAX_BOOKLET_SHEETS).step_by(4)).collect();
+    if current <= wordcraft_doc::MAX_BOOKLET_SHEETS && !v.contains(&current) {
+        v.push(current);
+        v.sort_unstable();
+    }
+    v
+}
+
 /// The commands Page Setup's OK runs for the paper, orientation and margins (#1433), all in the
 /// measurement unit as the dialog shows them. Refuses when the margins don't fit the paper.
 /// Otherwise it orders them so that none is refused on the way: the size first
 /// when the section's margins fit it, else the margins first, else margins of 0 in between.
 /// `layout.size` keeps the section's orientation; `layout.orientation` then turns the page and
 /// its margins to what the dialog shows. A size equal to the opened one (either way round,
-/// within 0.01 pt) doesn't run `layout.size`.
+/// within 0.01 pt) doesn't run `layout.size`. The margins must fit the page as the Multiple pages
+/// mode lays it out (half the sheet for 2 pages per sheet and Book fold).
 pub(super) fn page_layout_commands(
     app: &WordApp,
     (paper, was): ((f32, f32), (f32, f32)),
     landscape: bool,
     (top, bottom, left, right): (f32, f32, f32, f32),
+    multiple: MultiplePages,
 ) -> Result<Vec<(&'static str, Value)>, &'static str> {
     use wordcraft_engine::cmd::page::{MARGINS_DONT_FIT, margins_fit, sect};
     let ppu = crate::options::unit().pt_per_unit();
     let (paper, was) = ((paper.0 * ppu, paper.1 * ppu), (was.0 * ppu, was.1 * ppu));
     let m = (top * ppu, bottom * ppu, left * ppu, right * ppu);
     let cur = sect(&app.session);
-    if !margins_fit(paper, m, cur.gutter) {
+    let turned = |on: bool, (a, b): (f32, f32)| if on { (a.max(b), a.min(b)) } else { (a.min(b), a.max(b)) };
+    // The margins must fit the page, which is half the sheet in a multiple-pages mode.
+    let sheet = turned(landscape, paper);
+    if !margins_fit(multiple.page_size(sheet.0, sheet.1, landscape), m, cur.gutter) {
         return Err(MARGINS_DONT_FIT);
     }
-    let turned = |on: bool, (a, b): (f32, f32)| if on { (a.max(b), a.min(b)) } else { (a.min(b), a.max(b)) };
     let ((w0, h0), (w1, h1)) = (turned(false, paper), turned(false, was));
     let new_size = (w0 - w1).abs() >= 0.01 || (h0 - h1).abs() >= 0.01;
     let size = ("layout.size", json!({"width": paper.0, "height": paper.1}));
@@ -79,8 +96,8 @@ pub(super) fn run_as_one_step(app: &mut WordApp, commands: Vec<(&str, Value)>) -
 /// Page Setup's Paper group (#1433): a Paper size list (the named sizes and Custom size) and
 /// the width and height. The fields follow the orientation (the wide side is the width in
 /// landscape), and a typed size that is wider than tall turns the orientation to landscape.
-pub(super) fn page_paper_group(ui: &mut Ui, paper: &mut (f32, f32), landscape: &mut bool, custom: &mut bool) {
-    if (*landscape && paper.0 < paper.1) || (!*landscape && paper.0 > paper.1) {
+pub(super) fn page_paper_group(ui: &mut Ui, paper: &mut (f32, f32), landscape: &mut bool, custom: &mut bool, lock: bool) {
+    if !lock && ((*landscape && paper.0 < paper.1) || (!*landscape && paper.0 > paper.1)) {
         *paper = (paper.1, paper.0);
     }
     let unit = crate::options::unit();
@@ -115,7 +132,7 @@ pub(super) fn page_paper_group(ui: &mut Ui, paper: &mut (f32, f32), landscape: &
             .labelled_by(width_label.id);
         let height_label = ui.label(tl!(l.height));
         let h = ui.add(egui::DragValue::new(&mut paper.1).speed(3.6 / ppu).range(range).measure(unit).max_decimals(2)).labelled_by(height_label.id);
-        if (w.changed() || h.changed()) && paper.0 != paper.1 {
+        if !lock && (w.changed() || h.changed()) && paper.0 != paper.1 {
             *landscape = paper.0 > paper.1;
         }
         ui.end_row();

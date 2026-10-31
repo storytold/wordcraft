@@ -12,6 +12,7 @@ use egui::{Sense, Ui, vec2};
 use serde::Serialize;
 use serde_json::{Value, json};
 
+use wordcraft_doc::section::MultiplePages;
 use wordcraft_engine::Password;
 use wordcraft_engine::cmd::mailings::{FilterOp, FilterRule, SortKey};
 
@@ -48,6 +49,8 @@ pub use mailings::{ADDRESS_PARTS, FilterRow, NEW_LIST_FIELDS, RecipientFilter, r
 #[cfg(test)]
 pub(crate) use mailings::{hold_rows, merge_order, recipient_list, visible_recipients};
 pub(crate) use page_setup::PAPER_LABELS;
+#[cfg(test)]
+use page_setup::booklet_sheet_choices;
 #[cfg(test)]
 pub(crate) use page_setup::paper_entry;
 #[cfg(test)]
@@ -165,8 +168,16 @@ pub enum Dialog {
         left: f32,
         right: f32,
         landscape: bool,
-        /// Mirrored margins (the whole document's): left and right become inside and outside.
-        mirror: bool,
+        /// Multiple pages (the whole document's): Mirror margins and Book fold turn left and right
+        /// into inside and outside; `multiple_was` as opened (applied only if changed, #1836).
+        multiple: MultiplePages,
+        multiple_was: MultiplePages,
+        /// The mode at the end of the previous frame, to spot the switch to Book fold.
+        multiple_prev: MultiplePages,
+        /// Sheets per booklet for a Book fold; 0 = all.
+        sheets: u16,
+        /// "Reverse book fold": a Book fold whose booklet reads right to left.
+        reverse: bool,
         /// Document grid: kind (0 none, 1 lines, 2 lines and characters, 3 snap to characters),
         /// lines per page and characters per line; `grid_was` as opened (applied only if changed).
         grid: (u8, u32, u32),
@@ -698,7 +709,11 @@ impl Dialog {
                     left: sp.margin_left / crate::options::unit().pt_per_unit(),
                     right: sp.margin_right / crate::options::unit().pt_per_unit(),
                     landscape: sp.landscape,
-                    mirror: app.session.doc.settings.mirror_margins,
+                    multiple: app.session.doc.settings.multiple_pages(),
+                    multiple_was: app.session.doc.settings.multiple_pages(),
+                    multiple_prev: app.session.doc.settings.multiple_pages(),
+                    sheets: app.session.doc.settings.book_fold_sheets,
+                    reverse: app.session.doc.settings.book_fold && app.session.doc.settings.book_fold_reverse,
                     grid,
                     grid_was: grid,
                     rtl: sp.rtl,

@@ -1148,7 +1148,7 @@ fn page_setup_shows_a_refused_command_and_applies_nothing() {
     let doc = app.session.doc.sections().iter().map(|(_, x)| (*x).clone()).collect::<Vec<_>>();
     let depth = app.session.undo_depth();
     let mut h = app_harness(app);
-    page_setup_ok(&mut h, (300.0, 500.0), (72.0, 72.0, 72.0, 72.0));
+    page_setup_ok(&mut h, (4.0, 7.0), (72.0, 72.0, 72.0, 72.0));
     assert!(
         matches!(&h.state().dialog, Some(Dialog::PageSetup { message, .. }) if message.contains("margins don't fit")),
         "stays open with the error"
@@ -1168,6 +1168,186 @@ fn more_paper_sizes_opens_page_setup() {
     h.get(egui_kittest::kittest::By::new().label_contains("More Paper Sizes…")).click();
     h.run_steps(2);
     assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("pageSetup"));
+}
+
+/// The real UI path: picking Book fold in the combo box (not assigning the field between
+/// frames) still turns the margins once, on the next frame.
+#[test]
+fn page_setup_book_fold_chosen_in_the_combo_rotates_margins() {
+    use egui_kittest::kittest::Queryable;
+    use wordcraft_doc::section::MultiplePages;
+    let mut h = app_harness(app_with("Page"));
+    h.state_mut().run("ui.dialog", json!({"name": "pageSetup"})).unwrap();
+    h.run_steps(2);
+    if let Some(Dialog::PageSetup { top, bottom, left, right, .. }) = h.state_mut().dialog.as_mut() {
+        (*top, *bottom, *left, *right) = (1.0, 2.0, 3.0, 4.0);
+    }
+    h.run_steps(2);
+    h.get_by_label("Multiple pages:").click();
+    h.run_steps(6);
+    h.get_by_label("Book fold").click();
+    h.run_steps(4);
+    match &h.state().dialog {
+        Some(Dialog::PageSetup { top, bottom, left, right, multiple, landscape, .. }) => {
+            assert_eq!(*multiple, MultiplePages::BookFold);
+            assert!(*landscape);
+            assert_eq!((*top, *bottom, *left, *right), (3.0, 4.0, 2.0, 1.0), "turned once");
+        }
+        _ => panic!("open"),
+    }
+}
+
+/// "Reverse book fold" is its own choice in the combo; OK applies a book fold with the
+/// reverse direction (Word for Mac 16.114 saves it as `w:bookFoldRevPrinting` alone).
+#[test]
+fn page_setup_reverse_book_fold_choice_sets_the_direction() {
+    use egui_kittest::kittest::Queryable;
+    use wordcraft_doc::section::MultiplePages;
+    let mut h = app_harness(app_with("Page"));
+    h.state_mut().run("ui.dialog", json!({"name": "pageSetup"})).unwrap();
+    h.run_steps(2);
+    h.get_by_label("Multiple pages:").click();
+    h.run_steps(6);
+    h.get_by_label("Reverse book fold").click();
+    h.run_steps(4);
+    match &h.state().dialog {
+        Some(Dialog::PageSetup { multiple, reverse, .. }) => assert!(*multiple == MultiplePages::BookFold && *reverse),
+        _ => panic!("open"),
+    }
+    h.get_by_label("OK").click();
+    h.run_steps(4);
+    let st = &h.state().session.doc;
+    assert_eq!(st.settings.multiple_pages(), MultiplePages::BookFold);
+    assert!(st.settings.book_fold_reverse);
+}
+
+/// Switching to Book fold turns the margins once; editing the paper size afterwards leaves the
+/// margins and the typed size alone (the orientation stays locked).
+#[test]
+fn page_setup_book_fold_rotates_margins_once() {
+    use wordcraft_doc::section::MultiplePages;
+    let mut h = app_harness(app_with("Page"));
+    h.state_mut().run("ui.dialog", json!({"name": "pageSetup"})).unwrap();
+    h.run_steps(2);
+    if let Some(Dialog::PageSetup { top, bottom, left, right, multiple, .. }) = h.state_mut().dialog.as_mut() {
+        (*top, *bottom, *left, *right) = (1.0, 2.0, 3.0, 4.0);
+        *multiple = MultiplePages::BookFold;
+    }
+    h.run_steps(2);
+    let margins = |h: &egui_kittest::Harness<'static, WordApp>| match &h.state().dialog {
+        Some(Dialog::PageSetup { top, bottom, left, right, .. }) => (*top, *bottom, *left, *right),
+        _ => panic!("open"),
+    };
+    let turned = margins(&h);
+    assert_eq!(turned, (3.0, 4.0, 2.0, 1.0), "turned once on entry");
+    if let Some(Dialog::PageSetup { paper, .. }) = h.state_mut().dialog.as_mut() {
+        *paper = (4.0, 7.0);
+    }
+    h.run_steps(4);
+    assert_eq!(margins(&h), turned, "later frames leave the margins alone");
+    assert!(matches!(&h.state().dialog, Some(Dialog::PageSetup { landscape: true, paper: (4.0, 7.0), .. })));
+}
+
+/// #1836: Page Setup's Multiple pages list shows the document's mode, labels the margins
+/// Inside/Outside for a booklet, forces landscape for it, and OK applies a change, with the
+/// sheet count, as one undo step; a mode the margins don't fit is refused with nothing applied.
+#[test]
+fn page_setup_multiple_pages_applies_a_booklet() {
+    use egui_kittest::kittest::Queryable;
+    use wordcraft_doc::section::MultiplePages;
+    let mut h = app_harness(app_with("Page"));
+    let depth = h.state().session.undo_depth();
+    h.state_mut().run("ui.dialog", json!({"name": "pageSetup"})).unwrap();
+    h.run_steps(2);
+    assert!(matches!(&h.state().dialog, Some(Dialog::PageSetup { multiple: MultiplePages::Normal, .. })));
+    assert!(h.query_by_label("Multiple pages:").is_some() && h.query_by_label("Left:").is_some());
+    if let Some(Dialog::PageSetup { multiple, sheets, .. }) = h.state_mut().dialog.as_mut() {
+        *multiple = MultiplePages::BookFold;
+        *sheets = 8;
+    }
+    h.run_steps(2);
+    assert!(h.query_by_label("Inside:").is_some() && h.query_by_label("Sheets per booklet:").is_some());
+    assert!(matches!(&h.state().dialog, Some(Dialog::PageSetup { landscape: true, .. })), "a booklet is landscape");
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none());
+    let st = &h.state().session.doc;
+    assert_eq!(st.settings.multiple_pages(), MultiplePages::BookFold);
+    assert_eq!(st.settings.book_fold_sheets, 8);
+    assert!(st.last_section.landscape);
+    assert_eq!(h.state().session.undo_depth(), depth + 1, "one step");
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert_eq!(h.state().session.doc.settings.multiple_pages(), MultiplePages::Normal);
+    // Margins that leave no room on the half page are refused, and nothing is applied.
+    let mut h = app_harness(app_with("Page"));
+    let _ = h.state_mut().run("layout.margins", json!({"top": 200.0, "bottom": 200.0}));
+    h.state_mut().run("ui.dialog", json!({"name": "pageSetup"})).unwrap();
+    h.run_steps(2);
+    if let Some(Dialog::PageSetup { multiple, .. }) = h.state_mut().dialog.as_mut() {
+        *multiple = MultiplePages::TwoPerSheet;
+    }
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_some(), "refused");
+    assert_eq!(h.state().session.doc.settings.multiple_pages(), MultiplePages::Normal);
+}
+
+/// #1836, Word for Mac 16.113.4 (user-checked): Sheets per booklet offers All and 4 to 40 in
+/// fours; a file's other count stays in the list so it can be kept.
+#[test]
+fn booklet_sheet_choices_follow_word() {
+    let word = vec![0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40];
+    assert_eq!(booklet_sheet_choices(0), word);
+    assert_eq!(booklet_sheet_choices(8), word);
+    assert_eq!(booklet_sheet_choices(5), vec![0, 4, 5, 8, 12, 16, 20, 24, 28, 32, 36, 40]);
+    assert_eq!(booklet_sheet_choices(u16::MAX).last(), Some(&40));
+}
+
+/// #1836 review: choosing Book fold turns a portrait page landscape, and the margin fields turn
+/// with it as the page's margins would; switching from 2 pages per sheet to Book fold checks
+/// the margins against the booklet's half page, not the old mode's.
+#[test]
+fn page_setup_book_fold_turns_the_margins_and_switches_from_two_per_sheet() {
+    use egui_kittest::kittest::Queryable;
+    use wordcraft_doc::section::MultiplePages;
+    let ppu = crate::options::unit().pt_per_unit();
+    let mut h = app_harness(app_with("Page"));
+    h.state_mut().run("layout.margins", json!({"top": 72.0, "bottom": 72.0, "left": 100.0, "right": 50.0})).unwrap();
+    h.state_mut().run("ui.dialog", json!({"name": "pageSetup"})).unwrap();
+    h.run_steps(2);
+    if let Some(Dialog::PageSetup { multiple, .. }) = h.state_mut().dialog.as_mut() {
+        *multiple = MultiplePages::BookFold;
+    }
+    h.run_steps(2);
+    let Some(Dialog::PageSetup { top, bottom, left, right, .. }) = h.state().dialog.clone() else { panic!("open") };
+    let pt = |x: f32| (x * ppu).round();
+    assert_eq!((pt(top), pt(bottom), pt(left), pt(right)), (100.0, 50.0, 72.0, 72.0), "turned like the page");
+
+    // 2 pages per sheet → Book fold, with margins that fit the booklet's 306 x 792 page but not
+    // the 612 x 396 one of 2 pages per sheet.
+    let mut h = app_harness(app_with("Page"));
+    h.state_mut().run("layout.multiplePages", json!({"mode": "twoPerSheet"})).unwrap();
+    h.state_mut().run("ui.dialog", json!({"name": "pageSetup"})).unwrap();
+    h.run_steps(2);
+    if let Some(Dialog::PageSetup { multiple, .. }) = h.state_mut().dialog.as_mut() {
+        *multiple = MultiplePages::BookFold;
+    }
+    h.run_steps(2);
+    if let Some(Dialog::PageSetup { top, bottom, left, right, .. }) = h.state_mut().dialog.as_mut() {
+        (*top, *bottom, *left, *right) = (200.0 / ppu, 200.0 / ppu, 36.0 / ppu, 36.0 / ppu);
+    }
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let message = match &h.state().dialog {
+        Some(Dialog::PageSetup { message, .. }) => message.clone(),
+        _ => String::new(),
+    };
+    assert!(h.state().dialog.is_none(), "applied: {message}");
+    let d = &h.state().session.doc;
+    assert_eq!(d.settings.multiple_pages(), MultiplePages::BookFold);
+    assert_eq!((d.last_section.margin_top, d.last_section.landscape), (200.0, true));
 }
 
 /// #1320: Page Setup shows the section's vertical alignment, and OK applies a change.
