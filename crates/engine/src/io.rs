@@ -132,6 +132,25 @@ pub fn can_encrypt(name: &str) -> bool {
     is_word_package(&ext_of(name))
 }
 
+/// Whether two native paths name the same file, including through relative paths or symlinks.
+/// Path resolution stays in the I/O boundary so command handlers never bypass automation roots.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn same_file_path(a: &std::path::Path, b: &std::path::Path) -> bool {
+    if a == b {
+        return true;
+    }
+    if crate::file_access::check_read(&a.to_string_lossy()).is_err() || crate::file_access::check_write(&b.to_string_lossy()).is_err() {
+        return false;
+    }
+    std::fs::canonicalize(a).ok().zip(std::fs::canonicalize(b).ok()).is_some_and(|(a, b)| a == b)
+}
+
+/// The web build has no native paths; only identical path values can match.
+#[cfg(target_arch = "wasm32")]
+pub fn same_file_path(a: &std::path::Path, b: &std::path::Path) -> bool {
+    a == b
+}
+
 /// Finish a document just read from a file: never leave it empty, and bring its unlocked
 /// `DATE`/`TIME` fields up to now the way Word does on open (see
 /// [`crate::cmd::references::refresh_date_fields`]).

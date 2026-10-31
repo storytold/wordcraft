@@ -1,3 +1,4 @@
+use crate::DamagedSaveContinuation;
 use super::{
     AutoSaveBlock, AwaitingSave, PromptSave, SaveChoice, Value, WordApp, async_saves, dialogs, file_dialogs, i18n, json, keeps_everything, panes,
     printing,
@@ -35,7 +36,7 @@ impl WordApp {
                     file_dialogs::Asked::Busy => Ok(json!({"done": false})),
                 };
             }
-            SaveChoice::Save => match self.save_for_prompt() {
+            SaveChoice::Save => match self.save_for_prompt(&then, &params, document) {
                 Ok(PromptSave::Saved) => true,
                 Ok(PromptSave::NotSaved) => false,
                 // The browser's picker finishes later: the command waits for it (#1315).
@@ -62,8 +63,13 @@ impl WordApp {
     /// file locked by another app, a missing folder) is the save's error ([`Self::save_failed`]
     /// tells the user).
     /// In the browser the save picker may write the file later ([`PromptSave::Later`], #1315).
-    fn save_for_prompt(&mut self) -> Result<PromptSave, String> {
-        let v = self.execute("file.save", json!({}))?;
+    fn save_for_prompt(&mut self, then: &str, params: &Value, document: u64) -> Result<PromptSave, String> {
+        let v = self.execute_user("file.save", json!({}))?;
+        if v.get("confirmationRequired").and_then(Value::as_str) == Some("damagedDocx") {
+            self.damaged_save_continuation = Some(DamagedSaveContinuation { then: then.into(), params: params.clone(), document });
+        } else {
+            self.damaged_save_continuation = None;
+        }
         let saved = v.get("saved").and_then(Value::as_bool) == Some(true) || v.get("downloaded").is_some();
         if !self.safely_saved(saved) {
             return Ok(PromptSave::NotSaved);
@@ -82,7 +88,7 @@ impl WordApp {
     }
 
     /// The document's name as the Save Changes prompt shows it: its file's name, else its title.
-    pub(super) fn prompt_name(&self) -> String {
+    pub(crate) fn prompt_name(&self) -> String {
         self.session.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| self.title_stem())
     }
 
@@ -99,7 +105,7 @@ impl WordApp {
 
     /// The Save Changes prompt comes back with `message` (also on the status bar), the held-back
     /// command still waiting, if the document is still the one it asked about. Returns `message`.
-    fn prompt_again(&mut self, message: String, then: String, params: Value, document: u64) -> String {
+    pub(crate) fn prompt_again(&mut self, message: String, then: String, params: Value, document: u64) -> String {
         self.status(message.clone());
         if document == self.session.document_id() {
             let name = self.prompt_name();

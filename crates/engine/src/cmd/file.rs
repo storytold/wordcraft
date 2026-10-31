@@ -93,9 +93,9 @@ pub fn specs() -> Vec<CommandSpec> {
             .pure(),
         CommandSpec::new("file.save", "Save", "File", save)
             .key("Mod+S / Shift+F12 / Alt+Shift+F2")
-            .params(r#"{"path"?: string, "password"?: string (encrypt this and later saves with it, as file.encrypt does), "markup"?: bool (Print Markup for a PDF, PNG, HTML, Markdown or text copy: comments shown; default file.printMarkup), "format"?: "wordml2003" (an .xml file as a Word 2003 XML Document) | "flatopc" (as a Word XML Document, the default; saving over a Word 2003 XML file keeps that format)}"#)
+            .params(r#"{"path"?: string, "password"?: string (encrypt this and later saves with it, as file.encrypt does), "markup"?: bool (Print Markup for a PDF, PNG, HTML, Markdown or text copy: comments shown; default file.printMarkup), "format"?: "wordml2003" (an .xml file as a Word 2003 XML Document) | "flatopc" (as a Word XML Document, the default; saving over a Word 2003 XML file keeps that format), "confirmDamaged"?: bool (when true, allow overwriting the originally damaged DOCX source; otherwise a save to that source returns confirmationRequired: damagedDocx)}"#)
             .pure(),
-        CommandSpec::new("file.saveAs", "Save As", "File", save_as).key(super::mac_or("F12 / Mod+Shift+S", "F12 / Alt+F2")).params(r#"{"path": string, "password"?: string, "markup"?: bool, "format"?: string (as file.save)}"#).pure(),
+        CommandSpec::new("file.saveAs", "Save As", "File", save_as).key(super::mac_or("F12 / Mod+Shift+S", "F12 / Alt+F2")).params(r#"{"path": string, "password"?: string, "markup"?: bool, "format"?: string (as file.save), "confirmDamaged"?: bool (when true, allow overwriting the originally damaged DOCX source; otherwise a save to that source returns confirmationRequired: damagedDocx)}"#).pure(),
         // Pure: the password must not land in Repeat or a recorded macro, and it isn't an edit
         // to undo; it marks the document as changed itself.
         CommandSpec::new("file.encrypt", "Encrypt with Password", "File › Info › Protect Document", encrypt)
@@ -273,6 +273,7 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
     {
         doc.styles.default_chr.lang = Some(lang.clone());
     }
+    let skipped_parts = doc.skipped_parts.clone();
     match s.used_because() {
         None => s.set_document(doc),
         Some(why) => {
@@ -280,8 +281,15 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
             s.add_opened_document(doc);
         }
     }
+    if !skipped_parts.is_empty() {
+        s.damaged_source = Some((path.into(), skipped_parts.clone()));
+    }
+    s.status.clear();
     if let Some(z) = s.doc.settings.zoom {
         super::view::restore_zoom(s, z);
+    }
+    if !skipped_parts.is_empty() {
+        s.status = skipped_parts_warning(&skipped_parts);
     }
     s.path = Some(path.into());
     // Like Word, a document opened with a password is saved with it again.
@@ -289,8 +297,25 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
         s.password = password.map(crate::io::Password::new);
     }
     Ok(
-        json!({"path": path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count(), "encrypted": encrypted, "alreadyOpen": false, "id": s.document_id()}),
+        json!({"path": path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count(), "encrypted": encrypted, "alreadyOpen": false, "id": s.document_id(), "skippedParts": skipped_parts}),
     )
+}
+
+/// A short warning shared by the status bar and headless CLI. Part names come from the input
+/// package, so keep control characters and unbounded names out of user-facing status text.
+pub fn skipped_parts_warning(parts: &[String]) -> String {
+    let names = parts
+        .iter()
+        .take(3)
+        .map(|name| {
+            let name: String = name.chars().filter(|c| !c.is_control()).take(120).collect();
+            format!("{name:?}")
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let more = parts.len().saturating_sub(3);
+    let suffix = if more == 0 { String::new() } else { format!(" and {more} more") };
+    format!("Part of this file is damaged and was left out: {names}{suffix}. Check the document before you save it.")
 }
 
 /// Close a document with no window to ask about it (agents, headless sessions).
@@ -340,6 +365,23 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
             return Ok(json!({"saved": false}));
         }
     };
+    let confirm_damaged = match v.get("confirmDamaged") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(confirmed)) => *confirmed,
+        _ => return Err(CmdError::Params("`confirmDamaged` must be a boolean".into())),
+    };
+    let confirmation_parts = s.damaged_source.as_ref().and_then(|(source, parts)| crate::io::same_file_path(source, &path).then(|| parts.clone()));
+    if let Some(skipped_parts) = confirmation_parts.filter(|_| !confirm_damaged) {
+        s.push_ui_request(json!({
+            "open": "confirmDamagedSave",
+            "path": path.to_string_lossy(),
+            "skippedParts": skipped_parts.iter().take(3).collect::<Vec<_>>(),
+            "skippedPartsMore": skipped_parts.len().saturating_sub(3),
+            "document": s.document_id(),
+            "params": v,
+        }));
+        return Ok(json!({"saved": false, "confirmationRequired": "damagedDocx", "skippedParts": skipped_parts}));
+    }
     if let Some(pw) = v.get("password").filter(|pw| !pw.is_null()) {
         let Some(pw) = pw.as_str().filter(|pw| !pw.is_empty()) else {
             return Err(CmdError::Params("`password` must be a non-empty string (file.encrypt removes a password)".into()));
@@ -383,6 +425,12 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
     if own_file || ["docx", "docm", "dotx", "dotm", "odt", "rtf", "json", "xml"].contains(&ext.as_str()) {
         s.path = Some(path.clone());
         s.dirty = false;
+        if s.damaged_source.as_ref().is_some_and(|(source, _)| crate::io::same_file_path(source, &path)) {
+            s.damaged_source = None;
+            s.doc.skipped_parts.clear();
+        } else if s.damaged_source.is_none() {
+            s.doc.skipped_parts.clear();
+        }
         s.relayout();
     }
     Ok(json!({"saved": true, "path": path.to_string_lossy(), "encrypted": encrypted}))

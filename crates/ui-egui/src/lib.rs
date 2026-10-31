@@ -135,6 +135,13 @@ struct AwaitingSave {
     rev: u64,
 }
 
+/// A Save Changes command held until the user confirms a damaged-source overwrite.
+pub(crate) struct DamagedSaveContinuation {
+    pub(crate) then: String,
+    pub(crate) params: Value,
+    pub(crate) document: u64,
+}
+
 /// UI state that persists between runs (and that agents can read and set).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -601,6 +608,7 @@ pub struct WordApp {
     saves_in_flight: Vec<SaveInFlight>,
     /// Web: the command a Save Changes prompt held back until its picker save ends (#1315).
     awaiting_save: Option<AwaitingSave>,
+    pub(crate) damaged_save_continuation: Option<DamagedSaveContinuation>,
     /// The file dialog the host is showing, and what its answer is for ([`file_dialogs`]).
     file_dialog: Option<file_dialogs::PendingDialog>,
     /// The built-in file browser, when it is open, and the folder it showed last (#576).

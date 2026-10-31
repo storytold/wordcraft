@@ -41,6 +41,7 @@ pub(super) fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         Dialog::About { .. } => about_dialog(ui, d),
         Dialog::DiscardRecovery { .. } => discard_recovery_dialog(app, ui, d),
         Dialog::SaveChanges { .. } => save_changes_dialog(app, ui, d),
+        Dialog::ConfirmDamagedSave { .. } => confirm_damaged_save_dialog(app, ui, d),
         Dialog::RecipientList { fields, rows, message, filter } => recipient_list(app, ui, fields, rows, message, filter),
         Dialog::InsertMergeField { .. } => insert_merge_field_dialog(app, ui, d),
         Dialog::Password { .. } => password_dialog(app, ui, d),
@@ -1125,6 +1126,65 @@ fn discard_recovery_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bo
             app.status(e.clone());
         }
         return result.is_ok();
+    }
+    false
+}
+
+fn confirm_damaged_save_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
+    let Dialog::ConfirmDamagedSave { path, skipped_parts, skipped_parts_more, document, params } = d else {
+        return false;
+    };
+    ui.label(tl!("Some parts of this document could not be read and will be missing from the saved file."));
+    let mut warning = wordcraft_engine::cmd::file::skipped_parts_warning(skipped_parts);
+    if *skipped_parts_more > 0 {
+        warning.push_str(&format!(" Also {} additional parts were omitted.", skipped_parts_more));
+    }
+    ui.label(warning);
+    ui.add_space(4.0);
+    ui.label(egui::RichText::new(path.as_str()).small().weak());
+    ui.add_space(8.0);
+    let answer = ui
+        .horizontal(|ui| {
+            let cancel = ui.button(tl!("Cancel"));
+            let save = ui.add(crate::widgets::primary_button(ui, tl!("Save Anyway")));
+            (cancel.clicked(), save.clicked())
+        })
+        .inner;
+    if ui.input(|i| i.key_pressed(egui::Key::Escape)) || answer.0 {
+        if let Some(wait) = app.damaged_save_continuation.take() {
+            let name = app.prompt_name();
+            let message = crate::i18n::fmt(tl!("Saving {name} was cancelled, so it is still open and nothing was lost."), &[("name", &name)]);
+            app.prompt_again(message, wait.then, wait.params, wait.document);
+        }
+        return true;
+    }
+    if answer.1 {
+        let tracked = !app.session.doc.skipped_parts.is_empty() && app.session.path.as_deref() == Some(std::path::Path::new(path));
+        if app.session.document_id() != *document || (!tracked && app.session.path.as_deref() != Some(std::path::Path::new(path))) {
+            app.damaged_save_continuation = None;
+            app.status(tl!("The document changed while this confirmation was open. Save canceled."));
+            return true;
+        }
+        let mut save_params = params.clone();
+        if !save_params.is_object() {
+            save_params = json!({});
+        }
+        save_params["path"] = json!(path);
+        save_params["confirmDamaged"] = json!(true);
+        match app.run("file.save", save_params) {
+            Ok(result) if result.get("saved").and_then(Value::as_bool) == Some(true) => {
+                app.dialog = None;
+                if let Some(wait) = app.damaged_save_continuation.take()
+                    && wait.document == app.session.document_id()
+                    && let Err(error) = app.execute_user(&wait.then, wait.params)
+                {
+                    app.status(error);
+                }
+                return true;
+            }
+            Ok(_) => app.status(tl!("The damaged document was not saved.")),
+            Err(error) => app.status(error),
+        }
     }
     false
 }

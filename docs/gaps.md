@@ -8,6 +8,11 @@ Recovery discovery no longer interrupts an explicitly created or opened document
 
 Group connectors (gap 10): re-routing preserves displayed rotated and flipped free endpoints after unit, uniform or nonuniform group scaling, including ends whose target shape or site cannot be resolved. Glued endpoints still use their existing connection-site path. Degenerate display scales that cannot be inverted, or fallback spans exceeding the renderer's 4000 pt child-size cap, leave connectors needing fallback endpoints unchanged; fully resolved connectors still reroute. Invalid child extents retain the renderer's unit-scale fallback. Model and engine regressions cover this geometry and guard against nonfinite coordinate writes and repeated shrinkage at the display cap; routing around shapes remains missing, with no new native Word comparison.
 
+Damaged DOCX entries are skipped with their names exposed by `file.open`; the status names the
+omitted parts, and overwriting the same source requires confirmation. The CLI reports skipped
+parts and requires `--confirm-damaged` to replace the source. This closes the data-loss path in
+#3724; malformed required XML and fidelity across real-world DOCX files remain separate gaps.
+
 > **Printing update:** 2026-10-12 · direct desktop printing through craft-print; details below.
 
 The work list. One entry per shortfall, ranked by how much it stops a Word user from switching
@@ -169,6 +174,7 @@ Recipient label generation (#4880) now includes all selected recipients across a
 | 2026-10-17 | trivial | Gap 9 narrowed: Standard (Word 2007, AES-ECB) encrypted packages open with a password under any Word extension; AES headers in Word 97-2003 files are outside the public spec and refused with a clear message; estimate 3–5 → 0 h, since the remaining AES-in-`.doc` case is refused by design |
 | 2026-10-25 | trivial | Small follow-ups from the field, table and AutoFormat batch (#4232) |
 | 2026-10-25 | trivial | Highlight decisions include fully selected paragraph marks in whole cells and ordinary ranges, including empty paragraphs; partial text columns exclude unselected marks (#4085). |
+| 2026-10-24 | minor | #3724: skipped DOCX parts are named for GUI and headless callers; overwriting the same source requires confirmation; CLI conversion reports omissions |
 | 2026-10-25 | trivial | Highlight toggle checks the full target beyond 10,000 runs without collecting resolved formatting; mixed and inherited tails and Undo/Redo covered (#4085). |
 | 2026-10-24 | trivial | Highlight shortcut toggles the last chosen colour off when the whole selection has it; explicit colour commands remain setters (#4085). |
 | 2026-10-22 | minor | #8 narrowed: Spanish proofing (es-ES, es-MX, es-419, es-UY spelling from the installed Hunspell dictionaries, Uruguayan `vos` forms, generic and opening-mark checks, #3360, #3553) |

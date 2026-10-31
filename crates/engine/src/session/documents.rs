@@ -44,6 +44,8 @@ pub struct DocState {
     pub(super) view: ViewState,
     pub(super) pending: Option<CharProps>,
     pub(super) path: Option<PathBuf>,
+    /// Source file for unreadable parts, retained until that source is safely overwritten.
+    pub(super) damaged_source: Option<(PathBuf, Vec<String>)>,
     pub(super) file_name: Option<String>,
     pub(super) dirty: bool,
     pub(super) pending_move: Option<crate::cmd::moves::PendingMove>,
@@ -98,6 +100,7 @@ impl DocState {
             view,
             pending: None,
             path: None,
+            damaged_source: None,
             file_name: None,
             dirty: false,
             pending_move: None,
@@ -198,6 +201,7 @@ impl Session {
             view: _,
             pending: _,
             path: _,
+            damaged_source: _,
             file_name: _,
             dirty: _,
             pending_move: _,
@@ -287,6 +291,7 @@ impl Session {
             view,
             pending,
             path,
+            damaged_source,
             file_name,
             dirty,
             pending_move,
@@ -334,6 +339,7 @@ impl Session {
         swap(&mut self.view, view);
         swap(&mut self.pending, pending);
         swap(&mut self.path, path);
+        swap(&mut self.damaged_source, damaged_source);
         swap(&mut self.file_name, file_name);
         swap(&mut self.dirty, dirty);
         swap(&mut self.pending_move, pending_move);

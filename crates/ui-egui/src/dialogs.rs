@@ -331,6 +331,15 @@ pub enum Dialog {
         #[serde(default)]
         message: String,
     },
+    /// Saving over a damaged DOCX requires explicit confirmation before omitted parts are lost.
+    ConfirmDamagedSave {
+        path: String,
+        skipped_parts: Vec<String>,
+        skipped_parts_more: usize,
+        document: u64,
+        #[serde(skip)]
+        params: Value,
+    },
     /// Mailings › Select Recipients / Edit Recipient List: a table of recipients to type or
     /// edit (field names on top), or a file to load instead (#240).
     RecipientList {
@@ -508,6 +517,7 @@ impl Dialog {
             Dialog::PasteSpecial { .. } => "pasteSpecial",
             Dialog::About { .. } => "about",
             Dialog::SaveChanges { .. } => "saveChanges",
+            Dialog::ConfirmDamagedSave { .. } => "confirmDamagedSave",
             Dialog::DiscardRecovery { .. } => "discardRecovery",
             Dialog::RecipientList { .. } => "recipientList",
             Dialog::SelectTable { .. } => "selectTable",
