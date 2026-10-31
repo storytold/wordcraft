@@ -33,6 +33,9 @@ impl WordApp {
         // part of it: saving and exporting go on without it (the refusal stays on the status
         // line), and replacing the document asks Save / Don't Save / Cancel about it.
         let refused = if flushes_comment_drafts(id, &params) { panes::flush_comment_drafts(self).err() } else { None };
+        if matches!(id, "file.save" | "file.saveAs") && self.choose_provider_save(id == "file.saveAs") {
+            return Ok(json!({"pending":"fileProvider"}));
+        }
         if id == "file.recover" && params.as_object().is_none_or(|p| p.is_empty()) {
             self.ui.backstage = true;
             self.ui.backstage_page = "recover".into();

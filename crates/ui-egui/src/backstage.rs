@@ -552,6 +552,9 @@ fn personal_error_id() -> egui::Id {
 /// Draws the Recent documents list, distinguishes duplicate names by path for screen readers, and
 /// stores an open failure in this page's temporary state.
 fn open_list(app: &mut WordApp, ui: &mut Ui) {
+    if let Some(host) = &app.services.file_providers {
+        host.recent_ui(ui);
+    }
     let t = Tokens::get(ui.ctx());
     ui.label(egui::RichText::new(tl!("Recent")).font(semibold(16.0)));
     ui.add_space(6.0);

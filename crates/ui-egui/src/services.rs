@@ -4,6 +4,10 @@ use super::{FileDialogAnswer, FileDialogRequest, async_saves, paste_picture, pri
 /// Platform services injected by the host (file dialogs, file I/O).
 #[derive(Default)]
 pub struct Services {
+    /// Optional trusted web host, disconnected until explicitly registered by the embedding page.
+    pub file_providers: Option<crate::file_providers::Host>,
+    /// Device download independent of an existing legacy parent-frame writer.
+    pub provider_download: Option<Box<dyn Fn(&str, &[u8]) -> Result<(), String>>>,
     /// Desktop: discover configured printers on a worker.
     pub printers: Option<printing::Discover>,
     /// Desktop: submit the PDF with the chosen settings on a worker.
