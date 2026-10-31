@@ -313,19 +313,33 @@ impl InlineObject {
     /// A group's members placed in a `w` × `h` box at (`x`, `y`): each member's rectangle
     /// (x, y, w, h) and the member. Empty for anything else.
     pub fn group_rects(&self, x: f32, y: f32, w: f32, h: f32) -> Vec<([f32; 4], &InlineObject)> {
-        let InlineObject::Group { ch_w, ch_h, children, .. } = self else { return Vec::new() };
+        let InlineObject::Group { children, .. } = self else { return Vec::new() };
+        self.member_rects(x, y, w, h).into_iter().filter_map(|(i, r)| Some((r, &children.get(i)?.obj))).collect()
+    }
+    /// [`InlineObject::group_rects`] with each member's index in `children` instead of the member.
+    pub fn member_rects(&self, x: f32, y: f32, w: f32, h: f32) -> Vec<(usize, [f32; 4])> {
+        let InlineObject::Group { children, .. } = self else { return Vec::new() };
+        let (sx, sy) = self.group_scale(w, h);
         let fin = |v: f32| if v.is_finite() { v } else { 0.0 };
-        let sx = if fin(*ch_w) > 0.0 { fin(w) / ch_w } else { 1.0 };
-        let sy = if fin(*ch_h) > 0.0 { fin(h) / ch_h } else { 1.0 };
         children
             .iter()
             .take(MAX_GROUP_CHILDREN)
-            .filter_map(|c| {
+            .enumerate()
+            .filter_map(|(i, c)| {
                 let (cw, chh, _) = c.obj.frame()?;
                 let r = [x + fin(c.x) * sx, y + fin(c.y) * sy, (fin(cw) * sx).clamp(0.0, 4000.0), (fin(chh) * sy).clamp(0.0, 4000.0)];
-                (!matches!(c.obj, InlineObject::Group { .. })).then_some((r, &c.obj))
+                (!matches!(c.obj, InlineObject::Group { .. })).then_some((i, r))
             })
             .collect()
+    }
+    /// How much a group drawn `w` × `h` scales its members' space (x, y): 1 for a canvas, whose
+    /// members keep their size.
+    pub fn group_scale(&self, w: f32, h: f32) -> (f32, f32) {
+        let InlineObject::Group { ch_w, ch_h, .. } = self else { return (1.0, 1.0) };
+        let fin = |v: f32| if v.is_finite() { v } else { 0.0 };
+        let sx = if fin(*ch_w) > 0.0 { fin(w) / ch_w } else { 1.0 };
+        let sy = if fin(*ch_h) > 0.0 { fin(h) / ch_h } else { 1.0 };
+        (sx, sy)
     }
     /// A legacy form field's definition (`FORMCHECKBOX`, `FORMTEXT`, `FORMDROPDOWN`), read from
     /// the `w:ffData` it keeps; `None` for anything else.

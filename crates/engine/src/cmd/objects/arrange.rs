@@ -6,6 +6,9 @@ pub(super) const MAX_OFFSET: f32 = 4000.0;
 
 /// Resize and/or move the selected object (dragging its frame or handles).
 pub(super) fn bounds(s: &mut Session, v: &Value) -> CmdResult {
+    if let Some(r) = crate::cmd::canvas::member_bounds(s, v) {
+        return r;
+    }
     let (pos, obj) = selected(s).ok_or_else(|| CmdError::Disabled("no picture or shape selected".into()))?;
     let to = match (p::f32(v, "x"), p::f32(v, "y")) {
         (Some(x), Some(y)) => Some((x, y)),
