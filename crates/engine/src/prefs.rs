@@ -49,6 +49,9 @@ pub struct Prefs {
     /// Check spelling as you type (File › Options › Proofing). The live value is
     /// `ViewState::proofing`; this is the copy that is saved and restored (#1792).
     pub check_spelling: bool,
+    /// Read Mode's Page Color. The live value is `ViewState::read_page_color`.
+    #[serde(deserialize_with = "lenient_read_page_color")]
+    pub read_page_color: crate::cmd::view::ReadPageColor,
     pub ignore_uppercase: bool,
     pub ignore_numbers: bool,
     pub ignore_internet: bool,
@@ -74,6 +77,7 @@ impl Default for Prefs {
             marks: Default::default(),
             mark_grammar: true,
             check_spelling: true,
+            read_page_color: Default::default(),
             ignore_uppercase: true,
             ignore_numbers: true,
             ignore_internet: true,
@@ -99,4 +103,31 @@ impl Prefs {
 fn lenient_default_language<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
     let value = serde_json::Value::deserialize(d)?;
     Ok(value.as_str().and_then(wordcraft_proof::lang::normalize_tag))
+}
+
+/// Ignore an invalid saved Page Color without discarding other preferences.
+fn lenient_read_page_color<'de, D: serde::Deserializer<'de>>(d: D) -> Result<crate::cmd::view::ReadPageColor, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    Ok(serde_json::from_value(value).unwrap_or_default())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Prefs;
+    use crate::cmd::view::ReadPageColor;
+
+    #[test]
+    fn read_page_color_loads_from_old_and_damaged_prefs() {
+        let old: Prefs = serde_json::from_str(r#"{"checkSpelling":false}"#).unwrap();
+        assert_eq!(old.read_page_color, ReadPageColor::None);
+        assert!(!old.check_spelling);
+        for bad in [r#"{"readPageColor":"unknown","checkSpelling":false}"#, r#"{"readPageColor":42,"checkSpelling":false}"#] {
+            let prefs: Prefs = serde_json::from_str(bad).unwrap();
+            assert_eq!(prefs.read_page_color, ReadPageColor::None);
+            assert!(!prefs.check_spelling);
+        }
+        let saved: Prefs = serde_json::from_str(r#"{"readPageColor":"sepia"}"#).unwrap();
+        assert_eq!(saved.read_page_color, ReadPageColor::Sepia);
+        assert_eq!(serde_json::to_value(saved).unwrap()["readPageColor"], "sepia");
+    }
 }

@@ -186,6 +186,12 @@ impl RenderOptions {
         self.ink(self.read_paper.or(doc.settings.page_color).unwrap_or(self.paper))
     }
 
+    /// The on-screen color of paper with no page color: [`RenderOptions::read_paper`], else
+    /// [`RenderOptions::paper`]. White Read Mode paper on a dark page is the dark paper grey.
+    pub fn blank_paper(&self) -> Rgb {
+        self.ink(self.read_paper.unwrap_or(self.paper))
+    }
+
     /// The on-screen colour for a document colour (see [`RenderOptions::dark`]).
     pub fn ink(&self, c: Rgb) -> Rgb {
         if !self.dark {

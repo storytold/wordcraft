@@ -67,13 +67,16 @@ pub(super) fn reading_toolbar(app: &mut WordApp, ui: &mut Ui, t: Tokens) {
                 });
                 ui.separator();
                 use wordcraft_engine::cmd::view::ReadPageColor;
-                let colors =
-                    [(ReadPageColor::None, "None", "none"), (ReadPageColor::Sepia, "Sepia", "sepia"), (ReadPageColor::Inverse, "Inverse", "inverse")];
+                let colors = [
+                    (ReadPageColor::None, tl!("None"), "none"),
+                    (ReadPageColor::Sepia, tl!("Sepia"), "sepia"),
+                    (ReadPageColor::Inverse, tl!("Inverse"), "inverse"),
+                ];
                 let current = app.session.view.read_page_color;
-                let name = colors.iter().find(|c| c.0 == current).map_or("None", |c| c.1);
-                ui.menu_button(format!("{}: {}", tl!("Page color"), tl!(name)), |ui| {
+                let name = colors.iter().find(|c| c.0 == current).map_or_else(|| tl!("None"), |c| c.1);
+                ui.menu_button(format!("{}: {}", tl!("Page color"), name), |ui| {
                     for (color, name, value) in colors {
-                        if ui.selectable_label(current == color, tl!(name)).clicked() {
+                        if ui.selectable_label(current == color, name).clicked() {
                             let _ = app.run("view.readPageColor", json!({"value": value}));
                             ui.close();
                         }

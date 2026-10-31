@@ -350,6 +350,26 @@ fn read_paper_replaces_the_page_background() {
     assert!(darkest(&plain) < 0x40 && darkest(&on_sepia) <= darkest(&plain) + 8, "{} {}", darkest(&plain), darkest(&on_sepia));
 }
 
+/// The paper the canvas draws under a page before its raster: white, the reading paper, or
+/// the dark paper grey on a dark page, never the document's page color.
+#[test]
+fn blank_paper_is_the_reading_paper_or_white_on_screen() {
+    let mut d = Document::from_text("Hello");
+    d.settings.page_color = Some(Rgb(0x10, 0x10, 0x40));
+    let grey = Rgb(DARK_PAPER, DARK_PAPER, DARK_PAPER);
+    for (opts, paper) in [
+        (RenderOptions::default(), Rgb::WHITE),
+        (RenderOptions { read_paper: Some(SEPIA_PAPER), ..Default::default() }, SEPIA_PAPER),
+        (RenderOptions { read_paper: Some(Rgb::WHITE), dark: true, ..Default::default() }, grey),
+        (RenderOptions { dark: true, ..Default::default() }, grey),
+    ] {
+        assert_eq!(opts.blank_paper(), paper);
+        if opts.read_paper.is_some() {
+            assert_eq!(opts.paper_of(&d), paper, "the reading paper hides the page color");
+        }
+    }
+}
+
 /// A PNG signature, an IHDR declaring `w`×`h` 8-bit RGBA and a short IDAT (all CRCs valid, so
 /// the header parses), with no real pixel data.
 fn ihdr_only_png(w: u32, h: u32) -> Vec<u8> {

@@ -6378,7 +6378,7 @@ fn reading_mode_reflows_per_viewport_without_changing_document_or_export() {
 }
 
 /// Read Mode › View › Page Color: None, Sepia or Inverse, a view setting that leaves the
-/// document alone, is not saved, and starts at None on each entry to Read Mode.
+/// document alone, starts at None and is kept between documents and runs as a preference.
 #[test]
 fn reading_page_color_is_a_transient_view_setting() {
     use crate::cmd::view::ReadPageColor;
@@ -6389,18 +6389,46 @@ fn reading_page_color_is_a_transient_view_setting() {
     assert_eq!(s.view.read_page_color, ReadPageColor::None);
     assert_eq!(s.run("view.readPageColor", &json!({"value": "sepia"})).unwrap(), json!({"pageColor": "sepia"}));
     assert_eq!(s.view.read_page_color, ReadPageColor::Sepia);
+    assert_eq!(s.prefs.read_page_color, ReadPageColor::Sepia);
     run(&mut s, "view.readPageColor", json!({"value": "inverse"}));
     assert_eq!(s.view.read_page_color, ReadPageColor::Inverse);
+    assert_eq!(s.prefs.read_page_color, ReadPageColor::Inverse);
     for bad in [json!({"value": "black"}), json!({"value": 1}), json!({})] {
         assert!(s.run("view.readPageColor", &bad).is_err(), "{bad}");
     }
     assert_eq!(s.view.read_page_color, ReadPageColor::Inverse, "rejected values keep the color");
+    assert_eq!(s.prefs.read_page_color, ReadPageColor::Inverse);
     assert!(serde_json::to_value(&s.view).unwrap().get("readPageColor").is_none());
     assert_eq!(s.doc, original);
     assert_eq!(s.dirty, dirty);
+    // The color stays for the next entry to Read Mode, while the other reading controls reset.
+    run(&mut s, "view.readTextSize", json!({"value": 150}));
     run(&mut s, "view.printLayout", json!({}));
     run(&mut s, "view.readMode", json!({}));
-    assert_eq!(s.view.read_page_color, ReadPageColor::None);
+    assert_eq!(s.view.read_page_color, ReadPageColor::Inverse);
+    assert_eq!(s.view.read_zoom, 1.0);
+}
+
+#[test]
+fn reading_page_color_follows_saved_prefs_and_new_documents() {
+    use crate::cmd::view::ReadPageColor;
+    let mut s = s();
+    s.prefs.read_page_color = ReadPageColor::Sepia;
+    run(&mut s, "view.readMode", json!({}));
+    assert_eq!(s.view.read_page_color, ReadPageColor::Sepia);
+    let first = s.document_id();
+    s.view.read_page_color = ReadPageColor::None;
+    run(&mut s, "file.new", json!({}));
+    assert_eq!(s.view.read_page_color, ReadPageColor::Sepia);
+    run(&mut s, "view.readPageColor", json!({"value": "inverse"}));
+    s.activate(first).unwrap();
+    assert_eq!(s.view.read_page_color, ReadPageColor::Inverse);
+    s.view.read_page_color = ReadPageColor::None;
+    run(&mut s, "file.open", json!({"path": "reading-color.docx", "data": ""}));
+    assert_eq!(s.view.read_page_color, ReadPageColor::Inverse);
+    s.view.read_page_color = ReadPageColor::None;
+    s.set_document(wordcraft_doc::Document::new());
+    assert_eq!(s.view.read_page_color, ReadPageColor::Inverse);
 }
 
 /// File › Options › Advanced › Numeral: the display mode for digits (display only).

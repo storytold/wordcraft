@@ -61,7 +61,7 @@ pub struct ViewState {
     pub read_width: f32,
     #[serde(skip, default = "default_read_height")]
     pub read_height: f32,
-    /// Reader-only layout controls; they are neither document formatting nor saved UI prefs.
+    /// Reader-only width, size and spacing controls are neither document formatting nor saved UI prefs.
     /// `None` chooses responsive column width and keeps the document's line spacing.
     #[serde(skip)]
     pub read_column_width: Option<f32>,
@@ -69,7 +69,7 @@ pub struct ViewState {
     pub read_zoom: f32,
     #[serde(skip)]
     pub read_line_spacing: Option<f32>,
-    /// Read Mode's Page Color: the paper the reading columns are drawn on.
+    /// Read Mode's Page Color: the paper the reading columns are drawn on. `Prefs` saves its value.
     #[serde(skip)]
     pub read_page_color: crate::cmd::view::ReadPageColor,
     pub dark_mode: bool,
