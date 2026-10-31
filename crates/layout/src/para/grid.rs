@@ -1,6 +1,6 @@
 use super::builder::Builder;
 use super::model::ClKind;
-use super::{Arc, CharProps, Document, WrapText};
+use super::{Arc, CharProps, Document, Squeeze, WrapText};
 
 /// The section's document grid as layout applies it (`w:docGrid`, ECMA-376 §17.6.5).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -73,24 +73,21 @@ pub(super) fn snap_chars(b: &mut Builder, text: &str, grid: &Grid) {
     }
 }
 
-/// One side of two text clusters that touch: the cluster's index, the character at the touching
-/// side, its font size, and whether the cluster is that one character.
-#[derive(Clone, Copy)]
-struct Side {
-    k: usize,
-    ch: char,
-    size: f32,
-    single: bool,
-}
-
-/// The pairs of text clusters that touch, across runs: the first's last character and the
-/// second's first. A field or note number is classed by the text it shows; any other cluster
-/// (a space, tab, object or break) separates them.
-fn touching(b: &Builder, text: &str) -> Vec<(Side, Side)> {
+/// Automatic spacing (`w:autoSpaceDE`, `w:autoSpaceDN`): a quarter of the Asian character's font
+/// size between Asian text and Latin text or digits that touch, across runs. Measured on Word's
+/// PDF of a Chinese document at 16 pt (#2358), as JIS X 4051 asks. A field or note number is
+/// classed by the text it shows. The room goes after the first of the two characters; returns it
+/// by cluster index.
+pub(super) fn auto_space(b: &mut Builder, text: &str, de: bool, dn: bool) -> Vec<(usize, f32)> {
     let mut out = Vec::new();
+    if !de && !dn {
+        return out;
+    }
     let mut shown = b.shown.iter().map(|s| (s.0, s.1.as_str())).peekable();
-    let mut prev: Option<Side> = None;
-    for (k, c) in b.clusters.iter().enumerate() {
+    // The previous text cluster: index, its last character, its font size.
+    let mut prev: Option<(usize, char, f32)> = None;
+    for k in 0..b.clusters.len() {
+        let Some(c) = b.clusters.get(k) else { break };
         match c.kind {
             ClKind::Text => {}
             ClKind::Marker if c.adv == 0.0 => continue,
@@ -108,66 +105,49 @@ fn touching(b: &Builder, text: &str) -> Vec<(Side, Side)> {
             prev = None;
             continue;
         };
-        let single = s.chars().nth(1).is_none();
         let size = b.styles.get(c.style as usize).map_or(0.0, |st| st.size);
-        if let Some(p) = prev {
-            out.push((p, Side { k, ch: first, size, single }));
+        if let Some((pk, pc, psize)) = prev
+            && let Some(side) = crate::kinsoku::auto_space(pc, first, de, dn)
+        {
+            let asian = if side == crate::kinsoku::AsianSide::Left { psize } else { size };
+            let gap = if asian.is_finite() { (asian / 4.0).clamp(0.0, 400.0) } else { 0.0 };
+            if let Some(pc) = b.clusters.get_mut(pk) {
+                pc.adv += gap;
+                out.push((pk, gap));
+            }
         }
-        prev = Some(Side { k, ch: last, size, single });
+        prev = Some((k, last, size));
     }
     out
 }
 
-/// Automatic spacing (`w:autoSpaceDE`, `w:autoSpaceDN`): a quarter of the Asian character's font
-/// size between Asian text and Latin text or digits that touch, across runs. Measured on Word's
-/// PDF of a Chinese document at 16 pt (#2358), as JIS X 4051 asks. A field or note number is
-/// classed by the text it shows. The room goes after the first of the two characters; returns it
-/// by cluster index.
-pub(super) fn auto_space(b: &mut Builder, text: &str, de: bool, dn: bool) -> Vec<(usize, f32)> {
-    let mut out = Vec::new();
-    if !de && !dn {
-        return out;
-    }
-    for (p, n) in touching(b, text) {
-        let Some(side) = crate::kinsoku::auto_space(p.ch, n.ch, de, dn) else { continue };
-        let asian = if side == crate::kinsoku::AsianSide::Left { p.size } else { n.size };
-        let gap = if asian.is_finite() { (asian / 4.0).clamp(0.0, 400.0) } else { 0.0 };
-        if let Some(pc) = b.clusters.get_mut(p.k) {
-            pc.adv += gap;
-            out.push((p.k, gap));
-        }
-    }
-    out
-}
-
-/// Punctuation compression (`w:characterSpacingControl` other than `doNotCompress`): where two
-/// East Asian punctuation marks touch with a blank half between their ink, that blank half goes
-/// ([`crate::kinsoku::compresses`]), half the em of the mark that gives it up. The mark giving it
-/// up and the first cluster, whose advance shrinks, are full-width (advance at least 0.9 em): a
-/// proportional (Latin) quote keeps its width. The second and everything after move closer.
-/// Returns the change by cluster index, negative; like automatic spacing it is undone at a line's
-/// end, where the pair is split.
-pub(super) fn compress_punct(b: &mut Builder, text: &str) -> Vec<(usize, f32)> {
-    let mut out = Vec::new();
-    for (p, n) in touching(b, text) {
-        let Some(who) = crate::kinsoku::compresses(p.ch, n.ch) else { continue };
-        let mark = if who == crate::kinsoku::Compress::First { p } else { n };
-        // The mark that gives up its blank half is full-width, and so is the first cluster, whose
-        // advance shrinks: a proportional quote before a full-width bracket keeps its width.
-        let full = |m: Side| {
-            let adv = b.clusters.get(m.k).map_or(0.0, |c| c.adv);
-            m.single && m.size.is_finite() && m.size > 0.0 && adv >= 0.9 * m.size
-        };
-        if !full(mark) || !full(p) {
+/// Punctuation compression (`w:characterSpacingControl` other than `doNotCompress`), as WPS
+/// does it: nothing changes on a line that fits. On a line that would overflow, each compressible
+/// side of a full-width mark ([`crate::kinsoku::squeeze_side`]) may give up to a tenth of an em
+/// so the next unit fits ([`Squeeze`], used by the line breaker), and a closing mark ending a
+/// line takes no room for its blank half ([`crate::kinsoku::end_blank`]). Returns the squeeze
+/// room and the line-end room by cluster index; a mark is full-width when it is one character
+/// whose advance is at least 0.9 em, so a proportional (Latin) quote is left alone.
+pub(super) fn compress_punct(b: &Builder, text: &str) -> (Vec<Squeeze>, Vec<(usize, f32)>) {
+    let (mut squeeze, mut end) = (Vec::new(), Vec::new());
+    for (k, c) in b.clusters.iter().enumerate() {
+        if c.kind != ClKind::Text {
             continue;
         }
-        if let Some(pc) = b.clusters.get_mut(p.k) {
-            let adv = (pc.adv - (mark.size / 2.0).min(400.0)).max(0.0);
-            out.push((p.k, adv - pc.adv));
-            pc.adv = adv;
+        let mut chars = text.get(c.start..c.end).unwrap_or_default().chars();
+        let (Some(ch), None) = (chars.next(), chars.next()) else { continue };
+        let size = b.styles.get(c.style as usize).map_or(0.0, |st| st.size);
+        if !(size.is_finite() && size > 0.0 && c.adv >= 0.9 * size) {
+            continue;
+        }
+        if let Some(side) = crate::kinsoku::squeeze_side(ch) {
+            squeeze.push(Squeeze { k, room: (size / 10.0).min(40.0), left: side == crate::kinsoku::Side::Left });
+        }
+        if crate::kinsoku::end_blank(ch) {
+            end.push((k, (size / 2.0).min(200.0)));
         }
     }
-    out
+    (squeeze, end)
 }
 
 /// An area text wraps around.

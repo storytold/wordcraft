@@ -8,8 +8,9 @@
 //! - Word wrap off: Latin words may break at any character.
 //! - Automatic spacing (`autoSpaceDE`, `autoSpaceDN`): which neighbouring characters get room
 //!   between Asian text and Latin text or digits ([`auto_space`]).
-//! - Punctuation compression (`w:characterSpacingControl`): which neighbouring punctuation marks
-//!   share one blank half ([`compresses`]).
+//! - Punctuation compression (`w:characterSpacingControl`): which side of a mark may give up
+//!   room on a full line ([`squeeze_side`]), and which marks need no room for their blank half at
+//!   a line's end ([`end_blank`]).
 //!
 //! Only East Asian characters are in the lists, and the extra breaks need letters on both sides,
 //! so text with no East Asian characters breaks exactly as before unless word wrap is off.
@@ -26,37 +27,41 @@ const NO_START: &str = "、。，．・：；？！゛゜ヽヾゝゞ々〻〉�
 /// too, as for [`NO_START`]), currency signs.
 const NO_END: &str = "〈《「『【〔〖〘〚〝（［｛｟｢＄￡￥“‘﹙﹛";
 
-/// Full-width opening brackets and quotes: ink on the right half of the em, the left half blank.
-const OPENING: &str = "（〔［｛〈《「『【〘〖〚〝｟“‘";
+/// Full-width marks whose blank right half may shrink under punctuation compression: closing
+/// brackets and quotes, and the comma, full stop, colon, semicolon and exclamation mark. Measured
+/// in WPS in 宋体, 仿宋, 楷体 and 黑体 alike; the question mark, dashes and ellipses never shrink.
+const SQUEEZE_RIGHT: &str = "。，、：；！．）〕］｝〉》」』】〙〗〛〞〟｠”’·";
 
-/// Full-width closing brackets and quotes, and the comma and full stop: ink on the left half of
-/// the em, the right half blank (Japanese, and Simplified Chinese, W3C clreq §3.1.6). Colons,
-/// semicolons and question and exclamation marks are left out: they sit centred in Japanese
-/// fonts.
-const CLOSING: &str = "）〕］｝〉》」』】〙〗〛〞〟｠”’、。，．";
+/// Full-width marks whose blank left half may shrink: opening brackets and quotes.
+const SQUEEZE_LEFT: &str = "（〔［｛〈《「『【〘〖〚〝｟“‘";
 
-/// Which mark gives up the blank half of its em when East Asian punctuation is compressed.
+/// Marks that need no room for their blank right half when they end a line: those of
+/// [`SQUEEZE_RIGHT`] but the curly quotes and the middle dot (measured in WPS).
+const END_BLANK: &str = "。，、：；！．）〕］｝〉》」』】〙〗〛〞〟｠";
+
+/// The side of a full-width mark whose blank may shrink.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Compress {
-    /// The first mark's trailing blank half.
-    First,
-    /// The second mark's leading blank half.
-    Second,
+pub enum Side {
+    Left,
+    Right,
 }
 
-/// Whether punctuation compression (`compressPunctuation`) closes up `a` and the `b` right
-/// after it, and whose blank half goes: only one blank half stays between two marks whose blank
-/// halves meet or stand between their ink (`”“` `。”` `）、` `《“`), as JIS X 4051 and W3C clreq
-/// set them. The caller checks that the mark is full-width in its font.
-pub fn compresses(a: char, b: char) -> Option<Compress> {
-    let (open_b, close_b) = (OPENING.contains(b), CLOSING.contains(b));
-    if CLOSING.contains(a) && (open_b || close_b) {
-        Some(Compress::First)
-    } else if OPENING.contains(a) && open_b {
-        Some(Compress::Second)
+/// Which side of `c` may give up room when punctuation compression squeezes a full line, if any.
+/// The caller checks that the mark is full-width in its font.
+pub fn squeeze_side(c: char) -> Option<Side> {
+    if SQUEEZE_RIGHT.contains(c) {
+        Some(Side::Right)
+    } else if SQUEEZE_LEFT.contains(c) {
+        Some(Side::Left)
     } else {
         None
     }
+}
+
+/// Whether `c` ending a line needs no room for its blank right half under punctuation
+/// compression.
+pub fn end_blank(c: char) -> bool {
+    END_BLANK.contains(c)
 }
 
 /// Whether `c` is East Asian text: CJK ideographs, kana, bopomofo, CJK punctuation, and
@@ -150,17 +155,21 @@ fn is_hangul(c: char) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{AsianSide, Compress, apply, auto_space, compresses};
+    use super::{AsianSide, Side, apply, auto_space, end_blank, squeeze_side};
 
     #[test]
-    fn compression_pairs() {
-        for (a, b) in [('”', '“'), ('。', '”'), ('）', '、'), ('，', '《'), ('」', '。')] {
-            assert_eq!(compresses(a, b), Some(Compress::First), "{a}{b}");
+    fn compressible_marks() {
+        for c in ['。', '，', '、', '：', '；', '！', '）', '》', '」', '”', '’'] {
+            assert_eq!(squeeze_side(c), Some(Side::Right), "{c}");
         }
-        assert_eq!(compresses('《', '“'), Some(Compress::Second));
-        for (a, b) in [('（', '）'), ('“', '好'), ('好', '”'), ('：', '“'), ('"', '('), ('A', '。')] {
-            assert_eq!(compresses(a, b), None, "{a}{b}");
+        for c in ['（', '《', '「', '【', '“', '‘'] {
+            assert_eq!(squeeze_side(c), Some(Side::Left), "{c}");
         }
+        for c in ['？', '—', '…', '中', 'A', '(', '"'] {
+            assert_eq!(squeeze_side(c), None, "{c}");
+        }
+        assert!(end_blank('。') && end_blank('，') && end_blank('）') && end_blank('！'));
+        assert!(!end_blank('”') && !end_blank('？') && !end_blank('（'));
     }
 
     #[test]

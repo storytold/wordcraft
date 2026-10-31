@@ -392,9 +392,8 @@ impl<'e> Breaker<'e> {
         let hyphen = (sc.end == LineEnd::Wrap && c1 > c0 && pl.hyph_after.binary_search(&((c1 - 1) as u32)).is_ok())
             .then(|| pl.clusters.get(c1 - 1).map(|c| hyphen_glyph(pl, c.style, &mut self.hcache)))
             .flatten();
-        // A last mark whose compressed pair the wrap split gets its blank half back.
-        let end_x = match (sc.xs.last(), c1.checked_sub(1).and_then(|k| pl.clusters.get(k).map(|c| (k, c)))) {
-            (Some(lx), Some((k, c))) => lx + c.adv - pl.auto_space_after(k).min(0.0) + hyphen.map_or(0.0, |h| h.2),
+        let end_x = match (sc.xs.last(), c1.checked_sub(1).and_then(|k| pl.clusters.get(k))) {
+            (Some(lx), Some(c)) => lx + c.adv + hyphen.map_or(0.0, |h| h.2),
             _ => sc.line_start_x,
         };
         sc.xs.push(end_x);
@@ -498,11 +497,14 @@ impl<'e> Breaker<'e> {
     fn align(&mut self, pl: &mut ParaLayout, sc: &mut Scan, c1: usize) {
         let rp = &self.rp;
         let c0 = sc.c0;
+        let last_tab = (c0..c1).rev().find(|k| pl.clusters.get(*k).is_some_and(|c| c.kind == ClKind::Tab));
+        let display = pl.displays.iter().find(|(ci, _)| *ci >= c0 && *ci < c1).map(|d| d.1);
+        if display.is_none() && last_tab.is_none() {
+            squeeze_line(pl, sc, c1);
+        }
         let content_end = content_end(pl, sc, c1);
         let slack = sc.right_edge - content_end;
-        let last_tab = (c0..c1).rev().find(|k| pl.clusters.get(*k).is_some_and(|c| c.kind == ClKind::Tab));
         let align_from = last_tab.map(|k| k + 1).unwrap_or(c0);
-        let display = pl.displays.iter().find(|(ci, _)| *ci >= c0 && *ci < c1).map(|d| d.1);
         let shift = match (display, rp.align) {
             (Some(MathJc::Left), _) => 0.0,
             (Some(MathJc::Right), _) => slack,
@@ -645,6 +647,38 @@ struct Measure {
     text_desc: f32,
 }
 
+/// Punctuation compression: a line that overflows (it fitted only by counting its marks' squeeze
+/// room) takes the overflow out of its compressible marks, each in proportion to its room and
+/// never more, so it ends at the margin as WPS lays it out. An opening mark moves left itself;
+/// after a closing mark the rest of the line does.
+fn squeeze_line(pl: &ParaLayout, sc: &mut Scan, c1: usize) {
+    let c0 = sc.c0;
+    let over = content_end(pl, sc, c1) - sc.right_edge;
+    let room = pl.squeeze_room(c0, c1);
+    if over <= 0.0 || room <= 0.0 {
+        return;
+    }
+    let f = (over / room).min(1.0);
+    let from = pl.squeeze.partition_point(|s| s.k < c0);
+    let marks = pl.squeeze.get(from..).unwrap_or_default();
+    let (mut shift, mut m) = (0.0, 0);
+    for k in c0..=c1 {
+        let mut after = 0.0;
+        while let Some(s) = marks.get(m).filter(|s| s.k == k) {
+            if s.left {
+                shift += f * s.room;
+            } else {
+                after += f * s.room;
+            }
+            m += 1;
+        }
+        if let Some(x) = sc.xs.get_mut(k - c0) {
+            *x -= shift;
+        }
+        shift += after;
+    }
+}
+
 /// Where the line's content ends: trailing spaces and markers hang.
 fn content_end(pl: &ParaLayout, sc: &Scan, c1: usize) -> f32 {
     let mut content_end = sc.xs.last().copied().unwrap_or(sc.line_start_x);
@@ -654,9 +688,8 @@ fn content_end(pl: &ParaLayout, sc: &Scan, c1: usize) -> f32 {
                 content_end = sc.xs.get(k - sc.c0).copied().unwrap_or(content_end);
             }
             _ => {
-                // The automatic space after the line's last character goes with the wrap (a
-                // compressed mark's blank half is already back in the line's end x).
-                content_end -= pl.auto_space_after(k).max(0.0);
+                // The automatic space after the line's last character goes with the wrap.
+                content_end -= pl.auto_space_after(k);
                 break;
             }
         }
@@ -816,8 +849,10 @@ impl Scan {
         } else {
             0.0
         };
+        // Punctuation compression: the marks so far may give up room for this cluster.
+        let squeeze = pl.squeeze_room(c0, j + 1);
         let fits = absorbs
-            || self.x + advance - pl.auto_space_after(j) <= self.right_edge + shrink + 0.01
+            || self.x + advance - pl.auto_space_after(j) <= self.right_edge + shrink + squeeze + 0.01
             || c.kind == ClKind::Space
             || c.kind == ClKind::Marker;
         if !fits && pl.is_edit_boundary(c.start) && (c0..j).any(|k| pl.clusters.get(k).is_some_and(takes_room)) {
@@ -835,7 +870,7 @@ impl Scan {
             return true;
         }
         if c.break_after {
-            self.note_break(bk, pl, c, shrink);
+            self.note_break(bk, pl, c, shrink + squeeze);
         }
         self.j += 1;
         false
