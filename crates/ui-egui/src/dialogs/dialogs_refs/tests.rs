@@ -175,7 +175,7 @@ fn cross_reference_dialog_inserts_a_reference_to_a_custom_label() {
         a,
     );
     h.run_steps(4);
-    h.get_by_role_and_label(Role::Window, "Cross-reference");
+    h.get_by_role_and_label(Role::Dialog, "Cross-reference");
     h.get_all_by_role_and_label(Role::Button, "Insert").last().expect("the dialog's Insert button").click();
     h.run_steps(3);
     assert!(h.state().dialog.is_none(), "Insert closes the dialog");
@@ -261,7 +261,7 @@ fn table_of_figures_dialog_picks_the_caption_label() {
         a,
     );
     h.run_steps(4);
-    h.get_by_role_and_label(Role::Window, "Table of Figures");
+    h.get_by_role_and_label(Role::Dialog, "Table of Figures");
     // Without page numbers there is nothing to align: the margin choice is off until they are back.
     let margin = |h: &egui_kittest::Harness<'_, WordApp>| {
         h.get_by_role_and_label(Role::CheckBox, "Page numbers at the right margin").accesskit_node().is_disabled()

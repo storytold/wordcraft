@@ -126,7 +126,10 @@ pub fn dialog_tabs(ui: &mut Ui, labels: &[String], selected: usize) -> Option<us
         let w = galley.size().x + 28.0;
         let r = Rect::from_min_max(pos2(x, origin.y + 2.0), pos2(x + w, base_y));
         let resp = ui.interact(r, ui.scope_id().with(("dialog_tab", i)), Sense::click());
-        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, label));
+        // A tab to screen readers, selected or not, as Word's dialog tabs ("Indents and Spacing,
+        // tab, selected"): a pressed button read as a toggle.
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Tab, true, label));
+        ui.ctx().accesskit_node_builder(resp.id, |n| n.set_selected(on));
         let hover = ui.ctx().animate_bool_responsive(resp.id.with("hover"), resp.hovered());
         let fill = if on { page } else { page.lerp_to_gamma(t.border, 0.14 + 0.1 * hover) };
         let p = ui.painter();

@@ -581,7 +581,7 @@ pub fn borders(app: &mut WordApp, ui: &mut Ui, f: &mut BordersForm) -> bool {
         }
         _ => {
             ui.label(egui::RichText::new(tl!("Fill")).font(semibold(12.5)));
-            color_menu(ui, &theme, &mut f.fill);
+            color_menu(ui, tl!("Fill"), &theme, &mut f.fill);
             ui.add_space(6.0);
             let fill = Rgb::parse(&f.fill);
             preview(ui, &LineForm::read(None), fill, Target::from(f.fill_to_text));
@@ -638,7 +638,7 @@ fn lines(ui: &mut Ui, id: &str, l: &mut LineForm, theme: &[Rgb], fill: Option<Rg
                 }
             });
             ui.label(tl!("Color:"));
-            color_menu(ui, theme, &mut l.color);
+            color_menu(ui, tl!("Color:"), theme, &mut l.color);
             ui.label(tl!("Width:"));
             craft_ui::ComboBox::from_id_salt((id, "width"))
                 .selected_text(crate::i18n::fmt(tl!("{n} pt"), &[("n", &l.width.to_string())]))

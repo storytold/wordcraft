@@ -521,7 +521,7 @@ pub fn body(app: &mut WordApp, ui: &mut Ui, f: Form) -> bool {
             ui.toggle_value(&mut r.underline, egui::RichText::new("U").underline()).on_hover_text(tl!("Underline"));
             ui.push_id("tstyle_color", |ui| {
                 ui.label(tl!("Font color:"));
-                color_menu(ui, &theme, &mut r.color);
+                color_menu(ui, tl!("Font color:"), &theme, &mut r.color);
             });
         });
         // Borders: the pen (style, width, colour) and which edges; then the cell shading.
@@ -546,7 +546,7 @@ pub fn body(app: &mut WordApp, ui: &mut Ui, f: Form) -> bool {
             width.response.labelled_by(width_label.id);
             ui.push_id("tstyle_pen_color", |ui| {
                 ui.label(tl!("Color:"));
-                color_menu(ui, &theme, &mut pen.color);
+                color_menu(ui, tl!("Color:"), &theme, &mut pen.color);
             });
             ui.menu_button(format!("{} ▾", tl!("Borders")), |ui| {
                 for (label, edges) in EDGES {
@@ -563,7 +563,7 @@ pub fn body(app: &mut WordApp, ui: &mut Ui, f: Form) -> bool {
         ui.horizontal(|ui| {
             ui.push_id("tstyle_fill", |ui| {
                 ui.label(tl!("Fill color:"));
-                color_menu(ui, &theme, &mut r.fill);
+                color_menu(ui, tl!("Fill color:"), &theme, &mut r.fill);
             });
             ui.add_space(12.0);
             ui.label(tl!("Alignment:"));
