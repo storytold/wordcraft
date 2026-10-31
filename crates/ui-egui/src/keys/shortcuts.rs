@@ -201,7 +201,7 @@ pub(super) fn equation_key(app: &mut WordApp, key: Key, m: Modifiers) -> bool {
 }
 
 /// Whether releasing `key` with `modifiers` is the plain Paste shortcut (Mod+V or the Paste
-/// key) — not Mod+Shift+V (Paste Formatting) or Mod+Alt+V (Paste Special) — so a clipboard
+/// key) — not Mod+Shift+V (Keep Text Only) or Mod+Alt+V (Paste Special) — so a clipboard
 /// picture may be pasted on it (#45).
 pub(super) fn is_paste_release(key: Key, modifiers: egui::Modifiers) -> bool {
     (modifiers.command || key == Key::Paste) && !modifiers.alt && !modifiers.shift

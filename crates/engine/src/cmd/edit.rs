@@ -82,7 +82,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("edit.paste", "Paste", "Home › Clipboard", paste).key("Mod+V / Shift+Insert").params(r#"{"text"?: string, "html"?: string, "rtf"?: string}"#),
         CommandSpec::new("edit.pasteText", "Paste: Keep Text Only", "Home › Clipboard › Paste", paste_text)
             .params(r#"{"text"?: string}"#)
-            .key("Mod+Shift+Alt+V"),
+            .key("Mod+Shift+V / Ctrl+Shift+V"),
         CommandSpec::new("edit.pasteMerge", "Paste: Merge Formatting", "Home › Clipboard › Paste", paste_merge)
             .params(r#"{"text"?: string, "html"?: string, "rtf"?: string}"#),
         CommandSpec::new("edit.clipboardPane", "Clipboard Pane", "Home › Clipboard", |s, v| {
@@ -166,9 +166,9 @@ pub fn specs() -> Vec<CommandSpec> {
             painter_pick(s);
             sel_result(s)
         })
-        .key("Mod+Shift+C")
+        .key("Mod+Shift+C / Ctrl+Shift+C")
         .pure(),
-        CommandSpec::new("edit.pasteFormat", "Paste Formatting", "Home › Clipboard", paste_format).key("Mod+Shift+V"),
+        CommandSpec::new("edit.pasteFormat", "Paste Formatting", "Home › Clipboard", paste_format),
     ]
 }
 
@@ -836,7 +836,9 @@ fn painter(s: &mut Session, v: &Value) -> CmdResult {
 
 /// Apply the format painter's formatting to the selection.
 fn paste_format(s: &mut Session, _: &Value) -> CmdResult {
-    let Some((chr, para, sticky)) = s.painter.clone() else { return Err(CmdError::Failed("no formatting copied".into())) };
+    let Some((chr, para, sticky)) = s.painter.clone() else {
+        return Err(CmdError::Failed("no formatting copied; use Ctrl/Cmd+Shift+C first".into()));
+    };
     let (a, b) = s.sel.ordered();
     if a == b {
         // No selection: apply paragraph formatting (and word formatting like Word).

@@ -10,7 +10,7 @@ use wordcraft_doc::props::CharProps;
 use wordcraft_doc::{Block, Document, Paragraph, Table, para_block};
 
 use crate::WordApp;
-use crate::theme::{Tokens, regular};
+use crate::theme::{Tokens, fit_text, regular};
 
 #[derive(Default)]
 pub struct Previews {
@@ -227,7 +227,8 @@ impl Previews {
         Box::new(|ui: &mut Ui, name: &str| {
             let key = format!("font:{name}");
             let tex: Option<TextureHandle> = ui.ctx().data(|d| d.get_temp::<TextureHandle>(egui::Id::unique(&key)));
-            let (r, resp) = ui.allocate_exact_size(vec2(260.0, crate::widgets::COMBO_PREVIEW_ROW_H), Sense::click());
+            let row_width = if ui.is_sizing_pass() { crate::widgets::COMBO_PREVIEW_W } else { ui.available_width() };
+            let (r, resp) = ui.allocate_exact_size(vec2(row_width, crate::widgets::COMBO_PREVIEW_ROW_H), Sense::click());
             resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), name));
             let t = Tokens::get(ui.ctx());
             if resp.hovered() {
@@ -257,8 +258,12 @@ impl Previews {
             });
             match tex {
                 Some(h) => {
-                    let sz = h.size_vec2() / ui.ctx().pixels_per_point();
-                    ui.painter().image(
+                    let mut sz = h.size_vec2() / ui.ctx().pixels_per_point();
+                    let max_width = (r.width() - 12.0).max(0.0);
+                    if sz.x > max_width && sz.x > 0.0 {
+                        sz *= max_width / sz.x;
+                    }
+                    ui.painter().with_clip_rect(r).image(
                         h.id(),
                         Rect::from_min_size(pos2(r.min.x + 6.0, r.center().y - sz.y / 2.0), sz),
                         Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
@@ -266,7 +271,8 @@ impl Previews {
                     );
                 }
                 None => {
-                    ui.painter().text(pos2(r.min.x + 8.0, r.center().y), egui::Align2::LEFT_CENTER, name, regular(12.0), t.text);
+                    let shown = fit_text(ui.painter(), name, &regular(14.0), 0.0, t.text, (r.width() - 16.0).max(0.0));
+                    ui.painter().with_clip_rect(r).text(pos2(r.min.x + 8.0, r.center().y), egui::Align2::LEFT_CENTER, shown, regular(14.0), t.text);
                 }
             }
             resp
@@ -409,7 +415,7 @@ pub fn font_entry_image(name: &str, ppp: f32) -> egui::ColorImage {
         .preview_face(name)
         .filter(|f| name.chars().filter(|c| !c.is_whitespace()).all(|c| f.covers(c)))
         .unwrap_or_else(|| db.face(wordcraft_fonts::FALLBACK_FAMILY, "Regular"));
-    let img = wordcraft_render::render_text_line(&face, name, 13.0, 244.0, 22.0, 2.0, ppp);
+    let img = wordcraft_render::render_text_line(&face, name, 14.0, 244.0, 22.0, 2.0, ppp);
     egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &img.to_straight())
 }
 

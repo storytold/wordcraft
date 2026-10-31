@@ -29,6 +29,23 @@ pub(crate) fn comment_time(c: &wordcraft_doc::Comment) -> String {
     stamp(&c.date, c.date_utc.as_deref(), offset_minutes)
 }
 
+/// Return the user's local calendar date for an ISO-8601 timestamp. Recent-document timestamps
+/// are stored in UTC, but grouping is a calendar operation in the user's time zone.
+pub(crate) fn local_calendar_date(iso: &str) -> Option<String> {
+    let t = parse(iso)?;
+    let utc = t.secs - i64::from(t.zone.unwrap_or(0)) * 60;
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(time) = chrono::DateTime::<chrono::Utc>::from_timestamp(utc, 0) {
+        let date = if t.timed { time.with_timezone(&chrono::Local).date_naive() } else { time.date_naive() };
+        return Some(date.format("%Y-%m-%d").to_string());
+    }
+    // Keep the browser implementation, and provide a fallback for timestamps outside chrono's
+    // representable range on native targets.
+    let local = utc + i64::from(offset_minutes(utc)) * 60;
+    let (y, m, d) = wordcraft_engine::cmd::civil_from_days(local.div_euclid(86_400));
+    Some(format!("{y:04}-{m:02}-{d:02}"))
+}
+
 fn stamp(date: &str, date_utc: Option<&str>, offset: impl Fn(i64) -> i32) -> String {
     let utc = date_utc.and_then(parse).filter(|t| t.timed).map(|t| Time { zone: Some(t.zone.unwrap_or(0)), ..t });
     let local_date = || parse(date).map(|t| if date.trim_end().ends_with(['Z', 'z']) { Time { zone: None, ..t } } else { t });

@@ -135,6 +135,16 @@ struct AwaitingSave {
     rev: u64,
 }
 
+/// A document in File's Recent list. `last_opened` and `modified` are ISO-8601 UTC timestamps;
+/// empty values are legacy or unavailable metadata and are never looked up while the list draws.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentDocument {
+    pub path: String,
+    pub last_opened: String,
+    pub modified: String,
+}
+
 /// UI state that persists between runs (and that agents can read and set).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -152,7 +162,8 @@ pub struct UiState {
     /// Toolbar takes it away; Show Quick Access Toolbar (the ribbon's right-click menu, Customize
     /// Ribbon › Quick Access Toolbar) brings it back. Kept between runs.
     pub quick_access_toolbar: bool,
-    pub recent: Vec<String>,
+    #[serde(deserialize_with = "lenient_recent_documents")]
+    pub recent: Vec<RecentDocument>,
     /// Symbols inserted from the Symbol dialog, most recent first (#321).
     pub recent_symbols: Vec<dialogs_insert::RecentSymbol>,
     /// Colours picked in the Colors dialog (More Colors…), most recent first (#606).
@@ -431,6 +442,25 @@ fn lenient_float_rect<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<[
 fn lenient_recent_fonts<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
     let v = Value::deserialize(d)?;
     Ok(v.as_array().map(|a| recent_fonts_from(a.iter().filter_map(Value::as_str))).unwrap_or_default())
+}
+
+/// `recent` used to be an array of paths. Keep loading those settings while accepting the
+/// timestamped entries written by #2716; malformed entries are ignored individually.
+fn lenient_recent_documents<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<RecentDocument>, D::Error> {
+    let v = Value::deserialize(d)?;
+    Ok(v.as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| {
+            entry.as_str().map(|path| RecentDocument { path: path.to_string(), last_opened: String::new(), modified: String::new() }).or_else(|| {
+                let object = entry.as_object()?;
+                let path = object.get("path")?.as_str()?.to_string();
+                let last_opened = object.get("lastOpened").and_then(Value::as_str).unwrap_or_default().to_string();
+                let modified = object.get("modified").and_then(Value::as_str).unwrap_or_default().to_string();
+                Some(RecentDocument { path, last_opened, modified })
+            })
+        })
+        .collect())
 }
 
 /// The family a command applies: `format.font {"name"}` (the font box, the mini toolbar, command

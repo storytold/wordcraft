@@ -126,7 +126,7 @@ fn only_plain_paste_releases_paste_a_clipboard_picture() {
     let m = |command, shift, alt| egui::Modifiers { command, shift, alt, ..Default::default() };
     assert!(is_paste_release(Key::V, m(true, false, false)), "Mod+V");
     assert!(is_paste_release(Key::Paste, m(false, false, false)), "the Paste key");
-    assert!(!is_paste_release(Key::V, m(true, true, false)), "Mod+Shift+V is Paste Formatting");
+    assert!(!is_paste_release(Key::V, m(true, true, false)), "Mod+Shift+V is Keep Text Only");
     assert!(!is_paste_release(Key::V, m(true, false, true)), "Mod+Alt+V is Paste Special");
     assert!(!is_paste_release(Key::V, m(false, false, false)), "a plain V");
     assert!(is_paste_special_release(Key::V, m(true, false, true)), "Mod+Alt+V opens Paste Special");
@@ -184,7 +184,7 @@ fn mod_v_released_mod_first_pastes_the_clipboard_picture() {
     mods_frame(&ctx, &mut a, Modifiers::NONE, vec![key_event(Key::V, false, Modifiers::NONE)]);
     assert_eq!(pictures(&mut a), 1);
 
-    // Mod+Shift+V released Mod first stays Paste Formatting, not a picture paste.
+    // Mod+Shift+V released Mod first stays Keep Text Only, not a picture paste.
     let ctrl_shift = Modifiers { shift: true, ..ctrl };
     mods_frame(&ctx, &mut a, ctrl_shift, vec![]);
     mods_frame(&ctx, &mut a, Modifiers::SHIFT, vec![key_event(Key::ControlLeft, false, Modifiers::SHIFT)]);

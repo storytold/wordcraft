@@ -388,12 +388,12 @@ fn recent_documents_borrow_fallback_faces() {
         ctx.run_ui(egui::RawInput::default(), |ui| app.logic(ui.ctx())).drop_without_applying_deltas();
     };
     let mut latin = app();
-    latin.ui.recent.push("/home/ice/report.docx".into());
+    latin.ui.recent.push(RecentDocument { path: "/home/ice/report.docx".into(), last_opened: String::new(), modified: String::new() });
     frame(&mut latin);
     assert!(latin.canvas.ime_faces.is_empty(), "a Latin file name needs no extra face");
 
     let mut arabic = app();
-    arabic.ui.recent.push("/home/ice/نواقص 2026.docx".into());
+    arabic.ui.recent.push(RecentDocument { path: "/home/ice/نواقص 2026.docx".into(), last_opened: String::new(), modified: String::new() });
     frame(&mut arabic);
     let letter = 'ن';
     if wordcraft_fonts::FontDb::global().fallback_for(letter, u32::MAX).is_some_and(|f| f.data().len() <= 16 << 20) {
@@ -402,6 +402,15 @@ fn recent_documents_borrow_fallback_faces() {
     let n = arabic.canvas.ime_faces.len();
     frame(&mut arabic);
     assert_eq!(arabic.canvas.ime_faces.len(), n, "the face is added once");
+}
+
+#[test]
+fn old_path_only_recent_entries_are_migrated() {
+    let ui = UiState::from_json(br#"{"recent":["/tmp/legacy.docx",{"path":"/tmp/new.docx","lastOpened":"2026-10-30T12:00:00Z"},3]}"#).unwrap();
+    assert_eq!(ui.recent[0], RecentDocument { path: "/tmp/legacy.docx".into(), last_opened: String::new(), modified: String::new() });
+    assert_eq!(ui.recent[1].path, "/tmp/new.docx");
+    assert_eq!(ui.recent[1].last_opened, "2026-10-30T12:00:00Z");
+    assert_eq!(ui.recent.len(), 2);
 }
 
 /// #3248: the Find box and the Navigation pane's Results list draw the typed query and
@@ -2816,12 +2825,17 @@ fn open_opens_beside_unsaved_work() {
     assert_eq!(prompt(&a), None);
     assert!(body_text(&a).contains("Signed contract"));
     assert_eq!(a.session.path.as_deref(), Some(path.as_path()));
+    assert_eq!(a.ui.recent.len(), 1);
+    assert!(!a.ui.recent[0].modified.is_empty(), "explicit open records file metadata");
+    assert!(a.ui.recent[0].modified.contains('T'), "Recent keeps the full modification timestamp");
+    let first_opened = a.ui.recent[0].last_opened.clone();
     let opened = a.session.document_id();
     a.run("view.switchWindows", json!({"id": first})).unwrap();
     assert!(body_text(&a).contains(UNSAVED) && a.session.dirty);
     a.run("file.open", json!({"path": path.to_string_lossy()})).unwrap();
     assert_eq!(a.session.document_id(), opened, "an open file is shown, not opened twice");
     assert_eq!(a.session.documents().len(), 2);
+    assert!(a.ui.recent[0].last_opened >= first_opened, "reopening refreshes the Recent date");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -2831,6 +2845,7 @@ fn open_without_a_path_only_shows_the_picker() {
     let mut a = typed();
     a.run("file.open", json!({})).unwrap();
     assert_eq!(prompt(&a), None);
+    assert!(a.ui.recent.is_empty(), "opening the picker does not add a Recent entry");
     assert!(body_text(&a).contains(UNSAVED));
 }
 
@@ -3895,12 +3910,11 @@ fn word_shortcuts_run_from_the_keyboard() {
     assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Kilns");
 }
 
-/// PR #4241: Ctrl/Cmd+Shift+C copies the selection's formatting and Ctrl/Cmd+Shift+V pastes it
-/// onto another selection, as in Word — not the text. egui 0.37 delivers those chords as keys
-/// (only Cmd/Ctrl without extra modifiers become copy/paste events), so the registry's
-/// `Mod+Shift+C`/`Mod+Shift+V` commands must run.
+/// Ctrl/Cmd+Shift+V is Word's Keep Text Only paste: a normal copy carries the source formatting,
+/// but this shortcut inserts only the copied text. egui delivers the chord as a key, so the
+/// registry's `Mod+Shift+V` and `Ctrl+Shift+V` bindings must run.
 #[test]
-fn ctrl_shift_c_and_v_copy_and_paste_formatting_not_text() {
+fn ctrl_shift_v_pastes_copied_text_without_source_formatting() {
     // A native event carries ⌘ (mac_cmd and command) on macOS, Ctrl (ctrl and command)
     // elsewhere; COMMAND+SHIFT is the logical chord both platforms resolve.
     let native = if cfg!(target_os = "macos") {
@@ -3908,54 +3922,26 @@ fn ctrl_shift_c_and_v_copy_and_paste_formatting_not_text() {
     } else {
         egui::Modifiers::CTRL | egui::Modifiers::COMMAND | egui::Modifiers::SHIFT
     };
-    let copied = |h: &egui_kittest::Harness<WordApp>| -> Vec<String> {
-        h.output()
-            .platform_output
-            .commands
-            .iter()
-            .filter_map(|c| match c {
-                egui::OutputCommand::CopyText(t) => Some(t.clone()),
-                _ => None,
-            })
-            .collect()
-    };
     let bold = |h: &mut egui_kittest::Harness<WordApp>| -> Option<bool> {
         h.state_mut().run("format.state", json!({})).unwrap().get("bold").and_then(Value::as_bool)
     };
-    for modifiers in [egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, native] {
+    for modifiers in [egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, native, egui::Modifiers::CTRL | egui::Modifiers::SHIFT] {
         let mut a = app();
         a.run("text.insert", json!({"text": "Bold plain"})).unwrap();
         a.run("select.text", json!({"text": "Bold"})).unwrap();
         a.run("format.bold", json!({})).unwrap();
-        a.run("select.text", json!({"text": "plain"})).unwrap();
         a.run("edit.copy", json!({})).unwrap();
-        let clipboard_entries = a.session.clip_history.len();
-        assert_eq!(a.session.clipboard_text, "plain");
-        assert!(clipboard_entries > 0);
-        a.run("select.text", json!({"text": "Bold"})).unwrap();
+        a.run("select.text", json!({"text": "plain"})).unwrap();
         let mut h = harness(a);
         h.run_steps(6);
         assert!(h.state().canvas.focused, "the canvas's key handler has the keyboard");
-        assert_eq!(bold(&mut h), Some(true), "the source selection is bold");
-        let key = |key, modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
-        h.event(key(egui::Key::C, modifiers));
-        h.step();
-        assert!(h.state().session.painter.is_some(), "{modifiers:?}: Copy Formatting picked up the selection's formatting");
-        assert_eq!(h.state().session.clip_history.len(), clipboard_entries, "{modifiers:?}: Copy Formatting preserved clipboard history");
-        assert_eq!(h.state().session.clipboard_text, "plain", "{modifiers:?}: the existing clipboard text was preserved");
-        assert!(copied(&h).is_empty(), "{modifiers:?}: no text reached the system clipboard: {:?}", copied(&h));
-        assert_eq!(body_text(h.state()), "Bold plain", "{modifiers:?}: copying formatting left the document text alone");
-
-        h.state_mut().run("select.text", json!({"text": "plain"})).unwrap();
         assert_eq!(bold(&mut h), Some(false), "the target selection is plain before the paste");
+        let key = |key, modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
         h.event(key(egui::Key::V, modifiers));
         h.step();
-        assert_eq!(bold(&mut h), Some(true), "{modifiers:?}: Paste Formatting made the target bold");
-        assert!(h.state().session.painter.is_none(), "{modifiers:?}: the non-sticky painter is used up");
-        assert_eq!(body_text(h.state()), "Bold plain", "{modifiers:?}: pasting formatting left the document text alone");
-        assert_eq!(h.state().session.clip_history.len(), clipboard_entries, "{modifiers:?}: Paste Formatting preserved clipboard history");
-        assert_eq!(h.state().session.clipboard_text, "plain", "{modifiers:?}: Paste Formatting preserved the clipboard text");
-        assert!(copied(&h).is_empty(), "{modifiers:?}: pasting formatting put no text on the system clipboard: {:?}", copied(&h));
+        assert_eq!(body_text(h.state()), "Bold Bold", "{modifiers:?}: Keep Text Only replaces the target with copied text");
+        assert_eq!(bold(&mut h), Some(false), "{modifiers:?}: Keep Text Only does not copy source bold formatting");
+        assert!(h.state().session.painter.is_none(), "{modifiers:?}: Keep Text Only does not require the format painter");
     }
 }
 
@@ -4389,11 +4375,13 @@ fn renaming_a_saved_file_keeps_autosave_and_replaces_its_recent_entry() {
     let mut a = typed();
     a.run("file.save", json!({"path": path.to_string_lossy()})).unwrap();
     assert!(a.autosaves());
+    let opened = a.ui.recent[0].last_opened.clone();
     a.run("file.rename", json!({"name": "Notes v2"})).unwrap();
     assert_eq!(a.session.path.as_deref(), Some(renamed.as_path()));
     assert!(a.autosaves(), "AutoSave still covers the renamed file");
-    assert_eq!(a.ui.recent.first(), Some(&renamed.to_string_lossy().to_string()));
-    assert!(!a.ui.recent.contains(&path.to_string_lossy().to_string()), "{:?}", a.ui.recent);
+    assert_eq!(a.ui.recent.first().map(|r| r.path.as_str()), Some(renamed.to_string_lossy().as_ref()));
+    assert_eq!(a.ui.recent.first().map(|r| r.last_opened.as_str()), Some(opened.as_str()), "rename preserves the Recent timestamp");
+    assert!(!a.ui.recent.iter().any(|r| r.path == path.to_string_lossy()), "{:?}", a.ui.recent);
     a.run("text.insert", json!({"text": "More "})).unwrap();
     a.autosave_tick(now_ms() + 10_000.0);
     assert!(!a.session.dirty, "AutoSave wrote the renamed file");
