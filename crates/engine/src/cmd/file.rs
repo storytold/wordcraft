@@ -193,6 +193,25 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("document.layout", "Layout Summary", "Agents", layout_summary).pure(),
         CommandSpec::new("document.setText", "Replace Document Text", "Agents", |s, v| {
             let text = p::req_str(v, "text")?;
+            if s.doc.settings.track_changes {
+                // A reviewable revision, as Replace All makes (#88): the old text is deleted and
+                // the new text inserted, tracked, in the paragraphs that are there. A tracked
+                // deletion can't remove a table (no tracked table removal): refuse rather than
+                // leave it, with the new text in its first cell or after it.
+                if s.doc.body.iter().any(|b| matches!(**b, Block::Table(_))) {
+                    return Err(CmdError::Failed(
+                        "with Track Changes on, Replace Document Text can't replace a body with a table: turn Track Changes off, or delete the table first".into(),
+                    ));
+                }
+                let (start, end) = (s.doc.start_of(StoryRef::Body), s.doc.end_of(StoryRef::Body));
+                super::controls::check_deletions(s, StoryRef::Body, [(&start, &end)])?;
+                s.sel = crate::Selection { anchor: start, focus: end };
+                super::paste_text(s, &text.replace("\r\n", "\r").replace('\n', "\r"))?;
+                s.note_body_replaced();
+                s.math = None;
+                s.sel = crate::Selection::caret(s.doc.start_of(StoryRef::Body));
+                return sel_result(s);
+            }
             let d = Document::from_text(text);
             s.doc.body = d.body;
             // The body is new even though the document id stays: a live IME composition (or an

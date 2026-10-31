@@ -3568,6 +3568,61 @@ fn replace_all_is_tracked() {
     assert_eq!(text(&s), original);
 }
 
+/// Replace Document Text (agents) with Track Changes on records the old text as deleted and the
+/// new text as inserted, as Replace All does (#88): Reject All brings the old text back, Accept
+/// All keeps the new. Undo takes it back in one step. Off, it replaces the text untracked.
+#[test]
+fn set_text_is_tracked() {
+    let mut s = s();
+    let original = "The harbour opens at dawn.\n港口在清晨开放。";
+    let new = "The harbour opens at noon.\n港口在中午开放。\nBoats leave at six.";
+    run(&mut s, "document.setText", json!({"text": original}));
+    assert!(run(&mut s, "review.changes", json!({})).as_array().unwrap().is_empty(), "untracked when off");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "document.setText", json!({"text": new}));
+    let ch = run(&mut s, "review.changes", json!({}));
+    assert!(!ch.as_array().unwrap().is_empty(), "set text must leave tracked revisions");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(text(&s), original, "undone in one step");
+    assert!(run(&mut s, "review.changes", json!({})).as_array().unwrap().is_empty());
+    run(&mut s, "document.setText", json!({"text": new}));
+    run(&mut s, "review.rejectAll", json!({}));
+    assert_eq!(text(&s), original);
+    // Accept All from a one-paragraph text. Over several paragraphs it also joins the inserted
+    // ones, a separate bug that any tracked paste over several paragraphs shows.
+    run(&mut s, "review.trackChanges", json!({"value": false}));
+    run(&mut s, "document.setText", json!({"text": "The harbour opens at dawn. 港口在清晨开放。"}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "document.setText", json!({"text": new}));
+    run(&mut s, "review.acceptAll", json!({}));
+    assert_eq!(text(&s), new);
+    assert!(run(&mut s, "review.changes", json!({})).as_array().unwrap().is_empty());
+}
+
+/// With Track Changes on, Replace Document Text refuses a body with a table, changing nothing:
+/// a tracked deletion leaves the table in place (there is no tracked table removal), so the new
+/// text would land in its first cell, or after it, and the table would survive Accept All.
+/// Off, the table goes with the rest of the body.
+#[test]
+fn tracked_set_text_refuses_a_body_with_a_table() {
+    for first in [false, true] {
+        let mut s = s();
+        run(&mut s, "document.setText", json!({"text": "Intro line."}));
+        run(&mut s, if first { "caret.docStart" } else { "caret.docEnd" }, json!({}));
+        run(&mut s, "insert.table", json!({"rows": 1, "cols": 2}));
+        run(&mut s, "text.insert", json!({"text": "cell"}));
+        let before = text(&s);
+        run(&mut s, "review.trackChanges", json!({"value": true}));
+        let r = s.run("document.setText", &json!({"text": "New text."}));
+        assert!(r.is_err(), "table first {first}: refused, got {r:?}");
+        assert_eq!(text(&s), before, "table first {first}: nothing changed");
+        assert!(run(&mut s, "review.changes", json!({})).as_array().unwrap().is_empty());
+        run(&mut s, "review.trackChanges", json!({"value": false}));
+        run(&mut s, "document.setText", json!({"text": "New text."}));
+        assert_eq!(text(&s), "New text.", "table first {first}: untracked replaces the table too");
+    }
+}
+
 #[test]
 fn comments() {
     let mut s = s();
