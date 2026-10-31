@@ -218,8 +218,8 @@ impl Reader<'_> {
         if let Some(g) = self.graphics.get(&key) {
             return g.clone();
         }
-        let items = if self.graphic_budget == 0 { Vec::new() } else { self.graphic_items(kind, &key.1, w, h) };
-        self.graphic_budget = self.graphic_budget.saturating_sub(graphic_work(&items));
+        let items = if self.chunks.graphic == 0 { Vec::new() } else { self.graphic_items(kind, &key.1, w, h) };
+        self.chunks.graphic = self.chunks.graphic.saturating_sub(graphic_work(&items));
         // A chart or SmartArt that is exactly what WordCraft writes for its model can be edited
         // (and is written from the model); any other stays as it was read.
         let chart = match kind {
@@ -540,7 +540,7 @@ impl Reader<'_> {
         let mut blocks = Blocks::new();
         // Shapes in the text aren't members of a group the box may be in.
         let group = self.group_fill.take();
-        self.read_blocks(&mut inner, content, rels, &mut blocks, 0);
+        self.read_blocks(&mut inner, content, rels, &mut blocks, self.chunks.depth);
         self.group_fill = group;
         self.flush_pending(&mut inner, &mut blocks);
         self.doc.add_part(PartKind::TextBox, blocks)

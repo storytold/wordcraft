@@ -148,6 +148,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, tracked: bool) -> Vec<Para> {
         mark_ins: None,
         mark_del: None,
         fmt_change: None,
+        mark: None,
     };
     let in_code = kind == Kind::Code;
     let mut k = 0usize;
@@ -179,6 +180,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, tracked: bool) -> Vec<Para> {
                         mark_ins: None,
                         mark_del: None,
                         fmt_change: None,
+                        mark: None,
                     };
                     let prev = std::mem::replace(&mut out, next);
                     if prev.inlines.is_empty() {
@@ -320,6 +322,7 @@ fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: bool) -> FTable 
                 shading: c.props.shading,
                 borders: c.props.borders,
                 valign: c.props.valign,
+                width: None,
             });
         }
         rows.push(cells);

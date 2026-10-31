@@ -7,6 +7,27 @@ fn numeric_entity_rejects_sign() {
     assert_eq!(unescape("a&#65;&#x41;b"), "aAAb");
 }
 
+#[test]
+fn important_declarations_win_the_cascade() {
+    let color = |html: &str| fmt_of(paras(&parse(html))[0]).color;
+    let red = Some(wordcraft_doc::Rgb(255, 0, 0));
+    let blue = Some(wordcraft_doc::Rgb(0, 0, 255));
+    assert_eq!(color("<style>p { color: red }</style><p style='color: blue'>x</p>"), blue);
+    assert_eq!(color("<style>p { color: red !important }</style><p style='color: blue'>x</p>"), red);
+    assert_eq!(color("<style>p { color: red !important }</style><p style='color: blue !important'>x</p>"), blue);
+    assert_eq!(color("<p style='color: red !important; color: blue'>x</p>"), red);
+}
+
+#[test]
+fn a_declared_charset_decodes_the_page() {
+    // ISO 8859-2 (Central European): 0xA9 Š, 0xB9 š; named by the caller or the page.
+    assert_eq!(decode_as(&[0xA9, b' ', 0xB9], Some("iso-8859-2")), "Š š");
+    assert!(decode_as(b"<meta charset=iso-8859-2><p>\xA9</p>", None).contains("<p>Š</p>"));
+    assert_eq!(decode_as(&[0x8A], Some("windows-1252")), "Š");
+    // A page that says UTF-16 without a BOM is read as UTF-8, as browsers do.
+    assert_eq!(decode_as("é".as_bytes(), Some("utf-16")), "é");
+}
+
 fn texts(f: &Flow) -> Vec<String> {
     f.blocks
         .iter()
@@ -33,6 +54,9 @@ fn borderless_tables_get_no_grid_style() {
     assert_eq!(table_style("<table border=1><tr><td>a</table>").as_deref(), Some("TableGrid"));
     assert_eq!(table_style("<table style='border:1px solid #000'><tr><td>a</table>").as_deref(), Some("TableGrid"));
     assert_eq!(table_style("<table><tr><td style='border:1px solid #999'>a</table>").as_deref(), Some("TableGrid"));
+    // The last declaration decides: a `style` attribute's over the style sheet's.
+    assert_eq!(table_style("<style>table { border: 1px solid }</style><table><tr><td>a</table>").as_deref(), Some("TableGrid"));
+    assert_eq!(table_style("<style>table { border: 1px solid }</style><table style='border:none'><tr><td>a</table>").as_deref(), Some(""));
 }
 
 #[test]
@@ -513,4 +537,172 @@ fn font_size_at_the_integer_limits_does_not_overflow() {
     assert_eq!(size("<font size=\"+2147483647\">x</font>"), Some(36.0));
     assert_eq!(size("<font size=\"--2147483648\">x</font>"), Some(36.0));
     assert_eq!(size("<font size=\"-2147483647\">x</font>"), Some(7.5));
+}
+
+fn paras(f: &Flow) -> Vec<&Para> {
+    f.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None }).collect()
+}
+fn fmt_of(p: &Para) -> Fmt {
+    p.inlines.iter().find_map(|i| if let Inline::Text(_, f) = i { Some(f.clone()) } else { None }).unwrap_or_default()
+}
+
+#[test]
+fn style_sheet_rules_apply_in_cascade_order() {
+    let f = parse(
+        "<style><!-- p { color: #00ff00; font-size: 10pt } .big { font-size: 20pt } p.big { font-weight: bold } \
+         /* a comment { } */ @media print { p { color: #ff0000 } } div p, li:hover { font-style: italic } .000003 { text-align: center } --></style>\
+         <p>plain</p><p class='big x'>big</p><p class=big style='font-size: 8pt'>inline wins</p><p class=000003>digits</p>",
+    );
+    let ps = paras(&f);
+    let (plain, big, inline, digits) = (fmt_of(ps[0]), fmt_of(ps[1]), fmt_of(ps[2]), fmt_of(ps[3]));
+    assert_eq!((plain.color, plain.size, plain.bold, plain.italic), (Some(wordcraft_doc::Rgb(0, 255, 0)), Some(10.0), false, false));
+    assert_eq!((big.size, big.bold), (Some(20.0), true));
+    assert_eq!(inline.size, Some(8.0));
+    assert_eq!(ps[3].align, Some(Align::Center));
+    assert_eq!(digits.size, Some(10.0));
+}
+
+#[test]
+fn paragraph_css_states_spacing_indents_and_line_height() {
+    let f = parse(
+        "<style>p.a { margin: 6pt 1in 3pt; text-indent: -18pt; line-height: 150% }</style>\
+         <p class=a>a</p><p style='margin-top: 14,4px; margin-bottom: auto; line-height: 20pt'>b</p><p>c</p>",
+    );
+    let ps = paras(&f);
+    assert_eq!(
+        ps[0].spacing,
+        Spacing {
+            before: Some(6.0),
+            after: Some(3.0),
+            left: Some(72.0),
+            right: Some(72.0),
+            first: Some(-18.0),
+            line: Some(LineSpacing::Multiple(1.5)),
+            ..Spacing::default()
+        }
+    );
+    // Values that don't parse (a comma decimal, `auto`) state nothing.
+    assert_eq!(ps[1].spacing, Spacing { line: Some(LineSpacing::Exactly(20.0)), ..Spacing::default() });
+    assert_eq!(ps[2].spacing, Spacing::default());
+}
+
+#[test]
+fn a_page_opens_as_word_opens_one() {
+    let html = "<style>p.k { margin-bottom: 13px } span.z { margin: 0in }</style>\
+                <p>first</p><h1>Head</h1><p class=k><span class=z>kept</span></p><p class=k>own</p><div>bare</div><p>&nbsp;</p>";
+    let f = parse_in(html, &|_| None, true);
+    let ps = paras(&f);
+    // Times New Roman 12 pt on single lines; headings bold and black at a browser's sizes.
+    let first = fmt_of(ps[0]);
+    assert_eq!((first.font.as_deref(), first.size), (Some(PAGE_FONT), Some(12.0)));
+    assert_eq!(ps[0].spacing.line, Some(LineSpacing::Multiple(1.0)));
+    let cell = parse_in("<table><tr><td>cell</td></tr></table>", &|_| None, true);
+    let FBlock::Table(t) = &cell.blocks[0] else { panic!() };
+    let FBlock::Para(cp) = &t.rows[0][0].blocks[0] else { panic!() };
+    assert_eq!(cp.spacing.line, Some(LineSpacing::Multiple(1.0)));
+    let head = fmt_of(ps[1]);
+    assert_eq!((head.bold, head.size, head.color), (true, Some(24.0), Some(wordcraft_doc::Rgb(0, 0, 0))));
+    // A colour the heading inherits stays.
+    // A generic family names a face on a page; pasted text keeps the document's font.
+    let generic = parse_in("<p style='font-family: sans-serif'>a</p><p style='font-family: serif'>b</p>", &|_| None, true);
+    let fonts: Vec<Option<String>> = paras(&generic).iter().map(|p| fmt_of(p).font.map(|f| f.to_string())).collect();
+    assert_eq!(fonts, [Some("Arial".to_string()), Some(PAGE_FONT.to_string())]);
+    assert_eq!(fmt_of(paras(&parse("<p style='font-family: sans-serif'>a</p>"))[0]).font, None);
+    let inherited = parse_in("<body style='color: #000080'><h1>Head</h1></body>", &|_| None, true);
+    assert_eq!(fmt_of(paras(&inherited)[0]).color, Some(wordcraft_doc::Rgb(0, 0, 0x80)));
+    // Automatic spacing where a p or heading leaves its margins out (layout drops it at the
+    // top of the page and of a cell).
+    let auto = |p: &Para| (p.spacing.before_auto, p.spacing.after_auto, p.spacing.before, p.spacing.after);
+    assert_eq!(auto(ps[0]), (true, true, None, None));
+    assert_eq!(auto(ps[1]), (true, true, None, None));
+    // A span's margin replaces the one its paragraph states; the one it leaves out stays automatic.
+    assert_eq!(auto(ps[2]), (true, false, None, Some(0.0)));
+    assert_eq!(auto(ps[3]), (true, false, None, Some(9.75)));
+    // Other blocks get no automatic spacing.
+    assert_eq!(auto(ps[4]), (false, false, None, None));
+    // The document says so, and the empty paragraph's mark keeps its size.
+    let d = model::to_doc(&f);
+    let props = |i: usize| match &*d.body[i] {
+        wordcraft_doc::Block::Para(p) => p.clone(),
+        b => panic!("{b:?}"),
+    };
+    assert_eq!((props(0).props.space_before_auto, props(0).props.space_after_auto), (Some(true), Some(true)));
+    assert_eq!((props(2).props.space_after_auto, props(2).props.space_after), (None, Some(0.0)));
+    assert_eq!(props(5).mark.size, Some(12.0));
+    // `<p>&nbsp;</p>` keeps the size of its space for its line.
+    assert!(ps[5].inlines.is_empty());
+    assert_eq!(ps[5].mark.as_ref().and_then(|m| m.size), Some(12.0));
+    // A fragment (a paste) keeps the document's own formatting.
+    let pasted = parse(html);
+    assert_eq!(fmt_of(paras(&pasted)[0]).font, None);
+    assert_eq!(paras(&pasted)[0].spacing, Spacing::default());
+}
+
+#[test]
+fn cells_give_their_columns_widths() {
+    let f = parse(
+        "<style>td.n { width: 42px }</style><table border=1><tr><td colspan=3>t</td></tr><tr><td class=n>1</td><td width=200>a</td><td style='width: 2in'>b</td></tr></table>",
+    );
+    let FBlock::Table(t) = &f.blocks[0] else { panic!("{:?}", f.blocks) };
+    assert_eq!(t.widths, [31.5, 150.0, 144.0]);
+    // A column without a width leaves them all to the layout.
+    let f = parse("<table><tr><td width=100>a</td><td>b</td></tr></table>");
+    let FBlock::Table(t) = &f.blocks[0] else { panic!() };
+    assert!(t.widths.is_empty());
+    // A cell beside a cell spanning rows from above gives its own column its width.
+    let f =
+        parse("<table><tr><td rowspan=2>a</td><td width=200>b</td></tr><tr><td width=300>c</td></tr><tr><td width=100>d</td><td>e</td></tr></table>");
+    let FBlock::Table(t) = &f.blocks[0] else { panic!() };
+    assert_eq!(t.widths, [75.0, 150.0]);
+}
+
+#[test]
+fn cells_take_their_css_borders() {
+    use wordcraft_doc::props::{Border, BorderStyle};
+    let f = parse(
+        "<style>td.b { border-top: solid windowtext 1px; border-bottom: 2pt double #ff0000; border-left: none; border-right: 0px solid; vertical-align: bottom }</style><table><tr><td class=b>a</td><td>b</td></tr></table>",
+    );
+    let FBlock::Table(t) = &f.blocks[0] else { panic!() };
+    // The style sheet's other cell properties apply too.
+    assert_eq!(t.rows[0][0].valign, Some(wordcraft_doc::props::VAlign::Bottom));
+    let b = t.rows[0][0].borders.expect("borders");
+    assert_eq!(b.top, Some(Border::single(0.75)));
+    assert_eq!(b.bottom, Some(Border { style: BorderStyle::Double, width: 2.0, color: Some(wordcraft_doc::Rgb(255, 0, 0)), space: 0.0 }));
+    assert_eq!(b.left.map(|l| l.style), Some(BorderStyle::None));
+    // A border of no width is none (OOXML has no zero-width line).
+    assert_eq!(b.right.map(|r| r.style), Some(BorderStyle::None));
+    assert_eq!(t.rows[0][1].borders, None);
+}
+
+#[test]
+fn style_sheet_edge_cases() {
+    let f = parse_in(
+        "<style>@charset \"utf-8\"; @import url(a.css); p.a { color: #0000ff } body { margin: 20px } p.b { margin: 10 5% medium }</style>\
+         <body><p class=a>a</p>bare<p class=b>b</p></body>",
+        &|_| None,
+        true,
+    );
+    let ps = paras(&f);
+    // A rule right after statement at-rules still applies.
+    assert_eq!(fmt_of(ps[0]).color, Some(wordcraft_doc::Rgb(0, 0, 255)));
+    // The body's margins aren't the paragraphs' indents.
+    assert_eq!((ps[1].spacing.left, ps[1].spacing.before), (None, None));
+    // Bare numbers, percentages and keywords state no margin: automatic spacing stays.
+    assert_eq!((ps[2].spacing.before_auto, ps[2].spacing.left), (true, None));
+    // The `style` attribute wins even over a sheet with more declarations than are read.
+    let many = (0..600).map(|i| format!("x-{i}: 1")).collect::<Vec<_>>().join(";");
+    let f = parse(&format!("<style>p {{ {many}; color: #ff0000 }}</style><p style='color: #00ff00'>c</p>"));
+    assert_eq!(fmt_of(paras(&f)[0]).color, Some(wordcraft_doc::Rgb(0, 255, 0)));
+}
+
+#[test]
+fn hostile_style_sheets_never_panic() {
+    // One declaration block shared by many selectors isn't copied for each.
+    let selectors = vec!["p"; 20_000].join(",");
+    let huge = format!("<style>{selectors} {{ color: red; {} }}</style><p>x</p>", "x: y;".repeat(200_000));
+    let _ = parse_in(&huge, &|_| None, true);
+    let many = ".a { color: red } ".repeat(20_000);
+    for css in ["{", "}", "p {", "@media { p { x } ", "p { color: red", "/* open", ".{}", "p..a{}", "\u{0}.é{x:y}", many.as_str()] {
+        let _ = parse_in(&format!("<style>{css}</style><p class='a é'>x</p><td style='width: 1e40px'>y</td>"), &|_| None, true);
+    }
 }
