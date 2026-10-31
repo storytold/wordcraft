@@ -86,8 +86,8 @@ pub use settings::{
     COMPAT_MODE_CURRENT, CoreProps, CustomProp, DEFAULT_GRID, DEFAULT_HYPHENATION_ZONE, LEGACY_COMPAT_MODE, PagePicture, Settings, Source,
     THEME_COLORS, Watermark, Zoom, ZoomFit,
 };
-pub use text_walk::count_words;
 pub(crate) use text_walk::{PARA_WALK_DEPTH, walk_between};
+pub use text_walk::{count_chars, count_chars_no_spaces, count_words};
 
 /// A document.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

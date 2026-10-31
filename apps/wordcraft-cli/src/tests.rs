@@ -457,7 +457,11 @@ fn script_file_name_need_not_be_unicode() {
     let mut name = dir.as_os_str().to_os_string().into_vec();
     name.extend_from_slice(b"/caf\xe9.json");
     let path = PathBuf::from(OsString::from_vec(name));
-    std::fs::write(&path, r#"{"commands":["caret.docEnd"],"save":["o.txt"]}"#).unwrap();
+    // Where the filesystem only takes UTF-8 names (macOS APFS answers EILSEQ), such a
+    // file can't exist and the CLI never sees one; the path itself is exercised on Linux.
+    if std::fs::write(&path, r#"{"commands":["caret.docEnd"],"save":["o.txt"]}"#).is_err() {
+        return;
+    }
     let raw = vec![OsString::from("run"), OsString::from("--script"), path.into_os_string()];
     run(&raw).unwrap();
     assert!(dir.join("o.txt").exists());
