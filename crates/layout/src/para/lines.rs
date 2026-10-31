@@ -392,8 +392,9 @@ impl<'e> Breaker<'e> {
         let hyphen = (sc.end == LineEnd::Wrap && c1 > c0 && pl.hyph_after.binary_search(&((c1 - 1) as u32)).is_ok())
             .then(|| pl.clusters.get(c1 - 1).map(|c| hyphen_glyph(pl, c.style, &mut self.hcache)))
             .flatten();
-        let end_x = match (sc.xs.last(), c1.checked_sub(1).and_then(|k| pl.clusters.get(k))) {
-            (Some(lx), Some(c)) => lx + c.adv + hyphen.map_or(0.0, |h| h.2),
+        // A last mark whose compressed pair the wrap split gets its blank half back.
+        let end_x = match (sc.xs.last(), c1.checked_sub(1).and_then(|k| pl.clusters.get(k).map(|c| (k, c)))) {
+            (Some(lx), Some((k, c))) => lx + c.adv - pl.auto_space_after(k).min(0.0) + hyphen.map_or(0.0, |h| h.2),
             _ => sc.line_start_x,
         };
         sc.xs.push(end_x);
@@ -653,8 +654,9 @@ fn content_end(pl: &ParaLayout, sc: &Scan, c1: usize) -> f32 {
                 content_end = sc.xs.get(k - sc.c0).copied().unwrap_or(content_end);
             }
             _ => {
-                // The automatic space after the line's last character goes with the wrap.
-                content_end -= pl.auto_space_after(k);
+                // The automatic space after the line's last character goes with the wrap (a
+                // compressed mark's blank half is already back in the line's end x).
+                content_end -= pl.auto_space_after(k).max(0.0);
                 break;
             }
         }

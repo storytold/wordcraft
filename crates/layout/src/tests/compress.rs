@@ -90,6 +90,7 @@ fn a_pair_split_across_lines_keeps_the_first_mark_whole() {
         let last = line.c1 - 1;
         let (Some(c), Some(f), Some(&x)) = (g.clusters.get(last), full.clusters.get(last), line.xs.get(last - line.c0)) else { continue };
         assert!((x + f.adv - line.right).abs() < 0.01, "line ending at {last}: {x} + {} (compressed {}) vs {}", f.adv, c.adv, line.right);
+        assert_eq!(line.cl_right(last), Some(x + f.adv), "the line's end x and selection cover the whole mark");
     }
 }
 
