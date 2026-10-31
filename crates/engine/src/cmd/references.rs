@@ -16,9 +16,13 @@ mod properties;
 mod toc;
 
 use fields::caption;
+#[cfg(test)]
+use fields::file_size_in;
 pub use fields::{CHAPTER_SEPARATORS, refresh_date_fields, seq_format, update_fields, update_fields_in, update_seq};
 pub(super) use notes::note_options;
 use notes::{note, note_refs};
+#[cfg(test)]
+use properties::count_text;
 pub use properties::{bookmark_text, date_picture};
 #[cfg(test)]
 use toc::cached_toc_tabs;

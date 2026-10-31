@@ -145,6 +145,7 @@ impl Session {
         let identity_before = replaces_document.then(|| {
             (
                 self.path.clone(),
+                self.path_names_only,
                 self.file_name.clone(),
                 self.document_id,
                 self.password.clone(),
@@ -237,8 +238,9 @@ impl Session {
                 if let Some(versions) = versions_before {
                     self.versions = versions;
                 }
-                if let Some((path, file_name, document_id, password, dirty, bib_style, merge_preview)) = identity_before {
+                if let Some((path, path_names_only, file_name, document_id, password, dirty, bib_style, merge_preview)) = identity_before {
                     self.path = path;
+                    self.path_names_only = path_names_only;
                     self.file_name = file_name;
                     self.document_id = document_id;
                     self.password = password;

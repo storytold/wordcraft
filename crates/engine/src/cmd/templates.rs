@@ -266,12 +266,12 @@ pub(crate) fn is_network_path(p: &str) -> bool {
     sep(b.first()) && sep(b.get(1))
 }
 
-fn is_windows_absolute(p: &str) -> bool {
+pub(crate) fn is_windows_absolute(p: &str) -> bool {
     let b = p.as_bytes();
     p.starts_with("\\\\") || (b.first().is_some_and(u8::is_ascii_alphabetic) && b.get(1) == Some(&b':'))
 }
 
-fn percent_decode(s: &str) -> String {
+pub(crate) fn percent_decode(s: &str) -> String {
     let hex = |c: u8| (c as char).to_digit(16).and_then(|d| u8::try_from(d).ok());
     let mut out = Vec::with_capacity(s.len());
     let mut it = s.bytes();

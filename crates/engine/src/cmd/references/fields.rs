@@ -144,11 +144,77 @@ fn has_switch(instr: &str, sw: char) -> bool {
     })
 }
 
+/// The size in bytes of the file the document is saved as, as the file system reports it; `None`
+/// before the first save, on the web, or when the path is outside the allowed folders or is not a
+/// regular file.
+fn saved_file_size(s: &Session) -> Option<u64> {
+    if s.path_names_only {
+        return None;
+    }
+    crate::io::file_size(s.path.as_deref()?)
+}
+
+/// A FILESIZE field's number: `bytes` rounded to the nearest megabyte (1,000,000 bytes) with
+/// `\m`, else to the nearest kilobyte (1,000 bytes) with `\k`, else the bytes.
+pub(super) fn file_size_in(instr: &str, bytes: u64) -> u64 {
+    let unit = if has_switch(instr, 'm') {
+        1_000_000
+    } else if has_switch(instr, 'k') {
+        1_000
+    } else {
+        1
+    };
+    bytes.saturating_add(unit / 2) / unit
+}
+
+/// A TEMPLATE field's text: the attached template's file name, or with `path` its path (a `file:`
+/// URL as a local path, a relative reference from the folder of `base`, the document's file).
+/// Without an attached template, the name is `Normal.dotm`; `path` uses the configured user
+/// templates folder when available.
+/// A `file:` URL that names another machine (`file://server/share/T.dotx`) is shown decoded
+/// (`//server/share/T.dotx`) and is never opened. A relative reference in a document on another
+/// machine is shown from that document's folder and is never opened either.
+fn template_text(doc: &wordcraft_doc::Document, base: Option<&std::path::Path>, path: bool, user_templates_folder: Option<&str>) -> String {
+    use crate::cmd::templates::{is_network_path, is_windows_absolute, local_path, percent_decode};
+    let Some(target) = doc.settings.attached_template.as_deref().map(str::trim).filter(|t| !t.is_empty()) else {
+        return if path {
+            user_templates_folder
+                .filter(|folder| !folder.trim().is_empty())
+                .map(|folder| std::path::Path::new(folder).join("Normal.dotm").to_string_lossy().to_string())
+                .unwrap_or_else(|| "Normal.dotm".to_string())
+        } else {
+            "Normal.dotm".to_string()
+        };
+    };
+    let full = match local_path(target, base) {
+        Some(p) => p.to_string_lossy().to_string(),
+        None => {
+            let shown = match (target.get(..5), target.get(5..)) {
+                (Some(scheme), Some(rest)) if scheme.eq_ignore_ascii_case("file:") => percent_decode(rest),
+                _ => target.to_string(),
+            };
+            let relative = !shown.is_empty()
+                && !shown.contains("://")
+                && !is_network_path(&shown)
+                && !is_windows_absolute(&shown)
+                && std::path::Path::new(&shown).is_relative();
+            match base.and_then(std::path::Path::parent) {
+                Some(dir) if relative => dir.join(&shown).to_string_lossy().to_string(),
+                _ => shown,
+            }
+        }
+    };
+    if path {
+        return full;
+    }
+    full.rsplit(['/', '\\']).next().unwrap_or(&full).to_string()
+}
+
 /// Update fields of the story being edited, as Word's F9 does: dates, REF/PAGEREF, the document
 /// information fields (TITLE, SUBJECT, AUTHOR, KEYWORDS, COMMENTS, LASTSAVEDBY, REVNUM, NUMWORDS,
-/// NUMCHARS, FILENAME, DOCPROPERTY) in the body, or in the header, footer, note or text box the
-/// caret is in (the body's fields stay as they are then). SEQ numbering, citations and TOC are
-/// body-only, so they run only when the caret is in the body.
+/// NUMCHARS, FILENAME, FILESIZE, TEMPLATE, INFO, DOCPROPERTY) in the body, or in the header,
+/// footer, note or text box the caret is in (the body's fields stay as they are then). SEQ
+/// numbering, citations and TOC are body-only, so they run only when the caret is in the body.
 pub fn update_fields(s: &mut Session) -> Result<(), CmdError> {
     update_fields_in(s, false)
 }
@@ -189,6 +255,8 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
         let mut updates: Vec<(usize, String)> = Vec::new();
         for (k, o) in p.objects.iter().enumerate() {
             let InlineObject::Field { instr, locked: false, .. } = o else { continue };
+            // `INFO Subject` updates as `SUBJECT` does.
+            let instr = wordcraft_layout::fields::info_target(instr);
             // A table formula reads the cells around its own cell again.
             if instr.trim_start().starts_with('=') {
                 if let Some((tp, r, c)) = path.cell()
@@ -234,12 +302,26 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
                     updates.push((k, text_result(instr, summary_property(&core, &name).to_string())));
                 }
                 "LASTSAVEDBY" => updates.push((k, text_result(instr, core.last_modified_by.clone()))),
-                "NUMWORDS" => updates.push((k, count_text(instr, s.doc.word_count()))),
+                "NUMWORDS" => updates.push((k, count_text(instr, u64::try_from(s.doc.word_count()).unwrap_or(u64::MAX)))),
                 "NUMCHARS" => {
                     let chars = s.doc.plain_text(StoryRef::Body).chars().filter(|c| !c.is_whitespace()).count();
-                    updates.push((k, count_text(instr, chars)));
+                    updates.push((k, count_text(instr, u64::try_from(chars).unwrap_or(u64::MAX))));
                 }
-                "REVNUM" => updates.push((k, count_text(instr, core.revision as usize))),
+                "REVNUM" => updates.push((k, count_text(instr, u64::from(core.revision)))),
+                // FILESIZE shows the saved file's size in bytes, `\k` in kilobytes and `\m` in
+                // megabytes, and 0 in a document that has never been saved.
+                "FILESIZE" => {
+                    let never_saved = s.path.is_none() && s.file_name.is_none();
+                    if let Some(bytes) = if never_saved { Some(0) } else { saved_file_size(s) } {
+                        updates.push((k, count_text(instr, file_size_in(instr, bytes))));
+                    }
+                }
+                // TEMPLATE shows the attached template's file name, or Normal.dotm when absent.
+                // `\p` includes the path when one is known.
+                "TEMPLATE" => {
+                    let text = template_text(&s.doc, s.path.as_deref(), has_switch(instr, 'p'), s.prefs.user_templates_folder.as_deref());
+                    updates.push((k, text_result(instr, text)));
+                }
                 // DOCPROPERTY <name>: a custom property first, then a built-in one (#1798).
                 "DOCPROPERTY" => {
                     if let Some(name) = doc_property_arg(instr)
@@ -253,6 +335,7 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
                     let text = if has_switch(instr, 'p') { fn_path } else { fn_name };
                     updates.push((k, text_result(instr, text)));
                 }
+                "INFO" if wordcraft_layout::fields::info_type_unknown(instr) => updates.push((k, "Error! Unknown info keyword.".into())),
                 _ => {}
             }
         }

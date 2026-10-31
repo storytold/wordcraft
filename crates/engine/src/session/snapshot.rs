@@ -17,6 +17,7 @@ impl Session {
         self.doc.ensure_nonempty();
         self.password = None;
         self.file_name = None;
+        self.path_names_only = false;
         // The old document's equation is gone: its editing session cannot carry over.
         self.math = None;
         self.sel = Selection::caret(self.doc.start_of(StoryRef::Body));
@@ -70,6 +71,7 @@ impl Session {
             pending: _,
             last_highlight: _,
             path: _,
+            path_names_only: _,
             file_name: _,
             // The custom dictionary file, like the file path: host wiring, not an edit.
             user_dict_path: _,

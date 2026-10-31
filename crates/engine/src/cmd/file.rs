@@ -66,7 +66,7 @@ fn rename(s: &mut Session, v: &Value) -> CmdResult {
         }
         if destination != *path {
             #[cfg(not(target_arch = "wasm32"))]
-            {
+            if !s.path_names_only {
                 crate::io::rename_file(path, &destination).map_err(CmdError::Failed)?;
             }
             s.path = Some(destination);
@@ -284,6 +284,7 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
         super::view::restore_zoom(s, z);
     }
     s.path = Some(path.into());
+    s.path_names_only = p::str(v, "data").is_some();
     // Like Word, a document opened with a password is saved with it again.
     if encrypted {
         s.password = password.map(crate::io::Password::new);
@@ -382,6 +383,7 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
     let own_file = s.path.as_deref() == Some(path.as_path());
     if own_file || ["docx", "docm", "dotx", "dotm", "odt", "rtf", "json", "xml"].contains(&ext.as_str()) {
         s.path = Some(path.clone());
+        s.path_names_only = false;
         s.dirty = false;
         s.relayout();
     }

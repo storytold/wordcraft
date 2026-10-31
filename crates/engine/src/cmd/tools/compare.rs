@@ -137,6 +137,7 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
     if show_in != "original" || p::str(v, "original").is_some() {
         // The result is a new, untitled document: saving it never overwrites either file.
         s.path = None;
+        s.path_names_only = false;
         s.file_name = None;
         // Version snapshots belong to the document they were taken from, including when
         // Compare creates an untitled result from the current document.

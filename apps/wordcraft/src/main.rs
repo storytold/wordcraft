@@ -358,7 +358,10 @@ fn open_non_unicode(app: &mut WordApp, path: &std::path::Path) {
         .and_then(|bytes| app.run("file.open", serde_json::json!({"path": name, "data": wordcraft_engine::cmd::insert::base64_encode(&bytes)})));
     match opened {
         // Not when it waits for a password: that open names the document itself.
-        Ok(r) if r.get("pending").is_none() => app.session.path = Some(path.into()),
+        Ok(r) if r.get("pending").is_none() => {
+            app.session.path = Some(path.into());
+            app.session.path_names_only = false;
+        }
         Ok(_) => {}
         Err(e) => {
             app.report_open_failure(&name, &e);
