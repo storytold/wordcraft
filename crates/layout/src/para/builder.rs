@@ -3,12 +3,13 @@ use super::chars::{
     SegKey, caps_expands, context_digit_dirs, is_khmer, is_mark, is_numeral_digit, ligature_features, lookup_family, remap_range, thai_run_face,
     upper_char,
 };
-use super::grid::east_asian;
+use super::grid::{auto_space_range, east_asian};
 use super::model::{ClKind, Cluster, Enclosed, Glyph, ParaEnv, RubyLayout, StyleRun, SymbolRun};
 use super::{Arc, Document, FaceRef, NumeralMode, ResolvedChar, RubyAlign, SOFT_HYPHEN};
 
 pub(super) struct Builder<'a> {
     pub(super) env: &'a ParaEnv<'a>,
+    pub(super) atomic_auto_space: (bool, bool),
     pub(super) styles: Vec<StyleRun>,
     /// Hash of a style's format → (index in `styles`, small caps), see `style`.
     pub(super) style_index: std::collections::HashMap<u64, Vec<(u32, bool)>>,
@@ -403,6 +404,8 @@ impl<'a> Builder<'a> {
         let lv = bidi_levels(text, rtl_base);
         let before = self.clusters.len();
         self.shape_with(text, start, rc, None, if lv.is_empty() { Dir::Guess } else { Dir::Own(&lv) });
+        let (de, dn) = self.atomic_auto_space;
+        auto_space_range(self, text, start, before, de, dn);
         let added: Vec<Cluster> = self.clusters.drain(before..).collect();
         let Some(first) = added.first() else {
             let si = self.style(rc, None, false);

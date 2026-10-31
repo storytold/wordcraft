@@ -107,7 +107,22 @@ fn hostile_links_read_without_chains_running_wild() {
     assert_eq!(got.len(), 4, "every box with a story is read (a bad seq links nothing)");
     assert_eq!(r.text_box_chains(), vec![vec![got[0], got[1]]], "one chain: the first box and the first seq 1");
     let b = r.parts.get(&got[0]).unwrap().body;
-    assert_eq!((b.vert, b.anchor), (TextVert::Vert, VAlign::Center));
+    assert_eq!((b.vert, b.anchor), (TextVert::EaVert, VAlign::Center));
+}
+
+#[test]
+fn rotated_and_east_asian_vertical_text_boxes_remain_distinct() {
+    let mut d = Document::from_text("a\nb");
+    for (i, vert) in [TextVert::Vert, TextVert::EaVert].into_iter().enumerate() {
+        let shape = text_box(&mut d, "日本語", TextBody { vert, ..Default::default() });
+        d.insert_object(&wordcraft_doc::Pos::body(i, 1), shape, &Default::default()).unwrap();
+    }
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let xml = document_xml(&bytes);
+    assert!(xml.contains("vert=\"vert\"") && xml.contains("vert=\"eaVert\""));
+    let r = wordcraft_docx::read(&bytes).unwrap();
+    let dirs: Vec<_> = boxes(&r).iter().filter_map(|id| r.parts.get(id).map(|p| p.body.vert)).collect();
+    assert_eq!(dirs, [TextVert::Vert, TextVert::EaVert]);
 }
 
 #[test]
@@ -130,6 +145,8 @@ fn vml_text_boxes_keep_their_inset_fit_and_anchor() {
         shape("v-text-anchor:bottom-baseline", r#"inset="12700,bogus,-5pt,99in""#),
         // `o:insetmode="auto"` leaves the margins to the application.
         shape("", r#"o:insetmode="auto" inset="0,0,0,0""#),
+        // The VML fallback for a rotated DrawingML box carries the same text direction.
+        shape("", r#"style="layout-flow:vertical""#),
         // In a group, a member's margins go with that member's text, not an empty box's before it.
         format!(r#"<w:p><w:r><w:pict><v:group style="width:100pt;height:40pt"><v:shape><v:textbox inset="9pt,9pt,9pt,9pt"/></v:shape><v:shape><v:textbox inset="0,0,0,0">{content}</v:textbox></v:shape></v:group></w:pict></w:r></w:p>"#),
     ]
@@ -140,13 +157,14 @@ fn vml_text_boxes_keep_their_inset_fit_and_anchor() {
     let rels = br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
     let d = wordcraft_docx::read(&zip(&[("_rels/.rels", rels), ("word/document.xml", doc.as_bytes())])).unwrap();
     let bodies: Vec<TextBody> = boxes(&d).iter().map(|id| d.parts[id].body).collect();
-    assert_eq!(bodies.len(), 6);
+    assert_eq!(bodies.len(), 7);
     assert_eq!(bodies[0].inset, Some([0, 0, 0, 0]));
     assert_eq!((bodies[1].inset, bodies[1].auto_fit, bodies[1].anchor), (Some([36_000, 45_720, 25_400, 45_720]), true, VAlign::Center));
     assert_eq!(bodies[2], TextBody::default());
     assert_eq!((bodies[3].inset, bodies[3].anchor), (Some([12_700, 45_720, 0, wordcraft_doc::MAX_TEXT_BOX_INSET]), VAlign::Bottom));
     assert_eq!(bodies[4].inset, None);
-    assert_eq!(bodies[5].inset, Some([0, 0, 0, 0]));
+    assert_eq!(bodies[5].vert, TextVert::Vert);
+    assert_eq!(bodies[6].inset, Some([0, 0, 0, 0]));
     // Saved and read again, they stay.
     let back = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
     let again: Vec<TextBody> = boxes(&back).iter().map(|id| back.parts[id].body).collect();

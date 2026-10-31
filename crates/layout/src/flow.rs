@@ -901,6 +901,7 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counte
                         eq_number: ctx.eq_count,
                         read_line_spacing: if ctx.opts.view == ViewMode::Read { ctx.opts.read_line_spacing } else { None },
                         grid: ctx.grid,
+                        vertical_text_box: ctx.vertical_text_box,
                         fit_objects: false,
                         fitted: &[],
                     };

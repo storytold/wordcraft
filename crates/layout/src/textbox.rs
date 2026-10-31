@@ -10,8 +10,8 @@
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
-use wordcraft_doc::props::{TextDirection, TextVert, VAlign};
-use wordcraft_doc::{Block, Blocks, Path, StoryRef, TextBody};
+use wordcraft_doc::props::{LineSpacing, TextDirection, TextVert, VAlign};
+use wordcraft_doc::{Block, Blocks, Paragraph, Path, StoryRef, TextBody};
 use wordcraft_geom::Rect;
 
 use crate::{BoxInput, Ctx, Placed, fit_box, layout_box};
@@ -71,6 +71,13 @@ const STACK_WIDTH: f32 = 12.0;
 
 /// Lay `blocks` of story `id` out in lines `len` long; stacked text one letter to a line.
 fn lay(ctx: &mut Ctx, id: u32, blocks: &Blocks, len: f32, vert: TextVert, depth: usize) -> Vec<Placed> {
+    let previous = std::mem::replace(&mut ctx.vertical_text_box, vert.turn() != TextDirection::Horizontal);
+    let items = lay_in_direction(ctx, id, blocks, len, vert, depth);
+    ctx.vertical_text_box = previous;
+    items
+}
+
+fn lay_in_direction(ctx: &mut Ctx, id: u32, blocks: &Blocks, len: f32, vert: TextVert, depth: usize) -> Vec<Placed> {
     let story = StoryRef::Part(id);
     if vert == TextVert::Stacked {
         // One letter to a line: words may break anywhere, and each letter takes the narrowest
@@ -92,7 +99,88 @@ fn lay(ctx: &mut Ctx, id: u32, blocks: &Blocks, len: f32, vert: TextVert, depth:
             .collect();
         return layout_box(ctx, BoxInput::other(story, &stacked, STACK_WIDTH, depth + 1, None)).items;
     }
-    layout_box(ctx, BoxInput::other(story, blocks, len, depth + 1, None)).items
+    if vert.turn() == TextDirection::Horizontal {
+        return layout_box(ctx, BoxInput::other(story, blocks, len, depth + 1, None)).items;
+    }
+    let snap = (ctx.counters.clone(), ctx.eq_count);
+    let natural = layout_box(ctx, BoxInput::other(story, blocks, len, depth + 1, None)).items;
+    // A substitute can itself lack ideographs, so the shaping fallback may be a second font.
+    // Measure the line *after shaping* rather than guessing from either font's hhea metrics.
+    let mut changed = false;
+    let adjusted: Blocks = blocks
+        .iter()
+        .enumerate()
+        .map(|(i, b)| match &**b {
+            Block::Para(p) => {
+                let line_h = natural.iter().find_map(|it| match it {
+                    Placed::Lines { story: s, path, para, l0, .. } if *s == story && *path == Path::top(i) => {
+                        para.lines.get(*l0).map(|line| line.height)
+                    }
+                    _ => None,
+                });
+                match line_h.and_then(|h| fallback_vertical_spacing(ctx.doc, p, h)) {
+                    Some(m) => {
+                        changed = true;
+                        let mut p = p.clone();
+                        p.props.line_spacing = Some(LineSpacing::Multiple(m));
+                        p.touch();
+                        Arc::new(Block::Para(p))
+                    }
+                    None => b.clone(),
+                }
+            }
+            _ => b.clone(),
+        })
+        .collect();
+    if !changed {
+        return natural;
+    }
+    (ctx.counters, ctx.eq_count) = snap;
+    layout_box(ctx, BoxInput::other(story, &adjusted, len, depth + 1, None)).items
+}
+
+/// For an implicit single-spaced vertical CJK line with a missing requested font, use the
+/// measured line height to bring its advance near 1.28 em. Explicit spacing and installed
+/// document faces keep their own metrics. No font family is special-cased.
+fn fallback_vertical_spacing(doc: &wordcraft_doc::Document, p: &Paragraph, line_h: f32) -> Option<f32> {
+    let inherited = doc.styles.resolve_para(&p.props).line_spacing;
+    let cjk = p.text.chars().find(|c| wordcraft_fonts::is_cjk(*c)).or_else(|| {
+        p.objects.iter().find_map(|o| match o {
+            wordcraft_doc::InlineObject::Field { result, .. } => result.chars().find(|c| wordcraft_fonts::is_cjk(*c)),
+            _ => None,
+        })
+    });
+    if p.props.line_spacing.is_some()
+        || !matches!(inherited, LineSpacing::Multiple(m) if m.is_finite() && (0.5..=2.5).contains(&m))
+        || cjk.is_none()
+        || !line_h.is_finite()
+        || line_h <= 0.0
+    {
+        return None;
+    }
+    let mut target = 0.0f32;
+    for (range, props) in p.run_ranges() {
+        let Some(text) = p.text.get(range.clone()) else { continue };
+        let rc = doc.styles.resolve_char_in(p.props.style.as_deref(), None, props);
+        let family = rc.font_ea.as_deref().unwrap_or(&rc.font);
+        let resolved = wordcraft_fonts::word::resolve(family, rc.bold, rc.italic);
+        let missing_cjk = text.char_indices().any(|(offset, ch)| {
+            let needs_fallback = |c| wordcraft_fonts::is_cjk(c) && (resolved.substituted || !resolved.face.covers(c));
+            needs_fallback(ch)
+                || (ch == wordcraft_doc::para::OBJ
+                    && p.object_at(range.start.saturating_add(offset)).is_some_and(|object| match object {
+                        wordcraft_doc::InlineObject::Field { result, .. } => result.chars().any(needs_fallback),
+                        _ => false,
+                    }))
+        });
+        if !missing_cjk {
+            continue;
+        }
+        target = target.max(rc.size.max(1.0) * 1.28);
+    }
+    let LineSpacing::Multiple(base) = inherited else { return None };
+    let m = (base * target * base / line_h).clamp(0.5, 2.5);
+    (target > 0.0 && (m - base).abs() >= 0.0001).then_some(m)
 }
 
 /// The items showing text box `id` in its frame `rect` (page coordinates): its text, or its
