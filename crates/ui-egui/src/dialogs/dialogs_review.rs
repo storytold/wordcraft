@@ -356,6 +356,7 @@ impl AutoCorrectForm {
             "borderLines": o.border_lines,
             "tabIndent": o.tab_indent,
             "headingStyles": o.heading_styles,
+            "formatListItemStart": o.format_list_item_start,
             "doubleSpacePeriod": o.double_space_period,
             "autoAddFirstLetter": o.auto_add_first_letter,
             "autoAddInitialCaps": o.auto_add_initial_caps,
@@ -409,6 +410,7 @@ fn autocorrect_ui(app: &mut WordApp, ui: &mut Ui, f: &mut AutoCorrectForm) -> bo
             ui.checkbox(&mut o.border_lines, tl!("Border lines"));
             ui.checkbox(&mut o.heading_styles, tl!("Built-in Heading styles"));
             heading(ui, "Automatically as you type");
+            ui.checkbox(&mut o.format_list_item_start, tl!("Format beginning of list item like the one before it"));
             ui.checkbox(&mut o.tab_indent, tl!("Set left- and first-indent with tabs and backspaces"));
         }
         _ => math_tab(ui, f),
@@ -941,5 +943,41 @@ mod tests {
             h.step();
         }
         assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Hello. world");
+    }
+
+    /// Tick "Format beginning of list item like the one before it" on the AutoFormat As You Type
+    /// tab and press OK: the option is on, and the dialog shows it ticked when it opens again.
+    #[test]
+    fn the_list_item_lead_in_option_is_set_in_the_dialog() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = app("");
+        app.run("tools.autocorrect", json!({})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        for _ in 0..4 {
+            h.step();
+        }
+        h.get_by_label("AutoFormat As You Type").click();
+        for _ in 0..3 {
+            h.step();
+        }
+        h.get_by_label("Format beginning of list item like the one before it").click();
+        for _ in 0..3 {
+            h.step();
+        }
+        h.get_by_label("OK").click();
+        for _ in 0..4 {
+            h.step();
+        }
+        assert!(h.state().dialog.is_none(), "OK closes the dialog");
+        assert!(h.state().session.prefs.autocorrect.format_list_item_start, "the option is on");
+        let f = AutoCorrectForm::new(h.state());
+        assert_eq!(f.params()["formatListItemStart"], json!(true));
     }
 }

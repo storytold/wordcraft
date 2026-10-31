@@ -117,6 +117,8 @@ pub struct Session {
     join_anchor: bool,
     /// The newest automatic capitalisation, for Word's "Automatically add words to list" (#1857).
     pub(crate) autocap: Option<crate::cmd::tools::AutoCap>,
+    /// The list item lead-in being typed with the previous item's lead-in formatting.
+    pub(crate) lead_in: Option<crate::cmd::text::LeadIn>,
     rev: u64,
     /// Which document this is, unique in the process: changes when [`Session::set_document`]
     /// replaces it (an open into an untouched blank document, recover), never on an edit or when

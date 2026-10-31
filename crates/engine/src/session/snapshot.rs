@@ -106,6 +106,9 @@ impl Session {
             layout: _,
             // The word being typed, like `column`: valid only while `sel` is where typing left it.
             typing: _,
+            // A list item's lead-in, like `typing`: in effect only while `sel` and `pending` are
+            // where typing left them.
+            lead_in: _,
             originals: _,
             picture_looks: _,
             last_command: _,

@@ -15,6 +15,7 @@ impl Session {
             sel: self.sel.clone(),
             pending: self.pending.clone(),
             column: self.column.clone(),
+            lead_in: self.lead_in.clone(),
         }));
         if self.history.len() > MAX_UNDO {
             self.history.remove(0);
@@ -29,7 +30,14 @@ impl Session {
     /// Record `doc`/`sel` as their own undo step after the fact and close the typing group, so
     /// Undo right after an automatic change (AutoFormat, AutoCorrect) reverts only that change.
     pub fn push_undo(&mut self, label: &str, doc: Document, sel: Selection) {
-        self.history.push(Arc::new(Undo { label: label.to_string(), doc, sel, pending: self.pending.clone(), column: None }));
+        self.history.push(Arc::new(Undo {
+            label: label.to_string(),
+            doc,
+            sel,
+            pending: self.pending.clone(),
+            column: None,
+            lead_in: self.lead_in.clone(),
+        }));
         if self.history.len() > MAX_UNDO {
             self.history.remove(0);
             self.undo_evicted += 1;
@@ -174,7 +182,8 @@ impl Session {
 
     /// Undoes the newest step: closes typing, records an AutoCorrect exception when the undone step
     /// was its automatic capital, swaps the document, selection, pending formatting and column with
-    /// the redo snapshot, replaces the body identity, refreshes equation editing and touches layout.
+    /// the redo snapshot along with a list item lead-in, replaces the body identity, refreshes
+    /// equation editing and touches layout.
     pub fn undo(&mut self) -> bool {
         self.typing_open = false;
         // Undoing the automatic capitalisation's own step makes its word an exception; any
@@ -190,8 +199,10 @@ impl Session {
             sel: std::mem::replace(&mut self.sel, u.sel),
             pending: std::mem::replace(&mut self.pending, u.pending),
             column: std::mem::replace(&mut self.column, u.column),
+            lead_in: std::mem::replace(&mut self.lead_in, u.lead_in),
         };
         self.redo.push(Arc::new(cur));
+        crate::cmd::text::resync_lead_in(self);
         // Undo swaps the whole body back: a composition belongs to the text it showed.
         self.note_body_replaced();
         self.refresh_math_session();
@@ -205,8 +216,8 @@ impl Session {
         next.is_some_and(|u| crate::cmd::protect::protection_lifted(&self.doc, &u.doc))
     }
 
-    /// Redoes the newest undone step by swapping the snapshots back, replacing the body identity,
-    /// refreshing equation editing and touching layout.
+    /// Redoes the newest undone step by swapping the snapshots back (a list item lead-in with
+    /// them), replacing the body identity, refreshing equation editing and touching layout.
     pub fn redo(&mut self) -> bool {
         self.typing_open = false;
         let Some(u) = self.redo.pop().map(Arc::unwrap_or_clone) else { return false };
@@ -216,8 +227,10 @@ impl Session {
             sel: std::mem::replace(&mut self.sel, u.sel),
             pending: std::mem::replace(&mut self.pending, u.pending),
             column: std::mem::replace(&mut self.column, u.column),
+            lead_in: std::mem::replace(&mut self.lead_in, u.lead_in),
         };
         self.history.push(Arc::new(cur));
+        crate::cmd::text::resync_lead_in(self);
         self.note_body_replaced();
         self.refresh_math_session();
         self.touch();

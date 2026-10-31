@@ -1,6 +1,7 @@
 use super::autoformat::{
     EnterAutoFormat, apply_border_line, apply_heading_line, apply_table_line, border_line, heading_line, table_line, typing_options,
 };
+use super::lead_in;
 use super::unicode::ins_char;
 use super::{CmdError, CmdResult, NumRef, Pos, Selection, Session, Value, delete_selection, sel_result, split_para, type_text};
 
@@ -104,6 +105,7 @@ pub(super) fn insert_paragraphs(s: &mut Session, text: &str) -> CmdResult {
 /// (typed paragraphs, one undo step for all) no extra snapshot is taken.
 fn enter(s: &mut Session, undo_step: bool) -> Result<(), CmdError> {
     crate::cmd::controls::prepare_edit(s)?;
+    lead_in::finish(s);
     if let Some(text) = sample_text(s) {
         let end = s.sel.focus.clone();
         s.sel = Selection { anchor: Pos { off: 0, ..end.clone() }, focus: end };
@@ -167,9 +169,12 @@ fn enter(s: &mut Session, undo_step: bool) -> Result<(), CmdError> {
         s.autocap.take_if(|c| c.depth == u64::MAX);
         at = s.sel.focus.clone();
     }
+    // Format beginning of list item like the one before it.
+    let lead = lead_in::candidate(s, &at);
     let new = split_para(s, &at)?;
     s.sel = Selection::caret(new);
     s.goal_x = None;
+    lead_in::start(s, lead);
     Ok(())
 }
 
