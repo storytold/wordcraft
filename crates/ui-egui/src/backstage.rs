@@ -221,7 +221,6 @@ fn recovery_page(app: &mut WordApp, ui: &mut Ui) {
     });
 }
 
-/// The Backstage pages that work while no document is open (#1129).
 /// Opens a side-menu page, as a click on it (or its keytip) does. Without a document only the
 /// pages that work without one open.
 pub(crate) fn go_to_page(app: &mut WordApp, id: &str) {
@@ -256,6 +255,7 @@ pub(crate) fn go_to_page(app: &mut WordApp, id: &str) {
     }
 }
 
+/// The Backstage pages that work while no document is open (#1129).
 fn works_without_document(page: &str) -> bool {
     matches!(page, "home" | "new" | "open" | "options")
 }
