@@ -176,6 +176,37 @@ fn options_survive_a_restart_and_junk_in_ui_json() {
     assert!(UiState::from_json(b"[1, 2]").is_none() && UiState::from_json(b"not json").is_none());
 }
 
+/// #2080: the real picker changes the saved opening preference, not the current view.
+#[test]
+fn default_document_zoom_picker_and_restart() {
+    let mut a = app();
+    a.run("file.options", json!({"pane": "advanced"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 1000.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    h.get_by_label("Default document zoom:").click();
+    h.run_steps(3);
+    h.get_by_label("125%").click();
+    h.run_steps(3);
+    assert_eq!(h.state().session.prefs.default_zoom, Some(wordcraft_doc::Zoom { percent: 125, fit: None }));
+    assert_eq!(h.state().session.view.zoom, 1.0);
+    h.get_by_label("Override zoom saved in documents").click();
+    h.run_steps(3);
+    let saved = serde_json::to_vec(&h.state().prefs()).unwrap();
+    let mut restored = app();
+    restored.apply_prefs(UiState::from_json(&saved).unwrap());
+    assert!(restored.session.prefs.override_document_zoom);
+    assert_eq!(restored.session.view.zoom, 1.25, "the first document uses the restored preference");
+    restored.run("file.new", json!({})).unwrap();
+    assert_eq!(restored.session.view.zoom, 1.25);
+}
+
 /// The dictionaries folder (#1063) is saved with the settings and searched again after a
 /// restart, before any document is checked.
 #[test]

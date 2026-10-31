@@ -26,6 +26,11 @@ pub struct Prefs {
     pub insert_key_overtype: bool,
     /// Overtype: typed characters replace the ones after the caret.
     pub overtype: bool,
+    /// Preferred zoom for new/opened documents; absent keeps the existing view behavior.
+    #[serde(deserialize_with = "lenient_default_zoom")]
+    pub default_zoom: Option<wordcraft_doc::Zoom>,
+    /// Prefer `default_zoom` even when the document records a zoom of its own.
+    pub override_document_zoom: bool,
     /// The unit rulers and dialogs show lengths in, when the user chose one (File › Options ›
     /// Advanced › Measurement units); `None` follows the region ([`Session::units`]). Saved under
     /// a new key; an older `units` value other than inches (the old default) carries over on load.
@@ -59,6 +64,7 @@ pub struct Prefs {
 }
 
 impl Default for Prefs {
+    /// Start with standard editing preferences and no user override for document zoom.
     fn default() -> Self {
         Prefs {
             count_notes: true,
@@ -67,6 +73,8 @@ impl Default for Prefs {
             typing_replaces_selection: true,
             insert_key_overtype: false,
             overtype: false,
+            default_zoom: None,
+            override_document_zoom: false,
             units: Default::default(),
             region: None,
             dictionaries_folder: None,
@@ -82,6 +90,12 @@ impl Default for Prefs {
             autocorrect: Default::default(),
         }
     }
+}
+
+/// A damaged saved zoom must not discard the remaining editing preferences.
+fn lenient_default_zoom<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<wordcraft_doc::Zoom>, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    Ok(serde_json::from_value::<wordcraft_doc::Zoom>(value).ok().filter(|z| (10..=500).contains(&z.percent)))
 }
 
 impl Prefs {

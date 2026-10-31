@@ -238,6 +238,7 @@ pub(crate) fn normal_document(s: &Session) -> Document {
 /// Open a document, using the saved proofing default only for plain text and Markdown. A file
 /// that is already open becomes the active document instead (`"alreadyOpen": true`). The file
 /// replaces an untouched blank document; otherwise it opens beside the open documents.
+/// Applies the opening-zoom preference only to the newly opened document.
 fn open(s: &mut Session, v: &Value) -> CmdResult {
     let Some(path) = p::str(v, "path") else {
         s.push_ui_request(json!({"open": "openFile"}));
@@ -280,9 +281,7 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
             s.add_opened_document(doc);
         }
     }
-    if let Some(z) = s.doc.settings.zoom {
-        super::view::restore_zoom(s, z);
-    }
+    s.apply_document_zoom();
     s.path = Some(path.into());
     // Like Word, a document opened with a password is saved with it again.
     if encrypted {

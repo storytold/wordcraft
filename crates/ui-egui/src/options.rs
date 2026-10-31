@@ -512,6 +512,7 @@ fn accessibility(app: &mut WordApp, ui: &mut Ui) {
 
 /// Draws Advanced options: typing and overtype behavior, alignment guides, recent-document count,
 /// measurement units, region, keytips, caret animation, file locations and customization.
+/// Includes the default zoom applied to future documents.
 fn advanced(app: &mut WordApp, ui: &mut Ui) {
     section(ui, "Editing");
     let pr = app.session.prefs.clone();
@@ -528,6 +529,8 @@ fn advanced(app: &mut WordApp, ui: &mut Ui) {
     }
     ui.add_space(8.0);
     section(ui, "Display");
+    default_zoom_picker(app, ui);
+    ui.add_space(8.0);
     egui::Grid::new("options_display").num_columns(2).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
         let recent_label = ui.label(tl!("Recent documents to show:"));
         let mut n = app.ui.recent_shown();
@@ -610,6 +613,59 @@ fn advanced(app: &mut WordApp, ui: &mut Ui) {
             let _ = app.run("tools.customizeRibbon", json!({}));
         }
     });
+}
+
+/// The preferred zoom for future documents; changing the setting leaves the current view alone.
+fn default_zoom_picker(app: &mut WordApp, ui: &mut Ui) {
+    use wordcraft_doc::ZoomFit;
+    let current = app.session.prefs.default_zoom;
+    let shown = match current {
+        None => tl!("Use document zoom").to_string(),
+        Some(z) => match z.fit {
+            Some(ZoomFit::OnePage) => tl!("One Page").to_string(),
+            Some(ZoomFit::PageWidth) => tl!("Page Width").to_string(),
+            Some(ZoomFit::TextWidth) => tl!("Text Width").to_string(),
+            None => format!("{}%", z.percent),
+        },
+    };
+    ui.horizontal(|ui| {
+        let label = ui.label(tl!("Default document zoom:"));
+        craft_ui::ComboBox::from_id_salt("default_document_zoom")
+            .selected_text(shown)
+            .width(180.0)
+            .show_ui(ui, |ui| {
+                if ui.selectable_label(current.is_none(), tl!("Use document zoom")).clicked() {
+                    set(app, json!({"defaultZoom": "document"}));
+                }
+                for percent in [75, 90, 100, 125, 150, 200] {
+                    if ui.selectable_label(current.is_some_and(|z| z.fit.is_none() && z.percent == percent), format!("{percent}%")).clicked() {
+                        set(app, json!({"defaultZoom": percent}));
+                    }
+                }
+                for (fit, value, label) in [
+                    (ZoomFit::OnePage, "onePage", "One Page"),
+                    (ZoomFit::PageWidth, "pageWidth", "Page Width"),
+                    (ZoomFit::TextWidth, "textWidth", "Text Width"),
+                ] {
+                    if ui.selectable_label(current.is_some_and(|z| z.fit == Some(fit)), tl!(label)).clicked() {
+                        set(app, json!({"defaultZoom": value}));
+                    }
+                }
+            })
+            .response
+            .labelled_by(label.id);
+        if let Some(z) = current.filter(|z| z.fit.is_none()) {
+            let mut percent = z.percent;
+            if ui.add(egui::DragValue::new(&mut percent).range(10..=500).suffix("%").speed(1.0)).labelled_by(label.id).changed() {
+                set(app, json!({"defaultZoom": percent}));
+            }
+        }
+    });
+    let mut override_zoom = app.session.prefs.override_document_zoom;
+    if ui.add_enabled(current.is_some(), egui::Checkbox::new(&mut override_zoom, tl!("Override zoom saved in documents"))).changed() {
+        set(app, json!({"overrideDocumentZoom": override_zoom}));
+    }
+    note(ui, "Applies to new and opened documents. Saved document zoom takes priority unless you override it.");
 }
 
 /// The user templates folder (#2852): where File › New finds personal templates and Save as Word
