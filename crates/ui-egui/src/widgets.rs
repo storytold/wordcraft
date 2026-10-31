@@ -13,8 +13,8 @@ mod icon_buttons;
 mod tooltip;
 
 pub use buttons::{
-    BIG_ICON_Y, BIG_LABEL_Y, ButtonAction, CONTENT_H, DROPDOWN, LABEL_H, LABEL_LINE_H, LABEL_PITCH, MenuButtonOptions, big, big_toggle, enabled,
-    label_line, menu_button, menu_enabled, small, split,
+    BIG_ICON_Y, BIG_LABEL_Y, ButtonAction, CONTENT_H, DROPDOWN, LABEL_H, LABEL_LINE_H, LABEL_PITCH, MenuButtonOptions, big, big_split, big_toggle,
+    enabled, label_line, menu_button, menu_enabled, small, split,
 };
 pub(crate) use buttons::{bg, run_from_ribbon};
 pub(crate) use combo::swatch;

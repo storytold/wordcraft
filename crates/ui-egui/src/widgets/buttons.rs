@@ -282,3 +282,59 @@ pub fn menu_button(ui: &mut Ui, app: &mut WordApp, options: MenuButtonOptions<'_
         menu(ui, app);
     });
 }
+
+/// A large split button: the icon half runs the action's command and is named `tip`; the label
+/// half, with the drop-down marker, opens a menu filled by `menu` and is named "{label} options",
+/// as [`split`]'s arrow is.
+pub fn big_split(
+    ui: &mut Ui,
+    app: &mut WordApp,
+    icon: &str,
+    label: &str,
+    tip: &str,
+    action: ButtonAction<'_>,
+    menu: impl FnOnce(&mut Ui, &mut WordApp),
+) {
+    let ButtonAction { id, params, checked } = action;
+    let (label, tip) = (tl!(label), tl!(tip));
+    let t = Tokens::get(ui.ctx());
+    let galley_w =
+        label.split('\n').map(|l| ui.ctx().fonts_mut(|f| f.layout_no_wrap(l.to_string(), regular(11.5), t.text).size().x)).fold(0.0, f32::max);
+    let w = (galley_w + 22.0).max(44.0);
+    let (r, _) = ui.allocate_exact_size(vec2(w, CONTENT_H), Sense::hover());
+    let mid = r.min.y + BIG_LABEL_Y - 2.0;
+    let top = Rect::from_min_max(r.min, pos2(r.max.x, mid));
+    let bottom = Rect::from_min_max(pos2(r.min.x, mid), r.max);
+    let resp = ui.interact(top, ui.scope_id().with(("big_split", id)), Sense::click());
+    let aresp = ui.interact(bottom, ui.scope_id().with(("big_split_menu", id)), Sense::click());
+    keytip_badge(ui, r, id, tip);
+    let on = enabled(app, id);
+    bg(ui, top, &resp, checked, &t);
+    bg(ui, bottom, &aresp, false, &t);
+    let (c, a, text) = if on { (t.icon, t.accent, t.text) } else { (t.text_disabled, t.text_disabled, t.text_disabled) };
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(r.center().x, r.min.y + BIG_ICON_Y), vec2(32.0, 32.0)), icon, c, a);
+    let lines: Vec<&str> = label.split('\n').collect();
+    let mut y = r.min.y + BIG_LABEL_Y;
+    for (i, l) in lines.iter().enumerate() {
+        label_line(ui, r.center().x, y, l, regular(11.5), text, i + 1 == lines.len());
+        y += LABEL_PITCH;
+    }
+    let resp = tooltip(app, resp, tip, id);
+    command_menu(&resp, app, id);
+    if resp.clicked() && on {
+        run_from_ribbon(app, id, params);
+    }
+    let name = crate::i18n::fmt(tl!("{name} options"), &[("name", label.replace('\n', " ").as_str())]);
+    let reason = if on { None } else { Some(app.session.why_disabled(id).unwrap_or("")) };
+    let (title, notes) = tooltip_lines(&name, "", "", reason);
+    show_hint(&aresp, &title, &notes);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, tip));
+    aresp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, &name));
+    if !on {
+        return;
+    }
+    egui::Popup::menu(&aresp).show(|ui| {
+        ui.set_min_width(200.0);
+        menu(ui, app);
+    });
+}

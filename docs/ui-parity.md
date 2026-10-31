@@ -86,6 +86,7 @@ Labels → New Document with “One label per recipient” includes all filtered
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-25 | trivial | Review › Accept and Reject and Home › Paste are big split buttons: the icon half runs Accept and Move to Next, Reject and Move to Next (`review.accept` / `review.reject` `{"next": true}`) or Paste, and the label half opens the menu; the Accept and Reject KeyTips run the same actions |
 | 2026-10-28 | trivial | Aligned copies retain their locked document coordinate during middle-button scrolling and can start on secondary selected objects; existing Ctrl and Shift selection behavior stays (#4764) |
 | 2026-10-28 | trivial | Ctrl/Command+Shift drags a selected floating object into an axis-aligned copy (#4764); synthetic Linux interaction and persistence controls, native desktop and Word untested; gap/readiness estimates unchanged |
 | 2026-10-29 | trivial | Insert › Shapes lists the basic shapes as a grid of code-drawn icon tiles with accessible names and tooltips, as Word's gallery does, instead of a text list (#4349) |

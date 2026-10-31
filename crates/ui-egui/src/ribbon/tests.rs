@@ -173,6 +173,91 @@ fn menu_buttons_follow_their_command() {
     }
 }
 
+/// A document with two tracked insertions, "new " at the start and " end" at the end, and the
+/// caret on the first one.
+fn two_tracked_insertions() -> WordApp {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.view.proofing = false;
+    s.author = "Ana".into();
+    s.run("document.setText", &json!({"text": "one two three"})).unwrap();
+    s.run("review.trackChanges", &json!({"value": true})).unwrap();
+    s.run("caret.docStart", &json!({})).unwrap();
+    s.run("text.insert", &json!({"text": "new "})).unwrap();
+    s.run("caret.docEnd", &json!({})).unwrap();
+    s.run("text.insert", &json!({"text": " end"})).unwrap();
+    s.run("caret.docStart", &json!({})).unwrap();
+    WordApp::new(s, crate::Services::default())
+}
+
+fn tracked_changes(app: &mut WordApp) -> usize {
+    app.session.run("review.changes", &json!({})).unwrap().as_array().map_or(0, Vec::len)
+}
+
+/// Review › Accept and Reject are split buttons: the icon half runs Accept and Move to Next
+/// (Reject and Move to Next), and the label half opens the menu without resolving anything.
+#[test]
+fn accept_and_reject_buttons_move_to_the_next_change() {
+    use egui_kittest::kittest::Queryable;
+    for (verb, text) in [("Accept", "new one two three end"), ("Reject", "one two three end")] {
+        let mut app = two_tracked_insertions();
+        app.run("ui.tab", json!({"tab": "Review"})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(2560.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(3);
+        h.get_by_label(&format!("{verb} and Move to Next")).click();
+        h.run_steps(3);
+        assert_eq!(tracked_changes(h.state_mut()), 1, "{verb}: the first insertion is resolved");
+        let doc = &h.state().session.doc;
+        assert_eq!(doc.plain_text(wordcraft_doc::StoryRef::Body), text, "{verb}");
+        let (a, b) = h.state().session.sel.ordered();
+        let end = text.len();
+        assert_eq!((a.off, b.off), (end - 4, end), "{verb}: the insertion at the end is selected");
+
+        h.get_by_label(&format!("{verb} options")).click();
+        h.run_steps(3);
+        assert!(h.query_by_label_contains(&format!("{verb} All Changes and Stop Tracking")).is_some(), "{verb}: the menu opens");
+        assert_eq!(tracked_changes(h.state_mut()), 1, "{verb}: opening the menu resolves nothing");
+    }
+}
+
+/// Home › Paste is a split button: the icon half pastes, and the label half opens the paste
+/// options without pasting.
+#[test]
+fn paste_button_pastes_and_its_arrow_opens_the_options() {
+    use egui_kittest::kittest::Queryable;
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Copy me")), crate::Services::default());
+    app.run("select.text", json!({"text": "Copy"})).unwrap();
+    app.run("edit.copy", json!({})).unwrap();
+    app.run("caret.docEnd", json!({})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(2560.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    h.run_steps(3);
+    // The icon half is named "Paste"; its tooltip adds the platform's key.
+    h.get_by_label(tl!("Paste")).hover();
+    h.run_steps(60);
+    let key = if cfg!(target_os = "macos") { "⌘V" } else { "Ctrl+V" };
+    assert!(h.query_by_label(&format!("{} ({key})", tl!("Paste"))).is_some(), "the tooltip names {key}");
+    h.get_by_label(tl!("Paste")).click();
+    h.run_steps(3);
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Copy meCopy");
+    h.get_by_label(&crate::i18n::fmt(tl!("{name} options"), &[("name", tl!("Paste"))])).click();
+    h.run_steps(3);
+    assert!(h.query_by_label_contains("Keep Text Only").is_some(), "the menu opens");
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Copy meCopy", "opening the menu pastes nothing");
+}
+
 /// #4229: with a group selected the Group button stays on, so Ungroup in its menu can be
 /// reached; with nothing selected it is off, and with two objects it offers Group.
 #[test]

@@ -30,7 +30,8 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
     let st = app.session.run("format.state", &json!({})).unwrap_or_default();
     let flag = |k: &str| st.get(k).and_then(Value::as_bool).unwrap_or(false);
     group(ui, "Clipboard", Some("edit.clipboardPane"), app, |ui, app| {
-        menu_button(ui, app, crate::widgets::MenuButtonOptions::new("paste", Some("Paste"), "Paste (⌘V)", true, "edit.paste"), |ui, app| {
+        let action = crate::widgets::ButtonAction::new("edit.paste", json!({}), false);
+        crate::widgets::big_split(ui, app, "paste", "Paste", "Paste", action, |ui, app| {
             mi(ui, app, "Paste", "edit.paste", json!({}));
             mi(ui, app, "Keep Text Only", "edit.pasteText", json!({}));
             mi(ui, app, "Merge Formatting", "edit.pasteMerge", json!({}));

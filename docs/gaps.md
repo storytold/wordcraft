@@ -138,7 +138,6 @@ Small follow-ups from the 2026-10-25 field, table and AutoFormat batch (#4232):
 - PAGE with a section page-number format of cardinal or ordinal text (`w:pgNumType`) shows the words in lowercase; only a `\* CardText` or `\* OrdText` switch should lowercase them (#4224).
 - A number outside a text format's range (`\* CardText` or `\* OrdText` past 999,999, `\* roman` past 50,000) keeps its digits; Word shows "Error! Number cannot be represented in specified format." (#4224).
 - AutoFormat's `*bold*` and `_italic_` don't convert when a closing bracket or quote follows the closing mark (`(*see note*)`): the trigger checks only space and `,.;:!?` (#4098).
-- The ribbon's Accept and Reject buttons only open their menus; Word's main half runs Accept (Reject) and Move to Next. The ribbon needs a big split button (Paste needs one too) (#4205).
 
 Recipient label generation (#4880) now includes all selected recipients across as many sheets as needed, retaining filtered/sorted order and the chosen product geometry. This fixes the one-sheet omission; Update Labels and Finish & Merge template behavior remain separate, and gap 21 remains open. Readiness estimates are unchanged.
 
@@ -152,6 +151,7 @@ Recipient label generation (#4880) now includes all selected recipients across a
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-25 | trivial | The ribbon's Accept, Reject and Paste are big split buttons: the icon half runs Accept and Move to Next, Reject and Move to Next or Paste, and the label half opens the menu (#4205 follow-up) |
 | 2026-10-28 | trivial | Aligned copies retain their locked document coordinate during middle-button scrolling and can start on secondary selected objects; existing Ctrl and Shift selection behavior stays (#4764) |
 | 2026-10-28 | trivial | Ctrl/Command+Shift drags a selected floating object into an axis-aligned copy (#4764); synthetic Linux interaction and persistence controls, native desktop and Word untested; gap/readiness estimates unchanged |
 | 2026-10-28 | trivial | Connector object lookups retain the typed column-selection inputs on current main (#3631); readiness estimates unchanged |
