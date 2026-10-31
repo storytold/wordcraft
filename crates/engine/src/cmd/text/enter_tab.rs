@@ -2,7 +2,7 @@ use super::autoformat::{
     EnterAutoFormat, apply_border_line, apply_heading_line, apply_table_line, border_line, heading_line, table_line, typing_options,
 };
 use super::unicode::ins_char;
-use super::{CmdError, CmdResult, NumRef, Pos, Selection, Session, Value, delete_selection, sel_result, split_para, type_text};
+use super::{CmdError, CmdResult, NumRef, Path, Pos, Selection, Session, StoryRef, Value, delete_selection, sel_result, split_para, type_text};
 
 /// Exact sample-text formulas; bounded counts keep typed input from allocating without limit.
 fn sample_text(s: &Session) -> Option<String> {
@@ -186,17 +186,7 @@ pub(super) fn tab(s: &mut Session, _: &Value) -> CmdResult {
             let t = s.doc.table_mut(story, &tpath)?;
             t.insert_row(nr, r);
         }
-        let mut path = tpath.0.clone();
-        path.extend([nr as u32, nc as u32, 0]);
-        let start = Pos { story, path: wordcraft_doc::Path(path), off: 0 };
-        // Select the cell's content like Word.
-        let end_path = s.doc.para_paths(story).into_iter().rfind(|q| q.0.starts_with(&start.path.0[..start.path.0.len() - 1]));
-        let end = end_path.map(|q| {
-            let off = s.doc.para(story, &q).map(|x| x.len()).unwrap_or(0);
-            Pos { story, path: q, off }
-        });
-        s.sel = Selection { anchor: start.clone(), focus: end.unwrap_or(start) };
-        return sel_result(s);
+        return select_cell(s, story, &tpath, nr, nc);
     }
     let f = s.sel.focus.clone();
     if s.sel.is_collapsed()
@@ -269,6 +259,8 @@ fn indent_by_tab(s: &mut Session, f: &Pos) -> CmdResult {
     crate::cmd::para::indent(s, &Value::Null)
 }
 
+/// In a table: previous cell, its content selected as Tab does (the first cell stays). At the start
+/// of a list item: promote. Else outdent.
 pub(super) fn back_tab(s: &mut Session, _: &Value) -> CmdResult {
     if let Some((tpath, r, c)) = s.sel.focus.path.cell() {
         let story = s.sel.focus.story;
@@ -279,10 +271,7 @@ pub(super) fn back_tab(s: &mut Session, _: &Value) -> CmdResult {
         } else {
             return sel_result(s);
         };
-        let mut path = tpath.0.clone();
-        path.extend([nr as u32, nc as u32, 0]);
-        s.sel = Selection::caret(Pos { story, path: wordcraft_doc::Path(path), off: 0 });
-        return sel_result(s);
+        return select_cell(s, story, &tpath, nr, nc);
     }
     let f = s.sel.focus.clone();
     if let Some(n) = s.doc.para_at(&f).and_then(|x| x.props.numbering).filter(|n| n.num != 0) {
@@ -292,4 +281,17 @@ pub(super) fn back_tab(s: &mut Session, _: &Value) -> CmdResult {
         return sel_result(s);
     }
     crate::cmd::para::outdent(s, &Value::Null)
+}
+
+/// Tab and Shift+Tab land in a cell with its content selected, like Word. The selection runs from
+/// the cell's first paragraph to its last, so it stays in the cell when that starts with a table.
+fn select_cell(s: &mut Session, story: StoryRef, table: &Path, r: usize, c: usize) -> CmdResult {
+    let mut cell = table.0.clone();
+    cell.extend([r as u32, c as u32]);
+    let mut paras = s.doc.para_paths(story).into_iter().filter(|q| q.0.starts_with(&cell));
+    let Some(first) = paras.next() else { return sel_result(s) };
+    let last = paras.next_back().unwrap_or_else(|| first.clone());
+    let off = s.doc.para(story, &last).map(|x| x.len()).unwrap_or(0);
+    s.sel = Selection { anchor: Pos { story, path: first, off: 0 }, focus: Pos { story, path: last, off } };
+    sel_result(s)
 }
