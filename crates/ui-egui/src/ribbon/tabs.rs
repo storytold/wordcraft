@@ -143,6 +143,58 @@ pub fn resolve_tab<'a>(current: &'a str, available: &[&str]) -> &'a str {
 /// Width of the » button that holds the tabs the strip has no room for.
 pub(super) const MORE_TABS_W: f32 = 24.0;
 
+/// How long a contextual tab takes to settle into place after it appears, seconds.
+pub(super) const TAB_ENTRY_SECS: f64 = 0.35;
+/// How far, in points, a new contextual tab starts to the left of its place.
+pub(super) const TAB_ENTRY_SLIDE: f32 = 18.0;
+
+/// Fast at first, then slowing to rest: 0 → 1.
+pub(super) fn ease_out_cubic(p: f32) -> f32 {
+    1.0 - (1.0 - p.clamp(0.0, 1.0)).powi(3)
+}
+
+/// Track contextual tabs between frames and return those still animating out.
+pub(super) fn note_contextual_tabs(ctx: &egui::Context, shown: &[(&str, usize)], now: f64, animate: bool) -> Vec<(String, usize, f64)> {
+    let (shown_id, leaving_id) = (egui::Id::unique("contextual_tabs_shown"), egui::Id::unique("contextual_tabs_leaving"));
+    let prev: Option<Vec<(String, usize)>> = ctx.data(|d| d.get_temp(shown_id));
+    let mut leaving: Vec<(String, usize, f64)> = ctx.data(|d| d.get_temp(leaving_id)).unwrap_or_default();
+    leaving.retain(|(n, _, start)| animate && now - start < TAB_ENTRY_SECS && !shown.iter().any(|(s, _)| s == n));
+    // Count retained ghosts when storing positions, so exits from different frames share one layout.
+    let shown_with_ghosts: Vec<(&str, usize)> = shown
+        .iter()
+        .map(|(tab, at)| {
+            let before = leaving.iter().filter(|(_, ghost_at, _)| ghost_at <= at).count();
+            (*tab, at + before)
+        })
+        .collect();
+    if let Some(prev) = prev {
+        for (tab, _) in shown_with_ghosts.iter().filter(|(t, _)| !prev.iter().any(|(p, _)| p == t)) {
+            ctx.data_mut(|d| d.insert_temp(egui::Id::unique(("contextual_tab_entry", *tab)), now));
+        }
+        for (tab, at) in prev.iter().filter(|(p, _)| animate && !shown_with_ghosts.iter().any(|(s, _)| s == p)) {
+            if !leaving.iter().any(|(n, _, _)| n == tab) {
+                leaving.push((tab.clone(), *at, now));
+            }
+        }
+    }
+    ctx.data_mut(|d| {
+        d.insert_temp(shown_id, shown_with_ghosts.iter().map(|(t, at)| (t.to_string(), *at)).collect::<Vec<_>>());
+        d.insert_temp(leaving_id, leaving.clone());
+    });
+    leaving
+}
+
+/// Return a newly shown contextual tab's progress, requesting frames until it settles.
+pub(super) fn tab_entry(ctx: &egui::Context, tab: &str, now: f64, animate: bool) -> f32 {
+    let start: Option<f64> = ctx.data(|d| d.get_temp(egui::Id::unique(("contextual_tab_entry", tab))));
+    let Some(start) = start.filter(|_| animate) else { return 1.0 };
+    let p = ((now - start) / TAB_ENTRY_SECS).clamp(0.0, 1.0) as f32;
+    if p < 1.0 {
+        ctx.request_repaint();
+    }
+    ease_out_cubic(p)
+}
+
 /// Which tabs fit on a strip `avail` points wide (#897), from each tab's width and whether it must
 /// stay. The others give way from the end, leaving `more` points for the » menu that holds them
 /// (pure, tested).
@@ -249,4 +301,44 @@ pub fn plan_strip(tabs: &[TabSpec], buttons: [f32; 3], avail: f32, more: f32) ->
 /// Whether the caret is inside a table (so the contextual tabs and their badges are shown).
 pub fn in_table_public(app: &WordApp) -> bool {
     app.session.sel.focus.path.cell().is_some()
+}
+
+#[cfg(test)]
+mod transition_tests {
+    use super::*;
+
+    /// Contextual tabs absent on the first frame do not animate; a newly shown one eases to rest.
+    #[test]
+    fn a_new_contextual_tab_eases_in() {
+        let ctx = egui::Context::default();
+        note_contextual_tabs(&ctx, &[("Table Design", 1)], 1.0, true);
+        assert_eq!(tab_entry(&ctx, "Table Design", 1.0, true), 1.0, "tabs already there do not slide");
+        note_contextual_tabs(&ctx, &[("Table Design", 1), ("Picture Format", 2)], 2.0, true);
+        let at = |secs: f64| tab_entry(&ctx, "Picture Format", 2.0 + secs, true);
+        assert_eq!(at(0.0), 0.0);
+        let (a, b, c) = (at(0.1), at(0.2), at(TAB_ENTRY_SECS));
+        assert!(0.0 < a && a < b && b < c && c == 1.0, "{a} {b} {c}");
+        assert!(a > 0.1 / TAB_ENTRY_SECS as f32, "faster than linear at the start: {a}");
+        assert!(c - b < b - a, "slower at the end: {a} {b} {c}");
+        assert_eq!(tab_entry(&ctx, "Picture Format", 2.0, false), 1.0, "animations off");
+        note_contextual_tabs(&ctx, &[("Table Design", 1), ("Picture Format", 2)], 3.0, true);
+        assert_eq!(tab_entry(&ctx, "Picture Format", 3.0, true), 1.0, "staying shown does not restart it");
+    }
+
+    /// A departing contextual tab remains for one exit and stops when motion is disabled.
+    #[test]
+    fn a_contextual_tab_that_goes_away_leaves_gently() {
+        let ctx = egui::Context::default();
+        let both = [("Table Design", 1), ("Picture Format", 2)];
+        assert!(note_contextual_tabs(&ctx, &both, 1.0, true).is_empty());
+        let leaving = note_contextual_tabs(&ctx, &both[..1], 2.0, true);
+        assert_eq!(leaving, vec![("Picture Format".to_string(), 2, 2.0)]);
+        assert_eq!(note_contextual_tabs(&ctx, &both[..1], 2.2, true).len(), 1, "still leaving");
+        assert!(note_contextual_tabs(&ctx, &both[..1], 2.0 + TAB_ENTRY_SECS + 0.01, true).is_empty(), "gone");
+        assert!(note_contextual_tabs(&ctx, &both, 4.0, true).is_empty());
+        assert!(note_contextual_tabs(&ctx, &both[..1], 5.0, false).is_empty(), "animations off");
+        note_contextual_tabs(&ctx, &both, 6.0, true);
+        note_contextual_tabs(&ctx, &both[..1], 7.0, true);
+        assert!(note_contextual_tabs(&ctx, &both, 7.1, true).is_empty(), "back again");
+    }
 }

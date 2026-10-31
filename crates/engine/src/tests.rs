@@ -9200,6 +9200,47 @@ fn smart_art_edits_undo_one_step_each() {
     run(&mut s, "picture.size", json!({"width": 200, "height": 120, "lockAspect": false}));
 }
 
+/// An item's own colour survives item edits and layout changes, and a style colour drops it.
+#[test]
+fn smart_art_item_colors_stay_until_a_style_is_picked() {
+    let mut s = s();
+    run(&mut s, "insert.smartArt", json!({"layout": "process"}));
+    let colors = |s: &Session| cmd::smart_art::selected_smart_art(s).unwrap().items.iter().map(|i| i.color.map(|c| c.hex())).collect::<Vec<_>>();
+    assert!(!cmd::smart_art::selected_smart_art(&s).unwrap().has_custom_colors());
+    run(&mut s, "smartArt.itemColor", json!({"index": 1, "color": "FF8800"}));
+    assert_eq!(colors(&s), [None, Some("FF8800".to_string()), None, None]);
+    run(&mut s, "smartArt.items", json!({"items": [{"text": "A"}, {"text": "B", "color": "#ff8800"}]}));
+    run(&mut s, "smartArt.layout", json!({"layout": "cycle"}));
+    run(&mut s, "smartArt.addShape", json!({"after": 0}));
+    assert_eq!(colors(&s), [None, None, Some("FF8800".to_string())]);
+    assert!(s.run("smartArt.itemColor", &json!({"index": 0, "color": "nope"})).is_err());
+    run(&mut s, "smartArt.itemColor", json!({"index": 2}));
+    assert!(!cmd::smart_art::selected_smart_art(&s).unwrap().has_custom_colors());
+    run(&mut s, "smartArt.itemColor", json!({"index": 0, "color": "00FF00"}));
+    run(&mut s, "smartArt.colors", json!({"variant": "accent2"}));
+    assert!(!cmd::smart_art::selected_smart_art(&s).unwrap().has_custom_colors());
+    run(&mut s, "edit.undo", json!({}));
+    assert!(cmd::smart_art::selected_smart_art(&s).unwrap().has_custom_colors(), "undo brings the colours back");
+}
+
+/// A malformed colour must not silently replace a coloured item with its style colour.
+#[test]
+fn smart_art_item_colors_reject_invalid_values_without_changing_the_graphic() {
+    let mut s = s();
+    run(&mut s, "insert.smartArt", json!({"items": [{"text": "Keep", "color": "123456"}]}));
+    let before = cmd::smart_art::selected_smart_art(&s).unwrap();
+    for command in ["insert.smartArt", "smartArt.items"] {
+        for color in [json!("nope"), json!(42), json!(true), json!([]), json!({})] {
+            assert!(s.run(command, &json!({"items": [{"text": "Replace", "color": color}]})).is_err(), "{command}: {color}");
+            assert_eq!(cmd::smart_art::selected_smart_art(&s).unwrap(), before);
+        }
+        run(&mut s, command, json!({"items": [{"text": "Default", "color": null}, {"text": "Omitted"}]}));
+        assert!(!cmd::smart_art::selected_smart_art(&s).unwrap().has_custom_colors());
+        run(&mut s, "edit.undo", json!({}));
+        assert_eq!(cmd::smart_art::selected_smart_art(&s).unwrap(), before);
+    }
+}
+
 /// #497: hostile SmartArt params are capped or refused, never a panic.
 #[test]
 fn smart_art_hostile_params_are_capped() {
@@ -9221,6 +9262,7 @@ fn smart_art_hostile_params_are_capped() {
         "smartArt.demote",
         "smartArt.layout",
         "smartArt.colors",
+        "smartArt.itemColor",
         "smartArt.reset",
         "smartArt.textPane",
     ] {

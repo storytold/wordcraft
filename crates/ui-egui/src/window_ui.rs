@@ -246,6 +246,9 @@ impl WordApp {
         let UiState {
             // App-wide: preferences, recent lists, and the settings the session owns while
             // running.
+            date_time_format: _,
+            date_time_language: _,
+            date_time_update: _,
             ribbon_collapsed: _,
             quick_access_toolbar: _,
             recent: _,
