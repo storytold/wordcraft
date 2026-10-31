@@ -1,4 +1,4 @@
-use super::select::{edit_float, min_size, movable_story, obj_size, select_object, selected, with_obj};
+use super::select::{FROZEN, edit_float, min_size, movable_story, obj_size, picked_objects, select_object, selected, with_float, with_obj};
 use super::{CmdError, CmdResult, Float, InlineObject, Pos, Selection, Session, StoryRef, Value, Wrap, json, p};
 
 /// Largest object offset or move, points.
@@ -206,27 +206,213 @@ fn move_object_once(s: &mut Session, pos: &Pos, page: usize, x: f32, y: f32, (w,
 /// Turn the selected floating object's alignment (left, centred, …) into an offset from its
 /// column / paragraph that keeps it where it is, so it can be moved by an offset.
 pub(super) fn unalign(s: &mut Session) -> Result<(), CmdError> {
+    let (pos, _) = selected(s).ok_or_else(|| CmdError::Disabled("no picture or shape selected".into()))?;
+    unalign_at(s, &pos, (true, true))
+}
+
+/// [`unalign`] for the object at `pos`, on the axes asked for (across, down).
+fn unalign_at(s: &mut Session, pos: &Pos, (across, down): (bool, bool)) -> Result<(), CmdError> {
     use wordcraft_doc::para::Anchor;
-    let (pos, obj) = selected(s).ok_or_else(|| CmdError::Disabled("no picture or shape selected".into()))?;
+    let pos = pos.clone();
+    let obj = s.doc.para_at(&pos).and_then(|p| p.object_at(pos.off)).cloned().ok_or_else(|| CmdError::Failed("object vanished".into()))?;
     let Some((_, _, float)) = obj.frame() else { return Ok(()) };
-    if float.h_align.is_none() && float.v_align.is_none() {
+    if !(across && float.h_align.is_some() || down && float.v_align.is_some()) {
         return Ok(());
     }
     let hit = s.layout().object(&pos, s.page_hint).ok_or_else(|| CmdError::Failed("the object isn't laid out".into()))?;
     let (ox, oy) = (hit.rect.x - hit.origin.x, hit.rect.y - hit.origin.y);
     edit_float(s, &pos, |f| {
-        if f.h_align.is_some() {
+        if across && f.h_align.is_some() {
             f.h_align = None;
             f.h_rel = Anchor::Column;
             f.x = ox.clamp(-MAX_OFFSET, MAX_OFFSET);
         }
-        if f.v_align.is_some() {
+        if down && f.v_align.is_some() {
             f.v_align = None;
             f.v_rel = Anchor::Paragraph;
             f.y = oy.clamp(-MAX_OFFSET, MAX_OFFSET);
         }
     })?;
     Ok(())
+}
+
+/// One axis of the Layout dialog's Position tab: what it is relative to, and an alignment or an
+/// offset (points).
+type AxisPosition = (wordcraft_doc::para::Anchor, Option<wordcraft_doc::para::FloatAlign>, f32);
+
+/// The `horizontal` (`across`) or `vertical` part of `arrange.positionOptions`; None if left out.
+fn axis_position(v: &Value, across: bool) -> Result<Option<AxisPosition>, CmdError> {
+    use wordcraft_doc::para::{Anchor, FloatAlign};
+    let (key, off) = if across { ("horizontal", "x") } else { ("vertical", "y") };
+    let Some(a) = v.get(key).filter(|a| !a.is_null()) else { return Ok(None) };
+    if !a.is_object() {
+        return Err(CmdError::Params(format!("`{key}` must be an object")));
+    }
+    let rel = p::str(a, "relativeTo").unwrap_or("margin");
+    let anchor = match (rel, across) {
+        ("margin", _) => Anchor::Margin,
+        ("page", _) => Anchor::Page,
+        ("insideMargin", _) => Anchor::InsideMargin,
+        ("outsideMargin", _) => Anchor::OutsideMargin,
+        ("column", true) => Anchor::Column,
+        ("leftMargin", true) => Anchor::LeftMargin,
+        ("rightMargin", true) => Anchor::RightMargin,
+        ("paragraph", false) => Anchor::Paragraph,
+        ("topMargin", false) => Anchor::TopMargin,
+        ("bottomMargin", false) => Anchor::BottomMargin,
+        _ => return Err(CmdError::Params(format!("`{key}.relativeTo` can't be `{rel}`"))),
+    };
+    match (a.get("align"), a.get(off)) {
+        (Some(_), Some(_)) => Err(CmdError::Params(format!("`{key}`: `align` or `{off}`, not both"))),
+        (Some(al), None) => {
+            let align = match (al.as_str().unwrap_or(""), across) {
+                ("left", true) | ("top", false) => FloatAlign::Start,
+                ("center", _) => FloatAlign::Center,
+                ("right", true) | ("bottom", false) => FloatAlign::End,
+                ("inside", _) => FloatAlign::Inside,
+                ("outside", _) => FloatAlign::Outside,
+                _ => return Err(CmdError::Params(format!("bad `{key}.align`"))),
+            };
+            // A paragraph has no height to align in.
+            if anchor == Anchor::Paragraph {
+                return Err(CmdError::Params("an object can't be aligned relative to its paragraph; give `y`".into()));
+            }
+            Ok(Some((anchor, Some(align), 0.0)))
+        }
+        (None, Some(_)) => {
+            let at = p::f32(a, off).ok_or_else(|| CmdError::Params(format!("`{key}.{off}` must be a number")))?;
+            Ok(Some((anchor, None, at.clamp(-MAX_OFFSET, MAX_OFFSET))))
+        }
+        (None, None) => Err(CmdError::Params(format!("`{key}` needs `align` or `{off}`"))),
+    }
+}
+
+/// Layout dialog › Position: each axis given gets its alignment or offset and what it is relative
+/// to, in one undo step.
+pub(super) fn position_options(s: &mut Session, v: &Value) -> CmdResult {
+    let (across, down) = (axis_position(v, true)?, axis_position(v, false)?);
+    if across.is_none() && down.is_none() {
+        return Err(CmdError::Params("`horizontal` or `vertical` is required".into()));
+    }
+    with_float(s, |f| {
+        if f.wrap == Wrap::Inline {
+            f.wrap = Wrap::Square;
+        }
+        if let Some((rel, align, x)) = across {
+            (f.h_rel, f.h_align, f.x) = (rel, align, x);
+        }
+        if let Some((rel, align, y)) = down {
+            (f.v_rel, f.v_align, f.y) = (rel, align, y);
+        }
+    })
+}
+
+/// Where `size` starts in `(start, extent)` for an Align value: the start, the middle or the end.
+fn align_start((start, extent): (f32, f32), size: f32, how: &str) -> f32 {
+    match how {
+        "left" | "top" => start,
+        "right" | "bottom" => start + extent - size,
+        _ => start + (extent - size) / 2.0,
+    }
+}
+
+/// Arrange › Align: line the selected objects up with the margin, the page or (two or more
+/// selected) each other, or space them evenly across it. One object against the margin or page
+/// is positioned relative to it, so it stays there; objects against each other keep their anchors
+/// and move by an offset.
+pub(super) fn align(s: &mut Session, v: &Value) -> CmdResult {
+    use wordcraft_doc::para::Anchor;
+    let how = p::str(v, "value").unwrap_or("center").to_string();
+    let across = match how.as_str() {
+        "left" | "center" | "right" | "distributeHorizontally" => true,
+        "top" | "middle" | "bottom" | "distributeVertically" => false,
+        _ => return Err(CmdError::Params("bad `value`".into())),
+    };
+    let picked = picked_objects(s);
+    let to = p::str(v, "to").unwrap_or(if picked.len() >= 2 { "selected" } else { "margin" });
+    if !matches!(to, "margin" | "page" | "selected") {
+        return Err(CmdError::Params("`to` is margin, page or selected".into()));
+    }
+    let sect = crate::cmd::page::sect(s);
+    let area = |page: bool| match (across, page) {
+        (true, false) => (sect.margin_left, sect.text_width()),
+        (true, true) => (0.0, sect.page_w),
+        (false, false) => (sect.margin_top, sect.text_height()),
+        (false, true) => (0.0, sect.page_h),
+    };
+    if picked.len() < 2 {
+        if to == "selected" {
+            return Err(CmdError::Params("select two or more objects (Shift+click) to align them with each other".into()));
+        }
+        let size = selected(s).map(|(_, o)| obj_size(&o)).unwrap_or((72.0, 72.0));
+        let size = if across { size.0 } else { size.1 };
+        let rel = if to == "page" { Anchor::Page } else { Anchor::Margin };
+        // Offsets count from the anchor area's start; one object distributes to the middle.
+        let at = align_start((0.0, area(to == "page").1), size, &how).clamp(-MAX_OFFSET, MAX_OFFSET);
+        return with_float(s, |f| {
+            if f.wrap == Wrap::Inline {
+                f.wrap = Wrap::Square;
+            }
+            if across {
+                (f.h_rel, f.h_align, f.x) = (rel, None, at);
+            } else {
+                (f.v_rel, f.v_align, f.y) = (rel, None, at);
+            }
+        });
+    }
+    // Several objects: each one's frame on the page, as laid out now.
+    let mut frames = Vec::with_capacity(picked.len());
+    for pos in &picked {
+        let obj = s.doc.para_at(pos).and_then(|p| p.object_at(pos.off)).cloned();
+        match obj {
+            Some(InlineObject::Graphic { .. }) => return Err(CmdError::Disabled(FROZEN.into())),
+            Some(o) if o.is_floating() => {}
+            _ => return Err(CmdError::Disabled("objects In Line with Text can't be aligned with others".into())),
+        }
+        let hit = s.layout().object(pos, s.page_hint).ok_or_else(|| CmdError::Failed("an object isn't laid out".into()))?;
+        let (start, size) = if across { (hit.rect.x, hit.rect.w) } else { (hit.rect.y, hit.rect.h) };
+        frames.push((pos.clone(), start, size));
+    }
+    let (start, extent) = if to == "selected" {
+        let lo = frames.iter().map(|f| f.1).fold(f32::INFINITY, f32::min);
+        let hi = frames.iter().map(|f| f.1 + f.2).fold(f32::NEG_INFINITY, f32::max);
+        (lo, hi - lo)
+    } else {
+        area(to == "page")
+    };
+    // Where each frame starts: aligned, or one after another with equal gaps from start to end.
+    let mut targets: Vec<(Pos, f32)> = Vec::with_capacity(frames.len());
+    if how.starts_with("distribute") {
+        frames.sort_by(|a, b| a.1.total_cmp(&b.1));
+        let total: f32 = frames.iter().map(|f| f.2).sum();
+        let gaps = frames.len().saturating_sub(1).max(1) as f32;
+        let gap = (extent - total) / gaps;
+        let mut at = start;
+        for (pos, _, size) in &frames {
+            targets.push((pos.clone(), at));
+            at += size + gap;
+        }
+    } else {
+        targets.extend(frames.iter().map(|(pos, _, size)| (pos.clone(), align_start((start, extent), *size, &how))));
+    }
+    // One at a time in document order: moving one can reflow the text a later one follows.
+    targets.sort_by(|a, b| a.0.cmp(&b.0));
+    for (pos, target) in targets {
+        // Only the axis that moves; an alignment on the other one stays.
+        unalign_at(s, &pos, (across, !across))?;
+        let hit = s.layout().object(&pos, s.page_hint).ok_or_else(|| CmdError::Failed("an object isn't laid out".into()))?;
+        let d = target - if across { hit.rect.x } else { hit.rect.y };
+        edit_float(s, &pos, |f| {
+            if across {
+                f.x = (f.x + d).clamp(-MAX_OFFSET, MAX_OFFSET);
+            } else {
+                f.y = (f.y + d).clamp(-MAX_OFFSET, MAX_OFFSET);
+            }
+        })?;
+        s.touch(); // lay out again before the next object reads its frame
+    }
+    let objects: Vec<Value> = picked.iter().map(crate::cmd::pos_json).collect();
+    Ok(json!({"aligned": objects}))
 }
 
 /// Whether a floating object moves with its text (Word's "Move with Text"): its vertical position

@@ -1,4 +1,4 @@
-use super::arrange::{align_menu, rotate_menu, rotation_field, wrap_menu};
+use super::arrange::{align_menu, position_menu, rotate_menu, rotation_field, wrap_menu};
 use super::common::{mi, stack};
 use super::language::mi_check;
 use super::{Target, Ui, WordApp, big, group, json, menu_button, small, vec2};
@@ -124,7 +124,7 @@ pub(super) fn shape_format(app: &mut WordApp, ui: &mut Ui) {
     });
     shape_text_group(app, ui);
     group(ui, "Arrange", None, app, |ui, app| {
-        big(ui, app, "position", "Position", "arrange.position", json!({}), false);
+        position_menu(ui, app);
         wrap_menu(ui, app);
         stack(ui, |ui| {
             rotate_menu(ui, app, Some("Rotate"));

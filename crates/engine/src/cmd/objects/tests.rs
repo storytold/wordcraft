@@ -585,6 +585,219 @@ fn near(a: [f32; 4], b: [f32; 4]) -> bool {
     a.iter().zip(b).all(|(x, y)| (x - y).abs() < 0.5)
 }
 
+/// Position's nine presets are Word's "with Square Text Wrapping" ones: an object behind or in
+/// front of the text becomes Square too, while a move by x/y keeps its wrapping.
+#[test]
+fn position_presets_wrap_square() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("one\ntwo"));
+    s.run("insert.shape", &json!({"kind": "rectangle", "width": 100, "height": 50})).unwrap();
+    let wrap = |s: &Session| selected(s).unwrap().1.frame().unwrap().2.wrap;
+    s.run("arrange.wrap", &json!({"wrap": "behindText"})).unwrap();
+    s.run("arrange.position", &json!({"x": 10, "y": 20})).unwrap();
+    assert_eq!(wrap(&s), Wrap::BehindText, "a move by x/y keeps the wrapping");
+    s.run("arrange.position", &json!({"preset": "topLeft"})).unwrap();
+    assert_eq!(wrap(&s), Wrap::Square, "Position in Top Left with Square Text Wrapping");
+}
+
+/// Layout dialog › Position: an exact offset or an alignment per axis, relative to the page,
+/// the margin or the text; bad combinations are refused and each change is one undo step.
+#[test]
+fn position_options_place_by_offset_or_alignment() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("document.setText", &json!({"text": "one\ntwo\nthree"})).unwrap();
+    s.sel = Selection::caret(s.doc.start_of(StoryRef::Body));
+    s.run("insert.shape", &json!({"kind": "rectangle", "width": 100, "height": 50})).unwrap();
+    let sect = super::super::page::sect(&s);
+    let pos = selected(&s).unwrap().0;
+    let at = |x: f32, y: f32| json!({"horizontal": {"x": x, "relativeTo": "page"}, "vertical": {"y": y, "relativeTo": "page"}});
+    s.run("arrange.positionOptions", &at(72.0, 144.0)).unwrap();
+    assert!(near(rect_of(&mut s, &pos), [72.0, 144.0, 100.0, 50.0]), "{:?}", rect_of(&mut s, &pos));
+    // Centred on the page across, at the margin's bottom down.
+    let both = json!({"horizontal": {"align": "center", "relativeTo": "page"}, "vertical": {"align": "bottom"}});
+    s.run("arrange.positionOptions", &both).unwrap();
+    let bottom = sect.margin_top + sect.text_height() - 50.0;
+    assert!(near(rect_of(&mut s, &pos), [(sect.page_w - 100.0) / 2.0, bottom, 100.0, 50.0]), "{:?}", rect_of(&mut s, &pos));
+    let f = selected(&s).unwrap().1.frame().unwrap().2.clone();
+    assert_eq!(
+        (f.h_rel, f.h_align, f.v_rel),
+        (wordcraft_doc::para::Anchor::Page, Some(wordcraft_doc::para::FloatAlign::Center), wordcraft_doc::para::Anchor::Margin)
+    );
+    // One axis alone leaves the other where it is; the text's own anchors work too.
+    s.run("arrange.positionOptions", &json!({"vertical": {"y": 10, "relativeTo": "paragraph"}})).unwrap();
+    let r = rect_of(&mut s, &pos);
+    assert!((r[0] - (sect.page_w - 100.0) / 2.0).abs() < 0.5 && r[1] < bottom, "{r:?}");
+    // Undo is one step per command.
+    s.run("edit.undo", &json!({})).unwrap();
+    assert!(near(rect_of(&mut s, &pos), [(sect.page_w - 100.0) / 2.0, bottom, 100.0, 50.0]));
+    // A typed offset past the limit is held at it; nonsense is refused and changes nothing.
+    s.run("arrange.positionOptions", &json!({"horizontal": {"x": 1.0e9}})).unwrap();
+    assert_eq!(selected(&s).unwrap().1.frame().unwrap().2.x, MAX_OFFSET);
+    for bad in [
+        json!({}),
+        json!({"horizontal": 5}),
+        json!({"horizontal": {"relativeTo": "page"}}),
+        json!({"horizontal": {"align": "left", "x": 3}}),
+        json!({"horizontal": {"align": "top"}}),
+        json!({"horizontal": {"x": "far"}}),
+        json!({"horizontal": {"x": 3, "relativeTo": "paragraph"}}),
+        json!({"vertical": {"y": 3, "relativeTo": "column"}}),
+        json!({"vertical": {"align": "top", "relativeTo": "paragraph"}}),
+        json!({"vertical": {"y": 3, "relativeTo": "character"}}),
+    ] {
+        let before = selected(&s).unwrap().1;
+        assert!(s.run("arrange.positionOptions", &bad).is_err(), "{bad}");
+        assert_eq!(selected(&s).unwrap().1, before, "{bad}");
+    }
+}
+
+/// Align and Distribute: one object against the margin or page, several against each other.
+#[test]
+fn align_lines_objects_up_and_distributes_them() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("document.setText", &json!({"text": "one\ntwo\nthree\nfour\nfive"})).unwrap();
+    s.sel = Selection::caret(s.doc.start_of(StoryRef::Body));
+    let sect = super::super::page::sect(&s);
+    // One shape: against the page, then the margin.
+    s.run("insert.shape", &json!({"kind": "rectangle", "width": 100, "height": 50})).unwrap();
+    s.run("arrange.bounds", &json!({"page": 0, "x": 100, "y": 150})).unwrap();
+    let first = selected(&s).unwrap().0;
+    s.run("arrange.align", &json!({"value": "top", "to": "page"})).unwrap();
+    assert!(near(rect_of(&mut s, &first), [100.0, 0.0, 100.0, 50.0]), "{:?}", rect_of(&mut s, &first));
+    s.run("arrange.align", &json!({"value": "middle"})).unwrap();
+    let mid = sect.margin_top + (sect.text_height() - 50.0) / 2.0;
+    assert!(near(rect_of(&mut s, &first), [100.0, mid, 100.0, 50.0]), "{:?}", rect_of(&mut s, &first));
+    s.run("arrange.align", &json!({"value": "right", "to": "page"})).unwrap();
+    assert!(near(rect_of(&mut s, &first), [sect.page_w - 100.0, mid, 100.0, 50.0]));
+    assert!(s.run("arrange.align", &json!({"value": "left", "to": "selected"})).is_err(), "nothing to align with");
+    assert!(s.run("arrange.align", &json!({"value": "sideways"})).is_err());
+    assert!(s.run("arrange.align", &json!({"value": "left", "to": "window"})).is_err());
+    s.run("arrange.bounds", &json!({"page": 0, "x": 100, "y": 150})).unwrap();
+
+    // Three shapes, Shift+clicked together.
+    for (w, h, x, y) in [(60, 40, 300, 200), (80, 30, 200, 400)] {
+        s.run("select.collapse", &json!({"end": true})).unwrap();
+        s.run("insert.shape", &json!({"kind": "ellipse", "width": w, "height": h})).unwrap();
+        s.run("arrange.bounds", &json!({"page": 0, "x": x, "y": y})).unwrap();
+    }
+    let n = all_objects(&s).len();
+    assert_eq!(n, 3);
+    s.run("select.addObject", &json!({"objects": [0, 1]})).unwrap();
+    let picked = picked_objects(&s);
+    assert_eq!(picked.len(), 3);
+    let rects = |s: &mut Session| picked.iter().map(|p| rect_of(s, p)).collect::<Vec<_>>();
+    let start = rects(&mut s);
+    // Align keeps the objects selected, and so does its undo: Align, then Distribute.
+    let undo = |s: &mut Session| {
+        s.run("edit.undo", &json!({})).unwrap();
+        assert_eq!(picked_objects(s), picked);
+    };
+    s.run("arrange.align", &json!({"value": "left"})).unwrap();
+    assert!(rects(&mut s).iter().all(|r| (r[0] - 100.0).abs() < 0.5), "{:?}", rects(&mut s));
+    undo(&mut s);
+    assert_eq!(rects(&mut s), start, "one undo step");
+    s.run("arrange.align", &json!({"value": "bottom"})).unwrap();
+    assert!(rects(&mut s).iter().all(|r| (r[1] + r[3] - 430.0).abs() < 0.5), "{:?}", rects(&mut s));
+    undo(&mut s);
+    // Lefts 100, 200, 300 and widths 100, 80, 60 span 100–360: 10 pt between each.
+    s.run("arrange.align", &json!({"value": "distributeHorizontally"})).unwrap();
+    let mut xs: Vec<f32> = rects(&mut s).iter().map(|r| r[0]).collect();
+    xs.sort_by(f32::total_cmp);
+    assert!(xs.iter().zip([100.0, 210.0, 300.0]).all(|(a, b)| (a - b).abs() < 0.5), "{xs:?}");
+    // Against the page: each right edge on the page's.
+    s.run("arrange.align", &json!({"value": "right", "to": "page"})).unwrap();
+    assert!(rects(&mut s).iter().all(|r| (r[0] + r[2] - sect.page_w).abs() < 0.5), "{:?}", rects(&mut s));
+    // Spread down the margin: the first at its top, the last at its bottom.
+    s.run("arrange.align", &json!({"value": "distributeVertically", "to": "margin"})).unwrap();
+    let r = rects(&mut s);
+    let top = r.iter().map(|r| r[1]).fold(f32::INFINITY, f32::min);
+    let end = r.iter().map(|r| r[1] + r[3]).fold(0.0, f32::max);
+    assert!((top - sect.margin_top).abs() < 0.5 && (end - sect.margin_top - sect.text_height()).abs() < 0.5, "{r:?}");
+}
+
+/// An In Line with Text picture can't be lined up with floating shapes: Word greys Align out.
+#[test]
+fn align_refuses_inline_objects_among_several() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("document.setText", &json!({"text": "one\ntwo"})).unwrap();
+    s.sel = Selection::caret(s.doc.start_of(StoryRef::Body));
+    let data = super::super::insert::base64_encode(&png(20, 10));
+    s.run("insert.picture", &json!({"data": data})).unwrap();
+    s.run("select.collapse", &json!({"end": true})).unwrap();
+    s.run("insert.shape", &json!({"kind": "rectangle", "width": 50, "height": 50})).unwrap();
+    s.run("arrange.bounds", &json!({"page": 0, "x": 300, "y": 300})).unwrap();
+    s.run("select.addObject", &json!({"index": 0})).unwrap();
+    assert_eq!(picked_objects(&s).len(), 2);
+    let before: Vec<InlineObject> = all_objects(&s).into_iter().map(|(_, o)| o).collect();
+    assert!(s.run("arrange.align", &json!({"value": "left"})).is_err());
+    assert_eq!(all_objects(&s).into_iter().map(|(_, o)| o).collect::<Vec<_>>(), before, "nothing moved");
+}
+
+/// Moving the first shape pushes the text down, and the second shape moves with that text:
+/// it still lands on the line, whichever of the two was picked first.
+#[test]
+fn align_measures_each_object_after_the_last_one_moved() {
+    let follower = |s: &mut Session| {
+        s.run("select.text", &json!({"text": "four"})).unwrap();
+        s.run("select.collapse", &json!({"end": true})).unwrap();
+        s.run("insert.shape", &json!({"kind": "ellipse", "width": 60, "height": 40})).unwrap();
+        s.run("arrange.wrap", &json!({"wrap": "inFrontOfText"})).unwrap();
+        s.run("arrange.positionOptions", &json!({"horizontal": {"x": 300, "relativeTo": "page"}, "vertical": {"y": 200, "relativeTo": "paragraph"}}))
+            .unwrap();
+    };
+    let pusher = |s: &mut Session| {
+        s.sel = Selection::caret(s.doc.start_of(StoryRef::Body));
+        s.run("insert.shape", &json!({"kind": "rectangle", "width": 100, "height": 80})).unwrap();
+        s.run("arrange.wrap", &json!({"wrap": "topAndBottom"})).unwrap();
+        s.run("arrange.positionOptions", &json!({"horizontal": {"x": 100, "relativeTo": "page"}, "vertical": {"y": 500, "relativeTo": "page"}}))
+            .unwrap();
+    };
+    for follower_picked_first in [false, true] {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("document.setText", &json!({"text": "one\ntwo\nthree\nfour\nfive"})).unwrap();
+        let sect = super::super::page::sect(&s);
+        // The shape inserted last is the primary selection, picked first.
+        if follower_picked_first {
+            pusher(&mut s);
+            follower(&mut s);
+        } else {
+            follower(&mut s);
+            pusher(&mut s);
+        }
+        s.run("select.addObject", &json!({"index": if follower_picked_first { 0 } else { 1 }})).unwrap();
+        let picked = picked_objects(&s);
+        assert_eq!(picked.len(), 2);
+        s.run("arrange.align", &json!({"value": "top", "to": "margin"})).unwrap();
+        let tops: Vec<f32> = picked.iter().map(|p| rect_of(&mut s, p)[1]).collect();
+        assert!(tops.iter().all(|t| (t - sect.margin_top).abs() < 0.5), "follower picked first {follower_picked_first}: {tops:?}");
+    }
+}
+
+/// Aligning objects across leaves an alignment on the other axis alone: a shape aligned to the
+/// top margin is still aligned there after Align Left, so text changes can't move it down.
+#[test]
+fn align_across_keeps_a_vertical_alignment() {
+    use wordcraft_doc::para::{Anchor, FloatAlign};
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("document.setText", &json!({"text": "one\ntwo\nthree"})).unwrap();
+    for x in [100, 300] {
+        s.sel = Selection::caret(s.doc.start_of(StoryRef::Body));
+        s.run("insert.shape", &json!({"kind": "rectangle", "width": 60, "height": 40})).unwrap();
+        let at = json!({"horizontal": {"x": x, "relativeTo": "page"}, "vertical": {"align": "top", "relativeTo": "margin"}});
+        s.run("arrange.positionOptions", &at).unwrap();
+    }
+    s.run("select.addObject", &json!({"index": 1})).unwrap();
+    let picked = picked_objects(&s);
+    assert_eq!(picked.len(), 2);
+    s.run("arrange.align", &json!({"value": "left", "to": "selected"})).unwrap();
+    for pos in &picked {
+        let o = s.doc.para_at(pos).and_then(|p| p.object_at(pos.off)).cloned().unwrap();
+        let f = o.frame().unwrap().2.clone();
+        assert_eq!((f.v_rel, f.v_align), (Anchor::Margin, Some(FloatAlign::Start)), "still aligned to the top margin");
+    }
+    let lefts: Vec<f32> = picked.iter().map(|p| rect_of(&mut s, p)[0]).collect();
+    assert!((lefts[0] - lefts[1]).abs() < 0.5, "aligned left with each other: {lefts:?}");
+}
+
 /// Two floating shapes, Shift+clicked together and grouped: one object that moves as one with
 /// its members in place; ungrouping puts them back where the group showed them, still
 /// selected, so Group regroups them.
