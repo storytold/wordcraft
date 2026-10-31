@@ -465,6 +465,8 @@ fn migrate_units(v: &mut Value) {
 pub struct WordApp {
     pub session: Session,
     pub ui: UiState,
+    /// A collapsed ribbon temporarily opened by selecting a tab; never persisted.
+    ribbon_preview: bool,
     pub services: Services,
     pub printing: printing::State,
     print_feedback_seen: Option<printing::Feedback>,

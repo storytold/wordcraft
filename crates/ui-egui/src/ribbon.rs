@@ -73,8 +73,7 @@ pub use tabs::{
 use underline::{UNDERLINE_STYLES, underline_menu};
 use view::{outlining, view};
 
-/// Draws the Read toolbar or the full ribbon, switching to and from the contextual Equation and
-/// Outlining tabs and showing the available tab strip.
+/// Draws the Read toolbar or ribbon, including the temporary overlay for a collapsed tab.
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     if app.session.view.read_mode {
@@ -124,8 +123,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             app.ui.tab = next.to_string();
         }
     }
+    let collapsed = app.ui.ribbon_collapsed;
+    let preview = collapsed && app.ribbon_preview;
     // Tab strip.
-    egui::Panel::top("tabs")
+    let tabs = egui::Panel::top("tabs")
         .exact_size(30.0)
         .frame(egui::Frame::NONE.fill(t.tab_strip).inner_margin(egui::Margin { left: 8, right: 10, top: 0, bottom: 0 }))
         .show(ui, |ui| {
@@ -145,7 +146,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     let editing = crate::widgets::icon_text_button_width(ui, editing_label, regular(12.0), true, labels);
                     let comment = crate::widgets::icon_text_button_width(ui, comments, regular(12.0), false, labels);
                     // The gaps (6 + 4 + 8) and the strip's margin.
-                    spaced(share_button) + spaced(editing) + spaced(comment) + 18.0 + 12.0
+                    spaced(share_button) + spaced(editing) + spaced(comment) + 18.0 + 12.0 + if collapsed { 24.0 } else { 0.0 }
                 };
                 let button_levels = [button_widths(0), button_widths(1), button_widths(2)];
                 let labels: Vec<&str> = tabs.iter().map(|(tab, custom)| if *custom { tab.as_str() } else { tl!(tab) }).collect();
@@ -161,6 +162,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     .collect();
                 let plan = plan_strip(&specs, button_levels, ui.available_width(), MORE_TABS_W + 2.0);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if collapsed && !preview {
+                        let (_, rect) = ui.allocate_space(vec2(22.0, 22.0));
+                        ribbon_toggle(app, ui, rect);
+                    }
                     // No document open (#1129): nothing to share, edit or comment on — but only
                     // these buttons. Disabling the whole line took the tab strip with it: the
                     // tabs took clicks that did nothing, so the empty window had no way back to
@@ -308,15 +313,18 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 });
             });
         });
-    if app.ui.ribbon_collapsed {
+    if collapsed && !preview {
         return;
     }
-    egui::Panel::top("ribbon")
-        .exact_size(CONTENT_H + LABEL_H + 10.0)
-        .frame(
-            egui::Frame::NONE.fill(t.ribbon).inner_margin(egui::Margin { left: 8, right: 8, top: 4, bottom: 4 }).stroke(Stroke::new(1.0, t.border)),
-        )
-        .show(ui, |ui| {
+    let frame =
+        egui::Frame::NONE.fill(t.ribbon).inner_margin(egui::Margin { left: 8, right: 8, top: 4, bottom: 4 }).stroke(Stroke::new(1.0, t.border));
+    let child_open = egui::Popup::is_any_open(ui.ctx());
+    let content = |ui: &mut Ui| {
+        let rect = ui.max_rect();
+        ribbon_toggle(app, ui, Rect::from_min_size(rect.right_bottom() - vec2(22.0, 22.0), vec2(22.0, 22.0)));
+        // Keep groups, launchers and overflow arrows out of the toggle's gutter.
+        let content_rect = Rect::from_min_max(rect.min, pos2((rect.right() - 24.0).max(rect.left()), rect.bottom()));
+        ui.scope_builder(egui::UiBuilder::new().max_rect(content_rect), |ui| {
             // Right-click on the ribbon (outside a button): Customize Ribbon. Registered first, so
             // the buttons drawn over it keep their own clicks.
             // No document open (#1129): every command is greyed out but Help's.
@@ -400,6 +408,71 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 ui.ctx().request_repaint();
             }
         });
+    };
+    let panel = egui::Panel::top("ribbon").exact_size(CONTENT_H + LABEL_H + 10.0).frame(frame);
+    if preview {
+        let preview_layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::new("ribbon_preview"));
+        // egui clears focus at frame start on Escape, before the field cancels its edit.
+        let field_was_focused = ui.data(|d| d.get_temp::<bool>(preview_layer.id)).unwrap_or(false);
+        let outside = ui.input(|i| i.pointer.any_pressed())
+            && ui.input(|i| i.pointer.press_origin()).is_some_and(|p| {
+                !tabs.response.rect.contains(p)
+                    && !ui.ctx().layer_id_at(p).is_some_and(|l| matches!(l.order, egui::Order::Foreground | egui::Order::Tooltip))
+            });
+        // Commit deferred field edits before the page press can move the document's caret.
+        if outside
+            && let Some(id) = ui.ctx().memory(|m| m.focused()).filter(|id| ui.ctx().read_response(*id).is_some_and(|r| r.layer_id == preview_layer))
+        {
+            ui.ctx().memory_mut(|m| m.surrender_focus(id));
+        }
+        egui::Area::new(egui::Id::new("ribbon_preview")).order(egui::Order::Foreground).fixed_pos(tabs.response.rect.left_bottom()).show(
+            ui.ctx(),
+            |ui| {
+                ui.set_width(tabs.response.rect.width());
+                ui.set_height(CONTENT_H + LABEL_H + 10.0);
+                panel.show(ui, content);
+            },
+        );
+        let field_focused = ui.ctx().memory(|m| m.focused()).and_then(|id| ui.ctx().read_response(id)).is_some_and(|r| r.layer_id == preview_layer);
+        ui.data_mut(|d| d.insert_temp(preview_layer.id, app.ribbon_preview && field_focused));
+        let drag_stopped = ui
+            .ctx()
+            .drag_stopped_id()
+            .and_then(|id| ui.ctx().read_response(id))
+            .is_some_and(|r| r.layer_id == preview_layer && r.sense.senses_click());
+        // Fields, lists and collapsed groups own Escape before the temporary ribbon does.
+        let child_open = child_open || field_was_focused || field_focused || !app.escape_free || egui::Popup::is_any_open(ui.ctx());
+        app.escape_free = false;
+        let escape = !child_open && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+        if outside || escape || drag_stopped {
+            app.ribbon_preview = false;
+            if escape || drag_stopped {
+                app.canvas.want_focus = true;
+            }
+        }
+    } else {
+        ui.data_mut(|d| d.remove::<bool>(egui::Id::new("ribbon_preview")));
+        panel.show(ui, content);
+    }
+}
+
+/// The ribbon's persistent toggle: bottom-right when expanded, on the tab strip when collapsed.
+fn ribbon_toggle(app: &mut WordApp, ui: &mut Ui, rect: Rect) {
+    let (label, icon) = if app.ribbon_preview {
+        (tl!("Pin ribbon"), "pin")
+    } else if app.ui.ribbon_collapsed {
+        (tl!("Expand ribbon"), "chevronDown")
+    } else {
+        (tl!("Collapse ribbon"), "chevronUp")
+    };
+    let response = ui.interact(rect, egui::Id::new("ribbon_toggle"), Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
+    let style = crate::widgets::drawn_state(ui, &response, false);
+    ui.painter().rect_filled(rect, 4.0, style.fill);
+    icons::paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(14.0, 14.0)), icon, style.text, style.text);
+    if response.on_hover_text(label).clicked() {
+        let _ = app.run("ui.collapseRibbon", json!({}));
+    }
 }
 
 #[cfg(test)]
