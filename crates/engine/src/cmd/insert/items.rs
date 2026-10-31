@@ -59,7 +59,8 @@ pub(super) fn date_time(s: &mut Session, v: &Value) -> CmdResult {
     sel_result(s)
 }
 
-/// Format today's date with a Word picture (`M/d/yyyy`, `MMMM d, yyyy`, `yyyy-MM-dd`, `dddd`…).
+/// Format today's date with a Word picture (`M/d/yyyy`, `MMMM d, yyyy`, `yyyy-MM-dd`, `dddd`…),
+/// the Japanese era and numeral items (`ggge年M月d日`, 和暦) included.
 pub fn format_date(fmt: &str) -> String {
     let iso = crate::cmd::now_iso();
     let y: i64 = iso.get(0..4).and_then(|x| x.parse().ok()).unwrap_or(2026);
@@ -71,13 +72,86 @@ pub fn format_date(fmt: &str) -> String {
     format_date_parts(fmt, y, m, d, (hh, mm, ss), (crate::cmd::now_unix() / 86_400) as i64)
 }
 
-/// Format a date and time with a Word picture; `days_since` (days since 1970-01-01) gives the weekday.
+/// A Japanese era (元号) and the day it began, for the era date picture items.
+struct JapaneseEra {
+    /// The full name, e.g. `令和` (`ggg`).
+    name: &'static str,
+    /// The one-kanji abbreviation, e.g. `令` (`gg`).
+    kanji: char,
+    /// The Latin initial, e.g. `R` (`g`).
+    latin: char,
+    /// The era's first day.
+    start: (i64, usize, u32),
+}
+
+/// The Japanese eras in order. The boundaries are day-accurate: 大正 began 1912-07-30, so
+/// 1912-07-29 is still 明治45年.
+static JAPANESE_ERAS: [JapaneseEra; 5] = [
+    JapaneseEra { name: "明治", kanji: '明', latin: 'M', start: (1868, 1, 25) },
+    JapaneseEra { name: "大正", kanji: '大', latin: 'T', start: (1912, 7, 30) },
+    JapaneseEra { name: "昭和", kanji: '昭', latin: 'S', start: (1926, 12, 25) },
+    JapaneseEra { name: "平成", kanji: '平', latin: 'H', start: (1989, 1, 8) },
+    JapaneseEra { name: "令和", kanji: '令', latin: 'R', start: (2019, 5, 1) },
+];
+
+/// The era a date falls in: the latest one that had begun by then. A date before 明治 1868-01-25
+/// has none, and the era items render nothing (the rest of the picture still renders).
+fn japanese_era(y: i64, m: usize, d: u32) -> Option<&'static JapaneseEra> {
+    JAPANESE_ERAS.iter().rev().find(|e| (y, m, d) >= e.start)
+}
+
+/// A Japanese numeral in counting form — 十七, 二十七, 三十一 — not the formal 壱/弐 forms.
+fn japanese_numeral(n: usize) -> String {
+    const DIGITS: [&str; 10] = ["零", "一", "二", "三", "四", "五", "六", "七", "八", "九"];
+    // The items that use this never go past 59 (days ≤ 31, months ≤ 12, minutes and seconds ≤ 59);
+    // a junk part falls back to its digits instead of inventing 百/千 forms.
+    if n >= 100 {
+        return n.to_string();
+    }
+    let (tens, ones) = (n / 10, n % 10);
+    let mut out = String::new();
+    if tens > 1 {
+        out.push_str(DIGITS.get(tens).copied().unwrap_or(""));
+    }
+    if tens > 0 {
+        out.push('十');
+    }
+    if ones > 0 || n == 0 {
+        out.push_str(DIGITS.get(ones).copied().unwrap_or(""));
+    }
+    out
+}
+
+/// Format a date and time with a Word picture; `days_since` (days since 1970-01-01) gives the
+/// weekday.
+///
+/// Besides the Gregorian items, the Japanese ones of [MS-OE376] 2.16.4.1 are supported: `g`/`gg`/
+/// `ggg` the era's Latin initial, its one kanji and its full name, a longer run grouped from the
+/// left (`ggg`, then `gg`, then `g`); `e`/`ee` and their other spelling `n`/`nn` the era year,
+/// grouped the same way (`ee`, then `e`); `A`, `O`, `C` and `I` the day, month, seconds and minutes
+/// in Japanese numerals, repeated for each instance; `aaa`/`aaaa` the weekday's one kanji and its
+/// full name.
 pub fn format_date_parts(fmt: &str, y: i64, m: usize, d: u32, (hh, mm, ss): (u32, u32, u32), days_since: i64) -> String {
     const MONTHS: [&str; 12] =
         ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
     const DAYS: [&str; 7] = ["Thursday", "Friday", "Saturday", "Sunday", "Monday", "Tuesday", "Wednesday"];
+    // The weekday's one kanji, in the same order as `DAYS` (index 0, 1970-01-01, was a Thursday).
+    const DAYS_JA: [&str; 7] = ["木", "金", "土", "日", "月", "火", "水"];
     let month = MONTHS.get(m.saturating_sub(1)).copied().unwrap_or("January");
     let day = DAYS.get(days_since.rem_euclid(7) as usize).copied().unwrap_or("Monday");
+    let weekday_ja = DAYS_JA.get(days_since.rem_euclid(7) as usize).copied().unwrap_or("月");
+    // The era items. The reference defines `g`/`gg`/`ggg` as the Japanese era for every language
+    // but ko-KR and zh-TW, and the picture arrives here with no run language; they render
+    // unconditionally, and before 明治 there is no era to render.
+    let era = japanese_era(y, m, d);
+    let era_year = era.map(|e| y - e.start.0 + 1);
+    let era_g = era.map(|e| e.latin.to_string()).unwrap_or_default();
+    let era_gg = era.map(|e| e.kanji.to_string()).unwrap_or_default();
+    let era_ggg = era.map(|e| e.name.to_string()).unwrap_or_default();
+    // Era year 1 is a number (`令和1年`): the reference defines `e`/`ee` as year numbers and has no
+    // 元年 form (its own examples show 令和27年-style output).
+    let era_e = era_year.map(|n| n.to_string()).unwrap_or_default();
+    let era_ee = era_year.map(|n| format!("{n:02}")).unwrap_or_default();
     let mut out = String::new();
     let chars: Vec<char> = fmt.chars().collect();
     let mut i = 0;
@@ -87,6 +161,14 @@ pub fn format_date_parts(fmt: &str, y: i64, m: usize, d: u32, (hh, mm, ss): (u32
         if chars.get(i..i + 5).is_some_and(|w| w.iter().collect::<String>().eq_ignore_ascii_case("am/pm")) {
             out.push_str(if hh < 12 { "AM" } else { "PM" });
             i += 5;
+            continue;
+        }
+        // `A/P` (or `a/p`) is the other spelling of that token, and must be read before `A`, which
+        // is the Japanese day numeral ([MS-OE376] 2.16.4.1). The short spelling is Word's single
+        // letter, in the case the picture gives it.
+        if chars.get(i..i + 3).is_some_and(|w| w.iter().collect::<String>().eq_ignore_ascii_case("a/p")) {
+            out.push(if hh < 12 { c } else { chars.get(i + 2).copied().unwrap_or('P') });
+            i += 3;
             continue;
         }
         let mut n = 1;
@@ -112,7 +194,41 @@ pub fn format_date_parts(fmt: &str, y: i64, m: usize, d: u32, (hh, mm, ss): (u32
             ('m', _) => out.push_str(&mm.to_string()),
             ('s', 2..) => out.push_str(&format!("{ss:02}")),
             ('s', _) => out.push_str(&ss.to_string()),
-            ('a' | 'A', _) => out.push_str(if hh < 12 { "AM" } else { "PM" }),
+            // Japanese era items ([MS-OE376] 2.16.4.1): `g` the Latin initial, `gg` one kanji,
+            // `ggg` the full name. A longer run is grouped from the left as the reference says
+            // (`ggg` first, then `gg`, then `g`), so `gggg` is 令和 followed by R.
+            ('g', _) => {
+                for _ in 0..n / 3 {
+                    out.push_str(&era_ggg);
+                }
+                match n % 3 {
+                    2 => out.push_str(&era_gg),
+                    1 => out.push_str(&era_g),
+                    _ => {}
+                }
+            }
+            // `e`/`ee` and their other spelling `n`/`nn` the era year, grouped `ee` then `e`.
+            ('e' | 'n', _) => {
+                for _ in 0..n / 2 {
+                    out.push_str(&era_ee);
+                }
+                if n % 2 == 1 {
+                    out.push_str(&era_e);
+                }
+            }
+            // Japanese numerals in counting form: day, month, seconds and minutes. Every instance
+            // repeats the content, as the reference specifies (`AA` is 十七十七).
+            ('A', _) => out.push_str(&japanese_numeral(d as usize).repeat(n)),
+            ('O', _) => out.push_str(&japanese_numeral(m).repeat(n)),
+            ('C', _) => out.push_str(&japanese_numeral(ss as usize).repeat(n)),
+            ('I', _) => out.push_str(&japanese_numeral(mm as usize).repeat(n)),
+            // `aaa` the weekday's one kanji, `aaaa` its full name. Word gates both on the run's
+            // `w:lang` (ja-JP or ko-KR; literal text otherwise); the picture here has no run
+            // language and the user wrote the item, so it renders.
+            ('a', 3) => out.push_str(weekday_ja),
+            ('a', 4..) => out.push_str(&format!("{weekday_ja}曜日")),
+            // `a` and `aa` keep meaning AM/PM (`am/pm` itself is one token, matched above).
+            ('a', _) => out.push_str(if hh < 12 { "AM" } else { "PM" }),
             _ => {
                 for _ in 0..n {
                     out.push(c);
