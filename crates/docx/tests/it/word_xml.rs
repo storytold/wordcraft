@@ -106,7 +106,7 @@ fn wordml_2003_sample() -> String {
         <w:tr><w:tc><w:tcPr><w:tcW w:w="2000" w:type="dxa"/><w:vmerge w:val="restart"/></w:tcPr><w:p><w:r><w:t>A1</w:t></w:r></w:p></w:tc><w:tc><w:tcPr><w:tcW w:w="2000" w:type="dxa"/></w:tcPr><w:p><w:r><w:t>B1</w:t></w:r></w:p></w:tc></w:tr>
         <w:tr><w:tc><w:tcPr><w:tcW w:w="2000" w:type="dxa"/><w:vmerge/></w:tcPr><w:p/></w:tc><w:tc><w:tcPr><w:tcW w:w="2000" w:type="dxa"/></w:tcPr><w:p><w:r><w:t>B2</w:t></w:r></w:p></w:tc></w:tr>
       </w:tbl>
-      <w:p><w:r><w:pict><w:binData w:name="wordml://02000001.png">{png}</w:binData><v:shape id="_x0000_i1025" type="#_x0000_t75" style="width:36pt;height:18pt"><v:imagedata src="wordml://02000001.png" o:title="dot"/></v:shape></w:pict></w:r></w:p>
+      <w:p><w:r><w:pict><w:binData w:name="wordml://02000001.png">{png}</w:binData><v:shape id="_x0000_i1025" type="#_x0000_t75" style="width:36pt;height:18pt"><v:imagedata src="wordml://02000001.png" o:title="dot" gain="19661f" blacklevel="22938f"/></v:shape></w:pict></w:r></w:p>
       <w:sectPr>
         <w:hdr w:type="odd"><w:p><w:r><w:t>Garden header</w:t></w:r></w:p></w:hdr>
         <w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800" w:header="720" w:footer="720" w:gutter="0"/>
@@ -115,6 +115,16 @@ fn wordml_2003_sample() -> String {
   </w:body>
 </w:wordDocument>"##
     )
+}
+
+/// Word 2003 XML pictures keep Word's Washout (gain 0.3, black level 0.35) as brightness and
+/// contrast (#1711).
+#[test]
+fn word_2003_xml_picture_keeps_washout() {
+    let doc = read_xml(wordml_2003_sample().as_bytes()).unwrap();
+    let ps = paras(&doc);
+    let pic = ps.iter().flat_map(|p| p.objects.iter()).find(|o| matches!(o, InlineObject::Image { .. }));
+    assert!(matches!(pic, Some(InlineObject::Image { fx, .. }) if (fx.bright - 70_000).abs() <= 2 && (fx.contrast + 70_000).abs() <= 2), "{pic:?}");
 }
 
 #[test]

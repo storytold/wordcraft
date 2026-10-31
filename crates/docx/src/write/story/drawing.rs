@@ -15,7 +15,7 @@ pub(super) struct DrawingInfo<'a> {
 impl Writer<'_> {
     /// A picture's `pic:pic` (the image in `media/{file}`), at `off` in its group (or 0, 0).
     pub(super) fn pic(&mut self, w: &mut W, o: &InlineObject, file: &str, off: (f32, f32), rels: &mut PartRels) {
-        let InlineObject::Image { media, w: iw, h: ih, alt, crop, float, .. } = o else { return };
+        let InlineObject::Image { media, w: iw, h: ih, alt, crop, float, fx, .. } = o else { return };
         let rid = rels.add(rt::IMAGE, &format!("media/{file}"), false);
         self.used_media.insert(media.clone());
         w.open("pic:pic", &[]);
@@ -26,7 +26,21 @@ impl Writer<'_> {
         w.close("pic:cNvPicPr");
         w.close("pic:nvPicPr");
         w.open("pic:blipFill", &[]);
-        w.empty("a:blip", &[("r:embed", &rid)]);
+        // Brightness, contrast and transparency (#1711, #1766) as `a:blip` effects (ECMA-376
+        // §20.1.8.13 CT_Blip: an unbounded choice of effects, in any order).
+        let fx = fx.clamped();
+        if fx.is_identity() {
+            w.empty("a:blip", &[("r:embed", &rid)]);
+        } else {
+            w.open("a:blip", &[("r:embed", &rid)]);
+            if fx.transparency != 0 {
+                w.empty("a:alphaModFix", &[("amt", &n(i64::from(100_000 - fx.transparency)))]);
+            }
+            if fx.bright != 0 || fx.contrast != 0 {
+                w.empty("a:lum", &[("bright", &n(i64::from(fx.bright))), ("contrast", &n(i64::from(fx.contrast)))]);
+            }
+            w.close("a:blip");
+        }
         if crop.iter().any(|c| *c > 0.0) {
             let c = |v: f32| n((wordcraft_geom::finite(v).clamp(0.0, 1.0) * 100_000.0).round() as i64);
             w.empty("a:srcRect", &[("l", &c(crop[0])), ("t", &c(crop[1])), ("r", &c(crop[2])), ("b", &c(crop[3]))]);

@@ -215,6 +215,7 @@ fn picture_in_box_keeps_its_frame() {
         alt: "Synthetic marker".into(),
         float: Default::default(),
         crop: [0.0; 4],
+        fx: Default::default(),
         ole: None,
     };
     let mut p = Paragraph::new();

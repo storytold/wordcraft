@@ -4773,7 +4773,16 @@ fn context_menu_crop_item_activates_crop_mode() {
     use egui_kittest::kittest::Queryable;
     use wordcraft_doc::para::{InlineObject, OBJ};
     let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
-    let pic = InlineObject::Image { media: "m".into(), w: 200.0, h: 100.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None };
+    let pic = InlineObject::Image {
+        media: "m".into(),
+        w: 200.0,
+        h: 100.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    };
     app.session.doc.insert_object(&Pos::body(0, 0), pic, &Default::default()).unwrap();
     let end = Pos::body(0, OBJ.len_utf8());
     app.run("select.range", json!({"anchor": Pos::body(0, 0), "focus": end})).unwrap();
@@ -4814,6 +4823,7 @@ fn crop_is_disabled_when_cursor_is_adjacent_without_selection() {
         alt: String::new(),
         float: Default::default(),
         crop: [0.0; 4],
+        fx: Default::default(),
         ole: None,
     };
     app.session.doc.insert_object(&Pos::body(0, 0), pic, &Default::default()).unwrap();

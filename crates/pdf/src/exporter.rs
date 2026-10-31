@@ -10,6 +10,7 @@ use super::{
     NonZeroU16, Outline, OutlineNode, Page, PathBuilder, Placed, Point, Rect, Rgb, ShapeKind, Size, SpanTag, StoryRef, Stroke, StrokeDash, Surface,
     Tag, TagGroup, TagKind, TagTree, Target, Transform, WriteError, XyzDestination, krilla, rgb, write,
 };
+use wordcraft_doc::picfx::PicFx;
 
 mod draw;
 mod nav;
@@ -27,7 +28,9 @@ pub(crate) struct Exporter<'a> {
     /// Faces whose glyphs are drawn as outlines because krilla can't subset them.
     pub(crate) outlined: &'a HashSet<u32>,
     pub(crate) cmaps: HashMap<u32, Arc<HashMap<u32, char>>>,
-    pub(crate) images: HashMap<String, Option<Image>>,
+    /// Embedded pictures by media key and the brightness and contrast baked into them, so one
+    /// picture with the same corrections is embedded once however often it's drawn.
+    pub(crate) images: HashMap<(String, i32, i32), Option<Image>>,
     /// Parsed metafiles by media key (`None`: not readable).
     pub(crate) vectors: HashMap<String, Option<Arc<Vector>>>,
     pub(crate) tags: Vec<TagEntry>,
@@ -101,15 +104,18 @@ impl Exporter<'_> {
         v
     }
 
-    fn image(&mut self, key: &str) -> Option<Image> {
-        if let Some(i) = self.images.get(key) {
+    fn image(&mut self, key: &str, fx: PicFx) -> Option<Image> {
+        // Corrected pixels are embedded apart from the picture's own (#1711, #1766).
+        let fx = fx.clamped();
+        let cache_key = (key.to_string(), fx.bright, fx.contrast);
+        if let Some(i) = self.images.get(&cache_key) {
             return i.clone();
         }
-        let img = self.doc.media.get(key).and_then(load_image);
+        let img = self.doc.media.get(key).and_then(|d| load_image(d, fx));
         if img.is_none() {
             log::warn!("PDF: picture `{key}` could not be decoded");
         }
-        self.images.insert(key.to_string(), img.clone());
+        self.images.insert(cache_key, img.clone());
         img
     }
 

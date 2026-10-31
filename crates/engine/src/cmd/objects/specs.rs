@@ -1,12 +1,13 @@
 use super::arrange::{MAX_OFFSET, bounds, copy_to, move_with_text, unalign};
 use super::group::{add_object, group, ungroup};
-use super::picture::{adjust, adjust_media, crop, recolor, relook, remove_background, reset, size};
+use super::picture::{adjust, adjust_media, clear_lum, crop, original_media, recolor, relook, remove_background, reset, size};
 use super::select::{
     all_objects, alt_text, can_group, edit_obj, has_floating, has_group, has_movable, has_object, has_picture, has_shape, has_shape_or_canvas,
     has_sizable, obj_size, objects_list, selected, with_float, with_obj,
 };
 use super::shape::{NO_TEXT_BOX, can_link, has_text_box, link_text_box, set_text_body, shape_effects, text_box_target};
 use super::{CmdError, CommandSpec, InlineObject, Pos, Rgb, Selection, Spin, TextVert, VAlign, Wrap, WrapText, json, p, sel_result};
+use wordcraft_doc::picfx::PicFx;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -36,10 +37,9 @@ pub fn specs() -> Vec<CommandSpec> {
             let sharpen = p::f32(v, "sharpen").unwrap_or(0.0).clamp(-100.0, 100.0);
             // Absolute from the original (like transparency): re-setting all three to 0
             // restores the original pixels instead of stacking on the last pass.
-            let (_, o) = selected(s).ok_or_else(|| CmdError::Disabled("no picture".into()))?;
-            let InlineObject::Image { media, .. } = o else { return Err(CmdError::Disabled("not a picture".into())) };
-            let base = s.originals.get(&media).cloned().unwrap_or(media.clone());
-            adjust_media(s, &base, move |img| {
+            // The file's own brightness and contrast (`fx`) are replaced, not stacked on.
+            let base = original_media(s)?;
+            adjust_media(s, &base, clear_lum, move |img| {
                 let mut img = img;
                 if b != 0.0 {
                     img = image::DynamicImage::ImageRgba8(image::imageops::colorops::brighten(&img, (b * 2.55) as i32));
@@ -62,10 +62,11 @@ pub fn specs() -> Vec<CommandSpec> {
             let mode = p::str(v, "mode").unwrap_or("grayscale").to_string();
             let sat = p::f32(v, "saturation").unwrap_or(100.0);
             // Absolute from the original (like transparency): saturation 100 restores it.
-            let (_, o) = selected(s).ok_or_else(|| CmdError::Disabled("no picture".into()))?;
-            let InlineObject::Image { media, .. } = o else { return Err(CmdError::Disabled("not a picture".into())) };
-            let base = s.originals.get(&media).cloned().unwrap_or(media.clone());
-            adjust_media(s, &base, move |img| Ok(recolor(img, &mode, sat)))
+            // Color and Corrections are independent, as in Word: only Washout, which Word stores
+            // as brightness and contrast (`a:lum`), replaces the file's own (`fx`).
+            let base = original_media(s)?;
+            let fx: fn(&mut PicFx) = if mode == "washout" { clear_lum } else { |_| {} };
+            adjust_media(s, &base, fx, move |img| Ok(recolor(img, &mode, sat)))
         })
         .params(r#"{"mode": "grayscale|sepia|washout|blackAndWhite|saturation|tint", "saturation"?: 0..400}"#)
         .when(has_picture),
@@ -97,10 +98,10 @@ pub fn specs() -> Vec<CommandSpec> {
             // slider back and forth never fades what a previous pass already faded.
             // (Combining with other pixel edits then re-setting transparency drops those
             // edits; a full live-effect stack is future work.)
-            let (_, o) = selected(s).ok_or_else(|| CmdError::Disabled("no picture".into()))?;
-            let InlineObject::Image { media, .. } = o else { return Err(CmdError::Disabled("not a picture".into())) };
-            let base = s.originals.get(&media).cloned().unwrap_or(media.clone());
-            adjust_media(s, &base, move |img| {
+            // The file's own transparency (`fx`, `a:alphaModFix`) is replaced too: it's baked
+            // into the pixels from here on.
+            let base = original_media(s)?;
+            adjust_media(s, &base, |fx: &mut PicFx| fx.transparency = 0, move |img| {
                 let mut rgba = img.to_rgba8();
                 for px in rgba.pixels_mut() {
                     px.0[3] = (px.0[3] as f32 * (1.0 - t / 100.0)) as u8;

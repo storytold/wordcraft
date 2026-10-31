@@ -391,6 +391,7 @@ fn a_floating_copy_is_charged_its_alt_text() {
         alt,
         float: Default::default(),
         crop: Default::default(),
+        fx: Default::default(),
         ole: None,
     };
     let bare = crate::object_cost(&image(String::new()));

@@ -67,15 +67,21 @@ const MAX_DECODE_SIDE: u32 = u16::MAX as u32;
 /// Decode an encoded image to a premultiplied pixmap. The dimension limit above and the default
 /// allocation cap (512 MB, what `load_from_memory` applied) bound the decode during paint.
 pub fn decode_pixmap(bytes: &[u8]) -> Option<Pixmap> {
+    decode_pixmap_fx(bytes, wordcraft_doc::picfx::PicFx::default())
+}
+
+/// [`decode_pixmap`] with a picture's brightness and contrast applied (#1711, #1766), under the
+/// same decode limits.
+pub fn decode_pixmap_fx(bytes: &[u8], fx: wordcraft_doc::picfx::PicFx) -> Option<Pixmap> {
     // The shared probe also charges what the decoder holds beside its output (#3644).
     if !wordcraft_geom::picture::probe(bytes).is_ok_and(|p| p.fits(wordcraft_geom::MAX_DECODED_BYTES)) {
         return None;
     }
-    decode_pixmap_within(bytes, wordcraft_geom::MAX_DECODED_BYTES)
+    decode_pixmap_within(bytes, fx, wordcraft_geom::MAX_DECODED_BYTES)
 }
 
-/// [`decode_pixmap`] with an explicit RGBA byte budget (a small one in tests).
-pub(crate) fn decode_pixmap_within(bytes: &[u8], budget: u64) -> Option<Pixmap> {
+/// [`decode_pixmap_fx`] with an explicit RGBA byte budget (a small one in tests).
+pub(crate) fn decode_pixmap_within(bytes: &[u8], fx: wordcraft_doc::picfx::PicFx, budget: u64) -> Option<Pixmap> {
     use image::ImageDecoder;
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(MAX_DECODE_SIDE);
@@ -99,8 +105,9 @@ pub(crate) fn decode_pixmap_within(bytes: &[u8], budget: u64) -> Option<Pixmap> 
         );
         return None;
     }
-    let img = reader()?.decode().ok()?.into_rgba8();
+    let mut img = reader()?.decode().ok()?.into_rgba8();
     let (w, h) = img.dimensions();
+    fx.apply_rgba(&mut img);
     premul_pixmap(w, h, img.as_raw())
 }
 
@@ -331,7 +338,7 @@ pub(crate) fn draw_page_picture(ctx: &mut RenderContext, doc: &Document, page: &
         Some((w, h)) if w > 0 && h > 0 && (w as u64) * (h as u64) <= MAX_BACKGROUND_PIXELS => (w as f64, h as f64),
         _ => return,
     };
-    let Some(pm) = pixmap_for(doc, &pic.media) else { return };
+    let Some(pm) = pixmap_for(doc, &pic.media, wordcraft_doc::picfx::PicFx::default()) else { return };
     let (pw, ph) = (pm.width().max(1) as f64, pm.height().max(1) as f64);
     let (w, h) = (page.w as f64, (page.h as f64).min(1e6));
     if !(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0) {
@@ -351,14 +358,19 @@ pub(crate) fn draw_page_picture(ctx: &mut RenderContext, doc: &Document, page: &
     ctx.reset_paint_transform();
 }
 
-pub(crate) fn pixmap_for(doc: &Document, key: &str) -> Option<Arc<Pixmap>> {
+pub(crate) fn pixmap_for(doc: &Document, key: &str, fx: wordcraft_doc::picfx::PicFx) -> Option<Arc<Pixmap>> {
     let bytes = doc.media.get(key)?;
-    if let Some(v) = lock(images()).get(key, bytes) {
+    // Corrected pixels are cached apart from the picture's own (the same picture can be shown
+    // both ways).
+    let fx = fx.clamped();
+    let cache_key =
+        if fx.changes_pixels() { std::borrow::Cow::Owned(format!("{key}#fx{},{}", fx.bright, fx.contrast)) } else { std::borrow::Cow::Borrowed(key) };
+    if let Some(v) = lock(images()).get(&cache_key, bytes) {
         return v;
     }
-    let pm = decode_pixmap(bytes).map(|p| Arc::new(cacheable(p)));
+    let pm = decode_pixmap_fx(bytes, fx).map(|p| Arc::new(cacheable(p)));
     let size = pm.as_ref().map_or(0, |p| p.width() as usize * p.height() as usize * 4);
-    lock(images()).insert(key, bytes, pm.clone(), size);
+    lock(images()).insert(&cache_key, bytes, pm.clone(), size);
     pm
 }
 

@@ -382,14 +382,14 @@ fn decode_budget_is_checked_from_the_header() {
     let img = image::RgbaImage::from_fn(16, 8, |x, y| image::Rgba([x as u8, y as u8, 9, 255]));
     img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png).unwrap();
     // Decode, the RGBA conversion and the premultiplied copy are charged: two buffers at peak.
-    assert!(decode_pixmap_within(&buf, 1024).is_some());
-    assert!(decode_pixmap_within(&buf, 1023).is_none());
+    assert!(decode_pixmap_within(&buf, wordcraft_doc::picfx::PicFx::default(), 1024).is_some());
+    assert!(decode_pixmap_within(&buf, wordcraft_doc::picfx::PicFx::default(), 1023).is_none());
     // 16-bit RGBA decodes to 8 bytes a pixel, alive with its RGBA8 copy: 12 bytes a pixel.
     let mut wide = Vec::new();
     let img16 = image::ImageBuffer::<image::Rgba<u16>, _>::from_fn(16, 8, |x, y| image::Rgba([x as u16 * 999, y as u16, 9, 65535]));
     image::DynamicImage::ImageRgba16(img16).write_to(&mut std::io::Cursor::new(&mut wide), image::ImageFormat::Png).unwrap();
-    assert!(decode_pixmap_within(&wide, 1024).is_none(), "two RGBA8 buffers' worth is not enough for RGBA16");
-    assert!(decode_pixmap_within(&wide, 1536).is_some());
+    assert!(decode_pixmap_within(&wide, wordcraft_doc::picfx::PicFx::default(), 1024).is_none(), "two RGBA8 buffers' worth is not enough for RGBA16");
+    assert!(decode_pixmap_within(&wide, wordcraft_doc::picfx::PicFx::default(), 1536).is_some());
     // A header (valid CRC) claiming 60000x60000 with no pixel data reads fine, then the budget refuses it.
     let hdr = ihdr_only_png(60_000, 60_000);
     assert_eq!(image_size(&hdr), Some((60_000, 60_000)));
@@ -513,6 +513,7 @@ fn dimmed_header_image_renders() {
         alt: String::new(),
         float: Default::default(),
         crop: [0.0; 4],
+        fx: Default::default(),
         ole: None,
     };
     hp.insert_object(0, obj, &Default::default()).unwrap();
@@ -523,6 +524,55 @@ fn dimmed_header_image_renders() {
     assert!(opts.display.dim_header);
     let img = render_page(&d, &l.pages[0], 1.0, &opts);
     assert!(!img.to_png().is_empty());
+}
+
+/// A grey picture with brightness and contrast (#1766) is drawn lighter, inline and floating
+/// behind text; one with transparency is faded (and both, the same picture, side by side).
+#[test]
+fn picture_brightness_contrast_transparency() {
+    use wordcraft_doc::para::{Anchor, Float, InlineObject, Wrap};
+    use wordcraft_doc::picfx::PicFx;
+    let mut d = Document::from_text("");
+    let mut png = Vec::new();
+    image::RgbaImage::from_pixel(4, 4, image::Rgba([100, 100, 100, 255]))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    let media = d.add_media(png, "png");
+    let pic = |fx: PicFx, x: f32| InlineObject::Image {
+        media: media.clone(),
+        w: 40.0,
+        h: 40.0,
+        alt: String::new(),
+        float: Float { wrap: Wrap::BehindText, h_rel: Anchor::Page, v_rel: Anchor::Page, x, y: 400.0, ..Default::default() },
+        crop: [0.0; 4],
+        fx,
+        ole: None,
+    };
+    let mut p = wordcraft_doc::Paragraph::new();
+    p.insert_object(0, pic(PicFx::default(), 100.0), &Default::default()).unwrap();
+    p.insert_object(0, pic(PicFx::new(80_000, -80_000, 0), 200.0), &Default::default()).unwrap();
+    p.insert_object(0, pic(PicFx::new(0, 0, 50_000), 300.0), &Default::default()).unwrap();
+    // The same picture inline, lightened.
+    let mut inline = pic(PicFx::new(80_000, -80_000, 0), 0.0);
+    if let InlineObject::Image { float, .. } = &mut inline {
+        *float = Float::default();
+    }
+    p.insert_object(0, inline, &Default::default()).unwrap();
+    d.body = vec![wordcraft_doc::para_block(p)];
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let img = render_page(&d, &l.pages[0], 1.0, &RenderOptions::default());
+    let grey = |x: u32| img.pixel(x, 420);
+    assert_eq!(grey(120), [100, 100, 100, 255]);
+    // Word: 100 → 0.2 · 100 + 224.4 = 244.
+    let light = grey(220);
+    assert!(light[..3].iter().all(|c| c.abs_diff(244) <= 2), "{light:?}");
+    // Half transparent on white paper.
+    let faded = grey(320);
+    assert!(faded[..3].iter().all(|c| c.abs_diff(177) <= 3), "{faded:?}");
+    // Inline at the top margin: lightened, no full-strength grey anywhere up there.
+    let top: Vec<[u8; 4]> = (60..140).flat_map(|y| (60..140).map(move |x| (x, y))).map(|(x, y)| img.pixel(x, y)).collect();
+    assert!(top.iter().filter(|p| p[0].abs_diff(244) <= 2 && p[0] == p[2]).count() > 1000);
+    assert!(!top.iter().any(|p| p[0] == 100));
 }
 
 /// #2892: a rule is stroked with flat ends, as the PDF export and Word draw them. Round caps
@@ -874,6 +924,7 @@ fn metafile_picture_is_drawn_as_vectors() {
         alt: String::new(),
         float: Default::default(),
         crop: [0.0; 4],
+        fx: Default::default(),
         ole: None,
     };
     p.insert_object(0, obj, &Default::default()).unwrap();
@@ -910,8 +961,16 @@ fn a_crop_keeping_a_sliver_fills_the_frame_with_it() {
             let mut d = Document::new();
             let media = d.add_media(bytes.clone(), ext);
             let mut p = wordcraft_doc::Paragraph::new();
-            let obj =
-                wordcraft_doc::para::InlineObject::Image { media, w: 70.0, h: 70.0, alt: String::new(), float: Default::default(), crop, ole: None };
+            let obj = wordcraft_doc::para::InlineObject::Image {
+                media,
+                w: 70.0,
+                h: 70.0,
+                alt: String::new(),
+                float: Default::default(),
+                crop,
+                fx: Default::default(),
+                ole: None,
+            };
             p.insert_object(0, obj, &Default::default()).unwrap();
             d.body = vec![wordcraft_doc::para_block(p)];
             let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
@@ -947,6 +1006,7 @@ fn cosmetic_metafile_pen_is_one_device_pixel_wide() {
         alt: String::new(),
         float: Default::default(),
         crop: [0.0; 4],
+        fx: Default::default(),
         ole: None,
     };
     p.insert_object(0, obj, &Default::default()).unwrap();
@@ -993,6 +1053,7 @@ fn metafile_text_records_are_painted() {
         alt: String::new(),
         float: Default::default(),
         crop: [0.0; 4],
+        fx: Default::default(),
         ole: None,
     };
     p.insert_object(0, obj, &Default::default()).unwrap();
@@ -1039,6 +1100,7 @@ fn metafile_text_with_a_huge_font_is_left_out() {
         alt: String::new(),
         float: Default::default(),
         crop: [0.0; 4],
+        fx: Default::default(),
         ole: None,
     };
     p.insert_object(0, obj, &Default::default()).unwrap();
@@ -1077,6 +1139,7 @@ fn unreadable_metafile_keeps_the_grey_box() {
         alt: String::new(),
         float: Default::default(),
         crop: [0.0; 4],
+        fx: Default::default(),
         ole: None,
     };
     p.insert_object(0, obj, &Default::default()).unwrap();
