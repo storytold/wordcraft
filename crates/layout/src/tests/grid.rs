@@ -120,6 +120,35 @@ fn character_indents_count_grid_cells() {
 }
 
 #[test]
+fn character_indents_ignore_the_paragraph_mark_size_on_a_grid() {
+    // A large paragraph mark still indents two cells, not two of its own size; left and right
+    // indents count cells too.
+    let text = "中".repeat(400);
+    let (d, size, pitch) = tight_grid(&text);
+    let with = |f: &dyn Fn(&mut wordcraft_doc::Paragraph)| {
+        let mut d = d.clone();
+        if let Some(Block::Para(p)) = d.body.first_mut().map(std::sync::Arc::make_mut) {
+            f(p);
+        }
+        first_para(&lay(&d))
+    };
+    let g = with(&|p| {
+        p.props.indent_first_chars = Some(2.0);
+        p.mark.size = Some(size * 1.375);
+    });
+    let indent = g.lines[0].xs[0] - g.lines[1].xs[0];
+    assert!((indent - 2.0 * pitch).abs() < 0.01, "indent {indent} for pitch {pitch}");
+    let base = with(&|_| {});
+    let count = |l: &para::Line| l.c1 - l.c0;
+    let left = with(&|p| p.props.indent_left_chars = Some(2.0));
+    assert!((left.lines[0].left - (base.lines[0].left + 2.0 * pitch)).abs() < 0.01, "left {}", left.lines[0].left);
+    assert_eq!(count(&left.lines[0]) + 2, count(&base.lines[0]));
+    let right = with(&|p| p.props.indent_right_chars = Some(2.0));
+    assert!((right.lines[0].right - (base.lines[0].right - 2.0 * pitch)).abs() < 0.01, "right {}", right.lines[0].right);
+    assert_eq!(count(&right.lines[0]) + 2, count(&base.lines[0]));
+}
+
+#[test]
 fn grid_cells_round_up_only_past_a_whole_cell() {
     let grid = |font_size: f32| para::Grid { line: None, chars: Some(font_size), font_size, snap_all: false };
     assert_eq!(grid(16.0).cells(16.0), 1.0);
