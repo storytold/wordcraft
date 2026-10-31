@@ -31,7 +31,17 @@ pub struct Previews {
     math: PreviewAtlas,
     /// The font menus' entries, packed the same way (#5105); shared with the closures
     /// [`Previews::font_preview_fn`] hands out.
-    fonts: Arc<egui::mutex::Mutex<PreviewAtlas>>,
+    fonts: Arc<egui::mutex::Mutex<FontAtlas>>,
+}
+
+/// The font menus' atlas, and the font database generation its entries were drawn with. When
+/// fonts are added or removed, from this window or another one, every entry is drawn again: an
+/// entry drawn in the fallback face before its font was added, or in a removed font's face (a
+/// Recently Used Fonts entry), never stays.
+#[derive(Default)]
+struct FontAtlas {
+    generation: u64,
+    atlas: PreviewAtlas,
 }
 
 /// Side of each square texture page the pictures of a [`PreviewAtlas`] share, in pixels.
@@ -154,6 +164,14 @@ impl PreviewAtlas {
         self.uv.insert(key.to_string(), (i, uv));
         Some((tex.id(), uv))
     }
+
+    /// Forget every picture and clear the pages, keeping their textures.
+    fn clear(&mut self) {
+        for p in &mut self.pages {
+            p.reset();
+        }
+        self.uv.clear();
+    }
 }
 
 /// A font menu entry's key in the fonts' atlas: its display scale and family.
@@ -219,13 +237,11 @@ impl Previews {
         self.english_names.get(shown).cloned().unwrap_or_else(|| shown.to_string())
     }
 
-    /// Fonts were added or removed: list the families again and redraw the entries of
-    /// `families` (an entry drawn before its font was added shows the fallback face).
-    pub fn fonts_changed(&mut self, families: impl Iterator<Item = String>) {
+    /// Fonts were added or removed: list the families again. The font menus' entries see the
+    /// change themselves ([`FontAtlas`]), in every window.
+    pub fn fonts_changed(&mut self) {
         self.families = None;
         self.east_asian = None;
-        let families: std::collections::HashSet<String> = families.collect();
-        self.fonts.lock().uv.retain(|key, _| key.split_once(':').is_none_or(|(_, name)| !families.contains(name)));
     }
 
     /// A closure drawing a font-menu entry in its own face, from the fonts' atlas.
@@ -242,7 +258,15 @@ impl Previews {
                 ui.painter().rect_filled(r, 3.0, t.hover);
             }
             // The atlas lock is never held while the Context's is, nor the other way round.
-            let hit = atlas.lock().get(frame, &key);
+            let generation = wordcraft_fonts::FontDb::global().generation();
+            let hit = {
+                let mut fonts = atlas.lock();
+                if fonts.generation != generation {
+                    fonts.generation = generation;
+                    fonts.atlas.clear();
+                }
+                fonts.atlas.get(frame, &key)
+            };
             let hit = hit.or_else(|| {
                 // Context accessors share a lock: read input before taking the data write lock.
                 let now = ui.input(|i| i.time);
@@ -260,7 +284,7 @@ impl Previews {
                 }
                 let mut img = font_entry_image(name, ppp);
                 ink_mask(&mut img);
-                atlas.lock().add(ui.ctx(), frame, &key, img)
+                atlas.lock().atlas.add(ui.ctx(), frame, &key, img)
             });
             match hit {
                 Some((id, uv)) => {

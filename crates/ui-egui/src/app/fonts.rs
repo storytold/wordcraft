@@ -11,7 +11,7 @@ impl WordApp {
         }
         self.font_generation = generation;
         self.session.relayout();
-        self.previews.fonts_changed(db.user_fonts().iter().flat_map(|f| f.families()));
+        self.previews.fonts_changed();
         ctx.request_repaint();
     }
 

@@ -134,7 +134,7 @@ fn font_menu_previews_render_defer_and_reuse_without_deadlocking() {
                 preview(ui, "Inter");
             })
             .drop_without_applying_deltas();
-            let drawn = |key: &str| previews.fonts.lock().uv.contains_key(key);
+            let drawn = |key: &str| previews.fonts.lock().atlas.uv.contains_key(key);
             assert!(drawn(&sans));
             let budget = ctx.data(|d| d.get_temp::<(f64, u32)>(budget_id));
             if time == 1.0 {
@@ -351,8 +351,8 @@ fn ink_mask_keeps_the_ink_and_drops_the_paper() {
 /// red ones in dark mode: each entry was a texture of its own, and browsing the list created
 /// and freed hundreds of them, the DirectX 12 texture mix-up of #1002. Entries are now drawn
 /// from a few shared pages written in place: scrolling through a long font list, at a high
-/// display scale too, creates at most [`ATLAS_PAGES`] textures and frees none; fonts added
-/// later redraw only their own entries.
+/// display scale too, creates at most [`ATLAS_PAGES`] textures and frees none. Once fonts are
+/// added or removed (from any window), every entry is drawn again.
 #[test]
 fn font_menu_entries_share_a_few_textures_and_free_none() {
     for ppp in [1.0, 3.0] {
@@ -396,11 +396,17 @@ fn font_menu_entries_share_a_few_textures_and_free_none() {
             preview(ui, "Font 299");
         })
         .drop_without_applying_deltas();
-        assert!(previews.fonts.lock().uv.contains_key(&font_key("Font 299", ppp)));
-        // A font added later redraws only its own entries.
-        previews.fonts_changed(["Font 299".to_string()].into_iter());
-        let atlas = previews.fonts.lock();
-        assert!(!atlas.uv.contains_key(&font_key("Font 299", ppp)) && atlas.uv.contains_key(&font_key("Font 298", ppp)));
+        assert!(previews.fonts.lock().atlas.uv.contains_key(&font_key("Font 299", ppp)));
+        // Fonts were added or removed since the entries were drawn: the next entry drawn starts
+        // the atlas over, so none keeps a face it no longer has.
+        previews.fonts.lock().generation = u64::MAX;
+        ctx.run_ui(egui::RawInput { time: Some(1001.0), ..Default::default() }, |ui| {
+            preview(ui, "Font 298");
+        })
+        .drop_without_applying_deltas();
+        let fonts = previews.fonts.lock();
+        assert_eq!(fonts.generation, wordcraft_fonts::FontDb::global().generation());
+        assert!(fonts.atlas.uv.contains_key(&font_key("Font 298", ppp)) && !fonts.atlas.uv.contains_key(&font_key("Font 299", ppp)));
     }
 }
 
