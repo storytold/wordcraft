@@ -81,6 +81,11 @@ pub(crate) fn block_behind(app: &WordApp, ctx: &egui::Context, window: &egui::Re
         .inner;
     // The backdrop also has the pointer just inside the window's edge (egui's hit radius).
     let beside = ctx.input(|i| i.pointer.any_pressed() && i.pointer.press_origin().is_some_and(|p| !window.rect.contains(p)));
+    // The window still moves by its title bar behind it, as in Word for Mac (#5124).
+    let origin = ctx.input(|i| i.pointer.press_origin());
+    if backdrop.drag_started() && origin.is_some_and(|p| crate::chrome::title_drag_rect(ctx).is_some_and(|r| r.contains(p))) {
+        ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+    }
     ctx.move_to_top(layer);
     ctx.memory_mut(|m| m.set_modal_layer(layer));
     ctx.accesskit_node_builder(window.id, |node| node.set_modal());

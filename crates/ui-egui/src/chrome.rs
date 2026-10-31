@@ -275,6 +275,24 @@ impl MacTitleBar {
     }
 }
 
+/// The `ctx.data` key for the part of the title bar that drags this document window.
+fn title_drag_id(ctx: &egui::Context) -> egui::Id {
+    egui::Id::unique(("title_drag_rect", ctx.viewport_id()))
+}
+
+/// Notes `rect` as the part of the title bar that drags the window in this frame: behind a modal
+/// dialog its backdrop has the pointer there, and moves the window instead ([`title_drag_rect`]).
+pub(crate) fn note_title_drag(ctx: &egui::Context, rect: Rect) {
+    let (key, pass) = (title_drag_id(ctx), ctx.cumulative_pass_nr());
+    ctx.data_mut(|d| d.insert_temp(key, (rect, pass)));
+}
+
+/// The part of the title bar that drags the window, if it was drawn in this frame.
+pub(crate) fn title_drag_rect(ctx: &egui::Context) -> Option<Rect> {
+    let (key, pass) = (title_drag_id(ctx), ctx.cumulative_pass_nr());
+    ctx.data(|d| d.get_temp::<(Rect, u64)>(key)).filter(|(_, p)| *p == pass).map(|(r, _)| r)
+}
+
 /// Draws the title bar with window dragging, AutoSave, quick access, account, community and search
 /// controls, and the centred clickable document title.
 pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
@@ -295,6 +313,7 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
             if drag.drag_started() {
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
             }
+            note_title_drag(ui.ctx(), full);
             if drag.double_clicked() {
                 let max = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
