@@ -203,7 +203,11 @@ fn copy_with(s: &mut Session, whole: Option<&Path>) -> CmdResult {
 /// and for a copy of one equation alone, its MathML (#1297).
 pub(crate) fn copy_result(s: &mut Session) -> Value {
     s.clipboard_html = match &s.clipboard {
-        Some(f) => wordcraft_formats::html::export_fragment(&f.to_document()),
+        Some(f) => {
+            let mut document = f.to_document();
+            document.media.clone_from(&s.doc.media);
+            wordcraft_formats::html::export_fragment(&document)
+        }
         None => String::new(),
     };
     let mut r = json!({"text": s.clipboard_text});
