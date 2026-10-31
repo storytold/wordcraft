@@ -72,3 +72,46 @@ fn run_and_style_snap_to_grid_and_web_hidden_survive_two_saves() {
         doc = wordcraft_docx::read(&out).unwrap();
     }
 }
+
+#[test]
+fn special_hidden_paragraph_mark_survives_two_saves() {
+    let styles = r#"
+        <w:style w:type="paragraph" w:styleId="MarkOn"><w:rPr><w:specVanish/></w:rPr></w:style>
+        <w:style w:type="paragraph" w:styleId="MarkOff"><w:rPr><w:specVanish w:val="0"/></w:rPr></w:style>
+    "#;
+    let body = r#"
+        <w:p><w:pPr><w:rPr><w:specVanish/></w:rPr></w:pPr><w:r><w:t>mark true</w:t></w:r></w:p>
+        <w:p><w:pPr><w:rPr><w:specVanish w:val="0"/></w:rPr></w:pPr><w:r><w:t>mark false</w:t></w:r></w:p>
+        <w:p><w:pPr><w:pStyle w:val="MarkOn"/></w:pPr><w:r><w:t>style true</w:t></w:r></w:p>
+        <w:p><w:pPr><w:pStyle w:val="MarkOff"/></w:pPr><w:r><w:t>style false</w:t></w:r></w:p>
+        <w:p><w:r><w:rPr><w:vanish/></w:rPr><w:t>ordinary hidden text</w:t></w:r></w:p>
+        <w:p><w:r><w:t>absent</w:t></w:r></w:p>
+    "#;
+    let mut doc = wordcraft_docx::read(&docx(body, styles)).unwrap();
+    let marks = |doc: &wordcraft_doc::Document| doc.body.iter().filter_map(|b| b.as_para()).map(|p| p.mark.spec_vanish).collect::<Vec<_>>();
+    assert_eq!(marks(&doc), [Some(true), Some(false), None, None, None, None]);
+    let first = doc.body.iter().find_map(|b| b.as_para()).unwrap();
+    assert_eq!(first.plain_text(), "mark true");
+    let hidden = doc.body.iter().filter_map(|b| b.as_para()).nth(4).unwrap();
+    assert_eq!(hidden.props_at(0).hidden, Some(true));
+    assert_eq!(hidden.props_at(0).spec_vanish, None);
+    assert_eq!(doc.styles.get("MarkOn").unwrap().chr.spec_vanish, Some(true));
+    assert_eq!(doc.styles.get("MarkOff").unwrap().chr.spec_vanish, Some(false));
+
+    let json = serde_json::to_vec(&doc).unwrap();
+    doc = serde_json::from_slice(&json).unwrap();
+    assert_eq!(marks(&doc), [Some(true), Some(false), None, None, None, None]);
+    for pass in 0..2 {
+        let out = wordcraft_docx::write(&doc).unwrap();
+        let document_xml = part(&out, "word/document.xml");
+        let style_xml = part(&out, "word/styles.xml");
+        assert!(document_xml.contains("<w:specVanish/>"), "pass {pass}: {document_xml}");
+        assert!(document_xml.contains(r#"<w:specVanish w:val="0"/>"#), "pass {pass}: {document_xml}");
+        assert!(style_xml.contains("<w:specVanish/>"), "pass {pass}: {style_xml}");
+        assert!(style_xml.contains(r#"<w:specVanish w:val="0"/>"#), "pass {pass}: {style_xml}");
+        assert!(document_xml.contains("ordinary hidden text"), "pass {pass}: {document_xml}");
+        assert!(document_xml.contains("<w:vanish/>"), "pass {pass}: {document_xml}");
+        doc = wordcraft_docx::read(&out).unwrap();
+        assert_eq!(marks(&doc), [Some(true), Some(false), None, None, None, None]);
+    }
+}

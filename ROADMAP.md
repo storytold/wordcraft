@@ -140,6 +140,8 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
+- 2026-10-30: DOCX preserves the special hidden paragraph-mark flag `w:specVanish` independently from `w:vanish` and `w:webHidden`, including direct true/false/absent values, paragraph styles and native JSON through two save/reopen cycles (`run_props::special_hidden_paragraph_mark_survives_two_saves`). Full `cargo xtask ci` passed; readiness estimates unchanged.
+
 - 2026-10-28: Aligned-copy review fixes keep the document axis locked through middle-button scrolling and let Ctrl/Command+Shift start on a secondary selected object. Plain Ctrl and Shift clicks keep their existing behavior (#4764).
 
 - 2026-10-28: Ctrl/Command+Shift copies a selected floating picture, shape or text box along its dominant axis (#4764); inline copies keep the text cursor. Guides on the free axis, original/clipboard/selection, cancel, protection and history are covered by synthetic Linux tests. Native desktop and Word untested; readiness unchanged.
