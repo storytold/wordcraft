@@ -716,3 +716,13 @@ fn lone_table_open_markers_mixed_tables_and_paired() {
     assert!(res1.controls.open.is_empty());
     assert_eq!(res1.controls.close, 0);
 }
+
+#[test]
+fn next_shape_id_avoids_a_shape_at_the_largest_id() {
+    let mut d = Document::from_text("body");
+    d.body.extend(box_para(1, u32::MAX));
+    d.body.extend(box_para(2, 1));
+    assert_eq!(d.next_shape_id(), 2);
+    d.body.extend(box_para(3, 2));
+    assert_eq!(d.next_shape_id(), 3);
+}

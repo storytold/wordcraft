@@ -692,15 +692,17 @@ impl Document {
         out
     }
 
-    /// A drawing id no shape uses yet (for gluing a connector to a shape that has none).
-    pub fn next_shape_id(&self) -> u32 {
-        let mut max = 0u32;
+    /// Every drawing id the shapes in all stories carry.
+    pub fn shape_ids(&self) -> std::collections::BTreeSet<u32> {
+        let mut used = std::collections::BTreeSet::new();
         let mut see = |o: &InlineObject| match o {
-            InlineObject::Shape { extra, .. } => max = max.max(extra.id),
+            InlineObject::Shape { extra, .. } => {
+                used.insert(extra.id);
+            }
             InlineObject::Group { children, .. } => {
                 for c in children {
                     if let InlineObject::Shape { extra, .. } = &c.obj {
-                        max = max.max(extra.id);
+                        used.insert(extra.id);
                     }
                 }
             }
@@ -711,7 +713,17 @@ impl Document {
                 edit::each_para(b, 0, &mut |p| p.objects.iter().for_each(&mut see));
             }
         }
-        max.saturating_add(1).max(1)
+        used
+    }
+
+    /// A drawing id no shape uses yet (for gluing a connector to a shape that has none).
+    pub fn next_shape_id(&self) -> u32 {
+        let used = self.shape_ids();
+        match used.last().copied().unwrap_or(0).checked_add(1) {
+            Some(next) => next.max(1),
+            // The top id is taken: use the lowest gap instead of colliding with it.
+            None => (1..).find(|i| !used.contains(i)).unwrap_or(1),
+        }
     }
 
     /// Change every inline object in every story (paragraphs inside tables too), copying only

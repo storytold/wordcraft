@@ -93,6 +93,8 @@ pub(crate) struct Writer<'d> {
     /// Move ranges open in the output: (revision, range `w:id`, destination?).
     open_moves: Vec<(u32, String, bool)>,
     docpr: u32,
+    /// Drawing ids the document's shapes already carry; fresh ids skip them.
+    doc_ids: std::collections::BTreeSet<u32>,
     /// Shapes' own drawing ids written so far (connectors refer to them).
     shape_ids: std::collections::HashSet<u32>,
     z: u32,
@@ -175,8 +177,12 @@ impl Writer<'_> {
     }
 
     fn next_docpr(&mut self) -> String {
-        self.docpr = self.docpr.saturating_add(1);
-        self.docpr.to_string()
+        loop {
+            self.docpr = self.docpr.saturating_add(1);
+            if !self.doc_ids.contains(&self.docpr) {
+                return self.docpr.to_string();
+            }
+        }
     }
 
     /// The drawing id of a shape: its own (once; a copy gets a fresh one), else a fresh one.
