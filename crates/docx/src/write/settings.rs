@@ -1,5 +1,5 @@
 use super::parts::push_part;
-use super::*;
+use super::{CT_WML, Document, PartRels, W, Writer, math, rt, story, xml};
 
 /// The file id of the first footnote or endnote: after the separators (-1, 0) and the
 /// continuation notice (1), when the document has one.
@@ -102,22 +102,41 @@ pub(super) fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool, temp
         }
     }
     w.val("w:characterSpacingControl", "doNotCompress");
+    write_note_settings(&mut w, s, s_notes, footnotes, endnotes);
+    write_compatibility_settings(&mut w, doc);
+    if let Some(m) = &s.math {
+        math::math_pr(&mut w, m);
+    }
+    w.close("w:settings");
+    w.into_bytes()
+}
+
+fn write_note_settings(
+    w: &mut W,
+    settings: &wordcraft_doc::Settings,
+    separators: (&wordcraft_doc::NoteSeparators, &wordcraft_doc::NoteSeparators),
+    footnotes: bool,
+    endnotes: bool,
+) {
     for (tag, fmt, pr, used, el) in [
-        ("w:footnotePr", s.footnote_format, &s.footnote_pr, footnotes, "w:footnote"),
-        ("w:endnotePr", s.endnote_format, &s.endnote_pr, endnotes, "w:endnote"),
+        ("w:footnotePr", settings.footnote_format, &settings.footnote_pr, footnotes, "w:footnote"),
+        ("w:endnotePr", settings.endnote_format, &settings.endnote_pr, endnotes, "w:endnote"),
     ] {
         w.open(tag, &[]);
-        story::note_pr_inner(&mut w, &wordcraft_doc::section::NoteProps { num_fmt: Some(fmt), ..*pr });
+        story::note_pr_inner(w, &wordcraft_doc::section::NoteProps { num_fmt: Some(fmt), ..*pr });
         if used {
             w.empty(el, &[("w:id", "-1")]);
             w.empty(el, &[("w:id", "0")]);
-            let seps = if el == "w:footnote" { &s_notes.0 } else { &s_notes.1 };
+            let seps = if el == "w:footnote" { separators.0 } else { separators.1 };
             if seps.continuation_notice.is_some() {
                 w.empty(el, &[("w:id", "1")]);
             }
         }
         w.close(tag);
     }
+}
+
+fn write_compatibility_settings(w: &mut W, doc: &Document) {
     w.open("w:compat", &[]);
     // CT_Compat: the older switches come before the `w:compatSetting`s.
     if doc.settings.do_not_expand_shift_return {
@@ -126,17 +145,12 @@ pub(super) fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool, temp
     if doc.settings.sum_paragraph_spacing {
         w.empty("w:doNotUseHTMLParagraphAutoSpacing", &[]);
     }
-    if s.allow_space_of_same_style_in_table {
+    if doc.settings.allow_space_of_same_style_in_table {
         w.empty("w:allowSpaceOfSameStyleInTable", &[]);
     }
     let mode = doc.settings.compat_mode.clamp(11, 15).to_string();
     w.empty("w:compatSetting", &[("w:name", "compatibilityMode"), ("w:uri", "http://schemas.microsoft.com/office/word"), ("w:val", &mode)]);
     w.close("w:compat");
-    if let Some(m) = &s.math {
-        math::math_pr(&mut w, m);
-    }
-    w.close("w:settings");
-    w.into_bytes()
 }
 
 /// Is `d` a usable `w16cid:durableId`: 1–8 hex digits, below 0x7FFFFFFF, not 0?
@@ -158,6 +172,8 @@ pub(super) fn write_comment_ids(
     if comment_paras.is_empty() {
         return;
     }
+    // Keep the existing exact-string reservation rule, including comments without a written part.
+    let reserved: std::collections::HashSet<&str> = doc.comments.values().filter_map(|c| c.durable_id.as_deref()).collect();
     let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut next = 0x1000_0000u32;
     let mut rows: Vec<(String, String, Option<String>)> = Vec::new();
@@ -169,7 +185,7 @@ pub(super) fn write_comment_ids(
             None => loop {
                 next = next.saturating_add(1);
                 let d = format!("{next:08X}");
-                if !used.contains(&d) && !doc.comments.values().any(|o| o.durable_id.as_deref() == Some(d.as_str())) {
+                if !used.contains(&d) && !reserved.contains(d.as_str()) {
                     break d;
                 }
             },

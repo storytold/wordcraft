@@ -1,5 +1,5 @@
 use super::canvas::leave_full_screen;
-use super::*;
+use super::{Key, Modifiers, Value, WordApp, json};
 
 /// The registry's name for a key.
 pub fn key_name(k: Key) -> Option<&'static str> {

@@ -1,5 +1,5 @@
 use super::doc_state::{CellRange, EDIT_MARKS, Selection};
-use super::*;
+use super::{CharProps, Document, PartKind, Path, Pos, Session, StoryRef, ViewMode, untitled_name};
 
 impl Session {
     /// Remember the caret as the place of an edit, for Go Back. Edits in the same paragraph as

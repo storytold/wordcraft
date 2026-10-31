@@ -1,5 +1,5 @@
 use super::bx::{Bx, Cls};
-use super::*;
+use super::{Arc, C, FaceRef, MClass, MItem, MathTable, Rgb};
 
 pub(super) struct Ctx {
     pub(super) face: FaceRef,
