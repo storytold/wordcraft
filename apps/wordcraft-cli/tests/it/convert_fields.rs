@@ -13,7 +13,15 @@ fn convert_refresh_is_opt_in() {
     for locked in [true, false] {
         doc.insert_object(
             &Pos::body(0, 0),
-            InlineObject::Field { instr: "PAGEREF target".into(), result: "104".into(), locked, dirty: true, code: false, form: String::new() },
+            InlineObject::Field {
+                instr: "PAGEREF target".into(),
+                result: "104".into(),
+                locked,
+                dirty: true,
+                code: false,
+                form: String::new(),
+                code_xml: String::new(),
+            },
             &Default::default(),
         )
         .unwrap();

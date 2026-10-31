@@ -115,7 +115,7 @@ impl Writer<'_> {
             && let Some((instr, locked, dirty, props)) = self.toc_field.take()
         {
             self.rev_open(w, &props);
-            self.field_start(w, &instr, locked, dirty, "", &props);
+            self.field_start(w, &instr, locked, dirty, "", "", &props);
             self.rev_close(w, &props);
         }
         let toc_end = std::mem::take(&mut self.toc_end_here);

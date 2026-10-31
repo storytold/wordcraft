@@ -145,7 +145,15 @@ pub(super) fn citation(s: &mut Session, v: &Value) -> CmdResult {
     let instr = if pages.is_empty() { format!("CITATION {tag}") } else { format!("CITATION {tag} \\p {pages}") };
     let end = s.doc.insert_object(
         &at,
-        InlineObject::Field { instr, result: cite(&src, st.name, n, &pages), locked: false, dirty: false, code: false, form: String::new() },
+        InlineObject::Field {
+            instr,
+            result: cite(&src, st.name, n, &pages),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+            code_xml: String::new(),
+        },
         &props,
     )?;
     s.sel = Selection::caret(end);

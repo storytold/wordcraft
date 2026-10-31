@@ -4081,6 +4081,7 @@ fn update_toc_clears_stale_field_result_for_docx_span() {
                 dirty: false,
                 code: false,
                 form: String::new(),
+                code_xml: String::new(),
             },
             &CharProps::default(),
         )
@@ -4141,6 +4142,7 @@ fn update_fields_clears_dirty() {
                 dirty: true,
                 code: false,
                 form: String::new(),
+                code_xml: String::new(),
             },
             &wordcraft_doc::props::CharProps::default(),
         )
@@ -11019,6 +11021,7 @@ fn toc_collects_cell_headings() {
             dirty: true,
             code: false,
             form: String::new(),
+            code_xml: String::new(),
         },
         &CharProps::default(),
     )
@@ -11090,6 +11093,7 @@ fn toc_keeps_direct_number_tabs() {
                 dirty: true,
                 code: false,
                 form: String::new(),
+                code_xml: String::new(),
             },
             &CharProps::default(),
         )

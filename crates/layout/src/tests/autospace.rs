@@ -76,8 +76,15 @@ fn spaces_punctuation_hangul_and_latin_alone_get_nothing() {
 #[test]
 fn a_field_result_is_classed_by_the_text_it_shows() {
     let mut d = Document::from_text("漢漢");
-    let field =
-        InlineObject::Field { instr: "MERGEFIELD n".into(), result: "12".into(), locked: false, dirty: false, code: false, form: String::new() };
+    let field = InlineObject::Field {
+        instr: "MERGEFIELD n".into(),
+        result: "12".into(),
+        locked: false,
+        dirty: false,
+        code: false,
+        form: String::new(),
+        code_xml: String::new(),
+    };
     para0(&mut d).insert_object(3, field, &CharProps::default()).unwrap();
     let pl = first_para(&lay(&d));
     let at = pl.clusters.iter().position(|c| c.start == 3).unwrap();
