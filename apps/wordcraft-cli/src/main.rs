@@ -44,6 +44,7 @@ USAGE:
   wordcraft-cli commands [--json]             list every command
   wordcraft-cli parity [--markdown]           feature-catalog parity
   wordcraft-cli mcp [--connect HOST:PORT | --author NAME] [--automation-read-root DIR] [--automation-write-root DIR]
+                    [--allow-commands LIST|@FILE]
                                               MCP server on stdio (headless, or bridged to the app).
                                               --automation-read-root / --automation-write-root confine
                                               the files the agent's commands read (open, insert text
@@ -51,6 +52,11 @@ USAGE:
                                               export, merge output…) to DIR, links followed; a root left
                                               out grants none of its access. They apply to the headless
                                               server and are an error with --connect.
+                                              --allow-commands holds the agent to the commands
+                                              listed (ids like format.bold, groups like format.*,
+                                              comma-separated, or @FILE with one per line); execute,
+                                              batch, macros and the tools built on commands are all
+                                              held to it, and list_commands shows only those
   wordcraft-cli zotero <command> <file> [--cmd 'id={json}' …] [--save OUT] [--trace] [--port P]
                                               run a Zotero command on a document (Zotero must be
                                               running): addEditCitation, addEditBibliography,
@@ -291,6 +297,87 @@ fn automation_roots(
     Ok((roots, left))
 }
 
+/// The flags that confine the headless server are an error with `--connect`: a running app is
+/// not confined by them.
+fn headless_only_flags(connect: bool, roots: bool, allow_commands: bool) -> Result<(), String> {
+    if !connect {
+        return Ok(());
+    }
+    if allow_commands {
+        return Err("mcp: --allow-commands holds the headless server to a list; a running app is not held to it".into());
+    }
+    if roots {
+        return Err(
+            "mcp: --automation-read-root and --automation-write-root confine the headless server; a running app is not confined by them".into()
+        );
+    }
+    Ok(())
+}
+
+/// Hold `headless` (and every thread of this process, like the roots) to the `--allow-commands`
+/// list `spec`; without one, `headless` as it was.
+fn confine_commands(headless: wordcraft_mcp::Headless, spec: Option<&str>) -> Result<wordcraft_mcp::Headless, String> {
+    let Some(spec) = spec else { return Ok(headless) };
+    let list = std::sync::Arc::new(read_command_allowlist(spec, &headless.session.registry)?);
+    wordcraft_engine::command_access::confine_process(list.clone());
+    eprintln!("wordcraft-cli: commands allowed: {}", list.describe().join(", "));
+    Ok(headless.with_command_allowlist(Some(list)))
+}
+
+/// `--allow-commands LIST|@FILE`, given at most once and always with its list. A flag left without
+/// a value (last on the line, or followed by another option) is an error, so the server never
+/// starts with every command allowed because the list went missing; the check runs before
+/// `--connect` is looked at, so that flag can't slip past it either.
+fn allow_commands_arg(args: &[String]) -> Result<Option<String>, String> {
+    match find_option_arg(args, "--allow-commands") {
+        OptionArg::Absent => Ok(None),
+        OptionArg::Duplicate => Err("mcp: duplicate --allow-commands option".into()),
+        OptionArg::MissingValue => Err("mcp: --allow-commands requires a list of commands (or @FILE)".into()),
+        OptionArg::Value(list) => Ok(Some(list.to_string())),
+    }
+}
+
+/// The `--allow-commands` list: given inline (`format.*,text.insert`) or, after `@`, read from a
+/// file (`@allowed.txt`, one id or `group.*` per line, `#` comments). Any problem is an error at
+/// startup, never a server that runs unrestricted.
+fn read_command_allowlist(spec: &str, registry: &wordcraft_engine::Registry) -> Result<wordcraft_engine::command_access::CommandAllowlist, String> {
+    let text = match spec.strip_prefix('@') {
+        Some(path) => read_allowlist_file(path, wordcraft_engine::command_access::MAX_LIST_BYTES)?,
+        None => spec.to_string(),
+    };
+    wordcraft_engine::command_access::CommandAllowlist::parse(&text, registry).map_err(|e| format!("mcp: --allow-commands: {e}"))
+}
+
+/// The text of an `@FILE` command list, at most `max` bytes. Only a regular file (or a link to one)
+/// is read: a pipe, socket or device (`/dev/zero`, a FIFO that sends a short list and stays open)
+/// found at the first check is refused before it is opened, since opening or reading it could block
+/// startup forever. The check and the open are not atomic: another program that swaps a FIFO in
+/// between can still make the open wait for a writer (the same check-then-open race as the
+/// automation roots). The read itself stops after `max + 1` bytes, whatever the file's metadata
+/// says, so a file that grows while it is read can't make startup read on; anything longer than
+/// `max` is refused, never cut short.
+fn read_allowlist_file(path: &str, max: usize) -> Result<String, String> {
+    use std::io::Read;
+    let not_regular = || format!("mcp: --allow-commands: {path} is not a regular file");
+    let cannot_read = |e: std::io::Error| format!("mcp: --allow-commands: cannot read {path}: {e}");
+    if !std::fs::metadata(path).map_err(cannot_read)?.is_file() {
+        return Err(not_regular());
+    }
+    let file = std::fs::File::open(path).map_err(cannot_read)?;
+    // Checked again on the opened file: a path swapped after the first look for a device or other
+    // non-regular file that opened without waiting is refused here, before any read.
+    if !file.metadata().map_err(cannot_read)?.is_file() {
+        return Err(not_regular());
+    }
+    let limit = u64::try_from(max).unwrap_or(u64::MAX).saturating_add(1);
+    let mut bytes = Vec::new();
+    file.take(limit).read_to_end(&mut bytes).map_err(cannot_read)?;
+    if bytes.len() > max {
+        return Err(format!("mcp: --allow-commands: {path} is too long (more than {max} bytes)"));
+    }
+    String::from_utf8(bytes).map_err(|_| format!("mcp: --allow-commands: {path} is not UTF-8 text"))
+}
+
 /// The password a protected Word file is opened with: `--password` (which any other process on
 /// the machine can read from the command line), `--password-file`, or `WORDCRAFT_PASSWORD`.
 const PASSWORD_OPTIONS: &[OptionSpec] =
@@ -323,7 +410,11 @@ const RUN_OPTIONS: &[OptionSpec] = &[
 ];
 const COMMANDS_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--json", takes_value: false }];
 const PARITY_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--markdown", takes_value: false }];
-const MCP_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--connect", takes_value: true }, OptionSpec { name: "--author", takes_value: true }];
+const MCP_OPTIONS: &[OptionSpec] = &[
+    OptionSpec { name: "--connect", takes_value: true },
+    OptionSpec { name: "--author", takes_value: true },
+    OptionSpec { name: "--allow-commands", takes_value: true },
+];
 const ZOTERO_OPTIONS: &[OptionSpec] = &[
     OptionSpec { name: "--cmd", takes_value: true },
     OptionSpec { name: "--save", takes_value: true },
@@ -600,12 +691,8 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             validate_options("mcp", &rest, MCP_OPTIONS)?;
             let author = arg_value(&rest, "--author");
             let connect = arg_value(&rest, "--connect");
-            if roots.is_some() && connect.is_some() {
-                return Err(
-                    "mcp: --automation-read-root and --automation-write-root confine the headless server; a running app is not confined by them"
-                        .into(),
-                );
-            }
+            let allow_commands = allow_commands_arg(&rest)?;
+            headless_only_flags(connect.is_some(), roots.is_some(), allow_commands.is_some())?;
             let backend: Box<dyn wordcraft_mcp::Backend> = match connect {
                 // The app's user name is the person's own setting; don't rewrite it from a flag.
                 Some(_) if author.is_some() => {
@@ -643,6 +730,7 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
                         eprintln!("wordcraft-cli: files confined: read root {}, write root {}", show(roots.read_root()), show(roots.write_root()));
                         headless = headless.with_automation_roots(Some(roots));
                     }
+                    headless = confine_commands(headless, allow_commands.as_deref())?;
                     if let Some(name) = author {
                         set_author(&mut headless.session, &name)?;
                     }

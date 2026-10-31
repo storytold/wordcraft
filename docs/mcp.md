@@ -110,6 +110,42 @@ The checks hold for every thread of the server process. A path is checked, then 
 program that swaps a link in between can still win that race, so the roots keep an agent to the
 files it was given rather than guarding against other software on the computer.
 
+## Confining commands
+
+```sh
+wordcraft-cli mcp --allow-commands "text.*, format.*, para.*, select.text, caret.*, file.new, file.save"
+wordcraft-cli mcp --allow-commands @allowed.txt   # one id or group.* per line, # comments
+```
+
+`--allow-commands` keeps the agent to the commands it was given, the way the roots above keep it
+to folders. Use both together.
+
+- Every command a client asks for must be on the list: `execute`, each command of `batch`, and
+  the commands behind `new_document` (`file.new`), `open_document` (`file.open`),
+  `save_document` (`file.save`, or `file.exportPng` for `.png`), `type_text` (`text.insert`),
+  `select_text` (`select.text`), `get_text` (`document.text`) and `list_documents`
+  (`view.switchWindows`). A command off the list is an ordinary tool error:
+  `command `insert.table` is not allowed: it is not on this session's --allow-commands list`.
+- So must every step a macro plays back: allowing `tools.macros` doesn't allow what its macros
+  run, so a macro (even one defined before) is never a way around the list.
+- Commands a command runs itself (Heading 1 applying its style) are part of the command that was
+  allowed and aren't checked again. `inspect_document`, `render_page` and `parity` read the
+  document without a command and stay available.
+- `list_commands` shows only the commands the client may run.
+- A list names ids (`format.bold`) and groups (`format.*`: every command whose id starts with
+  `format.`), separated by commas, spaces or new lines. An unknown id, or a group that matches no
+  command, stops the server at startup, so a typo never leaves the agent with less, or more, than
+  meant. An empty list is an error too, and so is the flag without a list or given twice: the
+  server never starts with every command allowed because the list went missing.
+- An `@FILE` list must be a regular file (or a link to one). A pipe, socket or device found at the
+  first check stops the server at startup without being opened. That check and the open are not
+  atomic: a path swapped to a FIFO in between can make the open wait for a writer, the same
+  check-then-open race described under "Confining file access". It is read up to 256 KiB and no
+  further, whatever the file claims to be; a longer one, or one that keeps growing, stops the
+  server too.
+- Like the roots, the list holds the headless server: `--connect` with it is an error, with or
+  without a list after the flag.
+
 ## Tools
 
 | Tool | What it does |

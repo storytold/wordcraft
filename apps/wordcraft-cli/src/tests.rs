@@ -227,6 +227,84 @@ fn automation_roots_are_an_error_with_connect() {
 }
 
 #[test]
+fn allow_commands_needs_its_list() {
+    assert_eq!(allow_commands_arg(&args(&["--author", "Claude"])), Ok(None));
+    assert_eq!(allow_commands_arg(&args(&["--allow-commands", "format.*"])), Ok(Some("format.*".into())));
+    for bad in [
+        args(&["--allow-commands"]),
+        args(&["--allow-commands", "--author", "Claude"]),
+        args(&["--allow-commands", "format.*", "--allow-commands", "text.*"]),
+    ] {
+        assert!(allow_commands_arg(&bad).is_err(), "{bad:?}");
+    }
+    // Refused before anything is served, with or without --connect, wherever the flag stands.
+    for line in [
+        args(&["mcp", "--allow-commands"]),
+        args(&["mcp", "--author", "Claude", "--allow-commands"]),
+        args(&["mcp", "--connect", "127.0.0.1:9", "--allow-commands"]),
+        args(&["mcp", "--allow-commands", "--connect", "127.0.0.1:9"]),
+    ] {
+        let e = run(&line).unwrap_err().to_string();
+        assert!(e.contains("--allow-commands requires a list"), "{line:?}: {e}");
+    }
+    let e = run(&args(&["mcp", "--connect", "127.0.0.1:9", "--allow-commands", "format.*"])).unwrap_err().to_string();
+    assert!(e.contains("--allow-commands") && e.contains("running app"), "{e}");
+}
+
+/// A fresh, empty folder for one test.
+fn scratch(tag: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("wordcraft-allowlist-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+#[test]
+fn an_allowlist_file_is_read_up_to_its_limit_and_no_further() {
+    let dir = scratch("limit");
+    let at = |name: &str, text: &str| {
+        let path = dir.join(name);
+        std::fs::write(&path, text).unwrap();
+        path.to_string_lossy().into_owned()
+    };
+    assert_eq!(read_allowlist_file(&at("exact", "format.*"), 8).unwrap(), "format.*");
+    let e = read_allowlist_file(&at("long", "format.*\n"), 8).unwrap_err();
+    assert!(e.contains("too long"), "{e}");
+    assert!(read_allowlist_file(&at("bytes", "\u{FFFD}"), 8).is_ok());
+    std::fs::write(dir.join("latin1"), [b'c', b'a', b'f', 0xE9]).unwrap();
+    assert!(read_allowlist_file(&dir.join("latin1").to_string_lossy(), 8).unwrap_err().contains("not UTF-8"));
+    assert!(read_allowlist_file(&dir.join("missing").to_string_lossy(), 8).unwrap_err().contains("cannot read"));
+    // At the real limit, too: one byte over is refused, not cut short.
+    let limit = wordcraft_engine::command_access::MAX_LIST_BYTES;
+    let over = at("over", &"#".repeat(limit + 1));
+    assert!(read_allowlist_file(&over, limit).unwrap_err().contains("too long"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn streams_and_devices_are_refused_before_they_are_opened() {
+    let limit = wordcraft_engine::command_access::MAX_LIST_BYTES;
+    // `/dev/zero` reports a length of 0 and never ends.
+    assert!(read_allowlist_file("/dev/zero", limit).unwrap_err().contains("not a regular file"));
+    let dir = scratch("fifo");
+    assert!(read_allowlist_file(&dir.to_string_lossy(), limit).unwrap_err().contains("not a regular file"));
+    // A FIFO with no writer: opening it would block for good, so it must be refused without
+    // being opened. The test would hang here if it were.
+    let fifo = dir.join("list");
+    let made = std::process::Command::new("mkfifo").arg(&fifo).status();
+    assert!(made.is_ok_and(|s| s.success()), "mkfifo");
+    let started = std::time::Instant::now();
+    assert!(read_allowlist_file(&fifo.to_string_lossy(), limit).unwrap_err().contains("not a regular file"));
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    // A link to a regular file is still a regular file.
+    std::fs::write(dir.join("real"), "format.bold").unwrap();
+    std::os::unix::fs::symlink(dir.join("real"), dir.join("link")).unwrap();
+    assert_eq!(read_allowlist_file(&dir.join("link").to_string_lossy(), limit).unwrap(), "format.bold");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn render_rejects_missing_or_invalid_page_and_scale() {
     // Missing operands
     assert_eq!(run(&args(&["render", "missing.docx", "out.png", "--page"])), Err("render: --page requires a value".into()));
