@@ -187,12 +187,13 @@ fn copy_with(s: &mut Session, whole: Option<&Path>) -> CmdResult {
         (None, Some(r)) => s.doc.copy_table_cells(r.story, &r.table, r.rows, r.cols),
         (None, None) => None,
     };
-    let f = match table {
-        Some(f) => f,
+    let (f, range) = match table {
+        Some(f) => (f, false),
         None if a == b => return Ok(json!({"text": ""})),
-        None => s.doc.copy_range(&a, &b),
+        None => (s.doc.copy_range(&a, &b), true),
     };
-    s.clipboard_text = f.clipboard_text();
+    // A range copies with its list labels, as Word's plain-text copy has them (#2015).
+    s.clipboard_text = if range { s.doc.copy_text(&f, &a, &b) } else { f.clipboard_text() };
     s.clip_history.push(&f, &s.clipboard_text);
     s.clipboard = Some(f);
     Ok(copy_result(s))
