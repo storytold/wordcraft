@@ -140,6 +140,8 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
+- 2026-10-30: `get_text` (`document.text`) omits hidden runs — hidden directly, through the character style, or inside table cells — and `select.text` skips hidden occurrences unless `includeHidden`, so an agent edits the text it read back. Inspect Document (`file.inspect`) stays the hidden-text audit and removal path.
+
 - 2026-10-28: Aligned-copy review fixes keep the document axis locked through middle-button scrolling and let Ctrl/Command+Shift start on a secondary selected object. Plain Ctrl and Shift clicks keep their existing behavior (#4764).
 
 - 2026-10-28: Ctrl/Command+Shift copies a selected floating picture, shape or text box along its dominant axis (#4764); inline copies keep the text cursor. Guides on the free axis, original/clipboard/selection, cancel, protection and history are covered by synthetic Linux tests. Native desktop and Word untested; readiness unchanged.
@@ -1057,6 +1059,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-23 | trivial | Progress log: a table cell span from a `.json` file no longer overflows (#3637) |
 | 2026-10-28 | trivial | Progress log: chart and SmartArt text the font lacks is drawn in a fallback face (#4720) |
 | 2026-10-29 | trivial | Progress log: corporate authors in bibliographies (#4848) |
+| 2026-10-30 | trivial | get_text omits hidden runs; select.text skips hidden occurrences unless includeHidden (PR #4993) |
 | 2026-10-29 | trivial | Progress log: Table Properties follows the selection (#4857) |
 | 2026-10-27 | trivial | Progress log: AutoCorrect Options with no document open (#4585) |
 | 2026-10-28 | trivial | Progress log: RTF metafile pictures are imported (#4259) |

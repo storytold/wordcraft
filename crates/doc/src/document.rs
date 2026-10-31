@@ -338,7 +338,8 @@ impl Document {
         self.story_text(s, TextMode::Shown)
     }
 
-    /// [`Self::plain_text`] without tracked-deleted runs. A deleted paragraph mark still yields `\n`.
+    /// [`Self::plain_text`] without tracked-deleted or hidden runs. A deleted paragraph mark
+    /// still yields `\n`.
     pub fn final_text(&self, s: StoryRef) -> String {
         self.story_text(s, TextMode::Final)
     }
@@ -346,7 +347,7 @@ impl Document {
     fn story_text(&self, s: StoryRef, mode: TextMode) -> String {
         let mut out = String::new();
         if let Some(bl) = self.story(s) {
-            text_of(bl, &mut out, 0, mode);
+            text_of(bl, &mut out, 0, mode, &self.styles);
         }
         if out.ends_with('\n') {
             out.pop();

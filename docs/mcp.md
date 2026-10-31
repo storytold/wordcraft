@@ -124,8 +124,8 @@ files it was given rather than guarding against other software on the computer.
   step; each break is the Enter it stands for, so AutoFormat and AutoCorrect run and a
   one-line control refuses; at most 10,000 lines — the cap is `text.insert`'s own, so a
   control-channel or CLI call is held to it too) |
-| `select_text` | select the n-th occurrence of some text |
-| `get_text` / `inspect_document` | read the document back (verify without screenshots) |
+| `select_text` | select the n-th occurrence of some text (hidden runs are skipped by default, matching `get_text`; `includeHidden` counts them) |
+| `get_text` / `inspect_document` | read the document back (verify without screenshots); `get_text` omits hidden runs — text a reader does not see — and `inspect_document` (`file.inspect`) reports them |
 | `render_page` | a page as PNG |
 | `parity` | feature coverage |
 | `screenshot`, `click`, `key`, `ui_inspect` | app only (`--connect`) |

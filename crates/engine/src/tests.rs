@@ -3141,6 +3141,93 @@ fn document_text_drops_tracked_deletions() {
     assert_eq!(run(&mut s, "document.text", json!({}))["text"], "Signed by Bob Jones, Director.");
 }
 
+#[test]
+fn document_text_drops_hidden_text() {
+    // Hidden runs (w:vanish) are not body text: an agent reading get_text must not see what a
+    // reader does not see. Inspect Document still reports them.
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Approved budget: 100."}));
+    run(&mut s, "select.text", json!({"text": "100"}));
+    run(&mut s, "format.hidden", json!({"value": true}));
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "text.insert", json!({"text": " Paid: yes."}));
+    assert_eq!(run(&mut s, "document.text", json!({}))["text"], "Approved budget: . Paid: yes.");
+    assert_eq!(run(&mut s, "file.inspect", json!({}))["found"]["hiddenText"], json!(true));
+}
+
+#[test]
+fn document_text_drops_hidden_text_in_tables() {
+    // Hidden runs inside table cells follow the same rule as body paragraphs.
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Before. "}));
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 1}));
+    run(&mut s, "text.insert", json!({"text": "Cell note 42"}));
+    run(&mut s, "select.text", json!({"text": "42"}));
+    run(&mut s, "format.hidden", json!({"value": true}));
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "text.insert", json!({"text": "After."}));
+    let out = run(&mut s, "document.text", json!({}))["text"].as_str().unwrap().to_string();
+    assert!(!out.contains("42"), "hidden table text leaked: {out}");
+    assert!(out.contains("Cell note") && out.contains("After."), "{out}");
+}
+
+#[test]
+fn select_text_skips_hidden_occurrences() {
+    // get_text omits hidden runs; select.text must count the same visible text, or an edit
+    // aimed at what the agent read lands in a hidden run instead.
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "foo foo"}));
+    run(&mut s, "select.text", json!({"text": "foo", "occurrence": 1}));
+    run(&mut s, "format.hidden", json!({"value": true}));
+    // The first "foo" is hidden now: the default search selects the visible one.
+    run(&mut s, "select.text", json!({"text": "foo"}));
+    run(&mut s, "text.insert", json!({"text": "bar"}));
+    assert_eq!(run(&mut s, "document.text", json!({}))["text"], " bar");
+    // includeHidden finds the hidden occurrence explicitly.
+    run(&mut s, "select.text", json!({"text": "foo", "occurrence": 1, "includeHidden": true}));
+    run(&mut s, "text.insert", json!({"text": "X"}));
+    assert_eq!(text(&s), "X bar");
+}
+
+#[test]
+fn select_text_matches_a_match_straddling_hidden_characters() {
+    // "ayya" with "yy" hidden reads "aa"; the projection match spans the hidden characters.
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "ayya"}));
+    run(&mut s, "select.text", json!({"text": "yy"}));
+    run(&mut s, "format.hidden", json!({"value": true}));
+    run(&mut s, "select.text", json!({"text": "aa"}));
+    run(&mut s, "text.insert", json!({"text": "X"}));
+    assert_eq!(text(&s), "X");
+}
+
+#[test]
+fn select_text_finds_the_projections_first_occurrence() {
+    // "aaaa" with the first `a` hidden reads "aaa"; the projection's match sits at raw offset
+    // 1, where a raw-text search finds nothing (its match at 0 overlaps the hidden run).
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "aaaa"}));
+    run(&mut s, "select.text", json!({"text": "a", "occurrence": 1}));
+    run(&mut s, "format.hidden", json!({"value": true}));
+    run(&mut s, "select.text", json!({"text": "aa", "occurrence": 1}));
+    run(&mut s, "text.insert", json!({"text": "X"}));
+    assert_eq!(run(&mut s, "document.text", json!({}))["text"], "Xa");
+}
+
+#[test]
+fn select_text_counts_occurrences_of_the_visible_projection() {
+    // "aaaaa" with the first `a` hidden reads "aaaa"; both of its non-overlapping `aa`
+    // occurrences sit one raw offset further than a raw-text search would count (its match
+    // at raw offset 0 overlaps the hidden run, shifting every later occurrence).
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "aaaaa"}));
+    run(&mut s, "select.text", json!({"text": "a", "occurrence": 1}));
+    run(&mut s, "format.hidden", json!({"value": true}));
+    run(&mut s, "select.text", json!({"text": "aa", "occurrence": 2}));
+    run(&mut s, "text.insert", json!({"text": "Y"}));
+    assert_eq!(run(&mut s, "document.text", json!({}))["text"], "aaY");
+}
+
 /// The author of the revision `rid` points to.
 fn author_of(s: &Session, rid: Option<u32>) -> Option<String> {
     rid.and_then(|r| s.doc.revisions.get(r as usize)).map(|r| r.author.clone())
