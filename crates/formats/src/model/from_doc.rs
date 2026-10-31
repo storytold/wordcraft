@@ -357,6 +357,11 @@ fn flow_of(doc: &Document, tracked: bool) -> Flow {
     }
 }
 
+/// `blocks` (the story of a note or comment, say) as flow blocks.
+pub fn flow_of_blocks(doc: &Document, blocks: &Blocks) -> Vec<FBlock> {
+    flow_blocks(doc, blocks, 0, false)
+}
+
 /// List labels in document order for list paragraphs of a flow ("1.", "a.", "•"), computed by a
 /// simple per-level counter (what text exports show).
 #[derive(Default)]

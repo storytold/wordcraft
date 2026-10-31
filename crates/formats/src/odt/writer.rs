@@ -1,4 +1,8 @@
-use super::{Align, FBlock, FTable, Fmt, HashMap, Inline, Kind, Para, RevMark, Rgb, VAlign, mime_of, model};
+use super::body::{MARK, MAX_NOTES, MarkKind, for_paras, mark_name, parse_mark};
+use super::{
+    Align, Arc, Block, Comment, Document, FBlock, FTable, Fmt, HashMap, HashSet, Inline, InlineObject, Kind, NoteKind, OBJ, Para, PartKind, RevMark,
+    Rgb, VAlign, mime_of, model,
+};
 
 // ---------------------------------------------------------------------------------------------
 // Export
@@ -67,6 +71,12 @@ pub(super) struct Writer {
     /// Cell styles by (shading, vertical-alignment).
     cell_styles: Vec<(Option<Rgb>, Option<VAlign>)>,
     pub(super) pictures: Vec<(String, std::sync::Arc<Vec<u8>>, String)>,
+    /// Footnotes and endnotes (by part id) and comments (by id) to write where their markers are.
+    pub(super) out: OutExtras,
+    foot_n: usize,
+    end_n: usize,
+    /// Comments whose `office:annotation` is written and whose range is still open.
+    started: HashSet<u32>,
     /// `text:changed-region` elements written so far.
     pub(super) regions: Vec<String>,
     /// The insertion open in the body, and its region id.
@@ -384,6 +394,10 @@ impl Writer {
                         out.push_str(&format!("<svg:desc>{}</svg:desc>", x(&img.alt)));
                     }
                     out.push_str("</draw:frame>");
+                    prev_space = false;
+                }
+                Inline::Anchor(a) if a.starts_with(MARK) => {
+                    self.mark(a, out);
                     prev_space = false;
                 }
                 Inline::Anchor(a) => out.push_str(&format!("<text:bookmark text:name=\"{}\"/>", x(a))),
@@ -788,5 +802,126 @@ fn now_unix() -> i64 {
     {
         let ms = js_sys::Date::now();
         if ms.is_finite() && ms > 0.0 { (ms / 1000.0) as i64 } else { 0 }
+    }
+}
+
+/// The notes and comments of a document to write: footnote and endnote stories by part id
+/// (endnote?, custom mark, blocks) and comments by id (the comment, blocks).
+#[derive(Default)]
+pub(super) struct OutExtras {
+    notes: HashMap<u32, (bool, String, Vec<FBlock>)>,
+    comments: HashMap<u32, (Comment, Vec<FBlock>)>,
+}
+
+/// A copy of `doc` whose note references and comment boundaries in the body are the reserved
+/// bookmarks the flow model carries (`None` when there are none), and the notes and comments
+/// themselves.
+pub(super) fn prepare_export(doc: &Document) -> (Option<Document>, OutExtras) {
+    let has_notes = doc.parts.values().any(|p| matches!(p.kind, PartKind::Footnote | PartKind::Endnote));
+    if !has_notes && doc.comments.is_empty() {
+        return (None, OutExtras::default());
+    }
+    let mut d = doc.clone();
+    let mut notes: Vec<(u32, NoteKind, String)> = Vec::new();
+    let mut seen_notes: HashSet<u32> = HashSet::new();
+    let mut seen_comments: HashSet<u32> = HashSet::new();
+    for_paras(&mut d.body, 0, &mut |p| {
+        for off in p.object_offsets() {
+            let name = match p.object_at(off) {
+                Some(InlineObject::NoteRef { kind, id, custom }) if doc.parts.contains_key(id) => {
+                    if seen_notes.insert(*id) {
+                        notes.push((*id, *kind, custom.clone()));
+                    }
+                    Some(mark_name(MarkKind::Note, *id as usize))
+                }
+                Some(InlineObject::CommentStart { id }) if doc.comments.contains_key(id) => {
+                    seen_comments.insert(*id);
+                    Some(mark_name(MarkKind::CommentStart, *id as usize))
+                }
+                Some(InlineObject::CommentEnd { id }) if doc.comments.contains_key(id) => Some(mark_name(MarkKind::CommentEnd, *id as usize)),
+                _ => None,
+            };
+            if let Some(name) = name
+                && let Some(o) = p.object_at_mut(off)
+            {
+                *o = InlineObject::BookmarkStart { name };
+            }
+        }
+    });
+    let mut out = OutExtras::default();
+    for (id, kind, custom) in notes.into_iter().take(MAX_NOTES) {
+        let Some(part) = doc.parts.get(&id) else { continue };
+        let mut blocks = part.blocks.clone();
+        // The story's own reference mark (and the space after it) is the citation here.
+        if let Some(first) = blocks.first_mut()
+            && let Block::Para(p) = Arc::make_mut(first)
+            && let Some(off) = p.object_offsets().first().copied()
+            && matches!(p.object_at(off), Some(InlineObject::NoteRef { .. }))
+            && p.text.get(..off).is_some_and(|t| t.trim().is_empty())
+        {
+            let _ = p.delete(0, off + OBJ.len_utf8());
+            if p.text.starts_with(' ') {
+                let _ = p.delete(0, 1);
+            }
+        }
+        out.notes.insert(id, (kind == NoteKind::Endnote, custom, model::flow_of_blocks(doc, &blocks)));
+    }
+    for id in seen_comments.into_iter().take(MAX_NOTES) {
+        let Some(c) = doc.comments.get(&id) else { continue };
+        let blocks = doc.parts.get(&c.part).map(|p| model::flow_of_blocks(doc, &p.blocks)).unwrap_or_default();
+        out.comments.insert(id, (c.clone(), blocks));
+    }
+    (Some(d), out)
+}
+
+impl Writer {
+    /// A note reference or comment boundary (`name` is a reserved bookmark name).
+    fn mark(&mut self, name: &str, out: &mut String) {
+        let Some((kind, id)) = parse_mark(name) else { return };
+        let Ok(id) = u32::try_from(id) else { return };
+        match kind {
+            MarkKind::Note => {
+                let Some((endnote, custom, blocks)) = self.out.notes.get(&id).cloned() else { return };
+                let counter = if endnote { &mut self.end_n } else { &mut self.foot_n };
+                *counter += 1;
+                let num = *counter;
+                let (class, prefix) = if endnote { ("endnote", "edn") } else { ("footnote", "ftn") };
+                let (label, cite) =
+                    if custom.is_empty() { (String::new(), num.to_string()) } else { (format!(" text:label=\"{}\"", x(&custom)), custom) };
+                out.push_str(&format!(
+                    "<text:note text:id=\"{prefix}{num}\" text:note-class=\"{class}\"><text:note-citation{label}>{}</text:note-citation><text:note-body>",
+                    x(&cite)
+                ));
+                self.blocks(&blocks, out, 1);
+                out.push_str("</text:note-body></text:note>");
+            }
+            MarkKind::CommentStart => {
+                let Some((c, blocks)) = self.out.comments.get(&id).cloned() else { return };
+                if !self.started.insert(id) {
+                    return;
+                }
+                out.push_str(&format!("<office:annotation office:name=\"__Annotation__{id}\">"));
+                if !c.author.is_empty() {
+                    out.push_str(&format!("<dc:creator>{}</dc:creator>", x(&c.author)));
+                }
+                if !c.date.is_empty() {
+                    out.push_str(&format!("<dc:date>{}</dc:date>", x(&c.date)));
+                }
+                if !c.initials.is_empty() {
+                    out.push_str(&format!("<meta:creator-initials>{}</meta:creator-initials>", x(&c.initials)));
+                }
+                if blocks.is_empty() {
+                    out.push_str("<text:p/>");
+                } else {
+                    self.blocks(&blocks, out, 1);
+                }
+                out.push_str("</office:annotation>");
+            }
+            MarkKind::CommentEnd => {
+                if self.started.remove(&id) {
+                    out.push_str(&format!("<office:annotation-end office:name=\"__Annotation__{id}\"/>"));
+                }
+            }
+        }
     }
 }
