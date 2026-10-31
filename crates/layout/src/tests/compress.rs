@@ -5,6 +5,7 @@
 
 use crate::*;
 use wordcraft_doc::CharSpacing;
+use wordcraft_doc::props::Align;
 use wordcraft_doc::section::{DocGrid, DocGridType};
 
 fn lay(doc: &Document) -> DocLayout {
@@ -69,6 +70,27 @@ fn a_proportional_mark_keeps_its_width() {
     // A Latin “ (proportional, in the run's Latin font) before a full-width 《: nothing to take.
     let (got, _) = changes("A“《书》", CharSpacing::CompressPunctuation, &[]);
     assert_eq!(got.get(1).copied(), Some(0.0), "{got:?}");
+}
+
+#[test]
+fn a_pair_split_across_lines_keeps_the_first_mark_whole() {
+    // （甲）（乙）… right-aligned: wherever a line ends on ） before a （ on the next line, the
+    // blank half compression took comes back, so the mark's full advance ends at the right edge.
+    let text = "（甲）".repeat(60);
+    let mut d = Document::from_text(&text);
+    d.settings.char_spacing = CharSpacing::CompressPunctuation;
+    if let Some(Block::Para(p)) = d.body.first_mut().map(Arc::make_mut) {
+        p.props.align = Some(Align::Right);
+    }
+    let mut plain = d.clone();
+    plain.settings.char_spacing = CharSpacing::DoNotCompress;
+    let (g, full) = (first_para(&lay(&d)), first_para(&lay(&plain)));
+    assert!(g.lines.len() > 1);
+    for line in &g.lines[..g.lines.len() - 1] {
+        let last = line.c1 - 1;
+        let (Some(c), Some(f), Some(&x)) = (g.clusters.get(last), full.clusters.get(last), line.xs.get(last - line.c0)) else { continue };
+        assert!((x + f.adv - line.right).abs() < 0.01, "line ending at {last}: {x} + {} (compressed {}) vs {}", f.adv, c.adv, line.right);
+    }
 }
 
 #[test]

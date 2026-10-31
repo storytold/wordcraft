@@ -141,11 +141,14 @@ pub(super) fn auto_space(b: &mut Builder, text: &str, de: bool, dn: bool) -> Vec
 }
 
 /// Punctuation compression (`w:characterSpacingControl` other than `doNotCompress`): where two
-/// full-width East Asian punctuation marks touch with blank halves between their ink, one blank
-/// half goes ([`crate::kinsoku::compresses`]), half the em of the mark that gives it up. The
-/// first cluster's advance shrinks, so the second and everything after move closer. A mark is
-/// full-width when its advance is at least 0.9 em; a proportional (Latin) quote keeps its width.
-pub(super) fn compress_punct(b: &mut Builder, text: &str) {
+/// East Asian punctuation marks touch with a blank half between their ink, that blank half goes
+/// ([`crate::kinsoku::compresses`]), half the em of the mark that gives it up. The mark giving it
+/// up and the first cluster, whose advance shrinks, are full-width (advance at least 0.9 em): a
+/// proportional (Latin) quote keeps its width. The second and everything after move closer.
+/// Returns the change by cluster index, negative; like automatic spacing it is undone at a line's
+/// end, where the pair is split.
+pub(super) fn compress_punct(b: &mut Builder, text: &str) -> Vec<(usize, f32)> {
+    let mut out = Vec::new();
     for (p, n) in touching(b, text) {
         let Some(who) = crate::kinsoku::compresses(p.ch, n.ch) else { continue };
         let mark = if who == crate::kinsoku::Compress::First { p } else { n };
@@ -159,9 +162,12 @@ pub(super) fn compress_punct(b: &mut Builder, text: &str) {
             continue;
         }
         if let Some(pc) = b.clusters.get_mut(p.k) {
-            pc.adv = (pc.adv - (mark.size / 2.0).min(400.0)).max(0.0);
+            let adv = (pc.adv - (mark.size / 2.0).min(400.0)).max(0.0);
+            out.push((p.k, adv - pc.adv));
+            pc.adv = adv;
         }
     }
+    out
 }
 
 /// An area text wraps around.

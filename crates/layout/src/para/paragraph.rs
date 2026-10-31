@@ -570,10 +570,10 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     }
     // Text on a character grid keeps to its cells.
     let on_grid = rp.snap_to_grid && env.grid.chars.is_some();
-    if !on_grid && doc.settings.char_spacing.compresses_punctuation() {
-        compress_punct(&mut sh.b, &p.text);
-    }
-    let auto_space = if on_grid { Vec::new() } else { auto_space(&mut sh.b, &p.text, rp.auto_space_de, rp.auto_space_dn) };
+    let compressed = if !on_grid && doc.settings.char_spacing.compresses_punctuation() { compress_punct(&mut sh.b, &p.text) } else { Vec::new() };
+    let mut auto_space = if on_grid { Vec::new() } else { auto_space(&mut sh.b, &p.text, rp.auto_space_de, rp.auto_space_dn) };
+    auto_space.extend(compressed);
+    auto_space.sort_by_key(|a| a.0);
     let mut skip = sh.left.clone();
     skip.extend(sh.bare.iter().cloned());
     let bt = BreakText::new(&p.text, skip);

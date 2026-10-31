@@ -91,8 +91,9 @@ pub struct ParaLayout {
     pub shown: Vec<(usize, String, Vec<std::ops::Range<usize>>)>,
     /// Shapes drawn around overstruck field text (enclosed characters, `EQ \o`), by cluster index.
     pub enclosures: Vec<(usize, Enclosed)>,
-    /// Room after a cluster between Asian text and Latin text or digits ([`auto_space`]), by
-    /// cluster index, sorted. It is part of the cluster's advance, but takes no room at a line's end.
+    /// Room after a cluster between Asian text and Latin text or digits ([`auto_space`]), and
+    /// (negative) the blank half punctuation compression took ([`compress_punct`]), by cluster
+    /// index, sorted. It is part of the cluster's advance, but is undone at a line's end.
     pub auto_space: Vec<(usize, f32)>,
 }
 
