@@ -39,6 +39,9 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("edit.pasteSpecial", "Paste Special", "Home › Clipboard › Paste", paste_special)
             .key("Mod+Alt+V")
             .params(r#"{"as"?: "formatted"|"rtf"|"html"|"picture"|"text", "text"?: string, "html"?: string, "rtf"?: string, "picture"?: base64}"#),
+        CommandSpec::new("edit.pasteChange", "Paste Options", "Home › Clipboard › Paste", change_paste)
+            .params(r#"{"mode": "source"|"text"|"merge"|"picture" (Keep Source Formatting, Keep Text Only, Merge Formatting, Picture)}"#)
+            .when(|s| if paste_options(s).is_empty() { Some("there is no paste to change") } else { None }),
     ]
 }
 
@@ -248,13 +251,29 @@ pub fn rich_fragment(s: &mut Session, v: &Value) -> Option<Fragment> {
     let fits = |k: &str| p::str(v, k).filter(|t| !t.trim().is_empty() && t.len() <= MAX_PASTE_BYTES);
     let doc = fits("html").map(import_html);
     let doc = match doc.filter(has_content) {
-        Some(d) => d,
+        Some(mut d) => {
+            drop_computed_left(&mut d);
+            d
+        }
         None => {
             let rtf = fits("rtf").filter(|t| looks_like_rtf(t))?;
             wordcraft_formats::rtf::import(rtf.as_bytes()).ok().filter(has_content)?
         }
     };
     Some(adopt(s, doc))
+}
+
+/// Browsers write the computed `text-align: left` (or `start`) on every paragraph they copy: that
+/// is the default, not a choice, so it must not override a centered destination for all but the
+/// first paragraph. Only HTML is treated so: in RTF `\ql` is a property the author set.
+fn drop_computed_left(doc: &mut Document) {
+    for b in &mut doc.body {
+        each_para(Arc::make_mut(b), 0, &mut |p| {
+            if p.props.align == Some(wordcraft_doc::Align::Left) {
+                p.props.align = None;
+            }
+        });
+    }
 }
 
 /// What a Paste brings in.
@@ -305,21 +324,42 @@ pub fn insert_text(s: &mut Session, text: &str) -> Result<(), CmdError> {
 /// Merge Formatting (#687): the pasted text takes the formatting where it lands — the paragraph's
 /// and the caret's — keeping only its emphasis (bold, italic, underline, strikethrough).
 pub fn merge_formatting(s: &Session, frag: &mut Fragment) {
+    let (base, para) = destination_formatting(s);
+    merge_into(frag, &base, &para, &s.doc.styles);
+}
+
+/// The formatting a paste lands in: the caret's character formatting and its paragraph's.
+fn destination_formatting(s: &Session) -> (wordcraft_doc::CharProps, wordcraft_doc::ParaProps) {
     let mut base = s.typing_props();
     base.ins = None;
     base.del = None;
     base.fmt_change = None;
     let (start, _) = s.sel.ordered();
     let para = s.doc.para_at(&start).map(|p| p.props.clone()).unwrap_or_default();
+    (base, para)
+}
+
+fn merge_into(frag: &mut Fragment, base: &wordcraft_doc::CharProps, para: &wordcraft_doc::ParaProps, styles: &wordcraft_doc::styles::StyleSheet) {
+    // Emphasis a paragraph style gives (a heading's bold) is emphasis too.
+    let style_flag = |id: Option<&str>, get: fn(&wordcraft_doc::CharProps) -> Option<bool>| {
+        id.map(|id| styles.chain(id)).and_then(|chain| chain.iter().rev().find_map(|st| get(&st.chr))).unwrap_or(false)
+    };
     for b in &mut frag.blocks {
         each_para(b, 0, &mut |p| {
-            p.props = para.clone();
+            let source = std::mem::replace(&mut p.props, para.clone());
+            let (style_bold, style_italic) = (style_flag(source.style.as_deref(), |c| c.bold), style_flag(source.style.as_deref(), |c| c.italic));
+            // A list stays a list, at its levels: bullets, numbers and their indents are structure.
+            if source.numbering.is_some() {
+                p.props.numbering = source.numbering;
+                p.props.indent_left = source.indent_left;
+                p.props.indent_first = source.indent_first;
+            }
             for run in &mut p.runs {
                 let src = std::mem::replace(&mut run.props, base.clone());
-                if src.bold == Some(true) {
+                if src.bold == Some(true) || (src.bold.is_none() && style_bold) {
                     run.props.bold = Some(true);
                 }
-                if src.italic == Some(true) {
+                if src.italic == Some(true) || (src.italic.is_none() && style_italic) {
                     run.props.italic = Some(true);
                 }
                 if src.underline.is_some_and(|u| u != wordcraft_doc::props::Underline::None) {
@@ -338,9 +378,301 @@ pub fn merge_formatting(s: &Session, frag: &mut Fragment) {
     }
 }
 
-/// Replace the selection with `frag`, marking it as an insertion under Track Changes.
-pub fn insert(s: &mut Session, mut frag: Fragment) -> Result<(), CmdError> {
+/// The paste just made, kept so the Paste Options button (#1747) can redo it another way in
+/// place: where it went, what the source was, and the document revision right after it.
+#[derive(Clone, Debug)]
+pub struct LastPaste {
+    pub start: wordcraft_doc::Pos,
+    pub end: wordcraft_doc::Pos,
+    pub source: Fragment,
+    /// The formatting the paste landed in, from before it: what Merge Formatting and Keep Text
+    /// Only take (the document start would otherwise read the pasted text's own).
+    pub dest: (wordcraft_doc::CharProps, wordcraft_doc::ParaProps),
+    /// The option the paste is in now (one of [`PASTE_OPTIONS`]'s ids).
+    pub mode: &'static str,
+    /// Set once the command that pasted has finished (the session fills it in).
+    pub rev: Option<u64>,
+}
+
+/// How a paste can be changed afterwards: (id, label), in the menu's order.
+pub const PASTE_OPTIONS: [(&str, &str); 4] =
+    [("source", "Keep Source Formatting"), ("text", "Keep Text Only"), ("merge", "Merge Formatting"), ("picture", "Picture")];
+
+/// Pixels per point of the picture a paste is turned into (twice screen size, so it stays sharp).
+const PICTURE_SCALE: f32 = 2.0;
+/// Why Picture is refused for long content: it is shown to the person, so it says what to do.
+const TOO_LONG_FOR_PICTURE: &str =
+    "the pasted content is too long to turn into a picture (more than two pages tall): choose another option, or paste less";
+/// Tallest content turned into a picture, in points (the raster's side is limited).
+const PICTURE_MAX_H: f32 = 7000.0;
+
+/// The pasted content drawn as a PNG, cropped to what is on it, with its size (width, height) in
+/// points. The destination's styles and media render it, so pictures and styled text look as they
+/// did.
+fn fragment_picture(s: &Session, frag: &Fragment) -> Result<(Vec<u8>, f32, f32), CmdError> {
+    let mut d = s.doc.clone();
+    d.body = frag.blocks.iter().cloned().map(Arc::new).collect();
+    d.last_section.landscape = false;
+    let width = d.sections().first().map(|(_, sp)| sp.text_width()).filter(|w| w.is_finite() && *w > 10.0).unwrap_or(468.0).min(1500.0);
+    let sect = &mut d.last_section;
+    sect.page_w = width;
+    sect.page_h = PICTURE_MAX_H;
+    sect.margin_top = 0.0;
+    sect.margin_bottom = 0.0;
+    sect.margin_left = 0.0;
+    sect.margin_right = 0.0;
+    sect.header = 0.0;
+    sect.footer = 0.0;
+    sect.gutter = 0.0;
+    sect.headers = Default::default();
+    sect.footers = Default::default();
+    let layout = wordcraft_layout::layout(&d, &mut wordcraft_layout::LayoutCache::new(), &Default::default());
+    let page = layout.pages.first().ok_or_else(|| CmdError::Failed("nothing to turn into a picture".into()))?;
+    // More than one page of it can't be drawn whole: refuse rather than leave the rest out.
+    if layout.pages.len() > 1 {
+        return Err(CmdError::Failed(TOO_LONG_FOR_PICTURE.into()));
+    }
+    // Draw only as much page as the content takes, not the whole tall one it was laid out on.
+    let used = page.content_bottom();
+    let layout = if used > 0.0 && used + 8.0 < PICTURE_MAX_H {
+        d.last_section.page_h = (used + 8.0).ceil();
+        wordcraft_layout::layout(&d, &mut wordcraft_layout::LayoutCache::new(), &Default::default())
+    } else {
+        layout
+    };
+    if layout.pages.len() > 1 {
+        return Err(CmdError::Failed(TOO_LONG_FOR_PICTURE.into()));
+    }
+    let page = layout.pages.first().ok_or_else(|| CmdError::Failed("nothing to turn into a picture".into()))?;
+    let img = wordcraft_render::render_page(&d, page, PICTURE_SCALE, &Default::default());
+    // Crop to the ink: everything that isn't paper, with a small margin.
+    // The page's own corner: a table at the margin touches the top-left one.
+    let paper = img.pixel(img.width.saturating_sub(1), img.height.saturating_sub(1));
+    let (mut x0, mut y0, mut x1, mut y1) = (u32::MAX, u32::MAX, 0u32, 0u32);
+    for y in 0..img.height {
+        for x in 0..img.width {
+            if img.pixel(x, y) != paper {
+                x0 = x0.min(x);
+                y0 = y0.min(y);
+                x1 = x1.max(x);
+                y1 = y1.max(y);
+            }
+        }
+    }
+    if x0 > x1 || y0 > y1 {
+        return Err(CmdError::Failed("nothing to turn into a picture".into()));
+    }
+    let pad = 4;
+    let (x0, y0) = (x0.saturating_sub(pad), y0.saturating_sub(pad));
+    let (x1, y1) = ((x1 + pad).min(img.width.saturating_sub(1)), (y1 + pad).min(img.height.saturating_sub(1)));
+    let (w, h) = (x1 - x0 + 1, y1 - y0 + 1);
+    let mut cropped = wordcraft_render::Rendered { width: w, height: h, pixels: Vec::with_capacity(w as usize * h as usize * 4) };
+    for y in y0..=y1 {
+        let row = (y as usize * img.width as usize + x0 as usize) * 4;
+        match img.pixels.get(row..row + w as usize * 4) {
+            Some(r) => cropped.pixels.extend_from_slice(r),
+            None => return Err(CmdError::Failed("the picture could not be cropped".into())),
+        }
+    }
+    let png = cropped.to_png();
+    if png.is_empty() {
+        return Err(CmdError::Failed("the picture could not be encoded".into()));
+    }
+    Ok((png, w as f32 / PICTURE_SCALE, h as f32 / PICTURE_SCALE))
+}
+
+/// The widest the picture may be so that it also fits the page's text area in height: its width
+/// when it already does, else scaled down in proportion. Content more than twice a page tall would
+/// shrink to nothing legible, so it is refused instead.
+fn fit_to_page_height(s: &Session, width: f32, height: f32) -> Result<f32, CmdError> {
+    let page_h = s.doc.sections().first().map(|(_, sp)| sp.text_height()).filter(|h| h.is_finite() && *h > 10.0).unwrap_or(648.0);
+    if height <= page_h {
+        return Ok(width);
+    }
+    if height > page_h * 2.0 {
+        return Err(CmdError::Failed(TOO_LONG_FOR_PICTURE.into()));
+    }
+    Ok(width * page_h / height)
+}
+
+/// The fragment's words as plain paragraphs, the way Keep Text Only pastes them: a table row is
+/// one paragraph with its cells' text separated by commas.
+fn text_only(frag: &Fragment) -> Fragment {
+    fn cell_text(cell: &wordcraft_doc::Cell) -> String {
+        let doc = Fragment { blocks: cell.blocks.iter().map(|b| (**b).clone()).collect(), parts: Default::default() };
+        doc.plain_text().split('\n').map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" ")
+    }
+    fn lines(b: &Block, out: &mut Vec<String>, depth: usize) {
+        match b {
+            Block::Table(t) if depth < MAX_DEPTH => {
+                for row in &t.rows {
+                    out.push(row.cells.iter().map(cell_text).collect::<Vec<_>>().join(", "));
+                }
+            }
+            other => {
+                let one = Fragment { blocks: vec![other.clone()], parts: Default::default() };
+                out.extend(one.plain_text().split('\n').map(str::to_string));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for b in &frag.blocks {
+        lines(b, &mut out, 0);
+    }
+    // The empty paragraph a table needs after it isn't text.
+    while out.last().is_some_and(|l| l.is_empty()) {
+        out.pop();
+    }
+    Fragment::from_text(&out.join("\n"))
+}
+
+/// Whether `frag` can be pasted more than one way: plain text has nothing to choose between.
+fn has_choices(frag: &Fragment) -> bool {
+    Fragment::from_text(&frag.plain_text()).blocks != frag.blocks
+}
+
+/// The paste options available now: empty unless the caret is right after a paste that had a
+/// choice and nothing has changed since.
+pub fn paste_options(s: &Session) -> Vec<&'static str> {
+    match &s.last_paste {
+        Some(lp) if lp.rev == Some(s.rev()) && s.sel == Selection::caret(lp.end.clone()) => PASTE_OPTIONS.iter().map(|o| o.0).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The option the current paste is in, while the offer stands (`source` right after a paste).
+pub fn paste_mode(s: &Session) -> Option<&'static str> {
+    if paste_options(s).is_empty() { None } else { s.last_paste.as_ref().map(|lp| lp.mode) }
+}
+
+/// Redo the last paste in place with the chosen option (`source`, `merge` or `text`).
+pub fn change_paste(s: &mut Session, v: &Value) -> CmdResult {
+    let mode = p::str(v, "mode").unwrap_or("source");
+    if !PASTE_OPTIONS.iter().any(|o| o.0 == mode) {
+        return Err(CmdError::Failed(format!("unknown paste option `{mode}`")));
+    }
+    if paste_options(s).is_empty() {
+        return Err(CmdError::Disabled("there is no paste to change".into()));
+    }
+    let Some(lp) = s.last_paste.clone() else { return Err(CmdError::Disabled("there is no paste to change".into())) };
+    if mode == "picture" {
+        let (png, width, height) = fragment_picture(s, &lp.source)?;
+        let width = fit_to_page_height(s, width, height)?;
+        super::controls::prepare_edit(s)?;
+        s.sel = Selection { anchor: lp.start.clone(), focus: lp.end.clone() };
+        let at = delete_selection(s)?;
+        // A paste at a paragraph's start restyled that paragraph: it goes back to the destination's.
+        if at.off == 0
+            && let Ok(para) = s.doc.para_mut(at.story, &at.path)
+        {
+            para.props = lp.dest.1.clone();
+            para.touch();
+        }
+        s.sel = Selection::caret(at);
+        let r = super::insert::place_picture(s, png, Some(width), "Pasted content")?;
+        // The picture is still a paste: the options stay, so it can be turned back.
+        s.last_paste = Some(LastPaste { start: lp.start, end: s.sel.focus.clone(), source: lp.source, dest: lp.dest, mode: "picture", rev: None });
+        return Ok(r);
+    }
+    let mut frag = lp.source.clone();
+    if mode != "source" {
+        // The destination's formatting is what is there without the paste: at the start of a
+        // document the caret would otherwise read the pasted text's own.
+        super::controls::prepare_edit(s)?;
+        s.sel = Selection { anchor: lp.start.clone(), focus: lp.end.clone() };
+        let at = delete_selection(s)?;
+        // A paste at a paragraph's start gave that paragraph the source's properties (a heading's
+        // style): what is left of it goes back to the destination's.
+        if at.off == 0
+            && let Ok(para) = s.doc.para_mut(at.story, &at.path)
+        {
+            para.props = lp.dest.1.clone();
+            para.touch();
+        }
+        s.sel = Selection::caret(at);
+        if mode == "text" {
+            frag = text_only(&frag);
+        }
+        merge_into(&mut frag, &lp.dest.0, &lp.dest.1, &s.doc.styles);
+        let source = lp.source.clone();
+        insert_from(s, frag, Some(source))?;
+        if let Some(now) = s.last_paste.as_mut() {
+            now.mode = if mode == "text" { "text" } else { "merge" };
+            now.dest = lp.dest;
+        }
+        return sel_result(s);
+    }
+    // Back to the source: take the earlier paste out, give the paragraph it restyled back its own
+    // properties, and paste the source again from that clean spot.
     super::controls::prepare_edit(s)?;
+    s.sel = Selection { anchor: lp.start.clone(), focus: lp.end.clone() };
+    let at = delete_selection(s)?;
+    if at.off == 0
+        && let Ok(para) = s.doc.para_mut(at.story, &at.path)
+    {
+        para.props = lp.dest.1.clone();
+        para.touch();
+    }
+    s.sel = Selection::caret(at);
+    insert_from(s, frag, Some(lp.source))?;
+    if let Some(now) = s.last_paste.as_mut() {
+        now.mode = "source";
+        // The destination is what the first paste landed in, not the pasted text now there.
+        now.dest = lp.dest;
+    }
+    sel_result(s)
+}
+
+/// Replace the selection with `frag`, marking it as an insertion under Track Changes. This is a
+/// paste: the Paste Options button is offered after it when it had a choice.
+pub fn insert(s: &mut Session, frag: Fragment) -> Result<(), CmdError> {
+    insert_from(s, frag, None)
+}
+
+/// [`insert`] for content that is not a paste (Copy To): the fragment goes in as it is, and no
+/// Paste Options are offered.
+pub fn insert_plain(s: &mut Session, frag: Fragment) -> Result<(), CmdError> {
+    insert_inner(s, frag, None, false)
+}
+
+/// [`insert`], remembering `source` (the fragment before Merge Formatting changed it) as what a
+/// later Paste Options choice starts from.
+pub fn insert_from(s: &mut Session, frag: Fragment, source: Option<Fragment>) -> Result<(), CmdError> {
+    insert_inner(s, frag, source, true)
+}
+
+fn insert_inner(s: &mut Session, mut frag: Fragment, source: Option<Fragment>, paste: bool) -> Result<(), CmdError> {
+    super::controls::prepare_edit(s)?;
+    let source = source.unwrap_or_else(|| frag.clone());
+    let dest = destination_formatting(s);
+    // Plain text has no paragraph formatting of its own: every paragraph it makes takes the
+    // destination's (a centered paragraph stays centered through all of them), as in Word.
+    if !paste {
+        // Not a paste: keep the paragraphs as they are.
+    } else if !has_choices(&frag) {
+        for b in &mut frag.blocks {
+            each_para(b, 0, &mut |p| p.props = dest.1.clone());
+        }
+    } else {
+        // Formatted paragraphs that state no alignment, indent or spacing take the destination's
+        // too: the first paragraph joins the destination's, and the rest must not fall back to
+        // the style while it is centered. Paragraphs inside a table cell keep their own.
+        let d = &dest.1;
+        for b in &mut frag.blocks {
+            if let Block::Para(p) = b {
+                p.props.align = p.props.align.or(d.align);
+                if p.props.numbering.is_none() {
+                    p.props.indent_left = p.props.indent_left.or(d.indent_left);
+                    p.props.indent_right = p.props.indent_right.or(d.indent_right);
+                    p.props.indent_first = p.props.indent_first.or(d.indent_first);
+                }
+                p.props.space_before = p.props.space_before.or(d.space_before);
+                p.props.space_after = p.props.space_after.or(d.space_after);
+                p.props.line_spacing = p.props.line_spacing.or(d.line_spacing);
+                p.touch();
+            }
+        }
+    }
     let at = delete_selection(s)?;
     let track = s.doc.settings.track_changes;
     let mut rid = None;
@@ -378,6 +710,8 @@ pub fn insert(s: &mut Session, mut frag: Fragment) -> Result<(), CmdError> {
             }
         }
     }
+    s.last_paste =
+        (paste && has_choices(&source)).then(|| LastPaste { start: at.clone(), end: end.clone(), source, dest, mode: "source", rev: None });
     s.sel = Selection::caret(end);
     Ok(())
 }
@@ -525,4 +859,183 @@ fn adopt(s: &mut Session, src: Document) -> Fragment {
     // Text box stories the imported shapes show; pasting gives each a new story of its own.
     let parts = src.parts.into_iter().filter(|(_, p)| p.kind == wordcraft_doc::PartKind::TextBox).collect();
     Fragment { blocks, parts }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A table at the margin touches the picture's corner: the crop must still be the table's own
+    /// size, not the whole tall page it was drawn on.
+    #[test]
+    fn a_table_becomes_a_picture_cropped_to_the_table() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        let html = "<table border=\"1\"><tr><th>Item</th><th>Qty</th></tr><tr><td>Pencil</td><td>12</td></tr></table>";
+        s.run("edit.paste", &json!({"text": "Item\tQty\nPencil\t12", "html": html})).unwrap();
+        let source = s.last_paste.as_ref().map(|lp| lp.source.clone()).unwrap();
+        let (png, width_pt, _) = fragment_picture(&s, &source).unwrap();
+        let (w, h) = wordcraft_render::image_size(&png).unwrap();
+        assert!(h < 400, "{w}×{h}px: cropped to the table, not the page");
+        assert!(width_pt > 20.0 && width_pt < 500.0, "{width_pt}pt");
+    }
+
+    /// More than a page of content isn't drawn with the rest left out: it is refused.
+    #[test]
+    fn content_taller_than_the_picture_page_is_refused() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        let html: String = (0..900).map(|i| format!("<p><b>line {i}</b></p>")).collect();
+        let text: String = (0..900).map(|i| format!("line {i}\n")).collect();
+        s.run("edit.paste", &json!({"text": text, "html": html})).unwrap();
+        let source = s.last_paste.as_ref().map(|lp| lp.source.clone()).unwrap();
+        let err = fragment_picture(&s, &source).unwrap_err();
+        assert!(err.to_string().contains("too long"), "{err}");
+    }
+
+    /// A centered destination gives top-level pasted paragraphs its alignment, but the paragraphs
+    /// inside a pasted table's cells keep their own.
+    #[test]
+    fn table_cell_paragraphs_do_not_take_the_destination_alignment() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("para.alignCenter", &json!({})).unwrap();
+        let html = "<p><b>Top</b></p><table><tr><td>Cell</td></tr></table>";
+        s.run("edit.paste", &json!({"text": "Top\nCell", "html": html})).unwrap();
+        let mut aligns = Vec::new();
+        for b in &s.doc.body {
+            match &**b {
+                Block::Para(p) => aligns.push(("para", p.props.align)),
+                Block::Table(t) => {
+                    for row in &t.rows {
+                        for cell in &row.cells {
+                            for cb in &cell.blocks {
+                                if let Block::Para(p) = &**cb {
+                                    aligns.push(("cell", p.props.align));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(aligns.iter().any(|(k, a)| *k == "para" && *a == Some(wordcraft_doc::Align::Center)), "{aligns:?}");
+        assert!(aligns.iter().filter(|(k, _)| *k == "cell").all(|(_, a)| *a != Some(wordcraft_doc::Align::Center)), "{aligns:?}");
+    }
+
+    /// The offer does not depend on how deep the undo history is: with the history full (steps
+    /// evicted, its length constant) a paste still offers Paste Options, and changing it works.
+    #[test]
+    fn the_offer_stands_when_the_undo_history_is_full() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        for i in 0..520 {
+            s.run("text.insert", &json!({"text": "x"})).unwrap();
+            s.run("format.bold", &json!({"value": i % 2 == 0})).unwrap();
+        }
+        assert!(s.undo_steps_so_far() > 500, "steps were evicted: {}", s.undo_steps_so_far());
+        let html = "<p><b>Hello</b> <i>world</i></p><p>Second</p>";
+        s.run("edit.paste", &json!({"text": "Hello world\nSecond", "html": html})).unwrap();
+        assert!(!paste_options(&s).is_empty(), "the offer shows with a full history");
+        s.run("edit.pasteChange", &json!({"mode": "text"})).unwrap();
+        assert_eq!(paste_mode(&s), Some("text"));
+        s.run("edit.pasteChange", &json!({"mode": "source"})).unwrap();
+        assert_eq!(paste_mode(&s), Some("source"));
+    }
+
+    /// Copying something else after a paste does not spoil changing it: the offer keeps the
+    /// pasted content itself, not the clipboard's.
+    #[test]
+    fn changing_a_paste_survives_a_copy_made_after_it() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        let html = "<p><b>Bold start</b> tail</p><p>Two</p>";
+        s.run("edit.paste", &json!({"text": "Bold start tail\nTwo", "html": html})).unwrap();
+        let end = s.sel.clone();
+        // Something else is copied while the offer stands: the caret and the document stay.
+        s.run("select.all", &json!({})).unwrap();
+        s.run("edit.copy", &json!({})).unwrap();
+        s.sel = end;
+        assert!(!paste_options(&s).is_empty(), "copying does not end the offer");
+        s.run("edit.pasteChange", &json!({"mode": "merge"})).unwrap();
+        let text = s.doc.plain_text(wordcraft_doc::StoryRef::Body);
+        assert!(text.contains("Bold start tail") && text.contains("Two"), "{text:?}");
+        s.run("edit.pasteChange", &json!({"mode": "source"})).unwrap();
+        let first = s.doc.para_at(&s.doc.start_of(wordcraft_doc::StoryRef::Body)).unwrap();
+        assert!(first.runs.iter().any(|r| r.props.bold == Some(true)), "the source's bold is back: {:?}", first.runs);
+    }
+
+    /// `\ql` in pasted RTF is a left alignment the author chose: it is kept in a centered
+    /// destination. Only a browser's computed `text-align: left` is dropped.
+    #[test]
+    fn rtf_left_alignment_is_kept_in_a_centered_destination() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("para.alignCenter", &json!({})).unwrap();
+        let rtf = "{\\rtf1\\ansi\\pard\\ql First\\par\\pard\\ql Second\\par}";
+        s.run("edit.paste", &json!({"text": "First\nSecond", "rtf": rtf})).unwrap();
+        let aligns: Vec<_> = s.doc.body.iter().filter_map(|b| if let Block::Para(p) = &**b { Some(p.props.align) } else { None }).collect();
+        // The first paragraph joins the destination's; the second keeps the \ql the source set.
+        assert_eq!(aligns.last(), Some(&Some(wordcraft_doc::Align::Left)), "{aligns:?}");
+        // The same text from a browser (computed left) takes the destination's alignment.
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("para.alignCenter", &json!({})).unwrap();
+        let html = "<p style=\"text-align:left\">First</p><p style=\"text-align:left\">Second</p>";
+        s.run("edit.paste", &json!({"text": "First\nSecond", "html": html})).unwrap();
+        let aligns: Vec<_> = s.doc.body.iter().filter_map(|b| if let Block::Para(p) = &**b { Some(p.props.align) } else { None }).collect();
+        assert!(aligns.iter().all(|a| *a == Some(wordcraft_doc::Align::Center)), "{aligns:?}");
+    }
+
+    /// The copy of the pasted content that Paste Options keeps is freed when the offer ends: the
+    /// next edit drops it, but moving the caret away does not (the offer comes back at the end).
+    #[test]
+    fn the_pasted_copy_is_freed_when_the_offer_ends() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        let html = "<p><b>Hello</b> world</p><p>Second</p>";
+        s.run("edit.paste", &json!({"text": "Hello world\nSecond", "html": html})).unwrap();
+        assert!(s.last_paste.is_some() && !paste_options(&s).is_empty());
+        s.run("text.insert", &json!({"text": "x"})).unwrap();
+        assert!(s.last_paste.is_none(), "typing ends the offer and frees the copy");
+        assert!(paste_options(&s).is_empty());
+    }
+
+    /// A picture taller than the page's text area is scaled to fit it, not left running off the
+    /// page; content more than two pages tall is refused.
+    #[test]
+    fn a_tall_picture_fits_the_page() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        let text_h = s.doc.sections().first().map(|(_, sp)| sp.text_height()).unwrap();
+        let html: String = (0..45).map(|i| format!("<p><b>line {i}</b></p>")).collect();
+        let text: String = (0..45).map(|i| format!("line {i}\n")).collect();
+        s.run("edit.paste", &json!({"text": text, "html": html})).unwrap();
+        let source = s.last_paste.as_ref().map(|lp| lp.source.clone()).unwrap();
+        let (_, _, height) = fragment_picture(&s, &source).unwrap();
+        assert!(height > text_h, "the test content is taller than the page: {height} vs {text_h}");
+        s.run("edit.pasteChange", &json!({"mode": "picture"})).unwrap();
+        let mut found = None;
+        for b in &s.doc.body {
+            if let Block::Para(p) = &**b {
+                for o in &p.objects {
+                    if let wordcraft_doc::InlineObject::Image { h, .. } = o {
+                        found = Some(*h);
+                    }
+                }
+            }
+        }
+        let h = found.expect("a picture was inserted");
+        assert!(h <= text_h + 0.5, "the picture ({h} pt) fits the page's text height ({text_h} pt)");
+        // Several pages of it would shrink to nothing legible: refused, and the paste stays.
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        let html: String = (0..200).map(|i| format!("<p><b>line {i}</b></p>")).collect();
+        let text: String = (0..200).map(|i| format!("line {i}\n")).collect();
+        s.run("edit.paste", &json!({"text": text, "html": html})).unwrap();
+        let err = s.run("edit.pasteChange", &json!({"mode": "picture"})).unwrap_err();
+        assert!(err.to_string().contains("too long"), "{err}");
+        assert!(!paste_options(&s).is_empty(), "the paste is unchanged and still offers its options");
+    }
+
+    /// Picture at the start of a document puts the paragraph the paste restyled back.
+    #[test]
+    fn a_picture_restores_the_destination_paragraph() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        let html = "<h2 style=\"font-weight:bold\">Heading</h2><p>Body</p>";
+        s.run("edit.paste", &json!({"text": "Heading\nBody", "html": html})).unwrap();
+        s.run("edit.pasteChange", &json!({"mode": "picture"})).unwrap();
+        let first = s.doc.para_at(&s.doc.start_of(wordcraft_doc::StoryRef::Body)).unwrap();
+        assert!(first.props.style.is_none(), "{:?}", first.props.style);
+    }
 }

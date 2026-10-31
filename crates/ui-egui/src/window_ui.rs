@@ -12,13 +12,17 @@
 //!
 //! `swap_window` names every field, so a new field doesn't compile until it is classified.
 
-use crate::{AwaitingSave, UiState, WordApp, canvas, colors, content_controls, dialogs, dialogs_review, file_dialogs, keytips, previews, print_page};
+use crate::{
+    AwaitingSave, UiState, WordApp, canvas, colors, content_controls, dialogs, dialogs_review, file_dialogs, keytips, paste_options, previews,
+    print_page,
+};
 
 /// A window's state while another window is drawn. Fields mirror their namesakes in [`WordApp`]
 /// and, for the ribbon tab, Backstage, printing and keytips, in [`UiState`].
 pub(crate) struct WindowUi {
     pub(crate) canvas: canvas::CanvasState,
     pub(crate) controls: content_controls::ControlUi,
+    pub(crate) paste_options: paste_options::PasteOptionsUi,
     pub(crate) dialog: Option<dialogs::Dialog>,
     pub(crate) colors: Option<colors::ColorsDialog>,
     pub(crate) restrict: dialogs_review::RestrictPane,
@@ -88,6 +92,7 @@ impl WindowUi {
         WindowUi {
             canvas: Default::default(),
             controls: Default::default(),
+            paste_options: Default::default(),
             dialog: None,
             colors: None,
             restrict: Default::default(),
@@ -210,6 +215,7 @@ impl WordApp {
             ui,
             canvas,
             controls,
+            paste_options,
             dialog,
             colors,
             restrict,
@@ -306,6 +312,7 @@ impl WordApp {
         swap_fields!(w:
             canvas,
             controls,
+            paste_options,
             dialog,
             colors,
             restrict,

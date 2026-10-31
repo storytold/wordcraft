@@ -94,7 +94,7 @@ pub(super) fn copy_to(s: &mut Session, v: &Value) -> CmdResult {
         let at = landing(s, &pos, &to)?;
         let frag = s.doc.copy_range(&pos, &end);
         s.sel = Selection::caret(at.clone());
-        crate::cmd::paste::insert(s, frag)?;
+        crate::cmd::paste::insert_plain(s, frag)?;
         // The copy starts where it was pasted.
         let copy = s.doc.clamp(&at);
         select_object(s, &copy);
@@ -106,7 +106,7 @@ pub(super) fn copy_to(s: &mut Session, v: &Value) -> CmdResult {
     }
     let frag = s.doc.copy_range(&pos, &end);
     s.sel = Selection::caret(end.clone());
-    crate::cmd::paste::insert(s, frag)?;
+    crate::cmd::paste::insert_plain(s, frag)?;
     s.touch(); // lay out the copy before moving it
     // The copy sits right after the original; select it and move it like a drag would.
     s.sel = Selection { anchor: end.clone(), focus: Pos { off: end.off + len, ..end } };
