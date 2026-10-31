@@ -120,7 +120,9 @@ pub fn resolve(s: &mut Session, names: &BTreeSet<String>, accept: bool) -> Resul
     }
     let named = |s: &Session, r: Option<u32>| s.doc.move_name(r).is_some_and(|n| names.contains(n));
     for st in stories(s) {
-        for path in s.doc.para_paths(st).into_iter().rev() {
+        // Resolve every paragraph first, then remove the marks that go in one pass (#3658).
+        let mut gone = Vec::new();
+        for path in s.doc.para_paths(st) {
             let Some(p) = s.doc.para(st, &path) else { continue };
             let ranges: Vec<(usize, usize, bool, bool)> =
                 p.run_ranges().map(|(r, c)| (r.start, r.end, named(s, c.ins), named(s, c.del))).filter(|(_, _, ins, del)| *ins || *del).collect();
@@ -146,11 +148,6 @@ pub fn resolve(s: &mut Session, names: &BTreeSet<String>, accept: bool) -> Resul
             if !mark_ins && !mark_del {
                 continue;
             }
-            // A moved paragraph mark that goes away joins the next paragraph to this one.
-            if ((mark_del && accept) || (mark_ins && !accept)) && super::join_next_para(s, st, &path)? {
-                continue;
-            }
-            let para = s.doc.para_mut(st, &path)?;
             if mark_ins {
                 para.mark.ins = None;
             }
@@ -158,7 +155,12 @@ pub fn resolve(s: &mut Session, names: &BTreeSet<String>, accept: bool) -> Resul
                 para.mark.del = None;
             }
             para.touch();
+            // A moved paragraph mark that goes away joins the next paragraph to this one.
+            if (mark_del && accept) || (mark_ins && !accept) {
+                gone.push(path);
+            }
         }
+        super::join_paras(s, st, &gone, false)?;
     }
     Ok(())
 }

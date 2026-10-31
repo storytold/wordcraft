@@ -481,12 +481,20 @@ impl Paragraph {
 
     /// Append `other`'s content (its paragraph properties are dropped; its section break kept).
     pub fn append(&mut self, other: Paragraph) {
-        let Paragraph { text, runs, objects, section, .. } = other;
-        self.text.push_str(&text);
-        self.runs.extend(runs);
-        self.objects.extend(objects);
-        if section.is_some() {
-            self.section = section;
+        self.append_all(std::iter::once(other));
+    }
+
+    /// [`Self::append`] each of `others` in order, normalizing once (appending one at a time
+    /// re-normalizes the growing paragraph every time).
+    pub fn append_all(&mut self, others: impl IntoIterator<Item = Paragraph>) {
+        for other in others {
+            let Paragraph { text, runs, objects, section, .. } = other;
+            self.text.push_str(&text);
+            self.runs.extend(runs);
+            self.objects.extend(objects);
+            if section.is_some() {
+                self.section = section;
+            }
         }
         self.normalize();
         self.touch();
