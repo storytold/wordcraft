@@ -506,25 +506,35 @@ mod tests {
 
     /// The application's provider is asked with the document's own name first, its first installed
     /// candidate wins, and with none installed the built-in lists still apply. The provider is
-    /// global, so it answers only for names no other test uses.
+    /// global, so it answers only for names no other test uses. Its candidates (bundled Inter and
+    /// Source Serif 4) differ from the built-in result for these names, which is a sans face.
     #[test]
     fn substitute_provider_comes_first_and_falls_through() {
         fn provider(family: &str) -> Option<&'static [&'static str]> {
             match family {
-                "Wc Provided Face" | "Wc Provided Face Cyr" => Some(&["Wc Not Installed", "Source Sans 3"]),
-                "Wc Provided Missing" => Some(&["Wc Not Installed"]),
+                "Wc Provided Face" | "Wc Provided Face Cyr" => Some(&["Wc Not Installed", "Inter"]),
+                "Wc Precedence Face" => Some(&["Inter"]),
+                "Wc Precedence Face Cyr" => Some(&["Source Serif 4"]),
+                "Wc Provided Serif" => Some(&["Wc Not Installed"]),
                 _ => None,
             }
         }
         set_substitute_provider(provider);
-        let sans = resolve("Source Sans 3", false, false).face;
+        let inter = resolve("Inter", false, false).face;
         for name in ["Wc Provided Face", "Wc Provided Face Cyr", "Wc Provided Face Greek"] {
             assert!(has_named_substitutes(name), "{name}");
             let r = resolve(name, false, false);
-            assert!(r.substituted && r.face == sans, "{name}");
+            assert!(r.substituted && r.face == inter, "{name}");
         }
-        assert!(has_named_substitutes("Wc Provided Missing"));
-        assert_eq!(resolve("Wc Provided Missing", false, false).face, resolve("Wc Unknown Face", false, false).face);
+        // The exact name wins over its charset base.
+        let base = resolve("Wc Precedence Face", false, false);
+        let exact = resolve("Wc Precedence Face Cyr", false, false);
+        assert!(base.substituted && base.face == inter);
+        assert!(exact.substituted && exact.face == resolve("Source Serif 4", false, false).face);
+        // Nothing installed: the built-in serif list, not the default sans.
+        assert!(has_named_substitutes("Wc Provided Serif"));
+        assert_eq!(resolve("Wc Provided Serif", false, false).face, resolve("Wc Missing Serif", false, false).face);
+        assert_ne!(resolve("Wc Provided Serif", false, false).face, resolve("Wc Unknown Face", false, false).face);
         assert!(!has_named_substitutes("Wc Unknown Face"));
     }
 
