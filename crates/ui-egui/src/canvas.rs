@@ -222,6 +222,8 @@ pub struct CanvasState {
     pub(crate) paste_mods: Option<egui::Modifiers>,
     /// Draw Table or Eraser is on (`table_pen`): presses draw instead of moving the caret.
     pub table_tool: Option<crate::table_pen::TableTool>,
+    /// The pen Draw Table and the table borders draw with (Table Design > Borders).
+    pub table_pen: crate::table_pen::Pen,
     /// The Draw Table stroke (or eraser press) in progress.
     pub(crate) table_stroke: Option<crate::table_pen::PenStroke>,
     /// A table border or the table's resize handle being dragged (`table_resize`).
@@ -295,6 +297,7 @@ impl CanvasState {
             last_highlight: old.last_highlight,
             last_font_color: old.last_font_color,
             last_shading: old.last_shading,
+            table_pen: old.table_pen,
             ime_faces: old.ime_faces,
             tab_kind: old.tab_kind,
             scale: old.scale,
@@ -414,6 +417,7 @@ impl Default for CanvasState {
             balloon_h: 0.0,
             balloon_rects: Vec::new(),
             table_tool: None,
+            table_pen: Default::default(),
             table_stroke: None,
             table_resize: None,
             link_from: None,
