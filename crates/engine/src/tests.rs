@@ -11216,6 +11216,16 @@ fn drop_cap_options_set_position_lines_distance_and_font() {
     run(&mut s, "text.insert", json!({"text": "Cell"}));
     assert!(s.sel.focus.path.cell().is_some());
     assert!(s.run("insert.dropCap", &json!({})).is_err(), "off in a table cell");
+
+    // Thai consonant paragraph: enabled
+    let mut s = Session::new(wordcraft_doc::Document::from_text("กุรุณาอ่านข้อความนี้ให้ครบ"));
+    assert!(s.why_disabled("insert.dropCap").is_none(), "Drop Cap must be enabled for Thai consonant paragraph");
+    run(&mut s, "insert.dropCap", json!({"position": "dropped"}));
+    assert_eq!(s.doc.body.first().and_then(|b| b.as_para()).and_then(|p| p.props.drop_cap), Some(3));
+
+    // Thai leading-vowel paragraph (เก…): enabled
+    let s = Session::new(wordcraft_doc::Document::from_text("เกาะติดกับเรื่องราว"));
+    assert!(s.why_disabled("insert.dropCap").is_none(), "Drop Cap must be enabled for Thai leading-vowel paragraph");
 }
 
 #[test]

@@ -4153,6 +4153,117 @@ fn drop_cap_options_place_the_letter() {
     assert_ne!(text_style.as_deref(), Some("Liberation Mono"), "only the letter");
 }
 
+/// Thai drop cap: the whole TCB (consonant + following vowels/tone marks) must be enlarged
+/// together — not just the first codepoint.
+#[test]
+fn thai_drop_cap_takes_whole_tcb() {
+    // "กุ" = ก (U+0E01, 3 bytes) + ุ sara u (U+0E38, 3 bytes), followed by body text.
+    let body = "กุรุณาอ่านข้อความนี้ให้ครบถ้วน ".repeat(8);
+    let mut p = wordcraft_doc::Paragraph::with_text(&body, Default::default());
+    p.props.drop_cap = Some(3);
+    let mut d = Document::from_text("x");
+    d.body = vec![wordcraft_doc::para_block(p)];
+    let l = lay(&d);
+    let pl = l.pages[0].items.iter().find_map(|i| if let Placed::Lines { para, .. } = i { Some(para.clone()) } else { None }).expect("no lines");
+
+    let (nc, lines, _) = pl.drop_cap.expect("drop cap must be set");
+    assert_eq!(lines, 3, "should span 3 lines");
+    // The Thai shaper merges ก + ุ into 1 shaped cluster, so nc == 1 is expected.
+    assert_eq!(nc, 1, "shaper produces 1 cluster for the TCB");
+    // Critical: the cluster right after the drop cap must start at byte 6 (past "กุ"),
+    // NOT byte 3 (past "ก" only) — the sara u must be consumed by the drop cap, not
+    // rendered separately at body-text size.
+    let body_start = pl.clusters.get(nc).map(|c| c.start);
+    assert_eq!(body_start, Some(6), "body text must start at byte 6 (past กุ); got {body_start:?} — sara u leaked into body");
+    // The drop cap's glyph should be significantly larger than body text (12 pt default).
+    // Drop cap clusters come first; nc=1 means cluster[0] is the drop cap.
+    let cap_size = pl.clusters.first().and_then(|c| pl.styles.get(c.style as usize)).map(|s| s.rc.size).unwrap_or(0.0);
+    assert!(cap_size > 30.0, "drop cap font size {cap_size} should be >> 12pt for 3 lines");
+}
+
+/// Thai drop cap starting with a leading vowel (เ แ โ ใ ไ): only the vowel is dropped.
+/// "เกาะ…" → drop cap = "เ" (3 bytes); body starts at byte 3 with "กาะ…".
+#[test]
+fn thai_drop_cap_leading_vowel_alone() {
+    // เ (U+0E40, 3 bytes) + ก (U+0E01, 3 bytes) + าะ…
+    let body = "เกาะติดกับเรื่องราวที่น่าสนใจและสำคัญยิ่ง ".repeat(8);
+    let mut p = wordcraft_doc::Paragraph::with_text(&body, Default::default());
+    p.props.drop_cap = Some(3);
+    let mut d = Document::from_text("x");
+    d.body = vec![wordcraft_doc::para_block(p)];
+    let l = lay(&d);
+    let pl = l.pages[0].items.iter().find_map(|i| if let Placed::Lines { para, .. } = i { Some(para.clone()) } else { None }).expect("no lines");
+
+    let (nc, lines, _) = pl.drop_cap.expect("drop cap must be set for leading-vowel paragraph");
+    assert_eq!(lines, 3);
+    // The drop cap is just "เ" (3 bytes); body cluster must start at byte 3, not 6.
+    let body_start = pl.clusters.get(nc).map(|c| c.start);
+    assert_eq!(body_start, Some(3), "leading vowel dropped alone: body must start at byte 3 (ก), not byte 6; got {body_start:?}");
+}
+
+/// Sara aa (า U+0E32) is a pure trailing following vowel — no above/below component —
+/// and must NOT be part of the drop cap TCB.
+/// "ข่าว..." → TCB = "ข่" (ข U+0E02 + ่ U+0E48, 6 bytes), body starts at byte 6.
+#[test]
+fn thai_drop_cap_sara_aa_stays_in_body() {
+    // ข (U+0E02, 3 bytes) + ่ (U+0E48, 3 bytes) + า (U+0E32, 3 bytes) + วดี…
+    let body = "ข่าวดี กบน.ปรับอัตราเงินกองทุนน้ำมันฯ ".repeat(8);
+    let mut p = wordcraft_doc::Paragraph::with_text(&body, Default::default());
+    p.props.drop_cap = Some(3);
+    let mut d = Document::from_text("x");
+    d.body = vec![wordcraft_doc::para_block(p)];
+    let l = lay(&d);
+    let pl = l.pages[0].items.iter().find_map(|i| if let Placed::Lines { para, .. } = i { Some(para.clone()) } else { None }).expect("no lines");
+
+    pl.drop_cap.expect("drop cap must be set");
+    // The cluster after the drop cap must start at byte 6 (past ข + ่ only),
+    // NOT byte 9 (which would incorrectly include sara aa า in the drop cap).
+    let (nc, _, _) = pl.drop_cap.unwrap();
+    let body_start = pl.clusters.get(nc).map(|c| c.start);
+    assert_eq!(body_start, Some(6), "sara aa (byte 6-9) must stay in body text, not be consumed by the drop cap; got {body_start:?}");
+}
+
+/// Sara am (ำ U+0E33) encodes nikhahit (above) + sara aa in one codepoint — it has an
+/// above component and IS part of the drop cap TCB.
+/// "สำคัญ…" → TCB = "สำ" (ส U+0E2A + ำ U+0E33, 6 bytes), body starts at byte 6.
+/// "ข่ำ…"   → TCB = "ข่ำ" (ข + ่ + ำ, 9 bytes), body starts at byte 9.
+#[test]
+fn thai_drop_cap_sara_am_in_tcb() {
+    // Simple case: cons + sara am (no tone mark).
+    // ส (U+0E2A, 3 bytes) + ำ (U+0E33, 3 bytes)
+    let body = "สำคัญยิ่งต่อการพัฒนาประเทศ ".repeat(8);
+    let mut p = wordcraft_doc::Paragraph::with_text(&body, Default::default());
+    p.props.drop_cap = Some(3);
+    let mut d = Document::from_text("x");
+    d.body = vec![wordcraft_doc::para_block(p)];
+    let l = lay(&d);
+    let pl = l.pages[0].items.iter().find_map(|i| if let Placed::Lines { para, .. } = i { Some(para.clone()) } else { None }).expect("no lines");
+
+    pl.drop_cap.expect("drop cap must be set");
+    let (nc, _, _) = pl.drop_cap.unwrap();
+    let body_start = pl.clusters.get(nc).map(|c| c.start);
+    assert_eq!(body_start, Some(6), "TCB for สำ should be 6 bytes (ส + ำ); body_start={body_start:?}");
+
+    // With tone mark: cons + tone + sara am → TCB is all three (9 bytes).
+    // ข (U+0E02, 3) + ่ (U+0E48, 3) + ำ (U+0E33, 3)
+    let body2 = "ข่ำขลังมาแต่โบราณกาลนานนม ".repeat(8);
+    let mut p2 = wordcraft_doc::Paragraph::with_text(&body2, Default::default());
+    p2.props.drop_cap = Some(3);
+    let mut d2 = Document::from_text("x");
+    d2.body = vec![wordcraft_doc::para_block(p2)];
+    let l2 = lay(&d2);
+    let pl2 = l2.pages[0]
+        .items
+        .iter()
+        .find_map(|i| if let Placed::Lines { para, .. } = i { Some(para.clone()) } else { None })
+        .expect("no lines (tone+sara am)");
+
+    pl2.drop_cap.expect("drop cap must be set (tone+sara am)");
+    let (nc2, _, _) = pl2.drop_cap.unwrap();
+    let body_start2 = pl2.clusters.get(nc2).map(|c| c.start);
+    assert_eq!(body_start2, Some(9), "TCB for ข่ำ should be 9 bytes (ข + ่ + ำ); body_start={body_start2:?}");
+}
+
 #[test]
 fn auto_hyphenation_breaks_long_words() {
     let text = "Internationalization considerations notwithstanding, administrators systematically reconsidered extraordinarily uncharacteristic responsibilities. ".repeat(4);
