@@ -800,9 +800,20 @@ pub fn apply_animations(ctx: &egui::Context, on: bool) {
     });
 }
 
+/// Coverage exponent for light-on-dark interface text on Linux and the BSDs (see [`visuals`]).
+const DARK_TEXT_GAMMA: f32 = 0.8;
+
 /// egui's visuals for one of our palettes.
 fn visuals(t: &Tokens) -> Visuals {
     let mut v = if t.dark { Visuals::dark() } else { Visuals::light() };
+    // Light text on a dark background, on Linux and the BSDs: egui's dark default thickens every
+    // glyph edge, about a fifth more ink than FreeType gives it in Firefox and the other apps
+    // there, so the interface looked semi-bold. Plain coverage (Firefox's weight) left the thin
+    // light strokes on the darkest strips (the tab row) looking soft; a light boost, about 7 %
+    // more ink, was chosen side by side on a 145 % desktop.
+    if t.dark && cfg!(all(unix, not(target_os = "macos"))) {
+        v.text_options.color_transfer_function = egui::epaint::FontColorTransferFunction::Gamma(DARK_TEXT_GAMMA);
+    }
     v.panel_fill = t.ribbon;
     v.window_fill = t.menu;
     v.extreme_bg_color = t.input;
@@ -843,6 +854,51 @@ pub fn c32(c: wordcraft_doc::Rgb) -> Color32 {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
+
+    /// Ink of a line of interface text at 1.45x (a 145 % desktop) in `appearance`, drawn in the
+    /// palette's text colour extremes (black on white, white on black) so the two compare.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    fn interface_text_ink(appearance: super::Appearance) -> u64 {
+        let dark = matches!(appearance, super::Appearance::Dark);
+        let (fg, bg) = if dark { (egui::Color32::WHITE, egui::Color32::BLACK) } else { (egui::Color32::BLACK, egui::Color32::WHITE) };
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(560.0, 40.0)).with_pixels_per_point(1.45).wgpu().build_ui_state(
+            move |ui, set: &mut bool| {
+                if !*set {
+                    super::apply(ui.ctx(), appearance);
+                    ui.ctx().set_fonts(super::font_definitions(false, false));
+                    *set = true;
+                }
+                egui::Frame::new().fill(bg).inner_margin(8.0).show(ui, |ui| {
+                    ui.label(egui::RichText::new("Every Thursday evening the old print shop").font(egui::FontId::proportional(12.5)).color(fg));
+                });
+            },
+            false,
+        );
+        h.run();
+        let img = h.render().unwrap();
+        // Ink: how far each pixel, laid over the background (the window outside the frame is
+        // transparent), is from the background.
+        let back = u64::from(bg.r());
+        img.pixels()
+            .map(|p| {
+                let (v, a) = (u64::from(p.0[0]), u64::from(p.0[3]));
+                let shown = (v * a + back * (255 - a)) / 255;
+                shown.abs_diff(back)
+            })
+            .sum()
+    }
+
+    #[test]
+    #[cfg(all(unix, not(target_os = "macos")))]
+    fn dark_interface_text_is_only_a_little_heavier_than_light_interface_text() {
+        // egui's dark default added about a fifth more ink than FreeType gives the same text in
+        // Firefox on Linux (semi-bold); plain coverage, Firefox's weight, looked soft on the dark
+        // tab row. The light boost chosen side by side adds about 7 %.
+        let (light, dark) = (interface_text_ink(super::Appearance::Light), interface_text_ink(super::Appearance::Dark));
+        assert!(light > 0);
+        let ratio = dark as f64 / light as f64;
+        assert!((1.03..1.12).contains(&ratio), "light {light}, dark {dark}: {ratio:.3}");
+    }
 
     /// WCAG contrast ratio between two opaque colours.
     pub(super) fn contrast(a: egui::Color32, b: egui::Color32) -> f32 {

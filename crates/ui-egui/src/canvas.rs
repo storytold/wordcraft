@@ -146,6 +146,8 @@ pub struct CanvasState {
     pub viewed_page: Option<usize>,
     /// Effective scale (screen points per document point).
     pub scale: f32,
+    /// Whether this frame's pages were drawn hinted ([`hint_pages`]).
+    pub(crate) pages_hinted: bool,
     pub canvas_rect: Option<Rect>,
     pub focused: bool,
     /// The page's widget id and the pass that last drew it, so a click elsewhere can hand the
@@ -366,6 +368,7 @@ impl Default for CanvasState {
             scrollbar_page: None,
             viewed_page: None,
             scale: PX_PER_PT,
+            pages_hinted: screen_render_options().hinting,
             canvas_rect: None,
             focused: false,
             widget_id: None,
@@ -485,6 +488,8 @@ struct CanvasView {
     dark_page: bool,
     sepia_page: bool,
     animate: bool,
+    /// Whether this frame draws the pages hinted ([`hint_pages`]).
+    hinted: bool,
     opts: egui::InputOptions,
     geo: Geometry,
     dim_body: bool,
@@ -534,9 +539,12 @@ fn prepare_view(app: &mut WordApp, ui: &Ui, full: Rect, layout: &DocLayout) -> C
     if read_mode {
         app.canvas.scroll_max = (geo.size - area.size()).max(egui::Vec2::ZERO);
     }
-    if (geo.scale - app.canvas.scale).abs() > 1e-6 {
+    let rescaled = (geo.scale - app.canvas.scale).abs() > 1e-6;
+    if rescaled {
         ui.ctx().request_repaint();
     }
+    let hinted = hint_pages(zoom_delta, rescaled);
+    app.canvas.pages_hinted = hinted;
     app.canvas.scale = geo.scale;
     sync_fit_zoom(app, geo.scale);
     let anchored = if let Some((p, (page, x, y))) = zoom_anchor
@@ -564,7 +572,7 @@ fn prepare_view(app: &mut WordApp, ui: &Ui, full: Rect, layout: &DocLayout) -> C
     {
         app.session.page_hint = c.page;
     }
-    CanvasView { area, hruler, vruler, dark_page, sepia_page, animate, opts, geo, dim_body, grid_story, caret }
+    CanvasView { area, hruler, vruler, dark_page, sepia_page, animate, hinted, opts, geo, dim_body, grid_story, caret }
 }
 
 fn update_caret_scroll(app: &mut WordApp, view: &CanvasView) -> Option<Rect> {
@@ -832,6 +840,7 @@ struct PagePaint<'a> {
     sepia_page: bool,
     hidden: Option<(usize, Pos)>,
     view: u64,
+    hinted: bool,
     content_origin: Pos2,
     ppp: f32,
     max_tex: f32,
@@ -842,6 +851,20 @@ struct PagePaintOutput {
     rects: Vec<Rect>,
     visible_tile_keys: HashSet<(usize, usize)>,
     rendered: usize,
+}
+
+/// Are pages drawn hinted this frame (as [`screen_render_options`] says)? Not while a pointer
+/// zoom (Ctrl/⌘+wheel easing in, a pinch: `zoom_delta` other than 1) changes the scale
+/// (`rescaled`): each such frame is a new size shown for a moment, and hinting every one would
+/// cost each page about 1.5 ms more and fill the hint caches with sizes nobody rests on, pushing
+/// out the one the zoom ends at. The first frame at rest draws the page hinted (the hinting is in
+/// the page's key). A zoom that leaves the scale as it is (at 10 % or 500 %, or over the ribbon)
+/// keeps the pages hinted, and other scale changes (the Zoom dialog or slider, a fit zoom
+/// following the window) are drawn hinted at once.
+fn hint_pages(zoom_delta: f32, rescaled: bool) -> bool {
+    let gesture = zoom_delta.is_nan() || (zoom_delta - 1.0).abs() > 1e-3;
+    let zooming = gesture && rescaled;
+    screen_render_options().hinting && !zooming
 }
 
 fn draw_page_gridlines(app: &WordApp, painter: &egui::Painter, t: &Tokens, page: &Page, visual_sr: Rect, page_scale: f32) {
@@ -876,8 +899,24 @@ fn draw_page_gridlines(app: &WordApp, painter: &egui::Painter, t: &Tokens, page:
 }
 
 fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
-    let PagePaint { app, ui, layout, geo, t, painter, dim_body, dark_page, sepia_page, hidden, view, content_origin, ppp, max_tex, grid_story } =
-        pass;
+    let PagePaint {
+        app,
+        ui,
+        layout,
+        geo,
+        t,
+        painter,
+        dim_body,
+        dark_page,
+        sepia_page,
+        hidden,
+        view,
+        hinted,
+        content_origin,
+        ppp,
+        max_tex,
+        grid_story,
+    } = pass;
     let mut visible_tile_keys = HashSet::new();
     let mut rendered = 0;
     let mut rects = Vec::with_capacity(geo.rects.len());
@@ -906,6 +945,7 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
         // edit) then sits on the pixel grid in this frame too, rather than a frame later.
         if visible && !tiled && !fresh && (forced || rendered < 2 || !app.canvas.textures.contains_key(&i) && rendered < 4) {
             let mut opts = page_render_options(app, dim_body);
+            opts.hinting &= hinted;
             // Only on the page it is on: the `Pos` can't match an object of another page.
             opts.display.hide_object = hidden.as_ref().filter(|(page, _)| *page == i).map(|(_, p)| p.clone());
             let img = wordcraft_render::render_page(page_doc(app), page, scale_px, &opts);
@@ -967,6 +1007,7 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
                 let fresh = app.canvas.tiles.get(&id).is_some_and(|(k, _)| *k == key);
                 if !fresh && rendered < 4 {
                     let mut opts = page_render_options(app, dim_body);
+                    opts.hinting &= hinted;
                     // Only on the page it is on: the `Pos` can't match an object of another page.
                     opts.display.hide_object = hidden.as_ref().filter(|(page, _)| *page == i).map(|(_, p)| p.clone());
                     // The tiny subtraction avoids a 1px overshoot from round-tripping f32
@@ -1317,7 +1358,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let scroll_target = update_caret_scroll(app, &view);
     let motion = scroll_motion(app, ui, full, &view);
     let scroll_area = configure_scroll_area(app, ui, &view, motion);
-    let CanvasView { area, hruler, vruler, dark_page, sepia_page, geo, dim_body, grid_story, caret, .. } = view;
+    let CanvasView { area, hruler, vruler, dark_page, sepia_page, hinted, geo, dim_body, grid_story, caret, .. } = view;
     let mut origin = area.min;
     let mut ui_area = ui.new_child(egui::UiBuilder::new().max_rect(area));
     let mut ime_geometry: Option<(Rect, Rect)> = None;
@@ -1334,7 +1375,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         let max_tex = ui.ctx().input(|i| i.max_texture_side).min(wordcraft_render::MAX_SIDE as usize).max(1) as f32;
         let content_origin = ui.min_rect().min;
         let hidden = app.canvas.dragged_off_page();
-        let page_view = view_key(app, dim_body, hidden.as_ref().map(|(_, p)| p));
+        let page_view = view_key(app, dim_body, hidden.as_ref().map(|(_, p)| p), hinted);
         let t0 = crate::now_ms();
         let PagePaintOutput { rects, visible_tile_keys, rendered } = paint_pages(PagePaint {
             app,
@@ -1348,6 +1389,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             sepia_page,
             hidden,
             view: page_view,
+            hinted,
             content_origin,
             ppp,
             max_tex,

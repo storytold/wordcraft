@@ -290,6 +290,61 @@ fn text_darkening_adds_ink_on_screen_only() {
     assert!(!RenderOptions::default().text_darkening);
 }
 
+/// Inked pixels that are only partly covered (grey): an edge between two pixel rows.
+fn grey(img: &Rendered) -> usize {
+    img.pixels.as_chunks::<4>().0.iter().filter(|p| (40..215).contains(&p[0])).count()
+}
+
+/// The first and last pixel columns with any ink.
+fn ink_columns(img: &Rendered) -> (usize, usize) {
+    let w = img.width as usize;
+    let inked: Vec<usize> = img.pixels.as_chunks::<4>().0.iter().enumerate().filter(|(_, p)| p[0] < 250).map(|(i, _)| i % w.max(1)).collect();
+    (inked.iter().copied().min().unwrap_or(0), inked.iter().copied().max().unwrap_or(0))
+}
+
+#[test]
+fn hinting_sharpens_screen_text_without_making_it_bolder_or_moving_it() {
+    let d = Document::from_text("Every Thursday evening the old print shop fills with people who make things. Painters set up by the north windows.");
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    // 100 % zoom on a 145 % desktop: glyph edges land between pixels.
+    let scale = 96.0 / 72.0 * 1.45;
+    let plain = render_page(&d, &l.pages[0], scale, &RenderOptions::default());
+    let hinted = render_page(&d, &l.pages[0], scale, &RenderOptions { hinting: true, ..Default::default() });
+    // Fewer grey pixels: the baseline, x-height and cap height fill whole pixel rows. Only
+    // horizontal edges snap (the vertical stems stay put), so on the fonts the tests resolve
+    // to (system or bundled) the drop is 4 to 5 %: asked for at least 3 %.
+    let (g0, g1) = (grey(&plain), grey(&hinted));
+    assert!((g1 as f64) < g0 as f64 * 0.97, "grey pixels: plain {g0}, hinted {g1}");
+    // The same weight, as FreeType's light hinting draws it: no darker than a few percent.
+    let (a, b) = (ink(&plain), ink(&hinted));
+    assert!(b as f64 > a as f64 * 0.95 && (b as f64) < a as f64 * 1.12, "ink: plain {a}, hinted {b}");
+    // Nothing moves sideways: the text starts and ends in the same pixel columns.
+    let ((l0, r0), (l1, r1)) = (ink_columns(&plain), ink_columns(&hinted));
+    assert!(l0.abs_diff(l1) <= 1 && r0.abs_diff(r1) <= 1, "plain {l0}..{r0}, hinted {l1}..{r1}");
+    // Off by default: exports and thumbnails are untouched.
+    assert!(!RenderOptions::default().hinting);
+}
+
+#[test]
+fn rotated_or_mirrored_views_are_not_hinted() {
+    let d = Document::from_text("Rotated text stays as the font draws it.");
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let hint = RenderOptions { hinting: true, ..Default::default() };
+    for view in [
+        Affine::translate((300.0, -50.0)) * Affine::rotate(0.3) * Affine::scale(1.9),
+        Affine::translate((600.0, 0.0)) * Affine::scale_non_uniform(-1.9, 1.9),
+        Affine::scale_non_uniform(1.9, 2.4),
+    ] {
+        let plain = render_region(&d, &l.pages[0], 600, 300, view, &RenderOptions::default());
+        let hinted = render_region(&d, &l.pages[0], 600, 300, view, &hint);
+        assert!(ink(&plain) > 0, "{view:?}");
+        assert_eq!(plain.pixels, hinted.pixels, "{view:?}");
+    }
+    assert!(is_upright(Affine::translate((3.5, 7.25)) * Affine::scale(1.93)));
+    assert!(!is_upright(Affine::scale(f64::NAN)));
+    assert!(!is_upright(Affine::scale(0.0)));
+}
+
 #[test]
 fn page_picture_is_painted_behind_the_text() {
     let mut png = Vec::new();

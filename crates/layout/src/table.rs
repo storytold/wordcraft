@@ -1397,6 +1397,7 @@ mod width_tests {
 
     #[test]
     fn autofit_shares_donor_loss() {
+        crate::test_fonts();
         let table = Table::new(1, 4, 260.0);
         let mut grid = [30.0, 120.0, 20.0, 90.0];
         let content = [(28.0, 28.0), (40.0, 120.0), (40.0, 40.0), (30.0, 90.0)];
@@ -1406,6 +1407,7 @@ mod width_tests {
 
     #[test]
     fn autofit_exhausts_donors() {
+        crate::test_fonts();
         let table = Table::new(1, 2, 50.0);
         let mut grid = [30.0, 20.0];
         autofit(&mut grid, &[(25.0, 25.0), (40.0, 40.0)], &table, 50.0);
@@ -1414,6 +1416,7 @@ mod width_tests {
 
     #[test]
     fn autofit_keeps_fitting_widths() {
+        crate::test_fonts();
         let table = Table::new(1, 3, 120.0);
         let mut grid = [30.0, 40.0, 50.0];
         autofit(&mut grid, &[(10.0, 10.0), (20.0, 20.0), (30.0, 30.0)], &table, 120.0);
