@@ -3533,7 +3533,7 @@ fn the_default_app_button_shows_only_with_the_hosts_hook() {
             a,
         );
         h.run_steps(4);
-        assert!(h.query_by_label("Show the community button in the title bar").is_some(), "hook {hook}: the Options page rendered");
+        assert!(h.query_by_label("Dark page (white text on black)").is_some(), "hook {hook}: the Options page rendered");
         assert_eq!(h.query_by_label(LABEL).is_some(), hook, "hook {hook}: the button");
         if hook {
             h.get_by_label(LABEL).click();
