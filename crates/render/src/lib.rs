@@ -733,6 +733,39 @@ fn draw_glyphs(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
 
 fn draw_mark(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
     let Draw::Mark { x, baseline, size, ch, color: mark } = it else { return };
+    if *ch == '↵' {
+        // The text font's return glyph has a filled, wide arrowhead. Editing marks are
+        // screen furniture, so draw a small open-headed return independently of the
+        // document font and its substitution. Keep the dimensions proportional to the
+        // adjacent text, including headings and small print.
+        let s = f64::from(*size).clamp(1.0, 200.0) * 0.52;
+        let mut path = BezPath::new();
+        path.move_to((s, -s * 1.10));
+        path.line_to((s, -s * 0.60));
+        path.line_to((0.0, -s * 0.60));
+        path.move_to((s * 0.40, -s));
+        path.line_to((0.0, -s * 0.60));
+        path.line_to((s * 0.40, -s * 0.20));
+        ctx.set_paint(color(fr.opts.ink(mark.unwrap_or(fr.opts.mark_color)), 0.9));
+        ctx.set_transform(fr.view * Affine::translate((f64::from(*x), f64::from(*baseline))));
+        ctx.set_stroke(kurbo::Stroke::new((s * 0.12).clamp(0.8, 2.2)).with_caps(kurbo::Cap::Butt));
+        ctx.stroke_path(&path);
+        return;
+    }
+    if *ch == '↓' {
+        let s = f64::from(*size).clamp(1.0, 200.0) * 0.52;
+        let mut path = BezPath::new();
+        path.move_to((s * 0.40, -s * 1.30));
+        path.line_to((s * 0.40, -s * 0.05));
+        path.move_to((0.0, -s * 0.43));
+        path.line_to((s * 0.40, -s * 0.05));
+        path.line_to((s * 0.80, -s * 0.43));
+        ctx.set_paint(color(fr.opts.ink(mark.unwrap_or(fr.opts.mark_color)), 0.9));
+        ctx.set_transform(fr.view * Affine::translate((f64::from(*x), f64::from(*baseline))));
+        ctx.set_stroke(kurbo::Stroke::new((s * 0.10).clamp(0.8, 2.2)).with_caps(kurbo::Cap::Butt));
+        ctx.stroke_path(&path);
+        return;
+    }
     let face = wordcraft_fonts::word::resolve("Source Sans 3", false, false).face;
     let gid = face.glyph_for(*ch);
     let face = if gid == 0 {

@@ -149,7 +149,30 @@ fn caret_char(app: &WordApp) -> wordcraft_doc::resolve::ResolvedChar {
 
 /// The language tag at the caret, resolved through the styles and the document default.
 fn caret_lang_tag(app: &WordApp) -> Option<String> {
-    caret_char(app).lang
+    let resolved = caret_char(app);
+    let s = &app.session;
+    let at = &s.sel.focus;
+    let char_script = |c: char| {
+        if matches!(u32::from(c), 0x1100..=0x11ff | 0x3040..=0x30ff | 0x3100..=0x312f | 0x3400..=0x9fff | 0xac00..=0xd7af | 0xf900..=0xfaff | 0xff21..=0xff3a | 0xff41..=0xff5a | 0xff66..=0xff9f | 0x20000..=0x323af)
+        {
+            Some(true)
+        } else if c.is_alphabetic() {
+            Some(false)
+        } else {
+            None
+        }
+    };
+    let script = |text: &str| text.chars().find_map(char_script);
+    let local = s.doc.para_at(at).and_then(|p| {
+        p.text.get(at.off..).and_then(script).or_else(|| {
+            // Search backwards so the closest preceding letter determines the script.
+            p.text.get(..at.off).and_then(|t| t.chars().rev().find_map(char_script))
+        })
+    });
+    // At the beginning of a document the first paragraph can be empty. Use its first
+    // letter as the script context until the caret enters actual text.
+    let script = local.or_else(|| s.doc.para_paths(at.story).iter().find_map(|path| s.doc.para(at.story, path).and_then(|p| script(&p.text))));
+    if script == Some(true) { resolved.lang_ea.or(resolved.lang) } else { resolved.lang }
 }
 
 /// Is the text at the caret itself marked Do not check spelling or grammar? (`format.state`

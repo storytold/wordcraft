@@ -4,6 +4,61 @@ use wordcraft_layout::{LayoutCache, LayoutOptions, layout};
 
 mod color_glyphs;
 
+#[test]
+fn japanese_editing_arrows_are_distinct_and_scale_with_text() {
+    let doc = Document::new();
+    let shot = |ch, size| {
+        render_items(
+            &doc,
+            &[Draw::Mark { x: 10.0, baseline: 34.0, size, ch, color: None }],
+            wordcraft_geom::Rect::new(0.0, 0.0, 60.0, 60.0),
+            3.0,
+            &RenderOptions::default(),
+        )
+    };
+    let bounds = |img: &Rendered| {
+        let pixels: Vec<_> = (0..img.width).flat_map(|x| (0..img.height).map(move |y| (x, y))).filter(|&(x, y)| img.pixel(x, y)[3] > 100).collect();
+        let (x0, x1) = (pixels.iter().map(|p| p.0).min()?, pixels.iter().map(|p| p.0).max()?);
+        let (y0, y1) = (pixels.iter().map(|p| p.1).min()?, pixels.iter().map(|p| p.1).max()?);
+        Some((x1 - x0, y1 - y0))
+    };
+    let small = bounds(&shot('↵', 10.0)).expect("small return mark");
+    let large = bounds(&shot('↵', 20.0)).expect("large return mark");
+    let down = bounds(&shot('↓', 20.0)).expect("manual break mark");
+    assert!(large.0 > small.0 * 3 / 2 && large.1 > small.1 * 3 / 2, "font size changes mark dimensions: {small:?} {large:?}");
+    assert!(large.0 > down.0 && down.1 > 0, "paragraph and manual line breaks have different shapes: {large:?} {down:?}");
+    // The horizontal shaft belongs near the centre of the adjacent one-em text,
+    // rather than at its baseline. Check the rendered result at multiple sizes.
+    for size in [9.0_f32, 12.0, 18.0, 36.0] {
+        let img = shot('↵', size);
+        let shaft_y = (0..img.height).max_by_key(|&y| (0..img.width).filter(|&x| img.pixel(x, y)[3] > 100).count()).expect("rendered rows");
+        let expected = (34.0 - f64::from(size) * 0.312) * 3.0;
+        assert!((f64::from(shaft_y) - expected).abs() <= 3.0, "size {size}: shaft at {shaft_y}, expected near {expected}");
+    }
+}
+
+#[test]
+fn japanese_editing_marks_render_at_half_point_sizes_and_screen_scales() {
+    let doc = Document::new();
+    for half_points in 2..=144 {
+        let size = half_points as f32 / 2.0;
+        for scale in [1.0, 2.0, 2.611_111] {
+            for ch in ['↵', '↓'] {
+                let img = render_items(
+                    &doc,
+                    &[Draw::Mark { x: 20.0, baseline: 100.0, size, ch, color: None }],
+                    wordcraft_geom::Rect::new(0.0, 0.0, 160.0, 140.0),
+                    scale,
+                    &RenderOptions::default(),
+                );
+                let ink = img.pixels.as_chunks::<4>().0.iter().filter(|pixel| pixel[3] > 0).count();
+                assert!(ink > 0, "{ch} at {size}pt and scale {scale} must remain visible");
+                assert!(ink < img.width as usize * img.height as usize / 4, "{ch} at {size}pt must stay bounded");
+            }
+        }
+    }
+}
+
 /// The first and last pixel rows with ink in a black-on-white [`render_text_line`] raster.
 fn ink_rows(img: &Rendered) -> Option<(usize, usize)> {
     let w = img.width as usize * 4;

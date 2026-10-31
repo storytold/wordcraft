@@ -1435,8 +1435,10 @@ fn read_mode_click_and_caret_keep_scroll(d: &mut FrameDriver, a: &mut WordApp, s
     d.frame(a, vec![], screen);
     assert!((a.canvas.scroll_offset.x - initial_scroll).abs() < 0.5);
     assert!(a.session.sel.is_collapsed());
-    // An explicit caret move outside the visible columns must still reveal its destination.
-    a.run("caret.set", json!({"pos": wordcraft_doc::Pos::body(0, 5000)})).unwrap();
+    // The final column stays outside the viewport at either host screen scale.
+    // A fixed character offset can fall in a visible column when Mac's smaller
+    // 100% text fits more characters into each column.
+    a.run("caret.docEnd", json!({})).unwrap();
     d.frame(a, vec![], screen);
     assert!(a.canvas.scroll_offset.x > initial_scroll + a.session.view.read_width * a.canvas.scale);
     a.run("caret.set", json!({"pos": wordcraft_doc::Pos::body(0, 0)})).unwrap();
@@ -1670,10 +1672,16 @@ fn zoom_steps_land_finished_with_animation_effects_off() {
     };
     let opts = egui::InputOptions::default();
     let notch_zoom = (opts.scroll_zoom_speed * opts.line_scroll_speed).exp();
-    let before = a.canvas.scale;
+    let before = crate::canvas::document_zoom(&a);
     frame(&mut a, vec![ctrl_wheel(1.0)]);
     let (scale, pages) = (a.canvas.scale, a.canvas.page_rects.clone());
-    assert!((scale / before - notch_zoom).abs() < 1e-3, "the whole notch in its frame: {before} -> {scale}");
+    let requested = crate::canvas::document_zoom(&a);
+    assert!((requested / before - notch_zoom).abs() < 1e-3, "the whole notch in its frame: {before} -> {requested}");
+    let screen_scale = |zoom: f32| {
+        let scale = zoom * crate::canvas::PX_PER_PT;
+        if cfg!(target_os = "macos") { (scale * 72.0).round() / 72.0 } else { scale }
+    };
+    assert!((scale - screen_scale(requested)).abs() < 1e-3, "the drawn scale uses the requested zoom immediately");
     for _ in 0..30 {
         frame(&mut a, Vec::new());
         assert_eq!(a.canvas.scale, scale, "nothing is left to ease in");
@@ -1684,7 +1692,9 @@ fn zoom_steps_land_finished_with_animation_effects_off() {
     assert_eq!(a.canvas.scale, scale, "a quarter notch isn't a step yet");
     frame(&mut a, vec![ctrl_wheel(-0.25)]);
     let stepped = a.canvas.scale;
-    assert!((stepped / scale - (-0.1_f32).exp()).abs() < 1e-3, "{scale} -> {stepped}");
+    let requested_step = crate::canvas::document_zoom(&a);
+    assert!((requested_step / requested - (-0.1_f32).exp()).abs() < 1e-3, "{requested} -> {requested_step}");
+    assert!((stepped - screen_scale(requested_step)).abs() < 1e-3, "the complete step is drawn in its frame");
     for _ in 0..30 {
         frame(&mut a, Vec::new());
     }

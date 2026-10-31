@@ -59,6 +59,9 @@ pub struct ResolvedChar {
     pub fmt: Option<u32>,
     pub no_proof: bool,
     pub lang: Option<String>,
+    /// Language of East Asian text, resolved through the same style cascade.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lang_ea: Option<String>,
     /// Right-to-left run (`w:rtl`).
     pub rtl: bool,
     /// The whole run uses the complex-script properties (`w:cs`).
@@ -109,6 +112,7 @@ impl ResolvedChar {
             fmt: c.fmt_change.as_ref().map(|f| f.rev),
             no_proof: c.no_proof.unwrap_or(false),
             lang: c.lang.clone(),
+            lang_ea: c.lang_ea.clone(),
             rtl: c.rtl.unwrap_or(false),
             cs: c.cs.unwrap_or(false),
             font_cs: c.font_cs.clone().or_else(|| c.font.clone()).unwrap_or_else(|| crate::styles::BODY_FONT.to_string()),

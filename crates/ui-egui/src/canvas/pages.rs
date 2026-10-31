@@ -8,6 +8,8 @@ pub(super) fn view_key(app: &WordApp, dim_body: bool, hidden: Option<&Pos>) -> u
     let mut h = std::collections::hash_map::DefaultHasher::new();
     let v = &app.session.view;
     (v.marks, app.session.prefs.marks, v.show_markup, v.dark_mode, wordcraft_render::DARK_PAPER, v.hide_ink, v.draw.replay).hash(&mut h);
+    // Switching interface languages changes the visible paragraph mark.
+    app.ui.language.hash(&mut h);
     (v.read_mode, v.read_page_color).hash(&mut h);
     app.session.prefs.markup.hash(&mut h);
     dim_body.hash(&mut h);
@@ -91,6 +93,26 @@ pub(super) fn page_key(app: &mut WordApp, layout: &std::sync::Arc<DocLayout>, i:
 
 pub(super) fn to_screen(origin: Pos2, page_rect: Rect, scale: f32, x: f32, y: f32) -> Pos2 {
     pos2(origin.x + page_rect.min.x + x * scale, origin.y + page_rect.min.y + y * scale)
+}
+
+/// The four screen-only page-corner guides used while editing Japanese print layouts. Their
+/// inside corners sit just outside the text margins, with both arms pointing toward the paper
+/// edge. The marks are UI chrome, never part of the page raster or an exported document.
+pub(super) fn crop_mark_segments(body: wordcraft_geom::Rect, page: Rect, scale: f32) -> [[Pos2; 2]; 8] {
+    let at = |x: f32, y: f32| pos2(page.min.x + x * scale, page.min.y + y * scale);
+    let (left, right) = (body.x - 2.2, body.right() + 2.2);
+    let (top, bottom) = (body.y - 2.2, body.bottom() + 2.2);
+    let arm = 16.0;
+    [
+        [at(left, top - arm), at(left, top)],
+        [at(left - arm, top), at(left, top)],
+        [at(right, top - arm), at(right, top)],
+        [at(right, top), at(right + arm, top)],
+        [at(left, bottom), at(left, bottom + arm)],
+        [at(left - arm, bottom), at(left, bottom)],
+        [at(right, bottom), at(right, bottom + arm)],
+        [at(right, bottom), at(right + arm, bottom)],
+    ]
 }
 
 /// A page raster as an egui image. Both hold premultiplied RGBA8, so the pixels go across as they
@@ -225,6 +247,13 @@ pub(crate) fn preview_sel(app: &WordApp) -> Option<&wordcraft_engine::Selection>
 pub(super) fn page_render_options(app: &WordApp, dim_body: bool) -> wordcraft_render::RenderOptions {
     let mut opts = screen_render_options();
     opts.display.marks = app.session.view.marks;
+    let japanese_view = crate::i18n::Lang::from_pref(&app.ui.language).code() == "ja";
+    opts.display.japanese_paragraph_marks = japanese_view;
+    if japanese_view {
+        // Word's Japanese editing marks are light blue. The renderer composites marks at 90%
+        // opacity, so this paint gives the observed colour over white paper.
+        opts.mark_color = wordcraft_doc::props::Rgb(90, 164, 248);
+    }
     opts.display.always = app.session.prefs.marks;
     opts.display.placeholders = true;
     opts.display.markup = app.session.view.show_markup;

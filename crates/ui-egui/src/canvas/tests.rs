@@ -1,6 +1,101 @@
 use super::*;
 use crate::table_resize::tests::{H, cell, screen, steps, table_window};
 
+#[test]
+fn paragraph_mark_shape_follows_interface_language() {
+    // Builds without craft-i18n embed only English, so Japanese cannot be selected.
+    if crate::i18n::Lang::from_code("ja").is_none() {
+        return;
+    }
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+    app.ui.language = "ja".into();
+    assert!(page_render_options(&app, false).display.japanese_paragraph_marks);
+    assert_eq!(page_render_options(&app, false).mark_color, wordcraft_doc::props::Rgb(90, 164, 248));
+    let japanese_page = view_key(&app, false, None);
+    app.ui.language = "en".into();
+    assert!(!page_render_options(&app, false).display.japanese_paragraph_marks);
+    assert_ne!(japanese_page, view_key(&app, false, None));
+}
+
+/// A zoom percentage uses the host word processor's logical screen units. In the
+/// macOS comparison, Word's 130% A4 page was about the width of our former 100%
+/// page: the 96/72 conversion belongs to Windows/web, not AppKit's 72 pt/in.
+#[test]
+fn document_zoom_matches_the_host_screen_point_convention() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let layout = app.session.layout();
+    let page = &layout.pages[0];
+    let logical_points_per_inch = if cfg!(target_os = "macos") { 72.0 } else { 96.0 };
+    for percent in [100.0, 110.0, 125.0, 130.0, 200.0] {
+        app.session.run("view.zoom", &json!({"value": percent})).unwrap();
+        let g = geometry(&app, &layout, vec2(1440.0, 900.0));
+        let nominal = percent / 100.0 * logical_points_per_inch / 72.0;
+        let expected = if cfg!(target_os = "macos") { (nominal * 72.0_f32).round() / 72.0 } else { nominal };
+        assert!((g.rects[0].width() - page.w * expected).abs() < 0.01, "{percent}%: {:?}", g.rects[0]);
+        assert!((g.rects[0].height() - page.h * expected).abs() < 0.01, "the whole sheet uses the same zoom");
+        assert!((document_zoom(&app) - percent / 100.0).abs() < 0.001, "the requested zoom remains visible");
+        let p = g.rects[0].min + vec2(120.0, 200.0) * g.scale;
+        let (_, x, y) = page_at(&g.rects, &layout, g.scale, p).unwrap();
+        assert!((x - 120.0).abs() < 0.01 && (y - 200.0).abs() < 0.01, "hit testing uses the drawn scale");
+    }
+}
+
+#[test]
+fn dpi_rounding_leaves_fitted_web_and_reading_scales_alone() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let layout = app.session.layout();
+    let avail = vec2(1100.0, 760.0);
+    app.session.view.zoom = 1.3;
+    app.session.view.mode = wordcraft_layout::ViewMode::Web;
+    assert!((geometry(&app, &layout, avail).scale - 1.3 * PX_PER_PT).abs() < 0.0001);
+    app.session.view.mode = wordcraft_layout::ViewMode::Print;
+    app.session.view.read_mode = true;
+    app.session.view.read_zoom = 1.3;
+    assert!((geometry(&app, &layout, avail).scale - 1.3 * PX_PER_PT).abs() < 0.0001);
+    app.session.view.read_mode = false;
+    app.session.view.fit = "onePage".into();
+    let g = geometry(&app, &layout, avail);
+    let page = &layout.pages[0];
+    let expected = ((avail.y - 2.0 * GAP) / page.h).min((avail.x - 2.0 * GAP) / page.w).clamp(0.05, 6.0);
+    assert!((g.scale - expected).abs() < 0.0001, "fit uses the available area without DPI rounding");
+}
+
+#[test]
+fn hide_white_space_keeps_pages_in_one_column_on_wide_mac_canvases() {
+    let mut app = WordApp::new(
+        wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("First\u{000c}Second\u{000c}Third")),
+        crate::Services::default(),
+    );
+    let layout = app.session.layout();
+    let width = 2.0 * layout.pages[0].w * PX_PER_PT + 100.0;
+    let avail = vec2(width, 900.0);
+    assert!(geometry(&app, &layout, avail).cols >= 2);
+    app.session.run("view.hideWhiteSpace", &json!({"value": true})).unwrap();
+    let collapsed = geometry(&app, &layout, avail);
+    assert_eq!(collapsed.cols, 1);
+    assert!(collapsed.rects[1].top() < collapsed.rects[0].bottom() + GAP);
+}
+
+/// Fit modes have a geometric scale of their own, but their reported percentage
+/// and the next manual zoom use the same host convention as the page canvas.
+#[test]
+fn fitted_zoom_round_trips_through_the_host_scale() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let layout = app.session.layout();
+    let avail = vec2(1100.0, 760.0);
+    for fit in ["pageWidth", "onePage", "multiplePages"] {
+        app.session.view.fit = fit.into();
+        let fitted = geometry(&app, &layout, avail);
+        sync_fit_zoom(&mut app, fitted.scale);
+        let percent = app.session.view.zoom * 100.0;
+        app.session.run("view.zoom", &json!({"value": percent})).unwrap();
+        let manual = geometry(&app, &layout, avail);
+        let expected = if cfg!(target_os = "macos") { (fitted.scale * 72.0).round() / 72.0 } else { fitted.scale };
+        assert!((manual.scale - expected).abs() < 0.001, "{fit}: {percent}%");
+        assert!((manual.rects[0].width() - layout.pages[0].w * expected).abs() < 0.01, "{fit}: manual zoom uses the effective scale");
+    }
+}
+
 /// #3931: while Insert › Table's grid asks for a preview the page is laid out with that
 /// table; the document, its revision and undo history stay as they were, and without a
 /// request the page is the document's own again.
@@ -703,7 +798,7 @@ fn dragging_the_scrollbar_names_the_page_at_the_top() {
         }
         let page = h.state().canvas.scrollbar_page.expect("a tip while the scrollbar is dragged");
         assert!((4..9).contains(&page), "a page well down the document: {page}");
-        assert!(h.query_by_label(&format!("Page {} of 12", page + 1)).is_some(), "the tip names page {}", page + 1);
+        assert!(h.query_all_by_label(&format!("Page {} of 12", page + 1)).any(|n| n.rect().center().x > 700.0), "the tip names page {}", page + 1);
         let end = pos2(from.x, bar.bottom() - 4.0);
         for k in 1..=6 {
             h.event(Event::PointerMoved(to + (end - to) * (k as f32 / 6.0)));
@@ -3075,10 +3170,10 @@ fn a_right_click_keeps_selected_cells_only_on_them() {
 }
 
 /// Issue #123: zoomed out, pages sit side by side in rows when the width allows; at 100% a
-/// letter page in an ordinary window stays one per row.
+/// letter page in a 96 pt/in window stays one per row.
 #[test]
 fn pages_flow_into_rows_when_they_fit() {
-    let letter = 612.0 * PX_PER_PT;
+    let letter = 612.0 * 96.0 / 72.0;
     assert_eq!(columns_for(1200.0, letter, 10, 1, true), 1, "100%: one page per row");
     assert_eq!(columns_for(1200.0, letter * 0.6, 10, 1, true), 2, "60%: two per row");
     assert_eq!(columns_for(1200.0, letter * 0.25, 10, 1, true), 5, "25%: five per row");
@@ -3115,6 +3210,29 @@ fn pages_flow_into_rows_when_they_fit() {
         assert!(size.x.is_finite() && size.y.is_finite());
         assert!(rects.iter().all(|r| r.min.x.is_finite() && r.max.y.is_finite()), "{rects:?}");
     }
+}
+
+#[test]
+fn a_single_short_print_page_is_centred_vertically() {
+    let avail = vec2(800.0, 900.0);
+    let (rects, size) = place_pages(&[(280.0, 600.0)], 0.0, 1.0, 1, avail);
+    assert_eq!(rects.len(), 1);
+    assert!((rects[0].top() - 150.0).abs() < 0.01, "the envelope shares the spare room above and below: {rects:?}");
+    assert!(size.y >= avail.y);
+    let (tall, _) = place_pages(&[(280.0, 1000.0)], 0.0, 1.0, 1, avail);
+    assert!((tall[0].top() - GAP).abs() < 0.01, "a scrollable page starts at the normal gap");
+}
+
+#[test]
+fn japanese_print_guides_follow_the_text_margins_at_zoom() {
+    let page = Rect::from_min_size(pos2(0.0, 0.0), vec2(884.0, 1920.0));
+    let body = wordcraft_geom::Rect::new(28.35, 79.1, 283.5, 618.3);
+    let marks = crop_mark_segments(body, page, 2.6);
+    assert!((marks[0][1].x - 68.0).abs() < 1.0);
+    assert!((marks[0][1].y - 200.0).abs() < 1.0);
+    assert!((marks[0][0].y - 158.0).abs() < 1.0);
+    assert_eq!(marks[0][1], marks[1][1], "the two arms meet at the top-left corner");
+    assert!(marks[2][1].x > marks[0][1].x && marks[4][0].y > marks[0][1].y);
 }
 
 #[test]
@@ -3548,8 +3666,17 @@ fn ruler_numbers_skip_the_margins_and_the_markers_and_thin_out() {
     a.run("para.indents", json!({"left": 0.0})).unwrap();
     let d = frames(&mut a, &mut t);
     assert_eq!(names(&d.h_labels), ["1", "2", "3", "4", "5", "6"]);
-    // At 10% an inch is 9.6 px: a number every 4 inches, the text keeps its size.
-    a.run("view.zoom", json!({"value": 10})).unwrap();
+    // At 10% on Mac an inch is 7.2 logical points: numbers appear every 8 inches,
+    // so only the vertical text area is long enough to contain a numbered mark.
+    if cfg!(target_os = "macos") {
+        a.run("view.zoom", json!({"value": 10})).unwrap();
+        let d = frames(&mut a, &mut t);
+        assert!(d.h_labels.is_empty());
+        assert_eq!(names(&d.v_labels), ["8"]);
+    }
+    // An inch at 9.6 logical points gives a number every 4 inches on either host;
+    // the label font keeps its size while the document shrinks.
+    a.run("view.zoom", json!({"value": 10.0 * (96.0 / 72.0) / PX_PER_PT})).unwrap();
     let d = frames(&mut a, &mut t);
     assert_eq!(names(&d.h_labels), ["4"]);
     assert_eq!(names(&d.v_labels), ["4", "8"]);

@@ -68,6 +68,7 @@ fn status_bar_controls_hold_still_across_zoom_levels() {
     let mut seen: Vec<(f32, Vec<f64>)> = Vec::new();
     for (n, zoom) in [10.0_f32, 9.0, 100.0, 500.0].into_iter().enumerate() {
         a.canvas.scale = zoom / 100.0 * crate::canvas::PX_PER_PT;
+        a.session.view.zoom = zoom / 100.0;
         let input = egui::RawInput {
             time: Some(n as f64 / 60.0),
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(1200.0, 800.0))),
