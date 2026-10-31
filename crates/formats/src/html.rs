@@ -37,4 +37,6 @@ pub use export::{esc, export, export_flow, export_fragment, inlines_html};
 pub use import::{import, import_on, import_with, parse, parse_with};
 
 #[cfg(test)]
+use css::css_unescape;
+#[cfg(test)]
 mod tests;

@@ -300,6 +300,29 @@ fn if_rule_previews_its_result() {
     assert_eq!(s.doc.plain_text(StoryRef::Body), "Selected\nOther");
 }
 
+/// #3681: quotes and backslashes in a rule's texts and field name stay in them.
+#[test]
+fn rule_texts_keep_their_quotes() {
+    let mut s = Session::new(Document::new());
+    let rows = json!([{"Say \"hi\"": "a\\b", "Name": "O\"Neil"}, {"Say \"hi\"": "no", "Name": "Plain"}]);
+    s.run("mailings.recipients", &json!({"rows": rows})).unwrap();
+    s.run("mailings.start", &json!({"kind": "directory"})).unwrap();
+    let rule = json!({"rule": "IF", "field": "Say \"hi\"", "value": "a\\b", "then": "Dear \"friend\"", "else": "C:\\dir\\"});
+    s.run("mailings.rules", &rule).unwrap();
+    s.run("mailings.preview", &json!({"value": true})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Dear \"friend\"");
+    s.run("mailings.next", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "C:\\dir\\");
+    // SKIPIF compares with the value as typed.
+    let mut s = Session::new(Document::new());
+    s.run("mailings.recipients", &json!({"rows": rows})).unwrap();
+    s.run("mailings.start", &json!({"kind": "directory"})).unwrap();
+    s.run("mailings.rules", &json!({"rule": "SKIPIF", "field": "Name", "value": "O\"Neil"})).unwrap();
+    s.run("mailings.insertField", &json!({"field": "Name"})).unwrap();
+    s.run("mailings.finish", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Plain");
+}
+
 /// #430: merge fields in headers and footers are previewed and merged; each letter gets its
 /// own header.
 #[test]

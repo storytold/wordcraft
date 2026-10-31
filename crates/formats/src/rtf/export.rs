@@ -33,6 +33,12 @@ pub fn esc(s: &str) -> String {
     o
 }
 
+/// [`esc`] for a `\fonttbl` name: `;` would end the entry, so it is written `\'3b`, and control
+/// characters, which `esc` writes as `\line` or `\tab`, are dropped.
+fn esc_font(name: &str) -> String {
+    esc(&name.replace(char::is_control, "")).replace(';', "\\'3b")
+}
+
 pub(super) struct Tables {
     pub(super) fonts: Vec<String>,
     pub(super) colors: Vec<Rgb>,
@@ -682,7 +688,7 @@ fn export_with(m: &Meta, w: &Writer, body: &str, sec: &wordcraft_doc::SectionPro
     let mut out = String::from("{\\rtf1\\ansi\\ansicpg1252\\deff0\\deflang1033\\uc1\n{\\fonttbl");
     for (i, f) in w.t.fonts.iter().enumerate() {
         let fam = if model::is_mono(f) { "\\fmodern" } else { "\\fswiss" };
-        out.push_str(&format!("{{\\f{i}{fam}\\fcharset0 {};}}", esc(f)));
+        out.push_str(&format!("{{\\f{i}{fam}\\fcharset0 {};}}", esc_font(f)));
     }
     out.push_str("}\n{\\colortbl;");
     for c in &w.t.colors {

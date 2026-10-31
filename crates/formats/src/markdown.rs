@@ -12,6 +12,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use wordcraft_doc::table::{MAX_COLS, MAX_ROWS};
 use wordcraft_doc::{Align, Document};
 
 use crate::html::decode_entity;
@@ -28,5 +29,7 @@ pub use export::export;
 use export::{escape_line_start, inlines_md, table_md, write_blocks};
 pub use inlines::parse_inlines;
 
+#[cfg(test)]
+use blocks::split_row;
 #[cfg(test)]
 mod tests;

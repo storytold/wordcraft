@@ -489,6 +489,24 @@ fn deeply_nested_header_content_does_not_panic() {
 }
 
 #[test]
+fn headers_and_footers_share_the_text_s_budget_with_the_body() {
+    // Each header and footer was read with a budget of its own (#3700).
+    let run = r#"<text:s text:c="1000"/>"#.repeat(3_000);
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="21cm" fo:page-height="29.7cm"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"><style:header><text:p>h{run}</text:p></style:header><style:footer><text:p>f{run}</text:p></style:footer></style:master-page></office:master-styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p>b{run}</text:p></office:text></office:body></office:document-content>"#
+    );
+    let d = import(&package(&content, Some(&styles))).unwrap();
+    let texts =
+        [part_text(&d, d.last_section.headers.default), part_text(&d, d.last_section.footers.default), d.plain_text(wordcraft_doc::StoryRef::Body)];
+    // One space per element in all three, and one budget of extra spaces between them.
+    assert_eq!(texts.iter().map(|t| t.matches(' ').count()).sum::<usize>(), 3 * 3_000 + MAX_EXTRA_SPACES);
+    assert!(texts[0].starts_with("h ") && texts[1].starts_with("f ") && texts[2].starts_with("b "));
+}
+
+#[test]
 fn master_pages_and_column_sections_become_sections() {
     use wordcraft_doc::section::SectionStart;
     let doc = import(&sections_package()).unwrap();
@@ -1047,6 +1065,34 @@ fn explicit_spaces_at_paragraph_ends_are_kept() {
         let back = import(&export(&d).unwrap()).unwrap();
         assert_eq!(back.plain_text(wordcraft_doc::StoryRef::Body).trim_end_matches('\n'), t);
     }
+}
+
+#[test]
+fn text_s_spaces_have_a_budget_for_the_whole_document() {
+    // 5,000 elements asking for 1,000 spaces each would add 5 million (#3700).
+    let tags = 5_000;
+    let run = r#"<text:s text:c="1000"/>"#.repeat(tags);
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p>a{run}b</text:p><text:p>c<text:s text:c="3"/>d</text:p></office:text></office:body></office:document-content>"#
+    );
+    let f = parse(&package(&content, None)).unwrap();
+    let texts: Vec<String> = paras(&f).iter().map(|p| p.text()).collect();
+    // Once the budget is spent, each element still stands for one space.
+    assert_eq!(texts[0].len(), 2 + tags + MAX_EXTRA_SPACES);
+    assert!(texts[0].starts_with("a ") && texts[0].ends_with(" b"));
+    assert_eq!(texts[1], "c d");
+}
+
+#[test]
+fn text_s_outside_a_paragraph_spends_no_budget() {
+    // Spaces outside a paragraph are dropped, so they mustn't use up the budget (#3700).
+    let stray = r#"<text:s text:c="1000"/>"#.repeat(5_000);
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text>{stray}<text:p>a<text:s text:c="1000"/>b</text:p></office:text></office:body></office:document-content>"#
+    );
+    let f = parse(&package(&content, None)).unwrap();
+    let texts: Vec<String> = paras(&f).iter().map(|p| p.text()).collect();
+    assert_eq!(texts, vec![format!("a{}b", " ".repeat(1000))]);
 }
 
 #[test]

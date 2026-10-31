@@ -645,13 +645,15 @@ fn removing_a_whole_table_keeps_a_control_the_range_only_partly_covers() {
 
 #[test]
 fn a_table_nested_deeper_than_the_paragraph_walk_is_never_removed_whole() {
-    // 20 tables, each in the first cell of the one around it, ahead of that cell's paragraph:
-    // the innermost paragraphs come first in the document but the paragraph walk stops short.
+    // The deepest nesting allowed, each table in the first cell of the one around it, ahead of
+    // that cell's paragraph: the innermost paragraphs come first in the document but the
+    // paragraph walk stops short.
+    const { assert!(MAX_TABLE_DEPTH > crate::PARA_WALK_DEPTH) };
     let mut t = Table::new(1, 1, 200.0);
     if let Some(cell) = t.rows.get_mut(0).and_then(|r| r.cells.get_mut(0)) {
         cell.blocks = vec![para_block(Paragraph::with_text("deep", CharProps::default()))];
     }
-    for _ in 0..20 {
+    for _ in 1..MAX_TABLE_DEPTH {
         let mut outer = Table::new(1, 1, 200.0);
         if let Some(cell) = outer.rows.get_mut(0).and_then(|r| r.cells.get_mut(0)) {
             cell.blocks.insert(0, Arc::new(Block::Table(t)));
