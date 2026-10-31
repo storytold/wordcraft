@@ -3049,6 +3049,41 @@ fn layout_size_refuses_a_page_its_margins_dont_fit() {
     assert_eq!((s.doc.last_section.page_w, s.doc.last_section.page_h), (180.0, 180.0), "exactly 36 pt of room is enough");
 }
 
+/// The Japanese paper sizes in the Layout › Size list (はがき, 封筒, B6 JIS, 四六判…; the ribbon
+/// gallery and Page Setup read the same `PAPER_SIZES`) reach a page through `layout.size`.
+#[test]
+fn layout_size_takes_the_japanese_paper_names() {
+    let mut s = s();
+    // Small pages like a postcard or a business card need small margins first.
+    run(&mut s, "layout.margins", json!({"top": 18.0, "bottom": 18.0, "left": 18.0, "right": 18.0}));
+    let mm = |v: f32| v * 72.0 / 25.4;
+    let sizes: &[(&str, f32, f32)] = &[
+        ("Japanese Postcard", 100.0, 148.0),
+        ("Japanese Postcard (Double)", 148.0, 200.0),
+        ("Japanese Envelope #3", 120.0, 235.0),
+        ("Japanese Envelope #4", 90.0, 205.0),
+        ("Japanese Envelope Kaku #2", 240.0, 332.0),
+        ("Japanese Envelope Kaku #3", 216.0, 277.0),
+        ("Japanese Envelope Kaku #20", 229.0, 324.0),
+        ("A6", 105.0, 148.0),
+        ("B6 (JIS)", 128.0, 182.0),
+        ("Shiroku-ban", 127.0, 188.0),
+        ("Japanese Business Card", 91.0, 55.0),
+    ];
+    for &(name, w, h) in sizes {
+        run(&mut s, "layout.size", json!({"name": name}));
+        let (pw, ph) = (s.doc.last_section.page_w, s.doc.last_section.page_h);
+        let (want_w, want_h) = (mm(w).min(mm(h)), mm(w).max(mm(h)));
+        assert!((pw - want_w).abs() < 0.02 && (ph - want_h).abs() < 0.02, "{name}: {pw} × {ph} pt");
+        assert_eq!(wordcraft_geom::paper_name(pw, ph), Some(name), "{name} reads back in the gallery");
+    }
+    // An unknown name is still refused and leaves the page as it is.
+    run(&mut s, "layout.size", json!({"name": "Japanese Postcard"}));
+    let before = s.doc.last_section.clone();
+    assert!(s.run("layout.size", &json!({"name": "送り状"})).is_err());
+    assert_eq!(s.doc.last_section, before);
+}
+
 /// A negative margin (or gutter) counts as zero, so it can't offset an oversized one past the
 /// text-room check: `layout.margins` refuses and changes nothing.
 #[test]
