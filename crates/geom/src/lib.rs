@@ -1,4 +1,4 @@
-//! WordCraft geometry and units.
+//! `WordCraft` geometry and units.
 //!
 //! Layout works in **points** (1/72 inch, `f32`). File formats use other units: OOXML uses
 //! twentieths of a point (twips) for most lengths, half-points for font sizes, eighths of a point
@@ -25,31 +25,44 @@ pub const EMU_PER_PT: f32 = 12_700.0;
 pub const PT_PER_CM: f32 = 72.0 / 2.54;
 
 /// Twips → points.
+#[must_use]
+#[expect(clippy::cast_precision_loss, reason = "The f32 return type intentionally rounds i64 inputs to f32 precision.")]
 pub fn twips(v: i64) -> f32 {
     v as f32 / TWIPS_PER_PT
 }
 /// Points → twips (rounded).
+#[must_use]
+#[expect(clippy::cast_possible_truncation, reason = "The value is rounded first; Rust's float-to-integer cast saturates outside the i64 range.")]
 pub fn to_twips(pt: f32) -> i64 {
     finite(pt * TWIPS_PER_PT).round() as i64
 }
 /// EMU → points.
+#[must_use]
+#[expect(clippy::cast_precision_loss, reason = "The f32 return type intentionally rounds i64 inputs to f32 precision.")]
 pub fn emu(v: i64) -> f32 {
     v as f32 / EMU_PER_PT
 }
 /// Points → EMU (rounded).
+#[must_use]
+#[expect(clippy::cast_possible_truncation, reason = "The value is rounded first; Rust's float-to-integer cast saturates outside the i64 range.")]
 pub fn to_emu(pt: f32) -> i64 {
-    (finite(pt) as f64 * EMU_PER_PT as f64).round() as i64
+    (f64::from(finite(pt)) * f64::from(EMU_PER_PT)).round() as i64
 }
 /// Half-points (OOXML font sizes) → points.
+#[must_use]
+#[expect(clippy::cast_precision_loss, reason = "The f32 return type intentionally rounds i64 inputs to f32 precision.")]
 pub fn half_points(v: i64) -> f32 {
     v as f32 / 2.0
 }
 /// Points → half-points (rounded).
+#[must_use]
+#[expect(clippy::cast_possible_truncation, reason = "The value is rounded first; Rust's float-to-integer cast saturates outside the i64 range.")]
 pub fn to_half_points(pt: f32) -> i64 {
     (finite(pt) * 2.0).round() as i64
 }
 
 /// Replace NaN/inf with 0 so casts and arithmetic stay defined.
+#[must_use]
 pub fn finite(v: f32) -> f32 {
     if v.is_finite() { v } else { 0.0 }
 }
@@ -67,6 +80,7 @@ pub enum Unit {
 }
 
 impl Unit {
+    #[must_use]
     pub fn suffix(self) -> &'static str {
         match self {
             Unit::Inches => "\"",
@@ -76,6 +90,7 @@ impl Unit {
             Unit::Picas => " pi",
         }
     }
+    #[must_use]
     pub fn pt_per_unit(self) -> f32 {
         match self {
             Unit::Inches => PT_PER_IN,
@@ -86,14 +101,17 @@ impl Unit {
         }
     }
     /// Format `pt` in this unit the way Word's fields show it (`1"`, `2.54 cm`, `12 pt`).
+    #[must_use]
     pub fn format(self, pt: f32) -> String {
         self.format_with(pt, '.')
     }
     /// [`Unit::format`] with the region's decimal separator (`2,54 cm` with `,`).
+    #[must_use]
     pub fn format_with(self, pt: f32, decimal: char) -> String {
         format!("{}{}", self.number(pt, decimal), self.suffix())
     }
     /// `pt` as a number in this unit, at most two decimals, without the unit (`2,54` with `,`).
+    #[must_use]
     pub fn number(self, pt: f32, decimal: char) -> String {
         let v = finite(pt) / self.pt_per_unit();
         let s = format!("{v:.2}");
@@ -106,6 +124,7 @@ impl Unit {
 /// Parse a measurement typed by a user: `1"`, `1 in`, `2.5cm`, `12pt`, `3 pi`, `10 mm`, `1.5 li`
 /// (lines are 12 pt). A bare number is in `default`. Returns points. Either decimal separator
 /// works (`2,5 cm` and `2.5 cm`), whatever the region.
+#[must_use]
 pub fn parse_measure(s: &str, default: Unit) -> Option<f32> {
     let t = s.trim().to_ascii_lowercase().replace('\u{2212}', "-");
     if t.is_empty() {
@@ -123,8 +142,7 @@ pub fn parse_measure(s: &str, default: Unit) -> Option<f32> {
         "cm" => PT_PER_CM,
         "mm" => PT_PER_CM / 10.0,
         "pt" | "pts" | "point" | "points" => 1.0,
-        "pi" | "pc" | "pica" | "picas" => 12.0,
-        "li" | "line" | "lines" => 12.0,
+        "pi" | "pc" | "pica" | "picas" | "li" | "line" | "lines" => 12.0,
         "px" => 0.75,
         _ => return None,
     };
@@ -143,6 +161,7 @@ pub struct Point {
 }
 
 impl Point {
+    #[must_use]
     pub const fn new(x: f32, y: f32) -> Self {
         Point { x, y }
     }
@@ -158,36 +177,45 @@ pub struct Rect {
 }
 
 impl Rect {
+    #[must_use]
     pub fn new(x: f32, y: f32, w: f32, h: f32) -> Self {
         Rect { x: finite(x), y: finite(y), w: finite(w).max(0.0), h: finite(h).max(0.0) }
     }
+    #[must_use]
     pub fn right(&self) -> f32 {
         self.x + self.w
     }
+    #[must_use]
     pub fn bottom(&self) -> f32 {
         self.y + self.h
     }
+    #[must_use]
     pub fn contains(&self, p: Point) -> bool {
         p.x >= self.x && p.x <= self.right() && p.y >= self.y && p.y <= self.bottom()
     }
+    #[must_use]
     pub fn intersects(&self, o: &Rect) -> bool {
         self.x < o.right() && o.x < self.right() && self.y < o.bottom() && o.y < self.bottom()
     }
+    #[must_use]
     pub fn union(&self, o: &Rect) -> Rect {
         let x = self.x.min(o.x);
         let y = self.y.min(o.y);
         Rect::new(x, y, self.right().max(o.right()) - x, self.bottom().max(o.bottom()) - y)
     }
+    #[must_use]
     pub fn inset(&self, l: f32, t: f32, r: f32, b: f32) -> Rect {
         Rect::new(self.x + l, self.y + t, self.w - l - r, self.h - t - b)
     }
     /// Grown by `d` on every side (shrunk for negative `d`, down to zero size).
+    #[must_use]
     pub fn expand(&self, d: f32) -> Rect {
         self.inset(-d, -d, -d, -d)
     }
 }
 
 /// An angle in degrees brought into `0..360` (NaN and infinities become 0).
+#[must_use]
 pub fn normalize_degrees(deg: f32) -> f32 {
     if !deg.is_finite() {
         return 0.0;
@@ -198,7 +226,7 @@ pub fn normalize_degrees(deg: f32) -> f32 {
 }
 
 /// How a drawing is turned about its centre: mirrored first (`flip_h` left to right, `flip_v` top
-/// to bottom), then rotated `deg` degrees clockwise (page space, y down), as DrawingML's `a:xfrm`
+/// to bottom), then rotated `deg` degrees clockwise (page space, y down), as `DrawingML`'s `a:xfrm`
 /// `flipH`, `flipV` and `rot` say (ECMA-376 §20.1.7.6).
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct Spin {
@@ -209,17 +237,19 @@ pub struct Spin {
 
 impl Spin {
     /// A spin with its angle normalised to `0..360`.
+    #[must_use]
     pub fn new(deg: f32, flip_h: bool, flip_v: bool) -> Spin {
         Spin { deg: normalize_degrees(deg), flip_h, flip_v }
     }
 
     /// No rotation and no mirroring.
+    #[must_use]
     pub fn is_identity(&self) -> bool {
         normalize_degrees(self.deg) == 0.0 && !self.flip_h && !self.flip_v
     }
 
     /// The linear part (a, b, c, d: x' = a·x + c·y, y' = b·x + d·y).
-    fn linear(&self) -> [f32; 4] {
+    fn linear(self) -> [f32; 4] {
         let r = normalize_degrees(self.deg).to_radians();
         let (s, c) = r.sin_cos();
         let fx = if self.flip_h { -1.0 } else { 1.0 };
@@ -229,6 +259,7 @@ impl Spin {
 
     /// The affine map (a, b, c, d, e, f: x' = a·x + c·y + e, y' = b·x + d·y + f) turning the page
     /// about point (`cx`, `cy`).
+    #[must_use]
     pub fn matrix(&self, cx: f32, cy: f32) -> [f32; 6] {
         let [a, b, c, d] = self.linear();
         let (cx, cy) = (finite(cx), finite(cy));
@@ -236,36 +267,41 @@ impl Spin {
     }
 
     /// Where point (`x`, `y`) goes when turned about (`cx`, `cy`).
+    #[must_use]
     pub fn apply(&self, cx: f32, cy: f32, x: f32, y: f32) -> (f32, f32) {
-        let [a, b, c, d] = self.linear();
-        let (u, v) = (x - cx, y - cy);
-        (cx + a * u + c * v, cy + b * u + d * v)
+        let [x_from_x, y_from_x, x_from_y, y_from_y] = self.linear();
+        let (relative_x, relative_y) = (x - cx, y - cy);
+        (cx + x_from_x * relative_x + x_from_y * relative_y, cy + y_from_x * relative_x + y_from_y * relative_y)
     }
 
     /// The point that [`Spin::apply`] takes to (`x`, `y`).
+    #[must_use]
     pub fn unapply(&self, cx: f32, cy: f32, x: f32, y: f32) -> (f32, f32) {
         // The linear part is orthogonal: its inverse is its transpose.
-        let [a, b, c, d] = self.linear();
-        let (u, v) = (x - cx, y - cy);
-        (cx + a * u + b * v, cy + c * u + d * v)
+        let [x_from_x, y_from_x, x_from_y, y_from_y] = self.linear();
+        let (relative_x, relative_y) = (x - cx, y - cy);
+        (cx + x_from_x * relative_x + y_from_x * relative_y, cy + x_from_y * relative_x + y_from_y * relative_y)
     }
 
     /// The axis-aligned box `r` covers once turned about its centre.
+    #[must_use]
     pub fn bounds(&self, r: Rect) -> Rect {
         let (bw, bh) = self.extent(r.w, r.h);
         Rect::new(r.x + (r.w - bw) / 2.0, r.y + (r.h - bh) / 2.0, bw, bh)
     }
 
     /// The width and height of the box a `w` × `h` rectangle covers once turned.
+    #[must_use]
     pub fn extent(&self, w: f32, h: f32) -> (f32, f32) {
-        let (w, h) = (finite(w).abs(), finite(h).abs());
-        let r = normalize_degrees(self.deg).to_radians();
-        let (s, c) = (r.sin().abs(), r.cos().abs());
-        (w * c + h * s, w * s + h * c)
+        let (width, height) = (finite(w).abs(), finite(h).abs());
+        let radians = normalize_degrees(self.deg).to_radians();
+        let (sine, cosine) = (radians.sin().abs(), radians.cos().abs());
+        (width * cosine + height * sine, width * sine + height * cosine)
     }
 
     /// This spin applied inside `outer` (a group member's own spin within its group's): the one
     /// spin doing both.
+    #[must_use]
     pub fn within(self, outer: Spin) -> Spin {
         // outer = R(θo)·Fo, self = R(θs)·Fs; Fo·R(θ) = R(±θ)·Fo (one mirror reverses the turn).
         let one_mirror = outer.flip_h != outer.flip_v;
@@ -291,6 +327,7 @@ pub const PAPER_SIZES: &[(&str, f32, f32)] = &[
 ];
 
 /// The paper size whose dimensions match (either orientation, within half a point).
+#[must_use]
 pub fn paper_name(w: f32, h: f32) -> Option<&'static str> {
     PAPER_SIZES
         .iter()
@@ -299,6 +336,7 @@ pub fn paper_name(w: f32, h: f32) -> Option<&'static str> {
 }
 
 /// The standard paper size named `name` (case-insensitive), as (name, width, height) in points.
+#[must_use]
 pub fn paper_by_name(name: &str) -> Option<(&'static str, f32, f32)> {
     let name = name.trim();
     PAPER_SIZES.iter().find(|(n, _, _)| n.eq_ignore_ascii_case(name)).copied()
@@ -321,6 +359,7 @@ pub struct PaperFit {
 /// page's orientation, the page is scaled up or down by one factor to fill it and centred, as
 /// Word's Pages per sheet › Scale to paper size does. Degenerate or non-finite sizes give the
 /// page as it is (scale 1 on paper of its own size).
+#[must_use]
 pub fn fit_to_paper(page_w: f32, page_h: f32, paper_w: f32, paper_h: f32) -> PaperFit {
     let ok = |v: f32| v.is_finite() && v >= 1.0;
     let as_is = PaperFit { paper_w: page_w, paper_h: page_h, k: 1.0, dx: 0.0, dy: 0.0 };
@@ -343,11 +382,11 @@ mod tests {
 
     #[test]
     fn unit_round_trips() {
-        assert_eq!(twips(1440), 72.0);
+        assert_eq!(twips(1440).to_bits(), 72.0f32.to_bits());
         assert_eq!(to_twips(72.0), 1440);
-        assert_eq!(emu(914_400), 72.0);
+        assert_eq!(emu(914_400).to_bits(), 72.0f32.to_bits());
         assert_eq!(to_emu(72.0), 914_400);
-        assert_eq!(half_points(24), 12.0);
+        assert_eq!(half_points(24).to_bits(), 12.0f32.to_bits());
         assert_eq!(to_half_points(10.5), 21);
         assert_eq!(to_twips(f32::NAN), 0);
     }
@@ -429,7 +468,7 @@ mod tests {
         assert!(a.intersects(&b));
         assert_eq!(a.union(&b), Rect::new(0.0, 0.0, 15.0, 15.0));
         assert!(a.contains(Point::new(5.0, 5.0)));
-        assert_eq!(Rect::new(0.0, 0.0, -5.0, f32::NAN).w, 0.0);
+        assert_eq!(Rect::new(0.0, 0.0, -5.0, f32::NAN).w.to_bits(), 0.0f32.to_bits());
         assert_eq!(a.inset(1.0, 2.0, 3.0, 4.0), Rect::new(1.0, 2.0, 6.0, 4.0));
     }
 
