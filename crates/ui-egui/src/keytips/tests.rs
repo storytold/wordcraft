@@ -541,3 +541,60 @@ fn alt_then_q_opens_search() {
     assert_eq!(a.ui.keytips, Phase::Off);
     assert!(matches!(a.dialog, Some(crate::dialogs::Dialog::Commands { .. })), "{:?}", a.dialog.as_ref().map(|d| d.name()));
 }
+
+#[test]
+fn contextual_tabs_get_free_letters_that_open_them() {
+    let all = lettered_tab_letters();
+    assert_eq!(all.len(), LETTERED_TABS.len());
+    assert_eq!(
+        all,
+        &[("Picture Format", 'B'), ("Shape Format", 'C'), ("SmartArt Design", 'K'), ("Chart Design", 'L'), ("Equation", 'U'), ("Outlining", 'X'),]
+    );
+    let mut seen: Vec<char> = Vec::new();
+    for (tab, c) in all {
+        assert!(!seen.contains(c), "{tab}: {c} is used twice");
+        seen.push(*c);
+        assert!(TAB_LETTERS.iter().all(|(_, l)| !l.starts_with(*c)), "{tab}: {c} is a tab letter");
+        assert!(!"JQ".contains(*c) && legacy().iter().all(|(k, _)| !k.starts_with(*c)), "{tab}: {c} is taken");
+    }
+    let mut a = app();
+    a.run("insert.shape", serde_json::json!({"kind": "rectangle", "width": 50, "height": 50})).unwrap();
+    let letter = tab_letter_for(&a, "Shape Format");
+    assert_eq!(letter.chars().count(), 1);
+    assert!(badge_tabs(&a).contains(&"Shape Format"));
+    let key = egui::Key::from_name(&letter).expect("a letter key");
+    a.run("ui.tab", serde_json::json!({"tab": "Home"})).unwrap();
+    activate(&mut a);
+    assert!(handle_key(&mut a, key));
+    assert_eq!((a.ui.tab.as_str(), a.ui.keytips), ("Shape Format", Phase::Commands));
+    let b = app();
+    assert_eq!(tab_letter_for(&b, "Shape Format"), "");
+}
+
+#[test]
+fn contextual_tabs_badge_their_controls() {
+    for tab in ["Picture Format", "Shape Format", "SmartArt Design", "Chart Design"] {
+        let a = app();
+        let ids: Vec<&str> = controls(tab).iter().filter_map(|c| if let Target::Cmd { id, .. } = &c.target { Some(*id) } else { None }).collect();
+        assert!(ids.iter().all(|id| a.session.registry.get(id).is_some() || id.starts_with("ui.")), "{tab}: unknown command id");
+        let letters = letters_for(&a, tab);
+        assert!(!letters.is_empty(), "{tab} has controls");
+        let mut seen = letters.clone();
+        seen.sort();
+        seen.dedup();
+        assert_eq!(seen.len(), letters.len(), "{tab}: letters are unique");
+        assert!(letters.iter().all(|l| !l.is_empty() && !l.starts_with('?')), "{tab}: every control has a letter");
+    }
+}
+
+#[test]
+fn smart_art_add_shape_keytip_preserves_the_selected_insertion_point() {
+    let mut a = app();
+    a.run("insert.smartArt", serde_json::json!({"items": ["A", "B"]})).unwrap();
+    a.smart_art_item = Some(0);
+    let add_shape =
+        controls("SmartArt Design").into_iter().find(|c| matches!(&c.target, Target::Cmd { id: "smartArt.addShape", .. })).expect("Add Shape keytip");
+    add_shape.target.run(&mut a);
+    let items = wordcraft_engine::cmd::smart_art::selected_smart_art(&a.session).expect("selected SmartArt");
+    assert_eq!(items.items.iter().map(|item| item.text.as_str()).collect::<Vec<_>>(), ["A", "", "B"]);
+}

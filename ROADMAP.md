@@ -139,6 +139,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
    (20–30 h).
 
 ## Progress log
+- 2026-10-26: Contextual ribbon tabs receive stable WordCraft-assigned single-letter KeyTips; the four object-design tabs also expose control badges, while Equation and Outlining do not yet have control badges (#3854).
 
 - 2026-10-28: Aligned-copy review fixes keep the document axis locked through middle-button scrolling and let Ctrl/Command+Shift start on a secondary selected object. Plain Ctrl and Shift clicks keep their existing behavior (#4764).
 
@@ -690,6 +691,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-29 | trivial | Progress log: window fallback geometry and equation symbol tooltips |
 | 2026-10-29 | trivial | Progress log: window titles omit NUL characters (#3634) |
 | 2026-10-29 | trivial | Recipient labels continue across product-sized sheets instead of stopping after the first sheet (#4880). Filtered/sorted order, product geometry and single-label mode retained; readiness estimates unchanged. |
+| 2026-10-26 | trivial | Contextual KeyTips (#3854): WordCraft-assigned letters for six contextual tabs; four tabs have control badges, Equation and Outlining do not |
 | 2026-10-22 | trivial | Progress log: one native window per open document |
 | 2026-10-22 | trivial | Progress log: every open document keeps its own recovery copy |
 | 2026-10-22 | trivial | Progress log: several open documents in the desktop window |
