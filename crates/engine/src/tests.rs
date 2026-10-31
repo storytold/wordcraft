@@ -1576,6 +1576,27 @@ fn text_from_file_unlinks_inserted_sections_headers() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// #4843: Insert › Object inserts a file's text, as Text from File does, and without a file asks the
+/// app for one (a picker) instead of failing, so the ribbon button does something.
+#[test]
+fn insert_object_inserts_a_file_or_asks_for_one() {
+    let dir = std::env::temp_dir().join(format!("wordcraft-insert-object-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("object.txt");
+    std::fs::write(&path, "From the object").unwrap();
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Start "}));
+    run(&mut s, "caret.docEnd", json!({}));
+    s.ui_requests.clear();
+    run(&mut s, "insert.object", json!({}));
+    assert_eq!(s.ui_requests, [json!({"open": "insertObject"})], "no file: the app is asked to pick one");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Start ", "and nothing is inserted yet");
+    run(&mut s, "insert.object", json!({"path": path.to_str().unwrap()}));
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Start From the object");
+    assert!(s.run("insert.object", &json!({"path": dir.join("missing.txt").to_str().unwrap()})).is_err(), "a missing file is an error");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn paste_special_html_and_rtf_keep_bold() {
     let mut s = s();

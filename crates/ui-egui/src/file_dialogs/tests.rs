@@ -688,6 +688,29 @@ fn only_add_font_asks_for_several_files() {
     assert!(!a.file_dialog_open());
 }
 
+/// #4843: Insert › Object did nothing, as the button ran `insert.object` with no file. It now asks
+/// for a document and inserts its text where the caret is; cancelling inserts nothing.
+#[test]
+fn insert_object_asks_for_a_document_and_inserts_its_text() {
+    let dir = scratch("object");
+    let file = dir.join("insert-me.txt");
+    std::fs::write(&file, "Text from another document").unwrap();
+    let (mut a, shown) = async_app();
+    a.run("text.insert", json!({"text": "Before. "})).unwrap();
+    // The ribbon button: no path, so the app asks for a file.
+    a.run("insert.object", json!({})).unwrap();
+    assert_eq!(shown.borrow().len(), 1, "the picker is shown");
+    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Open { purpose: "object".into() });
+    answer(&shown, None);
+    assert_eq!(a.poll_file_dialog().unwrap().unwrap(), json!({"cancelled": true}));
+    assert_eq!(body_text(&a), "Before. ", "cancelling inserts nothing");
+    a.run("insert.object", json!({})).unwrap();
+    answer(&shown, Some(&file.to_string_lossy()));
+    a.poll_file_dialog().unwrap().unwrap();
+    assert!(body_text(&a).starts_with("Before. Text from another document"), "{}", body_text(&a));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A hostile selection is bounded: only the first MAX_FONTS_PER_PICK are tried.
 #[test]
 fn a_huge_font_selection_is_capped() {
