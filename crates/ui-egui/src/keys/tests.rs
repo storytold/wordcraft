@@ -1221,8 +1221,8 @@ fn typing_with_smart_art_selected_types_into_an_item() {
     assert_eq!(g.items[0].text, "Ada", "one undo step for the typing");
 }
 
-    #[test]
-    fn pt_br_word_shortcuts_are_localized_without_changing_english() {
+#[test]
+fn pt_br_word_shortcuts_are_localized_without_changing_english() {
         let reg = wordcraft_engine::cmd::registry();
         let user = wordcraft_engine::keymap::KeyMap::default();
         let cases = [
@@ -1245,8 +1245,8 @@ fn typing_with_smart_art_selected_types_into_an_item() {
         assert_eq!(localized_resolve(&reg, &user, "pt-br", "Mod+I").map(|s| s.id), Some("format.italic"));
     }
 
-    #[test]
-    fn pt_br_word_shortcuts_follow_user_customization_and_tooltips() {
+#[test]
+fn pt_br_word_shortcuts_follow_user_customization_and_tooltips() {
         let reg = wordcraft_engine::cmd::registry();
         let mut user = wordcraft_engine::keymap::KeyMap::default();
         if !cfg!(target_os = "macos") {
@@ -1262,8 +1262,8 @@ fn typing_with_smart_art_selected_types_into_an_item() {
         }
     }
 
-    #[test]
-    fn brazilian_shortcut_removal_is_scoped_to_portuguese() {
+#[test]
+fn brazilian_shortcut_removal_is_scoped_to_portuguese() {
         let reg = wordcraft_engine::cmd::registry();
         let mut user = wordcraft_engine::keymap::KeyMap::default();
         assert!(user.remove_for_locale(&reg, "pt-br", "format.bold", "Mod+N").unwrap());
@@ -1284,4 +1284,3 @@ fn typing_with_smart_art_selected_types_into_an_item() {
         }
     }
 
-    /// #1678: Ctrl+F1 collapses or expands the ribbon (not on macOS); plain F1 stays Help's.
