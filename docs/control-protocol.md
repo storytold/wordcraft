@@ -1,5 +1,7 @@
 # Control protocol
 
+> **Last updated:** 2026-10-31 · #2596: accept-thread startup failure disables the server and removes its key file; MCP retry policy distinguishes file exports from in-memory images.
+
 Start the app with a control port: `wordcraft --control 7981` (or `WORDCRAFT_CONTROL_PORT=7981`).
 A missing or invalid port after `--control` (not 1–65535) prints an error and exits with status 2.
 It listens on `127.0.0.1` only. Send one JSON object per line, with the window's key (see
@@ -49,6 +51,21 @@ app listens, so whoever listens there gets no key (#3699). For
 any other host it sends no key, says so, and the app refuses its requests: to drive an app on
 another machine, forward its port to `127.0.0.1` (for example `ssh -L 7981:127.0.0.1:7981 host`)
 and set `WORDCRAFT_CONTROL_KEY` to that app's key.
+
+## Delivery and startup failures
+
+If the accept thread cannot start, startup reports that the control server is off and removes
+its newly written key file; it does not report a listening server. Failure to start a worker
+for one connection closes only that connection and releases its admission slot.
+
+The server can accept a complete JSON body at EOF even without a final newline. A client that
+encounters a write error must therefore treat delivery as unknown once it has attempted to
+send. The MCP bridge does not replay mutations in this case, or image exports with a string
+`path`; see [delivery failures](mcp.md#delivery-failures).
+
+A request that times out while still queued is cancelled and cannot run later. If execution
+has already started, the timeout reports an unknown outcome rather than promising cancellation.
+Unauthenticated connections are limited to 64 while they wait for their first authorised request.
 
 ## Methods
 
