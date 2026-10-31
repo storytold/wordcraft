@@ -333,14 +333,15 @@ fn border_stroke(s: BorderStyle) -> Stroke {
     }
 }
 
-/// A border line from `(x0, y0)` to `(x1, y1)` (paragraph rules and character borders).
+/// A border line from `(x0, y0)` to `(x1, y1)` (paragraph rules and character borders). The
+/// thinnest is an eighth of a point, as Word draws `w:sz` 0 and 1 (#5065).
 fn rule(x0: f32, y0: f32, x1: f32, y1: f32, b: &Border, alpha: f32) -> Draw {
     Draw::Line {
         x0,
         y0,
         x1,
         y1,
-        width: if b.style == BorderStyle::Thick { b.width.max(1.5) } else { b.width.max(0.25) },
+        width: if b.style == BorderStyle::Thick { b.width.max(1.5) } else { b.width.max(0.125) },
         color: b.color.unwrap_or(Rgb::BLACK),
         stroke: border_stroke(b.style),
         alpha,

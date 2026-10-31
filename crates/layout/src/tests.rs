@@ -2179,6 +2179,21 @@ fn table_style_borders_survive_empty_tbl_borders() {
     assert!(rules_on_page0(&l).len() >= 8, "rules {:?}", rules_on_page0(&l));
 }
 
+/// #5065: the thinnest border is an eighth of a point, as Word draws `w:sz` 0 and 1.
+#[test]
+fn the_thinnest_border_is_an_eighth_of_a_point() {
+    for (width, drawn) in [(0.05, 0.125), (0.125, 0.125), (0.5, 0.5)] {
+        let mut d = Document::from_text("Ruled");
+        if let Some(wordcraft_doc::Block::Para(p)) = d.body.first_mut().map(std::sync::Arc::make_mut) {
+            p.props.borders = Some(Borders { bottom: Some(Border::single(width)), ..Borders::default() });
+        }
+        let l = lay(&d);
+        let items = display::page_display(&d, &l.pages[0], &display::DisplayOptions::default());
+        let widths: Vec<f32> = items.iter().filter_map(|i| if let display::Draw::Line { width, .. } = i { Some(*width) } else { None }).collect();
+        assert_eq!(widths, [drawn], "a {width} pt border");
+    }
+}
+
 /// Thick borders meet in closed corners: a horizontal edge starts at the outer side of the
 /// vertical edge it meets, not at its centre line.
 #[test]

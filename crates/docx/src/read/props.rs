@@ -476,9 +476,16 @@ fn shd_fill(e: &El) -> Option<Rgb> {
     None
 }
 
+/// The thinnest drawn border, and the width of one that leaves out `w:sz`: Word draws `w:sz` 0
+/// and 1 and a missing `w:sz` at an eighth of a point, for every border kind (#5065). Saving
+/// writes it as `w:sz="1"`.
+const BORDER_WIDTH_MIN: f32 = 0.125;
+
 pub fn border(e: &El) -> Border {
     let style = BorderStyle::from_ooxml(e.attr("w:val").unwrap_or("single"));
-    let width = e.attr("w:sz").and_then(|v| measure(v, 8.0)).unwrap_or(0.5).clamp(0.0, 12.0);
+    // A `nil`/`none` border draws nothing and keeps the width it states.
+    let min = if style == BorderStyle::None { 0.0 } else { BORDER_WIDTH_MIN };
+    let width = e.attr("w:sz").and_then(|v| measure(v, 8.0)).unwrap_or(min).clamp(min, 12.0);
     let color = e.attr("w:color").and_then(Rgb::parse);
     let space = e.attr("w:space").and_then(|v| measure(v, 1.0)).unwrap_or(0.0).clamp(0.0, 31.0);
     Border { style, width, color, space }
