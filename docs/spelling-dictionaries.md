@@ -1,6 +1,6 @@
 # Installing spelling dictionaries
 
-> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-10-23 · **Change:** minor (ISO 8859-9 Turkish dictionaries are read, #3692; previously minor: Spanish: `es_ES`, `es_MX`, `es_419` and `es_UY` with their fallbacks, #3360, #3553; previously trivial: every Hunspell language shows (no dictionary), not only Polish and Portuguese, and Indonesian is listed, #3150; previously trivial: ISO 8859-1 dictionaries are read, #2824)
+> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-10-28 · **Change:** trivial (suggestions use at most 4096 `REP` replacements and skip ones longer than a word, #3655; previously minor: ISO 8859-9 Turkish dictionaries are read, #3692; previously minor: Spanish: `es_ES`, `es_MX`, `es_419` and `es_UY` with their fallbacks, #3360, #3553; previously trivial: every Hunspell language shows (no dictionary), not only Polish and Portuguese, and Indonesian is listed, #3150; previously trivial: ISO 8859-1 dictionaries are read, #2824)
 
 English spelling works out of the box. Polish, Russian, Portuguese, Czech, Italian, Croatian,
 Turkish, Indonesian and Spanish spelling use a standard **Hunspell** dictionary (an `.aff` and a `.dic` file) that
@@ -47,6 +47,11 @@ American one found. LibreOffice's `dict-es` has them all. Uruguayan Spanish also
 The files may be UTF-8 or the encoding named on the `.aff`'s `SET` line (ISO 8859-1, ISO 8859-2,
 ISO 8859-9, KOI8-R and Windows-1251 are read as well; the original VERO `pt_BR` is ISO 8859-1, older
 Turkish `tr_TR` dictionaries ISO 8859-9).
+
+Suggestions use the first 4096 `REP` replacements of an `.aff` and skip any whose pattern is
+longer than a checked word (40 letters) or whose replacement is longer than a dictionary word
+(120 bytes), so a huge `REP` section can't take hundreds of MB per
+suggestion.
 
 ## Where WordCraft looks
 
@@ -140,6 +145,7 @@ Never commit dictionary files to this repository: they stay on the user's system
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-28 | trivial | Suggestions use the first 4096 `REP` replacements and skip ones longer than a word (40 letters to match, 120 bytes to insert), which bounds the table a hostile `.aff` can build (part of #3655) |
 | 2026-10-22 | minor | Spanish (#3360, #3553): the file names for Spain, Mexico, Latin America and Uruguay and their fallbacks |
 | 2026-10-22 | trivial | Italian, Croatian, Turkish, Russian, Czech and Indonesian without a dictionary now show **(no dictionary)** (or **(dictionary unreadable)**) too, as this page already said; before, only Polish and Portuguese did. Indonesian is listed with its file names (#3150) |
 | 2026-10-23 | trivial | ISO 8859-9 (`SET ISO8859-9`) dictionaries are read, so an older Turkish `tr_TR` loads without converting it to UTF-8; the Turkish dictionary is read through the same size-capped reader and `SET` decoding as the others (#3692) |

@@ -288,6 +288,19 @@ fn cap_try(s: &str) -> String {
     out
 }
 
+/// Most `REP` entries kept; every suggestion round tries each one at every place it matches.
+const MAX_REP_ENTRIES: usize = 4096;
+
+/// Adds a `REP` entry (`_` stands for a space) unless the table is full, `from` is empty or longer
+/// than any word a suggester takes (it could never match), or `to` is longer than a dictionary word.
+fn push_rep(rep: &mut Vec<(String, String)>, from: &str, to: &str) {
+    // Letters, not bytes: a 40-letter word in a four-byte script is 160 bytes long.
+    let fits = from.chars().nth(crate::cs::suggest::MAX_LETTERS).is_none();
+    if rep.len() < MAX_REP_ENTRIES && !from.is_empty() && fits && to.len() <= MAX_WORD_BYTES {
+        rep.push((from.replace('_', " "), to.replace('_', " ")));
+    }
+}
+
 /// `0` means empty in Hunspell's strip and append fields.
 fn zero_empty(s: &str) -> String {
     if s == "0" { String::new() } else { s.to_string() }
@@ -346,7 +359,7 @@ fn parse_aff(aff: &str) -> Result<Rules, String> {
                 if !rep_header && f.len() == 2 && at(1).parse::<usize>().is_ok() {
                     rep_header = true;
                 } else if f.len() >= 3 {
-                    r.rep.push((at(1).replace('_', " "), at(2).replace('_', " ")));
+                    push_rep(&mut r.rep, at(1), at(2));
                 }
             }
             "PFX" | "SFX" => {
@@ -968,7 +981,7 @@ impl AffixDict {
                 "TRY" => rules.try_chars = cap_try(at(1)),
                 "KEY" => rules.key = at(1).to_string(),
                 "MAP" => rules.map.push(at(1).chars().collect()),
-                "REP" => rules.rep.push((at(1).replace('_', " "), at(2).replace('_', " "))),
+                "REP" => push_rep(&mut rules.rep, at(1), at(2)),
                 directive @ ("FORBIDDENWORD" | "NOSUGGEST") => {
                     let mut it = at(1).chars();
                     match (it.next(), it.next()) {
@@ -1093,6 +1106,34 @@ pub(crate) mod tests {
         let raw = format!("{MAGIC}\nTRY {many}{many}\nWORDS\n\0kot\n");
         let bytes = miniz_oxide::deflate::compress_to_vec(raw.as_bytes(), 6);
         assert_eq!(AffixDict::from_bytes(&bytes).unwrap().try_chars(), want);
+    }
+
+    /// #3655: a hostile `.aff` can't grow the `REP` table past its cap or fill it with patterns
+    /// and replacements longer than a word.
+    #[test]
+    fn rep_table_is_capped_and_drops_oversized_entries() {
+        let mut aff = String::from("REP 200000\nREP rz ż\n");
+        aff += &format!("REP q {}\nREP {} q\n", "z".repeat(1 << 20), "z".repeat(MAX_WORD_BYTES + 1));
+        for i in 0..200_000 {
+            aff += &format!("REP q z{i}\n");
+        }
+        let d = AffixDict::from_hunspell(&aff, "1\nkot\n", &[]).unwrap();
+        let check = |d: &AffixDict| {
+            assert_eq!(d.rep().len(), MAX_REP_ENTRIES);
+            assert_eq!(d.rep().first(), Some(&("rz".to_string(), "ż".to_string())));
+            assert!(d.rep().iter().all(|(a, b)| a.chars().count() <= 40 && b.len() <= MAX_WORD_BYTES));
+        };
+        check(&d);
+        // A `from` of 40 four-byte letters (160 bytes) can match a word and is kept; 41 can't.
+        let long = "\u{1D51E}".repeat(40);
+        let d40 = AffixDict::from_hunspell(&format!("REP 2\nREP {long} a\nREP {long}\u{1D51E} a\n"), "1\nkot\n", &[]).unwrap();
+        assert_eq!(d40.rep(), [(long, "a".to_string())]);
+        check(&AffixDict::from_bytes(&d.to_bytes()).unwrap());
+
+        // Oversized REP lines fed straight to the compact reader are dropped as well.
+        let raw = format!("{MAGIC}\nREP q {}\nREP a_b c\nWORDS\n\0kot\n", "z".repeat(1 << 20));
+        let bytes = miniz_oxide::deflate::compress_to_vec(raw.as_bytes(), 6);
+        assert_eq!(AffixDict::from_bytes(&bytes).unwrap().rep(), &[("a b".to_string(), "c".to_string())]);
     }
 
     /// Shared hand-written fixture: collectors must reject every path to NOSUGGEST forms.
