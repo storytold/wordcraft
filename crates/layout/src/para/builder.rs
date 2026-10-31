@@ -1,4 +1,60 @@
 use super::bidi::{Dir, bidi_levels, strong_rtl, visual_order};
+
+fn is_below_or_phinthu(c: char) -> bool {
+    matches!(c, '\u{0E38}'..='\u{0E3A}')
+}
+
+/// Render-only substitutions applied to the string sent to the shaper.
+/// The document text is never touched. All substituted codepoints are exactly 3 UTF-8
+/// bytes, so cluster byte offsets remain valid after substitution.
+///
+/// Two rules:
+///
+/// 1. **Short-tail ฐ/ญ** (WTT 2.0 fonts only) — ฐ (U+0E10) and ญ (U+0E0D) have descending
+///    tails that collide with below-vowels (◌ุ ◌ู) and phinthu (◌ฺ). When immediately
+///    followed by one of those marks, swap to PUA short-tail forms U+F700 / U+F70F.
+///    Both the *requested* font name and the *actual rendering face* family must be WTT 2.0
+///    ([`wordcraft_fonts::word::is_wtt2_thai_font`]). When a WTT 2.0 font is not installed
+///    the rendering face is an OpenType substitute (Thonburi, Noto Serif Thai, …) whose
+///    family name is not in the WTT 2.0 list; that substitute handles short-tails via GSUB
+///    automatically, so emitting PUA codepoints would produce .notdef glyphs.
+///
+/// 2. **RU/LU + Sara_AA → LAKKHANGYAO** — ฤ (U+0E24) and ฦ (U+0E26) followed by sara aa
+///    (า U+0E32) render sara aa as lakkhangyao (ๅ U+0E45). Applied for all Thai fonts.
+fn thai_short_tail(text: &str, font: &str, face: &wordcraft_fonts::FaceRef) -> Option<String> {
+    let wtt2_base = wordcraft_fonts::word::is_wtt2_thai_font(font)
+                 && wordcraft_fonts::word::is_wtt2_thai_font(&face.family);
+    let has_f700 = wtt2_base && face.covers('\u{F700}');
+    let has_f70f = wtt2_base && face.covers('\u{F70F}');
+    let needs_short_tail = (has_f700 && text.contains('\u{0E10}'))
+                        || (has_f70f && text.contains('\u{0E0D}'));
+    let has_lakkhangyao = face.covers('\u{0E45}');
+    let needs_ru_lu = has_lakkhangyao && (text.contains('\u{0E24}') || text.contains('\u{0E26}'));
+    if !needs_short_tail && !needs_ru_lu {
+        return None;
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\u{0E10}' if has_f700 && chars.peek().copied().is_some_and(is_below_or_phinthu) => {
+                out.push('\u{F700}');
+            }
+            '\u{0E0D}' if has_f70f && chars.peek().copied().is_some_and(is_below_or_phinthu) => {
+                out.push('\u{F70F}');
+            }
+            '\u{0E24}' | '\u{0E26}' if has_lakkhangyao => {
+                out.push(c);
+                if chars.peek().copied() == Some('\u{0E32}') {
+                    chars.next();
+                    out.push('\u{0E45}');
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+    Some(out)
+}
 use super::chars::{
     SegKey, caps_expands, context_digit_dirs, is_khmer, is_mark, is_numeral_digit, ligature_features, lookup_family, remap_range, thai_run_face,
     upper_char,
@@ -262,6 +318,14 @@ impl<'a> Builder<'a> {
                 orig_of.push(sub.len());
             }
             let shape_text = if substituted { mapped.as_str() } else { sub };
+            // Render-only: swap ญ/ฐ for their short-tail PUA forms when followed by a below-vowel.
+            let short_tail_buf;
+            let shape_text = if let Some(buf) = thai_short_tail(shape_text, &rc.font, &st.face) {
+                short_tail_buf = buf;
+                short_tail_buf.as_str()
+            } else {
+                shape_text
+            };
             let map = |c: char| {
                 let d = show(c);
                 if d != c {
