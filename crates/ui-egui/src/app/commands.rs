@@ -469,6 +469,7 @@ impl WordApp {
         if req.get("close").is_some() {
             self.quit_requested = true;
         }
+        crate::windows::arrange::request(self, req);
     }
 
     /// A request made for document `document`, which isn't shown and which no other window

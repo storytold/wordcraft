@@ -201,6 +201,10 @@ pub struct CanvasState {
     /// The viewport (the content's visible rect on screen) at the end of last frame; the
     /// drag-select edge auto-scroll decides this frame's scroll from it (#688).
     pub(crate) viewport: Option<egui::Rect>,
+    /// Synchronous Scrolling (#322): document points the partner window scrolled, still to apply…
+    pub(crate) sync_in: f32,
+    /// …and this window's own scrolling since the last frame, for the partner.
+    pub(crate) sync_out: f32,
     /// Pages per row last frame; when it changes the caret's page is scrolled back into view.
     pub cols: usize,
     /// The comment whose balloon is selected (its text is editable in place, like Word's).
@@ -407,6 +411,8 @@ impl Default for CanvasState {
             scroll_max: egui::Vec2::ZERO,
             scroll_request: None,
             viewport: None,
+            sync_in: 0.0,
+            sync_out: 0.0,
             cols: 1,
             balloon: None,
             balloon_focus: false,
@@ -490,6 +496,8 @@ struct CanvasView {
     dim_body: bool,
     grid_story: Option<StoryRef>,
     caret: Option<wordcraft_layout::hit::Caret>,
+    /// The zoom changed this frame (#322): the scroll offset moved with it, nobody scrolled.
+    rescaled: bool,
 }
 
 fn prepare_view(app: &mut WordApp, ui: &Ui, full: Rect, layout: &DocLayout) -> CanvasView {
@@ -537,6 +545,8 @@ fn prepare_view(app: &mut WordApp, ui: &Ui, full: Rect, layout: &DocLayout) -> C
     if (geo.scale - app.canvas.scale).abs() > 1e-6 {
         ui.ctx().request_repaint();
     }
+    // A zoom moves the scroll offset without anyone scrolling: not passed on to a partner window.
+    let rescaled = (geo.scale - app.canvas.scale).abs() > 1e-4;
     app.canvas.scale = geo.scale;
     sync_fit_zoom(app, geo.scale);
     let anchored = if let Some((p, (page, x, y))) = zoom_anchor
@@ -564,7 +574,7 @@ fn prepare_view(app: &mut WordApp, ui: &Ui, full: Rect, layout: &DocLayout) -> C
     {
         app.session.page_hint = c.page;
     }
-    CanvasView { area, hruler, vruler, dark_page, sepia_page, animate, opts, geo, dim_body, grid_story, caret }
+    CanvasView { area, hruler, vruler, dark_page, sepia_page, animate, opts, geo, dim_body, grid_story, caret, rescaled }
 }
 
 fn update_caret_scroll(app: &mut WordApp, view: &CanvasView) -> Option<Rect> {
@@ -668,7 +678,9 @@ fn scroll_motion(app: &mut WordApp, ui: &Ui, full: Rect, view: &CanvasView) -> S
     ScrollMotion { wheel: wheel_delta, auto: auto_delta, middle: middle_delta }
 }
 
-fn configure_scroll_area(app: &mut WordApp, ui: &Ui, view: &CanvasView, motion: ScrollMotion) -> egui::ScrollArea {
+/// The scroll area, and the vertical offset this frame starts from once the partner window's
+/// scrolling is applied (Synchronous Scrolling, #322): what the window scrolls beyond it is its own.
+fn configure_scroll_area(app: &mut WordApp, ui: &Ui, view: &CanvasView, motion: ScrollMotion) -> (egui::ScrollArea, f32) {
     let delta = motion.wheel + motion.auto + motion.middle;
     // The canvas scrolls itself on wheel/touchpad input (crate::scroll): touchpads 1:1 with
     // momentum, wheel notches eased in (or all at once with animation effects off). Applied
@@ -684,14 +696,24 @@ fn configure_scroll_area(app: &mut WordApp, ui: &Ui, view: &CanvasView, motion: 
     if app.session.view.read_mode {
         scroll_area = scroll_area.scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden);
     }
-    if delta != egui::Vec2::ZERO || app.canvas.scroll_request.is_some() || app.session.view.read_mode {
-        let before = app.canvas.scroll_offset;
+    // Synchronous Scrolling (#322): the partner window's scrolling, in document points.
+    let synced = std::mem::take(&mut app.canvas.sync_in) * view.geo.scale;
+    let before = app.canvas.scroll_offset;
+    let mut from_partner = 0.0;
+    if delta != egui::Vec2::ZERO || app.canvas.scroll_request.is_some() || app.session.view.read_mode || synced != 0.0 {
         let step = app.session.view.read_width * view.geo.scale + GAP;
         let snapped = if step.is_finite() && step > 0.0 { vec2((before.x / step).round() * step, 0.0) } else { egui::Vec2::ZERO };
         let after = match app.canvas.scroll_request.take() {
             Some(request) => request.clamp(egui::Vec2::ZERO, app.canvas.scroll_max),
             None if app.session.view.read_mode => snapped.clamp(egui::Vec2::ZERO, app.canvas.scroll_max),
             None => clamped_scroll(before, delta, app.canvas.scroll_max),
+        };
+        let after = if synced != 0.0 {
+            let y = (after.y + synced).clamp(0.0, app.canvas.scroll_max.y);
+            from_partner = y - after.y;
+            vec2(after.x, y)
+        } else {
+            after
         };
         if after == before && motion.wheel != egui::Vec2::ZERO {
             app.canvas.wheel.hit_edge();
@@ -705,7 +727,7 @@ fn configure_scroll_area(app: &mut WordApp, ui: &Ui, view: &CanvasView, motion: 
     if app.canvas.wheel.is_animating() {
         ui.ctx().request_repaint();
     }
-    scroll_area
+    (scroll_area, before.y + from_partner)
 }
 
 fn prepare_layout(app: &mut WordApp, ui: &Ui, full: Rect) -> std::sync::Arc<DocLayout> {
@@ -740,6 +762,17 @@ struct CanvasFinish<'a> {
     dim_body: bool,
     hruler: Option<Rect>,
     vruler: Option<Rect>,
+    scroll_base: f32,
+    rescaled: bool,
+}
+
+/// What a window's own scrolling is measured against for Synchronous Scrolling (#322).
+#[derive(Clone, Copy)]
+struct ScrollSync {
+    /// The vertical offset the frame started from, the partner's scrolling included.
+    base: f32,
+    /// The zoom changed: the offset moved, nobody scrolled.
+    rescaled: bool,
 }
 
 fn update_canvas_scroll_state(
@@ -749,6 +782,7 @@ fn update_canvas_scroll_state(
     geo: &Geometry,
     caret: Option<wordcraft_layout::hit::Caret>,
     out: &egui::scroll_area::ScrollAreaOutput<(egui::Response, Vec<Rect>)>,
+    sync: ScrollSync,
 ) {
     app.canvas.scroll_offset = out.state.clamped_offset();
     scrollbar_page_tip(app, ui, out.id, &geo.rects, &geo.bands, layout.pages.len());
@@ -764,6 +798,11 @@ fn update_canvas_scroll_state(
         viewed_page(extent, &geo.rects, &geo.bands, app.canvas.scroll_offset.y, out.inner_rect.height()).min(layout.pages.len().saturating_sub(1))
     });
     crate::ink::replay_bar(app, ui, out.inner_rect);
+    // This window's own scrolling (wheel, scroll bar, keys, caret), for a partner window.
+    let own = app.canvas.scroll_offset.y - sync.base;
+    if app.session.windows.sync_scroll && !sync.rescaled && own.abs() > 0.01 && geo.scale > 0.0 {
+        app.canvas.sync_out += own / geo.scale;
+    }
     app.canvas.scroll_max = (out.content_size - out.inner_rect.size()).max(egui::Vec2::ZERO);
     if app.session.view.read_mode {
         let step = app.session.view.read_width * geo.scale + GAP;
@@ -1153,8 +1192,8 @@ fn handle_secondary_selection(app: &mut WordApp, resp: &egui::Response, rects: &
 }
 
 fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollAreaOutput<(egui::Response, Vec<Rect>)>) {
-    let CanvasFinish { app, ui, layout, geo, caret, ime_geometry, ime_interrupt, area, dim_body, hruler, vruler } = finish;
-    update_canvas_scroll_state(app, ui, layout, geo, caret, &out);
+    let CanvasFinish { app, ui, layout, geo, caret, ime_geometry, ime_interrupt, area, dim_body, hruler, vruler, scroll_base, rescaled } = finish;
+    update_canvas_scroll_state(app, ui, layout, geo, caret, &out, ScrollSync { base: scroll_base, rescaled });
     let (resp, rects) = out.inner;
     // A click on the page leaves the selected comment balloon.
     dismiss_balloon_on_canvas_click(app, ui, &resp);
@@ -1316,8 +1355,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let view = prepare_view(app, ui, full, &layout);
     let scroll_target = update_caret_scroll(app, &view);
     let motion = scroll_motion(app, ui, full, &view);
-    let scroll_area = configure_scroll_area(app, ui, &view, motion);
-    let CanvasView { area, hruler, vruler, dark_page, sepia_page, geo, dim_body, grid_story, caret, .. } = view;
+    let (scroll_area, scroll_base) = configure_scroll_area(app, ui, &view, motion);
+    let CanvasView { area, hruler, vruler, dark_page, sepia_page, geo, dim_body, grid_story, caret, rescaled, .. } = view;
     let mut origin = area.min;
     let mut ui_area = ui.new_child(egui::UiBuilder::new().max_rect(area));
     let mut ime_geometry: Option<(Rect, Rect)> = None;
@@ -1597,7 +1636,21 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         (resp, rects)
     });
     finish_canvas_frame(
-        CanvasFinish { app, ui, layout: &layout, geo: &geo, caret, ime_geometry, ime_interrupt, area, dim_body, hruler, vruler },
+        CanvasFinish {
+            app,
+            ui,
+            layout: &layout,
+            geo: &geo,
+            caret,
+            ime_geometry,
+            ime_interrupt,
+            area,
+            dim_body,
+            hruler,
+            vruler,
+            scroll_base,
+            rescaled,
+        },
         out,
     );
 }
