@@ -25,7 +25,8 @@ pub use script::{fallback_rank, is_emoji, needs_layout_tables, script_fallbacks}
 use skrifa::MetadataProvider;
 use skrifa::instance::Size;
 pub use ui_fallback::{
-    SystemUiFont, is_cjk, system_bengali_ui_font, system_cjk_ui_font, system_cjk_ui_font_for, system_hant_ui_font, ui_needs_system_cjk, ui_uncovered_cjk,
+    SystemUiFont, is_cjk, system_bengali_ui_font, system_cjk_ui_font, system_cjk_ui_font_for, system_hant_ui_font, ui_needs_system_cjk,
+    ui_uncovered_cjk,
 };
 
 /// A font from the optional craft-fonts build input (https://github.com/storytold/craft-fonts;

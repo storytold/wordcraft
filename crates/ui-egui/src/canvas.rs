@@ -1309,6 +1309,7 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
 /// Lays out and paints the document pages for print, Read and Web views, settles viewports, draw
 /// rulers and overlays, anchors zoom and scrolling, and routes pointer, selection, IME and caret
 /// input.
+#[allow(clippy::cognitive_complexity)]
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let full = ui.available_rect_before_wrap();

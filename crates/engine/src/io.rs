@@ -1176,6 +1176,7 @@ fn run_is_bijoy(props: &wordcraft_doc::CharProps, fonts: &StyleFonts<'_>, para_f
     font_pair_is_bijoy(latin, complex)
 }
 
+#[allow(clippy::cognitive_complexity)]
 fn normalize_blocks_bijoy(blocks: &mut [std::sync::Arc<wordcraft_doc::Block>], fonts: &StyleFonts<'_>) {
     for b in blocks.iter_mut() {
         let block = std::sync::Arc::make_mut(b);
@@ -1464,7 +1465,8 @@ mod tests {
             mark: CharProps { font: Some("SutonnyMJ".into()), ..Default::default() },
             ..Default::default()
         };
-        let mut doc = Document { body: vec![std::sync::Arc::new(Block::Para(p))], ..Default::default() };
+        let mut doc = Document::default();
+        doc.body = vec![std::sync::Arc::new(Block::Para(p))];
 
         normalize_bijoy_fonts(&mut doc);
 
@@ -1498,7 +1500,8 @@ mod tests {
             }],
             ..Default::default()
         };
-        let mut doc = Document { body: vec![std::sync::Arc::new(Block::Table(table))], ..Default::default() };
+        let mut doc = Document::default();
+        doc.body = vec![std::sync::Arc::new(Block::Table(table))];
 
         normalize_bijoy_fonts(&mut doc);
 
@@ -1557,7 +1560,9 @@ mod tests {
     fn unicode_doc(text: &str) -> Document {
         let props = CharProps { font: Some("Kalpurush".into()), ..Default::default() };
         let p = Paragraph { text: text.into(), runs: vec![Run { len: text.len(), props }], ..Default::default() };
-        Document { body: vec![std::sync::Arc::new(Block::Para(p))], ..Default::default() }
+        let mut doc = Document::default();
+        doc.body = vec![std::sync::Arc::new(Block::Para(p))];
+        doc
     }
 
     fn body_text(doc: &Document) -> String {

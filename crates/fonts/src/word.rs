@@ -403,7 +403,6 @@ fn is_khmer(f: &str) -> bool {
         || f.contains("khmer")
         || matches!(f, "daunpenh" | "moolboran" | "limon" | "battambang" | "bokor" | "content" | "dangrek" | "angkor")
 }
-}
 
 /// Hebrew document fonts.
 fn is_hebrew(f: &str) -> bool {

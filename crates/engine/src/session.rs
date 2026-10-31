@@ -242,4 +242,3 @@ impl Session {
     /// File name of the persisted custom dictionary inside the settings folder.
     pub const USER_DICT_FILE: &str = "custom-dictionary.txt";
 }
-}

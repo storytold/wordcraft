@@ -1,8 +1,8 @@
 use super::*;
 use egui_kittest::kittest::Queryable;
 
-mod perf;
 mod bangla;
+mod perf;
 
 fn mod_key(key: egui::Key) -> egui::Event {
     egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND }

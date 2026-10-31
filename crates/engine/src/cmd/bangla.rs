@@ -131,6 +131,7 @@ pub fn phonetic_transliterate(input: &str) -> String {
 }
 
 /// Transliterates a single alphabetic word phonetically.
+#[allow(clippy::cognitive_complexity)]
 fn phonetic_word(word: &str) -> String {
     // If word contains internal separators or explicit uppercase 'A' (independent আ), let the character engine handle it
     let has_explicit_independent = word.contains('A') || word.contains('\'') || word.contains('`');
@@ -2126,6 +2127,7 @@ pub fn ansi_to_unicode(text: &str) -> String {
 
 /// [`ansi_to_unicode`] on tagged text. Each output character carries the tag of the glyph it comes
 /// from, through conjunct mapping and pre-base vowel and reph reordering.
+#[allow(clippy::cognitive_complexity)]
 pub(crate) fn ansi_to_unicode_tagged(mut s: Tagged) -> Tagged {
     // 1. Pre-normalize special symbols, Bijoy shortcuts, and previously corrupted partial conversions
     for &(from, to) in ANSI_PRE_NORMALIZE {
@@ -2360,6 +2362,7 @@ fn cmd_bangla_candidates(_s: &mut Session, v: &Value) -> CmdResult {
 }
 
 /// Transliterates a Jatiya (Bijoy-layout) keystroke sequence into Unicode Bengali.
+#[allow(clippy::cognitive_complexity)]
 pub fn jatiya_transliterate(input: &str) -> String {
     let mut out = String::new();
     let mut linker = false;
@@ -2842,7 +2845,8 @@ mod tests {
             ],
             ..Default::default()
         };
-        let doc = wordcraft_doc::Document { body: vec![std::sync::Arc::new(wordcraft_doc::Block::Para(p))], ..Default::default() };
+        let mut doc = wordcraft_doc::Document::default();
+        doc.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Para(p))];
         let mut s = Session::new(doc);
 
         // Convert document to ANSI
@@ -2882,6 +2886,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::cognitive_complexity)]
     fn bijoy_document_ligatures_and_diacritics() {
         // 1. Krishi Bank title with ellipsis/ri-kar
         assert_eq!(ansi_to_unicode("evsjv‡`k K…wl e¨vsK"), "বাংলাদেশ কৃষি ব্যাংক");
@@ -2971,6 +2976,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::cognitive_complexity)]
     fn test_dari_bisarga_and_middle_vowels() {
         // Dari '.' and '|'
         assert_eq!(phonetic_transliterate("bangladesh."), "বাংলাদেশ।");
@@ -3489,7 +3495,8 @@ mod run_conversion_tests {
             ],
             ..Default::default()
         };
-        let mut doc = wordcraft_doc::Document { body: vec![std::sync::Arc::new(wordcraft_doc::Block::Para(p))], ..Default::default() };
+        let mut doc = wordcraft_doc::Document::default();
+        doc.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Para(p))];
         crate::io::normalize_bijoy_fonts(&mut doc);
 
         let p = doc.body[0].as_para().unwrap();

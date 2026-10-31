@@ -664,7 +664,6 @@ fn system_hant_font() -> Option<&'static wordcraft_fonts::SystemUiFont> {
     })
     .as_ref()
 }
-}
 
 pub fn medium(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("medium".into()))

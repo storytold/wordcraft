@@ -1,3 +1,6 @@
+//! Keyboard: typing, editing keys and command shortcuts (the user's custom keys from Customize
+//! Keyboard first, then the registry's `shortcut` fields).
+
 use egui::{Key, Modifiers};
 use serde_json::{Value, json};
 
@@ -9,8 +12,10 @@ mod canvas;
 mod ime;
 mod shortcuts;
 
-pub use alt_code::{AltCodeEcho, AltCodeState};
+pub(crate) use alt_code::AltCodeEcho;
 pub use canvas::canvas_events;
+pub(crate) use ime::observe_ime;
+#[cfg(test)]
 use ime::{ImeProof, MAX_IME_COMMIT_BYTES, MAX_IME_PREEDIT_BYTES, classify_ime_proof};
 pub use shortcuts::{combo, global_shortcuts, key_name};
 #[cfg(test)]
