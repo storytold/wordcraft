@@ -12,6 +12,7 @@ use wordcraft_ui_egui::{Inbox, Services, WordApp};
 const DOC_EXTS: &[&str] = &["docx", "docm", "dotx", "dotm", "doc", "dot", "odt", "rtf", "txt", "md", "html", "htm", "tex", "json", "xml"];
 const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "wmf", "emf"];
 const RECIPIENT_EXTS: &[&str] = wordcraft_engine::cmd::mailings::RECIPIENT_EXTENSIONS;
+mod clipboard;
 mod font_store;
 const CANVAS_ID: &str = "wordcraft_canvas";
 const LOADING_ID: &str = "wordcraft_loading";
@@ -38,13 +39,16 @@ pub fn start() {
         {
             log::error!("no unsaved-changes guard: {e}");
         }
+        let in_clipboard_event = clipboard::InEvent::default();
+        let app_in_clipboard_event = in_clipboard_event.clone();
         let mut options = eframe::WebOptions::default();
         if query().contains("webgl")
             && let eframe::egui_wgpu::WgpuSetup::CreateNew(create) = &mut options.wgpu_options.wgpu_setup
         {
             create.instance_descriptor.backends = eframe::wgpu::Backends::GL;
         }
-        let result = eframe::WebRunner::new()
+        let runner = eframe::WebRunner::new();
+        let result = runner
             .start(
                 canvas,
                 options,
@@ -69,6 +73,8 @@ pub fn start() {
                     session.system_region = region;
                     let messages = Rc::new(RefCell::new(Vec::new()));
                     let mut services = services(inbox.clone(), cc.egui_ctx.clone(), dirty, saves.clone(), messages.clone());
+                    // A copy's HTML goes in the browser's copy event (`clipboard`).
+                    services.set_clipboard_html = Some(app_in_clipboard_event.service());
                     if let Some(bridge) = &app_bridge {
                         bridge.connect(&mut services, inbox.clone(), cc.egui_ctx.clone());
                     }
@@ -99,10 +105,15 @@ pub fn start() {
                         crate::host::Bridge::set_author(&mut app, &author);
                         prefs.keep_own_author(&app.session.author, &own);
                     }
-                    Ok(Box::new(WebShell { app, inbox, messages, prefs }))
+                    Ok(Box::new(WebShell { app, inbox, messages, prefs, ctx: cc.egui_ctx.clone() }))
                 }),
             )
             .await;
+        if result.is_ok()
+            && let Err(e) = clipboard::install(&runner, in_clipboard_event)
+        {
+            log::error!("copying and pasting with formatting is unavailable: {e}");
+        }
         // Ready only once the runner is up: starting can still fail after the app is made.
         if let Some(bridge) = &bridge {
             match &result {
@@ -134,6 +145,7 @@ struct WebShell {
     inbox: Inbox,
     messages: Rc<RefCell<Vec<String>>>,
     prefs: crate::prefs::PrefsSync,
+    ctx: egui::Context,
 }
 
 fn local_storage() -> Option<web_sys::Storage> {
@@ -146,6 +158,12 @@ fn stored_prefs() -> Option<String> {
 }
 
 impl eframe::App for WebShell {
+    /// For the clipboard listeners, which run a command inside the browser's event
+    /// ([`eframe::WebRunner::app_mut`]).
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(&mut *self)
+    }
+
     /// Runs one browser frame: forwards queued host messages to the status bar, advances the app,
     /// then writes changed preferences to browser storage immediately, because a reload or closed
     /// tab never runs the exit path.
@@ -170,6 +188,11 @@ impl eframe::App for WebShell {
 
     /// Forwards this frame's raw browser input to the app before widgets run.
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        // Mod+C, Mod+X and Mod+V are the browser's copy, cut and paste events (`clipboard`, or
+        // eframe's text-only handlers). As shortcuts their presses ran the command a second
+        // time: Mod+V pasted WordCraft's own last copy and then the clipboard, and Mod+C wrote
+        // plain text over the copy's formatting. (egui-winit sends the desktop app only the events.)
+        raw.events.retain(|e| !crate::clipboard_input::is_clipboard_key(e));
         self.app.raw_input_hook(ctx, raw);
     }
 
