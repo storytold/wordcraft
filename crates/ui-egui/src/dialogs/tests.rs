@@ -1632,3 +1632,24 @@ fn the_custom_properties_dialog_leaves_imported_non_text_properties_alone() {
     let kinds: Vec<(&str, &str)> = h.state().session.doc.custom_props.iter().map(|p| (p.name.as_str(), p.kind.as_str())).collect();
     assert_eq!(kinds, [("Status", "lpwstr"), ("Count", "i4")], "Cancel leaves the imported property as it was");
 }
+
+/// A tall dialog on a short screen stays inside it and scrolls.
+#[test]
+fn a_tall_dialog_fits_a_short_screen() {
+    let mut app = app_with("Some text");
+    app.dialog = Dialog::open("pageSetup", &mut app);
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 360.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    for _ in 0..4 {
+        h.step();
+    }
+    let id = egui::Id::unique(("dialog", "Page Setup"));
+    let rect = h.ctx.memory(|m| m.area_rect(id)).expect("the dialog is open");
+    assert!(rect.height() <= 360.5, "the dialog is {}pt tall on a 360pt screen", rect.height());
+}

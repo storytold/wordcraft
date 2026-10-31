@@ -151,6 +151,7 @@ Recipient label generation (#4880) now includes all selected recipients across a
 > 2026-10-23 · cu20we: Paragraph-relative floats in headers, footers, cells and text boxes now start above effective space before; synthetic layout regressions cover all four contexts. Framed paragraphs already used the pre-spacing position. No new native Word comparison; broader object-position parity remains open.
 
 | Date | Change | Summary |
+| 2026-10-26 | trivial | Dialog sections improve readability across 13 dialogs; conditional scrolling keeps tall dialogs usable. Ranked gaps and estimates unchanged (#4035, #4038) |
 |---|---|---|
 | 2026-10-28 | trivial | Aligned copies retain their locked document coordinate during middle-button scrolling and can start on secondary selected objects; existing Ctrl and Shift selection behavior stays (#4764) |
 | 2026-10-28 | trivial | Ctrl/Command+Shift drags a selected floating object into an axis-aligned copy (#4764); synthetic Linux interaction and persistence controls, native desktop and Word untested; gap/readiness estimates unchanged |

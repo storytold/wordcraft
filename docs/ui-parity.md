@@ -85,6 +85,7 @@ Labels → New Document with “One label per recipient” includes all filtered
 ## Revision history
 
 | Date | Change | Summary |
+| 2026-10-26 | trivial | Dialog sections: 13 dialogs group related controls in theme-aware panels with indented settings; tall dialogs scroll only when needed (#4035, #4038) |
 |---|---|---|
 | 2026-10-28 | trivial | Aligned copies retain their locked document coordinate during middle-button scrolling and can start on secondary selected objects; existing Ctrl and Shift selection behavior stays (#4764) |
 | 2026-10-28 | trivial | Ctrl/Command+Shift drags a selected floating object into an axis-aligned copy (#4764); synthetic Linux interaction and persistence controls, native desktop and Word untested; gap/readiness estimates unchanged |

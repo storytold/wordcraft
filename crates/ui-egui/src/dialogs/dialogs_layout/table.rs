@@ -118,23 +118,25 @@ impl SortForm {
 }
 
 pub(super) fn sort_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SortForm) -> bool {
-    heading(ui, "Sort by");
-    ui.horizontal(|ui| {
-        craft_ui::ComboBox::from_id_salt("sort_column").selected_text(f.column_label(f.column)).width(180.0).show_ui(ui, |ui| {
-            for i in 0..f.headers.len() {
-                let label = f.column_label(i);
-                ui.selectable_value(&mut f.column, i, label);
-            }
-        });
-        ui.vertical(|ui| {
-            ui.radio_value(&mut f.descending, false, tl!("Ascending"));
-            ui.radio_value(&mut f.descending, true, tl!("Descending"));
+    crate::widgets::section(ui, tl!("Sort by"), |ui| {
+        ui.horizontal(|ui| {
+            craft_ui::ComboBox::from_id_salt("sort_column").selected_text(f.column_label(f.column)).width(180.0).show_ui(ui, |ui| {
+                for i in 0..f.headers.len() {
+                    let label = f.column_label(i);
+                    ui.selectable_value(&mut f.column, i, label);
+                }
+            });
+            ui.vertical(|ui| {
+                ui.radio_value(&mut f.descending, false, tl!("Ascending"));
+                ui.radio_value(&mut f.descending, true, tl!("Descending"));
+            });
         });
     });
-    heading(ui, "My list has");
-    ui.horizontal(|ui| {
-        ui.radio_value(&mut f.header, true, tl!("Header row"));
-        ui.radio_value(&mut f.header, false, tl!("No header row"));
+    crate::widgets::section(ui, tl!("My list has"), |ui| {
+        ui.horizontal(|ui| {
+            ui.radio_value(&mut f.header, true, tl!("Header row"));
+            ui.radio_value(&mut f.header, false, tl!("No header row"));
+        });
     });
     let (ok, cancel) = buttons(ui, "OK", true);
     if ok {
@@ -378,36 +380,39 @@ impl TextToTableForm {
 
 pub(super) fn text_to_table_ui(app: &mut WordApp, ui: &mut Ui, f: &mut TextToTableForm) -> bool {
     let before = (f.separator.clone(), f.other_char.clone(), f.columns);
-    heading(ui, "Table size");
-    egui::Grid::new("text_to_table").num_columns(2).show(ui, |ui| {
-        ui.label(tl!("Number of columns:"));
-        ui.add(egui::DragValue::new(&mut f.columns).range(1..=63));
-        ui.end_row();
-        ui.label(tl!("Number of rows:"));
-        ui.label(f.rows.to_string());
-        ui.end_row();
-    });
-    heading(ui, "AutoFit behavior");
-    ui.horizontal(|ui| {
-        ui.radio_value(&mut f.autofit, "initial".to_string(), tl!("Initial column width:"));
-        ui.add_enabled(f.autofit == "initial", egui::TextEdit::singleline(&mut f.width).desired_width(72.0));
-    });
-    ui.radio_value(&mut f.autofit, "contents".to_string(), tl!("AutoFit to contents"));
-    ui.radio_value(&mut f.autofit, "window".to_string(), tl!("AutoFit to window"));
-    heading(ui, "Separate text at");
-    egui::Grid::new("text_to_table_sep").num_columns(2).show(ui, |ui| {
-        ui.radio_value(&mut f.separator, "paragraph".to_string(), tl!("Paragraphs"));
-        ui.radio_value(&mut f.separator, "comma".to_string(), tl!("Commas"));
-        ui.end_row();
-        ui.radio_value(&mut f.separator, "tab".to_string(), tl!("Tabs"));
-        ui.horizontal(|ui| {
-            ui.radio_value(&mut f.separator, "other".to_string(), tl!("Other:"));
-            let r = ui.add(egui::TextEdit::singleline(&mut f.other_char).char_limit(1).desired_width(24.0));
-            if r.changed() {
-                f.separator = "other".into();
-            }
+    crate::widgets::section(ui, tl!("Table size"), |ui| {
+        egui::Grid::new("text_to_table").num_columns(2).show(ui, |ui| {
+            ui.label(tl!("Number of columns:"));
+            ui.add(egui::DragValue::new(&mut f.columns).range(1..=63));
+            ui.end_row();
+            ui.label(tl!("Number of rows:"));
+            ui.label(f.rows.to_string());
+            ui.end_row();
         });
-        ui.end_row();
+    });
+    crate::widgets::section(ui, tl!("AutoFit behavior"), |ui| {
+        ui.horizontal(|ui| {
+            ui.radio_value(&mut f.autofit, "initial".to_string(), tl!("Initial column width:"));
+            ui.add_enabled(f.autofit == "initial", egui::TextEdit::singleline(&mut f.width).desired_width(72.0));
+        });
+        ui.radio_value(&mut f.autofit, "contents".to_string(), tl!("AutoFit to contents"));
+        ui.radio_value(&mut f.autofit, "window".to_string(), tl!("AutoFit to window"));
+    });
+    crate::widgets::section(ui, tl!("Separate text at"), |ui| {
+        egui::Grid::new("text_to_table_sep").num_columns(2).show(ui, |ui| {
+            ui.radio_value(&mut f.separator, "paragraph".to_string(), tl!("Paragraphs"));
+            ui.radio_value(&mut f.separator, "comma".to_string(), tl!("Commas"));
+            ui.end_row();
+            ui.radio_value(&mut f.separator, "tab".to_string(), tl!("Tabs"));
+            ui.horizontal(|ui| {
+                ui.radio_value(&mut f.separator, "other".to_string(), tl!("Other:"));
+                let r = ui.add(egui::TextEdit::singleline(&mut f.other_char).char_limit(1).desired_width(24.0));
+                if r.changed() {
+                    f.separator = "other".into();
+                }
+            });
+            ui.end_row();
+        });
     });
     if (f.separator.as_str(), f.other_char.as_str()) != (before.0.as_str(), before.1.as_str()) {
         f.guess_columns();
