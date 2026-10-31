@@ -93,6 +93,45 @@ pub const NUMBER_FORMATS: &[(&str, &str)] = &[
     ("OrdText", "First, Second, Third, …"),
 ];
 
+/// Capitalization formats for the `\*` switch of a text field: (switch value, label).
+pub const TEXT_FORMATS: &[(&str, &str)] =
+    &[("", "(none)"), ("Upper", "Uppercase"), ("Lower", "Lowercase"), ("FirstCap", "First capital"), ("Caps", "Title case")];
+
+/// Whether the dialog offers the capitalization Format list for `name` (the fields whose result
+/// is text).
+pub fn takes_text_format(name: &str) -> bool {
+    matches!(name, "AUTHOR" | "COMMENTS" | "FILENAME" | "KEYWORDS" | "LASTSAVEDBY" | "SUBJECT" | "TITLE" | "REF" | "STYLEREF" | "MERGEFIELD")
+}
+
+/// The last capitalization switch in a field code, as its [`TEXT_FORMATS`] value, or `None`
+/// without one. Quoted text in the code is not a switch.
+pub fn last_text_format(code: &str) -> Option<&'static str> {
+    let mut chars = code.chars().peekable();
+    let mut quoted = false;
+    let mut last = None;
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' if quoted => {
+                chars.next();
+            }
+            '"' => quoted = !quoted,
+            '\\' if chars.peek() == Some(&'*') => {
+                chars.next();
+                while chars.next_if(|c| c.is_whitespace()).is_some() {}
+                let mut word = String::new();
+                while let Some(c) = chars.next_if(|c| !c.is_whitespace() && *c != '\\' && *c != '"') {
+                    word.push(c);
+                }
+                if let Some((v, _)) = TEXT_FORMATS.iter().find(|(v, _)| !v.is_empty() && v.eq_ignore_ascii_case(&word)) {
+                    last = Some(*v);
+                }
+            }
+            _ => {}
+        }
+    }
+    last
+}
+
 pub fn field_kind(name: &str) -> FieldKind {
     match name {
         "DATE" | "TIME" | "CREATEDATE" | "SAVEDATE" | "PRINTDATE" => FieldKind::Date,
@@ -117,6 +156,8 @@ pub struct FieldForm {
     pub date_format: String,
     /// `\*` value for number fields (empty = none).
     pub number_format: String,
+    /// `\*` capitalization value for text fields (empty = none).
+    pub text_format: String,
     /// Bookmark (REF, PAGEREF), sequence name (SEQ), merge field (MERGEFIELD) or style name
     /// (STYLEREF).
     pub target: String,
@@ -148,6 +189,7 @@ impl FieldForm {
             name: "DATE".into(),
             date_format: DATE_FORMATS.first().copied().unwrap_or("M/d/yyyy").to_string(),
             number_format: String::new(),
+            text_format: String::new(),
             target: String::new(),
             preserve: true,
             codes: false,
@@ -178,6 +220,7 @@ impl FieldForm {
     pub fn select(&mut self, name: &str) {
         self.name = name.to_string();
         self.number_format.clear();
+        self.text_format.clear();
         self.target = match field_kind(name) {
             FieldKind::Bookmark => self.bookmarks.first().cloned().unwrap_or_default(),
             FieldKind::Sequence => "Figure".into(),
@@ -230,6 +273,9 @@ impl FieldForm {
         if matches!(field_kind(&self.name), FieldKind::Number | FieldKind::Sequence) && !self.number_format.is_empty() {
             s.push_str(&format!(" \\* {}", self.number_format));
         }
+        if takes_text_format(&self.name) && !self.text_format.is_empty() {
+            s.push_str(&format!(" \\* {}", self.text_format));
+        }
         if self.preserve && field_kind(&self.name) != FieldKind::Toc {
             s.push_str(" \\* MERGEFORMAT");
         }
@@ -239,6 +285,17 @@ impl FieldForm {
     /// The code to insert: typed (Field Codes) or built from the options.
     pub fn final_code(&self) -> String {
         if self.codes { self.code.trim().to_string() } else { self.instruction() }
+    }
+
+    /// Field Codes / Hide Codes: showing the code starts it from the options; hiding it sets the
+    /// Format list to the code's last capitalization switch when the code is for the chosen field.
+    pub fn toggle_codes(&mut self) {
+        if !self.codes {
+            self.code = self.instruction();
+        } else if takes_text_format(&self.name) && wordcraft_layout::fields::field_name(&self.code) == self.name {
+            self.text_format = last_text_format(&self.code).unwrap_or_default().to_string();
+        }
+        self.codes = !self.codes;
     }
 
     /// The `insert.field` parameters (a merge field shows «name» until merged).
@@ -318,10 +375,7 @@ pub(super) fn field_ui(app: &mut WordApp, ui: &mut Ui, f: &mut FieldForm) -> boo
     ui.horizontal(|ui| {
         let label = if f.codes { "Hide Codes" } else { "Field Codes" };
         if ui.button(tl!(label)).clicked() {
-            if !f.codes {
-                f.code = f.instruction();
-            }
-            f.codes = !f.codes;
+            f.toggle_codes();
         }
     });
     let params = f.params();
@@ -409,7 +463,19 @@ fn field_options(ui: &mut Ui, f: &mut FieldForm, t: &Tokens) {
             }
         }
         FieldKind::Toc | FieldKind::Plain => {
-            ui.label(egui::RichText::new(tl!("This field has no options.")).small().color(t.text_dim));
+            if !takes_text_format(&f.name) {
+                ui.label(egui::RichText::new(tl!("This field has no options.")).small().color(t.text_dim));
+            }
         }
+    }
+    if takes_text_format(&f.name) {
+        ui.add_space(4.0);
+        ui.label(tl!("Format:"));
+        let shown = TEXT_FORMATS.iter().find(|(v, _)| *v == f.text_format).map(|(_, l)| *l).unwrap_or("(none)");
+        craft_ui::ComboBox::from_id_salt("field_text").selected_text(tl!(shown)).width(200.0).show_ui(ui, |ui| {
+            for (v, l) in TEXT_FORMATS {
+                ui.selectable_value(&mut f.text_format, (*v).to_string(), tl!(l));
+            }
+        });
     }
 }

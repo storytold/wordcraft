@@ -70,6 +70,21 @@ fn merge_field_types_ignore_case() {
     assert_eq!(s.doc.plain_text(StoryRef::Body), "Alpha\nBeta (b)");
 }
 
+/// A merge field's capitalization switch (`\* Upper`, `\* Lower`, `\* Caps`, `\* FirstCap`)
+/// applies to the record's value in Preview Results and Finish & Merge.
+#[test]
+fn merge_fields_apply_their_capitalization_switch() {
+    let mut s = Session::new(Document::new());
+    s.run("mailings.recipients", &json!({"rows": [{"City": "new york", "Name": "ADA lovelace"}]})).unwrap();
+    s.run("insert.field", &json!({"instr": r"MERGEFIELD City \* Upper \* MERGEFORMAT", "result": ""})).unwrap();
+    s.run("text.insert", &json!({"text": " "})).unwrap();
+    s.run("insert.field", &json!({"instr": r#"MERGEFIELD "Name" \* Lower"#, "result": ""})).unwrap();
+    s.run("mailings.preview", &json!({"value": true})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "NEW YORK ada lovelace");
+    s.run("mailings.finish", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "NEW YORK ada lovelace");
+}
+
 /// An IF is a merge rule only when the field it tests is a MERGEFIELD: the word in a quoted
 /// value doesn't make `IF { PAGE } = "mergefield" …` one.
 #[test]

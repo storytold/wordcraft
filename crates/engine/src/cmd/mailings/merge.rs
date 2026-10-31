@@ -136,7 +136,7 @@ fn keyword(instr: &str) -> String {
 fn act(s: &Session, instr: &str, row: usize) -> Option<Act> {
     let t = instr.trim();
     if let Some(n) = mergefield_name(t) {
-        return Some(Act::Text(value(s, row, &n)));
+        return Some(Act::Text(wordcraft_layout::fields::apply_case_switch(t, value(s, row, &n))));
     }
     Some(match keyword(t).as_str() {
         "ADDRESSBLOCK" => Act::Text(address_block(s, row)),

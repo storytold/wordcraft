@@ -149,6 +149,85 @@ fn field_dialog_builds_the_instruction() {
     assert!(f.params().is_none());
 }
 
+/// Text fields take a capitalization Format: each choice writes its `\*` switch before
+/// `\* MERGEFORMAT`, after the field's own arguments and switches, and (none) writes none.
+#[test]
+fn field_dialog_text_format_writes_its_switch() {
+    let a = app();
+    let mut f = FieldForm::new(&a);
+    f.select("AUTHOR");
+    assert_eq!(f.text_format, "");
+    assert_eq!(f.instruction(), r"AUTHOR \* MERGEFORMAT");
+    for v in ["Upper", "Lower", "FirstCap", "Caps"] {
+        f.text_format = v.into();
+        assert_eq!(f.instruction(), format!(r"AUTHOR \* {v} \* MERGEFORMAT"));
+    }
+    let labels: Vec<&str> = field::TEXT_FORMATS.iter().map(|(_, l)| *l).collect();
+    assert_eq!(labels, ["(none)", "Uppercase", "Lowercase", "First capital", "Title case"]);
+    f.select("REF");
+    f.target = "intro".into();
+    f.text_format = "Upper".into();
+    assert_eq!(f.instruction(), r"REF intro \h \* Upper \* MERGEFORMAT");
+    f.select("STYLEREF");
+    f.style_switches = "l".into();
+    f.text_format = "Caps".into();
+    f.preserve = false;
+    assert_eq!(f.instruction(), r#"STYLEREF "Heading 1" \l \* Caps"#);
+    f.select("MERGEFIELD");
+    f.target = "City".into();
+    f.text_format = "Lower".into();
+    assert_eq!(f.params().unwrap(), json!({"instr": r"MERGEFIELD City \* Lower", "result": "«City»"}));
+    // Choosing another field starts from (none).
+    f.select("TITLE");
+    assert_eq!((f.text_format.as_str(), f.instruction().as_str()), ("", "TITLE"));
+}
+
+/// The list is offered for the text fields only; date, number, PAGEREF, SEQ and TOC keep their
+/// own options and never take a capitalization switch from it.
+#[test]
+fn field_dialog_text_format_is_for_text_fields_only() {
+    for name in ["AUTHOR", "COMMENTS", "FILENAME", "KEYWORDS", "LASTSAVEDBY", "SUBJECT", "TITLE", "REF", "STYLEREF", "MERGEFIELD"] {
+        assert!(field::takes_text_format(name), "{name}");
+    }
+    let a = app();
+    let mut f = FieldForm::new(&a);
+    for name in ["DATE", "PAGE", "NUMPAGES", "PAGEREF", "SEQ", "TOC"] {
+        assert!(!field::takes_text_format(name), "{name}");
+        f.select(name);
+        let before = f.instruction();
+        f.text_format = "Upper".into();
+        assert_eq!(f.instruction(), before, "{name}");
+    }
+}
+
+/// Hide Codes sets the Format list from the typed code's last capitalization switch outside
+/// quotes, and to (none) when the code has none.
+#[test]
+fn field_dialog_text_format_follows_the_typed_code() {
+    assert_eq!(field::last_text_format(r#"AUTHOR "a \* Lower" \* upper \* Caps \* MERGEFORMAT"#), Some("Caps"));
+    assert_eq!(field::last_text_format(r#"MERGEFIELD "x \* FirstCap""#), None);
+    assert_eq!(field::last_text_format(r"PAGE \* roman"), None);
+    let a = app();
+    let mut f = FieldForm::new(&a);
+    f.select("SUBJECT");
+    f.toggle_codes();
+    assert_eq!(f.code, r"SUBJECT \* MERGEFORMAT");
+    f.code = r"SUBJECT \* FIRSTCAP \* MERGEFORMAT".into();
+    f.toggle_codes();
+    assert!(!f.codes);
+    assert_eq!(f.instruction(), r"SUBJECT \* FirstCap \* MERGEFORMAT");
+    f.toggle_codes();
+    f.code = "SUBJECT".into();
+    f.toggle_codes();
+    assert_eq!(f.text_format, "");
+    // A code for another field leaves the list as it was.
+    f.text_format = "Lower".into();
+    f.toggle_codes();
+    f.code = r"TITLE \* Upper".into();
+    f.toggle_codes();
+    assert_eq!(f.text_format, "Lower");
+}
+
 /// The Field dialog lists Word's document information fields, and the counts take a number
 /// format.
 #[test]
