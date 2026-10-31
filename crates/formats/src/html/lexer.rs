@@ -1,4 +1,4 @@
-use super::entity::unescape;
+use super::entity::{unescape, unescape_attr};
 
 // ---------------------------------------------------------------------------------------------
 // Tokenizer
@@ -144,7 +144,7 @@ impl Lexer<'_> {
                     Some(&q) if q == b'"' || q == b'\'' => {
                         let v0 = i + 1;
                         let e = rest.get(v0..).and_then(|r| r.find(q as char)).map(|k| v0 + k).unwrap_or(rest.len());
-                        val = unescape(rest.get(v0..e).unwrap_or(""));
+                        val = unescape_attr(rest.get(v0..e).unwrap_or(""));
                         i = e + 1;
                     }
                     _ => {
@@ -152,7 +152,7 @@ impl Lexer<'_> {
                         while b.get(i).is_some_and(|c| !c.is_ascii_whitespace() && *c != b'>') {
                             i += 1;
                         }
-                        val = unescape(rest.get(v0..i).unwrap_or(""));
+                        val = unescape_attr(rest.get(v0..i).unwrap_or(""));
                     }
                 }
             }
