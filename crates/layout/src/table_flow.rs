@@ -146,13 +146,26 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
     let repeated_height: f32 = header_rows.iter().filter_map(|i| tl.rows.get(*i)).map(|r| r.height).sum();
     let place = |pb: &mut PageBuilder, row: &table::RowLayout| {
         let (x, y) = (pb.col_x() + tl.x, pb.y);
+        // Where the row's items start, counted after those behind the text (see `block_marks`).
+        let behind = pb.behind.last().copied().unwrap_or(0);
+        let mut at = 0;
         if let Some(pg) = pb.page() {
+            at = pg.items.len().saturating_sub(behind);
             for it in &row.items {
                 let mut it = it.clone();
                 it.translate(x, y);
                 pg.items.push(it);
             }
         }
+        // In Front of Text objects in its cells go over the rest of the page too (#1993).
+        pb.push_on_top(
+            at,
+            row.on_top.iter().map(|t| {
+                let mut it = t.item.clone();
+                it.translate(x, y);
+                it
+            }),
+        );
         pb.y += row.height;
         pb.content_bottom = pb.content_bottom.max(pb.y);
     };
@@ -276,7 +289,11 @@ fn place_floating_table(ctx: &mut Ctx, pb: &mut PageBuilder, tl: &table::TableLa
             pb.advance(block, body_top);
             continue;
         }
+        let behind = pb.behind.last().copied().unwrap_or(0);
+        let mut top = Vec::new();
+        let mut at = 0;
         if let Some(pg) = pb.page() {
+            at = pg.items.len().saturating_sub(behind);
             let mut y = r.y;
             for row in &tl.rows {
                 for it in &row.items {
@@ -284,10 +301,16 @@ fn place_floating_table(ctx: &mut Ctx, pb: &mut PageBuilder, tl: &table::TableLa
                     it.translate(r.x, y);
                     pg.items.push(it);
                 }
+                for t in &row.on_top {
+                    let mut it = t.item.clone();
+                    it.translate(r.x, y);
+                    top.push(it);
+                }
                 y += row.height;
             }
             pg.float_tables.push(Path::top(block));
         }
+        pb.push_on_top(at, top);
         let area = r.inset(-dl, -dt, -dr, -db);
         pb.excl.push((area, false, None, WrapText::BothSides, true));
         pb.float_tables.push(area);

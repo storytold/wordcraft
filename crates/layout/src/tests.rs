@@ -3841,6 +3841,7 @@ fn split_row_rejects_a_hostile_cut() {
         items: vec![line(0.0), line(150.0)],
         bottom,
         cells: vec![CellPart { top: 2.0, items: 0..2, end: Some(170.0) }],
+        on_top: Vec::new(),
     };
     for cut in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.0, -1.0, 200.0] {
         assert!(split_row(&row(200.0, 4.0), cut).is_none(), "{cut}");
@@ -5229,6 +5230,165 @@ fn floats_align_within_their_reference_area() {
     assert!((r[2].right() - 612.0).abs() < 0.01, "right edge of the page: {:?}", r[2]);
     assert!((r[1].x - 10.0).abs() < 0.01, "measured from the page's left edge: {:?}", r[1]);
     assert!((r[0].y - (792.0 - 72.0)).abs() < 0.01, "top of the bottom margin: {:?}", r[0]);
+}
+
+/// Indices of the body text lines and the first shape among `items`.
+fn lines_and_shape(items: &[Placed]) -> (Vec<usize>, usize) {
+    let lines = items.iter().enumerate().filter(|(_, i)| matches!(i, Placed::Lines { story: StoryRef::Body, .. })).map(|(k, _)| k).collect();
+    (lines, items.iter().position(|i| matches!(i, Placed::Shape { .. })).unwrap())
+}
+
+/// #1993: a picture In Front of Text was drawn over its own paragraph only. Later paragraphs on
+/// the page were drawn after it, so their text showed through. It now goes over every line of
+/// the page, its frame (for hit testing) with it; Behind Text stays under them all.
+#[test]
+fn in_front_of_text_is_drawn_over_the_paragraphs_after_it() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    for wrap in [Wrap::InFrontOfText, Wrap::BehindText] {
+        let mut d = Document::from_text("Anchor paragraph\nSecond paragraph\nThird paragraph");
+        let f = Float { wrap, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, ..Default::default() };
+        d.insert_object(&Pos::body(0, 0), rect_shape(300.0, 200.0, f), &Default::default()).unwrap();
+        let l = lay(&d);
+        let items = &l.pages[0].items;
+        let r = shapes(items)[0];
+        let c = l.caret(&Pos::body(2, 0)).unwrap();
+        assert!(r.contains(wordcraft_geom::Point::new(c.x + 2.0, c.top + 2.0)), "{wrap:?}: the shape covers the third paragraph");
+        let (lines, shape) = lines_and_shape(items);
+        assert_eq!(lines.len(), 3, "{wrap:?}");
+        if wrap == Wrap::InFrontOfText {
+            assert!(lines.iter().all(|&k| k < shape), "in front: drawn after every line {lines:?} {shape}");
+            let frame = items.iter().rposition(|i| matches!(i, Placed::Object { .. })).unwrap();
+            assert!(frame > shape, "its frame comes with it");
+        } else {
+            assert!(lines.iter().all(|&k| k > shape), "behind: drawn before every line {lines:?} {shape}");
+        }
+    }
+}
+
+/// #1993: the same in a table cell (laid out as a box): over the cell's later paragraphs.
+#[test]
+fn in_front_of_text_in_a_cell_is_drawn_over_the_cell_text() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let mut d = Document::from_text("Anchor paragraph\nSecond paragraph\nThird paragraph");
+    let f = Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, ..Default::default() };
+    d.insert_object(&Pos::body(0, 0), rect_shape(300.0, 200.0, f), &Default::default()).unwrap();
+    let mut table = Table::new(1, 1, 468.0);
+    table.rows[0].cells[0].blocks = std::mem::take(&mut d.body);
+    d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(table))];
+    let l = lay(&d);
+    let (lines, shape) = lines_and_shape(&l.pages[0].items);
+    assert_eq!(lines.len(), 3);
+    assert!(lines.iter().all(|&k| k < shape), "drawn after the cell's lines {lines:?} {shape}");
+}
+
+/// #1993: one anchored in a table cell goes over the whole page, as in Word for Windows
+/// 16.0.17932: over the rows below its own and the paragraph after the table too, not only its
+/// cell's text.
+#[test]
+fn in_front_of_text_in_a_cell_is_drawn_over_the_rows_and_text_after_the_table() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let mut d = Document::from_text("Anchor row\nSecond row\nThird row\nAfter the table");
+    let f = Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, ..Default::default() };
+    d.insert_object(&Pos::body(0, 0), rect_shape(300.0, 200.0, f), &Default::default()).unwrap();
+    let mut table = Table::new(3, 1, 468.0);
+    for (row, block) in table.rows.iter_mut().zip(d.body.drain(..3)) {
+        row.cells[0].blocks = vec![block];
+    }
+    d.body.insert(0, std::sync::Arc::new(wordcraft_doc::Block::Table(table)));
+    let l = lay(&d);
+    let items = &l.pages[0].items;
+    let (lines, shape) = lines_and_shape(items);
+    assert_eq!(lines.len(), 4, "three rows and the paragraph after the table");
+    assert!(lines.iter().all(|&k| k < shape), "drawn after every line of the page {lines:?} {shape}");
+    let frame = items.iter().rposition(|i| matches!(i, Placed::Object { .. })).unwrap();
+    assert!(frame > shape, "its frame comes with it");
+    let r = shapes(items)[0];
+    let c = l.caret(&Pos::body(1, 0)).unwrap();
+    assert!(r.contains(wordcraft_geom::Point::new(c.x + 20.0, c.top + 2.0)), "the shape covers the paragraph after the table");
+}
+
+/// #1993: drawn last, an In Front of Text object still moves with its paragraph when the page is
+/// aligned vertically (centred, or justified with the blocks spread apart).
+#[test]
+fn in_front_of_text_moves_with_its_paragraph_under_vertical_alignment() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    use wordcraft_doc::section::PageVAlign;
+    let laid = |va: PageVAlign| {
+        let mut d = Document::from_text("One\nTwo\nThree");
+        let f = Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, ..Default::default() };
+        // In the second paragraph: justified alignment moves it with that block, not the last.
+        d.insert_object(&Pos::body(1, 0), rect_shape(50.0, 20.0, f), &Default::default()).unwrap();
+        d.last_section.valign = va;
+        let l = lay(&d);
+        let line = l.caret(&Pos::body(1, 0)).unwrap().top;
+        (shapes(&l.pages[0].items)[0].y, line)
+    };
+    let (top_y, top_line) = laid(PageVAlign::Top);
+    for va in [PageVAlign::Center, PageVAlign::Justify] {
+        let (y, line) = laid(va);
+        assert!(line - top_line > 50.0, "{va:?}: the paragraph moved down");
+        assert!(((y - top_y) - (line - top_line)).abs() < 0.05, "{va:?}: the shape moved as far as its paragraph");
+    }
+}
+
+/// #1993: footnotes are page text too, so an In Front of Text object over the note area is drawn
+/// after them.
+#[test]
+fn in_front_of_text_is_drawn_over_the_footnotes() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let mut d = Document::from_text("Anchor paragraph");
+    let id = footnote(&mut d, &Pos::body(0, 6), "The note under the picture.");
+    let f = Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 72.0, y: 640.0, ..Default::default() };
+    d.insert_object(&Pos::body(0, 0), rect_shape(300.0, 80.0, f), &Default::default()).unwrap();
+    let l = lay(&d);
+    let items = &l.pages[0].items;
+    let note = items.iter().position(|i| matches!(i, Placed::Lines { story: StoryRef::Part(p), .. } if *p == id)).unwrap();
+    let shape = items.iter().position(|i| matches!(i, Placed::Shape { .. })).unwrap();
+    assert!(note < shape, "the note {note} is drawn before the shape {shape}");
+}
+
+/// #1993: turned cell text laid out again for a taller row keeps its In Front of Text objects.
+#[test]
+fn in_front_of_text_in_a_turned_cell_stays_when_the_row_grows() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let mut d = turned_table(TextDirection::Down, "Turned", None);
+    let f = Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, ..Default::default() };
+    d.insert_object(&Pos { story: StoryRef::Body, path: Path(vec![1, 0, 1, 0]), off: 0 }, rect_shape(20.0, 20.0, f), &Default::default()).unwrap();
+    let Some(Block::Table(t)) = d.body.get_mut(1).map(Arc::make_mut) else { panic!("table") };
+    // Another cell makes the row taller than the turned text needs.
+    t.rows[0].cells[0].blocks =
+        (0..12).map(|_| wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("plain", Default::default()))).collect();
+    let l = lay(&d);
+    let b = turned_lines(&l).turned_bounds().unwrap();
+    assert!(b.h > 100.0, "the turned text runs the taller row: {b:?}");
+    assert_eq!(shapes(&l.pages[0].items).len(), 1, "the shape is still drawn");
+}
+
+/// #1993: when a row splits across pages, an In Front of Text object goes with its paragraph:
+/// one anchored in a paragraph that starts on the next page goes there too.
+#[test]
+fn in_front_of_text_goes_with_its_paragraph_when_a_row_splits() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let mut d = Document::from_text("before\nafter");
+    let mut t = Table::new(1, 1, 468.0);
+    let long = "Row text that keeps going and going so the cell grows taller than a page. ".repeat(120);
+    t.rows[0].cells[0].blocks = vec![
+        wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&long, Default::default())),
+        wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Anchor paragraph", Default::default())),
+    ];
+    d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+    let f = Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, ..Default::default() };
+    let cell_para = |k| Pos { story: StoryRef::Body, path: Path(vec![1, 0, 0, k]), off: 0 };
+    d.insert_object(&cell_para(0), rect_shape(50.0, 20.0, f.clone()), &Default::default()).unwrap();
+    d.insert_object(&cell_para(1), rect_shape(80.0, 20.0, f), &Default::default()).unwrap();
+    let l = lay(&d);
+    let anchor = l.caret(&cell_para(1)).unwrap();
+    assert!(anchor.page > 0, "the second paragraph starts on a later page");
+    let widths = |p: usize| shapes(&l.pages[p].items).iter().map(|r| r.w).collect::<Vec<_>>();
+    assert_eq!(widths(0), [50.0], "the first paragraph's shape stays where it starts");
+    assert_eq!(widths(anchor.page), [80.0], "the second's goes on with it");
+    let r = shapes(&l.pages[anchor.page].items)[0];
+    assert!((r.y - anchor.top).abs() < 5.0, "at its paragraph: {r:?} {anchor:?}");
 }
 
 #[test]
@@ -7007,6 +7167,7 @@ fn a_split_row_moves_shading_below_the_cut_with_it() {
         items: vec![line_row(0.0), line_row(150.0), fill(0.0, 200.0), fill(150.0, 50.0)],
         bottom: 0.0,
         cells: vec![CellPart { top: 2.0, items: 0..4, end: None }],
+        on_top: Vec::new(),
     };
     let (a, b) = split_row(&row, 100.0).expect("splits");
     let fills = |r: &RowLayout| {
@@ -10263,6 +10424,7 @@ fn split_cell_moves_image_frame() {
             edge: 0.0,
             items: vec![kept, image, frame],
             cells: vec![CellPart { top, items: 0..3, end: Some(170.0) }],
+            on_top: Vec::new(),
         };
         let (first, rest) = split_row(&row, 100.0).unwrap();
         assert_eq!(first.items.len(), 1);
