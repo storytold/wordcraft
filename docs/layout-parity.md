@@ -61,8 +61,9 @@ Native Word Mac 16.114.3 (26102720) references use Helvetica Neue for every
 visible character, as do the WordCraft PDFs. Word page counts are 6/7/9/6 versus
 WordCraft 6/7/7/6. All diagnostic markers have the same page assignments in
 controls 1, 2 and 4; this does not mean pixel parity. Control 1 still strands
-headings 4 and 7 at the preceding page's bottom, and footnote marker positions in
-control 4 differ by up to 14.49 pt. In control 2, marker origins differ vertically
+headings 4 and 7 at the preceding page's bottom. In control 4, main-body content
+marker positions differ by up to 14.49 pt; footnote-marker positions differ by at
+most 0.40 pt. In control 2, marker origins differ vertically
 by at most 0.29 pt. The complex control differs materially: Word puts its heading
 alone on page 4 and its table header alone on page 5, then flows the 100 long-row
 paragraphs across pages 6–7 (57/43); WordCraft flows them across pages 4–5 (55/45).
