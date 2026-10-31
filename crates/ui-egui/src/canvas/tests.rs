@@ -4841,3 +4841,39 @@ fn the_view_key_changes_when_a_drag_takes_an_object_off_the_page() {
     assert_ne!(hidden, view_key(&app, false, None), "the page without the dragged object is rendered again");
     assert_eq!(hidden, view_key(&app, false, Some(&object)), "the same drag keeps the key: no re-render every frame");
 }
+
+#[test]
+fn screen_paper_color_changes_raster_and_cache_without_changing_export_paper() {
+    use wordcraft_doc::props::Rgb;
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    let layout = app.session.layout();
+    let page = &layout.pages[0];
+    let print_before = wordcraft_render::render_page(&app.session.doc, page, 0.1, &Default::default());
+    let mut keys = vec![view_key(&app, false, None)];
+    for (value, expected) in [("green", Rgb(0xCC, 0xE8, 0xCF)), ("cream", Rgb(0xFA, 0xF0, 0xDC)), ("gray", Rgb(0xE8, 0xEA, 0xED))] {
+        app.run("view.paperColor", json!({"value":value})).unwrap();
+        let key = view_key(&app, false, None);
+        assert!(!keys.contains(&key), "each preset invalidates page and tile caches");
+        keys.push(key);
+        let opts = page_render_options(&app, false);
+        assert_eq!(opts.paper_of(&app.session.doc), expected);
+        let screen = wordcraft_render::render_page(&app.session.doc, page, 0.1, &opts);
+        assert_eq!(&screen.pixels[..4], &[expected.0, expected.1, expected.2, 255]);
+        let print = wordcraft_render::render_page(&app.session.doc, page, 0.1, &Default::default());
+        assert_eq!(print.pixels, print_before.pixels, "screen tints cannot leak into output rasters");
+    }
+    app.run("view.darkMode", json!({"value":true})).unwrap();
+    let d = wordcraft_render::DARK_PAPER;
+    assert_eq!(page_render_options(&app, false).paper_of(&app.session.doc), Rgb(d, d, d));
+    app.run("view.darkMode", json!({"value":false})).unwrap();
+    assert_eq!(page_render_options(&app, false).paper_of(&app.session.doc), Rgb(0xE8, 0xEA, 0xED));
+    app.run("design.pageColor", json!({"color":"#102040"})).unwrap();
+    assert_eq!(page_render_options(&app, false).paper_of(&app.session.doc), Rgb(0x10, 0x20, 0x40));
+    app.run("view.readMode", json!({})).unwrap();
+    assert_eq!(page_render_options(&app, false).paper_of(&app.session.doc), Rgb(0xE8, 0xEA, 0xED));
+    app.run("view.readPageColor", json!({"value":"sepia"})).unwrap();
+    assert_eq!(page_render_options(&app, false).paper_of(&app.session.doc), wordcraft_render::SEPIA_PAPER);
+    app.run("view.readPageColor", json!({"value":"inverse"})).unwrap();
+    let d = wordcraft_render::DARK_PAPER;
+    assert_eq!(page_render_options(&app, false).paper_of(&app.session.doc), Rgb(d, d, d));
+}

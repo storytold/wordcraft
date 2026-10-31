@@ -1017,6 +1017,7 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "tools.customizeKeyboard"
             | "tools.customizeRibbon"
             | "view.darkMode"
+            | "view.paperColor"
             | "view.marks"
             | "view.ruler"
             | "view.numeral"
