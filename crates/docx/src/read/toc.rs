@@ -1,4 +1,4 @@
-use super::*;
+use super::{Arc, Block, Blocks, ControlEvent, ControlKind, Document, HashSet, InlineObject, OBJ, StyleKind, control_events, pair_events};
 
 /// Word draws a table of contents' entry links without the Hyperlink character style (no blue,
 /// no underline) though the entries carry it (measured in Word for Windows: a Hyperlink-styled run

@@ -49,9 +49,9 @@ impl PrefsSync {
     pub fn changed(&mut self, app: &WordApp) -> Option<String> {
         let mut prefs = app.prefs();
         if let Some((host, own)) = &self.host_author
-            && prefs.author == *host
+            && prefs.author.as_deref() == Some(host.as_str())
         {
-            prefs.author = own.clone();
+            prefs.author = Some(own.clone());
         }
         let json = match serde_json::to_string(&prefs) {
             Ok(j) => j,
