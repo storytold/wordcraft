@@ -12051,3 +12051,23 @@ fn an_empty_bulleted_mark_after_a_bulleted_section_closer_draws_no_bullet() {
         assert!(text, "{filler} lines above: the text closer keeps its bullet");
     }
 }
+
+#[test]
+fn a_list_item_that_shows_nothing_reports_no_missing_font() {
+    // Its number is shaped in its mark's font before the paragraph turns out to show nothing
+    // (#3982): that font isn't shown in another, so it isn't missing from what's drawn.
+    let mut d = Document::from_text("Alpha\n\nBeta");
+    let id = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+    d.format_paragraphs(&Pos::body(0, 0), &Pos::body(2, 4), &|p| {
+        p.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 });
+    })
+    .unwrap();
+    let mark = &mut d.para_mut(StoryRef::Body, &Path::top(1)).unwrap().mark;
+    mark.font = Some("Wordcraft Gone Number Face".into());
+    let missing = |d: &Document| layout(d, &mut LayoutCache::new(), &LayoutOptions::default()).substituted_fonts();
+    let shown = missing(&d);
+    assert!(shown.iter().any(|(f, _)| f == "Wordcraft Gone Number Face"), "a shown number counts: {shown:?}");
+    d.para_mut(StoryRef::Body, &Path::top(1)).unwrap().mark.hidden = Some(true);
+    let gone = missing(&d);
+    assert!(!gone.iter().any(|(f, _)| f == "Wordcraft Gone Number Face"), "{gone:?}");
+}

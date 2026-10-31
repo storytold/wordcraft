@@ -1,7 +1,7 @@
 use super::bookmarks::{bookmark, enclose_preview, icons_body};
 use super::chrome::{buttons, color_field};
 use super::find::{FindTab, SEARCH_SUGGESTIONS, command_matches, find_in_navigation_pane, goto_body, special_menu, swallow_shortcut_text};
-use super::font::{apply_font, preview_size};
+use super::font::{apply_font, font_box, preview_size};
 use super::forms::{cell_margins_dialog, custom_properties, table_properties};
 use super::mailings::{ADDRESS_PARTS, recipient_list, rule_params};
 use super::page_setup::{page_layout_commands, page_paper_group, page_valign_combo, page_valign_value, run_as_one_step};
@@ -143,7 +143,10 @@ fn font_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         if *asian {
             ui.label(tl!("Asian text font:"));
             let fams = app.previews.east_asian_families();
-            if let Some(f) = crate::widgets::font_combo(ui, "fontdlg_asian", 220.0, font_ea, &fams, Some(&*prev)) {
+            let stored = app.previews.font_stored(font_ea);
+            let latin = app.previews.font_stored(font);
+            let warning = app.east_asian_font_box_warning(&stored, &latin);
+            if let Some(f) = font_box(ui, ("fontdlg_asian", font_ea.as_str()), &fams, &*prev, warning.as_deref()) {
                 if f == crate::widgets::ADD_FONT {
                     let _ = app.run("font.add", json!({}));
                 } else if f == crate::widgets::LOAD_SYSTEM_FONTS {
@@ -156,7 +159,9 @@ fn font_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         }
         ui.label(if *asian { tl!("Latin text font:") } else { tl!("Font:") });
         let fams = app.previews.families();
-        if let Some(f) = crate::widgets::font_combo(ui, "fontdlg_font", 220.0, font, &fams, Some(&*prev)) {
+        let stored = app.previews.font_stored(font);
+        let warning = app.font_box_warning(&stored);
+        if let Some(f) = font_box(ui, ("fontdlg_font", font.as_str()), &fams, &*prev, warning.as_deref()) {
             if f == crate::widgets::ADD_FONT {
                 let _ = app.run("font.add", json!({}));
             } else if f == crate::widgets::LOAD_SYSTEM_FONTS {

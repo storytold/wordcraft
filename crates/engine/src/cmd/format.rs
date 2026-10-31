@@ -866,8 +866,14 @@ pub fn state(s: &Session) -> Value {
     let at = selected_text_box(s).map_or_else(|| s.sel.focus.clone(), |(a, _)| a);
     let style = s.doc.para_at(&at).and_then(|p| p.props.style.clone()).unwrap_or_else(|| "Normal".into());
     let style_name = s.doc.styles.get(&style).map(|st| st.name.clone()).unwrap_or(style.clone());
+    let font = same(&|r| json!(r.font));
+    // The font's substitute when it isn't installed: the face its text is drawn in, apart from
+    // characters the substitute lacks. `font.missing` lists every face the shown text is drawn
+    // in, fallback faces too, and which fonts change the layout.
+    let shown_as = font.as_str().and_then(|f| crate::cmd::font::shown_as(&s.doc, f));
     json!({
-        "font": same(&|r| json!(r.font)),
+        "font": font,
+        "fontShownAs": shown_as,
         "fontEastAsia": same(&|r| json!(r.font_ea)),
         "size": same(&|r| json!(r.size)),
         "bold": all.iter().all(|r| r.bold),

@@ -345,6 +345,18 @@ pub fn t(s: &str) -> &str {
     tr(current(), s)
 }
 
+/// A count's wording in the current language: `one` and `other` are the English forms with `{n}`
+/// for the count, and the key of the catalog's `@plural` row, which gives each form the language
+/// has (Russian's 2, 5 and 21 differ).
+pub fn tn(n: u64, one: &str, other: &str) -> String {
+    #[cfg(test)]
+    if pseudo::on() {
+        return I18N.trn(craft_i18n::Lang::PSEUDO, n, one, other);
+    }
+    let lang = current();
+    lang.i18n().trn(lang.lang, n, one, other)
+}
+
 /// `s` in the current language as worded for `context` (`preview`, `template`), falling back to
 /// the plain translation and then to English.
 pub fn tc<'a>(context: &str, s: &'a str) -> &'a str {

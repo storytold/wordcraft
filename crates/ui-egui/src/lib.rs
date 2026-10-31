@@ -570,6 +570,9 @@ pub struct WordApp {
     escape_free: bool,
     pub quit_requested: bool,
     pub autosave: bool,
+    /// The document's fonts that aren't installed, for the status bar and the font box, and the
+    /// layout they were read from.
+    pub missing_fonts: crate::chrome::MissingFontsMemo,
     pub word_count: (u64, usize),
     last_autosave: f64,
     /// The tab shown before the Equation tab came up (restored when editing ends).

@@ -307,3 +307,65 @@ fn clicking_the_autosave_label_toggles_autosave() {
     assert!(h.state().autosaves(), "and clicking it again turns it back on");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn the_font_box_warns_where_the_status_bar_does_and_before_typing() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let missing = "Wordcraft Nowhere Face";
+    // An empty paragraph in a missing font: no letters show it yet, still worth a warning.
+    a.session.run("select.all", &json!({})).unwrap();
+    a.session.run("format.font", &json!({"name": missing})).unwrap();
+    assert!(a.font_box_warning(missing).is_some(), "an empty paragraph warns");
+    // Text in it: the status bar's list decides.
+    a.session.run("text.insert", &json!({"text": "Hello"})).unwrap();
+    let l = a.session.layout();
+    let (list, _) = a.cached_missing_fonts(&l);
+    assert!(list.iter().any(|f| f.font == missing), "{list:?}");
+    assert!(a.font_box_warning(missing).is_some());
+    // A missing font just picked at the end of text in an installed one: the next letter will be
+    // drawn in a substitute, so the box warns before it is typed.
+    a.session.run("select.all", &json!({})).unwrap();
+    a.session.run("format.font", &json!({"name": "JetBrains Mono"})).unwrap();
+    a.session.run("caret.docEnd", &json!({})).unwrap();
+    a.session.run("format.font", &json!({"name": "Wordcraft Just Picked"})).unwrap();
+    assert!(a.font_box_warning("Wordcraft Just Picked").is_some(), "picked at the caret");
+    // Over a selection the box shows the selected text's font, which the list decides.
+    a.session.run("select.all", &json!({})).unwrap();
+    assert!(a.font_box_warning("Wordcraft Half Typed").is_none());
+}
+
+#[test]
+fn the_east_asian_font_box_names_the_face_its_text_is_drawn_in() {
+    // MS Mincho is roman in many font tables; the run's font is drawn in Cambria then, but CJK
+    // text never is: it goes to the run's font or a fallback face.
+    let mincho = "Wordcraft Mincho Gone";
+    let mut doc = wordcraft_doc::Document::new();
+    doc.settings.roman_fonts = vec![mincho.into()];
+    let mut a = WordApp::new(wordcraft_engine::Session::new(doc), crate::Services::default());
+    let want = wordcraft_engine::cmd::font::east_asian_shown_as(&a.session.doc, mincho, "JetBrains Mono");
+    assert!(want.is_some(), "not installed");
+    assert_eq!(a.east_asian_font_box_warning(mincho, "JetBrains Mono"), want, "an empty paragraph warns");
+}
+
+#[test]
+fn a_screen_reader_hears_the_font_box_warning() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.session.run("text.insert", &json!({"text": "Hello"})).unwrap();
+    a.session.run("select.all", &json!({})).unwrap();
+    a.session.run("format.font", &json!({"name": "Wordcraft Nowhere Face"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(6);
+    let described = h
+        .query_all_by_role(egui::accesskit::Role::TextInput)
+        .filter_map(|n| n.accesskit_node().description())
+        .any(|d| d.contains("Wordcraft Nowhere Face") && d.contains("isn't installed"));
+    assert!(described, "the font box describes its warning");
+}

@@ -566,15 +566,22 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                 } else {
                     l.caret_on(&app.session.sel.focus, app.session.page_hint).map(|c| c.page + 1).unwrap_or(1)
                 };
-                let st = |ui: &mut Ui, s: &str| {
+                // A status item: its text, after an icon when it has one (one click target).
+                let st_icon = |ui: &mut Ui, icon: Option<&str>, s: &str| {
                     let font = TypeRung::Caption.regular();
                     let track = TypeRung::Caption.tracking();
                     let w = text_width(ui.painter(), s, &font, track, t.text_dim);
-                    let (r, resp) = ui.allocate_exact_size(vec2(w + 1.0, TypeRung::Caption.line_height()), Sense::click());
-                    paint_text(ui.painter(), pos2(r.min.x, r.min.y), Align2::LEFT_TOP, s, &font, track, t.text_dim);
+                    let lead = if icon.is_some() { 17.0 } else { 0.0 };
+                    let (r, resp) = ui.allocate_exact_size(vec2(lead + w + 1.0, TypeRung::Caption.line_height()), Sense::click());
+                    if let Some(icon) = icon {
+                        let ir = Rect::from_min_size(pos2(r.min.x, r.center().y - 6.5), vec2(13.0, 13.0));
+                        icons::paint(ui.painter(), ir, icon, t.icon, t.accent);
+                    }
+                    paint_text(ui.painter(), pos2(r.min.x + lead, r.min.y), Align2::LEFT_TOP, s, &font, track, t.text_dim);
                     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, s));
                     resp
                 };
+                let st = |ui: &mut Ui, s: &str| st_icon(ui, None, s);
                 if st(ui, &crate::i18n::fmt(tl!("Page {page} of {pages}"), &[("page", &page.to_string()), ("pages", &l.pages.len().to_string())]))
                     .on_hover_text(tl!("Go To (⌘⌥G)"))
                     .clicked()
@@ -619,6 +626,31 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                 });
                 if app.session.doc.settings.track_changes {
                     st(ui, tl!("Track Changes: On"));
+                }
+                // Fonts the document uses that aren't installed: they're drawn in other fonts, so
+                // the text can wrap and paginate unlike where the document was made.
+                let missing = app.cached_missing_fonts(&l).0;
+                let count = missing.iter().filter(|f| !f.metric_compatible).count();
+                if count > 0 {
+                    let label = crate::i18n::tn(count as u64, "{n} font not installed", "{n} fonts not installed");
+                    let resp = st_icon(ui, Some("fontMissing"), &label).on_hover_text(tl!("Shown in substitute fonts. Click for details."));
+                    egui::Popup::menu(&resp).show(|ui| {
+                        ui.set_min_width(260.0);
+                        ui.label(egui::RichText::new(tl!("Not installed — shown as")).strong());
+                        // A hostile file can name thousands of fonts: list the first few.
+                        const SHOWN: usize = 20;
+                        for f in missing.iter().filter(|f| !f.metric_compatible).take(SHOWN) {
+                            ui.label(format!("{} → {}", f.font, f.shown_as.join(", ")));
+                        }
+                        if count > SHOWN {
+                            ui.label(crate::i18n::tn((count - SHOWN) as u64, "…and {n} more", "…and {n} more"));
+                        }
+                        ui.separator();
+                        if ui.button(tl!("Add Font…")).clicked() {
+                            let _ = app.run("font.add", json!({}));
+                            ui.close();
+                        }
+                    });
                 }
                 if app.session.prefs.overtype && st(ui, tl!("Overtype")).on_hover_text(tl!("Click to switch back to inserting")).clicked() {
                     let _ = app.run("text.overtype", json!({"value": false}));
@@ -750,7 +782,62 @@ fn small_icon(ui: &mut Ui, icon: &str, tip: &str) -> bool {
     resp.on_hover_text(tip).clicked()
 }
 
+/// [`WordApp::cached_missing_fonts`]: the list, and the warnings by font key.
+pub type MissingFontsCache =
+    (std::sync::Arc<Vec<wordcraft_engine::cmd::font::MissingFont>>, std::sync::Arc<std::collections::HashMap<String, String>>);
+
+/// [`WordApp::missing_fonts`]: the layout the list was read from, and the list.
+pub type MissingFontsMemo = (std::sync::Weak<wordcraft_layout::DocLayout>, MissingFontsCache);
+
 impl WordApp {
+    /// [`wordcraft_engine::cmd::font::missing_fonts`] for `layout`, and the font box's warnings
+    /// by [`font_key`](wordcraft_engine::cmd::font::font_key) (the layout-changing ones, with the
+    /// faces drawn instead), read again only when the document is laid out again (adding or
+    /// removing a font lays it out again).
+    pub fn cached_missing_fonts(&mut self, layout: &std::sync::Arc<wordcraft_layout::DocLayout>) -> MissingFontsCache {
+        if !self.missing_fonts.0.upgrade().is_some_and(|seen| std::sync::Arc::ptr_eq(&seen, layout)) {
+            let found = wordcraft_engine::cmd::font::missing_fonts(&self.session.doc, layout);
+            let warnings = found
+                .iter()
+                .filter(|f| !f.metric_compatible)
+                .map(|f| (wordcraft_engine::cmd::font::font_key(&f.font), f.shown_as.join(", ")))
+                .collect();
+            self.missing_fonts = (std::sync::Arc::downgrade(layout), (std::sync::Arc::new(found), std::sync::Arc::new(warnings)));
+        }
+        self.missing_fonts.1.clone()
+    }
+
+    /// The font box's warning for `font` (a stored name): the faces its text is drawn in
+    /// instead, when the status bar lists it as missing and changing the layout. Read from the
+    /// same list as the status bar, so the two never disagree. At a collapsed caret, where the
+    /// box shows the font typing will use (an empty paragraph's, or one just picked at the end
+    /// of a line), the substitute layout will draw it in is named instead.
+    pub fn font_box_warning(&mut self, font: &str) -> Option<String> {
+        self.font_box_warning_or(font, |doc| wordcraft_engine::cmd::font::shown_as(doc, font))
+    }
+
+    /// [`WordApp::font_box_warning`] for an East Asian font box (`font_ea`, the run's font being
+    /// `font`): where no letters show it yet, the face layout draws such text in when the font
+    /// is missing, the run's font or a fallback face.
+    pub fn east_asian_font_box_warning(&mut self, font_ea: &str, font: &str) -> Option<String> {
+        self.font_box_warning_or(font_ea, |doc| wordcraft_engine::cmd::font::east_asian_shown_as(doc, font_ea, font))
+    }
+
+    /// The font box's warning for `font`: from the status bar's list, else, while no letters
+    /// show it, the family `unshown` says its text will be drawn in.
+    fn font_box_warning_or(&mut self, font: &str, unshown: impl FnOnce(&wordcraft_doc::Document) -> Option<String>) -> Option<String> {
+        let layout = self.session.layout();
+        let key = wordcraft_engine::cmd::font::font_key(font);
+        if let Some(w) = self.cached_missing_fonts(&layout).1.get(&key) {
+            return Some(w.clone());
+        }
+        // At a collapsed caret the box shows the font typing will use: no shown text is in it
+        // (else the list has it), so the next letter is drawn in `unshown`'s family. A selection's
+        // font is the selected text's, which the list already covers.
+        let shown = self.session.sel.is_collapsed().then(|| unshown(&self.session.doc)).flatten()?;
+        wordcraft_engine::cmd::font::warns(font, &shown).then_some(shown)
+    }
+
     /// Word count, recomputed only when the document changes.
     pub fn cached_word_count(&mut self) -> usize {
         // The count option changes the count without a document change.

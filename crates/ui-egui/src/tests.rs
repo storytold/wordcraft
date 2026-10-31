@@ -3709,7 +3709,11 @@ fn clicks_on_ribbon_and_status_bar_chrome_keep_typing_in_the_document() {
     h.step();
     h.step();
     assert!(egui::Popup::is_any_open(&h.ctx), "the language menu opened");
-    let elsewhere = egui::pos2(lang.max.x + 40.0, lang.center().y);
+    // Bare status bar: past the language item, and past the missing-fonts item after it when the
+    // document's fonts aren't installed (Aptos Display for Heading 1, on most machines without
+    // Office), however many there are.
+    let right = h.query_by_label_contains(" not installed").map_or(lang.max.x, |n| n.rect().max.x);
+    let elsewhere = egui::pos2(right + 40.0, lang.center().y);
     for pressed in [true, false] {
         h.hover_at(elsewhere);
         h.event(egui::Event::PointerButton { pos: elsewhere, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });

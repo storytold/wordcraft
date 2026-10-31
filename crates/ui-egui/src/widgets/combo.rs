@@ -62,7 +62,7 @@ pub fn combo(
     items: &[String],
     preview: Option<&dyn Fn(&mut Ui, &str) -> Response>,
 ) -> Option<String> {
-    combo_impl(ui, ComboOptions { id, width, current, items, recent: &[], preview, search: false, tip: "" })
+    combo_impl(ui, ComboOptions { id, width, current, items, recent: &[], preview, search: false, tip: "", shown_as: None })
 }
 
 /// [`combo`] whose field and arrow show the hover hint `tip` (already translated).
@@ -75,7 +75,7 @@ pub fn combo_hint(
     preview: Option<&dyn Fn(&mut Ui, &str) -> Response>,
     tip: &str,
 ) -> Option<String> {
-    combo_impl(ui, ComboOptions { id, width, current, items, recent: &[], preview, search: false, tip })
+    combo_impl(ui, ComboOptions { id, width, current, items, recent: &[], preview, search: false, tip, shown_as: None })
 }
 
 /// What [`font_combo`] returns when its list's last entry, Add Font…, is chosen (#582): the
@@ -99,7 +99,7 @@ pub fn font_combo(
     items: &[String],
     preview: Option<&dyn Fn(&mut Ui, &str) -> Response>,
 ) -> Option<String> {
-    combo_impl(ui, ComboOptions { id, width, current, items, recent: &[], preview, search: true, tip: tl!("Font") })
+    combo_impl(ui, ComboOptions { id, width, current, items, recent: &[], preview, search: true, tip: tl!("Font"), shown_as: None })
 }
 
 /// [`font_combo`] with the `recent` families (most recent first) in a Recently Used Fonts
@@ -116,10 +116,12 @@ pub fn font_combo_with_recent(
     recent: &[String],
     preview: Option<&dyn Fn(&mut Ui, &str) -> Response>,
 ) -> Option<String> {
-    combo_impl(ui, ComboOptions { id, width, current, items, recent, preview, search: true, tip: tl!("Font") })
+    combo_impl(ui, ComboOptions { id, width, current, items, recent, preview, search: true, tip: tl!("Font"), shown_as: None })
 }
 
-/// [`font_combo_with_recent`] with a hover hint `tip` (already translated).
+/// [`font_combo_with_recent`] with a hover hint `tip` (already translated). With `shown_as`
+/// (the families drawn instead of a `current` font that isn't installed) the box carries a
+/// warning mark saying so.
 pub struct FontComboOptions<'a> {
     pub id: &'a str,
     pub width: f32,
@@ -128,6 +130,7 @@ pub struct FontComboOptions<'a> {
     pub recent: &'a [String],
     pub preview: Option<&'a dyn Fn(&mut Ui, &str) -> Response>,
     pub tip: &'a str,
+    pub shown_as: Option<&'a str>,
 }
 
 pub fn font_combo_with_recent_hint(ui: &mut Ui, options: FontComboOptions<'_>) -> Option<String> {
@@ -142,7 +145,18 @@ pub fn font_combo_with_recent_hint(ui: &mut Ui, options: FontComboOptions<'_>) -
             recent: options.recent,
             preview: options.preview,
             tip: options.tip,
+            shown_as: options.shown_as,
         },
+    )
+}
+
+/// The hover note for a font that isn't installed, `shown_as` drawn instead.
+fn missing_font_tip(font: &str, shown_as: &str) -> String {
+    crate::i18n::fmt(
+        tl!(
+            "{font} isn't installed on this computer, so its text is shown in {shown}. Line breaks and page count can differ from where the document was made. If you have the font file, add it with Add Font… at the end of this list."
+        ),
+        &[("font", font), ("shown", shown_as)],
     )
 }
 
@@ -155,6 +169,8 @@ struct ComboOptions<'a> {
     preview: Option<&'a dyn Fn(&mut Ui, &str) -> Response>,
     search: bool,
     tip: &'a str,
+    /// See [`FontComboOptions::shown_as`].
+    shown_as: Option<&'a str>,
 }
 
 /// Indices of the `items` matching `query`, ignoring case: exact matches, then the names starting
@@ -208,7 +224,7 @@ struct ComboSearch {
 /// keyboard selection, popup rows with recent and preview sections, an arrow and hint, and
 /// returns the chosen or committed text.
 fn combo_impl(ui: &mut Ui, options: ComboOptions<'_>) -> Option<String> {
-    let ComboOptions { id, width, current, items, recent, preview, search, tip } = options;
+    let ComboOptions { id, width, current, items, recent, preview, search, tip, shown_as } = options;
     let mut out = None;
     let edit_id = ui.scope_id().with(("combo_text", id));
     let te_id = ui.scope_id().with(("combo_edit", id));
@@ -239,14 +255,31 @@ fn combo_impl(ui: &mut Ui, options: ComboOptions<'_>) -> Option<String> {
                 }
             });
         }
-        let te = egui::TextEdit::singleline(&mut text).id(te_id).desired_width(width - 16.0).font(regular(12.0)).margin(vec2(4.0, 3.0));
+        // A font that isn't installed: room at the field's right end for the warning mark.
+        let mark = shown_as.filter(|_| !current.is_empty());
+        let right = if mark.is_some() { 18 } else { 4 };
+        let te = egui::TextEdit::singleline(&mut text).id(te_id).desired_width(width - 16.0).font(regular(12.0)).margin(egui::Margin {
+            left: 4,
+            right,
+            top: 3,
+            bottom: 3,
+        });
         // The arrow's box is painted here, under the field, once its size is known.
         let arrow_bg = ui.painter().add(egui::Shape::Noop);
         let resp = ui.add(te);
+        if mark.is_some() {
+            let r = Rect::from_center_size(pos2(resp.rect.right() - 9.0, resp.rect.center().y), vec2(12.0, 12.0));
+            icons::paint(ui.painter(), r, "fontMissing", t.icon, t.accent);
+        }
+        let notes: Vec<String> = mark.map(|shown| missing_font_tip(current, shown)).into_iter().collect();
         // The field says what it is: without a name a screen reader has only "edit" to say
         // (#3172). The arrow says whose options it opens, as the split buttons' arrow does.
         if !tip.is_empty() {
             resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, ui.is_enabled(), tip));
+        }
+        // The warning mark is drawn, and its note is a hover hint: a screen reader reads it here.
+        if let Some(note) = notes.first() {
+            ui.ctx().accesskit_node_builder(resp.id, |n| n.set_description(note.as_str()));
         }
         keytip_badge(ui, resp.rect, "combo", id);
         focused = resp.has_focus();
@@ -315,8 +348,8 @@ fn combo_impl(ui: &mut Ui, options: ComboOptions<'_>) -> Option<String> {
         // A field only focused by Tab, with nothing typed, still gets its (delayed) keyboard hint.
         let typing = focused && text != current;
         if !tip.is_empty() && !typing && !s.open {
-            show_hint(&resp, tip, &[]);
-            show_hint(&aresp, tip, &[]);
+            show_hint(&resp, tip, &notes);
+            show_hint(&aresp, tip, &notes);
         }
         icons::paint(ui.painter(), Rect::from_center_size(ar.center(), vec2(DROPDOWN, DROPDOWN)), "dropdown", t.icon, t.accent);
         // The list drops from the box's left edge, as in Word, not from the arrow (#535).
