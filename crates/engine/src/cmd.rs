@@ -167,6 +167,9 @@ pub(crate) fn delete_selection_effect(s: &mut Session) -> Result<SelectionDelete
     if a == b {
         return Ok(SelectionDelete { at: a, content_changed: false, state_changed: false });
     }
+    if canvas::selected_member(s).is_some() {
+        return Err(CmdError::Disabled("a shape inside a drawing canvas is selected".into()));
+    }
     controls::check_delete(s, &a, &b)?;
     let effect = if s.doc.settings.track_changes {
         if !track_delete_would_change(s, &a, &b) {
@@ -184,7 +187,9 @@ pub(crate) fn delete_selection_effect(s: &mut Session) -> Result<SelectionDelete
     Ok(effect)
 }
 
-/// Delete the selection (respecting track changes); returns the collapsed position.
+/// Delete the selection (respecting track changes); returns the collapsed position. With a
+/// Drawing Canvas member picked (#2637) the selection is the whole canvas, which a command that
+/// replaces the selection (Insert › Table, Equation, Symbol, Field…) would take away: refused.
 pub fn delete_selection(s: &mut Session) -> Result<Pos, CmdError> {
     delete_selection_effect(s).map(|e| e.at)
 }

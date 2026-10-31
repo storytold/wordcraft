@@ -275,6 +275,8 @@ impl Session {
                 ime_state_exhausted: _,
             pending_ime_application_change: _,
             ime_origin: _,
+            // A picked Drawing Canvas member is cleared by a switch, not kept per document.
+            member: _,
             others: _,
             order: _,
             untitled_count: _,
@@ -375,6 +377,8 @@ impl Session {
         swap(&mut self.widened, widened);
         swap(&mut self.edit_marks, edit_marks);
         swap(&mut self.go_back_step, go_back_step);
+        // A picked Drawing Canvas member (#2637) belongs to the document left behind.
+        self.member = None;
     }
 
     /// Make document `id` active without anything else a switch by the user does.

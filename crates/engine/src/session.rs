@@ -216,6 +216,10 @@ pub struct Session {
     /// More pictures and shapes selected along with the one the selection holds (Shift+click),
     /// for Group. Cleared by any edit or selection change other than adding to it.
     pub also_selected: Vec<Pos>,
+    /// The member of the selected Drawing Canvas picked on its own (#2637), which Shape Format,
+    /// Delete, Copy and the frame act on; see [`crate::cmd::canvas::selected_member`]. Cleared by
+    /// any selection change, caret movement or undo.
+    pub member: Option<crate::cmd::canvas::CanvasMember>,
     /// Column (block) selection, if one was made (see [`Session::column_segments`]).
     pub column: Option<ColumnBlock>,
     /// Column selection mode (Ctrl+Shift+F8): caret movement extends the block.

@@ -78,7 +78,7 @@ fn sample() -> Document {
     p.insert_text(n, " back to top", &CharProps { link: Some("#intro".into()), italic: Some(true), ..Default::default() }).unwrap();
     b.push(para_block(p));
     b.push(para_block(Paragraph::with_text("Details", CharProps::default()).styled("Heading2")));
-    let list = d.numbering.add_list(ListKind::Numbered);
+    let list = Arc::make_mut(&mut d.numbering).add_list(ListKind::Numbered);
     for t in ["alpha item", "beta item"] {
         let mut q = Paragraph::with_text(t, CharProps::default()).styled("ListParagraph");
         q.props.numbering = Some(NumRef { num: list, level: 0 });
@@ -310,7 +310,7 @@ fn deleted_heading_text_stays_out_of_bookmarks_and_tags() {
 fn hidden_heading_text_stays_out_of_bookmarks_and_tags() {
     let mut d = Document::new();
     // Hidden text both directly and through a character style.
-    d.styles.upsert(wordcraft_doc::Style {
+    Arc::make_mut(&mut d.styles).upsert(wordcraft_doc::Style {
         id: "Secret".into(),
         name: "Secret".into(),
         kind: wordcraft_doc::StyleKind::Character,
@@ -421,7 +421,7 @@ fn table_style_hidden_heading_text_stays_out_of_bookmarks_and_tags() {
     // Hidden by the table style's header row, so only the layout's resolution (table conditional
     // formatting under the runs' own) says the text is hidden.
     let mut d = Document::new();
-    d.styles.upsert(wordcraft_doc::Style {
+    Arc::make_mut(&mut d.styles).upsert(wordcraft_doc::Style {
         id: "SecretHeader".into(),
         name: "Secret Header".into(),
         kind: wordcraft_doc::StyleKind::Table,
@@ -1586,7 +1586,7 @@ fn all_caps_and_small_caps_text_extracts_as_displayed() {
     // (as Word's PDFs do), and later text without caps keeps its own case: a capital glyph
     // first drawn for a lowercase letter must not make every later capital read as lowercase.
     let mut d = Document::new();
-    d.styles.upsert(wordcraft_doc::Style {
+    Arc::make_mut(&mut d.styles).upsert(wordcraft_doc::Style {
         id: "CapsPara".into(),
         name: "Caps Para".into(),
         kind: wordcraft_doc::StyleKind::Paragraph,
@@ -1623,14 +1623,14 @@ fn caps_list_labels_extract_as_displayed() {
     // #1473: a lowercase-letter list label in an All Caps paragraph is drawn with capital glyphs;
     // it reads as those capitals, and a later plain capital A still reads as "A".
     let mut d = Document::new();
-    d.styles.upsert(wordcraft_doc::Style {
+    Arc::make_mut(&mut d.styles).upsert(wordcraft_doc::Style {
         id: "CapsPara".into(),
         name: "Caps Para".into(),
         kind: wordcraft_doc::StyleKind::Paragraph,
         chr: CharProps { caps: Some(true), ..Default::default() },
         ..Default::default()
     });
-    let list = d.numbering.add_list(ListKind::Numbered);
+    let list = Arc::make_mut(&mut d.numbering).add_list(ListKind::Numbered);
     let mut item = Paragraph::with_text("item", CharProps::default()).styled("CapsPara");
     item.props.numbering = Some(NumRef { num: list, level: 1 });
     d.body = vec![para_block(item), para_block(Paragraph::with_text("Plain Apple.", CharProps::default()))];
@@ -2030,7 +2030,7 @@ fn metadata_language_overrides_and_fallbacks_are_preserved() {
         ..Default::default()
     };
     for language in [Some("es-CR"), Some("ja"), Some(""), Some("日本語"), None] {
-        d.styles.default_chr.lang = language.map(str::to_owned);
+        Arc::make_mut(&mut d.styles).default_chr.lang = language.map(str::to_owned);
         let bytes = export(&d, &opts).unwrap();
         let raw = String::from_utf8_lossy(&bytes);
         let pdf = hayro_syntax::Pdf::new(bytes.clone()).unwrap();

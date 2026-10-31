@@ -215,7 +215,7 @@ fn rtl_indents_and_alignment_are_measured_from_the_right() {
 #[test]
 fn rtl_list_label_sits_on_the_right() {
     let mut d = doc_of(&[("مورد اول", true), ("مورد دوم", true)]);
-    let id = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+    let id = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
     d.format_paragraphs(&Pos::body(0, 0), &Pos::body(1, 0), &|p: &mut ParaProps| {
         p.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 })
     })
@@ -534,7 +534,7 @@ fn list_label_moves_with_its_text_when_the_paragraph_is_aligned() {
     // margin. In Word the label stays attached to the start of the text, in both directions.
     for (rtl, text) in [(false, "alpha beta"), (true, "مورد اول")] {
         let mut d = doc_of(&[(text, rtl), (text, rtl), (text, rtl), (text, rtl)]);
-        let id = d.numbering.add_list(wordcraft_doc::ListKind::Bullet);
+        let id = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Bullet);
         d.format_paragraphs(&Pos::body(0, 0), &Pos::body(3, 1), &|p: &mut ParaProps| {
             p.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 })
         })
@@ -576,7 +576,7 @@ fn list_label_moves_with_its_text_when_the_paragraph_is_aligned() {
 fn rtl_list_label_mirrors_its_brackets() {
     let mut d = doc_of(&[("סעיף", true)]);
     let lvl = wordcraft_doc::numbering::Level { text: "(%1)".into(), ..Default::default() };
-    let num = d.numbering.try_add_levels(None, vec![lvl]).unwrap();
+    let num = Arc::make_mut(&mut d.numbering).try_add_levels(None, vec![lvl]).unwrap();
     d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p: &mut ParaProps| p.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 }))
         .unwrap();
     let l = lay(&d);
@@ -603,8 +603,8 @@ fn list_label_after_leading_page_break_uses_its_text_lines_alignment() {
                     let make = |page_break: bool| {
                         let contents = if page_break { format!("\u{000C}{text}") } else { text.clone() };
                         let mut d = doc_of(&[("Before", false), (&contents, rtl)]);
-                        let id = d.numbering.add_list(kind);
-                        for a in &mut d.numbering.abstracts {
+                        let id = Arc::make_mut(&mut d.numbering).add_list(kind);
+                        for a in &mut Arc::make_mut(&mut d.numbering).abstracts {
                             let level = a.levels.first_mut().unwrap();
                             level.start = 2;
                             level.indent = 14.2;

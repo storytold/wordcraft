@@ -6,6 +6,7 @@ use super::{
     Block, CharProps, CmdError, CmdResult, Document, FieldCode, InlineObject, Paragraph, Path, Pos, Session, SortKey, StoryRef, TabAlign, TabLeader,
     TabStop, Value, delete_selection, heading_letter, p, sel_result, sort_key,
 };
+use std::sync::Arc;
 
 /// The TOC field for `references.tableOfFigures` (ECMA-376 §17.16.5.68): `\c "<label>"` lists the
 /// captions that label's SEQ field numbers, `\a "<label>"` lists them without their label and
@@ -222,7 +223,7 @@ pub fn update_generated(s: &mut Session) -> Result<(), CmdError> {
 /// layout cache starts over (and the saved file would gain a style it doesn't use).
 fn add_entry_style(s: &mut Session) {
     if s.doc.styles.get(ENTRY_STYLE).is_none() {
-        s.doc.styles.upsert(wordcraft_doc::Style {
+        Arc::make_mut(&mut s.doc.styles).upsert(wordcraft_doc::Style {
             id: ENTRY_STYLE.into(),
             name: "List Entry".into(),
             kind: wordcraft_doc::StyleKind::Paragraph,
