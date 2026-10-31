@@ -1,0 +1,71 @@
+name: Spelling review preview
+
+on:
+  pull_request:
+    paths:
+      - 'crates/ui-egui/src/proofing_pane.rs'
+      - 'crates/ui-egui/src/panes.rs'
+      - 'crates/ui-egui/src/lib.rs'
+      - 'crates/ui-egui/src/window_ui.rs'
+      - 'crates/ui-egui/src/control.rs'
+      - 'crates/ui-egui/src/documents.rs'
+      - 'crates/ui-egui/src/canvas.rs'
+      - 'crates/engine/src/cmd/review.rs'
+      - 'crates/engine/src/cmd/review/**'
+      - 'crates/engine/src/tests/**'
+      - 'crates/ui-egui/src/app.rs'
+      - 'crates/ui-egui/src/app/**'
+      - 'crates/ui-egui/src/canvas/**'
+      - 'crates/ui-egui/src/control/**'
+      - 'crates/ui-egui/src/panes/**'
+      - 'crates/ui-egui/src/dialogs/**'
+      - '.github/workflows/spelling-review.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: spelling-review-preview-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  preview:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install build and software-rendering dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev \
+            libxi-dev libgtk-3-dev libfontconfig1-dev libfreetype-dev libvulkan1 mesa-vulkan-drivers
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+      - name: Formatting
+        id: formatting
+        continue-on-error: true
+        run: cargo fmt --all -- --check
+      - name: Proofing navigation regression
+        run: cargo test --locked -p wordcraft-engine --lib spelling_review_dialog_navigation
+      - name: Correction form regressions
+        run: cargo test --locked -p wordcraft-ui-egui --lib spelling_review_dialog -- --skip preview
+      - name: Render light and dark correction forms
+        run: cargo test --locked -p wordcraft-ui-egui --lib spelling_review_dialog_preview -- --ignored --nocapture
+      - name: Save visual review artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: spelling-review-preview
+          path: crates/ui-egui/spelling-review-*.png
+          if-no-files-found: error
+      - name: Require formatting success
+        if: steps.formatting.outcome != 'success'
+        run: exit 1

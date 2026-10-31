@@ -1058,3 +1058,66 @@ fn rtf_tracked_changes_accept_and_reject_after_opening_and_round_trip() {
         }
     }
 }
+
+#[cfg(test)]
+mod spelling_navigation_tests {
+    use super::*;
+    use wordcraft_doc::{Document, Pos, StoryRef};
+
+    use crate::Selection;
+
+    #[test]
+    fn spelling_review_dialog_navigation_moves_forward_and_wraps_only_when_requested() {
+        for text in ["The brwn fox and brwn dog.", "The brwn fox.\nThe brwn dog."] {
+            let mut s = Session::new(Document::from_text(text));
+            let first = s.run("review.spelling", &json!({"wrap": false})).unwrap();
+            assert_eq!(first["text"], "brwn");
+            let first_selection = s.sel.clone();
+            let second = s.run("review.spelling", &json!({"wrap": false})).unwrap();
+            assert_eq!(second["text"], "brwn");
+            assert_ne!(s.sel, first_selection);
+            assert_eq!(s.run("review.spelling", &json!({"wrap": false})).unwrap()["done"], true);
+            assert_eq!(s.run("review.spelling", &json!({})).unwrap()["start"], first["start"]);
+        }
+    }
+    #[test]
+    fn spelling_review_dialog_navigation_resolves_selected_spelling_before_overlapping_grammar() {
+        for reverse in [false, true] {
+            let mut s = Session::new(Document::from_text("A sentense sentense."));
+            s.sel = Selection::caret(Pos::body(0, 11));
+            let selected = s.run("review.spelling", &json!({"wrap": false})).unwrap();
+            assert_eq!(selected["kind"], "spelling");
+            assert_eq!(selected["start"]["off"], 11);
+            assert_eq!(selected["text"], "sentense");
+            let issues = s.run("review.issues", &json!({})).unwrap();
+            assert!(issues.as_array().unwrap().iter().any(|i| i["kind"] == "grammar" && i["text"] == "sentense sentense"));
+            if reverse {
+                std::mem::swap(&mut s.sel.anchor, &mut s.sel.focus);
+            }
+            assert_eq!(s.run("review.suggestions", &json!({})).unwrap(), selected);
+            let before_lookup = s.sel.clone();
+            let focus = s.sel.focus.off;
+            let explicit = s.run("review.suggestions", &json!({"pos": {"block": 0, "off": focus}})).unwrap();
+            assert_eq!(explicit["kind"], "grammar", "an explicit focus is a point lookup in either selection direction");
+            assert_eq!(explicit["text"], "sentense sentense");
+            assert_eq!(explicit["start"]["off"], 2);
+            assert_eq!(explicit["end"]["off"], 19);
+            assert_eq!(s.sel, before_lookup, "suggestion lookups do not move the selection");
+            for pos in [serde_json::Value::Null, json!({"off": "invalid"})] {
+                assert_eq!(
+                    s.run("review.suggestions", &json!({"pos": pos})).unwrap(),
+                    selected,
+                    "unparseable positions preserve implicit selection lookup"
+                );
+            }
+            assert_eq!(s.run("review.suggestions", &json!({})).unwrap(), selected);
+            let elsewhere = s.run("review.suggestions", &json!({"pos": {"block": 0, "off": 5}})).unwrap();
+            assert_eq!(elsewhere["kind"], "spelling");
+            assert_eq!(elsewhere["start"]["off"], 2, "an explicit other position keeps point lookup");
+            s.run("review.applySuggestion", &json!({"text": "sentence"})).unwrap();
+            assert_eq!(s.doc.plain_text(StoryRef::Body), "A sentense sentence.");
+            s.run("edit.undo", &json!({})).unwrap();
+            assert_eq!(s.doc.plain_text(StoryRef::Body), "A sentense sentense.");
+        }
+    }
+}
