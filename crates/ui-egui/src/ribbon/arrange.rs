@@ -90,9 +90,16 @@ pub(super) fn rotation_field(ui: &mut Ui, app: &mut WordApp) {
     }
 }
 
+/// The command the Group menu button follows: Ungroup while a group is selected (Group is off
+/// then, as one object has nothing to group), Group otherwise (#4229).
+pub(super) fn group_menu_command(app: &WordApp) -> &'static str {
+    if crate::widgets::enabled(app, "arrange.ungroup") { "arrange.ungroup" } else { "arrange.group" }
+}
+
 /// Arrange › Group: Group (Shift+click objects to select several) and Ungroup.
 pub(super) fn group_menu(ui: &mut Ui, app: &mut WordApp, label: Option<&str>) {
-    menu_button(ui, app, crate::widgets::MenuButtonOptions::new("group", label, "Group", false, "arrange.group"), |ui, app| {
+    let id = group_menu_command(app);
+    menu_button(ui, app, crate::widgets::MenuButtonOptions::new("group", label, "Group", false, id), |ui, app| {
         mi(ui, app, "Group", "arrange.group", json!({}));
         mi(ui, app, "Ungroup", "arrange.ungroup", json!({}));
     });
