@@ -443,8 +443,7 @@ impl Document {
         Ok(id)
     }
 
-    /// Count words like Word's status bar (whitespace-separated tokens containing a letter or digit,
-    /// including generated numbered-list labels).
+    /// Count words like Word's status bar ([`crate::count_words`], plus generated numbered-list labels).
     pub fn word_count(&self) -> usize {
         self.story_word_count(StoryRef::Body)
     }
@@ -795,7 +794,9 @@ impl Document {
                 p.kind = "lpwstr".into();
                 p.value = value.to_string();
             }
-            None => self.custom_props.push(CustomProp { name: name.to_string(), kind: "lpwstr".into(), value: value.to_string() }),
+            None => {
+                self.custom_props.push(CustomProp { name: name.to_string(), kind: "lpwstr".into(), value: value.to_string(), ..Default::default() })
+            }
         }
     }
 
