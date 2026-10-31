@@ -7,7 +7,7 @@ use wordcraft_doc::props::TextDirection;
 use wordcraft_doc::{Document, Path, Pos, StoryRef};
 use wordcraft_geom::{Point, Rect};
 
-use crate::para::{PARA_MARK_WIDTH, ParaLayout};
+use crate::para::{LineEnd, PARA_MARK_WIDTH, ParaLayout};
 use crate::{DocLayout, Page, Placed};
 
 /// Caret geometry on a page: a bar from (`x`, `top`) to (`x + width`, `top + height`). It is
@@ -624,6 +624,17 @@ impl DocLayout {
             let base = top + (l.baseline - l.top);
             let ctop = (base - asc).max(top);
             let r = crate::turn_rect(*turn, *x, *y, Rect::new(cx, ctop, 0.0, (base + desc - ctop).max(4.0)));
+            // The empty last line after a page break that ends the paragraph is kept on the
+            // break's page (its mark shows there), but text typed there starts the next page:
+            // the caret is drawn where it will appear, at the top of the next page's body (Word).
+            let after_break = li > *l0 && li + 1 == para.lines.len() && para.lines.get(li - 1).is_some_and(|p| p.end == LineEnd::PageBreak);
+            if after_break
+                && *turn == TextDirection::Horizontal
+                && let (Some(here), Some(next)) = (self.pages.get(pi), self.pages.get(pi + 1))
+            {
+                let x = r.x + (next.body.x - here.body.x);
+                return Some(Caret { page: pi + 1, x, top: next.body.y + (ctop - top), height: r.h, width: r.w });
+            }
             return Some(Caret { page: pi, x: r.x, top: r.y, height: r.h, width: r.w });
         }
         None
