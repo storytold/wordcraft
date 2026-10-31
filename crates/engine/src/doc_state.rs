@@ -129,6 +129,8 @@ pub(super) struct Undo {
     /// The column block or whole cells the selection was (undoing brings the selection back as
     /// it was).
     pub(super) column: Option<ColumnBlock>,
+    /// The equation being edited and the caret in it, so Undo puts the caret back too.
+    pub(super) math: Option<(Pos, wordcraft_doc::math_edit::MathPos)>,
 }
 
 /// The number of edit locations Go Back cycles through (Word: four).

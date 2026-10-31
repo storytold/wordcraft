@@ -295,11 +295,24 @@ fn current(s: &Session) -> Result<MathEdit, CmdError> {
     s.math.clone().ok_or_else(|| CmdError::Disabled("not editing an equation".into()))
 }
 
+/// Rewrites of one `equation.type` that get an undo step each; Undo past them returns to the
+/// state before the command, so hostile input can't flood the undo history.
+const MAX_REWRITE_STEPS: usize = 16;
+
+/// Adds a rewrite, dropping the oldest past `MAX_REWRITE_STEPS`.
+fn push_capped(rewrites: &mut Vec<(Arg, MathPos, usize)>, rewrite: (Arg, MathPos, usize)) {
+    if rewrites.len() == MAX_REWRITE_STEPS {
+        rewrites.remove(0);
+    }
+    rewrites.push(rewrite);
+}
+
 /// Caps typing at `MAX_EQUATION_TYPE_CHARS`; empty text is a classified no-op. Linear form
 /// inserts literal runs, while built-up form applies AutoCorrect and build-up before spaces and
-/// relational characters.
+/// relational characters. Each rewrite (up to `MAX_REWRITE_STEPS`, the newest) gets an undo step
+/// holding the text as typed from it on, so Undo takes back one build-up at a time, as Word does.
 fn type_text(s: &mut Session, v: &Value) -> CmdResult {
-    let text = p::req_str(v, "text")?.to_string();
+    let text: String = p::req_str(v, "text")?.chars().take(crate::MAX_EQUATION_TYPE_CHARS).collect();
     let m = current(s)?;
     if text.is_empty() {
         // No normalization, no linear-cache rewrite, no revision: an empty commit is a no-op.
@@ -310,30 +323,37 @@ fn type_text(s: &mut Session, v: &Value) -> CmdResult {
     let style = TypeStyle { nor: s.math_normal_text };
     let mut pos = m.pos.clone();
     let mut transformed = false;
+    // The equation and caret just before each rewrite, and where its trigger is in `text`.
+    let mut rewrites: Vec<(Arg, MathPos, usize)> = Vec::new();
     let (_, effect) = with_eq(s, &m.at, |math, _| {
         if math.linear {
             // Linear form is plain text: no build-up.
-            let text: String = text.chars().take(crate::MAX_EQUATION_TYPE_CHARS).collect();
             pos = me::insert_text(&mut math.nodes, &pos, &text, TypeStyle::default());
             set_literal(&mut math.nodes);
             return;
         }
-        for c in text.chars().take(crate::MAX_EQUATION_TYPE_CHARS) {
+        for (i, c) in text.char_indices() {
             let rel = matches!(wordcraft_doc::math::math_class(c), wordcraft_doc::math::MClass::Rel);
             if !style.nor && (c == ' ' || c == '\t' || rel) {
-                let mut changed = false;
-                if let Some(p) = me::autocorrect(&mut math.nodes, &pos) {
+                let (before_nodes, before) = (math.nodes.clone(), pos.clone());
+                let corrected = me::autocorrect(&mut math.nodes, &pos).map(|p| {
                     pos = p;
-                    changed = true;
+                    (math.nodes.clone(), pos.clone())
+                });
+                let built = me::build_up(&mut math.nodes, &pos, latex);
+                if let Some(p) = &built {
+                    pos = p.clone();
                 }
-                if let Some(p) = me::build_up(&mut math.nodes, &pos, latex) {
-                    pos = p;
-                    changed = true;
-                }
-                if changed {
+                if corrected.is_some() || built.is_some() {
                     transformed = true;
-                }
-                if c == ' ' && changed {
+                    push_capped(&mut rewrites, (before_nodes, before, i));
+                    // AutoCorrect and a build-up on one trigger are two steps.
+                    if let (Some((nodes, p)), Some(_)) = (corrected, &built) {
+                        push_capped(&mut rewrites, (nodes, p, i));
+                    }
+                    if c != ' ' {
+                        pos = me::insert_text(&mut math.nodes, &pos, &c.to_string(), style);
+                    }
                     continue;
                 }
             }
@@ -342,6 +362,20 @@ fn type_text(s: &mut Session, v: &Value) -> CmdResult {
     })?;
     if let Some(m) = s.math.as_mut() {
         m.pos = pos;
+    }
+    // Oldest first, so Undo meets the newest rewrite first. Each keeps the rest of the text as typed.
+    for (mut nodes, before, i) in rewrites {
+        let p = me::insert_text(&mut nodes, &before, text.get(i..).unwrap_or_default(), style);
+        let mut doc = s.doc.clone();
+        if let Ok(para) = doc.para_mut(m.at.story, &m.at.path)
+            && let Some(InlineObject::Equation { linear, math, .. }) = para.object_at_mut(m.at.off)
+        {
+            *linear = to_linear(&nodes);
+            math.nodes = nodes;
+            para.touch();
+            let sel = s.sel.clone();
+            s.push_math_undo("Build Up", doc, sel, p);
+        }
     }
     apply_effect(s, effect, transformed);
     result(s)
