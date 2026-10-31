@@ -1013,6 +1013,88 @@ fn selection_bar_of_a_right_to_left_paragraph_is_on_the_right() {
     assert!(h.state().session.sel.is_collapsed(), "a click in the left margin beside it is a caret, not a line");
 }
 
+/// #4114: the pointer is the arrow on the workspace beside the page, on both sides, and the
+/// I-beam over the page itself.
+#[test]
+fn the_pointer_is_an_arrow_beside_the_page_and_an_i_beam_on_it() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("text.insert", json!({"text": "Hello WordCraft"})).unwrap();
+    a.run("view.commentsPane", json!({"value": false})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    let page = h.state().canvas.page_rects[0];
+    let y = page.center().y;
+    let on_page = pos2(page.center().x, y);
+    let (left, right) = (pos2(page.min.x - 24.0, y), pos2(page.max.x + 24.0, y));
+    assert!(left.x > 0.0 && right.x < 1440.0, "room beside the page: {left:?} {right:?}");
+    // Where the I-beam is drawn (Windows, #1746) the system pointer over the page is hidden.
+    let ibeam = if h.state().canvas.drawn_ibeam { egui::CursorIcon::None } else { egui::CursorIcon::Text };
+    let mut pointer = |at: Pos2| {
+        h.event(egui::Event::PointerMoved(at));
+        h.step();
+        h.output().platform_output.cursor_icon
+    };
+    assert_eq!(pointer(on_page), ibeam, "on the page");
+    assert_eq!(pointer(left), egui::CursorIcon::Default, "beside the page on the left");
+    assert_eq!(pointer(on_page), ibeam, "back on the page");
+    assert_eq!(pointer(right), egui::CursorIcon::Default, "beside the page on the right");
+}
+
+/// #4114 review: a drag keeps the I-beam off the page only when it started on the page; one that
+/// starts in the workspace beside it and stays there keeps the arrow.
+#[test]
+fn a_drag_keeps_the_i_beam_only_when_it_started_on_the_page() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("text.insert", json!({"text": "Hello WordCraft"})).unwrap();
+    a.run("view.commentsPane", json!({"value": false})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    let page = h.state().canvas.page_rects[0];
+    let y = page.center().y;
+    let on_page = pos2(page.center().x, y);
+    let (left, further_left) = (pos2(page.min.x - 24.0, y), pos2(page.min.x - 48.0, y));
+    // Where the I-beam is drawn (Windows, #1746) the system pointer over the page is hidden.
+    let ibeam = if h.state().canvas.drawn_ibeam { egui::CursorIcon::None } else { egui::CursorIcon::Text };
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+    let cursor_after = |h: &mut egui_kittest::Harness<'_, WordApp>, to: Pos2| {
+        h.event(egui::Event::PointerMoved(to));
+        for _ in 0..2 {
+            h.step();
+        }
+        h.output().platform_output.cursor_icon
+    };
+    // Pressed beside the page and dragged along it: still the arrow.
+    cursor_after(&mut h, left);
+    h.event(button(left, true));
+    h.step();
+    assert_eq!(cursor_after(&mut h, further_left), egui::CursorIcon::Default, "a drag that started in the workspace");
+    h.event(button(further_left, false));
+    h.step();
+    // Pressed on the page and dragged off it: the I-beam stays.
+    cursor_after(&mut h, on_page);
+    h.event(button(on_page, true));
+    h.step();
+    assert_eq!(cursor_after(&mut h, further_left), ibeam, "a drag that started on the page");
+}
+
 /// #3453: while the Format Painter is armed the pointer over the text says so, and it goes
 /// back once the painter is off. The selection bar keeps its arrow while it is armed.
 #[test]
