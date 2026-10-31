@@ -4,7 +4,10 @@ use super::justify::{HYPHENATION_ZONE, hyphen_glyph, shrink_line_spaces, space_r
 use super::model::{ClKind, Cluster, Line, LineEnd, ParaEnv};
 use super::paragraph::word_widths;
 use super::tabs::{next_tab, pl_text_at, ptab_stop, resolve_tab};
-use super::{Align, Arc, Level, LevelSuffix, LineSpacing, MathJc, ParaLayout, TabAlign, TabLeader, TabStop, VecDeque, WrapText};
+use super::{
+    Align, Arc, COLUMN_BREAK, LINE_BREAK, Level, LevelSuffix, LineSpacing, MathJc, OBJ, PAGE_BREAK, ParaLayout, Paragraph, TabAlign, TabLeader,
+    TabStop, VecDeque, WrapText,
+};
 
 /// Narrow cells and float spans must retain their usable width.
 const MIN_LINE_WIDTH: f32 = 1.0;
@@ -12,6 +15,9 @@ const MIN_LINE_WIDTH: f32 = 1.0;
 /// What a paragraph's lines are broken with: the paragraph's measures and the state the lines
 /// are broken in, from one to the next.
 struct Breaker<'e> {
+    p: &'e Paragraph,
+    has_thai: bool,
+    thai_justify_after: &'e [usize],
     level: Option<&'e Level>,
     rp: wordcraft_doc::resolve::ResolvedPara,
     mark_style: u32,
@@ -79,6 +85,7 @@ struct Scan {
     leaders: Vec<(usize, TabLeader)>,
     /// Cluster index after which we may break.
     last_break: Option<usize>,
+    last_emergency_break: Option<usize>,
     /// The last non-hyphen break and the x after it.
     last_plain: Option<(usize, f32)>,
     /// Where the space before the current word starts.
@@ -143,13 +150,171 @@ fn mirrored_exclusions(exclusions: &[Exclusion], width: f32) -> Vec<Exclusion> {
         .collect()
 }
 
+const THAI_JUSTIFY_SPACE_MAX_EM: f32 = 0.5;
+const THAI_JUSTIFY_GROUP_MAX_EM: f32 = 0.15;
+
+fn capped_equal_spacing(slack: f32, caps: &[f32]) -> Vec<f32> {
+    let mut added = vec![0.0; caps.len()];
+    let mut active: Vec<usize> = caps.iter().enumerate().filter_map(|(i, cap)| (cap.is_finite() && *cap > 0.0).then_some(i)).collect();
+    let mut remaining = if slack.is_finite() { slack.max(0.0) } else { 0.0 };
+    while remaining > 0.0001 && !active.is_empty() {
+        let share = remaining / active.len() as f32;
+        let saturated: Vec<usize> = active
+            .iter()
+            .copied()
+            .filter(|i| caps.get(*i).copied().unwrap_or(0.0) - added.get(*i).copied().unwrap_or(0.0) <= share + 0.0001)
+            .collect();
+        if saturated.is_empty() {
+            for i in &active {
+                if let Some(v) = added.get_mut(*i) {
+                    *v += share;
+                }
+            }
+            break;
+        }
+        for i in &saturated {
+            if let Some(v) = added.get_mut(*i) {
+                let room = (caps.get(*i).copied().unwrap_or(0.0) - *v).max(0.0);
+                *v += room;
+                remaining = (remaining - room).max(0.0);
+            }
+        }
+        active.retain(|i| !saturated.contains(i));
+    }
+    added
+}
+
+fn style_size(pl: &ParaLayout, cluster: usize) -> f32 {
+    pl.clusters.get(cluster).and_then(|c| pl.styles.get(c.style as usize)).map(|s| s.size).filter(|s| s.is_finite() && *s > 0.0).unwrap_or(12.0)
+}
+
+pub(super) fn text_cluster_source<'a>(p: &'a Paragraph, c: &Cluster) -> Option<&'a str> {
+    if c.kind != ClKind::Text {
+        return None;
+    }
+    let text = p.text.get(c.start..c.end)?;
+    (!text.chars().any(|ch| matches!(ch, OBJ | LINE_BREAK | PAGE_BREAK | COLUMN_BREAK | '\t'))).then_some(text)
+}
+
+/// Select the sorted Thai gap indices wholly inside the line's justified content.
+fn line_thai_groups(indices: &[usize], c0: usize, c1: usize, align_from: usize) -> &[usize] {
+    let start = indices.partition_point(|&k| {
+        crate::work::steps(1);
+        k < c0.max(align_from)
+    });
+    let end = indices.partition_point(|&k| {
+        crate::work::steps(1);
+        k.saturating_add(1) < c1
+    });
+    indices.get(start..end).unwrap_or(&[])
+}
+
+fn space_text_neighbors(pl: &ParaLayout, p: &Paragraph, k: usize, c0: usize, c1: usize) -> Option<(usize, usize)> {
+    if pl.clusters.get(k)?.kind != ClKind::Space {
+        return None;
+    }
+    let mut left = k;
+    let left_text = loop {
+        left = left.checked_sub(1)?;
+        if left < c0 {
+            return None;
+        }
+        let c = pl.clusters.get(left)?;
+        if c.kind == ClKind::Space {
+            continue;
+        }
+        if c.kind == ClKind::Marker {
+            continue;
+        }
+        break text_cluster_source(p, c)?;
+    };
+    let mut right = k;
+    let right_text = loop {
+        right += 1;
+        if right >= c1 {
+            return None;
+        }
+        let c = pl.clusters.get(right)?;
+        if c.kind == ClKind::Space {
+            continue;
+        }
+        if c.kind == ClKind::Marker {
+            continue;
+        }
+        break text_cluster_source(p, c)?;
+    };
+    (!left_text.is_empty() && !right_text.is_empty()).then_some((left, right))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_thai_justification(
+    pl: &ParaLayout,
+    p: &Paragraph,
+    xs: &mut [f32],
+    c0: usize,
+    c1: usize,
+    align_from: usize,
+    content_end: f32,
+    slack: f32,
+    thai_justify_after: &[usize],
+) {
+    let mut increments = vec![0.0f32; c1.saturating_sub(c0)];
+    let space_indices: Vec<usize> = (align_from..c1)
+        .filter(|k| {
+            pl.clusters.get(*k).is_some_and(|c| c.kind == ClKind::Space)
+                && xs.get(k - c0).copied().unwrap_or(f32::MAX) < content_end - 0.01
+                && space_text_neighbors(pl, p, *k, c0, c1).is_some()
+        })
+        .collect();
+    let space_caps: Vec<f32> = space_indices
+        .iter()
+        .map(|k| {
+            let (left, right) = space_text_neighbors(pl, p, *k, c0, c1).unwrap_or((*k, *k));
+            THAI_JUSTIFY_SPACE_MAX_EM * style_size(pl, left).min(style_size(pl, right))
+        })
+        .collect();
+    let space_added = capped_equal_spacing(slack, &space_caps);
+    let mut remaining = slack.max(0.0);
+    for (k, add) in space_indices.iter().zip(space_added) {
+        if let Some(slot) = increments.get_mut(k - c0) {
+            *slot += add;
+        }
+        remaining = (remaining - add).max(0.0);
+    }
+
+    let group_indices = line_thai_groups(thai_justify_after, c0, c1, align_from);
+    let group_caps: Vec<f32> = group_indices.iter().map(|k| THAI_JUSTIFY_GROUP_MAX_EM * style_size(pl, *k).min(style_size(pl, k + 1))).collect();
+    for (k, add) in group_indices.iter().zip(capped_equal_spacing(remaining, &group_caps)) {
+        if let Some(slot) = increments.get_mut(k - c0) {
+            *slot += add;
+        }
+    }
+
+    let mut extra = 0.0;
+    for (i, x) in xs.iter_mut().take(c1.saturating_sub(c0)).enumerate() {
+        *x += extra;
+        extra += increments.get(i).copied().unwrap_or(0.0);
+    }
+    if let Some(end) = xs.get_mut(c1.saturating_sub(c0)) {
+        *end += extra;
+    }
+}
+
 /// Break a paragraph into lines, measure each line, apply the paragraph's alignment and place
 /// the list label. Fills `pl.lines`, `pl.height` and the label's position.
-pub(super) fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Option<&Level>) {
+pub(super) fn break_lines<'e>(
+    pl: &mut ParaLayout,
+    p: &'e Paragraph,
+    env: &'e ParaEnv<'e>,
+    mark_style: u32,
+    level: Option<&'e Level>,
+    has_thai: bool,
+    thai_justify_after: &'e [usize],
+) {
     let width = env.width.max(MIN_LINE_WIDTH);
     let mirrored = pl.rp.bidi.then(|| mirrored_exclusions(env.exclusions, width));
     let exclusions = mirrored.as_deref().unwrap_or(env.exclusions);
-    let mut bk = Breaker::new(pl, (env, exclusions), mark_style, level);
+    let mut bk = Breaker::new(pl, p, (env, exclusions), mark_style, level, has_thai, thai_justify_after);
     loop {
         let mut sc = bk.begin_line(pl);
         sc.scan(&mut bk, pl);
@@ -166,7 +331,15 @@ pub(super) fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, l
 }
 
 impl<'e> Breaker<'e> {
-    fn new(pl: &ParaLayout, (env, exclusions): (&'e ParaEnv<'e>, &'e [Exclusion]), mark_style: u32, level: Option<&'e Level>) -> Self {
+    fn new(
+        pl: &ParaLayout,
+        p: &'e Paragraph,
+        (env, exclusions): (&'e ParaEnv<'e>, &'e [Exclusion]),
+        mark_style: u32,
+        level: Option<&'e Level>,
+        has_thai: bool,
+        thai_justify_after: &'e [usize],
+    ) -> Self {
         let rp = pl.rp.clone();
         let width = env.width.max(MIN_LINE_WIDTH);
         let settings = &env.doc.settings;
@@ -177,6 +350,9 @@ impl<'e> Breaker<'e> {
             .unwrap_or(14.0)
             .max(1.0);
         Breaker {
+            p,
+            has_thai,
+            thai_justify_after,
             level,
             mark_style,
             exclusions,
@@ -186,7 +362,7 @@ impl<'e> Breaker<'e> {
             first_left: rp.indent_left + rp.indent_first,
             default_tab: settings.default_tab,
             hanging_at: if rp.indent_first < 0.0 { Some(rp.indent_left) } else { None },
-            shrink_spaces: rp.align == Align::Justify && settings.compat_mode >= wordcraft_doc::COMPAT_MODE_CURRENT,
+            shrink_spaces: matches!(rp.align, Align::Justify | Align::ThaiDistribute) && settings.compat_mode >= wordcraft_doc::COMPAT_MODE_CURRENT,
             expand_break: !settings.do_not_expand_shift_return,
             zone: Some(settings.hyphenation_zone).filter(|z| z.is_finite() && *z >= 0.0).unwrap_or(HYPHENATION_ZONE).min(1584.0),
             hyph_limit: settings.consecutive_hyphen_limit as usize,
@@ -270,6 +446,7 @@ impl<'e> Breaker<'e> {
             xs: Vec::new(),
             leaders: Vec::new(),
             last_break: None,
+            last_emergency_break: None,
             last_plain: None,
             word_from: left,
             hyph_ok: self.hyph_limit == 0 || self.lines.iter().rev().take_while(|l| l.hyphen.is_some()).count() < self.hyph_limit,
@@ -523,13 +700,24 @@ impl<'e> Breaker<'e> {
         }
         // A line ending in a manual line break is stretched too, unless `doNotExpandShiftReturn` says not to.
         let stretch_end = sc.end == LineEnd::Wrap || (sc.end == LineEnd::LineBreak && self.expand_break);
-        let justify = display.is_none() && ((rp.align == Align::Justify && stretch_end) || rp.align == Align::Distribute);
+        let line_has_thai = self.has_thai
+            && pl.clusters.get(c0..c1).is_some_and(|clusters| {
+                clusters.iter().any(|c| text_cluster_source(self.p, c).is_some_and(|t| t.chars().any(crate::kinsoku::is_thai_text_char)))
+            });
+        let justify = display.is_none()
+            && ((rp.align == Align::Justify && stretch_end && (!line_has_thai || sc.end == LineEnd::Wrap))
+                || (rp.align == Align::ThaiDistribute && sc.end == LineEnd::Wrap)
+                || rp.align == Align::Distribute);
         // A line that only fits with shrunk spaces is shrunk, the last line of the paragraph too.
         let shrink = display.is_none() && self.shrink_spaces && slack < 0.0 && last_tab.is_none();
         if shrink {
             shrink_line_spaces(pl, &mut sc.xs, c0, c1, content_end, slack);
         } else if justify && slack > 0.0 {
-            justify_line(pl, &mut sc.xs, (c0, c1, align_from), (content_end, slack), rp.align == Align::Distribute);
+            if line_has_thai && matches!(rp.align, Align::Justify | Align::ThaiDistribute) {
+                apply_thai_justification(pl, self.p, &mut sc.xs, c0, c1, align_from, content_end, slack, self.thai_justify_after);
+            } else {
+                justify_line(pl, &mut sc.xs, (c0, c1, align_from), (content_end, slack), rp.align == Align::Distribute);
+            }
         }
     }
 
@@ -818,12 +1006,14 @@ impl Scan {
             || self.x + advance - pl.auto_space_after(j) <= self.right_edge + shrink + 0.01
             || c.kind == ClKind::Space
             || c.kind == ClKind::Marker;
-        if !fits && pl.is_edit_boundary(c.start) && (c0..j).any(|k| pl.clusters.get(k).is_some_and(takes_room)) {
-            self.wrap(bk, pl);
+        if !fits && pl.is_edit_boundary(c.start) && (c0..j).any(|k| pl.clusters.get(k).is_some_and(takes_room)) && self.wrap(bk, pl) {
             return true;
         }
         self.xs.push(self.x);
         self.x += c.adv;
+        if c.emergency_break_after && !pl.clusters.get(j + 1).is_some_and(|next| next.kind == ClKind::Text && next.g1 <= next.g0) {
+            self.last_emergency_break = Some(j);
+        }
         if c.kind == ClKind::Space {
             self.space_w += c.adv;
         }
@@ -892,7 +1082,7 @@ impl Scan {
     }
 
     /// The cluster at `j` doesn't fit: wrap, backing up to the last break opportunity on the line.
-    fn wrap(&mut self, bk: &mut Breaker, pl: &ParaLayout) {
+    fn wrap(&mut self, bk: &mut Breaker, pl: &ParaLayout) -> bool {
         let c0 = self.c0;
         self.end = LineEnd::Wrap;
         // Hyphenate only when the plain break leaves more than the hyphenation zone empty.
@@ -911,8 +1101,9 @@ impl Scan {
             // Recompute x for the kept clusters.
             self.x = self.xs.last().copied().unwrap_or(self.line_start_x) + pl.clusters.get(b).map(|c| c.adv).unwrap_or(0.0);
         } else {
-            self.break_long_word(bk, pl);
+            return self.break_long_word(bk, pl);
         }
+        true
     }
 
     /// The text after a right, centre or decimal tab doesn't fit: like Word, the tab goes to the
@@ -932,10 +1123,23 @@ impl Scan {
     /// No opportunity to break: break here (a long word), unless the span is beside a floating
     /// object and the word fits the full line; then it tries the row's next span, or the next row.
     /// The word runs to the next break that isn't a hyphenation point.
-    fn break_long_word(&mut self, bk: &Breaker, pl: &ParaLayout) {
+    fn break_long_word(&mut self, bk: &Breaker, pl: &ParaLayout) -> bool {
         let (c0, j) = (self.c0, self.j);
         let full = bk.base_right - self.row_lo;
         self.skip = self.narrowed && bk.skipped < 50 && bk.widths.get(c0).is_some_and(|w| *w <= full + 0.01);
+        if self.skip {
+            return true;
+        }
+        if bk.has_thai {
+            if let Some(b) = self.last_emergency_break.filter(|b| *b >= c0) {
+                self.xs.truncate(b + 1 - c0);
+                self.j = b + 1;
+                self.x = self.xs.last().copied().unwrap_or(self.line_start_x) + pl.clusters.get(b).map(|c| c.adv).unwrap_or(0.0);
+                return true;
+            }
+            self.end = LineEnd::Para;
+            return false;
+        }
         // Never split a ligature's letters or a grapheme's drawing segments across
         // lines: back up to their first segment (unless it starts the line).
         let glyphless = |k: usize| pl.clusters.get(k).is_some_and(|c| c.kind == ClKind::Text && c.g1 <= c.g0);
@@ -955,6 +1159,7 @@ impl Scan {
             self.x = bx;
             self.j = b;
         }
+        true
     }
 }
 
@@ -1021,4 +1226,29 @@ fn row_spans(exclusions: &[Exclusion], top: f32, h: f32, table_h: f32, lo: f32, 
         return Err(taken.iter().map(|t| t.2).reduce(f32::min).unwrap_or(top));
     }
     Ok(spans.into())
+}
+
+#[cfg(test)]
+mod thai_group_tests {
+    use super::line_thai_groups;
+
+    #[test]
+    fn sorted_gaps_are_restricted_to_the_current_line_and_after_tabs() {
+        let gaps: Vec<usize> = (0..100_000).step_by(2).collect();
+        let mut total = 0;
+        let comparisons = crate::work::count(|| {
+            for start in (0..100_000).step_by(100) {
+                let end = start + 100;
+                let selected = line_thai_groups(&gaps, start, end, start + 10);
+                let expected: Vec<usize> = (start + 10..end - 1).step_by(2).collect();
+                assert_eq!(selected, expected);
+                total += selected.len();
+            }
+        });
+        assert_eq!(total, 45_000);
+        assert!(comparisons < 40_000, "line lookup took {comparisons} comparisons");
+        assert!(line_thai_groups(&gaps, 100, 100, 100).is_empty());
+        assert!(line_thai_groups(&gaps, 100, 120, 120).is_empty());
+        assert!(line_thai_groups(&[], 0, 20, 0).is_empty());
+    }
 }

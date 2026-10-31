@@ -544,6 +544,24 @@ fn paragraph_dialog_shows_direction_and_visual_alignment() {
 }
 
 #[test]
+fn paragraph_dialog_round_trips_thai_distributed_alignment() {
+    let mut app = app_with("ภาษาไทย");
+    let _ = app.run("para.align", json!({"value": "thaiDistribute"}));
+    let Some(Dialog::Paragraph { align, .. }) = Dialog::open("paragraph", &mut app) else { panic!("no paragraph dialog") };
+    assert_eq!(align, "thaiDistribute", "the dialog uses the command's canonical alignment key");
+    ok_unchanged(&mut app);
+    assert_eq!(para_props(&app, 0).align, Some(wordcraft_doc::props::Align::ThaiDistribute));
+
+    let mut app = app_with("ภาษาไทย");
+    let Some(mut dialog) = Dialog::open("paragraph", &mut app) else { panic!("no paragraph dialog") };
+    if let Dialog::Paragraph { align, .. } = &mut dialog {
+        *align = "thaiDistribute".into();
+    }
+    apply_paragraph(&mut app, &dialog);
+    assert_eq!(para_props(&app, 0).align, Some(wordcraft_doc::props::Align::ThaiDistribute), "para.set accepts the dialog's Thai alignment key");
+}
+
+#[test]
 fn paragraph_dialog_ok_keeps_what_it_shows() {
     for (rtl, align) in [(false, "para.alignCenter"), (false, "para.alignRight"), (true, "para.alignLeft"), (true, "para.alignRight")] {
         let mut app = app_with("متن");

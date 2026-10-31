@@ -303,6 +303,21 @@ fn odt_round_trip() {
 }
 
 #[test]
+fn thai_distributed_exports_as_justify_without_claiming_round_trip_support() {
+    let mut d = Document::from_text("ไทย alignment");
+    if let Some(Block::Para(p)) = d.body.get_mut(0).map(Arc::make_mut) {
+        p.props.align = Some(Align::ThaiDistribute);
+    }
+
+    for ext in ["html", "rtf", "odt"] {
+        let bytes = export(ext, &d).expect("handled").expect("export");
+        let back = import(ext, &bytes).expect("handled").expect("import");
+        let para = back.body.first().and_then(|b| b.as_para()).expect("paragraph");
+        assert_eq!(para.props.align, Some(Align::Justify), "{ext} falls back to regular Justify");
+    }
+}
+
+#[test]
 fn latex_round_trip() {
     check_round_trip("tex", true);
     let tex = String::from_utf8(export("tex", &sample()).unwrap().unwrap()).unwrap();

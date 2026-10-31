@@ -218,8 +218,9 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 - 2026-10-15: Find opens Navigation on Results; editing the query restores Results after manual Headings/Pages navigation. Typed and selected-text searches retain document contents (#2096).
 
 | Date | What landed |
-| 2026-10-28 | **Arabic diacritic editing (#4757):** Backspace removes the last stored Arabic combining mark, so its base letter can stay while the mark is replaced. Caret movement and forward Delete keep their cluster rules. Synthetic command, history, protection and native/DOCX fresh-reopen checks; no native Word comparison or readiness change. |
+| 2026-10-29 | Thai justification review follow-up: bookmark/comment markers no longer hide adjacent spaces from capped spacing; explicit-break regressions cover both Thai Justify and Thai Distributed. Layout regression passed. |
 | 2026-10-29 | Insert › Shapes shows the basic shapes as a grid of code-drawn icon tiles, each with an accessible name and tooltip, instead of a text list (#4349) |
+| 2026-10-28 | **Arabic diacritic editing (#4757):** Backspace removes the last stored Arabic combining mark, so its base letter can stay while the mark is replaced. Caret movement and forward Delete keep their cluster rules. Synthetic command, history, protection and native/DOCX fresh-reopen checks; no native Word comparison or readiness change. |
 | 2026-10-29 | Window sizing falls back to the screen rectangle when the reported inner size is invalid, and an Equation symbol tooltip no longer repeats a missing glyph's name or code point |
 | 2026-10-29 | A NUL in a document title no longer reaches the native window title, which panicked on X11 (#3634): displayed titles and suggested file names drop NUL characters and fall back to the untitled name when empty; the stored title is unchanged |
 | 2026-10-28 | The Traditional Chinese interface draws hanzi to the Taiwan standard: on the desktop an installed Traditional Chinese font (PingFang TC on macOS, Microsoft JhengHei on Windows, Noto Sans CJK TC on Linux) comes before the embedded Noto Sans CJK SC, which drew 說, 這, 為, 戶 in mainland shapes; without one, and on the web, nothing changes. |
@@ -229,6 +230,10 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 | 2026-10-28 | Markdown import bounds nested undefined reference-label work within the existing link allowance; literal source and normal reference matching are preserved (#4658). |
 | 2026-10-23 | A command that changes nothing is not an edit: it adds no undo step, marks no unsaved changes and forces no relayout, so the redo stack survives it and five hundred of them can no longer push the user's own edits out of the undo history. |
 | 2026-10-23 | Interface translations come from storytold/craft-i18n, shared with the other Crafting Apps: the catalogs are embedded at build time from the commit in `craft-i18n.rev` and looked up through craft-libs' `craft-i18n` crate; `crates/ui-egui/src/i18n/*.tsv` are gone (translations now go to craft-i18n). Strings other apps already translate show translated; a build without `CRAFT_I18N_DIR` is English only |
+| 2026-10-27 | Thai emergency-break safety checks are skipped for non-Thai paragraphs; existing wrapping rules remain unchanged. |
+| 2026-10-27 | Distributed toggles off either stored distributed alignment after text changes between Thai and English; turning it on again selects a mode from the current paragraph text. |
+| 2026-10-27 | Thai justification finds the current line's safe group gaps by binary search instead of scanning the paragraph's full gap list on every line; regression counts comparisons across 1,000 lines. |
+| 2026-10-26 | Thai layout review: mixed Thai/Latin paragraphs use Thai capped spacing only on lines containing Thai; Latin-only wrapped lines retain ordinary justification, covered for Justify and Thai Distributed. Review follow-up maps emergency boundaries past bare markers and compares every PDF glyph per page. Thai dictionary boundaries and runs now use one sorted pass to avoid quadratic rescans. A standalone rerun on 2026-10-26 using `cargo test -p wordcraft-ui-egui clicks_on_ribbon_and_status_bar_chrome_keep_typing_in_the_document -- --nocapture` passed (1 passed, 993 filtered out); earlier standalone runs passed twice. The full `wordcraft-ui-egui --lib` run aborted with Windows `STATUS_ACCESS_VIOLATION` (0xc0000005) without identifying a failing test. |
 | 2026-10-25 | #4085 mark review: whole-cell and ordinary highlight targets include their selected paragraph marks; empty, inherited and partial-column controls added. |
 | 2026-10-25 | #4085 review: highlight toggling checks the full target with constant resolved-run storage; a different colour after 10,000 runs prevents clearing. |
 | 2026-10-24 | #4085: Ctrl+Alt+H toggles the last chosen highlight colour; explicit colour setters remain idempotent. Mixed, inherited and pending formatting and Undo/Redo covered by command/key regressions. |
@@ -427,6 +432,10 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 | 2026-10-14 | DOCX files with legacy VML preset shapes show them (#1377): Word's right arrow (`_x0000_t13`) and the other presets appear with their fill, outline and size, drawn as WordCraft draws the same DrawingML preset (the nearest shape when it has no exact one), and saving keeps them as DrawingML shapes; before, they were dropped |
 | 2026-10-14 | Lists numbered with Russian letters (`russianLower`, `russianUpper`) show а), б), в) … я), then аа), бб), as in Word, instead of 1), 2), 3); the 29-letter sequence (no ё, й, ъ or ь) was observed in Word |
 | 2026-10-14 | "Do you want to save changes?" answers from the keyboard after typing too (#1597): Save takes focus from the page when the prompt opens, so the arrow keys and Tab move between Save, Don't Save and Cancel instead of the caret behind it, and Enter answers |
+| 2026-10-14 | Home/Open Recent: Thai document names and folder paths load installed interface fallbacks on the Start screen, before opening a document; stored paths are unchanged |
+| 2026-10-14 | Thai word segmentation and safe line breaking (#1548): ICU dictionary boundaries in visible paragraph context, safe emergency breaks for overlong words, and regressions for hidden/deleted text and wrapping settings; initial regression failed at the expected resource boundary, then cargo test -p wordcraft-layout passed (245 tests) |
+| 2026-10-14 | Thai Distributed: `distribute` and `thaiDistribute` are distinct through DOCX direct/style/override properties and repeated reopen; temporary layout follows Justify, while Thai spacing and automatic mode selection remain for task 3 |
+| 2026-10-14 | Thai task 3: wrapped Thai Justify/ThaiDistribute lines use capped space-first/group-second spacing; `para.distribute` stores a per-paragraph mode. Layout/DOCX/formats/PDF package regressions pass except the inherited engine filesystem scanner (`File::open` in `cmd/file.rs:264`); CI fmt/clippy, assets, layers, WASM, Trunk web bundle and desktop release build pass. A4 PDF/DOCX checks verified Angsana New 16 pt and Tahoma 11 pt; Sarabun skipped because absent. Cross-application Word page parity remains unverified. |
 | 2026-10-12 | Text boxes from older Word files (VML) keep their internal margins, Resize shape to fit text and vertical alignment, so letterhead address blocks and form headers sit where Word puts them instead of 7 pt in and 4 pt down. Hidden drawings stay hidden (they were drawn as empty boxes) and are kept on save |
 | 2026-10-13 | Word's privacy options are kept and honoured when saving .docx (#1062): with Remove personal information, comments and tracked changes are saved by "Author" and the file has no creator or last-modified-by; with Remove date and time, they are saved without dates. The open document keeps the real names and dates; `file.privacyOptions` sets both |
 | 2026-10-13 | A selected comment balloon's Delete, Reply and Resolve buttons work again (#1085): pressing them no longer counts as a click on the page that closes the balloon first, so a new empty comment, or any other, can be deleted from its balloon |
@@ -690,6 +699,10 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-29 | trivial | Progress log: window fallback geometry and equation symbol tooltips |
 | 2026-10-29 | trivial | Progress log: window titles omit NUL characters (#3634) |
 | 2026-10-29 | trivial | Recipient labels continue across product-sized sheets instead of stopping after the first sheet (#4880). Filtered/sorted order, product geometry and single-label mode retained; readiness estimates unchanged. |
+| 2026-10-27 | trivial | Skip Thai emergency-break safety checks for non-Thai paragraphs. |
+| 2026-10-27 | trivial | Distributed toggles off either stored mode after text changes; Recent Thai font regression uses the no-document Start screen. |
+| 2026-10-27 | trivial | Thai justification selects sorted group gaps by line using binary search; a regression bounds comparisons over a long paragraph. |
+| 2026-10-26 | trivial | PR #1713 review follow-up: correct bare-marker emergency offsets, compare PDF glyph positions for every page, clarify Thai alignment and known test results, remove quadratic rescans across Thai runs, and record the successful standalone Heading 1 tile test rerun. |
 | 2026-10-22 | trivial | Progress log: one native window per open document |
 | 2026-10-22 | trivial | Progress log: every open document keeps its own recovery copy |
 | 2026-10-22 | trivial | Progress log: several open documents in the desktop window |
@@ -711,6 +724,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-24 | trivial | Progress log: regex Replace expands capture groups (#4177) |
 | 2026-10-23 | trivial | Progress log: interface translations from storytold/craft-i18n through the `craft-i18n` crate |
 | 2026-10-23 | trivial | Progress log: comment times in local time (#2322, #2337) |
+| 2026-10-23 | trivial | Merge current main into Thai layout work, preserving upstream tab, ligature, float, RTF and Recent font fixes alongside Thai regression coverage |
 | 2026-10-22 | trivial | Progress log: mail merge record navigation and record ranges for Finish & Merge and Print Documents (#3028) |
 | 2026-10-23 | trivial | Progress log: a relationship the markup names without the prefix is read as it wrote (#3411 follow-up) |
 | 2026-10-21 | trivial | Progress log: a document with many relationships opens in the time its part takes (#3411) |
@@ -895,6 +909,10 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-14 | trivial | Progress log: VML preset shapes (#1377) |
 | 2026-10-14 | trivial | Progress log: Russian letter list labels |
 | 2026-10-14 | trivial | Progress log: the save prompt takes the keyboard from the page (#1597) |
+| 2026-10-14 | trivial | Progress log: Recent file names and folder paths get interface font fallbacks on Home/Open before document open |
+| 2026-10-14 | minor | Progress log: Thai dictionary segmentation and safe line breaking (#1548) |
+| 2026-10-14 | minor | Progress log: distinct Thai Distributed model and DOCX round-trip compatibility; Thai spacing/automatic mode selection remain |
+| 2026-10-14 | minor | Progress log: Thai justification, automatic Distributed selection and local A4 PDF/DOCX export consistency |
 | 2026-10-12 | trivial | Progress log: VML text box margins, fit and alignment; hidden drawings |
 | 2026-10-13 | trivial | Progress log: comment balloon buttons work, empty comments can be deleted (#1085) |
 | 2026-10-12 | trivial | Progress log: sample-text formulas on Enter (#1067) |
