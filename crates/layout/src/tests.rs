@@ -65,6 +65,39 @@ fn vertical_table_page_break_skips_repeated_header() {
     }
 }
 
+/// #3591: short destination text must not pull a cross-page caret into an adjacent cell.
+#[test]
+fn vertical_table_page_break_keeps_short_destination_column() {
+    for dir in [-1, 1] {
+        for col in 0..3 {
+            let mut doc = navigation_table_doc(1);
+            doc.styles.default_chr.font = Some(WRAP_TEST_FONT.into());
+            doc.styles.default_chr.size = Some(12.0);
+            for row in &mut doc.table_mut(StoryRef::Body, &Path::top(1)).unwrap().rows {
+                for cell in &mut row.cells {
+                    cell.blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("MMMMMMMMMMMM", Default::default()))];
+                }
+            }
+            let original = lay(&doc);
+            let lines = crate::hit::page_lines(&original.pages[0], StoryRef::Body);
+            let row = lines.iter().filter_map(|l| l.path.cell().map(|(_, r, _)| r)).max().unwrap();
+            let (source_row, target_row, source_page, target_page) = if dir > 0 { (row, row + 1, 0, 1) } else { (row + 1, row, 1, 0) };
+            doc.table_mut(StoryRef::Body, &Path::top(1)).unwrap().rows[target_row].cells[col].blocks =
+                vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("x", Default::default()))];
+            let layout = lay(&doc);
+            let from = Pos::new(StoryRef::Body, Path(vec![1, source_row as u32, col as u32, 0]), 12);
+            let expected = Path(vec![1, target_row as u32, col as u32, 0]);
+            assert_eq!(layout.caret_on(&from, source_page).unwrap().page, source_page);
+            let (to, gx) = layout.vertical(&from, None, dir, source_page).unwrap();
+            assert_eq!(to.path, expected, "direction {dir}, column {col}");
+            assert_eq!(to.off, 1);
+            assert_eq!(layout.caret_on(&to, target_page).unwrap().page, target_page);
+            let (back, _) = layout.vertical(&to, Some(gx), -dir, target_page).unwrap();
+            assert_eq!(back, from);
+        }
+    }
+}
+
 /// Continuing lines of one tall cell are not mistaken for copies of its heading.
 #[test]
 fn vertical_table_page_break_keeps_split_cell_lines() {
@@ -8618,6 +8651,46 @@ fn keep_with_next_carries_the_heading_when_widow_control_moves_the_next_paragrap
     // setting.
     assert_eq!(pages(fit - 1, true), [0, 0, 0, 1], "two lines below the heading hold it");
     assert_eq!(pages(fit - 1, false), [0, 0, 0, 1]);
+}
+
+/// A three-line paragraph under widow/orphan control can start on a page only whole: two lines
+/// and a widow, or an orphan and two, are both refused. So two lines of room below a kept
+/// heading do not hold it there; Word moves the heading over with the paragraph.
+#[test]
+fn keep_with_next_carries_the_heading_when_a_three_line_paragraph_moves_whole() {
+    // Pages of the heading and of the paragraph's three lines.
+    let pages = |fillers: usize, widow: bool| -> [usize; 4] {
+        let mut d = Document::new();
+        let plain = ParaProps {
+            space_before: Some(0.0),
+            space_after: Some(0.0),
+            line_spacing: Some(wordcraft_doc::props::LineSpacing::Multiple(1.0)),
+            widow_control: Some(widow),
+            ..Default::default()
+        };
+        let para = |text: &str, p: &ParaProps| {
+            let mut x = wordcraft_doc::Paragraph::with_text(text, Default::default());
+            x.props = p.clone();
+            wordcraft_doc::para_block(x)
+        };
+        d.body = (0..fillers).map(|i| para(&format!("F{i}"), &plain)).collect();
+        let kept = ParaProps { keep_next: Some(true), keep_lines: Some(true), ..plain.clone() };
+        d.body.push(para("HEADING", &kept));
+        d.body.push(para("Bb\nBc\nBd", &plain));
+        let l = lay(&d);
+        [
+            l.caret(&Pos::body(fillers, 0)).unwrap().page,
+            l.caret(&Pos::body(fillers + 1, 0)).unwrap().page,
+            l.caret(&Pos::body(fillers + 1, 3)).unwrap().page,
+            l.caret(&Pos::body(fillers + 1, 6)).unwrap().page,
+        ]
+    };
+    // The page edge that leaves the heading room for two lines of the paragraph after it.
+    let fit = (20..100).find(|n| pages(*n, false) == [0, 0, 0, 1]).expect("a filler count that leaves room for two lines after the heading");
+    // With the control the paragraph moves over whole, and the heading goes with it.
+    assert_eq!(pages(fit, true), [1, 1, 1, 1], "the heading follows the paragraph: {fit}");
+    // One line more of room holds all three below the heading.
+    assert_eq!(pages(fit - 1, true), [0, 0, 0, 0]);
 }
 
 /// The chain case of #966: a kept heading before a kept paragraph before a long one all move
