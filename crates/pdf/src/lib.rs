@@ -12,7 +12,9 @@
 //!   opacity, the page colour and the watermark.
 //! - **Interactive:** link annotations for hyperlinked runs (URLs and internal `#bookmark`
 //!   links) and a document outline built from the headings (outline levels).
-//! - **Metadata:** title, author, subject, keywords, language, creation date.
+//! - **Metadata:** title, author, subject, keywords, language, creation date (the
+//!   document's own, unless `SOURCE_DATE_EPOCH` is set — then the epoch, so repeated
+//!   exports of one document are byte-identical).
 //! - **Tagged PDF (best effort):** one structure element per paragraph (`H1`–`H6` for headings,
 //!   `P` otherwise), `Figure` for pictures with their alt text; headers, footers, decorations and
 //!   the watermark are artifacts.
@@ -59,20 +61,24 @@ mod metadata;
 mod options;
 mod paint;
 mod picture;
+mod report;
 mod tags;
 
-pub use export::{export, export_layout};
+pub use export::{export, export_layout, export_layout_with_report, export_with_report};
 #[cfg(test)]
 use exporter::Exporter;
 #[cfg(test)]
 use glyphs::{baseline, cluster_ends, left_to_right, split_clusters, visual_order};
 #[cfg(test)]
-use metadata::{civil, parse_iso};
+use metadata::{civil, metadata_at, parse_iso, parse_source_date_epoch, source_date_epoch};
 pub use options::{PdfError, PdfOptions};
 #[cfg(test)]
 use paint::shape_path;
 #[cfg(test)]
 use picture::{load_image, load_image_within};
+pub use report::ExportReport;
+#[cfg(test)]
+use report::pdf_version;
 
 #[cfg(test)]
 mod tests;

@@ -6,6 +6,22 @@ use wordcraft_doc::{Block, CharProps, Document, ListKind, Paragraph, Table, Wate
 
 use crate::*;
 
+/// The PDF date stamp an export of the sample document carries in the environment
+/// the test happens to run in: the epoch's stamp when `SOURCE_DATE_EPOCH` is in
+/// effect (a distribution build may set it for the whole build, tests included),
+/// else the document's own 2024-05-06T07:08:09Z. The crate forbids the `unsafe` the
+/// 2024 edition needs to set the variable, so date assertions read the environment
+/// through the same function the export uses instead of controlling it.
+fn expected_stamp() -> String {
+    match source_date_epoch() {
+        Some(secs) => {
+            let (y, mo, d, h, mi, s) = civil(secs);
+            format!("D:{y:04}{mo:02}{d:02}{h:02}{mi:02}{s:02}")
+        }
+        None => "D:20240506070809".to_string(),
+    }
+}
+
 /// Verify preset lines and connectors emit the requested PDF line-cap operator.
 #[test]
 fn shape_line_caps_reach_pdf_content() {
@@ -207,7 +223,7 @@ fn exports_pages_text_and_structure() {
     assert!(raw.contains("/Image"), "picture");
     assert!(raw.contains("PDF Sample"), "title");
     assert!(raw.contains("Ada Writer"), "author");
-    assert!(raw.contains("D:20240506070809"), "creation date");
+    assert!(raw.contains(&expected_stamp()), "creation date");
 }
 
 #[test]
@@ -2036,9 +2052,10 @@ fn metadata_language_overrides_and_fallbacks_are_preserved() {
         let pdf = hayro_syntax::Pdf::new(bytes.clone()).unwrap();
         let catalog = pdf.xref().get::<hayro_syntax::object::Dict<'_>>(pdf.xref().root_id()).unwrap();
         let actual_language = catalog.get::<hayro_syntax::object::String<'_>>(b"Lang");
-        for value in ["Override title", "Override author", "Description fallback", "first, second, third", "D:20240506070809"] {
+        for value in ["Override title", "Override author", "Description fallback", "first, second, third"] {
             assert!(raw.contains(value), "missing {value}");
         }
+        assert!(raw.contains(&expected_stamp()), "missing the creation stamp");
         if let Some(language) = language.filter(|s| !s.is_empty() && s.is_ascii()) {
             assert_eq!(actual_language.unwrap().as_bytes(), language.as_bytes());
             assert!(raw.contains(&format!("<dc:language><rdf:Bag><rdf:li>{language}</rdf:li>")));
@@ -2487,4 +2504,79 @@ fn baseline_is_the_most_shared_y() {
     assert_eq!(baseline(&[(1, 0.0, 7.5), (2, 3.0, 4.0), (3, 6.0, 7.5)]), Some(7.5));
     assert_eq!(baseline(&[(1, 0.0, 9.0), (2, 3.0, 4.0)]), Some(4.0));
     assert_eq!(baseline(&[(1, 0.0, -0.0), (2, 3.0, 0.0)]), Some(0.0));
+}
+
+/// `SOURCE_DATE_EPOCH` parsing: a plain non-negative integer of seconds, nothing else.
+/// (1700000000 is 2023-11-14T22:13:20Z, the value the reproducible-PDF tests use.)
+#[test]
+fn source_date_epoch_parsing() {
+    assert_eq!(parse_source_date_epoch(Some("1700000000")), Some(1_700_000_000));
+    assert_eq!(parse_source_date_epoch(Some(" 1700000000 ")), Some(1_700_000_000));
+    assert_eq!(parse_source_date_epoch(Some("0")), Some(0));
+    assert_eq!(parse_source_date_epoch(Some("253402300799")), Some(253_402_300_799));
+    assert_eq!(parse_source_date_epoch(Some("253402300800")), None);
+    assert_eq!(parse_source_date_epoch(Some("-1")), None);
+    assert_eq!(parse_source_date_epoch(Some("bogus")), None);
+    assert_eq!(parse_source_date_epoch(Some("1700000000.5")), None);
+    assert_eq!(parse_source_date_epoch(Some("")), None);
+    assert_eq!(parse_source_date_epoch(None), None);
+}
+
+/// With an epoch in effect it, not the document's own creation date, is written; without
+/// one the document's date stands. The sample document's created is 2024-05-06T07:08:09Z.
+#[test]
+fn epoch_overrides_the_documents_creation_date() {
+    let d = sample();
+    let epoch = DateTime::new(2023).month(11).day(14).hour(22).minute(13).second(20).utc_offset_hour(0).utc_offset_minute(0);
+    assert_eq!(metadata_at(&d, &PdfOptions::default(), Some(1_700_000_000)).created, Some(epoch));
+    let own = DateTime::new(2024).month(5).day(6).hour(7).minute(8).second(9).utc_offset_hour(0).utc_offset_minute(0);
+    assert_eq!(metadata_at(&d, &PdfOptions::default(), None).created, Some(own));
+}
+
+/// A document carrying a creation date exports the same bytes twice: the dates come
+/// from the document and the file IDs hash the content, so nothing in the file knows
+/// what day the export ran. The epoch-pinned twin of this property is covered end to
+/// end in the CLI's `convert_epoch` integration test, which can set the variable in
+/// a child process.
+#[test]
+fn a_dated_document_exports_byte_identical_twice() {
+    let d = sample();
+    let a = export(&d, &PdfOptions::default()).unwrap();
+    let b = export(&d, &PdfOptions::default()).unwrap();
+    assert_eq!(a, b);
+}
+
+/// The version is read from the finished file's header; anything else is "unknown".
+#[test]
+fn pdf_version_comes_from_the_header() {
+    assert_eq!(pdf_version(b"%PDF-1.7\n"), "1.7");
+    assert_eq!(pdf_version(b"%PDF-2.0\n"), "2.0");
+    assert_eq!(pdf_version(b"%PDF-"), "unknown");
+    assert_eq!(pdf_version(b"not a pdf"), "unknown");
+    assert_eq!(pdf_version(b""), "unknown");
+}
+
+/// `export_with_report` reports the export it actually made: the sample document is
+/// two pages (the second starts with a page break), its text is set in the bundled
+/// fonts, and the epoch it reports is the one in effect in the environment the
+/// test runs in (none, ordinarily).
+#[test]
+fn export_with_report_describes_the_export() {
+    let d = sample();
+    let (bytes, report) = export_with_report(&d, &PdfOptions::default()).unwrap();
+    assert_eq!(report.pages, 2);
+    assert_eq!(report.pdf_version, "1.7");
+    assert_eq!(pdf_version(&bytes), report.pdf_version);
+    assert!(report.tagged);
+    assert!(!report.pdf_ua, "tagging is best effort; the report must not claim PDF/UA");
+    assert_eq!(report.source_date_epoch, source_date_epoch());
+    assert!(!report.embedded_fonts.is_empty(), "no fonts reported: {report:?}");
+}
+
+/// With tagging off the report says so; the field tracks the option, not a guess.
+#[test]
+fn export_report_tagged_follows_the_option() {
+    let d = sample();
+    let (_, report) = export_with_report(&d, &PdfOptions { tagged: false, ..Default::default() }).unwrap();
+    assert!(!report.tagged);
 }
