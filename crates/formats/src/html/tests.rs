@@ -190,6 +190,33 @@ fn cell_text_align_reaches_the_cell_paragraphs() {
 }
 
 #[test]
+fn rtl_paragraphs_read_and_keep_their_direction() {
+    // #2693: Word writes an RTL paragraph's direction as dir="rtl" (or CSS direction:rtl);
+    // reading it keeps the paragraph's bidi flag, and the export writes dir="rtl" back.
+    for src in [r#"<p dir="rtl">مرها</p>"#, r#"<p style="direction:rtl">مرها</p>"#, r#"<div dir="rtl"><p>مرها</p></div>"#] {
+        let parsed = parse(src);
+        let Some(FBlock::Para(p)) = parsed.blocks.first() else { panic!("no paragraph") };
+        assert!(p.rtl, "{src}");
+    }
+    let ltr = parse(r#"<p dir="ltr">مرها</p>"#);
+    let Some(FBlock::Para(p)) = ltr.blocks.first() else { panic!("no paragraph") };
+    assert!(!p.rtl, "ltr is not RTL");
+    // An explicit ltr wins over an RTL ancestor.
+    for src in [r#"<div dir="rtl"><p dir="ltr">abc</p></div>"#, r#"<div dir="rtl"><p style="direction:ltr">abc</p></div>"#] {
+        let parsed = parse(src);
+        let Some(FBlock::Para(p)) = parsed.blocks.first() else { panic!("no paragraph") };
+        assert!(!p.rtl, "{src}");
+    }
+    // The document keeps it as `w:bidi`, and the export writes dir="rtl" back.
+    let doc = model::to_doc(&parse(r#"<p dir="rtl">مرها</p>"#));
+    assert!(doc.body.iter().any(|b| if let wordcraft_doc::Block::Para(p) = &**b { p.props.bidi.unwrap_or(false) } else { false }));
+    let out = export_fragment(&doc);
+    assert!(out.contains("dir=\"rtl\""), "{out}");
+    let back = model::to_doc(&parse(out.as_str()));
+    assert!(back.body.iter().any(|b| if let wordcraft_doc::Block::Para(p) = &**b { p.props.bidi.unwrap_or(false) } else { false }));
+}
+
+#[test]
 fn reporter_sample_header_bold_and_right_aligned_cells() {
     // #1381: the reporter's table.
     let f = parse(

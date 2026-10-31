@@ -47,6 +47,8 @@ struct StyleInfo {
     auto: bool,
     fmt: FmtDelta,
     align: Option<Align>,
+    /// `style:writing-mode="rl-tb"`: the style's paragraphs read right to left.
+    rtl: bool,
     page_break: bool,
     /// `fo:keep-with-next`: `Some(true)` for "always", `Some(false)` for "auto".
     keep_next: Option<bool>,
@@ -84,6 +86,11 @@ pub(super) fn columns_of(a: &Attrs) -> Columns {
 /// A `style:column-sep` (ODF 1.3 §17.13) draws a line between columns unless its style is "none".
 pub(super) fn column_sep(a: &Attrs) -> bool {
     get(a, "style:style") != Some("none")
+}
+
+/// `style:writing-mode="rl-tb"`: right-to-left.
+fn writing_mode_rtl(a: &Attrs) -> bool {
+    get(a, "style:writing-mode").is_some_and(|v| v.trim() == "rl-tb")
 }
 
 fn default_font(a: &Attrs) -> Option<String> {
@@ -158,6 +165,7 @@ impl Styles {
                 "style" if q.starts_with("style:") => {
                     if let Some(name) = get(&a, "style:name") {
                         let info = StyleInfo {
+                            rtl: writing_mode_rtl(&a),
                             parent: get(&a, "style:parent-style-name").map(String::from),
                             display: get(&a, "style:display-name").map(String::from),
                             auto: in_auto && auto_section_is_auto,
@@ -208,6 +216,7 @@ impl Styles {
                 }
                 "paragraph-properties" => {
                     if let Some((_, s)) = &mut cur {
+                        s.rtl |= writing_mode_rtl(&a);
                         s.align = match get(&a, "fo:text-align").map(|v| v.trim().to_ascii_lowercase()).as_deref() {
                             Some("center") => Some(Align::Center),
                             Some("end") | Some("right") => Some(Align::Right),
@@ -318,6 +327,11 @@ impl Styles {
     /// Columns of a section style (whole chain).
     pub(super) fn columns(&self, name: &str) -> Option<Columns> {
         self.chain(name).iter().find_map(|(_, s)| s.columns.clone())
+    }
+
+    /// Does this paragraph style read right to left (`style:writing-mode="rl-tb"`, whole chain)?
+    pub(super) fn rtl(&self, name: &str) -> bool {
+        self.chain(name).iter().any(|(_, s)| s.rtl)
     }
 
     /// Width in points of a table-column style (whole chain).

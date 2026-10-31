@@ -304,6 +304,8 @@ impl Body<'_> {
         self.end_para();
         let (mut kind, align, mut pb, rule, keep_next, base) =
             style.map(|s| self.styles.para(s)).unwrap_or((Kind::Normal, None, false, false, false, Fmt::default()));
+        // `style:writing-mode="rl-tb"` somewhere in the style's chain: the paragraph reads right to left.
+        let rtl = style.is_some_and(|s| self.styles.rtl(s));
         // The section break starts the new page; no page break besides.
         if let Some(next) = style.and_then(|s| self.page_section(s))
             && self.break_section(next)
@@ -313,7 +315,7 @@ impl Body<'_> {
         if let Some(h) = heading {
             kind = Kind::Heading(h.clamp(1, 6));
         }
-        let mut p = Para { kind, align, page_break: pb, keep_next, ..Default::default() };
+        let mut p = Para { kind, align, rtl, page_break: pb, keep_next, ..Default::default() };
         if rule && kind == Kind::Normal {
             p.kind = Kind::Rule;
         }
@@ -758,7 +760,7 @@ impl Body<'_> {
             self.para = Some(cur);
             return;
         }
-        let mut rest = Para { kind: cur.kind, list: cur.list, align: cur.align, ..Default::default() };
+        let mut rest = Para { kind: cur.kind, list: cur.list, align: cur.align, rtl: cur.rtl, ..Default::default() };
         // The host paragraph now ends at the first deleted paragraph's mark.
         cur.mark_del = Some(Box::new(mark.clone()));
         cur.mark_ins = first_mark_ins;
@@ -768,6 +770,7 @@ impl Body<'_> {
                 // The last deleted paragraph runs on into the rest of the body paragraph.
                 rest.kind = p.kind;
                 rest.align = p.align.or(rest.align);
+                rest.rtl |= p.rtl;
                 append(&mut rest, p.inlines);
             } else {
                 p.mark_del = Some(Box::new(mark.clone()));

@@ -152,6 +152,7 @@ fn trim_num(v: f32) -> String {
 }
 
 fn para_attrs(p: &Para) -> String {
+    let dir = if p.rtl { " dir=\"rtl\"" } else { "" };
     let mut css: Vec<&str> = Vec::new();
     if let Some(a) = align_css(p.align) {
         css.push(a);
@@ -159,7 +160,8 @@ fn para_attrs(p: &Para) -> String {
     if p.page_break {
         css.push("break-before:page;page-break-before:always");
     }
-    if css.is_empty() { String::new() } else { format!(" style=\"{}\"", css.join(";")) }
+    let style = if css.is_empty() { String::new() } else { format!(" style=\"{}\"", css.join(";")) };
+    format!("{}{}", dir, style)
 }
 
 fn para_html(p: &Para) -> String {

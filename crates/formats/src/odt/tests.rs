@@ -973,6 +973,24 @@ fn insertions_end_before_a_table_and_inside_a_cell() {
 }
 
 #[test]
+fn rtl_paragraphs_read_and_write_their_direction() {
+    // #2693: a paragraph style's `style:writing-mode="rl-tb"` (LibreOffice / Word) keeps the
+    // direction through the flow, the document's `w:bidi`, and the export writes it back.
+    let styles = r#"<office:styles><style:style style:name="RtlP" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties style:writing-mode="rl-tb"/></style:style></office:styles>"#;
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p text:style-name="RtlP">مرها</text:p></office:text></office:body></office:document-content>"#,
+    );
+    let pkg = package(content.as_str(), Some(styles));
+    let flow = parse(&pkg).unwrap();
+    assert!(paras(&flow).iter().any(|p| p.rtl), "the style's writing-mode reaches the flow");
+    let doc = import(&pkg).unwrap();
+    assert!(doc.body.iter().any(|b| if let wordcraft_doc::Block::Para(p) = &**b { p.props.bidi.unwrap_or(false) } else { false }));
+    // The export's automatic style keeps it, so reopening the package still reads RTL.
+    let back = import(&export(&doc).unwrap()).unwrap();
+    assert!(back.body.iter().any(|b| if let wordcraft_doc::Block::Para(p) = &**b { p.props.bidi.unwrap_or(false) } else { false }));
+}
+
+#[test]
 fn exported_changes_always_have_a_date_and_keep_paragraph_separators() {
     // A change without a date gets one on save (`dc:date` is required); a U+2029 in deleted
     // text is text, not a paragraph break.

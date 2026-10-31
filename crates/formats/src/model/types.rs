@@ -227,6 +227,9 @@ pub struct Para {
     pub kind: Kind,
     pub list: Option<ListInfo>,
     pub align: Option<Align>,
+    /// The paragraph reads right to left (OOXML `w:bidi`, HTML `dir="rtl"`, ODF
+    /// `style:writing-mode="rl-tb"`, RTF `\rtlpar`).
+    pub rtl: bool,
     pub page_break: bool,
     /// Keep the paragraph on the same page as the next one (ODT `fo:keep-with-next`).
     pub keep_next: bool,
