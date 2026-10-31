@@ -179,6 +179,9 @@ sync_github_name = true
 [people.pakiat]
 display_name = "OtorO"
 
+[people.tixomirkin]
+sync_github_name = true
+
 [people.TobyWu666]
 display_name = "tobywu"
 

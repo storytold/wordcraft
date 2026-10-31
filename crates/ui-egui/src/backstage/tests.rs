@@ -1054,3 +1054,33 @@ fn backstage_save_as_sidebar_opens_save_as_page() {
     h.run_steps(4);
     assert_eq!(h.state().ui.backstage_page, "saveAs");
 }
+
+/// The Backstage screen and internal page navigation animate with smooth transitions.
+#[test]
+fn backstage_screen_and_page_transitions_animate() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(10);
+    assert!(h.state().ui.backstage);
+    assert_eq!(h.state().ui.backstage_page, "home");
+
+    h.state_mut().run("ui.backstage", json!({"value": true, "page": "options"})).unwrap();
+    h.run_steps(1);
+    assert!(h.ctx.has_requested_repaint(), "backstage page change should trigger repaint/animation");
+    h.run_steps(15);
+    assert_eq!(h.state().ui.backstage_page, "options");
+
+    h.state_mut().run("ui.backstage", json!({"value": false})).unwrap();
+    h.run_steps(1);
+    assert!(h.ctx.has_requested_repaint(), "closing backstage should trigger repaint/animation");
+    h.run_steps(15);
+    assert!(!h.state().ui.backstage);
+}
