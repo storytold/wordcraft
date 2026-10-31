@@ -5264,9 +5264,8 @@ fn float_follows_its_paragraph_to_the_next_page() {
     assert!(para.lines[0].left >= 144.0, "text wraps beside it: {}", para.lines[0].left);
 }
 
-/// A floating object belongs to its paragraph, not to the line holding its anchor: Word draws
-/// it on the page the paragraph starts on. A Word cover page is one paragraph holding a page
-/// break and then the page-anchored text box with the title; the box stays on the cover.
+/// A Word cover page is one paragraph holding a page break and then the page-anchored text box
+/// with the title: with nothing after its anchor, the box stays on the cover.
 #[test]
 fn a_float_anchored_after_a_page_break_stays_on_its_paragraph_s_first_page() {
     let mut d = Document::from_text(&format!("{}\nAfter the cover", wordcraft_doc::para::PAGE_BREAK));
@@ -5277,6 +5276,45 @@ fn a_float_anchored_after_a_page_break_stays_on_its_paragraph_s_first_page() {
     assert_eq!(on_cover.len(), 1, "the shape is drawn on the cover: {on_cover:?}");
     assert!((on_cover[0].y - 300.0).abs() < 0.5, "{:?}", on_cover[0]);
     assert!(shapes(&l.pages[1].items).is_empty(), "and not again on page two");
+}
+
+/// #4262: a bookmark after the box's anchor (or a comment's end, a field's) takes no room: the box
+/// still stays on the cover. An inline picture after it does take room: it goes on to page two,
+/// and the box with it.
+#[test]
+fn a_cover_box_stays_on_the_cover_with_a_bookmark_after_it_but_not_with_a_picture() {
+    let cover = |after: InlineObject| {
+        let mut d = Document::from_text(&format!("{}\nAfter the cover", wordcraft_doc::para::PAGE_BREAK));
+        d.insert_object(&Pos::body(0, 1), after, &Default::default()).unwrap();
+        d.insert_object(&Pos::body(0, 1), rect_shape(200.0, 100.0, page_float(100.0, 300.0)), &Default::default()).unwrap();
+        let l = lay(&d);
+        // The floating box; the inline picture is 20 pt wide.
+        let boxes = |pi: usize| shapes(&l.pages[pi].items).iter().filter(|r| r.w > 100.0).count();
+        (boxes(0), boxes(1))
+    };
+    assert_eq!(cover(InlineObject::BookmarkEnd { name: "_GoBack".into() }), (1, 0), "with a bookmark: on the cover");
+    assert_eq!(cover(rect_shape(20.0, 20.0, Default::default())), (0, 1), "with an inline picture: on page two");
+}
+
+/// #4262: with text after the anchor, though, the line after the break is on the next page, and
+/// so is the float anchored at its start. Observed in Word for Mac: a shape dragged beside the
+/// first line after a page break inside a paragraph is anchored right after the break and stays
+/// on the new page, positioned from the paragraph's top there.
+#[test]
+fn a_float_anchored_before_text_after_a_page_break_is_drawn_on_the_next_page() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let text = "The quick brown fox jumps over the lazy dog. ";
+    let mut d = Document::from_text(&format!("{}{}{}", text.repeat(5), wordcraft_doc::para::PAGE_BREAK, text.repeat(5)));
+    let at = text.len() * 5 + wordcraft_doc::para::PAGE_BREAK.len_utf8();
+    let f = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 60.0, y: 1.0, ..Default::default() };
+    d.insert_object(&Pos::body(0, at), rect_shape(100.0, 50.0, f), &Default::default()).unwrap();
+    let l = lay(&d);
+    assert_eq!(l.pages.len(), 2);
+    assert!(shapes(&l.pages[0].items).is_empty(), "not on page one");
+    let (top, ..) = lines_on(&l, 1)[0];
+    assert_eq!(shapes(&l.pages[1].items).len(), 1, "drawn once");
+    let r = shapes(&l.pages[1].items)[0];
+    assert!((r.y - (top + 1.0)).abs() < 0.5, "1 pt below the paragraph's top on page two ({top}): {r:?}");
 }
 
 /// The lines of body paragraph 0 on page `pi`: each one's (top on the page, left, start).

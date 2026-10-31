@@ -55,6 +55,27 @@ fn a_shape_dragged_back_to_the_page_its_paragraph_starts_on_stays_there() {
     assert_eq!(s.undo_depth(), before.1 + 1);
 }
 
+/// #4262: dropped beside the first line after a page break inside a paragraph, a shape stays
+/// on the page it was dropped on, anchored in that line.
+#[test]
+fn a_shape_dropped_just_after_a_page_break_in_a_paragraph_stays_there() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    let text = "The quick brown fox jumps over the lazy dog. ";
+    s.run("text.insert", &json!({"text": text.repeat(20)})).unwrap();
+    s.run("insert.pageBreak", &json!({})).unwrap();
+    s.run("text.insert", &json!({"text": text.repeat(40)})).unwrap();
+    assert_eq!(s.doc.body.len(), 1, "one paragraph");
+    s.run("caret.docStart", &json!({})).unwrap();
+    s.run("insert.shape", &json!({"kind": "rectangle"})).unwrap();
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+    s.run("arrange.bounds", &json!({"page": 0, "x": 100, "y": 250, "width": 100, "height": 50})).unwrap();
+    s.run("arrange.bounds", &json!({"page": 1, "x": 100, "y": 80})).unwrap();
+    let o = object_area(&mut s);
+    let after_break = text.len() * 20 + wordcraft_doc::para::PAGE_BREAK.len_utf8();
+    assert_eq!((o.page, o.off), (1, after_break), "on the page it was dropped on, anchored right after the break: {o:?}");
+    assert!((o.rect.x - 100.0).abs() < 0.5 && (o.rect.y - 80.0).abs() < 0.5, "where it was dropped: {:?}", o.rect);
+}
+
 /// What a click and a handle or body drag do in the editor (#142, #82): hit-test the object,
 /// select it, then resize and move it with `arrange.bounds`.
 fn click_resize_and_drag(insert: &str, params: Value) {
