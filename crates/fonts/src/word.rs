@@ -9,6 +9,11 @@ use skrifa::raw::TableProvider;
 
 use crate::{FaceRef, FontDb};
 
+/// Word's bold character-unit allowance, as a fraction of the em. Character-unit
+/// indents include it for bold text; shaped advances include it only when the
+/// selected face needs synthetic bold (a native bold face supplies its own widths).
+pub const BOLD_WIDTH_EM: f32 = 0.02;
+
 /// A requested font resolved to a face.
 #[derive(Clone, Copy, Debug)]
 pub struct Resolved {
@@ -40,6 +45,18 @@ fn substitutes_by_name(family: &str) -> (&'static [&'static str], bool) {
     const SANS: &[&str] = &["Carlito", "Helvetica Neue", "Arial", "Liberation Sans", "Noto Sans", "DejaVu Sans", "Source Sans 3"];
     const SERIF: &[&str] = &["Caladea", "Times New Roman", "Liberation Serif", "Georgia", "Noto Serif", "DejaVu Serif", "Source Serif 4"];
     const MONO: &[&str] = &["Courier New", "Liberation Mono", "Menlo", "Consolas", "DejaVu Sans Mono", "JetBrains Mono"];
+    // Japanese Gothic substitutes preserve a sans-serif appearance and Japanese coverage.
+    // Prefer the fixed-width Japanese BIZ face where available; the bundled proportional
+    // face remains a fallback when it is not installed.
+    const MS_GOTHIC: &[&str] = &["BIZ UDGothic", "BIZ UDPGothic", "Noto Sans JP", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo"];
+    const MS_PGOTHIC: &[&str] = &["BIZ UDPGothic", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic", "Meiryo"];
+    // MS Mincho requests must remain in a Japanese Mincho face when the original is absent.
+    // A generic Latin serif often has no Japanese glyphs, and generic sans loses the strokes.
+    const MS_MINCHO: &[&str] = &["BIZ UDMincho", "Shippori Mincho", "Hiragino Mincho ProN", "Noto Serif CJK JP", "Yu Mincho"];
+    // Generic Japanese Mincho names in older forms need Japanese coverage. Measurements of
+    // Word's rendering of this name favour BIZ UDMincho when it is available; retain system
+    // and other open Mincho faces as fallbacks.
+    const GENERIC_MINCHO: &[&str] = &["BIZ UDMincho", "Hiragino Mincho ProN", "Shippori Mincho", "Noto Serif CJK JP", "Yu Mincho"];
     const ARIAL: &[&str] = &["Liberation Sans", "Helvetica", "Helvetica Neue", "Arimo", "Source Sans 3"];
     const ARIAL_UNICODE: &[&str] = &["Arial", "Liberation Sans", "Helvetica", "Helvetica Neue", "Arimo", "Source Sans 3"];
     const TIMES: &[&str] = &["Liberation Serif", "Times", "Tinos", "Source Serif 4"];
@@ -107,7 +124,7 @@ fn substitutes_by_name(family: &str) -> (&'static [&'static str], bool) {
         "DejaVu Serif",
         "Source Serif 4",
     ];
-    let f = family.to_ascii_lowercase();
+    let f = family.to_lowercase();
     if is_thai_serif(&f) {
         return (THAI_SERIF, true);
     }
@@ -127,6 +144,10 @@ fn substitutes_by_name(family: &str) -> (&'static [&'static str], bool) {
         return (ARABIC_SANS, true);
     }
     match f.as_str() {
+        "ms gothic" | "ms ゴシック" | "ｍｓ ゴシック" | "ｍｓ　ゴシック" => (MS_GOTHIC, true),
+        "ms pgothic" | "ms ｐゴシック" | "ｍｓ ｐゴシック" | "ｍｓ　ｐゴシック" => (MS_PGOTHIC, true),
+        "ms mincho" | "ms 明朝" | "ｍｓ 明朝" | "ｍｓ　明朝" => (MS_MINCHO, true),
+        "明朝体" | "明朝" => (GENERIC_MINCHO, true),
         "palatino linotype" | "book antiqua" | "palatino" => (PALATINO, true),
         "arial" | "helvetica" | "arial nova" => (ARIAL, true),
         "arial unicode ms" => (ARIAL_UNICODE, true),
@@ -343,11 +364,10 @@ fn is_hebrew(f: &str) -> bool {
 /// letters and digits as well as Thai ones (a Thai face without Latin would leave a mixed run in
 /// two fonts, #1549), else the first with Thai letters, else the first installed.
 fn substitute(db: &FontDb, family: &str) -> Option<&'static str> {
-    let mut installed = substitutes(family).iter().copied().filter(|s| db.has_family(s));
     if !is_thai_family(family) {
-        return installed.next();
+        return first_installed_substitute(family, |name| db.has_family(name));
     }
-    let installed: Vec<&'static str> = installed.collect();
+    let installed: Vec<&'static str> = substitutes(family).iter().copied().filter(|s| db.has_family(s)).collect();
     let covers = |name: &str, chars: &[char]| {
         let face = db.face(name, "Regular");
         face.named(name) && chars.iter().all(|c| face.covers(*c))
@@ -358,6 +378,30 @@ fn substitute(db: &FontDb, family: &str) -> Option<&'static str> {
         .find(|s| covers(s, &['\u{0E19}', 'A', 'z', '0', '9']))
         .or_else(|| installed.iter().copied().find(|s| covers(s, &['\u{0E19}'])))
         .or_else(|| installed.first().copied())
+}
+
+fn first_installed_substitute(family: &str, has_family: impl Fn(&str) -> bool) -> Option<&'static str> {
+    substitutes(family).iter().copied().find(|name| has_family(name))
+}
+
+// Localized Microsoft Japanese family names may be cataloged under English names, or vice versa.
+// Resolve these aliases as the original font before considering an actual substitute.
+fn installed_japanese_alias(family: &str, has_family: impl Fn(&str) -> bool) -> Option<&'static str> {
+    let name = family.trim().to_lowercase();
+    let names: &[&str] = match name.as_str() {
+        "ms gothic" | "ms ゴシック" | "ｍｓ ゴシック" | "ｍｓ　ゴシック" => {
+            &["MS Gothic", "ＭＳ ゴシック", "MS ゴシック", "ＭＳ　ゴシック"]
+        }
+        "ms mincho" | "ms 明朝" | "ｍｓ 明朝" | "ｍｓ　明朝" => &["MS Mincho", "ＭＳ 明朝", "MS 明朝", "ＭＳ　明朝"],
+        "ms pgothic" | "ms ｐゴシック" | "ｍｓ ｐゴシック" | "ｍｓ　ｐゴシック" => {
+            &["MS PGothic", "ＭＳ Ｐゴシック", "MS Ｐゴシック", "ＭＳ　Ｐゴシック"]
+        }
+        "ms pmincho" | "ms ｐ明朝" | "ｍｓ ｐ明朝" | "ｍｓ　ｐ明朝" => &["MS PMincho", "ＭＳ Ｐ明朝", "MS Ｐ明朝", "ＭＳ　Ｐ明朝"],
+        "yu mincho" | "游明朝" => &["Yu Mincho", "游明朝"],
+        "yu gothic" | "游ゴシック" => &["Yu Gothic", "游ゴシック"],
+        _ => return None,
+    };
+    names.iter().copied().find(|name| has_family(name))
 }
 
 fn style_name(bold: bool, italic: bool) -> &'static str {
@@ -404,6 +448,8 @@ pub fn resolve(family: &str, bold: bool, italic: bool) -> Resolved {
     } else if base != family && db.has_family(base) {
         // Windows maps the charset names to the font itself: not a substitution.
         (base.to_string(), false)
+    } else if let Some(alias) = installed_japanese_alias(base, |name| db.has_family(name)) {
+        (alias.to_string(), false)
     } else {
         (substitute(db, base).unwrap_or(crate::FALLBACK_FAMILY).to_string(), true)
     };
@@ -419,9 +465,98 @@ pub fn resolve(family: &str, bold: bool, italic: bool) -> Resolved {
     r
 }
 
+/// A script-specific substitute for a missing document face. MS Gothic's Japanese glyphs have
+/// narrower ink than BIZ UDGothic's: the latter can touch under a condensed document grid. An
+/// installed Hiragino face is closer for Japanese text, while the ordinary substitute keeps MS
+/// Gothic's fixed-width Latin letters and digits. Callers apply this only to East Asian text.
+/// An installed original always wins, and platforms without Hiragino keep ordinary fallback.
+pub fn east_asian_substitute(family: &str, bold: bool, italic: bool) -> Option<Resolved> {
+    let base = charset_base_family(family).trim().to_lowercase();
+    if !matches!(base.as_str(), "ms gothic" | "ms ゴシック" | "ｍｓ ゴシック" | "ｍｓ　ゴシック") || !resolve(family, bold, italic).substituted
+    {
+        return None;
+    }
+    const JAPANESE_GOTHIC: &str = "Hiragino Kaku Gothic ProN";
+    if !FontDb::global().has_family(JAPANESE_GOTHIC) {
+        return None;
+    }
+    let mut r = resolve(JAPANESE_GOTHIC, bold, italic);
+    r.substituted = true;
+    Some(r)
+}
+
+/// External leading missing from a one-em CJK substitute. Word's Japanese single lines
+/// measured at 9–36 pt take 1.3 em; the substitute can omit that room from its font tables.
+/// Installed requested faces, Latin substitutes and faces with their own leading keep it.
+pub fn substitute_cjk_leading(face: &FaceRef, substituted: bool) -> f64 {
+    let (a, d) = line_metrics(face);
+    if substituted && face.covers('国') && ((a + d) / face.upem.max(1.0) - 1.0).abs() < 0.01 { 0.3 } else { 0.0 }
+}
+
+/// Requested height for Japanese grid-row selection, including missing external leading.
+pub fn japanese_grid_height(family: &str, size: f32) -> f32 {
+    japanese_grid_height_for_style(family, size, false, false)
+}
+
+/// Requested Japanese grid height for the run's actual bold/italic face. Different styles can
+/// have different line metrics, so using Regular here can disagree with the run's line height.
+pub fn japanese_grid_height_for_style(family: &str, size: f32, bold: bool, italic: bool) -> f32 {
+    let r = resolve(family, bold, italic);
+    size * (1.0 + substitute_cjk_leading(&r.face, r.substituted) as f32)
+}
+
 /// A line's (ascent, descent) from hhea values, both positive: the line gap goes above the ascent.
 fn hhea_line(ascender: i16, descender: i16, line_gap: i16) -> (f64, f64) {
     (f64::from(ascender) + f64::from(line_gap.max(0)), f64::from(descender).abs())
+}
+
+fn horizontal_japanese_extents(ascent: f64, descent: f64, upem: f64, line_gap: i16, substituted: bool) -> Option<(f64, f64)> {
+    if (!substituted && line_gap != 0)
+        || !upem.is_finite()
+        || upem <= 0.0
+        || !ascent.is_finite()
+        || !descent.is_finite()
+        || ascent <= 0.0
+        || descent < 0.0
+        || ((ascent + descent) / upem - 1.0).abs() >= 0.01
+    {
+        return None;
+    }
+    let half_leading = upem * 0.15;
+    Some((ascent + half_leading, descent + half_leading))
+}
+
+/// Natural horizontal line extents for one-em Japanese substitutes and faces without native
+/// hhea leading. Black-box Word for Mac probes of missing Japanese requests and an installed
+/// zero-gap face give 1.3 em lines, with equal leading above and below the raw extents.
+/// Explicit minimum spacing retains this descent when the line grows. An installed requested
+/// face with its own gap retains that gap; coverage alone does not establish its line policy.
+/// Require ideograph and kana coverage; this policy does not select fonts by family name.
+/// Turned text retains [`line_metrics`] and its separately measured leading placement.
+pub fn horizontal_japanese_line_metrics(face: &crate::FontFace, substituted: bool) -> Option<(f64, f64)> {
+    type CachedMetrics = HashMap<(u32, bool), Option<(f64, f64)>>;
+    static CACHE: OnceLock<Mutex<CachedMetrics>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let key = (face.id(), substituted);
+    if let Some(v) = cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&key) {
+        return *v;
+    }
+    let metrics = if face.covers('国') && face.covers('あ') {
+        face.skrifa().and_then(|f| {
+            let hhea = f.hhea().ok()?;
+            horizontal_japanese_extents(
+                f64::from(hhea.ascender().to_i16()),
+                f64::from(hhea.descender().to_i16()).abs(),
+                face.upem,
+                hhea.line_gap().to_i16(),
+                substituted,
+            )
+        })
+    } else {
+        None
+    };
+    cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(key, metrics);
+    metrics
 }
 
 /// Line metrics for a face in font units: (ascent, descent), both positive, the way word
@@ -456,6 +591,83 @@ mod tests {
     use super::*;
 
     #[test]
+    fn horizontal_japanese_leading_scales_with_raw_font_units() {
+        for upem in [1000.0, 2048.0, 4096.0] {
+            for ascent_ratio in [0.75, 0.88, 0.9] {
+                let ascent = upem * ascent_ratio;
+                let descent = upem - ascent;
+                let (a, d) = horizontal_japanese_extents(ascent, descent, upem, 0, false).unwrap();
+                assert!((a - ascent - upem * 0.15).abs() < 0.00001);
+                assert!((d - descent - upem * 0.15).abs() < 0.00001);
+                assert!((a + d - upem * 1.3).abs() < 0.00001);
+            }
+        }
+    }
+
+    #[test]
+    fn horizontal_japanese_leading_requires_valid_one_em_raw_extents() {
+        assert!(horizontal_japanese_extents(880.0, 125.0, 1000.0, 0, false).is_some());
+        for (a, d, em) in [
+            (880.0, 140.0, 1000.0),
+            (1380.0, 120.0, 1000.0),
+            (880.0, 120.0, 0.0),
+            (-880.0, 120.0, 1000.0),
+            (880.0, -120.0, 1000.0),
+            (f64::NAN, 120.0, 1000.0),
+            (880.0, f64::INFINITY, 1000.0),
+            (880.0, 120.0, f64::NAN),
+        ] {
+            assert!(horizontal_japanese_extents(a, d, em, 0, false).is_none());
+        }
+    }
+
+    #[test]
+    fn horizontal_japanese_leading_preserves_native_gaps_and_keys_substitution() {
+        for gap in [-50, 67, 500] {
+            assert!(horizontal_japanese_extents(880.0, 120.0, 1000.0, gap, false).is_none());
+            assert!(horizontal_japanese_extents(880.0, 120.0, 1000.0, gap, true).is_some());
+        }
+        for family in ["Hiragino Mincho ProN", "Hiragino Kaku Gothic ProN"] {
+            let resolved = resolve(family, false, false);
+            if resolved.substituted {
+                continue;
+            }
+            let Some(font) = resolved.face.skrifa() else { continue };
+            let Ok(hhea) = font.hhea() else { continue };
+            if hhea.line_gap().to_i16() == 0
+                || !resolved.face.covers('国')
+                || !resolved.face.covers('あ')
+                || horizontal_japanese_extents(
+                    f64::from(hhea.ascender().to_i16()),
+                    f64::from(hhea.descender().to_i16()).abs(),
+                    resolved.face.upem,
+                    hhea.line_gap().to_i16(),
+                    true,
+                )
+                .is_none()
+            {
+                continue;
+            }
+            assert!(horizontal_japanese_line_metrics(&resolved.face, false).is_none());
+            assert!(horizontal_japanese_line_metrics(&resolved.face, true).is_some());
+            assert!(horizontal_japanese_line_metrics(&resolved.face, false).is_none());
+        }
+    }
+
+    #[test]
+    fn horizontal_japanese_leading_does_not_apply_to_latin_faces() {
+        for family in ["Source Sans 3", "Source Serif 4", "JetBrains Mono"] {
+            let resolved = resolve(family, false, false);
+            if resolved.substituted {
+                continue;
+            }
+            assert!(!resolved.face.covers('国') || !resolved.face.covers('あ'));
+            assert!(horizontal_japanese_line_metrics(&resolved.face, false).is_none());
+            assert!(horizontal_japanese_line_metrics(&resolved.face, true).is_none());
+        }
+    }
+
+    #[test]
     fn the_line_gap_goes_above_the_ascent() {
         // Times New Roman (hhea 1825 / -443, gap 87), and a font with a large gap: Word puts the
         // first baseline the ascent plus the whole gap below the line top.
@@ -464,6 +676,99 @@ mod tests {
         // A negative gap adds nothing; the most negative descender doesn't overflow.
         assert_eq!(hhea_line(1000, -300, -50), (1000.0, 300.0));
         assert_eq!(hhea_line(1000, i16::MIN, 0), (1000.0, 32768.0));
+    }
+
+    #[test]
+    fn generic_japanese_mincho_uses_a_japanese_face_for_symbols() {
+        let r = resolve("明朝体", false, false);
+        assert!(has_named_substitutes("明朝体"));
+        assert!(r.face.covers('◎') && r.face.covers('※'));
+        assert!(matches!(r.face.family.as_str(), "Hiragino Mincho ProN" | "Shippori Mincho" | "BIZ UDMincho" | "Noto Serif CJK JP" | "Yu Mincho"));
+    }
+
+    #[test]
+    fn missing_ms_mincho_uses_measured_japanese_grid_height() {
+        let r = resolve("MS Mincho", false, false);
+        let expected = 12.0 * (1.0 + substitute_cjk_leading(&r.face, r.substituted) as f32);
+        assert_eq!(japanese_grid_height("MS Mincho", 12.0), expected);
+        assert_eq!(japanese_grid_height("Century", 12.0), 12.0);
+        for family in ["BIZ UDMincho", "BIZ UDGothic"] {
+            let installed = resolve(family, false, false);
+            if !installed.substituted {
+                assert_eq!(substitute_cjk_leading(&installed.face, false), 0.0, "installed faces keep their own metrics");
+                assert_eq!(substitute_cjk_leading(&installed.face, true), 0.3, "one-em substitutes need external leading");
+                assert_eq!(japanese_grid_height(family, 12.0), 12.0);
+            }
+        }
+    }
+
+    #[test]
+    fn family_resolution_cache_keeps_bold_and_italic_faces_separate() {
+        // All four styles are bundled open font inputs, independent of installed fonts.
+        let styles = [(false, false, "Regular"), (true, false, "Bold"), (false, true, "Italic"), (true, true, "Bold Italic")];
+        let faces: Vec<_> = styles
+            .iter()
+            .map(|&(bold, italic, style)| {
+                let r = resolve("Source Serif 4", bold, italic);
+                assert!(!r.substituted && !r.synth_bold && !r.synth_italic);
+                assert_eq!(r.face.style, style);
+                r.face
+            })
+            .collect();
+        for (i, first) in faces.iter().enumerate() {
+            for second in faces.iter().skip(i + 1) {
+                assert_ne!(first.id(), second.id());
+            }
+        }
+        for _ in 0..2 {
+            for ((bold, italic, _), expected) in styles.iter().zip(&faces).rev() {
+                let r = resolve("Source Serif 4", *bold, *italic);
+                assert_eq!(r.face.id(), expected.id());
+                assert_eq!(line_metrics(&r.face), line_metrics(expected));
+            }
+        }
+    }
+
+    #[test]
+    fn localized_japanese_aliases_preserve_the_original_family() {
+        let groups: &[&[&str]] = &[
+            &["MS Gothic", "ＭＳ ゴシック", "MS ゴシック", "ＭＳ　ゴシック"],
+            &["MS Mincho", "ＭＳ 明朝", "MS 明朝", "ＭＳ　明朝"],
+            &["MS PGothic", "ＭＳ Ｐゴシック", "MS Ｐゴシック", "ＭＳ　Ｐゴシック"],
+            &["MS PMincho", "ＭＳ Ｐ明朝", "MS Ｐ明朝", "ＭＳ　Ｐ明朝"],
+            &["Yu Mincho", "游明朝"],
+            &["Yu Gothic", "游ゴシック"],
+        ];
+        for group in groups {
+            for requested in *group {
+                for installed in *group {
+                    assert_eq!(installed_japanese_alias(requested, |name| name == *installed), Some(*installed), "{requested} → {installed}");
+                }
+                assert_eq!(installed_japanese_alias(requested, |_| false), None);
+            }
+        }
+        // Proportional and fixed-pitch originals are separate families, as are Gothic and Mincho.
+        assert_eq!(installed_japanese_alias("MS PGothic", |name| name == "MS Gothic"), None);
+        assert_eq!(installed_japanese_alias("MS PMincho", |name| name == "MS Mincho"), None);
+        assert_eq!(installed_japanese_alias("Yu Mincho", |name| name == "Yu Gothic"), None);
+        assert_eq!(installed_japanese_alias("Unknown Japanese Font", |_| true), None);
+
+        let db = FontDb::global();
+        for group in groups {
+            for requested in *group {
+                for (bold, italic) in [(false, false), (true, false), (false, true), (true, true)] {
+                    let r = resolve(requested, bold, italic);
+                    if db.has_family(requested) {
+                        // An exact installed family/face is selected before consulting aliases.
+                        assert!(!r.substituted, "{requested} is installed");
+                        assert_eq!(r.face.id(), db.face(requested, style_name(bold, italic)).id(), "{requested} keeps its installed style");
+                    } else if let Some(alias) = installed_japanese_alias(requested, |name| db.has_family(name)) {
+                        assert!(!r.substituted, "{requested} is an alias for installed {alias}");
+                        assert_eq!(r.face.id(), db.face(alias, style_name(bold, italic)).id());
+                    }
+                }
+            }
+        }
     }
 
     #[test]
@@ -486,6 +791,87 @@ mod tests {
         assert!(!b.synth_bold);
         let (a, d) = line_metrics(&b.face);
         assert!(a > 0.0 && d >= 0.0);
+    }
+
+    #[test]
+    fn generic_mincho_prefers_measured_substitute_and_keeps_fallbacks() {
+        assert_eq!(first_installed_substitute("明朝体", |n| n == "BIZ UDMincho" || n == "Hiragino Mincho ProN"), Some("BIZ UDMincho"));
+        assert_eq!(first_installed_substitute("明朝体", |n| n == "Hiragino Mincho ProN"), Some("Hiragino Mincho ProN"));
+        assert_eq!(first_installed_substitute("明朝体", |_| false), None);
+        let db = FontDb::global();
+        let resolved = resolve("明朝体", false, false);
+        if db.has_family("明朝体") {
+            assert!(!resolved.substituted);
+            assert!(resolved.face.named("明朝体"));
+        } else if db.has_family("BIZ UDMincho") {
+            assert!(resolved.substituted);
+            assert!(resolved.face.named("BIZ UDMincho"));
+        }
+    }
+
+    #[test]
+    fn ms_gothic_aliases_prefer_the_installed_original_then_japanese_sans() {
+        for name in ["MS Gothic", "ms gothic", "MS ゴシック", "ＭＳ ゴシック", "ＭＳ　ゴシック"] {
+            assert_eq!(installed_japanese_alias(name, |candidate| candidate == "MS Gothic"), Some("MS Gothic"));
+            assert_eq!(installed_japanese_alias(name, |candidate| candidate == "ＭＳ ゴシック"), Some("ＭＳ ゴシック"));
+            assert_eq!(installed_japanese_alias(name, |_| false), None);
+            assert_eq!(&substitutes(name)[..2], &["BIZ UDGothic", "BIZ UDPGothic"]);
+            assert!(has_named_substitutes(name));
+        }
+        assert_eq!(first_installed_substitute("MS Gothic", |n| n == "BIZ UDGothic" || n == "BIZ UDPGothic"), Some("BIZ UDGothic"));
+        assert_eq!(first_installed_substitute("MS Gothic", |n| n == "BIZ UDPGothic"), Some("BIZ UDPGothic"));
+        assert_eq!(first_installed_substitute("MS Gothic", |_| false), None);
+        assert_eq!(installed_japanese_alias("MS PGothic", |_| true), Some("MS PGothic"));
+        assert_eq!(substitutes("MS PGothic")[0], "BIZ UDPGothic");
+        assert!(has_named_substitutes("MS PGothic"));
+        let db = FontDb::global();
+        if !["MS Gothic", "ＭＳ ゴシック", "MS ゴシック", "ＭＳ　ゴシック"].iter().any(|n| db.has_family(n)) && db.has_family("BIZ UDPGothic")
+        {
+            let resolved = resolve("ＭＳ ゴシック", false, false);
+            assert!(resolved.substituted);
+            assert!(resolved.face.named(if db.has_family("BIZ UDGothic") { "BIZ UDGothic" } else { "BIZ UDPGothic" }));
+            assert!(resolved.face.covers('日'));
+        }
+    }
+
+    #[test]
+    fn ms_gothic_east_asian_substitute_keeps_other_families_and_installed_originals() {
+        for name in ["Source Sans 3", "BIZ UDGothic", "Hiragino Kaku Gothic ProN", "MS PGothic", "MS Mincho", "Missing Japanese Font"] {
+            assert!(east_asian_substitute(name, false, false).is_none(), "{name} keeps its ordinary resolution");
+        }
+        let db = FontDb::global();
+        for name in ["MS Gothic", "ＭＳ ゴシック", "ＭＳ　ゴシック"] {
+            let primary = resolve(name, false, false);
+            let asian = east_asian_substitute(name, false, false);
+            if !primary.substituted || !db.has_family("Hiragino Kaku Gothic ProN") {
+                assert!(asian.is_none(), "an installed original wins and no new font is required");
+            } else {
+                let asian = asian.expect("an installed Japanese substitute");
+                assert!(asian.substituted);
+                assert!(asian.face.named("Hiragino Kaku Gothic ProN"));
+                assert!(asian.face.covers('日'));
+                assert_eq!(resolve(name, false, false).face.id(), primary.face.id(), "Latin resolution remains unchanged");
+            }
+        }
+    }
+
+    #[test]
+    fn ms_mincho_aliases_prefer_the_installed_original_then_japanese_serif() {
+        for name in ["MS Mincho", "ms mincho", "MS 明朝", "ＭＳ 明朝", "ＭＳ　明朝"] {
+            assert_eq!(installed_japanese_alias(name, |candidate| candidate == "MS Mincho"), Some("MS Mincho"));
+            assert_eq!(installed_japanese_alias(name, |candidate| candidate == "ＭＳ 明朝"), Some("ＭＳ 明朝"));
+            assert_eq!(installed_japanese_alias(name, |_| false), None);
+            assert_eq!(substitutes(name)[0], "BIZ UDMincho");
+            assert!(has_named_substitutes(name));
+        }
+        assert_eq!(first_installed_substitute("MS Mincho", |n| n == "BIZ UDMincho"), Some("BIZ UDMincho"));
+        let db = FontDb::global();
+        if !["MS Mincho", "ＭＳ 明朝", "MS 明朝", "ＭＳ　明朝"].iter().any(|n| db.has_family(n)) && db.has_family("BIZ UDMincho") {
+            let resolved = resolve("MS Mincho", false, false);
+            assert!(resolved.substituted);
+            assert!(resolved.face.named("BIZ UDMincho"));
+            assert!(resolved.face.covers('日'));
+        }
     }
 
     #[test]

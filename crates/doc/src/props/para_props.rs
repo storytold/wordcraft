@@ -274,6 +274,11 @@ pub struct ParaProps {
     pub space_before: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub space_after: Option<f32>,
+    /// Spacing before/after in line units (OOXML stores hundredths); `None` inherits.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub space_before_lines: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub space_after_lines: Option<f32>,
     /// HTML-style automatic space before (`w:beforeAutospacing`): 14 pt, none at the top of the
     /// document or of a table cell, and collapsing with the space after the paragraph above.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -374,7 +379,7 @@ impl ParaProps {
 
     fn overlay_layout(&mut self, patch: &ParaProps) {
         overlay_fields!(self, patch; style, align, indent_left, indent_right, indent_first, indent_left_chars, indent_right_chars, indent_first_chars,
-            space_before, space_after, space_before_auto, space_after_auto, line_spacing, contextual_spacing, mirror_indents, tabs, shading, borders);
+            space_before, space_after, space_before_lines, space_after_lines, space_before_auto, space_after_auto, line_spacing, contextual_spacing, mirror_indents, tabs, shading, borders);
     }
 
     fn overlay_pagination(&mut self, patch: &ParaProps) {
@@ -392,6 +397,27 @@ impl ParaProps {
     pub fn is_empty(&self) -> bool {
         *self == ParaProps::default()
     }
+    /// A point spacing edit cancels inherited line-unit and automatic values unless the caller
+    /// supplies those values too. This is for edit commands, not document import or generic overlay.
+    pub fn cancel_line_units_for_point_edits(&mut self) {
+        if self.space_before.is_some() {
+            if self.space_before_lines.is_none() {
+                self.space_before_lines = Some(0.0);
+            }
+            if self.space_before_auto.is_none() {
+                self.space_before_auto = Some(false);
+            }
+        }
+        if self.space_after.is_some() {
+            if self.space_after_lines.is_none() {
+                self.space_after_lines = Some(0.0);
+            }
+            if self.space_after_auto.is_none() {
+                self.space_after_auto = Some(false);
+            }
+        }
+    }
+
     /// After setting indents in points: keep the indents in characters (left, right, first line)
     /// an inherited style may set from winning over them, as Word does (`w:firstLineChars="0"`).
     pub fn cancel_char_indents(&mut self, left: bool, right: bool, first: bool) {

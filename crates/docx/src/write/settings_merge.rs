@@ -8,7 +8,7 @@
 //! tag (namespace declarations, `mc:Ignorable`) and every child the model doesn't own are kept
 //! byte for byte; owned children come from the generated part (or go, when the model turned
 //! them off); owned children the original lacks are inserted at their CT_Settings position; in
-//! `w:compat` only the `compatibilityMode` setting is replaced. Kept children that refer to a
+//! `w:compat` the `compatibilityMode` and modelled width-balancing switch are replaced. Kept children that refer to a
 //! relationship (`r:id`, e.g. a mail merge data source) are dropped: their relationships aren't
 //! carried. Anything unexpected returns `None`, and the generated part is written as before.
 
@@ -227,7 +227,7 @@ fn children(xml: &str, root: &str) -> Option<(usize, usize, Vec<Child>)> {
     Some((open_end, close, out))
 }
 
-/// The original `w:compat` with its `compatibilityMode` taken from the generated one.
+/// The original `w:compat` with its modelled settings taken from the generated one.
 fn merge_compat(orig: &str, generated: &str) -> Option<String> {
     let mode = |s: &str| -> Option<(usize, usize)> {
         let at = s.find("w:name=\"compatibilityMode\"")?;
@@ -235,7 +235,7 @@ fn merge_compat(orig: &str, generated: &str) -> Option<String> {
         let tag_end = tag_start + s.get(tag_start..)?.find('>')? + 1;
         Some((tag_start, tag_end))
     };
-    match (mode(orig), mode(generated)) {
+    let merged = match (mode(orig), mode(generated)) {
         (Some((a, b)), Some((c, d))) => Some(format!("{}{}{}", orig.get(..a)?, generated.get(c..d)?, orig.get(b..)?)),
         (None, Some((c, d))) => {
             // No mode in the original: add the generated one before `</w:compat>`, or expand a self-closing `<w:compat/>`.
@@ -249,7 +249,61 @@ fn merge_compat(orig: &str, generated: &str) -> Option<String> {
             }
         }
         _ => Some(orig.to_string()),
+    }?;
+    merge_balance_switch(&merged, generated)
+}
+
+/// Keep the model-owned width-balancing switch editable even when other compatibility
+/// children are preserved from an imported settings part.
+fn merge_balance_switch(orig: &str, generated: &str) -> Option<String> {
+    const NAME: &str = "w:balanceSingleByteDoubleByteWidth";
+    let generated_children = match children(generated, "w:compat") {
+        Some((_, _, children)) => children,
+        None if generated.trim_end().ends_with("/>") => Vec::new(),
+        None => return None,
+    };
+    let replacement = generated_children.iter().find(|c| c.name == NAME).and_then(|c| generated.get(c.start..c.end));
+    let (open, _, children) = match children(orig, "w:compat") {
+        Some(value) => value,
+        None if orig.trim_end().ends_with("/>") => {
+            return match replacement {
+                Some(value) => Some(format!("{}>{value}</w:compat>", orig.get(..orig.rfind("/>")?)?.trim_end())),
+                None => Some(orig.to_string()),
+            };
+        }
+        None => return None,
+    };
+    let mut out = String::with_capacity(orig.len() + replacement.map_or(0, str::len));
+    out.push_str(orig.get(..open)?);
+    let mut inserted = false;
+    let mut cursor = open;
+    for child in children {
+        // Preserve whitespace and comments between children byte for byte.
+        out.push_str(orig.get(cursor..child.start)?);
+        if child.name == NAME {
+            if !inserted {
+                if let Some(value) = replacement {
+                    out.push_str(value);
+                }
+                inserted = true;
+            }
+        } else {
+            // A newly enabled switch precedes the parameterized compatibility settings.
+            if !inserted && child.name == "w:compatSetting" {
+                if let Some(value) = replacement {
+                    out.push_str(value);
+                }
+                inserted = true;
+            }
+            out.push_str(orig.get(child.start..child.end)?);
+        }
+        cursor = child.end;
     }
+    if !inserted && let Some(value) = replacement {
+        out.push_str(value);
+    }
+    out.push_str(orig.get(cursor..)?);
+    Some(out)
 }
 
 /// Does `original` (a settings part) hold anything the model doesn't write? Then the reader keeps
@@ -385,5 +439,15 @@ mod tests {
         let out = String::from_utf8(merge(orig.as_bytes(), GEN.as_bytes()).unwrap()).unwrap();
         assert!(out.contains("<w:compat><w:compatSetting") && out.contains("</w:compat>"), "{out}");
         assert!(out.contains("<w:rsidRoot w:val=\"00112233\"/>"), "{out}");
+    }
+
+    #[test]
+    fn merging_width_balance_keeps_comments_and_accepts_empty_compat_blocks() {
+        let enabled = "<w:compat><w:balanceSingleByteDoubleByteWidth/></w:compat>";
+        assert_eq!(merge_balance_switch("<w:compat/>", "<w:compat/>").unwrap(), "<w:compat/>");
+        assert_eq!(merge_balance_switch("<w:compat/>", enabled).unwrap(), enabled);
+        let original = "<w:compat>\n<!--before--><w:balanceSingleByteDoubleByteWidth/><!--after-->\n<w:useFELayout/>\n</w:compat>";
+        assert_eq!(merge_balance_switch(original, "<w:compat/>").unwrap(), "<w:compat>\n<!--before--><!--after-->\n<w:useFELayout/>\n</w:compat>");
+        assert_eq!(merge_balance_switch(original, enabled).unwrap(), original);
     }
 }

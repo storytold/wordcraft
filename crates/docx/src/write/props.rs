@@ -96,6 +96,15 @@ pub fn rpr_inner(w: &mut W, c: &CharProps) {
     if let Some(s) = c.shading {
         w.empty("w:shd", &[("w:val", "clear"), ("w:color", "auto"), ("w:fill", &s.hex())]);
     }
+    if let Some(fit) = c.fit_text.filter(|f| f.width.is_finite()) {
+        let width = twips(fit.width.clamp(0.0, 1584.0));
+        let id = fit.id.map(|id| id.to_string());
+        let mut attrs = vec![("w:val", width.as_str())];
+        if let Some(id) = &id {
+            attrs.push(("w:id", id));
+        }
+        w.empty("w:fitText", &attrs);
+    }
     if let Some(v) = c.vert_align {
         w.val(
             "w:vertAlign",
@@ -373,11 +382,15 @@ fn write_spacing(w: &mut W, p: &ParaProps) {
     if p.space_before.is_some()
         || p.space_after.is_some()
         || p.line_spacing.is_some()
+        || p.space_before_lines.is_some()
+        || p.space_after_lines.is_some()
         || p.space_before_auto.is_some()
         || p.space_after_auto.is_some()
     {
         let before = p.space_before.map(|v| twips(v.max(0.0)));
         let after = p.space_after.map(|v| twips(v.max(0.0)));
+        let before_lines = p.space_before_lines.map(|v| n(round(v.clamp(0.0, 1584.0) * 100.0)));
+        let after_lines = p.space_after_lines.map(|v| n(round(v.clamp(0.0, 1584.0) * 100.0)));
         let line = p.line_spacing.map(|l| match l {
             LineSpacing::Multiple(m) => (n(round(m.clamp(0.06, 132.0) * 240.0)), "auto"),
             LineSpacing::AtLeast(v) => (twips(v.abs()), "atLeast"),
@@ -387,11 +400,17 @@ fn write_spacing(w: &mut W, p: &ParaProps) {
         if let Some(b) = &before {
             a.push(("w:before", b));
         }
+        if let Some(v) = &before_lines {
+            a.push(("w:beforeLines", v));
+        }
         if let Some(on) = p.space_before_auto {
             a.push(("w:beforeAutospacing", if on { "1" } else { "0" }));
         }
         if let Some(x) = &after {
             a.push(("w:after", x));
+        }
+        if let Some(v) = &after_lines {
+            a.push(("w:afterLines", v));
         }
         if let Some(on) = p.space_after_auto {
             a.push(("w:afterAutospacing", if on { "1" } else { "0" }));

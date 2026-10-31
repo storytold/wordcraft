@@ -25,7 +25,9 @@ mod lines;
 mod model;
 mod paragraph;
 mod proof;
+mod spaces;
 mod tabs;
+mod textfit;
 
 pub use bidi::{bidi_levels, visual_order};
 pub(crate) use builder::left_out;

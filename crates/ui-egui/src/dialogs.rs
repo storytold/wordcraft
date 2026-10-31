@@ -254,6 +254,8 @@ pub enum Dialog {
         color: String,
         before: f32,
         after: f32,
+        #[serde(skip)]
+        spacing_start: (f32, f32),
     },
     /// Manage Styles: every style with its preview and description; modify, create, delete and
     /// show or hide them.
@@ -617,11 +619,14 @@ impl Dialog {
                 let tab = if name == "asianTypography" { 2 } else { 0 };
                 let s = &app.session;
                 let story = s.sel.focus.story;
-                let of = |props: &wordcraft_doc::props::ParaProps| paragraph_dialog(&s.doc.styles.resolve_para(props), tab);
+                let of = |path| {
+                    let pos = wordcraft_doc::Pos { story, path, off: 0 };
+                    s.resolved_para_at(&pos).map(|rp| paragraph_dialog(&rp, tab))
+                };
                 // Every selected paragraph as the dialog would show it: what they all share is
                 // shown, and what OK compares with; the rest shows blank (#1346).
-                let mut each = wordcraft_engine::cmd::selected_paths(s).into_iter().filter_map(|path| s.doc.para(story, &path)).map(|p| of(&p.props));
-                let mut d = each.next().or_else(|| s.doc.para_at(&s.sel.focus).map(|p| of(&p.props)))?;
+                let mut each = wordcraft_engine::cmd::selected_paths(s).into_iter().filter_map(of);
+                let mut d = each.next().or_else(|| s.resolved_para_at(&s.sel.focus).map(|rp| paragraph_dialog(&rp, tab)))?;
                 let fields = para_fields(&d);
                 let mut shared = fields.clone();
                 for other in each {
@@ -868,6 +873,7 @@ impl Dialog {
             },
             before: rp.space_before,
             after: rp.space_after,
+            spacing_start: (rp.space_before, rp.space_after),
         })
     }
 }

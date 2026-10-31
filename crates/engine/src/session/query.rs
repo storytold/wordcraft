@@ -2,6 +2,35 @@ use super::doc_state::{CellRange, EDIT_MARKS, Selection};
 use super::{CharProps, Document, PartKind, Path, Pos, Session, StoryRef, ViewMode, untitled_name};
 
 impl Session {
+    /// Paragraph formatting at a position, including the containing section's spacing grid.
+    pub fn resolved_para_at(&self, pos: &Pos) -> Option<wordcraft_doc::resolve::ResolvedPara> {
+        let para = self.doc.para_at(pos)?;
+        let pitch = match pos.story {
+            StoryRef::Part(id) if self.doc.parts.get(&id).is_some_and(|p| matches!(p.kind, PartKind::Header | PartKind::Footer)) => {
+                // Header/footer layout clears the body grid before shaping these stories.
+                12.0
+            }
+            story => {
+                let index = match story {
+                    StoryRef::Body => self.doc.section_index_of(pos.path.0.first().copied().unwrap_or(0) as usize),
+                    StoryRef::Part(id) => crate::cmd::page::section_of_part(self, id),
+                };
+                self.doc.sections().get(index).and_then(|(_, section)| section.grid_line_pitch()).unwrap_or(12.0)
+            }
+        };
+        // Table style spacing belongs to the nearest enclosing table. Conditional cell
+        // regions change alignment/character properties only, not paragraph spacing.
+        let table = pos
+            .path
+            .cell()
+            .and_then(|(path, _, _)| self.doc.table(pos.story, &path))
+            .and_then(|table| table.props.style.as_deref())
+            .and_then(|id| self.doc.styles.table_style(id));
+        let mut rp = self.doc.styles.resolve_para_in(&para.props, table.as_ref().map(|style| &style.para));
+        rp.set_line_space_unit(pitch);
+        Some(rp)
+    }
+
     /// Remember the caret as the place of an edit, for Go Back. Edits in the same paragraph as
     /// the last one (typing on) update that place rather than adding one.
     pub(super) fn note_edit(&mut self) {

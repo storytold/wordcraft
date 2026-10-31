@@ -9773,6 +9773,74 @@ fn spacing_commands_handle_automatic_spacing() {
     assert!(s.run("para.spacing", &json!({"beforeAuto": "yes"})).is_ok(), "junk is ignored, never a panic");
 }
 
+#[test]
+fn paragraph_spacing_presets_and_style_point_edits_cancel_line_units() {
+    let mut s = s();
+    s.doc.styles.default_para.space_before_lines = Some(1.0);
+    s.doc.styles.default_para.space_after_lines = Some(1.0);
+    s.doc.styles.default_para.space_after_auto = Some(true);
+    run(&mut s, "design.paragraphSpacing", json!({"value": "compact"}));
+    let default = &s.doc.styles.default_para;
+    assert_eq!((default.space_before_lines, default.space_after_lines), (Some(0.0), Some(0.0)));
+    assert_eq!((default.space_before, default.space_after), (Some(0.0), Some(4.0)));
+    assert_eq!(default.space_after_auto, Some(false));
+
+    let normal = s.doc.styles.get_mut("Normal").unwrap();
+    normal.para.space_before_lines = Some(0.5);
+    normal.para.space_after_lines = Some(0.5);
+    run(&mut s, "styles.modify", json!({"style": "Normal", "para": {"spaceBefore": 3}}));
+    let normal = &s.doc.styles.get("Normal").unwrap().para;
+    assert_eq!((normal.space_before_lines, normal.space_after_lines), (Some(0.0), Some(0.5)));
+    run(&mut s, "styles.modify", json!({"style": "Normal", "para": {"spaceAfter": 4, "spaceAfterLines": 0.75}}));
+    assert_eq!(s.doc.styles.get("Normal").unwrap().para.space_after_lines, Some(0.75));
+
+    let table = s.doc.styles.get_mut("TableGrid").unwrap();
+    table.para.space_after_lines = Some(1.0);
+    run(&mut s, "table.modifyStyle", json!({"style": "TableGrid", "para": {"spaceAfter": 8}}));
+    assert_eq!(s.doc.styles.get("TableGrid").unwrap().para.space_after_lines, Some(0.0));
+}
+
+#[test]
+fn paragraph_set_point_spacing_overrides_inherited_line_units() {
+    let mut s = s();
+    s.doc.styles.default_para.space_before_lines = Some(0.5);
+    s.doc.styles.default_para.space_after_lines = Some(1.0);
+    run(&mut s, "para.set", json!({"props": {"spaceBefore": 3}}));
+    let rp = s.resolved_para_at(&s.sel.focus).unwrap();
+    assert_eq!((rp.space_before, rp.space_before_lines), (3.0, Some(0.0)));
+    assert_eq!(rp.space_after_lines, Some(1.0), "unchanged side retains its line units");
+    run(&mut s, "para.set", json!({"props": {"spaceAfter": 4, "spaceAfterLines": 0.75}}));
+    assert_eq!(s.resolved_para_at(&s.sel.focus).unwrap().space_after_lines, Some(0.75), "explicit line units survive");
+}
+
+#[test]
+fn paragraph_spacing_commands_use_the_containing_section_grid() {
+    let mut s = s();
+    s.doc.last_section.doc_grid =
+        Some(wordcraft_doc::section::DocGrid { kind: wordcraft_doc::section::DocGridType::Lines, line_pitch: 20.0, char_space: 0 });
+    s.doc.styles.default_para.space_after_lines = Some(0.5);
+    let rp = s.resolved_para_at(&s.sel.focus).unwrap();
+    assert_eq!(rp.space_after, 10.0);
+    run(&mut s, "para.removeSpaceAfter", json!({}));
+    assert_eq!(s.resolved_para_at(&s.sel.focus).unwrap().space_after, 0.0);
+}
+
+#[test]
+fn paragraph_point_spacing_overrides_inherited_line_units() {
+    let mut s = s();
+    s.doc.styles.default_para.space_before_lines = Some(0.5);
+    s.doc.styles.default_para.space_after_lines = Some(1.0);
+    let resolved = |s: &Session| s.doc.styles.resolve_para(&s.doc.para_at(&s.sel.focus).unwrap().props);
+    run(&mut s, "para.spacing", json!({"before": 3, "after": 4}));
+    let rp = resolved(&s);
+    assert_eq!((rp.space_before, rp.space_after), (3.0, 4.0));
+    assert_eq!((rp.space_before_lines, rp.space_after_lines), (Some(0.0), Some(0.0)));
+    run(&mut s, "para.addSpaceBefore", json!({}));
+    run(&mut s, "para.removeSpaceAfter", json!({}));
+    let rp = resolved(&s);
+    assert_eq!((rp.space_before, rp.space_after), (0.0, 0.0));
+}
+
 /// #712, as in Word: Ctrl+F (`edit.find` with no text) opens the Navigation pane and asks the UI
 /// to put the keyboard in its search box, not the dialog; Ctrl+H (`edit.replace` with nothing to
 /// replace) opens Find and Replace on its Replace tab instead of failing; Go To moves by pages from
@@ -11474,4 +11542,117 @@ fn scale_font_sizes_reaches_char_table_and_cs_sizes_and_unset_default() {
     let grid = st.styles.iter().find(|x| x.id == "Grid").and_then(|x| x.table.as_ref()).unwrap();
     assert_eq!(grid.header_chr.size, Some(16.0));
     assert_eq!(grid.regions.get(&TablePart::Band2Horz).unwrap().chr.size, Some(10.0));
+}
+
+#[test]
+fn paragraph_spacing_query_matches_header_footer_layout_and_nonactive_note_section() {
+    use wordcraft_doc::para::{InlineObject, NoteKind};
+    use wordcraft_doc::section::{DocGrid, DocGridType};
+    use wordcraft_doc::{Document, PartKind, Path};
+
+    let mut doc = Document::from_text("First section\nSecond section");
+    doc.para_mut(StoryRef::Body, &Path::top(0)).unwrap().section = Some(Default::default());
+    doc.last_section.doc_grid = Some(DocGrid { kind: DocGridType::Lines, line_pitch: 20.0, char_space: 0 });
+    doc.styles.default_para.space_after_lines = Some(0.5);
+    let mut parts = Vec::new();
+    for (kind, text) in [(PartKind::Header, "Header"), (PartKind::Footer, "Footer"), (PartKind::Footnote, "Note")] {
+        let id = doc.add_part(kind, vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()))]);
+        parts.push((kind, id));
+        match kind {
+            PartKind::Header => doc.last_section.headers.default = Some(id),
+            PartKind::Footer => doc.last_section.footers.default = Some(id),
+            PartKind::Footnote => {
+                doc.para_mut(StoryRef::Body, &Path::top(1))
+                    .unwrap()
+                    .insert_object(0, InlineObject::NoteRef { kind: NoteKind::Footnote, id, custom: String::new() }, &Default::default())
+                    .unwrap();
+            }
+            _ => {}
+        }
+    }
+    let mut s = Session::new(doc);
+    // The focus remains in section one; queries for other stories use their own context.
+    let focus = s.sel.focus.clone();
+    assert_eq!(s.resolved_para_at(&focus).unwrap().space_after, 6.0);
+    let layout = s.layout();
+    for (kind, id) in parts {
+        let pos = s.doc.start_of(StoryRef::Part(id));
+        let queried = s.resolved_para_at(&pos).unwrap().space_after;
+        let expected = if kind == PartKind::Footnote { 10.0 } else { 6.0 };
+        assert_eq!(queried, expected, "{kind:?} spacing uses its own story context");
+        let laid_out = layout
+            .pages
+            .iter()
+            .flat_map(|p| p.items.iter().chain(&p.header).chain(&p.footer))
+            .find_map(|item| match item {
+                wordcraft_layout::Placed::Lines { story: StoryRef::Part(story), para, .. } if *story == id => Some(para.rp.space_after),
+                _ => None,
+            })
+            .expect("each attached story is laid out");
+        assert_eq!(queried, laid_out, "{kind:?} query agrees with layout");
+    }
+    assert_eq!(s.sel.focus, focus, "queries leave the active selection unchanged");
+}
+
+#[test]
+fn paragraph_spacing_query_inherits_nearest_table_style_like_layout() {
+    use std::sync::Arc;
+    use wordcraft_doc::props::ParaProps;
+    use wordcraft_doc::section::{DocGrid, DocGridType};
+    use wordcraft_doc::{Block, Document, PartKind, Path, Style, StyleKind, Table};
+
+    let mut doc = Document::from_text("Body");
+    doc.last_section.doc_grid = Some(DocGrid { kind: DocGridType::Lines, line_pitch: 20.0, char_space: 0 });
+    for (id, base, before, after) in [
+        ("SpacingOuter", None, Some(0.5), Some(1.0)),
+        ("SpacingBase", None, Some(0.25), Some(0.5)),
+        ("SpacingInner", Some("SpacingBase"), None, Some(0.75)),
+    ] {
+        doc.styles.upsert(Style {
+            id: id.into(),
+            name: id.into(),
+            kind: StyleKind::Table,
+            based_on: base.map(str::to_string),
+            para: ParaProps { space_before_lines: before, space_after_lines: after, ..Default::default() },
+            ..Default::default()
+        });
+    }
+    let paragraph = |text| wordcraft_doc::Paragraph::with_text(text, Default::default());
+    let mut direct = paragraph("Direct point override");
+    direct.props.space_after = Some(2.0);
+    direct.props.space_after_lines = Some(0.0);
+    let mut inner = Table::new(1, 1, 260.0);
+    inner.props.style = Some("SpacingInner".into());
+    inner.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(paragraph("Inner")), wordcraft_doc::para_block(direct)];
+    let mut outer = Table::new(1, 1, 300.0);
+    outer.props.style = Some("SpacingOuter".into());
+    outer.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(paragraph("Outer")), Arc::new(Block::Table(inner))];
+    let block = Arc::new(Block::Table(outer));
+    doc.body.push(block.clone());
+    let header = doc.add_part(PartKind::Header, vec![block]);
+    doc.last_section.headers.default = Some(header);
+    let mut s = Session::new(doc);
+    let layout = s.layout();
+    for (story, top, unit) in [(StoryRef::Body, 1, 20.0), (StoryRef::Part(header), 0, 12.0)] {
+        for (suffix, before, after) in
+            [(vec![0, 0, 0], unit * 0.5, unit), (vec![0, 0, 1, 0, 0, 0], unit * 0.25, unit * 0.75), (vec![0, 0, 1, 0, 0, 1], unit * 0.25, 2.0)]
+        {
+            let path = Path(std::iter::once(top).chain(suffix).collect());
+            let pos = Pos::new(story, path.clone(), 0);
+            let queried = s.resolved_para_at(&pos).unwrap();
+            assert_eq!((queried.space_before, queried.space_after), (before, after), "{story:?} {path}");
+            let laid_out = layout
+                .pages
+                .iter()
+                .flat_map(|page| page.items.iter().chain(&page.header).chain(&page.footer))
+                .find_map(|item| match item {
+                    wordcraft_layout::Placed::Lines { story: st, path: p, para, .. } if *st == story && *p == path => {
+                        Some((para.rp.space_before, para.rp.space_after))
+                    }
+                    _ => None,
+                })
+                .expect("each table paragraph is laid out");
+            assert_eq!((queried.space_before, queried.space_after), laid_out, "{story:?} {path} query agrees with layout");
+        }
+    }
 }

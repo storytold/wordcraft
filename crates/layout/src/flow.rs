@@ -180,7 +180,9 @@ impl<'a> Flow<'a> {
         // Floating objects anchored here join the page's wrap areas before the text is laid out; if
         // the paragraph then starts somewhere else (another column or page, or contextual spacing
         // drops its space before), they are placed again there.
-        let space_before = ctx.doc.styles.resolve_para(&p.props).space_before;
+        let mut rp = ctx.doc.styles.resolve_para(&p.props);
+        rp.set_line_space_unit(ctx.grid.line.unwrap_or(12.0));
+        let space_before = rp.space_before;
         let excl_mark = pb.excl.len();
         let guess = pb.y + space_before;
         let label = ctx.next_label(p);

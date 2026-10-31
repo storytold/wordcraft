@@ -163,3 +163,29 @@ fn do_not_track_moves_round_trips() {
     assert!(s.contains("<w:doNotTrackMoves/>"), "{s}");
     assert!(!wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).unwrap().settings.track_moves);
 }
+
+#[test]
+fn width_balancing_is_modelled_and_editable_in_preserved_compatibility_settings() {
+    for enabled in [false, true] {
+        let settings = format!(
+            r#"<w:settings xmlns:w="{W}"><w:compat><w:spaceForUL/><w:balanceSingleByteDoubleByteWidth w:val="{}"/><w:useFELayout/></w:compat></w:settings>"#,
+            u8::from(enabled)
+        );
+        let mut doc = wordcraft_docx::read(&with_settings(&settings)).unwrap();
+        assert_eq!(doc.settings.balance_single_byte_double_byte_width, enabled);
+        for value in [false, true, false] {
+            doc.settings.balance_single_byte_double_byte_width = value;
+            let files = save(&doc);
+            let xml = text(&files, "word/settings.xml");
+            assert!(xml.contains("<w:useFELayout/>") && xml.contains("<w:spaceForUL/>"), "other compatibility settings remain intact");
+            assert_eq!(xml.matches("<w:balanceSingleByteDoubleByteWidth").count(), usize::from(value));
+            let bytes = wordcraft_docx::write(&doc).unwrap();
+            doc = wordcraft_docx::read(&bytes).unwrap();
+            assert_eq!(doc.settings.balance_single_byte_double_byte_width, value);
+        }
+    }
+    let mut new = wordcraft_doc::Document::new();
+    new.settings.balance_single_byte_double_byte_width = true;
+    let reopened = wordcraft_docx::read(&wordcraft_docx::write(&new).unwrap()).unwrap();
+    assert!(reopened.settings.balance_single_byte_double_byte_width);
+}

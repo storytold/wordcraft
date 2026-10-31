@@ -139,6 +139,9 @@ fn write_note_settings(
 fn write_compatibility_settings(w: &mut W, doc: &Document) {
     w.open("w:compat", &[]);
     // CT_Compat: the older switches come before the `w:compatSetting`s.
+    if doc.settings.balance_single_byte_double_byte_width {
+        w.empty("w:balanceSingleByteDoubleByteWidth", &[]);
+    }
     if doc.settings.do_not_expand_shift_return {
         w.empty("w:doNotExpandShiftReturn", &[]);
     }

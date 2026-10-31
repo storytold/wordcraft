@@ -920,7 +920,7 @@ fn new_style_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
 }
 
 fn modify_style_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
-    let Dialog::ModifyStyle { back, resume, id, name, font, size, bold, italic, color, before, after } = d else {
+    let Dialog::ModifyStyle { back, resume, id, name, font, size, bold, italic, color, before, after, spacing_start } = d else {
         return false;
     };
     egui::Grid::new("ms").num_columns(2).show(ui, |ui| {
@@ -962,7 +962,14 @@ fn modify_style_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         if let Some(c) = wordcraft_doc::Rgb::parse(color) {
             chr["color"] = json!({"Rgb": [c.0, c.1, c.2]});
         }
-        let _ = app.run("styles.modify", json!({"style": id, "name": name, "chr": chr, "para": {"spaceBefore": *before, "spaceAfter": *after}}));
+        let mut para = json!({});
+        if *before != spacing_start.0 {
+            para["spaceBefore"] = json!(*before);
+        }
+        if *after != spacing_start.1 {
+            para["spaceAfter"] = json!(*after);
+        }
+        let _ = app.run("styles.modify", json!({"style": id, "name": name, "chr": chr, "para": para}));
     }
     if (ok || cancel) && *back {
         app.dialog = Some(Dialog::ManageStyles { alphabetical: false, selected: id.clone() });

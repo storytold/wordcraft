@@ -407,7 +407,11 @@ fn paragraph_dialog_leaves_what_the_selected_paragraphs_differ_in() {
     });
     assert_eq!(app.session.undo_depth(), depth + 1, "one undo step");
     for (i, was) in was.iter().enumerate() {
-        assert_eq!(para_props(&app, i), wordcraft_doc::props::ParaProps { space_before: Some(6.0), ..was.clone() }, "paragraph {i}");
+        assert_eq!(
+            para_props(&app, i),
+            wordcraft_doc::props::ParaProps { space_before: Some(6.0), space_before_lines: Some(0.0), space_before_auto: Some(false), ..was.clone() },
+            "paragraph {i}"
+        );
     }
     let _ = app.run("edit.undo", json!({}));
     assert_eq!((0..3).map(|i| para_props(&app, i)).collect::<Vec<_>>(), was, "undo takes all of it back");
@@ -769,6 +773,9 @@ fn font_dialog_sets_kerning_for_fonts() {
 fn modify_style_font_box_finds_the_family() {
     use egui_kittest::kittest::{By, Queryable};
     let mut app = app_with("Example");
+    let p = &mut app.session.doc.styles.get_mut("Normal").unwrap().para;
+    p.space_before_lines = Some(0.5);
+    p.space_after_lines = Some(1.0);
     app.dialog = Dialog::modify_style(&app, "Normal");
     let mut fonts = false;
     let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
@@ -797,6 +804,8 @@ fn modify_style_font_box_finds_the_family() {
     assert!(h.state().dialog.is_none(), "Enter pressed OK");
     let rc = h.state().session.doc.styles.resolve_char(Some("Normal"), &wordcraft_doc::CharProps::default());
     assert_eq!(rc.font, wordcraft_doc::styles::HEADING_FONT);
+    let p = &h.state().session.doc.styles.get("Normal").unwrap().para;
+    assert_eq!((p.space_before_lines, p.space_after_lines), (Some(0.5), Some(1.0)), "font-only edit retains line spacing");
 }
 
 /// A dialog was pinned by its anchor, so dragging its title bar did nothing (#732).

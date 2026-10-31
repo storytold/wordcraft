@@ -327,7 +327,8 @@ fn edit(st: &mut Style, v: &Value) -> Result<(), CmdError> {
         st.table = (parts != TableStyleParts::default()).then_some(parts);
     }
     if let Some(pp) = v.get("para") {
-        let pp: ParaProps = serde_json::from_value(pp.clone()).map_err(|e| CmdError::Params(format!("para: {e}")))?;
+        let mut pp: ParaProps = serde_json::from_value(pp.clone()).map_err(|e| CmdError::Params(format!("para: {e}")))?;
+        pp.cancel_line_units_for_point_edits();
         st.para.overlay(&pp);
         st.para.style = None;
         st.para.numbering = None;

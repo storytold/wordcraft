@@ -271,6 +271,12 @@ impl PropCtx {
                 }
                 "w:spacing" => c.spacing = tw(k, "w:val").map(|v| v.clamp(-1584.0, 1584.0)),
                 "w:w" => c.scale = k.attr("w:val").and_then(|v| measure(v.trim_end_matches('%'), 1.0)).map(|v| v.clamp(1.0, 600.0)),
+                "w:fitText" => {
+                    c.fit_text = tw(k, "w:val").filter(|v| v.is_finite()).map(|width| wordcraft_doc::props::FitText {
+                        width: width.clamp(0.0, 1584.0),
+                        id: k.attr("w:id").and_then(|v| v.parse().ok()),
+                    });
+                }
                 "w:kern" => c.kern = k.attr("w:val").and_then(|v| measure(v, 2.0)).map(|v| v.clamp(0.0, 1638.0)),
                 "w:position" => c.position = k.attr("w:val").and_then(|v| measure(v, 2.0)).map(|v| v.clamp(-1584.0, 1584.0)),
                 "w:sz" => c.size = k.attr("w:val").and_then(|v| measure(v, 2.0)).filter(|v| *v > 0.0).map(|v| v.clamp(1.0, 1638.0)),
@@ -374,6 +380,8 @@ impl PropCtx {
                     if let Some(v) = tw(k, "w:after") {
                         p.space_after = Some(v.max(0.0));
                     }
+                    p.space_before_lines = k.attr("w:beforeLines").and_then(int).map(|v| v.clamp(0, 158_400) as f32 / 100.0);
+                    p.space_after_lines = k.attr("w:afterLines").and_then(int).map(|v| v.clamp(0, 158_400) as f32 / 100.0);
                     // HTML-style automatic spacing; "0" switches an inherited one off.
                     let auto = |name| k.attr(name).map(|v| matches!(v.trim(), "1" | "true" | "on"));
                     if let Some(a) = auto("w:beforeAutospacing") {

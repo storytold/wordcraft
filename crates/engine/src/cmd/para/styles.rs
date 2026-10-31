@@ -117,7 +117,8 @@ pub(super) fn modify_style(s: &mut Session, v: &Value) -> CmdResult {
     if let Some(c) = chr {
         st.chr.overlay(&c);
     }
-    if let Some(pp) = para {
+    if let Some(mut pp) = para {
+        pp.cancel_line_units_for_point_edits();
         st.para.overlay(&pp);
     }
     if let Some(n) = next {

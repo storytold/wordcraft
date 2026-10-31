@@ -14,6 +14,10 @@ pub const AUTO_SPACING: f32 = 14.0;
 /// The largest drop cap distance from the text, in points (22", as Word's dialog allows).
 pub const MAX_DROP_CAP_DISTANCE: f32 = 1584.0;
 
+fn default_character_grid() -> bool {
+    true
+}
+
 /// Concrete character formatting.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -36,7 +40,12 @@ pub struct ResolvedChar {
     pub small_caps: bool,
     pub hidden: bool,
     pub spacing: f32,
+    /// Character-grid participation; paragraph line-grid snapping is resolved separately.
+    #[serde(default = "default_character_grid")]
+    pub snap_to_grid: bool,
     pub scale: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fit_text: Option<crate::props::FitText>,
     pub position: f32,
     /// Kerning: the smallest font size, in points, that is kerned (`w:kern`); 0 = never kerned.
     #[serde(default)]
@@ -94,7 +103,9 @@ impl ResolvedChar {
             small_caps: c.small_caps.unwrap_or(false),
             hidden: c.hidden.unwrap_or(false),
             spacing: c.spacing.unwrap_or(0.0).clamp(-100.0, 100.0),
+            snap_to_grid: c.snap_to_grid.unwrap_or(true),
             scale: c.scale.unwrap_or(100.0).clamp(1.0, 600.0),
+            fit_text: c.fit_text.filter(|f| f.width.is_finite()).map(|f| crate::props::FitText { width: f.width.clamp(0.0, 1584.0), ..f }),
             position: c.position.unwrap_or(0.0).clamp(-800.0, 800.0),
             kern: c.kern.filter(|k| k.is_finite()).unwrap_or(0.0).clamp(0.0, 1638.0),
             ligatures: c.ligatures,
@@ -159,6 +170,11 @@ pub struct ResolvedPara {
     pub indent_first: f32,
     pub space_before: f32,
     pub space_after: f32,
+    /// Optional paragraph spacing in line units; converted by layout when its metric is known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space_before_lines: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space_after_lines: Option<f32>,
     /// The space before or after is automatic (HTML-style, [`AUTO_SPACING`]): see
     /// `ParaProps::space_before_auto`.
     #[serde(default)]
@@ -220,14 +236,43 @@ impl ResolvedPara {
         if self.bidi { (self.indent_right, self.indent_left) } else { (self.indent_left, self.indent_right) }
     }
 
-    /// Turn the indents given in characters into points, one character being `size` points: the
-    /// size of the paragraph mark's font (as Word measures `w:firstLineChars` and friends).
-    pub fn set_char_unit(&mut self, size: f32) {
+    /// Convert non-zero line-unit paragraph spacing using a section's grid pitch. Word
+    /// applies it even when the paragraph does not snap to the grid.
+    /// Zero leaves the point value effective; automatic spacing takes precedence.
+    pub fn set_line_space_unit(&mut self, size: f32) {
         let size = if size.is_finite() { size.clamp(1.0, 1638.0) } else { 12.0 };
+        for (lines, auto, points) in
+            [(self.space_before_lines, self.before_auto, &mut self.space_before), (self.space_after_lines, self.after_auto, &mut self.space_after)]
+        {
+            if !auto && let Some(v) = lines.filter(|v| *v > 0.0) {
+                *points = (v * size).clamp(0.0, 1584.0);
+            }
+        }
+    }
+
+    /// Resolve character indents when the document and paragraph use the same character unit.
+    pub fn set_char_unit(&mut self, size: f32) {
+        self.set_char_units(size, size);
+    }
+
+    /// Left/right units come from the default paragraph; first-line/hanging units come from
+    /// its text (the style until layout resolves the first run and section grid). With hanging, the left
+    /// character value locates the first line; continuation lines add the hanging width.
+    pub fn set_char_units(&mut self, default_size: f32, paragraph_size: f32) {
+        let finite_size = |v: f32| if v.is_finite() { v.clamp(1.0, 1638.0) } else { 12.0 };
+        let base = finite_size(default_size);
+        let para = finite_size(paragraph_size);
         let [l, r, f] = self.indent_chars;
-        for (chars, pts) in [(l, &mut self.indent_left), (r, &mut self.indent_right), (f, &mut self.indent_first)] {
-            if chars != 0.0 {
-                *pts = (chars * size).clamp(-MAX_INDENT, MAX_INDENT);
+        if l != 0.0 {
+            self.indent_left = (l * base).clamp(-MAX_INDENT, MAX_INDENT);
+        }
+        if r != 0.0 {
+            self.indent_right = (r * base).clamp(-MAX_INDENT, MAX_INDENT);
+        }
+        if f != 0.0 {
+            self.indent_first = (f * para).clamp(-MAX_INDENT, MAX_INDENT);
+            if f < 0.0 {
+                self.indent_left = (l * base - self.indent_first).clamp(-MAX_INDENT, MAX_INDENT);
             }
         }
     }
@@ -247,6 +292,8 @@ impl ResolvedPara {
             indent_first: clampi(p.indent_first),
             space_before: if p.space_before_auto == Some(true) { AUTO_SPACING } else { p.space_before.unwrap_or(0.0).clamp(0.0, 1584.0) },
             space_after: if p.space_after_auto == Some(true) { AUTO_SPACING } else { p.space_after.unwrap_or(0.0).clamp(0.0, 1584.0) },
+            space_before_lines: p.space_before_lines.filter(|v| v.is_finite()).map(|v| v.clamp(0.0, 1584.0)),
+            space_after_lines: p.space_after_lines.filter(|v| v.is_finite()).map(|v| v.clamp(0.0, 1584.0)),
             before_auto: p.space_before_auto == Some(true),
             after_auto: p.space_after_auto == Some(true),
             line_spacing: match p.line_spacing.unwrap_or_default() {
@@ -344,10 +391,12 @@ impl StyleSheet {
         }
         base.overlay(&direct);
         let mut rp = ResolvedPara::from(&base, &style);
-        // Indents in characters: measured in the style's font size here; layout measures them in
-        // the paragraph mark's (`set_char_unit`), which direct formatting may change.
+        let size = self.resolve_char(Some(&style), &CharProps::default()).size;
+        // Default for a document without an explicit grid; layout applies the section grid.
+        rp.set_line_space_unit(12.0);
+        // Character-unit indents retain separate default-paragraph and paragraph-style units.
         if rp.indent_chars.iter().any(|c| *c != 0.0) {
-            rp.set_char_unit(self.resolve_char(Some(&style), &CharProps::default()).size);
+            rp.set_char_units(self.resolve_char(None, &CharProps::default()).size, size);
         }
         rp
     }
@@ -386,6 +435,23 @@ impl StyleSheet {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn line_unit_paragraph_spacing_cascades_and_zero_overrides() {
+        let mut s = StyleSheet::builtin();
+        s.default_para.space_before_lines = Some(0.25);
+        if let Some(normal) = s.get_mut("Normal") {
+            normal.para.space_after_lines = Some(0.5);
+        }
+        let inherited = s.resolve_para(&ParaProps::default());
+        assert_eq!((inherited.space_before_lines, inherited.space_after_lines), (Some(0.25), Some(0.5)));
+        let direct = s.resolve_para(&ParaProps { space_before_lines: Some(0.0), space_after_lines: Some(1.0), ..Default::default() });
+        assert_eq!((direct.space_before_lines, direct.space_after_lines), (Some(0.0), Some(1.0)));
+        assert_eq!(direct.space_before, 0.0);
+        assert_eq!(direct.space_after, 12.0);
+        let automatic = s.resolve_para(&ParaProps { space_before_auto: Some(true), space_after_auto: Some(true), ..Default::default() });
+        assert_eq!((automatic.space_before, automatic.space_after), (AUTO_SPACING, AUTO_SPACING));
+    }
 
     /// #2036: only a character itself (direct formatting) has a symbol font of its own; a
     /// style never gives one to its text.

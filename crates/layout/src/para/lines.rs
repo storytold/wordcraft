@@ -192,7 +192,7 @@ impl<'e> Breaker<'e> {
             hyph_limit: settings.consecutive_hyphen_limit as usize,
             widths: word_widths(&pl.clusters, &pl.hyph_after),
             rtl_para: rp.bidi,
-            grid: Some(env.grid).filter(|g| g.line.is_some() && rp.snap_to_grid),
+            grid: Some(env.grid).filter(|g| g.line.is_some() && rp.snap_to_grid && !matches!(rp.line_spacing, LineSpacing::AtLeast(v) if v <= 0.0)),
             bidi: rp.bidi || !pl.bidi_levels.is_empty(),
             est_h,
             // Exact spacing fixes the table-contact boundary even when the mark has other metrics.
@@ -295,6 +295,19 @@ impl<'e> Breaker<'e> {
         let end = lab.x + lab.width;
         match self.level.map(|l| l.suffix).unwrap_or(LevelSuffix::Tab) {
             LevelSuffix::Tab => {
+                // When the paragraph pulls a list's text indent left of the level's own tab,
+                // a label that just reaches that indent must not jump to the old level tab.
+                // A small overrun can arise from the label's font metrics. Keep the text after
+                // the label (never overlap it); longer labels still follow normal tab stops.
+                if let (Some(level), Some(hanging)) = (self.level, self.hanging_at)
+                    && level.tab.is_some_and(|tab| tab >= level.indent - 0.01)
+                    && level.indent > hanging + 0.01
+                    && (self.rp.indent_first + level.hanging).abs() < 0.01
+                    && end >= hanging - 0.01
+                    && end <= hanging + pl.styles.get(lab.style as usize).map(|s| s.size * 0.5).unwrap_or(6.0)
+                {
+                    return end.max(hanging);
+                }
                 let t = next_tab(end, &self.rp.tabs, self.default_tab, self.hanging_at).pos;
                 // The level's own tab stop after the number, when it comes first.
                 match self.level.and_then(|l| l.tab).filter(|p| p.is_finite() && *p > end + 0.01) {
@@ -404,7 +417,7 @@ impl<'e> Breaker<'e> {
     /// tallest picture on it (which sits on the baseline).
     fn extents(&self, pl: &ParaLayout, (c0, c1): (usize, usize)) -> Extents {
         let rp = &self.rp;
-        let mut ex = Extents { asc: 0.0, desc: 0.0, obj_asc: 0.0 };
+        let mut ex = Extents { asc: 0.0, desc: 0.0, obj_asc: 0.0, grid_height: 0.0 };
         let mut any = false;
         let dropped = pl.drop_cap.map_or(0, |d| d.0);
         for (k, c) in pl.clusters.get(c0..c1).into_iter().flatten().enumerate() {
@@ -417,10 +430,15 @@ impl<'e> Breaker<'e> {
                 continue;
             }
             let Some(st) = pl.styles.get(c.style as usize) else { continue };
+            // A grid row is sized from the requested point size, not the ascent and descent of
+            // the face used to draw the glyph. A missing East Asian font can fall back to one
+            // with much taller metrics and must not turn every 12 pt line into two grid rows.
+            ex.grid_height = ex.grid_height.max(st.grid_size + st.rc.position.abs());
+            let math = matches!(c.kind, ClKind::Object(k) if pl.maths.iter().any(|(i, _)| *i == k));
             // A picture sits on the baseline of its run: the line keeps that font's ascent
             // and descent, and grows above the baseline to fit a taller picture.
             let (a, d) = if matches!(c.kind, ClKind::Object(_)) && c.obj_h > 0.0 {
-                if pl.maths.iter().any(|(k, _)| c.kind == ClKind::Object(*k)) {
+                if math {
                     // Exact spacing keeps the run's baseline; tall math may overflow the
                     // fixed line box without moving adjacent text up by its denominator.
                     if matches!(rp.line_spacing, LineSpacing::Exactly(_)) { (st.ascent, st.descent) } else { (c.obj_h, c.obj_d) }
@@ -435,6 +453,13 @@ impl<'e> Breaker<'e> {
             };
             ex.asc = ex.asc.max(a);
             ex.desc = ex.desc.max(d);
+            // Ruby and math need their real extent; pictures are kept by the separate floor,
+            // so multiple spacing does not enlarge them.
+            if c.obj_h > 0.0 && (!matches!(c.kind, ClKind::Object(_)) || math) {
+                // Ruby stores its raised ascent in obj_h, but its base-text descent
+                // remains in the run. Math supplies both object extents itself.
+                ex.grid_height = ex.grid_height.max(c.obj_h + if math { c.obj_d } else { d });
+            }
             any = true;
         }
         if (!any || (ex.asc == 0.0 && ex.desc == 0.0))
@@ -442,6 +467,7 @@ impl<'e> Breaker<'e> {
         {
             ex.asc = st.ascent;
             ex.desc = st.descent;
+            ex.grid_height = st.mark_grid_size + st.rc.position.abs();
         }
         ex
     }
@@ -449,10 +475,10 @@ impl<'e> Breaker<'e> {
     /// The line's height, baseline and text extent.
     fn measure(&self, pl: &ParaLayout, range: (usize, usize)) -> Measure {
         let rp = &self.rp;
-        let Extents { mut asc, mut desc, obj_asc } = self.extents(pl, range);
+        let Extents { mut asc, mut desc, obj_asc, mut grid_height } = self.extents(pl, range);
         let text_natural = asc + desc;
         let (text_asc, text_desc) = (asc.max(obj_asc), desc);
-        let text_pictures = if obj_asc > asc { obj_asc + desc } else { 0.0 };
+        let text_pictures = if obj_asc > 0.0 { obj_asc + desc } else { 0.0 };
         let mut label_extra = 0.0;
         if self.first
             && let Some(lab) = &pl.label
@@ -462,6 +488,9 @@ impl<'e> Breaker<'e> {
                 // overflow adds room, unscaled by the automatic spacing multiplier.
                 label_extra = (lab.ascent - asc).max(0.0);
                 asc = asc.max(lab.ascent);
+                for st in lab.runs.iter().filter_map(|r| pl.styles.get(r.style as usize)) {
+                    grid_height = grid_height.max(st.grid_size + st.rc.position.abs());
+                }
             } else {
                 for st in lab.runs.iter().filter_map(|r| pl.styles.get(r.style as usize)) {
                     asc = asc.max(st.ascent);
@@ -474,12 +503,12 @@ impl<'e> Breaker<'e> {
         // 1.9pt in docxide-pdf's header fixtures case121/case123, where the descent is 3.3pt), and
         // no rule tried so far (none, only the text's descent) matched both; it needs Word probes.
         let natural = asc + desc;
-        let pictures = if obj_asc > asc { obj_asc + desc } else { 0.0 };
+        let pictures = if obj_asc > 0.0 { obj_asc + desc } else { 0.0 };
         // Document grid: the line takes whole line pitches, its text centred in them.
         let grid = self.grid.as_ref();
         let (height, centred) = match (rp.line_spacing, grid) {
-            (LineSpacing::Multiple(m), Some(g)) => ((g.snap_height(natural) * m).max(g.snap_height(pictures)), true),
-            (LineSpacing::AtLeast(v), Some(g)) => (g.snap_height(natural.max(pictures)).max(v), true),
+            (LineSpacing::Multiple(m), Some(g)) => (g.multiple_height(grid_height.max(pictures), m), true),
+            (LineSpacing::AtLeast(v), Some(g)) => (g.snap_height(grid_height.max(pictures)).max(v), true),
             (LineSpacing::Multiple(m), None) => ((text_natural * m + label_extra).max(text_pictures), false),
             (LineSpacing::AtLeast(v), None) => (natural.max(text_pictures).max(v), false),
             (LineSpacing::Exactly(v), _) => (v, false),
@@ -558,9 +587,10 @@ impl<'e> Breaker<'e> {
         let grid = self.grid.as_ref();
         let (asc, desc) = pl.styles.get(self.mark_style as usize).map(|s| (s.ascent, s.descent)).unwrap_or((10.0, 3.0));
         let natural = asc + desc;
+        let grid_height = pl.styles.get(self.mark_style as usize).map_or(natural, |s| s.mark_grid_size);
         let h = match (rp.line_spacing, grid) {
-            (LineSpacing::Multiple(m), Some(g)) => g.snap_height(natural) * m,
-            (LineSpacing::AtLeast(v), Some(g)) => g.snap_height(natural).max(v),
+            (LineSpacing::Multiple(m), Some(g)) => g.multiple_height(grid_height, m),
+            (LineSpacing::AtLeast(v), Some(g)) => g.snap_height(grid_height).max(v),
             (LineSpacing::Multiple(m), None) => natural * m,
             (LineSpacing::AtLeast(v), None) => natural.max(v),
             (LineSpacing::Exactly(v), _) => v,
@@ -570,7 +600,12 @@ impl<'e> Breaker<'e> {
         self.lines.push(Line {
             top: self.top,
             height: h,
-            baseline: self.top + if grid.is_some() { h - desc } else { baseline_offset(rp.line_spacing, asc, h, desc) },
+            baseline: self.top
+                + if grid.is_some() && !matches!(rp.line_spacing, LineSpacing::Exactly(_)) {
+                    h - desc
+                } else {
+                    baseline_offset(rp.line_spacing, asc, h, desc)
+                },
             text_asc: asc,
             text_desc: desc,
             c0: self.n,
@@ -634,6 +669,7 @@ struct Extents {
     asc: f32,
     desc: f32,
     obj_asc: f32,
+    grid_height: f32,
 }
 
 /// A line's height and baseline, and the extent of its text.
@@ -965,12 +1001,16 @@ const MIN_SPAN: f32 = 20.0;
 /// How far below a line's top its baseline sits. Multiple spacing at or above single keeps the
 /// text at the top of the line and puts the extra leading below the baseline; below single it
 /// shrinks the whole box, ascent included (Word's output for docxide-pdf's fixtures: 1.15-spaced
-/// Times New Roman 12pt sits one ascent below the line top, not 1.8pt lower). Exact and at-least
-/// spacing keep the descent below the baseline and the rest above it.
+/// Times New Roman 12pt sits one ascent below the line top, not 1.8pt lower). At-least spacing
+/// keeps the font's descent below the baseline. Exact spacing divides the fixed line box into
+/// four fifths above the baseline and one fifth below, independently of the font's metrics:
+/// observed in Word for Mac with explicit Arial and Hiragino marks/runs at 12 and 24 pt,
+/// with fixed pitches from 12 to 96 pt. Font ascenders and descenders may overflow that box.
 fn baseline_offset(spacing: LineSpacing, asc: f32, height: f32, desc: f32) -> f32 {
     match spacing {
         LineSpacing::Multiple(m) => asc * m.min(1.0),
-        LineSpacing::AtLeast(_) | LineSpacing::Exactly(_) => height - desc,
+        LineSpacing::AtLeast(_) => height - desc,
+        LineSpacing::Exactly(_) => height * 0.8,
     }
 }
 

@@ -221,7 +221,7 @@ fn manual_hyphenation(s: &mut Session, v: &Value) -> CmdResult {
     Ok(best.map(|(_, v)| v).unwrap_or_else(|| json!({"done": true})))
 }
 
-fn section_of_part(s: &Session, id: u32) -> usize {
+pub(crate) fn section_of_part(s: &Session, id: u32) -> usize {
     let sections = s.doc.sections();
     for (i, (_, sp)) in sections.iter().enumerate() {
         if [sp.headers.default, sp.headers.first, sp.headers.even, sp.footers.default, sp.footers.first, sp.footers.even].contains(&Some(id)) {

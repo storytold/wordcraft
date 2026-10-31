@@ -12,8 +12,7 @@ pub(super) fn cur(s: &Session) -> wordcraft_doc::resolve::ResolvedPara {
     {
         at = Pos { path: last, off: 0, ..at };
     }
-    let props = s.doc.para_at(&at).map(|p| p.props.clone()).unwrap_or_default();
-    s.doc.styles.resolve_para(&props)
+    s.resolved_para_at(&at).unwrap_or_else(|| s.doc.styles.resolve_para(&ParaProps::default()))
 }
 
 pub fn fmt(s: &mut Session, f: &dyn Fn(&mut ParaProps)) -> CmdResult {
@@ -105,7 +104,8 @@ pub(super) fn asian_typography(s: &mut Session, v: &Value) -> CmdResult {
 /// every selected paragraph, then `onPage`'s alignment and indents as seen on the page, each
 /// paragraph's own direction (once `props` is applied) saying which edge is its start.
 pub(super) fn set_props(s: &mut Session, v: &Value) -> CmdResult {
-    let props: ParaProps = serde_json::from_value(v.get("props").cloned().unwrap_or(Value::Null)).map_err(|e| CmdError::Params(e.to_string()))?;
+    let mut props: ParaProps = serde_json::from_value(v.get("props").cloned().unwrap_or(Value::Null)).map_err(|e| CmdError::Params(e.to_string()))?;
+    props.cancel_line_units_for_point_edits();
     let page = v.get("onPage").cloned().unwrap_or(Value::Null);
     let align = match p::str(&page, "align") {
         None => None,
