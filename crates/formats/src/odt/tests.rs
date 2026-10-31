@@ -1102,6 +1102,56 @@ fn latin_attributes_win_over_asian_and_line_types() {
 }
 
 #[test]
+fn metadata_keywords_keep_xml_text_chunks_together() {
+    let m = read_meta(
+        r#"<office:document-meta><office:meta>
+            <meta:keyword>R&amp;D</meta:keyword>
+            <meta:keyword>A&#x2B;B&#43;C</meta:keyword>
+            <meta:keyword>Re<![CDATA[search]]>Plan</meta:keyword>
+            <meta:keyword>Con<!-- a comment is not a separator -->tract</meta:keyword>
+            <meta:keyword><![CDATA[<review>]]>&quot;O&apos;Brien&quot;</meta:keyword>
+            <meta:keyword>日本語&#x1F4DA;</meta:keyword>
+            <meta:keyword/><meta:keyword></meta:keyword><meta:keyword><![CDATA[]]></meta:keyword>
+            <dc:title>Title &amp; subtitle</dc:title>
+            <meta:keyword>Final</meta:keyword>
+        </office:meta></office:document-meta>"#
+            .as_bytes(),
+    );
+    assert_eq!(m.keywords, "R&D, A+B+C, ResearchPlan, Contract, <review>\"O'Brien\", 日本語📚, Final");
+    assert_eq!(m.title, "Title & subtitle");
+    assert_eq!(read_meta(b"<office:meta><meta:keyword> 	 </meta:keyword></office:meta>").keywords, " 	 ");
+    assert!(read_meta(b"<office:meta><dc:title>No keywords</dc:title></office:meta>").keywords.is_empty());
+}
+
+#[test]
+fn metadata_keywords_keep_all_dense_entries_without_empty_separators() {
+    let mut xml = String::from("<office:meta>");
+    let expected: Vec<_> = (0..20_001).map(|i| format!("K{i}&V")).collect();
+    for i in 0..expected.len() {
+        xml.push_str(&format!("<meta:keyword/><meta:keyword><![CDATA[]]></meta:keyword><meta:keyword>K{i}&amp;V</meta:keyword>"));
+    }
+    xml.push_str("</office:meta>");
+    assert_eq!(read_meta(xml.as_bytes()).keywords, expected.join(", "));
+}
+
+#[test]
+fn metadata_keywords_survive_repeated_odt_saves() {
+    let content = format!(
+        "<office:document-content {NS_T}><office:body><office:text><text:p>Original text</text:p></office:text></office:body></office:document-content>"
+    );
+    let meta = r#"<office:document-meta xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:meta="urn:oasis:names:tc:opendocument:xmlns:meta:1.0">
+        <office:meta><meta:keyword>R&amp;D</meta:keyword><meta:keyword>Re<![CDATA[view]]></meta:keyword><meta:keyword>A&#43;B</meta:keyword></office:meta>
+    </office:document-meta>"#;
+    let bytes = zip_of(&[("content.xml", content.as_bytes()), ("meta.xml", meta.as_bytes())]);
+    let mut doc = import(&bytes).unwrap();
+    for _ in 0..3 {
+        assert_eq!(doc.core.keywords, "R&D, Review, A+B");
+        doc = import(&export(&doc).unwrap()).unwrap();
+    }
+    assert_eq!(doc.core.keywords, "R&D, Review, A+B");
+}
+
+#[test]
 fn meta_creation_date_timezones_and_fallbacks() {
     let xml_neg = br#"<office:document-meta><office:meta>
             <meta:creation-date>2024-03-05T13:45:00-05:00</meta:creation-date>
