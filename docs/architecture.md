@@ -1,6 +1,6 @@
 # WordCraft architecture
 
-> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-28 · **Change:** major (crate and layer inventory, source counts, proofing languages and module boundaries re-measured from this checkout; previously minor: `proof` is per language: English and Polish; previously major: first committed version; `plan/architecture.md` is local-only) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-30 · **Change:** trivial (`Session::run` also guards its pre-checks and after-command hooks, #3721; previously major: crate and layer inventory, source counts, proofing languages and module boundaries re-measured from this checkout; previously minor: `proof` is per language: English and Polish; previously major: first committed version; `plan/architecture.md` is local-only) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 How WordCraft is built today. The longer design notes in
 `plan/architecture.md` are gitignored and local to the original author's machine; this file is the
@@ -45,7 +45,7 @@ crate name links to its source tree.
 2. **Edit:** every user-visible action is a command id run through `Session::run` (ribbon,
    shortcuts, command search, CLI, control channel and MCP all dispatch by id). `Session::run`
    snapshots for undo (blocks are `Arc`-shared, so snapshots are cheap) and catches an escaped
-   panic, restoring the document (never-crash standard).
+   panic, restoring the document (never-crash standard). The guard covers the command and the
 3. **Layout:** `layout` turns the document into pages of positioned glyphs, boxes and images
    (display list), incrementally: an edit relayouts only what changed (1.4 ms on a 188-page
    document, measured 2026-10-06).
@@ -72,3 +72,4 @@ crate name links to its source tree.
 | 2026-10-28 | major | Recounted workspace crates, layers and Rust source lines; refreshed proofing languages and documented current engine/layout module boundaries and source links |
 | 2026-10-10 | minor | `proof`: proofing languages (English, Polish), affix engine, Polish patterns; layout and engine route each run by its language |
 | 2026-10-10 | major | First committed architecture doc, from the crates' sources and `AGENTS.md` |
+| 2026-10-28 | trivial | `Session::run`: the panic guard covers the after-command hooks and the pre-checks (#3721) |

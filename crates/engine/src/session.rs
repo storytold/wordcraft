@@ -22,6 +22,8 @@ mod lifecycle;
 mod query;
 mod run;
 mod snapshot;
+#[cfg(test)]
+pub(crate) use run::{PANIC_AFTER_COMMAND, PANIC_SETTLING_ELSEWHERE, PANICS_CAUGHT};
 
 use crate::doc_state;
 use crate::ime as ime_state;

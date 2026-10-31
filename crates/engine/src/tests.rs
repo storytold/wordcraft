@@ -4389,6 +4389,91 @@ fn typed_paragraphs_are_capped_for_every_caller() {
     assert!(!body_texts(&s).iter().any(|p| p.contains('y')));
 }
 
+/// A panic in the checks and hooks after a successful command is an error, and the document,
+/// selection, undo and redo history and unsaved-changes flag are as they were before the command
+/// (#3721).
+#[test]
+fn panic_after_a_command_is_an_error_and_restores_the_document() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Kept "}));
+    // Caret movement ends the typing group, so Undo takes back only the second insert.
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "text.insert", json!({"text": "undone"}));
+    run(&mut s, "edit.undo", json!({}));
+    assert!(s.can_redo());
+    let (text_before, sel_before, undo_before, dirty_before) = (text(&s), s.sel.clone(), s.undo_labels(), s.dirty);
+    crate::session::PANIC_AFTER_COMMAND.with(|f| f.set(true));
+    let e = s.run("text.insert", &json!({"text": "Lost"})).unwrap_err().to_string();
+    assert!(e.contains("text.insert panicked: injected after-command panic"), "{e}");
+    assert_eq!(text(&s), text_before);
+    assert_eq!(s.sel, sel_before);
+    assert_eq!(s.undo_labels(), undo_before);
+    assert!(s.can_redo(), "the redo step survives");
+    assert_eq!(s.dirty, dirty_before);
+    run(&mut s, "text.insert", json!({"text": "again"}));
+    assert_eq!(text(&s), "Kept again");
+}
+
+/// A command that doesn't change the document (caret movement) has no document snapshot: a panic
+/// in its hooks puts the selection back where it was (#3721).
+#[test]
+fn panic_after_a_caret_move_puts_the_selection_back() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Some words"}));
+    let sel_before = s.sel.clone();
+    crate::session::PANIC_AFTER_COMMAND.with(|f| f.set(true));
+    let e = s.run("caret.docStart", &json!({})).unwrap_err().to_string();
+    assert!(e.contains("caret.docStart panicked"), "{e}");
+    assert_eq!(s.sel, sel_before);
+    run(&mut s, "caret.docStart", json!({}));
+    assert_eq!(s.sel.focus.off, 0);
+}
+
+/// A command that ends in another document (File › New) settles there under the guard too: a
+/// panic while settling closes the document it opened and leaves the first one shown, with its
+/// text, selection and undo and redo history as they were (#3721).
+#[test]
+fn panic_settling_in_a_new_document_closes_it_and_restores_the_first() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Kept "}));
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "text.insert", json!({"text": "undone"}));
+    run(&mut s, "edit.undo", json!({}));
+    let home = s.document_id();
+    let (docs_before, text_before, sel_before, undo_before) = (s.documents().len(), text(&s), s.sel.clone(), s.undo_labels());
+    assert!(s.can_redo());
+    crate::session::PANIC_SETTLING_ELSEWHERE.with(|f| f.set(true));
+    let e = s.run("file.new", &json!({})).unwrap_err().to_string();
+    assert!(e.contains("file.new panicked: injected settle-elsewhere panic"), "{e}");
+    assert_eq!(s.document_id(), home, "the first document is shown");
+    assert_eq!(s.documents().len(), docs_before, "the new document is closed");
+    assert_eq!(text(&s), text_before);
+    assert_eq!(s.sel, sel_before);
+    assert_eq!(s.undo_labels(), undo_before);
+    assert!(s.can_redo(), "the redo step survives");
+    run(&mut s, "file.new", json!({}));
+    assert_eq!(s.documents().len(), docs_before + 1);
+}
+
+/// A panic in a command's `enabled` check, before anything ran, is an error too, and the session
+/// carries on as before (#3721).
+#[test]
+fn panic_in_a_commands_enabled_check_is_an_error() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Kept"}));
+    let (text_before, undo_before) = (text(&s), s.undo_labels());
+    let boom = crate::CommandSpec::new("test.boom", "Boom", "Test", |_, _| Ok(json!({}))).when(|_| panic!("enabled check"));
+    let mut specs = s.registry.all().to_vec();
+    specs.push(boom);
+    s.registry = std::sync::Arc::new(crate::Registry::new(specs));
+    let e = s.run("test.boom", &json!({})).unwrap_err().to_string();
+    assert!(e.contains("test.boom panicked: enabled check"), "{e}");
+    assert_eq!(text(&s), text_before);
+    assert_eq!(s.undo_labels(), undo_before);
+    run(&mut s, "text.insert", json!({"text": " too"}));
+    assert_eq!(text(&s), "Kept too");
+}
+
 #[test]
 fn hostile_params_never_panic() {
     let reg = cmd::registry();
@@ -4411,7 +4496,10 @@ fn hostile_params_never_panic() {
         for j in &junk {
             let mut s = Session::new(crate::sample::sample_document());
             assert_ne!(s.read_aloud.backend, crate::speech::Backend::System, "tests must never start real speech");
-            let _ = s.run(spec.id, j);
+            // `run` turns a panic into an error, so the test counts the panics it caught (#3721).
+            crate::session::PANICS_CAUGHT.with(|n| n.set(0));
+            let r = s.run(spec.id, j);
+            assert_eq!(crate::session::PANICS_CAUGHT.with(std::cell::Cell::get), 0, "{} with {j}: {r:?}", spec.id);
             s.clamp_selection();
             let _ = s.layout();
         }
