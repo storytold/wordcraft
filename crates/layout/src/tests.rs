@@ -6346,9 +6346,8 @@ fn graphic_items_scale_with_their_frame() {
 }
 
 #[test]
-fn inline_picture_wider_than_a_text_box_is_fitted_to_it() {
-    // Text boxes don't clip what runs past their sides, so a 400 x 100 pt picture in a 144 pt box
-    // is fitted to the box's 129.6 pt inside its margins instead of spilling over the page.
+fn box_picture_keeps_its_size() {
+    // Inline pictures keep their requested size even past a text box's internal margins.
     let mut d = Document::from_text("Before");
     let mut p = wordcraft_doc::Paragraph::with_text("", Default::default());
     p.insert_object(0, picture(400.0, 100.0, Default::default()), &Default::default()).unwrap();
@@ -6376,7 +6375,7 @@ fn inline_picture_wider_than_a_text_box_is_fitted_to_it() {
             _ => None,
         })
         .expect("the picture");
-    assert!((r.w - 129.6).abs() < 0.1 && (r.h - 32.4).abs() < 0.1, "{r:?}");
+    assert!((r.w - 400.0).abs() < 0.1 && (r.h - 100.0).abs() < 0.1, "{r:?}");
 }
 
 #[test]
@@ -6538,6 +6537,45 @@ fn a_behind_or_in_front_of_text_picture_in_a_cell_leaves_the_row_alone() {
     for wrap in [Wrap::BehindText, Wrap::InFrontOfText] {
         let gap = row_gap(wrap);
         assert!(gap < 60.0, "{wrap:?}: text after the table is {gap}pt below the cell's text; the 300pt picture grew the row");
+    }
+}
+
+/// #3863: an in-front-of-text picture is drawn above the page's tables, wherever its anchor
+/// paragraph is: one anchored before them (a calendar's picture over its tables of days) must not
+/// end up under the tables laid out after it.
+#[test]
+fn an_in_front_of_text_picture_stays_above_a_later_table() {
+    let table = |text: &str| {
+        let mut t = Table::new(2, 2, 400.0);
+        t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()))];
+        wordcraft_doc::Block::Table(t)
+    };
+    for (case, anchor_after) in [("anchored before the tables", false), ("anchored after the tables", true)] {
+        let mut d = Document::from_text("Anchor");
+        d.insert_block(StoryRef::Body, &Path::top(1), table("Day 1")).unwrap();
+        d.insert_block(StoryRef::Body, &Path::top(2), table("Month")).unwrap();
+        if anchor_after {
+            d.insert_block(
+                StoryRef::Body,
+                &Path::top(3),
+                wordcraft_doc::Block::Para(wordcraft_doc::Paragraph::with_text("After", Default::default())),
+            )
+            .unwrap();
+        }
+        let block = if anchor_after { 3 } else { 0 };
+        d.insert_object(&Pos::body(block, 0), rect_shape(400.0, 400.0, page_float(72.0, 72.0)), &Default::default()).unwrap();
+        let l = lay(&d);
+        let items = &l.pages[0].items;
+        let shape = items.iter().position(|i| matches!(i, Placed::Shape { .. })).expect("the picture is drawn");
+        let last_table = items
+            .iter()
+            .rposition(|i| match i {
+                Placed::Lines { story: StoryRef::Body, path, .. } => path.0.len() > 1,
+                Placed::Fill { .. } | Placed::Rule { .. } => true,
+                _ => false,
+            })
+            .expect("the tables are drawn");
+        assert!(shape > last_table, "{case}: the picture is drawn at item {shape}, before the tables' item {last_table}, which paint over it");
     }
 }
 
@@ -7039,6 +7077,31 @@ fn kinsoku_keeps_a_manual_line_break_before_a_closing_bracket() {
     assert_eq!(lines.len(), 2, "{lines:?}");
     assert_eq!(lines[0].1, LineEnd::LineBreak, "{lines:?}");
     assert_eq!(lines[1].0, bracket, "the second line starts at the bracket: {lines:?}");
+}
+
+/// 行頭禁則 (JIS X 4051 §4) end to end: a paragraph wrapping in a narrow column never starts a
+/// line with a small kana or the prolonged sound mark, even where the break opportunity that
+/// would put one there sits right after a kanji.
+#[test]
+fn a_line_never_starts_with_a_small_kana_or_the_prolonged_sound_mark() {
+    let text = "漢っ漢ゃ漢ー漢ッ漢ャ漢ゕ漢ヶ漢ㇺ漢ｯ漢ｬ漢ｰ漢";
+    let mut d = Document::from_text(text);
+    d.last_section.page_w = 72.0 + 72.0 + 72.0; // 72 pt of text: a few East Asian characters
+    let l = lay(&d);
+    let mut lines = Vec::new();
+    for p in &l.pages {
+        for it in &p.items {
+            if let Placed::Lines { para, l0, l1, .. } = it {
+                lines.extend(para.lines[*l0..*l1].iter().map(|line| (line.start, line.stop)));
+            }
+        }
+    }
+    assert!(lines.len() > 1, "the paragraph wraps: {lines:?}");
+    let non_starters = "ぁぃぅぇぉっゃゅょゎゕゖァィゥェォッャュョヮヵヶㇰㇱㇲㇳㇴㇵㇶㇷㇸㇹㇺㇻㇼㇽㇾㇿｧｨｩｪｫｬｭｮｯーｰ";
+    for &(start, _) in &lines {
+        let first = text.get(start..).and_then(|t| t.chars().next()).unwrap_or_default();
+        assert!(!non_starters.contains(first), "a line must not start with {first}: {lines:?}");
+    }
 }
 
 /// #332: a rotated floating shape keeps text clear of its rotated bounds (it reaches further at
@@ -12050,4 +12113,23 @@ fn an_empty_bulleted_mark_after_a_bulleted_section_closer_draws_no_bullet() {
             .any(|it| matches!(it, Placed::Lines { path, para, .. } if *path == Path::top(filler) && para.label.is_some()));
         assert!(text, "{filler} lines above: the text closer keeps its bullet");
     }
+}
+
+/// An empty paragraph closing a section mid-page draws no shading, with a continuous or a
+/// new-page break (Word); a paragraph with text keeps it.
+#[test]
+fn an_empty_section_closing_paragraph_is_not_shaded() {
+    use wordcraft_doc::section::{SectionProps, SectionStart};
+    let fills = |mark: &str, start: SectionStart| {
+        let mut d = Document::from_text(&format!("Intro\nAAA\n{mark}\nBBB"));
+        let p = d.para_mut(StoryRef::Body, &Path::top(2)).unwrap();
+        p.props.shading = Rgb::parse("FFC000");
+        p.section = Some(Box::new(SectionProps { start: SectionStart::Continuous, ..Default::default() }));
+        d.last_section.start = start;
+        let l = lay(&d);
+        l.pages[0].items.iter().filter(|i| matches!(i, Placed::Fill { .. })).count()
+    };
+    assert_eq!(fills("", SectionStart::Continuous), 0);
+    assert_eq!(fills("", SectionStart::NextPage), 0);
+    assert_eq!(fills("Mark", SectionStart::Continuous), 1);
 }

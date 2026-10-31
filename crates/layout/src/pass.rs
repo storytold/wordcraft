@@ -186,6 +186,7 @@ fn new_page_builder<'p>(sect: &'p SectionProps, early: &'p EarlyFloats, web: boo
         seps: NoteSeps::default(),
         para_end: None,
         behind: Vec::new(),
+        front: Vec::new(),
         max_y: 0.0,
         content_bottom: 0.0,
         balance: None,
@@ -374,6 +375,7 @@ fn finish_pages(pb: PageBuilder, doc: &Document, sections: &[(usize, &SectionPro
         pb.flush_notes();
     }
     pb.carry.clear();
+    lift_front(&mut pb.pages, &pb.behind, &pb.front);
     let mut pages = pb.pages;
     if !web {
         for p in &mut pages {
@@ -545,6 +547,30 @@ pub(crate) fn layout_pass(
     Pass::Done(lay)
 }
 
+/// Moves each page's items in front of the text (see `PageBuilder::front`) to the end of its
+/// list, in their order: Word draws floating objects above the text and tables of the page,
+/// whichever block they are anchored in.
+fn lift_front(pages: &mut [Page], behind: &[usize], front: &[Vec<(usize, usize)>]) {
+    for ((pg, &b), ranges) in pages.iter_mut().zip(behind).zip(front) {
+        if ranges.is_empty() {
+            continue;
+        }
+        let mut lifted = vec![false; pg.items.len()];
+        for &(at, n) in ranges {
+            let start = b.saturating_add(at);
+            for flag in lifted.iter_mut().skip(start).take(n) {
+                *flag = true;
+            }
+        }
+        let (mut rest, mut top) = (Vec::with_capacity(pg.items.len()), Vec::new());
+        for (it, up) in std::mem::take(&mut pg.items).into_iter().zip(lifted) {
+            if up { top.push(it) } else { rest.push(it) }
+        }
+        rest.extend(top);
+        pg.items = rest;
+    }
+}
+
 /// Pagination state saved before a block, to lay the blocks from there out again (balancing
 /// columns): the builder without its pages, how far its last page had got, and the walk state.
 struct Snap<'a> {
@@ -561,9 +587,9 @@ struct Snap<'a> {
 impl<'a> Snap<'a> {
     fn take(pb: &mut PageBuilder<'a>, ctx: &Ctx) -> Self {
         // The pages stay out of the copy: it would cost the whole document per block.
-        let (pages, behind) = (std::mem::take(&mut pb.pages), std::mem::take(&mut pb.behind));
+        let (pages, behind, front) = (std::mem::take(&mut pb.pages), std::mem::take(&mut pb.behind), std::mem::take(&mut pb.front));
         let copy = pb.clone();
-        (pb.pages, pb.behind) = (pages, behind);
+        (pb.pages, pb.behind, pb.front) = (pages, behind, front);
         Snap {
             pb: copy,
             pages: pb.pages.len(),
@@ -579,9 +605,14 @@ impl<'a> Snap<'a> {
     /// Go back to this state: drop the pages added since and what was added to the last one
     /// (appended, or inserted at the front behind the text).
     fn restore(&self, pb: &mut PageBuilder<'a>, ctx: &mut Ctx) {
-        let (mut pages, mut behind) = (std::mem::take(&mut pb.pages), std::mem::take(&mut pb.behind));
+        let (mut pages, mut behind, mut front) = (std::mem::take(&mut pb.pages), std::mem::take(&mut pb.behind), std::mem::take(&mut pb.front));
         pages.truncate(self.pages);
         behind.truncate(self.pages);
+        front.truncate(self.pages);
+        if let Some(f) = front.last_mut() {
+            let kept = self.items.saturating_sub(self.behind);
+            f.retain(|&(at, n)| at.saturating_add(n) <= kept);
+        }
         if let Some(pg) = pages.last_mut() {
             let k = behind.last().copied().unwrap_or(0).saturating_sub(self.behind).min(pg.items.len());
             pg.items.drain(..k);
@@ -591,7 +622,7 @@ impl<'a> Snap<'a> {
             *b = self.behind;
         }
         *pb = self.pb.clone();
-        (pb.pages, pb.behind) = (pages, behind);
+        (pb.pages, pb.behind, pb.front) = (pages, behind, front);
         ctx.counters = self.counters.clone();
         ctx.eq_count = self.eq_count;
         ctx.fields.page = self.page_field;

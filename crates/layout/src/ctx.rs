@@ -195,7 +195,6 @@ impl Ctx<'_> {
             eq_number: 0,
             read_line_spacing: None,
             grid: para::Grid::default(),
-            fit_objects: false,
             fitted: &[],
         };
         let pl = Arc::new(para::layout_para(&p, &env));
@@ -315,11 +314,13 @@ impl Ctx<'_> {
             if float.wrap != Wrap::Inline || float.rot != 0.0 {
                 continue;
             }
+            // Measure and cache at the width stored by paragraph layout.
+            let w = w.clamp(1.0, 4000.0);
             let key = (*id, w.to_bits());
             let h = match self.fitted.get(&key) {
                 Some(h) => *h,
                 None => {
-                    let h = textbox::fitted_height(self, *id, *w);
+                    let h = textbox::fitted_height(self, *id, w);
                     self.fitted.insert(key, h);
                     h
                 }
@@ -369,7 +370,6 @@ impl Ctx<'_> {
             eq: if eq_here > 0 { eq_number } else { 0 },
             read_spacing: if self.opts.view == ViewMode::Read { self.opts.read_line_spacing.map(f32::to_bits) } else { None },
             grid: self.grid.key(),
-            fit: self.boxes.inside(),
             fitted: if fitted.is_empty() { 0 } else { hash_of(&format!("{fitted:?}")) },
             hide_deleted: self.hide_deleted,
             sref: if self.fields.styleref.is_some() && styleref::has_styleref(p) { self.fields.styleref_key(p) } else { 0 },
@@ -411,7 +411,6 @@ impl Ctx<'_> {
             eq_number,
             read_line_spacing: if self.opts.view == ViewMode::Read { self.opts.read_line_spacing } else { None },
             grid: self.grid,
-            fit_objects: self.boxes.inside(),
             fitted,
         }
     }

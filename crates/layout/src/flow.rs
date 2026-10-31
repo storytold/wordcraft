@@ -15,6 +15,25 @@ use crate::WRAP_RELAYS;
 /// A closing mark before a continuous section takes no room after content. An otherwise empty
 /// section starting a new page retains its paragraph line.
 pub(crate) fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: usize, body_top: f32) {
+    // Word draws no shading for an empty paragraph that closes a section mid-page.
+    if p.section.is_some() && p.text.is_empty() && p.objects.is_empty() && !pb.at_top() && !pb.pages.is_empty() {
+        let first = pb.pages.len() - 1;
+        let from = pb.pages.get(first).map_or(0, |pg| pg.items.len());
+        place_para_inner(ctx, pb, p, block, body_top);
+        for (i, pg) in pb.pages.iter_mut().enumerate().skip(first) {
+            let keep = if i == first { from } else { 0 };
+            let mut n = 0;
+            pg.items.retain(|it| {
+                n += 1;
+                n <= keep || !matches!(it, Placed::Fill { .. })
+            });
+        }
+        return;
+    }
+    place_para_inner(ctx, pb, p, block, body_top);
+}
+
+fn place_para_inner(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: usize, body_top: f32) {
     if !pb.web && ctx.quiet_marks.binary_search(&block).is_ok() {
         let follows_section = block.checked_sub(1).and_then(|i| ctx.doc.body.get(i)).and_then(|b| b.as_para()).is_some_and(|p| p.section.is_some());
         let section = pb.sect_idx;
@@ -523,9 +542,10 @@ impl<'a> Flow<'a> {
                 depth: 0,
             },
         );
+        let up = (items.len(), front.len());
         items.extend(front);
         items.extend(line_numbers(ctx, pb, &self.pl, (l0, l1), y));
-        add_items(pb, behind, items);
+        add_items(pb, behind, items, up);
         if let (Some(f), Some(l)) = (self.pl.lines.get(l0), self.pl.lines.get(l1 - 1)) {
             pb.y = y + (l.top + l.height - f.top);
             pb.content_bottom = pb.content_bottom.max(pb.y);
@@ -696,9 +716,16 @@ fn line_numbers(ctx: &mut Ctx, pb: &mut PageBuilder, pl: &ParaLayout, (l0, l1): 
 }
 
 /// Add a piece's items to the last page: those `behind` the text at the front, the rest at the end.
-fn add_items(pb: &mut PageBuilder, behind: Vec<Placed>, items: Vec<Placed>) {
+/// `up` is (start, count) of the items in front of the text among `items` (#3863).
+fn add_items(pb: &mut PageBuilder, behind: Vec<Placed>, items: Vec<Placed>, up: (usize, usize)) {
     let n_behind = behind.len();
     if let Some(pg) = pb.pages.last_mut() {
+        if up.1 > 0
+            && let Some(f) = pb.front.last_mut()
+        {
+            let at = pg.items.len().saturating_sub(pb.behind.last().copied().unwrap_or(0)).saturating_add(up.0);
+            f.push((at, up.1));
+        }
         for (i, it) in behind.into_iter().enumerate() {
             pg.items.insert(i.min(pg.items.len()), it);
         }
@@ -901,7 +928,6 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counte
                         eq_number: ctx.eq_count,
                         read_line_spacing: if ctx.opts.view == ViewMode::Read { ctx.opts.read_line_spacing } else { None },
                         grid: ctx.grid,
-                        fit_objects: false,
                         fitted: &[],
                     };
                     Arc::new(para::layout_para(p, &env))

@@ -337,7 +337,6 @@ mod label_spacing_tests {
             eq_number: 0,
             numeral: crate::NumeralMode::default(),
             read_line_spacing: None,
-            fit_objects: false,
             fitted: &[],
         };
         let mut p = Paragraph::with_text(if wrap { "Alpha probe synthetic business text repeated" } else { "Alpha probe" }, Default::default());

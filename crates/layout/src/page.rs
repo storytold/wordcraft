@@ -61,6 +61,10 @@ pub(crate) struct PageBuilder<'a> {
     /// Per page: how many items were inserted at the front of its list (behind the text), so a
     /// [`Snap`] can take them out again.
     pub(crate) behind: Vec<usize>,
+    /// Per page: the items of objects in front of the text, as (start, count) counted after the
+    /// items behind the text. They are moved to the end of the page's list once it is laid out,
+    /// so tables and text after their anchors don't paint over them (#3863).
+    pub(crate) front: Vec<Vec<(usize, usize)>>,
     /// The bottom of the tallest column on the current page before the current one.
     pub(crate) max_y: f32,
     /// The bottom of the lowest line or table row placed on the current page (without the space
@@ -274,6 +278,7 @@ impl PageBuilder<'_> {
         }
         self.pages.pop();
         self.behind.pop();
+        self.front.pop();
         self.number = self.number.saturating_sub(1);
         self.after_break_mark = false;
         // The page before was aligned when it was left: nothing on it moves again.
@@ -319,6 +324,7 @@ impl PageBuilder<'_> {
         self.page_valign = s.valign;
         self.pages.push(Page { w, h, section: self.sect_idx, number: self.number, body, first_block, items: decor, ..Default::default() });
         self.behind.push(0);
+        self.front.push(Vec::new());
         self.col = 0;
         self.cols = s.column_boxes();
         self.top = body_top;

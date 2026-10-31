@@ -323,16 +323,14 @@ impl<'a> Shaped<'a> {
             && !float.hidden
         {
             // A picture wider than the line keeps its size, as in Word: it runs past
-            // the margin and the page edge clips it (see `ParaEnv::fit_objects`).
-            let maxw = (env.width - cx.rp.indent_left.max(0.0) - cx.rp.indent_right.max(0.0)).max(18.0);
+            // the margin and the page edge clips it.
             let h = env.fitted.iter().find(|(i, _)| *i == k).map_or(saved_h, |(_, h)| *h);
             let (w, h) = (w.clamp(1.0, 4000.0), h.clamp(1.0, 4000.0));
-            let s = if env.fit_objects && w > maxw { maxw / w } else { 1.0 };
             // The line makes room for effects (shadows) around the picture too, and
             // for a rotated one's bounds, as Word does.
             let [el, et, er, eb] = float.effect_extent();
-            let (px, py) = float.spin_pad(w * s, h * s);
-            self.push(slot, ClKind::Object(k), w * s + el + er + 2.0 * px, h * s + et + eb + 2.0 * py);
+            let (px, py) = float.spin_pad(w, h);
+            self.push(slot, ClKind::Object(k), w + el + er + 2.0 * px, h + et + eb + 2.0 * py);
         } else {
             self.push(slot, ClKind::Object(k), 0.0, 0.0);
         }

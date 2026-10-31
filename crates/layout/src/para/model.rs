@@ -383,9 +383,6 @@ pub struct ParaEnv<'a> {
     pub read_line_spacing: Option<f32>,
     /// The section's document grid (`Grid::default()`: none).
     pub grid: Grid,
-    /// Shrink inline drawings wider than the line to fit it: in text boxes, which don't clip what
-    /// runs past their sides. Elsewhere such a drawing keeps its size and the page edge clips it.
-    pub fit_objects: bool,
     /// Heights of the paragraph's inline text boxes that resize to fit their text, by object
     /// index: they take these instead of their saved heights.
     pub fitted: &'a [(usize, f32)],
