@@ -1,5 +1,6 @@
 //! Text boxes' text direction, alignment and linked boxes (Shape Format › Text).
 
+use crate::boxes::natural_width;
 #[allow(unused_imports)]
 use crate::*;
 use wordcraft_doc::props::{TextVert, VAlign};
@@ -180,6 +181,103 @@ fn own_margins_and_resize_to_fit_keep_the_text_in_view() {
     assert!(shown >= 1);
 }
 
+/// #2191: a floating box that resizes to fit its text and doesn't wrap it (Wrap text in shape
+/// off) is as wide as its line and as deep as its text, whatever size the file gives it: Word's
+/// figure caption on one line, not a 144 pt square of three lines pushing the text beside it.
+/// Without Resize shape to fit text the box keeps its size and the line runs on past its side;
+/// a box whose text wraps keeps its size too.
+#[test]
+fn a_box_fitting_text_it_doesnt_wrap_takes_the_size_of_its_line() {
+    let [l, t, r, b] = TextBody::default().insets_pt();
+    let ((n, wide), frame) = square_caption(TextBody { auto_fit: true, no_wrap: true, ..Default::default() }, None, 0.0);
+    assert_eq!(n, 1, "one line");
+    assert!(wide > 200.0, "the line is wider than the box was: {wide}");
+    assert!((frame.w - (wide + l + r)).abs() < 0.05, "as wide as its line: {frame:?}, line {wide}");
+    assert!(frame.h > t + b + 5.0 && frame.h < t + b + 20.0, "one line deep: {frame:?}");
+    let ((n, wide), frame) = square_caption(TextBody { no_wrap: true, ..Default::default() }, None, 0.0);
+    assert_eq!(n, 1, "one line, past the box's side");
+    assert!(wide > 200.0 && (frame.w - 144.0).abs() < 0.01 && (frame.h - 144.0).abs() < 0.01, "its own size: {frame:?}");
+    let ((n, _), frame) = square_caption(TextBody { auto_fit: true, ..Default::default() }, None, 0.0);
+    assert!(n > 1, "the text wraps");
+    assert!((frame.w - 144.0).abs() < 0.01 && (frame.h - 144.0).abs() < 0.01, "its own size: {frame:?}");
+}
+
+/// Word adds a fitted box's outline width to its size, drawn or not: no outline 354.6 × 19.6 pt,
+/// a 0.5 pt one 355.1 × 20.1, a 3 pt one (drawn or `a:noFill`) 357.6 × 22.6 (Word for Windows
+/// 16.0.17932, a synthetic caption box, #2191 review). The text stays the same size.
+#[test]
+fn a_fitted_box_also_takes_its_outlines_width() {
+    let body = TextBody { auto_fit: true, no_wrap: true, ..Default::default() };
+    let ((_, wide), bare) = square_caption(body, None, 0.0);
+    let grey = Some(wordcraft_doc::props::Rgb(0x80, 0x80, 0x80));
+    for (stroke, width) in [(grey, 0.5), (grey, 3.0), (None, 3.0)] {
+        let ((n, w), frame) = square_caption(body, stroke, width);
+        assert_eq!((n, w), (1, wide), "the same line ({stroke:?}, {width} pt)");
+        let grown = (frame.w - bare.w, frame.h - bare.h);
+        assert!((grown.0 - width).abs() < 0.01 && (grown.1 - width).abs() < 0.01, "{width} pt wider and deeper ({stroke:?}): {grown:?}");
+    }
+}
+
+/// A square-wrapped box holding a one-line caption, with outline `stroke` `width` pt wide: its
+/// first paragraph's line count and widest line, and its frame.
+fn square_caption(body: TextBody, stroke: Option<wordcraft_doc::props::Rgb>, width: f32) -> ((usize, f32), Rect) {
+    let mut d = Document::from_text("x");
+    let id = text_box(&mut d, 0, "(Figure 1.1) A time line of the important vaccines, on one line", 144.0, 144.0, body);
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    for o in &mut p.objects {
+        if let InlineObject::Shape { stroke: s, stroke_width, .. } = o {
+            (*s, *stroke_width) = (stroke, width);
+        }
+    }
+    if let Some(f) = p.objects.iter_mut().find_map(InlineObject::float_mut) {
+        f.wrap = wordcraft_doc::para::Wrap::Square;
+    }
+    p.touch();
+    let l = lay(&d);
+    let line = l.pages[0].items.iter().find_map(|it| match it {
+        Placed::Lines { story: StoryRef::Part(s), para, .. } if *s == id => Some((para.lines.len(), natural_width(para))),
+        _ => None,
+    });
+    (line.unwrap(), frame_of(&l, id))
+}
+
+/// A box whose text doesn't wrap but that also holds a table keeps its own width, also when it
+/// resizes to fit its text (an inline one is then as deep as its text, #2791); its paragraphs
+/// still run on one line past its side, and the table keeps the box's width (#2191 review).
+#[test]
+fn text_that_doesnt_wrap_beside_a_table_stays_on_one_line() {
+    let caption = "(Figure 1.1) A time line of the important vaccines, on one line";
+    for body in [TextBody { no_wrap: true, ..Default::default() }, TextBody { no_wrap: true, auto_fit: true, ..Default::default() }] {
+        let mut d = Document::from_text("x");
+        let id = text_box(&mut d, 0, caption, 144.0, 144.0, body);
+        if let Some(p) = d.parts.get_mut(&id) {
+            p.blocks.push(std::sync::Arc::new(Block::Table(wordcraft_doc::Table::new(1, 2, 100.0))));
+        }
+        let l = lay(&d);
+        let frame = frame_of(&l, id);
+        assert!((frame.w - 144.0).abs() < 0.01, "its own width: {frame:?} ({body:?})");
+        if body.auto_fit {
+            assert!(frame.h < 100.0, "as deep as one line and the table: {frame:?}");
+        } else {
+            assert!((frame.h - 144.0).abs() < 0.01, "its own height: {frame:?}");
+        }
+        let caption_lines = l.pages[0].items.iter().find_map(|it| match it {
+            Placed::Lines { story: StoryRef::Part(s), para, .. } if *s == id => Some((para.lines.len(), natural_width(para))),
+            _ => None,
+        });
+        let (n, wide) = caption_lines.unwrap();
+        assert_eq!(n, 1, "one line, past the box's side ({body:?})");
+        assert!(wide > 200.0, "{wide}");
+        let table_right = l.pages[0].items.iter().filter_map(|it| match it {
+            Placed::Rule { x0, x1, .. } => Some(x0.max(*x1)),
+            _ => None,
+        });
+        for right in table_right {
+            assert!(right <= frame.right() + 1.0, "the table stays in the box: {right} > {}", frame.right());
+        }
+    }
+}
+
 /// An auto-fit inline box shrinks to its three lines and keeps the explicit page break on page
 /// one; a fixed 10 cm box keeps its saved height and pushes the break and following text to
 /// later pages.
@@ -295,3 +393,106 @@ fn inline_box_that_resizes_to_fit_takes_its_texts_height() {
 /// Filler paragraphs before the box in [`inline_box_that_resizes_to_fit_takes_its_texts_height`]:
 /// enough that a 10 cm box no longer leaves room for the page break on the first page.
 const FILLER: usize = 22;
+
+/// An inline box that resizes to fit text it doesn't wrap is one line deep (#2191 with #2791's
+/// inline fitting); with its text wrapping it is as deep as the wrapped lines.
+#[test]
+fn inline_box_fitting_text_it_doesnt_wrap_is_one_line_deep() {
+    let caption = "(Figure 1.1) A time line of the important vaccines, on one line";
+    let height = |no_wrap: bool| {
+        let mut d = Document::from_text("x");
+        let id = text_box(&mut d, 0, caption, 144.0, 283.0, TextBody { auto_fit: true, no_wrap, ..Default::default() });
+        frame_of(&lay(&d), id).h
+    };
+    let [_, t, _, b] = TextBody::default().insets_pt();
+    let one = height(true);
+    assert!(one > t + b + 5.0 && one < t + b + 20.0, "one line deep: {one}");
+    assert!(height(false) > one + 10.0, "wrapped, it is deeper: {} vs {one}", height(false));
+}
+
+/// Measuring text that doesn't wrap lays its nested boxes out once more than showing it does: the
+/// measuring mustn't use up the nested-box budget, or the boxes after it show blank (#2191 review).
+#[test]
+fn measuring_text_that_doesnt_wrap_leaves_the_nested_box_budget() {
+    let n = 40;
+    assert!(n * 2 > wordcraft_doc::BoxBudget::MAX_NESTED && n < wordcraft_doc::BoxBudget::MAX_NESTED);
+    let mut d = Document::from_text("x");
+    let outer = text_box(&mut d, 0, "Boxes", 144.0, 144.0, TextBody { no_wrap: true, ..Default::default() });
+    let inner: Vec<u32> = (0..n)
+        .map(|i| {
+            let id = d.add_part(PartKind::TextBox, vec![para_block(Paragraph::with_text(&format!("n{i}"), Default::default()))]);
+            let shape = InlineObject::Shape {
+                kind: wordcraft_doc::para::ShapeKind::TextBox,
+                w: 20.0,
+                h: 20.0,
+                fill: None,
+                stroke: None,
+                stroke_width: 1.0,
+                float: Default::default(),
+                story: Some(id),
+                effects: Default::default(),
+                freeform: None,
+                extra: Default::default(),
+            };
+            d.insert_object(&Pos { story: StoryRef::Part(outer), path: Path::top(0), off: 0 }, shape, &Default::default()).unwrap();
+            id
+        })
+        .collect();
+    let l = lay(&d);
+    let shown: Vec<u32> = inner.iter().copied().filter(|id| !lines(&l, *id).is_empty()).collect();
+    assert_eq!(shown.len(), n, "every nested box shows its text");
+}
+
+/// A linked box whose text doesn't wrap runs its paragraphs on past its side too, and the next box
+/// picks up at the next paragraph (#2191 review).
+#[test]
+fn a_linked_box_whose_text_doesnt_wrap_keeps_each_paragraph_on_one_line() {
+    let mut d = Document::from_text("one\ntwo");
+    let a = text_box(
+        &mut d,
+        0,
+        "(Figure 1.1) A time line of the important vaccines, on one line",
+        144.0,
+        30.0,
+        TextBody { no_wrap: true, ..Default::default() },
+    );
+    let b = text_box(&mut d, 1, "", 144.0, 200.0, TextBody::default());
+    d.parts.get_mut(&a).unwrap().blocks.push(para_block(Paragraph::with_text("The next paragraph.", Default::default())));
+    d.parts.get_mut(&a).unwrap().body.next = Some(b);
+    let l = lay(&d);
+    let first = l.pages[0].items.iter().find_map(|it| match it {
+        Placed::Lines { story: StoryRef::Part(s), path, para, .. } if *s == a && path.0 == [0] => Some(para.lines.len()),
+        _ => None,
+    });
+    assert_eq!(first, Some(1), "the caption stays on one line in the linked box");
+}
+
+/// A linked box whose text doesn't wrap, picking up partway through a paragraph the box before it
+/// wrapped, carries on from the next line rather than showing that paragraph again from its start
+/// (#2191 review).
+#[test]
+fn a_no_wrap_box_continuing_a_wrapped_paragraph_shows_only_the_rest() {
+    let mut d = Document::from_text("one\ntwo");
+    let text = "Words that run on well past the first little box. ".repeat(6);
+    let a = text_box(&mut d, 0, &text, 144.0, 48.0, TextBody::default());
+    let b = text_box(&mut d, 1, "", 144.0, 400.0, TextBody { no_wrap: true, ..Default::default() });
+    let in_a = {
+        let l = lay(&d);
+        lines(&l, a).iter().map(|(.., l0, l1)| l1 - l0).sum::<usize>()
+    };
+    d.parts.get_mut(&a).unwrap().body.next = Some(b);
+    let l = lay(&d);
+    // Both boxes show the first box's story: the second frame is the no-wrap box.
+    let frames: Vec<Rect> = l.pages[0]
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            Placed::Object { rect, text_box: Some(s), .. } if *s == a => Some(*rect),
+            _ => None,
+        })
+        .collect();
+    let rb = frames[1];
+    let ls = lines(&l, a);
+    let rest: Vec<_> = ls.iter().filter(|(_, y, ..)| *y >= rb.y).collect();
+    assert_eq!(rest.first().map(|(.., l0, _)| *l0), Some(in_a), "carries on from the first line the first box couldn't show: {ls:?}");
+}

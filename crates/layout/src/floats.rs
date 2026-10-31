@@ -56,6 +56,14 @@ pub(crate) fn floating(o: &InlineObject) -> Option<(f32, f32, &Float)> {
     o.frame().filter(|(_, _, float)| float.wrap != Wrap::Inline)
 }
 
+/// A floating object's size and placement as laid out: a text box that fits text it doesn't
+/// wrap takes that text's size (see [`textbox::fitted_size`]).
+pub(crate) fn floating_sized<'o>(ctx: &mut Ctx, o: &'o InlineObject, depth: usize) -> Option<(f32, f32, &'o Float)> {
+    let (w, h, float) = floating(o)?;
+    let (w, h) = textbox::fitted_size(ctx, o, depth).unwrap_or((w, h));
+    Some((w, h, float))
+}
+
 /// Where a floating object goes, in the coordinates of the box `frame` places on the page.
 /// `col` is the column (or cell) left edge and width, `y0` the anchor paragraph's top. Without a
 /// frame (table cells, text boxes, notes) positions relative to the page or margins fall back
@@ -351,10 +359,10 @@ pub(crate) fn anchor_floats(
         // it takes no room either.
         let left_out = left_out_objects(ctx.doc, p, None, ctx.opts.show_hidden, ctx.hide_deleted);
         for (oi, o) in p.objects.iter().enumerate() {
-            let Some((w, h, float)) = floating(o) else { continue };
             if left_out(oi) {
                 continue;
             }
+            let Some((w, h, float)) = floating_sized(ctx, o, 0) else { continue };
             // Positions relative to the paragraph start above its space before (Word for Windows).
             let mut r = float_rect(Some(frame), (col_x, width), y0 - before, w, h, float);
             let outline = ctx.wrap_outline(o);
@@ -480,7 +488,13 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
             let rect = if let Some(r) = pinned {
                 r
             } else if floating {
-                floats.get(&oi).copied().unwrap_or_else(|| float_rect(at.page, at.col, at.para_y, w, h, float))
+                match floats.get(&oi) {
+                    Some(r) => *r,
+                    None => {
+                        let (w, h) = textbox::fitted_size(ctx, obj, depth).unwrap_or((w, h));
+                        float_rect(at.page, at.col, at.para_y, w, h, float)
+                    }
+                }
             } else {
                 let cx = x + line.cl_left(k).unwrap_or(0.0);
                 display::inline_rect(Some(obj), cx, y + (line.baseline - fl.top), c.adv, c.obj_h)

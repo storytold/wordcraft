@@ -86,6 +86,9 @@ pub struct TextBody {
     /// Resize shape to fit text (`a:spAutoFit`, VML `mso-fit-shape-to-text`): Word grows the
     /// box to its text, so none of the text is cut.
     pub auto_fit: bool,
+    /// Wrap text in shape off (`wps:bodyPr wrap="none"`): each paragraph stays on one line, past
+    /// the box's sides if need be; with `auto_fit` the box is as wide as the widest line.
+    pub no_wrap: bool,
     /// The colour the shape's style gives its text (`wps:style/a:fontRef`): what automatic text
     /// colour means inside this box, instead of black. Text whose colour comes from its runs,
     /// styles or the document defaults keeps it (Word, observed with synthetic documents).

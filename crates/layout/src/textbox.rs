@@ -11,9 +11,10 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use wordcraft_doc::props::{TextDirection, TextVert, VAlign};
-use wordcraft_doc::{Block, Blocks, Path, StoryRef, TextBody};
+use wordcraft_doc::{Block, Blocks, InlineObject, PartKind, Path, StoryRef, TextBody};
 use wordcraft_geom::Rect;
 
+use crate::boxes::natural_width;
 use crate::{BoxInput, Ctx, Placed, fit_box, layout_box};
 
 /// Linked text boxes for one layout, worked out when a linked box is first laid out.
@@ -95,18 +96,129 @@ fn lay(ctx: &mut Ctx, id: u32, blocks: &Blocks, len: f32, vert: TextVert, depth:
     layout_box(ctx, BoxInput::other(story, blocks, len, depth + 1, None)).items
 }
 
+/// How long a line of text that doesn't wrap may run (the largest page side).
+const NO_WRAP_LEN: f32 = 1584.0;
+/// Room text that doesn't wrap is laid out with past its widest line, so the line still fits.
+const FIT_SLACK: f32 = 0.5;
+/// The widest outline a fitted box counts (the reader's cap on `a:ln` widths).
+const MAX_OUTLINE: f32 = 100.0;
+
+/// The widest line and the depth of text box `id`'s text when it doesn't wrap (Wrap text in
+/// shape off). None when it can't be told here, so the box keeps its own size: text running up,
+/// down or stacked, a linked box, or text holding tables or text boxes.
+fn unwrapped_extent(ctx: &mut Ctx, id: u32, depth: usize) -> Option<(f32, f32)> {
+    let part = ctx.doc.parts.get(&id)?;
+    if !part.body.no_wrap || part.body.vert != TextVert::Horz || part.body.next.is_some() {
+        return None;
+    }
+    let nested = |b: &Arc<Block>| match &**b {
+        Block::Para(p) => p.objects.iter().any(|o| !o.text_boxes().is_empty()),
+        Block::Table(_) => true,
+    };
+    if part.blocks.iter().any(nested) || shown_story(ctx, id) != id {
+        return None;
+    }
+    let blocks = part.blocks.clone();
+    // Measured apart from where the text is shown: list numbers, equation numbers and the nested
+    // boxes' budget count once.
+    let snap = (ctx.counters.clone(), ctx.eq_count, ctx.boxes.clone());
+    let items = layout_box(ctx, BoxInput::other(StoryRef::Part(id), &blocks, NO_WRAP_LEN, depth + 1, None)).items;
+    (ctx.counters, ctx.eq_count, ctx.boxes) = snap;
+    let widest = items
+        .iter()
+        .filter_map(|it| match it {
+            Placed::Lines { para, .. } => Some(natural_width(para)),
+            _ => None,
+        })
+        .fold(0.0f32, f32::max);
+    Some((widest, extent(&items)))
+}
+
+/// The widest line of text box `id`'s paragraphs laid out on their own, when the box doesn't
+/// wrap its text but [`unwrapped_extent`] leaves it alone because it also holds tables or text
+/// boxes. None when the box wraps its text, runs it up, down or stacked, or is linked.
+fn mixed_unwrapped_width(ctx: &mut Ctx, id: u32, blocks: &Blocks, depth: usize) -> Option<f32> {
+    let body = ctx.doc.parts.get(&id)?.body;
+    if !body.no_wrap || body.vert != TextVert::Horz || body.next.is_some() || shown_story(ctx, id) != id {
+        return None;
+    }
+    Some(paras_widest(ctx, id, blocks, depth))
+}
+
+/// The widest line of story `id`'s paragraphs among `blocks`, laid out on their own and unwrapped.
+fn paras_widest(ctx: &mut Ctx, id: u32, blocks: &Blocks, depth: usize) -> f32 {
+    let paras: Blocks = blocks.iter().filter(|b| matches!(&***b, Block::Para(_))).cloned().collect();
+    // Measured apart from where the text is shown: list numbers, equation numbers and the nested
+    // boxes' budget count once.
+    let snap = (ctx.counters.clone(), ctx.eq_count, ctx.boxes.clone());
+    let items = layout_box(ctx, BoxInput::other(StoryRef::Part(id), &paras, NO_WRAP_LEN, depth + 1, None)).items;
+    (ctx.counters, ctx.eq_count, ctx.boxes) = snap;
+    items
+        .iter()
+        .filter_map(|it| match it {
+            Placed::Lines { para, .. } => Some(natural_width(para)),
+            _ => None,
+        })
+        .fold(0.0f32, f32::max)
+}
+
+/// `blocks` with each paragraph's lines `room` points longer (its right indent that much less),
+/// so text that doesn't wrap runs on past the box's side while its tables keep the box's width.
+fn widen_paras(ctx: &Ctx, blocks: &Blocks, room: f32) -> Blocks {
+    blocks
+        .iter()
+        .map(|b| match &**b {
+            Block::Para(p) => {
+                let mut p = p.clone();
+                let right = ctx.doc.styles.resolve_para(&p.props).indent_right;
+                p.props.indent_right = Some(right - room);
+                p.props.indent_right_chars = None;
+                p.touch();
+                Arc::new(Block::Para(p))
+            }
+            _ => b.clone(),
+        })
+        .collect()
+}
+
+/// The size Word gives a text box that resizes to fit its text and doesn't wrap it: its widest
+/// line and its text's depth, inside its margins, and its outline's width, drawn or not (Word
+/// for Windows: a 3 pt outline makes the box 3 pt wider and deeper, #2191). None: the shape's
+/// own size.
+pub(crate) fn fitted_size(ctx: &mut Ctx, o: &InlineObject, depth: usize) -> Option<(f32, f32)> {
+    let InlineObject::Shape { story: Some(id), stroke_width, .. } = o else { return None };
+    let body = ctx.doc.parts.get(id).filter(|p| p.kind == PartKind::TextBox && p.body.auto_fit)?.body;
+    let (widest, deep) = unwrapped_extent(ctx, *id, depth)?;
+    let [l, t, r, b] = body.insets_pt();
+    let line = wordcraft_geom::finite(*stroke_width).clamp(0.0, MAX_OUTLINE);
+    Some(((widest + l + r + line).clamp(1.0, NO_WRAP_LEN), (deep + t + b + line).clamp(1.0, NO_WRAP_LEN)))
+}
+
 /// The items showing text box `id` in its frame `rect` (page coordinates): its text, or its
 /// share of a linked chain's, cut to what fits, aligned and turned as the box says.
 pub(crate) fn box_items(ctx: &mut Ctx, id: u32, rect: Rect, depth: usize) -> Vec<Placed> {
     let body = ctx.doc.parts.get(&id).map(|p| p.body).unwrap_or_default();
-    let (len, across) = frame(&body, rect.w, rect.h);
+    let (mut len, across) = frame(&body, rect.w, rect.h);
     let items = match chain_share(ctx, id, depth) {
         Some(items) => items,
         None => {
+            // Text that doesn't wrap runs on to its widest line, past the box's side if need be.
+            let unwrapped = unwrapped_extent(ctx, id, depth);
+            if let Some((widest, _)) = unwrapped {
+                len = len.max(widest + FIT_SLACK);
+            }
             if !ctx.boxes.enter(id) {
                 return Vec::new();
             }
-            let blocks = ctx.doc.parts.get(&id).map(|p| p.blocks.clone()).unwrap_or_default();
+            let mut blocks = ctx.doc.parts.get(&id).map(|p| p.blocks.clone()).unwrap_or_default();
+            // Beside tables or text boxes the box keeps its size and its tables the box's width;
+            // only its paragraphs run on to their widest line.
+            if unwrapped.is_none()
+                && let Some(widest) = mixed_unwrapped_width(ctx, id, &blocks, depth)
+                && widest + FIT_SLACK > len
+            {
+                blocks = widen_paras(ctx, &blocks, widest + FIT_SLACK - len);
+            }
             let inner = lay(ctx, id, &blocks, len, body.vert, depth);
             ctx.boxes.leave();
             // Text that doesn't fit inside the margins is hidden, as in Word; a box that resizes
@@ -129,8 +241,15 @@ pub(crate) fn fitted_height(ctx: &mut Ctx, id: u32, w: f32) -> Option<f32> {
     if ctx.chains.member.contains_key(&id) || !ctx.boxes.enter(id) {
         return None;
     }
-    let blocks = ctx.doc.parts.get(&id).map(|p| p.blocks.clone()).unwrap_or_default();
+    let mut blocks = ctx.doc.parts.get(&id).map(|p| p.blocks.clone()).unwrap_or_default();
     let (len, _) = frame(&body, w, 0.0);
+    // Text that doesn't wrap (Wrap text in shape off) is measured on its unwrapped lines, as
+    // `box_items` shows it (#2191).
+    if let Some(widest) = mixed_unwrapped_width(ctx, id, &blocks, 0)
+        && widest + FIT_SLACK > len
+    {
+        blocks = widen_paras(ctx, &blocks, widest + FIT_SLACK - len);
+    }
     // Measuring doesn't count the box's list numbers and equations: `box_items` lays it out again.
     let snap = (ctx.counters.clone(), ctx.eq_count);
     let items = lay(ctx, id, &blocks, len, body.vert, 0);
@@ -217,10 +336,11 @@ struct Cut {
 pub(crate) const MAX_FLOW_WIDTHS: usize = 16;
 
 /// Line lengths are told apart to a twentieth of a point (a twip): resized boxes a hair apart
-/// share one layout. Stacked text is laid out at [`STACK_WIDTH`] whatever the box's size.
-fn flow_key(len: f32, vert: TextVert) -> (i32, TextVert) {
+/// share one layout. Stacked text is laid out at [`STACK_WIDTH`] whatever the box's size. Text
+/// that `unwrap`s (runs its paragraphs on past the box's side, #2191) is laid out apart.
+fn flow_key(len: f32, vert: TextVert, unwrap: bool) -> (i32, TextVert, bool) {
     let len = if vert == TextVert::Stacked { STACK_WIDTH } else { len };
-    ((len * 20.0).round() as i32, vert)
+    ((len * 20.0).round() as i32, vert, unwrap)
 }
 
 /// Split the text of `chain`'s first box over its boxes.
@@ -236,7 +356,7 @@ fn flow(ctx: &mut Ctx, chain: &[u32], depth: usize) -> Vec<Vec<Placed>> {
     // time), sharing a layout with the boxes before it of the same length.
     let snap = (ctx.counters.clone(), ctx.eq_count);
     let mut after = None;
-    let mut layouts: Vec<((i32, TextVert), Vec<Placed>)> = Vec::new();
+    let mut layouts: Vec<((i32, TextVert, bool), Vec<Placed>)> = Vec::new();
     let mut out = Vec::with_capacity(chain.len());
     // Where the next box's text starts: `Some(None)` at the beginning, `None` when all is shown.
     let mut start: Option<Option<Cut>> = Some(None);
@@ -248,17 +368,29 @@ fn flow(ctx: &mut Ctx, chain: &[u32], depth: usize) -> Vec<Vec<Placed>> {
         let body = ctx.doc.parts.get(id).map(|p| p.body).unwrap_or_default();
         let (w, h) = sizes.get(id).copied().unwrap_or((0.0, 0.0));
         let (len, across) = frame(&body, w, h);
-        let key = flow_key(len, body.vert);
-        // Past the cap the box takes the nearest layout in its direction: the widest line length
-        // that fits it, else the narrowest. The first box in a direction is laid out (one more
-        // layout for each of the few directions at most).
-        let near = || layouts.iter().filter(|((_, v), _)| *v == key.1).min_by_key(|((k, _), _)| (*k > key.0, k.abs_diff(key.0)));
+        // Text that doesn't wrap runs on to its widest line in this box too, when the box starts
+        // at a paragraph; one picking up partway through a paragraph wraps it, or it would show
+        // that paragraph again from its start.
+        let unwrap = body.no_wrap && body.vert == TextVert::Horz && cut.as_ref().is_none_or(|c| c.byte == 0);
+        let key = flow_key(len, body.vert, unwrap);
+        // Past the cap the box takes the nearest layout in its direction (wrapped or not): the
+        // widest line length that fits it, else the narrowest. The first box in a direction is
+        // laid out (one more layout for each of the few directions at most).
+        let near = || layouts.iter().filter(|((_, v, u), _)| (*v, *u) == (key.1, key.2)).min_by_key(|((k, ..), _)| (*k > key.0, k.abs_diff(key.0)));
         let kept = layouts.iter().find(|(k, _)| *k == key).or_else(|| if layouts.len() >= MAX_FLOW_WIDTHS { near() } else { None });
         let items = match kept {
             Some((_, items)) => items.clone(),
             None => {
                 (ctx.counters, ctx.eq_count) = (snap.0.clone(), snap.1);
-                let items = lay(ctx, head, &blocks, len, body.vert, depth);
+                // Tables keep the box's width (#2191).
+                let mut shown = blocks.clone();
+                if unwrap {
+                    let widest = paras_widest(ctx, head, &blocks, depth);
+                    if widest + FIT_SLACK > len {
+                        shown = widen_paras(ctx, &blocks, widest + FIT_SLACK - len);
+                    }
+                }
+                let items = lay(ctx, head, &shown, len, body.vert, depth);
                 after.get_or_insert_with(|| (ctx.counters.clone(), ctx.eq_count));
                 layouts.push((key, items.clone()));
                 items

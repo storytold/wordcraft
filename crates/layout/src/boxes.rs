@@ -1,6 +1,6 @@
 use super::ctx::{Ctx, page_anchored};
 use super::floats::{
-    ObjFrame, ObjectPlacement, WrapArea, align_in, float_rect, floating, left_out_objects, place_objects, rel_exclusions, wrap_area,
+    ObjFrame, ObjectPlacement, WrapArea, align_in, float_rect, floating_sized, left_out_objects, place_objects, rel_exclusions, wrap_area,
 };
 use super::page::PageFrame;
 use super::placed::Placed;
@@ -276,10 +276,10 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                 let mut pinned = HashMap::new();
                 let left_out = left_out_objects(ctx.doc, p, table.map(|t| &t.chr), ctx.opts.show_hidden, ctx.hide_deleted);
                 for (oi, o) in p.objects.iter().enumerate() {
-                    let Some((w, h, float)) = floating(o) else { continue };
                     if left_out(oi) {
                         continue;
                     }
+                    let Some((w, h, float)) = floating_sized(ctx, o, depth) else { continue };
                     if let Some(pin) = ctx.pin.as_ref().filter(|pin| in_cell && pin.story == story && float.outside_cell && page_anchored(float)) {
                         let page = PageFrame { sect: &pin.sect, origin: (0.0, 0.0), number: pin.number, mirror: pin.mirror };
                         pinned.insert(oi, float_rect(Some(page), (0.0, width), para_top, w, h, float));
@@ -379,7 +379,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
 }
 
 /// The width a text frame without one takes: its widest line, with the paragraph's indents.
-fn natural_width(pl: &ParaLayout) -> f32 {
+pub(crate) fn natural_width(pl: &ParaLayout) -> f32 {
     let widest = (0..pl.lines.len())
         .filter_map(|li| {
             let l = pl.lines.get(li)?;
