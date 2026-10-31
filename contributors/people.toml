@@ -187,3 +187,7 @@ sync_github_name = true
 
 [people.dylanmtaylor]
 sync_github_name = true
+
+[people.ovezthaking]
+real_name = "Oliwer Urbaniak"
+sync_github_name = true

@@ -165,6 +165,20 @@ fn millions_of_attributes_on_one_paragraph_are_capped() {
     assert!(start.elapsed() < std::time::Duration::from_secs(10), "took {:?}", start.elapsed());
 }
 
+/// Attributes distributed across many elements cannot exceed the cumulative budget (#4299).
+#[test]
+fn cumulative_attributes_across_many_paragraphs_are_capped() {
+    let attrs: String = (0..1000).map(|i| format!(" a{i}=\"\"")).collect();
+    let elem = format!("<w:p{attrs}><w:r><w:t>x</w:t></w:r></w:p>");
+    let body = elem.repeat(8001);
+    let x = format!("<w:document {W_NS}><w:body>{body}</w:body></w:document>");
+    match read(&doc_zip(x.as_bytes())) {
+        Err(DocxError::Limit(_)) => {}
+        Ok(_) => panic!("expected a Limit error for cumulative attributes"),
+        Err(e) => panic!("expected a Limit error, got {e}"),
+    }
+}
+
 /// A small valid document.xml to mutate.
 fn base_xml() -> String {
     format!(
