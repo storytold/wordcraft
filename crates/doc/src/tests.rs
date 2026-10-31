@@ -716,3 +716,35 @@ fn lone_table_open_markers_mixed_tables_and_paired() {
     assert!(res1.controls.open.is_empty());
     assert_eq!(res1.controls.close, 0);
 }
+
+#[test]
+fn normalize_runs_reconciles_objects_with_markers() {
+    let c = CharProps::default();
+    let markers = |p: &Paragraph| p.text.chars().filter(|ch| *ch == '\u{FFFC}').count();
+    let build = || {
+        let mut d = Document::from_text("abc");
+        let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+        p.insert_object(1, fs("A"), &c).unwrap();
+        p.insert_object(5, fs("B"), &c).unwrap();
+        d
+    };
+    // More objects than markers (as a hand-edited .json can say): the surplus goes.
+    let mut d = build();
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().objects.push(fs("C"));
+    d.normalize_runs();
+    let p = d.para(StoryRef::Body, &Path::top(0)).unwrap();
+    assert_eq!((markers(p), p.objects.len()), (2, 2));
+    assert_eq!(p.objects, vec![fs("A"), fs("B")]);
+    // More markers than objects: the unmatched marker goes, runs still cover the text.
+    let mut d = build();
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    p.text.push('\u{FFFC}');
+    p.runs[0].len += 3;
+    d.normalize_runs();
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    assert_eq!((markers(p), p.objects.len()), (2, 2));
+    assert_eq!(p.runs.iter().map(|r| r.len).sum::<usize>(), p.text.len());
+    // Deleting the first marker keeps B on the second.
+    p.delete(1, 4).unwrap();
+    assert_eq!(p.objects, vec![fs("B")]);
+}

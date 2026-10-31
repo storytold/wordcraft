@@ -742,7 +742,10 @@ impl Document {
         stories.extend(self.parts.values_mut().map(|p| &mut p.blocks));
         for blocks in stories {
             for b in blocks.iter_mut() {
-                edit::each_para_mut(Arc::make_mut(b), 0, &mut Paragraph::normalize);
+                edit::each_para_mut(Arc::make_mut(b), 0, &mut |p: &mut Paragraph| {
+                    p.normalize();
+                    p.reconcile_objects();
+                });
             }
         }
     }
