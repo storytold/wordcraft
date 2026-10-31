@@ -6,8 +6,8 @@ use wordcraft_doc::fill::Fill;
 use wordcraft_doc::numbering::ListKind;
 use wordcraft_doc::para::{Anchor, Float, FloatAlign, NoteKind, ShapeKind, Wrap};
 use wordcraft_doc::props::{
-    Align, Border, BorderStyle, Borders, CharProps, HeightRule, Highlight, LineSpacing, NumRef, ParaProps, Rgb, RowProps, TabAlign, TabLeader,
-    TabStop, TableLook, TextColor, TextDirection, Underline, VAlign, VMerge, VertAlign,
+    Align, Border, BorderStyle, Borders, CharProps, HeightRule, Highlight, LineSpacing, NumRef, ParaProps, PropChange, Rgb, RowProps, TabAlign,
+    TabLeader, TabStop, TableLook, TextColor, TextDirection, Underline, VAlign, VMerge, VertAlign,
 };
 use wordcraft_doc::section::{Columns, DocGrid, DocGridType, LineNumberRestart, LineNumbering, NumFormat, PageVAlign, SectionProps, SectionStart};
 use wordcraft_doc::styles::{Style, StyleKind};
@@ -264,6 +264,8 @@ fn styles_and_lists_round_trip() {
         locked: true,
         default: false,
         table: None,
+        para_change: None,
+        chr_change: None,
     });
     d.styles.upsert(Style {
         id: "MyStyleChar".into(),
@@ -297,6 +299,41 @@ fn styles_and_lists_round_trip() {
     }
     assert_eq!(r.styles.styles.len(), d.styles.styles.len());
     assert_eq!(paras(&r)[1].props.numbering, Some(NumRef { num: nums, level: 1 }));
+}
+
+/// A tracked change of a style's paragraph/run properties (#2697): valid `w:pPrChange` and
+/// `w:rPrChange` elements carry the old properties and revision through the round trip.
+#[test]
+fn tracked_style_definition_change_round_trips() {
+    let mut d = Document::new();
+    d.revisions.push(Revision { kind: RevisionKind::Format, author: "Ana".into(), date: "2026-10-17T10:00:00Z".into(), move_name: None });
+    d.styles.upsert(Style {
+        id: "Mine".into(),
+        name: "Mine".into(),
+        kind: StyleKind::Paragraph,
+        para: ParaProps { align: Some(Align::Center), ..Default::default() },
+        chr: CharProps { bold: Some(true), size: Some(14.0), ..Default::default() },
+        para_change: PropChange::boxed(0, ParaProps { align: Some(Align::Right), ..Default::default() }),
+        chr_change: PropChange::boxed(0, CharProps { italic: Some(true), ..Default::default() }),
+        ..Default::default()
+    });
+    d.body = vec![para_block(Paragraph::with_text("x", CharProps::default()))];
+    let bytes = wordcraft_docx::write(&d).expect("write");
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/styles.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains("<w:pPrChange") && xml.contains("<w:rPrChange"), "{xml}");
+    assert!(!xml.contains("stylePrChange"), "CT_Style has no such element: {xml}");
+    drop(zip);
+
+    let r = wordcraft_docx::read(&bytes).expect("read");
+    let st = r.styles.get("Mine").expect("the style");
+    let para = st.para_change.as_ref().expect("the paragraph change survives");
+    let chr = st.chr_change.as_ref().expect("the run change survives");
+    assert_eq!((st.para.align, para.old.align), (Some(Align::Center), Some(Align::Right)));
+    assert_eq!(st.chr.bold, Some(true));
+    assert_eq!((chr.old.italic, chr.old.bold), (Some(true), None), "the style as it was");
+    assert_eq!(r.revisions.get(chr.rev as usize).map(|x| (x.kind, x.author.as_str())), Some((RevisionKind::Format, "Ana")));
 }
 
 #[test]

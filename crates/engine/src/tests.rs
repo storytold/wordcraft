@@ -3129,6 +3129,216 @@ fn track_changes_and_accept() {
     assert_eq!(text(&s), "inal added");
 }
 
+/// #2697: Modify Style while Track Changes is on records the style definition as it was
+/// (`w:pPrChange` / `w:rPrChange` in the style); a later change by the same author keeps the first one's start, and
+/// accepting keeps the current definition, rejecting restores the old one.
+#[test]
+fn tracked_style_definition_changes_are_recorded_and_resolved() {
+    use wordcraft_doc::props::Align;
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Heading text"}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "styles.modify", json!({"style": "Heading1", "chr": {"bold": true}}));
+    run(&mut s, "styles.modify", json!({"style": "Heading1", "para": {"align": "center"}}));
+
+    let st = s.doc.styles.get("Heading1").unwrap();
+    let chr = st.chr_change.as_ref().expect("the run change is recorded");
+    let para = st.para_change.as_ref().expect("the paragraph change is recorded");
+    assert_eq!((chr.old.bold, st.chr.bold), (None, Some(true)), "the record keeps the style as it was");
+    assert_eq!((para.old.align, st.para.align), (None, Some(Align::Center)), "a second change by the same author keeps the first one's start");
+    assert_eq!(para.rev, chr.rev, "one author's edits to one style remain one review change");
+
+    let ch = run(&mut s, "review.changes", json!({}));
+    assert_eq!(ch.as_array().unwrap().len(), 1, "{ch}");
+    assert_eq!(ch[0]["kind"], "format", "{ch}");
+    // A style change describes the style's run and paragraph properties, nested as chr and para.
+    let d = ch[0]["description"].as_str().unwrap_or_default();
+    assert!(d.contains("Chr") && d.contains("bold") && d.contains("Para") && d.contains("align"), "{d}");
+    assert_eq!(ch[0]["start"]["path"], json!([0]), "the change sits at the start of the document");
+
+    // Reject the change at the start of the document (where Word shows it): the old definition
+    // comes back and the change is gone.
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 0}, "focus": {"block": 0, "off": 0}}));
+    run(&mut s, "review.reject", json!({}));
+    let st = s.doc.styles.get("Heading1").unwrap();
+    assert_eq!((st.chr.bold, st.para.align), (None, None), "rejecting restores the style as it was");
+    assert!(st.para_change.is_none() && st.chr_change.is_none());
+    assert_eq!(run(&mut s, "review.changes", json!({})), json!([]), "nothing left to review");
+
+    run(&mut s, "styles.modify", json!({"style": "Heading1", "chr": {"bold": true}}));
+    run(&mut s, "review.acceptAll", json!({}));
+    assert_eq!(s.doc.styles.get("Heading1").unwrap().chr.bold, Some(true), "accepting keeps the change");
+    assert!(s.doc.revisions.is_empty());
+}
+
+/// #2697 review: Update Style to Match Selection also rewrites the selected paragraph. Its body
+/// revision must not make a later property of the same style look like a second author change.
+#[test]
+fn update_to_match_keeps_one_style_revision_per_author() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Heading"}));
+    run(&mut s, "styles.apply", json!({"style": "Heading1"}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "styles.modify", json!({"style": "Heading1", "chr": {"bold": true}}));
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 0}, "focus": {"block": 0, "off": 7}}));
+    run(&mut s, "para.alignCenter", json!({}));
+    run(&mut s, "styles.updateToMatch", json!({"style": "Heading1"}));
+
+    let st = s.doc.styles.get("Heading1").unwrap();
+    let para = st.para_change.as_ref().expect("Update to Match records paragraph properties");
+    let chr = st.chr_change.as_ref().expect("the earlier run-property change remains");
+    assert_eq!(para.rev, chr.rev, "one author has one review change for the style");
+}
+
+/// #2697 review: accepting or rejecting a text change whose range begins at the document start
+/// must not also resolve unrelated style-definition changes anchored there.
+#[test]
+fn a_first_word_range_does_not_resolve_style_changes() {
+    for command in ["review.accept", "review.reject"] {
+        let mut s = s();
+        run(&mut s, "document.setText", json!({"text": "first word stays"}));
+        run(&mut s, "review.trackChanges", json!({"value": true}));
+        run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 0}, "focus": {"block": 0, "off": 5}}));
+        run(&mut s, "format.bold", json!({}));
+
+        s.author = "Ana".into();
+        run(&mut s, "styles.modify", json!({"style": "Heading1", "chr": {"italic": true}}));
+        s.author = "Bo".into();
+        run(&mut s, "styles.modify", json!({"style": "Heading2", "para": {"align": "center"}}));
+        assert!(s.doc.styles.get("Heading1").unwrap().chr_change.is_some());
+        assert!(s.doc.styles.get("Heading2").unwrap().para_change.is_some());
+
+        run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 0}, "focus": {"block": 0, "off": 5}}));
+        run(&mut s, command, json!({}));
+        assert!(s.doc.styles.get("Heading1").unwrap().chr_change.is_some(), "{command} resolved Ana's unrelated style change");
+        assert!(s.doc.styles.get("Heading2").unwrap().para_change.is_some(), "{command} resolved Bo's unrelated style change");
+    }
+}
+
+/// #2697 review: remember that a selection covered the whole body before accepting its text
+/// revisions changes the body's end position.
+#[test]
+fn a_whole_body_selection_resolves_style_changes_after_text_shrinks() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "remove keep"}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 0}, "focus": {"block": 0, "off": 7}}));
+    run(&mut s, "text.delete", json!({}));
+    run(&mut s, "styles.modify", json!({"style": "Heading1", "chr": {"bold": true}}));
+    let (start, end) = (s.doc.start_of(StoryRef::Body), s.doc.end_of(StoryRef::Body));
+    s.sel = crate::Selection { anchor: start, focus: end };
+
+    run(&mut s, "review.accept", json!({}));
+    assert_eq!(text(&s), "keep", "accepting the deletion shrinks the selected body");
+    assert!(s.doc.styles.get("Heading1").unwrap().chr_change.is_none(), "the pre-mutation whole-body selection also resolves style changes");
+}
+
+/// #2697 review: change navigation selects the collapsed style-change anchor, where an
+/// individual Reject resolves it.
+#[test]
+fn a_navigated_style_change_can_be_resolved_at_its_anchor() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "body"}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "styles.modify", json!({"style": "Heading1", "chr": {"bold": true}}));
+    s.sel = crate::Selection::caret(s.doc.end_of(StoryRef::Body));
+
+    run(&mut s, "review.nextChange", json!({}));
+    let start = s.doc.start_of(StoryRef::Body);
+    assert_eq!(s.sel.ordered(), (start.clone(), start), "navigation selects the style anchor");
+    run(&mut s, "review.reject", json!({}));
+    let st = s.doc.styles.get("Heading1").unwrap();
+    assert_eq!(st.chr.bold, None);
+    assert!(st.para_change.is_none() && st.chr_change.is_none());
+}
+
+/// #2697 review: identity, relationships, table formatting and gallery metadata do not have a
+/// tracked-change carrier in OOXML's CT_Style, so changing only those fields creates no false
+/// paragraph/run formatting revision.
+#[test]
+fn non_property_style_changes_are_not_recorded_as_formatting() {
+    use wordcraft_doc::styles::TableStyleParts;
+    let mut s = s();
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    let before = s.doc.clone();
+    let st = s.doc.styles.get_mut("Heading1").unwrap();
+    st.based_on = Some("Title".into());
+    st.next = Some("Heading2".into());
+    st.linked = Some("Emphasis".into());
+    st.name = "Renamed heading".into();
+    st.quick = !st.quick;
+    st.table = Some(TableStyleParts::default());
+    crate::cmd::fmt_revisions::record(&mut s, "styles.modify", &before);
+    let st = s.doc.styles.get("Heading1").unwrap();
+    assert!(st.para_change.is_none() && st.chr_change.is_none());
+}
+
+/// #2697: saving a tracked style change to .docx and reopening keeps the change, the old
+/// paragraph/run properties and the revision author.
+#[test]
+fn tracked_style_change_round_trips_through_docx() {
+    use wordcraft_doc::RevisionKind;
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Heading text"}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "styles.modify", json!({"style": "Heading1", "chr": {"bold": true}}));
+
+    let bytes = crate::io::save_bytes("x.docx", &s.doc).unwrap();
+    let d = crate::io::open_bytes("x.docx", &bytes).unwrap();
+    let st = d.styles.get("Heading1").unwrap();
+    assert_eq!(st.chr.bold, Some(true), "the new definition is saved");
+    let ch = st.chr_change.as_ref().expect("the change survives the round trip");
+    assert_eq!(ch.old.bold, None, "the change keeps Heading 1 as it was");
+    let rev = d.revisions.get(ch.rev as usize).expect("the revision is read back");
+    assert_eq!((rev.kind, rev.author.as_str()), (RevisionKind::Format, "WordCraft User"));
+
+    // And the change is resolved on the reopened document.
+    let mut r = Session::new(d);
+    run(&mut r, "review.rejectAll", json!({}));
+    assert_eq!(r.doc.styles.get("Heading1").unwrap().chr.bold, None);
+}
+
+/// #2697 review: rejecting a style change in a reopened .docx restores the run and paragraph
+/// properties only; the style keeps its id and metadata (builtin, quick, priority) and a table
+/// style keeps its unrelated table formatting.
+#[test]
+fn rejecting_a_reopened_style_change_keeps_style_metadata() {
+    use wordcraft_doc::styles::{Style, StyleKind, TableStyleParts};
+    let mut s = s();
+    s.doc.styles.upsert(Style {
+        id: "GridX".into(),
+        name: "Grid X".into(),
+        kind: StyleKind::Table,
+        builtin: true,
+        quick: true,
+        priority: Some(7),
+        table: Some(TableStyleParts { header_chr: wordcraft_doc::props::CharProps { bold: Some(true), ..Default::default() }, ..Default::default() }),
+        ..Default::default()
+    });
+    run(&mut s, "text.insert", json!({"text": "Heading text"}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "styles.modify", json!({"style": "Heading1", "chr": {"bold": true}}));
+    run(&mut s, "styles.modify", json!({"style": "GridX", "chr": {"italic": true}}));
+
+    let bytes = crate::io::save_bytes("x.docx", &s.doc).unwrap();
+    let d = crate::io::open_bytes("x.docx", &bytes).unwrap();
+    let before: Vec<_> = ["Heading1", "GridX"].iter().map(|i| d.styles.get(i).unwrap().clone()).collect();
+    assert!(before.iter().all(|st| st.chr_change.is_some()), "both changes survive the round trip");
+    assert!(before[1].table.is_some(), "the table formatting is read back");
+
+    let mut r = Session::new(d);
+    run(&mut r, "review.rejectAll", json!({}));
+    let h = r.doc.styles.get("Heading1").unwrap();
+    assert_eq!(h.chr.bold, None, "the bold is cleared");
+    let g = r.doc.styles.get("GridX").unwrap();
+    assert_eq!(g.chr.italic, None, "the italic is cleared");
+    for (st, was) in [h, g].into_iter().zip(&before) {
+        assert!(st.para_change.is_none() && st.chr_change.is_none());
+        assert_eq!((&st.id, &st.name, st.builtin, st.quick, st.priority), (&was.id, &was.name, was.builtin, was.quick, was.priority));
+        assert_eq!(st.table, was.table, "{}", st.id);
+    }
+}
+
 #[test]
 fn document_text_drops_tracked_deletions() {
     // #866: document.text (MCP get_text) omits tracked deletions; plain_text still includes them.

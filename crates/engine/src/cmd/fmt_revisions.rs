@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 use wordcraft_doc::props::VMerge;
 use wordcraft_doc::props::{CellProps, CharProps, ParaProps, PropChange, RowProps, TableProps};
 use wordcraft_doc::section::SectionProps;
+use wordcraft_doc::styles::Style;
 use wordcraft_doc::table::{Cell, Row, Table};
 use wordcraft_doc::{Block, Blocks, Document, Paragraph, Revision, RevisionKind};
 
@@ -73,6 +74,10 @@ impl Recorder<'_> {
     fn change<T: Clone + PartialEq>(&mut self, before: &T, after: &T, f: fn(&T) -> T, get: fn(&T) -> &Slot<T>) -> Option<Replacement<T>> {
         let (fb, fa) = (f(before), f(after));
         let (had, has) = (get(before), get(after));
+        self.change_values(fb, fa, had, has)
+    }
+
+    fn change_values<T: Clone + PartialEq>(&mut self, fb: T, fa: T, had: &Slot<T>, has: &Slot<T>) -> Option<Replacement<T>> {
         let want = if fb == fa {
             // Not formatted by this command: keep the change it carries (or carried).
             if has.is_some() {
@@ -178,6 +183,33 @@ impl Recorder<'_> {
             }
         }
     }
+
+    /// Record the style-definition changes between `before` and `after` (the same style list):
+    /// a style `after` formats differently from `before` carries the style as it was.
+    fn styles(&mut self, before: &[Style], after: &mut [Style]) {
+        for (b, a) in before.iter().zip(after.iter_mut()) {
+            if b.id != a.id || b == &*a {
+                continue;
+            }
+            // A later property edit by the same author remains one style change, even when the
+            // first command changed only run properties and the next only paragraph properties.
+            let command_rid = self.rid;
+            let prior_style_rid =
+                [b.para_change.as_ref().map(|ch| ch.rev), b.chr_change.as_ref().map(|ch| ch.rev)].into_iter().flatten().find(|rev| self.own(*rev));
+            if let Some(rev) = prior_style_rid {
+                self.rid = Some(rev);
+            }
+            if let Some(Replacement(want)) = self.change_values(b.para.formatting(), a.para.formatting(), &b.para_change, &a.para_change) {
+                a.para_change = want;
+            }
+            if let Some(Replacement(want)) = self.change_values(b.chr.formatting(), a.chr.formatting(), &b.chr_change, &a.chr_change) {
+                a.chr_change = want;
+            }
+            if prior_style_rid.is_some() {
+                self.rid = command_rid;
+            }
+        }
+    }
 }
 
 /// The formatting-comparison strips: what isn't formatting in these properties. A cell's merge
@@ -210,6 +242,7 @@ pub(crate) fn record(s: &mut Session, id: &str, before: &Document) {
             r.blocks(&pb.blocks, &mut pa.blocks, 0);
         }
     }
+    r.styles(&before.styles.styles, &mut doc.styles.styles);
 }
 
 /// Compare Documents: record how paragraph `new` (the revised version, same text) is formatted
@@ -245,6 +278,27 @@ pub fn char_diff(c: &CharProps) -> Vec<Value> {
 /// The properties a paragraph's change set.
 pub fn para_diff(p: &ParaProps) -> Vec<Value> {
     p.fmt_change.as_ref().map(|ch| diff(&ch.old.formatting(), &p.formatting())).unwrap_or_default()
+}
+
+/// A style's paragraph/run property changes, grouped by revision. A single style edit normally
+/// shares one revision; foreign DOCX may attribute the two property carriers independently.
+pub fn style_diffs(st: &Style) -> Vec<(u32, Vec<Value>)> {
+    let mut out: Vec<(u32, Vec<Value>)> = Vec::new();
+    for (rev, prop, value) in [
+        st.para_change.as_ref().map(|ch| (ch.rev, "para", diff(&ch.old.formatting(), &st.para.formatting()))),
+        st.chr_change.as_ref().map(|ch| (ch.rev, "chr", diff(&ch.old.formatting(), &st.chr.formatting()))),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let item = json!({"prop": prop, "value": value});
+        if let Some((_, props)) = out.iter_mut().find(|(r, _)| *r == rev) {
+            props.push(item);
+        } else {
+            out.push((rev, vec![item]));
+        }
+    }
+    out
 }
 
 /// A section's change: the properties it set.
@@ -362,6 +416,16 @@ pub fn resolve_row(r: &mut Row, accept: bool) {
 pub fn resolve_cell(c: &mut Cell, accept: bool) {
     if let Some(ch) = c.props.fmt_change.take().filter(|_| !accept) {
         c.props = CellProps { fmt_change: None, span: c.props.span, vmerge: c.props.vmerge, ..ch.old };
+    }
+}
+
+/// Accept or reject a style definition change.
+pub fn resolve_style(st: &mut Style, accept: bool) {
+    if let Some(ch) = st.para_change.take().filter(|_| !accept) {
+        st.para = ch.old;
+    }
+    if let Some(ch) = st.chr_change.take().filter(|_| !accept) {
+        st.chr = ch.old;
     }
 }
 

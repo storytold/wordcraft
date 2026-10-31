@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 use crate::props::{
-    Align, Border, BorderStyle, Borders, CharProps, LineSpacing, ParaProps, Rgb, TabAlign, TabLeader, TabStop, TableLook, TextColor, Underline,
-    VAlign,
+    Align, Border, BorderStyle, Borders, CharProps, LineSpacing, ParaProps, PropChange, Rgb, TabAlign, TabLeader, TabStop, TableLook, TextColor,
+    Underline, VAlign,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
@@ -46,6 +46,13 @@ pub struct Style {
     /// (`w:locked`).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub locked: bool,
+    /// A tracked change of the style's paragraph properties (`w:pPrChange`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub para_change: Option<Box<PropChange<ParaProps>>>,
+    /// A tracked change of the style's run properties (`w:rPrChange`). Kept separate because a
+    /// foreign DOCX can attribute the two property changes to different revisions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chr_change: Option<Box<PropChange<CharProps>>>,
     /// The default style of its kind (`w:default`), whatever its id: localized documents call
     /// the default character, table and list styles something other than the English ids.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
