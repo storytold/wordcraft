@@ -103,8 +103,8 @@ pub(super) fn balloons(app: &mut WordApp, ui: &mut Ui, painter: &egui::Painter, 
             let top = (anchor.y + if over_page { 4.0 } else { -12.0 }).max(next_y);
             let active = app.canvas.balloon == Some(*id);
             // Lay out a read-only balloon's text: the comment, then each reply under a rule,
-            // each with who wrote it and when. (galley, gap above, a rule above)
-            let mut lines: Vec<(craft_ui::text::AlignedGalley, f32, bool)> = Vec::new();
+            // each with who wrote it and when. (galley, gap above, a rule above, height shown)
+            let mut lines: Vec<(craft_ui::text::AlignedGalley, f32, bool, f32)> = Vec::new();
             let card = if active {
                 Rect::from_min_size(pos2(x0, top), vec2(w, app.canvas.balloon_h.max(24.0)))
             } else {
@@ -113,15 +113,21 @@ pub(super) fn balloons(app: &mut WordApp, ui: &mut Ui, painter: &egui::Painter, 
                 for (i, cid) in std::iter::once(*id).chain(thread.iter().copied()).enumerate() {
                     let Some(r) = app.session.doc.comments.get(&cid) else { continue };
                     let gap = if i == 0 { 0.0 } else { 9.0 };
-                    lines.push((balloon_text(painter, author_name(&r.author), semibold(fs), t.text, w - 16.0), gap, i > 0));
+                    let g = balloon_text(painter, author_name(&r.author), semibold(fs), t.text, w - 16.0);
+                    let h = g.height();
+                    lines.push((g, gap, i > 0, h));
                     let when = crate::local_time::comment_time(r);
                     if !when.is_empty() {
-                        lines.push((balloon_text(painter, when, small.clone(), t.text_dim, w - 16.0), 1.0, false));
+                        let g = balloon_text(painter, when, small.clone(), t.text_dim, w - 16.0);
+                        let h = g.height();
+                        lines.push((g, 1.0, false, h));
                     }
                     let text = app.session.doc.plain_text(StoryRef::Part(r.part));
-                    lines.push((balloon_text(painter, text.trim().to_string(), regular(fs), dim(resolved), w - 16.0), 4.0, false));
+                    let g = balloon_text(painter, text.trim().to_string(), regular(fs), dim(resolved), w - 16.0);
+                    let h = shown_height(&g);
+                    lines.push((g, 4.0, false, h));
                 }
-                let h = lines.iter().map(|(g, gap, _)| g.height() + gap).sum::<f32>() + 12.0;
+                let h = lines.iter().map(|(_, gap, _, h)| h + gap).sum::<f32>() + 12.0;
                 Rect::from_min_size(pos2(x0, top), vec2(w, h))
             };
             if !card.intersects(clip) {
@@ -145,14 +151,19 @@ pub(super) fn balloons(app: &mut WordApp, ui: &mut Ui, painter: &egui::Painter, 
                 card_shapes(painter, &t, card, color, selected, None);
                 let text_painter = painter.with_clip_rect(card.intersect(clip));
                 let mut y = card.min.y + 6.0;
-                for (g, gap, rule) in lines {
+                for (g, gap, rule, h) in lines {
                     y += gap;
                     if rule {
                         // A reply starts: a hairline between it and what it answers.
                         painter.hline(card.min.x + 10.0..=card.max.x - 8.0, y - gap / 2.0, Stroke::new(1.0, t.border));
                     }
-                    let h = g.height();
-                    g.paint(&text_painter, pos2(card.min.x + 10.0, y), t.text);
+                    // A body cut off at its shown rows paints none of the rows below them.
+                    let shown = if h < g.height() {
+                        text_painter.with_clip_rect(text_painter.clip_rect().intersect(Rect::from_x_y_ranges(card.x_range(), y..=y + h)))
+                    } else {
+                        text_painter.clone()
+                    };
+                    g.paint(&shown, pos2(card.min.x + 10.0, y), t.text);
                     y += h;
                 }
                 let r = ui.interact(card, ui.scope_id().with(("balloon", *id)), Sense::click());
@@ -260,6 +271,15 @@ fn card_shapes(painter: &egui::Painter, t: &Tokens, card: Rect, color: Color32, 
         None => {
             painter.extend(shapes);
         }
+    }
+}
+
+/// The height of a balloon body's first [`COMMENT_ROWS`](crate::panes::COMMENT_ROWS) rows; the
+/// rest is cut off until the balloon is selected and its field scrolls.
+fn shown_height(g: &craft_ui::text::AlignedGalley) -> f32 {
+    match g {
+        craft_ui::text::AlignedGalley::Aligned { galley, .. } => galley.rows.get(crate::panes::COMMENT_ROWS).map_or(g.height(), |r| r.pos.y),
+        craft_ui::text::AlignedGalley::InvalidWidth { .. } => g.height(),
     }
 }
 

@@ -4841,3 +4841,57 @@ fn the_view_key_changes_when_a_drag_takes_an_object_off_the_page() {
     assert_ne!(hidden, view_key(&app, false, None), "the page without the dragged object is rendered again");
     assert_eq!(hidden, view_key(&app, false, Some(&object)), "the same drag keeps the key: no re-render every frame");
 }
+
+/// A two-paragraph document with a 200-line comment (`line` gives each line's text) on the first
+/// and a short one on the second, drawn without the Comments pane; returns both comment ids.
+fn long_comment_balloons(line: fn(usize) -> String) -> (egui_kittest::Harness<'static, WordApp>, u32, u32) {
+    let mut a = WordApp::new(
+        wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Alpha paragraph one.\n\nBeta paragraph two.")),
+        Default::default(),
+    );
+    a.run("select.text", json!({"text": "Alpha"})).unwrap();
+    let long = (1..=200).map(line).collect::<Vec<_>>().join("\n");
+    let first = a.run("review.newComment", json!({"text": long})).unwrap()["id"].as_u64().unwrap() as u32;
+    a.run("select.text", json!({"text": "Beta"})).unwrap();
+    let second = a.run("review.newComment", json!({"text": "Short note."})).unwrap()["id"].as_u64().unwrap() as u32;
+    a.run("view.commentsPane", json!({"value": false})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    (h, first, second)
+}
+
+fn balloon_rect(h: &egui_kittest::Harness<'static, WordApp>, id: u32) -> Option<egui::Rect> {
+    h.state().canvas.balloon_rects.iter().find(|(i, _)| *i == id).map(|(_, r)| *r)
+}
+
+/// #3382: a long comment's balloon, once selected, stops at about ten lines of text: its field
+/// scrolls, so its buttons and the next comment's balloon stay in view.
+#[test]
+fn a_long_comment_selected_balloon_keeps_the_next_one_in_view() {
+    let (mut h, first, second) = long_comment_balloons(|i| format!("Line {i}"));
+    click_balloon(&mut h, first);
+    let selected = balloon_rect(&h, first).expect("the selected balloon");
+    assert!(selected.height() < 350.0, "the selected balloon's field scrolls instead of growing: {selected:?}");
+    assert!(balloon_rect(&h, second).is_some_and(|r| r.max.y < 900.0), "the next balloon is in view");
+}
+
+/// #3382: a long comment's balloon that isn't selected shows its first ten lines and cuts off the
+/// rest, in either reading direction, so the next comment's balloon stays in view.
+#[test]
+fn a_long_comment_balloon_shows_ten_lines_and_keeps_the_next_one_in_view() {
+    for line in [(|i| format!("Line {i}")) as fn(usize) -> String, |i| format!("سطر {i}")] {
+        let (h, first, second) = long_comment_balloons(line);
+        let card = balloon_rect(&h, first).expect("the long balloon");
+        assert!(card.height() < 350.0, "the balloon stops at ten lines of its comment: {card:?}");
+        assert!(balloon_rect(&h, second).is_some_and(|r| r.max.y < 900.0), "the next balloon is in view");
+    }
+}
