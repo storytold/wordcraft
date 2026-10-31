@@ -60,6 +60,9 @@ wordcraft-engine = { workspace = true, features = ["test-support"] }
 egui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"] }
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
 zip = { workspace = true }
+# #2726's regression test: the consumer the Windows adapter runs, fed with our updates.
+# Pinned to the version egui already brings into the tree, so nothing is built twice.
+accesskit_consumer = "=0.39.1"
 
 [build-dependencies]
 serde_json = { workspace = true }
