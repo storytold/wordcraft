@@ -160,7 +160,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     })
                     .collect();
                 let plan = plan_strip(&specs, button_levels, ui.available_width(), MORE_TABS_W + 2.0);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let rtl = crate::i18n::current().rtl();
+                let trailing = if rtl { egui::Layout::left_to_right(egui::Align::Center) } else { egui::Layout::right_to_left(egui::Align::Center) };
+                let leading = if rtl { egui::Layout::right_to_left(egui::Align::Center) } else { egui::Layout::left_to_right(egui::Align::Center) };
+                ui.with_layout(trailing, |ui| {
                     // No document open (#1129): nothing to share, edit or comment on — but only
                     // these buttons. Disabling the whole line took the tab strip with it: the
                     // tabs took clicks that did nothing, so the empty window had no way back to
@@ -213,7 +216,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                         }
                     });
                     ui.add_space(8.0);
-                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.with_layout(leading, |ui| {
                         // The tabs that don't fit go into a » menu at the end of the strip (#897, #2026).
                         for (i, ((tab, custom), _)) in tabs.iter().zip(&plan.fits).enumerate().filter(|(_, (_, fits))| **fits) {
                             let (tab, custom) = (tab.as_str(), *custom);
@@ -335,8 +338,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             if let Some(x) = pending {
                 area = area.horizontal_scroll_offset(x);
             }
+            let rtl = crate::i18n::current().rtl();
+            let ribbon_row = if rtl { egui::Layout::right_to_left(egui::Align::TOP) } else { egui::Layout::left_to_right(egui::Align::TOP) };
             let scroll = area.show(ui, |ui| {
-                ui.horizontal_top(|ui| {
+                ui.with_layout(ribbon_row, |ui| {
                     ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
                     match entry {
                         // Every tab hidden: nothing to show.
@@ -382,17 +387,19 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             let overflow = scroll.content_size.x - r.width();
             let offset = scroll.state.clamped_offset().x;
             let step = 160.0;
+            let can_scroll_left = if rtl { overflow - offset > 1.0 } else { offset > 1.0 };
+            let can_scroll_right = if rtl { offset > 1.0 } else { overflow - offset > 1.0 };
             let mut next = None;
-            if offset > 1.0 {
+            if can_scroll_left {
                 let left = Rect::from_min_max(r.left_top(), pos2(r.left() + 18.0, r.bottom()));
                 if edge_cue(ui, left, "‹", tl!("Scroll ribbon left"), &t) {
-                    next = Some(offset - step);
+                    next = Some(if rtl { offset + step } else { offset - step });
                 }
             }
-            if overflow - offset > 1.0 {
+            if can_scroll_right {
                 let right = Rect::from_min_max(pos2(r.right() - 18.0, r.top()), r.right_bottom());
                 if edge_cue(ui, right, "›", tl!("Scroll ribbon right"), &t) {
-                    next = Some(offset + step);
+                    next = Some(if rtl { offset - step } else { offset + step });
                 }
             }
             if let Some(x) = next {

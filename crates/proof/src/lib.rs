@@ -55,6 +55,7 @@ pub mod cs;
 pub mod dict;
 pub mod en_variants;
 pub mod es;
+pub mod he;
 pub mod hr;
 pub mod hunspell;
 pub mod hyphen;
@@ -171,6 +172,7 @@ pub fn set_dictionaries_folder(dir: Option<std::path::PathBuf>) {
     cs::reload_dictionary();
     id::reload_dictionary();
     es::reload_dictionary();
+    he::reload_dictionary();
     DICTIONARY_GENERATION.fetch_add(1, Ordering::Relaxed);
 }
 
@@ -190,6 +192,7 @@ pub fn installed_dictionaries() -> Vec<(ProofLang, Option<std::path::PathBuf>)> 
         (ProofLang::EsMx, es::installed_path(ProofLang::EsMx)),
         (ProofLang::Es419, es::installed_path(ProofLang::Es419)),
         (ProofLang::EsUy, es::installed_path(ProofLang::EsUy)),
+        (ProofLang::He, he::installed_path()),
     ]
 }
 
@@ -204,6 +207,7 @@ pub fn dictionary_load_error(lang: ProofLang) -> Option<String> {
         ProofLang::Hr => "hr_HR",
         ProofLang::Tr => "tr_TR",
         ProofLang::Id => "id_ID",
+        ProofLang::He => "he_IL",
         ProofLang::Es | ProofLang::EsMx | ProofLang::Es419 | ProofLang::EsUy => es::dictionary_name(lang),
         _ => return None,
     };
@@ -447,6 +451,7 @@ fn dictionary_loaded(lang: ProofLang) -> Option<bool> {
         ProofLang::Ru => ru::has_dictionary(),
         ProofLang::Cs => cs::has_dictionary(),
         ProofLang::Id => id::has_dictionary(),
+        ProofLang::He => he::has_dictionary(),
         l if l.is_spanish() => es::has_dictionary(l),
         _ => return None,
     })
@@ -465,6 +470,7 @@ fn dictionary_needed(lang: ProofLang, installed: bool) -> Option<&'static str> {
         ProofLang::Ru => Some("ru_RU"),
         ProofLang::Cs => Some("cs_CZ"),
         ProofLang::Id => Some("id_ID"),
+        ProofLang::He => Some("he_IL"),
         l if l.is_spanish() => Some(es::dictionary_name(l)),
         _ => None,
     }
@@ -651,9 +657,16 @@ fn damerau(a: &[char], b: &str) -> usize {
 pub fn words(text: &str) -> Vec<(usize, usize)> {
     let mut out = Vec::new();
     let mut start: Option<usize> = None;
-    let is_w = |c: char| c.is_alphanumeric() || c == '\'' || c == '’' || c == '-' || unicode_normalization::char::is_combining_mark(c);
+    let is_w = |i: usize, c: char| {
+        c.is_alphanumeric()
+            || matches!(c, '\'' | '’' | '-' | '\u{05F3}' | '\u{05F4}' | '\u{05BE}')
+            || unicode_normalization::char::is_combining_mark(c)
+            || (matches!(c, '"' | '”' | '“')
+                && text.get(..i).and_then(|s| s.chars().next_back()).is_some_and(he::is_hebrew_letter)
+                && text.get(i + c.len_utf8()..).and_then(|s| s.chars().next()).is_some_and(he::is_hebrew_letter))
+    };
     for (i, c) in text.char_indices() {
-        match (start, is_w(c)) {
+        match (start, is_w(i, c)) {
             (None, true) => start = Some(i),
             (Some(s), false) => {
                 out.push((s, i));
@@ -665,12 +678,12 @@ pub fn words(text: &str) -> Vec<(usize, usize)> {
     if let Some(s) = start {
         out.push((s, text.len()));
     }
-    // Trim surrounding apostrophes/hyphens.
+    // Trim surrounding apostrophes/hyphens/gershayim (except trailing geresh on Hebrew abbreviations).
     out.into_iter()
         .filter_map(|(a, b)| {
             let w = text.get(a..b)?;
-            let lead = w.len() - w.trim_start_matches(['\'', '’', '-']).len();
-            let trail = w.len() - w.trim_end_matches(['\'', '’', '-']).len();
+            let lead = w.len() - w.trim_start_matches(['\'', '’', '-', '\u{05F3}', '\u{05F4}', '\u{05BE}']).len();
+            let trail = w.len() - w.trim_end_matches(['\'', '’', '-', '\u{05F4}', '\u{05BE}']).len();
             (a + lead < b - trail).then_some((a + lead, b - trail))
         })
         .collect()
@@ -748,6 +761,7 @@ fn spelling_issue(text: &str, a: usize, b: usize, lang: ProofLang, opts: &Option
         ProofLang::Ru => "Возможна орфографическая ошибка",
         ProofLang::Cs => "Možná pravopisná chyba",
         ProofLang::Id => "Kemungkinan salah eja",
+        ProofLang::He => "שגיאת כתיב אפשרית",
         ProofLang::Es | ProofLang::EsMx | ProofLang::Es419 | ProofLang::EsUy => "Posible error ortográfico",
         _ => "Possible spelling mistake",
     };
@@ -787,6 +801,13 @@ pub fn is_correct_in_with(word: &str, lang: ProofLang, opts: &Options) -> bool {
         }
         ProofLang::Cs => accepted_by_options(word, opts) || cs::is_correct_with_options(word, opts),
         ProofLang::Id => accepted_by_options(word, opts) || id::is_correct_with_options(word, opts),
+        ProofLang::He => {
+            let he_opts = Options {
+                ignore_uppercase: opts.ignore_uppercase && word.chars().any(char::is_uppercase) && word.chars().all(|c| !c.is_lowercase()),
+                ..*opts
+            };
+            accepted_by_options(word, &he_opts) || he::is_correct_with_options(word, opts)
+        }
         ProofLang::Bg | ProofLang::De | ProofLang::Other => true,
     }
 }
@@ -805,6 +826,7 @@ pub fn suggest_in(word: &str, max: usize, lang: ProofLang) -> Vec<String> {
         ProofLang::Ru => ru::suggest(word, max),
         ProofLang::Cs => cs::suggest(word, max),
         ProofLang::Id => id::suggest(word, max),
+        ProofLang::He => he::suggest(word, max),
         ProofLang::Es | ProofLang::EsMx | ProofLang::Es419 | ProofLang::EsUy => es::suggest(word, max, lang),
         ProofLang::Bg | ProofLang::De | ProofLang::Other => Vec::new(),
     }
@@ -833,6 +855,7 @@ fn grammar_in(text: &str, lang: ProofLang, capital_first: bool) -> Vec<Issue> {
         // Czech has no sentence-capital rule, so a list item needs no exception.
         ProofLang::Cs => cs::grammar::check(text),
         ProofLang::Id => id::grammar::check(text),
+        ProofLang::He => he::grammar::check(text),
         // Spanish has no sentence-capital rule either.
         ProofLang::Es | ProofLang::EsMx | ProofLang::Es419 | ProofLang::EsUy => es::grammar::check(text, lang),
         ProofLang::Bg | ProofLang::De | ProofLang::Other => Vec::new(),
@@ -1084,6 +1107,7 @@ mod tests {
             ("es_MX", es::test_dict::AFF, es::test_dict::DIC_AMERICAS),
             ("es_419", es::test_dict::AFF, es::test_dict::DIC_AMERICAS),
             ("es_UY", es::test_dict::AFF, es::test_dict::DIC_AMERICAS),
+            ("he_IL", he::test_dict::AFF, he::test_dict::DIC),
         ] {
             std::fs::write(dir.join(format!("{name}.aff")), aff).unwrap();
             std::fs::write(dir.join(format!("{name}.dic")), dic).unwrap();
@@ -1096,11 +1120,11 @@ mod tests {
         let before = dictionary_generation();
         set_dictionaries_folder(Some(dir.clone()));
         assert!(dictionary_generation() > before, "cached checks are dropped");
-        // Turkish has no test dictionary to put in the folder; Russian, Czech, Indonesian and the Spanishes follow it.
+        // Turkish has no test dictionary to put in the folder; Russian, Czech, Indonesian, the Spanishes, and Hebrew follow it.
         let found = installed_dictionaries();
         assert_eq!(found.get(4).map(|(lang, _)| *lang), Some(ProofLang::Tr));
         assert_eq!(
-            found[7..],
+            found[7..12],
             [
                 (ProofLang::Id, Some(dir.join("id_ID.dic"))),
                 (ProofLang::Es, Some(dir.join("es_ES.dic"))),
@@ -1109,6 +1133,7 @@ mod tests {
                 (ProofLang::EsUy, Some(dir.join("es_UY.dic"))),
             ]
         );
+        assert_eq!(found.get(12).map(|(lang, _)| *lang), Some(ProofLang::He));
         assert_eq!(
             found[..4],
             [

@@ -781,3 +781,34 @@ fn shape_and_chart_formats_leave_out_of_range_sizes_alone() {
     assert_eq!(before.0, Some((20.0, 2500.0)));
     assert_eq!(shown(a), before, "Chart Design shown, the chart untouched");
 }
+
+/// Verifies that in RTL (Hebrew), an overflowing ribbon initially offers the left scroll cue
+/// to reveal groups hidden to the physical left, rather than the LTR right cue.
+#[test]
+fn rtl_ribbon_edge_cue_shows_left_chevron_when_overflowing() {
+    if !crate::i18n::catalogs_embedded() {
+        return;
+    }
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let _ = app.run("ui.language", json!({"value": "he"}));
+    app.ui.tab = "Home".to_string();
+    app.ui.backstage = false;
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(vec2(400.0, 300.0))
+        .with_context_setup(|ctx| ctx.set_fonts(crate::theme::font_definitions(false, false)))
+        .build_ui_state(
+            |ui, app: &mut WordApp| {
+                app.logic(ui.ctx());
+                show(app, ui);
+            },
+            app,
+        );
+    h.run_steps(3);
+
+    // Click the left edge cue at (x = 9.0, y = 100.0)
+    let left_cue_pos = egui::pos2(9.0, 100.0);
+    h.event(egui::Event::PointerButton { pos: left_cue_pos, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+    h.step();
+    h.event(egui::Event::PointerButton { pos: left_cue_pos, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+    h.run_steps(2);
+}
