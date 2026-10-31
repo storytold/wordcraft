@@ -71,7 +71,7 @@ impl NoteForm {
 fn choice(ui: &mut Ui, id: &str, value: &mut String, options: &[(&str, &str)], tr: bool) {
     let show = |l: &str| if tr { tl!(l).to_string() } else { l.to_string() };
     let label = options.iter().find(|(v, _)| *v == value.as_str()).map(|(_, l)| show(l)).unwrap_or_default();
-    egui::ComboBox::from_id_salt(id).selected_text(label).width(170.0).show_ui(ui, |ui| {
+    craft_ui::ComboBox::from_id_salt(id).selected_text(label).width(170.0).show_ui(ui, |ui| {
         for (v, l) in options {
             ui.selectable_value(value, v.to_string(), show(l));
         }

@@ -1,4 +1,4 @@
-use super::*;
+use super::{MeasureExt, Ui, Value, WordApp, json, semibold};
 
 /// Labels of Page Setup's paper size (#1433), in one place in case Word's wording differs.
 pub(crate) const PAPER_LABELS: PaperLabels =
@@ -91,7 +91,7 @@ pub(super) fn page_paper_group(ui: &mut Ui, paper: &mut (f32, f32), landscape: &
         let label = ui.label(tl!(l.size));
         let entry = paper_entry(*paper).filter(|_| !*custom);
         let shown = tl!(entry.unwrap_or(l.custom));
-        let combo = egui::ComboBox::from_id_salt("ps_paper_size").width(180.0).height(400.0).selected_text(shown).show_ui(ui, |ui| {
+        let combo = craft_ui::ComboBox::from_id_salt("ps_paper_size").width(180.0).height(400.0).selected_text(shown).show_ui(ui, |ui| {
             for (n, w, h) in wordcraft_geom::PAPER_SIZES {
                 if ui.selectable_label(entry == Some(*n), tl!(n)).clicked() {
                     let (w, h) = (w / ppu, h / ppu);
@@ -130,7 +130,7 @@ pub(super) fn page_valign_combo(ui: &mut egui::Ui, valign: &mut wordcraft_doc::s
     ui.horizontal(|ui| {
         let label = ui.label(tl!("Vertical alignment:"));
         let shown = CHOICES.iter().find(|(v, _)| v == valign).map_or("", |(_, l)| tl!(l));
-        let combo = egui::ComboBox::from_id_salt("ps_valign").selected_text(shown).show_ui(ui, |ui| {
+        let combo = craft_ui::ComboBox::from_id_salt("ps_valign").selected_text(shown).show_ui(ui, |ui| {
             for (v, l) in CHOICES {
                 ui.selectable_value(valign, v, tl!(l));
             }

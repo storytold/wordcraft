@@ -1,5 +1,5 @@
 use super::generated::page_of;
-use super::*;
+use super::{CharProps, CmdError, CmdResult, Document, InlineObject, Paragraph, Pos, Selection, Session, StoryRef, Value, delete_selection, json, p};
 
 pub(super) fn cross_ref(s: &mut Session, v: &Value) -> CmdResult {
     let to = p::str(v, "to").unwrap_or("heading");
@@ -77,13 +77,19 @@ pub(super) fn caption_label(p: &Paragraph, text: &str) -> Option<String> {
     (!label.is_empty() && label.chars().count() <= 40).then_some(label)
 }
 
+/// Whether `p` is a caption: its style is Caption or one based on it, as a caption restyled with a
+/// style of its own (a `Table Caption` based on Caption) still is (#4411).
+pub(super) fn is_caption(doc: &Document, p: &Paragraph) -> bool {
+    p.props.style.as_deref().is_some_and(|id| id == "Caption" || doc.styles.chain(id).iter().any(|s| s.id == "Caption"))
+}
+
 /// The caption paragraphs of the body: (text, position, label).
 fn captions(s: &Session) -> Vec<(String, Pos, Option<String>)> {
     s.doc
         .para_paths(StoryRef::Body)
         .into_iter()
         .filter_map(|path| {
-            let p = s.doc.para(StoryRef::Body, &path).filter(|p| p.props.style.as_deref() == Some("Caption"))?;
+            let p = s.doc.para(StoryRef::Body, &path).filter(|p| is_caption(&s.doc, p))?;
             let text = p.plain_text();
             let label = caption_label(p, &text);
             Some((text, Pos { story: StoryRef::Body, path, off: 0 }, label))
@@ -125,7 +131,7 @@ pub fn ref_targets(s: &Session, to: &str) -> Vec<(String, Pos)> {
             };
             for path in s.doc.para_paths(StoryRef::Body) {
                 if let Some(p) = s.doc.para(StoryRef::Body, &path)
-                    && p.props.style.as_deref() == Some("Caption")
+                    && is_caption(&s.doc, p)
                     && p.plain_text().starts_with(label)
                 {
                     targets.push((p.plain_text(), Pos { story: StoryRef::Body, path: path.clone(), off: 0 }));
