@@ -142,7 +142,9 @@ pub(super) fn citation(s: &mut Session, v: &Value) -> CmdResult {
     let n = number_of(&s.doc, &bib_order(&s.doc, st, crate::cmd::default_lang(s)), &tag);
     let props = s.typing_props();
     let at = delete_selection(s)?;
-    let instr = if pages.is_empty() { format!("CITATION {tag}") } else { format!("CITATION {tag} \\p {pages}") };
+    let quoted_tag = tag.chars().any(|c| c.is_whitespace() || c == '"' || c == '\\').then(|| quote_field_arg(&tag));
+    let tag_arg = quoted_tag.as_deref().unwrap_or(&tag);
+    let instr = if pages.is_empty() { format!("CITATION {tag_arg}") } else { format!("CITATION {tag_arg} \\p {}", quote_field_arg(&pages)) };
     let end = s.doc.insert_object(
         &at,
         InlineObject::Field { instr, result: cite(&src, st.name, n, &pages), locked: false, dirty: false, code: false, form: String::new() },
@@ -156,29 +158,99 @@ pub(super) fn citation(s: &mut Session, v: &Value) -> CmdResult {
     Ok(json!({"tag": tag}))
 }
 
+fn quote_field_arg(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// The end of a complete quoted argument, using FieldCode's escape rules.
+fn quoted_argument_end(value: &str) -> Option<usize> {
+    let mut chars = value.strip_prefix('"')?.char_indices().peekable();
+    while let Some((at, c)) = chars.next() {
+        match c {
+            '"' => {
+                let end = at.checked_add(2)?;
+                let rest = value.get(end..)?;
+                return rest.chars().next().is_none_or(char::is_whitespace).then_some(end);
+            }
+            '\\' if matches!(chars.peek(), Some((_, '"' | '\\'))) => {
+                chars.next();
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Older insertions wrote tags verbatim. Resolve an exact stored literal tag without
+/// rewriting its instruction; an existing decoded quoted tag keeps its parsed meaning.
+fn citation_code(instr: &str, source_tags: &std::collections::HashSet<String>) -> super::FieldCode {
+    let field = super::FieldCode::parse(instr);
+    if field.name != "CITATION" {
+        return field;
+    }
+    let trimmed = instr.trim_start();
+    let Some(rest) = trimmed.find(char::is_whitespace).and_then(|at| trimmed.get(at..)) else { return field };
+    let rest = rest.trim_start();
+    let quoted_end = quoted_argument_end(rest);
+    if !rest.starts_with('\\') && quoted_end.is_none() {
+        // Older insertions also wrote multiword tags verbatim. Keep the whole tag up to
+        // the first switch, including when it is missing, rather than citing its prefix.
+        let switch = rest.char_indices().find(|(at, c)| {
+            *c == '\\'
+                && rest.get(*at..).and_then(|tail| tail.chars().nth(1)).is_some_and(|next| !next.is_whitespace())
+                && rest.get(..*at).is_some_and(|head| head.ends_with(char::is_whitespace))
+        });
+        let raw = rest.get(..switch.map_or(rest.len(), |(at, _)| at)).unwrap_or(rest).trim_end();
+        if raw.chars().any(char::is_whitespace) {
+            let Some(tail) = rest.get(raw.len()..) else { return field };
+            return super::FieldCode::parse(&format!("CITATION {}{tail}", quote_field_arg(raw)));
+        }
+    }
+    let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+    let Some(raw) = rest.get(..end) else { return field };
+    let unquoted_literal = if raw.starts_with('"') { quoted_end.is_none() } else { raw.contains('"') || raw.starts_with('\\') };
+    if !unquoted_literal && field.args.first().is_some_and(|tag| source_tags.contains(tag)) {
+        return field;
+    }
+    // A missing legacy source must not resolve to a shorter parsed prefix, and a complete
+    // quoted argument must not resolve to its first raw word.
+    if !unquoted_literal && (!source_tags.contains(raw) || quoted_end.is_some_and(|end| end != raw.len())) {
+        return field;
+    }
+    let Some(tail) = rest.get(end..) else { return field };
+    super::FieldCode::parse(&format!("CITATION {}{tail}", quote_field_arg(raw)))
+}
+
 /// The tag and `\p` pages of a CITATION field instruction.
-fn citation_field(instr: &str) -> Option<(&str, &str)> {
-    let mut words = instr.split_whitespace();
-    if words.next()? != "CITATION" {
+fn citation_field(instr: &str, source_tags: &std::collections::HashSet<String>) -> Option<(String, String)> {
+    let field = citation_code(instr, source_tags);
+    if field.name != "CITATION" {
         return None;
     }
-    let tag = words.next()?;
-    let pages = instr.split("\\p").nth(1).map(str::trim).unwrap_or("");
+    let tag = field.args.into_iter().next()?;
+    let pages = field.switches.into_iter().find(|(key, _)| *key == 'p').and_then(|(_, arg)| arg).unwrap_or_default();
     Some((tag, pages))
 }
 
-/// Tags cited in the body, in order of first citation.
+/// Tags cited in the body, including each `\m` source, in order of first citation.
 fn cited_tags(doc: &Document) -> Vec<String> {
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
+    let source_tags: std::collections::HashSet<String> = doc.sources.iter().map(|source| source.tag.clone()).collect();
     for path in doc.para_paths(StoryRef::Body) {
         let Some(p) = doc.para(StoryRef::Body, &path) else { continue };
         for o in &p.objects {
-            if let InlineObject::Field { instr, .. } = o
-                && let Some((tag, _)) = citation_field(instr)
-                && seen.insert(tag.to_string())
-            {
-                out.push(tag.to_string());
+            let InlineObject::Field { instr, .. } = o else { continue };
+            let field = citation_code(instr, &source_tags);
+            if field.name != "CITATION" {
+                continue;
+            }
+            let Some(primary) = field.args.first() else { continue };
+            let secondary = field.switches.iter().filter(|(key, _)| *key == 'm').filter_map(|(_, arg)| arg.as_ref());
+            for tag in std::iter::once(primary).chain(secondary) {
+                if seen.insert(tag.clone()) {
+                    out.push(tag.clone());
+                }
             }
         }
     }
@@ -233,6 +305,7 @@ pub fn update_citations(s: &mut Session) -> Result<(), CmdError> {
 fn refresh_citations(s: &mut Session) -> Result<(), CmdError> {
     let st = style(&s.bib_style);
     let order = bib_order(&s.doc, st, crate::cmd::default_lang(s));
+    let source_tags: std::collections::HashSet<String> = s.doc.sources.iter().map(|source| source.tag.clone()).collect();
     for path in s.doc.para_paths(StoryRef::Body) {
         let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };
         let updates: Vec<(usize, String)> = p
@@ -241,9 +314,9 @@ fn refresh_citations(s: &mut Session) -> Result<(), CmdError> {
             .enumerate()
             .filter_map(|(k, o)| match o {
                 InlineObject::Field { instr, .. } => {
-                    let (tag, pages) = citation_field(instr)?;
+                    let (tag, pages) = citation_field(instr, &source_tags)?;
                     let src = s.doc.sources.iter().find(|x| x.tag == tag)?;
-                    Some((k, cite(src, st.name, number_of(&s.doc, &order, tag), pages)))
+                    Some((k, cite(src, st.name, number_of(&s.doc, &order, &tag), &pages)))
                 }
                 _ => None,
             })

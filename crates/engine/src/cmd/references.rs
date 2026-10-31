@@ -101,7 +101,8 @@ pub fn specs() -> Vec<CommandSpec> {
 /// A field instruction split into its name, positional arguments and switches (ECMA-376
 /// §17.16.1): `TOC \o "1-3" \h` → name `TOC`, switches `o` = `1-3` and `h`. Quoted text stays
 /// whole (without the quotes; `\"` and `\\` inside it are a quote and a backslash). A switch
-/// takes the word after it as its argument unless that word is another switch.
+/// takes the word after it as its argument unless that word is another switch. Legacy
+/// unquoted `CITATION \p` pages extend to the next switch, as older insertions wrote them.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FieldCode {
     pub name: String,
@@ -112,43 +113,58 @@ pub struct FieldCode {
 
 impl FieldCode {
     pub fn parse(instr: &str) -> FieldCode {
-        let mut words: Vec<(String, bool)> = Vec::new();
-        let mut chars = instr.chars().peekable();
-        while let Some(&c) = chars.peek() {
+        let mut words = Vec::new();
+        let mut chars = instr.char_indices().peekable();
+        while let Some(&(start, c)) = chars.peek() {
             if c.is_whitespace() {
                 chars.next();
             } else if c == '"' {
                 chars.next();
                 let mut w = String::new();
-                while let Some(c) = chars.next() {
+                while let Some((_, c)) = chars.next() {
                     match c {
                         '"' => break,
-                        '\\' if matches!(chars.peek(), Some('"' | '\\')) => w.extend(chars.next()),
+                        '\\' if matches!(chars.peek(), Some((_, '"' | '\\'))) => w.extend(chars.next().map(|(_, c)| c)),
                         c => w.push(c),
                     }
                 }
-                words.push((w, true));
+                words.push((w, true, start..chars.peek().map_or(instr.len(), |(i, _)| *i)));
             } else {
                 let mut w = String::new();
-                while let Some(&c) = chars.peek() {
+                while let Some(&(_, c)) = chars.peek() {
                     if c.is_whitespace() || (c == '"' && !w.is_empty()) {
                         break;
                     }
                     w.push(c);
                     chars.next();
                 }
-                words.push((w, false));
+                words.push((w, false, start..chars.peek().map_or(instr.len(), |(i, _)| *i)));
             }
         }
         let mut words = words.into_iter().peekable();
-        let mut f =
-            FieldCode { name: words.next().map(|(w, _)| w.trim_start_matches('=').to_ascii_uppercase()).unwrap_or_default(), ..Default::default() };
-        while let Some((w, quoted)) = words.next() {
+        let mut f = FieldCode {
+            name: words.next().map(|(w, _, _)| w.trim_start_matches('=').to_ascii_uppercase()).unwrap_or_default(),
+            ..Default::default()
+        };
+        while let Some((w, quoted, _)) = words.next() {
             let sw = if quoted { None } else { w.strip_prefix('\\').and_then(|r| r.chars().next()) };
             match sw {
                 Some(c) => {
+                    let legacy_pages = f.name == "CITATION" && c.eq_ignore_ascii_case(&'p');
                     let arg = match words.peek() {
-                        Some((n, q)) if *q || !n.starts_with('\\') => words.next().map(|(n, _)| n),
+                        Some((n, q, _)) if *q || !n.starts_with('\\') || (legacy_pages && n == "\\") => words.next().map(|(n, quoted, mut span)| {
+                            if legacy_pages && !quoted {
+                                while words.peek().is_some_and(|(n, q, _)| *q || !n.starts_with('\\') || n == "\\") {
+                                    if let Some((_, _, next)) = words.next() {
+                                        span.end = next.end;
+                                    }
+                                }
+                                // Token boundaries are UTF-8 boundaries; keep authored spacing.
+                                instr.get(span).unwrap_or(&n).to_string()
+                            } else {
+                                n
+                            }
+                        }),
                         _ => None,
                     };
                     f.switches.push((c.to_ascii_lowercase(), arg));

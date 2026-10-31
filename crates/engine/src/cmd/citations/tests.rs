@@ -2,6 +2,424 @@ use super::*;
 use crate::Session;
 
 #[test]
+fn inserted_citation_tags_survive_refresh_and_docx_reopen() {
+    for tag in ["Plain", "SourceΩ", "Two Words", "Wide\u{2003}Gap", "Quote\"Tag", r"Back\Slash", r"\m"] {
+        for pages in ["", "12, 14"] {
+            let mut s = Session::new(Document::new());
+            s.run("references.sources", &json!({"add": {"tag": "UNUSED", "author": "Zzz", "title": "Uncited source", "year": "2000"}})).unwrap();
+            s.run(
+                "references.citation",
+                &json!({"source": {"tag": tag, "kind": "book", "author": "Writer", "title": "Original tag title", "year": "2023"}, "pages": pages}),
+            )
+            .unwrap();
+            if tag == "Plain" {
+                let para = s.doc.para(StoryRef::Body, &Path::top(0)).unwrap();
+                let InlineObject::Field { instr, .. } = &para.objects[0] else { panic!("citation field") };
+                assert_eq!(instr, if pages.is_empty() { "CITATION Plain" } else { r#"CITATION Plain \p "12, 14""# });
+            }
+            s.run("references.citationStyle", &json!({"style": "IEEE"})).unwrap();
+            assert_eq!(s.doc.plain_text(StoryRef::Body), "[1]", "{tag:?}, pages {pages:?}");
+            s.run("caret.docEnd", &json!({})).unwrap();
+            s.run("text.newParagraph", &json!({})).unwrap();
+            s.run("references.bibliography", &json!({})).unwrap();
+            for _ in 0..2 {
+                let entries: Vec<_> = s
+                    .doc
+                    .body
+                    .iter()
+                    .filter_map(|b| b.as_para())
+                    .filter(|p| p.props.style.as_deref() == Some(ENTRY_STYLE))
+                    .map(|p| p.plain_text())
+                    .collect();
+                assert_eq!(entries.len(), 1, "{tag:?}");
+                assert!(entries[0].contains("Original tag title"), "{tag:?}: {entries:?}");
+                assert!(!entries[0].contains("Uncited source"));
+                assert_eq!(s.doc.sources.len(), 2);
+                s = Session::new(wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap());
+                s.run("references.updateFields", &json!({})).unwrap();
+                let para = s.doc.para(StoryRef::Body, &Path::top(0)).unwrap();
+                assert_eq!(para.plain_text(), "[1]", "{tag:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn legacy_literal_citation_tags_keep_their_sources_and_pages() {
+    for tag in [
+        "Quote\"Tag",
+        r"\m",
+        r"\p",
+        "\"Quoted\"",
+        "\"Quoted\"Suffix",
+        "\"Quoted",
+        r#""Quoted"\Tail"#,
+        "Alpha Beta",
+        "Alpha  Beta",
+        "Alpha\tBeta",
+        "Alpha\u{2003}Beta",
+        r"Back\Slash Name",
+        "Quote\"Tag Name",
+        r#""Quoted"Suffix Name"#,
+        "\"Unclosed Name",
+        r#""A\"B"Suffix Name"#,
+        r#""日本"Suffix Name"#,
+        r#"""Suffix Name"#,
+        "\"Quoted\"Suffix\u{2003}Name",
+        r"Alpha \ Beta",
+        "Alpha \\",
+    ] {
+        for pages in ["", "12, 14"] {
+            let mut d = Document::new();
+            d.sources.push(Source {
+                tag: tag.into(),
+                author: "Writer".into(),
+                title: "Legacy source".into(),
+                year: "2024".into(),
+                ..Default::default()
+            });
+            let prefix = if tag.starts_with('"') && tag.chars().any(char::is_whitespace) {
+                tag.split_whitespace().next().unwrap()
+            } else if tag.starts_with('"') && !tag.ends_with('"') {
+                "Quoted"
+            } else if tag.chars().any(char::is_whitespace) {
+                tag.split_whitespace().next().unwrap().split('"').next().unwrap()
+            } else {
+                "Quote"
+            };
+            d.sources.push(Source { tag: prefix.into(), author: "Wrong".into(), year: "1999".into(), ..Default::default() });
+            let instr = if pages.is_empty() { format!("CITATION {tag}") } else { format!("CITATION {tag} \\p {pages}") };
+            d.para_mut(StoryRef::Body, &Path::top(0))
+                .unwrap()
+                .insert_object(
+                    0,
+                    InlineObject::Field {
+                        instr: instr.clone(),
+                        result: "Original cache".into(),
+                        locked: false,
+                        dirty: false,
+                        code: false,
+                        form: String::new(),
+                    },
+                    &CharProps::default(),
+                )
+                .unwrap();
+            let mut s = Session::new(d);
+            for _ in 0..2 {
+                s.run("references.updateFields", &json!({})).unwrap();
+                assert_eq!(
+                    s.doc.plain_text(StoryRef::Body),
+                    if pages.is_empty() { "(Writer, 2024)" } else { "(Writer, 2024, p. 12, 14)" },
+                    "{tag:?}"
+                );
+                let InlineObject::Field { instr: actual, .. } = &s.doc.para(StoryRef::Body, &Path::top(0)).unwrap().objects[0] else {
+                    panic!("citation")
+                };
+                assert_eq!(actual, &instr);
+                assert_eq!(super::sources::bib_order(&s.doc, style("IEEE"), None), [0]);
+                s = Session::new(wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap());
+            }
+        }
+    }
+    let mut d = Document::new();
+    for (tag, author) in [("Quoted", "Modern"), ("\"Quoted\"", "Literal")] {
+        d.sources.push(Source { tag: tag.into(), author: author.into(), year: "2024".into(), ..Default::default() });
+    }
+    d.para_mut(StoryRef::Body, &Path::top(0))
+        .unwrap()
+        .insert_object(
+            0,
+            InlineObject::Field {
+                instr: "CITATION \"Quoted\"".into(),
+                result: "Original cache".into(),
+                locked: false,
+                dirty: false,
+                code: false,
+                form: String::new(),
+            },
+            &CharProps::default(),
+        )
+        .unwrap();
+    let mut s = Session::new(d);
+    s.run("references.updateFields", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "(Modern, 2024)");
+}
+
+#[test]
+fn missing_legacy_literal_citation_tags_keep_their_cached_results() {
+    for tag in [
+        "Quote\"Tag",
+        r"\m",
+        r"\p",
+        "\"Quoted\"Suffix",
+        "\"Quoted",
+        r#""Quoted"\Tail"#,
+        "Alpha Beta",
+        "Alpha  Beta",
+        "Alpha\tBeta",
+        "Alpha\u{2003}Beta",
+        r"Back\Slash Name",
+        "Quote\"Tag Name",
+        r#""Quoted"Suffix Name"#,
+        "\"Unclosed Name",
+        r#""A\"B"Suffix Name"#,
+        r#""日本"Suffix Name"#,
+        r#"""Suffix Name"#,
+        "\"Quoted\"Suffix\u{2003}Name",
+        r"Alpha \ Beta",
+        "Alpha \\",
+    ] {
+        let mut d = Document::new();
+        let prefix = if tag.starts_with('"') && tag.chars().any(char::is_whitespace) {
+            tag.split_whitespace().next().unwrap()
+        } else if tag.starts_with('"') {
+            "Quoted"
+        } else if tag.chars().any(char::is_whitespace) {
+            tag.split_whitespace().next().unwrap().split('"').next().unwrap()
+        } else {
+            "Quote"
+        };
+        d.sources.push(Source { tag: prefix.into(), author: "Wrong".into(), year: "1999".into(), ..Default::default() });
+        let instr = format!("CITATION {tag} \\p 12, 14");
+        d.para_mut(StoryRef::Body, &Path::top(0))
+            .unwrap()
+            .insert_object(
+                0,
+                InlineObject::Field {
+                    instr,
+                    result: "Original retained citation".into(),
+                    locked: false,
+                    dirty: false,
+                    code: false,
+                    form: String::new(),
+                },
+                &CharProps::default(),
+            )
+            .unwrap();
+        let mut s = Session::new(d);
+        let before = s.doc.clone();
+        s.run("references.updateFields", &json!({})).unwrap();
+        assert_eq!(s.doc, before);
+        assert!(super::sources::bib_order(&s.doc, style("IEEE"), None).is_empty());
+        s = Session::new(wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap());
+        s.run("references.updateFields", &json!({})).unwrap();
+        assert_eq!(s.doc.plain_text(StoryRef::Body), "Original retained citation");
+        assert!(super::sources::bib_order(&s.doc, style("IEEE"), None).is_empty());
+    }
+}
+
+#[test]
+fn missing_quoted_source_does_not_match_a_literal_prefix() {
+    for (instr, prefix) in [(r#"CITATION "Quoted Space" \p "12, 14""#, r#""Quoted"#), (r#"CITATION "Quoted\" Space" \p "12, 14""#, r#""Quoted\""#)] {
+        let mut d = Document::new();
+        d.sources.push(Source { tag: prefix.into(), author: "Wrong".into(), year: "1999".into(), ..Default::default() });
+        d.para_mut(StoryRef::Body, &Path::top(0))
+            .unwrap()
+            .insert_object(
+                0,
+                InlineObject::Field {
+                    instr: instr.into(),
+                    result: "Original retained citation".into(),
+                    locked: false,
+                    dirty: false,
+                    code: false,
+                    form: String::new(),
+                },
+                &CharProps::default(),
+            )
+            .unwrap();
+        let mut s = Session::new(d);
+        for _ in 0..2 {
+            let before = s.doc.clone();
+            s.run("references.updateFields", &json!({})).unwrap();
+            assert_eq!(s.doc, before, "{instr}");
+            assert!(super::sources::bib_order(&s.doc, style("IEEE"), None).is_empty());
+            s = Session::new(wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap());
+        }
+    }
+}
+
+#[test]
+fn citation_refresh_recognizes_field_names_and_quoted_primary_tags() {
+    let mut d = Document::new();
+    for (tag, author, year) in [("plain", "Writer", "2023"), ("Primary Ω", "Researcher", "2024")] {
+        d.sources.push(Source { tag: tag.into(), author: author.into(), year: year.into(), ..Default::default() });
+    }
+    let instructions = [
+        r#"CITATION plain \p 12"#,
+        r#"citation plain \p 12"#,
+        r#"CITATION "Primary Ω" \p 12"#,
+        r#"cItAtIoN "Primary Ω" \p 12"#,
+        r#"CITATION "Primary Ω" \p 12 \m plain"#,
+        r#"CITATION "Primary Ω" \m plain \p 12"#,
+        r#"CITATION "Primary Ω" \p "12" \m plain"#,
+        r#"CITATION plain \p 12, 14"#,
+        r#"CITATION plain \p 12,  14 \m "Primary Ω""#,
+        r#"citation "Primary Ω" \m plain \p 12–14, 20"#,
+        r#"CITATION "Primary Ω" \p "12, 14" \m plain"#,
+        r#"CITATION "Primary Ω" \P 12, 14 \l 1033"#,
+        r"CITATION plain \p 12 \ index",
+        "CITATION plain \\p 12 \\",
+        r"CITATION plain \p \ index",
+        r#"CITATION plain \p 12 \ \ index \m "Primary Ω""#,
+        "CITATION PLAIN",
+        "citation missing",
+        "REF plain",
+    ];
+    let para = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    for instr in instructions {
+        para.insert_object(
+            para.len(),
+            InlineObject::Field {
+                instr: instr.into(),
+                result: "Original cached citation".into(),
+                locked: false,
+                dirty: false,
+                code: false,
+                form: String::new(),
+            },
+            &CharProps::default(),
+        )
+        .unwrap();
+    }
+    let before = d.clone();
+    let mut s = Session::new(d);
+    s.run("references.updateFields", &json!({})).unwrap();
+    let fields: Vec<_> = s
+        .doc
+        .para(StoryRef::Body, &Path::top(0))
+        .unwrap()
+        .objects
+        .iter()
+        .filter_map(|object| match object {
+            InlineObject::Field { instr, result, .. } => Some((instr.as_str(), result.as_str())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(fields.len(), instructions.len());
+    let expected = [
+        "(Writer, 2023, p. 12)",
+        "(Writer, 2023, p. 12)",
+        "(Researcher, 2024, p. 12)",
+        "(Researcher, 2024, p. 12)",
+        "(Researcher, 2024, p. 12)",
+        "(Researcher, 2024, p. 12)",
+        "(Researcher, 2024, p. 12)",
+        "(Writer, 2023, p. 12, 14)",
+        "(Writer, 2023, p. 12,  14)",
+        "(Researcher, 2024, p. 12–14, 20)",
+        "(Researcher, 2024, p. 12, 14)",
+        "(Researcher, 2024, p. 12, 14)",
+        r"(Writer, 2023, p. 12 \ index)",
+        "(Writer, 2023, p. 12 \\)",
+        r"(Writer, 2023, p. \ index)",
+        r"(Writer, 2023, p. 12 \ \ index)",
+    ];
+    for (index, (instr, result)) in fields.iter().enumerate() {
+        assert_eq!(*instr, instructions[index]);
+        assert_eq!(*result, expected.get(index).copied().unwrap_or("Original cached citation"));
+    }
+    assert_eq!(s.doc.sources, before.sources);
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.doc, before);
+}
+
+#[test]
+fn inserted_citation_pages_survive_refresh_and_docx_reopen() {
+    for pages in ["12, 14", "12,  14", "12–14, 20", r#"12, "appendix" \ index"#] {
+        let mut s = Session::new(Document::new());
+        s.run("references.citation", &json!({"source": {"tag": "A", "kind": "book", "author": "Writer", "year": "2023"}, "pages": pages})).unwrap();
+        let original = s.doc.clone();
+        let expected = format!("(Writer, 2023, p. {pages})");
+        assert_eq!(s.doc.plain_text(StoryRef::Body), expected);
+        for _ in 0..2 {
+            s.run("references.updateFields", &json!({})).unwrap();
+            assert_eq!(s.doc.plain_text(StoryRef::Body), expected);
+            assert_eq!(s.doc.sources, original.sources);
+            assert_eq!(s.doc.para(StoryRef::Body, &Path::top(0)).unwrap().objects, original.para(StoryRef::Body, &Path::top(0)).unwrap().objects);
+            s = Session::new(wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap());
+        }
+    }
+}
+
+/// The bibliography includes every source in a multi-source field, once, in first-cited
+/// order for numbered styles. Building the list must leave the imported citation intact.
+#[test]
+fn bibliography_discovers_secondary_citation_sources() {
+    let mut d = Document::from_text("Original citation ");
+    for (tag, title) in [("A", "Alpha"), ("B", "Beta"), ("C", "Gamma"), ("unused", "Uncited")] {
+        d.sources.push(Source { tag: tag.into(), title: title.into(), year: "2024".into(), ..Default::default() });
+    }
+    let instr = r#"CITATION C \l 1033 \m A \p 12 \m B \m A"#;
+    let at = Pos { story: StoryRef::Body, path: Path::top(0), off: d.para(StoryRef::Body, &Path::top(0)).unwrap().len() };
+    let field = InlineObject::Field {
+        instr: instr.into(),
+        result: "Original multi-source citation".into(),
+        locked: false,
+        dirty: false,
+        code: false,
+        form: String::new(),
+    };
+    d.insert_object(&at, field.clone(), &CharProps::default()).unwrap();
+    d.settings.bib_style = Some("IEEE".into());
+    let mut s = Session::new(d);
+    s.run("caret.docEnd", &json!({})).unwrap();
+    s.run("text.newParagraph", &json!({})).unwrap();
+    let before = s.doc.clone();
+    s.run("references.bibliography", &json!({})).unwrap();
+    let entries = |d: &Document| -> Vec<String> {
+        d.body.iter().filter_map(|b| b.as_para()).filter(|p| p.props.style.as_deref() == Some(ENTRY_STYLE)).map(|p| p.plain_text()).collect()
+    };
+    let expected: Vec<_> = [2, 0, 1].into_iter().enumerate().map(|(n, i)| entry(&s.doc.sources[i], "IEEE", n + 1)).collect();
+    assert_eq!(entries(&s.doc), expected);
+    assert!(s.doc.body.iter().filter_map(|b| b.as_para()).flat_map(|p| &p.objects).any(|o| o == &field));
+    assert_eq!(s.doc.sources.len(), 4);
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.doc, before);
+    s.run("edit.redo", &json!({})).unwrap();
+    assert_eq!(entries(&s.doc), expected);
+    for _ in 0..2 {
+        let reopened = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap();
+        s = Session::new(reopened);
+        s.run("references.updateFields", &json!({})).unwrap();
+        assert_eq!(entries(&s.doc), expected);
+        assert_eq!(s.doc.sources.len(), 4);
+    }
+}
+
+/// Quoted tags and repeated switches use the existing field tokenizer. Unrelated fields,
+/// switch arguments, missing source tags and duplicate citations add no source of their own.
+#[test]
+fn bibliography_discovers_quoted_citation_tags() {
+    let mut d = Document::new();
+    for tag in ["Primary Ω", "Second Tag", "third", "THIRD", "prefix"] {
+        d.sources.push(Source { tag: tag.into(), title: tag.into(), ..Default::default() });
+    }
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    for instr in [r#"citation "Primary Ω" \f prefix \m "Second Tag" \m third \m missing \m third \m"#, "REF THIRD \\m prefix"] {
+        p.insert_object(
+            p.len(),
+            InlineObject::Field {
+                instr: instr.into(),
+                result: "Cached citation".into(),
+                locked: false,
+                dirty: false,
+                code: false,
+                form: String::new(),
+            },
+            &CharProps::default(),
+        )
+        .unwrap();
+    }
+    let order = super::sources::bib_order(&d, style("IEEE"), None);
+    assert_eq!(order, [0, 1, 2]);
+    let sorted = super::sources::bib_order(&d, style("APA"), None);
+    assert_eq!(sorted.len(), 3);
+    assert!(!sorted.contains(&3));
+    assert!(!sorted.contains(&4));
+}
+
+#[test]
 fn citations_and_bibliography() {
     let mut s = Session::new(wordcraft_doc::Document::new());
     s.run("text.insert", &json!({"text": "Studios matter "})).unwrap();
