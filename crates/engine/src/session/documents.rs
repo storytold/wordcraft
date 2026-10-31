@@ -47,6 +47,8 @@ pub struct DocState {
     pub(super) file_name: Option<String>,
     pub(super) dirty: bool,
     pub(super) pending_move: Option<crate::cmd::moves::PendingMove>,
+    /// The paste just made, for the Paste Options button (#1747): positions in this document.
+    pub(super) last_paste: Option<crate::cmd::paste::LastPaste>,
     pub(super) find: FindState,
     pub(super) goal_x: Option<f32>,
     pub(super) page_hint: usize,
@@ -101,6 +103,7 @@ impl DocState {
             file_name: None,
             dirty: false,
             pending_move: None,
+            last_paste: None,
             find: FindState::default(),
             goal_x: None,
             page_hint: 0,
@@ -201,6 +204,7 @@ impl Session {
             file_name: _,
             dirty: _,
             pending_move: _,
+            last_paste: _,
             find: _,
             goal_x: _,
             page_hint: _,
@@ -290,6 +294,7 @@ impl Session {
             file_name,
             dirty,
             pending_move,
+            last_paste,
             find,
             goal_x,
             page_hint,
@@ -337,6 +342,7 @@ impl Session {
         swap(&mut self.file_name, file_name);
         swap(&mut self.dirty, dirty);
         swap(&mut self.pending_move, pending_move);
+        swap(&mut self.last_paste, last_paste);
         swap(&mut self.find, find);
         swap(&mut self.goal_x, goal_x);
         swap(&mut self.page_hint, page_hint);
