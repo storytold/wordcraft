@@ -26,6 +26,23 @@ pub(super) fn painter_double_click(app: &mut WordApp) {
     let _ = app.run("edit.formatPainter", json!({"sticky": true}));
 }
 
+/// Change List Level › and Define New Bullet… at the foot of the Bullets drop-down (#2786).
+/// Change List Level is for a paragraph in a list of its own numbering, the one `para.listLevel`
+/// changes (a style's numbering it leaves alone).
+fn bullet_list_items(ui: &mut Ui, app: &mut WordApp) {
+    ui.separator();
+    let in_list = app.session.doc.para_at(&app.session.sel.focus).and_then(|p| p.props.numbering).is_some_and(|n| n.num != 0);
+    ui.add_enabled_ui(in_list, |ui| {
+        ui.menu_button(tl!("Change List Level"), |ui| {
+            for level in 0..9u8 {
+                let label = format!("{} {}", tl!("Level"), level + 1);
+                mi_text(ui, app, &label, "para.listLevel", json!({"level": level}));
+            }
+        });
+    });
+    mi(ui, app, "Define New Bullet…", "ui.dialog", json!({"name": "defineBullet"}));
+}
+
 pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
     let st = app.session.run("format.state", &json!({})).unwrap_or_default();
     let flag = |k: &str| st.get(k).and_then(Value::as_bool).unwrap_or(false);
@@ -194,6 +211,7 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
                         }
                     });
                     mi(ui, app, "None", "para.bullets", json!({"off": true}));
+                    bullet_list_items(ui, app);
                 });
                 split(
                     ui,

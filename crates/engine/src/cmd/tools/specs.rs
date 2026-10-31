@@ -313,10 +313,9 @@ pub fn specs() -> Vec<CommandSpec> {
             sel_result(s)
         })
         .params(r#"{"value": n}"#),
-        CommandSpec::new("para.defineBullet", "Define New Bullet", "Home › Paragraph › Bullets", |s, v| {
-            s.run("para.bullets", &json!({"kind": p::str(v, "char").unwrap_or("★")}))
-        })
-        .params(r#"{"char": string}"#),
+        CommandSpec::new("para.defineBullet", "Define New Bullet", "Home › Paragraph › Bullets", crate::cmd::lists::define_bullet).params(
+            r#"{"char"?: one character (default ★), "font"?: family (the bullet's own font; "" = the text's), "size"?: pt, "bold"?: bool, "italic"?: bool, "color"?: "RRGGBB" | "auto", "align"?: "left|center|right"} (the selected paragraphs get a list of their own; each keeps its level)"#,
+        ),
         CommandSpec::new("para.defineNumber", "Define New Number Format", "Home › Paragraph › Numbering", |s, v| {
             let fmt = wordcraft_doc::section::NumFormat::from_ooxml(p::str(v, "format").unwrap_or("decimal"));
             let text = p::str(v, "text").unwrap_or("%1.").to_string();

@@ -86,6 +86,7 @@ use serde_json::{Value, json};
 use wordcraft_engine::Session;
 
 pub use control::ControlRequest;
+pub use dialogs::dialogs_bullet;
 pub use dialogs::dialogs_chart;
 pub use dialogs::dialogs_controls;
 pub use dialogs::dialogs_insert;

@@ -64,6 +64,48 @@ pub(super) fn east_asian_char(c: char) -> bool {
     matches!(u32::from(c), 0x1100..=0x11FF | 0x2E80..=0x9FFF | 0xA960..=0xA97F | 0xAC00..=0xD7FF | 0xF900..=0xFAFF | 0xFE30..=0xFE4F | 0xFF00..=0xFFEF | 0x20000..=0x3FFFF)
 }
 
+/// The Font dialog formatting Define New Bullet's bullet (#2786): it opens on the bullet's font,
+/// size, bold, italic and colour, and carries the form back (see `Dialog::Font::bullet`).
+pub fn font_for_bullet(app: &mut WordApp, form: crate::dialogs_bullet::DefineBulletForm) -> Option<Dialog> {
+    let mut d = Dialog::open("font", app)?;
+    if let Dialog::Font { font, font_was, size, bold, italic, color, .. } = &mut d {
+        if !form.font.is_empty() {
+            *font = app.previews.font_shown(&form.font);
+            *font_was = font.clone();
+        }
+        *size = form.size.clone();
+        *bold = form.bold;
+        *italic = form.italic;
+        *color = form.color.clone();
+    }
+    let props = font_props(&d);
+    if let Dialog::Font { start, bullet, .. } = &mut d {
+        *start = props;
+        *bullet = Some(Box::new(form));
+    }
+    Some(d)
+}
+
+/// The Font dialog's OK or Cancel while it formats Define New Bullet's bullet (#2786): back to
+/// that dialog, with the font (its stored English name, and only when the user changed it, so a
+/// bullet in the text's font keeps following the text), size, bold, italic and colour on OK.
+/// False when the dialog isn't formatting a bullet.
+pub(super) fn hand_back_bullet(app: &mut WordApp, d: &mut Dialog, ok: bool) -> bool {
+    let Dialog::Font { bullet, font, font_was, size, bold, italic, color, .. } = d else { return false };
+    let Some(mut form) = bullet.take() else { return false };
+    if ok {
+        if font.trim() != font_was.trim() {
+            form.font = app.previews.font_stored(font.trim());
+        }
+        form.size = size.trim().to_string();
+        form.bold = *bold;
+        form.italic = *italic;
+        form.color = color.clone();
+    }
+    app.dialog = Some(Dialog::Insert(Box::new(crate::dialogs_insert::InsertDialog::DefineBullet(*form))));
+    true
+}
+
 /// The Font dialog's OK: one formatting step that sets only the properties the user changed, so
 /// formatting the dialog can't show or left alone stays as it is. Fonts are set by their stored
 /// (English) names, the Latin font for Persian/Arabic text too (as `format.font`).
