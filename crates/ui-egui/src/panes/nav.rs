@@ -29,14 +29,13 @@ pub(super) fn nav(app: &mut WordApp, ui: &mut Ui) {
         }
     }
     ui.add_space(4.0);
-    ui.horizontal_wrapped(|ui| {
-        for (k, l) in [("headings", "Headings"), ("pages", "Pages"), ("results", "Results")] {
-            if ui.selectable_label(app.ui.nav_tab == k, tl!(l)).clicked() {
-                app.ui.nav_tab = k.into();
-            }
-        }
-    });
-    ui.separator();
+    let keys = ["headings", "pages", "results"];
+    let names = ["Headings", "Pages", "Results"].map(|n| tl!(n).to_string());
+    let current = keys.iter().position(|k| *k == app.ui.nav_tab).unwrap_or(0);
+    if let Some(i) = crate::widgets::dialog_tabs_within(ui, &names, current, ui.available_width()) {
+        app.ui.nav_tab = keys[i].into();
+    }
+    ui.add_space(4.0);
     egui::ScrollArea::vertical().show(ui, |ui| match app.ui.nav_tab.as_str() {
         "pages" => {
             let l = app.session.layout();

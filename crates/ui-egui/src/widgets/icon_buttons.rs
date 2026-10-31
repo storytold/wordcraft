@@ -108,10 +108,19 @@ pub fn icon_menu_item(ui: &mut Ui, icon: &str, text: &str, shortcut: &str, min_w
 /// A strip of dialog tabs. The active tab joins the page below it.
 /// Returns the index of the tab the user clicked.
 pub fn dialog_tabs(ui: &mut Ui, labels: &[String], selected: usize) -> Option<usize> {
+    dialog_tabs_within(ui, labels, selected, f32::INFINITY)
+}
+
+/// `dialog_tabs` for a narrow pane: the tab padding shrinks, to 4 pt
+/// per side at least, so the strip fits `max_width`.
+pub fn dialog_tabs_within(ui: &mut Ui, labels: &[String], selected: usize, max_width: f32) -> Option<usize> {
     const H: f32 = 26.0;
     let t = Tokens::get(ui.ctx());
     let page = ui.visuals().window_fill;
-    let need: f32 = labels.iter().map(|l| ui.painter().layout_no_wrap(l.clone(), regular(12.5), t.text).size().x + 27.0).sum::<f32>() + 1.0;
+    let texts: Vec<f32> = labels.iter().map(|l| ui.painter().layout_no_wrap(l.clone(), regular(12.5), t.text).size().x).collect();
+    let spare = (max_width - 1.0 - texts.iter().sum::<f32>()) / texts.len().max(1) as f32;
+    let pad = spare.clamp(8.0, 28.0);
+    let need: f32 = texts.iter().map(|w| w + pad - 1.0).sum::<f32>() + 1.0;
     ui.set_min_width(need);
     let origin = ui.cursor().min;
     let width = ui.available_width();
@@ -123,7 +132,7 @@ pub fn dialog_tabs(ui: &mut Ui, labels: &[String], selected: usize) -> Option<us
     for (i, label) in labels.iter().enumerate() {
         let on = i == selected;
         let galley = ui.painter().layout_no_wrap(label.clone(), regular(12.5), t.text);
-        let w = galley.size().x + 28.0;
+        let w = galley.size().x + pad;
         let r = Rect::from_min_max(pos2(x, origin.y + 2.0), pos2(x + w, base_y));
         let resp = ui.interact(r, ui.scope_id().with(("dialog_tab", i)), Sense::click());
         resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, label));
