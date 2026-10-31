@@ -120,6 +120,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::Password { .. } => "Password",
         Dialog::EncryptPassword { .. } => "Encrypt with Password",
         Dialog::DefineList { .. } => "Define New Multilevel List",
+        Dialog::DefineNumber { .. } => "Define New Number Format",
         Dialog::TrackOptions { .. } => "Track Changes Options",
         Dialog::Review(d) => d.title(),
         Dialog::CustomizeKeyboard { .. } => "Customize Keyboard",

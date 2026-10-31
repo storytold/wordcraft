@@ -35,6 +35,7 @@ impl WordApp {
         let window_ui::WindowUi {
             canvas,
             controls,
+            paste_options,
             dialog,
             colors,
             restrict,
@@ -145,6 +146,7 @@ impl WordApp {
             print_document: None,
             canvas,
             controls,
+            paste_options,
             dialog,
             colors,
             restrict,

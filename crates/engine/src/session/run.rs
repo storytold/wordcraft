@@ -227,6 +227,7 @@ impl Session {
                 self.ime_edit_outcome = ImeEditOutcome::default();
                 self.pending_ime_application_change = pending_application_change_before;
                 self.autocap = None;
+                self.forget_unfinished_paste();
                 self.prefs.default_language = default_language_before;
                 if let Some(epoch) = ime_epoch_before {
                     self.ime_body_epoch = epoch;
@@ -275,6 +276,26 @@ impl Session {
         result
     }
 
+    /// After a command that may edit: the paste it just made is valid for the revision it produced;
+    /// a paste from before is over once the document has changed since, and its copy of the pasted
+    /// content (kept for Paste Options) is freed with it.
+    fn settle_last_paste(&mut self, edited: bool) {
+        let rev = self.rev;
+        match self.last_paste.as_mut() {
+            Some(lp) if lp.rev.is_none() && edited => lp.rev = Some(rev),
+            Some(lp) if lp.rev.is_some_and(|r| r != rev) => self.last_paste = None,
+            _ => {}
+        }
+    }
+
+    /// A paste the failed command made was rolled back with it (it has no revision yet): the
+    /// Paste Options offer for it goes too.
+    fn forget_unfinished_paste(&mut self) {
+        if self.last_paste.as_ref().is_some_and(|lp| lp.rev.is_none()) {
+            self.last_paste = None;
+        }
+    }
+
     fn finish_success(&mut self, context: SuccessContext<'_>) {
         let SuccessContext {
             id,
@@ -321,6 +342,7 @@ impl Session {
             if rerouted {
                 self.touch();
             }
+            self.settle_last_paste(changed || rerouted);
             // A command that changed nothing is not an edit (#23): it adds no undo
             // step, marks no unsaved changes, forces no relayout and leaves the redo
             // stack alone. What it left behind is compared with what it started from,

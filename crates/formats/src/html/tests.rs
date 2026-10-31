@@ -129,6 +129,107 @@ fn omitted_head_keeps_body_text() {
 }
 
 #[test]
+fn background_colour_functions_and_shorthands_become_character_shading() {
+    // Browsers copy highlighted text as `rgb(255, 255, 0)`, spaces included.
+    for css in [
+        "background-color: rgb(255, 255, 0);",
+        "background-color:#ffff00",
+        "background:#ff0 none no-repeat",
+        "background: rgb(255, 255, 0) repeat-x",
+        "background: url(x.png) no-repeat rgba(255,255,0,1)",
+    ] {
+        let f = parse(&format!("<p><span style=\"{css}\">hi</span></p>"));
+        let FBlock::Para(p) = &f.blocks[0] else { panic!() };
+        assert!(
+            matches!(&p.inlines[0], Inline::Text(t, f) if t == "hi" && f.background == Some(wordcraft_doc::Rgb(255, 255, 0))),
+            "{css}: {:?}",
+            p.inlines
+        );
+    }
+}
+
+/// A browser writes `rgba(0, 0, 0, 0)` for a run with no background: that is no shading, not
+/// black. A partly transparent colour is kept as the opaque colour.
+#[test]
+fn transparent_backgrounds_are_no_shading() {
+    let shade = |css: &str| {
+        let f = parse(&format!("<p><span style=\"{css}\">t</span></p>"));
+        let FBlock::Para(p) = &f.blocks[0] else { panic!() };
+        p.inlines.iter().find_map(|i| if let Inline::Text(_, f) = i { Some(f.background) } else { None }).unwrap()
+    };
+    for css in [
+        "background-color: rgba(0, 0, 0, 0)",
+        "background-color:rgba(0,0,0,0.0)",
+        "background-color: hsla(0, 0%, 0%, 0)",
+        "background-color: rgb(0 0 0 / 0%)",
+        "background-color: #00000000",
+        "background-color: #0000",
+        "background: rgba(0, 0, 0, 0) none repeat scroll 0% 0%",
+        "background: url(x.png) rgba(255, 0, 0, 0)",
+    ] {
+        assert_eq!(shade(css), None, "{css}");
+    }
+    assert_eq!(shade("background-color: rgba(255, 255, 0, 0.5)"), Some(wordcraft_doc::Rgb(255, 255, 0)), "partial alpha keeps the colour");
+    assert_eq!(shade("background-color: rgba(255, 255, 0, 1)"), Some(wordcraft_doc::Rgb(255, 255, 0)));
+}
+
+/// A line-height may have spaces around its slash, any weight 1–1000 is a weight, and a
+/// shorthand without a family is invalid and changes nothing.
+#[test]
+fn font_shorthand_edge_cases() {
+    let para = |css: &str| {
+        let f = parse(&format!("<p><span style=\"{css}\">t</span></p>"));
+        let FBlock::Para(p) = &f.blocks[0] else { panic!() };
+        p.inlines.iter().find_map(|i| if let Inline::Text(_, f) = i { Some(f.clone()) } else { None }).unwrap()
+    };
+    for css in ["font: 12px / 1.4 Arial", "font: 12px /1.4 Arial", "font: 12px/ 1.4 Arial", "font: 12px/1.4 Arial"] {
+        let f = para(css);
+        assert!(f.font.as_deref() == Some("Arial") && f.size == Some(9.0), "{css}: {:?} {:?}", f.font, f.size);
+    }
+    let f = para("font: 1000 12pt Arial");
+    assert!(f.bold && f.size == Some(12.0), "1000 is a weight, not the size");
+    for css in ["font: 12pt", "font: 12pt inherit"] {
+        let f = para(css);
+        assert!(f.size.is_none() && f.font.is_none(), "{css} is invalid and changes nothing");
+    }
+}
+
+#[test]
+fn font_shorthand_sets_weight_size_and_family() {
+    let f = parse("<p><span style=\"font:bold 22px 'Courier New'\">big</span> <span style=\"font: italic 600 12pt/1.4 Georgia, serif\">g</span></p>");
+    let FBlock::Para(p) = &f.blocks[0] else { panic!() };
+    assert!(matches!(&p.inlines[0], Inline::Text(t, f) if t == "big" && f.bold && f.code && f.size == Some(16.5)), "{:?}", p.inlines);
+    assert!(
+        p.inlines.iter().any(
+            |i| matches!(i, Inline::Text(t, f) if t == "g" && f.italic && f.bold && f.size == Some(12.0) && f.font.as_deref() == Some("Georgia"))
+        ),
+        "{:?}",
+        p.inlines
+    );
+}
+
+#[test]
+fn a_table_without_widths_follows_its_content() {
+    let d = crate::html::import("<table><tr><td>a</td><td>b</td></tr></table>");
+    let t = d.body.iter().find_map(|b| if let wordcraft_doc::Block::Table(t) = &**b { Some(t) } else { None }).unwrap();
+    assert_eq!(t.props.width, None);
+    assert!(t.rows[0].cells.iter().all(|c| c.props.width.is_none()), "automatic widths, so AutoFit sizes them");
+}
+
+#[test]
+fn a_font_shorthand_replaces_the_family_of_an_outer_span() {
+    let f = parse(
+        "<p><span style=\"font-family:Georgia\"><span style=\"font: 12pt serif\">a</span> <span style=\"font: 12pt Arial\">b</span></span><span style=\"font-family:'Courier New'\"><span style=\"font: 12pt Georgia\">c</span></span></p>",
+    );
+    let FBlock::Para(p) = &f.blocks[0] else { panic!() };
+    let font =
+        |text: &str| p.inlines.iter().find_map(|i| if let Inline::Text(t, f) = i { (t == text).then(|| (f.font.clone(), f.code)) } else { None });
+    assert_eq!(font("a"), Some((None, false)), "a generic family clears Georgia");
+    assert_eq!(font("b"), Some((Some("Arial".into()), false)));
+    assert_eq!(font("c"), Some((Some("Georgia".into()), false)), "and the code styling of the outer span");
+}
+
+#[test]
 fn styles_and_links() {
     let f = parse("<p style='text-align:center'><span style=\"color:#ff0000;font-weight:700\">red</span> <a href=\"http://x\">l</a><br>n</p>");
     let FBlock::Para(p) = &f.blocks[0] else { panic!() };
