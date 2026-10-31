@@ -28,6 +28,24 @@ pub(super) fn nav(app: &mut WordApp, ui: &mut Ui) {
             app.session.find.results.clear();
         }
     }
+    // Enter in the box goes to the next result and Shift+Enter to the previous one (#5019); the
+    // box keeps the keyboard, so Enter can go on through them.
+    let enter = ui.input(|i| {
+        i.events.iter().find_map(|e| match e {
+            egui::Event::Key { key: egui::Key::Enter, pressed: true, modifiers, .. } => Some(modifiers.shift),
+            _ => None,
+        })
+    });
+    if !q.is_empty()
+        && r.lost_focus()
+        && let Some(back) = enter
+    {
+        step_result(app, ui, back);
+        r.request_focus();
+    }
+    if !q.is_empty() {
+        result_bar(app, ui);
+    }
     ui.add_space(4.0);
     ui.horizontal_wrapped(|ui| {
         for (k, l) in [("headings", "Headings"), ("pages", "Pages"), ("results", "Results")] {
@@ -49,8 +67,15 @@ pub(super) fn nav(app: &mut WordApp, ui: &mut Ui) {
         }
         "results" => {
             let results = app.session.find.results.clone();
-            ui.label(egui::RichText::new(format!("{} results", results.len())).small().weak());
-            for (a, b) in results.iter().take(500) {
+            let current = current_result(app);
+            // When the arrows (or a search) move to another result, the list scrolls to it.
+            let seen = app.window_id("nav_result_seen");
+            let moved = ui.data_mut(|d| {
+                let last = d.get_temp::<Option<usize>>(seen);
+                d.insert_temp(seen, current);
+                last != Some(current)
+            });
+            for (i, (a, b)) in results.iter().enumerate().skip(results_window(results.len(), current).start).take(MAX_RESULT_ROWS) {
                 let Some(p) = app.session.doc.para_at(a) else { continue };
                 let from = p.clamp(a.off.saturating_sub(30));
                 let to = p.clamp((b.off + 40).min(p.len()));
@@ -65,7 +90,12 @@ pub(super) fn nav(app: &mut WordApp, ui: &mut Ui) {
                 job.append(hit, 0.0, egui::TextFormat { font_id: semibold(12.0), background: mark, color: ui.visuals().text_color(), ..Default::default() });
                 job.append(post, 0.0, fmt(ui.visuals().text_color()));
                 job.wrap.max_width = ui.available_width();
-                if ui.add(egui::Button::new(job).frame(false)).clicked() {
+                // The result the arrows are on is marked in the list too.
+                let resp = ui.add(egui::Button::selectable(current == Some(i), job).wrap());
+                if moved && current == Some(i) {
+                    resp.scroll_to_me(Some(egui::Align::Center));
+                }
+                if resp.clicked() {
                     let _ = app.run("select.range", json!({"anchor": a, "focus": b}));
                 }
                 ui.separator();
@@ -104,6 +134,83 @@ pub(super) fn nav(app: &mut WordApp, ui: &mut Ui) {
             }
         }
     });
+}
+
+/// The line under the search box: which result is selected, of how many, and buttons to the
+/// previous and next one, which go round from the last result to the first (#5019).
+fn result_bar(app: &mut WordApp, ui: &mut Ui) {
+    let n = app.session.find.results.len();
+    let text = match current_result(app) {
+        Some(i) => crate::i18n::fmt(tl!("Result {current} of {count}"), &[("current", &(i + 1).to_string()), ("count", &n.to_string())]),
+        None if n == 0 => tl!("No results").to_string(),
+        None => crate::i18n::fmt(tl!("{count} results"), &[("count", &n.to_string())]),
+    };
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(text).small().weak());
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add_enabled_ui(n > 0, |ui| {
+                // Right to left: Next goes first, so Previous sits on its left.
+                if result_button(ui, "chevronDown", tl!("Next result")).clicked() {
+                    step_result(app, ui, false);
+                }
+                if result_button(ui, "chevronUp", tl!("Previous result")).clicked() {
+                    step_result(app, ui, true);
+                }
+            });
+        });
+    });
+}
+
+/// A 22 px arrow button of the result bar, named for screen readers, greyed when there are no
+/// results.
+fn result_button(ui: &mut Ui, icon: &str, name: &str) -> egui::Response {
+    let t = Tokens::get(ui.ctx());
+    let enabled = ui.is_enabled();
+    let (rect, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), egui::Sense::click());
+    if enabled && resp.hovered() {
+        ui.painter().rect_filled(rect, 4.0, t.hover);
+    }
+    let color = if enabled { t.icon } else { t.text_disabled };
+    crate::icons::paint(ui.painter(), egui::Rect::from_center_size(rect.center(), vec2(14.0, 14.0)), icon, color, color);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, name));
+    resp.on_hover_text(name)
+}
+
+/// The search result the selection is on, if it is one.
+/// Most search results the Results list shows at once.
+const MAX_RESULT_ROWS: usize = 500;
+
+/// The results the Results list shows, of `len`: the first [`MAX_RESULT_ROWS`], or as many around
+/// `current` when it is past them, so the result the arrows are on is always listed and marked.
+pub(super) fn results_window(len: usize, current: Option<usize>) -> std::ops::Range<usize> {
+    let start = match current {
+        Some(c) if c >= MAX_RESULT_ROWS => c.saturating_sub(MAX_RESULT_ROWS / 2).min(len.saturating_sub(MAX_RESULT_ROWS)),
+        _ => 0,
+    };
+    start..len.min(start.saturating_add(MAX_RESULT_ROWS))
+}
+
+fn current_result(app: &WordApp) -> Option<usize> {
+    let sel = app.session.sel.ordered();
+    app.session.find.results.iter().position(|r| *r == sel)
+}
+
+/// Go to the next search result, or the previous one, going round at either end. At most once a
+/// frame: when egui runs a frame's pass again (`request_discard`, which the ribbon's font list
+/// uses), the second pass gets the same input, and a step is not idempotent as selecting a
+/// result is.
+fn step_result(app: &mut WordApp, ui: &Ui, back: bool) {
+    let once = app.window_id("nav_result_step");
+    let frame = ui.ctx().cumulative_frame_nr();
+    let last = ui.data_mut(|d| {
+        let last = d.get_temp::<u64>(once);
+        d.insert_temp(once, frame);
+        last
+    });
+    if last == Some(frame) {
+        return;
+    }
+    let _ = app.run(if back { "edit.findPrevious" } else { "edit.findNext" }, json!({}));
 }
 
 /// Which headings the pane shows: those under a collapsed heading (every following heading
