@@ -5826,6 +5826,118 @@ fn a_floating_table_taller_than_a_page_runs_across_pages() {
     assert_eq!(rows, 80);
 }
 
+/// A page-positioned table may follow the text it wraps in document order. Its page position
+/// must be reserved before laying out that text, rather than painting over the notes above its
+/// anchor. Later body blocks then start after the displaced notes.
+#[test]
+fn a_page_anchored_floating_table_wraps_text_before_its_anchor() {
+    use wordcraft_doc::para::Anchor;
+    use wordcraft_doc::props::{HeightRule, LineSpacing, TableFloat};
+    let text = "Visible notes before the break.\nMore visible notes before the break.\u{000C}Notes above the table anchor.\nA continuation tail in the same paragraph.";
+    let mut d = Document::from_text("Notes.\nContinuation notes.\nAfter the table.");
+    d.body[0] = wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()));
+    for block in &mut d.body {
+        if let Block::Para(p) = Arc::make_mut(block) {
+            p.props.line_spacing = Some(LineSpacing::Exactly(24.0));
+            p.props.space_before = Some(0.0);
+            p.props.space_after = Some(0.0);
+        }
+    }
+    let visible_lines = |layout: &DocLayout, page: usize| {
+        layout.pages[page]
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Placed::Lines { story: StoryRef::Body, path, para, y, l0, l1, .. } if path.0 == [0] => Some((para, *y, *l0, *l1)),
+                _ => None,
+            })
+            .flat_map(|(para, y, l0, l1)| {
+                para.lines[l0..l1]
+                    .iter()
+                    .filter(|line| text[line.start..line.stop].chars().any(char::is_alphabetic))
+                    .map(move |line| (line.start, line.stop, y + line.top, y + line.baseline))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>()
+    };
+    let before = visible_lines(&lay(&d), 0);
+    assert_eq!(before.len(), 2, "the fixture must have visible lines before the manual break");
+    let mut t = Table::new(1, 1, 468.0);
+    t.rows[0].props.height = Some(480.0);
+    t.rows[0].props.height_rule = HeightRule::Exact;
+    t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Form", Default::default()))];
+    t.props.float = Some(TableFloat { h_rel: Anchor::Margin, v_rel: Anchor::Page, y: 72.0, ..Default::default() });
+    d.insert_block(StoryRef::Body, &Path::top(2), wordcraft_doc::Block::Table(t)).unwrap();
+    let layout = lay(&d);
+    assert_eq!(layout.pages.len(), 2);
+    assert_eq!(visible_lines(&layout, 0), before, "reflow must preserve the earlier page's text ranges and positions");
+    let page = &layout.pages[1];
+    let cell = page
+        .items
+        .iter()
+        .find_map(|i| match i {
+            Placed::Cell { rect, .. } => Some(*rect),
+            _ => None,
+        })
+        .unwrap();
+    assert!((cell.y - 72.0).abs() < 0.01);
+    let tail = visible_lines(&layout, 1);
+    assert_eq!(tail.len(), 2, "the same paragraph must resume after the break");
+    assert!(tail.iter().all(|line| line.2 >= cell.bottom() - 0.01), "the continued lines must move below the table");
+    for block in [0, 1, 3] {
+        let y = page
+            .items
+            .iter()
+            .find_map(|i| match i {
+                Placed::Lines { path, y, para, l0, .. } if path.0 == [block] => Some(y + para.lines[*l0].top),
+                _ => None,
+            })
+            .unwrap();
+        assert!(y >= cell.bottom() - 0.01, "body block {block} at {y}, table ends at {}", cell.bottom());
+    }
+}
+
+/// Text inside the table's requested top clearance must reflow even when it does not
+/// touch the table's physical border.
+#[test]
+fn a_page_anchored_floating_table_rewraps_earlier_text_inside_its_clearance() {
+    use wordcraft_doc::para::Anchor;
+    use wordcraft_doc::props::{HeightRule, LineSpacing, TableFloat};
+    let mut d = Document::from_text("\u{000C}Earlier text in the clearance.\nAnchor paragraph.");
+    for block in &mut d.body {
+        if let Block::Para(p) = Arc::make_mut(block) {
+            p.props.line_spacing = Some(LineSpacing::Exactly(24.0));
+            p.props.space_before = Some(0.0);
+            p.props.space_after = Some(0.0);
+        }
+    }
+    let mut t = Table::new(1, 1, 468.0);
+    t.rows[0].props.height = Some(120.0);
+    t.rows[0].props.height_rule = HeightRule::Exact;
+    t.props.float = Some(TableFloat { h_rel: Anchor::Margin, v_rel: Anchor::Page, y: 150.0, dist: [0.0, 100.0, 0.0, 0.0], ..Default::default() });
+    d.insert_block(StoryRef::Body, &Path::top(2), wordcraft_doc::Block::Table(t)).unwrap();
+    let l = lay(&d);
+    let page = &l.pages[1];
+    let cell = page
+        .items
+        .iter()
+        .find_map(|i| match i {
+            Placed::Cell { rect, .. } => Some(*rect),
+            _ => None,
+        })
+        .unwrap();
+    assert!((cell.y - 150.0).abs() < 0.01);
+    let earlier_y = page
+        .items
+        .iter()
+        .find_map(|i| match i {
+            Placed::Lines { path, y, para, l0, .. } if path.0 == [0] => Some(y + para.lines[*l0].top),
+            _ => None,
+        })
+        .unwrap();
+    assert!(earlier_y >= cell.bottom() - 0.01, "earlier text at {earlier_y}, table ends at {}", cell.bottom());
+}
+
 /// #534: a table placed on the page (`w:tblpPr w:vertAnchor="page"`) whose anchor comes after a
 /// page full of text goes to the next page with it, like Word, instead of covering that text.
 #[test]

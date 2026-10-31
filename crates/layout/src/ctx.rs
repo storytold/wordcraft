@@ -63,7 +63,8 @@ pub(crate) struct Ctx<'a> {
     /// per layout ([`textbox::fitted_height`]).
     pub(crate) fitted: HashMap<(u32, u32), Option<f32>>,
     /// Each body float's latest placement: on which page and with what wrap area, when it is
-    /// above its anchor paragraph with text before it ([`EarlyFloats`]).
+    /// above its anchor with text before it ([`EarlyFloats`]); tables use `usize::MAX` as the
+    /// object index, since their block cannot also be a paragraph holding drawing objects.
     pub(crate) floats_above: HashMap<(usize, usize), Option<(usize, WrapArea)>>,
     /// The document's sections with their headers and footers linked ([`HfLinks`]).
     pub(crate) hf: Arc<HfLinks<'a>>,
