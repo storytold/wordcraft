@@ -130,6 +130,9 @@ pub struct Settings {
     /// natural spacing; by default Word stretches it to the margin like a wrapped line.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub do_not_expand_shift_return: bool,
+    /// `w:balanceSingleByteDoubleByteWidth`: keep fullwidth tracking twice halfwidth tracking.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub balance_single_byte_double_byte_width: bool,
     /// Keep contextual paragraph spacing inside legacy table cells (`allowSpaceOfSameStyleInTable`).
     /// Word ignores the layout override in compatibility mode 15, but the flag still round-trips.
     pub allow_space_of_same_style_in_table: bool,
@@ -297,6 +300,7 @@ impl Default for Settings {
             roman_fonts: Vec::new(),
             sum_paragraph_spacing: false,
             do_not_expand_shift_return: false,
+            balance_single_byte_double_byte_width: false,
             allow_space_of_same_style_in_table: false,
             grid_h: DEFAULT_GRID,
             grid_v: DEFAULT_GRID,

@@ -3,12 +3,14 @@ use super::chars::{
     SegKey, caps_expands, context_digit_dirs, is_khmer, is_mark, is_numeral_digit, ligature_features, lookup_family, remap_range, thai_run_face,
     upper_char,
 };
-use super::grid::east_asian;
+use super::grid::{east_asian, kern_punctuation};
 use super::model::{ClKind, Cluster, Enclosed, Glyph, ParaEnv, RubyLayout, StyleRun, SymbolRun};
 use super::{Arc, Document, FaceRef, NumeralMode, ResolvedChar, RubyAlign, SOFT_HYPHEN};
 
 pub(super) struct Builder<'a> {
     pub(super) env: &'a ParaEnv<'a>,
+    /// Apply the natural-line policy only outside the section's active line grid.
+    pub(super) natural_japanese_metrics: bool,
     pub(super) styles: Vec<StyleRun>,
     /// Hash of a style's format → (index in `styles`, small caps), see `style`.
     pub(super) style_index: std::collections::HashMap<u64, Vec<(u32, bool)>>,
@@ -64,7 +66,10 @@ impl<'a> Builder<'a> {
             let primary = if complex { primary_cs.unwrap_or(primary) } else { primary };
             let face = match cur {
                 Some(k) if mark => k.face,
-                _ if !complex && east_asian(c) && primary_ea.is_some_and(|f| f.covers(c)) => primary_ea,
+                // Ideographic space is not East Asian *text* for line breaking, but it
+                // still takes its advance from the run's East Asian font. Proportional
+                // Japanese faces can have a U+3000 advance narrower than one em.
+                _ if !complex && (east_asian(c) || c == '\u{3000}') && primary_ea.is_some_and(|f| f.covers(c)) => primary_ea,
                 _ if !c.is_control() && c != SOFT_HYPHEN && run_face.is_some_and(|f| f.covers(dc)) => run_face,
                 _ if primary.covers(dc) || c.is_whitespace() || c.is_control() || c == SOFT_HYPHEN => None,
                 Some(SegKey { face: Some(face), .. }) if face.covers(dc) => Some(face),
@@ -119,13 +124,46 @@ impl<'a> Builder<'a> {
             }
         }
         let size = rc.draw_size() * if small { 0.8 } else { 1.0 };
+        // This script-specific substitute changes Japanese ink, not the missing fixed-width
+        // font's line metrics. Keep its ordinary substitute's ascent/descent so mixed Japanese
+        // and Latin text retains its baseline, grid placement and pagination. Its substitution
+        // status also belongs to the East Asian request, independently of the Latin family.
+        let (metric_face, metric_substituted) = face_override
+            .and_then(|f| {
+                let family = rc.font_ea.as_deref().unwrap_or(&rc.font);
+                let ea = wordcraft_fonts::word::resolve(family, rc.bold, rc.italic);
+                if ea.face.id() == f.id() {
+                    Some((f, ea.substituted))
+                } else {
+                    wordcraft_fonts::word::east_asian_substitute(family, rc.bold, rc.italic)
+                        .filter(|r| r.face.id() == f.id())
+                        .map(|_| (ea.face, ea.substituted))
+                }
+            })
+            .unwrap_or((face, r.substituted));
+        // Missing Japanese requests and zero-gap one-em faces share Word's natural leading.
+        // Installed faces with native leading and turned text retain their measured metrics.
+        let japanese_metrics = if self.natural_japanese_metrics {
+            wordcraft_fonts::word::horizontal_japanese_line_metrics(&metric_face, metric_substituted)
+        } else {
+            None
+        };
         // A symbol font that isn't installed, or is installed one em tall (Apple's Symbol), takes
         // the height Word gives it.
-        let (a, d) = match wordcraft_fonts::word::symbol_line(&rc.font, &r) {
-            Some((a, d)) => (a * face.upem, d * face.upem),
-            None => wordcraft_fonts::word::line_metrics(&face),
+        let (mut a, mut d) = match wordcraft_fonts::word::symbol_line(&rc.font, &r) {
+            Some((a, d)) => (a * metric_face.upem, d * metric_face.upem),
+            None => japanese_metrics.unwrap_or_else(|| wordcraft_fonts::word::line_metrics(&metric_face)),
         };
-        let k = size as f64 / face.upem.max(1.0);
+        // One-em CJK substitutes omit the external leading used by Japanese Word faces.
+        // Keep the ink centred while deriving the extra line room from the em, not pixels.
+        let leading = if japanese_metrics.is_some() {
+            0.0
+        } else {
+            wordcraft_fonts::word::substitute_cjk_leading(&metric_face, metric_substituted) * metric_face.upem / 2.0
+        };
+        a += leading;
+        d += leading;
+        let k = size as f64 / metric_face.upem.max(1.0);
         // A fallback face (letters the requested font lacks) is emboldened or slanted when it has
         // no bold or italic of its own.
         let (synth_bold, synth_italic) = match face_override {
@@ -138,6 +176,18 @@ impl<'a> Builder<'a> {
             synth_bold,
             synth_italic,
             rc: rc.clone(),
+            grid_size: wordcraft_fonts::word::japanese_grid_height_for_style(
+                if face_override.is_some() { rc.font_ea.as_deref().unwrap_or(&rc.font) } else { &rc.font },
+                rc.size,
+                rc.bold,
+                rc.italic,
+            ),
+            mark_grid_size: wordcraft_fonts::word::japanese_grid_height_for_style(
+                rc.font_ea.as_deref().unwrap_or(&rc.font),
+                rc.size,
+                rc.bold,
+                rc.italic,
+            ),
             ascent: (a * k) as f32,
             descent: (d * k) as f32,
             shift: rc.baseline_shift(),
@@ -169,15 +219,32 @@ impl<'a> Builder<'a> {
         let sym = SymbolRun::of(&rc.font, &resolved);
         let show = |c: char| sym.map_or(c, |m| m.show(c));
         let primary_cs = rc_cs.as_ref().map(|r| wordcraft_fonts::word::resolve(lookup_family(self.env.doc, &r.font), r.bold, r.italic).face);
-        // Chinese, Japanese and Korean characters use the run's East Asian font (`w:eastAsia`) when
-        // it is installed and has them.
+        // Chinese, Japanese and Korean characters use the run's East Asian font (`w:eastAsia`).
+        // A named substitute also takes ambiguous Japanese symbols such as ※ and ◎; otherwise
+        // the Latin face can draw a much smaller glyph even though the run requests MS Mincho.
         let primary_ea = rc
             .font_ea
             .as_ref()
-            .filter(|f| !f.eq_ignore_ascii_case(&rc.font) && text.chars().any(east_asian))
+            .filter(|f| !f.eq_ignore_ascii_case(&rc.font) && text.chars().any(|c| east_asian(c) || c == '\u{3000}'))
             .map(|f| wordcraft_fonts::word::resolve(f, rc.bold, rc.italic))
-            .filter(|r| !r.substituted)
-            .map(|r| r.face);
+            .and_then(|r| {
+                if r.substituted {
+                    wordcraft_fonts::word::east_asian_substitute(rc.font_ea.as_deref().unwrap_or(&rc.font), rc.bold, rc.italic)
+                        .map(|s| s.face)
+                        .or_else(|| wordcraft_fonts::word::has_named_substitutes(rc.font_ea.as_deref().unwrap_or(&rc.font)).then_some(r.face))
+                } else {
+                    Some(r.face)
+                }
+            })
+            .or_else(|| {
+                // A missing fixed-width Japanese face may need a different substitute for its
+                // Japanese glyphs. Latin text keeps the primary face and its half-em advances.
+                text.chars()
+                    .any(east_asian)
+                    .then(|| wordcraft_fonts::word::east_asian_substitute(rc.font_ea.as_deref().unwrap_or(&rc.font), rc.bold, rc.italic))
+                    .flatten()
+                    .map(|r| r.face)
+            });
         // The levels by byte of `text`, from `lbase` on.
         let (levels, lbase): (&[u8], usize) = match dir {
             Dir::Para => (&self.levels, base),
@@ -289,7 +356,12 @@ impl<'a> Builder<'a> {
                 }
                 None => [kern_off; 5],
             };
-            let from = usize::from(rc.kerned());
+            // A script-specific ink substitute preserves the primary substitute's fixed
+            // advances. Its proportional kana kerning must not change wrapping; Japanese
+            // punctuation kerning is applied consistently across runs after shaping.
+            let ink_substitute = wordcraft_fonts::word::east_asian_substitute(rc.font_ea.as_deref().unwrap_or(&rc.font), rc.bold, rc.italic)
+                .is_some_and(|r| r.face.id() == st.face.id());
+            let from = usize::from(rc.kerned() && !ink_substitute);
             let to = if ligatures.is_some() { all.len() } else { 1 };
             let features: &[wordcraft_fonts::Feature] = all.get(from..to).unwrap_or_default();
             let shaped = if use_levels {
@@ -299,6 +371,8 @@ impl<'a> Builder<'a> {
             };
             let k = st.size / st.face.upem.max(1.0) as f32;
             let hscale = rc.scale / 100.0;
+            // Manual run width takes precedence over expanded/condensed spacing.
+            let spacing = if rc.fit_text.is_some_and(|f| f.width > 0.0) { 0.0 } else { rc.spacing };
             // Group glyphs by cluster byte offset; graphemes may span several shaper clusters.
             // Complex-script syllables the graphemes split (Myanmar vowel signs, stacked
             // consonants) stay one cluster: the caret never stops inside them.
@@ -312,6 +386,8 @@ impl<'a> Builder<'a> {
             let mut gi = 0usize;
             for (bi, &gs) in bounds.iter().enumerate() {
                 let ge = bounds.get(bi + 1).copied().unwrap_or(shape_text.len());
+                let s = shape_text.get(gs..ge).unwrap_or("");
+                let ch = s.chars().next().unwrap_or(' ');
                 let g0 = self.glyphs.len() as u32;
                 let mut adv = 0.0f32;
                 while let Some(g) = shaped.get(gi) {
@@ -320,11 +396,16 @@ impl<'a> Builder<'a> {
                     }
                     self.glyphs.push(Glyph { gid: g.gid, dx: adv + g.x_offset as f32 * k * hscale, dy: g.y_offset as f32 * k });
                     adv += g.x_advance as f32 * k * hscale;
+                    // A simulated bold face needs room for its wider outline. Native
+                    // bold already has its own advances; zero-width combining glyphs
+                    // must stay attached to their base. An ideographic space has no
+                    // ink to embolden, so synthetic bold does not widen it.
+                    if st.synth_bold && g.x_advance > 0 && ch != '\u{3000}' {
+                        adv += st.size * hscale * wordcraft_fonts::word::BOLD_WIDTH_EM;
+                    }
                     gi += 1;
                 }
                 let g1 = self.glyphs.len() as u32;
-                let s = shape_text.get(gs..ge).unwrap_or("");
-                let ch = s.chars().next().unwrap_or(' ');
                 let kind = kind_override.unwrap_or(if ch == ' ' || ch == '\u{3000}' {
                     ClKind::Space
                 } else if ch == SOFT_HYPHEN {
@@ -332,7 +413,13 @@ impl<'a> Builder<'a> {
                 } else {
                     ClKind::Text
                 });
-                let adv = if kind == ClKind::Marker { 0.0 } else { adv + rc.spacing };
+                // A fullwidth character carries two halfwidth tracking units when Word's
+                // width-balancing compatibility switch is enabled. Scale and grid pitch
+                // remain independent; fitted text has already suppressed manual tracking.
+                let em = st.size * hscale;
+                let fullwidth = super::grid::is_east_asian(ch) || (matches!(ch, '※' | '○' | '◎') && em > 0.0 && (adv - em).abs() < em * 0.01);
+                let tracked = if self.env.doc.settings.balance_single_byte_double_byte_width && fullwidth { spacing * 2.0 } else { spacing };
+                let adv = if kind == ClKind::Marker { 0.0 } else { adv + tracked };
                 // Clusters index the document text, never the displayed text.
                 let (cs, ce) = if substituted { remap_range(&map_starts, &orig_of, sub.len(), gs, ge) } else { (gs, ge) };
                 self.clusters.push(Cluster {
@@ -350,7 +437,7 @@ impl<'a> Builder<'a> {
                 });
             }
             if matches!(dir, Dir::Para) {
-                self.split_ligature_advances(seg_c0, rc.spacing, key.rtl);
+                self.split_ligature_advances(seg_c0, spacing, key.rtl);
             }
         }
     }
@@ -403,6 +490,8 @@ impl<'a> Builder<'a> {
         let lv = bidi_levels(text, rtl_base);
         let before = self.clusters.len();
         self.shape_with(text, start, rc, None, if lv.is_empty() { Dir::Guess } else { Dir::Own(&lv) });
+        super::spaces::balance(self, text, start, before);
+        kern_punctuation(self, text, start, before);
         let added: Vec<Cluster> = self.clusters.drain(before..).collect();
         let Some(first) = added.first() else {
             let si = self.style(rc, None, false);

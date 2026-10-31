@@ -1,14 +1,14 @@
 use super::bidi::{Dir, bidi_levels, visual_order};
 use super::builder::{Builder, left_out, overstrike};
 use super::chars::caps_char;
-use super::grid::{auto_space, snap_chars};
+use super::grid::{auto_space, kern_punctuation, snap_chars};
 use super::justify::hyphenation_points;
 use super::lines::break_lines;
 use super::model::{ClKind, Cluster, Enclosed, Glyph, Label, LabelRun, ParaEnv, RubyLayout, undrawable_bullet};
 use super::proof::{ProofRun, is_list_item, proof_issues};
 use super::{
-    Arc, COLUMN_BREAK, CharProps, Document, FIELD_SHADING, InlineObject, LINE_BREAK, NoteKind, OBJ, PAGE_BREAK, PTabAlign, PTabBase, ParaLayout,
-    Paragraph, ResolvedChar, ResolvedPara, TabLeader, field_code_text, field_text_on, reference_link,
+    Arc, COLUMN_BREAK, CharProps, Document, FIELD_SHADING, InlineObject, LINE_BREAK, LineSpacing, NoteKind, OBJ, PAGE_BREAK, PTabAlign, PTabBase,
+    ParaLayout, Paragraph, ResolvedChar, ResolvedPara, TabLeader, field_code_text, field_text_on, reference_link,
 };
 
 /// A run's formatting resolved in the paragraph's style and table.
@@ -95,9 +95,23 @@ fn paragraph_props(p: &Paragraph, env: &ParaEnv) -> ResolvedPara {
     if let Some(spacing) = env.read_line_spacing.filter(|s| s.is_finite() && (1.0..=2.0).contains(s)) {
         rp.line_spacing = wordcraft_doc::props::LineSpacing::Multiple(spacing);
     }
-    // Indents in characters are measured in the paragraph mark's font size.
+    // Word measures paragraph spacing in grid lines even when snapToGrid is off.
+    rp.set_line_space_unit(env.grid.line.unwrap_or(12.0));
+    // Left/right character units follow the default paragraph font. First-line/hanging
+    // units follow the first text run, including its tracking, rather than the paragraph mark.
     if rp.indent_chars.iter().any(|c| *c != 0.0) {
-        rp.set_char_unit(doc.styles.resolve_char_in(p.props.style.as_deref(), env.table.map(|t| &t.chr), &p.mark).size);
+        let first = p
+            .run_ranges()
+            .find_map(|(range, props)| p.text.get(range).filter(|text| text.chars().any(|c| !is_special(c) && !c.is_control())).map(|_| props));
+        let style = doc.styles.resolve_char_in(p.props.style.as_deref(), env.table.map(|t| &t.chr), first.unwrap_or(&CharProps::default()));
+        let default = doc.styles.resolve_char(None, &CharProps::default());
+        let unit = |rc: &ResolvedChar| {
+            let tracking = rc.spacing * if doc.settings.balance_single_byte_double_byte_width { 2.0 } else { 1.0 };
+            let grid_delta = if rc.snap_to_grid { env.grid.chars.map_or(0.0, |pitch| pitch - env.grid.font_size) } else { 0.0 };
+            let bold = if rc.bold { rc.size * wordcraft_fonts::word::BOLD_WIDTH_EM } else { 0.0 };
+            rc.size + bold + tracking + grid_delta
+        };
+        rp.set_char_units(unit(&default), unit(&style));
     }
     list_indents(&mut rp, p, env);
     rp
@@ -519,6 +533,7 @@ fn shape_label(b: &mut Builder, text: &str, rc: &Arc<ResolvedChar>, bidi: bool) 
     let before_c = b.clusters.len();
     let before_g = b.glyphs.len();
     b.shape_with(text, 0, rc, None, if lv.is_empty() { Dir::Guess } else { Dir::Own(&lv) });
+    super::spaces::balance(b, text, 0, before_c);
     let mut clusters: Vec<Cluster> = b.clusters.drain(before_c..).collect();
     if !lv.is_empty() {
         let cl_lv: Vec<u8> = clusters.iter().map(|c| lv.get(c.start).copied().unwrap_or(1)).collect();
@@ -557,7 +572,16 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let rp = paragraph_props(p, env);
     let res = Resolver { doc, style: p.props.style.as_deref(), table: env.table.map(|t| &t.chr) };
     let levels = bidi_levels(&p.text, rp.bidi);
-    let b = Builder { env, styles: Vec::new(), style_index: Default::default(), glyphs: Vec::new(), clusters: Vec::new(), levels, shown: Vec::new() };
+    let b = Builder {
+        env,
+        natural_japanese_metrics: !rp.snap_to_grid || env.grid.line.is_none() || matches!(rp.line_spacing, LineSpacing::AtLeast(v) if v <= 0.0),
+        styles: Vec::new(),
+        style_index: Default::default(),
+        glyphs: Vec::new(),
+        clusters: Vec::new(),
+        levels,
+        shown: Vec::new(),
+    };
     let cx = Cx { p, env, rp: &rp, res, math_props: doc.settings.math.clone().unwrap_or_default(), drop_first: drop_cap_char(p, &rp) };
     let mut sh = Shaped::new(b, env.eq_number);
     let mark_rc = cx.res.char(&p.mark);
@@ -565,12 +589,12 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     for (range, props) in p.run_ranges() {
         sh.run(&cx, range, props);
     }
-    if rp.snap_to_grid {
-        snap_chars(&mut sh.b, &p.text, &env.grid);
-    }
-    // Text on a character grid keeps to its cells.
-    let auto_space =
-        if rp.snap_to_grid && env.grid.chars.is_some() { Vec::new() } else { auto_space(&mut sh.b, &p.text, rp.auto_space_de, rp.auto_space_dn) };
+    super::spaces::balance(&mut sh.b, &p.text, 0, 0);
+    kern_punctuation(&mut sh.b, &p.text, 0, 0);
+    snap_chars(&mut sh.b, &p.text, &env.grid);
+    // Exact character-cell grids suppress boundary spacing; additive character grids retain it.
+    let auto_space = auto_space(&mut sh.b, &p.text, rp.auto_space_de, rp.auto_space_dn);
+    super::textfit::fit_text(&mut sh.b);
     let mut skip = sh.left.clone();
     skip.extend(sh.bare.iter().cloned());
     let bt = BreakText::new(&p.text, skip);

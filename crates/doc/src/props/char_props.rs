@@ -226,6 +226,16 @@ impl Highlight {
 /// The text size, in points, of a run whose size no style or default sets.
 pub const DEFAULT_FONT_SIZE: f32 = 11.0;
 
+/// A contiguous group's manual width (`w:fitText`, ECMA-376 §17.3.2.14).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FitText {
+    /// Width in points; zero disables fitting.
+    pub width: f32,
+    /// Adjacent runs with the same ID share one width. Word treats no ID as zero.
+    pub id: Option<i32>,
+}
+
 /// Character formatting (direct or in a style). `None` = inherit.
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -285,6 +295,9 @@ pub struct CharProps {
     /// Horizontal scale, percent (100 = normal).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scale: Option<f32>,
+    /// Manual text width shared by adjacent runs with the same fit ID.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fit_text: Option<FitText>,
     /// Raised (+) / lowered (−) position, points.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub position: Option<f32>,
@@ -462,7 +475,15 @@ impl CharProps {
 
     fn minus_text_style(&mut self, base: &CharProps) {
         drop_same_fields!(self, base; style, font, sym_font, size, bold, italic, underline, underline_color, strike, double_strike, color, highlight,
-            shading, border, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, outline, shadow, emboss, engrave, lang, no_proof, rtl);
+            shading, border, vert_align, caps, small_caps, hidden, outline, shadow, emboss, engrave, lang, no_proof, rtl);
+        self.minus_text_geometry(base);
+    }
+
+    fn minus_text_geometry(&mut self, base: &CharProps) {
+        drop_same_fields!(self, base; spacing, scale, position, kern);
+        if self.fit_text == base.fit_text {
+            self.fit_text = None;
+        }
     }
 
     fn minus_run_visibility(&mut self, base: &CharProps) {
@@ -493,7 +514,15 @@ impl CharProps {
 
     fn overlay_text_style(&mut self, patch: &CharProps) {
         overlay_fields!(self, patch; style, font, sym_font, size, bold, italic, underline, underline_color, strike, double_strike, color, highlight,
-            shading, border, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, outline, shadow, emboss, engrave, lang, no_proof, rtl);
+            shading, border, vert_align, caps, small_caps, hidden, outline, shadow, emboss, engrave, lang, no_proof, rtl);
+        self.overlay_text_geometry(patch);
+    }
+
+    fn overlay_text_geometry(&mut self, patch: &CharProps) {
+        overlay_fields!(self, patch; spacing, scale, position, kern);
+        if patch.fit_text.is_some() {
+            self.fit_text = patch.fit_text;
+        }
     }
 
     fn overlay_run_visibility(&mut self, patch: &CharProps) {

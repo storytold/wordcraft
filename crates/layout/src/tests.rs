@@ -7,14 +7,21 @@ use wordcraft_doc::{Pos, Table};
 mod autospace;
 mod bidi;
 mod budget;
+mod character_indents;
 mod complex;
+mod font_metrics;
 mod grid;
+mod japanese_line_metrics;
 mod ligature;
 pub(crate) mod linear;
 mod nbsp;
 mod numeral;
 mod pages;
+mod paragraph_lines;
+mod small_type_spacing;
+mod space_balancing;
 mod styleref;
+mod synthetic_bold_spacing;
 mod table_contact;
 mod textbox;
 mod vertical;
@@ -1697,6 +1704,64 @@ fn lists_get_labels_and_indent() {
     assert_eq!(labels, vec!["1.", "2.", "3."]);
     let x = l.caret(&Pos::body(0, 0)).unwrap().x;
     assert!((x - 108.0).abs() < 0.5, "{x}");
+}
+
+#[test]
+fn overridden_list_indent_keeps_a_nearby_label_out_of_the_old_tab() {
+    use wordcraft_doc::props::{NumRef, TabAlign, TabLeader, TabStop};
+    use wordcraft_doc::section::NumFormat;
+    let mut d = Document::from_text(
+        "一
+二",
+    );
+    let id = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+    let level = &mut d.numbering.abstracts[0].levels[0];
+    level.indent = 78.5;
+    level.hanging = 36.0;
+    level.tab = Some(78.5);
+    level.format = NumFormat::DecimalFullWidth;
+    level.text = "（%1）".into();
+    level.chr.size = Some(12.0);
+    for i in 0..2 {
+        let p = d.para_mut(StoryRef::Body, &Path::top(i)).unwrap();
+        p.props.numbering = Some(NumRef { num: id, level: 0 });
+        p.props.indent_left = Some(45.05);
+        p.mark.size = Some(12.0);
+        if i == 0 {
+            p.props.tabs = Some(vec![TabStop { pos: 56.7, align: TabAlign::Left, leader: TabLeader::None }]);
+        }
+    }
+    let l = lay(&d);
+    let paras: Vec<_> = l.pages[0]
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            Placed::Lines { para, .. } => Some(para),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(paras.len(), 2);
+    for p in paras {
+        let label = p.label.as_ref().unwrap();
+        let text_start = p.lines[0].xs[0];
+        assert!(label.x + label.width >= 45.04, "fixture must reach the hanging indent");
+        assert!(text_start >= label.x + label.width - 0.01, "label overlaps text");
+        assert!(text_start < 51.1, "text jumped to an old tab: {text_start}");
+    }
+    // A substantially longer label still advances to the next tab rather than colliding.
+    d.numbering.abstracts[0].levels[0].text = "（第%1番号）".into();
+    let l = lay(&d);
+    let p = l.pages[0]
+        .items
+        .iter()
+        .find_map(|it| match it {
+            Placed::Lines { para, .. } => Some(para),
+            _ => None,
+        })
+        .unwrap();
+    let label = p.label.as_ref().unwrap();
+    assert!(label.x + label.width > 51.05);
+    assert!(p.lines[0].xs[0] > label.x + label.width, "long label must use the next tab");
 }
 
 #[test]
@@ -4844,10 +4909,10 @@ fn multiple_line_spacing_adds_its_leading_below_the_text() {
             );
         }
     }
-    // Exact spacing still keeps the descent below the baseline.
-    let mut d = Document::from_text("Exact");
+    // Minimum spacing still keeps the descent below the baseline.
+    let mut d = Document::from_text("Minimum");
     if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
-        p.props.line_spacing = Some(LineSpacing::Exactly(30.0));
+        p.props.line_spacing = Some(LineSpacing::AtLeast(30.0));
     }
     let l = lay(&d);
     let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
@@ -5877,10 +5942,10 @@ fn a_page_break_at_the_bottom_of_a_full_page_leaves_no_blank_page() {
     assert!(last_on_2, "the text after the break is on page 2");
 }
 
-/// #534: indents in characters (`w:firstLineChars`) are measured in the paragraph mark's font
-/// size and win over the indent in points.
+/// Character-unit indents use the style font size and win over a point indent. A direct
+/// font-size change on the paragraph mark leaves the text position unchanged in Word.
 #[test]
-fn character_indents_use_the_paragraph_mark_size() {
+fn character_indents_use_the_paragraph_style_size() {
     let mut p = wordcraft_doc::Paragraph::with_text(&"字".repeat(80), Default::default());
     p.props.indent_first = Some(5.0);
     p.props.indent_first_chars = Some(2.0);
@@ -5890,8 +5955,32 @@ fn character_indents_use_the_paragraph_mark_size() {
     d.body = vec![wordcraft_doc::para_block(p)];
     let l = lay(&d);
     let para = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para.clone()) } else { None }).unwrap();
-    assert!((para.lines[0].left - 60.0).abs() < 0.01, "first line at {}", para.lines[0].left);
-    assert!((para.lines[1].left - 20.0).abs() < 0.01, "second line at {}", para.lines[1].left);
+    let style_size = d.styles.resolve_char(None, &Default::default()).size;
+    assert!((para.lines[0].left - 3.0 * style_size).abs() < 0.01, "first line at {}", para.lines[0].left);
+    assert!((para.lines[1].left - style_size).abs() < 0.01, "second line at {}", para.lines[1].left);
+}
+
+/// Character-based hanging locates the first line at leftChars, regardless of stale point values.
+#[test]
+fn conflicting_character_and_point_hanging_indents_keep_word_position() {
+    let first_line_left = |left: Option<f32>, hanging: Option<f32>, left_chars: f32, hanging_chars: f32| {
+        let mut p = wordcraft_doc::Paragraph::with_text("　　・項目", Default::default());
+        p.props.indent_left = left;
+        p.props.indent_first = hanging;
+        p.props.indent_left_chars = Some(left_chars);
+        p.props.indent_first_chars = Some(hanging_chars);
+        p.mark.size = Some(12.0);
+        let mut d = Document::from_text("");
+        d.body = vec![wordcraft_doc::para_block(p)];
+        let l = lay(&d);
+        l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para.lines[0].left) } else { None }).unwrap()
+    };
+    // Word places the first line at 0.86 characters, then adds seven characters for continuation.
+    assert!((first_line_left(Some(82.85), Some(-73.7), 0.86, -7.0) - 10.32).abs() < 0.01);
+    // Without point values the character indents remain authoritative.
+    assert!((first_line_left(None, None, 0.86, -7.0) - 10.32).abs() < 0.01);
+    // A consistent pair continues to use character units.
+    assert!((first_line_left(Some(24.0), Some(-12.0), 2.0, -1.0) - 24.0).abs() < 0.01);
 }
 
 #[test]

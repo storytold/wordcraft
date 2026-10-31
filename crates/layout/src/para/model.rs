@@ -71,6 +71,10 @@ pub struct StyleRun {
     pub synth_bold: bool,
     pub synth_italic: bool,
     pub rc: Arc<ResolvedChar>,
+    /// Requested size for text line-grid row selection, adjusted only for a missing Japanese face.
+    pub grid_size: f32,
+    /// Paragraph-mark grid size; its East Asian font can differ from the text's Latin font.
+    pub mark_grid_size: f32,
     /// Line ascent/descent at this size, points.
     pub ascent: f32,
     pub descent: f32,

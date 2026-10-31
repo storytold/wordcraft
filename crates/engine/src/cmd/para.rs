@@ -103,9 +103,11 @@ pub fn specs() -> Vec<CommandSpec> {
             fmt(s, &|p| {
                 if let Some(x) = b {
                     p.space_before = Some(x.clamp(0.0, 1584.0));
+                    p.space_before_lines = Some(0.0);
                 }
                 if let Some(x) = a {
                     p.space_after = Some(x.clamp(0.0, 1584.0));
+                    p.space_after_lines = Some(0.0);
                 }
                 if let Some(on) = b_auto {
                     p.space_before_auto = Some(on);
@@ -121,6 +123,7 @@ pub fn specs() -> Vec<CommandSpec> {
             let has = rp.space_before > 0.0;
             fmt(s, &|p| {
                 p.space_before = Some(if has { 0.0 } else { 12.0 });
+                p.space_before_lines = Some(0.0);
                 if rp.before_auto {
                     p.space_before_auto = Some(false);
                 }
@@ -132,6 +135,7 @@ pub fn specs() -> Vec<CommandSpec> {
             let has = rp.space_after > 0.0;
             fmt(s, &|p| {
                 p.space_after = Some(if has { 0.0 } else { 8.0 });
+                p.space_after_lines = Some(0.0);
                 if rp.after_auto {
                     p.space_after_auto = Some(false);
                 }

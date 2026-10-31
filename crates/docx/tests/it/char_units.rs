@@ -80,3 +80,52 @@ fn automatic_spacing_reads_and_round_trips() {
     let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
     assert_eq!(props(&again)[..3], p[..3]);
 }
+
+#[test]
+fn paragraph_spacing_in_lines_preserves_values_and_explicit_zero() {
+    let body = r#"<w:p><w:pPr><w:spacing w:before="200" w:beforeLines="50" w:after="143" w:afterLines="30"/></w:pPr><w:r><w:t>a</w:t></w:r></w:p>
+        <w:p><w:pPr><w:spacing w:beforeLines="0" w:afterLines="0" w:afterAutospacing="0"/></w:pPr><w:r><w:t>b</w:t></w:r></w:p>
+        <w:p><w:r><w:t>c</w:t></w:r></w:p>"#;
+    let d = wordcraft_docx::read(&docx(body)).unwrap();
+    let p = props(&d);
+    assert_eq!(
+        (p[0].space_before, p[0].space_before_lines, p[0].space_after, p[0].space_after_lines),
+        (Some(10.0), Some(0.5), Some(7.15), Some(0.3))
+    );
+    assert_eq!((p[1].space_before_lines, p[1].space_after_lines, p[1].space_after_auto), (Some(0.0), Some(0.0), Some(false)));
+    assert_eq!((p[2].space_before_lines, p[2].space_after_lines), (None, None));
+    let saved = wordcraft_docx::write(&d).unwrap();
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(&saved)).unwrap();
+    let mut xml = String::new();
+    z.by_name("word/document.xml").unwrap().read_to_string(&mut xml).unwrap();
+    for attr in [r#"w:beforeLines="50""#, r#"w:afterLines="30""#, r#"w:beforeLines="0""#, r#"w:afterLines="0""#] {
+        assert!(xml.contains(attr), "{attr} missing");
+    }
+    assert_eq!(props(&wordcraft_docx::read(&saved).unwrap())[..3], p[..3]);
+}
+
+#[test]
+fn run_character_grid_and_paragraph_line_grid_round_trip_independently() {
+    let body = r#"<w:p><w:pPr><w:snapToGrid w:val="0"/></w:pPr>
+        <w:r><w:rPr><w:snapToGrid/></w:rPr><w:t>国</w:t></w:r>
+        <w:r><w:rPr><w:snapToGrid w:val="0"/></w:rPr><w:t>語</w:t></w:r>
+        <w:r><w:t>文</w:t></w:r></w:p>"#;
+    let doc = wordcraft_docx::read(&docx(body)).unwrap();
+    let para = doc.body[0].as_para().unwrap();
+    assert_eq!(para.props.snap_to_grid, Some(false));
+    assert_eq!(para.runs.iter().map(|r| r.props.snap_to_grid).collect::<Vec<_>>(), [Some(true), Some(false), None]);
+    let mut inherited = doc.clone();
+    inherited.styles.default_chr.snap_to_grid = Some(false);
+    for (run, expected) in para.runs.iter().zip([true, false, false]) {
+        assert_eq!(inherited.styles.resolve_char(para.props.style.as_deref(), &run.props).snap_to_grid, expected);
+    }
+    let saved = wordcraft_docx::write(&inherited).unwrap();
+    let reopened = wordcraft_docx::read(&saved).unwrap();
+    assert_eq!(reopened.body[0].as_para().unwrap().props.snap_to_grid, Some(false));
+    assert_eq!(reopened.body[0].as_para().unwrap().runs.iter().map(|r| r.props.snap_to_grid).collect::<Vec<_>>(), [Some(true), Some(false), None]);
+    assert_eq!(reopened.styles.default_chr.snap_to_grid, Some(false));
+    let mut base = wordcraft_doc::CharProps { snap_to_grid: Some(false), ..Default::default() };
+    base.overlay(&wordcraft_doc::CharProps { snap_to_grid: Some(true), ..Default::default() });
+    assert_eq!(base.snap_to_grid, Some(true));
+    assert_eq!(base.clone().minus(&base).snap_to_grid, None);
+}

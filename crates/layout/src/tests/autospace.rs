@@ -89,20 +89,29 @@ fn a_field_result_is_classed_by_the_text_it_shows() {
 }
 
 #[test]
-fn a_character_grid_the_paragraph_snaps_to_turns_it_off() {
+fn only_a_fixed_character_cell_suppresses_automatic_asian_spacing() {
     let with = |kind: DocGridType, snap: bool| {
         let mut d = Document::from_text("法院94年");
         d.last_section.doc_grid = Some(DocGrid { kind, line_pitch: 18.0, char_space: 0 });
-        para0(&mut d).props.snap_to_grid = Some(snap);
+        d.styles.default_chr.snap_to_grid = Some(snap);
         d
     };
-    let d = with(DocGridType::LinesAndChars, true);
+    let d = with(DocGridType::SnapToChars, true);
     assert!(gaps(&d).iter().all(|g| *g == 0.0), "{:?}", gaps(&d));
-    // A line grid alone, or a paragraph that doesn't snap, keeps it.
-    for d in [with(DocGridType::Lines, true), with(DocGridType::LinesAndChars, false)] {
+    // Additive character spacing, a line grid alone, or a run that doesn't snap keeps it.
+    for d in [
+        with(DocGridType::Lines, true),
+        with(DocGridType::LinesAndChars, true),
+        with(DocGridType::LinesAndChars, false),
+        with(DocGridType::SnapToChars, false),
+    ] {
         let q = quarter(&d);
         assert_eq!(gaps(&d), [0.0, q, 0.0, q, 0.0]);
     }
+    let mut paragraph_off = with(DocGridType::LinesAndChars, true);
+    para0(&mut paragraph_off).props.snap_to_grid = Some(false);
+    let q = quarter(&paragraph_off);
+    assert_eq!(gaps(&paragraph_off), [0.0, q, 0.0, q, 0.0], "paragraph snapping controls lines, independently of character-grid spacing");
 }
 
 #[test]
