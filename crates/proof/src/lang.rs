@@ -70,6 +70,12 @@ pub enum ProofLang {
     /// spelling). There is no German dictionary or grammar yet, so, as for [`ProofLang::Other`],
     /// no spelling or grammar marks.
     De,
+    /// Serbian (`sr`, `sr-RS`, `sr-Cyrl-RS`, `sr-Latn-RS`, `sr-ME`…; also `sh`, the code Hunspell's
+    /// Serbian Latin dictionaries use, and ISO 639-2 `srp`): hyphenation by the Serbian patterns,
+    /// in both scripts (Latin words through their Cyrillic spelling, [`crate::hyphen`]). There is
+    /// no Serbian dictionary or grammar yet, so, as for [`ProofLang::Other`], no spelling or
+    /// grammar marks.
+    Sr,
     /// A language without proofing tools here (`fr-FR`, `ja-JP`, `x-none`…). Like Word without
     /// the language's proofing tools: no spelling or grammar marks, so its words are never
     /// flagged as English misspellings. Hyphenation keeps using the English patterns, as before
@@ -128,6 +134,8 @@ impl ProofLang {
             ProofLang::spanish(tag)
         } else if ["de", "deu", "ger"].iter().any(|c| primary.eq_ignore_ascii_case(c)) {
             ProofLang::De
+        } else if ["sr", "srp", "sh"].iter().any(|c| primary.eq_ignore_ascii_case(c)) {
+            ProofLang::Sr
         } else {
             ProofLang::Other
         }
@@ -167,7 +175,7 @@ impl ProofLang {
         matches!(self, ProofLang::Es | ProofLang::EsMx | ProofLang::Es419 | ProofLang::EsUy)
     }
 
-    /// The primary language subtag (`en`, `pl`, `bg`, `tr`, `ru`, `cs`, `id`, `de`, `es`); empty for [`ProofLang::Other`].
+    /// The primary language subtag (`en`, `pl`, `bg`, `tr`, `ru`, `cs`, `id`, `de`, `es`, `sr`); empty for [`ProofLang::Other`].
     pub fn code(self) -> &'static str {
         match self {
             ProofLang::En | ProofLang::EnGb | ProofLang::EnCa => "en",
@@ -182,6 +190,7 @@ impl ProofLang {
             ProofLang::Id => "id",
             ProofLang::Es | ProofLang::EsMx | ProofLang::Es419 | ProofLang::EsUy => "es",
             ProofLang::De => "de",
+            ProofLang::Sr => "sr",
             ProofLang::Other => "",
         }
     }
@@ -335,6 +344,10 @@ mod tests {
         assert_tags(&["de", "de-DE", "de-CH", "DE_at", "deu", "ger"], ProofLang::De);
         assert_tags(&["ru", "ru-RU", "RU-ru", "ru_RU", "ru_RU.UTF-8", " ru-RU ", "rus"], ProofLang::Ru);
         assert!(!ProofLang::De.is_proofed());
+        assert_tags(&["sr", "sr-RS", "sr-Cyrl-RS", "sr-Latn-RS", "sr_RS", "sh_RS", "sr-ME", "SR", "srp"], ProofLang::Sr);
+        // Serbian has hyphenation only: no spelling or grammar marks.
+        assert!(!ProofLang::Sr.is_proofed());
+        assert_eq!(ProofLang::Sr.code(), "sr");
         assert!(!ProofLang::Bg.is_proofed());
         assert_eq!(ProofLang::Bg.code(), "bg");
         assert!(ProofLang::Pt.is_proofed() && !ProofLang::Other.is_proofed());
@@ -358,7 +371,10 @@ mod tests {
 
     #[test]
     fn tags_reject_unknown_or_partial_language_codes() {
-        assert_tags(&["fr-FR", "dex", "x-none", "ja-JP", "plx", "bgx", "trx", "csx", "idx", "inx", "esx", "spax", "e", "-"], ProofLang::Other);
+        assert_tags(
+            &["fr-FR", "dex", "srx", "shx", "x-none", "ja-JP", "plx", "bgx", "trx", "csx", "idx", "inx", "esx", "spax", "e", "-"],
+            ProofLang::Other,
+        );
     }
 
     /// #3360, #3553: Spanish is proofed, by region: Spain (and no region), Mexico, Uruguay, and

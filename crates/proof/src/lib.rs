@@ -41,10 +41,12 @@
 //!   existing English fallback.
 //! - **German** ([`ProofLang::De`]): hyphenation by `hyph-utf8`'s German patterns (reformed
 //!   spelling, MIT); no spelling or grammar marks yet.
+//! - **Serbian** ([`ProofLang::Sr`]): hyphenation by `hyph-utf8`'s Serbian patterns (Cyrillic,
+//!   LPPL), Latin words through their Cyrillic spelling; no spelling or grammar marks yet.
 //! - **Other languages** ([`ProofLang::Other`]): no spelling or grammar marks, like Word without
 //!   the language's proofing tools.
 //! - **Hyphenation** ([`hyphen`]): dictionary, Liang patterns (English, Polish, Portuguese,
-//!   Italian, German), Bulgarian syllable rules, Russian word-division rules, heuristic.
+//!   Italian, German, Serbian), Bulgarian syllable rules, Russian word-division rules, heuristic.
 //!
 //! [`check_text`] checks a paragraph whose runs are in different languages.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
@@ -787,7 +789,7 @@ pub fn is_correct_in_with(word: &str, lang: ProofLang, opts: &Options) -> bool {
         }
         ProofLang::Cs => accepted_by_options(word, opts) || cs::is_correct_with_options(word, opts),
         ProofLang::Id => accepted_by_options(word, opts) || id::is_correct_with_options(word, opts),
-        ProofLang::Bg | ProofLang::De | ProofLang::Other => true,
+        ProofLang::Bg | ProofLang::De | ProofLang::Sr | ProofLang::Other => true,
     }
 }
 
@@ -806,7 +808,7 @@ pub fn suggest_in(word: &str, max: usize, lang: ProofLang) -> Vec<String> {
         ProofLang::Cs => cs::suggest(word, max),
         ProofLang::Id => id::suggest(word, max),
         ProofLang::Es | ProofLang::EsMx | ProofLang::Es419 | ProofLang::EsUy => es::suggest(word, max, lang),
-        ProofLang::Bg | ProofLang::De | ProofLang::Other => Vec::new(),
+        ProofLang::Bg | ProofLang::De | ProofLang::Sr | ProofLang::Other => Vec::new(),
     }
 }
 
@@ -835,7 +837,7 @@ fn grammar_in(text: &str, lang: ProofLang, capital_first: bool) -> Vec<Issue> {
         ProofLang::Id => id::grammar::check(text),
         // Spanish has no sentence-capital rule either.
         ProofLang::Es | ProofLang::EsMx | ProofLang::Es419 | ProofLang::EsUy => es::grammar::check(text, lang),
-        ProofLang::Bg | ProofLang::De | ProofLang::Other => Vec::new(),
+        ProofLang::Bg | ProofLang::De | ProofLang::Sr | ProofLang::Other => Vec::new(),
     }
 }
 
@@ -1046,7 +1048,7 @@ mod tests {
             let english = matches!(l, ProofLang::En | ProofLang::EnGb | ProofLang::EnCa);
             assert_eq!(dictionary_needed(l, false).is_some(), !english, "{l:?}");
         }
-        for l in [ProofLang::En, ProofLang::Bg, ProofLang::De, ProofLang::Other] {
+        for l in [ProofLang::En, ProofLang::Bg, ProofLang::De, ProofLang::Sr, ProofLang::Other] {
             assert_eq!(dictionary_needed(l, false), None);
         }
         // Installed dictionaries and the built-in English list: no hint.
