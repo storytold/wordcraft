@@ -53,7 +53,7 @@ pub fn set_substitute_provider(provider: SubstituteProvider) -> bool {
 /// then with its charset alias removed ("仿宋_GB2312 CE" → "仿宋_GB2312").
 fn provided(family: &str) -> Option<&'static [&'static str]> {
     let provider = SUBSTITUTE_PROVIDER.get()?;
-    let base = charset_base_family(family);
+    let base = base_family(family);
     provider(family).or_else(|| if base == family { None } else { provider(base) })
 }
 
@@ -407,6 +407,12 @@ const FAMILY_CACHE_MAX: usize = 4096;
 /// Family names longer than this (bytes) are resolved but never remembered.
 const FAMILY_KEY_MAX: usize = 256;
 
+/// The family `family` stands for: Symbol for a printer-driver Symbol alias (same encoding), else
+/// the name without its charset alias. The provider and the built-in lists both look it up.
+fn base_family(family: &str) -> &str {
+    if family.trim().eq_ignore_ascii_case("Symbol (PCL6)") { "Symbol" } else { charset_base_family(family) }
+}
+
 /// Resolve `family` with bold/italic to a face (memoised until user fonts are added or removed,
 /// [`FontDb::generation`]).
 pub fn resolve(family: &str, bold: bool, italic: bool) -> Resolved {
@@ -424,8 +430,7 @@ pub fn resolve(family: &str, bold: bool, italic: bool) -> Resolved {
             return *r;
         }
     }
-    // Printer-driver Symbol aliases use the same encoding as Symbol.
-    let base = if family.trim().eq_ignore_ascii_case("Symbol (PCL6)") { "Symbol" } else { charset_base_family(family) };
+    let base = base_family(family);
     let (fam, substituted) = if db.has_family(family) {
         (family.to_string(), false)
     } else if base != family && db.has_family(base) {
@@ -593,6 +598,8 @@ mod tests {
 
     #[test]
     fn pcl6_symbol_resolves_as_symbol() {
+        // The substitute provider is asked for Symbol too ([`provided`] shares the alias).
+        assert_eq!(base_family("Symbol (PCL6)"), "Symbol");
         let actual = resolve("Symbol (PCL6)", false, false);
         let db = FontDb::global();
         if db.has_family("Symbol (PCL6)") {
