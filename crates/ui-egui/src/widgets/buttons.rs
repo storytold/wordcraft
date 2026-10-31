@@ -60,6 +60,10 @@ pub(crate) fn run_from_ribbon(app: &mut WordApp, id: &str, params: Value) {
     }
 }
 
+pub(crate) fn in_group_popup(ui: &Ui) -> bool {
+    ui.stack().iter().any(|s| s.tags().contains("ribbon_group_popup"))
+}
+
 /// A large ribbon button: 32 px icon over a (possibly two-line) label.
 pub fn big(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, params: Value, menu: bool) -> Response {
     big_button(ui, app, icon, label, id, params, BigState { menu, checked: false })
@@ -98,6 +102,10 @@ struct BigState {
 fn big_button(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, params: Value, state: BigState) -> Response {
     let BigState { menu, checked } = state;
     let label = tl!(label);
+    if crate::widgets::single_line(ui) {
+        let label = label.replace('\n', " ");
+        return small(ui, app, icon, None, &label, ButtonAction::new(if menu { "" } else { id }, params, checked));
+    }
     let t = Tokens::get(ui.ctx());
     let galley_w =
         label.split('\n').map(|l| ui.ctx().fonts_mut(|f| f.layout_no_wrap(l.to_string(), regular(11.5), t.text).size().x)).fold(0.0, f32::max);
@@ -119,6 +127,9 @@ fn big_button(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str,
     command_menu(&resp, app, id);
     if resp.clicked() && on && !menu {
         run_from_ribbon(app, id, params);
+        if in_group_popup(ui) {
+            ui.close();
+        }
     }
     resp
 }
@@ -140,7 +151,7 @@ pub fn small(ui: &mut Ui, app: &mut WordApp, icon: &str, label: Option<&str>, ti
     let ButtonAction { id, params, checked } = action;
     let (label, tip) = (label.map(|l| tl!(l)), tl!(tip));
     // A compact group (#662) shows only the icon; the tooltip keeps the name.
-    let label = label.filter(|_| !crate::ribbon_fit::compact(ui.ctx()));
+    let label = label.filter(|_| !crate::widgets::single_line(ui) && !crate::ribbon_fit::compact(ui.ctx()));
     let t = Tokens::get(ui.ctx());
     let text_w = label.map(|l| ui.ctx().fonts_mut(|f| f.layout_no_wrap(l.to_string(), regular(11.5), t.text).size().x) + 6.0).unwrap_or(0.0);
     let (r, resp) = ui.allocate_exact_size(vec2(24.0 + text_w, 22.0), Sense::click());
@@ -157,6 +168,9 @@ pub fn small(ui: &mut Ui, app: &mut WordApp, icon: &str, label: Option<&str>, ti
     command_menu(&resp, app, id);
     if resp.clicked() && on {
         run_from_ribbon(app, id, params);
+        if in_group_popup(ui) {
+            ui.close();
+        }
     }
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, tip));
     resp
@@ -195,6 +209,9 @@ pub fn split(
     command_menu(&resp, app, id);
     if resp.clicked() && on {
         run_from_ribbon(app, id, params);
+        if in_group_popup(ui) {
+            ui.close();
+        }
     }
     let (arrow_title, _) = tooltip_lines(&crate::i18n::fmt(tl!("{name} options"), &[("name", tip)]), "", "", None);
     show_hint(&aresp, &arrow_title, &[]);
@@ -232,9 +249,20 @@ impl<'a> MenuButtonOptions<'a> {
 }
 
 pub fn menu_button(ui: &mut Ui, app: &mut WordApp, options: MenuButtonOptions<'_>, menu: impl FnOnce(&mut Ui, &mut WordApp)) {
+    menu_button_with_behavior(ui, app, options, egui::PopupCloseBehavior::CloseOnClick, menu);
+}
+
+pub(crate) fn menu_button_with_behavior(
+    ui: &mut Ui,
+    app: &mut WordApp,
+    options: MenuButtonOptions<'_>,
+    close_behavior: egui::PopupCloseBehavior,
+    menu: impl FnOnce(&mut Ui, &mut WordApp),
+) {
     let MenuButtonOptions { icon, label, tip, big_btn, id } = options;
     let (label, tip) = (label.map(|l| tl!(l)), tl!(tip));
-    let label = label.filter(|_| big_btn || !crate::ribbon_fit::compact(ui.ctx()));
+    let big_btn = big_btn && !crate::widgets::single_line(ui);
+    let label = label.filter(|_| !crate::widgets::single_line(ui) && (big_btn || !crate::ribbon_fit::compact(ui.ctx())));
     let t = Tokens::get(ui.ctx());
     // `id` names the command the menu is about (Header for the Header menu…); while it is
     // disabled the button greys out and doesn't open, like the other ribbon buttons. "" = always on.
@@ -277,8 +305,13 @@ pub fn menu_button(ui: &mut Ui, app: &mut WordApp, options: MenuButtonOptions<'_
     if !on {
         return;
     }
-    egui::Popup::menu(&resp).show(|ui| {
+    let content = |ui: &mut Ui| {
         ui.set_min_width(200.0);
         menu(ui, app);
-    });
+    };
+    if close_behavior == egui::PopupCloseBehavior::CloseOnClickOutside {
+        egui::Popup::menu(&resp).close_behavior(close_behavior).show(content);
+    } else {
+        crate::widgets::ribbon_popup(ui, &resp, content);
+    }
 }

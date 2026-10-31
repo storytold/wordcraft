@@ -7187,3 +7187,22 @@ fn focus_hides_the_ribbon_and_escape_brings_it_back() {
     h.step();
     assert!(h.state().session.view.read_mode && shown(&h, "Focus"), "Immersive Reader keeps the status bar");
 }
+
+/// The layout command is saved independently of collapse, validates parameters, and works empty.
+#[test]
+fn single_line_ribbon_is_optional_and_persisted() {
+    let mut a = app();
+    assert!(!a.ui.single_line_ribbon);
+    a.run("ui.collapseRibbon", json!({})).unwrap();
+    assert_eq!(a.run("ui.singleLineRibbon", json!({"value": true})).unwrap()["singleLineRibbon"], true);
+    assert!(a.ui.ribbon_collapsed, "layout never expands the ribbon");
+    let saved = serde_json::to_value(&a.ui).unwrap();
+    let restored: UiState = serde_json::from_value(saved).unwrap();
+    assert!(restored.single_line_ribbon && restored.ribbon_collapsed);
+    for value in [json!(null), json!("true"), json!(1)] {
+        assert!(a.run("ui.singleLineRibbon", json!({"value": value})).is_err());
+        assert!(a.ui.single_line_ribbon);
+    }
+    a.run("file.close", json!({})).unwrap();
+    assert_eq!(a.run("ui.singleLineRibbon", json!({})).unwrap()["singleLineRibbon"], false);
+}
