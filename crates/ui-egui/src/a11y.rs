@@ -51,6 +51,8 @@ struct Key {
     pages: (usize, usize),
     rects: Vec<Rect>,
     sel: (Pos, Pos),
+    /// The document's revision: the tree's positions are offsets in the text it had then.
+    rev: u64,
 }
 
 impl Key {
@@ -63,6 +65,7 @@ impl Key {
             && self.pages == o.pages
             && self.rects == o.rects
             && self.sel == o.sel
+            && self.rev == o.rev
     }
 }
 
@@ -73,6 +76,9 @@ pub struct Tree {
     pub nodes: Vec<(Id, Node)>,
     pub top: Vec<NodeId>,
     pub selection: Option<TextSelection>,
+    /// The document position of each character of the text runs, and of the end of each run:
+    /// where a screen reader's SetTextSelection points.
+    pub positions: HashMap<(NodeId, usize), Pos>,
 }
 
 /// The pages to describe: those meeting `view`, and one either side.
@@ -90,6 +96,28 @@ pub fn expose(app: &mut crate::WordApp, ctx: &egui::Context, doc_id: Id, layout:
         app.canvas.a11y = A11yCache::default();
         return;
     }
+    // A screen reader moves the caret with SetTextSelection (UIA's `ITextRangeProvider::Select`):
+    // NVDA's browse mode does on every move, by arrow or to a heading or link. The positions are
+    // those of the tree it was given, so a request waits while that tree is older than the text
+    // (an edit since) or while the page shows the table preview, which is not the document.
+    let wanted = ctx.input(|i| {
+        i.accesskit_action_requests(doc_id, accesskit::Action::SetTextSelection)
+            .filter_map(|r| match &r.data {
+                Some(accesskit::ActionData::SetTextSelection(s)) => Some(*s),
+                _ => None,
+            })
+            .last()
+    });
+    if let Some(s) = wanted
+        && app.canvas.a11y.key.as_ref().is_some_and(|k| !k.previewing && k.rev == app.session.rev())
+        && crate::canvas::preview_sel(app).is_none()
+    {
+        let at = |p: TextPosition| app.canvas.a11y.tree.positions.get(&(p.node, p.character_index)).cloned();
+        if let (Some(anchor), Some(focus)) = (at(s.anchor), at(s.focus)) {
+            // A position the document no longer has is refused, and the caret stays.
+            let _ = app.run("select.range", serde_json::json!({"anchor": anchor, "focus": focus}));
+        }
+    }
     let pages = page_window(rects, view).unwrap_or((0, 0));
     // The page may show Insert › Table's preview copy while the grid is hovered (#3931): describe
     // the same document and selection the pages and caret are drawn from, not the real document
@@ -103,6 +131,7 @@ pub fn expose(app: &mut crate::WordApp, ctx: &egui::Context, doc_id: Id, layout:
         pages,
         rects: rects.get(pages.0..pages.1).unwrap_or_default().to_vec(),
         sel,
+        rev: app.session.rev(),
     };
     if !app.canvas.a11y.key.as_ref().is_some_and(|k| k.same(&key)) {
         // Build before writing the cache: the preview document borrows `app`, and the tree is
@@ -124,6 +153,7 @@ pub fn expose(app: &mut crate::WordApp, ctx: &egui::Context, doc_id: Id, layout:
     });
     ctx.accesskit_node_builder(doc_id, |n| {
         n.set_label(title);
+        n.add_action(accesskit::Action::SetTextSelection);
         for c in &tree.top {
             n.push_child(*c);
         }
@@ -158,6 +188,49 @@ pub fn build(doc: &Document, layout: &DocLayout, doc_id: Id, rects: &[Rect], pag
             let Placed::Lines { story: StoryRef::Body, path, para, l0, l1, x, y, turn } = it else { continue };
             let place = LinePlace { x: *x, y: *y, turn: *turn, scale, origin: pr.min };
             b.paragraph(path, para, *l0..*l1, &place, &pictures);
+        }
+    }
+    for (path, entries) in &b.offsets {
+        let here = Path(path.clone());
+        let para = doc.para(StoryRef::Body, &here);
+        // The paragraph right after this one in its container, if the next block is one.
+        let beside = Some(here.with_last(here.last().saturating_add(1))).filter(|q| doc.para(StoryRef::Body, q).is_some());
+        // The shaping can split a character the caret can't enter (an emoji in two fonts, a
+        // syllable in two styles): a position inside one goes to its start, an end to its end.
+        let stop = |off: usize, end: bool| {
+            para.map_or(off, |p| {
+                if wordcraft_doc::cluster::is_cluster_boundary(&p.text, off) {
+                    off
+                } else if end {
+                    p.next_boundary(off)
+                } else {
+                    p.prev_boundary(off)
+                }
+            })
+        };
+        for (i, (off, run, idx)) in entries.iter().enumerate() {
+            // Only the run's characters and its end: nothing past what the screen reader was given.
+            let Some(len) = b.index.get(run).and_then(|&n| b.tree.nodes.get(n)).map(|(_, n)| n.character_lengths().len()) else { continue };
+            if *idx > len {
+                continue;
+            }
+            let pos = Pos::new(StoryRef::Body, here.clone(), stop(*off, false));
+            // A later cluster at the same character (after one that shows nothing) wins.
+            b.tree.positions.insert((run.accesskit_id(), *idx), pos.clone());
+            if *idx < len {
+                // The end of a run is where the next cluster starts, or where its last one ends when
+                // the paragraph goes on past the pages described. After the paragraph mark it is the
+                // next paragraph's start, as AccessKit has it, so a selection to there takes the mark;
+                // not past a table's edge, where the next paragraph is somewhere else.
+                let end = match entries.get(i + 1) {
+                    Some(e) => Pos { off: stop(e.0, true), ..pos.clone() },
+                    None => match para.filter(|p| *off >= p.len()).and(beside.clone()) {
+                        Some(q) => Pos::new(StoryRef::Body, q, 0),
+                        None => Pos { off: para.map_or(*off, |p| p.next_boundary(*off)), ..pos.clone() },
+                    },
+                };
+                b.tree.positions.entry((run.accesskit_id(), idx + 1)).or_insert(end);
+            }
         }
     }
     let at = |p: &Pos| if p.story == StoryRef::Body { b.position(&p.path, p.off) } else { None };
@@ -572,6 +645,44 @@ mod tests {
         update.expect("AccessKit output")
     }
 
+    /// One frame in which a screen reader asks the document `doc` to select from `anchor` to
+    /// `focus` (text run, character), as UIA's `ITextRangeProvider::Select` does.
+    fn request_selection(app: &mut crate::WordApp, ctx: &egui::Context, doc: NodeId, anchor: (NodeId, usize), focus: (NodeId, usize)) {
+        request_selection_over(app, ctx, doc, anchor, focus, None);
+    }
+
+    /// [`request_selection`] in a frame where Insert › Table's grid hovers `preview` (rows, columns).
+    fn request_selection_over(
+        app: &mut crate::WordApp,
+        ctx: &egui::Context,
+        doc: NodeId,
+        anchor: (NodeId, usize),
+        focus: (NodeId, usize),
+        preview: Option<(usize, usize)>,
+    ) {
+        let at = |(node, character_index): (NodeId, usize)| TextPosition { node, character_index };
+        let request = accesskit::ActionRequest {
+            action: accesskit::Action::SetTextSelection,
+            target_tree: accesskit::TreeId::ROOT,
+            target_node: doc,
+            data: Some(accesskit::ActionData::SetTextSelection(TextSelection { anchor: at(anchor), focus: at(focus) })),
+        };
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0))),
+            time: Some(ctx.input(|i| i.time) + 0.1),
+            events: vec![egui::Event::AccessKitActionRequest(request)],
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input, |ui| {
+            if preview.is_some() {
+                app.canvas.table_preview = preview;
+            }
+            app.logic(ui.ctx());
+            app.ui(ui);
+        });
+        out.textures_delta.clear();
+    }
+
     /// What AccessKit is told after a few frames in which Insert › Table's grid hovers `rows` ×
     /// `cols`: the picker sets the request from the popup after the ribbon draws, and the canvas
     /// lays out and describes the page from that preview.
@@ -637,6 +748,158 @@ mod tests {
     /// #488: with AccessKit on, the canvas describes the document: a heading with its level, a
     /// paragraph, a list item in a list, a table's rows and cells and a link, with the text in
     /// text runs and the caret at its paragraph and character.
+    /// A screen reader moves the caret and the selection with SetTextSelection, as NVDA's browse
+    /// mode does on every move; it was ignored, so focus mode took over from the old caret. A
+    /// position it wasn't given leaves the selection alone.
+    #[test]
+    fn a_screen_reader_moves_the_caret() {
+        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        for (cmd, p) in [
+            ("text.insert", json!({"text": "Read this "})),
+            ("insert.link", json!({"url": "https://example.com", "text": "link"})),
+            ("text.insert", json!({"text": ", then stop."})),
+            ("text.newParagraph", json!({})),
+            ("text.insert", json!({"text": "Second"})),
+        ] {
+            app.run(cmd, p).unwrap_or_else(|e| panic!("{cmd}: {e}"));
+        }
+        let ctx = egui::Context::default();
+        let update = described(&mut app, &ctx);
+        let doc = update.nodes.iter().find(|(_, n)| n.role() == Role::Document).map(|(id, _)| *id).expect("a document node");
+        assert!(update.nodes.iter().any(|(id, n)| *id == doc && n.supports_action(accesskit::Action::SetTextSelection)));
+        let run = |text: &str| {
+            update
+                .nodes
+                .iter()
+                .find(|(_, n)| n.role() == Role::TextRun && n.value() == Some(text))
+                .map(|(id, _)| *id)
+                .unwrap_or_else(|| panic!("no run {text:?}"))
+        };
+        let (read, link, second) = (run("Read this "), run("link"), run("Second\n"));
+        let sel = |app: &crate::WordApp| (app.session.sel.anchor.clone(), app.session.sel.focus.clone());
+
+        // Into the link, after "li".
+        request_selection(&mut app, &ctx, doc, (link, 2), (link, 2));
+        assert_eq!(sel(&app), (Pos::body(0, 12), Pos::body(0, 12)));
+        // From "this" to the second paragraph's "Sec", across the link.
+        request_selection(&mut app, &ctx, doc, (read, 5), (second, 3));
+        assert_eq!(sel(&app), (Pos::body(0, 5), Pos::body(1, 3)));
+        // The first paragraph, to the end of its last run: past its mark, at the next one's start.
+        request_selection(&mut app, &ctx, doc, (read, 0), (run(", then stop.\n"), 13));
+        assert_eq!(sel(&app), (Pos::body(0, 0), Pos::body(1, 0)));
+        // The last paragraph's end stays its end.
+        request_selection(&mut app, &ctx, doc, (second, 7), (second, 7));
+        assert_eq!(sel(&app), (Pos::body(1, 6), Pos::body(1, 6)));
+        // The end of a run is where the next one starts.
+        request_selection(&mut app, &ctx, doc, (read, 10), (read, 10));
+        assert_eq!(sel(&app), (Pos::body(0, 10), Pos::body(0, 10)));
+        // A node it wasn't given, or a character past a run's end.
+        request_selection(&mut app, &ctx, doc, (NodeId(u64::MAX), 0), (read, 1));
+        request_selection(&mut app, &ctx, doc, (read, 11), (read, 11));
+        assert_eq!(sel(&app), (Pos::body(0, 10), Pos::body(0, 10)));
+    }
+
+    /// #4832 review: a request is refused when the tree it points into is older than the text
+    /// (an edit came after it), while the page shows the table preview (from its first frame on),
+    /// and past the end of a run that a mark not shown follows.
+    #[test]
+    fn a_screen_reader_request_waits_for_a_tree_of_the_current_text() {
+        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        for (cmd, p) in [
+            ("text.insert", json!({"text": "Read this"})),
+            ("text.newParagraph", json!({})),
+            ("text.insert", json!({"text": "A"})),
+            ("insert.bookmark", json!({"name": "After"})),
+            ("caret.end", json!({})),
+            ("insert.link", json!({"url": "https://example.com", "text": "x"})),
+        ] {
+            app.run(cmd, p).unwrap_or_else(|e| panic!("{cmd}: {e}"));
+        }
+        let ctx = egui::Context::default();
+        let update = described(&mut app, &ctx);
+        let doc = update.nodes.iter().find(|(_, n)| n.role() == Role::Document).map(|(id, _)| *id).expect("a document node");
+        let run = |text: &str| {
+            update
+                .nodes
+                .iter()
+                .find(|(_, n)| n.role() == Role::TextRun && n.value() == Some(text))
+                .map(|(id, _)| *id)
+                .unwrap_or_else(|| panic!("no run {text:?}"))
+        };
+        let (read, a) = (run("Read this\n"), run("A"));
+        let sel = |app: &crate::WordApp| (app.session.sel.anchor.clone(), app.session.sel.focus.clone());
+
+        // Past the end of "A", which the bookmark and the link follow.
+        let before = sel(&app);
+        request_selection(&mut app, &ctx, doc, (a, 2), (a, 2));
+        assert_eq!(sel(&app), before);
+        // Typed text after the tree was made: "this" is no longer at 5.
+        app.run("caret.docStart", json!({})).unwrap();
+        app.run("text.insert", json!({"text": "Now "})).unwrap();
+        request_selection(&mut app, &ctx, doc, (read, 5), (read, 5));
+        assert_eq!(sel(&app), (Pos::body(0, 4), Pos::body(0, 4)), "the request waits");
+        // The tree of the current text takes it.
+        let read = described(&mut app, &ctx).nodes.iter().find(|(_, n)| n.value() == Some("Now Read this\n")).map(|(id, _)| *id).expect("the run");
+        request_selection(&mut app, &ctx, doc, (read, 9), (read, 9));
+        assert_eq!(sel(&app), (Pos::body(0, 9), Pos::body(0, 9)));
+        // The first frame of the table preview already shows it, not the document.
+        request_selection_over(&mut app, &ctx, doc, (read, 1), (read, 1), Some((2, 2)));
+        assert_eq!(sel(&app), (Pos::body(0, 9), Pos::body(0, 9)));
+    }
+
+    /// #4832 review: a syllable in two styles is shaped in two pieces, so a screen reader is given
+    /// a character inside it; the caret, which can't stop there, goes to the syllable's start.
+    #[test]
+    fn a_screen_reader_never_puts_the_caret_inside_a_character() {
+        // "Hi क्ष", escaped: the interface's own text is checked for glyphs it lacks.
+        let mut doc = wordcraft_doc::Document::from_text("Hi \u{915}\u{94d}\u{937}");
+        let p = doc.para_mut(StoryRef::Body, &Path::top(0)).expect("a paragraph");
+        // ष, which the virama before it stacks onto क, in bold.
+        p.format(9, 12, &|c| c.bold = Some(true)).expect("bold");
+        let text = p.text.clone();
+        assert!(!wordcraft_doc::cluster::is_cluster_boundary(&text, 9), "no caret stop inside the syllable");
+        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(doc), Default::default());
+        let ctx = egui::Context::default();
+        let update = described(&mut app, &ctx);
+        let positions = &app.canvas.a11y.tree.positions;
+        assert!(positions.values().all(|q| wordcraft_doc::cluster::is_cluster_boundary(&text, q.off)), "{positions:?}");
+        let (doc_node, (run, n)) = (
+            update.nodes.iter().find(|(_, n)| n.role() == Role::Document).map(|(id, _)| *id).expect("a document node"),
+            update
+                .nodes
+                .iter()
+                .find(|(_, n)| n.role() == Role::TextRun && n.value().is_some_and(|v| v.starts_with("Hi")))
+                .map(|(id, n)| (*id, n))
+                .expect("the paragraph's run"),
+        );
+        // H, i, space, then the syllable in at least two pieces, and the paragraph mark.
+        assert!(n.character_lengths().len() >= 6, "the shaping splits the syllable: {:?}", n.character_lengths());
+        request_selection(&mut app, &ctx, doc_node, (run, 4), (run, 4));
+        assert_eq!(app.session.sel.focus, Pos::body(0, 3));
+    }
+
+    /// #4832 review: the end of every run is after its last character, also for the last run
+    /// described of a paragraph that goes on past the pages described.
+    #[test]
+    fn the_end_of_each_run_is_after_its_last_character() {
+        let doc = wordcraft_doc::Document::from_text(&"word ".repeat(4000));
+        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(doc), Default::default());
+        let update = described(&mut app, &egui::Context::default());
+        let positions = &app.canvas.a11y.tree.positions;
+        let mut checked = 0;
+        for (id, n) in update.nodes.iter().filter(|(_, n)| n.role() == Role::TextRun) {
+            let len = n.character_lengths().len();
+            let (Some(last), Some(end)) = (positions.get(&(*id, len.wrapping_sub(1))), positions.get(&(*id, len))) else { continue };
+            assert!(end.off > last.off, "{:?}: the end {} is not after the last character {}", n.value(), end.off, last.off);
+            checked += 1;
+        }
+        assert!(checked > 10, "{checked} runs");
+        assert!(
+            app.session.doc.para(StoryRef::Body, &Path::top(0)).is_some_and(|p| positions.values().all(|q| q.off < p.len())),
+            "the paragraph goes on"
+        );
+    }
+
     #[test]
     fn the_canvas_describes_the_document_to_screen_readers() {
         let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
