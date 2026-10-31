@@ -1,5 +1,7 @@
 use super::*;
 
+mod note_conversion;
+
 #[test]
 fn new_document_is_valid() {
     let d = Document::new();
@@ -650,4 +652,67 @@ fn control_markers_kept_are_sorted() {
         assert!(!kept.is_empty(), "{a:?}..{b:?}");
         assert!(kept.windows(2).all(|p| p[0] < p[1]), "sorted, no repeats: {kept:?}");
     }
+}
+
+#[test]
+fn lone_table_open_markers_linear_time() {
+    let mut d = Document::new();
+    let mut t = Table::new(1, 1, 100.0);
+    const COUNT: usize = 2_000;
+    t.controls.open = (0..COUNT).map(|i| ContentControl { tag: format!("ctrl_{i}"), ..Default::default() }).collect();
+    d.body.insert(0, Arc::new(Block::Table(t)));
+
+    let mut paras = Vec::new();
+    let mut tables = Vec::new();
+    let timer = std::time::Instant::now();
+    crate::control::orphans(&d.body, &mut Vec::new(), 0, &mut paras, &mut tables);
+
+    assert_eq!(paras.len(), 0);
+    assert_eq!(tables.len(), COUNT);
+    for (i, (path, nth, is_open)) in tables.iter().enumerate() {
+        assert_eq!(*path, Path::top(0));
+        assert_eq!(*nth, i);
+        assert!(*is_open);
+    }
+
+    assert!(d.has_unbalanced_controls());
+    let removed = d.balance_controls();
+    assert_eq!(removed, COUNT);
+    assert!(!d.has_unbalanced_controls());
+    assert!(timer.elapsed().as_secs_f32() < 10.0, "{:?}", timer.elapsed());
+    let Block::Table(tbl) = &*d.body[0] else { panic!("expected table") };
+    assert!(tbl.controls.open.is_empty());
+}
+
+#[test]
+fn lone_table_open_markers_mixed_tables_and_paired() {
+    let mut d = Document::new();
+    let mut t0 = Table::new(1, 1, 100.0);
+    t0.controls.open = (0..3).map(|i| ContentControl { tag: format!("t0_{i}"), ..Default::default() }).collect();
+    t0.controls.close = 1;
+
+    let mut t1 = Table::new(1, 1, 100.0);
+    t1.controls.open = (0..2).map(|i| ContentControl { tag: format!("t1_{i}"), ..Default::default() }).collect();
+
+    d.body = vec![Arc::new(Block::Table(t0)), Arc::new(Block::Table(t1))];
+
+    let mut paras = Vec::new();
+    let mut tables = Vec::new();
+    crate::control::orphans(&d.body, &mut Vec::new(), 0, &mut paras, &mut tables);
+
+    assert_eq!(paras.len(), 0);
+    assert_eq!(tables, vec![(Path::top(0), 0, true), (Path::top(0), 1, true), (Path::top(1), 0, true), (Path::top(1), 1, true),]);
+
+    let removed = d.balance_controls();
+    assert_eq!(removed, 4);
+    assert!(!d.has_unbalanced_controls());
+
+    let Block::Table(res0) = &*d.body[0] else { panic!("expected table") };
+    assert_eq!(res0.controls.open.len(), 1);
+    assert_eq!(res0.controls.open[0].tag, "t0_2");
+    assert_eq!(res0.controls.close, 1);
+
+    let Block::Table(res1) = &*d.body[1] else { panic!("expected table") };
+    assert!(res1.controls.open.is_empty());
+    assert_eq!(res1.controls.close, 0);
 }

@@ -403,3 +403,91 @@ fn a_part_reached_under_many_spellings_is_kept_and_written_once() {
     let written: usize = files.values().map(Vec::len).sum();
     assert!(written < 4 * 64 * 1024, "{written} bytes written");
 }
+
+#[test]
+fn embedded_fonts_load_and_save_when_the_package_spells_the_font_table_in_capitals() {
+    // Part names are case-insensitive: a package storing `WORD/FONTTABLE.XML` and its fonts in
+    // capitals, related in lower case, loaded no fonts, and a save dropped the table and every
+    // font (review of #3872).
+    let table = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?><w:fonts xmlns:w="{W}" xmlns:r="{R_NS}"><w:font w:name="Quill Sans"><w:embedRegular r:id="rId1"/></w:font></w:fonts>"#
+    );
+    let table_rels = rels(&[("rId1", &format!("{REL}/font"), "fonts/font1.odttf")]);
+    let font_bytes = vec![9u8; 2048];
+    let ct = CT.replace(
+        "<Default Extension=\"jpeg\"",
+        "<Default Extension=\"odttf\" ContentType=\"application/vnd.openxmlformats-officedocument.obfuscatedFont\"/><Default Extension=\"jpeg\"",
+    );
+    let mut entries: Vec<(&str, Vec<u8>)> = vec![
+        ("_rels/.rels", rels(&[("rIdMain", &format!("{REL}/officeDocument"), "word/document.xml")])),
+        ("[Content_Types].xml", ct.into_bytes()),
+        (
+            "word/document.xml",
+            format!(r#"<w:document xmlns:w="{W}"><w:body><w:p><w:r><w:t>Body</w:t></w:r></w:p></w:body></w:document>"#).into_bytes(),
+        ),
+        ("word/_rels/document.xml.rels", rels(&[("rId1", &format!("{REL}/fontTable"), "fontTable.xml")])),
+    ];
+    entries.push(("WORD/FONTTABLE.XML", table.into_bytes()));
+    entries.push(("WORD/_RELS/FONTTABLE.XML.RELS", table_rels));
+    entries.push(("WORD/FONTS/FONT1.ODTTF", font_bytes.clone()));
+    let doc = wordcraft_docx::read(&zip(&entries)).unwrap();
+    let fonts = wordcraft_docx::embedded_fonts(&doc);
+    assert_eq!(fonts.len(), 1, "the font loads");
+    assert_eq!(fonts[0].data, font_bytes);
+    // And through a save and a reopen.
+    let saved = wordcraft_docx::write(&doc).unwrap();
+    let files = unzip(&saved);
+    assert!(files.keys().any(|k| k.to_ascii_lowercase().ends_with("fonttable.xml")), "{:?}", files.keys());
+    let again = wordcraft_docx::read(&saved).unwrap();
+    let fonts = wordcraft_docx::embedded_fonts(&again);
+    assert_eq!(fonts.len(), 1, "the font survives a save: {:?}", files.keys());
+    assert_eq!(fonts[0].data, font_bytes);
+}
+
+#[test]
+fn comment_ids_keep_sparse_threads_reservations_and_missing_parts() {
+    use wordcraft_doc::{Comment, Document, Paragraph, Part, PartKind, para_block};
+    let mut doc = Document::from_text("Original thread fixture.");
+    // New IDs must skip the exact durable ID reserved by a later comment, even one whose
+    // missing part keeps it out of commentsIds.xml. Duplicate imported IDs are reassigned.
+    let rows = [
+        (3, None, Some(90), false, true),
+        (11, Some("5a1b2c3d"), Some(90), true, true),
+        (25, Some("5A1B2C3D"), Some(999), false, true),
+        (90, Some("10000001"), None, true, true),
+        (999, Some("10000002"), None, false, false),
+        (u32::MAX, Some("not-hex"), Some(3), false, true),
+    ];
+    for (id, durable, parent, resolved, has_part) in rows {
+        let part = id;
+        if has_part {
+            doc.parts.insert(
+                part,
+                Part {
+                    kind: PartKind::Comment,
+                    blocks: vec![para_block(Paragraph::with_text(&format!("Comment {id} β"), Default::default()))],
+                    ..Default::default()
+                },
+            );
+        }
+        doc.comments.insert(id, Comment { part, parent, resolved, durable_id: durable.map(str::to_string), ..Default::default() });
+    }
+    let files = save(&doc);
+    let (ids, _) = written_ids(&files);
+    assert_eq!(ids.iter().map(|(_, id)| id.as_str()).collect::<Vec<_>>(), ["10000003", "5A1B2C3D", "10000004", "10000001", "10000005"]);
+    let ex = text(&files, "word/commentsExtended.xml");
+    assert_eq!(ex.matches("<w15:commentEx ").count(), 5);
+    assert!(ex.contains(r#"w15:paraId="10000001" w15:paraIdParent="10000004" w15:done="0""#));
+    assert!(ex.contains(r#"w15:paraId="10000002" w15:paraIdParent="10000004" w15:done="1""#));
+    assert!(ex.contains(r#"w15:paraId="10000003" w15:done="0""#), "a missing parent part has no paragraph ID");
+    assert!(ex.contains(r#"w15:paraId="10000006" w15:paraIdParent="10000001" w15:done="0""#));
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).unwrap();
+    // Reader IDs need not match the sparse input IDs. Check the thread by authored text.
+    let comment = |text: &str| back.comments.iter().find(|(_, c)| back.plain_text(wordcraft_doc::StoryRef::Part(c.part)).trim() == text).unwrap();
+    let (root, _) = comment("Comment 90 β");
+    assert_eq!(comment("Comment 3 β").1.parent, Some(*root));
+    assert_eq!(comment("Comment 11 β").1.parent, Some(*root));
+    assert!(comment("Comment 11 β").1.resolved);
+    let (first, _) = comment("Comment 3 β");
+    assert_eq!(comment(&format!("Comment {} β", u32::MAX)).1.parent, Some(*first));
+}

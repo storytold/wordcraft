@@ -1002,3 +1002,12 @@ fn dropped_names_and_links_are_logged_once_per_document() {
     let (_, warned) = crate::test_log::warnings(|| crate::latex::import(tex.as_bytes()));
     assert_eq!(count(&warned, "links longer"), 1, "{warned:?}");
 }
+
+#[test]
+fn html_title_outside_head_is_metadata_not_body() {
+    for html in ["<title>T</title><p>b</p>", "<html><title>T</title><body>b</body></html>"] {
+        let d = crate::html::import(html);
+        assert_eq!(para_texts(&d), vec!["b".to_string()], "{html}");
+        assert_eq!(d.core.title, "T", "{html}");
+    }
+}

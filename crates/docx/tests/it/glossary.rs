@@ -509,3 +509,53 @@ fn hostile_glossaries_never_panic() {
     let doc = read(two);
     assert_eq!(doc.glossary.len(), 1);
 }
+
+#[test]
+fn a_private_save_escapes_the_attribute_values_it_rewrites() {
+    // A value read from single quotes holds a bare `"`; the privacy rewrite wrote it back inside
+    // double quotes unescaped, which is not XML (review of #3872).
+    let quoted = r#"<w:docPart><w:docPartPr><w:name w:val='Say "hi" &amp; &lt;go&gt;'/><w:category><w:name w:val="General"/><w:gallery w:val="docParts"/></w:category></w:docPartPr><w:docPartBody><w:p><w:ins w:id="1" w:author="Quill Ramsey" w:date="2026-03-04T05:06:07Z"><w:r><w:t>Added clause</w:t></w:r></w:ins></w:p></w:docPartBody></w:docPart>"#;
+    let bytes = package(
+        &[("rId7", GLOSSARY_REL, "glossary/document.xml")],
+        &[
+            ("[Content_Types].xml", content_types(&[("/word/glossary/document.xml", GLOSSARY_CT)])),
+            ("word/glossary/document.xml", glossary_xml(quoted)),
+        ],
+    );
+    let doc = wordcraft_docx::read(&bytes).unwrap();
+    let name = doc.glossary.first().map(|e| e.name.clone()).expect("an entry");
+    assert_eq!(name, r#"Say "hi" & <go>"#);
+    let mut private = doc.clone();
+    private.settings.remove_personal_info = true;
+    let saved = wordcraft_docx::write(&private).unwrap();
+    let files = unzip(&saved);
+    let g = text(&files, &glossary_target(&files).expect("a glossary"));
+    assert!(!g.contains("Quill Ramsey"), "{g}");
+    let again = wordcraft_docx::read(&saved).unwrap();
+    assert_eq!(again.glossary.first().map(|e| e.name.as_str()), Some(name.as_str()), "{g}");
+}
+
+#[test]
+fn a_private_save_keeps_character_references_in_attribute_values_as_written() {
+    // `&#10;` and `&#9;` are a newline and a tab only as references; written as the raw
+    // characters they read back as spaces (review of #3872).
+    let entry = r#"<w:docPart><w:docPartPr><w:name w:val="Clause"/><w:category><w:name w:val="General"/><w:gallery w:val="docParts"/></w:category><w:description w:val="line1&#10;line2&#9;end"/></w:docPartPr><w:docPartBody><w:p><w:ins w:id="1" w:author="Quill Ramsey" w:date="2026-03-04T05:06:07Z"><w:r><w:t>Added clause</w:t></w:r></w:ins></w:p></w:docPartBody></w:docPart>"#;
+    let bytes = package(
+        &[("rId7", GLOSSARY_REL, "glossary/document.xml")],
+        &[
+            ("[Content_Types].xml", content_types(&[("/word/glossary/document.xml", GLOSSARY_CT)])),
+            ("word/glossary/document.xml", glossary_xml(entry)),
+        ],
+    );
+    let doc = wordcraft_docx::read(&bytes).unwrap();
+    let before = doc.glossary.first().map(|e| e.description.clone()).expect("an entry");
+    assert_eq!(before, "line1\nline2\tend");
+    let mut private = doc.clone();
+    private.settings.remove_personal_info = true;
+    let saved = wordcraft_docx::write(&private).unwrap();
+    let files = unzip(&saved);
+    let g = text(&files, &glossary_target(&files).expect("a glossary"));
+    assert!(!g.contains("Quill Ramsey") && g.contains(r#"w:val="line1&#10;line2&#9;end""#), "{g}");
+    let again = wordcraft_docx::read(&saved).unwrap();
+    assert_eq!(again.glossary.first().map(|e| e.description.as_str()), Some(before.as_str()));
+}

@@ -180,97 +180,13 @@ pub fn suggest_in(d: &AffixDict, word: &str, max: usize) -> Vec<String> {
     let input = word.to_lowercase();
     let chars: Vec<char> = input.chars().collect();
     let mut col = Collector { d, input: input.clone(), tested: HashSet::new(), found: HashMap::new(), seq: 0 };
-    // 1. Letter case.
-    if d.contains(&input) && word != input {
-        col.keep(input.clone(), COST_CASE);
-    } else if d.contains(&capitalize(&input)) && word != capitalize(&input) {
-        col.keep(capitalize(&input), COST_CASE);
-    }
-    // 2. Accents and other MAP slips.
     let map = d.map();
-    let alts: Vec<Vec<char>> = chars.iter().map(|&c| alternatives(c, map)).collect();
-    let mut variants = Vec::new();
-    map_variants(&chars, &alts, 0, 0, 0, &mut Vec::with_capacity(n), &mut variants);
-    variants.sort_by_key(|v| v.1);
-    for (v, cost) in &variants {
-        col.offer(v, *cost);
-    }
-    // 3. Common confusions.
-    for (from, to) in d.rep() {
-        if from.is_empty() {
-            continue;
-        }
-        for (i, _) in input.match_indices(from.as_str()) {
-            if let (Some(a), Some(b)) = (input.get(..i), input.get(i + from.len()..)) {
-                col.offer(&format!("{a}{to}{b}"), COST_REP);
-            }
-        }
-    }
-    // 4. A missing space; both halves must be dictionary words.
-    for (i, _) in input.char_indices().skip(1) {
-        let (Some(a), Some(b)) = (input.get(..i), input.get(i..)) else { continue };
-        let long = |part: &str| part.chars().count() >= 3;
-        let cost = if long(a) && long(b) { COST_SPLIT } else { COST_SPLIT_RARE };
-        col.offer(&format!("{a} {b}"), cost);
-    }
-    // 5. Keyboard neighbours from the installed dictionary's KEY rows.
-    for row in d.key().split('|').take(32) {
-        let keys: Vec<char> = row.chars().take(128).collect();
-        for pair in keys.windows(2) {
-            let [a, b] = pair else { continue };
-            for (i, &c) in chars.iter().enumerate() {
-                let replacement = if c == *a {
-                    Some(*b)
-                } else if c == *b {
-                    Some(*a)
-                } else {
-                    None
-                };
-                if let Some(replacement) = replacement {
-                    let mut v = chars.clone();
-                    if let Some(x) = v.get_mut(i) {
-                        *x = replacement;
-                    }
-                    col.offer(&v.iter().collect::<String>(), COST_KEY);
-                }
-            }
-        }
-    }
-    // One-letter edits use only the runtime TRY alphabet, with bounded work.
-    let mut letters: Vec<char> = d.try_chars().chars().filter(|c| c.is_lowercase()).take(128).collect();
-    letters.sort_unstable();
-    letters.dedup();
-    let s = |v: &[char]| v.iter().collect::<String>();
-    for i in 0..n.saturating_sub(1) {
-        if chars.get(i) != chars.get(i + 1) {
-            let mut v = chars.clone();
-            v.swap(i, i + 1);
-            col.offer(&s(&v), COST_SWAP);
-        }
-    }
-    for i in 0..n {
-        let mut v = chars.clone();
-        v.remove(i);
-        col.offer(&s(&v), COST_DROP_OR_ADD);
-    }
-    for i in 0..=n {
-        for &c in &letters {
-            let mut v = chars.clone();
-            v.insert(i, c);
-            col.offer(&s(&v), COST_DROP_OR_ADD);
-        }
-    }
-    for i in 0..n {
-        for &c in &letters {
-            if chars.get(i) != Some(&c) {
-                let mut v = chars.clone();
-                if let Some(x) = v.get_mut(i) {
-                    *x = c;
-                }
-                col.offer(&s(&v), COST_MISTYPE);
-            }
-        }
-    }
+    add_case_suggestions(&mut col, &input, word);
+    add_map_suggestions(&mut col, &chars, map);
+    add_replacement_suggestions(&mut col, &input, d.rep());
+    add_split_suggestions(&mut col, &input);
+    add_keyboard_suggestions(&mut col, &chars, d.key());
+    add_typing_suggestions(&mut col, &chars, d.try_chars());
     // 6. Further off: scan the stems that start like the word.
     if col.count_within(COST_MISTYPE) < max {
         scan(&mut col, &chars);
@@ -295,6 +211,126 @@ pub fn suggest_in(d: &AffixDict, word: &str, max: usize) -> Vec<String> {
         }
     }
     out
+}
+
+fn add_case_suggestions(col: &mut Collector, input: &str, word: &str) {
+    if col.d.contains(input) && word != input {
+        col.keep(input.to_string(), COST_CASE);
+    } else {
+        let capitalized = capitalize(input);
+        if col.d.contains(&capitalized) && word != capitalized {
+            col.keep(capitalized, COST_CASE);
+        }
+    }
+}
+
+fn add_map_suggestions(col: &mut Collector, chars: &[char], map: &[Vec<char>]) {
+    let alternatives: Vec<Vec<char>> = chars.iter().map(|&c| alternatives(c, map)).collect();
+    let mut variants = Vec::new();
+    map_variants(chars, &alternatives, 0, 0, 0, &mut Vec::with_capacity(chars.len()), &mut variants);
+    variants.sort_by_key(|variant| variant.1);
+    for (variant, cost) in variants {
+        col.offer(&variant, cost);
+    }
+}
+
+fn add_replacement_suggestions(col: &mut Collector, input: &str, replacements: &[(String, String)]) {
+    for (from, to) in replacements {
+        if from.is_empty() {
+            continue;
+        }
+        for (index, _) in input.match_indices(from) {
+            if let (Some(prefix), Some(suffix)) = (input.get(..index), input.get(index + from.len()..)) {
+                col.offer(&format!("{prefix}{to}{suffix}"), COST_REP);
+            }
+        }
+    }
+}
+
+fn add_split_suggestions(col: &mut Collector, input: &str) {
+    for (index, _) in input.char_indices().skip(1) {
+        let (Some(first), Some(second)) = (input.get(..index), input.get(index..)) else { continue };
+        let cost = if first.chars().count() >= 3 && second.chars().count() >= 3 { COST_SPLIT } else { COST_SPLIT_RARE };
+        col.offer(&format!("{first} {second}"), cost);
+    }
+}
+
+fn add_keyboard_suggestions(col: &mut Collector, chars: &[char], key_rows: &str) {
+    for row in key_rows.split('|').take(32) {
+        let keys: Vec<char> = row.chars().take(128).collect();
+        for pair in keys.windows(2) {
+            let [first, second] = pair else { continue };
+            for (index, &character) in chars.iter().enumerate() {
+                let replacement = if character == *first {
+                    Some(*second)
+                } else if character == *second {
+                    Some(*first)
+                } else {
+                    None
+                };
+                if let Some(replacement) = replacement {
+                    let mut candidate = chars.to_vec();
+                    if let Some(character) = candidate.get_mut(index) {
+                        *character = replacement;
+                    }
+                    col.offer(&candidate.iter().collect::<String>(), COST_KEY);
+                }
+            }
+        }
+    }
+}
+
+fn add_typing_suggestions(col: &mut Collector, chars: &[char], try_chars: &str) {
+    let mut letters: Vec<char> = try_chars.chars().filter(|character| character.is_lowercase()).take(128).collect();
+    letters.sort_unstable();
+    letters.dedup();
+    let word = |candidate: &[char]| candidate.iter().collect::<String>();
+    add_swap_suggestions(col, chars, &word);
+    add_drop_suggestions(col, chars, &word);
+    add_insert_suggestions(col, chars, &letters, &word);
+    add_mistype_suggestions(col, chars, &letters, &word);
+}
+
+fn add_swap_suggestions(col: &mut Collector, chars: &[char], word: &impl Fn(&[char]) -> String) {
+    for index in 0..chars.len().saturating_sub(1) {
+        if chars.get(index) != chars.get(index + 1) {
+            let mut candidate = chars.to_vec();
+            candidate.swap(index, index + 1);
+            col.offer(&word(&candidate), COST_SWAP);
+        }
+    }
+}
+
+fn add_drop_suggestions(col: &mut Collector, chars: &[char], word: &impl Fn(&[char]) -> String) {
+    for index in 0..chars.len() {
+        let mut candidate = chars.to_vec();
+        candidate.remove(index);
+        col.offer(&word(&candidate), COST_DROP_OR_ADD);
+    }
+}
+
+fn add_insert_suggestions(col: &mut Collector, chars: &[char], letters: &[char], word: &impl Fn(&[char]) -> String) {
+    for index in 0..=chars.len() {
+        for &letter in letters {
+            let mut candidate = chars.to_vec();
+            candidate.insert(index, letter);
+            col.offer(&word(&candidate), COST_DROP_OR_ADD);
+        }
+    }
+}
+
+fn add_mistype_suggestions(col: &mut Collector, chars: &[char], letters: &[char], word: &impl Fn(&[char]) -> String) {
+    for index in 0..chars.len() {
+        for &letter in letters {
+            if chars.get(index) != Some(&letter) {
+                let mut candidate = chars.to_vec();
+                if let Some(character) = candidate.get_mut(index) {
+                    *character = letter;
+                }
+                col.offer(&word(&candidate), COST_MISTYPE);
+            }
+        }
+    }
 }
 
 /// Round 6: rank the stems starting with the word's first letter (or a MAP relative of it, either

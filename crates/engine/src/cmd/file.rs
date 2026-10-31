@@ -147,7 +147,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(r#"{"id"?: n (an open document, see view.switchWindows; default the active one), "force"?: bool (discard unsaved changes; without it a document with unsaved changes is an error and stays open)} → {"closed": id, "active": id, "documents": [{"id", "title", "path", "dirty", "active"}]}; closing the last document leaves a new blank one"#)
             .pure(),
         CommandSpec::new("file.properties", "Properties", "File › Info", properties)
-            .params(r#"{"title"?, "subject"?, "author"?, "keywords"?, "comments"?, "category"?, "custom"?: {name: string | null (removes)}}"#),
+            .params(r#"{"title"?, "subject"?, "author"?, "keywords"?, "comments"?, "category"?, "custom"?: {name: string | {"value": string, "linkTarget"?: string | null} | null (removes)}}; text values and bookmark targets are at most 1 MiB; a string keeps an existing target, an object replaces it (omitted/null target unlinks)"#),
         CommandSpec::new("file.info", "Info", "File", info).pure(),
         CommandSpec::new("file.setAuthor", "User Name", "File › Options › General", set_author)
             .params(r#"{"name": string (author of new tracked changes and comments)}"#)
@@ -445,6 +445,15 @@ fn export_png(s: &mut Session, v: &Value) -> CmdResult {
     Ok(json!({"path": path, "width": img.width, "height": img.height, "bytes": png.len()}))
 }
 
+/// Text and its bookmark association cross the dialog/command boundary together on rename.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LinkedCustomText<'a> {
+    value: &'a str,
+    #[serde(borrow)]
+    link_target: Option<&'a str>,
+}
+
 fn properties(s: &mut Session, v: &Value) -> CmdResult {
     let c = &mut s.doc.core;
     let set = |dst: &mut String, k: &str| {
@@ -460,7 +469,7 @@ fn properties(s: &mut Session, v: &Value) -> CmdResult {
     set(&mut c.category, "category");
     if let Some(custom) = v.get("custom") {
         let Some(m) = custom.as_object() else {
-            return Err(CmdError::Params("`custom` must be an object of name → string or null".into()));
+            return Err(CmdError::Params("`custom` must be an object of name → text, linked text value, or null".into()));
         };
         // Removals first: a case-only rename sends the old spelling as null and the new one
         // with its value, and `set_custom_prop` matches names case-insensitively, so setting
@@ -471,17 +480,32 @@ fn properties(s: &mut Session, v: &Value) -> CmdResult {
             }
         }
         for (name, val) in m {
-            match val {
-                // Removals took the name as stored above: a file opened from an older Word may
-                // hold one longer than today's limit, and it must still be deletable (#2982).
-                Value::Null => {}
-                Value::String(x) if x.len() <= MAX_CUSTOM_VALUE => {
-                    if name.trim().is_empty() || name.chars().count() > MAX_CUSTOM_NAME {
-                        return Err(CmdError::Params(format!("custom property names are 1–{MAX_CUSTOM_NAME} characters")));
-                    }
-                    s.doc.set_custom_prop(name, x);
+            let bad_value =
+                || CmdError::Params(format!("custom property `{name}` must be text (≤ {MAX_CUSTOM_VALUE} bytes), a linked text value, or null"));
+            let (value, target) = match val {
+                // Removal also accepts names longer than today's limit (#2982).
+                Value::Null => continue,
+                Value::String(value) => (value.as_str(), None),
+                Value::Object(_) => {
+                    let linked: LinkedCustomText<'_> = serde::Deserialize::deserialize(val).map_err(|_| bad_value())?;
+                    (linked.value, Some(linked.link_target))
                 }
-                _ => return Err(CmdError::Params(format!("custom property `{name}` must be a string (≤ {MAX_CUSTOM_VALUE} bytes) or null"))),
+                _ => return Err(bad_value()),
+            };
+            if value.len() > MAX_CUSTOM_VALUE {
+                return Err(bad_value());
+            }
+            if name.trim().is_empty() || name.chars().count() > MAX_CUSTOM_NAME {
+                return Err(CmdError::Params(format!("custom property names are 1–{MAX_CUSTOM_NAME} characters")));
+            }
+            if target.flatten().is_some_and(|t| t.len() > MAX_CUSTOM_VALUE) {
+                return Err(CmdError::Params(format!("custom property bookmark targets are at most {MAX_CUSTOM_VALUE} bytes")));
+            }
+            s.doc.set_custom_prop(name, value);
+            if let Some(target) = target
+                && let Some(prop) = s.doc.custom_props.iter_mut().find(|p| p.name.eq_ignore_ascii_case(name))
+            {
+                prop.link_target = target.map(str::to_string);
             }
         }
     }
@@ -495,7 +519,7 @@ fn properties(s: &mut Session, v: &Value) -> CmdResult {
 /// Longest custom property name (Word's limit). The Custom Properties dialog validates with it
 /// too (#2982).
 pub const MAX_CUSTOM_NAME: usize = 255;
-/// Largest custom property value we accept from a command. The Custom Properties dialog
+/// Largest custom property value or bookmark target we accept from a command. The Custom Properties dialog
 /// validates with it too (#2982).
 pub const MAX_CUSTOM_VALUE: usize = 1024 * 1024;
 

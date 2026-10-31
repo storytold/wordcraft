@@ -179,6 +179,67 @@ fn char_prop(w: &mut W, name: &str, c: Option<char>) {
     val(w, name, &s);
 }
 
+fn write_matrix(w: &mut W, n: &MNode, depth: usize) {
+    let MNode::Matrix { rows, col_jc } = n else { return };
+    let cols = rows.iter().map(|r| r.len()).max().unwrap_or(0).max(1);
+    w.open("m:m", &[]);
+    w.open("m:mPr", &[]);
+    w.open("m:mcs", &[]);
+    for c in 0..cols {
+        let jc = match col_jc.get(c).copied().unwrap_or_default() {
+            ColJc::Center => "center",
+            ColJc::Left => "left",
+            ColJc::Right => "right",
+        };
+        w.open("m:mc", &[]);
+        w.open("m:mcPr", &[]);
+        val(w, "m:count", "1");
+        val(w, "m:mcJc", jc);
+        w.close("m:mcPr");
+        w.close("m:mc");
+    }
+    w.close("m:mcs");
+    ctrl(w);
+    w.close("m:mPr");
+    for row in rows {
+        w.open("m:mr", &[]);
+        for c in 0..cols {
+            arg(w, "m:e", row.get(c).map(|v| v.as_slice()).unwrap_or(&[]), depth);
+        }
+        w.close("m:mr");
+    }
+    w.close("m:m");
+}
+
+fn write_nary(w: &mut W, n: &MNode, depth: usize) {
+    let MNode::Nary { chr, lim_loc, grow, sub_hide, sup_hide, sub, sup, e } = n else { return };
+    w.open("m:nary", &[]);
+    w.open("m:naryPr", &[]);
+    if *chr != '∫' {
+        char_prop(w, "m:chr", Some(*chr));
+    }
+    match lim_loc {
+        Some(LimLoc::UndOvr) => val(w, "m:limLoc", "undOvr"),
+        Some(LimLoc::SubSup) => val(w, "m:limLoc", "subSup"),
+        None => {}
+    }
+    if *grow {
+        val(w, "m:grow", "1");
+    }
+    if *sub_hide {
+        val(w, "m:subHide", "1");
+    }
+    if *sup_hide {
+        val(w, "m:supHide", "1");
+    }
+    ctrl(w);
+    w.close("m:naryPr");
+    arg(w, "m:sub", sub, depth);
+    arg(w, "m:sup", sup, depth);
+    arg(w, "m:e", e, depth);
+    w.close("m:nary");
+}
+
 fn node(w: &mut W, n: &MNode, depth: usize) {
     match n {
         MNode::Run(r) => run(w, r),
@@ -235,33 +296,7 @@ fn node(w: &mut W, n: &MNode, depth: usize) {
             arg(w, "m:e", e, depth);
             w.close("m:rad");
         }
-        MNode::Nary { chr, lim_loc, grow, sub_hide, sup_hide, sub, sup, e } => {
-            w.open("m:nary", &[]);
-            w.open("m:naryPr", &[]);
-            if *chr != '∫' {
-                char_prop(w, "m:chr", Some(*chr));
-            }
-            match lim_loc {
-                Some(LimLoc::UndOvr) => val(w, "m:limLoc", "undOvr"),
-                Some(LimLoc::SubSup) => val(w, "m:limLoc", "subSup"),
-                None => {}
-            }
-            if *grow {
-                val(w, "m:grow", "1");
-            }
-            if *sub_hide {
-                val(w, "m:subHide", "1");
-            }
-            if *sup_hide {
-                val(w, "m:supHide", "1");
-            }
-            ctrl(w);
-            w.close("m:naryPr");
-            arg(w, "m:sub", sub, depth);
-            arg(w, "m:sup", sup, depth);
-            arg(w, "m:e", e, depth);
-            w.close("m:nary");
-        }
+        MNode::Nary { .. } => write_nary(w, n, depth),
         MNode::Delim { beg, end, sep, grow, shp_match, elems } => {
             w.open("m:d", &[]);
             w.open("m:dPr", &[]);
@@ -375,36 +410,7 @@ fn node(w: &mut W, n: &MNode, depth: usize) {
             }
             w.close("m:eqArr");
         }
-        MNode::Matrix { rows, col_jc } => {
-            let cols = rows.iter().map(|r| r.len()).max().unwrap_or(0).max(1);
-            w.open("m:m", &[]);
-            w.open("m:mPr", &[]);
-            w.open("m:mcs", &[]);
-            for c in 0..cols {
-                let jc = match col_jc.get(c).copied().unwrap_or_default() {
-                    ColJc::Center => "center",
-                    ColJc::Left => "left",
-                    ColJc::Right => "right",
-                };
-                w.open("m:mc", &[]);
-                w.open("m:mcPr", &[]);
-                val(w, "m:count", "1");
-                val(w, "m:mcJc", jc);
-                w.close("m:mcPr");
-                w.close("m:mc");
-            }
-            w.close("m:mcs");
-            ctrl(w);
-            w.close("m:mPr");
-            for r in rows {
-                w.open("m:mr", &[]);
-                for c in 0..cols {
-                    arg(w, "m:e", r.get(c).map(|v| v.as_slice()).unwrap_or(&[]), depth);
-                }
-                w.close("m:mr");
-            }
-            w.close("m:m");
-        }
+        MNode::Matrix { .. } => write_matrix(w, n, depth),
         MNode::Phant { show, zero_wid, zero_asc, zero_desc, e } => {
             w.open("m:phant", &[]);
             w.open("m:phantPr", &[]);

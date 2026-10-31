@@ -570,7 +570,7 @@ impl P {
                 }
                 out.pop()
             };
-            if !matches!(c, '^' | '_') && !(matches!(c, '┬' | '┴') && self.no_limits == 0) && !is_combining(c) {
+            if !(matches!(c, '^' | '_') || matches!(c, '┬' | '┴') && self.no_limits == 0 || is_combining(c)) {
                 break;
             }
             // The base is already deep: the operator is text (see `too_deep`).
