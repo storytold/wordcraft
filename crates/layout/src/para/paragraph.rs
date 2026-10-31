@@ -5,7 +5,7 @@ use super::grid::{auto_space, snap_chars};
 use super::justify::hyphenation_points;
 use super::lines::break_lines;
 use super::model::{ClKind, Cluster, Enclosed, Glyph, Label, LabelRun, ParaEnv, RubyLayout, undrawable_bullet};
-use super::proof::{ProofRun, is_list_item, proof_issues};
+use super::proof::{ProofRun, is_list_item, proof_issues, scripted_runs};
 use super::{
     Arc, COLUMN_BREAK, CharProps, Document, FIELD_SHADING, InlineObject, LINE_BREAK, NoteKind, OBJ, PAGE_BREAK, PTabAlign, PTabBase, ParaLayout,
     Paragraph, ResolvedChar, ResolvedPara, TabLeader, field_code_text, field_text_on, reference_link,
@@ -578,6 +578,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let label = list_label(&cx, &mut sh.b, mark_style);
     let joined_cluster_starts = joined_cluster_starts(p, &sh.b.clusters);
     let Shaped { b, has_page_fields, notes, drop_cap, drop_cap_w, maths, enclosures, rubies, displays, ptabs, left, runs, .. } = sh;
+    let runs = scripted_runs(&p.text, &runs);
     let mut pl = ParaLayout {
         rp,
         styles: b.styles,

@@ -716,3 +716,22 @@ fn lone_table_open_markers_mixed_tables_and_paired() {
     assert!(res1.controls.open.is_empty());
     assert_eq!(res1.controls.close, 0);
 }
+
+#[test]
+fn word_count_handles_japanese_and_mixed_text() {
+    assert_eq!(count_words("Wordで文字数をカウントします"), 13);
+    assert_eq!(count_words("日本語、ＡＢ１２。"), 9);
+    assert_eq!(count_words("日本語abc 123日本語"), 8);
+    assert_eq!(count_words("ｶﾀｶﾅ"), 4);
+    assert_eq!(count_words("か\u{3099}𠮷"), 2);
+    assert_eq!(count_words("㌔"), 1);
+    assert_eq!(count_words("﨑神"), 2);
+    assert_eq!(count_words("가나"), count_words("가나"));
+    // Word counts these as a run of symbols between East Asian characters, not as
+    // individual full-width characters. It also counts an isolated run as one word.
+    assert_eq!(count_words("日※ 日◎ 日× 日○"), 8);
+    assert_eq!(count_words("※◎×○"), 1);
+    assert_eq!(count_words("Hello, world! -- 42"), 3);
+    assert_eq!(count_words("\t日本語\tABC\t123"), 5);
+    assert_eq!(Document::from_text("日本語\nEnglish text").word_count(), 5);
+}

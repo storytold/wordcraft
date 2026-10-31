@@ -632,7 +632,7 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.spacing_mut().item_spacing = vec2(4.0, 0.0);
                     let reading = app.session.view.read_mode;
-                    let z = (if reading { app.session.view.read_zoom } else { app.canvas.scale / crate::canvas::PX_PER_PT } * 100.0).round();
+                    let z = (if reading { app.session.view.read_zoom } else { crate::canvas::document_zoom(app) } * 100.0).round();
                     let ztxt = format!("{z}%");
                     let zfont = TypeRung::Caption.regular();
                     let ztrack = TypeRung::Caption.tracking();
@@ -653,7 +653,7 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                         }
                     }
                     // Reading zoom changes only reading presentation, never the normal view zoom.
-                    let mut v = if reading { app.session.view.read_zoom } else { app.canvas.scale / crate::canvas::PX_PER_PT };
+                    let mut v = if reading { app.session.view.read_zoom } else { crate::canvas::document_zoom(app) };
                     let slider = egui::Slider::new(&mut v, if reading { 0.75..=1.5 } else { 0.1..=5.0 }).logarithmic(!reading).show_value(false);
                     ui.spacing_mut().slider_width = 110.0;
                     let response = ui.add(slider);

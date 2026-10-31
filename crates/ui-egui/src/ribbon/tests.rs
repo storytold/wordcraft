@@ -781,3 +781,16 @@ fn shape_and_chart_formats_leave_out_of_range_sizes_alone() {
     assert_eq!(before.0, Some((20.0, 2500.0)));
     assert_eq!(shown(a), before, "Chart Design shown, the chart untouched");
 }
+
+#[test]
+fn caret_language_uses_the_east_asian_language_for_japanese_text() {
+    let mut doc = wordcraft_doc::Document::from_text("\n日本語\nEnglish");
+    doc.styles.default_chr.lang = Some("en-US".into());
+    doc.styles.default_chr.lang_ea = Some("ja-JP".into());
+    let mut app = WordApp::new(Session::new(doc), crate::Services::default());
+    assert_eq!(caret_language(&app), "Japanese", "an empty first paragraph follows the document text");
+    app.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(1, 0));
+    assert_eq!(caret_language(&app), "Japanese");
+    app.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(2, 0));
+    assert_eq!(caret_language(&app), "English (United States)");
+}

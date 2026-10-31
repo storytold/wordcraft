@@ -2,10 +2,10 @@
 //! looked up (#3692, #3706): an input 8x the size must cost about 8x as much, not 64x.
 //!
 //! The cost is the steps the lookups' walks count ([`crate::work`]), not a timing, so a busy
-//! machine can't make a linear lookup look quadratic or the other way round. Only proofing text,
-//! whose walk is the document model's, is timed.
+//! machine can't make a linear lookup look quadratic or the other way round. Proofing text
+//! counts its character and run walks in the proofing implementation.
 
-use super::{SCALE, cost_ratio};
+use super::SCALE;
 use crate::{
     Block, CharProps, DocLayout, Document, HeaderSet, HeightRule, InlineObject, LayoutCache, LayoutOptions, Page, ParaLayout, Paragraph, Path,
     Placed, SectionProps, SectionStart, StoryRef, display, layout, para, work,
@@ -56,22 +56,16 @@ fn proof_text_walks_the_runs_once() {
         p
     };
     assert_eq!(para::proof_text(&para(5)), "a\u{1}a\u{1}a");
-    // The runs are the document model's, whose walk counts no steps, so this one is timed: the
-    // CPU time this thread ran (`cost_ratio`). At 50,000 runs the old walk took 64x as long for
-    // 8x the runs, and the new one about 8x; a limit of 24x stays far from both, and a ratio over
-    // it is measured again, twice, before the test fails, so a busy spell can't fail it alone.
-    let (small, big) = (para(50_000), para(SCALE * 50_000));
-    let proof_8 = |p: &Paragraph| (0..8).for_each(|_| drop(std::hint::black_box(para::proof_text(p))));
-    let mut ratios = Vec::new();
-    for _ in 0..3 {
-        let (t1, tk, ratio) = cost_ratio(SCALE, || proof_8(&small), || proof_8(&big));
-        eprintln!("proof_text: t(n) {t1:.4} s, t(8n) {tk:.4} s, ratio {ratio:.1}");
-        if ratio < 24.0 {
-            return;
-        }
-        ratios.push(ratio);
-    }
-    panic!("proof_text: 8x the runs took {ratios:.1?}x the time, three times over: not linear");
+    // Count each character inspected and each run advanced, including a check that the
+    // instrumentation covers both walks. This avoids cache-size and scheduling effects while
+    // catching a return to scanning earlier runs for every character.
+    let steps = |n| {
+        let p = para(n);
+        work::count(|| drop(std::hint::black_box(para::proof_text(&p))))
+    };
+    let (small, big) = (steps(5000), steps(SCALE * 5000));
+    assert_eq!(small, 2 * 5000 - 1);
+    assert_eq!(big, 2 * (SCALE * 5000) as u64 - 1);
 }
 
 /// A right-to-left paragraph whose one line holds `n` hidden letters: caret offsets with no width.

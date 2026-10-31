@@ -12051,3 +12051,111 @@ fn an_empty_bulleted_mark_after_a_bulleted_section_closer_draws_no_bullet() {
         assert!(text, "{filler} lines above: the text closer keeps its bullet");
     }
 }
+
+#[test]
+fn underline_covers_spaces_at_paragraph_end() {
+    let text = "Name  \u{3000}";
+    let mut d = Document::from_text(text);
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, text.len()), &|c| c.underline = Some(wordcraft_doc::props::Underline::Single)).unwrap();
+    let l = lay(&d);
+    let end = l.caret(&Pos::body(0, text.len())).unwrap().x;
+    let right = display::page_display(&d, &l.pages[0], &Default::default())
+        .iter()
+        .filter_map(|item| match item {
+            display::Draw::Line { x1, .. } => Some(*x1),
+            _ => None,
+        })
+        .fold(f32::NEG_INFINITY, f32::max);
+    assert!((right - end).abs() < 0.1, "underline ends at {right}, caret at {end}");
+}
+
+#[test]
+fn japanese_paragraph_marks_use_return_shape() {
+    let d = Document::from_text("日本語\n次の段落");
+    let l = lay(&d);
+    let marks: Vec<char> =
+        display::page_display(&d, &l.pages[0], &display::DisplayOptions { marks: true, japanese_paragraph_marks: true, ..Default::default() })
+            .into_iter()
+            .filter_map(|item| match item {
+                display::Draw::Mark { ch, .. } => Some(ch),
+                _ => None,
+            })
+            .collect();
+    assert_eq!(marks, ['↵', '↵']);
+}
+
+#[test]
+fn japanese_view_keeps_tabs_spaces_and_manual_line_break_marks() {
+    let mut d = Document::from_text("");
+    d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("日本語 \t続き\n次", Default::default()))];
+    let l = lay(&d);
+    let marks: Vec<char> =
+        display::page_display(&d, &l.pages[0], &display::DisplayOptions { marks: true, japanese_paragraph_marks: true, ..Default::default() })
+            .into_iter()
+            .filter_map(|item| match item {
+                display::Draw::Mark { ch, .. } => Some(ch),
+                _ => None,
+            })
+            .collect();
+    assert!(marks.contains(&'·'), "space remains visible: {marks:?}");
+    assert!(marks.contains(&'→'), "tab remains visible: {marks:?}");
+    assert_eq!(marks.iter().filter(|&&ch| ch == '↓').count(), 1, "manual line break: {marks:?}");
+    assert_eq!(marks.iter().filter(|&&ch| ch == '↵').count(), 1, "paragraph end: {marks:?}");
+
+    let paragraph_only: Vec<char> = display::page_display(
+        &d,
+        &l.pages[0],
+        &display::DisplayOptions {
+            japanese_paragraph_marks: true,
+            always: display::FormattingMarks { paragraphs: true, ..Default::default() },
+            ..Default::default()
+        },
+    )
+    .into_iter()
+    .filter_map(|item| match item {
+        display::Draw::Mark { ch, .. } => Some(ch),
+        _ => None,
+    })
+    .collect();
+    assert_eq!(paragraph_only, ['↓', '↵'], "individual visibility does not expose unrelated dots or tabs");
+}
+
+#[test]
+fn paragraph_only_visibility_does_not_draw_a_page_break_rule() {
+    let d = Document::from_text(&format!("Before{}After", wordcraft_doc::para::PAGE_BREAK));
+    let l = lay(&d);
+    let opts = display::DisplayOptions { always: display::FormattingMarks { paragraphs: true, ..Default::default() }, ..Default::default() };
+    let only = display::page_display(&d, &l.pages[0], &opts);
+    assert!(!only.iter().any(|item| matches!(item, display::Draw::Line { stroke: display::Stroke::Dotted, .. })));
+    let all = display::page_display(&d, &l.pages[0], &display::DisplayOptions { marks: true, ..opts });
+    assert!(all.iter().any(|item| matches!(item, display::Draw::Line { stroke: display::Stroke::Dotted, .. })));
+}
+
+#[test]
+fn japanese_east_asian_language_keeps_form_spacing_out_of_english_grammar() {
+    let text = "申請者  住所 English  words";
+    let mut d = Document::from_text(text);
+    d.styles.default_chr.lang = Some("en-US".into());
+    d.styles.default_chr.lang_ea = Some("ja-JP".into());
+    let japanese_spaces = text.find("  ").unwrap();
+    d.format_range(&Pos::body(0, japanese_spaces), &Pos::body(0, japanese_spaces + 2), &|c| c.bold = Some(true)).unwrap();
+    let p = d.para(StoryRef::Body, &Path::top(0)).unwrap();
+    let runs = para::proof_runs(&d, p, None);
+    let language_at = |at: usize| runs.iter().find(|run| run.range.contains(&at)).map(|run| run.lang);
+    assert_eq!(language_at(0), Some(wordcraft_proof::ProofLang::Other));
+    let english = text.find("English").unwrap();
+    assert_eq!(language_at(english), Some(wordcraft_proof::ProofLang::En));
+    let issues = para::paragraph_issues(p, &runs, &Default::default(), true, false);
+    let extras: Vec<_> = issues.iter().filter(|issue| issue.message == "Extra space").map(|issue| issue.start).collect();
+    assert_eq!(extras, [text.find("  words").unwrap()], "Japanese form spaces must not get blue grammar lines");
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions { proofing: true, ..LayoutOptions::default() });
+    let visible: Vec<_> = l.pages[0]
+        .items
+        .iter()
+        .filter_map(|item| if let Placed::Lines { para, .. } = item { Some(para.issues.clone()) } else { None })
+        .flatten()
+        .filter(|issue| issue.2)
+        .map(|issue| issue.0)
+        .collect();
+    assert_eq!(visible, extras);
+}

@@ -103,6 +103,9 @@ fn big_table_scroll_bench() {
 #[test]
 fn scrolling_a_big_table_fingerprints_only_pages_coming_into_view() {
     let mut h = harness(big_table_doc(600, 8));
+    // Measure a long scroll through one page column on every host, independent
+    // of how many 100% sheets fit across the window.
+    h.state_mut().session.view.single_column = true;
     h.run_steps(4);
     let layout = h.state_mut().session.layout();
     let pages = layout.pages.len();
@@ -120,12 +123,15 @@ fn scrolling_a_big_table_fingerprints_only_pages_coming_into_view() {
         max_textures = max_textures.max(h.state().canvas.texture_count());
     }
     let offset = h.state().canvas.scroll_offset.y;
-    assert!(offset > 20_000.0, "scrolled through many pages: {offset}");
+    let page_step = h.state().canvas.page_rects[0].height() + 18.0;
+    assert!(offset / page_step > 15.0, "scrolled through many page rows: {offset}");
     let after = std::sync::Arc::clone(&h.state_mut().session.layout());
     assert!(std::sync::Arc::ptr_eq(&layout, &after), "scrolling never lays the document out again");
     let hashed = h.state().canvas.page_keys.hashed;
-    // 60 steps of 400 pt cross about 24'000 / 1'056 ≈ 23 pages (at 100%, 1.33 px a point).
-    assert!(hashed < pages && hashed <= first + 30, "pages fingerprinted: {hashed} of {pages}");
+    // The page budget follows actual rows crossed, plus one row entering the
+    // viewport. 100% sheets have different screen heights on Mac and Windows.
+    let crossed = (offset / page_step).ceil() as usize;
+    assert!(hashed < pages && hashed <= first + crossed + 1, "pages fingerprinted: {hashed} of {pages}, crossed {crossed}");
     // Textures stay bounded to the pages near the view.
     assert!(max_textures <= 12, "textures kept while scrolling: {max_textures}");
     assert!(h.state().canvas.texture_count() >= 1, "the pages in view stay rendered");

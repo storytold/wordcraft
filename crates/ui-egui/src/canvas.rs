@@ -60,8 +60,8 @@ use navigation::{scrollbar_page_tip, viewed_page};
 use pages::{DRAWING_GRID_MAX_LINES, DRAWING_GRID_MIN_PX};
 pub(crate) use pages::{PageKeys, page_doc, page_screen_scale, preview_sel, screen_render_options};
 use pages::{
-    drawing_grid, drawing_grid_step, gridline_cells, page_image, page_key, page_render_options, shown_layout, texel_aligned_rect, view_key,
-    visible_tiles,
+    crop_mark_segments, drawing_grid, drawing_grid_step, gridline_cells, page_image, page_key, page_render_options, shown_layout, texel_aligned_rect,
+    view_key, visible_tiles,
 };
 pub(crate) use reading::turn_read_page;
 #[cfg(test)]
@@ -76,8 +76,18 @@ pub use story::{EquationFrame, editing_header_footer, in_text_box};
 use story::{dims_body, equation_frame};
 pub(crate) use story::{part_kind, text_box_host};
 
-/// Points on screen per document point at 100% (96 px per inch, like a word processor).
-pub const PX_PER_PT: f32 = 96.0 / 72.0;
+/// Logical screen points per document point at 100% document zoom.
+///
+/// Word for Mac uses 72 logical points per inch (one AppKit point per document point),
+/// while Windows and web use 96. Retina's backing scale is applied separately by egui;
+/// counting it here too would change the zoom's meaning when moving between displays.
+/// Using 96 on macOS made a 100% page as large as Word's 133% page.
+pub const PX_PER_PT: f32 = if cfg!(target_os = "macos") { 1.0 } else { 96.0 / 72.0 };
+
+/// The requested zoom, distinct from the screen scale used to draw the page.
+pub(crate) fn document_zoom(app: &WordApp) -> f32 {
+    if app.session.view.fit.is_empty() { app.session.view.zoom } else { app.canvas.scale / PX_PER_PT }
+}
 const GAP: f32 = 18.0;
 /// Width reserved for the vertical scrollbar beside the canvas.
 const SCROLLBAR: f32 = 14.0;
@@ -523,8 +533,8 @@ fn prepare_view(app: &mut WordApp, ui: &Ui, full: Rect, layout: &DocLayout) -> C
         if !read_mode && let Some(p) = ui.input(|i| i.pointer.latest_pos()) {
             zoom_anchor = page_at(&app.canvas.page_rects, layout, app.canvas.scale, p).map(|at| (p, at));
         }
-        let pct =
-            (app.canvas.scale / PX_PER_PT * zoom_delta * 100.0).clamp(if read_mode { 75.0 } else { 10.0 }, if read_mode { 150.0 } else { 500.0 });
+        let base_zoom = if read_mode { app.session.view.read_zoom } else { document_zoom(app) };
+        let pct = (base_zoom * zoom_delta * 100.0).clamp(if read_mode { 75.0 } else { 10.0 }, if read_mode { 150.0 } else { 500.0 });
         let id = if read_mode { "view.readTextSize" } else { "view.zoom" };
         app.canvas.wheel.cancel();
         let _ = app.run(id, json!({"value": pct}));
@@ -1005,6 +1015,16 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
             painter.image(tex.id(), visual_sr, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         }
         let page_scale = page_screen_scale(visual_sr, page, geo.scale);
+        if app.session.view.mode == wordcraft_layout::ViewMode::Print
+            && !app.session.view.read_mode
+            && crate::i18n::Lang::from_pref(&app.ui.language).code() == "ja"
+        {
+            let guide = painter.with_clip_rect(painter.clip_rect().intersect(visual_sr));
+            let stroke = Stroke::new(1.3, Color32::from_gray(170));
+            for segment in crop_mark_segments(page.body, visual_sr, page_scale) {
+                guide.line_segment(segment, stroke);
+            }
+        }
         // Header/footer editing chrome.
         if let StoryRef::Part(id) = app.session.sel.focus.story {
             let sect_body = page.body;

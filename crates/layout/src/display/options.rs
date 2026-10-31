@@ -10,7 +10,8 @@ pub struct FormattingMarks {
     pub tabs: bool,
     /// Spaces (·).
     pub spaces: bool,
-    /// Paragraph marks (¶), line breaks, page, column and section breaks.
+    /// Paragraph marks (¶) and manual line breaks. Show/Hide All also reveals
+    /// page, column and section break rules.
     pub paragraphs: bool,
     /// Hidden text (shown with its dotted underline instead of left out).
     pub hidden: bool,
@@ -33,6 +34,9 @@ impl FormattingMarks {
 pub struct DisplayOptions {
     /// Show formatting marks (¶): Show/Hide ¶, every mark.
     pub marks: bool,
+    /// Use the return-shaped paragraph mark shown by Word's Japanese editing view.
+    /// This changes only the on-screen mark, never document content or pagination.
+    pub japanese_paragraph_marks: bool,
     /// Marks shown while `marks` is off (File › Options › Display).
     pub always: FormattingMarks,
     /// Dim headers/footers (editing the body) or the body (editing a header/footer).
@@ -55,6 +59,7 @@ impl Default for DisplayOptions {
     fn default() -> Self {
         DisplayOptions {
             marks: false,
+            japanese_paragraph_marks: false,
             always: FormattingMarks::default(),
             dim_header: true,
             dim_body: false,

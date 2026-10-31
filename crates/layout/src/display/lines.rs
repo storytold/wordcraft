@@ -300,7 +300,7 @@ fn draw_glyph_runs(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
                 x_scale: rc.scale / 100.0,
             });
         }
-        // Decorations across the run (underline skips trailing spaces of the line). Right-to-left
+        // Decorations across the run. Right-to-left
         // text inside a run can split it into several visual spans.
         let mut end_k = run_end;
         while end_k > run_start
@@ -317,30 +317,32 @@ fn draw_glyph_runs(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
         };
         let double = rc.double_strike || del_mark == Some(DeleteMark::DoubleStrikethrough);
         let struck = rc.strike || double || ins_mark == Some(InsertMark::Strikethrough) || del_mark == Some(DeleteMark::Strikethrough);
-        let spans = if underline != Underline::None || struck { line.spans(run_start, end_k) } else { Vec::new() };
+        // Word underlines spaces at the end of a paragraph, as used for blanks on forms.
+        let underline_end = if line.end == LineEnd::Para { run_end } else { end_k };
+        let spans = if underline != Underline::None { line.spans(run_start, underline_end) } else { Vec::new() };
         for (x0, x1) in spans.into_iter().map(|(a, b)| (x + a, x + b)).filter(|(a, b)| b > a) {
-            if underline != Underline::None {
-                let uy = base - st.shift + st.size * 0.12;
-                let ucolor = rc.underline_color.unwrap_or(color);
-                if underline == Underline::Words {
-                    for kk in run_start..end_k {
-                        let Some(c) = pl.clusters.get(kk) else { continue };
-                        if c.kind != ClKind::Text {
-                            continue;
-                        }
-                        let a = x + line.cl_left(kk).unwrap_or(0.0);
-                        let b = x + line.cl_right(kk).unwrap_or(a - x);
-                        if a < x0 - 0.01 || b > x1 + 0.01 {
-                            continue; // drawn with its own span
-                        }
-                        out.push(Draw::Line { x0: a, y0: uy, x1: b, y1: uy, width: thick, color: ucolor, stroke: Stroke::Solid, alpha, text_bg });
+            let uy = base - st.shift + st.size * 0.12;
+            let ucolor = rc.underline_color.unwrap_or(color);
+            if underline == Underline::Words {
+                for kk in run_start..underline_end {
+                    let Some(c) = pl.clusters.get(kk) else { continue };
+                    if c.kind != ClKind::Text {
+                        continue;
                     }
-                } else {
-                    let w = if underline == Underline::Thick { thick * 2.0 } else { thick };
-                    out.push(Draw::Line { x0, y0: uy, x1, y1: uy, width: w, color: ucolor, stroke: stroke_of(underline), alpha, text_bg });
+                    let a = x + line.cl_left(kk).unwrap_or(0.0);
+                    let b = x + line.cl_right(kk).unwrap_or(a - x);
+                    if a < x0 - 0.01 || b > x1 + 0.01 {
+                        continue; // drawn with its own span
+                    }
+                    out.push(Draw::Line { x0: a, y0: uy, x1: b, y1: uy, width: thick, color: ucolor, stroke: Stroke::Solid, alpha, text_bg });
                 }
+            } else {
+                let w = if underline == Underline::Thick { thick * 2.0 } else { thick };
+                out.push(Draw::Line { x0, y0: uy, x1, y1: uy, width: w, color: ucolor, stroke: stroke_of(underline), alpha, text_bg });
             }
-            if struck {
+        }
+        if struck {
+            for (x0, x1) in line.spans(run_start, end_k).into_iter().map(|(a, b)| (x + a, x + b)).filter(|(a, b)| b > a) {
                 let sy = base - st.shift - st.size * 0.28;
                 let stroke = if double { Stroke::Double } else { Stroke::Solid };
                 out.push(Draw::Line { x0, y0: sy, x1, y1: sy, width: thick, color, stroke, alpha, text_bg });
@@ -484,8 +486,15 @@ fn formatting_marks(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
                 ClKind::Tab if marks.tabs => {
                     out.push(Draw::Mark { x: cx + ((nx - cx) / 2.0 - size * 0.3).max(0.0), baseline: base, size, ch: arrow, color: None })
                 }
-                ClKind::LineBreak if marks.paragraphs => out.push(Draw::Mark { x: cx + 1.0, baseline: base, size, ch: '↵', color: None }),
-                ClKind::PageBreak | ClKind::ColumnBreak if marks.paragraphs => {
+                // A Shift+Enter line break is a downward arrow in Word's Japanese view;
+                // Enter ends the paragraph and gets the bent return arrow below.
+                ClKind::LineBreak if marks.paragraphs => {
+                    let ch = if opts.japanese_paragraph_marks { '↓' } else { '↵' };
+                    out.push(Draw::Mark { x: cx + 1.0, baseline: base, size, ch, color: None });
+                }
+                // The individual Paragraph marks preference does not expose the break rule;
+                // that belongs to Show/Hide All, which also reveals spaces and tabs.
+                ClKind::PageBreak | ClKind::ColumnBreak if opts.marks => {
                     let label = if c.kind == ClKind::PageBreak { '⤓' } else { '⇥' };
                     out.push(Draw::Line {
                         x0: cx + 2.0,
@@ -525,10 +534,13 @@ fn formatting_marks(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
             });
             // The last paragraph of a section ends in a section break instead of a plain ¶.
             if let Some(start) = section_break_after(doc, story, path) {
-                let (x0, x1) = if line.rtl { (x + line.left, ex - 2.0) } else { (ex + 2.0, x + line.right) };
-                section_break_mark(start, x0, x1, base, size, alpha, out);
+                if opts.marks {
+                    let (x0, x1) = if line.rtl { (x + line.left, ex - 2.0) } else { (ex + 2.0, x + line.right) };
+                    section_break_mark(start, x0, x1, base, size, alpha, out);
+                }
             } else {
-                out.push(Draw::Mark { x: mx, baseline: base, size, ch: '¶', color });
+                let ch = if opts.japanese_paragraph_marks { '↵' } else { '¶' };
+                out.push(Draw::Mark { x: mx, baseline: base, size, ch, color });
             }
         }
     }

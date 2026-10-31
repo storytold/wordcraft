@@ -146,7 +146,9 @@ pub(super) fn place_pages(sizes: &[(f32, f32)], markup: f32, scale: f32, cols: u
     let row_w = cols as f32 * slot + (cols as f32 - 1.0) * GAP;
     let content_w = (row_w + 2.0 * GAP).max(avail.x);
     let mut rects = Vec::with_capacity(sizes.len());
-    let mut y = GAP;
+    // Word centres a single short sheet in the print-layout viewport. This is noticeable for
+    // envelopes: at 100–130% the page is shorter than the available canvas height.
+    let mut y = if sizes.len() == 1 { sizes.first().map_or(GAP, |&(_, h)| ((avail.y - sane_dim(h, 1e6) * scale) / 2.0).max(GAP)) } else { GAP };
     for row in sizes.chunks(cols) {
         let mut x = (content_w - row_w) / 2.0;
         let mut h = 0.0f32;
@@ -184,6 +186,12 @@ pub fn geometry(app: &WordApp, l: &DocLayout, avail: egui::Vec2) -> Geometry {
         "multiplePages" => scale = ((avail.y - 2.0 * GAP) / maxh).min((avail.x - 3.0 * GAP) / (2.0 * maxw)).clamp(0.05, 6.0),
         _ => {}
     }
+    // Word for Mac's manual Print Layout zoom uses an integer logical DPI for both the
+    // sheet and its content. Keep the requested percentage in the session; only screen
+    // geometry takes this measured scale. Fit and other views keep their own scales.
+    if cfg!(target_os = "macos") && !web && v.fit.is_empty() {
+        scale = (scale * 72.0).round() / 72.0;
+    }
     if web {
         scale = PX_PER_PT * v.zoom.clamp(0.1, 5.0);
     }
@@ -192,7 +200,9 @@ pub fn geometry(app: &WordApp, l: &DocLayout, avail: egui::Vec2) -> Geometry {
     }
     // Pages flow side by side in Print Layout whenever more than one fits across; One Page and
     // Page Width show one per row (and so does a zoom after One Page, #768), Web Layout has no pages. Reading Mode is handled above.
-    let (min_cols, auto) = if web || v.fit == "onePage" || v.fit == "pageWidth" || v.single_column {
+    let editing_part = matches!(app.session.sel.focus.story, StoryRef::Part(_));
+    let collapse_margins = v.hide_white_space && !web && !editing_part;
+    let (min_cols, auto) = if web || v.fit == "onePage" || v.fit == "pageWidth" || v.single_column || collapse_margins {
         (1, false)
     } else if v.multi_page {
         (2, true)
@@ -217,8 +227,7 @@ pub fn geometry(app: &WordApp, l: &DocLayout, avail: egui::Vec2) -> Geometry {
     }
     let (mut rects, mut size) = place_pages(&sizes, markup, scale, cols, avail);
     let mut bands: Vec<(f32, f32)> = rects.iter().map(|r| (0.0, r.height())).collect();
-    let editing_part = matches!(app.session.sel.focus.story, StoryRef::Part(_));
-    if v.hide_white_space && v.mode == wordcraft_layout::ViewMode::Print && !v.read_mode && cols == 1 && !editing_part && rects.len() > 1 {
+    if collapse_margins && cols == 1 && rects.len() > 1 {
         let bodies: Vec<(f32, f32)> = l.pages.iter().map(|p| (p.body.y, p.body.bottom())).collect();
         let (r, b, h) = collapse_white_space(&rects, &bodies, scale, avail.y);
         (rects, bands) = (r, b);

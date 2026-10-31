@@ -101,9 +101,13 @@ pub(super) fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[
         // spans the text area, so a border marker keeps its drag) and before the indent markers,
         // which keep the pointer where they overlap.
         crate::table_ruler::columns(app, ui, layout, pi, bar, x0, scale);
+        // Keep the indent hit zones close to their 9-point-wide glyphs. A
+        // 12-point zone reaches a neighbouring table-column grip's centre at
+        // Mac's 100% scale (the default cell margin is only 5.4 points).
+        // The visible indent still wins wherever the glyphs overlap.
         // Dragging the left-indent marker.
         let id = ui.scope_id().with("ruler_left");
-        let mr = Rect::from_center_size(pos2(left, bar.max.y - 3.0), vec2(12.0, 12.0));
+        let mr = Rect::from_center_size(pos2(left, bar.max.y - 3.0), vec2(10.0, 12.0));
         let r = ui.interact(mr, id, Sense::click_and_drag());
         if r.dragged()
             && let Some(pp) = r.interact_pointer_pos()
@@ -115,7 +119,7 @@ pub(super) fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[
             }
             let _ = app.run("para.indents", json!({"left": snapped}));
         }
-        let fr = Rect::from_center_size(pos2(first, bar.min.y + 3.0), vec2(12.0, 10.0));
+        let fr = Rect::from_center_size(pos2(first, bar.min.y + 3.0), vec2(10.0, 10.0));
         let r = ui.interact(fr, ui.scope_id().with("ruler_first"), Sense::click_and_drag());
         if r.dragged()
             && let Some(pp) = r.interact_pointer_pos()
@@ -126,7 +130,7 @@ pub(super) fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[
             }
             let _ = app.run("para.indents", json!({"firstLine": (pt / 4.5).round() * 4.5}));
         }
-        let rr = Rect::from_center_size(pos2(right, bar.max.y - 3.0), vec2(12.0, 12.0));
+        let rr = Rect::from_center_size(pos2(right, bar.max.y - 3.0), vec2(10.0, 12.0));
         let r = ui.interact(rr, ui.scope_id().with("ruler_right"), Sense::click_and_drag());
         if r.dragged()
             && let Some(pp) = r.interact_pointer_pos()

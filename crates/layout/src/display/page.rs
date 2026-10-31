@@ -7,6 +7,7 @@ use super::{
     BezPath, Border, BorderStyle, ChangeBar, Document, Draw, HashMap, InlineObject, LineEnd, Page, Placed, Rect, Rgb, Spin, StoryRef, TextDirection,
     Underline,
 };
+use wordcraft_doc::props::TextVert;
 
 /// Colour of moved text (both ends of a tracked move).
 pub const MOVE_COLOR: Rgb = Rgb(0x1A, 0x7F, 0x37);
@@ -404,19 +405,12 @@ fn item_in(doc: &Document, it: &Placed, opts: &DisplayOptions, authors: &Authors
         Placed::Cell { .. } | Placed::Object { .. } => {}
         Placed::Lines { story, path, para, l0, l1, x, y, turn } if turn.is_turned() => {
             let mut items = Vec::new();
+            // DrawingML `vert` rotates the whole text run, including CJK glyphs. Only an
+            // East Asian vertical mode (or a vertical section/cell) stands them back up.
+            let east_asian_down = *turn == TextDirection::Down
+                && !matches!(story, StoryRef::Part(id) if doc.parts.get(id).is_some_and(|p| p.body.vert == TextVert::Vert));
             lines(
-                LineRender {
-                    doc,
-                    story: *story,
-                    path,
-                    pl: para,
-                    range: *l0..*l1,
-                    origin: (0.0, 0.0),
-                    opts,
-                    authors,
-                    alpha,
-                    down: *turn == TextDirection::Down,
-                },
+                LineRender { doc, story: *story, path, pl: para, range: *l0..*l1, origin: (0.0, 0.0), opts, authors, alpha, down: east_asian_down },
                 &mut items,
             );
             // Link areas are axis-aligned page rectangles: turned text gets none.
@@ -425,7 +419,7 @@ fn item_in(doc: &Document, it: &Placed, opts: &DisplayOptions, authors: &Authors
                     *link = None;
                 }
             }
-            if *turn == TextDirection::Down {
+            if east_asian_down {
                 items = upright_east_asian(items);
             }
             out.push(Draw::Turned { x: *x, y: *y, turn: *turn, items });
