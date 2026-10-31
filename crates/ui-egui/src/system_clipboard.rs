@@ -71,6 +71,13 @@ pub(crate) fn fill(app: &mut WordApp, id: &str, params: &mut Value) -> Option<Re
 /// equations as MathML, #816; a lone equation in the MathML formats too, #1297) when the host can
 /// set it, else the text through egui. egui sets its text at the end of the frame, which would
 /// replace the HTML, so only one of them runs.
+///
+/// The text also goes on the primary selection where the platform has one (Linux), and only with
+/// "Use the middle mouse button to paste instead of autoscroll" on (#1934): a middle click then
+/// pastes a copy from here, as it can from a browser. Without the option WordCraft never reads it,
+/// so it leaves the mouse selection other programs keep to them. It is plain text either way — the
+/// primary selection carries no formatting — and the ordinary clipboard is set whether or not this
+/// succeeds.
 pub(crate) fn put(app: &WordApp, ctx: &egui::Context, text: &str, html: &str, mathml: &str) {
     if text.is_empty() {
         // A copied picture or shape has no text, only HTML (#2276): empty the clipboard's text,
@@ -79,6 +86,10 @@ pub(crate) fn put(app: &WordApp, ctx: &egui::Context, text: &str, html: &str, ma
             ctx.copy_text(String::new());
         }
         return;
+    }
+    if app.session.prefs.middle_click_paste {
+        // A middle click in another program pastes this copy then, as a browser's does (#1934).
+        let _ = app.services.set_primary_text.as_ref().is_some_and(|f| f(text));
     }
     if !html.is_empty() && app.services.set_clipboard_html.as_ref().is_some_and(|f| f(html, text, mathml)) {
         return;
@@ -90,6 +101,55 @@ pub(crate) fn put(app: &WordApp, ctx: &egui::Context, text: &str, html: &str, ma
 pub(crate) fn put_result(app: &WordApp, ctx: &egui::Context, r: &Value) {
     let s = |k: &str| r.get(k).and_then(Value::as_str).unwrap_or("");
     put(app, ctx, s("text"), s("html"), s("mathml"));
+}
+
+/// The document's selection last put on the primary selection (#1934): the range it covered, so
+/// the same selection isn't put there again, and the text that was put there.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct SharedSelection {
+    /// The selection's range, as the session orders it.
+    pub range: (wordcraft_doc::Pos, wordcraft_doc::Pos),
+    /// The text that was put on the primary selection.
+    pub text: String,
+}
+
+/// Put the document's selection on the primary selection (#1934).
+///
+/// The primary selection is the mouse selection programs share on Linux, and it is what a middle
+/// click pastes. The freedesktop clipboard spec makes it "the current selection": selecting text
+/// here puts it there, so a middle click in another program pastes what is selected here, as it
+/// does with a browser's selection. A copy puts it there too (see [`put`]), but that is not
+/// enough: a selection made without a copy is the current selection all the same.
+///
+/// Only with "Use the middle mouse button to paste instead of autoscroll" on: without it
+/// WordCraft never reads the primary selection, so it leaves the mouse selection to the programs
+/// that share it. The text is plain (a selection carries no formatting) and bounded by
+/// [`MAX_PASTE_BYTES`], as a paste from another program is.
+///
+/// A selection that is still moving isn't published: while a button is down it changes with the
+/// pointer, and it settles when the pointer comes up, which is when it is published. The same
+/// selection isn't published twice, and a selection too large to paste isn't published at all.
+pub(crate) fn share_selection(app: &mut WordApp, ctx: &egui::Context) {
+    if !app.session.prefs.middle_click_paste {
+        return;
+    }
+    let Some(set) = &app.services.set_primary_text else {
+        return;
+    };
+    if ctx.input(|i| i.pointer.any_down()) {
+        // The selection is still moving.
+        return;
+    }
+    let range = app.session.sel.ordered();
+    if app.shared_selection.as_ref().is_some_and(|s| s.range == range) {
+        return;
+    }
+    let text = app.session.selected_text();
+    if text.is_empty() || text.len() > MAX_PASTE_BYTES {
+        return;
+    }
+    let _ = set(&text);
+    app.shared_selection = Some(SharedSelection { range, text });
 }
 
 /// Format names worth showing: not the clipboard protocol's own bookkeeping targets.
@@ -247,6 +307,138 @@ mod tests {
         assert!(e.contains("couldn't be read") && e.contains("isn't supported"), "{e}");
     }
 
+    /// #1934: a copy also reaches the primary selection, so a middle click pastes what was
+    /// copied here — here or in another program, as it does from a browser — rather than only
+    /// what another program left there. It is plain text: the primary selection carries no
+    /// formatting.
+    #[test]
+    fn copying_also_puts_the_text_on_the_primary_selection() {
+        // #1934: a middle click pastes the primary selection, so a copy here has to land on it
+        // too — as it does from a browser — or copying inside WordCraft and pasting with the
+        // middle button would reach only what another program left there.
+        let primary = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+        let mut a = app(Services {
+            set_primary_text: Some(Box::new({
+                let s = primary.clone();
+                move |t: &str| {
+                    s.borrow_mut().push(t.to_string());
+                    true
+                }
+            })),
+            ..Default::default()
+        });
+        a.session.prefs.middle_click_paste = true;
+        a.run("document.setText", json!({"text": "Studio"})).unwrap();
+        let ctx = egui::Context::default();
+        a.run("select.all", json!({})).unwrap();
+        let r = a.run("edit.copy", json!({})).unwrap();
+        put_result(&a, &ctx, &r);
+        assert_eq!(primary.borrow().as_slice(), ["Studio"], "the copy reached the primary selection");
+
+        // It goes there whatever the ordinary clipboard does, HTML or not.
+        let mut a = app(Services {
+            set_primary_text: Some(Box::new({
+                let s = primary.clone();
+                move |t: &str| {
+                    s.borrow_mut().push(t.to_string());
+                    false
+                }
+            })),
+            set_clipboard_html: Some(Box::new(|_, _, _| true)),
+            ..Default::default()
+        });
+        a.session.prefs.middle_click_paste = true;
+        a.run("document.setText", json!({"text": "Studio"})).unwrap();
+        let r = a.run("select.all", json!({})).and_then(|_| a.run("edit.copy", json!({}))).unwrap();
+        put_result(&a, &ctx, &r);
+        assert_eq!(primary.borrow().last().map(String::as_str), Some("Studio"), "set even when the clipboard write failed");
+
+        // With the option off a copy leaves the primary selection alone, so the mouse selection
+        // other programs keep stays theirs.
+        let mut a = app(Services {
+            set_primary_text: Some(Box::new({
+                let s = primary.clone();
+                move |t: &str| {
+                    s.borrow_mut().push(t.to_string());
+                    true
+                }
+            })),
+            ..Default::default()
+        });
+        a.run("document.setText", json!({"text": "Studio"})).unwrap();
+        a.run("select.all", json!({})).unwrap();
+        let r = a.run("edit.copy", json!({})).unwrap();
+        put_result(&a, &ctx, &r);
+        assert_eq!(primary.borrow().len(), 2, "with the option off the copy left the primary selection alone");
+    }
+
+    /// #1934: the document's selection goes on the primary selection, so a middle click in
+    /// another program pastes what is selected here — no copy needed, as the freedesktop
+    /// clipboard spec asks ("the current selection"). With the option off the mouse selection
+    /// other programs keep stays theirs.
+    #[test]
+    fn a_selection_goes_on_the_primary_selection_without_a_copy() {
+        let primary = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+        let mut a = app(Services {
+            set_primary_text: Some(Box::new({
+                let s = primary.clone();
+                move |t: &str| {
+                    s.borrow_mut().push(t.to_string());
+                    true
+                }
+            })),
+            ..Default::default()
+        });
+        a.session.prefs.middle_click_paste = true;
+        a.run("document.setText", json!({"text": "Studio of text"})).unwrap();
+        let ctx = egui::Context::default();
+
+        // No selection yet: nothing to share.
+        share_selection(&mut a, &ctx);
+        assert!(primary.borrow().is_empty(), "no selection, nothing on the primary selection");
+
+        // A selection, and no copy: it goes on the primary selection all the same.
+        a.session.run("select.range", &json!({"anchor": {"block": 0, "off": 0}, "focus": {"block": 0, "off": 6}})).unwrap();
+        share_selection(&mut a, &ctx);
+        assert_eq!(primary.borrow().as_slice(), ["Studio"], "the selection is on the primary selection");
+
+        // The same selection isn't put there again.
+        share_selection(&mut a, &ctx);
+        assert_eq!(primary.borrow().len(), 1, "the same selection isn't put there twice");
+
+        // A different selection replaces it.
+        a.session.run("select.range", &json!({"anchor": {"block": 0, "off": 7}, "focus": {"block": 0, "off": 9}})).unwrap();
+        share_selection(&mut a, &ctx);
+        assert_eq!(primary.borrow().last().map(String::as_str), Some("of"), "the new selection is on it");
+
+        // A selection too large to paste isn't put there.
+        a.session.run("select.all", &json!({})).unwrap();
+        let big = "x".repeat(MAX_PASTE_BYTES + 1);
+        a.run("document.setText", json!({"text": big})).unwrap();
+        a.session.run("select.all", &json!({})).unwrap();
+        share_selection(&mut a, &ctx);
+        assert_eq!(primary.borrow().last().map(String::as_str), Some("of"), "an oversized selection isn't put there");
+
+        // With the option off the mouse selection other programs keep stays theirs.
+        let mut b = app(Services {
+            set_primary_text: Some(Box::new({
+                let s = primary.clone();
+                move |t: &str| {
+                    s.borrow_mut().push(t.to_string());
+                    true
+                }
+            })),
+            ..Default::default()
+        });
+        b.run("document.setText", json!({"text": "Studio of text"})).unwrap();
+        b.session.run("select.all", &json!({})).unwrap();
+        share_selection(&mut b, &ctx);
+        assert_eq!(primary.borrow().len(), 2, "with the option off the selection isn't put there");
+    }
+
+    /// #816: a copy of an equation gives the host HTML with the equation as MathML beside the
+    /// text, and a copy of anything else gives it HTML too, so other programs keep the
+    /// formatting (#1523).
     #[test]
     fn copying_an_equation_puts_its_html_on_the_system_clipboard() {
         // #816: the host gets HTML with the equation as MathML beside the text.

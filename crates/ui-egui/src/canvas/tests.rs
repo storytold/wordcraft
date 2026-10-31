@@ -2913,6 +2913,167 @@ fn middle_click_scrolls_toward_the_pointer_until_clicked_again() {
     assert_eq!(offset(&h), released, "letting go after a drag stops it");
 }
 
+/// #1934: with "Use the middle mouse button to paste instead of autoscroll" on, a middle click
+/// pastes the primary selection instead of starting the autoscroll gesture.
+#[test]
+#[cfg(target_os = "linux")]
+fn middle_click_pastes_the_primary_selection_instead_of_scrolling() {
+    let text = vec!["A line of text in a long document."; 400].join("\n");
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text(&text)), Default::default());
+    a.canvas.auto_scroll.supported = true;
+    a.session.prefs.middle_click_paste = true;
+    a.services.primary_selection_text = Some(Box::new(|| Some("pasted words".to_string())));
+    let mut h: H = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(6);
+    let anchor = h.state().canvas.viewport.expect("the canvas is shown").center();
+    let before = h.state().session.doc.clone();
+
+    h.event(egui::Event::PointerMoved(anchor));
+    h.event(egui::Event::PointerButton { pos: anchor, button: egui::PointerButton::Middle, pressed: true, modifiers: Default::default() });
+    h.step();
+    h.event(egui::Event::PointerButton { pos: anchor, button: egui::PointerButton::Middle, pressed: false, modifiers: Default::default() });
+    h.run_steps(3);
+
+    assert!(!h.state().canvas.auto_scroll.active(), "the click doesn't start scrolling");
+    assert_ne!(h.state().session.doc, before, "the primary selection was pasted");
+    let text = h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+    assert!(text.contains("pasted words"), "the selection's text is in the document");
+    // A paste leaves the caret after what it inserted, rather than the click moving it.
+    assert_eq!(h.state().session.sel.focus.off, "pasted words".len(), "the caret ends up after the pasted text");
+}
+
+/// #1934: only a middle click on the canvas pastes. Over the ribbon, a pane or a panel above
+/// the canvas the middle button is theirs — pasting there would put text in the document where
+/// the user clicked something else.
+#[test]
+#[cfg(target_os = "linux")]
+fn a_middle_click_off_the_canvas_pastes_nothing() {
+    let text = vec!["A line of text in a long document."; 400].join("\n");
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text(&text)), Default::default());
+    a.canvas.auto_scroll.supported = true;
+    a.session.prefs.middle_click_paste = true;
+    a.services.primary_selection_text = Some(Box::new(|| Some("pasted words".to_string())));
+    let mut h: H = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(6);
+    let canvas = h.state().canvas.viewport.expect("the canvas is shown");
+    // The ribbon strip above the pages, the same distance in from the window's left edge.
+    let ribbon = egui::pos2(canvas.left() + 40.0, canvas.top() - 8.0);
+    assert!(!canvas.contains(ribbon), "the click lands outside the canvas");
+    let before = h.state().session.doc.clone();
+
+    h.event(egui::Event::PointerMoved(ribbon));
+    h.event(egui::Event::PointerButton { pos: ribbon, button: egui::PointerButton::Middle, pressed: true, modifiers: Default::default() });
+    h.step();
+    h.event(egui::Event::PointerButton { pos: ribbon, button: egui::PointerButton::Middle, pressed: false, modifiers: Default::default() });
+    h.run_steps(3);
+
+    assert!(!h.state().canvas.auto_scroll.paste_requested(), "a click off the canvas doesn't ask to paste");
+    assert!(!h.state().canvas.auto_scroll.active(), "and doesn't start scrolling either");
+    assert_eq!(h.state().session.doc, before, "the document is unchanged");
+}
+
+/// #1934: a middle click pastes the primary selection as plain text, whoever owns it. The
+/// selection carries no formatting, and it carries no owner either, so a copy's formatting
+/// must never be applied to it: a selection that merely reads like our copy would come in
+/// bold against the will of the program it came from.
+#[test]
+#[cfg(target_os = "linux")]
+fn a_middle_click_pastes_the_primary_selection_as_plain_text() {
+    // A bold "Studio" copied in WordCraft, which puts its text on the primary selection.
+    let text = format!("Studio\n{}", vec!["A line of text in a long document."; 400].join("\n"));
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text(&text)), Default::default());
+    a.canvas.auto_scroll.supported = true;
+    a.session.prefs.middle_click_paste = true;
+    // The primary selection holds what the copy puts there.
+    let copied: std::rc::Rc<std::cell::RefCell<String>> = std::rc::Rc::default();
+    a.services.primary_selection_text = Some(Box::new({
+        let c = copied.clone();
+        move || Some(c.borrow().clone())
+    }));
+    a.services.set_primary_text = Some(Box::new({
+        let c = copied.clone();
+        move |t: &str| {
+            *c.borrow_mut() = t.to_string();
+            true
+        }
+    }));
+    let mut h: H = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(6);
+    h.state_mut().session.run("select.range", &json!({"anchor": {"block": 0, "off": 0}, "focus": {"block": 0, "off": 6}})).unwrap();
+    h.state_mut().session.run("format.bold", &json!({"value": true})).unwrap();
+    // The app's Copy, so the copy reaches the primary selection as it does in the app.
+    h.state_mut().run("edit.copy", json!({})).unwrap();
+    assert_eq!(copied.borrow().as_str(), "Studio", "the copy put its text on the primary selection");
+
+    // Paste it at the end of the document, with the middle button.
+    h.state_mut().session.run("caret.docEnd", &json!({})).unwrap();
+    h.run_steps(3);
+    let anchor = h.state().canvas.viewport.expect("the canvas is shown").center();
+    h.event(egui::Event::PointerMoved(anchor));
+    h.event(egui::Event::PointerButton { pos: anchor, button: egui::PointerButton::Middle, pressed: true, modifiers: Default::default() });
+    h.step();
+    h.event(egui::Event::PointerButton { pos: anchor, button: egui::PointerButton::Middle, pressed: false, modifiers: Default::default() });
+    h.run_steps(3);
+
+    // The text is there, but not the bold the copy carried: the primary selection is text.
+    let focus = h.state().session.sel.focus.clone();
+    assert_eq!(focus.off, 40, "the six characters were pasted after the line's own text");
+    let bold = h.state().session.doc.para_at(&focus).and_then(|p| p.props_of_char(34).bold);
+    assert_ne!(bold, Some(true), "the primary selection came in as plain text");
+}
+
+/// #1934: the selection goes on the primary selection, so a middle click in another program
+/// pastes what is selected here — with no copy in between, as the freedesktop clipboard spec
+/// asks ("the current selection").
+#[test]
+fn a_selection_reaches_the_primary_selection() {
+    let text = format!("Studio\n{}", vec!["A line of text in a long document."; 400].join("\n"));
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text(&text)), Default::default());
+    a.session.prefs.middle_click_paste = true;
+    let primary = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
+    a.services.set_primary_text = Some(Box::new({
+        let p = primary.clone();
+        move |t: &str| {
+            *p.borrow_mut() = t.to_string();
+            true
+        }
+    }));
+    let mut h: H = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(6);
+    // A selection, and no copy.
+    h.state_mut().session.run("select.range", &json!({"anchor": {"block": 0, "off": 0}, "focus": {"block": 0, "off": 6}})).unwrap();
+    h.run_steps(3);
+    assert_eq!(primary.borrow().as_str(), "Studio", "the selection is on the primary selection");
+}
+
 /// A right-click at `at`, the button pressed and released a frame apart.
 fn right_click(h: &mut H, at: Pos2) {
     h.event(egui::Event::PointerMoved(at));

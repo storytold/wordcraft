@@ -289,6 +289,9 @@ fn display(app: &mut WordApp, ui: &mut Ui) {
     }
     numeral_picker(app, ui);
     ui.add_space(8.0);
+    section(ui, "Status bar");
+    status_count_picker(app, ui);
+    ui.add_space(8.0);
     section(ui, "Printing");
     ui.checkbox(&mut app.ui.print_backgrounds, tl!("Print the page color"));
     ui.checkbox(&mut app.ui.update_fields_before_print, tl!("Update fields before printing"));
@@ -510,7 +513,8 @@ fn accessibility(app: &mut WordApp, ui: &mut Ui) {
     }
 }
 
-/// Draws Advanced options: typing and overtype behavior, alignment guides, recent-document count,
+/// File › Options › Advanced: the editing, measurement and display settings that need no pane of
+/// their own — typing and overtype behaviour, alignment guides, recent-document count,
 /// measurement units, region, keytips, caret animation, file locations and customization.
 fn advanced(app: &mut WordApp, ui: &mut Ui) {
     section(ui, "Editing");
@@ -518,6 +522,8 @@ fn advanced(app: &mut WordApp, ui: &mut Ui) {
     flag(app, ui, "Typing replaces selected text", "typingReplacesSelection", pr.typing_replaces_selection);
     flag(app, ui, "Use the Insert key to switch overtype on and off", "insertKeyOvertype", pr.insert_key_overtype);
     flag(app, ui, "Overtype (typing replaces the characters after the caret)", "overtype", pr.overtype);
+    #[cfg(target_os = "linux")]
+    flag(app, ui, "Use the middle mouse button to paste instead of autoscroll", "middleClickPaste", pr.middle_click_paste);
     let mut guides = app.ui.alignment_guides;
     if ui
         .checkbox(&mut guides, tl!("Show alignment guides when moving pictures and shapes"))
@@ -661,6 +667,25 @@ fn theme_picker(app: &mut WordApp, ui: &mut Ui) {
         });
         combo.response.labelled_by(label.id);
     });
+}
+
+/// What the status bar's live count shows (#2797): words (as Word's status bar counts), characters
+/// with spaces, or characters without spaces. Right-clicking the count in the status bar offers
+/// the same choices.
+fn status_count_picker(app: &mut WordApp, ui: &mut Ui) {
+    use crate::StatusCount;
+    ui.horizontal(|ui| {
+        let label = ui.label(tl!("Status bar count:"));
+        let combo = craft_ui::ComboBox::from_id_salt("status_count").selected_text(tl!(app.ui.status_count.label())).width(220.0).show_ui(ui, |ui| {
+            for c in StatusCount::ALL {
+                if ui.selectable_label(app.ui.status_count == c, tl!(c.label())).clicked() {
+                    let _ = app.run("ui.statusCount", json!({"value": c.code()}));
+                }
+            }
+        });
+        combo.response.labelled_by(label.id);
+    });
+    note(ui, "You can also right-click the count in the status bar to change it.");
 }
 
 /// Interface size (#475, #822): Auto, which keeps the system's display scale and shows the size it

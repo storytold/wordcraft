@@ -4,9 +4,9 @@
 //! leaving the window stops it. Holding the wheel down and moving scrolls too, and then letting
 //! go stops.
 //!
-//! WordCraft doesn't paste the primary selection on a middle click, so on Linux the button is
-//! free for this. macOS apps don't scroll this way, and browsers have their own middle-click
-//! behaviour, so there the button is left alone.
+//! With "Use the middle mouse button to paste instead of autoscroll" on (Linux, #1934), a middle
+//! click pastes the primary selection instead and this gesture doesn't start. macOS apps don't scroll this way, and
+//! browsers have their own middle-click behaviour, so there the button is left alone.
 
 use egui::{CursorIcon, Event, Key, PointerButton, Pos2, Stroke, Vec2, vec2};
 
@@ -34,11 +34,15 @@ pub(crate) struct AutoScroll {
     cancel_button: Option<PointerButton>,
     block_input: bool,
     pub(crate) supported: bool,
+    /// A middle click on the canvas arrived while `skip_middle_click` was set, so the canvas
+    /// should paste the primary selection instead of this scrolling. Set for that frame only
+    /// ([`update`] clears it first, [`cancel`] drops it), so it can never fire a paste a frame later.
+    paste_requested: bool,
 }
 
 impl Default for AutoScroll {
     fn default() -> Self {
-        Self { anchor: None, holding: false, dragged: false, cancel_button: None, block_input: false, supported: SUPPORTED }
+        Self { anchor: None, holding: false, dragged: false, cancel_button: None, block_input: false, supported: SUPPORTED, paste_requested: false }
     }
 }
 
@@ -53,6 +57,7 @@ impl AutoScroll {
         self.dragged = false;
         self.cancel_button = None;
         self.block_input = false;
+        self.paste_requested = false;
     }
 
     /// Mouse buttons belong to the gesture this frame: the canvas mustn't act on them.
@@ -60,10 +65,23 @@ impl AutoScroll {
         self.block_input
     }
 
+    /// Whether a middle click asked for a primary-selection paste this frame ([`update`] with
+    /// `skip_middle_click`). The flag is cleared before every frame is read, so it describes this
+    /// frame only.
+    pub(crate) fn paste_requested(&self) -> bool {
+        self.paste_requested
+    }
+
     /// Run before the canvas scrolls. Returns this frame's delta (positive moves the content
     /// down, as the canvas's wheel delta). Starting is restricted to the visible canvas; once
     /// started, moving outside it still controls the speed.
-    pub(crate) fn update(&mut self, ui: &egui::Ui, viewport: egui::Rect) -> Vec2 {
+    ///
+    /// `skip_middle_click`: a middle click pastes the primary selection instead of starting this
+    /// gesture ([`paste_requested`] says so). Off, the middle click scrolls the document (#1065).
+    pub(crate) fn update(&mut self, ui: &egui::Ui, viewport: egui::Rect, skip_middle_click: bool) -> Vec2 {
+        // The paste belongs to the frame the click arrived in: clear it before reading input, so
+        // a click can't leave a paste queued for a later frame.
+        self.paste_requested = false;
         if !self.supported {
             self.cancel();
             return Vec2::ZERO;
@@ -110,11 +128,22 @@ impl AutoScroll {
                 self.block_input = true;
                 self.cancel_button = Some(PointerButton::Middle);
                 return Vec2::ZERO;
-            } else if !cancel && viewport.intersect(ui.clip_rect()).contains(pressed_at) && ctx.layer_id_at(pressed_at) == Some(ui.layer_id()) {
+            }
+            // Only a click on the canvas itself is the document's: the middle button over the ribbon,
+            // a pane or a panel above the canvas belongs to that (#1934 pastes only here).
+            if cancel || !viewport.intersect(ui.clip_rect()).contains(pressed_at) || ctx.layer_id_at(pressed_at) != Some(ui.layer_id()) {
+                return Vec2::ZERO;
+            }
+            if skip_middle_click {
+                // Paste instead of scrolling (#1934): the canvas pastes the primary selection. The
+                // click is still this gesture's, so it mustn't also click the page.
+                self.paste_requested = true;
+            } else {
                 self.anchor = Some(pressed_at);
                 self.holding = true;
                 self.dragged = false;
             }
+            return Vec2::ZERO;
         }
         let (Some(anchor), Some(pointer)) = (self.anchor, pointer) else { return Vec2::ZERO };
         let displacement = pointer.y - anchor.y;

@@ -9753,6 +9753,19 @@ fn new_documents_follow_the_region() {
     assert_eq!(t.prefs.region.as_deref(), Some("en-US"), "junk is saved as en-US");
 }
 
+/// #1934: "Use the middle mouse button to paste instead of autoscroll" is set and read back like
+/// any other setting, so an agent can confirm what it changed.
+#[test]
+fn middle_click_paste_is_a_read_back_setting() {
+    let mut s = s();
+    assert_eq!(run(&mut s, "file.options", json!({}))["middleClickPaste"], json!(false), "off until it is chosen");
+    let o = run(&mut s, "file.options", json!({"middleClickPaste": true}));
+    assert_eq!((o["middleClickPaste"].as_bool(), s.prefs.middle_click_paste), (Some(true), true));
+    let o = run(&mut s, "file.options", json!({"middleClickPaste": false}));
+    assert_eq!((o["middleClickPaste"].as_bool(), s.prefs.middle_click_paste), (Some(false), false));
+    assert!(s.run("file.options", &json!({"middleClickPaste": "yes"})).is_err());
+}
+
 /// Automatic (HTML-style) paragraph spacing: `para.spacing` turns it on and off, and a number
 /// replaces it, as typing one in Word's Paragraph dialog does; Ctrl+0 and Remove Space After work
 /// on it too.

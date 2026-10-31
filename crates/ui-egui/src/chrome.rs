@@ -5,7 +5,7 @@ use serde_json::json;
 use wordcraft_doc::{PartKind, StoryRef};
 
 use crate::theme::{Tokens, TypeRung, fit_text, medium, paint_text, regular, semibold, text_width};
-use crate::{WordApp, icons};
+use crate::{StatusCount, StatusCounts, WordApp, icons};
 
 /// Why the caret's language isn't spell-checked (dictionary unreadable or missing), if it isn't.
 pub(crate) fn dictionary_problem(lang: &str, unreadable: &Option<(std::path::PathBuf, String)>, missing: Option<&str>) -> Option<String> {
@@ -581,15 +581,29 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                 {
                     let _ = app.run("ui.dialog", json!({"name": "goto"}));
                 }
-                let words = app.cached_word_count();
+                // The live count: words (the default, as Word's status bar counts), characters
+                // with spaces, or characters without spaces — whichever the person chose (#2797).
+                let unit = app.ui.status_count;
+                let counts = app.cached_status_counts();
                 // A selected picture/shape/text box isn't a text selection: show the total.
                 let wtxt = if app.session.sel.is_collapsed() || crate::objects::selected(app).is_some() {
-                    crate::i18n::fmt(tl!("{words} words"), &[("words", &words.to_string())])
+                    status_count_text(unit, counts.in_unit(unit), None)
                 } else {
-                    let sw = wordcraft_doc::count_words(&app.session.selected_text());
-                    crate::i18n::fmt(tl!("{selected} of {words} words"), &[("selected", &sw.to_string()), ("words", &words.to_string())])
+                    let selected = crate::count_in_unit(&app.session.selected_text(), unit);
+                    status_count_text(unit, counts.in_unit(unit), Some(selected))
                 };
-                if st(ui, &wtxt).clicked() {
+                let counted = st(ui, &wtxt);
+                // Right-click, as Word's status bar offers: choose what the count shows (#2797).
+                counted.context_menu(|ui| {
+                    ui.set_min_width(180.0);
+                    for c in crate::StatusCount::ALL {
+                        if ui.selectable_label(app.ui.status_count == c, tl!(c.label())).clicked() {
+                            let _ = app.run("ui.statusCount", json!({"value": c.code()}));
+                            ui.close();
+                        }
+                    }
+                });
+                if counted.clicked() {
                     let _ = app.run("ui.dialog", json!({"name": "wordCount"}));
                 }
                 if app.session.sel.focus.story != StoryRef::Body && !crate::canvas::in_text_box(app) {
@@ -751,14 +765,43 @@ fn small_icon(ui: &mut Ui, icon: &str, tip: &str) -> bool {
 }
 
 impl WordApp {
-    /// Word count, recomputed only when the document changes.
-    pub fn cached_word_count(&mut self) -> usize {
-        // The count option changes the count without a document change.
+    /// The document's counts, recomputed only when the document (or the count option) changes:
+    /// words as the status bar and the Word Count dialog count them, and characters with and
+    /// without spaces as the dialog does (#2797).
+    pub fn cached_status_counts(&mut self) -> StatusCounts {
+        // The count option changes the counts without a document change.
         let key = self.session.rev().wrapping_mul(2) | u64::from(self.session.prefs.count_notes);
-        if self.word_count.0 != key {
-            self.word_count = (key, self.session.word_count());
+        if self.status_counts.0 != key {
+            let text = self.session.counted_text();
+            self.status_counts = (
+                key,
+                StatusCounts {
+                    words: self.session.word_count(),
+                    chars: wordcraft_doc::count_chars(&text),
+                    chars_no_spaces: wordcraft_doc::count_chars_no_spaces(&text),
+                },
+            );
         }
-        self.word_count.1
+        self.status_counts.1
+    }
+}
+
+/// The status bar's count line (#2797): the whole document's `total`, or "selected of total" when
+/// part of it is selected, worded as the Word Count dialog words the same counts.
+pub(crate) fn status_count_text(unit: StatusCount, total: usize, selected: Option<usize>) -> String {
+    match (unit, selected) {
+        (StatusCount::Words, None) => crate::i18n::fmt(tl!("{words} words"), &[("words", &total.to_string())]),
+        (StatusCount::Words, Some(n)) => {
+            crate::i18n::fmt(tl!("{selected} of {words} words"), &[("selected", &n.to_string()), ("words", &total.to_string())])
+        }
+        (StatusCount::Characters, None) => crate::i18n::fmt(tl!("{chars} characters"), &[("chars", &total.to_string())]),
+        (StatusCount::Characters, Some(n)) => {
+            crate::i18n::fmt(tl!("{selected} of {chars} characters"), &[("selected", &n.to_string()), ("chars", &total.to_string())])
+        }
+        (StatusCount::CharactersNoSpaces, None) => crate::i18n::fmt(tl!("{chars} characters (no spaces)"), &[("chars", &total.to_string())]),
+        (StatusCount::CharactersNoSpaces, Some(n)) => {
+            crate::i18n::fmt(tl!("{selected} of {chars} characters (no spaces)"), &[("selected", &n.to_string()), ("chars", &total.to_string())])
+        }
     }
 }
 
