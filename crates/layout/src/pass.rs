@@ -101,6 +101,7 @@ fn new_ctx<'a>(
         quiet_marks: Vec::new(),
         stacked_marks: Vec::new(),
         mirror: false,
+        frame_run: None,
         table_keys: Vec::new(),
         fitted: HashMap::new(),
         header_tables: HashMap::new(),

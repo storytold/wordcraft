@@ -295,7 +295,7 @@ fn place_floating_table(ctx: &mut Ctx, pb: &mut PageBuilder, tl: &table::TableLa
     }
 }
 
-fn placed_intersects(item: &Placed, rect: &Rect) -> bool {
+pub(crate) fn placed_intersects(item: &Placed, rect: &Rect) -> bool {
     match item {
         Placed::Lines { para, l0, l1, x, y, .. } => para.lines.get(*l0..*l1).is_some_and(|lines| {
             lines.iter().enumerate().any(|(offset, line)| {

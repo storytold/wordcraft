@@ -8379,6 +8379,309 @@ fn a_text_frame_in_a_cell_floats_beside_the_text() {
     assert!(frame.x > text.x + 200.0, "right-aligned in the cell: {} vs {}", frame.x, text.x);
 }
 
+/// Consecutive paragraphs with the same frame in a cell (or header) share the frame, one under
+/// the other, instead of being drawn over each other.
+#[test]
+fn text_frames_in_a_cell_share_one_frame() {
+    use wordcraft_doc::props::TextFrame;
+    let mut d = Document::from_text("Above");
+    let mut t = Table::new(1, 1, 300.0);
+    let fr =
+        TextFrame { x_align: Some("right".into()), h_anchor: "text".into(), v_anchor: "text".into(), wrap: "around".into(), ..Default::default() };
+    let framed = |s: &str| {
+        let mut p = wordcraft_doc::Paragraph::with_text(s, Default::default());
+        p.props.frame = Some(fr.clone());
+        wordcraft_doc::para_block(p)
+    };
+    t.rows[0].cells[0].blocks = vec![framed("7"), framed("8")];
+    d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+    let l = lay(&d);
+    let at = |i: u32| l.caret(&Pos { story: StoryRef::Body, path: Path(vec![1, 0, 0, i]), off: 0 }).unwrap();
+    let (a, b) = (at(0), at(1));
+    assert!(b.top > a.top + 5.0, "one under the other: {} vs {}", a.top, b.top);
+    assert!((a.x - b.x).abs() < 1.0);
+}
+
+/// #4986: two header paragraphs with the same frame (18 pt wide, at the margin, exactly 24 pt
+/// lines) share it, one line apart, as in Word, instead of being drawn at one spot.
+#[test]
+fn text_frames_in_a_header_share_one_frame() {
+    use wordcraft_doc::props::{LineSpacing, TextFrame};
+    let mut d = Document::from_text("");
+    let fr = TextFrame { w: Some(18.0), h_anchor: "margin".into(), v_anchor: "margin".into(), wrap: "none".into(), ..Default::default() };
+    let framed = |s: &str| {
+        let mut p = wordcraft_doc::Paragraph::with_text(s, Default::default());
+        p.props.frame = Some(fr.clone());
+        p.props.line_spacing = Some(LineSpacing::Exactly(24.0));
+        p.props.space_before = Some(0.0);
+        p.props.space_after = Some(0.0);
+        wordcraft_doc::para_block(p)
+    };
+    let id = d.add_part(wordcraft_doc::PartKind::Header, vec![framed("1"), framed("2")]);
+    d.last_section.headers.default = Some(id);
+    let l = lay(&d);
+    let at = |i: usize| l.caret_on(&Pos { story: StoryRef::Part(id), path: Path::top(i), off: 0 }, 0).unwrap();
+    let (a, b) = (at(0), at(1));
+    assert!((b.top - a.top - 24.0).abs() < 0.5, "one 24 pt line apart: {} vs {}", a.top, b.top);
+    assert!((a.x - b.x).abs() < 1.0);
+}
+
+/// Text frames in the body (a court form built from them, #2406) go where their frame puts them
+/// on the page; paragraphs with the same frame stack in it, and the text outside it flows as if
+/// the frame weren't there. WordCraft laid every framed paragraph out in line, one under the
+/// other down the left margin.
+#[test]
+fn body_text_frames_go_where_the_frame_puts_them() {
+    use wordcraft_doc::props::TextFrame;
+    let frame = TextFrame {
+        w: Some(150.0),
+        x: 300.0,
+        y: 400.0,
+        h_anchor: "page".into(),
+        v_anchor: "page".into(),
+        wrap: "around".into(),
+        ..Default::default()
+    };
+    let framed = |text: &str| {
+        let mut p = wordcraft_doc::Paragraph::with_text(text, Default::default());
+        p.props.frame = Some(frame.clone());
+        wordcraft_doc::para_block(p)
+    };
+    let mut d = Document::new();
+    d.body =
+        vec![framed("Attorney 1"), framed("Attorney 2"), wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Body", Default::default()))];
+    let l = lay(&d);
+    let at = |b: usize| l.caret(&Pos::body(b, 0)).unwrap();
+    let (one, two, body) = (at(0), at(1), at(2));
+    assert!((one.x - 300.0).abs() < 1.0 && (one.top - 400.0).abs() < 1.0, "the frame's place on the page: ({}, {})", one.x, one.top);
+    assert!((two.x - one.x).abs() < 0.5 && two.top > one.top + 5.0, "the second paragraph under the first: ({}, {})", two.x, two.top);
+    assert!(two.top < one.top + 40.0, "in the same frame: {} vs {}", two.top, one.top);
+    assert!((body.top - 72.0).abs() < 1.0 && (body.x - 72.0).abs() < 1.0, "the frames take no room: ({}, {})", body.x, body.top);
+}
+
+/// A section break ends a run of paragraphs with the same frame: the paragraph after it, in the
+/// next section (on a new page), is a frame of its own at the frame's place, not stacked under the
+/// one before.
+#[test]
+fn a_section_break_ends_a_text_frame_run() {
+    let frame = wordcraft_doc::props::TextFrame {
+        w: Some(150.0),
+        x: 300.0,
+        y: 400.0,
+        h_anchor: "page".into(),
+        v_anchor: "page".into(),
+        wrap: "around".into(),
+        ..Default::default()
+    };
+    let framed = |text: &str, ends_section: bool| {
+        let mut p = wordcraft_doc::Paragraph::with_text(text, Default::default());
+        p.props.frame = Some(frame.clone());
+        if ends_section {
+            p.section = Some(Box::default());
+        }
+        wordcraft_doc::para_block(p)
+    };
+    let mut d = Document::new();
+    d.body = vec![framed("First section", true), framed("Second section", false)];
+    let l = lay(&d);
+    let (one, two) = (l.caret(&Pos::body(0, 0)).unwrap(), l.caret(&Pos::body(1, 0)).unwrap());
+    assert_eq!((one.page, two.page), (0, 1), "the next section starts a page");
+    assert!((two.x - 300.0).abs() < 1.0 && (two.top - 400.0).abs() < 1.0, "a frame of its own at the frame's place: ({}, {})", two.x, two.top);
+}
+
+/// A footnote referenced in a body text frame sits at the bottom of the frame's page, as it does
+/// from a paragraph in the flow.
+#[test]
+fn footnotes_referenced_in_a_body_text_frame_are_placed() {
+    let frame = wordcraft_doc::props::TextFrame {
+        w: Some(150.0),
+        x: 300.0,
+        y: 400.0,
+        h_anchor: "page".into(),
+        v_anchor: "page".into(),
+        wrap: "around".into(),
+        ..Default::default()
+    };
+    let mut p = wordcraft_doc::Paragraph::with_text("Framed reference", Default::default());
+    p.props.frame = Some(frame);
+    let mut d = Document::new();
+    d.body = vec![wordcraft_doc::para_block(p), wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Body", Default::default()))];
+    let id = footnote(&mut d, &Pos::body(0, "Framed reference".len()), "Frame note payload.");
+    let l = lay(&d);
+    let c = l.caret(&d.start_of(StoryRef::Part(id))).expect("the frame's footnote is placed");
+    assert_eq!(c.page, 0);
+    assert!(c.top > 600.0, "at the page bottom: {c:?}");
+}
+
+/// A body text frame in Read Mode stays in the reflowed text (its page offsets are for the paper);
+/// a framed paragraph with a page break before goes on the next page, in a frame of its own; one
+/// with a hard page break in it stays in the flow, so the text after the break is on the next page.
+#[test]
+fn body_text_frames_keep_page_breaks_and_stay_in_the_text_when_reflowed() {
+    let frame = wordcraft_doc::props::TextFrame {
+        w: Some(150.0),
+        x: 300.0,
+        y: 400.0,
+        h_anchor: "page".into(),
+        v_anchor: "page".into(),
+        wrap: "around".into(),
+        ..Default::default()
+    };
+    let framed = |text: &str, break_before: bool| {
+        let mut p = wordcraft_doc::Paragraph::with_text(text, Default::default());
+        p.props.frame = Some(frame.clone());
+        p.props.page_break_before = break_before.then_some(true);
+        wordcraft_doc::para_block(p)
+    };
+    let body = || wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Body", Default::default()));
+
+    let mut d = Document::new();
+    d.body = vec![framed("Attorney 1", false), body()];
+    let opts = LayoutOptions { view: ViewMode::Read, web_width: 230.0, read_height: 390.0, ..Default::default() };
+    let read = layout(&d, &mut LayoutCache::new(), &opts);
+    let c = read.caret(&Pos::body(0, 0)).unwrap();
+    assert!(c.x < 230.0 && c.top < 390.0, "on the narrow page, in the text: ({}, {})", c.x, c.top);
+
+    // After body text, and on a page that holds only a frame (its lines leave the flow at the top).
+    for first in [vec![body()], vec![]] {
+        let n = first.len();
+        d.body = first.into_iter().chain([framed("Attorney 1", false), framed("Attorney 2", true), body()]).collect();
+        let l = lay(&d);
+        let (one, two) = (l.caret(&Pos::body(n, 0)).unwrap(), l.caret(&Pos::body(n + 1, 0)).unwrap());
+        assert_eq!((one.page, two.page), (0, 1), "the page break before starts a new page (after {n} body paragraphs)");
+        assert!((two.top - 400.0).abs() < 1.0, "at the top of its own frame there: {}", two.top);
+    }
+
+    let brk = wordcraft_doc::para::PAGE_BREAK;
+    d.body = vec![framed(&format!("Before{brk}After"), false), body()];
+    let l = lay(&d);
+    let after = l.caret(&Pos::body(0, format!("Before{brk}").len())).unwrap();
+    assert_eq!(after.page, 1, "the text after the hard break is on the next page");
+
+    // A hard column break keeps the paragraph in the flow too.
+    let brk = wordcraft_doc::para::COLUMN_BREAK;
+    d.body = vec![framed(&format!("Before{brk}After"), false), body()];
+    let c = lay(&d).caret(&Pos::body(0, 0)).unwrap();
+    assert!((c.x - 72.0).abs() < 1.0, "in the flow, at the margin: {}", c.x);
+}
+
+/// A body text frame placed against the text area (`vAnchor="margin"`), like the city and year
+/// at the foot of a title page.
+fn body_frame(y_align: &str) -> wordcraft_doc::props::TextFrame {
+    wordcraft_doc::props::TextFrame {
+        w: Some(468.0),
+        x_align: Some("center".into()),
+        y_align: Some(y_align.into()),
+        h_anchor: "margin".into(),
+        v_anchor: "margin".into(),
+        wrap: "notBeside".into(),
+        ..Default::default()
+    }
+}
+
+/// Paragraphs `texts` (those in `framed` in `frame`) as a document's body.
+fn framed_doc(texts: &[&str], framed: &[usize], frame: &wordcraft_doc::props::TextFrame) -> Document {
+    let mut d = Document::new();
+    d.body = texts
+        .iter()
+        .enumerate()
+        .map(|(i, t)| {
+            let mut p = wordcraft_doc::Paragraph::with_text(t, Default::default());
+            p.props.space_before = Some(0.0);
+            p.props.space_after = Some(0.0);
+            if framed.contains(&i) {
+                p.props.frame = Some(frame.clone());
+            }
+            wordcraft_doc::para_block(p)
+        })
+        .collect();
+    d
+}
+
+/// Text frames in the body (`w:framePr`) are placed apart, like floating objects: the city and
+/// year at the foot of a title page (`vAnchor="margin" yAlign="bottom"`) sit at the bottom of the
+/// text area, one under the other — consecutive paragraphs with the same frame share it — and
+/// take no room in the flow. WordCraft laid them out as ordinary paragraphs where they stood.
+#[test]
+fn body_text_frames_at_the_foot_of_the_page_share_one_frame() {
+    let d = framed_doc(&["Title", "City", "2026", "After"], &[1, 2], &body_frame("bottom"));
+    let l = lay(&d);
+    let at = |i: usize| l.caret(&Pos { story: StoryRef::Body, path: Path::top(i), off: 0 }).unwrap();
+    let (title, city, year, after) = (at(0), at(1), at(2), at(3));
+    assert_eq!(l.pages.len(), 1);
+    assert!(after.top - title.top < 30.0, "the frame takes no room: the text after it goes on below the title: {} vs {}", after.top, title.top);
+    let s = d.sections().first().map(|(_, s)| (*s).clone()).unwrap();
+    let foot = s.page_h - s.margin_bottom;
+    assert!(year.top > city.top + 5.0, "one under the other: {} vs {}", city.top, year.top);
+    assert!(
+        year.top + year.height <= foot + 0.5 && year.top + year.height > foot - 20.0,
+        "at the foot of the text area: {} vs {foot}",
+        year.top + year.height
+    );
+}
+
+/// A frame at the foot of the page after text that already runs down there would cover it: it
+/// moves to the next page with its paragraphs, as a floating table does, and the empty paragraph
+/// after it that carries the section break (it can't go in the frame) starts no blank page.
+#[test]
+fn body_text_frame_after_a_full_page_moves_to_the_next() {
+    let lines: Vec<String> = (0..80).map(|i| format!("Line {i}")).collect();
+    let plain: Vec<&str> = lines.iter().map(String::as_str).collect();
+    // as many lines as fill the first page
+    let full = {
+        let l = lay(&framed_doc(&plain, &[], &body_frame("bottom")));
+        (0..plain.len()).take_while(|&i| l.caret(&Pos { story: StoryRef::Body, path: Path::top(i), off: 0 }).is_some_and(|c| c.page == 0)).count()
+    };
+    let mut texts: Vec<&str> = plain[..full].to_vec();
+    texts.extend(["City", "2026", "", "Next section"]);
+    let mut d = framed_doc(&texts, &[full, full + 1], &body_frame("bottom"));
+    // the empty paragraph ends the first section, the next one starts on a new page
+    let sect = d.last_section.clone();
+    if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(full + 2).map(Arc::make_mut) {
+        p.section = Some(Box::new(sect));
+    }
+    let l = lay(&d);
+    let at = |i: usize| l.caret(&Pos { story: StoryRef::Body, path: Path::top(i), off: 0 }).unwrap();
+    let city = at(full);
+    for i in 0..full {
+        let c = at(i);
+        assert!(c.page != city.page || c.top + c.height <= city.top + 0.5, "line {i} under the frame: {} vs {}", c.top + c.height, city.top);
+    }
+    assert_eq!(city.page, 1, "the frame moved off the full page");
+    assert_eq!(at(full + 3).page, 2, "no blank page between the frame and the next section");
+}
+
+/// A run of more than 64 paragraphs with one frame is cut into frames of 64 from its start: the
+/// 65th paragraph starts a new frame at the frame's place, and the ones after it stack under it
+/// instead of landing on one another.
+#[test]
+fn a_long_run_of_framed_paragraphs_is_cut_into_whole_frames() {
+    let frame = wordcraft_doc::props::TextFrame {
+        w: Some(150.0),
+        x: 300.0,
+        y: 100.0,
+        h_anchor: "page".into(),
+        v_anchor: "page".into(),
+        wrap: "around".into(),
+        ..Default::default()
+    };
+    let mut d = Document::new();
+    d.body = (0..130)
+        .map(|i| {
+            let mut p = wordcraft_doc::Paragraph::with_text(&format!("Line {i}"), Default::default());
+            p.props.frame = Some(frame.clone());
+            wordcraft_doc::para_block(p)
+        })
+        .collect();
+    let l = lay(&d);
+    let top = |b: usize| l.caret(&Pos::body(b, 0)).unwrap().top;
+    assert!((top(64) - top(0)).abs() < 0.5, "a new frame at the frame's place: {} vs {}", top(64), top(0));
+    assert!((top(128) - top(0)).abs() < 0.5, "and another: {}", top(128));
+    for b in (0..63).chain(64..127) {
+        assert!(top(b + 1) > top(b) + 1.0, "paragraph {} under {b}: {} vs {}", b + 1, top(b + 1), top(b));
+    }
+}
+
 /// Word has no frames inside a text box: a paragraph there whose style carries a frame (a
 /// letterhead's "Weld" and "Governor" styles, framed at the page's left) runs in the box's text
 /// like any other. WordCraft placed each one apart at the frame's offset, so two of them in a row
