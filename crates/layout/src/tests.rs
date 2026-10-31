@@ -1319,6 +1319,92 @@ fn a_missing_roman_font_is_drawn_as_word_draws_it() {
 }
 
 #[test]
+fn a_missing_font_is_drawn_in_its_font_table_alternate() {
+    // Measured in Word 2024 and Word for Windows 16.0.20527 (#2702): a font that isn't installed is
+    // drawn in the alternate its font table names (`w:altName`), before the roman rule; an
+    // alternate that can't be drawn either leaves the family class in charge: Cambria for a roman
+    // or modern font, the generic substitutes (Calibri in Word) for a swiss one.
+    #[derive(Clone, Copy)]
+    enum Family {
+        Swiss,
+        Roman,
+        Modern,
+    }
+    let face_of = |alt: Option<&str>, family: Family| {
+        let mut d = Document::from_text("Lanterns");
+        if let Some(alt) = alt {
+            d.settings.font_alt_names = vec![("No Such Brand Font".into(), alt.into())];
+        }
+        match family {
+            Family::Roman => d.settings.roman_fonts = vec!["No Such Brand Font".into()],
+            Family::Modern => d.settings.modern_fonts = vec!["No Such Brand Font".into()],
+            Family::Swiss => {}
+        }
+        let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+        p.runs[0].props.font = Some("No Such Brand Font".into());
+        let l = lay(&d);
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!("no text") };
+        let first = para.clusters.first().expect("a cluster");
+        para.styles[first.style as usize].face
+    };
+    let face = |alt: Option<&str>, roman: bool| face_of(alt, if roman { Family::Roman } else { Family::Swiss });
+    let resolve = |f: &str| wordcraft_fonts::word::resolve(f, false, false).face;
+    let (courier, times, calibri, cambria) = (resolve("Courier New"), resolve("Times New Roman"), resolve("Calibri"), resolve("Cambria"));
+    let generic = face(None, false);
+    // Serif and sans faces are bundled, so these differ on any machine.
+    assert_ne!(times, generic);
+    assert_ne!(cambria, generic);
+    // A, B: a missing font with an alternate.
+    assert_eq!(face(Some("Times New Roman"), false), times);
+    assert_eq!(face(Some("Courier New"), false), courier);
+    // go_math (docxide-pdf corpus): Museo Sans 300 → Calibri.
+    assert_eq!(face(Some("Calibri"), false), calibri);
+    // D: the alternate beats the roman rule.
+    assert_eq!(face(Some("Times New Roman"), true), times);
+    assert_eq!(face(Some("Courier New"), true), courier);
+    // E: an alternate that is missing too, with no substitutes of its own: the roman rule, or the
+    // generic substitutes for a font that isn't roman.
+    assert_eq!(face(Some("No Such Alternate"), true), cambria);
+    assert_eq!(face(Some("No Such Alternate"), false), generic);
+    // Word reads a value with a comma as one name, not a list (MS-OE376 2.1.264): no font is
+    // called that, so the roman rule or the generic substitutes draw it.
+    assert_eq!(face(Some("No Such Alternate, Times New Roman"), false), generic);
+    assert_eq!(face(Some("No Such Alternate, Times New Roman"), true), cambria);
+    // A modern font: its installed alternate draws it, a missing alternate leaves it in Cambria,
+    // and with no alternate at all it takes the generic substitutes (Calibri in Word).
+    assert_eq!(face_of(Some("Courier New"), Family::Modern), courier);
+    assert_eq!(face_of(Some("No Such Alternate"), Family::Modern), cambria);
+    assert_eq!(face_of(None, Family::Modern), generic);
+    // An alternate that names another missing font with an alternate of its own: the chain isn't
+    // followed.
+    let mut d = Document::from_text("Lanterns");
+    d.settings.font_alt_names = vec![("No Such Brand Font".into(), "No Such Alternate".into()), ("No Such Alternate".into(), "Courier New".into())];
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    p.runs[0].props.font = Some("No Such Brand Font".into());
+    let l = lay(&d);
+    let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!("no text") };
+    let first = para.clusters.first().expect("a cluster");
+    assert_eq!(para.styles[first.style as usize].face, generic, "the chain isn't followed");
+}
+
+#[test]
+fn an_installed_font_ignores_its_font_table_alternate() {
+    // The alternate is only for a font that isn't there: an installed (here bundled) font keeps its
+    // own face.
+    let font = wordcraft_fonts::FALLBACK_FAMILY;
+    let mut d = Document::from_text("Lanterns");
+    d.settings.font_alt_names = vec![(font.into(), "Times New Roman".into())];
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    p.runs[0].props.font = Some(font.into());
+    let l = lay(&d);
+    let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!("no text") };
+    let first = para.clusters.first().expect("a cluster");
+    let own = wordcraft_fonts::word::resolve(font, false, false).face;
+    assert_ne!(own, wordcraft_fonts::word::resolve("Times New Roman", false, false).face);
+    assert_eq!(para.styles[first.style as usize].face, own);
+}
+
+#[test]
 fn a_missing_roman_font_with_its_own_substitute_keeps_it() {
     // Times New Roman is roman in every font table. Where it isn't installed it keeps its metric
     // clone (Liberation Serif), not Cambria: Word, which always has it, never draws it missing.
@@ -8170,6 +8256,47 @@ fn east_asian_text_takes_the_asian_font_and_latin_text_the_latin_font() {
         let want = if ch.is_ascii() { latin_face } else { asian_face };
         assert_eq!(face, want, "{ch:?} in {}", if ch.is_ascii() { latin } else { &asian });
     }
+}
+
+#[test]
+fn a_missing_east_asian_font_is_drawn_in_its_font_table_alternate() {
+    // #2702 for the run's East Asian font (`w:eastAsia`): one that isn't installed is drawn in the
+    // alternate its font table names, when that one is installed and has the characters. Take an
+    // installed CJK font other than the one fallback would pick anyway, so the test tells them apart.
+    let resolve = |f: &str| wordcraft_fonts::word::resolve(f, false, false);
+    let fallback = wordcraft_fonts::FontDb::global().fallback_for('你', 0).map(|f| f.family.clone());
+    let Some(asian) = wordcraft_fonts::FontDb::global().east_asian_families().into_iter().find(|f| {
+        let r = resolve(f);
+        Some(f) != fallback.as_ref() && !r.substituted && r.face.covers('你') && r.face.covers('好')
+    }) else {
+        eprintln!("skipped: no second Chinese font installed");
+        return;
+    };
+    let missing = "No Such East Asian Font 2702";
+    let text = "Hello 你好";
+    let faces = |alternate: bool| {
+        let mut d = Document::from_text(text);
+        if alternate {
+            d.settings.font_alt_names = vec![(missing.into(), asian.clone())];
+        }
+        d.format_range(&Pos::body(0, 0), &Pos::body(0, text.len()), &|c| {
+            c.font = Some(wordcraft_doc::styles::BODY_FONT.into());
+            c.font_ea = Some(missing.into());
+        })
+        .unwrap();
+        let l = lay(&d);
+        let para =
+            l.pages.iter().flat_map(|p| p.items.iter()).find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+        para.clusters
+            .iter()
+            .filter(|c| text.get(c.start..c.end).and_then(|s| s.chars().next()).is_some_and(|ch| !ch.is_ascii()))
+            .map(|c| para.styles[c.style as usize].face.id())
+            .collect::<Vec<_>>()
+    };
+    let asian_face = resolve(&asian).face.id();
+    let with = faces(true);
+    assert!(!with.is_empty() && with.iter().all(|f| *f == asian_face), "你好 in the alternate {asian}");
+    assert!(faces(false).iter().all(|f| *f != asian_face), "without the alternate, fallback picks another font");
 }
 
 /// A page total in the footer ("Page X of Y") is filled in after pagination, so it doesn't make

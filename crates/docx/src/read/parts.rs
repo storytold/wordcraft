@@ -48,16 +48,28 @@ impl Reader<'_> {
         }
     }
 
-    /// The fonts the font table classes as roman (`w:font/w:family w:val="roman"`).
+    /// The fonts the font table classes as roman or modern (`w:font/w:family`) and the alternate
+    /// names it gives them (`w:font/w:altName`).
     pub(super) fn read_font_families(&mut self, path: &str) {
         let Ok(Some(table)) = self.xml(path) else { return };
-        self.doc.settings.roman_fonts = table
-            .children("w:font")
-            .filter(|f| f.child("w:family").and_then(|v| v.attr("w:val")) == Some("roman"))
-            .filter_map(|f| f.attr("w:name"))
-            .filter(|n| !n.is_empty() && n.len() <= MAX_FONT_NAME)
+        let fonts =
+            || table.children("w:font").filter_map(|f| f.attr("w:name").map(|n| (f, n))).filter(|(_, n)| !n.is_empty() && n.len() <= MAX_FONT_NAME);
+        // Each list has its own limit, so fonts of one kind never crowd out the other.
+        let family = |class: &str| -> Vec<String> {
+            fonts()
+                .filter(|(f, _)| f.child("w:family").and_then(|v| v.attr("w:val")) == Some(class))
+                .take(MAX_TABLE_FONTS)
+                .map(|(_, n)| n.to_string())
+                .collect()
+        };
+        self.doc.settings.roman_fonts = family("roman");
+        self.doc.settings.modern_fonts = family("modern");
+        self.doc.settings.font_alt_names = fonts()
+            .filter_map(|(f, n)| {
+                let alt = f.child("w:altName").and_then(|v| v.attr("w:val"))?.trim();
+                (!alt.is_empty() && alt.len() <= MAX_FONT_NAME && !alt.eq_ignore_ascii_case(n)).then(|| (n.to_string(), alt.to_string()))
+            })
             .take(MAX_TABLE_FONTS)
-            .map(str::to_string)
             .collect();
     }
 
