@@ -215,6 +215,11 @@ impl VisCl {
 pub const PARA_MARK_WIDTH: f32 = 5.0;
 
 impl Line {
+    /// How far below the line's top its text ends, without the leading spacing puts under it. Tight
+    /// spacing can put that below the line's own height.
+    pub fn text_depth(&self) -> f32 {
+        (self.baseline - self.top + self.text_desc).max(0.0)
+    }
     /// Left edge of cluster `k` (a paragraph cluster index on this line).
     pub fn cl_left(&self, k: usize) -> Option<f32> {
         let i = k.checked_sub(self.c0)?;

@@ -203,7 +203,7 @@ pub(crate) fn add(ctx: &mut Ctx, lay: &mut DocLayout) {
                 break;
             }
             let avail = bottom - top;
-            let (items, h) = if c.h > avail { (fit_box(c.items, avail - PAD), avail) } else { (c.items, c.h) };
+            let (items, h) = if c.h > avail { (fit_box(c.items, avail - PAD, 0.0), avail) } else { (c.items, c.h) };
             next = top + h + GAP;
             let line = |style, width: f32| Border { style, width, color: Some(c.color), space: 0.0 };
             // Leader: along the text from the anchor to the page edge, then to the card.
