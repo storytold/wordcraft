@@ -1,12 +1,33 @@
 //! Which hyperlink targets may leave the document: followed by the OS, or written into an
 //! exported HTML/Markdown file where a browser would run them.
 
-/// Whether Ctrl/⌘+click may hand a document's hyperlink to the system: web and email links only,
+/// The URL Ctrl/⌘+click may hand to the system, if any: a web link with a host or an email link,
 /// so a document can't launch `file:` paths, programs or custom-scheme handlers. Exact: a leading
-/// space or a control character makes it not a link.
-pub fn is_web_or_mail_link(url: &str) -> bool {
-    let Some((scheme, _)) = url.split_once(':') else { return false };
-    ["http", "https", "mailto"].iter().any(|s| scheme.eq_ignore_ascii_case(s))
+/// space or a control character makes it not a link. Returns what must be opened (see
+/// `opened_form`).
+pub fn followable_url(url: &str) -> Option<String> {
+    let (scheme, _) = url.split_once(':')?;
+    if !["http", "https", "mailto"].iter().any(|s| scheme.eq_ignore_ascii_case(s)) {
+        return None;
+    }
+    opened_form(url)
+}
+
+/// Web build: the browser's `window.open` reads the link itself and never opens a local file.
+#[cfg(target_arch = "wasm32")]
+fn opened_form(url: &str) -> Option<String> {
+    Some(url.to_string())
+}
+
+/// Desktop: the parsed, normalised URL, with a host for http/https. The opener (`webbrowser`)
+/// reads any string `url` can't parse, such as `https://host:99999/`, as a local file path (#3732).
+#[cfg(not(target_arch = "wasm32"))]
+fn opened_form(url: &str) -> Option<String> {
+    let parsed = url::Url::parse(url).ok()?;
+    let ok = parsed.scheme() == "mailto" || parsed.host_str().is_some_and(|h| !h.is_empty());
+    // `webbrowser` on WSL runs `cmd.exe /c start <url>`, escaping only `^` and `&`, and `url`
+    // leaves `|` as it is: a raw `|` would pipe into another command there.
+    ok.then(|| parsed.as_str().replace('|', "%7C"))
 }
 
 /// Whether a hyperlink may be written as an `href` (or Markdown destination, RTF `HYPERLINK`
@@ -46,7 +67,7 @@ mod tests {
     #[test]
     fn only_web_and_mail_links_are_followable() {
         for ok in ["https://example.com/a?b#c", "http://example.com", "HTTPS://EXAMPLE.COM", "mailto:someone@example.com"] {
-            assert!(is_web_or_mail_link(ok), "{ok}");
+            assert!(followable_url(ok).is_some(), "{ok}");
         }
         for bad in [
             "file:///etc/passwd",
@@ -60,7 +81,54 @@ mod tests {
             "example.com",
             "#top",
         ] {
-            assert!(!is_web_or_mail_link(bad), "{bad:?}");
+            assert!(followable_url(bad).is_none(), "{bad:?}");
+        }
+    }
+
+    /// Desktop: what gets opened is the parsed URL, not the document's string (#3732).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn followed_links_are_parsed_first() {
+        for (ok, opened) in [
+            ("https://example.com/a?b#c", "https://example.com/a?b#c"),
+            ("http://example.com", "http://example.com/"),
+            ("HTTPS://EXAMPLE.COM", "https://example.com/"),
+            ("mailto:someone@example.com", "mailto:someone@example.com"),
+            ("MAILTO:a@b.c?subject=hi there", "mailto:a@b.c?subject=hi%20there"),
+            ("https:\\\\example.com\\a\\b", "https://example.com/a/b"),
+            ("https://us er:p@ss@example.com/", "https://us%20er:p%40ss@example.com/"),
+            // A `|` would pipe into another command where the opener runs `cmd.exe /c start`.
+            ("https://x.test/a|calc?q=|#|", "https://x.test/a%7Ccalc?q=%7C#%7C"),
+            ("mailto:a|b@c.d", "mailto:a%7Cb@c.d"),
+        ] {
+            assert_eq!(followable_url(ok).as_deref(), Some(opened), "{ok}");
+        }
+        for bad in [
+            // An allowed scheme `url` can't parse: the opener would read it as a file path.
+            "https://example.com:99999/",
+            "https://",
+            "http:",
+            "https://exa mple.com/",
+            "http://[::1/",
+        ] {
+            assert!(followable_url(bad).is_none(), "{bad:?}");
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    proptest::proptest! {
+        /// What gets opened is itself a followable URL: same scheme, no `|`, unchanged when
+        /// checked again.
+        #[test]
+        fn followable_urls_are_stable(url in "(https?|HTTPS|mailto):[\\\\/]{0,2}[ -~]{0,30}") {
+            if let Some(u) = followable_url(&url) {
+                let parsed = url::Url::parse(&u);
+                proptest::prop_assert!(parsed.is_ok(), "{u}");
+                let scheme = url.split_once(':').map(|(s, _)| s.to_ascii_lowercase());
+                proptest::prop_assert_eq!(parsed.ok().map(|p| p.scheme().to_string()), scheme);
+                proptest::prop_assert!(!u.contains('|'), "{u}");
+                proptest::prop_assert_eq!(followable_url(&u), Some(u.clone()));
+            }
         }
     }
 

@@ -1,5 +1,5 @@
 use super::balloons::over_balloon;
-use super::links::{field_showing_code, is_followable_link, is_generated_bookmark_link, link_under};
+use super::links::{field_showing_code, followable_link, is_generated_bookmark_link, link_under};
 use super::navigation::page_at;
 use super::story::{enters_header_footer, in_text_box, part_kind, text_box_host};
 use super::{CanvasState, DocLayout, PartKind, Pos, Pos2, Rect, StoryRef, Ui, WordApp, json};
@@ -334,8 +334,8 @@ fn handle_primary_press(
             if app.run("edit.goto", json!({"bookmark": name})).is_ok() {
                 let _ = app.run("select.collapse", json!({}));
             }
-        } else if is_followable_link(&link) {
-            app.canvas.open_url = Some(link);
+        } else if let Some(url) = followable_link(&link) {
+            app.canvas.open_url = Some(url);
         } else {
             app.status(tl!("Only web (http, https) and email (mailto) links can be followed"));
         }

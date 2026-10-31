@@ -2658,7 +2658,7 @@ fn drag_floating_picture(wrap: &str, header: bool, preselect: bool) {
 #[test]
 fn only_web_and_email_links_are_followed() {
     for ok in ["https://example.com/a?b#c", "http://example.com", "HTTPS://EXAMPLE.COM", "mailto:someone@example.com"] {
-        assert!(is_followable_link(ok), "{ok}");
+        assert!(followable_link(ok).is_some(), "{ok}");
     }
     for bad in [
         "file:///etc/passwd",
@@ -2674,8 +2674,55 @@ fn only_web_and_email_links_are_followed() {
         "",
         "example.com",
     ] {
-        assert!(!is_followable_link(bad), "{bad:?}");
+        assert!(followable_link(bad).is_none(), "{bad:?}");
     }
+    // Desktop: `webbrowser` would open these as local file paths (#3732).
+    #[cfg(not(target_arch = "wasm32"))]
+    for bad in ["https://example.com:99999/", "https://"] {
+        assert!(followable_link(bad).is_none(), "{bad:?}");
+    }
+}
+
+/// #3732: Ctrl/⌘+click opens the parsed link, not the document's string: scheme and host
+/// lower-cased, `|` percent-encoded.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn ctrl_click_opens_the_parsed_link() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("See here")), Default::default());
+    a.run("select.text", json!({"text": "here"})).unwrap();
+    a.run("insert.link", json!({"url": "HTTPS://Example.com/a|b"})).unwrap();
+    a.run("caret.docEnd", json!({})).unwrap();
+    // Read each frame's OpenUrl commands inside the frame.
+    let opened = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+    let seen = opened.clone();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        move |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+            seen.borrow_mut().extend(ctx.output(|o| {
+                o.commands
+                    .iter()
+                    .filter_map(|c| match c {
+                        egui::OutputCommand::OpenUrl(o) => Some(o.url.clone()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+            }));
+        },
+        a,
+    );
+    steps(&mut h, 6);
+    // Between the link's "e" and "r".
+    let c = h.state_mut().session.layout().caret(&Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 6 }).unwrap();
+    let at = screen(&mut h, c.x, c.top + c.height / 2.0);
+    h.event(egui::Event::PointerMoved(at));
+    h.step();
+    let press = egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::COMMAND };
+    h.event_modifiers(press, egui::Modifiers::COMMAND);
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+    steps(&mut h, 3);
+    assert_eq!(*opened.borrow(), ["https://example.com/a%7Cb"]);
 }
 
 /// Ctrl+click on a link to a bookmark puts the caret at the bookmark's start, as Word does;

@@ -43,8 +43,8 @@ pub(super) fn is_generated_bookmark_link(link: &str) -> bool {
     link.strip_prefix("#_").is_some()
 }
 
-/// Whether Ctrl/⌘+click may hand a document's hyperlink to the system: web and email links only,
-/// so a document can't launch `file:` paths, programs or custom-scheme handlers.
-pub(super) fn is_followable_link(url: &str) -> bool {
-    wordcraft_doc::link::is_web_or_mail_link(url)
+/// The URL Ctrl/⌘+click may hand to the system, parsed: web and email links only, so a document
+/// can't launch `file:` paths, programs or custom-scheme handlers.
+pub(super) fn followable_link(url: &str) -> Option<String> {
+    wordcraft_doc::link::followable_url(url)
 }

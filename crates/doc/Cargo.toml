@@ -22,5 +22,10 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 unicode-segmentation = { workspace = true }
 
+# Followed links are parsed for the desktop opener (`link::followable_url`); the web build's
+# `window.open` reads links itself, and `url` would add about 235 KB to its wasm.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+url = { workspace = true }
+
 [dev-dependencies]
 proptest = { workspace = true }

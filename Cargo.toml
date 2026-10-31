@@ -41,6 +41,9 @@ proptest = "1"
 rayon = "1"
 unicode-bidi = "0.3"
 unicode-segmentation = "1"
+# Desktop only: followed links are parsed before they reach the opener (#3732); already in the
+# desktop tree through webbrowser and reqwest.
+url = "2.5"
 unicode-linebreak = "0.1"
 unicode-script = "0.5"
 regex = { version = "1", default-features = false, features = ["std", "unicode", "perf"] }
