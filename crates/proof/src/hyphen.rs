@@ -18,6 +18,9 @@
 //! **German**: the TeX German patterns for the reformed spelling ([`Patterns::de`]), also for
 //! Swiss text, whose `ss` the patterns split like any double consonant (`Stras-se`).
 //!
+//! **Spanish**: the TeX Spanish patterns ([`Patterns::es`], by Javier Bezos and CervanTeX, MIT),
+//! for every Spanish variety.
+//!
 //! Then the paragraph's limits ([`Limits`]) are applied.
 
 pub use crate::dict;
@@ -42,6 +45,8 @@ static IT_PAT: &str = include_str!("../../../assets/hyphenation/it.pat");
 /// hyph-utf8's `hyph-de-1996.tex` (reformed spelling), unmodified (MIT; the notice is in the
 /// file's header).
 static DE_PAT: &str = include_str!("../../../assets/hyphenation/de.pat");
+/// hyph-utf8's `hyph-es.tex`, unmodified (MIT; the notice is in the file's header).
+static ES_PAT: &str = include_str!("../../../assets/hyphenation/es.pat");
 
 impl Dictionary {
     /// The bundled US English dictionary (decoded on first use).
@@ -88,6 +93,18 @@ impl Patterns {
     pub fn de() -> &'static Patterns {
         static P: OnceLock<Patterns> = OnceLock::new();
         P.get_or_init(|| Patterns::parse(DE_PAT))
+    }
+
+    /// The bundled Spanish patterns, for every Spanish variety (parsed on first use; the file has
+    /// no exception words). `ü` (`pingüino`) is in the alphabet though no pattern names it, so
+    /// such words are still hyphenated by the patterns.
+    pub fn es() -> &'static Patterns {
+        static P: OnceLock<Patterns> = OnceLock::new();
+        P.get_or_init(|| {
+            let mut p = Patterns::parse(ES_PAT);
+            p.add_letters(['ü']);
+            p
+        })
     }
 }
 
@@ -146,6 +163,7 @@ fn core_breaks(core: &[char], lang: ProofLang) -> (Vec<usize>, Source) {
         ProofLang::Pt => return core_breaks_patterns(Patterns::pt(), core),
         ProofLang::It => return core_breaks_patterns(Patterns::it(), core),
         ProofLang::De => return core_breaks_patterns(Patterns::de(), core),
+        ProofLang::Es | ProofLang::EsMx | ProofLang::Es419 | ProofLang::EsUy => return core_breaks_patterns(Patterns::es(), core),
         _ => {}
     }
     if lang == ProofLang::Ru && core.iter().all(|&c| crate::ru::is_cyrillic(c)) {
@@ -873,10 +891,36 @@ mod tests {
         assert_eq!(heuristic_points_pl(&c), vec![5], "szczé-rze: `rz` stays whole");
     }
 
+    /// Spanish words break at their syllables (the RAE's rules, as the TeX patterns encode
+    /// them), in every Spanish variety, not by the English patterns.
+    #[test]
+    fn spanish_patterns_break_spanish_syllables() {
+        let shown = |w: &str, lang: ProofLang| {
+            let (points, src) = word_breaks_in(w, lang);
+            assert_eq!(src, Source::Patterns, "{w}");
+            let mut s = String::new();
+            for (i, c) in w.chars().enumerate() {
+                if points.contains(&i) {
+                    s.push('-');
+                }
+                s.push(c);
+            }
+            s
+        };
+        for lang in [ProofLang::Es, ProofLang::EsMx, ProofLang::Es419, ProofLang::EsUy] {
+            for want in ["ca-mi-se-ta", "pre-su-pues-to", "cons-truc-ción", "ca-rre-te-ra", "Ayun-ta-mien-to", "de-sa-rro-llo"] {
+                assert_eq!(shown(&want.replace('-', ""), lang), want, "{lang:?}");
+            }
+        }
+        assert!(Patterns::es().len() > 4000, "{}", Patterns::es().len());
+        // The paragraph limits still apply.
+        assert_eq!(hyphen_points_in("presupuesto", &Limits { before_last: 3, ..Limits::default() }, ProofLang::Es), [3, 5]);
+    }
+
     #[test]
     fn languages_without_patterns_keep_the_english_ones() {
         for w in ["hyphenation", "typography", "internationalization"] {
-            for lang in [ProofLang::Other, ProofLang::Cs, ProofLang::Id, ProofLang::Es, ProofLang::EsMx, ProofLang::Es419, ProofLang::EsUy] {
+            for lang in [ProofLang::Other, ProofLang::Cs, ProofLang::Id] {
                 assert_eq!(hyphen_points_in(w, &Limits::default(), lang), hyphen_points(w, &Limits::default()), "{w}");
             }
         }
