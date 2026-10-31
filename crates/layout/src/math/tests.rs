@@ -179,6 +179,116 @@ fn delimiters_grow_around_tall_content() {
 }
 
 #[test]
+fn nested_empty_delimiters_grow_with_nesting() {
+    use wordcraft_doc::math::*;
+    fn delim(inner: Vec<MNode>) -> MNode {
+        MNode::Delim { beg: Some('('), end: Some(')'), sep: None, grow: true, shp_match: false, elems: vec![inner] }
+    }
+    fn nest(level: usize) -> Vec<MNode> {
+        if level == 0 {
+            return Vec::new();
+        }
+        vec![delim(nest(level - 1))]
+    }
+    for display in [false, true] {
+        let heights: Vec<f32> = (1..=5)
+            .map(|level| {
+                let m = lay_in(&Math { nodes: nest(level), ..Default::default() }, "", display, 400.0, &MathProps::default());
+                m.ascent + m.descent
+            })
+            .collect();
+        for pair in heights.windows(2) {
+            assert!(pair[1] > pair[0] * 1.05, "display={display}: {heights:?}");
+        }
+        // A nested pair beside other content grows too; it need not be the whole argument.
+        let solo = lay_in(&Math { nodes: vec![delim(Vec::new())], ..Default::default() }, "", display, 400.0, &MathProps::default());
+        let mixed = lay_in(
+            &Math { nodes: vec![delim(vec![MNode::Run(MRun::new("x+")), delim(Vec::new())])], ..Default::default() },
+            "",
+            display,
+            400.0,
+            &MathProps::default(),
+        );
+        let h = |m: &MathLayout| m.ascent + m.descent;
+        assert!(h(&mixed) > h(&solo) * 1.05, "display={display}: {} vs {}", h(&mixed), h(&solo));
+        // Invisible grouping brackets add no glyph; the outer pair should still grow.
+        let invisible = |inner: Vec<MNode>| MNode::Delim { beg: None, end: None, sep: None, grow: true, shp_match: false, elems: vec![inner] };
+        let grouped = lay_in(&Math { nodes: vec![delim(vec![invisible(nest(1))])], ..Default::default() }, "", display, 400.0, &MathProps::default());
+        assert!(h(&grouped) > h(&solo) * 1.05, "display={display}: {} vs {}", h(&grouped), h(&solo));
+        let empty_group =
+            lay_in(&Math { nodes: vec![delim(vec![invisible(Vec::new())])], ..Default::default() }, "", display, 400.0, &MathProps::default());
+        assert!((h(&empty_group) - h(&solo)).abs() < 0.01, "display={display}: {} vs {}", h(&empty_group), h(&solo));
+        // An invisible group can still draw a visible separator between its arguments.
+        let separated = lay_in(
+            &Math {
+                nodes: vec![delim(vec![MNode::Delim {
+                    beg: None,
+                    end: None,
+                    sep: Some('|'),
+                    grow: true,
+                    shp_match: false,
+                    elems: vec![Vec::new(), Vec::new()],
+                }])],
+                ..Default::default()
+            },
+            "",
+            display,
+            400.0,
+            &MathProps::default(),
+        );
+        assert!(h(&separated) > h(&solo) * 1.05, "display={display}: {} vs {}", h(&separated), h(&solo));
+        // A separator field with a single argument draws nothing, so it is not visible.
+        let one_argument = lay_in(
+            &Math {
+                nodes: vec![delim(vec![MNode::Delim {
+                    beg: None,
+                    end: None,
+                    sep: Some('|'),
+                    grow: true,
+                    shp_match: false,
+                    elems: vec![Vec::new()],
+                }])],
+                ..Default::default()
+            },
+            "",
+            display,
+            400.0,
+            &MathProps::default(),
+        );
+        assert!((h(&one_argument) - h(&solo)).abs() < 0.01, "display={display}: {} vs {}", h(&one_argument), h(&solo));
+        // Boxed content and shown phantoms draw no boundary of their own.
+        let boxed =
+            lay_in(&Math { nodes: vec![delim(vec![MNode::Boxed { e: nest(1) }])], ..Default::default() }, "", display, 400.0, &MathProps::default());
+        assert!(h(&boxed) > h(&solo) * 1.05, "display={display}: {} vs {}", h(&boxed), h(&solo));
+        let phantom = lay_in(
+            &Math {
+                nodes: vec![delim(vec![MNode::Phant { show: true, zero_wid: false, zero_asc: false, zero_desc: false, e: nest(1) }])],
+                ..Default::default()
+            },
+            "",
+            display,
+            400.0,
+            &MathProps::default(),
+        );
+        assert!(h(&phantom) > h(&solo) * 1.05, "display={display}: {} vs {}", h(&phantom), h(&solo));
+    }
+}
+
+#[test]
+fn nested_delimiters_grow_their_separator() {
+    use wordcraft_doc::math::*;
+    let pair = || MNode::Delim { beg: Some('('), end: Some(')'), sep: None, grow: true, shp_match: false, elems: vec![Vec::new()] };
+    let group =
+        |inner: Vec<MNode>| MNode::Delim { beg: None, end: None, sep: Some('|'), grow: true, shp_match: false, elems: vec![inner, Vec::new()] };
+    for display in [false, true] {
+        let plain = lay_in(&Math { nodes: vec![group(Vec::new())], ..Default::default() }, "", display, 400.0, &MathProps::default());
+        let nested = lay_in(&Math { nodes: vec![group(vec![pair()])], ..Default::default() }, "", display, 400.0, &MathProps::default());
+        let h = |m: &MathLayout| m.ascent + m.descent;
+        assert!(h(&nested) > h(&plain) * 1.05, "display={display}: {} vs {}", h(&nested), h(&plain));
+    }
+}
+
+#[test]
 fn every_structure_lays_out() {
     use wordcraft_doc::math::*;
     let x = || vec![MNode::Run(MRun::new("x"))];
