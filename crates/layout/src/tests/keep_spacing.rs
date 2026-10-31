@@ -127,3 +127,85 @@ fn kept_chain_counts_every_effective_gap_once() {
     let layout = lay(&doc);
     assert_eq!(layout.caret(&Pos::body(2, 0)).unwrap().page, 1, "the middle of the chain moves with both ends");
 }
+
+/// A looked-ahead footnote requires a full multiple-spaced line, including in a kept chain.
+#[test]
+fn kept_lookahead_with_a_footnote_keeps_the_whole_line_height() {
+    use wordcraft_doc::para::NoteKind;
+    use wordcraft_doc::{Paragraph, PartKind, para_block};
+    let check_font = |layout: &DocLayout| {
+        let mut count = 0;
+        for item in layout.pages.iter().flat_map(|page| &page.items) {
+            if let Placed::Lines { para, .. } = item {
+                for style in &para.styles {
+                    count += 1;
+                    assert_eq!(style.face.family, WRAP_TEST_FONT);
+                    assert_eq!(style.face.style, "Regular");
+                    assert!(style.face.data() == include_bytes!("../../../../assets/fonts/SourceSans3-Regular.ttf").as_slice());
+                    // Automatic note references are superscripted to 65% of the 12 pt body.
+                    assert!((style.size - 12.0).abs() < 0.01 || (style.size - 7.8).abs() < 0.01);
+                }
+            }
+        }
+        assert!(count > 0);
+    };
+    for (kind, part_kind) in [(NoteKind::Footnote, PartKind::Footnote), (NoteKind::Endnote, PartKind::Endnote)] {
+        for chained in [false, true] {
+            let mut doc = heading_at_edge(120.0);
+            let body = doc.para_mut(StoryRef::Body, &Path::top(2)).unwrap();
+            body.props.line_spacing = Some(LineSpacing::Multiple(2.0));
+            body.props.widow_control = Some(false);
+            let mut note = Paragraph::with_text("SYNTHETIC NOTE", Default::default());
+            note.props = ParaProps { line_spacing: Some(LineSpacing::Exactly(14.0)), space_after: Some(0.0), ..Default::default() };
+            let id = doc.add_part(part_kind, vec![para_block(note)]);
+            doc.insert_object(&Pos::body(2, 0), InlineObject::NoteRef { kind, id, custom: String::new() }, &Default::default()).unwrap();
+            let body_block = if chained {
+                let mut middle = Paragraph::with_text("SYNTHETIC MIDDLE", Default::default());
+                middle.props = ParaProps {
+                    keep_next: Some(true),
+                    line_spacing: Some(LineSpacing::Exactly(14.0)),
+                    space_before: Some(0.0),
+                    space_after: Some(0.0),
+                    ..Default::default()
+                };
+                doc.body.insert(2, para_block(middle));
+                3
+            } else {
+                2
+            };
+            let probe = lay(&doc);
+            check_font(&probe);
+            let first_height = probe
+                .pages
+                .iter()
+                .flat_map(|p| &p.items)
+                .find_map(|item| match item {
+                    Placed::Lines { story: StoryRef::Body, path, para, .. } if path.0 == [body_block as u32] => {
+                        para.lines.first().map(|line| line.height)
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            // Just short of the complete heading + effective gap + next line. A leading discount
+            // would leave the heading behind even though actual note placement needs the full line.
+            let room = 16.0 + 6.0 + if chained { 14.0 } else { 0.0 } + first_height - 0.5;
+            doc.para_mut(StoryRef::Body, &Path::top(0)).unwrap().props.line_spacing =
+                Some(LineSpacing::Exactly(doc.last_section.text_height() - room));
+            let layout = lay(&doc);
+            check_font(&layout);
+            let page = |block| layout.caret(&Pos::body(block, 0)).unwrap().page;
+            let expected = if kind == NoteKind::Footnote { 1 } else { 0 };
+            assert_eq!(page(1), expected, "{kind:?}, chained={chained}: heading follows the line's actual room requirement");
+            assert_eq!(page(body_block), expected, "{kind:?}, chained={chained}: the first body line stays with the heading");
+            if chained {
+                assert_eq!(page(2), expected, "the middle paragraph travels with both ends");
+            }
+            if kind == NoteKind::Footnote {
+                assert!(
+                    layout.pages[1].items.iter().any(|item| matches!(item, Placed::Lines { story: StoryRef::Part(part), .. } if *part == id)),
+                    "the note is placed on the reference page"
+                );
+            }
+        }
+    }
+}
