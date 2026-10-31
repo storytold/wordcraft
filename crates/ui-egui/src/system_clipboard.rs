@@ -29,6 +29,16 @@ pub(crate) fn fill(app: &mut WordApp, id: &str, params: &mut Value) -> Option<Re
     if !is_paste(id) {
         return None;
     }
+    // Files copied in a file manager are pictures to paste, not the name that travels beside
+    // them: Finder puts "Screenshot 2026-10-14 at 13-08-08.png" on the clipboard as text too, and
+    // that name is not what Copy meant. Only a copy that really holds files counts, so text
+    // that merely names a picture file still pastes as text.
+    if id == "edit.paste"
+        && app.session.math.is_none()
+        && let Some(r) = paste_picture::paste_copied_files(app)
+    {
+        return Some(r);
+    }
     let o = params.as_object_mut()?;
     if !o.contains_key("text")
         && let Some(text) = app.services.clipboard_text.as_ref().and_then(|f| f()).filter(|t| !t.is_empty())
@@ -245,6 +255,41 @@ mod tests {
         };
         let e = app(unreadable).run("edit.paste", json!({})).unwrap_err();
         assert!(e.contains("couldn't be read") && e.contains("isn't supported"), "{e}");
+    }
+
+    /// A file manager's Copy puts the file's name on the clipboard as text beside the file itself.
+    /// Paste inserts the picture, not that name — including Ctrl+V, whose paste event carries the
+    /// name as its text.
+    #[test]
+    fn copied_picture_files_win_over_the_name_beside_them() {
+        let path = std::env::temp_dir().join(format!("wc-finder-copy-{}.png", std::process::id()));
+        std::fs::write(&path, crate::paste_picture::png_from_rgba(4, 4, vec![200; 4 * 4 * 4]).unwrap()).unwrap();
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        let (text, file) = (name.clone(), path.clone());
+        let services = Services {
+            clipboard_text: Some(Box::new(move || Some(text.clone()))),
+            clipboard_picture: Some(Box::new(move || Some(ClipboardPicture::Files(vec![file.clone()])))),
+            ..Default::default()
+        };
+        let mut a = app(services);
+        a.run("edit.paste", json!({"text": name})).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(a.session.doc.media.len(), 1, "the picture is pasted");
+        assert!(!first_para(&a).contains(".png"), "not the file's name: {:?}", first_para(&a));
+    }
+
+    /// A copied file that isn't a picture isn't one: its name still pastes as text.
+    #[test]
+    fn a_copied_file_that_is_not_a_picture_pastes_its_name() {
+        let services = Services {
+            clipboard_text: Some(Box::new(|| Some("notes.txt".into()))),
+            clipboard_picture: Some(Box::new(|| Some(ClipboardPicture::Files(vec![std::path::PathBuf::from("/tmp/notes.txt")])))),
+            ..Default::default()
+        };
+        let mut a = app(services);
+        a.run("edit.paste", json!({})).unwrap();
+        assert_eq!(first_para(&a), "notes.txt");
+        assert_eq!(a.session.doc.media.len(), 0);
     }
 
     #[test]
