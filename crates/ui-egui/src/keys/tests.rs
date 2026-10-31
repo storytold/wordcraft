@@ -1284,3 +1284,21 @@ fn brazilian_shortcut_removal_is_scoped_to_portuguese() {
         }
     }
 
+#[test]
+fn pt_br_word_shortcuts_removing_other_assignment_preserves_localized_owner() {
+    let reg = wordcraft_engine::cmd::registry();
+    let mut user = wordcraft_engine::keymap::KeyMap::default();
+    user.assign(&reg, "edit.find", "Mod+N").unwrap();
+    assert_eq!(localized_resolve(&reg, &user, "pt-br", "Mod+N").map(|s| s.id), Some("edit.find"));
+
+    assert!(user.remove_for_locale(&reg, "pt-br", "edit.find", "Mod+N").unwrap());
+    assert!(!user.assigned.contains_key("Mod+N"));
+    assert!(!user.removed_localized.get("pt-br").is_some_and(|keys| keys.contains("Mod+N")));
+
+    // Restoring the English built-in must not leave the pt-BR built-in disabled.
+    user.assign(&reg, "file.new", "Mod+N").unwrap();
+    if !cfg!(target_os = "macos") {
+        assert_eq!(localized_resolve(&reg, &user, "pt-br", "Mod+N").map(|s| s.id), Some("format.bold"));
+    }
+    assert_eq!(localized_resolve(&reg, &user, "en", "Mod+N").map(|s| s.id), Some("file.new"));
+}
