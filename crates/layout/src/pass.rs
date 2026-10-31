@@ -382,6 +382,10 @@ fn finish_pages(pb: PageBuilder, doc: &Document, sections: &[(usize, &SectionPro
             }
         }
     }
+    // The last page is done too (`new_page` gives back the room of the ones before).
+    if let Some(p) = pages.last_mut() {
+        p.items.shrink_to_fit();
+    }
     pages
 }
 
