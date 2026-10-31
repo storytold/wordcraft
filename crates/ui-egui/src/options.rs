@@ -518,6 +518,22 @@ fn advanced(app: &mut WordApp, ui: &mut Ui) {
     flag(app, ui, "Typing replaces selected text", "typingReplacesSelection", pr.typing_replaces_selection);
     flag(app, ui, "Use the Insert key to switch overtype on and off", "insertKeyOvertype", pr.insert_key_overtype);
     flag(app, ui, "Overtype (typing replaces the characters after the caret)", "overtype", pr.overtype);
+    ui.horizontal(|ui| {
+        ui.label(tl!("Paste as:"));
+        let current = crate::paste_options::PasteMode::from_key(&app.ui.default_paste);
+        let label = match current {
+            crate::paste_options::PasteMode::Source => tl!("Paste"),
+            crate::paste_options::PasteMode::Merge => tl!("Merge Formatting"),
+            crate::paste_options::PasteMode::Text => tl!("Keep Text Only"),
+        };
+        egui::ComboBox::from_id_salt("default_paste_mode").selected_text(label).show_ui(ui, |ui| {
+            for (key, label) in [("source", "Paste"), ("merge", "Merge Formatting"), ("text", "Keep Text Only")] {
+                if ui.selectable_label(current.key() == key, tl!(label)).clicked() {
+                    let _ = app.run("ui.defaultPaste", json!({"value": key}));
+                }
+            }
+        });
+    });
     let mut guides = app.ui.alignment_guides;
     if ui
         .checkbox(&mut guides, tl!("Show alignment guides when moving pictures and shapes"))

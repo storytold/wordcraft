@@ -634,7 +634,7 @@ impl Session {
     /// the command ended up in another document (it opened or made one) and left the first
     /// document's text as it was: opening a document is no edit to undo there.
     pub(super) fn put_back_parked(&mut self, id: u64, before: Option<super::RunSnapshot>) {
-        let Some((doc, sel, history, redo, typing_open, evicted, column)) = before else { return };
+        let Some((doc, sel, history, redo, typing_open, evicted, column, pending_move)) = before else { return };
         if !self.is_open(id) {
             return;
         }
@@ -648,6 +648,7 @@ impl Session {
             s.typing_open = typing_open;
             s.undo_evicted = evicted;
             s.column = column;
+            s.pending_move = pending_move;
         });
     }
 }

@@ -47,6 +47,8 @@ impl WordApp {
         self.window_shows(id);
 
         self.canvas.show_other_document(seen);
+        // A paste option belongs only to the document that received the paste.
+        self.paste_options = None;
         self.controls = Default::default();
         self.dialog = None;
         self.colors = None;

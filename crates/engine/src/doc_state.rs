@@ -129,6 +129,8 @@ pub(super) struct Undo {
     /// The column block or whole cells the selection was (undoing brings the selection back as
     /// it was).
     pub(super) column: Option<ColumnBlock>,
+    /// Tracked-cut candidate preserved through Undo/Redo and paste-mode replay.
+    pub(super) pending_move: Option<crate::cmd::moves::PendingMove>,
 }
 
 /// The number of edit locations Go Back cycles through (Word: four).

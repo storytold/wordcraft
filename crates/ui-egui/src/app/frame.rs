@@ -93,6 +93,7 @@ impl WordApp {
         let window = self.windows.shown();
         let moved = |app: &WordApp| app.windows.shown() != window;
         content_controls::popup(self, ctx);
+        paste_options::show(self, ctx);
         dialogs::show(self, ctx);
         if moved(self) {
             return;
