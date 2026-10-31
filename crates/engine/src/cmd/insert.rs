@@ -5,7 +5,7 @@ use wordcraft_doc::para::{Float, InlineObject, ShapeKind, Wrap};
 use wordcraft_doc::props::{Align, Border, Borders, CharProps, Rgb, TabAlign, TabStop, TextColor};
 use wordcraft_doc::{Block, Paragraph, PartKind, Path, Pos, StoryRef, Table, para_block};
 
-use super::{delete_selection, sel_result, split_para, type_text};
+use super::{delete_selection, sel_result, type_page_break, type_text};
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 
 mod header_footer;
@@ -26,15 +26,12 @@ pub(crate) use objects::{image_ext, picture};
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("insert.pageBreak", "Page Break", "Insert › Pages", |s, _| {
-            type_text(s, "\u{000C}")?;
+            type_page_break(s)?;
             sel_result(s)
         }),
         CommandSpec::new("insert.blankPage", "Blank Page", "Insert › Pages", |s, _| {
-            type_text(s, "\u{000C}")?;
-            let at = s.sel.focus.clone();
-            let at = split_para(s, &at)?;
-            s.doc.insert_text(&at, "\u{000C}", &CharProps::default())?;
-            s.sel = Selection::caret(at);
+            type_page_break(s)?;
+            type_page_break(s)?;
             sel_result(s)
         }),
         CommandSpec::new("insert.coverPage", "Cover Page", "Insert › Pages", cover_page).params(r#"{"title"?: string, "subtitle"?: string, "author"?: string}"#),
