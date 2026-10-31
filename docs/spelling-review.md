@@ -1,6 +1,6 @@
 # Spelling and grammar task pane
 
-> **Last updated:** 2026-10-31 · **Status:** synchronized with main `eecbb8f`; validation of the new synchronization SHA is pending. The parent `6e96b547` passed its exact-head hosted gate, three-platform Printing and proofing preview; those results do not validate this synchronization. Historical status: historical three-platform checks passed; at f1264f3 the revised hosted gate, previews, Windows and Linux passed, while macOS remained unvalidated after pre-run cancellations. Later review corrections required their own hosted checks.
+> **Last updated:** 2026-10-31 · **Status:** synchronized with main `e6a5cd0`; validation of this evening synchronization SHA is pending. The parent `7c20316` passed its exact-head hosted gate, three-platform Printing and proofing preview; those results do not validate this synchronization. Historical status: historical three-platform checks passed; at f1264f3 the revised hosted gate, previews, Windows and Linux passed, while macOS remained unvalidated after pre-run cancellations. Later review corrections required their own hosted checks.
 
 ## Word reference
 
@@ -20,7 +20,7 @@ This work is independent of French contribution #3185. It consumes language-awar
 
 ## Technical synchronization (2026-10-31)
 
-The existing pane is merged with main `eecbb8fe57a56340e7fa109e8da7f1376a03e154`, retaining its updater/dependency changes and current instructions. Proofing source and regressions are unchanged from `6e96b547`: a valid explicit position remains a point lookup at the focus, while an absent/unparseable position preserves exact-selection priority. Navigation, correction/undo, compact menus and per-window state are retained. Fresh exact-SHA hosted checks and rendered previews must validate this synchronization; no new feature or readiness increase is claimed.
+The existing pane is merged with main `e6a5cd05f045e4caf25a28660bfeb622f25b5129`, retaining its Macros dialog, keytips and print-pipeline changes. The proofing-specific source and regressions are unchanged from `7c20316`: a valid explicit position remains a point lookup at the focus, while an absent/unparseable position preserves exact-selection priority. Navigation, correction/undo, compact menus and per-window state are retained. Fresh exact-SHA hosted checks and rendered previews must validate this synchronization; no new feature or readiness increase is claimed.
 
 ## Technical synchronization and API follow-up (2026-10-30)
 
@@ -43,7 +43,7 @@ The first light/dark artifacts at `20205a5` were inspected: the sentence frame s
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-31 | trivial | Synchronize the existing Proofing pane with main `eecbb8f`; preserve explicit-position lookup, implicit selection, navigation, undo and per-window state; fresh exact-SHA hosted validation pending, readiness unchanged |
+| 2026-10-31 | trivial | Synchronize the existing Proofing pane with main `e6a5cd0` after the earlier `eecbb8f` synchronization; preserve explicit-position lookup, implicit selection, navigation, undo and per-window state; parent `7c20316` passed hosted checks, fresh evening-SHA validation pending, readiness unchanged |
 | 2026-10-30 | trivial | Merge the existing pane with main `3b7f7ed`; preserve explicit-position point lookup at the selection focus, implicit/parse-fallback selection priority and correction/undo; new follow-up SHA requires fresh hosted validation |
 | 2026-10-27 | trivial | Synchronize the existing pane with extracted engine/UI modules on main `436d444`; preserve selection/navigation/undo tests and compact menus, expand workflow path filters; new-SHA validation pending |
 | 2026-10-26 | minor | Resolve selected spelling before overlapping grammar, add command/pane regressions, include pane-integration workflow paths and distinguish validated history from pending review corrections |
