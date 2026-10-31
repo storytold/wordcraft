@@ -3,6 +3,9 @@ use super::{
     para_block, pos_json, sel_result,
 };
 
+#[cfg(test)]
+mod tests;
+
 pub(super) fn new_comment(s: &mut Session, v: &Value) -> CmdResult {
     let text = p::str(v, "text").unwrap_or("").to_string();
     let (a, b) = s.sel.ordered();
@@ -110,13 +113,13 @@ pub fn comment_range_at_caret(s: &Session) -> Option<u32> {
     let f = &s.sel.focus;
     let p = s.doc.para_at(f)?;
     let mut open: Vec<u32> = Vec::new();
-    for off in p.object_offsets() {
+    for (off, object) in p.objects_with_offsets() {
         if off > f.off {
             break;
         }
-        match p.object_at(off) {
-            Some(InlineObject::CommentStart { id }) => open.push(*id),
-            Some(InlineObject::CommentEnd { id }) => open.retain(|x| x != id),
+        match object {
+            InlineObject::CommentStart { id } => open.push(*id),
+            InlineObject::CommentEnd { id } => open.retain(|x| x != id),
             _ => {}
         }
     }
@@ -128,8 +131,8 @@ pub(super) fn comment_at_caret(s: &Session) -> Option<u32> {
     let f = &s.sel.focus;
     let p = s.doc.para_at(f)?;
     comment_range_at_caret(s).or_else(|| {
-        p.object_offsets().into_iter().find_map(|o| match p.object_at(o) {
-            Some(InlineObject::CommentStart { id }) | Some(InlineObject::CommentEnd { id }) => Some(*id),
+        p.objects_with_offsets().find_map(|(_, object)| match object {
+            InlineObject::CommentStart { id } | InlineObject::CommentEnd { id } => Some(*id),
             _ => None,
         })
     })
@@ -145,9 +148,10 @@ fn remove_anchors(s: &mut Session, ids: &BTreeSet<u32>) -> Result<(), CmdError> 
                 .doc
                 .para(story, &path)
                 .map(|p| {
-                    p.object_offsets()
-                        .into_iter()
-                        .filter(|o| matches!(p.object_at(*o), Some(InlineObject::CommentStart { id }) | Some(InlineObject::CommentEnd { id }) if ids.contains(id)))
+                    p.objects_with_offsets()
+                        .filter_map(|(off, object)| {
+                            matches!(object, InlineObject::CommentStart { id } | InlineObject::CommentEnd { id } if ids.contains(id)).then_some(off)
+                        })
                         .collect()
                 })
                 .unwrap_or_default();
@@ -209,6 +213,8 @@ pub(super) fn delete_comment(s: &mut Session, v: &Value) -> CmdResult {
 /// (a removed header) has no anchor.
 pub fn comment_list(s: &Session) -> Vec<(u32, Option<Pos>)> {
     let mut found: Vec<(u32, Option<Pos>)> = Vec::new();
+    // Membership is separate from the result: duplicate anchors keep every position.
+    let mut listed = BTreeSet::new();
     // The balloons ask every frame; most documents have no comments.
     if s.doc.comments.is_empty() {
         return found;
@@ -216,15 +222,16 @@ pub fn comment_list(s: &Session) -> Vec<(u32, Option<Pos>)> {
     for story in s.doc.shown_stories() {
         for path in s.doc.para_paths(story) {
             let Some(p) = s.doc.para(story, &path) else { continue };
-            for o in p.object_offsets() {
-                if let Some(InlineObject::CommentStart { id }) = p.object_at(o) {
-                    found.push((*id, Some(Pos { story, path: path.clone(), off: o })));
+            for (off, object) in p.objects_with_offsets() {
+                if let InlineObject::CommentStart { id } = object {
+                    listed.insert(*id);
+                    found.push((*id, Some(Pos { story, path: path.clone(), off })));
                 }
             }
         }
     }
     for id in s.doc.comments.keys() {
-        if !found.iter().any(|(x, _)| x == id) {
+        if !listed.contains(id) {
             found.push((*id, None));
         }
     }
