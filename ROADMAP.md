@@ -140,6 +140,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
+- 2026-10-28: Code cleanup: the Zotero field list pairs a paragraph's objects with their offsets through `Paragraph::objects_with_offsets()`, the shared helper, instead of by hand; the PDF exporter's copy of the clipped-cell index had already gone with #3866. No behaviour change. (#3906)
 - 2026-10-28: Aligned-copy review fixes keep the document axis locked through middle-button scrolling and let Ctrl/Command+Shift start on a secondary selected object. Plain Ctrl and Shift clicks keep their existing behavior (#4764).
 
 - 2026-10-28: Ctrl/Command+Shift copies a selected floating picture, shape or text box along its dominant axis (#4764); inline copies keep the text cursor. Guides on the free axis, original/clipboard/selection, cancel, protection and history are covered by synthetic Linux tests. Native desktop and Word untested; readiness unchanged.
@@ -1060,3 +1061,4 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-29 | trivial | Progress log: Table Properties follows the selection (#4857) |
 | 2026-10-27 | trivial | Progress log: AutoCorrect Options with no document open (#4585) |
 | 2026-10-28 | trivial | Progress log: RTF metafile pictures are imported (#4259) |
+| 2026-10-28 | trivial | Progress log: Zotero field list uses the shared object-offset helper (#3906) |
