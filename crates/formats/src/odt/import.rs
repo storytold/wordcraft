@@ -114,7 +114,7 @@ fn parse_full(bytes: &[u8]) -> Result<(Flow, SectionProps), String> {
 }
 
 /// [`parse_full`], plus whether change tracking is on (`None`: the document has no tracked changes).
-fn parse_tracked(bytes: &[u8]) -> Result<(Flow, SectionProps, Option<bool>, Option<String>, page_parts::Parts), String> {
+fn parse_tracked(bytes: &[u8]) -> Result<(Flow, SectionProps, Option<bool>, Option<String>, model::Spacing, page_parts::Parts), String> {
     let mut z = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| format!("ODT: not a valid package ({e})"))?;
     if let Some(mt) = read_entry(&mut z, "mimetype") {
         let mt = String::from_utf8_lossy(&mt);
@@ -154,17 +154,22 @@ fn parse_tracked(bytes: &[u8]) -> Result<(Flow, SectionProps, Option<bool>, Opti
         blocks.push(FBlock::Para(Para::default()));
     }
     let track = body.track;
-    Ok((Flow { blocks, meta }, last, track, styles.doc_font(), parts))
+    Ok((Flow { blocks, meta }, last, track, styles.doc_font(), styles.doc_spacing(), parts))
 }
 
 /// Parse an `.odt` package into a document.
 pub fn import(bytes: &[u8]) -> Result<Document, String> {
     model::begin_import();
-    let (flow, last, track, font, parts) = parse_tracked(bytes)?;
+    let (flow, last, track, font, spacing, parts) = parse_tracked(bytes)?;
     let mut doc = model::to_doc(&flow);
     if font.is_some() {
         doc.styles.default_chr.font = font;
     }
+    // The document's own paragraph defaults, not the built-in Normal's (8pt after, 1.15 lines):
+    // a LibreOffice document that sets no spacing has none (#5101).
+    doc.styles.default_para.space_before = spacing.before;
+    doc.styles.default_para.space_after = spacing.after;
+    doc.styles.default_para.line_spacing = spacing.line;
     doc.last_section = last;
     page_parts::add(&mut doc, parts);
     if let Some(t) = track {

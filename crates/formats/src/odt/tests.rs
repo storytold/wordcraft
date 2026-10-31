@@ -1135,3 +1135,97 @@ fn meta_creation_date_timezones_and_fallbacks() {
     assert_eq!(m2.created, "2024-03-05T13:45:00Z");
     assert_eq!(m2.author, "Solo Creator");
 }
+
+#[test]
+fn paragraph_defaults_are_odfs_not_words() {
+    // #5101: ODF's defaults are no space before or after and single line spacing (ODF 1.3
+    // §20.207, §20.235, §20.355). The import used to leave the built-in Normal's 8pt after and 1.15
+    // lines in place, so a LibreOffice document that sets no spacing (blank lines as spacers
+    // are common) opened with a gap after every paragraph and ran onto extra pages.
+    use wordcraft_doc::props::LineSpacing;
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p>One</text:p><text:p/><text:p>Two</text:p></office:text></office:body></office:document-content>"#
+    );
+    let plain = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:paragraph-properties fo:orphans="2"/></style:default-style><style:style style:name="Standard" style:family="paragraph" style:class="text"/></office:styles></office:document-styles>"#
+    );
+    for doc in [import(&package(&content, Some(&plain))).unwrap(), import(&package(&content, None)).unwrap()] {
+        let d = &doc.styles.default_para;
+        assert_eq!((d.space_before, d.space_after, d.line_spacing), (Some(0.0), Some(0.0), Some(LineSpacing::Multiple(1.0))));
+    }
+    // The default style's spacing is the document's, and Standard's comes before it.
+    let set = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:paragraph-properties fo:margin-bottom="8pt" fo:line-height="115%"/></style:default-style><style:style style:name="Standard" style:family="paragraph"><style:paragraph-properties fo:margin-top="0.1in"/></style:style></office:styles></office:document-styles>"#
+    );
+    let doc = import(&package(&content, Some(&set))).unwrap();
+    let d = &doc.styles.default_para;
+    assert!(d.space_before.is_some_and(|b| (b - 7.2).abs() < 1e-3), "{:?}", d.space_before);
+    assert_eq!(d.space_after, Some(8.0));
+    assert!(matches!(d.line_spacing, Some(LineSpacing::Multiple(m)) if (m - 1.15).abs() < 1e-6));
+}
+
+#[test]
+fn paragraph_styles_give_space_before_after_and_line_spacing() {
+    // A paragraph takes the nearest style's `fo:margin-top`, `fo:margin-bottom` and
+    // `fo:line-height` (or `style:line-height-at-least`) along its chain, automatic and common
+    // styles alike; Standard's are the document defaults, so a paragraph that sets nothing has
+    // none of its own.
+    use wordcraft_doc::props::LineSpacing;
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles>
+        <style:style style:name="Standard" style:family="paragraph"><style:paragraph-properties fo:margin-bottom="2pt"/></style:style>
+        <style:style style:name="Text_20_body" style:display-name="Text body" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties fo:margin-top="0in" fo:margin-bottom="0.0972in" fo:line-height="115%"/></style:style>
+        </office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:automatic-styles>
+        <style:style style:name="P1" style:family="paragraph" style:parent-style-name="Text_20_body"><style:paragraph-properties fo:margin-bottom="12pt"/></style:style>
+        <style:style style:name="P2" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties fo:line-height="0.25in"/></style:style>
+        <style:style style:name="P3" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties style:line-height-at-least="14pt"/></style:style>
+        <style:style style:name="P4" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties fo:line-height="normal"/></style:style>
+        <style:style style:name="Bad" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties fo:margin-top="-5pt" fo:margin-bottom="99999in" fo:line-height="1e9%"/></style:style>
+        </office:automatic-styles><office:body><office:text>
+        <text:p text:style-name="Text_20_body">Body</text:p><text:p text:style-name="P1">Own after</text:p>
+        <text:p text:style-name="P2">Exactly</text:p><text:p text:style-name="P3">At least</text:p><text:p text:style-name="P4">Normal</text:p>
+        <text:p text:style-name="Standard">Standard</text:p><text:p>None</text:p><text:p text:style-name="Bad">Hostile</text:p>
+        </office:text></office:body></office:document-content>"#
+    );
+    let flow = parse(&package(&content, Some(&styles))).unwrap();
+    let got: Vec<_> = paras(&flow).iter().map(|p| (p.spacing.before, p.spacing.after, p.spacing.line)).collect();
+    let m115 = LineSpacing::Multiple(1.15);
+    let want = [
+        (Some(0.0), Some(0.0972 * 72.0), Some(m115)),
+        (Some(0.0), Some(12.0), Some(m115)),
+        (None, None, Some(LineSpacing::Exactly(18.0))),
+        (None, None, Some(LineSpacing::AtLeast(14.0))),
+        (None, None, Some(LineSpacing::Multiple(1.0))),
+        (None, None, None),
+        (None, None, None),
+        (None, None, None),
+    ];
+    assert_eq!(got.len(), want.len());
+    for (i, (g, w)) in got.iter().zip(want).enumerate() {
+        let close = |a: Option<f32>, b: Option<f32>| match (a, b) {
+            (Some(a), Some(b)) => (a - b).abs() < 1e-3,
+            (a, b) => a == b,
+        };
+        let line_close = match (g.2, w.2) {
+            (Some(LineSpacing::Multiple(a)), Some(LineSpacing::Multiple(b))) => (a - b).abs() < 1e-6,
+            (a, b) => a == b,
+        };
+        assert!(close(g.0, w.0) && close(g.1, w.1) && line_close, "paragraph {i}: got {g:?}, want {w:?}");
+    }
+    // Standard's 2pt after is the document default, not the Standard paragraph's own.
+    let doc = import(&package(&content, Some(&styles))).unwrap();
+    assert_eq!(doc.styles.default_para.space_after, Some(2.0));
+}
+
+#[test]
+fn own_odt_export_keeps_its_paragraph_spacing_on_reopen() {
+    // The writer declares 8pt after in its default style; reading the file back must keep it,
+    // not fall to ODF's zero.
+    let doc = wordcraft_doc::Document::new();
+    let bytes = crate::odt::export(&doc).unwrap();
+    let again = import(&bytes).unwrap();
+    assert_eq!(again.styles.default_para.space_after, Some(8.0));
+}
