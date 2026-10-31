@@ -984,6 +984,8 @@ fn input_dialog_other(id: &str, params: &Value) -> Option<&'static str> {
         "review.language" if no_settings(params) => Some("language"),
         "tools.autocorrect" if no_settings(params) => Some("autoCorrect"),
         "tools.templates" => Some("templates"),
+        // Macros without a name to run, define or delete shows its dialog (#4327); scripts get the list.
+        "tools.macros" if !["run", "define", "delete"].into_iter().any(|key| has_value(params, key)) => Some("macros"),
         "styles.organizer" if !has_value(params, "path") => Some("organizer"),
         "developer.properties" if no_settings(params) => Some("controlProperties"),
         _ => None,

@@ -1,4 +1,4 @@
-use super::bookmarks::{bookmark, enclose_preview, icons_body};
+use super::bookmarks::{bookmark, enclose_preview, icons_body, macros};
 use super::chrome::{buttons, color_field};
 use super::find::{FindTab, SEARCH_SUGGESTIONS, command_matches, find_in_navigation_pane, goto_body, special_menu, swallow_shortcut_text};
 use super::font::{apply_font, preview_size};
@@ -36,6 +36,7 @@ pub(super) fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         Dialog::Insert(f) => crate::dialogs_insert::body(app, ui, f),
         Dialog::Refs(f) => crate::dialogs_refs::body(app, ui, f),
         Dialog::Commands { .. } => commands_dialog(app, ui, d),
+        Dialog::Macros { name } => macros(app, ui, name),
         Dialog::Icons { query, category, selected } => icons_body(app, ui, query, category, selected),
         Dialog::PasteSpecial { .. } => paste_special_dialog(app, ui, d),
         Dialog::About { .. } => about_dialog(ui, d),
