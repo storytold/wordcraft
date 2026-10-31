@@ -230,6 +230,34 @@ fn language_dialog_default_survives_a_restart() {
     assert_eq!(LanguageForm::read(&b).lang, "fr-FR");
 }
 
+/// #735: Hungarian chosen in the Language dialog's list marks the selection `hu-HU` on OK.
+#[test]
+fn language_dialog_selects_hungarian() {
+    use egui_kittest::kittest::Queryable;
+    let mut a = app();
+    a.run("ui.language", json!({"value": "en"})).unwrap();
+    a.run("select.all", json!({})).unwrap();
+    a.run("review.language", json!({})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(3);
+    h.get_by_label("Hungarian").scroll_to_me();
+    h.run_steps(3);
+    h.get_by_label("Hungarian").click();
+    h.run_steps(3);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none());
+    let state = h.state_mut().run("format.state", json!({})).unwrap();
+    assert_eq!(state["lang"], "hu-HU");
+}
+
 /// #407: Envelopes starts from the selected address; Add to Document puts an envelope
 /// section before the letter without asking to save (nothing is replaced).
 #[test]

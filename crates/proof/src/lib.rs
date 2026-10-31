@@ -41,6 +41,11 @@
 //!   existing English fallback.
 //! - **German** ([`ProofLang::De`]): hyphenation by `hyph-utf8`'s German patterns (reformed
 //!   spelling, MIT); no spelling or grammar marks yet.
+//! - **Hungarian** ([`ProofLang::Hu`], module [`hu`]): spelling against the Hunspell `hu_HU`
+//!   dictionary installed on the system (Magyar Ispell; not bundled), with its compounds and
+//!   word breaks, suggestions tuned for Hungarian (missing accents, `j`/`ly`, missing spaces),
+//!   conservative grammar rules with Hungarian messages, and the installed Hungarian
+//!   hyphenation patterns or else the Hungarian syllable rules.
 //! - **Other languages** ([`ProofLang::Other`]): no spelling or grammar marks, like Word without
 //!   the language's proofing tools.
 //! - **Hyphenation** ([`hyphen`]): dictionary, Liang patterns (English, Polish, Portuguese,
@@ -56,6 +61,7 @@ pub mod dict;
 pub mod en_variants;
 pub mod es;
 pub mod hr;
+pub mod hu;
 pub mod hunspell;
 pub mod hyphen;
 pub mod id;
@@ -171,6 +177,7 @@ pub fn set_dictionaries_folder(dir: Option<std::path::PathBuf>) {
     cs::reload_dictionary();
     id::reload_dictionary();
     es::reload_dictionary();
+    hu::reload_dictionary();
     DICTIONARY_GENERATION.fetch_add(1, Ordering::Relaxed);
 }
 
@@ -190,6 +197,7 @@ pub fn installed_dictionaries() -> Vec<(ProofLang, Option<std::path::PathBuf>)> 
         (ProofLang::EsMx, es::installed_path(ProofLang::EsMx)),
         (ProofLang::Es419, es::installed_path(ProofLang::Es419)),
         (ProofLang::EsUy, es::installed_path(ProofLang::EsUy)),
+        (ProofLang::Hu, hu::installed_path()),
     ]
 }
 
@@ -197,7 +205,12 @@ pub fn installed_dictionaries() -> Vec<(ProofLang, Option<std::path::PathBuf>)> 
 /// error), if it was read and failed. Doesn't read anything itself: a dictionary nobody has
 /// checked yet reports `None` (#2830).
 pub fn dictionary_load_error(lang: ProofLang) -> Option<String> {
-    let key = match lang {
+    hunspell::load_error(load_error_key(lang)?).map(|(_, reason)| reason)
+}
+
+/// The name a language's dictionary load error is kept under (see [`hunspell::note_load`]).
+fn load_error_key(lang: ProofLang) -> Option<&'static str> {
+    Some(match lang {
         ProofLang::Pl => "pl_PL",
         ProofLang::Pt => "pt_BR",
         ProofLang::It => "it_IT",
@@ -205,9 +218,9 @@ pub fn dictionary_load_error(lang: ProofLang) -> Option<String> {
         ProofLang::Tr => "tr_TR",
         ProofLang::Id => "id_ID",
         ProofLang::Es | ProofLang::EsMx | ProofLang::Es419 | ProofLang::EsUy => es::dictionary_name(lang),
+        ProofLang::Hu => hu::NAMES[0],
         _ => return None,
-    };
-    hunspell::load_error(key).map(|(_, reason)| reason)
+    })
 }
 
 /// A number that changes whenever a word is added to or removed from the user dictionary, or the
@@ -448,6 +461,7 @@ fn dictionary_loaded(lang: ProofLang) -> Option<bool> {
         ProofLang::Cs => cs::has_dictionary(),
         ProofLang::Id => id::has_dictionary(),
         l if l.is_spanish() => es::has_dictionary(l),
+        ProofLang::Hu => hu::has_dictionary(),
         _ => return None,
     })
 }
@@ -466,6 +480,7 @@ fn dictionary_needed(lang: ProofLang, installed: bool) -> Option<&'static str> {
         ProofLang::Cs => Some("cs_CZ"),
         ProofLang::Id => Some("id_ID"),
         l if l.is_spanish() => Some(es::dictionary_name(l)),
+        ProofLang::Hu => Some(hu::NAMES[0]),
         _ => None,
     }
 }
@@ -735,8 +750,16 @@ pub(crate) fn is_address(token: &str) -> bool {
 /// classification of the word's enclosing token, from [`enclosing_token`].
 fn spelling_issue(text: &str, a: usize, b: usize, lang: ProofLang, opts: &Options, internet: bool) -> Option<Issue> {
     let w = text.get(a..b)?;
+    // A Hungarian abbreviation is listed with its period (`pl.`, `stb.`), which isn't part of the
+    // word, and takes its endings after a hyphen (`Kft.-ben`): those spans are checked.
+    let spans = if lang == ProofLang::Hu { hu::spelling_spans(text, a, b) } else { Vec::new() };
+    let correct = if spans.is_empty() {
+        is_correct_in_with(w, lang, opts)
+    } else {
+        spans.iter().filter_map(|&(s, e)| text.get(s..e)).any(|t| is_correct_in_with(t, lang, opts))
+    };
     // A word with a Vietnamese-only letter (a name like Nguyễn in English text) isn't English.
-    if (opts.ignore_internet && internet) || (lang.is_english() && vi::is_vietnamese_word(w)) || is_correct_in_with(w, lang, opts) {
+    if (opts.ignore_internet && internet) || (lang.is_english() && vi::is_vietnamese_word(w)) || correct {
         return None;
     }
     let message = match lang {
@@ -749,6 +772,7 @@ fn spelling_issue(text: &str, a: usize, b: usize, lang: ProofLang, opts: &Option
         ProofLang::Cs => "Možná pravopisná chyba",
         ProofLang::Id => "Kemungkinan salah eja",
         ProofLang::Es | ProofLang::EsMx | ProofLang::Es419 | ProofLang::EsUy => "Posible error ortográfico",
+        ProofLang::Hu => "Lehetséges helyesírási hiba",
         _ => "Possible spelling mistake",
     };
     Some(Issue { start: a, end: b, kind: IssueKind::Spelling, message: message.into(), suggestions: Vec::new(), lang })
@@ -787,6 +811,7 @@ pub fn is_correct_in_with(word: &str, lang: ProofLang, opts: &Options) -> bool {
         }
         ProofLang::Cs => accepted_by_options(word, opts) || cs::is_correct_with_options(word, opts),
         ProofLang::Id => accepted_by_options(word, opts) || id::is_correct_with_options(word, opts),
+        ProofLang::Hu => accepted_by_options(word, opts) || hu::is_correct(word),
         ProofLang::Bg | ProofLang::De | ProofLang::Other => true,
     }
 }
@@ -806,6 +831,7 @@ pub fn suggest_in(word: &str, max: usize, lang: ProofLang) -> Vec<String> {
         ProofLang::Cs => cs::suggest(word, max),
         ProofLang::Id => id::suggest(word, max),
         ProofLang::Es | ProofLang::EsMx | ProofLang::Es419 | ProofLang::EsUy => es::suggest(word, max, lang),
+        ProofLang::Hu => hu::suggest(word, max),
         ProofLang::Bg | ProofLang::De | ProofLang::Other => Vec::new(),
     }
 }
@@ -813,7 +839,7 @@ pub fn suggest_in(word: &str, max: usize, lang: ProofLang) -> Vec<String> {
 /// Grammar issues in a paragraph of text in `lang`: the English rules, the Polish ones
 /// ([`pl::grammar`]), the Portuguese ones ([`pt::grammar`]), the Italian ones ([`it::grammar`]),
 /// the Turkish ones ([`tr::grammar`]), Czech and Indonesian generic checks ([`cs::grammar`], [`id::grammar`]), the Spanish ones
-/// ([`es::grammar`]), or none for a language WordCraft doesn't proof.
+/// ([`es::grammar`]), the Hungarian ones ([`hu::grammar`]), or none for a language WordCraft doesn't proof.
 pub fn check_grammar_in(text: &str, lang: ProofLang) -> Vec<Issue> {
     grammar_in(text, lang, true)
 }
@@ -835,6 +861,7 @@ fn grammar_in(text: &str, lang: ProofLang, capital_first: bool) -> Vec<Issue> {
         ProofLang::Id => id::grammar::check(text),
         // Spanish has no sentence-capital rule either.
         ProofLang::Es | ProofLang::EsMx | ProofLang::Es419 | ProofLang::EsUy => es::grammar::check(text, lang),
+        ProofLang::Hu => hu::grammar::check_with(text, capital_first),
         ProofLang::Bg | ProofLang::De | ProofLang::Other => Vec::new(),
     }
 }
@@ -1037,6 +1064,7 @@ mod tests {
             (ProofLang::EsMx, "es_MX"),
             (ProofLang::Es419, "es_419"),
             (ProofLang::EsUy, "es_UY"),
+            (ProofLang::Hu, "hu_HU"),
         ] {
             assert_eq!(dictionary_needed(l, false), Some(name), "{l:?}");
             assert_eq!(dictionary_needed(l, true), None, "{l:?}");
@@ -1084,6 +1112,7 @@ mod tests {
             ("es_MX", es::test_dict::AFF, es::test_dict::DIC_AMERICAS),
             ("es_419", es::test_dict::AFF, es::test_dict::DIC_AMERICAS),
             ("es_UY", es::test_dict::AFF, es::test_dict::DIC_AMERICAS),
+            ("hu_HU", hu::test_dict::AFF, hu::test_dict::DIC),
         ] {
             std::fs::write(dir.join(format!("{name}.aff")), aff).unwrap();
             std::fs::write(dir.join(format!("{name}.dic")), dic).unwrap();
@@ -1096,7 +1125,7 @@ mod tests {
         let before = dictionary_generation();
         set_dictionaries_folder(Some(dir.clone()));
         assert!(dictionary_generation() > before, "cached checks are dropped");
-        // Turkish has no test dictionary to put in the folder; Russian, Czech, Indonesian and the Spanishes follow it.
+        // Turkish has no test dictionary to put in the folder; Russian, Czech, Indonesian, the Spanishes and Hungarian follow it.
         let found = installed_dictionaries();
         assert_eq!(found.get(4).map(|(lang, _)| *lang), Some(ProofLang::Tr));
         assert_eq!(
@@ -1107,6 +1136,7 @@ mod tests {
                 (ProofLang::EsMx, Some(dir.join("es_MX.dic"))),
                 (ProofLang::Es419, Some(dir.join("es_419.dic"))),
                 (ProofLang::EsUy, Some(dir.join("es_UY.dic"))),
+                (ProofLang::Hu, Some(dir.join("hu_HU.dic"))),
             ]
         );
         assert_eq!(
@@ -1150,6 +1180,7 @@ mod tests {
             (ProofLang::Tr, "elma ve armut"),
             (ProofLang::Pt, "maçãs e peras"),
             (ProofLang::Ru, "яблоки и груши"),
+            (ProofLang::Hu, "alma és körte"),
         ] {
             let first = text.split(' ').next().unwrap();
             assert!(grammar(text, lang, true).is_empty(), "{lang:?} list item: {:?}", grammar(text, lang, true));
@@ -1859,7 +1890,7 @@ mod tests {
             let _ = has_dictionary(Some(&s));
             let _ = is_correct_for(&s, Some(&s));
             let _ = hyphen::hyphen_points(&s, &hyphen::Limits::default());
-            for lang in [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa, ProofLang::Pl, ProofLang::Pt, ProofLang::It, ProofLang::Hr, ProofLang::Tr, ProofLang::Ru, ProofLang::Cs, ProofLang::Id, ProofLang::De, ProofLang::Es, ProofLang::EsMx, ProofLang::Es419, ProofLang::EsUy, ProofLang::Other] {
+            for lang in [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa, ProofLang::Pl, ProofLang::Pt, ProofLang::It, ProofLang::Hr, ProofLang::Tr, ProofLang::Ru, ProofLang::Cs, ProofLang::Id, ProofLang::De, ProofLang::Es, ProofLang::EsMx, ProofLang::Es419, ProofLang::EsUy, ProofLang::Hu, ProofLang::Other] {
                 let _ = check_spelling_in(&s, lang);
                 let _ = check_grammar_in(&s, lang);
                 let _ = is_correct_in(&s, lang);
@@ -1912,8 +1943,8 @@ mod tests {
         }
 
         #[test]
-        fn mixed_spans_never_panic(s in "\\PC{0,60}", cuts in proptest::collection::vec((0usize..80, 0usize..80, 0u8..15), 0..6)) {
-            let langs = [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa, ProofLang::Pl, ProofLang::Pt, ProofLang::It, ProofLang::Tr, ProofLang::Ru, ProofLang::Cs, ProofLang::Id, ProofLang::Es, ProofLang::EsMx, ProofLang::Es419, ProofLang::EsUy, ProofLang::Other];
+        fn mixed_spans_never_panic(s in "\\PC{0,60}", cuts in proptest::collection::vec((0usize..80, 0usize..80, 0u8..16), 0..6)) {
+            let langs = [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa, ProofLang::Pl, ProofLang::Pt, ProofLang::It, ProofLang::Tr, ProofLang::Ru, ProofLang::Cs, ProofLang::Id, ProofLang::Es, ProofLang::EsMx, ProofLang::Es419, ProofLang::EsUy, ProofLang::Hu, ProofLang::Other];
             let spans: Vec<(Range<usize>, ProofLang)> = cuts.iter().map(|&(a, b, l)| (a.min(b)..a.max(b), langs[l as usize % langs.len()])).collect();
             for i in check_text(&s, &spans) {
                 proptest::prop_assert!(i.start <= i.end && i.end <= s.len());

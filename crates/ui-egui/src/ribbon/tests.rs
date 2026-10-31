@@ -327,6 +327,29 @@ fn turkish_has_a_name_in_the_language_menu() {
 }
 
 #[test]
+fn hungarian_has_a_name_in_the_language_menu() {
+    assert!(PROOFING_LANGUAGES.iter().any(|(t, _)| *t == "hu-HU"));
+    assert_eq!(language_name(Some("hu-HU")), "Hungarian");
+    assert_eq!(language_name(Some("hu")), "Hungarian");
+    assert_eq!(language_name(Some("HU-HU")), "Hungarian");
+}
+
+/// #735: Review › Language › Hungarian marks the selection `hu-HU`, and the menu then checks it.
+#[test]
+fn language_menu_selects_hungarian() {
+    use egui_kittest::kittest::{By, Queryable};
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Szia")), crate::Services::default());
+    app.run("select.all", json!({})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(400.0, 400.0)).build_ui_state(|ui, app: &mut WordApp| language_menu(ui, app), app);
+    h.run();
+    h.get(By::new().label_contains("Hungarian")).click();
+    h.run();
+    let state = h.state_mut().run("format.state", json!({})).unwrap();
+    assert_eq!(state["lang"], "hu-HU");
+    assert_eq!(caret_language(h.state()), "Hungarian");
+}
+
+#[test]
 fn picture_format_tab_appears_when_picture_selected() {
     let mut s = Session::new(wordcraft_doc::Document::new());
     assert!(!has_picture_selected(&s));
