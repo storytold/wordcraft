@@ -20,6 +20,9 @@ impl Reader<'_> {
                         && prev.section.is_none()
                         && prev.text.len() <= 16
                         && p.props.drop_cap.is_none()
+                        // An empty paragraph after it has no text to drop into: merging would take
+                        // the letter's size away and leave a paragraph too short to drop a letter.
+                        && p.text.chars().any(|c| c != wordcraft_doc::para::OBJ)
                         && let Some(Block::Para(mut first)) = out.pop().map(|b| (*b).clone())
                     {
                         let mut props = p.props.clone();

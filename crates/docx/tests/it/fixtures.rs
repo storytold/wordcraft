@@ -3601,6 +3601,19 @@ fn a_drop_cap_frames_other_sizes_are_kept() {
     assert_eq!(size("e"), Some(Some(10.0)), "{:?}", p[0].runs);
 }
 
+/// #3000: a drop cap's frame followed by an empty paragraph stays as it is: there is no text to
+/// merge the letter into, so it keeps its enlarged size instead of shrinking to an ordinary letter.
+#[test]
+fn a_drop_cap_before_an_empty_paragraph_keeps_its_size() {
+    let d = read_body(
+        r#"<w:p><w:pPr><w:framePr w:dropCap="drop" w:lines="3" w:wrap="around" w:vAnchor="text" w:hAnchor="text"/></w:pPr><w:r><w:rPr><w:sz w:val="88"/></w:rPr><w:t>B</w:t></w:r></w:p>
+        <w:p/>"#,
+    );
+    let p = paras(&d);
+    assert_eq!(p.len(), 2, "the empty paragraph is not merged: {p:?}");
+    assert_eq!((p[0].text.as_str(), p[0].runs[0].props.size), ("B", Some(44.0)));
+}
+
 /// #3000: a bookmark opening the drop cap's own frame is a sizeless run before the letter; the
 /// letter is still recognised by its enlarged size and takes the text's size back.
 #[test]

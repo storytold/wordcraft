@@ -7,7 +7,8 @@ impl Writer<'_> {
         // Which content control markers are written inline (set by `blocks`).
         let inline = std::mem::take(&mut self.inline_controls);
         // A drop cap is a separate framed paragraph holding the first character.
-        if let Some(lines) = p.props.drop_cap.filter(|l| *l > 0)
+        // `w:lines` and the layout stop at 10, so the letter's saved size does too.
+        if let Some(lines) = p.props.drop_cap.filter(|l| *l > 0).map(|l| l.min(10))
             && let Some(first) = p.text.chars().next().filter(|c| !matches!(*c, wordcraft_doc::para::OBJ | '\t' | '\n' | '\u{c}' | '\u{e}'))
             && p.text.len() > first.len_utf8()
         {
