@@ -488,14 +488,11 @@ fn body(ui: &mut Ui, d: &mut ColorsDialog) -> Option<bool> {
     ui.set_width(430.0);
     ui.label(egui::RichText::new(tl!("Colors")).font(crate::theme::semibold(14.0)));
     ui.add_space(6.0);
-    ui.horizontal(|ui| {
-        for (tab, label) in [(ColorsTab::Standard, "Standard"), (ColorsTab::Custom, "Custom")] {
-            if ui.selectable_label(d.tab == tab, tl!(label)).clicked() {
-                d.tab = tab;
-            }
-        }
-    });
-    ui.separator();
+    let names = ["Standard", "Custom"].map(|n| tl!(n).to_string());
+    if let Some(k) = crate::widgets::dialog_tabs(ui, &names, d.tab as usize) {
+        d.tab = if k == 0 { ColorsTab::Standard } else { ColorsTab::Custom };
+    }
+    ui.add_space(6.0);
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
             ui.set_width(330.0);

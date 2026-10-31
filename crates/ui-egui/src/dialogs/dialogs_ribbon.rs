@@ -88,17 +88,14 @@ fn label_of(app: &WordApp, id: &str) -> String {
 
 /// The dialog body; true closes it.
 pub fn customize_ribbon(app: &mut WordApp, ui: &mut Ui, f: &mut RibbonForm) -> bool {
-    ui.horizontal(|ui| {
-        for (page, name) in [(Page::Ribbon, "Ribbon"), (Page::QuickAccess, "Quick Access Toolbar")] {
-            if ui.selectable_label(f.page == page, tl!(name)).clicked() && f.page != page {
-                f.page = page;
-                f.renaming = None;
-                f.confirm_reset = false;
-                f.message.clear();
-            }
-        }
-    });
-    ui.separator();
+    let names = ["Ribbon", "Quick Access Toolbar"].map(|n| tl!(n).to_string());
+    if let Some(k) = crate::widgets::dialog_tabs(ui, &names, (f.page == Page::QuickAccess) as usize) {
+        f.page = if k == 0 { Page::Ribbon } else { Page::QuickAccess };
+        f.renaming = None;
+        f.confirm_reset = false;
+        f.message.clear();
+    }
+    ui.add_space(6.0);
     let (left, right, h) = (150.0, 230.0, 300.0);
     ui.add(egui::TextEdit::singleline(&mut f.filter).hint_text(tl!("Search")).desired_width(left + right + 8.0));
     let mut cats: Vec<(String, String)> = categories(app).into_iter().map(|c| (c.clone(), tl!(&c).to_string())).collect();

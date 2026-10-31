@@ -269,14 +269,11 @@ fn symbol_cell(app: &mut WordApp, ui: &mut Ui, font: &str, c: char, selected: bo
 pub(super) fn symbol_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SymbolForm) -> bool {
     let t = Tokens::get(ui.ctx());
     ui.set_width(GRID_COLS as f32 * CELL + 24.0);
-    ui.horizontal(|ui| {
-        for (i, l) in ["Symbols", "Special Characters"].into_iter().enumerate() {
-            if ui.selectable_label(f.tab == i as u8, tl!(l)).clicked() {
-                f.tab = i as u8;
-            }
-        }
-    });
-    ui.separator();
+    let names = ["Symbols", "Special Characters"].map(|n| tl!(n).to_string());
+    if let Some(k) = crate::widgets::dialog_tabs(ui, &names, f.tab as usize) {
+        f.tab = k as u8;
+    }
+    ui.add_space(6.0);
     let mut insert: Option<(Value, String, String)> = None;
     if f.tab == 1 {
         if special_ui(app, ui, f, &mut insert, &t) {
