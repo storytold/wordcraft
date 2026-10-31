@@ -181,6 +181,8 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
     // The document properties as the fields read and set them (`SUBJECT "New subject"`): a field
     // after one that sets a property shows the new value.
     let mut core = s.doc.core.clone();
+    // Every table formula in this pass reads cells against one shared budget.
+    let formula_budget = crate::cmd::table_formula::FormulaBudget::new();
     for (story, path) in stories.into_iter().flat_map(|st| s.doc.para_paths(st).into_iter().map(move |p| (st, p))).collect::<Vec<_>>() {
         let Some(p) = s.doc.para(story, &path) else { continue };
         if !p.objects.iter().any(|o| matches!(o, InlineObject::Field { .. })) {
@@ -195,7 +197,15 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
                     && let Some(t) = s.doc.table(StoryRef::Body, &tp)
                 {
                     let default_lang = crate::cmd::default_lang(s);
-                    let text = match crate::cmd::table_formula::evaluate_field_with(t, Some(&s.doc), default_lang.as_deref(), r, c, instr) {
+                    let text = match crate::cmd::table_formula::evaluate_field_budgeted(
+                        t,
+                        Some(&s.doc),
+                        default_lang.as_deref(),
+                        r,
+                        c,
+                        instr,
+                        &formula_budget,
+                    ) {
                         Ok(text) => text,
                         Err(e) => format!("!{e}"),
                     };

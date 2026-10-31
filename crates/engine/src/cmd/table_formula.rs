@@ -22,6 +22,37 @@ const MAX_DEPTH: usize = 32;
 /// The most cells one evaluation reads; past it the formula is too complex to work out, so a
 /// hostile document full of huge ranges can't make Update Field hang.
 pub const MAX_CELL_VISITS: usize = 100_000;
+/// A cell with more text than this, in bytes, holds no number: it isn't read for one. Each
+/// further this many bytes in a cell count as one more cell read against [`MAX_CELL_VISITS`].
+const MAX_NUMBER_TEXT: usize = 1024;
+
+/// The cells formulas may still read (see [`MAX_CELL_VISITS`]). One budget is shared by every
+/// formula an Update Fields pass works out, so many fields can't add up to a hang.
+#[derive(Debug, Default)]
+pub struct FormulaBudget {
+    visits: std::cell::Cell<usize>,
+}
+
+impl FormulaBudget {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Count `n` more cells read, failing once the budget is spent.
+    fn spend(&self, n: usize) -> Result<(), CmdError> {
+        let total = self.visits.get().saturating_add(n);
+        self.visits.set(total);
+        if total > MAX_CELL_VISITS { Err(CmdError::Failed("Formula too complex".into())) } else { Ok(()) }
+    }
+
+    /// Charge reading `c`: one, plus one per [`MAX_NUMBER_TEXT`] bytes of its text. The text is
+    /// measured only as far as what is left of the budget, so a spent budget reads nothing.
+    fn charge_cell(&self, c: &Cell) -> Result<(), CmdError> {
+        let left = MAX_CELL_VISITS.saturating_sub(self.visits.get());
+        let bytes = cell_bytes(c, left.saturating_mul(MAX_NUMBER_TEXT));
+        self.spend(1usize.saturating_add(bytes / MAX_NUMBER_TEXT))
+    }
+}
 
 /// Evaluate `formula` (with or without its leading `=`) for the cell in row `r`, cell index `c`.
 pub fn evaluate(t: &Table, r: usize, c: usize, formula: &str) -> Result<f64, CmdError> {
@@ -36,6 +67,18 @@ pub fn evaluate_with(
     c: usize,
     formula: &str,
 ) -> Result<f64, CmdError> {
+    evaluate_budgeted(t, doc, default_lang, r, c, formula, &FormulaBudget::new())
+}
+
+fn evaluate_budgeted(
+    t: &Table,
+    doc: Option<&wordcraft_doc::Document>,
+    default_lang: Option<&str>,
+    r: usize,
+    c: usize,
+    formula: &str,
+    budget: &FormulaBudget,
+) -> Result<f64, CmdError> {
     if formula.len() > MAX_FORMULA {
         return Err(syntax(format!("the formula is longer than {MAX_FORMULA} characters")));
     }
@@ -46,7 +89,7 @@ pub fn evaluate_with(
     if parser.pos != parser.toks.len() {
         return Err(syntax("unexpected text after the formula".into()));
     }
-    let here = Here { t, doc, default_lang, r, c, g: t.grid_col(r, c), visits: std::cell::Cell::new(0) };
+    let here = Here { t, doc, default_lang, r, c, g: t.grid_col(r, c), budget };
     match eval(&expr, &here)? {
         Val::Num(x) => finite(x),
         Val::List(_) => Err(syntax("a range or ABOVE/LEFT/RIGHT/BELOW needs a function, such as SUM".into())),
@@ -73,29 +116,40 @@ pub fn evaluate_field_with(
     c: usize,
     instr: &str,
 ) -> Result<String, CmdError> {
+    evaluate_field_budgeted(t, doc, default_lang, r, c, instr, &FormulaBudget::new())
+}
+
+/// [`evaluate_field_with`], reading cells against `budget`, which earlier formulas may have spent.
+pub fn evaluate_field_budgeted(
+    t: &Table,
+    doc: Option<&wordcraft_doc::Document>,
+    default_lang: Option<&str>,
+    r: usize,
+    c: usize,
+    instr: &str,
+    budget: &FormulaBudget,
+) -> Result<String, CmdError> {
     let (formula, switch) = split_switch(instr);
-    let value = evaluate_with(t, doc, default_lang, r, c, formula)?;
+    let value = evaluate_budgeted(t, doc, default_lang, r, c, formula, budget)?;
     let text = match switch.and_then(picture_of) {
         Some(picture) => format_picture(value, &picture),
         None => {
-            let out_lang = doc
-                .and_then(|d| {
-                    t.rows.get(r).and_then(|row| row.cells.get(c)).and_then(|cl| {
-                        cl.blocks.iter().filter_map(|b| b.as_para()).find(|p| !p.plain_text().trim().is_empty()).and_then(|p| super::para_lang(d, p))
-                    })
-                })
-                .or_else(|| {
-                    doc.and_then(|d| {
-                        t.rows.iter().flat_map(|row| row.cells.iter()).take(100).find_map(|cl| {
-                            cl.blocks
-                                .iter()
-                                .filter_map(|b| b.as_para())
-                                .find(|p| !p.plain_text().trim().is_empty())
-                                .and_then(|p| super::para_lang(d, p))
-                        })
-                    })
-                })
-                .or_else(|| default_lang.map(str::to_string));
+            // The language of the formula's cell, else of the table's first cells; each cell
+            // looked at is charged to the budget.
+            let mut out_lang = None;
+            if let Some(d) = doc {
+                let own = t.rows.get(r).and_then(|row| row.cells.get(c));
+                for cl in own.into_iter().chain(t.rows.iter().flat_map(|row| row.cells.iter()).take(100)) {
+                    budget.charge_cell(cl)?;
+                    let lang =
+                        cl.blocks.iter().filter_map(|b| b.as_para()).find(|p| !p.plain_text().trim().is_empty()).and_then(|p| super::para_lang(d, p));
+                    if lang.is_some() {
+                        out_lang = lang;
+                        break;
+                    }
+                }
+            }
+            let out_lang = out_lang.or_else(|| default_lang.map(str::to_string));
             wordcraft_doc::locale_number::format_number(value, out_lang.as_deref())
         }
     };
@@ -541,16 +595,14 @@ struct Here<'a> {
     r: usize,
     c: usize,
     g: usize,
-    /// Cells read so far in this evaluation (see [`MAX_CELL_VISITS`]).
-    visits: std::cell::Cell<usize>,
+    /// The cells this evaluation may still read (see [`MAX_CELL_VISITS`]).
+    budget: &'a FormulaBudget,
 }
 
 impl Here<'_> {
     /// Count `n` more cells read, failing once the evaluation has read too many.
     fn visit(&self, n: usize) -> Result<(), CmdError> {
-        let total = self.visits.get().saturating_add(n);
-        self.visits.set(total);
-        if total > MAX_CELL_VISITS { Err(CmdError::Failed("Formula too complex".into())) } else { Ok(()) }
+        self.budget.spend(n)
     }
 
     fn cell_lang(&self, c: &Cell) -> Option<String> {
@@ -561,6 +613,9 @@ impl Here<'_> {
     }
 
     fn cell_number(&self, c: &Cell) -> Option<f64> {
+        if cell_bytes(c, MAX_NUMBER_TEXT) > MAX_NUMBER_TEXT {
+            return None;
+        }
         let lang = self.cell_lang(c);
         let text = super::table::cell_text(c);
         parse_number(&text, lang.as_deref())
@@ -568,17 +623,36 @@ impl Here<'_> {
 
     /// The number in the cell covering grid column `g` of row `r`, counted against the budget.
     fn number_at(&self, r: usize, g: usize) -> Result<Option<f64>, CmdError> {
-        self.visit(1)?;
         let ci = match self.t.cell_at_grid(r, g) {
             Some(ci) => ci,
-            None => return Ok(None),
+            None => return self.visit(1).map(|()| None),
         };
         let c = match self.t.rows.get(r).and_then(|row| row.cells.get(ci)) {
             Some(c) => c,
-            None => return Ok(None),
+            None => return self.visit(1).map(|()| None),
         };
+        self.budget.charge_cell(c)?;
         Ok(self.cell_number(c))
     }
+}
+
+/// The length of a cell's text in bytes (as `table::cell_text` builds it), without building it.
+/// Counting stops once it passes `cap`, so the answer is exact only up to `cap`.
+fn cell_bytes(c: &Cell, cap: usize) -> usize {
+    let mut n = 0usize;
+    for p in c.blocks.iter().filter_map(|b| b.as_para()) {
+        n = n.saturating_add(p.text.len()).saturating_add(1);
+        for o in &p.objects {
+            if n > cap {
+                return n;
+            }
+            n = n.saturating_add(o.plain_text().len());
+        }
+        if n > cap {
+            return n;
+        }
+    }
+    n
 }
 
 enum Val {
@@ -691,11 +765,12 @@ fn side_numbers(here: &Here, side: Side) -> Result<Vec<f64>, CmdError> {
         }
         Side::Left | Side::Right => {
             let Some(row) = here.t.rows.get(here.r) else { return Ok(out) };
-            here.visit(row.cells.len())?;
-            let cells: Vec<Option<f64>> = row.cells.iter().map(|c| here.cell_number(c)).collect();
-            let order: Vec<usize> = if side == Side::Left { (0..here.c).rev().collect() } else { ((here.c + 1)..cells.len()).collect() };
+            let order: Vec<usize> = if side == Side::Left { (0..here.c).rev().collect() } else { ((here.c + 1)..row.cells.len()).collect() };
+            // Each cell is charged as it is read, so a spent budget stops the walk at once.
             for ci in order {
-                if !take(cells.get(ci).copied().flatten()) {
+                let Some(c) = row.cells.get(ci) else { break };
+                here.budget.charge_cell(c)?;
+                if !take(here.cell_number(c)) {
                     break;
                 }
             }
@@ -1058,6 +1133,18 @@ mod tests {
         let err = ev(&t, 0, 1, &too_much).unwrap_err();
         assert_eq!(err, CmdError::Failed("Formula too complex".into()));
         assert_eq!(evaluate_field(&t, 0, 1, &too_much).unwrap_err().to_string(), "Formula too complex");
+    }
+
+    #[test]
+    fn a_huge_cell_is_charged_by_its_size() {
+        // #3651: a 2 MB cell read eighty times must not count as eighty cheap visits.
+        let big = format!("1{}", " ".repeat(2_000_000));
+        let t = table(&[&[big.as_str(), ""]]);
+        // Ranges skip cells without a number, so only the size charge can stop this one.
+        let f = format!("=SUM({})", ["A1:A1"; 80].join(","));
+        assert!(f.len() <= MAX_FORMULA);
+        let err = ev(&t, 0, 1, &f).unwrap_err();
+        assert_eq!(err, CmdError::Failed("Formula too complex".into()));
     }
 
     #[test]
