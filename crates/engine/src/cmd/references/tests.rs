@@ -511,3 +511,60 @@ fn caption_for_an_object_in_a_cell_stays_in_the_cell() {
     let texts: Vec<String> = s.doc.body.iter().filter_map(|b| b.as_para()).map(|p| p.plain_text()).collect();
     assert_eq!(texts.get(1).map(String::as_str), Some("Figure 1"), "{texts:?}");
 }
+
+/// F9 fills IF fields as Word for Windows does: each code below with its stored result "stale",
+/// and the result Word's update put in it.
+#[test]
+fn update_fields_evaluates_if_fields_as_word_does() {
+    let cases = [
+        (r#"IF 1 = 1 "yes" "no""#, "yes"),
+        (r#"IF 2 > 10 "gt" "le""#, "le"),
+        (r#"IF "2" > "10" "gt" "le""#, "gt"),
+        (r#"IF 10 = 10.0 "eq" "ne""#, "eq"),
+        (r#"IF 5 <> 5 "ne" "eq""#, "eq"),
+        (r#"IF 3 <= 3 "le" "gt""#, "le"),
+        (r#"IF 4 >= 5 "ge" "lt""#, "lt"),
+        (r#"IF 3 < 4 "lt" "ge""#, "lt"),
+        (r#"IF "apple" < "banana" "lt" "ge""#, "lt"),
+        (r#"IF "Apple" = "apple" "same" "differ""#, "differ"),
+        (r#"IF "abc" = "a*" "match" "nomatch""#, "match"),
+        (r#"IF "abc" = "a?c" "match" "nomatch""#, "match"),
+        (r#"IF "abc" <> "x*" "nomatch" "match""#, "nomatch"),
+        (r#"IF abc = abc "words" "nowords""#, "words"),
+        (r#"IF "a b" = "a b" "spaced" "not""#, "spaced"),
+        (r#"IF 1 = 2 "only""#, ""),
+        (r#"IF 1 = 1 "only""#, "only"),
+        (r#"IF 1=1 "tight" "loose""#, super::properties::IF_UNKNOWN_OP),
+        (r#"IF 1 = 1 "yes" "no" \* Upper"#, "YES"),
+        ("IF 1 = 1 yes no", "yes"),
+        (r#"IF "" = "" "empty" "nonempty""#, "empty"),
+        (r#"IF 1,000 = 1000 "comma" "nocomma""#, "comma"),
+        ("IF 1 = 1", ""),
+        (r#"IF "z" > "Z" "lower" "upper""#, "upper"),
+        // A field written out in braces isn't evaluated: the IF keeps its result.
+        (r#"IF { PAGE } = 1 "first" "other""#, "stale"),
+    ];
+    let mut s = Session::new(wordcraft_doc::Document::from_text("If "));
+    s.run("caret.docEnd", &json!({})).unwrap();
+    for (instr, _) in cases {
+        s.run("insert.field", &json!({"instr": instr, "result": "stale"})).unwrap();
+        s.run("text.insert", &json!({"text": " "})).unwrap();
+    }
+    // A locked IF keeps what it shows.
+    s.run("insert.field", &json!({"instr": r#"IF 1 = 1 "yes" "no""#, "result": "stale"})).unwrap();
+    let para = s.doc.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    for o in &mut para.objects {
+        if let InlineObject::Field { result, .. } = o {
+            *result = "stale".into();
+        }
+    }
+    if let Some(InlineObject::Field { locked, .. }) = para.objects.last_mut() {
+        *locked = true;
+    }
+    para.touch();
+    update_fields(&mut s).unwrap();
+    let got: Vec<String> = fields(&s).into_iter().map(|(_, r)| r).collect();
+    let mut expected: Vec<&str> = cases.iter().map(|(_, r)| *r).collect();
+    expected.push("stale");
+    assert_eq!(got, expected);
+}
