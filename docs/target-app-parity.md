@@ -86,7 +86,7 @@ Weighted feature depth: **~68%** (Σ weight × parity / 100 over the table).
 
 ## Readiness numbers: full, mainstream practitioner, essentials user
 
-Three numbers, each with its own hours (craftrules `standards/progress-docs.md`, "Numbers"). The
+Three numbers, each with its own hours. The
 **full** number is the additive weighted sum over the dimension table below. **Mainstream** and
 **essentials** average depth over the areas in scope, then multiply by written-down discounts for
 what still stops real work. The stage follows the full number and the core-workflow gate.
@@ -217,7 +217,7 @@ Word. Their weighted sum is the **full ready for real work** number.
   splits it into feature depth (67%, up: equations, .doc import, RTL, text boxes, Zotero landed) and
   ready-for-real-work (60%, additive weighted sum), which adds file fidelity, stability,
   localization and the rest. A multiplicative version (~47%) was briefly used the same day and
-  reverted to align with the standard; no new evidence.
+  reverted; no new evidence.
 - **Why the hours went up** from "120–150 h to 100%" (2026-10-06): that figure left out
   localization, multilingual proofing, ecosystem, hardware, PDF Reflow and `.doc` writing, and
   priced DOCX corpus fidelity at 10 h. The new evidence is the Word bundle inventory (30 UI
@@ -314,7 +314,7 @@ can be used without committing Word output.
 | 2026-10-10 | trivial | Draw Table and Eraser (#303): catalog 384/430 → 387/430 (90.0%) |
 | 2026-10-10 | trivial | Pictures, shapes, text boxes: free rotation and flips, rotation handle, rotated wrap bounds, DOCX `a:xfrm` rot/flipH/flipV (#332); no percentage change |
 | 2026-10-10 | minor | Merged main (12 PRs): Paste Special, Advanced Find, Column Selection, Style Inspector, custom table styles, gridlines, zoom buttons, touchpad scrolling, File Info fields, Serbian. Catalog 378/428 → 384/430 (89.3%); typing 82→85%, styles 72→74%, tables 74→76%; feature depth 67→68%; mainstream 54→55%; full stays ~60%, essentials ~63% |
-| 2026-10-10 | minor | Readiness table: hours to ~95% per audience (full ~650–1,100 h, mainstream ~300–500 h, essentials ~90–140 h). Full number restored to the additive weighted sum, ~47% → ~60%: method aligned with the standard, no new evidence; beta distance back to ~15 points and ~150–230 h |
+| 2026-10-10 | minor | Readiness table: hours to ~95% per audience (full ~650–1,100 h, mainstream ~300–500 h, essentials ~90–140 h). Full number restored to the additive weighted sum, ~47% → ~60%: no new evidence; beta distance back to ~15 points and ~150–230 h |
 | 2026-10-11 | trivial | East Asian typography 15% → 25%: document grid (#391); kinsoku and Asian Typography options already landed |
 | 2026-10-10 | minor | Added mainstream practitioner (~54%) and essentials user (~63%) numbers with written weights and discounts; full ready-for-real-work recomputed with the same multiplicative discounts: 60% → ~47% (method change, not new product evidence; stage stays alpha: above 40% and the gate passes); beta now ~450–700 h to the 75% bar; user-evidence counts from GitHub |
 | 2026-10-10 | minor | Stage checked against the core-workflow alpha gate: passes, stays alpha |

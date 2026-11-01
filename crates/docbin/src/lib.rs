@@ -233,6 +233,7 @@ pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Docume
         Some((f, l)) => stsh::parse(&table, f, l)?,
         None => Vec::new(),
     };
+    let standard_fonts = fib.pair(fib::pair::STSHF).map(|(f, l)| stsh::standard_fonts(&table, f, l)).unwrap_or_default();
     let chpx_bins = match fib.pair(fib::pair::PLCF_BTE_CHPX) {
         Some((f, l)) => Bins::parse(&table, f, l)?,
         None => Bins::parse(&[], 0, 0)?,
@@ -248,7 +249,7 @@ pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Docume
     }
     doc.body.clear();
     let style_ids = fmt::style_ids(&raw_styles);
-    doc.styles = fmt::stylesheet(&raw_styles, &style_ids, &fonts);
+    doc.styles = fmt::stylesheet(&raw_styles, &style_ids, &fonts, standard_fonts);
     // With no quick flag read, the Home › Styles gallery shows Word's usual set, as the DOCX
     // reader does.
     if !doc.styles.styles.iter().any(|s| s.quick) {

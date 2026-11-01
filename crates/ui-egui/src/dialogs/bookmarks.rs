@@ -198,3 +198,63 @@ pub(super) fn enclose_preview(ui: &mut Ui, style: &str, text: &str, shape: &str)
     let dy = if shape == "triangle" && box_h > 0.0 { h * 0.3 } else { 0.0 };
     p.text(c + vec2(0.0, dy), egui::Align2::CENTER_CENTER, text, egui::FontId::proportional(px), ink);
 }
+
+/// View › Macros (#4327): the macros recorded or defined this session, with Run and Delete beside
+/// the list and Record below it. While a recording is running the box offers Stop Recording instead.
+/// The list is read from the session, not from `tools.macros`, which would ask to open this
+/// dialog again. Run and Record close the dialog; Delete leaves it open.
+pub(super) fn macros(app: &mut WordApp, ui: &mut Ui, name: &mut String) -> bool {
+    let names: Vec<String> = app.session.macros.keys().cloned().collect();
+    let recording = app.session.recording.as_ref().map(|(n, _)| n.clone());
+    let t = Tokens::get(ui.ctx());
+    let (mut run, mut delete, mut record) = (false, false, false);
+    ui.horizontal_top(|ui| {
+        ui.vertical(|ui| {
+            let name_label = ui.label(tl!("Macro name:"));
+            ui.add(egui::TextEdit::singleline(name).desired_width(240.0)).labelled_by(name_label.id);
+            egui::Frame::NONE.stroke(egui::Stroke::new(1.0, t.border)).inner_margin(4).show(ui, |ui| {
+                ui.set_width(232.0);
+                ui.set_height(150.0);
+                egui::ScrollArea::vertical().id_salt("macro_list").max_height(150.0).auto_shrink([false, false]).show(ui, |ui| {
+                    if names.is_empty() {
+                        ui.label(egui::RichText::new(tl!("There are no macros yet. Record one to add it here.")).small().color(t.text_dim));
+                    }
+                    for n in &names {
+                        if ui.selectable_label(*n == *name, n.as_str()).clicked() {
+                            *name = n.clone();
+                        }
+                    }
+                });
+            });
+        });
+        ui.vertical(|ui| {
+            ui.add_space(18.0);
+            let listed = names.contains(name);
+            let w = vec2(110.0, 0.0);
+            run = ui.add_enabled(listed && recording.is_none(), egui::Button::new(tl!("Run")).min_size(w)).clicked();
+            delete = ui.add_enabled(listed, egui::Button::new(tl!("Delete")).min_size(w)).clicked();
+            let record_label = if recording.is_some() { tl!("Stop Recording") } else { tl!("Record…") };
+            record = ui.add_enabled(recording.is_some() || !name.trim().is_empty(), egui::Button::new(record_label).min_size(w)).clicked();
+        });
+    });
+    if run {
+        let _ = app.run("tools.macros", json!({"run": name.as_str()}));
+        return true;
+    }
+    if delete && app.run("tools.macros", json!({"delete": name.as_str()})).is_ok() {
+        name.clear();
+    }
+    if record {
+        // Stopping takes no name; starting records under the one typed.
+        let _ = app.run("tools.recordMacro", if recording.is_some() { json!({}) } else { json!({"name": name.trim()}) });
+        return true;
+    }
+    ui.add_space(8.0);
+    let mut close = ui.input(|i| i.key_pressed(egui::Key::Escape));
+    ui.horizontal(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            close |= ui.button(tl!("Close")).clicked();
+        });
+    });
+    close
+}
