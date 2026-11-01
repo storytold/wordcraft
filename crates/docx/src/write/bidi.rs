@@ -71,13 +71,18 @@ pub(super) fn over_styles(styles: &StyleSheet, para: &CharProps, c: &CharProps) 
 /// Add `rtl` and, when given, the bidi language `lang` to `c` where it doesn't say them. Where
 /// `m` (what `c`'s styles and own formatting give it) has no complex-script font, size, bold or
 /// italic, the ordinary one WordCraft drew it with is written as the complex-script value, since
-/// Word draws a `w:rtl` run with those alone.
+/// Word draws a `w:rtl` run with those alone. A run already marked complex script (`w:cs`) is
+/// drawn by Word with its complex-script values already, so `w:rtl` changes nothing there and
+/// none is added.
 fn direct(c: &mut CharProps, lang: Option<&String>, m: &CharProps) {
     c.rtl.get_or_insert(true);
     if let Some(l) = lang
         && c.lang_bidi.is_none()
     {
         c.lang_bidi = Some(l.clone());
+    }
+    if m.cs == Some(true) {
+        return;
     }
     if m.font_cs.is_none() {
         c.font_cs = m.font.clone();

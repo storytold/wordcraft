@@ -259,6 +259,22 @@ fn inherited_ordinary_values_become_the_complex_script_ones() {
 }
 
 #[test]
+fn a_run_already_marked_complex_script_gets_no_complex_script_values() {
+    // `w:cs` already has Word draw the run with its complex-script values (a bold run with no
+    // `w:bCs` is plain), so marking it `w:rtl` changes nothing and nothing is added.
+    let d = doc_of(
+        "שלום WordCraft",
+        true,
+        CharProps { cs: Some(true), font: Some("Courier New".into()), size: Some(20.0), bold: Some(true), italic: Some(true), ..Default::default() },
+    );
+    let runs = run_props(&document_xml(&wordcraft_docx::write(&d).unwrap()));
+    let rtl = runs.iter().find(|r| r.contains("<w:rtl/>")).unwrap_or_else(|| panic!("{runs:?}"));
+    for added in ["w:cs=\"Courier New\"", "<w:bCs", "<w:iCs", "<w:szCs"] {
+        assert!(!rtl.contains(added), "{added}: {rtl}");
+    }
+}
+
+#[test]
 fn complex_script_values_already_set_are_not_repeated() {
     let mut d = doc_of("שלום WordCraft", true, CharProps { size: Some(20.0), bold: Some(true), ..arial() });
     d.styles.default_chr.font_cs = Some("Arial".into());
