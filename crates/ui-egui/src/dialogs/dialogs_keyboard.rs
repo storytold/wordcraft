@@ -115,7 +115,9 @@ fn pressed_key(ui: &Ui) -> Option<String> {
     let mut out = None;
     for e in events {
         let key = match e {
-            egui::Event::Key { key, pressed: true, modifiers, .. } => crate::keys::key_name(key).map(|n| crate::keys::combo(modifiers, n, true)),
+            egui::Event::Key { key, pressed: true, modifiers, .. } => {
+                crate::keys::key_name_with(key, modifiers).map(|n| crate::keys::combo(modifiers, n, true))
+            }
             // The shell turns these into clipboard events rather than keys.
             egui::Event::Copy => Some(crate::keys::combo(mods, "C", true)),
             egui::Event::Cut => Some(crate::keys::combo(mods, "X", true)),
