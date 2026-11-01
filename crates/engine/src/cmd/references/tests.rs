@@ -599,3 +599,43 @@ fn output_shows_words_error_for_a_reference_to_a_missing_bookmark() {
     assert_eq!(shown(&s.layout()), ["stale", "stale"], "the editor shows the stored result");
     assert_eq!(fields(&s).iter().map(|f| f.1.as_str()).collect::<Vec<_>>(), ["stale", "stale"], "the document keeps it");
 }
+
+/// Output looks the bookmarks up once for all of a document's REF fields: several fields to one
+/// bookmark, fields to others, and one to a bookmark the document lacks each show what
+/// `bookmark_text` (F9's lookup) gives, or Word's error.
+#[test]
+fn output_gives_every_reference_its_bookmarks_text() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("First target\nSecond target\nRefs "));
+    for (text, name) in [("First target", "A"), ("Second target", "B")] {
+        s.run("select.text", &json!({"text": text})).unwrap();
+        s.run("insert.bookmark", &json!({"name": name})).unwrap();
+    }
+    s.run("caret.docEnd", &json!({})).unwrap();
+    let targets = ["A", "B", "A", "Missing", "A"];
+    for t in targets {
+        s.run("insert.field", &json!({"instr": format!("REF {t} \\h"), "result": "x"})).unwrap();
+        s.run("text.insert", &json!({"text": " "})).unwrap();
+    }
+    let last = s.doc.para_paths(StoryRef::Body).pop().unwrap();
+    let para = s.doc.para_mut(StoryRef::Body, &last).unwrap();
+    for o in &mut para.objects {
+        if let InlineObject::Field { result, .. } = o {
+            *result = "stale".into();
+        }
+    }
+    para.touch();
+    let out = output_fields(&s.doc).expect("the stale results change");
+    let results: Vec<String> = out
+        .para(StoryRef::Body, &last)
+        .unwrap()
+        .objects
+        .iter()
+        .filter_map(|o| match o {
+            InlineObject::Field { result, .. } => Some(result.clone()),
+            _ => None,
+        })
+        .collect();
+    let expected: Vec<String> = targets.iter().map(|t| super::bookmark_text(&s.doc, t).unwrap_or_else(|| REFERENCE_NOT_FOUND.to_string())).collect();
+    assert_eq!(results, expected);
+    assert_eq!(results, ["First target", "Second target", "First target", REFERENCE_NOT_FOUND, "First target"]);
+}

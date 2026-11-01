@@ -1,5 +1,6 @@
 use super::properties::{
-    bookmark_text, count_text, date_picture, doc_property, doc_property_arg, new_property_value, set_summary_property, summary_property, text_result,
+    bookmark_text, bookmark_text_at, count_text, date_picture, doc_property, doc_property_arg, new_property_value, set_summary_property,
+    summary_property, text_result,
 };
 use super::toc::{heading_style_level, update_toc};
 use super::{
@@ -139,9 +140,16 @@ pub const REFERENCE_NOT_FOUND: &str = "Error! Reference source not found.";
 
 /// The fresh results of the body's unlocked REF fields as output shows them: the bookmark's
 /// text, or Word's error when the document lacks the bookmark (measured in Word for Windows);
-/// `\p`, which gives "above" or "below", keeps the stored result.
+/// `\p`, which gives "above" or "below", keeps the stored result. The document's bookmarks are
+/// looked up once, and each bookmark's text read once, however many fields refer to it.
 fn ref_results(doc: &wordcraft_doc::Document) -> Vec<FieldResult> {
     let mut out = Vec::new();
+    let mut starts: std::collections::HashMap<String, Pos> = std::collections::HashMap::new();
+    for (name, start) in doc.bookmarks() {
+        // The first of two bookmarks with one name, as `bookmark_text` takes.
+        starts.entry(name).or_insert(start);
+    }
+    let mut texts: std::collections::HashMap<String, Option<String>> = std::collections::HashMap::new();
     for path in doc.para_paths(StoryRef::Body) {
         let Some(p) = doc.para(StoryRef::Body, &path) else { continue };
         for (k, o) in p.objects.iter().enumerate() {
@@ -151,7 +159,8 @@ fn ref_results(doc: &wordcraft_doc::Document) -> Vec<FieldResult> {
             }
             let f = FieldCode::parse(instr);
             let target = f.args.first().map(|s| s.split('\\').next().unwrap_or("").trim_matches('"')).unwrap_or("");
-            let shown = bookmark_text(doc, target).map_or_else(|| REFERENCE_NOT_FOUND.to_string(), |r| text_result(instr, r));
+            let text = texts.entry(target.to_string()).or_insert_with(|| starts.get(target).and_then(|start| bookmark_text_at(doc, target, start)));
+            let shown = text.clone().map_or_else(|| REFERENCE_NOT_FOUND.to_string(), |r| text_result(instr, r));
             out.push((path.clone(), k, shown));
         }
     }
