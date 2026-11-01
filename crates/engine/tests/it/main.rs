@@ -1,6 +1,7 @@
 mod comment_ids;
 mod date_fields;
 mod macro_packages;
+mod odt_charts;
 mod odt_fields;
 #[cfg(not(target_arch = "wasm32"))]
 mod odt_sections;

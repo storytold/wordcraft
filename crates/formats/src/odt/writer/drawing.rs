@@ -236,6 +236,7 @@ impl Writer {
                     self.drawing_shape(*kind, (*w, *h), Place::Member(x, y, float.as_deref()), (look, path.as_deref()), blocks, out)
                 }
                 Inline::Image(img) => self.image(img, Place::Member(x, y, img.float.as_deref()), out),
+                Inline::Chart(c) => self.chart(c, Place::Member(x, y, c.float.as_deref()), out),
                 Inline::Group { members, .. } if depth < model::MAX_GROUP_DEPTH => {
                     out.push_str("<draw:g>");
                     self.members(members, (x, y), depth + 1, out);
@@ -365,10 +366,14 @@ impl Writer {
     /// pointing at a sub-document whose `content.xml` is the equation's MathML, its frame about
     /// the size the formula takes (LibreOffice scales the formula to the frame).
     pub(in crate::odt) fn formula(&mut self, linear: &str, display: bool, out: &mut String) {
-        let n = self.formulas.len() + 1;
+        let n = self.objects.len() + 1;
         let name = format!("Object {}{n}", self.prefix);
         let mathml = crate::mathml::linear_to_mathml(linear, display);
-        self.formulas.push((name.clone(), format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n{mathml}\n")));
+        self.objects.push((
+            name.clone(),
+            format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n{mathml}\n"),
+            "application/vnd.oasis.opendocument.formula",
+        ));
         let (w, h) = crate::odt::formula_size::size(linear);
         // Centred on the line, as LibreOffice sets its own formulas.
         let style = self.graphic_style(" style:vertical-pos=\"middle\" style:vertical-rel=\"text\"".into());

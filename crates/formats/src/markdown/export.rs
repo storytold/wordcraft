@@ -132,7 +132,9 @@ fn inlines_md_impl(inlines: &[Inline], in_table: bool) -> String {
                 let safe: String = a.chars().filter(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | ':')).collect();
                 pieces.push((String::new(), Fmt::default(), Some(format!("<a id=\"{safe}\"></a>"))));
             }
-            Inline::Figure(alt) => pieces.push((String::new(), Fmt::default(), Some(format!("![{}]()", escape(alt))))),
+            Inline::Figure(alt) | Inline::Chart(crate::model::Chart { alt, .. }) => {
+                pieces.push((String::new(), Fmt::default(), Some(format!("![{}]()", escape(alt)))))
+            }
             Inline::Equation { .. } => {}
             Inline::Field { result, fmt, .. } => pieces.push((result.clone(), fmt.clone(), None)),
             Inline::Note { .. }

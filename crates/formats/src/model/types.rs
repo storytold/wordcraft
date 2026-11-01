@@ -152,6 +152,18 @@ pub struct Img {
     pub float: Option<Box<wordcraft_doc::para::Float>>,
 }
 
+/// An editable chart in a flow ([`Inline::Chart`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Chart {
+    pub spec: Arc<wordcraft_doc::chart::ChartSpec>,
+    /// Display size, points.
+    pub w: f32,
+    pub h: f32,
+    pub alt: String,
+    /// How a floating chart is placed and wrapped; `None`: in line with the text.
+    pub float: Option<Box<wordcraft_doc::para::Float>>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Inline {
     Text(String, Fmt),
@@ -165,6 +177,9 @@ pub enum Inline {
     /// A chart or diagram known here only by its alt text: written where alt text has a place
     /// (an HTML or Markdown image), left out of editable formats so it never turns into body text.
     Figure(String),
+    /// A chart WordCraft can edit, `w` × `h` points: only in flows asked for boxes
+    /// ([`FlowOpts::boxes`]); others get its alt text as an [`Inline::Figure`].
+    Chart(Chart),
     /// An equation in the linear format WordCraft keeps them in (`x=(-b±√(b^2-4ac))/2a`). Formats
     /// without equations write `linear` as text.
     Equation {
@@ -615,6 +630,7 @@ impl Para {
                 Inline::Image(_)
                 | Inline::Anchor(_)
                 | Inline::Figure(_)
+                | Inline::Chart(_)
                 | Inline::Note { .. }
                 | Inline::Comment { .. }
                 | Inline::CommentEnd(_)
@@ -641,6 +657,7 @@ impl Para {
                 Inline::Image(_)
                 | Inline::Anchor(_)
                 | Inline::Figure(_)
+                | Inline::Chart(_)
                 | Inline::Note { .. }
                 | Inline::Comment { .. }
                 | Inline::CommentEnd(_)

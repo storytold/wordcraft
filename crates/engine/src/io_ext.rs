@@ -14,10 +14,19 @@ pub fn open(ext: &str, bytes: &[u8], page: &wordcraft_doc::SectionProps) -> Opti
         other => wordcraft_formats::import_on(other, bytes, page).map(|r| {
             r.map(|mut doc| {
                 crate::io::fit_pictures(&mut doc);
+                draw_charts(&mut doc);
                 doc
             })
         }),
     }
+}
+
+/// Draw the charts a reader left undrawn (ODT charts come as their chart model alone): in the
+/// document's theme colours, at their size.
+fn draw_charts(doc: &mut Document) {
+    let theme = doc.settings.theme_colors.clone();
+    let undrawn = |o: &wordcraft_doc::para::InlineObject| matches!(o, wordcraft_doc::para::InlineObject::Graphic { graphic, .. } if graphic.chart.is_some() && graphic.items.is_empty());
+    doc.objects_mut(&undrawn, &mut |o| crate::cmd::chart::redraw(o, &theme));
 }
 
 /// Save to a format other than plain text / JSON.

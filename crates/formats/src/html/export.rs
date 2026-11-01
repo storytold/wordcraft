@@ -155,7 +155,7 @@ pub fn inlines_html(inlines: &[Inline]) -> String {
                 }
             }
             // No picture to show: the browser shows the alt text in its place.
-            Inline::Figure(alt) => o.push_str(&format!("<img alt=\"{}\">", esc(alt))),
+            Inline::Figure(alt) | Inline::Chart(crate::model::Chart { alt, .. }) => o.push_str(&format!("<img alt=\"{}\">", esc(alt))),
             // MathML, which browsers, Word and LibreOffice show as an equation (#816).
             Inline::Equation { linear, display } => o.push_str(&crate::mathml::linear_to_mathml(linear, *display)),
         }

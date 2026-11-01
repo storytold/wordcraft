@@ -109,3 +109,18 @@ fn hostile_flat_documents_do_not_panic() {
         }
     }
 }
+
+#[test]
+fn an_inline_sub_document_does_not_end_the_body() {
+    // A chart object inline holds an `office:document` with an `office:body` of its own: the
+    // outer body goes on past it (the text after the chart stays), and deep nesting is bounded.
+    let chart = r#"<draw:frame svg:width="2in" svg:height="1in"><draw:object><office:document office:mimetype="application/vnd.oasis.opendocument.chart"><office:body><office:chart/></office:body></office:document></draw:object></draw:frame>"#;
+    let xml = format!(
+        r#"<?xml version="1.0"?><office:document xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0"><office:body><office:text><text:p>Before{chart}</text:p><text:p>After the chart.</text:p></office:text></office:body></office:document>"#
+    );
+    let d = import_flat(xml.as_bytes()).unwrap();
+    let text: Vec<String> = d.body.iter().filter_map(|b| b.as_para()).map(|p| p.text.replace(wordcraft_doc::para::OBJ, "")).collect();
+    assert_eq!(text, ["Before", "After the chart."]);
+    let deep = format!("<office:document><office:body>{}", "<office:body>".repeat(5000));
+    let _ = import_flat(deep.as_bytes());
+}

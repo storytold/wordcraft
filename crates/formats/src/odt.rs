@@ -38,6 +38,7 @@ use wordcraft_doc::{Align, Document, RevisionKind, Rgb, SectionProps};
 use crate::model::{self, Cell, FBlock, FComment, FTable, Flow, Fmt, Inline, Kind, ListInfo, Meta, Para, RevMark, make_img, mime_of};
 
 mod body;
+mod chart;
 mod datastyle;
 mod fields;
 mod flat;

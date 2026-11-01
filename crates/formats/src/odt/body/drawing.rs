@@ -75,7 +75,7 @@ impl Body<'_> {
     /// End a frame or drawing shape: its picture, equation, text box or shape goes into the
     /// paragraph.
     pub(in crate::odt) fn end_frame(&mut self) {
-        if let Some((w, h, img, alt, eq)) = self.frame.take() {
+        if let Some((w, h, img, alt, eq, chart)) = self.frame.take() {
             let boxed = self.frame_box.take();
             let mut float = self.frame_float.take();
             if boxed.is_some()
@@ -101,6 +101,13 @@ impl Body<'_> {
                     Some(Inline::Shape { kind, w: w.unwrap_or(72.0), h: h.unwrap_or(1.0), float: float.map(Box::new), blocks, look, path })
                 }
                 (None, Some((linear, display))) => Some(Inline::Equation { linear, display }),
+                (None, None) if let Some(spec) = chart => Some(Inline::Chart(model::Chart {
+                    spec: std::sync::Arc::new(spec),
+                    w: w.unwrap_or(360.0),
+                    h: h.unwrap_or(216.0),
+                    alt: alt.trim().to_string(),
+                    float: float.map(Box::new),
+                })),
                 (None, None) => img.and_then(|data| make_img(data, w, h, alt.trim())).map(|mut img| {
                     img.float = float.map(Box::new);
                     Inline::Image(img)
@@ -189,7 +196,7 @@ impl Body<'_> {
         self.frame_look = g.shape_look(kind, &self.styles.defs);
         self.shape_path = crate::odt::shapes::freeform(local(q), a, w, h).map(std::sync::Arc::new);
         self.shape_kind = Some(kind);
-        let frame = (Some((Some(w), Some(h), None, String::new(), None)), Some(float), std::mem::take(&mut self.frame_look));
+        let frame = (Some((Some(w), Some(h), None, String::new(), None, None)), Some(float), std::mem::take(&mut self.frame_look));
         self.start_note(a);
         if let Some(n) = &mut self.note {
             n.text_box = Some(frame);

@@ -489,11 +489,20 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
                         None => {}
                     }
                 }
-                Some(InlineObject::Graphic { alt, .. }) => {
+                Some(InlineObject::Graphic { alt, w, h, float, graphic }) => {
                     if !buf.is_empty() {
                         out.push_text(&std::mem::take(&mut buf), &f);
                     }
-                    if !alt.trim().is_empty() {
+                    // An editable chart, for formats that keep charts (ODT).
+                    if let Some(spec) = graphic.chart.as_ref().filter(|_| opts.boxes) {
+                        out.inlines.push(Inline::Chart(crate::model::Chart {
+                            spec: spec.clone(),
+                            w: *w,
+                            h: *h,
+                            alt: alt.clone(),
+                            float: kept_float(float).filter(|_| opts.paras),
+                        }));
+                    } else if !alt.trim().is_empty() {
                         out.inlines.push(Inline::Figure(alt.clone()));
                     }
                 }

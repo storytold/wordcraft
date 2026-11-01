@@ -401,6 +401,7 @@ impl Writer {
                 Inline::Ruby { base, fmt, .. } => self.run(base, fmt, out),
                 Inline::Field { result, fmt, .. } => self.run(result, fmt, out),
                 Inline::Figure(_)
+                | Inline::Chart(_)
                 | Inline::Equation { .. }
                 | Inline::Note { .. }
                 | Inline::Comment { .. }

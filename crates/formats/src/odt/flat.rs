@@ -35,12 +35,36 @@ fn element<'a>(xml: &'a str, name: &str) -> &'a str {
     if xml.get(..tag_end).is_some_and(|t| t.ends_with('/')) {
         return xml.get(start..=tag_end).unwrap_or("");
     }
+    // Its end: the close tag at its own depth (a chart object inside holds an `office:body`,
+    // an `office:document` of its own).
     let close = format!("</{name}>");
-    match xml.get(tag_end..).and_then(|r| r.find(&close)) {
-        Some(e) => xml.get(start..tag_end + e + close.len()).unwrap_or(""),
-        // Unclosed (malformed): to the end.
-        None => xml.get(start..).unwrap_or(""),
+    let mut depth = 0usize;
+    let mut at = tag_end;
+    // Nesting is bounded like any XML here: deeper is malformed.
+    for _ in 0..super::limits::MAX_XML_DEPTH.saturating_mul(2) {
+        let rest = xml.get(at..).unwrap_or("");
+        let next_close = rest.find(&close);
+        let next_open = rest.match_indices(&open).map(|(i, _)| i).find(|&i| {
+            let after = rest.get(i + open.len()..).unwrap_or("");
+            after.chars().next().is_some_and(|c| c == '>' || c == '/' || c.is_whitespace())
+                // Not self-closed.
+                && after.find('>').and_then(|e| after.get(..e)).is_some_and(|t| !t.ends_with('/'))
+        });
+        match (next_open, next_close) {
+            (Some(o), Some(c)) if o < c => {
+                depth += 1;
+                at += o + open.len();
+            }
+            (_, Some(c)) if depth > 0 => {
+                depth -= 1;
+                at += c + close.len();
+            }
+            (_, Some(c)) => return xml.get(start..at + c + close.len()).unwrap_or(""),
+            // Unclosed (malformed): to the end.
+            (_, None) => return xml.get(start..).unwrap_or(""),
+        }
     }
+    xml.get(start..).unwrap_or("")
 }
 
 /// What is inside element `el` (an element string as [`element`] gives).
@@ -232,6 +256,11 @@ pub fn export_flat(doc: &Document) -> Result<Vec<u8>, String> {
             let math = bytes_of(&format!("{}/content.xml", target.trim_start_matches("./")));
             let math = String::from_utf8_lossy(&math);
             let math = math.split_once("?>").map_or(math.as_ref(), |(_, m)| m).trim();
+            // A sub-document (a chart) goes in as an `office:document` (§3.1.2), its root.
+            let math = match math.strip_prefix("<office:document-content").and_then(|m| m.strip_suffix("</office:document-content>")) {
+                Some(inner) => format!("<office:document{inner}</office:document>"),
+                None => math.to_string(),
+            };
             // A plain `draw:object` around it: the reference's other attributes go with it.
             let rest_tag_end = after.find("/>").unwrap_or(0);
             flat.push_str(before.rfind("<draw:object").and_then(|i| before.get(..i)).unwrap_or(before));

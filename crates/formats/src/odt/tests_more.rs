@@ -3,6 +3,7 @@
 mod bookmarks;
 mod char_styles;
 mod chars;
+mod charts;
 mod comments;
 mod drop_caps;
 mod equations;

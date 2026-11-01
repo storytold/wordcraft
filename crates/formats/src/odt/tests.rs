@@ -198,7 +198,7 @@ pub(super) fn package(content: &str, styles: Option<&str>) -> Vec<u8> {
     z.finish().unwrap().into_inner()
 }
 
-fn paras(f: &Flow) -> Vec<&Para> {
+pub(super) fn paras(f: &Flow) -> Vec<&Para> {
     f.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None }).collect()
 }
 
@@ -1144,6 +1144,12 @@ fn meta_creation_date_timezones_and_fallbacks() {
 pub(super) fn content_of(bytes: &[u8]) -> String {
     let mut z = archive(bytes);
     String::from_utf8(read_entry(&mut z, "content.xml").unwrap()).unwrap()
+}
+
+/// Entry `name` of a package, as text.
+pub(super) fn entry(bytes: &[u8], name: &str) -> String {
+    let mut z = archive(bytes);
+    String::from_utf8(read_entry(&mut z, name).unwrap()).unwrap()
 }
 
 /// The `styles.xml` of a package.

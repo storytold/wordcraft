@@ -1,6 +1,7 @@
 use super::{Align, FBlock, FTable, Fmt, HashMap, Inline, Kind, Para, RevMark, Rgb, VAlign, mime_of, model};
 use wordcraft_doc::props::{Border, BorderStyle, Borders, LineSpacing};
 
+mod charts;
 mod drawing;
 mod indexes;
 mod notes;
@@ -143,8 +144,10 @@ pub(super) struct Writer {
     /// Graphic styles of floating pictures: their `style:graphic-properties` attributes.
     graphic_styles: Vec<String>,
     pub(super) pictures: Vec<(String, std::sync::Arc<Vec<u8>>, String)>,
-    /// Formula sub-documents: their directory and their `content.xml`.
-    pub(super) formulas: Vec<(String, String)>,
+    /// Object sub-documents (formulas, charts): their directory, `content.xml` and media type.
+    pub(super) objects: Vec<(String, String, &'static str)>,
+    /// The theme's accent colours, which charts' series are drawn in.
+    pub(super) accents: Vec<wordcraft_doc::Rgb>,
     /// `text:changed-region` elements written so far.
     pub(super) regions: Vec<String>,
     /// The insertion open in the body, and its region id.
@@ -395,6 +398,10 @@ impl Writer {
                     prev_space = false;
                 }
                 Inline::Figure(_) => {}
+                Inline::Chart(c) => {
+                    self.chart(c, Place::Text(c.float.as_deref()), out);
+                    prev_space = false;
+                }
             }
         }
     }

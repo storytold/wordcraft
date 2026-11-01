@@ -19,7 +19,8 @@ use notes::{OpenField, OpenNote, balance_comments};
 use tables::TableB;
 use tracked::{DelState, Region, change_mark};
 
-type Frame = (Option<f32>, Option<f32>, Option<Vec<u8>>, String, Option<(String, bool)>);
+/// An open frame: its size, picture, alt text, equation and chart.
+type Frame = (Option<f32>, Option<f32>, Option<Vec<u8>>, String, Option<(String, bool)>, Option<wordcraft_doc::chart::ChartSpec>);
 
 pub(super) struct Body<'a> {
     styles: &'a Styles,
@@ -682,7 +683,7 @@ impl Body<'_> {
             "frame" => {
                 let w = get(a, "svg:width").and_then(length);
                 let h = get(a, "svg:height").and_then(length);
-                self.frame = Some((w, h, None, String::new(), None));
+                self.frame = Some((w, h, None, String::new(), None, None));
                 let g = get(a, "draw:style-name").map(|s| self.styles.graphic(s)).unwrap_or_default();
                 self.frame_float = Some(super::frames::place(a, w.unwrap_or(0.0), h.unwrap_or(0.0), &g));
                 self.member_start(a, w.unwrap_or(0.0), h.unwrap_or(0.0), None);
@@ -694,23 +695,19 @@ impl Body<'_> {
                     && let Some(fr) = &mut self.frame
                     && fr.2.is_none()
                     && fr.4.is_none()
+                    && fr.5.is_none()
                 {
                     let path = href.trim_start_matches("./");
                     fr.2 = (self.zip)(path);
                 }
             }
             // An embedded object (ODF 1.3 §10.4.3): a formula sub-document's `content.xml` holds
-            // a `math:math` tree (#3099). Other object kinds have none, so the frame still falls
-            // back to its `draw:image` replacement preview, read at `end` below.
+            // a `math:math` tree (#3099), a chart's an `office:chart`. Other object kinds (and
+            // charts WordCraft can't edit) fall back to the frame's `draw:image` replacement
+            // preview, read at `end` below.
             "object" => {
-                if let Some(href) = get(a, "xlink:href")
-                    && let Some(fr) = &mut self.frame
-                    && fr.4.is_none()
-                {
-                    let path = format!("{}/content.xml", href.trim_start_matches("./").trim_end_matches('/'));
-                    if let Some(xml) = (self.zip)(&path) {
-                        fr.4 = read_formula(&xml);
-                    }
+                if let Some(href) = get(a, "xlink:href") {
+                    self.read_object(href);
                 }
             }
             "desc" | "title" if self.frame.is_some() => self.in_desc = true,
@@ -731,6 +728,21 @@ impl Body<'_> {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// The open frame's object at `href`: its formula, or else its chart.
+    fn read_object(&mut self, href: &str) {
+        if let Some(fr) = &mut self.frame
+            && fr.4.is_none()
+        {
+            let path = format!("{}/content.xml", href.trim_start_matches("./").trim_end_matches('/'));
+            if let Some(xml) = (self.zip)(&path) {
+                fr.4 = read_formula(&xml);
+                if fr.4.is_none() {
+                    fr.5 = super::chart::read_chart(&xml);
+                }
+            }
         }
     }
 

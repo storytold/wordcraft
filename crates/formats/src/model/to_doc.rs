@@ -321,18 +321,42 @@ impl<'a> Builder<'a> {
 
     /// The document object for picture, shape or group `i` (members of groups `depth` deep).
     fn drawing(&mut self, i: &Inline, depth: usize) -> Option<InlineObject> {
+        // Offsets and distances on the page.
+        let fit_float = |float: &Option<Box<wordcraft_doc::para::Float>>| {
+            float.as_deref().cloned().map(|mut f| {
+                let fit = |v: f32| if v.is_finite() { v.clamp(-1584.0, 1584.0) } else { 0.0 };
+                (f.x, f.y) = (fit(f.x), fit(f.y));
+                (f.dist, f.dist_top, f.dist_bottom) = (fit(f.dist).max(0.0), fit(f.dist_top).max(0.0), fit(f.dist_bottom).max(0.0));
+                f
+            })
+        };
         match i {
             Inline::Image(img) => {
                 let key = self.doc.add_media(img.data.to_vec(), &img.ext);
                 let (w, h) = (finite_or(img.w, 72.0).clamp(1.0, 1584.0), finite_or(img.h, 72.0).clamp(1.0, 1584.0));
-                let float = img.float.as_deref().cloned().map(|mut f| {
-                    // Offsets and distances on the page.
-                    let fit = |v: f32| if v.is_finite() { v.clamp(-1584.0, 1584.0) } else { 0.0 };
-                    (f.x, f.y) = (fit(f.x), fit(f.y));
-                    (f.dist, f.dist_top, f.dist_bottom) = (fit(f.dist).max(0.0), fit(f.dist_top).max(0.0), fit(f.dist_bottom).max(0.0));
-                    f
-                });
+                let float = fit_float(&img.float);
                 Some(InlineObject::Image { media: key, w, h, alt: img.alt.clone(), float: float.unwrap_or_default(), crop: [0.0; 4], ole: None })
+            }
+            // Its drawing is made from the chart by the program that opens the document
+            // (`wordcraft_engine`'s chart drawing), which has the theme's colours.
+            Inline::Chart(c) => {
+                let (w, h) = (finite_or(c.w, 360.0).clamp(1.0, 1584.0), finite_or(c.h, 216.0).clamp(1.0, 1584.0));
+                let mut spec = (*c.spec).clone();
+                spec.sanitize();
+                let graphic = wordcraft_doc::graphic::Graphic {
+                    kind: wordcraft_doc::graphic::GraphicKind::Chart,
+                    w,
+                    h,
+                    chart: Some(Arc::new(spec)),
+                    ..Default::default()
+                };
+                Some(InlineObject::Graphic {
+                    w,
+                    h,
+                    alt: clean_text(&c.alt),
+                    float: fit_float(&c.float).unwrap_or_default(),
+                    graphic: Arc::new(graphic),
+                })
             }
             Inline::Shape { kind, w, h, float, blocks, look, path } => {
                 // A text box always has its story; a shape only when it holds text.
@@ -450,7 +474,7 @@ impl<'a> Builder<'a> {
                     append(&mut out, "", &CharProps::default(), Some(obj));
                 }
                 Inline::FieldEnd => append(&mut out, "", &CharProps::default(), Some(InlineObject::FieldEnd)),
-                Inline::Image(_) | Inline::Shape { .. } | Inline::Group { .. } => {
+                Inline::Image(_) | Inline::Chart(_) | Inline::Shape { .. } | Inline::Group { .. } => {
                     if let Some(obj) = self.drawing(i, 0) {
                         append(&mut out, "", &CharProps::default(), Some(obj));
                     }

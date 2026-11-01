@@ -241,6 +241,7 @@ impl Writer {
                 }
                 Inline::Anchor(name) => o.push_str(&format!("\\hypertarget{{{}}}{{}}", escape_url(name))),
                 Inline::Figure(_)
+                | Inline::Chart(_)
                 | Inline::Note { .. }
                 | Inline::Comment { .. }
                 | Inline::CommentEnd(_)

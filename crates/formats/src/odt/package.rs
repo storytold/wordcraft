@@ -506,7 +506,9 @@ pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
         doc,
         model::FlowOpts { tracked: true, fields: true, notes: true, comments: true, lists: true, chars: true, paras: true, boxes: true },
     );
+    let accents = doc.settings.theme_colors.get(4..10).map(<[_]>::to_vec).unwrap_or_default();
     let mut w = Writer::default();
+    w.accents.clone_from(&accents);
     w.ranged = model::ranged_anchors(&flow.blocks);
     let mut body = String::new();
     let sections = flow_sections(&flow.blocks, &doc.last_section);
@@ -570,6 +572,7 @@ pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
         w.automatic_styles()
     );
     let mut hw = Writer::with_prefix("M");
+    hw.accents = accents;
     let parts: Vec<PageParts> = pages.iter().map(|(_, sec)| page_parts(doc, sec, &mut hw)).collect();
     let mut named = std::mem::take(&mut w.named);
     named.append(&mut hw.named);
@@ -590,7 +593,7 @@ pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
         1,
     );
     w.pictures.append(&mut hw.pictures);
-    w.formulas.append(&mut hw.formulas);
+    w.objects.append(&mut hw.objects);
     let meta = meta_xml(&flow.meta);
     let mut manifest = String::from(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<manifest:manifest xmlns:manifest=\"urn:oasis:names:tc:opendocument:xmlns:manifest:1.0\" manifest:version=\"1.3\">\n<manifest:file-entry manifest:full-path=\"/\" manifest:version=\"1.3\" manifest:media-type=\"application/vnd.oasis.opendocument.text\"/>\n<manifest:file-entry manifest:full-path=\"content.xml\" manifest:media-type=\"text/xml\"/>\n<manifest:file-entry manifest:full-path=\"styles.xml\" manifest:media-type=\"text/xml\"/>\n<manifest:file-entry manifest:full-path=\"meta.xml\" manifest:media-type=\"text/xml\"/>\n<manifest:file-entry manifest:full-path=\"settings.xml\" manifest:media-type=\"text/xml\"/>\n",
@@ -598,9 +601,9 @@ pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
     for (name, _, mime) in &w.pictures {
         manifest.push_str(&format!("<manifest:file-entry manifest:full-path=\"{}\" manifest:media-type=\"{mime}\"/>\n", x(name)));
     }
-    for (dir, _) in &w.formulas {
+    for (dir, _, mime) in &w.objects {
         manifest.push_str(&format!(
-            "<manifest:file-entry manifest:full-path=\"{0}/\" manifest:version=\"1.3\" manifest:media-type=\"application/vnd.oasis.opendocument.formula\"/>\n<manifest:file-entry manifest:full-path=\"{0}/content.xml\" manifest:media-type=\"text/xml\"/>\n",
+            "<manifest:file-entry manifest:full-path=\"{0}/\" manifest:version=\"1.3\" manifest:media-type=\"{mime}\"/>\n<manifest:file-entry manifest:full-path=\"{0}/content.xml\" manifest:media-type=\"text/xml\"/>\n",
             x(dir)
         ));
     }
@@ -623,7 +626,7 @@ pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
         z.start_file(name, deflated).map_err(err)?;
         z.write_all(data).map_err(ioerr)?;
     }
-    for (dir, xml) in &w.formulas {
+    for (dir, xml, _) in &w.objects {
         z.start_file(format!("{dir}/content.xml"), deflated).map_err(err)?;
         z.write_all(xml.as_bytes()).map_err(ioerr)?;
     }
