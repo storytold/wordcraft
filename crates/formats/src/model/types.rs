@@ -320,7 +320,7 @@ pub struct Affix {
 }
 
 impl Affix {
-    pub const MAX: usize = 12;
+    pub const MAX: usize = 8;
 
     /// The characters of `s` that fit in [`Affix::MAX`] bytes, without control characters and
     /// `%` (which would read as a number placeholder).
@@ -351,6 +351,11 @@ pub struct Label {
     pub suffix: Affix,
     /// Levels shown, this one and those above it (1: only its own number).
     pub shown: u8,
+    /// Where the level's text starts and how far its label hangs left of it, in twentieths of a
+    /// point, and how the label sits in that room, when the source says.
+    pub indent: Option<i16>,
+    pub hanging: Option<i16>,
+    pub align: Option<super::Align>,
 }
 
 impl Label {
@@ -358,7 +363,32 @@ impl Label {
     pub fn bulleted(bullet: Option<char>) -> Label {
         let mut b = [0u8; 4];
         let prefix = bullet.map(|c| Affix::new(c.encode_utf8(&mut b))).unwrap_or_default();
-        Label { format: wordcraft_doc::section::NumFormat::Bullet, prefix, suffix: Affix::default(), shown: 1 }
+        Label {
+            format: wordcraft_doc::section::NumFormat::Bullet,
+            prefix,
+            suffix: Affix::default(),
+            shown: 1,
+            indent: None,
+            hanging: None,
+            align: None,
+        }
+    }
+
+    /// Points as twentieths of a point, on the page.
+    pub fn twips(pt: f32) -> Option<i16> {
+        pt.is_finite().then(|| (pt.clamp(-1584.0, 1584.0) * 20.0).round() as i16)
+    }
+
+    /// This label placed `indent` points in with its label `hanging` points left of the text,
+    /// aligned `align`.
+    pub fn placed(mut self, indent: f32, hanging: f32, align: super::Align) -> Label {
+        (self.indent, self.hanging, self.align) = (Label::twips(indent), Label::twips(hanging), Some(align));
+        self
+    }
+
+    /// The indent and hanging, in points, when stated.
+    pub fn position(&self) -> Option<(f32, f32)> {
+        Some((f32::from(self.indent?) / 20.0, f32::from(self.hanging.unwrap_or(0)) / 20.0))
     }
 
     /// The bullet of a bulleted level, when it names one.
@@ -392,6 +422,9 @@ impl Label {
             prefix: Affix::new(text.get(..first).unwrap_or("")),
             suffix: Affix::new(text.get(last.min(text.len())..).unwrap_or("")),
             shown,
+            indent: None,
+            hanging: None,
+            align: None,
         }
     }
 }

@@ -240,8 +240,12 @@ fn number_headings(doc: &mut Document, levels: &[super::styles::ListLevel]) {
     let mut out = levels_for(ListKind::Numbered);
     for (i, level) in out.iter_mut().enumerate() {
         let src = levels.get(i).copied().unwrap_or_default();
-        // Headings sit at the margin, their number followed by a tab.
-        (level.indent, level.hanging) = (0.0, 0.0);
+        // Headings sit where the outline level puts them, else at the margin; their number is
+        // followed by a tab.
+        (level.indent, level.hanging) = src.label.and_then(|l| l.position()).unwrap_or((0.0, 0.0));
+        if let Some(a) = src.label.and_then(|l| l.align) {
+            level.align = a;
+        }
         match src.label.filter(|_| src.ordered) {
             Some(l) => {
                 level.format = l.format;

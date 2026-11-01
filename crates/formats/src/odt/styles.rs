@@ -611,6 +611,27 @@ fn num_format(f: &str) -> NumFormat {
     }
 }
 
+/// A level's `style:list-level-properties` (its label's alignment, `fo:text-align`) or
+/// `style:list-level-label-alignment` (its indent, `fo:margin-left`, and the label's hanging,
+/// `fo:text-indent`), ODF 1.3 §17.19–17.20, into `slot`'s label.
+fn level_position(slot: &mut ListLevel, local: &str, a: &Attrs) {
+    let Some(label) = slot.label.as_mut() else { return };
+    if local == "list-level-properties" {
+        label.align = match get(a, "fo:text-align").map(str::trim) {
+            Some("end" | "right") => Some(Align::Right),
+            Some("center") => Some(Align::Center),
+            Some("start" | "left") => Some(Align::Left),
+            _ => label.align,
+        };
+        return;
+    }
+    let len = |k: &str| get(a, k).and_then(length).filter(|v| v.is_finite());
+    if let Some(m) = len("fo:margin-left") {
+        label.indent = model::Label::twips(m.clamp(-MAX_LEN, MAX_LEN));
+        label.hanging = model::Label::twips((-len("fo:text-indent").unwrap_or(0.0)).clamp(-MAX_LEN, MAX_LEN));
+    }
+}
+
 /// A `text:list-level-style-number`/`-bullet`/`-image` element's level.
 fn list_level(local: &str, a: &Attrs) -> ListLevel {
     let shown = get(a, "text:display-levels").and_then(|v| v.trim().parse::<u8>().ok()).unwrap_or(1).clamp(1, 9);
@@ -620,7 +641,15 @@ fn list_level(local: &str, a: &Attrs) -> ListLevel {
         "list-level-style-number" => {
             let format = num_format(get(a, "style:num-format").unwrap_or(""));
             let ordered = format != NumFormat::None;
-            let label = model::Label { format, prefix: affix("style:num-prefix"), suffix: affix("style:num-suffix"), shown };
+            let label = model::Label {
+                format,
+                prefix: affix("style:num-prefix"),
+                suffix: affix("style:num-suffix"),
+                shown,
+                indent: None,
+                hanging: None,
+                align: None,
+            };
             ListLevel { ordered, label: ordered.then_some(label), start }
         }
         _ => {
@@ -662,6 +691,9 @@ impl Styles {
         let mut cur: Option<(String, StyleInfo)> = None;
         let mut in_default = false;
         let mut list: Option<(String, Vec<ListLevel>)> = None;
+        // The list or outline level being read.
+        let mut level_at: Option<usize> = None;
+        let mut outline_at: Option<usize> = None;
         events(xml, |ev| match ev {
             Ev::Start(q, a) => match local(&q) {
                 "automatic-styles" => in_auto = true,
@@ -710,6 +742,7 @@ impl Styles {
                     if let Some(slot) = self.outline.as_mut().and_then(|o| o.get_mut(lv - 1)) {
                         *slot = list_level("list-level-style-number", &a);
                     }
+                    outline_at = Some(lv - 1);
                 }
                 "list-level-style-number" | "list-level-style-bullet" | "list-level-style-image" => {
                     if let Some((_, v)) = &mut list {
@@ -717,6 +750,16 @@ impl Styles {
                         if let Some(slot) = v.get_mut(lv - 1) {
                             *slot = list_level(local(&q), &a);
                         }
+                        level_at = Some(lv - 1);
+                    }
+                }
+                "list-level-properties" | "list-level-label-alignment" => {
+                    let slot = match (&mut list, level_at) {
+                        (Some((_, v)), Some(i)) => v.get_mut(i),
+                        _ => self.outline.as_mut().zip(outline_at).and_then(|(o, i)| o.get_mut(i)),
+                    };
+                    if let Some(slot) = slot {
+                        level_position(slot, local(&q), &a);
                     }
                 }
                 _ => {}
@@ -736,6 +779,8 @@ impl Styles {
                         self.lists.insert(n, v);
                     }
                 }
+                "list-level-style-number" | "list-level-style-bullet" | "list-level-style-image" => level_at = None,
+                "outline-level-style" => outline_at = None,
                 _ => {}
             },
             Ev::Text(_) => {}

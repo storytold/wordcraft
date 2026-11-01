@@ -458,6 +458,14 @@ impl<'a> Builder<'a> {
                     }
                     _ => {}
                 }
+                if let Some(l) = labels.get(i).copied().flatten() {
+                    if let Some((indent, hanging)) = l.position() {
+                        (level.indent, level.hanging) = (indent, hanging);
+                    }
+                    if let Some(a) = l.align {
+                        level.align = a;
+                    }
+                }
                 level
             })
             .collect();

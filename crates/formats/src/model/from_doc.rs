@@ -170,7 +170,7 @@ fn props_kind(doc: &Document, props: &ParaProps, blank: bool) -> (Kind, Option<L
             level: n.level.min(8),
             start: lv.start,
             list: n.num,
-            label: Some(super::types::Label::of_level(lv.format, &lv.text)),
+            label: Some(super::types::Label::of_level(lv.format, &lv.text).placed(lv.indent, lv.hanging, lv.align)),
         })
     });
     (kind, list)

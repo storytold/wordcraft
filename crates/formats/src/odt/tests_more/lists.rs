@@ -141,3 +141,28 @@ fn a_word_before_the_number_is_kept() {
     let back = import(&export(&d).unwrap()).unwrap();
     assert_eq!(items(&back)[0].3, "Chapter %1:");
 }
+
+#[test]
+fn list_level_positions_are_read_and_written() {
+    // Each level's indent, hanging and number alignment (ODF 1.3 §17.19–17.20,
+    // `style:list-level-properties` in label-alignment mode).
+    let styles = r#"<text:list-style style:name="P"><text:list-level-style-number text:level="1" style:num-format="1" style:num-suffix="."><style:list-level-properties text:list-level-position-and-space-mode="label-alignment" fo:text-align="end"><style:list-level-label-alignment text:label-followed-by="listtab" text:list-tab-stop-position="0.5in" fo:text-indent="-0.25in" fo:margin-left="0.5in"/></style:list-level-properties></text:list-level-style-number></text:list-style><text:list-style style:name="Q"><text:list-level-style-bullet text:level="1" text:bullet-char="•"><style:list-level-properties text:list-level-position-and-space-mode="label-alignment"><style:list-level-label-alignment text:label-followed-by="listtab" fo:text-indent="-0.1in" fo:margin-left="0.2in"/></style:list-level-properties></text:list-level-style-bullet></text:list-style>"#;
+    let d = doc(styles, &[list("P", &["one"], ""), list("Q", &["dot"], "")].concat());
+    let level = |i: usize| {
+        let p = d.body.iter().filter_map(|b| b.as_para()).nth(i).unwrap();
+        let n = p.props.numbering.unwrap();
+        d.numbering.level(n.num, n.level).unwrap().clone()
+    };
+    let (a, b) = (level(0), level(1));
+    assert_eq!((a.indent, a.hanging, a.align), (36.0, 18.0, wordcraft_doc::Align::Right));
+    assert_eq!((b.indent, b.hanging), (14.4, 7.2));
+    let back = import(&export(&d).unwrap()).unwrap();
+    let again = |i: usize| {
+        let p = back.body.iter().filter_map(|b| b.as_para()).nth(i).unwrap();
+        let n = p.props.numbering.unwrap();
+        back.numbering.level(n.num, n.level).unwrap().clone()
+    };
+    let (c, e) = (again(0), again(1));
+    assert_eq!((c.indent, c.hanging, c.align), (a.indent, a.hanging, a.align));
+    assert!((e.indent - b.indent).abs() < 0.01 && (e.hanging - b.hanging).abs() < 0.01);
+}

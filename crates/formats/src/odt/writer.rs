@@ -1124,10 +1124,18 @@ impl Writer {
             for (l, out) in kinds.iter().enumerate() {
                 let ordered = &out.ordered;
                 let lv = l + 1;
+                // The level's own place, else WordCraft's default: 36 pt a level, hanging 18 pt.
+                let (indent, hanging) = out.label.and_then(|lb| lb.position()).unwrap_or((36.0 * lv as f32, 18.0));
+                let align = match out.label.and_then(|lb| lb.align) {
+                    Some(Align::Right) => " fo:text-align=\"end\"",
+                    Some(Align::Center) => " fo:text-align=\"center\"",
+                    _ => "",
+                };
                 let props = format!(
-                    "<style:list-level-properties text:list-level-position-and-space-mode=\"label-alignment\"><style:list-level-label-alignment text:label-followed-by=\"listtab\" text:list-tab-stop-position=\"{}\" fo:text-indent=\"-18pt\" fo:margin-left=\"{}\"/></style:list-level-properties>",
-                    pt(36.0 * lv as f32),
-                    pt(36.0 * lv as f32)
+                    "<style:list-level-properties text:list-level-position-and-space-mode=\"label-alignment\"{align}><style:list-level-label-alignment text:label-followed-by=\"listtab\" text:list-tab-stop-position=\"{}\" fo:text-indent=\"{}\" fo:margin-left=\"{}\"/></style:list-level-properties>",
+                    pt(indent),
+                    pt(-hanging),
+                    pt(indent)
                 );
                 if *ordered {
                     let fmt = ["1", "a", "i"].get(l % 3).copied().unwrap_or("1");
