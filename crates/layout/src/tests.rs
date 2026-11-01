@@ -12057,6 +12057,100 @@ fn an_empty_mark_after_a_text_section_mark_stays_quiet() {
     assert!((gap(true) - gap(false)).abs() < 0.01, "text closing a section: {}, plain text: {}", gap(true), gap(false));
 }
 
+/// An empty list paragraph closing a continuous section takes no room, but as a list item it still
+/// takes the automatic space after off the item above, and as a same-style paragraph its
+/// contextual spacing: the next paragraph sits a line below the last item (#3976). Measured in
+/// Word for Mac (16.114, compatibility mode 15): "Intro", items "AAA" and "AAB", the empty
+/// paragraph (numbered or plain, closing a continuous section or not), "BBB". BBB below AAB:
+/// automatic spacing 13.05 (numbered mark) / 26.8 (plain), the mark's line kept without the
+/// break 13.05 + 26.8 / 26.8 + 13.05; List Paragraph with contextual spacing and 8 pt after 13.0 /
+/// 20.65, 13.0 + 19.9 / 20.65 + 12.25; without contextual spacing 20.65 / 20.65, 20.65 + 20.65 /
+/// 20.65 + 13.05; no space after a line each. The mark draws no label.
+#[test]
+fn an_empty_list_mark_closing_a_continuous_section_takes_the_space_after_above() {
+    use wordcraft_doc::ListKind;
+    use wordcraft_doc::props::NumRef;
+    use wordcraft_doc::section::{SectionProps, SectionStart};
+    #[derive(Clone, Copy, PartialEq, Debug)]
+    enum Spacing {
+        Auto,
+        Contextual8,
+        After8,
+        After0,
+    }
+    // BBB's top below AAB's, and whether the mark drew a label.
+    let gap = |spacing: Spacing, numbered: bool, closes: bool| {
+        let mut d = Document::new();
+        d.styles.upsert(wordcraft_doc::Style { id: "ListPara".into(), name: "ListPara".into(), ..Default::default() });
+        let list = d.numbering.add_list(ListKind::Numbered);
+        let plain = ParaProps { space_before: Some(0.0), space_after: Some(0.0), ..Default::default() };
+        let item = ParaProps {
+            numbering: Some(NumRef { num: list, level: 0 }),
+            ..match spacing {
+                Spacing::Auto => ParaProps {
+                    space_before: Some(5.0),
+                    space_after: Some(5.0),
+                    space_before_auto: Some(true),
+                    space_after_auto: Some(true),
+                    ..Default::default()
+                },
+                _ => ParaProps {
+                    style: Some("ListPara".into()),
+                    space_before: Some(0.0),
+                    space_after: Some(if spacing == Spacing::After0 { 0.0 } else { 8.0 }),
+                    contextual_spacing: Some(spacing == Spacing::Contextual8),
+                    ..Default::default()
+                },
+            }
+        };
+        let para = |text: &str, props: &ParaProps| {
+            let mut p = wordcraft_doc::Paragraph::with_text(text, Default::default());
+            p.props = props.clone();
+            p
+        };
+        let mut mark = para("", if numbered { &item } else { &plain });
+        if closes {
+            mark.section = Some(Box::new(SectionProps { start: SectionStart::Continuous, ..Default::default() }));
+            d.last_section.start = SectionStart::Continuous;
+        }
+        d.body = [para("Intro", &plain), para("AAA", &item), para("AAB", &item), mark, para("BBB", &plain)]
+            .into_iter()
+            .map(wordcraft_doc::para_block)
+            .collect();
+        let l = lay(&d);
+        let top = |i: usize| l.caret(&Pos::body(i, 0)).unwrap().top;
+        let labelled =
+            l.pages[0].items.iter().any(|it| matches!(it, Placed::Lines { path, para, .. } if *path == Path::top(3) && para.label.is_some()));
+        (top(4) - top(2), labelled)
+    };
+    let (line, _) = gap(Spacing::After0, false, false);
+    let line = line / 2.0;
+    // (spacing, numbered mark, closes the section) → lines and space between AAB and BBB.
+    let cases = [
+        (Spacing::Auto, true, true, 1.0, 0.0),
+        (Spacing::Auto, false, true, 1.0, 14.0),
+        (Spacing::Auto, true, false, 2.0, 14.0),
+        (Spacing::Auto, false, false, 2.0, 14.0),
+        (Spacing::Contextual8, true, true, 1.0, 0.0),
+        (Spacing::Contextual8, false, true, 1.0, 8.0),
+        (Spacing::Contextual8, true, false, 2.0, 8.0),
+        (Spacing::Contextual8, false, false, 2.0, 8.0),
+        (Spacing::After8, true, true, 1.0, 8.0),
+        (Spacing::After8, false, true, 1.0, 8.0),
+        (Spacing::After8, true, false, 2.0, 16.0),
+        (Spacing::After8, false, false, 2.0, 8.0),
+        (Spacing::After0, true, true, 1.0, 0.0),
+        (Spacing::After0, false, true, 1.0, 0.0),
+        (Spacing::After0, true, false, 2.0, 0.0),
+    ];
+    for (spacing, numbered, closes, lines, space) in cases {
+        let (got, labelled) = gap(spacing, numbered, closes);
+        let want = lines * line + space;
+        assert!((got - want).abs() < 0.5, "{spacing:?}, numbered {numbered}, closes {closes}: BBB {got} below AAB, want {want} as in Word");
+        assert_eq!(labelled, numbered && !closes, "{spacing:?}, numbered {numbered}, closes {closes}: the mark's label");
+    }
+}
+
 /// dpkruse's Genuine Steps Certificate (#3907 review): a bulleted text paragraph closes a
 /// two-column continuous section, then an empty bulleted paragraph closes another. Word draws no
 /// bullet for the empty one wherever the text above ends, down to the foot of the page.
