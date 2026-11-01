@@ -10,7 +10,7 @@ The product target is Word parity (observed behaviour plus ECMA-376 / ISO 29500)
 
 | Finding | Status | Evidence |
 |---|---|---|
-| Caret and Backspace step one ideograph or kana at a time; Han and kana are not in `joins_cluster` | Verified | `doc::cluster` tests `japanese_and_chinese_text_steps_one_character_at_a_time`, `mixed_latin_and_cjk_keep_grapheme_boundaries`; engine `tests/cjk.rs` |
+| Caret and Backspace step one ideograph or kana at a time; Han and kana are not in `joins_cluster`. Left/Right also treat か+U+3099, halfwidth ﾊ+ﾞ, emoji ZWJ sequences and decomposed Hangul L/V/T as one unit (Backspace/Delete for these are not yet asserted) | Verified | `doc::cluster` tests `japanese_and_chinese_text_steps_one_character_at_a_time`, `mixed_latin_and_cjk_keep_grapheme_boundaries`; engine `tests/cjk.rs` |
 | A supplementary-plane ideograph (U+20000…) is one cluster and one Backspace | Verified | `supplementary_plane_ideograph_is_one_cluster`; engine `supplementary_plane_ideograph_types_and_deletes_as_one_character` |
 | An ideographic variation sequence (base + U+E0100…) is one caret/Backspace unit | Verified | `ideographic_variation_sequence_is_one_grapheme_cluster`; engine `ideographic_variation_sequence_edits_as_one_grapheme` |
 | IVS and supplementary characters survive shaping as addressable layout clusters | Verified | `layout/tests/cjk.rs::supplementary_and_ivs_codepoints_survive_layout` |

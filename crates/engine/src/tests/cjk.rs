@@ -116,3 +116,24 @@ fn ideographic_variation_sequence_edits_as_one_grapheme() {
     typ(&mut s, "\u{8}");
     assert_eq!(body_text(&s), "東", "Backspace removes base+VS together");
 }
+
+/// Left/Right step over combining-mark, halfwidth-mark, emoji-ZWJ and decomposed-Hangul sequences
+/// as one unit (UAX #29). Backspace/Delete are not asserted: Word's behaviour needs observing.
+#[test]
+fn caret_steps_over_multi_scalar_sequences_as_one_unit() {
+    let units = ["あ", "か\u{3099}", "\u{FF8A}\u{FF9E}", "\u{1F468}\u{200D}\u{1F469}", "\u{1112}\u{1161}\u{11AB}", "い"];
+    let text = units.concat();
+    let mut s = typed(&text);
+    assert_eq!(body_text(&s), text);
+    let mut off = text.len();
+    for unit in units.iter().rev() {
+        run(&mut s, "caret.left", json!({}));
+        off -= unit.len();
+        assert_eq!(s.sel.focus.off, off, "left over {unit:?}");
+    }
+    for unit in units {
+        run(&mut s, "caret.right", json!({}));
+        off += unit.len();
+        assert_eq!(s.sel.focus.off, off, "right over {unit:?}");
+    }
+}

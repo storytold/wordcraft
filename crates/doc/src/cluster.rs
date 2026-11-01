@@ -327,4 +327,48 @@ mod tests {
         let with_neighbors = format!("東{ivs}西");
         assert_eq!(split(&with_neighbors, &cluster_starts(&with_neighbors)), vec!["東", ivs, "西"]);
     }
+
+    /// Caret units (left/right) for sequences where CJK differs from Latin. Expected values come
+    /// from UAX #29 (Extend, ZWJ and Hangul L/V/T rules), not from what the code did. Backspace and
+    /// Delete are deliberately not asserted here: Word's behaviour for these needs observing.
+    fn assert_caret_units(text: &str, expected: &[&str]) {
+        assert_eq!(split(text, &cluster_starts(text)), expected, "cluster_starts of {text:?}");
+        let mut off = 0;
+        for unit in expected {
+            let next = next_cluster(text, off);
+            assert_eq!(text.get(off..next), Some(*unit), "next_cluster from {off} in {text:?}");
+            assert_eq!(prev_cluster(text, next), off, "prev_cluster from {next} in {text:?}");
+            off = next;
+        }
+        assert_eq!(off, text.len());
+    }
+
+    /// か + U+3099 (combining voiced sound mark) is one unit, with kana on either side.
+    #[test]
+    fn kana_with_combining_voiced_mark_is_one_cluster() {
+        let ka = "か\u{3099}";
+        assert_caret_units(&format!("あ{ka}い"), &["あ", ka, "い"]);
+    }
+
+    /// Halfwidth katakana plus its separate sound mark (ﾊ + U+FF9E) is one unit.
+    #[test]
+    fn halfwidth_katakana_with_sound_mark_is_one_cluster() {
+        let ba = "\u{FF8A}\u{FF9E}";
+        assert_caret_units(&format!("\u{FF76}{ba}\u{FF72}"), &["\u{FF76}", ba, "\u{FF72}"]);
+    }
+
+    /// An emoji ZWJ sequence next to kana is one unit and does not absorb its neighbours.
+    #[test]
+    fn emoji_zwj_sequence_next_to_kana_is_one_cluster() {
+        let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}";
+        assert_caret_units(&format!("あ{family}い"), &["あ", family, "い"]);
+    }
+
+    /// Decomposed Hangul syllables (conjoining jamo L+V and L+V+T) are one unit each.
+    #[test]
+    fn decomposed_hangul_syllables_are_one_cluster() {
+        let han = "\u{1112}\u{1161}\u{11AB}"; // ᄒ ᅡ ᆫ → 한
+        let geul = "\u{1100}\u{1173}"; // ᄀ ᅳ → 그 (no final)
+        assert_caret_units(&format!("{han}{geul}"), &[han, geul]);
+    }
 }
