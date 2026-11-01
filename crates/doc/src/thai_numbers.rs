@@ -127,11 +127,15 @@ pub(crate) fn baht_text_int(n: u32) -> String {
     out
 }
 
+/// Excel's BAHTTEXT returns an empty string for absolute values at or above 1 trillion baht.
+/// Word follows the same rule. Values in [−999_999_999_999.99, 999_999_999_999.99] are valid.
+const EXCEL_BAHTTEXT_LIMIT: f64 = 1_000_000_000_000.0; // 10^12
+
 /// Thai Baht text for a floating-point amount (used by the `{ BAHTTEXT … }` field).
-/// Returns `None` when `x` is not finite.
+/// Returns `None` when `x` is not finite or `|x| >= 1_000_000_000_000`.
 pub(crate) fn baht_text_f64(x: f64) -> Option<String> {
     let x = round_to_satang(x);
-    if !x.is_finite() {
+    if !x.is_finite() || x.abs() >= EXCEL_BAHTTEXT_LIMIT {
         return None;
     }
     let fixed = format!("{:.2}", x.abs());
@@ -181,6 +185,13 @@ mod tests {
         // Non-finite → None.
         assert!(baht_text_f64(f64::INFINITY).is_none());
         assert!(baht_text_f64(f64::NAN).is_none());
+        // Excel / Word return empty for |x| >= 1 trillion (same error behaviour).
+        assert!(baht_text_f64(1_000_000_000_000.0).is_none());
+        assert!(baht_text_f64(-1_000_000_000_000.0).is_none());
+        assert!(baht_text_f64(1_000_000_000_000_000.0).is_none());
+        // Just inside the limit is still valid.
+        assert!(baht_text_f64(999_999_999_999.99).is_some());
+        assert!(baht_text_f64(-999_999_999_999.99).is_some());
     }
 
     #[test]
