@@ -14,7 +14,8 @@
 //! Supported: one-character flags (at most 128 distinct, any Unicode character — `FLAG UTF-8`),
 //! `PFX`/`SFX` with strip, append and condition (`.`, letters, `[abc]`, `[^abc]`), cross
 //! products, continuation classes on suffixes (at most two suffixes in a row, as in Hunspell),
-//! `FORBIDDENWORD`, `NOSUGGEST`, and the suggestion tables `TRY`, `KEY`, `MAP` and `REP`. Rejected: compounding,
+//! `FORBIDDENWORD`, `NOSUGGEST`, and the suggestion tables `TRY`, `KEY`, `MAP` and `REP` (each capped
+//! in entries and length, since an `.aff` file is untrusted input). Rejected: compounding,
 //! long or numeric flags, `NEEDAFFIX` and the other directives that change which words are correct.
 //!
 //! Lookups never panic: stems sit in one string, found through an open-addressing hash table, and
@@ -263,6 +264,9 @@ struct Rules {
     /// The `FORBIDDENWORD` flag: stems carrying it are listed but never correct.
     forbidden: Option<char>,
     no_suggest: Option<char>,
+    /// `REP` entries and `MAP` groups left out: past the caps, oversized or empty. Reported once
+    /// when the dictionary is built, so a truncated table isn't silent.
+    dropped: usize,
 }
 
 /// A rule as parsed from text, before flags become bits: `(flag, cross, strip, add, cont, cond)`.
@@ -286,6 +290,51 @@ fn cap_try(s: &str) -> String {
         }
     }
     out
+}
+
+/// Most `REP` entries kept. Each one is tried against the misspelled word on every suggestion
+/// call, so a hostile `.aff` with a huge table would make every suggestion slow (#4999). The
+/// largest tables shipped with LibreOffice's dictionaries have about a thousand (pt_BR 1,056,
+/// nl_NL 885).
+pub(crate) const MAX_REP_ENTRIES: usize = 4096;
+/// Most `MAP` groups kept; real dictionaries have a few dozen at most.
+const MAX_MAP_ENTRIES: usize = 256;
+/// Longest `REP` side or `MAP` group kept, in characters; real ones are under 30. Longer entries
+/// are dropped, not cut, since a cut entry would suggest something the dictionary never said.
+const MAX_TABLE_ITEM_CHARS: usize = 64;
+
+impl Rules {
+    /// Adds a `REP` entry, unless it is empty, oversized or past [`MAX_REP_ENTRIES`]. Entries
+    /// are kept in file order, so past the cap the rest of the table is left out (never the
+    /// middle). The table's count line is never trusted: nothing is preallocated from it.
+    fn push_rep(&mut self, from: &str, to: &str) {
+        let fits = |s: &str| s.chars().nth(MAX_TABLE_ITEM_CHARS).is_none();
+        if self.rep.len() < MAX_REP_ENTRIES && !from.is_empty() && fits(from) && fits(to) {
+            self.rep.push((from.replace('_', " "), to.replace('_', " ")));
+        } else {
+            self.dropped = self.dropped.saturating_add(1);
+        }
+    }
+
+    /// Adds a `MAP` group, unless it is empty, oversized or past [`MAX_MAP_ENTRIES`].
+    fn push_map(&mut self, group: &str) {
+        let chars: Vec<char> = group.chars().take(MAX_TABLE_ITEM_CHARS + 1).collect();
+        if self.map.len() < MAX_MAP_ENTRIES && !chars.is_empty() && chars.len() <= MAX_TABLE_ITEM_CHARS {
+            self.map.push(chars);
+        } else {
+            self.dropped = self.dropped.saturating_add(1);
+        }
+    }
+}
+
+/// Longest `KEY` value kept, in characters. Suggestions try each letter's neighbours on the
+/// keyboard rows, so an oversized value would slow every suggestion; real ones are a few rows of
+/// a keyboard, well under 200 characters.
+const MAX_KEY_CHARS: usize = 512;
+
+/// Keeps the first [`MAX_KEY_CHARS`] characters of a `KEY` value.
+fn cap_key(s: &str) -> String {
+    s.chars().take(MAX_KEY_CHARS).collect()
 }
 
 /// `0` means empty in Hunspell's strip and append fields.
@@ -334,19 +383,19 @@ fn parse_aff(aff: &str) -> Result<Rules, String> {
                 }
             }
             "TRY" => r.try_chars = cap_try(at(1)),
-            "KEY" => r.key = at(1).to_string(),
+            "KEY" => r.key = cap_key(at(1)),
             "MAP" => {
                 if !map_header && at(1).parse::<usize>().is_ok() {
                     map_header = true;
                 } else if !at(1).contains('(') {
-                    r.map.push(at(1).chars().collect());
+                    r.push_map(at(1));
                 }
             }
             "REP" => {
                 if !rep_header && f.len() == 2 && at(1).parse::<usize>().is_ok() {
                     rep_header = true;
                 } else if f.len() >= 3 {
-                    r.rep.push((at(1).replace('_', " "), at(2).replace('_', " ")));
+                    r.push_rep(at(1), at(2));
                 }
             }
             "PFX" | "SFX" => {
@@ -429,6 +478,12 @@ impl AffixDict {
     }
 
     fn build(rules: Rules, mut stems: Vec<(String, String)>, comments: Vec<String>) -> Result<AffixDict, String> {
+        if rules.dropped > 0 {
+            log::warn!(
+                "affix dictionary: {} REP/MAP entries ignored (empty, longer than {MAX_TABLE_ITEM_CHARS} characters, or past the first {MAX_REP_ENTRIES} REP / {MAX_MAP_ENTRIES} MAP)",
+                rules.dropped
+            );
+        }
         // Flags: every one a rule or a stem uses gets a bit.
         let mut flag_chars: Vec<char> = rules.prefixes.iter().chain(&rules.suffixes).map(|r| r.0).collect();
         flag_chars.extend(stems.iter().flat_map(|s| s.1.chars()));
@@ -966,9 +1021,9 @@ impl AffixDict {
             let at = |k: usize| f.get(k).copied().unwrap_or("");
             match at(0) {
                 "TRY" => rules.try_chars = cap_try(at(1)),
-                "KEY" => rules.key = at(1).to_string(),
-                "MAP" => rules.map.push(at(1).chars().collect()),
-                "REP" => rules.rep.push((at(1).replace('_', " "), at(2).replace('_', " "))),
+                "KEY" => rules.key = cap_key(at(1)),
+                "MAP" => rules.push_map(at(1)),
+                "REP" => rules.push_rep(at(1), at(2)),
                 directive @ ("FORBIDDENWORD" | "NOSUGGEST") => {
                     let mut it = at(1).chars();
                     match (it.next(), it.next()) {
@@ -1070,6 +1125,100 @@ pub(crate) mod tests {
         assert_eq!(hash.try_chars(), "a#b");
         assert_eq!(hash.key(), "a#b");
         assert_eq!(AffixDict::from_bytes(&hash.to_bytes()).unwrap().key(), "a#b");
+    }
+
+    #[test]
+    fn rep_and_map_tables_are_capped() {
+        // #4999: a crafted `.aff` with a huge REP or MAP table keeps only the first entries.
+        let mut aff = String::from("REP 20000\n");
+        for i in 0..20_000 {
+            aff.push_str(&format!("REP a a{i}\n"));
+        }
+        aff.push_str("MAP 5000\n");
+        for i in 0..5_000u32 {
+            let c = char::from_u32(0x100 + i).unwrap();
+            aff.push_str(&format!("MAP a{c}\n"));
+        }
+        let d = AffixDict::from_hunspell(&aff, "1\nkot\n", &[]).unwrap();
+        assert_eq!(d.rep().len(), MAX_REP_ENTRIES);
+        assert_eq!(d.rep().first(), Some(&("a".to_string(), "a0".to_string())));
+        assert_eq!(d.map().len(), MAX_MAP_ENTRIES);
+        let compact = AffixDict::from_bytes(&d.to_bytes()).unwrap();
+        assert_eq!(compact.rep(), d.rep());
+        assert_eq!(compact.map(), d.map());
+
+        // The compact reader caps a table that never went through the `.aff` reader.
+        let mut raw = format!("{MAGIC}\n");
+        for i in 0..20_000 {
+            raw.push_str(&format!("REP a a{i}\nMAP ab{i}\n"));
+        }
+        raw.push_str("WORDS\n\0kot\n");
+        let bytes = miniz_oxide::deflate::compress_to_vec(raw.as_bytes(), 6);
+        let compact = AffixDict::from_bytes(&bytes).unwrap();
+        assert_eq!(compact.rep().len(), MAX_REP_ENTRIES);
+        assert_eq!(compact.map().len(), MAX_MAP_ENTRIES);
+    }
+
+    #[test]
+    fn key_is_capped() {
+        let aff = format!("KEY {}\n", "qwertyuiop|".repeat(1_000));
+        let d = AffixDict::from_hunspell(&aff, "1\nkot\n", &[]).unwrap();
+        assert_eq!(d.key().chars().count(), MAX_KEY_CHARS);
+        assert!(d.key().starts_with("qwertyuiop|asdf") || d.key().starts_with("qwertyuiop|qwerty"));
+        let raw = format!("{MAGIC}\nKEY {}\nWORDS\n\0kot\n", "a".repeat(10_000));
+        let bytes = miniz_oxide::deflate::compress_to_vec(raw.as_bytes(), 6);
+        assert_eq!(AffixDict::from_bytes(&bytes).unwrap().key().chars().count(), MAX_KEY_CHARS);
+        // A real keyboard layout is kept whole.
+        let d = AffixDict::from_hunspell("KEY qwertyuiop|asdfghjkl|zxcvbnm\n", "1\nkot\n", &[]).unwrap();
+        assert_eq!(d.key(), "qwertyuiop|asdfghjkl|zxcvbnm");
+    }
+
+    #[test]
+    fn rep_and_map_caps_keep_the_first_entries_exactly() {
+        // At the cap everything is kept; one over, the last line is the one left out, and the
+        // count is reported. The count lines (`REP 1000000000`) are never trusted.
+        let table = |n: usize, map: usize| {
+            let mut aff = String::from("REP 1000000000\n");
+            for i in 0..n {
+                aff.push_str(&format!("REP a{i} b{i}\n"));
+            }
+            aff.push_str("MAP 1000000000\n");
+            for i in 0..map {
+                aff.push_str(&format!("MAP x{i}\n"));
+            }
+            aff
+        };
+        let rules = parse_aff(&table(MAX_REP_ENTRIES, MAX_MAP_ENTRIES)).unwrap();
+        assert_eq!((rules.rep.len(), rules.map.len(), rules.dropped), (MAX_REP_ENTRIES, MAX_MAP_ENTRIES, 0));
+        let rules = parse_aff(&table(MAX_REP_ENTRIES + 1, MAX_MAP_ENTRIES + 1)).unwrap();
+        assert_eq!((rules.rep.len(), rules.map.len(), rules.dropped), (MAX_REP_ENTRIES, MAX_MAP_ENTRIES, 2));
+        let last = MAX_REP_ENTRIES - 1;
+        assert_eq!(rules.rep.last(), Some(&(format!("a{last}"), format!("b{last}"))), "the first entries are kept, in order");
+        // A huge count line with two entries loads the two.
+        let d = AffixDict::from_hunspell("REP 4294967295\nREP ab cd\nREP ef gh\n", "1\nkot\n", &[]).unwrap();
+        assert_eq!(d.rep().len(), 2);
+        // A long entry at the edge: 64 characters kept, 65 left out and counted.
+        let edge = "y".repeat(MAX_TABLE_ITEM_CHARS);
+        let long = "y".repeat(MAX_TABLE_ITEM_CHARS + 1);
+        let rules = parse_aff(&format!("REP {edge} z\nREP {long} z\nREP z {long}\n")).unwrap();
+        assert_eq!((rules.rep.len(), rules.dropped), (1, 2));
+    }
+
+    #[test]
+    fn oversized_or_empty_rep_and_map_items_are_dropped() {
+        let long = "x".repeat(MAX_TABLE_ITEM_CHARS + 1);
+        let edge = "y".repeat(MAX_TABLE_ITEM_CHARS);
+        let aff = format!("REP 4\nREP {long} a\nREP a {long}\nREP {edge} b\nREP ż rz\nMAP 2\nMAP {long}\nMAP aą\n");
+        let d = AffixDict::from_hunspell(&aff, "1\nkot\n", &[]).unwrap();
+        assert_eq!(d.rep(), &[(edge.clone(), "b".to_string()), ("ż".to_string(), "rz".to_string())]);
+        assert_eq!(d.map(), &[vec!['a', 'ą']]);
+
+        // A table the size of the largest real ones (pt_BR has 1,056 REP lines) is kept whole.
+        let mut aff = String::from("REP 1100\n");
+        for i in 0..1_100 {
+            aff.push_str(&format!("REP a{i} b{i}\n"));
+        }
+        assert_eq!(AffixDict::from_hunspell(&aff, "1\nkot\n", &[]).unwrap().rep().len(), 1_100);
     }
 
     #[test]
