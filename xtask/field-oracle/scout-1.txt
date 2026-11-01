@@ -1,0 +1,59 @@
+# Field codes behind the Word-versus-WordCraft differences in the first scout report (2026-10-26).
+# One code per line (the text between the braces, without them); blank lines and # lines are skipped.
+
+# Last format switch wins
+NUMPAGES \* ArabicDash \* roman
+NUMPAGES \* roman \* ArabicDash
+PAGE \* Hex \* CardText
+PAGE \* roman \* Arabic
+
+# Basics that already match
+= 790 \* CardText
+= 790 \* CardText \* Caps
+= 21 \* OrdText \* FirstCap
+= 31 \* ArabicDash
+= 458 \* Hex
+= 458 \* Hex \* Lower
+
+# Caps lowercases the rest of each word; FirstCap leaves it
+TITLE "WEEKLY REPORT" \* Caps
+TITLE "wEEKLY rEPORT" \* Caps
+TITLE "wEEKLY rEPORT" \* FirstCap
+TITLE "WEEKLY REPORT" \* Lower \* Caps
+TITLE "WEEKLY REPORT" \* Caps \* Lower
+= 255 \* Hex \* Caps
+
+# DollarText truncates the whole part and rounds cents modulo 100
+= 0.999 \* DollarText
+= 1.995 \* DollarText
+= 999999.995 \* DollarText
+= 12.345 \* DollarText
+= -0.004 \* DollarText
+= 1.4 \* DollarText
+= -1 \* DollarText
+
+# Numbers outside a text format's range
+= 1000140 \* CardText
+= 999999 \* OrdText
+= 1000000 \* OrdText
+= 32767 \* roman
+= 32768 \* roman
+= 1000000 \* Hex
+= -5 \* CardText
+= -5 \* ArabicDash
+= 0 \* roman
+= 0 \* alphabetic
+= 0 \* OrdText
+= 27 \* alphabetic
+= 2.5 \* CardText
+
+# Backslash is an escape inside a quoted argument
+TITLE "x \* Upper"
+SUBJECT "Draft two" \* Upper
+
+# Formula fields outside a table
+= 1+1
+=1+1
+= SUM(1,2)
+= 2*3
+= SUM(2,3) \* CardText

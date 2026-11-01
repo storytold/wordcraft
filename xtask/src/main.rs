@@ -4,6 +4,7 @@
 //! invoked through `std::process::Command`.
 
 mod assets;
+mod field_oracle;
 mod ico;
 mod layers;
 mod parity;
@@ -34,6 +35,9 @@ commands:
   visual-diff <ref.pdf> <test.pdf> <outdir> [--private] [--dpi N]
                   compare two PDFs of a document page by page (SSIM, line breaks, offsets);
                   needs poppler (pdftoppm, pdftotext)
+  field-oracle <codes.txt | --code CODE>... [--out table.md] [--cli wordcraft-cli] [--no-word]
+                  run field codes in real Word (COM) and in wordcraft-cli, print a comparison table
+                  (xtask/field-oracle/scout-1.txt is the first corpus; Word and PowerShell needed)
   ico <out.ico> <in.png>...
                   pack square PNGs (<= 256 px) into a Windows .ico (see packaging/icons.sh)
 ";
@@ -51,6 +55,7 @@ fn main() -> ExitCode {
         Some("corpus") => cmd_corpus(rest.contains(&"--download")),
         Some("stats") => stats::run(&root(), rest.contains(&"--exact")),
         Some("parity") => parity::run(&root()),
+        Some("field-oracle") => field_oracle::run(&root(), &rest),
         Some("ico") => ico::run(&rest),
         Some("visual-diff") => visual_diff::run(&rest),
         Some("version") => version::run(&root(), &rest),
