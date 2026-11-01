@@ -105,6 +105,9 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::About { .. } => "About WordCraft",
         Dialog::SaveChanges { .. } => "WordCraft",
         Dialog::DiscardRecovery { .. } => "Discard recovery copy",
+        Dialog::SetDefault { .. } => "Set As Default",
+        Dialog::ResetDefaults => "Reset Default Formatting",
+        Dialog::DesignDefault => "Set as Default",
         Dialog::RecipientList { .. } => "Recipient List",
         Dialog::SelectTable { .. } => "Select Table",
         Dialog::InsertMergeField { .. } => "Insert Merge Field",
@@ -159,6 +162,14 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         close |= crate::window_close::show(ctx, &shown.response, &Tokens::get(ctx));
     }
     if close {
+        // The title-bar × on Set As Default is Cancel: back to the dialog it was asked from,
+        // edits intact (OK and Cancel have already taken `back`).
+        if app.dialog.is_none()
+            && let Dialog::SetDefault { back: Some(b), .. } = d
+        {
+            app.dialog = Some(*b);
+            return;
+        }
         app.canvas.want_focus = true;
     } else {
         app.dialog = Some(d);

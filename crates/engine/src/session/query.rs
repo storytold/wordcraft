@@ -201,9 +201,10 @@ impl Session {
         self.region().format(self.units(), pt)
     }
 
-    /// A new blank document (the Normal template) on the region's paper: Letter in the US and
-    /// other Letter regions, A4 elsewhere (#838). Margins stay 2.54 cm (1") all round.
-    pub fn blank_document(&self) -> Document {
+    /// A built-in blank document on the region's paper: Letter in the US and other Letter
+    /// regions, A4 elsewhere (#838). Margins stay 2.54 cm (1") all round. New documents come
+    /// from [`Session::normal_document`], which starts here and applies the Normal template.
+    pub(crate) fn blank_document(&self) -> Document {
         blank_document(&self.region())
     }
 
@@ -281,7 +282,7 @@ impl Session {
 }
 
 /// A new blank document on `region`'s paper (see [`Session::blank_document`]).
-pub fn blank_document(region: &wordcraft_geom::Region) -> Document {
+pub(crate) fn blank_document(region: &wordcraft_geom::Region) -> Document {
     let mut d = Document::new();
     let (_, w, h) = region.paper();
     d.last_section.page_w = w;

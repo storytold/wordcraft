@@ -1693,3 +1693,449 @@ fn the_custom_properties_dialog_leaves_imported_non_text_properties_alone() {
     let kinds: Vec<(&str, &str)> = h.state().session.doc.custom_props.iter().map(|p| (p.name.as_str(), p.kind.as_str())).collect();
     assert_eq!(kinds, [("Status", "lpwstr"), ("Count", "i4")], "Cancel leaves the imported property as it was");
 }
+
+/// A harness drawing `app` whole, with the Normal template in memory.
+fn normal_template_harness(
+    dialog: &str,
+    edit: impl FnOnce(&mut Dialog),
+) -> (egui_kittest::Harness<'static, WordApp>, std::sync::Arc<wordcraft_engine::normal_template::MemoryStore>) {
+    let store = wordcraft_engine::normal_template::MemoryStore::new();
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Lanterns")), crate::Services::default());
+    a.session.normal_store = Some(store.clone());
+    let mut d = if dialog == "modifyStyle" { Dialog::modify_style(&a, "Normal") } else { Dialog::open(dialog, &mut a) }.unwrap();
+    edit(&mut d);
+    a.dialog = Some(d);
+    let h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            app.logic(&ui.ctx().clone());
+            app.ui(ui);
+        },
+        a,
+    );
+    (h, store)
+}
+
+/// A new session on `store`, as after a restart: its first blank document.
+fn restarted(store: &std::sync::Arc<wordcraft_engine::normal_template::MemoryStore>) -> wordcraft_doc::Document {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.normal_store = Some(store.clone());
+    s.normal_document()
+}
+
+/// #4237: Font › Set As Default asks "this document only" or "all documents"; all saves every
+/// field into the Normal template for new documents, and the open document changes too.
+#[test]
+fn font_set_as_default_asks_then_saves_for_new_documents() {
+    use egui_kittest::kittest::Queryable;
+    let (mut h, store) = normal_template_harness("font", |d| {
+        if let Dialog::Font { font, size, .. } = d {
+            *font = "Georgia".into();
+            *size = "15".into();
+        }
+    });
+    h.run_steps(3);
+    h.get_by_label("Set As Default").click();
+    h.run_steps(3);
+    assert!(matches!(h.state().dialog, Some(Dialog::SetDefault { .. })), "it asks");
+    h.get_by_label("All documents based on the Normal template?").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none());
+    let r = h.state().session.doc.styles.resolve_char(Some("Normal"), &Default::default());
+    assert_eq!((r.font.as_str(), r.size), ("Georgia", 15.0), "the open document changes too");
+    let d = restarted(&store);
+    let r = d.styles.resolve_char(Some("Normal"), &Default::default());
+    assert_eq!((r.font.as_str(), r.size), ("Georgia", 15.0));
+}
+
+/// #4237: "This document only" leaves the template alone.
+#[test]
+fn paragraph_set_as_default_this_document_only() {
+    use egui_kittest::kittest::Queryable;
+    let (mut h, store) = normal_template_harness("paragraph", |d| {
+        if let Dialog::Paragraph { after, .. } = d {
+            *after = 24.0;
+        }
+    });
+    h.run_steps(3);
+    h.get_by_label("Set As Default").click();
+    h.run_steps(3);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(h.state().session.doc.styles.default_para.space_after, Some(24.0));
+    assert!(store.get().is_none(), "nothing saved for new documents");
+}
+
+/// #4237: Page Setup › Set As Default applies the page setup, then saves it for new documents.
+#[test]
+fn page_setup_set_as_default() {
+    use egui_kittest::kittest::Queryable;
+    let (mut h, store) = normal_template_harness("pageSetup", |d| {
+        if let Dialog::PageSetup { landscape, .. } = d {
+            *landscape = true;
+        }
+    });
+    h.run_steps(3);
+    h.get_by_label("Set As Default").click();
+    h.run_steps(3);
+    assert!(!h.state().session.doc.last_section.landscape, "asked first: nothing applied yet");
+    // Cancel: back to Page Setup with the edit, nothing applied.
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert!(matches!(h.state().dialog, Some(Dialog::PageSetup { landscape: true, .. })), "back with the edit");
+    assert!(!h.state().session.doc.last_section.landscape && store.get().is_none());
+    // This document only: applied, not saved.
+    h.get_by_label("Set As Default").click();
+    h.run_steps(3);
+    h.get_by_label("This document only?").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none());
+    assert!(h.state().session.doc.last_section.landscape, "applied");
+    assert!(store.get().is_none(), "not saved");
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert!(!h.state().session.doc.last_section.landscape, "one undo step");
+    // All: applied and saved, in one undo step.
+    let d = Dialog::open("pageSetup", h.state_mut()).map(|mut d| {
+        if let Dialog::PageSetup { landscape, .. } = &mut d {
+            *landscape = true;
+        }
+        d
+    });
+    h.state_mut().dialog = d;
+    h.run_steps(3);
+    h.get_by_label("Set As Default").click();
+    h.run_steps(3);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert!(h.state().session.doc.last_section.landscape);
+    assert!(restarted(&store).last_section.landscape);
+}
+
+/// Review P3: Cancel on Set As Default's question goes back to the Font or Paragraph dialog with
+/// its edits.
+#[test]
+fn cancelling_set_as_default_returns_to_the_dialog() {
+    use egui_kittest::kittest::Queryable;
+    let (mut h, store) = normal_template_harness("font", |d| {
+        if let Dialog::Font { size, .. } = d {
+            *size = "17".into();
+        }
+    });
+    h.run_steps(3);
+    h.get_by_label("Set As Default").click();
+    h.run_steps(3);
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert!(matches!(&h.state().dialog, Some(Dialog::Font { size, .. }) if size == "17"), "back in Font with the edit");
+    assert!(store.get().is_none());
+    let (mut h, _) = normal_template_harness("paragraph", |d| {
+        if let Dialog::Paragraph { after, .. } = d {
+            *after = 33.0;
+        }
+    });
+    h.run_steps(3);
+    h.get_by_label("Set As Default").click();
+    h.run_steps(3);
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert!(matches!(&h.state().dialog, Some(Dialog::Paragraph { after, .. }) if *after == 33.0));
+}
+
+/// Re-review P3: closing the Set As Default question with its title-bar × is Cancel: back to
+/// the dialog it was asked from, with its edits.
+#[test]
+fn closing_set_as_default_returns_to_the_dialog() {
+    use egui_kittest::kittest::Queryable;
+    let (mut h, store) = normal_template_harness("font", |d| {
+        if let Dialog::Font { size, .. } = d {
+            *size = "17".into();
+        }
+    });
+    h.run_steps(3);
+    h.get_by_label("Set As Default").click();
+    h.run_steps(3);
+    assert!(matches!(&h.state().dialog, Some(Dialog::SetDefault { .. })));
+    let window = h.ctx.memory(|m| m.area_rect(egui::Id::unique(("dialog", "Set As Default")))).expect("question is open");
+    let at = egui::pos2(window.right() - 6.0, crate::window_close::close_rect(window, 1.0, crate::window_close::geometry(&h.ctx)).center().y);
+    let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    h.event(egui::Event::PointerMoved(at));
+    h.step();
+    h.event(button(true));
+    h.step();
+    h.event(button(false));
+    h.run_steps(4);
+    assert!(matches!(&h.state().dialog, Some(Dialog::Font { size, .. }) if size == "17"), "back in Font with the edit");
+    assert!(store.get().is_none());
+}
+
+/// Re-review P3: the Design ribbon's Set as Default button opens the question; nothing is saved
+/// until its OK.
+#[test]
+fn design_ribbon_set_as_default_asks_first() {
+    use egui_kittest::kittest::Queryable;
+    let (mut h, store) = normal_template_harness("font", |_| {});
+    h.state_mut().dialog = None;
+    h.state_mut().ui.tab = "Design".into();
+    h.run_steps(3);
+    h.get_by_label("Set as Default").click();
+    h.run_steps(3);
+    assert!(matches!(h.state().dialog, Some(Dialog::DesignDefault)), "the question opens");
+    assert!(store.get().is_none(), "and nothing is saved yet");
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert!(store.get().is_some(), "OK saves");
+}
+
+/// Review P3: Design › Set as Default asks before saving; Cancel saves nothing.
+#[test]
+fn design_set_as_default_asks_first() {
+    use egui_kittest::kittest::Queryable;
+    let (mut h, store) = normal_template_harness("font", |_| {});
+    h.state_mut().dialog = None;
+    h.state_mut().run("design.theme", json!({"name": "Studio"})).unwrap();
+    h.state_mut().run("ui.dialog", json!({"name": "designSetDefault"})).unwrap();
+    h.run_steps(3);
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert!(store.get().is_none(), "Cancel saves nothing");
+    h.state_mut().run("ui.dialog", json!({"name": "designSetDefault"})).unwrap();
+    h.run_steps(3);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(restarted(&store).settings.theme_name, "Studio");
+}
+
+/// Review P3: Paragraph › Set As Default keeps Exactly line spacing the dialog can't show, and
+/// sends no direction for a left-to-right paragraph.
+#[test]
+fn paragraph_set_as_default_keeps_what_the_dialog_cant_show() {
+    use egui_kittest::kittest::Queryable;
+    let store = wordcraft_engine::normal_template::MemoryStore::new();
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Lanterns")), crate::Services::default());
+    a.session.normal_store = Some(store.clone());
+    a.run("para.lineSpacing", json!({"exactly": 20.0})).unwrap();
+    let d = Dialog::open("paragraph", &mut a).unwrap();
+    let props = super::paragraph::default_para_props(&a, &d);
+    assert_eq!(props.get("lineSpacing"), Some(&json!({"rule": "exactly", "value": 20.0})), "{props:?}");
+    assert!(!props.contains_key("bidi"), "{props:?}");
+    a.dialog = Some(d);
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            app.logic(&ui.ctx().clone());
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(3);
+    h.get_by_label("Set As Default").click();
+    h.run_steps(3);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(h.state().session.doc.styles.default_para.line_spacing, Some(wordcraft_doc::props::LineSpacing::Exactly(20.0)));
+    assert_eq!(h.state().session.doc.styles.default_para.bidi, None);
+}
+
+/// Re-review P3: paragraphs with different spacing rules (Exactly 12 and Exactly 18) show alike
+/// in the dialog; Set As Default leaves their spacing out rather than saving the caret's.
+#[test]
+fn paragraph_set_as_default_skips_mixed_line_spacing() {
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("One\nTwo")), crate::Services::default());
+    a.run("select.text", json!({"text": "One"})).unwrap();
+    a.run("para.lineSpacing", json!({"exactly": 12.0})).unwrap();
+    a.run("select.text", json!({"text": "Two"})).unwrap();
+    a.run("para.lineSpacing", json!({"exactly": 18.0})).unwrap();
+    a.run("select.all", json!({})).unwrap();
+    let d = Dialog::open("paragraph", &mut a).unwrap();
+    let props = super::paragraph::default_para_props(&a, &d);
+    assert!(!props.contains_key("lineSpacing"), "{props:?}");
+}
+
+/// Re-review P2: a selection from One's start to Two's start covers only One (as the dialog
+/// shows it), so One's Exactly 12 is saved, not left out because of Two's 18.
+#[test]
+fn paragraph_set_as_default_uses_the_paragraphs_the_dialog_shows() {
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("One\nTwo")), crate::Services::default());
+    a.run("select.text", json!({"text": "One"})).unwrap();
+    a.run("para.lineSpacing", json!({"exactly": 12.0})).unwrap();
+    a.run("select.text", json!({"text": "Two"})).unwrap();
+    a.run("para.lineSpacing", json!({"exactly": 18.0})).unwrap();
+    a.run("select.range", json!({"anchor": {"block": 0, "off": 0}, "focus": {"block": 1, "off": 0}})).unwrap();
+    let d = Dialog::open("paragraph", &mut a).unwrap();
+    let props = super::paragraph::default_para_props(&a, &d);
+    let want = serde_json::to_value(wordcraft_doc::props::LineSpacing::Exactly(12.0)).unwrap();
+    assert_eq!(props.get("lineSpacing"), Some(&want), "{props:?}");
+}
+
+/// #4237: Modify Style › New documents based on this template; Options › Reset asks first.
+#[test]
+fn modify_style_for_new_documents_and_reset() {
+    use egui_kittest::kittest::Queryable;
+    let (mut h, store) = normal_template_harness("modifyStyle", |_| {});
+    let Some(Dialog::ModifyStyle { id, .. }) = &h.state().dialog else { panic!("modify style") };
+    let id = id.clone();
+    if let Some(Dialog::ModifyStyle { italic, .. }) = &mut h.state_mut().dialog {
+        *italic = true;
+    }
+    h.run_steps(3);
+    h.get_by_label("New documents based on this template").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(restarted(&store).styles.get(&id).and_then(|s| s.chr.italic), Some(true));
+
+    h.state_mut().dialog = Some(Dialog::ResetDefaults);
+    h.run_steps(3);
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert!(store.get().is_some(), "Cancel keeps it");
+    h.state_mut().dialog = Some(Dialog::ResetDefaults);
+    h.run_steps(3);
+    h.get_by_label("Reset").click();
+    h.run_steps(3);
+    assert!(store.get().is_none(), "Reset deletes it");
+}
+
+/// #4621 review: Modify Style for new documents with a template that can't be saved changes
+/// nothing (style, undo, template) and keeps the dialog open with the user's edits.
+#[test]
+fn modify_style_for_new_documents_with_a_read_only_template() {
+    use egui_kittest::kittest::Queryable;
+    struct ReadOnly;
+    impl wordcraft_engine::normal_template::NormalStore for ReadOnly {
+        fn load(&self) -> Result<Option<Vec<u8>>, String> {
+            Ok(None)
+        }
+        fn save(&self, _: &[u8]) -> Result<(), String> {
+            Err("read-only".into())
+        }
+        fn reset(&self) -> Result<(), String> {
+            Err("read-only".into())
+        }
+    }
+    let (mut h, _) = normal_template_harness("modifyStyle", |d| {
+        if let Dialog::ModifyStyle { italic, .. } = d {
+            *italic = true;
+        }
+    });
+    h.state_mut().session.normal_store = Some(std::sync::Arc::new(ReadOnly));
+    let styles = h.state().session.doc.styles.clone();
+    let undo = h.state().session.undo_labels();
+    h.run_steps(3);
+    h.get_by_label("New documents based on this template").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(h.state().session.doc.styles, styles, "the style is unchanged");
+    assert_eq!(h.state().session.undo_labels(), undo, "no undo step");
+    let Some(Dialog::ModifyStyle { italic, new_documents, .. }) = &h.state().dialog else { panic!("the dialog stays open") };
+    assert!(*italic && *new_documents, "with the user's edits");
+}
+
+/// Review of #4449–#4458: Modify Style keeps only what was changed. Strong made italic for new
+/// documents gets no font or size of its own (the dialog shows the resolved ones), so bold text
+/// in a heading keeps the heading's font and size.
+#[test]
+fn modify_style_saves_only_what_was_changed() {
+    use egui_kittest::kittest::Queryable;
+    let (mut h, store) = normal_template_harness("modifyStyle", |_| {});
+    let strong = Dialog::modify_style(h.state(), "Strong").map(|mut d| {
+        if let Dialog::ModifyStyle { italic, .. } = &mut d {
+            *italic = true;
+        }
+        d
+    });
+    h.state_mut().dialog = strong;
+    h.run_steps(3);
+    h.get_by_label("New documents based on this template").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    for (what, sheet) in [("the open document", h.state().session.doc.styles.clone()), ("new documents", restarted(&store).styles)] {
+        let st = sheet.get("Strong").expect("Strong");
+        assert_eq!((st.chr.bold, st.chr.italic), (Some(true), Some(true)), "{what}");
+        assert_eq!((st.chr.font.as_deref(), st.chr.size), (None, None), "{what}: no font or size of its own");
+        let r = sheet.resolve_char(Some("Heading1"), &wordcraft_doc::CharProps { style: Some("Strong".into()), ..Default::default() });
+        assert_eq!(r.size, sheet.resolve_char(Some("Heading1"), &Default::default()).size, "{what}: bold in a heading keeps its size");
+    }
+}
+
+/// Opens Modify Style on `style` in `h`, applies `edit`, ticks "New documents based on this
+/// template" and presses OK.
+fn modify_style_for_new_documents(h: &mut egui_kittest::Harness<'static, WordApp>, style: &str, edit: impl FnOnce(&mut Dialog)) {
+    use egui_kittest::kittest::Queryable;
+    let mut d = Dialog::modify_style(h.state(), style).expect("the style");
+    edit(&mut d);
+    h.state_mut().dialog = Some(d);
+    h.run_steps(3);
+    h.get_by_label("New documents based on this template").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+}
+
+/// #4237 review (as on #4456): Modify Style sets a red style's colour back to automatic, in the
+/// document and for new documents.
+#[test]
+fn modify_style_sets_colour_back_to_automatic() {
+    let (mut h, store) = normal_template_harness("modifyStyle", |_| {});
+    h.state_mut().dialog = None;
+    h.state_mut().run("styles.modify", json!({"style": "Strong", "chr": {"color": "FF0000"}})).unwrap();
+    modify_style_for_new_documents(&mut h, "Strong", |d| {
+        if let Dialog::ModifyStyle { color, .. } = d {
+            *color = "auto".into();
+        }
+    });
+    for (what, sheet) in [("the open document", h.state().session.doc.styles.clone()), ("new documents", restarted(&store).styles)] {
+        let st = sheet.get("Strong").expect("Strong");
+        assert_eq!(st.chr.color, Some(wordcraft_doc::TextColor::Auto), "{what}");
+    }
+}
+
+/// #4237 review: each field Modify Style changes is sent: size, colour, spacing before and after,
+/// and bold turned off.
+#[test]
+fn modify_style_sends_each_changed_field() {
+    let (mut h, store) = normal_template_harness("modifyStyle", |_| {});
+    h.state_mut().dialog = None;
+    h.state_mut().run("styles.modify", json!({"style": "Heading1", "chr": {"bold": true}})).unwrap();
+    modify_style_for_new_documents(&mut h, "Heading1", |d| {
+        if let Dialog::ModifyStyle { size, bold, color, before, after, .. } = d {
+            *size = 23.0;
+            *bold = false;
+            *color = "00FF00".into();
+            *before = 7.0;
+            *after = 9.0;
+        }
+    });
+    for (what, sheet) in [("the open document", h.state().session.doc.styles.clone()), ("new documents", restarted(&store).styles)] {
+        let st = sheet.get("Heading1").expect("Heading1");
+        assert_eq!(st.chr.size, Some(23.0), "{what}");
+        assert_eq!(st.chr.bold, Some(false), "{what}");
+        assert_eq!(st.chr.color, Some(wordcraft_doc::TextColor::Rgb(wordcraft_doc::Rgb(0, 255, 0))), "{what}");
+        assert_eq!((st.para.space_before, st.para.space_after), (Some(7.0), Some(9.0)), "{what}");
+    }
+}
+
+/// #4237 review: Modify Style compares with the style as it was when the dialog opened, so a
+/// change made meanwhile (an agent over the control channel) survives on the fields the user
+/// left alone.
+#[test]
+fn modify_style_keeps_changes_made_while_it_is_open() {
+    use egui_kittest::kittest::Queryable;
+    let (mut h, _) = normal_template_harness("modifyStyle", |_| {});
+    let mut d = Dialog::modify_style(h.state(), "Strong").expect("Strong");
+    if let Dialog::ModifyStyle { italic, .. } = &mut d {
+        *italic = true;
+    }
+    h.state_mut().dialog = Some(d);
+    h.run_steps(3);
+    h.state_mut().run("styles.modify", json!({"style": "Strong", "chr": {"size": 30.0}})).unwrap();
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let st = h.state().session.doc.styles.get("Strong").cloned().expect("Strong");
+    assert_eq!(st.chr.italic, Some(true));
+    assert_eq!(st.chr.size, Some(30.0), "the size set meanwhile stays");
+}

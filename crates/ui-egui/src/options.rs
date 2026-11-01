@@ -596,6 +596,15 @@ fn advanced(app: &mut WordApp, ui: &mut Ui) {
         section(ui, "File locations");
         templates_folder(app, ui);
     }
+    // The Normal template (#4237): Set As Default for all new documents saves into it.
+    ui.add_space(8.0);
+    section(ui, "Default formatting");
+    ui.horizontal(|ui| {
+        ui.label(tl!("Formatting saved for new documents:"));
+        if ui.add_enabled(app.session.normal_store.is_some(), egui::Button::new(tl!("Reset…"))).clicked() {
+            app.dialog = Some(crate::dialogs::Dialog::ResetDefaults);
+        }
+    });
     ui.add_space(8.0);
     section(ui, "Customize");
     ui.horizontal(|ui| {

@@ -219,20 +219,10 @@ fn new(s: &mut Session, v: &Value) -> CmdResult {
         "letter" => crate::sample::letter(),
         "resume" => crate::sample::resume(),
         "report" => crate::sample::report(),
-        _ => normal_document(s),
+        _ => s.normal_document(),
     };
     s.add_document(doc);
     sel_result(s)
-}
-
-/// A blank document on the Normal template: the region's paper (#838), written in the editing
-/// language (the templates' text is English).
-pub(crate) fn normal_document(s: &Session) -> Document {
-    let mut d = s.blank_document();
-    if let Some(lang) = s.prefs.default_language.as_ref().or(s.editing_lang.as_ref()) {
-        d.styles.default_chr.lang = Some(lang.clone());
-    }
-    d
 }
 
 /// Open a document, using the saved proofing default only for plain text and Markdown. A file
@@ -257,21 +247,20 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
         // An empty file (File Explorer's New › Microsoft Word Document makes one) opens as a new
         // blank document that saves back to it (#1384).
         if bytes.is_empty() {
-            (normal_document(s), false)
+            (s.normal_document(), false)
         } else {
             crate::io::open_bytes_in(path, &bytes, password, &s.region()).map_err(CmdError::Failed)?
         }
     } else if crate::io::is_empty_file(std::path::Path::new(path)) {
-        (normal_document(s), false)
+        (s.normal_document(), false)
     } else {
         crate::io::open_path_in(std::path::Path::new(path), password, &s.region()).map_err(CmdError::Failed)?
     };
-    // Plain text and Markdown carry no language: they are in the editing language.
+    // Plain text and Markdown carry no formatting or language: they take the Normal template's
+    // and are in the editing language.
     let ext = std::path::Path::new(path).extension().and_then(std::ffi::OsStr::to_str).unwrap_or("").to_ascii_lowercase();
-    if let Some(lang) = s.prefs.default_language.as_ref().or(s.editing_lang.as_ref())
-        && matches!(ext.as_str(), "txt" | "text" | "md" | "markdown")
-    {
-        doc.styles.default_chr.lang = Some(lang.clone());
+    if matches!(ext.as_str(), "txt" | "text" | "md" | "markdown") {
+        s.apply_normal_to_import(&mut doc);
     }
     match s.used_because() {
         None => s.set_document(doc),

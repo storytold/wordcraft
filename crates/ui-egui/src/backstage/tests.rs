@@ -1054,3 +1054,56 @@ fn backstage_save_as_sidebar_opens_save_as_page() {
     h.run_steps(4);
     assert_eq!(h.state().ui.backstage_page, "saveAs");
 }
+
+/// Review P3: File › New's blank tile pictures the Normal template.
+#[test]
+fn the_blank_tile_shows_the_normal_template() {
+    let store = wordcraft_engine::normal_template::MemoryStore::new();
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.session.normal_store = Some(store.clone());
+    a.run("layout.orientation", json!({"value": "landscape"})).unwrap();
+    a.run("layout.setDefault", json!({})).unwrap();
+    assert!(super::tile_session(&a, "blank").doc.last_section.landscape);
+    assert!(!super::tile_session(&a, "letter").doc.last_section.landscape, "templates keep their own");
+}
+
+/// #4237 re-review: the blank tile follows the stored template's content, so a template saved by
+/// another window redraws it, and the new picture replaces the old texture instead of piling up.
+#[test]
+fn the_blank_tile_follows_the_stored_template() {
+    let store = wordcraft_engine::normal_template::MemoryStore::new();
+    let mut h = new_page_harness(None);
+    h.state_mut().session.normal_store = Some(store.clone());
+    h.run_steps(4);
+    let tile = |h: &egui_kittest::Harness<'_, WordApp>| {
+        h.ctx.data(|d| d.get_temp::<((u32, u64), egui::TextureHandle)>(egui::Id::unique(("tpl", "blank")))).map(|(_, t)| t.id()).expect("blank tile")
+    };
+    let first = tile(&h);
+    let textures = h.ctx.tex_manager().read().num_allocated();
+    for orientation in ["landscape", "portrait", "landscape"] {
+        // Another window saves the template: this one's commands never ran.
+        let mut other = wordcraft_engine::Session::new(wordcraft_doc::Document::new());
+        other.normal_store = Some(store.clone());
+        other.run("layout.orientation", &json!({"value": orientation})).unwrap();
+        other.run("layout.setDefault", &json!({})).unwrap();
+        h.run_steps(90);
+    }
+    assert_ne!(tile(&h), first, "the tile was redrawn");
+    assert!(h.ctx.tex_manager().read().num_allocated() <= textures, "old pictures were freed");
+}
+
+/// CodeRabbit on #4621: a new region (A4 instead of Letter) redraws the blank tile, as
+/// `file.new` would make the new paper.
+#[test]
+fn the_blank_tile_follows_the_region() {
+    let mut h = new_page_harness(None);
+    h.run_steps(4);
+    let tile = |h: &egui_kittest::Harness<'_, WordApp>| {
+        h.ctx.data(|d| d.get_temp::<((u32, u64), egui::TextureHandle)>(egui::Id::unique(("tpl", "blank")))).map(|(_, t)| t.id()).expect("blank tile")
+    };
+    let first = tile(&h);
+    let region = if h.state().session.prefs.region.as_deref() == Some("de-DE") { "en-US" } else { "de-DE" };
+    h.state_mut().session.prefs.region = Some(region.into());
+    h.run_steps(4);
+    assert_ne!(tile(&h), first, "the tile was redrawn");
+}

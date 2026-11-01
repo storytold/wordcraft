@@ -84,23 +84,7 @@ impl Session {
         if spec.mutates && self.doc.settings.protection.as_deref() == Some("trackedChanges") {
             self.doc.settings.track_changes = true;
         }
-        // Macro recording and Repeat.
-        let record = !matches!(id, "tools.recordMacro" | "tools.macros" | "edit.undo" | "edit.redo" | "edit.repeat")
-            && (spec.mutates || id.starts_with("caret.") || id.starts_with("select."));
-        // A password never lands in a recorded macro or Repeat.
-        let kept = || {
-            let mut p = params.clone();
-            if let Some(m) = p.as_object_mut() {
-                m.remove("password");
-            }
-            p
-        };
-        if record && let Some((_, steps)) = self.recording.as_mut() {
-            steps.push((id.to_string(), kept()));
-        }
-        if spec.mutates && !matches!(id, "edit.undo" | "edit.redo" | "edit.repeat") {
-            self.last_command = Some((id.to_string(), kept()));
-        }
+        self.note_for_macro_and_repeat(id, spec.mutates, params);
         // Typing, caret movement and selection outside the equation commands leave the equation.
         self.leave_math_for_command(id);
         // The undo stacks are snapshotted whole, not as a length: commands run nested commands,
@@ -181,11 +165,17 @@ impl Session {
         // A rejected command must not persist a new proofing default, including a rejection
         // by the protected-region check after its handler has succeeded. Undo stays document-only.
         let default_language_before = self.prefs.default_language.clone();
+        // Set As Default queues its template change; the outermost command writes the queue below,
+        // only if it succeeds. A nested command that succeeds hands its queue up to the command
+        // that ran it, so a macro failing after a Set As Default leaves the template alone.
+        let template_before = std::mem::take(&mut self.pending_template);
         let run = spec.run;
         let mutates = spec.mutates;
         let ime_caret_before = self.current_ime_caret_state();
         let rev_before = self.rev;
+        self.run_depth = self.run_depth.saturating_add(1);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::cmd::column::dispatch(self, id, mutates, run, params)));
+        self.run_depth = self.run_depth.saturating_sub(1);
         let mut result = match result {
             Ok(r) => r,
             Err(p) => {
@@ -194,6 +184,8 @@ impl Session {
             }
         };
         if self.document_id != home || (result.is_err() && self.order.iter().any(|d| *d >= mark)) {
+            // No Set As Default switches documents: whatever it queued is dropped.
+            self.pending_template = template_before;
             return self.finish_elsewhere(
                 ElsewhereContext { home, mark, before_doc, blocks_before, default_language_before, pending_application_change_before },
                 result,
@@ -206,6 +198,13 @@ impl Session {
             && !crate::cmd::protect::outside_unchanged(before, &self.doc, &self.author)
         {
             result = Err(CmdError::Disabled(format!("{id}: only the editable regions of this protected document can change")));
+        }
+        // The Normal template is written only now that the command has succeeded and passed the
+        // post-check; a failed write fails the command, which then rolls the document back. A
+        // nested command's queue goes to the command that ran it. Reading and merging the stored
+        // template is input-driven, so it runs under the same panic guard as the command.
+        if let Err(e) = self.settle_template(id, template_before, result.is_ok()) {
+            result = Err(e);
         }
         match &result {
             Ok(_) => self.finish_success(SuccessContext {
@@ -273,6 +272,47 @@ impl Session {
             }
         }
         result
+    }
+
+    /// Macro recording and Repeat: notes the command for both, with no password.
+    fn note_for_macro_and_repeat(&mut self, id: &str, mutates: bool, params: &Value) {
+        // Macro recording and Repeat.
+        // Set As Default and Reset change the Normal template, not the document: Repeat or a macro
+        // replaying one would rewrite the person's defaults unasked (#4237 review).
+        let template_command = id.ends_with(".setDefault") || id == "defaults.reset";
+        let record = !matches!(id, "tools.recordMacro" | "tools.macros" | "edit.undo" | "edit.redo" | "edit.repeat")
+            && !template_command
+            && (mutates || id.starts_with("caret.") || id.starts_with("select."));
+        // A password never lands in a recorded macro or Repeat.
+        let kept = || {
+            let mut p = params.clone();
+            if let Some(m) = p.as_object_mut() {
+                m.remove("password");
+            }
+            p
+        };
+        if record && let Some((_, steps)) = self.recording.as_mut() {
+            steps.push((id.to_string(), kept()));
+        }
+        if mutates && !template_command && !matches!(id, "edit.undo" | "edit.redo" | "edit.repeat") {
+            self.last_command = Some((id.to_string(), kept()));
+        }
+    }
+
+    /// After a command: restores the queue it started with (`before`), then, if it succeeded,
+    /// hands its queued Normal template change up to the command that ran it or, at the outermost
+    /// command, writes it (#4237). A failed command's queue is dropped.
+    fn settle_template(&mut self, id: &str, before: Vec<crate::cmd::defaults::TemplateEdit>, succeeded: bool) -> Result<(), CmdError> {
+        let template = std::mem::replace(&mut self.pending_template, before);
+        if !succeeded || template.is_empty() {
+            return Ok(());
+        }
+        if self.run_depth > 0 {
+            self.pending_template.extend(template);
+            return Ok(());
+        }
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::cmd::defaults::commit_template(self, template)))
+            .unwrap_or_else(|_| Err(CmdError::Failed(format!("{id}: the Normal template could not be updated"))))
     }
 
     fn finish_success(&mut self, context: SuccessContext<'_>) {
