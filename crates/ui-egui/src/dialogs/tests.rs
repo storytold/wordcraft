@@ -1109,6 +1109,11 @@ fn page_setup_paper_widgets_work_together() {
     h.run_steps(3);
     h.get_by_role_and_label(Role::ComboBox, "Paper size:").click();
     h.run_steps(3);
+    // The list holds every paper and "Custom size" is its last row, so scroll it into the
+    // popup before clicking it, the way a person would (the fixed-height popup clips the row
+    // until it is scrolled into view).
+    h.get_by_label("Custom size").scroll_to_me();
+    h.run_steps(3);
     h.get_by_label("Custom size").click();
     h.run_steps(3);
     assert_eq!(state(&h), (841.89, 595.28, true));

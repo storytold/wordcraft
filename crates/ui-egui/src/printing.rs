@@ -127,7 +127,8 @@ pub fn feedback(message: &Feedback, translate: impl Fn(&str) -> String) -> Strin
     }
 }
 
-/// The IPP/PWG 5101.1 media name of a Layout › Size paper (the spooler's `media` option).
+/// The IPP/PWG 5101.1 media name of a Layout › Size paper (the spooler's `media` option), when the
+/// sheet has a standard one.
 pub fn pwg_media(paper: &str) -> Option<&'static str> {
     Some(match paper {
         "Letter" => "na_letter_8.5x11in",
@@ -136,14 +137,42 @@ pub fn pwg_media(paper: &str) -> Option<&'static str> {
         "A3" => "iso_a3_297x420mm",
         "A4" => "iso_a4_210x297mm",
         "A5" => "iso_a5_148x210mm",
+        "A6" => "iso_a6_105x148mm",
         "B4 (JIS)" => "jis_b4_257x364mm",
         "B5 (JIS)" => "jis_b5_182x257mm",
+        "B6 (JIS)" => "jis_b6_128x182mm",
         "Tabloid" => "na_ledger_11x17in",
         "Statement" => "na_invoice_5.5x8.5in",
         "Envelope #10" => "na_number-10_4.125x9.5in",
         "Envelope DL" => "iso_dl_110x220mm",
+        // The Japanese sheets an IPP/PWG 5101.1 name matches exactly: はがき, 往復はがき,
+        // 封筒 長形3号/長形4号 and 角形2号/角形3号. 角形20, 四六判 and 名刺 have no name.
+        "Japanese Postcard" => "jpn_hagaki_100x148mm",
+        "Japanese Postcard (Double)" => "jpn_oufuku_148x200mm",
+        "Japanese Envelope #3" => "jpn_chou3_120x235mm",
+        "Japanese Envelope #4" => "jpn_chou4_90x205mm",
+        "Japanese Envelope Kaku #2" => "jpn_kaku2_240x332mm",
+        "Japanese Envelope Kaku #3" => "jpn_kaku3_216x277mm",
         _ => return None,
     })
+}
+
+/// Points to millimetres to a tenth: the paper presets without a PWG name are millimetre sizes.
+fn millimetres(pt: f32) -> f32 {
+    (pt * 25.4 / 72.0 * 10.0).round() / 10.0
+}
+
+/// The CUPS `media` option for a Layout › Size paper. A sheet with a PWG name gets that name; one
+/// without (`Japanese Envelope Kaku #20`, `Shiroku-ban`, the business card…) is asked for as the
+/// custom size CUPS documents, `Custom.<width>x<height>mm`, so Scale to paper size picks the sheet
+/// the pages were laid out on instead of the queue's default. `None` for a name that is not a
+/// paper preset.
+pub fn cups_media(paper: &str) -> Option<String> {
+    if let Some(media) = pwg_media(paper) {
+        return Some(media.to_owned());
+    }
+    let (_, w, h) = wordcraft_geom::paper_by_name(paper)?;
+    Some(format!("Custom.{}x{}mm", millimetres(w), millimetres(h)))
 }
 
 /// Build the upstream page-range/markup PDF and hand it to the chosen host print flow.
@@ -199,8 +228,8 @@ pub fn submit(app: &mut crate::WordApp, params: &serde_json::Value) -> Result<se
                 lay.pages.first().is_some_and(|p| p.w > p.h)
             };
             // Scale to paper size: ask the printer for that paper too, so it takes it from the right tray.
-            if let Some(media) = wordcraft_engine::print::paper(params).ok().flatten().and_then(|(name, _, _)| pwg_media(name)) {
-                print_options.push(("media".into(), media.into()));
+            if let Some(media) = wordcraft_engine::print::paper(params).ok().flatten().and_then(|(name, _, _)| cups_media(name)) {
+                print_options.push(("media".into(), media));
             }
             if is_landscape {
                 print_options.push(("orientation-requested".into(), "4".into()));
@@ -234,10 +263,33 @@ mod tests {
     /// Every Layout › Size paper has a printer media name (#2108) the spooler accepts as a keyword.
     #[test]
     fn every_paper_size_has_a_media_name() {
-        for (name, _, _) in wordcraft_geom::PAPER_SIZES {
-            let media = super::pwg_media(name).unwrap_or_else(|| panic!("{name} has no media name"));
+        // Every preset asks the queue for its own sheet: the PWG name where the sheet has one, and
+        // the CUPS custom-size form (the paper's own millimetre size) for the Japanese sheets that
+        // have no PWG name, so Scale to paper size does not fall back to the queue's default.
+        for (name, w, h) in wordcraft_geom::PAPER_SIZES {
+            let media = super::cups_media(name).unwrap_or_else(|| panic!("{name} has no media name"));
             assert!(media.len() <= 64 && media.bytes().all(|b| b.is_ascii_graphic() && !matches!(b, b'/' | b':' | b'=' | b'"')), "{media}");
+            match super::pwg_media(name) {
+                Some(pwg) => assert_eq!(media, pwg, "{name}"),
+                None => assert_eq!(media, format!("Custom.{}x{}mm", super::millimetres(*w), super::millimetres(*h)), "{name}"),
+            }
+        }
+        // The Japanese sheets with a PWG name of their own ask for it, not for a custom size.
+        for (name, pwg) in [
+            ("Japanese Postcard", "jpn_hagaki_100x148mm"),
+            ("Japanese Postcard (Double)", "jpn_oufuku_148x200mm"),
+            ("Japanese Envelope #3", "jpn_chou3_120x235mm"),
+            ("Japanese Envelope #4", "jpn_chou4_90x205mm"),
+            ("Japanese Envelope Kaku #2", "jpn_kaku2_240x332mm"),
+            ("Japanese Envelope Kaku #3", "jpn_kaku3_216x277mm"),
+        ] {
+            assert_eq!(super::pwg_media(name), Some(pwg), "{name}");
+        }
+        // 封筒 角形20, 四六判 and 名刺 have no PWG name among the registrations.
+        for name in ["Japanese Envelope Kaku #20", "Shiroku-ban", "Japanese Business Card"] {
+            assert_eq!(super::pwg_media(name), None, "{name}");
         }
         assert_eq!(super::pwg_media("Quarto"), None);
+        assert_eq!(super::cups_media("Quarto"), None);
     }
 }
