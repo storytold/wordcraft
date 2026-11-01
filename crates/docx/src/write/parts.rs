@@ -5,7 +5,7 @@ use super::settings::{
 use super::styles::{numbering_xml, styles_xml};
 use super::{
     BTreeMap, Blocks, CT_WML, Document, DocxError, Flavor, HashMap, MAX_VBA_RELATED, PartRels, VBA_PROJECT_PART, VBA_RELATED, W, Writer, embed,
-    glossary, rt, settings_merge, watermark, xml,
+    glossary, mail_merge, rt, settings_merge, watermark, xml,
 };
 
 /// The parts of the package [`write_as`] zips, in order, `[Content_Types].xml` first: (part name
@@ -136,20 +136,16 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
     let mut settings_rels = PartRels::default();
     let template = doc.settings.attached_template.as_deref().map(str::trim).filter(|t| !t.is_empty());
     let template_rel = template.map(|t| settings_rels.add(rt::ATTACHED_TEMPLATE, t, true));
-    push_part(
-        &mut entries,
-        &mut overrides,
-        "word/settings.xml",
-        {
-            let generated = settings_xml(doc, notes_part(doc, &wr, true), notes_part(doc, &wr, false), template_rel.as_deref());
-            match doc.passthrough.get(crate::package::SETTINGS_ORIG) {
-                Some(orig) => settings_merge::merge(orig, &generated).unwrap_or(generated),
-                None => generated,
-            }
-        },
-        &format!("{CT_WML}settings+xml"),
-        settings_rels,
-    );
+    let mail_merge = mail_merge::write(doc, &mut settings_rels, &mut wr.embeds)?;
+    let generated = settings_xml(doc, notes_part(doc, &wr, true), notes_part(doc, &wr, false), template_rel.as_deref(), mail_merge.as_deref());
+    let settings = match doc.passthrough.get(crate::package::SETTINGS_ORIG) {
+        Some(orig) => settings_merge::merge(orig, &generated).unwrap_or(generated),
+        None => generated,
+    };
+    if mail_merge.is_some() {
+        settings_rels = mail_merge::source_relationships(&settings, settings_rels)?;
+    }
+    push_part(&mut entries, &mut overrides, "word/settings.xml", settings, &format!("{CT_WML}settings+xml"), settings_rels);
     rels.add(rt::THEME, "theme/theme1.xml", false);
     push_part(
         &mut entries,

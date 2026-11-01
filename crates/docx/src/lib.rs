@@ -13,6 +13,7 @@ mod crypt;
 mod custom;
 mod flat;
 mod fonts;
+mod mail_merge;
 mod package;
 mod read;
 mod smart_art;
@@ -143,6 +144,9 @@ pub enum DocxError {
     /// A required part is absent.
     #[error("missing part: {0}")]
     MissingPart(String),
+    /// A mail-merge source cannot be retained without losing or misbinding its settings.
+    #[error("cannot preserve mail merge settings: {0}")]
+    MailMerge(String),
     /// A part is not well-formed XML.
     #[error("malformed XML: {0}")]
     Xml(String),

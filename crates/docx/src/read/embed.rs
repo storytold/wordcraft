@@ -237,7 +237,7 @@ impl Reader<'_> {
     }
 
     /// Keep one part's bytes and content type (not its relationships).
-    fn keep_part(&mut self, part: &str) -> bool {
+    pub(super) fn keep_part(&mut self, part: &str) -> bool {
         let lower = part.to_ascii_lowercase();
         if !manifest_field_ok(part) || lower.ends_with(".rels") || lower == "[content_types].xml" || part.eq_ignore_ascii_case(&self.main) {
             log::warn!("docx: not carrying part {part:?} for an embedded object");
