@@ -3,6 +3,9 @@ use crate::Session;
 use serde_json::json;
 use wordcraft_doc::StoryRef;
 
+#[cfg(target_os = "linux")]
+mod soak;
+
 struct Temp(PathBuf);
 impl Temp {
     fn new() -> Self {
