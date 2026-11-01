@@ -196,7 +196,7 @@ impl Reader<'_> {
         let mut t = TableStyleParts::default();
         if let Some(tp) = s.child("w:tblPr") {
             if let Some(b) = tp.child("w:tblBorders") {
-                t.borders = Some(props::borders(b));
+                t.borders = Some(self.pc.borders(b));
             }
             t.fill = tp.child("w:shd").and_then(|e| self.pc.shd_fill(e));
             t.cell_margins = tp.child("w:tblCellMar").map(props::margins);
@@ -210,7 +210,7 @@ impl Reader<'_> {
             let f = PartFormat {
                 chr: c.child("w:rPr").map(|r| self.pc.rpr(r)).unwrap_or_default(),
                 fill: tc.and_then(|p| p.child("w:shd")).and_then(|e| self.pc.shd_fill(e)),
-                borders: tc.and_then(|p| p.child("w:tcBorders")).map(props::borders),
+                borders: tc.and_then(|p| p.child("w:tcBorders")).map(|b| self.pc.borders(b)),
                 align: ppr.as_ref().and_then(|p| p.align),
                 v_align: tc.and_then(|p| p.child_val("w:vAlign")).map(|v| match v {
                     "center" => VAlign::Center,
@@ -229,7 +229,7 @@ impl Reader<'_> {
                     t.fill = f.fill;
                 }
                 if let Some(b) = c.child("w:tblPr").and_then(|p| p.child("w:tblBorders")) {
-                    t.borders = Some(props::borders(b));
+                    t.borders = Some(self.pc.borders(b));
                 }
                 if f.v_align.is_some() {
                     t.regions.insert(part, PartFormat { v_align: f.v_align, ..PartFormat::default() });
