@@ -395,6 +395,105 @@ fn a_click_on_the_ribbon_puts_the_bar_away_until_the_selection_changes() {
     assert!(bar_layer(&h).is_some(), "selecting the same text again brings the bar back");
 }
 
+/// A Navigation result selects its match to show it, so no bar covers it (#5017); the next
+/// selection gets the bar as usual.
+#[test]
+fn a_navigation_result_selects_its_match_without_the_bar() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = bar_over("brown fox");
+    let a = h.state_mut();
+    a.session.view.nav_pane = true;
+    a.ui.nav_tab = "results".into();
+    a.session.run("edit.find", &json!({"text": "lazy"})).unwrap();
+    // Find selects the match itself; the result has to move the selection for the bar to show.
+    a.run("select.text", json!({"text": "brown fox"})).unwrap();
+    steps(&mut h);
+    let at = h.get_by_label_contains("lazy dog").rect().center();
+    h.event(egui::Event::PointerMoved(at));
+    // A hand's press and release land on different frames, as `click_at`'s don't.
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
+        h.step();
+    }
+    steps(&mut h);
+    assert_eq!(h.state().session.selected_text(), "lazy", "the click went to the result");
+    assert!(!visible(h.state()) && bar_layer(&h).is_none(), "no bar over the match");
+    h.state_mut().run("select.text", json!({"text": "quick"})).unwrap();
+    steps(&mut h);
+    assert!(visible(h.state()) && bar_layer(&h).is_some(), "the next selection gets it");
+}
+
+/// Typing in the Navigation search box selects the first match as it goes: no bar there either.
+#[test]
+fn searching_in_the_navigation_pane_brings_up_no_bar() {
+    let mut h = bar_over("brown fox");
+    h.state_mut().session.view.nav_pane = true;
+    h.state_mut().nav_search_focus = true;
+    steps(&mut h);
+    h.event(egui::Event::Text("lazy".into()));
+    steps(&mut h);
+    assert_eq!(h.state().session.selected_text(), "lazy", "the search went to the match");
+    assert!(!visible(h.state()) && bar_layer(&h).is_none(), "no bar over the match");
+}
+
+/// F3 goes to the next match with no dialog or pane involved (review of #5034).
+#[test]
+fn the_find_next_shortcut_brings_up_no_bar() {
+    let mut h = bar_over("brown fox");
+    h.state_mut().run("edit.findNext", json!({"text": "the"})).unwrap();
+    h.state_mut().run("select.text", json!({"text": "brown fox"})).unwrap();
+    steps(&mut h);
+    assert!(visible(h.state()), "a selection in the text gets the bar");
+    h.key_press(egui::Key::F3);
+    steps(&mut h);
+    assert_eq!(h.state().session.selected_text(), "the", "F3 went to the match");
+    assert!(!visible(h.state()) && bar_layer(&h).is_none(), "no bar over the match");
+}
+
+/// A Find that selects nothing leaves the selection the user made its bar (review of #5034).
+#[test]
+fn a_find_that_selects_nothing_leaves_the_bar() {
+    let mut h = bar_over("brown fox");
+    for params in [json!({"text": "nowhere"}), json!({})] {
+        h.state_mut().run("edit.find", params).unwrap();
+        steps(&mut h);
+        assert_eq!(h.state().session.selected_text(), "brown fox", "Find moved nothing");
+        assert!(visible(h.state()) && bar_layer(&h).is_some(), "the bar stays");
+    }
+}
+
+/// The same for a search in the Navigation pane that finds nothing.
+#[test]
+fn a_navigation_search_with_no_match_leaves_the_bar() {
+    let mut h = bar_over("brown fox");
+    h.state_mut().session.view.nav_pane = true;
+    h.state_mut().nav_search_focus = true;
+    steps(&mut h);
+    h.event(egui::Event::Text("nowhere".into()));
+    steps(&mut h);
+    assert_eq!(h.state().session.selected_text(), "brown fox", "the search moved nothing");
+    assert!(visible(h.state()) && bar_layer(&h).is_some(), "the bar stays");
+}
+
+/// Find Next selects its match to show it too, so closing the dialog brings up no bar over it.
+#[test]
+fn a_find_next_match_gets_no_bar_when_the_dialog_closes() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = bar_over("brown fox");
+    h.state_mut().run("ui.dialog", json!({"name": "find"})).unwrap();
+    if let Some(crate::dialogs::Dialog::Find { query, .. }) = &mut h.state_mut().dialog {
+        *query = "lazy".into();
+    }
+    steps(&mut h);
+    let at = h.get_by_label("Find Next").rect().center();
+    click_at(&mut h, at);
+    assert_eq!(h.state().session.selected_text(), "lazy", "Find Next went to the match");
+    let at = h.get_all_by_label("Close").map(|n| n.rect().center()).max_by(|a, b| a.y.total_cmp(&b.y)).expect("the dialog's Close");
+    click_at(&mut h, at);
+    assert!(h.state().dialog.is_none(), "the dialog closed");
+    assert!(!visible(h.state()) && bar_layer(&h).is_none(), "no bar over the match");
+}
+
 /// The ribbon's size list hangs over the page: picking from it is no press in the document, so
 /// the bar stays away (it would cover the list again otherwise).
 #[test]

@@ -266,10 +266,10 @@ impl Reader<'_> {
     }
 
     pub fn read_section(&mut self, s: &El, rels: &Rels) -> wordcraft_doc::SectionProps {
-        let (mut sp, refs) = sectpr(s);
+        let (mut sp, refs) = sectpr(&self.pc, s);
         // §17.13.5.32: the section's properties before a tracked change (no header references).
         if let Some(ch) = s.child("w:sectPrChange") {
-            let old = ch.child("w:sectPr").map(|o| sectpr(o).0).unwrap_or_default();
+            let old = ch.child("w:sectPr").map(|o| sectpr(&self.pc, o).0).unwrap_or_default();
             sp.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, ch), old);
         }
         for r in refs {

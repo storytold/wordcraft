@@ -74,7 +74,12 @@ impl WordApp {
             return r;
         }
         let applied = applied_font(id, &params);
+        let before = self.session.sel.clone();
         let r = self.execute_user(id, params);
+        // Find goes to a match to show it, by button or shortcut alike (#5017).
+        if matches!(id, "edit.find" | "edit.findNext" | "edit.findPrevious") && self.session.sel != before {
+            crate::mini_toolbar::put_away(self);
+        }
         // A save error already on the status line is the reason to see; the refusal shows otherwise.
         if let (Some(e), true) = (refused, r.is_ok()) {
             self.status(e);
@@ -245,13 +250,8 @@ impl WordApp {
             self.recovery_seen = true;
             self.sync_document();
         }
-        // An explicit save to the document's own file lets AutoSave keep writing there.
-        if let Ok(v) = &r
-            && matches!(id, "file.save" | "file.saveAs")
-            && v.get("saved").and_then(Value::as_bool) == Some(true)
-            && v.get("path").and_then(Value::as_str).map(std::path::Path::new) == self.session.path.as_deref()
-        {
-            self.autosave_path = self.session.path.clone();
+        if let Ok(v) = &r {
+            self.note_file_on_disk(id, &params, v);
         }
         // A renamed file is the same file: AutoSave keeps covering it, and Recent drops the old name.
         if r.is_ok()
@@ -260,6 +260,9 @@ impl WordApp {
         {
             if self.autosave_path.as_ref() == Some(&old) {
                 self.autosave_path = self.session.path.clone();
+            }
+            if self.read_from.as_ref() == Some(&old) {
+                self.read_from = self.session.path.clone();
             }
             let old = old.to_string_lossy();
             self.ui.recent.retain(|r| *r != old);
@@ -343,6 +346,25 @@ impl WordApp {
             self.ui.backstage = false;
         }
         r
+    }
+
+    /// Which file on disk the document is in, after `file.save`, `file.saveAs` or `file.open`.
+    fn note_file_on_disk(&mut self, id: &str, params: &Value, v: &Value) {
+        // An explicit save to the document's own file lets AutoSave keep writing there.
+        if matches!(id, "file.save" | "file.saveAs")
+            && v.get("saved").and_then(Value::as_bool) == Some(true)
+            && v.get("path").and_then(Value::as_str).map(std::path::Path::new) == self.session.path.as_deref()
+        {
+            self.autosave_path = self.session.path.clone();
+            self.read_from = self.session.path.clone();
+        }
+        // A file read from disk may have AutoSave turned on for it; one opened from bytes only
+        // names a file it never read.
+        // `file.open` without a path only asks for the picker, and `data` that isn't a string is
+        // ignored (the file is read from disk).
+        if id == "file.open" && params.get("path").and_then(Value::as_str).is_some() && v.get("alreadyOpen").and_then(Value::as_bool) == Some(false) {
+            self.read_from = if params.get("data").and_then(Value::as_str).is_some() { None } else { self.session.path.clone() };
+        }
     }
 
     fn after_command(&mut self, id: &str) {
@@ -752,6 +774,8 @@ impl WordApp {
                 self.canvas.open_url = Some("https://discord.gg/artcraft".into());
                 json!({})
             }
+            // File › Options › Agents' Copy buttons.
+            "ui.copyMcpSetup" => return Some(options::copy_mcp_setup(self, p)),
             "ui.caretAnimation" => {
                 // File › Options › Advanced › Animation: `value` true or false turns the caret's
                 // glide and fading blink on or off; no value reads it.
@@ -781,6 +805,16 @@ impl WordApp {
                     Some(_) => return Some(Err("`value` must be true or false".into())),
                 }
                 json!({"startScreen": self.ui.start_screen})
+            }
+            "ui.updateCheck" => {
+                // File › Options › General › Start-up (#5053): `value` true or false turns the
+                // check for a newer release at start-up on or off; no value reads it.
+                match p.get("value") {
+                    None => {}
+                    Some(Value::Bool(on)) => self.ui.update_check = *on,
+                    Some(_) => return Some(Err("`value` must be true or false".into())),
+                }
+                json!({"updateCheck": self.ui.update_check})
             }
             // Shape Format › Text › Create Link: the next click on an empty text box links the
             // selected box to it (`shape.link` with that box as the target); Esc cancels.
@@ -1037,8 +1071,10 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.fileBrowser"
             | "ui.makeDefaultApp"
             | "ui.discord"
+            | "ui.copyMcpSetup"
             | "ui.caretAnimation"
             | "ui.startScreen"
+            | "ui.updateCheck"
             | "ui.checkForUpdates"
     ) || id.starts_with("help.")
 }

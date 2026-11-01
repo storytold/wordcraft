@@ -10936,7 +10936,7 @@ fn ink_member_of_a_group_draws_its_fallback_picture() {
     use std::sync::Arc;
     use wordcraft_doc::graphic::{Graphic, GraphicItem, GraphicKind};
     use wordcraft_doc::para::{Float, GroupChild};
-    let items = vec![GraphicItem::Image { rect: [0.0, 0.0, 60.0, 30.0], media: "preview".into() }];
+    let items = vec![GraphicItem::Image { rect: [0.0, 0.0, 60.0, 30.0], media: "preview".into(), crop: [0.0; 4] }];
     let ink = InlineObject::Graphic {
         w: 60.0,
         h: 30.0,
@@ -10972,6 +10972,39 @@ fn ink_member_of_a_group_draws_its_fallback_picture() {
     let [r] = found.as_slice() else { panic!("ink preview not drawn: {found:?}") };
     assert!((r.x - (frame.x + 20.0)).abs() < 0.01 && (r.y - (frame.y + 30.0)).abs() < 0.01, "{r:?} in {frame:?}");
     assert!((r.w - 60.0).abs() < 0.01 && (r.h - 30.0).abs() < 0.01, "{r:?}");
+}
+
+/// A graphic shown by its fallback picture draws that picture's crop (review of #4713).
+#[test]
+fn graphic_fallback_picture_draws_its_crop() {
+    use crate::display::Draw;
+    use std::sync::Arc;
+    use wordcraft_doc::graphic::{Graphic, GraphicItem, GraphicKind};
+    let crop = [0.1, 0.0, 0.2, 0.0];
+    let items = vec![GraphicItem::Image { rect: [0.0, 0.0, 60.0, 30.0], media: "preview".into(), crop }];
+    let model = InlineObject::Graphic {
+        w: 60.0,
+        h: 30.0,
+        alt: String::new(),
+        float: Default::default(),
+        graphic: Arc::new(Graphic { kind: GraphicKind::Model3d, items, w: 60.0, h: 30.0, ..Default::default() }),
+    };
+    let mut d = Document::from_text("Text by the model.");
+    d.insert_object(&Pos::body(0, 0), model, &Default::default()).unwrap();
+    let l = lay(&d);
+    fn crops(draws: &[Draw], out: &mut Vec<[f32; 4]>) {
+        for d in draws {
+            match d {
+                Draw::Image { media, crop, .. } if media == "preview" => out.push(*crop),
+                Draw::Rotated { items, .. } | Draw::Clip { items, .. } => crops(items, out),
+                Draw::Figure { draws, .. } => crops(draws, out),
+                _ => {}
+            }
+        }
+    }
+    let mut found = Vec::new();
+    crops(&crate::display::page_display(&d, &l.pages[0], &Default::default()), &mut found);
+    assert_eq!(found, [crop]);
 }
 
 /// The word being typed gets no spelling squiggle until the caret leaves it (#1552): only in the

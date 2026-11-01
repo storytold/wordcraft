@@ -174,7 +174,7 @@ pub fn page(app: &mut WordApp, ui: &mut Ui) {
                 "language" => language(app, ui),
                 "accessibility" => accessibility(app, ui),
                 "advanced" => advanced(app, ui),
-                "agents" => agents(ui),
+                "agents" => agents(app, ui),
                 _ => general(app, ui),
             }
         });
@@ -207,7 +207,8 @@ fn flag(app: &mut WordApp, ui: &mut Ui, label: &str, key: &str, value: bool) {
 }
 
 /// Draws General options: interface theme and size, mini toolbar, dark page, community button and
-/// default apps; the Start screen; and personalization such as user name and initials.
+/// default apps; the Start screen and the update check; and personalization such as user name and
+/// initials.
 fn general(app: &mut WordApp, ui: &mut Ui) {
     section(ui, "Interface");
     theme_picker(app, ui);
@@ -234,6 +235,17 @@ fn general(app: &mut WordApp, ui: &mut Ui) {
         .changed()
     {
         let _ = app.run("ui.startScreen", json!({"value": start}));
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let mut check = app.ui.update_check;
+        if ui
+            .checkbox(&mut check, tl!("Check for updates when WordCraft starts"))
+            .on_hover_text(tl!("Off: WordCraft doesn't look for new versions by itself. Help › Check for Updates still works."))
+            .changed()
+        {
+            let _ = app.run("ui.updateCheck", json!({"value": check}));
+        }
     }
     ui.add_space(8.0);
     section(ui, "Personalize");
@@ -642,9 +654,125 @@ fn templates_folder(app: &mut WordApp, ui: &mut Ui) {
     note(ui, "File › New lists the .dotx and .dotm templates here under Personal; Save as Word Template starts here.");
 }
 
-fn agents(ui: &mut Ui) {
-    section(ui, "Agents");
-    ui.label(tl!("Every command is available to scripts and AI agents: run `wordcraft-cli mcp` for an MCP server, or start the app with `--control <port>` for the JSON control channel."));
+/// File › Options › Agents: how an AI app on this computer starts WordCraft's MCP server, ready to
+/// copy. The app runs the server itself, so nothing here signs in anywhere; the command is
+/// [`crate::Services::mcp_command`], or plain `wordcraft-cli mcp` where none was found.
+fn agents(app: &mut WordApp, ui: &mut Ui) {
+    section(ui, "AI apps");
+    if cfg!(target_arch = "wasm32") {
+        ui.label(tl!("AI apps on your computer can write and edit documents through the MCP server of the WordCraft desktop app."));
+    } else {
+        ui.label(tl!(
+            "An AI app on this computer can write and edit documents with WordCraft's commands. Add WordCraft's MCP server to the app once: the app starts it when needed, and there is nothing to sign in to."
+        ));
+        let found = app.services.mcp_command.clone();
+        if found.is_none() {
+            note(
+                ui,
+                "No wordcraft-cli was found beside this copy of WordCraft. Download the command-line tool for your system from the releases page (on a Mac, wordcraft-cli-…-macos-universal.zip) and put it on your PATH.",
+            );
+            ui.hyperlink_to(tl!("WordCraft releases"), "https://github.com/storytold/wordcraft/releases");
+        }
+        for (client, title, text) in agent_setups(found) {
+            copy_box(app, ui, client, title, &text);
+        }
+        ui.add_space(6.0);
+        ui.label(tl!(
+            "Using a local model, for example with Ollama? Choose a model that supports tools; Ollama's model library marks them with a tools label. A model without tool support can chat, but it can't change your documents. Ollama also needs a helper app such as ollmcp, which reads the JSON setup above."
+        ));
+        ui.add_space(6.0);
+        note(
+            ui,
+            "The server opens and saves document files itself. For an AI app to work in a window you have open, start WordCraft with --control 7981 and add --connect 127.0.0.1:7981 after mcp.",
+        );
+    }
+    ui.add_space(8.0);
+    section(ui, "Scripts");
+    ui.label(tl!("Scripts can drive the app through the JSON control channel: start WordCraft with `--control <port>`."));
+}
+
+/// The Agents pane's setups (the `ui.copyMcpSetup` client, a title, then the text to copy) for the
+/// server command `found`, or `wordcraft-cli mcp` on the PATH. Commands and JSON, never
+/// translated; the i18n audit exempts them.
+pub(crate) fn agent_setups(found: Option<Vec<String>>) -> [(&'static str, &'static str, String); 3] {
+    let command = found.unwrap_or_else(|| vec!["wordcraft-cli".into(), "mcp".into()]);
+    let line = shell_line(&command, cfg!(windows));
+    [
+        ("claudeCode", "Claude Code", format!("claude mcp add --scope user wordcraft -- {line}")),
+        ("codex", "Codex", format!("codex mcp add wordcraft -- {line}")),
+        ("json", "Claude Desktop, Cursor, LM Studio and other apps set up with a JSON file", mcp_json(&command)),
+    ]
+}
+
+/// The setup whose Copy button says Copied (egui's temporary data).
+fn copied_id() -> egui::Id {
+    egui::Id::unique("options_agents_copied")
+}
+
+/// `ui.copyMcpSetup {"client": "claudeCode" | "codex" | "json"}`: puts that setup for this install's
+/// MCP server on the clipboard and returns it as `text`. Only these setups, never arbitrary text.
+pub(crate) fn copy_mcp_setup(app: &mut WordApp, p: &Value) -> Result<Value, String> {
+    let client = p.get("client").and_then(Value::as_str).unwrap_or_default();
+    let (_, _, text) = agent_setups(app.services.mcp_command.clone())
+        .into_iter()
+        .find(|(c, _, _)| *c == client)
+        .ok_or("`client` must be \"claudeCode\", \"codex\" or \"json\"")?;
+    if let Some(ctx) = &app.ctx {
+        ctx.copy_text(text.clone());
+        ctx.data_mut(|d| d.insert_temp(copied_id(), text.clone()));
+    }
+    Ok(json!({"client": client, "text": text}))
+}
+
+/// A titled snippet in a box, with a Copy button that says Copied once it has copied this one.
+fn copy_box(app: &mut WordApp, ui: &mut Ui, client: &str, title: &str, text: &str) {
+    let t = Tokens::get(ui.ctx());
+    let copied = ui.data(|d| d.get_temp::<String>(copied_id())).is_some_and(|c| c == text);
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(tl!(title)).font(semibold(13.0)));
+        let resp = ui.button(if copied { tl!("Copied") } else { tl!("Copy") });
+        // Three buttons say Copy; screen readers hear which one.
+        let spoken = format!("{} {}", if copied { tl!("Copied") } else { tl!("Copy") }, tl!(title));
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &spoken));
+        if resp.clicked()
+            && let Err(e) = app.run("ui.copyMcpSetup", json!({"client": client}))
+        {
+            app.status(e);
+        }
+    });
+    egui::Frame::new().fill(t.input).stroke(egui::Stroke::new(1.0, t.input_border)).corner_radius(4.0).inner_margin(6.0).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.add(egui::Label::new(RichText::new(text).monospace()).selectable(true));
+    });
+}
+
+/// `args` as one line to paste into a terminal. Windows: words with anything but letters, digits
+/// and `-_./:\=@+,` go in double quotes (a Windows path can't hold one). Elsewhere such words go
+/// in single quotes, a quote inside written `'\''`.
+fn shell_line(args: &[String], windows: bool) -> String {
+    let plain =
+        |a: &String, extra: &str| !a.is_empty() && a.chars().all(|c| c.is_ascii_alphanumeric() || "-_./:=@+,".contains(c) || extra.contains(c));
+    let word = |a: &String| match (windows, plain(a, if windows { "\\" } else { "" })) {
+        (_, true) => a.clone(),
+        (true, false) => format!("\"{a}\""),
+        (false, false) => format!("'{}'", a.replace('\'', r"'\''")),
+    };
+    args.iter().map(word).collect::<Vec<_>>().join(" ")
+}
+
+/// The `mcpServers` entry that apps set up with a JSON file (Claude Desktop, Cursor, LM Studio…)
+/// read: `command` is the program, `args` the rest. A struct keeps `command` first, as their
+/// guides write it (a JSON object would sort the keys).
+fn mcp_json(command: &[String]) -> String {
+    #[derive(Serialize)]
+    struct Server<'a> {
+        command: &'a str,
+        args: &'a [String],
+    }
+    let Some((program, args)) = command.split_first() else { return String::new() };
+    let servers = std::collections::BTreeMap::from([("wordcraft", Server { command: program, args })]);
+    serde_json::to_string_pretty(&std::collections::BTreeMap::from([("mcpServers", servers)])).unwrap_or_default()
 }
 
 /// Interface theme: Light, Dark, or follow the system's appearance (#115).

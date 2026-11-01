@@ -274,6 +274,9 @@ pub struct UiState {
     /// File › Options › General: start on File › Home (Blank document, templates, Recent) when
     /// the app opens without a document (#766); on, as in Word. See [`WordApp::start_screen`].
     pub start_screen: bool,
+    /// File › Options › General: look for a newer release when the app starts (on; #5053).
+    /// Help › Check for Updates works either way.
+    pub update_check: bool,
     /// File › Options › Display: print the page colour (off, as in Word).
     pub print_backgrounds: bool,
     /// File › Options › Display: update fields (dates, page numbers, SEQ…) before printing.
@@ -352,6 +355,7 @@ impl Default for UiState {
             mini_toolbar: true,
             alignment_guides: true,
             start_screen: true,
+            update_check: true,
             print_backgrounds: false,
             update_fields_before_print: false,
             dictionary: Vec::new(),
@@ -597,6 +601,9 @@ pub struct WordApp {
     /// there. A file that was merely opened isn't rewritten until the user saves it: saving drops
     /// whatever WordCraft can't represent (content controls, charts, macros…).
     autosave_path: Option<std::path::PathBuf>,
+    /// The file on disk the document was read from or saved to. A document opened from bytes
+    /// (`file.open` with `data`) only names a file, so the AutoSave switch can't cover it.
+    read_from: Option<std::path::PathBuf>,
     /// Web: saves the browser's picker hasn't finished yet ([`async_saves`], #1315).
     saves_in_flight: Vec<SaveInFlight>,
     /// Web: the command a Save Changes prompt held back until its picker save ends (#1315).

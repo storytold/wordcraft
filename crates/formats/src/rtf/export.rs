@@ -235,7 +235,9 @@ impl Writer {
         // leaks the reader's NTLM credentials.
         match f.link.as_deref().filter(|l| wordcraft_doc::link::is_safe_href(l)) {
             Some(l) => {
-                out.push_str(&format!("{{\\field{{\\*\\fldinst{{HYPERLINK \"{}\"}}}}{{\\fldrslt{{{}}}}}}}", esc(&l.replace('"', "%22")), body));
+                // In a field's quotes `\\` is one backslash; a quote is stored as `%22`.
+                let target = l.replace('\\', "\\\\").replace('"', "%22");
+                out.push_str(&format!("{{\\field{{\\*\\fldinst{{HYPERLINK \"{}\"}}}}{{\\fldrslt{{{}}}}}}}", esc(&target), body));
             }
             None => out.push_str(&body),
         }
