@@ -5084,6 +5084,56 @@ fn justified_lines_shrink_spaces_in_word_2013_mode() {
     }
 }
 
+/// Spaces before a line's first character keep their width in justified and distributed lines:
+/// Thai official letters indent their paragraphs with a run of spaces. Measured in Word (left,
+/// `both`, `distribute` and `thaiDistribute`, Thai and Latin text, spaces at the paragraph start,
+/// after a line break and after a tab): the first character sits where it does left-aligned, and
+/// only the spaces between words stretch. WordCraft stretched the leading spaces too, so the
+/// first character of a justified line moved right by up to the line's whole slack. A
+/// distributed line also counted the space it wrapped at, so its text stopped short of the margin.
+#[test]
+fn leading_spaces_keep_their_width_in_justified_lines() {
+    let spaces = " ".repeat(20);
+    let body = "We tie the spend to a pipe and to the books, so it is in an ad hoc view of all of it. ".repeat(4);
+    // `hidden` (zero-width hidden text before the spaces) and `float` (a floating shape anchored
+    // before them): Word ignores those, and a bookmark, there too; the first character is still
+    // the one after the spaces.
+    let first_x = |align: Align, hidden: &str, float: bool| {
+        let mut d = Document::from_text(&format!("{hidden}{spaces}{body}"));
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.align = Some(align)).unwrap();
+        if !hidden.is_empty() {
+            d.format_range(&Pos::body(0, 0), &Pos::body(0, hidden.len()), &|c| c.hidden = Some(true)).unwrap();
+        }
+        if float {
+            d.insert_object(&Pos::body(0, 0), rect_shape(20.0, 20.0, page_float(400.0, 600.0)), &Default::default()).unwrap();
+        }
+        let text = d.body[0].as_para().unwrap().text.clone();
+        let lead = text.len() - body.len();
+        let l = lay(&d);
+        let (para, x0) =
+            l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, x, .. } = it { Some((para.clone(), *x)) } else { None }).unwrap();
+        assert!(para.lines.len() > 1, "the paragraph wraps");
+        let line = &para.lines[0];
+        // The first line's last character (ASCII here): its index and left and right positions.
+        let end = line.start + text[line.start..line.stop].trim_end().len();
+        (para.x_of(0, lead).unwrap(), end, para.x_of(0, end - 1).unwrap() + x0, para.x_of(0, end).unwrap() + x0)
+    };
+    for (hidden, float) in [("", false), ("hidden", false), ("", true)] {
+        let (left, left_end, left_from, left_to) = first_x(Align::Left, hidden, float);
+        for align in [Align::Justify, Align::Distribute] {
+            let (x, end, from, _) = first_x(align, hidden, float);
+            let case = format!("{align:?} hidden {hidden:?} float {float}");
+            assert!((x - left).abs() < 0.01, "{case}: the first character is at {x}, left-aligned at {left}");
+            assert_eq!(end, left_end, "{case}: the line breaks where it does left-aligned");
+            assert!(from > left_from + 1.0, "{case}: the line is still stretched ({from} vs {left_from})");
+            // The line ends with the space it wrapped at; its last character, keeping its own
+            // advance, still ends at the margin: no gap is left after it.
+            let ink_end = from + (left_to - left_from);
+            assert!((ink_end - 540.0).abs() < 0.05, "{case}: the line's last character ends at {ink_end}, not the margin");
+        }
+    }
+}
+
 /// Measured in Word for Mac (compatibility mode 15, justified paragraphs of one repeated word,
 /// the right indent leaving room for N words plus one more that fits only if the spaces shrink):
 /// the spaces give up at most a quarter of their width, and a word with the space before it may
@@ -5171,6 +5221,30 @@ fn justified_line_ending_in_line_break_is_stretched() {
     let kept = ends(true);
     assert_eq!(kept.len(), 2, "{kept:?}");
     assert!(kept[0] < 400.0, "doNotExpandShiftReturn keeps the line before the break short: {}", kept[0]);
+}
+
+/// A distributed line that ends in a manual line break stretches its characters to the margin, as
+/// in Word (measured with a synthetic `distribute` paragraph): the break itself takes no gap.
+#[test]
+fn distributed_line_ending_in_line_break_reaches_the_margin() {
+    let first = "We tie the spend";
+    let text = format!("{first}\nto a pipe");
+    // The left edge of the first line's last character and the position after it, on the page.
+    let last = |align: Align| {
+        let mut d = Document::from_text("");
+        let mut p = wordcraft_doc::Paragraph::with_text(&text, Default::default());
+        p.props = ParaProps { align: Some(align), ..Default::default() };
+        d.body = vec![wordcraft_doc::para_block(p)];
+        let l = lay(&d);
+        let (para, x) =
+            l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, x, .. } = it { Some((para.clone(), *x)) } else { None }).unwrap();
+        (para.x_of(0, first.len() - 1).unwrap() + x, para.x_of(0, first.len()).unwrap() + x)
+    };
+    let (left_from, left_to) = last(Align::Left);
+    let (from, _) = last(Align::Distribute);
+    // The last character keeps its own advance and ends at the margin: no gap is left after it.
+    let ink_end = from + (left_to - left_from);
+    assert!((ink_end - 540.0).abs() < 0.05, "the line's last character ends at {ink_end}, not the margin");
 }
 
 #[test]
