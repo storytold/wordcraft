@@ -1,5 +1,7 @@
 //! Hit testing and caret geometry.
 
+use std::collections::HashMap;
+
 use wordcraft_doc::para::Wrap;
 use wordcraft_doc::props::TextDirection;
 use wordcraft_doc::{Document, Path, Pos, StoryRef};
@@ -7,6 +9,12 @@ use wordcraft_geom::{Point, Rect};
 
 use crate::para::{PARA_MARK_WIDTH, ParaLayout};
 use crate::{DocLayout, Page, Placed, cell_clip, clipped_cells};
+
+#[derive(Clone, Copy)]
+enum CaretGeometry {
+    Intrinsic,
+    Visible,
+}
 
 struct EquationPlacement {
     geometry: EquationBox,
@@ -75,6 +83,36 @@ pub struct ObjectHit {
     pub wrap: Wrap,
     /// Where column- and paragraph-relative offsets start (see [`Placed::Object`]).
     pub origin: Point,
+}
+
+/// Object positions in one layout, retaining each page occurrence for page-hinted lookups.
+/// Build once for a batch of lookups; rebuild when the layout changes.
+pub struct ObjectIndex {
+    by_pos: HashMap<Pos, Vec<ObjectHit>>,
+}
+
+impl ObjectIndex {
+    /// Like [`DocLayout::object`]: prefer `page_hint`, otherwise the first matching page.
+    pub fn object(&self, pos: &Pos, page_hint: usize) -> Option<&ObjectHit> {
+        let hits = self.by_pos.get(pos)?;
+        hits.binary_search_by_key(&page_hint, |h| h.page).ok().and_then(|i| hits.get(i)).or_else(|| hits.first())
+    }
+}
+
+/// The inputs for a column selection across laid-out lines.
+pub struct ColumnSelection<'a> {
+    /// The selection's first corner.
+    pub start: &'a Pos,
+    /// The selection's opposite corner.
+    pub end: &'a Pos,
+    /// One horizontal edge in page coordinates.
+    pub left: f32,
+    /// The other horizontal edge in page coordinates.
+    pub right: f32,
+    /// The page nearest the selection's starting corner.
+    pub page_hint: usize,
+    /// The maximum number of lines to return.
+    pub max_lines: usize,
 }
 
 impl ObjectHit {
@@ -157,6 +195,93 @@ fn text_at(p: &Page, index: usize, x: f32, y: f32) -> Option<StoryRef> {
     })
 }
 
+/// The pieces of story `story`'s paragraphs on each page, by paragraph, for the pages looked at
+/// so far ([`DocLayout::pieces_in`]).
+struct PartPages<'a> {
+    story: StoryRef,
+    pages: HashMap<usize, HashMap<&'a Path, Vec<(&'a Placed, Option<Rect>)>>>,
+    body_clips: HashMap<usize, crate::Clips>,
+    /// The first page that shows each paragraph, made the first time one is asked for, in one
+    /// walk of the pages (not one walk of them for every paragraph).
+    first: Option<HashMap<&'a Path, usize>>,
+}
+
+impl<'a> PartPages<'a> {
+    fn new(story: StoryRef) -> Self {
+        PartPages { story, pages: HashMap::new(), body_clips: HashMap::new(), first: None }
+    }
+
+    /// The first page of `lay` that shows a piece of the paragraph at `path`.
+    fn first_page(&mut self, lay: &'a DocLayout, path: &Path) -> Option<usize> {
+        let story = self.story;
+        let first = self.first.get_or_insert_with(|| {
+            let mut first: HashMap<&'a Path, usize> = HashMap::new();
+            for (pi, p) in lay.pages.iter().enumerate() {
+                crate::work::steps(1);
+                for it in items_of(p, story) {
+                    if let Placed::Lines { story: s, path, .. } = it
+                        && *s == story
+                    {
+                        first.entry(path).or_insert(pi);
+                    }
+                }
+            }
+            first
+        });
+        first.get(path).copied()
+    }
+
+    /// The pieces of the paragraph at `path` on page `pi` of `lay`, as [`DocLayout::pieces_on`]
+    /// gives them.
+    fn on(&mut self, lay: &'a DocLayout, pi: usize, path: &Path) -> Vec<(usize, &'a Placed, Option<Rect>)> {
+        let Some(p) = lay.pages.get(pi) else { return Vec::new() };
+        crate::work::steps(1);
+        let story = self.story;
+        let index = self.pages.entry(pi).or_insert_with(|| {
+            let mut index: HashMap<&'a Path, Vec<(&'a Placed, Option<Rect>)>> = HashMap::new();
+            for (it, clip) in line_items(p, story) {
+                crate::work::steps(1);
+                if let Placed::Lines { path, .. } = it {
+                    index.entry(path).or_default().push((it, clip));
+                }
+            }
+            index
+        });
+        index.get(path).map(|v| v.iter().map(|(it, clip)| (pi, *it, *clip)).collect()).unwrap_or_default()
+    }
+    fn body(&mut self, lay: &'a DocLayout, path: &Path) -> Vec<(usize, &'a Placed, Option<Rect>)> {
+        let Some(pieces) = lay.index.get(&(StoryRef::Body, path.clone())) else { return Vec::new() };
+        pieces
+            .iter()
+            .filter_map(|&(pi, index)| {
+                crate::work::steps(1);
+                let page = lay.pages.get(pi)?;
+                let item = page.items.get(index)?;
+                let clips = self.body_clips.entry(pi).or_insert_with(|| clipped_cells(&page.items));
+                Some((pi, item, cell_clip(clips, StoryRef::Body, &path.0, index)))
+            })
+            .collect()
+    }
+}
+
+/// The items of `page` that `story`'s pieces are among (each one looked at counted as a step of
+/// [`crate::work`]).
+fn items_of(page: &Page, story: StoryRef) -> Box<dyn Iterator<Item = &Placed> + '_> {
+    let items = story_items(page, story);
+    #[cfg(test)]
+    let items: Box<dyn Iterator<Item = &Placed> + '_> = Box::new(items.inspect(|_| crate::work::steps(1)));
+    items
+}
+
+fn story_items(page: &Page, story: StoryRef) -> Box<dyn Iterator<Item = &Placed> + '_> {
+    match story {
+        StoryRef::Body => Box::new(page.items.iter()),
+        // Headers and footers, and the text boxes in them, are drawn with the page's header and
+        // footer; everything else is in its items.
+        StoryRef::Part(_) => Box::new(page.header.iter().chain(page.footer.iter()).chain(page.items.iter())),
+    }
+}
+
 /// Whether header/footer part `id` has text near (x, y) on the page (its header or footer
 /// lines). Used so an object behind the header text is only grabbed where there's no text,
 /// mirroring `text_at` for the body.
@@ -216,6 +341,31 @@ fn clip_geometry(rect: Rect, clip: Option<Rect>) -> Option<Rect> {
     Some(Rect::new(x, y, right - x, bottom - y))
 }
 
+/// Logical caret in its paragraph frame, before the physical placement and clip.
+fn caret_rect(para: &ParaLayout, li: usize, off: usize) -> Option<Rect> {
+    let line = para.lines.get(li)?;
+    let x = para.x_of(li, off)?;
+    let x = para.caret_limit(li).map_or(x, |limit| x.min(limit));
+    let (asc, desc) = para.caret_metrics(li);
+    let top = (line.baseline - asc).max(line.top);
+    Some(Rect::new(x, top, 0.0, (line.baseline + desc - top).max(4.0)))
+}
+
+/// Reuse one page's clip lookup when validating goal-x destinations.
+fn goal_lines(page: &Page, story: StoryRef, x: f32) -> Vec<LineHit<'_>> {
+    hit_lines(page, story)
+        .into_iter()
+        .filter_map(|(line, clip)| {
+            let off = line.para.off_at_x(line.li, x - line.x);
+            let mut rect = caret_rect(line.para, line.li, off)?;
+            rect.x += line.x;
+            rect.y += line.top - line.para.lines.get(line.li)?.top;
+            clip_geometry(rect, clip)?;
+            Some(line)
+        })
+        .collect()
+}
+
 /// Text ink excludes leading-only intersections. Blank and object lines keep their caret band.
 fn cell_text_band(para: &ParaLayout, li: usize) -> Option<Rect> {
     let line = para.lines.get(li)?;
@@ -250,12 +400,6 @@ fn cell_text_band(para: &ParaLayout, li: usize) -> Option<Rect> {
 /// Turned lines (see [`turned_hit`]) are left out.
 pub fn page_lines(page: &Page, story: StoryRef) -> Vec<LineHit<'_>> {
     hit_lines(page, story).into_iter().map(|(line, _)| line).collect()
-}
-
-#[derive(Clone, Copy)]
-enum Geometry {
-    Visible,
-    Intrinsic,
 }
 
 fn hit_lines(page: &Page, story: StoryRef) -> Vec<(LineHit<'_>, Option<Rect>)> {
@@ -485,6 +629,22 @@ impl DocLayout {
         self.find_object(page_hint, |o| o.story == pos.story && o.path == pos.path && o.off == pos.off)
     }
 
+    /// Index objects once for repeated [`Self::object`] lookups, preserving their selection
+    /// order, including objects repeated on several pages (headers or repeated table rows).
+    pub fn object_index(&self) -> ObjectIndex {
+        let mut by_pos: HashMap<Pos, Vec<ObjectHit>> = HashMap::new();
+        for (i, page) in self.pages.iter().enumerate() {
+            for hit in all_objects(page, i) {
+                let hits = by_pos.entry(hit.pos()).or_default();
+                // all_objects has the same within-page order as find_object; first wins.
+                if hits.last().is_none_or(|prev| prev.page != i) {
+                    hits.push(hit);
+                }
+            }
+        }
+        ObjectIndex { by_pos }
+    }
+
     /// Where the text box showing story `part` is laid out.
     pub fn text_box(&self, part: u32, page_hint: usize) -> Option<ObjectHit> {
         self.find_object(page_hint, |o| o.text_box == Some(part))
@@ -539,16 +699,24 @@ impl DocLayout {
                 })
                 .unwrap_or_default();
         }
+        let mut first = || (0..self.pages.len()).find(|pi| !self.pieces_on(*pi, story, path).is_empty());
+        self.part_pieces(page_hint, &mut first, &mut |pi| self.pieces_on(pi, story, path))
+    }
+
+    /// Pieces of a paragraph of a story part (see [`Self::pieces`]), `on` giving those on a page.
+    fn part_pieces<'a>(
+        &'a self,
+        page_hint: usize,
+        first: &mut dyn FnMut() -> Option<usize>,
+        on: &mut dyn FnMut(usize) -> Vec<(usize, &'a Placed, Option<Rect>)>,
+    ) -> Vec<(usize, &'a Placed, Option<Rect>)> {
         // Headers/footers repeat: prefer the hinted page, else the first that shows the part.
-        let mut order: Vec<usize> = (0..self.pages.len()).collect();
-        if page_hint < order.len() {
-            order.retain(|p| *p != page_hint);
-            order.insert(0, page_hint);
-        }
-        for pi in order {
-            let mut found = self.pieces_on(pi, story, path);
+        let hinted = if page_hint < self.pages.len() { on(page_hint) } else { Vec::new() };
+        let start = if hinted.is_empty() { first() } else { Some(page_hint) };
+        if let Some(pi) = start {
+            let mut found = if hinted.is_empty() { on(pi) } else { hinted };
             if found.is_empty() {
-                continue;
+                return found;
             }
             // A note continued over pages has the rest of the paragraph on the pages before or
             // after (a repeated header shows all of it on every page: one page is enough).
@@ -561,7 +729,7 @@ impl DocLayout {
             let mut k = pi;
             while lo > 0 && k > 0 {
                 k -= 1;
-                let more = self.pieces_on(k, story, path);
+                let more = on(k);
                 if more.is_empty() {
                     break;
                 }
@@ -571,7 +739,7 @@ impl DocLayout {
             let mut k = pi;
             while hi < n && k + 1 < self.pages.len() {
                 k += 1;
-                let more = self.pieces_on(k, story, path);
+                let more = on(k);
                 if more.is_empty() {
                     break;
                 }
@@ -581,6 +749,19 @@ impl DocLayout {
             return found;
         }
         Vec::new()
+    }
+
+    /// [`Self::pieces`] for each of many paragraphs of `pages.story`: a part's pieces on a page
+    /// are looked up in that page's index, made the first time it is looked at, so a selection
+    /// over many header, footer or text box paragraphs walks each page's items once rather than
+    /// once for every paragraph.
+    fn pieces_in<'a>(&'a self, pages: &mut PartPages<'a>, path: &Path, page_hint: usize) -> Vec<(usize, &'a Placed, Option<Rect>)> {
+        if pages.story == StoryRef::Body {
+            return pages.body(self, path);
+        }
+        // The first-page index is made only when the hinted page doesn't show the paragraph.
+        let pages = std::cell::RefCell::new(pages);
+        self.part_pieces(page_hint, &mut || pages.borrow_mut().first_page(self, path), &mut |pi| pages.borrow_mut().on(self, pi, path))
     }
 
     /// Pieces of a paragraph of story part `story` on page `pi`.
@@ -599,44 +780,40 @@ impl DocLayout {
     }
 
     pub fn caret_on(&self, pos: &Pos, page_hint: usize) -> Option<Caret> {
-        self.caret_for(pos, page_hint, Geometry::Visible)
+        self.caret_for(pos, page_hint, CaretGeometry::Visible)
     }
 
-    /// Intrinsic caret anchor for navigation and scrolling, including fully clipped text.
-    /// Painting and input-method overlays must use `caret_on` instead.
+    /// Intrinsic anchor for scrolling and logical page lookup. Painting uses caret_on.
     pub fn caret_anchor_on(&self, pos: &Pos, page_hint: usize) -> Option<Caret> {
-        self.caret_for(pos, page_hint, Geometry::Intrinsic)
+        self.caret_for(pos, page_hint, CaretGeometry::Intrinsic)
     }
 
-    fn caret_for(&self, pos: &Pos, page_hint: usize, geometry: Geometry) -> Option<Caret> {
+    // Navigation starts at the logical caret even when its ink is clipped away.
+    fn caret_for(&self, pos: &Pos, page_hint: usize, geometry: CaretGeometry) -> Option<Caret> {
         for (pi, it, clip) in self.pieces(pos.story, &pos.path, page_hint) {
-            let clip = match geometry {
-                Geometry::Visible => clip,
-                Geometry::Intrinsic => None,
-            };
             let Placed::Lines { para, l0, l1, x, y, turn, .. } = it else { continue };
             let li = para.line_of(pos.off);
             if li < *l0 || li >= *l1 {
                 continue;
             }
             let first = para.lines.get(*l0)?;
-            let l = para.lines.get(li)?;
-            if clip.is_some()
+            if matches!(geometry, CaretGeometry::Visible)
+                && clip.is_some()
                 && cell_text_band(para, li)
                     .is_some_and(|r| clip_geometry(crate::turn_rect(*turn, *x, *y, Rect::new(r.x, r.y - first.top, r.w, r.h)), clip).is_none())
             {
                 continue;
             }
-            let cx = para.x_of(li, pos.off)?;
-            let cx = para.caret_limit(li).map_or(cx, |m| cx.min(m));
-            // In the lines' own frame (turned text turns it onto the page).
-            let top = l.top - first.top;
-            // Caret spans the text height (ascent + descent), not the full line spacing.
-            let (asc, desc) = para.caret_metrics(li);
-            let base = top + (l.baseline - l.top);
-            let ctop = (base - asc).max(top);
-            let r = crate::turn_rect(*turn, *x, *y, Rect::new(cx, ctop, 0.0, (base + desc - ctop).max(4.0)));
-            let Some(r) = clip_geometry(r, clip) else { continue };
+            let mut r = caret_rect(para, li, pos.off)?;
+            r.y -= first.top;
+            let r = crate::turn_rect(*turn, *x, *y, r);
+            let r = match geometry {
+                CaretGeometry::Intrinsic => r,
+                CaretGeometry::Visible => {
+                    let Some(r) = clip_geometry(r, clip) else { continue };
+                    r
+                }
+            };
             return Some(Caret { page: pi, x: r.x, top: r.y, height: r.h, width: r.w });
         }
         None
@@ -644,16 +821,10 @@ impl DocLayout {
 
     /// The position one line up (`dir < 0`) or down from `pos`, keeping `goal_x` (page x).
     pub fn vertical(&self, pos: &Pos, goal_x: Option<f32>, dir: i32, page_hint: usize) -> Option<(Pos, f32)> {
-        let c = self.caret_anchor_on(pos, page_hint)?;
+        let c = self.caret_for(pos, page_hint, CaretGeometry::Intrinsic)?;
         let gx = goal_x.unwrap_or(c.x);
-        // A retained object line can expose leading while its selected caret stays clipped.
-        let visible = |l: &LineHit<'_>, page| {
-            let off = l.para.off_at_x(l.li, gx - l.x);
-            let target = Pos { story: l.story, path: l.path.clone(), off };
-            self.caret_on(&target, page).is_some_and(|caret| caret.page == page)
-        };
         let page = self.pages.get(c.page)?;
-        let lines = page_lines(page, pos.story);
+        let lines = goal_lines(page, pos.story, gx);
         let cur_mid = c.top + c.height / 2.0;
         let cands: Vec<&LineHit> = lines
             .iter()
@@ -665,7 +836,6 @@ impl DocLayout {
                     mid > cur_mid + 1.0 && l.top >= c.top + c.height * 0.5
                 }
             })
-            .filter(|l| visible(l, c.page))
             .collect();
         let across: Vec<&LineHit> = cands.iter().copied().filter(|l| gx >= l.left - 2.0 && gx <= l.right + 2.0).collect();
         let target = match nearest(&across, dir) {
@@ -690,9 +860,8 @@ impl DocLayout {
         // Next/previous page.
         let np = if dir < 0 { c.page.checked_sub(1)? } else { c.page + 1 };
         let p = self.pages.get(np)?;
-        let lines = page_lines(p, pos.story);
-        let candidates = lines.iter().filter(|l| visible(l, np));
-        let l = if dir < 0 { candidates.max_by(|a, b| a.top.total_cmp(&b.top))? } else { candidates.min_by(|a, b| a.top.total_cmp(&b.top))? };
+        let lines = goal_lines(p, pos.story, gx);
+        let l = if dir < 0 { lines.iter().max_by(|a, b| a.top.total_cmp(&b.top))? } else { lines.iter().min_by(|a, b| a.top.total_cmp(&b.top))? };
         let off = l.para.off_at_x(l.li, gx - l.x);
         Some((Pos { story: l.story, path: l.path.clone(), off }, gx))
     }
@@ -776,16 +945,18 @@ impl DocLayout {
     /// Column (block) selection: the piece of every line from the line holding `a` to the line
     /// holding `b` (document order) that lies between page x `left` and `right`. One `(start,
     /// end)` pair per line, both in the same paragraph; lines shorter than `left` give an empty
-    /// pair. At most `max` lines.
-    pub fn column_segments(&self, doc: &Document, a: &Pos, b: &Pos, left: f32, right: f32, page_hint: usize, max: usize) -> Vec<(Pos, Pos)> {
+    /// pair. At most `selection.max_lines` lines.
+    pub fn column_segments(&self, doc: &Document, selection: ColumnSelection<'_>) -> Vec<(Pos, Pos)> {
+        let ColumnSelection { start: a, end: b, left, right, page_hint, max_lines } = selection;
         let (a, b) = if a <= b { (a, b) } else { (b, a) };
         let (left, right) = if left <= right { (left, right) } else { (right, left) };
         let mut out = Vec::new();
         if a.story != b.story || !left.is_finite() || !right.is_finite() {
             return out;
         }
+        let mut pages = PartPages::new(a.story);
         for path in doc.paths_between(a, b) {
-            for (_, it, _) in self.pieces(a.story, &path, page_hint) {
+            for (_, it, _) in self.pieces_in(&mut pages, &path, page_hint) {
                 let Placed::Lines { para, l0, l1, x, .. } = it else { continue };
                 let first = if path == a.path { para.line_of(a.off) } else { 0 };
                 let last = if path == b.path { para.line_of(b.off) } else { usize::MAX };
@@ -793,7 +964,7 @@ impl DocLayout {
                     if li < first || li > last {
                         continue;
                     }
-                    if out.len() >= max {
+                    if out.len() >= max_lines {
                         return out;
                     }
                     let o0 = para.off_at_x(li, left - x);
@@ -811,8 +982,9 @@ impl DocLayout {
     pub fn selection_rects(&self, doc: &Document, a: &Pos, b: &Pos, page_hint: usize) -> Vec<(usize, Rect)> {
         let (a, b) = if a <= b { (a, b) } else { (b, a) };
         let mut out = Vec::new();
+        let mut pages = PartPages::new(a.story);
         for path in doc.paths_between(a, b) {
-            for (pi, it, clip) in self.pieces(a.story, &path, page_hint) {
+            for (pi, it, clip) in self.pieces_in(&mut pages, &path, page_hint) {
                 let Placed::Lines { para, l0, l1, x, y, turn, .. } = it else { continue };
                 let Some(first) = para.lines.get(*l0) else { continue };
                 // Rectangles in the lines' own frame, turned onto the page.
@@ -881,8 +1053,8 @@ impl DocLayout {
             let l = para.lines.get(li)?;
             let here = para.x_of(li, pos.off)?;
             let mut best: Option<(usize, f32)> = None;
-            for off in para.line_offsets(li) {
-                let Some(x) = para.x_of(li, off) else { continue };
+            for (off, x) in para.line_carets(li) {
+                let Some(x) = x else { continue };
                 let ahead = if left { x < here - 0.01 } else { x > here + 0.01 };
                 let d = (x - here).abs();
                 if ahead && best.is_none_or(|b| d < b.1) {
@@ -975,7 +1147,7 @@ impl DocLayout {
         None
     }
 
-    /// Page index for a body position (first page showing its line).
+    /// Logical page index for a position, including retained text whose ink is clipped.
     pub fn page_of(&self, pos: &Pos) -> Option<usize> {
         self.caret_anchor_on(pos, 0).map(|c| c.page)
     }
@@ -1008,4 +1180,89 @@ fn score(l: &LineHit, x: f32, y: f32) -> f32 {
         0.0
     };
     dy * 4.0 + dx
+}
+
+#[cfg(test)]
+mod object_index_tests {
+    use super::*;
+
+    /// Compare with the ordinary lookup, including repeated rows/parts and within-page ties.
+    #[test]
+    fn indexed_objects_keep_page_hints_and_first_match_order() {
+        let body = Pos::body(0, 3);
+        let header = Pos::new(StoryRef::Part(7), Path(vec![0, 0, 0, 1]), 6);
+        let footer = Pos::new(StoryRef::Part(8), Path(vec![0]), 0);
+        let object = |pos: &Pos, x| Placed::Object {
+            rect: Rect::new(x, 20.0, 40.0, 30.0),
+            spin: wordcraft_geom::Spin::default(),
+            story: pos.story,
+            path: pos.path.clone(),
+            off: pos.off,
+            text_box: None,
+            wrap: Wrap::InFrontOfText,
+            origin: Point::new(5.0, 6.0),
+        };
+        let layout = DocLayout {
+            pages: vec![
+                Page { items: vec![object(&body, 10.0), object(&body, 11.0)], header: vec![object(&header, 12.0)], ..Default::default() },
+                Page::default(),
+                Page {
+                    items: vec![object(&body, 30.0)],
+                    header: vec![object(&header, 31.0), object(&header, 32.0)],
+                    footer: vec![object(&footer, 33.0)],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let index = layout.object_index();
+        for pos in [body, header, footer, Pos::body(99, 0), Pos::new(StoryRef::Part(7), Path(vec![0]), 6)] {
+            for hint in [0, 1, 2, 3, usize::MAX] {
+                assert_eq!(index.object(&pos, hint).cloned(), layout.object(&pos, hint), "{pos:?}, page hint {hint}");
+            }
+        }
+        assert!(DocLayout::default().object_index().object(&Pos::body(0, 0), 0).is_none());
+    }
+}
+
+#[cfg(test)]
+mod clip_navigation_tests {
+    use super::*;
+    use crate::{LayoutCache, LayoutOptions, layout};
+    use wordcraft_doc::props::LineSpacing;
+
+    #[test]
+    fn clipped_anchor_can_navigate() {
+        let mut doc = Document::from_text("LEAD\nFIRST\nSECOND");
+        for index in 0..3 {
+            doc.para_mut(StoryRef::Body, &Path::top(index)).unwrap().props.line_spacing = Some(LineSpacing::Exactly(24.0));
+        }
+        doc.para_mut(StoryRef::Body, &Path::top(1)).unwrap().props.page_break_before = Some(true);
+        let mut lay = layout(&doc, &mut LayoutCache::new(), &LayoutOptions::default());
+        let path = Path(vec![1, 0, 0, 0]);
+        let index = lay.pages[1].items.iter().position(|item| matches!(item, Placed::Lines { path, .. } if *path == Path::top(1))).unwrap();
+        if let Placed::Lines { path: actual, .. } = &mut lay.pages[1].items[index] {
+            *actual = path.clone();
+        }
+        lay.index.remove(&(StoryRef::Body, Path::top(1)));
+        lay.index.insert((StoryRef::Body, path.clone()), vec![(1, index)]);
+        let pos = Pos { story: StoryRef::Body, path, off: 0 };
+        let anchor = lay.caret_for(&pos, 1, CaretGeometry::Intrinsic).unwrap();
+        lay.pages[1].items.push(Placed::Cell {
+            rect: Rect::new(anchor.x, anchor.top + anchor.height + 100.0, 100.0, 1.0),
+            covered: false,
+            table: Path::top(1),
+            row: 0,
+            cell: 0,
+            story: StoryRef::Body,
+            clip: true,
+        });
+        assert!(lay.caret_on(&pos, 1).is_none(), "painting has no visible caret");
+        assert_eq!(lay.caret_for(&pos, 1, CaretGeometry::Intrinsic), Some(anchor), "the navigation anchor stays logical");
+        assert_eq!(lay.page_of(&pos), Some(1), "logical page lookup retains the hidden anchor on page two");
+        let (next, goal) = lay.vertical(&pos, Some(anchor.x), 1, 1).unwrap();
+        assert_eq!(next.path, Path::top(2));
+        assert_eq!(goal, anchor.x);
+        assert!(lay.caret_on(&next, 1).is_some(), "navigation lands on a visible caret");
+    }
 }

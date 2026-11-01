@@ -187,7 +187,7 @@ fn shown_text(s: &mut Session, f: &FieldAt) -> String {
         return String::new();
     };
     let l = s.layout();
-    let page = l.caret(&f.at).and_then(|c| l.pages.get(c.page));
+    let page = l.page_of(&f.at).and_then(|page| l.pages.get(page));
     let section = page.map(|p| (p.section + 1) as u32).unwrap_or(1);
     let section_pages = page
         .map(|p| l.pages.iter().filter(|pg| pg.section == p.section).count() as u32)

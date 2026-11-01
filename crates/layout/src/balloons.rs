@@ -20,8 +20,8 @@ use wordcraft_doc::props::{Border, BorderStyle, CharProps, Rgb, TextColor};
 use wordcraft_doc::{Document, Paragraph, Pos, StoryRef};
 use wordcraft_geom::Rect;
 
-use crate::display::revision_color;
-use crate::{BoxContext, BoxLayout, Ctx, DocLayout, Edges, Placed, fit_box, layout_box, push_para};
+use crate::display::{author_order, revision_color};
+use crate::{BoxInput, BoxLayout, Ctx, DocLayout, Edges, Placed, fit_box, layout_box, push_para};
 
 /// Width of the markup area beside each page (points): the editor's.
 pub const MARKUP_AREA: f32 = 216.0;
@@ -103,17 +103,6 @@ pub fn replies(doc: &Document) -> BTreeMap<u32, Vec<u32>> {
     m
 }
 
-/// The comment authors in order of first appearance (for their colours).
-fn author_index(doc: &Document, author: &str) -> u32 {
-    let mut seen: Vec<&str> = Vec::new();
-    for c in doc.comments.values() {
-        if !seen.contains(&c.author.as_str()) {
-            seen.push(&c.author);
-        }
-    }
-    seen.iter().position(|a| *a == author).unwrap_or(0) as u32
-}
-
 fn author_name(a: &str) -> &str {
     if a.trim().is_empty() { "Author" } else { a }
 }
@@ -132,10 +121,12 @@ pub(crate) fn add(ctx: &mut Ctx, lay: &mut DocLayout) {
     let card_w = MARKUP_AREA - 2.0 * SIDE;
     let inner = card_w - STRIPE - 2.0 * PAD;
     let mut cards: Vec<Card> = Vec::new();
+    // The comment authors in order of first appearance (for their colours), once for every card.
+    let authors = author_order(doc.comments.values().map(|c| c.author.as_str()));
     for (id, pos) in anchors {
         let Some(caret) = lay.caret_on(&pos, 0) else { continue };
         let Some(c) = doc.comments.get(&id) else { continue };
-        let color = revision_color(author_index(doc, &c.author));
+        let color = revision_color(authors.get(c.author.as_str()).copied().unwrap_or(0));
         let mut thread = vec![id];
         thread.extend(threads.get(&id).into_iter().flatten().copied());
         let x = STRIPE + PAD;
@@ -148,7 +139,7 @@ pub(crate) fn add(ctx: &mut Ctx, lay: &mut DocLayout) {
                 // A reply starts: a hairline between it and what it answers.
                 y += 3.0;
                 let border = Border { style: BorderStyle::Single, width: 0.25, color: Some(Rgb(0xC8, 0xC8, 0xC8)), space: 0.0 };
-                items.push(Placed::Rule { x0: x, y0: y, x1: x + inner, y1: y, border });
+                items.push(Placed::Rule { x0: x, y0: y, x1: x + inner, y1: y, border, source: None });
                 y += 3.0;
             }
             // Who wrote it, in their colour.
@@ -158,11 +149,11 @@ pub(crate) fn add(ctx: &mut Ctx, lay: &mut DocLayout) {
             );
             let pl = ctx.para_labelled(&head, inner, None, &[], None);
             let lead = pl.lines.first().map_or(0.0, |l| l.top.max(0.0));
-            push_para(&mut items, story, &[HEADER_PATH], &pl, 0, pl.lines.len(), x, y + lead, inner, Edges::own(&pl, 0, pl.lines.len()));
+            push_para(&mut items, (story, &[HEADER_PATH]), &pl, (0, pl.lines.len()), (x, y + lead), inner, Edges::own(&pl, 0, pl.lines.len()));
             y += pl.height + 2.0;
             // The comment itself, as written (its own formatting).
             if let Some(part) = doc.parts.get(&cm.part) {
-                let BoxLayout { items: body, height, .. } = layout_box(ctx, story, &part.blocks, &[], inner, BoxContext::Other, 1, None);
+                let BoxLayout { items: body, height, .. } = layout_box(ctx, BoxInput::other(story, &part.blocks, inner, 1, None));
                 for mut it in body {
                     it.translate(x, y);
                     items.push(it);
@@ -216,15 +207,15 @@ pub(crate) fn add(ctx: &mut Ctx, lay: &mut DocLayout) {
             next = top + h + GAP;
             let line = |style, width: f32| Border { style, width, color: Some(c.color), space: 0.0 };
             // Leader: along the text from the anchor to the page edge, then to the card.
-            page.items.push(Placed::Rule { x0: c.ax, y0: c.ay, x1: pw, y1: c.ay, border: line(BorderStyle::Dashed, 0.5) });
-            page.items.push(Placed::Rule { x0: pw, y0: c.ay, x1: x0, y1: top + 8.0, border: line(BorderStyle::Single, 0.5) });
+            page.items.push(Placed::Rule { x0: c.ax, y0: c.ay, x1: pw, y1: c.ay, border: line(BorderStyle::Dashed, 0.5), source: None });
+            page.items.push(Placed::Rule { x0: pw, y0: c.ay, x1: x0, y1: top + 8.0, border: line(BorderStyle::Single, 0.5), source: None });
             // The card: white, outlined and striped in the author's colour.
             let card = Rect::new(x0, top, card_w, h);
-            page.items.push(Placed::Fill { rect: card, color: Rgb(0xFF, 0xFF, 0xFF) });
-            page.items.push(Placed::Fill { rect: Rect::new(x0, top, STRIPE, h), color: c.color });
+            page.items.push(Placed::Fill { rect: card, color: Rgb(0xFF, 0xFF, 0xFF), source: None });
+            page.items.push(Placed::Fill { rect: Rect::new(x0, top, STRIPE, h), color: c.color, source: None });
             let (l, r, b) = (card.x, card.right(), card.bottom());
             for (ax, ay, bx, by) in [(l, top, r, top), (r, top, r, b), (l, b, r, b), (l, top, l, b)] {
-                page.items.push(Placed::Rule { x0: ax, y0: ay, x1: bx, y1: by, border: line(BorderStyle::Single, 0.5) });
+                page.items.push(Placed::Rule { x0: ax, y0: ay, x1: bx, y1: by, border: line(BorderStyle::Single, 0.5), source: None });
             }
             for mut it in items {
                 it.translate(x0, top);

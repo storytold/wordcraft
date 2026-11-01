@@ -187,9 +187,9 @@ pub(crate) fn symbol_items(pl: &Arc<ParaLayout>, x: f32, y: f32, level: u8, chil
     }
     let r = 4.6;
     out.push(disc(r));
-    out.push(Placed::Rule { x0: cx - 2.6, y0: cy, x1: cx + 2.6, y1: cy, border: white });
+    out.push(Placed::Rule { x0: cx - 2.6, y0: cy, x1: cx + 2.6, y1: cy, border: white, source: None });
     if children {
-        out.push(Placed::Rule { x0: cx, y0: cy - 2.6, x1: cx, y1: cy + 2.6, border: white });
+        out.push(Placed::Rule { x0: cx, y0: cy - 2.6, x1: cx, y1: cy + 2.6, border: white, source: None });
     }
     if collapsed {
         let w = first.xs.last().copied().unwrap_or(0.0).max(12.0);
@@ -200,6 +200,7 @@ pub(crate) fn symbol_items(pl: &Arc<ParaLayout>, x: f32, y: f32, level: u8, chil
             x1: x + w,
             y1: by,
             border: Border { style: BorderStyle::Wave, width: 0.75, color: Some(SYMBOL_GREY), space: 0.0 },
+            source: None,
         });
     }
     out
