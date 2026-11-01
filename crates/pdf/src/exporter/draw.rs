@@ -3,6 +3,38 @@ use super::{
     Draw, Exporter, Fill, FillRule, LineCap, LineJoin, LineStyle, PathBuilder, Rect, Rgb, ShapeKind, Size, Stroke, StrokeDash, Surface, Transform,
     append_path, fill, grown, krilla, norm, ok, paint_fill, pdf_line_cap, rect_path, rgb, shape_effects, shape_path, vector_picture,
 };
+use wordcraft_doc::props::Border;
+
+fn stroke_wave_line(s: &mut Surface, (x0, y0, x1, y1): (f32, f32, f32, f32), amp: f32, sw: f32, paint: &krilla::paint::Paint, alpha: f32) {
+    let step = amp * 2.0;
+    let (dx, dy) = (x1 - x0, y1 - y0);
+    let len = (dx * dx + dy * dy).sqrt();
+    if len < 1e-3 {
+        return;
+    }
+    let (ux, uy) = (dx / len, dy / len);
+    let (nx, ny) = (-uy, ux);
+    let mut pb = PathBuilder::new();
+    pb.move_to(x0, y0);
+    let mut t = 0.0;
+    let mut up = true;
+    while t < len && t < 20_000.0 {
+        let nt = (t + step).min(len);
+        let mid_t = (t + nt) / 2.0;
+        let sign = if up { -1.0 } else { 1.0 };
+        let cx = x0 + ux * mid_t + nx * amp * sign;
+        let cy = y0 + uy * mid_t + ny * amp * sign;
+        let ex = x0 + ux * nt;
+        let ey = y0 + uy * nt;
+        pb.quad_to(cx, cy, ex, ey);
+        t = nt;
+        up = !up;
+    }
+    if let Some(p) = pb.finish() {
+        s.set_stroke(Some(Stroke { paint: paint.clone(), width: sw, opacity: norm(alpha), line_cap: LineCap::Round, ..Default::default() }));
+        s.draw_path(&p);
+    }
+}
 
 impl Exporter<'_> {
     /// Paint one display item on the PDF surface in its current point-coordinate system.
@@ -43,6 +75,7 @@ impl Exporter<'_> {
                 }
             }
             Draw::Line { x0, y0, x1, y1, width, color, stroke, alpha, .. } => self.line(s, (*x0, *y0, *x1, *y1), *width, *color, *stroke, *alpha),
+            Draw::BorderBox { rect, top, bottom, left, right, alpha } => self.border_box(s, *rect, (*top, *bottom, *left, *right), *alpha),
             Draw::Image { rect, media, crop, alpha, .. } => self.picture(s, rect, media, crop, *alpha),
             Draw::Path { segs, fill: f, stroke, stroke_width, dash, cap } => {
                 let mut pb = PathBuilder::new();
@@ -188,6 +221,268 @@ impl Exporter<'_> {
         }
     }
 
+    fn border_box(&mut self, s: &mut Surface, rect: Rect, sides: (Option<Border>, Option<Border>, Option<Border>, Option<Border>), alpha: f32) {
+        let (top, bottom, left, right) = sides;
+        let sides = [top, bottom, left, right];
+        let visible_count = sides.iter().filter(|s| s.is_some_and(|b| b.is_visible())).count();
+        if visible_count == 0 {
+            return;
+        }
+        let same_look = |a: Option<&Border>, b: Option<&Border>| match (a, b) {
+            (None, None) => true,
+            (Some(a), Some(b)) => a.style == b.style && (a.width - b.width).abs() < 0.01 && a.color == b.color,
+            _ => false,
+        };
+        let all_same = visible_count == 4
+            && same_look(top.as_ref(), bottom.as_ref())
+            && same_look(bottom.as_ref(), left.as_ref())
+            && same_look(left.as_ref(), right.as_ref());
+        if all_same && let Some(b) = top {
+            let w = if b.width.is_finite() { b.width.clamp(0.1, 100.0) } else { 0.5 };
+            let c = b.color.unwrap_or(Rgb::BLACK);
+            let paint: krilla::paint::Paint = rgb::Color::new(c.0, c.1, c.2).into();
+            let rect_path = |(x0, y0, x1, y1): (f32, f32, f32, f32)| {
+                let mut pb = PathBuilder::new();
+                pb.move_to(x0, y0);
+                pb.line_to(x1, y0);
+                pb.line_to(x1, y1);
+                pb.line_to(x0, y1);
+                pb.close();
+                pb.finish()
+            };
+            let stroke_rect = |s: &mut Surface, (x0, y0, x1, y1): (f32, f32, f32, f32), width: f32| {
+                if let Some(p) = rect_path((x0, y0, x1, y1)) {
+                    s.set_stroke(Some(Stroke {
+                        paint: paint.clone(),
+                        width,
+                        opacity: norm(alpha),
+                        line_join: LineJoin::Miter,
+                        ..Default::default()
+                    }));
+                    s.draw_path(&p);
+                }
+            };
+            s.set_fill(None);
+            let (x0, y0, x1, y1) = (rect.x, rect.y, rect.right(), rect.bottom());
+            match b.style {
+                wordcraft_doc::props::BorderStyle::Double => {
+                    let t = (w * 0.35).max(0.5);
+                    let gap = (w * 0.3).max(0.4);
+                    let off_in = t / 2.0;
+                    let off_out = t + gap + t / 2.0;
+                    stroke_rect(s, (x0 - off_in, y0 - off_in, x1 + off_in, y1 + off_in), t);
+                    stroke_rect(s, (x0 - off_out, y0 - off_out, x1 + off_out, y1 + off_out), t);
+                }
+                wordcraft_doc::props::BorderStyle::Triple => {
+                    let t = (w * 0.22).max(0.4);
+                    let gap = (w * 0.17).max(0.3);
+                    let off1 = t / 2.0;
+                    let off2 = t + gap + t / 2.0;
+                    let off3 = 2.0 * (t + gap) + t / 2.0;
+                    stroke_rect(s, (x0 - off1, y0 - off1, x1 + off1, y1 + off1), t);
+                    stroke_rect(s, (x0 - off2, y0 - off2, x1 + off2, y1 + off2), t);
+                    stroke_rect(s, (x0 - off3, y0 - off3, x1 + off3, y1 + off3), t);
+                }
+                wordcraft_doc::props::BorderStyle::ThinThick
+                | wordcraft_doc::props::BorderStyle::ThinThickSmallGap
+                | wordcraft_doc::props::BorderStyle::ThinThickLargeGap => {
+                    let t_thin = (w * 0.28).max(0.4);
+                    let t_thick = (w * 0.52).max(0.75);
+                    let gap = match b.style {
+                        wordcraft_doc::props::BorderStyle::ThinThickSmallGap => (w * 0.15).max(0.3),
+                        wordcraft_doc::props::BorderStyle::ThinThickLargeGap => (w * 0.45).max(0.8),
+                        _ => (w * 0.25).max(0.5),
+                    };
+                    let off_thin = t_thin / 2.0;
+                    let off_thick = t_thin + gap + t_thick / 2.0;
+                    stroke_rect(s, (x0 - off_thin, y0 - off_thin, x1 + off_thin, y1 + off_thin), t_thin);
+                    stroke_rect(s, (x0 - off_thick, y0 - off_thick, x1 + off_thick, y1 + off_thick), t_thick);
+                }
+                wordcraft_doc::props::BorderStyle::ThickThin
+                | wordcraft_doc::props::BorderStyle::ThickThinSmallGap
+                | wordcraft_doc::props::BorderStyle::ThickThinLargeGap => {
+                    let t_thick = (w * 0.52).max(0.75);
+                    let t_thin = (w * 0.28).max(0.4);
+                    let gap = match b.style {
+                        wordcraft_doc::props::BorderStyle::ThickThinSmallGap => (w * 0.15).max(0.3),
+                        wordcraft_doc::props::BorderStyle::ThickThinLargeGap => (w * 0.45).max(0.8),
+                        _ => (w * 0.25).max(0.5),
+                    };
+                    let off_thick = t_thick / 2.0;
+                    let off_thin = t_thick + gap + t_thin / 2.0;
+                    stroke_rect(s, (x0 - off_thick, y0 - off_thick, x1 + off_thick, y1 + off_thick), t_thick);
+                    stroke_rect(s, (x0 - off_thin, y0 - off_thin, x1 + off_thin, y1 + off_thin), t_thin);
+                }
+                wordcraft_doc::props::BorderStyle::ThinThickThin
+                | wordcraft_doc::props::BorderStyle::ThinThickThinSmallGap
+                | wordcraft_doc::props::BorderStyle::ThinThickThinLargeGap => {
+                    let t_thin = (w * 0.2).max(0.35);
+                    let t_thick = (w * 0.4).max(0.6);
+                    let gap = match b.style {
+                        wordcraft_doc::props::BorderStyle::ThinThickThinSmallGap => (w * 0.1).max(0.25),
+                        wordcraft_doc::props::BorderStyle::ThinThickThinLargeGap => (w * 0.35).max(0.6),
+                        _ => (w * 0.2).max(0.4),
+                    };
+                    let off1 = t_thin / 2.0;
+                    let off2 = t_thin + gap + t_thick / 2.0;
+                    let off3 = t_thin + gap + t_thick + gap + t_thin / 2.0;
+                    stroke_rect(s, (x0 - off1, y0 - off1, x1 + off1, y1 + off1), t_thin);
+                    stroke_rect(s, (x0 - off2, y0 - off2, x1 + off2, y1 + off2), t_thick);
+                    stroke_rect(s, (x0 - off3, y0 - off3, x1 + off3, y1 + off3), t_thin);
+                }
+                wordcraft_doc::props::BorderStyle::Wave => {
+                    let amp = (w * 1.2).max(0.8);
+                    let sw = w * 0.8;
+                    let (wx0, wy0, wx1, wy1) = (x0 - amp, y0 - amp, x1 + amp, y1 + amp);
+                    stroke_wave_line(s, (wx0, wy0, wx1, wy0), amp, sw, &paint, alpha);
+                    stroke_wave_line(s, (wx1, wy0, wx1, wy1), amp, sw, &paint, alpha);
+                    stroke_wave_line(s, (wx1, wy1, wx0, wy1), amp, sw, &paint, alpha);
+                    stroke_wave_line(s, (wx0, wy1, wx0, wy0), amp, sw, &paint, alpha);
+                }
+                wordcraft_doc::props::BorderStyle::DoubleWave => {
+                    let amp = (w * 1.2).max(0.8);
+                    let sw = w * 0.6;
+                    for off in [amp * 0.8, amp * 2.0] {
+                        let (wx0, wy0, wx1, wy1) = (x0 - off, y0 - off, x1 + off, y1 + off);
+                        stroke_wave_line(s, (wx0, wy0, wx1, wy0), amp, sw, &paint, alpha);
+                        stroke_wave_line(s, (wx1, wy0, wx1, wy1), amp, sw, &paint, alpha);
+                        stroke_wave_line(s, (wx1, wy1, wx0, wy1), amp, sw, &paint, alpha);
+                        stroke_wave_line(s, (wx0, wy1, wx0, wy0), amp, sw, &paint, alpha);
+                    }
+                }
+                wordcraft_doc::props::BorderStyle::ThreeDEmboss | wordcraft_doc::props::BorderStyle::ThreeDEngrave => {
+                    let light_paint: krilla::paint::Paint = rgb::Color::new(192, 192, 192).into();
+                    let dark_paint: krilla::paint::Paint = rgb::Color::new(96, 96, 96).into();
+                    let is_emboss = b.style == wordcraft_doc::props::BorderStyle::ThreeDEmboss;
+                    let (c1, c2) = if is_emboss { (light_paint.clone(), dark_paint.clone()) } else { (dark_paint.clone(), light_paint.clone()) };
+                    let half = (w * 0.45).max(0.5);
+                    let seg = |s: &mut Surface, (ax, ay, bx, by): (f32, f32, f32, f32), p: krilla::paint::Paint| {
+                        let mut pb = PathBuilder::new();
+                        pb.move_to(ax, ay);
+                        pb.line_to(bx, by);
+                        if let Some(path) = pb.finish() {
+                            s.set_stroke(Some(Stroke { paint: p, width: half, opacity: norm(alpha), line_cap: LineCap::Butt, ..Default::default() }));
+                            s.draw_path(&path);
+                        }
+                    };
+                    let (ox0, oy0, ox1, oy1) = (x0 - half / 2.0, y0 - half / 2.0, x1 + half / 2.0, y1 + half / 2.0);
+                    seg(s, (ox0, oy0, ox1, oy0), c1.clone());
+                    seg(s, (ox0, oy0, ox0, oy1), c1);
+                    seg(s, (ox0, oy1, ox1, oy1), c2.clone());
+                    seg(s, (ox1, oy0, ox1, oy1), c2);
+                    let (ix0, iy0, ix1, iy1) = (x0 - half * 1.5, y0 - half * 1.5, x1 + half * 1.5, y1 + half * 1.5);
+                    let (ic1, ic2) = if is_emboss { (dark_paint, light_paint) } else { (light_paint, dark_paint) };
+                    seg(s, (ix0, iy0, ix1, iy0), ic1.clone());
+                    seg(s, (ix0, iy0, ix0, iy1), ic1);
+                    seg(s, (ix0, iy1, ix1, iy1), ic2.clone());
+                    seg(s, (ix1, iy0, ix1, iy1), ic2);
+                }
+                wordcraft_doc::props::BorderStyle::Outset | wordcraft_doc::props::BorderStyle::Inset => {
+                    let light_paint: krilla::paint::Paint = rgb::Color::new(192, 192, 192).into();
+                    let dark_paint: krilla::paint::Paint = rgb::Color::new(96, 96, 96).into();
+                    let is_inset = b.style == wordcraft_doc::props::BorderStyle::Inset;
+                    let (c_tl, c_br) = if is_inset { (dark_paint, light_paint) } else { (light_paint, dark_paint) };
+                    let off = w / 2.0;
+                    let seg = |s: &mut Surface, (ax, ay, bx, by): (f32, f32, f32, f32), p: krilla::paint::Paint| {
+                        let mut pb = PathBuilder::new();
+                        pb.move_to(ax, ay);
+                        pb.line_to(bx, by);
+                        if let Some(path) = pb.finish() {
+                            s.set_stroke(Some(Stroke { paint: p, width: w, opacity: norm(alpha), line_cap: LineCap::Butt, ..Default::default() }));
+                            s.draw_path(&path);
+                        }
+                    };
+                    seg(s, (x0 - off, y0 - off, x1 + off, y0 - off), c_tl.clone());
+                    seg(s, (x0 - off, y0 - off, x0 - off, y1 + off), c_tl);
+                    seg(s, (x0 - off, y1 + off, x1 + off, y1 + off), c_br.clone());
+                    seg(s, (x1 + off, y0 - off, x1 + off, y1 + off), c_br);
+                }
+                _ => {
+                    let line_style = match b.style {
+                        wordcraft_doc::props::BorderStyle::Dotted => LineStyle::BorderDotted,
+                        wordcraft_doc::props::BorderStyle::Dashed => LineStyle::BorderDashed,
+                        wordcraft_doc::props::BorderStyle::DashSmallGap => LineStyle::BorderDashSmallGap,
+                        wordcraft_doc::props::BorderStyle::DotDash => LineStyle::BorderDotDash,
+                        wordcraft_doc::props::BorderStyle::DotDotDash => LineStyle::BorderDotDotDash,
+                        wordcraft_doc::props::BorderStyle::DashDotStroked => LineStyle::DashDotStroked,
+                        wordcraft_doc::props::BorderStyle::DashLongDash => LineStyle::DashLongDash,
+                        _ => LineStyle::Solid,
+                    };
+                    let dash = line_style.dashes().map(|arr| StrokeDash { array: arr.iter().map(|k| k * w).collect(), offset: 0.0 });
+                    let off = w / 2.0;
+                    if let Some(p) = rect_path((x0 - off, y0 - off, x1 + off, y1 + off)) {
+                        s.set_stroke(Some(Stroke {
+                            paint: paint.clone(),
+                            width: w,
+                            opacity: norm(alpha),
+                            dash,
+                            line_join: LineJoin::Miter,
+                            ..Default::default()
+                        }));
+                        s.draw_path(&p);
+                    }
+                }
+            }
+            return;
+        }
+        let (x0, y0, x1, y1) = (rect.x, rect.y, rect.right(), rect.bottom());
+        let to_line_style = |st: wordcraft_doc::props::BorderStyle| match st {
+            wordcraft_doc::props::BorderStyle::Double => LineStyle::Double,
+            wordcraft_doc::props::BorderStyle::Triple => LineStyle::Triple,
+            wordcraft_doc::props::BorderStyle::Dotted => LineStyle::BorderDotted,
+            wordcraft_doc::props::BorderStyle::Dashed => LineStyle::BorderDashed,
+            wordcraft_doc::props::BorderStyle::DashSmallGap => LineStyle::BorderDashSmallGap,
+            wordcraft_doc::props::BorderStyle::DotDash => LineStyle::BorderDotDash,
+            wordcraft_doc::props::BorderStyle::DotDotDash => LineStyle::BorderDotDotDash,
+            wordcraft_doc::props::BorderStyle::DashDotStroked => LineStyle::DashDotStroked,
+            wordcraft_doc::props::BorderStyle::DashLongDash => LineStyle::DashLongDash,
+            wordcraft_doc::props::BorderStyle::ThickThin
+            | wordcraft_doc::props::BorderStyle::ThickThinSmallGap
+            | wordcraft_doc::props::BorderStyle::ThickThinLargeGap => LineStyle::ThickThin,
+            wordcraft_doc::props::BorderStyle::ThinThick
+            | wordcraft_doc::props::BorderStyle::ThinThickSmallGap
+            | wordcraft_doc::props::BorderStyle::ThinThickLargeGap => LineStyle::ThinThick,
+            wordcraft_doc::props::BorderStyle::ThinThickThin
+            | wordcraft_doc::props::BorderStyle::ThinThickThinSmallGap
+            | wordcraft_doc::props::BorderStyle::ThinThickThinLargeGap => LineStyle::ThinThickThin,
+            wordcraft_doc::props::BorderStyle::Wave => LineStyle::Wave,
+            wordcraft_doc::props::BorderStyle::DoubleWave => LineStyle::DoubleWave,
+            wordcraft_doc::props::BorderStyle::ThreeDEmboss => LineStyle::ThreeDEmboss,
+            wordcraft_doc::props::BorderStyle::ThreeDEngrave => LineStyle::ThreeDEngrave,
+            wordcraft_doc::props::BorderStyle::Outset => LineStyle::Outset,
+            wordcraft_doc::props::BorderStyle::Inset => LineStyle::Inset,
+            _ => LineStyle::Solid,
+        };
+        let corner_w = |b: Option<wordcraft_doc::props::Border>| {
+            b.filter(|b| b.is_visible()).map_or(0.0, |b| {
+                let w = b.width;
+                match b.style {
+                    wordcraft_doc::props::BorderStyle::Double => w * 1.2,
+                    wordcraft_doc::props::BorderStyle::Triple => w * 2.1,
+                    wordcraft_doc::props::BorderStyle::ThinThickThin => w * 1.45,
+                    wordcraft_doc::props::BorderStyle::ThickThin | wordcraft_doc::props::BorderStyle::ThinThick => w * 1.0,
+                    _ => w / 2.0,
+                }
+            })
+        };
+        let wt = corner_w(top);
+        let wb = corner_w(bottom);
+        let wl = corner_w(left);
+        let wr = corner_w(right);
+        if let Some(b) = top.filter(wordcraft_doc::props::Border::is_visible) {
+            self.line(s, (x0 - wl, y0, x1 + wr, y0), b.width, b.color.unwrap_or(Rgb::BLACK), to_line_style(b.style), alpha);
+        }
+        if let Some(b) = bottom.filter(wordcraft_doc::props::Border::is_visible) {
+            self.line(s, (x0 - wl, y1, x1 + wr, y1), b.width, b.color.unwrap_or(Rgb::BLACK), to_line_style(b.style), alpha);
+        }
+        if let Some(b) = left.filter(wordcraft_doc::props::Border::is_visible) {
+            self.line(s, (x0, y0 - wt, x0, y1 + wb), b.width, b.color.unwrap_or(Rgb::BLACK), to_line_style(b.style), alpha);
+        }
+        if let Some(b) = right.filter(wordcraft_doc::props::Border::is_visible) {
+            self.line(s, (x1, y0 - wt, x1, y1 + wb), b.width, b.color.unwrap_or(Rgb::BLACK), to_line_style(b.style), alpha);
+        }
+    }
+
     fn line(&mut self, s: &mut Surface, (x0, y0, x1, y1): (f32, f32, f32, f32), width: f32, c: Rgb, style: LineStyle, alpha: f32) {
         if ![x0, y0, x1, y1].iter().all(|v| ok(*v)) {
             return;
@@ -212,14 +507,84 @@ impl Exporter<'_> {
         };
         s.set_fill(None);
         match style {
-            LineStyle::Solid => {
+            LineStyle::Solid | LineStyle::ThreeDEmboss | LineStyle::ThreeDEngrave | LineStyle::Outset | LineStyle::Inset => {
                 s.set_stroke(Some(stroke(w, None, LineCap::Butt)));
                 seg(s, 0.0, 0.0);
             }
-            LineStyle::Dotted | LineStyle::Dashed | LineStyle::BorderDotted | LineStyle::BorderDashed | LineStyle::BorderDotDash => {
+            LineStyle::Dotted
+            | LineStyle::Dashed
+            | LineStyle::BorderDotted
+            | LineStyle::BorderDashed
+            | LineStyle::BorderDashSmallGap
+            | LineStyle::BorderDotDash
+            | LineStyle::BorderDotDotDash
+            | LineStyle::DashDotStroked
+            | LineStyle::DashLongDash => {
                 let array = style.dashes().unwrap_or(&[]).iter().map(|k| k * w).collect();
                 s.set_stroke(Some(stroke(w, Some(StrokeDash { array, offset: 0.0 }), LineCap::Butt)));
                 seg(s, 0.0, 0.0);
+            }
+            LineStyle::ThickThin | LineStyle::ThickThinSmallGap | LineStyle::ThickThinLargeGap => {
+                let (dx, dy) = (x1 - x0, y1 - y0);
+                let len = (dx * dx + dy * dy).sqrt().max(1e-3);
+                let (nx, ny) = (-dy / len * w * 0.8, dx / len * w * 0.8);
+                s.set_stroke(Some(stroke(w * 0.8, None, LineCap::Butt)));
+                seg(s, nx, ny);
+                s.set_stroke(Some(stroke(w * 0.4, None, LineCap::Butt)));
+                seg(s, -nx * 0.8, -ny * 0.8);
+            }
+            LineStyle::ThinThick | LineStyle::ThinThickSmallGap | LineStyle::ThinThickLargeGap => {
+                let (dx, dy) = (x1 - x0, y1 - y0);
+                let len = (dx * dx + dy * dy).sqrt().max(1e-3);
+                let (nx, ny) = (-dy / len * w * 0.8, dx / len * w * 0.8);
+                s.set_stroke(Some(stroke(w * 0.4, None, LineCap::Butt)));
+                seg(s, nx, ny);
+                s.set_stroke(Some(stroke(w * 0.8, None, LineCap::Butt)));
+                seg(s, -nx * 0.8, -ny * 0.8);
+            }
+            LineStyle::ThinThickThin | LineStyle::ThinThickThinSmallGap | LineStyle::ThinThickThinLargeGap => {
+                let (dx, dy) = (x1 - x0, y1 - y0);
+                let len = (dx * dx + dy * dy).sqrt().max(1e-3);
+                let (nx, ny) = (-dy / len * w * 1.4, dx / len * w * 1.4);
+                s.set_stroke(Some(stroke(w * 0.35, None, LineCap::Butt)));
+                seg(s, nx, ny);
+                s.set_stroke(Some(stroke(w * 0.7, None, LineCap::Butt)));
+                seg(s, 0.0, 0.0);
+                s.set_stroke(Some(stroke(w * 0.35, None, LineCap::Butt)));
+                seg(s, -nx, -ny);
+            }
+            LineStyle::DoubleWave => {
+                let amp = (w * 1.2).max(0.8);
+                let step = amp * 2.0;
+                let (dx, dy) = (x1 - x0, y1 - y0);
+                let len = (dx * dx + dy * dy).sqrt();
+                if len >= 1e-3 {
+                    let (ux, uy) = (dx / len, dy / len);
+                    let (nx, ny) = (-uy, ux);
+                    let off = amp * 0.8;
+                    for sign_offset in [-off, off] {
+                        let mut pb = PathBuilder::new();
+                        pb.move_to(x0 + nx * sign_offset, y0 + ny * sign_offset);
+                        let mut t = 0.0;
+                        let mut up = true;
+                        while t < len && t < 20_000.0 {
+                            let nt = (t + step).min(len);
+                            let mid_t = (t + nt) / 2.0;
+                            let sign = if up { -1.0 } else { 1.0 };
+                            let cx = x0 + ux * mid_t + nx * (sign_offset + amp * sign);
+                            let cy = y0 + uy * mid_t + ny * (sign_offset + amp * sign);
+                            let ex = x0 + ux * nt + nx * sign_offset;
+                            let ey = y0 + uy * nt + ny * sign_offset;
+                            pb.quad_to(cx, cy, ex, ey);
+                            t = nt;
+                            up = !up;
+                        }
+                        s.set_stroke(Some(stroke(w * 0.6, None, LineCap::Round)));
+                        if let Some(p) = pb.finish() {
+                            s.draw_path(&p);
+                        }
+                    }
+                }
             }
             LineStyle::Double => {
                 // Two thinner lines either side of the centre line.
