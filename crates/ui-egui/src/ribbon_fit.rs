@@ -380,13 +380,23 @@ mod ui_tests {
         h.state_mut().run("select.all", json!({})).unwrap();
         h.get_by_role_and_label(Role::Button, "Font").click();
         h.run_steps(3);
-        let size = |h: &mut egui_kittest::Harness<'static, WordApp>| {
-            h.state_mut().session.run("format.state", &json!({})).ok().and_then(|v| v.get("size").and_then(serde_json::Value::as_f64))
+        let sizes = |h: &egui_kittest::Harness<'static, WordApp>| {
+            let s = &h.state().session;
+            s.doc
+                .para_paths(wordcraft_doc::StoryRef::Body)
+                .iter()
+                .filter_map(|path| s.doc.para(wordcraft_doc::StoryRef::Body, path))
+                .flat_map(|p| p.run_ranges().map(|(_, c)| s.doc.styles.resolve_char(p.props.style.as_deref(), c).size))
+                .collect::<Vec<_>>()
         };
-        let before = size(&mut h);
+        let before = sizes(&h);
+        assert!(before.windows(2).any(|sizes| sizes[0] != sizes[1]), "the fixture has mixed sizes");
         click_shown(&h, "Increase Font Size");
         h.run_steps(3);
-        assert_ne!(size(&mut h), before, "Increase Font Size ran");
+        let after = sizes(&h);
+        assert_eq!(after.len(), before.len());
+        assert!(after.windows(2).any(|sizes| sizes[0] != sizes[1]), "mixed sizes stay mixed");
+        assert!(after.iter().zip(&before).all(|(after, before)| after > before), "Increase Font Size grew each run without flattening mixed sizes");
         assert!(shown(&h, "Change Case"), "the drop-down stays open after a click inside");
         click_shown(&h, "Change Case");
         h.run_steps(3);
