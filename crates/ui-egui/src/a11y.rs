@@ -84,6 +84,7 @@ pub fn page_window(rects: &[Rect], view: Rect) -> Option<(usize, usize)> {
 
 /// Describe the document under the canvas widget `doc_id` to AccessKit for this frame.
 /// `rects` are the pages' screen rectangles, `view` the visible part of the canvas.
+/// The document's read-only accessibility state follows Viewing on every frame.
 pub fn expose(app: &mut crate::WordApp, ctx: &egui::Context, doc_id: Id, layout: &Arc<DocLayout>, rects: &[Rect], view: Rect) {
     if ctx.accesskit_node_builder(doc_id, |n| n.set_role(Role::Document)).is_none() {
         // No screen reader: describe nothing, keep nothing.
@@ -124,6 +125,11 @@ pub fn expose(app: &mut crate::WordApp, ctx: &egui::Context, doc_id: Id, layout:
     });
     ctx.accesskit_node_builder(doc_id, |n| {
         n.set_label(title);
+        if app.session.view.viewing {
+            n.set_read_only();
+        } else {
+            n.clear_read_only();
+        }
         for c in &tree.top {
             n.push_child(*c);
         }

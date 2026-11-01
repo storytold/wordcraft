@@ -22,18 +22,30 @@ pub fn icon_button(ui: &mut Ui, icon: &str, tip: &str) -> Response {
 /// fonts and would draw as empty boxes, so icons are painted (`icons.rs`) rather than typed.
 /// It looks and reacts like `ui.button` (see [`drawn_state`]).
 pub fn icon_text_button(ui: &mut Ui, icon: &str, text: &str, font: egui::FontId) -> Response {
-    icon_text_button_with(ui, icon, text, font, false, true)
+    icon_text_button_with(ui, icon, text, font, false, true, false)
 }
 
 /// [`icon_text_button`] that opens a menu: the drop-down marker follows the text.
 pub fn icon_text_menu_button(ui: &mut Ui, icon: &str, text: &str, font: egui::FontId) -> Response {
-    icon_text_button_with(ui, icon, text, font, true, true)
+    icon_text_button_with(ui, icon, text, font, true, true, false)
 }
 
 /// The icon-only form of [`icon_text_button`] / [`icon_text_menu_button`] for a crowded strip
 /// (#2026): `label` is the accessible name and the tooltip, not drawn.
 pub fn icon_only_button(ui: &mut Ui, icon: &str, label: &str, font: egui::FontId, marker: bool) -> Response {
-    icon_text_button_with(ui, icon, label, font, marker, false).on_hover_text(label)
+    icon_text_button_with(ui, icon, label, font, marker, false, false).on_hover_text(label)
+}
+
+/// The interaction-mode menu keeps its orange indicator in the compact icon-only strip too.
+pub fn interaction_mode_button(ui: &mut Ui, text: &str, viewing: bool, show_text: bool) -> Response {
+    if !viewing {
+        return if show_text {
+            icon_text_menu_button(ui, "pencil", text, regular(12.0))
+        } else {
+            icon_only_button(ui, "pencil", text, regular(12.0), true)
+        };
+    }
+    icon_text_button_with(ui, "readMode", text, regular(12.0), true, show_text, true).on_hover_text(text)
 }
 
 /// Width [`icon_text_button`] (or its menu / icon-only forms) takes.
@@ -51,7 +63,7 @@ fn icon_text_button_size(ui: &Ui, text_w: f32, marker: bool, show_text: bool) ->
 
 /// Allocates and paints a themed icon button with optional text, marker and accessible label, and
 /// returns its response.
-fn icon_text_button_with(ui: &mut Ui, icon: &str, text: &str, font: egui::FontId, marker: bool, show_text: bool) -> Response {
+fn icon_text_button_with(ui: &mut Ui, icon: &str, text: &str, font: egui::FontId, marker: bool, show_text: bool, orange: bool) -> Response {
     let t = Tokens::get(ui.ctx());
     let galley = ui.painter().layout_no_wrap(text.to_string(), font, Color32::PLACEHOLDER);
     let pad = ui.spacing().button_padding;
@@ -62,21 +74,23 @@ fn icon_text_button_with(ui: &mut Ui, icon: &str, text: &str, font: egui::FontId
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), text));
     let st = drawn_state(ui, &resp, true);
     let r = r.expand(st.expansion);
-    ui.painter().rect(r, ui.visuals().widgets.inactive.corner_radius, st.fill, st.stroke, egui::StrokeKind::Inside);
+    let fill = if orange { t.orange } else { st.fill };
+    let ink = if orange { t.on_orange } else { st.text };
+    ui.painter().rect(r, ui.visuals().widgets.inactive.corner_radius, fill, st.stroke, egui::StrokeKind::Inside);
     icons::paint(
         ui.painter(),
         Rect::from_center_size(pos2(r.min.x + pad.x + icon_w / 2.0, r.center().y), vec2(icon_w, icon_w)),
         icon,
-        t.icon,
-        t.accent,
+        if orange { ink } else { t.icon },
+        if orange { ink } else { t.accent },
     );
     let text_x = r.min.x + pad.x + icon_w + if show_text { 4.0 } else { 0.0 };
     if show_text {
-        ui.painter().galley(pos2(text_x, r.center().y - galley.size().y / 2.0), galley, st.text);
+        ui.painter().galley(pos2(text_x, r.center().y - galley.size().y / 2.0), galley, ink);
     }
     if marker {
         let c = pos2(text_x + text_w + 4.0 + DROPDOWN / 2.0, r.center().y);
-        icons::paint(ui.painter(), Rect::from_center_size(c, vec2(DROPDOWN, DROPDOWN)), "dropdown", st.text, st.text);
+        icons::paint(ui.painter(), Rect::from_center_size(c, vec2(DROPDOWN, DROPDOWN)), "dropdown", ink, ink);
     }
     resp
 }

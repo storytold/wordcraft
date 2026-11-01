@@ -588,3 +588,36 @@ fn citation_at_document_end_stays_closed() {
     let back = wordcraft_engine::io::open_bytes("probe.docx", &bytes).unwrap();
     assert_eq!(back.field_ranges(StoryRef::Body).len(), 1);
 }
+
+#[test]
+fn viewing_refuses_zotero_writes_before_dispatch_but_keeps_queries() {
+    let mut z = Z::new("Original", 0);
+    z.begin();
+    z.s.run("view.viewing", &json!({"value":true})).unwrap();
+    let before = z.s.doc.clone();
+    for method in [
+        "Document_setDocumentData",
+        "Document_insertField",
+        "Document_insertText",
+        "Document_convertPlaceholdersToFields",
+        "Document_setBibliographyStyle",
+        "Document_convert",
+        "Field_convert",
+        "Field_delete",
+        "Field_removeCode",
+        "Field_setText",
+        "Field_setCode",
+    ] {
+        let error = z.call(method, json!([])).expect_err(method);
+        assert!(error.contains("Viewing"), "{method} was not blocked before dispatch: {error}");
+        assert!(z.s.doc.same_content(&before), "{method} changed the viewed document");
+    }
+    assert_eq!(z.ok("Document_getDocumentData", json!([1])), "");
+    assert_eq!(z.ok("Document_canInsertField", json!([1, "ReferenceMark"])), false);
+    z.ok("Document_complete", json!([1]));
+    assert!(z.b.completed);
+    assert!(z.s.doc.same_content(&before));
+    z.s.run("view.viewing", &json!({"value":false})).unwrap();
+    z.ok("Document_insertText", json!([1, "Allowed"]));
+    assert!(z.text().contains("Allowed"));
+}

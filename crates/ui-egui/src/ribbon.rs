@@ -134,7 +134,14 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 // Share, Editing mode and Comments keep their room; the tabs get what is left of it
                 // (#897, #2026), and the buttons give up their labels before a tab is drawn over them.
                 let share = tl!("Share");
-                let editing_label = if app.session.doc.settings.track_changes { tl!("Reviewing") } else { tl!("Editing") };
+                let viewing = app.session.view.viewing;
+                let editing_label = if viewing {
+                    tl!("Viewing")
+                } else if app.session.doc.settings.track_changes {
+                    tl!("Reviewing")
+                } else {
+                    tl!("Editing")
+                };
                 let comments = tl!("Comments");
                 let share_w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(share.to_string(), medium(12.0), t.text).size().x);
                 let spaced = |w: f32| w + 2.0;
@@ -187,18 +194,24 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                         }
                         ui.add_space(6.0);
                         let track = app.session.doc.settings.track_changes;
-                        let mode = if plan.buttons == 0 {
-                            crate::widgets::icon_text_menu_button(ui, "pencil", editing_label, regular(12.0))
-                        } else {
-                            crate::widgets::icon_only_button(ui, "pencil", editing_label, regular(12.0), true)
-                        };
+                        let mode = crate::widgets::interaction_mode_button(ui, editing_label, viewing, plan.buttons == 0);
                         egui::Popup::menu(&mode).show(|ui| {
-                            if ui.selectable_label(!track, tl!(tl!("Editing — edit the document directly"))).clicked() {
-                                let _ = app.run("review.trackChanges", json!({"value": false}));
+                            if ui.selectable_label(!viewing && !track, tl!("Editing — edit the document directly")).clicked() {
+                                let _ = app.run("view.viewing", json!({"value": false}));
+                                if track {
+                                    let _ = app.run("review.trackChanges", json!({"value": false}));
+                                }
                                 ui.close();
                             }
-                            if ui.selectable_label(track, tl!(tl!("Reviewing — edits become suggestions"))).clicked() {
-                                let _ = app.run("review.trackChanges", json!({"value": true}));
+                            if ui.selectable_label(!viewing && track, tl!("Reviewing — edits become suggestions")).clicked() {
+                                let _ = app.run("view.viewing", json!({"value": false}));
+                                if !track {
+                                    let _ = app.run("review.trackChanges", json!({"value": true}));
+                                }
+                                ui.close();
+                            }
+                            if ui.selectable_label(viewing, tl!("Viewing — view the file but make no changes")).clicked() {
+                                let _ = app.run("view.viewing", json!({"value": true}));
                                 ui.close();
                             }
                         });

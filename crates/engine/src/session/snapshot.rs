@@ -3,8 +3,9 @@ use super::snapshot_types::{EditSnapshot, SNAPSHOT_HEAD};
 use super::{Document, Session, StoryRef, next_document_id};
 
 impl Session {
-    /// Replace the document (open/new).
+    /// Replace the document (open/new), starting it outside the previous document's Viewing mode.
     pub fn set_document(&mut self, doc: Document) {
+        self.view.viewing = false;
         self.autocap = None;
         let replaced = self.document_id;
         self.document_id = next_document_id();
@@ -242,10 +243,14 @@ impl Session {
         }
     }
 
-    /// Why command `id` can't run now, for greying it out: its own `enabled` check, then what
-    /// Restrict Editing refuses outright. `None` when it can run (or doesn't exist).
+    /// Why command `id` can't run now, for greying it out: Viewing, its own `enabled` check,
+    /// then what Restrict Editing refuses outright. `None` when it can run (or doesn't exist).
+    /// Mixed query/write commands still need parameter-sensitive checks at dispatch.
     pub fn why_disabled(&self, id: &str) -> Option<&'static str> {
         let spec = self.registry.get(id)?;
+        if self.viewing_blocks_command(id, &serde_json::json!({})) {
+            return Some(super::viewing::REASON);
+        }
         (spec.enabled)(self).or_else(|| if spec.mutates { crate::cmd::protect::greyed_out(self, id, || self.protect_facts()) } else { None })
     }
 

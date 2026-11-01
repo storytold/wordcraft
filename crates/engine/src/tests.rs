@@ -16,6 +16,7 @@ mod fonts;
 mod ime_noop;
 mod revision_checks;
 mod typing;
+mod viewing;
 mod wordart;
 
 fn s() -> Session {

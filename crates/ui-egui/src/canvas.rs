@@ -1086,7 +1086,7 @@ fn handle_primary_pointer(
         let _ = app.run("view.hideWhiteSpace", json!({"value": !app.session.view.hide_white_space}));
     } else
     // Draw Table / Eraser own the mouse while on (no caret moves); else the usual editing.
-    if !middle_gesture && !crate::table_pen::pointer(app, ui, resp, rects, layout, geo.scale) {
+    if !middle_gesture && (app.session.view.viewing || !crate::table_pen::pointer(app, ui, resp, rects, layout, geo.scale)) {
         mouse(app, ui, resp, rects, layout, geo.scale);
     }
 }
@@ -1165,7 +1165,7 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
     let middle_gesture = app.canvas.auto_scroll.blocks_input();
     handle_primary_pointer(app, ui, &resp, &rects, layout, geo, middle_gesture);
     // A click on a check box ticks it; on a list's button opens the list.
-    if !middle_gesture {
+    if !middle_gesture && !app.session.view.viewing {
         crate::content_controls::clicks(app, &resp);
     }
     let secondary_clicked = resp.secondary_clicked() && !middle_gesture;
@@ -1201,7 +1201,7 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
     }
     let menu = egui::Popup::menu(&resp).open_bool(&mut shown);
     let menu = menu.at_position(app.canvas.context_menu_at.unwrap_or(out.inner_rect.left_top()));
-    let with_toolbar = crate::mini_toolbar::context_menu_visible(app);
+    let with_toolbar = !app.session.view.viewing && crate::mini_toolbar::context_menu_visible(app);
     let menu = if with_toolbar { menu.frame(egui::Frame::NONE).close_behavior(egui::PopupCloseBehavior::IgnoreClicks) } else { menu };
     menu.show(|ui| {
         if with_toolbar {
@@ -1269,11 +1269,18 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
     }
     app.canvas.auto_scroll.paint(ui, area);
     if let (Some(h), Some(v)) = (hruler, vruler) {
-        rulers(app, ui, h, v, &rects, layout, geo.scale);
+        if app.session.view.viewing {
+            let mut ruler_ui = ui.new_child(egui::UiBuilder::new());
+            ruler_ui.disable();
+            rulers(app, &mut ruler_ui, h, v, &rects, layout, geo.scale);
+        } else {
+            rulers(app, ui, h, v, &rects, layout, geo.scale);
+        }
     }
     crate::mini_toolbar::track_dismissal(app, ui.ctx(), area);
     if let Some(sel) = app.canvas.mini_anchor
         && app.ui.mini_toolbar
+        && !app.session.view.viewing
     {
         crate::mini_toolbar::show(app, ui.ctx(), sel, out.inner_rect);
     }
@@ -1310,6 +1317,24 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
 /// rulers and overlays, anchors zoom and scrolling, and routes pointer, selection, IME and caret
 /// input.
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
+    if app.session.view.viewing {
+        app.canvas.obj_drag = None;
+        app.canvas.crop_drag = None;
+        app.canvas.crop = None;
+        app.canvas.ink = None;
+        app.canvas.ink_ui.lasso = None;
+        app.canvas.erasing = None;
+        app.canvas.table_tool = None;
+        app.canvas.table_stroke = None;
+        app.canvas.table_resize = None;
+        app.canvas.table_drag = None;
+        app.canvas.tab_drag = None;
+        app.canvas.link_from = None;
+        app.canvas.ime_preedit.clear();
+        app.canvas.ime_preedit_range = None;
+        app.canvas.ime_join_text = None;
+        app.canvas.want_focus = false;
+    }
     let t = Tokens::get(ui.ctx());
     let full = ui.available_rect_before_wrap();
     let layout = prepare_layout(app, ui, full);
@@ -1435,7 +1460,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         crate::content_controls::paint(app, &painter, &t, &layout, &rects, geo.scale);
         paint_read_aloud_highlight(app, &painter, &layout, &rects, &geo, &t);
         // Caret.
-        let focused = resp.has_focus() || app.canvas.focused;
+        let focused = !app.session.view.viewing && (resp.has_focus() || app.canvas.focused);
         // After an automatic change the web's text agent starts afresh
         // (`keys::note_automatic_change`) — only there, because on X11 an interrupt recreates the
         // input context and fcitx drops later keys (#1169). A body replacement interrupts on every
@@ -1588,12 +1613,14 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 ime_geometry = Some((cr, cr));
             }
         }
-        crate::objects::paint(app, &painter, &t, &layout, &rects, geo.scale);
-        crate::dialogs_smart_art::frame_button(app, ui.ctx(), &layout, &rects, geo.scale, ui.clip_rect());
+        if !app.session.view.viewing {
+            crate::objects::paint(app, &painter, &t, &layout, &rects, geo.scale);
+            crate::dialogs_smart_art::frame_button(app, ui.ctx(), &layout, &rects, geo.scale, ui.clip_rect());
+            crate::table_pen::paint(app, &painter, &t, &layout, &rects, geo.scale);
+            crate::table_resize::paint(app, &painter, &t, &layout, &rects, geo.scale);
+            crate::table_mouse::paint(app, &painter, &t, &layout, &rects, geo.scale);
+        }
         crate::ink::paint(app, &painter, &rects, &layout, geo.scale);
-        crate::table_pen::paint(app, &painter, &t, &layout, &rects, geo.scale);
-        crate::table_resize::paint(app, &painter, &t, &layout, &rects, geo.scale);
-        crate::table_mouse::paint(app, &painter, &t, &layout, &rects, geo.scale);
         (resp, rects)
     });
     finish_canvas_frame(
