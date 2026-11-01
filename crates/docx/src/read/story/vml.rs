@@ -235,6 +235,8 @@ impl Reader<'_> {
                 // Resize shape to fit text (DrawingML's `a:spAutoFit`).
                 let fit = vml_style(tb.attr("style").unwrap_or(""), "mso-fit-shape-to-text").or_else(|| vml_style(style, "mso-fit-shape-to-text"));
                 part.body.auto_fit = fit.is_some_and(|v| v.eq_ignore_ascii_case("t") || v.eq_ignore_ascii_case("true"));
+                // Wrap text in shape turned off (DrawingML's `wrap="none"`).
+                part.body.no_wrap = vml_style(style, "mso-wrap-style").is_some_and(|v| v.trim().eq_ignore_ascii_case("none"));
                 // Where the text sits between the box's top and bottom (DrawingML's `anchor`).
                 if let Some(a) = vml_style(tb.attr("style").unwrap_or(""), "v-text-anchor").or_else(|| vml_style(style, "v-text-anchor")) {
                     let al = a.trim().to_ascii_lowercase();

@@ -180,6 +180,28 @@ fn own_margins_and_resize_to_fit_keep_the_text_in_view() {
     assert!(shown >= 1);
 }
 
+#[test]
+fn wrap_text_in_shape_off_keeps_a_narrow_boxs_lines_whole() {
+    // A classification label: a box saved 35 pt wide, 20 pt of it left margin, around a long line
+    // with Wrap text in shape off and Resize shape to fit text on.
+    let label = "          Internal / Confidential";
+    let body = TextBody { inset: Some([254_000, 190_500, 0, 0]), auto_fit: true, ..Default::default() };
+    let shown = |body: TextBody| {
+        let mut d = Document::from_text("x");
+        let id = text_box(&mut d, 0, label, 35.0, 35.0, body);
+        let l = lay(&d);
+        lines(&l, id).iter().map(|(.., l0, l1)| l1 - l0).sum::<usize>()
+    };
+    assert!(shown(body) > 1, "with wrapping on, the text wraps in the box");
+    assert_eq!(shown(TextBody { no_wrap: true, ..body }), 1, "with wrapping off, it stays on one line");
+    // Paragraphs keep their own lines.
+    let mut d = Document::from_text("x");
+    let id = text_box(&mut d, 0, label, 35.0, 35.0, TextBody { no_wrap: true, ..body });
+    d.parts.get_mut(&id).unwrap().blocks =
+        vec![para_block(Paragraph::with_text(label, Default::default())), para_block(Paragraph::with_text("Two", Default::default()))];
+    assert_eq!(lines(&lay(&d), id).len(), 2);
+}
+
 /// An auto-fit inline box shrinks to its three lines and keeps the explicit page break on page
 /// one; a fixed 10 cm box keeps its saved height and pushes the break and following text to
 /// later pages.

@@ -1376,7 +1376,7 @@ fn row_gaps(row: &Row, end: usize) -> impl Iterator<Item = (usize, usize, f32)> 
 }
 
 /// The narrowest and widest a block list can be laid out.
-fn blocks_content(ctx: &mut Ctx, blocks: &Blocks, text: Option<&CellText>, depth: usize) -> (f32, f32) {
+pub(crate) fn blocks_content(ctx: &mut Ctx, blocks: &Blocks, text: Option<&CellText>, depth: usize) -> (f32, f32) {
     let (mut lo, mut hi) = (0.0f32, 0.0f32);
     for b in blocks.iter() {
         let (l, h) = match &**b {

@@ -66,6 +66,20 @@ fn frame(body: &TextBody, w: f32, h: f32) -> (f32, f32) {
     (along.max(12.0), across)
 }
 
+/// The line length for `blocks` in a box whose lines are `len` long: as long as the widest line
+/// when Wrap text in shape is off, so a box saved narrower than its text keeps its lines whole.
+fn line_len(ctx: &mut Ctx, blocks: &Blocks, body: &TextBody, len: f32) -> f32 {
+    if !body.no_wrap || body.vert == TextVert::Stacked {
+        return len;
+    }
+    // Measuring doesn't count the box's list numbers and equations: laying it out does.
+    let snap = (ctx.counters.clone(), ctx.eq_count);
+    let (_, widest) = crate::table::blocks_content(ctx, blocks, None, 0);
+    (ctx.counters, ctx.eq_count) = snap;
+    // A hair over, so rounding can't push the last word of the widest line onto a line of its own.
+    len.max(widest + 0.5)
+}
+
 /// The width stacked text is laid out in (a paragraph's narrowest).
 const STACK_WIDTH: f32 = 12.0;
 
@@ -107,6 +121,7 @@ pub(crate) fn box_items(ctx: &mut Ctx, id: u32, rect: Rect, depth: usize) -> Vec
                 return Vec::new();
             }
             let blocks = ctx.doc.parts.get(&id).map(|p| p.blocks.clone()).unwrap_or_default();
+            let len = line_len(ctx, &blocks, &body, len);
             let inner = lay(ctx, id, &blocks, len, body.vert, depth);
             ctx.boxes.leave();
             // Text that doesn't fit inside the margins is hidden, as in Word; a box that resizes
@@ -131,6 +146,7 @@ pub(crate) fn fitted_height(ctx: &mut Ctx, id: u32, w: f32) -> Option<f32> {
     }
     let blocks = ctx.doc.parts.get(&id).map(|p| p.blocks.clone()).unwrap_or_default();
     let (len, _) = frame(&body, w, 0.0);
+    let len = line_len(ctx, &blocks, &body, len);
     // Measuring doesn't count the box's list numbers and equations: `box_items` lays it out again.
     let snap = (ctx.counters.clone(), ctx.eq_count);
     let items = lay(ctx, id, &blocks, len, body.vert, 0);
