@@ -219,10 +219,14 @@ impl Writer {
             props.push_str(" fo:keep-with-next=\"always\"");
         }
         props.push_str(&spacing_props(&p.spacing));
-        // Children of the paragraph properties go after a separator in the key.
+        // Child elements of the paragraph properties: tab stops (§17.8), a drop cap (§17.9).
+        let mut children = String::new();
         if let Some(tabs) = p.extra.as_ref().and_then(|x| x.tabs.as_ref()) {
-            props.push('\u{1}');
-            props.push_str(&tab_stops(tabs));
+            children.push_str(&tab_stops(tabs));
+        }
+        if let Some((lines, distance)) = p.extra.as_ref().and_then(|x| x.drop_cap.filter(|l| *l > 1).map(|l| (l.min(10), x.drop_cap_distance))) {
+            let d = distance.filter(|d| d.is_finite()).map_or(0.0, |d| d.clamp(0.0, 1584.0));
+            children.push_str(&format!("<style:drop-cap style:lines=\"{lines}\" style:length=\"1\" style:distance=\"{}\"/>", pt(d)));
         }
         if p.kind == Kind::Rule {
             props.push_str(" fo:border-bottom=\"0.75pt solid #a0a0a0\" fo:padding-bottom=\"1pt\"");
@@ -237,6 +241,11 @@ impl Writer {
         }
         if p.extra.as_ref().and_then(|x| x.bidi) == Some(true) {
             props.push_str(" style:writing-mode=\"rl-tb\"");
+        }
+        // The children go after a separator in the key.
+        if !children.is_empty() {
+            props.push('\u{1}');
+            props.push_str(&children);
         }
         let master = start.map(|(m, _)| m.clone()).unwrap_or_default();
         if props.is_empty() && master.is_empty() {

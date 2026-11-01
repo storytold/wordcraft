@@ -165,6 +165,8 @@ fn para_extra(doc: &Document, p: &wordcraft_doc::props::ParaProps) -> Option<Box
         style,
         contextual_spacing: p.contextual_spacing,
         bidi: p.bidi.filter(|b| *b),
+        drop_cap: p.drop_cap.filter(|l| *l > 1),
+        drop_cap_distance: p.drop_cap_distance.filter(|_| p.drop_cap.is_some_and(|l| l > 1)),
         ..Default::default()
     };
     (x != wordcraft_doc::props::ParaProps::default()).then(|| Box::new(x))

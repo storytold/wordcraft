@@ -226,6 +226,8 @@ struct StyleInfo {
     contextual: Option<bool>,
     /// `style:writing-mode` of a paragraph style: right to left or not.
     rtl: Option<bool>,
+    /// A drop cap (§17.9 `style:drop-cap`): lines it spans and its distance from the text.
+    drop_cap: Option<(u8, f32)>,
     /// `fo:border*` of a paragraph style, each side's padding as its distance from the text.
     para_borders: Option<Borders>,
     /// `fo:background-color` of a paragraph style (`Some(None)`: transparent, stated).
@@ -349,6 +351,8 @@ pub(super) struct ParaLook {
     pub(super) contextual: Option<bool>,
     /// Right to left (`style:writing-mode`).
     pub(super) rtl: Option<bool>,
+    /// A drop cap: lines it spans (2–10) and its distance from the text, points.
+    pub(super) drop_cap: Option<(u8, f32)>,
     /// Borders (when a side shows) and background.
     pub(super) borders: Option<Borders>,
     pub(super) shading: Option<Rgb>,
@@ -494,6 +498,12 @@ fn style_child(name: &str, q: &str, a: &Attrs, s: &mut StyleInfo) -> bool {
     match name {
         "paragraph-properties" => paragraph_properties(a, s),
         "tab-stops" => s.tabs = Some(Vec::new()),
+        // One line drops nothing.
+        "drop-cap" => {
+            let lines = get(a, "style:lines").and_then(|l| l.trim().parse::<u32>().ok()).unwrap_or(1);
+            let distance = get(a, "style:distance").and_then(length).filter(|d| d.is_finite()).map_or(0.0, |d| d.clamp(0.0, 1584.0));
+            s.drop_cap = Some(((lines.min(10) as u8), distance)).filter(|(l, _)| *l > 1);
+        }
         "tab-stop" => {
             if let Some(t) = s.tabs.as_mut().filter(|t| t.len() < MAX_TABS)
                 && let Some(stop) = tab_stop(a)
@@ -1223,9 +1233,26 @@ impl Styles {
         let shading = own().find_map(|(_, s)| s.para_shading).flatten();
         let contextual = own().find_map(|(_, s)| s.contextual);
         let rtl = own().find_map(|(_, s)| s.rtl);
+        let drop_cap = own().find_map(|(_, s)| s.drop_cap);
         // Where LibreOffice measures the tab stops from: the indent the paragraph ends up with,
         // whichever style in the chain gives it.
         let tab_origin = chain.iter().find_map(|(_, s)| s.spacing.left).filter(|v| v.is_finite()).unwrap_or(0.0);
-        ParaLook { kind, align, page_break: pb, rule, keep_next, fmt: f, spacing, tabs, borders, shading, named, contextual, rtl, tab_origin }
+        ParaLook {
+            kind,
+            align,
+            page_break: pb,
+            rule,
+            keep_next,
+            fmt: f,
+            spacing,
+            tabs,
+            borders,
+            shading,
+            named,
+            contextual,
+            rtl,
+            tab_origin,
+            drop_cap,
+        }
     }
 }

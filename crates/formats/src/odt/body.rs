@@ -329,6 +329,10 @@ impl Body<'_> {
         if look.rtl == Some(true) {
             p.extra.get_or_insert_with(Default::default).bidi = Some(true);
         }
+        if let Some((lines, distance)) = look.drop_cap {
+            let x = p.extra.get_or_insert_with(Default::default);
+            (x.drop_cap, x.drop_cap_distance) = (Some(lines), (distance > 0.0).then_some(distance));
+        }
         if let Some(mut tabs) = look.tabs {
             // LibreOffice measures tabs from the indent (its `TabsRelativeToIndent`); Word from
             // the margin.

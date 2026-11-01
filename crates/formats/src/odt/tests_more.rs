@@ -4,6 +4,7 @@ mod bookmarks;
 mod char_styles;
 mod chars;
 mod comments;
+mod drop_caps;
 mod equations;
 mod fields;
 mod flat;

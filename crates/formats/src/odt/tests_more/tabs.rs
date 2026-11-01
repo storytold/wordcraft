@@ -131,3 +131,22 @@ fn tabs_are_measured_from_the_indent_a_style_gives() {
     let style = d.styles.get("Indented").unwrap().para.tabs.clone().unwrap_or_default();
     assert_eq!(style.iter().map(|t| t.pos).collect::<Vec<_>>(), [180.0], "2in from the style's own 0.5in indent");
 }
+
+#[test]
+fn tab_stops_and_other_paragraph_properties_together() {
+    // The tab stops are a child of the paragraph properties; the background and contextual
+    // spacing stay attributes of it.
+    let mut p = Paragraph::with_text("a\tb", Default::default());
+    p.props = ParaProps {
+        tabs: Some(vec![TabStop { pos: 100.0, align: TabAlign::Left, leader: TabLeader::None }]),
+        shading: Some(wordcraft_doc::props::Rgb(200, 220, 240)),
+        contextual_spacing: Some(true),
+        ..Default::default()
+    };
+    let mut d = Document::new();
+    d.body = vec![para_block(p)];
+    let back = import(&export(&d).unwrap()).unwrap();
+    let props = &back.body[0].as_para().unwrap().props;
+    assert_eq!(props.tabs.as_ref().map(|t| t.iter().map(|t| t.pos).collect::<Vec<_>>()), Some(vec![100.0]));
+    assert_eq!((props.shading, props.contextual_spacing), (Some(wordcraft_doc::props::Rgb(200, 220, 240)), Some(true)));
+}
