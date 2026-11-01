@@ -3,7 +3,7 @@ use super::ctx::{Ctx, with_pin};
 use super::floats::{EarlyFloats, WrapArea};
 use super::notes::{NOTE_SEP, NOTE_SEP_W, NoteBox, NoteSeps, v_span};
 use super::placed::Placed;
-use super::{Block, Border, FloatAlign, Page, ParaLayout, Rect, SectionProps, StoryRef};
+use super::{Block, Border, Document, FloatAlign, Page, ParaLayout, Paragraph, Rect, SectionProps, StoryRef};
 
 #[derive(Clone)]
 pub(crate) struct PageBuilder<'a> {
@@ -407,18 +407,51 @@ pub(crate) fn item_bottom(y: f32, para: &ParaLayout, l0: usize, l1: usize) -> Op
 }
 
 /// Where body text starts: the top margin, or below the header if it's taller.
-pub(crate) fn body_top_for(ctx: &mut Ctx, sect: &SectionProps, header: Option<u32>) -> f32 {
-    let Some(id) = header else { return sect.margin_top };
-    let Some(part) = ctx.doc.parts.get(&id) else { return sect.margin_top };
-    let blocks = part.blocks.clone();
+pub(crate) fn body_top_for(ctx: &mut Ctx, sect: &SectionProps, header: Option<u32>, section: usize) -> f32 {
+    let background = background_header(ctx.doc, header, section);
+    let mut blocks = header.and_then(|id| ctx.doc.parts.get(&id)).map(|p| p.blocks.clone()).unwrap_or_default();
+    if blocks.is_empty() && background {
+        blocks.push(wordcraft_doc::para_block(Paragraph::new()));
+    }
+    if background {
+        // Word 16.113.2 reserves an empty Header-style paragraph for the page colour,
+        // owned by the initial header stories and retained when those stories are linked.
+        let mut p = Paragraph::new();
+        p.props.style = Some("Header".into());
+        if ctx.doc.styles.get("Header").is_none() {
+            p.props.space_before = Some(0.0);
+            p.props.space_after = Some(0.0);
+        }
+        blocks.push(wordcraft_doc::para_block(p));
+    }
+    if blocks.is_empty() {
+        return sect.margin_top;
+    }
+    let story = header.map(StoryRef::Part).unwrap_or(StoryRef::Body);
     // Placed as `headers_footers` draws it, so page-relative floats wrap the same way.
     let frame = PageFrame { sect, origin: (sect.margin_left + sect.gutter, sect.header), number: 1, mirror: ctx.mirror };
     let track = std::mem::replace(&mut ctx.track_totals, false);
-    let (h, ..) =
-        with_pin(ctx, id, sect, 1, |ctx| layout_box(ctx, BoxInput::other(StoryRef::Part(id), &blocks, sect.text_width(), 0, Some(frame))).height);
+    let measure = |ctx: &mut Ctx| layout_box(ctx, BoxInput::other(story, &blocks, sect.text_width(), 0, Some(frame))).height;
+    let counters = std::mem::take(&mut ctx.counters);
+    let h = match header {
+        Some(id) => with_pin(ctx, id, sect, 1, measure).0,
+        None => measure(ctx),
+    };
+    ctx.counters = counters;
     ctx.track_totals = track;
     // Word starts the body right below a header that reaches past the top margin, no gap.
     sect.margin_top.max(sect.header + h)
+}
+
+fn background_header(doc: &Document, header: Option<u32>, section: usize) -> bool {
+    if doc.settings.page_color.is_none() {
+        return false;
+    }
+    let first = doc.body.iter().find_map(|b| b.as_para().and_then(|p| p.section.as_deref())).unwrap_or(&doc.last_section);
+    match header {
+        None => section == 0,
+        Some(id) => [first.headers.default, first.headers.first, first.headers.even].contains(&Some(id)),
+    }
 }
 
 /// Where the footer starts (as `headers_footers` places it), `f32::MAX` without one.

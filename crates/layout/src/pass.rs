@@ -217,9 +217,13 @@ fn endnote_queue(ctx: &Ctx) -> VecDeque<(u32, usize)> {
 fn turned_sections(ctx: &mut Ctx, sections: &[(usize, &SectionProps)], web: bool) -> Vec<Option<SectionProps>> {
     sections
         .iter()
-        .map(|(_, s)| {
+        .enumerate()
+        .map(|(si, (_, s))| {
             (!web && s.text_direction.is_turned()).then(|| {
-                let top = body_top_for(ctx, s, s.headers.default);
+                // Page-colour ownership follows the resolved story, including inherited IDs.
+                let header = if ctx.doc.settings.page_color.is_some() { ctx.hf.heads.set(si).default } else { s.headers.default };
+                let base = ctx.hf.defining_width(false, si, header);
+                let top = with_pct_base(ctx, base, |ctx| body_top_for(ctx, s, header, si));
                 vertical::unturned_sect(s, top)
             })
         })
@@ -233,8 +237,8 @@ fn section_tops(ctx: &mut Ctx, hf: &HfLinks, (si, sect): (usize, &SectionProps),
     let (heads, feet) = (hf.heads.set(si), hf.feet.set(si));
     let hb = |i: Option<u32>| hf.defining_width(false, si, i);
     let fb = |i: Option<u32>| hf.defining_width(true, si, i);
-    let body = if fixed { sect.margin_top } else { with_pct_base(ctx, hb(heads.default), |c| body_top_for(c, sect, heads.default)) };
-    let first = if fixed || !sect.title_page { body } else { with_pct_base(ctx, hb(heads.first), |c| body_top_for(c, sect, heads.first)) };
+    let body = if fixed { sect.margin_top } else { with_pct_base(ctx, hb(heads.default), |c| body_top_for(c, sect, heads.default, si)) };
+    let first = if fixed || !sect.title_page { body } else { with_pct_base(ctx, hb(heads.first), |c| body_top_for(c, sect, heads.first, si)) };
     let foot = if fixed { f32::MAX } else { with_pct_base(ctx, fb(feet.default), |c| foot_top_for(c, sect, feet.default)) };
     let first_foot = if fixed || !sect.title_page { foot } else { with_pct_base(ctx, fb(feet.first), |c| foot_top_for(c, sect, feet.first)) };
     Tops { body, first, foot, first_foot }
@@ -263,8 +267,10 @@ fn end_previous_section<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, hf: &HfLink
     pb.sect = prev;
     pb.sect_idx = si - 1;
     let (ph, pf) = (hf.heads.set(si - 1), hf.feet.set(si - 1));
-    let top = body_top_for(ctx, prev, ph.default);
-    pb.foot_top = foot_top_for(ctx, prev, pf.default);
+    let hb = hf.defining_width(false, si - 1, ph.default);
+    let fb = hf.defining_width(true, si - 1, pf.default);
+    let top = with_pct_base(ctx, hb, |c| body_top_for(c, prev, ph.default, si - 1));
+    pb.foot_top = with_pct_base(ctx, fb, |c| foot_top_for(c, prev, pf.default));
     pb.new_page(block, top);
 }
 
