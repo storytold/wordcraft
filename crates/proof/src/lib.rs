@@ -18,6 +18,10 @@
 //!   dictionary installed on the system (VERO and friends; not bundled), suggestions tuned for
 //!   Portuguese (missing accents, `seje`/`seja` confusions, missing spaces), conservative
 //!   grammar rules with Portuguese messages, and `hyph-utf8`'s Portuguese patterns.
+//! - **European Portuguese** ([`ProofLang::PtPt`], module [`pt`]): spelling against the Hunspell
+//!   `pt_PT` dictionary installed on the system (LibreOffice's `dict-pt-PT` included; not
+//!   bundled), or the `pt_BR` one when there is none; suggestions, grammar and hyphenation as for
+//!   Portuguese above.
 //! - **Italian** ([`ProofLang::It`], module [`it`]): spelling against the Hunspell `it_IT`
 //!   dictionary installed on the system (not bundled — the upstream file is GPL-licensed),
 //!   suggestions tuned for Italian (missing accents, `REP` confusions, missing spaces),
@@ -176,7 +180,7 @@ struct Language {
 
 /// Every language proofed against a Hunspell dictionary, in the order File › Options › Proofing
 /// lists them. English has a built-in word list and is handled apart.
-static LANGUAGES: [Language; 12] = [
+static LANGUAGES: [Language; 13] = [
     Language {
         lang: ProofLang::Pl,
         slot: &pl::DICT,
@@ -192,6 +196,15 @@ static LANGUAGES: [Language; 12] = [
         is_correct: |w, _, o| pt::is_correct_with_options(w, o),
         suggest: |w, n, _| pt::suggest(w, n),
         grammar: |t, _, c| pt::grammar::check_with(t, c),
+    },
+    Language {
+        lang: ProofLang::PtPt,
+        slot: &pt::EUROPEAN_DICT,
+        message: "Possível erro de ortografia",
+        is_correct: |w, _, o| pt::is_correct_with_options_for(pt::Variant::Pt, w, o),
+        suggest: |w, n, _| pt::suggest_for(pt::Variant::Pt, w, n),
+        // The rules are the same in both spellings; the issues say which one they are in.
+        grammar: |t, lang, c| pt::grammar::check_with(t, c).into_iter().map(|i| Issue { lang, ..i }).collect(),
     },
     Language {
         lang: ProofLang::It,
@@ -529,6 +542,7 @@ pub fn missing_dictionary(lang: Option<&str>) -> Option<&'static str> {
 pub fn unreadable_dictionary(lang: Option<&str>) -> Option<(&'static str, std::path::PathBuf, String)> {
     let lang = ProofLang::from_tag(lang);
     let name = dictionary_needed(lang, dictionary_loaded(lang)?)?;
+    // European Portuguese without a `pt_PT` reads `pt_BR`: an unreadable one is the problem.
     hunspell::load_error(name).map(|(file, reason)| (name, file, reason))
 }
 
@@ -1054,8 +1068,10 @@ mod tests {
     fn missing_dictionary_is_named_only_for_hunspell_languages_without_one() {
         assert_eq!(dictionary_needed(ProofLang::Pl, false), Some("pl_PL"));
         assert_eq!(dictionary_needed(ProofLang::Pt, false), Some("pt_BR"));
+        assert_eq!(dictionary_needed(ProofLang::PtPt, false), Some("pt_PT"));
         assert_eq!(dictionary_needed(ProofLang::Pl, true), None);
         assert_eq!(dictionary_needed(ProofLang::Pt, true), None);
+        assert_eq!(dictionary_needed(ProofLang::PtPt, true), None);
         // Every Hunspell language is named by the first name its module looks for (#3150).
         for (l, name) in [
             (ProofLang::It, "it_IT"),
@@ -1084,8 +1100,21 @@ mod tests {
         // Installed dictionaries and the built-in English list: no hint.
         pl::test_dict::install();
         pt::test_dict::install();
+        pt::test_dict::install_european();
         es::test_dict::install();
-        for tag in [Some("pl-PL"), Some("pt-BR"), Some("es-ES"), Some("es-MX"), Some("es-419"), Some("es-UY"), Some("en-US"), Some("fr-FR"), None] {
+        for tag in [
+            Some("pl-PL"),
+            Some("pt-BR"),
+            Some("pt-PT"),
+            Some("pt-AO"),
+            Some("es-ES"),
+            Some("es-MX"),
+            Some("es-419"),
+            Some("es-UY"),
+            Some("en-US"),
+            Some("fr-FR"),
+            None,
+        ] {
             assert_eq!(missing_dictionary(tag), None, "{tag:?}");
         }
     }
@@ -1109,6 +1138,7 @@ mod tests {
         for (name, aff, dic) in [
             ("pl_PL", pl::test_dict::AFF, pl::test_dict::DIC),
             ("pt_BR", pt::test_dict::AFF, pt::test_dict::DIC),
+            ("pt_PT", pt::test_dict::AFF, pt::test_dict::DIC_EUROPEAN),
             ("it_IT", it::test_dict::AFF, it::test_dict::DIC),
             ("hr_HR", hr::test_dict::AFF, hr::test_dict::DIC),
             ("tr_TR", tr::test_dict::AFF, tr::test_dict::DIC),
@@ -1137,12 +1167,13 @@ mod tests {
         // the languages' own tests install theirs concurrently, so an exact path would race them.
         // The folder is searched first whatever is in use.
         let found = installed_dictionaries();
-        let names = ["pl_PL", "pt_BR", "it_IT", "hr_HR", "tr_TR", "ru_RU", "cs_CZ", "id_ID", "es_ES", "es_MX", "es_419", "es_UY"];
+        let names = ["pl_PL", "pt_BR", "pt_PT", "it_IT", "hr_HR", "tr_TR", "ru_RU", "cs_CZ", "id_ID", "es_ES", "es_MX", "es_419", "es_UY"];
         assert_eq!(
             found.iter().map(|(lang, _)| *lang).collect::<Vec<_>>(),
             [
                 ProofLang::Pl,
                 ProofLang::Pt,
+                ProofLang::PtPt,
                 ProofLang::It,
                 ProofLang::Hr,
                 ProofLang::Tr,
@@ -1161,6 +1192,7 @@ mod tests {
             assert_eq!(hunspell::find(&[name]).map(|(_, dic)| dic), Some(file), "{lang:?}");
         }
         assert!(is_correct_in("chrząszcz", ProofLang::Pl) && !is_correct_in("chrzonszcz", ProofLang::Pl));
+        assert!(is_correct_in("facto", ProofLang::PtPt) && !is_correct_in("facto", ProofLang::Pt));
         assert!(is_correct_in("tenés", ProofLang::EsUy) && !is_correct_in("prueva", ProofLang::EsUy));
         assert!(is_correct_in("дом", ProofLang::Ru) && !is_correct_in("дум", ProofLang::Ru));
     }
@@ -1210,6 +1242,7 @@ mod tests {
             (ProofLang::It, "mele e pere"),
             (ProofLang::Tr, "elma ve armut"),
             (ProofLang::Pt, "maçãs e peras"),
+            (ProofLang::PtPt, "maçãs e peras"),
             (ProofLang::Ru, "яблоки и груши"),
         ] {
             let first = text.split(' ').next().unwrap();
@@ -1913,6 +1946,32 @@ mod tests {
         assert!(v.iter().all(|i| i.lang == ProofLang::It && i.message == "Possibile errore di ortografia"), "{v:?}");
     }
 
+    /// European and Brazilian Portuguese are checked against their own dictionaries: `facto` and
+    /// `equipa` are words in Portugal, `equipe` and `ônibus` in Brazil.
+    #[test]
+    fn european_and_brazilian_portuguese_use_their_own_dictionaries() {
+        pt::test_dict::install();
+        pt::test_dict::install_european();
+        let t = "O facto é que a equipa tem um autocarro económico.";
+        let pt = check_text(t, &[(0..t.len(), ProofLang::PtPt)]);
+        assert!(pt.is_empty(), "{pt:?}");
+        let br = check_text(t, &[(0..t.len(), ProofLang::Pt)]);
+        assert_eq!(flagged(t, &br), ["facto", "equipa", "autocarro", "económico"], "{br:?}");
+        let t = "A equipe tem um ônibus econômico.";
+        let pt = check_text(t, &[(0..t.len(), ProofLang::PtPt)]);
+        assert_eq!(flagged(t, &pt), ["equipe", "ônibus", "econômico"], "{pt:?}");
+        assert!(pt.iter().all(|i| i.lang == ProofLang::PtPt && i.message == "Possível erro de ortografia"), "{pt:?}");
+        assert!(check_text(t, &[(0..t.len(), ProofLang::Pt)]).is_empty());
+        // Suggestions come from the same dictionary: the European accent, not the Brazilian one.
+        assert_eq!(suggest_in("economico", 3, ProofLang::PtPt).first().map(String::as_str), Some("económico"));
+        assert_eq!(suggest_in("economico", 3, ProofLang::Pt).first().map(String::as_str), Some("econômico"));
+        assert!(is_correct_for("facto", Some("pt-PT")) && is_correct_for("facto", Some("pt_AO")));
+        assert!(!is_correct_for("facto", Some("pt-BR")) && !is_correct_for("facto", Some("pt")));
+        // Grammar issues in a European run carry its language.
+        let g = check_grammar_in("O autocarro autocarro chegou.", ProofLang::PtPt);
+        assert!(!g.is_empty() && g.iter().all(|i| i.lang == ProofLang::PtPt), "{g:?}");
+    }
+
     proptest::proptest! {
         #[test]
         fn never_panics(s in "\\PC{0,80}") {
@@ -1922,7 +1981,7 @@ mod tests {
             let _ = has_dictionary(Some(&s));
             let _ = is_correct_for(&s, Some(&s));
             let _ = hyphen::hyphen_points(&s, &hyphen::Limits::default());
-            for lang in [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa, ProofLang::Pl, ProofLang::Pt, ProofLang::It, ProofLang::Hr, ProofLang::Tr, ProofLang::Ru, ProofLang::Cs, ProofLang::Id, ProofLang::De, ProofLang::Es, ProofLang::EsMx, ProofLang::Es419, ProofLang::EsUy, ProofLang::Other] {
+            for lang in [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa, ProofLang::Pl, ProofLang::Pt, ProofLang::PtPt, ProofLang::It, ProofLang::Hr, ProofLang::Tr, ProofLang::Ru, ProofLang::Cs, ProofLang::Id, ProofLang::De, ProofLang::Es, ProofLang::EsMx, ProofLang::Es419, ProofLang::EsUy, ProofLang::Other] {
                 let _ = check_spelling_in(&s, lang);
                 let _ = check_grammar_in(&s, lang);
                 let _ = is_correct_in(&s, lang);
@@ -1940,6 +1999,7 @@ mod tests {
         #[test]
         fn portuguese_suggestions_never_panic(s in "[a-záàâãéêíóôõúüçA-ZÁÀÂÃÉÊÍÓÔÕÚÜÇ'’ -]{0,14}") {
             let _ = suggest_in(&s, 4, ProofLang::Pt);
+            let _ = suggest_in(&s, 4, ProofLang::PtPt);
         }
 
         #[test]
@@ -1976,7 +2036,7 @@ mod tests {
 
         #[test]
         fn mixed_spans_never_panic(s in "\\PC{0,60}", cuts in proptest::collection::vec((0usize..80, 0usize..80, 0u8..15), 0..6)) {
-            let langs = [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa, ProofLang::Pl, ProofLang::Pt, ProofLang::It, ProofLang::Tr, ProofLang::Ru, ProofLang::Cs, ProofLang::Id, ProofLang::Es, ProofLang::EsMx, ProofLang::Es419, ProofLang::EsUy, ProofLang::Other];
+            let langs = [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa, ProofLang::Pl, ProofLang::Pt, ProofLang::PtPt, ProofLang::It, ProofLang::Tr, ProofLang::Ru, ProofLang::Cs, ProofLang::Id, ProofLang::Es, ProofLang::EsMx, ProofLang::Es419, ProofLang::EsUy, ProofLang::Other];
             let spans: Vec<(Range<usize>, ProofLang)> = cuts.iter().map(|&(a, b, l)| (a.min(b)..a.max(b), langs[l as usize % langs.len()])).collect();
             for i in check_text(&s, &spans) {
                 proptest::prop_assert!(i.start <= i.end && i.end <= s.len());

@@ -1,13 +1,14 @@
 use super::{Ui, Value, WordApp, json, vec2};
 
 /// The proofing languages the Language menu offers: tag and English name (translated when drawn).
-pub(crate) const PROOFING_LANGUAGES: [(&str, &str); 16] = [
+pub(crate) const PROOFING_LANGUAGES: [(&str, &str); 17] = [
     ("en-US", "English (United States)"),
     ("en-GB", "English (United Kingdom)"),
     ("en-AU", "English (Australia)"),
     ("en-CA", "English (Canada)"),
     ("pl-PL", "Polish"),
     ("pt-BR", "Portuguese (Brazil)"),
+    ("pt-PT", "Portuguese (Portugal)"),
     ("it-IT", "Italian"),
     ("hr-HR", "Croatian"),
     ("tr-TR", "Turkish"),
@@ -33,6 +34,9 @@ pub(crate) fn language_name(tag: Option<&str>) -> String {
     }
     let mut parts = tag.split(['-', '_']);
     let primary = parts.next().unwrap_or("");
+    if primary.eq_ignore_ascii_case("pt") || primary.eq_ignore_ascii_case("por") {
+        return portuguese_name(tag);
+    }
     // The region: the first two-letter or three-digit subtag after the language (and script).
     let region =
         parts.find(|p| (p.len() == 2 && p.chars().all(|c| c.is_ascii_alphabetic())) || (p.len() == 3 && p.chars().all(|c| c.is_ascii_digit())));
@@ -63,6 +67,23 @@ pub(crate) fn language_name(tag: Option<&str>) -> String {
             wordcraft_engine::proof::ProofLang::En if tag.eq_ignore_ascii_case("en") => "English (United States)".into(),
             _ => tag.to_string(),
         },
+    }
+}
+
+/// The name of a Portuguese tag, read as `ProofLang::from_tag` reads it, so the label and the
+/// menu's check mark match the spelling proofed (#1028 review): a POSIX `.UTF-8` or `@euro` tail
+/// and ISO 639-2 `por` are understood, and a private-use `pt-x-PT` has no region. A region is
+/// named ("Portuguese (Portugal)", "Portuguese (Angola)"); no region is Brazil's, as proofed.
+fn portuguese_name(tag: &str) -> String {
+    let base = tag.split(['.', '@']).next().unwrap_or(tag);
+    let region = base
+        .split(['-', '_'])
+        .skip(1)
+        .take_while(|p| p.len() != 1)
+        .find(|p| (p.len() == 2 && p.chars().all(|c| c.is_ascii_alphabetic())) || (p.len() == 3 && p.chars().all(|c| c.is_ascii_digit())));
+    match region {
+        Some(r) => format!("Portuguese ({})", region_name(r)),
+        None => "Portuguese (Brazil)".into(),
     }
 }
 

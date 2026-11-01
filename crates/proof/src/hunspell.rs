@@ -53,8 +53,9 @@ pub fn set_dictionary_dir(dir: Option<PathBuf>) {
 }
 
 /// The LibreOffice extension directories a Hunspell dictionary name may live in: LibreOffice's
-/// IDs are per dictionary — Polish is `dict-pl`, Brazilian Portuguese `dict-pt-BR` — so both
-/// the primary-language folder and the dashed full name are tried.
+/// IDs are per dictionary — Polish is `dict-pl`, Brazilian Portuguese `dict-pt-BR`, European
+/// Portuguese `dict-pt-PT` — so both the primary-language folder and the dashed full name are
+/// tried.
 fn lo_ext_dirs(name: &str) -> Vec<String> {
     let primary = name.split(['-', '_']).next().unwrap_or(name);
     let dashed = name.replace('_', "-");
@@ -635,6 +636,7 @@ mod tests {
         assert_eq!(super::lo_ext_dirs("id_ID"), ["dict-id", "dict-id-ID"]);
         assert_eq!(super::lo_ext_dirs("pl_PL"), ["dict-pl", "dict-pl-PL"]);
         assert_eq!(super::lo_ext_dirs("pt_BR"), ["dict-pt", "dict-pt-BR"]);
+        assert_eq!(super::lo_ext_dirs("pt_PT"), ["dict-pt", "dict-pt-PT"]);
         assert_eq!(super::lo_ext_dirs("de-DE"), ["dict-de", "dict-de-DE"]);
         let dirs = search_dirs(Some(&super::lo_ext_dirs("pt_BR")));
         assert!(dirs.iter().any(|d| d.ends_with("dict-pt-BR")), "{dirs:?}");

@@ -143,7 +143,7 @@ fn core_breaks(core: &[char], lang: ProofLang) -> (Vec<usize>, Source) {
         return (crate::tr::hyphen::points(core), Source::Rules);
     }
     match lang {
-        ProofLang::Pt => return core_breaks_patterns(Patterns::pt(), core),
+        ProofLang::Pt | ProofLang::PtPt => return core_breaks_patterns(Patterns::pt(), core),
         ProofLang::It => return core_breaks_patterns(Patterns::it(), core),
         ProofLang::De => return core_breaks_patterns(Patterns::de(), core),
         _ => {}
@@ -825,6 +825,8 @@ mod tests {
             ("bem", "bem"),
         ] {
             assert_eq!(pt(w), want, "{w}");
+            // European Portuguese divides syllables the same way.
+            assert_eq!(hyphenate_word_in(w, &Limits::default(), ProofLang::PtPt), want, "{w}");
         }
     }
 

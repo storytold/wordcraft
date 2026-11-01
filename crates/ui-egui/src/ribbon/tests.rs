@@ -318,6 +318,39 @@ fn portuguese_has_a_name_in_the_language_menu() {
     assert_eq!(language_name(Some("PT-BR".to_string().as_str())), "Portuguese (Brazil)");
 }
 
+/// European Portuguese is its own entry, checked by its tag; the other regions that spell
+/// like Portugal (proofed as `pt-PT`) show by name, as other regions do.
+#[test]
+fn european_portuguese_is_in_the_language_menu() {
+    assert!(PROOFING_LANGUAGES.contains(&("pt-PT", "Portuguese (Portugal)")));
+    assert!(crate::dialogs_layout::LANGUAGES.contains(&("pt-PT", "Portuguese (Portugal)")));
+    for tag in ["pt-PT", "pt_pt", "PT-pt"] {
+        assert_eq!(language_name(Some(tag)), "Portuguese (Portugal)", "{tag}");
+    }
+    let c = language_checks("pt-pt", |t| t.eq_ignore_ascii_case("pt-PT"));
+    assert_eq!((c.extra, c.listed), (None, PROOFING_LANGUAGES.map(|(t, _)| t == "pt-PT")));
+    assert_eq!(language_name(Some("pt-MZ")), "Portuguese (Mozambique)");
+    assert_eq!(wordcraft_engine::proof::ProofLang::from_tag(Some("pt-MZ")), wordcraft_engine::proof::ProofLang::PtPt);
+    // #1028 review: however the tag is written, the label and the check mark follow the
+    // spelling it is proofed in.
+    use wordcraft_engine::proof::ProofLang;
+    for (tag, name, lang) in [
+        ("pt_PT.UTF-8", "Portuguese (Portugal)", ProofLang::PtPt),
+        ("pt_PT@euro", "Portuguese (Portugal)", ProofLang::PtPt),
+        ("por-PT", "Portuguese (Portugal)", ProofLang::PtPt),
+        ("pt-Latn-PT", "Portuguese (Portugal)", ProofLang::PtPt),
+        ("pt_BR.UTF-8", "Portuguese (Brazil)", ProofLang::Pt),
+        ("por", "Portuguese (Brazil)", ProofLang::Pt),
+        ("pt-x-PT", "Portuguese (Brazil)", ProofLang::Pt),
+    ] {
+        assert_eq!(language_name(Some(tag)), name, "{tag}");
+        assert_eq!(ProofLang::from_tag(Some(tag)), lang, "{tag}");
+        let listed = if lang == ProofLang::PtPt { "pt-PT" } else { "pt-BR" };
+        let c = language_checks(tag, |t| t.eq_ignore_ascii_case(tag));
+        assert_eq!((c.extra, c.listed), (None, PROOFING_LANGUAGES.map(|(t, _)| t == listed)), "{tag}");
+    }
+}
+
 #[test]
 fn turkish_has_a_name_in_the_language_menu() {
     assert!(PROOFING_LANGUAGES.iter().any(|(t, _)| *t == "tr-TR"));
