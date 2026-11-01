@@ -181,7 +181,7 @@ fn cmd_test() -> Result<(), String> {
     test_run(&["-E", &format!("not ({I18N_AUDIT_FILTER})")], &["--skip", I18N_AUDIT])
 }
 
-/// Missing translations never fail the build: the report lists them in the log.
+/// The test `cmd_language` runs.
 const LANGUAGE_CHECK: &str = "packs::tests::the_default_build_embeds_only_english";
 const LANGUAGE_CHECK_FILTER: &str = "package(wordcraft-engine) & test(=packs::tests::the_default_build_embeds_only_english)";
 
@@ -195,6 +195,7 @@ fn cmd_language() -> Result<(), String> {
     test_run(&["-E", LANGUAGE_CHECK_FILTER], &["--exact", LANGUAGE_CHECK])
 }
 
+/// Missing translations never fail the build: the report lists them in the log.
 fn cmd_i18n_report() -> Result<(), String> {
     test_run(&["-E", I18N_AUDIT_FILTER, "--no-capture"], &["--exact", I18N_AUDIT, "--nocapture"])
 }

@@ -120,6 +120,7 @@ pub fn set_backend(backend: Option<Arc<dyn Backend>>) {
     let dir = backend.as_ref().and_then(|b| b.packs_dir());
     *BACKEND.write().unwrap_or_else(PoisonError::into_inner) = backend;
     *INDEX.lock().unwrap_or_else(PoisonError::into_inner) = None;
+    jobs().errors.clear();
     wordcraft_proof::packs::set_packs_dir(dir);
 }
 
@@ -169,6 +170,14 @@ pub fn available() -> Vec<Pack> {
     let index = clean_index(b.index().unwrap_or_default());
     *cached = Some(index.clone());
     index
+}
+
+/// How many packs [`available`] lists, without copying them (the window asks every frame).
+pub fn available_len() -> usize {
+    if let Some(i) = INDEX.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
+        return i.len();
+    }
+    available().len()
 }
 
 /// Fetch the index again (downloading must be on).
@@ -253,6 +262,9 @@ pub fn install(locale: &str, cancel: &Cancel, progress: &mut dyn FnMut(u64, u64)
 /// Remove the installed pack for `locale`.
 pub fn remove(locale: &str) -> Result<(), String> {
     let b = backend().ok_or_else(no_store)?;
+    if jobs().installs.iter().any(|(l, ..)| l == locale) {
+        return Err(format!("the {locale} pack is being installed: cancel it first"));
+    }
     if !b.installed().iter().any(|p| p.locale == locale) {
         return Err(format!("no language pack is installed for {locale}"));
     }
@@ -262,6 +274,198 @@ pub fn remove(locale: &str) -> Result<(), String> {
     b.remove(locale)?;
     reload(&b);
     Ok(())
+}
+
+/// What the app does with a long pack request (an install or a fetch of the list): `None` runs it
+/// in the caller (the CLI, headless MCP, tests); `Some(notify)` runs it on a thread, so the window
+/// keeps drawing whoever asked (the person, the control channel, MCP), and calls `notify` on each
+/// change (the window repaints). Set once by the desktop app.
+pub type Notify = Arc<dyn Fn() + Send + Sync>;
+
+static BACKGROUND: RwLock<Option<Notify>> = RwLock::new(None);
+
+/// Installs and fetches running on a thread, and how the finished ones ended.
+#[derive(Default)]
+struct Jobs {
+    /// Running installs by locale: (bytes done, bytes in all, its Cancel).
+    installs: Vec<(String, u64, u64, Cancel)>,
+    fetching: bool,
+    /// The last failure of each locale's install ("" for the list), until it is tried again.
+    errors: Vec<(String, String)>,
+    /// Bumped as each job ends: the window relays out and shows the result.
+    finished: u64,
+}
+
+static JOBS: Mutex<Jobs> = Mutex::new(Jobs { installs: Vec::new(), fetching: false, errors: Vec::new(), finished: 0 });
+
+fn jobs() -> std::sync::MutexGuard<'static, Jobs> {
+    JOBS.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Run long pack requests on a thread (`Some`: the desktop app), or in the caller (`None`).
+pub fn set_background(notify: Option<Notify>) {
+    *BACKGROUND.write().unwrap_or_else(PoisonError::into_inner) = notify;
+}
+
+fn background() -> Option<Notify> {
+    if cfg!(target_arch = "wasm32") {
+        return None;
+    }
+    BACKGROUND.read().unwrap_or_else(PoisonError::into_inner).clone()
+}
+
+/// Whether installs and fetches run on a thread ([`set_background`]).
+pub fn runs_in_background() -> bool {
+    background().is_some()
+}
+
+/// A running install: (locale, bytes done, bytes in all).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Progress {
+    pub locale: String,
+    pub done: u64,
+    pub total: u64,
+}
+
+/// The installs running now.
+pub fn installing() -> Vec<Progress> {
+    jobs().installs.iter().map(|(l, d, t, _)| Progress { locale: l.clone(), done: *d, total: *t }).collect()
+}
+
+/// Whether the list is being fetched.
+pub fn fetching() -> bool {
+    jobs().fetching
+}
+
+/// The last failure of `locale`'s install ("" for the list), until it is tried again.
+pub fn error(locale: &str) -> Option<String> {
+    jobs().errors.iter().find(|(l, _)| l == locale).map(|(_, e)| e.clone())
+}
+
+/// Every recorded failure, (locale or "" for the list, message).
+pub fn errors() -> Vec<(String, String)> {
+    jobs().errors.clone()
+}
+
+/// Counts finished jobs: when it changes, the window lays the documents out again.
+pub fn finished() -> u64 {
+    jobs().finished
+}
+
+/// Stop `locale`'s running install.
+pub fn cancel(locale: &str) {
+    if let Some((_, _, _, c)) = jobs().installs.iter().find(|(l, ..)| l == locale) {
+        c.cancel();
+    }
+}
+
+fn set_error(locale: &str, e: Option<String>) {
+    let mut j = jobs();
+    j.errors.retain(|(l, _)| l != locale);
+    if let Some(e) = e {
+        j.errors.push((locale.to_string(), e));
+    }
+}
+
+/// Start installing `locale` ([`install`]): on a thread when [`runs_in_background`], else now.
+/// What's wrong up front (no pack, downloading off, outside the write root) is an error at once.
+/// Returns whether it is still running (`false`: done, or it already was running).
+pub fn start_install(locale: &str) -> Result<bool, String> {
+    let b = backend().ok_or_else(no_store)?;
+    let pack = find(locale).ok_or_else(|| format!("there is no language pack for {locale}"))?;
+    if !b.network_on() {
+        return Err(network_off());
+    }
+    if let Some(dir) = b.packs_dir() {
+        crate::file_access::check_write(&dir.to_string_lossy())?;
+    }
+    let Some(notify) = background() else {
+        let r = install(locale, &Cancel::new(), &mut |_, _| {});
+        set_error(locale, r.as_ref().err().cloned());
+        return r.map(|_| false);
+    };
+    let cancel = Cancel::new();
+    {
+        let mut j = jobs();
+        if j.installs.iter().any(|(l, ..)| l == locale) {
+            return Ok(true);
+        }
+        j.installs.push((locale.to_string(), 0, pack.size, cancel.clone()));
+        j.errors.retain(|(l, _)| l != locale);
+    }
+    let key = locale.to_string();
+    let locale = locale.to_string();
+    let started = spawn(move || {
+        let progress_notify = notify.clone();
+        let r = install(&locale, &cancel, &mut |done, total| {
+            if let Some(job) = jobs().installs.iter_mut().find(|(l, ..)| *l == locale) {
+                job.1 = done;
+                job.2 = total;
+            }
+            progress_notify();
+        });
+        let mut j = jobs();
+        j.installs.retain(|(l, ..)| *l != locale);
+        if let Err(e) = r {
+            j.errors.push((locale, e));
+        }
+        j.finished = j.finished.wrapping_add(1);
+        drop(j);
+        notify();
+    });
+    if let Err(e) = started {
+        jobs().installs.retain(|(l, ..)| *l != key);
+        return Err(e);
+    }
+    Ok(true)
+}
+
+/// Start fetching the list again ([`refresh`]): on a thread when [`runs_in_background`], else now.
+/// Returns whether it is still running.
+pub fn start_refresh() -> Result<bool, String> {
+    let b = backend().ok_or_else(no_store)?;
+    if !b.network_on() {
+        return Err(network_off());
+    }
+    let Some(notify) = background() else {
+        let r = refresh(&Cancel::new());
+        set_error("", r.as_ref().err().cloned());
+        return r.map(|_| false);
+    };
+    {
+        let mut j = jobs();
+        if j.fetching {
+            return Ok(true);
+        }
+        j.fetching = true;
+        j.errors.retain(|(l, _)| !l.is_empty());
+    }
+    let started = spawn(move || {
+        let r = refresh(&Cancel::new());
+        let mut j = jobs();
+        j.fetching = false;
+        if let Err(e) = r {
+            j.errors.push((String::new(), e));
+        }
+        j.finished = j.finished.wrapping_add(1);
+        drop(j);
+        notify();
+    });
+    if let Err(e) = started {
+        jobs().fetching = false;
+        return Err(e);
+    }
+    Ok(true)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn spawn(f: impl FnOnce() + Send + 'static) -> Result<(), String> {
+    std::thread::Builder::new().name("language-pack".into()).spawn(f).map(|_| ()).map_err(|e| format!("couldn't start the download: {e}"))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn spawn(_: impl FnOnce() + Send + 'static) -> Result<(), String> {
+    Err(no_store())
 }
 
 /// Have proofing look at the packs folder again (its dictionaries are reloaded).

@@ -5,16 +5,16 @@
 
 use serde_json::{Value, json};
 
-use crate::packs::{self, Cancel};
+use crate::packs;
 use crate::{CmdError, CmdResult, CommandSpec, Session, p};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("proof.packs", "Language Packs", "File › Options › Language", list)
-            .params(r#"{"refresh"?: bool (fetch the pinned index again; only while downloading is on)} — opens nothing. Returns {"packs": [{"locale", "name", "size" (bytes), "licence" (SPDX), "class", "source" (where the data comes from), "archive" (the download), "spelling", "hyphenation", "installed"}], "installed": [{"locale", "name", "licence"}], "network": bool (downloading on), "available": bool (a font store to install into)}"#)
+            .params(r#"{"refresh"?: bool (fetch the pinned index again; only while downloading is on; in the app it runs in the background: see "refreshing")} — opens nothing. Returns {"packs": [{"locale", "name", "size" (bytes), "licence" (SPDX), "class", "source" (where the data comes from), "archive" (the download), "spelling", "hyphenation", "installed"}], "installed": [{"locale", "name", "licence"}], "installing": [{"locale", "done", "total"} (bytes)], "refreshing": bool, "errors": {locale or "" (the list): message} (the last failure of each), "network": bool (downloading on), "available": bool (a font store to install into)}"#)
             .pure(),
         CommandSpec::new("proof.installPack", "Install Language Pack", "File › Options › Language", install)
-            .params(r#"{"locale": string (a pack's locale from proof.packs, like nl or pt-pt)} — downloads, verifies (sha256) and installs it; spelling and hyphenation in that language use it at once. Needs downloading on (only the person in the app can turn it on). Opens nothing."#)
+            .params(r#"{"locale": string (a pack's locale from proof.packs, like nl or pt-pt)} — downloads, verifies (sha256) and installs it; spelling and hyphenation in that language use it at once. Needs downloading on (only the person in the app can turn it on). Opens nothing. In the app it runs in the background and returns {"started": true}: follow it with proof.packs ("installing", then "installed" or "errors"); elsewhere it returns when installed."#)
             .pure()
             .when(available),
         CommandSpec::new("proof.removePack", "Remove Language Pack", "File › Options › Language", remove)
@@ -34,7 +34,13 @@ fn locale_param(v: &Value) -> Result<String, CmdError> {
 }
 
 fn list(_: &mut Session, v: &Value) -> CmdResult {
-    let index = if p::bool(v, "refresh") == Some(true) { packs::refresh(&Cancel::new()).map_err(CmdError::Failed)? } else { packs::available() };
+    if p::bool(v, "refresh") == Some(true) {
+        packs::start_refresh().map_err(CmdError::Failed)?;
+        if let Some(e) = packs::error("") {
+            return Err(CmdError::Failed(e));
+        }
+    }
+    let index = packs::available();
     let installed = packs::installed();
     let backend = packs::backend();
     let rows: Vec<Value> = index
@@ -50,6 +56,9 @@ fn list(_: &mut Session, v: &Value) -> CmdResult {
     Ok(json!({
         "packs": rows,
         "installed": installed.iter().map(|i| json!({"locale": i.locale, "name": i.name, "licence": i.licence})).collect::<Vec<_>>(),
+        "installing": packs::installing(),
+        "refreshing": packs::fetching(),
+        "errors": packs::errors().into_iter().map(|(l, e)| (l, Value::String(e))).collect::<serde_json::Map<String, Value>>(),
         "network": backend.as_ref().is_some_and(|b| b.network_on()),
         "available": backend.is_some(),
     }))
@@ -60,7 +69,11 @@ fn install(s: &mut Session, v: &Value) -> CmdResult {
     if packs::is_installed(&locale) {
         return Ok(json!({"locale": locale, "installed": true, "already": true}));
     }
-    let done = packs::install(&locale, &Cancel::new(), &mut |_, _| {}).map_err(CmdError::Failed)?;
+    if packs::start_install(&locale).map_err(CmdError::Failed)? {
+        return Ok(json!({"locale": locale, "started": true}));
+    }
+    let done =
+        packs::installed().into_iter().find(|p| p.locale == locale).ok_or_else(|| CmdError::Failed(format!("the {locale} pack didn't install")))?;
     // Spelling and hyphenation in that language change.
     s.relayout();
     Ok(json!({"locale": done.locale, "name": done.name, "licence": done.licence, "installed": true}))
@@ -90,6 +103,7 @@ mod tests {
         packs::set_backend(Some(b.clone() as Arc<dyn Backend>));
         let mut s = Session::new(crate::sample::sample_document());
         let r = f(&mut s, &b);
+        packs::set_background(None);
         packs::set_backend(None);
         r
     }
@@ -192,6 +206,98 @@ mod tests {
         assert_eq!(packs::pack_for_tag("", &packs), None);
         assert!(packs::valid_locale("sr-latn"));
         assert!(!packs::valid_locale("sr--latn") && !packs::valid_locale("-x") && !packs::valid_locale("x/y"));
+    }
+
+    /// An install or a removal in one window proofs every open document again, parked ones too:
+    /// their layouts are keyed on the dictionaries' generation, not only their own revision.
+    #[test]
+    fn installing_proofs_parked_documents_again() {
+        with_backend(FixedBackend::sample(), |s, b| {
+            let mut parked = Session::new(crate::sample::sample_document());
+            let before = parked.layout();
+            assert!(std::sync::Arc::ptr_eq(&before, &parked.layout()), "unchanged: the same layout");
+            b.network.store(true, Ordering::Relaxed);
+            s.run("proof.installPack", &json!({"locale": "pl"})).unwrap();
+            assert!(!std::sync::Arc::ptr_eq(&before, &parked.layout()), "the parked document is laid out (and proofed) again");
+            let after = parked.layout();
+            s.run("proof.removePack", &json!({"locale": "pl"})).unwrap();
+            assert!(!std::sync::Arc::ptr_eq(&after, &parked.layout()));
+        });
+    }
+
+    /// A backend whose installs wait until the test lets them finish.
+    struct Slow {
+        inner: FixedBackend,
+        go: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
+    }
+
+    impl Backend for Slow {
+        fn index(&self) -> Result<Vec<Pack>, String> {
+            self.inner.index()
+        }
+        fn fetch_index(&self, c: &packs::Cancel) -> Result<Vec<Pack>, String> {
+            self.inner.fetch_index(c)
+        }
+        fn network_on(&self) -> bool {
+            self.inner.network_on()
+        }
+        fn enable_network(&self) -> Result<(), String> {
+            self.inner.enable_network()
+        }
+        fn install(&self, pack: &Pack, cancel: &packs::Cancel, progress: &mut dyn FnMut(u64, u64)) -> Result<(), String> {
+            progress(1, pack.size);
+            let _ = self.go.lock().unwrap().recv();
+            self.inner.install(pack, cancel, progress)
+        }
+        fn remove(&self, locale: &str) -> Result<(), String> {
+            self.inner.remove(locale)
+        }
+        fn packs_dir(&self) -> Option<std::path::PathBuf> {
+            None
+        }
+        fn installed(&self) -> Vec<packs::Installed> {
+            self.inner.installed()
+        }
+    }
+
+    /// In the app an install runs on a thread, whoever asks: the command returns at once, and
+    /// `proof.packs` shows it running, then installed. A removal of the same pack meanwhile is
+    /// refused.
+    #[test]
+    fn in_the_app_installs_run_in_the_background() {
+        let _g = LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let slow = Arc::new(Slow { inner: FixedBackend::sample(), go: std::sync::Mutex::new(rx) });
+        slow.inner.network.store(true, Ordering::Relaxed);
+        packs::set_backend(Some(slow.clone() as Arc<dyn Backend>));
+        let notified = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let n = notified.clone();
+        packs::set_background(Some(Arc::new(move || {
+            n.fetch_add(1, Ordering::Relaxed);
+        })));
+        let mut s = Session::new(crate::sample::sample_document());
+        let before = packs::finished();
+        let r = s.run("proof.installPack", &json!({"locale": "pl"})).unwrap();
+        assert_eq!(r["started"], true);
+        let list = s.run("proof.packs", &json!({})).unwrap();
+        assert_eq!(list["installing"][0]["locale"], "pl");
+        let e = s.run("proof.removePack", &json!({"locale": "pl"})).unwrap_err();
+        assert!(e.to_string().contains("being installed"), "{e}");
+        tx.send(()).unwrap();
+        for _ in 0..500 {
+            if packs::finished() != before {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_ne!(packs::finished(), before);
+        assert!(notified.load(Ordering::Relaxed) > 0, "the window is told");
+        let list = s.run("proof.packs", &json!({})).unwrap();
+        assert_eq!(list["installing"], json!([]));
+        assert_eq!(list["installed"][0]["locale"], "pl");
+        assert!(s.ui_requests.is_empty(), "no dialog opens");
+        packs::set_background(None);
+        packs::set_backend(None);
     }
 
     use crate::packs::Pack;

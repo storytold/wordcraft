@@ -119,8 +119,8 @@ the suite's font store (see [installing languages](spelling-dictionaries.md#lang
 
 | Command | Params | Returns |
 |---|---|---|
-| `proof.packs` | `{"refresh"?: bool}` (fetch the pinned index again) | `{"packs": [{"locale", "name", "size", "licence", "class", "source" (upstream), "archive", "spelling", "hyphenation", "installed"}], "installed": [...], "network", "available"}` |
-| `proof.installPack` | `{"locale": "nl"}` | `{"locale", "name", "licence", "installed": true}` (`"already": true` when it was) |
+| `proof.packs` | `{"refresh"?: bool}` (fetch the pinned index again) | `{"packs": [{"locale", "name", "size", "licence", "class", "source" (upstream), "archive", "spelling", "hyphenation", "installed"}], "installed": [...], "installing": [{"locale", "done", "total"}], "refreshing", "errors": {locale: message}, "network", "available"}` |
+| `proof.installPack` | `{"locale": "nl"}` | `{"locale", "name", "licence", "installed": true}` (`"already": true` when it was); with `--connect`, `{"locale", "started": true}` |
 | `proof.removePack` | `{"locale": "nl"}` | `{"locale", "installed": false}` |
 
 None opens anything. Downloading is the font store's single consent setting: an agent can install
@@ -128,7 +128,14 @@ only while the person has turned it on in the app (File › Options › Language
 available languages), and can never turn it on itself; otherwise `proof.installPack` fails with
 *downloading is turned off*. `refresh` likewise needs it on. Every archive is checked against the
 sha256 in the pinned index before it is unpacked. With `--connect` the commands act on the running
-app's packs; headless, on the same font store folder. The web build has no packs.
+app's packs, and an install or a `refresh` runs in the background so the window keeps working: the
+command returns `"started": true` at once, and `proof.packs` shows it under `installing` (or
+`refreshing`), then under `installed`, or its failure under `errors`. A removal waits until that
+pack's install ends. Headless, they act on the same font store folder and return when done. The
+web build has no packs.
+
+A click or key sent with `click`/`key` on Install, Show available languages or Refresh never turns
+downloading on either: only the person's own click does; the app shows why instead.
 
 For testing packs before they are published, set `CRAFT_LANGUAGE_PACK_INDEX` to another index (a
 URL or a path to an `index.json`) when starting WordCraft or `wordcraft-cli`; the archives it lists
