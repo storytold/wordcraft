@@ -92,20 +92,25 @@ struct Measured {
     order: HashMap<String, Vec<String>>,
 }
 
+/// Stable storage id for the ribbon fit plan of the current frame.
 fn frame_id() -> Id {
-    Id::new("ribbon_fit_frame")
+    Id::unique("ribbon_fit_frame")
 }
+/// Stable storage id for widths measured from earlier ribbon frames.
 fn measured_id() -> Id {
-    Id::new("ribbon_fit_measured")
+    Id::unique("ribbon_fit_measured")
 }
+/// Stable storage id for the ribbon's compact-layout choices.
 fn compact_id() -> Id {
-    Id::new("ribbon_fit_compact")
+    Id::unique("ribbon_fit_compact")
 }
+/// Stable storage id for the points a group would save by drawing compact.
 fn saving_id() -> Id {
-    Id::new("ribbon_fit_saving")
+    Id::unique("ribbon_fit_saving")
 }
+/// Stable storage id for whether this frame's ribbon fit plan is active.
 fn active_id() -> Id {
-    Id::new("ribbon_fit_active")
+    Id::unique("ribbon_fit_active")
 }
 
 /// What the measured widths depend on besides the groups themselves.
@@ -375,13 +380,23 @@ mod ui_tests {
         h.state_mut().run("select.all", json!({})).unwrap();
         h.get_by_role_and_label(Role::Button, "Font").click();
         h.run_steps(3);
-        let size = |h: &mut egui_kittest::Harness<'static, WordApp>| {
-            h.state_mut().session.run("format.state", &json!({})).ok().and_then(|v| v.get("size").and_then(serde_json::Value::as_f64))
+        let sizes = |h: &egui_kittest::Harness<'static, WordApp>| {
+            let s = &h.state().session;
+            s.doc
+                .para_paths(wordcraft_doc::StoryRef::Body)
+                .iter()
+                .filter_map(|path| s.doc.para(wordcraft_doc::StoryRef::Body, path))
+                .flat_map(|p| p.run_ranges().map(|(_, c)| s.doc.styles.resolve_char(p.props.style.as_deref(), c).size))
+                .collect::<Vec<_>>()
         };
-        let before = size(&mut h);
+        let before = sizes(&h);
+        assert!(before.windows(2).any(|sizes| sizes[0] != sizes[1]), "the fixture has mixed sizes");
         click_shown(&h, "Increase Font Size");
         h.run_steps(3);
-        assert_ne!(size(&mut h), before, "Increase Font Size ran");
+        let after = sizes(&h);
+        assert_eq!(after.len(), before.len());
+        assert!(after.windows(2).any(|sizes| sizes[0] != sizes[1]), "mixed sizes stay mixed");
+        assert!(after.iter().zip(&before).all(|(after, before)| after > before), "Increase Font Size grew each run without flattening mixed sizes");
         assert!(shown(&h, "Change Case"), "the drop-down stays open after a click inside");
         click_shown(&h, "Change Case");
         h.run_steps(3);

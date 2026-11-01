@@ -39,7 +39,11 @@ pub fn parse_page_range(spec: &str, total: usize) -> Result<Vec<usize>, String> 
             continue;
         }
         let page = |t: &str| -> Result<usize, String> {
-            let n: usize = t.parse().map_err(|_| format!("`{item}` isn't a page or a range like 2-4"))?;
+            let not_a_page = || format!("`{item}` isn't a page or a range like 2-4");
+            if !t.bytes().all(|b| b.is_ascii_digit()) {
+                return Err(not_a_page());
+            }
+            let n: usize = t.parse().map_err(|_| not_a_page())?;
             if n == 0 || n > total {
                 return Err(format!("page {n} doesn't exist; the document has {total} page{}", if total == 1 { "" } else { "s" }));
             }
@@ -152,8 +156,20 @@ impl Session {
     }
 
     /// The document as the PDF of a print job `v` describes (see [`plan`]), with the number of
-    /// distinct pages chosen and copies. Does not touch the document.
+    /// distinct pages chosen and copies, as File › Print › Save these pages as PDF keeps it:
+    /// links work. Does not touch the document.
     pub fn print_pdf(&self, v: &Value) -> Result<(Vec<u8>, PrintPlan), CmdError> {
+        self.print_pdf_with(v, true)
+    }
+
+    /// The PDF sent to a printer for job `v`: [`Self::print_pdf`] without link annotations,
+    /// which print nothing, and which a printer driver can't fit to the paper ("flatten page
+    /// annotations before using shrink-to-fit", #4734).
+    pub fn print_job_pdf(&self, v: &Value) -> Result<(Vec<u8>, PrintPlan), CmdError> {
+        self.print_pdf_with(v, false)
+    }
+
+    fn print_pdf_with(&self, v: &Value, links: bool) -> Result<(Vec<u8>, PrintPlan), CmdError> {
         // Print Markup (File › Print) decides whether tracked changes and comments print.
         let markup = crate::cmd::file::export_options(self, v);
         let lay = self.export_layout_with(markup.markup);
@@ -166,6 +182,7 @@ impl Session {
             include_markup: markup.markup,
             comments: markup.comments,
             paper,
+            links,
             ..Default::default()
         };
         let bytes = wordcraft_pdf::export_layout(&self.doc, &lay, &opts).map_err(|e| CmdError::Failed(e.to_string()))?;
@@ -194,7 +211,7 @@ mod tests {
         assert_eq!(parse_page_range("5,1-2,2", 6), Ok(vec![0, 1, 4]), "document order, no repeats");
         assert_eq!(parse_page_range("4-", 6), Ok(vec![3, 4, 5]));
         assert_eq!(parse_page_range("-2", 6), Ok(vec![0, 1]));
-        for bad in ["", " , ", "0", "7", "3-1", "a", "1-2-3", "99999999999999999999999", "-", "1..3", &"1,".repeat(400)] {
+        for bad in ["", " , ", "0", "7", "3-1", "a", "1-2-3", "99999999999999999999999", "-", "1..3", "+3", "1-+3", "+2-+4", &"1,".repeat(400)] {
             assert!(parse_page_range(bad, 6).is_err(), "`{bad}` is refused");
         }
         assert!(parse_page_range("1", 0).is_err());
@@ -232,6 +249,36 @@ mod tests {
         assert!(s.print_pdf(&json!({"pages": "9999"})).is_err());
         let r = s.run("file.printPdf", &json!({})).is_err();
         assert!(r, "printPdf needs a path");
+    }
+
+    /// #4734: the PDF sent to a printer has no link annotations, which a printer driver can't fit
+    /// to the paper ("flatten page annotations before using shrink-to-fit"). An exported PDF and
+    /// one saved with Save these pages as PDF (`file.printPdf`) keep them.
+    #[test]
+    fn only_the_print_job_leaves_out_link_annotations() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("insert.link", &json!({"url": "https://example.com", "text": "a link"})).unwrap();
+        let lay = s.export_layout();
+        let exported = wordcraft_pdf::export_layout(&s.doc, &lay, &wordcraft_pdf::PdfOptions::default()).unwrap();
+        let links = |bytes: &[u8]| {
+            let raw = String::from_utf8_lossy(bytes);
+            raw.contains("/Annots") && raw.contains("/Link")
+        };
+        assert!(links(&exported), "an exported PDF keeps the link");
+        for params in [json!({}), json!({"paper": "A4"}), json!({"markup": true})] {
+            let (job, _) = s.print_job_pdf(&params).unwrap();
+            assert!(!links(&job) && !String::from_utf8_lossy(&job).contains("/Annots"), "{params}");
+            let (saved, _) = s.print_pdf(&params).unwrap();
+            assert!(links(&saved), "{params}");
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let path = std::env::temp_dir().join(format!("wc-print-links-{}.pdf", std::process::id()));
+            s.run("file.printPdf", &json!({"path": path.to_string_lossy()})).unwrap();
+            let saved = std::fs::read(&path).unwrap();
+            let _ = std::fs::remove_file(&path);
+            assert!(links(&saved), "Save these pages as PDF keeps the link");
+        }
     }
 
     /// Scale to paper size (#2108): the PDF goes on the chosen paper; the document keeps its size.

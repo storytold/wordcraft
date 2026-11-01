@@ -16,72 +16,35 @@ mod suggest;
 #[cfg(test)]
 pub(crate) mod test_dict;
 
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use crate::affix::AffixDict;
+use crate::slot::DictSlot;
 
 pub use suggest::suggest;
 
-/// The Portuguese dictionary: `None` until first use, then the installed one (or an empty one).
-static DICT: RwLock<Option<Arc<AffixDict>>> = RwLock::new(None);
-
 /// File names of a Portuguese Hunspell dictionary.
 const NAMES: &[&str] = &["pt_BR", "pt-BR", "pt"];
+
+/// The Portuguese dictionary, found on first use (see [`DictSlot`]).
+pub(crate) static DICT: DictSlot<AffixDict> = DictSlot::new(NAMES, "Portuguese");
 
 /// The Portuguese dictionary: the installed Hunspell `pt_BR` (read on first use), one given with
 /// [`install_dictionary`], or an empty one when none is available (Portuguese spelling is off
 /// then; see [`has_dictionary`]).
 pub fn dictionary() -> Arc<AffixDict> {
-    if let Some(d) = DICT.read().unwrap_or_else(|e| e.into_inner()).as_ref() {
-        return d.clone();
-    }
-    let loaded = Arc::new(load_installed());
-    let mut slot = DICT.write().unwrap_or_else(|e| e.into_inner());
-    // Another thread (or an install) may have filled it meanwhile: that one wins.
-    slot.get_or_insert(loaded).clone()
-}
-
-fn load_installed() -> AffixDict {
-    let Some((aff, dic)) = crate::hunspell::find(NAMES) else {
-        crate::hunspell::clear_load_error(NAMES[0]);
-        log::info!("Portuguese spelling: no Hunspell pt_BR dictionary installed");
-        return AffixDict::default();
-    };
-    crate::hunspell::note_load(NAMES[0], &dic, crate::hunspell::load(&aff, &dic)).unwrap_or_else(|e| {
-        log::warn!("Portuguese spelling: {e}");
-        AffixDict::default()
-    })
+    DICT.get()
 }
 
 /// Use this Portuguese dictionary from now on (Hunspell `.aff` and `.dic` text, decoded to
 /// UTF-8), for example one the user picked. On error the current dictionary stays.
 pub fn install_dictionary(aff: &str, dic: &str) -> Result<(), String> {
-    let d = AffixDict::from_hunspell(aff, dic, &[])?;
-    *DICT.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(d));
-    Ok(())
-}
-
-/// Forget the loaded dictionary, so the next check looks for an installed one again (after
-/// [`crate::hunspell::set_dictionary_dir`] or a dictionary was installed).
-pub fn reload_dictionary() {
-    *DICT.write().unwrap_or_else(|e| e.into_inner()) = None;
-}
-
-/// The `.dic` file of the installed Portuguese dictionary, searching the dictionaries folder and
-/// the system locations now (File › Options › Proofing shows it, #1063); `None` when there is
-/// none. A dictionary given with [`install_dictionary`] has no file and isn't reported.
-pub fn installed_path() -> Option<std::path::PathBuf> {
-    crate::hunspell::find(NAMES).map(|(_, dic)| dic)
+    DICT.install(aff, dic)
 }
 
 /// Is a Portuguese dictionary available (spelling is checked)?
 pub fn has_dictionary() -> bool {
-    !dictionary().is_empty()
-}
-
-/// Is `c` a letter of the Latin script (the only one the Portuguese dictionary covers)?
-fn is_latin_letter(c: char) -> bool {
-    c.is_alphabetic() && (c < '\u{0250}' || ('\u{1E00}'..='\u{1EFF}').contains(&c))
+    DICT.has_dictionary()
 }
 
 /// Is `word` spelled correctly in Portuguese? Numbers, single letters, short words in capitals
@@ -91,23 +54,23 @@ pub fn is_correct(word: &str) -> bool {
     is_correct_with(&dictionary(), word)
 }
 
+/// [`is_correct`] with the File › Options › Proofing choices: with Ignore words in UPPERCASE off,
+/// short words in capitals are checked against the dictionary too, and with Ignore words that
+/// contain numbers off, so are words with digits.
+pub fn is_correct_with_options(word: &str, opts: &crate::Options) -> bool {
+    check(&dictionary(), word, opts)
+}
+
 /// [`is_correct`] against a given dictionary (an empty one accepts everything).
 pub fn is_correct_with(d: &AffixDict, word: &str) -> bool {
-    if d.is_empty() {
-        return true; // no Portuguese dictionary installed: no spelling marks
-    }
-    let w = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'' && c != '’');
-    let w = w.trim_matches(['\'', '’']);
-    let n = w.chars().count();
-    if n <= 1 || w.chars().any(|c| c.is_ascii_digit()) || !w.chars().any(char::is_alphabetic) {
+    check(d, word, &crate::Options::default())
+}
+
+/// [`is_correct_with_options`] against a given dictionary.
+fn check(d: &AffixDict, word: &str, opts: &crate::Options) -> bool {
+    let Some(w) = crate::spelling::word_to_check(d, word, opts) else {
         return true;
-    }
-    if w.chars().all(|c| !c.is_lowercase()) && n <= 6 {
-        return true;
-    }
-    if !w.chars().any(is_latin_letter) {
-        return true; // other scripts: no dictionary
-    }
+    };
     if w.contains('-') {
         return w.split('-').all(|p| p.chars().count() <= 1 || known(d, p));
     }
@@ -216,5 +179,23 @@ mod tests {
         // Added as the context menu adds it, hyphen and all (#2082).
         crate::add_word("Unigranrio-RJ");
         assert!(crate::check_spelling_in(text, crate::ProofLang::Pt).is_empty());
+    }
+
+    /// With Ignore words in UPPERCASE or Ignore words that contain numbers off, Portuguese checks
+    /// those words against the dictionary instead of accepting them.
+    #[test]
+    fn proofing_options_reach_the_portuguese_check() {
+        test_dict::install();
+        let lang = crate::ProofLang::Pt;
+        let defaults = crate::Options::default();
+        let check_caps = crate::Options { ignore_uppercase: false, ..defaults };
+        let check_digits = crate::Options { ignore_numbers: false, ..defaults };
+        assert!(crate::is_correct_in_with("PRAYA", lang, &defaults), "short capitals are acronyms by default");
+        assert!(!crate::is_correct_in_with("PRAYA", lang, &check_caps));
+        assert!(crate::is_correct_in_with("PRAIA", lang, &check_caps));
+        assert!(crate::is_correct_in_with("praya2", lang, &defaults));
+        assert!(!crate::is_correct_in_with("praya2", lang, &check_digits));
+        assert!(crate::is_correct_in_with("2026", lang, &check_digits), "numbers alone stay correct");
+        assert!(is_correct("PRAYA"), "direct checks keep the defaults");
     }
 }

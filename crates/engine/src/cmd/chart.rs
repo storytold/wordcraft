@@ -145,7 +145,7 @@ fn insert(s: &mut Session, v: &Value) -> CmdResult {
     let kind = chart_type(v)?;
     // No type and no data: Insert › Chart's picker, as the ribbon button does.
     if kind.is_none() && v.get("data").is_none() {
-        s.ui_requests.push(json!({"open": "insertChart"}));
+        s.push_ui_request(json!({"open": "insertChart"}));
         return sel_result(s);
     }
     let kind = kind.unwrap_or_default();

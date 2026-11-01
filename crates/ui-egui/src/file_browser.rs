@@ -47,7 +47,8 @@ pub(crate) struct Listing {
 
 /// Whether `path` has one of `exts` (case-insensitive); `*` takes any file.
 pub(crate) fn matches(path: &Path, exts: &[String]) -> bool {
-    exts.iter().any(|e| e == "*") || path.extension().and_then(|e| e.to_str()).is_some_and(|e| exts.iter().any(|x| x.eq_ignore_ascii_case(e)))
+    exts.iter().any(|e| e == "*")
+        || path.extension().and_then(std::ffi::OsStr::to_str).is_some_and(|e| exts.iter().any(|x| x.eq_ignore_ascii_case(e)))
 }
 
 /// The subfolders and the files with one of `exts` in `dir`, at most `cap` of them, folders first
@@ -150,8 +151,8 @@ impl FileBrowser {
             FileDialogRequest::Open { purpose } | FileDialogRequest::OpenMany { purpose } => {
                 (String::new(), open_filters(purpose).iter().map(|(l, e)| ((*l).to_string(), e.iter().map(|x| (*x).to_string()).collect())).collect())
             }
-            FileDialogRequest::Save { name } => {
-                let ext = Path::new(name).extension().and_then(|e| e.to_str()).filter(|e| !e.is_empty());
+            FileDialogRequest::Save { name, .. } => {
+                let ext = Path::new(name).extension().and_then(std::ffi::OsStr::to_str).filter(|e| !e.is_empty());
                 let mut f: Vec<(String, Vec<String>)> = ext.map(|e| (format!("*.{e}"), vec![e.to_string()])).into_iter().collect();
                 f.push(("All files".into(), vec!["*".into()]));
                 (name.clone(), f)
@@ -258,11 +259,13 @@ impl FileBrowser {
 impl WordApp {
     /// Ask for a file in the built-in browser and do `after` with the answer when it closes.
     pub(crate) fn show_file_browser(&mut self, req: FileDialogRequest, after: AfterPick, unavailable: bool) {
-        let start = self
-            .file_browser
-            .last_dir
-            .clone()
-            .filter(|d| d.is_dir())
+        // A folder the request names (the user templates folder, #2852) comes first.
+        let asked = match &req {
+            FileDialogRequest::Save { dir: Some(d), .. } => Some(PathBuf::from(d)).filter(|d| d.is_dir()),
+            _ => None,
+        };
+        let start = asked
+            .or_else(|| self.file_browser.last_dir.clone().filter(|d| d.is_dir()))
             .or_else(|| self.session.path.as_ref().and_then(|p| p.parent()).map(Path::to_path_buf).filter(|d| d.is_dir()))
             .or_else(home)
             .or_else(|| std::env::current_dir().ok())
@@ -281,10 +284,10 @@ impl WordApp {
             "picture" => (FileDialogRequest::Open { purpose: "picture".into() }, AfterPick::Picture),
             "recipients" => (FileDialogRequest::Open { purpose: "recipients".into() }, AfterPick::Recipients),
             "save" => (
-                FileDialogRequest::Save { name: self.default_save_name() },
+                FileDialogRequest::Save { name: self.default_save_name(), dir: None },
                 AfterPick::SaveAs { after: crate::file_dialogs::AfterSave::Nothing, document: self.session.document_id() },
             ),
-            _ => (FileDialogRequest::Open { purpose: "document".into() }, AfterPick::OpenDocument),
+            _ => (FileDialogRequest::Open { purpose: "document".into() }, AfterPick::OpenDocument { document: self.session.document_id() }),
         };
         self.show_file_browser(req, after, false);
     }
@@ -307,7 +310,7 @@ pub(crate) fn show(app: &mut WordApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
     let mut done: Option<Option<PathBuf>> = None;
     let window = egui::Window::new(tl!(b.title()))
-        .id(egui::Id::new("builtin_file_browser"))
+        .id(egui::Id::unique("builtin_file_browser"))
         .collapsible(false)
         .resizable(false)
         .anchor(Align2::CENTER_CENTER, vec2(0.0, -20.0));
@@ -345,7 +348,7 @@ fn body(ui: &mut Ui, b: &mut FileBrowser, t: &Tokens) -> Option<Option<PathBuf>>
         {
             b.navigate(h);
         }
-        let r = ui.add(egui::TextEdit::singleline(&mut b.location).desired_width(f32::INFINITY));
+        let r = ui.add(egui::TextEdit::singleline(&mut b.location).desired_width(f32::INFINITY)).accessible_name(tl!("Folder path"));
         if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
             location_done = true;
             let typed = b.location.clone();
@@ -437,11 +440,16 @@ fn body(ui: &mut Ui, b: &mut FileBrowser, t: &Tokens) -> Option<Option<PathBuf>>
         }
         let before = b.filter;
         let current = b.filters.get(b.filter).map(|(l, _)| tl!(l.as_str()).to_string()).unwrap_or_default();
-        egui::ComboBox::from_id_salt("builtin_file_browser_type").selected_text(current).width(150.0).show_ui(ui, |ui| {
-            for (i, (l, _)) in b.filters.iter().enumerate() {
-                ui.selectable_value(&mut b.filter, i, tl!(l.as_str()));
-            }
-        });
+        craft_ui::ComboBox::from_id_salt("builtin_file_browser_type")
+            .selected_text(current)
+            .width(150.0)
+            .show_ui(ui, |ui| {
+                for (i, (l, _)) in b.filters.iter().enumerate() {
+                    ui.selectable_value(&mut b.filter, i, tl!(l.as_str()));
+                }
+            })
+            .response
+            .accessible_name(tl!("File type"));
         refilter = b.filter != before;
     });
     if refilter {
@@ -526,8 +534,8 @@ mod tests {
         let dir = scratch("save");
         std::fs::create_dir(dir.join("drafts")).unwrap();
         std::fs::write(dir.join("drafts").join("old.docx"), b"x").unwrap();
-        let req = FileDialogRequest::Save { name: "Document1.docx".into() };
-        let mut b = FileBrowser::new(req, AfterPick::OpenDocument, dir.clone(), false);
+        let req = FileDialogRequest::Save { name: "Document1.docx".into(), dir: None };
+        let mut b = FileBrowser::new(req, AfterPick::OpenDocument { document: 0 }, dir.clone(), false);
         b.name = "drafts".into();
         assert_eq!(b.accept(), Step::Stay);
         assert_eq!(b.dir, dir.join("drafts"));
@@ -575,7 +583,8 @@ mod tests {
     fn an_empty_folder_says_there_are_no_items() {
         let dir = scratch("empty_state");
         let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
-        let mut b = FileBrowser::new(FileDialogRequest::Open { purpose: "document".into() }, AfterPick::OpenDocument, dir.clone(), false);
+        let mut b =
+            FileBrowser::new(FileDialogRequest::Open { purpose: "document".into() }, AfterPick::OpenDocument { document: 0 }, dir.clone(), false);
         b.navigate(dir.clone());
         assert!(matches!(&b.listing, Ok(l) if l.entries.is_empty()), "the folder starts empty");
         a.file_browser.open = Some(Box::new(b));

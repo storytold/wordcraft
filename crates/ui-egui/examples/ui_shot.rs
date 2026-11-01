@@ -84,9 +84,11 @@ fn main() {
     }
 }
 
+/// Applies the harness's pending raw input and advances one UI frame.
 fn step(harness: &mut egui_kittest::Harness<'_, WordApp>) {
     let mut raw = std::mem::take(harness.input_mut());
-    harness.state_mut().raw_input_hook(&mut raw);
+    let ctx = harness.ctx.clone();
+    harness.state_mut().raw_input_hook(&ctx, &mut raw);
     *harness.input_mut() = raw;
     harness.step();
 }

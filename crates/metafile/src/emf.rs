@@ -2,7 +2,7 @@
 //! record (bitmap info and bits) are relative to the record start, so each handler reads the record slice.
 
 use crate::bytes::Bytes;
-use crate::canvas::{BS_NULL, Brush, Canvas, Obj, PS_NULL, PS_STYLE_MASK, Pen, Xform, colorref};
+use crate::canvas::{BS_NULL, Brush, Canvas, Font, Obj, PS_NULL, PS_STYLE_MASK, Pen, Xform, colorref};
 use crate::dib::{self, Blend};
 use crate::geom::{self, ArcKind, P};
 use crate::{Error, Frame, MAX_PATH_OPS};
@@ -15,6 +15,9 @@ const SRCCOPY: u32 = 0x00CC_0020;
 /// LogPenEx pen type bits; PS_COSMETIC pens are one device pixel wide.
 const PS_TYPE_MASK: u32 = 0x000F_0000;
 const PS_COSMETIC: u32 = 0;
+/// EXTTEXTOUT options: the string holds glyph indices, and the dx array holds (x, y) pairs.
+const ETO_GLYPH_INDEX: u32 = 0x10;
+const ETO_PDY: u32 = 0x2000;
 
 pub(crate) fn is_emf(b: Bytes) -> bool {
     b.u32(0) == Some(1) && b.u32(40) == Some(EMF_SIGNATURE)
@@ -100,6 +103,10 @@ fn record(cv: &mut Canvas, typ: u32, r: Bytes) {
         38 => create_pen(cv, r),
         95 => create_ext_pen(cv, r),
         39 => create_brush(cv, r),
+        82 => create_font(cv, r),
+        22 => r.u32(8).map(|a| cv.set_text_align(a)),
+        24 => r.u32(8).map(|c| cv.set_text_color(colorref(c))),
+        84 => ext_text_out_w(cv, r),
         40 => r.u32(8).map(|i| cv.delete_object(i)),
         27 => xy32(r, 8).map(|p| cv.move_to(p)),
         54 => xy32(r, 8).map(|p| cv.line_to(p)),
@@ -247,6 +254,55 @@ fn create_brush(cv: &mut Canvas, r: Bytes) -> Option<()> {
     let style = r.u32(12)?;
     let color = r.u32(16)?;
     cv.add_object(Some(slot), Obj::Brush(Brush { style, color: colorref(color) }));
+    Some(())
+}
+
+/// EMR_EXTCREATEFONTINDIRECTW: handle, then a LogFont (height, width, escapement, orientation, weight,
+/// italic, ..., face name of 32 UTF-16 units at 40).
+fn create_font(cv: &mut Canvas, r: Bytes) -> Option<()> {
+    let slot = r.u32(8)? as usize;
+    let mut face = [0u16; 32];
+    for (i, u) in face.iter_mut().enumerate() {
+        *u = r.u16(40 + i * 2).unwrap_or(0);
+    }
+    let font = Font { height: r.i32(12)?, escapement: r.i32(20)?, weight: r.i32(28)?, italic: *r.0.get(32)? != 0, face };
+    cv.add_object(Some(slot), Obj::Font(font));
+    Some(())
+}
+
+/// EMR_EXTTEXTOUTW: an EmrText at 36 with the reference point, the character count at 44, the string
+/// offset at 48, the options at 52 and the dx array offset at 72 (offsets from the record start).
+/// Glyph-index strings are skipped: they cannot be mapped back to characters.
+fn ext_text_out_w(cv: &mut Canvas, r: Bytes) -> Option<()> {
+    let at = xy32(r, 36)?;
+    let n = r.u32(44)? as usize;
+    let (off, options, off_dx) = (r.u32(48)? as usize, r.u32(52)?, r.u32(72)? as usize);
+    if options & ETO_GLYPH_INDEX != 0 || n == 0 {
+        return None;
+    }
+    let units: Vec<u16> = r.slice(off, n.checked_mul(2)?)?.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
+    // dx has one entry per UTF-16 unit (two with ETO_PDY); a character takes the sum of its units.
+    let step = if options & ETO_PDY != 0 { 8 } else { 4 };
+    let raw_dx: Vec<f64> = match r.slice(off_dx, n.checked_mul(step)?) {
+        Some(b) if off_dx != 0 => b.chunks_exact(step).filter_map(|c| Some(f64::from(i32::from_le_bytes(c.get(..4)?.try_into().ok()?)))).collect(),
+        _ => Vec::new(),
+    };
+    let mut text = String::new();
+    let mut dx = Vec::new();
+    let mut i = 0;
+    for ch in char::decode_utf16(units.iter().copied()) {
+        let c = ch.unwrap_or(char::REPLACEMENT_CHARACTER);
+        // A replacement stands for one unpaired unit.
+        let w = if c == char::REPLACEMENT_CHARACTER { 1 } else { c.len_utf16() };
+        if !raw_dx.is_empty() {
+            dx.push(raw_dx.get(i..i + w).map_or(0.0, |s| s.iter().sum()));
+        }
+        i += w;
+        text.push(c);
+    }
+    let text = text.trim_end_matches('\0').to_string();
+    dx.truncate(text.chars().count());
+    cv.text(at, text, &dx);
     Some(())
 }
 
