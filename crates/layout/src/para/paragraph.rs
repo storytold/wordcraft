@@ -8,7 +8,7 @@ use super::model::{ClKind, Cluster, Glyph, Label, LabelRun, ParaEnv, undrawable_
 use super::proof::{ProofRun, is_list_item, proof_issues};
 use super::*;
 
-use wordcraft_doc::thai_fn::{is_lao_following, is_thai_following, thai_lao_tcb_byte_len};
+use wordcraft_doc::thai_fn::thai_lao_tcb_byte_len;
 
 /// Lay out one paragraph.
 pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
