@@ -19,8 +19,8 @@ pub(crate) struct Exporter<'a> {
     pub(crate) doc: &'a Document,
     pub(crate) lay: &'a DocLayout,
     pub(crate) opts: &'a PdfOptions,
-    /// Layout page index → output page index.
-    pub(crate) out_index: HashMap<usize, usize>,
+    /// Layout page index to the first output sheet side and its placement transform.
+    pub(crate) out_index: HashMap<usize, (usize, Fit)>,
     /// Embedded fonts by face id (`None`: krilla can't read it).
     pub(crate) fonts: HashMap<u32, (FaceRef, Option<Font>)>,
     pub(crate) font_error: Option<PdfError>,

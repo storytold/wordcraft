@@ -17,7 +17,7 @@ impl Exporter<'_> {
         });
         let pos = exact.get(name).or_else(|| folded.get(&name.to_ascii_lowercase()))?.clone();
         if let Some(c) = self.lay.caret(&pos)
-            && let Some(out) = self.out_index.get(&c.page)
+            && let Some((out, fit)) = self.out_index.get(&c.page)
         {
             // The left edge of the paragraph's piece on that page, at the top of the line.
             let x = self
@@ -32,7 +32,7 @@ impl Exporter<'_> {
                     _ => None,
                 })
                 .unwrap_or(c.x);
-            let (x, y) = self.lay.pages.get(c.page).map(|p| Fit::of(p, self.opts.paper).point(x, c.top)).unwrap_or((x, c.top));
+            let (x, y) = fit.point(x, c.top);
             return Some((*out, x, y));
         }
         self.locate(pos.story, &pos.path)
@@ -42,10 +42,10 @@ impl Exporter<'_> {
     fn locate(&self, story: StoryRef, path: &DocPath) -> Option<(usize, f32, f32)> {
         let places = self.lay.index.get(&(story, path.clone()))?;
         for (pi, ii) in places {
-            let Some(out) = self.out_index.get(pi) else { continue };
+            let Some((out, fit)) = self.out_index.get(pi) else { continue };
             let Some(page) = self.lay.pages.get(*pi) else { continue };
             let (x, y) = match page.items.get(*ii) {
-                Some(Placed::Lines { x, y, .. }) => Fit::of(page, self.opts.paper).point(*x, *y),
+                Some(Placed::Lines { x, y, .. }) => fit.point(*x, *y),
                 _ => (0.0, 0.0),
             };
             return Some((*out, x, y));
@@ -78,7 +78,8 @@ impl Exporter<'_> {
     /// The outline from body headings (outline levels 1–9) on the exported pages.
     pub(crate) fn outline(&self, pages: &[usize]) -> Option<Outline> {
         let mut flat: Vec<(u8, String, usize, f32, f32)> = Vec::new();
-        for (out, pi) in pages.iter().enumerate() {
+        for pi in pages {
+            let Some((out, fit)) = self.out_index.get(pi) else { continue };
             let Some(page) = self.lay.pages.get(*pi) else { continue };
             for it in &page.items {
                 let Placed::Lines { story: StoryRef::Body, path, para, l0, l1, x, y, .. } = it else { continue };
@@ -105,8 +106,8 @@ impl Exporter<'_> {
                 if title.is_empty() {
                     continue;
                 }
-                let (x, y) = Fit::of(page, self.opts.paper).point(*x, *y + line.top - piece.top);
-                flat.push((level.min(8), title, out, x, y));
+                let (x, y) = fit.point(*x, *y + line.top - piece.top);
+                flat.push((level.min(8), title, *out, x, y));
             }
         }
         if flat.is_empty() {

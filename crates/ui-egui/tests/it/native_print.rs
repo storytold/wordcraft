@@ -309,26 +309,199 @@ fn native_print_scales_to_the_chosen_paper() {
     assert_eq!((app.session.doc.last_section.page_w, app.session.doc.last_section.page_h), page, "the document is unchanged");
 }
 
+/// Native copies stay in the spooler; booklet pairing and padding happen once in its PDF.
+#[test]
+fn native_booklet_uses_landscape_sheets_without_multiplying_copies() {
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("1\u{c}2\u{c}3\u{c}4\u{c}5")), Services::default());
+    let jobs = Rc::new(RefCell::new(Vec::new()));
+    let observed = jobs.clone();
+    app.services.print_native = Some(Box::new(move |bytes, settings, collate, options| {
+        observed.borrow_mut().push((bytes, settings, collate, options));
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(Ok("test spooler".into())).unwrap();
+        rx
+    }));
+    app.printing.printers.push(Printer { name: "Queue".into(), label: String::new(), default: true });
+    app.run("ui.printSettings", json!({"printer":"Queue","copies":2,"duplex":"shortEdge"})).unwrap();
+    app.run("ui.printSubmit", json!({"pagesPerSheet":"booklet"})).unwrap();
+    let jobs = jobs.borrow();
+    let (bytes, settings, collate, options) = &jobs[0];
+    assert_eq!(settings.copies, 2);
+    assert_eq!(settings.duplex, Some(Duplex::ShortEdge));
+    assert!(*collate);
+    assert_eq!(String::from_utf8_lossy(bytes).matches("/MediaBox[").count(), 4);
+    assert!(options.contains(&("orientation-requested".into(), "4".into())));
+}
+
+/// Real combo-box input changes both the submitted parameters and physical preview page count.
+#[test]
+fn print_booklet_choice_updates_sheet_preview() {
+    use egui_kittest::kittest::{By, Queryable};
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("1\u{c}2\u{c}3\u{c}4\u{c}5")), Services::default());
+    app.ui.language = "en".into();
+    app.run("file.print", json!({})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 1000.0)).with_pixels_per_point(1.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    for _ in 0..4 {
+        let mut raw = std::mem::take(h.input_mut());
+        let ctx = h.ctx.clone();
+        h.state_mut().raw_input_hook(&ctx, &mut raw);
+        *h.input_mut() = raw;
+        h.step();
+    }
+    h.get(By::new().role(egui::accesskit::Role::ComboBox).value("1")).click();
+    h.run_steps(2);
+    h.get_by_label("Booklet (left binding)").click();
+    h.run_steps(4);
+    assert_eq!(h.state().ui.print.params()["pagesPerSheet"], "booklet");
+    assert!(h.query(By::new().role(egui::accesskit::Role::Image).label("Sheet 1 of 4")).is_some());
+    h.get_by_label("Next sheet").click();
+    h.run_steps(3);
+    assert!(h.query(By::new().role(egui::accesskit::Role::Image).label("Sheet 2 of 4")).is_some());
+    h.get(By::new().role(egui::accesskit::Role::ComboBox).value("Booklet (left binding)")).click();
+    h.run_steps(2);
+    h.get_by_label("4").click();
+    h.run_steps(4);
+    assert_eq!(h.state().ui.print.params()["pagesPerSheet"], 4);
+    assert!(h.query(By::new().role(egui::accesskit::Role::Image).label("Sheet 2 of 2")).is_some());
+}
+
+/// Changing a late-page range opens its first physical sheet in single-page and N-up previews.
+#[test]
+fn print_range_changes_start_at_the_first_planned_sheet() {
+    use egui::{Event, Key, Modifiers};
+    use egui_kittest::kittest::{By, Queryable};
+    for (range, label, selection, per_sheet, sheets) in
+        [("selection", "Selected pages", "3\u{c}4\u{c}5", "1", 3), ("custom", "Custom range", "9", "2", 5), ("custom", "Custom range", "9", "4", 3)]
+    {
+        let mut app = WordApp::new(
+            Session::new(wordcraft_doc::Document::from_text("1\u{c}2\u{c}3\u{c}4\u{c}5\u{c}6\u{c}7\u{c}8\u{c}9\u{c}10")),
+            Services::default(),
+        );
+        app.ui.language = "en".into();
+        app.run("select.text", json!({"text": selection})).unwrap();
+        assert!(app.session.current_pages(&app.session.export_layout()).0 >= 2);
+        app.run("file.print", json!({})).unwrap();
+        app.ui.print.pages = "2-10".into();
+        app.ui.print.pages_per_sheet = per_sheet.into();
+        app.ui.print.preview = 8;
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 1000.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                app.logic(ui.ctx());
+                app.ui(ui);
+            },
+            app,
+        );
+        for _ in 0..4 {
+            let mut raw = std::mem::take(h.input_mut());
+            let ctx = h.ctx.clone();
+            h.state_mut().raw_input_hook(&ctx, &mut raw);
+            *h.input_mut() = raw;
+            h.step();
+        }
+        h.get(By::new().role(egui::accesskit::Role::ComboBox).value("All pages")).click();
+        h.run_steps(2);
+        h.get_by_label(label).click();
+        h.run_steps(4);
+        assert_eq!(h.state().ui.print.range, range);
+        assert_eq!(h.state().ui.print.preview, 0, "{range}, {per_sheet} pages per sheet");
+        let preview_label = format!("Sheet 1 of {sheets}");
+        assert!(h.query(By::new().role(egui::accesskit::Role::Image).label(&preview_label)).is_some());
+        if range == "custom" {
+            h.state_mut().ui.print.preview = (sheets - 1) as usize;
+            h.run_steps(2);
+            h.get(By::new().role(egui::accesskit::Role::TextInput).label("Pages")).click();
+            h.run_steps(2);
+            h.input_mut().events.push(Event::Key { key: Key::A, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::COMMAND });
+            h.step();
+            h.input_mut().events.extend([
+                Event::Key { key: Key::A, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE },
+                Event::Text("2-9".into()),
+            ]);
+            h.run_steps(4);
+            assert_eq!(h.state().ui.print.pages, "2-9", "the real text input changed the range");
+            assert_eq!(h.state().ui.print.preview, 0, "editing the custom range starts at its first sheet");
+            if per_sheet == "2" {
+                h.state_mut().ui.print.preview = 3;
+                h.run_steps(2);
+                h.get(By::new().role(egui::accesskit::Role::ComboBox).value("All pages in the range")).click();
+                h.run_steps(2);
+                h.get_by_label("Odd pages only").click();
+                h.run_steps(4);
+                assert_eq!(h.state().ui.print.parity, "odd");
+                assert_eq!(h.state().ui.print.preview, 0, "filtering the selected pages starts at its first sheet");
+            }
+        }
+    }
+}
+
+/// Native N-up accepts comment balloons and custom ranges from preferences or an explicit markup override.
+#[test]
+fn native_imposed_print_accepts_comment_markup_and_explicit_overrides() {
+    use wordcraft_doc::{Comment, Document, InlineObject, Paragraph, PartKind, Pos, para_block};
+    let mut doc = Document::from_text("First page\u{c}Second page\u{c}Third page");
+    let part = doc.add_part(PartKind::Comment, vec![para_block(Paragraph::with_text("Check these totals", Default::default()))]);
+    doc.comments.insert(0, Comment { author: "Synthetic reviewer".into(), part, ..Default::default() });
+    doc.insert_object(&Pos::body(0, 0), InlineObject::CommentStart { id: 0 }, &Default::default()).unwrap();
+    for explicit_override in [false, true] {
+        let mut app = WordApp::new(Session::new(doc.clone()), Services::default());
+        app.session.prefs.print_markup = !explicit_override;
+        app.session.prefs.markup.comments = true;
+        let marked = app.session.export_layout_with(true);
+        let plain = app.session.export_layout_with(false);
+        assert!(marked.pages[0].w > plain.pages[0].w && marked.pages[0].markup > 0.0, "the fixture includes actual balloon geometry");
+        let pages = marked.pages.len();
+        assert!(pages >= 3);
+        let jobs = Rc::new(RefCell::new(Vec::new()));
+        let observed = jobs.clone();
+        app.services.print_native = Some(Box::new(move |bytes, _, _, options| {
+            observed.borrow_mut().push((bytes, options));
+            let (tx, rx) = std::sync::mpsc::channel();
+            tx.send(Ok("test spooler".into())).unwrap();
+            rx
+        }));
+        app.printing.printers.push(Printer { name: "Queue".into(), label: String::new(), default: true });
+        app.run("ui.printSettings", json!({"printer":"Queue"})).unwrap();
+        let mut params = json!({"range":"custom","pages":format!("1-{pages}"),"pagesPerSheet":2});
+        if explicit_override {
+            params["markup"] = json!(true);
+        }
+        app.run("ui.printSubmit", params).unwrap();
+        let jobs = jobs.borrow();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(String::from_utf8_lossy(&jobs[0].0).matches("/MediaBox[").count(), pages.div_ceil(2));
+        assert!(jobs[0].1.contains(&("orientation-requested".into(), "4".into())));
+    }
+}
+
 /// #4734: the job sent to the printer has no link annotations, which a printer driver can't fit
 /// to the paper ("flatten page annotations before using shrink-to-fit"); `file.printPdf` (Save
 /// these pages as PDF) keeps them.
 #[test]
 fn native_print_job_leaves_out_link_annotations() {
-    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
-    app.run("insert.link", json!({"url": "https://example.com", "text": "a link"})).unwrap();
-    app.printing.printers.push(Printer { name: "Queue".into(), label: String::new(), default: true });
-    app.run("ui.printSettings", json!({"printer":"Queue"})).unwrap();
-    let jobs = Rc::new(RefCell::new(Vec::new()));
-    let observed = jobs.clone();
-    app.services.print_native = Some(Box::new(move |bytes, _, _, _| {
-        observed.borrow_mut().push(bytes);
-        let (sender, receiver) = std::sync::mpsc::channel();
-        sender.send(Ok("queued".into())).unwrap();
-        receiver
-    }));
-    let annots = |bytes: &[u8]| String::from_utf8_lossy(bytes).contains("/Annots");
-    app.run("ui.printSubmit", json!({"paper": "A4"})).unwrap();
-    assert!(!annots(&jobs.borrow()[0]), "the printer gets no link annotations");
-    let (saved, _) = app.session.print_pdf(&json!({"paper": "A4"})).unwrap();
-    assert!(annots(&saved), "a saved print PDF keeps its links");
+    for mode in [json!(1), json!(2), json!("booklet"), json!("bookletReverse")] {
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        app.run("insert.link", json!({"url": "https://example.com", "text": "a link"})).unwrap();
+        app.printing.printers.push(Printer { name: "Queue".into(), label: String::new(), default: true });
+        app.run("ui.printSettings", json!({"printer":"Queue"})).unwrap();
+        let jobs = Rc::new(RefCell::new(Vec::new()));
+        let observed = jobs.clone();
+        app.services.print_native = Some(Box::new(move |bytes, _, _, _| {
+            observed.borrow_mut().push(bytes);
+            let (sender, receiver) = std::sync::mpsc::channel();
+            sender.send(Ok("queued".into())).unwrap();
+            receiver
+        }));
+        let annots = |bytes: &[u8]| String::from_utf8_lossy(bytes).contains("/Annots");
+        app.run("ui.printSubmit", json!({"paper": "A4", "pagesPerSheet": mode})).unwrap();
+        assert!(!annots(&jobs.borrow()[0]), "the printer gets no link annotations");
+        let (saved, _) = app.session.print_pdf(&json!({"paper": "A4", "pagesPerSheet": mode})).unwrap();
+        assert!(annots(&saved), "a saved print PDF keeps its links");
+    }
 }
