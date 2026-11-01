@@ -417,16 +417,17 @@ impl<'e> Breaker<'e> {
                 continue;
             }
             let Some(st) = pl.styles.get(c.style as usize) else { continue };
-            // A picture sits on the baseline of its run: the line keeps that font's ascent
-            // and descent, and grows above the baseline to fit a taller picture.
-            let (a, d) = if matches!(c.kind, ClKind::Object(_)) && c.obj_h > 0.0 {
+            // A picture sits on the baseline of its run (raised or lowered by its position):
+            // the line keeps that font's ascent and descent, and grows to fit it.
+            let (a, d) = if matches!(c.kind, ClKind::Object(_)) && c.obj_h + c.obj_d > 0.0 {
                 if pl.maths.iter().any(|(k, _)| c.kind == ClKind::Object(*k)) {
                     // Exact spacing keeps the run's baseline; tall math may overflow the
                     // fixed line box without moving adjacent text up by its denominator.
                     if matches!(rp.line_spacing, LineSpacing::Exactly(_)) { (st.ascent, st.descent) } else { (c.obj_h, c.obj_d) }
                 } else {
                     ex.obj_asc = ex.obj_asc.max(c.obj_h);
-                    (st.ascent, st.descent)
+                    // A lowered picture reaches below the baseline: the line's descent grows.
+                    (st.ascent, st.descent.max(c.obj_d))
                 }
             } else {
                 // `obj_h` is set on text clusters only under ruby text, which the line grows to fit.

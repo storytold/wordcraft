@@ -477,13 +477,13 @@ pub(crate) fn effects_in(effects: wordcraft_doc::effects::ShapeEffects, spin: Sp
     e
 }
 
-/// Where inline object `obj` is drawn, given its cluster's box (`adv` × `obj_h` standing on the
-/// baseline at `cx`): inside the room kept for its effects.
+/// Where inline object `obj` is drawn, given its cluster's box (`adv` wide at `cx`, reaching
+/// `obj_h` above the baseline and `obj_d` below it): inside the room kept for its effects.
 /// A rotated one's unrotated frame, centred in that room.
-pub(crate) fn inline_rect(obj: Option<&InlineObject>, cx: f32, base: f32, adv: f32, obj_h: f32) -> Rect {
+pub(crate) fn inline_rect(obj: Option<&InlineObject>, cx: f32, base: f32, adv: f32, (obj_h, obj_d): (f32, f32)) -> Rect {
     let frame = obj.and_then(InlineObject::frame);
     let [l, t, r, b] = frame.map_or([0.0; 4], |(_, _, float)| float.effect_extent());
-    let room = Rect::new(cx + l, base - obj_h + t, (adv - l - r).max(0.0), (obj_h - t - b).max(0.0));
+    let room = Rect::new(cx + l, base - obj_h + t, (adv - l - r).max(0.0), (obj_h + obj_d - t - b).max(0.0));
     let Some((w, h, float)) = frame.filter(|(_, _, f)| f.rot != 0.0) else { return room };
     // The room is the rotated bounds of the frame: undo the rotation.
     let (w, h) = (wordcraft_geom::finite(w).clamp(1.0, 4000.0), wordcraft_geom::finite(h).clamp(1.0, 4000.0));

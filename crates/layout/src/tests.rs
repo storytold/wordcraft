@@ -4950,8 +4950,42 @@ fn inline_picture_keeps_room_for_its_effects() {
     assert_eq!((c.adv, c.obj_h), (124.0, 89.0), "picture plus effect extents");
     // Drawn inside that room.
     let obj = picture(100.0, 50.0, shadow);
-    let r = display::inline_rect(Some(&obj), 10.0, 200.0, c.adv, c.obj_h);
+    let r = display::inline_rect(Some(&obj), 10.0, 200.0, c.adv, (c.obj_h, c.obj_d));
     assert_eq!((r.x, r.y, r.w, r.h), (16.0, 123.0, 100.0, 50.0));
+}
+
+#[test]
+fn an_inline_picture_moves_with_its_runs_position() {
+    // Word moves an inline picture up or down with its run's position (`w:position`): lowered,
+    // it reaches below the baseline and the line grows down to hold it; raised, it rises off it.
+    let line_of = |position: f32| {
+        let mut d = Document::from_text("");
+        let props = wordcraft_doc::CharProps { position: Some(position), ..Default::default() };
+        let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+        p.insert_object(0, picture(40.0, 30.0, Default::default()), &props).unwrap();
+        let l = lay(&d);
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+        let c = para.clusters.iter().find(|c| matches!(c.kind, para::ClKind::Object(_))).unwrap().clone();
+        let line = para.lines[0].clone();
+        let desc = para.styles[c.style as usize].descent;
+        (c, line, desc)
+    };
+    // On the baseline.
+    let (c, _, _) = line_of(0.0);
+    assert_eq!((c.obj_h, c.obj_d), (30.0, 0.0));
+    // Lowered by its whole height: its top on the baseline, the line deep enough for it.
+    let (c, line, _) = line_of(-30.0);
+    assert_eq!((c.obj_h, c.obj_d), (0.0, 30.0));
+    assert!(line.top + line.height - line.baseline >= 30.0 - 0.01, "{line:?}");
+    let r = display::inline_rect(Some(&picture(40.0, 30.0, Default::default())), 0.0, 100.0, c.adv, (c.obj_h, c.obj_d));
+    assert_eq!((r.y, r.h), (100.0, 30.0));
+    // Lowered further than that: still only to its top.
+    assert_eq!(line_of(-500.0).0.obj_d, 30.0);
+    // Raised: it stands clear of the baseline, as tall as before.
+    let (c, _, _) = line_of(6.0);
+    assert_eq!((c.obj_h, c.obj_d), (36.0, -6.0));
+    let r = display::inline_rect(Some(&picture(40.0, 30.0, Default::default())), 0.0, 100.0, c.adv, (c.obj_h, c.obj_d));
+    assert_eq!((r.y, r.h), (64.0, 30.0));
 }
 
 /// Tops of the body text lines drawn on page one, in order.

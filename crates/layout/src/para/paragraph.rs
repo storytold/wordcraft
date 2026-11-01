@@ -289,7 +289,7 @@ impl<'a> Shaped<'a> {
             return;
         };
         match o {
-            _ if o.is_drawing() => self.drawing(cx, (k, o), slot),
+            _ if o.is_drawing() => self.drawing(cx, (k, o), slot, rc.position),
             InlineObject::Field { .. } => self.field(cx, (k, o), slot, rc),
             InlineObject::NoteRef { kind, id, custom } => self.note_ref(cx, (*kind, *id, custom), slot, rc),
             InlineObject::Equation { linear, display, math } => self.equation(cx, k, slot, rc, (linear, *display, math)),
@@ -315,7 +315,10 @@ impl<'a> Shaped<'a> {
     }
 
     /// A picture, shape or text box: inline, as wide and high as it is; a floating one takes no room.
-    fn drawing(&mut self, cx: &Cx, (k, o): (usize, &InlineObject), slot: Slot) {
+    /// An inline drawing: it stands on the baseline, raised or lowered by its run's position
+    /// (`raise`, points, as Word moves an inline picture with `w:position`). Its cluster reaches
+    /// `obj_h` above the baseline and `obj_d` below it (negative when raised clear of it).
+    fn drawing(&mut self, cx: &Cx, (k, o): (usize, &InlineObject), slot: Slot, raise: f32) {
         let env = cx.env;
         // A hidden one takes no room, and with no height its line doesn't draw it.
         if let Some((w, saved_h, float)) = o.frame()
@@ -332,7 +335,10 @@ impl<'a> Shaped<'a> {
             // for a rotated one's bounds, as Word does.
             let [el, et, er, eb] = float.effect_extent();
             let (px, py) = float.spin_pad(w * s, h * s);
-            self.push(slot, ClKind::Object(k), w * s + el + er + 2.0 * px, h * s + et + eb + 2.0 * py);
+            let tall = h * s + et + eb + 2.0 * py;
+            // Lowered at most until its top is on the baseline.
+            let raise = if raise.is_finite() { raise.clamp(-tall, 1584.0) } else { 0.0 };
+            self.b.clusters.push(slot.cluster(ClKind::Object(k), w * s + el + er + 2.0 * px, (tall + raise, -raise)));
         } else {
             self.push(slot, ClKind::Object(k), 0.0, 0.0);
         }
