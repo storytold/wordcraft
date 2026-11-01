@@ -86,3 +86,8 @@ getrandom = "0.3"
 
 [target.'cfg(windows)'.dependencies]
 craft-update = { workspace = true }
+
+[dev-dependencies]
+# Reads packaging/macos/Info.plist.in in the file-association tests (#4983). Already in the build
+# through craft-update, at this version.
+plist = "1"
