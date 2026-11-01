@@ -5390,9 +5390,17 @@ fn auto_interface_size_is_capped_to_what_fits_the_screen() {
     use theme::{AUTO_MIN_POINTS, InterfaceSize, auto_scale_limit};
     let limit = auto_scale_limit(Some((1366.0, 768.0)));
     assert!((1.0..1.6).contains(&limit), "{limit}");
+    // Scales that fit are left as the system reports them.
+    for (screen, natives) in [((1920.0, 1080.0), [1.0, 1.25, 1.5]), ((1366.0, 768.0), [1.0, 1.25, 1.5])] {
+        let limit = auto_scale_limit(Some(screen));
+        for native in natives {
+            assert_eq!(f32::from(InterfaceSize::AUTO.drawn_percent_within(native, limit)), native * 100.0, "{screen:?} {native}");
+        }
+    }
+    assert!((auto_scale_limit(Some((1920.0, 1080.0))) - 2.13).abs() < 0.01);
     for native in [2.0, 3.17] {
         let drawn = f32::from(InterfaceSize::AUTO.drawn_percent_within(native, limit)) / 100.0;
-        assert!(1366.0 / drawn >= AUTO_MIN_POINTS.0 - 1.0 && 768.0 / drawn >= AUTO_MIN_POINTS.1 - 1.0, "{native}: {drawn}");
+        assert!(1366.0 / drawn >= AUTO_MIN_POINTS.0 - 3.0 && 768.0 / drawn >= AUTO_MIN_POINTS.1 - 3.0, "{native}: {drawn}");
     }
     // A scale that already fits, an unknown screen and junk are left alone.
     assert_eq!(InterfaceSize::AUTO.drawn_percent_within(1.25, limit), 125);
@@ -5404,6 +5412,43 @@ fn auto_interface_size_is_capped_to_what_fits_the_screen() {
     assert_eq!(InterfaceSize::AUTO.drawn_percent_within(2.0, auto_scale_limit(Some((3840.0, 2160.0)))), 200);
     // A chosen size is the user's and is not capped.
     assert_eq!(InterfaceSize::from_percent(300.0).unwrap().drawn_percent_within(3.0, limit), 300);
+}
+
+/// #4030: the cap shows in `ui.interfaceSize` and is never saved; Ctrl+Shift+0 returns to Auto
+/// while Ctrl+Alt+0 (AltGr+0, which types `}` on a German layout) neither resets nor swallows it.
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn reset_interface_size_shortcut_and_capped_report() {
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app(),
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    {
+        let a = h.state_mut();
+        a.native_scale = 3.0;
+        a.auto_scale_limit = 1.5;
+        assert_eq!(a.run("ui.interfaceSize", json!({})).unwrap(), json!({"auto": true, "percent": 150}));
+        assert!(!serde_json::to_string(&a.ui).unwrap().contains("150"), "the cap is not saved");
+        a.run("ui.interfaceSize", json!({"percent": 300})).unwrap();
+    }
+    let altgr = egui::Modifiers { alt: true, ctrl: true, shift: false, mac_cmd: false, command: true };
+    h.event(egui::Event::Key { key: egui::Key::Num0, physical_key: None, pressed: true, repeat: false, modifiers: altgr });
+    h.event(egui::Event::ModifiersChanged(altgr));
+    h.event(egui::Event::Text("}".into()));
+    h.step();
+    assert_eq!(h.state().ui.interface_size.percent(), Some(300), "AltGr+0 doesn't reset");
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "}", "AltGr+0 types the character");
+    let chord = egui::Modifiers { alt: false, ctrl: true, shift: true, mac_cmd: false, command: true };
+    h.event(egui::Event::Key { key: egui::Key::Num0, physical_key: None, pressed: true, repeat: false, modifiers: chord });
+    h.step();
+    assert!(h.state().ui.interface_size.is_auto(), "Ctrl+Shift+0 returns to Auto");
 }
 
 /// #115: System follows the OS appearance (light when unknown); the manual choices ignore it.

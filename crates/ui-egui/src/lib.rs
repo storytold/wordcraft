@@ -289,9 +289,10 @@ pub const DEFAULT_TAB: &str = "Home";
 
 /// ⌘Q, which only the Mac sends: quit.
 const QUIT: egui::KeyboardShortcut = egui::KeyboardShortcut::new(egui::Modifiers::MAC_CMD, egui::Key::Q);
-/// Ctrl+Alt+0 (⌘⌥0): back to the Auto interface size, whatever is on screen (#4030).
+/// Ctrl+Shift+0 (⌘⇧0): back to the Auto interface size, whatever is on screen (#4030). Not
+/// Ctrl+Alt+0, which is AltGr+0 on some layouts and types a character there (#3424).
 const RESET_INTERFACE_SIZE: egui::KeyboardShortcut =
-    egui::KeyboardShortcut::new(egui::Modifiers { alt: true, ..egui::Modifiers::COMMAND }, egui::Key::Num0);
+    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND.plus(egui::Modifiers::SHIFT), egui::Key::Num0);
 /// Most recent documents kept (File › Options › Advanced offers 0–50, as Word does).
 pub const MAX_RECENT: usize = 50;
 /// Most custom dictionary words read back from `ui.json`.

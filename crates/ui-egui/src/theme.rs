@@ -145,15 +145,15 @@ impl InterfaceSize {
 }
 
 /// The smallest window, in points, the interface is laid out for under Auto.
-pub const AUTO_MIN_POINTS: (f32, f32) = (900.0, 500.0);
+pub const AUTO_MIN_POINTS: (f32, f32) = (900.0, 460.0);
 
 /// The largest pixels-per-point Auto may draw at on a screen of `screen_px` pixels (#4030): the
 /// one that still leaves [`AUTO_MIN_POINTS`], so the ribbon and the window's controls stay on
 /// screen. Never below 1.0, and unlimited when the screen size is unknown.
 pub fn auto_scale_limit(screen_px: Option<(f32, f32)>) -> f32 {
-    screen_px.filter(|(w, h)| w.is_finite() && h.is_finite() && *w > 0.0 && *h > 0.0).map_or(f32::INFINITY, |(w, h)| {
-        (w / AUTO_MIN_POINTS.0).min(h / AUTO_MIN_POINTS.1).max(1.0)
-    })
+    screen_px
+        .filter(|(w, h)| w.is_finite() && h.is_finite() && *w > 0.0 && *h > 0.0)
+        .map_or(f32::INFINITY, |(w, h)| (w / AUTO_MIN_POINTS.0).min(h / AUTO_MIN_POINTS.1).max(1.0))
 }
 
 /// The display's scale, or 1.0 when egui doesn't know it (or reports nonsense).
