@@ -31,6 +31,8 @@ const SIDE: f32 = 9.0;
 const GAP: f32 = 6.0;
 /// Padding inside a card.
 const PAD: f32 = 5.0;
+/// Room past `PAD` for the text of a card cut to fit (`fit_box`): none, unlike a text box's margin.
+const CUT_CARD_MARGIN: f32 = 0.0;
 /// The author-colour stripe on a card's left.
 const STRIPE: f32 = 3.0;
 /// Space kept above the first and below the last card on a page.
@@ -203,7 +205,7 @@ pub(crate) fn add(ctx: &mut Ctx, lay: &mut DocLayout) {
                 break;
             }
             let avail = bottom - top;
-            let (items, h) = if c.h > avail { (fit_box(c.items, avail - PAD), avail) } else { (c.items, c.h) };
+            let (items, h) = if c.h > avail { (fit_box(c.items, avail - PAD, CUT_CARD_MARGIN), avail) } else { (c.items, c.h) };
             next = top + h + GAP;
             let line = |style, width: f32| Border { style, width, color: Some(c.color), space: 0.0 };
             // Leader: along the text from the anchor to the page edge, then to the card.

@@ -180,6 +180,161 @@ fn own_margins_and_resize_to_fit_keep_the_text_in_view() {
     assert!(shown >= 1);
 }
 
+#[test]
+fn an_object_starting_in_the_bottom_margin_stays_out_of_the_box() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    // #5059: only text may run into the margin. An object stays whole, so it would stick out.
+    let shown = |y: f32| {
+        let mut d = Document::from_text("x");
+        let id = text_box(&mut d, 0, "One", 144.0, 72.0, TextBody::default());
+        let float = Float { wrap: Wrap::InFrontOfText, v_rel: Anchor::Paragraph, y, ..Default::default() };
+        let picture = InlineObject::Shape {
+            kind: wordcraft_doc::para::ShapeKind::Rectangle,
+            w: 20.0,
+            h: 20.0,
+            fill: None,
+            stroke: None,
+            stroke_width: 1.0,
+            float,
+            story: None,
+            effects: Default::default(),
+            freeform: None,
+            extra: Default::default(),
+        };
+        d.insert_object(&Pos { story: StoryRef::Part(id), path: Path::top(0), off: 3 }, picture, &Default::default()).unwrap();
+        let l = lay(&d);
+        l.pages[0].items.iter().filter(|it| matches!(it, Placed::Shape { rect, .. } if rect.w == 20.0)).count()
+    };
+    let inner = 72.0 - 2.0 * BOX_INSET_Y;
+    assert_eq!(shown(inner - 1.0), 1, "it starts inside the margins");
+    assert_eq!(shown(inner + 2.0), 0, "it starts in the bottom margin");
+}
+
+#[test]
+fn turned_cell_text_starting_in_the_bottom_margin_stays_out_of_the_box() {
+    // Like an object it stays whole, so it would stick out of the box.
+    let starts = |h: f32| {
+        let mut d = Document::from_text("x");
+        let id = text_box(&mut d, 0, "One", 144.0, h, TextBody::default());
+        let mut t = wordcraft_doc::Table::new(1, 1, 120.0);
+        t.rows[0].cells[0].blocks = vec![para_block(Paragraph::with_text("Turned", Default::default()))];
+        t.rows[0].cells[0].props.text_direction = TextDirection::Down;
+        d.parts.get_mut(&id).unwrap().blocks.push(std::sync::Arc::new(wordcraft_doc::Block::Table(t)));
+        let l = lay(&d);
+        let top = frame_of(&l, id).y + BOX_INSET_Y;
+        l.pages[0].items.iter().find_map(Placed::turned_bounds).map(|r| r.y - top)
+    };
+    let y = starts(400.0).unwrap();
+    let height = |inner: f32| inner + 2.0 * BOX_INSET_Y;
+    assert!(starts(height(y + 1.0)).is_some(), "it starts inside the margins");
+    assert!(starts(height(y - 2.0)).is_none(), "it starts in the bottom margin");
+}
+
+#[test]
+fn shading_and_side_borders_follow_the_text_into_the_bottom_margin() {
+    use wordcraft_doc::props::{Border, Borders, Rgb};
+    // (the box's height, the text's end, the shading's and the left border's) relative to its top.
+    let ends = |h: f32| {
+        let mut d = Document::from_text("x");
+        let id = text_box(&mut d, 0, "One", 144.0, h, TextBody::default());
+        let mut p = Paragraph::with_text("Two", Default::default());
+        p.props.shading = Some(Rgb(0xEE, 0xEE, 0xEE));
+        p.props.borders = Some(Borders { left: Some(Border::single(1.0)), ..Borders::default() });
+        d.parts.get_mut(&id).unwrap().blocks = vec![para_block(Paragraph::with_text("One", Default::default())), para_block(p)];
+        let l = lay(&d);
+        let top = frame_of(&l, id).y;
+        let text = l.pages[0].items.iter().find_map(|it| match it {
+            Placed::Lines { path, para, y, .. } if *path == Path::top(1) => para.lines.first().map(|f| y + f.text_depth()),
+            _ => None,
+        });
+        let shade = l.pages[0].items.iter().find_map(|it| if let Placed::Fill { rect, .. } = it { Some(rect.bottom()) } else { None });
+        let side = l.pages[0].items.iter().find_map(|it| if let Placed::Rule { y1, .. } = it { Some(*y1) } else { None });
+        (text.map(|y| y - top), shade.map(|y| y - top), side.map(|y| y - top))
+    };
+    let end = ends(400.0).0.unwrap();
+    let h = end + 0.25;
+    let (text, shade, side) = ends(h);
+    assert!(text.is_some(), "the line stays");
+    for reach in [shade.unwrap(), side.unwrap()] {
+        assert!(reach >= end - 0.01 && reach <= h + 0.5 + 0.01, "{reach} against {end} in {h}");
+    }
+}
+
+#[test]
+fn a_line_stays_while_its_text_ends_inside_the_box() {
+    use wordcraft_doc::props::LineSpacing;
+    // #5059: two lines in a box `w` × `h`, how many show and where the second's text ends.
+    let two = |spacing: f32, w: f32, body: TextBody| {
+        let mut d = Document::from_text("x");
+        let (bw, bh) = if body.vert == TextVert::Horz { (144.0, w) } else { (w, 144.0) };
+        let id = text_box(&mut d, 0, "One", bw, bh, body);
+        let para = |text: &str| {
+            let mut p = Paragraph::with_text(text, Default::default());
+            p.props.line_spacing = Some(LineSpacing::Multiple(spacing));
+            para_block(p)
+        };
+        d.parts.get_mut(&id).unwrap().blocks = vec![para("One"), para("Two")];
+        let l = lay(&d);
+        let ends = l.pages[0].items.iter().filter_map(|it| match it {
+            Placed::Lines { story: StoryRef::Part(s), para, l0, y, .. } if *s == id => {
+                let (first, last) = (para.lines.get(*l0)?, para.lines.last()?);
+                Some(y + last.top - first.top + last.baseline - last.top + last.text_desc)
+            }
+            _ => None,
+        });
+        let end = ends.fold(0.0f32, f32::max) - frame_of(&l, id).y;
+        (lines(&l, id).iter().map(|(.., l0, l1)| l1 - l0).sum::<usize>(), end)
+    };
+    // Tight spacing shrinks the ascent, not the descent, so the text ends below the line box.
+    for spacing in [0.5, 1.0, 1.5] {
+        let (_, end) = two(spacing, 400.0, TextBody::default());
+        assert_eq!(two(spacing, end + 0.25, TextBody::default()).0, 2, "{spacing}: the text ends in the bottom margin");
+        assert_eq!(two(spacing, end - 1.0, TextBody::default()).0, 1, "{spacing}: the text would run past the box");
+    }
+    // Turned text ends at the side its lines stack towards: the left at 90°, the right at 270°.
+    let (_, end) = two(1.0, 400.0, TextBody::default());
+    let (near, far) = (4 * 12700, 20 * 12700);
+    let inset = BOX_INSET_Y as u32 * 12700;
+    let deep = 4.0 + end - BOX_INSET_Y;
+    for (vert, l, r) in [(TextVert::Vert, far, near), (TextVert::Vert270, near, far)] {
+        let body = TextBody { vert, inset: Some([l, inset, r, inset]), ..Default::default() };
+        assert_eq!(two(1.0, deep + 0.25, body).0, 2, "{vert:?}: the text ends in the far margin");
+        assert_eq!(two(1.0, deep - 1.0, body).0, 1, "{vert:?}: the text would run past the box");
+    }
+    // A linked box keeps the same lines: the next picks up after them and none shows twice.
+    let (_, end) = two(1.5, 400.0, TextBody::default());
+    let mut d = Document::from_text("one\ntwo");
+    let a = text_box(&mut d, 0, "One", 144.0, end + 0.25, TextBody::default());
+    let b = text_box(&mut d, 1, "", 144.0, 400.0, TextBody::default());
+    let part = d.parts.get_mut(&a).unwrap();
+    part.body.next = Some(b);
+    part.blocks = ["One", "Two", "Three"]
+        .map(|text| {
+            let mut p = Paragraph::with_text(text, Default::default());
+            p.props.line_spacing = Some(LineSpacing::Multiple(1.5));
+            para_block(p)
+        })
+        .into();
+    let l = lay(&d);
+    let boxes = l.pages[0].items.iter().filter_map(|it| match it {
+        Placed::Object { rect, text_box: Some(s), .. } if *s == a => Some(rect.y),
+        _ => None,
+    });
+    let second = boxes.fold(0.0f32, f32::max);
+    let shown = lines(&l, a);
+    assert_eq!(shown.iter().map(|(.., l0, l1)| l1 - l0).sum::<usize>(), 3);
+    assert_eq!(shown.iter().filter(|(_, y, ..)| *y < second).count(), 2, "the first box keeps its two lines");
+    let paras: Vec<_> = l.pages[0]
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            Placed::Lines { story: StoryRef::Part(s), path, .. } if *s == a => Some(path.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(paras, [Path::top(0), Path::top(1), Path::top(2)], "each line shows once, in order");
+}
+
 /// An auto-fit inline box shrinks to its three lines and keeps the explicit page break on page
 /// one; a fixed 10 cm box keeps its saved height and pushes the break and following text to
 /// later pages.
