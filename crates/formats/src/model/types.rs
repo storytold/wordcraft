@@ -158,6 +158,10 @@ pub enum Inline {
     Image(Img),
     /// A bookmark (link target).
     Anchor(String),
+    /// Where bookmark `name`, started by an [`Inline::Anchor`] before it, ends: the bookmark
+    /// covers the text between. Only flows asked for fields ([`FlowOpts::fields`]) hold them;
+    /// an anchor without one is a point.
+    AnchorEnd(String),
     /// A chart or diagram known here only by its alt text: written where alt text has a place
     /// (an HTML or Markdown image), left out of editable formats so it never turns into body text.
     Figure(String),
@@ -271,6 +275,44 @@ impl Default for BoxLook {
             auto_fit: false,
         }
     }
+}
+
+/// The bookmarks in `blocks` whose end ([`Inline::AnchorEnd`]) follows their start
+/// ([`Inline::Anchor`]): ranges, not points. Tables' cells, notes, comments and shapes' text
+/// are looked through, in document order.
+pub fn ranged_anchors(blocks: &[FBlock]) -> std::collections::HashSet<String> {
+    fn walk(blocks: &[FBlock], depth: usize, started: &mut std::collections::HashSet<String>, ranged: &mut std::collections::HashSet<String>) {
+        if depth > MAX_DEPTH {
+            return;
+        }
+        for b in blocks {
+            match b {
+                FBlock::Para(p) => {
+                    for i in &p.inlines {
+                        match i {
+                            Inline::Anchor(n) => {
+                                started.insert(n.clone());
+                            }
+                            Inline::AnchorEnd(n) if started.contains(n) => {
+                                ranged.insert(n.clone());
+                            }
+                            Inline::Note { blocks, .. } | Inline::Shape { blocks, .. } => walk(blocks, depth + 1, started, ranged),
+                            Inline::Comment { comment, .. } => walk(&comment.blocks, depth + 1, started, ranged),
+                            _ => {}
+                        }
+                    }
+                }
+                FBlock::Table(t) => {
+                    for c in t.rows.iter().flatten() {
+                        walk(&c.blocks, depth + 1, started, ranged);
+                    }
+                }
+            }
+        }
+    }
+    let (mut started, mut ranged) = Default::default();
+    walk(blocks, 0, &mut started, &mut ranged);
+    ranged
 }
 
 /// `blocks` with each table replaced by the blocks of its cells, row by row (nested tables too),
@@ -579,7 +621,8 @@ impl Para {
                 | Inline::Shape { .. }
                 | Inline::Group { .. }
                 | Inline::FieldStart(_)
-                | Inline::FieldEnd => {}
+                | Inline::FieldEnd
+                | Inline::AnchorEnd(_) => {}
             }
         }
         s
@@ -604,7 +647,8 @@ impl Para {
                 | Inline::Shape { .. }
                 | Inline::Group { .. }
                 | Inline::FieldStart(_)
-                | Inline::FieldEnd => {}
+                | Inline::FieldEnd
+                | Inline::AnchorEnd(_) => {}
             }
         }
         s

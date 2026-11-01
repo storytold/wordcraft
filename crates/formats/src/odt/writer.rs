@@ -83,6 +83,10 @@ type SecStart = (String, Option<u32>);
 
 #[derive(Default)]
 pub(super) struct Writer {
+    /// Bookmarks that cover text (written as a start and an end), and those started and ended.
+    pub(super) ranged: std::collections::HashSet<String>,
+    bookmarks: std::collections::HashSet<String>,
+    bookmark_ends: std::collections::HashSet<String>,
     /// Indexes written so far (their names).
     pub(super) indexes: usize,
     /// An index's entries are being written: their links are in LibreOffice's Index Link style.
@@ -315,7 +319,22 @@ impl Writer {
                     self.group((*w, *h), float.as_deref(), members, out);
                     prev_space = false;
                 }
-                Inline::Anchor(a) => out.push_str(&format!("<text:bookmark text:name=\"{}\"/>", x(a))),
+                // A bookmark (§6.2.1): over the text up to its end, or a point; each name once.
+                Inline::Anchor(a) if self.bookmarks.insert(a.clone()) => {
+                    // One ending right where it starts is a point.
+                    let empty = matches!(inl.get(idx + 1), Some(Inline::AnchorEnd(e)) if e == a);
+                    if empty {
+                        self.bookmark_ends.insert(a.clone());
+                    }
+                    let el = if self.ranged.contains(a) && !empty { "bookmark-start" } else { "bookmark" };
+                    out.push_str(&format!("<text:{el} text:name=\"{}\"/>", x(a)));
+                }
+                Inline::Anchor(_) => {}
+                Inline::AnchorEnd(a) => {
+                    if self.ranged.contains(a) && self.bookmarks.contains(a) && self.bookmark_ends.insert(a.clone()) {
+                        out.push_str(&format!("<text:bookmark-end text:name=\"{}\"/>", x(a)));
+                    }
+                }
                 Inline::Note { endnote, custom, blocks } => {
                     self.note(*endnote, custom, blocks, out);
                     prev_space = false;

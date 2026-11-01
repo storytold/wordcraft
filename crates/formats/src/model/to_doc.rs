@@ -184,6 +184,11 @@ struct Builder<'a> {
     comments: std::collections::HashMap<u32, u32>,
     /// The document's list instance for each flow list number ([`ListInfo::list`]).
     lists: std::collections::HashMap<u32, u32>,
+    /// Bookmarks that cover text ([`super::types::ranged_anchors`]), those started, and those
+    /// ended: each started once and ended once, after its start.
+    ranged: std::collections::HashSet<String>,
+    started: std::collections::HashSet<String>,
+    ended: std::collections::HashSet<String>,
 }
 
 fn rev_key(kind: RevisionKind) -> u8 {
@@ -195,7 +200,8 @@ fn rev_key(kind: RevisionKind) -> u8 {
 }
 
 impl<'a> Builder<'a> {
-    fn new(doc: &'a mut Document) -> Builder<'a> {
+    /// A builder for `blocks` into `doc`.
+    fn new(doc: &'a mut Document, blocks: &[FBlock]) -> Builder<'a> {
         let mut revs = std::collections::HashMap::new();
         for (i, r) in doc.revisions.iter().enumerate() {
             if r.move_name.is_none() {
@@ -203,7 +209,16 @@ impl<'a> Builder<'a> {
                 revs.entry((rev_key(r.kind), mark)).or_insert(i as u32);
             }
         }
-        Builder { doc, revs, run_strings: 0, comments: Default::default(), lists: Default::default() }
+        Builder {
+            doc,
+            revs,
+            run_strings: 0,
+            comments: Default::default(),
+            lists: Default::default(),
+            ranged: super::types::ranged_anchors(blocks),
+            started: Default::default(),
+            ended: Default::default(),
+        }
     }
 
     /// The document revision for a tracked change, added the first time it is seen.
@@ -436,9 +451,18 @@ impl<'a> Builder<'a> {
                         append(&mut out, "", &CharProps::default(), Some(obj));
                     }
                 }
-                Inline::Anchor(name) => {
+                // A bookmark once (the first of a name): a point, or the start of the text it covers.
+                Inline::Anchor(name) if self.started.insert(name.clone()) => {
                     append(&mut out, "", &CharProps::default(), Some(InlineObject::BookmarkStart { name: name.clone() }));
-                    append(&mut out, "", &CharProps::default(), Some(InlineObject::BookmarkEnd { name: name.clone() }));
+                    if !self.ranged.contains(name) {
+                        append(&mut out, "", &CharProps::default(), Some(InlineObject::BookmarkEnd { name: name.clone() }));
+                    }
+                }
+                Inline::Anchor(_) => {}
+                Inline::AnchorEnd(name) => {
+                    if self.ranged.contains(name) && self.started.contains(name) && self.ended.insert(name.clone()) {
+                        append(&mut out, "", &CharProps::default(), Some(InlineObject::BookmarkEnd { name: name.clone() }));
+                    }
                 }
                 Inline::Figure(_) => {}
                 Inline::Comment { id, comment } => {
@@ -715,7 +739,7 @@ pub fn to_doc_in(flow: &Flow, section: wordcraft_doc::SectionProps) -> Document 
     if uses_code {
         doc.styles.upsert(code_style());
     }
-    let body = Builder::new(&mut doc).blocks(&flow.blocks, 0);
+    let body = Builder::new(&mut doc, &flow.blocks).blocks(&flow.blocks, 0);
     doc.body = body;
     let m = &flow.meta;
     doc.core.title = m.title.clone();
@@ -731,7 +755,7 @@ pub fn to_doc_in(flow: &Flow, section: wordcraft_doc::SectionProps) -> Document 
 /// `blocks` as document blocks of `doc` (their pictures go into its media), for a header,
 /// footer or other part an importer adds itself.
 pub fn part_blocks(doc: &mut Document, blocks: &[FBlock]) -> Blocks {
-    let mut out = Builder::new(doc).blocks(blocks, 0);
+    let mut out = Builder::new(doc, blocks).blocks(blocks, 0);
     if out.is_empty() {
         out.push(para_block(Paragraph::new()));
     }

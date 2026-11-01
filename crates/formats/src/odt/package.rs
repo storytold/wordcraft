@@ -500,6 +500,7 @@ pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
         model::FlowOpts { tracked: true, fields: true, notes: true, comments: true, lists: true, chars: true, paras: true, boxes: true },
     );
     let mut w = Writer::default();
+    w.ranged = model::ranged_anchors(&flow.blocks);
     let mut body = String::new();
     let sections = flow_sections(&flow.blocks, &doc.last_section);
     // One master page per section that starts a page; the first one is "Standard".

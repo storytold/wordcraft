@@ -408,7 +408,8 @@ impl Writer {
                 | Inline::Shape { .. }
                 | Inline::Group { .. }
                 | Inline::FieldStart(_)
-                | Inline::FieldEnd => {}
+                | Inline::FieldEnd
+                | Inline::AnchorEnd(_) => {}
             }
         }
     }

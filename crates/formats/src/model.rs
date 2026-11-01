@@ -28,7 +28,7 @@ pub use to_doc::{char_props, part_blocks, to_doc, to_doc_in};
 pub use types::{
     Affix, BoxLook, CODE_STYLE, Cell, FBlock, FComment, FTable, Flow, FlowOpts, Fmt, FmtChange, Img, Inline, Kind, Label, ListInfo, MAX_DEPTH,
     MAX_FONT_NAME, MAX_GROUP_DEPTH, MAX_LINK, MONO_FONT, Member, Meta, Para, RUBY_BASE_SIZE, RevMark, Spacing, clean_text, equations_as_text,
-    flatten_tables, kept_font, kept_link, ruby_as_text, ruby_object,
+    flatten_tables, kept_font, kept_link, ranged_anchors, ruby_as_text, ruby_object,
 };
 pub(crate) use types::{Dropped, begin_import, dropped};
 

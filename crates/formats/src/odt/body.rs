@@ -752,14 +752,11 @@ impl Body<'_> {
             }
             "tab" => self.push_text("\t"),
             "line-break" => self.push_text("\n"),
-            "bookmark" | "bookmark-start" => {
-                if let Some(name) = get(a, "text:name") {
-                    if self.para.is_none() {
-                        self.start_para(None, None);
-                    }
-                    if let Some(p) = &mut self.para {
-                        p.inlines.push(Inline::Anchor(name.to_string()));
-                    }
+            // A bookmark (§6.2.1): a point, or the start or end of the text it covers.
+            "bookmark" | "bookmark-start" | "bookmark-end" => {
+                if let Some(name) = get(a, "text:name").filter(|n| !n.is_empty()) {
+                    let name = name.to_string();
+                    self.push_inline(if local(q) == "bookmark-end" { Inline::AnchorEnd(name) } else { Inline::Anchor(name) });
                 }
             }
             _ => return false,

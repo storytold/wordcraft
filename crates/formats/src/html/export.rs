@@ -143,7 +143,8 @@ pub fn inlines_html(inlines: &[Inline]) -> String {
             | Inline::Shape { .. }
             | Inline::Group { .. }
             | Inline::FieldStart(_)
-            | Inline::FieldEnd => {}
+            | Inline::FieldEnd
+            | Inline::AnchorEnd(_) => {}
             Inline::Field { result, fmt, .. } => {
                 let (open, close) = fmt_tags(fmt);
                 let at_start = o.is_empty();
