@@ -103,9 +103,7 @@ impl Body<'_> {
                     let blocks = if kind != wordcraft_doc::para::ShapeKind::TextBox && empty { Vec::new() } else { blocks };
                     let path = self.shape_path.take().filter(|_| kind == wordcraft_doc::para::ShapeKind::Freeform);
                     let (w, h) = (w.unwrap_or(72.0), h.unwrap_or(1.0));
-                    if self.member_at.is_none() {
-                        self.note_place(kind, (w, h), &look, float.as_ref());
-                    }
+                    self.note_place(kind, (w, h), &look, float.as_ref());
                     Some(Inline::Shape { kind, w, h, float: float.map(Box::new), blocks, look, path })
                 }
                 (None, Some((linear, display))) => Some(Inline::Equation { linear, display }),
@@ -183,11 +181,15 @@ impl Body<'_> {
         look: &model::BoxLook,
         float: Option<&wordcraft_doc::para::Float>,
     ) {
-        if let (Some(c), Some(f)) = (look.conn.as_deref().filter(|c| c.id != 0), float)
-            && self.shape_places.len() < MAX_CONN_IDS
-        {
-            self.shape_places.insert(c.id, (kind, [f.x, f.y, w, h], f.clone(), self.para_seq));
+        let Some(c) = look.conn.as_deref().filter(|c| c.id != 0) else { return };
+        if self.shape_places.len() >= MAX_CONN_IDS {
+            return;
         }
+        // A group's member (placed in the group, not on the paragraph) or a shape in line: known
+        // by its kind only, never in the paragraph's coordinates.
+        let seq = if self.member_at.is_some() { usize::MAX } else { self.para_seq };
+        let f = float.cloned().unwrap_or_default();
+        self.shape_places.insert(c.id, (kind, [f.x, f.y, w, h], f, if float.is_some() { seq } else { usize::MAX }));
     }
 
     /// The connectors of paragraph `p` glued to shapes (see [`Self::conn_of`]): each end's glue
@@ -196,31 +198,45 @@ impl Body<'_> {
     /// shapes anchored in this paragraph, placed alike, runs between their sites. (A connector's
     /// own coordinates are in LibreOffice's drawing layer, not its anchor's.)
     pub(in crate::odt) fn glue_connectors(&self, p: &mut model::Para) {
-        use crate::odt::shapes::site_of_glue;
         for i in &mut p.inlines {
-            let Inline::Shape { kind, w, h, float, look, .. } = i else { continue };
-            let Some(c) = look.conn.as_deref_mut().filter(|_| kind.is_connector()) else { continue };
-            let resolve = |e: Option<wordcraft_doc::connector::ConnEnd>| {
-                let e = e?;
-                let place = self.shape_places.get(&e.id)?;
-                site_of_glue(place.0, e.site).map(|site| (wordcraft_doc::connector::ConnEnd { id: e.id, site }, place))
-            };
-            let (start, end) = (resolve(c.start), resolve(c.end));
-            (c.start, c.end) = (start.map(|(e, _)| e), end.map(|(e, _)| e));
-            let (Some((s, sp)), Some((e, ep)), Some(f)) = (start, end, float.as_deref_mut()) else { continue };
-            let same = |pl: &(wordcraft_doc::para::ShapeKind, [f32; 4], wordcraft_doc::para::Float, usize)| {
-                pl.3 == self.para_seq && pl.2.h_rel == f.h_rel && pl.2.v_rel == f.v_rel
-            };
-            if !(same(sp) && same(ep)) {
-                continue;
-            }
-            let point = |pl: &(wordcraft_doc::para::ShapeKind, [f32; 4], wordcraft_doc::para::Float, usize), site| {
-                wordcraft_doc::connector::site_point(pl.0, pl.1, pl.2.spin(), site)
-            };
-            let (Some((x1, y1)), Some((x2, y2))) = (point(sp, s.site), point(ep, e.site)) else { continue };
-            (f.x, f.y, f.flip_h, f.flip_v) = (x1.min(x2), y1.min(y2), x2 < x1, y2 < y1);
-            (*w, *h) = ((x2 - x1).abs().min(MAX_LEN), (y2 - y1).abs().min(MAX_LEN));
+            self.glue_connector(i, 0);
         }
+    }
+
+    /// Connector `i` of a paragraph or a group (`depth` deep in groups) glued to shapes (see
+    /// [`Self::glue_connectors`]).
+    fn glue_connector(&self, i: &mut Inline, depth: usize) {
+        use crate::odt::shapes::site_of_glue;
+        if let Inline::Group { members, .. } = i {
+            if depth < model::MAX_GROUP_DEPTH {
+                for m in members {
+                    self.glue_connector(&mut m.inline, depth + 1);
+                }
+            }
+            return;
+        }
+        let Inline::Shape { kind, w, h, float, look, .. } = i else { return };
+        let Some(c) = look.conn.as_deref_mut().filter(|_| kind.is_connector()) else { return };
+        let resolve = |e: Option<wordcraft_doc::connector::ConnEnd>| {
+            let e = e?;
+            let place = self.shape_places.get(&e.id)?;
+            site_of_glue(place.0, e.site).map(|site| (wordcraft_doc::connector::ConnEnd { id: e.id, site }, place))
+        };
+        let (start, end) = (resolve(c.start), resolve(c.end));
+        (c.start, c.end) = (start.map(|(e, _)| e), end.map(|(e, _)| e));
+        let (Some((s, sp)), Some((e, ep)), Some(f)) = (start, end, float.as_deref_mut()) else { return };
+        let same = |pl: &(wordcraft_doc::para::ShapeKind, [f32; 4], wordcraft_doc::para::Float, usize)| {
+            pl.3 == self.para_seq && pl.2.h_rel == f.h_rel && pl.2.v_rel == f.v_rel
+        };
+        if !(same(sp) && same(ep)) {
+            return;
+        }
+        let point = |pl: &(wordcraft_doc::para::ShapeKind, [f32; 4], wordcraft_doc::para::Float, usize), site| {
+            wordcraft_doc::connector::site_point(pl.0, pl.1, pl.2.spin(), site)
+        };
+        let (Some((x1, y1)), Some((x2, y2))) = (point(sp, s.site), point(ep, e.site)) else { return };
+        (f.x, f.y, f.flip_h, f.flip_v) = (x1.min(x2), y1.min(y2), x2 < x1, y2 < y1);
+        (*w, *h) = ((x2 - x1).abs().min(MAX_LEN), (y2 - y1).abs().min(MAX_LEN));
     }
 
     /// A frame or shape `w` × `h` (attributes `a`) begins: in a group (not in a shape's text), where

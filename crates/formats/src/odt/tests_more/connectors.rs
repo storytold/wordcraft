@@ -75,3 +75,28 @@ fn glue_to_nothing_or_a_glue_point_of_its_own_is_dropped() {
     assert_eq!((s[1].4, s[1].5), (None, None));
     assert_eq!(s[2].4, None);
 }
+
+#[test]
+fn a_connector_in_a_group_is_glued_by_its_shapes_sites() {
+    // In a group, a connector glued to the group's ellipse: its glue point is the ellipse's site
+    // (right: glue point 1 is the ellipse's site 6), not taken as a site number itself.
+    let content = format!(
+        r#"<office:document-content {NS_T} {NS_D}><office:body><office:text><text:p><draw:g text:anchor-type="paragraph"><draw:ellipse xml:id="e" svg:width="1in" svg:height="1in" svg:x="0in" svg:y="0in"/><draw:rect xml:id="r" svg:width="1in" svg:height="1in" svg:x="2in" svg:y="0in"/><draw:connector svg:x1="1in" svg:y1="0.5in" svg:x2="2in" svg:y2="0.5in" draw:start-shape="e" draw:start-glue-point="1" draw:end-shape="r" draw:end-glue-point="3"/></draw:g></text:p></office:text></office:body></office:document-content>"#
+    );
+    let d = import(&package(&content, None)).unwrap();
+    let ends: Vec<(Option<(u32, u32)>, Option<(u32, u32)>)> = d
+        .body
+        .iter()
+        .filter_map(|b| b.as_para())
+        .flat_map(|p| p.objects.iter())
+        .filter_map(|o| if let InlineObject::Group { children, .. } = o { Some(children) } else { None })
+        .flatten()
+        .filter_map(|c| match &c.obj {
+            InlineObject::Shape { kind, extra, .. } if kind.is_connector() => {
+                Some((extra.start.map(|e| (e.id, e.site)), extra.end.map(|e| (e.id, e.site))))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ends, [(Some((1, 6)), Some((2, 1)))]);
+}
