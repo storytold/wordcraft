@@ -257,6 +257,12 @@ xtask assets` (57 files attributed), `cargo test -p wordcraft-engine --lib` (107
 
 ## Revision history
 
+> 2026-10-31 · Review follow-up 2: the slim-bar badge list now comes from the tabs the ribbon
+> strip shows (a new `ribbon::visible_tabs`, shared with the strip itself), so a tab hidden in
+> Customize Ribbon gets no badge in Focus or Full Screen View and cannot be picked from the slim
+> bar; the report scopes its `cargo xtask ci` claim to the engine and ui-egui gates, which run
+> green while the pre-existing Thai font-fallback failure stays red on this machine. 26 tests.
+
 > 2026-10-31 · Review follow-up: fix 2 widened to six command families that read `value` without
 > the shared pattern — `draw.inkToShape` (which converted the lasso's strokes), `layout.hyphenation`,
 > the character-toggle helper behind `format.bold` and friends, `format.underline`,
@@ -269,7 +275,11 @@ xtask assets` (57 files attributed), `cargo test -p wordcraft-engine --lib` (107
 > across every switch; a chrome change hands the keyboard back to the page; keytips draw on the slim
 > bar and drop the ribbon; large ribbon buttons are named for screen readers. Two older tests that
 > clicked by a now-shared label pick by position. The flaky `ime_body_epoch_marks_body_replacements_not_edits`
-> (a hard-coded document id) is fixed too, so `cargo xtask ci` runs green. 24 tests in all (8 engine, 16 UI).
+> (a hard-coded document id) is fixed too. The engine and ui-egui gates run green; `cargo xtask ci`
+> stays red on this machine at the pre-existing
+> `wordcraft-fonts::a_thai_run_with_latin_falls_back_to_one_face` (clean `main` fails the same way:
+> this machine's Thonburi lacks layout tables, so the test cannot pick a shaping face). 24 tests in
+> all (8 engine, 16 UI).
 
 > 2026-10-31 · First version: 23 new integration tests (8 engine, 15 ui-egui), all green, pinning six
 > findings — the empty-window trap after closing the last document in Focus (severe), the silent
