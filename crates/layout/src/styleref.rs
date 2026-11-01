@@ -293,7 +293,7 @@ impl StyleIndex {
             Number::Chapter => e.label.as_deref().map(chapter_number).filter(|s| !s.is_empty()).unwrap_or_else(|| e.ordinal.to_string()),
             Number::Plain | Number::Full => {
                 let own = match &e.label {
-                    Some(l) if code.suppress => suppress(l, &e.levels),
+                    Some(l) if code.suppress => suppress(l, &e.levels, e.level),
                     Some(l) => l.trim().trim_end_matches('.').to_string(),
                     None => e.ordinal.to_string(),
                 };
@@ -301,7 +301,8 @@ impl StyleIndex {
                     // Levels above the paragraph's that the label's own template doesn't show. By
                     // level, not position: a "none" level has no entry, its own (#4985) included.
                     let above: Vec<&str> = e.levels.iter().filter(|(k, _, shown)| *k < e.level && !shown).map(|(_, v, _)| v.as_str()).collect();
-                    if above.is_empty() { own } else { format!("{}.{own}", above.join(".")) }
+                    // An empty label of its own (a "none" level with no text) adds no part: `3`, not `3.`.
+                    above.into_iter().chain(Some(own.as_str()).filter(|o| !o.is_empty())).collect::<Vec<_>>().join(".")
                 } else {
                     own
                 }
@@ -323,10 +324,17 @@ fn chapter_number(label: &str) -> String {
     word.trim_matches(|c: char| !c.is_alphanumeric()).to_string()
 }
 
-/// `\t`: the label without its words that hold no number (`Chapter 2.` → `2`).
-fn suppress(label: &str, levels: &[(u8, String, bool)]) -> String {
+/// `\t`: the label without its words that hold no number (`Chapter 2.` → `2`). A "none" level's
+/// label (`level` has no number of its own) holding none is left with nothing (`Note`, #4985);
+/// any other label that holds none is kept whole.
+fn suppress(label: &str, levels: &[(u8, String, bool)], level: u8) -> String {
     let kept: Vec<&str> = label.split_whitespace().filter(|w| levels.iter().any(|(_, v, _)| !v.is_empty() && w.contains(v.as_str()))).collect();
-    let s = if kept.is_empty() { label.trim().to_string() } else { kept.join(" ") };
+    let none = !levels.iter().any(|(k, ..)| *k == level);
+    let s = match kept.is_empty() {
+        true if none => String::new(),
+        true => label.trim().to_string(),
+        false => kept.join(" "),
+    };
     s.trim_end_matches('.').to_string()
 }
 
@@ -362,7 +370,9 @@ mod tests {
 
     #[test]
     fn suppress_keeps_the_number() {
-        assert_eq!(suppress("Chapter 2.", &[(0, "2".into(), true)]), "2");
+        assert_eq!(suppress("Chapter 2.", &[(0, "2".into(), true)], 0), "2");
+        assert_eq!(suppress("Note", &[(0, "3".into(), false)], 1), "", "a none level's label");
+        assert_eq!(suppress("Appendix", &[(0, "3".into(), false)], 0), "Appendix", "kept whole when the level has a number");
         assert_eq!(chapter_number("Chapter IV."), "IV");
     }
 }
