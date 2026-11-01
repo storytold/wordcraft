@@ -38,8 +38,13 @@ pub const MAX_WORD_BYTES: usize = 120;
 const EMPTY: u32 = u32::MAX;
 /// Most flags one `.dic` entry or one continuation class field may carry. Real dictionaries use a
 /// few hundred at most (Belarusian: 264); a longer field is hostile and is refused (`.aff`) or
-/// skipped (`.dic`).
+/// skipped (`.dic`, though its `FORBIDDENWORD` and `NOSUGGEST` flags still apply to the word).
 pub const MAX_FLAGS_PER_ENTRY: usize = 1024;
+/// Most flags one stem may carry once its homonyms (the same word on several `.dic` lines) are
+/// merged, and so most flags a stem line of the compact format may carry. Larger than
+/// [`MAX_FLAGS_PER_ENTRY`] because merged sets aren't `.dic` fields; a homonym that would take the
+/// set past it adds only its `FORBIDDENWORD` and `NOSUGGEST` flags, as an exclusion is never lost.
+pub const MAX_FLAGS_PER_STEM: usize = 8 * MAX_FLAGS_PER_ENTRY;
 /// Most distinct flags a dictionary may use: each gets a `u16` id.
 const MAX_DISTINCT_FLAGS: usize = 1 << 16;
 
@@ -390,10 +395,15 @@ impl FlagMode {
     /// The flags of a field (`.dic` flags, continuation classes), in source order, at most
     /// [`MAX_FLAGS_PER_ENTRY`]. An empty field has none.
     fn parse(self, field: &str) -> Result<Vec<FlagKey>, String> {
+        self.parse_at_most(field, MAX_FLAGS_PER_ENTRY)
+    }
+
+    /// The flags of a field, at most `cap` of them.
+    fn parse_at_most(self, field: &str, cap: usize) -> Result<Vec<FlagKey>, String> {
         let mut out = Vec::new();
         let mut push = |k: FlagKey| {
-            if out.len() >= MAX_FLAGS_PER_ENTRY {
-                return Err(format!("more than {MAX_FLAGS_PER_ENTRY} flags in `{}`", field.chars().take(40).collect::<String>()));
+            if out.len() >= cap {
+                return Err(format!("more than {cap} flags in `{}`", field.chars().take(40).collect::<String>()));
             }
             out.push(k);
             Ok(())
@@ -593,23 +603,36 @@ impl AffixDict {
             }
             stems.push((word, flags));
         }
-        AffixDict::build(rules, stems, comments.iter().map(ToString::to_string).collect())
+        AffixDict::build(rules, stems, comments.iter().map(ToString::to_string).collect(), MAX_FLAGS_PER_ENTRY)
     }
 
-    fn build(rules: Rules, stems: Vec<(String, String)>, comments: Vec<String>) -> Result<AffixDict, String> {
+    /// Build from parsed rules and stems whose flag fields carry at most `entry_cap` flags each
+    /// ([`MAX_FLAGS_PER_ENTRY`] for `.dic` entries, [`MAX_FLAGS_PER_STEM`] for compact data).
+    fn build(rules: Rules, stems: Vec<(String, String)>, comments: Vec<String>, entry_cap: usize) -> Result<AffixDict, String> {
         let mode = rules.mode;
-        // A `.dic` entry whose flags don't read (a bad number, too many flags) is skipped, as a
-        // word Hunspell would read with the wrong flags: better unknown than wrongly accepted.
+        // A `.dic` entry whose flags don't read (a bad number, more than MAX_FLAGS_PER_STEM flags)
+        // is skipped, as a word Hunspell would read with the wrong flags: better unknown than
+        // wrongly accepted. One with more than `entry_cap` flags is not a word either, but its
+        // FORBIDDENWORD and NOSUGGEST flags still apply to its homonyms: an exclusion is never lost.
         let mut skipped = 0usize;
+        let exclusion_keys = [rules.forbidden, rules.no_suggest];
+        let is_exclusion_key = |k: &FlagKey| exclusion_keys.contains(&Some(*k));
         // Each stem's flags are a range of `stem_keys`: one buffer, not one allocation per stem.
+        // The flag says whether the entry is a word (false: it only carries exclusions).
         let mut stem_keys: Vec<FlagKey> = Vec::new();
-        let mut stems: Vec<(String, usize, usize)> = stems
+        let mut stems: Vec<(String, usize, usize, bool)> = stems
             .into_iter()
-            .filter_map(|(w, f)| match mode.parse(&f) {
+            .filter_map(|(w, f)| match mode.parse_at_most(&f, MAX_FLAGS_PER_STEM.max(entry_cap)) {
                 Ok(keys) => {
                     let start = stem_keys.len();
-                    stem_keys.extend(keys);
-                    Some((w, start, stem_keys.len()))
+                    let word = keys.len() <= entry_cap;
+                    if word {
+                        stem_keys.extend(keys);
+                    } else {
+                        skipped += 1;
+                        stem_keys.extend(keys.into_iter().filter(is_exclusion_key));
+                    }
+                    Some((w, start, stem_keys.len(), word))
                 }
                 Err(_) => {
                     skipped += 1;
@@ -618,7 +641,7 @@ impl AffixDict {
             })
             .collect();
         if skipped > 0 {
-            log::debug!("affix dictionary: {skipped} entries with unreadable flags skipped");
+            log::debug!("affix dictionary: {skipped} entries with unreadable or too many flags skipped");
         }
         let conts = |rs: &[RawRule]| rs.iter().map(|r| mode.parse(&r.4)).collect::<Result<Vec<_>, _>>();
         let (pfx_cont, sfx_cont) = (conts(&rules.prefixes)?, conts(&rules.suffixes)?);
@@ -660,32 +683,74 @@ impl AffixDict {
         d.offs.push(0);
         let mut set_ids: FxMap<Vec<u16>, u32> = FxMap::default();
         set_ids.insert(Vec::new(), 0);
+        let exclusions: Vec<u16> = exclusion_keys.into_iter().flatten().filter_map(id_of).collect();
         let mut i = 0;
+        let mut dropped = 0usize;
         let mut merged: Vec<u16> = Vec::new();
+        let mut fresh: Vec<u16> = Vec::new();
+        let mut carried: Vec<u16> = Vec::new();
         while i < stems.len() {
             let Some((word, ..)) = stems.get(i) else { break };
             merged.clear();
+            carried.clear();
+            let mut is_word = false;
             let mut j = i;
-            while let Some((w, a, b)) = stems.get(j)
+            while let Some((w, a, b, entry_is_word)) = stems.get(j)
                 && w == word
             {
-                // Homonyms each within MAX_FLAGS_PER_ENTRY can still add up to more; an entry
-                // that would take the merged set past it is skipped, as an oversized entry is, so
-                // the compact data never holds a set its reader refuses.
-                let mut next = merged.clone();
-                next.extend(stem_keys.get(*a..*b).unwrap_or_default().iter().filter_map(|&k| id_of(k)));
-                next.sort_unstable();
-                next.dedup();
-                if next.len() <= MAX_FLAGS_PER_ENTRY {
-                    merged = next;
-                }
                 j += 1;
+                fresh.clear();
+                fresh.extend(stem_keys.get(*a..*b).unwrap_or_default().iter().filter_map(|&k| id_of(k)));
+                for &f in &fresh {
+                    if exclusions.contains(&f) && !carried.contains(&f) {
+                        carried.push(f);
+                    }
+                }
+                if !entry_is_word {
+                    continue;
+                }
+                is_word = true;
+                fresh.sort_unstable();
+                fresh.dedup();
+                fresh.retain(|&f| !has(&merged, f));
+                // Homonyms can add up to more flags than one entry holds; past MAX_FLAGS_PER_STEM
+                // an entry's other flags are dropped (its exclusions are carried below), so the
+                // compact data never holds a set its reader refuses.
+                if merged.len().saturating_add(fresh.len()) <= MAX_FLAGS_PER_STEM {
+                    merged.extend_from_slice(&fresh);
+                    // A sorted run and a sorted tail: the stable sort merges them in linear time.
+                    merged.sort();
+                } else {
+                    dropped += 1;
+                }
+            }
+            if !is_word {
+                i = j;
+                continue;
+            }
+            for &f in &carried {
+                if has(&merged, f) {
+                    continue;
+                }
+                // Make room by dropping a flag that excludes nothing (there are at most two
+                // exclusion flags, so a full set always has one).
+                if merged.len() >= MAX_FLAGS_PER_STEM
+                    && let Some(at) = merged.iter().rposition(|g| !exclusions.contains(g))
+                {
+                    merged.remove(at);
+                }
+                if let Err(at) = merged.binary_search(&f) {
+                    merged.insert(at, f);
+                }
             }
             let id = d.intern(&mut set_ids, &mut merged)?;
             d.words.push_str(word);
             d.offs.push(u32::try_from(d.words.len()).map_err(|_| "stems too large".to_string())?);
             d.flags.push(id);
             i = j;
+        }
+        if dropped > 0 {
+            log::debug!("affix dictionary: {dropped} homonym entries past {MAX_FLAGS_PER_STEM} merged flags kept only their exclusions");
         }
         let mut build_rules = |raw: Vec<RawRule>, conts: Vec<Vec<FlagKey>>, d: &mut AffixDict| -> Result<Vec<Rule>, String> {
             raw.into_iter()
@@ -1307,7 +1372,7 @@ impl AffixDict {
             }
             stems.push((word.to_string(), flags.to_string()));
         }
-        AffixDict::build(rules, stems, comments)
+        AffixDict::build(rules, stems, comments, MAX_FLAGS_PER_STEM)
     }
 }
 
@@ -1811,15 +1876,93 @@ pub(crate) mod tests {
         }
         let err = AffixDict::from_hunspell("", &dic, &[]).unwrap_err();
         assert!(err.contains("distinct flags"), "{err}");
-        // Homonyms are merged into one set; an entry that would take it past the cap is skipped,
-        // so the compact data reloads with the word.
+        // Homonyms are merged into one set. The per-entry cap is for .dic fields, not merged sets:
+        // two entries adding up to more than MAX_FLAGS_PER_ENTRY are both kept (up to
+        // MAX_FLAGS_PER_STEM), and the compact data reloads with the word and all its flags.
+        let aff2 = format!("{aff}SFX {n} Y 1\nSFX {n} 0 b .\n", n = MAX_FLAGS_PER_ENTRY + 5);
         let first = field(MAX_FLAGS_PER_ENTRY);
         let second = (MAX_FLAGS_PER_ENTRY + 1..=MAX_FLAGS_PER_ENTRY + 10).map(|i| i.to_string()).collect::<Vec<_>>().join(",");
         let dic = format!("2\nsame/{first}\nsame/{second}\n");
-        let d = AffixDict::from_hunspell(aff, &dic, &[]).unwrap();
-        assert!(d.check("same") && d.check("samea"));
+        let d = AffixDict::from_hunspell(&aff2, &dic, &[]).unwrap();
+        assert!(d.check("same") && d.check("samea") && d.check("sameb"), "the second homonym's flags are merged");
         let back = AffixDict::from_bytes(&d.to_bytes()).unwrap();
-        assert!(back.check("same") && back.check("samea"));
+        assert!(back.check("same") && back.check("samea") && back.check("sameb"));
+    }
+
+    /// `n` homonym lines of `same`, each with MAX_FLAGS_PER_ENTRY distinct numeric flags (the
+    /// first starting at 1), the last one ending with the flags `extra` (comma-separated).
+    fn homonyms(n: usize, extra: &str) -> String {
+        let mut dic = format!("{n}\n");
+        for e in 0..n {
+            let flags = e * MAX_FLAGS_PER_ENTRY + 1..=(e + 1) * MAX_FLAGS_PER_ENTRY;
+            let mut flags: Vec<String> = flags.map(|i| i.to_string()).collect();
+            if e + 1 == n && !extra.is_empty() {
+                // Still exactly MAX_FLAGS_PER_ENTRY flags: the entry itself is within its cap.
+                let extra: Vec<&str> = extra.split(',').collect();
+                flags.truncate(MAX_FLAGS_PER_ENTRY - extra.len());
+                flags.extend(extra.iter().map(ToString::to_string));
+            }
+            dic.push_str(&format!("same/{}\n", flags.join(",")));
+        }
+        dic
+    }
+
+    #[test]
+    fn merged_homonyms_between_the_entry_and_stem_caps_round_trip() {
+        // Eight full entries: exactly MAX_FLAGS_PER_STEM merged flags, the largest set build()
+        // makes. The compact reader takes it back, word and flags.
+        let n = MAX_FLAGS_PER_STEM / MAX_FLAGS_PER_ENTRY;
+        let last = MAX_FLAGS_PER_STEM;
+        let aff = format!("FLAG num\nSFX 1 Y 1\nSFX 1 0 a .\nSFX {last} Y 1\nSFX {last} 0 z .\n");
+        let d = AffixDict::from_hunspell(&aff, &homonyms(n, ""), &[]).unwrap();
+        let back = AffixDict::from_bytes(&d.to_bytes()).unwrap();
+        for d in [&d, &back] {
+            assert!(d.check("same") && d.check("samea") && d.check("samez"));
+        }
+        // One flag past the stem cap in compact data is refused, as an oversized .dic entry is.
+        let flags = (1..=MAX_FLAGS_PER_STEM + 1).map(|i| i.to_string()).collect::<Vec<_>>().join(",");
+        let raw = format!("{MAGIC}\nFLAG num\nSFX 1 Y 0 a .\nWORDS\n\0same/{flags}\n\0kot\n");
+        let d = AffixDict::from_bytes(&miniz_oxide::deflate::compress_to_vec(raw.as_bytes(), 6)).unwrap();
+        assert!(!d.check("same") && d.check("kot"));
+    }
+
+    #[test]
+    fn a_homonym_past_the_merged_cap_keeps_its_exclusions() {
+        // Nine full homonyms: the ninth takes the merged set past MAX_FLAGS_PER_STEM, and it is
+        // the only one with the exclusion flag. Its other flags are dropped; the exclusion isn't.
+        let n = MAX_FLAGS_PER_STEM / MAX_FLAGS_PER_ENTRY + 1;
+        let x = 60_000;
+        let rules = "SFX 1 Y 1\nSFX 1 0 a .\n";
+        let forbidden = AffixDict::from_hunspell(&format!("FLAG num\nFORBIDDENWORD {x}\n{rules}"), &homonyms(n, &x.to_string()), &[]).unwrap();
+        let back = AffixDict::from_bytes(&forbidden.to_bytes()).unwrap();
+        for d in [&forbidden, &back] {
+            assert!(!d.check("same") && !d.check("samea") && !d.contains("same"), "still forbidden");
+            assert!(!d.contains_suggestible("same"));
+        }
+        let no_suggest = AffixDict::from_hunspell(&format!("FLAG num\nNOSUGGEST {x}\n{rules}"), &homonyms(n, &x.to_string()), &[]).unwrap();
+        let back = AffixDict::from_bytes(&no_suggest.to_bytes()).unwrap();
+        for d in [&no_suggest, &back] {
+            assert!(d.check("same") && d.check("samea"), "correct");
+            assert!(!d.contains_suggestible("same") && !d.contains_suggestible("samea"), "but never suggested");
+        }
+        // Both exclusions on the overflowing homonym: both carried.
+        let both = format!("FLAG num\nFORBIDDENWORD {x}\nNOSUGGEST {y}\n{rules}", y = x + 1);
+        let d = AffixDict::from_hunspell(&both, &homonyms(n, &format!("{x},{}", x + 1)), &[]).unwrap();
+        let back = AffixDict::from_bytes(&d.to_bytes()).unwrap();
+        for d in [&d, &back] {
+            assert!(!d.check("same") && !d.contains_suggestible("same"));
+        }
+        // A single entry over MAX_FLAGS_PER_ENTRY is not a word, but its exclusion still rules
+        // its homonym out.
+        let over = format!("{},{x}", (2..=MAX_FLAGS_PER_ENTRY + 1).map(|i| i.to_string()).collect::<Vec<_>>().join(","));
+        let d = AffixDict::from_hunspell(&format!("FLAG num\nFORBIDDENWORD {x}\n{rules}"), &format!("2\nsame/1\nsame/{over}\n"), &[]).unwrap();
+        let back = AffixDict::from_bytes(&d.to_bytes()).unwrap();
+        for d in [&d, &back] {
+            assert!(!d.check("same") && !d.check("samea"), "an oversized entry's FORBIDDENWORD applies");
+        }
+        // Alone, an oversized entry is still no word, exclusion or not.
+        let d = AffixDict::from_hunspell(&format!("FLAG num\nNOSUGGEST {x}\n{rules}"), &format!("1\nsame/{over}\n"), &[]).unwrap();
+        assert!(!d.check("same"));
     }
 
     #[test]
