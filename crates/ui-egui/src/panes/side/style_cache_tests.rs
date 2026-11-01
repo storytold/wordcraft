@@ -1,5 +1,6 @@
 use super::*;
 
+/// Create a synthetic document with 256 custom styles to exercise list reuse.
 fn app() -> WordApp {
     let mut doc = wordcraft_doc::Document::from_text("First paragraph.\nSecond paragraph.");
     let normal = doc.styles.get("Normal").unwrap().clone();
@@ -22,6 +23,7 @@ fn paint(ctx: &egui::Context, app: &mut WordApp) {
     .drop_without_applying_deltas();
 }
 
+/// Unchanged frames and caret movement reuse the list without modifying the document.
 #[test]
 fn styles_pane_reuses_unchanged_list_across_repaints() {
     let ctx = egui::Context::default();
@@ -41,6 +43,7 @@ fn styles_pane_reuses_unchanged_list_across_repaints() {
     assert_eq!(STYLE_LIST_BUILDS.with(|n| n.get()), 1, "caret movement keeps the list");
 }
 
+/// Stable case-insensitive ordering preserves flags and excludes hidden and table styles.
 #[test]
 fn styles_pane_keeps_stable_order_and_style_flags() {
     use wordcraft_doc::{Document, Style, StyleKind};
@@ -70,6 +73,7 @@ fn styles_pane_keeps_stable_order_and_style_flags() {
     );
 }
 
+/// Language changes rebuild translated ordering while retaining custom names and revision.
 #[test]
 fn styles_pane_refreshes_translated_order_without_document_edits() {
     struct Restore(crate::i18n::Lang);
@@ -98,6 +102,7 @@ fn styles_pane_refreshes_translated_order_without_document_edits() {
     assert_eq!(*cached_styles(&mut app), *english);
 }
 
+/// Style edits and Undo/Redo invalidate cached rows and preserve current definitions.
 #[test]
 fn styles_pane_refreshes_after_style_edits_and_history() {
     let ctx = egui::Context::default();
@@ -133,6 +138,7 @@ fn styles_pane_refreshes_after_style_edits_and_history() {
     assert_eq!(*rows, *cached_styles(&mut app), "body edits preserve the style rows");
 }
 
+/// Different document identities invalidate rows even when revisions coincide.
 #[test]
 fn styles_pane_refreshes_on_equal_revision_document_switch_and_replacement() {
     let mut app = app();
@@ -151,6 +157,7 @@ fn styles_pane_refreshes_on_equal_revision_document_switch_and_replacement() {
 
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
+/// Window swaps retain separate rows and closing a window releases its row allocation.
 fn styles_pane_cache_follows_window_ownership() {
     let ctx = egui::Context::default();
     crate::theme::install_fonts(&ctx);
@@ -176,6 +183,7 @@ fn styles_pane_cache_follows_window_ownership() {
 
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
+/// Cached rows still apply, update, modify and delete the selected live style.
 fn styles_pane_cached_rows_keep_actions_live() {
     use egui_kittest::kittest::Queryable;
     let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Original text")), crate::Services::default());

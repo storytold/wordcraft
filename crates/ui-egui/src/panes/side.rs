@@ -51,6 +51,7 @@ pub(super) fn clipboard(app: &mut WordApp, ui: &mut Ui) {
     });
 }
 
+/// Draw current-style controls and cached rows; dispatch actions through the live session.
 pub(super) fn styles(app: &mut WordApp, ui: &mut Ui) {
     let st = app.session.run("format.state", &json!({})).unwrap_or_default();
     let cur = st.get("style").and_then(Value::as_str).unwrap_or("Normal").to_string();
@@ -123,6 +124,7 @@ pub(crate) struct StyleCache {
     items: StyleRows,
 }
 
+/// Reuse this window's ordered rows until document identity, revision or language changes.
 fn cached_styles(app: &mut WordApp) -> StyleRows {
     let stamp = (app.session.document_id(), app.session.rev(), crate::i18n::current());
     let cache = &mut app.style_cache;
