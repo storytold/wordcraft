@@ -124,6 +124,48 @@ fn apply_look(doc: &mut Document, kind: model::Kind, look: &super::styles::ParaL
     p.keep_next = look.keep_next.then_some(true);
 }
 
+/// Number the headings as the outline style `levels` does (ODF 1.3 §16.34): one list whose
+/// levels carry the outline's formats, each linked to its heading style, which numbers its
+/// paragraphs through it, as Word's numbered headings do. Levels without a number are left so.
+fn number_headings(doc: &mut Document, levels: &[super::styles::ListLevel]) {
+    use wordcraft_doc::numbering::{AbstractNum, ListKind, Num, levels_for};
+    use wordcraft_doc::props::NumRef;
+    let numbered: Vec<bool> = (0..6).map(|i| levels.get(i).is_some_and(|l| l.ordered)).collect();
+    if !numbered.contains(&true) {
+        return;
+    }
+    let mut out = levels_for(ListKind::Numbered);
+    for (i, level) in out.iter_mut().enumerate() {
+        let src = levels.get(i).copied().unwrap_or_default();
+        // Headings sit at the margin, their number followed by a tab.
+        (level.indent, level.hanging) = (0.0, 0.0);
+        match src.label.filter(|_| src.ordered) {
+            Some(l) => {
+                level.format = l.format;
+                level.text = l.text(i as u8);
+                level.start = src.start;
+            }
+            None => {
+                level.format = wordcraft_doc::section::NumFormat::None;
+                level.text = String::new();
+            }
+        }
+        if i < 6 {
+            level.style = Some(format!("Heading{}", i + 1));
+        }
+    }
+    let numbering = &mut doc.numbering;
+    let aid = numbering.abstracts.iter().map(|a| a.id + 1).max().unwrap_or(0);
+    numbering.abstracts.push(AbstractNum { id: aid, name: None, levels: out, ..Default::default() });
+    let nid = numbering.nums.iter().map(|n| n.id + 1).max().unwrap_or(1).max(1);
+    numbering.nums.push(Num { id: nid, abstract_id: aid, ..Default::default() });
+    for (i, on) in numbered.iter().enumerate() {
+        if *on && let Some(st) = doc.styles.get_mut(&format!("Heading{}", i + 1)) {
+            st.para.numbering = Some(NumRef { num: nid, level: i as u8 });
+        }
+    }
+}
+
 /// The boolean configuration item `name` of `settings.xml` (ODF 1.3 §3.10), when it has one.
 fn setting(xml: &[u8], name: &str) -> Option<bool> {
     let mut inside = false;
@@ -155,6 +197,8 @@ struct Parsed {
     track: Option<bool>,
     /// The document's default font.
     font: Option<String>,
+    /// The heading numbering (`text:outline-style`), level by level.
+    outline: Option<Vec<super::styles::ListLevel>>,
     /// How the file's heading, title, quotation and preformatted styles look.
     looks: Vec<(model::Kind, super::styles::ParaLook)>,
     /// The document's default paragraph spacing.
@@ -215,6 +259,7 @@ fn parse_tracked(bytes: &[u8]) -> Result<Parsed, String> {
         font: styles.doc_font(),
         spacing: styles.doc_spacing(),
         looks: styles.kind_looks(),
+        outline: styles.outline.clone(),
         kern: styles.default_kern,
         default_tab: styles.default_tab,
         parts,
@@ -224,7 +269,7 @@ fn parse_tracked(bytes: &[u8]) -> Result<Parsed, String> {
 /// Parse an `.odt` package into a document.
 pub fn import(bytes: &[u8]) -> Result<Document, String> {
     model::begin_import();
-    let Parsed { flow, last, track, font, spacing, looks, kern, default_tab, parts } = parse_tracked(bytes)?;
+    let Parsed { flow, last, track, font, spacing, looks, outline, kern, default_tab, parts } = parse_tracked(bytes)?;
     let mut doc = model::to_doc(&flow);
     if font.is_some() {
         doc.styles.default_chr.font = font;
@@ -238,6 +283,9 @@ pub fn import(bytes: &[u8]) -> Result<Document, String> {
     (d.indent_left, d.indent_right, d.indent_first) = (spacing.left, spacing.right, spacing.first);
     for (kind, look) in &looks {
         apply_look(&mut doc, *kind, look);
+    }
+    if let Some(levels) = &outline {
+        number_headings(&mut doc, levels);
     }
     doc.last_section = last;
     page_parts::add(&mut doc, parts);

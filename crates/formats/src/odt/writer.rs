@@ -14,7 +14,7 @@ struct ListOut {
 
 /// WordCraft number format → ODF's `style:num-format` (ODF 1.3 §19.500); formats ODF lacks are
 /// written as decimal.
-fn odf_num_format(f: wordcraft_doc::section::NumFormat) -> &'static str {
+pub(super) fn odf_num_format(f: wordcraft_doc::section::NumFormat) -> &'static str {
     use wordcraft_doc::section::NumFormat as F;
     match f {
         F::LowerRoman => "i",

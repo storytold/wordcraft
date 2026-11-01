@@ -485,7 +485,7 @@ fn paragraph_properties(a: &Attrs, s: &mut StyleInfo) {
 }
 
 /// A list style's level (ODF 1.3 §16.31–16.33): numbered or not, its label and start value.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(super) struct ListLevel {
     pub(super) ordered: bool,
     pub(super) label: Option<model::Label>,
@@ -533,6 +533,8 @@ pub(super) struct Styles {
     map: HashMap<String, StyleInfo>,
     /// Font faces (`style:font-face`): name → family.
     faces: HashMap<String, String>,
+    /// The levels of `text:outline-style` (heading numbering, ODF 1.3 §16.34), when there is one.
+    pub(super) outline: Option<Vec<ListLevel>>,
     pub(super) lists: HashMap<String, Vec<ListLevel>>,
     /// Font of `style:default-style` for paragraphs (the document default, ODF 1.3 §16.4).
     default_font: Option<String>,
@@ -643,6 +645,13 @@ impl Styles {
                     }
                 }
                 "list-style" => list = get(&a, "style:name").map(|n| (n.to_string(), vec![ListLevel::default(); 10])),
+                "outline-style" => self.outline = Some(vec![ListLevel::default(); 10]),
+                "outline-level-style" => {
+                    let lv = get(&a, "text:level").and_then(|l| l.trim().parse::<usize>().ok()).unwrap_or(1).clamp(1, 10);
+                    if let Some(slot) = self.outline.as_mut().and_then(|o| o.get_mut(lv - 1)) {
+                        *slot = list_level("list-level-style-number", &a);
+                    }
+                }
                 "list-level-style-number" | "list-level-style-bullet" | "list-level-style-image" => {
                     if let Some((_, v)) = &mut list {
                         let lv = get(&a, "text:level").and_then(|l| l.trim().parse::<usize>().ok()).unwrap_or(1).clamp(1, 10);

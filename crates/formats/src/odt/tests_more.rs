@@ -7,6 +7,7 @@ mod fonts;
 mod headers;
 mod lists;
 mod notes;
+mod outline;
 mod spacing;
 mod style_look;
 mod tables;

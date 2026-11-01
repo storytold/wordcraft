@@ -50,6 +50,40 @@ fn kind_styles(doc: &Document) -> String {
     s
 }
 
+/// `text:outline-style` (ODF 1.3 §16.34): the numbering of Heading 1–6, from the list level each
+/// heading style numbers its paragraphs with; levels without one show no number.
+fn outline_style(doc: &Document) -> String {
+    let mut s = String::from("<text:outline-style style:name=\"Outline\">");
+    for n in 1..=10u8 {
+        let level = (n <= 6)
+            .then(|| doc.styles.para_style_props(&format!("Heading{n}")).0.numbering)
+            .flatten()
+            .and_then(|r| doc.numbering.level(r.num, r.level).cloned().map(|l| (r.level, l)));
+        let attrs = match level {
+            Some((lv, l)) if !matches!(l.format, wordcraft_doc::section::NumFormat::None | wordcraft_doc::section::NumFormat::Bullet) => {
+                let label = model::Label::of_level(l.format, &l.text);
+                let mut a = format!(" style:num-format=\"{}\"", super::writer::odf_num_format(l.format));
+                for (k, v) in [("style:num-prefix", label.prefix.as_str()), ("style:num-suffix", label.suffix.as_str())] {
+                    if !v.is_empty() {
+                        a.push_str(&format!(" {k}=\"{}\"", x(v)));
+                    }
+                }
+                if label.shown > 1 {
+                    a.push_str(&format!(" text:display-levels=\"{}\"", label.shown.min(lv.saturating_add(1))));
+                }
+                if l.start != 1 {
+                    a.push_str(&format!(" text:start-value=\"{}\"", l.start));
+                }
+                a
+            }
+            _ => " style:num-format=\"\"".into(),
+        };
+        s.push_str(&format!("<text:outline-level-style text:level=\"{n}\"{attrs}/>"));
+    }
+    s.push_str("</text:outline-style>");
+    s
+}
+
 /// A master page's headers and footers (ODF 1.3 §16.10), written.
 #[derive(Default)]
 struct PageParts {
@@ -127,6 +161,7 @@ fn styles_xml(doc: &Document, pages: &[(String, wordcraft_doc::SectionProps)], p
     ));
     s.push_str("<style:style style:name=\"Standard\" style:family=\"paragraph\" style:class=\"text\"/>");
     s.push_str(&kind_styles(doc));
+    s.push_str(&outline_style(doc));
     // The note text styles, as WordCraft's Footnote Text and Endnote Text: 10 pt, no spacing.
     for (name, class) in [("Footnote", "extra"), ("Endnote", "extra")] {
         s.push_str(&format!(
