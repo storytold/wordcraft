@@ -45,7 +45,12 @@
   <key>NSHumanReadableCopyright</key>
   <string>Copyright © the WordCraft authors. MIT OR Apache-2.0.</string>
 
-  <!-- Documents WordCraft opens (system type declarations). -->
+  <!-- Documents WordCraft opens (#295, #4983). Finder offers WordCraft under Open With, and
+       Get Info › Open with › Change All can make it the default, only for a file whose type is
+       listed here, so each document format claimed below has its type here (LaTeX, XML and JSON
+       open from File › Open but are deliberately not claimed)
+       (apps/wordcraft/src/default_apps.rs checks). Alternate: WordCraft never takes a default
+       over another app by itself; the person chooses it. -->
   <key>CFBundleDocumentTypes</key>
   <array>
     <dict>
@@ -58,14 +63,200 @@
       <key>LSItemContentTypes</key>
       <array>
         <string>org.openxmlformats.wordprocessingml.document</string>
+        <string>org.openxmlformats.wordprocessingml.document.macroenabled</string>
+        <!-- Pages declares the macro-enabled types with a hyphen; on a Mac where its declaration
+             wins, a .docm or .dotm file gets that identifier, so it's claimed as well. -->
+        <string>org.openxmlformats.wordprocessingml.document.macro-enabled</string>
         <string>org.openxmlformats.wordprocessingml.template</string>
+        <string>org.openxmlformats.wordprocessingml.template.macroenabled</string>
+        <string>org.openxmlformats.wordprocessingml.template.macro-enabled</string>
         <string>com.microsoft.word.doc</string>
+        <string>com.microsoft.word.dot</string>
         <string>org.oasis-open.opendocument.text</string>
         <string>public.rtf</string>
         <string>net.daringfireball.markdown</string>
         <string>public.html</string>
         <string>public.plain-text</string>
       </array>
+    </dict>
+  </array>
+
+  <!-- The types above that aren't public.*, declared again for a Mac that doesn't know them
+       (an older macOS without Word or Pages): there a .md or .docm file gets a dynamic type,
+       which no claim matches, so WordCraft couldn't be chosen for it. An imported declaration
+       gives way to the system's or the owning app's own, so this changes nothing where the
+       type is known. -->
+  <key>UTImportedTypeDeclarations</key>
+  <array>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>org.openxmlformats.wordprocessingml.document</string>
+      <key>UTTypeDescription</key>
+      <string>Word Document</string>
+      <key>UTTypeConformsTo</key>
+      <array>
+        <string>public.data</string>
+        <string>public.composite-content</string>
+      </array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array>
+          <string>docx</string>
+        </array>
+        <key>public.mime-type</key>
+        <array>
+          <string>application/vnd.openxmlformats-officedocument.wordprocessingml.document</string>
+        </array>
+      </dict>
+    </dict>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>org.openxmlformats.wordprocessingml.document.macroenabled</string>
+      <key>UTTypeDescription</key>
+      <string>Word Macro-Enabled Document</string>
+      <key>UTTypeConformsTo</key>
+      <array>
+        <string>public.data</string>
+        <string>public.composite-content</string>
+      </array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array>
+          <string>docm</string>
+        </array>
+        <key>public.mime-type</key>
+        <array>
+          <string>application/vnd.ms-word.document.macroEnabled.12</string>
+        </array>
+      </dict>
+    </dict>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>org.openxmlformats.wordprocessingml.template</string>
+      <key>UTTypeDescription</key>
+      <string>Word Template</string>
+      <key>UTTypeConformsTo</key>
+      <array>
+        <string>public.data</string>
+        <string>public.composite-content</string>
+      </array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array>
+          <string>dotx</string>
+        </array>
+        <key>public.mime-type</key>
+        <array>
+          <string>application/vnd.openxmlformats-officedocument.wordprocessingml.template</string>
+        </array>
+      </dict>
+    </dict>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>org.openxmlformats.wordprocessingml.template.macroenabled</string>
+      <key>UTTypeDescription</key>
+      <string>Word Macro-Enabled Template</string>
+      <key>UTTypeConformsTo</key>
+      <array>
+        <string>public.data</string>
+        <string>public.composite-content</string>
+      </array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array>
+          <string>dotm</string>
+        </array>
+        <key>public.mime-type</key>
+        <array>
+          <string>application/vnd.ms-word.template.macroEnabled.12</string>
+        </array>
+      </dict>
+    </dict>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>com.microsoft.word.doc</string>
+      <key>UTTypeDescription</key>
+      <string>Word 97-2003 Document</string>
+      <key>UTTypeConformsTo</key>
+      <array>
+        <string>public.data</string>
+      </array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array>
+          <string>doc</string>
+        </array>
+        <key>public.mime-type</key>
+        <array>
+          <string>application/msword</string>
+        </array>
+      </dict>
+    </dict>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>com.microsoft.word.dot</string>
+      <key>UTTypeDescription</key>
+      <string>Word 97-2003 Template</string>
+      <key>UTTypeConformsTo</key>
+      <array>
+        <string>public.data</string>
+      </array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array>
+          <string>dot</string>
+        </array>
+      </dict>
+    </dict>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>org.oasis-open.opendocument.text</string>
+      <key>UTTypeDescription</key>
+      <string>OpenDocument Text</string>
+      <key>UTTypeConformsTo</key>
+      <array>
+        <string>public.data</string>
+        <string>public.composite-content</string>
+      </array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array>
+          <string>odt</string>
+        </array>
+        <key>public.mime-type</key>
+        <array>
+          <string>application/vnd.oasis.opendocument.text</string>
+        </array>
+      </dict>
+    </dict>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>net.daringfireball.markdown</string>
+      <key>UTTypeDescription</key>
+      <string>Markdown Document</string>
+      <key>UTTypeConformsTo</key>
+      <array>
+        <string>public.plain-text</string>
+      </array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array>
+          <string>md</string>
+          <string>markdown</string>
+        </array>
+        <key>public.mime-type</key>
+        <array>
+          <string>text/markdown</string>
+        </array>
+      </dict>
     </dict>
   </array>
 </dict>
