@@ -53,9 +53,14 @@ fn describe(app: &WordApp, id: &str) -> Option<String> {
         _ => None,
     };
     if let Some((want, name)) = alignment {
-        // As the ribbon's buttons show it: Center twice centres, then goes back to the left.
+        // As the ribbon's buttons show it: Center twice centres, then goes back to the left. Read
+        // in a paragraph the command formatted: a selection ending at the next paragraph's start
+        // leaves that one out (#418).
         let s = &app.session;
-        let align = s.doc.para_at(&s.sel.focus).map(|p| s.doc.styles.resolve_para(&p.props)).map(|r| r.align.visual(r.bidi));
+        let formatted = wordcraft_engine::cmd::selected_paths(s);
+        let path = if formatted.contains(&s.sel.focus.path) { Some(s.sel.focus.path.clone()) } else { formatted.last().cloned() };
+        let at = path.map(|path| wordcraft_doc::Pos { path, off: 0, ..s.sel.focus.clone() });
+        let align = at.and_then(|at| s.doc.para_at(&at)).map(|p| s.doc.styles.resolve_para(&p.props)).map(|r| r.align.visual(r.bidi));
         return Some(on_off(name, align == Some(want)));
     }
     if matches!(id, "format.growFont" | "format.shrinkFont" | "format.growFont1" | "format.shrinkFont1") {
@@ -93,8 +98,8 @@ mod tests {
 
     use crate::WordApp;
 
-    fn harness() -> egui_kittest::Harness<'static, WordApp> {
-        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Lanterns glow")), crate::Services::default());
+    fn harness(text: &str) -> egui_kittest::Harness<'static, WordApp> {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text(text)), crate::Services::default());
         app.canvas.want_focus = true;
         let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
             |ui, app: &mut WordApp| {
@@ -130,7 +135,7 @@ mod tests {
     /// then "Bold Off"), each time in a new live region, so the same words twice are heard twice.
     #[test]
     fn formatting_shortcuts_say_what_they_did() {
-        let mut h = harness();
+        let mut h = harness("Lanterns glow");
         assert_eq!(heard(&h), None, "nothing to say before a shortcut");
         let (text, first) = press(&mut h, Modifiers::COMMAND, Key::B).expect("Ctrl+B is announced");
         assert_eq!(text, "Bold On");
@@ -160,7 +165,7 @@ mod tests {
     /// formatting says nothing. An announcement leaves the tree after three seconds.
     #[test]
     fn only_formatting_shortcuts_are_announced_for_a_while() {
-        let mut h = harness();
+        let mut h = harness("Lanterns glow");
         h.state_mut().run("format.bold", json!({})).unwrap();
         h.run_steps(2);
         assert_eq!(heard(&h), None, "a command run another way isn't announced");
@@ -171,5 +176,33 @@ mod tests {
         }
         h.run_steps(2);
         assert_eq!(heard(&h), None, "gone after three seconds");
+    }
+
+    /// A selection ending at the next paragraph's start (Shift+Down from a paragraph's start)
+    /// formats only the paragraph it covers, as in Word: that is the one the announcement says.
+    #[test]
+    fn alignment_is_said_for_the_paragraph_the_shortcut_formatted() {
+        let mut h = harness("Lanterns glow\nRivers run");
+        h.state_mut().session.sel = wordcraft_engine::Selection { anchor: wordcraft_doc::Pos::body(0, 0), focus: wordcraft_doc::Pos::body(1, 0) };
+        h.run_steps(2);
+        assert_eq!(press(&mut h, Modifiers::COMMAND, Key::E).map(|(t, _)| t).as_deref(), Some("Center On"));
+        let align =
+            |h: &egui_kittest::Harness<'_, WordApp>, i| h.state().session.doc.para_at(&wordcraft_doc::Pos::body(i, 0)).and_then(|p| p.props.align);
+        assert_eq!((align(&h, 0), align(&h, 1)), (Some(wordcraft_doc::Align::Center), None), "only the first paragraph is centred");
+        assert_eq!(press(&mut h, Modifiers::COMMAND, Key::E).map(|(t, _)| t).as_deref(), Some("Center Off"));
+    }
+
+    /// The shortcut runs after the announcement's place in the frame, so the announcement goes in
+    /// the next frame's tree: a key asks egui for that frame itself.
+    #[test]
+    fn the_announcement_is_in_the_frame_after_the_key() {
+        let mut h = harness("Lanterns glow");
+        // The key down alone, in one frame (`key_press_modifiers` gives each event a frame).
+        h.input_mut().events.push(egui::Event::Key { key: Key::B, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::COMMAND });
+        h.step();
+        assert_eq!(heard(&h), None, "the key's own frame built its tree before the shortcut ran");
+        assert!(h.ctx.has_requested_repaint(), "the key asked for another frame");
+        h.step();
+        assert_eq!(heard(&h).map(|(t, _)| t).as_deref(), Some("Bold On"));
     }
 }
