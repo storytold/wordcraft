@@ -265,8 +265,8 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                     y: &mut y,
                     sum_paragraph_spacing: ctx.doc.settings.sum_paragraph_spacing,
                 });
-                // Paragraph-relative floats start above the effective space before, as in the
-                // body path. Keep text and wrap exclusions relative to the text's actual top.
+                // Paragraph- and line-relative floats start above the effective space before, as in
+                // the body path. Keep text and wrap exclusions relative to the text's actual top.
                 let para_top = y;
                 y += if i == 0 { before } else { before.max(0.0) };
                 // Floating objects anchored here: place them, then wrap the text around them.
@@ -286,9 +286,9 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                         pinned.insert(oi, float_rect(Some(page), (0.0, width), para_top, w, h, float));
                         continue;
                     }
-                    // Only paragraph-relative placement excludes space-before. Line anchors
-                    // and frameless page/margin fallbacks retain the text-top origin.
-                    let float_y = if float.v_rel == Anchor::Paragraph { para_top } else { y };
+                    // Only paragraph- and line-relative placement excludes space-before. Frameless
+                    // page/margin fallbacks retain the text-top origin.
+                    let float_y = if matches!(float.v_rel, Anchor::Paragraph | Anchor::Line) { para_top } else { y };
                     let r = float_rect(frame, (0.0, width), float_y, w, h, float);
                     let outline = ctx.wrap_outline(o);
                     excl.extend(wrap_area(r, float, outline.as_deref().map(Vec::as_slice)));

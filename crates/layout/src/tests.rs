@@ -5490,7 +5490,7 @@ fn floats_in_headers_and_table_cells_are_drawn() {
     assert!(c[0].x > 72.0 && c[0].x < 72.0 + 234.0, "inside the first cell: {:?}", c[0]);
 }
 
-/// Paragraph anchors exclude space-before; line and frameless page/margin anchors retain it.
+/// Paragraph and line anchors exclude space-before; frameless page/margin anchors retain it.
 #[test]
 fn box_float_origins_respect_vertical_anchor_with_space_before() {
     use wordcraft_doc::{
@@ -5557,7 +5557,7 @@ fn box_float_origins_respect_vertical_anchor_with_space_before() {
                 let r = shapes(items).into_iter().find(|r| (r.w - 37.0).abs() < 0.01).unwrap();
                 r.y - y
             };
-            let expected = if anchor == Anchor::Paragraph { -24.0 } else { 0.0 };
+            let expected = if matches!(anchor, Anchor::Paragraph | Anchor::Line) { -24.0 } else { 0.0 };
             assert!((gap(24.0) - gap(0.0) - expected).abs() < 0.01, "{context} {anchor:?}: float/text gap must change by {expected}");
         }
     }
@@ -5643,6 +5643,76 @@ fn header_cell_float_placed_on_the_page() {
     let s = shapes(&lay(&d).pages[0].header);
     assert_eq!(s.len(), 1);
     assert!((s[0].x + 180.0 - 423.0).abs() < 1.0 && s[0].y < 72.0, "in the cell: {:?}", s[0]);
+}
+
+/// A floating object placed relative to its paragraph or its line in a header or a table cell
+/// is measured from the paragraph's top above its space before, as in the body. Word for Mac
+/// (A4, 72 pt margins, the header 36 pt from the top, exact 17 pt lines, VML and DrawingML
+/// objects placed from the paragraph and from the line; their tops in the PDF Word exported):
+/// 1.4 pt above a header paragraph with 36 pt before, 34.6; 20 pt below it, 56.0; the same
+/// paragraph after a 17 pt line, 51.6, or after one with 20 pt after (36 pt before less those
+/// 20), 71.6; in a cell's second paragraph with 36 pt before, 104.6. In the body, 87.6 and 70.6.
+#[test]
+fn objects_in_headers_and_cells_are_placed_from_their_paragraphs_top_above_its_space_before() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    use wordcraft_doc::props::LineSpacing;
+    let para = |text: &str, before: f32, after: f32, y: Option<f32>| {
+        let mut p = wordcraft_doc::Paragraph::with_text(text, Default::default());
+        p.props =
+            ParaProps { space_before: Some(before), space_after: Some(after), line_spacing: Some(LineSpacing::Exactly(17.0)), ..Default::default() };
+        for (i, v_rel) in [Anchor::Paragraph, Anchor::Line].into_iter().enumerate().filter(|_| y.is_some()) {
+            let f = Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Column, v_rel, x: 60.0 * i as f32, y: y.unwrap_or(0.0), ..Default::default() };
+            p.insert_object(0, rect_shape(40.0, 20.0, f), &Default::default()).unwrap();
+        }
+        wordcraft_doc::para_block(p)
+    };
+    let cell = |blocks: Vec<std::sync::Arc<wordcraft_doc::Block>>| {
+        let mut t = Table::new(1, 1, 300.0);
+        t.props.style = None;
+        t.props.cell_margins = Some([0.0; 4]);
+        t.rows[0].cells[0].blocks = blocks;
+        std::sync::Arc::new(wordcraft_doc::Block::Table(t))
+    };
+    let cases = [
+        ("header", vec![para("HDRLINE", 36.0, 0.0, Some(-1.4))], vec![para("BODY", 0.0, 0.0, None)], 34.6),
+        ("header, 20 pt below", vec![para("HDRLINE", 36.0, 0.0, Some(20.0))], vec![para("BODY", 0.0, 0.0, None)], 56.0),
+        ("header, second", vec![para("HDR1", 0.0, 0.0, None), para("HDRLINE", 36.0, 0.0, Some(-1.4))], vec![para("BODY", 0.0, 0.0, None)], 51.6),
+        (
+            "header, after 20 pt",
+            vec![para("HDR1", 0.0, 20.0, None), para("HDRLINE", 36.0, 0.0, Some(-1.4))],
+            vec![para("BODY", 0.0, 0.0, None)],
+            71.6,
+        ),
+        (
+            "cell",
+            vec![],
+            vec![
+                para("FIRST", 0.0, 0.0, None),
+                cell(vec![para("C1", 0.0, 0.0, None), para("CELLLINE", 36.0, 0.0, Some(-1.4))]),
+                para("END", 0.0, 0.0, None),
+            ],
+            104.6,
+        ),
+        ("body", vec![], vec![para("FIRST", 0.0, 0.0, None), para("BODYLINE", 36.0, 0.0, Some(-1.4)), para("END", 0.0, 0.0, None)], 87.6),
+        ("body, first", vec![], vec![para("BODYLINE", 36.0, 0.0, Some(-1.4)), para("END", 0.0, 0.0, None)], 70.6),
+    ];
+    for (name, header, body, word) in cases {
+        let mut d = Document::new();
+        d.last_section.margin_top = 72.0;
+        d.last_section.header = 36.0;
+        let in_header = !header.is_empty();
+        if in_header {
+            let id = d.add_part(wordcraft_doc::PartKind::Header, header);
+            d.last_section.headers.default = Some(id);
+        }
+        d.body = body;
+        let l = lay(&d);
+        let r = shapes(if in_header { &l.pages[0].header } else { &l.pages[0].items });
+        assert_eq!(r.len(), 2, "{name}: {r:?}");
+        for s in r {
+            assert!((s.y - word).abs() < 0.01, "{name}: {} (Word {word})", s.y);
+        }
+    }
 }
 
 #[test]
