@@ -783,10 +783,11 @@ impl Body<'_> {
                 let valign = get(a, "table:style-name").and_then(|s| self.styles.cell_valign(s));
                 let borders = get(a, "table:style-name").and_then(|s| self.styles.cell_borders(s));
                 let margins = get(a, "table:style-name").and_then(|s| self.styles.cell_padding(s));
+                let direction = get(a, "table:style-name").map(|s| self.styles.cell_direction(s)).unwrap_or_default();
                 if let Some(t) = self.tables.last_mut() {
                     t.hcover = span as usize - 1;
                 }
-                self.cells.push(Cell { colspan: span, rowspan: rows, shading, valign, borders, margins, ..Default::default() });
+                self.cells.push(Cell { colspan: span, rowspan: rows, shading, valign, borders, margins, direction, ..Default::default() });
                 self.formulas.push(get(a, "table:formula").and_then(super::cell_formula::word_of));
                 self.containers.push(Vec::new());
                 self.lists_saved.push((std::mem::take(&mut self.lists), std::mem::take(&mut self.item_used), self.list_id));

@@ -318,6 +318,7 @@ fn drawing_inline(doc: &Document, o: &InlineObject, opts: FlowOpts, depth: usize
                 arrows: (extra.arrow_start, extra.arrow_end),
                 inset: part.and_then(|p| p.body.inset.is_some().then(|| p.body.insets_pt())),
                 auto_fit: part.is_some_and(|p| p.body.auto_fit),
+                vert: part.map(|p| p.body.vert).unwrap_or_default(),
                 conn: (opts.boxes && (extra.id != 0 || extra.start.is_some() || extra.end.is_some()))
                     .then(|| Box::new(crate::model::Conn { id: extra.id, start: extra.start, end: extra.end })),
                 // A text box is named after its story; a linked one names the box it continues in.
@@ -717,6 +718,7 @@ fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: FlowOpts) -> FTa
                 valign: c.props.valign,
                 // Formats that keep cell padding get each cell's, its table's or Word's default.
                 margins: tracked.paras.then(|| c.props.resolved_margins(t.props.cell_margins.unwrap_or(WORD_CELL_MARGINS))),
+                direction: c.props.text_direction,
             });
         }
         rows.push(cells);

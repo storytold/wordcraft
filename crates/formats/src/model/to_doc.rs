@@ -398,6 +398,7 @@ impl<'a> Builder<'a> {
                     let emu = |v: f32| if v.is_finite() { (v.clamp(0.0, 1584.0) * 12_700.0).round() as u32 } else { 0 };
                     part.body.inset = look.inset.map(|i| i.map(emu));
                     part.body.auto_fit = look.auto_fit;
+                    part.body.vert = look.vert;
                 }
                 let (stroke, stroke_width) = match look.line {
                     Some((c, w)) if w.is_finite() && w > 0.0 => (Some(c), w.min(12.0)),
@@ -796,6 +797,7 @@ impl<'a> Builder<'a> {
                         borders: c.borders,
                         margins: c.margins.filter(|m| m.iter().all(|v| v.is_finite())).map(|m| m.map(|v| v.clamp(0.0, 1584.0))),
                         valign: c.valign,
+                        text_direction: c.direction,
                         ..Default::default()
                     },
                     blocks,

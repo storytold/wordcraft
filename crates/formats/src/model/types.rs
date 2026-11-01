@@ -309,6 +309,8 @@ pub struct BoxLook {
     /// A text box's name and the box its text continues in when it doesn't fit (linked text
     /// boxes), by name.
     pub chain: Option<Box<Chain>>,
+    /// Which way a text box's text runs (turned down or up).
+    pub vert: wordcraft_doc::props::TextVert,
 }
 
 /// A text box's name, and the name of the box its text continues in ([`BoxLook::chain`]).
@@ -338,6 +340,7 @@ impl Default for BoxLook {
             auto_fit: false,
             conn: None,
             chain: None,
+            vert: Default::default(),
         }
     }
 }
@@ -773,11 +776,24 @@ pub struct Cell {
     pub valign: Option<VAlign>,
     /// The cell's padding (top, left, bottom, right), points, when the source gives it.
     pub margins: Option<[f32; 4]>,
+    /// Which way its text runs (turned down or up).
+    pub direction: wordcraft_doc::props::TextDirection,
 }
 
 impl Default for Cell {
     fn default() -> Self {
-        Cell { blocks: Vec::new(), colspan: 1, rowspan: 1, covered: false, header: false, shading: None, borders: None, valign: None, margins: None }
+        Cell {
+            blocks: Vec::new(),
+            colspan: 1,
+            rowspan: 1,
+            covered: false,
+            header: false,
+            shading: None,
+            borders: None,
+            valign: None,
+            margins: None,
+            direction: Default::default(),
+        }
     }
 }
 

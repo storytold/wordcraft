@@ -57,6 +57,9 @@ pub(super) struct Graphic {
     /// only along its outside (`style:wrap-contour-mode`, §20.402: `full` or `outside`).
     wrap_contour: Option<bool>,
     contour_mode: Option<String>,
+    /// Which way a text box's text runs (§20.404 `style:writing-mode`; LibreOffice's upward
+    /// `bt-lr` is its own `loext:writing-mode`).
+    vert: Option<wordcraft_doc::props::TextVert>,
 }
 
 /// A `fo:clip` value, `rect(top, right, bottom, left)` (commas or spaces between; `auto` is 0):
@@ -148,6 +151,14 @@ impl Graphic {
             stroke_width: get(a, "svg:stroke-width").and_then(length).filter(|v| v.is_finite()).map(|v| v.clamp(0.0, 12.0)),
             clip: get(a, "fo:clip").and_then(clip_rect),
             wrap_contour: get(a, "style:wrap-contour").map(|v| v.trim() == "true"),
+            vert: get(a, "loext:writing-mode").or_else(|| get(a, "style:writing-mode")).map(|m| {
+                use wordcraft_doc::props::{TextDirection, TextVert};
+                match super::styles::writing_direction(m) {
+                    TextDirection::Down => TextVert::Vert,
+                    TextDirection::Up => TextVert::Vert270,
+                    TextDirection::Horizontal => TextVert::Horz,
+                }
+            }),
             contour_mode: s("style:wrap-contour-mode"),
         }
     }
@@ -180,6 +191,7 @@ impl Graphic {
         self.stroke_width = self.stroke_width.or(parent.stroke_width);
         self.clip = self.clip.or(parent.clip);
         self.wrap_contour = self.wrap_contour.or(parent.wrap_contour);
+        self.vert = self.vert.or(parent.vert);
         fill(&mut self.contour_mode, &parent.contour_mode);
         self.grow = self.grow.or(parent.grow);
         fill(&mut self.dash, &parent.dash);
@@ -240,6 +252,7 @@ impl Graphic {
             auto_fit: self.grow == Some(true),
             conn: None,
             chain: None,
+            vert: Default::default(),
         }
     }
 
@@ -255,6 +268,7 @@ impl Graphic {
             auto_fit,
             conn: None,
             chain: None,
+            vert: self.vert.unwrap_or_default(),
         }
     }
 }

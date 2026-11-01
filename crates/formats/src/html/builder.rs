@@ -759,6 +759,7 @@ impl<'r> Builder<'r> {
                     borders: None,
                     valign,
                     margins: None,
+                    direction: Default::default(),
                 });
                 fmt.background = None;
                 self.containers.push(Vec::new());

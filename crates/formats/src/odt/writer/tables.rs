@@ -65,6 +65,12 @@ pub(in crate::odt) fn cell_props(t: &FTable, ri: usize, g0: usize, c: &model::Ce
         Some(VAlign::Bottom) => " style:vertical-align=\"bottom\"",
         None => "",
     });
+    // Which way its text runs (§20.404; upward is LibreOffice's own `bt-lr`).
+    p.push_str(match c.direction {
+        wordcraft_doc::props::TextDirection::Horizontal => "",
+        wordcraft_doc::props::TextDirection::Down => " style:writing-mode=\"tb-rl\"",
+        wordcraft_doc::props::TextDirection::Up => " loext:writing-mode=\"bt-lr\"",
+    });
     p
 }
 

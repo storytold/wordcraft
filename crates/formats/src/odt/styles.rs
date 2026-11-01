@@ -212,6 +212,7 @@ struct StyleInfo {
     cell_background: Option<Rgb>,
     /// `style:vertical-align` of a table-cell style's `style:table-cell-properties`.
     cell_valign: Option<VAlign>,
+    cell_direction: Option<wordcraft_doc::props::TextDirection>,
     /// `fo:border*` of a table-cell style: each side as stated (`none` an explicit no line).
     cell_borders: Option<Borders>,
     /// `fo:padding*` of a table-cell style (top, left, bottom, right), each as stated.
@@ -592,6 +593,17 @@ fn style_child(name: &str, q: &str, a: &Attrs, s: &mut StyleInfo) -> bool {
     true
 }
 
+/// The text direction a `style:writing-mode` names: top to bottom turned down, bottom to top
+/// turned up, the rest across.
+pub(super) fn writing_direction(m: &str) -> wordcraft_doc::props::TextDirection {
+    use wordcraft_doc::props::TextDirection;
+    match m.trim() {
+        "tb-rl" | "tb-lr" | "tb" => TextDirection::Down,
+        "bt-lr" => TextDirection::Up,
+        _ => TextDirection::Horizontal,
+    }
+}
+
 /// A table-cell style's `style:table-cell-properties` (ODF 1.3 §17.18): background, borders,
 /// padding and vertical alignment.
 fn table_cell_properties(a: &Attrs, s: &mut StyleInfo) {
@@ -599,6 +611,11 @@ fn table_cell_properties(a: &Attrs, s: &mut StyleInfo) {
         s.cell_background = Some(c);
     }
     cell_borders_and_padding(a, s);
+    // Which way its text runs (§20.404 `style:writing-mode`; LibreOffice's upward `bt-lr` is
+    // its own `loext:writing-mode`).
+    if let Some(m) = get(a, "loext:writing-mode").or_else(|| get(a, "style:writing-mode")) {
+        s.cell_direction = Some(writing_direction(m));
+    }
     if let Some(va) = get(a, "style:vertical-align") {
         s.cell_valign = match va.trim() {
             "top" => Some(VAlign::Top),
@@ -1178,6 +1195,11 @@ impl Styles {
     /// Vertical alignment of a table-cell style (whole chain).
     pub(super) fn cell_valign(&self, name: &str) -> Option<VAlign> {
         self.chain(name).iter().find_map(|(_, s)| s.cell_valign)
+    }
+
+    /// Which way a table-cell style's text runs (whole chain).
+    pub(super) fn cell_direction(&self, name: &str) -> wordcraft_doc::props::TextDirection {
+        self.chain(name).iter().find_map(|(_, s)| s.cell_direction).unwrap_or_default()
     }
 
     /// Paragraph kind, alignment, page break, rule, keep-with-next and base formatting. The text formatting of

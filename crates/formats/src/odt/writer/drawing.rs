@@ -21,6 +21,13 @@ pub(in crate::odt) fn box_look_attrs(look: &model::BoxLook, defs: &mut crate::od
         pt(b)
     ));
     a.push_str(&fill_attrs(look.fill.as_ref(), true, defs, prefix));
+    // Which way its text runs (§20.404; upward is LibreOffice's own `bt-lr`; stacked letters
+    // have no ODF form).
+    a.push_str(match look.vert {
+        wordcraft_doc::props::TextVert::Vert => " style:writing-mode=\"tb-rl\"",
+        wordcraft_doc::props::TextVert::Vert270 => " loext:writing-mode=\"bt-lr\"",
+        _ => "",
+    });
     a
 }
 
