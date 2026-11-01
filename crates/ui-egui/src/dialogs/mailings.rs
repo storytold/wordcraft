@@ -1,5 +1,5 @@
 use super::chrome::buttons;
-use super::*;
+use super::{Dialog, FilterOp, FilterRule, Sense, Serialize, SortKey, Tokens, Ui, Value, WordApp, json, vec2};
 
 /// The address parts Match Fields lists, with their keys in `mailings.matchFields`' `address`.
 pub const ADDRESS_PARTS: [(&str, &str); 9] = [
@@ -414,7 +414,7 @@ fn recipient_filter(ui: &mut Ui, fields: &[String], filter: &mut RecipientFilter
     let names: Vec<String> = fields.iter().map(|f| f.trim().to_string()).filter(|f| !f.is_empty()).collect();
     let field_combo = |ui: &mut Ui, id: (&str, usize), value: &mut String, none: bool| {
         let shown = if value.is_empty() { tl!("(none)").to_string() } else { value.clone() };
-        egui::ComboBox::from_id_salt(id).width(130.0).selected_text(shown).show_ui(ui, |ui| {
+        craft_ui::ComboBox::from_id_salt(id).width(130.0).selected_text(shown).show_ui(ui, |ui| {
             if none {
                 ui.selectable_value(value, String::new(), tl!("(none)"));
             }
@@ -434,13 +434,13 @@ fn recipient_filter(ui: &mut Ui, fields: &[String], filter: &mut RecipientFilter
             if i == 0 {
                 ui.label("");
             } else {
-                egui::ComboBox::from_id_salt(("rf_join", i)).width(60.0).selected_text(tl!(if r.or { "Or" } else { "And" })).show_ui(ui, |ui| {
+                craft_ui::ComboBox::from_id_salt(("rf_join", i)).width(60.0).selected_text(tl!(if r.or { "Or" } else { "And" })).show_ui(ui, |ui| {
                     ui.selectable_value(&mut r.or, false, tl!("And"));
                     ui.selectable_value(&mut r.or, true, tl!("Or"));
                 });
             }
             field_combo(ui, ("rf_field", i), &mut r.field, false);
-            egui::ComboBox::from_id_salt(("rf_op", i)).width(150.0).selected_text(tl!(r.op.label())).show_ui(ui, |ui| {
+            craft_ui::ComboBox::from_id_salt(("rf_op", i)).width(150.0).selected_text(tl!(r.op.label())).show_ui(ui, |ui| {
                 for op in FilterOp::ALL {
                     ui.selectable_value(&mut r.op, op, tl!(op.label()));
                 }
@@ -471,13 +471,13 @@ fn recipient_filter(ui: &mut Ui, fields: &[String], filter: &mut RecipientFilter
             ui.label(tl!(if i == 0 { "Sort by" } else { "Then by" }));
             field_combo(ui, ("rs_field", i), field, true);
             ui.add_enabled_ui(!field.is_empty(), |ui| {
-                egui::ComboBox::from_id_salt(("rs_dir", i)).width(110.0).selected_text(tl!(if *desc { "Descending" } else { "Ascending" })).show_ui(
-                    ui,
-                    |ui| {
+                craft_ui::ComboBox::from_id_salt(("rs_dir", i))
+                    .width(110.0)
+                    .selected_text(tl!(if *desc { "Descending" } else { "Ascending" }))
+                    .show_ui(ui, |ui| {
                         ui.selectable_value(desc, false, tl!("Ascending"));
                         ui.selectable_value(desc, true, tl!("Descending"));
-                    },
-                );
+                    });
             });
             ui.end_row();
         }

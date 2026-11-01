@@ -391,6 +391,27 @@ fn valid_connect_addr(addr: &str) -> bool {
     !host.is_empty() && port.parse::<u16>().is_ok()
 }
 
+fn load_run_script(rest: &[String], script_path: Option<&Path>) -> Result<Option<script::Script>, Failure> {
+    match arg_value(rest, "--script") {
+        Some(path) if !path.starts_with("--") => {
+            let source = script_path.unwrap_or(Path::new(&path));
+            Ok(Some(script::load(source)?))
+        }
+        _ if rest.iter().any(|arg| arg == "--script") => Err("run: --script requires a value".into()),
+        _ => Ok(None),
+    }
+}
+
+fn run_source_paths(rest: &[String], script: Option<&script::Script>) -> (Option<String>, Option<String>) {
+    // A source named on the command line wins over both of the script's.
+    let (mut from_file, mut from_template) = (arg_value(rest, "--file"), arg_value(rest, "--template"));
+    if from_file.is_none() && from_template.is_none() {
+        from_file = script.and_then(|loaded| loaded.file.clone());
+        from_template = script.and_then(|loaded| loaded.template.clone());
+    }
+    (from_file, from_template)
+}
+
 /// Run the subcommand named by `args` (the command line after the program name). Files named
 /// there are opened by their real names, which may not be valid Unicode.
 fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
@@ -474,17 +495,8 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             let page = parse_page_arg("run", &rest)?;
             let scale = parse_scale_arg("run", &rest)?;
             let password = password_from(&rest)?;
-            let script = match arg_value(&rest, "--script") {
-                Some(path) if !path.starts_with("--") => Some(script::load(script_path.as_deref().unwrap_or(Path::new(&path)))?),
-                _ if rest.iter().any(|a| a == "--script") => return Err("run: --script requires a value".into()),
-                _ => None,
-            };
-            // A source named on the command line wins over both of the script's.
-            let (mut from_file, mut from_template) = (arg_value(&rest, "--file"), arg_value(&rest, "--template"));
-            if from_file.is_none() && from_template.is_none() {
-                from_file = script.as_ref().and_then(|c| c.file.clone());
-                from_template = script.as_ref().and_then(|c| c.template.clone());
-            }
+            let script = load_run_script(&rest, script_path.as_deref())?;
+            let (from_file, from_template) = run_source_paths(&rest, script.as_ref());
             let mut s = match (from_file, from_template) {
                 (Some(f), _) => open(&f, password.as_deref())?,
                 // Both go through `file.new`, which puts a blank document on the region's paper (#3152).

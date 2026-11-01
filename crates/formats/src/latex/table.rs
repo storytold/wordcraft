@@ -2,7 +2,7 @@ use super::lex::{Tok, text_symbol};
 use super::limits::MAX_NEST;
 use super::parser::Parser;
 use super::units::{parse_color, spec_widths};
-use super::*;
+use super::{Cell, FTable};
 
 /// Plain text of tokens (arguments that are names, URLs, lengths).
 pub(super) fn raw_text(toks: &[Tok]) -> String {

@@ -1,6 +1,6 @@
 use super::date::{iso_datetime, iso_time};
 use super::xlsx::number;
-use super::*;
+use super::{Ev, Grid, MAX_CELLS, MAX_COLS, MAX_SHEETS, MAX_TEXT_BYTES, attr, push_capped, walk};
 
 // ---------------------------------------------------------------------------------------------
 // OpenDocument

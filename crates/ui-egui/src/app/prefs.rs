@@ -1,4 +1,4 @@
-use super::*;
+use super::{DEFAULT_TAB, MAX_DICTIONARY, UiState, WordApp, desktop_theme, recent_fonts_from, theme};
 
 /// What the operating system says about light and dark. macOS and Windows answer through winit;
 /// winit reports nothing on Linux, where the desktop portal does ([`desktop_theme`]). `None` means
@@ -12,7 +12,7 @@ impl WordApp {
     /// preferences.
     pub fn prefs(&self) -> UiState {
         let mut ui = self.ui.clone();
-        ui.author = self.session.author.clone();
+        ui.author = Some(self.session.author.clone());
         ui.initials = self.session.initials.clone();
         ui.dictionary = wordcraft_engine::proof::user_dictionary();
         ui.editing = self.session.prefs.clone();
@@ -47,8 +47,10 @@ impl WordApp {
         self.legacy_interface_size =
             self.ui.legacy_interface_size.take().filter(|_| self.ui.interface_size.is_auto()).and_then(|old| theme::legacy_interface_percent(&old));
         // The session owns the name from here on; `prefs` copies it back when saving.
-        let author = std::mem::take(&mut self.ui.author);
-        if !author.trim().is_empty() {
+        // A saved empty name stays empty (#4368); one of only spaces keeps the default.
+        if let Some(author) = self.ui.author.take()
+            && (author.is_empty() || !author.trim().is_empty())
+        {
             self.session.author = author;
         }
         self.session.initials = std::mem::take(&mut self.ui.initials).chars().take(wordcraft_engine::cmd::options::MAX_INITIALS_CHARS).collect();

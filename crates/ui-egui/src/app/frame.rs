@@ -1,6 +1,20 @@
-use super::*;
+#[cfg(not(target_arch = "wasm32"))]
+use super::file_browser;
+use super::{
+    WordApp, backstage, canvas, chrome, colors, content_controls, dialogs, documents, keys, now_ms, panes, read_aloud, ribbon, theme, updates_ui,
+    zotero,
+};
 
 impl WordApp {
+    /// A file that wouldn't open (#1103): log it, and say on the status bar which file and why,
+    /// whatever handed it over (the command line, a macOS open event, a drop). Returns the message.
+    pub fn report_open_failure(&mut self, path: &str, error: &str) -> String {
+        log::warn!("{path}: {error}");
+        let msg = crate::i18n::fmt(crate::tl!("Couldn't open {path}: {error}"), &[("path", path), ("error", error)]);
+        self.status(msg.clone());
+        msg
+    }
+
     pub fn status(&mut self, s: impl Into<String>) {
         self.status_msg = Some((s.into(), now_ms()));
     }
@@ -8,7 +22,7 @@ impl WordApp {
     /// Document title for the title bar (and the suggested file name). An untitled document is
     /// named in the interface language, as `Document1` is in English.
     pub fn title_stem(&self) -> String {
-        match &self.session.path {
+        let mut title = match &self.session.path {
             Some(p) => p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| tl!("Document1").into()),
             None => match &self.session.file_name {
                 Some(name) => name.clone(),
@@ -17,7 +31,10 @@ impl WordApp {
                 }
                 None => self.session.doc.core.title.clone(),
             },
-        }
+        };
+        // X11 converts window titles to C strings, which cannot contain NUL (#3634).
+        title.retain(|c| c != '\0');
+        if title.is_empty() { tl!("Document1").into() } else { title }
     }
 
     /// Tell the host whether the document has unsaved changes ([`Services::on_dirty`]).

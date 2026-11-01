@@ -1,7 +1,7 @@
 use super::format::{date_text, excel_stamp, format_value, is_date_code};
 use super::model::{Axis, Grouping, Kind, Pos, Series};
 use super::plot::label;
-use super::*;
+use super::{Chart, El, FONT, LINE_W, MAX_CELLS, MAX_POINTS, MAX_RADAR_SERIES, MAX_SERIES, MAX_SPOKES, Rgb, fill_colour, int, measure, slot};
 
 impl Chart {
     pub(super) fn parse(space: &El, theme: &[Rgb]) -> Option<Chart> {

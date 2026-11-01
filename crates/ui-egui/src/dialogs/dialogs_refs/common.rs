@@ -1,4 +1,4 @@
-use super::*;
+use super::{Sense, Tokens, Ui, semibold, vec2};
 
 pub(super) fn heading(ui: &mut Ui, s: &str) {
     ui.add_space(4.0);
@@ -8,7 +8,7 @@ pub(super) fn heading(ui: &mut Ui, s: &str) {
 /// A choice from `options` ((value, label)) in a drop-down, named by its visible label.
 pub(super) fn choice<T: PartialEq + Clone>(ui: &mut Ui, id: &str, value: &mut T, options: &[(T, &str)], label: &egui::Response) {
     let shown = options.iter().find(|(v, _)| v == value).map(|(_, l)| tl!(l).to_string()).unwrap_or_default();
-    let combo = egui::ComboBox::from_id_salt(id).selected_text(shown).width(150.0).show_ui(ui, |ui| {
+    let combo = craft_ui::ComboBox::from_id_salt(id).selected_text(shown).width(150.0).show_ui(ui, |ui| {
         for (v, l) in options {
             ui.selectable_value(value, v.clone(), tl!(l));
         }

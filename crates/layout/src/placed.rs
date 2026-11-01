@@ -1,4 +1,4 @@
-use super::*;
+use super::{Arc, Border, ParaLayout, Path, Rect, Rgb, Spin, StoryRef, TextDirection, Wrap};
 
 /// Something placed on a page (page coordinates, points, y down).
 #[derive(Clone, Debug)]

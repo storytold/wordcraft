@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    AbstractNum, DocxError, El, Level, LevelSuffix, Num, NumFormat, PartFormat, Reader, Style, StyleKind, StyleSheet, TablePart, TableStyleParts,
+    VAlign, flag, int, props, tw, u32_of,
+};
 
 /// Built-in style names Word stores in lower case, and how the UI shows them.
 pub(crate) const LOWER_NAMES: &[(&str, &str)] = &[
@@ -37,6 +40,13 @@ pub(crate) fn ui_style_name(n: &str) -> String {
         }
     }
     n.to_string()
+}
+
+/// The outline level (0 for Heading 1) of Word's built-in style named `heading 1` … `heading 9`.
+fn builtin_heading_level(name: &str) -> Option<u8> {
+    let name = name.trim();
+    let digit = name.get(..8).filter(|p| p.eq_ignore_ascii_case("heading ")).and(name.get(8..))?;
+    digit.parse::<u8>().ok().filter(|d| digit.len() == 1 && (1..=9).contains(d)).map(|d| d - 1)
 }
 
 impl Reader<'_> {
@@ -112,7 +122,7 @@ impl Reader<'_> {
                 priority: s.child_val("w:uiPriority").and_then(u32_of),
                 quick: flag(s, "w:qFormat").unwrap_or(false),
                 hidden: flag(s, "w:semiHidden").unwrap_or(false) || flag(s, "w:hidden").unwrap_or(false),
-                builtin: !s.attr("w:customStyle").is_some_and(|v| v == "1" || v == "true"),
+                builtin: !s.attr("w:customStyle").is_some_and(|v| matches!(v.trim(), "1" | "true" | "on")),
                 locked: flag(s, "w:locked").unwrap_or(false),
                 // Only where the writer couldn't tell from the id (it flags the English ids).
                 default: s.attr("w:default").is_some_and(|v| v == "1" || v == "true")
@@ -127,6 +137,16 @@ impl Reader<'_> {
             };
             if let Some(p) = s.child("w:pPr") {
                 st.para = self.pc.ppr(p).0;
+            }
+            // Word gives its built-in heading styles their outline level whether or not the file
+            // writes `w:outlineLvl` (some producers leave it out): "heading 2" is level 2 in the
+            // Navigation pane and the table of contents, whatever its id (#4696).
+            if kind == StyleKind::Paragraph
+                && st.builtin
+                && st.para.outline_level.is_none()
+                && let Some(level) = s.child_val("w:name").and_then(builtin_heading_level)
+            {
+                st.para.outline_level = Some(level);
             }
             if let Some(rp) = s.child("w:rPr") {
                 st.chr = self.pc.rpr(rp);

@@ -1,4 +1,4 @@
-use super::boxes::{BoxContext, clear_of_float_tables, layout_box};
+use super::boxes::{BoxInput, clear_of_float_tables, layout_box};
 use super::ctx::{Ctx, with_pct_base};
 use super::floats::{WrapArea, align_in, body_wraps};
 use super::flow::again;
@@ -6,7 +6,7 @@ use super::headers::{MAX_HEADER_ITEMS, header_table_areas};
 use super::notes::table_notes;
 use super::page::{PageBuilder, PageFrame, page_frame};
 use super::placed::Placed;
-use super::*;
+use super::{Anchor, Arc, HeightRule, Path, Rect, StoryRef, TableFloat, ViewMode, WrapText, table};
 
 /// Footer page tables wrap only the intersecting body lines, which resume below them.
 pub(crate) fn footer_table_wraps(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<WrapArea> {
@@ -49,10 +49,10 @@ pub(crate) fn footer_table_wraps(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<WrapAre
     let areas = again(ctx, 0, |ctx| {
         with_pct_base(ctx, base, |ctx| {
             let story = StoryRef::Part(id);
-            let h = layout_box(ctx, story, &blocks, &[], sect.text_width(), BoxContext::Other, 0, None).height;
+            let h = layout_box(ctx, BoxInput::other(story, &blocks, sect.text_width(), 0, None)).height;
             let y = sect.page_h - sect.footer - h;
             let frame = PageFrame { sect, origin: (x, y), number: page.number, mirror: ctx.mirror };
-            let mut areas = layout_box(ctx, story, &blocks, &[], sect.text_width(), BoxContext::Other, 0, Some(frame)).page_table_wraps;
+            let mut areas = layout_box(ctx, BoxInput::other(story, &blocks, sect.text_width(), 0, Some(frame))).page_table_wraps;
             for (rect, ..) in &mut areas {
                 rect.x += x;
                 rect.y += y;

@@ -1,5 +1,16 @@
 use super::object::ink_name;
-use super::*;
+use super::{
+    AltText, Anchor, Fill, Float, GradientFlip, GradientKind, InlineObject, PartRels, PathShape, Rgb, ShapeEffects, ShapeKind, W, Wrap, Writer, emu,
+    n, rt,
+};
+
+pub(super) struct DrawingInfo<'a> {
+    pub float: &'a Float,
+    pub size: (f32, f32),
+    pub docpr: &'a str,
+    pub name: &'a str,
+    pub alt: &'a str,
+}
 
 impl Writer<'_> {
     /// A picture's `pic:pic` (the image in `media/{file}`), at `off` in its group (or 0, 0).
@@ -198,28 +209,19 @@ impl Writer<'_> {
         w.close("wps:wsp");
     }
 
-    #[allow(clippy::too_many_arguments)]
     /// A `w:drawing` holding `graphic` (an `a:graphic`) in a frame of the object's size and place.
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn graphic_frame(
-        &mut self,
-        w: &mut W,
-        float: &Float,
-        (gw, gh): (f32, f32),
-        docpr: &str,
-        name: &str,
-        alt: &str,
-        graphic: &crate::xml::El,
-    ) {
+    pub(super) fn graphic_frame(&mut self, w: &mut W, info: DrawingInfo<'_>, graphic: &crate::xml::El) {
+        let inline = info.float.wrap == Wrap::Inline;
         w.open("w:drawing", &[]);
-        self.drawing_open(w, float, gw, gh, docpr, name, alt);
+        self.drawing_open(w, info);
         w.empty("wp:cNvGraphicFramePr", &[]);
         w.raw(&graphic.to_xml());
-        w.close(if float.wrap == Wrap::Inline { "wp:inline" } else { "wp:anchor" });
+        w.close(if inline { "wp:inline" } else { "wp:anchor" });
         w.close("w:drawing");
     }
 
-    pub(super) fn drawing_open(&mut self, w: &mut W, float: &Float, iw: f32, ih: f32, docpr: &str, name: &str, alt: &str) {
+    pub(super) fn drawing_open(&mut self, w: &mut W, info: DrawingInfo<'_>) {
+        let DrawingInfo { float, size: (iw, ih), docpr, name, alt } = info;
         let (cx, cy) = (emu(iw.max(0.0)), emu(ih.max(0.0)));
         if float.wrap == Wrap::Inline {
             w.open("wp:inline", &[("distT", "0"), ("distB", "0"), ("distL", "0"), ("distR", "0")]);

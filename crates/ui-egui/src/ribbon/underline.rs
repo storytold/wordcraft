@@ -1,5 +1,5 @@
 use super::common::mi;
-use super::*;
+use super::{Rect, Stroke, Target, Tokens, Ui, WordApp, json, pos2, vec2};
 
 /// The underline styles Home › Underline offers as line samples: (`format.underline` style, name).
 pub(super) const UNDERLINE_STYLES: [(&str, &str); 8] = [

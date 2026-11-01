@@ -3,7 +3,7 @@ use super::limits::{MAX_ANCHOR_RUN, MAX_NEST, MAX_SOURCE, MAX_SPEC};
 use super::math::latex_to_linear;
 use super::table::{raw_text, source_text, table};
 use super::units::{length_pt, parse_color, size_of};
-use super::*;
+use super::{Align, Document, FBlock, Flow, Fmt, Inline, Kind, ListInfo, Para, model};
 
 // =============================================================================================
 // Import

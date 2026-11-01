@@ -1,5 +1,5 @@
 use super::state::{SavedDock, labels, move_before, open, pane_state};
-use super::*;
+use super::{Edge, Pane, PaneHost, PaneRequest, PaneState, Place, SidePolicy, Stroke, Tokens, Ui, Value, WordApp, json};
 
 pub(super) struct Content<'a> {
     pub(super) app: &'a mut WordApp,

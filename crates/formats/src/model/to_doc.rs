@@ -3,7 +3,11 @@ use super::types::{
     CODE_STYLE, Cell, Dropped, FBlock, FTable, Flow, Fmt, Inline, Kind, ListInfo, MAX_DEPTH, MAX_RUN_STRINGS, MONO_FONT, Para, RUBY_BASE_SIZE,
     RevMark, clean_text, dropped, ruby_object,
 };
-use super::*;
+use super::{
+    AbstractNum, Arc, Block, Blocks, Border, BorderStyle, Borders, CellProps, CharProps, Document, InlineObject, Level, ListKind, Num, NumRef, OBJ,
+    ParaProps, Paragraph, PropChange, Revision, RevisionKind, Rgb, RowProps, Run, Style, StyleKind, Table, TextColor, Underline, VMerge, VertAlign,
+    levels_for, para_block,
+};
 
 pub fn char_props(f: &Fmt) -> CharProps {
     let on = |b: bool| if b { Some(true) } else { None };

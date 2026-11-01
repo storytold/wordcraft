@@ -2,7 +2,7 @@ use super::date::dttm_to_iso;
 use super::parse::column_grid;
 use super::state::{CellDef, Dest, HeaderFooter, MAX_GROUPS, MAX_REV_AUTHORS, MAX_SECTIONS, Output, PageGeom, SecFmt, St};
 use super::styles::{StyleDef, drop_style_formatting, style_fmt};
-use super::*;
+use super::{Arc, Cell, FBlock, FTable, HashMap, Inline, Kind, Meta, Para, Rgb, model};
 
 #[derive(Default)]
 pub(super) struct Reader {
@@ -62,6 +62,10 @@ pub(super) struct Reader {
     pub(super) pict_h: Option<f32>,
     pub(super) pict_sx: f32,
     pub(super) pict_sy: f32,
+    /// `\picw`/`\pich` as written, read for metafiles (0 when absent).
+    pub(super) pict_nat: (i32, i32),
+    /// The mapping mode `N` of `\wmetafileN`.
+    pub(super) pict_mm: i32,
     pub(super) bkmk: Option<(usize, String)>,
     /// Authors of tracked changes (`\revtbl`), and the entry being read.
     rev_authors: Vec<String>,

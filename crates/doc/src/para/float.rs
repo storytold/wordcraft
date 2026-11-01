@@ -1,4 +1,4 @@
-use super::*;
+use super::{Deserialize, Serialize};
 
 /// How a floating object is placed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]

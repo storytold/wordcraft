@@ -1,4 +1,4 @@
-use super::*;
+use super::{MeasureExt, Serialize, Ui, Value, WordApp, buttons, fit_size, heading, json, run, unit, vec2};
 
 // ---------------------------------------------------------------------------------------------
 // Size
@@ -261,7 +261,7 @@ pub(super) fn page_numbers_ui(app: &mut WordApp, ui: &mut Ui, f: &mut PageNumber
     ui.add_space(4.0);
     ui.label(tl!("Number format"));
     let label = crate::dialogs_notes::FORMATS.iter().find(|(v, _)| *v == f.format.as_str()).map(|(_, l)| *l).unwrap_or_default();
-    egui::ComboBox::from_id_salt("pnum_format").selected_text(label).width(150.0).show_ui(ui, |ui| {
+    craft_ui::ComboBox::from_id_salt("pnum_format").selected_text(label).width(150.0).show_ui(ui, |ui| {
         for (v, l) in crate::dialogs_notes::FORMATS {
             ui.selectable_value(&mut f.format, v.to_string(), l);
         }

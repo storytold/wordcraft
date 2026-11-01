@@ -1,4 +1,6 @@
-use super::*;
+use super::{
+    ChangeAttrs, CharProps, InlineObject, Paragraph, PartRels, Piece, PropChange, RevisionKind, W, Writer, open_change, ppr_inner, rpr, rpr_inner, rt,
+};
 
 impl Writer<'_> {
     pub(super) fn para(&mut self, w: &mut W, p: &Paragraph, rels: &mut PartRels, top: bool, depth: usize) {

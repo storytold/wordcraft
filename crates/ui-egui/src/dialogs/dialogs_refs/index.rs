@@ -1,6 +1,6 @@
 use super::common::{LEADERS, choice, heading, leader_char, sample};
 use super::shell::{Next, go};
-use super::*;
+use super::{FieldCode, RefsDialog, Serialize, Ui, Value, WordApp, buttons, json, vec2};
 
 // ---------------------------------------------------------------------------------------------
 // Index and Mark Index Entry
@@ -172,7 +172,7 @@ pub(super) fn mark_ui(app: &mut WordApp, ui: &mut Ui, f: &mut MarkForm) -> Next 
             ui.add_enabled_ui(!f.bookmarks.is_empty(), |ui| ui.radio_value(&mut f.option, "range".to_string(), tl!("Pages of bookmark:"))).inner;
         ui.add_enabled_ui(f.option == "range", |ui| {
             let opts: Vec<(String, &str)> = f.bookmarks.iter().map(|b| (b.clone(), b.as_str())).collect();
-            let combo = egui::ComboBox::from_id_salt("xe_bm").selected_text(f.bookmark.clone()).width(140.0).show_ui(ui, |ui| {
+            let combo = craft_ui::ComboBox::from_id_salt("xe_bm").selected_text(f.bookmark.clone()).width(140.0).show_ui(ui, |ui| {
                 for (v, l) in &opts {
                     ui.selectable_value(&mut f.bookmark, v.clone(), *l);
                 }

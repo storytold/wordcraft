@@ -276,84 +276,69 @@ mod tests {
         }
     }
 
+    fn assert_tags(tags: &[&str], expected: ProofLang) {
+        for tag in tags {
+            assert_eq!(ProofLang::from_tag(Some(tag)), expected, "{tag}");
+        }
+    }
+
     #[test]
-    fn tags_resolve() {
-        for t in ["pl", "pl-PL", "PL-pl", "pl_PL", "pl_PL.UTF-8", " pl-PL ", "pol"] {
-            assert_eq!(ProofLang::from_tag(Some(t)), ProofLang::Pl, "{t}");
-        }
-        for t in ["pt", "pt-BR", "PT_br", "pt-BR.UTF-8", " pt-PT ", "por"] {
-            assert_eq!(ProofLang::from_tag(Some(t)), ProofLang::Pt, "{t}");
-        }
-        for t in ["it", "it-IT", "IT_it", "it-CH", "it-CH.UTF-8", " it-IT ", "ita"] {
-            assert_eq!(ProofLang::from_tag(Some(t)), ProofLang::It, "{t}");
-        }
-        for t in ["cs", "cs-CZ", "CS-cz", "cs_CZ", " ces ", "CES", "cze", "CZE"] {
-            assert_eq!(ProofLang::from_tag(Some(t)), ProofLang::Cs, "{t}");
-        }
+    fn tags_resolve_primary_languages() {
+        assert_tags(&["pl", "pl-PL", "PL-pl", "pl_PL", "pl_PL.UTF-8", " pl-PL ", "pol"], ProofLang::Pl);
+        assert_tags(&["pt", "pt-BR", "PT_br", "pt-BR.UTF-8", " pt-PT ", "por"], ProofLang::Pt);
+        assert_tags(&["it", "it-IT", "IT_it", "it-CH", "it-CH.UTF-8", " it-IT ", "ita"], ProofLang::It);
+        assert_tags(&["cs", "cs-CZ", "CS-cz", "cs_CZ", " ces ", "CES", "cze", "CZE"], ProofLang::Cs);
+        assert_tags(&["id", "id-ID", "ID-id", "id_ID", "id_ID.UTF-8", " id-ID ", "ind", "in", "in_ID"], ProofLang::Id);
         assert_eq!(ProofLang::Cs.code(), "cs");
         assert!(ProofLang::Cs.is_proofed() && ProofLang::PROOFED.contains(&ProofLang::Cs));
-        for t in ["id", "id-ID", "ID-id", "id_ID", "id_ID.UTF-8", " id-ID ", "ind", "in", "in_ID"] {
-            assert_eq!(ProofLang::from_tag(Some(t)), ProofLang::Id, "{t}");
-        }
         assert_eq!(ProofLang::Id.code(), "id");
         assert!(ProofLang::Id.is_proofed() && ProofLang::PROOFED.contains(&ProofLang::Id));
-        for t in ["en", "en-US", "EN_us", "en-Latn-US", "en-PH", "en-001", "eng", "en_US.UTF-8", "en-x-gb"] {
-            assert_eq!(ProofLang::from_tag(Some(t)), ProofLang::En, "{t}");
-        }
-        for t in [
-            "en-GB",
-            "EN_gb",
-            "en_GB.UTF-8",
-            "en-AU",
-            "en_AU",
-            "en-NZ",
-            "en-IE",
-            "en-ZA",
-            "en-IN",
-            "en-Latn-GB",
-            "en-UK",
-            "en-150",
-            "eng-GB",
-            "en_GB@euro",
-        ] {
-            assert_eq!(ProofLang::from_tag(Some(t)), ProofLang::EnGb, "{t}");
-        }
-        for t in ["en-CA", "en_CA", "EN-ca", "en_CA.UTF-8", "en-Latn-CA"] {
-            assert_eq!(ProofLang::from_tag(Some(t)), ProofLang::EnCa, "{t}");
-        }
-        for l in [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa] {
-            assert!(l.is_english() && l.is_proofed() && ProofLang::PROOFED.contains(&l), "{l:?}");
-            assert_eq!(l.code(), "en");
+    }
+
+    #[test]
+    fn tags_resolve_english_regions() {
+        assert_tags(&["en", "en-US", "EN_us", "en-Latn-US", "en-PH", "en-001", "eng", "en_US.UTF-8", "en-x-gb"], ProofLang::En);
+        assert_tags(
+            &[
+                "en-GB",
+                "EN_gb",
+                "en_GB.UTF-8",
+                "en-AU",
+                "en_AU",
+                "en-NZ",
+                "en-IE",
+                "en-ZA",
+                "en-IN",
+                "en-Latn-GB",
+                "en-UK",
+                "en-150",
+                "eng-GB",
+                "en_GB@euro",
+            ],
+            ProofLang::EnGb,
+        );
+        assert_tags(&["en-CA", "en_CA", "EN-ca", "en_CA.UTF-8", "en-Latn-CA"], ProofLang::EnCa);
+        for language in [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa] {
+            assert!(language.is_english() && language.is_proofed() && ProofLang::PROOFED.contains(&language), "{language:?}");
+            assert_eq!(language.code(), "en");
         }
         assert!(!ProofLang::Pl.is_english() && !ProofLang::Other.is_english());
         // The region is the first two-letter or three-digit subtag: a script or variant isn't one.
         assert_eq!(ProofLang::from_tag(Some("en-Brai")), ProofLang::En);
         assert_eq!(ProofLang::from_tag(Some("en-GB-oxendict")), ProofLang::EnGb);
-        for t in ["bg", "bg-BG", "BG_bg", "bg_BG.UTF-8", "bul"] {
-            assert_eq!(ProofLang::from_tag(Some(t)), ProofLang::Bg, "{t}");
-        }
-        for t in ["tr", "tr-TR", "tr-CY", "TR_tr", "tur"] {
-            assert_eq!(ProofLang::from_tag(Some(t)), ProofLang::Tr, "{t}");
-        }
-        for t in ["de", "de-DE", "de-CH", "DE_at", "deu", "ger"] {
-            assert_eq!(ProofLang::from_tag(Some(t)), ProofLang::De, "{t}");
-        }
+    }
+
+    #[test]
+    fn tags_resolve_additional_locales_and_defaults() {
+        assert_tags(&["bg", "bg-BG", "BG_bg", "bg_BG.UTF-8", "bul"], ProofLang::Bg);
+        assert_tags(&["tr", "tr-TR", "tr-CY", "TR_tr", "tur"], ProofLang::Tr);
+        assert_tags(&["de", "de-DE", "de-CH", "DE_at", "deu", "ger"], ProofLang::De);
+        assert_tags(&["ru", "ru-RU", "RU-ru", "ru_RU", "ru_RU.UTF-8", " ru-RU ", "rus"], ProofLang::Ru);
         assert!(!ProofLang::De.is_proofed());
-        for t in ["fr-FR", "dex", "x-none", "ja-JP", "plx", "bgx", "trx", "csx", "idx", "inx", "esx", "spax", "e", "-"] {
-            assert_eq!(ProofLang::from_tag(Some(t)), ProofLang::Other, "{t}");
-        }
-        assert_eq!(ProofLang::from_tag(None), ProofLang::En);
-        assert_eq!(ProofLang::from_tag(Some("")), ProofLang::En);
-        assert_eq!(ProofLang::from_tag(Some("  ")), ProofLang::En);
-        assert!(ProofLang::Pl.is_proofed() && !ProofLang::Other.is_proofed());
-        // Bulgarian has hyphenation only: no spelling or grammar marks.
         assert!(!ProofLang::Bg.is_proofed());
         assert_eq!(ProofLang::Bg.code(), "bg");
         assert!(ProofLang::Pt.is_proofed() && !ProofLang::Other.is_proofed());
         assert!(ProofLang::Tr.is_proofed());
-        for t in ["ru", "ru-RU", "RU-ru", "ru_RU", "ru_RU.UTF-8", " ru-RU ", "rus"] {
-            assert_eq!(ProofLang::from_tag(Some(t)), ProofLang::Ru, "{t}");
-        }
         assert!(ProofLang::Ru.is_proofed());
         assert_eq!(ProofLang::Ru.code(), "ru");
         assert!(ProofLang::PROOFED.contains(&ProofLang::Ru));
@@ -365,6 +350,15 @@ mod tests {
         assert_eq!(ProofLang::Hr.code(), "hr");
         assert_eq!(ProofLang::Tr.code(), "tr");
         assert!(ProofLang::PROOFED.contains(&ProofLang::Pt), "every proofed language is listed");
+        assert_eq!(ProofLang::from_tag(None), ProofLang::En);
+        assert_eq!(ProofLang::from_tag(Some("")), ProofLang::En);
+        assert_eq!(ProofLang::from_tag(Some("  ")), ProofLang::En);
+        assert!(ProofLang::Pl.is_proofed() && !ProofLang::Other.is_proofed());
+    }
+
+    #[test]
+    fn tags_reject_unknown_or_partial_language_codes() {
+        assert_tags(&["fr-FR", "dex", "x-none", "ja-JP", "plx", "bgx", "trx", "csx", "idx", "inx", "esx", "spax", "e", "-"], ProofLang::Other);
     }
 
     /// #3360, #3553: Spanish is proofed, by region: Spain (and no region), Mexico, Uruguay, and

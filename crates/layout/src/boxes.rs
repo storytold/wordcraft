@@ -1,9 +1,14 @@
 use super::ctx::{Ctx, page_anchored};
-use super::floats::{ObjFrame, WrapArea, align_in, float_rect, floating, left_out_objects, place_objects, rel_exclusions, wrap_area};
+use super::floats::{
+    ObjFrame, ObjectPlacement, WrapArea, align_in, float_rect, floating, left_out_objects, place_objects, rel_exclusions, wrap_area,
+};
 use super::page::PageFrame;
 use super::placed::Placed;
 use super::table_flow::below;
-use super::*;
+use super::{
+    Anchor, Arc, Block, Blocks, Border, Document, Float, FloatAlign, HashMap, ParaLayout, Paragraph, Path, Rect, SectionProps, StoryRef, TableFloat,
+    TextDirection, Wrap, WrapText, para, table,
+};
 
 /// Cell identity is independent of optional table-style formatting.
 pub(crate) enum BoxContext<'a> {
@@ -11,21 +16,177 @@ pub(crate) enum BoxContext<'a> {
     Cell(Option<&'a para::CellText>),
 }
 
+pub(crate) struct BoxInput<'a> {
+    pub(crate) story: StoryRef,
+    pub(crate) blocks: &'a Blocks,
+    pub(crate) prefix: &'a [u32],
+    pub(crate) width: f32,
+    pub(crate) context: BoxContext<'a>,
+    pub(crate) depth: usize,
+    pub(crate) frame: Option<PageFrame<'a>>,
+}
+
+impl<'a> BoxInput<'a> {
+    pub(crate) fn other(story: StoryRef, blocks: &'a Blocks, width: f32, depth: usize, frame: Option<PageFrame<'a>>) -> Self {
+        Self { story, blocks, prefix: &[], width, context: BoxContext::Other, depth, frame }
+    }
+
+    pub(crate) fn cell(story: StoryRef, blocks: &'a Blocks, prefix: &'a [u32], width: f32, cell: Option<&'a para::CellText>, depth: usize) -> Self {
+        Self { story, blocks, prefix, width, context: BoxContext::Cell(cell), depth, frame: None }
+    }
+}
+
+struct ParagraphSpacing<'a> {
+    index: usize,
+    listed: bool,
+    style: &'a str,
+    contextual: bool,
+    before_auto: bool,
+    space_before: f32,
+    allow_same_style_space: bool,
+    previous_style: Option<&'a (String, bool)>,
+    previous_listed: bool,
+    previous_after_auto: bool,
+    previous_after: &'a mut f32,
+    y: &'a mut f32,
+    sum_paragraph_spacing: bool,
+}
+
+struct TableBlockContext<'ctx, 'state, 'doc> {
+    ctx: &'ctx mut Ctx<'doc>,
+    story: StoryRef,
+    table: &'state wordcraft_doc::Table,
+    path: &'state [u32],
+    width: f32,
+    frame: Option<PageFrame<'state>>,
+    in_cell: bool,
+    depth: usize,
+    y: &'state mut f32,
+    items: &'state mut Vec<Placed>,
+    exclusions: &'state mut Vec<WrapArea>,
+    float_tables: &'state mut Vec<Rect>,
+    table_areas: &'state mut Vec<Rect>,
+    page_table_wraps: &'state mut Vec<WrapArea>,
+    previous_after: &'state mut f32,
+    previous_style: &'state mut Option<(String, bool)>,
+}
+
+fn paragraph_spacing(input: ParagraphSpacing<'_>) -> (bool, f32) {
+    let ParagraphSpacing {
+        index,
+        listed,
+        style,
+        contextual,
+        before_auto,
+        space_before,
+        allow_same_style_space,
+        previous_style,
+        previous_listed,
+        previous_after_auto,
+        previous_after,
+        y,
+        sum_paragraph_spacing,
+    } = input;
+    let contextual = contextual && !allow_same_style_space;
+    let mut before = space_before;
+    if let Some((previous, previous_contextual)) = previous_style
+        && previous == style
+        && !allow_same_style_space
+    {
+        if *previous_contextual {
+            *y -= *previous_after;
+            before = (before - *previous_after).max(0.0);
+            *previous_after = 0.0;
+        }
+        if contextual {
+            before = 0.0;
+        }
+    }
+    if index > 0 && previous_listed && listed {
+        if previous_after_auto {
+            *y -= *previous_after;
+            *previous_after = 0.0;
+        }
+        if before_auto {
+            before = 0.0;
+        }
+    }
+    if before_auto && index == 0 {
+        before = 0.0;
+    } else if index > 0 && before > 0.0 && *previous_after > 0.0 && !sum_paragraph_spacing {
+        before = (before - *previous_after).max(0.0);
+    }
+    (contextual, before)
+}
+
+fn layout_table_block(input: TableBlockContext<'_, '_, '_>) -> bool {
+    let TableBlockContext {
+        ctx,
+        story,
+        table: t,
+        path,
+        width,
+        frame,
+        in_cell,
+        depth,
+        y,
+        items,
+        exclusions,
+        float_tables,
+        table_areas,
+        page_table_wraps,
+        previous_after,
+        previous_style,
+    } = input;
+    if depth > 8 {
+        return false;
+    }
+    // Page tables do not contribute to the footer text's intrinsic height.
+    if frame.is_none()
+        && !in_cell
+        && matches!(story, StoryRef::Part(id) if ctx.doc.parts.get(&id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::Footer))
+        && t.props.float.is_some_and(|f| f.v_rel == Anchor::Page)
+    {
+        return false;
+    }
+    let layout = table::layout_table(ctx, story, t, path, width, depth + 1);
+    let (tx, ty) = match t.props.float {
+        Some(float) => {
+            let legacy = if ctx.doc.settings.compat_mode < 15 { table::first_cell_left_margin(ctx, t) } else { 0.0 };
+            let (rect, area) = box_float_table_rect(frame, width, *y, &layout, &float, legacy, float_tables);
+            exclusions.push((area, false, None, WrapText::BothSides, true));
+            float_tables.push(area);
+            table_areas.push(area);
+            if float.v_rel == Anchor::Page {
+                page_table_wraps.push((area, false, None, WrapText::BothSides, true));
+            }
+            (rect.x, rect.y)
+        }
+        None => (layout.x, below(exclusions, *y, layout.x, layout.x + layout.width)),
+    };
+    let mut row_y = ty;
+    for row in &layout.rows {
+        for item in &row.items {
+            let mut item = item.clone();
+            item.translate(tx, row_y);
+            items.push(item);
+        }
+        row_y += row.height;
+    }
+    if t.props.float.is_none() {
+        *y = row_y;
+        *previous_after = 0.0;
+        *previous_style = None;
+    }
+    true
+}
+
 /// Lay out a block list into a free-standing box of `width` (no page breaks): table cells,
 /// headers, footers, notes, text boxes. Returns items relative to (0, 0) and the height. `frame`
 /// says where the box sits on its page, for floating objects positioned relative to the page or
 /// its margins; without it (cells, notes, text boxes) they're positioned in the box.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn layout_box(
-    ctx: &mut Ctx,
-    story: StoryRef,
-    blocks: &Blocks,
-    prefix: &[u32],
-    width: f32,
-    context: BoxContext<'_>,
-    depth: usize,
-    frame: Option<PageFrame>,
-) -> BoxLayout {
+pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
+    let BoxInput { story, blocks, prefix, width, context, depth, frame } = input;
     // Deletions in balloons leave the body's text only: a header, note or text box keeps its own
     // inline (restored for the story around this box when it's done).
     let outer_hide = std::mem::replace(&mut ctx.hide_deleted, ctx.opts.hides_deleted(story));
@@ -84,45 +245,26 @@ pub(crate) fn layout_box(
                     };
                     let float = frame_float(&fr);
                     let r = float_rect(frame, (0.0, width), y, fw, h, &float);
-                    push_para(&mut items, story, &path, &pf, 0, pf.lines.len(), r.x, r.y, fw, Edges::own(&pf, 0, pf.lines.len()));
+                    push_para(&mut items, (story, &path), &pf, (0, pf.lines.len()), (r.x, r.y), fw, Edges::own(&pf, 0, pf.lines.len()));
                     excl.extend(wrap_area(r, &float, None));
                     float_tables.push(r);
                     continue;
                 }
-                // A legacy table compatibility flag lets same-style paragraphs in a table keep their
-                // spacing (`allow_same_style_space`).
-                let ctxl = pl.rp.contextual_spacing && !allow_same_style_space;
-                let mut before = pl.rp.space_before;
-                if let Some((style, previous_contextual)) = &prev_style
-                    && *style == pl.rp.style
-                    && !allow_same_style_space
-                {
-                    if *previous_contextual {
-                        y -= prev_after;
-                        before = (before - prev_after).max(0.0);
-                        prev_after = 0.0;
-                    }
-                    if ctxl {
-                        before = 0.0;
-                    }
-                }
-                // Automatic spacing: none between two list items (as in an HTML list).
-                if i > 0 && prev_listed && listed {
-                    if prev_after_auto {
-                        y -= prev_after;
-                        prev_after = 0.0;
-                    }
-                    if pl.rp.before_auto {
-                        before = 0.0;
-                    }
-                }
-                // Automatic spacing: none at the top of a cell or box, and it collapses with the
-                // space after the paragraph above (the larger one counts).
-                if pl.rp.before_auto && i == 0 {
-                    before = 0.0;
-                } else if i > 0 && before > 0.0 && prev_after > 0.0 && !ctx.doc.settings.sum_paragraph_spacing {
-                    before = (before - prev_after).max(0.0);
-                }
+                let (ctxl, before) = paragraph_spacing(ParagraphSpacing {
+                    index: i,
+                    listed,
+                    style: &pl.rp.style,
+                    contextual: pl.rp.contextual_spacing,
+                    before_auto: pl.rp.before_auto,
+                    space_before: pl.rp.space_before,
+                    allow_same_style_space,
+                    previous_style: prev_style.as_ref(),
+                    previous_listed: prev_listed,
+                    previous_after_auto: prev_after_auto,
+                    previous_after: &mut prev_after,
+                    y: &mut y,
+                    sum_paragraph_spacing: ctx.doc.settings.sum_paragraph_spacing,
+                });
                 // Paragraph-relative floats start above the effective space before, as in the
                 // body path. Keep text and wrap exclusions relative to the text's actual top.
                 let para_top = y;
@@ -169,11 +311,24 @@ pub(crate) fn layout_box(
                 if above {
                     edges.up = (y + lead - prev_end).max(0.0);
                 }
-                prev_end = push_para(&mut items, story, &path, &pl, 0, pl.lines.len(), 0.0, y + lead, width, edges);
+                prev_end = push_para(&mut items, (story, &path), &pl, (0, pl.lines.len()), (0.0, y + lead), width, edges);
                 // Pictures, shapes and text boxes: drawn, their areas and text boxes' text.
                 if !p.objects.is_empty() {
                     let at = ObjFrame { page: frame, col: (0.0, width), para_y: para_top, table_chr: table.map(|t| &t.chr), pinned: Some(&pinned) };
-                    let (back, front) = place_objects(ctx, story, &path, p, &pl, (0, pl.lines.len()), (0.0, y + lead), &at, &floats, depth);
+                    let (back, front) = place_objects(
+                        ctx,
+                        &ObjectPlacement {
+                            story,
+                            path: &path,
+                            p,
+                            pl: &pl,
+                            lines: (0, pl.lines.len()),
+                            origin: (0.0, y + lead),
+                            at: &at,
+                            floats: &floats,
+                            depth,
+                        },
+                    );
                     for placed in back.iter().chain(front.iter()) {
                         if let Placed::Object { rect, spin, wrap, .. } = placed
                             && !matches!(wrap, Wrap::Inline | Wrap::BehindText | Wrap::InFrontOfText)
@@ -195,48 +350,25 @@ pub(crate) fn layout_box(
                 prev_style = Some((pl.rp.style.clone(), ctxl));
             }
             Block::Table(t) => {
-                if depth > 8 {
+                if !layout_table_block(TableBlockContext {
+                    ctx,
+                    story,
+                    table: t,
+                    path: &path,
+                    width,
+                    frame,
+                    in_cell,
+                    depth,
+                    y: &mut y,
+                    items: &mut items,
+                    exclusions: &mut excl,
+                    float_tables: &mut float_tables,
+                    table_areas: &mut table_areas,
+                    page_table_wraps: &mut page_table_wraps,
+                    previous_after: &mut prev_after,
+                    previous_style: &mut prev_style,
+                }) {
                     continue;
-                }
-                // Page tables do not contribute to the footer text's intrinsic height.
-                if frame.is_none()
-                    && !in_cell
-                    && matches!(story, StoryRef::Part(id) if ctx.doc.parts.get(&id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::Footer))
-                    && t.props.float.is_some_and(|f| f.v_rel == Anchor::Page)
-                {
-                    continue;
-                }
-                let tl = table::layout_table(ctx, story, t, &path, width, depth + 1);
-                let (tx, ty) = match t.props.float {
-                    // A floating table stands at its own position and takes no room; the text
-                    // after it wraps around it.
-                    Some(f) => {
-                        let legacy = if ctx.doc.settings.compat_mode < 15 { table::first_cell_left_margin(ctx, t) } else { 0.0 };
-                        let (r, area) = box_float_table_rect(frame, width, y, &tl, &f, legacy, &float_tables);
-                        excl.push((area, false, None, WrapText::BothSides, true));
-                        float_tables.push(area);
-                        table_areas.push(area);
-                        if f.v_rel == Anchor::Page {
-                            page_table_wraps.push((area, false, None, WrapText::BothSides, true));
-                        }
-                        (r.x, r.y)
-                    }
-                    // A table in the text flow starts below the floating objects in its way.
-                    None => (tl.x, below(&excl, y, tl.x, tl.x + tl.width)),
-                };
-                let mut row_y = ty;
-                for row in &tl.rows {
-                    for it in &row.items {
-                        let mut it = it.clone();
-                        it.translate(tx, row_y);
-                        items.push(it);
-                    }
-                    row_y += row.height;
-                }
-                if t.props.float.is_none() {
-                    y = row_y;
-                    prev_after = 0.0;
-                    prev_style = None;
                 }
             }
         }
@@ -470,16 +602,12 @@ impl Edges {
 
 /// Paragraph lines plus their shading and borders; returns the bottom of the lines. The
 /// shading fills the box out to the borders, the room they take included (Word).
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn push_para(
     items: &mut Vec<Placed>,
-    story: StoryRef,
-    path: &[u32],
+    (story, path): (StoryRef, &[u32]),
     pl: &Arc<ParaLayout>,
-    l0: usize,
-    l1: usize,
-    x: f32,
-    y: f32,
+    (l0, l1): (usize, usize),
+    (x, y): (f32, f32),
     width: f32,
     e: Edges,
 ) -> f32 {

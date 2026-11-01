@@ -423,6 +423,22 @@ mod label_spacing_tests {
 mod tests {
     use super::*;
 
+    /// The ASCII shortcuts give the bidi class's answer for every character.
+    #[test]
+    fn strong_and_mark_shortcuts_match_the_bidi_class() {
+        use unicode_bidi::BidiClass::{AL, BN, L, NSM, R};
+        for c in (0..=0x10ffff).filter_map(char::from_u32) {
+            let class = unicode_bidi::bidi_class(c);
+            let strong = match class {
+                R | AL => Some(true),
+                L => Some(false),
+                _ => None,
+            };
+            assert_eq!(bidi::strong_rtl(c), strong, "{:04x}", c as u32);
+            assert_eq!(chars::is_mark(c), matches!(class, NSM | BN) && !c.is_control(), "{:04x}", c as u32);
+        }
+    }
+
     #[test]
     fn symbols_ignore_roman_hint() {
         let mut d = Document::new();

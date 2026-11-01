@@ -273,8 +273,9 @@ fn set(s: &mut Session, v: &Value) -> CmdResult {
     } else if let (Some(pg), Some(x), Some(y)) = (p::u64(v, "page"), p::f32(v, "x"), p::f32(v, "y")) {
         let story = super::story_param(s, v);
         let l = s.layout();
-        s.page_hint = pg as usize;
-        l.hit(pg as usize, x, y, story).ok_or_else(|| CmdError::Params("no text on that page".into()))?
+        let page = usize::try_from(pg).unwrap_or(usize::MAX);
+        s.page_hint = page;
+        l.hit(page, x, y, story).ok_or_else(|| CmdError::Params("no text on that page".into()))?
     } else {
         return Err(CmdError::Params("`pos` or `page`/`x`/`y` required".into()));
     };

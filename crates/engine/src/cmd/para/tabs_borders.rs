@@ -1,5 +1,5 @@
 use super::format::fmt;
-use super::*;
+use super::{Border, BorderStyle, Borders, CmdError, CmdResult, ParaProps, Rgb, Session, TabAlign, TabLeader, TabStop, Value, p, sel_result};
 
 /// Most tab stops a paragraph keeps.
 const MAX_TABS: usize = 64;

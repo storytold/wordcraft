@@ -1,4 +1,14 @@
-use super::*;
+use super::{
+    Anchor, Arc, CharProps, El, Float, FloatAlign, InlineObject, MAX_STORY_DEPTH, MAX_VML_GROUP_DEPTH, Paragraph, PartKind, Reader, Rels, Rgb,
+    ShapeExtra, ShapeKind, StoryCtx, TextColor, TextWarp, Wrap, int, measure, para_block, vml_color, vml_fill, vml_fraction, vml_preset_kind,
+};
+
+#[derive(Clone, Copy)]
+struct VmlGroupSpace {
+    origin: (f32, f32),
+    scale: (f32, f32),
+    depth: usize,
+}
 
 impl Reader<'_> {
     /// Every legacy VML drawing in one `w:pict`, in document order: a `w:pict` may hold any
@@ -43,7 +53,7 @@ impl Reader<'_> {
         let (ch_w, ch_h) = vml_coordpair(grp, "coordsize").filter(|(cw, ch)| *cw > 0.0 && *ch > 0.0).unwrap_or((w.max(1.0), h.max(1.0)));
         let (cx, cy) = vml_coordpair(grp, "coordorigin").unwrap_or((0.0, 0.0));
         let mut children = Vec::new();
-        self.vml_group_members(sc, pict, grp, rels, (-cx, -cy, 1.0, 1.0), 0, &mut children);
+        self.vml_group_members(sc, pict, grp, rels, VmlGroupSpace { origin: (-cx, -cy), scale: (1.0, 1.0), depth: 0 }, &mut children);
         if children.is_empty() {
             return None;
         }
@@ -59,11 +69,11 @@ impl Reader<'_> {
         pict: &El,
         g: &El,
         rels: &Rels,
-        t: (f32, f32, f32, f32),
-        depth: usize,
+        space: VmlGroupSpace,
         out: &mut Vec<wordcraft_doc::para::GroupChild>,
     ) {
-        let (x0, y0, sx, sy) = t;
+        let (x0, y0) = space.origin;
+        let (sx, sy) = space.scale;
         let max = crate::units::MAX_LEN_PT;
         let fit = |v: f32, lo: f32| wordcraft_geom::finite(v).clamp(lo, max);
         for e in g.els() {
@@ -77,7 +87,7 @@ impl Reader<'_> {
             let num = |k: &str| vml_style(style, k).and_then(|v| measure(v, 1.0)).map_or(0.0, wordcraft_geom::finite);
             let ((ox, oy), (ew, eh)) = ((num("left"), num("top")), (num("width"), num("height")));
             if e.local() == "group" {
-                if depth >= MAX_VML_GROUP_DEPTH {
+                if space.depth >= MAX_VML_GROUP_DEPTH {
                     continue;
                 }
                 // Its members' space maps onto its own box.
@@ -85,7 +95,7 @@ impl Reader<'_> {
                 let (cox, coy) = vml_coordpair(e, "coordorigin").unwrap_or((0.0, 0.0));
                 let (kx, ky) = (ew / cw, eh / ch);
                 let nt = (x0 + (ox - cox * kx) * sx, y0 + (oy - coy * ky) * sy, sx * kx, sy * ky);
-                self.vml_group_members(sc, pict, e, rels, nt, depth + 1, out);
+                self.vml_group_members(sc, pict, e, rels, VmlGroupSpace { origin: (nt.0, nt.1), scale: (nt.2, nt.3), depth: space.depth + 1 }, out);
                 continue;
             }
             let Some(mut obj) = self.read_vml_shape(sc, pict, e, rels, Some((sx, sy))) else { continue };
