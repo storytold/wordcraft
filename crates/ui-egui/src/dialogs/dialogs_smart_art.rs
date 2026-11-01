@@ -382,6 +382,9 @@ fn color_button_id(i: usize) -> egui::Id {
 fn color_button(app: &mut WordApp, ui: &mut Ui, g: &SmartArtSpec, i: usize) {
     let t = Tokens::get(ui.ctx());
     let (rect, _) = ui.allocate_exact_size(vec2(SWATCH, SWATCH), Sense::hover());
+    // An item with no shape of its own (text inside another item's shape) has nothing to colour:
+    // no button, so no click target or accessible name for it.
+    let Some(accent_n) = g.style_accent(i) else { return };
     let resp = ui.interact(rect, color_button_id(i), Sense::click());
     let label = g
         .items
@@ -389,7 +392,6 @@ fn color_button(app: &mut WordApp, ui: &mut Ui, g: &SmartArtSpec, i: usize) {
         .filter(|it| !it.text.is_empty())
         .map_or_else(|| format!("{} ({})", tl!("Shape color"), i + 1), |it| format!("{}: {}", tl!("Shape color"), it.text));
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label.as_str()));
-    let Some(accent_n) = g.style_accent(i) else { return };
     let theme = app.session.doc.settings.theme_colors.clone();
     let own = g.items.get(i).and_then(|it| it.color);
     let fill = own.map_or_else(|| accent(&theme, accent_n), c32);
@@ -511,6 +513,24 @@ mod tests {
         h.run_steps(2);
         h.get_by_label("Shape color: Named");
         h.get_by_label("Shape color (2)");
+    }
+
+    #[test]
+    fn an_item_without_a_shape_of_its_own_has_no_colour_button() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        let mut spec = SmartArtSpec::sample(SmartArtLayout::Process);
+        spec.items[0].text = "Step".into();
+        spec.items[1].text = "Detail".into();
+        spec.items[1].level = 1;
+        assert_eq!(spec.style_accent(1), None);
+        let mut h = egui_kittest::Harness::builder().build_ui(move |ui| {
+            color_button(&mut app, ui, &spec, 0);
+            color_button(&mut app, ui, &spec, 1);
+        });
+        h.run_steps(2);
+        h.get_by_label("Shape color: Step");
+        assert!(h.query_by_label("Shape color: Detail").is_none(), "text inside another item's shape has no colour button");
     }
 
     #[test]
