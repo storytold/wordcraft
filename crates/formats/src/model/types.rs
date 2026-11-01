@@ -109,6 +109,11 @@ pub struct Fmt {
     /// Tracked formatting change of this text: who made it and the formatting before it (only
     /// [`from_doc_tracked`] and formats that keep revisions set it).
     pub fmt_change: Option<Box<FmtChange<Fmt>>>,
+    /// Formatting beyond the fields above, for formats that keep it (ODT): underline style and
+    /// colour, double strike, caps, small caps, hidden, spacing, scale, position, outline,
+    /// shadow, emboss, engrave and language, as character properties. Only flows asked for it
+    /// ([`FlowOpts::chars`]) hold it.
+    pub extra: Option<Box<wordcraft_doc::props::CharProps>>,
 }
 
 /// A tracked formatting change in a flow: who made it, and the formatting before it.
@@ -238,6 +243,9 @@ pub struct FlowOpts {
     pub notes: bool,
     /// Comments as [`Inline::Comment`] and [`Inline::CommentEnd`] (otherwise left out).
     pub comments: bool,
+    /// Character formatting beyond the [`Fmt`] fields ([`Fmt::extra`]), hidden text kept (as
+    /// hidden), and a monospaced font by its name rather than as code.
+    pub chars: bool,
     /// Lists with their identity and labels ([`ListInfo::list`], [`ListInfo::label`]; otherwise
     /// consecutive items form one list in the default look of its kind).
     pub lists: bool,

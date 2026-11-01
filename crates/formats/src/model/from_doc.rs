@@ -70,7 +70,32 @@ fn fmt_of(doc: &Document, cp: &CharProps, in_code: bool) -> Fmt {
         ins: None,
         del: None,
         fmt_change: None,
+        extra: None,
     }
+}
+
+/// The formatting in `e` (effective character properties) that only [`Fmt::extra`] holds;
+/// `None` when it sets none of it.
+fn extra_of(e: &CharProps) -> Option<Box<CharProps>> {
+    let set = |v: Option<bool>| v.filter(|b| *b);
+    let x = CharProps {
+        underline: e.underline.filter(|u| !matches!(u, Underline::None | Underline::Single)),
+        underline_color: e.underline_color,
+        double_strike: set(e.double_strike),
+        caps: set(e.caps),
+        small_caps: set(e.small_caps),
+        hidden: set(e.hidden),
+        spacing: e.spacing.filter(|v| *v != 0.0 && v.is_finite()),
+        scale: e.scale.filter(|v| *v != 100.0 && v.is_finite()),
+        position: e.position.filter(|v| *v != 0.0 && v.is_finite()),
+        outline: set(e.outline),
+        shadow: set(e.shadow),
+        emboss: set(e.emboss),
+        engrave: set(e.engrave),
+        lang: e.lang.clone().filter(|l| !l.is_empty()),
+        ..Default::default()
+    };
+    (x != CharProps::default()).then(|| Box::new(x))
 }
 
 /// Revision `i` as a flow mark (unknown author and date when there is none).
@@ -228,8 +253,17 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
         let Some(text) = p.text.get(range.clone()) else { continue };
         // Deleted objects and page breaks stay out even when tracking: the flow has no marks for them.
         let hidden = props.hidden.unwrap_or(false) || props.del.is_some();
-        let hidden_text = props.hidden.unwrap_or(false) || (props.del.is_some() && !tracked);
+        // Formats that keep hidden text get it, marked hidden.
+        let hidden_text = (props.hidden.unwrap_or(false) && !opts.chars) || (props.del.is_some() && !tracked);
         let mut f = fmt_of(doc, props, in_code);
+        if opts.chars {
+            let e = effective(doc, props);
+            f.extra = extra_of(&e);
+            if f.code {
+                f.code = false;
+                f.font = e.shown_font().map(Arc::from);
+            }
+        }
         if tracked {
             (f.ins, f.del) = rev_marks(doc, props);
             f.fmt_change = props.fmt_change.as_deref().map(|c| Box::new(FmtChange { mark: rev_mark(doc, c.rev), old: fmt_of(doc, &c.old, in_code) }));

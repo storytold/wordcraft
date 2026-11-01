@@ -115,6 +115,55 @@ pub(super) struct Writer {
     part: usize,
 }
 
+/// `style:text-properties` attributes for what only [`Fmt::extra`] holds (underline and strike
+/// are written with the rest); `size` is the text's size, which a raised position is a share of.
+fn extra_props(x: &wordcraft_doc::props::CharProps, size: Option<f32>) -> String {
+    let mut p = String::new();
+    let on = |v: Option<bool>| v == Some(true);
+    if on(x.caps) {
+        p.push_str(" fo:text-transform=\"uppercase\"");
+    }
+    if on(x.small_caps) {
+        p.push_str(" fo:font-variant=\"small-caps\"");
+    }
+    if on(x.hidden) {
+        p.push_str(" text:display=\"none\"");
+    }
+    if let Some(s) = x.spacing.filter(|s| s.is_finite() && *s != 0.0) {
+        p.push_str(&format!(" fo:letter-spacing=\"{}\"", pt(s)));
+    }
+    if let Some(s) = x.scale.filter(|s| s.is_finite() && *s > 0.0 && *s != 100.0) {
+        p.push_str(&format!(" style:text-scale=\"{}%\"", s.round()));
+    }
+    if let Some(r) = x.position.filter(|r| r.is_finite() && *r != 0.0) {
+        let size = size.filter(|s| s.is_finite() && *s >= 1.0).unwrap_or(12.0);
+        let pct = r / size * 100.0;
+        p.push_str(&format!(" style:text-position=\"{}% 100%\"", (pct * 100.0).round() / 100.0));
+    }
+    if on(x.outline) {
+        p.push_str(" style:text-outline=\"true\"");
+    }
+    if on(x.shadow) {
+        p.push_str(" fo:text-shadow=\"1pt 1pt\"");
+    }
+    if on(x.emboss) {
+        p.push_str(" style:font-relief=\"embossed\"");
+    } else if on(x.engrave) {
+        p.push_str(" style:font-relief=\"engraved\"");
+    }
+    if let Some(l) = x.lang.as_deref() {
+        let mut parts = l.split(['-', '_']);
+        let ok = |s: &&str| (1..=8).contains(&s.len()) && s.chars().all(|c| c.is_ascii_alphanumeric());
+        if let Some(lang) = parts.next().filter(ok) {
+            p.push_str(&format!(" fo:language=\"{lang}\""));
+            if let Some(country) = parts.next().filter(ok) {
+                p.push_str(&format!(" fo:country=\"{country}\""));
+            }
+        }
+    }
+    p
+}
+
 fn text_props(f: &Fmt) -> String {
     let mut p = String::new();
     if f.bold {
@@ -123,11 +172,35 @@ fn text_props(f: &Fmt) -> String {
     if f.italic {
         p.push_str(" fo:font-style=\"italic\" style:font-style-asian=\"italic\" style:font-style-complex=\"italic\"");
     }
+    let extra = f.extra.as_deref();
     if f.underline {
-        p.push_str(" style:text-underline-style=\"solid\" style:text-underline-width=\"auto\" style:text-underline-color=\"font-color\"");
+        use wordcraft_doc::props::Underline as U;
+        let (style, kind, width, mode) = match extra.and_then(|e| e.underline) {
+            Some(U::Double) => ("solid", "double", "auto", ""),
+            Some(U::Thick) => ("solid", "single", "bold", ""),
+            Some(U::Dotted) => ("dotted", "single", "auto", ""),
+            Some(U::Dash) => ("dash", "single", "auto", ""),
+            Some(U::DotDash) => ("dot-dash", "single", "auto", ""),
+            Some(U::DotDotDash) => ("dot-dot-dash", "single", "auto", ""),
+            Some(U::Wave) => ("wave", "single", "auto", ""),
+            Some(U::DoubleWave) => ("wave", "double", "auto", ""),
+            Some(U::Words) => ("solid", "single", "auto", " style:text-underline-mode=\"skip-white-space\""),
+            _ => ("solid", "single", "auto", ""),
+        };
+        let color =
+            extra.and_then(|e| e.underline_color).map(|c| format!("#{}", c.hex().to_ascii_lowercase())).unwrap_or_else(|| "font-color".into());
+        p.push_str(&format!(
+            " style:text-underline-style=\"{style}\" style:text-underline-type=\"{kind}\" style:text-underline-width=\"{width}\" style:text-underline-color=\"{color}\"{mode}"
+        ));
     }
-    if f.strike {
+    if f.strike || extra.is_some_and(|e| e.double_strike == Some(true)) {
         p.push_str(" style:text-line-through-style=\"solid\"");
+        if extra.is_some_and(|e| e.double_strike == Some(true)) {
+            p.push_str(" style:text-line-through-type=\"double\"");
+        }
+    }
+    if let Some(e) = extra {
+        p.push_str(&extra_props(e, f.size));
     }
     if f.sup {
         p.push_str(" style:text-position=\"super 58%\"");

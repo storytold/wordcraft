@@ -1,7 +1,7 @@
 use super::xml::{Attrs, Ev, events, get, length, local};
 use super::{Align, Arc, Columns, Fmt, HashMap, Kind, Rgb, VAlign, model};
 use crate::model::Spacing;
-use wordcraft_doc::props::LineSpacing;
+use wordcraft_doc::props::{LineSpacing, Underline};
 use wordcraft_doc::section::NumFormat;
 
 // ---------------------------------------------------------------------------------------------
@@ -20,9 +20,18 @@ struct FmtDelta {
     size: Option<f32>,
     font: Option<Arc<str>>,
     code: Option<bool>,
+    /// What [`Fmt::extra`] holds, as set here (unset fields leave the inherited ones).
+    extra: wordcraft_doc::props::CharProps,
+    /// `style:text-position` raising or lowering text at full size: percent of its height.
+    raise: Option<f32>,
 }
 
 impl FmtDelta {
+    /// Whether the properties read so far underline the text.
+    fn fmt_underline_on(&self) -> bool {
+        self.underline == Some(true)
+    }
+
     fn apply(&self, f: &mut Fmt) {
         macro_rules! set {
             ($($k:ident),*) => { $( if let Some(v) = self.$k.clone() { f.$k = v; } )* };
@@ -40,6 +49,98 @@ impl FmtDelta {
         if let Some(fam) = &self.font {
             f.font = Some(fam.clone());
         }
+        if self.extra != wordcraft_doc::props::CharProps::default() || self.raise.is_some() {
+            let mut x = f.extra.take().map(|b| *b).unwrap_or_default();
+            x.overlay(&self.extra);
+            if let Some(r) = self.raise {
+                let size = f.size.unwrap_or(12.0);
+                x.position = Some((r / 100.0 * size).clamp(-1584.0, 1584.0)).filter(|p| *p != 0.0);
+            }
+            // An explicit "off" only cancels what a parent style set.
+            for b in
+                [&mut x.double_strike, &mut x.caps, &mut x.small_caps, &mut x.hidden, &mut x.outline, &mut x.shadow, &mut x.emboss, &mut x.engrave]
+            {
+                if *b == Some(false) {
+                    *b = None;
+                }
+            }
+            x.spacing = x.spacing.filter(|s| *s != 0.0);
+            x.scale = x.scale.filter(|s| *s != 100.0);
+            f.extra = (x != wordcraft_doc::props::CharProps::default()).then(|| Box::new(x));
+        }
+    }
+}
+
+/// The underline `style:text-underline-style`, `-type`, `-width` and `-mode` describe (ODF 1.3
+/// §20.390–20.393), when underlined.
+fn underline_kind(a: &Attrs) -> Underline {
+    let style = get(a, "style:text-underline-style").map(str::trim).unwrap_or("solid");
+    let double = get(a, "style:text-underline-type").is_some_and(|t| t.trim() == "double");
+    let bold = get(a, "style:text-underline-width").is_some_and(|w| matches!(w.trim(), "bold" | "thick" | "medium"));
+    let words = get(a, "style:text-underline-mode").is_some_and(|m| m.trim() == "skip-white-space");
+    match style {
+        "dotted" => Underline::Dotted,
+        "dash" | "long-dash" => Underline::Dash,
+        "dot-dash" => Underline::DotDash,
+        "dot-dot-dash" => Underline::DotDotDash,
+        "wave" if double => Underline::DoubleWave,
+        "wave" => Underline::Wave,
+        _ if double => Underline::Double,
+        _ if bold => Underline::Thick,
+        _ if words => Underline::Words,
+        _ => Underline::Single,
+    }
+}
+
+/// The rest of a `style:text-properties` element: what only [`Fmt::extra`] holds.
+fn extra_text_properties(a: &Attrs, d: &mut FmtDelta) {
+    let underlined = d.fmt_underline_on();
+    let x = &mut d.extra;
+    if underlined {
+        x.underline = Some(underline_kind(a));
+        if let Some(c) = get(a, "style:text-underline-color").filter(|c| c.trim() != "font-color").and_then(model::parse_color) {
+            x.underline_color = Some(c);
+        }
+    }
+    if let Some(t) = get(a, "style:text-line-through-type") {
+        x.double_strike = Some(t.trim() == "double");
+    }
+    if let Some(t) = get(a, "fo:text-transform") {
+        x.caps = Some(t.trim() == "uppercase");
+    }
+    if let Some(v) = get(a, "fo:font-variant") {
+        x.small_caps = Some(v.trim() == "small-caps");
+    }
+    if let Some(v) = get(a, "text:display") {
+        x.hidden = Some(v.trim() == "none");
+    }
+    if let Some(v) = get(a, "fo:letter-spacing") {
+        x.spacing = Some(if v.trim() == "normal" { 0.0 } else { length(v).unwrap_or(0.0).clamp(-1584.0, 1584.0) });
+    }
+    if let Some(v) = get(a, "style:text-scale")
+        .and_then(|v| v.trim().strip_suffix('%'))
+        .and_then(|v| v.trim().parse::<f32>().ok())
+        .filter(|v| v.is_finite() && *v > 0.0)
+    {
+        x.scale = Some(v.clamp(1.0, 600.0));
+    }
+    if let Some(v) = get(a, "style:text-outline") {
+        x.outline = Some(v.trim() == "true");
+    }
+    if let Some(v) = get(a, "fo:text-shadow") {
+        x.shadow = Some(v.trim() != "none");
+    }
+    if let Some(v) = get(a, "style:font-relief") {
+        (x.emboss, x.engrave) = (Some(v.trim() == "embossed"), Some(v.trim() == "engraved"));
+    }
+    fn tag(v: Option<&str>) -> Option<&str> {
+        v.map(str::trim).filter(|v| (1..=8).contains(&v.len()) && v.chars().all(|c| c.is_ascii_alphanumeric()))
+    }
+    if let Some(l) = tag(get(a, "fo:language")).filter(|l| *l != "none" && *l != "zxx") {
+        x.lang = Some(match tag(get(a, "fo:country")).filter(|c| *c != "none") {
+            Some(c) => format!("{l}-{c}"),
+            None => l.to_string(),
+        });
     }
 }
 
@@ -184,10 +285,22 @@ fn text_properties(a: &Attrs, style: &mut StyleInfo) {
         fmt.strike = Some(is_not_none(value));
     }
     if let Some(value) = get(a, "style:text-position") {
-        let first = value.split_whitespace().next().unwrap_or("");
-        let pct = first.trim_end_matches('%').parse::<f32>().unwrap_or(0.0);
-        fmt.sup = Some(first.eq_ignore_ascii_case("super") || pct > 0.0);
-        fmt.sub = Some(first.eq_ignore_ascii_case("sub") || pct < 0.0);
+        // `super`/`sub` or a percentage raising the text, then its size (§20.374): raised text
+        // at full size is a position, smaller text superscript or subscript.
+        let mut parts = value.split_whitespace();
+        let first = parts.next().unwrap_or("");
+        let pct = first.trim_end_matches('%').parse::<f32>().ok().filter(|p| p.is_finite()).unwrap_or(0.0);
+        let full = parts.next().and_then(|s| s.trim_end_matches('%').parse::<f32>().ok()).is_some_and(|s| s >= 100.0);
+        let keyword = first.eq_ignore_ascii_case("super") || first.eq_ignore_ascii_case("sub");
+        if full && !keyword {
+            fmt.sup = Some(false);
+            fmt.sub = Some(false);
+            fmt.raise = Some(pct.clamp(-10_000.0, 10_000.0));
+        } else {
+            fmt.sup = Some(first.eq_ignore_ascii_case("super") || pct > 0.0);
+            fmt.sub = Some(first.eq_ignore_ascii_case("sub") || pct < 0.0);
+            fmt.raise = Some(0.0);
+        }
     }
     if let Some(color) = get(a, "fo:color").and_then(model::parse_color) {
         fmt.color = Some(color);
@@ -200,12 +313,13 @@ fn text_properties(a: &Attrs, style: &mut StyleInfo) {
     }
     if let Some(family) = get(a, "fo:font-family").or_else(|| get(a, "style:font-name")) {
         let family = family.split(',').next().unwrap_or("").trim().trim_matches(['\'', '"']).to_string();
-        if model::is_mono(&family) || get(a, "style:font-pitch").is_some_and(|pitch| pitch.trim().eq_ignore_ascii_case("fixed")) {
-            fmt.code = Some(true);
-        } else if !family.is_empty() {
+        // A monospaced font keeps its name (it is not "code" here, which would be Courier New).
+        if !family.is_empty() {
             fmt.font = model::kept_font(&family);
+            fmt.code = Some(false);
         }
     }
+    extra_text_properties(a, &mut style.fmt);
 }
 
 /// A paragraph style's `style:paragraph-properties` (ODF 1.3 §17.6) into `s`.
@@ -283,6 +397,9 @@ pub(super) struct Styles {
     default_font: Option<String>,
     /// Spacing of `style:default-style` for paragraphs.
     default_spacing: Spacing,
+    /// Pair kerning of `style:default-style` for paragraphs (`style:letter-kerning`, §20.317;
+    /// off unless it says so).
+    pub(super) default_kern: bool,
 }
 
 impl Styles {
@@ -310,6 +427,7 @@ impl Styles {
                 "default-style" if q.starts_with("style:") => in_default = get(&a, "style:family") == Some("paragraph"),
                 "text-properties" if in_default && cur.is_none() => {
                     self.default_font = default_font(&a);
+                    self.default_kern = get(&a, "style:letter-kerning").is_some_and(|k| k.trim() == "true");
                 }
                 "paragraph-properties" if in_default && cur.is_none() => paragraph_spacing(&a, &mut self.default_spacing),
                 "text-properties" => {

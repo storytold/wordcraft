@@ -38,7 +38,7 @@ fn page_parts(doc: &Document, sec: &SectionProps, w: &mut Writer) -> PageParts {
             }
             let mut body = String::new();
             if let Some(part) = id.and_then(|i| doc.parts.get(&i)) {
-                let blocks = model::part_flow(doc, &part.blocks, model::FlowOpts { fields: true, lists: true, ..Default::default() });
+                let blocks = model::part_flow(doc, &part.blocks, model::FlowOpts { fields: true, lists: true, chars: true, ..Default::default() });
                 w.blocks(&blocks, &mut body, 0);
             }
             if body.is_empty() {
@@ -64,10 +64,11 @@ fn styles_xml(
     part_styles: &str,
     body_font: &str,
     defaults: &model::Spacing,
+    kern: bool,
 ) -> String {
     let mut s = format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-styles {NS}><office:styles>");
     s.push_str(&format!(
-        "<style:default-style style:family=\"paragraph\"><style:paragraph-properties{}/><style:text-properties fo:font-family=\"'{}'\" fo:font-size=\"12pt\"/></style:default-style>",
+        "<style:default-style style:family=\"paragraph\"><style:paragraph-properties{}/><style:text-properties fo:font-family=\"'{}'\" fo:font-size=\"12pt\" style:letter-kerning=\"{kern}\"/></style:default-style>",
         spacing_props(defaults),
         x(body_font)
     ));
@@ -187,7 +188,7 @@ fn flow_sections(blocks: &[FBlock], last: &SectionProps) -> Vec<(SectionProps, s
 
 /// Write an `.odt` package.
 pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
-    let flow = model::from_doc_with(doc, model::FlowOpts { tracked: true, fields: true, notes: true, comments: true, lists: true });
+    let flow = model::from_doc_with(doc, model::FlowOpts { tracked: true, fields: true, notes: true, comments: true, lists: true, chars: true });
     let mut w = Writer::default();
     let mut body = String::new();
     let sections = flow_sections(&flow.blocks, &doc.last_section);
@@ -254,7 +255,8 @@ pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
     };
     let mut hw = Writer::with_prefix("M");
     let parts: Vec<PageParts> = pages.iter().map(|(_, sec)| page_parts(doc, sec, &mut hw)).collect();
-    let styles = styles_xml(&pages, &parts, &hw.style_defs(), &body_font, &defaults);
+    let kern = doc.styles.default_chr.kern.is_some_and(|k| k > 0.0);
+    let styles = styles_xml(&pages, &parts, &hw.style_defs(), &body_font, &defaults, kern);
     w.pictures.append(&mut hw.pictures);
     let meta = meta_xml(&flow.meta);
     let mut manifest = String::from(

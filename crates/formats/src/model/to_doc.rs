@@ -30,6 +30,42 @@ pub fn char_props(f: &Fmt) -> CharProps {
         shading: f.background,
         ..Default::default()
     }
+    .with_extra(f)
+}
+
+/// [`Fmt::extra`] laid over the character properties of the other [`Fmt`] fields.
+trait WithExtra {
+    fn with_extra(self, f: &Fmt) -> CharProps;
+}
+
+impl WithExtra for CharProps {
+    fn with_extra(mut self, f: &Fmt) -> CharProps {
+        let Some(x) = f.extra.as_deref() else { return self };
+        if f.underline
+            && let Some(u) = x.underline
+        {
+            self.underline = Some(u);
+        }
+        if f.underline {
+            self.underline_color = x.underline_color;
+        }
+        if x.double_strike == Some(true) {
+            (self.strike, self.double_strike) = (None, Some(true));
+        }
+        let finite = |v: Option<f32>, lo: f32, hi: f32| v.filter(|v| v.is_finite()).map(|v| v.clamp(lo, hi));
+        self.caps = x.caps;
+        self.small_caps = x.small_caps;
+        self.hidden = x.hidden;
+        self.spacing = finite(x.spacing, -1584.0, 1584.0);
+        self.scale = finite(x.scale, 1.0, 600.0);
+        self.position = finite(x.position, -1584.0, 1584.0);
+        self.outline = x.outline;
+        self.shadow = x.shadow;
+        self.emboss = x.emboss;
+        self.engrave = x.engrave;
+        self.lang = x.lang.as_deref().map(clean_text).filter(|l| !l.is_empty() && l.len() <= 64);
+        self
+    }
 }
 
 fn code_style() -> Style {

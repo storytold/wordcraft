@@ -124,6 +124,8 @@ struct Parsed {
     font: Option<String>,
     /// The document's default paragraph spacing.
     spacing: model::Spacing,
+    /// Whether the document kerns pairs of letters by default.
+    kern: bool,
     parts: page_parts::Parts,
 }
 
@@ -168,17 +170,18 @@ fn parse_tracked(bytes: &[u8]) -> Result<Parsed, String> {
         blocks.push(FBlock::Para(Para::default()));
     }
     let track = body.track;
-    Ok(Parsed { flow: Flow { blocks, meta }, last, track, font: styles.doc_font(), spacing: styles.doc_spacing(), parts })
+    Ok(Parsed { flow: Flow { blocks, meta }, last, track, font: styles.doc_font(), spacing: styles.doc_spacing(), kern: styles.default_kern, parts })
 }
 
 /// Parse an `.odt` package into a document.
 pub fn import(bytes: &[u8]) -> Result<Document, String> {
     model::begin_import();
-    let Parsed { flow, last, track, font, spacing, parts } = parse_tracked(bytes)?;
+    let Parsed { flow, last, track, font, spacing, kern, parts } = parse_tracked(bytes)?;
     let mut doc = model::to_doc(&flow);
     if font.is_some() {
         doc.styles.default_chr.font = font;
     }
+    doc.styles.default_chr.kern = kern.then_some(1.0);
     let d = &mut doc.styles.default_para;
     (d.space_before, d.space_after, d.line_spacing) = (spacing.before, spacing.after, spacing.line);
     (d.indent_left, d.indent_right, d.indent_first) = (spacing.left, spacing.right, spacing.first);
