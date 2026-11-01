@@ -125,9 +125,11 @@ struct Entry {
     runs: Vec<(String, String)>,
     /// The list label as shown (`Chapter 2.`).
     label: Option<String>,
-    /// Each level's value up to the paragraph's, formatted; and whether the label's own
-    /// template shows that level.
-    levels: Vec<(String, bool)>,
+    /// Each level up to the paragraph's that has a number (not a bullet, nor a "none" level):
+    /// its index, its value formatted, and whether the label's own template shows it.
+    levels: Vec<(u8, String, bool)>,
+    /// The paragraph's own list level.
+    level: u8,
     /// How many paragraphs of its style there are up to this one.
     ordinal: u32,
 }
@@ -174,7 +176,7 @@ impl StyleIndex {
             *ord = ord.saturating_add(1);
             let ordinal = *ord;
             let num = p.props.numbering.or_else(|| doc.styles.resolve_para(&p.props).numbering).filter(|n| n.num != 0);
-            let (mut label, mut levels) = (None, Vec::new());
+            let (mut label, mut levels, mut level) = (None, Vec::new(), 0u8);
             if let Some(n) = num
                 && let Some((l, def)) = counters.next_label(&doc.numbering, n.num, n.level)
                 && def.format != NumFormat::Bullet
@@ -187,9 +189,10 @@ impl StyleIndex {
                     }
                     let v = if *v == 0 { lv.start } else { *v };
                     let fmt = if def.legal && lv.format != NumFormat::DecimalZero { NumFormat::Decimal } else { lv.format };
-                    levels.push((fmt.format(v), def.text.contains(&format!("%{}", k + 1))));
+                    levels.push((k as u8, fmt.format(v), def.text.contains(&format!("%{}", k + 1))));
                 }
                 label = Some(l);
+                level = n.level.min(8);
             }
             let mut runs: Vec<(String, String)> = Vec::new();
             let mut off = 0usize;
@@ -207,7 +210,7 @@ impl StyleIndex {
                 off = end;
             }
             by_path.insert(path.clone(), entries.len());
-            entries.push(Entry { path, style, text: clean(&p.plain_text()), runs, label, levels, ordinal });
+            entries.push(Entry { path, style, text: clean(&p.plain_text()), runs, label, levels, level, ordinal });
         }
         StyleIndex { entries, by_path, styles }
     }
@@ -287,18 +290,32 @@ impl StyleIndex {
         let mut out = match code.number {
             Number::Text if code.position => String::new(),
             Number::Text => text,
-            Number::Chapter => e.label.as_deref().map(chapter_number).filter(|s| !s.is_empty()).unwrap_or_else(|| e.ordinal.to_string()),
+            // The last number the label shows (`3` of `3 Response`, or of a "none" level's `%1`);
+            // a label of the paragraph's own number that shows none recognisably, its last word;
+            // else, as for an unnumbered heading or a "none" level's `Note`, the heading's count.
+            Number::Chapter => {
+                let own = e.levels.iter().any(|(k, ..)| *k == e.level);
+                e.label
+                    .as_deref()
+                    .and_then(|l| {
+                        let shown = l.split_whitespace().rev().find_map(|w| number_span(w, &e.levels));
+                        shown.map(|n| n.trim_matches(|c: char| !c.is_alphanumeric()).to_string()).or_else(|| own.then(|| chapter_number(l)))
+                    })
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| e.ordinal.to_string())
+            }
             Number::Plain | Number::Full => {
                 let own = match &e.label {
-                    Some(l) if code.suppress => suppress(l, &e.levels),
+                    Some(l) if code.suppress => suppress(l, &e.levels, e.level),
                     Some(l) => l.trim().trim_end_matches('.').to_string(),
                     None => e.ordinal.to_string(),
                 };
                 if code.number == Number::Full && e.label.is_some() {
-                    // Levels above that the label's own template doesn't show.
-                    let above: Vec<&str> =
-                        e.levels.iter().take(e.levels.len().saturating_sub(1)).filter(|(_, shown)| !shown).map(|(v, _)| v.as_str()).collect();
-                    if above.is_empty() { own } else { format!("{}.{own}", above.join(".")) }
+                    // Levels above the paragraph's that the label's own template doesn't show. By
+                    // level, not position: a "none" level has no entry, its own (#4985) included.
+                    let above: Vec<&str> = e.levels.iter().filter(|(k, _, shown)| *k < e.level && !shown).map(|(_, v, _)| v.as_str()).collect();
+                    // An empty label of its own (a "none" level with no text) adds no part: `3`, not `3.`.
+                    above.into_iter().chain(Some(own.as_str()).filter(|o| !o.is_empty())).collect::<Vec<_>>().join(".")
                 } else {
                     own
                 }
@@ -320,11 +337,44 @@ fn chapter_number(label: &str) -> String {
     word.trim_matches(|c: char| !c.is_alphanumeric()).to_string()
 }
 
-/// `\t`: the label without its words that hold no number (`Chapter 2.` → `2`).
-fn suppress(label: &str, levels: &[(String, bool)]) -> String {
-    let kept: Vec<&str> = label.split_whitespace().filter(|w| levels.iter().any(|(v, _)| !v.is_empty() && w.contains(v.as_str()))).collect();
-    let s = if kept.is_empty() { label.trim().to_string() } else { kept.join(" ") };
+/// `\t`: the label without its words that hold no number (`Chapter 2.` → `2`). A "none" level's
+/// label (`level` has no number of its own) holding none is left with nothing (`Note`, #4985);
+/// any other label that holds none is kept whole.
+fn suppress(label: &str, levels: &[(u8, String, bool)], level: u8) -> String {
+    // Each word's numbers, without the text attached to them (`Section3` → `3`).
+    let kept: Vec<&str> = label.split_whitespace().filter_map(|w| number_span(w, levels)).collect();
+    let none = !levels.iter().any(|(k, ..)| *k == level);
+    let s = match kept.is_empty() {
+        true if none => String::new(),
+        true => label.trim().to_string(),
+        false => kept.join(" "),
+    };
     s.trim_end_matches('.').to_string()
+}
+
+/// The part of `word` that holds the numbers the label's template shows (`levels` flagged shown),
+/// with the delimiters around it (`(3)`, `1.1`, `2.`), without the text attached (`Section3` →
+/// `3`); `None` when it holds none. A number written in letters (`a`, `iv`) counts only standing
+/// apart from other letters: the `a` of `Chapter` isn't one.
+fn number_span<'w>(word: &'w str, levels: &[(u8, String, bool)]) -> Option<&'w str> {
+    let alpha = |c: Option<char>| c.is_some_and(char::is_alphabetic);
+    let mut span: Option<(usize, usize)> = None;
+    for (_, v, _) in levels.iter().filter(|(_, v, shown)| *shown && !v.is_empty()) {
+        let letters = v.chars().any(char::is_alphabetic);
+        for (i, _) in word.match_indices(v.as_str()) {
+            let end = i.saturating_add(v.len());
+            let before = word.get(..i).and_then(|s| s.chars().next_back());
+            let after = word.get(end..).and_then(|s| s.chars().next());
+            if letters && (alpha(before) || alpha(after)) {
+                continue;
+            }
+            span = Some(span.map_or((i, end), |(a, b)| (a.min(i), b.max(end))));
+        }
+    }
+    let (a, b) = span?;
+    let lead: usize = word.get(..a)?.chars().rev().take_while(|c| !c.is_alphanumeric()).map(char::len_utf8).sum();
+    let trail: usize = word.get(b..)?.chars().take_while(|c| !c.is_alphanumeric()).map(char::len_utf8).sum();
+    word.get(a.saturating_sub(lead)..b.saturating_add(trail))
 }
 
 /// Does `p` hold a STYLEREF field?
@@ -359,7 +409,14 @@ mod tests {
 
     #[test]
     fn suppress_keeps_the_number() {
-        assert_eq!(suppress("Chapter 2.", &[("2".into(), true)]), "2");
+        assert_eq!(suppress("Chapter 2.", &[(0, "2".into(), true)], 0), "2");
+        assert_eq!(suppress("Chapter", &[(0, "a".into(), false)], 1), "", "an ancestor's number the label doesn't show");
+        assert_eq!(suppress("Section3", &[(0, "3".into(), true)], 1), "3", "the text attached to the number");
+        assert_eq!(suppress("Chapter a.", &[(0, "a".into(), true)], 0), "a", "a letter number standing apart, not Chapter's a");
+        assert_eq!(suppress("(iv)", &[(0, "iv".into(), true)], 0), "(iv)", "delimiters stay");
+        assert_eq!(suppress("1.2", &[(0, "1".into(), true), (1, "2".into(), true)], 1), "1.2");
+        assert_eq!(suppress("Note", &[(0, "3".into(), false)], 1), "", "a none level's label");
+        assert_eq!(suppress("Appendix", &[(0, "3".into(), false)], 0), "Appendix", "kept whole when the level has a number");
         assert_eq!(chapter_number("Chapter IV."), "IV");
     }
 }

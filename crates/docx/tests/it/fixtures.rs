@@ -2289,6 +2289,31 @@ fn east_asian_number_formats_read_label_and_round_trip() {
     assert_eq!(formats(&back), want);
 }
 
+/// #4985: a level with numFmt none and literal text (`RESPONSE:`) labels its paragraph with that
+/// text, as in Word, and keeps both through a save.
+#[test]
+fn a_none_level_s_literal_text_is_its_label() {
+    use wordcraft_doc::numbering::Counters;
+    use wordcraft_doc::section::NumFormat;
+    let numbering = format!(
+        r#"<w:numbering {W_NS}><w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="none"/><w:lvlText w:val="RESPONSE:"/><w:pPr><w:ind w:left="1440" w:hanging="1440"/></w:pPr></w:lvl></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num></w:numbering>"#
+    );
+    let body = r#"<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>X</w:t></w:r></w:p>"#;
+    let bytes = docx(body, &[("rId1", "numbering", "numbering.xml")], &[("word/numbering.xml", &numbering)]);
+    let label = |d: &Document| {
+        let n = paras(d).first().and_then(|p| p.props.numbering)?;
+        Counters::default().next_label(&d.numbering, n.num, n.level).map(|l| l.0)
+    };
+    let d = wordcraft_docx::read(&bytes).unwrap();
+    assert_eq!(label(&d).as_deref(), Some("RESPONSE:"));
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    assert_eq!(
+        back.numbering.level(1, 0).map(|l| (l.format, l.text.as_str(), l.indent, l.hanging)),
+        Some((NumFormat::None, "RESPONSE:", 72.0, 72.0))
+    );
+    assert_eq!(label(&back).as_deref(), Some("RESPONSE:"));
+}
+
 /// #464: a bookmark whose end follows the document's final table keeps its end (it goes into
 /// the table's last cell) and is saved as a matched pair.
 #[test]

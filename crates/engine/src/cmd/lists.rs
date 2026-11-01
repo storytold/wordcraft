@@ -458,7 +458,8 @@ mod tests {
             ("headings", [Some("1"), Some("1.1"), Some("1.1.1")]),
             ("article", [Some("Article I."), Some("Section 1.01"), Some("(a)")]),
             ("outlineHeadings", [Some("I."), Some("A."), Some("1.")]),
-            ("chapter", [Some("Chapter 1"), None, None]),
+            // The lower levels are "none" levels with no text: an empty label, as in Word (#4985).
+            ("chapter", [Some("Chapter 1"), Some(""), Some("")]),
         ] {
             let mut s = headings("Heading3");
             s.run("list.multilevelPreset", &json!({"preset": preset})).unwrap();
