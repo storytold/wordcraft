@@ -855,6 +855,25 @@ fn a_tracked_border_line_at_the_top_supersedes_another_authors_formatting() {
     assert_eq!((p.props.align, p.props.borders.and_then(|b| b.bottom).is_some()), (Some(Align::Center), false));
 }
 
+/// The border line at the top records its formatting change before the split, so the new
+/// paragraph does not copy a revision that is missing the earlier formatting.
+#[test]
+fn a_tracked_border_line_in_a_centred_empty_paragraph_keeps_the_centring_on_reject() {
+    use wordcraft_doc::props::Align;
+    let mut s = typed("");
+    run(&mut s, "para.align", json!({"value": "center"}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    typ(&mut s, "---\n");
+    assert_eq!(texts(&s), ["", ""]);
+    // Only the characters' paragraph carries the formatting revision, not the one typing continues in.
+    let tracked = |s: &Session, i| s.doc.para_at(&Pos::body(i, 0)).is_some_and(|p| p.props.fmt_change.is_some());
+    assert!(tracked(&s, 0) && !tracked(&s, 1));
+    run(&mut s, "review.rejectAll", json!({}));
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert_eq!((p.props.align, p.props.borders.and_then(|b| b.bottom).is_some()), (Some(Align::Center), false));
+    assert!(s.doc.body.iter().filter_map(|b| b.as_para()).all(|p| p.props.fmt_change.is_none()), "{:?}", s.doc.revisions);
+}
+
 #[test]
 fn a_tracked_table_line_keeps_its_characters_as_a_deletion() {
     let mut s = typed("+--+------+");
