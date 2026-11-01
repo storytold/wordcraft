@@ -424,6 +424,12 @@ fn the_dropdown_offers_a_monospace_only_box() {
     h.run_steps(3);
     assert!(h.query_by_label("Arial").is_none(), "a proportional family is left out");
     assert!(h.query_by_label("Courier New").is_some(), "a monospaced one stays");
+    // Add Font… isn't a pick: the filter is still on when the list opens again.
+    h.get_by_label("Add Font…").click();
+    h.run_steps(3);
+    h.get_by_label("Font options").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Arial").is_none(), "Add Font… keeps the filter");
     h.get_by_label("Monospace fonts only").click();
     h.run_steps(3);
     assert!(h.query_by_label("Arial").is_some(), "unticked, every family is back");

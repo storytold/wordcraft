@@ -425,7 +425,9 @@ fn combo_impl(ui: &mut Ui, options: ComboOptions<'_>) -> Option<String> {
     });
     let keep = (focused || s.open) && out.is_none();
     ui.data_mut(|d| {
-        if out.is_some() && mono_only {
+        // A picked font ends the filter; Add Font… and Load System Installed Fonts… keep it, so
+        // a cancelled file picker comes back to the same list.
+        if mono_only && out.as_deref().is_some_and(|o| o != ADD_FONT && o != LOAD_SYSTEM_FONTS) {
             d.remove::<bool>(mono_id);
         }
         if keep {
