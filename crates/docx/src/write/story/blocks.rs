@@ -98,7 +98,9 @@ impl Writer<'_> {
         let chg = t.props.fmt_change.as_ref().map(|c| self.change_attrs(c.rev));
         tblpr(w, &t.props, chg.as_ref());
         w.open("w:tblGrid", &[]);
-        let cols = t.cols().clamp(1, 63);
+        // Counted once: counting walks every row.
+        let ncols = t.cols();
+        let cols = ncols.clamp(1, 63);
         for g in 0..cols {
             let gw = t.grid.get(g).copied().unwrap_or(72.0);
             w.empty("w:gridCol", &[("w:w", &twips(gw.max(0.0)))]);
@@ -126,7 +128,7 @@ impl Writer<'_> {
                 let chg = c.props.fmt_change.as_ref().map(|c| self.change_attrs(c.rev));
                 tcpr(w, &c.props, chg.as_ref());
                 let span = c.span();
-                let chr = style.as_ref().map(|st| cell_chr(st, t, (ri, g, span)));
+                let chr = style.as_ref().map(|st| cell_chr(st, t, (ri, g, span, ncols)));
                 let outer = std::mem::replace(&mut self.table_chr, chr);
                 self.blocks(w, &c.blocks, rels, false, depth + 1);
                 self.table_chr = outer;
@@ -156,11 +158,11 @@ impl Writer<'_> {
 }
 
 /// The run formatting table style `st` gives the cell of `t` at row `ri`, grid column `g`
-/// spanning `span` columns: each of the cell's style parts over the last, lowest precedence
-/// first (ECMA-376 §17.7.6), as layout gives the cell's text.
-fn cell_chr(st: &wordcraft_doc::styles::TableStyleProps, t: &Table, (ri, g, span): (usize, usize, usize)) -> CharProps {
+/// spanning `span` of the table's `ncols` columns: each of the cell's style parts over the last,
+/// lowest precedence first (ECMA-376 §17.7.6), as layout gives the cell's text.
+fn cell_chr(st: &wordcraft_doc::styles::TableStyleProps, t: &Table, (ri, g, span, ncols): (usize, usize, usize, usize)) -> CharProps {
     let bands = (st.parts.band_size.unwrap_or(0), st.parts.col_band_size.unwrap_or(0));
-    let parts = wordcraft_doc::styles::PartSet::of_cell(&t.props.look, bands, (ri, t.rows.len()), (g, span, t.cols()));
+    let parts = wordcraft_doc::styles::PartSet::of_cell(&t.props.look, bands, (ri, t.rows.len()), (g, span, ncols));
     let mut chr = CharProps::default();
     for part in parts.iter() {
         chr.overlay(&st.part(part).chr);
