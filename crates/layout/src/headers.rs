@@ -182,13 +182,13 @@ pub(crate) fn headers_footers_refer_to_pages(doc: &Document) -> bool {
     })
 }
 
-/// Whether the body shows a `PAGEREF` field, which output resolves from the paginated body
-/// ([`crate::LayoutOptions::output_page_refs`]).
+/// Whether the body shows an unlocked `PAGEREF` field, which output resolves from the paginated
+/// body ([`crate::LayoutOptions::output_page_refs`]); a locked one keeps its result, so it needs
+/// no extra pass.
 pub(crate) fn body_refers_to_pages(doc: &Document) -> bool {
-    doc.para_paths(StoryRef::Body)
-        .iter()
-        .filter_map(|path| doc.para(StoryRef::Body, path))
-        .any(|p| p.objects.iter().any(|o| matches!(o, InlineObject::Field { instr, .. } if fields::field_name(instr) == "PAGEREF")))
+    doc.para_paths(StoryRef::Body).iter().filter_map(|path| doc.para(StoryRef::Body, path)).any(|p| {
+        p.objects.iter().any(|o| matches!(o, InlineObject::Field { instr, locked, .. } if !*locked && fields::field_name(instr) == "PAGEREF"))
+    })
 }
 
 /// Where each bookmark in the body starts: the number and number format of the page it is placed

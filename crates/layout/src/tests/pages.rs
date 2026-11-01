@@ -372,6 +372,13 @@ fn page_references_in_the_body_show_their_bookmarks_page_in_output() {
             .collect()
     };
     let output = LayoutOptions { output_page_refs: true, ..Default::default() };
+    // Only an unlocked reference calls for the extra pass: a locked one keeps its result.
+    assert!(crate::headers::body_refers_to_pages(&d));
+    let mut all_locked = d.clone();
+    if let Some(InlineObject::Field { locked, .. }) = all_locked.para_mut(StoryRef::Body, &Path::top(0)).unwrap().objects.last_mut() {
+        *locked = true;
+    }
+    assert!(!crate::headers::body_refers_to_pages(&all_locked));
     let l = lay(&d);
     assert_eq!(l.pages.len(), 3);
     assert_eq!(refs(&l), ["9", "9"]);
