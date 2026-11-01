@@ -512,7 +512,9 @@ mod bar {
                         if events.is_empty() {
                             // Paste with no text on the clipboard (a picture): the ribbon's Paste,
                             // which reads pictures, HTML and RTF itself (#45, #584, #687).
-                            if let Err(err) = app.run("edit.paste", json!({})) {
+                            if app.canvas.focused
+                                && let Err(err) = app.run("edit.paste", json!({}))
+                            {
                                 app.status(err);
                             }
                         } else {
