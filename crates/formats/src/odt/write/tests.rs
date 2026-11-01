@@ -407,6 +407,62 @@ fn styles_whose_names_normalize_alike_go_to_the_flow_writer() {
     assert!(super::can_write(&d));
 }
 
+/// The parent of style `name` of `family` as written, if any.
+fn parent_of(o: &Odt, family: &str, name: &str) -> Option<String> {
+    o.map.get(&(family.to_string(), name.to_string())).and_then(|(p, _)| p.clone())
+}
+
+#[test]
+fn a_based_on_loop_is_not_written_as_a_loop() {
+    let mut d = doc_of(vec![plain("Looped").styled("LoopA")]);
+    for (id, on) in [("LoopA", "LoopB"), ("LoopB", "LoopA"), ("Self", "Self")] {
+        d.styles.upsert(Style { id: id.into(), name: id.into(), kind: StyleKind::Paragraph, based_on: Some(on.into()), ..Default::default() });
+    }
+    // The default paragraph style based on a heading that is based on it.
+    if let Some(n) = d.styles.get_mut("Normal") {
+        n.based_on = Some("Heading1".into());
+    }
+    let o = Odt::new(&d);
+    assert_eq!(o.para("Looped").style, "LoopA");
+    // Following style:parent-style-name from any style ends, without coming back.
+    for (family, name) in o.map.keys() {
+        let mut seen = vec![name.clone()];
+        let mut cur = parent_of(&o, family, name);
+        while let Some(p) = cur {
+            assert!(!seen.contains(&p), "{family} style {name} is its own ancestor: {seen:?} then {p}");
+            seen.push(p.clone());
+            cur = parent_of(&o, family, &p);
+        }
+    }
+    assert_eq!(parent_of(&o, "paragraph", "Self"), None);
+    // The loop is cut at one edge; the style outside the loop keeps its parent.
+    assert_eq!(parent_of(&o, "paragraph", "Heading1"), None, "Heading1's parent Normal is based on it");
+    assert_eq!(parent_of(&o, "paragraph", "Heading2").as_deref(), Some("Standard"));
+}
+
+#[test]
+fn style_names_are_ncnames_and_display_names_are_escaped() {
+    let display = r#"Quote "A" <b> & 'c'"#;
+    let mut d = doc_of(vec![plain("Odd").styled("Q\"<&>'x"), plain("Run")]);
+    d.styles.upsert(Style { id: "Q\"<&>'x".into(), name: display.into(), kind: StyleKind::Paragraph, ..Default::default() });
+    d.styles.upsert(Style { id: "C&\"".into(), name: display.into(), kind: StyleKind::Character, ..Default::default() });
+    let mut run = plain("");
+    run.insert_text(0, "Run", &CharProps { style: Some("C&\"".into()), ..Default::default() }).unwrap();
+    d.body[1] = para_block(run);
+    let o = Odt::new(&d);
+    let p = o.para("Odd").style;
+    assert_eq!(p, "Q_____x");
+    // Letters of any script are kept; characters that are alphanumeric but not name characters
+    // (superscript two, circled one) are not, nor a digit first.
+    assert_eq!(super::styles::name("Überschrift²①"), "Überschrift__");
+    assert_eq!(super::styles::name("2col"), "_2col");
+    for (family, name) in [("paragraph", p.as_str()), ("text", "C__")] {
+        let own = &o.map[&(family.to_string(), name.to_string())].1;
+        assert_eq!(own.get("style:display-name").map(String::as_str), Some(display), "{family} {name}");
+    }
+    assert!(o.styles.contains("style:display-name=\"Quote &quot;A&quot; &lt;b&gt; &amp; &apos;c&apos;\""), "{}", o.styles);
+}
+
 /// A style chain: "Base" sets spacing and a font, "Derived" (based on it) only the space after,
 /// a character style "Loud", tab stops with a clear.
 fn styled_doc() -> Document {

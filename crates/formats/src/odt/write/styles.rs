@@ -20,16 +20,30 @@ use crate::odt::x;
 /// The name of the default paragraph style in ODF.
 pub(super) const STANDARD: &str = "Standard";
 
-/// An ODF style name (an NCName) for model style id `id`. Names that could clash with the
-/// automatic styles' (`P1`, `MT3`) or the built-in ones get a leading underscore.
+/// Whether `c` may start an XML name (XML 1.0 `NameStartChar`, without `:`).
+fn name_start(c: char) -> bool {
+    c.is_ascii_alphabetic()
+        || c == '_'
+        || matches!(c as u32, 0xC0..=0xD6 | 0xD8..=0xF6 | 0xF8..=0x2FF | 0x370..=0x37D | 0x37F..=0x1FFF | 0x200C..=0x200D | 0x2070..=0x218F
+            | 0x2C00..=0x2FEF | 0x3001..=0xD7FF | 0xF900..=0xFDCF | 0xFDF0..=0xFFFD | 0x10000..=0xEFFFF)
+}
+
+/// Whether `c` may be in an XML name (XML 1.0 `NameChar`, without `:`).
+fn name_char(c: char) -> bool {
+    name_start(c) || c.is_ascii_digit() || matches!(c, '-' | '.' | '\u{B7}') || matches!(c as u32, 0x300..=0x36F | 0x203F..=0x2040)
+}
+
+/// An ODF style name (an NCName) for model style id `id`: every other character becomes `_`, so
+/// the name needs no escaping. Names that could clash with the automatic styles' (`P1`, `MT3`)
+/// or the built-in ones, or that can't start a name, get a leading underscore.
 pub(super) fn name(id: &str) -> String {
-    let mut s: String = id.chars().map(|c| if c.is_alphanumeric() || matches!(c, '_' | '-' | '.') { c } else { '_' }).collect();
+    let mut s: String = id.chars().map(|c| if name_char(c) { c } else { '_' }).collect();
     let auto_like = {
         let t = s.strip_prefix('M').unwrap_or(&s);
         let letters = t.trim_end_matches(|c: char| c.is_ascii_digit());
         letters.len() < t.len() && ["P", "T", "Tb", "Co", "Ce", "Se", "X", "L"].contains(&letters)
     };
-    if auto_like || s == STANDARD || !s.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_') {
+    if auto_like || s == STANDARD || !s.chars().next().is_some_and(name_start) {
         s.insert(0, '_');
     }
     s
@@ -423,7 +437,13 @@ fn named(ctx: &mut Ctx, st: &Style) -> String {
     let sname = if standard { STANDARD.to_string() } else { name(&st.id) };
     let mut head =
         format!(" style:name=\"{sname}\" style:display-name=\"{}\" style:family=\"{}\"", x(&st.name), if para { "paragraph" } else { "text" });
-    let parent = st.based_on.as_deref().filter(|b| *b != st.id).and_then(|b| doc.styles.get(b)).filter(|b| b.kind == st.kind);
+    // A `based_on` loop in the model is cut where it closes: a parent whose own chain leads back
+    // to this style is not written, so no ODF style is its own ancestor.
+    let parent = st
+        .based_on
+        .as_deref()
+        .and_then(|b| doc.styles.get(b))
+        .filter(|b| b.kind == st.kind && !doc.styles.chain(&b.id).iter().any(|c| c.id == st.id));
     if let Some(b) = parent.filter(|_| !standard) {
         let pn = if para { para_style_name(doc, Some(&b.id)) } else { name(&b.id) };
         head.push_str(&format!(" style:parent-style-name=\"{pn}\""));
