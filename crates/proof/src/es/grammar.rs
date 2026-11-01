@@ -18,9 +18,12 @@ fn issue(start: usize, end: usize, message: String, suggestions: Vec<String>, la
 /// every one).
 pub fn check(text: &str, lang: ProofLang) -> Vec<Issue> {
     let mut issues = Vec::new();
-    repeated_words(text, &words(text), lang, &mut issues);
+    let ws = words(text);
+    repeated_words(text, &ws, lang, &mut issues);
     spaces(text, lang, &mut issues);
     opening_marks(text, lang, &mut issues);
+    check_haber_participles(text, &ws, lang, &mut issues);
+    check_interrogative_accents(text, lang, &mut issues);
     issues.sort_by_key(|i| (i.start, i.end));
     issues
 }
@@ -174,6 +177,161 @@ fn opening_marks(text: &str, lang: ProofLang, v: &mut Vec<Issue>) {
             continue;
         }
         v.push(issue(start, i + 1, message.into(), vec![format!("{opener}{sentence}")], lang));
+    }
+}
+
+/// Known participles commonly confused with preposition 'a' (e.g. "a hecho" -> "ha hecho").
+const PARTICIPLES_WITH_A: &[(&str, &str)] = &[
+    ("bajado", "ha bajado"),
+    ("bebido", "ha bebido"),
+    ("comentado", "ha comentado"),
+    ("comido", "ha comido"),
+    ("corrido", "ha corrido"),
+    ("guardado", "ha guardado"),
+    ("hecho", "ha hecho"),
+    ("imprimido", "ha impreso"),
+    ("llamado", "ha llamado"),
+    ("pensado", "ha pensado"),
+    ("seleccionado", "ha seleccionado"),
+    ("sombreado", "ha sombreado"),
+    ("subido", "ha subido"),
+    ("surgido", "ha surgido"),
+    ("venido", "ha venido"),
+    ("visto", "ha visto"),
+    ("vuelto", "ha vuelto"),
+];
+
+fn check_haber_participles(text: &str, ws: &[(usize, usize)], lang: ProofLang, v: &mut Vec<Issue>) {
+    let folded = |w: &str| w.nfc().collect::<String>().to_lowercase();
+    for pair in ws.windows(2) {
+        let [(a0, b0), (a1, b1)] = pair else { continue };
+        let (Some(w0), Some(w1), Some(gap)) = (text.get(*a0..*b0), text.get(*a1..*b1), text.get(*b0..*a1)) else { continue };
+        if !gap.is_empty() && gap.chars().all(char::is_whitespace) && folded(w0) == "a" {
+            let w1_lower = folded(w1);
+            if let Some(&(_, fix)) = PARTICIPLES_WITH_A.iter().find(|(p, _)| *p == w1_lower) {
+                let Some(actual) = text.get(*a0..*b1) else { continue };
+                let suggestion = if w0.starts_with('A') {
+                    let mut s = fix.to_string();
+                    if let Some(c) = s.get_mut(0..1) {
+                        c.make_ascii_uppercase();
+                    }
+                    s
+                } else {
+                    fix.to_string()
+                };
+                v.push(issue(
+                    *a0,
+                    *b1,
+                    format!("Probable confusión: «{actual}» debería ser «{suggestion}» (forma del verbo haber)"),
+                    vec![suggestion],
+                    lang,
+                ));
+            }
+        }
+    }
+}
+
+/// Interrogative / exclamative pronouns that must carry a diacritic accent inside questions or exclamations.
+const INTERROGATIVES: &[(&str, &str)] = &[
+    ("como", "cómo"),
+    ("cuando", "cuándo"),
+    ("donde", "dónde"),
+    ("adonde", "adónde"),
+    ("que", "qué"),
+    ("quien", "quién"),
+    ("quienes", "quiénes"),
+    ("cual", "cuál"),
+    ("cuales", "cuáles"),
+    ("cuanto", "cuánto"),
+    ("cuanta", "cuánta"),
+    ("cuantos", "cuántos"),
+    ("cuantas", "cuántas"),
+];
+
+/// Prepositions that can precede an interrogative/exclamative pronoun at the start of a clause.
+const INTERROGATIVE_PREPOSITIONS: &[&str] = &["a", "de", "en", "por", "para", "con", "hacia", "hasta", "desde", "sobre"];
+
+/// Subject pronouns that can introduce a subject before an interrogative in a question (e.g. "¿Tú qué harás?", "¿Y tú qué harás?").
+const SUBJECT_PRONOUNS: &[&str] =
+    &["yo", "tú", "tu", "él", "el", "ella", "ello", "usted", "nosotros", "nosotras", "vosotros", "vosotras", "ellos", "ellas", "ustedes"];
+
+/// Introductory coordinating conjunctions before an interrogative or subject (e.g. "¿Y tú qué harás?", "¿Y por qué no?").
+const INTRODUCTORY_CONJUNCTIONS: &[&str] = &["y", "e", "o", "u", "pero"];
+
+fn check_interrogative_accents(text: &str, lang: ProofLang, v: &mut Vec<Issue>) {
+    // Single linear pass over text to find matched question/exclamation spans without overlapping rescans
+    let mut current_opener_start: Option<usize> = None;
+
+    for (i, c) in text.char_indices() {
+        match c {
+            '¿' | '¡' => {
+                current_opener_start = Some(i + c.len_utf8());
+            }
+            '?' | '!' => {
+                if let Some(start) = current_opener_start.take()
+                    && start < i
+                    && let Some(question_body) = text.get(start..i)
+                {
+                    check_clause_interrogatives(question_body, start, lang, v);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn check_clause_interrogatives(question_body: &str, base_offset: usize, lang: ProofLang, v: &mut Vec<Issue>) {
+    let body_words = words(question_body);
+    for (idx, &(w_start, w_end)) in body_words.iter().enumerate() {
+        let Some(word_str) = question_body.get(w_start..w_end) else { continue };
+        let folded_word = word_str.nfc().collect::<String>().to_lowercase();
+        let Some(&(_, accented)) = INTERROGATIVES.iter().find(|(u, _)| *u == folded_word) else { continue };
+
+        // Restrict suggestions to actual interrogative/exclamative positions:
+        // - At the start of the clause (e.g. "¿Qué haces?")
+        // - After a comma inside the question (vocative/topic, e.g. "¿Juan, qué haces?", "¿Y tú, qué harás?")
+        // - Right after an introductory preposition or subject pronoun (e.g. "¿A dónde?", "¿Por qué?", "¿Tú qué harás?")
+        // - After an introductory conjunction + subject/preposition (e.g. "¿Y tú qué harás?", "¿Y por qué no?")
+        // Relative and conjunctive uses inside the clause (e.g. "¿Crees que vendrá?",
+        // "¿Qué pasa cuando llueve?") correctly take no accent per RAE rules.
+        let is_interrogative_position = if idx == 0 {
+            true
+        } else if let Some(&(_, prev_end)) = body_words.get(idx.saturating_sub(1))
+            && idx > 0
+            && let Some(gap) = question_body.get(prev_end..w_start)
+            && gap.contains(',')
+        {
+            true
+        } else if idx == 1 {
+            let Some((p_start, p_end)) = body_words.first().copied() else { continue };
+            let Some(prev_word) = question_body.get(p_start..p_end) else { continue };
+            let prev_folded = prev_word.nfc().collect::<String>().to_lowercase();
+            INTERROGATIVE_PREPOSITIONS.contains(&prev_folded.as_str()) || SUBJECT_PRONOUNS.contains(&prev_folded.as_str())
+        } else if idx == 2 {
+            let (Some(&(w0_s, w0_e)), Some(&(w1_s, w1_e))) = (body_words.first(), body_words.get(1)) else { continue };
+            let (Some(w0), Some(w1)) = (question_body.get(w0_s..w0_e), question_body.get(w1_s..w1_e)) else { continue };
+            let w0_folded = w0.nfc().collect::<String>().to_lowercase();
+            let w1_folded = w1.nfc().collect::<String>().to_lowercase();
+            INTRODUCTORY_CONJUNCTIONS.contains(&w0_folded.as_str())
+                && (SUBJECT_PRONOUNS.contains(&w1_folded.as_str()) || INTERROGATIVE_PREPOSITIONS.contains(&w1_folded.as_str()))
+        } else {
+            false
+        };
+
+        if is_interrogative_position {
+            let abs_start = base_offset + w_start;
+            let abs_end = base_offset + w_end;
+            let sug = if word_str.chars().next().is_some_and(char::is_uppercase) {
+                let mut s = accented.to_string();
+                if let Some(c) = s.get_mut(0..1) {
+                    c.make_ascii_uppercase();
+                }
+                s
+            } else {
+                accented.to_string()
+            };
+            v.push(issue(abs_start, abs_end, format!("El pronombre interrogativo o exclamativo debe llevar tilde: «{sug}»"), vec![sug], lang));
+        }
     }
 }
 
@@ -377,6 +535,68 @@ mod tests {
         assert_eq!(spaced, ["¿ ", "¡ "], "{issues:?}");
         assert!(issues.iter().all(|i| !i.message.starts_with("Falta")), "{issues:?}");
         assert!(check("¿ ", ProofLang::Es).is_empty());
+    }
+
+    #[test]
+    fn haber_participles_flag_confusion_with_preposition_a() {
+        let text = "El usuario a hecho una copia y a venido hoy.";
+        let issues = check(text, ProofLang::EsMx);
+        let haber: Vec<&Issue> = issues.iter().filter(|i| i.message.contains("forma del verbo haber")).collect();
+        assert_eq!(haber.len(), 2, "{issues:?}");
+        assert_eq!(&text[haber[0].start..haber[0].end], "a hecho");
+        assert_eq!(haber[0].suggestions, ["ha hecho"]);
+        assert_eq!(&text[haber[1].start..haber[1].end], "a venido");
+        assert_eq!(haber[1].suggestions, ["ha venido"]);
+
+        // Capitalized
+        let text_cap = "A llamado hoy.";
+        let issues_cap = check(text_cap, ProofLang::Es);
+        let haber_cap: Vec<&Issue> = issues_cap.iter().filter(|i| i.message.contains("forma del verbo haber")).collect();
+        assert_eq!(haber_cap.len(), 1);
+        assert_eq!(haber_cap[0].suggestions, ["Ha llamado"]);
+
+        // Correct usage of 'a' and adjectival 'dicho' must NOT trigger
+        for ok_text in ["Voy a comer a la casa.", "Escribí a dicho cliente.", "Conforme a dicho acuerdo."] {
+            assert!(check(ok_text, ProofLang::Es).is_empty(), "{ok_text}: {:?}", check(ok_text, ProofLang::Es));
+        }
+    }
+
+    #[test]
+    fn interrogative_pronouns_require_accents_inside_questions() {
+        let text = "¿Como estas? ¡Que sorpresa! ¿A donde vas? ¿Por que no viniste?";
+        let issues = check(text, ProofLang::Es);
+        let tildes: Vec<&Issue> = issues.iter().filter(|i| i.message.contains("debe llevar tilde")).collect();
+        assert_eq!(tildes.len(), 4, "{issues:?}");
+        assert_eq!(&text[tildes[0].start..tildes[0].end], "Como");
+        assert_eq!(tildes[0].suggestions, ["Cómo"]);
+        assert_eq!(&text[tildes[1].start..tildes[1].end], "Que");
+        assert_eq!(tildes[1].suggestions, ["Qué"]);
+        assert_eq!(&text[tildes[2].start..tildes[2].end], "donde");
+        assert_eq!(tildes[2].suggestions, ["dónde"]);
+        assert_eq!(&text[tildes[3].start..tildes[3].end], "que");
+        assert_eq!(tildes[3].suggestions, ["qué"]);
+
+        // Introductory subject and vocative clauses (Fundéu / CodeRabbit review)
+        for intro in ["¿Y tú que harás?", "¿Y tú, que harás?", "¿Tú que harás?", "¿Juan, que dices?"] {
+            let res = check(intro, ProofLang::Es);
+            let flagged: Vec<&str> = res.iter().filter(|i| i.message.contains("debe llevar tilde")).map(|i| &intro[i.start..i.end]).collect();
+            assert_eq!(flagged, ["que"], "{intro}: {res:?}");
+        }
+
+        // Relative pronouns and conjunctions inside questions must NOT be flagged (RAE rule)
+        for text in ["¿Crees que vendrá?", "¿Qué pasa cuando llueve?", "¿Sabes si viene?", "¿Cómo estás? ¡Qué sorpresa!"] {
+            assert!(check(text, ProofLang::Es).is_empty(), "{text}: {:?}", check(text, ProofLang::Es));
+        }
+    }
+
+    #[test]
+    fn repeated_openers_scan_linearly_without_quadratic_blowup() {
+        let repeated = "¿que ".repeat(2_000) + "?";
+        let started = std::time::Instant::now();
+        let issues = check(&repeated, ProofLang::Es);
+        let took = started.elapsed();
+        assert!(took < std::time::Duration::from_millis(50), "took {took:?}");
+        assert_eq!(issues.iter().filter(|i| i.message.contains("debe llevar tilde")).count(), 1);
     }
 
     proptest::proptest! {
