@@ -356,7 +356,15 @@ fn sections_headers_footers_round_trip() {
         let mut p = Paragraph::with_text("Page ", CharProps::default());
         p.insert_object(
             5,
-            InlineObject::Field { instr: instr.into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new() },
+            InlineObject::Field {
+                instr: instr.into(),
+                result: "1".into(),
+                locked: false,
+                dirty: false,
+                code: false,
+                form: String::new(),
+                code_xml: String::new(),
+            },
             &CharProps::default(),
         )
         .unwrap();
@@ -408,7 +416,15 @@ fn sections_headers_footers_round_trip() {
     let fp = r.parts.get(&secs[0].1.footers.default.unwrap()).unwrap().blocks[0].as_para().unwrap();
     assert_eq!(
         fp.objects,
-        vec![InlineObject::Field { instr: "PAGE".into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new() }]
+        vec![InlineObject::Field {
+            instr: "PAGE".into(),
+            result: "1".into(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+            code_xml: String::new()
+        }]
     );
     assert_eq!(part_text(&r, secs[1].1.footers.default), "Page 1");
     assert_eq!(r.parts.get(&secs[0].1.headers.default.unwrap()).unwrap().kind, PartKind::Header);
@@ -838,6 +854,7 @@ fn toc_field_wraps_its_entries() {
                 dirty: false,
                 code: false,
                 form: String::new(),
+                code_xml: String::new(),
             },
             &CharProps::default(),
         )
@@ -930,6 +947,7 @@ fn toc_field_skips_nested_stories() {
             dirty: false,
             code: false,
             form: String::new(),
+            code_xml: String::new(),
         },
         &CharProps::default(),
     )
@@ -971,7 +989,15 @@ fn tracked_changes_round_trip() {
     let end = p.len();
     p.insert_object(
         end,
-        InlineObject::Field { instr: "DATE".into(), result: "today".into(), locked: false, dirty: false, code: false, form: String::new() },
+        InlineObject::Field {
+            instr: "DATE".into(),
+            result: "today".into(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+            code_xml: String::new(),
+        },
         &del,
     )
     .unwrap();
@@ -1021,7 +1047,15 @@ fn tracked_paragraph_marks_round_trip() {
 fn fields_and_special_chars_round_trip() {
     let mut p = Paragraph::with_text("a\tb\nc\u{000C}d\u{000E}e\u{2011}f\u{00AD}g  spaced  ", CharProps::default());
     let fields = [
-        InlineObject::Field { instr: "PAGE".into(), result: "4".into(), locked: false, dirty: false, code: false, form: String::new() },
+        InlineObject::Field {
+            instr: "PAGE".into(),
+            result: "4".into(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+            code_xml: String::new(),
+        },
         InlineObject::Field {
             instr: "DATE \\@ \"M/d/yyyy\"".into(),
             result: "1/2/2026".into(),
@@ -1029,8 +1063,17 @@ fn fields_and_special_chars_round_trip() {
             dirty: false,
             code: false,
             form: String::new(),
+            code_xml: String::new(),
         },
-        InlineObject::Field { instr: "NUMPAGES".into(), result: String::new(), locked: false, dirty: false, code: false, form: String::new() },
+        InlineObject::Field {
+            instr: "NUMPAGES".into(),
+            result: String::new(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+            code_xml: String::new(),
+        },
     ];
     for f in &fields {
         let end = p.len();
@@ -1061,7 +1104,15 @@ fn field_dirty_flag_round_trips() {
         let end = p.len();
         p.insert_object(
             end,
-            InlineObject::Field { instr: instr.into(), result: "7".into(), locked: false, dirty: false, code: false, form: String::new() },
+            InlineObject::Field {
+                instr: instr.into(),
+                result: "7".into(),
+                locked: false,
+                dirty: false,
+                code: false,
+                form: String::new(),
+                code_xml: String::new(),
+            },
             &CharProps::default(),
         )
         .unwrap();
@@ -2479,7 +2530,15 @@ fn enclosed_characters_round_trip_in_words_structure() {
         let off = p.len();
         p.insert_object(
             off,
-            InlineObject::Field { instr: e.instr(), result: "字".into(), locked: false, dirty: false, code: false, form: String::new() },
+            InlineObject::Field {
+                instr: e.instr(),
+                result: "字".into(),
+                locked: false,
+                dirty: false,
+                code: false,
+                form: String::new(),
+                code_xml: String::new(),
+            },
             &CharProps { size, ..Default::default() },
         )
         .unwrap();

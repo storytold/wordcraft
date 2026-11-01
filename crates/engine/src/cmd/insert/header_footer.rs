@@ -74,7 +74,15 @@ pub(super) fn header_footer(s: &mut Session, v: &Value, header: bool) -> CmdResu
                 para.props.align = Some(Align::Center);
                 para.insert_object(
                     0,
-                    InlineObject::Field { instr: "PAGE".into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new() },
+                    InlineObject::Field {
+                        instr: "PAGE".into(),
+                        result: "1".into(),
+                        locked: false,
+                        dirty: false,
+                        code: false,
+                        form: String::new(),
+                        code_xml: String::new(),
+                    },
                     &CharProps::default(),
                 )?;
             }
