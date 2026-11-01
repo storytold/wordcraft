@@ -719,6 +719,8 @@ pub fn section_break_label(start: SectionStart) -> &'static str {
 
 /// Width of a [`Draw::MarkText`] label.
 pub fn mark_text_width(text: &str, size: f32) -> f32 {
+    #[cfg(test)]
+    crate::test_fonts();
     let face = wordcraft_fonts::word::resolve("Source Sans 3", false, false).face;
     let k = size / face.upem.max(1.0) as f32;
     text.chars().map(|c| face.advance(face.glyph_for(c)) as f32 * k).sum()
