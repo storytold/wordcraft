@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 
 use egui::{Color32, Pos2, Rect, Sense, Stroke, TextureHandle, Ui, pos2, vec2};
-use serde_json::json;
+use serde_json::{Value, json};
 use wordcraft_doc::{PartKind, Pos, StoryRef};
 use wordcraft_layout::display::CommentDisplay;
 use wordcraft_layout::{DocLayout, Page, Placed};
@@ -88,6 +88,31 @@ const TILE_HEIGHT_PX: usize = 1024;
 /// are rendered again when they come back.
 const TEXTURE_KEEP_SCREENS: f32 = 3.0;
 
+/// A list level picked by clicking its number or bullet (#4282): the list, the level, and the
+/// caret position it was picked at — the caret moving elsewhere lets it go.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ListLevel {
+    pub num: u32,
+    pub level: u8,
+    pub at: Pos,
+}
+
+/// A drag that started on a list number or bullet (#4282): the picked level and where the
+/// pointer went down, so moving it changes the level's indents directly on the page, as in Word.
+#[derive(Clone, Debug)]
+pub(crate) struct LabelDrag {
+    pub(crate) level: ListLevel,
+    pub(crate) start_x: f32,
+    pub(crate) start_aligned: f32,
+    pub(crate) start_indent: f32,
+    /// The paragraph reads right-to-left: a rightward pointer move means a smaller indent.
+    pub(crate) rtl: bool,
+    /// The last position sent to `list.indents`, so a stationary pointer does not repeat it.
+    pub(crate) last_aligned: f32,
+    pub(crate) last_indent: f32,
+    pub(crate) moved: bool,
+}
+
 pub struct CanvasState {
     textures: HashMap<usize, (u64, TextureHandle)>,
     /// Visible full-resolution tiles of pages too tall for one GPU texture.
@@ -131,6 +156,11 @@ pub struct CanvasState {
     /// A drag after a double-click, triple-click or Ctrl/⌘+click: the unit it extends by, the
     /// unit first selected, and the last position the pointer hit.
     unit_drag: Option<UnitDrag>,
+    /// The list level clicked on its number or bullet (#4282): a ruler drag then moves the whole
+    /// level (`list.indents`) instead of the caret paragraph's indents.
+    pub(crate) list_level: Option<ListLevel>,
+    /// A drag that started on a number or bullet: it moves the picked level's indents directly.
+    pub(super) label_drag: Option<LabelDrag>,
     pub last_highlight: String,
     pub last_font_color: String,
     pub last_shading: String,
@@ -358,6 +388,8 @@ impl Default for CanvasState {
             last_press: None,
             hf_press_switched: false,
             unit_drag: None,
+            list_level: None,
+            label_drag: None,
             last_highlight: "yellow".into(),
             last_font_color: "C00000".into(),
             last_shading: "FFF2CC".into(),
@@ -1392,6 +1424,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 }
             }
         }
+        list_level_wash(app, &painter, &rects, &layout, geo.scale, &t);
         // Selection (a selected object shows its frame instead): whole table cells shade the
         // cells (an empty one too), a column selection each row's piece, text running into or
         // across a table the whole cells of the rows it takes.
@@ -1600,6 +1633,66 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         CanvasFinish { app, ui, layout: &layout, geo: &geo, caret, ime_geometry, ime_interrupt, area, dim_body, hruler, vruler },
         out,
     );
+}
+
+/// The list level picked by a click on its number or bullet, while the caret is still where that
+/// click put it (#4282).
+pub(crate) fn picked_level(app: &WordApp) -> Option<ListLevel> {
+    let l = app.canvas.list_level.clone()?;
+    let para = app.session.doc.para_at(&app.session.sel.focus)?;
+    let n = para.props.numbering.or_else(|| app.session.doc.styles.resolve_para(&para.props).numbering).filter(|n| n.num != 0)?;
+    (l.at == app.session.sel.focus && n.num == l.num && n.level == l.level).then_some(l)
+}
+
+/// Run `list.indents` for a level picked by clicking its number: the level's definition moves, so
+/// every item at that level does (#4282).
+pub(crate) fn move_level(app: &mut WordApp, l: &ListLevel, mut params: Value) {
+    if let Some(o) = params.as_object_mut() {
+        o.insert("num".into(), json!(l.num));
+        o.insert("level".into(), json!(l.level));
+    }
+    let _ = app.run("list.indents", params);
+}
+
+/// The number or bullet of every paragraph at the picked list level, for the light wash that shows
+/// which items a drag will move (#4282). Only the label is shaded, not the text. Lists that share
+/// the picked list's definition count too, as `list.indents` moves them together.
+pub(crate) fn list_level_rects(
+    layout: &DocLayout,
+    doc: &wordcraft_doc::Document,
+    picked: &ListLevel,
+    _page_hint: usize,
+) -> Vec<(usize, wordcraft_geom::Rect)> {
+    let Some(num) = doc.numbering.num(picked.num) else { return Vec::new() };
+    let aid = num.abstract_id;
+    let nums: Vec<u32> = doc.numbering.nums.iter().filter(|n| n.abstract_id == aid).map(|n| n.id).collect();
+    let stories: Vec<StoryRef> = std::iter::once(StoryRef::Body).chain(doc.parts.keys().map(|k| StoryRef::Part(*k))).collect();
+    let mut targets: HashSet<(StoryRef, wordcraft_doc::Path)> = HashSet::new();
+    for story in stories {
+        for path in doc.para_paths(story) {
+            let Some(para) = doc.para(story, &path) else { continue };
+            let numbering = para.props.numbering.or_else(|| doc.styles.resolve_para(&para.props).numbering);
+            if numbering.is_some_and(|n| nums.contains(&n.num) && n.level == picked.level) {
+                targets.insert((story, path));
+            }
+        }
+    }
+    layout.label_rects_matching(&targets)
+}
+
+/// A picked list level (#4282): a light wash over every item at that level, so a drag's target
+/// is visible before it starts. The selection, when there is one, draws over it.
+fn list_level_wash(app: &WordApp, painter: &egui::Painter, rects: &[Rect], layout: &DocLayout, scale: f32, t: &Tokens) {
+    if preview_sel(app).is_some() {
+        return;
+    }
+    let Some(level) = picked_level(app) else { return };
+    for (pi, r) in list_level_rects(layout, &app.session.doc, &level, app.session.page_hint) {
+        let Some(pr) = rects.get(pi) else { continue };
+        let s = layout.pages.get(pi).map_or(scale, |page| page_screen_scale(*pr, page, scale));
+        let sr = Rect::from_min_size(pos2(pr.min.x + r.x * s, pr.min.y + r.y * s), vec2(r.w * s, r.h * s));
+        painter.rect_filled(sr, 0.0, t.selection.gamma_multiply(0.28));
+    }
 }
 
 #[cfg(test)]

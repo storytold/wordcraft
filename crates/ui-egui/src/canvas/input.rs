@@ -2,7 +2,7 @@ use super::balloons::over_balloon;
 use super::links::{field_showing_code, is_followable_link, is_generated_bookmark_link, link_under};
 use super::navigation::page_at;
 use super::story::{enters_header_footer, in_text_box, part_kind, text_box_host};
-use super::{CanvasState, DocLayout, PartKind, Pos, Pos2, Rect, StoryRef, Ui, WordApp, json};
+use super::{CanvasState, DocLayout, LabelDrag, ListLevel, PartKind, Pos, Pos2, Rect, StoryRef, Ui, WordApp, json, move_level};
 
 /// Drag-select auto-scroll (#688): the pointer within this many points of the viewport's edge
 /// starts scrolling, like Word.
@@ -133,6 +133,37 @@ fn route_pointer_targets(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rect
     }
     // A press on a table's selection area, insert button or move handle.
     if crate::table_mouse::pointer(app, ui, resp, rects, layout, scale) {
+        return None;
+    }
+    // A drag that started on a list number or bullet moves that level's indents directly (#4282):
+    // the number and the text at the level follow the pointer, as in Word, without the ruler.
+    if let Some(mut d) = app.canvas.label_drag.clone() {
+        let (down, at) = ui.input(|i| (i.pointer.primary_down(), i.pointer.latest_pos()));
+        if down {
+            if let Some(at) = at
+                && scale.is_finite()
+                && scale > 0.0
+            {
+                let dx = (at.x - d.start_x) / scale;
+                let dx = if d.rtl { -dx } else { dx };
+                if dx.abs() >= 1.0 {
+                    let aligned = d.start_aligned + dx;
+                    let indent = d.start_indent + dx;
+                    if (aligned - d.last_aligned).abs() >= 0.01 || (indent - d.last_indent).abs() >= 0.01 {
+                        if d.moved {
+                            app.session.join_next_undo();
+                        }
+                        d.moved = true;
+                        d.last_aligned = aligned;
+                        d.last_indent = indent;
+                        move_level(app, &d.level, json!({"alignedAt": aligned, "indentAt": indent}));
+                    }
+                }
+            }
+            app.canvas.label_drag = Some(d);
+        } else {
+            app.canvas.label_drag = None;
+        }
         return None;
     }
     pointer
@@ -322,6 +353,44 @@ fn handle_primary_press(
         };
         app.canvas.unit_drag = Some(UnitDrag { unit, clicks, start, end, last: line });
         app.canvas.dragging = true;
+        return;
+    }
+    // Clicking a number or bullet picks its list level (#4282): the caret goes into the item,
+    // and the ruler then moves every item at that level, as clicking the number does in Word.
+    app.canvas.list_level = None;
+    if !mods.shift
+        && !mods.command
+        && !mods.alt
+        && clicks <= 1
+        && let Some((path, level)) = layout.label_at(page, x, y, story)
+    {
+        app.canvas.column_drag = None;
+        app.session.page_hint = page;
+        let at = Pos { story, path, off: 0 };
+        let pj = serde_json::to_value(&at).unwrap_or_default();
+        let _ = app.run("caret.set", json!({"pos": pj}));
+        app.canvas.list_level = wordcraft_engine::cmd::lists::caret_list(&app.session).map(|num| ListLevel { num, level, at: at.clone() });
+        if let Some(l) = app.canvas.list_level.clone()
+            && let Some(lvl) = app.session.doc.numbering.level(l.num, l.level)
+        {
+            // The press starts a direct drag too: moving the pointer left or right moves the
+            // level, not only the ruler (#4282).
+            app.canvas.label_drag = Some(LabelDrag {
+                level: l,
+                start_x: p.x,
+                start_aligned: lvl.indent - lvl.hanging,
+                start_indent: lvl.indent,
+                rtl: app.session.doc.para_at(&at).is_some_and(|p| app.session.doc.styles.resolve_para(&p.props).bidi),
+                last_aligned: lvl.indent - lvl.hanging,
+                last_indent: lvl.indent,
+                moved: false,
+            });
+            let hint = crate::i18n::fmt(
+                tl!("List level {level}: drag it or the ruler to move every item at this level"),
+                &[("level", &(level as u32 + 1).to_string())],
+            );
+            app.status(hint);
+        }
         return;
     }
     let Some(pos) = layout.hit(page, x, y, story) else { return };

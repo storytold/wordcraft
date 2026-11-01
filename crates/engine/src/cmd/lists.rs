@@ -1,7 +1,7 @@
-//! List definitions: Define New Multilevel List (`list.define`) and reading one back
-//! (`list.get`). A definition is Word's abstract numbering: nine levels, each with its number
-//! format, style, start, restart rule, linked paragraph style, alignment, indents, what follows
-//! the number and the number's font.
+//! List definitions: Define New Multilevel List (`list.define`), reading one back (`list.get`)
+//! and moving one level's indents (`list.indents`). A definition is Word's abstract numbering:
+//! nine levels, each with its number format, style, start, restart rule, linked paragraph style,
+//! alignment, indents, what follows the number and the number's font.
 
 use serde_json::{Value, json};
 use wordcraft_doc::StoryRef;
@@ -23,6 +23,9 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("list.get", "List Definition", "Home › Paragraph › Multilevel List", get)
             .params(r#"{"num"?: list id (default: the caret's list)} → {"num", "levels": [as list.define]}"#)
             .pure(),
+        CommandSpec::new("list.indents", "Adjust List Indents", "Home › Paragraph › Multilevel List", indents).params(
+            r#"{"num": list id, "level": 0-8, "alignedAt"?: pt (the number's position), "indentAt"?: pt (the text's indent)} — moves that one level of the list: its definition changes and every paragraph at that level follows, as clicking a number or bullet and dragging the ruler does in Word (#4282)"#,
+        ),
         CommandSpec::new("list.multilevelPreset", "Multilevel List Library", "Home › Paragraph › Multilevel List", preset).params(
             r#"{"preset": "headings" (1 / 1.1 / 1.1.1) | "article" (Article I. / Section 1.01 / (a)) | "outlineHeadings" (I. / A. / 1.) | "chapter" (Chapter 1, lower levels unnumbered)} — a new list whose nine levels are linked to Heading 1–9: every paragraph in those styles is numbered, selected paragraphs already in a Heading style keep it, and any other selected paragraph becomes Heading 1 (the first level)"#,
         ),
@@ -161,6 +164,104 @@ fn get(s: &mut Session, v: &Value) -> CmdResult {
         p::u64(v, "num").map(|n| n.min(u32::MAX as u64) as u32).or_else(|| caret_list(s)).ok_or_else(|| CmdError::Failed("not in a list".into()))?;
     let levels = levels_of(s, num).ok_or_else(|| CmdError::Params("no such list".into()))?;
     Ok(json!({"num": num, "levels": levels.iter().map(level_json).collect::<Vec<_>>()}))
+}
+
+/// Move one level of list `num` (#4282): the number's position (`alignedAt`) and the text's
+/// indent (`indentAt`), in the definition itself, so every item at that level moves with it.
+/// Word does this when a number or bullet is clicked (selecting the level) and the ruler dragged;
+/// a paragraph's own indents give way to the level's, as they do there.
+fn indents(s: &mut Session, v: &Value) -> CmdResult {
+    let num = p::u64(v, "num").map(|n| n.min(u32::MAX as u64) as u32).ok_or_else(|| CmdError::Params("`num` (list id) is required".into()))?;
+    let level = p::u64(v, "level").filter(|l| *l < LEVELS as u64).ok_or_else(|| CmdError::Params(format!("`level` must be 0 to {}", LEVELS - 1)))?;
+    let pt = |k: &str| p::f32(v, k).map(|x| x.clamp(-1584.0, 1584.0));
+    let (aligned, indent) = (pt("alignedAt"), pt("indentAt"));
+    if aligned.is_none() && indent.is_none() {
+        return Err(CmdError::Params("`alignedAt` or `indentAt` is required".into()));
+    }
+    let level = level as u8;
+    let mut lvl = levels_of(s, num).and_then(|l| l.get(level as usize).cloned()).ok_or_else(|| CmdError::Params("no such list".into()))?;
+    // The label sits `hanging` points left of the text, so moving one edge carries the other.
+    if let Some(i) = indent {
+        lvl.indent = i;
+    }
+    if let Some(a) = aligned {
+        lvl.hanging = lvl.indent - a;
+    }
+    let (aligned_at, indent_at, style) = (lvl.indent - lvl.hanging, lvl.indent, lvl.style.clone());
+    let aid = s.doc.numbering.num(num).map(|n| n.abstract_id).ok_or_else(|| CmdError::Params("no such list".into()))?;
+    store_level(s, num, level, lvl.indent, lvl.hanging)?;
+    // A list that restarts numbers its items through a `num` of its own on the same definition:
+    // its items follow the new indents too (#4282).
+    let sharing: Vec<u32> = s.doc.numbering.nums.iter().filter(|x| x.abstract_id == aid).map(|x| x.id).collect();
+    // The definition says where the level's text goes: a paragraph's own indents give way to it.
+    let paragraphs = follow_level(s, &sharing, level)?;
+    touch_lists(s, &sharing)?;
+    if let Some(style) = style {
+        touch_styles(s, &[style])?;
+    }
+    let mut r = sel_result(s)?;
+    r["num"] = json!(num);
+    r["level"] = json!(level);
+    r["alignedAt"] = json!(aligned_at);
+    r["indentAt"] = json!(indent_at);
+    r["paragraphs"] = json!(paragraphs);
+    Ok(r)
+}
+
+/// Level `level` of list `num` as the definition now holds it (`list.indents`). Only the position
+/// fields (`indent` and `hanging`) change: a `num` override's format, text, start and style stay
+/// its own. Every list sharing the abstract definition gets the new positions too, including its
+/// own override at that level, so the items all follow the drag.
+fn store_level(s: &mut Session, num: u32, level: u8, indent: f32, hanging: f32) -> Result<(), CmdError> {
+    let n = s.doc.numbering.num(num).ok_or_else(|| CmdError::Params("no such list".into()))?;
+    let aid = n.abstract_id;
+    if let Some(a) = s.doc.numbering.abstracts.iter_mut().find(|a| a.id == aid) {
+        // Every list has nine levels; one the file left out takes its default.
+        while a.levels.len() <= level as usize {
+            let i = a.levels.len();
+            a.levels.push(default_level(i));
+        }
+        if let Some(l) = a.levels.get_mut(level as usize) {
+            l.indent = indent;
+            l.hanging = hanging;
+        }
+    }
+    for x in s.doc.numbering.nums.iter_mut().filter(|x| x.abstract_id == aid) {
+        if let Some((_, l)) = x.level_overrides.iter_mut().find(|(i, _)| *i == level) {
+            l.indent = indent;
+            l.hanging = hanging;
+        }
+    }
+    Ok(())
+}
+
+/// Clear the indents set on the paragraph itself in every paragraph numbered `level` of the lists
+/// `nums` (those sharing one definition), in every story, so they follow the level's definition;
+/// the count is what `list.indents` reports.
+fn follow_level(s: &mut Session, nums: &[u32], level: u8) -> Result<usize, CmdError> {
+    let stories: Vec<StoryRef> = std::iter::once(StoryRef::Body).chain(s.doc.parts.keys().map(|k| StoryRef::Part(*k))).collect();
+    let mut n = 0;
+    for story in stories {
+        for path in s.doc.para_paths(story) {
+            let at_level = {
+                let Some(para) = s.doc.para(story, &path) else { continue };
+                // A list can come from the paragraph's style instead of its own props.
+                let nr = para.props.numbering.or_else(|| s.doc.styles.resolve_para(&para.props).numbering);
+                nr.is_some_and(|r| nums.contains(&r.num) && r.level == level)
+            };
+            if !at_level {
+                continue;
+            }
+            let para = s.doc.para_mut(story, &path)?;
+            para.props.indent_left = None;
+            para.props.indent_first = None;
+            para.props.indent_left_chars = None;
+            para.props.indent_first_chars = None;
+            para.touch();
+            n += 1;
+        }
+    }
+    Ok(n)
 }
 
 fn define(s: &mut Session, v: &Value) -> CmdResult {
@@ -357,6 +458,142 @@ mod tests {
             .flat_map(|p| &p.items)
             .filter_map(|i| if let Placed::Lines { para, l0: 0, .. } = i { para.label.as_ref().map(|lb| lb.text.clone()) } else { None })
             .collect()
+    }
+
+    /// Each body paragraph's laid-out label, left to right on the page, in paragraph order.
+    fn label_x(s: &mut Session) -> Vec<f32> {
+        let l = s.layout();
+        let mut out: Vec<(usize, f32)> = l
+            .pages
+            .iter()
+            .flat_map(|p| &p.items)
+            .filter_map(|i| match i {
+                Placed::Lines { path, para, l0: 0, x, .. } => Some((*path.0.first()? as usize, x + para.label.as_ref()?.x)),
+                _ => None,
+            })
+            .collect();
+        out.sort_by_key(|(i, _)| *i);
+        out.into_iter().map(|(_, x)| x).collect()
+    }
+
+    /// #4282: `list.indents` moves one level of the list — the definition and every item at that
+    /// level — and leaves the other levels (and a paragraph's own indents) where they are. It
+    /// survives a save to .docx and back.
+    #[test]
+    fn list_indents_moves_the_whole_level_and_no_other() {
+        use wordcraft_doc::props::NumRef;
+        use wordcraft_doc::{Pos, StoryRef};
+        let mut s = Session::new(Document::new());
+        for (i, t) in ["One", "Two", "Three"].iter().enumerate() {
+            if i > 0 {
+                s.run("text.newParagraph", &json!({})).unwrap();
+            }
+            s.run("text.insert", &json!({"text": t})).unwrap();
+        }
+        s.run("select.all", &json!({})).unwrap();
+        s.run("para.numbering", &json!({})).unwrap();
+        let num = s.doc.para_at(&Pos::body(0, 0)).unwrap().props.numbering.unwrap().num;
+        let paths = s.doc.para_paths(StoryRef::Body);
+        // The third item one level down, and the second carrying indents of its own (as a ruler
+        // drag with a caret, rather than a clicked number, leaves them).
+        let p = s.doc.para_mut(StoryRef::Body, &paths[2]).unwrap();
+        p.props.numbering = Some(NumRef { num, level: 1 });
+        p.touch();
+        let p = s.doc.para_mut(StoryRef::Body, &paths[1]).unwrap();
+        p.props.indent_left = Some(9.0);
+        p.props.indent_first = Some(-9.0);
+        p.touch();
+        s.relayout();
+        let before = label_x(&mut s);
+        let levels_before = s.run("list.get", &json!({"num": num})).unwrap()["levels"].clone();
+        let r = s.run("list.indents", &json!({"num": num, "level": 0, "indentAt": 72.0})).unwrap();
+        assert_eq!(r["paragraphs"], json!(2), "both items at level 0");
+        assert_eq!((r["alignedAt"].as_f64(), r["indentAt"].as_f64()), (Some(54.0), Some(72.0)), "the label keeps its distance from the text");
+        let after = label_x(&mut s);
+        assert!((after[0] - before[0] - 36.0).abs() < 0.01, "{before:?} → {after:?}");
+        assert!(after[1] > before[1], "the item with indents of its own moved too: {before:?} → {after:?}");
+        assert!((after[2] - before[2]).abs() < 0.01, "the level below stays: {before:?} → {after:?}");
+        // The level's indents win over the paragraph's own, so both items sit together.
+        assert!((after[0] - after[1]).abs() < 0.01, "{after:?}");
+        let p = s.doc.para_at(&Pos::body(1, 0)).unwrap();
+        assert_eq!((p.props.indent_left, p.props.indent_first), (None, None), "the paragraph's own indents gave way");
+        // The other levels' definitions are untouched.
+        let lv = s.run("list.get", &json!({"num": num})).unwrap();
+        let (now, then) = (lv["levels"].as_array().unwrap(), levels_before.as_array().unwrap());
+        assert_eq!(&now[1..], &then[1..], "only level 0 moved");
+        assert_eq!((lv["levels"][0]["alignedAt"].as_f64(), lv["levels"][0]["indentAt"].as_f64()), (Some(54.0), Some(72.0)));
+        // Programmatic calls say what they need, and change nothing when they can't.
+        let rev = s.rev();
+        assert!(s.run("list.indents", &json!({"num": num, "level": 0})).is_err());
+        assert!(s.run("list.indents", &json!({"level": 0, "indentAt": 72.0})).is_err());
+        assert!(s.run("list.indents", &json!({"num": num, "level": 9, "indentAt": 72.0})).is_err());
+        assert!(s.run("list.indents", &json!({"num": 999, "level": 0, "indentAt": 72.0})).is_err());
+        assert_eq!(s.rev(), rev, "a refused call changes nothing");
+
+        // Saving and reopening keeps the level's new indents and its items' layout.
+        let back = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap();
+        let mut b = Session::new(back);
+        let lv = b.run("list.get", &json!({"num": num})).unwrap();
+        assert_eq!((lv["levels"][0]["alignedAt"].as_f64(), lv["levels"][0]["indentAt"].as_f64()), (Some(54.0), Some(72.0)));
+        let back_labels = label_x(&mut b);
+        assert_eq!(back_labels.len(), after.len());
+        assert!(back_labels.iter().zip(&after).all(|(a, b)| (a - b).abs() < 0.01), "{back_labels:?} vs {after:?}");
+    }
+
+    /// #4282: a list that restarts numbers through a `num` of its own on the same definition, so
+    /// moving a level moves its items too.
+    #[test]
+    fn list_indents_moves_the_lists_sharing_the_definition() {
+        use wordcraft_doc::props::NumRef;
+        use wordcraft_doc::{Pos, StoryRef};
+        let mut s = Session::new(Document::new());
+        s.run("text.insert", &json!({"text": "One"})).unwrap();
+        s.run("text.newParagraph", &json!({})).unwrap();
+        s.run("text.insert", &json!({"text": "Two"})).unwrap();
+        s.run("select.all", &json!({})).unwrap();
+        s.run("para.numbering", &json!({})).unwrap();
+        let paths = s.doc.para_paths(StoryRef::Body);
+        let num = s.doc.para_at(&Pos::body(0, 0)).unwrap().props.numbering.unwrap().num;
+        // Restarting the second item numbers it 1. again, in a list of its own that shares the
+        // definition (Word's `w:num` on the list's abstract numbering).
+        let other = s.doc.numbering.restart(num).expect("a second instance of the list");
+        assert_ne!(other, num);
+        let p = s.doc.para_mut(StoryRef::Body, &paths[1]).unwrap();
+        p.props.numbering = Some(NumRef { num: other, level: 0 });
+        p.touch();
+        s.relayout();
+        let before = label_x(&mut s);
+        let r = s.run("list.indents", &json!({"num": num, "level": 0, "indentAt": 72.0})).unwrap();
+        assert_eq!(r["paragraphs"], json!(2), "both lists' items are at the level");
+        let after = label_x(&mut s);
+        assert!((after[0] - before[0] - 36.0).abs() < 0.01 && (after[1] - before[1] - 36.0).abs() < 0.01, "{before:?} → {after:?}");
+    }
+
+    /// #4282: moving a level changes only its position fields. A `num` override's own format,
+    /// text and start stay its own, and the shared abstract level keeps its label.
+    #[test]
+    fn list_indents_keeps_a_levels_format_text_and_start() {
+        use wordcraft_doc::props::NumRef;
+        use wordcraft_doc::{Pos, StoryRef};
+        let mut s = Session::new(Document::new());
+        s.run("text.insert", &json!({"text": "One"})).unwrap();
+        s.run("select.all", &json!({})).unwrap();
+        s.run("para.numbering", &json!({})).unwrap();
+        let num = s.doc.para_at(&Pos::body(0, 0)).unwrap().props.numbering.unwrap().num;
+        let aid = s.doc.numbering.num(num).unwrap().abstract_id;
+        let abstract_text = s.doc.numbering.abstracts.iter().find(|a| a.id == aid).unwrap().levels[0].text.clone();
+        let mut own = s.doc.numbering.level(num, 0).cloned().unwrap();
+        own.text = "X".into();
+        own.start = 5;
+        s.doc.numbering.nums.iter_mut().find(|n| n.id == num).unwrap().level_overrides.push((0, own));
+        s.doc.para_mut(StoryRef::Body, &s.doc.para_paths(StoryRef::Body)[0]).unwrap().props.numbering = Some(NumRef { num, level: 0 });
+        s.relayout();
+        s.run("list.indents", &json!({"num": num, "level": 0, "indentAt": 72.0})).unwrap();
+        let lv = s.run("list.get", &json!({"num": num})).unwrap();
+        assert_eq!(lv["levels"][0]["text"], "X", "the override's text is its own");
+        assert_eq!(lv["levels"][0]["start"], 5, "the override's start is its own");
+        assert_eq!(lv["levels"][0]["indentAt"], 72.0, "the position moved");
+        assert_eq!(s.doc.numbering.abstracts.iter().find(|a| a.id == aid).unwrap().levels[0].text, abstract_text, "the shared label is untouched");
     }
 
     /// #328: a custom three-level list numbers paragraphs 1. / 1.1. / a) and survives a save to

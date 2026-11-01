@@ -1,6 +1,6 @@
 //! Hit testing and caret geometry.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use wordcraft_doc::para::Wrap;
 use wordcraft_doc::props::TextDirection;
@@ -411,6 +411,53 @@ impl DocLayout {
         let best = lines.iter().filter(|l| !away(l.path)).min_by(nearest).or_else(|| lines.iter().min_by(nearest))?;
         let off = best.para.off_at_x(best.li, x - best.x);
         Some(Pos { story: best.story, path: best.path.clone(), off })
+    }
+
+    /// The list label (a number or bullet) under (x, y) on `page`, in `story`: the paragraph it
+    /// belongs to and the list level it numbers. The label is drawn on the paragraph's label line
+    /// (`ParaLayout::label_line`), to the left of the text at its own indent, so a press there is
+    /// the level's and not the text's (#4282) — [`Self::hit`] alone maps it to the paragraph start.
+    pub fn label_at(&self, page: usize, x: f32, y: f32, story: StoryRef) -> Option<(Path, u8)> {
+        let p = self.pages.get(page)?;
+        if !(x.is_finite() && y.is_finite()) {
+            return None;
+        }
+        // A little slack either way, as clicks elsewhere on the page get.
+        let pad = 1.0;
+        page_lines(p, story).into_iter().find_map(|l| {
+            let lab = l.para.label.as_ref()?;
+            if l.li != l.para.label_line() {
+                return None;
+            }
+            let level = l.para.rp.numbering.filter(|n| n.num != 0)?.level;
+            let x0 = l.x + lab.x;
+            let inside = y >= l.top - pad && y <= l.bottom + pad && x >= x0 - pad && x <= x0 + lab.width + pad;
+            inside.then(|| (l.path.clone(), level))
+        })
+    }
+
+    /// The boxes of the list labels of `targets` on every page, in page coordinates: the number
+    /// or bullet alone, not the text (#4282). Used to show which items a list-level drag will
+    /// move. One scan of the layout serves every target.
+    pub fn label_rects_matching(&self, targets: &HashSet<(StoryRef, Path)>) -> Vec<(usize, Rect)> {
+        if targets.is_empty() {
+            return Vec::new();
+        }
+        let stories: HashSet<StoryRef> = targets.iter().map(|(story, _)| *story).collect();
+        let mut out = Vec::new();
+        for (pi, p) in self.pages.iter().enumerate() {
+            for story in &stories {
+                for l in page_lines(p, *story) {
+                    if l.li != l.para.label_line() || !targets.contains(&(l.story, l.path.clone())) {
+                        continue;
+                    }
+                    let Some(lab) = l.para.label.as_ref() else { continue };
+                    let x0 = l.x + lab.x;
+                    out.push((pi, Rect::new(x0, l.top, lab.width, l.bottom - l.top)));
+                }
+            }
+        }
+        out
     }
 
     /// The story whose text is under a point (body, footnotes, endnotes, text boxes; not

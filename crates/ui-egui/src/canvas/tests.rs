@@ -4841,3 +4841,186 @@ fn the_view_key_changes_when_a_drag_takes_an_object_off_the_page() {
     assert_ne!(hidden, view_key(&app, false, None), "the page without the dragged object is rendered again");
     assert_eq!(hidden, view_key(&app, false, Some(&object)), "the same drag keeps the key: no re-render every frame");
 }
+
+/// #4282: a click on a number (rather than its text) picks that list level, and a ruler drag
+/// then moves every item at the level — its definition too — and nothing else.
+#[test]
+fn a_ruler_drag_after_clicking_a_number_moves_the_whole_level() {
+    use egui::{Event, PointerButton};
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("One\nTwo\nPlain")), Default::default());
+    a.session.sel = wordcraft_engine::Selection { anchor: Pos::body(0, 0), focus: Pos::body(1, 3) };
+    a.run("para.numbering", json!({})).unwrap();
+    let num = a.session.doc.para_at(&Pos::body(0, 0)).unwrap().props.numbering.unwrap().num;
+    a.run("caret.docStart", json!({})).unwrap();
+    a.run("view.ruler", json!({"value": true})).unwrap();
+    a.run("view.commentsPane", json!({"value": false})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    let area = h.state().canvas.canvas_rect.expect("the canvas is laid out");
+    let path = |i: usize| wordcraft_doc::Path::top(i);
+    let label_x = |h: &mut egui_kittest::Harness<'_, WordApp>, i: usize| -> Option<f32> {
+        let l = h.state_mut().session.layout();
+        l.pages.iter().flat_map(|p| &p.items).find_map(|it| match it {
+            Placed::Lines { path: p, para, l0: 0, x, .. } if *p == path(i) => para.label.as_ref().map(|lb| x + lb.x),
+            _ => None,
+        })
+    };
+    // The second item's number on the page: press it.
+    let (lx, ly) = {
+        let l = h.state_mut().session.layout();
+        let mut at = None;
+        for it in l.pages.iter().flat_map(|p| &p.items) {
+            let Placed::Lines { path: p, para, l0, x, y, .. } = it else { continue };
+            if *p != path(1) {
+                continue;
+            }
+            let lab = para.label.as_ref().expect("a number");
+            let line = para.lines.get(*l0).expect("a first line");
+            at = Some((x + lab.x + lab.width / 2.0, y + line.height / 2.0));
+        }
+        at.expect("the second item's number")
+    };
+    let button = |at: Pos2, pressed: bool| Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Default::default() };
+    let at = page_to_screen(h.state_mut(), 0, lx, ly).expect("on screen");
+    h.event(Event::PointerMoved(at));
+    h.event(button(at, true));
+    h.step();
+    let picked = h.state().canvas.list_level.clone().expect("the number picked its level");
+    assert_eq!((picked.num, picked.level), (num, 0), "the clicked item's list and level");
+    h.event(button(at, false));
+    for _ in 0..3 {
+        h.step();
+    }
+    assert_eq!(h.state().session.sel.focus, Pos::body(1, 0), "the caret went into the item");
+    // Drag the left-indent marker half an inch right.
+    let ruler_x = |h: &mut egui_kittest::Harness<'_, WordApp>, d: f32| {
+        let body_x = h.state_mut().session.layout().pages[0].body.x;
+        page_to_screen(h.state_mut(), 0, body_x + d, 0.0).expect("on screen").x
+    };
+    let before = (label_x(&mut h, 0).expect("the first number"), label_x(&mut h, 1).expect("the second number"));
+    let (from, to) = (pos2(ruler_x(&mut h, 36.0), area.min.y - 6.0), pos2(ruler_x(&mut h, 73.0), area.min.y - 6.0));
+    h.event(Event::PointerMoved(from));
+    h.event(button(from, true));
+    h.step();
+    for k in 1..=4 {
+        h.event(Event::PointerMoved(from + (to - from) * (k as f32 / 4.0)));
+        h.step();
+    }
+    h.event(button(to, false));
+    for _ in 0..3 {
+        h.step();
+    }
+    let lv = h.state_mut().run("list.get", json!({"num": num})).unwrap();
+    assert_eq!(lv["levels"][0]["indentAt"].as_f64(), Some(72.0), "the level's text indent moved");
+    assert_eq!(lv["levels"][0]["alignedAt"].as_f64(), Some(54.0), "and its number with it");
+    let after = (label_x(&mut h, 0).expect("the first number"), label_x(&mut h, 1).expect("the second number"));
+    assert!((after.0 - before.0 - 36.0).abs() < 0.01 && (after.1 - before.1 - 36.0).abs() < 0.01, "{before:?} → {after:?}");
+    assert!((after.0 - after.1).abs() < 0.01, "the items stay together: {after:?}");
+    // The plain paragraph after the list is not the level's: it stays where it was.
+    for i in 0..2 {
+        let p = h.state().session.doc.para_at(&Pos::body(i, 0)).unwrap();
+        assert_eq!((p.props.indent_left, p.props.indent_first), (None, None), "item {i} follows the level");
+    }
+    let plain = h.state().session.doc.para_at(&Pos::body(2, 0)).unwrap();
+    assert_eq!((plain.props.indent_left, plain.props.numbering), (None, None), "the plain paragraph has no level to move");
+}
+
+/// #4282: pressing a list number and dragging it directly moves the level's indents on the
+/// page, without touching the ruler; the items at that level move together and the drag is one
+/// undo step.
+#[test]
+fn dragging_a_number_moves_the_whole_level_without_the_ruler() {
+    use egui::{Event, PointerButton};
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("One\nTwo")), Default::default());
+    a.session.sel = wordcraft_engine::Selection { anchor: Pos::body(0, 0), focus: Pos::body(1, 3) };
+    a.run("para.numbering", json!({})).unwrap();
+    let num = a.session.doc.para_at(&Pos::body(0, 0)).unwrap().props.numbering.unwrap().num;
+    a.run("caret.docStart", json!({})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    let path = |i: usize| wordcraft_doc::Path::top(i);
+    let label_x = |h: &mut egui_kittest::Harness<'_, WordApp>, i: usize| -> Option<f32> {
+        let l = h.state_mut().session.layout();
+        l.pages.iter().flat_map(|p| &p.items).find_map(|it| match it {
+            Placed::Lines { path: p, para, l0: 0, x, .. } if *p == path(i) => para.label.as_ref().map(|lb| x + lb.x),
+            _ => None,
+        })
+    };
+    let (lx, ly) = {
+        let l = h.state_mut().session.layout();
+        let mut at = None;
+        for it in l.pages.iter().flat_map(|p| &p.items) {
+            let Placed::Lines { path: p, para, l0, x, y, .. } = it else { continue };
+            if *p != path(0) {
+                continue;
+            }
+            let lab = para.label.as_ref().expect("a number");
+            let line = para.lines.get(*l0).expect("a first line");
+            at = Some((x + lab.x + lab.width / 2.0, y + line.height / 2.0));
+        }
+        at.expect("the first number")
+    };
+    let from = page_to_screen(h.state_mut(), 0, lx, ly).expect("on screen");
+    let to = page_to_screen(h.state_mut(), 0, lx + 36.0, ly).expect("on screen");
+    let button = |at: Pos2, pressed: bool| Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Default::default() };
+    let before = (label_x(&mut h, 0).expect("the first number"), label_x(&mut h, 1).expect("the second number"));
+    h.event(Event::PointerMoved(from));
+    h.event(button(from, true));
+    h.step();
+    for k in 1..=4 {
+        h.event(Event::PointerMoved(from + (to - from) * (k as f32 / 4.0)));
+        h.step();
+    }
+    h.event(button(to, false));
+    for _ in 0..3 {
+        h.step();
+    }
+    let lv = h.state_mut().run("list.get", json!({"num": num})).unwrap();
+    assert_eq!(lv["levels"][0]["indentAt"].as_f64(), Some(72.0), "the level's text indent moved");
+    assert_eq!(lv["levels"][0]["alignedAt"].as_f64(), Some(54.0), "and its number with it");
+    let after = (label_x(&mut h, 0).expect("the first number"), label_x(&mut h, 1).expect("the second number"));
+    assert!((after.0 - before.0 - 36.0).abs() < 0.01 && (after.1 - before.1 - 36.0).abs() < 0.01, "{before:?} → {after:?}");
+    assert!((after.0 - after.1).abs() < 0.01, "the items stay together: {after:?}");
+}
+
+/// #4282: the wash that shows a drag's target covers every item at the picked level, not the
+/// nested level and not plain paragraphs.
+#[test]
+fn list_level_rects_cover_every_item_at_the_level() {
+    use wordcraft_doc::props::NumRef;
+    let mut s = wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("One\nTwo\nNested"));
+    s.run("select.all", &json!({})).unwrap();
+    s.run("para.numbering", &json!({})).unwrap();
+    let num = s.doc.para_at(&Pos::body(0, 0)).unwrap().props.numbering.unwrap().num;
+    let paths = s.doc.para_paths(StoryRef::Body);
+    let p = s.doc.para_mut(StoryRef::Body, &paths[2]).unwrap();
+    p.props.numbering = Some(NumRef { num, level: 1 });
+    p.touch();
+    s.relayout();
+    let layout = s.layout();
+    let at = |level| ListLevel { num, level, at: Pos::body(0, 0) };
+    let level0 = list_level_rects(&layout, &s.doc, &at(0), 0);
+    assert_eq!(level0.len(), 2, "both level-0 labels");
+    for (pi, r) in &level0 {
+        assert!(layout.label_at(*pi, r.x + r.w / 2.0, r.y + r.h / 2.0, StoryRef::Body).is_some(), "the wash is on the label, not the text");
+    }
+    assert_eq!(list_level_rects(&layout, &s.doc, &at(1), 0).len(), 1, "the nested label alone");
+}
