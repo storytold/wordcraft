@@ -4960,11 +4960,13 @@ fn ref_visual_canvas() {
     h.event(button(from, true));
     h.step();
     let pressed = caret_screen(h.state_mut()).unwrap().0;
+    assert!(std::sync::Arc::ptr_eq(&layout, &h.state_mut().session.layout()), "canvas preparation and pointer press retain the owner");
     assert_eq!(h.state().session.sel.focus, Pos::body(0, 0));
     assert!(pressed.y > screen(h.state_mut(), point(0, 0)).y + 10.0, "click must retain its continuation line");
     h.event(egui::Event::PointerMoved(to));
     h.step();
     let dragged = caret_screen(h.state_mut()).unwrap().0;
+    assert!(std::sync::Arc::ptr_eq(&layout, &h.state_mut().session.layout()), "pointer drag retains the same snapshot");
     assert!(dragged.y > pressed.y + 5.0, "same-Pos drag must update visual affinity");
     h.event(button(to, false));
     h.run_steps(3);

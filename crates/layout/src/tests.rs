@@ -12454,3 +12454,46 @@ fn ref_visual_legacy_paths() {
     let visual = layout.hit_visual(caret.page, caret.x, caret.top + caret.height / 2.0, StoryRef::Body).unwrap();
     assert_eq!(layout.caret_visual(visual.position(), Some(&visual), caret.page), layout.caret_on(visual.position(), caret.page));
 }
+
+/// A repeated header can place the same source line twice on one page, in different columns.
+#[test]
+fn ref_repeated_line_occurrence() {
+    let doc = ref_wrap_doc(&"Alpha Beta ".repeat(12), RefText::Field);
+    let mut layout = lay(&doc);
+    let first = layout.pages[0].items.iter().find(|item| matches!(item, Placed::Lines { l0, l1, .. } if l1 - l0 > 2)).unwrap().clone();
+    let mut second = first.clone();
+    let column_offset = 300.0;
+    if let Placed::Lines { x, .. } = &mut second {
+        *x += column_offset;
+    }
+    layout.pages[0].items = vec![first, second];
+    layout.pages[0].w += column_offset;
+    layout.pages[0].body.w += column_offset;
+    let layout = Arc::new(layout);
+    let Placed::Lines { para, l0, x, y, .. } = &layout.pages[0].items[0] else { panic!("placed text") };
+    let li = l0 + 1;
+    let line = &para.lines[li];
+    let hit_y = y + line.top - para.lines[*l0].top + line.height / 2.0;
+    let left = layout.hit_visual(0, x + line.left + 1.0, hit_y, StoryRef::Body).unwrap();
+    let right = layout.hit_visual(0, x + column_offset + line.left + 1.0, hit_y, StoryRef::Body).unwrap();
+    assert_eq!(left.position(), right.position(), "copies retain the same legal source position");
+    assert_ne!(left, right, "same-Pos dragging must distinguish physical copies");
+    let caret = |target: &crate::VisualPos| layout.caret_visual(target.position(), Some(target), 0).unwrap();
+    let left_caret = caret(&left);
+    let right_caret = caret(&right);
+    assert!((right_caret.x - left_caret.x - column_offset).abs() < 0.001);
+    assert_eq!(left_caret.top, right_caret.top);
+    for edge in [crate::VisualEdge::Leading, crate::VisualEdge::Trailing] {
+        let left_edge = layout.line_edge_visual(left.position(), Some(&left), 0, edge).unwrap();
+        let right_edge = layout.line_edge_visual(right.position(), Some(&right), 0, edge).unwrap();
+        assert!((caret(&right_edge).x - caret(&left_edge).x - column_offset).abs() < 0.001);
+    }
+    for dir in [-1, 1] {
+        let (next, goal) = layout.vertical_visual(right.position(), Some(&right), None, dir, 0).unwrap();
+        assert!((caret(&next).x - right_caret.x).abs() < 0.001, "vertical movement stays in the selected column");
+        let (back, _) = layout.vertical_visual(next.position(), Some(&next), Some(goal), -dir, 0).unwrap();
+        assert_eq!(caret(&back), right_caret);
+    }
+    let other = Arc::new((*layout).clone());
+    assert_eq!(other.caret_visual(right.position(), Some(&right), 0), other.caret_on(right.position(), 0), "another owner rejects the occurrence");
+}

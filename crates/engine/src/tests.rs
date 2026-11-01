@@ -11839,3 +11839,45 @@ fn export_png_rejects_a_page_number_that_does_not_fit() {
     assert!(!target.exists(), "no file is written for an invalid page");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Rejected commands can evict both cached layouts before rollback restores the document.
+#[test]
+fn ref_rollback_retains_owner() {
+    for web_width in [None, Some(110.0)] {
+        let mut s = ref_visual_session();
+        let (_, x, y) = ref_visual_points(&mut s)[2];
+        run(&mut s, "caret.set", json!({"page":0,"x":x,"y":y}));
+        let before = ref_visual_caret(&mut s);
+        let owner = std::sync::Arc::downgrade(&s.layout());
+        let revision = s.rev();
+        let selection = s.sel.clone();
+        let mut specs = s.registry.all().to_vec();
+        specs.push(crate::CommandSpec::new("test.failLayouts", "Fail", "Test", |s, v| {
+            for text in ["temporary", "again"] {
+                s.doc.insert_text(&s.sel.focus, text, &Default::default())?;
+                s.touch();
+                let _ = s.layout();
+            }
+            if let Some(width) = v.get("width").and_then(serde_json::Value::as_f64) {
+                s.view.mode = wordcraft_layout::ViewMode::Web;
+                s.view.web_width = width as f32;
+            }
+            Err(crate::CmdError::Failed("synthetic failure after two layouts".into()))
+        }));
+        s.registry = std::sync::Arc::new(crate::Registry::new(specs));
+        assert!(s.run("test.failLayouts", &json!({"width":web_width})).is_err());
+        assert_eq!(s.rev(), revision);
+        assert_eq!(s.sel, selection);
+        assert_eq!(s.doc.body[0].as_para().unwrap().text, wordcraft_doc::para::OBJ.to_string());
+        // No external strong Arc kept the original snapshot alive during the handler.
+        let original = owner.upgrade().expect("rollback retained the original owner");
+        let current = s.layout();
+        if web_width.is_none() {
+            assert!(std::sync::Arc::ptr_eq(&original, &current));
+            assert_eq!(ref_visual_caret(&mut s), before);
+        } else {
+            assert!(!std::sync::Arc::ptr_eq(&original, &current), "changed view cannot reuse the saved owner");
+            assert_eq!(ref_visual_caret(&mut s), current.caret_on(&s.sel.focus, s.page_hint).unwrap());
+        }
+    }
+}

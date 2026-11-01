@@ -493,7 +493,7 @@ struct CanvasView {
     caret: Option<wordcraft_layout::hit::Caret>,
 }
 
-fn prepare_view(app: &mut WordApp, ui: &Ui, full: Rect, layout: &DocLayout) -> CanvasView {
+fn prepare_view(app: &mut WordApp, ui: &Ui, full: Rect, layout: &std::sync::Arc<DocLayout>) -> CanvasView {
     use wordcraft_engine::cmd::view::ReadPageColor;
     let read_mode = app.session.view.read_mode;
     let dark_page = if read_mode { app.session.view.read_page_color == ReadPageColor::Inverse } else { app.session.view.dark_mode };
@@ -556,7 +556,7 @@ fn prepare_view(app: &mut WordApp, ui: &Ui, full: Rect, layout: &DocLayout) -> C
             app.canvas.scroll_to_caret = true;
         }
     }
-    let caret = app.session.caret_geometry(&layout, &preview_sel(app).unwrap_or(app.session.sel_ends()).focus);
+    let caret = app.session.caret_geometry(layout, &preview_sel(app).unwrap_or(app.session.sel_ends()).focus);
     let dim_body = dims_body(app, layout);
     let grid_story = text_box_host(app, layout).unwrap_or(app.session.sel.focus.story);
     let grid_story = matches!(part_kind(app, grid_story), Some(PartKind::Header | PartKind::Footer)).then_some(grid_story);

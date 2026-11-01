@@ -134,6 +134,8 @@ impl Session {
         // trace.
         let dirty_before = spec.mutates.then_some(self.dirty);
         let rev_restore = spec.mutates.then_some(self.rev);
+        // Rollback must retain owners evicted by temporary layouts. layout() still checks eligibility.
+        let layout_before = spec.mutates.then(|| self.layout.clone());
         // These mutating commands can replace the open document and discard its saved versions.
         // Keep the versions until the command and the protected-region post-check have both
         // succeeded; rejected commands must leave the old document and its snapshots together.
@@ -266,6 +268,9 @@ impl Session {
                 }
                 if let Some(rev) = rev_restore {
                     self.restore_rev(rev);
+                }
+                if let Some(entries) = layout_before {
+                    self.layout = entries.map(|entry| entry.filter(|entry| entry.0 == self.rev));
                 }
                 if let Some(b) = blocks_before {
                     self.building_blocks = b;

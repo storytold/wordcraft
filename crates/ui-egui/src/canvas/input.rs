@@ -144,7 +144,7 @@ fn route_pointer_targets(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rect
 struct PagePointer<'a> {
     ui: &'a Ui,
     resp: &'a egui::Response,
-    layout: &'a DocLayout,
+    layout: &'a std::sync::Arc<DocLayout>,
     p: Pos2,
     page: usize,
     x: f32,
