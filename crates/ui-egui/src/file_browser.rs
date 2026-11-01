@@ -304,9 +304,20 @@ impl WordApp {
     }
 }
 
+/// Whether the browser shows CJK text in its folder, name field or listed names.
+fn browses_cjk(b: &FileBrowser) -> bool {
+    let cjk = |s: &str| s.chars().any(wordcraft_fonts::is_cjk);
+    cjk(&b.dir.to_string_lossy()) || cjk(&b.location) || cjk(&b.name) || b.listing.as_ref().is_ok_and(|l| l.entries.iter().any(|e| cjk(&e.name)))
+}
+
 /// Draw the browser, if it is open.
 pub(crate) fn show(app: &mut WordApp, ctx: &egui::Context) {
     let Some(mut b) = app.file_browser.open.take() else { return };
+    // A Chinese file or folder name in the browser is drawn with the interface faces too: load
+    // the installed CJK font before the next frame, as the Recent list and the caption do.
+    if !app.fonts_system_cjk && browses_cjk(&b) {
+        app.want_system_cjk = true;
+    }
     let t = Tokens::get(ctx);
     let mut done: Option<Option<PathBuf>> = None;
     let window = egui::Window::new(tl!(b.title()))
@@ -620,5 +631,24 @@ mod tests {
         assert!(texts(&h).iter().any(|t| t.contains("chapter.docx")), "the file is listed");
         assert!(!texts(&h).iter().any(|t| t.contains("No items to show.")), "the hint is gone");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+    /// A Chinese folder, file name or listed entry asks for the installed CJK UI font; a Latin
+    /// listing does not (#2067 follow-up).
+    #[test]
+    fn a_chinese_name_in_the_browser_asks_for_the_cjk_font() {
+        let dir = scratch("cjk_names");
+        std::fs::write(dir.join("試卷-題目卷.docx"), b"x").unwrap();
+        let mut b =
+            FileBrowser::new(FileDialogRequest::Open { purpose: "document".into() }, AfterPick::OpenDocument { document: 0 }, dir.clone(), false);
+        b.navigate(dir.clone());
+        assert!(browses_cjk(&b), "a Chinese listed file needs the CJK font");
+        let latin = scratch("latin_names");
+        std::fs::write(latin.join("report.docx"), b"x").unwrap();
+        let mut b =
+            FileBrowser::new(FileDialogRequest::Open { purpose: "document".into() }, AfterPick::OpenDocument { document: 0 }, latin.clone(), false);
+        b.navigate(latin.clone());
+        assert!(!browses_cjk(&b));
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(latin);
     }
 }

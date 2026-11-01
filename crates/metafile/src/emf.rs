@@ -258,14 +258,22 @@ fn create_brush(cv: &mut Canvas, r: Bytes) -> Option<()> {
 }
 
 /// EMR_EXTCREATEFONTINDIRECTW: handle, then a LogFont (height, width, escapement, orientation, weight,
-/// italic, ..., face name of 32 UTF-16 units at 40).
+/// italic, ..., character set, ..., face name of 32 UTF-16 units at 40). The text is UTF-16 here, so
+/// the character set only travels with the font for the renderers.
 fn create_font(cv: &mut Canvas, r: Bytes) -> Option<()> {
     let slot = r.u32(8)? as usize;
     let mut face = [0u16; 32];
     for (i, u) in face.iter_mut().enumerate() {
         *u = r.u16(40 + i * 2).unwrap_or(0);
     }
-    let font = Font { height: r.i32(12)?, escapement: r.i32(20)?, weight: r.i32(28)?, italic: *r.0.get(32)? != 0, face };
+    let font = Font {
+        height: r.i32(12)?,
+        escapement: r.i32(20)?,
+        weight: r.i32(28)?,
+        italic: *r.0.get(32)? != 0,
+        face,
+        charset: *r.0.get(35).unwrap_or(&0),
+    };
     cv.add_object(Some(slot), Obj::Font(font));
     Some(())
 }

@@ -583,7 +583,9 @@ fn inline_objects(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
         }
         let cx = x + line.cl_left(k).unwrap_or(0.0);
         let obj = para.and_then(|p| p.objects.get(oi));
-        let rect = inline_rect(obj, cx, base, c.adv, c.obj_h);
+        // The run's `w:position` shifts the object off the baseline, as it shifts text.
+        let shift = pl.styles.get(c.style as usize).map_or(0.0, |st| st.shift);
+        let rect = inline_rect(obj, cx, base - shift, c.adv, c.obj_h);
         let spin = obj.and_then(InlineObject::frame).map(|(_, _, f)| f.spin()).unwrap_or_default();
         match obj {
             Some(o @ (InlineObject::Image { .. } | InlineObject::Shape { .. } | InlineObject::Group { .. })) => {

@@ -533,6 +533,98 @@ fn wmf_font_takes_an_object_slot_so_handles_line_up() {
     assert_eq!(stroke, Some(([0, 255, 0, 255], 4.0)));
 }
 
+/// A WMF LOGFONT payload (50 bytes): height, weight 400, charset and face name.
+fn logfont(height: i32, charset: u8, face: &str) -> Vec<u8> {
+    let mut p = vec![0u8; 50];
+    p[0..2].copy_from_slice(&(height as i16).to_le_bytes());
+    p[8..10].copy_from_slice(&400i16.to_le_bytes());
+    p[13] = charset;
+    let bytes = face.as_bytes();
+    let n = bytes.len().min(32);
+    p[18..18 + n].copy_from_slice(&bytes[..n]);
+    p
+}
+
+fn first_text(p: &crate::Picture) -> &crate::Text {
+    p.items
+        .iter()
+        .find_map(|i| match i {
+            Item::Text(t) => Some(t),
+            _ => None,
+        })
+        .expect("a text item")
+}
+
+#[test]
+fn wmf_ext_text_out_draws_the_selected_font_at_the_current_point() {
+    // MathType's records: TA_UPDATECP, a MOVETO before each run, no rectangle (neither ETO_OPAQUE
+    // nor ETO_CLIPPED), the string padded to a word, then one dx per byte.
+    let recs = [
+        wrec(0x0103, &h16(8)),
+        wrec(0x020C, &cat(vec![h16(1000), h16(1000)])),
+        wrec(0x012E, &h16(0x19)),
+        wrec(0x0209, &h32(0)),
+        wrec(0x02FB, &logfont(-100, 0, "Times New Roman")),
+        wrec(0x012D, &h16(0)),
+        wrec(0x0214, &cat(vec![h16(200), h16(100)])),
+        wrec(0x0A32, &cat(vec![h16(0), h16(0), h16(3), h16(0), b"Hi!".to_vec(), vec![0], h16(10), h16(20), h16(30)])),
+    ];
+    let p = parse(&wmf(&recs, Some([0, 0, 1000, 1000]))).unwrap();
+    let t = first_text(&p);
+    assert_eq!(t.text, "Hi!");
+    assert_eq!(t.font, "Times New Roman");
+    assert_eq!((t.x, t.y), (5.0, 10.0));
+    assert!(close(t.size, 5.0), "{}", t.size);
+    assert_eq!(t.valign, crate::VAlign::Baseline);
+    assert_eq!(t.dx.len(), 3);
+    assert!(close(t.dx[0], 0.5) && close(t.dx[2], 1.5), "{:?}", t.dx);
+}
+
+#[test]
+fn wmf_ext_text_out_decodes_big5_and_symbol_fonts() {
+    // A Big5 font: two bytes are one fullwidth minus; MathType writes an advance for each byte.
+    let big5 = [0xB7u8, 0x73, 0xB2, 0xD3, 0xA9, 0xFA, 0xC5, 0xE9]; // 新細明體
+    let mut face = vec![0u8; 50];
+    face[0..2].copy_from_slice(&(-100i16).to_le_bytes());
+    face[8..10].copy_from_slice(&400i16.to_le_bytes());
+    face[13] = 136;
+    face[18..26].copy_from_slice(&big5);
+    let recs = [
+        wrec(0x020C, &cat(vec![h16(1000), h16(1000)])),
+        wrec(0x02FB, &face),
+        wrec(0x012D, &h16(0)),
+        wrec(0x0A32, &cat(vec![h16(0), h16(0), h16(2), h16(0), vec![0xA1, 0xD0], h16(444), h16(0)])),
+    ];
+    let p = parse(&wmf(&recs, Some([0, 0, 1000, 1000]))).unwrap();
+    let t = first_text(&p);
+    assert_eq!(t.text, "－");
+    assert_eq!(t.dx.len(), 1);
+    assert!(close(t.dx[0], 22.2), "{:?}", t.dx);
+
+    // The Symbol font's bytes are its own codes; big parenthesis pieces become standard Unicode.
+    let recs = [
+        wrec(0x020C, &cat(vec![h16(1000), h16(1000)])),
+        wrec(0x02FB, &logfont(-100, 1, "Symbol")),
+        wrec(0x012D, &h16(0)),
+        wrec(0x0A32, &cat(vec![h16(0), h16(0), h16(2), h16(0), vec![0xE6, 0xF6], h16(0), h16(0)])),
+    ];
+    let p = parse(&wmf(&recs, Some([0, 0, 1000, 1000]))).unwrap();
+    assert_eq!(first_text(&p).text, "\u{239B}\u{239E}");
+}
+
+#[test]
+fn wmf_ext_text_out_reads_the_clipped_rectangle_before_the_string() {
+    let recs = [
+        wrec(0x020C, &cat(vec![h16(1000), h16(1000)])),
+        wrec(0x02FB, &logfont(-100, 0, "Arial")),
+        wrec(0x012D, &h16(0)),
+        // ETO_CLIPPED: y, x, count, options, rectangle (8 bytes), string, dx.
+        wrec(0x0A32, &cat(vec![h16(0), h16(0), h16(2), h16(0x0004), h16(0), h16(0), h16(500), h16(500), b"AB".to_vec(), h16(10), h16(20)])),
+    ];
+    let p = parse(&wmf(&recs, Some([0, 0, 1000, 1000]))).unwrap();
+    assert_eq!(first_text(&p).text, "AB");
+}
+
 #[test]
 fn emf_polybezierto16_continues_the_open_path() {
     // BEGINPATH, MOVETO a, LINETO b, POLYBEZIERTO16, CLOSEFIGURE, FILLPATH: one closed figure from a.

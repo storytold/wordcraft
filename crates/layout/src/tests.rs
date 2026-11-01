@@ -833,7 +833,7 @@ fn a_megabyte_long_word_lays_out_quickly() {
 
 /// A cluster with the given advance and kind, for the tests that measure a word by hand.
 fn word_cluster(kind: para::ClKind, adv: f32, break_after: bool) -> para::Cluster {
-    para::Cluster { start: 0, end: 1, adv, kind, style: 0, g0: 0, g1: 1, break_after, obj_h: 0.0, obj_d: 0.0, dot: false }
+    para::Cluster { start: 0, end: 1, adv, kind, style: 0, g0: 0, g1: 1, break_after, obj_h: 0.0, obj_d: 0.0, obj_shift: 0.0, dot: false }
 }
 
 /// A word that a negative advance makes narrower still fits beside a float: the width of a word
@@ -6394,6 +6394,33 @@ fn inline_picture_wider_than_the_text_keeps_its_size() {
     let draws = flat(display::page_display(&d, &l.pages[0], &Default::default()));
     let r = draws.iter().find_map(|x| if let display::Draw::Shape { rect, .. } = x { Some(*rect) } else { None }).expect("the picture");
     assert!((r.w - 1000.0).abs() < 0.01 && (r.h - 100.0).abs() < 0.01, "{r:?}");
+}
+
+#[test]
+fn an_object_run_position_shifts_the_object_off_the_baseline() {
+    // `w:position` shifts a run's inline picture too, as MathType's equation objects need: the
+    // object's bottom follows the run, and the line grows above or below to keep it.
+    let placed = |position: f32| {
+        let mut d = Document::from_text("");
+        if let Some(Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
+            let props = wordcraft_doc::CharProps { position: Some(position), ..Default::default() };
+            p.insert_object(0, rect_shape(20.0, 20.0, Default::default()), &props).unwrap();
+        }
+        let l = lay(&d);
+        let Some(Placed::Lines { para, y, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!("no lines") };
+        let baseline = y + para.lines[0].baseline;
+        let draws = flat(display::page_display(&d, &l.pages[0], &Default::default()));
+        let r = draws.iter().find_map(|x| if let display::Draw::Shape { rect, .. } = x { Some(*rect) } else { None }).expect("the shape");
+        (r.y + r.h - baseline, para.lines[0].height)
+    };
+    let (plain, plain_h) = placed(0.0);
+    assert!(plain.abs() < 0.01, "without a shift the bottom sits on the baseline: {plain}");
+    let (lowered, lowered_h) = placed(-10.0);
+    assert!((lowered - 10.0).abs() < 0.01, "a -10pt shift lowers the object's bottom by 10pt: {lowered}");
+    assert!(lowered_h > plain_h, "the line makes room below: {lowered_h} against {plain_h}");
+    let (raised, raised_h) = placed(10.0);
+    assert!((raised + 10.0).abs() < 0.01, "a +10pt shift raises it: {raised}");
+    assert!(raised_h > plain_h, "the line makes room above: {raised_h} against {plain_h}");
 }
 
 /// A floating object's anchor takes no room on a line: an inline picture a little wider than the

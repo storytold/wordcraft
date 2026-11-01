@@ -133,6 +133,9 @@ pub struct Cluster {
     pub obj_h: f32,
     /// Depth below the baseline for objects (equations), points.
     pub obj_d: f32,
+    /// Baseline shift of an object's run (`w:position`), points, positive up: the object's bottom
+    /// sits this far above (or, negative, below) the baseline.
+    pub obj_shift: f32,
     /// The cluster is a decimal separator (decimal tabs align on it).
     pub dot: bool,
 }

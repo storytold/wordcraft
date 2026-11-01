@@ -423,9 +423,16 @@ impl<'e> Breaker<'e> {
                 if pl.maths.iter().any(|(k, _)| c.kind == ClKind::Object(*k)) {
                     // Exact spacing keeps the run's baseline; tall math may overflow the
                     // fixed line box without moving adjacent text up by its denominator.
-                    if matches!(rp.line_spacing, LineSpacing::Exactly(_)) { (st.ascent, st.descent) } else { (c.obj_h, c.obj_d) }
+                    if matches!(rp.line_spacing, LineSpacing::Exactly(_)) {
+                        (st.ascent, st.descent)
+                    } else {
+                        ((c.obj_h + c.obj_shift).max(0.0), (c.obj_d - c.obj_shift).max(0.0))
+                    }
                 } else {
-                    ex.obj_asc = ex.obj_asc.max(c.obj_h);
+                    // A run's `w:position` shifts its picture too (MathType lowers an equation
+                    // object into its line): the line grows above or below to keep it.
+                    ex.obj_asc = ex.obj_asc.max((c.obj_h + c.obj_shift).max(0.0));
+                    ex.desc = ex.desc.max((-c.obj_shift).max(0.0));
                     (st.ascent, st.descent)
                 }
             } else {

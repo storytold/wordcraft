@@ -346,6 +346,7 @@ impl<'a> Builder<'a> {
                     break_after: false,
                     obj_h: 0.0,
                     obj_d: 0.0,
+                    obj_shift: 0.0,
                     dot: s == "." || s == ",",
                 });
             }
@@ -418,6 +419,7 @@ impl<'a> Builder<'a> {
                 break_after: false,
                 obj_h: 0.0,
                 obj_d: 0.0,
+                obj_shift: 0.0,
                 dot: false,
             });
             return;
@@ -452,7 +454,20 @@ impl<'a> Builder<'a> {
         let style = first.style;
         let g1 = added.last().map(|c| c.g1).unwrap_or(g0);
         self.shown.push((self.clusters.len(), text.to_string(), ranges));
-        self.clusters.push(Cluster { start, end, adv: x, kind: ClKind::Text, style, g0, g1, break_after: false, obj_h: 0.0, obj_d: 0.0, dot: false });
+        self.clusters.push(Cluster {
+            start,
+            end,
+            adv: x,
+            kind: ClKind::Text,
+            style,
+            g0,
+            g1,
+            break_after: false,
+            obj_h: 0.0,
+            obj_d: 0.0,
+            obj_shift: 0.0,
+            dot: false,
+        });
     }
 
     /// Shape `texts` on top of one another as one cluster for `start..end`: each aligned within
@@ -502,7 +517,20 @@ impl<'a> Builder<'a> {
         if !text.is_empty() {
             self.shown.push((k, text, ranges));
         }
-        self.clusters.push(Cluster { start, end, adv, kind: ClKind::Text, style, g0, g1, break_after: false, obj_h: 0.0, obj_d: 0.0, dot: false });
+        self.clusters.push(Cluster {
+            start,
+            end,
+            adv,
+            kind: ClKind::Text,
+            style,
+            g0,
+            g1,
+            break_after: false,
+            obj_h: 0.0,
+            obj_d: 0.0,
+            obj_shift: 0.0,
+            dot: false,
+        });
         Some(k)
     }
 }

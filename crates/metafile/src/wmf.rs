@@ -2,13 +2,20 @@
 //! records of (size in 16-bit words, function, parameters). Parameters are read at byte 6 of each record.
 
 use crate::bytes::Bytes;
-use crate::canvas::{Brush, Canvas, Obj, Pen, colorref};
+use crate::canvas::{Brush, Canvas, Font, Obj, Pen, colorref};
+use crate::codepage;
 use crate::dib;
 use crate::geom::{self, ArcKind, P};
 use crate::{Error, Frame, MAX_PATH_OPS};
 
 const PLACEABLE_KEY: u32 = 0x9AC6_CDD7;
 const DEFAULT_INCH: f64 = 1440.0;
+/// META_EXTTEXTOUT options (MS-WMF 2.1.1.10): the rectangle is present for the first two, the
+/// string holds glyph indices for the third, and the dx array holds (dx, dy) pairs for the last.
+const ETO_OPAQUE: u16 = 0x0002;
+const ETO_CLIPPED: u16 = 0x0004;
+const ETO_GLYPH_INDEX: u16 = 0x0010;
+const ETO_PDY: u16 = 0x2000;
 
 pub(crate) fn is_wmf(b: Bytes) -> bool {
     if b.u32(0) == Some(PLACEABLE_KEY) {
@@ -93,6 +100,10 @@ fn record(cv: &mut Canvas, func: u16, r: Bytes) {
         0x0103 => r.u16(6).map(|m| cv.set_map_mode(u32::from(m))),
         0x0106 => r.u16(6).map(|m| cv.set_polyfill(u32::from(m))),
         0x0104 => r.u16(6).map(|m| cv.set_rop2(u32::from(m))),
+        // SETTEXTALIGN (TA_* flags) and SETTEXTCOLOR (COLORREF); MathType positions each run with
+        // MOVETO and TA_UPDATECP, so without these the text lands at (0, 0) in black.
+        0x012E => r.u16(6).map(|a| cv.set_text_align(u32::from(a))),
+        0x0209 => r.u32(6).map(|c| cv.set_text_color(colorref(c))),
         // Y is stored before X in these records.
         0x020B => xy16(r, 6).map(|p| cv.set_window_org(p)),
         0x020C => xy16(r, 6).map(|p| cv.set_window_ext(p)),
@@ -128,12 +139,16 @@ fn record(cv: &mut Canvas, func: u16, r: Bytes) {
         }),
         0x02FA => create_pen(cv, r),
         0x02FC => create_brush(cv, r),
-        // Fonts, palettes, pattern brushes and regions take a handle slot too, so later SELECTOBJECT
+        0x02FB => create_font(cv, r),
+        // Palettes, pattern brushes and regions take a handle slot too, so later SELECTOBJECT
         // handles count them; selecting one draws nothing.
-        0x02FB | 0x00F7 | 0x01F9 | 0x0142 | 0x06FF => {
+        0x00F7 | 0x01F9 | 0x0142 | 0x06FF => {
             cv.add_object(None, Obj::Other);
             Some(())
         }
+        // META_TEXTOUT and META_EXTTEXTOUT: 8-bit characters in the selected font's code page.
+        0x0521 => text_out(cv, r),
+        0x0A32 => ext_text_out(cv, r),
         0x012D => r.u16(6).map(|h| cv.select(wmf_handle(h))),
         0x01F0 => r.u16(6).map(|h| cv.delete_object(u32::from(h))),
         // STRETCHDIB: rop(4) usage(2) srcH srcW ySrc xSrc destH destW yDest xDest, then the DIB.
@@ -173,6 +188,90 @@ fn create_brush(cv: &mut Canvas, r: Bytes) -> Option<()> {
     let style = r.u16(6)?;
     let color = r.u32(8)?;
     cv.add_object(None, Obj::Brush(Brush { style: u32::from(style), color: colorref(color) }));
+    Some(())
+}
+
+/// CREATEFONTINDIRECT: a 50-byte ANSI LOGFONT at 6 — height, width, escapement, orientation,
+/// weight, style bytes, character set, face name (32 bytes in the character set's code page).
+fn create_font(cv: &mut Canvas, r: Bytes) -> Option<()> {
+    // A truncated LOGFONT still takes a handle slot: later SELECTOBJECT handles count it, even
+    // when there is no face name to read (the format's own object table is positional).
+    let height = r.i16(6).map(i32::from).unwrap_or(0);
+    let escapement = r.i16(10).map(i32::from).unwrap_or(0);
+    let weight = r.i16(14).map(i32::from).unwrap_or(400);
+    let italic = r.0.get(16).is_some_and(|b| *b != 0);
+    let charset = r.0.get(19).copied().unwrap_or(0);
+    let face_bytes = r.slice(24, 32).unwrap_or(&[]);
+    let end = face_bytes.iter().position(|b| *b == 0).unwrap_or(face_bytes.len());
+    let (face, _) = codepage::decode(&face_bytes[..end], charset);
+    let mut units = [0u16; 32];
+    for (slot, c) in units.iter_mut().zip(face.encode_utf16()) {
+        *slot = c;
+    }
+    cv.add_object(None, Obj::Font(Font { height, escapement, weight, italic, face: units, charset }));
+    Some(())
+}
+
+/// The text of a WMF record's 8-bit string in the selected font. A symbol font's bytes are its
+/// own codes (the Adobe Symbol encoding), not the ANSI code page.
+fn decode_text(cv: &Canvas, bytes: &[u8]) -> (String, Vec<usize>) {
+    let font = cv.current_font();
+    let face = String::from_utf16_lossy(&font.face);
+    let face = face.trim_end_matches('\0').trim();
+    if face.eq_ignore_ascii_case("Symbol") {
+        let text = bytes.iter().map(|b| codepage::symbol_char(*b).unwrap_or(char::from(*b))).collect();
+        (text, vec![1; bytes.len()])
+    } else {
+        codepage::decode(bytes, font.charset)
+    }
+}
+
+/// META_TEXTOUT (0x0521): count at 6, the string at 8, then y and x. No dx array.
+fn text_out(cv: &mut Canvas, r: Bytes) -> Option<()> {
+    let n = r.u16(6)? as usize;
+    let bytes = r.slice(8, n)?;
+    let at = xy16(r, 8 + n)?;
+    let (text, _) = decode_text(cv, bytes);
+    cv.text(at, text, &[]);
+    Some(())
+}
+
+/// META_EXTTEXTOUT (0x0A32): reference point, character count and options at 6..14, an optional
+/// clipped/opaque rectangle, then the 8-bit string and its per-character advances. The rectangle
+/// is omitted by MathType when neither ETO_CLIPPED nor ETO_OPAQUE is set (it is optional in the
+/// format), so the string's offset depends on the options.
+fn ext_text_out(cv: &mut Canvas, r: Bytes) -> Option<()> {
+    let at = xy16(r, 6)?;
+    let n = r.u16(10)? as usize;
+    let options = r.u16(12)?;
+    // A glyph-index string cannot be mapped back to characters.
+    if options & ETO_GLYPH_INDEX != 0 {
+        return Some(());
+    }
+    let mut off = 14usize;
+    if options & (ETO_OPAQUE | ETO_CLIPPED) != 0 {
+        off = off.checked_add(8)?;
+    }
+    let bytes = r.slice(off, n)?;
+    // The string is followed by a word-aligned array of 16-bit advances (dx, dy pairs with
+    // ETO_PDY), one per byte of the string.
+    let dx_at = off.checked_add(n)?.checked_add((off + n) & 1)?;
+    let step = if options & ETO_PDY != 0 { 4 } else { 2 };
+    let total = n.min(r.0.len().saturating_sub(dx_at) / step);
+    let per_byte: Vec<f64> = (0..total).filter_map(|i| r.i16(dx_at + i * step).map(f64::from)).collect();
+    let (text, lengths) = decode_text(cv, bytes);
+    // One dx entry per character, summing the bytes a DBCS character came from.
+    let mut dx = Vec::with_capacity(lengths.len());
+    let mut i = 0usize;
+    for len in lengths {
+        let mut sum = 0.0;
+        for _ in 0..len {
+            sum += per_byte.get(i).copied().unwrap_or(0.0);
+            i = i.saturating_add(1);
+        }
+        dx.push(sum);
+    }
+    cv.text(at, text, &dx);
     Some(())
 }
 
