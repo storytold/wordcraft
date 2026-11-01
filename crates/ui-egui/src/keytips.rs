@@ -857,10 +857,6 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context, ui: &mut Ui) {
         return;
     }
     let cmds: Vec<(Rect, String)> = ui.data(|d| d.get_temp::<Vec<(Rect, String)>>(rects_id())).unwrap_or_default();
-    // With no ribbon showing (Focus, Full Screen View) there are no tab rects to hang badges on,
-    // so the tab badges are laid out along the slim bar instead: keytips there still pick a tab,
-    // and without badges the mode would consume every key with nothing on screen to show for it.
-    let bar_tabs = if tabs.is_empty() && app.ui.keytips == Phase::Tabs { slim_bar_badges(app, ui.ctx().content_rect()) } else { Vec::new() };
     // Badges sit on the ribbon. In Focus the ribbon is dropped over the page in its own area above
     // the window's layer, so the window's painter would put them underneath it: paint on that
     // area's layer instead (#1678).
@@ -869,9 +865,21 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context, ui: &mut Ui) {
     } else {
         ui.painter().clone()
     };
-    for (r, l) in tabs.into_iter().chain(bar_tabs).chain(cmds) {
+    for (r, l) in badge_rects(app, ui.ctx().content_rect(), tabs, cmds) {
         badge_on(&painter, ui.ctx(), r, &l);
     }
+}
+
+/// Every badge this frame paints: the ribbon's own tab rects, the tab badges laid along the slim
+/// bar when no ribbon is showing, and the command badges the widgets published.
+///
+/// Whether the tab badges go on the bar is decided by the screen state, not by "no rects were
+/// recorded": Full Screen View's bar has a Search box that records its own `Q` badge, so a
+/// recorded-rect test would leave that state showing `Q` alone (#1678).
+pub(crate) fn badge_rects(app: &WordApp, window: Rect, tabs: Vec<(Rect, String)>, cmds: Vec<(Rect, String)>) -> Vec<(Rect, String)> {
+    let ribbon_showing = crate::chrome::Screen::of(&app.session.view) == crate::chrome::Screen::Normal;
+    let bar_tabs = if app.ui.keytips == Phase::Tabs && !ribbon_showing { slim_bar_badges(app, window) } else { Vec::new() };
+    tabs.into_iter().chain(bar_tabs).chain(cmds).collect()
 }
 
 /// Tab badge positions along the slim bar of Focus and Full Screen View, in tab order: a small

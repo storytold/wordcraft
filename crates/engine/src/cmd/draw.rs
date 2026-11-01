@@ -236,6 +236,9 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         CommandSpec::new("draw.erase", "Erase Ink", "Draw › Tools", erase).params(r#"{"page": n, "x": pt, "y": pt}"#),
         CommandSpec::new("draw.inkToShape", "Ink to Shape", "Draw › Convert", |s, v| {
+            // A `value` that is not a boolean refuses the command: it must not fall through to
+            // converting the lasso-selected strokes as if no value had been given.
+            p::check_switch(v)?;
             if let Some(on) = p::bool(v, "value") {
                 s.view.draw.ink_to_shape = on;
                 return Ok(json!({"value": on}));

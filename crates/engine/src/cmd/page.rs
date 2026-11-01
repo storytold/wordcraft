@@ -141,6 +141,8 @@ fn line_numbers(s: &mut Session, v: &Value) -> CmdResult {
 
 /// Hyphenation: automatic on or off, and its options (Hyphenation Options).
 fn hyphenation(s: &mut Session, v: &Value) -> CmdResult {
+    // A `value` that is not a boolean refuses the command instead of toggling hyphenation.
+    p::check_switch(v)?;
     let st = &mut s.doc.settings;
     let options = ["zone", "caps", "limit"].iter().any(|k| v.get(*k).is_some_and(|x| !x.is_null()));
     match p::bool(v, "value") {

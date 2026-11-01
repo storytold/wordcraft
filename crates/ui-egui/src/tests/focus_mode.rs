@@ -158,6 +158,10 @@ fn keytips_in_focus_show_their_badges_on_the_slim_bar() {
     assert!(letters.starts_with(&["F", "H", "N"]), "the tab badges in tab order: {letters:?}");
     assert!(badges.iter().all(|(r, _)| bar.contains_rect(*r)), "every badge is in the slim bar: {badges:?}");
     assert!(badges.windows(2).all(|w| w[0].0.max.x <= w[1].0.min.x), "and none overlaps the next");
+    // Every badge the frame paints: the bar's tabs, plus whatever the chrome recorded (in Full
+    // Screen View the Search box records its own Q).
+    let all: Vec<String> = crate::keytips::badge_rects(h.state(), bar, Vec::new(), Vec::new()).into_iter().map(|(_, l)| l).collect();
+    assert_eq!(all, letters.iter().map(|l| l.to_string()).collect::<Vec<_>>(), "the bar's badges are what Focus paints");
     // W is the View tab's keytip letter: the ribbon drops down, since command badges need it.
     h.key_press(egui::Key::W);
     h.run_steps(3);
@@ -399,6 +403,30 @@ fn f6_in_focus_keeps_the_keyboard_on_the_page() {
     h.event(egui::Event::Text("k".into()));
     h.run_steps(2);
     assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Hellok");
+}
+
+/// Full Screen View's keytips: its bar has a Search box, which records a Q badge during layout.
+/// The tab badges must still be laid along the bar — testing "no rects were recorded" would leave
+/// that state showing Q alone (a review finding) — and the ribbon still drops for the commands.
+#[test]
+fn full_screen_view_keeps_its_tab_badges_beside_search() {
+    let mut h = canvas_harness();
+    h.state_mut().run("view.fullScreenView", json!({"value": true})).unwrap();
+    h.run_steps(3);
+    h.key_press(egui::Key::F10);
+    h.run_steps(3);
+    assert_eq!(h.state().ui.keytips, crate::keytips::Phase::Tabs);
+    // What the Search box records during layout (a Q badge over itself), and what the frame paints
+    // on top of it.
+    let bar = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1440.0, crate::chrome::SCREEN_BAR_HEIGHT));
+    let search = (egui::Rect::from_min_size(egui::pos2(700.0, 6.0), egui::vec2(15.0, 15.0)), "Q".to_string());
+    let painted: Vec<String> = crate::keytips::badge_rects(h.state(), bar, vec![search], Vec::new()).into_iter().map(|(_, l)| l).collect();
+    assert!(painted.contains(&"Q".to_string()), "Search keeps its badge: {painted:?}");
+    assert!(painted.contains(&"F".to_string()) && painted.contains(&"W".to_string()), "and the tabs are there too: {painted:?}");
+    // A W picks View and drops the ribbon, whose command badges then have a home.
+    h.key_press(egui::Key::W);
+    h.run_steps(3);
+    assert!(h.state().focus_ribbon, "the ribbon drops down for the command badges");
 }
 
 /// Full Screen View can drop the ribbon too, which is how its keytips show their command badges:

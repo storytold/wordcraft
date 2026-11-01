@@ -1,6 +1,6 @@
 # Focus (distraction-free / "Zen") mode: integration test report
 
-> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-10-31 · **Change:** issues 1–5 fixed and their tests flipped to the fixed behaviour (24 tests); issue 6 stands as notes. First version the same day: integration testing of View › Immersive › Focus (`view.focus`, #1678) across the engine, the egui front end, the control channel, the CLI and MCP; six issues found (one severe), all pinned by new tests.
+> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-10-31 · **Change:** issues 1–5 fixed and their tests flipped to the fixed behaviour (24 tests); a review follow-up widened fix 2 to four more commands that read `value` without the shared pattern, and fixed the tab badges beside Full Screen View's Search badge (25 tests). Issue 6 stands as notes. First version the same day: integration testing of View › Immersive › Focus (`view.focus`, #1678) across the engine, the egui front end, the control channel, the CLI and MCP; six issues found (one severe), all pinned by new tests.
 
 Focus is WordCraft's distraction-free mode: the document alone on a black canvas, with a slim bar
 whose `…` drops the ribbon over the page. It shares the "screen state" code with Full Screen View
@@ -18,7 +18,7 @@ New test files (the fixes themselves are in `crates/engine/src`, `crates/ui-egui
 | File | Tests | What it covers |
 |---|---|---|
 | `crates/engine/src/tests/focus_mode.rs` | 8 | The command's contract: `view.state` reporting, toggle vs. `value`, a non-boolean `value` refused (every view switch), no undo/dirty/document change, the three full-screen states, Read Mode, per-document view state, not saved in the file |
-| `crates/ui-egui/src/tests/focus_mode.rs` | 16 | The whole frame loop: chrome/panes/ruler/status bar hidden and restored, both entry buttons, the ribbon button by keytip, Escape ordering (dialog, selection, File page), keytips on the slim bar and the ribbon they drop, OS full-screen exit, closing the last document, Read Mode, typing/formatting/undo, F6, the keyboard handover, the Search palette, collapsed ribbon, accessible names, preferences, Full Screen View's dropped ribbon |
+| `crates/ui-egui/src/tests/focus_mode.rs` | 17 | The whole frame loop: chrome/panes/ruler/status bar hidden and restored, both entry buttons, the ribbon button by keytip, Escape ordering (dialog, selection, File page), keytips on the slim bar and the ribbon they drop, OS full-screen exit, closing the last document, Read Mode, typing/formatting/undo, F6, the keyboard handover, the Search palette, collapsed ribbon, accessible names, preferences, Full Screen View's dropped ribbon |
 
 Run them with:
 
@@ -114,6 +114,14 @@ string, a number, `null`, an array — is a parameter error that changes nothing
 read `value` with `p::bool(...).unwrap_or(...)` now goes through them, so paragraph toggles, review
 switches, panes, options and equations share the contract. MCP reports it as
 `bad parameters: `value` must be true or false`.
+
+**Review follow-up:** four more commands read `value` without that pattern, so a junk value fell
+through to the "no value" branch — the worst being `draw.inkToShape`, which would convert the
+lasso-selected strokes to shapes. All four now validate first and change nothing:
+`draw.inkToShape`, `layout.hyphenation`, `format.bold`/`format.italic`/… (the character-toggle
+helper) and `format.underline`, plus `table.repeatHeader` and `table.rtl`. The widened test checks
+thirty switches and compares `view.state`, `document.inspect` and the undo labels before and after
+every refusal.
 
 ### 3. Moderate: Focus started without a click strands the keyboard in the vanished field — **fixed**
 
@@ -247,6 +255,12 @@ Gates run while checking this work: `cargo fmt --all -- --check` (clean),
 (1000 passed), `cargo test -p wordcraft-engine --lib` (1076 passed, 1 pre-existing failure above).
 
 ## Revision history
+
+> 2026-10-31 · Review follow-up: fix 2 widened to four commands that read `value` without the
+> shared pattern — `draw.inkToShape` (which converted the lasso's strokes), `layout.hyphenation`,
+> the character-toggle helper and `format.underline`, `table.repeatHeader` and `table.rtl` — and fix
+> 4 widened to Full Screen View, whose Search box's own `Q` badge would have hidden the tab badges.
+> 25 tests.
 
 > 2026-10-31 · Fixes: issues 1–5 resolved — the empty window keeps the screen state and its bar, so
 > nothing can strand a full-screen window; `p::toggle`/`p::switch` refuse a non-boolean `value`
