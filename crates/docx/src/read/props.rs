@@ -208,6 +208,10 @@ impl PropCtx {
 
     /// `w:shd`: its fill colour (a theme fill first), or a solid pattern's colour.
     pub fn shd_fill(&self, e: &El) -> Option<Rgb> {
+        // `nil` counts as no shading, whatever fill it carries (MS-OI29500 17.18.78).
+        if e.attr("w:val") == Some("nil") {
+            return None;
+        }
         if let Some(c) = self.theme_color(e, "w:themeFill", "w:themeFillTint", "w:themeFillShade") {
             return Some(c);
         }
@@ -282,7 +286,7 @@ impl PropCtx {
                     c.underline_color =
                         self.theme_color(k, "w:themeColor", "w:themeTint", "w:themeShade").or_else(|| k.attr("w:color").and_then(Rgb::parse));
                 }
-                "w:bdr" => c.border = Some(border(k)),
+                "w:bdr" => c.border = Some(self.border(k)),
                 "w:shd" => c.shading = self.shd_fill(k),
                 "w:vertAlign" => {
                     c.vert_align = k.attr("w:val").map(|v| match v {
@@ -361,7 +365,7 @@ impl PropCtx {
                         (None, None) => {}
                     }
                 }
-                "w:pBdr" => p.borders = Some(borders(k)),
+                "w:pBdr" => p.borders = Some(self.borders(k)),
                 "w:shd" => p.shading = self.shd_fill(k),
                 "w:tabs" => {
                     let tabs: Vec<TabStop> = k.children("w:tab").take(64).filter_map(tab_stop).collect();
@@ -476,29 +480,32 @@ fn shd_fill(e: &El) -> Option<Rgb> {
     None
 }
 
-pub fn border(e: &El) -> Border {
-    let style = BorderStyle::from_ooxml(e.attr("w:val").unwrap_or("single"));
-    let width = e.attr("w:sz").and_then(|v| measure(v, 8.0)).unwrap_or(0.5).clamp(0.0, 12.0);
-    let color = e.attr("w:color").and_then(Rgb::parse);
-    let space = e.attr("w:space").and_then(|v| measure(v, 1.0)).unwrap_or(0.0).clamp(0.0, 31.0);
-    Border { style, width, color, space }
-}
-
-/// `w:pBdr`, `w:tblBorders`, `w:tcBorders`, `w:pgBorders`.
-pub fn borders(e: &El) -> Borders {
-    let mut b = Borders::default();
-    for k in e.els() {
-        match k.local() {
-            "top" => b.top = Some(border(k)),
-            "left" | "start" => b.left = Some(border(k)),
-            "bottom" => b.bottom = Some(border(k)),
-            "right" | "end" => b.right = Some(border(k)),
-            "between" | "insideH" => b.between = Some(border(k)),
-            "insideV" => b.inside_v = Some(border(k)),
-            _ => {}
-        }
+impl PropCtx {
+    /// One border (`CT_Border`); its theme colour supersedes `w:color`, as for text.
+    pub fn border(&self, e: &El) -> Border {
+        let style = BorderStyle::from_ooxml(e.attr("w:val").unwrap_or("single"));
+        let width = e.attr("w:sz").and_then(|v| measure(v, 8.0)).unwrap_or(0.5).clamp(0.0, 12.0);
+        let color = self.theme_color(e, "w:themeColor", "w:themeTint", "w:themeShade").or_else(|| e.attr("w:color").and_then(Rgb::parse));
+        let space = e.attr("w:space").and_then(|v| measure(v, 1.0)).unwrap_or(0.0).clamp(0.0, 31.0);
+        Border { style, width, color, space }
     }
-    b
+
+    /// `w:pBdr`, `w:tblBorders`, `w:tcBorders`, `w:pgBorders`.
+    pub fn borders(&self, e: &El) -> Borders {
+        let mut b = Borders::default();
+        for k in e.els() {
+            match k.local() {
+                "top" => b.top = Some(self.border(k)),
+                "left" | "start" => b.left = Some(self.border(k)),
+                "bottom" => b.bottom = Some(self.border(k)),
+                "right" | "end" => b.right = Some(self.border(k)),
+                "between" | "insideH" => b.between = Some(self.border(k)),
+                "insideV" => b.inside_v = Some(self.border(k)),
+                _ => {}
+            }
+        }
+        b
+    }
 }
 
 /// Margins element (`w:tblCellMar`, `w:tcMar`) → [top, left, bottom, right].
@@ -532,7 +539,7 @@ impl PropCtx {
                 }
                 "w:jc" => t.align = k.attr("w:val").map(align),
                 "w:tblInd" => t.indent = tw(k, "w:w"),
-                "w:tblBorders" => t.borders = Some(borders(k)),
+                "w:tblBorders" => t.borders = Some(self.borders(k)),
                 "w:shd" => t.shading = self.shd_fill(k),
                 "w:tblLayout" => t.fixed = k.attr("w:type") == Some("fixed"),
                 "w:bidiVisual" => t.bidi_visual = on_off(k),
@@ -638,7 +645,7 @@ pub fn tcpr(pc: &PropCtx, e: &El) -> (CellProps, bool) {
             "w:gridSpan" => c.span = k.attr("w:val").and_then(u32_of).unwrap_or(1).clamp(1, 63),
             "w:hMerge" => hcont = k.attr("w:val") != Some("restart"),
             "w:vMerge" => c.vmerge = if k.attr("w:val") == Some("restart") { VMerge::Restart } else { VMerge::Continue },
-            "w:tcBorders" => c.borders = Some(borders(k)),
+            "w:tcBorders" => c.borders = Some(pc.borders(k)),
             "w:shd" => c.shading = pc.shd_fill(k),
             "w:noWrap" => c.no_wrap = on_off(k),
             "w:hideMark" => c.hide_mark = on_off(k),
@@ -675,7 +682,7 @@ pub struct HfRef {
 }
 
 /// `w:sectPr` (header/footer references are returned for the caller to resolve).
-pub fn sectpr(e: &El) -> (SectionProps, Vec<HfRef>) {
+pub fn sectpr(pc: &PropCtx, e: &El) -> (SectionProps, Vec<HfRef>) {
     let mut s = SectionProps::default();
     let mut refs = Vec::new();
     for k in e.els() {
@@ -780,7 +787,7 @@ pub fn sectpr(e: &El) -> (SectionProps, Vec<HfRef>) {
                     _ => PageVAlign::Top,
                 }
             }
-            "w:pgBorders" => s.page_borders = Some(borders(k)),
+            "w:pgBorders" => s.page_borders = Some(pc.borders(k)),
             "w:docGrid" => {
                 let mut g = DocGrid::default();
                 if let Some(t) = k.attr("w:type").and_then(DocGridType::from_ooxml) {
