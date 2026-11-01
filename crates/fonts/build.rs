@@ -1,13 +1,17 @@
 //! Optional craft-fonts build input (https://github.com/storytold/craft-fonts, recipe from its
 //! `docs/integration.md`). With `CRAFT_FONTS_DIR=<checkout>` the fonts in its
 //! `fonts/manifest.txt` are embedded as `CRAFT_FONTS`; unset, `CRAFT_FONTS` is empty. Web
-//! (wasm32) builds embed only the Georgian interface face (about 230 KB), to stay within the web
-//! size budget; the Japanese one is 4.7 MB. With `CRAFT_FONTS_REQUIRED` (releases), a native
+//! (wasm32) builds embed only the Georgian interface face and the Thai document face (about 230
+//! and 220 KB, `src/web_fonts.rs`), to stay within the web size budget; the Japanese one is
+//! 4.7 MB. With `CRAFT_FONTS_REQUIRED` (releases), a native
 //! build also fails when the checkout has no font for a CJK interface language (Japanese,
 //! Simplified Chinese), as an outdated pin once did (#241). It only reads the local checkout: no
 //! network.
 use std::fmt::Write as _;
 use std::path::PathBuf;
+
+#[path = "src/web_fonts.rs"]
+mod web_fonts;
 
 fn main() {
     println!("cargo::rerun-if-env-changed=CRAFT_FONTS_DIR");
@@ -56,7 +60,7 @@ fn craft_fonts(dir: &std::path::Path) -> Result<(String, Vec<String>), String> {
         let [family, style, file, scripts, ..] = f.as_slice() else {
             return Err(format!("malformed manifest line: {line}"));
         };
-        if wasm && !scripts.split(',').any(|s| s.trim() == "Geor") {
+        if wasm && !web_fonts::embed_on_web(scripts) {
             continue;
         }
         let path = dir.join(file).canonicalize().map_err(|e| format!("{file}: {e}"))?;
