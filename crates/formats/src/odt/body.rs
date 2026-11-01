@@ -277,6 +277,8 @@ pub(super) struct Body<'a> {
     active_ins: Vec<(String, RevMark)>,
     /// The text field being read.
     field: Option<OpenField>,
+    /// Where the frame being read floats.
+    frame_float: Option<wordcraft_doc::para::Float>,
     /// The note or comment being read.
     note: Option<OpenNote>,
     /// The list being read (its flow number, [`ListInfo::list`]), the last one, the next number,
@@ -384,6 +386,7 @@ impl<'a> Body<'a> {
             del: None,
             active_ins: Vec::new(),
             field: None,
+            frame_float: None,
             note: None,
             comment_names: HashMap::new(),
             next_comment: 0,
@@ -864,6 +867,8 @@ impl Body<'_> {
                 let w = get(a, "svg:width").and_then(length);
                 let h = get(a, "svg:height").and_then(length);
                 self.frame = Some((w, h, None, String::new(), None));
+                let g = get(a, "draw:style-name").map(|s| self.styles.graphic(s)).unwrap_or_default();
+                self.frame_float = Some(super::frames::float_of(get(a, "text:anchor-type"), get(a, "svg:x"), get(a, "svg:y"), &g));
             }
             "image" => {
                 if let Some(href) = get(a, "xlink:href")
@@ -1453,7 +1458,10 @@ impl Body<'_> {
                 if let Some((w, h, img, alt, eq)) = self.frame.take() {
                     let inline = match eq {
                         Some((linear, display)) => Some(Inline::Equation { linear, display }),
-                        None => img.and_then(|data| make_img(data, w, h, alt.trim())).map(Inline::Image),
+                        None => img.and_then(|data| make_img(data, w, h, alt.trim())).map(|mut img| {
+                            img.float = self.frame_float.take().filter(|f| f.wrap != wordcraft_doc::para::Wrap::Inline).map(Box::new);
+                            Inline::Image(img)
+                        }),
                     };
                     if let Some(inline) = inline {
                         if self.para.is_none() {

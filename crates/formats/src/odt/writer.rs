@@ -102,6 +102,8 @@ pub(super) struct Writer {
     master: Option<SecStart>,
     /// Cell styles by (shading, vertical-alignment).
     cell_styles: Vec<String>,
+    /// Graphic styles of floating pictures: their `style:graphic-properties` attributes.
+    graphic_styles: Vec<String>,
     pub(super) pictures: Vec<(String, std::sync::Arc<Vec<u8>>, String)>,
     /// `text:changed-region` elements written so far.
     pub(super) regions: Vec<String>,
@@ -677,8 +679,16 @@ impl Writer {
                 Inline::Image(img) => {
                     let href = self.picture(img);
                     let n = self.pictures.len();
+                    // A floating picture: anchored, in a graphic style that places and wraps it.
+                    let (anchor, place) = match img.float.as_deref() {
+                        Some(f) => {
+                            let (anchor, props, xy) = super::frames::frame_of(f);
+                            (anchor, format!(" draw:style-name=\"{}\"{xy}", self.graphic_style(props)))
+                        }
+                        None => ("as-char", String::new()),
+                    };
                     out.push_str(&format!(
-                        "<draw:frame draw:name=\"{}Image{n}\" text:anchor-type=\"as-char\" svg:width=\"{}\" svg:height=\"{}\" draw:z-index=\"0\"><draw:image xlink:href=\"{href}\" xlink:type=\"simple\" xlink:show=\"embed\" xlink:actuate=\"onLoad\"/>",
+                        "<draw:frame draw:name=\"{}Image{n}\"{place} text:anchor-type=\"{anchor}\" svg:width=\"{}\" svg:height=\"{}\" draw:z-index=\"0\"><draw:image xlink:href=\"{href}\" xlink:type=\"simple\" xlink:show=\"embed\" xlink:actuate=\"onLoad\"/>",
                         self.prefix,
                         pt(img.w),
                         pt(img.h)
@@ -949,6 +959,18 @@ impl Writer {
         }
     }
 
+    /// The automatic graphic style of a frame placed by `props`.
+    fn graphic_style(&mut self, props: String) -> String {
+        let k = match self.graphic_styles.iter().position(|s| *s == props) {
+            Some(k) => k,
+            None => {
+                self.graphic_styles.push(props);
+                self.graphic_styles.len() - 1
+            }
+        };
+        format!("{}fr{}", self.prefix, k + 1)
+    }
+
     /// The automatic style of a cell with `props` (its `style:table-cell-properties` attributes).
     fn cell_style(&mut self, props: String) -> String {
         let k = match self.cell_styles.iter().position(|s| *s == props) {
@@ -1100,6 +1122,13 @@ impl Writer {
                     pt(*w)
                 ));
             }
+        }
+        for (i, props) in self.graphic_styles.iter().enumerate() {
+            s.push_str(&format!(
+                "<style:style style:name=\"{}fr{}\" style:family=\"graphic\"><style:graphic-properties{props}/></style:style>",
+                self.prefix,
+                i + 1
+            ));
         }
         for (i, props) in self.cell_styles.iter().enumerate() {
             s.push_str(&format!(

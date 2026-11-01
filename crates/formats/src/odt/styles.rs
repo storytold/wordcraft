@@ -185,6 +185,8 @@ struct StyleInfo {
     para_borders: Option<Borders>,
     /// `fo:background-color` of a paragraph style (`Some(None)`: transparent, stated).
     para_shading: Option<Option<Rgb>>,
+    /// `style:graphic-properties` of a graphic style: a frame's placement.
+    graphic: Option<super::frames::Graphic>,
     /// `style:tab-stops`: the style's whole set (it replaces the parent's, §17.7).
     tabs: Option<Vec<TabStop>>,
 }
@@ -334,6 +336,42 @@ pub(super) fn parse_border(v: &str) -> Option<Border> {
         any = true;
     }
     any.then_some(b)
+}
+
+/// A property element `name` (`q` in full) of the style being read, into `s`: true when it is
+/// one (paragraph, table, column, cell, section and graphic properties, tab stops).
+fn style_child(name: &str, q: &str, a: &Attrs, s: &mut StyleInfo) -> bool {
+    match name {
+        "paragraph-properties" => paragraph_properties(a, s),
+        "tab-stops" => s.tabs = Some(Vec::new()),
+        "tab-stop" => {
+            if let Some(t) = s.tabs.as_mut().filter(|t| t.len() < MAX_TABS)
+                && let Some(stop) = tab_stop(a)
+            {
+                t.push(stop);
+            }
+        }
+        "table-properties" => {
+            if let Some(v) = get(a, "style:page-number") {
+                s.page_number = Some(v.trim().parse::<u32>().ok().map(|n| n.min(32_767)));
+            }
+        }
+        "table-column-properties" => {
+            if let Some(w) = get(a, "style:column-width").and_then(length) {
+                s.column_width = Some(w);
+            }
+        }
+        "table-cell-properties" => table_cell_properties(a, s),
+        "columns" if q.starts_with("style:") => s.columns = Some(columns_of(a)),
+        "column-sep" => {
+            if let Some(c) = &mut s.columns {
+                c.separator = column_sep(a);
+            }
+        }
+        "graphic-properties" => s.graphic = Some(super::frames::Graphic::read(a)),
+        _ => return false,
+    }
+    true
 }
 
 /// A table-cell style's `style:table-cell-properties` (ODF 1.3 §17.18): background, borders,
@@ -618,59 +656,12 @@ impl Styles {
                         self.default_tab = Some(d.clamp(1.0, MAX_LEN));
                     }
                 }
-                "tab-stops" => {
-                    if let Some((_, s)) = &mut cur {
-                        s.tabs = Some(Vec::new());
-                    }
-                }
-                "tab-stop" => {
-                    if let Some(t) = cur.as_mut().and_then(|(_, s)| s.tabs.as_mut()).filter(|t| t.len() < MAX_TABS)
-                        && let Some(stop) = tab_stop(&a)
-                    {
-                        t.push(stop);
-                    }
-                }
                 "text-properties" => {
                     if let Some((_, s)) = &mut cur {
                         text_properties(&a, s, &self.faces);
                     }
                 }
-                "table-properties" => {
-                    if let Some((_, s)) = &mut cur
-                        && let Some(v) = get(&a, "style:page-number")
-                    {
-                        s.page_number = Some(v.trim().parse::<u32>().ok().map(|n| n.min(32_767)));
-                    }
-                }
-                "table-column-properties" => {
-                    if let Some((_, s)) = &mut cur
-                        && let Some(w) = get(&a, "style:column-width").and_then(length)
-                    {
-                        s.column_width = Some(w);
-                    }
-                }
-                "table-cell-properties" => {
-                    if let Some((_, s)) = &mut cur {
-                        table_cell_properties(&a, s);
-                    }
-                }
-                "paragraph-properties" => {
-                    if let Some((_, s)) = &mut cur {
-                        paragraph_properties(&a, s);
-                    }
-                }
-                "columns" if q.starts_with("style:") => {
-                    if let Some((_, s)) = &mut cur {
-                        s.columns = Some(columns_of(&a));
-                    }
-                }
-                "column-sep" => {
-                    if let Some((_, s)) = &mut cur
-                        && let Some(c) = &mut s.columns
-                    {
-                        c.separator = column_sep(&a);
-                    }
-                }
+                name if cur.as_mut().is_some_and(|(_, s)| style_child(name, &q, &a, s)) => {}
                 "font-face" if q.starts_with("style:") && self.faces.len() < MAX_FACES => {
                     if let (Some(n), Some(f)) = (get(&a, "style:name"), get(&a, "svg:font-family")) {
                         let family = f.split(',').next().unwrap_or("").trim().trim_matches(['\'', '"']);
@@ -800,6 +791,11 @@ impl Styles {
     pub(super) fn cell_padding(&self, name: &str) -> Option<[f32; 4]> {
         let p = self.chain(name).iter().map(|(_, s)| s.cell_padding).find(|p| p.iter().any(Option::is_some))?;
         Some(p.map(|v| v.unwrap_or(0.0)))
+    }
+
+    /// A graphic style's frame placement (whole chain).
+    pub(super) fn graphic(&self, name: &str) -> super::frames::Graphic {
+        self.chain(name).iter().filter_map(|(_, s)| s.graphic.as_ref()).fold(super::frames::Graphic::default(), |g, p| g.or(p))
     }
 
     /// Vertical alignment of a table-cell style (whole chain).

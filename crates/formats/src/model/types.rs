@@ -144,6 +144,9 @@ pub struct Img {
     pub w: f32,
     pub h: f32,
     pub alt: String,
+    /// How a floating picture is placed and wrapped, for formats that keep it (ODT); `None`: in
+    /// line with the text.
+    pub float: Option<Box<wordcraft_doc::para::Float>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
