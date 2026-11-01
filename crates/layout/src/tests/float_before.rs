@@ -937,3 +937,46 @@ fn text_before_a_shape_wraps_around_it_when_its_paragraph_breaks_into_a_column_o
         assert!(after_break, "{widths:?}: the text after the break is in the second column");
     }
 }
+
+/// A floating table and, after it, a shape on a page with columns of unequal widths: the text
+/// before the shape, laid out again around both, pushes the table's anchor into the narrower
+/// column, where the table (as wide as its column) would come out narrower than where it stood.
+/// The table and the shape stay drawn and every paragraph is placed once.
+#[test]
+fn a_floating_table_pushed_into_a_narrower_column_by_a_later_shape_stays_drawn() {
+    let mut table = Table::new(1, 1, 300.0);
+    table.props.width = None;
+    table.props.width_pct = Some(100.0);
+    table.rows[0].cells[0].props.width = None;
+    table.props.float = Some(TableFloat { h_rel: Anchor::Margin, ..on_page(450.0) });
+    let n = 44usize;
+    let text: Vec<String> = (0..n).map(|i| format!("P{i}")).collect();
+    let mut dropped = Vec::new();
+    for shape_h in [60.0, 100.0, 150.0, 200.0] {
+        for a in 24..=36usize {
+            let over = Float { wrap: Wrap::TopAndBottom, h_rel: Anchor::Margin, v_rel: Anchor::Page, y: 100.0, ..Default::default() };
+            let mut d = doc_with_shape(&text.join("\n"), a + 3, 300.0, shape_h, over);
+            d.last_section.columns =
+                wordcraft_doc::section::Columns { count: 2, space: 18.0, separator: false, widths: vec![(300.0, 18.0), (150.0, 0.0)] };
+            d.insert_block(StoryRef::Body, &Path::top(a), Block::Table(table.clone())).unwrap();
+            let l = lay(&d);
+            if !(0..l.pages.len()).any(|p| table_rect(&l, p, a as u32).is_some()) {
+                dropped.push((shape_h, a));
+            }
+            assert_eq!(l.pages.iter().map(|p| shapes(&p.items).len()).sum::<usize>(), 1, "shape {shape_h} high, table at {a}");
+            let mut firsts: Vec<u32> = l
+                .pages
+                .iter()
+                .flat_map(|p| &p.items)
+                .filter_map(|it| match it {
+                    Placed::Lines { story: StoryRef::Body, path, l0: 0, .. } if path.0.len() == 1 => path.0.first().copied(),
+                    _ => None,
+                })
+                .collect();
+            firsts.sort_unstable();
+            let paragraphs: Vec<u32> = (0..=n as u32).filter(|b| *b != a as u32).collect();
+            assert_eq!(firsts, paragraphs, "shape {shape_h} high, table at {a}");
+        }
+    }
+    assert!(dropped.is_empty(), "tables not drawn (shape's height, table's block): {dropped:?}");
+}

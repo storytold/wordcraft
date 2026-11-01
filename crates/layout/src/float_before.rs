@@ -224,7 +224,8 @@ fn place_block(ctx: &mut Ctx, pb: &mut PageBuilder, block: usize, floats: &[Plac
 
 /// Lay out blocks `from..to` again from `snap` (taken before `from`), keeping the state before
 /// each, with the wrap areas of `floats` (on page `page`) on that page from the start and those
-/// floating tables and objects where they were.
+/// floating tables and objects where they were. Returns whether each of those floating tables
+/// was placed again (one that no longer comes out the size it was isn't).
 fn replay<'a>(
     ctx: &mut Ctx,
     pb: &mut PageBuilder<'a>,
@@ -232,7 +233,7 @@ fn replay<'a>(
     (snap, from, to): (&Snap<'a>, usize, usize),
     (page, floats): (usize, &[PlacedFloat]),
     body_top: f32,
-) {
+) -> bool {
     snap.restore(pb, ctx);
     pb.walk_from = blocks.kept.first().map_or(from, |(b, _)| *b);
     #[cfg(test)]
@@ -245,10 +246,15 @@ fn replay<'a>(
         }
     }
     pb.arm_pending_floats(pb.pages.len().saturating_sub(1));
+    let mut placed = true;
     for block in from..to {
         blocks.keep(pb, ctx, block);
-        place_block(ctx, pb, block, floats, body_top);
+        let again = place_block(ctx, pb, block, floats, body_top);
+        if again.is_none() && is_table(doc, block) && floats.iter().any(|f| f.block == block) {
+            placed = false;
+        }
     }
+    placed
 }
 
 /// Floating table or paragraph `placed.block` was just placed, with floating tables or objects
@@ -281,9 +287,10 @@ pub(crate) fn wrap_text_before<'a>(
     drop(tail);
     let floats: Vec<PlacedFloat> = blocks.floats.iter().filter(|f| f.page == page && f.block >= from).cloned().collect();
     let thrown = ctx.boxes.total().saturating_sub(snap.boxes);
-    replay(ctx, pb, blocks, (&snap, from, block), (page, &floats), body_top);
-    // The wrap areas went onto the page, and the text before the block still ends there ...
-    let armed = !pb.pending_floats.iter().any(|(p, _)| *p == page);
+    let placed = replay(ctx, pb, blocks, (&snap, from, block), (page, &floats), body_top);
+    // The floating tables among the text before were placed again, their wrap areas went onto the
+    // page, and the text before the block still ends there ...
+    let armed = placed && !pb.pending_floats.iter().any(|(p, _)| *p == page);
     if armed && pb.pages.len() == page.saturating_add(1) {
         pb.pending_floats.retain(|(p, _)| *p != page);
         blocks.keep(pb, ctx, block);
