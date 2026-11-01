@@ -4,7 +4,7 @@ use super::file_browser;
 use super::services::Services;
 use super::state::{AutoSaveBlock, DefaultApp, PromptSave, SaveChoice, keeps_everything};
 use super::{
-    AwaitingSave, ControlRequest, DEFAULT_TAB, MAX_DICTIONARY, MAX_RECENT, QUIT, SaveInFlight, Session, UiState, Value, WordApp, applied_font,
+    AwaitingSave, ControlRequest, DEFAULT_TAB, MAX_DICTIONARY, MAX_RECENT, QUIT, RESET_INTERFACE_SIZE, SaveInFlight, Session, UiState, Value, WordApp, applied_font,
     async_saves, backstage, canvas, chrome, colors, content_controls, crop, desktop_theme, dialogs, dialogs_table_style, documents, file_dialogs,
     i18n, json, keys, keytips, options, panes, paste_picture, printing, push_recent_font, read_aloud, recent_fonts_from, ribbon, scroll,
     system_clipboard, table_pen, theme, updates_ui, widgets, window_ui, windows, zotero,
@@ -120,6 +120,7 @@ impl WordApp {
             fonts_frames: 0,
             applied_theme: None,
             native_scale: 1.0,
+            auto_scale_limit: f32::INFINITY,
             legacy_interface_size: None,
             // Inert until the app binary calls `watch_desktop_theme`.
             desktop_theme: desktop_theme::DesktopTheme::default(),
@@ -277,7 +278,12 @@ impl WordApp {
         {
             self.ui.interface_size = theme::migrate_legacy_interface_size(old, native);
         }
-        let zoom = self.ui.interface_size.zoom_factor(self.native_scale);
+        // Auto never draws larger than the screen holds (#4030): a system that guesses 3× on a
+        // 1366x768 panel would put the window's controls off screen. `monitor_size` is in points,
+        // so the screen's pixels are that times the scale in force.
+        let ppp = ctx.pixels_per_point();
+        self.auto_scale_limit = theme::auto_scale_limit(ctx.input(|i| i.viewport().monitor_size).map(|m| (m.x * ppp, m.y * ppp)));
+        let zoom = self.ui.interface_size.zoom_factor_within(self.native_scale, self.auto_scale_limit);
         if ctx.zoom_factor() != zoom {
             ctx.set_zoom_factor(zoom);
         }
@@ -378,6 +384,10 @@ impl WordApp {
     /// Pane's Tab keys and dropped files are read in the first UI pass
     /// ([`WordApp::handle_ui_input_events`]).
     pub(crate) fn window_input(&mut self, ctx: &egui::Context) {
+        // The way back when a large interface size has pushed File › Options off screen (#4030).
+        if ctx.input_mut(|i| i.consume_shortcut(&RESET_INTERFACE_SIZE)) {
+            let _ = self.run("ui.interfaceSize", serde_json::json!({"value": "auto"}));
+        }
         if self.windows.native() && ctx.input_mut(|i| i.consume_shortcut(&QUIT)) {
             self.quit();
         }

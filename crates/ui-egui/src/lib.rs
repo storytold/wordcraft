@@ -289,6 +289,9 @@ pub const DEFAULT_TAB: &str = "Home";
 
 /// ⌘Q, which only the Mac sends: quit.
 const QUIT: egui::KeyboardShortcut = egui::KeyboardShortcut::new(egui::Modifiers::MAC_CMD, egui::Key::Q);
+/// Ctrl+Alt+0 (⌘⌥0): back to the Auto interface size, whatever is on screen (#4030).
+const RESET_INTERFACE_SIZE: egui::KeyboardShortcut =
+    egui::KeyboardShortcut::new(egui::Modifiers { alt: true, ..egui::Modifiers::COMMAND }, egui::Key::Num0);
 /// Most recent documents kept (File › Options › Advanced offers 0–50, as Word does).
 pub const MAX_RECENT: usize = 50;
 /// Most custom dictionary words read back from `ui.json`.
@@ -544,6 +547,8 @@ pub struct WordApp {
     /// The display scale (native pixels per point) seen in the last frame, 1.0 before the first;
     /// `ui.interfaceSize` reports the size Auto draws at with it.
     native_scale: f32,
+    /// The most pixels per point Auto may draw at on this screen ([`theme::auto_scale_limit`], #4030).
+    auto_scale_limit: f32,
     /// A pre-#822 interface size (percent on top of the display scale) waiting for the first frame
     /// that knows the display's scale, to become the absolute size it drew at
     /// ([`theme::migrate_legacy_interface_size`]).

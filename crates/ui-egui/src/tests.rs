@@ -5383,6 +5383,29 @@ fn interface_size_survives_an_unusable_display_scale() {
     assert_eq!(InterfaceSize::AUTO.drawn_percent(f32::MAX), u16::MAX);
 }
 
+/// #4030: a system that reports a huge scale (an 11-inch 1366x768 panel on X11) must not make Auto
+/// draw an interface larger than the screen holds; the controls stay on screen.
+#[test]
+fn auto_interface_size_is_capped_to_what_fits_the_screen() {
+    use theme::{AUTO_MIN_POINTS, InterfaceSize, auto_scale_limit};
+    let limit = auto_scale_limit(Some((1366.0, 768.0)));
+    assert!((1.0..1.6).contains(&limit), "{limit}");
+    for native in [2.0, 3.17] {
+        let drawn = f32::from(InterfaceSize::AUTO.drawn_percent_within(native, limit)) / 100.0;
+        assert!(1366.0 / drawn >= AUTO_MIN_POINTS.0 - 1.0 && 768.0 / drawn >= AUTO_MIN_POINTS.1 - 1.0, "{native}: {drawn}");
+    }
+    // A scale that already fits, an unknown screen and junk are left alone.
+    assert_eq!(InterfaceSize::AUTO.drawn_percent_within(1.25, limit), 125);
+    assert_eq!(auto_scale_limit(None), f32::INFINITY);
+    assert_eq!(auto_scale_limit(Some((f32::NAN, 768.0))), f32::INFINITY);
+    assert_eq!(InterfaceSize::AUTO.drawn_percent_within(3.0, auto_scale_limit(None)), 300);
+    // A screen below the minimum is never scaled under 100 %; a 4K screen at 2x is untouched.
+    assert_eq!(auto_scale_limit(Some((640.0, 480.0))), 1.0);
+    assert_eq!(InterfaceSize::AUTO.drawn_percent_within(2.0, auto_scale_limit(Some((3840.0, 2160.0)))), 200);
+    // A chosen size is the user's and is not capped.
+    assert_eq!(InterfaceSize::from_percent(300.0).unwrap().drawn_percent_within(3.0, limit), 300);
+}
+
 /// #115: System follows the OS appearance (light when unknown); the manual choices ignore it.
 #[test]
 fn interface_theme_resolves_against_the_os_appearance() {

@@ -125,9 +125,35 @@ impl InterfaceSize {
 
     /// The size the interface is drawn at on that display, in percent (screen pixels per point × 100).
     pub fn drawn_percent(self, native: f32) -> u16 {
-        let drawn = usable_scale(native) * self.zoom_factor(native) * 100.0;
+        self.drawn_percent_within(native, f32::INFINITY)
+    }
+
+    /// [`InterfaceSize::zoom_factor`] on a screen that [`auto_scale_limit`] caps at `limit` pixels
+    /// per point: Auto never draws larger than that.
+    pub fn zoom_factor_within(self, native: f32, limit: f32) -> f32 {
+        match self.0 {
+            None => (limit / usable_scale(native)).min(1.0),
+            Some(_) => self.zoom_factor(native),
+        }
+    }
+
+    /// [`InterfaceSize::drawn_percent`] within [`auto_scale_limit`]'s cap.
+    pub fn drawn_percent_within(self, native: f32, limit: f32) -> u16 {
+        let drawn = usable_scale(native) * self.zoom_factor_within(native, limit) * 100.0;
         drawn.round().clamp(0.0, f32::from(u16::MAX)) as u16
     }
+}
+
+/// The smallest window, in points, the interface is laid out for under Auto.
+pub const AUTO_MIN_POINTS: (f32, f32) = (900.0, 500.0);
+
+/// The largest pixels-per-point Auto may draw at on a screen of `screen_px` pixels (#4030): the
+/// one that still leaves [`AUTO_MIN_POINTS`], so the ribbon and the window's controls stay on
+/// screen. Never below 1.0, and unlimited when the screen size is unknown.
+pub fn auto_scale_limit(screen_px: Option<(f32, f32)>) -> f32 {
+    screen_px.filter(|(w, h)| w.is_finite() && h.is_finite() && *w > 0.0 && *h > 0.0).map_or(f32::INFINITY, |(w, h)| {
+        (w / AUTO_MIN_POINTS.0).min(h / AUTO_MIN_POINTS.1).max(1.0)
+    })
 }
 
 /// The display's scale, or 1.0 when egui doesn't know it (or reports nonsense).
