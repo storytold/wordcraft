@@ -152,3 +152,41 @@ fn a_paragraph_ending_inside_a_field_still_ends() {
     let texts: Vec<String> = d.body.iter().filter_map(|b| b.as_para()).map(|p| p.text.replace(wordcraft_doc::para::OBJ, "#")).collect();
     assert_eq!(texts, ["a#", "b"]);
 }
+
+#[test]
+fn custom_properties_and_user_fields_are_docproperty_fields() {
+    // A custom property (`meta:user-defined`) shown by `text:user-defined`, and a user field
+    // (`text:user-field-decl`) shown by `text:user-field-get`: Word's custom document properties
+    // and `DOCPROPERTY` fields.
+    let meta = r#"<office:document-meta xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:meta="urn:oasis:names:tc:opendocument:xmlns:meta:1.0"><office:meta><meta:user-defined meta:name="Project" meta:value-type="string">Kiln</meta:user-defined><meta:user-defined meta:name="Budget" meta:value-type="float">1200.5</meta:user-defined></office:meta></office:document-meta>"#;
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:user-field-decls><text:user-field-decl text:name="Owner" office:value-type="string" office:string-value="Ada"/></text:user-field-decls><text:p>For <text:user-defined text:name="Project">Kiln</text:user-defined> by <text:user-field-get text:name="Owner">Ada</text:user-field-get>.</text:p></office:text></office:body></office:document-content>"#
+    );
+    let pkg = crate::odt::tests::zip_of(&[("content.xml", content.as_bytes()), ("meta.xml", meta.as_bytes())]);
+    let d = crate::odt::import(&pkg).unwrap();
+    let props: Vec<(String, String, String)> = d.custom_props.iter().map(|p| (p.name.clone(), p.kind.clone(), p.value.clone())).collect();
+    assert_eq!(
+        props,
+        [
+            ("Project".into(), "lpwstr".into(), "Kiln".into()),
+            ("Budget".into(), "r8".into(), "1200.5".into()),
+            ("Owner".into(), "lpwstr".into(), "Ada".into())
+        ]
+    );
+    let instrs: Vec<String> = d
+        .body
+        .iter()
+        .filter_map(|b| b.as_para())
+        .flat_map(|p| p.objects.iter())
+        .filter_map(|o| if let wordcraft_doc::para::InlineObject::Field { instr, .. } = o { Some(instr.clone()) } else { None })
+        .collect();
+    assert_eq!(instrs, [r#"DOCPROPERTY "Project""#, r#"DOCPROPERTY "Owner""#]);
+    // Saved: the properties in `meta.xml`, the fields as `text:user-defined`.
+    let saved = crate::odt::export(&d).unwrap();
+    let m = crate::odt::tests::entry(&saved, "meta.xml");
+    assert!(m.contains(r#"<meta:user-defined meta:name="Budget" meta:value-type="float">1200.5</meta:user-defined>"#), "{m}");
+    assert!(m.contains(r#"meta:name="Owner""#), "{m}");
+    let c = crate::odt::tests::content_of(&saved);
+    assert!(c.contains(r#"<text:user-defined text:name="Owner">Ada</text:user-defined>"#), "{c}");
+    assert_eq!(crate::odt::import(&saved).unwrap().custom_props.len(), 3);
+}

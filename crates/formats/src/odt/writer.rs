@@ -159,6 +159,9 @@ pub(super) struct Writer {
     /// kept objects' folders with their media types, for the manifest.
     pub(super) object_names: usize,
     pub(super) object_dirs: Vec<(String, String)>,
+    /// The document's custom properties' names: `DOCPROPERTY` fields naming one are written as
+    /// `text:user-defined`.
+    pub(super) custom_props: std::collections::HashSet<String>,
     /// The kinds of the shapes with drawing ids, which connectors' glue points depend on.
     pub(super) conn_kinds: HashMap<u32, wordcraft_doc::para::ShapeKind>,
     /// Ruby was written: its automatic ruby style is.
@@ -645,6 +648,10 @@ impl Writer {
     /// The ODF element for field `instr` showing `result`, with the date style and sequence
     /// declaration it needs; `None` when ODF has none.
     fn field_element(&mut self, instr: &str, result: &str) -> Option<String> {
+        // A custom document property's value (§7.5.6).
+        if let Some(n) = super::fields::docproperty_name(instr).filter(|n| self.custom_props.contains(*n)) {
+            return Some(format!("<text:user-defined text:name=\"{}\">{}</text:user-defined>", x(n), x(result)));
+        }
         let ds = self.data_style(instr);
         if let Some(seq) = super::fields::sequence_name(instr) {
             self.sequences.insert(seq.to_string());

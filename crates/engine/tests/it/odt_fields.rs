@@ -82,3 +82,18 @@ fn a_flat_document_opens_and_saves_by_its_extension() {
     assert!(saved.starts_with(b"<?xml"));
     assert_eq!(text(&Session::new(io::open_bytes("plain.fodt", &saved).unwrap())), ["Flat words."]);
 }
+
+#[test]
+fn a_user_field_updates_from_its_property() {
+    // An ODT user field opens as `DOCPROPERTY`: updating fields shows the property's value.
+    let content = r#"<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"><office:body><office:text><text:user-field-decls><text:user-field-decl text:name="Owner" office:value-type="string" office:string-value="Ada"/></text:user-field-decls><text:p>By <text:user-field-get text:name="Owner">stale</text:user-field-get>.</text:p></office:text></office:body></office:document-content>"#;
+    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (name, data) in [("mimetype", "application/vnd.oasis.opendocument.text"), ("content.xml", content)] {
+        z.start_file(name, o).unwrap();
+        std::io::Write::write_all(&mut z, data.as_bytes()).unwrap();
+    }
+    let mut s = Session::new(io::open_bytes("user.odt", &z.finish().unwrap().into_inner()).unwrap());
+    s.run("references.updateFields", &json!({"all": true})).unwrap();
+    assert_eq!(results(&s), ["Ada"]);
+}

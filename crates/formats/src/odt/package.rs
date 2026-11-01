@@ -456,7 +456,7 @@ fn settings_xml(doc: &Document) -> String {
     s
 }
 
-fn meta_xml(m: &Meta) -> String {
+fn meta_xml(m: &Meta, props: &[wordcraft_doc::CustomProp]) -> String {
     let mut s =
         format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-meta {NS}><office:meta><meta:generator>WordCraft</meta:generator>");
     if !m.title.is_empty() {
@@ -476,6 +476,17 @@ fn meta_xml(m: &Meta) -> String {
     }
     if !m.created.is_empty() {
         s.push_str(&format!("<meta:creation-date>{}</meta:creation-date>", x(m.created.trim_end_matches('Z'))));
+    }
+    // Custom document properties (§4.3.2.14); ones kept as raw XML from a Word file aren't.
+    for p in props.iter().filter(|p| p.kind != "raw") {
+        let t = match p.kind.as_str() {
+            "r4" | "r8" | "i1" | "i2" | "i4" | "i8" | "int" | "ui1" | "ui2" | "ui4" | "ui8" | "uint" | "decimal" | "cy" => "float",
+            "bool" => "boolean",
+            "filetime" | "date" => "date",
+            _ => "string",
+        };
+        let value = if t == "boolean" { if matches!(p.value.trim(), "true" | "1") { "true" } else { "false" }.to_string() } else { p.value.clone() };
+        s.push_str(&format!("<meta:user-defined meta:name=\"{}\" meta:value-type=\"{t}\">{}</meta:user-defined>", x(&p.name), x(&value)));
     }
     s.push_str("</office:meta></office:document-meta>\n");
     s
@@ -540,6 +551,7 @@ pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
     let mut w = Writer::default();
     w.accents.clone_from(&accents);
     w.conn_kinds = conn_kinds(&flow.blocks);
+    w.custom_props = doc.custom_props.iter().filter(|p| p.kind != "raw").map(|p| p.name.clone()).collect();
     w.forms_allowed = true;
     w.ranged = model::ranged_anchors(&flow.blocks);
     let mut body = String::new();
@@ -629,7 +641,7 @@ pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
     w.pictures.append(&mut hw.pictures);
     w.objects.append(&mut hw.objects);
     w.object_dirs.append(&mut hw.object_dirs);
-    let meta = meta_xml(&flow.meta);
+    let meta = meta_xml(&flow.meta, &doc.custom_props);
     let mut manifest = String::from(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<manifest:manifest xmlns:manifest=\"urn:oasis:names:tc:opendocument:xmlns:manifest:1.0\" manifest:version=\"1.3\">\n<manifest:file-entry manifest:full-path=\"/\" manifest:version=\"1.3\" manifest:media-type=\"application/vnd.oasis.opendocument.text\"/>\n<manifest:file-entry manifest:full-path=\"content.xml\" manifest:media-type=\"text/xml\"/>\n<manifest:file-entry manifest:full-path=\"styles.xml\" manifest:media-type=\"text/xml\"/>\n<manifest:file-entry manifest:full-path=\"meta.xml\" manifest:media-type=\"text/xml\"/>\n<manifest:file-entry manifest:full-path=\"settings.xml\" manifest:media-type=\"text/xml\"/>\n",
     );

@@ -46,6 +46,13 @@ pub(super) fn instr_of(local: &str, a: &Attrs, picture: impl Fn(&str) -> Option<
             .filter(|n| !n.is_empty() && n.len() <= MAX_REF_NAME && !n.contains(|c: char| c.is_whitespace() || c == '"' || c == '\\'))
     };
     match local {
+        // A document property's value (§7.5.6 `text:user-defined`, a `meta:user-defined`) or a
+        // user field's (§7.4.9 `text:user-field-get`, declared once for the document): Word's
+        // `DOCPROPERTY`, the property kept as a custom document property.
+        "user-defined" | "user-field-get" => {
+            let n = clean_prop_name(get(a, "text:name")?)?;
+            Some(format!("DOCPROPERTY \"{n}\""))
+        }
         // An index entry at a point (§8.1.10): Word's `XE`, its keys the levels above it.
         "alphabetical-index-mark" => xe_instr(get(a, "text:key1"), get(a, "text:key2"), get(a, "text:string-value")?),
         // Numbering figures, tables and the like (§7.4.13): Word's `SEQ` and its number format.
@@ -175,6 +182,100 @@ pub(super) fn element(instr: &str, result: &str, data_style: Option<&str>) -> Op
             Some(format!("<text:{el}{ds}>{result}</text:{el}>"))
         }
     }
+}
+
+/// A custom property's name as a field code can quote it: no quotes or backslashes, no control
+/// characters, at most 255 characters. `None` when nothing is left.
+pub(super) fn clean_prop_name(n: &str) -> Option<String> {
+    let n: String = n.chars().filter(|c| !matches!(c, '"' | '\\') && !c.is_control()).take(255).collect();
+    let n = n.trim();
+    (!n.is_empty()).then(|| n.to_string())
+}
+
+/// The property a `DOCPROPERTY` field code names, if it is one.
+pub(super) fn docproperty_name(instr: &str) -> Option<&str> {
+    let rest = instr.trim_start().strip_prefix("DOCPROPERTY")?.trim_start();
+    match rest.strip_prefix('"') {
+        Some(q) => q.split('"').next(),
+        None => rest.split_whitespace().next(),
+    }
+    .map(str::trim)
+    .filter(|n| !n.is_empty() && !n.starts_with('\\'))
+}
+
+/// Most custom properties read from a document.
+pub(super) const MAX_PROPS: usize = 1000;
+/// Longest custom property value read, characters.
+const MAX_PROP_VALUE: usize = 4096;
+
+/// A custom property of ODF value type `t` (`office:value-type`, `meta:value-type`) and value
+/// `v`: as a document's custom property (OOXML variant type, value).
+pub(super) fn custom_prop(name: &str, t: Option<&str>, v: &str) -> Option<wordcraft_doc::CustomProp> {
+    let name = clean_prop_name(name)?;
+    let kind = match t.map(str::trim) {
+        Some("float" | "percentage" | "currency") => "r8",
+        Some("boolean") => "bool",
+        Some("date") => "filetime",
+        _ => "lpwstr",
+    };
+    let value: String = v.chars().filter(|c| !c.is_control() || *c == '\n').take(MAX_PROP_VALUE).collect();
+    Some(wordcraft_doc::CustomProp { name, kind: kind.into(), value, link_target: None })
+}
+
+/// The custom properties of a package's `meta.xml` (§4.3.2.14 `meta:user-defined`).
+pub(super) fn meta_props(xml: &[u8]) -> Vec<wordcraft_doc::CustomProp> {
+    let mut out: Vec<wordcraft_doc::CustomProp> = Vec::new();
+    let mut open: Option<(String, Option<String>, String)> = None;
+    super::events(xml, |ev| match ev {
+        super::Ev::Start(q, a) if q == "meta:user-defined" => {
+            open = get(&a, "meta:name").map(|n| (n.to_string(), get(&a, "meta:value-type").map(String::from), String::new()));
+        }
+        super::Ev::Text(t) => {
+            if let Some((_, _, v)) = &mut open
+                && v.len() < MAX_PROP_VALUE * 4
+            {
+                v.push_str(&t);
+            }
+        }
+        super::Ev::End(q) if q == "meta:user-defined" => {
+            if let Some((n, t, v)) = open.take()
+                && out.len() < MAX_PROPS
+                && let Some(p) = custom_prop(&n, t.as_deref(), &v)
+                && !out.iter().any(|o| o.name == p.name)
+            {
+                out.push(p);
+            }
+        }
+        _ => {}
+    });
+    out
+}
+
+/// The user fields a package's `content.xml` declares (§7.4.7 `text:user-field-decl`), as custom
+/// properties.
+pub(super) fn user_fields(xml: &[u8]) -> Vec<wordcraft_doc::CustomProp> {
+    let mut out: Vec<wordcraft_doc::CustomProp> = Vec::new();
+    super::events(xml, |ev| {
+        if let super::Ev::Start(q, a) = ev
+            && q == "text:user-field-decl"
+            && out.len() < MAX_PROPS
+        {
+            let t = get(&a, "office:value-type");
+            let v = match t.map(str::trim) {
+                Some("float" | "percentage" | "currency") => get(&a, "office:value"),
+                Some("boolean") => get(&a, "office:boolean-value"),
+                Some("date") => get(&a, "office:date-value"),
+                _ => get(&a, "office:string-value"),
+            }
+            .unwrap_or("");
+            if let Some(p) = get(&a, "text:name").and_then(|n| custom_prop(n, t, v))
+                && !out.iter().any(|o| o.name == p.name)
+            {
+                out.push(p);
+            }
+        }
+    });
+    out
 }
 
 /// Most characters of an index entry's level.

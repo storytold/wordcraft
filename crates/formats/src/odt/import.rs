@@ -404,6 +404,8 @@ struct Parsed {
     parts: page_parts::Parts,
     /// Some paragraph hyphenates: the document hyphenates (see [`hyphenation`]).
     hyphenate: bool,
+    /// Custom document properties (`meta:user-defined`) and user fields.
+    custom: Vec<wordcraft_doc::CustomProp>,
 }
 
 /// Hyphenation is a paragraph's in ODF (`fo:hyphenate`) and the document's in WordCraft (as in
@@ -444,7 +446,15 @@ fn parse_tracked(bytes: &[u8]) -> Result<Parsed, String> {
     styles.read(&content, true);
     let settings = read_entry(&mut z, "settings.xml");
     styles.tabs_from_indent = settings.as_deref().and_then(|s| setting(s, "TabsRelativeToIndent")).unwrap_or(true);
-    let meta = read_entry(&mut z, "meta.xml").map(|m| read_meta(&m)).unwrap_or_default();
+    let meta_xml = read_entry(&mut z, "meta.xml");
+    let meta = meta_xml.as_deref().map(read_meta).unwrap_or_default();
+    // Custom document properties, then the user fields not among them.
+    let mut custom = meta_xml.as_deref().map(super::fields::meta_props).unwrap_or_default();
+    for f in super::fields::user_fields(&content) {
+        if custom.len() < super::fields::MAX_PROPS && !custom.iter().any(|c| c.name == f.name) {
+            custom.push(f);
+        }
+    }
     let entries: Vec<String> = z.file_names().take(100_000).map(str::to_string).collect();
     let manifest = read_entry(&mut z, "META-INF/manifest.xml").map(|m| super::objects::manifest(&m)).unwrap_or_default();
     let mut pictures = Pictures::new(MAX_ENTRY);
@@ -505,6 +515,7 @@ fn parse_tracked(bytes: &[u8]) -> Result<Parsed, String> {
         page_doc: pages.doc.clone(),
         parts,
         hyphenate,
+        custom,
     })
 }
 
@@ -531,8 +542,10 @@ pub fn import(bytes: &[u8]) -> Result<Document, String> {
         page_doc,
         parts,
         hyphenate,
+        custom,
     } = parse_tracked(bytes)?;
     let mut doc = model::to_doc(&flow);
+    doc.custom_props = custom;
     doc.settings.auto_hyphenation |= hyphenate;
     if font.is_some() {
         doc.styles.default_chr.font = font;
