@@ -432,13 +432,25 @@ mod tests {
     #[test]
     fn heading_resolves() {
         let s = StyleSheet::builtin();
-        let p = s.resolve_para(&ParaProps { style: Some("Heading1".into()), ..Default::default() });
-        assert!(p.keep_next);
-        assert_eq!(p.outline_level, Some(0));
-        assert_eq!(p.space_after, 4.0);
+        let h1 = s.resolve_para(&ParaProps { style: Some("Heading1".into()), ..Default::default() });
+        assert!(h1.keep_next);
+        assert_eq!(h1.outline_level, Some(0));
+        assert_eq!((h1.space_before, h1.space_after), (12.0, 6.0));
         let c = s.resolve_char(Some("Heading1"), &CharProps::default());
-        assert_eq!(c.size, 20.0);
-        assert_eq!(c.font, crate::styles::HEADING_FONT);
+        assert_eq!(c.size, 24.0);
+        assert_eq!(c.font, crate::styles::HEADING_SERIF_FONT);
+        assert!(c.bold, "the headings are bold");
+        assert_eq!(c.color, TextColor::Rgb(crate::styles::HEADING_BLUE), "heading blue");
+        // Levels 2 and 3: sans and serif faces, sizes and spacing.
+        let h2 = s.resolve_para(&ParaProps { style: Some("Heading2".into()), ..Default::default() });
+        assert_eq!((h2.outline_level, h2.space_before, h2.space_after), (Some(1), 10.0, 6.0));
+        let h2c = s.resolve_char(Some("Heading2"), &CharProps::default());
+        assert_eq!((h2c.size, h2c.font.as_str(), h2c.bold), (16.0, crate::styles::HEADING_SANS_FONT, true));
+        let h3 = s.resolve_para(&ParaProps { style: Some("Heading3".into()), ..Default::default() });
+        assert_eq!((h3.outline_level, h3.space_before, h3.space_after), (Some(2), 7.0, 6.0));
+        let h3c = s.resolve_char(Some("Heading3"), &CharProps::default());
+        assert_eq!((h3c.size, h3c.font.as_str(), h3c.bold), (14.0, crate::styles::HEADING_SERIF_FONT, true));
+        // Direct formatting still wins.
         let c2 = s.resolve_char(Some("Heading1"), &CharProps { size: Some(30.0), ..Default::default() });
         assert_eq!(c2.size, 30.0);
     }
