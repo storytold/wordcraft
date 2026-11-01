@@ -249,7 +249,8 @@ pub fn system_bengali_ui_font() -> Option<SystemUiFont> {
             "truetype/freefont/FreeSans.ttf",
         ]
     };
-    find_ui_font(&with_asset_data(crate::system_font_dirs()), names, &['ক'], Region::Other)
+    const PROBE: &[char] = &['অ', 'এ', 'ক', 'ত', 'র', '্', 'া'];
+    find_ui_font(&with_asset_data(crate::system_font_dirs()), names, PROBE, Region::Other)
 }
 
 /// `dirs` and, for each macOS font asset folder among them (`com_apple_MobileAsset_Font<N>`),
@@ -483,5 +484,13 @@ mod tests {
         assert!(found.bytes == sans);
         assert!(find_ui_font(std::slice::from_ref(&dir), &["hvgl.ttf"], &['A'], Region::Hans).is_none());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn system_bengali_ui_font_probes_representative_glyphs() {
+        if let Some(font) = system_bengali_ui_font() {
+            let parsed = skrifa::FontRef::from_index(&font.bytes, font.index);
+            assert!(parsed.is_ok());
+        }
     }
 }
