@@ -11898,6 +11898,45 @@ fn a_row_leaves_room_for_the_border_below_it() {
     }
 }
 
+/// A horizontal rule (VML `o:hr`) takes its whole line and is drawn across its share of it,
+/// placed by its alignment (Word, measured: 50 % centred, left, right). In a table cell it
+/// follows its column instead of widening the table.
+#[test]
+fn horizontal_rules_take_their_line() {
+    use wordcraft_doc::connector::HorizontalRule;
+    use wordcraft_doc::props::Align;
+    let rule = |pct: f32, align: Align| {
+        let mut o = rect_shape(0.0, 1.5, Default::default());
+        if let InlineObject::Shape { extra, .. } = &mut o {
+            extra.hr = Some(HorizontalRule { pct, align, standard: true });
+        }
+        o
+    };
+    let drawn = |d: &Document| -> Vec<wordcraft_geom::Rect> {
+        let l = lay(d);
+        display::page_display(d, &l.pages[0], &display::DisplayOptions::default())
+            .iter()
+            .filter_map(
+                |i| if let display::Draw::Shape { rect, kind: wordcraft_doc::para::ShapeKind::Rectangle, .. } = i { Some(*rect) } else { None },
+            )
+            .collect()
+    };
+    let mut d = Document::from_text("a\nb");
+    d.insert_object(&Pos::body(1, 0), rule(50.0, Align::Center), &Default::default()).unwrap();
+    d.insert_object(&Pos::body(0, 0), rule(100.0, Align::Left), &Default::default()).unwrap();
+    let s = drawn(&d);
+    let (full, half) = (s[0], s[1]);
+    assert!(full.w > 400.0, "the whole line: {full:?}");
+    assert!((half.w - full.w / 2.0).abs() < 0.01 && (half.x - (full.x + full.w / 4.0)).abs() < 0.01, "{half:?} in {full:?}");
+    let mut cell = Table::new(1, 1, 200.0);
+    let mut p = Paragraph::default();
+    p.insert_object(0, rule(100.0, Align::Left), &Default::default()).unwrap();
+    cell.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(p)];
+    d.body = vec![Arc::new(Block::Table(cell))];
+    let s = drawn(&d);
+    assert!(s.first().is_some_and(|r| r.w > 150.0 && r.w < 200.0), "the cell's width, not the page's: {s:?}");
+}
+
 /// A kept-together paragraph starting a continuous section low on a page, with room there for
 /// one of its lines, moves whole to the next page, where it fits (#3907 review).
 #[test]

@@ -4172,3 +4172,47 @@ fn vml_textbox_style_anchor_and_fit() {
     assert_eq!(tb.body.anchor, wordcraft_doc::props::VAlign::Center);
     assert!(tb.body.auto_fit);
 }
+
+/// A VML horizontal rule (`o:hr`, a web page's `<hr>` pasted into Word) is read as one: the whole
+/// line when it has no width and no `o:hrpct`, a share of it (`o:hrpct`, tenths of a percent), or
+/// its own width (`o:hrpct="0"`), placed by `o:hralign`. It saves back as the same VML rule.
+#[test]
+fn vml_horizontal_rules_are_read_and_kept() {
+    use wordcraft_doc::connector::HorizontalRule;
+    use wordcraft_doc::props::Align;
+    let hr = |attrs: &str, style: &str| format!(r#"<w:p><w:r><w:pict><v:rect style="{style}" {attrs}/></w:pict></w:r></w:p>"#);
+    let body = [
+        hr(r#"o:hralign="center" o:hrstd="t" o:hr="t""#, "width:0;height:1.5pt"),
+        hr(r#"o:hrpct="500" o:hralign="right" o:hr="t""#, "width:0;height:1.5pt"),
+        hr(r#"o:hrpct="0" o:hralign="center" o:hr="t""#, "width:100pt;height:3pt"),
+        hr("", "width:100pt;height:3pt"),
+    ]
+    .concat();
+    let rules = |d: &Document| -> Vec<(Option<HorizontalRule>, f32)> {
+        paras(d)
+            .iter()
+            .filter_map(|p| p.objects.iter().find_map(|o| if let InlineObject::Shape { extra, w, .. } = o { Some((extra.hr, *w)) } else { None }))
+            .collect()
+    };
+    let d = read_body(&body);
+    let got = rules(&d);
+    assert_eq!(
+        got,
+        [
+            (Some(HorizontalRule { pct: 100.0, align: Align::Center, standard: true }), 0.0),
+            (Some(HorizontalRule { pct: 50.0, align: Align::Right, standard: false }), 0.0),
+            (Some(HorizontalRule { pct: 0.0, align: Align::Center, standard: false }), 100.0),
+            (None, 100.0),
+        ]
+    );
+    let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    assert_eq!(rules(&again)[..3], got[..3]);
+    // A positioned or hidden rule stays a plain shape, keeping its placement and visibility.
+    let body = [
+        hr(r#"o:hralign="center" o:hr="t""#, "position:absolute;margin-left:10pt;margin-top:20pt;width:100pt;height:2pt"),
+        hr(r#"o:hralign="center" o:hr="t""#, "visibility:hidden;width:0;height:2pt"),
+    ]
+    .concat();
+    let d = read_body(&body);
+    assert_eq!(rules(&d).iter().map(|r| r.0).collect::<Vec<_>>(), [None, None]);
+}
