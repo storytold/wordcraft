@@ -327,6 +327,103 @@ fn document_information_fields_show_the_properties() {
     assert_eq!(got, ["Budget", "plan; costs", "Draft for review", "Grace", "7", "VII", "11", "iii"]);
 }
 
+/// #3620: each count field must not walk the entire body again.
+#[test]
+fn many_document_count_fields_do_not_rescan_the_body() {
+    let mut doc = wordcraft_doc::Document::from_text(&"one two three four five six seven eight nine ten\n".repeat(2_000));
+    let mut blocks = Vec::new();
+    for _ in 0..6_000 {
+        let mut p = Paragraph::new();
+        p.insert_object(
+            0,
+            InlineObject::Field { instr: "NUMWORDS".into(), result: "stale".into(), locked: false, dirty: true, code: false, form: String::new() },
+            &wordcraft_doc::CharProps::default(),
+        )
+        .unwrap();
+        blocks.push(para_block(p));
+    }
+    let header = doc.add_part(PartKind::Header, blocks);
+    let mut s = Session::new(doc);
+    s.sel = Selection::caret(Pos::new(StoryRef::Part(header), Path::top(0), 0));
+    super::fields::BODY_RECOUNTS.with(|counts| counts.set((0, 0)));
+    update_fields(&mut s).unwrap();
+    assert_eq!(super::fields::BODY_RECOUNTS.with(|counts| counts.get()), (1, 0));
+    let got = story_fields(&s, StoryRef::Part(header));
+    assert_eq!(got.len(), 6_000);
+    for (_, result) in got {
+        assert_eq!(result, "20000");
+    }
+    super::fields::BODY_RECOUNTS.with(|counts| counts.set((0, 0)));
+    update_fields(&mut s).unwrap();
+    assert_eq!(super::fields::BODY_RECOUNTS.with(|counts| counts.get()), (1, 0), "a new update starts a fresh cache");
+}
+
+/// #3620: NUMCHARS has a separate, lazy cache. Count its body scans independently
+/// of NUMWORDS, without making correctness depend on test-runner scheduling.
+#[test]
+fn many_document_character_count_fields_do_not_rescan_the_body() {
+    let mut doc = wordcraft_doc::Document::from_text(&"one two three four five six seven eight nine ten\n".repeat(20_000));
+    let mut blocks = Vec::new();
+    for _ in 0..6_000 {
+        let mut p = Paragraph::new();
+        p.insert_object(
+            0,
+            InlineObject::Field { instr: "NUMCHARS".into(), result: "stale".into(), locked: false, dirty: true, code: false, form: String::new() },
+            &wordcraft_doc::CharProps::default(),
+        )
+        .unwrap();
+        blocks.push(para_block(p));
+    }
+    let header = doc.add_part(PartKind::Header, blocks);
+    let mut s = Session::new(doc);
+    s.sel = Selection::caret(Pos::new(StoryRef::Part(header), Path::top(0), 0));
+    super::fields::BODY_RECOUNTS.with(|counts| counts.set((0, 0)));
+    update_fields(&mut s).unwrap();
+    assert_eq!(super::fields::BODY_RECOUNTS.with(|counts| counts.get()), (0, 1));
+    let got = story_fields(&s, StoryRef::Part(header));
+    assert_eq!(got.len(), 6_000);
+    for (_, result) in got {
+        assert_eq!(result, "780000");
+    }
+    super::fields::BODY_RECOUNTS.with(|counts| counts.set((0, 0)));
+    update_fields(&mut s).unwrap();
+    assert_eq!(super::fields::BODY_RECOUNTS.with(|counts| counts.get()), (0, 1), "a new update starts a fresh cache");
+}
+
+/// Results within one paragraph see the same counts; the next paragraph sees the previous
+/// paragraph's new results. The counts are discarded before the next update or text edit.
+#[test]
+fn document_count_fields_follow_paragraph_updates() {
+    let mut doc = wordcraft_doc::Document::from_text("one two\n\n\n");
+    doc.core.title = "new multiword title".into();
+    let add = |doc: &mut wordcraft_doc::Document, block, instr: &str, result: &str| {
+        let p = doc.para_mut(StoryRef::Body, &Path::top(block)).unwrap();
+        p.insert_object(
+            p.len(),
+            InlineObject::Field { instr: instr.into(), result: result.into(), locked: false, dirty: true, code: false, form: String::new() },
+            &wordcraft_doc::CharProps::default(),
+        )
+        .unwrap();
+    };
+    add(&mut doc, 1, "NUMWORDS", "old old");
+    add(&mut doc, 1, "NUMCHARS", "long result");
+    add(&mut doc, 1, "TITLE", "x");
+    add(&mut doc, 2, "NUMWORDS", "");
+    add(&mut doc, 2, "NUMCHARS", "");
+    let mut s = Session::new(doc);
+    s.run("references.updateFields", &json!({})).unwrap();
+    let got: Vec<_> = fields(&s).into_iter().map(|(_, r)| r).collect();
+    assert_eq!(got, ["5", "23", "new multiword title", "5", "26"]);
+    s.run("references.updateFields", &json!({})).unwrap();
+    let got: Vec<_> = fields(&s).into_iter().map(|(_, r)| r).collect();
+    assert_eq!(got, ["6", "29", "new multiword title", "6", "29"]);
+    s.run("caret.docEnd", &json!({})).unwrap();
+    s.run("text.insert", &json!({"text": " extra words"})).unwrap();
+    s.run("references.updateFields", &json!({})).unwrap();
+    let got: Vec<_> = fields(&s).into_iter().map(|(_, r)| r).collect();
+    assert_eq!(got, ["8", "39", "new multiword title", "8", "39"]);
+}
+
 /// A quoted text after TITLE, SUBJECT, AUTHOR, KEYWORDS or COMMENTS replaces the property
 /// (at most 255 characters); the field and later ones, DOCPROPERTY too, show the new value.
 #[test]

@@ -153,6 +153,67 @@ pub fn update_fields(s: &mut Session) -> Result<(), CmdError> {
     update_fields_in(s, false)
 }
 
+/// Counts are shared by this update only. Results are written a paragraph at a time, so a
+/// later paragraph must see the changed text of an earlier one. Numbering and paragraph
+/// structure do not change in this loop; only the paragraph's plain-text contribution does.
+#[derive(Default)]
+struct FieldCounts {
+    words: Option<usize>,
+    chars: Option<usize>,
+}
+
+#[cfg(test)]
+std::thread_local! {
+    // Each test observes only recounts performed on its own thread.
+    pub(super) static BODY_RECOUNTS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+impl FieldCounts {
+    /// Count the body once, when this update first needs NUMWORDS.
+    fn words(&mut self, doc: &wordcraft_doc::Document) -> usize {
+        *self.words.get_or_insert_with(|| {
+            #[cfg(test)]
+            BODY_RECOUNTS.with(|counts| {
+                let (words, chars) = counts.get();
+                counts.set((words.saturating_add(1), chars));
+            });
+            doc.word_count()
+        })
+    }
+
+    /// Count non-whitespace body characters once, on the first NUMCHARS field.
+    fn chars(&mut self, doc: &wordcraft_doc::Document) -> usize {
+        *self.chars.get_or_insert_with(|| {
+            #[cfg(test)]
+            BODY_RECOUNTS.with(|counts| {
+                let (words, chars) = counts.get();
+                counts.set((words, chars.saturating_add(1)));
+            });
+            doc.plain_text(StoryRef::Body).chars().filter(|c| !c.is_whitespace()).count()
+        })
+    }
+
+    /// Measure only the paragraph contributions needed by initialized counts.
+    fn paragraph(&self, para: &Paragraph) -> (usize, usize) {
+        if self.words.is_none() && self.chars.is_none() {
+            return (0, 0);
+        }
+        let text = para.plain_text();
+        (self.words.map_or(0, |_| wordcraft_doc::count_words(&text)), self.chars.map_or(0, |_| text.chars().filter(|c| !c.is_whitespace()).count()))
+    }
+
+    /// Keep initialized totals current after writing one body's paragraph results.
+    fn replace_paragraph(&mut self, before: (usize, usize), para: &Paragraph) {
+        let after = self.paragraph(para);
+        if let Some(words) = &mut self.words {
+            *words = words.saturating_sub(before.0).saturating_add(after.0);
+        }
+        if let Some(chars) = &mut self.chars {
+            *chars = chars.saturating_sub(before.1).saturating_add(after.1);
+        }
+    }
+}
+
 /// [`update_fields`], or with `all` the whole document: the body (with SEQ, citations and TOC) and
 /// every part story, wherever the caret is (what printing needs).
 pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
@@ -181,6 +242,7 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
     // The document properties as the fields read and set them (`SUBJECT "New subject"`): a field
     // after one that sets a property shows the new value.
     let mut core = s.doc.core.clone();
+    let mut counts = FieldCounts::default();
     for (story, path) in stories.into_iter().flat_map(|st| s.doc.para_paths(st).into_iter().map(move |p| (st, p))).collect::<Vec<_>>() {
         let Some(p) = s.doc.para(story, &path) else { continue };
         if !p.objects.iter().any(|o| matches!(o, InlineObject::Field { .. })) {
@@ -234,11 +296,8 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
                     updates.push((k, text_result(instr, summary_property(&core, &name).to_string())));
                 }
                 "LASTSAVEDBY" => updates.push((k, text_result(instr, core.last_modified_by.clone()))),
-                "NUMWORDS" => updates.push((k, count_text(instr, s.doc.word_count()))),
-                "NUMCHARS" => {
-                    let chars = s.doc.plain_text(StoryRef::Body).chars().filter(|c| !c.is_whitespace()).count();
-                    updates.push((k, count_text(instr, chars)));
-                }
+                "NUMWORDS" => updates.push((k, count_text(instr, counts.words(&s.doc)))),
+                "NUMCHARS" => updates.push((k, count_text(instr, counts.chars(&s.doc)))),
                 "REVNUM" => updates.push((k, count_text(instr, core.revision as usize))),
                 // DOCPROPERTY <name>: a custom property first, then a built-in one (#1798).
                 "DOCPROPERTY" => {
@@ -262,6 +321,7 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
         if updates.is_empty() {
             continue;
         }
+        let before = if story == StoryRef::Body { s.doc.para(story, &path).map(|p| counts.paragraph(p)) } else { None };
         let para = s.doc.para_mut(story, &path)?;
         for (k, r) in updates {
             if let Some(InlineObject::Field { result, dirty, .. }) = para.objects.get_mut(k) {
@@ -271,6 +331,9 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
             }
         }
         para.touch();
+        if let Some(before) = before {
+            counts.replace_paragraph(before, para);
+        }
     }
     if !in_body {
         return Ok(());
