@@ -805,16 +805,17 @@ pub fn data_xml(spec: &SmartArtSpec, drawing_rel: &str) -> String {
 
 /// A layout node: `alg` with its parameters, a shape (`None`: no geometry), what text it shows
 /// (`presOf` attributes), then `body`.
-fn layout_node(
-    w: &mut W,
-    name: &str,
-    style: Option<&str>,
-    alg: &str,
-    params: &[(&str, &str)],
-    shape: Option<&str>,
-    pres_of: &[(&str, &str)],
-    body: impl FnOnce(&mut W),
-) {
+struct LayoutNode<'a> {
+    name: &'a str,
+    style: Option<&'a str>,
+    alg: &'a str,
+    params: &'a [(&'a str, &'a str)],
+    shape: Option<&'a str>,
+    pres_of: &'a [(&'a str, &'a str)],
+}
+
+fn layout_node(w: &mut W, node: LayoutNode<'_>, body: impl FnOnce(&mut W)) {
+    let LayoutNode { name, style, alg, params, shape, pres_of } = node;
     let mut attrs = vec![("name", name)];
     if let Some(s) = style {
         attrs.push(("styleLbl", s));
@@ -870,45 +871,74 @@ pub fn layout_xml(l: SmartArtLayout) -> String {
         SmartArtLayout::Cycle | SmartArtLayout::Radial | SmartArtLayout::Venn => "ellipse",
         SmartArtLayout::Pyramid => "trapezoid",
     };
-    layout_node(&mut w, "diagram", None, alg, params, None, &[], |w| match l {
+    layout_node(&mut w, LayoutNode { name: "diagram", style: None, alg, params, shape: None, pres_of: &[] }, |w| match l {
         SmartArtLayout::Hierarchy => {
             w.open("dgm:forEach", &[("name", "branches"), ("axis", "ch"), ("ptType", "node")]);
-            layout_node(w, "branch", None, "hierRoot", &[], None, &[], |w| {
-                layout_node(w, "item", Some("node1"), "tx", &[], Some(shape), &[("axis", "self")], |_| {});
-                layout_node(w, "below", None, "hierChild", &[("chAlign", "t")], None, &[], |w| {
-                    w.open("dgm:forEach", &[("name", "joins"), ("axis", "ch"), ("ptType", "parTrans")]);
-                    layout_node(
-                        w,
-                        "join",
-                        Some("connector"),
-                        "conn",
-                        &[("dim", "1D"), ("connRout", "bend"), ("begPts", "bCtr"), ("endPts", "tCtr")],
-                        Some("conn"),
-                        &[("axis", "self")],
-                        |_| {},
-                    );
-                    w.close("dgm:forEach");
-                    w.empty("dgm:forEach", &[("name", "deeper"), ("ref", "branches")]);
-                });
+            layout_node(w, LayoutNode { name: "branch", style: None, alg: "hierRoot", params: &[], shape: None, pres_of: &[] }, |w| {
+                layout_node(
+                    w,
+                    LayoutNode { name: "item", style: Some("node1"), alg: "tx", params: &[], shape: Some(shape), pres_of: &[("axis", "self")] },
+                    |_| {},
+                );
+                layout_node(
+                    w,
+                    LayoutNode { name: "below", style: None, alg: "hierChild", params: &[("chAlign", "t")], shape: None, pres_of: &[] },
+                    |w| {
+                        w.open("dgm:forEach", &[("name", "joins"), ("axis", "ch"), ("ptType", "parTrans")]);
+                        layout_node(
+                            w,
+                            LayoutNode {
+                                name: "join",
+                                style: Some("connector"),
+                                alg: "conn",
+                                params: &[("dim", "1D"), ("connRout", "bend"), ("begPts", "bCtr"), ("endPts", "tCtr")],
+                                shape: Some("conn"),
+                                pres_of: &[("axis", "self")],
+                            },
+                            |_| {},
+                        );
+                        w.close("dgm:forEach");
+                        w.empty("dgm:forEach", &[("name", "deeper"), ("ref", "branches")]);
+                    },
+                );
             });
             w.close("dgm:forEach");
         }
         SmartArtLayout::Radial => {
             w.open("dgm:forEach", &[("name", "middle"), ("axis", "ch"), ("ptType", "node"), ("cnt", "1")]);
-            layout_node(w, "centre", Some("node1"), "tx", &[], Some(shape), &[("axis", "self")], |w| {
-                w.open("dgm:forEach", &[("name", "around"), ("axis", "ch"), ("ptType", "node")]);
-                layout_node(w, "spoke", Some("node1"), "tx", &[], Some(shape), ITEM_TEXT, |_| {});
-                w.close("dgm:forEach");
-            });
+            layout_node(
+                w,
+                LayoutNode { name: "centre", style: Some("node1"), alg: "tx", params: &[], shape: Some(shape), pres_of: &[("axis", "self")] },
+                |w| {
+                    w.open("dgm:forEach", &[("name", "around"), ("axis", "ch"), ("ptType", "node")]);
+                    layout_node(
+                        w,
+                        LayoutNode { name: "spoke", style: Some("node1"), alg: "tx", params: &[], shape: Some(shape), pres_of: ITEM_TEXT },
+                        |_| {},
+                    );
+                    w.close("dgm:forEach");
+                },
+            );
             w.close("dgm:forEach");
         }
         _ => {
             w.open("dgm:forEach", &[("name", "items"), ("axis", "ch"), ("ptType", "node")]);
             let style = if l == SmartArtLayout::Venn { "venn" } else { "node1" };
-            layout_node(w, "item", Some(style), "tx", &[], Some(shape), ITEM_TEXT, |_| {});
+            layout_node(w, LayoutNode { name: "item", style: Some(style), alg: "tx", params: &[], shape: Some(shape), pres_of: ITEM_TEXT }, |_| {});
             if matches!(l, SmartArtLayout::Process | SmartArtLayout::Cycle) {
                 w.open("dgm:forEach", &[("name", "arrows"), ("axis", "followSib"), ("ptType", "sibTrans"), ("cnt", "1")]);
-                layout_node(w, "arrow", Some("connector"), "conn", &[("dim", "2D")], Some("rightArrow"), &[("axis", "self")], |_| {});
+                layout_node(
+                    w,
+                    LayoutNode {
+                        name: "arrow",
+                        style: Some("connector"),
+                        alg: "conn",
+                        params: &[("dim", "2D")],
+                        shape: Some("rightArrow"),
+                        pres_of: &[("axis", "self")],
+                    },
+                    |_| {},
+                );
                 w.close("dgm:forEach");
             }
             w.close("dgm:forEach");
