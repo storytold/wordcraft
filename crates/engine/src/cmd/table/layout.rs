@@ -1,7 +1,7 @@
 use super::cells::{cell, selected_cells, with_cells, with_table};
 use super::{
-    Align, Border, BorderStyle, Borders, CmdError, CmdResult, HeightRule, Path, Pos, Rgb, Selection, Session, Table, TextDirection, VAlign, Value,
-    json, p, sel_result,
+    Align, Border, BorderStyle, Borders, CmdError, CmdResult, HeightRule, Path, Pos, Selection, Session, StoryRef, Table, TextDirection, VAlign,
+    Value, json, p, sel_result,
 };
 
 /// Table Layout › AutoFit: Contents sizes the columns to their text, Window spreads them across
@@ -215,6 +215,11 @@ pub(crate) fn text_direction(s: &mut Session, v: &Value) -> CmdResult {
 /// Bump the revision of every paragraph in a table (table style changes alter their layout).
 pub(crate) fn touch_cells(s: &mut Session, tp: &Path) -> Result<(), CmdError> {
     let story = s.sel.focus.story;
+    touch_cells_in(s, story, tp)
+}
+
+/// `touch_cells` for a table in a given story (the caret may be in a different one).
+pub(crate) fn touch_cells_in(s: &mut Session, story: StoryRef, tp: &Path) -> Result<(), CmdError> {
     let paths: Vec<Path> = s.doc.para_paths(story).into_iter().filter(|p| p.0.len() > tp.0.len() && p.0.starts_with(&tp.0)).collect();
     for p in paths {
         s.doc.para_mut(story, &p)?.touch();
@@ -238,9 +243,12 @@ pub(super) fn fix_caret(s: &mut Session, tp: &Path, r: usize, c: usize) -> CmdRe
 
 pub(super) fn borders(s: &mut Session, v: &Value) -> CmdResult {
     let kind = p::str(v, "kind").unwrap_or("all");
-    let w = p::f32(v, "width").unwrap_or(0.5).clamp(0.25, 6.0);
-    let color = p::str(v, "color").and_then(Rgb::parse);
-    let b = Border { style: BorderStyle::Single, width: w, color, space: 0.0 };
+    // What isn't given comes from the border pen (Border Styles).
+    let pen = s.border_pen;
+    let style = p::str(v, "style").map(crate::cmd::border_pen::parse_style).transpose()?.unwrap_or(pen.style);
+    let w = p::f32(v, "width").map_or(pen.width, crate::cmd::border_pen::clamp_width);
+    let color = crate::cmd::border_pen::color_param(v)?.unwrap_or(pen.color);
+    let b = Border { style, width: w, color, space: 0.0 };
     let none = Border { style: BorderStyle::None, width: 0.0, color: None, space: 0.0 };
     with_table(s, |t| {
         let mut cur = t.props.borders.unwrap_or_default();

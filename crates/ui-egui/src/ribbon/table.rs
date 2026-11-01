@@ -1,5 +1,5 @@
 use super::common::{mi, stack};
-use super::{MeasureExt, Remember, Target, Ui, WordApp, big, group, json, menu_button, small, split, vec2};
+use super::{MeasureExt, Remember, Sense, Stroke, Target, Tokens, Ui, WordApp, big, big_toggle, group, json, menu_button, pos2, small, split, vec2};
 
 pub(super) fn table_design(app: &mut WordApp, ui: &mut Ui) {
     let look = app.session.sel.focus.path.cell().and_then(|(tp, _, _)| app.session.doc.table(app.session.sel.focus.story, &tp).map(|t| t.props.look));
@@ -95,6 +95,12 @@ pub(super) fn table_design(app: &mut WordApp, ui: &mut Ui) {
         });
     });
     group(ui, "Borders", None, app, |ui, app| {
+        menu_button(
+            ui,
+            app,
+            crate::widgets::MenuButtonOptions::new("borderStyles", Some("Border\nStyles"), "Border Styles", true, "table.borderStyles"),
+            border_styles_gallery,
+        );
         menu_button(ui, app, crate::widgets::MenuButtonOptions::new("borders", Some("Borders"), "Borders", true, "table.borders"), |ui, app| {
             for (l, k) in [
                 ("All Borders", "all"),
@@ -107,8 +113,65 @@ pub(super) fn table_design(app: &mut WordApp, ui: &mut Ui) {
                 mi(ui, app, l, "table.borders", json!({"kind": k}));
             }
         });
-        big(ui, app, "borderPainter", "Border\nPainter", "table.borderPainter", json!({}), false);
+        let painting = app.canvas.table_tool == Some(crate::table_pen::TableTool::Paint);
+        big_toggle(ui, app, "borderPainter", "Border\nPainter", "table.borderPainter", painting);
     });
+}
+
+/// The Border Styles gallery's colours: Automatic, then the theme's accents 1–6 (slots 4–9); a
+/// slot the theme lacks takes our default theme's colour there.
+pub(super) fn gallery_colors(theme: &[wordcraft_doc::Rgb]) -> Vec<(String, Option<wordcraft_doc::Rgb>)> {
+    let mut colors = vec![(tl!("Automatic").to_string(), None)];
+    for n in 1..=6usize {
+        let name = crate::i18n::fmt(tl!("Accent {n}"), &[("n", &n.to_string())]);
+        let slot = n + 3;
+        colors.push((name, theme.get(slot).or_else(|| wordcraft_doc::THEME_COLORS.get(slot)).copied()));
+    }
+    colors
+}
+
+/// The Border Styles gallery (the ribbon's menu and the table's context menu): single ½ pt,
+/// single 1½ pt and double ½ pt pens in Automatic and the theme's six accent colours, each drawn
+/// as a sample of its line. Picking one sets the pen and turns on the Border Painter.
+pub(crate) fn border_styles_gallery(ui: &mut Ui, app: &mut WordApp) {
+    let t = Tokens::get(ui.ctx());
+    let colors = gallery_colors(&app.session.doc.settings.theme_colors);
+    let pens = [("single", tl!("Single"), 0.5f32, "½ pt"), ("single", tl!("Single"), 1.5, "1½ pt"), ("double", tl!("Double"), 0.5, "½ pt")];
+    ui.label(egui::RichText::new(tl!("Theme Colors")).small().weak());
+    let mut picked = None;
+    for (style, style_name, width, width_text) in pens {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing = vec2(3.0, 3.0);
+            for (color_name, color) in &colors {
+                let label = format!("{style_name} {width_text}, {color_name}");
+                let (r, resp) = ui.allocate_exact_size(vec2(34.0, 20.0), Sense::click());
+                let resp = resp.on_hover_text(&label);
+                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
+                // A piece of paper with the pen's line across it (automatic is black on paper).
+                ui.painter().rect_filled(r, 2.0, egui::Color32::WHITE);
+                let edge = if resp.hovered() { Stroke::new(1.5, t.accent) } else { Stroke::new(1.0, t.border) };
+                ui.painter().rect_stroke(r, 2.0, edge, egui::StrokeKind::Inside);
+                let ink = color.map_or(egui::Color32::BLACK, |c| egui::Color32::from_rgb(c.0, c.1, c.2));
+                let (x0, x1, y) = (r.min.x + 5.0, r.max.x - 5.0, r.center().y);
+                if style == "double" {
+                    for dy in [-1.5, 1.5] {
+                        ui.painter().line_segment([pos2(x0, y + dy), pos2(x1, y + dy)], Stroke::new(1.0, ink));
+                    }
+                } else {
+                    ui.painter().line_segment([pos2(x0, y), pos2(x1, y)], Stroke::new((width * 4.0 / 3.0).max(1.0), ink));
+                }
+                if resp.clicked() {
+                    picked = Some(json!({"style": style, "width": width, "color": color.map(|c| c.hex())}));
+                }
+            }
+        });
+    }
+    if let Some(pen) = picked {
+        if let Err(e) = app.run("table.borderStyles", pen) {
+            app.status(e);
+        }
+        ui.close();
+    }
 }
 
 /// Table Layout › Cell Size: the caret cell's row height and column width, in inches. They show

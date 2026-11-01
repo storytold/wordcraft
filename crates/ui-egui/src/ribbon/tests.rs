@@ -781,3 +781,17 @@ fn shape_and_chart_formats_leave_out_of_range_sizes_alone() {
     assert_eq!(before.0, Some((20.0, 2500.0)));
     assert_eq!(shown(a), before, "Chart Design shown, the chart untouched");
 }
+
+/// The Border Styles gallery's colours: Automatic, then the theme's accents 1–6; a theme
+/// missing a slot falls back to our default theme's colour there, never to black.
+#[test]
+fn border_styles_gallery_colours_fall_back_to_the_default_theme() {
+    use wordcraft_doc::{Rgb, THEME_COLORS};
+    let cols = super::table::gallery_colors(&[]);
+    assert_eq!(cols.len(), 7);
+    assert_eq!(cols.first().map(|c| c.1), Some(None), "Automatic first");
+    assert_eq!(cols.get(2).map(|c| c.1), Some(Some(THEME_COLORS[5])), "accent 2 from the default theme");
+    let mut theme = THEME_COLORS.to_vec();
+    theme[5] = Rgb(1, 2, 3);
+    assert_eq!(super::table::gallery_colors(&theme).get(2).map(|c| c.1), Some(Some(Rgb(1, 2, 3))));
+}

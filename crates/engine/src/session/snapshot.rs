@@ -87,6 +87,7 @@ impl Session {
             author: _,
             initials: _,
             painter: _,
+            border_pen: _,
             status: _,
             // Headers just created to edit: closing checks they still exist and are empty.
             new_header_parts: _,
