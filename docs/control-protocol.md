@@ -10,6 +10,11 @@ It listens on `127.0.0.1` only. Send one JSON object per line, with the window's
 {"id": 1, "ok": true, "result": {"anchor": {...}, "focus": {...}}}
 ```
 
+The key is a new random one at each start, or the one `--control-token` or
+`--control-token-file` gives ([Choosing the key at launch](#choosing-the-key-at-launch));
+`--automation-read-root` and `--automation-write-root` confine the files requests reach
+([Confining file access](#confining-file-access)).
+
 Errors come back as `{"id": …, "ok": false, "error": "message"}`. A failed command leaves the
 document unchanged. A line that isn't valid JSON gets one error reply, then the server closes the
 connection (so an HTTP request sent to the port can't run a command); reconnect to continue.
@@ -40,15 +45,62 @@ cat ~/.config/wordcraft/control-key.local-7981   # Linux, outside Flatpak, port 
 - A connection that sends no authorised request within 30 s of being accepted is closed. That is
   one limit: blank lines and bad JSON do not extend it. After an authorised request the
   connection may stay idle.
+- Keys are hex, and the letters match in either case (as PhotoCraft's tokens do).
 
-`wordcraft-cli mcp --connect` takes the key from `WORDCRAFT_CONTROL_KEY`, or else from the key
-file for the port it connects to, and reads it again on every new connection (the app may have
-restarted). It sends the key only to the app's own address, `127.0.0.1` (`localhost` connects
-there too, never to `::1`): another loopback address such as `::1` or `127.0.0.2` is not where the
+### Choosing the key at launch
+
+The app can also use a key you give it, with the same options as PhotoCraft (#5047), so one
+setup works across the Craft apps:
+
+```sh
+wordcraft --control 7981 --control-token-file ~/.private/wordcraft-control.token \
+  --automation-read-root /work/project --automation-write-root /work/project/out
+```
+
+- `--control-token HEX` (or `WORDCRAFT_CONTROL_TOKEN`): the key, exactly 64 hex digits. Any
+  other user on the machine may be able to read a command line or another process's
+  environment, so prefer the file.
+- `--control-token-file PATH` (or `WORDCRAFT_CONTROL_TOKEN_FILE`): a file holding the key. If
+  nothing has that name, the app creates the file (mode 0600 on Unix) with a new random key, and
+  later starts reuse it. An existing file must be a regular file holding 64 hex digits (surrounding
+  whitespace is fine); on Unix it must not be readable by group or others (`chmod 600`). A link
+  that leads nowhere is an error, not a file to create.
+- A flag wins over its variable, and an empty variable counts as unset. Each flag is given once,
+  as `--flag VALUE` or `--flag=VALUE` (write a value starting with `-` with `=`).
+- The options are read only when the control server is on (`--control` or
+  `WORDCRAFT_CONTROL_PORT`); otherwise they are ignored. With it, a token together with a token
+  file (from flags or variables), a bad token, an unusable token file or a root that isn't a
+  folder prints an error and exits with status 2 before the window opens.
+- The key given is also written to the key file above, as a new key is, so
+  `wordcraft-cli mcp --connect` finds it with no flags. The token file itself is yours and stays
+  when the app exits.
+
+### The MCP bridge's key
+
+`wordcraft-cli mcp --connect` takes the key from `--control-token` or `--control-token-file` (or
+`WORDCRAFT_CONTROL_TOKEN` / `WORDCRAFT_CONTROL_TOKEN_FILE`, with the same rules: a flag wins over
+its variable, and a token with a token file is an error), else from `WORDCRAFT_CONTROL_KEY`, or
+else from the key file for the port it connects to. It reads a key file or token file again on
+every new connection (the app may have restarted, or not have made the token file yet); a token
+file that exists when the bridge starts is checked at once. The token flags need `--connect`.
+It sends the key only to the app's own address, `127.0.0.1` (`localhost` connects there too,
+never to `::1`): another loopback address such as `::1` or `127.0.0.2` is not where the
 app listens, so whoever listens there gets no key (#3699). For
 any other host it sends no key, says so, and the app refuses its requests: to drive an app on
 another machine, forward its port to `127.0.0.1` (for example `ssh -L 7981:127.0.0.1:7981 host`)
 and set `WORDCRAFT_CONTROL_KEY` to that app's key.
+
+### Confining file access
+
+`--automation-read-root DIR` and `--automation-write-root DIR` (or
+`WORDCRAFT_AUTOMATION_READ_ROOT` / `WORDCRAFT_AUTOMATION_WRITE_ROOT`; only the desktop app reads
+these variables) confine the files control requests read and write, with the same rules as
+[`wordcraft-cli mcp`](mcp.md#confining-file-access): read and write access are separate, and with
+either root given, a root left out grants none of its access. Without either, nothing is
+confined. They cover the commands a request runs (`engine.execute`, `ui.render` with a `path`)
+and the files it asks for (a `ui.screenshot` `path`, written a few frames later). What the person
+at the keyboard does is not confined, and nor are the commands synthetic input (`ui.key`,
+`ui.click`, `ui.text`) leads to: they act as the person would.
 
 ## Methods
 

@@ -9,7 +9,7 @@ pub mod backend;
 pub mod server;
 pub mod tools;
 
-pub use backend::{Backend, Remote};
+pub use backend::{Backend, KeySource, Remote};
 pub use server::Server;
 
 use std::sync::Arc;

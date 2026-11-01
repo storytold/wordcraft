@@ -34,12 +34,14 @@ impl WordApp {
     }
 
     /// Drains queued control requests, dispatches each through `control::handle`, sends its reply or
-    /// admits a screenshot, then puts the receiver back.
+    /// admits a screenshot, then puts the receiver back. Each request runs confined to the control
+    /// roots, when there are any.
     pub(super) fn drain_control(&mut self, ctx: &egui::Context) {
         let Some(rx) = self.control_rx.take() else { return };
         while let Ok(req) = rx.try_recv() {
             let reply = req.reply.clone();
-            match control::handle(self, ctx, &req) {
+            let roots = self.control_roots.clone();
+            match wordcraft_engine::file_access::confine(roots.as_ref(), || control::handle(self, ctx, &req)) {
                 control::Outcome::Done(v) => {
                     let _ = reply.send(v);
                 }

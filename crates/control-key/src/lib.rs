@@ -1,5 +1,11 @@
 //! The control channel's key file, one rule for the app (which writes it) and the MCP bridge
 //! (which reads it): `<settings>/control-key.<instance>`. See `docs/control-protocol.md`, Keys.
+//! A key given at launch (`--control-token`, `--control-token-file`) follows [`token`]'s rules.
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+
+pub mod token;
+
+pub use token::{TOKEN_HEX_LEN, client_token, read_token_file, server_token, validate_token};
 
 use std::path::{Path, PathBuf};
 

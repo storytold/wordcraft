@@ -2,8 +2,9 @@
 //! This is the transport the MCP server (`wordcraft-cli mcp --connect`) wraps.
 //!
 //! Every request needs the window's key (`docs/control-protocol.md`, Keys): once the port is
-//! bound, the app writes a random key to `<settings>/control-key.<instance>` (mode 0600) and
-//! removes the file when the window closes.
+//! bound, the app writes its key (a random one, or the one given at launch with `--control-token`
+//! or `--control-token-file`) to `<settings>/control-key.<instance>` (mode 0600) and removes the
+//! file when the window closes.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -33,21 +34,14 @@ impl KeyFile {
     }
 }
 
-/// Bind `127.0.0.1:port`, write the key file into `settings` and serve. `None` when the port
-/// cannot be bound or there is no random key (the control channel is off); the key file is
-/// `None` when it could not be written (requests are then refused).
-pub fn start(port: u16, ctx: egui::Context, settings: Option<&Path>) -> Option<(Receiver<ControlRequest>, Option<KeyFile>)> {
+/// Bind `127.0.0.1:port`, write `key` to the key file in `settings` and serve. `None` when the
+/// port cannot be bound (the control channel is off); the key file is `None` when it could not be
+/// written (then only a client that was given the key at launch can connect).
+pub fn start(port: u16, ctx: egui::Context, settings: Option<&Path>, key: String) -> Option<(Receiver<ControlRequest>, Option<KeyFile>)> {
     let listener = match TcpListener::bind(("127.0.0.1", port)) {
         Ok(l) => l,
         Err(e) => {
             log::error!("control server failed to bind 127.0.0.1:{port}: {e}");
-            return None;
-        }
-    };
-    let key = match random_key() {
-        Ok(k) => k,
-        Err(e) => {
-            log::error!("control server off: no random key ({e})");
             return None;
         }
     };
@@ -57,13 +51,13 @@ pub fn start(port: u16, ctx: egui::Context, settings: Option<&Path>) -> Option<(
             match write_key_file(&p, &key) {
                 Ok(()) => Some(KeyFile(p)),
                 Err(e) => {
-                    log::error!("control key file not written ({e}): requests will be refused");
+                    log::error!("control key file not written ({e}): only a client given the key at launch can connect");
                     None
                 }
             }
         }
         None => {
-            log::error!("no settings folder for the control key file: requests will be refused");
+            log::error!("no settings folder for the control key file: only a client given the key at launch can connect");
             None
         }
     };
@@ -75,7 +69,7 @@ pub fn start(port: u16, ctx: egui::Context, settings: Option<&Path>) -> Option<(
 }
 
 /// A new key: 32 random bytes from the operating system, as hex.
-fn random_key() -> Result<String, String> {
+pub fn random_key() -> Result<String, String> {
     let mut b = [0u8; 32];
     getrandom::fill(&mut b).map_err(|e| e.to_string())?;
     Ok(b.iter().map(|x| format!("{x:02x}")).collect())
@@ -97,10 +91,12 @@ fn write_key_file(p: &Path, key: &str) -> Result<(), String> {
 }
 
 /// Compare a key with the window's in time that does not depend on where they differ. An
-/// empty key never matches.
+/// empty key never matches. Letters match in either case, as PhotoCraft's tokens do (#5047): a
+/// key is hex, kept lowercase, and a client sending a `--control-token` as it was given in
+/// uppercase must still get in.
 fn keys_match(given: &str, key: &str) -> bool {
     let (a, b) = (given.as_bytes(), key.as_bytes());
-    !b.is_empty() && a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+    !b.is_empty() && a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x.to_ascii_lowercase() ^ y.to_ascii_lowercase())) == 0
 }
 
 fn serve_on(listener: TcpListener, ctx: egui::Context, key: String, first: Duration) -> Receiver<ControlRequest> {
@@ -315,7 +311,7 @@ mod tests {
     #[test]
     fn a_wrong_key_is_refused_and_closed() {
         let (port, rx) = boot();
-        for key in ["nope", &KEY[..63], &format!("{KEY}0"), &KEY.to_uppercase()] {
+        for key in ["nope", &KEY[..63], &format!("{KEY}0"), &KEY.replace('f', "g")] {
             let mut c = Conn::open(port);
             assert_eq!(c.call(&format!(r#"{{"id":1,"key":"{key}","method":"document.inspect"}}"#))["error"], "unauthorized", "{key}");
             assert!(c.closed());
@@ -454,6 +450,9 @@ mod tests {
     #[test]
     fn keys_compare_whole() {
         assert!(keys_match(KEY, KEY));
+        // Hex letters in either case (#5047), but nothing else folds.
+        assert!(keys_match(&KEY.to_uppercase(), KEY));
+        assert!(!keys_match(&KEY.replace('0', "O"), KEY));
         assert!(!keys_match(KEY, &KEY[..63]));
         assert!(!keys_match(&KEY[..63], KEY));
         assert!(!keys_match(KEY, &KEY.replace('f', "e")));
@@ -480,14 +479,14 @@ mod tests {
         // The port is taken: no key file.
         let taken = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = taken.local_addr().unwrap().port();
-        assert!(start(port, egui::Context::default(), Some(&dir)).is_none());
+        assert!(start(port, egui::Context::default(), Some(&dir), KEY.into()).is_none());
         assert!(!dir.exists() || std::fs::read_dir(&dir).unwrap().next().is_none(), "no key file after a failed bind");
         drop(taken);
         // Bound: the key file holds the key that opens the port.
         let mut free_port = port.wrapping_add(1).max(1024);
         let mut started = None;
         for _ in 0..100 {
-            if let Some(res) = start(free_port, egui::Context::default(), Some(&dir)) {
+            if let Some(res) = start(free_port, egui::Context::default(), Some(&dir), random_key().unwrap()) {
                 started = Some((res, free_port));
                 break;
             }
@@ -509,6 +508,31 @@ mod tests {
         assert_eq!(c.recv()["ok"], true);
         key_file.remove();
         assert!(!key_file.path().exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `--control-token` / `--control-token-file` (#5047): the key given is the one in the key file
+    /// (so `wordcraft-cli mcp --connect` finds it as before) and the one that opens the port.
+    #[test]
+    fn a_key_given_at_launch_is_the_one_served() {
+        let dir = temp_dir("given");
+        let mut started = None;
+        for _ in 0..100 {
+            let port = TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
+            if let Some(res) = start(port, egui::Context::default(), Some(&dir), KEY.into()) {
+                started = Some((res, port));
+                break;
+            }
+        }
+        let ((rx, key_file), port) = started.unwrap();
+        let key_file = key_file.unwrap();
+        assert_eq!(std::fs::read_to_string(key_file.path()).unwrap(), KEY);
+        // As given, in either case.
+        let mut c = Conn::open(port);
+        c.send(&format!(r#"{{"id":1,"key":"{}","method":"document.inspect"}}"#, KEY.to_uppercase()));
+        answer(&rx);
+        assert_eq!(c.recv()["ok"], true);
+        key_file.remove();
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -1,6 +1,7 @@
 //! The folders automation may read and write (#769).
 //!
-//! `wordcraft-cli mcp --automation-read-root <dir> --automation-write-root <dir>` confines the
+//! `wordcraft-cli mcp --automation-read-root <dir> --automation-write-root <dir>` (and the same flags
+//! on `wordcraft --control`, for its control requests, #5047) confine the
 //! files an agent's commands reach. [`AutomationRoots`] holds the two folders. While they are in force, every path a command
 //! reads goes through [`check_read`] and every path it writes through [`check_write`]:
 //!

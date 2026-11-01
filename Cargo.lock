@@ -6687,6 +6687,7 @@ version = "0.13.2"
 dependencies = [
  "serde_json",
  "sys-locale",
+ "wordcraft-control-key",
  "wordcraft-doc",
  "wordcraft-engine",
  "wordcraft-mcp",

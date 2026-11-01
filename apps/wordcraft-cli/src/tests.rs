@@ -153,20 +153,20 @@ fn automation_root_flags_are_taken_out_of_the_mcp_arguments() {
     let (roots, left) =
         automation_roots("mcp", &args(&["--automation-read-root", &read, "--author", "Claude", &format!("--automation-write-root={write}")]))
             .unwrap();
-    let roots = roots.unwrap();
+    let roots = roots.roots.unwrap();
     assert_eq!(left, args(&["--author", "Claude"]));
     assert!(roots.read_root().is_some() && roots.write_root().is_some());
     assert!(validate_options("mcp", &left, MCP_OPTIONS).is_ok());
 
     // A root left out grants none of its access.
     let (roots, _) = automation_roots("mcp", &args(&["--automation-read-root", &read])).unwrap();
-    let roots = roots.unwrap();
+    let roots = roots.roots.unwrap();
     assert!(roots.write_root().is_none());
     assert!(roots.check(&format!("{write}/x.docx"), wordcraft_engine::file_access::Access::Write).unwrap_err().contains("write authority is absent"));
 
     // No flags: nothing is confined and the arguments pass through.
     let (roots, left) = automation_roots("mcp", &args(&["--connect", "127.0.0.1:9"])).unwrap();
-    assert!(roots.is_none());
+    assert!(roots.roots.is_none() && roots.control_token.is_none() && roots.control_token_file.is_none());
     assert_eq!(left, args(&["--connect", "127.0.0.1:9"]));
     let _ = std::fs::remove_dir_all(base);
 }
@@ -224,6 +224,83 @@ fn automation_roots_are_an_error_with_connect() {
     let dir = std::env::temp_dir().to_string_lossy().into_owned();
     let e = run(&args(&["mcp", "--connect", "127.0.0.1:9", "--automation-read-root", &dir])).unwrap_err().to_string();
     assert!(e.contains("--automation-read-root") && e.contains("headless"), "{e}");
+}
+
+const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+/// The key `mcp --connect` sends, from `flags` and the variables in `env`.
+fn key_for(flags: &[&str], env: &[(&str, &str)]) -> Result<wordcraft_mcp::KeySource, String> {
+    let (flags, left) = automation_roots("mcp", &args(flags))?;
+    assert!(left.is_empty(), "{left:?}");
+    let env: Vec<(String, String)> = env.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+    key_source(&flags, |name| env.iter().find(|(k, _)| k == name).map(|(_, v)| OsString::from(v)))
+}
+
+fn token(token: &str, from: &str) -> wordcraft_mcp::KeySource {
+    wordcraft_mcp::KeySource::Token { token: token.into(), from: from.into() }
+}
+
+/// `mcp --connect … --control-token / --control-token-file` and their variables (#5047), as
+/// PhotoCraft's bridge takes them.
+#[test]
+fn the_control_token_for_connect_comes_from_a_flag_then_its_variable() {
+    let upper = TOKEN.to_uppercase();
+    assert!(key_for(&["--control-token", &upper], &[]) == Ok(token(TOKEN, "--control-token")));
+    assert!(key_for(&[], &[("WORDCRAFT_CONTROL_TOKEN", TOKEN)]) == Ok(token(TOKEN, "WORDCRAFT_CONTROL_TOKEN")));
+    // A flag wins over its own variable, and a blank variable is unset.
+    let other = "f".repeat(64);
+    assert!(key_for(&["--control-token", TOKEN], &[("WORDCRAFT_CONTROL_TOKEN", &other)]) == Ok(token(TOKEN, "--control-token")));
+    assert!(key_for(&[], &[("WORDCRAFT_CONTROL_TOKEN", " "), ("WORDCRAFT_CONTROL_TOKEN_FILE", "")]) == Ok(wordcraft_mcp::KeySource::Default));
+    // Nothing given: as before (WORDCRAFT_CONTROL_KEY, then the app's key file).
+    assert!(key_for(&[], &[("WORDCRAFT_CONTROL_KEY", "k")]) == Ok(wordcraft_mcp::KeySource::Default));
+    // A token and a token file, however given, are an error naming both.
+    let e = key_for(&["--control-token", TOKEN], &[("WORDCRAFT_CONTROL_TOKEN_FILE", "/t")]).err().unwrap();
+    assert_eq!(e, "mcp: --control-token cannot be used with WORDCRAFT_CONTROL_TOKEN_FILE");
+    let e = key_for(&["--control-token", TOKEN, "--control-token-file", "/t"], &[]).err().unwrap();
+    assert_eq!(e, "mcp: --control-token cannot be used with --control-token-file");
+    // A bad token stops the bridge, naming where it came from.
+    let e = key_for(&[], &[("WORDCRAFT_CONTROL_TOKEN", "abcd")]).err().unwrap();
+    assert!(e.starts_with("mcp: WORDCRAFT_CONTROL_TOKEN: ") && e.contains("hexadecimal"), "{e}");
+}
+
+#[test]
+fn a_control_token_file_is_checked_when_there_and_read_later_when_not() {
+    let dir = std::env::temp_dir().join(format!("wc-cli-token-file-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("control.token");
+    let shown = path.to_string_lossy().into_owned();
+    let file = |from: &str| wordcraft_mcp::KeySource::TokenFile { path: path.clone(), from: from.into() };
+    // Not made yet (the app makes it when it starts): read once it is there.
+    assert!(key_for(&["--control-token-file", &shown], &[]) == Ok(file("--control-token-file")));
+    // The flag wins over its variable.
+    assert!(
+        key_for(&[&format!("--control-token-file={shown}")], &[("WORDCRAFT_CONTROL_TOKEN_FILE", "/elsewhere")]) == Ok(file("--control-token-file"))
+    );
+    assert!(key_for(&[], &[("WORDCRAFT_CONTROL_TOKEN_FILE", &shown)]) == Ok(file("WORDCRAFT_CONTROL_TOKEN_FILE")));
+    // There and not a token: an error at once.
+    std::fs::write(&path, "nonsense").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let e = key_for(&["--control-token-file", &shown], &[]).err().unwrap();
+    assert!(e.starts_with("mcp: --control-token-file: control token file"), "{e}");
+    assert!(run(&args(&["mcp", "--connect", "127.0.0.1:9", "--control-token-file", &shown])).is_err());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn control_token_flags_need_connect() {
+    for flags in [["--control-token", TOKEN], ["--control-token-file", "/t"]] {
+        let e = run(&args(&[&["mcp"][..], &flags[..]].concat())).unwrap_err().to_string();
+        assert!(e.contains("--connect") && e.contains("headless"), "{e}");
+    }
+    // A bad one with --connect stops before serving.
+    let e = run(&args(&["mcp", "--connect", "127.0.0.1:9", "--control-token", "abcd"])).unwrap_err().to_string();
+    assert!(e.contains("hexadecimal"), "{e}");
+    assert!(run(&args(&["mcp", "--connect", "127.0.0.1:9", "--control-token"])).unwrap_err().to_string().contains("needs a value"));
 }
 
 #[test]

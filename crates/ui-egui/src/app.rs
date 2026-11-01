@@ -102,6 +102,7 @@ impl WordApp {
             mac_titlebar: chrome::MacTitleBar::default(),
             updates_rt: updates_ui::Runtime::default(),
             control_rx: None,
+            control_roots: None,
             shots: crate::control::Shots::default(),
             capture_epoch: 0,
             surface_geometry: None,
@@ -182,6 +183,14 @@ impl WordApp {
 
     pub fn with_control(mut self, rx: std::sync::mpsc::Receiver<ControlRequest>) -> Self {
         self.control_rx = Some(rx);
+        self
+    }
+
+    /// Confine the files control requests read and write to `roots` (the app's
+    /// `--automation-read-root` / `--automation-write-root`, #5047): commands and screenshots
+    /// they ask for, not what the person at the keyboard does. `None` leaves them unconfined.
+    pub fn with_control_roots(mut self, roots: Option<std::sync::Arc<wordcraft_engine::file_access::AutomationRoots>>) -> Self {
+        self.control_roots = roots;
         self
     }
 
