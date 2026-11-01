@@ -138,6 +138,20 @@ fn inlines_md_impl(inlines: &[Inline], in_table: bool) -> String {
             Inline::Ruby { .. } => {}
         }
     }
+    // A backslash break at the end of a block reads back as a literal backslash: use `<br>`.
+    let mut trailing_breaks = 0;
+    while let Some((text, f, raw)) = pieces.last_mut() {
+        if raw.is_some() || f.code {
+            break;
+        }
+        let kept = text.trim_end_matches('\n').len();
+        trailing_breaks += text.len() - kept;
+        text.truncate(kept);
+        if !text.is_empty() {
+            break;
+        }
+        pieces.pop();
+    }
     let mut out = String::new();
     let mut stack: Vec<Mark> = Vec::new();
     let mut link: Option<Arc<str>> = None;
@@ -208,6 +222,7 @@ fn inlines_md_impl(inlines: &[Inline], in_table: bool) -> String {
     if let Some(l) = &link {
         out.push_str(&format!("]({})", link_target(l)));
     }
+    out.push_str(&"<br>".repeat(trailing_breaks));
     out
 }
 

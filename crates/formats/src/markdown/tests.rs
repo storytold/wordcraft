@@ -695,3 +695,19 @@ fn exported_link_destinations_read_back_unchanged() {
     assert_eq!(md("https://example.com/a b"), "[x](<https://example.com/a b>)");
     assert_eq!(md("https://e.com/x\ny"), "[x](https://e.com/xy)");
 }
+
+#[test]
+fn trailing_line_break_does_not_become_a_literal_backslash() {
+    use wordcraft_doc::{CharProps, Document, Paragraph, StoryRef, para_block};
+    for s in ["x\n", "x\n\n"] {
+        let mut d = Document::new();
+        d.body = vec![para_block(Paragraph::with_text(s, CharProps::default()))];
+        let md = export(&d);
+        let back = import(&md).plain_text(StoryRef::Body);
+        assert_eq!(back, s, "{md:?}");
+    }
+    let bold = Fmt { bold: true, ..Fmt::default() };
+    let md = export::inlines_md(&[Inline::Text("x\n".into(), bold)]);
+    assert!(!md.contains('\\'), "{md:?}");
+    assert_eq!(md, "**x**<br>");
+}
