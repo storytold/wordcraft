@@ -382,11 +382,10 @@ fn line_dash(w: &mut W, dash: &wordcraft_doc::line_dash::LineDash) {
 /// A shape's `a:effectLst` (ECMA-376 Part 1 §20.1.8.26), children in schema order.
 /// A line's arrowheads (`a:headEnd`, `a:tailEnd`, ECMA-376 §20.1.8.38 / §20.1.8.57).
 fn arrow_ends(w: &mut W, extra: &wordcraft_doc::connector::ShapeExtra) {
-    if extra.arrow_start {
-        w.empty("a:headEnd", &[("type", "triangle")]);
-    }
-    if extra.arrow_end {
-        w.empty("a:tailEnd", &[("type", "triangle")]);
+    for (on, tag, style) in [(extra.arrow_start, "a:headEnd", extra.start_style), (extra.arrow_end, "a:tailEnd", extra.end_style)] {
+        if on {
+            w.empty(tag, &[("type", style.kind.ooxml()), ("w", style.width.ooxml()), ("len", style.length.ooxml())]);
+        }
     }
 }
 
