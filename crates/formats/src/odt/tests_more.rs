@@ -19,6 +19,7 @@ mod rtl;
 mod settings;
 mod shapes;
 mod spacing;
+mod strokes;
 mod style_look;
 mod tables;
 mod tabs;

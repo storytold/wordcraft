@@ -746,6 +746,8 @@ pub(super) struct Styles {
     pub(super) default_kern: bool,
     /// `style:default-style` for graphics: what every drawing shape's style falls back on.
     default_graphic: super::frames::Graphic,
+    /// The named dashes and gradients graphic styles use.
+    pub(super) defs: super::strokes::Defs,
 }
 
 impl Styles {
@@ -806,6 +808,7 @@ impl Styles {
                         }
                     }
                 }
+                "stroke-dash" | "gradient" if q.starts_with("draw:") => self.defs.read(local(&q), &a),
                 "list-style" => list = get(&a, "style:name").map(|n| (n.to_string(), vec![ListLevel::default(); 10])),
                 "outline-style" => self.outline = Some(vec![ListLevel::default(); 10]),
                 "outline-level-style" => {

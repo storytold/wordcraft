@@ -951,7 +951,7 @@ impl Body<'_> {
                 self.frame_float = Some(super::frames::place(a, w.unwrap_or(0.0), h.unwrap_or(0.0), &g));
                 self.member_start(a, w.unwrap_or(0.0), h.unwrap_or(0.0), None);
                 // Without a height, a text box in it grows to its text (`fo:min-height` below).
-                self.frame_look = g.look(h.is_none());
+                self.frame_look = g.look(h.is_none(), &self.styles.defs);
             }
             "image" => {
                 if let Some(href) = get(a, "xlink:href")
@@ -1541,7 +1541,7 @@ impl Body<'_> {
     fn start_shape(&mut self, q: &str, a: &Attrs) {
         let kind = super::shapes::element_kind(local(q));
         let g = self.styles.shape_graphic(get(a, "draw:style-name"));
-        let (w, h, x, y, rising) = super::shapes::geometry(kind, a);
+        let (w, h, x, y, (flip_h, flip_v)) = super::shapes::geometry(kind, a);
         let mut float = if kind == wordcraft_doc::para::ShapeKind::Line {
             // A line is placed by its ends.
             let at = |v: Option<f32>| v.map(super::writer::pt);
@@ -1549,13 +1549,13 @@ impl Body<'_> {
         } else {
             super::frames::place(a, w, h, &g)
         };
-        float.flip_v = rising;
+        (float.flip_h, float.flip_v) = (flip_h, flip_v);
         self.shape_flip = (false, false);
         self.member_start(a, w, h, (kind == wordcraft_doc::para::ShapeKind::Line).then_some((x, y)));
         if let Some(rot) = self.member_rot.take() {
             float.rot = rot;
         }
-        self.frame_look = g.shape_look(kind);
+        self.frame_look = g.shape_look(kind, &self.styles.defs);
         self.shape_kind = Some(kind);
         let frame = (Some((Some(w), Some(h), None, String::new(), None)), Some(float), std::mem::take(&mut self.frame_look));
         self.start_note(a);

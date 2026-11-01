@@ -3,10 +3,13 @@
 //! `style:vertical-pos`/`-rel`, `fo:margin-*` of `style:graphic-properties`), and WordCraft's
 //! [`Float`] for it, both ways.
 
+use super::strokes::Defs;
 use super::styles::parse_border;
 use super::writer::pt;
 use super::xml::{Attrs, get, length};
 use crate::model::{BoxLook, parse_color};
+use wordcraft_doc::fill::Fill;
+use wordcraft_doc::line_dash::LineDash;
 use wordcraft_doc::para::{Anchor, Float, FloatAlign, ShapeKind, Wrap, WrapText};
 use wordcraft_doc::props::BorderStyle;
 use wordcraft_doc::props::Rgb;
@@ -42,6 +45,11 @@ pub(super) struct Graphic {
     stroke_width: Option<f32>,
     /// A shape grows to fit its text (`draw:auto-grow-height`).
     grow: Option<bool>,
+    /// The names of its dash (`draw:stroke-dash`), gradient (`draw:fill-gradient-name`) and
+    /// arrowheads (`draw:marker-start`, `draw:marker-end`; an empty name is none).
+    dash: Option<String>,
+    gradient: Option<String>,
+    markers: [Option<String>; 2],
 }
 
 /// The colour LibreOffice draws a shape's line in when its styles give none (#3465a4), and fills
@@ -77,6 +85,9 @@ impl Graphic {
             stroke: s("draw:stroke"),
             stroke_color: get(a, "svg:stroke-color").and_then(parse_color),
             grow: get(a, "draw:auto-grow-height").map(|v| v.trim() == "true"),
+            dash: s("draw:stroke-dash"),
+            gradient: s("draw:fill-gradient-name"),
+            markers: [s("draw:marker-start"), s("draw:marker-end")],
             stroke_width: get(a, "svg:stroke-width").and_then(length).filter(|v| v.is_finite()).map(|v| v.clamp(0.0, 12.0)),
         }
     }
@@ -108,43 +119,69 @@ impl Graphic {
         self.stroke_color = self.stroke_color.or(parent.stroke_color);
         self.stroke_width = self.stroke_width.or(parent.stroke_width);
         self.grow = self.grow.or(parent.grow);
+        fill(&mut self.dash, &parent.dash);
+        fill(&mut self.gradient, &parent.gradient);
+        for (m, p) in self.markers.iter_mut().zip(&parent.markers) {
+            fill(m, p);
+        }
         self
     }
 
     /// The fill a style of `draw:fill` `kind` gives, `default` when it states none: `None` is
     /// no fill; a gradient, hatch or bitmap stands as its colour.
-    fn fill_with(&self, default: Option<&str>) -> Option<Rgb> {
+    fn fill_with(&self, default: Option<&str>, defs: &Defs) -> Option<Fill> {
         let color = self.fill_color.or(self.background.flatten());
+        let solid = |c: Option<Rgb>| c.map(Fill::solid);
         match self.fill.as_deref().or(default) {
             Some("none") => None,
-            Some("solid") => color,
-            Some(_) => color.or(Some(Rgb::WHITE)),
-            None => self.background.flatten(),
+            Some("solid") => solid(color),
+            Some("gradient") => self.gradient.as_deref().and_then(|n| defs.gradient(n)).cloned().or_else(|| solid(color.or(Some(Rgb::WHITE)))),
+            Some(_) => solid(color.or(Some(Rgb::WHITE))),
+            None => solid(self.background.flatten()),
         }
+    }
+
+    /// The line's dash for a line `width` points wide, and its arrowheads (a named marker at
+    /// either end).
+    fn stroke_extra(&self, width: f32, defs: &Defs) -> (LineDash, (bool, bool)) {
+        let dash = match self.stroke.as_deref() {
+            Some("dash") => self.dash.as_deref().and_then(|n| defs.dash(n)).map_or(LineDash::Dash, |d| d.pattern(width)),
+            _ => LineDash::Solid,
+        };
+        let marked = |m: &Option<String>| m.as_deref().is_some_and(|m| !m.trim().is_empty());
+        (dash, (marked(&self.markers[0]), marked(&self.markers[1])))
     }
 
     /// The look of drawing shape `kind` in this style: LibreOffice's solid fill and hairline in
     /// its default colours where the styles say nothing; a line has no fill.
-    pub(super) fn shape_look(&self, kind: ShapeKind) -> BoxLook {
+    pub(super) fn shape_look(&self, kind: ShapeKind, defs: &Defs) -> BoxLook {
         let fill = if kind == ShapeKind::Line {
             None
         } else {
             let mut g = self.clone();
             g.fill_color = g.fill_color.or(Some(SHAPE_FILL));
-            g.fill_with(Some("solid"))
+            g.fill_with(Some("solid"), defs)
         };
         let line = match self.stroke.as_deref() {
             Some("none") => None,
             _ => Some((self.stroke_color.unwrap_or(SHAPE_LINE), self.stroke_width.filter(|w| *w > 0.0).unwrap_or(HAIRLINE))),
         };
         // Only a shape that says it grows to its text does: WordCraft's fit shrinks it too.
-        BoxLook { fill, line, inset: Some(self.padding.map(|p| p.unwrap_or(0.0))), auto_fit: self.grow == Some(true) }
+        let (dash, arrows) = self.stroke_extra(line.map_or(HAIRLINE, |l| l.1), defs);
+        BoxLook { fill, line, dash, arrows, inset: Some(self.padding.map(|p| p.unwrap_or(0.0))), auto_fit: self.grow == Some(true) }
     }
 
     /// The look of a text box in a frame of this style, growing to its text when `auto_fit`.
     /// What the styles leave unsaid is ODF's default: no line, no fill, no padding.
-    pub(super) fn look(&self, auto_fit: bool) -> BoxLook {
-        BoxLook { fill: self.fill_with(None), line: self.line.flatten(), inset: Some(self.padding.map(|p| p.unwrap_or(0.0))), auto_fit }
+    pub(super) fn look(&self, auto_fit: bool, defs: &Defs) -> BoxLook {
+        BoxLook {
+            fill: self.fill_with(None, defs),
+            line: self.line.flatten(),
+            dash: LineDash::Solid,
+            arrows: (false, false),
+            inset: Some(self.padding.map(|p| p.unwrap_or(0.0))),
+            auto_fit,
+        }
     }
 }
 

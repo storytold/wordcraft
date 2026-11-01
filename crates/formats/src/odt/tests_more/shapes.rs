@@ -26,7 +26,7 @@ fn shapes(d: &Document) -> Vec<Seen> {
                     .unwrap_or_default();
                 let size = ((*w * 10.0).round() / 10.0, (*h * 10.0).round() / 10.0);
                 let line = stroke.map(|c| (c, (*stroke_width * 100.0).round() / 100.0));
-                out.push((*kind, size, fill.as_ref().map(|f| f.main_color()), line, float.wrap != Wrap::Inline, float.flip_v, text));
+                out.push((*kind, size, fill.as_ref().map(|f| f.main_color()), line, float.wrap != Wrap::Inline, float.flip_h != float.flip_v, text));
             }
         }
     }

@@ -298,7 +298,7 @@ fn drawing_inline(doc: &Document, o: &InlineObject, opts: FlowOpts, depth: usize
     use wordcraft_doc::para::ShapeKind;
     let (sx, sy) = scale;
     match o {
-        InlineObject::Shape { kind, w, h, float, story, fill, stroke, stroke_width, .. } if *kind != ShapeKind::Freeform => {
+        InlineObject::Shape { kind, w, h, float, story, fill, stroke, stroke_width, extra, .. } if *kind != ShapeKind::Freeform => {
             // A connector is a straight line.
             let kind = match kind {
                 ShapeKind::StraightConnector | ShapeKind::ElbowConnector | ShapeKind::CurvedConnector => ShapeKind::Line,
@@ -308,8 +308,10 @@ fn drawing_inline(doc: &Document, o: &InlineObject, opts: FlowOpts, depth: usize
             let part = story.and_then(|id| doc.parts.get(&id));
             let blocks = part.map(|p| flow_blocks(doc, &p.blocks, 0, inner)).unwrap_or_default();
             let look = BoxLook {
-                fill: fill.as_ref().filter(|_| kind != ShapeKind::Line).map(wordcraft_doc::fill::Fill::main_color),
+                fill: fill.clone().filter(|_| kind != ShapeKind::Line),
                 line: stroke.filter(|_| stroke_width.is_finite() && *stroke_width > 0.0).map(|c| (c, stroke_width.min(12.0))),
+                dash: extra.dash.clone(),
+                arrows: (extra.arrow_start, extra.arrow_end),
                 inset: part.and_then(|p| p.body.inset.is_some().then(|| p.body.insets_pt())),
                 auto_fit: part.is_some_and(|p| p.body.auto_fit),
             };

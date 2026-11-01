@@ -339,14 +339,19 @@ impl<'a> Builder<'a> {
                     kind: *kind,
                     w: fit(*w),
                     h: fit(*h),
-                    fill: look.fill.map(wordcraft_doc::fill::Fill::solid),
+                    fill: look.fill.clone().and_then(|f| f.sanitized()),
                     stroke,
                     stroke_width,
                     float: float.as_deref().cloned().unwrap_or_default(),
                     story,
                     freeform: None,
                     effects: Default::default(),
-                    extra: Default::default(),
+                    extra: wordcraft_doc::connector::ShapeExtra {
+                        dash: look.dash.clone(),
+                        arrow_start: look.arrows.0,
+                        arrow_end: look.arrows.1,
+                        ..Default::default()
+                    },
                 };
                 Some(obj)
             }

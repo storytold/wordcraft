@@ -560,8 +560,15 @@ pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
     let mut named_text = std::mem::take(&mut w.named_text);
     named_text.append(&mut hw.named_text);
     let named_text_xml = char_styles(doc, &named_text);
-    let styles =
-        styles_xml(doc, &pages, &parts, &hw.style_defs(), &named).replacen("</office:styles>", &format!("{named_text_xml}</office:styles>"), 1);
+    // The dashes, gradients and arrowheads graphic styles name (§16.39–16.41).
+    let mut draw_defs = std::mem::take(&mut w.draw_defs.defs);
+    draw_defs.append(&mut hw.draw_defs.defs);
+    let draw_xml: String = draw_defs.into_values().collect();
+    let styles = styles_xml(doc, &pages, &parts, &hw.style_defs(), &named).replacen(
+        "</office:styles>",
+        &format!("{draw_xml}{named_text_xml}</office:styles>"),
+        1,
+    );
     w.pictures.append(&mut hw.pictures);
     w.formulas.append(&mut hw.formulas);
     let meta = meta_xml(&flow.meta);

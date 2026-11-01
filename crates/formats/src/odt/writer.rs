@@ -68,6 +68,8 @@ type SecStart = (String, Option<u32>);
 
 #[derive(Default)]
 pub(super) struct Writer {
+    /// The named dashes, gradients and arrowheads its graphic styles use.
+    pub(super) draw_defs: super::strokes::DrawDefs,
     /// The custom paragraph styles paragraphs were written in (document style ids).
     pub(super) named: std::collections::BTreeSet<String>,
     /// The custom character styles text was written in.
@@ -421,7 +423,7 @@ fn cell_starting_at(row: &[model::Cell], g: usize) -> Option<&model::Cell> {
 /// A text box frame's graphic properties for `look`: its line (§20.183 `fo:border`), padding
 /// (§20.210 `fo:padding-*`) and fill, both ways (LibreOffice reads `draw:fill`, and fills a
 /// frame without it).
-fn box_look_attrs(look: &model::BoxLook) -> String {
+fn box_look_attrs(look: &model::BoxLook, defs: &mut super::strokes::DrawDefs, prefix: &str) -> String {
     let hex = |c: Rgb| format!("#{}", c.hex().to_ascii_lowercase());
     let mut a = match look.line {
         Some((c, w)) if w.is_finite() && w > 0.0 => format!(" fo:border=\"{} solid {}\"", pt(w.min(12.0)), hex(c)),
@@ -435,11 +437,31 @@ fn box_look_attrs(look: &model::BoxLook) -> String {
         pt(r),
         pt(b)
     ));
-    match look.fill {
-        Some(c) => a.push_str(&format!(" fo:background-color=\"{0}\" draw:fill=\"solid\" draw:fill-color=\"{0}\"", hex(c))),
-        None => a.push_str(" fo:background-color=\"transparent\" draw:fill=\"none\""),
-    }
+    a.push_str(&fill_attrs(look.fill.as_ref(), true, defs, prefix));
     a
+}
+
+/// The graphic properties of fill `fill` (§20.118 `draw:fill`, §20.119 `draw:fill-color`,
+/// §20.120 `draw:fill-gradient-name`; a frame's `fo:background-color` too): a gradient by the
+/// name of its definition, with its main colour for readers that draw none.
+fn fill_attrs(fill: Option<&wordcraft_doc::fill::Fill>, frame: bool, defs: &mut super::strokes::DrawDefs, prefix: &str) -> String {
+    use wordcraft_doc::fill::Fill;
+    let hex = |c: Rgb| format!("#{}", c.hex().to_ascii_lowercase());
+    let background = |c: &str| if frame { format!(" fo:background-color=\"{c}\"") } else { String::new() };
+    match fill {
+        Some(f @ Fill::Gradient(g)) => {
+            let main = hex(f.main_color());
+            match defs.gradient(g, prefix) {
+                Some(name) => format!("{} draw:fill=\"gradient\" draw:fill-gradient-name=\"{name}\" draw:fill-color=\"{main}\"", background(&main)),
+                None => format!("{} draw:fill=\"solid\" draw:fill-color=\"{main}\"", background(&main)),
+            }
+        }
+        Some(f) => {
+            let c = hex(f.main_color());
+            format!("{} draw:fill=\"solid\" draw:fill-color=\"{c}\"", background(&c))
+        }
+        None => format!("{} draw:fill=\"none\"", background("transparent")),
+    }
 }
 
 /// Where a frame or shape is written.
@@ -501,18 +523,28 @@ fn placement(place: Place<'_>, w: f32, h: f32) -> (String, String, String) {
 /// `svg:stroke-color`, `svg:stroke-width`), fill (§20.118 `draw:fill`, `draw:fill-color`),
 /// whether it grows to its text (§20.105 `draw:auto-grow-height`) and the padding around its
 /// text.
-fn shape_look_attrs(look: &model::BoxLook) -> String {
+fn shape_look_attrs(look: &model::BoxLook, defs: &mut super::strokes::DrawDefs, prefix: &str) -> String {
     let hex = |c: Rgb| format!("#{}", c.hex().to_ascii_lowercase());
     let mut a = match look.line {
         Some((c, w)) if w.is_finite() && w > 0.0 => {
-            format!(" draw:stroke=\"solid\" svg:stroke-color=\"{}\" svg:stroke-width=\"{}\"", hex(c), pt(w.min(12.0)))
+            let w = w.min(12.0);
+            let mut a = match defs.dash(&look.dash, prefix) {
+                Some(name) => format!(" draw:stroke=\"dash\" draw:stroke-dash=\"{name}\""),
+                None => " draw:stroke=\"solid\"".to_string(),
+            };
+            a.push_str(&format!(" svg:stroke-color=\"{}\" svg:stroke-width=\"{}\"", hex(c), pt(w)));
+            // Arrowheads (§20.164 `draw:marker-start`, §20.162 `draw:marker-end`).
+            for (on, end) in [(look.arrows.0, "start"), (look.arrows.1, "end")] {
+                if on {
+                    let marker = defs.arrow();
+                    a.push_str(&format!(" draw:marker-{end}=\"{marker}\" draw:marker-{end}-width=\"{}\"", super::strokes::arrow_width(w)));
+                }
+            }
+            a
         }
         _ => " draw:stroke=\"none\"".to_string(),
     };
-    match look.fill {
-        Some(c) => a.push_str(&format!(" draw:fill=\"solid\" draw:fill-color=\"{}\"", hex(c))),
-        None => a.push_str(" draw:fill=\"none\""),
-    }
+    a.push_str(&fill_attrs(look.fill.as_ref(), false, defs, prefix));
     // Its size is its own unless it resizes to fit its text (LibreOffice otherwise grows and
     // shrinks a shape with text to it).
     a.push_str(&format!(" draw:auto-grow-height=\"{}\" draw:auto-grow-width=\"false\"", look.auto_fit));
@@ -1059,7 +1091,7 @@ impl Writer {
     fn text_box(&mut self, size: (f32, f32), place: Place<'_>, look: &model::BoxLook, blocks: &[FBlock], out: &mut String) {
         let reopen = self.open_ins.as_ref().map(|(m, _)| m.clone());
         self.close_ins(out);
-        let frame = box_look_attrs(look);
+        let frame = box_look_attrs(look, &mut self.draw_defs, self.prefix);
         let (anchor, props, xy) = placement(place, size.0, size.1);
         let style = self.graphic_style(format!("{props}{frame}"));
         let mut body = self.story(blocks);
@@ -1101,7 +1133,8 @@ impl Writer {
         self.close_ins(out);
         let float = place.float();
         let (anchor, props, xy) = placement(place, size.0, size.1);
-        let style = self.graphic_style(format!("{props}{}", shape_look_attrs(look)));
+        let look_attrs = shape_look_attrs(look, &mut self.draw_defs, self.prefix);
+        let style = self.graphic_style(format!("{props}{look_attrs}"));
         let body = self.story(blocks);
         self.boxes += 1;
         let (element, geometry) = super::shapes::element_of(kind);
@@ -1112,13 +1145,14 @@ impl Writer {
                 // to top right when it rises.
                 let (w, h) = (len(size.0, 0.0), len(size.1, 0.0));
                 let (x, y) = place.origin();
-                let rises = float.is_some_and(|f| f.flip_v != f.flip_h);
-                let (y1, y2) = if rises { (y + h, y) } else { (y, y + h) };
+                // From its start to its end: mirrored, it starts on the right or at the bottom.
+                let (fh, fv) = float.map_or((false, false), |f| (f.flip_h, f.flip_v));
+                let ((x1, x2), (y1, y2)) = (if fh { (x + w, x) } else { (x, x + w) }, if fv { (y + h, y) } else { (y, y + h) });
                 // Turned about its centre: its ends turned with it.
                 let (cx, cy) = (x + w / 2.0, y + h / 2.0);
                 let (sin, cos) = float.filter(|f| super::frames::turned(f)).map_or(0.0, |f| f.rot.to_radians()).sin_cos();
                 let turn = |px: f32, py: f32| (cx + (px - cx) * cos - (py - cy) * sin, cy + (px - cx) * sin + (py - cy) * cos);
-                let ((x1, y1), (x2, y2)) = (turn(x, y1), turn(x + w, y2));
+                let ((x1, y1), (x2, y2)) = (turn(x1, y1), turn(x2, y2));
                 format!(" svg:x1=\"{}\" svg:y1=\"{}\" svg:x2=\"{}\" svg:y2=\"{}\"", pt(x1), pt(y1), pt(x2), pt(y2))
             }
         } else {

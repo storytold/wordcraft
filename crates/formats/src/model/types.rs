@@ -233,14 +233,18 @@ pub struct Member {
     pub inline: Inline,
 }
 
-/// How a text box or shape looks: its fill, its outline, its inner margins, and whether it
-/// grows to fit its text.
+/// How a text box or shape looks: its fill, its outline (colour and width, dash and
+/// arrowheads), its inner margins, and whether it grows to fit its text.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BoxLook {
-    /// Fill colour; `None` is no fill.
-    pub fill: Option<Rgb>,
+    /// Fill: a colour or a gradient; `None` is no fill.
+    pub fill: Option<wordcraft_doc::fill::Fill>,
     /// Outline colour and width in points; `None` is no line.
     pub line: Option<(Rgb, f32)>,
+    /// The outline's dash pattern.
+    pub dash: wordcraft_doc::line_dash::LineDash,
+    /// Arrowheads at a line's start and end.
+    pub arrows: (bool, bool),
     /// Inner margins (left, top, right, bottom) in points; `None` is the default.
     pub inset: Option<[f32; 4]>,
     /// The box grows to its text; its height is the least it is.
@@ -250,7 +254,14 @@ pub struct BoxLook {
 impl Default for BoxLook {
     /// A new text box's: white, with a thin black line.
     fn default() -> BoxLook {
-        BoxLook { fill: Some(Rgb::WHITE), line: Some((Rgb::BLACK, 0.75)), inset: None, auto_fit: false }
+        BoxLook {
+            fill: Some(wordcraft_doc::fill::Fill::solid(Rgb::WHITE)),
+            line: Some((Rgb::BLACK, 0.75)),
+            dash: Default::default(),
+            arrows: (false, false),
+            inset: None,
+            auto_fit: false,
+        }
     }
 }
 

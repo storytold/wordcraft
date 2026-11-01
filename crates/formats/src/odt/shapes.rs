@@ -67,16 +67,17 @@ pub(super) fn element_of(kind: ShapeKind) -> (&'static str, Option<&'static str>
     }
 }
 
-/// A shape's size and offset (`svg:width`, `svg:height`, `svg:x`, `svg:y`), points, and whether
-/// it runs from its bottom left to its top right. A line's come from its two ends (`svg:x1`…):
-/// its box spans them, and it rises when one end is left of and below the other.
-pub(super) fn geometry(kind: ShapeKind, a: &Attrs) -> (f32, f32, Option<f32>, Option<f32>, bool) {
+/// A shape's size and offset (`svg:width`, `svg:height`, `svg:x`, `svg:y`), points, and which
+/// way it is drawn (from right to left, from bottom to top). A line's come from its two ends
+/// (`svg:x1`…): its box spans them, and it starts at the first end, so a line drawn leftwards
+/// or upwards is flipped that way (its arrowheads stay at its ends).
+pub(super) fn geometry(kind: ShapeKind, a: &Attrs) -> (f32, f32, Option<f32>, Option<f32>, (bool, bool)) {
     let len = |k: &str| get(a, k).and_then(length).filter(|v| v.is_finite()).map(|v| v.clamp(-MAX_LEN, MAX_LEN));
     if kind == ShapeKind::Line {
         let [x1, y1, x2, y2] = ["svg:x1", "svg:y1", "svg:x2", "svg:y2"].map(|k| len(k).unwrap_or(0.0));
         let size = |d: f32| d.abs().min(MAX_LEN);
-        return (size(x2 - x1), size(y2 - y1), Some(x1.min(x2)), Some(y1.min(y2)), (x2 - x1) * (y2 - y1) < 0.0);
+        return (size(x2 - x1), size(y2 - y1), Some(x1.min(x2)), Some(y1.min(y2)), (x2 < x1, y2 < y1));
     }
     let size = |k: &str| len(k).map_or(72.0, |v| v.clamp(1.0, MAX_LEN));
-    (size("svg:width"), size("svg:height"), len("svg:x"), len("svg:y"), false)
+    (size("svg:width"), size("svg:height"), len("svg:x"), len("svg:y"), (false, false))
 }
