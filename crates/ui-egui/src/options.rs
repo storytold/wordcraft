@@ -590,6 +590,11 @@ fn advanced(app: &mut WordApp, ui: &mut Ui) {
     {
         let _ = app.run("ui.caretAnimation", json!({"value": caret}));
     }
+    if cfg!(all(unix, not(target_os = "macos"))) {
+        ui.add_space(8.0);
+        section(ui, "Linux display server");
+        display_server_picker(app, ui);
+    }
     // The web app has no folders to name.
     if !cfg!(target_arch = "wasm32") {
         ui.add_space(8.0);
@@ -719,6 +724,25 @@ fn animations_picker(app: &mut WordApp, ui: &mut Ui) {
         };
         note(ui, reported);
     }
+}
+
+/// Linux display server (#2184): Automatic, Wayland or X11 (XWayland). The desktop app reads it
+/// before the window opens, so a change applies at the next launch.
+fn display_server_picker(app: &mut WordApp, ui: &mut Ui) {
+    use crate::DisplayServer;
+    let name = |d: DisplayServer| if d == DisplayServer::Auto { tl!(d.label()) } else { d.label() };
+    ui.horizontal(|ui| {
+        let label = ui.label(tl!("Display server:"));
+        let combo = craft_ui::ComboBox::from_id_salt("display_server").selected_text(name(app.ui.display_server)).width(220.0).show_ui(ui, |ui| {
+            for d in DisplayServer::ALL {
+                if ui.selectable_label(app.ui.display_server == d, name(d)).clicked() {
+                    let _ = app.run("ui.displayServer", json!({"value": d.code()}));
+                }
+            }
+        });
+        combo.response.labelled_by(label.id);
+    });
+    note(ui, "Applies the next time WordCraft starts.");
 }
 
 /// Interface language: follow the system (the default) or pick one (#8).
