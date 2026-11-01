@@ -1468,6 +1468,54 @@ fn the_custom_properties_dialog_keeps_a_case_only_rename() {
     assert_eq!(props, [("status".to_string(), "draft".to_string())], "the stored spelling follows the rename");
 }
 
+/// #4767: a dialog rename keeps the imported bookmark association through the command
+/// boundary, Undo/Redo and a DOCX save, including a rename that changes only letter case.
+#[test]
+fn custom_property_rename_keeps_bookmark_link_through_docx() {
+    use egui_kittest::kittest::Queryable;
+    for (name, linked, replacement) in [("Renamed", true, false), ("status", true, false), ("Taken", true, true), ("Taken", false, true)] {
+        let mut app = app_with("Original linked content");
+        app.session.run("select.all", &json!({})).unwrap();
+        app.session.run("insert.bookmark", &json!({"name": "OriginalBookmark"})).unwrap();
+        app.session.run("file.properties", &json!({"custom": {"Status": "draft"}})).unwrap();
+        app.session.doc.custom_props[0].link_target = linked.then(|| "OriginalBookmark".into());
+        if replacement {
+            app.session.run("insert.bookmark", &json!({"name": "OtherBookmark"})).unwrap();
+            app.session.doc.set_custom_prop("Taken", "draft");
+            app.session.doc.custom_props[1].link_target = Some("OtherBookmark".into());
+        }
+        let original = app.session.doc.custom_props.clone();
+        let _ = app.run("ui.backstage", json!({"value": true, "page": "info"}));
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(4);
+        h.get_by_label("Advanced Properties…").click();
+        h.run_steps(4);
+        set_text_field(&mut h, "Name:", name);
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "Modify").click();
+        h.run_steps(2);
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "OK").click();
+        h.run_steps(4);
+        let changed = h.state().session.doc.custom_props.clone();
+        assert_eq!(changed[0].name, name);
+        assert_eq!(changed.len(), 1);
+        assert_eq!(changed[0].link_target.as_deref(), linked.then_some("OriginalBookmark"));
+        let bytes = wordcraft_engine::io::save_bytes("linked.docx", &h.state().session.doc).unwrap();
+        let reopened = wordcraft_engine::io::open_bytes("linked.docx", &bytes).unwrap();
+        assert_eq!(reopened.custom_props, changed);
+        h.state_mut().session.run("edit.undo", &json!({})).unwrap();
+        assert_eq!(h.state().session.doc.custom_props, original);
+        h.state_mut().session.run("edit.redo", &json!({})).unwrap();
+        assert_eq!(h.state().session.doc.custom_props, changed);
+    }
+}
+
 /// #2982: Cancel leaves the document as it was; empty names are refused with a message in
 /// the dialog; the Name box stops at Word's limit; and the last deletion shows the empty
 /// state with Modify and Delete disabled.
@@ -1536,7 +1584,7 @@ fn the_custom_properties_dialog_leaves_imported_non_text_properties_alone() {
     use egui_kittest::kittest::Queryable;
     let mut app = app_with("Report body");
     let _ = app.run("file.properties", json!({"custom": {"Status": "draft"}}));
-    app.session.doc.custom_props.push(wordcraft_doc::CustomProp { name: "Count".into(), kind: "i4".into(), value: "7".into() });
+    app.session.doc.custom_props.push(wordcraft_doc::CustomProp { name: "Count".into(), kind: "i4".into(), value: "7".into(), ..Default::default() });
     let _ = app.run("ui.backstage", json!({"value": true, "page": "info"}));
     let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {

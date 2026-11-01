@@ -1,5 +1,5 @@
 use super::writer::{NS, Writer, pt, x};
-use super::*;
+use super::{Columns, Cursor, Document, FBlock, Meta, SectionProps, SectionStart, Write, model};
 
 /// `style:columns` (ODF 1.3 §17.12) of equal columns with their gap and, when on, the line between.
 fn columns_xml(c: &Columns) -> String {

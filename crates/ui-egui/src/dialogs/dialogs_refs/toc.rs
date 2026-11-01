@@ -1,7 +1,7 @@
 use super::common::{BUILT_IN_LABELS, LEADERS, choice, heading, leader_char, sample};
 use super::index::body_field;
 use super::shell::{Next, go};
-use super::*;
+use super::{Dialog, FieldCode, RefsDialog, Serialize, StyleKind, Ui, Value, WordApp, buttons, json, vec2};
 
 // ---------------------------------------------------------------------------------------------
 // Table of Contents
@@ -256,7 +256,7 @@ pub(super) fn figures_ui(app: &mut WordApp, ui: &mut Ui, f: &mut FiguresForm) ->
     ui.horizontal(|ui| {
         let label_label = ui.label(tl!("Label:"));
         let labels: Vec<(String, &str)> = f.labels.iter().map(|l| (l.clone(), l.as_str())).collect();
-        let combo = egui::ComboBox::from_id_salt("tof_label").selected_text(tl!(&f.label)).width(150.0).show_ui(ui, |ui| {
+        let combo = craft_ui::ComboBox::from_id_salt("tof_label").selected_text(tl!(&f.label)).width(150.0).show_ui(ui, |ui| {
             for (v, l) in &labels {
                 ui.selectable_value(&mut f.label, v.clone(), tl!(l));
             }

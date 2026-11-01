@@ -1,9 +1,9 @@
-use super::boxes::{BoxContext, layout_box};
+use super::boxes::{BoxInput, layout_box};
 use super::ctx::{Ctx, with_pin};
 use super::floats::{EarlyFloats, WrapArea};
 use super::notes::{NOTE_SEP, NOTE_SEP_W, NoteBox, NoteSeps, v_span};
 use super::placed::Placed;
-use super::*;
+use super::{Block, Border, FloatAlign, Page, ParaLayout, Rect, SectionProps, StoryRef};
 
 #[derive(Clone)]
 pub(crate) struct PageBuilder<'a> {
@@ -14,6 +14,9 @@ pub(crate) struct PageBuilder<'a> {
     pub(crate) cols: Vec<(f32, f32)>,
     pub(crate) y: f32,
     pub(crate) top: f32,
+    /// The body's top on this page: `top` moves down below the text when a continuous section
+    /// starts mid-page.
+    pub(crate) page_top: f32,
     pub(crate) bottom: f32,
     pub(crate) number: u32,
     pub(crate) web: bool,
@@ -103,9 +106,13 @@ pub(crate) fn page_border_rules(s: &SectionProps) -> Vec<Placed> {
 impl PageBuilder<'_> {
     /// Space footnotes take at the bottom of the page.
     pub(crate) fn notes_h(&self) -> f32 {
-        match self.notes.first() {
+        self.stack_h(&self.notes)
+    }
+    /// The height of a page's note area holding `notes`, with its separator.
+    fn stack_h(&self, notes: &[NoteBox]) -> f32 {
+        match notes.first() {
             None => 0.0,
-            Some(first) => self.seps.sep_h(first.cont) + self.notes.iter().map(|n| n.h).sum::<f32>(),
+            Some(first) => self.seps.sep_h(first.cont) + notes.iter().map(|n| n.h).sum::<f32>(),
         }
     }
     /// The lowest bottom of the body text and tables on the current page.
@@ -289,9 +296,7 @@ impl PageBuilder<'_> {
         let s = self.sect;
         self.number = self.restart_at.take().unwrap_or_else(|| self.number.saturating_add(1));
         let (w, h) = if self.web { (s.page_w, f32::MAX / 4.0) } else { (s.page_w, s.page_h) };
-        // A footer taller than the bottom margin pushes the body up (Word: no gap), leaving it at
-        // least a little room.
-        let bottom = (s.page_h - s.margin_bottom).min(self.foot_top.max(body_top + 36.0));
+        let bottom = self.body_bottom(body_top);
         let body = Rect::new(s.margin_left + s.gutter, body_top, s.text_width(), (bottom - body_top).max(36.0));
         let mut decor = Vec::new();
         if !self.web {
@@ -317,6 +322,7 @@ impl PageBuilder<'_> {
         self.col = 0;
         self.cols = s.column_boxes();
         self.top = body_top;
+        self.page_top = body_top;
         self.bottom = if self.web { f32::MAX / 8.0 } else { bottom };
         self.orig_bottom = self.bottom;
         self.y = self.top;
@@ -339,6 +345,23 @@ impl PageBuilder<'_> {
             self.bottom = self.bottom.min(self.top + h);
         }
     }
+    /// The bottom of the body on a page started with its body at `body_top`: a footer taller than
+    /// the bottom margin pushes it up (Word: no gap), leaving it at least a little room.
+    fn body_bottom(&self, body_top: f32) -> f32 {
+        (self.sect.page_h - self.sect.margin_bottom).min(self.foot_top.max(body_top + 36.0))
+    }
+    /// The room for text in the next column, or on the page [`Self::advance`] starts after the
+    /// last: there, below its body top (`body_top`) and above its footer and the notes carried
+    /// onto it (#3907 CodeRabbit: a different first page's header or footer doesn't shrink it).
+    pub(crate) fn next_room(&self, body_top: f32) -> f32 {
+        if self.col + 1 < self.cols.len() {
+            self.uncapped_bottom() - self.top
+        } else if self.web {
+            f32::MAX / 8.0 - body_top
+        } else {
+            self.body_bottom(body_top) - self.stack_h(&self.carry) - body_top
+        }
+    }
     /// The bottom of the columns without balancing: above the footnotes.
     pub(crate) fn uncapped_bottom(&self) -> f32 {
         self.orig_bottom - self.notes_h()
@@ -355,6 +378,12 @@ impl PageBuilder<'_> {
     }
     pub(crate) fn at_top(&self) -> bool {
         self.y <= self.top + 0.01
+    }
+    /// At the top with nothing above on this page, so moving on gains no room. A continuous
+    /// section starting mid-page is at its top but not fresh: what doesn't fit there goes to the
+    /// next page (#3907).
+    pub(crate) fn fresh(&self) -> bool {
+        self.at_top() && self.top <= self.page_top + 0.01
     }
     /// Move to the next column or page.
     pub(crate) fn advance(&mut self, block: usize, body_top: f32) {
@@ -385,9 +414,8 @@ pub(crate) fn body_top_for(ctx: &mut Ctx, sect: &SectionProps, header: Option<u3
     // Placed as `headers_footers` draws it, so page-relative floats wrap the same way.
     let frame = PageFrame { sect, origin: (sect.margin_left + sect.gutter, sect.header), number: 1, mirror: ctx.mirror };
     let track = std::mem::replace(&mut ctx.track_totals, false);
-    let (h, ..) = with_pin(ctx, id, sect, 1, |ctx| {
-        layout_box(ctx, StoryRef::Part(id), &blocks, &[], sect.text_width(), BoxContext::Other, 0, Some(frame)).height
-    });
+    let (h, ..) =
+        with_pin(ctx, id, sect, 1, |ctx| layout_box(ctx, BoxInput::other(StoryRef::Part(id), &blocks, sect.text_width(), 0, Some(frame))).height);
     ctx.track_totals = track;
     // Word starts the body right below a header that reaches past the top margin, no gap.
     sect.margin_top.max(sect.header + h)
@@ -400,8 +428,7 @@ pub(crate) fn foot_top_for(ctx: &mut Ctx, sect: &SectionProps, footer: Option<u3
     // A page total in the footer is filled in after pagination, like the header's: it doesn't
     // make the body lay out again.
     let track = std::mem::replace(&mut ctx.track_totals, false);
-    let (laid, ..) =
-        with_pin(ctx, id, sect, 1, |ctx| layout_box(ctx, StoryRef::Part(id), &blocks, &[], sect.text_width(), BoxContext::Other, 0, None));
+    let (laid, ..) = with_pin(ctx, id, sect, 1, |ctx| layout_box(ctx, BoxInput::other(StoryRef::Part(id), &blocks, sect.text_width(), 0, None)));
     ctx.track_totals = track;
     let top = sect.page_h - sect.footer - laid.height;
     // Flow-table strokes extend above their cell boxes. Floating decorations keep their wrap rules.

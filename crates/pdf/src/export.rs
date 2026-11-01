@@ -2,7 +2,10 @@ use super::exporter::Exporter;
 use super::metadata::metadata;
 use super::options::{PdfError, PdfOptions};
 use super::paint::{clamp_side, ok};
-use super::*;
+use super::{
+    DocLayout, Document, HashMap, HashSet, KrillaError, LayoutCache, LayoutOptions, Page, PageSettings, Size, Transform, WriteError, Writer, krilla,
+    layout, write,
+};
 
 /// Lay out `doc` and write it as PDF. Without markup the layout is the final text: tracked
 /// deletions are left out, as in Word's "No Markup" view. With `comments` each page carries the

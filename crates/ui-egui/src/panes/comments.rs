@@ -1,4 +1,4 @@
-use super::*;
+use super::{BTreeMap, StoryRef, Stroke, Tokens, Ui, Value, WordApp, json, regular, semibold};
 
 /// Draws the Comments pane: New Comment and scrollable comment and reply cards with edit, go-to,
 /// reply, resolve or reopen, and delete actions.

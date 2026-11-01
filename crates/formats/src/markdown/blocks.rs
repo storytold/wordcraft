@@ -1,5 +1,5 @@
 use super::inlines::parse_inlines;
-use super::*;
+use super::{Align, Arc, Cell, Document, FBlock, FTable, Fmt, HashMap, Kind, ListInfo, Para, model};
 
 /// Nesting limit for block containers (quotes, list items) and inline links.
 pub(super) const MAX_NEST: usize = 32;
@@ -403,22 +403,7 @@ fn parse_blocks(lines: &[String], depth: usize, level: u8, refs: &Refs) -> Vec<F
                 i += 1;
                 continue;
             }
-            // Indented code.
-            let mut code: Vec<&str> = Vec::new();
-            while let Some(l) = lines.get(i) {
-                if is_blank(l) {
-                    code.push("");
-                } else if indent(l) >= 4 {
-                    code.push(strip_indent(l, 4));
-                } else {
-                    break;
-                }
-                i += 1;
-            }
-            while code.last().is_some_and(|l| l.is_empty()) {
-                code.pop();
-            }
-            out.extend(code.into_iter().map(code_para));
+            parse_indented_code(lines, &mut i, &mut out);
             continue;
         }
         let t = line.trim_start_matches([' ', '\t']);
@@ -475,33 +460,7 @@ fn parse_blocks(lines: &[String], depth: usize, level: u8, refs: &Refs) -> Vec<F
         }
         if t.starts_with('>') {
             flush_para(&mut para, &mut out, depth, refs);
-            let mut inner: Vec<String> = Vec::new();
-            while let Some(l) = lines.get(i) {
-                let lt = l.trim_start_matches([' ', '\t']);
-                if indent(l) < 4 && lt.starts_with('>') {
-                    let s = &lt[1..];
-                    inner.push(s.strip_prefix(' ').unwrap_or(s).to_string());
-                } else if !is_blank(l) && !interrupts(l) && inner.last().is_some_and(|x| !is_blank(x)) {
-                    inner.push(l.clone());
-                } else {
-                    break;
-                }
-                i += 1;
-            }
-            if depth >= MAX_NEST {
-                let mut p = Para::new(Kind::Quote);
-                p.push_text(&inner.join(" "), &Fmt::default());
-                out.push(FBlock::Para(p));
-            } else {
-                for mut b in parse_blocks(&inner, depth + 1, level, refs) {
-                    if let FBlock::Para(p) = &mut b
-                        && p.kind == Kind::Normal
-                    {
-                        p.kind = Kind::Quote;
-                    }
-                    out.push(b);
-                }
-            }
+            parse_quote(lines, &mut i, depth, level, refs, &mut out);
             continue;
         }
         if para.is_empty()
@@ -542,6 +501,54 @@ fn parse_blocks(lines: &[String], depth: usize, level: u8, refs: &Refs) -> Vec<F
     }
     flush_para(&mut para, &mut out, depth, refs);
     out
+}
+
+fn parse_indented_code(lines: &[String], i: &mut usize, out: &mut Vec<FBlock>) {
+    let mut code: Vec<&str> = Vec::new();
+    while let Some(line) = lines.get(*i) {
+        if is_blank(line) {
+            code.push("");
+        } else if indent(line) >= 4 {
+            code.push(strip_indent(line, 4));
+        } else {
+            break;
+        }
+        *i += 1;
+    }
+    while code.last().is_some_and(|line| line.is_empty()) {
+        code.pop();
+    }
+    out.extend(code.into_iter().map(code_para));
+}
+
+fn parse_quote(lines: &[String], i: &mut usize, depth: usize, level: u8, refs: &Refs, out: &mut Vec<FBlock>) {
+    let mut inner = Vec::new();
+    while let Some(line) = lines.get(*i) {
+        let trimmed = line.trim_start_matches([' ', '\t']);
+        if indent(line) < 4 && trimmed.starts_with('>') {
+            let content = &trimmed[1..];
+            inner.push(content.strip_prefix(' ').unwrap_or(content).to_string());
+        } else if !is_blank(line) && !interrupts(line) && inner.last().is_some_and(|line| !is_blank(line)) {
+            inner.push(line.clone());
+        } else {
+            break;
+        }
+        *i += 1;
+    }
+    if depth >= MAX_NEST {
+        let mut p = Para::new(Kind::Quote);
+        p.push_text(&inner.join(" "), &Fmt::default());
+        out.push(FBlock::Para(p));
+        return;
+    }
+    for mut block in parse_blocks(&inner, depth + 1, level, refs) {
+        if let FBlock::Para(p) = &mut block
+            && p.kind == Kind::Normal
+        {
+            p.kind = Kind::Quote;
+        }
+        out.push(block);
+    }
 }
 
 fn marker_space(ind: usize, marker_len: usize, after: &str) -> (usize, usize) {

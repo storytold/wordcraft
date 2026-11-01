@@ -34,35 +34,40 @@ fn translations(code: &str) -> Vec<String> {
 #[test]
 fn system_locales_map_to_languages() {
     needs_catalogs!();
-    assert_eq!(lang_from_tag("zh_CN.UTF-8"), Some(lang("zh-hans")));
-    assert_eq!(lang_from_tag("zh-CN"), Some(lang("zh-hans")));
-    assert_eq!(lang_from_tag("zh"), Some(lang("zh-hans")));
-    assert_eq!(lang_from_tag("zh-SG"), Some(lang("zh-hans")));
-    assert_eq!(lang_from_tag("zh-Hans-HK"), Some(lang("zh-hans")), "a script beats the region");
-    assert_eq!(lang_from_tag("zh_TW.UTF-8"), Some(lang("zh-hant")));
-    assert_eq!(lang_from_tag("zh-HK"), Some(lang("zh-hant")));
-    assert_eq!(lang_from_tag("zh-Hant"), Some(lang("zh-hant")));
-    assert_eq!(lang_from_tag("ja-JP"), Some(lang("ja")));
-    assert_eq!(lang_from_tag("ja_JP.eucJP@euro"), Some(lang("ja")));
-    assert_eq!(lang_from_tag("ko-KR"), Some(lang("ko")));
-    assert_eq!(lang_from_tag("ko_KR.UTF-8"), Some(lang("ko")));
-    assert_eq!(lang_from_tag("en-GB"), Some(Lang::EN));
-    assert_eq!(lang_from_tag("C"), Some(Lang::EN));
-    assert_eq!(lang_from_tag("POSIX"), Some(Lang::EN));
-    assert_eq!(lang_from_tag("fr-FR"), Some(lang("fr")));
-    assert_eq!(lang_from_tag(UNSUPPORTED), None);
-    assert_eq!(lang_from_tag(""), None);
-    assert_eq!(lang_from_tag("_"), None);
-    assert_eq!(lang_from_tag("sr"), Some(lang("sr")), "Cyrillic is the default script");
-    assert_eq!(lang_from_tag("sr-RS"), Some(lang("sr")));
-    assert_eq!(lang_from_tag("sr-Cyrl-RS"), Some(lang("sr")));
-    assert_eq!(lang_from_tag("sr-Latn-RS"), Some(lang("sr-latn")));
-    assert_eq!(lang_from_tag("sr-Latn"), Some(lang("sr-latn")));
-    assert_eq!(lang_from_tag("de"), Some(lang("de")));
-    assert_eq!(lang_from_tag("de-DE"), Some(lang("de")));
-    assert_eq!(lang_from_tag("de_AT.UTF-8"), Some(lang("de")));
-    assert_eq!(lang_from_tag("de-CH"), Some(lang("de")));
-    assert_eq!(lang_from_tag("DE_de.UTF-8@euro"), Some(lang("de")));
+    let cases = [
+        ("zh_CN.UTF-8", Some(lang("zh-hans"))),
+        ("zh-CN", Some(lang("zh-hans"))),
+        ("zh", Some(lang("zh-hans"))),
+        ("zh-SG", Some(lang("zh-hans"))),
+        ("zh-Hans-HK", Some(lang("zh-hans"))),
+        ("zh_TW.UTF-8", Some(lang("zh-hant"))),
+        ("zh-HK", Some(lang("zh-hant"))),
+        ("zh-Hant", Some(lang("zh-hant"))),
+        ("ja-JP", Some(lang("ja"))),
+        ("ja_JP.eucJP@euro", Some(lang("ja"))),
+        ("ko-KR", Some(lang("ko"))),
+        ("ko_KR.UTF-8", Some(lang("ko"))),
+        ("en-GB", Some(Lang::EN)),
+        ("C", Some(Lang::EN)),
+        ("POSIX", Some(Lang::EN)),
+        ("fr-FR", Some(lang("fr"))),
+        (UNSUPPORTED, None),
+        ("", None),
+        ("_", None),
+        ("sr", Some(lang("sr"))),
+        ("sr-RS", Some(lang("sr"))),
+        ("sr-Cyrl-RS", Some(lang("sr"))),
+        ("sr-Latn-RS", Some(lang("sr-latn"))),
+        ("sr-Latn", Some(lang("sr-latn"))),
+        ("de", Some(lang("de"))),
+        ("de-DE", Some(lang("de"))),
+        ("de_AT.UTF-8", Some(lang("de"))),
+        ("de-CH", Some(lang("de"))),
+        ("DE_de.UTF-8@euro", Some(lang("de"))),
+    ];
+    for (tag, expected) in cases {
+        assert_eq!(lang_from_tag(tag), expected, "locale {tag}");
+    }
 }
 
 /// A language tag no catalog will ever have: `qaa`–`qtz` are reserved for local use (ISO 639-2),
@@ -344,10 +349,40 @@ fn chinese_interface_fonts_load_and_cover_simplified_hanzi() {
 }
 
 #[test]
+fn traditional_chinese_interface_puts_an_installed_traditional_font_first() {
+    needs_catalogs!();
+    assert!(Lang::all().filter(|l| l.prefers_hant()).map(Lang::code).eq(["zh-hant"]));
+    assert!(lang("zh-hant").prefers_hans());
+    assert!(Lang::hant_font_chars().contains(&'說'));
+    let order = |hant: bool, system_cjk: bool| {
+        crate::theme::font_definitions_language(true, false, hant, system_cjk).families[&egui::FontFamily::Proportional].clone()
+    };
+    let is_hant = |n: &String| n.starts_with("system hant ");
+    let hant = order(true, true);
+    assert!(!order(false, true).iter().any(is_hant));
+    assert!(!order(true, false).iter().any(is_hant));
+    let Some(installed) = wordcraft_fonts::system_hant_ui_font(&[]) else {
+        assert_eq!(hant, order(false, true), "no Traditional Chinese font installed: the Simplified Chinese order");
+        return;
+    };
+    let at = hant.iter().position(is_hant).unwrap();
+    assert_eq!(hant[at], format!("system hant {}", installed.family));
+    for f in wordcraft_fonts::ui_cjk_fonts(true) {
+        let embedded = hant.iter().position(|n| *n == format!("{} {}", f.family, f.style)).unwrap();
+        assert!(at < embedded, "{} comes before {}", hant[embedded], hant[at]);
+    }
+    assert!(hant.iter().position(|n| n == "Inter").is_some_and(|i| i < at), "{hant:?}");
+    let ctx = egui::Context::default();
+    ctx.set_fonts(crate::theme::font_definitions_language(true, false, true, true));
+    ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();
+    assert!(ctx.fonts_mut(|f| f.has_glyphs(&egui::FontId::proportional(14.0), "說這為戶")));
+}
+
+#[test]
 fn korean_interface_fonts_load_and_cover_hangul() {
     needs_catalogs!();
     let ctx = egui::Context::default();
-    ctx.set_fonts(crate::theme::font_definitions_language(false, true, true));
+    ctx.set_fonts(crate::theme::font_definitions_language(false, true, false, true));
     ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();
     let covered = ctx.fonts_mut(|f| f.has_glyphs(&egui::FontId::proportional(14.0), "한글"));
     let (catalogs, names) = Lang::cjk_font_text_for(false, true);
@@ -375,7 +410,7 @@ fn cjk_catalogs_are_covered_by_the_embedded_interface_faces() {
     for code in ["zh-hans", "zh-hant", "ja", "ko"] {
         let l = lang(code);
         let ctx = egui::Context::default();
-        ctx.set_fonts(crate::theme::font_definitions_language(l.prefers_hans(), l.prefers_korean(), false));
+        ctx.set_fonts(crate::theme::font_definitions_language(l.prefers_hans(), l.prefers_korean(), l.prefers_hant(), false));
         ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();
         let entries = translations(code);
         let chars: std::collections::BTreeSet<char> =

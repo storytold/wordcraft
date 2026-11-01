@@ -1,5 +1,5 @@
 use super::common::stack;
-use super::*;
+use super::{Ui, WordApp, big, big_toggle, group, json, menu_button, small, vec2};
 
 /// Draws the View tab's Views, Immersive, Page Movement, Show, Zoom, Dark Mode, Window and Macros
 /// and Templates groups.
@@ -10,8 +10,8 @@ pub(super) fn view(app: &mut WordApp, ui: &mut Ui) {
         big(ui, app, "printLayout", "Print\nLayout", "view.printLayout", json!({}), false);
         big(ui, app, "webLayout", "Web\nLayout", "view.webLayout", json!({}), false);
         stack(ui, |ui| {
-            small(ui, app, "outline", Some("Outline"), "Outline", "view.outline", json!({}), false);
-            small(ui, app, "draft", Some("Draft"), "Draft", "view.draft", json!({}), false);
+            small(ui, app, "outline", Some("Outline"), "Outline", crate::widgets::ButtonAction::new("view.outline", json!({}), false));
+            small(ui, app, "draft", Some("Draft"), "Draft", crate::widgets::ButtonAction::new("view.draft", json!({}), false));
         });
     });
     group(ui, "Immersive", None, app, |ui, app| {
@@ -50,25 +50,44 @@ pub(super) fn view(app: &mut WordApp, ui: &mut Ui) {
         big(ui, app, "zoom100", "100%", "view.zoom100", json!({}), false);
         // Step the zoom up and down by 10% (issue #67), from whatever the page shows now.
         stack(ui, |ui| {
-            small(ui, app, "zoomIn", Some("Zoom In"), "Zoom In", "view.zoomIn", json!({}), false);
-            small(ui, app, "zoomOut", Some("Zoom Out"), "Zoom Out", "view.zoomOut", json!({}), false);
+            small(ui, app, "zoomIn", Some("Zoom In"), "Zoom In", crate::widgets::ButtonAction::new("view.zoomIn", json!({}), false));
+            small(ui, app, "zoomOut", Some("Zoom Out"), "Zoom Out", crate::widgets::ButtonAction::new("view.zoomOut", json!({}), false));
         });
         stack(ui, |ui| {
-            small(ui, app, "onePage", Some("One Page"), "One Page", "view.onePage", json!({}), v.fit == "onePage");
-            small(ui, app, "multiplePages", Some("Multiple Pages"), "Multiple Pages", "view.multiplePages", json!({}), v.multi_page);
-            small(ui, app, "pageWidth", Some("Page Width"), "Page Width", "view.pageWidth", json!({}), v.fit == "pageWidth");
+            small(ui, app, "onePage", Some("One Page"), "One Page", crate::widgets::ButtonAction::new("view.onePage", json!({}), v.fit == "onePage"));
+            small(
+                ui,
+                app,
+                "multiplePages",
+                Some("Multiple Pages"),
+                "Multiple Pages",
+                crate::widgets::ButtonAction::new("view.multiplePages", json!({}), v.multi_page),
+            );
+            small(
+                ui,
+                app,
+                "pageWidth",
+                Some("Page Width"),
+                "Page Width",
+                crate::widgets::ButtonAction::new("view.pageWidth", json!({}), v.fit == "pageWidth"),
+            );
         });
     });
     group(ui, "Dark Mode", None, app, |ui, app| {
         big(ui, app, "darkMode", "Switch\nModes", "view.darkMode", json!({}), false);
-        menu_button(ui, app, "interfaceTheme", Some("Interface\nTheme"), "Interface Theme", true, "", |ui, app| {
-            for a in crate::theme::Appearance::ALL {
-                if ui.add(egui::Button::selectable(app.ui.theme == a, tl!(a.label())).min_size(vec2(200.0, 0.0))).clicked() {
-                    let _ = app.run("view.interfaceTheme", json!({"value": a.code()}));
-                    ui.close();
+        menu_button(
+            ui,
+            app,
+            crate::widgets::MenuButtonOptions::new("interfaceTheme", Some("Interface\nTheme"), "Interface Theme", true, ""),
+            |ui, app| {
+                for a in crate::theme::Appearance::ALL {
+                    if ui.add(egui::Button::selectable(app.ui.theme == a, tl!(a.label())).min_size(vec2(200.0, 0.0))).clicked() {
+                        let _ = app.run("view.interfaceTheme", json!({"value": a.code()}));
+                        ui.close();
+                    }
                 }
-            }
-        });
+            },
+        );
     });
     group(ui, "Window", None, app, |ui, app| {
         big(ui, app, "newWindow", "New\nWindow", "view.newWindow", json!({}), false);
@@ -77,11 +96,7 @@ pub(super) fn view(app: &mut WordApp, ui: &mut Ui) {
         menu_button(
             ui,
             app,
-            "switchWindows",
-            Some("Switch\nWindows"),
-            "Switch Windows",
-            true,
-            "view.switchWindows",
+            crate::widgets::MenuButtonOptions::new("switchWindows", Some("Switch\nWindows"), "Switch Windows", true, "view.switchWindows"),
             crate::documents::switch_windows_menu,
         );
         // The Full Screen button carries its name for assistive technology (and for the
@@ -110,8 +125,15 @@ pub(super) fn outlining(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Outline Tools", None, app, |ui, app| {
         stack(ui, |ui| {
             crate::widgets::row(ui, |ui| {
-                small(ui, app, "outlineTop", None, "Promote to Heading 1", "outline.promoteToHeading1", json!({}), false);
-                small(ui, app, "outlinePromote", None, "Promote", "outline.promote", json!({}), false);
+                small(
+                    ui,
+                    app,
+                    "outlineTop",
+                    None,
+                    "Promote to Heading 1",
+                    crate::widgets::ButtonAction::new("outline.promoteToHeading1", json!({}), false),
+                );
+                small(ui, app, "outlinePromote", None, "Promote", crate::widgets::ButtonAction::new("outline.promote", json!({}), false));
                 let levels: Vec<String> = (1..=BODY).map(name).collect();
                 if let Some(v) = crate::widgets::combo_hint(ui, "outlineLevel", 100.0, &name(level), &levels, None, tl!("Outline Level"))
                     && let Some(i) = levels.iter().position(|x| *x == v)
@@ -119,15 +141,22 @@ pub(super) fn outlining(app: &mut WordApp, ui: &mut Ui) {
                     let l = if i + 1 >= usize::from(BODY) { json!("body") } else { json!(i + 1) };
                     let _ = app.run("outline.level", json!({ "level": l }));
                 }
-                small(ui, app, "outlineDemote", None, "Demote", "outline.demote", json!({}), false);
-                small(ui, app, "outlineBody", None, "Demote to Body Text", "outline.demoteToBody", json!({}), false);
+                small(ui, app, "outlineDemote", None, "Demote", crate::widgets::ButtonAction::new("outline.demote", json!({}), false));
+                small(
+                    ui,
+                    app,
+                    "outlineBody",
+                    None,
+                    "Demote to Body Text",
+                    crate::widgets::ButtonAction::new("outline.demoteToBody", json!({}), false),
+                );
             });
             ui.add_space(3.0);
             crate::widgets::row(ui, |ui| {
-                small(ui, app, "outlineUp", None, "Move Up", "outline.moveUp", json!({}), false);
-                small(ui, app, "outlineDown", None, "Move Down", "outline.moveDown", json!({}), false);
-                small(ui, app, "outlineExpand", None, "Expand", "outline.expand", json!({}), false);
-                small(ui, app, "outlineCollapse", None, "Collapse", "outline.collapse", json!({}), false);
+                small(ui, app, "outlineUp", None, "Move Up", crate::widgets::ButtonAction::new("outline.moveUp", json!({}), false));
+                small(ui, app, "outlineDown", None, "Move Down", crate::widgets::ButtonAction::new("outline.moveDown", json!({}), false));
+                small(ui, app, "outlineExpand", None, "Expand", crate::widgets::ButtonAction::new("outline.expand", json!({}), false));
+                small(ui, app, "outlineCollapse", None, "Collapse", crate::widgets::ButtonAction::new("outline.collapse", json!({}), false));
                 ui.add_space(6.0);
                 ui.label(egui::RichText::new(tl!("Show Level")).size(11.5));
                 let mut shown: Vec<String> = vec![tl!("All Levels").to_string()];

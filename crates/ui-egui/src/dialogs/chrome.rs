@@ -1,5 +1,5 @@
 use super::dispatch::body;
-use super::*;
+use super::{Dialog, Sense, Tokens, Ui, WordApp, vec2};
 
 /// A colour menu: a swatch with the colour grid and No Color. `value` is hex, empty for none.
 pub(crate) fn color_menu(ui: &mut Ui, theme: &[wordcraft_doc::Rgb], value: &mut String) {

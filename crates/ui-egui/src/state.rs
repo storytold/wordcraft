@@ -1,4 +1,4 @@
-use super::*;
+use super::i18n;
 
 /// How Save in the Save Changes prompt went.
 pub(crate) enum PromptSave {
