@@ -269,7 +269,7 @@ fn content(app: &mut WordApp, ui: &mut egui::Ui, t: &Tokens) {
         let size = st.get("size").and_then(Value::as_f64).map(|s| crate::font_sizes::label(s, lang)).unwrap_or_default();
         let sizes = crate::font_sizes::items(lang);
         if let Some(v) = widgets::combo_hint(ui, "mini_size", COMBO_SIZE_W, &size, &sizes, None, tl!("Font Size"))
-            && let Some(x) = crate::font_sizes::parse(&v)
+            && let Some(x) = crate::font_sizes::parse(&v, lang)
         {
             let _ = app.run("format.size", json!({"size": x}));
         }

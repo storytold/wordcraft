@@ -75,7 +75,7 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
                 let size = st.get("size").and_then(Value::as_f64).map(|s| crate::font_sizes::label(s, lang)).unwrap_or_default();
                 let sizes = crate::font_sizes::items(lang);
                 if let Some(v) = crate::widgets::combo_hint(ui, "size", 52.0, &size, &sizes, None, tl!("Font Size"))
-                    && let Some(x) = crate::font_sizes::parse(&v)
+                    && let Some(x) = crate::font_sizes::parse(&v, lang)
                 {
                     let _ = app.run("format.size", json!({"size": x}));
                 }

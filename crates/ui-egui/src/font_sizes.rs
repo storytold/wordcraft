@@ -93,11 +93,15 @@ pub fn items(lang: Lang) -> Vec<String> {
     NAMED.iter().map(|n| pick(n).to_string()).chain(nums.into_iter().map(points)).collect()
 }
 
-/// The points a typed or chosen size stands for: a Chinese size name in either script (`小四`,
-/// `初號`) in any interface, or a finite, positive number of points. Anything else is `None`.
-pub fn parse(text: &str) -> Option<f64> {
+/// The points a typed or chosen size stands for in `lang`'s interface: a finite, positive number
+/// of points, or, in a Chinese interface, a size name in either script (`小四`, `初號`). Other
+/// interfaces don't take the names: Japan's own 号 sizes differ (its 一号 is 27.5 pt, not 26).
+/// Anything else is `None`.
+pub fn parse(text: &str, lang: Lang) -> Option<f64> {
     let t = text.trim();
-    if let Some(n) = NAMED.iter().find(|n| n.hans == t || n.hant == t) {
+    if naming(lang) != Naming::Points
+        && let Some(n) = NAMED.iter().find(|n| n.hans == t || n.hant == t)
+    {
         return Some(n.pt);
     }
     t.parse::<f64>().ok().filter(|pt| pt.is_finite() && *pt > 0.0)
@@ -157,22 +161,34 @@ mod tests {
 
     #[test]
     fn typed_sizes_parse_to_points() {
-        assert_eq!(parse("小四"), Some(12.0));
-        assert_eq!(parse(" 四号 "), Some(14.0));
-        assert_eq!(parse("初號"), Some(42.0));
-        assert_eq!(parse("五號"), Some(10.5));
-        assert_eq!(parse("12"), Some(12.0));
-        assert_eq!(parse("10.5"), Some(10.5));
-        for junk in ["", "abc", "小", "NaN", "inf", "-3", "0"] {
-            assert_eq!(parse(junk), None, "{junk:?}");
+        // A Chinese interface takes the names in either script.
+        for code in ["zh-hans", "zh-hant"] {
+            let l = lang(code);
+            assert_eq!(parse("小四", l), Some(12.0));
+            assert_eq!(parse(" 四号 ", l), Some(14.0));
+            assert_eq!(parse("初號", l), Some(42.0));
+            assert_eq!(parse("五號", l), Some(10.5));
+        }
+        // Every interface takes numbers; only Chinese ones take the names (Japan's 一号 differs).
+        for code in ["en", "ja", "ko", "zh-hans"] {
+            let l = lang(code);
+            assert_eq!(parse("12", l), Some(12.0));
+            assert_eq!(parse("10.5", l), Some(10.5));
+            for junk in ["", "abc", "小", "NaN", "inf", "-3", "0"] {
+                assert_eq!(parse(junk, l), None, "{code} {junk:?}");
+            }
+        }
+        for code in ["en", "ja", "ko"] {
+            assert_eq!(parse("小四", lang(code)), None, "{code}");
+            assert_eq!(parse("一号", lang(code)), None, "{code}");
         }
         // Every list entry parses, and its size's label (a name, where the size has one: `5`
         // shows as 八号) parses back to the same size.
         for code in ["en", "zh-hans", "zh-hant"] {
             let l = lang(code);
             for item in items(l) {
-                let pt = parse(&item).unwrap();
-                assert_eq!(parse(&label(pt, l)), Some(pt), "{code} {item}");
+                let pt = parse(&item, l).unwrap();
+                assert_eq!(parse(&label(pt, l), l), Some(pt), "{code} {item}");
             }
         }
         assert_eq!(label(5.0, lang("zh-hans")), "八号");
