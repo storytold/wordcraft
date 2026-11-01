@@ -71,6 +71,8 @@ pub(crate) struct Reader<'p> {
     /// Move ranges (`w:moveFromRangeStart` …) seen so far.
     pub moves: MoveCtx,
     media_by_path: HashMap<String, String>,
+    /// Pictures an `a:alphaModFix` could not fade (undecodable): not tried again.
+    unfadable: HashSet<String>,
     hf_by_path: HashMap<String, u32>,
     /// Header/footer parts being read right now (see [`MAX_HF_DEPTH`]).
     hf_depth: usize,
@@ -154,6 +156,7 @@ pub(crate) fn read_opened(pkg: &Package) -> Result<Document, DocxError> {
         revs: HashMap::new(),
         moves: MoveCtx::default(),
         media_by_path: HashMap::new(),
+        unfadable: HashSet::new(),
         hf_by_path: HashMap::new(),
         hf_depth: 0,
         footnotes: HashMap::new(),
