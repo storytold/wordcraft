@@ -2,6 +2,7 @@
 
 mod chars;
 mod comments;
+mod equations;
 mod fields;
 mod floats;
 mod fonts;

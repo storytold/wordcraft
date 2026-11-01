@@ -31,6 +31,7 @@ use crate::model::{self, Cell, FBlock, FComment, FTable, Flow, Fmt, Inline, Kind
 
 mod body;
 mod fields;
+mod formula_size;
 mod frames;
 mod import;
 mod limits;

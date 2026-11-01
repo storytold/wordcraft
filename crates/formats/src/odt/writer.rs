@@ -105,6 +105,8 @@ pub(super) struct Writer {
     /// Graphic styles of floating pictures: their `style:graphic-properties` attributes.
     graphic_styles: Vec<String>,
     pub(super) pictures: Vec<(String, std::sync::Arc<Vec<u8>>, String)>,
+    /// Formula sub-documents: their directory and their `content.xml`.
+    pub(super) formulas: Vec<(String, String)>,
     /// `text:changed-region` elements written so far.
     pub(super) regions: Vec<String>,
     /// The insertion open in the body, and its region id.
@@ -612,9 +614,8 @@ impl Writer {
 
     fn plain_inlines(&mut self, inl: &[Inline], out: &mut String) {
         let mut prev_space = true;
-        let eq = model::equations_as_text(inl);
         // ODF has no ruby: its base text goes through the text path below.
-        let inl = model::ruby_as_text(&eq);
+        let inl = model::ruby_as_text(inl);
         let last = inl.len().saturating_sub(1);
         for (idx, i) in inl.iter().enumerate() {
             match i {
@@ -725,7 +726,11 @@ impl Writer {
                 },
                 // Read as its base text by `ruby_as_text` above.
                 Inline::Ruby { .. } => {}
-                Inline::Figure(_) | Inline::Equation { .. } => {}
+                Inline::Equation { linear, display } => {
+                    self.formula(linear, *display, out);
+                    prev_space = false;
+                }
+                Inline::Figure(_) => {}
             }
         }
     }
@@ -957,6 +962,27 @@ impl Writer {
                 }
             }
         }
+    }
+
+    /// An equation as an embedded formula object (ODF 1.3 §10.4.3): a frame in line with the text
+    /// pointing at a sub-document whose `content.xml` is the equation's MathML, its frame about
+    /// the size the formula takes (LibreOffice scales the formula to the frame).
+    fn formula(&mut self, linear: &str, display: bool, out: &mut String) {
+        let n = self.formulas.len() + 1;
+        let name = format!("Object {}{n}", self.prefix);
+        let mathml = crate::mathml::linear_to_mathml(linear, display);
+        self.formulas.push((name.clone(), format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n{mathml}\n")));
+        let (w, h) = super::formula_size::size(linear);
+        // Centred on the line, as LibreOffice sets its own formulas.
+        let style = self.graphic_style(" style:vertical-pos=\"middle\" style:vertical-rel=\"text\"".into());
+        out.push_str(&format!(
+            "<draw:frame draw:name=\"{}Formula{n}\" draw:style-name=\"{style}\" text:anchor-type=\"as-char\" svg:width=\"{}\" svg:height=\"{}\" draw:z-index=\"0\"><draw:object xlink:href=\"./{}\" xlink:type=\"simple\" xlink:show=\"embed\" xlink:actuate=\"onLoad\"/><svg:desc>{}</svg:desc></draw:frame>",
+            self.prefix,
+            pt(w),
+            pt(h),
+            x(&name),
+            x(linear)
+        ));
     }
 
     /// The automatic graphic style of a frame placed by `props`.

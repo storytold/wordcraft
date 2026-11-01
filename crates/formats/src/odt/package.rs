@@ -356,12 +356,19 @@ pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
     let parts: Vec<PageParts> = pages.iter().map(|(_, sec)| page_parts(doc, sec, &mut hw)).collect();
     let styles = styles_xml(doc, &pages, &parts, &hw.style_defs());
     w.pictures.append(&mut hw.pictures);
+    w.formulas.append(&mut hw.formulas);
     let meta = meta_xml(&flow.meta);
     let mut manifest = String::from(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<manifest:manifest xmlns:manifest=\"urn:oasis:names:tc:opendocument:xmlns:manifest:1.0\" manifest:version=\"1.3\">\n<manifest:file-entry manifest:full-path=\"/\" manifest:version=\"1.3\" manifest:media-type=\"application/vnd.oasis.opendocument.text\"/>\n<manifest:file-entry manifest:full-path=\"content.xml\" manifest:media-type=\"text/xml\"/>\n<manifest:file-entry manifest:full-path=\"styles.xml\" manifest:media-type=\"text/xml\"/>\n<manifest:file-entry manifest:full-path=\"meta.xml\" manifest:media-type=\"text/xml\"/>\n<manifest:file-entry manifest:full-path=\"settings.xml\" manifest:media-type=\"text/xml\"/>\n",
     );
     for (name, _, mime) in &w.pictures {
         manifest.push_str(&format!("<manifest:file-entry manifest:full-path=\"{}\" manifest:media-type=\"{mime}\"/>\n", x(name)));
+    }
+    for (dir, _) in &w.formulas {
+        manifest.push_str(&format!(
+            "<manifest:file-entry manifest:full-path=\"{0}/\" manifest:version=\"1.3\" manifest:media-type=\"application/vnd.oasis.opendocument.formula\"/>\n<manifest:file-entry manifest:full-path=\"{0}/content.xml\" manifest:media-type=\"text/xml\"/>\n",
+            x(dir)
+        ));
     }
     manifest.push_str("</manifest:manifest>\n");
 
@@ -381,6 +388,10 @@ pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
     ] {
         z.start_file(name, deflated).map_err(err)?;
         z.write_all(data).map_err(ioerr)?;
+    }
+    for (dir, xml) in &w.formulas {
+        z.start_file(format!("{dir}/content.xml"), deflated).map_err(err)?;
+        z.write_all(xml.as_bytes()).map_err(ioerr)?;
     }
     for (name, data, _) in &w.pictures {
         z.start_file(name.as_str(), stored).map_err(err)?;
