@@ -3194,6 +3194,82 @@ fn freeform_arrow_end_draws_at_the_last_point() {
     assert_eq!(arrow_tip, endpoint, "the arrowhead tip meets the custom path's final point");
 }
 
+/// A slanted line's arrowheads sit on its ends and point along it. A line runs from its frame's
+/// top-left to its bottom-right, as DrawingML's `line` and the renderers draw it; its arrowheads
+/// were put at the other two corners. Flipped, the frame turns with the arrowheads in it:
+/// `flipH` runs the line from the top-right, `flipV` from the bottom-left, both from the
+/// bottom-right.
+#[test]
+fn a_slanted_lines_arrowheads_sit_on_its_ends_and_point_along_it() {
+    use wordcraft_doc::connector::ShapeExtra;
+    use wordcraft_doc::graphic::PathSeg;
+    use wordcraft_doc::para::{Float, ShapeKind};
+    use wordcraft_doc::props::Rgb;
+    let ends = |flip_h: bool, flip_v: bool| {
+        let line = InlineObject::Shape {
+            kind: ShapeKind::Line,
+            w: 60.0,
+            h: 40.0,
+            fill: None,
+            stroke: Some(Rgb::BLACK),
+            stroke_width: 1.0,
+            float: Float { flip_h, flip_v, ..Default::default() },
+            story: None,
+            freeform: None,
+            effects: Default::default(),
+            extra: ShapeExtra { arrow_start: true, arrow_end: true, ..Default::default() },
+        };
+        let mut doc = Document::from_text("Scan");
+        doc.insert_object(&Pos::body(0, 0), line, &Default::default()).unwrap();
+        // Each draw with the turn it is drawn under, if any.
+        let mut placed = Vec::new();
+        for d in flat(display::page_display(&doc, &lay(&doc).pages[0], &Default::default())) {
+            match d {
+                display::Draw::Rotated { cx, cy, spin, items } => placed.extend(items.into_iter().map(|i| (i, Some((cx, cy, spin))))),
+                d => placed.push((d, None)),
+            }
+        }
+        let turn = |t: &Option<(f32, f32, _)>, p: (f32, f32)| t.map_or(p, |(cx, cy, s): (f32, f32, wordcraft_geom::Spin)| s.apply(cx, cy, p.0, p.1));
+        let (start, end) = placed
+            .iter()
+            .find_map(|(d, t)| match d {
+                display::Draw::Shape { rect, kind: ShapeKind::Line, .. } => Some((turn(t, (rect.x, rect.y)), turn(t, (rect.right(), rect.bottom())))),
+                _ => None,
+            })
+            .expect("the line");
+        let heads: Vec<[(f32, f32); 3]> = placed
+            .iter()
+            .filter_map(|(d, t)| match d {
+                display::Draw::Path { fill: Some(display::Paint::Solid(Rgb::BLACK, _)), segs, .. } => match segs[..] {
+                    [PathSeg::Move(x, y), PathSeg::Line(ax, ay), PathSeg::Line(bx, by), PathSeg::Close] => {
+                        Some([turn(t, (x, y)), turn(t, (ax, ay)), turn(t, (bx, by))])
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        assert_eq!(heads.len(), 2, "flips {flip_h} {flip_v}: {heads:?}");
+        let near = |a: (f32, f32), b: (f32, f32)| (a.0 - b.0).abs() < 0.01 && (a.1 - b.1).abs() < 0.01;
+        let (dx, dy) = (end.0 - start.0, end.1 - start.1);
+        let length = dx.hypot(dy);
+        for (head, tip) in heads.iter().zip([start, end]) {
+            assert!(near(head[0], tip), "flips {flip_h} {flip_v}: the arrowhead's tip is on the line's end {tip:?}: {head:?}");
+            // Its base's middle is on the line, inside it: the head points along it.
+            let mid = ((head[1].0 + head[2].0) / 2.0, (head[1].1 + head[2].1) / 2.0);
+            let off = (dx * (mid.1 - start.1) - dy * (mid.0 - start.0)).abs() / length;
+            assert!(off < 0.05, "flips {flip_h} {flip_v}: the arrowhead at {tip:?} is {off} pt off the line: {head:?}");
+            let along = (dx * (mid.0 - start.0) + dy * (mid.1 - start.1)) / length;
+            assert!(along > 0.0 && along < length, "flips {flip_h} {flip_v}: the arrowhead at {tip:?} points away from the line: {head:?}");
+        }
+        (start, end)
+    };
+    let runs = |(s, e): ((f32, f32), (f32, f32))| (e.0 > s.0, e.1 > s.1);
+    assert_eq!(runs(ends(false, false)), (true, true), "top-left to bottom-right");
+    assert_eq!(runs(ends(true, false)), (false, true), "flipH: top-right to bottom-left");
+    assert_eq!(runs(ends(false, true)), (true, false), "flipV: bottom-left to top-right");
+    assert_eq!(runs(ends(true, true)), (false, false), "both: bottom-right to top-left");
+}
 #[test]
 fn hidden_drawings_are_neither_drawn_nor_take_room() {
     // A hidden floating shape (VML `visibility:hidden`, `wp:docPr/@hidden`): no wrap area, nothing

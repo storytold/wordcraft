@@ -2661,6 +2661,85 @@ fn alt_text_title_and_decorative_round_trip_for_every_object() {
     assert_eq!((t.props.caption.as_deref(), t.props.description.as_deref()), (Some("Prices"), Some("Prices by year")));
 }
 
+/// A line keeps its direction through save and open. DrawingML's `line` runs from the top-left
+/// to the bottom-right of its frame, and the flips turn it, so a line drawn from the bottom-left
+/// to the top-right is saved as `flipV` and comes back with its ends, and its arrowhead, where
+/// they were.
+#[test]
+fn a_lines_direction_and_arrowheads_round_trip() {
+    use wordcraft_doc::connector::{ShapeExtra, ends};
+    let mut d = Document::new();
+    let line = |flip_h, flip_v| InlineObject::Shape {
+        kind: ShapeKind::Line,
+        w: 60.0,
+        h: 30.0,
+        fill: None,
+        stroke: Some(Rgb(0, 0, 0)),
+        stroke_width: 1.0,
+        float: Float {
+            wrap: Wrap::InFrontOfText,
+            h_rel: Anchor::Column,
+            v_rel: Anchor::Paragraph,
+            x: 20.0,
+            y: 10.0,
+            flip_h,
+            flip_v,
+            ..Default::default()
+        },
+        story: None,
+        freeform: None,
+        effects: Default::default(),
+        extra: ShapeExtra { arrow_end: true, ..Default::default() },
+    };
+    let lines = [line(false, false), line(false, true), line(true, false), line(true, true)];
+    let mut p = Paragraph::with_text("", CharProps::default());
+    for o in &lines {
+        let end = p.len();
+        p.insert_object(end, o.clone(), &CharProps::default()).unwrap();
+    }
+    d.body = vec![para_block(p)];
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let mut pkg = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut pkg.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert_eq!(xml.matches("prst=\"line\"").count(), 4, "{xml}");
+    assert_eq!(xml.matches("flipV=\"1\"").count(), 2, "{xml}");
+    assert_eq!(xml.matches("flipH=\"1\"").count(), 2, "{xml}");
+    let r = wordcraft_docx::read(&bytes).unwrap();
+    let got = &paras(&r)[0].objects;
+    assert_eq!(got.len(), 4);
+    let geometry = |o: &InlineObject| match o {
+        InlineObject::Shape { kind: ShapeKind::Line, w, h, float, extra, .. } => {
+            (ends(0.0, 0.0, *w, *h, float.flip_h, float.flip_v), extra.arrow_start, extra.arrow_end)
+        }
+        _ => panic!("{o:?}"),
+    };
+    for (saved, read) in lines.iter().zip(got) {
+        assert_eq!(geometry(read), geometry(saved));
+    }
+    // The one drawn from the bottom-left: it starts there and its arrowhead is at the top-right.
+    assert_eq!(geometry(&got[1]).0, ((0.0, 30.0), (60.0, 0.0)));
+
+    // Word's `lineInv` runs from the bottom-left to the top-right, and flipped top to bottom it
+    // runs from the top-left: it reads as `line` turned the other way, and is saved as `line`.
+    let inv = String::from_utf8(bytes_of(&bytes, "word/document.xml")).unwrap().replace("prst=\"line\"", "prst=\"lineInv\"");
+    let r = wordcraft_docx::read(&replace_part(&bytes, "word/document.xml", inv.as_bytes())).unwrap();
+    let got = &paras(&r)[0].objects;
+    assert_eq!(geometry(&got[0]).0, ((0.0, 30.0), (60.0, 0.0)), "lineInv: bottom-left to top-right");
+    assert_eq!(geometry(&got[1]).0, ((0.0, 0.0), (60.0, 30.0)), "lineInv with flipV: top-left to bottom-right");
+    let again = String::from_utf8(bytes_of(&wordcraft_docx::write(&r).unwrap(), "word/document.xml")).unwrap();
+    assert_eq!(again.matches("prst=\"line\"").count(), 4, "{again}");
+    assert!(!again.contains("lineInv"), "{again}");
+}
+
+/// The bytes of part `name` in `zip`.
+fn bytes_of(zip: &[u8], name: &str) -> Vec<u8> {
+    let mut pkg = zip::ZipArchive::new(std::io::Cursor::new(zip)).unwrap();
+    let mut out = Vec::new();
+    std::io::Read::read_to_end(&mut pkg.by_name(name).unwrap(), &mut out).unwrap();
+    out
+}
+
 /// WordArt's warp (`a:prstTxWarp` with its adjust value) and connectors glued to shapes
 /// (`a:stCxn`/`a:endCxn`, with arrowheads) come back as saved; a shape no connector is glued to
 /// loses its drawing id, and hostile values are reduced.

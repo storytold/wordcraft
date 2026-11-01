@@ -419,6 +419,11 @@ impl Reader<'_> {
         let prst = sppr.and_then(|s| s.child("a:prstGeom")).and_then(|g| g.attr("prst")).unwrap_or("rect");
         let txbx = wsp.child("wps:txbx").and_then(|t| t.child("w:txbxContent"));
         let mut kind = preset_kind(prst);
+        // `line` runs from the frame's top-left to its bottom-right, `lineInv` from its
+        // bottom-left to its top-right: the same line flipped top to bottom.
+        if prst == "lineInv" {
+            float.flip_v = !float.flip_v;
+        }
         let is_tb = wsp.child("wps:cNvSpPr").and_then(|c| c.attr("txBox")).is_some_and(|v| v == "1" || v == "true");
         if is_tb || (txbx.is_some() && kind == ShapeKind::Rectangle) {
             kind = ShapeKind::TextBox;
