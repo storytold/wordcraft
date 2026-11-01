@@ -1,6 +1,7 @@
 # Apache (see HOSTING.md). Needs mod_mime; mod_deflate and mod_headers are optional.
 AddType application/wasm .wasm
 AddType text/javascript .js
+AddType application/manifest+json .webmanifest
 
 <IfModule mod_deflate.c>
   AddOutputFilterByType DEFLATE application/wasm text/javascript text/html
@@ -10,7 +11,7 @@ AddType text/javascript .js
   <FilesMatch "\.(wasm|js)$">
     Header set Cache-Control "public, max-age=31536000, immutable"
   </FilesMatch>
-  <FilesMatch "^index\.html$">
+  <FilesMatch "^(index\.html|manifest\.webmanifest)$">
     Header set Cache-Control "no-cache"
   </FilesMatch>
 </IfModule>

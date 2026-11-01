@@ -11,3 +11,7 @@
 
 /index.html
   Cache-Control: no-cache
+
+/manifest.webmanifest
+  Content-Type: application/manifest+json
+  Cache-Control: no-cache
