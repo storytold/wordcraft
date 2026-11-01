@@ -259,7 +259,8 @@ impl Reader<'_> {
                 if let Some(v) = sr.attr(n).and_then(int)
                     && let Some(slot) = crop.get_mut(i)
                 {
-                    *slot = (v.clamp(0, 100_000) as f32 / 100_000.0).clamp(0.0, 1.0);
+                    // Negative values (Word's compatibility mode) pad the picture instead of cropping it.
+                    *slot = (v.clamp(-100_000, 100_000) as f32 / 100_000.0).clamp(-1.0, 1.0);
                 }
             }
         }

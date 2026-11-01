@@ -804,8 +804,14 @@ fn draw_image(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
         image: vello_cpu::ImageSource::Pixmap(pm),
         sampler: peniko::ImageSampler::default().with_quality(peniko::ImageQuality::Medium),
     });
-    ctx.set_paint_transform(Affine::translate((r.x0 - cl * pw * sx, r.y0 - ct * ph * sy)) * Affine::scale_non_uniform(sx, sy));
-    ctx.fill_rect(&r);
+    // Where the whole source lands. A negative crop pads it: only its own area is painted, so the
+    // padding stays clear (the PDF export draws just the image there too).
+    let (ix, iy) = (r.x0 - cl * pw * sx, r.y0 - ct * ph * sy);
+    ctx.set_paint_transform(Affine::translate((ix, iy)) * Affine::scale_non_uniform(sx, sy));
+    let own = kurbo::Rect::new(ix, iy, ix + pw * sx, iy + ph * sy).intersect(r);
+    if own.width() > 0.0 && own.height() > 0.0 {
+        ctx.fill_rect(&own);
+    }
     ctx.reset_paint_transform();
     if faded {
         ctx.pop_layer();
