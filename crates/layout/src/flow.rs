@@ -871,7 +871,8 @@ fn space_after_kept(ctx: &Ctx, block: usize, rp: &wordcraft_doc::resolve::Resolv
 
 /// The room the paragraphs after `block` need on the page for keep with next: enough of the
 /// next one to start there — its first line, two of its lines with widow/orphan control (it
-/// doesn't leave a single line at the bottom of a page; it moves over whole instead), or all
+/// doesn't leave a single line at the bottom of a page; it moves over whole instead), all three
+/// of a three-line one under that control (two would leave a widow), or all
 /// of it under keep lines together — or all of it and what it keeps with in turn when it is
 /// kept with the next too (a chain moves together in Word). Word carries a kept heading over
 /// when the paragraph after it cannot start on the page (#966).
@@ -925,7 +926,8 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counte
                     + if pl.rp.keep_lines {
                         pl.height
                     } else if pl.rp.widow_control && pl.lines.len() >= 2 {
-                        to(1)
+                        // Neither split of three lines is allowed (`settled_end`).
+                        to(if pl.lines.len() == 3 { 2 } else { 1 })
                     } else {
                         to(0)
                     }

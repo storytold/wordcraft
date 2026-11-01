@@ -1,10 +1,10 @@
-use super::cross_refs::caption_label;
+use super::cross_refs::{caption_label, is_caption};
 use super::render::entry;
 use super::sources::bib_order;
 use super::styles::style;
 use super::{
-    Block, CharProps, CmdError, CmdResult, FieldCode, InlineObject, Paragraph, Path, Pos, Session, SortKey, StoryRef, TabAlign, TabLeader, TabStop,
-    Value, delete_selection, heading_letter, p, sel_result, sort_key,
+    Block, CharProps, CmdError, CmdResult, Document, FieldCode, InlineObject, Paragraph, Path, Pos, Session, SortKey, StoryRef, TabAlign, TabLeader,
+    TabStop, Value, delete_selection, heading_letter, p, sel_result, sort_key,
 };
 
 /// The TOC field for `references.tableOfFigures` (ECMA-376 §17.16.5.68): `\c "<label>"` lists the
@@ -86,8 +86,8 @@ fn figures_label(instr: &str) -> Option<String> {
 
 /// Whether `p` is a caption numbered by SEQ identifier `ident` (any case, as Word matches it). A
 /// caption typed by hand, without a SEQ field, goes by its label.
-fn captioned_as(p: &Paragraph, ident: &str) -> bool {
-    if p.props.style.as_deref() != Some("Caption") {
+fn captioned_as(doc: &Document, p: &Paragraph, ident: &str) -> bool {
+    if !is_caption(doc, p) {
         return false;
     }
     let seq = p.objects.iter().find_map(|o| match o {
@@ -256,7 +256,7 @@ fn entries_for(s: &mut Session, kind: &str) -> Vec<(String, bool)> {
     for path in s.doc.para_paths(StoryRef::Body) {
         let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };
         if let Some(ident) = &figures {
-            if captioned_as(p, ident) {
+            if captioned_as(&s.doc, p, ident) {
                 let text = if bare { caption_body(p, &ident.replace('_', " ")) } else { p.plain_text() };
                 marks.push((text, Pos { story: StoryRef::Body, path: path.clone(), off: 0 }));
             }
@@ -280,7 +280,7 @@ fn entries_for(s: &mut Session, kind: &str) -> Vec<(String, bool)> {
         for path in s.doc.para_paths(StoryRef::Body) {
             let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };
             if let Some(ident) = &figures {
-                if captioned_as(p, ident) {
+                if captioned_as(&s.doc, p, ident) {
                     v.push(Pos { story: StoryRef::Body, path: path.clone(), off: 0 });
                 }
                 continue;

@@ -112,6 +112,7 @@ impl WordApp {
             styled: false,
             fonts_hans: false,
             fonts_korean: false,
+            fonts_hant: false,
             fonts_system_cjk: false,
             want_system_cjk: false,
             recover_fonts_for: None,

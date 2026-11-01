@@ -18,6 +18,49 @@ fn citations_and_bibliography() {
     assert!(s.doc.plain_text(StoryRef::Body).contains("[1]"));
 }
 
+/// #4848: a corporate author is cited and listed as written, in every style: never turned into
+/// a surname and initials ("Organization, W. H."), never left out for the title. Its tag and its
+/// place in an author-sorted list come from the name too.
+#[test]
+fn a_corporate_author_is_cited_and_listed_as_written() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("text.insert", &json!({"text": "Hearing loss is common "})).unwrap();
+    let who = "World Health Organization";
+    s.run("references.citation", &json!({"source": {"kind": "report", "corporate": who, "title": "World report on hearing", "year": "2021", "publisher": "WHO Press", "city": "Geneva"}}))
+        .unwrap();
+    s.run("text.insert", &json!({"text": " and rising "})).unwrap();
+    s.run("references.citation", &json!({"source": {"author": "Adams, Kim", "title": "Quiet Rooms", "year": "2019"}})).unwrap();
+    s.run("text.newParagraph", &json!({})).unwrap();
+    s.run("references.bibliography", &json!({})).unwrap();
+    assert_eq!(s.doc.sources[0].tag, "Wor21", "the tag starts with the corporate name");
+    let t = s.doc.plain_text(StoryRef::Body);
+    assert!(t.contains(&format!("({who}, 2021)")), "{t}");
+    assert!(t.contains(&format!("{who}. (2021). World report on hearing. WHO Press.")), "{t}");
+    // Sorted by the corporate name: Adams before World.
+    let adams = t.find("Adams, K. (2019)").unwrap_or(usize::MAX);
+    let world = t.find(&format!("{who}. (2021)")).unwrap_or(0);
+    assert!(adams < world, "{t}");
+    for style in [
+        "MLA",
+        "Chicago",
+        "GB/T 7714",
+        "GOST (name sort)",
+        "GOST (title sort)",
+        "ISO 690 (author-date)",
+        "ISO 690 (numerical)",
+        "Harvard (Anglia)",
+        "Turabian",
+        "IEEE",
+        "SIST02",
+    ] {
+        s.run("references.citationStyle", &json!({"style": style})).unwrap();
+        let t = s.doc.plain_text(StoryRef::Body);
+        let entry = t.lines().find(|l| l.contains("World report on hearing")).unwrap_or_default();
+        assert!(entry.contains(who), "{style}: {entry}");
+        assert!(!entry.contains("Organization, W") && !entry.contains("ORGANIZATION, W"), "{style}: {entry}");
+    }
+}
+
 /// Updating fields in a document without generated lists leaves its styles alone: a new
 /// style would make the next layout start over from nothing.
 #[test]
@@ -160,6 +203,49 @@ fn caption_labels_do_not_need_a_digit() {
     s.run("caret.docEnd", &json!({})).unwrap();
     s.run("insert.crossReference", &json!({"to": "label:Photo Plate", "target": "Photo Plate I", "show": "number"})).unwrap();
     assert!(s.doc.plain_text(StoryRef::Body).ends_with("See Photo Plate I"), "{}", s.doc.plain_text(StoryRef::Body));
+}
+
+/// #4411: captions restyled with a style based on Caption, directly (`Caption Table`) or through
+/// another (`Caption Table Wide`), are still captions after a DOCX save and reopen: every `tableX`
+/// caption is a cross-reference target and in the table of figures, and a Table caption is a
+/// Table target. Captions in a style not based on Caption are not, nor are their labels.
+#[test]
+fn captions_in_a_style_based_on_caption() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("T1\nT2\nT3\nT4\nT5\nNote\nGrid\nStone\nSee "));
+    let caption = |s: &mut Session, text: &str, label: &str, title: &str| {
+        s.run("select.text", &json!({"text": text})).unwrap();
+        s.run("references.caption", &json!({"label": label, "text": title})).unwrap();
+    };
+    for k in 1..=5 {
+        caption(&mut s, &format!("T{k}"), "tableX", &format!("Row {k}"));
+    }
+    caption(&mut s, "Note", "tableX", "Aside");
+    caption(&mut s, "Grid", "Table", "Grid");
+    caption(&mut s, "Stone", "Plate", "Stone");
+    s.run("styles.create", &json!({"name": "Caption Table", "basedOn": "Caption", "fromSelection": false})).unwrap();
+    s.run("styles.create", &json!({"name": "Caption Table Wide", "basedOn": "Caption Table", "fromSelection": false})).unwrap();
+    s.run("styles.create", &json!({"name": "Aside", "fromSelection": false})).unwrap();
+    let style = |s: &Session, name: &str| s.doc.styles.find(name).map(|st| st.id.clone());
+    let (table, wide, aside) = (style(&s, "Caption Table"), style(&s, "Caption Table Wide"), style(&s, "Aside"));
+    for path in s.doc.para_paths(StoryRef::Body) {
+        let p = s.doc.para_mut(StoryRef::Body, &path).unwrap();
+        let text = p.plain_text();
+        p.props.style = match text.get(..8).unwrap_or_default() {
+            "tableX 1" | "tableX 2" => table.clone(),
+            "tableX 3" | "Table 1:" => wide.clone(),
+            "tableX 6" | "Plate 1:" => aside.clone(),
+            _ => continue,
+        };
+    }
+    let bytes = wordcraft_docx::write(&s.doc).expect("docx write");
+    let mut s = Session::new(wordcraft_docx::read(&bytes).expect("docx read"));
+    let want: Vec<String> = (1..=5).map(|k| format!("tableX {k}: Row {k}")).collect();
+    assert_eq!(s.run("insert.crossReference", &json!({"to": "label:tableX"})).unwrap(), json!(want));
+    assert_eq!(s.run("insert.crossReference", &json!({"to": "table"})).unwrap(), json!(["Table 1: Grid"]));
+    assert_eq!(caption_labels(&s), ["tableX", "Table"]);
+    s.run("caret.docEnd", &json!({})).unwrap();
+    s.run("references.tableOfFigures", &json!({"label": "tableX", "pageNumbers": false})).unwrap();
+    assert_eq!(list_entries(&s).into_iter().map(|(t, _)| t).collect::<Vec<_>>(), want);
 }
 
 /// The entries of every generated list, in order, with their last tab stop's leader.

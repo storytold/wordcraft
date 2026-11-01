@@ -48,6 +48,54 @@ fn window_title_is_sent_only_when_it_changes() {
     assert_eq!(titles(&mut app), 1);
 }
 
+/// #3634: a NUL in the document title never reaches the window title (X11 needs a C string)
+/// or the suggested file name.
+#[test]
+fn window_title_with_nul_is_safe_for_x11() {
+    let ctx = egui::Context::default();
+    let mut app = app();
+    let fallback = app.title_stem();
+    app.run("file.properties", json!({"title": "\u{0}"})).unwrap();
+    let mut titles = Vec::new();
+    for _ in 0..4 {
+        let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.logic(ui.ctx());
+            app.ui(ui);
+        });
+        for command in out.viewport_output.values().flat_map(|v| &v.commands) {
+            if let egui::ViewportCommand::Title(title) = command {
+                titles.push(title.clone());
+            }
+        }
+        out.drop_without_applying_deltas();
+    }
+    assert!(!titles.is_empty());
+    for title in &titles {
+        assert!(std::ffi::CString::new(title.as_str()).is_ok(), "X11 needs a title without NUL: {title:?}");
+    }
+    assert_eq!(app.title_stem(), fallback);
+    assert_eq!(app.default_save_name(), format!("{fallback}.docx"));
+    assert_eq!(app.session.doc.core.title, "\u{0}");
+}
+
+/// #3634: every source of the title (path, file name, document title) drops NUL.
+#[test]
+fn title_stem_omits_nul_from_each_title_source() {
+    let mut app = app();
+    let fallback = app.title_stem();
+    for title in ["Résumé\u{0} notes", "\u{0}"] {
+        let expected = if title == "\u{0}" { fallback.as_str() } else { "Résumé notes" };
+        app.session.doc.core.title = title.into();
+        assert_eq!(app.title_stem(), expected);
+        app.session.file_name = Some(title.into());
+        assert_eq!(app.title_stem(), expected);
+        app.session.path = Some(std::path::PathBuf::from(format!("{title}.docx")));
+        assert_eq!(app.title_stem(), expected);
+        app.session.path = None;
+        app.session.file_name = None;
+    }
+}
+
 /// #1678: Focus and Full Screen View put the window in full screen, asked of the system once
 /// per change (switching between the two keeps it), and the usual window comes back after.
 #[test]
@@ -613,6 +661,10 @@ fn start_screen_shows_file_home_and_esc_leaves_no_document() {
     let refused = a.run("ui.zotero.status", json!({})).unwrap_err();
     assert!(refused.contains("No document is open"), "refused before it runs: {refused}");
     assert!(works_without_document("font.add"), "a font file dropped on the empty window is added");
+    // #4585: File › Options › Proofing › AutoCorrect Options edits a user setting, not the document.
+    a.run("tools.autocorrect", json!({})).unwrap();
+    assert_eq!(a.dialog.as_ref().map(|d| d.name()), Some("autoCorrect"));
+    a.dialog = None;
     // Neither keys nor commands reach the hidden placeholder.
     assert!(a.run("text.insert", json!({"text": "Hello"})).is_err());
     assert!(a.execute("format.bold", json!({})).is_err());
@@ -724,6 +776,44 @@ fn templates_and_files_open_from_the_start_screen() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// #1103: a file that fails to open names the file and the real cause on the status bar.
+#[test]
+fn a_file_that_wont_open_says_which_file_and_why() {
+    let dir = scratch("open-failure");
+    let bad = dir.join("broken.docx");
+    std::fs::write(&bad, b"PK\x03\x04 this is not really a zip").unwrap();
+    let mut a = app();
+    let path = bad.to_string_lossy().to_string();
+    let error = a.run("file.open", json!({"path": path})).unwrap_err();
+    assert!(error.contains("zip") || error.contains("Word"), "the engine names the cause: {error}");
+    let msg = a.report_open_failure(&path, &error);
+    assert!(msg.contains(&path) && msg.contains(&error), "{msg}");
+    assert_eq!(a.status_msg.as_ref().map(|(m, _)| m.as_str()), Some(msg.as_str()));
+
+    let missing = dir.join("gone.docx").to_string_lossy().to_string();
+    let error = a.run("file.open", json!({"path": missing})).unwrap_err();
+    let msg = a.report_open_failure(&missing, &error);
+    assert!(msg.contains("gone.docx") && (msg.to_lowercase().contains("no such file") || msg.contains("os error")), "{msg}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A failed open of a file, with unsaved typing in the window, still names the file and the
+/// cause (#1103). (An open no longer waits on "Save changes?": the file opens in its own window.)
+#[test]
+fn failed_open_with_unsaved_work_names_the_file() {
+    let dir = scratch("open-over-unsaved");
+    let bad = dir.join("broken.docx").to_string_lossy().to_string();
+    std::fs::write(&bad, b"PK\x03\x04 not really a zip").unwrap();
+    let mut a = typed();
+    a.ui.backstage = true;
+    assert!(a.execute_held_back("file.open", json!({"path": bad})).is_err());
+    let shown = a.status_msg.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
+    assert!(shown.contains("broken.docx"), "{shown}");
+    assert!(!a.ui.backstage, "Backstage hides the status bar");
+    assert!(body_text(&a).contains(UNSAVED), "the document is untouched");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// The Start screen setting is a UI command, kept between runs; settings saved before it
 /// existed leave it on, and opening saved settings never reopens the Backstage by itself.
 #[test]
@@ -791,6 +881,52 @@ fn table_properties_button_opens_the_dialog() {
     let basis = g.clone();
     g.rtl = true;
     assert_eq!(g.changes(&basis), json!({"rtl": true}));
+}
+
+/// #4857: with the whole table selected, a row check box the rows differ in shows as mixed and
+/// changes nothing left alone; clicked, OK sets it for every selected row.
+#[test]
+fn table_properties_dialog_sets_every_selected_row() {
+    let mut a = app();
+    a.run("insert.table", json!({"rows": 3, "cols": 2})).unwrap();
+    a.run("table.properties", json!({"allowBreak": false})).unwrap();
+    a.run("table.selectTable", json!({})).unwrap();
+    a.run("table.properties", json!({})).unwrap();
+    let Some(dialogs::Dialog::TableProperties { form, basis }) = a.dialog.clone() else { panic!("no dialog: {:?}", a.dialog) };
+    assert!(form.mixed.contains("allowBreak") && !form.mixed.contains("headerRow"), "{:?}", form.mixed);
+    assert_eq!(form.changes(&basis), json!({}), "a mixed box left alone changes nothing");
+    let mut f = (*form).clone();
+    f.mixed.remove("allowBreak");
+    f.allow_break = false;
+    assert_eq!(f.changes(&basis), json!({"allowBreak": false}), "clicked, it sets every row");
+
+    // Drawn: one click on the mixed box turns breaking on for every row.
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..4 {
+        h.step();
+    }
+    h.get_by_label("Allow row to break across pages").click();
+    for _ in 0..4 {
+        h.step();
+    }
+    h.get_by_label("OK").click();
+    for _ in 0..4 {
+        h.step();
+    }
+    let a = h.state();
+    assert!(a.dialog.is_none(), "OK closes the dialog");
+    let (tp, _, _) = a.session.sel.focus.path.cell().unwrap();
+    let t = a.session.doc.table(a.session.sel.focus.story, &tp).unwrap();
+    assert_eq!(t.rows.iter().map(|r| r.props.cant_split).collect::<Vec<_>>(), [false, false, false]);
+    let g = dialogs::TableForm::read(a).unwrap();
+    assert!(g.mixed.is_empty() && g.allow_break, "reopened, the box is plainly on");
 }
 
 /// Table Layout › Cell Margins opens with the table defaults and does not replace imported
@@ -2433,7 +2569,26 @@ fn user_name_survives_restart() {
 
     // A later rename is what gets saved next, not the name loaded at startup.
     second.run("file.setAuthor", json!({"name": "Grace Hopper"})).unwrap();
-    assert_eq!(second.prefs().author, "Grace Hopper");
+    assert_eq!(second.prefs().author.as_deref(), Some("Grace Hopper"));
+}
+
+/// #4368: a user name cleared in File › Options stays empty after a restart.
+#[test]
+fn blank_user_name_survives_restart() {
+    let mut first = app();
+    first.session.author.clear();
+    let saved = serde_json::to_vec(&first.prefs()).unwrap();
+
+    let mut second = app();
+    assert!(!second.session.author.is_empty());
+    second.apply_prefs(serde_json::from_slice(&saved).unwrap());
+    assert_eq!(second.session.author, "");
+
+    // A name of only spaces is not a name: the default stays.
+    let default = app().session.author;
+    let mut third = app();
+    third.apply_prefs(serde_json::from_str(r#"{"author": "   "}"#).unwrap());
+    assert_eq!(third.session.author, default);
 }
 
 const UNSAVED: &str = "My unsaved novel chapter";
@@ -3856,6 +4011,37 @@ fn escape_selects_a_wordart_box_and_delete_removes_it() {
     h.run_steps(2);
     let s = &h.state().session;
     assert!(s.sel.is_collapsed() && s.sel.focus.story == wordcraft_doc::StoryRef::Body, "a second Escape leaves a caret in the body");
+}
+
+/// #4061: a WordArt picked from a style gallery has its text selected and the page gets the
+/// keyboard back, so typing replaces the placeholder text at once. The gallery's cells ran
+/// their command without handing focus back, so the first keystrokes went nowhere.
+#[test]
+fn picking_a_wordart_style_hands_the_keyboard_back_to_the_page() {
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(400.0, 300.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            // The first pass installs the fonts the gallery's cells are drawn in.
+            if ctx.cumulative_pass_nr() > 1 {
+                crate::wordart_menus::style_gallery(ui, app, "insert.wordArt");
+            }
+        },
+        app(),
+    );
+    h.run_steps(3);
+    h.state_mut().canvas.want_focus = false;
+    // The first cell, "Solid Accent": a click on its middle (the cells carry no label here).
+    let at = egui::pos2(30.0, 30.0);
+    let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    h.event(egui::Event::PointerMoved(at));
+    h.run_steps(1);
+    h.event(button(true));
+    h.run_steps(1);
+    h.event(button(false));
+    h.run_steps(2);
+    assert!(canvas::in_text_box(h.state()), "the WordArt's text is selected");
+    assert!(h.state().canvas.want_focus, "the page takes the keyboard back");
 }
 
 /// #1218: Ctrl+Q resets the paragraph formatting and nothing else; it also closed the window

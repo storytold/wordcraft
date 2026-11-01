@@ -1,5 +1,61 @@
+use super::arrange::group_menu_command;
 use super::*;
 use wordcraft_engine::Session;
+
+/// #4349: Insert › Shapes offers the basic shapes as a grid of drawn tiles, each named for
+/// screen readers and by its tooltip; a click inserts that shape.
+#[test]
+fn the_shapes_menu_offers_its_basic_shapes_as_a_grid_of_tiles() {
+    use egui_kittest::kittest::Queryable;
+    let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Lanterns")), crate::Services::default());
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(vec2(400.0, 300.0))
+        .build_ui_state(|ui, app: &mut WordApp| super::insert::shape_gallery(ui, app), app);
+    h.run_steps(2);
+    let rects: Vec<Rect> = super::insert::SHAPE_TILES.iter().map(|(label, _)| h.get_by_label(label).rect()).collect();
+    // A grid, not a list: tiles sit side by side, wrapping into rows.
+    assert_eq!(rects[0].top(), rects[1].top(), "the first two shapes share a row");
+    assert!(rects[0].right() <= rects[1].left(), "side by side");
+    let rows = rects.iter().map(|r| r.top().round() as i32).collect::<std::collections::BTreeSet<_>>().len();
+    assert!(rows >= 2 && rows < super::insert::SHAPE_TILES.len(), "{rows} rows for {} shapes", super::insert::SHAPE_TILES.len());
+    assert!(rects.iter().all(|r| r.width() >= 24.0 && r.height() >= 24.0), "tiles are big enough to read and hit");
+    // Every tile inserts its own shape.
+    for (label, kind) in super::insert::SHAPE_TILES {
+        let before = h.state().session.undo_depth();
+        h.get_by_label(label).click();
+        h.run_steps(2);
+        assert_eq!(h.state().session.undo_depth(), before + 1, "{label} inserts a shape");
+        let doc = serde_json::to_string(&h.state().session.doc).unwrap();
+        assert!(doc.contains(&format!("\"{kind}\"")), "{label} inserts a {kind}");
+        assert!(h.state_mut().session.undo());
+    }
+}
+
+/// #4412: the Shading button's bar is the colour a click applies (the last one picked), as
+/// the Font Color and Text Highlight Color buttons' bars are, not always the icon's yellow.
+#[test]
+fn the_shading_button_shows_the_last_picked_colour() {
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+    a.run("view.commentsPane", json!({"value": false})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    let ribbon_bars = |h: &egui_kittest::Harness<'_, WordApp>, hex: &str| {
+        let want = crate::theme::c32(wordcraft_doc::Rgb::parse(hex).unwrap());
+        h.output().shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.fill == want && r.rect.height() < 4.0 && r.rect.width() > 10.0))
+    };
+    h.run_steps(6);
+    assert!(ribbon_bars(&h, "FFF2CC"), "the default colour");
+    h.state_mut().canvas.last_shading = "00B0F0".into();
+    h.run_steps(3);
+    assert!(ribbon_bars(&h, "00B0F0"), "the picked colour");
+    assert!(!ribbon_bars(&h, "FFF2CC"), "and not the old one");
+}
 
 /// Two clicks arm and disarm the painter; the double-click handling then leaves it sticky (#2785).
 #[test]
@@ -115,6 +171,34 @@ fn menu_buttons_follow_their_command() {
     for id in ["table.selectTable", "table.deleteTable", "table.autofit"] {
         assert!(menu_enabled(&a, id), "{id} is on inside a table");
     }
+}
+
+/// #4229: with a group selected the Group button stays on, so Ungroup in its menu can be
+/// reached; with nothing selected it is off, and with two objects it offers Group.
+#[test]
+fn the_group_menu_stays_on_for_a_selected_group() {
+    use crate::widgets::{enabled, menu_enabled};
+    let mut a = crate::WordApp::new(
+        Session::new(wordcraft_doc::Document::from_text(
+            "one
+two
+three",
+        )),
+        crate::Services::default(),
+    );
+    assert!(!menu_enabled(&a, group_menu_command(&a)), "nothing selected");
+    a.run("insert.shape", json!({"kind": "rectangle", "width": 80, "height": 40})).unwrap();
+    a.run("arrange.bounds", json!({"page": 0, "x": 100, "y": 150})).unwrap();
+    a.run("select.collapse", json!({"end": true})).unwrap();
+    a.run("insert.shape", json!({"kind": "ellipse", "width": 80, "height": 40})).unwrap();
+    a.run("arrange.bounds", json!({"page": 0, "x": 300, "y": 150})).unwrap();
+    a.run("select.addObject", json!({"index": 0})).unwrap();
+    assert_eq!(group_menu_command(&a), "arrange.group");
+    assert!(menu_enabled(&a, group_menu_command(&a)), "two objects to group");
+    a.run("arrange.group", json!({})).unwrap();
+    assert!(!enabled(&a, "arrange.group"), "one group: nothing to group");
+    assert_eq!(group_menu_command(&a), "arrange.ungroup");
+    assert!(menu_enabled(&a, group_menu_command(&a)), "the menu reaches Ungroup");
 }
 
 /// #1206: Margins, Orientation, Size and Columns mark the caret section's setting, as Word

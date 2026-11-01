@@ -391,9 +391,9 @@ struct TableFrame {
     x: f32,
 }
 
-fn table_frame(ctx: &mut Ctx, t: &Table, avail: f32, depth: usize, style: Option<&TableStyleProps>) -> TableFrame {
+// Nested measurement needs the same preferred weights as layout before sharing span minima.
+fn preferred_grid(t: &Table, avail: f32) -> Vec<f32> {
     let ncols = grid_cols(t).max(1);
-    // Column widths.
     let mut grid: Vec<f32> = if t.grid.len() == ncols {
         // Grid units can be narrower than a text box, including omitted row-end columns.
         t.grid
@@ -408,6 +408,12 @@ fn table_frame(ctx: &mut Ctx, t: &Table, avail: f32, depth: usize, style: Option
         vec![avail / ncols as f32; ncols]
     };
     apply_cell_widths(t, &mut grid);
+    grid
+}
+
+fn table_frame(ctx: &mut Ctx, t: &Table, avail: f32, depth: usize, style: Option<&TableStyleProps>) -> TableFrame {
+    let ncols = grid_cols(t).max(1);
+    let mut grid = preferred_grid(t, avail);
     let mut total: f32 = grid.iter().sum();
     // A top-level table in an inherited header or footer takes its share of the defining
     // section's width (`Ctx::pct_base`).
@@ -437,7 +443,7 @@ fn table_frame(ctx: &mut Ctx, t: &Table, avail: f32, depth: usize, style: Option
     if !t.props.fixed {
         // Measuring lays paragraphs out once more; it mustn't count their equations twice.
         let eq_count = ctx.eq_count;
-        let content = column_content(ctx, t, style, depth);
+        let content = column_content(ctx, t, style, depth, &grid);
         ctx.eq_count = eq_count;
         if let Some(content) = content {
             autofit(&mut grid, &content, t, avail);
@@ -1167,7 +1173,7 @@ fn region_text(st: &TableStyleProps, region: Region) -> CellText {
 /// Each column's narrowest and widest content, cell margins included: its longest word and its
 /// longest line. A cell spanning columns shares what they lack between them; nested tables count
 /// with their own. `None` when every cell is empty.
-fn column_content(ctx: &mut Ctx, t: &Table, style: Option<&TableStyleProps>, depth: usize) -> Option<Vec<(f32, f32)>> {
+fn column_content(ctx: &mut Ctx, t: &Table, style: Option<&TableStyleProps>, depth: usize, grid: &[f32]) -> Option<Vec<(f32, f32)>> {
     let margins_def = default_margins(t, style);
     // The grid's width once: counting it walks every row.
     let ncols = grid_cols(t);
@@ -1196,13 +1202,34 @@ fn column_content(ctx: &mut Ctx, t: &Table, style: Option<&TableStyleProps>, dep
     for (g, span, need) in spanning {
         let Some(cs) = cols.get_mut(g..g.saturating_add(span).min(ncols)) else { continue };
         let n = cs.len().max(1) as f32;
-        let (have_lo, have_hi) = cs.iter().fold((0.0, 0.0), |(l, h), c| (l + c.0, h + c.1));
+        let have_hi: f32 = cs.iter().map(|c| c.1).sum();
+        let preferred = (!is_automatic(t)).then(|| grid.get(g..g + cs.len())).flatten();
+        share_span_min(cs, preferred, need.0);
         for c in cs {
-            c.0 += (need.0 - have_lo).max(0.0) / n;
             c.1 += (need.1 - have_hi).max(0.0) / n;
         }
     }
     any.then_some(cols)
+}
+
+// Share a span's extra minimum in preferred-column proportions. Each column keeps
+// its own text minimum; automatic tables share the extra equally.
+fn share_span_min(cols: &mut [(f32, f32)], grid: Option<&[f32]>, need: f32) {
+    let extra = (need - cols.iter().map(|c| c.0).sum::<f32>()).max(0.0);
+    let weight = |w: &f32| if w.is_finite() { w.clamp(0.0, UNBOUNDED) } else { 0.0 };
+    let total = grid.map_or(0.0, |grid| grid.iter().take(cols.len()).map(weight).sum::<f32>());
+    if total > 0.0 {
+        if let Some(grid) = grid {
+            for (c, w) in cols.iter_mut().zip(grid) {
+                c.0 += extra * weight(w) / total;
+            }
+        }
+        return;
+    }
+    let share = extra / cols.len().max(1) as f32;
+    for c in cols {
+        c.0 += share;
+    }
 }
 
 /// The grid columns row `row` leaves empty before its first cell and after its last one (which
@@ -1234,7 +1261,8 @@ fn blocks_content(ctx: &mut Ctx, blocks: &Blocks, text: Option<&CellText>, depth
                     (width, width)
                 } else {
                     let style = table_style(ctx, nt);
-                    let cols = column_content(ctx, nt, style.as_ref(), depth + 1).unwrap_or_default();
+                    let weights = preferred_grid(nt, width);
+                    let cols = column_content(ctx, nt, style.as_ref(), depth + 1, &weights).unwrap_or_default();
                     let (l, h) = cols.iter().fold((0.0, 0.0), |(l, h), c| (l + c.0, h + c.1));
                     (width.max(l), width.max(h))
                 }

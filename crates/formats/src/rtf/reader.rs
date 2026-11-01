@@ -62,6 +62,10 @@ pub(super) struct Reader {
     pub(super) pict_h: Option<f32>,
     pub(super) pict_sx: f32,
     pub(super) pict_sy: f32,
+    /// `\picw`/`\pich` as written, read for metafiles (0 when absent).
+    pub(super) pict_nat: (i32, i32),
+    /// The mapping mode `N` of `\wmetafileN`.
+    pub(super) pict_mm: i32,
     pub(super) bkmk: Option<(usize, String)>,
     /// Authors of tracked changes (`\revtbl`), and the entry being read.
     rev_authors: Vec<String>,

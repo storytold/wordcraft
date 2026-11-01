@@ -286,13 +286,14 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
                         mi(ui, app, "Line Spacing Options…", "para.dialog", json!({}));
                     },
                 );
+                let sw = wordcraft_doc::Rgb::parse(&app.canvas.last_shading).map(crate::theme::c32);
                 split(
                     ui,
                     app,
-                    "shading",
+                    "shadingNoBar",
                     "Shading",
                     crate::widgets::ButtonAction::new("para.shading", json!({"color": app.canvas.last_shading.clone()}), false),
-                    None,
+                    sw,
                     |ui, app| {
                         mi(ui, app, "No Color", "para.shading", json!({"color": null}));
                         let theme = app.session.doc.settings.theme_colors.clone();

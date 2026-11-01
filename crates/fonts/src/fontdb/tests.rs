@@ -1,5 +1,5 @@
 #[cfg(not(target_arch = "wasm32"))]
-mod sysfonts;
+pub(crate) mod sysfonts;
 
 #[test]
 #[cfg(not(target_arch = "wasm32"))]

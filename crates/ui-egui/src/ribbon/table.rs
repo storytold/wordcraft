@@ -78,13 +78,14 @@ pub(super) fn table_design(app: &mut WordApp, ui: &mut Ui) {
                     }
                 },
             );
+            let sw = wordcraft_doc::Rgb::parse(&app.canvas.last_shading).map(crate::theme::c32);
             split(
                 ui,
                 app,
-                "shading",
+                "shadingNoBar",
                 "Shading",
                 crate::widgets::ButtonAction::new("table.shading", json!({"color": app.canvas.last_shading.clone()}), false),
-                None,
+                sw,
                 |ui, app| {
                     mi(ui, app, "No Color", "table.shading", json!({"color": null}));
                     let theme = app.session.doc.settings.theme_colors.clone();

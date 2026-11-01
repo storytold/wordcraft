@@ -89,6 +89,8 @@ fn every_char_prop_round_trips() {
         caps: Some(true),
         small_caps: Some(false),
         hidden: Some(true),
+        web_hidden: Some(true),
+        snap_to_grid: Some(false),
         spacing: Some(1.5),
         scale: Some(150.0),
         position: Some(3.0),
@@ -2265,6 +2267,39 @@ fn bibliography_sources_round_trip() {
 
     assert_bibliography_parts(&bytes);
     assert_bibliography_sources_round_trip(&bytes);
+}
+
+/// #4848: a corporate author saves as Word's `b:Corporate`, in place of a name list (a role holds
+/// one or the other), and reads back whole.
+#[test]
+fn a_corporate_author_round_trips() {
+    let mut d = Document::new();
+    d.sources.push(Source {
+        tag: "Wor20".into(),
+        kind: "report".into(),
+        corporate: "World Health Organization".into(),
+        title: "World report on hearing".into(),
+        year: "2020".into(),
+        editor: "Chadha, Shelly".into(),
+        ..Default::default()
+    });
+    d.sources.push(Source {
+        tag: "Both".into(),
+        author: "Rivera, Alex".into(),
+        corporate: "Harbor Guild, Inc.".into(),
+        title: "Shared Spaces".into(),
+        ..Default::default()
+    });
+    let bytes = wordcraft_docx::write(&d).expect("write");
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes[..])).unwrap();
+    let mut item_xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("customXml/item1.xml").unwrap(), &mut item_xml).unwrap();
+    assert!(item_xml.contains("<b:Author><b:Author><b:Corporate>World Health Organization</b:Corporate></b:Author><b:Editor>"), "{item_xml}");
+    assert!(item_xml.contains("<b:Corporate>Harbor Guild, Inc.</b:Corporate>"), "{item_xml}");
+    assert!(!item_xml.contains("<b:Last>Rivera</b:Last>"), "the corporate author takes the person authors' place: {item_xml}");
+    let back = wordcraft_docx::read(&bytes).expect("read");
+    let got: Vec<(&str, &str, &str)> = back.sources.iter().map(|s| (s.corporate.as_str(), s.author.as_str(), s.editor.as_str())).collect();
+    assert_eq!(got, [("World Health Organization", "", "Chadha, Shelly"), ("Harbor Guild, Inc.", "", "")]);
 }
 
 fn assert_bibliography_parts(bytes: &[u8]) {

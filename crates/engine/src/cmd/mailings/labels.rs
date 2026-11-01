@@ -254,8 +254,9 @@ impl LabelProduct {
 }
 
 /// Labels: a new document with a table of labels laid out like the sheet (`product`; spacer
-/// columns and rows stand for the gaps). A full page of the same `text` (or one recipient per
-/// label), or (`single`: `{"row", "col"}`, from 1) one label at that place on the sheet.
+/// columns and rows stand for the gaps). A full page of the same `text`, as many sheets as
+/// needed for one label per recipient, or (`single`: `{"row", "col"}`, from 1) one label
+/// at that place on the sheet.
 pub(super) fn labels(s: &mut Session, v: &Value) -> CmdResult {
     let prod = match p::str(v, "product") {
         Some(id) => *LabelProduct::by_id(id).ok_or_else(|| CmdError::Params(format!("unknown label product `{id}`")))?,
@@ -285,46 +286,58 @@ pub(super) fn labels(s: &mut Session, v: &Value) -> CmdResult {
     let grid_cols: Vec<Option<usize>> = (0..cols).flat_map(|c| [Some(c)].into_iter().chain((c + 1 < cols && h_gap > 0.5).then_some(None))).collect();
     let grid_rows: Vec<Option<usize>> = (0..rows).flat_map(|r| [Some(r)].into_iter().chain((r + 1 < rows && v_gap > 0.5).then_some(None))).collect();
     let width: f32 = grid_cols.iter().map(|c| if c.is_some() { prod.width } else { h_gap }).sum();
-    let mut t = Table::new(grid_rows.len(), grid_cols.len(), width);
-    t.props.style = None;
-    t.props.borders = Some(wordcraft_doc::props::Borders::default());
-    t.props.fixed = true;
-    t.grid = grid_cols.iter().map(|c| if c.is_some() { prod.width } else { h_gap }).collect();
+    let per_sheet = rows * cols;
+    let sheets = if from_rec { s.merge.rows.len().div_ceil(per_sheet).max(1) } else { 1 };
     let mut k = 0usize;
     let mut made = 0usize;
-    for (row, r) in t.rows.iter_mut().zip(&grid_rows) {
-        row.props.height = Some(if r.is_some() { prod.height } else { v_gap });
-        row.props.height_rule = wordcraft_doc::props::HeightRule::Exact;
-        for (cell, c) in row.cells.iter_mut().zip(&grid_cols) {
-            cell.props.width = Some(if c.is_some() { prod.width } else { h_gap });
-            let (Some(r), Some(c)) = (r, c) else { continue };
-            let content = match single {
-                Some((sr, sc)) if (sr, sc) != (r + 1, c + 1) => String::new(),
-                _ if from_rec => {
-                    let rec = if k < s.merge.rows.len() { address_block(s, k) } else { String::new() };
-                    k += 1;
-                    rec
+    d.body.clear();
+    for sheet in 0..sheets {
+        let mut t = Table::new(grid_rows.len(), grid_cols.len(), width);
+        t.props.style = None;
+        t.props.borders = Some(wordcraft_doc::props::Borders::default());
+        t.props.fixed = true;
+        t.grid = grid_cols.iter().map(|c| if c.is_some() { prod.width } else { h_gap }).collect();
+        for (row, r) in t.rows.iter_mut().zip(&grid_rows) {
+            row.props.height = Some(if r.is_some() { prod.height } else { v_gap });
+            row.props.height_rule = wordcraft_doc::props::HeightRule::Exact;
+            for (cell, c) in row.cells.iter_mut().zip(&grid_cols) {
+                cell.props.width = Some(if c.is_some() { prod.width } else { h_gap });
+                let (Some(r), Some(c)) = (r, c) else { continue };
+                let content = match single {
+                    Some((sr, sc)) if (sr, sc) != (r + 1, c + 1) => String::new(),
+                    _ if from_rec => {
+                        let rec = if k < s.merge.rows.len() { address_block(s, k) } else { String::new() };
+                        k += 1;
+                        rec
+                    }
+                    _ => text.clone(),
+                };
+                if !content.is_empty() {
+                    made += 1;
                 }
-                _ => text.clone(),
-            };
-            if !content.is_empty() {
-                made += 1;
+                cell.props.valign = Some(wordcraft_doc::props::VAlign::Center);
+                cell.blocks = content
+                    .split('\n')
+                    .take(20)
+                    .map(|l| {
+                        let mut p = Paragraph::with_text(l, CharProps::default()).styled("NoSpacing");
+                        p.props.align = Some(Align::Left);
+                        p.props.indent_left = Some(9.0);
+                        para_block(p)
+                    })
+                    .collect();
             }
-            cell.props.valign = Some(wordcraft_doc::props::VAlign::Center);
-            cell.blocks = content
-                .split('\n')
-                .take(20)
-                .map(|l| {
-                    let mut p = Paragraph::with_text(l, CharProps::default()).styled("NoSpacing");
-                    p.props.align = Some(Align::Left);
-                    p.props.indent_left = Some(9.0);
-                    para_block(p)
-                })
-                .collect();
         }
+        d.body.push(std::sync::Arc::new(Block::Table(t)));
+        let mut end = Paragraph::new();
+        if sheet + 1 < sheets {
+            // End each sheet with the same next-page section, so the next table
+            // starts at the product's top margin without a leading blank line.
+            end.section = Some(Box::new(d.last_section.clone()));
+        }
+        d.body.push(para_block(end));
     }
-    d.body = vec![std::sync::Arc::new(Block::Table(t)), para_block(Paragraph::new())];
     s.add_document(d);
     let _ = Pos::body(0, 0);
-    Ok(json!({"labels": if single.is_some() { 1 } else { rows * cols }, "filled": made, "product": prod.id}))
+    Ok(json!({"labels": if single.is_some() { 1 } else { sheets * per_sheet }, "filled": made, "product": prod.id}))
 }

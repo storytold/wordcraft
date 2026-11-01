@@ -53,7 +53,9 @@ pub fn rpr_inner(w: &mut W, c: &CharProps) {
     toggle(w, "w:emboss", c.emboss);
     toggle(w, "w:imprint", c.engrave);
     toggle(w, "w:noProof", c.no_proof);
+    toggle(w, "w:snapToGrid", c.snap_to_grid);
     toggle(w, "w:vanish", c.hidden);
+    toggle(w, "w:webHidden", c.web_hidden);
     match c.color {
         Some(TextColor::Auto) => w.val("w:color", "auto"),
         Some(TextColor::Rgb(rgb)) => w.val("w:color", &rgb.hex()),

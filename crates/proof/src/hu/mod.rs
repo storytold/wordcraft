@@ -11,7 +11,9 @@ pub mod grammar;
 pub(crate) mod test_dict;
 
 use std::path::Path;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+
+use crate::slot::DictSlot;
 
 /// A Hungarian dictionary, or none (Hungarian spelling is off then).
 #[derive(Default)]
@@ -44,11 +46,25 @@ impl HuDict {
     }
 }
 
-/// The Hungarian dictionary: `None` until first use, then the installed one (or an empty one).
-static DICT: RwLock<Option<Arc<HuDict>>> = RwLock::new(None);
+impl crate::slot::Dictionary for HuDict {
+    fn load(aff: &Path, dic: &Path) -> Result<Self, String> {
+        load(aff, dic)
+    }
+
+    fn parse(aff: &str, dic: &str) -> Result<Self, String> {
+        HuDict::from_hunspell(aff, dic)
+    }
+
+    fn is_empty(&self) -> bool {
+        HuDict::is_empty(self)
+    }
+}
 
 /// File names of a Hungarian Hunspell dictionary.
 const NAMES: &[&str] = &["hu_HU", "hu-HU", "hu"];
+
+/// The Hungarian dictionary, found on first use (see [`DictSlot`]).
+pub(crate) static DICT: DictSlot<HuDict> = DictSlot::new(NAMES, "Hungarian");
 
 /// Longest word (in bytes) checked or corrected; longer input is accepted as is.
 const MAX_WORD_BYTES: usize = 120;
@@ -56,39 +72,32 @@ const MAX_WORD_BYTES: usize = 120;
 /// The Hungarian dictionary: the installed Hunspell `hu_HU` (read on first use), one given
 /// with [`install_dictionary`], or an empty one when none is available (see [`has_dictionary`]).
 pub fn dictionary() -> Arc<HuDict> {
-    if let Some(d) = DICT.read().unwrap_or_else(|e| e.into_inner()).as_ref() {
-        return d.clone();
-    }
-    let loaded = Arc::new(load_installed());
-    let mut slot = DICT.write().unwrap_or_else(|e| e.into_inner());
-    // Another thread (or an install) may have filled it meanwhile: that one wins.
-    slot.get_or_insert(loaded).clone()
-}
-
-fn load_installed() -> HuDict {
-    let Some((aff, dic)) = crate::hunspell::find(NAMES) else {
-        crate::hunspell::clear_load_error(NAMES[0]);
-        log::info!("Hungarian spelling: no Hunspell hu_HU dictionary installed");
-        return HuDict::default();
-    };
-    crate::hunspell::note_load(NAMES[0], &dic, load(&aff, &dic)).unwrap_or_else(|e| {
-        log::warn!("Hungarian spelling: {e}");
-        HuDict::default()
-    })
+    DICT.get()
 }
 
 /// Read a Hunspell pair from disk, decoded per the `.aff`'s `SET` line. A UTF-8 `.aff` that
 /// isn't valid UTF-8 is read with [`byte_flags_to_long`]: that is Magyar Ispell's.
 pub fn load(aff: &Path, dic: &Path) -> Result<HuDict, String> {
     let (aff_bytes, dic_bytes) = (crate::hunspell::read_capped(aff)?, crate::hunspell::read_capped(dic)?);
-    let (aff_text, dic_text) = match crate::hunspell::decode(&aff_bytes, &dic_bytes) {
-        Ok(pair) => pair,
-        Err(e) => {
-            let dic_text = String::from_utf8(dic_bytes).map_err(|_| e.clone())?;
-            (byte_flags_to_long(&aff_bytes).ok_or(e)?, dic_text)
-        }
-    };
+    // [`crate::hunspell::decode`] would read byte flags as U+0080..U+00FF characters, which
+    // `spellbook` takes as UTF-8 bytes (`\xe1` and `\xcb` would share their first byte), so they
+    // become `FLAG long` here first.
+    if std::str::from_utf8(&aff_bytes).is_err()
+        && utf8_set(&aff_bytes)
+        && let (Some(aff_text), Ok(dic_text)) = (byte_flags_to_long(&aff_bytes), std::str::from_utf8(&dic_bytes))
+    {
+        return HuDict::from_hunspell(&aff_text, dic_text);
+    }
+    let (aff_text, dic_text) = crate::hunspell::decode(&aff_bytes, &dic_bytes)?;
     HuDict::from_hunspell(&aff_text, &dic_text)
+}
+
+/// Does the `.aff` say its text is UTF-8 (its first `SET` line, or none)?
+fn utf8_set(aff: &[u8]) -> bool {
+    aff.split(|&b| b == b'\n')
+        .map(split_field)
+        .find(|(key, _)| *key == b"SET")
+        .is_none_or(|(_, rest)| matches!(split_field(rest).0.to_ascii_uppercase().as_slice(), b"UTF-8" | b"UTF8"))
 }
 
 /// Directives whose one argument is a flag.
@@ -184,28 +193,15 @@ fn split_field(line: &[u8]) -> (&[u8], &[u8]) {
     (field, rest.get(skip..).unwrap_or_default())
 }
 
-/// Where the installed Hungarian `.dic` is (`None`: not installed).
-pub fn installed_path() -> Option<std::path::PathBuf> {
-    crate::hunspell::find(NAMES).map(|(_, dic)| dic)
-}
-
 /// Use this Hungarian dictionary from now on (Hunspell `.aff` and `.dic` text, decoded to
 /// UTF-8), for example one the user picked. On error the current dictionary stays.
 pub fn install_dictionary(aff: &str, dic: &str) -> Result<(), String> {
-    let d = HuDict::from_hunspell(aff, dic)?;
-    *DICT.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(d));
-    Ok(())
-}
-
-/// Forget the loaded dictionary, so the next check looks for an installed one again (after
-/// [`crate::hunspell::set_dictionary_dir`] or a dictionary was installed).
-pub fn reload_dictionary() {
-    *DICT.write().unwrap_or_else(|e| e.into_inner()) = None;
+    DICT.install(aff, dic)
 }
 
 /// Is a Hungarian dictionary available (spelling is checked)?
 pub fn has_dictionary() -> bool {
-    !dictionary().is_empty()
+    DICT.has_dictionary()
 }
 
 /// Is `c` a letter of the Latin script (the only one the Hungarian dictionary covers)?
