@@ -644,24 +644,18 @@ fn draw_line(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
     let len = (dx * dx + dy * dy).sqrt().max(1e-3);
     match *stroke {
         Stroke::Wave => {
-            let amp = (w * 1.2).max(0.8);
+            let amp = f64::from(Stroke::wave_amplitude(*width));
             ctx.set_stroke(kurbo::Stroke::new(w * 0.8));
             ctx.stroke_path(&wave_path(x0, y0, x1, y1, amp));
         }
-        // Three thin lines, spaced as a double's, across the line's direction (so a vertical
-        // border's lines stand side by side).
-        Stroke::Triple => {
-            let (nx, ny) = (-dy / len * w * 1.8, dx / len * w * 1.8);
-            ctx.set_stroke(kurbo::Stroke::new(w * 0.6));
-            for k in [-1.0, 0.0, 1.0] {
-                stroke_segment(ctx, (x0, y0, x1, y1), (nx * k, ny * k));
+        // Parallel lines across the line's direction (so a vertical border's lines stand side by
+        // side), spaced and weighted as the PDF export draws them.
+        Stroke::Double | Stroke::Triple => {
+            let (nx, ny) = (-dy / len, dx / len);
+            for (off, line_w) in stroke.parallel_lines(*width) {
+                ctx.set_stroke(kurbo::Stroke::new(f64::from(line_w)).with_caps(kurbo::Cap::Butt));
+                stroke_segment(ctx, (x0, y0, x1, y1), (nx * f64::from(off), ny * f64::from(off)));
             }
-        }
-        Stroke::Double => {
-            let (nx, ny) = (-dy / len * w * 0.9, dx / len * w * 0.9);
-            ctx.set_stroke(kurbo::Stroke::new(w * 0.6).with_caps(kurbo::Cap::Butt));
-            stroke_segment(ctx, (x0, y0, x1, y1), (nx, ny));
-            stroke_segment(ctx, (x0, y0, x1, y1), (-nx, -ny));
         }
         _ => {
             ctx.set_stroke(st);

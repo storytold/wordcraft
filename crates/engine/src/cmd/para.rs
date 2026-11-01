@@ -186,7 +186,7 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"color": "RRGGBB" | null}"#),
         CommandSpec::new("para.borders", "Borders", "Home › Paragraph", borders).params(
-            r#"{"kind": "bottom|top|left|right|none|all|outside|inside|horizontalLine", "width"?: pt, "color"?: "RRGGBB", "style"?: "single|double|dotted|dashed|thick|triple|dotDash|wave", "sides"?: Sides} where Sides = {"top"|"left"|"bottom"|"right"|"between": {"style"?, "width"?: pt, "color"?: "RRGGBB"} | null}: exactly these sides (others off), instead of `kind`"#,
+            r#"{"kind": "bottom|top|left|right|none|all|outside|inside|horizontalLine", "width"?: pt, "color"?: "RRGGBB", "style"?: "single|double|dotted|dashed|thick|triple|dotDash|wave", "sides"?: Sides} where Sides = {"top"|"left"|"bottom"|"right"|"between": {"style"?, "width"?: pt, "color"?: "RRGGBB"} | null}: exactly these sides (others off), instead of `kind`. Quick kinds apply to the caret cell or selected cells in a table; `horizontalLine`, `sides`, and text-only selections within one cell apply to paragraphs"#,
         ),
         CommandSpec::new("para.sort", "Sort", "Home › Paragraph", sort).params(r#"{"descending"?: bool}"#),
         CommandSpec::new("para.keepNext", "Keep with Next", "Home › Paragraph › Line and Page Breaks", |s, v| tog(s, v, |p| p.keep_next, |p, b| p.keep_next = Some(b)))
@@ -263,3 +263,7 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
     ]
 }
+
+#[cfg(test)]
+#[path = "para_borders_tests.rs"]
+mod borders_tests;

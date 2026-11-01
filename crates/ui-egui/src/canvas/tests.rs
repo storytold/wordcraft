@@ -1,3 +1,4 @@
+use super::pages::gridline_cells;
 use super::*;
 use crate::table_resize::tests::{H, cell, screen, steps, table_window};
 
@@ -3180,6 +3181,41 @@ fn table_gridlines_include_header_and_footer_tables() {
     assert_eq!(ys(Some(StoryRef::Part(1))), [10.0]);
     assert_eq!(ys(Some(StoryRef::Part(2))), [200.0]);
     assert!(ys(None).is_empty(), "closing header/footer editing removes the automatic guides");
+}
+
+/// #1740: gridlines show only where a cell edge has no visible border, so they never draw
+/// through a dashed or double border; an edge partly bordered keeps the rest.
+#[test]
+fn table_gridlines_skip_bordered_edges() {
+    use wordcraft_doc::props::{Border, BorderStyle};
+    let cell = Placed::Cell {
+        rect: wordcraft_geom::Rect::new(100.0, 100.0, 50.0, 20.0),
+        covered: false,
+        table: Default::default(),
+        row: 0,
+        cell: 0,
+        story: StoryRef::Body,
+        clip: false,
+    };
+    let line = |x0, y0, x1, y1, style| Placed::Rule { x0, y0, x1, y1, border: Border { style, width: 1.0, color: None, space: 0.0 } };
+    let page = Page {
+        items: vec![
+            cell,
+            // The top edge is bordered past its corners, the left edge half way down, and the
+            // bottom has a line with no width (no border).
+            line(99.0, 100.0, 151.0, 100.0, BorderStyle::Dashed),
+            line(100.0, 100.0, 100.0, 110.0, BorderStyle::Double),
+            line(100.0, 120.0, 150.0, 120.0, BorderStyle::None),
+        ],
+        ..Default::default()
+    };
+    let mut edges = gridline_edges(&page, true, None);
+    edges.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    assert_eq!(
+        edges,
+        vec![[(100.0, 110.0), (100.0, 120.0)], [(100.0, 120.0), (150.0, 120.0)], [(150.0, 100.0), (150.0, 120.0)]],
+        "the top is all border; the left keeps its lower half; the bottom and right show"
+    );
 }
 
 #[test]
