@@ -88,6 +88,12 @@ pub fn rtf() -> Option<String> {
     s.trim_start().starts_with("{\\rtf").then_some(s)
 }
 
+/// `true` when the system clipboard can't be opened at all (GNOME's Wayland without the
+/// data-control protocol, in a Flatpak without X11): the menu Paste then reads through egui.
+pub fn unreachable() -> bool {
+    arboard::Clipboard::new().is_err()
+}
+
 /// The names of the formats on the clipboard, where the platform lists them (Wayland, Windows).
 pub fn formats() -> Vec<String> {
     platform::formats()

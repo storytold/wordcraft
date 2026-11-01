@@ -132,6 +132,7 @@ impl WordApp {
             autosave: true,
             zotero: zotero::ZoteroLink::default(),
             ctx: None,
+            pending_paste: None,
             ime_origin: false,
             read_aloud_error: None,
             autosave_path: None,
@@ -292,6 +293,7 @@ impl WordApp {
         if self.ctx.is_none() {
             self.ctx = Some(ctx.clone());
         }
+        system_clipboard::tick(self, ctx);
         // Capture geometry/window/document identity is current before control admission and
         // completion.
         self.refresh_capture_geometry(ctx);
