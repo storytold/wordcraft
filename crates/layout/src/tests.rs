@@ -6965,6 +6965,43 @@ fn a_percentage_width_past_the_text_column_is_kept() {
 }
 
 #[test]
+fn a_percentage_table_before_word_2013_adds_its_outer_cell_margins() {
+    // Measured in Word for Windows on a 100% table of two auto columns: in compatibility mode 14
+    // (and in files that name no mode) the table is the text width plus the first cell's left
+    // and the last cell's right margin; in mode 15 it is the text width.
+    let gap = |mode: u32, table_margins: (f32, f32), own: Option<f32>| {
+        let mut t = Table::new(1, 2, 225.0);
+        t.props.width_pct = Some(100.0);
+        t.props.cell_margins = Some([0.0, table_margins.0, 0.0, table_margins.1]);
+        for (i, c) in t.rows[0].cells.iter_mut().enumerate() {
+            c.blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("x", Default::default()))];
+            if let Some(m) = own {
+                c.props.margins = Some(if i == 0 { [0.0, m, 0.0, table_margins.1] } else { [0.0, table_margins.0, 0.0, m] });
+            }
+        }
+        let mut d = Document::from_text("After");
+        d.settings.compat_mode = mode;
+        d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+        let text_width = d.sections().first().map_or(0.0, |(_, s)| s.text_width());
+        let l = lay(&d);
+        let [(x0, _, _)] = para_at(&l, &[0, 0, 0, 0])[..] else { panic!("first cell missing") };
+        let [(x1, _, _)] = para_at(&l, &[0, 0, 1, 0])[..] else { panic!("second cell missing") };
+        (x1 - x0, text_width)
+    };
+    let close =
+        |got: f32, want: f32, case: &str| assert!((got - want).abs() < 0.3, "{case}: second cell's text is {got} pt after the first's, Word {want}");
+    let (g, tw) = gap(14, (3.75, 3.75), None);
+    close(g, (tw + 7.5) / 2.0, "mode 14, 3.75pt margins");
+    let (g, tw) = gap(14, (2.5, 10.0), None);
+    close(g, (tw + 12.5) / 2.0, "mode 14, 2.5pt and 10pt margins");
+    // Cells' own margins: the first cell's left and the last cell's right count.
+    let (g, tw) = gap(14, (3.75, 3.75), Some(15.0));
+    close(g, (tw + 30.0) / 2.0 - 15.0 + 3.75, "mode 14, 15pt outer cell margins");
+    let (g, tw) = gap(15, (3.75, 3.75), Some(15.0));
+    close(g, tw / 2.0 - 15.0 + 3.75, "mode 15");
+}
+
+#[test]
 fn a_floating_table_in_the_footer_leaves_the_footer_where_it_is() {
     use wordcraft_doc::para::Anchor;
     use wordcraft_doc::props::TableFloat;
