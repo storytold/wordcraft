@@ -236,16 +236,15 @@ fn a_font_naming_another_family_as_its_typographic_family_is_not_that_family() {
     let styles = db.styles("Test SansPSK");
     assert!(styles.iter().any(|s| s == "Regular") && styles.iter().any(|s| s == "Light") && !styles.iter().any(|s| s == "Bold"), "{styles:?}");
     assert!(db.styles("Test SansIT9").iter().any(|s| s == "Bold"));
-    // With no face of its own a family lists the styles of the faces that claim it, each once.
+    // With no face of its own a family is missing: faces that claim it offer no styles, and its
+    // name gets the fallback, as Word substitutes for a missing font (measured in Word for Windows).
     let only = FontDb::with_font_dirs(vec![]);
     only.set_system_fallback(false);
     catalog::push_new_faces(&mut only.faces.write().unwrap(), vec![impostor.clone(), face(BUNDLED[1], "Regular", "Test SansNew")]);
-    assert_eq!(only.styles("Test SansPSK"), ["Regular"]);
-    // With no face of its own, the family's name still finds the only face that has it.
-    let alone = FontDb::with_font_dirs(vec![]);
-    alone.set_system_fallback(false);
-    alone.faces.write().unwrap().push(impostor.clone());
-    assert_eq!(alone.face("Test SansPSK", "Regular").id(), impostor.id());
+    assert!(only.styles("Test SansPSK").is_empty());
+    assert!(!only.has_family("Test SansPSK"));
+    assert_ne!(only.face("Test SansPSK", "Regular").id(), impostor.id());
+    assert_eq!(only.face("Test SansIT9", "Regular").id(), impostor.id());
 }
 
 #[test]

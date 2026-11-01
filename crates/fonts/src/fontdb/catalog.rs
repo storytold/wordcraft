@@ -28,11 +28,17 @@ pub(super) fn push_new_faces(faces: &mut Vec<Arc<FontFace>>, new: Vec<Arc<FontFa
 impl FontDb {
     /// Family names available (loaded plus cataloged system fonts), sorted and deduplicated. Like
     /// Word's font list, this holds each face's legacy family name too ("Roboto Light", "Inter
-    /// SemiBold"), which [`FontDb::face`] resolves to that face.
+    /// SemiBold"), which [`FontDb::face`] resolves to that face; a typographic family only when
+    /// the face is one of its own (TH SarabunIT๙ lists as itself, not as TH SarabunPSK).
     pub fn families(&self) -> Vec<String> {
-        let mut v: Vec<String> = self.read_faces().iter().flat_map(|f| [f.family.clone(), f.legacy_family.clone()]).collect();
+        let names = |family: &str, legacy: &str| {
+            let typographic = owns_name(legacy, family).then(|| family.to_string());
+            typographic.into_iter().chain(std::iter::once(legacy.to_string()))
+        };
+        let mut v: Vec<String> = self.read_faces().iter().flat_map(|f| names(&f.family, &f.legacy_family)).collect();
         #[cfg(not(target_arch = "wasm32"))]
-        v.extend(self.read_catalog().iter().flat_map(|c| [c.family.clone(), c.legacy.clone()]));
+        v.extend(self.read_catalog().iter().flat_map(|c| names(&c.family, &c.legacy)));
+        v.retain(|n| !n.is_empty());
         v.sort_by_key(|a| a.to_lowercase());
         v.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
         v
@@ -108,8 +114,8 @@ impl FontDb {
     }
 
     /// The styles of the faces named `family`, loaded or cataloged: by typographic family (the
-    /// family's own faces only, when it has some, as [`FontDb::face`] chooses), else by legacy
-    /// family name. Each style once, Regular first, then by weight.
+    /// family's own faces only, as [`FontDb::face`] chooses), else by legacy family name. Each
+    /// style once, Regular first, then by weight.
     fn styles_named(&self, family: &str) -> Vec<String> {
         let mut v: Vec<(bool, f32, String)> = Vec::new();
         for legacy in [false, true] {
@@ -130,8 +136,8 @@ impl FontDb {
                 }
             }
             // The styles `face` chooses among: a face claiming the family by its typographic name
-            // only (TH SarabunIT๙ for TH SarabunPSK) offers none when the family has its own.
-            if !legacy && found.iter().any(|t| owns_name(&t.3, family)) {
+            // only (TH SarabunIT๙ for TH SarabunPSK) offers none.
+            if !legacy {
                 found.retain(|t| owns_name(&t.3, family));
             }
             // Each style once, though two families' faces can share one.
@@ -256,50 +262,30 @@ impl FontDb {
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn load_cataloged(&self, family: &str) -> bool {
         let _loading = self.loading.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Another lookup may have loaded it while this one waited.
-        if self.is_loaded(family) {
+        // Another lookup may have loaded it while this one waited. A face claiming the family
+        // only by its typographic name (see `keep_own_faces`) doesn't count: it isn't the family.
+        if self.find(family, "Regular").is_some() {
             return true;
         }
+        // The scan the paths come from, read first: a scan that ends after this counts as another,
+        // so its files are tried.
+        let generation = self.catalog_gen.load(Ordering::Acquire);
         let paths = self.family_paths(family);
-        self.load_paths(paths)
-    }
-
-    /// Load the installed files of `family`'s own faces (see `keep_own_faces`) that aren't
-    /// loaded, when a face claiming the family only by its typographic name was found first.
-    /// Returns whether any face was added.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(super) fn load_cataloged_owner(&self, family: &str) -> bool {
-        let _loading = self.loading.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Once per family and scan: a lookup that waited here for another's load finds the faces
-        // it loaded, and a file that can't be read isn't read again on every lookup.
+        // Once per family and scan: files that can't be read, or hold only faces claiming the
+        // family's name, aren't read again on every lookup. The set is held only to look and add.
         {
-            let generation = self.catalog_gen.load(Ordering::Acquire);
-            let mut tried = self.owner_tried.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            if tried.0 != generation {
+            let mut tried = self.tried.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if tried.0 < generation {
                 *tried = (generation, std::collections::HashSet::new());
             }
             // ASCII case only, as the catalog compares names: "Семья" and "семья" are two families.
-            if !tried.1.insert(family.to_ascii_lowercase()) {
+            // Paths from a scan older than the set's are tried without being recorded.
+            if tried.0 == generation && !tried.1.insert(family.to_ascii_lowercase()) {
                 return false;
             }
         }
-        let mut paths: Vec<std::path::PathBuf> = self
-            .read_catalog()
-            .iter()
-            .filter(|c| c.family.eq_ignore_ascii_case(family) && owns_name(&c.legacy, family))
-            .map(|c| c.path.clone())
-            .collect();
-        paths.sort();
-        paths.dedup();
-        !paths.is_empty() && self.load_paths(paths)
+        self.load_paths(paths)
     }
-
-    /// Are any of `family`'s own faces (see `keep_own_faces`) installed?
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(super) fn catalog_has_owner(&self, family: &str) -> bool {
-        self.read_catalog().iter().any(|c| c.family.eq_ignore_ascii_case(family) && owns_name(&c.legacy, family))
-    }
-
     /// Load the font files at `paths` (see [`FontDb::add_fonts`]). Returns whether any face was added.
     #[cfg(not(target_arch = "wasm32"))]
     fn load_paths(&self, paths: Vec<std::path::PathBuf>) -> bool {
