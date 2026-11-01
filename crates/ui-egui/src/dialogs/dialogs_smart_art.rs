@@ -12,6 +12,7 @@ use wordcraft_doc::smart_art::{MAX_ITEMS, SmartArtColors, SmartArtLayout, SmartA
 
 use crate::WordApp;
 use crate::theme::{Tokens, c32, regular, semibold};
+use crate::widgets;
 
 /// The picker's categories (`All` first), in the order shown.
 pub const CATEGORIES: [&str; 8] = ["All", "List", "Process", "Cycle", "Hierarchy", "Relationship", "Matrix", "Pyramid"];
@@ -151,6 +152,21 @@ pub fn swatches(p: &Painter, r: Rect, colors: SmartArtColors, theme: &[Rgb]) {
     }
 }
 
+/// Swatches in `r` of the colours the items of `g` have now: their own or the style's.
+pub fn custom_swatches(p: &Painter, r: Rect, g: &SmartArtSpec, theme: &[Rgb]) {
+    let shown: Vec<Color32> = (0..g.items.len())
+        .filter_map(|i| match g.items.get(i)?.color {
+            Some(c) => Some(c32(c)),
+            None => Some(accent(theme, g.style_accent(i)?)),
+        })
+        .take(5)
+        .collect();
+    let w = r.width() / shown.len().max(1) as f32;
+    for (k, c) in shown.into_iter().enumerate() {
+        p.rect_filled(Rect::from_min_size(pos2(r.left() + k as f32 * w, r.top()), vec2(w - 2.0, r.height())), 2.0, c);
+    }
+}
+
 /// Height of the picker's three columns, points: three rows of 96 pt tiles and the gaps between them.
 const PICKER_HEIGHT: f32 = 3.0 * 96.0 + 2.0 * 8.0;
 
@@ -258,8 +274,12 @@ pub fn picker_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SmartArtForm) -> bool {
 
 /// The `smartArt.items` params for `g` with item `i`'s text replaced by `text`.
 pub fn items_with(g: &SmartArtSpec, i: usize, text: &str) -> Value {
-    let items: Vec<Value> =
-        g.items.iter().enumerate().map(|(j, it)| json!({"text": if j == i { text } else { it.text.as_str() }, "level": it.level})).collect();
+    let items: Vec<Value> = g
+        .items
+        .iter()
+        .enumerate()
+        .map(|(j, it)| json!({"text": if j == i { text } else { it.text.as_str() }, "level": it.level, "color": it.color.map(|c| c.hex())}))
+        .collect();
     json!({"items": items})
 }
 
@@ -271,7 +291,9 @@ pub fn items_without(g: &SmartArtSpec, i: usize) -> Value {
         .iter()
         .enumerate()
         .filter(|(j, _)| *j != i)
-        .map(|(j, it)| json!({"text": it.text, "level": if under.contains(&j) { it.level.saturating_sub(1) } else { it.level }}))
+        .map(|(j, it)| {
+            json!({"text": it.text, "level": if under.contains(&j) { it.level.saturating_sub(1) } else { it.level }, "color": it.color.map(|c| c.hex())})
+        })
         .collect();
     json!({"items": items})
 }
@@ -347,6 +369,49 @@ pub(crate) fn type_into(app: &mut WordApp, typed: &str) -> SmartArtTypeResult {
     SmartArtTypeResult::Changed
 }
 
+/// Side of an item's colour button, points.
+const SWATCH: f32 = 18.0;
+
+/// Id of item `i`'s colour button.
+fn color_button_id(i: usize) -> egui::Id {
+    egui::Id::unique(("smart_art_color_button", i))
+}
+
+/// The button at the right of item `i`'s row: its shape's colour (the style's until changed).
+/// A click offers the colour grid; the style's colour is offered back.
+fn color_button(app: &mut WordApp, ui: &mut Ui, g: &SmartArtSpec, i: usize) {
+    let t = Tokens::get(ui.ctx());
+    let (rect, _) = ui.allocate_exact_size(vec2(SWATCH, SWATCH), Sense::hover());
+    let resp = ui.interact(rect, color_button_id(i), Sense::click());
+    let label = g
+        .items
+        .get(i)
+        .filter(|it| !it.text.is_empty())
+        .map_or_else(|| format!("{} ({})", tl!("Shape color"), i + 1), |it| format!("{}: {}", tl!("Shape color"), it.text));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label.as_str()));
+    let Some(accent_n) = g.style_accent(i) else { return };
+    let theme = app.session.doc.settings.theme_colors.clone();
+    let own = g.items.get(i).and_then(|it| it.color);
+    let fill = own.map_or_else(|| accent(&theme, accent_n), c32);
+    ui.painter().rect_filled(rect, 3.0, fill);
+    let line = if resp.hovered() { t.accent } else { t.border_strong };
+    ui.painter().rect_stroke(rect, 3.0, Stroke::new(1.0, line), egui::StrokeKind::Inside);
+    let resp = resp.on_hover_text(tl!("Shape color"));
+    egui::Popup::menu(&resp).show(|ui| {
+        let mut pick = widgets::color_grid(ui, &theme).map(|hex| json!({"index": i, "color": hex}));
+        ui.add_space(2.0);
+        ui.separator();
+        if ui.add_enabled(own.is_some(), egui::Button::new(tl!("Style Color")).frame(false)).clicked() {
+            pick = Some(json!({"index": i}));
+        }
+        if let Some(params) = pick {
+            app.smart_art_typing = None;
+            let _ = app.run("smartArt.itemColor", params);
+            ui.close();
+        }
+    });
+}
+
 /// The Text Pane: a row per item, indented by level. Typing changes the graphic as you go (one
 /// undo step per item typed in); Enter adds an item after the current one; Tab demotes the
 /// focused item and Shift+Tab promotes it, as Word's Text Pane does.
@@ -366,9 +431,9 @@ pub fn text_pane(app: &mut WordApp, ui: &mut Ui) {
                 ui.label(egui::RichText::new("•").color(t.text_dim));
                 let mut text = it.text.clone();
                 let item_name = format!("{} {}", tl!("Text Pane"), i + 1);
-                let r = ui
-                    .add(egui::TextEdit::singleline(&mut text).id_salt(("smart_art_item", i)).desired_width(f32::INFINITY))
-                    .accessible_name(item_name);
+                let width = (ui.available_width() - SWATCH - ui.spacing().item_spacing.x).max(40.0);
+                let r = ui.add(egui::TextEdit::singleline(&mut text).id_salt(("smart_art_item", i)).desired_width(width)).accessible_name(item_name);
+                color_button(app, ui, &g, i);
                 if want_focus == Some(i) {
                     r.request_focus();
                 }
@@ -433,12 +498,66 @@ mod tests {
     use super::*;
 
     #[test]
+    fn color_buttons_expose_item_names_and_empty_row_indices() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        let mut spec = SmartArtSpec::sample(SmartArtLayout::Process);
+        spec.items[0].text = "Named".into();
+        spec.items[1].text.clear();
+        let mut h = egui_kittest::Harness::builder().build_ui(move |ui| {
+            color_button(&mut app, ui, &spec, 0);
+            color_button(&mut app, ui, &spec, 1);
+        });
+        h.run_steps(2);
+        h.get_by_label("Shape color: Named");
+        h.get_by_label("Shape color (2)");
+    }
+
+    #[test]
     fn removing_an_item_lifts_the_items_under_it() {
         let g = SmartArtSpec::sample(SmartArtLayout::Hierarchy);
         let v = items_without(&g, 1);
         let levels: Vec<u64> = v["items"].as_array().unwrap().iter().map(|i| i["level"].as_u64().unwrap()).collect();
         assert_eq!(levels, [0, 1, 1, 2, 2]);
         assert_eq!(items_with(&g, 0, "Boss")["items"][0]["text"], "Boss");
+    }
+
+    /// The colour button opens a grid: a swatch sets the item's own colour and Style Color clears it.
+    #[test]
+    fn the_color_button_sets_and_clears_an_items_colour() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        a.run("insert.smartArt", json!({"layout": "process"})).unwrap();
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
+        crate::theme::apply(&ctx, crate::theme::Appearance::Light);
+        let mut n = 0u32;
+        let mut frame = |ctx: &egui::Context, events: Vec<egui::Event>, a: &mut WordApp| {
+            n += 1;
+            let input = egui::RawInput { time: Some(f64::from(n) / 60.0), predicted_dt: 1.0 / 60.0, events, ..Default::default() };
+            ctx.run_ui(input, |ui| text_pane(a, ui)).drop_without_applying_deltas();
+        };
+        let click = |ctx: &egui::Context, pos: egui::Pos2, a: &mut WordApp, frame: &mut dyn FnMut(&egui::Context, Vec<egui::Event>, &mut WordApp)| {
+            let button = |pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+            frame(ctx, vec![egui::Event::PointerMoved(pos), button(true)], a);
+            frame(ctx, vec![button(false)], a);
+            frame(ctx, vec![], a);
+        };
+        let colour =
+            |a: &WordApp| wordcraft_engine::cmd::smart_art::selected_smart_art(&a.session).and_then(|g| g.items.get(1).and_then(|i| i.color));
+        frame(&ctx, vec![], &mut a);
+        let button = ctx.read_response(color_button_id(1)).expect("item 1 has a colour button");
+        let popup = egui::Popup::default_response_id(&button);
+        click(&ctx, button.rect.center(), &mut a, &mut frame);
+        assert!(egui::Popup::is_id_open(&ctx, popup), "the button opens the colour grid");
+        let area = ctx.memory(|m| m.area_rect(popup)).expect("the grid is drawn");
+        // The first theme swatch: under the "Theme Colors" label at the popup's top left.
+        click(&ctx, area.min + vec2(14.0, 38.0), &mut a, &mut frame);
+        assert!(colour(&a).is_some(), "a swatch gives the item its own colour");
+        let button = ctx.read_response(color_button_id(1)).unwrap();
+        click(&ctx, button.rect.center(), &mut a, &mut frame);
+        let area = ctx.memory(|m| m.area_rect(popup)).expect("the grid is drawn again");
+        click(&ctx, pos2(area.min.x + 30.0, area.max.y - 14.0), &mut a, &mut frame);
+        assert_eq!(colour(&a), None, "Style Color clears it");
     }
 
     /// #2832: the separators between the picker's columns made the dialog as tall as the window.
