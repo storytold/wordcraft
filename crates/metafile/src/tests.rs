@@ -903,10 +903,18 @@ fn crop_window_keeps_a_sliver_and_stays_finite() {
     let top = tf * kurbo::Point::new(0.0, 517.71);
     let bottom = tf * kurbo::Point::new(0.0, 545.15);
     assert!(top.y.abs() < 1e-3 && (bottom.y - 27.44).abs() < 1e-3, "{top:?} {bottom:?}");
-    for c in [[f32::NAN, f32::INFINITY, -1.0, 2.0], [0.9; 4], [1.0, 1.0, 0.0, 0.0], [f32::MAX, f32::MIN, f32::NEG_INFINITY, 0.5]] {
+    for c in [[f32::NAN, f32::INFINITY, 0.0, 2.0], [0.9; 4], [1.0, 1.0, 0.0, 0.0], [f32::MAX, f32::MIN, f32::NEG_INFINITY, 0.5]] {
         let [x, y, w, h] = crate::crop_window(c);
         assert!([x, y, w, h].iter().all(|v| v.is_finite()) && w > 0.0 && h > 0.0 && x + w <= 1.0 + 1e-9 && y + h <= 1.0 + 1e-9, "{c:?}");
     }
+}
+
+/// A negative side pads the source (Word's compatibility mode): the window starts before the
+/// source and is wider than it, so the picture is not squeezed into the frame.
+#[test]
+fn crop_window_with_negative_sides_pads_the_source() {
+    let [x, y, w, h] = crate::crop_window([-0.25, -0.5, 0.0, 0.0]);
+    assert!((x + 0.25).abs() < 1e-6 && (y + 0.5).abs() < 1e-6 && (w - 1.25).abs() < 1e-6 && (h - 1.5).abs() < 1e-6, "{x} {y} {w} {h}");
 }
 
 /// The narrowest crop on the largest frame layout makes (4000 pt, far down a 22-inch page) still
