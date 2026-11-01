@@ -223,7 +223,10 @@ fn observe(dir: &Path) {
             // before saving. Compare every other native model field after a fresh process open.
             if ext == "json" {
                 let mut actual = s.doc.clone();
-                actual.core = document.core.clone();
+                actual.core.last_modified_by = document.core.last_modified_by.clone();
+                actual.core.created = document.core.created.clone();
+                actual.core.modified = document.core.modified.clone();
+                actual.core.revision = document.core.revision;
                 assert_eq!(actual, document);
             }
         }
@@ -257,7 +260,7 @@ fn sustained_crash_restart() {
     let limit: usize = std::env::var("WORDCRAFT_RECOVERY_SOAK_ITERATIONS").unwrap_or_else(|_| "32".into()).parse().unwrap();
     assert!((50..=3600).contains(&seconds) && (1..=100).contains(&limit));
     let root = PathBuf::from(std::env::var_os("WORDCRAFT_RECOVERY_SOAK_DIR").expect("set a fresh absolute output directory"));
-    assert!(root.is_absolute() && root.parent().unwrap().canonicalize().unwrap() == root.parent().unwrap());
+    assert!(root.is_absolute() && root.parent().unwrap().is_dir());
     fs::create_dir(&root).expect("output must be new; retained evidence is never overwritten");
     let started = Instant::now();
     let deadline = started + Duration::from_secs(seconds);
@@ -267,10 +270,18 @@ fn sustained_crash_restart() {
     while iterations.len() < limit && (iterations.is_empty() || deadline.saturating_duration_since(Instant::now()) >= CYCLE_BUDGET) {
         let dir = root.join(format!("cycle-{}-{}", iterations.len() + 1, new_id().unwrap()));
         fs::create_dir(&dir).unwrap();
+        let dir = dir.canonicalize().unwrap();
         let mut originals = Vec::new();
         for (name, text) in [("original-a.docx", "Original synthetic DOCX."), ("original-b.json", "Original synthetic native document.")] {
             let path = dir.join(name);
-            crate::io::save_path(&path, &Document::from_text(text)).unwrap();
+            let mut document = Document::from_text(text);
+            document.core.title = format!("Synthetic recovery {name}");
+            document.core.subject = "Crash and restart retention".into();
+            document.core.creator = "Synthetic author".into();
+            document.core.keywords = "recovery, soak".into();
+            document.core.description = "Original metadata must survive native save and reopen.".into();
+            document.core.category = "Reliability verification".into();
+            crate::io::save_path(&path, &document).unwrap();
             originals.push((path.clone(), fs::read(&path).unwrap(), sha256(&path)));
         }
         let cycle_start = Instant::now();

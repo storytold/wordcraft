@@ -105,7 +105,8 @@ after. No Microsoft Word operation is needed for this reliability test.
 
 The existing isolated recovery test family also has a sustained process replay. It is ignored
 by normal CI. On Linux, choose a **new absolute output directory**
-whose parent already exists, an explicit duration in seconds and an iteration limit:
+whose parent already exists (including a symlinked parent), an explicit duration in seconds
+and an iteration limit:
 
 ```sh
 WORDCRAFT_RECOVERY_SOAK_SECONDS=180 \
@@ -129,7 +130,10 @@ The replay stops at the iteration limit or when the remaining duration cannot ad
   the latest successful snapshot; the other must fall back to the previous valid generation.
   Compare the full restored models and save separate native JSON and DOCX copies.
 - Reopen those copies in another fresh process and verify the saved edits. Native comparison
-  excludes only the core metadata that a normal Save updates. Compare both original files'
+  excludes only the four core fields that a normal Save updates: last-modified author,
+  created/modified timestamps and revision. Title, subject, creator, keywords, description
+  and category have non-empty synthetic values and remain part of the comparison.
+  Compare both original files'
   exact bytes and SHA-256 before and after the cycle.
 
 The output retains profiles, originals, expected models, process logs, a copy of the newest
