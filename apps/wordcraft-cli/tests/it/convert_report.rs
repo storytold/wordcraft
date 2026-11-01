@@ -91,6 +91,26 @@ fn convert_report_names_an_unembeddable_font_as_requested_only() {
 }
 
 #[test]
+fn convert_report_counts_a_face_alias_of_an_embedded_font_as_embedded() {
+    // The bundled Source Sans 3, named by its PostScript name rather than its
+    // typographic family, which is how `embeddedFonts` lists it.
+    let alias = "SourceSans3-Regular";
+    let dir = tempfile::Builder::new().prefix("wc-cli-report-alias-").tempdir().unwrap();
+    let mut doc = Document::new();
+    doc.body =
+        vec![para_block(Paragraph::with_text("Set in a face named by its alias", CharProps { font: Some(alias.into()), ..Default::default() }))];
+    let input = dir.path().join("in.json");
+    std::fs::write(&input, serde_json::to_vec(&doc).unwrap()).unwrap();
+    let out = dir.path().join("out.pdf");
+    let run = convert(&input, &out, true);
+    assert_eq!(run.status.code(), Some(0), "{}", String::from_utf8_lossy(&run.stderr));
+    let report: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.path().join("out.pdf.report.json")).unwrap()).unwrap();
+    assert_eq!(report["requestedFonts"], serde_json::json!([alias]));
+    assert!(report["embeddedFonts"].as_array().unwrap().iter().any(|f| f == "Source Sans 3"), "{report}");
+    assert_eq!(report["warnings"], serde_json::json!([]), "{alias}");
+}
+
+#[test]
 fn convert_without_report_writes_no_sidecar() {
     let (dir, input) = doc_with_named_font("plain");
     let out = dir.path().join("plain.pdf");

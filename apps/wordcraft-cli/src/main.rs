@@ -245,7 +245,7 @@ fn write_report(s: &Session, source: &str, target: &str, report: &Value) -> Resu
     let embedded = report.get("embeddedFonts").and_then(Value::as_array);
     let warnings: Vec<Value> = requested
         .iter()
-        .filter(|font| !embedded.is_some_and(|names| names.iter().any(|name| name.as_str().is_some_and(|name| name.eq_ignore_ascii_case(font)))))
+        .filter(|font| !embedded.is_some_and(|names| font_is_embedded(font, names)))
         .map(|font| json!({"code": "requestedFontNotEmbedded", "font": font}))
         .collect();
     let mut value = report.clone();
@@ -263,6 +263,25 @@ fn write_report(s: &Session, source: &str, target: &str, report: &Value) -> Resu
     wordcraft_engine::io::write_file(&sidecar, text.as_bytes()).map_err(|e| format!("could not write report; the PDF remains at {target}: {e}"))?;
     eprintln!("wrote {sidecar}");
     Ok(())
+}
+
+/// Did the PDF embed the font a run names? The report lists embedded faces by
+/// typographic family, but a run may name a face by an alias the font database
+/// also answers to: its legacy family ("Source Sans 3 Semibold"), full or
+/// PostScript name ("SourceSans3-Regular"), or a localized family (宋体 for
+/// SimSun). Such a name counts as embedded when it resolves to a face that
+/// answers to it and whose family was embedded. A name no face answers to
+/// resolves to the fallback face, which then doesn't count as the requested font.
+fn font_is_embedded(font: &str, embedded: &[Value]) -> bool {
+    let is_embedded = |family: &str| embedded.iter().any(|name| name.as_str().is_some_and(|name| name.eq_ignore_ascii_case(family)));
+    if is_embedded(font) {
+        return true;
+    }
+    let db = wordcraft_fonts::FontDb::global();
+    let face = db.face(font, "Regular");
+    let answers = face.named(font)
+        || db.english_family(font).is_some_and(|en| en.eq_ignore_ascii_case(&face.family) || en.eq_ignore_ascii_case(&face.legacy_family));
+    answers && is_embedded(&face.family)
 }
 
 /// The font names the document's runs ask for, sorted: body paragraphs and table
