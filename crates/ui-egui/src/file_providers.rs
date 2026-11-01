@@ -3,7 +3,7 @@
 //! The UI owns serialization and document state; the host only transports immutable captures.
 //! A resource ID is an opaque provider identity, never a path or permission to run a command.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use serde::{Deserialize, Serialize};
@@ -26,6 +26,19 @@ pub struct Resource {
 pub struct Event {
     pub metadata: Value,
     pub bytes: Option<Vec<u8>>,
+}
+
+#[derive(Clone, Copy)]
+enum TerminalOwner {
+    Open,
+    Save,
+}
+
+#[derive(Clone)]
+struct Terminal {
+    request: String,
+    metadata: Value,
+    owner: TerminalOwner,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -78,6 +91,8 @@ struct State {
     resources: Vec<Resource>,
     commands: Vec<Command>,
     events: Vec<Event>,
+    // Owners stay in opening/working until delivery can be queued: at most 16 of each.
+    finished: VecDeque<Terminal>,
     documents: Value,
 }
 
@@ -89,6 +104,7 @@ impl State {
             || !self.opening.is_empty()
             || !self.working.is_empty()
             || !self.commands.is_empty()
+            || !self.finished.is_empty()
     }
 
     fn next(&mut self, kind: &str) -> Result<String, String> {
@@ -122,6 +138,23 @@ impl State {
                 Command::Result { capture, .. } => capture.doc == doc,
                 Command::Open { .. } => false,
             })
+    }
+
+    fn flush_finished(&mut self) {
+        while let Some(terminal) = self.finished.front().cloned() {
+            if self.event(terminal.metadata, None).is_err() {
+                break;
+            }
+            self.finished.pop_front();
+            match terminal.owner {
+                TerminalOwner::Open => {
+                    self.opening.remove(&terminal.request);
+                }
+                TerminalOwner::Save => {
+                    self.working.remove(&terminal.request);
+                }
+            }
+        }
     }
 }
 
@@ -367,25 +400,32 @@ impl Host {
 
     pub(crate) fn opened(&self, request: &str, capture: Option<Capture>, error: &str) {
         let mut s = self.state();
-        let Some(resource) = s.opening.remove(request) else { return };
-        if let Some(capture) = capture {
-            s.bindings.insert(capture.doc, Binding { resource: resource.clone(), name: capture.name.clone() });
-            let _ = s.event(
-                json!({"type":"opened", "requestId":request, "resourceId":resource,
-                "documentId":capture.doc.to_string(), "revision":capture.revision}),
-                None,
-            );
-        } else {
-            let error: String = error.chars().take(1024).collect();
-            let _ = s.event(json!({"type":"openFailed", "requestId":request, "resourceId":resource, "error":error}), None);
+        let Some(resource) = s.opening.get(request).cloned() else { return };
+        if s.finished.iter().any(|terminal| terminal.request == request) {
+            return;
         }
+        let metadata = if let Some(capture) = capture {
+            s.bindings.insert(capture.doc, Binding { resource: resource.clone(), name: capture.name.clone() });
+            json!({"type":"opened", "requestId":request, "resourceId":resource,
+                "documentId":capture.doc.to_string(), "revision":capture.revision})
+        } else {
+            json!({"type":"openFailed", "requestId":request, "resourceId":resource, "error":bounded_error(error)})
+        };
+        s.finished.push_back(Terminal { request: request.into(), metadata, owner: TerminalOwner::Open });
+        s.flush_finished();
     }
 
     pub(crate) fn failed(&self, request: &str, message: &str) {
         let mut s = self.state();
-        s.working.remove(request);
-        let message: String = message.chars().take(1024).collect();
-        let _ = s.event(json!({"type":"saveFailed", "requestId":request, "error":message}), None);
+        if !s.working.contains_key(request) || s.finished.iter().any(|terminal| terminal.request == request) {
+            return;
+        }
+        s.finished.push_back(Terminal {
+            request: request.into(),
+            metadata: json!({"type":"saveFailed", "requestId":request, "error":bounded_error(message)}),
+            owner: TerminalOwner::Save,
+        });
+        s.flush_finished();
     }
 
     pub(crate) fn take_commands(&self) -> Vec<Command> {
@@ -405,7 +445,10 @@ impl Host {
     }
 
     pub fn take_events(&self) -> Vec<Event> {
-        std::mem::take(&mut self.state().events)
+        let mut s = self.state();
+        let events = std::mem::take(&mut s.events);
+        s.flush_finished();
+        if events.is_empty() { std::mem::take(&mut s.events) } else { events }
     }
 
     pub(crate) fn publish_documents(&self, documents: Value, open_ids: &[u64]) {
@@ -445,6 +488,17 @@ impl Host {
         ui.separator();
         ui.weak("Recent on this device");
     }
+}
+
+fn bounded_error(message: &str) -> String {
+    let mut error = String::new();
+    for ch in message.chars().filter(|ch| !ch.is_control()) {
+        if error.len().saturating_add(ch.len_utf8()) > 1024 {
+            break;
+        }
+        error.push(ch);
+    }
+    error
 }
 
 fn valid_id(value: &str) -> bool {
