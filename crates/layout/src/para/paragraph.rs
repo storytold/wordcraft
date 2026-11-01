@@ -320,7 +320,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
                             (rr.size, rr.size_cs, rr.position) = (size, size, 0.0);
                             rr.vert_align = wordcraft_doc::props::VertAlign::Baseline;
                             let raise = if raise.is_finite() { raise.clamp(0.0, 1584.0) } else { rc.size };
-                            if let Some(r) = b.ruby(base, ruby, *align, raise, start, end, &rc, &Arc::new(rr)) {
+                            if let Some(r) = b.ruby(base, ruby, *align, raise, (start, end), (&rc, &Arc::new(rr))) {
                                 rubies.push(r);
                             }
                         }
@@ -419,19 +419,6 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     // Myanmar has no spaces between words: it wraps between syllables.
     if text.chars().any(|c| matches!(u32::from(c), 0x1000..=0x109F | 0xA9E0..=0xA9FF | 0xAA60..=0xAA7F)) {
         found.extend(wordcraft_doc::cluster::myanmar_breaks(&text));
-        found.sort_unstable();
-        found.dedup();
-    }
-    // Thai and Lao have no spaces between words: replace UAX #14's per-character SA breaks with
-    // ICU4X dictionary word boundaries.
-    if text.chars().any(wordcraft_doc::cluster::is_thai_lao) {
-        found.retain(|&i| {
-            let prev = text.get(..i).and_then(|s| s.chars().next_back());
-            let next = text.get(i..).and_then(|s| s.chars().next());
-            !matches!((prev, next), (Some(p), Some(n))
-                if wordcraft_doc::cluster::is_thai_lao(p) && wordcraft_doc::cluster::is_thai_lao(n))
-        });
-        found.extend(wordcraft_doc::cluster::thai_lao_breaks(&text));
         found.sort_unstable();
         found.dedup();
     }

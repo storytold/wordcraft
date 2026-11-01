@@ -174,6 +174,11 @@ pub fn myanmar_breaks(text: &str) -> Vec<usize> {
     out
 }
 
+/// Whether `c` is a Thai or Lao character (U+0E00–U+0EFF).
+pub fn is_thai_lao(c: char) -> bool {
+    matches!(u32::from(c), 0x0E00..=0x0EFF)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
