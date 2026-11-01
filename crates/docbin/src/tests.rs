@@ -2080,6 +2080,144 @@ fn hostile_tab_operands_are_safe() {
     assert_eq!(iter.next().map(|p| p.op), Some(0x2403), "the next sprm is still read");
 }
 
+fn raw_style(istd_base: u16, name: &str, papx: Vec<u8>) -> crate::stsh::RawStyle {
+    crate::stsh::RawStyle { stk: 1, istd_base, name: name.into(), papx, chpx: Vec::new() }
+}
+
+/// A base style whose papx piles up tab sprms, under thousands of styles based on it (#3707):
+/// every style used to apply the whole chain again, and every added stop scanned all the others.
+/// A paragraph keeps at most 64 stops, and the base chain is applied once.
+#[test]
+fn many_tab_sprms_in_a_base_style_read_in_bounded_time() {
+    // 330 sprms adding 64 distinct stops each (21,120 before the cap), and 64 removals every
+    // other sprm, which leave `Clear` stops.
+    let mut papx = Vec::new();
+    for s in 0..330i16 {
+        let add: Vec<(i16, u8)> = (0..64).map(|k| (s * 64 + k, 0)).collect();
+        papx.extend(grpprl(&[(0xC60D, &tabs_papx(&[], &add))]));
+        if s % 2 == 0 {
+            let del: Vec<i16> = (0..64).map(|k| -(s * 64 + k) - 1).collect();
+            papx.extend(grpprl(&[(0xC60D, &tabs_papx(&del, &[]))]));
+        }
+    }
+    let mut raw = vec![raw_style(0x0FFF, "Normal", papx)];
+    raw.extend((1..4096).map(|i| raw_style(0, &format!("Style {i}"), grpprl(&[(0xC60D, &tabs_papx(&[], &[(30_000, 0)]))]))));
+    let started = std::time::Instant::now();
+    let sheet = crate::fmt::stylesheet(&raw, &["Calibri".to_string()]);
+    assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
+    assert_eq!(sheet.styles.len(), 4096);
+    for s in &sheet.styles {
+        assert!(s.para.tabs.as_ref().is_some_and(|t| !t.is_empty() && t.len() <= 64), "{}", s.name);
+    }
+}
+
+/// Styles read from their parent's resolved properties inherit as they did when each applied its
+/// whole chain: stops added and removed down a chain, and a cycle in a corrupt file.
+#[test]
+fn style_tab_stops_inherit_down_the_chain() {
+    use wordcraft_doc::props::TabAlign;
+    let tabs = |add: &[(i16, u8)], del: &[i16]| grpprl(&[(0xC60D, &tabs_papx(del, add))]);
+    let raw = vec![
+        raw_style(0x0FFF, "Normal", tabs(&[(720, 0)], &[])),
+        raw_style(0, "Mid", tabs(&[(1440, 2)], &[])),
+        raw_style(1, "Child", tabs(&[], &[720])),
+        // A and B name each other as their base.
+        raw_style(4, "A", tabs(&[(2880, 0)], &[])),
+        raw_style(3, "B", tabs(&[(4320, 0)], &[])),
+    ];
+    let sheet = crate::fmt::stylesheet(&raw, &["Calibri".to_string()]);
+    let stops = |name: &str| {
+        let s = sheet.styles.iter().find(|s| s.name == name).expect(name);
+        s.para.tabs.iter().flatten().map(|t| (t.pos, t.align)).collect::<Vec<_>>()
+    };
+    assert_eq!(stops("Normal"), [(36.0, TabAlign::Left)]);
+    assert_eq!(stops("Mid"), [(36.0, TabAlign::Left), (72.0, TabAlign::Right)]);
+    assert_eq!(stops("Child"), [(36.0, TabAlign::Clear), (72.0, TabAlign::Right)]);
+    assert_eq!(stops("A"), [(144.0, TabAlign::Left), (216.0, TabAlign::Left)]);
+    assert_eq!(stops("B"), [(144.0, TabAlign::Left), (216.0, TabAlign::Left)]);
+}
+
+/// A paragraph's own grpprl with 10,000 tab sprms, applied as the reader applies a papx (#3707):
+/// the paragraph keeps its first 64 stops and later adds are dropped, in bounded time.
+#[test]
+fn ten_thousand_tab_sprms_in_a_paragraph_keep_64_stops() {
+    let mut papx = Vec::new();
+    for s in 0..10_000i16 {
+        papx.extend(grpprl(&[(0xC60D, &tabs_papx(&[], &[(s * 3, 0)]))]));
+    }
+    let started = std::time::Instant::now();
+    let mut para = wordcraft_doc::props::ParaProps::default();
+    let mut read = 0;
+    for prl in crate::sprm::iter(&papx) {
+        crate::fmt::apply_para(&mut para, &prl);
+        read += 1;
+    }
+    assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
+    assert_eq!(read, 10_000);
+    let stops: Vec<f32> = para.tabs.iter().flatten().map(|t| t.pos).collect();
+    assert_eq!(stops, (0..64).map(|s| s as f32 * 3.0 / 20.0).collect::<Vec<_>>(), "the first 64 stops");
+}
+
+/// At 64 stops, a removal that hits a stop keeps its `Clear` stop even after an unmatched
+/// removal, and a position removed twice leaves one `Clear` stop.
+#[test]
+fn tab_removals_at_the_cap_keep_their_clear_stops() {
+    let full: Vec<(i16, u8)> = (0..64).map(|k| (k * 100, 0)).collect();
+    let mut para = wordcraft_doc::props::ParaProps::default();
+    for papx in [grpprl(&[(0xC60D, &tabs_papx(&[], &full))]), grpprl(&[(0xC60D, &tabs_papx(&[-2000, 500, 500], &[]))])] {
+        for prl in crate::sprm::iter(&papx) {
+            crate::fmt::apply_para(&mut para, &prl);
+        }
+    }
+    let tabs = para.tabs.unwrap_or_default();
+    assert_eq!(tabs.len(), 64);
+    let clear: Vec<f32> = tabs.iter().filter(|t| t.align == wordcraft_doc::props::TabAlign::Clear).map(|t| t.pos).collect();
+    assert_eq!(clear, [25.0], "the removed stop is hidden, the unmatched removal is dropped");
+}
+
+/// Removals a twip apart are not merged: only the one at 75 twips is within 25 twips of the
+/// stop at 100, and it still removes it after a removal at 74.
+#[test]
+fn tab_removals_a_twip_apart_each_apply() {
+    use wordcraft_doc::props::TabAlign;
+    let mut para = wordcraft_doc::props::ParaProps::default();
+    for papx in [grpprl(&[(0xC60D, &tabs_papx(&[], &[(0, 0), (100, 0)]))]), grpprl(&[(0xC60D, &tabs_papx(&[74, 75], &[]))])] {
+        for prl in crate::sprm::iter(&papx) {
+            crate::fmt::apply_para(&mut para, &prl);
+        }
+    }
+    let stops: Vec<(f32, TabAlign)> = para.tabs.iter().flatten().map(|t| (t.pos, t.align)).collect();
+    assert_eq!(stops, [(0.0, TabAlign::Left), (3.7, TabAlign::Clear), (3.75, TabAlign::Clear)]);
+}
+
+/// The cycle guard of the base chain: a style based on itself, three styles based on each other,
+/// and a chain deeper than `MAX_STYLE_DEPTH` (16) all resolve, each style applied once.
+#[test]
+fn style_base_cycles_and_deep_chains_resolve() {
+    let stop = |twips: i16| grpprl(&[(0xC60D, &tabs_papx(&[], &[(twips, 0)]))]);
+    // Deep 0 to Deep 39: each based on the one before, adding a stop at (i + 1) × 20 twips.
+    let mut raw: Vec<_> =
+        (0..40u16).map(|i| raw_style(if i == 0 { 0x0FFF } else { i - 1 }, &format!("Deep {i}"), stop(20 * (i as i16 + 1)))).collect();
+    raw.push(raw_style(40, "Self", stop(10_000)));
+    raw.push(raw_style(43, "X", stop(11_000)));
+    raw.push(raw_style(41, "Y", stop(12_000)));
+    raw.push(raw_style(42, "Z", stop(13_000)));
+    let started = std::time::Instant::now();
+    let sheet = crate::fmt::stylesheet(&raw, &["Calibri".to_string()]);
+    assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
+    let stops = |name: &str| {
+        let s = sheet.styles.iter().find(|s| s.name == name).expect(name);
+        s.para.tabs.iter().flatten().map(|t| t.pos).collect::<Vec<_>>()
+    };
+    assert_eq!(stops("Self"), [500.0], "a style based on itself is a root");
+    for name in ["X", "Y", "Z"] {
+        assert_eq!(stops(name), [550.0, 600.0, 650.0], "{name}: each style of the cycle once");
+    }
+    assert_eq!(stops("Deep 10"), (1..=11).map(|i| i as f32).collect::<Vec<_>>());
+    // Deep 39's chain is cut at 16 styles: Deep 24 to Deep 39.
+    assert_eq!(stops("Deep 39"), (25..=40).map(|i| i as f32).collect::<Vec<_>>());
+}
+
 /// A section mark (0x0C) at a section's end is the section's last paragraph mark, not a page
 /// break inside a paragraph: the section's properties (here continuous) land on that paragraph.
 /// Before, every section of such a file was lost and each section mark became a page break.
