@@ -32,13 +32,27 @@ pub(crate) fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, blo
             return;
         }
         // Its (empty) line stays where the text ended, even at the bottom of a full column.
-        let (y, prev, bottom, content_bottom, at) = (pb.y, pb.prev.clone(), pb.bottom, pb.content_bottom, (pb.pages.len(), pb.col));
+        let (y, mut prev, bottom, content_bottom, at) = (pb.y, pb.prev.clone(), pb.bottom, pb.content_bottom, (pb.pages.len(), pb.col));
+        // It takes no room, but it still takes the paragraph above's space after away when it
+        // would before any other paragraph: a list item ends the automatic space after the item
+        // above, a same-style one the contextual spacing (measured in Word, #3976). An empty
+        // paragraph with a hidden mark is laid out as nothing at all (#3982).
+        let mut y_left = y;
+        if p.section.is_some()
+            && (ctx.opts.show_hidden || !ctx.doc.styles.resolve_char(p.props.style.as_deref(), &p.mark).hidden)
+            && !pb.at_top()
+            && let Some(above) = prev.as_mut()
+            && drops_space_after(above, &ctx.doc.styles.resolve_para(&p.props), ctx.has_label(p))
+        {
+            y_left -= above.2;
+            above.2 = 0.0;
+        }
         let drawn = pb.page().map_or(0, |page| page.items.len());
         pb.bottom = f32::MAX / 4.0;
         place_para_in_flow(ctx, pb, p, block, body_top);
         pb.bottom = bottom;
         if (pb.pages.len(), pb.col) == at {
-            (pb.y, pb.prev, pb.content_bottom) = (y, prev, content_bottom);
+            (pb.y, pb.prev, pb.content_bottom) = (y_left, prev, content_bottom);
             if let Some(page) = pb.page() {
                 strip_mark(page, drawn, true);
             }
@@ -269,7 +283,8 @@ impl<'a> Flow<'a> {
     fn merge_gap(&self, ctx: &Ctx, pb: &mut PageBuilder, mut before: f32, prev: (String, bool, f32, bool, bool)) -> f32 {
         let (style, ctxl, mut after, after_auto, listed) = prev;
         let rp = &self.pl.rp;
-        // Contextual spacing suppresses each paragraph's own side of the gap.
+        // Contextual spacing suppresses each paragraph's own side of the gap. (`drops_space_after`
+        // makes the same tests for the previous paragraph's side.)
         if style == rp.style {
             if ctxl {
                 pb.y -= after;
@@ -845,6 +860,15 @@ fn mirror_shift(rp: &wordcraft_doc::resolve::ResolvedPara, number: u32, web: boo
     }
     let (left, right) = rp.visual_indents();
     right - left
+}
+
+/// Whether a paragraph (resolved as `rp`, `labelled` when it gets a list label) takes away the
+/// space after of the paragraph above it (`above`, as in `PageBuilder::prev`): same-style
+/// contextual spacing the one above asks for, or automatic spacing between two list items. The
+/// tests `Flow::merge_gap` makes.
+fn drops_space_after(above: &(String, bool, f32, bool, bool), rp: &wordcraft_doc::resolve::ResolvedPara, labelled: bool) -> bool {
+    let (style, ctxl, _, after_auto, listed) = above;
+    (*style == rp.style && *ctxl) || (*listed && labelled && *after_auto)
 }
 
 /// The space after body paragraph `block` (resolved as `rp`) that is really left below it: none
