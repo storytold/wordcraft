@@ -566,6 +566,8 @@ pub struct RestrictPane {
     /// Its style list shown, and the styles allowed (by id); `None` until first shown (all).
     pub show_styles: bool,
     pub allowed: Option<Vec<String>>,
+    /// Ordered source names are window-owned; labels are translated live when drawn.
+    pub(crate) styles: RestrictStyleCache,
     /// 2. Editing restrictions on, and which (index into [`EDIT_MODES`]).
     pub editing: bool,
     pub mode: usize,
@@ -580,8 +582,23 @@ pub struct RestrictPane {
 pub const EDIT_MODES: [(&str, &str); 4] =
     [("readOnly", "No changes (read only)"), ("trackedChanges", "Tracked changes"), ("comments", "Comments"), ("forms", "Filling in forms")];
 
+type RestrictStyleRows = std::sync::Arc<Vec<(String, String)>>;
+
+/// Reuse the pane's ordered metadata while the document identity and revision are unchanged.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct RestrictStyleCache {
+    stamp: Option<(u64, u64)>,
+    rows: RestrictStyleRows,
+}
+
 /// The styles the formatting restriction lists: paragraph and character styles not hidden.
-fn listed_styles(app: &WordApp) -> Vec<(String, String)> {
+fn listed_styles(app: &WordApp, cache: &mut RestrictStyleCache) -> RestrictStyleRows {
+    let stamp = (app.session.document_id(), app.session.rev());
+    if cache.stamp == Some(stamp) {
+        return cache.rows.clone();
+    }
+    #[cfg(test)]
+    RESTRICT_LIST_BUILDS.with(|n| n.set(n.get() + 1));
     use wordcraft_doc::StyleKind;
     let mut v: Vec<(String, String)> = app
         .session
@@ -593,8 +610,18 @@ fn listed_styles(app: &WordApp) -> Vec<(String, String)> {
         .map(|s| (s.id.clone(), if s.name.is_empty() { s.id.clone() } else { s.name.clone() }))
         .collect();
     v.sort_by_key(|a| a.1.to_lowercase());
-    v
+    cache.rows = std::sync::Arc::new(v);
+    cache.stamp = Some(stamp);
+    cache.rows.clone()
 }
+
+#[cfg(test)]
+thread_local! {
+    static RESTRICT_LIST_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+mod restrict_cache_tests;
 
 pub fn restrict_pane(app: &mut WordApp, ui: &mut Ui) {
     let mut st = std::mem::take(&mut app.restrict);
@@ -612,7 +639,7 @@ fn setup_ui(app: &mut WordApp, ui: &mut Ui, st: &mut RestrictPane) {
     if st.formatting && ui.small_button(tl!("Settings…")).clicked() {
         st.show_styles = !st.show_styles;
     }
-    let styles = listed_styles(app);
+    let styles = listed_styles(app, &mut st.styles);
     if st.allowed.is_none() {
         // Start from the document's own locked styles.
         let doc = &app.session.doc.styles;
@@ -629,14 +656,18 @@ fn setup_ui(app: &mut WordApp, ui: &mut Ui, st: &mut RestrictPane) {
                 allowed.clear();
             }
         });
+        // Keep the ordered selection for commands, but query membership once per row.
+        let mut allowed_ids: std::collections::HashSet<String> = allowed.iter().cloned().collect();
         egui::ScrollArea::vertical().id_salt("restrict_styles").max_height(160.0).show(ui, |ui| {
-            for (id, name) in &styles {
-                let mut on = allowed.contains(id);
+            for (id, name) in styles.iter() {
+                let mut on = allowed_ids.contains(id);
                 if ui.checkbox(&mut on, tl!(name.as_str())).changed() {
                     if on {
                         allowed.push(id.clone());
+                        allowed_ids.insert(id.clone());
                     } else {
                         allowed.retain(|x| x != id);
+                        allowed_ids.remove(id);
                     }
                 }
             }
@@ -691,9 +722,9 @@ fn setup_ui(app: &mut WordApp, ui: &mut Ui, st: &mut RestrictPane) {
                     let mut p =
                         json!({"mode": if st.editing { mode } else { "none" }, "formatting": st.formatting, "password": st.password.as_str()});
                     if st.formatting {
-                        let allowed = st.allowed.clone().unwrap_or_default();
+                        let allowed: std::collections::HashSet<&str> = st.allowed.iter().flatten().map(String::as_str).collect();
                         p["lockedStyles"] =
-                            json!(styles.iter().filter(|(id, _)| !allowed.contains(id)).map(|(id, _)| id.clone()).collect::<Vec<_>>());
+                            json!(styles.iter().filter(|(id, _)| !allowed.contains(id.as_str())).map(|(id, _)| id.clone()).collect::<Vec<_>>());
                     }
                     match app.run("review.restrict", p) {
                         Ok(_) => {
