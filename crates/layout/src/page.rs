@@ -283,6 +283,10 @@ impl PageBuilder<'_> {
     pub(crate) fn new_page(&mut self, first_block: usize, body_top: f32) {
         self.apply_valign();
         self.flush_notes();
+        // The page before is done: it gives back the room its items grew for.
+        if let Some(p) = self.pages.last_mut() {
+            p.items.shrink_to_fit();
+        }
         self.beneath = self.sect_beneath;
         self.excl.clear();
         // Floats placed above their anchors further down this page are known from its start.
