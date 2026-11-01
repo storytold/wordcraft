@@ -71,28 +71,14 @@ pub(super) fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[
         let left = px(rp.indent_left);
         let right = px(w - rp.indent_right);
         let c = t.text_dim;
-        hp.add(egui::Shape::convex_polygon(
-            vec![pos2(first - 4.5, bar.min.y), pos2(first + 4.5, bar.min.y), pos2(first, bar.min.y + 5.0)],
-            t.ruler,
-            Stroke::new(1.0, c),
-        ));
-        hp.add(egui::Shape::convex_polygon(
-            vec![pos2(left - 4.5, bar.max.y - 3.0), pos2(left + 4.5, bar.max.y - 3.0), pos2(left, bar.max.y - 8.0)],
-            t.ruler,
-            Stroke::new(1.0, c),
-        ));
-        hp.rect(
-            Rect::from_min_max(pos2(left - 4.5, bar.max.y - 3.0), pos2(left + 4.5, bar.max.y + 1.0)),
-            0.0,
-            t.ruler,
-            Stroke::new(1.0, c),
-            egui::StrokeKind::Inside,
-        );
-        hp.add(egui::Shape::convex_polygon(
-            vec![pos2(right - 4.5, bar.max.y - 1.0), pos2(right + 4.5, bar.max.y - 1.0), pos2(right, bar.max.y - 6.0)],
-            t.ruler,
-            Stroke::new(1.0, c),
-        ));
+        let shapes = indent_shapes(first, left, right, bar);
+        // The stem and arm joining the markers: an L with a hanging indent, a J with a first-line
+        // indent, and a T when they line up, as in Word (#4284).
+        hp.add(egui::Shape::line(shapes.join.to_vec(), Stroke::new(1.0, c)));
+        hp.add(egui::Shape::convex_polygon(shapes.first.to_vec(), t.ruler, Stroke::new(1.0, c)));
+        hp.add(egui::Shape::convex_polygon(shapes.hanging.to_vec(), t.ruler, Stroke::new(1.0, c)));
+        hp.rect(shapes.left_box, 0.0, t.ruler, Stroke::new(1.0, c), egui::StrokeKind::Inside);
+        hp.add(egui::Shape::convex_polygon(shapes.right.to_vec(), t.ruler, Stroke::new(1.0, c)));
         // Tab stops: drawn and registered before the indent markers' drags, which win where they overlap.
         let step = unit / div as f32 / 2.0;
         let ruler = crate::ruler_tabs::Ruler { bar, text, width: w, step, rtl, x_of: &px, dist_at: &dist_at };
@@ -101,41 +87,52 @@ pub(super) fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[
         // spans the text area, so a border marker keeps its drag) and before the indent markers,
         // which keep the pointer where they overlap.
         crate::table_ruler::columns(app, ui, layout, pi, bar, x0, scale);
+        // Dragging a marker moves it freely with Alt or both mouse buttons, and snaps otherwise
+        // (4.5 pt, a 16th of an inch); the whole gesture is one undo step (#4284).
+        let free = crate::ruler_tabs::fine(ui);
+        let units = app.session.units();
+        let decimal = crate::options::decimal();
+        let tip = |label: &str, at: f32| format!("{} {}", tl!(label), units.format_with(at, decimal));
         // Dragging the left-indent marker.
         let id = ui.scope_id().with("ruler_left");
         let mr = Rect::from_center_size(pos2(left, bar.max.y - 3.0), vec2(12.0, 12.0));
         let r = ui.interact(mr, id, Sense::click_and_drag());
+        let r = if r.dragged() { r } else { r.on_hover_text(tip("Left Indent", rp.indent_left)) };
         if r.dragged()
             && let Some(pp) = r.interact_pointer_pos()
         {
-            let pt = dist_at(pp.x).clamp(-col_x, (w - 18.0).max(-col_x));
-            let snapped = (pt / 4.5).round() * 4.5;
+            let v = snapped_indent(dist_at(pp.x), free).clamp(-col_x, (w - 18.0).max(-col_x));
             if !r.drag_started() {
                 app.session.join_next_undo();
             }
-            let _ = app.run("para.indents", json!({"left": snapped}));
+            let _ = app.run("para.indents", json!({"left": v}));
+            indent_readout(ui, app.canvas.canvas_rect, px(v), &tip("Left Indent", v), &t);
         }
         let fr = Rect::from_center_size(pos2(first, bar.min.y + 3.0), vec2(12.0, 10.0));
         let r = ui.interact(fr, ui.scope_id().with("ruler_first"), Sense::click_and_drag());
+        let r = if r.dragged() { r } else { r.on_hover_text(tip("First Line Indent", rp.indent_left + rp.indent_first)) };
         if r.dragged()
             && let Some(pp) = r.interact_pointer_pos()
         {
-            let pt = dist_at(pp.x) - rp.indent_left;
+            let v = snapped_indent(dist_at(pp.x), free) - rp.indent_left;
             if !r.drag_started() {
                 app.session.join_next_undo();
             }
-            let _ = app.run("para.indents", json!({"firstLine": (pt / 4.5).round() * 4.5}));
+            let _ = app.run("para.indents", json!({"firstLine": v}));
+            indent_readout(ui, app.canvas.canvas_rect, px(rp.indent_left + v), &tip("First Line Indent", rp.indent_left + v), &t);
         }
         let rr = Rect::from_center_size(pos2(right, bar.max.y - 3.0), vec2(12.0, 12.0));
         let r = ui.interact(rr, ui.scope_id().with("ruler_right"), Sense::click_and_drag());
+        let r = if r.dragged() { r } else { r.on_hover_text(tip("Right Indent", rp.indent_right)) };
         if r.dragged()
             && let Some(pp) = r.interact_pointer_pos()
         {
-            let pt = w - dist_at(pp.x);
+            let v = snapped_indent(w - dist_at(pp.x), free);
             if !r.drag_started() {
                 app.session.join_next_undo();
             }
-            let _ = app.run("para.indents", json!({"right": (pt / 4.5).round() * 4.5}));
+            let _ = app.run("para.indents", json!({"right": v}));
+            indent_readout(ui, app.canvas.canvas_rect, px(w - v), &tip("Right Indent", v), &t);
         }
     }
     // Vertical.
@@ -158,14 +155,64 @@ pub(super) fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[
     crate::table_ruler::rows(app, ui, layout, pi, vbar, y0, scale);
 }
 
+/// The size of the ruler's indent markers (screen points): half their width, the head's height,
+/// and how far the left-indent box hangs below the bar.
+const INDENT_HALF_W: f32 = 4.5;
+pub(super) const INDENT_HEAD_H: f32 = 5.0;
+pub(super) const INDENT_BOX_DROP: f32 = 1.0;
+/// The indent markers' snap step (points): a 16th of an inch, as before (#4284).
+pub(super) const INDENT_STEP: f32 = 4.5;
+
+/// An indent marker drag's value (points): `pt` as it is for a free drag, else snapped to
+/// `INDENT_STEP` (4.5 pt, a 16th of an inch). Junk lands at zero.
+pub(super) fn snapped_indent(pt: f32, free: bool) -> f32 {
+    let pt = if pt.is_finite() { pt } else { 0.0 };
+    if free { pt } else { (pt / INDENT_STEP).round() * INDENT_STEP }
+}
+
+/// Where the three indent markers are drawn on the horizontal ruler `bar`, each centred on its
+/// screen x: the first-line triangle on top, the hanging triangle on its left-indent box at the
+/// bottom, and the right indent's triangle. `join` is the stem and arm that turn the group into
+/// Word's L (a hanging indent), J (a first-line indent) or T (aligned) silhouette (#4284).
+pub(super) struct IndentShapes {
+    pub(super) first: [Pos2; 3],
+    pub(super) hanging: [Pos2; 3],
+    pub(super) left_box: Rect,
+    pub(super) right: [Pos2; 3],
+    pub(super) join: [Pos2; 3],
+}
+
+pub(super) fn indent_shapes(first: f32, left: f32, right: f32, bar: Rect) -> IndentShapes {
+    let shoulder = bar.max.y - 3.0;
+    IndentShapes {
+        first: [pos2(first - INDENT_HALF_W, bar.min.y), pos2(first + INDENT_HALF_W, bar.min.y), pos2(first, bar.min.y + INDENT_HEAD_H)],
+        hanging: [pos2(left - INDENT_HALF_W, shoulder), pos2(left + INDENT_HALF_W, shoulder), pos2(left, shoulder - INDENT_HEAD_H)],
+        left_box: Rect::from_min_max(pos2(left - INDENT_HALF_W, shoulder), pos2(left + INDENT_HALF_W, bar.max.y + INDENT_BOX_DROP)),
+        right: [pos2(right - INDENT_HALF_W, bar.max.y - 1.0), pos2(right + INDENT_HALF_W, bar.max.y - 1.0), pos2(right, bar.max.y - 6.0)],
+        join: [pos2(first, bar.min.y + INDENT_HEAD_H), pos2(first, shoulder), pos2(left, shoulder)],
+    }
+}
+
 /// The indent markers' outlines on the horizontal ruler `bar`, each centred on its screen x:
-/// first line (a flag at the top), left and right (at the bottom).
-fn indent_marker_rects(first: f32, left: f32, right: f32, bar: Rect) -> [Rect; 3] {
-    [
-        Rect::from_min_max(pos2(first - 4.5, bar.min.y), pos2(first + 4.5, bar.min.y + 5.0)),
-        Rect::from_min_max(pos2(left - 4.5, bar.max.y - 8.0), pos2(left + 4.5, bar.max.y + 1.0)),
-        Rect::from_min_max(pos2(right - 4.5, bar.max.y - 6.0), pos2(right + 4.5, bar.max.y - 1.0)),
-    ]
+/// first line (a flag at the top), left and right (at the bottom). Each rect is the bounds of the
+/// shape [`indent_shapes`] draws, so the numbers that keep clear of them match what is seen.
+pub(super) fn indent_marker_rects(first: f32, left: f32, right: f32, bar: Rect) -> [Rect; 3] {
+    let s = indent_shapes(first, left, right, bar);
+    let bounds = |points: &[Pos2]| points.iter().fold(Rect::NOTHING, |r, p| r.union(Rect::from_center_size(*p, egui::Vec2::ZERO)));
+    [bounds(&s.first), bounds(&s.hanging).union(s.left_box).union(bounds(&s.join)), bounds(&s.right)]
+}
+
+/// Show an indent drag's position beside its marker, as Word does: a small tab under the ruler
+/// and a dashed guide down the text area, both gone on release (#4284).
+fn indent_readout(ui: &Ui, area: Option<Rect>, x: f32, text: &str, t: &Tokens) {
+    let Some(area) = area else { return };
+    let p = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, ui.scope_id().with("ruler_indent_readout"))).with_clip_rect(area);
+    p.extend(egui::Shape::dashed_line(&[pos2(x, area.min.y), pos2(x, area.max.y)], Stroke::new(1.0, t.text_dim), 3.0, 3.0));
+    let galley = p.layout_no_wrap(text.to_owned(), regular(10.5), t.text);
+    let half = galley.size().x / 2.0;
+    let at = pos2((x - half).clamp(area.min.x + 2.0, (area.max.x - galley.size().x - 2.0).max(area.min.x + 2.0)), area.min.y + 3.0);
+    p.rect(Rect::from_min_size(at, galley.size()).expand(2.0), 2.0, t.menu, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+    p.galley(at, galley, t.text);
 }
 
 /// One mark drawn along a ruler.
