@@ -17,10 +17,12 @@ fn first_para(l: &DocLayout) -> Arc<ParaLayout> {
     l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para.clone()) } else { None }).unwrap()
 }
 
-/// Reconstruct the paragraph's visible text cluster ranges (Markers skipped).
+/// Reconstruct visible text from the clusters placed on each line (Markers skipped), so a cluster
+/// left out of every line is noticed.
 fn cluster_slices<'a>(para_text: &'a str, pl: &ParaLayout) -> Vec<&'a str> {
-    pl.clusters
+    pl.lines
         .iter()
+        .flat_map(|line| pl.clusters.get(line.c0..line.c1).into_iter().flatten())
         .filter(|c| c.kind != ClKind::Marker && c.start < c.end && c.end <= para_text.len())
         .map(|c| &para_text[c.start..c.end])
         .collect()
