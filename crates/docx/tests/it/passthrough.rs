@@ -314,6 +314,39 @@ fn an_english_default_style_keeps_its_flag_beside_a_localized_one() {
     assert_eq!(s.matches(r#"w:default="1""#).count(), 4, "{s}");
 }
 
+/// The paragraph styles a `styles.xml` flags `w:default`, in file order: Word takes the last.
+fn flagged_paragraph_styles(s: &str) -> Vec<&str> {
+    s.split("<w:style ")
+        .skip(1)
+        .filter(|st| {
+            let open = &st[..st.find('>').unwrap_or(st.len())];
+            open.contains(r#"w:type="paragraph""#) && open.contains(r#"w:default="1""#)
+        })
+        .filter_map(|st| st.split(r#"w:styleId=""#).nth(1)?.split('"').next())
+        .collect()
+}
+
+/// A localized Normal and an English `Normal` both flagged as the default paragraph style: after
+/// a save `Normal`, the later one, is still the last flagged, so Word keeps it as the default.
+#[test]
+fn a_localized_and_an_english_normal_keep_the_same_default_through_a_save() {
+    let styles = r#"<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="paragraph" w:default="1" w:styleId="Normalny"><w:name w:val="Normal"/><w:rPr><w:sz w:val="48"/></w:rPr></w:style><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:rPr><w:sz w:val="24"/></w:rPr></w:style></w:styles>"#;
+    let bytes =
+        package("<w:p><w:r><w:t>x</w:t></w:r></w:p>", &[("rId1", &format!("{REL}/styles"), "styles.xml")], &[], &[("word/styles.xml", styles)]);
+    let s = text(&save(&wordcraft_docx::read(&bytes).unwrap()), "word/styles.xml");
+    assert_eq!(flagged_paragraph_styles(&s), ["Normalny", "Normal"], "{s}");
+}
+
+/// A file whose only default paragraph style is the English `Normal` keeps it flagged, alone.
+#[test]
+fn an_english_normal_alone_stays_the_only_default_through_a_save() {
+    let styles = r#"<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style><w:style w:type="paragraph" w:styleId="Normalny"><w:name w:val="Normalny"/><w:basedOn w:val="Normal"/></w:style></w:styles>"#;
+    let bytes =
+        package("<w:p><w:r><w:t>x</w:t></w:r></w:p>", &[("rId1", &format!("{REL}/styles"), "styles.xml")], &[], &[("word/styles.xml", styles)]);
+    let s = text(&save(&wordcraft_docx::read(&bytes).unwrap()), "word/styles.xml");
+    assert_eq!(flagged_paragraph_styles(&s), ["Normal"], "{s}");
+}
+
 #[test]
 fn list_identities_survive_and_a_copied_definition_gets_none() {
     let numbering = r#"<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:abstractNum w:abstractNumId="0"><w:nsid w:val="1F2E3D4C"/><w:multiLevelType w:val="hybridMultilevel"/><w:tmpl w:val="0415000F"/><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/></w:lvl></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num></w:numbering>"#;
