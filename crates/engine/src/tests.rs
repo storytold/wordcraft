@@ -11599,3 +11599,37 @@ fn export_png_rejects_a_page_number_that_does_not_fit() {
     assert!(!target.exists(), "no file is written for an invalid page");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn screen_paper_color_is_a_persistent_preference_not_document_formatting() {
+    use crate::cmd::view::PaperColor;
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Screen paper test", "raw": true}));
+    let before = serde_json::to_value(&s.doc).unwrap();
+    let docx_before = wordcraft_docx::write(&s.doc).unwrap();
+    s.dirty = false;
+    let dirty = s.dirty;
+    s.view.dark_mode = true;
+    for (value, expected) in
+        [("green", PaperColor::Green), ("cream", PaperColor::Cream), ("gray", PaperColor::Gray), ("document", PaperColor::Document)]
+    {
+        run(&mut s, "view.paperColor", json!({"value": value}));
+        assert_eq!(s.prefs.paper_color, expected);
+        assert_eq!(serde_json::to_value(&s.doc).unwrap(), before);
+        assert_eq!(s.dirty, dirty);
+        assert_eq!(wordcraft_docx::write(&s.doc).unwrap(), docx_before);
+        assert!(!s.view.dark_mode, "choosing a tint turns off dark paper");
+        let saved = serde_json::to_value(&s.prefs).unwrap();
+        let restored: crate::Prefs = serde_json::from_value(saved).unwrap();
+        assert_eq!(restored.paper_color, expected);
+    }
+    for v in [json!({}), json!({"value": "red"}), json!({"value": 42})] {
+        assert!(s.run("view.paperColor", &v).is_err());
+        assert_eq!(s.prefs.paper_color, PaperColor::Document);
+    }
+    let legacy: crate::Prefs = serde_json::from_value(json!({})).unwrap();
+    assert_eq!(legacy.paper_color, PaperColor::Document);
+    let future: crate::Prefs = serde_json::from_value(json!({"paperColor":"future", "countNotes":false})).unwrap();
+    assert_eq!(future.paper_color, PaperColor::Document);
+    assert!(!future.count_notes);
+}

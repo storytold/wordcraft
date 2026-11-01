@@ -212,6 +212,21 @@ fn general(app: &mut WordApp, ui: &mut Ui) {
     section(ui, "Interface");
     theme_picker(app, ui);
     interface_size_picker(app, ui);
+    ui.horizontal(|ui| {
+        use wordcraft_engine::cmd::view::PaperColor;
+        let label = ui.label(tl!("Screen paper color:"));
+        let selected = app.session.prefs.paper_color;
+        let combo = craft_ui::ComboBox::from_id_salt("screen_paper_color").selected_text(tl!(selected.label())).width(220.0).show_ui(ui, |ui| {
+            for color in PaperColor::ALL {
+                if ui.selectable_label(selected == color, tl!(color.label())).clicked() {
+                    let _ = app.run("view.paperColor", json!({"value": color}));
+                }
+            }
+        });
+        combo.response.labelled_by(label.id).on_hover_text(tl!(
+            "Screen only. Document backgrounds, printing and exports keep their colours. Dark page and explicit Read Mode colours take precedence."
+        ));
+    });
     ui.checkbox(&mut app.ui.mini_toolbar, tl!("Show the mini toolbar when text is selected"));
     let mut dark_page = app.session.view.dark_mode;
     if ui
