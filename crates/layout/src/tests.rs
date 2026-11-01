@@ -12,6 +12,7 @@ mod grid;
 mod ligature;
 pub(crate) mod linear;
 mod nbsp;
+mod note_separator_spacing;
 mod numeral;
 mod pages;
 mod styleref;

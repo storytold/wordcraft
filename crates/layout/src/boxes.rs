@@ -13,6 +13,8 @@ use super::{
 /// Cell identity is independent of optional table-style formatting.
 pub(crate) enum BoxContext<'a> {
     Other,
+    /// A note separator reserves its content, but not its last paragraph's after-space.
+    FootnoteSeparator,
     Cell(Option<&'a para::CellText>),
 }
 
@@ -191,8 +193,9 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     // inline (restored for the story around this box when it's done).
     let outer_hide = std::mem::replace(&mut ctx.hide_deleted, ctx.opts.hides_deleted(story));
     let empty_cell = para::CellText::default();
+    let separator = matches!(&context, BoxContext::FootnoteSeparator);
     let (table, in_cell) = match context {
-        BoxContext::Other => (None, false),
+        BoxContext::Other | BoxContext::FootnoteSeparator => (None, false),
         BoxContext::Cell(table) => (Some(table.unwrap_or(&empty_cell)), true),
     };
     // Word 16.113.3: the override applies in modes 11/12/14, but not mode 15.
@@ -375,7 +378,10 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     }
     let floats_bottom = float_tables.iter().map(|r| r.bottom()).fold(float_objects_bottom, f32::max);
     ctx.hide_deleted = outer_hide;
-    BoxLayout { items, height: y.max(0.0), floats_bottom, last_top: last_top.max(0.0), table_areas, page_table_wraps }
+    // Word ignores space after the final paragraph of a separator story. Keep internal
+    // paragraph gaps, line height and border room; ordinary boxes retain their after-space.
+    let height = (y - if separator { prev_after } else { 0.0 }).max(0.0);
+    BoxLayout { items, height, floats_bottom, last_top: last_top.max(0.0), table_areas, page_table_wraps }
 }
 
 /// The width a text frame without one takes: its widest line, with the paragraph's indents.
