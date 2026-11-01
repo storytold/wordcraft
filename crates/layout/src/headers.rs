@@ -191,12 +191,14 @@ pub(crate) fn body_refers_to_pages(doc: &Document) -> bool {
     })
 }
 
-/// Where each bookmark in the body starts: the number and number format of the page it is placed
-/// on (with two of the same name, the first in the document).
+/// Where each bookmark in the body, or in a text box anchored there, starts: the number and
+/// number format of the page it is placed on (with two of the same name, the first in the
+/// document). A bookmark in a text box is on the page of the box's anchor (measured in Word for
+/// Windows).
 pub(crate) fn bookmark_pages(doc: &Document, pages: &[Page], sections: &[(usize, &SectionProps)]) -> fields::BookmarkPages {
     // Each paragraph's bookmarks: name, offset, and its line in the paragraph layout last looked
     // up (the pieces of a paragraph usually share one).
-    let mut wanted: HashMap<Path, Vec<(String, usize, Option<(usize, usize)>)>> = HashMap::new();
+    let mut wanted: Wanted = HashMap::new();
     let mut seen = HashSet::new();
     for path in doc.para_paths(StoryRef::Body) {
         let Some(p) = doc.para(StoryRef::Body, &path) else { continue };
@@ -208,6 +210,17 @@ pub(crate) fn bookmark_pages(doc: &Document, pages: &[Page], sections: &[(usize,
                 && seen.insert(name.as_str())
             {
                 wanted.entry(path.clone()).or_default().push((name.clone(), off, None));
+            }
+        }
+    }
+    if doc.parts.values().any(|part| part.kind == wordcraft_doc::PartKind::TextBox) {
+        let mut boxes = HashSet::new();
+        for path in doc.para_paths(StoryRef::Body) {
+            let Some(p) = doc.para(StoryRef::Body, &path) else { continue };
+            for (off, o) in p.object_offsets().into_iter().zip(&p.objects) {
+                for id in o.text_boxes() {
+                    box_bookmarks(doc, id, (&path, off), &mut boxes, &mut seen, &mut wanted);
+                }
             }
         }
     }
@@ -242,6 +255,32 @@ pub(crate) fn bookmark_pages(doc: &Document, pages: &[Page], sections: &[(usize,
         }
     }
     out
+}
+
+/// The bookmarks [`bookmark_pages`] looks for, by body paragraph: name, offset, and the line in
+/// the paragraph layout last looked up.
+type Wanted = HashMap<Path, Vec<(String, usize, Option<(usize, usize)>)>>;
+
+/// Add the bookmarks of text box `id`, and of the boxes inside it, to `wanted` at `anchor` (the
+/// body paragraph and offset of the outermost box). A box shown twice, or inside itself, counts once.
+fn box_bookmarks<'d>(doc: &'d Document, id: u32, anchor: (&Path, usize), boxes: &mut HashSet<u32>, seen: &mut HashSet<&'d str>, wanted: &mut Wanted) {
+    if !boxes.insert(id) {
+        return;
+    }
+    let story = StoryRef::Part(id);
+    for path in doc.para_paths(story) {
+        let Some(p) = doc.para(story, &path) else { continue };
+        for o in &p.objects {
+            if let InlineObject::BookmarkStart { name } = o
+                && seen.insert(name.as_str())
+            {
+                wanted.entry(anchor.0.clone()).or_default().push((name.clone(), anchor.1, None));
+            }
+            for inner in o.text_boxes() {
+                box_bookmarks(doc, inner, anchor, boxes, seen, wanted);
+            }
+        }
+    }
 }
 
 /// A key for caches standing for `marks` (0 for none).

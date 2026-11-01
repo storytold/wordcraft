@@ -441,6 +441,47 @@ fn a_page_reference_to_a_missing_bookmark_shows_words_error_in_output() {
         assert_eq!(shown(&layout(&d, &mut cache, &editor)), ["9", "9"], "the editor after output, other bookmark: {other_mark}");
     }
 }
+
+/// Printed or exported, a reference to a bookmark in a text box shows the page of the box's
+/// anchor (measured in Word for Windows), not "Error! Bookmark not defined.".
+#[test]
+fn a_page_reference_to_a_bookmark_in_a_text_box_shows_its_anchors_page_in_output() {
+    use wordcraft_doc::para::{Float, ShapeKind, Wrap};
+    let mut d = Document::from_text("See \nSecond");
+    d.para_mut(StoryRef::Body, &Path::top(1)).unwrap().props.page_break_before = Some(true);
+    let mut inner = Paragraph::with_text("Caption", Default::default());
+    inner.insert_object(0, InlineObject::BookmarkStart { name: "Boxed".into() }, &Default::default()).unwrap();
+    let story = d.add_part(PartKind::TextBox, vec![para_block(inner)]);
+    let shape = InlineObject::Shape {
+        kind: ShapeKind::TextBox,
+        w: 100.0,
+        h: 40.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 0.0,
+        float: Float { wrap: Wrap::Inline, ..Default::default() },
+        story: Some(story),
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    d.para_mut(StoryRef::Body, &Path::top(1)).unwrap().insert_object(0, shape, &Default::default()).unwrap();
+    let field =
+        InlineObject::Field { instr: "PAGEREF Boxed \\h".into(), result: "9".into(), locked: false, dirty: false, code: false, form: String::new() };
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    let n = p.len();
+    p.insert_object(n, field, &Default::default()).unwrap();
+    let output = layout(&d, &mut LayoutCache::new(), &LayoutOptions { output_page_refs: true, ..Default::default() });
+    let shown: Vec<String> = output.pages[0]
+        .items
+        .iter()
+        .flat_map(|it| match it {
+            Placed::Lines { story: StoryRef::Body, para, .. } => para.shown.iter().map(|s| s.1.clone()).collect(),
+            _ => vec![],
+        })
+        .collect();
+    assert_eq!(shown, ["2"]);
+}
 /// The fields' text in each page's footer, joined with "/".
 fn footer_shown(l: &DocLayout) -> Vec<String> {
     l.pages
