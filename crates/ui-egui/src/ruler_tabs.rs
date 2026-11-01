@@ -118,7 +118,7 @@ pub(crate) fn selector(app: &mut WordApp, ui: &Ui, corner: Rect) {
         return;
     }
     let t = Tokens::get(ui.ctx());
-    let r = ui.interact(corner, ui.id().with("ruler_tab_kind"), Sense::click());
+    let r = ui.interact(corner, ui.scope_id().with("ruler_tab_kind"), Sense::click());
     if r.clicked() {
         app.canvas.tab_kind = next_kind(app.canvas.tab_kind, false);
     } else if r.secondary_clicked() {
@@ -186,7 +186,7 @@ pub(crate) fn stops(app: &mut WordApp, ui: &Ui, hp: &Painter, g: &Ruler<'_>, tab
     // A click on an empty stretch over the text sets a stop of the selector's kind there; pressing
     // and dragging places it where the button is released. The edges stay with the margin handles
     // and indent markers, and only the primary button places stops.
-    let add = ui.interact(g.text.shrink2(vec2(4.0, 0.0)), ui.id().with("ruler_tab_add"), Sense::click_and_drag());
+    let add = ui.interact(g.text.shrink2(vec2(4.0, 0.0)), ui.scope_id().with("ruler_tab_add"), Sense::click_and_drag());
     let kind = app.canvas.tab_kind;
     let placing = |x: f32| TabDrag { from: None, para: para.clone(), align: kind, leader: TabLeader::None, at: snap(x), off: false };
     if add.clicked()
@@ -204,8 +204,11 @@ pub(crate) fn stops(app: &mut WordApp, ui: &Ui, hp: &Painter, g: &Ruler<'_>, tab
     let mut open_dialog = false;
     for (i, tab) in tabs.iter().enumerate() {
         let x = (g.x_of)(tab.pos);
-        let r =
-            ui.interact(Rect::from_center_size(pos2(x, g.bar.max.y - 4.0), vec2(9.0, 10.0)), ui.id().with(("ruler_tab", i)), Sense::click_and_drag());
+        let r = ui.interact(
+            Rect::from_center_size(pos2(x, g.bar.max.y - 4.0), vec2(9.0, 10.0)),
+            ui.scope_id().with(("ruler_tab", i)),
+            Sense::click_and_drag(),
+        );
         let starts = r.drag_started_by(egui::PointerButton::Primary);
         if starts {
             app.canvas.tab_drag =
@@ -240,13 +243,15 @@ pub(crate) fn stops(app: &mut WordApp, ui: &Ui, hp: &Painter, g: &Ruler<'_>, tab
                 draw_tab_glyph(hp, x, base, d.align, g.rtl, stroke);
                 // A guide down the page shows where text will line up.
                 if let Some(area) = app.canvas.canvas_rect {
-                    let guide =
-                        ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, ui.id().with("ruler_tab_guide"))).with_clip_rect(area);
+                    let guide = ui
+                        .ctx()
+                        .layer_painter(egui::LayerId::new(egui::Order::Foreground, ui.scope_id().with("ruler_tab_guide")))
+                        .with_clip_rect(area);
                     guide.extend(Shape::dashed_line(&[pos2(x, area.min.y), pos2(x, area.max.y)], Stroke::new(1.0, t.text_dim), 3.0, 3.0));
                 }
                 format!("{} {}", tl!(kind_label(d.align)), units.format_with(d.at, decimal))
             };
-            egui::Tooltip::always_open(ui.ctx().clone(), ui.layer_id(), ui.id().with("ruler_tab_tip"), egui::PopupAnchor::Pointer).show(|ui| {
+            egui::Tooltip::always_open(ui.ctx().clone(), ui.layer_id(), ui.scope_id().with("ruler_tab_tip"), egui::PopupAnchor::Pointer).show(|ui| {
                 ui.label(label);
             });
         } else {

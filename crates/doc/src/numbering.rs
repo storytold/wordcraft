@@ -288,8 +288,19 @@ impl Numbering {
 pub struct Counters {
     /// Per abstract list: current value per level.
     state: HashMap<u32, [u32; 9]>,
-    /// Which nums have started (to apply start overrides once).
-    seen: HashMap<u32, bool>,
+    /// Which levels of which nums have started: a num's start override for a level applies
+    /// once, when that level of that num is first used (ECMA-376 Part 1, 17.9.27 startOverride).
+    seen: HashMap<(u32, u8), bool>,
+    /// Per abstract list: whether each level has counted yet (a value of 0 can be a real count when a
+    /// level starts at 0).
+    flags: HashMap<u32, [LevelFlags; 9]>,
+}
+
+/// Whether a level has counted yet, and the value its next item takes if a start override says so.
+#[derive(Default, Debug, Clone, Copy)]
+struct LevelFlags {
+    started: bool,
+    first: Option<u32>,
 }
 
 impl Counters {
@@ -312,34 +323,42 @@ impl Counters {
             return None;
         }
         let st = self.state.entry(abs.id).or_insert([0; 9]);
-        if let std::collections::hash_map::Entry::Vacant(e) = self.seen.entry(num) {
+        let fl = self.flags.entry(abs.id).or_default();
+        // Only this level's override, not the num's others: the counters are shared by every
+        // num of the abstract list, so restarting its other levels here would renumber
+        // paragraphs of the other nums. A heading style can use one num for levels 1-4 and
+        // another, with start overrides on every level, for 5-9; its first level-5 heading
+        // must not restart the chapter count.
+        if let std::collections::hash_map::Entry::Vacant(e) = self.seen.entry((num, lv as u8)) {
             e.insert(true);
-            for (l, start) in &n.start_overrides {
-                if let Some(s) = st.get_mut(*l as usize) {
-                    *s = start.saturating_sub(1);
-                }
+            if let Some((_, start)) = n.start_overrides.iter().find(|(l, _)| *l as usize == lv)
+                && let (Some(s), Some(f)) = (st.get_mut(lv), fl.get_mut(lv))
+            {
+                *s = 0;
+                *f = LevelFlags { started: false, first: Some(*start) };
             }
         }
-        if let Some(v) = st.get_mut(lv) {
-            *v = if *v == 0 { def.start.max(if def.start == 0 { 0 } else { 1 }) } else { v.saturating_add(1) };
-            if *v == 0 {
-                *v = def.start;
-            }
+        if let (Some(v), Some(f)) = (st.get_mut(lv), fl.get_mut(lv)) {
+            *v = if f.started { v.saturating_add(1) } else { f.first.unwrap_or(def.start) };
+            *f = LevelFlags { started: true, first: None };
         }
         // Deeper levels restart, unless they never restart or only restart after a level above
         // this one (Word's lvlRestart).
-        for (d, deeper) in st.iter_mut().enumerate().skip(lv + 1) {
+        for (d, (deeper, f)) in st.iter_mut().zip(fl.iter_mut()).enumerate().skip(lv + 1) {
             let restarts = level_def(d).is_none_or(|l| l.restart && l.restart_after.is_none_or(|k| lv < k as usize));
             if restarts {
                 *deeper = 0;
+                *f = LevelFlags::default();
             }
         }
         let vals = *st;
+        let started = *fl;
         if def.format == NumFormat::Bullet {
             return Some((def.text.clone(), def));
         }
         let mut label = String::new();
-        let mut chars = def.text.chars().peekable();
+        // Word's level text is short; .docx and the lists command already cap it at 64.
+        let mut chars = def.text.chars().take(MAX_LEVEL_TEXT).peekable();
         while let Some(c) = chars.next() {
             if c == '%'
                 && let Some(d) = chars.peek().and_then(|d| d.to_digit(10))
@@ -347,7 +366,8 @@ impl Counters {
                 chars.next();
                 let k = (d as usize).saturating_sub(1).min(8);
                 let val = vals.get(k).copied().unwrap_or(0);
-                let val = if val == 0 { level_def(k).map(|l| l.start).unwrap_or(1) } else { val };
+                let counted = started.get(k).is_some_and(|f| f.started);
+                let val = if counted { val } else { level_def(k).map(|l| l.start).unwrap_or(1) };
                 // Legal numbering (w:isLgl) shows every level in Arabic digits, whatever its own
                 // format (二 of a Chinese outline becomes 2 in "2.1").
                 let fmt = match level_def(k).map(|l| l.format).unwrap_or(NumFormat::Decimal) {
@@ -356,6 +376,9 @@ impl Counters {
                     f => f,
                 };
                 label.push_str(&fmt.format(val));
+                if label.len() > MAX_LABEL_BYTES {
+                    break;
+                }
             } else {
                 label.push(c);
             }
@@ -364,9 +387,28 @@ impl Counters {
     }
 }
 
+/// Longest level text (in characters) expanded into a list label.
+const MAX_LEVEL_TEXT: usize = 64;
+/// Labels stop growing once they pass this many bytes.
+const MAX_LABEL_BYTES: usize = 256;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_huge_level_text_gives_a_bounded_label() {
+        let mut n = Numbering::default();
+        let id = n.add_list(ListKind::Numbered);
+        let huge = Level { format: NumFormat::UpperRoman, text: "%1".repeat(30_000), start: u32::MAX, ..Level::default() };
+        if let Some(num) = n.nums.iter_mut().find(|x| x.id == id) {
+            num.level_overrides = vec![(0, huge)];
+        }
+        let mut c = Counters::default();
+        let label = c.next_label(&n, id, 0).unwrap().0;
+        assert!(label.len() <= 512, "label is {} bytes", label.len());
+        assert!(label.starts_with("MMMM"));
+    }
 
     #[test]
     fn a_list_s_own_level_definitions_win() {
@@ -390,6 +432,29 @@ mod tests {
     }
 
     #[test]
+    fn a_start_override_restarts_only_its_own_level_of_a_shared_list() {
+        // One abstract list numbers the headings through two nums: one for levels 1-4, and one
+        // restarting every level (startOverride 1 on 0..8) for levels 5-9, first used deep in
+        // chapter 2. Chapter 3 is still chapter 3, and the deep heading counts from 1.
+        let mut n = Numbering::default();
+        let chapters = n.add_list(ListKind::Legal);
+        let abs = n.abstract_of(chapters).map(|a| a.id).unwrap();
+        let deep = chapters + 1;
+        n.nums.push(Num { id: deep, abstract_id: abs, start_overrides: (0..9).map(|l| (l, 1)).collect(), ..Num::default() });
+        let mut c = Counters::default();
+        let mut l = |num, lv| c.next_label(&n, num, lv).unwrap().0;
+        assert_eq!(l(chapters, 0), "1.");
+        assert_eq!(l(chapters, 0), "2.");
+        assert_eq!(l(chapters, 1), "2.1.");
+        assert_eq!(l(chapters, 2), "2.1.1.");
+        assert_eq!(l(chapters, 3), "2.1.1.1.");
+        assert_eq!(l(deep, 4), "2.1.1.1.1.", "the deep num restarts only level 5");
+        assert_eq!(l(deep, 4), "2.1.1.1.2.");
+        assert_eq!(l(chapters, 0), "3.", "and not the chapter count");
+        assert_eq!(l(chapters, 1), "3.1.");
+    }
+
+    #[test]
     fn levels_restart_only_after_their_restart_level() {
         let mut n = Numbering::default();
         let id = n.add_list(ListKind::Legal);
@@ -409,6 +474,40 @@ mod tests {
         assert_eq!(l(0), "2.");
         assert_eq!(l(1), "2.3.", "level 2 never restarts");
         assert_eq!(l(2), "(1)", "level 1 restarts level 3");
+    }
+
+    #[test]
+    fn a_level_starting_at_zero_counts_up() {
+        let mut n = Numbering::default();
+        let id = n.add_list(ListKind::Numbered);
+        if let Some(a) = n.abstracts.first_mut() {
+            a.levels[0].start = 0;
+        }
+        let mut c = Counters::default();
+        let labels: Vec<String> = (0..4).map(|_| c.next_label(&n, id, 0).unwrap().0).collect();
+        assert_eq!(labels, ["0.", "1.", "2.", "3."]);
+    }
+
+    #[test]
+    fn a_start_override_of_one_or_zero_is_honoured() {
+        let mut n = Numbering::default();
+        let id = n.add_list(ListKind::Numbered);
+        if let Some(a) = n.abstracts.first_mut() {
+            a.levels[0].start = 5;
+        }
+        if let Some(num) = n.nums.iter_mut().find(|x| x.id == id) {
+            num.start_overrides = vec![(0, 1)];
+        }
+        let mut c = Counters::default();
+        let labels: Vec<String> = (0..2).map(|_| c.next_label(&n, id, 0).unwrap().0).collect();
+        assert_eq!(labels, ["1.", "2."]);
+
+        if let Some(num) = n.nums.iter_mut().find(|x| x.id == id) {
+            num.start_overrides = vec![(0, 0)];
+        }
+        let mut c = Counters::default();
+        let labels: Vec<String> = (0..3).map(|_| c.next_label(&n, id, 0).unwrap().0).collect();
+        assert_eq!(labels, ["0.", "1.", "2."]);
     }
 
     #[test]

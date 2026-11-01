@@ -5,8 +5,6 @@
 //! elements around runs (inline) or around whole paragraphs and tables (block level). [`plan`]
 //! decides, per block list, which controls are written where so that the XML always nests.
 
-use std::collections::HashSet;
-
 use wordcraft_doc::Blocks;
 use wordcraft_doc::control::{ContentControl, ControlEvent, ControlKind, control_events, pair_events};
 use wordcraft_doc::para::OBJ;
@@ -20,8 +18,11 @@ pub struct Plan<'a> {
     pub opens: Vec<Vec<&'a ContentControl>>,
     /// Controls closing after block `i`.
     pub closes: Vec<u32>,
-    /// Paragraph markers written inline, as (block, byte offset).
-    pub inline: HashSet<(usize, usize)>,
+    /// The paragraph markers written inline, by block: the byte offsets in block `i`, in order.
+    ///
+    /// Grouped by block rather than one set of (block, offset) pairs, so that asking for a
+    /// paragraph's markers is a lookup and not a search of every marker in the document (#13).
+    pub inline: Vec<Vec<usize>>,
 }
 
 impl Plan<'_> {
@@ -38,9 +39,7 @@ impl Plan<'_> {
     }
     /// The byte offsets of paragraph `i`'s markers that are written inline.
     pub fn inline_in(&self, i: usize) -> Vec<usize> {
-        let mut v: Vec<usize> = self.inline.iter().filter(|(b, _)| *b == i).map(|(_, o)| *o).collect();
-        v.sort_unstable();
-        v
+        self.inline.get(i).cloned().unwrap_or_default()
     }
 }
 
@@ -54,7 +53,7 @@ enum Mode {
 /// Markers without a partner are not written.
 pub fn plan(bl: &Blocks) -> Plan<'_> {
     let n = bl.len();
-    let mut out = Plan { opens: vec![Vec::new(); n], closes: vec![0; n], inline: HashSet::new() };
+    let mut out = Plan { opens: vec![Vec::new(); n], closes: vec![0; n], inline: vec![Vec::new(); n] };
     let events = control_events(bl);
     if events.is_empty() {
         return out;
@@ -115,17 +114,37 @@ pub fn plan(bl: &Blocks) -> Plan<'_> {
     }
     // Block-level controls nest by block: one that opens in the block another (not its
     // ancestor) closes after starts with the next block instead.
+    //
+    // Such a clash is with a control that closes before this one opens and ends in the block
+    // this one starts in. The block-level controls are grouped by the block they end in, each
+    // group keeping the two earliest closes in it: the earliest close that is not this
+    // control's own is the one the test is about (#13).
+    let mut first_close: Vec<usize> = vec![usize::MAX; n + 1];
+    let mut second_close: Vec<usize> = vec![usize::MAX; n + 1];
+    let mut first_owner: Vec<usize> = vec![usize::MAX; n + 1];
+    for (q, (_, qc)) in ranges.iter().enumerate() {
+        if mode.get(q) != Some(&Mode::Block) {
+            continue;
+        }
+        let Some(&(_, qe)) = span.get(q) else { continue };
+        let e = qe.min(n);
+        if *qc < first_close[e] {
+            second_close[e] = first_close[e];
+            first_close[e] = *qc;
+            first_owner[e] = q;
+        } else if *qc < second_close[e] {
+            second_close[e] = *qc;
+        }
+    }
     for k in 0..ranges.len() {
         if mode.get(k) != Some(&Mode::Block) {
             continue;
         }
         let Some(&(o, _)) = ranges.get(k) else { continue };
         let Some(&(sb, eb)) = span.get(k) else { continue };
-        let clash = ranges
-            .iter()
-            .enumerate()
-            .any(|(q, (_, qc))| q != k && *qc < o && mode.get(q) == Some(&Mode::Block) && span.get(q).is_some_and(|s| s.1 == sb));
-        if clash {
+        let e = sb.min(n);
+        let close = if first_owner[e] == k { second_close[e] } else { first_close[e] };
+        if close < o {
             let to = (sb + 1).min(eb);
             if let Some(s) = span.get_mut(k) {
                 s.0 = to;
@@ -146,12 +165,18 @@ pub fn plan(bl: &Blocks) -> Plan<'_> {
             }
             _ => {
                 for e in [events.get(*o), events.get(*c)].into_iter().flatten() {
-                    if let Some(off) = e.off() {
-                        out.inline.insert((e.block(), off));
+                    if let Some(off) = e.off()
+                        && let Some(v) = out.inline.get_mut(e.block())
+                    {
+                        v.push(off);
                     }
                 }
             }
         }
+    }
+    for v in out.inline.iter_mut() {
+        v.sort_unstable();
+        v.dedup();
     }
     out
 }

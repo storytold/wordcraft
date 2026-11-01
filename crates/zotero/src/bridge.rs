@@ -5,6 +5,8 @@
 //! Field ids handed to Zotero stay valid for the transaction: they are kept in a list parallel
 //! to the document-order list of Zotero fields, updated as fields are inserted and removed.
 
+use std::collections::HashMap;
+
 use serde_json::{Value, json};
 use wordcraft_doc::edit::Fragment;
 use wordcraft_doc::para::OBJ;
@@ -192,6 +194,7 @@ impl Bridge {
         }
     }
 
+    /// Answer one call by its method name; [`Bridge::handle`] wraps it so a panic becomes an error.
     fn dispatch(&mut self, s: &mut Session, host: &mut dyn Host, c: &Call) -> R {
         match c.method.as_str() {
             "Application_getActiveDocument" => {
@@ -274,21 +277,8 @@ impl Bridge {
             // citation moves between the text, footnotes and endnotes (switching styles).
             "Document_convert" => {
                 let Value::Array(ids) = arg(c, 1)? else { return Err("field ids must be an array".into()) };
-                let ids: Vec<Value> = ids.iter().take(100_000).cloned().collect();
-                let notes = c.args.get(3).cloned().unwrap_or(Value::Null);
-                for (i, idv) in ids.iter().enumerate() {
-                    let id = match idv {
-                        Value::Number(n) => n.as_u64(),
-                        Value::String(x) => x.trim().parse().ok(),
-                        _ => None,
-                    }
-                    .ok_or("bad field id")?;
-                    let note = match &notes {
-                        Value::Array(a) => a.get(i).and_then(Value::as_i64).unwrap_or(0),
-                        v => v.as_i64().unwrap_or(0),
-                    };
-                    self.convert_field(s, id, note)?;
-                }
+                let notes = c.args.get(3).unwrap_or(&Value::Null);
+                self.convert_fields(s, ids, notes)?;
                 Ok(Value::Null)
             }
             "Field_convert" => {
@@ -484,6 +474,49 @@ impl Bridge {
         Ok(())
     }
 
+    /// `Document_convert`: each id once (listed again, its last note type wins), every id
+    /// checked against one indexed list of the fields before anything moves. Only a citation
+    /// that actually moves costs a fresh list.
+    fn convert_fields(&mut self, s: &mut Session, ids: &[Value], notes: &Value) -> Result<(), String> {
+        let mut todo: Vec<(u64, i64)> = Vec::new();
+        let mut slot: HashMap<u64, usize> = HashMap::new();
+        for (i, idv) in ids.iter().take(fields::MAX_FIELDS).enumerate() {
+            let id = match idv {
+                Value::Number(n) => n.as_u64(),
+                Value::String(x) => x.trim().parse().ok(),
+                _ => None,
+            }
+            .ok_or("bad field id")?;
+            let note = match notes {
+                Value::Array(a) => a.get(i).and_then(Value::as_i64).unwrap_or(0),
+                v => v.as_i64().unwrap_or(0),
+            };
+            match slot.get(&id).and_then(|k| todo.get_mut(*k)) {
+                Some(t) => t.1 = note,
+                None => {
+                    slot.insert(id, todo.len());
+                    todo.push((id, note));
+                }
+            }
+        }
+        let index = |ids: &[u64]| -> HashMap<u64, usize> { ids.iter().enumerate().map(|(k, id)| (*id, k)).collect() };
+        let mut list = self.fields(s);
+        let mut at = index(&self.ids);
+        if let Some((id, _)) = todo.iter().find(|(id, _)| !at.contains_key(id)) {
+            return Err(format!("no field with id {id}"));
+        }
+        for (id, note) in todo {
+            let f = at.get(&id).and_then(|k| list.get(*k)).ok_or_else(|| format!("no field with id {id}"))?;
+            if !moves(s, f, note) {
+                continue;
+            }
+            self.convert_field(s, id, note)?;
+            list = self.fields(s);
+            at = index(&self.ids);
+        }
+        Ok(())
+    }
+
     fn convert_placeholders(&mut self, s: &mut Session, ph: &[Value], note: i64) -> R {
         let mut ids = Vec::new();
         for v in ph {
@@ -517,6 +550,20 @@ impl Bridge {
         }
         Ok(json!([ids, codes, notes]))
     }
+}
+
+/// Whether moving `f` to the text (`note` 0), a footnote (1) or an endnote (2) changes anything,
+/// as [`Bridge::convert_field`] decides it.
+fn moves(s: &Session, f: &ZField, note: i64) -> bool {
+    let current = match f.start.story {
+        StoryRef::Body => 0,
+        StoryRef::Part(pid) => match s.doc.parts.get(&pid).map(|p| p.kind) {
+            Some(PartKind::Footnote) => 1,
+            Some(PartKind::Endnote) => 2,
+            _ => return false,
+        },
+    };
+    current != if matches!(note, 1 | 2) { note } else { 0 }
 }
 
 /// Delete the selection; returns where it collapsed.

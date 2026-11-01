@@ -93,8 +93,12 @@ fn picker(dialog: rfd::AsyncFileDialog, req: &FileDialogRequest) -> Picking {
     match req.clone() {
         FileDialogRequest::Open { purpose } => Box::pin(async move { open_filters(dialog, &purpose).pick_file().await.into_iter().collect() }),
         FileDialogRequest::OpenMany { purpose } => Box::pin(async move { open_filters(dialog, &purpose).pick_files().await.unwrap_or_default() }),
-        FileDialogRequest::Save { name } => {
+        FileDialogRequest::Save { name, dir } => {
             let mut dialog = dialog.set_file_name(name.clone());
+            // Save as Word Template starts in the user templates folder (#2852).
+            if let Some(dir) = dir.filter(|d| std::path::Path::new(d).is_dir()) {
+                dialog = dialog.set_directory(dir);
+            }
             for (label, exts) in save_filters(&name) {
                 dialog = dialog.add_filter(label, &exts);
             }
@@ -203,8 +207,8 @@ fn on_path(program: &str) -> bool {
 fn save_exts(name: &str) -> Vec<String> {
     let suggested = std::path::Path::new(name)
         .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
+        .and_then(std::ffi::OsStr::to_str)
+        .map(str::to_ascii_lowercase)
         .filter(|e| wordcraft_engine::io::SAVE_EXTS.contains(&e.as_str()))
         .unwrap_or_else(|| "docx".to_string());
     let mut exts: Vec<String> = Vec::with_capacity(wordcraft_engine::io::SAVE_EXTS.len());
@@ -255,7 +259,9 @@ mod tests {
     fn an_instant_cancel_retries_then_falls_back() {
         let quick = Duration::from_millis(200);
         let slow_cancel = || async {
-            std::thread::sleep(Duration::from_millis(250));
+            // The test polls this future by hand, with no async runtime, so a blocking sleep
+            // models a slow portal response.
+            std::thread::sleep(Duration::from_millis(250)); // NOSONAR
             Vec::<u8>::new()
         };
         assert_eq!(pick(async { vec![1u8] }, async { vec![2] }, quick), Ok(vec![1]));

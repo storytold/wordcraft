@@ -73,8 +73,13 @@ pub struct TableStyleParts {
     pub band_chr: CharProps,
     /// Cell borders of the odd row bands (`band1Horz` region's `w:tcBorders`).
     pub band_borders: Option<Borders>,
-    /// Rows per band (`w:tblStyleRowBandSize`); one when unset.
+    /// Rows per band (`w:tblStyleRowBandSize`). Unset (in the whole based-on chain) or zero, the
+    /// row bands are off: Word reads a missing size as zero, where ECMA-376 says one (MS-OE376
+    /// §2.7.5.7, #3415). Our own banded styles set one.
     pub band_size: Option<u32>,
+    /// Columns per band (`w:tblStyleColBandSize`); unset or zero, the column bands are off, as
+    /// in Word (MS-OI29500 §17.7.6.5).
+    pub col_band_size: Option<u32>,
     pub first_col_chr: CharProps,
     pub total_chr: CharProps,
     pub total_border_top: Option<Border>,
@@ -179,17 +184,24 @@ pub struct PartSet(u16);
 
 impl PartSet {
     /// The parts of the cell at row `ri` of `nrows`, grid column `g` spanning `span` of `ncols`,
-    /// in a table with options `look` and row bands of `band_size` rows.
-    pub fn of_cell(look: &TableLook, band_size: u32, (ri, nrows): (usize, usize), (g, span, ncols): (usize, usize, usize)) -> PartSet {
+    /// in a table with options `look`, row bands of `row_size` rows and column bands of
+    /// `col_size` columns (a size of zero turns those bands off, as in Word).
+    pub fn of_cell(
+        look: &TableLook,
+        (row_size, col_size): (u32, u32),
+        (ri, nrows): (usize, usize),
+        (g, span, ncols): (usize, usize, usize),
+    ) -> PartSet {
         let header = look.header_row && ri == 0;
         let total = look.total_row && ri + 1 == nrows && nrows > 1;
         let first_col = look.first_column && g == 0;
         let last_col = look.last_column && g.saturating_add(span) >= ncols && ncols > 1;
-        let size = band_size.clamp(1, 1000) as usize;
-        let row_band = look.banded_rows && !header;
-        let odd_row = (ri.saturating_sub(usize::from(look.header_row)) / size).is_multiple_of(2);
-        let col_band = look.banded_columns && !first_col;
-        let odd_col = g.saturating_sub(usize::from(look.first_column)).is_multiple_of(2);
+        let rows = row_size.min(1000) as usize;
+        let cols = col_size.min(1000) as usize;
+        let row_band = look.banded_rows && !header && rows > 0;
+        let odd_row = (ri.saturating_sub(usize::from(look.header_row)) / rows.max(1)).is_multiple_of(2);
+        let col_band = look.banded_columns && !first_col && cols > 0;
+        let odd_col = (g.saturating_sub(usize::from(look.first_column)) / cols.max(1)).is_multiple_of(2);
         let mut bits = TablePart::WholeTable.bit();
         for (on, p) in [
             (col_band && odd_col, TablePart::Band1Vert),
@@ -270,6 +282,7 @@ impl TableStyleParts {
         self.header_borders = merge(self.header_borders, patch.header_borders);
         self.band_borders = merge(self.band_borders, patch.band_borders);
         self.band_size = patch.band_size.or(self.band_size);
+        self.col_band_size = patch.col_band_size.or(self.col_band_size);
         self.band_chr.overlay(&patch.band_chr);
         self.fill = patch.fill.or(self.fill);
         self.cell_margins = patch.cell_margins.or(self.cell_margins);
@@ -846,6 +859,7 @@ fn p_style() -> Style {
 /// A few table styles of our own (grid, plain, light/medium accents).
 fn table_styles() -> Vec<Style> {
     let thin = |c: Rgb| Border { style: BorderStyle::Single, width: 0.5, color: Some(c), space: 0.0 };
+    // Bands of one row and one column, written out so Word bands them too (#3415).
     let mk = |id: &str, name: &str, parts: TableStyleParts| Style {
         id: id.into(),
         name: name.into(),
@@ -854,7 +868,7 @@ fn table_styles() -> Vec<Style> {
         para: ParaProps { space_after: Some(0.0), line_spacing: Some(LineSpacing::Multiple(1.0)), ..ParaProps::default() },
         priority: Some(60),
         builtin: true,
-        table: Some(parts),
+        table: Some(TableStyleParts { band_size: Some(1), col_band_size: Some(1), ..parts }),
         ..Default::default()
     };
     let accents = [
@@ -977,6 +991,25 @@ mod tests {
         }
         let c = s.chain("Heading1");
         assert!(c.len() <= 2);
+    }
+
+    /// #3415: a band size of zero (Word's reading of a style without one) turns those bands off.
+    #[test]
+    fn band_size_zero_turns_bands_off() {
+        let look = crate::props::TableLook { banded_columns: true, ..Default::default() };
+        let parts = |sizes, ri, g| PartSet::of_cell(&look, sizes, (ri, 5), (g, 1, 4));
+        assert!(parts((1, 1), 1, 1).contains(TablePart::Band1Horz) && parts((1, 1), 1, 1).contains(TablePart::Band1Vert));
+        assert!(parts((1, 1), 2, 2).contains(TablePart::Band2Horz) && parts((1, 1), 2, 2).contains(TablePart::Band2Vert));
+        for (ri, g) in [(1, 1), (2, 2)] {
+            let p = parts((0, 0), ri, g);
+            for band in [TablePart::Band1Horz, TablePart::Band2Horz, TablePart::Band1Vert, TablePart::Band2Vert] {
+                assert!(!p.contains(band), "{band:?} at row {ri}, column {g}");
+            }
+        }
+        // Our banded styles say so, so Word bands them too.
+        let s = StyleSheet::builtin();
+        let t = s.table_style("GridTable4AccentBlue").map(|t| t.parts);
+        assert_eq!(t.map(|t| (t.band_size, t.col_band_size)), Some((Some(1), Some(1))));
     }
 
     /// A table style based on another inherits what it doesn't set itself; borders merge edge by

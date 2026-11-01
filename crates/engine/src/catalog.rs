@@ -30,6 +30,7 @@ File|Backstage|Version History|file.versions
 File|Backstage|Recover Unsaved|file.recover
 File|Backstage|New from Template|file.newFromTemplate
 File|Backstage|Save as Template|file.saveTemplate
+File|Backstage|Personal Templates|file.listTemplates
 Quick Access|Toolbar|Undo|edit.undo
 Quick Access|Toolbar|Undo List|edit.undoTo
 Quick Access|Toolbar|Redo|edit.redo
@@ -56,6 +57,7 @@ Home|Font|Bold|format.bold
 Home|Font|Italic|format.italic
 Home|Font|Underline|format.underline
 Home|Font|Double Underline|format.doubleUnderline
+Home|Font|Underline Color|format.underlineColor
 Home|Font|Strikethrough|format.strikethrough
 Home|Font|Subscript|format.subscript
 Home|Font|Superscript|format.superscript
@@ -277,9 +279,13 @@ Mailings|Write & Insert Fields|Match Fields|mailings.matchFields
 Mailings|Preview Results|Preview Results|mailings.preview
 Mailings|Preview Results|Next Record|mailings.next
 Mailings|Preview Results|Previous Record|mailings.previous
+Mailings|Preview Results|First Record|mailings.first
+Mailings|Preview Results|Last Record|mailings.last
+Mailings|Preview Results|Go to Record|mailings.goToRecord
 Mailings|Preview Results|Find Recipient|mailings.findRecipient
 Mailings|Preview Results|Check for Errors|mailings.checkErrors
 Mailings|Finish|Finish & Merge|mailings.finish
+Mailings|Finish|Print Documents|mailings.printDocuments
 Review|Proofing|Spelling & Grammar|review.spelling
 Review|Proofing|Thesaurus|review.thesaurus
 Review|Proofing|Word Count|review.wordCount
@@ -340,6 +346,9 @@ View|Window|Switch Windows|view.switchWindows
 View|Macros|Macros|tools.macros
 View|Macros|Record Macro|tools.recordMacro
 View|SharePoint|Properties|file.properties
+Read Mode|View|Column Width|view.readColumnWidth
+Read Mode|View|Page Color|view.readPageColor
+Read Mode|View|Layout|view.readLayout
 Developer|Controls|Rich Text Content Control|developer.richText
 Developer|Controls|Plain Text Content Control|developer.plainText
 Developer|Controls|Picture Content Control|developer.picture
@@ -455,6 +464,8 @@ Chart Design|Chart Layouts|Chart Title|chart.title
 Chart Design|Chart Layouts|Legend|chart.legend
 Chart Design|Chart Layouts|Data Labels|chart.dataLabels
 Shape Format|Shape Styles|Shape Fill|shape.fill
+Shape Format|Shape Styles|Shape Fill Gradient|shape.fill
+Shape Format|Shape Styles|Format Shape Pane|view.formatShapePane
 Shape Format|Shape Styles|Shape Outline|shape.outline
 Shape Format|Shape Styles|Shape Effects|shape.effects
 Shape Format|WordArt Styles|WordArt Quick Styles|wordArt.style
@@ -474,6 +485,7 @@ Editing|Keyboard|New Paragraph|text.newParagraph
 Editing|Keyboard|Line Break|text.lineBreak
 Editing|Keyboard|Column Break|text.columnBreak
 Editing|Keyboard|Tab|text.tab
+Editing|Keyboard|Tab Character|text.insertTab
 Editing|Keyboard|Backspace|text.backspace
 Editing|Keyboard|Delete|text.delete
 Editing|Keyboard|Delete Previous Word|text.deleteWordBack
@@ -515,6 +527,7 @@ Tools|Customize|Customize Ribbon|tools.customizeRibbon
 Tools|Customize|Customize Keyboard|tools.customizeKeyboard
 Tools|Protection|Encrypt with Password|file.encrypt
 Tools|Templates|Templates and Add-ins|tools.templates
+Tools|Views|Full Screen View|view.fullScreenView
 ";
 
 /// Catalog entries: (tab, group, feature, id).
@@ -580,5 +593,18 @@ mod tests {
         let pct = p["percent"].as_f64().unwrap();
         // The floor only ever rises.
         assert!(pct >= 90.4, "parity {pct}%");
+    }
+
+    #[test]
+    fn read_mode_view_menu_is_catalogued() {
+        let e = entries();
+        let read_mode: Vec<_> = e.iter().filter(|x| x.0 == "Read Mode").map(|x| (x.1, x.2, x.3)).collect();
+        assert_eq!(
+            read_mode,
+            [("View", "Column Width", "view.readColumnWidth"), ("View", "Page Color", "view.readPageColor"), ("View", "Layout", "view.readLayout")]
+        );
+        let reg = crate::cmd::registry();
+        assert!(reg.get("view.readColumnWidth").is_some(), "Column Width counts as live");
+        assert!(reg.get("view.readPageColor").is_some(), "Page Color counts as live");
     }
 }

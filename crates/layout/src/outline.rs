@@ -124,6 +124,7 @@ fn plain_chars(c: &CharProps) -> CharProps {
         rtl: c.rtl,
         cs: c.cs,
         lang_bidi: c.lang_bidi.clone(),
+        lang_ea: c.lang_ea.clone(),
         link: c.link.clone(),
         ins: c.ins,
         del: c.del,
@@ -168,7 +169,7 @@ pub(crate) fn symbol_items(pl: &Arc<ParaLayout>, x: f32, y: f32, level: u8, chil
     let disc = |r: f32| Placed::Shape {
         rect: Rect::new(cx - r, cy - r, r * 2.0, r * 2.0),
         kind: ShapeKind::Ellipse,
-        fill: Some(SYMBOL_GREY),
+        fill: Some(wordcraft_doc::fill::Fill::solid(SYMBOL_GREY)),
         stroke: None,
         stroke_width: 0.0,
         freeform: None,
@@ -177,6 +178,7 @@ pub(crate) fn symbol_items(pl: &Arc<ParaLayout>, x: f32, y: f32, level: u8, chil
         extra: Default::default(),
         // A heading's symbol, not an object of its own: never left out of a page.
         object: None,
+        alt: String::new(),
     };
     let white = Border { style: BorderStyle::Single, width: 1.1, color: Some(Rgb(0xFF, 0xFF, 0xFF)), space: 0.0 };
     if level >= BODY {

@@ -1,8 +1,12 @@
 //! DrawingML colours shared by charts and SmartArt: a colour element with its modifiers, and the
 //! paint of a fill or line (solid, the first stop of a gradient, a pattern's foreground).
 
+use std::sync::Arc;
+
 use wordcraft_doc::THEME_COLORS;
+use wordcraft_doc::fill::{Fill, Gradient, GradientFlip, GradientKind, PathShape};
 use wordcraft_doc::props::Rgb;
+use wordcraft_doc::wordart::{GradStop, MAX_STOPS};
 
 use crate::units::int;
 use crate::xml::El;
@@ -35,11 +39,24 @@ fn is_color(e: &El) -> bool {
 }
 
 /// A colour element (`a:srgbClr`, `a:schemeClr`, `a:sysClr`), or the one inside `e`, with its
-/// `lumMod` / `lumOff` / `tint` / `shade` applied in document order.
+/// `lumMod` / `lumOff` / `tint` / `shade` / `satMod` applied in document order.
 pub(crate) fn color(e: &El, theme: &[Rgb]) -> Option<Rgb> {
+    color_alpha(e, theme, None).map(|(c, _)| c)
+}
+
+/// [`color`] and its transparency, percent (`a:alpha` is opacity, so 30% opaque is 70%
+/// transparent). `ph` is the colour and transparency `phClr` stands for (in a theme's fill
+/// styles: the colour of the shape's style reference).
+pub(crate) fn color_alpha(e: &El, theme: &[Rgb], ph: Option<(Rgb, f32)>) -> Option<(Rgb, f32)> {
     let c = if is_color(e) { e } else { e.els().find(|c| is_color(c))? };
+    let mut opacity = 100.0;
     let base = match c.name.as_str() {
         "a:srgbClr" => Rgb::parse(c.attr("val")?)?,
+        "a:schemeClr" if c.attr("val") == Some("phClr") => {
+            let (rgb, t) = ph?;
+            opacity -= t;
+            rgb
+        }
         "a:schemeClr" => *theme.get(scheme_slot(c.attr("val")?)?)?,
         "a:sysClr" => match c.attr("lastClr").and_then(Rgb::parse) {
             Some(rgb) => rgb,
@@ -58,7 +75,7 @@ pub(crate) fn color(e: &El, theme: &[Rgb]) -> Option<Rgb> {
         "a:hslClr" => {
             let v = |n: &str| c.attr(n).and_then(int).unwrap_or(0) as f64;
             let hue = (v("hue") / 60_000.0).rem_euclid(360.0) / 360.0;
-            from_hsl(hue, (v("sat") / 100_000.0).clamp(0.0, 1.0), (v("lum") / 100_000.0).clamp(0.0, 1.0))
+            Rgb::from_hsl(hue, (v("sat") / 100_000.0).clamp(0.0, 1.0), (v("lum") / 100_000.0).clamp(0.0, 1.0))
         }
         _ => return None,
     };
@@ -66,14 +83,68 @@ pub(crate) fn color(e: &El, theme: &[Rgb]) -> Option<Rgb> {
     let mut rgb = base;
     for m in c.els() {
         rgb = match m.name.as_str() {
-            "a:lumMod" => adjust_lum(rgb, |l| l * val(m)),
-            "a:lumOff" => adjust_lum(rgb, |l| l + val(m)),
-            "a:tint" => mix(rgb, 255.0, val(m)),
-            "a:shade" => mix(rgb, 0.0, val(m)),
+            n @ ("a:lumMod" | "a:lumOff" | "a:tint" | "a:shade" | "a:satMod") => modified(rgb, n.trim_start_matches("a:"), val(m)),
+            "a:alpha" => {
+                opacity = val(m) as f32 * 100.0;
+                rgb
+            }
+            "a:alphaMod" => {
+                opacity *= val(m) as f32;
+                rgb
+            }
+            "a:alphaOff" => {
+                opacity += val(m) as f32 * 100.0;
+                rgb
+            }
             _ => rgb,
         };
     }
-    Some(rgb)
+    Some((rgb, (100.0 - opacity).clamp(0.0, 100.0)))
+}
+
+/// Fill element `e` (`a:solidFill`, `a:gradFill`; a pattern as its foreground colour) as a
+/// shape's fill; `None` for no fill, picture and group fills. `ph` as in [`color_alpha`].
+pub(crate) fn fill(e: &El, theme: &[Rgb], ph: Option<(Rgb, f32)>) -> Option<Fill> {
+    let solid = |c: Option<&El>| c.and_then(|c| color_alpha(c, theme, ph)).map(|(color, transparency)| Fill::Solid { color, transparency });
+    match e.name.as_str() {
+        "a:solidFill" => solid(Some(e)),
+        "a:pattFill" => solid(e.child("a:fgClr")),
+        "a:gradFill" => {
+            let pct = |v: Option<&str>| v.and_then(int).map_or(0.0, |v| v.clamp(-100_000_000, 100_000_000) as f32 / 1000.0);
+            let rect = |r: Option<&El>| r.map_or([0.0; 4], |r| ["l", "t", "r", "b"].map(|k| pct(r.attr(k))));
+            let stops = e
+                .child("a:gsLst")
+                .into_iter()
+                .flat_map(|l| l.children("a:gs"))
+                .take(MAX_STOPS * 4)
+                .filter_map(|g| color_alpha(g, theme, ph).map(|(color, transparency)| GradStop { pos: pct(g.attr("pos")), color, transparency }))
+                .collect();
+            let on = |v: Option<&str>| v.is_some_and(|v| v == "1" || v == "true");
+            let kind = match (e.child("a:path"), e.child("a:lin")) {
+                (Some(p), _) => {
+                    let shape = match p.attr("path") {
+                        Some("rect") => PathShape::Rect,
+                        Some("shape") => PathShape::Shape,
+                        _ => PathShape::Circle,
+                    };
+                    GradientKind::Path { shape, focus: rect(p.child("a:fillToRect")) }
+                }
+                (None, l) => GradientKind::Linear {
+                    angle: l.and_then(|l| l.attr("ang")).and_then(int).map_or(0.0, |a| (a % 21_600_000) as f32 / 60_000.0),
+                    scaled: on(l.and_then(|l| l.attr("scaled"))),
+                },
+            };
+            let flip = match e.attr("flip") {
+                Some("x") => GradientFlip::X,
+                Some("y") => GradientFlip::Y,
+                Some("xy") => GradientFlip::Xy,
+                _ => GradientFlip::None,
+            };
+            let tile = e.child("a:tileRect").map(|r| rect(Some(r)));
+            Fill::Gradient(Arc::new(Gradient { stops, kind, tile, rot_with_shape: on(e.attr("rotWithShape")), flip })).sanitized()
+        }
+        _ => None,
+    }
 }
 
 /// A preset colour (`a:prstClr/@val`, ECMA-376 Part 1 §20.1.10.48): the common ones; others are
@@ -159,58 +230,14 @@ pub(crate) fn lum(c: Rgb, f: impl Fn(f64) -> f64) -> Rgb {
     adjust_lum(c, f)
 }
 
-/// `tint` (towards `to` = 255) and `shade` (towards 0): `v` is the share of the original colour kept.
-fn mix(c: Rgb, to: f64, v: f64) -> Rgb {
-    let f = |x: u8| (x as f64 * v + to * (1.0 - v)).round().clamp(0.0, 255.0) as u8;
-    Rgb(f(c.0), f(c.1), f(c.2))
+/// `c` with the DrawingML colour modifier `name` at `v` (see [`Rgb::modified`]).
+fn modified(c: Rgb, name: &str, v: f64) -> Rgb {
+    c.modified(name, v)
 }
 
 /// `c` with its HSL luminance changed by `f`.
 pub(crate) fn adjust_lum(c: Rgb, f: impl Fn(f64) -> f64) -> Rgb {
-    let (h, s, l) = to_hsl(c);
-    from_hsl(h, s, f(l).clamp(0.0, 1.0))
-}
-
-fn to_hsl(c: Rgb) -> (f64, f64, f64) {
-    let (r, g, b) = (c.0 as f64 / 255.0, c.1 as f64 / 255.0, c.2 as f64 / 255.0);
-    let (max, min) = (r.max(g).max(b), r.min(g).min(b));
-    let l = (max + min) / 2.0;
-    if max == min {
-        return (0.0, 0.0, l);
-    }
-    let d = max - min;
-    let s = if l > 0.5 { d / (2.0 - max - min) } else { d / (max + min) };
-    let h = if max == r {
-        (g - b) / d + if g < b { 6.0 } else { 0.0 }
-    } else if max == g {
-        (b - r) / d + 2.0
-    } else {
-        (r - g) / d + 4.0
-    };
-    (h / 6.0, s, l)
-}
-
-fn from_hsl(h: f64, s: f64, l: f64) -> Rgb {
-    let byte = |v: f64| (v * 255.0).round().clamp(0.0, 255.0) as u8;
-    if s == 0.0 {
-        return Rgb(byte(l), byte(l), byte(l));
-    }
-    let q = if l < 0.5 { l * (1.0 + s) } else { l + s - l * s };
-    let p = 2.0 * l - q;
-    let channel = |t: f64| {
-        let t = t.rem_euclid(1.0);
-        let v = if t < 1.0 / 6.0 {
-            p + (q - p) * 6.0 * t
-        } else if t < 0.5 {
-            q
-        } else if t < 2.0 / 3.0 {
-            p + (q - p) * (2.0 / 3.0 - t) * 6.0
-        } else {
-            p
-        };
-        byte(v)
-    };
-    Rgb(channel(h + 1.0 / 3.0), channel(h), channel(h - 1.0 / 3.0))
+    c.with_lum(f)
 }
 
 #[cfg(test)]

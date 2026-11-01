@@ -11,7 +11,7 @@ on:
         default: ""
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -19,12 +19,17 @@ concurrency:
 
 jobs:
   release:
+    # Only this job publishes the GitHub release, so only it gets write access.
+    permissions:
+      contents: write
+      packages: write
     # Intentionally tracked at @main (not SHA-pinned) so org-wide CI improvements, security fixes, and build optimizations propagate without PR churn across all craftapp repos.
     uses: storytold/craft-common-actions/.github/workflows/release.yml@main
     with:
       app-name: wordcraft
       app-title: WordCraft
-      craft-fonts-ref: 8dcdacd5153e64560d109541a47d806f26f048c0
+      craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+      web-craft-fonts: true
       version: ${{ inputs.version }}
     secrets:
       APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}

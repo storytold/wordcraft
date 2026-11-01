@@ -95,7 +95,16 @@ pub fn export_with(doc: &Document, opts: &EpubOptions) -> Result<Vec<u8>, String
     let modified = modified(doc, opts);
     let author =
         opts.author.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).unwrap_or_else(|| doc.core.creator.trim().to_string());
-    let opf = package_document(&title, &author, &language, &identifier, &modified, &chapters, &ctx.images, &flow.meta);
+    let opf = package_document(&PackageParts {
+        title: &title,
+        author: &author,
+        language: &language,
+        identifier: &identifier,
+        modified: &modified,
+        chapters: &chapters,
+        images: &ctx.images,
+        meta: &flow.meta,
+    });
     let nav = nav_document(&language, &contents_title(&language), &ctx.nav);
     let container = CONTAINER;
 
@@ -643,6 +652,60 @@ fn render_cell(cell: &Cell, ctx: &mut Ctx, chapter: &str, out: &mut String, dept
     }
 }
 
+/// The base text in the run's formatting, then its phonetic guide inside the same tags
+/// (`<ruby>base<rt>guide</rt></ruby>`, EPUB 3 is XHTML5 so ruby is real markup).
+fn render_ruby(base: &str, ruby: &str, fmt: &Fmt, ctx: &Ctx, chapter: &str, out: &mut String) {
+    let mut open = String::new();
+    let mut close: Vec<&'static str> = Vec::new();
+    if let Some(href) = fmt.link.as_deref().filter(|l| wordcraft_doc::link::is_safe_href(l)).and_then(|link| link_href(link, chapter, &ctx.anchors)) {
+        open.push_str(&format!("<a href=\"{}\">", xml_attr(&href)));
+        close.push("</a>");
+    }
+    let mut tag = |o: &str, c: &'static str| {
+        open.push_str(o);
+        close.push(c);
+    };
+    if fmt.bold {
+        tag("<strong>", "</strong>");
+    }
+    if fmt.italic {
+        tag("<em>", "</em>");
+    }
+    if fmt.underline {
+        tag("<u>", "</u>");
+    }
+    if fmt.strike {
+        tag("<s>", "</s>");
+    }
+    if fmt.sup {
+        tag("<sup>", "</sup>");
+    } else if fmt.sub {
+        tag("<sub>", "</sub>");
+    }
+    if fmt.code {
+        tag("<code>", "</code>");
+    }
+    out.push_str(&open);
+    out.push_str("<ruby>");
+    for (k, line) in base.split('\n').enumerate() {
+        if k > 0 {
+            out.push_str("<br/>");
+        }
+        out.push_str(&xml_text(line));
+    }
+    out.push_str("<rt>");
+    for (k, line) in ruby.split('\n').enumerate() {
+        if k > 0 {
+            out.push_str("<br/>");
+        }
+        out.push_str(&xml_text(line));
+    }
+    out.push_str("</rt></ruby>");
+    for c in close.iter().rev() {
+        out.push_str(c);
+    }
+}
+
 fn render_inlines(inlines: &[Inline], ctx: &mut Ctx, chapter: &str, out: &mut String) {
     for inline in inlines {
         match inline {
@@ -687,6 +750,9 @@ fn render_inlines(inlines: &[Inline], ctx: &mut Ctx, chapter: &str, out: &mut St
                 let mathml = crate::mathml::linear_to_mathml(linear, *display);
                 out.push_str(&strip_invalid_xml(&mathml));
             }
+            // EPUB 3 is XHTML5: ruby is real markup there (base text with its phonetic guide),
+            // inside the run's own tags.
+            Inline::Ruby { base, ruby, fmt } => render_ruby(base, ruby, fmt, ctx, chapter, out),
         }
     }
 }
@@ -844,16 +910,21 @@ fn conversion_notes(omitted: &Omitted) -> String {
     out
 }
 
-fn package_document(
-    title: &str,
-    author: &str,
-    language: &str,
-    identifier: &str,
-    modified: &str,
-    chapters: &[Chapter],
-    images: &Images,
-    meta: &model::Meta,
-) -> String {
+/// The OPF package. Its many fields come straight from the OPC parts, so they arrive together in
+/// `parts` and unpack here.
+struct PackageParts<'a> {
+    title: &'a str,
+    author: &'a str,
+    language: &'a str,
+    identifier: &'a str,
+    modified: &'a str,
+    chapters: &'a [Chapter],
+    images: &'a Images,
+    meta: &'a model::Meta,
+}
+
+fn package_document(parts: &PackageParts<'_>) -> String {
+    let PackageParts { title, author, language, identifier, modified, chapters, images, meta } = *parts;
     let mut out = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
     out.push_str(&format!(
         "<package xmlns=\"http://www.idpf.org/2007/opf\" version=\"3.0\" unique-identifier=\"bookid\" xml:lang=\"{}\">\n",

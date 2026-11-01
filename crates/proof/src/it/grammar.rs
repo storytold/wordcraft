@@ -276,7 +276,7 @@ fn e_apostrophe(text: &str, ws: &[(usize, usize)], v: &mut Vec<Issue>) {
         }
         let mut after = text.get(*b..).unwrap_or("").chars();
         let Some(ap) = after.next().filter(|&c| is_apostrophe(c)) else { continue };
-        let ends = after.next().is_none_or(|c| c.is_whitespace());
+        let ends = after.next().is_none_or(char::is_whitespace);
         let quoted = text.get(..*a).and_then(|t| t.chars().next_back()).is_some_and(|c| is_apostrophe(c) || c == '‘');
         if ends && !quoted {
             v.push(issue(*a, *b + ap.len_utf8(), "«È» si scrive con l'accento, non con l'apostrofo".into(), vec!["È".into()]));

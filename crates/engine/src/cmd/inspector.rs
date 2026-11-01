@@ -122,7 +122,13 @@ fn clear(s: &mut Session, v: &Value) -> CmdResult {
         }
         "paragraphFormatting" => {
             s.doc.format_paragraphs(&a, &b, &|p| {
-                *p = ParaProps { style: p.style.clone(), numbering: p.numbering, ..Default::default() };
+                *p = ParaProps {
+                    style: p.style.clone(),
+                    numbering: p.numbering,
+                    num_change: p.num_change.take(),
+                    fmt_change: p.fmt_change.take(),
+                    ..Default::default()
+                };
             })?;
         }
         "characterStyle" => return super::format::apply(s, &|c| c.style = None),
@@ -136,6 +142,7 @@ fn clear(s: &mut Session, v: &Value) -> CmdResult {
                     lang: c.lang.clone(),
                     no_proof: c.no_proof,
                     rtl: c.rtl,
+                    fmt_change: c.fmt_change.take(),
                     ..Default::default()
                 };
             });
