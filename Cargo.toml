@@ -28,7 +28,7 @@ wordcraft-pdf = { path = "crates/pdf" }
 # storytold/craft-libs#483 (SCOWL English, stacked on #482, which adds craft-proof), fetched
 # from storytold (GitHub serves PR heads from the base repo); merged with a merge commit, it
 # stays in storytold main, so the pin needs no follow-up.
-wordcraft-proof = { package = "craft-proof", git = "https://github.com/storytold/craft-libs", rev = "0675d583417c1f340749dc5a37d0f00dec554502", version = "=0.1.0" }
+wordcraft-proof = { package = "craft-proof", git = "https://github.com/storytold/craft-libs", rev = "6e45fda67c6d748b4775428cc495e26006a3bf4a", version = "=0.1.0" }
 wordcraft-engine = { path = "crates/engine" }
 wordcraft-mcp = { path = "crates/mcp" }
 wordcraft-zotero = { path = "crates/zotero" }
