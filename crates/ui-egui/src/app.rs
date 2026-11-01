@@ -208,6 +208,12 @@ impl WordApp {
         self.no_document != Some(self.session.document_id())
     }
 
+    /// Whether a modal dialog is open: the rest of the window takes no clicks, keys or
+    /// shortcuts until it closes (#3859).
+    pub(crate) fn modal_open(&self) -> bool {
+        self.file_browser_open() || self.dialog.as_ref().is_some_and(crate::dialogs::Dialog::is_modal) || self.colors.is_some()
+    }
+
     /// Terminal feedback also reaches the normal window when printing starts through control.
     pub fn poll_printing(&mut self, ctx: &egui::Context) {
         self.printing.poll(ctx);
