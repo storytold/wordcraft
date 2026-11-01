@@ -211,6 +211,7 @@ fn flag(app: &mut WordApp, ui: &mut Ui, label: &str, key: &str, value: bool) {
 fn general(app: &mut WordApp, ui: &mut Ui) {
     section(ui, "Interface");
     theme_picker(app, ui);
+    header_colour_picker(app, ui);
     interface_size_picker(app, ui);
     ui.checkbox(&mut app.ui.mini_toolbar, tl!("Show the mini toolbar when text is selected"));
     let mut dark_page = app.session.view.dark_mode;
@@ -660,6 +661,33 @@ fn theme_picker(app: &mut WordApp, ui: &mut Ui) {
             }
         });
         combo.response.labelled_by(label.id);
+    });
+}
+
+/// Named header colours and a custom opaque colour; Default restores the normal palette.
+fn header_colour_picker(app: &mut WordApp, ui: &mut Ui) {
+    use crate::theme::HeaderColour;
+    ui.horizontal(|ui| {
+        let label = ui.label(tl!("Header colour:"));
+        let combo =
+            craft_ui::ComboBox::from_id_salt("header_colour").selected_text(tl!(app.ui.header_colour.label())).width(120.0).show_ui(ui, |ui| {
+                for (name, colour) in HeaderColour::PRESETS {
+                    if ui.selectable_label(app.ui.header_colour == colour, tl!(name)).clicked() {
+                        let _ = app.run("ui.headerColour", json!({"value": colour.code()}));
+                    }
+                }
+            });
+        combo.response.labelled_by(label.id);
+        let default = Tokens::get(ui.ctx()).title_bar;
+        let mut rgb = app.ui.header_colour.rgb().unwrap_or([default.r(), default.g(), default.b()]);
+        let response = ui.color_edit_button_srgb(&mut rgb).labelled_by(label.id).on_hover_text(tl!("Choose a custom colour"));
+        if response.changed() {
+            let [r, g, b] = rgb;
+            let _ = app.run("ui.headerColour", json!({"value": format!("#{r:02X}{g:02X}{b:02X}")}));
+        }
+        if app.ui.header_colour.rgb().is_some() {
+            ui.monospace(app.ui.header_colour.code());
+        }
     });
 }
 

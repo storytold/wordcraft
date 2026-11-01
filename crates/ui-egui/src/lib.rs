@@ -163,6 +163,9 @@ pub struct UiState {
     pub recent_fonts: Vec<String>,
     /// Interface theme: light, dark, or follow the OS appearance (#115).
     pub theme: theme::Appearance,
+    /// Optional title-bar and ribbon-tab colour, separate from light/dark appearance.
+    #[serde(rename = "headerColour")]
+    header_colour: theme::HeaderColour,
     /// Interface size (#475, #822): Auto (the display scale the system reports) or an absolute
     /// size in percent. Junk saved values read as Auto; out-of-range ones are clamped to 50–300 %.
     #[serde(rename = "uiScale")]
@@ -312,6 +315,7 @@ impl Default for UiState {
             recent_colors: Vec::new(),
             recent_fonts: Vec::new(),
             theme: theme::Appearance::default(),
+            header_colour: theme::HeaderColour::default(),
             interface_size: theme::InterfaceSize::default(),
             legacy_interface_size: None,
             animations: theme::Animations::default(),

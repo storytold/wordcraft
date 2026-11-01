@@ -30,7 +30,7 @@ pub(crate) fn qat_button_id(id: &str) -> egui::Id {
 }
 
 fn qat_button(ui: &mut Ui, app: &mut WordApp, icon: &str, tip: &str, id: &str, enabled: bool) -> egui::Response {
-    let t = Tokens::get(ui.ctx());
+    let t = Tokens::get(ui.ctx()).header(app.ui.header_colour);
     let (r, _) = ui.allocate_exact_size(vec2(26.0, 24.0), Sense::hover());
     let resp = ui.interact(r, qat_button_id(id), Sense::click());
     if resp.hovered() && enabled {
@@ -85,7 +85,7 @@ fn quick_access(ui: &mut Ui, app: &mut WordApp) {
             undo_list_button(ui, app, enabled);
         }
     }
-    let t = Tokens::get(ui.ctx());
+    let t = Tokens::get(ui.ctx()).header(app.ui.header_colour);
     let (r, _) = ui.allocate_exact_size(vec2(26.0, 24.0), Sense::hover());
     let resp = ui.interact(r, qat_menu_button_id(), Sense::click());
     if resp.hovered() {
@@ -135,7 +135,7 @@ pub(crate) fn undo_list_footer(n: usize) -> String {
 
 /// The small arrow beside Undo: opens the list of steps to undo several at once.
 fn undo_list_button(ui: &mut Ui, app: &mut WordApp, enabled: bool) {
-    let t = Tokens::get(ui.ctx());
+    let t = Tokens::get(ui.ctx()).header(app.ui.header_colour);
     let (r, _) = ui.allocate_exact_size(vec2(12.0, 24.0), Sense::hover());
     let resp = ui.interact(r, undo_list_button_id(), if enabled { Sense::click() } else { Sense::hover() });
     if resp.hovered() && enabled {
@@ -278,7 +278,9 @@ impl MacTitleBar {
 /// Draws the title bar with window dragging, AutoSave, quick access, account, community and search
 /// controls, and the centred clickable document title.
 pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
-    let t = Tokens::get(ui.ctx());
+    let base = Tokens::get(ui.ctx());
+    let t = base.header(app.ui.header_colour);
+    let (button_fill, button_hover, button_ink) = base.header_buttons(app.ui.header_colour);
     // macOS: shorter, so the system's traffic lights are centred in it; the tallest controls
     // shrink to keep a margin above and below them.
     let mac = app.integrated_titlebar;
@@ -315,9 +317,9 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                 );
                 let (r, resp) = ui.allocate_exact_size(vec2(30.0, 16.0), Sense::click());
                 let (fill, stroke, knob_fill) = match (&block, on) {
-                    (Some(_), _) => (t.input.gamma_multiply(0.5), t.border.gamma_multiply(0.7), t.text_dim.gamma_multiply(0.45)),
-                    (None, true) => (t.accent, t.accent, t.on_accent),
-                    (None, false) => (t.input, t.border_strong, t.text_dim),
+                    (Some(_), _) => (t.input.gamma_multiply(0.5), t.border.gamma_multiply(0.7), base.text_dim.gamma_multiply(0.45)),
+                    (None, true) => (button_fill, button_fill, button_ink),
+                    (None, false) => (t.input, t.border_strong, base.text_dim),
                 };
                 ui.painter().rect(r, 8.0, fill, Stroke::new(1.0, stroke), egui::StrokeKind::Inside);
                 let knob = if on { r.max.x - 8.0 } else { r.min.x + 8.0 };
@@ -348,25 +350,25 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     // Account / community.
                     let (r, resp) = ui.allocate_exact_size(vec2(control_h, control_h), Sense::click());
-                    ui.painter().circle_filled(r.center(), control_h / 2.0 - 1.0, t.accent);
+                    ui.painter().circle_filled(r.center(), control_h / 2.0 - 1.0, if resp.hovered() { button_hover } else { button_fill });
                     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Account")));
                     let initials: String = app.session.user_initials().chars().take(2).collect();
-                    ui.painter().text(r.center(), Align2::CENTER_CENTER, initials, semibold(10.5), t.on_accent);
+                    ui.painter().text(r.center(), Align2::CENTER_CENTER, initials, semibold(10.5), button_ink);
                     if resp.on_hover_text(format!("{} — set your name in File › Options", app.session.author)).clicked() {
                         let _ = app.run("ui.backstage", json!({"value": true, "page": "options", "pane": "general"}));
                     }
                     ui.add_space(8.0);
                     if app.ui.show_discord {
                         let (r, resp) = ui.allocate_exact_size(vec2(84.0, 22.0), Sense::click());
-                        ui.painter().rect_filled(r, 11.0, if resp.hovered() { t.accent_text } else { t.accent });
+                        ui.painter().rect_filled(r, 11.0, if resp.hovered() { button_hover } else { button_fill });
                         icons::paint(
                             ui.painter(),
                             Rect::from_center_size(pos2(r.min.x + 13.0, r.center().y), vec2(14.0, 14.0)),
                             "discord",
-                            t.on_accent,
-                            t.on_accent,
+                            button_ink,
+                            button_ink,
                         );
-                        ui.painter().text(pos2(r.min.x + 24.0, r.center().y), Align2::LEFT_CENTER, tl!("Discord"), medium(11.5), t.on_accent);
+                        ui.painter().text(pos2(r.min.x + 24.0, r.center().y), Align2::LEFT_CENTER, tl!("Discord"), medium(11.5), button_ink);
                         if resp.on_hover_text(tl!("Join the ArtCraft community on Discord")).clicked() {
                             let _ = app.run("ui.discord", json!({}));
                         }

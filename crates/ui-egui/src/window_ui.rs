@@ -253,6 +253,7 @@ impl WordApp {
             recent_colors: _,
             recent_fonts: _,
             theme: _,
+            header_colour: _,
             interface_size: _,
             legacy_interface_size: _,
             animations: _,

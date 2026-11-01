@@ -124,10 +124,12 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             app.ui.tab = next.to_string();
         }
     }
+    let header = t.header(app.ui.header_colour);
+    let (button_fill, button_hover, button_ink) = t.header_buttons(app.ui.header_colour);
     // Tab strip.
     egui::Panel::top("tabs")
         .exact_size(30.0)
-        .frame(egui::Frame::NONE.fill(t.tab_strip).inner_margin(egui::Margin { left: 8, right: 10, top: 0, bottom: 0 }))
+        .frame(egui::Frame::NONE.fill(header.tab_strip).inner_margin(egui::Margin { left: 8, right: 10, top: 0, bottom: 0 }))
         .show(ui, |ui| {
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing = vec2(2.0, 0.0);
@@ -136,7 +138,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 let share = tl!("Share");
                 let editing_label = if app.session.doc.settings.track_changes { tl!("Reviewing") } else { tl!("Editing") };
                 let comments = tl!("Comments");
-                let share_w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(share.to_string(), medium(12.0), t.text).size().x);
+                let share_w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(share.to_string(), medium(12.0), header.text).size().x);
                 let spaced = |w: f32| w + 2.0;
                 let button_widths = |level: usize| -> f32 {
                     let labels = level == 0;
@@ -153,7 +155,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     .iter()
                     .zip(&labels)
                     .map(|((tab, custom), shown)| TabSpec {
-                        text_w: ui.ctx().fonts_mut(|f| f.layout_no_wrap(shown.to_string(), medium(12.5), t.text).size().x),
+                        text_w: ui.ctx().fonts_mut(|f| f.layout_no_wrap(shown.to_string(), medium(12.5), header.text).size().x),
                         file: tab == "File",
                         active: *tab == app.ui.tab,
                         contextual: !custom && wordcraft_engine::ribbon::CONTEXTUAL_TABS.contains(&tab.as_str()),
@@ -169,17 +171,17 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                         let (share_size, share_text) =
                             if plan.buttons < 2 { (((share_w + 36.0).max(74.0), 24.0), true) } else { ((30.0, 24.0), false) };
                         let (r, resp) = ui.allocate_exact_size(vec2(share_size.0, share_size.1), Sense::click());
-                        ui.painter().rect_filled(r, 4.0, if resp.hovered() { t.accent_text } else { t.accent });
+                        ui.painter().rect_filled(r, 4.0, if resp.hovered() { button_hover } else { button_fill });
                         let icon_x = if share_text { r.min.x + 14.0 } else { r.center().x };
                         icons::paint(
                             ui.painter(),
                             Rect::from_center_size(pos2(icon_x, r.center().y), vec2(14.0, 14.0)),
                             "share",
-                            t.on_accent,
-                            t.on_accent,
+                            button_ink,
+                            button_ink,
                         );
                         if share_text {
-                            ui.painter().text(pos2(r.min.x + 26.0, r.center().y), Align2::LEFT_CENTER, share, medium(12.0), t.on_accent);
+                            ui.painter().text(pos2(r.min.x + 26.0, r.center().y), Align2::LEFT_CENTER, share, medium(12.0), button_ink);
                         }
                         resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, share));
                         if resp.on_hover_text(tl!("Export a copy to share (PDF, Word document)")).clicked() {
@@ -232,9 +234,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                             let active = app.ui.tab == tab && !app.ui.backstage;
                             resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, active, shown));
                             if resp.hovered() && !active {
-                                ui.painter().rect_filled(r.shrink2(vec2(0.0, 4.0)), 4.0, t.hover);
+                                ui.painter().rect_filled(r.shrink2(vec2(0.0, 4.0)), 4.0, header.hover);
                             }
-                            let color = if contextual || active { t.accent_text } else { t.text };
+                            let color = if contextual || active { header.accent_text } else { header.text };
                             if cut {
                                 let mut job = egui::text::LayoutJob::single_section(
                                     shown.to_string(),
@@ -260,7 +262,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                             let resp = if cut { resp.on_hover_text(shown) } else { resp };
                             if active {
                                 let u = Rect::from_center_size(pos2(r.center().x, r.max.y - 2.0), vec2(w - 16.0, 3.0));
-                                ui.painter().rect_filled(u, 2.0, t.accent);
+                                ui.painter().rect_filled(u, 2.0, header.accent);
                             }
                             if resp.clicked() {
                                 let _ = app.run("ui.tab", json!({"tab": tab}));
@@ -280,7 +282,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                         if !left_out.is_empty() {
                             let (r, resp) = ui.allocate_exact_size(vec2(MORE_TABS_W, 30.0), Sense::click());
                             if resp.hovered() {
-                                ui.painter().rect_filled(r.shrink2(vec2(0.0, 4.0)), 4.0, t.hover);
+                                ui.painter().rect_filled(r.shrink2(vec2(0.0, 4.0)), 4.0, header.hover);
                             }
                             // The active tab is in the menu: the button says so.
                             let holds_active = left_out.iter().any(|(tab, _)| *tab == app.ui.tab);
@@ -289,7 +291,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                 Align2::CENTER_CENTER,
                                 "»",
                                 medium(12.5),
-                                if holds_active { t.accent_text } else { t.text },
+                                if holds_active { header.accent_text } else { header.text },
                             );
                             // "»" means nothing read aloud: the button says what it holds.
                             let more = tl!("More tabs");
