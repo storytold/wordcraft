@@ -1012,6 +1012,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-atomic"
+version = "0.1.0"
+dependencies = [
+ "rustix 1.1.5",
+]
+
+[[package]]
+name = "craft-font-catalog"
+version = "0.1.0"
+dependencies = [
+ "fontique",
+ "skrifa 0.47.0",
+ "thiserror 2.0.21",
+ "windows-registry",
+]
+
+[[package]]
+name = "craft-font-store"
+version = "0.1.0"
+dependencies = [
+ "craft-atomic",
+ "craft-font-catalog",
+ "flate2",
+ "log",
+ "ruzstd",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "skrifa 0.47.0",
+ "tar",
+ "thiserror 2.0.21",
+ "ureq",
+]
+
+[[package]]
 name = "craft-fonts-build"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=92d392cff132eaf53e13afff77f38b5c11b73aa0#92d392cff132eaf53e13afff77f38b5c11b73aa0"
@@ -1064,10 +1099,10 @@ dependencies = [
 [[package]]
 name = "craft-proof"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=6e45fda67c6d748b4775428cc495e26006a3bf4a#6e45fda67c6d748b4775428cc495e26006a3bf4a"
 dependencies = [
  "log",
  "miniz_oxide 0.9.1",
+ "toml",
  "unicode-normalization",
 ]
 
@@ -1809,6 +1844,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c92d9081c7ab3bd83ef1eecdfad090f3d966e3ce74106779664114cfe1a6274"
 dependencies = [
  "bytemuck",
+]
+
+[[package]]
+name = "fontique"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6688bc1294fe7117d788937b6c53480169b29c566954af490830d4c09da9516a"
+dependencies = [
+ "hashbrown 0.17.1",
+ "linebender_resource_handle",
+ "memmap2",
+ "objc2 0.6.5",
+ "objc2-core-foundation",
+ "objc2-core-text",
+ "objc2-foundation 0.3.2",
+ "parlance",
+ "read-fonts 0.41.0",
+ "roxmltree",
+ "smallvec",
+ "windows",
+ "windows-core",
+ "yeslogic-fontconfig-sys",
 ]
 
 [[package]]
@@ -3345,6 +3402,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "objc2-core-text"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0cde0dfb48d25d2b4862161a4d5fcc0e3c24367869ad306b0c9ec0073bfed92d"
+dependencies = [
+ "bitflags 2.13.2",
+ "objc2-core-foundation",
+]
+
+[[package]]
 name = "objc2-encode"
 version = "4.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3614,6 +3681,12 @@ dependencies = [
  "smallvec",
  "windows-link",
 ]
+
+[[package]]
+name = "parlance"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73072a9470554c8e794778acece2312661218aaabb635600957d952cf01c716e"
 
 [[package]]
 name = "pdf-writer"
@@ -4525,6 +4598,12 @@ dependencies = [
  "tempfile",
  "wait-timeout",
 ]
+
+[[package]]
+name = "ruzstd"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69e4ce4a039f42bf25920b95667e4d789e98749ab11bbb8d2c2936f788421bb5"
 
 [[package]]
 name = "ryu"
@@ -5733,6 +5812,7 @@ dependencies = [
  "rustls-platform-verifier",
  "ureq-proto",
  "utf8-zero",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -6112,6 +6192,15 @@ name = "webpki-root-certs"
 version = "1.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e49d0e65abc00c142e8f9428da991da9f1a250c39be97459901eb12b9b49f62a"
+dependencies = [
+ "rustls-pki-types",
+]
+
+[[package]]
+name = "webpki-roots"
+version = "1.0.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f5f280bbb2b287bc8e7de7e3852945a0ff50d1bbcb5ed42b6c7a568c546df171"
 dependencies = [
  "rustls-pki-types",
 ]
@@ -6658,7 +6747,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft"
-version = "0.14.0"
+version = "0.13.2"
 dependencies = [
  "arboard",
  "chrono",
@@ -6693,7 +6782,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-cli"
-version = "0.14.0"
+version = "0.13.2"
 dependencies = [
  "serde_json",
  "sys-locale",
@@ -6706,11 +6795,11 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-control-key"
-version = "0.14.0"
+version = "0.13.2"
 
 [[package]]
 name = "wordcraft-doc"
-version = "0.14.0"
+version = "0.13.2"
 dependencies = [
  "base64 0.23.1",
  "log",
@@ -6724,7 +6813,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-docbin"
-version = "0.14.0"
+version = "0.13.2"
 dependencies = [
  "cfb",
  "chrono",
@@ -6741,7 +6830,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-docx"
-version = "0.14.0"
+version = "0.13.2"
 dependencies = [
  "aes",
  "base64 0.23.1",
@@ -6765,10 +6854,12 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-engine"
-version = "0.14.0"
+version = "0.13.2"
 dependencies = [
  "cfb",
  "chrono",
+ "craft-font-catalog",
+ "craft-font-store",
  "craft-proof",
  "encoding_rs",
  "getrandom 0.3.4",
@@ -6796,7 +6887,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-fonts"
-version = "0.14.0"
+version = "0.13.2"
 dependencies = [
  "brotli-decompressor",
  "harfrust 0.13.3",
@@ -6810,7 +6901,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-formats"
-version = "0.14.0"
+version = "0.13.2"
 dependencies = [
  "cfb",
  "chardetng",
@@ -6829,7 +6920,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-geom"
-version = "0.14.0"
+version = "0.13.2"
 dependencies = [
  "image",
  "serde",
@@ -6837,7 +6928,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-layout"
-version = "0.14.0"
+version = "0.13.2"
 dependencies = [
  "craft-proof",
  "image",
@@ -6857,7 +6948,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-mcp"
-version = "0.14.0"
+version = "0.13.2"
 dependencies = [
  "log",
  "serde_json",
@@ -6869,7 +6960,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-metafile"
-version = "0.14.0"
+version = "0.13.2"
 dependencies = [
  "kurbo",
  "thiserror 2.0.21",
@@ -6877,7 +6968,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-pdf"
-version = "0.14.0"
+version = "0.13.2"
 dependencies = [
  "chrono",
  "craft-pdf",
@@ -6898,7 +6989,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-render"
-version = "0.14.0"
+version = "0.13.2"
 dependencies = [
  "image",
  "log",
@@ -6912,7 +7003,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-ui-egui"
-version = "0.14.0"
+version = "0.13.2"
 dependencies = [
  "cfb",
  "chrono",
@@ -6943,7 +7034,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-web"
-version = "0.14.0"
+version = "0.13.2"
 dependencies = [
  "eframe",
  "egui",
@@ -6962,7 +7053,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-zotero"
-version = "0.14.0"
+version = "0.13.2"
 dependencies = [
  "log",
  "proptest",
@@ -7125,9 +7216,20 @@ checksum = "9440ea3e5aeabb0ac63af70daf835274065238cdd0cec83418f417eae38bacee"
 
 [[package]]
 name = "xtask"
-version = "0.14.0"
+version = "0.13.2"
 dependencies = [
  "serde_json",
+]
+
+[[package]]
+name = "yeslogic-fontconfig-sys"
+version = "6.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d8b8abf912b9a29ff112e1671c97c33636903d13a69712037190e6805af4f76"
+dependencies = [
+ "dlib",
+ "once_cell",
+ "pkg-config",
 ]
 
 [[package]]

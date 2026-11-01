@@ -25,7 +25,10 @@ commands:
                   audit with its missing-translation report, then doctests
   i18n-report     the interface audit: fails on text that skips the catalog, and prints the
                   strings each language has no translation for (never a failure)
-  ci              fmt --check, clippy -D warnings, test, i18n-report, doctest, assets, layers, wasm
+  language        the default build embeds only English Language data (en-*); the other
+                  languages come as Language packs. Skipped in a Language build (CRAFT_PROOF_EMBED set)
+  ci              fmt --check, clippy -D warnings, test, i18n-report, language, doctest, assets,
+                  layers, wasm
                   (stops at first failure)
   corpus [--download]
                   show where test corpora live; --download fetches PngSuite into corpus/pngsuite
@@ -47,6 +50,7 @@ fn main() -> ExitCode {
         Some("wasm") => cmd_wasm(),
         Some("test") => cmd_test().and_then(|()| cmd_i18n_report()).and_then(|()| cmd_doctest()),
         Some("i18n-report") => cmd_i18n_report(),
+        Some("language") => cmd_language(),
         Some("ci") => cmd_ci(),
         Some("corpus") => cmd_corpus(rest.contains(&"--download")),
         Some("stats") => stats::run(&root(), rest.contains(&"--exact")),
@@ -178,6 +182,19 @@ fn cmd_test() -> Result<(), String> {
 }
 
 /// Missing translations never fail the build: the report lists them in the log.
+const LANGUAGE_CHECK: &str = "packs::tests::the_default_build_embeds_only_english";
+const LANGUAGE_CHECK_FILTER: &str = "package(wordcraft-engine) & test(=packs::tests::the_default_build_embeds_only_english)";
+
+/// CP4.4: the embedded locale list is `en-*` unless this is a Language build, which names the
+/// other locales it embeds in `CRAFT_PROOF_EMBED` (craft-proof's build.rs).
+fn cmd_language() -> Result<(), String> {
+    if let Some(v) = std::env::var_os("CRAFT_PROOF_EMBED").filter(|v| !v.is_empty()) {
+        eprintln!("language: a Language build (CRAFT_PROOF_EMBED={}), not checked", v.to_string_lossy());
+        return Ok(());
+    }
+    test_run(&["-E", LANGUAGE_CHECK_FILTER], &["--exact", LANGUAGE_CHECK])
+}
+
 fn cmd_i18n_report() -> Result<(), String> {
     test_run(&["-E", I18N_AUDIT_FILTER, "--no-capture"], &["--exact", I18N_AUDIT, "--nocapture"])
 }
@@ -224,6 +241,7 @@ fn cmd_ci() -> Result<(), String> {
         ),
         ("test", Box::new(cmd_test)),
         ("i18n-report", Box::new(cmd_i18n_report)),
+        ("language", Box::new(cmd_language)),
         ("doctest", Box::new(cmd_doctest)),
         ("assets", Box::new(|| assets::run(&root()))),
         ("layers", Box::new(cmd_layers)),

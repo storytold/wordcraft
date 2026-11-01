@@ -758,6 +758,9 @@ fn parity_markdown(p: &Value) -> String {
 
 fn main() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    // Language packs installed in the suite's font store are used; `proof.installPack` installs
+    // only while the person has turned downloading on in the app.
+    wordcraft_engine::packs::use_font_store(false);
     match run(&args) {
         Ok(()) | Err(Failure::StdoutClosed) => ExitCode::SUCCESS,
         Err(Failure::Error(e)) => {

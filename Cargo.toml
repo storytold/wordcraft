@@ -4,7 +4,7 @@ members = ["crates/*", "apps/*", "xtask"]
 default-members = ["crates/*", "apps/wordcraft", "apps/wordcraft-cli", "xtask"]
 
 [workspace.package]
-version = "0.14.0"
+version = "0.13.2"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.95"
@@ -25,10 +25,11 @@ wordcraft-pdf = { path = "crates/pdf" }
 # language-data/, embedded from CRAFT_I18N_DIR (craft-i18n.rev). The package keeps the
 # `wordcraft-proof` name here so `wordcraft_proof::` paths are unchanged.
 # Pinned like the other craft-libs crates (each has its own rev). This rev is the head of
-# storytold/craft-libs#483 (SCOWL English, stacked on #482, which adds craft-proof), fetched
-# from storytold (GitHub serves PR heads from the base repo); merged with a merge commit, it
-# stays in storytold main, so the pin needs no follow-up.
-wordcraft-proof = { package = "craft-proof", git = "https://github.com/storytold/craft-libs", rev = "6e45fda67c6d748b4775428cc495e26006a3bf4a", version = "=0.1.0" }
+# storytold/craft-libs#482, which adds craft-proof; move it to that PR's merge commit once merged.
+# TODO(CP4): path deps to Lane 4's worktrees while developing; switched to their pushed heads before push.
+wordcraft-proof = { package = "craft-proof", path = "../wt-p4-libs/crates/proof" }
+craft-font-store = { path = "../wt-p4-store/crates/font-store" }
+craft-font-catalog = { path = "../wt-p4-store/crates/font-catalog" }
 wordcraft-engine = { path = "crates/engine" }
 wordcraft-mcp = { path = "crates/mcp" }
 wordcraft-zotero = { path = "crates/zotero" }

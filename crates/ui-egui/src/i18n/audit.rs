@@ -164,6 +164,17 @@ impl<'a> Exempt<'a> {
             names.extend(c.categories.iter().cloned());
             names.extend(c.series.iter().map(|s| s.name.clone()));
         }
+        // About › Language data: the licences' own titles and texts, and the packs' names,
+        // licences and sources (File › Options › Language), as their authors wrote them.
+        for (title, text) in wordcraft_engine::packs::licence_texts() {
+            names.extend([title, text]);
+        }
+        for p in wordcraft_engine::packs::available() {
+            names.extend([format!("{} · {}", p.name, p.locale), p.name, p.licence, p.url]);
+        }
+        for p in wordcraft_engine::packs::installed() {
+            names.extend([p.name.clone(), p.licence, format!("{} · {}", p.name, p.locale)]);
+        }
         for m in crate::credits::MODELS {
             names.extend([m.company, m.model, m.version].map(str::to_string));
         }
@@ -281,6 +292,7 @@ fn untranslated_interface_text() {
         "about",
         "contributors",
         "models",
+        "languageData",
         "insertMergeField",
         "findRecipient",
         "mergeRecords",

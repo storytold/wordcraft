@@ -762,6 +762,7 @@ impl Dialog {
             "about" => Dialog::About { tab: 0 },
             "contributors" => Dialog::About { tab: 1 },
             "models" => Dialog::About { tab: 2 },
+            "languageData" => Dialog::About { tab: 3 },
             // The current list to edit, or a new one to type.
             "recipientList" | "newRecipientList" => {
                 let m = &app.session.merge;

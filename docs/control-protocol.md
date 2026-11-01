@@ -73,6 +73,11 @@ and set `WORDCRAFT_CONTROL_KEY` to that app's key.
 
 Any other method name is treated as a command id: `{"method": "format.bold"}` works.
 
+Language packs (see [MCP](mcp.md#language-packs)) are commands like any other: `proof.packs`,
+`proof.installPack {"locale": "nl"}` and `proof.removePack {"locale": "nl"}`. Through the control
+channel they act on the running app's packs, and install only while its downloading setting is on;
+they never turn it on. `ui.dialog {"name": "languageData"}` opens About › Language data.
+
 ### Open documents
 
 Several documents can be open at once. Each has an id, a whole number that stays the same while

@@ -163,6 +163,7 @@ impl WordApp {
             mac_titlebar: _,
             control_rx: _,
             updates_rt: _,
+            packs_rt: _,
             // The control channel's screenshots and input go to the active window, whichever it is.
             shots: _,
             capture_epoch: _,
