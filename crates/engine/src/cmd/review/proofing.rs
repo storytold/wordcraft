@@ -55,7 +55,16 @@ fn para_issues(s: &Session, story: StoryRef, path: &wordcraft_doc::Path) -> Vec<
 
 /// The issue under a position.
 pub(super) fn issue_at(s: &Session, at: &Pos) -> Option<(Pos, Pos, wordcraft_proof::Issue)> {
-    para_issues(s, at.story, &at.path).into_iter().find(|(a, b, _)| a.off <= at.off && at.off <= b.off)
+    let issues = para_issues(s, at.story, &at.path);
+    let selected = s.sel.ordered();
+    // F7 can select a spelling issue inside a larger grammar issue. Keep that
+    // exact target for either selection direction before falling back to a point.
+    if at == &s.sel.focus
+        && let Some(issue) = issues.iter().find(|(a, b, _)| a == &selected.0 && b == &selected.1)
+    {
+        return Some(issue.clone());
+    }
+    issues.into_iter().find(|(a, b, _)| a.off <= at.off && at.off <= b.off)
 }
 
 fn issue_json(s: &Session, a: &Pos, b: &Pos, i: &wordcraft_proof::Issue) -> Value {
@@ -69,15 +78,23 @@ fn issue_json(s: &Session, a: &Pos, b: &Pos, i: &wordcraft_proof::Issue) -> Valu
 }
 
 /// F7: select the next issue after the caret and return it with suggestions.
-pub(super) fn next_issue(s: &mut Session, _: &Value) -> CmdResult {
+pub(super) fn next_issue(s: &mut Session, v: &Value) -> CmdResult {
     let caret = s.sel.ordered().1;
     let story = caret.story;
     let paths = s.doc.para_paths(story);
     let start = paths.iter().position(|p| *p == caret.path).unwrap_or(0);
-    for k in 0..paths.len() {
-        let Some(path) = paths.get((start + k) % paths.len().max(1)) else { break };
+    let wrap = p::bool(v, "wrap").unwrap_or(true);
+    // Scan forward first, including the rest of the caret's paragraph. A second pass
+    // optionally visits the earlier part; never select the first typo repeatedly in
+    // a single-paragraph story. Dialogs disable wrapping so Ignore Once can finish.
+    for (path, before) in paths
+        .iter()
+        .skip(start)
+        .map(|path| (path, false))
+        .chain(paths.iter().take(if wrap { start.saturating_add(1) } else { 0 }).map(|path| (path, true)))
+    {
         for (a, b, i) in para_issues(s, story, path) {
-            if k == 0 && a.off < caret.off && start + k < paths.len() && paths.len() > 1 {
+            if *path == caret.path && (a.off < caret.off) != before {
                 continue;
             }
             let r = issue_json(s, &a, &b, &i);
@@ -103,8 +120,13 @@ pub(super) fn all_issues(s: &mut Session, _: &Value) -> CmdResult {
 }
 
 pub(super) fn suggestions(s: &mut Session, v: &Value) -> CmdResult {
-    let at = v.get("pos").and_then(crate::cmd::parse_pos).unwrap_or_else(|| s.sel.focus.clone());
-    match issue_at(s, &at) {
+    // Explicit positions are point lookups, even when they equal the selection focus.
+    // Only an implicit or unparseable position keeps the exact selected issue.
+    let issue = match v.get("pos").and_then(crate::cmd::parse_pos) {
+        Some(at) => para_issues(s, at.story, &at.path).into_iter().find(|(a, b, _)| a.off <= at.off && at.off <= b.off),
+        None => issue_at(s, &s.sel.focus),
+    };
+    match issue {
         Some((a, b, i)) => Ok(issue_json(s, &a, &b, &i)),
         None => Ok(Value::Null),
     }
