@@ -3194,6 +3194,61 @@ fn freeform_arrow_end_draws_at_the_last_point() {
     assert_eq!(arrow_tip, endpoint, "the arrowhead tip meets the custom path's final point");
 }
 
+/// A slanted line's arrowheads sit on its ends and point along it. A line runs from its frame's
+/// top-left to its bottom-right, as DrawingML's `line` and the renderers draw it; its arrowheads
+/// were put at the other two corners.
+#[test]
+fn a_slanted_lines_arrowheads_sit_on_its_ends_and_point_along_it() {
+    use wordcraft_doc::connector::ShapeExtra;
+    use wordcraft_doc::graphic::PathSeg;
+    use wordcraft_doc::para::{Float, ShapeKind};
+    use wordcraft_doc::props::Rgb;
+    let line = InlineObject::Shape {
+        kind: ShapeKind::Line,
+        w: 60.0,
+        h: 40.0,
+        fill: None,
+        stroke: Some(Rgb::BLACK),
+        stroke_width: 1.0,
+        float: Float::default(),
+        story: None,
+        freeform: None,
+        effects: Default::default(),
+        extra: ShapeExtra { arrow_start: true, arrow_end: true, ..Default::default() },
+    };
+    let mut doc = Document::from_text("Scan");
+    doc.insert_object(&Pos::body(0, 0), line, &Default::default()).unwrap();
+    let draws = flat(display::page_display(&doc, &lay(&doc).pages[0], &Default::default()));
+    let rect = draws
+        .iter()
+        .find_map(|d| match d {
+            display::Draw::Shape { rect, kind: ShapeKind::Line, .. } => Some(*rect),
+            _ => None,
+        })
+        .expect("the line");
+    let heads: Vec<[(f32, f32); 3]> = draws
+        .iter()
+        .filter_map(|d| match d {
+            display::Draw::Path { fill: Some(display::Paint::Solid(Rgb::BLACK, _)), segs, .. } => match segs[..] {
+                [PathSeg::Move(x, y), PathSeg::Line(ax, ay), PathSeg::Line(bx, by), PathSeg::Close] => Some([(x, y), (ax, ay), (bx, by)]),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(heads.len(), 2, "{heads:?}");
+    let near = |a: (f32, f32), b: (f32, f32)| (a.0 - b.0).abs() < 0.01 && (a.1 - b.1).abs() < 0.01;
+    let (start, end) = ((rect.x, rect.y), (rect.right(), rect.bottom()));
+    for (head, tip) in heads.iter().zip([start, end]) {
+        assert!(near(head[0], tip), "the arrowhead's tip is on the line's end {tip:?}: {head:?}");
+        // Its base's middle is on the line: the head points along it.
+        let mid = ((head[1].0 + head[2].0) / 2.0, (head[1].1 + head[2].1) / 2.0);
+        let cross = (end.0 - start.0) * (mid.1 - start.1) - (end.1 - start.1) * (mid.0 - start.0);
+        assert!(cross.abs() < 0.05 * rect.w * rect.h, "the arrowhead at {tip:?} points along the line: {head:?}");
+        assert!(mid.0 > start.0 && mid.0 < end.0, "the arrowhead at {tip:?} points into the line, not away from it: {head:?}");
+    }
+}
+
 #[test]
 fn hidden_drawings_are_neither_drawn_nor_take_room() {
     // A hidden floating shape (VML `visibility:hidden`, `wp:docPr/@hidden`): no wrap area, nothing
