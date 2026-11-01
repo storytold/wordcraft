@@ -647,7 +647,7 @@ impl WordApp {
                     }
                 }
                 let size = self.ui.interface_size;
-                json!({"auto": size.is_auto(), "percent": size.drawn_percent(self.native_scale)})
+                json!({"auto": size.is_auto(), "percent": size.drawn_percent_within(self.native_scale, self.auto_scale_limit)})
             }
             "ui.animations" => {
                 // `system` (follow the system's animation setting), `on` or `off`; no value reads

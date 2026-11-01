@@ -669,7 +669,8 @@ fn interface_size_picker(app: &mut WordApp, ui: &mut Ui) {
     use crate::theme::InterfaceSize;
     let size = app.ui.interface_size;
     let native = ui.ctx().native_pixels_per_point().unwrap_or(1.0);
-    let auto = crate::i18n::fmt(tl!("Auto ({percent}%)"), &[("percent", &InterfaceSize::AUTO.drawn_percent(native).to_string())]);
+    let drawn = InterfaceSize::AUTO.drawn_percent_within(native, app.auto_scale_limit);
+    let auto = crate::i18n::fmt(tl!("Auto ({percent}%)"), &[("percent", &drawn.to_string())]);
     let selected = size.percent().map_or_else(|| auto.clone(), |pct| format!("{pct}%"));
     ui.horizontal(|ui| {
         let label = ui.label(tl!("Interface size:"));
