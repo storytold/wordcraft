@@ -74,6 +74,7 @@ pub(super) const NS: &str = concat!(
     "xmlns:svg=\"urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0\" ",
     "xmlns:number=\"urn:oasis:names:tc:opendocument:xmlns:datastyle:1.0\" ",
     "xmlns:form=\"urn:oasis:names:tc:opendocument:xmlns:form:1.0\" ",
+    "xmlns:ooow=\"http://openoffice.org/2004/writer\" ",
     "xmlns:loext=\"urn:org:documentfoundation:names:experimental:office:xmlns:loext:1.0\" ",
     "office:version=\"1.3\""
 );

@@ -67,6 +67,8 @@ pub(super) struct Body<'a> {
     lists_saved: Vec<(Vec<(Option<String>, bool)>, Vec<bool>, u32)>,
     tables: Vec<TableB>,
     cells: Vec<Cell>,
+    /// Each open cell's formula, as a Word formula field code (§19.646 `table:formula`).
+    formulas: Vec<Option<String>>,
     pub(super) in_text: bool,
     skip: usize,
     depth: usize,
@@ -174,6 +176,7 @@ impl<'a> Body<'a> {
             item_used: Vec::new(),
             tables: Vec::new(),
             cells: Vec::new(),
+            formulas: Vec::new(),
             in_text: false,
             skip: 0,
             depth: 0,
@@ -784,6 +787,7 @@ impl Body<'_> {
                     t.hcover = span as usize - 1;
                 }
                 self.cells.push(Cell { colspan: span, rowspan: rows, shading, valign, borders, margins, ..Default::default() });
+                self.formulas.push(get(a, "table:formula").and_then(super::cell_formula::word_of));
                 self.containers.push(Vec::new());
                 self.lists_saved.push((std::mem::take(&mut self.lists), std::mem::take(&mut self.item_used), self.list_id));
             }
@@ -1164,7 +1168,10 @@ impl Body<'_> {
             }
             "table-cell" => {
                 self.end_para();
-                let blocks = if self.containers.len() > 1 { self.containers.pop().unwrap_or_default() } else { Vec::new() };
+                let mut blocks = if self.containers.len() > 1 { self.containers.pop().unwrap_or_default() } else { Vec::new() };
+                if let Some(f) = self.formulas.pop().flatten() {
+                    super::cell_formula::into_field(&mut blocks, f);
+                }
                 (self.lists, self.item_used, self.list_id) = self.lists_saved.pop().unwrap_or_default();
                 let mut cell = self.cells.pop().unwrap_or_default();
                 cell.blocks = blocks;

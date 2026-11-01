@@ -97,3 +97,35 @@ fn a_user_field_updates_from_its_property() {
     s.run("references.updateFields", &json!({"all": true})).unwrap();
     assert_eq!(results(&s), ["Ada"]);
 }
+
+#[test]
+fn a_table_formula_updates_as_a_word_formula() {
+    // LibreOffice's sum of the cells above, its value out of date: Update Field works it out.
+    let cell = |v: &str| {
+        format!(
+            r#"<table:table-row><table:table-cell office:value-type="float" office:value="{v}"><text:p>{v}</text:p></table:table-cell></table:table-row>"#
+        )
+    };
+    let body = format!(
+        r#"<table:table xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0">{}{}<table:table-row><table:table-cell table:formula="ooow:sum &lt;A1:A2&gt;" office:value-type="float" office:value="99"><text:p>99</text:p></table:table-cell></table:table-row></table:table>"#,
+        cell("1.5"),
+        cell("3")
+    );
+    let mut s = Session::new(io::open_bytes("sum.odt", &odt(&body)).unwrap());
+    let shown = |s: &Session| -> Vec<(String, String)> {
+        let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+        t.rows
+            .iter()
+            .flat_map(|r| r.cells.iter())
+            .flat_map(|c| c.blocks.iter().filter_map(|b| b.as_para()))
+            .flat_map(|p| p.objects.iter())
+            .filter_map(|o| match o {
+                wordcraft_doc::para::InlineObject::Field { instr, result, .. } => Some((instr.clone(), result.clone())),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(shown(&s), [("=SUM(A1:A2)".to_string(), "99".to_string())]);
+    s.run("references.updateFields", &json!({"all": true})).unwrap();
+    assert_eq!(shown(&s), [("=SUM(A1:A2)".to_string(), "4.50".to_string())]);
+}

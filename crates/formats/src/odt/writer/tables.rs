@@ -1,6 +1,6 @@
 //! Tables written (ODF 1.3 §9.1): columns, rows, cells and their borders, padding and shading.
 
-use super::{Border, BorderStyle, Borders, FTable, Rgb, VAlign, Writer, model, odf_border, pt};
+use super::{Border, BorderStyle, Borders, FTable, Rgb, VAlign, Writer, model, odf_border, pt, x};
 
 /// Word's default cell margins (top, left, bottom, right), points.
 pub(in crate::odt) const WORD_CELL_MARGINS: [f32; 4] = [0.0, 5.4, 0.0, 5.4];
@@ -128,7 +128,21 @@ impl Writer {
                     continue;
                 }
                 let st = self.cell_style(cell_props(t, ri, g - span, c, cols));
-                let mut attrs = format!(" table:style-name=\"{st}\" office:value-type=\"string\"");
+                // A formula field: the cell's formula, and the value it shows (§19.646, §19.388).
+                let formula = crate::odt::cell_formula::of_cell(&c.blocks)
+                    .and_then(|(instr, result)| Some((crate::odt::cell_formula::odf_of(instr, (ri, g - span), (t.rows.len(), cols))?, result)));
+                let value = match formula {
+                    Some((f, result)) => match result.trim().parse::<f64>().ok().filter(|v| v.is_finite()) {
+                        Some(v) => format!(" table:formula=\"{}\" office:value-type=\"float\" office:value=\"{v}\"", x(&f)),
+                        None => format!(" table:formula=\"{}\"", x(&f)),
+                    },
+                    None => match crate::odt::cell_formula::number_of(&c.blocks) {
+                        // A number: formulas calculate with it.
+                        Some(v) => format!(" office:value-type=\"float\" office:value=\"{v}\""),
+                        None => " office:value-type=\"string\"".to_string(),
+                    },
+                };
+                let mut attrs = format!(" table:style-name=\"{st}\"{value}");
                 if span > 1 {
                     attrs.push_str(&format!(" table:number-columns-spanned=\"{span}\""));
                 }
