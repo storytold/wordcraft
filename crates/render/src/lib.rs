@@ -550,315 +550,44 @@ fn path_len_bound(path: &BezPath) -> f64 {
     len
 }
 
+/// Where and how a display item is rasterized: `view` maps its current point coordinates to
+/// pixels, and `visible` is a culling area in those point coordinates.
+struct Frame<'a> {
+    doc: &'a Document,
+    opts: &'a RenderOptions,
+    view: Affine,
+    visible: &'a kurbo::Rect,
+}
+
+/// The rectangle in kurbo's terms.
+fn kurbo_rect(rect: &wordcraft_geom::Rect) -> kurbo::Rect {
+    kurbo::Rect::new(rect.x as f64, rect.y as f64, rect.right() as f64, rect.bottom() as f64)
+}
+
 /// Rasterize one display item with `view` mapping its current point coordinates to pixels.
 /// `visible` is a culling area in those point coordinates; nested clips intersect it and turns
 /// transform it into the child's coordinates. Shape and path strokes apply their stored caps,
 /// while ink uses its tool's round ends and joins.
 fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visible: &kurbo::Rect, opts: &RenderOptions) {
+    let fr = Frame { doc, opts, view, visible };
     match it {
         Draw::Figure { draws, .. } => {
             for d in draws {
                 draw(ctx, doc, d, view, visible, opts);
             }
         }
-        Draw::Fill { rect, color: c, alpha, text_bg } => {
-            let r = kurbo::Rect::new(rect.x as f64, rect.y as f64, rect.right() as f64, rect.bottom() as f64);
-            if !r.overlaps(*visible) {
-                return;
-            }
-            ctx.set_transform(view);
-            ctx.set_paint(color(if *text_bg { opts.ink_bg(*c) } else { opts.ink(*c) }, *alpha));
-            ctx.fill_rect(&r);
-        }
-        Draw::Line { x0, y0, x1, y1, width, color: c, stroke, alpha, text_bg } => {
-            ctx.set_transform(view);
-            ctx.set_paint(color(opts.ink_text(*c, *text_bg), *alpha));
-            let w = *width as f64;
-            // Flat ends, like the PDF export and Word: a round cap sticks half the width out past
-            // every end, blobbing over the neighbouring border at a table's corners (#2892). Wavy
-            // underlines keep round ends, as the PDF draws them.
-            let mut st = kurbo::Stroke::new(w).with_caps(kurbo::Cap::Butt);
-            let (x0, y0, x1, y1) = (*x0 as f64, *y0 as f64, *x1 as f64, *y1 as f64);
-            if let Some(d) = stroke.dashes() {
-                st = st.with_dashes(0.0, safe_dashes(d.iter().map(|k| f64::from(*k) * w), (x1 - x0).hypot(y1 - y0)));
-            }
-            let line = |ctx: &mut RenderContext, ox: f64, oy: f64| {
-                let mut p = BezPath::new();
-                p.move_to((x0 + ox, y0 + oy));
-                p.line_to((x1 + ox, y1 + oy));
-                ctx.stroke_path(&p);
-            };
-            if *stroke == Stroke::Wave {
-                let amp = (w * 1.2).max(0.8);
-                let p = wave_path(x0, y0, x1, y1, amp);
-                ctx.set_stroke(kurbo::Stroke::new(w * 0.8));
-                ctx.stroke_path(&p);
-                return;
-            }
-            if *stroke == Stroke::Triple {
-                // Three thin lines, spaced as a double's, across the line's direction (so a
-                // vertical border's lines stand side by side).
-                let (dx, dy) = (x1 - x0, y1 - y0);
-                let len = (dx * dx + dy * dy).sqrt().max(1e-3);
-                let (nx, ny) = (-dy / len * w * 1.8, dx / len * w * 1.8);
-                ctx.set_stroke(kurbo::Stroke::new(w * 0.6));
-                for k in [-1.0, 0.0, 1.0] {
-                    line(ctx, nx * k, ny * k);
-                }
-                return;
-            }
-            if *stroke == Stroke::Double {
-                let (dx, dy) = (x1 - x0, y1 - y0);
-                let len = (dx * dx + dy * dy).sqrt().max(1e-3);
-                let (nx, ny) = (-dy / len * w * 0.9, dx / len * w * 0.9);
-                ctx.set_stroke(kurbo::Stroke::new(w * 0.6).with_caps(kurbo::Cap::Butt));
-                line(ctx, nx, ny);
-                line(ctx, -nx, -ny);
-                return;
-            }
-            ctx.set_stroke(st);
-            line(ctx, 0.0, 0.0);
-        }
-        Draw::Glyphs { face, size, glyphs, color: c, alpha, synth_bold, synth_italic, text_bg, x_scale, .. } => {
-            // Invisible glyphs (WordArt letters are drawn from their outlines) carry text only.
-            if *alpha <= 0.0 {
-                return;
-            }
-            let db = FontDb::global();
-            let k = *size as f64 / face.upem.max(1.0);
-            ctx.set_paint(color(opts.ink_text(*c, *text_bg), *alpha));
-            let skew = if *synth_italic { Affine::new([1.0, 0.0, -0.21, 1.0, 0.0, 0.0]) } else { Affine::IDENTITY };
-            // Scaled letters (`w:w`): each glyph stretched across from its pen position.
-            let sx = if x_scale.is_finite() && *x_scale > 0.0 { f64::from(*x_scale) } else { 1.0 };
-            let skew = Affine::scale_non_uniform(sx, 1.0) * skew;
-            // Outline strokes, in font units: synthetic bold, then on-screen stem darkening (a
-            // stroke grows the outline by half its width on each side). Darkening is skipped for
-            // translucent text, where the stroke overlapping the fill would show as a darker rim.
-            let px_per_pt = view.determinant().abs().sqrt();
-            let darken_px = if opts.text_darkening && *alpha >= 1.0 { stem_darkening(*size as f64 * px_per_pt) } else { 0.0 };
-            let darken = if darken_px > 0.0 && k * px_per_pt > 0.0 { 2.0 * darken_px / (k * px_per_pt) } else { 0.0 };
-            let outline_stroke = if *synth_bold { face.upem * 0.03 } else { 0.0 } + darken;
-            if outline_stroke > 0.0 {
-                let join = if darken > 0.0 { kurbo::Join::Round } else { kurbo::Join::Miter };
-                ctx.set_stroke(kurbo::Stroke::new(outline_stroke).with_join(join));
-            }
-            // Emoji and other colour glyphs (#1269) are drawn from the font's colour data.
-            let colour = face.has_color_glyphs();
-            let ppem = *size as f64 * px_per_pt;
-            for (gid, x, y) in glyphs {
-                let (gx, gy) = (*x as f64, *y as f64);
-                // Written so a NaN position is skipped too.
-                let near = gx >= visible.x0 - 100.0 && gx <= visible.x1 && gy >= visible.y0 && gy <= visible.y1 + 200.0;
-                if !near {
-                    continue;
-                }
-                if colour && let Some(d) = color_glyph::drawable(face, *gid, ppem, true) {
-                    let at = view * Affine::translate((gx, gy)) * skew * Affine::scale(k);
-                    color_glyph::draw(ctx, &d, at, face.upem, color(opts.ink(*c), 1.0), *alpha);
-                    ctx.set_paint(color(opts.ink(*c), *alpha));
-                    continue;
-                }
-                let o = db.outline(face, *gid);
-                if o.elements().is_empty() {
-                    continue;
-                }
-                ctx.set_transform(view * Affine::translate((gx, gy)) * skew * Affine::scale(k));
-                ctx.fill_path(&o);
-                if outline_stroke > 0.0 {
-                    ctx.stroke_path(&o);
-                }
-            }
-        }
-        Draw::Mark { x, baseline, size, ch, color: mark } => {
-            let face = wordcraft_fonts::word::resolve("Source Sans 3", false, false).face;
-            let gid = face.glyph_for(*ch);
-            let face = if gid == 0 {
-                match FontDb::global().fallback_for(*ch, face.id()) {
-                    Some(f) => wordcraft_fonts::FaceRef::of(&f),
-                    None => return,
-                }
-            } else {
-                face
-            };
-            let gid = face.glyph_for(*ch);
-            let o = FontDb::global().outline(&face, gid);
-            let k = *size as f64 / face.upem.max(1.0);
-            ctx.set_paint(color(opts.ink(mark.unwrap_or(opts.mark_color)), 0.9));
-            ctx.set_transform(view * Affine::translate((*x as f64, *baseline as f64)) * Affine::scale(k));
-            ctx.fill_path(&o);
-        }
-        Draw::MarkText { x, baseline, size, text } => {
-            let base_face = wordcraft_fonts::word::resolve("Source Sans 3", false, false).face;
-            ctx.set_paint(color(opts.ink(opts.mark_color), 0.9));
-            let mut gx = *x as f64;
-            for ch in text.chars() {
-                let mut face = base_face;
-                if face.glyph_for(ch) == 0
-                    && let Some(f) = FontDb::global().fallback_for(ch, face.id())
-                {
-                    face = wordcraft_fonts::FaceRef::of(&f);
-                }
-                let gid = face.glyph_for(ch);
-                let k = *size as f64 / face.upem.max(1.0);
-                let o = FontDb::global().outline(&face, gid);
-                ctx.set_transform(view * Affine::translate((gx, *baseline as f64)) * Affine::scale(k));
-                ctx.fill_path(&o);
-                gx += face.advance(gid) * k;
-            }
-        }
-        Draw::Image { rect, media, crop, alpha, .. } => {
-            let r = kurbo::Rect::new(rect.x as f64, rect.y as f64, rect.right() as f64, rect.bottom() as f64);
-            if !r.overlaps(*visible) {
-                return;
-            }
-            if let Some(v) = vector_for(doc, media) {
-                draw_vector(ctx, &v, &r, crop, *alpha, view);
-                return;
-            }
-            let Some(pm) = pixmap_for(doc, media) else {
-                ctx.set_transform(view);
-                ctx.set_paint(color(opts.ink(Rgb(0xD0, 0xD0, 0xD0)), 1.0));
-                ctx.fill_rect(&r);
-                return;
-            };
-            let (pw, ph) = (pm.width().max(1) as f64, pm.height().max(1) as f64);
-            let [cl, ct, vis_w, vis_h] = wordcraft_metafile::crop_window(*crop);
-            let sx = r.width() / (pw * vis_w);
-            let sy = r.height() / (ph * vis_h);
-            ctx.set_transform(view);
-            // vello_cpu panics on image paints with sampler alpha != 1, so fade through a layer.
-            let alpha = if alpha.is_finite() { alpha.clamp(0.0, 1.0) } else { 1.0 };
-            let faded = alpha < 1.0;
-            if faded {
-                ctx.push_opacity_layer(alpha);
-            }
-            ctx.set_paint(vello_cpu::Image {
-                image: vello_cpu::ImageSource::Pixmap(pm),
-                sampler: peniko::ImageSampler::default().with_quality(peniko::ImageQuality::Medium),
-            });
-            ctx.set_paint_transform(Affine::translate((r.x0 - cl * pw * sx, r.y0 - ct * ph * sy)) * Affine::scale_non_uniform(sx, sy));
-            ctx.fill_rect(&r);
-            ctx.reset_paint_transform();
-            if faded {
-                ctx.pop_layer();
-            }
-        }
-        Draw::Path { segs, fill, stroke, stroke_width, dash, cap } => {
-            let path = wordcraft_layout::display::seg_path(segs);
-            if path.elements().is_empty() {
-                return;
-            }
-            ctx.set_transform(view);
-            if let Some(f) = fill {
-                set_paint(ctx, f, opts);
-                ctx.fill_path(&path);
-            }
-            if let Some(s) = stroke {
-                // Width 0 (or none) is a hairline.
-                let w = if stroke_width.is_finite() && *stroke_width > 0.0 { stroke_width.clamp(0.25, 200.0) } else { 0.75 };
-                ctx.set_paint(color(opts.ink(*s), 1.0));
-                ctx.set_stroke(
-                    kurbo::Stroke::new(w as f64)
-                        .with_caps(screen_cap(*cap))
-                        .with_dashes(0.0, safe_dashes(dash.iter().map(|v| f64::from(*v)), path_len_bound(&path))),
-                );
-                ctx.stroke_path(&path);
-            }
-        }
-        Draw::Art { path, fx, color: c, alpha, text_bg } => {
-            let Some(b) = wordcraft_layout::wordart::path_box(path) else { return };
-            if !b.inflate(200.0, 200.0).overlaps(*visible) {
-                return;
-            }
-            ctx.set_transform(view);
-            for l in wordcraft_layout::wordart::art_layers(path, fx, *c, *alpha) {
-                // The letters read against their highlight like plain text (#1252); shadows don't.
-                let ink = |c: Rgb| if l.letters { opts.ink_text(c, *text_bg) } else { opts.ink(c) };
-                set_paint_inked(ctx, &l.paint, ink);
-                match l.stroke {
-                    Some(w) => {
-                        ctx.set_stroke(kurbo::Stroke::new(f64::from(w.clamp(0.1, 400.0))).with_join(kurbo::Join::Round));
-                        ctx.stroke_path(&l.path);
-                    }
-                    None => ctx.fill_path(&l.path),
-                }
-            }
-        }
-        Draw::Ink { pts, color: c, width, alpha } => {
-            let Some(path) = ink_path(pts) else { return };
-            if !path.bounding_box().inflate(*width as f64, *width as f64).overlaps(*visible) {
-                return;
-            }
-            ctx.set_transform(view);
-            ctx.set_paint(color(opts.ink(*c), *alpha));
-            let w = if width.is_finite() { width.clamp(0.25, 200.0) } else { 1.0 };
-            ctx.set_stroke(kurbo::Stroke::new(w as f64).with_caps(kurbo::Cap::Round).with_join(kurbo::Join::Round));
-            ctx.stroke_path(&path);
-        }
-        Draw::Shape { rect, kind, fill, stroke, stroke_width, effects, corner, dash, cap } => {
-            let r = kurbo::Rect::new(rect.x as f64, rect.y as f64, rect.right() as f64, rect.bottom() as f64);
-            let path = shape_path(*kind, r, *corner);
-            ctx.set_transform(view);
-            let fx = effects.sanitized();
-            let can_fill = *kind != ShapeKind::Line && fill.is_some();
-            if !fx.is_empty() && (can_fill || stroke.is_some()) {
-                let sw = if stroke_width.is_finite() { stroke_width.clamp(0.25, 200.0) as f64 } else { 0.75 };
-                // The shape's silhouette grown by `g` points and moved by `d`, in the current paint.
-                let silhouette = |ctx: &mut RenderContext, g: f32, d: kurbo::Vec2| {
-                    let g = g as f64;
-                    if can_fill {
-                        let grow = g + if stroke.is_some() { sw / 2.0 } else { 0.0 };
-                        let rr = r.inflate(grow, grow) + d;
-                        if rr.width() > 0.0 && rr.height() > 0.0 {
-                            ctx.fill_path(&shape_path(*kind, rr, *corner));
-                        }
-                    } else if sw + 2.0 * g > 0.05 {
-                        ctx.set_stroke(kurbo::Stroke::new(sw + 2.0 * g));
-                        ctx.stroke_path(&shape_path(*kind, r + d, *corner));
-                    }
-                };
-                if let Some(sh) = fx.shadow {
-                    let (dx, dy) = sh.offset();
-                    for (g, a) in wordcraft_doc::effects::bands(-sh.blur / 2.0, sh.blur / 2.0, sh.opacity()) {
-                        ctx.set_paint(color(opts.ink(sh.color), a));
-                        silhouette(ctx, g, kurbo::Vec2::new(dx as f64, dy as f64));
-                    }
-                }
-                if let Some(gl) = fx.glow {
-                    for (g, a) in wordcraft_doc::effects::bands(0.0, gl.size, gl.opacity()) {
-                        ctx.set_paint(color(opts.ink(gl.color), a));
-                        silhouette(ctx, g, kurbo::Vec2::ZERO);
-                    }
-                }
-            }
-            // Soft edges: the fill fades out toward the outline (which fades with it).
-            if let (Some(rad), Some(f), true) = (fx.soft_edge, fill, can_fill) {
-                let rad = rad.min(rect.w.min(rect.h) / 2.0).max(0.0);
-                for (g, a) in wordcraft_doc::effects::bands(-rad, 0.0, 1.0) {
-                    let rr = r.inflate(g as f64, g as f64);
-                    if rr.width() > 0.0 && rr.height() > 0.0 {
-                        set_paint(ctx, &f.faded(a), opts);
-                        ctx.fill_path(&shape_path(*kind, rr, *corner));
-                    }
-                }
-                return;
-            }
-            if let Some(f) = fill {
-                set_paint(ctx, f, opts);
-                ctx.fill_path(&path);
-            }
-            if let Some(s) = stroke {
-                ctx.set_paint(color(opts.ink(*s), 1.0));
-                ctx.set_stroke(
-                    kurbo::Stroke::new(if stroke_width.is_nan() { 0.25 } else { stroke_width.clamp(0.25, 200.0) } as f64)
-                        .with_caps(screen_cap(*cap))
-                        .with_dashes(0.0, safe_dashes(dash.iter().map(|v| f64::from(*v)), path_len_bound(&path))),
-                );
-                ctx.stroke_path(&path);
-            }
-        }
+        Draw::Fill { .. } => draw_fill(ctx, &fr, it),
+        Draw::Line { .. } => draw_line(ctx, &fr, it),
+        Draw::Glyphs { .. } => draw_glyphs(ctx, &fr, it),
+        Draw::Mark { .. } => draw_mark(ctx, &fr, it),
+        Draw::MarkText { .. } => draw_mark_text(ctx, &fr, it),
+        Draw::Image { .. } => draw_image(ctx, &fr, it),
+        Draw::Path { .. } => draw_path(ctx, &fr, it),
+        Draw::Art { .. } => draw_art(ctx, &fr, it),
+        Draw::Ink { .. } => draw_ink(ctx, &fr, it),
+        Draw::Shape { .. } => draw_shape(ctx, &fr, it),
         Draw::Clip { rect, items } => {
-            let r = kurbo::Rect::new(rect.x as f64, rect.y as f64, rect.right() as f64, rect.bottom() as f64);
+            let r = kurbo_rect(rect);
             if !r.is_finite() || !r.overlaps(*visible) {
                 return;
             }
@@ -884,6 +613,342 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
                 draw(ctx, doc, it, view * m, &local, opts);
             }
         }
+    }
+}
+
+fn draw_fill(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
+    let Draw::Fill { rect, color: c, alpha, text_bg } = it else { return };
+    let r = kurbo_rect(rect);
+    if !r.overlaps(*fr.visible) {
+        return;
+    }
+    ctx.set_transform(fr.view);
+    ctx.set_paint(color(if *text_bg { fr.opts.ink_bg(*c) } else { fr.opts.ink(*c) }, *alpha));
+    ctx.fill_rect(&r);
+}
+
+fn draw_line(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
+    let Draw::Line { x0, y0, x1, y1, width, color: c, stroke, alpha, text_bg } = it else { return };
+    ctx.set_transform(fr.view);
+    ctx.set_paint(color(fr.opts.ink_text(*c, *text_bg), *alpha));
+    let w = *width as f64;
+    let (x0, y0, x1, y1) = (*x0 as f64, *y0 as f64, *x1 as f64, *y1 as f64);
+    // Flat ends, like the PDF export and Word: a round cap sticks half the width out past
+    // every end, blobbing over the neighbouring border at a table's corners (#2892). Wavy
+    // underlines keep round ends, as the PDF draws them.
+    let mut st = kurbo::Stroke::new(w).with_caps(kurbo::Cap::Butt);
+    if let Some(d) = stroke.dashes() {
+        st = st.with_dashes(0.0, safe_dashes(d.iter().map(|k| f64::from(*k) * w), (x1 - x0).hypot(y1 - y0)));
+    }
+    let (dx, dy) = (x1 - x0, y1 - y0);
+    let len = (dx * dx + dy * dy).sqrt().max(1e-3);
+    match *stroke {
+        Stroke::Wave => {
+            let amp = (w * 1.2).max(0.8);
+            ctx.set_stroke(kurbo::Stroke::new(w * 0.8));
+            ctx.stroke_path(&wave_path(x0, y0, x1, y1, amp));
+        }
+        // Three thin lines, spaced as a double's, across the line's direction (so a vertical
+        // border's lines stand side by side).
+        Stroke::Triple => {
+            let (nx, ny) = (-dy / len * w * 1.8, dx / len * w * 1.8);
+            ctx.set_stroke(kurbo::Stroke::new(w * 0.6));
+            for k in [-1.0, 0.0, 1.0] {
+                stroke_segment(ctx, (x0, y0, x1, y1), (nx * k, ny * k));
+            }
+        }
+        Stroke::Double => {
+            let (nx, ny) = (-dy / len * w * 0.9, dx / len * w * 0.9);
+            ctx.set_stroke(kurbo::Stroke::new(w * 0.6).with_caps(kurbo::Cap::Butt));
+            stroke_segment(ctx, (x0, y0, x1, y1), (nx, ny));
+            stroke_segment(ctx, (x0, y0, x1, y1), (-nx, -ny));
+        }
+        _ => {
+            ctx.set_stroke(st);
+            stroke_segment(ctx, (x0, y0, x1, y1), (0.0, 0.0));
+        }
+    }
+}
+
+/// Stroke the line from (`x0`, `y0`) to (`x1`, `y1`), moved by (`ox`, `oy`).
+fn stroke_segment(ctx: &mut RenderContext, (x0, y0, x1, y1): (f64, f64, f64, f64), (ox, oy): (f64, f64)) {
+    let mut p = BezPath::new();
+    p.move_to((x0 + ox, y0 + oy));
+    p.line_to((x1 + ox, y1 + oy));
+    ctx.stroke_path(&p);
+}
+
+fn draw_glyphs(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
+    let Draw::Glyphs { face, size, glyphs, color: c, alpha, synth_bold, synth_italic, text_bg, x_scale, .. } = it else { return };
+    // Invisible glyphs (WordArt letters are drawn from their outlines) carry text only.
+    if *alpha <= 0.0 {
+        return;
+    }
+    let (view, visible, opts) = (fr.view, fr.visible, fr.opts);
+    let db = FontDb::global();
+    let k = *size as f64 / face.upem.max(1.0);
+    ctx.set_paint(color(opts.ink_text(*c, *text_bg), *alpha));
+    let skew = if *synth_italic { Affine::new([1.0, 0.0, -0.21, 1.0, 0.0, 0.0]) } else { Affine::IDENTITY };
+    // Scaled letters (`w:w`): each glyph stretched across from its pen position.
+    let sx = if x_scale.is_finite() && *x_scale > 0.0 { f64::from(*x_scale) } else { 1.0 };
+    let skew = Affine::scale_non_uniform(sx, 1.0) * skew;
+    // Outline strokes, in font units: synthetic bold, then on-screen stem darkening (a
+    // stroke grows the outline by half its width on each side). Darkening is skipped for
+    // translucent text, where the stroke overlapping the fill would show as a darker rim.
+    let px_per_pt = view.determinant().abs().sqrt();
+    let darken_px = if opts.text_darkening && *alpha >= 1.0 { stem_darkening(*size as f64 * px_per_pt) } else { 0.0 };
+    let darken = if darken_px > 0.0 && k * px_per_pt > 0.0 { 2.0 * darken_px / (k * px_per_pt) } else { 0.0 };
+    let outline_stroke = if *synth_bold { face.upem * 0.03 } else { 0.0 } + darken;
+    if outline_stroke > 0.0 {
+        let join = if darken > 0.0 { kurbo::Join::Round } else { kurbo::Join::Miter };
+        ctx.set_stroke(kurbo::Stroke::new(outline_stroke).with_join(join));
+    }
+    // Emoji and other colour glyphs (#1269) are drawn from the font's colour data.
+    let colour = face.has_color_glyphs();
+    let ppem = *size as f64 * px_per_pt;
+    for (gid, x, y) in glyphs {
+        let (gx, gy) = (*x as f64, *y as f64);
+        // Written so a NaN position is skipped too.
+        let near = gx >= visible.x0 - 100.0 && gx <= visible.x1 && gy >= visible.y0 && gy <= visible.y1 + 200.0;
+        if !near {
+            continue;
+        }
+        if colour && let Some(d) = color_glyph::drawable(face, *gid, ppem, true) {
+            let at = view * Affine::translate((gx, gy)) * skew * Affine::scale(k);
+            color_glyph::draw(ctx, &d, at, face.upem, color(opts.ink(*c), 1.0), *alpha);
+            ctx.set_paint(color(opts.ink(*c), *alpha));
+            continue;
+        }
+        let o = db.outline(face, *gid);
+        if o.elements().is_empty() {
+            continue;
+        }
+        ctx.set_transform(view * Affine::translate((gx, gy)) * skew * Affine::scale(k));
+        ctx.fill_path(&o);
+        if outline_stroke > 0.0 {
+            ctx.stroke_path(&o);
+        }
+    }
+}
+
+fn draw_mark(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
+    let Draw::Mark { x, baseline, size, ch, color: mark } = it else { return };
+    let face = wordcraft_fonts::word::resolve("Source Sans 3", false, false).face;
+    let gid = face.glyph_for(*ch);
+    let face = if gid == 0 {
+        match FontDb::global().fallback_for(*ch, face.id()) {
+            Some(f) => wordcraft_fonts::FaceRef::of(&f),
+            None => return,
+        }
+    } else {
+        face
+    };
+    let gid = face.glyph_for(*ch);
+    let o = FontDb::global().outline(&face, gid);
+    let k = *size as f64 / face.upem.max(1.0);
+    ctx.set_paint(color(fr.opts.ink(mark.unwrap_or(fr.opts.mark_color)), 0.9));
+    ctx.set_transform(fr.view * Affine::translate((*x as f64, *baseline as f64)) * Affine::scale(k));
+    ctx.fill_path(&o);
+}
+
+fn draw_mark_text(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
+    let Draw::MarkText { x, baseline, size, text } = it else { return };
+    let base_face = wordcraft_fonts::word::resolve("Source Sans 3", false, false).face;
+    ctx.set_paint(color(fr.opts.ink(fr.opts.mark_color), 0.9));
+    let mut gx = *x as f64;
+    for ch in text.chars() {
+        let mut face = base_face;
+        if face.glyph_for(ch) == 0
+            && let Some(f) = FontDb::global().fallback_for(ch, face.id())
+        {
+            face = wordcraft_fonts::FaceRef::of(&f);
+        }
+        let gid = face.glyph_for(ch);
+        let k = *size as f64 / face.upem.max(1.0);
+        let o = FontDb::global().outline(&face, gid);
+        ctx.set_transform(fr.view * Affine::translate((gx, *baseline as f64)) * Affine::scale(k));
+        ctx.fill_path(&o);
+        gx += face.advance(gid) * k;
+    }
+}
+
+fn draw_image(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
+    let Draw::Image { rect, media, crop, alpha, .. } = it else { return };
+    let (doc, view) = (fr.doc, fr.view);
+    let r = kurbo_rect(rect);
+    if !r.overlaps(*fr.visible) {
+        return;
+    }
+    if let Some(v) = vector_for(doc, media) {
+        draw_vector(ctx, &v, &r, crop, *alpha, view);
+        return;
+    }
+    let Some(pm) = pixmap_for(doc, media) else {
+        ctx.set_transform(view);
+        ctx.set_paint(color(fr.opts.ink(Rgb(0xD0, 0xD0, 0xD0)), 1.0));
+        ctx.fill_rect(&r);
+        return;
+    };
+    let (pw, ph) = (pm.width().max(1) as f64, pm.height().max(1) as f64);
+    let [cl, ct, vis_w, vis_h] = wordcraft_metafile::crop_window(*crop);
+    let sx = r.width() / (pw * vis_w);
+    let sy = r.height() / (ph * vis_h);
+    ctx.set_transform(view);
+    // vello_cpu panics on image paints with sampler alpha != 1, so fade through a layer.
+    let alpha = if alpha.is_finite() { alpha.clamp(0.0, 1.0) } else { 1.0 };
+    let faded = alpha < 1.0;
+    if faded {
+        ctx.push_opacity_layer(alpha);
+    }
+    ctx.set_paint(vello_cpu::Image {
+        image: vello_cpu::ImageSource::Pixmap(pm),
+        sampler: peniko::ImageSampler::default().with_quality(peniko::ImageQuality::Medium),
+    });
+    ctx.set_paint_transform(Affine::translate((r.x0 - cl * pw * sx, r.y0 - ct * ph * sy)) * Affine::scale_non_uniform(sx, sy));
+    ctx.fill_rect(&r);
+    ctx.reset_paint_transform();
+    if faded {
+        ctx.pop_layer();
+    }
+}
+
+fn draw_path(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
+    let Draw::Path { segs, fill, stroke, stroke_width, dash, cap } = it else { return };
+    let path = wordcraft_layout::display::seg_path(segs);
+    if path.elements().is_empty() {
+        return;
+    }
+    ctx.set_transform(fr.view);
+    if let Some(f) = fill {
+        set_paint(ctx, f, fr.opts);
+        ctx.fill_path(&path);
+    }
+    if let Some(s) = stroke {
+        // Width 0 (or none) is a hairline.
+        let w = if stroke_width.is_finite() && *stroke_width > 0.0 { stroke_width.clamp(0.25, 200.0) } else { 0.75 };
+        ctx.set_paint(color(fr.opts.ink(*s), 1.0));
+        ctx.set_stroke(
+            kurbo::Stroke::new(w as f64)
+                .with_caps(screen_cap(*cap))
+                .with_dashes(0.0, safe_dashes(dash.iter().map(|v| f64::from(*v)), path_len_bound(&path))),
+        );
+        ctx.stroke_path(&path);
+    }
+}
+
+fn draw_art(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
+    let Draw::Art { path, fx, color: c, alpha, text_bg } = it else { return };
+    let Some(b) = wordcraft_layout::wordart::path_box(path) else { return };
+    if !b.inflate(200.0, 200.0).overlaps(*fr.visible) {
+        return;
+    }
+    ctx.set_transform(fr.view);
+    for l in wordcraft_layout::wordart::art_layers(path, fx, *c, *alpha) {
+        // The letters read against their highlight like plain text (#1252); shadows don't.
+        let ink = |c: Rgb| if l.letters { fr.opts.ink_text(c, *text_bg) } else { fr.opts.ink(c) };
+        set_paint_inked(ctx, &l.paint, ink);
+        match l.stroke {
+            Some(w) => {
+                ctx.set_stroke(kurbo::Stroke::new(f64::from(w.clamp(0.1, 400.0))).with_join(kurbo::Join::Round));
+                ctx.stroke_path(&l.path);
+            }
+            None => ctx.fill_path(&l.path),
+        }
+    }
+}
+
+fn draw_ink(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
+    let Draw::Ink { pts, color: c, width, alpha } = it else { return };
+    let Some(path) = ink_path(pts) else { return };
+    if !path.bounding_box().inflate(*width as f64, *width as f64).overlaps(*fr.visible) {
+        return;
+    }
+    ctx.set_transform(fr.view);
+    ctx.set_paint(color(fr.opts.ink(*c), *alpha));
+    let w = if width.is_finite() { width.clamp(0.25, 200.0) } else { 1.0 };
+    ctx.set_stroke(kurbo::Stroke::new(w as f64).with_caps(kurbo::Cap::Round).with_join(kurbo::Join::Round));
+    ctx.stroke_path(&path);
+}
+
+/// A shape's outline and how it is painted, for its shadow, glow and soft edges.
+struct ShapeGeom {
+    r: kurbo::Rect,
+    kind: ShapeKind,
+    corner: Option<u32>,
+    can_fill: bool,
+    stroked: bool,
+}
+
+/// A shape's shadow and glow, behind it: bands of its silhouette grown by `g` points and moved
+/// by `d`, in the current paint. `sw` is the outline's width.
+fn shape_shadow_and_glow(ctx: &mut RenderContext, fr: &Frame, (geom, sw): (&ShapeGeom, f64), fx: &wordcraft_doc::effects::ShapeEffects) {
+    let r = geom.r;
+    let silhouette = |ctx: &mut RenderContext, g: f32, d: kurbo::Vec2| {
+        let g = g as f64;
+        if geom.can_fill {
+            let grow = g + if geom.stroked { sw / 2.0 } else { 0.0 };
+            let rr = r.inflate(grow, grow) + d;
+            if rr.width() > 0.0 && rr.height() > 0.0 {
+                ctx.fill_path(&shape_path(geom.kind, rr, geom.corner));
+            }
+        } else if sw + 2.0 * g > 0.05 {
+            ctx.set_stroke(kurbo::Stroke::new(sw + 2.0 * g));
+            ctx.stroke_path(&shape_path(geom.kind, r + d, geom.corner));
+        }
+    };
+    if let Some(sh) = fx.shadow {
+        let (dx, dy) = sh.offset();
+        for (g, a) in wordcraft_doc::effects::bands(-sh.blur / 2.0, sh.blur / 2.0, sh.opacity()) {
+            ctx.set_paint(color(fr.opts.ink(sh.color), a));
+            silhouette(ctx, g, kurbo::Vec2::new(dx as f64, dy as f64));
+        }
+    }
+    if let Some(gl) = fx.glow {
+        for (g, a) in wordcraft_doc::effects::bands(0.0, gl.size, gl.opacity()) {
+            ctx.set_paint(color(fr.opts.ink(gl.color), a));
+            silhouette(ctx, g, kurbo::Vec2::ZERO);
+        }
+    }
+}
+
+/// Soft edges: the fill fades out toward the outline (which fades with it).
+fn shape_soft_edges(ctx: &mut RenderContext, fr: &Frame, geom: &ShapeGeom, (rad, f): (f32, &Paint)) {
+    for (g, a) in wordcraft_doc::effects::bands(-rad, 0.0, 1.0) {
+        let rr = geom.r.inflate(g as f64, g as f64);
+        if rr.width() > 0.0 && rr.height() > 0.0 {
+            set_paint(ctx, &f.faded(a), fr.opts);
+            ctx.fill_path(&shape_path(geom.kind, rr, geom.corner));
+        }
+    }
+}
+
+fn draw_shape(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
+    let Draw::Shape { rect, kind, fill, stroke, stroke_width, effects, corner, dash, cap } = it else { return };
+    let r = kurbo_rect(rect);
+    let path = shape_path(*kind, r, *corner);
+    ctx.set_transform(fr.view);
+    let fx = effects.sanitized();
+    let geom = ShapeGeom { r, kind: *kind, corner: *corner, can_fill: *kind != ShapeKind::Line && fill.is_some(), stroked: stroke.is_some() };
+    if !fx.is_empty() && (geom.can_fill || geom.stroked) {
+        let sw = if stroke_width.is_finite() { stroke_width.clamp(0.25, 200.0) as f64 } else { 0.75 };
+        shape_shadow_and_glow(ctx, fr, (&geom, sw), &fx);
+    }
+    if let (Some(rad), Some(f), true) = (fx.soft_edge, fill, geom.can_fill) {
+        shape_soft_edges(ctx, fr, &geom, (rad.min(rect.w.min(rect.h) / 2.0).max(0.0), f));
+        return;
+    }
+    if let Some(f) = fill {
+        set_paint(ctx, f, fr.opts);
+        ctx.fill_path(&path);
+    }
+    if let Some(s) = stroke {
+        ctx.set_paint(color(fr.opts.ink(*s), 1.0));
+        ctx.set_stroke(
+            kurbo::Stroke::new(if stroke_width.is_nan() { 0.25 } else { stroke_width.clamp(0.25, 200.0) } as f64)
+                .with_caps(screen_cap(*cap))
+                .with_dashes(0.0, safe_dashes(dash.iter().map(|v| f64::from(*v)), path_len_bound(&path))),
+        );
+        ctx.stroke_path(&path);
     }
 }
 
@@ -998,8 +1063,9 @@ pub fn shape_path(kind: ShapeKind, r: kurbo::Rect, corner: Option<u32>) -> BezPa
     }
 }
 
-/// Render the page area (`x`, `y`, `w`×`h` points) at `scale` px/pt — for previews and thumbnails.
-pub fn render_area(doc: &Document, page: &Page, x: f32, y: f32, w: f32, h: f32, scale: f32, opts: &RenderOptions) -> Rendered {
+/// Render the page `area` (points) at `scale` px/pt — for previews and thumbnails.
+pub fn render_area(doc: &Document, page: &Page, area: wordcraft_geom::Rect, scale: f32, opts: &RenderOptions) -> Rendered {
+    let wordcraft_geom::Rect { x, y, w, h } = area;
     let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
     let pw = ((w * scale).ceil() as u32).clamp(1, MAX_SIDE);
     let ph = ((h * scale).ceil() as u32).clamp(1, MAX_SIDE);
@@ -1007,9 +1073,10 @@ pub fn render_area(doc: &Document, page: &Page, x: f32, y: f32, w: f32, h: f32, 
     render_region(doc, page, pw, ph, view, opts)
 }
 
-/// Draw `items` (page points) alone, on nothing, over the page area (`x`, `y`, `w`×`h` points)
-/// at `scale` px/pt: no paper, no watermark. A dragged object's preview.
-pub fn render_items(doc: &Document, items: &[Draw], x: f32, y: f32, w: f32, h: f32, scale: f32, opts: &RenderOptions) -> Rendered {
+/// Draw `items` (page points) alone, on nothing, over the page `area` (points) at `scale` px/pt:
+/// no paper, no watermark. A dragged object's preview.
+pub fn render_items(doc: &Document, items: &[Draw], area: wordcraft_geom::Rect, scale: f32, opts: &RenderOptions) -> Rendered {
+    let wordcraft_geom::Rect { x, y, w, h } = area;
     let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
     let (pw, ph) = (((w * scale).ceil() as u32).clamp(1, MAX_SIDE), ((h * scale).ceil() as u32).clamp(1, MAX_SIDE));
     let (cw, ch) = wordcraft_geom::fit_pixels(pw, ph, wordcraft_geom::MAX_RASTER_PIXELS);
