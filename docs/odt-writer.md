@@ -60,6 +60,12 @@ page or column break waiting for the next block.
 As the exchange-flow writer does, hidden text is left out of the package (with the breaks and
 objects in it), and a picture marked decorative is written with no description.
 
+Style names: a model style id becomes an ODF style name (an NCName) by replacing every
+character XML doesn't allow in a name with `_` (and `:`), so nothing in it needs escaping; the
+model's name goes to `style:display-name`, escaped. Ids that normalize to the same name send
+the document to the exchange-flow writer. A `based_on` loop in the model is cut where it closes:
+a style whose parent's chain leads back to it is written without `style:parent-style-name`.
+
 ## LibreOffice behaviours the writer works around
 
 The reference is LibreOffice opening the DOCX of the same document: the ODT must lay out the
