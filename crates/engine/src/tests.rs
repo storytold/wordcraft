@@ -1,6 +1,6 @@
-// Reuse our hand-written Czech proof fixture; its install helper resolves this parent import.
+// A copy of craft-proof's hand-written Czech fixture (`crates/proof/src/cs/test_dict.rs` in
+// craft-libs, which a dependency's tests can't share); its install helper resolves this parent import.
 use wordcraft_proof::cs::install_dictionary;
-#[path = "../../proof/src/cs/test_dict.rs"]
 mod czech_test_dict;
 
 use serde_json::json;

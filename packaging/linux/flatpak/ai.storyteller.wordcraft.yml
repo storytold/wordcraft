@@ -122,9 +122,10 @@ modules:
           - corpus
           - build-flatpak
           - .flatpak-builder
-      # The interface translations at the commit in craft-i18n.rev (a test keeps the two equal).
+      # The interface translations and Language data at the commit in craft-i18n.rev (a test keeps
+      # the two equal).
       - type: git
         url: https://github.com/storytold/craft-i18n
-        commit: 9205108cfdced5177706264038848b68b2422d2b
+        commit: f84aaa56adf40a595e0d279a6014cf1d07eb0289
         dest: craft-i18n
       - cargo-sources.json

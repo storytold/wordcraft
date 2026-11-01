@@ -140,6 +140,17 @@ cargo run --release -p wordcraft -- --sample        # the desktop app with the s
 cargo run --release -p wordcraft -- report.docx     # open a document
 ```
 
+The interface translations and the spelling and hyphenation data come from
+[craft-i18n](https://github.com/storytold/craft-i18n), an optional build input. To build with them,
+check it out at the commit in `craft-i18n.rev` and point `CRAFT_I18N_DIR` at it (an absolute
+path); without it WordCraft builds in English with no English spell-checking and no hyphenation:
+
+```sh
+git clone https://github.com/storytold/craft-i18n ../craft-i18n
+git -C ../craft-i18n checkout "$(cat craft-i18n.rev)"
+CRAFT_I18N_DIR="$PWD/../craft-i18n" cargo run --release -p wordcraft -- --sample
+```
+
 Command line:
 
 ```sh
@@ -194,7 +205,7 @@ covers every target starting with it (`wordcraft*=debug`). The logger is
 | Layer | Crate | Job |
 |---|---|---|
 | L0 | `wordcraft-geom` | units and measurements |
-| L1 | `wordcraft-doc`, `wordcraft-fonts`, `wordcraft-proof` | document model and editing; fonts and shaping; spelling, grammar, hyphenation |
+| L1 | `wordcraft-doc`, `wordcraft-fonts`, `wordcraft-proof` ([`craft-proof`](https://github.com/storytold/craft-libs/tree/main/crates/proof) from craft-libs) | document model and editing; fonts and shaping; spelling, grammar, hyphenation (data: craft-i18n `language-data/`, `CRAFT_I18N_DIR`) |
 | L2 | `wordcraft-layout`, `wordcraft-docx`, `wordcraft-formats` | line breaking, pagination, tables, notes, hit testing; OOXML; ODT/RTF/HTML/Markdown/TXT |
 | L3 | `wordcraft-render`, `wordcraft-pdf` | rasteriser (vello_cpu); PDF ([craft-pdf](docs/shared-pdf.md), Krilla) |
 | L4 | `wordcraft-engine` | session, undo, 422 commands, document feature catalog |
