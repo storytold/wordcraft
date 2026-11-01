@@ -1,6 +1,6 @@
 # WordCraft roadmap
 
-> **Highlight update:** 2026-10-25 · Highlight shortcut toggles the last chosen colour off when the whole selection has it; explicit colour commands remain setters (#4085). Readiness estimates unchanged.
+> **AutoCorrect update:** 2026-10-28 · TWo INitial CApitals fixes a word only when the spelling check of its language or the replacement list knows the fixed word, as in Word, so `DMs` stays as typed (#4248); previously, 2026-10-25: Highlight shortcut toggles the last chosen colour off when the whole selection has it; explicit colour commands remain setters (#4085). Readiness estimates unchanged.
 
 **Stage: alpha** · next: beta, ~15 points (60% → 75% ready for real work) and ~150–230 h away
 
@@ -170,6 +170,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 - 2026-10-25: Interface catalogs are still the shared storytold/craft-i18n ones embedded from `craft-i18n.rev` (`9205108c…`): 27 WordCraft languages with English fallback for missing strings, and the equation “Delete Around Caret in Equation” translation preserved. Native-speaker review remains human.
 - 2026-10-25: Input methods (egui 0.37): character- and byte-counted surrounding deletions, a fresh composition after body/equation replacement, rejection of queued stale replacements before mutation, transactional equation deletes and one undo group, with tracked and placeholder length mapping. Synthetic regressions document these paths; managed CI passed, and native IME acceptance (#155–#164) plus browser IME behavior remain open.
 - 2026-10-25: Text Highlight Color shows the last colour as the button's bar in the ribbon and mini toolbar; after No Color it shows the pen without a misleading yellow bar, and the button removes highlighting (#4087).
+- 2026-10-28: AutoCorrect's TWo INitial CApitals fixes a word only when the spelling check of its language accepts the fixed word or the replacement list has it, as Word for Windows does, so `DMs`, `MBps` and `PDfs` stay as typed while `THe` and `HEllo` are still fixed (#4248).
 - 2026-10-23: cu20we: DrawingML flat, square and round line caps are imported, saved, displayed and exported to PDF; absent or unknown caps default to flat. VML end caps (including shapetype inheritance) are preserved through DOCX save. Ink and metafile stroke handling remain separate. Synthetic DOCX, raster and PDF regressions cover the change; no new native Word comparison.
 - 2026-10-23: cu20we: paragraph-relative box floats start above effective space before; header, footer, cell and text-box layout regressions pass. Framed paragraph positioning is unchanged; no new native Word comparison.
 - 2026-10-23: AutoFormat As You Type: `*Bold* and _italic_ as real formatting`. With the option on, `*word*` typed and finished becomes bold and `_word_` italic, without the marks. It is off by default (`tools.autocorrect {"boldItalic"}`).
@@ -685,6 +686,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-31 | trivial | Progress log: Backstage keytips, Alt, F, P prints (#4960) |
 | 2026-10-30 | trivial | Progress log: only the PDF sent to the printer leaves out link annotations; Save these pages as PDF keeps them (#4734) |
 | 2026-10-29 | trivial | Progress log: documents with links print (#4734) |
+| 2026-10-28 | trivial | Progress log: TWo INitial CApitals fixes only into a known word (#4248) |
 | 2026-10-28 | trivial | Aligned copies retain their locked document coordinate during middle-button scrolling and can start on secondary selected objects; existing Ctrl and Shift selection behavior stays (#4764) |
 | 2026-10-28 | trivial | Ctrl/Command+Shift drags a selected floating object into an axis-aligned copy (#4764); synthetic Linux interaction and persistence controls, native desktop and Word untested; gap/readiness estimates unchanged |
 | 2026-10-28 | trivial | Connector object lookups retain the typed column-selection inputs on current main (#3631); readiness estimates unchanged |
