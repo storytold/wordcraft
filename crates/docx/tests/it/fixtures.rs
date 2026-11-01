@@ -2475,6 +2475,52 @@ fn vml_lines_and_rectangles() {
     ));
 }
 
+/// An arrowhead's kind, width and length (DrawingML `a:headEnd`/`a:tailEnd` `type`/`w`/`len`, VML
+/// `startarrow`/`startarrowwidth`/`startarrowlength`) are read and saved: they set the size Word
+/// draws it at. An end without `w`/`len` is medium.
+#[test]
+fn arrowheads_keep_their_kind_and_size() {
+    use wordcraft_doc::connector::{ArrowKind, ArrowSize, ArrowStyle};
+    let style = |kind, width, length| ArrowStyle { kind, width, length };
+    let body = [
+        anchored_wsp(
+            "Line",
+            1270000,
+            0,
+            r#"<a:prstGeom prst="line"><a:avLst/></a:prstGeom><a:ln w="12700"><a:solidFill><a:srgbClr val="000000"/></a:solidFill><a:headEnd type="stealth" w="sm" len="lg"/><a:tailEnd type="diamond" w="lg" len="sm"/></a:ln>"#,
+            "",
+            "<wps:cNvCnPr/>",
+        ),
+        anchored_wsp("Plain", 1270000, 0, r#"<a:prstGeom prst="line"><a:avLst/></a:prstGeom><a:ln><a:solidFill><a:srgbClr val="000000"/></a:solidFill><a:tailEnd type="triangle"/></a:ln>"#, "", "<wps:cNvCnPr/>"),
+        r#"<w:r><w:pict><v:line style="position:absolute" from="10pt,20pt" to="40pt,20pt"><v:stroke startarrow="classic" startarrowwidth="narrow" startarrowlength="long" endarrow="oval" endarrowwidth="wide" endarrowlength="short"/></v:line></w:pict></w:r>"#.to_string(),
+    ]
+    .concat();
+    let ends = |d: &Document| -> Vec<(bool, ArrowStyle, bool, ArrowStyle)> {
+        paras(d)[0]
+            .objects
+            .iter()
+            .map(|o| match o {
+                InlineObject::Shape { extra, .. } => (extra.arrow_start, extra.start_style, extra.arrow_end, extra.end_style),
+                o => panic!("{o:?}"),
+            })
+            .collect()
+    };
+    let expected = vec![
+        (true, style(ArrowKind::Stealth, ArrowSize::Small, ArrowSize::Large), true, style(ArrowKind::Diamond, ArrowSize::Large, ArrowSize::Small)),
+        (false, ArrowStyle::default(), true, ArrowStyle::default()),
+        (true, style(ArrowKind::Stealth, ArrowSize::Small, ArrowSize::Large), true, style(ArrowKind::Oval, ArrowSize::Large, ArrowSize::Small)),
+    ];
+    let d = read_body(&format!("<w:p>{body}</w:p>"));
+    assert_eq!(ends(&d), expected);
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let mut xml = String::new();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).unwrap();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains(r#"<a:headEnd type="stealth" w="sm" len="lg"/>"#), "{xml}");
+    assert!(xml.contains(r#"<a:tailEnd type="diamond" w="lg" len="sm"/>"#), "{xml}");
+    assert_eq!(ends(&wordcraft_docx::read(&bytes).unwrap()), expected);
+}
+
 /// The right arrow's shapetype as Word writes it (ECMA-376 Part 4 `v:shapetype`, `o:spt` 13).
 const VML_RIGHT_ARROW_TYPE: &str = r#"<v:shapetype id="_x0000_t13" coordsize="21600,21600" o:spt="13" adj="16200,5400" path="m@0,l@0@1,0@1,0@2@0@2@0,21600,21600,10800xe"><v:stroke joinstyle="miter"/><v:formulas><v:f eqn="val #0"/><v:f eqn="val #1"/></v:formulas><v:path o:connecttype="custom"/></v:shapetype>"#;
 
