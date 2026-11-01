@@ -2099,6 +2099,47 @@ fn theme_colour_wins_over_the_fixed_colour() {
     assert!(near(Some(TextColor::Rgb(fill)), Rgb(0xFB, 0xE4, 0xD5)), "{fill:?}");
 }
 
+/// `w:shd w:val="nil"` paints nothing despite its fill: a CV template's red cell showed over the name.
+#[test]
+fn nil_shading_paints_no_fill() {
+    let body = r#"
+<w:tbl><w:tblGrid><w:gridCol w:w="200"/><w:gridCol w:w="2000"/></w:tblGrid><w:tr>
+ <w:tc><w:tcPr><w:shd w:val="nil" w:color="auto" w:fill="C00000"/></w:tcPr><w:p/></w:tc>
+ <w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="C00000"/></w:tcPr><w:p/></w:tc></w:tr></w:tbl>
+<w:p><w:pPr><w:shd w:val="nil" w:fill="C00000" w:themeFill="accent2"/></w:pPr><w:r><w:rPr><w:shd w:val="nil" w:color="C00000" w:fill="C00000"/></w:rPr><w:t>x</w:t></w:r></w:p>"#;
+    let d = read_body(body);
+    let Block::Table(t) = &*d.body[0] else { panic!("table first") };
+    assert_eq!(t.rows[0].cells[0].props.shading, None);
+    assert_eq!(t.rows[0].cells[1].props.shading, Some(Rgb(0xC0, 0, 0)));
+    let p = paras(&d);
+    assert_eq!(p[0].props.shading, None);
+    assert_eq!(p[0].props_of_char(0).shading, None);
+}
+
+/// A border's theme colour wins over its stale `w:color`: a template's white rule showed as black.
+#[test]
+fn border_theme_colour_wins_over_the_fixed_colour() {
+    let body = r#"
+<w:p><w:pPr><w:pBdr><w:top w:val="single" w:sz="4" w:color="000000" w:themeColor="background1"/><w:left w:val="single" w:sz="4" w:color="FF0000"/></w:pBdr></w:pPr><w:r><w:rPr><w:bdr w:val="single" w:sz="4" w:color="auto" w:themeColor="accent2"/></w:rPr><w:t>x</w:t></w:r></w:p>
+<w:tbl><w:tblPr><w:tblBorders><w:top w:val="single" w:sz="4" w:color="000000" w:themeColor="accent1"/></w:tblBorders></w:tblPr><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcBorders><w:left w:val="single" w:sz="4" w:color="000000" w:themeColor="accent6" w:themeShade="BF"/></w:tcBorders></w:tcPr><w:p/></w:tc></w:tr></w:tbl>
+<w:p/>
+<w:sectPr><w:pgBorders><w:top w:val="single" w:sz="4" w:color="000000" w:themeColor="text2"/></w:pgBorders></w:sectPr>"#;
+    let styles = r#"<w:style w:type="table" w:styleId="T"><w:name w:val="T"/><w:tblPr><w:tblBorders><w:bottom w:val="single" w:sz="4" w:color="000000" w:themeColor="accent3"/></w:tblBorders></w:tblPr></w:style>"#;
+    let d = themed_docx(body, styles, None);
+    let p = paras(&d);
+    let pb = p[0].props.borders.unwrap();
+    assert_eq!(pb.top.and_then(|b| b.color), Some(Rgb(0xFF, 0xFF, 0xFF)));
+    assert_eq!(pb.left.and_then(|b| b.color), Some(Rgb(0xFF, 0, 0)), "no theme colour keeps the fixed one");
+    assert_eq!(p[0].props_of_char(0).border.and_then(|b| b.color), Some(Rgb(0xED, 0x7D, 0x31)));
+    let Block::Table(t) = &*d.body[1] else { panic!("table second") };
+    assert_eq!(t.props.borders.and_then(|b| b.top).and_then(|b| b.color), Some(Rgb(0x44, 0x72, 0xC4)));
+    let cell = t.rows[0].cells[0].props.borders.and_then(|b| b.left).and_then(|b| b.color);
+    assert!(near(cell.map(TextColor::Rgb), Rgb(0x53, 0x81, 0x35)), "{cell:?}");
+    assert_eq!(d.last_section.page_borders.and_then(|b| b.top).and_then(|b| b.color), Some(Rgb(0x44, 0x54, 0x6A)));
+    let st = d.styles.get("T").and_then(|s| s.table.as_ref()).and_then(|t| t.borders);
+    assert_eq!(st.and_then(|b| b.bottom).and_then(|b| b.color), Some(Rgb(0xA5, 0xA5, 0xA5)));
+}
+
 #[test]
 fn theme_colours_follow_the_colour_scheme_mapping() {
     // Styles are read before settings; the mapping still applies to them.
