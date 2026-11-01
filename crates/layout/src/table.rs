@@ -1357,7 +1357,8 @@ fn apply_cell_widths(t: &Table, grid: &mut [f32]) {
 /// Word sizes each column by the percentage its cells ask for, whichever rows ask: cells without a
 /// preferred width take no part, so a header row of percentages sizes the automatic rows below it.
 /// The percentages are shares of the table's width, scaled up when they come short of 100%; past
-/// 100% the last column takes what is left, 2 pt at least in a fixed table. A table without a
+/// 100% the columns take their shares left to right until the width runs out
+/// (`overfull_shares`). A table without a
 /// width of its own takes `avail` when autofit and its grid's width when fixed. Measured in Word.
 /// Columns some cell leaves unsized, conflicting percentages, spans and absolute widths keep the
 /// grid.
@@ -1397,19 +1398,42 @@ fn apply_pct_widths(t: &Table, grid: &mut [f32], avail: f32) {
         }
         return;
     }
-    // Over 100%, every column but the last takes its share and the last gives up the overflow:
-    // in an autofit table down to nothing, then autofit widens it to its longest word at the
-    // others' expense; in a fixed table down to 2 pt, its text clipped to the cell.
-    let mut used = 0.0;
-    let last = grid.len() - 1;
-    for (w, p) in grid[..last].iter_mut().zip(&pcts) {
-        *w = total * p / 100.0;
-        used += *w;
-    }
-    grid[last] = (total - used).max(if t.props.fixed { FIXED_PCT_MIN_COLUMN } else { 0.0 });
+    let floor = if t.props.fixed { FIXED_PCT_MIN_COLUMN } else { 0.0 };
+    grid.copy_from_slice(&overfull_shares(&pcts, total, floor));
 }
 
-/// The narrowest a fixed table's last column gets when the percentages before it fill the table
+/// Over 100%, as Word lays it out: the columns take their shares left to right until the table's
+/// width runs out; the column it runs out in takes what is left, and those after it nothing. In an
+/// autofit table autofit then widens them to their longest words at the others' expense. In a
+/// fixed table they keep `floor` each, their text clipped, and the shares are of what is left
+/// once those are set aside.
+fn overfull_shares(pcts: &[f32], total: f32, floor: f32) -> Vec<f32> {
+    let mut starved = 0;
+    loop {
+        let room = (total - floor * starved as f32).max(0.0);
+        let mut used = 0.0;
+        let mut short = 0;
+        let widths: Vec<f32> = pcts
+            .iter()
+            .map(|p| {
+                let w = (room * p / 100.0).min(room - used);
+                if w < floor || w <= 0.0 {
+                    short += 1;
+                    return floor;
+                }
+                used += w;
+                w
+            })
+            .collect();
+        // More columns starved than were set aside for: set aside for them and share again.
+        if short <= starved || starved >= pcts.len() {
+            return widths;
+        }
+        starved = short;
+    }
+}
+
+/// The narrowest a fixed table's columns get when the percentages before them fill the table
 /// (measured in Word: 2 pt, with or without a table width).
 const FIXED_PCT_MIN_COLUMN: f32 = 2.0;
 

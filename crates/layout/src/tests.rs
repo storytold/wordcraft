@@ -9792,13 +9792,14 @@ fn percentage_cell_widths_size_the_columns_whichever_rows_ask() {
     let over = starts(table(0, [60.0, 20.0, 20.0, 60.0]));
     let lost = [0.6 * 468.0 - over[1], 0.2 * 468.0 - (over[2] - over[1]), 0.2 * 468.0 - (over[3] - over[2])];
     assert!(lost[0] > 1.0 && lost.iter().all(|l| (l - lost[0]).abs() < 0.01), "columns start at {over:?}");
-    // A fixed table gives the last column 2 pt and clips its text to the cell instead.
+    // A fixed table gives the last column 2 pt and clips its text to the cell instead; the
+    // others share the rest of its 460.3 pt (Word: 275.5, 91.5, 91 and 2 pt).
     let mut fixed_over = table(0, [60.0, 20.0, 20.0, 60.0]);
     fixed_over.props.fixed = true;
     for row in &mut fixed_over.rows {
         row.cells[3].blocks = vec![wordcraft_doc::para_block(Paragraph::with_text("Lorem ipsum", Default::default()))];
     }
-    near(starts(fixed_over.clone()), [0.0, 0.6, 0.8, 1.0].map(|f| f * 460.3));
+    near(starts(fixed_over.clone()), [0.0, 0.6, 0.8, 1.0].map(|f| f * (460.3 - 2.0)));
     let mut d = Document::from_text("After");
     d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(fixed_over)).unwrap();
     let l = lay(&d);
@@ -9809,6 +9810,33 @@ fn percentage_cell_widths_size_the_columns_whichever_rows_ask() {
         .collect();
     assert!(cells.iter().any(|&(c, w, clip)| c == 3 && (w - 2.0).abs() < 0.01 && clip), "the last cell is 2 pt and clipped: {cells:?}");
     assert!(cells.iter().all(|&(c, _, clip)| c == 3 || !clip), "only the last cell is clipped: {cells:?}");
+    // When the columns before the last already pass 100% (80/40/40/20), Word gives them their
+    // shares left to right until the width runs out, and the table keeps its width: in a fixed
+    // table the third and fourth columns get 2 pt, the shares being of 460.3 - 4 pt; in an
+    // autofit table they get their longest words, the first two giving up the same width.
+    let widths = |t: Table| {
+        let mut d = Document::from_text("After");
+        d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+        let l = lay(&d);
+        let mut w: Vec<(usize, f32)> = l.pages[0]
+            .items
+            .iter()
+            .filter_map(|i| if let Placed::Cell { cell, rect, row: 0, .. } = i { Some((*cell, rect.w)) } else { None })
+            .collect();
+        w.sort_by_key(|c| c.0);
+        w.into_iter().map(|c| c.1).collect::<Vec<f32>>()
+    };
+    let mut fixed_far = table(0, [80.0, 40.0, 40.0, 20.0]);
+    fixed_far.props.fixed = true;
+    let got = widths(fixed_far);
+    let room = 460.3 - 4.0;
+    let want = [0.8 * room, 0.2 * room, 2.0, 2.0];
+    assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() < 0.01), "fixed 80/40/40/20: {got:?}, not {want:?}");
+    assert!((got.iter().sum::<f32>() - 460.3).abs() < 0.01, "fixed 80/40/40/20 is {} wide", got.iter().sum::<f32>());
+    let got = widths(table(0, [80.0, 40.0, 40.0, 20.0]));
+    assert!((got.iter().sum::<f32>() - 468.0).abs() < 0.01, "autofit 80/40/40/20 is {} wide: {got:?}", got.iter().sum::<f32>());
+    let lost = [0.8 * 468.0 - got[0], 0.2 * 468.0 - got[1]];
+    assert!(lost[0] > 1.0 && (lost[0] - lost[1]).abs() < 0.01 && got[2] > 1.0 && got[3] > 1.0, "autofit 80/40/40/20: {got:?}");
     // A column no cell sizes, percentages that disagree, a span over two columns and an absolute
     // width alongside keep the grid.
     let grid = [0.0, 107.3, 144.5, 176.45];
