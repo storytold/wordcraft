@@ -85,6 +85,22 @@ pub(crate) struct PageBuilder<'a> {
     /// No layout pass follows for floats found above their anchors: each is kept clear of the
     /// text laid out before it ([`settle_early`]).
     pub(crate) settle: bool,
+    /// The lines between the columns of the section on the current page, drawn once its text
+    /// there is laid out ([`PageBuilder::close_column_lines`]).
+    pub(crate) column_lines: Option<ColumnLines>,
+}
+
+/// Where the lines between a section's columns go on a page: the page, the top of the section's
+/// text there (the body's top, or below the text before a continuous section break), and each
+/// line's x.
+#[derive(Clone, Debug)]
+pub(crate) struct ColumnLines {
+    page: usize,
+    top: f32,
+    xs: Vec<f32>,
+    /// The first top-level block of the section's text on the page: its text is the page's
+    /// items from there on.
+    first_block: usize,
 }
 
 /// Page borders, measured from the page edge (Word's default), so they surround the header,
@@ -281,6 +297,7 @@ impl PageBuilder<'_> {
         true
     }
     pub(crate) fn new_page(&mut self, first_block: usize, body_top: f32) {
+        self.close_column_lines();
         self.apply_valign();
         self.flush_notes();
         self.beneath = self.sect_beneath;
@@ -301,18 +318,6 @@ impl PageBuilder<'_> {
         let mut decor = Vec::new();
         if !self.web {
             decor = page_border_rules(s);
-            // Lines between columns.
-            if s.columns.separator && s.columns.count > 1 {
-                let cols = s.column_boxes();
-                for w in cols.windows(2) {
-                    if let [(ax, aw), (bx, bw)] = w {
-                        // Midway across the space between neighbours (leftwards in an RTL section).
-                        let mid = if bx >= ax { (ax + aw + bx) / 2.0 } else { (bx + bw + ax) / 2.0 };
-                        let x = s.margin_left + s.gutter + mid;
-                        decor.push(Placed::Rule { x0: x, y0: body_top, x1: x, y1: bottom, border: Border::single(0.5) });
-                    }
-                }
-            }
         }
         self.page_items_start = decor.len();
         self.block_marks.clear();
@@ -334,6 +339,47 @@ impl PageBuilder<'_> {
         self.max_y = self.top;
         self.content_bottom = self.top;
         self.cap_columns();
+        self.open_column_lines(first_block);
+    }
+    /// Start the lines between the current section's columns at `top` on this page, when it has
+    /// them (Line between, `w:sep`).
+    pub(crate) fn open_column_lines(&mut self, first_block: usize) {
+        let s = self.sect;
+        if self.web || !s.columns.separator || s.columns.count < 2 || self.pages.is_empty() {
+            self.column_lines = None;
+            return;
+        }
+        let xs = s
+            .column_boxes()
+            .windows(2)
+            .filter_map(|w| match w {
+                // Midway across the space between neighbours (leftwards in an RTL section).
+                [(ax, aw), (bx, bw)] => Some(s.margin_left + s.gutter + if bx >= ax { (ax + aw + bx) / 2.0 } else { (bx + bw + ax) / 2.0 }),
+                _ => None,
+            })
+            .collect();
+        self.column_lines = Some(ColumnLines { page: self.pages.len() - 1, top: self.top, xs, first_block });
+    }
+    /// Draw the lines between the columns of the section's text on its page, from the top of
+    /// that text to the bottom of its tallest column, as Word does: a continuous section in the
+    /// middle of a page (columns for selected text, #5178) gets lines its own height, and a
+    /// section with no text on the page none (space before alone included). They span the text's
+    /// lines and table cells, not the space before its first paragraph or after its last. Called
+    /// when the page or the section ends there, so the page's text below the section's top is the
+    /// section's.
+    pub(crate) fn close_column_lines(&mut self) {
+        let Some(c) = self.column_lines.take() else { return };
+        if c.page + 1 != self.pages.len() {
+            return;
+        }
+        let flow_bottom = self.text_bottom();
+        let Some(pg) = self.pages.get_mut(c.page) else { return };
+        let Some((top, bottom)) = text_extent(&pg.items, c.first_block) else { return };
+        let (top, bottom) = (top.max(c.top), bottom.min(flow_bottom));
+        if bottom <= top + 0.5 {
+            return;
+        }
+        pg.items.extend(c.xs.iter().map(|&x| Placed::Rule { x0: x, y0: top, x1: x, y1: bottom, border: Border::single(0.5) }));
     }
     /// Where the columns end on this page: the page bottom above its footnotes, or higher up
     /// when the columns are balanced.
@@ -398,6 +444,27 @@ impl PageBuilder<'_> {
     pub(crate) fn page(&mut self) -> Option<&mut Page> {
         self.pages.last_mut()
     }
+}
+
+/// The top of the highest and the bottom of the lowest body text line or table cell among
+/// `items` of top-level blocks from `first_block` on (the space before and after paragraphs left
+/// out), `None` when there are none. Lines in table cells count by their cell's box, which clips
+/// what overflows an exact row height. Items are picked by the block they belong to, not by their
+/// order (objects behind the text go first) or place (a floating table of an earlier section can
+/// sit lower).
+fn text_extent(items: &[Placed], first_block: usize) -> Option<(f32, f32)> {
+    let ours = |path: &wordcraft_doc::Path| path.0.first().is_some_and(|b| *b as usize >= first_block);
+    items
+        .iter()
+        .filter_map(|it| match it {
+            Placed::Lines { story: StoryRef::Body, path, y, para, l0, l1, .. } if path.depth() == 0 && ours(path) => {
+                Some((*y, item_bottom(*y, para, *l0, *l1)?))
+            }
+            Placed::Cell { story: StoryRef::Body, table, rect, .. } if ours(table) => Some((rect.y, rect.bottom())),
+            _ => None,
+        })
+        .filter(|(t, b)| t.is_finite() && b.is_finite())
+        .reduce(|(t0, b0), (t1, b1)| (t0.min(t1), b0.max(b1)))
 }
 
 pub(crate) fn item_bottom(y: f32, para: &ParaLayout, l0: usize, l1: usize) -> Option<f32> {

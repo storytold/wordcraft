@@ -3286,6 +3286,61 @@ fn freeform_arrow_end_draws_at_the_last_point() {
 }
 
 #[test]
+fn an_arrowhead_is_as_long_and_wide_as_its_sizes_make_it() {
+    // Word draws an arrowhead 2, 3 or 5 times the line's width long and wide (small, medium,
+    // large), and a line thinner than 2 points as if it were 2 points (measured in Word's PDFs).
+    use wordcraft_doc::connector::{ArrowKind, ArrowSize, ArrowStyle, ShapeExtra};
+    use wordcraft_doc::graphic::PathSeg;
+    use wordcraft_doc::para::{Float, ShapeKind};
+    use wordcraft_doc::props::Rgb;
+
+    let style = |width, length| ArrowStyle { kind: ArrowKind::Triangle, width, length };
+    let cases = [
+        (0.75, style(ArrowSize::Small, ArrowSize::Large), style(ArrowSize::Large, ArrowSize::Small), (10.0, 4.0), (4.0, 10.0)),
+        (0.75, ArrowStyle::default(), ArrowStyle::default(), (6.0, 6.0), (6.0, 6.0)),
+        (3.0, style(ArrowSize::Medium, ArrowSize::Large), style(ArrowSize::Small, ArrowSize::Medium), (15.0, 9.0), (9.0, 6.0)),
+        (6.0, style(ArrowSize::Large, ArrowSize::Large), style(ArrowSize::Small, ArrowSize::Small), (30.0, 30.0), (12.0, 12.0)),
+    ];
+    for (line_width, start_style, end_style, start_dims, end_dims) in cases {
+        let shape = InlineObject::Shape {
+            kind: ShapeKind::Line,
+            w: 100.0,
+            h: 0.0,
+            fill: None,
+            stroke: Some(Rgb::BLACK),
+            stroke_width: line_width,
+            float: Float::default(),
+            story: None,
+            freeform: None,
+            effects: Default::default(),
+            extra: ShapeExtra { arrow_start: true, arrow_end: true, start_style, end_style, ..Default::default() },
+        };
+        let mut doc = Document::from_text("Scan");
+        doc.insert_object(&Pos::body(0, 0), shape, &Default::default()).unwrap();
+        let draws = flat(display::page_display(&doc, &lay(&doc).pages[0], &Default::default()));
+        // Each arrowhead: its length (tip to the middle of its base) and width (across its base),
+        // the start's first.
+        let heads: Vec<(f32, f32)> = draws
+            .iter()
+            .filter_map(|draw| match draw {
+                display::Draw::Path { fill: Some(display::Paint::Solid(Rgb::BLACK, _)), segs, .. } => match segs.as_slice() {
+                    [PathSeg::Move(tx, ty), PathSeg::Line(ax, ay), PathSeg::Line(bx, by), PathSeg::Close] => {
+                        let (mx, my) = ((ax + bx) / 2.0, (ay + by) / 2.0);
+                        Some(((tx - mx).hypot(ty - my), (ax - bx).hypot(ay - by)))
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        assert_eq!(heads.len(), 2, "{line_width}: {heads:?}");
+        for ((got, want), end) in heads.iter().zip([start_dims, end_dims]).zip(["start", "end"]) {
+            assert!((got.0 - want.0).abs() < 0.01 && (got.1 - want.1).abs() < 0.01, "{line_width} pt line, {end}: got {got:?}, want {want:?}");
+        }
+    }
+}
+
+#[test]
 fn hidden_drawings_are_neither_drawn_nor_take_room() {
     // A hidden floating shape (VML `visibility:hidden`, `wp:docPr/@hidden`): no wrap area, nothing
     // drawn, as in Word for Windows. A hidden inline one takes no room in its line.
@@ -7959,6 +8014,120 @@ fn two_column_section(start: wordcraft_doc::section::SectionStart, widths: Vec<(
     d.para_mut(StoryRef::Body, &Path::top(9)).unwrap().section = Some(Box::new(s));
     d.last_section.start = start;
     d
+}
+
+/// The vertical rules on page `p`: (x, top, bottom).
+fn vertical_rules(l: &DocLayout, p: usize) -> Vec<(f32, f32, f32)> {
+    l.pages[p]
+        .items
+        .iter()
+        .filter_map(|i| if let Placed::Rule { x0, x1, y0, y1, .. } = i { (x0 == x1).then_some((*x0, *y0, *y1)) } else { None })
+        .collect()
+}
+
+/// #5178: two columns with Line between for selected text (a continuous section between
+/// one-column text) draw their line, from the top of the section's text to the bottom of its
+/// columns, not over the text above or below; a section starting the page draws it down to the
+/// bottom of its text, not of the page.
+#[test]
+fn the_line_between_columns_spans_the_section_s_text() {
+    use wordcraft_doc::section::{SectionProps, SectionStart};
+    let text: Vec<String> =
+        ["Intro".to_string()].into_iter().chain((1..=8).map(|i| format!("Column text {i}"))).chain(["After".to_string()]).collect();
+    let mut d = Document::from_text(&text.join("\n"));
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().section = Some(Box::default());
+    let mut two = SectionProps { start: SectionStart::Continuous, ..Default::default() };
+    two.columns.count = 2;
+    two.columns.separator = true;
+    d.para_mut(StoryRef::Body, &Path::top(8)).unwrap().section = Some(Box::new(two.clone()));
+    d.last_section.start = SectionStart::Continuous;
+    let l = lay(&d);
+    let boxes = para_boxes(&l);
+    let rules = vertical_rules(&l, 0);
+    let [(x, top, bottom)] = rules[..] else { panic!("one line: {rules:?}") };
+    let mid = 72.0 + 468.0 / 2.0;
+    assert!((x - mid).abs() < 0.5, "midway between the columns: {x}");
+    assert!(top >= boxes[0].3 - 0.5 && (top - boxes[1].2).abs() < 0.5, "from the section's top: {top} {boxes:?}");
+    assert!(bottom <= boxes[9].2 + 0.5 && bottom > top + 30.0, "down to its columns' bottom, above After: {bottom} {boxes:?}");
+
+    // Space before and after the column paragraphs isn't text: the line runs from the first
+    // line's top to the bottom of the lowest line.
+    let mut spaced = d.clone();
+    for i in 1..=8 {
+        let p = spaced.para_mut(StoryRef::Body, &Path::top(i)).unwrap();
+        (p.props.space_before, p.props.space_after) = (Some(24.0), Some(24.0));
+    }
+    let l = lay(&spaced);
+    let boxes = para_boxes(&l);
+    let rules = vertical_rules(&l, 0);
+    let [(_, top, bottom)] = rules[..] else { panic!("one line: {rules:?}") };
+    let lowest = boxes[1..=8].iter().map(|b| b.3).fold(0.0f32, f32::max);
+    // The second column's first paragraph starts at the column's top (no space before there).
+    let highest = boxes[1..=8].iter().map(|b| b.2).fold(f32::MAX, f32::min);
+    assert!(boxes[1].2 > highest + 10.0, "the first column's text starts below its space before: {boxes:?}");
+    assert!((top - highest).abs() < 0.5, "from the highest line, not a space before: {top} {boxes:?}");
+    assert!((bottom - lowest).abs() < 0.5, "to the lowest line, not its space after: {bottom} vs {lowest}");
+    // A section of one paragraph: its line starts at the paragraph's first line, below its space
+    // before, not at the section's top.
+    let mut one = Document::from_text("Intro\nOnly paragraph\nAfter");
+    one.para_mut(StoryRef::Body, &Path::top(0)).unwrap().section = Some(Box::default());
+    let p = one.para_mut(StoryRef::Body, &Path::top(1)).unwrap();
+    p.props.space_before = Some(24.0);
+    p.section = Some(Box::new(two.clone()));
+    one.last_section.start = SectionStart::Continuous;
+    let l = lay(&one);
+    let boxes = para_boxes(&l);
+    let rules = vertical_rules(&l, 0);
+    let [(_, top, bottom)] = rules[..] else { panic!("one line: {rules:?}") };
+    assert!((top - boxes[1].2).abs() < 0.5 && (bottom - boxes[1].3).abs() < 0.5, "the paragraph's lines: {top}..{bottom} {boxes:?}");
+
+    // A section whose one line doesn't fit at the foot of the page (40 pt type) starts on the
+    // next: no line where it has no text, though the flow moved down there by its space before.
+    let mut late = Document::from_text("Filler\nBig\nAfter");
+    let filler = late.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    filler.props.space_after = Some(600.0);
+    filler.section = Some(Box::default());
+    late.format_range(&Pos::body(1, 0), &Pos::body(1, 3), &|c: &mut wordcraft_doc::CharProps| c.size = Some(40.0)).unwrap();
+    let p = late.para_mut(StoryRef::Body, &Path::top(1)).unwrap();
+    p.props.space_before = Some(6.0);
+    p.section = Some(Box::new(two.clone()));
+    late.last_section.start = SectionStart::Continuous;
+    let l = lay(&late);
+    assert_eq!(para_boxes(&l)[1].0, 1, "the paragraph moves to page 2: {:?}", para_boxes(&l));
+    assert!(vertical_rules(&l, 0).is_empty(), "no line on page 1: {:?}", vertical_rules(&l, 0));
+    assert_eq!(vertical_rules(&l, 1).len(), 1, "its line on page 2");
+
+    // A floating table of the section before, placed lower on the page than the columns' text,
+    // isn't the columns' text: the line stays with the columns.
+    let mut floated = Document::from_text("Intro\nEnd of one\nCol one\nCol two\nAfter");
+    let mut t = Table::new(1, 1, 200.0);
+    t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Low table", Default::default()))];
+    t.props.float = Some(wordcraft_doc::props::TableFloat {
+        h_rel: wordcraft_doc::para::Anchor::Margin,
+        v_rel: wordcraft_doc::para::Anchor::Page,
+        y: 500.0,
+        ..Default::default()
+    });
+    floated.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+    floated.para_mut(StoryRef::Body, &Path::top(2)).unwrap().section = Some(Box::default());
+    floated.para_mut(StoryRef::Body, &Path::top(4)).unwrap().section = Some(Box::new(two.clone()));
+    floated.last_section.start = SectionStart::Continuous;
+    let l = lay(&floated);
+    let low = l.pages[0].items.iter().find_map(|i| if let Placed::Cell { rect, .. } = i { Some(rect.y) } else { None });
+    assert!(low.is_some_and(|y| y >= 490.0), "the table stands low on the page: {low:?}");
+    // The table's own side borders are vertical rules too: the line is the one midway.
+    let rules: Vec<_> = vertical_rules(&l, 0).into_iter().filter(|r| (r.0 - mid).abs() < 0.5).collect();
+    let [(_, _, bottom)] = rules[..] else { panic!("one line: {rules:?}") };
+    let boxes = para_boxes(&l);
+    assert!(bottom < 300.0 && bottom <= boxes[4].2 + 0.5, "the line ends with the columns, above After: {bottom} {boxes:?}");
+
+    // One section of two columns: the line runs down to the bottom of the text, not the page.
+    let mut d = Document::from_text("One\nTwo\nThree");
+    d.last_section.columns = two.columns.clone();
+    let l = lay(&d);
+    let rules = vertical_rules(&l, 0);
+    let [(_, top, bottom)] = rules[..] else { panic!("one line: {rules:?}") };
+    assert!((top - 72.0).abs() < 0.5 && bottom < 150.0, "{top}..{bottom}");
 }
 
 /// Each top-level paragraph's first piece: (page, x, top, bottom).
