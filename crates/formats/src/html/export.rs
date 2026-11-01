@@ -28,21 +28,22 @@ fn align_css(a: Option<Align>) -> Option<&'static str> {
     }
 }
 
-fn text_html(t: &str, at_start: bool) -> String {
+/// `prev_space` says whether the character written just before `t` was a space (or the start of
+/// the paragraph), so a space there becomes `&nbsp;`; it is updated for the next run.
+fn text_html(t: &str, prev_space: &mut bool) -> String {
     let mut o = String::new();
-    let mut prev_space = at_start;
     for c in t.chars() {
         match c {
             '\n' => {
                 o.push_str("<br>");
-                prev_space = true;
+                *prev_space = true;
                 continue;
             }
             '\t' => o.push_str("<span style=\"white-space:pre\">\t</span>"),
-            ' ' if prev_space => o.push_str("&nbsp;"),
+            ' ' if *prev_space => o.push_str("&nbsp;"),
             _ => o.push_str(&esc(&c.to_string())),
         }
-        prev_space = c == ' ';
+        *prev_space = c == ' ';
     }
     o
 }
@@ -104,13 +105,16 @@ fn fmt_tags(f: &Fmt) -> (String, Vec<&'static str>) {
 /// Inline spans → HTML.
 pub fn inlines_html(inlines: &[Inline]) -> String {
     let mut o = String::new();
+    // Whether the last character written was a space, carried across runs so a space that
+    // starts a run after one that ended with a space is not collapsed.
+    let mut prev_space = false;
     for i in inlines.iter() {
         match i {
             Inline::Text(t, f) => {
                 let (open, close) = fmt_tags(f);
-                let at_start = o.is_empty();
+                prev_space |= o.is_empty();
                 o.push_str(&open);
-                o.push_str(&text_html(t, at_start));
+                o.push_str(&text_html(t, &mut prev_space));
                 for c in close.iter().rev() {
                     o.push_str(c);
                 }
@@ -119,14 +123,16 @@ pub fn inlines_html(inlines: &[Inline]) -> String {
             // no alignment or size, so the guide's own attributes stay in the document model.
             Inline::Ruby { base, ruby, fmt } => {
                 let (open, close) = fmt_tags(fmt);
-                let at_start = o.is_empty();
+                prev_space |= o.is_empty();
                 o.push_str(&open);
-                o.push_str(&format!("<ruby>{}<rt>{}</rt></ruby>", text_html(base, at_start), text_html(ruby, false)));
+                let base = text_html(base, &mut prev_space);
+                o.push_str(&format!("<ruby>{}<rt>{}</rt></ruby>", base, text_html(ruby, &mut false)));
                 for c in close.iter().rev() {
                     o.push_str(c);
                 }
             }
             Inline::Image(img) => {
+                prev_space = false;
                 o.push_str(&format!(
                     "<img src=\"data:{};base64,{}\" alt=\"{}\" width=\"{}\" height=\"{}\">",
                     mime_of(&img.ext),
@@ -138,9 +144,15 @@ pub fn inlines_html(inlines: &[Inline]) -> String {
             }
             Inline::Anchor(a) => o.push_str(&format!("<a id=\"{}\"></a>", esc(a))),
             // No picture to show: the browser shows the alt text in its place.
-            Inline::Figure(alt) => o.push_str(&format!("<img alt=\"{}\">", esc(alt))),
+            Inline::Figure(alt) => {
+                prev_space = false;
+                o.push_str(&format!("<img alt=\"{}\">", esc(alt)));
+            }
             // MathML, which browsers, Word and LibreOffice show as an equation (#816).
-            Inline::Equation { linear, display } => o.push_str(&crate::mathml::linear_to_mathml(linear, *display)),
+            Inline::Equation { linear, display } => {
+                prev_space = false;
+                o.push_str(&crate::mathml::linear_to_mathml(linear, *display));
+            }
         }
     }
     o
