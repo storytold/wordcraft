@@ -98,6 +98,50 @@ fn design_style_set_gallery_stays_in_its_box() {
     assert!(next_x >= gallery.right() + 8.0 - 0.01, "{next_x} {gallery:?}");
 }
 
+/// #5043: Home › Paragraph Tools: the drop-down's entries each run their own command over the
+/// selection; "in the Whole Document" entries run the same command with `scope: "all"`.
+#[test]
+fn paragraph_tools_menu_entries_run_their_commands() {
+    use egui_kittest::kittest::Queryable;
+    let a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("a  b\n\nc   d")), crate::Services::default());
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(vec2(900.0, 300.0))
+        .with_context_setup(|ctx| ctx.set_fonts(crate::theme::font_definitions(false, false)))
+        .build_ui_state(|ui, app: &mut WordApp| super::home::home(app, ui), a);
+    h.run_steps(2);
+    // The accessible label is the menu button's tip, "Paragraph Tools".
+    h.get_by_label("Paragraph Tools").click();
+    h.run_steps(2);
+    // Items carry their (empty) shortcut text in the label, so match by containment.
+    for name in [
+        "Split Lines into Paragraphs",
+        "Add Blank Paragraphs Between",
+        "Separate Paragraphs",
+        "Delete Blank Paragraphs",
+        "Remove Leading Spaces",
+        "Remove Extra Spaces",
+        "Indent Leading Spaces",
+        "Indents to Leading Spaces",
+        "Join Lines",
+        "Delete Blank Paragraphs in the Whole Document",
+        "Remove Leading Spaces in the Whole Document",
+        "Remove Extra Spaces in the Whole Document",
+    ] {
+        assert!(!h.query_all_by_label_contains(name).collect::<Vec<_>>().is_empty(), "{name} is a named entry");
+    }
+    // A caret, not a selection: the whole-document entries cover both paragraphs.
+    h.get_by_label_contains("Remove Extra Spaces in the Whole Document").click();
+    h.run_steps(2);
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "a b\n\nc d");
+    // The menu closed with the click; open it again for the next entry.
+    h.get_by_label("Paragraph Tools").click();
+    h.run_steps(2);
+    // Both entries match by containment; the plain one is first in the menu.
+    h.query_all_by_label_contains("Delete Blank Paragraphs").min_by(|a, b| a.rect().min.y.total_cmp(&b.rect().min.y)).unwrap().click();
+    h.run_steps(2);
+    assert_eq!(h.state().session.undo_depth(), 2, "the second entry is its own undo step");
+}
+
 /// #2738: Home › Underline's drop-down: every line sample is a named entry (assistive
 /// technology, tooltips) that applies its own style; Words only, None and Underline Color ›
 /// Automatic do what they say.

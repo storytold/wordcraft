@@ -328,6 +328,32 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
             });
         });
     });
+    // Advanced paragraph tools (#5043): conversions and cleanup over the selection, or the
+    // whole document with Ctrl+A first (the commands take `scope: "all"` for that as well).
+    group(ui, "Paragraph Tools", None, app, |ui, app| {
+        menu_button(ui, app, crate::widgets::MenuButtonOptions::new("pilcrow", Some("Paragraph\nTools"), "Paragraph Tools", true, ""), |ui, app| {
+            mi(ui, app, "Split Lines into Paragraphs", "para.convertBreaks", json!({}));
+            mi(ui, app, "Add Blank Paragraphs Between", "para.blankBetween", json!({}));
+            mi(ui, app, "Separate Paragraphs", "para.separateParagraphs", json!({}));
+            ui.separator();
+            mi(ui, app, "Delete Blank Paragraphs", "para.removeBlank", json!({}));
+            mi(ui, app, "Remove Leading Spaces", "para.trimLeadingSpaces", json!({}));
+            mi(ui, app, "Remove Extra Spaces", "para.removeExtraSpaces", json!({}));
+            ui.separator();
+            mi(ui, app, "Indent Leading Spaces", "para.spacesToIndent", json!({}));
+            mi(ui, app, "Indents to Leading Spaces", "para.indentToSpaces", json!({}));
+            mi(ui, app, "Join Lines", "para.removeLineBreaks", json!({}));
+            ui.separator();
+            // The whole document, not just the selection.
+            for (l, id) in [
+                ("Delete Blank Paragraphs in the Whole Document", "para.removeBlank"),
+                ("Remove Leading Spaces in the Whole Document", "para.trimLeadingSpaces"),
+                ("Remove Extra Spaces in the Whole Document", "para.removeExtraSpaces"),
+            ] {
+                mi(ui, app, l, id, json!({"scope": "all"}));
+            }
+        });
+    });
     group(ui, "Styles", Some("styles.pane"), app, |ui, app| {
         crate::previews::style_gallery(app, ui, &st);
     });

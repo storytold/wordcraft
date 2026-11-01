@@ -15,6 +15,7 @@ mod lists;
 mod outline;
 mod styles;
 mod tabs_borders;
+mod tools;
 
 use format::{align, asian_typography, cur, direction, line_spacing, ls, set_align, set_props, tog};
 pub use format::{fmt, indent, outdent};
@@ -25,6 +26,10 @@ use outline::{move_paras, outline_step, sort};
 use styles::{apply_style, apply_styles, create_style, delete_style, modify_style, set_visibility, style_id, update_to_match};
 pub use tabs_borders::border_sides;
 use tabs_borders::{borders, tabs};
+use tools::{
+    blank_between, convert_breaks, indent_to_spaces, remove_blank, remove_extra_spaces, remove_line_breaks, separate_paragraphs, spaces_to_indent,
+    trim_leading,
+};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -261,5 +266,25 @@ pub fn specs() -> Vec<CommandSpec> {
             }
             sel_result(s)
         }),
+        // Advanced paragraph tools (#5043, as in WPS Office): conversions and cleanup over the
+        // selection, or the whole document with `scope: "all"`. One undo step per command.
+        CommandSpec::new("para.convertBreaks", "Convert Line Breaks to Paragraphs", "Home › Paragraph › Paragraph Tools", convert_breaks)
+            .params(r#"{"scope"?: "selection|all"}"#),
+        CommandSpec::new("para.blankBetween", "Insert Blank Paragraphs Between", "Home › Paragraph › Paragraph Tools", blank_between)
+            .params(r#"{"scope"?: "selection|all", "after"?: bool (also after the last paragraph)}"#),
+        CommandSpec::new("para.separateParagraphs", "Separate Paragraphs", "Home › Paragraph › Paragraph Tools", separate_paragraphs)
+            .params(r#"{"scope"?: "selection|all"}"#),
+        CommandSpec::new("para.removeBlank", "Delete Blank Paragraphs", "Home › Paragraph › Paragraph Tools", remove_blank)
+            .params(r#"{"scope"?: "selection|all"}"#),
+        CommandSpec::new("para.trimLeadingSpaces", "Remove Leading Spaces", "Home › Paragraph › Paragraph Tools", trim_leading)
+            .params(r#"{"scope"?: "selection|all"}"#),
+        CommandSpec::new("para.removeExtraSpaces", "Remove Extra Spaces", "Home › Paragraph › Paragraph Tools", remove_extra_spaces)
+            .params(r#"{"scope"?: "selection|all"}"#),
+        CommandSpec::new("para.spacesToIndent", "Convert Spaces to Indentation", "Home › Paragraph › Paragraph Tools", spaces_to_indent)
+            .params(r#"{"scope"?: "selection|all"}"#),
+        CommandSpec::new("para.indentToSpaces", "Convert Indents to Spaces", "Home › Paragraph › Paragraph Tools", indent_to_spaces)
+            .params(r#"{"scope"?: "selection|all"}"#),
+        CommandSpec::new("para.removeLineBreaks", "Remove Line Breaks", "Home › Paragraph › Paragraph Tools", remove_line_breaks)
+            .params(r#"{"scope"?: "selection|all"}"#),
     ]
 }
