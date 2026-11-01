@@ -184,6 +184,25 @@ impl Bridge {
 
     /// Answer one call. Errors become `ERR:` replies; Zotero shows them and cancels.
     pub fn handle(&mut self, s: &mut Session, host: &mut dyn Host, c: &Call) -> R {
+        // Zotero writes directly rather than dispatching engine commands.
+        if s.view.viewing
+            && matches!(
+                c.method.as_str(),
+                "Document_setDocumentData"
+                    | "Document_insertField"
+                    | "Document_insertText"
+                    | "Document_convertPlaceholdersToFields"
+                    | "Document_setBibliographyStyle"
+                    | "Document_convert"
+                    | "Field_convert"
+                    | "Field_delete"
+                    | "Field_removeCode"
+                    | "Field_setText"
+                    | "Field_setCode"
+            )
+        {
+            return Err("Editing is blocked in Viewing mode.".into());
+        }
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.dispatch(s, host, c)));
         match r {
             Ok(r) => r,
@@ -217,7 +236,7 @@ impl Bridge {
                 host.activate();
                 Ok(Value::Null)
             }
-            "Document_canInsertField" => Ok(json!(fields::can_insert_at(&s.doc, &s.sel.ordered().0))),
+            "Document_canInsertField" => Ok(json!(!s.view.viewing && fields::can_insert_at(&s.doc, &s.sel.ordered().0))),
             "Document_getDocumentData" => Ok(json!(fields::get_prefs(&s.doc))),
             "Document_setDocumentData" => {
                 let data = arg_str(c, 1)?;

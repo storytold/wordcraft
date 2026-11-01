@@ -51,6 +51,9 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
         app.canvas.paste_mods = Some(held);
     }
     for e in events {
+        if app.session.view.viewing && matches!(e, egui::Event::Text(_) | egui::Event::Paste(_) | egui::Event::Cut | egui::Event::Ime(_)) {
+            continue;
+        }
         // A key closed the window (Mod+W) or brought another forward: the frame's other keys
         // were typed in this one and are dropped.
         if app.windows.shown() != window {

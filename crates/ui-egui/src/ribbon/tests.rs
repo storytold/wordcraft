@@ -781,3 +781,75 @@ fn shape_and_chart_formats_leave_out_of_range_sizes_alone() {
     assert_eq!(before.0, Some((20.0, 2500.0)));
     assert_eq!(shown(a), before, "Chart Design shown, the chart untouched");
 }
+
+/// Viewing is a manual interaction choice, with an orange active indicator and a reversible edit lock.
+#[test]
+fn viewing_menu_is_manual_and_only_viewing_is_orange() {
+    use egui_kittest::kittest::Queryable;
+    let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Original")), crate::Services::default());
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    h.run_steps(6);
+    h.get_by_label("Editing").click();
+    h.run_steps(2);
+    h.get_by_label("Viewing — view the file but make no changes").click();
+    h.run_steps(3);
+    assert!(h.state_mut().run("text.insert", json!({"text":"Blocked"})).is_err());
+    let mode = h.get_by_label("Viewing").rect();
+    let orange = Tokens::get(&h.ctx).orange;
+    assert!(
+        h.output().shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.fill == orange && r.rect.intersects(mode))),
+        "the active mode has an orange fill"
+    );
+    h.get_by_label("Viewing").click();
+    h.run_steps(2);
+    h.get_by_label("Editing — edit the document directly").click();
+    h.run_steps(3);
+    assert!(h.state_mut().run("text.insert", json!({"text":"Allowed"})).is_ok());
+    h.get_by_label("Editing");
+}
+
+#[test]
+fn viewing_canvas_keeps_copy_and_releases_ime_ownership() {
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Original")), crate::Services::default());
+    app.run("view.viewing", json!({"value":true})).unwrap();
+    let before = app.session.doc.clone();
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1000.0, 700.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    h.run_steps(6);
+    let (id, _) = h.state().canvas.widget_id.expect("visible canvas");
+    h.ctx.memory_mut(|m| m.request_focus(id));
+    h.run_steps(1);
+    assert!(h.state().canvas.focused, "keyboard selection keeps its focus");
+    h.input_mut().events.push(egui::Event::Text("Blocked".into()));
+    h.input_mut().events.push(egui::Event::Paste("Blocked paste".into()));
+    h.run_steps(3);
+    assert!(h.state().session.doc.same_content(&before));
+    assert!(h.output().platform_output.ime.is_none(), "Viewing must not request a text input context");
+    h.state_mut().run("select.all", json!({})).unwrap();
+    h.state_mut().run("edit.copy", json!({})).unwrap();
+    assert_eq!(h.state().session.selected_text(), "Original");
+}
+
+#[test]
+fn viewing_refuses_ui_edits_before_dialogs_or_external_connections() {
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Original")), crate::Services::default());
+    app.execute("view.viewing", json!({"value":true})).unwrap();
+    assert!(app.run("insert.picture", json!({})).is_err());
+    assert!(app.dialog.is_none(), "a refused edit must not open its input dialog");
+    let error = app.execute("ui.zotero.addEditCitation", json!({})).unwrap_err();
+    assert!(error.contains("Viewing"), "must refuse before contacting Zotero: {error}");
+    assert!(app.zotero.busy.is_none());
+}

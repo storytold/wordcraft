@@ -124,6 +124,11 @@ pub fn expose(app: &mut crate::WordApp, ctx: &egui::Context, doc_id: Id, layout:
     });
     ctx.accesskit_node_builder(doc_id, |n| {
         n.set_label(title);
+        if app.session.view.viewing {
+            n.set_read_only();
+        } else {
+            n.clear_read_only();
+        }
         for c in &tree.top {
             n.push_child(*c);
         }

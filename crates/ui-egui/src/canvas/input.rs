@@ -114,6 +114,9 @@ pub(super) fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[
 }
 
 fn route_pointer_targets(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layout: &DocLayout, scale: f32) -> Option<Pos2> {
+    if app.session.view.viewing {
+        return resp.interact_pointer_pos().or_else(|| resp.hover_pos());
+    }
     // A pen or the eraser (Draw tab) owns the pointer.
     if crate::ink::pointer(app, ui, resp, rects, layout, scale) {
         return None;

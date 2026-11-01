@@ -15,6 +15,24 @@ fn toggle(s: &mut Session, v: &Value, f: fn(&mut crate::ViewState) -> &mut bool)
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
+        CommandSpec::new("view.viewing", "Viewing", "Interaction Mode", |s, v| {
+            let value = match v.get("value") {
+                None => !s.view.viewing,
+                Some(Value::Bool(value)) => *value,
+                Some(_) => return Err(CmdError::Params("`value` must be true or false".into())),
+            };
+            s.view.viewing = value;
+            if value {
+                s.close_typing();
+                s.math = None;
+                s.painter = None;
+                s.view.draw.mode = crate::cmd::draw::DrawMode::Select;
+                s.view.draw.lasso = None;
+            }
+            Ok(json!({"value": value}))
+        })
+        .params(r#"{"value"?: bool (omit to toggle; transient for this open document)}"#)
+        .pure(),
         CommandSpec::new("view.marks", "Show/Hide ¶", "Home › Paragraph", |s, v| {
             let r = toggle(s, v, |x| &mut x.marks);
             s.relayout();
@@ -149,7 +167,11 @@ pub fn specs() -> Vec<CommandSpec> {
             .key(super::mac_or("Mod+Ctrl+F / F11", "F11"))
             .when(full_screen_available)
             .pure(),
-        CommandSpec::new("view.state", "View State", "View", |s, _| serde_json::to_value(&s.view).map_err(|e| CmdError::Failed(e.to_string())))
+        CommandSpec::new("view.state", "View State", "View", |s, _| {
+            let mut state = serde_json::to_value(&s.view).map_err(|e| CmdError::Failed(e.to_string()))?;
+            state["viewing"] = json!(s.view.viewing);
+            Ok(state)
+        })
             .pure(),
         // Word › File › Options › Advanced › Numeral: how digits look on screen, in print, PDFs
         // and page images (display only; the document text keeps the typed codepoints).

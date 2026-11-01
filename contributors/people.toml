@@ -187,3 +187,7 @@ sync_github_name = true
 
 [people.dylanmtaylor]
 sync_github_name = true
+
+[people.multipointmaster-glitch]
+display_name = "Bogdan Claudiu Petanec"
+sync_github_name = false

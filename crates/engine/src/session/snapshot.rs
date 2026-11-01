@@ -5,6 +5,7 @@ use super::{Document, Session, StoryRef, next_document_id};
 impl Session {
     /// Replace the document (open/new).
     pub fn set_document(&mut self, doc: Document) {
+        self.view.viewing = false;
         self.autocap = None;
         let replaced = self.document_id;
         self.document_id = next_document_id();
@@ -246,6 +247,9 @@ impl Session {
     /// Restrict Editing refuses outright. `None` when it can run (or doesn't exist).
     pub fn why_disabled(&self, id: &str) -> Option<&'static str> {
         let spec = self.registry.get(id)?;
+        if self.viewing_blocks_command(id, &serde_json::json!({})) {
+            return Some(super::viewing::REASON);
+        }
         (spec.enabled)(self).or_else(|| if spec.mutates { crate::cmd::protect::greyed_out(self, id, || self.protect_facts()) } else { None })
     }
 

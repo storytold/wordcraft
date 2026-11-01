@@ -5,6 +5,23 @@ use super::{
 };
 
 impl WordApp {
+    /// The UI must refuse edits before opening dialogs, reading paste data or launching integrations.
+    pub(crate) fn viewing_blocks_command(&self, id: &str, params: &Value) -> bool {
+        self.session.viewing_blocks_command(id, params)
+            || (self.session.view.viewing
+                && (matches!(id, "ui.crop" | "ui.linkTextBox")
+                    || (id.starts_with("ui.zotero.") && !matches!(id, "ui.zotero.status" | "ui.zotero.answer"))))
+    }
+
+    fn check_viewing(&mut self, id: &str, params: &Value) -> Result<(), String> {
+        if self.viewing_blocks_command(id, params) {
+            let reason = tl!("Editing is blocked in Viewing mode.").to_string();
+            self.status(reason.clone());
+            return Err(reason);
+        }
+        Ok(())
+    }
+
     /// `run` for a command a mouse drag on a table sends: the view stays where it is.
     pub(crate) fn run_keep_view(&mut self, id: &str, params: Value) -> Result<Value, String> {
         self.canvas.keep_view = true;
@@ -28,6 +45,7 @@ impl WordApp {
     /// Close, Envelopes, Labels and Finish & Merge on a document with unsaved changes first ask
     /// Save / Don't Save / Cancel, and the command runs once that is answered (`ui.saveChanges`).
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        self.check_viewing(id, &params)?;
         // Comment text still being typed is written first, so a save or export has it and a
         // close, New or Open counts it as a change (#1348). A draft the document refuses is not
         // part of it: saving and exporting go on without it (the refusal stays on the status
@@ -112,6 +130,7 @@ impl WordApp {
     /// Run a command for a script or an agent (control channel, MCP bridge): never asks first.
     /// UI-level commands (`ui.*`) are handled here, the rest by the engine.
     pub fn execute(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        self.check_viewing(id, &params)?;
         self.clear_command_targets(id);
         if let Some(error) = self.document_required_error(id) {
             return Err(error);

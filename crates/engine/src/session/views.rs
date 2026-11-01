@@ -58,9 +58,12 @@ impl Session {
     pub fn take_view(&mut self) -> WindowView {
         use std::mem::{replace, take};
         let start = self.doc.start_of(StoryRef::Body);
+        let viewing = self.view.viewing;
+        let view = take(&mut self.view);
+        self.view.viewing = viewing;
         WindowView {
             sel: replace(&mut self.sel, Selection::caret(start)),
-            view: take(&mut self.view),
+            view,
             pending: self.pending.take(),
             goal_x: self.goal_x.take(),
             page_hint: take(&mut self.page_hint),
@@ -134,7 +137,10 @@ impl Session {
         } = v;
         let current = document_id == self.document_id && rev == self.rev;
         self.sel = sel;
+        // Viewing belongs to the open document, not a possibly older window snapshot.
+        let viewing = self.view.viewing;
         self.view = view;
+        self.view.viewing = viewing;
         self.pending = pending;
         self.goal_x = goal_x;
         self.page_hint = page_hint;
