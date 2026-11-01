@@ -677,6 +677,7 @@ fn enclosures(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
         let Some(style) = ctx.pl.styles.get(cluster.style as usize) else { continue };
         let rect = Rect::new(ctx.x + left + enclosure.x, ctx.base - style.shift - enclosure.top, enclosure.w, enclosure.h);
         out.push(Draw::Shape {
+            pattern: None,
             rect,
             kind: enclosure.kind,
             fill: None,

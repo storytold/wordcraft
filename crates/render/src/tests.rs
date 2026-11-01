@@ -92,6 +92,7 @@ fn background_at_caret_follows_page_colour_highlight_and_dark_mode() {
 fn background_follows_a_shapes_outline_not_its_box() {
     let opts = RenderOptions::default();
     let ellipse = Draw::Shape {
+        pattern: None,
         rect: wordcraft_geom::Rect::new(100.0, 100.0, 200.0, 100.0),
         kind: ShapeKind::Ellipse,
         fill: Some(wordcraft_layout::display::Paint::solid(Rgb::BLACK)),

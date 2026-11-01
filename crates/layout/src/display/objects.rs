@@ -13,6 +13,7 @@ pub(super) fn graphic_draws(doc: &Document, g: &Graphic, rect: Rect, alpha: f32)
     for it in &g.items {
         match it {
             GraphicItem::Shape { rect: r, kind, fill, stroke, stroke_width } => out.push(Draw::Shape {
+                pattern: None,
                 rect: inside(r),
                 kind: *kind,
                 fill: fill.map(Paint::solid),
@@ -119,6 +120,7 @@ pub(super) fn shape_draws(rect: Rect, look: &ShapeLook, opts: &DisplayOptions, o
             stroke_width,
             effects,
             corner: extra.corner,
+            pattern: extra.pattern.as_deref().copied(),
             dash: extra.dash.pattern(stroke_width),
             cap: extra.cap,
         });
@@ -227,6 +229,7 @@ fn line_draws(
             out.push(Draw::Path { segs, fill: None, stroke, stroke_width: width, dash: extra.dash.pattern(width), cap: extra.cap });
         }
         None => out.push(Draw::Shape {
+            pattern: None,
             rect,
             kind,
             fill: None,
@@ -497,6 +500,7 @@ pub(crate) fn inline_rect(obj: Option<&InlineObject>, cx: f32, base: f32, adv: f
 /// A Drawing Canvas's background and outline over its frame `rect`.
 fn canvas_background(rect: Rect, c: &wordcraft_doc::para::CanvasStyle) -> Draw {
     Draw::Shape {
+        pattern: None,
         rect,
         kind: ShapeKind::Rectangle,
         fill: c.fill.as_ref().and_then(|f| paint_for(f, rect)),
@@ -508,3 +512,6 @@ fn canvas_background(rect: Rect, c: &wordcraft_doc::para::CanvasStyle) -> Draw {
         cap: Default::default(),
     }
 }
+
+#[cfg(test)]
+mod fill_alpha_tests;

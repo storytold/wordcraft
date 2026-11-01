@@ -114,6 +114,7 @@ pub(crate) fn vml_preset_kind(spt: u32) -> Option<ShapeKind> {
 #[derive(Debug, Default, PartialEq)]
 pub(crate) struct ShapePaint {
     pub fill: Option<Fill>,
+    pub pattern: Option<wordcraft_doc::pattern::PatternFill>,
     pub stroke: Option<Rgb>,
     /// Points.
     pub stroke_width: f32,
@@ -165,6 +166,7 @@ pub(crate) fn shape_paint(sppr: Option<&El>, style: Option<&El>, theme: &[Rgb], 
         let r = style?.child(name)?;
         Some((r.attr("idx").and_then(int).unwrap_or(0), r))
     };
+    let mut pattern = sppr.and_then(|s| super::drawing_color::pattern_fill(s, theme));
     let fill = own_fill(sppr, theme, group).unwrap_or_else(|| {
         let (idx, r) = style_ref("a:fillRef").filter(|(idx, _)| *idx > 0)?;
         // The theme style in the reference's colour (`phClr`), else that colour: also for a style
@@ -173,7 +175,10 @@ pub(crate) fn shape_paint(sppr: Option<&El>, style: Option<&El>, theme: &[Rgb], 
         let solid = Fill::Solid { color: ph.0, transparency: ph.1 };
         match styles.get(idx) {
             Some(st) if st.name == "a:noFill" => None,
-            Some(st) => read_fill(st, theme, Some(ph)).or(Some(solid)),
+            Some(st) => {
+                pattern = super::drawing_color::pattern_from_fill(st, theme, Some(ph));
+                read_fill(st, theme, Some(ph)).or(Some(solid))
+            }
             None => Some(solid),
         }
     });
@@ -194,7 +199,7 @@ pub(crate) fn shape_paint(sppr: Option<&El>, style: Option<&El>, theme: &[Rgb], 
         // Word's default outline when the file names none (no outline: no width).
         .unwrap_or(if stroke.is_some() { 0.75 } else { 0.0 })
         .clamp(0.0, 100.0);
-    ShapePaint { fill, stroke, stroke_width, outline_fill }
+    ShapePaint { fill, pattern, stroke, stroke_width, outline_fill }
 }
 
 /// A VML shape's fill: `fillcolor` (white by default) and its `v:fill`: opacity, and a linear

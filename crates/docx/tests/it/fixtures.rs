@@ -3976,6 +3976,166 @@ fn equation_in_alternate_content_is_read() {
     assert!(!p.plain_text().contains("[picture]"));
 }
 
+#[test]
+fn pattern_alpha_transform_order() {
+    let cases = [
+        (
+            r#"<a:alpha val="40000"/><a:alphaMod val="50000"/><a:alphaOff val="10000"/>"#,
+            r#"<a:alpha val="40000"/><a:alphaOff val="10000"/><a:alphaMod val="50000"/>"#,
+            (30_000, 25_000),
+        ),
+        (r#"<a:alphaMod val="50000"/><a:alphaOff val="-10000"/>"#, r#"<a:alphaOff val="-10000"/><a:alphaMod val="50000"/>"#, (40_000, 45_000)),
+        (
+            r#"<a:alpha val="10000"/><a:alphaMod val="50000"/><a:alpha val="80000"/><a:alphaOff val="-20000"/>"#,
+            r#"<a:alphaOff val="100000"/><a:alphaMod val="50000"/>"#,
+            (60_000, 100_000),
+        ),
+    ];
+    let pattern = |doc: &Document| match &paras(doc)[0].objects[0] {
+        InlineObject::Shape { extra, .. } => **extra.pattern.as_ref().unwrap(),
+        object => panic!("{object:?}"),
+    };
+    for (foreground, background, expected) in cases {
+        let fill = format!(
+            r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:pattFill prst="ltVert"><a:fgClr><a:srgbClr val="204060">{foreground}</a:srgbClr></a:fgClr><a:bgClr><a:srgbClr val="A0B0C0">{background}</a:srgbClr></a:bgClr></a:pattFill>"#
+        );
+        let doc = read_body(&format!("<w:p>{}</w:p>", anchored_wsp("Pattern", 1270000, 635000, &fill, "", "<wps:cNvSpPr/>")));
+        let read = pattern(&doc);
+        assert_eq!((read.foreground.alpha, read.background.alpha), expected, "{foreground}; {background}");
+        assert_eq!(read.foreground.color, Rgb(0x20, 0x40, 0x60));
+        assert_eq!(read.background.color, Rgb(0xA0, 0xB0, 0xC0));
+        let bytes = wordcraft_docx::write(&doc).unwrap();
+        let parts = unzip(&bytes);
+        let xml = String::from_utf8_lossy(parts.get("word/document.xml").unwrap());
+        for alpha in [expected.0, expected.1] {
+            assert!(xml.contains(&format!("<a:alpha val=\"{alpha}\"/>")), "{xml}");
+        }
+        let again = wordcraft_docx::read(&bytes).unwrap();
+        assert_eq!(pattern(&again), read);
+    }
+}
+
+const THEME_PATTERN_REFS: [u32; 2] = [1, 1001];
+
+fn theme_pattern_docx(index: u32, own: &str) -> Vec<u8> {
+    let pattern = r#"<a:pattFill prst="ltVert"><a:fgClr><a:schemeClr val="phClr"><a:alphaMod val="50000"/></a:schemeClr></a:fgClr><a:bgClr><a:srgbClr val="A0B0C0"><a:alpha val="30000"/></a:srgbClr></a:bgClr></a:pattFill>"#;
+    let solid = r#"<a:solidFill><a:schemeClr val="phClr"/></a:solidFill>"#;
+    let theme = format!(
+        r#"<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="Original pattern"><a:themeElements><a:fmtScheme name="Original pattern"><a:fillStyleLst>{pattern}{solid}{solid}</a:fillStyleLst><a:lnStyleLst/><a:effectStyleLst/><a:bgFillStyleLst>{pattern}{solid}{solid}</a:bgFillStyleLst></a:fmtScheme></a:themeElements></a:theme>"#
+    );
+    let style = format!(r#"<wps:style><a:fillRef idx="{index}"><a:srgbClr val="204060"><a:alpha val="80000"/></a:srgbClr></a:fillRef></wps:style>"#);
+    let shape = anchored_wsp(
+        "Original pattern",
+        254000,
+        254000,
+        &format!(r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>{own}"#),
+        &style,
+        "<wps:cNvSpPr/>",
+    );
+    docx(&format!("<w:p>{shape}</w:p>"), &[("rId2", "theme", "theme/theme1.xml")], &[("word/theme/theme1.xml", &theme)])
+}
+
+fn expected_theme_pattern() -> wordcraft_doc::pattern::PatternFill {
+    use wordcraft_doc::pattern::{PatternColor, PatternFill, PatternKind};
+    PatternFill {
+        kind: PatternKind::LightVertical,
+        foreground: PatternColor { color: Rgb(0x20, 0x40, 0x60), alpha: 40_000 },
+        background: PatternColor { color: Rgb(0xA0, 0xB0, 0xC0), alpha: 30_000 },
+    }
+}
+
+#[test]
+fn theme_pattern_imports() {
+    for index in THEME_PATTERN_REFS {
+        let doc = wordcraft_docx::read(&theme_pattern_docx(index, "")).unwrap();
+        let InlineObject::Shape { fill, extra, .. } = &paras(&doc)[0].objects[0] else { panic!() };
+        assert_eq!(extra.pattern.as_deref(), Some(&expected_theme_pattern()), "theme index {index}");
+        assert_eq!(fill, &Some(Fill::Solid { color: Rgb(0x20, 0x40, 0x60), transparency: 60.0 }));
+    }
+}
+
+#[test]
+fn theme_pattern_saves() {
+    for index in THEME_PATTERN_REFS {
+        let doc = wordcraft_docx::read(&theme_pattern_docx(index, "")).unwrap();
+        let saved = wordcraft_docx::write(&doc).unwrap();
+        let xml = text(&unzip(&saved), "word/document.xml");
+        assert!(xml.contains("<a:pattFill prst=\"ltVert\">"), "theme index {index} was flattened: {xml}");
+        assert!(xml.contains("<a:bgClr>"));
+        assert!(xml.contains("<a:alpha val=\"40000\"/>"));
+        assert!(xml.contains("<a:alpha val=\"30000\"/>"));
+        let reopened = wordcraft_docx::read(&saved).unwrap();
+        let InlineObject::Shape { extra, .. } = &paras(&reopened)[0].objects[0] else { panic!() };
+        assert_eq!(extra.pattern.as_deref(), Some(&expected_theme_pattern()));
+    }
+}
+
+#[test]
+fn theme_pattern_direct_wins() {
+    let solid = r#"<a:solidFill><a:srgbClr val="ABCDEF"><a:alpha val="25000"/></a:srgbClr></a:solidFill>"#;
+    let pattern = r#"<a:pattFill prst="ltVert"><a:fgClr><a:srgbClr val="123456"><a:alpha val="60000"/></a:srgbClr></a:fgClr><a:bgClr><a:srgbClr val="654321"><a:alpha val="20000"/></a:srgbClr></a:bgClr></a:pattFill>"#;
+    for index in THEME_PATTERN_REFS {
+        for own in ["<a:noFill/>", "<a:blipFill/>", "<a:grpFill/>", solid, pattern] {
+            let doc = wordcraft_docx::read(&theme_pattern_docx(index, own)).unwrap();
+            let InlineObject::Shape { fill, extra, .. } = &paras(&doc)[0].objects[0] else { panic!() };
+            if own == pattern {
+                let pattern = extra.pattern.as_deref().unwrap();
+                assert_eq!(pattern.foreground.color, Rgb(0x12, 0x34, 0x56));
+                assert_eq!(pattern.foreground.alpha, 60_000);
+                assert_eq!(pattern.background.color, Rgb(0x65, 0x43, 0x21));
+                assert_eq!(pattern.background.alpha, 20_000);
+            } else {
+                assert!(extra.pattern.is_none(), "direct fill must block the theme pattern: {own}");
+                let expected = (own == solid).then_some(Fill::Solid { color: Rgb(0xAB, 0xCD, 0xEF), transparency: 75.0 });
+                assert_eq!(fill, &expected, "{own}");
+            }
+            let reopened = wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).unwrap();
+            let InlineObject::Shape { fill: again, extra: saved, .. } = &paras(&reopened)[0].objects[0] else { panic!() };
+            assert_eq!(again, fill);
+            assert_eq!(saved.pattern, extra.pattern);
+        }
+    }
+}
+
+/// A fill's `a:alpha` is its opacity: a translucent white wash over a picture stayed opaque and
+/// hid the picture.
+#[test]
+fn a_shape_fill_keeps_its_transparency() {
+    let fill =
+        r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="FFFFFF"><a:alpha val="30980"/></a:srgbClr></a:solidFill>"#;
+    let d = read_body(&format!("<w:p>{}</w:p>", anchored_wsp("Wash", 1270000, 635000, fill, "", "<wps:cNvSpPr/>")));
+    let transparency = |d: &Document| match &paras(d)[0].objects[0] {
+        InlineObject::Shape { fill: Some(wordcraft_doc::fill::Fill::Solid { color, transparency }), .. } => (Some(*color), *transparency),
+        o => panic!("{o:?}"),
+    };
+    const FILL_ALPHA: u32 = 30_980;
+    const ALPHA_SCALE: f32 = 100_000.0;
+    // Canonical Fill stores the percentage computed from opacity, including f32 rounding.
+    let expected = 100.0 - (FILL_ALPHA as f32 / ALPHA_SCALE) * 100.0;
+    assert_eq!(transparency(&d), (Some(Rgb(255, 255, 255)), expected));
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let parts = unzip(&bytes);
+    let xml = String::from_utf8_lossy(parts.get("word/document.xml").unwrap());
+    assert!(xml.contains(&format!("<a:alpha val=\"{FILL_ALPHA}\"/>")), "{xml}");
+    let again = wordcraft_docx::read(&bytes).unwrap();
+    assert_eq!(transparency(&again), (Some(Rgb(255, 255, 255)), expected));
+}
+
+/// Pattern foreground/background opacity must survive editing, not become a solid fill.
+#[test]
+fn ltvert_fill_roundtrips() {
+    let paint = r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:pattFill prst="ltVert"><a:fgClr><a:srgbClr val="9BBB59"><a:alpha val="80000"/></a:srgbClr></a:fgClr><a:bgClr><a:srgbClr val="FFFFFF"><a:alpha val="40000"/></a:srgbClr></a:bgClr></a:pattFill>"#;
+    let d = read_body(&format!("<w:p>{}</w:p>", anchored_wsp("Pattern", 254000, 254000, paint, "", "<wps:cNvSpPr/>")));
+    let saved = wordcraft_docx::write(&d).unwrap();
+    let xml = text(&unzip(&saved), "word/document.xml");
+    assert!(xml.contains("<a:pattFill prst=\"ltVert\">"), "pattern was flattened: {xml}");
+    assert!(xml.contains("<a:bgClr>"));
+    assert!(xml.contains("val=\"80000\""));
+    assert!(xml.contains("val=\"40000\""));
+    let again = wordcraft_docx::read(&saved).unwrap();
+    assert_eq!(d.body, again.body);
+}
+
 /// #1500: gradient fills and transparency on shapes (the cases in the issue), from the shape's
 /// own properties, the theme's fill styles (`a:fillRef` 3 and 1003, as Word's cover pages use),
 /// a group's fill (`a:grpFill`), an outline gradient and VML's `v:fill`. Each is read as the

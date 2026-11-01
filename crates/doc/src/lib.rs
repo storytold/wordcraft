@@ -39,6 +39,7 @@ pub mod math_linear;
 pub mod math_symbols;
 pub mod numbering;
 pub mod para;
+pub mod pattern;
 pub mod props;
 pub mod resolve;
 pub mod section;
