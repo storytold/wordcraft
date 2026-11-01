@@ -671,9 +671,25 @@ pub(crate) fn leader_xs(left: f32, right: f32, pitch: f32) -> Vec<f32> {
     if !(left.is_finite() && right.is_finite() && pitch.is_finite() && pitch > 0.0) {
         return Vec::new();
     }
-    let first = (left / pitch - 0.001).ceil() as i64;
-    (first..first + 2000).map(|k| k as f32 * pitch).take_while(|x| x + pitch <= right + 0.001).collect()
+    let first = (left / pitch - LEADER_GRID_SLACK).ceil() as i64;
+    (first..first + MAX_LEADER_GLYPHS).map(|k| k as f32 * pitch).take_while(|x| x + pitch <= right + LEADER_FIT_SLACK).collect()
 }
+
+/// How far, in grid places, `left` may be past a place and still start the leader there: so text
+/// ending on a grid place, give or take float rounding, doesn't lose the first glyph.
+const LEADER_GRID_SLACK: f32 = 0.001;
+
+/// How far, in points, a leader's last glyph may end past `right` and still be drawn: the same
+/// allowance for rounding at the other end.
+const LEADER_FIT_SLACK: f32 = 0.001;
+
+/// The most glyphs one leader draws, so a hostile tab position can't make it loop for long.
+const MAX_LEADER_GLYPHS: i64 = 2000;
+
+/// How far, in pixels, a font size may fall short of a whole 600-dpi pixel and still count as it,
+/// so a size that is a whole number of pixels (12 pt is 100) isn't taken as one fewer when the
+/// float arithmetic comes out a hair short.
+const PPEM_SLACK: f32 = 0.001;
 
 /// How far apart a tab leader's glyphs are drawn, as measured in Word: the glyph's advance (`units`
 /// of the font's `upem`) at the font size in whole 600-dpi pixels, rounded to a whole pixel. So a
@@ -682,7 +698,7 @@ pub(crate) fn leader_xs(left: f32, right: f32, pitch: f32) -> Vec<f32> {
 /// least 1 pt.
 pub(crate) fn leader_pitch(units: f32, upem: f32, size: f32) -> f32 {
     const DPI: f32 = 600.0;
-    let ppem = (size * DPI / 72.0 + 0.001).floor();
+    let ppem = (size * DPI / 72.0 + PPEM_SLACK).floor();
     let px = (units * ppem / upem.max(1.0)).round();
     (px * 72.0 / DPI).max(1.0)
 }
