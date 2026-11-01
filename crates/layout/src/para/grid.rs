@@ -29,6 +29,17 @@ impl Grid {
     pub fn key(&self) -> (u32, u32, u32, bool) {
         (self.line.map_or(0, f32::to_bits), self.chars.map_or(0, f32::to_bits), self.font_size.to_bits(), self.snap_all)
     }
+    /// The advance of an East Asian character of `size` points on the character grid: its size
+    /// plus the grid's adjustment, the pitch less the default size (`w:charSpace` is space added
+    /// to each character, ECMA-376 §17.6.5). At the default size that is the pitch; larger and
+    /// smaller text keeps its own size, so 22 pt text on a 15.8 pt grid for 16 pt advances
+    /// 21.8 pt and 12 pt text 11.8 pt, as WPS lays them out. `None` without a character grid.
+    pub fn advance(&self, size: f32) -> Option<f32> {
+        let pitch = self.chars?;
+        let size = if size.is_finite() && size > 0.0 { size } else { self.font_size };
+        let adv = size + pitch - self.font_size;
+        Some(if adv.is_finite() { adv.clamp(0.0, 1e4) } else { pitch })
+    }
     /// `h` rounded up to whole line pitches (unchanged without a line grid).
     pub fn snap_height(&self, h: f32) -> f32 {
         match self.line {
@@ -47,9 +58,9 @@ pub fn is_east_asian(c: char) -> bool {
         | 0xFE30..=0xFE4F | 0xFF01..=0xFF60 | 0xFFE0..=0xFFE6 | 0x20000..=0x3FFFF)
 }
 
-/// Character grid: East Asian characters (all text with `snapToChars`) take whole cells of the
-/// pitch, the glyph centred in them. A character at the default size takes one cell, a larger one
-/// as many as its size needs; Latin text stays proportional unless everything snaps.
+/// Character grid: East Asian characters advance by their size plus the grid's adjustment
+/// ([`Grid::advance`]: one pitch at the default size), the glyph centred in its advance. Latin
+/// text stays proportional unless everything snaps (`snapToChars`), when it takes whole cells.
 pub(super) fn snap_chars(b: &mut Builder, text: &str, grid: &Grid) {
     let Some(pitch) = grid.chars else { return };
     let base = grid.font_size.max(1.0);
@@ -63,8 +74,7 @@ pub(super) fn snap_chars(b: &mut Builder, text: &str, grid: &Grid) {
             continue;
         }
         let size = b.styles.get(c.style as usize).map_or(base, |st| st.size);
-        let cells = if east_asian { (size / base).round() } else { (c.adv / pitch - 0.01).ceil() }.clamp(1.0, 64.0);
-        let adv = cells * pitch;
+        let adv = if east_asian { grid.advance(size).unwrap_or(pitch) } else { (c.adv / pitch - 0.01).ceil().clamp(1.0, 64.0) * pitch };
         let shift = (adv - c.adv) / 2.0;
         for g in b.glyphs.get_mut(c.g0 as usize..c.g1 as usize).into_iter().flatten() {
             g.dx += shift;
