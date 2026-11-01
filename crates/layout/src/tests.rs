@@ -7272,6 +7272,31 @@ fn kinsoku_keeps_a_manual_line_break_before_a_closing_bracket() {
     assert_eq!(lines[1].0, bracket, "the second line starts at the bracket: {lines:?}");
 }
 
+/// 行頭禁則 (JIS X 4051 §4) end to end: a paragraph wrapping in a narrow column never starts a
+/// line with a small kana or the prolonged sound mark, even where the break opportunity that
+/// would put one there sits right after a kanji.
+#[test]
+fn a_line_never_starts_with_a_small_kana_or_the_prolonged_sound_mark() {
+    let text = "漢っ漢ゃ漢ー漢ッ漢ャ漢ゕ漢ヶ漢ㇺ漢ｯ漢ｬ漢ｰ漢";
+    let mut d = Document::from_text(text);
+    d.last_section.page_w = 72.0 + 72.0 + 72.0; // 72 pt of text: a few East Asian characters
+    let l = lay(&d);
+    let mut lines = Vec::new();
+    for p in &l.pages {
+        for it in &p.items {
+            if let Placed::Lines { para, l0, l1, .. } = it {
+                lines.extend(para.lines[*l0..*l1].iter().map(|line| (line.start, line.stop)));
+            }
+        }
+    }
+    assert!(lines.len() > 1, "the paragraph wraps: {lines:?}");
+    let non_starters = "ぁぃぅぇぉっゃゅょゎゕゖァィゥェォッャュョヮヵヶㇰㇱㇲㇳㇴㇵㇶㇷㇸㇹㇺㇻㇼㇽㇾㇿｧｨｩｪｫｬｭｮｯーｰ";
+    for &(start, _) in &lines {
+        let first = text.get(start..).and_then(|t| t.chars().next()).unwrap_or_default();
+        assert!(!non_starters.contains(first), "a line must not start with {first}: {lines:?}");
+    }
+}
+
 /// #332: a rotated floating shape keeps text clear of its rotated bounds (it reaches further at
 /// the side), its frame stays put (rotation is about the centre) and it is drawn turned; hit
 /// testing follows the turned shape, not its frame.
