@@ -264,7 +264,8 @@ fn a_positional_tab_in_a_box_that_doesnt_wrap_stays_in_it() {
 fn a_list_label_counts_in_a_box_that_doesnt_wrap() {
     // A label wider than its hanging indent moves the text along: the line is that much longer.
     let mut d = Document::from_text("x");
-    let id = text_box(&mut d, 0, "A list item that is quite long indeed", 35.0, 35.0, TextBody { no_wrap: true, ..Default::default() });
+    let id =
+        text_box(&mut d, 0, "A list item that is quite long indeed", 35.0, 35.0, TextBody { no_wrap: true, auto_fit: true, ..Default::default() });
     let mut levels = wordcraft_doc::numbering::levels_for(wordcraft_doc::ListKind::Numbered);
     levels[0].text = "Section %1 with a long label:".into();
     let num = d.numbering.try_add_levels(None, levels).unwrap();
@@ -336,6 +337,30 @@ fn a_list_label_counts_on_its_own_line_of_a_box_that_doesnt_wrap() {
     let l = lay(&d);
     let (r, end) = (frame_of(&l, id), lines_end(&l, id));
     assert!(r.right() - end < 1.0, "the box {r:?} hugs its longest line, which ends at {end}");
+}
+
+#[test]
+fn a_list_label_counts_in_a_right_to_left_box_that_doesnt_wrap() {
+    // The label starts a right-to-left line too, so the line is that much longer.
+    let mut d = Document::from_text("x");
+    let id = text_box(
+        &mut d,
+        0,
+        &"\u{5e9}\u{5dc}\u{5d5}\u{5dd} \u{5e2}\u{5d5}\u{5dc}\u{5dd} ".repeat(6),
+        35.0,
+        35.0,
+        TextBody { no_wrap: true, auto_fit: true, ..Default::default() },
+    );
+    let mut levels = wordcraft_doc::numbering::levels_for(wordcraft_doc::ListKind::Numbered);
+    levels[0].text = "Section %1 with a long label:".into();
+    let num = d.numbering.try_add_levels(None, levels).unwrap();
+    let p = d.para_mut(StoryRef::Part(id), &Path::top(0)).unwrap();
+    p.props.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
+    p.props.bidi = Some(true);
+    float_box(&mut d);
+    let l = lay(&d);
+    let shown: usize = lines(&l, id).iter().map(|(.., l0, l1)| l1 - l0).sum();
+    assert_eq!(shown, 1, "label and text share one line");
 }
 
 /// An auto-fit inline box shrinks to its three lines and keeps the explicit page break on page

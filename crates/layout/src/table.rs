@@ -1460,7 +1460,8 @@ fn para_widths(pl: &ParaLayout) -> (f32, f32, f32) {
 pub(crate) fn para_content_labelled(pl: &ParaLayout) -> (f32, f32) {
     let (lo, hi, first) = para_widths(pl);
     let start = pl.rp.indent_left.max(0.0) + pl.rp.indent_first.max(0.0);
-    let text = pl.label.as_ref().and_then(|_| pl.lines.first()).filter(|l| !l.rtl).and_then(|l| l.xs.first()).copied().unwrap_or(start);
+    // The leftmost: reordered right-to-left text runs from its far end.
+    let text = pl.label.as_ref().and_then(|_| pl.lines.first()).and_then(|l| l.xs.iter().copied().reduce(f32::min)).unwrap_or(start);
     (lo, hi.max(first + (text - start).max(0.0)))
 }
 

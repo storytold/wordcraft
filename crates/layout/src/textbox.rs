@@ -88,11 +88,13 @@ fn block_width(ctx: &mut Ctx, block: &Arc<Block>, len: f32) -> f32 {
         return crate::table::blocks_content(ctx, &vec![block.clone()], None, 0).1;
     };
     let label = ctx.next_label(p);
-    // Alignment moves a line, not its width, and at the measuring width a label would move too.
+    // Alignment and direction move a line, not its width, and at the measuring width a label
+    // would move too.
     let left;
     let p = if label.is_some() {
         let mut l = p.clone();
         l.props.align = Some(Align::Left);
+        l.props.bidi = Some(false);
         l.touch();
         left = l;
         &left
