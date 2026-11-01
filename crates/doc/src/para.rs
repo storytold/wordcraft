@@ -511,28 +511,18 @@ impl Paragraph {
         }
     }
     /// Start of the word at or before `off` (Ctrl+Left).
-    /// Thai and Lao have no spaces between words; ICU4X dictionary segmentation is used there.
     pub fn word_start(&self, off: usize) -> usize {
         let off = self.clamp(off);
-        if self.text.get(..off).and_then(|t| t.chars().next_back()).is_some_and(crate::cluster::is_thai_lao) {
-            return crate::cluster::thai_word_start(&self.text, off);
-        }
         let Some(before) = self.text.get(..off) else { return 0 };
         let mut idx = off;
         let mut seen_word = false;
         for (i, c) in before.char_indices().rev() {
-            // Thai/Lao chars are alphanumeric but belong to their own script; treat the script
-            // transition as a word boundary so the Latin scan doesn't walk into Thai/Lao runs.
-            let w = crate::bidi::is_word_char(c) && !crate::cluster::is_thai_lao(c);
+            let w = crate::bidi::is_word_char(c);
             if w {
                 seen_word = true;
                 idx = i;
             } else if seen_word {
                 break;
-            } else if crate::cluster::is_thai_lao(c) {
-                // Reached a Thai/Lao run before finding any Latin word (e.g. cursor on a space
-                // between Thai and Latin).  Delegate to Thai segmentation at the run's right edge.
-                return crate::cluster::thai_word_start(&self.text, i + c.len_utf8());
             } else {
                 idx = i;
             }
@@ -540,22 +530,15 @@ impl Paragraph {
         idx
     }
     /// End of the word after `off`, including trailing spaces (Ctrl+Right, like Word).
-    /// Thai and Lao have no spaces between words; ICU4X dictionary segmentation is used there.
     pub fn word_end(&self, off: usize) -> usize {
         let off = self.clamp(off);
-        if self.text.get(off..).and_then(|t| t.chars().next()).is_some_and(crate::cluster::is_thai_lao) {
-            return crate::cluster::thai_word_end(&self.text, off);
-        }
         let Some(after) = self.text.get(off..) else { return self.text.len() };
         let it = after.char_indices().peekable();
         let mut end = self.text.len();
-        // Thai/Lao is alphanumeric but forms its own script; it must not be treated as a Latin
-        // word char — the script transition is a word boundary.
-        let is_latin_word = |c: char| crate::bidi::is_word_char(c) && !crate::cluster::is_thai_lao(c);
-        let first_word = after.chars().next().is_some_and(|c| is_latin_word(c) && c != '\'');
+        let first_word = after.chars().next().is_some_and(|c| crate::bidi::is_word_char(c) && c != '\'');
         let mut in_space = false;
         for (i, c) in it {
-            let w = is_latin_word(c);
+            let w = crate::bidi::is_word_char(c);
             if c == ' ' || c == NBSP {
                 in_space = true;
                 continue;
@@ -568,23 +551,9 @@ impl Paragraph {
         end
     }
     /// The word around `off` (double-click): (start, end) without trailing space.
-    /// Thai and Lao have no spaces between words; ICU4X dictionary segmentation is used there.
     pub fn word_at(&self, off: usize) -> (usize, usize) {
         let off = self.clamp(off);
-        let at_off = self.text.get(off..).and_then(|t| t.chars().next());
-        let before_off = self.text.get(..off).and_then(|t| t.chars().next_back());
-        // Use ICU4X Thai/Lao segmentation when the character AT the cursor is Thai/Lao, or when
-        // the cursor sits on a space or end-of-text and the preceding character is Thai/Lao.
-        // Never route to thai_word_at when the cursor is on a Latin/other script character (e.g.
-        // the first letter of "test" in "ไทยtest" must select the Latin word, not the Thai one).
-        let use_thai = at_off.is_some_and(crate::cluster::is_thai_lao)
-            || (at_off.is_none_or(|c| matches!(c, ' ' | '\u{00A0}')) && before_off.is_some_and(crate::cluster::is_thai_lao));
-        if use_thai {
-            return crate::cluster::thai_word_at(&self.text, off);
-        }
-        // Thai/Lao chars satisfy is_alphanumeric, so exclude them from the Latin scan — they act
-        // as a script boundary (the Thai path above handles them).
-        let is_w = |c: char| crate::bidi::is_word_char(c) && !crate::cluster::is_thai_lao(c);
+        let is_w = |c: char| crate::bidi::is_word_char(c);
         let mut a = off;
         for (i, c) in self.text.get(..off).unwrap_or("").char_indices().rev() {
             if !is_w(c) {
@@ -815,49 +784,6 @@ mod tests {
         assert_eq!(p.sentence_at(3), (0, 21));
         assert_eq!(p.next_boundary(0), 1);
         assert_eq!(p.prev_boundary(0), 0);
-        // Mixed Thai/Latin (no spaces): script transitions are word boundaries; ICU4X word
-        // boundaries within a Thai run are also respected.
-        //
-        // Byte layout: "ไทย"=9B(0) "test"=4B(9) "ลาว"=9B(13) "test"=4B(22)
-        //              "ไม่"=9B(26) "รวม"=9B(35) "Khmer"=5B(44) → total 49B.
-        // "ไม่รวม" is one Thai run (26..44); ICU4X splits it into ไม่(26..35)/รวม(35..44).
-        let mixed = Paragraph::with_text("ไทยtestลาวtestไม่รวมKhmer", CharProps::default());
-        assert_eq!(mixed.text.len(), 49);
-        // Ctrl+Right (word_end)
-        assert_eq!(mixed.word_end(0), 9, "ไทย→");
-        assert_eq!(mixed.word_end(9), 13, "first test→");
-        assert_eq!(mixed.word_end(13), 22, "ลาว→");
-        assert_eq!(mixed.word_end(22), 26, "second test→");
-        assert_eq!(mixed.word_end(26), 35, "ไม่→ (ICU4X intra-run boundary)");
-        assert_eq!(mixed.word_end(35), 44, "รวม→");
-        assert_eq!(mixed.word_end(44), 49, "Khmer→end");
-        // Ctrl+Left (word_start)
-        assert_eq!(mixed.word_start(9), 0, "←ไทย");
-        assert_eq!(mixed.word_start(13), 9, "←first test");
-        assert_eq!(mixed.word_start(22), 13, "←ลาว");
-        assert_eq!(mixed.word_start(26), 22, "←second test");
-        assert_eq!(mixed.word_start(35), 26, "←ไม่");
-        assert_eq!(mixed.word_start(44), 35, "←รวม");
-        assert_eq!(mixed.word_start(49), 44, "←Khmer");
-        // Double-click (word_at)
-        assert_eq!(mixed.word_at(3), (0, 9), "inside ไทย");
-        assert_eq!(mixed.word_at(9), (9, 13), "on 't' after ไทย → Latin");
-        assert_eq!(mixed.word_at(13), (13, 22), "on 'ล'");
-        assert_eq!(mixed.word_at(16), (13, 22), "inside ลาว");
-        assert_eq!(mixed.word_at(26), (26, 35), "on 'ไ' of ไม่");
-        assert_eq!(mixed.word_at(35), (35, 44), "boundary inside Thai run → right word รวม (like Latin)");
-        assert_eq!(mixed.word_at(38), (35, 44), "inside รวม");
-        assert_eq!(mixed.word_at(44), (44, 49), "on 'K' → Khmer");
-        // Ctrl+Left across a space into a Thai run: "อนุรักษ์ภาษาไทย abc"
-        // "อนุรักษ์"=24B(0) "ภาษา"=12B(24) "ไทย"=9B(36) " "=1B(45) "abc"=3B(46) → 49B
-        let spaced = Paragraph::with_text("อนุรักษ์ภาษาไทย abc", CharProps::default());
-        assert_eq!(spaced.text.len(), 49);
-        assert_eq!(spaced.word_start(46), 36, "Ctrl+Left from 'a' crosses space → start of ไทย");
-        assert_eq!(spaced.word_start(47), 46, "Ctrl+Left from inside 'abc' → start of abc");
-        // NBSP after Thai routes word_at to thai_word_at.
-        let nbsp = Paragraph::with_text("ไทย\u{00A0}abc", CharProps::default());
-        // "ไทย"=9B, NBSP=2B(9..11), "abc"=3B(11..14)
-        assert_eq!(nbsp.word_at(9), (0, 9), "cursor on NBSP after Thai → selects Thai word");
     }
 
     proptest::proptest! {
