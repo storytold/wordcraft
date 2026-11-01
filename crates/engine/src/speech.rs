@@ -13,15 +13,22 @@
 //! voice the user chose), and without a voice for the language the default voice speaks.
 //!
 //! The speech itself runs on a worker thread (desktop only): it starts `say` (macOS), `espeak`
-//! / `spd-say` (Linux, BSD) or the Windows speech synthesizer (PowerShell) for the current
-//! sentence, and moves on when it finishes. Commands only change the shared state and wake the
-//! worker, which stops the running sentence when the state changed under it.
+//! / `spd-say` (Linux, BSD) or the Windows speech synthesizer for the current sentence, and moves
+//! on when it finishes. On Windows one PowerShell host stays alive for the whole reading and
+//! loads System.Speech once; if it cannot start, or fails at any point, the reading falls back to
+//! a fresh PowerShell process per sentence. A failure after a sentence starts repeats that
+//! sentence on the fallback path, so no text is dropped, though the part already spoken may be
+//! heard twice. The next reading tries the host again. Commands only change the shared state and
+//! wake the worker, which stops the running sentence when the state changed under it.
 
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 
 use serde_json::{Value, json};
 use wordcraft_doc::para::{COLUMN_BREAK, LINE_BREAK, OBJ, PAGE_BREAK};
 use wordcraft_doc::{Document, InlineObject, Pos};
+
+#[cfg(any(target_os = "windows", test))]
+mod windows_host;
 
 /// Longest sentence handed to the speech program (longer ones are split at a space).
 const MAX_SENTENCE: usize = 600;
@@ -537,6 +544,10 @@ struct Shared {
     rate: f32,
     /// Bumped on every change that should stop the sentence being spoken.
     generation: u64,
+    /// Bumped by `start`: a new reading gets a fresh speech host, so a failed host is retried
+    /// and a changed default voice is captured again.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    reading: u64,
     error: Option<String>,
     /// A worker thread is running (cleared under the lock as it exits).
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
@@ -561,7 +572,16 @@ impl Default for ReadAloud {
         let off = cfg!(test) || std::env::var("WORDCRAFT_SPEECH").is_ok_and(|v| v == "off");
         ReadAloud {
             shared: Arc::new((
-                Mutex::new(Shared { queue: Vec::new(), index: 0, state: State::Stopped, rate: 1.0, generation: 0, error: None, running: false }),
+                Mutex::new(Shared {
+                    queue: Vec::new(),
+                    index: 0,
+                    state: State::Stopped,
+                    rate: 1.0,
+                    generation: 0,
+                    reading: 0,
+                    error: None,
+                    running: false,
+                }),
                 Condvar::new(),
             )),
             backend: if off { Backend::Hold } else { Backend::System },
@@ -596,6 +616,7 @@ impl ReadAloud {
             s.state = if queue.is_empty() { State::Stopped } else { State::Playing };
             s.queue = queue;
             s.index = 0;
+            s.reading = s.reading.wrapping_add(1);
             s.error = None;
         });
     }
@@ -726,31 +747,104 @@ enum Spoken {
     Failed(String),
 }
 
+/// The system voice for one reading. On Windows it keeps one PowerShell host alive from the
+/// first system sentence; if the host cannot start, or fails, it falls back to a process per
+/// sentence (repeating the sentence if it had started).
 #[cfg(not(target_arch = "wasm32"))]
+struct SystemSpeaker {
+    #[cfg(target_os = "windows")]
+    host: Option<windows_host::Host>,
+    #[cfg(target_os = "windows")]
+    started: bool,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl SystemSpeaker {
+    /// An empty speaker; the Windows host starts on the first system sentence.
+    fn new() -> Self {
+        Self {
+            #[cfg(target_os = "windows")]
+            host: None,
+            #[cfg(target_os = "windows")]
+            started: false,
+        }
+    }
+
+    /// Speak one sentence with the persistent Windows host, or with a fresh process per sentence.
+    fn speak(&mut self, text: &str, lang: Option<&str>, rate: f32, changed: &dyn Fn() -> bool) -> Spoken {
+        #[cfg(target_os = "windows")]
+        {
+            if !self.started {
+                self.started = true;
+                self.host = windows_host::Host::start(changed).ok();
+                if changed() {
+                    if self.host.is_none() {
+                        self.started = false;
+                    }
+                    return Spoken::Interrupted;
+                }
+            }
+            if let Some(host) = self.host.as_mut() {
+                match host.speak(text, lang, rate, changed) {
+                    Ok(spoken) => return spoken,
+                    Err(windows_host::HostError::Voice) => {
+                        if let Ok(spoken) = host.speak(text, None, rate, changed) {
+                            return spoken;
+                        }
+                    }
+                    Err(windows_host::HostError::Unavailable) => {}
+                }
+                self.host = None;
+            }
+        }
+        speak(text, lang, rate, changed)
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// The Read Aloud worker loop; it owns the system speaker for one reading. While the speaker
+/// shuts down it keeps `running` set, so a new reading cannot start a second host, but it
+/// releases the state lock so UI reads are not blocked by the bounded host shutdown.
 fn worker(shared: &(Mutex<Shared>, Condvar), backend: Backend) {
     let (m, cv) = shared;
+    let mut speaker = SystemSpeaker::new();
+    let mut reading = lock(m).reading;
     loop {
-        let (text, lang, generation, rate) = {
+        let (text, lang, generation, rate, now) = {
             let mut s = lock(m);
             while s.state == State::Paused {
                 s = cv.wait(s).unwrap_or_else(PoisonError::into_inner);
             }
             if s.state == State::Stopped {
-                s.running = false;
+                if let Some(now) = finish_worker(m, s, speaker) {
+                    reading = now;
+                    speaker = SystemSpeaker::new();
+                    continue;
+                }
                 return;
             }
             match s.queue.get(s.index) {
-                Some(u) => (u.text.clone(), u.lang.clone(), s.generation, s.rate),
+                Some(u) => (u.text.clone(), u.lang.clone(), s.generation, s.rate, s.reading),
                 None => {
                     s.state = State::Stopped;
-                    s.running = false;
+                    if let Some(now) = finish_worker(m, s, speaker) {
+                        reading = now;
+                        speaker = SystemSpeaker::new();
+                        continue;
+                    }
                     return;
                 }
             }
         };
+        if now != reading {
+            // A new reading: drop the old host (quit or kill) and start afresh, so a failed host
+            // is retried and the default voice is captured again.
+            reading = now;
+            speaker = SystemSpeaker::new();
+        }
         let changed = || lock(m).generation != generation;
         let outcome = match backend {
-            Backend::System => speak(&text, lang.as_deref(), rate, &changed),
+            Backend::System => speaker.speak(&text, lang.as_deref(), rate, &changed),
             Backend::Instant => Spoken::Done,
             Backend::Hold => {
                 let mut s = lock(m);
@@ -769,7 +863,11 @@ fn worker(shared: &(Mutex<Shared>, Condvar), backend: Backend) {
                 s.index += 1;
                 if s.index >= s.queue.len() {
                     s.state = State::Stopped;
-                    s.running = false;
+                    if let Some(now) = finish_worker(m, s, speaker) {
+                        reading = now;
+                        speaker = SystemSpeaker::new();
+                        continue;
+                    }
                     return;
                 }
             }
@@ -777,10 +875,33 @@ fn worker(shared: &(Mutex<Shared>, Condvar), backend: Backend) {
             Spoken::Failed(e) => {
                 s.state = State::Stopped;
                 s.error = Some(e);
-                s.running = false;
+                if let Some(now) = finish_worker(m, s, speaker) {
+                    reading = now;
+                    speaker = SystemSpeaker::new();
+                    continue;
+                }
                 return;
             }
         }
+    }
+}
+
+/// Finish this worker without holding the state lock while the speaker shuts down. `running`
+/// stays set, so `ensure_worker` cannot start a second worker during the bounded host shutdown.
+/// Returns the latest reading when a new one started meanwhile, so the worker can keep it with a
+/// fresh speaker; otherwise clears `running` and returns `None`.
+#[cfg(not(target_arch = "wasm32"))]
+fn finish_worker(m: &Mutex<Shared>, s: MutexGuard<Shared>, speaker: SystemSpeaker) -> Option<u64> {
+    drop(s);
+    // Off Windows `SystemSpeaker` has no fields, so this drop is an intentional no-op.
+    #[allow(clippy::drop_non_drop)]
+    drop(speaker);
+    let mut state = lock(m);
+    if state.state == State::Playing && !state.queue.is_empty() {
+        Some(state.reading)
+    } else {
+        state.running = false;
+        None
     }
 }
 
@@ -807,10 +928,40 @@ struct WindowsSpeech {
     creation_flags: u32,
 }
 
+/// The PowerShell program and common arguments for `script`. Both the per-sentence fallback and
+/// the persistent host build their `Command` from this, so their path and flags cannot drift.
 #[cfg(any(target_os = "windows", test))]
+fn windows_command(system_root: Option<std::ffi::OsString>, script: &str) -> WindowsSpeech {
+    WindowsSpeech {
+        program: windows_powershell(system_root),
+        args: ["-NoProfile".into(), "-NonInteractive".into(), "-Command".into(), script.into()],
+        // PowerShell is a console program: without this, every sentence flashes a console window
+        // over the document (#1122).
+        creation_flags: CREATE_NO_WINDOW,
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl WindowsSpeech {
+    /// Build the PowerShell `Command` from the stored program, arguments and flags.
+    fn command(&self) -> std::process::Command {
+        let mut command = std::process::Command::new(&self.program);
+        command.args(&self.args);
+        std::os::windows::process::CommandExt::creation_flags(&mut command, self.creation_flags);
+        command
+    }
+}
+
+/// SAPI rate: -10 (a third of normal speed) … 10 (three times).
+#[cfg(any(target_os = "windows", test))]
+fn sapi_rate(rate: f32) -> i64 {
+    ((rate.ln() / 3f32.ln()) * 10.0).round().clamp(-10.0, 10.0) as i64
+}
+
+#[cfg(any(target_os = "windows", test))]
+/// Build the per-sentence PowerShell script for `rate` and `lang`, and return its command.
 fn windows_speech(system_root: Option<std::ffi::OsString>, rate: f32, lang: Option<&str>) -> WindowsSpeech {
-    // SAPI rate: -10 (a third of normal speed) … 10 (three times).
-    let r = ((rate.ln() / 3f32.ln()) * 10.0).round().clamp(-10.0, 10.0) as i64;
+    let r = sapi_rate(rate);
     // The voice of the sentence's language, when one is installed (the default voice would spell
     // out Cyrillic, Greek… letters one by one), but only when the user's default voice doesn't
     // speak that language already, in any region. The tag is `primary_tag`-clean, so it can't end
@@ -826,13 +977,7 @@ fn windows_speech(system_root: Option<std::ffi::OsString>, rate: f32, lang: Opti
     let script = format!(
         "Add-Type -AssemblyName System.Speech; $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; $s.Rate = {r}; {voice}$m = New-Object System.IO.MemoryStream; [Console]::OpenStandardInput().CopyTo($m); $s.Speak([System.Text.Encoding]::UTF8.GetString($m.ToArray()))"
     );
-    WindowsSpeech {
-        program: windows_powershell(system_root),
-        args: ["-NoProfile".into(), "-NonInteractive".into(), "-Command".into(), script],
-        // PowerShell is a console program: without this, every sentence flashes a console window
-        // over the document (#1122).
-        creation_flags: CREATE_NO_WINDOW,
-    }
+    windows_command(system_root, &script)
 }
 
 /// Speak one sentence with the system's speech program, stopping early when `changed()`. When
@@ -869,10 +1014,7 @@ fn speak_with(text: &str, lang: Option<&str>, rate: f32, changed: &dyn Fn() -> b
     #[cfg(target_os = "windows")]
     {
         let w = windows_speech(std::env::var_os("SystemRoot"), rate, lang);
-        let mut c = Command::new(&w.program);
-        c.args(&w.args);
-        std::os::windows::process::CommandExt::creation_flags(&mut c, w.creation_flags);
-        tries.push((c, lang.and_then(primary_tag).is_some()));
+        tries.push((w.command(), lang.and_then(primary_tag).is_some()));
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
