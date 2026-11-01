@@ -97,6 +97,51 @@ pub struct ParaLayout {
 }
 
 impl ParaLayout {
+    /// Estimate directly owned layout buffers, excluding shared fonts, formatting and maths.
+    /// Cache retention uses capacities, since shortening a vector does not free its allocation.
+    pub(crate) fn owned_buffer_bytes(&self) -> usize {
+        fn bytes<T>(v: &Vec<T>) -> usize {
+            v.capacity().saturating_mul(std::mem::size_of::<T>())
+        }
+        let mut total = [
+            bytes(&self.styles),
+            bytes(&self.glyphs),
+            bytes(&self.clusters),
+            bytes(&self.lines),
+            bytes(&self.joined_cluster_starts),
+            bytes(&self.notes),
+            bytes(&self.issues),
+            bytes(&self.hyph_after),
+            bytes(&self.bidi_levels),
+            bytes(&self.maths),
+            bytes(&self.rubies),
+            bytes(&self.displays),
+            bytes(&self.ptabs),
+            bytes(&self.left_out),
+            bytes(&self.shown),
+            bytes(&self.enclosures),
+            bytes(&self.auto_space),
+        ]
+        .into_iter()
+        .fold(0usize, usize::saturating_add);
+        for line in &self.lines {
+            total = total.saturating_add(bytes(&line.xs)).saturating_add(bytes(&line.vis)).saturating_add(bytes(&line.leaders));
+        }
+        for (_, text, ranges) in &self.shown {
+            total = total.saturating_add(text.capacity()).saturating_add(bytes(ranges));
+        }
+        for ruby in &self.rubies {
+            total = total.saturating_add(bytes(&ruby.glyphs)).saturating_add(ruby.text.capacity()).saturating_add(bytes(&ruby.ranges));
+        }
+        if let Some(label) = &self.label {
+            total = total.saturating_add(label.text.capacity()).saturating_add(bytes(&label.glyphs)).saturating_add(bytes(&label.runs));
+            for run in &label.runs {
+                total = total.saturating_add(run.text.capacity());
+            }
+        }
+        total
+    }
+
     /// Returns whether `off` is a legal caret and edit boundary, that is, not the interior start of a
     /// joined grapheme cluster.
     fn is_edit_boundary(&self, off: usize) -> bool {
