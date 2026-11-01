@@ -9726,6 +9726,219 @@ fn cell_widths_override_grid() {
 }
 
 #[test]
+fn percentage_cell_widths_that_disagree_or_span_columns() {
+    // Measured in Word (A4, 451.3 pt between the margins; 468 pt here), autofit tables 100% wide:
+    // rows asking 30/10/10/30 and 10/30/10/30, in either order, give 30/30/10/30 (each column its
+    // largest); a merged cell asking 50% over the first two columns, beside 10% and 40%, gives
+    // those two 50% between them; a merged 20% over columns asking 40% and 10% changes nothing;
+    // and a nested table's percentages are of its own width.
+    let cell_text = |s: &str| vec![wordcraft_doc::para_block(Paragraph::with_text(s, Default::default()))];
+    let table = |rows: &[&[(Option<f32>, u32)]]| {
+        let mut t = Table::new(rows.len(), 4, 460.3);
+        t.grid = vec![107.3, 37.2, 31.95, 283.85];
+        t.props.width_pct = Some(100.0);
+        for (row, spec) in t.rows.iter_mut().zip(rows) {
+            row.cells.truncate(spec.len());
+            for (cell, (pct, span)) in row.cells.iter_mut().zip(spec.iter()) {
+                cell.props.width = None;
+                cell.props.width_pct = *pct;
+                cell.props.span = *span;
+                cell.blocks = cell_text("A");
+            }
+        }
+        t
+    };
+    let starts_at = |t: Table, prefix: &[u32], row: u32| {
+        let mut d = Document::from_text("After");
+        d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+        let l = lay(&d);
+        let x: Vec<f32> = (0..4)
+            .map(|c| {
+                let path: Vec<u32> = prefix.iter().copied().chain([row, c, 0]).collect();
+                let [(x, _, _)] = para_at(&l, &path)[..] else { panic!("cell {c} missing") };
+                x
+            })
+            .collect();
+        x.iter().map(|v| v - x[0]).collect::<Vec<_>>()
+    };
+    let near = |got: Vec<f32>, want: [f32; 4], what: &str| {
+        assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() < 0.01), "{what}: columns start at {got:?}, not {want:?}");
+    };
+    let at = |shares: [f32; 3]| [0.0, shares[0] * 468.0, shares[1] * 468.0, shares[2] * 468.0];
+    let p = |v: f32| (Some(v), 1);
+    let auto = (None, 1);
+    let open = [auto, auto, auto, auto];
+    near(
+        starts_at(table(&[&[p(30.0), p(10.0), p(10.0), p(30.0)], &[p(10.0), p(30.0), p(10.0), p(30.0)], &open]), &[0], 2),
+        at([0.3, 0.6, 0.7]),
+        "rows disagree",
+    );
+    near(
+        starts_at(table(&[&[p(10.0), p(30.0), p(10.0), p(30.0)], &[p(30.0), p(10.0), p(10.0), p(30.0)], &open]), &[0], 2),
+        at([0.3, 0.6, 0.7]),
+        "the other order",
+    );
+    let merged = starts_at(table(&[&[(Some(50.0), 2), p(10.0), p(40.0)], &open]), &[0], 1);
+    near(vec![merged[0], merged[2], merged[3]].into_iter().chain([0.0]).collect(), [0.0, 0.5 * 468.0, 0.6 * 468.0, 0.0], "merged 50%");
+    near(
+        starts_at(table(&[&[p(40.0), p(10.0), p(10.0), p(40.0)], &[(Some(20.0), 2), auto, auto], &open]), &[0], 2),
+        at([0.4, 0.5, 0.6]),
+        "a smaller merged cell",
+    );
+    // The nested table fills the outer table's only cell, less the cell's margins.
+    let inner = table(&[&[p(40.0), p(10.0), p(10.0), p(40.0)], &open]);
+    let mut outer = Table::new(1, 1, 468.0);
+    outer.props.width_pct = Some(100.0);
+    outer.rows[0].cells[0].props.width_pct = Some(100.0);
+    outer.rows[0].cells[0].blocks = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(inner)), wordcraft_doc::para_block(Paragraph::new())];
+    let nested = starts_at(outer, &[0, 0, 0, 0], 1);
+    let w = nested[3] / 0.6;
+    near(nested, [0.0, 0.4 * w, 0.5 * w, 0.6 * w], "nested");
+    assert!(w > 400.0 && w <= 468.0, "the nested table is {w} wide");
+}
+#[test]
+fn percentage_cell_widths_size_the_columns_whichever_rows_ask() {
+    // Measured in Word (A4, 451.3 pt between the margins; 468 pt here): a 40/10/10/40 header row
+    // over rows without cell widths lays out 40/10/10/40 of the table, from the grid
+    // 107.3/37.2/32/283.9 pt a document saved. The same with the row in the middle, in a fixed
+    // table, with the table 100% wide or without a width; 144 pt for 40% of a 360 pt table; and
+    // 20/5/5/20 scaled up to fill the table.
+    let starts = |t: Table| {
+        let mut d = Document::from_text("After");
+        d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+        let l = lay(&d);
+        let x: Vec<f32> = (0..4)
+            .map(|c| {
+                let [(x, _, _)] = para_at(&l, &[0, 2, c, 0])[..] else { panic!("cell {c} missing") };
+                x
+            })
+            .collect();
+        x.iter().map(|v| v - x[0]).collect::<Vec<_>>()
+    };
+    let table = |pct_row: usize, pcts: [f32; 4]| {
+        let mut t = Table::new(4, 4, 460.3);
+        t.grid = vec![107.3, 37.2, 31.95, 283.85];
+        for (r, row) in t.rows.iter_mut().enumerate() {
+            for (cell, p) in row.cells.iter_mut().zip(pcts) {
+                cell.props.width = None;
+                cell.props.width_pct = (r == pct_row).then_some(p);
+                cell.blocks = vec![wordcraft_doc::para_block(Paragraph::with_text("A", Default::default()))];
+            }
+        }
+        t
+    };
+    let near = |got: Vec<f32>, want: [f32; 4]| {
+        assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() < 0.01), "columns start at {got:?}, not {want:?}");
+    };
+    let of = |w: f32| [0.0, w * 0.4, w * 0.5, w * 0.6];
+    near(starts(table(0, [40.0, 10.0, 10.0, 40.0])), of(468.0));
+    near(starts(table(1, [40.0, 10.0, 10.0, 40.0])), of(468.0));
+    near(starts(table(0, [20.0, 5.0, 5.0, 20.0])), of(468.0));
+    // A fixed table without a width of its own keeps its grid's 460.3 pt; 100% wide, it takes
+    // the text width.
+    let mut fixed = table(0, [40.0, 10.0, 10.0, 40.0]);
+    fixed.props.fixed = true;
+    near(starts(fixed.clone()), of(460.3));
+    fixed.props.width_pct = Some(100.0);
+    near(starts(fixed), of(468.0));
+    let mut full = table(0, [40.0, 10.0, 10.0, 40.0]);
+    full.props.width_pct = Some(100.0);
+    near(starts(full), of(468.0));
+    let mut narrow = table(0, [20.0, 5.0, 5.0, 20.0]);
+    narrow.props.width = Some(360.0);
+    near(starts(narrow), of(360.0));
+    // A row that starts one column in gives its percentages to the columns it covers: 10/10/40
+    // there agree with the header row's 10/10/40 over the last three columns.
+    let mut shifted = table(0, [40.0, 10.0, 10.0, 40.0]);
+    shifted.rows[1].props.grid_before = 1;
+    shifted.rows[1].cells.remove(0);
+    for (cell, p) in shifted.rows[1].cells.iter_mut().zip([10.0, 10.0, 40.0]) {
+        cell.props.width_pct = Some(p);
+    }
+    near(starts(shifted), of(468.0));
+    // Past 100% Word gives every column but the last its share of the table and the last what
+    // is left: 44/11/11/44 starts the columns at 44%, 55% and 66%. At 60/20/20/60 nothing is left,
+    // so the last column takes its longest word and the other three give up the same width.
+    near(starts(table(0, [44.0, 11.0, 11.0, 44.0])), [0.0, 0.44, 0.55, 0.66].map(|f| f * 468.0));
+    let over = starts(table(0, [60.0, 20.0, 20.0, 60.0]));
+    let lost = [0.6 * 468.0 - over[1], 0.2 * 468.0 - (over[2] - over[1]), 0.2 * 468.0 - (over[3] - over[2])];
+    assert!(lost[0] > 1.0 && lost.iter().all(|l| (l - lost[0]).abs() < 0.01), "columns start at {over:?}");
+    // A fixed table gives the last column 2 pt and clips its text to the cell instead; the
+    // others share the rest of its 460.3 pt (Word: 275.5, 91.5, 91 and 2 pt).
+    let mut fixed_over = table(0, [60.0, 20.0, 20.0, 60.0]);
+    fixed_over.props.fixed = true;
+    for row in &mut fixed_over.rows {
+        row.cells[3].blocks = vec![wordcraft_doc::para_block(Paragraph::with_text("Lorem ipsum", Default::default()))];
+    }
+    near(starts(fixed_over.clone()), [0.0, 0.6, 0.8, 1.0].map(|f| f * (460.3 - 2.0)));
+    let mut d = Document::from_text("After");
+    d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(fixed_over)).unwrap();
+    let l = lay(&d);
+    let cells: Vec<(usize, f32, bool)> = l.pages[0]
+        .items
+        .iter()
+        .filter_map(|i| if let Placed::Cell { cell, rect, clip, row: 0, .. } = i { Some((*cell, rect.w, *clip)) } else { None })
+        .collect();
+    assert!(cells.iter().any(|&(c, w, clip)| c == 3 && (w - 2.0).abs() < 0.01 && clip), "the last cell is 2 pt and clipped: {cells:?}");
+    assert!(cells.iter().all(|&(c, _, clip)| c == 3 || !clip), "only the last cell is clipped: {cells:?}");
+    // When the columns before the last already pass 100% (80/40/40/20), Word gives them their
+    // shares left to right until the width runs out, and the table keeps its width: in a fixed
+    // table the third and fourth columns get 2 pt, the shares being of 460.3 - 4 pt; in an
+    // autofit table they get their longest words, the first two giving up the same width.
+    let widths = |t: Table| {
+        let mut d = Document::from_text("After");
+        d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+        let l = lay(&d);
+        let mut w: Vec<(usize, f32)> = l.pages[0]
+            .items
+            .iter()
+            .filter_map(|i| if let Placed::Cell { cell, rect, row: 0, .. } = i { Some((*cell, rect.w)) } else { None })
+            .collect();
+        w.sort_by_key(|c| c.0);
+        w.into_iter().map(|c| c.1).collect::<Vec<f32>>()
+    };
+    let mut fixed_far = table(0, [80.0, 40.0, 40.0, 20.0]);
+    fixed_far.props.fixed = true;
+    let got = widths(fixed_far);
+    let room = 460.3 - 4.0;
+    let want = [0.8 * room, 0.2 * room, 2.0, 2.0];
+    assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() < 0.01), "fixed 80/40/40/20: {got:?}, not {want:?}");
+    assert!((got.iter().sum::<f32>() - 460.3).abs() < 0.01, "fixed 80/40/40/20 is {} wide", got.iter().sum::<f32>());
+    // A fixed grid narrower than 2 pt a column keeps its width: the columns share it.
+    let mut fixed_narrow = table(0, [80.0, 40.0, 40.0, 20.0]);
+    fixed_narrow.props.fixed = true;
+    fixed_narrow.grid = vec![1.5; 4];
+    let got = widths(fixed_narrow);
+    assert!(got.iter().all(|w| (w - 1.5).abs() < 0.01), "a fixed 6 pt grid of 80/40/40/20: {got:?}");
+    let got = widths(table(0, [80.0, 40.0, 40.0, 20.0]));
+    assert!((got.iter().sum::<f32>() - 468.0).abs() < 0.01, "autofit 80/40/40/20 is {} wide: {got:?}", got.iter().sum::<f32>());
+    let lost = [0.8 * 468.0 - got[0], 0.2 * 468.0 - got[1]];
+    assert!(lost[0] > 1.0 && (lost[0] - lost[1]).abs() < 0.01 && got[2] > 1.0 && got[3] > 1.0, "autofit 80/40/40/20: {got:?}");
+    // A smaller percentage in another row of a column changes nothing: the column takes its
+    // largest. A merged cell's 20% goes to the two columns under it, which ask none.
+    let mut disagreeing = table(0, [40.0, 10.0, 10.0, 40.0]);
+    disagreeing.rows[1].cells[0].props.width_pct = Some(10.0);
+    near(starts(disagreeing), of(468.0));
+    let mut spanned = table(0, [40.0, 10.0, 10.0, 40.0]);
+    spanned.rows[0].cells.remove(2);
+    spanned.rows[0].cells[1].props.span = 2;
+    spanned.rows[0].cells[1].props.width_pct = Some(20.0);
+    let got = starts(spanned);
+    assert!((got[1] - 0.4 * 468.0).abs() < 0.01 && (got[3] - 0.6 * 468.0).abs() < 0.01, "merged 20%: columns start at {got:?}");
+    // A column no cell sizes and an absolute width alongside keep the grid.
+    let grid = [0.0, 107.3, 144.5, 176.45];
+    let mut unsized_column = table(0, [40.0, 10.0, 10.0, 40.0]);
+    unsized_column.rows[0].cells[3].props.width_pct = None;
+    let mut absolute = table(0, [40.0, 10.0, 10.0, 40.0]);
+    absolute.rows[1].cells[0].props.width = Some(100.0);
+    for t in [unsized_column, absolute] {
+        let got = starts(t);
+        let k = got[3] / grid[3];
+        near(got, grid.map(|g| g * k));
+    }
+}
+
+#[test]
 fn ambiguous_widths_keep_grid() {
     let mut t = Table::new(2, 3, 450.0);
     t.grid = vec![40.0, 175.0, 235.0];
