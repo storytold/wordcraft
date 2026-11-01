@@ -686,19 +686,15 @@ const LEADER_FIT_SLACK: f32 = 0.001;
 /// The most glyphs one leader draws, so a hostile tab position can't make it loop for long.
 const MAX_LEADER_GLYPHS: i64 = 2000;
 
-/// How far, in pixels, a font size may fall short of a whole 600-dpi pixel and still count as it,
-/// so a size that is a whole number of pixels (12 pt is 100) isn't taken as one fewer when the
-/// float arithmetic comes out a hair short.
-const PPEM_SLACK: f32 = 0.001;
-
 /// How far apart a tab leader's glyphs are drawn, as measured in Word: the glyph's advance (`units`
-/// of the font's `upem`) at the font size in whole 600-dpi pixels, rounded to a whole pixel. So a
-/// TH SarabunPSK dot at 16 pt (133 px, 162/1000 em: 21.5 px) is drawn every 22 px, 2.64 pt rather
-/// than 2.59, and a Tahoma one at 22 pt (183 px, 620/2048 em: 55.4 px) every 55 px, 6.6 pt. At
-/// least 1 pt.
+/// of the font's `upem`) at the font size rounded to whole 600-dpi pixels, rounded to a whole
+/// pixel. So a TH SarabunPSK dot at 16 pt (133 px, 162/1000 em: 21.5 px) is drawn every 22 px,
+/// 2.64 pt rather than 2.59, a Tahoma one at 22 pt (183 px, 620/2048 em: 55.4 px) every 55 px,
+/// 6.6 pt, and an Arial one at 14 pt (116.7 px, so 117; 569/2048 em: 32.5 px) every 33 px,
+/// 3.96 pt. At least 1 pt.
 pub(crate) fn leader_pitch(units: f32, upem: f32, size: f32) -> f32 {
     const DPI: f32 = 600.0;
-    let ppem = (size * DPI / 72.0 + PPEM_SLACK).floor();
+    let ppem = (size * DPI / 72.0).round();
     let px = (units * ppem / upem.max(1.0)).round();
     (px * 72.0 / DPI).max(1.0)
 }

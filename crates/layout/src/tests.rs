@@ -1614,11 +1614,17 @@ fn right_tab_whose_text_does_not_fit_moves_to_the_next_line_with_it() {
 #[test]
 fn leader_dots_are_spaced_and_placed_as_in_word() {
     use wordcraft_doc::props::{TabAlign, TabLeader, TabStop};
-    // TH SarabunPSK at 16 pt, Tahoma at 22 pt, Times New Roman at 12 pt and Arial at 10 pt.
+    // TH SarabunPSK at 16 pt, Tahoma at 22 pt, Times New Roman at 12 pt and Arial at 10 pt; Arial
+    // at 14 pt and Tahoma at 20 pt, whose sizes (116.7 and 166.7 pixels) round up to 117 and 167.
     let pitch = |units, upem, size| display::leader_pitch(units, upem, size);
-    for (got, want) in
-        [(pitch(162.0, 1000.0, 16.0), 2.64), (pitch(620.0, 2048.0, 22.0), 6.6), (pitch(512.0, 2048.0, 12.0), 3.0), (pitch(569.0, 2048.0, 10.0), 2.76)]
-    {
+    for (got, want) in [
+        (pitch(162.0, 1000.0, 16.0), 2.64),
+        (pitch(620.0, 2048.0, 22.0), 6.6),
+        (pitch(512.0, 2048.0, 12.0), 3.0),
+        (pitch(569.0, 2048.0, 10.0), 2.76),
+        (pitch(569.0, 2048.0, 14.0), 3.96),
+        (pitch(620.0, 2048.0, 20.0), 6.12),
+    ] {
         assert!((got - want).abs() < 1e-4, "pitch {got}, not {want}");
     }
     // A leader across most of the page keeps its last dot: from 72 to 528 pt at 2.64 pt the dots
