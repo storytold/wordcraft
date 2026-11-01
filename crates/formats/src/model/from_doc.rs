@@ -101,7 +101,8 @@ fn extra_of(e: &CharProps) -> Option<Box<CharProps>> {
 /// The paragraph formatting only [`Para::extra`] holds that `p` sets itself; `None` when none.
 fn para_extra(p: &wordcraft_doc::props::ParaProps) -> Option<Box<wordcraft_doc::props::ParaProps>> {
     let tabs = p.tabs.clone().filter(|t| !t.is_empty());
-    tabs.is_some().then(|| Box::new(wordcraft_doc::props::ParaProps { tabs, ..Default::default() }))
+    let x = wordcraft_doc::props::ParaProps { tabs, shading: p.shading, ..Default::default() };
+    (x != wordcraft_doc::props::ParaProps::default()).then(|| Box::new(x))
 }
 
 /// Revision `i` as a flow mark (unknown author and date when there is none).

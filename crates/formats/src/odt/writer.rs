@@ -464,6 +464,17 @@ impl Writer {
         }
         if p.kind == Kind::Rule {
             props.push_str(" fo:border-bottom=\"0.75pt solid #a0a0a0\" fo:padding-bottom=\"1pt\"");
+        } else if let Some(b) = p.borders.filter(|b| b.any_visible()) {
+            for (side, line) in [("top", b.top), ("left", b.left), ("bottom", b.bottom), ("right", b.right)] {
+                let shown = line.filter(|l| l.is_visible());
+                props.push_str(&format!(" fo:border-{side}=\"{}\"", odf_border(shown)));
+                if let Some(l) = shown {
+                    props.push_str(&format!(" fo:padding-{side}=\"{}\"", pt(l.space.clamp(0.0, 31.0))));
+                }
+            }
+        }
+        if let Some(bg) = p.extra.as_ref().and_then(|x| x.shading) {
+            props.push_str(&format!(" fo:background-color=\"#{}\"", bg.hex().to_ascii_lowercase()));
         }
         let master = start.map(|(m, _)| m.clone()).unwrap_or_default();
         if props.is_empty() && master.is_empty() {

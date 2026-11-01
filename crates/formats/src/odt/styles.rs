@@ -181,6 +181,10 @@ struct StyleInfo {
     columns: Option<Columns>,
     /// Margins, first-line indent and line spacing of `style:paragraph-properties`.
     spacing: Spacing,
+    /// `fo:border*` of a paragraph style, each side's padding as its distance from the text.
+    para_borders: Option<Borders>,
+    /// `fo:background-color` of a paragraph style (`Some(None)`: transparent, stated).
+    para_shading: Option<Option<Rgb>>,
     /// `style:tab-stops`: the style's whole set (it replaces the parent's, §17.7).
     tabs: Option<Vec<TabStop>>,
 }
@@ -294,6 +298,9 @@ pub(super) struct ParaLook {
     pub(super) spacing: Spacing,
     /// Tab stops, from where the document measures them.
     pub(super) tabs: Option<Vec<TabStop>>,
+    /// Borders (when a side shows) and background.
+    pub(super) borders: Option<Borders>,
+    pub(super) shading: Option<Rgb>,
 }
 
 /// An ODF border (`0.5pt solid #000000`, `none`; ODF 1.3 §20.183): width, style and colour in any
@@ -482,6 +489,34 @@ fn paragraph_properties(a: &Attrs, s: &mut StyleInfo) {
         s.border_bottom = true;
     }
     paragraph_spacing(a, &mut s.spacing);
+    if let Some(b) = border_sides(a) {
+        s.para_borders = Some(b);
+    }
+    if let Some(bg) = get(a, "fo:background-color") {
+        s.para_shading = Some(if bg.trim() == "transparent" { None } else { model::parse_color(bg) });
+    }
+}
+
+/// `fo:border`, `fo:border-top`… of `a` (a side's own value wins over the shorthand), each side's
+/// `fo:padding*` as its distance from the text; `None` when none is stated.
+fn border_sides(a: &Attrs) -> Option<Borders> {
+    let all = get(a, "fo:border").and_then(parse_border);
+    let pad_all = get(a, "fo:padding").and_then(length);
+    let side = |b: &str, p: &str| {
+        let mut line = get(a, b).and_then(parse_border).or(all)?;
+        if let Some(sp) = get(a, p).and_then(length).or(pad_all).filter(|v| v.is_finite()) {
+            line.space = sp.clamp(0.0, 31.0);
+        }
+        Some(line)
+    };
+    let b = Borders {
+        top: side("fo:border-top", "fo:padding-top"),
+        left: side("fo:border-left", "fo:padding-left"),
+        bottom: side("fo:border-bottom", "fo:padding-bottom"),
+        right: side("fo:border-right", "fo:padding-right"),
+        ..Default::default()
+    };
+    (b.top.is_some() || b.left.is_some() || b.bottom.is_some() || b.right.is_some()).then_some(b)
 }
 
 /// A list style's level (ODF 1.3 §16.31–16.33): numbered or not, its label and start value.
@@ -852,6 +887,10 @@ impl Styles {
         let keep_next = chain.iter().take(kind_at).find_map(|(_, s)| s.keep_next).unwrap_or(false);
         // A style's tab stops replace its parent's; the kind's style and Standard give none.
         let tabs = chain.iter().take(kind_at).filter(|(n, s)| s.auto || *n != "Standard").find_map(|(_, s)| s.tabs.clone());
-        ParaLook { kind, align, page_break: pb, rule, keep_next, fmt: f, spacing, tabs }
+        // Borders and background: the nearest in the chain, the kind's style and Standard aside.
+        let own = || chain.iter().take(kind_at).filter(|(n, s)| s.auto || *n != "Standard");
+        let borders = own().find_map(|(_, s)| s.para_borders).filter(|b| b.any_visible());
+        let shading = own().find_map(|(_, s)| s.para_shading).flatten();
+        ParaLook { kind, align, page_break: pb, rule, keep_next, fmt: f, spacing, tabs, borders, shading }
     }
 }

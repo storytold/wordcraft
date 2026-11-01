@@ -543,6 +543,10 @@ impl Body<'_> {
             kind = Kind::Heading(h.clamp(1, 6));
         }
         let mut p = Para { kind, align, page_break: pb, keep_next, spacing: look.spacing, ..Default::default() };
+        p.borders = look.borders;
+        if let Some(bg) = look.shading {
+            p.extra.get_or_insert_with(Default::default).shading = Some(bg);
+        }
         if let Some(mut tabs) = look.tabs {
             // LibreOffice measures tabs from the indent (its `TabsRelativeToIndent`); Word from
             // the margin.
@@ -552,7 +556,7 @@ impl Body<'_> {
                     t.pos = (t.pos + indent).clamp(-1584.0, 1584.0);
                 }
             }
-            p.extra = Some(Box::new(wordcraft_doc::props::ParaProps { tabs: Some(tabs), ..Default::default() }));
+            p.extra.get_or_insert_with(Default::default).tabs = Some(tabs);
         }
         if rule && kind == Kind::Normal {
             p.kind = Kind::Rule;

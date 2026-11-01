@@ -8,6 +8,7 @@ mod headers;
 mod lists;
 mod notes;
 mod outline;
+mod para_borders;
 mod spacing;
 mod style_look;
 mod tables;

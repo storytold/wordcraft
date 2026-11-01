@@ -139,6 +139,9 @@ fn para_props(p: &Para, list_num: Option<u32>) -> ParaProps {
     if p.page_break {
         out.page_break_before = Some(true);
     }
+    if let Some(bg) = p.extra.as_ref().and_then(|x| x.shading) {
+        out.shading = Some(bg);
+    }
     // Tab stops a format gives the paragraph itself: finite, on the page, at most 64.
     if let Some(tabs) = p.extra.as_ref().and_then(|x| x.tabs.as_ref()) {
         let tabs: Vec<_> = tabs
