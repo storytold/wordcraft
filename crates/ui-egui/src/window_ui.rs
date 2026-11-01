@@ -156,6 +156,8 @@ impl WordApp {
             // App-wide.
             session: _,
             services: _,
+            #[cfg(not(target_arch = "wasm32"))]
+                recent_files: _,
             printing: _,
             print_feedback_seen: _,
             font_generation: _,

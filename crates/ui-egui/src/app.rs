@@ -130,6 +130,8 @@ impl WordApp {
             frame_ms: 0.0,
             quit_requested: false,
             autosave: true,
+            #[cfg(not(target_arch = "wasm32"))]
+            recent_files: crate::recent_files::RecentFiles::default(),
             zotero: zotero::ZoteroLink::default(),
             ctx: None,
             ime_origin: false,
