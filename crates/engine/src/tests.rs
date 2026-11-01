@@ -11,6 +11,7 @@ use crate::{Session, cmd};
 
 mod bidi;
 mod documents;
+mod focus_mode;
 mod fonts;
 mod ime_noop;
 mod revision_checks;
@@ -3158,8 +3159,10 @@ fn line_and_page_break_toggles_take_an_explicit_value() {
         assert_eq!(at(&s, 1), Some(true), "{id} without value toggles");
         run(&mut s, id, json!({}));
         assert_eq!(at(&s, 1), Some(false), "{id} without value toggles back");
-        run(&mut s, id, json!({"value": "yes"}));
-        assert_eq!(at(&s, 1), Some(true), "{id} ignores a value that isn't a bool and toggles, as format.bold does");
+        // A `value` that is present but is not a boolean is refused, not read as "toggle": a
+        // client that sends `"yes"` hears about it instead of flipping the setting.
+        assert!(s.run(id, &json!({"value": "yes"})).is_err(), "{id} refuses a value that isn't a bool");
+        assert_eq!(at(&s, 1), Some(false), "{id} leaves the paragraph alone when it refuses");
     }
 }
 
@@ -5521,7 +5524,9 @@ fn style_inspector_pane_and_hostile_params() {
         assert!(s.run("styles.inspectorClear", &junk).is_err(), "{junk}");
     }
     assert_eq!(text(&s), before);
-    assert!(s.run("styles.inspector", &json!({"value": "yes"})).is_ok());
+    let pane_before = s.view.style_inspector;
+    assert!(s.run("styles.inspector", &json!({"value": "yes"})).is_err(), "a value that isn't a bool is refused");
+    assert_eq!(s.view.style_inspector, pane_before, "and the pane is left as it was");
     // A selection reaching far outside the document.
     s.sel.focus = Pos::body(9999, 99999);
     s.sel.anchor = Pos::body(0, 0);
@@ -10860,6 +10865,9 @@ fn export_png_refuses_a_path_that_is_not_png() {
 #[test]
 fn ime_body_epoch_marks_body_replacements_not_edits() {
     let mut s = s();
+    // Ids come from a process-wide counter, so this document's id is not 1 when another test
+    // created a session first: remember it and check it doesn't change.
+    let id = s.document_id();
     run(&mut s, "text.insert", json!({"text": "one"}));
     let first = s.ime_body_epoch();
     run(&mut s, "text.insert", json!({"text": " two"}));
@@ -10868,7 +10876,7 @@ fn ime_body_epoch_marks_body_replacements_not_edits() {
     run(&mut s, "document.setText", json!({"text": "same text"}));
     let replaced = s.ime_body_epoch();
     assert!(replaced > first, "setText replaces the body under the same document id");
-    assert_eq!(s.document_id(), 1, "the document id itself is unchanged");
+    assert_eq!(s.document_id(), id, "the document id itself is unchanged");
 
     // The same text again still replaces the body: a composition must not survive on content
     // equality.

@@ -255,7 +255,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .pure(),
         CommandSpec::new("styles.addToGallery", "Add to Style Gallery", "Home › Styles", |s, v| {
             let id = style_id(s, p::req_str(v, "style")?)?;
-            let on = p::bool(v, "value").unwrap_or(true);
+            let on = p::switch(v, true)?;
             if let Some(st) = s.doc.styles.get_mut(&id) {
                 st.quick = on;
             }

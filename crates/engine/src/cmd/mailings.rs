@@ -156,12 +156,12 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .pure(),
         CommandSpec::new("mailings.highlightFields", "Highlight Merge Fields", "Mailings › Write & Insert Fields", |s, v| {
-            s.merge.highlight = p::bool(v, "value").unwrap_or(!s.merge.highlight);
+            s.merge.highlight = p::toggle(v, s.merge.highlight)?;
             Ok(json!({"value": s.merge.highlight}))
         })
         .pure(),
         CommandSpec::new("mailings.preview", "Preview Results", "Mailings › Preview Results", |s, v| {
-            s.merge.preview = p::bool(v, "value").unwrap_or(!s.merge.preview);
+            s.merge.preview = p::toggle(v, s.merge.preview)?;
             refresh(s);
             Ok(json!({"preview": s.merge.preview, "record": s.merge.record + 1}))
         })

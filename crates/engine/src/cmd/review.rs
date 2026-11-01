@@ -37,7 +37,7 @@ pub fn specs() -> Vec<CommandSpec> {
             validate_comment_id(v)?;
             let id = p::u64(v, "id").map(|x| x as u32).or_else(|| comment_at_caret(s)).ok_or_else(|| CmdError::Params("`id` required".into()))?;
             let c = s.doc.comments.get_mut(&id).ok_or_else(|| CmdError::Params("no such comment".into()))?;
-            c.resolved = p::bool(v, "value").unwrap_or(!c.resolved);
+            c.resolved = p::toggle(v, c.resolved)?;
             sel_result(s)
         })
         .params(r#"{"id"?: non-negative JSON integer (omit to use the caret), "value"?: bool (omit to toggle)}"#),
@@ -45,7 +45,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("review.previousComment", "Previous", "Review › Comments", |s, _| nav_comment(s, -1)).pure(),
         CommandSpec::new("review.comments", "Show Comments", "Review › Comments", list_comments).pure(),
         CommandSpec::new("review.trackChanges", "Track Changes", "Review › Tracking", |s, v| {
-            s.doc.settings.track_changes = p::bool(v, "value").unwrap_or(!s.doc.settings.track_changes);
+            s.doc.settings.track_changes = p::toggle(v, s.doc.settings.track_changes)?;
             Ok(json!({"value": s.doc.settings.track_changes}))
         })
         .params(r#"{"value"?: bool (omit to toggle)}"#)
@@ -131,7 +131,7 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"text": string}"#),
         CommandSpec::new("review.proofing", "Check Spelling as You Type", "File › Options › Proofing", |s, v| {
-            s.view.proofing = p::bool(v, "value").unwrap_or(!s.view.proofing);
+            s.view.proofing = p::toggle(v, s.view.proofing)?;
             s.prefs.check_spelling = s.view.proofing;
             Ok(json!({"value": s.view.proofing}))
         })
