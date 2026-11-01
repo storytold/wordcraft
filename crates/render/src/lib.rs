@@ -732,7 +732,27 @@ fn draw_glyphs(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
 }
 
 fn draw_mark(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
-    let Draw::Mark { x, baseline, size, ch, color: mark } = it else { return };
+    let Draw::Mark { x, baseline, size, width, ch, color: mark } = it else { return };
+    if *ch == '□' {
+        // An editing mark, independent of the document's or system's glyphs.
+        let span = width.unwrap_or(*size * 0.78);
+        if !span.is_finite() || span <= 0.0 || !size.is_finite() || *size <= 0.0 {
+            return;
+        }
+        let side = f64::from(span).min(200.0);
+        let size = f64::from(*size).clamp(0.0, 200.0);
+        let mut path = BezPath::new();
+        path.move_to((0.0, -size * 0.82));
+        path.line_to((side, -size * 0.82));
+        path.line_to((side, -size * 0.04));
+        path.line_to((0.0, -size * 0.04));
+        path.close_path();
+        ctx.set_paint(color(fr.opts.ink(mark.unwrap_or(fr.opts.mark_color)), 0.9));
+        ctx.set_transform(fr.view * Affine::translate((f64::from(*x), f64::from(*baseline))));
+        ctx.set_stroke(kurbo::Stroke::new((size * 0.05).clamp(0.35, 2.0)));
+        ctx.stroke_path(&path);
+        return;
+    }
     let face = wordcraft_fonts::word::resolve("Source Sans 3", false, false).face;
     let gid = face.glyph_for(*ch);
     let face = if gid == 0 {

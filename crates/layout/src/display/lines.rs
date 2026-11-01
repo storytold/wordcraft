@@ -479,12 +479,46 @@ fn formatting_marks(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
             let arrow = if line.rtl { '←' } else { '→' };
             match c.kind {
                 ClKind::Space if marks.spaces => {
-                    out.push(Draw::Mark { x: (cx + nx) / 2.0 - size * 0.12, baseline: base - size * 0.08, size, ch: '·', color: None })
+                    if para.and_then(|p| p.text.get(c.start..c.end)) == Some("\u{3000}") {
+                        let advance = (nx - cx).abs();
+                        let style = pl.styles.get(c.style as usize);
+                        let scale = style.map_or(1.0, |s| (s.rc.scale / 100.0).max(0.0));
+                        let em = size * scale;
+                        let native = style.map_or(em, |s| {
+                            let gid = s.face.glyph_for('\u{3000}');
+                            if gid == 0 { em } else { (s.face.advance(gid) / s.face.upem.max(1.0)) as f32 * em }
+                        });
+                        let width = ideographic_space_mark_width(advance, em, native);
+                        out.push(Draw::Mark {
+                            x: (cx + nx - width) / 2.0,
+                            baseline: base,
+                            size,
+                            width: Some(width),
+                            ch: '□',
+                            color: Some(Rgb(0x60, 0x60, 0x60)),
+                        });
+                    } else {
+                        out.push(Draw::Mark {
+                            x: (cx + nx) / 2.0 - size * 0.12,
+                            baseline: base - size * 0.08,
+                            size,
+                            width: None,
+                            ch: '·',
+                            color: None,
+                        });
+                    }
                 }
-                ClKind::Tab if marks.tabs => {
-                    out.push(Draw::Mark { x: cx + ((nx - cx) / 2.0 - size * 0.3).max(0.0), baseline: base, size, ch: arrow, color: None })
+                ClKind::Tab if marks.tabs => out.push(Draw::Mark {
+                    x: cx + ((nx - cx) / 2.0 - size * 0.3).max(0.0),
+                    baseline: base,
+                    size,
+                    width: None,
+                    ch: arrow,
+                    color: None,
+                }),
+                ClKind::LineBreak if marks.paragraphs => {
+                    out.push(Draw::Mark { x: cx + 1.0, baseline: base, size, width: None, ch: '↵', color: None })
                 }
-                ClKind::LineBreak if marks.paragraphs => out.push(Draw::Mark { x: cx + 1.0, baseline: base, size, ch: '↵', color: None }),
                 ClKind::PageBreak | ClKind::ColumnBreak if marks.paragraphs => {
                     let label = if c.kind == ClKind::PageBreak { '⤓' } else { '⇥' };
                     out.push(Draw::Line {
@@ -498,7 +532,7 @@ fn formatting_marks(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
                         alpha,
                         text_bg: None,
                     });
-                    out.push(Draw::Mark { x: cx + 1.0, baseline: base, size, ch: label, color: None });
+                    out.push(Draw::Mark { x: cx + 1.0, baseline: base, size, width: None, ch: label, color: None });
                 }
                 _ => {}
             }
@@ -528,10 +562,20 @@ fn formatting_marks(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
                 let (x0, x1) = if line.rtl { (x + line.left, ex - 2.0) } else { (ex + 2.0, x + line.right) };
                 section_break_mark(start, x0, x1, base, size, alpha, out);
             } else {
-                out.push(Draw::Mark { x: mx, baseline: base, size, ch: '¶', color });
+                out.push(Draw::Mark { x: mx, baseline: base, size, width: None, ch: '¶', color });
             }
         }
     }
+}
+
+// In Word's observed marks, a one-em space has an outline about .83 em wide
+// including its stroke; a .6665-em proportional space has one about .40 em wide.
+// The remaining advance carries tracking or grid adjustment, rather than changing height.
+fn ideographic_space_mark_width(advance: f32, em: f32, native: f32) -> f32 {
+    if !advance.is_finite() || !em.is_finite() || !native.is_finite() || advance <= 0.0 {
+        return 0.0;
+    }
+    (advance - em * 0.22 - (em - native).max(0.0) * 0.29).clamp(0.0, advance.max(0.0))
 }
 
 fn draw_rubies(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
@@ -785,5 +829,33 @@ fn equation(items: &[MItem], x: f32, base: f32, alpha: f32, screen: bool, out: &
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod space_mark_tests {
+    use super::ideographic_space_mark_width;
+
+    #[test]
+    fn width_tracks_native_space_proportions_and_actual_advance() {
+        for size in [5.0, 5.5, 6.5, 7.5, 8.0, 9.0, 10.0, 10.5, 11.0, 12.0, 14.0, 16.0, 18.0, 20.0, 22.0, 24.0, 26.0, 28.0, 36.0, 48.0, 72.0] {
+            let full = ideographic_space_mark_width(size, size, size);
+            let prop = ideographic_space_mark_width(size * 0.6665, size, size * 0.6665);
+            assert!((full / size - 0.78).abs() < 0.001);
+            assert!((prop / size - 0.35).abs() < 0.001);
+            let expanded = ideographic_space_mark_width(size * 0.8, size, size * 0.6665);
+            assert!((expanded - prop - size * (0.8 - 0.6665)).abs() < 0.001);
+            assert_eq!(ideographic_space_mark_width(0.0, size, size), 0.0);
+        }
+    }
+
+    #[test]
+    fn invalid_space_metrics_do_not_create_an_outline() {
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert_eq!(ideographic_space_mark_width(bad, 12.0, 12.0), 0.0);
+            assert_eq!(ideographic_space_mark_width(12.0, bad, 12.0), 0.0);
+            assert_eq!(ideographic_space_mark_width(12.0, 12.0, bad), 0.0);
+        }
+        assert_eq!(ideographic_space_mark_width(-1.0, 12.0, 12.0), 0.0);
     }
 }
