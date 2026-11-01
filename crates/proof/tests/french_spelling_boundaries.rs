@@ -10,8 +10,7 @@ struct Reset;
 impl Drop for Reset {
     fn drop(&mut self) {
         proof::remove_word("zxq--personnel");
-        proof::fr::reload_dictionary();
-        proof::pt::reload_dictionary();
+        proof::set_dictionaries_folder(None);
     }
 }
 

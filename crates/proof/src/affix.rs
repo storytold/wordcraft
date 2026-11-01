@@ -16,7 +16,8 @@
 //! strip/append/conditions and cross products, and bounded suffix continuation classes (including
 //! a prefix flag granted by a suffix). `FORBIDDENWORD`, `NEEDAFFIX`, `KEEPCASE`, `FULLSTRIP`,
 //! `ICONV`, `IGNORE`, `NOSUGGEST`, `SUBSTANDARD` and the `TRY`/`KEY`/`MAP`/`REP` suggestion tables
-//! are supported. Morphological fields and `AM`/`LEMMA_PRESENT` hints are skipped. Compounding,
+//! are supported. Output conversion (`OCONV`), morphological fields and `AM`/`LEMMA_PRESENT`
+//! hints are skipped. Compounding,
 //! a used `CIRCUMFIX`, and unsupported correctness-changing directives are rejected.
 //!
 //! Lookups never panic: stems sit in one string, found through an open-addressing hash table, and
@@ -46,7 +47,6 @@ const UNSUPPORTED: &[&str] = &[
     "COMPOUNDMIN",
     "COMPOUNDPERMITFLAG",
     "COMPOUNDRULE",
-    "OCONV",
     "ONLYINCOMPOUND",
     "PSEUDOROOT",
 ];
@@ -499,6 +499,8 @@ fn parse_aff(aff: &str) -> Result<(Rules, FlagReader), String> {
         match dir {
             "SET" | "LANG" | "NAME" | "VERSION" | "HOME" | "WORDCHARS" | "MAXNGRAMSUGS" | "MAXDIFF" | "ONLYMAXDIFF" | "NOSPLITSUGS"
             | "SUGSWITHDOTS" | "WARN" | "FORBIDWARN" | "MAXCPDSUGS" | "BREAK" => {}
+            // Output conversion hints do not change which input words are accepted.
+            "OCONV" => {}
             "AM" | "LEMMA_PRESENT" => {}
             "SUBSTANDARD" => r.substandard = Some(flags.one(at(1)).map_err(line_err)?),
             "IGNORE" => r.ignore = at(1).chars().collect(),
@@ -2042,10 +2044,9 @@ pub(crate) mod tests {
         assert!(d.check("aujourd’hui") && d.check("aujourd'hui") && d.check("ﬁn") && d.check("Aujourd’hui"));
         assert!(!d.check("aujourd’huy"));
         assert!(AffixDict::from_bytes(&d.to_bytes()).unwrap().check("aujourd’hui"), "ICONV survives a round trip");
-        // An ICONV line without operands in compact data must not loop forever.
+        // A malformed compact ICONV line is rejected in bounded parsing, without a normalization loop.
         let empty = miniz_oxide::deflate::compress_to_vec(b"WCAFF1\nICONV\nWORDS\n\x00fin\n", 6);
-        let d = AffixDict::from_bytes(&empty).unwrap();
-        assert!(d.check("fin") && !d.check("a"));
+        assert!(AffixDict::from_bytes(&empty).is_err());
     }
 
     #[test]
@@ -2139,6 +2140,17 @@ pub(crate) mod tests {
         for dict in [&d, &AffixDict::from_bytes(&d.to_bytes()).unwrap()] {
             assert!(dict.contains("a_b"), "the underscore input converts to x");
             assert!(!dict.contains("a b"), "a space is not an ICONV underscore");
+        }
+    }
+
+    #[test]
+    fn output_conversion_hints_do_not_change_input_words() {
+        let aff = "SET UTF-8\nOCONV 1\nOCONV chat chien\nSFX S Y 1\nSFX S 0 s .\n";
+        let d = AffixDict::from_hunspell(aff, "1\nchat/S\n", &[]).unwrap();
+        for dict in [&d, &AffixDict::from_bytes(&d.to_bytes()).unwrap()] {
+            assert!(dict.check("chat") && dict.check("chats"));
+            assert!(dict.can_suggest("chat"));
+            assert!(!dict.check("chien") && !dict.check("chiens"), "output hints are not input conversions");
         }
     }
 
