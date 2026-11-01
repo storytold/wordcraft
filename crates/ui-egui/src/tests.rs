@@ -3,6 +3,14 @@ use egui_kittest::kittest::Queryable;
 
 mod perf;
 
+#[test]
+fn native_window_title_uses_the_compiled_application_name() {
+    let app = app();
+    assert!(app.window_title().ends_with(crate::build_config::app_name()));
+    assert_eq!(crate::windows::title("Synthetic", false), format!("Synthetic - {}", crate::build_config::app_name()));
+    assert_eq!(crate::windows::title("Synthetic", true), format!("Synthetic • - {}", crate::build_config::app_name()));
+}
+
 fn mod_key(key: egui::Key) -> egui::Event {
     egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND }
 }

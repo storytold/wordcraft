@@ -377,9 +377,9 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                 });
             });
             // Centred title.
-            let title = if !app.has_document() {
+            let mut title = if !app.has_document() {
                 // No document open (#1129): the app's name alone.
-                "WordCraft".to_string()
+                crate::build_config::app_name().to_string()
             } else {
                 format!(
                     "{} — {}",
@@ -393,6 +393,11 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                     }
                 )
             };
+            if app.has_document() && !crate::build_config::BUILD_LABEL.is_empty() {
+                title.push_str(" (");
+                title.push_str(crate::build_config::BUILD_LABEL);
+                title.push(')');
+            }
             let font = TypeRung::Chrome.semibold();
             let track = TypeRung::Chrome.tracking();
             let cx = full.center().x;
