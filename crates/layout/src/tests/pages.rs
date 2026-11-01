@@ -612,3 +612,58 @@ fn a_page_ends_when_a_multiple_spaced_lines_text_no_longer_fits() {
         assert!(past_margin > 0, "{multiple}: some shift should leave the last line's leading past the margin");
     }
 }
+
+/// One-and-a-half-spaced filler paragraphs, then "Kept" (kept with the next) and "Next", shifted
+/// down by `shift` points.
+fn kept_pair(shift: usize, keep: bool) -> Document {
+    use wordcraft_doc::props::LineSpacing;
+    let mut d = Document::from_text(&format!("{}Kept\nNext", "Filler line\n".repeat(20)));
+    let n = d.body.len();
+    for (i, b) in d.body.iter_mut().enumerate() {
+        if let wordcraft_doc::Block::Para(p) = Arc::make_mut(b) {
+            p.props.line_spacing = Some(LineSpacing::Multiple(1.5));
+            p.props.widow_control = Some(false);
+            if i == 0 {
+                p.props.space_before = Some(shift as f32);
+            }
+            if i == n - 2 {
+                p.props.keep_next = Some(keep);
+            }
+        }
+    }
+    d
+}
+
+/// The page of each of the last two paragraphs.
+fn last_two_pages(l: &DocLayout, n: u32) -> (usize, usize) {
+    let page = |block: u32| {
+        l.pages
+            .iter()
+            .position(|p| p.items.iter().any(|it| matches!(it, Placed::Lines { story: StoryRef::Body, path, .. } if path.0.first() == Some(&block))))
+            .unwrap()
+    };
+    (page(n - 2), page(n - 1))
+}
+
+#[test]
+fn keep_with_next_lets_the_last_lines_leading_into_the_margin() {
+    // Word lets the leading of a page's last multiple-spaced line run into the bottom margin, and
+    // a kept pair stays on the page as long as both texts fit: "Kept" doesn't go over with "Next"
+    // when "Next" would stay on the page anyway, and "Kept" fitting only without its own leading
+    // still goes over with "Next" (a picture with its caption kept with it stayed alone at the foot
+    // of the page). Either way the pair stays together.
+    let (mut together, mut apart) = (0, 0);
+    for shift in 0..40 {
+        let n = kept_pair(shift, false).body.len() as u32;
+        let free = last_two_pages(&lay(&kept_pair(shift, false)), n);
+        let kept = last_two_pages(&lay(&kept_pair(shift, true)), n);
+        assert_eq!(kept.0, kept.1, "shift {shift}: the pair is split {kept:?}");
+        if free.0 == free.1 {
+            assert_eq!(kept, free, "shift {shift}: the pair fits where it is but moved");
+            together += 1;
+        } else {
+            apart += 1;
+        }
+    }
+    assert!(together > 0 && apart > 0, "{together} together, {apart} apart");
+}

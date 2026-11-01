@@ -266,36 +266,15 @@ impl<'a> Flow<'a> {
     }
 
     /// `before`, the space before the paragraph, with the previous paragraph (`prev`) taken into account.
-    fn merge_gap(&self, ctx: &Ctx, pb: &mut PageBuilder, mut before: f32, prev: (String, bool, f32, bool, bool)) -> f32 {
-        let (style, ctxl, mut after, after_auto, listed) = prev;
-        let rp = &self.pl.rp;
-        // Contextual spacing suppresses each paragraph's own side of the gap.
-        if style == rp.style {
-            if ctxl {
-                pb.y -= after;
-                before = (before - after).max(0.0);
-                after = 0.0;
-            }
-            if rp.contextual_spacing {
-                before = 0.0;
-            }
-        }
-        // Automatic spacing: none between two list items (as in an HTML list; measured in Word:
-        // any two items, of one list or two, at any level).
-        if listed && self.label.is_some() {
-            if after_auto {
-                pb.y -= after;
-                after = 0.0;
-            }
-            if rp.before_auto {
-                before = 0.0;
-            }
-        }
-        // The space between two paragraphs is the larger of the first's space after and the
-        // second's space before, not their sum.
-        if before > 0.0 && after > 0.0 && !ctx.doc.settings.sum_paragraph_spacing {
-            before = (before - after).max(0.0);
-        }
+    fn merge_gap(&self, ctx: &Ctx, pb: &mut PageBuilder, before: f32, prev: (String, bool, f32, bool, bool)) -> f32 {
+        let (after, before) = paragraph_gap(
+            ctx.doc.settings.sum_paragraph_spacing,
+            before,
+            &self.pl.rp,
+            self.label.is_some(),
+            (&prev.0, prev.1, prev.2, prev.3, prev.4),
+        );
+        pb.y -= prev.2 - after;
         before
     }
 
@@ -306,10 +285,27 @@ impl<'a> Flow<'a> {
     fn keep_together(&self, ctx: &mut Ctx, pb: &mut PageBuilder, rooms: Rooms, before: f32) -> f32 {
         let rp = &self.pl.rp;
         let height = self.pl.height + rooms.top + rooms.bottom;
-        if !(rp.keep_lines || (rp.keep_next && pb.y + height <= pb.bottom + 0.01)) {
+        // The last line on the page may leave its leading in the bottom margin, as `fit_height`
+        // lets it when that line is placed: this paragraph's own, or that of the last line kept
+        // with it.
+        let at_margin = pb.bottom >= pb.sect.page_h - pb.sect.margin_bottom - 0.01 && pb.notes.is_empty();
+        let own_leading = match (rp.line_spacing, self.pl.lines.last()) {
+            (wordcraft_doc::props::LineSpacing::Multiple(m), Some(l)) if m > 1.0 && at_margin && rooms.bottom == 0.0 => leading_below(l),
+            _ => 0.0,
+        };
+        if !(rp.keep_lines || (rp.keep_next && pb.y + height - own_leading <= pb.bottom + 0.01)) {
             return before;
         }
-        let need = height + if rp.keep_next { next_first_line(ctx, self.block, self.width, 0, &mut ctx.counters.clone()) } else { 0.0 };
+        // Lookahead already includes the next paragraph's before-space. Adjust it to the same
+        // collapsed, contextual or automatic gap that actual placement will leave between them.
+        let gap = if matches!(ctx.doc.body.get(self.block + 1).map(|b| &**b), Some(Block::Para(_))) {
+            kept_gap_adjustment(ctx, self.block, rp, self.label.is_some())
+        } else {
+            0.0
+        };
+        let (next, leading) =
+            if rp.keep_next { next_first_line(ctx, self.block, self.width, 0, &mut ctx.counters.clone(), pb.web) } else { (0.0, 0.0) };
+        let need = height + if rp.keep_next { gap + next - if at_margin { leading } else { 0.0 } } else { -own_leading };
         // (Against the whole column: balanced columns grow to hold it.)
         // With the 0.01 pt of slack the other fit checks take.
         if pb.y + need > pb.bottom + 0.01 && !pb.fresh() && need <= pb.next_room(self.body_top) {
@@ -633,9 +629,15 @@ fn fit_height(pb: &PageBuilder, l: &para::Line, rp: &wordcraft_doc::resolve::Res
     let at_margin = pb.bottom >= pb.sect.page_h - pb.sect.margin_bottom - 0.01;
     match rp.line_spacing {
         // `baseline` is from the paragraph's top; the text ends a descent below it.
-        wordcraft_doc::props::LineSpacing::Multiple(m) if m > 1.0 && at_margin && free => (l.baseline - l.top + l.text_desc).clamp(0.0, l.height),
+        wordcraft_doc::props::LineSpacing::Multiple(m) if m > 1.0 && at_margin && free => l.height - leading_below(l),
         _ => l.height,
     }
+}
+
+/// The leading of a multiple-spaced line below its text: what `fit_height` lets run into the
+/// bottom margin.
+fn leading_below(l: &para::Line) -> f32 {
+    (l.height - (l.baseline - l.top + l.text_desc)).clamp(0.0, l.height)
 }
 
 /// Notes too long for the rest of the page continue on the next one: the line still fits if the
@@ -847,6 +849,55 @@ fn mirror_shift(rp: &wordcraft_doc::resolve::ResolvedPara, number: u32, web: boo
     right - left
 }
 
+/// The after-space retained from the previous paragraph and the before-space applied to this
+/// one. Placement and keep-with-next lookahead must use the same spacing rules.
+fn paragraph_gap(
+    sum: bool,
+    mut before: f32,
+    rp: &wordcraft_doc::resolve::ResolvedPara,
+    listed: bool,
+    (style, contextual, mut after, after_auto, previous_listed): (&str, bool, f32, bool, bool),
+) -> (f32, f32) {
+    if style == rp.style.as_str() {
+        if contextual {
+            before = (before - after).max(0.0);
+            after = 0.0;
+        }
+        if rp.contextual_spacing {
+            before = 0.0;
+        }
+    }
+    // Automatic spacing disappears between list items, including different lists or levels.
+    if previous_listed && listed {
+        if after_auto {
+            after = 0.0;
+        }
+        if rp.before_auto {
+            before = 0.0;
+        }
+    }
+    if before > 0.0 && after > 0.0 && !sum {
+        before = (before - after).max(0.0);
+    }
+    (after, before)
+}
+
+/// Replace the next paragraph's raw before-space (already included by `next_first_line`)
+/// with the effective gap on both sides. The adjustment may be negative when spacing is
+/// suppressed. Non-paragraph boundaries keep the existing chained after-space contract.
+fn kept_gap_adjustment(ctx: &Ctx, block: usize, rp: &wordcraft_doc::resolve::ResolvedPara, listed: bool) -> f32 {
+    let Some(Block::Para(next)) = ctx.doc.body.get(block + 1).map(|b| &**b) else { return rp.space_after };
+    let next_rp = ctx.doc.styles.resolve_para(&next.props);
+    let (after, before) = paragraph_gap(
+        ctx.doc.settings.sum_paragraph_spacing,
+        next_rp.space_before,
+        &next_rp,
+        ctx.has_label(next),
+        (&rp.style, rp.contextual_spacing, rp.space_after, rp.after_auto, listed),
+    );
+    after + before - next_rp.space_before
+}
+
 /// The space after body paragraph `block` (resolved as `rp`) that is really left below it: none
 /// when contextual spacing or automatic spacing between list items drops it before the next
 /// paragraph. Same tests as the spacing between paragraphs in `place_para_in_flow`: contextual
@@ -875,14 +926,16 @@ fn space_after_kept(ctx: &Ctx, block: usize, rp: &wordcraft_doc::resolve::Resolv
 /// of a three-line one under that control (two would leave a widow), or all
 /// of it under keep lines together — or all of it and what it keeps with in turn when it is
 /// kept with the next too (a chain moves together in Word). Word carries a kept heading over
-/// when the paragraph after it cannot start on the page (#966).
-fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counters: &mut Counters) -> f32 {
+/// when the paragraph after it cannot start on the page (#966). With it, the leading below the
+/// text of the last of those lines, which may run into the bottom margin (`fit_height`).
+fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counters: &mut Counters, web: bool) -> (f32, f32) {
     match ctx.doc.body.get(block + 1).map(|b| &**b) {
         Some(Block::Para(p)) => {
             // Keep list indents and label metrics without consuming the document counters.
             let rp = ctx.doc.styles.resolve_para(&p.props);
             let label =
                 p.props.numbering.or(rp.numbering).filter(|n| n.num != 0).and_then(|n| counters.next_label(&ctx.doc.numbering, n.num, n.level));
+            let listed = label.is_some();
             let pl = match ctx.para_ahead(p, width, label.clone()) {
                 Some(pl) => pl,
                 None => {
@@ -913,7 +966,11 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counte
             let top = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block), None) { 0.0 } else { own.top };
             if pl.rp.keep_next && depth < 8 {
                 let bottom = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block + 2), None) { 0.0 } else { own.bottom };
-                pl.rp.space_before + top + pl.height + bottom + pl.rp.space_after + next_first_line(ctx, block + 1, width, depth + 1, counters)
+                let (next, leading) = next_first_line(ctx, block + 1, width, depth + 1, counters, web);
+                let gap = kept_gap_adjustment(ctx, block + 1, &pl.rp, listed);
+                // Any note in the kept prefix removes the margin-leading allowance too.
+                let leading = if !web && has_lookahead_footnote(ctx.doc, p, &pl, pl.lines.len().saturating_sub(1)) { 0.0 } else { leading };
+                (pl.rp.space_before + top + pl.height + bottom + gap + next, leading)
             } else {
                 // The room this one needs to start on the page with the kept paragraph before
                 // it (#966).
@@ -921,19 +978,39 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counte
                     (Some(first), Some(last)) => last.top + last.height - first.top,
                     _ => 0.0,
                 };
-                pl.rp.space_before
-                    + top
-                    + if pl.rp.keep_lines {
-                        pl.height
-                    } else if pl.rp.widow_control && pl.lines.len() >= 2 {
-                        // Neither split of three lines is allowed (`settled_end`).
-                        to(if pl.lines.len() == 3 { 2 } else { 1 })
-                    } else {
-                        to(0)
+                let last = if pl.rp.keep_lines {
+                    pl.lines.len().saturating_sub(1)
+                } else if pl.rp.widow_control && pl.lines.len() >= 2 {
+                    // Retain main's three-line widow/orphan fix while adapting #5095.
+                    if pl.lines.len() == 3 { 2 } else { 1 }
+                } else {
+                    0
+                };
+                let need = if pl.rp.keep_lines { pl.height } else { to(last) };
+                // Placement requires the full line height when its candidate range has notes;
+                // only note-free multiple-spacing leading may extend into the bottom margin.
+                let leading = match (pl.rp.line_spacing, pl.lines.get(last)) {
+                    (wordcraft_doc::props::LineSpacing::Multiple(m), Some(l))
+                        if m > 1.0 && (web || !has_lookahead_footnote(ctx.doc, p, &pl, last)) =>
+                    {
+                        leading_below(l)
                     }
+                    _ => 0.0,
+                };
+                (pl.rp.space_before + top + need, leading)
             }
         }
-        Some(Block::Table(_)) => 24.0,
-        None => 0.0,
+        Some(Block::Table(_)) => (24.0, 0.0),
+        None => (0.0, 0.0),
     }
+}
+
+/// Whether the looked-ahead lines through `last` bring a footnote onto the page, including
+/// references inside inline text boxes. Endnotes do not occupy the page's footnote area.
+fn has_lookahead_footnote(doc: &Document, p: &Paragraph, pl: &ParaLayout, last: usize) -> bool {
+    pl.lines.first().zip(pl.lines.get(last)).is_some_and(|(first, last)| {
+        para_notes(doc, p, pl)
+            .iter()
+            .any(|(ci, id)| *ci >= first.c0 && *ci < last.c1 && doc.parts.get(id).is_some_and(|part| part.kind == wordcraft_doc::PartKind::Footnote))
+    })
 }
