@@ -7785,6 +7785,49 @@ fn two_column_section(start: wordcraft_doc::section::SectionStart, widths: Vec<(
     d
 }
 
+/// The vertical rules on page `p`: (x, top, bottom).
+fn vertical_rules(l: &DocLayout, p: usize) -> Vec<(f32, f32, f32)> {
+    l.pages[p]
+        .items
+        .iter()
+        .filter_map(|i| if let Placed::Rule { x0, x1, y0, y1, .. } = i { (x0 == x1).then_some((*x0, *y0, *y1)) } else { None })
+        .collect()
+}
+
+/// #5178: two columns with Line between for selected text (a continuous section between
+/// one-column text) draw their line, from the top of the section's text to the bottom of its
+/// columns, not over the text above or below; a section starting the page draws it down to the
+/// bottom of its text, not of the page.
+#[test]
+fn the_line_between_columns_spans_the_section_s_text() {
+    use wordcraft_doc::section::{SectionProps, SectionStart};
+    let text: Vec<String> =
+        ["Intro".to_string()].into_iter().chain((1..=8).map(|i| format!("Column text {i}"))).chain(["After".to_string()]).collect();
+    let mut d = Document::from_text(&text.join("\n"));
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().section = Some(Box::default());
+    let mut two = SectionProps { start: SectionStart::Continuous, ..Default::default() };
+    two.columns.count = 2;
+    two.columns.separator = true;
+    d.para_mut(StoryRef::Body, &Path::top(8)).unwrap().section = Some(Box::new(two.clone()));
+    d.last_section.start = SectionStart::Continuous;
+    let l = lay(&d);
+    let boxes = para_boxes(&l);
+    let rules = vertical_rules(&l, 0);
+    let [(x, top, bottom)] = rules[..] else { panic!("one line: {rules:?}") };
+    let mid = 72.0 + 468.0 / 2.0;
+    assert!((x - mid).abs() < 0.5, "midway between the columns: {x}");
+    assert!(top >= boxes[0].3 - 0.5 && (top - boxes[1].2).abs() < 0.5, "from the section's top: {top} {boxes:?}");
+    assert!(bottom <= boxes[9].2 + 0.5 && bottom > top + 30.0, "down to its columns' bottom, above After: {bottom} {boxes:?}");
+
+    // One section of two columns: the line runs down to the bottom of the text, not the page.
+    let mut d = Document::from_text("One\nTwo\nThree");
+    d.last_section.columns = two.columns.clone();
+    let l = lay(&d);
+    let rules = vertical_rules(&l, 0);
+    let [(_, top, bottom)] = rules[..] else { panic!("one line: {rules:?}") };
+    assert!((top - 72.0).abs() < 0.5 && bottom < 150.0, "{top}..{bottom}");
+}
+
 /// Each top-level paragraph's first piece: (page, x, top, bottom).
 fn para_boxes(l: &DocLayout) -> Vec<(usize, f32, f32, f32)> {
     let mut v: Vec<(usize, usize, f32, f32, f32)> = Vec::new();

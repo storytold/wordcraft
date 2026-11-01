@@ -85,6 +85,19 @@ pub(crate) struct PageBuilder<'a> {
     /// No layout pass follows for floats found above their anchors: each is kept clear of the
     /// text laid out before it ([`settle_early`]).
     pub(crate) settle: bool,
+    /// The lines between the columns of the section on the current page, drawn once its text
+    /// there is laid out ([`PageBuilder::close_column_lines`]).
+    pub(crate) column_lines: Option<ColumnLines>,
+}
+
+/// Where the lines between a section's columns go on a page: the page, the top of the section's
+/// text there (the body's top, or below the text before a continuous section break), and each
+/// line's x.
+#[derive(Clone, Debug)]
+pub(crate) struct ColumnLines {
+    page: usize,
+    top: f32,
+    xs: Vec<f32>,
 }
 
 /// Page borders, measured from the page edge (Word's default), so they surround the header,
@@ -281,6 +294,7 @@ impl PageBuilder<'_> {
         true
     }
     pub(crate) fn new_page(&mut self, first_block: usize, body_top: f32) {
+        self.close_column_lines();
         self.apply_valign();
         self.flush_notes();
         self.beneath = self.sect_beneath;
@@ -301,18 +315,6 @@ impl PageBuilder<'_> {
         let mut decor = Vec::new();
         if !self.web {
             decor = page_border_rules(s);
-            // Lines between columns.
-            if s.columns.separator && s.columns.count > 1 {
-                let cols = s.column_boxes();
-                for w in cols.windows(2) {
-                    if let [(ax, aw), (bx, bw)] = w {
-                        // Midway across the space between neighbours (leftwards in an RTL section).
-                        let mid = if bx >= ax { (ax + aw + bx) / 2.0 } else { (bx + bw + ax) / 2.0 };
-                        let x = s.margin_left + s.gutter + mid;
-                        decor.push(Placed::Rule { x0: x, y0: body_top, x1: x, y1: bottom, border: Border::single(0.5) });
-                    }
-                }
-            }
         }
         self.page_items_start = decor.len();
         self.block_marks.clear();
@@ -334,6 +336,40 @@ impl PageBuilder<'_> {
         self.max_y = self.top;
         self.content_bottom = self.top;
         self.cap_columns();
+        self.open_column_lines();
+    }
+    /// Start the lines between the current section's columns at `top` on this page, when it has
+    /// them (Line between, `w:sep`).
+    pub(crate) fn open_column_lines(&mut self) {
+        let s = self.sect;
+        if self.web || !s.columns.separator || s.columns.count < 2 || self.pages.is_empty() {
+            self.column_lines = None;
+            return;
+        }
+        let xs = s
+            .column_boxes()
+            .windows(2)
+            .filter_map(|w| match w {
+                // Midway across the space between neighbours (leftwards in an RTL section).
+                [(ax, aw), (bx, bw)] => Some(s.margin_left + s.gutter + if bx >= ax { (ax + aw + bx) / 2.0 } else { (bx + bw + ax) / 2.0 }),
+                _ => None,
+            })
+            .collect();
+        self.column_lines = Some(ColumnLines { page: self.pages.len() - 1, top: self.top, xs });
+    }
+    /// Draw the lines between the columns of the section's text on its page, from the top of
+    /// that text to the bottom of its tallest column, as Word does: a continuous section in the
+    /// middle of a page (columns for selected text, #5178) gets lines its own height, and a
+    /// section with no text on the page none. Called when the page or the section ends there.
+    pub(crate) fn close_column_lines(&mut self) {
+        let Some(c) = self.column_lines.take() else { return };
+        let bottom = self.text_bottom();
+        if bottom <= c.top + 0.5 || c.page + 1 != self.pages.len() {
+            return;
+        }
+        if let Some(pg) = self.pages.get_mut(c.page) {
+            pg.items.extend(c.xs.iter().map(|&x| Placed::Rule { x0: x, y0: c.top, x1: x, y1: bottom, border: Border::single(0.5) }));
+        }
     }
     /// Where the columns end on this page: the page bottom above its footnotes, or higher up
     /// when the columns are balanced.
