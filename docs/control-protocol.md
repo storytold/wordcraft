@@ -75,6 +75,21 @@ wordcraft --control 7981 --control-token-file ~/.private/wordcraft-control.token
   `wordcraft-cli mcp --connect` finds it with no flags. The token file itself is yours and stays
   when the app exits.
 
+### The MCP bridge's key
+
+`wordcraft-cli mcp --connect` takes the key from `--control-token` or `--control-token-file` (or
+`WORDCRAFT_CONTROL_TOKEN` / `WORDCRAFT_CONTROL_TOKEN_FILE`, with the same rules: a flag wins over
+its variable, and a token with a token file is an error), else from `WORDCRAFT_CONTROL_KEY`, or
+else from the key file for the port it connects to. It reads a key file or token file again on
+every new connection (the app may have restarted, or not have made the token file yet); a token
+file that exists when the bridge starts is checked at once. The token flags need `--connect`.
+It sends the key only to the app's own address, `127.0.0.1` (`localhost` connects there too,
+never to `::1`): another loopback address such as `::1` or `127.0.0.2` is not where the
+app listens, so whoever listens there gets no key (#3699). For
+any other host it sends no key, says so, and the app refuses its requests: to drive an app on
+another machine, forward its port to `127.0.0.1` (for example `ssh -L 7981:127.0.0.1:7981 host`)
+and set `WORDCRAFT_CONTROL_KEY` to that app's key.
+
 ### Confining file access
 
 `--automation-read-root DIR` and `--automation-write-root DIR` (or
@@ -86,18 +101,6 @@ confined. They cover the commands a request runs (`engine.execute`, `ui.render` 
 and the files it asks for (a `ui.screenshot` `path`, written a few frames later). What the person
 at the keyboard does is not confined, and nor are the commands synthetic input (`ui.key`,
 `ui.click`, `ui.text`) leads to: they act as the person would.
-
-`wordcraft-cli mcp --connect` takes the key from `--control-token` or `--control-token-file` (or
-`WORDCRAFT_CONTROL_TOKEN` / `WORDCRAFT_CONTROL_TOKEN_FILE`, with the same rules: a flag wins over
-its variable, and a token with a token file is an error), else from `WORDCRAFT_CONTROL_KEY`, or
-else from the key file for the port it connects to. It reads a key file or token file again on
-every new connection (the app may have restarted, or not have made the token file yet); a token
-file that exists when the bridge starts is checked at once. The token flags need `--connect`. It sends the key only to the app's own address, `127.0.0.1` (`localhost` connects
-there too, never to `::1`): another loopback address such as `::1` or `127.0.0.2` is not where the
-app listens, so whoever listens there gets no key (#3699). For
-any other host it sends no key, says so, and the app refuses its requests: to drive an app on
-another machine, forward its port to `127.0.0.1` (for example `ssh -L 7981:127.0.0.1:7981 host`)
-and set `WORDCRAFT_CONTROL_KEY` to that app's key.
 
 ## Methods
 
