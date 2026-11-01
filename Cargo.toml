@@ -4,7 +4,7 @@ members = ["crates/*", "apps/*", "xtask"]
 default-members = ["crates/*", "apps/wordcraft", "apps/wordcraft-cli", "xtask"]
 
 [workspace.package]
-version = "0.13.2"
+version = "0.14.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.95"
@@ -27,7 +27,7 @@ wordcraft-pdf = { path = "crates/pdf" }
 # craft-proof with Language packs is the head of storytold/craft-libs#485 (CP4.2, stacked on #483
 # SCOWL English and #482); the font store's `language-pack` kind is #486 (CP4.1). GitHub serves PR
 # heads from storytold/craft-libs, and merged with merge commits they stay in its main.
-wordcraft-proof = { package = "craft-proof", git = "https://github.com/storytold/craft-libs", rev = "bdd434bc5f97eb4e8aaaec32876c267baaf96972", version = "=0.1.0" }
+wordcraft-proof = { package = "craft-proof", git = "https://github.com/storytold/craft-libs", rev = "8f16fe5a132054f057c57e2af424a81f5ace4203", version = "=0.1.0" }
 craft-font-store = { git = "https://github.com/storytold/craft-libs", rev = "83c2e7bf8c6e409581b099a098eb00ac423d8b6c", version = "=0.1.0" }
 craft-font-catalog = { git = "https://github.com/storytold/craft-libs", rev = "83c2e7bf8c6e409581b099a098eb00ac423d8b6c", version = "=0.1.0" }
 wordcraft-engine = { path = "crates/engine" }
