@@ -340,74 +340,326 @@ fn phonetic_guide_ruby_box_takes_the_keyboard_on_open() {
     }
 }
 
-/// #2986: a box that keeps the keyboard asks for focus only while it lacks it. `request_focus`
-/// always interrupts IME; on X11 that recreates the XIM context, and Search asking every frame
-/// left fcitx taking no keys at all. Once the box has focus, no frame interrupts, and typing lands;
-/// after Tab takes the keyboard away, the box takes it back with one reset, not one per frame.
-#[test]
-fn boxes_that_keep_focus_do_not_interrupt_ime_every_frame() {
-    fn typed(d: Option<&Dialog>) -> Option<&str> {
-        match d? {
-            Dialog::Commands { query, .. } | Dialog::Icons { query, .. } => Some(query.as_str()),
-            Dialog::Find { goto_target, .. } => Some(goto_target.as_str()),
-            Dialog::Refs(r) => match r.as_ref() {
-                crate::dialogs_refs::RefsDialog::NewLabel(f) => Some(f.new_label.as_str()),
-                _ => None,
-            },
+/// What has been typed into the box a dialog's keyboard starts in.
+fn typed_in_box(d: Option<&Dialog>) -> Option<&str> {
+    match d? {
+        Dialog::Commands { query, .. } | Dialog::Icons { query, .. } => Some(query.as_str()),
+        Dialog::Find { goto_target, .. } => Some(goto_target.as_str()),
+        Dialog::FieldCode { code, .. } => Some(code.as_str()),
+        Dialog::Password { password, .. } | Dialog::EncryptPassword { password, .. } => Some(password.as_str()),
+        Dialog::Refs(r) => match r.as_ref() {
+            crate::dialogs_refs::RefsDialog::NewLabel(f) => Some(f.new_label.as_str()),
             _ => None,
-        }
+        },
+        _ => None,
     }
-    let key = |key| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
-    for name in ["commands", "icons", "goto", "newLabel"] {
-        let mut app = app_with("Unchanged document");
-        let dialog = match name {
-            "newLabel" => Dialog::Refs(Box::new(crate::dialogs_refs::RefsDialog::NewLabel(crate::dialogs_refs::CaptionForm::read(&app)))),
-            _ => Dialog::open(name, &mut app).unwrap(),
-        };
-        app.dialog = Some(dialog);
-        let mut h = app_harness(app);
-        // The box takes the keyboard from the page in the first frames.
-        h.run_steps(4);
+}
+
+/// The dialogs that open with the keyboard in a box.
+const BOX_DIALOGS: [&str; 7] = ["commands", "icons", "goto", "newLabel", "fieldCode", "password", "encryptPassword"];
+
+/// The dialog `name` open over a document, after the frames in which its box takes the keyboard.
+fn box_dialog(name: &str) -> egui_kittest::Harness<'static, WordApp> {
+    let mut app = app_with("Unchanged document");
+    let dialog = match name {
+        "newLabel" => Dialog::Refs(Box::new(crate::dialogs_refs::RefsDialog::NewLabel(crate::dialogs_refs::CaptionForm::read(&app)))),
+        "password" => Dialog::Password { name: "Locked.docx".into(), params: json!({}), password: Default::default(), message: String::new() },
+        _ => Dialog::open(name, &mut app).unwrap(),
+    };
+    app.dialog = Some(dialog);
+    let mut h = app_harness(app);
+    h.run_steps(4);
+    h
+}
+
+fn key_event(key: egui::Key, modifiers: egui::Modifiers) -> egui::Event {
+    egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }
+}
+
+/// Types `t` (one letter) as a key and its text, in one frame.
+fn type_letter(h: &mut egui_kittest::Harness<'_, WordApp>, key: egui::Key, t: &str) {
+    h.event(key_event(key, egui::Modifiers::NONE));
+    h.event(egui::Event::Text(t.into()));
+    h.step();
+}
+
+/// Whether the frame just run reset the input method, counted as egui-winit does: IME coming
+/// back on, or interrupted while on (each recreates the XIM context). `on` tracks IME.
+fn ime_reset(h: &egui_kittest::Harness<'_, WordApp>, on: &mut bool) -> bool {
+    let ime = h.output().platform_output.ime.as_ref();
+    let reset = ime.is_some_and(|i| !*on || i.should_interrupt_composition);
+    *on = ime.is_some();
+    reset
+}
+
+/// #2986: a dialog's box asks for the keyboard once, not in every frame it lacks it.
+/// `request_focus` always interrupts IME; on X11 that recreates the XIM context, and Search asking
+/// every frame left fcitx taking no keys at all. Once the box has focus, no frame interrupts, and
+/// typing lands.
+#[test]
+fn dialog_boxes_do_not_interrupt_ime_every_frame() {
+    for name in BOX_DIALOGS {
+        let mut h = box_dialog(name);
         let interrupted = |h: &egui_kittest::Harness<'_, WordApp>| h.output().platform_output.ime.as_ref().map(|i| i.should_interrupt_composition);
         for frame in 0..6 {
             h.step();
             assert_eq!(interrupted(&h), Some(false), "{name}: frame {frame} resets the input method");
         }
         for (k, t) in [(egui::Key::A, "a"), (egui::Key::B, "b")] {
-            h.event(key(k));
-            h.event(egui::Event::Text(t.into()));
-            h.step();
+            type_letter(&mut h, k, t);
             assert_eq!(interrupted(&h), Some(false), "{name}: typing {t} resets the input method");
         }
-        assert_eq!(typed(h.state().dialog.as_ref()), Some("ab"), "{name}: the keys reach the box");
+        assert_eq!(typed_in_box(h.state().dialog.as_ref()), Some("ab"), "{name}: the keys reach the box");
+    }
+}
 
-        // Tab moves the keyboard to the dialog's next control and the box takes it back. As
-        // egui-winit does, count a reset when IME comes back on or is interrupted while on (each
-        // recreates the XIM context): one or two for the round trip, then none, and the next
-        // key reaches the box.
-        let reset = |h: &egui_kittest::Harness<'_, WordApp>, on: &mut bool| {
-            let ime = h.output().platform_output.ime.as_ref();
-            let reset = ime.is_some_and(|i| !*on || i.should_interrupt_composition);
-            *on = ime.is_some();
-            reset
-        };
+/// #3172: Tab leaves a dialog's box for the dialog's next control, as in Word, and Shift+Tab
+/// comes back to it. The box used to ask for the keyboard in every frame it lacked it, so Tab
+/// moved on and the box took the keyboard straight back: screen readers said nothing, Go To's
+/// buttons and the Icons were out of reach, and Search ran only its first command. Coming back
+/// resets the input method once, as any move to a box does.
+#[test]
+fn tab_leaves_a_dialog_box_and_shift_tab_comes_back() {
+    for name in BOX_DIALOGS {
+        let mut h = box_dialog(name);
+        type_letter(&mut h, egui::Key::A, "a");
+        let in_box = h.ctx.memory(|m| m.focused());
+        assert!(in_box.is_some(), "{name}: the box has the keyboard");
         let mut on = true;
-        h.event(key(egui::Key::Tab));
-        let mut back = 0;
+        let mut resets = 0;
+        h.event(key_event(egui::Key::Tab, egui::Modifiers::NONE));
         for _ in 0..4 {
             h.step();
-            back += usize::from(reset(&h, &mut on));
+            resets += usize::from(ime_reset(&h, &mut on));
         }
-        assert!((1..=2).contains(&back), "{name}: Tab and back reset the input method {back} times");
-        for frame in 0..4 {
+        let next = h.ctx.memory(|m| m.focused());
+        assert!(next.is_some() && next != in_box, "{name}: Tab gives the keyboard to the next control");
+        type_letter(&mut h, egui::Key::B, "b");
+        assert_eq!(typed_in_box(h.state().dialog.as_ref()), Some("a"), "{name}: and keeps it there");
+        assert_eq!(h.ctx.memory(|m| m.focused()), next, "{name}: the box does not take it back");
+        h.event(key_event(egui::Key::Tab, egui::Modifiers::SHIFT));
+        for _ in 0..4 {
             h.step();
-            assert!(!reset(&h, &mut on), "{name}: frame {frame} after Tab resets the input method");
+            resets += usize::from(ime_reset(&h, &mut on));
         }
-        h.event(key(egui::Key::C));
-        h.event(egui::Event::Text("c".into()));
-        h.step();
-        assert_eq!(typed(h.state().dialog.as_ref()), Some("abc"), "{name}: the box has the keyboard back after Tab");
+        assert_eq!(h.ctx.memory(|m| m.focused()), in_box, "{name}: Shift+Tab comes back to the box");
+        assert!((1..=2).contains(&resets), "{name}: Tab and back reset the input method {resets} times");
+        type_letter(&mut h, egui::Key::C, "c");
+        assert_eq!(typed_in_box(h.state().dialog.as_ref()), Some("ac"), "{name}: typing lands in the box again");
     }
+}
+
+/// Presses Tab until the control named `name` has the keyboard.
+fn tab_to(h: &mut egui_kittest::Harness<'static, WordApp>, name: &str) {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let focused = |h: &egui_kittest::Harness<'static, WordApp>| h.query_by(|n| n.is_focused()).and_then(|n| n.accesskit_node().label());
+    for _ in 0..30 {
+        if focused(h).as_deref() == Some(name) {
+            return;
+        }
+        h.key_press(egui::Key::Tab);
+        h.run_steps(2);
+    }
+    panic!("Tab never reaches {name}");
+}
+
+/// Go To: Enter in the page box is Next, but Enter on Previous or Close presses that button, as in
+/// Word. On Previous it went a page on; on Close it went a page on, then closed the dialog.
+#[test]
+fn enter_on_a_go_to_button_presses_that_button() {
+    use egui_kittest::kittest::Queryable;
+    let mut app = app_with("Page 1");
+    for i in 2..=3 {
+        app.run("insert.pageBreak", json!({})).unwrap();
+        app.run("text.insert", json!({"text": format!("Page {i}")})).unwrap();
+    }
+    app.run("edit.goto", json!({"page": 2})).unwrap();
+    app.dialog = Dialog::open("goto", &mut app);
+    let mut h = app_harness(app);
+    h.run_steps(4);
+    let page = |h: &mut egui_kittest::Harness<'static, WordApp>| {
+        let s = &mut h.state_mut().session;
+        s.layout().caret_on(&s.sel.focus, s.page_hint).map(|c| c.page + 1)
+    };
+    assert_eq!(page(&mut h), Some(2));
+    // Enter on Bookmark or Page picks it and goes nowhere: it went a page on too.
+    for kind in ["Bookmark", "Page"] {
+        h.get_by_label(kind).focus();
+        h.run_steps(2);
+        h.key_press(egui::Key::Enter);
+        h.run_steps(2);
+        assert_eq!(page(&mut h), Some(2), "Enter on {kind} stays on page 2");
+    }
+    assert!(matches!(h.state().dialog, Some(Dialog::Find { goto_what: GoToWhat::Page, .. })), "Page is picked");
+    tab_to(&mut h, "Previous");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    assert_eq!(page(&mut h), Some(1), "Enter on Previous goes a page back");
+    assert!(h.state().dialog.is_some(), "and leaves the dialog open");
+    tab_to(&mut h, "Close");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    assert!(h.state().dialog.is_none(), "Enter on Close closes the dialog");
+    assert_eq!(page(&mut h), Some(1), "without going a page on");
+}
+
+/// Go To: Enter in the page box goes to the page and leaves the keyboard in the box, as in Word,
+/// so the next number can be typed: egui's one-line box let go of it on Enter, and nothing had it.
+#[test]
+fn enter_in_the_go_to_page_box_keeps_the_keyboard_there() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut app = app_with("Page 1");
+    for i in 2..=3 {
+        app.run("insert.pageBreak", json!({})).unwrap();
+        app.run("text.insert", json!({"text": format!("Page {i}")})).unwrap();
+    }
+    app.dialog = Dialog::open("goto", &mut app);
+    let mut h = app_harness(app);
+    h.run_steps(4);
+    let page = |h: &mut egui_kittest::Harness<'static, WordApp>| {
+        let s = &mut h.state_mut().session;
+        s.layout().caret_on(&s.sel.focus, s.page_hint).map(|c| c.page + 1)
+    };
+    let in_box = |h: &egui_kittest::Harness<'static, WordApp>| {
+        h.query_by(|n| n.is_focused()).and_then(|n| n.accesskit_node().label()).as_deref() == Some("Enter page number:")
+    };
+    for n in ["3", "1"] {
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.event(egui::Event::Text(n.into()));
+        h.run_steps(2);
+        h.key_press(egui::Key::Enter);
+        h.run_steps(2);
+        assert_eq!(page(&mut h).map(|p| p.to_string()).as_deref(), Some(n), "Enter goes to page {n}");
+        assert!(in_box(&h), "and the page box keeps the keyboard");
+    }
+}
+
+/// Tab from Go To's page box to Previous and Enter in the very next pass press Previous: the box
+/// takes the keyboard back only after an Enter it had itself (egui still reports it lost the
+/// keyboard in the pass after Tab).
+#[test]
+fn tab_then_enter_at_once_in_go_to_presses_previous() {
+    use egui_kittest::kittest::Queryable;
+    let mut app = app_with("Page 1");
+    for i in 2..=3 {
+        app.run("insert.pageBreak", json!({})).unwrap();
+        app.run("text.insert", json!({"text": format!("Page {i}")})).unwrap();
+    }
+    app.dialog = Dialog::open("goto", &mut app);
+    let mut h = app_harness(app);
+    h.run_steps(4);
+    h.key_press(egui::Key::Tab);
+    h.step();
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    let s = &mut h.state_mut().session;
+    assert_eq!(s.layout().caret_on(&s.sel.focus, s.page_hint).map(|c| c.page + 1), Some(2), "Previous went back from page 3");
+    assert!(h.get_by_label("Previous").is_focused(), "and keeps the keyboard");
+}
+
+/// Enter on a bookmark in Go To's open list picks it and goes nowhere yet, as a click there does:
+/// the Enter was the list's, not Go To's.
+#[test]
+fn enter_in_go_to_bookmark_list_only_picks_it() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    let mut app = app_with("Start");
+    app.run("insert.pageBreak", json!({})).unwrap();
+    app.run("insert.bookmark", json!({"name": "Zulu"})).unwrap();
+    app.run("caret.docStart", json!({})).unwrap();
+    app.dialog = Dialog::open("goto", &mut app);
+    if let Some(Dialog::Find { goto_what, .. }) = &mut app.dialog {
+        *goto_what = GoToWhat::Bookmark;
+    }
+    let mut h = app_harness(app);
+    h.run_steps(4);
+    h.get_by_role_and_label(Role::ComboBox, "Enter bookmark name:").click();
+    h.run_steps(2);
+    h.get_by_label("Zulu").focus();
+    h.run_steps(2);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert!(matches!(&h.state().dialog, Some(Dialog::Find { goto_target, .. }) if goto_target == "Zulu"), "Enter picked the bookmark");
+    let s = &mut h.state_mut().session;
+    assert_eq!(s.layout().caret_on(&s.sel.focus, s.page_hint).map(|c| c.page + 1), Some(1), "and went nowhere yet");
+}
+
+/// Word Count has one Close button, as Word's has: Close and Cancel did the same thing, and Tab
+/// went through both. Enter on Close closes it; Enter on the check box is the check box's.
+#[test]
+fn word_count_has_one_close_button() {
+    use egui_kittest::kittest::Queryable;
+    let mut app = app_with("Some words to count");
+    app.dialog = Dialog::open("wordCount", &mut app);
+    let mut h = app_harness(app);
+    h.run_steps(4);
+    // The other Close is the title bar's close box.
+    assert_eq!(h.query_all_by_label("Close").count(), 2, "Close is there");
+    assert!(h.query_by_label("Cancel").is_none(), "Cancel is not");
+    // As a screen reader gives it the keyboard (a click doesn't, in egui).
+    h.get_by_label("Count words in text boxes and notes").focus();
+    h.run_steps(2);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    assert!(h.state().dialog.is_some(), "Enter on the check box leaves the dialog open");
+    tab_to(&mut h, "Close");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    assert!(h.state().dialog.is_none(), "Enter on Close closes it");
+
+    // Opened while the page keeps the keyboard (as from Search), Enter closes it too.
+    let mut app = app_with("Some words to count");
+    app.canvas.want_focus = true;
+    let mut h = app_harness(app);
+    h.run_steps(4);
+    h.state_mut().dialog = Dialog::open("wordCount", h.state_mut());
+    h.run_steps(4);
+    assert!(h.state().canvas.focused, "the page has the keyboard");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    assert!(h.state().dialog.is_none(), "Enter closes it");
+}
+
+/// Find and Replace: turning to the Go To tab puts the keyboard in the page box, once, as opening
+/// on it does; Find what had taken the keyboard when the dialog opened on Find.
+#[test]
+fn turning_to_go_to_puts_the_keyboard_in_the_page_box() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut app = app_with("Some text");
+    app.dialog = Dialog::open("find", &mut app);
+    let mut h = app_harness(app);
+    h.run_steps(4);
+    let focused = |h: &egui_kittest::Harness<'static, WordApp>| h.query_by(|n| n.is_focused()).and_then(|n| n.accesskit_node().label());
+    assert_eq!(focused(&h).as_deref(), Some("Find what:"));
+    h.get_by_label("Go To").click();
+    h.run_steps(4);
+    assert_eq!(focused(&h).as_deref(), Some("Enter page number:"), "the page box has the keyboard");
+    h.key_press(egui::Key::Tab);
+    h.run_steps(2);
+    assert_ne!(focused(&h).as_deref(), Some("Enter page number:"), "and Tab moves on");
+}
+
+/// Search: Enter on "Find … in the document" searches the document, where it ran the first
+/// command the words matched (Enter in the box runs that one).
+#[test]
+fn enter_on_search_find_in_the_document_searches_the_document() {
+    let mut app = app_with("A table of contents");
+    app.dialog = Dialog::open("commands", &mut app);
+    let mut h = app_harness(app);
+    h.run_steps(4);
+    // A key first: the box swallows the text of the shortcut that opened it.
+    h.key_press(egui::Key::T);
+    h.event(egui::Event::Text("table".into()));
+    h.run_steps(2);
+    tab_to(&mut h, "Find \u{201c}table\u{201d} in the document");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    assert!(h.state().dialog.is_none(), "the box closes");
+    assert_eq!(h.state().ui.nav_tab, "results", "the Navigation pane shows the results");
+    let query = h.ctx.data(|d| d.get_temp::<String>(h.state().window_id("nav_query"))).unwrap_or_default();
+    assert_eq!(query, "table", "of the text typed in the box");
+    assert_eq!(h.state().session.find.results.len(), 1, "found in the document");
+    assert!(h.state().session.doc.body.iter().all(|b| b.as_table().is_none()), "and no command ran");
 }
 
 /// Open the Paragraph dialog and press OK without changing anything.
