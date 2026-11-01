@@ -36,6 +36,8 @@ use wordcraft_engine::WindowView;
 
 use crate::{WordApp, documents, window_ui::WindowUi};
 
+pub(crate) mod arrange;
+
 /// The window title for a document called `name`.
 pub(crate) fn title(name: &str, dirty: bool) -> String {
     format!("{name}{} - WordCraft", if dirty { " •" } else { "" })
@@ -90,6 +92,8 @@ pub struct Windows {
     input_plugin: bool,
     /// The viewport driver draws the windows this frame, and titles them.
     driven: bool,
+    /// View › Window: Side by Side and Synchronous Scrolling (#322).
+    arranged: arrange::State,
 }
 
 impl Windows {
@@ -113,6 +117,7 @@ impl Windows {
             builder: egui::ViewportBuilder::default().with_inner_size([1440.0, 920.0]).with_min_inner_size([760.0, 480.0]),
             input_plugin: false,
             driven: false,
+            arranged: arrange::State::default(),
         }
     }
 
@@ -648,6 +653,7 @@ impl WordApp {
             return;
         }
         self.window_ui(ui);
+        arrange::forward_scroll(self, &ctx);
         // Drawing can close the window or bring another forward: the fields then hold another
         // window's state.
         if self.windows.shown != key {

@@ -346,6 +346,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 |---|---|
 | 2026-10-18 | Explicit New/Open keeps the requested document visible when startup recovery discovery finishes; older copies stay available. Recover uses the regular theme. See docs/recovery.md. |
 | 2026-10-15 | A floating picture or shape in a table cell set to align centre or bottom no longer lands half its height above its line (#1887); it starts at the anchor line |
+| 2026-10-26 | View › Window across the native windows (#322): Arrange All, View Side by Side, Synchronous Scrolling |
 | 2026-10-18 | Picture Format › Size (#2573): width and height in the interface unit, and a size typed in any unit works, pixels too (`300 px` keeps the picture's proportions, #1901), applied once typed (Enter, Tab or a click elsewhere; Esc cancels) in one undo step. The group's launcher opens a Size dialog: height and width, scale of the original size (or of the size it opened with), Lock aspect ratio, the original size with its pixels, and Reset. `picture.size {"original": true, "scale"?}` sizes from the original; sizes past 4000 pt that keep the proportions shrink as a whole. |
 | 2026-10-16 | Save Changes gives assistive technology a named alert dialog with the loss warning and any save failure; visual layout and save policy unchanged (#1015). Native screen-reader verification remains pending. |
 | 2026-10-17 | `design.scaleFontSizes` (Design › Document Formatting): grow or shrink every style's font size at once, by points (`delta`) or percent, rounded to half points and clamped to 1–1638 pt; inherited sizes follow, runs are untouched, one undo step (#1475) |
@@ -770,6 +771,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-17 | trivial | A line breaks after a hyphen before a digit, like Word (#2712) |
 | 2026-10-15 | trivial | Progress log: text above a float's anchor wraps around it, #2048 |
 | 2026-10-18 | trivial | Progress log: long navigation headings wrap within the pane instead of ending in an ellipsis (#3015) |
+| 2026-10-26 | trivial | View › Window across the native windows (#322): View catalog 26/29 → 29/29 |
 | 2026-10-18 | trivial | Font list starts at its first row after clearing a no-match query; recent heading remains visible (#2068) |
 | 2026-10-18 | trivial | A word after a slash wraps whole, like Word (#2963) |
 | 2026-10-19 | trivial | Progress log: render threads reused while typing (#3027) |
