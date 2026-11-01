@@ -3286,6 +3286,61 @@ fn freeform_arrow_end_draws_at_the_last_point() {
 }
 
 #[test]
+fn an_arrowhead_is_as_long_and_wide_as_its_sizes_make_it() {
+    // Word draws an arrowhead 2, 3 or 5 times the line's width long and wide (small, medium,
+    // large), and a line thinner than 2 points as if it were 2 points (measured in Word's PDFs).
+    use wordcraft_doc::connector::{ArrowKind, ArrowSize, ArrowStyle, ShapeExtra};
+    use wordcraft_doc::graphic::PathSeg;
+    use wordcraft_doc::para::{Float, ShapeKind};
+    use wordcraft_doc::props::Rgb;
+
+    let style = |width, length| ArrowStyle { kind: ArrowKind::Triangle, width, length };
+    let cases = [
+        (0.75, style(ArrowSize::Small, ArrowSize::Large), style(ArrowSize::Large, ArrowSize::Small), (10.0, 4.0), (4.0, 10.0)),
+        (0.75, ArrowStyle::default(), ArrowStyle::default(), (6.0, 6.0), (6.0, 6.0)),
+        (3.0, style(ArrowSize::Medium, ArrowSize::Large), style(ArrowSize::Small, ArrowSize::Medium), (15.0, 9.0), (9.0, 6.0)),
+        (6.0, style(ArrowSize::Large, ArrowSize::Large), style(ArrowSize::Small, ArrowSize::Small), (30.0, 30.0), (12.0, 12.0)),
+    ];
+    for (line_width, start_style, end_style, start_dims, end_dims) in cases {
+        let shape = InlineObject::Shape {
+            kind: ShapeKind::Line,
+            w: 100.0,
+            h: 0.0,
+            fill: None,
+            stroke: Some(Rgb::BLACK),
+            stroke_width: line_width,
+            float: Float::default(),
+            story: None,
+            freeform: None,
+            effects: Default::default(),
+            extra: ShapeExtra { arrow_start: true, arrow_end: true, start_style, end_style, ..Default::default() },
+        };
+        let mut doc = Document::from_text("Scan");
+        doc.insert_object(&Pos::body(0, 0), shape, &Default::default()).unwrap();
+        let draws = flat(display::page_display(&doc, &lay(&doc).pages[0], &Default::default()));
+        // Each arrowhead: its length (tip to the middle of its base) and width (across its base),
+        // the start's first.
+        let heads: Vec<(f32, f32)> = draws
+            .iter()
+            .filter_map(|draw| match draw {
+                display::Draw::Path { fill: Some(display::Paint::Solid(Rgb::BLACK, _)), segs, .. } => match segs.as_slice() {
+                    [PathSeg::Move(tx, ty), PathSeg::Line(ax, ay), PathSeg::Line(bx, by), PathSeg::Close] => {
+                        let (mx, my) = ((ax + bx) / 2.0, (ay + by) / 2.0);
+                        Some(((tx - mx).hypot(ty - my), (ax - bx).hypot(ay - by)))
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        assert_eq!(heads.len(), 2, "{line_width}: {heads:?}");
+        for ((got, want), end) in heads.iter().zip([start_dims, end_dims]).zip(["start", "end"]) {
+            assert!((got.0 - want.0).abs() < 0.01 && (got.1 - want.1).abs() < 0.01, "{line_width} pt line, {end}: got {got:?}, want {want:?}");
+        }
+    }
+}
+
+#[test]
 fn hidden_drawings_are_neither_drawn_nor_take_room() {
     // A hidden floating shape (VML `visibility:hidden`, `wp:docPr/@hidden`): no wrap area, nothing
     // drawn, as in Word for Windows. A hidden inline one takes no room in its line.

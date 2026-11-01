@@ -1,6 +1,7 @@
 use super::options::DisplayOptions;
 use super::paint::{Paint, paint_for};
 use super::{BezPath, Document, Draw, FaceRef, Graphic, GraphicItem, GraphicKind, InlineObject, PathSeg, Rect, Rgb, ShapeKind, Spin, TextAlign};
+use wordcraft_doc::connector::ArrowStyle;
 
 /// The draws of a chart or diagram's items inside `rect` (page coordinates). The items were built
 /// for the size `g.w` × `g.h` (0: `rect`'s own size), so they are scaled to `rect`; strokes and text
@@ -143,7 +144,7 @@ pub(super) fn shape_draws(rect: Rect, look: &ShapeLook, opts: &DisplayOptions, o
                 }
                 if !closed
                     && extra.arrow_end
-                    && let Some(arrow) = path_arrowhead(&pts, color, width)
+                    && let Some(arrow) = path_arrowhead(&pts, color, width, extra.end_style)
                 {
                     out.push(arrow);
                 }
@@ -172,7 +173,7 @@ pub(super) fn shape_draws(rect: Rect, look: &ShapeLook, opts: &DisplayOptions, o
             && let Some(color) = stroke
         {
             let points: Vec<(f32, f32)> = pts.iter().map(|[x, y]| (*x, *y)).collect();
-            if let Some(arrow) = path_arrowhead(&points, color, width) {
+            if let Some(arrow) = path_arrowhead(&points, color, width, extra.end_style) {
                 out.push(arrow);
             }
         }
@@ -185,10 +186,10 @@ fn path_stroke_width(width: f32) -> f32 {
 }
 
 /// Make a filled triangular arrowhead at the last point, in the points' coordinate space.
-/// The last distinct segment supplies its direction and the bounded stroke width sets its size.
+/// The last distinct segment supplies its direction; `style` and the stroke width set its size.
 /// Returns `None` if there is no usable final segment. The triangle has no outline, so the path's
 /// cap setting does not affect its appearance.
-fn path_arrowhead(points: &[(f32, f32)], color: Rgb, stroke_width: f32) -> Option<Draw> {
+fn path_arrowhead(points: &[(f32, f32)], color: Rgb, stroke_width: f32, style: ArrowStyle) -> Option<Draw> {
     let tip = *points.last()?;
     let (prev_x, prev_y) = points.iter().rev().skip(1).copied().find(|p| *p != tip)?;
     let dx = tip.0 - prev_x;
@@ -197,13 +198,17 @@ fn path_arrowhead(points: &[(f32, f32)], color: Rgb, stroke_width: f32) -> Optio
     if !length.is_finite() || length <= f32::EPSILON {
         return None;
     }
-    let (dx, dy) = (dx / length, dy / length);
-    let width = if stroke_width.is_finite() { stroke_width.clamp(0.25, 200.0) } else { 0.75 };
-    let len = (width * 3.5).max(7.0);
+    Some(arrowhead(tip, (dx / length, dy / length), stroke_width, style, color))
+}
+
+/// A filled triangular arrowhead with its tip at `tip`, pointing along unit vector `dir`: as long
+/// and as wide as `style` makes it for a `stroke_width` line ([`ArrowStyle::dims`]).
+fn arrowhead(tip: (f32, f32), (dx, dy): (f32, f32), stroke_width: f32, style: ArrowStyle, color: Rgb) -> Draw {
+    let (len, wide) = style.dims(stroke_width);
     let (bx, by) = (tip.0 - dx * len, tip.1 - dy * len);
-    let (nx, ny) = (-dy * len * 0.45, dx * len * 0.45);
+    let (nx, ny) = (-dy * wide / 2.0, dx * wide / 2.0);
     let segs = vec![PathSeg::Move(tip.0, tip.1), PathSeg::Line(bx + nx, by + ny), PathSeg::Line(bx - nx, by - ny), PathSeg::Close];
-    Some(Draw::Path { segs, fill: Some(Paint::solid(color)), stroke: None, stroke_width: 0.0, dash: Vec::new(), cap: Default::default() })
+    Draw::Path { segs, fill: Some(Paint::solid(color)), stroke: None, stroke_width: 0.0, dash: Vec::new(), cap: Default::default() }
 }
 
 /// A line or connector at `rect` (its unflipped frame: flips are the frame's turn), with its
@@ -249,17 +254,10 @@ fn line_draws(
     // to the bottom-right.
     let (start, end) =
         if kind == ShapeKind::Line { ((rect.x, rect.bottom()), (rect.right(), rect.y)) } else { ((rect.x, rect.y), (rect.right(), rect.bottom())) };
-    let width = if stroke_width.is_finite() { stroke_width.clamp(0.25, 200.0) } else { 0.75 };
-    let len = (width * 3.5).max(7.0);
-    for (on, tip, at_end) in [(extra.arrow_start, start, false), (extra.arrow_end, end, true)] {
-        if !on {
-            continue;
+    for (on, tip, at_end, style) in [(extra.arrow_start, start, false, extra.start_style), (extra.arrow_end, end, true, extra.end_style)] {
+        if on {
+            out.push(arrowhead(tip, end_direction(kind, rect.w, rect.h, at_end), stroke_width, style, color));
         }
-        let (dx, dy) = end_direction(kind, rect.w, rect.h, at_end);
-        let (bx, by) = (tip.0 - dx * len, tip.1 - dy * len);
-        let (nx, ny) = (-dy * len * 0.45, dx * len * 0.45);
-        let segs = vec![PathSeg::Move(tip.0, tip.1), PathSeg::Line(bx + nx, by + ny), PathSeg::Line(bx - nx, by - ny), PathSeg::Close];
-        out.push(Draw::Path { segs, fill: Some(Paint::solid(color)), stroke: None, stroke_width: 0.0, dash: Vec::new(), cap: Default::default() });
     }
 }
 
