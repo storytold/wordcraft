@@ -5,6 +5,242 @@ use wordcraft_doc::{Document, Pos};
 
 use super::*;
 
+/// #4764: Ctrl+Shift drags the selected object into an aligned copy, without changing
+/// the original or clipboard, and the whole drop is one undo step.
+#[test]
+fn ctrl_shift_drag_copies_along_the_dominant_axis() {
+    use egui::{Event, Modifiers, PointerButton};
+    for (dx, dy, want_x, want_y) in [(150.0, 35.0, 350.0, 300.0), (25.0, 120.0, 200.0, 420.0)] {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(Document::new()), crate::Services::default());
+        app.run("view.commentsPane", json!({"value": false})).unwrap();
+        app.run("insert.shape", json!({"kind": "rectangle", "width": 100, "height": 60})).unwrap();
+        app.run("arrange.bounds", json!({"page": 0, "x": 200, "y": 300})).unwrap();
+        app.session.clipboard_text = "untouched clipboard".into();
+        let before = app.session.doc.clone();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 1100.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(6);
+        let from = crate::canvas::page_to_screen(h.state_mut(), 0, 250.0, 330.0).unwrap();
+        let to = crate::canvas::page_to_screen(h.state_mut(), 0, 250.0 + dx, 330.0 + dy).unwrap();
+        let mods = Modifiers { shift: true, ..Modifiers::COMMAND };
+        h.event(Event::ModifiersChanged(mods));
+        h.event(Event::PointerMoved(from));
+        h.event(Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: mods });
+        h.run_steps(1);
+        for k in 1..=4 {
+            h.event(Event::PointerMoved(from + (to - from) * (k as f32 / 4.0)));
+            h.run_steps(1);
+        }
+        let d = h.state().canvas.obj_drag.as_ref().expect("Ctrl+Shift starts a copy drag");
+        assert!(d.copy);
+        assert!((d.drag.rect.x - want_x).abs() < 0.01 && (d.drag.rect.y - want_y).abs() < 0.01, "aligned preview: {:?}", d.drag.rect);
+        h.event(Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: mods });
+        h.run_steps(3);
+        h.event(Event::ModifiersChanged(Modifiers::NONE));
+        h.run_steps(1);
+        assert!(h.state().canvas.obj_drag.is_none());
+        assert_eq!(h.state().session.clipboard_text, "untouched clipboard");
+        let (pos, _) = selected(h.state()).expect("the duplicate is selected");
+        let layout = h.state_mut().session.layout();
+        let copy = layout.object(&pos, 0).unwrap();
+        assert!((copy.rect.x - want_x).abs() < 0.01 && (copy.rect.y - want_y).abs() < 0.01, "aligned drop: {:?}", copy.rect);
+        assert!(layout.find_object(0, |o| (o.rect.x - 200.0).abs() < 0.01 && (o.rect.y - 300.0).abs() < 0.01).is_some());
+        let after = h.state().session.doc.clone();
+        assert_ne!(after, before);
+        h.state_mut().run("edit.undo", json!({})).unwrap();
+        assert_eq!(h.state().session.doc, before);
+        h.state_mut().run("edit.redo", json!({})).unwrap();
+        assert_eq!(h.state().session.doc, after);
+    }
+}
+
+/// Guides can snap an aligned copy along its free axis, and live Shift changes or Escape
+/// do not leave a stale constraint or commit a cancelled copy.
+#[test]
+fn ctrl_shift_drag_keeps_its_axis_with_guides_and_live_modifiers() {
+    use egui::{Event, Modifiers, PointerButton};
+    let mut app = WordApp::new(wordcraft_engine::Session::new(Document::new()), Default::default());
+    app.run("view.commentsPane", json!({"value": false})).unwrap();
+    app.run("insert.shape", json!({"kind": "rectangle", "width": 100, "height": 60})).unwrap();
+    app.run("arrange.bounds", json!({"page": 0, "x": 100, "y": 250})).unwrap();
+    app.run("caret.docEnd", json!({})).unwrap();
+    app.run("insert.shape", json!({"kind": "rectangle", "width": 60, "height": 60})).unwrap();
+    app.run("arrange.bounds", json!({"page": 0, "x": 450, "y": 252})).unwrap();
+    app.run("select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 3)})).unwrap();
+    let before = app.session.doc.clone();
+    let depth = app.session.undo_depth();
+    let mut h = rotation_window(app);
+    let centre = h.state_mut().session.layout().pages[0].w / 2.0;
+    let from = crate::canvas::page_to_screen(h.state_mut(), 0, 150.0, 280.0).unwrap();
+    let to = crate::canvas::page_to_screen(h.state_mut(), 0, centre + 1.5, 315.0).unwrap();
+    let mods = Modifiers { shift: true, ..Modifiers::COMMAND };
+    h.event(Event::ModifiersChanged(mods));
+    h.event(Event::PointerMoved(from));
+    h.event(Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: mods });
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.event(Event::PointerMoved(from + (to - from) * (k as f32 / 4.0)));
+        h.run_steps(1);
+    }
+    let d = h.state().canvas.obj_drag.as_ref().unwrap();
+    assert!((d.drag.rect.x + 50.0 - centre).abs() < 0.01, "the free axis still snaps");
+    assert!((d.drag.rect.y - 250.0).abs() < 0.01, "the nearby object's y guide must not move the copy");
+    assert!(d.guides.iter().all(|g| g.axis == guides::Axis::X));
+    assert!(!d.guides.is_empty());
+    h.event(Event::ModifiersChanged(Modifiers::COMMAND));
+    h.run_steps(1);
+    assert!((h.state().canvas.obj_drag.as_ref().unwrap().drag.rect.y - 250.0).abs() > 10.0, "Shift up releases the axis");
+    h.event(Event::ModifiersChanged(mods));
+    h.run_steps(1);
+    assert!((h.state().canvas.obj_drag.as_ref().unwrap().drag.rect.y - 250.0).abs() < 0.01, "Shift down restores the axis");
+    h.event(Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: mods });
+    h.run_steps(1);
+    assert!(h.state().canvas.obj_drag.is_none());
+    h.event(Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: mods });
+    h.run_steps(2);
+    assert_eq!(h.state().session.doc, before);
+    assert_eq!(h.state().session.undo_depth(), depth);
+}
+
+/// Ctrl+Shift on another object still adds it to the selection, as do Shift and Ctrl.
+#[test]
+fn copy_axis_modifiers_keep_additive_object_clicks() {
+    use egui::{Event, Modifiers, PointerButton};
+    for mods in [Modifiers::SHIFT, Modifiers::COMMAND, Modifiers { shift: true, ..Modifiers::COMMAND }] {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(Document::new()), Default::default());
+        app.run("view.commentsPane", json!({"value": false})).unwrap();
+        for x in [100, 350] {
+            app.run("caret.docEnd", json!({})).unwrap();
+            app.run("insert.shape", json!({"kind": "rectangle", "width": 100, "height": 60})).unwrap();
+            app.run("arrange.bounds", json!({"page": 0, "x": x, "y": 250})).unwrap();
+        }
+        app.run("select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 3)})).unwrap();
+        let before = app.session.doc.clone();
+        let depth = app.session.undo_depth();
+        let mut h = rotation_window(app);
+        let at = crate::canvas::page_to_screen(h.state_mut(), 0, 400.0, 280.0).unwrap();
+        h.event(Event::ModifiersChanged(mods));
+        h.event(Event::PointerMoved(at));
+        h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: mods });
+        h.run_steps(1);
+        h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: mods });
+        h.run_steps(2);
+        assert!(h.state().canvas.obj_drag.is_none());
+        assert_eq!(wordcraft_engine::cmd::objects::picked_objects(&h.state().session), vec![Pos::body(0, 0), Pos::body(0, 3)]);
+        assert_eq!(h.state().session.doc, before);
+        assert_eq!(h.state().session.undo_depth(), depth);
+        if mods.command && mods.shift {
+            h.run_steps(4);
+            h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: mods });
+            h.run_steps(1);
+            h.event(Event::PointerMoved(at + egui::vec2(100.0, 20.0)));
+            h.run_steps(1);
+            assert!(h.state().canvas.obj_drag.as_ref().is_some_and(|d| d.copy), "a secondary selected object starts an aligned copy");
+            h.event(Event::PointerButton { pos: at + egui::vec2(100.0, 20.0), button: PointerButton::Primary, pressed: false, modifiers: mods });
+            h.run_steps(2);
+            assert_eq!(h.state().session.doc.para_at(&Pos::body(0, 0)).unwrap().objects.len(), 3);
+            h.state_mut().run("edit.undo", json!({})).unwrap();
+            assert_eq!(h.state().session.doc, before);
+        }
+    }
+}
+
+/// A middle-button scroll during an aligned copy must not move its locked document row
+/// onto another page when the original page scrolls off screen.
+#[test]
+fn ctrl_shift_drag_keeps_its_document_axis_after_middle_scroll() {
+    use egui::{Event, Modifiers, PointerButton};
+    let text = vec!["Original long document for a scrolling copy."; 120].join("\n");
+    let mut app = WordApp::new(wordcraft_engine::Session::new(Document::from_text(&text)), Default::default());
+    app.run("view.commentsPane", json!({"value": false})).unwrap();
+    app.run("caret.docStart", json!({})).unwrap();
+    app.run("insert.shape", json!({"kind": "rectangle", "width": 100, "height": 60})).unwrap();
+    app.run("arrange.bounds", json!({"page": 0, "x": 100, "y": 250})).unwrap();
+    app.ui.alignment_guides = false;
+    app.canvas.auto_scroll.supported = true;
+    let before = app.session.doc.clone();
+    let mut h = rotation_window(app);
+    assert!(h.state_mut().session.layout().pages.len() > 2);
+    let from = crate::canvas::page_to_screen(h.state_mut(), 0, 150.0, 280.0).unwrap();
+    let to = crate::canvas::page_to_screen(h.state_mut(), 0, 450.0, 280.0).unwrap();
+    let mods = Modifiers { shift: true, ..Modifiers::COMMAND };
+    h.event(Event::ModifiersChanged(mods));
+    h.event(Event::PointerMoved(from));
+    h.event(Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: mods });
+    h.run_steps(1);
+    h.event(Event::PointerMoved(to));
+    h.run_steps(1);
+    let offset = h.state().canvas.scroll_offset.y;
+    h.event(Event::PointerButton { pos: to, button: PointerButton::Middle, pressed: true, modifiers: mods });
+    h.run_steps(1);
+    let below = to + egui::vec2(0.0, 150.0);
+    h.event(Event::PointerMoved(below));
+    h.run_steps(16);
+    assert!(h.state().canvas.scroll_offset.y > offset + 500.0, "the real middle-button gesture scrolls the canvas");
+    h.event(Event::PointerButton { pos: below, button: PointerButton::Middle, pressed: false, modifiers: mods });
+    h.run_steps(3);
+    let d = h.state().canvas.obj_drag.as_ref().unwrap();
+    assert_eq!(d.drag.to_page, 0, "the copy stays on the original horizontal row");
+    assert!((d.drag.rect.y - 250.0).abs() < 0.01, "the document y stays locked after scrolling");
+    h.event(Event::PointerButton { pos: below, button: PointerButton::Primary, pressed: false, modifiers: mods });
+    h.run_steps(3);
+    let (pos, _) = selected(h.state()).unwrap();
+    let hit = h.state_mut().session.layout().object(&pos, 0).unwrap();
+    assert_eq!(hit.page, 0);
+    assert!((hit.rect.y - 250.0).abs() < 0.01);
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert_eq!(h.state().session.doc, before);
+}
+
+/// An inline Ctrl+Shift copy follows the text insertion cursor, without an axis constraint.
+#[test]
+fn ctrl_shift_drag_copies_an_inline_picture_at_the_text_cursor() {
+    use egui::{Event, Modifiers, PointerButton};
+    let mut app = WordApp::new(wordcraft_engine::Session::new(Document::from_text("First paragraph.\nSecond paragraph.")), Default::default());
+    app.run("view.commentsPane", json!({"value": false})).unwrap();
+    let image =
+        InlineObject::Image { media: String::new(), w: 80.0, h: 40.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None };
+    app.session.doc.insert_object(&Pos::body(1, 0), image, &Default::default()).unwrap();
+    app.session.touch();
+    app.run("select.range", json!({"anchor": Pos::body(1, 0), "focus": Pos::body(1, 3)})).unwrap();
+    let before = app.session.doc.clone();
+    let depth = app.session.undo_depth();
+    let mut h = rotation_window(app);
+    let o = h.state_mut().session.layout().object(&Pos::body(1, 0), 0).unwrap();
+    let target = Pos::body(0, "First".len());
+    let c = h.state_mut().session.layout().caret(&target).unwrap();
+    let from = crate::canvas::page_to_screen(h.state_mut(), 0, o.rect.x + o.rect.w / 2.0, o.rect.y + o.rect.h / 2.0).unwrap();
+    let to = crate::canvas::page_to_screen(h.state_mut(), 0, c.x + 0.5, c.top + c.height / 2.0).unwrap();
+    let mods = Modifiers { shift: true, ..Modifiers::COMMAND };
+    h.event(Event::ModifiersChanged(mods));
+    h.event(Event::PointerMoved(from));
+    h.event(Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: mods });
+    h.run_steps(1);
+    for k in 1..=5 {
+        h.event(Event::PointerMoved(from + (to - from) * (k as f32 / 5.0)));
+        h.run_steps(1);
+    }
+    let d = h.state().canvas.obj_drag.as_ref().unwrap();
+    assert!(d.copy);
+    assert_eq!(d.drop_at.as_ref().map(|(p, _)| p), Some(&target));
+    assert!(d.guides.is_empty());
+    h.event(Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: mods });
+    h.run_steps(3);
+    let (pos, image) = selected(h.state()).unwrap();
+    assert_eq!(pos, target);
+    assert!(!image.is_floating());
+    assert_eq!(h.state().session.doc.para_at(&Pos::body(1, 0)).unwrap().objects.len(), 1, "the original remains inline");
+    assert_eq!(h.state().session.undo_depth(), depth + 1);
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert_eq!(h.state().session.doc, before);
+}
+
 /// An app whose first paragraph holds `obj`, and where it's laid out.
 fn app_with(obj: InlineObject) -> (WordApp, ObjectHit) {
     let mut app = WordApp::new(wordcraft_engine::Session::new(Document::new()), crate::Services::default());
