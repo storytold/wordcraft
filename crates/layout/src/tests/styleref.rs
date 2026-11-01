@@ -131,6 +131,8 @@ fn a_none_level_heading_s_number_has_no_text_and_no_trailing_period() {
         headers(&d)[3].clone()
     };
     assert!(numbered("Note", &[r#"STYLEREF "Heading 2" \n \t"#]).is_empty(), "nothing is drawn");
+    // `\s` is a chapter number: a "none" label isn't one, so the heading's count stands in.
+    assert_eq!(numbered("Note", &[r#"STYLEREF "Heading 2" \s"#]), ["1"]);
     assert_eq!(numbered("", &[r#"STYLEREF "Heading 2" \w"#, r#"STYLEREF "Heading 2" \r"#]), ["3", "3"]);
 }
 

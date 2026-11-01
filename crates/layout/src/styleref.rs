@@ -290,7 +290,15 @@ impl StyleIndex {
         let mut out = match code.number {
             Number::Text if code.position => String::new(),
             Number::Text => text,
-            Number::Chapter => e.label.as_deref().map(chapter_number).filter(|s| !s.is_empty()).unwrap_or_else(|| e.ordinal.to_string()),
+            // A "none" level's label (`Note`) is no chapter number: the heading's count stands in,
+            // as for an unnumbered heading.
+            Number::Chapter => e
+                .label
+                .as_deref()
+                .filter(|_| e.levels.iter().any(|(k, ..)| *k == e.level))
+                .map(chapter_number)
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| e.ordinal.to_string()),
             Number::Plain | Number::Full => {
                 let own = match &e.label {
                     Some(l) if code.suppress => suppress(l, &e.levels, e.level),
@@ -328,7 +336,9 @@ fn chapter_number(label: &str) -> String {
 /// label (`level` has no number of its own) holding none is left with nothing (`Note`, #4985);
 /// any other label that holds none is kept whole.
 fn suppress(label: &str, levels: &[(u8, String, bool)], level: u8) -> String {
-    let kept: Vec<&str> = label.split_whitespace().filter(|w| levels.iter().any(|(_, v, _)| !v.is_empty() && w.contains(v.as_str()))).collect();
+    // Only the numbers the label's template shows: an ancestor's `a` isn't in `Chapter`.
+    let kept: Vec<&str> =
+        label.split_whitespace().filter(|w| levels.iter().any(|(_, v, shown)| *shown && !v.is_empty() && w.contains(v.as_str()))).collect();
     let none = !levels.iter().any(|(k, ..)| *k == level);
     let s = match kept.is_empty() {
         true if none => String::new(),
@@ -371,6 +381,7 @@ mod tests {
     #[test]
     fn suppress_keeps_the_number() {
         assert_eq!(suppress("Chapter 2.", &[(0, "2".into(), true)], 0), "2");
+        assert_eq!(suppress("Chapter", &[(0, "a".into(), false)], 1), "", "an ancestor's number the label doesn't show");
         assert_eq!(suppress("Note", &[(0, "3".into(), false)], 1), "", "a none level's label");
         assert_eq!(suppress("Appendix", &[(0, "3".into(), false)], 0), "Appendix", "kept whole when the level has a number");
         assert_eq!(chapter_number("Chapter IV."), "IV");
