@@ -26,14 +26,17 @@ pub struct Note {
 
 fn root(doc: &Document, id: u32) -> u32 {
     let mut cur = id;
+    let mut seen = HashSet::new();
+    seen.insert(id);
     for _ in 0..MAX_PARENT_CHAIN {
         match doc.comments.get(&cur).and_then(|c| c.parent) {
-            Some(p) if p != cur && doc.comments.contains_key(&p) => cur = p,
+            Some(p) if p != cur && seen.insert(p) && doc.comments.contains_key(&p) => cur = p,
             _ => break,
         }
     }
     cur
 }
+
 
 fn author(a: &str) -> String {
     if a.trim().is_empty() { "Author".to_string() } else { a.trim().to_string() }
@@ -116,19 +119,35 @@ pub fn notes(doc: &Document) -> Vec<Note> {
     out
 }
 
+fn rfind_case_insensitive(haystack: &str, needle: &str) -> Option<usize> {
+    let n_len = needle.len();
+    if haystack.len() < n_len {
+        return None;
+    }
+    for i in (0..=haystack.len() - n_len).rev() {
+        if haystack.is_char_boundary(i) && haystack.is_char_boundary(i + n_len) {
+            if haystack[i..i + n_len].eq_ignore_ascii_case(needle) {
+                return Some(i);
+            }
+        }
+    }
+    None
+}
+
 /// `bytes` (a copy in format `ext`) with the comments written at its end.
 pub fn append(ext: &str, doc: &Document, bytes: Vec<u8>) -> Vec<u8> {
     let notes = notes(doc);
     if notes.is_empty() {
         return bytes;
     }
-    match ext {
+    let clean = ext.trim_start_matches('.').to_ascii_lowercase();
+    match clean.as_str() {
         "html" | "htm" | "xhtml" => {
             let mut s = match String::from_utf8(bytes) {
                 Ok(s) => s,
                 Err(e) => return e.into_bytes(),
             };
-            let at = s.rfind("</body>").unwrap_or(s.len());
+            let at = rfind_case_insensitive(&s, "</body>").unwrap_or(s.len());
             s.insert_str(at, &html(&notes));
             s.into_bytes()
         }
@@ -198,3 +217,100 @@ fn text(notes: &[Note]) -> String {
     }
     s
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use wordcraft_doc::{Block, Comment, Document, Paragraph, Part};
+
+    #[test]
+    fn append_handles_case_insensitive_extensions_and_body_tag() {
+        let mut doc = Document::default();
+        let part_id = 100;
+        let mut p = Paragraph::default();
+        p.text = "This is a comment".into();
+        doc.parts.insert(
+            part_id,
+            Part {
+                blocks: vec![Arc::new(Block::Para(p))],
+                ..Default::default()
+            },
+        );
+        doc.comments.insert(
+            1,
+            Comment {
+                author: "Alice".into(),
+                part: part_id,
+                parent: None,
+                ..Default::default()
+            },
+        );
+
+        let html_input = b"<!DOCTYPE html><html><head><title>Test</title></head><BODY><p>Content</p></BODY></html>".to_vec();
+        let out_html = append(".HTML", &doc, html_input);
+        let s = String::from_utf8(out_html).unwrap();
+        assert!(s.contains("<section class=\"comments\">"));
+        assert!(s.ends_with("</BODY></html>"));
+
+        let md_input = b"# Title\n\nBody".to_vec();
+        let out_md = append(".MD", &doc, md_input);
+        let s_md = String::from_utf8(out_md).unwrap();
+        assert!(s_md.contains("## Comments"));
+
+        let txt_input = b"Plain text".to_vec();
+        let out_txt = append(".TXT", &doc, txt_input);
+        let s_txt = String::from_utf8(out_txt).unwrap();
+        assert!(s_txt.contains("Comments"));
+    }
+
+    #[test]
+    fn comment_cycle_does_not_loop_or_falsely_become_root() {
+        let mut doc = Document::default();
+        let p1 = 101;
+        let p2 = 102;
+        doc.parts.insert(
+            p1,
+            Part {
+                blocks: vec![Arc::new(Block::Para(Paragraph::default()))],
+                ..Default::default()
+            },
+        );
+        doc.parts.insert(
+            p2,
+            Part {
+                blocks: vec![Arc::new(Block::Para(Paragraph::default()))],
+                ..Default::default()
+            },
+        );
+
+        // 1 -> 2 -> 1 cycle
+        doc.comments.insert(
+            1,
+            Comment {
+                author: "A".into(),
+                part: p1,
+                parent: Some(2),
+                ..Default::default()
+            },
+        );
+        doc.comments.insert(
+            2,
+            Comment {
+                author: "B".into(),
+                part: p2,
+                parent: Some(1),
+                ..Default::default()
+            },
+        );
+
+        let r1 = root(&doc, 1);
+        let r2 = root(&doc, 2);
+        assert_ne!(r1, 1);
+        assert_ne!(r2, 2);
+
+        let n = notes(&doc);
+        assert!(n.is_empty());
+    }
+}
+
