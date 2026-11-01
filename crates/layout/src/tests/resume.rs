@@ -33,16 +33,18 @@ fn long_doc() -> Document {
     doc
 }
 
-/// Lay `doc` out with `cache` (its pass before kept), and from scratch: the same pages.
-fn assert_fresh(doc: &Document, cache: &mut LayoutCache, what: &str) {
+/// Lay `doc` out with `cache` (its pass before kept), and from scratch: the same pages. Returns
+/// the fresh layout.
+fn assert_fresh(doc: &Document, cache: &mut LayoutCache, what: &str) -> DocLayout {
     let ours = layout(doc, cache, &LayoutOptions::default());
     let fresh = layout(doc, &mut LayoutCache::new(), &LayoutOptions::default());
     assert!(format!("{:?}", ours.pages) == format!("{:?}", fresh.pages), "{what}: not the pages of a fresh layout");
     assert_eq!(ours.text_boxes, fresh.text_boxes, "{what}: text boxes laid out");
     assert_eq!(
-        format!("{:?}", { ours.index.into_iter().collect::<std::collections::BTreeMap<_, _>>() }),
-        format!("{:?}", { fresh.index.into_iter().collect::<std::collections::BTreeMap<_, _>>() })
+        format!("{:?}", { ours.index.iter().collect::<std::collections::BTreeMap<_, _>>() }),
+        format!("{:?}", { fresh.index.iter().collect::<std::collections::BTreeMap<_, _>>() })
     );
+    fresh
 }
 
 fn at(block: usize, off: usize) -> Pos {
@@ -303,4 +305,91 @@ fn a_header_box_sized_to_its_text_lays_out_as_a_fresh_layout() {
         assert_fresh(&doc, &mut cache, "typing");
     }
     assert!(crate::resume::STARTS.get().1 > joined, "no pass joined the pages before");
+}
+
+/// Random edits, half of them in the first paragraph of a page or the one before it, each laid
+/// out from the earlier pass and from scratch: typing, lines more, splits, joins, deletions
+/// within and across paragraphs, and paragraphs gaining or losing keep with next, keep
+/// together, a page break, a list number or a border. The seed and the edit are in the message
+/// when the pages differ.
+#[test]
+fn random_edits_lay_out_as_a_fresh_layout() {
+    let starts = crate::resume::STARTS.get();
+    let cp = CharProps::default();
+    let border = Some(Borders { top: Some(Border::single(1.0)), bottom: Some(Border::single(1.0)), ..Default::default() });
+    for seed in [0x9e37_79b9_7f4a_7c15_u64, 0x2545_f491_4f6c_dd1d, 0x0bad_5eed_1234_5678] {
+        let mut doc = long_doc();
+        let list = doc.numbering.add_list(ListKind::Numbered);
+        // Bordered paragraphs in boxes of four all through, some of them across a page break.
+        for (_, b) in doc.body.iter_mut().enumerate().filter(|(i, _)| i % 17 < 4) {
+            if let Block::Para(p) = Arc::make_mut(b) {
+                p.props.borders = border;
+            }
+        }
+        let mut cache = LayoutCache::new();
+        let mut l = layout(&doc, &mut cache, &LayoutOptions::default());
+        let mut state = seed;
+        let mut next = |n: usize| {
+            // xorshift64: the same edits on every run.
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state % n as u64) as usize
+        };
+        for step in 0..40 {
+            let page_of = |b: usize| l.index.get(&(StoryRef::Body, Path::top(b))).and_then(|v| v.first()).map(|(page, _)| *page);
+            let firsts: Vec<usize> = (1..doc.body.len() - 3).filter(|&b| page_of(b) > page_of(b - 1)).collect();
+            let block = match next(2) {
+                0 if !firsts.is_empty() => firsts[next(firsts.len())] - next(2),
+                _ => next(doc.body.len() - 3),
+            };
+            let len = |doc: &Document, b: usize| doc.para(StoryRef::Body, &Path::top(b)).map_or(0, |p| p.text.len());
+            let n = len(&doc, block);
+            let off = next(n + 1);
+            let what = match next(10) {
+                0 => {
+                    doc.insert_text(&at(block, off), "typed", &cp).unwrap();
+                    "typing"
+                }
+                1 => {
+                    doc.insert_text(&at(block, off), &" more words".repeat(next(60) + 1), &cp).unwrap();
+                    "lines more"
+                }
+                2 => {
+                    doc.split_paragraph(&at(block, off)).unwrap();
+                    "a paragraph split"
+                }
+                3 => {
+                    doc.delete_range(&at(block, n), &at(block + 1, 0)).unwrap();
+                    "two paragraphs joined"
+                }
+                4 => {
+                    doc.delete_range(&at(block, off), &at(block, (off + next(80)).min(n))).unwrap();
+                    "words deleted"
+                }
+                5 => {
+                    let to = block + 1 + next(2);
+                    doc.delete_range(&at(block, off), &at(to, next(len(&doc, to) + 1))).unwrap();
+                    "paragraphs deleted"
+                }
+                k => {
+                    let Block::Para(p) = Arc::make_mut(&mut doc.body[block]) else { continue };
+                    match k {
+                        6 => p.props.keep_next = Some(p.props.keep_next != Some(true)),
+                        7 => p.props.keep_lines = Some(p.props.keep_lines != Some(true)),
+                        8 => p.props.page_break_before = Some(p.props.page_break_before != Some(true)),
+                        _ if block % 2 == 0 => {
+                            p.props.numbering = if p.props.numbering.is_some() { None } else { Some(NumRef { num: list, level: 0 }) }
+                        }
+                        _ => p.props.borders = if p.props.borders.is_some() { None } else { border },
+                    }
+                    p.touch();
+                    "a paragraph's properties"
+                }
+            };
+            l = assert_fresh(&doc, &mut cache, &format!("seed {seed:#x}, edit {step}: {what} at block {block}, offset {off}"));
+        }
+    }
+    let (resumed, joined) = crate::resume::STARTS.get();
+    assert!(resumed - starts.0 >= 60 && joined - starts.1 >= 40, "started again {} times, joined {}", resumed - starts.0, joined - starts.1);
 }
