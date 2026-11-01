@@ -50,6 +50,9 @@ pub const NAMESPACES: &[(&str, &str)] = &[
     ("cx6", "http://schemas.microsoft.com/office/drawing/2016/5/12/chartex"),
     ("cx7", "http://schemas.microsoft.com/office/drawing/2016/5/13/chartex"),
     ("cx8", "http://schemas.microsoft.com/office/drawing/2016/5/14/chartex"),
+    // 3D models (`am3d:model3d`, [MS-ODRAWXML]) and the animation they may embed.
+    ("am3d", "http://schemas.microsoft.com/office/drawing/2017/model3d"),
+    ("a3danim", "http://schemas.microsoft.com/office/drawing/2018/animation/model3d"),
 ];
 
 /// The `a:ext` URI under which a drawing is marked decorative ([MS-ODRAWXML]), and the

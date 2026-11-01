@@ -148,7 +148,7 @@ fn shape(sp: &El, xf: Xf, b: [f64; 4], theme: &[Rgb], fit: f32, image: &mut dyn 
     if let Some(blip) = sppr.and_then(|p| p.child("a:blipFill")).and_then(|f| f.find("a:blip")) {
         // A picture fill stretches into the shape's box; no clipping to the outline.
         if let Some(media) = blip.attr("r:embed").and_then(image) {
-            out.push(GraphicItem::Image { rect, media });
+            out.push(GraphicItem::Image { rect, media, crop: [0.0; 4] });
         }
         filled = false;
     } else {

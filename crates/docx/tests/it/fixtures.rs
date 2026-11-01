@@ -1728,6 +1728,268 @@ fn resized_office_2016_chart_resizes_its_fallback_too() {
     assert_eq!(attr_values(&body, "wp:extent", "cx"), ["3657600", "3657600"], "{body}");
 }
 
+// ---- 3D models (am3d:model3d, [MS-ODRAWXML]) written back with their glTF part and picture ----
+
+const MODEL3D_NS: &str = "http://schemas.microsoft.com/office/drawing/2017/model3d";
+const ANIM3D_NS: &str = "http://schemas.microsoft.com/office/drawing/2018/animation/model3d";
+const CT_GLB: &str = "model/gltf-binary";
+/// A binary glTF header: the model is carried, never parsed.
+const GLB: &[u8] = b"glTF\x02\x00\x00\x00\x0c\x00\x00\x00";
+
+/// A package holding one 3D model as [MS-ODRAWXML] describes it: `am3d:model3d` (camera,
+/// transform, rendered picture, an animation's poster frame) in an `mc:Choice` requiring `am3d`,
+/// the same picture in the `mc:Fallback`. Without `model_rel` the model's part isn't related.
+fn model3d_docx(model_rel: bool) -> Vec<u8> {
+    let frame = r#"<wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="2743200" cy="1371600"/><wp:docPr id="1" name="3D Model 1"/><wp:cNvGraphicFramePr/>"#;
+    let model = format!(
+        r#"<am3d:model3d r:embed="rIdModel"><am3d:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="2743200" cy="1371600"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></am3d:spPr><am3d:camera><am3d:pos x="0" y="0" z="60000000"/><am3d:up dx="0" dy="36000000" dz="0"/><am3d:lookAt x="0" y="0" z="0"/><am3d:perspective fov="2700000"/></am3d:camera><am3d:trans><am3d:meterPerModelUnit n="1" d="1"/><am3d:rot ax="900000" ay="1800000" az="0"/></am3d:trans><am3d:raster rName="Renderer" rVer="1"><am3d:blip r:embed="rIdPic"/></am3d:raster><am3d:extLst><a:ext uri="{{00000000-0000-0000-0000-000000000001}}"><a3danim:posterFrame xmlns:a3danim="{ANIM3D_NS}" animId="0"/></a:ext></am3d:extLst><am3d:objViewport viewportSz="2743200"/><am3d:ambientLight><am3d:clr><a:scrgbClr r="50000" g="50000" b="50000"/></am3d:clr><am3d:illuminance n="500000" d="1000000"/></am3d:ambientLight></am3d:model3d>"#
+    );
+    let body = format!(
+        r#"<w:p><w:r><w:t>Model</w:t></w:r><w:r><mc:AlternateContent><mc:Choice xmlns:am3d="{MODEL3D_NS}" Requires="am3d"><w:drawing>{frame}<a:graphic><a:graphicData uri="{MODEL3D_NS}">{model}</a:graphicData></a:graphic></wp:inline></w:drawing></mc:Choice><mc:Fallback><w:drawing>{frame}<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="1" name="3D Model 1"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rIdPic"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="2743200" cy="1371600"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></mc:Fallback></mc:AlternateContent></w:r></w:p>"#
+    );
+    let doc = format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document {W_NS}><w:body>{body}</w:body></w:document>"#);
+    let model_rel = if model_rel {
+        r#"<Relationship Id="rIdModel" Type="http://schemas.microsoft.com/office/2017/06/relationships/model3d" Target="media/model3d1.glb"/>"#
+    } else {
+        ""
+    };
+    let doc_rels = format!(
+        r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{model_rel}<Relationship Id="rIdPic" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.png"/></Relationships>"#
+    );
+    let types = format!(
+        r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Default Extension="glb" ContentType="{CT_GLB}"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"#
+    );
+    zip(&[
+        ("[Content_Types].xml", types.as_bytes()),
+        ("_rels/.rels", ROOT_RELS.as_bytes()),
+        ("word/document.xml", doc.as_bytes()),
+        ("word/_rels/document.xml.rels", doc_rels.as_bytes()),
+        ("word/media/model3d1.glb", GLB),
+        ("word/media/image1.png", b"fallback picture bytes"),
+    ])
+}
+
+#[test]
+fn model_3d_keeps_its_model_part_and_fallback_through_saves() {
+    let mut d = wordcraft_docx::read(&model3d_docx(true)).unwrap();
+    for round in 0..2 {
+        let g = graphics(&d);
+        let [InlineObject::Graphic { w, graphic, .. }] = g.as_slice() else { panic!("round {round}: {g:?}") };
+        assert_eq!((*w, graphic.kind), (216.0, wordcraft_doc::graphic::GraphicKind::Model3d));
+        assert!(
+            graphic.items.iter().any(|i| matches!(i, wordcraft_doc::graphic::GraphicItem::Image { media, .. } if d.media.contains_key(media))),
+            "round {round}: the model shows its fallback picture"
+        );
+        let files = unzip(&wordcraft_docx::write(&d).unwrap());
+        let body = text(&files, "word/document.xml");
+        assert_eq!(attr_values(&body, "mc:Choice", "Requires"), ["am3d"], "{body}");
+        assert!(body.contains(&format!(r#"xmlns:am3d="{MODEL3D_NS}""#)), "am3d is declared: {body}");
+        assert_eq!(attr_values(&body, "am3d:perspective", "fov"), ["2700000"], "the camera: {body}");
+        assert_eq!(attr_values(&body, "a3danim:posterFrame", "animId"), ["0"], "the animation's poster frame: {body}");
+        let doc_rels = text(&files, "word/_rels/document.xml.rels");
+        let [model_id] = attr_values(&body, "am3d:model3d", "r:embed").try_into().unwrap_or_else(|_| panic!("model lost: {body}"));
+        let (kind, target) = rel(&doc_rels, &model_id);
+        assert!(kind.ends_with("/relationships/model3d"), "{kind}");
+        let model = part_at("word", &target);
+        assert_eq!(files.get(&model).map(Vec::as_slice), Some(GLB));
+        let types = text(&files, "[Content_Types].xml");
+        assert!(types.contains(&format!(r#"PartName="/{model}" ContentType="{CT_GLB}""#)), "{types}");
+        let fallback = body.split("<mc:Fallback>").nth(1).unwrap_or_else(|| panic!("no fallback: {body}"));
+        let [pic_id] = attr_values(fallback, "a:blip", "r:embed").try_into().unwrap_or_else(|_| panic!("fallback picture lost: {body}"));
+        assert_eq!(files.get(&part_at("word", &rel(&doc_rels, &pic_id).1)).map(Vec::as_slice), Some(&b"fallback picture bytes"[..]));
+        assert!(attr_values(&body, "wp:docPr", "name").iter().all(|n| n.starts_with("3D Model ")), "{body}");
+        let entries: Vec<_> = files.iter().map(|(name, bytes)| (name.as_str(), bytes.as_slice())).collect();
+        d = wordcraft_docx::read(&zip(&entries)).unwrap();
+    }
+}
+
+#[test]
+fn resized_model_3d_resizes_its_fallback_too() {
+    let mut d = wordcraft_docx::read(&model3d_docx(true)).unwrap();
+    if let Some(Block::Para(p)) = d.body.first_mut().map(std::sync::Arc::make_mut)
+        && let Some(InlineObject::Graphic { w, h, .. }) = p.objects.first_mut()
+    {
+        (*w, *h) = (288.0, 144.0);
+    }
+    let body = text(&unzip(&wordcraft_docx::write(&d).unwrap()), "word/document.xml");
+    assert_eq!(attr_values(&body, "wp:extent", "cx"), ["3657600", "3657600"], "{body}");
+    assert_eq!(attr_values(&body, "wp:extent", "cy"), ["1828800", "1828800"], "{body}");
+}
+
+#[test]
+fn model_3d_keeps_the_crop_of_its_picture() {
+    let mut files = unzip(&model3d_docx(true));
+    let blip = r#"<a:blip r:embed="rIdPic"/>"#;
+    let doc = text(&files, "word/document.xml").replacen(blip, &format!(r#"{blip}<a:srcRect l="10000" r="20000"/>"#), 1);
+    files.insert("word/document.xml".into(), doc.into_bytes());
+    let entries: Vec<_> = files.iter().map(|(name, bytes)| (name.as_str(), bytes.as_slice())).collect();
+    let d = wordcraft_docx::read(&zip(&entries)).unwrap();
+    let g = graphics(&d);
+    let [InlineObject::Graphic { graphic, .. }] = g.as_slice() else { panic!("{g:?}") };
+    let crop = graphic.items.iter().find_map(|i| match i {
+        wordcraft_doc::graphic::GraphicItem::Image { crop, .. } => Some(*crop),
+        _ => None,
+    });
+    assert_eq!(crop, Some([0.1, 0.0, 0.2, 0.0]));
+    let body = text(&unzip(&wordcraft_docx::write(&d).unwrap()), "word/document.xml");
+    assert_eq!(attr_values(&body, "a:srcRect", "r"), ["20000"], "{body}");
+}
+
+#[test]
+fn model_3d_after_a_choice_it_cant_keep_is_still_kept() {
+    let mut files = unzip(&model3d_docx(true));
+    let doc = text(&files, "word/document.xml");
+    let choice = doc.split("<mc:Choice").nth(1).and_then(|c| c.split("</mc:Choice>").next()).unwrap();
+    let unknown =
+        format!(r#"<mc:Choice{}</mc:Choice>"#, choice.replace(r#"Requires="am3d""#, r#"xmlns:x9="urn:example:unknown" Requires="am3d x9""#));
+    files.insert("word/document.xml".into(), doc.replacen("<mc:AlternateContent>", &format!("<mc:AlternateContent>{unknown}"), 1).into_bytes());
+    let entries: Vec<_> = files.iter().map(|(name, bytes)| (name.as_str(), bytes.as_slice())).collect();
+    let d = wordcraft_docx::read(&zip(&entries)).unwrap();
+    let g = graphics(&d);
+    let [InlineObject::Graphic { graphic, .. }] = g.as_slice() else { panic!("{g:?}") };
+    assert_eq!(graphic.kind, wordcraft_doc::graphic::GraphicKind::Model3d);
+    let body = text(&unzip(&wordcraft_docx::write(&d).unwrap()), "word/document.xml");
+    assert_eq!(attr_values(&body, "mc:Choice", "Requires"), ["am3d"], "only the Choice that can be kept: {body}");
+}
+
+/// A reader takes the first Choice it understands, so a model behind one isn't kept in its place.
+#[test]
+fn model_3d_after_a_choice_read_as_usual_leaves_that_choice_to_be_read() {
+    let mut files = unzip(&model3d_docx(true));
+    let doc = text(&files, "word/document.xml");
+    let picture = doc.split("<mc:Fallback>").nth(1).and_then(|f| f.split("</mc:Fallback>").next()).unwrap();
+    let first = format!(r#"<mc:Choice xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" Requires="w14">{picture}</mc:Choice>"#);
+    files.insert("word/document.xml".into(), doc.replacen("<mc:AlternateContent>", &format!("<mc:AlternateContent>{first}"), 1).into_bytes());
+    let entries: Vec<_> = files.iter().map(|(name, bytes)| (name.as_str(), bytes.as_slice())).collect();
+    let d = wordcraft_docx::read(&zip(&entries)).unwrap();
+    let objects: Vec<InlineObject> = paras(&d).iter().flat_map(|p| p.objects.iter()).cloned().collect();
+    assert!(matches!(objects.as_slice(), [InlineObject::Image { .. }]), "{objects:?}");
+}
+
+#[test]
+fn model_3d_without_its_model_part_opens_as_its_picture() {
+    // No relationship to the model, then a relationship to a part the package doesn't hold.
+    let mut files = unzip(&model3d_docx(true));
+    files.remove("word/media/model3d1.glb");
+    let entries: Vec<_> = files.iter().map(|(name, bytes)| (name.as_str(), bytes.as_slice())).collect();
+    for package in [model3d_docx(false), zip(&entries)] {
+        let d = wordcraft_docx::read(&package).unwrap();
+        let objects: Vec<InlineObject> = paras(&d).iter().flat_map(|p| p.objects.iter()).cloned().collect();
+        let [InlineObject::Image { media, .. }] = objects.as_slice() else { panic!("{objects:?}") };
+        assert!(d.media.contains_key(media));
+        let body = text(&unzip(&wordcraft_docx::write(&d).unwrap()), "word/document.xml");
+        assert!(!body.contains("am3d:model3d") && !body.contains("mc:AlternateContent"), "{body}");
+    }
+}
+
+/// `docx` with its `mc:Fallback` replaced by `fallback`.
+fn with_fallback(docx: &[u8], fallback: &str) -> Vec<u8> {
+    let mut files = unzip(docx);
+    let doc = text(&files, "word/document.xml");
+    let (head, rest) = doc.split_once("<mc:Fallback>").unwrap();
+    let (_, tail) = rest.split_once("</mc:Fallback>").unwrap();
+    files.insert("word/document.xml".into(), format!("{head}{fallback}{tail}").into_bytes());
+    let entries: Vec<_> = files.iter().map(|(name, bytes)| (name.as_str(), bytes.as_slice())).collect();
+    zip(&entries)
+}
+
+#[test]
+fn model_3d_with_no_fallback_keeps_its_model() {
+    use wordcraft_doc::graphic::{GraphicItem, GraphicKind};
+    // `mc:Fallback` is optional: the model is whole, there's only no picture to draw it from.
+    for fallback in ["", "<mc:Fallback/>"] {
+        let mut d = wordcraft_docx::read(&with_fallback(&model3d_docx(true), fallback)).unwrap();
+        for round in 0..2 {
+            let g = graphics(&d);
+            let [InlineObject::Graphic { w, graphic, .. }] = g.as_slice() else { panic!("{fallback:?} round {round}: {g:?}") };
+            assert_eq!((*w, graphic.kind), (216.0, GraphicKind::Model3d));
+            assert!(matches!(graphic.items.as_slice(), [GraphicItem::Image { media, .. }] if media.is_empty()), "the missing-picture box");
+            let out = wordcraft_docx::write(&d).unwrap();
+            let files = unzip(&out);
+            let body = text(&files, "word/document.xml");
+            assert_eq!(attr_values(&body, "mc:Choice", "Requires"), ["am3d"], "{body}");
+            let doc_rels = text(&files, "word/_rels/document.xml.rels");
+            let [model_id] = attr_values(&body, "am3d:model3d", "r:embed").try_into().unwrap_or_else(|_| panic!("model lost: {body}"));
+            assert_eq!(files.get(&part_at("word", &rel(&doc_rels, &model_id).1)).map(Vec::as_slice), Some(GLB));
+            d = wordcraft_docx::read(&out).unwrap();
+        }
+    }
+}
+
+#[test]
+fn office_2016_chart_with_no_fallback_keeps_its_chart() {
+    let docx = with_fallback(&chartex_docx("cx1", "http://schemas.microsoft.com/office/drawing/2015/9/8/chartex"), "");
+    let mut d = wordcraft_docx::read(&docx).unwrap();
+    for _ in 0..2 {
+        let g = graphics(&d);
+        let [InlineObject::Graphic { graphic, .. }] = g.as_slice() else { panic!("{g:?}") };
+        assert_eq!(graphic.kind, wordcraft_doc::graphic::GraphicKind::Chart);
+        assert!(
+            matches!(graphic.items.as_slice(), [wordcraft_doc::graphic::GraphicItem::Image { media, .. }] if media.is_empty()),
+            "the missing-picture box"
+        );
+        let out = wordcraft_docx::write(&d).unwrap();
+        let files = unzip(&out);
+        let body = text(&files, "word/document.xml");
+        assert_eq!(attr_values(&body, "mc:Choice", "Requires"), ["cx1"], "{body}");
+        let [cx_id] = attr_values(&body, "cx:chart", "r:id").try_into().unwrap_or_else(|_| panic!("chart lost: {body}"));
+        let doc_rels = text(&files, "word/_rels/document.xml.rels");
+        assert_eq!(text(&files, &part_at("word", &rel(&doc_rels, &cx_id).1)), CHARTEX_XML);
+        d = wordcraft_docx::read(&out).unwrap();
+    }
+}
+
+#[test]
+fn model_3d_outside_an_alternate_is_kept() {
+    let mut files = unzip(&model3d_docx(true));
+    let doc = text(&files, "word/document.xml");
+    let (head, rest) = doc.split_once("<mc:AlternateContent>").unwrap();
+    let (_, rest) = rest.split_once("<w:drawing>").unwrap();
+    let (drawing, rest) = rest.split_once("</mc:Choice>").unwrap();
+    let (_, tail) = rest.split_once("</mc:AlternateContent>").unwrap();
+    files.insert("word/document.xml".into(), format!(r#"{head}<w:drawing xmlns:am3d="{MODEL3D_NS}">{drawing}{tail}"#).into_bytes());
+    let entries: Vec<_> = files.iter().map(|(name, bytes)| (name.as_str(), bytes.as_slice())).collect();
+    let mut d = wordcraft_docx::read(&zip(&entries)).unwrap();
+    for round in 0..2 {
+        let g = graphics(&d);
+        let [InlineObject::Graphic { graphic, .. }] = g.as_slice() else { panic!("round {round}: {g:?}") };
+        assert_eq!(graphic.kind, wordcraft_doc::graphic::GraphicKind::Model3d);
+        assert!(
+            matches!(graphic.items.as_slice(), [wordcraft_doc::graphic::GraphicItem::Image { media, .. }] if media.is_empty()),
+            "the missing-picture box"
+        );
+        let out = wordcraft_docx::write(&d).unwrap();
+        let saved = unzip(&out);
+        let body = text(&saved, "word/document.xml");
+        let [model_id] = attr_values(&body, "am3d:model3d", "r:embed").try_into().unwrap_or_else(|_| panic!("model lost: {body}"));
+        let doc_rels = text(&saved, "word/_rels/document.xml.rels");
+        assert_eq!(saved.get(&part_at("word", &rel(&doc_rels, &model_id).1)).map(Vec::as_slice), Some(GLB));
+        d = wordcraft_docx::read(&out).unwrap();
+    }
+}
+
+#[test]
+fn model_3d_whose_picture_is_gone_opens_without_it() {
+    // The model's own `am3d:raster` names the picture too, so it can't be written back whole:
+    // the rest of the document stays and the save points at nothing missing.
+    let mut no_part = unzip(&model3d_docx(true));
+    no_part.remove("word/media/image1.png");
+    let mut no_rel = unzip(&model3d_docx(true));
+    let rels = text(&no_rel, "word/_rels/document.xml.rels");
+    let start = rels.find(r#"<Relationship Id="rIdPic""#).unwrap();
+    let end = start + rels[start..].find("/>").unwrap() + "/>".len();
+    no_rel.insert("word/_rels/document.xml.rels".into(), format!("{}{}", &rels[..start], &rels[end..]).into_bytes());
+    for files in [no_part, no_rel] {
+        let entries: Vec<_> = files.iter().map(|(name, bytes)| (name.as_str(), bytes.as_slice())).collect();
+        let d = wordcraft_docx::read(&zip(&entries)).unwrap();
+        assert_eq!(paras(&d).iter().map(|p| p.text.as_str()).collect::<Vec<_>>(), ["Model"]);
+        assert!(paras(&d).iter().all(|p| p.objects.is_empty()));
+        let saved = unzip(&wordcraft_docx::write(&d).unwrap());
+        let body = text(&saved, "word/document.xml");
+        assert!(!body.contains("am3d:model3d") && !body.contains("mc:AlternateContent") && !body.contains("r:embed"), "{body}");
+    }
+}
+
 #[test]
 fn moved_and_copied_chart_keeps_its_parts() {
     let d = wordcraft_docx::read(&chart_docx()).unwrap();
