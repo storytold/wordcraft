@@ -62,6 +62,11 @@ impl FontDb {
             return (Some(face), self.read_faces().len());
         }
         let (found, n) = self.loaded_fallback(c, exclude);
+        // Kana take a font made for Japanese over a Chinese one loaded first, which maps them too.
+        #[cfg(not(target_arch = "wasm32"))]
+        if crate::is_kana(c) && found.as_ref().is_some_and(|f| !crate::is_japanese_family(&f.family)) && self.load_japanese(&[c]) {
+            return self.loaded_fallback(c, exclude);
+        }
         if found.is_some() {
             return (found, n);
         }
@@ -112,12 +117,14 @@ impl FontDb {
         let faces = self.read_faces();
         let mut order: Vec<&Arc<FontFace>> = faces.iter().filter(|f| f.id != exclude).collect();
         // Right-to-left letters prefer a font made for the script, so a word isn't split across
-        // fonts (that breaks Arabic joining). Emoji prefer a colour emoji font.
+        // fonts (that breaks Arabic joining). Emoji prefer a colour emoji font, kana a Japanese one.
         let rank = |f: &FontFace| {
             if crate::is_rtl(c) || arabic_block(c) {
                 RTL_FALLBACKS.iter().position(|n| f.family.eq_ignore_ascii_case(n)).unwrap_or(RTL_FALLBACKS.len())
             } else if crate::is_emoji(c) {
                 crate::fallback_rank(c, &f.family)
+            } else if crate::is_kana(c) {
+                usize::from(!crate::is_japanese_family(&f.family))
             } else {
                 0
             }
@@ -144,13 +151,22 @@ impl FontDb {
     /// Cached per (character set, excluded face, bold, italic) and dropped when the loaded faces
     /// change, like [`Self::fallback_for`], so relayout doesn't repeat the search.
     pub fn fallback_for_run(&self, chars: &[char], exclude: u32, bold: bool, italic: bool) -> Option<Arc<FontFace>> {
+        self.fallback_for_run_in(chars, exclude, bold, italic, false)
+    }
+
+    /// [`Self::fallback_for_run`] for a run in Japanese (`w:lang w:eastAsia`): a font made for
+    /// Japanese comes first, and one installed is loaded if none is ([`crate::JAPANESE_FALLBACKS`]),
+    /// so the ideographs Japanese shares with Chinese take their Japanese forms. A run with kana in
+    /// it is Japanese whatever `japanese` says.
+    pub fn fallback_for_run_in(&self, chars: &[char], exclude: u32, bold: bool, italic: bool, japanese: bool) -> Option<Arc<FontFace>> {
         if chars.is_empty() {
             return None;
         }
         let mut set: Vec<char> = chars.to_vec();
         set.sort_unstable();
         set.dedup();
-        let key = (set, exclude, bold, italic);
+        let japanese = japanese || set.iter().any(|c| crate::is_kana(*c));
+        let key = (set, exclude, bold, italic, japanese);
         let n = self.read_faces().len();
         {
             let cache = self.run_fallbacks.read().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -163,7 +179,7 @@ impl FontDb {
         // Keyed by the face count the search last looked at, not the count after it: a face loaded
         // meanwhile by another thread (one its search, or a family named by a document) must make
         // a miss count as stale, not as the answer for the new count.
-        let (found, n) = self.search_run(&key.0, exclude, bold, italic);
+        let (found, n) = self.search_run(&key.0, exclude, bold, italic, japanese);
         let mut cache = self.run_fallbacks.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         if cache.faces != n || cache.map.len() >= RUN_FALLBACK_CACHE_MAX || cache.chars.saturating_add(key.0.len()) > RUN_FALLBACK_CACHE_CHARS {
             cache.map.clear();
@@ -176,9 +192,9 @@ impl FontDb {
     }
 
     /// The face for a run, and the number of loaded faces the search last chose from.
-    fn search_run(&self, chars: &[char], exclude: u32, bold: bool, italic: bool) -> (Option<Arc<FontFace>>, usize) {
+    fn search_run(&self, chars: &[char], exclude: u32, bold: bool, italic: bool, japanese: bool) -> (Option<Arc<FontFace>>, usize) {
         #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
-        let (mut base, mut checked) = self.loaded_covering(chars, exclude);
+        let (mut base, mut checked) = self.loaded_covering(chars, exclude, japanese);
         #[cfg(not(target_arch = "wasm32"))]
         if base.is_none() {
             // A character no loaded face covers: load a system font for it, then retry (the run's
@@ -188,7 +204,7 @@ impl FontDb {
                     continue;
                 }
                 if self.system_fallback(*c) {
-                    (base, checked) = self.loaded_covering(chars, exclude);
+                    (base, checked) = self.loaded_covering(chars, exclude, japanese);
                     if base.is_some() {
                         break;
                     }
@@ -201,8 +217,15 @@ impl FontDb {
                 // Look again even when this search loaded nothing: another thread's may just have
                 // loaded the font (and taken its files off the index).
                 self.indexed_run_fallback(chars);
-                (base, checked) = self.loaded_covering(chars, exclude);
+                (base, checked) = self.loaded_covering(chars, exclude, japanese);
             }
+        }
+        // Japanese text in a Chinese font, loaded first or just now for a character (a Chinese
+        // font maps kana and kanji too): load a font made for Japanese that maps the run, if one
+        // is installed.
+        #[cfg(not(target_arch = "wasm32"))]
+        if japanese && base.as_ref().is_none_or(|f| !crate::is_japanese_family(&f.family)) && self.load_japanese(chars) {
+            (base, checked) = self.loaded_covering(chars, exclude, japanese);
         }
         let Some(base) = base else { return (None, checked) };
         if !bold && !italic {
@@ -224,14 +247,42 @@ impl FontDb {
 
     /// The first face in the fallback order that covers every char, and the number of loaded
     /// faces it was chosen from.
-    fn loaded_covering(&self, chars: &[char], exclude: u32) -> (Option<Arc<FontFace>>, usize) {
+    fn loaded_covering(&self, chars: &[char], exclude: u32, japanese: bool) -> (Option<Arc<FontFace>>, usize) {
         let faces = self.read_faces();
         let rtl = chars.iter().any(|c| crate::is_rtl(*c) || arabic_block(*c));
         // A complex-script character picks the families its script prefers (the lowest one: the
         // run's characters come sorted).
         let complex = chars.iter().copied().find(|c| crate::needs_layout_tables(*c));
-        let found = fallback_order(&faces, exclude, rtl, complex).into_iter().find(|f| chars.iter().all(|c| f.covers(*c))).cloned();
+        let found = fallback_order(&faces, exclude, rtl, complex, japanese).into_iter().find(|f| chars.iter().all(|c| f.covers(*c))).cloned();
         (found, faces.len())
+    }
+
+    /// Load the first installed family made for Japanese ([`crate::JAPANESE_FALLBACKS`], in order)
+    /// that maps every char. Each family is tried once, like the other preferred fallback
+    /// families. Returns whether a loaded Japanese face now maps them all.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn load_japanese(&self, chars: &[char]) -> bool {
+        let untried: Vec<&'static str> = {
+            let sys = self.sys.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if !sys.enabled {
+                return false;
+            }
+            crate::JAPANESE_FALLBACKS.iter().copied().filter(|f| !sys.tried.contains(f)).collect()
+        };
+        let covered = |db: &FontDb| db.read_faces().iter().any(|f| crate::is_japanese_family(&f.family) && chars.iter().all(|c| f.covers(*c)));
+        for fam in untried {
+            if self.is_loaded(fam) || !self.read_catalog().iter().any(|e| e.family.eq_ignore_ascii_case(fam)) {
+                continue;
+            }
+            if !self.sys.lock().unwrap_or_else(std::sync::PoisonError::into_inner).tried.insert(fam) {
+                continue;
+            }
+            self.load_cataloged(fam);
+            if covered(self) {
+                return true;
+            }
+        }
+        false
     }
 
     /// Load a system font covering `c` (preferred fallback families first, then any cataloged

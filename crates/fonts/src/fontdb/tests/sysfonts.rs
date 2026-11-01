@@ -421,6 +421,60 @@ fn a_family_partly_loaded_by_a_character_fallback_is_loaded_whole_for_a_run() {
 }
 
 #[test]
+fn japanese_text_takes_a_japanese_font_over_a_chinese_one_loaded_first() {
+    // On macOS, PingFang (Chinese, first among the preferred fallback families) loaded for the
+    // first kanji and then drew all Japanese text, kana too, though Hiragino was installed.
+    let dir = font_dir("japanese");
+    // Both map 、。, kana, 取 and 鳥 (a format 12 cmap, to glyphs the font has).
+    let both = |family: &str| {
+        let named = with_family_names("SourceSans3-Regular.ttf", &[(0x0409, family)]);
+        let font = skrifa::FontRef::new(&named).unwrap();
+        let mut cmap = Vec::new();
+        for v in [0u16, 1, 3, 10] {
+            cmap.extend_from_slice(&v.to_be_bytes());
+        }
+        cmap.extend_from_slice(&12u32.to_be_bytes());
+        cmap.extend_from_slice(&[0, 12, 0, 0]);
+        for v in [64u32, 0, 4, 0x3001, 0x3002, 300, 0x3040, 0x30FF, 1, 0x53D6, 0x53D6, 200, 0x9CE5, 0x9CE5, 201] {
+            cmap.extend_from_slice(&v.to_be_bytes());
+        }
+        let mut tables: Vec<([u8; 4], Vec<u8>)> = font
+            .table_directory()
+            .table_records()
+            .iter()
+            .filter(|r| r.tag() != skrifa::Tag::new(b"cmap"))
+            .map(|r| (r.tag().to_be_bytes(), font.table_data(r.tag()).unwrap().as_bytes().to_vec()))
+            .collect();
+        tables.push((*b"cmap", cmap));
+        tables.sort_by_key(|t| t.0);
+        mini_font(&tables)
+    };
+    std::fs::write(dir.join("PingFang.ttf"), both("PingFang SC")).unwrap();
+    std::fs::write(dir.join("Hiragino.ttf"), both("Hiragino Kaku Gothic ProN")).unwrap();
+    let db = FontDb::with_font_dirs(vec![dir.clone()]);
+    let latin = db.face(FALLBACK_FAMILY, "Regular");
+    if db.read_faces().iter().any(|f| f.covers('と') || f.covers('鳥')) {
+        eprintln!("skipped: a bundled face (craft-fonts) draws Japanese");
+        return;
+    }
+    let family = |f: Option<Arc<FontFace>>| f.map(|f| f.family.clone());
+    // The first lookup: the run's first character (、, no script of its own) loads the Chinese
+    // font, which maps the whole run. The Japanese one is still loaded for it.
+    let fresh = FontDb::with_font_dirs(vec![dir]);
+    let fresh_latin = fresh.face(FALLBACK_FAMILY, "Regular");
+    let run = ['、', 'と', '取'];
+    assert_eq!(family(fresh.fallback_for_run(&run, fresh_latin.id(), false, false)).as_deref(), Some("Hiragino Kaku Gothic ProN"));
+    // A kanji alone: the first preferred family that maps it, the Chinese one.
+    assert_eq!(family(db.fallback_for('鳥', latin.id())).as_deref(), Some("PingFang SC"));
+    // Kana are Japanese: the Japanese font is loaded for them, alone or in a run with kanji.
+    assert_eq!(family(db.fallback_for_run(&['鳥', '取', 'と', 'り'], latin.id(), false, false)).as_deref(), Some("Hiragino Kaku Gothic ProN"));
+    assert_eq!(family(db.fallback_for('と', latin.id())).as_deref(), Some("Hiragino Kaku Gothic ProN"));
+    // Kanji alone are Japanese only when the run says so (`w:lang w:eastAsia`).
+    assert_eq!(family(db.fallback_for_run(&['鳥', '取'], latin.id(), false, false)).as_deref(), Some("PingFang SC"));
+    assert_eq!(family(db.fallback_for_run_in(&['鳥', '取'], latin.id(), false, false, true)).as_deref(), Some("Hiragino Kaku Gothic ProN"));
+}
+
+#[test]
 fn coverage_ranges_hold_exactly_the_mapped_characters() {
     let data = renamed("SourceSans3-Regular.ttf");
     let ranges = coverage_ranges(&data);
