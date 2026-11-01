@@ -414,3 +414,26 @@ fn built_in_styles_grey_out_delete_in_the_styles_pane() {
     assert!(delete_is_disabled("Normal"), "the built-in style's Delete is greyed out");
     assert!(!delete_is_disabled("Callout"), "the custom style's Delete stays enabled");
 }
+
+/// #3382: a long comment's card in the Comments pane stops at ten lines of text, so its buttons
+/// and the card after it stay in view.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn a_long_comment_card_keeps_its_buttons_and_the_next_card_in_view() {
+    use egui_kittest::kittest::Queryable;
+
+    let mut app = crate::WordApp::new(
+        wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Alpha paragraph one.\n\nBeta paragraph two.")),
+        crate::Services::default(),
+    );
+    app.run("select.text", serde_json::json!({"text": "Alpha"})).unwrap();
+    let long = (1..=200).map(|i| format!("Line {i}")).collect::<Vec<_>>().join("\n");
+    app.run("review.newComment", serde_json::json!({"text": long})).unwrap();
+    app.run("select.text", serde_json::json!({"text": "Beta"})).unwrap();
+    app.run("review.newComment", serde_json::json!({"text": "Short note."})).unwrap();
+    app.run("view.commentsPane", serde_json::json!({"value": true})).unwrap();
+    let h = pane_harness(app);
+    let go_to: Vec<egui::Rect> = h.get_all_by_label("Go to").map(|n| n.rect()).collect();
+    assert_eq!(go_to.len(), 2, "one Go to button per card");
+    assert!(go_to.iter().all(|r| r.max.y < 900.0), "both cards' buttons are in view: {go_to:?}");
+}
