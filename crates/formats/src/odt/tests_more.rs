@@ -8,6 +8,7 @@ mod floats;
 mod fonts;
 mod headers;
 mod lists;
+mod named_styles;
 mod notes;
 mod outline;
 mod para_borders;

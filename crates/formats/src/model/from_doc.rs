@@ -98,10 +98,34 @@ fn extra_of(e: &CharProps) -> Option<Box<CharProps>> {
     (x != CharProps::default()).then(|| Box::new(x))
 }
 
+/// Whether paragraph style `id` of `doc` is one of its own rather than one the flow model's
+/// paragraph kinds, lists and notes stand for (Normal, the headings, Title, Quote, Code, List
+/// Paragraph, the note texts).
+pub fn is_custom_style(doc: &Document, id: &str) -> bool {
+    // The styles the kinds stand for, and the names formats write fixed styles under.
+    let kinds = [
+        "Normal",
+        "Title",
+        "Quote",
+        super::types::CODE_STYLE,
+        "ListParagraph",
+        "FootnoteText",
+        "EndnoteText",
+        "Standard",
+        "Footnote",
+        "Endnote",
+        "Quotations",
+        "Heading",
+    ];
+    let heading = id.strip_prefix("Heading").is_some_and(|n| n.len() == 1 && n.chars().all(|c| c.is_ascii_digit()));
+    !heading && !kinds.contains(&id) && doc.styles.get(id).is_some_and(|s| s.kind == wordcraft_doc::styles::StyleKind::Paragraph)
+}
+
 /// The paragraph formatting only [`Para::extra`] holds that `p` sets itself; `None` when none.
-fn para_extra(p: &wordcraft_doc::props::ParaProps) -> Option<Box<wordcraft_doc::props::ParaProps>> {
+fn para_extra(doc: &Document, p: &wordcraft_doc::props::ParaProps) -> Option<Box<wordcraft_doc::props::ParaProps>> {
     let tabs = p.tabs.clone().filter(|t| !t.is_empty());
-    let x = wordcraft_doc::props::ParaProps { tabs, shading: p.shading, ..Default::default() };
+    let style = p.style.clone().filter(|id| is_custom_style(doc, id));
+    let x = wordcraft_doc::props::ParaProps { tabs, shading: p.shading, style, ..Default::default() };
     (x != wordcraft_doc::props::ParaProps::default()).then(|| Box::new(x))
 }
 
@@ -265,7 +289,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
         extra: None,
     };
     if opts.paras {
-        out.extra = para_extra(&p.props);
+        out.extra = para_extra(doc, &p.props);
     }
     let in_code = kind == Kind::Code;
     let mut k = 0usize;

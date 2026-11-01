@@ -303,6 +303,39 @@ pub(super) struct ParaLook {
     /// Borders (when a side shows) and background.
     pub(super) borders: Option<Borders>,
     pub(super) shading: Option<Rgb>,
+    /// The custom style (a common style other than Standard and the kinds' styles) the
+    /// paragraph is in, by its ODF name; the formatting above is then only what the automatic
+    /// styles over it add.
+    pub(super) named: Option<String>,
+}
+
+/// Where a custom style's formatting comes from besides its own ([`NamedStyle::parent`]).
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum Parent {
+    /// The document defaults (Standard, or no parent).
+    Normal,
+    /// The style of a paragraph kind.
+    Kind(Kind),
+    /// Another custom style, by ODF name.
+    Named(String),
+}
+
+/// A custom paragraph style as a document style: its name, parent and own formatting.
+#[derive(Clone, Debug)]
+pub(super) struct NamedStyle {
+    pub(super) name: String,
+    pub(super) parent: Parent,
+    pub(super) look: ParaLook,
+}
+
+/// Longest style id made, in characters.
+const MAX_STYLE_ID: usize = 64;
+
+/// The document style id for an ODF style: its name's letters and digits (LibreOffice's
+/// `Text_20_body` is `Textbody`), at most [`MAX_STYLE_ID`] of them.
+pub(super) fn style_id(odt: &str) -> String {
+    let id: String = odt.replace("_20_", " ").chars().filter(|c| c.is_alphanumeric()).take(MAX_STYLE_ID).collect();
+    if id.is_empty() { "Custom".into() } else { id }
 }
 
 /// An ODF border (`0.5pt solid #000000`, `none`; ODF 1.3 §20.183): width, style and colour in any
@@ -842,6 +875,44 @@ impl Styles {
             .collect()
     }
 
+    /// The custom style `odt` names (a common paragraph style other than Standard and the
+    /// kinds' styles), with its parent and own formatting; `None` for any other style.
+    pub(super) fn named_style(&self, odt: &str) -> Option<NamedStyle> {
+        let s = self.map.get(odt).filter(|s| !s.auto && odt != "Standard")?;
+        let lower = |n: &str| n.to_ascii_lowercase().replace("_20_", " ");
+        // The kinds' styles, and the note text styles (WordCraft's Footnote Text and Endnote
+        // Text stand for them), are no custom styles.
+        let special = |n: &str| kind_named(n).is_some() || matches!(n, "footnote" | "endnote");
+        if special(&lower(odt)) || s.display.as_deref().is_some_and(|d| special(&lower(d))) {
+            return None;
+        }
+        let parent = match s.parent.as_deref() {
+            None | Some("Standard") => Parent::Normal,
+            Some(p) => match self.map.get(p) {
+                None => Parent::Normal,
+                Some(ps) => match kind_named(&lower(p)).or_else(|| ps.display.as_deref().and_then(|d| kind_named(&lower(d)))) {
+                    Some(k) => Parent::Kind(k),
+                    None if ps.auto => Parent::Normal,
+                    None => Parent::Named(p.to_string()),
+                },
+            },
+        };
+        let mut fmt = Fmt::default();
+        s.fmt.apply(&mut fmt);
+        let look = ParaLook {
+            align: s.align,
+            keep_next: s.keep_next == Some(true),
+            fmt,
+            spacing: s.spacing,
+            tabs: s.tabs.clone(),
+            borders: s.para_borders.filter(|b| b.any_visible()),
+            shading: s.para_shading.flatten(),
+            ..Default::default()
+        };
+        let name = s.display.clone().unwrap_or_else(|| odt.replace("_20_", " "));
+        Some(NamedStyle { name: name.chars().take(super::super::model::MAX_FONT_NAME).collect(), parent, look })
+    }
+
     pub(super) fn para(&self, name: &str) -> ParaLook {
         let chain = self.chain(name);
         let mut kind = Kind::Normal;
@@ -870,7 +941,12 @@ impl Styles {
             }
             kind_at = chain.len();
         }
-        let align = chain.iter().find_map(|(_, s)| s.align);
+        // The nearest custom style: its formatting stays in it; the automatic styles over it give
+        // the paragraph's own.
+        let named_at = chain.iter().take(kind_at).position(|(n, _)| self.named_style(n).is_some());
+        let named = named_at.and_then(|i| chain.get(i)).map(|(n, _)| n.to_string());
+        let kind_at = named_at.unwrap_or(kind_at);
+        let align = if named.is_some() { chain.iter().take(kind_at).find_map(|(_, s)| s.align) } else { chain.iter().find_map(|(_, s)| s.align) };
         let pb = chain.iter().take_while(|(_, s)| s.auto).any(|(_, s)| s.page_break);
         let rule = chain.iter().any(|(_, s)| s.border_bottom);
         let mut f = Fmt::default();
@@ -887,6 +963,6 @@ impl Styles {
         let own = || chain.iter().take(kind_at).filter(|(n, s)| s.auto || *n != "Standard");
         let borders = own().find_map(|(_, s)| s.para_borders).filter(|b| b.any_visible());
         let shading = own().find_map(|(_, s)| s.para_shading).flatten();
-        ParaLook { kind, align, page_break: pb, rule, keep_next, fmt: f, spacing, tabs, borders, shading }
+        ParaLook { kind, align, page_break: pb, rule, keep_next, fmt: f, spacing, tabs, borders, shading, named }
     }
 }

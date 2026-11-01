@@ -52,6 +52,66 @@ fn kind_styles(doc: &Document) -> String {
     s
 }
 
+/// The ODF parent of document style `id`: Standard for Normal, the kinds' styles for theirs, a
+/// custom style by its id.
+fn odf_parent(doc: &Document, id: Option<&str>) -> String {
+    match id {
+        None | Some("Normal") => "Standard".into(),
+        Some("Title") => "Title".into(),
+        Some("Quote") => "Quotations".into(),
+        Some(id) if id == model::CODE_STYLE => "Preformatted_20_Text".into(),
+        Some(id) => match id.strip_prefix("Heading").and_then(|n| n.parse::<u8>().ok()).filter(|n| (1..=9).contains(n)) {
+            Some(n) => format!("Heading_20_{}", n.min(6)),
+            None if model::is_custom_style(doc, id) => super::writer::odf_name(id),
+            None => "Standard".into(),
+        },
+    }
+}
+
+/// The custom paragraph styles in `named` and the custom styles they are based on, as common
+/// styles (ODF 1.3 §16.2): named by their document id, shown by their name, each with its own
+/// paragraph and text formatting over its parent's.
+fn custom_styles(doc: &Document, named: &std::collections::BTreeSet<String>) -> String {
+    let mut todo: Vec<String> = named.iter().cloned().collect();
+    let mut done = std::collections::BTreeSet::new();
+    let mut s = String::new();
+    while let Some(id) = todo.pop() {
+        if !done.insert(id.clone()) || done.len() > 10_000 {
+            continue;
+        }
+        let Some(st) = doc.styles.get(&id) else { continue };
+        if let Some(b) = st.based_on.as_deref().filter(|b| model::is_custom_style(doc, b)) {
+            todo.push(b.to_string());
+        }
+        let pp = &st.para;
+        let mut attrs = spacing_props(&model::Spacing {
+            before: pp.space_before,
+            after: pp.space_after,
+            line: pp.line_spacing,
+            left: pp.indent_left,
+            right: pp.indent_right,
+            first: pp.indent_first,
+        });
+        attrs.push_str(align_attr(pp.align));
+        if pp.keep_next == Some(true) {
+            attrs.push_str(" fo:keep-with-next=\"always\"");
+        }
+        attrs.push_str(&super::writer::border_attrs(pp.borders));
+        if let Some(bg) = pp.shading {
+            attrs.push_str(&format!(" fo:background-color=\"#{}\"", bg.hex().to_ascii_lowercase()));
+        }
+        let tabs = pp.tabs.as_deref().map(super::writer::tab_stops).unwrap_or_default();
+        let parent = odf_parent(doc, st.based_on.as_deref());
+        s.push_str(&format!(
+            "<style:style style:name=\"{}\" style:display-name=\"{}\" style:family=\"paragraph\" style:parent-style-name=\"{parent}\"><style:paragraph-properties{attrs}>{tabs}</style:paragraph-properties><style:text-properties{}/></style:style>",
+            super::writer::odf_name(&id),
+            x(&st.name),
+            props_text(&st.chr)
+        ));
+    }
+    s
+}
+
 /// `text:outline-style` (ODF 1.3 §16.34): the numbering of Heading 1–6, from the list level each
 /// heading style numbers its paragraphs with; levels without one show no number.
 fn outline_style(doc: &Document) -> String {
@@ -157,7 +217,13 @@ fn page_parts(doc: &Document, sec: &SectionProps, w: &mut Writer) -> PageParts {
 /// body font, pair kerning, the tab interval), the paragraph kinds' styles, and one master page
 /// per entry of `pages` with `parts`, its headers and footers, whose automatic styles are
 /// `part_styles`.
-fn styles_xml(doc: &Document, pages: &[(String, wordcraft_doc::SectionProps)], parts: &[PageParts], part_styles: &str) -> String {
+fn styles_xml(
+    doc: &Document,
+    pages: &[(String, wordcraft_doc::SectionProps)],
+    parts: &[PageParts],
+    part_styles: &str,
+    named: &std::collections::BTreeSet<String>,
+) -> String {
     // The document defaults: Normal's font, spacing and indents, pair kerning and tab interval.
     let body_font = doc.styles.default_chr.font.clone().unwrap_or_else(|| wordcraft_doc::styles::BODY_FONT.to_string());
     let normal = doc.styles.resolve_para(&Default::default());
@@ -181,6 +247,7 @@ fn styles_xml(doc: &Document, pages: &[(String, wordcraft_doc::SectionProps)], p
     s.push_str("<style:style style:name=\"Standard\" style:family=\"paragraph\" style:class=\"text\"/>");
     s.push_str(&kind_styles(doc));
     s.push_str(&outline_style(doc));
+    s.push_str(&custom_styles(doc, named));
     // The note text styles, as WordCraft's Footnote Text and Endnote Text: 10 pt, no spacing.
     for (name, class) in [("Footnote", "extra"), ("Endnote", "extra")] {
         s.push_str(&format!(
@@ -354,7 +421,9 @@ pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
     );
     let mut hw = Writer::with_prefix("M");
     let parts: Vec<PageParts> = pages.iter().map(|(_, sec)| page_parts(doc, sec, &mut hw)).collect();
-    let styles = styles_xml(doc, &pages, &parts, &hw.style_defs());
+    let mut named = std::mem::take(&mut w.named);
+    named.append(&mut hw.named);
+    let styles = styles_xml(doc, &pages, &parts, &hw.style_defs(), &named);
     w.pictures.append(&mut hw.pictures);
     w.formulas.append(&mut hw.formulas);
     let meta = meta_xml(&flow.meta);

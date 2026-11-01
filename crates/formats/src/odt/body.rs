@@ -547,6 +547,10 @@ impl Body<'_> {
         }
         let mut p = Para { kind, align, page_break: pb, keep_next, spacing: look.spacing, ..Default::default() };
         p.borders = look.borders;
+        if let Some(n) = look.named {
+            // The ODF name for now; import makes it the document style's id.
+            p.extra.get_or_insert_with(Default::default).style = Some(n);
+        }
         if let Some(bg) = look.shading {
             p.extra.get_or_insert_with(Default::default).shading = Some(bg);
         }

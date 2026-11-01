@@ -56,6 +56,13 @@ pub(super) struct Parts {
     even_odd: bool,
 }
 
+impl Parts {
+    /// The blocks of every header and footer read.
+    pub(super) fn blocks_mut(&mut self) -> impl Iterator<Item = &mut Vec<FBlock>> {
+        self.parts.iter_mut().map(|(_, b)| b)
+    }
+}
+
 /// Read each visible header and footer of the master pages in `pages`, and name it on its master
 /// page's section as part id 1, 2, … in order, so the sections the body starts carry them.
 /// [`add`] puts those parts into the document.

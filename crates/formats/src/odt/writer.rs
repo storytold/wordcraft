@@ -68,6 +68,8 @@ type SecStart = (String, Option<u32>);
 
 #[derive(Default)]
 pub(super) struct Writer {
+    /// The custom paragraph styles paragraphs were written in (document style ids).
+    pub(super) named: std::collections::BTreeSet<String>,
     /// Notes written so far (their ids), and footnotes and endnotes among them (their numbers).
     notes: usize,
     footnotes: u32,
@@ -292,7 +294,7 @@ fn annotation_name(prefix: &str, id: u32) -> String {
 
 /// `style:tab-stops` (ODF 1.3 §17.7) for `tabs`, measured from the margin (the package's
 /// settings say so); bar and clearing stops have no ODF form and are left out.
-fn tab_stops(tabs: &[wordcraft_doc::props::TabStop]) -> String {
+pub(super) fn tab_stops(tabs: &[wordcraft_doc::props::TabStop]) -> String {
     use wordcraft_doc::props::{TabAlign, TabLeader};
     let mut s = String::from("<style:tab-stops>");
     for t in tabs.iter().filter(|t| t.pos.is_finite()) {
@@ -314,6 +316,36 @@ fn tab_stops(tabs: &[wordcraft_doc::props::TabStop]) -> String {
     }
     s.push_str("</style:tab-stops>");
     s
+}
+
+/// An ODF style name (an XML NCName, ODF 1.3 §19.75) for document style id `id`: letters,
+/// digits and `-`, `.` kept, anything else as `_xHH_` (its code point in hex), and a leading
+/// digit, `-` or `.` escaped too.
+pub(super) fn odf_name(id: &str) -> String {
+    let mut out = String::new();
+    for (i, c) in id.chars().enumerate() {
+        let ok = c.is_alphanumeric() || (i > 0 && (c == '-' || c == '.' || c.is_ascii_digit()));
+        if ok && !(i == 0 && c.is_ascii_digit()) {
+            out.push(c);
+        } else {
+            out.push_str(&format!("_x{:X}_", c as u32));
+        }
+    }
+    if out.is_empty() { "Custom".into() } else { out }
+}
+
+/// `fo:border-*` and `fo:padding-*` attributes for paragraph borders `b`, when a side shows.
+pub(super) fn border_attrs(b: Option<Borders>) -> String {
+    let mut p = String::new();
+    let Some(b) = b.filter(|b| b.any_visible()) else { return p };
+    for (side, line) in [("top", b.top), ("left", b.left), ("bottom", b.bottom), ("right", b.right)] {
+        let shown = line.filter(|l| l.is_visible());
+        p.push_str(&format!(" fo:border-{side}=\"{}\"", odf_border(shown)));
+        if let Some(l) = shown {
+            p.push_str(&format!(" fo:padding-{side}=\"{}\"", pt(l.space.clamp(0.0, 31.0))));
+        }
+    }
+    p
 }
 
 /// Word's default cell margins (top, left, bottom, right), points.
@@ -437,8 +469,14 @@ impl Writer {
     /// The paragraph style of `p`; `start` makes it begin a page of that master page (ODF 1.3
     /// §19.471 `style:master-page-name`), restarting page numbering where asked (§20.322).
     fn para_style_at(&mut self, p: &Para, start: Option<&SecStart>) -> String {
-        let parent = match (p.kind, self.note_parent) {
-            (Kind::Normal, Some(n)) => n.to_string(),
+        let named = p.extra.as_ref().and_then(|x| x.style.as_deref()).filter(|_| matches!(p.kind, Kind::Normal | Kind::Rule));
+        let parent = match (p.kind, self.note_parent, named) {
+            // A custom style: written as a common style of the same name (see `custom_styles`).
+            (_, _, Some(id)) => {
+                self.named.insert(id.to_string());
+                odf_name(id)
+            }
+            (Kind::Normal, Some(n), None) => n.to_string(),
             _ => parent_style(p.kind).to_string(),
         };
         let mut props = String::new();
@@ -468,14 +506,8 @@ impl Writer {
         }
         if p.kind == Kind::Rule {
             props.push_str(" fo:border-bottom=\"0.75pt solid #a0a0a0\" fo:padding-bottom=\"1pt\"");
-        } else if let Some(b) = p.borders.filter(|b| b.any_visible()) {
-            for (side, line) in [("top", b.top), ("left", b.left), ("bottom", b.bottom), ("right", b.right)] {
-                let shown = line.filter(|l| l.is_visible());
-                props.push_str(&format!(" fo:border-{side}=\"{}\"", odf_border(shown)));
-                if let Some(l) = shown {
-                    props.push_str(&format!(" fo:padding-{side}=\"{}\"", pt(l.space.clamp(0.0, 31.0))));
-                }
-            }
+        } else {
+            props.push_str(&border_attrs(p.borders));
         }
         if let Some(bg) = p.extra.as_ref().and_then(|x| x.shading) {
             props.push_str(&format!(" fo:background-color=\"#{}\"", bg.hex().to_ascii_lowercase()));

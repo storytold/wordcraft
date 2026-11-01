@@ -213,14 +213,14 @@ fn common_paragraph_styles_give_text_formatting() {
     let content = format!(
         r#"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="Bridge" style:family="paragraph" style:parent-style-name="Emphasis"/></office:automatic-styles><office:body><office:text><text:p>Plain</text:p><text:p text:style-name="Emphasis">Common</text:p><text:p text:style-name="Derived">Derived</text:p><text:p text:style-name="Bridge">Bridge</text:p></office:text></office:body></office:document-content>"#
     );
-    let f = parse(&package(&content, Some(&styles))).unwrap();
-    let ps = paras(&f);
-    assert_eq!(ps.len(), 4);
-    let fmt = |p: &Para| p.inlines.iter().find_map(|i| if let Inline::Text(_, f) = i { Some(f.clone()) } else { None }).unwrap();
-    assert_eq!(fmt(ps[0]), Fmt::default());
-    for p in &ps[1..] {
-        let f = fmt(p);
-        assert!(f.bold && f.color == Some(Rgb(255, 0, 0)) && f.size == Some(24.0), "{}: {f:?}", p.text());
+    // The text shows them (they stay in the custom styles the paragraphs are in).
+    let d = import(&package(&content, Some(&styles))).unwrap();
+    let shown: Vec<_> =
+        d.body.iter().filter_map(|b| b.as_para()).map(|p| d.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props)).collect();
+    assert_eq!(shown.len(), 4);
+    assert!(!shown[0].bold && shown[0].size != 24.0);
+    for c in &shown[1..] {
+        assert!(c.bold && c.color == wordcraft_doc::props::TextColor::Rgb(Rgb(255, 0, 0)) && c.size == 24.0, "{c:?}");
     }
 }
 
@@ -239,7 +239,10 @@ fn text_after_a_drawing_shape_stays_in_its_paragraph() {
     let f = parse(&package(&content, Some(&styles))).unwrap();
     let ps = paras(&f);
     assert_eq!(ps.iter().map(|p| p.text()).collect::<Vec<_>>(), ["Before middle after", "Next"]);
-    assert!(ps[0].inlines.iter().all(|i| !matches!(i, Inline::Text(_, f) if !f.bold)), "{:?}", ps[0].inlines);
+    // The whole paragraph keeps its style's bold.
+    let d = import(&package(&content, Some(&styles))).unwrap();
+    let p = d.body[0].as_para().unwrap();
+    assert!(p.runs.iter().all(|r| d.styles.resolve_char(p.props.style.as_deref(), &r.props).bold), "{:?}", p.runs);
 }
 
 #[test]
@@ -455,7 +458,7 @@ fn headers_and_footers_follow_their_master_page() {
     assert_eq!(d.parts.len(), 6);
     let id = up.headers.default.unwrap();
     let Some(wordcraft_doc::Block::Para(p)) = d.parts[&id].blocks.first().map(|b| &**b) else { panic!("no header paragraph") };
-    assert!(p.runs.iter().all(|r| r.props.bold == Some(true)), "{:?}", p.runs);
+    assert!(p.runs.iter().all(|r| d.styles.resolve_char(p.props.style.as_deref(), &r.props).bold), "{:?}", p.runs);
 }
 
 #[test]

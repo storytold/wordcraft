@@ -103,6 +103,109 @@ pub(super) fn read_meta(xml: &[u8]) -> Meta {
     m
 }
 
+/// The custom styles the paragraphs of `blocks` name (by ODF name, [`super::styles::ParaLook::named`])
+/// with their parents, parents first; the paragraphs then name them by document style id.
+/// `odt` holds the styles already found (in other parts), which aren't added again.
+fn custom_styles(blocks: &mut [FBlock], styles: &Styles, odt: Vec<String>) -> (Vec<String>, Vec<super::styles::NamedStyle>) {
+    fn each_para(blocks: &mut [FBlock], depth: usize, f: &mut dyn FnMut(&mut Para)) {
+        if depth > model::MAX_DEPTH {
+            return;
+        }
+        for b in blocks {
+            match b {
+                FBlock::Para(p) => {
+                    f(p);
+                    for i in &mut p.inlines {
+                        match i {
+                            model::Inline::Note { blocks, .. } => each_para(blocks, depth + 1, f),
+                            model::Inline::Comment { comment, .. } => each_para(&mut comment.blocks, depth + 1, f),
+                            _ => {}
+                        }
+                    }
+                }
+                FBlock::Table(t) => {
+                    for c in t.rows.iter_mut().flatten() {
+                        each_para(&mut c.blocks, depth + 1, f);
+                    }
+                }
+            }
+        }
+    }
+    let mut odt = odt;
+    let mut defs: Vec<super::styles::NamedStyle> = Vec::new();
+    each_para(blocks, 0, &mut |p| {
+        let Some(name) = p.extra.as_mut().and_then(|x| x.style.take()) else { return };
+        // The style and its custom parents, parents first, each once (a loop ends the chain).
+        let mut chain: Vec<(String, super::styles::NamedStyle)> = Vec::new();
+        let mut cur = Some(name.clone());
+        while let Some(n) = cur.take() {
+            if odt.contains(&n) || chain.iter().any(|(m, _)| *m == n) || chain.len() >= 16 {
+                break;
+            }
+            let Some(def) = styles.named_style(&n) else { break };
+            if let super::styles::Parent::Named(p) = &def.parent {
+                cur = Some(p.clone());
+            }
+            chain.push((n, def));
+        }
+        for (n, def) in chain.into_iter().rev() {
+            odt.push(n);
+            defs.push(def);
+        }
+        if odt.contains(&name)
+            && let Some(x) = p.extra.as_mut()
+        {
+            x.style = Some(super::styles::style_id(&name));
+        }
+    });
+    (odt, defs)
+}
+
+/// Add the custom styles `named` (ODF names `odt`, parents first) to the document: each with its
+/// name, the style it is based on and its own formatting. A style WordCraft has under the same id
+/// takes the file's definition.
+fn add_custom_styles(doc: &mut Document, named: &[super::styles::NamedStyle], odt: &[String]) {
+    use super::styles::{Parent, style_id};
+    for (def, name) in named.iter().zip(odt) {
+        let id = style_id(name);
+        let based_on = match &def.parent {
+            Parent::Normal => "Normal".to_string(),
+            Parent::Kind(model::Kind::Heading(n)) => format!("Heading{}", (*n).clamp(1, 6)),
+            Parent::Kind(model::Kind::Title) => "Title".into(),
+            Parent::Kind(model::Kind::Quote) => "Quote".into(),
+            Parent::Kind(model::Kind::Code) if doc.styles.get(model::CODE_STYLE).is_some() => model::CODE_STYLE.into(),
+            Parent::Kind(_) => "Normal".into(),
+            Parent::Named(p) => style_id(p),
+        };
+        let look = &def.look;
+        let sp = &look.spacing;
+        let para = wordcraft_doc::props::ParaProps {
+            space_before: sp.before,
+            space_after: sp.after,
+            line_spacing: sp.line,
+            indent_left: sp.left,
+            indent_right: sp.right,
+            indent_first: sp.first,
+            align: look.align,
+            keep_next: look.keep_next.then_some(true),
+            borders: look.borders,
+            shading: look.shading,
+            tabs: look.tabs.clone(),
+            ..Default::default()
+        };
+        let style = wordcraft_doc::styles::Style {
+            id: id.clone(),
+            name: def.name.clone(),
+            kind: wordcraft_doc::styles::StyleKind::Paragraph,
+            based_on: (based_on != id).then_some(based_on),
+            para,
+            chr: model::char_props(&look.fmt),
+            ..Default::default()
+        };
+        doc.styles.upsert(style);
+    }
+}
+
 /// Give the document's style for paragraph kind `kind` the look the file gives its own: its text
 /// formatting, spacing, alignment and keep with next replace WordCraft's (a heading the file
 /// leaves black isn't blue). Its outline level and other settings stay.
@@ -197,6 +300,10 @@ struct Parsed {
     track: Option<bool>,
     /// The document's default font.
     font: Option<String>,
+    /// The custom paragraph styles the paragraphs use, parents included, parents first.
+    named: Vec<super::styles::NamedStyle>,
+    /// Their ODF names, alongside.
+    named_odt: Vec<String>,
     /// The heading numbering (`text:outline-style`), level by level.
     outline: Option<Vec<super::styles::ListLevel>>,
     /// How the file's heading, title, quotation and preformatted styles look.
@@ -235,10 +342,16 @@ fn parse_tracked(bytes: &[u8]) -> Result<Parsed, String> {
         // A frame may point at any entry, as often as it likes: `Pictures` keeps that bounded.
         pictures.get(&mut z, path)
     };
-    let parts = styles_xml.as_deref().map(|x| page_parts::read(x, &styles, &mut pages, &mut fetch)).unwrap_or_default();
+    let mut parts = styles_xml.as_deref().map(|x| page_parts::read(x, &styles, &mut pages, &mut fetch)).unwrap_or_default();
     let mut body = Body::new(&styles, &pages, &mut fetch);
     events(&content, |ev| body.feed(ev));
     let mut blocks = body.take_blocks();
+    let (mut named_odt, mut named) = custom_styles(&mut blocks, &styles, Vec::new());
+    for b in parts.blocks_mut() {
+        let (o, n) = custom_styles(b, &styles, named_odt);
+        named_odt = o;
+        named.extend(n);
+    }
     // An open section with nothing in it (after a column section at the end) isn't one: the
     // section before it ends the document.
     let mut last = body.sec;
@@ -259,6 +372,8 @@ fn parse_tracked(bytes: &[u8]) -> Result<Parsed, String> {
         font: styles.doc_font(),
         spacing: styles.doc_spacing(),
         looks: styles.kind_looks(),
+        named,
+        named_odt,
         outline: styles.outline.clone(),
         kern: styles.default_kern,
         default_tab: styles.default_tab,
@@ -269,7 +384,7 @@ fn parse_tracked(bytes: &[u8]) -> Result<Parsed, String> {
 /// Parse an `.odt` package into a document.
 pub fn import(bytes: &[u8]) -> Result<Document, String> {
     model::begin_import();
-    let Parsed { flow, last, track, font, spacing, looks, outline, kern, default_tab, parts } = parse_tracked(bytes)?;
+    let Parsed { flow, last, track, font, spacing, looks, named, named_odt, outline, kern, default_tab, parts } = parse_tracked(bytes)?;
     let mut doc = model::to_doc(&flow);
     if font.is_some() {
         doc.styles.default_chr.font = font;
@@ -284,6 +399,7 @@ pub fn import(bytes: &[u8]) -> Result<Document, String> {
     for (kind, look) in &looks {
         apply_look(&mut doc, *kind, look);
     }
+    add_custom_styles(&mut doc, &named, &named_odt);
     if let Some(levels) = &outline {
         number_headings(&mut doc, levels);
     }
