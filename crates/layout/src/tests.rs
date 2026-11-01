@@ -5686,6 +5686,150 @@ fn compatibility_mode_decides_where_a_table_s_edge_sits() {
     assert!((cell_text_x(12) - 72.0).abs() < 0.01, "{}", cell_text_x(12));
 }
 
+/// Measured in Word for Windows (compatibility mode 15, two equal columns, cell borders 0.75pt,
+/// 3pt and 6pt): a 100% table reaches the margins with the outer edges of its outer borders, so
+/// its columns give up those borders' outer halves and the line between them stays at the middle
+/// of the text width; the same table 400pt wide keeps its columns and moves right by half its
+/// left border.
+#[test]
+fn a_percentage_table_from_word_2013_ends_its_outer_borders_at_its_width() {
+    use wordcraft_doc::props::{Border, BorderStyle, Borders};
+    // The cells' left and right edges, for border width `w` and a table 100% or 400pt wide.
+    let cells = |w: f32, pct: bool| {
+        let mut d = Document::from_text("");
+        d.settings.compat_mode = 15;
+        let style = if w > 0.0 { BorderStyle::Single } else { BorderStyle::None };
+        let line = Some(Border { style, width: w, color: None, space: 0.0 });
+        let mut t = Table::new(1, 2, 200.0);
+        if pct {
+            t.props.width_pct = Some(100.0);
+        } else {
+            t.props.width = Some(400.0);
+        }
+        t.props.fixed = true;
+        t.props.borders = Some(Borders { top: line, left: line, bottom: line, right: line, between: line, inside_v: line });
+        d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(t))];
+        let l = lay(&d);
+        let mut out: Vec<(f32, f32)> =
+            l.pages[0].items.iter().filter_map(|i| if let Placed::Cell { rect, .. } = i { Some((rect.x, rect.x + rect.w)) } else { None }).collect();
+        out.sort_by(|a, b| a.0.total_cmp(&b.0));
+        out
+    };
+    let near = |a: f32, b: f32| (a - b).abs() < 0.01;
+    let plain = cells(0.0, true);
+    let (left, right) = (plain[0].0, plain[1].1);
+    for w in [0.75, 3.0, 6.0] {
+        let c = cells(w, true);
+        assert!(near(c[0].0, left + w / 2.0) && near(c[1].1, right - w / 2.0), "{w}: {c:?} without borders {plain:?}");
+        assert!(near(c[0].1, (left + right) / 2.0) && near(c[1].0, (left + right) / 2.0), "{w}: {c:?} without borders {plain:?}");
+        let fixed = cells(w, false);
+        let plain = cells(0.0, false);
+        assert!(near(fixed[0].0, plain[0].0 + w / 2.0) && near(fixed[1].1, plain[1].1 + w / 2.0), "{w}: {fixed:?}");
+    }
+}
+
+/// Measured in Word for Windows (compatibility mode 15, 6pt table borders): an end-aligned table
+/// puts its end border's outer edge on the margin, a 100% table landing where a start-aligned one
+/// does and a 400pt one with its right border half inside the margin; and a row exception
+/// (`w:tblPrEx`) turning the outer borders off leaves the 100% table its whole width, as the
+/// cells draw no outer border.
+#[test]
+fn a_table_from_word_2013_ends_at_the_borders_its_cells_draw() {
+    use wordcraft_doc::props::{Align, Border, BorderStyle, Borders, TableProps};
+    let six = Some(Border { style: BorderStyle::Single, width: 6.0, color: None, space: 0.0 });
+    let none = Some(Border { style: BorderStyle::None, width: 0.0, color: None, space: 0.0 });
+    let all = |b: Option<Border>| Borders { top: b, left: b, bottom: b, right: b, between: b, inside_v: b };
+    let cells = |borders: Borders, pct: bool, right: bool, row_off: bool| {
+        let mut d = Document::from_text("");
+        d.settings.compat_mode = 15;
+        let mut t = Table::new(1, 2, 200.0);
+        if pct {
+            t.props.width_pct = Some(100.0);
+        } else {
+            t.props.width = Some(400.0);
+        }
+        t.props.fixed = true;
+        t.props.borders = Some(borders);
+        if right {
+            t.props.align = Some(Align::Right);
+        }
+        if row_off {
+            t.rows[0].props.exceptions =
+                Some(Box::new(TableProps { borders: Some(Borders { left: none, right: none, ..Default::default() }), ..Default::default() }));
+        }
+        d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(t))];
+        let l = lay(&d);
+        let mut out: Vec<(f32, f32)> =
+            l.pages[0].items.iter().filter_map(|i| if let Placed::Cell { rect, .. } = i { Some((rect.x, rect.x + rect.w)) } else { None }).collect();
+        out.sort_by(|a, b| a.0.total_cmp(&b.0));
+        out
+    };
+    let near = |a: f32, b: f32| (a - b).abs() < 0.01;
+    let plain = cells(all(none), true, false, false);
+    let (left, right) = (plain[0].0, plain[1].1);
+    let start = cells(all(six), true, false, false);
+    let end = cells(all(six), true, true, false);
+    assert!(near(end[0].0, start[0].0) && near(end[1].1, start[1].1), "100% end-aligned {end:?}, start-aligned {start:?}");
+    let points = cells(all(six), false, true, false);
+    assert!(near(points[1].1, right - 3.0), "400pt end-aligned {points:?}, margin {right}");
+    let row_off = cells(all(six), true, false, true);
+    assert!(near(row_off[0].0, left) && near(row_off[1].1, right), "outer borders off in the row {row_off:?}, plain {plain:?}");
+}
+
+/// Measured in Word for Windows (compatibility mode 15): a table style with 6pt borders whose
+/// first-row part turns the left and right borders off gives its one-row 100% table its whole
+/// width while the table shows the first row's formatting, and takes the borders' halves off it
+/// when it doesn't.
+#[test]
+fn a_table_from_word_2013_takes_its_outer_borders_from_its_style_s_parts() {
+    use wordcraft_doc::styles::{PartFormat, Style, StyleKind, TablePart, TableStyleParts};
+    let six = Some(Border { style: BorderStyle::Single, width: 6.0, color: None, space: 0.0 });
+    let none = Some(Border { style: BorderStyle::None, width: 0.0, color: None, space: 0.0 });
+    let cells = |style: bool, header_row: bool| {
+        let mut d = Document::from_text("");
+        d.settings.compat_mode = 15;
+        let mut st = Style {
+            id: "Cond".into(),
+            name: "Cond".into(),
+            kind: StyleKind::Table,
+            table: Some(TableStyleParts {
+                borders: Some(Borders { top: six, left: six, bottom: six, right: six, between: six, inside_v: six }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        st.set_table_part(
+            TablePart::FirstRow,
+            PartFormat { borders: Some(Borders { left: none, right: none, ..Default::default() }), ..Default::default() },
+        );
+        d.styles.upsert(st);
+        let mut t = Table::new(1, 2, 200.0);
+        t.props.width_pct = Some(100.0);
+        t.props.fixed = true;
+        if style {
+            t.props.style = Some("Cond".into());
+            t.props.borders = None;
+        } else {
+            let off = Borders { top: none, left: none, bottom: none, right: none, between: none, inside_v: none };
+            t.props.borders = Some(off);
+        }
+        t.props.look.header_row = header_row;
+        d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(t))];
+        let l = lay(&d);
+        let mut out: Vec<(f32, f32)> =
+            l.pages[0].items.iter().filter_map(|i| if let Placed::Cell { rect, .. } = i { Some((rect.x, rect.x + rect.w)) } else { None }).collect();
+        out.sort_by(|a, b| a.0.total_cmp(&b.0));
+        out
+    };
+    let near = |a: f32, b: f32| (a - b).abs() < 0.01;
+    let plain = cells(false, true);
+    let (left, right) = (plain[0].0, plain[1].1);
+    let on = cells(true, true);
+    assert!(near(on[0].0, left) && near(on[1].1, right), "first row's borders off {on:?}, plain {plain:?}");
+    let off = cells(true, false);
+    assert!(near(off[0].0, left + 3.0) && near(off[1].1, right - 3.0), "the table's borders {off:?}, plain {plain:?}");
+}
+
 #[test]
 fn floating_tables_take_no_room_and_text_wraps_beside_them() {
     use wordcraft_doc::para::Anchor;
