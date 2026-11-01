@@ -391,9 +391,10 @@ fn untranslated_interface_text() {
 /// whose translation is the English itself (kept English, not counted as translated). A missing
 /// translation falls back to English, so the report never fails; without embedded catalogs
 /// (`CRAFT_I18N_DIR` unset) it is skipped. The strings are the ones the audit saw looked up, the
-/// ribbon tabs, every command's label and ribbon location, the File › Home greetings, every reason
-/// a command gives for being off (#2678) and the equation gallery's labels (shown in menus the
-/// audit doesn't open one by one). Numbered style names go through a template.
+/// ribbon tabs, every command's label and ribbon location, the File › Home greetings, the Line
+/// Spacing menu's Add/Remove Space wordings (the audit sees one pair), every reason a command gives
+/// for being off (#2678) and the equation gallery's labels (shown in menus the audit doesn't open
+/// one by one). Numbered style names go through a template.
 fn report_catalog_gaps(mut keys: std::collections::BTreeSet<String>) {
     use wordcraft_engine::math_gallery::{BUILT_INS, STRUCTURES, SYMBOL_SETS};
     if super::CRAFT_I18N.is_empty() {
@@ -407,6 +408,7 @@ fn report_catalog_gaps(mut keys: std::collections::BTreeSet<String>) {
     let tabs = crate::ribbon::TABS.iter().chain(&["Table Design", "Table Layout"]);
     keys.extend(tabs.map(|t| t.to_string()));
     keys.extend(["Good morning", "Good afternoon", "Good evening"].map(String::from));
+    keys.extend(wordcraft_engine::cmd::para::SPACING_LABELS.map(String::from));
     keys.extend(disabled_reasons());
     // Reasons the UI itself gives (`widgets.rs::tooltip`), which the engine's checks never reach.
     keys.insert("Open a document first".to_string());
