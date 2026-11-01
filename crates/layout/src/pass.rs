@@ -110,6 +110,8 @@ fn new_ctx<'a>(
         floats_above: HashMap::new(),
         hf: Arc::new(HfLinks::new(doc.sections())),
         alphas: Default::default(),
+        boxes_before: 0,
+        fitted_unmeasured: false,
     }
 }
 
@@ -607,7 +609,7 @@ pub(crate) fn layout_pass(
     if opts.comment_balloons && !mode.web {
         balloons::add(&mut ctx, &mut lay);
     }
-    lay.text_boxes = ctx.boxes.total().saturating_sub(boxes_discarded);
+    lay.text_boxes = (ctx.boxes.total() + ctx.boxes_before).saturating_sub(boxes_discarded);
     Pass::Done(lay)
 }
 

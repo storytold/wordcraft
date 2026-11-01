@@ -1,7 +1,7 @@
 //! Lists: abstract numbering definitions (9 levels each), numbering instances, and the counter
 //! state used to compute list labels.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
@@ -283,17 +283,18 @@ impl Numbering {
     }
 }
 
-/// Running list counters while walking a document in order.
+/// Running list counters while walking a document in order. Ordered maps, so two equal counters
+/// write out the same (a layout compares its walk with an earlier one as text).
 #[derive(Default, Debug, Clone)]
 pub struct Counters {
     /// Per abstract list: current value per level.
-    state: HashMap<u32, [u32; 9]>,
+    state: BTreeMap<u32, [u32; 9]>,
     /// Which levels of which nums have started: a num's start override for a level applies
     /// once, when that level of that num is first used (ECMA-376 Part 1, 17.9.27 startOverride).
-    seen: HashMap<(u32, u8), bool>,
+    seen: BTreeMap<(u32, u8), bool>,
     /// Per abstract list: whether each level has counted yet (a value of 0 can be a real count when a
     /// level starts at 0).
-    flags: HashMap<u32, [LevelFlags; 9]>,
+    flags: BTreeMap<u32, [LevelFlags; 9]>,
 }
 
 /// Whether a level has counted yet, and the value its next item takes if a start override says so.
@@ -329,7 +330,7 @@ impl Counters {
         // paragraphs of the other nums. A heading style can use one num for levels 1-4 and
         // another, with start overrides on every level, for 5-9; its first level-5 heading
         // must not restart the chapter count.
-        if let std::collections::hash_map::Entry::Vacant(e) = self.seen.entry((num, lv as u8)) {
+        if let std::collections::btree_map::Entry::Vacant(e) = self.seen.entry((num, lv as u8)) {
             e.insert(true);
             if let Some((_, start)) = n.start_overrides.iter().find(|(l, _)| *l as usize == lv)
                 && let (Some(s), Some(f)) = (st.get_mut(lv), fl.get_mut(lv))
@@ -395,6 +396,22 @@ const MAX_LABEL_BYTES: usize = 256;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Two counters that counted the same write out the same, whatever order the lists were met in
+    /// (a layout compares its walk with an earlier one as text).
+    #[test]
+    fn equal_counters_write_out_the_same() {
+        let mut n = Numbering::default();
+        let lists: Vec<u32> = (0..20).map(|_| n.add_list(ListKind::Numbered)).collect();
+        let (mut a, mut b) = (Counters::default(), Counters::default());
+        for &id in &lists {
+            a.next_label(&n, id, 0);
+        }
+        for &id in lists.iter().rev() {
+            b.next_label(&n, id, 0);
+        }
+        assert_eq!(format!("{a:?}"), format!("{b:?}"));
+    }
 
     #[test]
     fn a_huge_level_text_gives_a_bounded_label() {

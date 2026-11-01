@@ -8,11 +8,14 @@
 //! from the last mark before the change that nothing before it looked ahead into; and when, past
 //! the change, a page starts as it did before with the walk as it was, it takes the earlier
 //! pages from there. Its pages are those a pass from the first page makes: each mark holds all
-//! the state the rest of the pass reads, and what is worked out once per layout (text boxes,
-//! picture transparency) is never under way at a mark.
+//! the state the rest of the pass reads, and what is worked out once per layout (linked text
+//! boxes' text split over them, picture transparency) is never under way at a mark. Text boxes on
+//! their own are laid out where they are placed, from their own story: a mark only counts them.
 
 use std::collections::VecDeque;
 use std::sync::LazyLock;
+
+use wordcraft_doc::Revision;
 
 use super::cache::hash_of;
 use super::ctx::Ctx;
@@ -56,6 +59,12 @@ struct Walk {
     endnotes: VecDeque<(u32, usize)>,
     discarded: usize,
     turn: TextDirection,
+    /// Text boxes laid out so far, those on pages taken from an earlier pass included.
+    boxes: usize,
+    /// After the body only: the heights of text boxes sized to their text worked out by then, and
+    /// whether one could not be measured where it was met (marks are taken only before either).
+    fitted: HashMap<(u32, u32), Option<f32>>,
+    fitted_unmeasured: bool,
 }
 
 impl Walk {
@@ -76,11 +85,14 @@ impl Walk {
             endnotes: endnotes.clone(),
             discarded,
             turn,
+            boxes: ctx.boxes.total() + ctx.boxes_before,
+            fitted: HashMap::new(),
+            fitted_unmeasured: false,
         }
     }
 
     /// Put the walk back in `ctx`, replacing what the start of the pass left there. The pass's
-    /// own note numbers stay (they are the same: [`Track::start`]); text boxes and picture
+    /// own note numbers stay (they are the same: [`Track::start`]); linked text boxes and picture
     /// transparency start again, as none were laid out or decoded when the walk was kept.
     fn put(self, ctx: &mut Ctx) -> Loop {
         let notes = Arc::clone(&ctx.fields.notes);
@@ -95,8 +107,13 @@ impl Walk {
         ctx.floats_above = self.floats_above;
         ctx.ahead.set(self.ahead);
         ctx.boxes = Default::default();
+        ctx.boxes_before = self.boxes;
         ctx.chains = Default::default();
         ctx.alphas = Default::default();
+        // A pass joining an earlier one's pages takes the box heights its body worked out after
+        // them (headers and footers read them, and the boxes it laid out count them).
+        ctx.fitted.extend(self.fitted);
+        ctx.fitted_unmeasured |= self.fitted_unmeasured;
         (self.endnotes, self.discarded, self.turn)
     }
 
@@ -112,12 +129,16 @@ impl Walk {
     fn print(&self) -> String {
         let mut floats: Vec<_> = self.floats_above.iter().collect();
         floats.sort_by_key(|(k, _)| **k);
-        let fields = FieldCtx { notes: Default::default(), ..self.fields.clone() };
+        // Maps in their keys' order: two equal hash maps may list their entries in different orders.
+        let mut bookmarks: Vec<_> = self.fields.bookmark_pages.iter().collect();
+        bookmarks.sort_by(|a, b| a.0.cmp(b.0));
+        let fields = FieldCtx { notes: Default::default(), bookmark_pages: Default::default(), ..self.fields.clone() };
         format!(
             "{:?}",
             (
                 &self.counters,
                 fields,
+                bookmarks,
                 self.eq_count,
                 self.grid,
                 self.hide_deleted,
@@ -125,8 +146,7 @@ impl Walk {
                 self.pct_base,
                 floats,
                 &self.endnotes,
-                self.discarded,
-                self.turn
+                (self.discarded, self.turn, self.boxes)
             )
         )
     }
@@ -177,7 +197,13 @@ impl Mark {
     /// Whether the walk from here certainly goes as it does from the earlier pass's mark `other`,
     /// its blocks moved by `shift` (compared cheaply first).
     fn same(&self, other: &Mark, shift: Shift) -> bool {
-        let print = |m: &Mark| format!("{} {} {:?} {:?} {:?} {:?}", m.si, m.body_top, m.before, m.page, m.pb, m.behind);
+        let print = |m: &Mark| {
+            // Where the last paragraph ended is read for the next one in the same column of the same
+            // page only, and every paragraph placed sets it: one on a page before the mark's is left out.
+            let mut pb = m.pb.clone();
+            pb.para_end = pb.para_end.filter(|(page, ..)| *page >= m.pages);
+            format!("{} {} {:?} {:?} {:?} {:?}", m.si, m.body_top, m.before, m.page, pb, m.behind)
+        };
         if self.block != shift.block(other.block)
             || self.pages != other.pages
             || self.pb.y != other.pb.y
@@ -263,6 +289,7 @@ pub(crate) struct Resume {
     sections: Vec<(usize, SectionProps)>,
     notes: Arc<HashMap<u32, NoteNum>>,
     typing: Option<TypingWord>,
+    revisions: Vec<Revision>,
     /// How many paragraph layouts the cache had in use after the last pass from the first page.
     used: usize,
     marks: Vec<Mark>,
@@ -321,6 +348,7 @@ pub(crate) struct Track {
     held: Held,
     sections: Vec<(usize, SectionProps)>,
     typing: Option<TypingWord>,
+    revisions: Vec<Revision>,
     /// What the cache had in use after the last pass from the first page (`Resume::used`).
     used: Option<usize>,
     /// Pages when the last mark was taken.
@@ -332,13 +360,12 @@ pub(crate) struct Track {
 }
 
 /// The inputs of a layout besides the body, as one hash: the cache environment, the options but
-/// the word being typed, the rest of the document, and the address of each other story's blocks
+/// the word being typed, the rest of the document but its tracked changes, and the address of each other story's blocks
 /// and each picture's bytes (kept alive by the returned [`Held`]). `None` when they can't be read.
 fn inputs(doc: &Document, opts: &LayoutOptions, env: u64) -> Option<(u64, Held)> {
     let rest = serde_json::to_string(&(
         &doc.last_section,
         &doc.comments,
-        &doc.revisions,
         &doc.settings,
         &doc.core,
         &doc.sources,
@@ -363,7 +390,7 @@ impl Track {
             return Track::default();
         };
         let sections = doc.sections().into_iter().map(|(end, s)| (end, s.clone())).collect();
-        Track { on: true, inputs, held, sections, typing: opts.typing_word, ..Default::default() }
+        Track { on: true, inputs, held, sections, typing: opts.typing_word, revisions: doc.revisions.clone(), ..Default::default() }
     }
 
     pub(crate) fn on(&self) -> bool {
@@ -376,8 +403,17 @@ impl Track {
         // Passes started again keep what the pages before them used in the cache, and so the
         // paragraph layouts of every edit since: a pass from the first page now and then lets
         // the cache forget those.
-        let earlier =
-            earlier.filter(|e| self.on && e.inputs == self.inputs && *e.notes == *notes && used <= e.used.saturating_mul(2).saturating_add(1024))?;
+        // Tracked changes made since are added after those before, which keep their authors (and
+        // colours) and moves: only the changed blocks can show the new ones. (A block naming one
+        // that wasn't there yet takes it as a plain change either way, unless it is a move.)
+        let earlier = earlier.filter(|e| {
+            self.on
+                && e.inputs == self.inputs
+                && self.revisions.starts_with(&e.revisions)
+                && self.revisions.get(e.revisions.len()..).is_some_and(|new| new.iter().all(|r| r.move_name.is_none()))
+                && *e.notes == *notes
+                && used <= e.used.saturating_mul(2).saturating_add(1024)
+        })?;
         let (a, b) = (&earlier.body, &doc.body);
         let first = a.iter().zip(b).take_while(|(x, y)| Arc::ptr_eq(x, y)).count();
         let room = a.len().min(b.len()).saturating_sub(first);
@@ -450,13 +486,20 @@ impl Track {
         at: (usize, usize, f32),
         lp: (&VecDeque<(u32, usize)>, usize, TextDirection),
     ) -> bool {
-        if !self.on || pb.pages.len() == self.last || ctx.boxes.total() > 0 || ctx.boxes.inside() || ctx.alphas.decoded > 0 || ctx.pin.is_some() {
+        if !self.on || pb.pages.len() == self.last || ctx.chains.any_laid_out() || ctx.boxes.inside() || ctx.alphas.decoded > 0 || ctx.pin.is_some() {
             return false;
         }
         // What headers and footers give the body (their tables' areas, text boxes sized to their
         // text) is worked out once per page, sometimes while a paragraph running on to the page sets
-        // where its fields are: a pass started again might work it out otherwise. None: no marks.
-        if ctx.header_tables.values().any(|a| !a.is_empty()) || ctx.footer_wraps.values().any(|a| !a.is_empty()) || !ctx.fitted.is_empty() {
+        // where its fields are: a pass started again might work it out otherwise. None: no marks. (Boxes
+        // that keep their own size are noted in `fitted` without anything laid out.) Nor once a box
+        // sized to its text could not be measured where it was met: a pass started again meets it
+        // first elsewhere.
+        if ctx.header_tables.values().any(|a| !a.is_empty())
+            || ctx.footer_wraps.values().any(|a| !a.is_empty())
+            || ctx.fitted.values().any(Option::is_some)
+            || ctx.fitted_unmeasured
+        {
             return false;
         }
         self.last = pb.pages.len();
@@ -516,10 +559,11 @@ impl Track {
             return;
         }
         ctx.cache.resume = None;
-        if ctx.boxes.total() > 0 || ctx.boxes.inside() || ctx.alphas.decoded > 0 {
+        // Linked boxes laid out after the last mark are no hindrance: no pass starts or joins past them.
+        if ctx.boxes.inside() || ctx.alphas.decoded > 0 {
             return;
         }
-        let walk = Walk::take(ctx, lp);
+        let walk = Walk { fitted: ctx.fitted.clone(), fitted_unmeasured: ctx.fitted_unmeasured, ..Walk::take(ctx, lp) };
         ctx.cache.resume = Some(Box::new(Resume {
             inputs: self.inputs,
             _held: self.held,
@@ -527,6 +571,7 @@ impl Track {
             sections: self.sections,
             notes: Arc::clone(&ctx.fields.notes),
             typing: self.typing,
+            revisions: self.revisions,
             used: self.used.unwrap_or(ctx.cache.used.len()),
             marks: self.marks,
             end: pb.clone().with_refs(&NO_SECT, &NO_EARLY),

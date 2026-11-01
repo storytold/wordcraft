@@ -28,6 +28,11 @@ pub(crate) struct Chains {
 }
 
 impl Chains {
+    /// Whether a chain's text has been split over its boxes in this layout.
+    pub(crate) fn any_laid_out(&self) -> bool {
+        !self.flows.is_empty()
+    }
+
     fn build(&mut self, doc: &wordcraft_doc::Document) {
         if self.built {
             return;
@@ -126,7 +131,11 @@ pub(crate) fn fitted_height(ctx: &mut Ctx, id: u32, w: f32) -> Option<f32> {
         return None;
     }
     ctx.chains.build(ctx.doc);
-    if ctx.chains.member.contains_key(&id) || !ctx.boxes.enter(id) {
+    if ctx.chains.member.contains_key(&id) {
+        return None;
+    }
+    if !ctx.boxes.enter(id) {
+        ctx.fitted_unmeasured = true;
         return None;
     }
     let blocks = ctx.doc.parts.get(&id).map(|p| p.blocks.clone()).unwrap_or_default();
@@ -138,6 +147,7 @@ pub(crate) fn fitted_height(ctx: &mut Ctx, id: u32, w: f32) -> Option<f32> {
     ctx.boxes.leave();
     let [_, t, _, b] = body.insets_pt();
     let h = extent(&items) + t + b;
+    ctx.fitted_unmeasured |= !h.is_finite();
     h.is_finite().then_some(h)
 }
 

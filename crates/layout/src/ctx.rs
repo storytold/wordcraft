@@ -66,6 +66,9 @@ pub(crate) struct Ctx<'a> {
     /// Heights of text boxes that resize to fit their text, by (story, width), worked out once
     /// per layout ([`textbox::fitted_height`]).
     pub(crate) fitted: HashMap<(u32, u32), Option<f32>>,
+    /// A box that resizes to fit its text was not measured where it was met (inside itself, too
+    /// deep, or no finite height): its entry in `fitted` stands for where it was first met.
+    pub(crate) fitted_unmeasured: bool,
     /// Each body float's latest placement: on which page and with what wrap area, when it is
     /// above its anchor paragraph with text before it ([`EarlyFloats`]).
     pub(crate) floats_above: HashMap<(usize, usize), Option<(usize, WrapArea)>>,
@@ -73,6 +76,9 @@ pub(crate) struct Ctx<'a> {
     pub(crate) hf: Arc<HfLinks<'a>>,
     /// Pictures' transparency, decoded for Tight and Through wrapping ([`Ctx::wrap_outline`]).
     pub(crate) alphas: contour::Alphas,
+    /// Text boxes laid out on the pages a pass took from an earlier one, counted in
+    /// [`DocLayout::text_boxes`](crate::DocLayout::text_boxes) with `boxes` ([`crate::resume`]).
+    pub(crate) boxes_before: usize,
 }
 
 struct ParaEnvInput<'a> {
