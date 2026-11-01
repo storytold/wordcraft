@@ -57,8 +57,10 @@ pub const NAMESPACES: &[(&str, &str)] = &[
 pub const DECORATIVE_EXT: &str = "{C183D7F6-B498-43B3-948B-1728B52AA6E4}";
 pub const DECORATIVE_NS: &str = "http://schemas.microsoft.com/office/drawing/2017/decorative";
 
-/// Namespaces that only appear in non-body parts.
+/// Namespaces that only appear in non-body parts, or that the reader reads but never writes.
 const OTHER_NAMESPACES: &[(&str, &str)] = &[
+    // A locked canvas, read into a drawing group (#5060).
+    ("lc", "http://schemas.openxmlformats.org/drawingml/2006/lockedCanvas"),
     ("b", "http://schemas.openxmlformats.org/officeDocument/2006/bibliography"),
     ("rel", "http://schemas.openxmlformats.org/package/2006/relationships"),
     ("ct", "http://schemas.openxmlformats.org/package/2006/content-types"),

@@ -17,6 +17,7 @@ mod glossary;
 mod heading_levels;
 mod legacy_forms;
 mod ligatures;
+mod locked_canvas;
 mod malformed;
 mod note_comments;
 mod passthrough;

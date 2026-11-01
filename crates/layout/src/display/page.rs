@@ -48,13 +48,17 @@ pub struct ItemDisplay<'a> {
     page: &'a Page,
     authors: Authors<'a>,
     clips: Clips,
+    /// The page's warped text boxes ([`warped_boxes`]): their text is drawn bent, with their
+    /// first line, as the page draws it, though their frame is another item.
+    warps: Vec<(u32, Rect, wordcraft_doc::wordart::TextWarp)>,
 }
 
 impl<'a> ItemDisplay<'a> {
     pub fn new(doc: &'a Document, page: &'a Page) -> Self {
         let cells: Vec<Placed> =
             page.header.iter().chain(&page.footer).chain(&page.items).filter(|c| matches!(c, Placed::Cell { clip: true, .. })).cloned().collect();
-        ItemDisplay { doc, page, authors: Authors::new(doc), clips: clipped_cells(&cells) }
+        let warps = [&page.header, &page.footer, &page.items].into_iter().flat_map(|items| warped_boxes(doc, items)).collect();
+        ItemDisplay { doc, page, authors: Authors::new(doc), clips: clipped_cells(&cells), warps }
     }
 
     /// The draw items of `it` alone, as [`page_display`] gives them for a page holding just it
@@ -63,6 +67,27 @@ impl<'a> ItemDisplay<'a> {
         let mut out = Vec::new();
         let items = std::slice::from_ref(it);
         let (_, ba) = dimming(opts);
+        if let Placed::Lines { story: StoryRef::Part(id), .. } = it
+            && let Some((_, rect, warp)) = self.warps.iter().find(|(w, ..)| w == id)
+        {
+            // A warped text box's lines are drawn together, bent, with its first one.
+            let page = self.page;
+            let lines: Vec<&Placed> = [&page.header, &page.footer, &page.items]
+                .into_iter()
+                .flatten()
+                .filter(|i| matches!(i, Placed::Lines { story: StoryRef::Part(s), .. } if s == id))
+                .collect();
+            match lines.iter().position(|l| std::ptr::eq(*l, it)) {
+                Some(0) => {
+                    warped_text(WarpedText { doc: self.doc, lines: &lines, rect: *rect, warp, opts, authors: &self.authors, alpha: ba }, &mut out)
+                }
+                Some(_) => {}
+                // Not one of the page's own items: drawn on its own, as before.
+                None => stories_display(self.doc, &[items], Some(&self.clips), opts, &self.authors, ba, &mut out),
+            }
+            body_change_bars(self.doc, self.page, items, opts, ba, &mut out);
+            return out;
+        }
         stories_display(self.doc, &[items], Some(&self.clips), opts, &self.authors, ba, &mut out);
         body_change_bars(self.doc, self.page, items, opts, ba, &mut out);
         out
@@ -207,16 +232,30 @@ fn cell_clip(clips: &Clips, story: StoryRef, path: &[u32]) -> Option<Rect> {
 /// The text boxes among `items` whose text is warped (Text Effects › Transform, drawn bent): their
 /// story, frame and warp. Empty, without a walk of the document, when none is.
 fn warped_boxes(doc: &Document, items: &[Placed]) -> Vec<(u32, Rect, wordcraft_doc::wordart::TextWarp)> {
-    items
-        .iter()
-        .filter_map(|it| {
-            let Placed::Object { rect, story, path, off, text_box: Some(id), .. } = it else { return None };
-            match doc.para(*story, path)?.object_at(*off)? {
-                InlineObject::Shape { extra, .. } => extra.warp.clone().filter(|w| !w.is_plain()).map(|w| (*id, *rect, w)),
-                _ => None,
+    let warp = |extra: &wordcraft_doc::connector::ShapeExtra| extra.warp.clone().filter(|w| !w.is_plain());
+    let mut out = Vec::new();
+    for it in items {
+        let Placed::Object { rect, spin, story, path, off, text_box, .. } = it else { continue };
+        let Some(o) = doc.para(*story, path).and_then(|p| p.object_at(*off)) else { continue };
+        match o {
+            InlineObject::Shape { extra, .. } => out.extend(text_box.zip(warp(extra)).map(|(id, w)| (id, *rect, w))),
+            // A group's text boxes (WordArt in a Word 2007 locked canvas, #5060), each where the
+            // group's turn carries it, as their text is laid out.
+            InlineObject::Group { .. } => {
+                let centre = wordcraft_geom::Point::new(rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
+                for ([x, y, w, h], c) in o.group_rects(rect.x, rect.y, rect.w, rect.h) {
+                    if let InlineObject::Shape { story: Some(id), extra, float, .. } = c
+                        && !float.hidden
+                        && let Some(wp) = warp(extra)
+                    {
+                        out.push((*id, crate::floats::carried(Rect::new(x, y, w, h), *spin, centre), wp));
+                    }
+                }
             }
-        })
-        .collect()
+            _ => {}
+        }
+    }
+    out
 }
 
 /// The text of a warped text box at `rect`: its lines' letters as outlines bent by `warp`, the

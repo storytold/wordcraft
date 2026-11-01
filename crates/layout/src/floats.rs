@@ -306,7 +306,7 @@ pub fn shape_figure_alt(o: &InlineObject) -> Option<&str> {
 /// A group's members, each with its rectangle when the group is at `rect`.
 /// `rect` moved (not turned) to where `spin` about `centre` takes its centre: a group member's
 /// frame inside its turned group.
-fn carried(rect: Rect, spin: Spin, centre: Point) -> Rect {
+pub(crate) fn carried(rect: Rect, spin: Spin, centre: Point) -> Rect {
     let (cx, cy) = (rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
     let (nx, ny) = spin.apply(centre.x, centre.y, cx, cy);
     Rect::new(rect.x + nx - cx, rect.y + ny - cy, rect.w, rect.h)
