@@ -117,18 +117,29 @@ pub fn is_correct(word: &str) -> bool {
     is_correct_with(&dictionary(), word)
 }
 
+/// [`is_correct`] under the File › Options › Proofing choices: words with digits and short words
+/// in capitals are checked too when the options say so.
+pub fn is_correct_with_options(word: &str, opts: &crate::Options) -> bool {
+    check(&dictionary(), word, opts)
+}
+
 /// [`is_correct`] against a given dictionary (an empty one accepts everything).
 pub fn is_correct_with(d: &AffixDict, word: &str) -> bool {
+    check(d, word, &crate::Options::default())
+}
+
+/// [`is_correct_with_options`] against a given dictionary.
+fn check(d: &AffixDict, word: &str, opts: &crate::Options) -> bool {
     if d.is_empty() {
         return true; // no Hungarian dictionary installed: no spelling marks
     }
     let w = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '-');
     let w = w.trim_matches('-');
     let n = w.chars().count();
-    if n <= 1 || w.chars().any(|c| c.is_ascii_digit()) || !w.chars().any(char::is_alphabetic) {
+    if n <= 1 || (opts.ignore_numbers && w.chars().any(|c| c.is_ascii_digit())) || !w.chars().any(char::is_alphabetic) {
         return true;
     }
-    if w.chars().all(|c| !c.is_lowercase()) && n <= 6 && !w.contains('-') {
+    if opts.ignore_uppercase && w.chars().all(|c| !c.is_lowercase()) && n <= 6 && !w.contains('-') {
         return true;
     }
     if !w.chars().any(is_latin_letter) {
@@ -277,8 +288,21 @@ mod tests {
 
     #[test]
     fn a_failed_load_is_reported_under_the_hungarian_name() {
-        assert_eq!(DICT.name(), "hu_HU");
+        assert_eq!(crate::dictionary_needed(crate::ProofLang::Hu, false), Some("hu_HU"));
         assert_eq!(NAMES.first(), Some(&"hu_HU"));
+    }
+
+    #[test]
+    fn the_proofing_options_decide_on_digits_and_capitals() {
+        test_dict::install();
+        let strict = crate::Options { ignore_uppercase: false, ignore_numbers: false, ..crate::Options::default() };
+        for w in ["XQZW", "x2qz"] {
+            assert!(is_correct(w) && !is_correct_with_options(w, &strict), "{w}");
+        }
+        assert!(is_correct_with_options("ház", &strict));
+        // Through the language table, as a document is checked.
+        assert!(!crate::is_correct_in_with("XQZW", crate::ProofLang::Hu, &strict));
+        assert!(crate::is_correct_in_with("XQZW", crate::ProofLang::Hu, &crate::Options::default()));
     }
 
     #[test]

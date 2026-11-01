@@ -13,12 +13,48 @@
 //!    doubled forms (`ssz`, `ggy`…) are never split, for the same reason as above.
 
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, PoisonError, RwLock};
 
 use crate::patterns::Patterns;
 
-/// The installed patterns: `None` until first use, then the loaded ones (empty when none).
-static PATTERNS: RwLock<Option<Arc<Patterns>>> = RwLock::new(None);
+/// The installed patterns.
+static PATTERNS: Cache = Cache::new();
+
+/// Patterns read on first use: `None` until then, and a count of the reloads, so patterns read
+/// before one (from another folder) are not kept.
+struct Cache(RwLock<(Option<Arc<Patterns>>, u64)>);
+
+impl Cache {
+    const fn new() -> Self {
+        Cache(RwLock::new((None, 0)))
+    }
+
+    fn get(&self, load: impl FnOnce() -> Patterns) -> Arc<Patterns> {
+        let reloads = {
+            let s = self.0.read().unwrap_or_else(PoisonError::into_inner);
+            if let Some(p) = s.0.as_ref() {
+                return p.clone();
+            }
+            s.1
+        };
+        self.keep(reloads, Arc::new(load()))
+    }
+
+    /// Keep patterns read after `reloads` reloads, unless there has been one since: then they
+    /// serve this call only, or ones read since serve it.
+    fn keep(&self, reloads: u64, loaded: Arc<Patterns>) -> Arc<Patterns> {
+        let mut s = self.0.write().unwrap_or_else(PoisonError::into_inner);
+        if s.1 != reloads {
+            return s.0.clone().unwrap_or(loaded);
+        }
+        s.0.get_or_insert(loaded).clone()
+    }
+
+    fn reload(&self) {
+        let mut s = self.0.write().unwrap_or_else(PoisonError::into_inner);
+        *s = (None, s.1.wrapping_add(1));
+    }
+}
 
 /// File names of the Hungarian `hyphen` patterns.
 const NAMES: &[&str] = &["hyph_hu_HU.dic", "hyph_hu.dic", "hyph-hu.dic"];
@@ -42,17 +78,12 @@ pub fn installed_path() -> Option<PathBuf> {
 
 /// The installed Hungarian patterns (read on first use; empty when there are none).
 pub fn patterns() -> Arc<Patterns> {
-    if let Some(p) = PATTERNS.read().unwrap_or_else(|e| e.into_inner()).as_ref() {
-        return p.clone();
-    }
-    let loaded = Arc::new(load_installed());
-    let mut slot = PATTERNS.write().unwrap_or_else(|e| e.into_inner());
-    slot.get_or_insert(loaded).clone()
+    PATTERNS.get(load_installed)
 }
 
 /// Forget the loaded patterns, so the next hyphenation looks for installed ones again.
 pub fn reload_patterns() {
-    *PATTERNS.write().unwrap_or_else(|e| e.into_inner()) = None;
+    PATTERNS.reload();
 }
 
 fn load_installed() -> Patterns {
@@ -188,6 +219,18 @@ pub fn points(core: &[char]) -> Option<(Vec<usize>, bool)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn patterns_read_before_a_reload_are_not_kept() {
+        let cache = Cache::new();
+        let old = Arc::new(parse("UTF-8\n1a1\n"));
+        let reloads = cache.0.read().unwrap().1;
+        cache.reload();
+        assert!(Arc::ptr_eq(&cache.keep(reloads, old.clone()), &old), "used once");
+        let new = cache.get(|| parse("UTF-8\n1b1\n"));
+        assert!(!Arc::ptr_eq(&new, &old) && Arc::ptr_eq(&cache.get(Patterns::default), &new), "the new ones are kept");
+        assert!(Arc::ptr_eq(&cache.keep(reloads, old), &new), "a stale read gets the kept ones");
+    }
 
     fn hyph(word: &str, points: &[usize]) -> String {
         let mut s = String::new();

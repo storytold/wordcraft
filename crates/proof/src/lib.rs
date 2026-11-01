@@ -285,7 +285,7 @@ static LANGUAGES: [Language; 13] = [
         lang: ProofLang::Hu,
         slot: &hu::DICT,
         message: "Lehetséges helyesírási hiba",
-        is_correct: |w, _, _| hu::is_correct(w),
+        is_correct: |w, _, o| hu::is_correct_with_options(w, o),
         suggest: |w, n, _| hu::suggest(w, n),
         grammar: |t, _, c| hu::grammar::check_with(t, c),
     },
@@ -1163,7 +1163,7 @@ mod tests {
         // the languages' own tests install theirs concurrently, so an exact path would race them.
         // The folder is searched first whatever is in use.
         let found = installed_dictionaries();
-        let names = ["pl_PL", "pt_BR", "it_IT", "hr_HR", "tr_TR", "ru_RU", "cs_CZ", "id_ID", "es_ES", "es_MX", "es_419", "es_UY"];
+        let names = ["pl_PL", "pt_BR", "it_IT", "hr_HR", "tr_TR", "ru_RU", "cs_CZ", "id_ID", "es_ES", "es_MX", "es_419", "es_UY", "hu_HU"];
         assert_eq!(
             found.iter().map(|(lang, _)| *lang).collect::<Vec<_>>(),
             [

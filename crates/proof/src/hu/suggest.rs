@@ -308,7 +308,7 @@ pub fn suggest_in(d: &AffixDict, word: &str, max: usize) -> Vec<String> {
     }
     let mut found: Vec<(String, (u32, usize))> = col.found.into_iter().collect();
     found.sort_by_key(|(_, k)| *k);
-    in_case(found, case, word, max)
+    in_case(d, found, case, word, max)
 }
 
 /// Round 3: the dictionary's `REP` pairs, each at every place it matches.
@@ -387,14 +387,52 @@ fn one_typo(d: &AffixDict, chars: &[char]) -> Vec<(String, u32)> {
 }
 
 /// The suggestions in the word's letter case, best first, without the word itself, at most `max`.
-fn in_case(found: Vec<(String, (u32, usize))>, case: Casing, word: &str, max: usize) -> Vec<String> {
+/// A suggestion takes the word's case unless that makes it wrong or unsuggestible, as Hunspell's
+/// do: then it is offered in lower case or with a capital, whichever may be suggested first (`km` for `Kmm` with `km`
+/// flagged `KEEPCASE`, `ijs` for `Ijss` with `Ijs` forbidden; `Km` when `Km` is listed too), or
+/// not at all (`Kwhh` gets no `kWh`). Unlike Hunspell, a case variant flagged `NOSUGGEST` or
+/// `SUBSTANDARD` is never offered (`Km/NOSUGGEST`: `Kmm` gets `km`, not `Km`).
+fn in_case(d: &AffixDict, found: Vec<(String, (u32, usize))>, case: Casing, word: &str, max: usize) -> Vec<String> {
     let n = word.chars().count();
     let mut out: Vec<String> = Vec::new();
+    // A re-cased suggestion costs a check, at most 4 × `max` of them; the others cost nothing.
+    let mut checks = max.saturating_mul(4);
     for (text, _) in found {
-        let t = match case {
+        let recased = match case {
             Casing::Initial => capitalize(&text),
             Casing::Upper if n > 1 => text.to_uppercase(),
-            _ => text,
+            _ => text.clone(),
+        };
+        // Hunspell re-cases a split all the same (`Dkgis` → `Dkg is`), and takes a mixed-case
+        // word in capitals unless it keeps its case (`MIXCASE` of `mixCase`, not `MRNS` of
+        // `mRNS/KEEPCASE`), which the engine doesn't check yet.
+        let mixed = || {
+            matches!(case, Casing::Upper)
+                && text.chars().skip(1).any(char::is_uppercase)
+                && !d.case_locked(&text)
+                && !text.split('-').any(|p| d.case_locked(p))
+        };
+        let t = if recased == text || text.contains(' ') {
+            recased
+        } else if checks == 0 {
+            continue;
+        } else {
+            checks -= 1;
+            if mixed() || d.can_suggest(&recased) {
+                recased
+            } else {
+                // The text itself is suggestible as found; a lower-case one needs no second look.
+                let lower = text.to_lowercase();
+                let initial = capitalize(&lower);
+                if lower == text {
+                    text
+                } else {
+                    match [lower, initial].into_iter().find(|v| d.can_suggest(v)) {
+                        Some(v) => v,
+                        None => continue,
+                    }
+                }
+            }
         };
         if t != word && !out.contains(&t) {
             out.push(t);
@@ -467,6 +505,39 @@ fn scan(col: &mut Collector, chars: &[char]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A suggestion wrong in the word's case keeps the dictionary's (`KEEPCASE`, as hu_HU flags
+    /// `km`, `kg`; a forbidden case), as the Hunspell 1.7 command line does: `Km` and `Kmm` get
+    /// `km`, `Ijss` gets `ijs`, and with `Km` listed `Kmm` gets `Km` and `KMM` gets `KM`.
+    #[test]
+    fn keepcase_suggestions_keep_the_dictionary_case() {
+        let d = AffixDict::from_hunspell("SET UTF-8\nKEEPCASE ?\nTRY km\n", "2\nkm/?\nkör\n", &[]).unwrap();
+        for w in ["Km", "Kmm", "KMM"] {
+            let got = suggest_in(&d, w, 5);
+            assert!(got.iter().any(|s| s == "km") && !got.iter().any(|s| s == "Km" || s == "KM"), "{w}: {got:?}");
+        }
+        assert_eq!(suggest_in(&d, "Körr", 5).first().map(String::as_str), Some("Kör"), "other words follow the word's case");
+        let forbidden = AffixDict::from_hunspell("SET UTF-8\nFORBIDDENWORD W\nTRY ijs\n", "2\nijs\nIjs/W\n", &[]).unwrap();
+        for w in ["Ijss", "IJSS"] {
+            assert_eq!(suggest_in(&forbidden, w, 5), ["ijs"], "{w}");
+        }
+        // Neither in lower case nor with a capital: no suggestion, as with the command line.
+        let kwh = AffixDict::from_hunspell("SET UTF-8\nKEEPCASE ?\nTRY kwh\n", "2\nkWh\nmRNS/?\n", &[]).unwrap();
+        for w in ["Kwhh", "Mrnss", "MRNSS"] {
+            assert!(suggest_in(&kwh, w, 5).is_empty(), "{w}: {:?}", suggest_in(&kwh, w, 5));
+        }
+        // A case variant that may not be suggested isn't (the command line offers `Km` here).
+        let hidden = AffixDict::from_hunspell("SET UTF-8\nKEEPCASE ?\nNOSUGGEST !\nTRY kmKM\n", "2\nkm/?\nKm/!\n", &[]).unwrap();
+        assert_eq!(suggest_in(&hidden, "Kmm", 5).first().map(String::as_str), Some("km"));
+        // Without KEEPCASE and FORBIDDENWORD too (`Iphonee` gets no `IPhone`).
+        let plain = AffixDict::from_hunspell("SET UTF-8\nTRY kwhipone\n", "2\nkWh\niPhone\n", &[]).unwrap();
+        for w in ["Kwhh", "Iphonee"] {
+            assert!(suggest_in(&plain, w, 5).is_empty(), "{w}: {:?}", suggest_in(&plain, w, 5));
+        }
+        let listed = AffixDict::from_hunspell("SET UTF-8\nKEEPCASE ?\nTRY kmKM\n", "2\nkm/?\nKm\n", &[]).unwrap();
+        assert_eq!(suggest_in(&listed, "Kmm", 5).first().map(String::as_str), Some("Km"));
+        assert_eq!(suggest_in(&listed, "KMM", 5).first().map(String::as_str), Some("KM"));
+    }
 
     fn has(word: &str, want: &str) {
         let s = suggest(word, 8);
