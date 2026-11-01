@@ -61,7 +61,12 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("outline.promoteToHeading1", "Promote to Heading 1", "Outlining › Outline Tools", |s, _| set_levels(s, Some(1))),
         CommandSpec::new("outline.promote", "Promote", "Outlining › Outline Tools", |s, _| run_joined(s, "para.promote")),
         CommandSpec::new("outline.demote", "Demote", "Outlining › Outline Tools", |s, _| run_joined(s, "para.demote")),
-        CommandSpec::new("outline.demoteToBody", "Demote to Body Text", "Outlining › Outline Tools", |s, _| set_levels(s, None)),
+        // Word's Ctrl+Shift+N (Mod+Shift+N on Windows/Linux). Normal Style also has that key
+        // there, so this command takes it in Outline view and Normal Style keeps it elsewhere.
+        // On macOS Normal Style is ⌘⇧N, leaving the Control key free for this.
+        CommandSpec::new("outline.demoteToBody", "Demote to Body Text", "Outlining › Outline Tools", |s, _| set_levels(s, None))
+            .key(super::mac_or("Ctrl+Shift+N", "Mod+Shift+N"))
+            .when(in_outline),
         CommandSpec::new("outline.level", "Outline Level", "Outlining › Outline Tools", |s, v| {
             let level = match v.get("level") {
                 Some(Value::String(b)) if b.eq_ignore_ascii_case("body") => None,
@@ -77,12 +82,12 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("outline.moveUp", "Move Up", "Outlining › Outline Tools", |s, _| run_joined(s, "para.moveUp")),
         CommandSpec::new("outline.moveDown", "Move Down", "Outlining › Outline Tools", |s, _| run_joined(s, "para.moveDown")),
         CommandSpec::new("outline.expand", "Expand", "Outlining › Outline Tools", |s, v| expand(s, v, false))
-            .key("Alt+Shift+=")
+            .key(super::mac_or("Alt+Shift+= / Ctrl+Shift+=", "Alt+Shift+="))
             .params(BLOCK)
             .when(in_outline)
             .pure(),
         CommandSpec::new("outline.collapse", "Collapse", "Outlining › Outline Tools", |s, v| collapse(s, v, false))
-            .key("Alt+Shift+-")
+            .key(super::mac_or("Alt+Shift+- / Ctrl+Shift+-", "Alt+Shift+-"))
             .params(BLOCK)
             .when(in_outline)
             .pure(),
@@ -114,50 +119,50 @@ pub fn specs() -> Vec<CommandSpec> {
         .when(in_outline)
         .pure(),
         CommandSpec::new("outline.showLevel1", "Show Level 1", "Outlining › Outline Tools", |s, _| show_level(s, 1))
-            .key("Alt+Shift+1")
+            .key(super::mac_or("Alt+Shift+1 / Ctrl+Shift+1", "Alt+Shift+1"))
             .when(in_outline)
             .pure(),
         CommandSpec::new("outline.showLevel2", "Show Level 2", "Outlining › Outline Tools", |s, _| show_level(s, 2))
-            .key("Alt+Shift+2")
+            .key(super::mac_or("Alt+Shift+2 / Ctrl+Shift+2", "Alt+Shift+2"))
             .when(in_outline)
             .pure(),
         CommandSpec::new("outline.showLevel3", "Show Level 3", "Outlining › Outline Tools", |s, _| show_level(s, 3))
-            .key("Alt+Shift+3")
+            .key(super::mac_or("Alt+Shift+3 / Ctrl+Shift+3", "Alt+Shift+3"))
             .when(in_outline)
             .pure(),
         CommandSpec::new("outline.showLevel4", "Show Level 4", "Outlining › Outline Tools", |s, _| show_level(s, 4))
-            .key("Alt+Shift+4")
+            .key(super::mac_or("Alt+Shift+4 / Ctrl+Shift+4", "Alt+Shift+4"))
             .when(in_outline)
             .pure(),
         CommandSpec::new("outline.showLevel5", "Show Level 5", "Outlining › Outline Tools", |s, _| show_level(s, 5))
-            .key("Alt+Shift+5")
+            .key(super::mac_or("Alt+Shift+5 / Ctrl+Shift+5", "Alt+Shift+5"))
             .when(in_outline)
             .pure(),
         CommandSpec::new("outline.showLevel6", "Show Level 6", "Outlining › Outline Tools", |s, _| show_level(s, 6))
-            .key("Alt+Shift+6")
+            .key(super::mac_or("Alt+Shift+6 / Ctrl+Shift+6", "Alt+Shift+6"))
             .when(in_outline)
             .pure(),
         CommandSpec::new("outline.showLevel7", "Show Level 7", "Outlining › Outline Tools", |s, _| show_level(s, 7))
-            .key("Alt+Shift+7")
+            .key(super::mac_or("Alt+Shift+7 / Ctrl+Shift+7", "Alt+Shift+7"))
             .when(in_outline)
             .pure(),
         CommandSpec::new("outline.showLevel8", "Show Level 8", "Outlining › Outline Tools", |s, _| show_level(s, 8))
-            .key("Alt+Shift+8")
+            .key(super::mac_or("Alt+Shift+8 / Ctrl+Shift+8", "Alt+Shift+8"))
             .when(in_outline)
             .pure(),
         CommandSpec::new("outline.showLevel9", "Show Level 9", "Outlining › Outline Tools", |s, _| show_level(s, 9))
-            .key("Alt+Shift+9")
+            .key(super::mac_or("Alt+Shift+9 / Ctrl+Shift+9", "Alt+Shift+9"))
             .when(in_outline)
             .pure(),
         CommandSpec::new("outline.showAll", "Show All Levels", "Outlining › Outline Tools", |s, _| show_level(s, 0))
-            .key("Alt+Shift+A")
+            .key(super::mac_or("Alt+Shift+A / Ctrl+Shift+A", "Alt+Shift+A"))
             .when(in_outline)
             .pure(),
         CommandSpec::new("outline.firstLineOnly", "Show First Line Only", "Outlining › Outline Tools", |s, v| {
             s.view.outline.first_line_only = p::bool(v, "value").unwrap_or(!s.view.outline.first_line_only);
             Ok(json!({"value": s.view.outline.first_line_only}))
         })
-        .key(super::non_mac("Alt+Shift+L"))
+        .key(super::mac_or("Ctrl+Shift+L", "Alt+Shift+L"))
         .params(r#"{"value"?: bool}"#)
         .when(in_outline)
         .pure(),

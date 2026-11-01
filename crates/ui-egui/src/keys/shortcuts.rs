@@ -23,6 +23,7 @@ pub fn key_name(k: Key) -> Option<&'static str> {
         Key::Minus => "-",
         Key::Period => ".",
         Key::Comma => ",",
+        Key::Semicolon => ";",
         Key::OpenBracket => "[",
         Key::CloseBracket => "]",
         Key::Num0 => "0",
@@ -119,7 +120,7 @@ pub(super) fn ui_shortcut(key: Key, m: Modifiers) -> Option<(&'static str, Value
 pub(super) fn dispatch(app: &mut WordApp, key: Key, m: Modifiers) -> bool {
     let reg = app.session.registry.clone();
     let name = key_name(key);
-    let bound = name.and_then(|n| app.session.keymap.resolve(&reg, &combo(m, n, true)));
+    let bound = name.and_then(|n| app.session.keymap.resolve_in(&reg, &app.session, &combo(m, n, true)));
     // Ctrl+F1 collapses the ribbon only when the user hasn't given it to a command (#1678); the
     // other interface shortcuts (Alt+Q, ⌘⌥R) keep their place ahead of the keymap.
     if let Some((id, params)) = ui_shortcut(key, m).filter(|_| key != Key::F1 || bound.is_none()) {

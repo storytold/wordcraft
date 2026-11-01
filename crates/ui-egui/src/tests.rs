@@ -5535,20 +5535,7 @@ fn the_full_screen_button_reports_the_commands_own_enabled_state() {
         .all()
         .iter()
         .map(|s| {
-            if s.id == "view.fullScreen" {
-                CommandSpec {
-                    id: s.id,
-                    label: s.label,
-                    location: s.location,
-                    shortcut: s.shortcut,
-                    params: s.params,
-                    mutates: s.mutates,
-                    enabled: unavailable,
-                    run: s.run,
-                }
-            } else {
-                s.clone()
-            }
+            if s.id == "view.fullScreen" { CommandSpec::new(s.id, s.label, s.location, s.run).params(s.params).when(unavailable) } else { s.clone() }
         })
         .collect();
     a.session.registry = std::sync::Arc::new(Registry::new(specs));

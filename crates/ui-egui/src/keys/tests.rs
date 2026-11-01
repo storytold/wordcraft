@@ -1233,3 +1233,13 @@ fn typing_with_smart_art_selected_types_into_an_item() {
     let g = wordcraft_engine::cmd::smart_art::selected_smart_art(&a.session).expect("still there");
     assert_eq!(g.items[0].text, "Ada", "one undo step for the typing");
 }
+/// The named keys the PR's Word-default set uses reach the registry's spellings.
+#[test]
+fn named_keys_and_semicolon_reach_the_registry() {
+    // Alt+; (Ellipsis) and the named table-selection keys need registry spellings too.
+    assert_eq!(key_name(Key::Semicolon), Some(";"));
+    assert_eq!(key_name(Key::Home), Some("Home"));
+    assert_eq!(key_name(Key::End), Some("End"));
+    assert_eq!(key_name(Key::PageUp), Some("PageUp"));
+    assert_eq!(key_name(Key::PageDown), Some("PageDown"));
+}

@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{CommandSpec, Registry};
+use crate::{CommandSpec, Registry, Session};
 
 /// At most this many saved entries are read (a hand-edited settings file can't balloon memory).
 const MAX_ENTRIES: usize = 2000;
@@ -88,7 +88,30 @@ fn builtin_keys(spec: &CommandSpec) -> impl Iterator<Item = String> + '_ {
 
 /// The command a key runs without customization (the first command listing it).
 fn builtin<'a>(reg: &'a Registry, key: &str) -> Option<&'a CommandSpec> {
-    reg.all().iter().find(|s| !s.shortcut.is_empty() && builtin_keys(s).any(|k| k == key))
+    reg.all().iter().find(|s| has_key(s, key))
+}
+
+/// Whether `spec` lists `key` (already normalized).
+fn has_key(spec: &CommandSpec, key: &str) -> bool {
+    !spec.shortcut.is_empty() && builtin_keys(spec).any(|k| k == key)
+}
+
+/// The command a key runs in the session's state: where a key is shared, one available only in
+/// some states (`when`; Outline view's Demote to Body Text) wins there while it is available, and
+/// the general command (Normal Style) keeps the key everywhere else.
+fn builtin_in<'a>(reg: &'a Registry, s: &Session, key: &str) -> Option<&'a CommandSpec> {
+    let mut first = None;
+    let mut available = None;
+    for spec in reg.all().iter().filter(|spec| has_key(spec, key)) {
+        first.get_or_insert(spec);
+        if (spec.enabled)(s).is_none() {
+            if spec.conditional {
+                return Some(spec);
+            }
+            available.get_or_insert(spec);
+        }
+    }
+    available.or(first)
 }
 
 impl KeyMap {
@@ -129,6 +152,20 @@ impl KeyMap {
             return None;
         }
         builtin(reg, &key)
+    }
+
+    /// [`resolve`](Self::resolve) with the session's state: the same, except that a command
+    /// available only in some state (Outline view's Demote to Body Text) takes a key it shares
+    /// with one available everywhere (Normal Style) while it is available.
+    pub fn resolve_in<'a>(&self, reg: &'a Registry, s: &Session, key: &str) -> Option<&'a CommandSpec> {
+        let key = normalize(key)?;
+        if let Some(spec) = self.assigned.get(&key).and_then(|id| reg.get(id)) {
+            return Some(spec);
+        }
+        if self.removed.contains(&key) {
+            return None;
+        }
+        builtin_in(reg, s, &key)
     }
 
     /// The keys that run a command now: its built-in keys still in effect, then the user's.

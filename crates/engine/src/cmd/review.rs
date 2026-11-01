@@ -136,7 +136,10 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(json!({"value": s.view.proofing}))
         })
         .pure(),
-        CommandSpec::new("review.thesaurus", "Thesaurus", "Review › Proofing", thesaurus).key("Shift+F7").pure(),
+        CommandSpec::new("review.thesaurus", "Thesaurus", "Review › Proofing", thesaurus)
+            // Word for Mac also opens the Thesaurus with ⌃⌥⌘R.
+            .key(super::mac_or("Shift+F7 / Mod+Ctrl+Alt+R", "Shift+F7"))
+            .pure(),
     ]
 }
 
