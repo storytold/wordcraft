@@ -8459,6 +8459,58 @@ fn body_text_frames_go_where_the_frame_puts_them() {
     assert!((body.top - 72.0).abs() < 1.0 && (body.x - 72.0).abs() < 1.0, "the frames take no room: ({}, {})", body.x, body.top);
 }
 
+/// Only paragraphs one after another with equal frames share one: a paragraph with another frame
+/// goes to that frame's place, and an unframed paragraph between two equal frames ends the run,
+/// so the second is a frame of its own at the frame's place, not stacked under the first.
+#[test]
+fn different_or_interrupted_body_text_frames_are_frames_of_their_own() {
+    use wordcraft_doc::props::TextFrame;
+    let at = |x: f32, y: f32| TextFrame {
+        w: Some(150.0),
+        x,
+        y,
+        h_anchor: "page".into(),
+        v_anchor: "page".into(),
+        wrap: "around".into(),
+        ..Default::default()
+    };
+    let framed = |text: &str, frame: &TextFrame| {
+        let mut p = wordcraft_doc::Paragraph::with_text(text, Default::default());
+        p.props.frame = Some(frame.clone());
+        wordcraft_doc::para_block(p)
+    };
+    let plain = |text: &str| wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()));
+    let (one, two) = (at(300.0, 400.0), at(100.0, 500.0));
+    let mut d = Document::new();
+    d.body = vec![framed("First", &one), framed("Other", &two), plain("Between"), framed("Again", &one), plain("Body")];
+    let l = lay(&d);
+    let caret = |b: usize| l.caret(&Pos::body(b, 0)).unwrap();
+    let (first, other, again) = (caret(0), caret(1), caret(3));
+    assert!((first.x - 300.0).abs() < 1.0 && (first.top - 400.0).abs() < 1.0, "({}, {})", first.x, first.top);
+    assert!((other.x - 100.0).abs() < 1.0 && (other.top - 500.0).abs() < 1.0, "another frame, at its place: ({}, {})", other.x, other.top);
+    assert!((again.x - 300.0).abs() < 1.0 && (again.top - 400.0).abs() < 1.0, "a frame of its own, not under First: ({}, {})", again.x, again.top);
+}
+
+/// Automatic equation numbers count once through a run of framed paragraphs, which is laid out
+/// once to measure the frame and again to place it: (1) and (2) in the frame, (3) after it.
+#[test]
+fn numbered_equations_in_a_body_text_frame_count_once() {
+    use wordcraft_doc::props::TextFrame;
+    let frame = TextFrame { w: Some(200.0), x: 300.0, y: 400.0, h_anchor: "page".into(), v_anchor: "page".into(), ..Default::default() };
+    let eq_para = |s: &str, framed: bool| {
+        let mut p = wordcraft_doc::Paragraph::new();
+        let math = wordcraft_doc::math::Math { nodes: wordcraft_doc::math::parse_linear(s), ..Default::default() };
+        p.insert_object(0, InlineObject::Equation { linear: s.into(), display: true, math }, &Default::default()).unwrap();
+        if framed {
+            p.props.frame = Some(frame.clone());
+        }
+        wordcraft_doc::para_block(p)
+    };
+    let mut d = Document::new();
+    d.body = vec![eq_para("a=b#", true), eq_para("c=d#", true), eq_para("e=f#", false)];
+    assert_eq!(equation_numbers(&lay(&d)), ["(1)", "(2)", "(3)"]);
+}
+
 /// A section break ends a run of paragraphs with the same frame: the paragraph after it, in the
 /// next section (on a new page), is a frame of its own at the frame's place, not stacked under the
 /// one before.
