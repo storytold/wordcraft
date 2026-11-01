@@ -48,6 +48,131 @@ impl LineCap {
     }
 }
 
+/// An arrowhead's width across its line or length along it (ST_LineEndWidth and
+/// ST_LineEndLength, ECMA-376 §20.1.10.39–40): 2, 3 or 5 times the line's width, as Word draws it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ArrowSize {
+    Small,
+    #[default]
+    Medium,
+    Large,
+}
+
+impl ArrowSize {
+    /// Read a DrawingML size (`sm`, `med`, `lg`); absent or unknown values are medium.
+    pub fn from_ooxml(value: &str) -> Self {
+        match value {
+            "sm" => Self::Small,
+            "lg" => Self::Large,
+            _ => Self::Medium,
+        }
+    }
+
+    /// The DrawingML spelling.
+    pub fn ooxml(self) -> &'static str {
+        match self {
+            Self::Small => "sm",
+            Self::Medium => "med",
+            Self::Large => "lg",
+        }
+    }
+
+    /// Read a VML width (`narrow`, `medium`, `wide`) or length (`short`, `medium`, `long`).
+    pub fn from_vml(value: &str) -> Self {
+        match value {
+            "narrow" | "short" => Self::Small,
+            "wide" | "long" => Self::Large,
+            _ => Self::Medium,
+        }
+    }
+
+    /// How many [`arrow_unit`]s the arrowhead measures.
+    pub fn factor(self) -> f32 {
+        match self {
+            Self::Small => 2.0,
+            Self::Medium => 3.0,
+            Self::Large => 5.0,
+        }
+    }
+}
+
+/// The kind of an arrowhead (ST_LineEndType, ECMA-376 §20.1.10.33), kept for saving; every kind
+/// is drawn as a triangle.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ArrowKind {
+    #[default]
+    Triangle,
+    Stealth,
+    Diamond,
+    Oval,
+    Arrow,
+}
+
+impl ArrowKind {
+    /// Read a DrawingML end type other than `none`; unknown values are triangles.
+    pub fn from_ooxml(value: &str) -> Self {
+        match value {
+            "stealth" => Self::Stealth,
+            "diamond" => Self::Diamond,
+            "oval" => Self::Oval,
+            "arrow" => Self::Arrow,
+            _ => Self::Triangle,
+        }
+    }
+
+    /// The DrawingML spelling.
+    pub fn ooxml(self) -> &'static str {
+        match self {
+            Self::Triangle => "triangle",
+            Self::Stealth => "stealth",
+            Self::Diamond => "diamond",
+            Self::Oval => "oval",
+            Self::Arrow => "arrow",
+        }
+    }
+
+    /// Read a VML arrow (`block`, `classic`, `diamond`, `oval`, `open`) other than `none`.
+    pub fn from_vml(value: &str) -> Self {
+        match value {
+            "classic" => Self::Stealth,
+            "diamond" => Self::Diamond,
+            "oval" => Self::Oval,
+            "open" => Self::Arrow,
+            _ => Self::Triangle,
+        }
+    }
+}
+
+/// An arrowhead's kind and size (`a:headEnd` / `a:tailEnd`). The default is a medium triangle.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ArrowStyle {
+    pub kind: ArrowKind,
+    pub width: ArrowSize,
+    pub length: ArrowSize,
+}
+
+impl ArrowStyle {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// The arrowhead's length along its line and width across it, for a line `line_width` wide.
+    pub fn dims(self, line_width: f32) -> (f32, f32) {
+        let unit = arrow_unit(line_width);
+        (self.length.factor() * unit, self.width.factor() * unit)
+    }
+}
+
+/// What an arrowhead's size is a multiple of: the line's width, but at least 2 points (Word draws
+/// a thinner line's arrowheads as for a 2-point line).
+pub fn arrow_unit(line_width: f32) -> f32 {
+    let w = if line_width.is_finite() { line_width.clamp(0.25, 200.0) } else { 0.75 };
+    w.max(2.0)
+}
+
 /// The rest of a shape's properties. Empty (the default) for most shapes.
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -69,6 +194,11 @@ pub struct ShapeExtra {
     pub arrow_start: bool,
     #[serde(skip_serializing_if = "is_false")]
     pub arrow_end: bool,
+    /// The kind and size of the start and end arrowheads, when there are any.
+    #[serde(skip_serializing_if = "ArrowStyle::is_default")]
+    pub start_style: ArrowStyle,
+    #[serde(skip_serializing_if = "ArrowStyle::is_default")]
+    pub end_style: ArrowStyle,
     /// A rounded rectangle's corner radius (`roundRect`'s `adj`, ECMA-376 §20.1.10.56): in
     /// 100000ths of the shorter side, at most [`MAX_CORNER`]; `None` draws [`DEFAULT_CORNER`].
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -362,6 +492,43 @@ mod tests {
         assert!(near(corner_radius(Some(10_000), -5.0, 100.0), 0.0));
     }
 
+    /// One rerouting case: the free end settles and the attached end keeps its site.
+    fn assert_transformed_reroute(kind: ShapeKind, rot: f32, flip_h: bool, flip_v: bool, free: Option<ConnEnd>, free_start: bool) {
+        let attached = Some(ConnEnd { id: 7, site: 3 });
+        let (start, end) = if free_start { (free, attached) } else { (attached, free) };
+        let mut obj = shape(kind, 40.0, 20.0, ShapeExtra { start, end, ..Default::default() });
+        let InlineObject::Shape { float, .. } = &mut obj else { panic!() };
+        float.rot = rot;
+        float.flip_h = flip_h;
+        float.flip_v = flip_v;
+        // Frame (10, 30, 40, 20), centre (30, 40): mirror, then rotate
+        // clockwise in y-down group space. Do not use the routing transform
+        // to compute the expectation.
+        let sign = if free_start { -1.0 } else { 1.0 };
+        let dx = sign * if flip_h { -20.0 } else { 20.0 };
+        let dy = sign * if flip_v { -10.0 } else { 10.0 };
+        let (sin, cos) = rot.to_radians().sin_cos();
+        let expected = (30.0 + dx * cos - dy * sin, 40.0 + dx * sin + dy * cos);
+        let kids = vec![
+            GroupChild { x: 100.0, y: 200.0, obj: shape(ShapeKind::Rectangle, 40.0, 20.0, ShapeExtra { id: 7, ..Default::default() }) },
+            GroupChild { x: 10.0, y: 30.0, obj },
+        ];
+        let mut group = group(kids);
+        assert!(reroute_group(&mut group));
+        let InlineObject::Group { children, .. } = &group else { panic!() };
+        let c = &children[1];
+        let InlineObject::Shape { w, h, float, .. } = &c.obj else { panic!() };
+        let (start, end) = ends(c.x, c.y, *w, *h, float.flip_h, float.flip_v);
+        let (free, attached) = if free_start { (start, end) } else { (end, start) };
+        assert!(
+            (free.0 - expected.0).abs() < 0.001 && (free.1 - expected.1).abs() < 0.001,
+            "{kind:?}, {rot}, {flip_h}, {flip_v}, {free_start}: {free:?} != {expected:?}"
+        );
+        assert_eq!(attached, (140.0, 210.0));
+        assert_eq!(float.rot, 0.0);
+        assert!(!reroute_group(&mut group), "rerouting must settle");
+    }
+
     #[test]
     fn rerouting_preserves_transformed_free_and_unresolved_ends() {
         for kind in [ShapeKind::StraightConnector, ShapeKind::ElbowConnector, ShapeKind::CurvedConnector] {
@@ -369,43 +536,7 @@ mod tests {
                 for (flip_h, flip_v) in [(false, false), (true, false), (false, true), (true, true)] {
                     for free in [None, Some(ConnEnd { id: 404, site: 0 }), Some(ConnEnd { id: 7, site: 99 })] {
                         for free_start in [false, true] {
-                            let attached = Some(ConnEnd { id: 7, site: 3 });
-                            let (start, end) = if free_start { (free, attached) } else { (attached, free) };
-                            let mut obj = shape(kind, 40.0, 20.0, ShapeExtra { start, end, ..Default::default() });
-                            let InlineObject::Shape { float, .. } = &mut obj else { panic!() };
-                            float.rot = rot;
-                            float.flip_h = flip_h;
-                            float.flip_v = flip_v;
-                            // Frame (10, 30, 40, 20), centre (30, 40): mirror, then rotate
-                            // clockwise in y-down group space. Do not use the routing transform
-                            // to compute the expectation.
-                            let sign = if free_start { -1.0 } else { 1.0 };
-                            let dx = sign * if flip_h { -20.0 } else { 20.0 };
-                            let dy = sign * if flip_v { -10.0 } else { 10.0 };
-                            let (sin, cos) = rot.to_radians().sin_cos();
-                            let expected = (30.0 + dx * cos - dy * sin, 40.0 + dx * sin + dy * cos);
-                            let kids = vec![
-                                GroupChild {
-                                    x: 100.0,
-                                    y: 200.0,
-                                    obj: shape(ShapeKind::Rectangle, 40.0, 20.0, ShapeExtra { id: 7, ..Default::default() }),
-                                },
-                                GroupChild { x: 10.0, y: 30.0, obj },
-                            ];
-                            let mut group = group(kids);
-                            assert!(reroute_group(&mut group));
-                            let InlineObject::Group { children, .. } = &group else { panic!() };
-                            let c = &children[1];
-                            let InlineObject::Shape { w, h, float, .. } = &c.obj else { panic!() };
-                            let (start, end) = ends(c.x, c.y, *w, *h, float.flip_h, float.flip_v);
-                            let (free, attached) = if free_start { (start, end) } else { (end, start) };
-                            assert!(
-                                (free.0 - expected.0).abs() < 0.001 && (free.1 - expected.1).abs() < 0.001,
-                                "{kind:?}, {rot}, {flip_h}, {flip_v}, {free_start}: {free:?} != {expected:?}"
-                            );
-                            assert_eq!(attached, (140.0, 210.0));
-                            assert_eq!(float.rot, 0.0);
-                            assert!(!reroute_group(&mut group), "rerouting must settle");
+                            assert_transformed_reroute(kind, rot, flip_h, flip_v, free, free_start);
                         }
                     }
                 }

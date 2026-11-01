@@ -25,11 +25,11 @@ pub fn read(root: &El) -> Vec<CustomProp> {
         let Some(v) = p.els().next() else { continue };
         let kind = v.local();
         let prop = if SIMPLE.contains(&kind) {
-            CustomProp { name: name.to_string(), kind: kind.to_string(), value: v.text() }
+            CustomProp { name: name.to_string(), kind: kind.to_string(), value: v.text(), link_target: p.attr("linkTarget").map(str::to_string) }
         } else {
             let mut xml = String::new();
             el_xml(v, &mut xml, 0);
-            CustomProp { name: name.to_string(), kind: "raw".into(), value: xml }
+            CustomProp { name: name.to_string(), kind: "raw".into(), value: xml, link_target: p.attr("linkTarget").map(str::to_string) }
         };
         out.push(prop);
     }
@@ -51,7 +51,12 @@ pub fn write(props: &[CustomProp]) -> Vec<u8> {
         if p.kind == "raw" && !raw_is_wellformed(&p.value) {
             continue;
         }
-        w.open("property", &[("fmtid", FMTID), ("pid", &pid.to_string()), ("name", &p.name)]);
+        let pid = pid.to_string();
+        let mut attrs = vec![("fmtid", FMTID), ("pid", &pid), ("name", &p.name)];
+        if let Some(target) = &p.link_target {
+            attrs.push(("linkTarget", target));
+        }
+        w.open("property", &attrs);
         if p.kind == "raw" {
             w.raw(&p.value);
         } else {
