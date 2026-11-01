@@ -1359,11 +1359,14 @@ fn apply_cell_widths(t: &Table, grid: &mut [f32]) {
 /// The percentages are shares of the table's width, scaled up when they come short of 100%; past
 /// 100% the columns take their shares left to right until the width runs out
 /// (`overfull_shares`). A table without a
-/// width of its own takes `avail` when autofit and its grid's width when fixed. Measured in Word.
-/// Columns some cell leaves unsized, conflicting percentages, spans and absolute widths keep the
-/// grid.
+/// width of its own takes `avail` when autofit and its grid's width when fixed. Where rows ask
+/// different percentages of a column it takes the largest. A merged cell's percentage is shared
+/// by the columns under it that ask none of their own, in their grid proportions (Word shares it
+/// by their content), and makes no column narrower than it asks. Measured in Word. Columns no cell
+/// sizes and absolute widths keep the grid.
 fn apply_pct_widths(t: &Table, grid: &mut [f32], avail: f32) {
     let mut pcts: Vec<Option<f32>> = vec![None; grid.len()];
+    let mut merged: Vec<(usize, usize, f32)> = Vec::new();
     for row in &t.rows {
         let mut g = row.first_grid();
         for cell in &row.cells {
@@ -1371,19 +1374,40 @@ fn apply_pct_widths(t: &Table, grid: &mut [f32], avail: f32) {
                 return;
             }
             if let Some(p) = cell.props.width_pct {
-                if cell.span() != 1 || !p.is_finite() || p <= 0.0 {
+                if !p.is_finite() || p <= 0.0 {
                     return;
                 }
-                let Some(slot) = pcts.get_mut(g) else { return };
-                if slot.is_some_and(|q| (q - p).abs() > 0.01) {
-                    return;
+                if cell.span() == 1 {
+                    let Some(slot) = pcts.get_mut(g) else { return };
+                    *slot = Some(slot.map_or(p, |q| q.max(p)));
+                } else {
+                    merged.push((g, cell.span(), p));
                 }
-                *slot = Some(p);
             }
             g = g.saturating_add(cell.span());
         }
     }
+    for (g, span, p) in merged {
+        let Some(cols) = pcts.get_mut(g..g.saturating_add(span)) else { return };
+        let Some(weights) = grid.get(g..g.saturating_add(span)) else { return };
+        let own: f32 = cols.iter().flatten().sum();
+        let free: f32 = cols.iter().zip(weights).filter(|(c, _)| c.is_none()).map(|(_, w)| *w).sum();
+        let rest = (p - own).max(0.0);
+        if free > 0.0 {
+            for (c, w) in cols.iter_mut().zip(weights) {
+                if c.is_none() {
+                    *c = Some(rest * w / free);
+                }
+            }
+        } else if own > 0.0 && rest > 0.0 {
+            // Every column asks its own, short of the merged cell's: they grow to it together.
+            cols.iter_mut().flatten().for_each(|c| *c *= p / own);
+        }
+    }
     let Some(pcts) = pcts.into_iter().collect::<Option<Vec<f32>>>() else { return };
+    if pcts.iter().any(|p| *p <= 0.0) {
+        return;
+    }
     let sum: f32 = pcts.iter().sum();
     let own_width = t.props.width_pct.is_some_and(|p| p > 0.0) || t.props.width.is_some_and(|w| w > 0.0);
     // A table with its own width is scaled to it afterwards; any positive total will do. A fixed

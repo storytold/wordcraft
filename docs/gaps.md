@@ -24,7 +24,7 @@ Floating tables count exact contact with a line's bottom edge (#3977); shapes ke
 
 An otherwise empty section at page start retains its line before continuous content. Shared-section page totals and wrapping earlier text around later floating tables remain open.
 
-Consistent cell widths override stale table grid proportions when their totals agree. Percentage cell widths size their columns whichever rows give them, as in Word. Conflicting widths, spans and mixed absolute and percentage widths still need the shared-grid algorithm.
+Consistent cell widths override stale table grid proportions when their totals agree. Percentage cell widths size their columns whichever rows give them, as in Word: rows that disagree give each column its largest, and a merged cell's percentage is shared by the columns under it (in grid proportions, where Word shares it by their content). Mixed absolute and percentage widths still need the shared-grid algorithm.
 
 Local desktop recovery now covers unsaved drafts and edits to existing files; see
 [recovery.md](recovery.md). This narrows gap #3 but does not resolve the crash/hang reports or
@@ -152,7 +152,7 @@ Recipient label generation (#4880) now includes all selected recipients across a
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-31 | trivial | Percentage cell widths size their columns whichever rows give them, as measured in Word; conflicting widths, spans and mixed absolute and percentage widths still need the shared-grid algorithm; no ranked gap changed; readiness estimates unchanged |
+| 2026-10-31 | trivial | Percentage cell widths size their columns whichever rows give them, as measured in Word, rows that disagree giving each column its largest and merged cells sharing theirs; mixed absolute and percentage widths still need the shared-grid algorithm; no ranked gap changed; readiness estimates unchanged |
 | 2026-10-30 | trivial | Only the PDF sent to the printer omits link annotations; File › Print › Save these pages as PDF (`file.printPdf`) keeps them, like Export (#4734); no ranked gap changed; readiness estimates unchanged |
 | 2026-10-29 | trivial | The print job's PDF omits link annotations, which the spooler refused to fit to the paper, so documents with links reach the printer (#4734); physical printer output remains to be validated; no ranked gap changed; readiness estimates unchanged |
 | 2026-10-28 | trivial | Aligned copies retain their locked document coordinate during middle-button scrolling and can start on secondary selected objects; existing Ctrl and Shift selection behavior stays (#4764) |
