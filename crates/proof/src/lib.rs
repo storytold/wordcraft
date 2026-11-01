@@ -56,6 +56,8 @@ pub mod cs;
 pub mod dict;
 pub mod en_variants;
 pub mod es;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod harper;
 pub mod hr;
 pub mod hunspell;
 pub mod hyphen;
@@ -70,6 +72,29 @@ mod slot;
 mod spelling;
 pub mod tr;
 pub mod vi;
+
+/// The web build has no background thread for Harper ([`harper`] on the desktop): no results,
+/// nothing waiting.
+#[cfg(target_arch = "wasm32")]
+pub mod harper {
+    pub const BUILT: bool = false;
+    pub fn stamp(_: &str) -> u64 {
+        0
+    }
+    pub fn generation() -> u64 {
+        0
+    }
+    pub fn waiting() -> usize {
+        0
+    }
+    pub fn begin_pass() {}
+    pub fn wait(_: std::time::Duration) -> bool {
+        true
+    }
+    pub(crate) fn issues(_: &str, _: crate::ProofLang) -> Option<Vec<crate::Issue>> {
+        None
+    }
+}
 
 use std::collections::HashSet;
 use std::ops::Range;
@@ -878,15 +903,16 @@ fn grammar_in(text: &str, lang: ProofLang, capital_first: bool) -> Vec<Issue> {
 /// inside that language's spans: an English quotation in a Polish paragraph gets English
 /// spelling and is never told a Polish rule.
 pub fn check_text(text: &str, spans: &[(Range<usize>, ProofLang)]) -> Vec<Issue> {
-    check_text_with(text, spans, &Options::default(), true, false)
+    check_text_with(text, spans, &Options::default(), true, false, false)
 }
 
-/// [`check_text`] with the File › Options › Proofing choices: what spelling skips, and whether
-/// grammar is checked at all.
+/// [`check_text`] with the File › Options › Proofing choices: what spelling skips, whether
+/// grammar is checked at all, and whether Harper's English grammar checks are added ([`harper`]:
+/// its issues once the background thread has checked this text).
 ///
 /// `list_item` marks a list paragraph: items are often fragments, so the English rule asking for
 /// a capital on the paragraph's first word is off for it (later sentences are still checked).
-pub fn check_text_with(text: &str, spans: &[(Range<usize>, ProofLang)], opts: &Options, grammar: bool, list_item: bool) -> Vec<Issue> {
+pub fn check_text_with(text: &str, spans: &[(Range<usize>, ProofLang)], opts: &Options, grammar: bool, list_item: bool, harper: bool) -> Vec<Issue> {
     // Sorted, empty ones dropped, neighbours of one language merged.
     let mut sorted: Vec<&(Range<usize>, ProofLang)> = spans.iter().filter(|(r, _)| r.start < r.end).collect();
     sorted.sort_by_key(|s| s.0.start);
@@ -929,9 +955,19 @@ pub fn check_text_with(text: &str, spans: &[(Range<usize>, ProofLang)], opts: &O
     }
     langs.sort();
     langs.dedup();
+    let english: Vec<ProofLang> = langs.iter().copied().filter(|l| harper && l.is_english()).collect();
     for lang in langs {
         let found = grammar_in(text, lang, !list_item);
         v.extend(found.into_iter().filter(|i| lang_at(i.start) == lang));
+    }
+    // Harper's marks go where no other mark is, and never on a word the user added or ignored.
+    for lang in english {
+        for i in harper::issues(text, lang).unwrap_or_default() {
+            let user_word = text.get(i.start..i.end).is_some_and(|w| !w.contains(char::is_whitespace) && in_user_dictionary(&w.to_lowercase()));
+            if lang_at(i.start) == lang && !user_word && !v.iter().any(|o| i.start < o.end && o.start < i.end) {
+                v.push(i);
+            }
+        }
     }
     v.sort_by_key(|i| (i.start, i.end));
     v
@@ -1197,7 +1233,7 @@ mod tests {
     #[test]
     fn list_item_first_word_needs_no_capital() {
         let grammar = |t: &str, lang: ProofLang, list: bool| -> Vec<String> {
-            check_text_with(t, &[(0..t.len(), lang)], &Options::default(), true, list)
+            check_text_with(t, &[(0..t.len(), lang)], &Options::default(), true, list, false)
                 .into_iter()
                 .filter(|i| i.kind == IssueKind::Grammar)
                 .filter_map(|i| t.get(i.start..i.end).map(str::to_string))

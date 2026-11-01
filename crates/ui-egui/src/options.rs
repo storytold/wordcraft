@@ -310,6 +310,12 @@ fn proofing(app: &mut WordApp, ui: &mut Ui) {
     let spelling = app.session.view.proofing;
     flag(app, ui, "Check spelling as you type", "checkSpelling", spelling);
     ui.add_enabled_ui(app.session.view.proofing, |ui| flag(app, ui, "Mark grammar errors as you type", "markGrammar", pr.mark_grammar));
+    // Harper (#799) runs where the app starts it: the desktop app, not the web.
+    if app.session.harper {
+        ui.add_enabled_ui(app.session.view.proofing && pr.mark_grammar, |ui| {
+            flag(app, ui, "Check English grammar with Harper", "harperGrammar", pr.harper_grammar)
+        });
+    }
     ui.add_space(8.0);
     section(ui, "Custom dictionary");
     custom_dictionary(app, ui);

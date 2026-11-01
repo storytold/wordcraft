@@ -7945,7 +7945,7 @@ fn hyphenation_and_proofing_follow_each_runs_language() {
     assert_eq!(flagged, ["żeka", "beautifull"]);
     // The layout and the Review commands report the same issues.
     let p = d.para(StoryRef::Body, &Path::top(0)).unwrap();
-    let issues = para::paragraph_issues(p, &para::proof_runs(&d, p, None), &Default::default(), true, false);
+    let issues = para::paragraph_issues(p, &para::proof_runs(&d, p, None), &Default::default(), true, false, false);
     assert_eq!(issues.iter().map(|i| (i.start, i.end, i.kind == wordcraft_proof::IssueKind::Grammar)).collect::<Vec<_>>(), para.issues);
     assert_eq!(issues[0].lang, wordcraft_proof::ProofLang::Pl);
     assert_eq!(issues[1].lang, wordcraft_proof::ProofLang::En);
@@ -10713,6 +10713,46 @@ fn ink_member_of_a_group_draws_its_fallback_picture() {
     let [r] = found.as_slice() else { panic!("ink preview not drawn: {found:?}") };
     assert!((r.x - (frame.x + 20.0)).abs() < 0.01 && (r.y - (frame.y + 30.0)).abs() < 0.01, "{r:?} in {frame:?}");
     assert!((r.w - 60.0).abs() < 0.01 && (r.h - 30.0).abs() < 0.01, "{r:?}");
+}
+
+/// Harper's grammar marks (#799) come from a background thread: a paragraph shows the built-in
+/// marks until its result is stored, and then laying out again redraws only the paragraphs whose
+/// result arrived. Off, the same cache shows no Harper marks.
+#[test]
+fn harper_marks_arrive_later_and_redraw_only_their_paragraph() {
+    let (first, second, edited) = ("We could of gone home.", "They might of left.", "They might of left early.");
+    let mut d = Document::from_text(&format!("{first}\n{second}"));
+    let grammar = |l: &DocLayout, at: usize, text: &str| -> Vec<String> {
+        l.pages[0]
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                Placed::Lines { para, path, .. } if *path == Path::top(at) => {
+                    Some(para.issues.iter().filter(|i| i.2).map(|i| text[i.0..i.1].to_string()).collect::<Vec<_>>())
+                }
+                _ => None,
+            })
+            .flatten()
+            .collect()
+    };
+    let wait = || assert!(wordcraft_proof::harper::wait(std::time::Duration::from_secs(300)), "Harper didn't finish");
+    let mut c = LayoutCache::new();
+    let opts = LayoutOptions { proofing: true, proof: ProofOptions { harper: true, ..ProofOptions::default() }, ..LayoutOptions::default() };
+    assert!(grammar(&layout(&d, &mut c, &opts), 0, first).is_empty(), "not checked yet");
+    wait();
+    let l = layout(&d, &mut c, &opts);
+    assert_eq!(grammar(&l, 0, first), ["could of"]);
+    assert_eq!(grammar(&l, 1, second), ["might of"]);
+    // An edit to the second paragraph: once its new text is checked, only it is laid out again.
+    d.insert_text(&Pos::body(1, second.len() - 1), " early", &Default::default()).unwrap();
+    layout(&d, &mut c, &opts);
+    wait();
+    let misses = c.misses;
+    let l = layout(&d, &mut c, &opts);
+    assert_eq!(c.misses, misses + 1, "only the edited paragraph is laid out again");
+    assert_eq!(grammar(&l, 1, edited), ["might of"]);
+    assert_eq!(grammar(&l, 0, first), ["could of"]);
+    assert!(grammar(&layout(&d, &mut c, &LayoutOptions { proof: ProofOptions::default(), ..opts.clone() }), 0, first).is_empty());
 }
 
 /// The word being typed gets no spelling squiggle until the caret leaves it (#1552): only in the

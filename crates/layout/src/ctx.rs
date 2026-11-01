@@ -368,6 +368,11 @@ impl Ctx<'_> {
             excl: if exclusions.is_empty() { 0 } else { hash_of(&format!("{exclusions:?}")) },
             eq: if eq_here > 0 { eq_number } else { 0 },
             read_spacing: if self.opts.view == ViewMode::Read { self.opts.read_line_spacing.map(f32::to_bits) } else { None },
+            harper: if self.opts.proofing && self.opts.proof.grammar && self.opts.proof.harper && !p.text.trim().is_empty() {
+                wordcraft_proof::harper::stamp(&para::proof_text(p))
+            } else {
+                0
+            },
             grid: self.grid.key(),
             fit: self.boxes.inside(),
             fitted: if fitted.is_empty() { 0 } else { hash_of(&format!("{fitted:?}")) },

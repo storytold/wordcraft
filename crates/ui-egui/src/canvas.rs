@@ -1313,6 +1313,12 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let full = ui.available_rect_before_wrap();
     let layout = prepare_layout(app, ui, full);
+    // Harper checks paragraphs in the background (#799): draw again as its marks arrive, soon after
+    // an edit and a few times a second while a whole document is checked.
+    match app.session.harper_waiting() {
+        0 => {}
+        n => ui.ctx().request_repaint_after(std::time::Duration::from_millis(if n <= 8 { 30 } else { 250 })),
+    }
     let view = prepare_view(app, ui, full, &layout);
     let scroll_target = update_caret_scroll(app, &view);
     let motion = scroll_motion(app, ui, full, &view);

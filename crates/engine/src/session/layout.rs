@@ -5,6 +5,18 @@ use super::view::DRAFT_WIDTH;
 use super::{Arc, DocLayout, Document, LayoutCache, LayoutOptions, Session, StoryRef, Value, ViewMode};
 
 impl Session {
+    /// Whether Harper's English grammar marks are shown: the front end runs Harper
+    /// ([`Session::harper`]) and File › Options › Proofing keeps it on.
+    pub fn harper_grammar(&self) -> bool {
+        self.harper && self.prefs.harper_grammar
+    }
+
+    /// How many paragraphs Harper still has to check (0 when its marks aren't shown): the front
+    /// end draws again soon, so the marks show as they arrive.
+    pub fn harper_waiting(&self) -> usize {
+        if self.view.proofing && self.prefs.mark_grammar && self.harper_grammar() { wordcraft_proof::harper::waiting() } else { 0 }
+    }
+
     /// The current layout (recomputed when the document or view changed).
     pub fn layout(&mut self) -> Arc<DocLayout> {
         let typing = self.typing_word();
@@ -27,7 +39,9 @@ impl Session {
         let deleted = (hide_deleted, self.prefs.markup.hidden_deletions(), self.revisions_in_balloons());
         let outline = (mode == ViewMode::Outline).then(|| self.view.outline.view());
         let shown = (self.view.marks || self.prefs.marks.hidden, self.view.field_codes);
-        let (rev, proofing, numeral) = (self.rev, self.view.proofing, self.view.numeral);
+        // A Harper result arriving lays the document out again (only its paragraph misses the cache).
+        let harper = if self.view.proofing && self.harper_grammar() { wordcraft_proof::harper::generation() } else { 0 };
+        let (rev, proofing, numeral) = (self.rev, (self.view.proofing, harper), self.view.numeral);
         let fits = |e: &Option<LayoutEntry>| {
             e.as_ref().is_some_and(|(r, w, h, m, sp, _, pf, o, hd, n, t, sh)| {
                 *r == rev
@@ -67,17 +81,19 @@ impl Session {
             comment_balloons: false,
             field_codes: shown.1,
             outline: outline.clone(),
-            proof: wordcraft_layout::ProofOptions { grammar: self.prefs.mark_grammar, spelling: self.prefs.spelling() },
+            proof: wordcraft_layout::ProofOptions {
+                grammar: self.prefs.mark_grammar,
+                spelling: self.prefs.spelling(),
+                harper: self.harper_grammar(),
+            },
             typing_word: typing,
             filename: filename.clone(),
             filepath: filepath.clone(),
         };
         let l = Arc::new(wordcraft_layout::layout(&self.doc, &mut self.cache, &opts));
         let [newest, _] = std::mem::take(&mut self.layout);
-        self.layout = [
-            Some((self.rev, width, height, mode, spacing, l.clone(), self.view.proofing, outline, deleted, self.view.numeral, typing, shown)),
-            newest,
-        ];
+        self.layout =
+            [Some((self.rev, width, height, mode, spacing, l.clone(), proofing, outline, deleted, self.view.numeral, typing, shown)), newest];
         l
     }
 
