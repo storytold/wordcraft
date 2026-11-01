@@ -9,6 +9,7 @@ description = "WordCraft DOCX (OOXML WordprocessingML) reader and writer"
 workspace = true
 
 [dependencies]
+serde_json = { workspace = true }
 wordcraft-doc = { workspace = true }
 wordcraft-geom = { workspace = true }
 quick-xml = { workspace = true }

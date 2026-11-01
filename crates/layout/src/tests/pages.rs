@@ -10,6 +10,50 @@ fn lay(doc: &Document) -> DocLayout {
     layout(doc, &mut c, &LayoutOptions::default())
 }
 
+#[test]
+fn a_page_break_before_an_empty_section_mark_does_not_add_a_blank_page() {
+    // Word for Windows, user-assisted book round trip: the empty section mark after a page
+    // break stays on the preceding page; the following text-only segment starts on page 2.
+    use wordcraft_doc::page_label::{PageLabel, PageLabelMode};
+    for (breaks, closing_text, pages) in [("\u{000c}", "", 2), ("\u{000c}\u{000c}", "", 3), ("\u{000c}", "Keep me", 3)] {
+        let mut d = Document::from_text(&format!("Cover\n{breaks}\n{closing_text}\nVorwort"));
+        let section = SectionProps { page_label: Some(PageLabel { mode: PageLabelMode::Hidden, ..Default::default() }), ..Default::default() };
+        d.para_mut(StoryRef::Body, &Path::top(2)).unwrap().section = Some(Box::new(section));
+        d.last_section.page_label = Some(PageLabel { mode: PageLabelMode::Text, text: "Vorwort".into(), ..Default::default() });
+        let l = lay(&d);
+        assert_eq!(l.pages.len(), pages, "{breaks:?}, {closing_text:?}");
+        assert_eq!(l.caret(&Pos::body(2, 0)).unwrap().page, pages - 2, "closing paragraph remains reachable");
+        assert_eq!(l.caret(&Pos::body(3, 0)).unwrap().page, pages - 1);
+        assert_eq!(l.pages.last().unwrap().section, 1);
+    }
+}
+
+#[test]
+fn folded_section_break_keeps_footnotes_at_the_old_margin() {
+    for valign in [wordcraft_doc::section::PageVAlign::Top, wordcraft_doc::section::PageVAlign::Center, wordcraft_doc::section::PageVAlign::Bottom] {
+        let mut d = Document::from_text("Cover\n\u{000c}\n\nNext section");
+        let section = SectionProps { valign, margin_left: 108.0, ..Default::default() };
+        d.para_mut(StoryRef::Body, &Path::top(2)).unwrap().section = Some(Box::new(section));
+        d.last_section.margin_left = 36.0;
+        let id = d.add_part(PartKind::Footnote, vec![para_block(Paragraph::with_text("A note", Default::default()))]);
+        d.insert_object(&Pos::body(0, 5), InlineObject::NoteRef { kind: NoteKind::Footnote, id, custom: String::new() }, &Default::default())
+            .unwrap();
+        let l = lay(&d);
+        assert_eq!(l.pages.len(), 2);
+        let x = l.pages[0]
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Placed::Lines { story: StoryRef::Part(part), x, .. } if *part == id => Some(*x),
+                _ => None,
+            })
+            .expect("footnote on the old page");
+        assert!((x - 108.0).abs() < 0.01, "footnote left edge: {x}");
+        let (_, bottom) = extent(&l.pages[0].items, StoryRef::Part(id)).unwrap();
+        assert!(bottom <= l.pages[0].h - d.last_section.margin_bottom + 0.01, "{valign:?}: footnote bottom {bottom}");
+    }
+}
+
 fn paras(text: &str, n: usize) -> Vec<Arc<Block>> {
     (1..=n).map(|i| para_block(Paragraph::with_text(&format!("{text} {i}"), Default::default()))).collect()
 }

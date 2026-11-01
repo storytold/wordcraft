@@ -85,11 +85,20 @@ fn write_attempt(doc: &Document, lay: &DocLayout, opts: &PdfOptions, pages: &[us
     if let Some(o) = ex.outline(pages) {
         pdf.set_outline(o);
     }
+    let sections = doc.sections();
+    let custom_labels = sections.iter().any(|(_, sec)| sec.page_label.is_some());
     for &pi in pages {
         let Some(page) = lay.pages.get(pi) else { return Err(PdfError::BadPage(pi.saturating_add(1))) };
         let fit = Fit::of(page, opts.paper);
         let size = Size::from_wh(clamp_side(fit.paper_w), clamp_side(fit.paper_h)).ok_or(PdfError::NoPages)?;
-        let mut kp = pdf.start_page_with(PageSettings::new(size));
+        // Once the PDF has a label tree, ordinary sections also need an explicit label;
+        // an empty dictionary there would suppress their default decimal page numbers.
+        let settings = if let Some((_, section)) = sections.get(page.section).filter(|_| custom_labels) {
+            PageSettings::new(size).with_page_label(krilla::page::PageLabel::new(None, Some(section.page_label(page.number)), None))
+        } else {
+            PageSettings::new(size)
+        };
+        let mut kp = pdf.start_page_with(settings);
         let mut s = kp.surface();
         ex.links.clear();
         // A page with a markup area is scaled down to fit its paper with the area beside it; a

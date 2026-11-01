@@ -11,6 +11,9 @@ pub(super) struct FieldData<'a> {
 
 impl Writer<'_> {
     pub(super) fn field(&mut self, w: &mut W, field: FieldData<'_>, props: &CharProps) {
+        if self.labelled_page_field(w, &field, props) {
+            return;
+        }
         let FieldData { instr, result, locked, dirty, form } = field;
         if self.toc_hold_end && is_toc(instr) {
             // A TOC heading's field opens in the first entry and closes after the last (see `toc_span`).

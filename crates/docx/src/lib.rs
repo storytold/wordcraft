@@ -14,6 +14,7 @@ mod custom;
 mod flat;
 mod fonts;
 mod package;
+mod page_labels;
 mod read;
 mod smart_art;
 #[cfg(test)]

@@ -18,6 +18,7 @@ mod blocks;
 mod drawing;
 mod field;
 mod object;
+mod page_label;
 mod para;
 mod section;
 mod toc;

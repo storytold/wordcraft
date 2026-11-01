@@ -156,6 +156,32 @@ pub(super) fn hf_nav(s: &mut Session, dir: i32) -> CmdResult {
     let i = ids.iter().position(|x| *x == cur).unwrap_or(0) as i32;
     let n = ids.len().max(1) as i32;
     let next = ids.get(((i + dir).rem_euclid(n)) as usize).copied().unwrap_or(cur);
+    let layout = s.layout();
+    let current_shows_next = layout.pages.get(s.page_hint).is_some_and(|pg| pg.header_story == Some(next) || pg.footer_story == Some(next));
+    if current_shows_next {
+        // Keep the current page, which already shows the target story in the active section.
+    } else if let Some(pg_idx) = layout.pages.iter().position(|pg| pg.header_story == Some(next) || pg.footer_story == Some(next)) {
+        s.page_hint = pg_idx;
+    } else {
+        let target_sec_and_slot = s.doc.sections().iter().enumerate().find_map(|(idx, (_, sec))| {
+            if sec.headers.first == Some(next) || sec.footers.first == Some(next) {
+                Some((idx, wordcraft_layout::HfSlot::First))
+            } else if sec.headers.even == Some(next) || sec.footers.even == Some(next) {
+                Some((idx, wordcraft_layout::HfSlot::Even))
+            } else if sec.headers.default == Some(next) || sec.footers.default == Some(next) {
+                Some((idx, wordcraft_layout::HfSlot::Default))
+            } else {
+                None
+            }
+        });
+        if let Some((sec_idx, slot)) = target_sec_and_slot {
+            let matching_page = layout.pages.iter().position(|pg| pg.section == sec_idx && pg.hf_slot == slot);
+            let sec_first_page = layout.pages.iter().position(|pg| pg.section == sec_idx);
+            if let Some(pg_idx) = matching_page.or(sec_first_page) {
+                s.page_hint = pg_idx;
+            }
+        }
+    }
     s.sel = Selection::caret(s.doc.start_of(StoryRef::Part(next)));
     sel_result(s)
 }

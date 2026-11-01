@@ -161,6 +161,7 @@ fn insert_index(s: &mut Session, v: &Value) -> CmdResult {
 /// One page reference of an entry.
 #[derive(Clone, Debug, PartialEq)]
 struct PageRef {
+    physical: (usize, usize),
     page: String,
     bold: bool,
     italic: bool,
@@ -190,7 +191,8 @@ fn collect(s: &mut Session, lang: Option<&str>) -> BTreeMap<Vec<SortKey>, Node> 
         }
     }
     let l = s.layout();
-    let page = |pos: &Pos| l.caret(pos).and_then(|c| l.pages.get(c.page)).map(|p| p.number).unwrap_or(1);
+    let labels = crate::cmd::page_labels::PageLabels::new(&s.doc);
+    let page = |pos: &Pos| labels.at(&l, pos);
     let bookmark_end = |name: &str| {
         s.doc.para_paths(StoryRef::Body).into_iter().find_map(|path| {
             let p = s.doc.para(StoryRef::Body, &path)?;
@@ -221,11 +223,15 @@ fn collect(s: &mut Session, lang: Option<&str>) -> BTreeMap<Vec<SortKey>, Node> 
         }
         let range = f.arg('r').and_then(|bm| {
             let a = starts.iter().find(|(n, _)| n == bm).map(|(_, p)| page(p))?;
-            let b = bookmark_end(bm).map(|p| page(&p)).unwrap_or(a);
-            Some(if b > a { format!("{a}\u{2013}{b}") } else { a.to_string() })
+            let b = bookmark_end(bm).map(|p| page(&p)).unwrap_or_else(|| a.clone());
+            Some(if b.0 > a.0 { ((a.0, b.0), format!("{}\u{2013}{}", a.1, b.1)) } else { ((a.0, a.0), a.1) })
         });
-        let r = PageRef { page: range.unwrap_or_else(|| page(&pos).to_string()), bold: f.has('b'), italic: f.has('i') };
-        match node.pages.iter_mut().find(|x| x.page == r.page) {
+        let (physical, page) = range.unwrap_or_else(|| {
+            let (index, label) = page(&pos);
+            ((index, index), label)
+        });
+        let r = PageRef { physical, page, bold: f.has('b'), italic: f.has('i') };
+        match node.pages.iter_mut().find(|x| x.physical == r.physical) {
             Some(x) => {
                 x.bold |= r.bold;
                 x.italic |= r.italic;

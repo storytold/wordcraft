@@ -56,6 +56,24 @@ impl Reader<'_> {
             }
             "w:sdt" => {
                 let Some(c) = k.child("w:sdtContent") else { return };
+                let metadata = self.page_label_metadata.field(k);
+                let instr = k
+                    .attr("wc:pageField")
+                    .filter(|i| i.len() <= MAX_INSTR && i.split_whitespace().next().is_some_and(|n| n.eq_ignore_ascii_case("PAGE")))
+                    .or_else(|| metadata.map(|m| m.instr.as_str()))
+                    .map(str::to_owned);
+                if let Some(instr) = instr.filter(|_| !self.preserve_page_label_content && self.page_label_metadata.content_matches(k)) {
+                    if c.find("w:fldChar").is_some_and(|f| on_off_attr(f, "w:fldLock")) {
+                        self.read_inline_children(sc, pb, c, rels, ctx, depth + 1);
+                        return;
+                    }
+                    let props = c.find("w:rPr").map(|p| self.run_props(p, ctx)).unwrap_or_else(|| self.run_props_none(ctx));
+                    pb.push_obj(
+                        InlineObject::Field { instr, result: String::new(), locked: false, dirty: false, code: false, form: String::new() },
+                        &props,
+                    );
+                    return;
+                }
                 let mut ctl = crate::read::sdt::sdt_pr(k.child("w:sdtPr"), false);
                 ctl.end_pr_xml = crate::read::sdt::sdt_end_pr(k.child("w:sdtEndPr"));
                 ctl.run_props = k.child("w:sdtPr").and_then(|pr| pr.child("w:rPr")).map(|r| self.pc.rpr(r));

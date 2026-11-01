@@ -9,6 +9,96 @@ fn app() -> WordApp {
     WordApp::new(Session::new(wordcraft_doc::Document::from_text("Dear Jo,\nThanks.")), Services::default())
 }
 
+#[test]
+fn page_segments_dialog_preserves_zero_and_drafts_without_mutation() {
+    let mut a = app();
+    a.run("layout.pageNumberFormat", json!({"start":0})).unwrap();
+    a.run("ui.dialog", json!({"name":"pageNumbers"})).unwrap();
+    let LayoutDialog::PageNumbers(mut f) = form(&mut a) else { panic!("page numbers") };
+    assert_eq!(f.start, 0);
+    assert!(!f.cont);
+    let before = serde_json::to_value(&a.session.doc).unwrap();
+    f.segment = true;
+    f.new_segment = true;
+    f.label.name = "Appendix".into();
+    f.label.mode = wordcraft_doc::page_label::PageLabelMode::TextNumber;
+    f.label.text = "Annex".into();
+    assert_eq!(serde_json::to_value(&a.session.doc).unwrap(), before, "form edits do not change the document");
+    a.run("layout.pageSegment", f.params()).unwrap();
+    a.run("ui.dialog", json!({"name":"pageNumbers"})).unwrap();
+    let LayoutDialog::PageNumbers(mut f) = form(&mut a) else { panic!("page numbers") };
+    assert_eq!(f.start, 0);
+    assert_eq!(f.label.text, "Annex");
+    assert!(!f.new_segment);
+    f.cont = true;
+    assert_eq!(f.params()["start"], serde_json::Value::Null);
+}
+
+#[test]
+fn page_segments_new_button_cancel_and_create() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    let mut a = app();
+    a.run("caret.docEnd", json!({})).unwrap();
+    a.run("ui.dialog", json!({"name":"pageNumbers"})).unwrap();
+    let before = serde_json::to_value(&a.session.doc).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    h.get_by_role_and_label(Role::Button, "+ New segment…").click();
+    h.run_steps(3);
+    assert_eq!(serde_json::to_value(&h.state().session.doc).unwrap(), before);
+    h.get_by_role_and_label(Role::Button, "Cancel").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none());
+    assert_eq!(serde_json::to_value(&h.state().session.doc).unwrap(), before);
+    h.state_mut().run("ui.dialog", json!({"name":"pageNumbers"})).unwrap();
+    h.run_steps(3);
+    h.get_by_role_and_label(Role::Button, "+ New segment…").click();
+    h.run_steps(3);
+    h.get_by_role_and_label(Role::RadioButton, "From cursor on a new page").click();
+    h.run_steps(3);
+    h.get_by_role_and_label(Role::Button, "Create segment").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none());
+    assert_eq!(h.state().session.doc.sections().len(), 2);
+    assert_eq!(h.state().session.doc.last_section.page_num_start, Some(1));
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert_eq!(serde_json::to_value(&h.state().session.doc).unwrap(), before);
+}
+
+#[test]
+fn page_segments_table_boundary_is_explained_before_create() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.run("insert.table", json!({"rows":2,"cols":2})).unwrap();
+    a.run("ui.dialog", json!({"name":"pageNumbers"})).unwrap();
+    let before = serde_json::to_value(&a.session.doc).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    h.get_by_role_and_label(Role::Button, "+ New segment…").click();
+    h.run_steps(3);
+    assert!(h.get_by_role_and_label(Role::Button, "Create segment").accesskit_node().is_disabled());
+    assert!(h.query_by_label("Place the cursor before or after the table, then choose From cursor on a new page.").is_some());
+    h.get_by_role_and_label(Role::Button, "Cancel").click();
+    h.run_steps(3);
+    assert_eq!(serde_json::to_value(&h.state().session.doc).unwrap(), before);
+}
+
 fn form(a: &mut WordApp) -> LayoutDialog {
     let Some(Dialog::Layout(d)) = a.dialog.take() else { panic!("no dialog: {:?}", a.dialog) };
     *d
@@ -87,7 +177,7 @@ fn page_numbers_dialog_sets_the_format_and_start() {
     a.run("caret.end", json!({})).unwrap();
     assert_eq!(wordcraft_engine::cmd::page::section_index_of_focus(&a.session), 1, "the caret is in the new section");
     a.run("layout.pageNumberFormat", json!({"format": "lowerRoman", "start": 9})).unwrap();
-    f.follow(&a);
+    f.follow(&mut a);
     assert_eq!((f.section, f.format.as_str(), f.start), (1, "lowerRoman", 9));
 }
 

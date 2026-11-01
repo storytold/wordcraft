@@ -13,6 +13,7 @@ mod drawing_payload;
 mod east_asian_lang;
 mod east_asian_layout;
 mod fixtures;
+mod footer_table_end;
 mod glossary;
 mod heading_levels;
 mod legacy_forms;

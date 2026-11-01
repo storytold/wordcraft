@@ -3695,10 +3695,10 @@ fn clicks_on_ribbon_and_status_bar_chrome_keep_typing_in_the_document() {
     type_after_click(&mut h, "empty ribbon space", " blank");
 
     // The status bar's view buttons.
-    h.get_by_role_and_label(Role::Button, "Web Layout").click();
+    h.get_all_by_role_and_label(Role::Button, "Web Layout").max_by(|a, b| a.rect().top().total_cmp(&b.rect().top())).unwrap().click();
     type_after_click(&mut h, "Web Layout", " web");
     assert_eq!(h.state().session.view.mode, wordcraft_layout::ViewMode::Web);
-    h.get_by_role_and_label(Role::Button, "Print Layout").click();
+    h.get_all_by_role_and_label(Role::Button, "Print Layout").max_by(|a, b| a.rect().top().total_cmp(&b.rect().top())).unwrap().click();
     type_after_click(&mut h, "Print Layout", " print");
     assert_eq!(h.state().session.view.mode, wordcraft_layout::ViewMode::Print);
 
@@ -7166,9 +7166,10 @@ fn focus_hides_the_ribbon_and_escape_brings_it_back() {
     for _ in 0..6 {
         h.step();
     }
-    let shown = |h: &egui_kittest::Harness<WordApp>, label| h.query_by_label(label).is_some();
+    let shown = |h: &egui_kittest::Harness<WordApp>, label| h.query_all_by_label(label).next().is_some();
     assert!(shown(&h, "Ruler"), "the View tab is showing");
-    h.get_by_role_and_label(egui::accesskit::Role::Button, "Focus").click();
+    // Ribbon and status bar both expose accessible buttons; exercise the lower status-bar one.
+    h.get_all_by_role_and_label(egui::accesskit::Role::Button, "Focus").max_by(|a, b| a.rect().top().total_cmp(&b.rect().top())).unwrap().click();
     h.step();
     h.step();
     assert!(h.state().session.view.focus_mode);

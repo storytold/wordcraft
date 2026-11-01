@@ -161,8 +161,8 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
     if in_body {
         update_seq(s)?;
     }
-    let mut pages: std::collections::HashMap<String, (u32, NumFormat)> = Default::default();
-    let formats: Vec<NumFormat> = s.doc.sections().into_iter().map(|(_, sec)| sec.page_num_format).collect();
+    let mut pages: std::collections::HashMap<String, (u32, NumFormat, Option<wordcraft_doc::page_label::PageLabel>)> = Default::default();
+    let formats: Vec<_> = s.doc.sections().into_iter().map(|(_, sec)| (sec.page_num_format, sec.page_label.clone())).collect();
     let marks = s.doc.bookmarks();
     for (name, pos) in marks {
         let l = s.layout();
@@ -170,10 +170,10 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
             .caret(&pos)
             .and_then(|c| l.pages.get(c.page))
             .map(|p| {
-                let format = formats.get(p.section).copied().unwrap_or_default();
-                (p.number, format)
+                let (format, label) = formats.get(p.section).cloned().unwrap_or_default();
+                (p.number, format, label)
             })
-            .unwrap_or((1, NumFormat::Decimal));
+            .unwrap_or((1, NumFormat::Decimal, None));
         pages.entry(name).or_insert(page_info);
     }
     let stories: Vec<StoryRef> =
@@ -215,9 +215,15 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
                     let r = if name == "REF" {
                         if !has_switch(instr, 'p') { bookmark_text(&s.doc, target) } else { None }
                     } else if !has_switch(instr, 'p') {
-                        pages.get(target).map(|(num, page_fmt)| {
+                        pages.get(target).map(|(num, page_fmt, label)| {
                             let fmt = wordcraft_layout::fields::format_switch(instr).unwrap_or(*page_fmt);
-                            wordcraft_layout::fields::field_number(instr, fmt, *num)
+                            label.as_ref().map_or_else(
+                                || wordcraft_layout::fields::field_number(instr, fmt, *num),
+                                |label| {
+                                    let text = wordcraft_layout::fields::labelled_number(instr, Some(label), fmt, *num);
+                                    if text.is_empty() { wordcraft_layout::fields::apply_case_switch(instr, label.name.clone()) } else { text }
+                                },
+                            )
                         })
                     } else {
                         None

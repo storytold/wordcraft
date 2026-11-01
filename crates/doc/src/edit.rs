@@ -1012,6 +1012,54 @@ impl Document {
         Some(id)
     }
 
+    /// Copy a story and its anchored text boxes, preserving sharing and cycles within the copy.
+    pub fn copy_part(&mut self, id: u32) -> Result<u32> {
+        let mut copies = BTreeMap::new();
+        let mut pending = vec![id];
+        while let Some(old) = pending.pop() {
+            if copies.contains_key(&old) {
+                continue;
+            }
+            let part = self.parts.get(&old).cloned().ok_or(DocError::BadStory(crate::StoryRef::Part(old)))?;
+            let mut blocks: Vec<&Block> = part.blocks.iter().map(|b| &**b).collect();
+            while let Some(block) = blocks.pop() {
+                match block {
+                    Block::Table(t) => blocks.extend(t.rows.iter().flat_map(|r| &r.cells).flat_map(|c| &c.blocks).map(|b| &**b)),
+                    Block::Para(p) => pending.extend(p.objects.iter().flat_map(InlineObject::text_boxes)),
+                }
+            }
+            if let Some(next) = part.body.next {
+                pending.push(next);
+            }
+            let new = self.try_add_part(part.kind, part.blocks)?;
+            if let Some(copy) = self.parts.get_mut(&new) {
+                copy.body = part.body;
+            }
+            copies.insert(old, new);
+        }
+        for new in copies.values() {
+            let Some(part) = self.parts.get_mut(new) else { continue };
+            part.body.next = part.body.next.and_then(|old| copies.get(&old).copied());
+            let mut blocks: Vec<&mut Block> = part.blocks.iter_mut().map(Arc::make_mut).collect();
+            while let Some(block) = blocks.pop() {
+                match block {
+                    Block::Table(t) => blocks.extend(t.rows.iter_mut().flat_map(|r| &mut r.cells).flat_map(|c| &mut c.blocks).map(Arc::make_mut)),
+                    Block::Para(p) => {
+                        for object in &mut p.objects {
+                            for slot in object.text_box_slots() {
+                                if let Some(new) = slot.and_then(|old| copies.get(&old).copied()) {
+                                    *slot = Some(new);
+                                }
+                            }
+                        }
+                        p.touch();
+                    }
+                }
+            }
+        }
+        copies.get(&id).copied().ok_or(DocError::BadStory(crate::StoryRef::Part(id)))
+    }
+
     /// Insert a fragment at `pos`; returns the position after the pasted content.
     pub fn insert_fragment(&mut self, pos: &Pos, frag: &Fragment) -> Result<Pos> {
         // Tables that would nest deeper than the limit here become their paragraphs (#1596).

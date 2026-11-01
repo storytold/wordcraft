@@ -233,24 +233,131 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"csv"?: string}"#),
         CommandSpec::new("layout.linkToPrevious", "Link to Previous", "Header & Footer › Navigation", |s, v| {
-            let header = p::bool(v, "footer").map(|f| !f).unwrap_or(true);
-            let block = s.sel.focus.path.0.first().copied().unwrap_or(0) as usize;
-            let sect = s.doc.section_mut(block);
-            if header {
-                sect.headers = Default::default();
-            } else {
-                sect.footers = Default::default();
+            s.layout();
+    let si = crate::cmd::page::section_index_for_hf(s);
+            if si == 0 {
+                return Err(CmdError::Disabled("first section cannot link to previous".into()));
             }
-            Ok(json!({"linked": true}))
+
+            let header = match p::bool(v, "footer") {
+                Some(f) => !f,
+                None => match crate::cmd::page::hf_story(s) {
+                    StoryRef::Part(id) => s.doc.parts.get(&id).map(|p| !matches!(p.kind, wordcraft_doc::PartKind::Footer)).unwrap_or(true),
+                    _ => true,
+                },
+            };
+
+            let slot = {
+                let layout = s.layout();
+                let page = if s.sel.focus.story == StoryRef::Body { layout.page_of(&s.sel.focus).unwrap_or(s.page_hint) } else { s.page_hint };
+                layout.pages.get(page).map(|pg| pg.hf_slot).unwrap_or(wordcraft_layout::HfSlot::Default)
+            };
+
+            fn slot_of(slot: wordcraft_layout::HfSlot, set: &mut wordcraft_doc::section::HeaderSet) -> &mut Option<u32> {
+                match slot {
+                    wordcraft_layout::HfSlot::First => &mut set.first,
+                    wordcraft_layout::HfSlot::Even => &mut set.even,
+                    wordcraft_layout::HfSlot::Default => &mut set.default,
+                }
+            }
+            fn slot_get(slot: wordcraft_layout::HfSlot, set: &wordcraft_doc::section::HeaderSet) -> Option<u32> {
+                match slot {
+                    wordcraft_layout::HfSlot::First => set.first,
+                    wordcraft_layout::HfSlot::Even => set.even,
+                    wordcraft_layout::HfSlot::Default => set.default,
+                }
+            }
+
+            let currently_linked = {
+                let sect = s.doc.section_mut_at(si);
+                let set = if header { &sect.headers } else { &sect.footers };
+                slot_get(slot, set).is_none()
+            };
+
+            let target_linked = p::bool(v, "linked").unwrap_or(!currently_linked);
+            if target_linked == currently_linked {
+                return Ok(json!({"linked": currently_linked, "section": si, "header": header}));
+            }
+
+            if target_linked {
+                let sect = s.doc.section_mut_at(si);
+                let set = if header { &mut sect.headers } else { &mut sect.footers };
+                *slot_of(slot, set) = None;
+
+                let sections = s.doc.sections();
+                let mut inherited_id = None;
+                for prev_i in (0..si).rev() {
+                    if let Some((_, sp)) = sections.get(prev_i) {
+                        let prev_set = if header { &sp.headers } else { &sp.footers };
+                        if let Some(id) = slot_get(slot, prev_set) {
+                            inherited_id = Some(id);
+                            break;
+                        }
+                    }
+                }
+                if inherited_id.is_none() && slot == wordcraft_layout::HfSlot::Even {
+                    inherited_id = sections.iter().take(si.saturating_add(1)).rev()
+                        .find_map(|(_, sp)| if header { sp.headers.default } else { sp.footers.default });
+                }
+                if matches!(s.sel.focus.story, StoryRef::Part(_)) {
+                    if let Some(id) = inherited_id {
+                        s.sel = Selection::caret(s.doc.end_of(StoryRef::Part(id)));
+                    } else {
+                        let back = s.hf_return.take();
+                        s.sel = back.unwrap_or_else(|| Selection::caret(s.doc.start_of(StoryRef::Body)));
+                    }
+                }
+                s.touch();
+                s.layout();
+                Ok(json!({"linked": true, "section": si, "header": header}))
+            } else {
+                let sections = s.doc.sections();
+                let mut inherited_id = None;
+                for prev_i in (0..si).rev() {
+                    if let Some((_, sp)) = sections.get(prev_i) {
+                        let prev_set = if header { &sp.headers } else { &sp.footers };
+                        if let Some(id) = slot_get(slot, prev_set) {
+                            inherited_id = Some(id);
+                            break;
+                        }
+                    }
+                }
+
+                if inherited_id.is_none() && slot == wordcraft_layout::HfSlot::Even {
+                    inherited_id = sections.iter().take(si.saturating_add(1)).rev()
+                        .find_map(|(_, sp)| if header { sp.headers.default } else { sp.footers.default });
+                }
+                let new_id = if let Some(id) = inherited_id {
+                    s.doc.copy_part(id)?
+                } else {
+                    let style = if header { "Header" } else { "Footer" };
+                    let kind = if header { wordcraft_doc::PartKind::Header } else { wordcraft_doc::PartKind::Footer };
+                    s.doc.try_add_part(kind, vec![para_block(Paragraph::new().styled(style))])?
+                };
+                // An explicitly unlinked empty story must survive closing and saving.
+
+                let sect = s.doc.section_mut_at(si);
+                let set = if header { &mut sect.headers } else { &mut sect.footers };
+                *slot_of(slot, set) = Some(new_id);
+
+                if matches!(s.sel.focus.story, StoryRef::Part(_)) {
+                    s.sel = Selection::caret(s.doc.end_of(StoryRef::Part(new_id)));
+                }
+                s.touch();
+                s.layout();
+                Ok(json!({"linked": false, "section": si, "header": header, "story": new_id}))
+            }
         })
+        .when(|s| if crate::cmd::page::section_index_for_hf(s) == 0 { Some("first section") } else { None })
         .key(crate::cmd::non_mac("Alt+Shift+R"))
-        .params(r#"{"footer"?: bool}"#),
+        .params(r#"{"linked"?: bool, "footer"?: bool}"#),
         CommandSpec::new("hf.next", "Next Section", "Header & Footer › Navigation", |s, _| hf_nav(s, 1)).pure(),
         CommandSpec::new("hf.previous", "Previous Section", "Header & Footer › Navigation", |s, _| hf_nav(s, -1)).pure(),
         CommandSpec::new("hf.position", "Header/Footer Position", "Header & Footer › Position", |s, v| {
             let (h, f) = (p::f32(v, "header"), p::f32(v, "footer"));
-            let block = s.sel.focus.path.0.first().copied().unwrap_or(0) as usize;
-            let sect = s.doc.section_mut(block);
+            s.layout();
+    let si = crate::cmd::page::section_index_for_hf(s);
+            let sect = s.doc.section_mut_at(si);
             if let Some(h) = h {
                 sect.header = h.clamp(0.0, 300.0);
             }

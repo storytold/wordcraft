@@ -781,3 +781,41 @@ fn shape_and_chart_formats_leave_out_of_range_sizes_alone() {
     assert_eq!(before.0, Some((20.0, 2500.0)));
     assert_eq!(shown(a), before, "Chart Design shown, the chart untouched");
 }
+
+/// #4847: Link to Previous button is disabled in Section 1, and enabled & active when in Section 2.
+#[test]
+fn link_to_previous_button_states_follow_section_and_link() {
+    let mut a = crate::WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.run("text.insert", json!({"text": "Section 1"})).unwrap();
+    assert!(!crate::widgets::enabled(&a, "layout.linkToPrevious"), "Section 1 cannot link to previous");
+
+    a.run("layout.break", json!({"kind": "nextPage"})).unwrap();
+    a.run("text.insert", json!({"text": "Section 2"})).unwrap();
+    assert!(crate::widgets::enabled(&a, "layout.linkToPrevious"), "Section 2 can link to previous");
+    assert!(wordcraft_engine::cmd::page::is_hf_linked(&a.session), "Section 2 starts linked");
+
+    // Unlinking toggles the linked state
+    a.run("layout.linkToPrevious", json!({})).unwrap();
+    assert!(!wordcraft_engine::cmd::page::is_hf_linked(&a.session), "Section 2 unlinked");
+
+    // Re-linking toggles back
+    a.run("layout.linkToPrevious", json!({})).unwrap();
+    assert!(wordcraft_engine::cmd::page::is_hf_linked(&a.session), "Section 2 linked again");
+    use egui_kittest::kittest::Queryable;
+    a.run("ui.tab", json!({"tab":"Insert"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(2);
+    h.get_by_label("Link to Previous").click();
+    h.run_steps(2);
+    assert!(!wordcraft_engine::cmd::page::is_hf_linked(&h.state().session));
+    h.get_by_label("Link to Previous").click();
+    h.run_steps(2);
+    assert!(wordcraft_engine::cmd::page::is_hf_linked(&h.state().session));
+}

@@ -213,68 +213,200 @@ pub(super) fn size_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SizeForm) -> bool 
 // ---------------------------------------------------------------------------------------------
 // Format Page Numbers
 
-/// The Format Page Numbers dialog's fields (#1113): the number format, and where numbering
-/// starts — `cont` numbers on from the section before (no `w:start`), else the pages start at
-/// `start`.
+/// Format Page Numbers and optional named page-label segments.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PageNumbersForm {
-    /// The section the fields were read from (see [`Self::follow`]).
     pub section: usize,
-    /// OOXML number format (`decimal`, `upperRoman`, …).
     pub format: String,
     pub cont: bool,
     pub start: u32,
+    pub label: wordcraft_doc::page_label::PageLabel,
+    pub segment: bool,
+    pub new_segment: bool,
+    pub from_page: bool,
+    pub caret_section: usize,
 }
 
 impl PageNumbersForm {
-    /// The section's numbering as it is at the caret.
-    pub fn read(app: &WordApp) -> PageNumbersForm {
-        let sp = wordcraft_engine::cmd::page::sect(&app.session);
-        PageNumbersForm {
-            section: wordcraft_engine::cmd::page::section_index_of_focus(&app.session),
-            format: sp.page_num_format.ooxml().to_string(),
+    pub fn read(app: &mut WordApp) -> Self {
+        let section = wordcraft_engine::cmd::page::numbering_section(&mut app.session);
+        Self::read_section(app, section, section)
+    }
+
+    fn read_section(app: &WordApp, section: usize, caret_section: usize) -> Self {
+        let sp = app.session.doc.sections().get(section).map(|(_, sec)| (*sec).clone()).unwrap_or_default();
+        Self {
+            section,
+            format: sp.page_num_format.ooxml().into(),
             cont: sp.page_num_start.is_none(),
-            start: sp.page_num_start.unwrap_or(1).clamp(1, 100_000),
+            start: sp.page_num_start.unwrap_or(1).min(100_000),
+            segment: sp.page_label.is_some(),
+            label: sp.page_label.unwrap_or_default(),
+            new_segment: false,
+            from_page: true,
+            caret_section,
         }
     }
 
-    /// Follow the caret: dialogs aren't modal, so a click on the page may move it to another
-    /// section. The form then shows that section's numbering, so OK never writes numbers read
-    /// from another one (the Size dialog follows its object the same way).
-    pub fn follow(&mut self, app: &WordApp) {
-        if self.section != wordcraft_engine::cmd::page::section_index_of_focus(&app.session) {
-            *self = PageNumbersForm::read(app);
+    pub fn follow(&mut self, app: &mut WordApp) {
+        let focus = wordcraft_engine::cmd::page::numbering_section(&mut app.session);
+        if self.caret_section != focus || self.section >= app.session.doc.sections().len() {
+            *self = Self::read(app);
         }
     }
 
-    /// `layout.pageNumberFormat` parameters: no `start` (null) when the pages number on from the
-    /// section before.
     pub fn params(&self) -> Value {
         let start = if self.cont { Value::Null } else { json!(self.start) };
-        json!({"format": self.format, "start": start})
+        if self.segment {
+            json!({"format":self.format,"start":start,"label":self.label,"section":self.section,
+                "new":self.new_segment,"from":if self.from_page {"page"} else {"cursor"}})
+        } else {
+            json!({"format": self.format, "start": start})
+        }
     }
 }
 
 pub(super) fn page_numbers_ui(app: &mut WordApp, ui: &mut Ui, f: &mut PageNumbersForm) -> bool {
+    use wordcraft_doc::page_label::PageLabelMode;
     f.follow(app);
     ui.add_space(4.0);
-    ui.label(tl!("Number format"));
-    let label = crate::dialogs_notes::FORMATS.iter().find(|(v, _)| *v == f.format.as_str()).map(|(_, l)| *l).unwrap_or_default();
-    craft_ui::ComboBox::from_id_salt("pnum_format").selected_text(label).width(150.0).show_ui(ui, |ui| {
-        for (v, l) in crate::dialogs_notes::FORMATS {
-            ui.selectable_value(&mut f.format, v.to_string(), l);
+    let sections: Vec<_> = app
+        .session
+        .doc
+        .sections()
+        .iter()
+        .enumerate()
+        .map(|(i, (_, s))| {
+            let name = s
+                .page_label
+                .as_ref()
+                .map(|l| l.name.as_str())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("{} {}", tl!("Segment"), i + 1));
+            (i, name)
+        })
+        .collect();
+    if !f.new_segment {
+        let mut selected = f.section;
+        let name = sections.get(f.section).map(|(_, n)| n.as_str()).unwrap_or_default();
+        let label = ui.label(tl!("Segment"));
+        let combo = craft_ui::ComboBox::from_id_salt("page_segment").selected_text(name).show_ui(ui, |ui| {
+            for (i, name) in &sections {
+                ui.selectable_value(&mut selected, *i, name);
+            }
+        });
+        combo.response.labelled_by(label.id);
+        if selected != f.section {
+            *f = PageNumbersForm::read_section(app, selected, f.caret_section);
         }
-    });
-    heading(ui, "Page numbering");
-    ui.radio_value(&mut f.cont, true, tl!("Continue from previous section"));
-    ui.horizontal(|ui| {
-        ui.radio_value(&mut f.cont, false, tl!("Start at:"));
-        ui.add_enabled(!f.cont, egui::DragValue::new(&mut f.start).range(1..=100_000));
-    });
-    let (ok, cancel) = buttons(ui, "OK", true);
+    } else {
+        heading(ui, "New segment");
+        ui.radio_value(&mut f.from_page, true, tl!("From this page"));
+        ui.add_enabled_ui(app.session.sel.focus.story == wordcraft_doc::StoryRef::Body && app.session.sel.focus.path.depth() == 0, |ui| {
+            ui.radio_value(&mut f.from_page, false, tl!("From cursor on a new page"));
+        });
+    }
+    if !f.new_segment {
+        ui.checkbox(&mut f.segment, tl!("Custom page labels"));
+    }
+    if f.segment {
+        let label = ui.label(tl!("Segment name"));
+        ui.add(egui::TextEdit::singleline(&mut f.label.name).char_limit(256)).labelled_by(label.id);
+        let modes = [
+            (PageLabelMode::Hidden, "No label"),
+            (PageLabelMode::Text, "Text only"),
+            (PageLabelMode::Number, "Counter only"),
+            (PageLabelMode::TextNumber, "Text and counter"),
+        ];
+        let mode = modes.iter().find(|(v, _)| *v == f.label.mode).map(|(_, n)| *n).unwrap_or("Counter only");
+        let label = ui.label(tl!("Page label"));
+        let combo = craft_ui::ComboBox::from_id_salt("page_label_mode").selected_text(tl!(mode)).show_ui(ui, |ui| {
+            for (value, name) in modes {
+                ui.selectable_value(&mut f.label.mode, value, tl!(name));
+            }
+        });
+        combo.response.labelled_by(label.id);
+        if matches!(f.label.mode, PageLabelMode::Text | PageLabelMode::TextNumber) {
+            let label = ui.label(tl!("Text"));
+            ui.add(egui::TextEdit::singleline(&mut f.label.text).char_limit(256)).labelled_by(label.id);
+        }
+        if f.label.mode == PageLabelMode::TextNumber {
+            let label = ui.label(tl!("Separator"));
+            ui.add(egui::TextEdit::singleline(&mut f.label.separator).char_limit(16)).labelled_by(label.id);
+        }
+    }
+    if !f.segment || f.label.counts() {
+        let format_label = ui.label(tl!("Number format"));
+        let label = crate::dialogs_notes::FORMATS.iter().find(|(v, _)| *v == f.format.as_str()).map(|(_, l)| *l).unwrap_or_default();
+        let combo = craft_ui::ComboBox::from_id_salt("pnum_format").selected_text(label).width(150.0).show_ui(ui, |ui| {
+            for (v, l) in crate::dialogs_notes::FORMATS {
+                ui.selectable_value(&mut f.format, v.to_string(), l);
+            }
+        });
+        combo.response.labelled_by(format_label.id);
+        heading(ui, "Page numbering");
+        ui.radio_value(&mut f.cont, true, tl!("Continue from previous section"));
+        ui.horizontal(|ui| {
+            let label = ui.radio_value(&mut f.cont, false, tl!("Start at:"));
+            ui.add_enabled(!f.cont, egui::DragValue::new(&mut f.start).range(0..=100_000)).labelled_by(label.id);
+        });
+        if f.segment && !f.cont && f.start == 0 && f.format != "decimal" {
+            let label = ui.label(tl!("Zero-page label (empty hides it)"));
+            ui.add(egui::TextEdit::singleline(&mut f.label.zero_label).char_limit(256)).labelled_by(label.id);
+        }
+    }
+    if f.segment {
+        ui.label(tl!("Preview"));
+        let format = wordcraft_doc::section::NumFormat::from_ooxml(&f.format);
+        let first = if f.cont {
+            let layout = app.session.layout();
+            let page = if app.session.sel.focus.story == wordcraft_doc::StoryRef::Body {
+                layout.page_of(&app.session.sel.focus).unwrap_or(app.session.page_hint)
+            } else {
+                app.session.page_hint
+            };
+            layout
+                .pages
+                .iter()
+                .enumerate()
+                .rev()
+                .find(|(i, p)| {
+                    (if f.new_segment { *i < page || (!f.from_page && *i == page) } else { p.section < f.section })
+                        && app.session.doc.sections().get(p.section).is_some_and(|(_, sec)| sec.page_label.as_ref().is_none_or(|l| l.counts()))
+                })
+                .map_or(1, |(_, p)| p.number.saturating_add(1))
+        } else {
+            f.start
+        };
+        let labels: Vec<_> = (0..3)
+            .map(|i| {
+                let text = f.label.format(format, first.saturating_add(i));
+                if text.is_empty() { "—".into() } else { text }
+            })
+            .collect();
+        ui.label(labels.join(" · "));
+    }
+    if !f.new_segment && ui.button(tl!("+ New segment…")).clicked() {
+        f.new_segment = true;
+        f.segment = true;
+        f.cont = false;
+        f.start = 1;
+        f.label.name.clear();
+    }
+    let boundary_ok = !f.new_segment || wordcraft_engine::cmd::page::page_segment_start(&mut app.session, f.from_page).is_ok();
+    if !boundary_ok {
+        ui.label(tl!("Place the cursor before or after the table, then choose From cursor on a new page."));
+    }
+    let (ok, cancel) = buttons(ui, if f.new_segment { "Create segment" } else { "OK" }, boundary_ok && (!f.segment || f.label.validate().is_ok()));
     if ok {
-        return run(app, "layout.pageNumberFormat", f.params());
+        let mut params = f.params();
+        if !f.segment {
+            params["section"] = json!(f.section);
+            params["label"] = Value::Null;
+        }
+        return run(app, "layout.pageSegment", params);
     }
     cancel
 }

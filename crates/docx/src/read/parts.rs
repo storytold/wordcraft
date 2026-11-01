@@ -142,6 +142,10 @@ impl Reader<'_> {
         let rels = self.pkg.rels(path);
         let mut sc = StoryCtx::default();
         sc.in_hf = true;
+        self.page_label_edits |= !self.preserve_page_label_content && self.page_label_metadata.has_edits(&root, 0);
+        if let Some(label) = self.page_label_metadata.story_label(&root) {
+            self.hf_page_labels.insert(id, label);
+        }
         let mut blocks = Blocks::new();
         self.hf_depth += 1;
         self.read_blocks(&mut sc, &root, &rels, &mut blocks, 0);

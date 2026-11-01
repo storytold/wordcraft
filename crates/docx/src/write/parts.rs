@@ -22,6 +22,8 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
         doc
     };
     let mut wr = Writer {
+        page_label_metadata: crate::page_labels::Export::new(&doc.custom_props),
+        page_label: None,
         eq_number: 0,
         doc,
         media_files: BTreeMap::new(),
@@ -36,6 +38,8 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
         endnotes: Vec::new(),
         hf: Vec::new(),
         linked_headers: Default::default(),
+        linked_footers: Default::default(),
+        has_page_labels: doc.sections().iter().any(|(_, sec)| sec.page_label.is_some()),
         wm_header: (0..=u32::MAX).rev().find(|id| !doc.parts.contains_key(id)).unwrap_or(u32::MAX),
         pending_watermark: None,
         para_ids: HashMap::new(),
@@ -79,10 +83,11 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
     }
 
     let body = write_document_body(doc, &mut wr, &mut rels, &ns_refs);
+    wr.page_label = None;
 
     // Headers and footers (discovered while writing sections).
     let mut done = 0;
-    while let Some((id, file, footer)) = wr.hf.get(done).cloned() {
+    while let Some((id, file, footer, label)) = wr.hf.get(done).cloned() {
         done += 1;
         let mut prels = PartRels::default();
         let mut w = W::new();
@@ -94,8 +99,14 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
             Some(wm) if !footer => watermark::run(wm, done, &doc.last_section),
             _ => None,
         };
-        wr.blocks(&mut w, &blocks, &mut prels, false, 0);
-        // Always taken: the story ends with a top-level paragraph.
+        wr.page_label = label;
+        if footer {
+            wr.footer_blocks(&mut w, &blocks, &mut prels);
+        } else {
+            wr.blocks(&mut w, &blocks, &mut prels, false, 0);
+        }
+        wr.page_label = None;
+        // A header's watermark was taken by its own or its trailing top-level paragraph.
         wr.pending_watermark = None;
         w.close(tag);
         push_part(
@@ -233,9 +244,10 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
     overrides.push(("/docProps/core.xml".into(), "application/vnd.openxmlformats-package.core-properties+xml".into()));
     entries.push(("docProps/app.xml".into(), app_xml(doc)));
     overrides.push(("/docProps/app.xml".into(), "application/vnd.openxmlformats-officedocument.extended-properties+xml".into()));
-    if !doc.custom_props.is_empty() {
+    let custom_props: Vec<_> = doc.custom_props.iter().chain(wr.page_label_metadata.properties()).cloned().collect();
+    if !custom_props.is_empty() {
         root.add(rt::CUSTOM, "docProps/custom.xml", false);
-        entries.push(("docProps/custom.xml".into(), crate::custom::write(&doc.custom_props)));
+        entries.push(("docProps/custom.xml".into(), crate::custom::write(&custom_props)));
         overrides.push(("/docProps/custom.xml".into(), "application/vnd.openxmlformats-officedocument.custom-properties+xml".into()));
     }
     if !doc.sources.is_empty() {

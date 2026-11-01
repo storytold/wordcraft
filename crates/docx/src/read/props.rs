@@ -676,7 +676,14 @@ pub struct HfRef {
 
 /// `w:sectPr` (header/footer references are returned for the caller to resolve).
 pub fn sectpr(e: &El) -> (SectionProps, Vec<HfRef>) {
-    let mut s = SectionProps::default();
+    let mut s = SectionProps {
+        page_label: e
+            .attr("wc:pageLabel")
+            .filter(|text| text.len() <= 8192)
+            .and_then(|text| serde_json::from_str::<wordcraft_doc::page_label::PageLabel>(text).ok())
+            .filter(|label| label.validate().is_ok()),
+        ..Default::default()
+    };
     let mut refs = Vec::new();
     for k in e.els() {
         match k.name.as_str() {

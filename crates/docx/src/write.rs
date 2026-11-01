@@ -82,7 +82,11 @@ impl PartRels {
     }
 }
 
+type PageLabelContext = Option<(wordcraft_doc::page_label::PageLabel, wordcraft_doc::section::NumFormat, u32)>;
+
 pub(crate) struct Writer<'d> {
+    page_label_metadata: crate::page_labels::Export,
+    page_label: PageLabelContext,
     doc: &'d Document,
     /// Numbered display equations written so far (automatic numbers are written as text).
     pub(crate) eq_number: u32,
@@ -100,10 +104,12 @@ pub(crate) struct Writer<'d> {
     footnotes: Vec<u32>,
     endnotes: Vec<u32>,
     /// Header/footer part id → (file name, is footer).
-    hf: Vec<(u32, String, bool)>,
+    hf: Vec<(u32, String, bool, PageLabelContext)>,
     /// The headers each slot has so far in body order, with sections' empty slots linked to the
     /// ones before (as layout shows them): where a watermark needs a header of its own.
     linked_headers: wordcraft_doc::section::HeaderSet,
+    linked_footers: wordcraft_doc::section::HeaderSet,
+    has_page_labels: bool,
     /// The part id standing for a header written only to hold the watermark (no such part).
     wm_header: u32,
     /// The watermark shape to put at the start of the next top-level paragraph (a header's first).
@@ -202,17 +208,17 @@ impl Writer<'_> {
         (idx + base).to_string()
     }
 
-    fn hf_rel(&mut self, part: u32, footer: bool, rels: &mut PartRels) -> Option<String> {
+    fn hf_rel(&mut self, part: u32, footer: bool, label: PageLabelContext, rels: &mut PartRels) -> Option<String> {
         let kind = if part == self.wm_header && !footer { PartKind::Header } else { self.doc.parts.get(&part)?.kind };
         if !matches!(kind, PartKind::Header | PartKind::Footer) {
             return None;
         }
-        let file = match self.hf.iter().find(|(p, _, f)| *p == part && *f == footer) {
-            Some((_, f, _)) => f.clone(),
+        let file = match self.hf.iter().find(|(p, _, f, l)| *p == part && *f == footer && *l == label) {
+            Some((_, f, _, _)) => f.clone(),
             None => {
-                let n = self.hf.iter().filter(|(_, _, f)| *f == footer).count() + 1;
+                let n = self.hf.iter().filter(|(_, _, f, _)| *f == footer).count() + 1;
                 let f = format!("{}{n}.xml", if footer { "footer" } else { "header" });
-                self.hf.push((part, f.clone(), footer));
+                self.hf.push((part, f.clone(), footer, label));
                 f
             }
         };

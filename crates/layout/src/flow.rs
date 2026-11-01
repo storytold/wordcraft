@@ -544,8 +544,23 @@ impl<'a> Flow<'a> {
             });
         match forced {
             Some(LineEnd::PageBreak) if mark_with_break => {
-                pb.new_page(block, body_top);
-                pb.after_break_mark = true;
+                // Word shares this break with a following empty paragraph's next-page section break.
+                let closes_section = self.p.section.is_none()
+                    && pb.next_starts_page
+                    && block
+                        .checked_add(1)
+                        .and_then(|i| ctx.doc.body.get(i))
+                        .and_then(|b| b.as_para())
+                        .is_some_and(|p| p.section.is_some() && p.text.is_empty() && p.objects.is_empty() && !ctx.has_label(p));
+                if closes_section {
+                    pb.apply_valign();
+                    // The closing mark must not align the completed page and its notes again.
+                    pb.page_valign = wordcraft_doc::section::PageVAlign::Top;
+                    pb.flush_notes();
+                } else {
+                    pb.new_page(block, body_top);
+                    pb.after_break_mark = true;
+                }
             }
             Some(LineEnd::PageBreak) if starts_with_break && !pb.web => {
                 pb.new_page(block, body_top);
