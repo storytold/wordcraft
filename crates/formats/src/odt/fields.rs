@@ -75,7 +75,17 @@ pub(super) fn instr_of(local: &str, a: &Attrs, picture: impl Fn(&str) -> Option<
             }
         }
         // Only the current page's number: "previous" and "next" have no Word equivalent.
-        "page-number" => (get(a, "text:select-page").is_none_or(|v| v.trim() == "current")).then(|| "PAGE".to_string()),
+        "page-number" => (get(a, "text:select-page").is_none_or(|v| v.trim() == "current")).then(|| {
+            // Its own number format, over the page style's (Word's `\*` format switch).
+            match get(a, "style:num-format").map(str::trim) {
+                Some("1") => "PAGE \\* Arabic".to_string(),
+                Some("i") => "PAGE \\* roman".to_string(),
+                Some("I") => "PAGE \\* ROMAN".to_string(),
+                Some("a") => "PAGE \\* alphabetic".to_string(),
+                Some("A") => "PAGE \\* ALPHABETIC".to_string(),
+                _ => "PAGE".to_string(),
+            }
+        }),
         "bookmark-ref" => {
             let name =
                 get(a, "text:ref-name").map(str::trim).filter(|n| !n.is_empty() && n.len() <= MAX_REF_NAME && !n.contains(char::is_whitespace))?;
@@ -125,7 +135,17 @@ pub(super) fn element(instr: &str, result: &str, data_style: Option<&str>) -> Op
             let display = if number { "number" } else { "name" };
             Some(format!("<text:chapter text:display=\"{display}\" text:outline-level=\"{level}\">{result}</text:chapter>"))
         }
-        "PAGE" => Some(format!("<text:page-number text:select-page=\"current\">{result}</text:page-number>")),
+        "PAGE" => {
+            let fmt = match switch_arg(instr, '*').as_deref() {
+                Some(f) if f.eq_ignore_ascii_case("arabic") => " style:num-format=\"1\"",
+                Some("roman") => " style:num-format=\"i\"",
+                Some("ROMAN") => " style:num-format=\"I\"",
+                Some("alphabetic") => " style:num-format=\"a\"",
+                Some("ALPHABETIC") => " style:num-format=\"A\"",
+                _ => "",
+            };
+            Some(format!("<text:page-number{fmt} text:select-page=\"current\">{result}</text:page-number>"))
+        }
         "REF" | "PAGEREF" => {
             let name = words.next().filter(|n| !n.starts_with('\\') && n.len() <= MAX_REF_NAME)?;
             let rest: Vec<&str> = words.collect();

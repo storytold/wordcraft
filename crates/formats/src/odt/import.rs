@@ -399,6 +399,8 @@ struct Parsed {
     default_tab: Option<f32>,
     /// Tab stops are measured from the indent (LibreOffice's `TabsRelativeToIndent`).
     tabs_from_indent: bool,
+    /// The page settings that are the document's.
+    page_doc: PageDoc,
     parts: page_parts::Parts,
 }
 
@@ -475,6 +477,7 @@ fn parse_tracked(bytes: &[u8]) -> Result<Parsed, String> {
         scripts: styles.default_scripts.clone(),
         default_tab: styles.default_tab,
         tabs_from_indent: styles.tabs_from_indent,
+        page_doc: pages.doc.clone(),
         parts,
     })
 }
@@ -499,6 +502,7 @@ pub fn import(bytes: &[u8]) -> Result<Document, String> {
         scripts,
         default_tab,
         tabs_from_indent,
+        page_doc,
         parts,
     } = parse_tracked(bytes)?;
     let mut doc = model::to_doc(&flow);
@@ -509,6 +513,13 @@ pub fn import(bytes: &[u8]) -> Result<Document, String> {
     doc.styles.default_chr.overlay(&scripts);
     if let Some(t) = default_tab {
         doc.settings.default_tab = t;
+    }
+    doc.settings.page_color = page_doc.page_color;
+    if let Some((fmt, props)) = page_doc.notes[0] {
+        (doc.settings.footnote_format, doc.settings.footnote_pr) = (fmt, props);
+    }
+    if let Some((fmt, props)) = page_doc.notes[1] {
+        (doc.settings.endnote_format, doc.settings.endnote_pr) = (fmt, props);
     }
     let d = &mut doc.styles.default_para;
     (d.space_before, d.space_after, d.line_spacing) = (spacing.before, spacing.after, spacing.line);
@@ -539,6 +550,55 @@ pub(super) struct Pages {
     pub(super) masters: HashMap<String, SectionProps>,
     pub(super) first: Option<SectionProps>,
     pub(super) first_name: Option<String>,
+    /// What the document's first page style and its note and line numbering settings say for
+    /// the whole document.
+    pub(super) doc: PageDoc,
+}
+
+/// Page settings that are the document's in WordCraft (and Word): the page colour (the first
+/// page style's background), footnote and endnote numbering (`text:notes-configuration`).
+#[derive(Clone, Default)]
+pub(super) struct PageDoc {
+    pub(super) page_color: Option<wordcraft_doc::props::Rgb>,
+    /// Footnotes', then endnotes', number format and options.
+    pub(super) notes: [Option<(wordcraft_doc::section::NumFormat, wordcraft_doc::section::NoteProps)>; 2],
+}
+
+/// A `text:notes-configuration` (ODF 1.3 §16.29): which notes it is for (endnotes: true), their
+/// number format, first number (ODF counts from 0), restart, and footnotes at the page's foot
+/// or the document's end.
+fn notes_config(a: &Attrs) -> (bool, wordcraft_doc::section::NumFormat, wordcraft_doc::section::NoteProps) {
+    use wordcraft_doc::section::{MAX_NOTE_START, NotePos, NoteProps, NoteRestart};
+    let endnote = get(a, "text:note-class").is_some_and(|c| c.trim() == "endnote");
+    let fmt = super::styles::num_format(get(a, "style:num-format").unwrap_or("1"));
+    let num_start =
+        get(a, "text:start-value").and_then(|v| v.trim().parse::<u64>().ok()).map(|v| v.saturating_add(1).min(u64::from(MAX_NOTE_START)) as u32);
+    let num_restart = get(a, "text:start-numbering-at").map(|v| match v.trim() {
+        "page" => NoteRestart::EachPage,
+        "chapter" => NoteRestart::EachSect,
+        _ => NoteRestart::Continuous,
+    });
+    let pos = match (endnote, get(a, "text:footnotes-position").map(str::trim)) {
+        (false, Some("document")) => Some(NotePos::DocEnd),
+        (false, Some("page")) => Some(NotePos::PageBottom),
+        _ => None,
+    };
+    (endnote, fmt, NoteProps { pos, num_fmt: None, num_start, num_restart })
+}
+
+/// A `text:linenumbering-configuration` (ODF 1.3 §16.31) that numbers lines: every how many,
+/// how far from the text, restarting on each page or not.
+fn line_numbering(a: &Attrs) -> Option<wordcraft_doc::section::LineNumbering> {
+    use wordcraft_doc::section::{LineNumberRestart, LineNumbering};
+    // On unless it says otherwise (§19.845).
+    if get(a, "text:number-lines").is_some_and(|v| v.trim() == "false") {
+        return None;
+    }
+    let count_by = get(a, "text:increment").and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(1).clamp(1, 100);
+    let distance = get(a, "text:offset").and_then(length).filter(|v| v.is_finite()).map_or(0.0, |v| v.clamp(0.0, 1584.0));
+    let restart =
+        if get(a, "text:restart-on-page").is_some_and(|v| v.trim() == "true") { LineNumberRestart::Page } else { LineNumberRestart::Continuous };
+    Some(LineNumbering { count_by, start: 1, distance, restart })
 }
 
 /// A page layout's header or footer area (`style:header-style`/`style:footer-style`, ODF 1.3
@@ -566,8 +626,17 @@ fn read_pages(xml: &[u8]) -> Pages {
     // Master pages: name, layout, whether a header and a footer show.
     let mut masters: Vec<(String, String, bool, bool)> = Vec::new();
     let mut in_master = false;
+    let mut doc = PageDoc::default();
+    let mut lines = None;
     events(xml, |ev| match ev {
         Ev::Start(q, a) => match local(&q) {
+            "notes-configuration" if q.starts_with("text:") => {
+                let (endnote, fmt, props) = notes_config(&a);
+                if let Some(slot) = doc.notes.get_mut(usize::from(endnote)) {
+                    *slot = Some((fmt, props));
+                }
+            }
+            "linenumbering-configuration" if q.starts_with("text:") => lines = line_numbering(&a),
             "page-layout" if q.starts_with("style:") => cur = get(&a, "style:name").map(String::from),
             "header-style" => in_footer = false,
             "footer-style" => in_footer = true,
@@ -621,11 +690,15 @@ fn read_pages(xml: &[u8]) -> Pages {
         },
         Ev::Text(_) => {}
     });
-    let mut pages = Pages::default();
+    let mut pages = Pages { doc, ..Default::default() };
     for (name, layout, header, footer) in masters {
         let Some(Layout { attrs: a, columns: cols, header: hb, footer: fb }) = layouts.get(&layout) else { continue };
         let mut sec = SectionProps::default();
         apply_layout(a, &mut sec);
+        sec.line_numbers.clone_from(&lines);
+        if pages.first.is_none() {
+            pages.doc.page_color = get(a, "fo:background-color").and_then(model::parse_color);
+        }
         // ODF starts a header at the page margin and the text after the header's band; Word
         // measures the header's distance and the text's margin from the edge. The band's height
         // takes in its spacing (as LibreOffice draws it: a 2 cm header with 1 cm spacing puts
@@ -685,5 +758,36 @@ fn apply_layout(a: &Attrs, sec: &mut SectionProps) {
             // No margin is larger than the page's longer side (as `w:pgMar` in the DOCX reader).
             *slot = v.min(sec.page_w.max(sec.page_h));
         }
+    }
+    // Page numbers' format (§19.500 `style:num-format`; an empty one shows the numbers anyway).
+    if let Some(f) = get(a, "style:num-format").filter(|f| !f.trim().is_empty()) {
+        sec.page_num_format = super::styles::num_format(f);
+    }
+    // Page borders (§20.183 `fo:border`, §20.210 `fo:padding`: the space inside them).
+    let side = |s: &str| {
+        let b = get(a, &format!("fo:border-{s}")).or_else(|| get(a, "fo:border")).and_then(super::styles::parse_border)?;
+        let pad = get(a, &format!("fo:padding-{s}")).or_else(|| get(a, "fo:padding")).and_then(length).filter(|v| v.is_finite());
+        (b.style != wordcraft_doc::props::BorderStyle::None)
+            .then(|| wordcraft_doc::props::Border { space: pad.map_or(0.0, |p| p.clamp(0.0, 31.0)), ..b })
+    };
+    // ODF's border is at the margin, the text inside its padding; WordCraft measures the border
+    // from the page edge and the text margin from the edge too.
+    let limit = sec.page_w.max(sec.page_h);
+    let inset = |b: Option<wordcraft_doc::props::Border>, margin: &mut f32| {
+        b.map(|b| {
+            let edge = *margin;
+            *margin = (edge + b.width + b.space).min(limit);
+            wordcraft_doc::props::Border { space: edge, ..b }
+        })
+    };
+    let borders = wordcraft_doc::props::Borders {
+        top: inset(side("top"), &mut sec.margin_top),
+        bottom: inset(side("bottom"), &mut sec.margin_bottom),
+        left: inset(side("left"), &mut sec.margin_left),
+        right: inset(side("right"), &mut sec.margin_right),
+        ..Default::default()
+    };
+    if borders.any_visible() {
+        sec.page_borders = Some(borders);
     }
 }

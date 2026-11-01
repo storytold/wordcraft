@@ -101,3 +101,15 @@ fn hostile_formats_and_references_do_not_panic() {
         let _ = export(&d).unwrap();
     }
 }
+
+#[test]
+fn a_page_number_keeps_its_own_format() {
+    // On a page numbered i, ii…, a page number field may show 1, 2… (or another format).
+    let content = format!(
+        r#"<office:document-content {NS_T} {NS_N}><office:body><office:text><text:p><text:page-number style:num-format="1" text:select-page="current">1</text:page-number> <text:page-number style:num-format="A" text:select-page="current">A</text:page-number> <text:page-number text:select-page="current">i</text:page-number></text:p></office:text></office:body></office:document-content>"#
+    );
+    let d = import(&package(&content, None)).unwrap();
+    let got = items(&d);
+    assert_eq!(got[0], [r#"PAGE \* Arabic = 1"#, r#"PAGE \* ALPHABETIC = A"#, "PAGE = i"]);
+    assert_eq!(items(&import(&export(&d).unwrap()).unwrap()), got);
+}

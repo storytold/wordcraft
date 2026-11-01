@@ -727,7 +727,7 @@ pub(super) struct ListLevel {
 
 /// ODF number format (`style:num-format`, ODF 1.3 §19.500) → WordCraft's; an empty format shows
 /// no number.
-fn num_format(f: &str) -> NumFormat {
+pub(super) fn num_format(f: &str) -> NumFormat {
     match f.trim() {
         "" => NumFormat::None,
         "i" => NumFormat::LowerRoman,

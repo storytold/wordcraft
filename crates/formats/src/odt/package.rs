@@ -298,6 +298,10 @@ fn styles_xml(
             "<style:style style:name=\"{name}\" style:family=\"paragraph\" style:parent-style-name=\"Standard\" style:class=\"{class}\"><style:paragraph-properties fo:margin-top=\"0pt\" fo:margin-bottom=\"0pt\" fo:line-height=\"100%\"/><style:text-properties fo:font-size=\"10pt\"/></style:style>"
         ));
     }
+    s.push_str(&notes_configuration(doc));
+    if let Some(l) = pages.first().and_then(|(_, sec)| sec.line_numbers.as_ref()) {
+        s.push_str(&line_numbering_xml(l));
+    }
     s.push_str("</office:styles><office:automatic-styles>");
     s.push_str(part_styles);
     let none = PageParts::default();
@@ -311,6 +315,8 @@ fn styles_xml(
         // reach the text (it grows with its content, as Word's pushes the text down).
         let (top, header_h) = if pp.header { (sec.header, (sec.margin_top - sec.header).max(0.0)) } else { (sec.margin_top, 0.0) };
         let (bottom, footer_h) = if pp.footer { (sec.footer, (sec.margin_bottom - sec.footer).max(0.0)) } else { (sec.margin_bottom, 0.0) };
+        // A page border is at ODF's margin, the text (or header, footer) inside its padding.
+        let (borders, [top, bottom, left, right]) = page_borders(sec.page_borders, [top, bottom, sec.margin_left, sec.margin_right]);
         let header = if pp.header {
             format!(
                 "<style:header-style><style:header-footer-properties fo:min-height=\"{}\" fo:margin-bottom=\"0pt\"/></style:header-style>",
@@ -328,15 +334,16 @@ fn styles_xml(
             String::new()
         };
         s.push_str(&format!(
-            "<style:page-layout style:name=\"pm{}\"><style:page-layout-properties fo:page-width=\"{}\" fo:page-height=\"{}\" fo:margin-top=\"{}\" fo:margin-bottom=\"{}\" fo:margin-left=\"{}\" fo:margin-right=\"{}\" style:print-orientation=\"{}\">{cols}</style:page-layout-properties>{header}{footer}</style:page-layout>",
+            "<style:page-layout style:name=\"pm{}\"><style:page-layout-properties fo:page-width=\"{}\" fo:page-height=\"{}\" fo:margin-top=\"{}\" fo:margin-bottom=\"{}\" fo:margin-left=\"{}\" fo:margin-right=\"{}\" style:print-orientation=\"{}\"{}>{cols}</style:page-layout-properties>{header}{footer}</style:page-layout>",
             i + 1,
             pt(sec.page_w),
             pt(sec.page_h),
             pt(top),
             pt(bottom),
-            pt(sec.margin_left),
-            pt(sec.margin_right),
-            if sec.page_w > sec.page_h { "landscape" } else { "portrait" }
+            pt(left),
+            pt(right),
+            if sec.page_w > sec.page_h { "landscape" } else { "portrait" },
+            page_look(doc, sec) + &borders
         ));
     }
     s.push_str("</office:automatic-styles><office:master-styles>");
@@ -626,4 +633,80 @@ pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
     }
     let cur = z.finish().map_err(err)?;
     Ok(cur.into_inner())
+}
+
+/// A page layout's page number format (§19.500 `style:num-format`), the document's page colour
+/// (§20.175 `fo:background-color`) and the section's page borders with the space inside them.
+fn page_look(doc: &Document, sec: &SectionProps) -> String {
+    let mut a = String::new();
+    let f = super::writer::odf_num_format(sec.page_num_format);
+    if f != "1" {
+        a.push_str(&format!(" style:num-format=\"{f}\""));
+    }
+    if let Some(c) = doc.settings.page_color {
+        a.push_str(&format!(" fo:background-color=\"#{}\"", c.hex().to_ascii_lowercase()));
+    }
+    a
+}
+
+/// Page borders `b` as ODF writes them, and the margins (top, bottom, left, right) of the page
+/// they go round: each border at its distance from the edge (WordCraft's), which becomes the
+/// margin, with the rest of the way to the text as its padding.
+fn page_borders(b: Option<wordcraft_doc::props::Borders>, margins: [f32; 4]) -> (String, [f32; 4]) {
+    let Some(b) = b.filter(|b| b.any_visible()) else { return (String::new(), margins) };
+    let mut out = margins;
+    let mut attrs = String::new();
+    for (i, (side, edge)) in [("top", b.top), ("bottom", b.bottom), ("left", b.left), ("right", b.right)].into_iter().enumerate() {
+        let (Some(e), Some(m)) = (edge.filter(|e| e.is_visible()), out.get_mut(i)) else { continue };
+        let at = if e.space.is_finite() { e.space.clamp(0.0, *m) } else { 0.0 };
+        let pad = (*m - at - e.width).max(0.0);
+        *m = at;
+        attrs.push_str(&format!(" fo:border-{side}=\"{}\" fo:padding-{side}=\"{}\"", super::writer::odf_border(Some(e)), pt(pad)));
+    }
+    (attrs, out)
+}
+
+/// The footnotes' and endnotes' numbering (§16.29 `text:notes-configuration`): format, first
+/// number (ODF counts from 0), restart and, for footnotes, page foot or document end.
+fn notes_configuration(doc: &Document) -> String {
+    use wordcraft_doc::section::{NotePos, NoteRestart};
+    let mut s = String::new();
+    for (class, fmt, pr) in
+        [("footnote", doc.settings.footnote_format, &doc.settings.footnote_pr), ("endnote", doc.settings.endnote_format, &doc.settings.endnote_pr)]
+    {
+        // Only what the document sets: the rest stays the reader's default.
+        let start = pr.num_start.map(|n| format!(" text:start-value=\"{}\"", n.max(1) - 1)).unwrap_or_default();
+        let restart = pr
+            .num_restart
+            .map(|r| {
+                let at = match r {
+                    NoteRestart::EachPage => "page",
+                    NoteRestart::EachSect => "chapter",
+                    NoteRestart::Continuous => "document",
+                };
+                format!(" text:start-numbering-at=\"{at}\"")
+            })
+            .unwrap_or_default();
+        let position = match (class, pr.pos) {
+            ("footnote", Some(NotePos::DocEnd)) => " text:footnotes-position=\"document\"",
+            ("footnote", Some(_)) => " text:footnotes-position=\"page\"",
+            _ => "",
+        };
+        s.push_str(&format!(
+            "<text:notes-configuration text:note-class=\"{class}\" style:num-format=\"{}\"{start}{restart}{position}/>",
+            super::writer::odf_num_format(fmt)
+        ));
+    }
+    s
+}
+
+/// Line numbering (§16.30 `text:linenumbering-configuration`): every how many lines, how far
+/// from the text, restarting on each page or not.
+fn line_numbering_xml(l: &wordcraft_doc::section::LineNumbering) -> String {
+    let restart = l.restart == wordcraft_doc::section::LineNumberRestart::Page;
+    format!(
+        "<text:linenumbering-configuration text:number-lines=\"true\" text:increment=\"{}\" text:offset=\"{}\" style:num-format=\"1\" text:number-position=\"left\" text:restart-on-page=\"{restart}\"/>",
+        l.count_by.clamp(1, 100),
+        pt(if l.distance.is_finite() { l.distance.clamp(0.0, 1584.0) } else { 0.0 })
+    )
 }

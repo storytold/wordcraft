@@ -16,6 +16,7 @@ mod named_styles;
 mod notes;
 mod numbering_fields;
 mod outline;
+mod page_setup;
 mod para_borders;
 mod polygons;
 mod rotation;
