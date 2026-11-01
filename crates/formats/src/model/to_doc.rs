@@ -28,6 +28,10 @@ pub fn char_props(f: &Fmt) -> CharProps {
         size: f.size.filter(|s| s.is_finite() && *s >= 1.0 && *s <= 1638.0),
         font: if f.code { Some(MONO_FONT.to_string()) } else { f.font.as_deref().filter(|s| !s.is_empty()).map(str::to_string) },
         shading: f.background,
+        lang: f.lang.clone(),
+        lang_ea: f.lang_ea.clone(),
+        lang_bidi: f.lang_bidi.clone(),
+        no_proof: on(f.no_proof),
         ..Default::default()
     }
 }

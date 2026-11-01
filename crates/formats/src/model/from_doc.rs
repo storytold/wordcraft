@@ -65,6 +65,11 @@ fn fmt_of(doc: &Document, cp: &CharProps, in_code: bool) -> Fmt {
         size: e.size,
         font: if code || in_code { None } else { e.shown_font().map(Arc::from) },
         background: e.highlight.and_then(|h| h.rgb()).or(e.shading),
+        // No writer gives the language yet; leaving it out keeps runs merged as before.
+        lang: None,
+        lang_ea: None,
+        lang_bidi: None,
+        no_proof: false,
         ins: None,
         del: None,
         fmt_change: None,

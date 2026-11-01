@@ -52,6 +52,9 @@ impl Reader {
         if self.destination_word(w, p, on, pv) {
             return;
         }
+        if self.language_word(w, on, pv) {
+            return;
+        }
         match w {
             "par" => self.end_para_mark(),
             "sect" => self.end_section(),
@@ -264,6 +267,30 @@ impl Reader {
             }
             _ => {}
         }
+    }
+
+    /// The language words: a run's languages and No Proofing, and the document's defaults.
+    fn language_word(&mut self, word: &str, on: bool, value: i32) -> bool {
+        match word {
+            // Language IDs ([MS-LCID]); one that names no language (1024, the user's default)
+            // leaves the language as it was. `\langnp` and `\langfenp` repeat `\lang` and `\langfe`.
+            "lang" | "langnp" => set_lang(&mut self.st.fmt.lang, value),
+            "langfe" | "langfenp" => set_lang(&mut self.st.fmt.lang_ea, value),
+            "alang" => set_lang(&mut self.st.fmt.lang_bidi, value),
+            "noproof" => self.st.fmt.no_proof = on,
+            "deflang" | "deflangfe" | "adeflang" => {
+                let i = match word {
+                    "deflang" => 0,
+                    "deflangfe" => 1,
+                    _ => 2,
+                };
+                if let (Some(d), Some(tag)) = (self.deflang.get_mut(i), lang_tag(value)) {
+                    *d = Some(tag);
+                }
+            }
+            _ => return false,
+        }
+        true
     }
 
     fn destination_for_word(&mut self, w: &str) -> Option<Dest> {
@@ -504,6 +531,17 @@ impl Reader {
 
     fn in_info(&self) -> bool {
         self.info_depth.is_some_and(|d| self.depth() > d)
+    }
+}
+
+/// The language tag of an RTF language ID (`1029` → `cs-CZ`).
+fn lang_tag(pv: i32) -> Option<&'static str> {
+    u16::try_from(pv).ok().and_then(wordcraft_doc::lcid::tag)
+}
+
+fn set_lang(lang: &mut Option<String>, pv: i32) {
+    if let Some(tag) = lang_tag(pv) {
+        *lang = Some(tag.to_string());
     }
 }
 

@@ -147,6 +147,46 @@ fn default_font_is_deff_or_font_zero() {
 }
 
 #[test]
+fn languages_come_from_their_language_ids() {
+    // #4190: \deflang, \deflangfe and \adeflang are the defaults; \lang (and \langnp),
+    // \langfe and \alang a run's, \noproof keeps it from being checked, and \plain goes
+    // back to the defaults. 1024 (the user's default) names no language and changes nothing.
+    let d = import(
+        br"{\rtf1\ansi\deflang1029\deflangfe2052\adeflang1025 Ahoj {\lang1033\langnp1033\noproof Hello} {\langfe1041\alang1037 svete}{\lang1024 x}\par}",
+    )
+    .unwrap();
+    let dc = &d.styles.default_chr;
+    assert_eq!((dc.lang.as_deref(), dc.lang_ea.as_deref(), dc.lang_bidi.as_deref()), (Some("cs-CZ"), Some("zh-CN"), Some("ar-SA")));
+    let p = d.body.first().and_then(|b| b.as_para()).unwrap();
+    let at = |t: &str| p.props_of_char(p.text.find(t).unwrap()).clone();
+    let s = |t: &str| Some(t.to_string());
+    assert_eq!((at("Ahoj").lang, at("Ahoj").no_proof), (None, None), "the default applies");
+    assert_eq!((at("Hello").lang, at("Hello").no_proof), (s("en-US"), Some(true)));
+    assert_eq!((at("svete").lang_ea, at("svete").lang_bidi), (s("ja-JP"), s("he-IL")));
+    assert_eq!(at("x").lang, None);
+    // No \deflang: our default stays.
+    let d = import(br"{\rtf1\ansi x\par}").unwrap();
+    assert_eq!(d.styles.default_chr.lang, wordcraft_doc::StyleSheet::builtin().default_chr.lang);
+}
+
+#[test]
+fn tracked_language_changes_keep_the_old_languages() {
+    // #4190: `\oldcprops` holds the language words that changed (`\noproof0` turns No
+    // Proofing back off); Reject puts the old languages and proofing back.
+    let d = import(
+        br"{\rtf1\ansi\deflang1029{\*\revtbl {Unknown;}{Alice;}} {\lang1033\langfe1041\alang1037\noproof{\*\oldcprops \lang1029\langfe2052\alang1025\noproof0\crauth1}Hello}\par}",
+    )
+    .unwrap();
+    let p = d.body.first().and_then(|b| b.as_para()).unwrap();
+    let now = p.props_of_char(p.text.find("Hello").unwrap());
+    let s = |t: &str| Some(t.to_string());
+    assert_eq!((now.lang.clone(), now.lang_ea.clone(), now.lang_bidi.clone(), now.no_proof), (s("en-US"), s("ja-JP"), s("he-IL"), Some(true)));
+    let old = &now.fmt_change.as_deref().expect("the change").old;
+    assert_eq!((old.lang.clone(), old.lang_ea.clone(), old.lang_bidi.clone()), (s("cs-CZ"), s("zh-CN"), s("ar-SA")), "{old:?}");
+    assert_ne!(old.no_proof, Some(true), "{old:?}");
+}
+
+#[test]
 fn unicode_escapes_in_font_names() {
     // Ordinary fallback, hex fallback and \uc0 all give "Café Sans"; the fallback is not kept.
     for name in [r"Caf\u233? Sans", r"Caf\u233\'e9 Sans", r"\uc0 Caf\u233  Sans", r"\uc2 Caf\u233\'e9\'e9 Sans"] {

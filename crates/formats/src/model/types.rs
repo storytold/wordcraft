@@ -102,6 +102,13 @@ pub struct Fmt {
     pub font: Option<Arc<str>>,
     /// Background (highlight / shading).
     pub background: Option<Rgb>,
+    /// Language tags (`w:lang`) of the text, of its East Asian characters and of its
+    /// right-to-left and complex-script characters (formats that name them: RTF).
+    pub lang: Option<String>,
+    pub lang_ea: Option<String>,
+    pub lang_bidi: Option<String>,
+    /// Excluded from spelling and grammar checks (RTF `\noproof`).
+    pub no_proof: bool,
     /// Tracked insertion of this text (formats that keep revisions: RTF).
     pub ins: Option<RevMark>,
     /// Tracked deletion of this text. Only [`from_doc_tracked`] keeps deleted text in a flow.

@@ -20,6 +20,8 @@ struct Parsed {
     /// The last section's properties (the others are on the paragraphs that end them).
     last_section: wordcraft_doc::SectionProps,
     default_font: Option<String>,
+    /// The default languages (`\deflang`, `\deflangfe`, `\adeflang`).
+    default_lang: [Option<&'static str>; 3],
     /// Each section's headers and footers, in order, the last section's last.
     headers_footers: Vec<Vec<(HeaderFooter, Vec<FBlock>)>>,
 }
@@ -228,7 +230,7 @@ fn finalize(mut r: Reader) -> Parsed {
         blocks.push(FBlock::Para(Para::default()));
     }
     let default_font = r.fonts.get(&r.deff).filter(|n| !model::is_mono(n)).map(|n| n.to_string());
-    Parsed { flow: Flow { blocks, meta: r.meta }, page: r.page, last_section, default_font, headers_footers }
+    Parsed { flow: Flow { blocks, meta: r.meta }, page: r.page, last_section, default_font, default_lang: r.deflang, headers_footers }
 }
 
 /// The column grid of a table from its rows' cell right edges: every distinct edge starts a grid
@@ -271,7 +273,7 @@ pub(super) fn column_grid(rows: &mut [Vec<Cell>], rights: &[Vec<i32>]) -> Vec<f3
 /// Parse RTF bytes into a document.
 pub fn import(bytes: &[u8]) -> Result<Document, String> {
     model::begin_import();
-    let Parsed { flow, last_section, default_font, headers_footers, .. } = parse_full(bytes)?;
+    let Parsed { flow, last_section, default_font, default_lang, headers_footers, .. } = parse_full(bytes)?;
     let mut doc = model::to_doc_in(&flow, last_section);
     // Each section's own headers and footers; those it leaves out stay linked to the previous.
     let mut sets = Vec::with_capacity(headers_footers.len());
@@ -311,6 +313,12 @@ pub fn import(bytes: &[u8]) -> Result<Document, String> {
     dp.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(1.0));
     if default_font.is_some() {
         doc.styles.default_chr.font = default_font;
+    }
+    let dc = &mut doc.styles.default_chr;
+    for (lang, default) in [&mut dc.lang, &mut dc.lang_ea, &mut dc.lang_bidi].into_iter().zip(default_lang) {
+        if let Some(tag) = default {
+            *lang = Some(tag.to_string());
+        }
     }
     Ok(doc)
 }
