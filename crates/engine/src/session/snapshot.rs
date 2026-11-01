@@ -14,6 +14,7 @@ impl Session {
         self.note_body_replaced();
         self.bib_style = doc_bib_style(&doc);
         self.doc = doc;
+        self.damaged_source = None;
         self.doc.ensure_nonempty();
         self.password = None;
         self.file_name = None;
@@ -70,6 +71,8 @@ impl Session {
             pending: _,
             last_highlight: _,
             path: _,
+            // Like the source path: recovery metadata, not part of an edit snapshot.
+            damaged_source: _,
             file_name: _,
             // The custom dictionary file, like the file path: host wiring, not an edit.
             user_dict_path: _,

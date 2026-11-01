@@ -11263,6 +11263,58 @@ fn table_cell_margins_preserves_unpassed_sides() {
     assert_eq!(margins, [0.0, 10.0, 0.0, 15.0]);
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn opening_a_docx_with_a_damaged_part_says_so() {
+    let dir = std::env::temp_dir().join(format!("wordcraft-engine-damaged-part-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("damaged.docx");
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Hello"}));
+    run(&mut s, "file.save", json!({"path": path.to_string_lossy()}));
+    let mut open = Session::new(wordcraft_doc::Document::new());
+    run(&mut open, "file.open", json!({"path": path.to_string_lossy()}));
+    assert_eq!(open.status, "", "a sound file opens without a word");
+
+    // Change a byte inside the data of the part `word/settings.xml`, found by its local header.
+    let mut bytes = std::fs::read(&path).unwrap();
+    let name_at = bytes.windows(17).position(|w| w == b"word/settings.xml").expect("settings entry name is in the DOCX");
+    let at = name_at.checked_sub(30).expect("local file header precedes its name");
+    let header = bytes.get(at..name_at).expect("local file header is complete");
+    assert_eq!(header.get(..4), Some(b"PK\x03\x04".as_slice()), "the entry name follows a local header");
+    let read_u16 = |range| bytes.get(at + range..at + range + 2).and_then(|v| <[u8; 2]>::try_from(v).ok()).map(u16::from_le_bytes).map(usize::from);
+    let name_len = read_u16(26).expect("local name length is present");
+    let extra_len = read_u16(28).expect("local extra length is present");
+    let data = name_at.checked_add(name_len).and_then(|at| at.checked_add(extra_len)).expect("settings data offset does not overflow");
+    *bytes.get_mut(data).expect("settings entry has data to corrupt") ^= 0xFF;
+    std::fs::write(&path, &bytes).unwrap();
+    let mut damaged = Session::new(wordcraft_doc::Document::new());
+    let opened = run(&mut damaged, "file.open", json!({"path": path.to_string_lossy()}));
+    assert!(damaged.status.contains("damaged"), "{:?}", damaged.status);
+    assert_eq!(damaged.doc.plain_text(StoryRef::Body), "Hello", "the text still opens");
+    assert!(
+        opened["skippedParts"].as_array().is_some_and(|parts| parts.iter().any(|part| part == "word/settings.xml")),
+        "open result should identify the skipped part: {opened}"
+    );
+
+    // Saving over the damaged source is refused until the caller explicitly confirms it.
+    let damaged_bytes = std::fs::read(&path).unwrap();
+    let save_args = json!({"path": path.to_string_lossy()});
+    let refused = damaged.run("file.save", &save_args).unwrap();
+    assert_eq!(refused["saved"], false);
+    assert_eq!(refused["confirmationRequired"], "damagedDocx");
+    assert_eq!(std::fs::read(&path).unwrap(), damaged_bytes, "refused save must preserve the damaged source bytes");
+
+    let invalid = damaged.run("file.save", &json!({"path": path.to_string_lossy(), "confirmDamaged": "yes"}));
+    assert!(matches!(invalid, Err(crate::CmdError::Params(_))), "non-boolean confirmation must be rejected: {invalid:?}");
+
+    let confirmed = damaged.run("file.save", &json!({"path": path.to_string_lossy(), "confirmDamaged": true})).unwrap();
+    assert_eq!(confirmed["saved"], true);
+    assert!(damaged.damaged_source.is_none(), "confirmed overwrite clears the damaged-source guard");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn headless_ui_requests_stay_bounded() {
     let mut s = s();

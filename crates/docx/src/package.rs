@@ -201,6 +201,7 @@ pub fn rel_is(t: &str, full: &str) -> bool {
 /// picture, an embedded object) is handed over rather than copied.
 pub struct Package {
     files: BTreeMap<String, Arc<Vec<u8>>>,
+    skipped: Vec<String>,
     /// Lowercased part name → its stored spelling (the first in name order): part names are
     /// case-insensitive (ECMA-376 Part 2 §6.2.2.3), so every spelling is one part.
     lower: HashMap<String, String>,
@@ -216,13 +217,18 @@ impl Package {
         if zip.len() > MAX_ENTRIES {
             return Err(DocxError::Limit(format!("{} zip entries", zip.len())));
         }
+        // Keep central-directory names separately: `by_index` can fail while reading a local
+        // header, but the caller still needs to know which package part was skipped.
+        let names = zip.file_names().map(|name| name.trim_start_matches('/').to_string()).collect::<Vec<_>>();
         let mut files = BTreeMap::new();
+        let mut skipped = Vec::new();
         let mut total: u64 = 0;
         for i in 0..zip.len() {
             let mut f = match zip.by_index(i) {
                 Ok(f) => f,
                 Err(e) => {
                     log::warn!("docx: skipping unreadable zip entry {i}: {e}");
+                    skipped.push(names.get(i).cloned().unwrap_or_else(|| format!("entry {i}")));
                     continue;
                 }
             };
@@ -245,20 +251,26 @@ impl Package {
             if let Err(e) = read {
                 // A corrupt entry: keep going unless it's a part we can't do without.
                 log::warn!("docx: zip entry {name} unreadable: {e}");
+                skipped.push(name);
                 continue;
             }
             files.insert(name, Arc::new(buf));
         }
-        Ok(Package::new(files))
+        Ok(Package::new(files, skipped))
     }
 
     /// A package from parts already in memory (a Flat OPC file, a converted document), by part
     /// name without the leading `/`.
     pub fn from_parts(files: BTreeMap<String, Vec<u8>>) -> Package {
-        Package::new(files.into_iter().map(|(name, bytes)| (name, Arc::new(bytes))).collect())
+        Package::new(files.into_iter().map(|(name, bytes)| (name, Arc::new(bytes))).collect(), Vec::new())
     }
 
-    fn new(mut files: BTreeMap<String, Arc<Vec<u8>>>) -> Package {
+    /// The entries of the zip that could not be read and were left out (their names).
+    pub fn skipped(&self) -> &[String] {
+        &self.skipped
+    }
+
+    fn new(mut files: BTreeMap<String, Arc<Vec<u8>>>, skipped: Vec<String>) -> Package {
         let mut lower: HashMap<String, String> = HashMap::new();
         let mut collides = false;
         for name in files.keys() {
@@ -270,7 +282,7 @@ impl Package {
             }
         }
         if !collides {
-            return Package { files, lower };
+            return Package { files, lower, skipped };
         }
         // Entries whose names differ only in case are one part, so every spelling of the name
         // reaches the same stored entry (#3704). The spelling kept is the one a relationship
@@ -284,7 +296,7 @@ impl Package {
         files.retain(|name, _| lower.get(&name.to_ascii_lowercase()) == Some(name));
         let dropped = before.saturating_sub(files.len());
         log::warn!("docx: {dropped} zip entries are other spellings of parts already read; they are left out");
-        Package { files, lower }
+        Package { files, lower, skipped }
     }
 
     /// The stored spelling of part `name` (leading `/` ignored; case-insensitive).

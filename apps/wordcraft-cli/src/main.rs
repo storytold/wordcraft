@@ -17,9 +17,10 @@ const USAGE: &str = "\
 wordcraft-cli — WordCraft from the command line
 
 USAGE:
-  wordcraft-cli convert <in> <out> [--markup] [--update-fields] [--format wordml2003|flatopc]
+  wordcraft-cli convert <in> <out> [--markup] [--update-fields] [--confirm-damaged] [--format wordml2003|flatopc]
                                               convert between formats (docx, doc [read], pdf, odt, rtf, html, md, tex, txt, json, png,
                                               xml); --update-fields refreshes unlocked fields before saving;
+                                              --confirm-damaged permits replacing a damaged source file;
                                               an .xml file is a Word XML Document (Flat OPC), or with
                                               --format wordml2003 a Word 2003 XML Document;
                                               --markup (Print Markup): comments beside each page and
@@ -90,6 +91,9 @@ fn open(path: &Path, password: Option<&str>) -> Result<Session, String> {
     // paper, as in the app: A4 in Italy, Letter in the US (#1381).
     let region = system_region();
     let (doc, encrypted) = wordcraft_engine::io::open_path_in(path, password, &region)?;
+    if !doc.skipped_parts.is_empty() {
+        eprintln!("{}", wordcraft_engine::cmd::file::skipped_parts_warning(&doc.skipped_parts));
+    }
     let mut s = session(doc);
     s.path = Some(path.into());
     if encrypted {
@@ -299,6 +303,7 @@ const CONVERT_OPTIONS: &[OptionSpec] = &[
     OptionSpec { name: "--markup", takes_value: false },
     OptionSpec { name: "--format", takes_value: true },
     OptionSpec { name: "--update-fields", takes_value: false },
+    OptionSpec { name: "--confirm-damaged", takes_value: false },
     OptionSpec { name: "--password", takes_value: true },
     OptionSpec { name: "--password-file", takes_value: true },
 ];
@@ -412,6 +417,35 @@ fn run_source_paths(rest: &[String], script: Option<&script::Script>) -> (Option
     (from_file, from_template)
 }
 
+fn check_damaged_source_overwrite(session: &Session, output: &Path, confirmed: bool) -> Result<(), Failure> {
+    if !confirmed && !session.doc.skipped_parts.is_empty() && session.path.as_deref().is_some_and(|source| same_file_path(source, output)) {
+        return Err("convert: refusing to replace the damaged source; review the omitted parts and pass --confirm-damaged to continue".into());
+    }
+    Ok(())
+}
+
+fn remote_mcp_backend(addr: &str) -> Result<Box<dyn wordcraft_mcp::Backend>, Failure> {
+    // A malformed address must fail at startup, not on every tool call the lazy remote would retry it with.
+    if !valid_connect_addr(addr) {
+        return Err(format!("mcp: --connect needs HOST:PORT with a numeric port, got `{addr}`").into());
+    }
+    match wordcraft_mcp::Remote::connect(addr) {
+        Ok(remote) => {
+            eprintln!("wordcraft-cli mcp: connected to WordCraft at {addr}");
+            if let Some(w) = remote.key_warning() {
+                eprintln!("wordcraft-cli: {w}");
+            }
+            Ok(Box::new(remote))
+        }
+        // The app may start after the client does: serve anyway and connect on the
+        // first call, or the client marks the server failed for its whole session (#4078).
+        Err(e) => {
+            eprintln!("wordcraft-cli mcp: WordCraft is not reachable at {addr} yet ({e}); will retry on each call");
+            Ok(Box::new(wordcraft_mcp::Remote::lazy(addr)))
+        }
+    }
+}
+
 /// Run the subcommand named by `args` (the command line after the program name). Files named
 /// there are opened by their real names, which may not be valid Unicode.
 fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
@@ -434,8 +468,10 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             let paths = positionals(&rest, CONVERT_OPTIONS);
             let (i, o) = (paths.first().ok_or_else(missing_argument)?.to_string(), paths.get(1).ok_or_else(missing_argument)?.to_string());
             let markup = rest.iter().any(|a| a == "--markup");
+            let confirm_damaged = rest.iter().any(|a| a == "--confirm-damaged");
             let password = password_from(&rest)?;
             let mut s = open(&i, password.as_deref())?;
+            check_damaged_source_overwrite(&s, Path::new(&o), confirm_damaged)?;
             if rest.iter().any(|a| a == "--update-fields") {
                 s.run("references.updateFields", &json!({})).map_err(|e| e.to_string())?;
             }
@@ -443,12 +479,16 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
                 s.run("file.exportPng", &json!({"path": o, "page": 1, "markup": markup}))
             } else {
                 let mut params = json!({"path": o, "markup": markup});
+                if confirm_damaged {
+                    params["confirmDamaged"] = json!(true);
+                }
                 if let Some(f) = format {
                     params["format"] = json!(f);
                 }
                 s.run("file.save", &params)
             };
-            r.map_err(|e| e.to_string())?;
+            let result = r.map_err(|e| e.to_string())?;
+            ensure_save_completed(&result, &o)?;
             eprintln!("wrote {o}");
             Ok(())
         }
@@ -565,7 +605,8 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
                 } else {
                     s.run("file.save", &json!({"path": out}))
                 };
-                r.map_err(|e| e.to_string())?;
+                let result = r.map_err(|e| e.to_string())?;
+                ensure_save_completed(&result, &out)?;
                 eprintln!("wrote {out}");
             }
             Ok(())
@@ -611,29 +652,7 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
                 Some(_) if author.is_some() => {
                     return Err("mcp: --author applies to the headless server; with --connect, run file.setAuthor".into());
                 }
-                Some(addr) => {
-                    // A malformed address must fail at startup, not on every tool call the lazy
-                    // remote would retry it with.
-                    if !valid_connect_addr(&addr) {
-                        return Err(format!("mcp: --connect needs HOST:PORT with a numeric port, got `{addr}`").into());
-                    }
-                    match wordcraft_mcp::Remote::connect(&addr) {
-                        Ok(remote) => {
-                            eprintln!("wordcraft-cli mcp: connected to WordCraft at {addr}");
-                            if let Some(w) = remote.key_warning() {
-                                eprintln!("wordcraft-cli: {w}");
-                            }
-                            Box::new(remote)
-                        }
-                        // The app may start after the client does: serve anyway and connect on the
-                        // first call, or the client marks the server failed for its whole session
-                        // (#4078).
-                        Err(e) => {
-                            eprintln!("wordcraft-cli mcp: WordCraft is not reachable at {addr} yet ({e}); will retry on each call");
-                            Box::new(wordcraft_mcp::Remote::lazy(&addr))
-                        }
-                    }
-                }
+                Some(addr) => remote_mcp_backend(&addr)?,
                 None => {
                     let mut headless = wordcraft_mcp::Headless::default();
                     if let Some(roots) = roots {
@@ -690,7 +709,8 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             }
             eprintln!("{} calls, {}", out.calls, if out.completed { "completed" } else { "ended without completing (cancelled?)" });
             if let Some(o) = arg_value(&rest, "--save") {
-                s.run("file.save", &json!({"path": o})).map_err(|e| e.to_string())?;
+                let result = s.run("file.save", &json!({"path": o})).map_err(|e| e.to_string())?;
+                ensure_save_completed(&result, &o)?;
                 eprintln!("wrote {o}");
             }
             Ok(())
@@ -699,6 +719,20 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
         "" | "help" | "--help" | "-h" => write_stdout(|o| write!(o, "{USAGE}")),
         other => Err(format!("unknown command `{other}`\n\n{USAGE}").into()),
     }
+}
+
+fn same_file_path(a: &Path, b: &Path) -> bool {
+    a == b || std::fs::canonicalize(a).ok().zip(std::fs::canonicalize(b).ok()).is_some_and(|(a, b)| a == b)
+}
+
+/// A refused damaged-DOCX overwrite is a successful command response, but not a completed write.
+fn ensure_save_completed(result: &Value, path: &str) -> Result<(), Failure> {
+    if result.get("saved").and_then(Value::as_bool) == Some(false)
+        && result.get("confirmationRequired").and_then(Value::as_str) == Some("damagedDocx")
+    {
+        return Err(format!("refusing to replace damaged source {path}; review skipped parts and confirm the save explicitly").into());
+    }
+    Ok(())
 }
 
 /// At most 400 characters of `s`, for traces.
