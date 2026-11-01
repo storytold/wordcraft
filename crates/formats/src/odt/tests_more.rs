@@ -6,6 +6,7 @@ mod chars;
 mod charts;
 mod comments;
 mod drop_caps;
+mod encryption;
 mod equations;
 mod fields;
 mod flat;

@@ -6802,19 +6802,26 @@ dependencies = [
 name = "wordcraft-formats"
 version = "0.13.2"
 dependencies = [
+ "aes",
  "base64 0.23.1",
  "cfb",
  "chardetng",
  "chrono",
  "encoding_rs",
+ "getrandom 0.3.4",
+ "hmac",
  "image",
  "js-sys",
  "log",
+ "miniz_oxide 0.9.1",
  "proptest",
  "quick-xml 0.41.0",
+ "sha1 0.11.0",
+ "sha2 0.11.1",
  "wordcraft-doc",
  "wordcraft-geom",
  "wordcraft-metafile",
+ "zeroize",
  "zip 3.0.0",
 ]
 

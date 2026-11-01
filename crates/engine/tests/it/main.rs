@@ -4,6 +4,7 @@ mod macro_packages;
 mod odt_charts;
 mod odt_fields;
 mod odt_objects;
+mod odt_password;
 #[cfg(not(target_arch = "wasm32"))]
 mod odt_sections;
 mod odt_toc;

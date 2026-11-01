@@ -39,6 +39,7 @@ use crate::model::{self, Cell, FBlock, FComment, FTable, Flow, Fmt, Inline, Kind
 
 mod body;
 mod chart;
+mod crypt;
 mod datastyle;
 mod fields;
 mod flat;
@@ -56,6 +57,7 @@ mod writer;
 mod xml;
 
 use body::Body;
+pub use crypt::{CryptError, decrypt, encrypt, is_encrypted};
 pub use flat::{export_flat, import_flat};
 use import::Pages;
 #[cfg(test)]

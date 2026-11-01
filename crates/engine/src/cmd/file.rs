@@ -345,7 +345,9 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
             return Err(CmdError::Params("`password` must be a non-empty string (file.encrypt removes a password)".into()));
         };
         if !crate::io::can_encrypt(&path.to_string_lossy()) {
-            return Err(CmdError::Params("only Word documents (.docx, .docm, .dotx, .dotm) can be saved with a password".into()));
+            return Err(CmdError::Params(
+                "only Word documents (.docx, .docm, .dotx, .dotm) and ODT documents (.odt) can be saved with a password".into(),
+            ));
         }
         wordcraft_docx::check_password(pw).map_err(|e| CmdError::Params(e.to_string()))?;
         s.clear_recovery_before_password()?;
