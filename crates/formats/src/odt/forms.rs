@@ -21,6 +21,17 @@ const MAX_VALUE: usize = 10_000;
 pub(in crate::odt) const RADIO_ON: char = '\u{25C9}';
 pub(in crate::odt) const RADIO_OFF: char = '\u{25CB}';
 
+/// Form controls WordCraft has no kind for, kept verbatim (see [`ContentControl::form_xml`]).
+const KEPT: [&str; 8] =
+    ["form:button", "form:image", "form:fixed-text", "form:file", "form:value-range", "form:frame", "form:image-frame", "form:generic-control"];
+/// Most bytes of a kept control's XML.
+const MAX_KEPT: usize = 64 * 1024;
+/// The namespace prefixes a kept control may use: those the content WordCraft writes declares.
+const PREFIXES: [&str; 19] = [
+    "office", "style", "text", "table", "draw", "fo", "xlink", "dc", "meta", "svg", "number", "form", "ooo", "ooow", "oooc", "script", "dom",
+    "loext", "xml",
+];
+
 /// A control read: its content control and the text it holds.
 pub(in crate::odt) type Read = (ContentControl, String);
 
@@ -37,6 +48,39 @@ pub(in crate::odt) struct FormsReader {
     open: Option<(String, ContentControl, Vec<String>)>,
     /// The controls read, by `form:id` (or `xml:id`).
     pub(in crate::odt) controls: HashMap<String, Read>,
+    /// A control WordCraft has no kind for being kept: its id, name, label, its XML so far (its
+    /// id left out) and how many of its elements are open.
+    kept: Option<Kept>,
+}
+
+struct Kept {
+    id: String,
+    name: String,
+    label: String,
+    xml: String,
+    open: usize,
+    /// It uses a prefix the content WordCraft writes doesn't declare: not kept.
+    foreign: bool,
+}
+
+/// Whether name `q` has a prefix the content WordCraft writes declares.
+fn known(q: &str) -> bool {
+    q.split_once(':').is_some_and(|(p, _)| PREFIXES.contains(&p))
+}
+
+/// Whether element `q` with attributes `a` uses only declared prefixes.
+fn declared(q: &str, a: &Attrs) -> bool {
+    known(q) && a.iter().all(|(k, _)| known(k))
+}
+
+/// Element `q` with attributes `a` as XML, its ids (`form:id`, `xml:id`) left out.
+fn element_xml(q: &str, a: &Attrs) -> String {
+    let mut s = format!("<{q}");
+    for (k, v) in a.iter().filter(|(k, _)| k != "form:id" && k != "xml:id") {
+        s.push_str(&format!(" {k}=\"{}\"", x(v)));
+    }
+    s.push('>');
+    s
 }
 
 impl FormsReader {
@@ -50,7 +94,21 @@ impl FormsReader {
             return true;
         }
         self.depth += 1;
+        if let Some(k) = &mut self.kept {
+            if k.xml.len() < MAX_KEPT {
+                k.xml.push_str(&element_xml(q, a));
+            }
+            k.foreign |= !declared(q, a);
+            k.open += 1;
+            return true;
+        }
         let id = get(a, "form:id").or_else(|| get(a, "xml:id")).unwrap_or_default().to_string();
+        if KEPT.contains(&q) && !id.is_empty() && self.controls.len() < MAX_CONTROLS {
+            let name = get(a, "form:name").map(capped).unwrap_or_default();
+            let label = get(a, "form:label").map(capped).filter(|l| !l.is_empty()).unwrap_or_else(|| name.clone());
+            self.kept = Some(Kept { id, name, label, xml: element_xml(q, a), open: 1, foreign: !declared(q, a) });
+            return true;
+        }
         let name = get(a, "form:name").map(capped).unwrap_or_default();
         let value = || get(a, "form:current-value").or_else(|| get(a, "form:value")).map(capped).unwrap_or_default();
         let kind = match q {
@@ -122,6 +180,23 @@ impl FormsReader {
             return false;
         }
         self.depth -= 1;
+        if let Some(k) = &mut self.kept {
+            k.xml.push_str(&format!("</{q}>"));
+            k.open = k.open.saturating_sub(1);
+            if k.open == 0
+                && let Some(k) = self.kept.take()
+            {
+                // Too long to keep whole, or naming what WordCraft can't write: not kept.
+                if k.xml.len() <= MAX_KEPT && !k.foreign {
+                    let mut c = ContentControl::new(ControlKind::Text { multi_line: false });
+                    c.tag = k.name;
+                    c.lock = wordcraft_doc::control::ControlLock::ContentLocked;
+                    c.form_xml = k.xml;
+                    self.controls.insert(k.id, (c, k.label));
+                }
+            }
+            return true;
+        }
         if matches!(
             q,
             "form:text" | "form:formatted-text" | "form:textarea" | "form:checkbox" | "form:radio" | "form:listbox" | "form:combobox" | "form:date"
@@ -160,6 +235,19 @@ fn value(c: &ContentControl, text: &str) -> String {
 /// A content control as a form control in `office:forms`, with id `id`: the element, and the
 /// size of its `draw:control` (points). `None` for kinds a form has no control for.
 pub(in crate::odt) fn form_xml(c: &ContentControl, text: &str, id: &str, n: usize) -> Option<(String, f32, f32)> {
+    let size = |(xml, w, h): (String, f32, f32)| {
+        let fit = |v: f32| if v.is_finite() { v.clamp(1.0, 1584.0) } else { 16.0 };
+        match c.form_size {
+            Some([fw, fh]) => (xml, fit(fw), fit(fh)),
+            None => (xml, w, h),
+        }
+    };
+    // A control kept verbatim, with its new id.
+    if !c.form_xml.is_empty() {
+        let end = c.form_xml.find(|ch: char| ch.is_whitespace() || ch == '>')?;
+        let (head, rest) = (c.form_xml.get(..end)?, c.form_xml.get(end..)?);
+        return Some(size((format!("{head} xml:id=\"{id}\" form:id=\"{id}\"{rest}"), 72.0, 20.0)));
+    }
     let name = if c.tag.is_empty() { format!("Control {n}") } else { c.tag.clone() };
     let common = format!(" form:name=\"{}\" xml:id=\"{id}\" form:id=\"{id}\"", x(&name));
     let label = if c.title.is_empty() { String::new() } else { format!(" form:label=\"{}\"", x(&c.title)) };
@@ -228,7 +316,7 @@ pub(in crate::odt) fn form_xml(c: &ContentControl, text: &str, id: &str, n: usiz
         }
         _ => return None,
     };
-    Some(out)
+    Some(size(out))
 }
 
 /// The `office:forms` holding the controls `xml` (empty when there are none).

@@ -862,7 +862,12 @@ impl Body<'_> {
         if self.field.is_some() {
             return;
         }
-        if let Some((control, text)) = get(a, "draw:control").and_then(|id| self.forms.controls.get(id)).cloned() {
+        if let Some((mut control, text)) = get(a, "draw:control").and_then(|id| self.forms.controls.get(id)).cloned() {
+            // Its size (§19.539, §19.571).
+            let len = |k: &str| get(a, k).and_then(length).filter(|v| v.is_finite() && *v > 0.0).map(|v| v.min(1584.0));
+            if let (Some(w), Some(h)) = (len("svg:width"), len("svg:height")) {
+                control.form_size = Some([w, h]);
+            }
             let fmt = self.cur_fmt();
             self.push_inline(Inline::Control { control: Box::new(control), text, fmt });
         }

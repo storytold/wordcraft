@@ -39,7 +39,9 @@ fn controls(flow: &crate::model::Flow) -> Vec<(ControlKind, String, String, Stri
 fn form_controls_open_as_content_controls() {
     let flow = parse(&package(&doc_xml(), None)).unwrap();
     let got = controls(&flow);
-    assert_eq!(got.len(), 8, "the button and a missing control are left out: {got:?}");
+    assert_eq!(got.len(), 9, "a missing control is left out: {got:?}");
+    // A button, which WordCraft has no kind for, shows its label (see `buttons_are_kept`).
+    assert_eq!((got[8].1.as_str(), got[8].3.as_str()), ("Submit", "Send"));
     assert_eq!(got[0], (ControlKind::Text { multi_line: false }, "FullName".into(), String::new(), "Ada Lovelace".into(), false));
     assert!(matches!(got[1].0, ControlKind::CheckBox { checked: true, checked_char: '\u{2612}', unchecked_char: '\u{2610}', .. }));
     assert_eq!((got[1].1.as_str(), got[1].2.as_str(), got[1].3.as_str()), ("Subscribe", "Yes please", "\u{2612}"));
@@ -101,4 +103,57 @@ fn hostile_forms_are_bounded() {
     // Ids past the limit aren't read; a list keeps at most its limit of entries.
     assert!(got.iter().all(|(k, ..)| k.items().is_none_or(|i| i.len() <= 1000)));
     assert!(got.len() <= 2);
+}
+
+#[test]
+fn controls_keep_their_size() {
+    let saved = export(&import(&package(&doc_xml(), None)).unwrap()).unwrap();
+    let content = entry(&saved, "content.xml");
+    // Each control 1in × 0.2in, as it was, not sized to its text.
+    assert_eq!(content.matches(r#"svg:width="72pt" svg:height="14.4pt""#).count(), 9, "{content}");
+}
+
+#[test]
+fn buttons_are_kept() {
+    let button = r#"<form:button form:name="Go" form:control-implementation="ooo:com.sun.star.form.component.CommandButton" xml:id="b1" form:id="b1" form:label="Send &amp; close" form:image-position="center"><form:properties><form:property form:property-name="DefaultControl" office:value-type="string" office:string-value="com.sun.star.form.control.CommandButton"/></form:properties></form:button>"#;
+    let content = format!(
+        r#"<office:document-content {NS_T} {NS_F}><office:body><office:text><office:forms><form:form form:name="Form">{button}</form:form></office:forms><text:p>Press <draw:control text:anchor-type="as-char" svg:width="1in" svg:height="0.3in" draw:control="b1"/></text:p></office:text></office:body></office:document-content>"#
+    );
+    let doc = import(&package(&content, None)).unwrap();
+    // It shows its label, which can't be edited.
+    let p = doc.body[0].as_para().unwrap();
+    assert!(p.text.contains("Send & close"), "{:?}", p.text);
+    let saved = export(&doc).unwrap();
+    let c = entry(&saved, "content.xml");
+    assert!(
+        c.contains(r#"<form:button xml:id="control1" form:id="control1" form:name="Go" form:control-implementation="ooo:com.sun.star.form.component.CommandButton" form:label="Send &amp; close" form:image-position="center"><form:properties><form:property form:property-name="DefaultControl""#),
+        "{c}"
+    );
+    assert!(c.contains(r#"svg:width="72pt" svg:height="21.6pt" draw:control="control1""#), "{c}");
+    // And again: still a button.
+    let again = entry(&export(&import(&saved).unwrap()).unwrap(), "content.xml");
+    assert_eq!(again.matches("<form:button ").count(), 1, "{again}");
+}
+
+#[test]
+fn hostile_kept_controls_are_bounded() {
+    let deep = format!("{}{}", "<form:properties>".repeat(5000), "</form:properties>".repeat(5000));
+    let wide =
+        r#"<form:property form:property-name="p" office:string-value="vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"/>"#
+            .repeat(5000);
+    let content = format!(
+        r#"<office:document-content {NS_T} {NS_F}><office:body><office:text><office:forms><form:form><form:button form:id="a">{deep}</form:button><form:button form:id="b">{wide}</form:button><form:button form:label="no id"/><form:image form:id="c"><form:button form:id="d"/></form:image></form:form></office:forms><text:p><draw:control draw:control="a" svg:width="-1in" svg:height="1e40in"/><draw:control draw:control="b"/><draw:control draw:control="c"/><draw:control draw:control="d"/></text:p></office:text></office:body></office:document-content>"#
+    );
+    let doc = import(&package(&content, None)).unwrap();
+    let c = entry(&export(&doc).unwrap(), "content.xml");
+    // Too long to keep whole: left out; a control inside a kept one is part of it.
+    assert_eq!(c.matches("<form:image ").count(), 1, "{c}");
+    assert!(!c.contains(r#"office:string-value="vvvv"#), "the over-long button isn't kept");
+    // One naming a namespace prefix the saved content doesn't declare isn't kept.
+    let content = format!(
+        r#"<office:document-content {NS_T} {NS_F}><office:body><office:text><office:forms><form:form><form:button form:id="a" xmlns:odd="urn:x"><odd:thing/></form:button><form:button form:id="b" odd:attr="1"/><form:button form:id="c"><office:event-listeners><script:event-listener script:language="ooo:script" script:event-name="dom:click" xlink:href="vnd.sun.star.script:x"/></office:event-listeners></form:button></form:form></office:forms><text:p><draw:control draw:control="a"/><draw:control draw:control="b"/><draw:control draw:control="c"/></text:p></office:text></office:body></office:document-content>"#
+    );
+    let c = entry(&export(&import(&package(&content, None)).unwrap()).unwrap(), "content.xml");
+    assert_eq!(c.matches("<form:button ").count(), 1, "{c}");
+    assert!(c.contains("<script:event-listener "), "{c}");
 }
