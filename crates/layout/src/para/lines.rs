@@ -404,7 +404,7 @@ impl<'e> Breaker<'e> {
     /// tallest picture on it (which sits on the baseline).
     fn extents(&self, pl: &ParaLayout, (c0, c1): (usize, usize)) -> Extents {
         let rp = &self.rp;
-        let mut ex = Extents { asc: 0.0, desc: 0.0, obj_asc: 0.0 };
+        let mut ex = Extents { asc: 0.0, desc: 0.0, obj_asc: 0.0, text: false };
         let mut any = false;
         let dropped = pl.drop_cap.map_or(0, |d| d.0);
         for (k, c) in pl.clusters.get(c0..c1).into_iter().flatten().enumerate() {
@@ -436,6 +436,10 @@ impl<'e> Breaker<'e> {
             ex.asc = ex.asc.max(a);
             ex.desc = ex.desc.max(d);
             any = true;
+            // Text needs its descent below the line; so does inline math (an object with its own
+            // descent). A line break ending the line is no text.
+            let math = pl.maths.iter().any(|(k, _)| c.kind == ClKind::Object(*k));
+            ex.text |= math || !matches!(c.kind, ClKind::Object(_) | ClKind::LineBreak | ClKind::PageBreak | ClKind::ColumnBreak);
         }
         if (!any || (ex.asc == 0.0 && ex.desc == 0.0))
             && let Some(st) = pl.styles.get(self.mark_style as usize)
@@ -449,10 +453,17 @@ impl<'e> Breaker<'e> {
     /// The line's height, baseline and text extent.
     fn measure(&self, pl: &ParaLayout, range: (usize, usize)) -> Measure {
         let rp = &self.rp;
-        let Extents { mut asc, mut desc, obj_asc } = self.extents(pl, range);
+        let Extents { mut asc, mut desc, obj_asc, text } = self.extents(pl, range);
         let text_natural = asc + desc;
         let (text_asc, text_desc) = (asc.max(obj_asc), desc);
-        let text_pictures = if obj_asc > asc { obj_asc + desc } else { 0.0 };
+        // A picture taller than the text sits on the baseline, with the text's descent below it
+        // only when the line has text: with multiple spacing a line of only pictures (and spaces)
+        // ends at their bottom, and the spacing adds its share of the text's height (Word, measured
+        // with 10 and 20 pt Aptos, Arial and Times at single, 1.15 and 1.5 spacing: a 30 pt
+        // picture alone takes 30, 30 + 0.15 and 30 + 0.5 times the text's height; with text, the
+        // descent more).
+        let below = if obj_asc > asc && !text && matches!(rp.line_spacing, LineSpacing::Multiple(_)) { 0.0 } else { desc };
+        let text_pictures = if obj_asc > asc { obj_asc + below } else { 0.0 };
         let mut label_extra = 0.0;
         if self.first
             && let Some(lab) = &pl.label
@@ -469,10 +480,7 @@ impl<'e> Breaker<'e> {
                 }
             }
         }
-        // Keep the picture floor independent of list-label metrics and line-spacing multipliers.
-        // shortcut: Word leaves less than a full descent below a line of only pictures (0.5pt to
-        // 1.9pt in docxide-pdf's header fixtures case121/case123, where the descent is 3.3pt), and
-        // no rule tried so far (none, only the text's descent) matched both; it needs Word probes.
+        // Keep the picture floor independent of list-label metrics.
         let natural = asc + desc;
         let pictures = if obj_asc > asc { obj_asc + desc } else { 0.0 };
         // Document grid: the line takes whole line pitches, its text centred in them.
@@ -480,7 +488,7 @@ impl<'e> Breaker<'e> {
         let (height, centred) = match (rp.line_spacing, grid) {
             (LineSpacing::Multiple(m), Some(g)) => ((g.snap_height(natural) * m).max(g.snap_height(pictures)), true),
             (LineSpacing::AtLeast(v), Some(g)) => (g.snap_height(natural.max(pictures)).max(v), true),
-            (LineSpacing::Multiple(m), None) => ((text_natural * m + label_extra).max(text_pictures), false),
+            (LineSpacing::Multiple(m), None) => ((text_natural * m + label_extra).max(text_pictures + (m - 1.0).max(0.0) * text_natural), false),
             (LineSpacing::AtLeast(v), None) => (natural.max(text_pictures).max(v), false),
             (LineSpacing::Exactly(v), _) => (v, false),
         };
@@ -488,7 +496,7 @@ impl<'e> Breaker<'e> {
             let up = asc.max(obj_asc);
             self.top + ((height - up - desc) / 2.0).max(0.0) + up
         } else {
-            self.top + baseline_offset(rp.line_spacing, asc, height, desc).max(obj_asc.min(height - desc))
+            self.top + baseline_offset(rp.line_spacing, asc, height, below).max(obj_asc.min(height - below))
         };
         Measure { height, baseline, text_asc, text_desc }
     }
@@ -634,6 +642,8 @@ struct Extents {
     asc: f32,
     desc: f32,
     obj_asc: f32,
+    /// Whether the line holds text besides its pictures (spaces and tabs don't count).
+    text: bool,
 }
 
 /// A line's height and baseline, and the extent of its text.

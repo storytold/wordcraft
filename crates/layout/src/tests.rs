@@ -4815,9 +4815,11 @@ fn line_spacing_does_not_scale_pictures() {
     let l = lay(&d);
     let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
     let line = &para.lines[0];
-    let desc = para.styles[0].descent;
-    // Word: the picture plus the font's descent, not (picture + descent) x 1.15.
-    assert!((line.height - (144.0 + desc)).abs() < 0.01, "line {} for a 144pt picture (descent {desc})", line.height);
+    let natural = para.styles[0].ascent + para.styles[0].descent;
+    // Word, measured (Aptos, Arial, Times; 10 and 20 pt; single, 1.15, 1.5): a line of only a
+    // picture is the picture plus the spacing's share of the text's height, with no descent below
+    // it, not (picture + descent) x 1.15.
+    assert!((line.height - (144.0 + 0.15 * natural)).abs() < 0.01, "line {} for a 144pt picture (text {natural})", line.height);
     assert!((line.baseline - line.top - 144.0).abs() < 0.01, "the picture stands on the baseline");
 }
 
@@ -4869,8 +4871,14 @@ fn list_label_does_not_inflate_an_inline_picture_floor() {
         let l = lay(&d);
         let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
         let line = &para.lines[0];
-        let desc = para.styles[para.clusters[0].style as usize].descent;
-        assert!((line.height - (144.0 + desc)).abs() < 0.01, "{spacing:?}: {}", line.height);
+        let st = &para.styles[para.clusters[0].style as usize];
+        // Multiple spacing: the picture plus its share of the text's height (Word, measured);
+        // at least: the picture and the descent.
+        let want = match spacing {
+            LineSpacing::Multiple(m) => 144.0 + (m - 1.0) * (st.ascent + st.descent),
+            _ => 144.0 + st.descent,
+        };
+        assert!((line.height - want).abs() < 0.01, "{spacing:?}: {} (want {want})", line.height);
         assert!((line.baseline - line.top - 144.0).abs() < 0.01);
     }
 }
@@ -11896,6 +11904,43 @@ fn a_row_leaves_room_for_the_border_below_it() {
             assert!(end + border <= bottom + 0.02, "border {border}, {fill} filler lines: the last row ends at {end}, the margin at {bottom}");
         }
     }
+}
+
+/// A line of only a picture (and spaces) ends at the picture's bottom; with text beside the
+/// picture the text's descent goes below it too (Word, measured with Aptos, Arial and Times New
+/// Roman at 10 and 20 pt: a 30 pt picture alone or after spaces takes 30 pt at single spacing,
+/// after a word 30 pt plus the descent).
+#[test]
+fn a_line_of_only_pictures_takes_no_descent() {
+    use wordcraft_doc::props::LineSpacing;
+    let line_of = |lead: &str| {
+        let mut d = Document::from_text(lead);
+        if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
+            p.props.line_spacing = Some(LineSpacing::Multiple(1.0));
+            let at = p.len();
+            p.insert_object(at, picture(60.0, 30.0, Default::default()), &Default::default()).unwrap();
+        }
+        let l = lay(&d);
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+        (para.lines[0].height, para.lines[0].baseline - para.lines[0].top, para.styles[0].descent)
+    };
+    for lead in ["", "    "] {
+        let (h, base, _) = line_of(lead);
+        assert!((h - 30.0).abs() < 0.01 && (base - 30.0).abs() < 0.01, "{lead:?}: line {h}, baseline {base}");
+    }
+    let (h, base, desc) = line_of("Text ");
+    assert!((h - (30.0 + desc)).abs() < 0.01 && (base - 30.0).abs() < 0.01, "with text: line {h}, baseline {base}");
+    // A line break ending the picture's line is no text.
+    let mut d = Document::from_text("");
+    if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
+        p.props.line_spacing = Some(LineSpacing::Multiple(1.0));
+        p.insert_object(0, picture(60.0, 30.0, Default::default()), &Default::default()).unwrap();
+        let at = p.len();
+        p.insert_text(at, &format!("{}Next", wordcraft_doc::para::LINE_BREAK), &Default::default()).unwrap();
+    }
+    let l = lay(&d);
+    let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+    assert!(para.lines.len() == 2 && (para.lines[0].height - 30.0).abs() < 0.01, "picture, then a line break: {}", para.lines[0].height);
 }
 
 /// A kept-together paragraph starting a continuous section low on a page, with room there for
