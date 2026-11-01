@@ -183,8 +183,9 @@ fn bullet_level(i: usize, c: char) -> Level {
 /// The label of a "none" level whose template is `text`: the text with every level's number
 /// (`%1`…`%9`) left out, as Word draws it.
 pub fn none_label(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
+    // Templates are capped at MAX_LEVEL_TEXT characters; a hostile longer label is cut, not copied.
+    let mut out = String::new();
+    let mut chars = text.chars().take(MAX_LEVEL_TEXT).peekable();
     while let Some(c) = chars.next() {
         if c == '%' && chars.peek().is_some_and(|d| ('1'..='9').contains(d)) {
             chars.next();
@@ -432,6 +433,8 @@ mod tests {
             }
         }
         assert_eq!(none_label("%1.%2 – %10"), ". – 0");
+        // A hostile long label is cut at MAX_LEVEL_TEXT characters.
+        assert_eq!(none_label(&"x".repeat(100_000)).chars().count(), MAX_LEVEL_TEXT);
     }
 
     #[test]
