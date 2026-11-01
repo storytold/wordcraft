@@ -91,7 +91,7 @@ fn speed(s: &mut Session, v: &Value) -> CmdResult {
 
 /// Turn skipping citations on or off; a reading in progress carries on from the same sentence.
 fn skip_citations(s: &mut Session, v: &Value) -> CmdResult {
-    let on = p::bool(v, "value").unwrap_or(!s.read_aloud.skip_citations);
+    let on = p::toggle(v, s.read_aloud.skip_citations)?;
     if on != s.read_aloud.skip_citations {
         s.read_aloud.skip_citations = on;
         if let Some(cur) = s.read_aloud.current().filter(|_| s.read_aloud.document == Some(s.document_id())) {

@@ -236,6 +236,9 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         CommandSpec::new("draw.erase", "Erase Ink", "Draw › Tools", erase).params(r#"{"page": n, "x": pt, "y": pt}"#),
         CommandSpec::new("draw.inkToShape", "Ink to Shape", "Draw › Convert", |s, v| {
+            // A `value` that is not a boolean refuses the command: it must not fall through to
+            // converting the lasso-selected strokes as if no value had been given.
+            p::check_switch(v)?;
             if let Some(on) = p::bool(v, "value") {
                 s.view.draw.ink_to_shape = on;
                 return Ok(json!({"value": on}));
@@ -255,7 +258,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(r#"{"value"?: bool}  (starts or stops Ink Replay; returns the strokes in the order they were drawn)"#)
             .pure(),
         CommandSpec::new("review.hideInk", "Hide Ink", "Review › Ink", |s, v| {
-            s.view.hide_ink = p::bool(v, "value").unwrap_or(!s.view.hide_ink);
+            s.view.hide_ink = p::toggle(v, s.view.hide_ink)?;
             Ok(json!({"value": s.view.hide_ink}))
         })
         .params(r#"{"value"?: bool}"#)
@@ -906,7 +909,7 @@ pub fn strokes_in_drawing_order(s: &mut Session) -> Vec<(usize, PlacedInk)> {
 
 /// Start or stop Ink Replay; the strokes in the order they'll be replayed.
 fn replay(s: &mut Session, v: &Value) -> CmdResult {
-    let on = p::bool(v, "value").unwrap_or(!s.view.draw.replay);
+    let on = p::toggle(v, s.view.draw.replay)?;
     let strokes = if on { strokes_in_drawing_order(s) } else { Vec::new() };
     if on && strokes.is_empty() {
         return Err(CmdError::Failed("there is no ink to replay".into()));

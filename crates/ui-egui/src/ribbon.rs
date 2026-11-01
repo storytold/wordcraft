@@ -73,6 +73,22 @@ pub use tabs::{
 use underline::{UNDERLINE_STYLES, underline_menu};
 use view::{outlining, view};
 
+/// The tabs the ribbon shows, in order: File, the user's visible tabs in their order (Customize
+/// Ribbon), then the contextual ones (the Outlining tab right after File). Keytips' slim-bar
+/// badges use the same list, so a tab hidden in Customize Ribbon has no badge anywhere (#1678).
+pub(crate) fn visible_tabs(user_tabs: &[wordcraft_engine::ribbon::TabEntry], session: &wordcraft_engine::Session) -> Vec<(String, bool)> {
+    let mut tabs: Vec<(String, bool)> = vec![("File".to_string(), false)];
+    tabs.extend(user_tabs.iter().filter(|e| !e.hidden).map(|e| (e.name.clone(), e.custom)));
+    for ct in contextual_tabs(session) {
+        if ct == "Outlining" {
+            tabs.insert(1.min(tabs.len()), (ct.to_string(), false));
+        } else if !tabs.iter().any(|(n, _)| n == ct) {
+            tabs.push((ct.to_string(), false));
+        }
+    }
+    tabs
+}
+
 /// Draws the Read toolbar or the full ribbon, switching to and from the contextual Equation and
 /// Outlining tabs and showing the available tab strip.
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
@@ -107,15 +123,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     // contextual ones (the Outlining tab right after File). A contextual tab (Table, Picture
     // Format) may be stored while the selection moved away, and a tab may have been hidden.
     let user_tabs = app.session.ribbon.tabs().into_owned();
-    let mut tabs: Vec<(String, bool)> = vec![("File".to_string(), false)];
-    tabs.extend(user_tabs.iter().filter(|e| !e.hidden).map(|e| (e.name.clone(), e.custom)));
-    for ct in contextual_tabs(&app.session) {
-        if ct == "Outlining" {
-            tabs.insert(1.min(tabs.len()), (ct.to_string(), false));
-        } else if !tabs.iter().any(|(n, _)| n == ct) {
-            tabs.push((ct.to_string(), false));
-        }
-    }
+    let tabs = visible_tabs(&user_tabs, &app.session);
     {
         let names: Vec<&str> = tabs.iter().map(|(n, _)| n.as_str()).collect();
         let next = resolve_tab(&app.ui.tab, &names);
@@ -308,6 +316,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 });
             });
         });
+    // The tab strip is laid out, so keytips can hang their tab badges on it (a collapsed ribbon
+    // still shows the strip). Keytips check this to decide where their badges go.
+    app.ribbon_tabs_shown = true;
     if app.ui.ribbon_collapsed {
         return;
     }

@@ -204,6 +204,26 @@ pub mod p {
     pub fn value(v: &Value) -> Option<&Value> {
         v.get("value")
     }
+    /// A switch's new state: `value` when it is a boolean, `when_absent` when the caller gave
+    /// none, and a parameter error when `value` is present but is not a boolean. A client that
+    /// sends `"true"` (a string) or `null` hears about it instead of silently getting the default
+    /// or a toggle — which, for a toggle, would turn the setting *off* when it was on.
+    pub fn switch(v: &Value, when_absent: bool) -> Result<bool, CmdError> {
+        match v.get("value") {
+            None => Ok(when_absent),
+            Some(Value::Bool(b)) => Ok(*b),
+            Some(_) => Err(CmdError::Params("`value` must be true or false".into())),
+        }
+    }
+    /// A toggle's new state: `value` when it is a boolean, otherwise the opposite of `current`.
+    pub fn toggle(v: &Value, current: bool) -> Result<bool, CmdError> {
+        switch(v, !current)
+    }
+    /// [`switch`]'s check alone, for a command that has to read the current state before it can
+    /// take a default (a paragraph's own formatting, an equation's display mode).
+    pub fn check_switch(v: &Value) -> Result<(), CmdError> {
+        switch(v, false).map(|_| ())
+    }
 }
 
 #[cfg(test)]

@@ -200,7 +200,7 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"side": "bothSides|left|right|largest"}  (the sides of the selected Square, Tight or Through object text flows on; largest: the wider side, line by line)"#)
         .when(has_movable),
-        CommandSpec::new("arrange.moveWithText", "Move with Text", "Layout › Arrange › Wrap Text", |s, v| move_with_text(s, p::bool(v, "value").unwrap_or(true)))
+        CommandSpec::new("arrange.moveWithText", "Move with Text", "Layout › Arrange › Wrap Text", |s, v| move_with_text(s, p::switch(v, true)?))
             .params(r#"{"value": bool}  (true: Move with Text, the floating object's vertical position follows its paragraph; false: Fix Position on Page. It stays where it is)"#)
             .when(has_floating),
         CommandSpec::new("arrange.position", "Position", "Layout › Arrange", |s, v| {

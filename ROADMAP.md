@@ -1089,3 +1089,4 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-27 | trivial | Progress log: AutoCorrect Options with no document open (#4585) |
 | 2026-10-28 | trivial | Progress log: RTF metafile pictures are imported (#4259) |
 | 2026-10-28 | trivial | Progress log: Chinese and Japanese text counts a word per character (#4547) |
+| 2026-10-31 | trivial | Focus mode integration testing: 25 tests (8 engine, 17 UI) pin six findings and their fixes — the empty window keeps the Focus bar so nothing can strand a full-screen window, keytips badge on the slim bar and drop the ribbon, large ribbon buttons are named, a non-boolean `value` is refused across every switch, and a chrome change hands the keyboard back to the page; see [the report](docs/focus-mode-test-report.md) |

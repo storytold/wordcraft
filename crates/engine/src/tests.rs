@@ -11,6 +11,7 @@ use crate::{Session, cmd};
 
 mod bidi;
 mod documents;
+mod focus_mode;
 mod font_sizes;
 mod fonts;
 mod ime_noop;
@@ -3528,8 +3529,10 @@ fn line_and_page_break_toggles_take_an_explicit_value() {
         assert_eq!(at(&s, 1), Some(true), "{id} without value toggles");
         run(&mut s, id, json!({}));
         assert_eq!(at(&s, 1), Some(false), "{id} without value toggles back");
-        run(&mut s, id, json!({"value": "yes"}));
-        assert_eq!(at(&s, 1), Some(true), "{id} ignores a value that isn't a bool and toggles, as format.bold does");
+        // A `value` that is present but is not a boolean is refused, not read as "toggle": a
+        // client that sends `"yes"` hears about it instead of flipping the setting.
+        assert!(s.run(id, &json!({"value": "yes"})).is_err(), "{id} refuses a value that isn't a bool");
+        assert_eq!(at(&s, 1), Some(false), "{id} leaves the paragraph alone when it refuses");
     }
 }
 
@@ -5966,7 +5969,9 @@ fn style_inspector_pane_and_hostile_params() {
         assert!(s.run("styles.inspectorClear", &junk).is_err(), "{junk}");
     }
     assert_eq!(text(&s), before);
-    assert!(s.run("styles.inspector", &json!({"value": "yes"})).is_ok());
+    let pane_before = s.view.style_inspector;
+    assert!(s.run("styles.inspector", &json!({"value": "yes"})).is_err(), "a value that isn't a bool is refused");
+    assert_eq!(s.view.style_inspector, pane_before, "and the pane is left as it was");
     // A selection reaching far outside the document.
     s.sel.focus = Pos::body(9999, 99999);
     s.sel.anchor = Pos::body(0, 0);

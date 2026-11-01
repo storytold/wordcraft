@@ -46,20 +46,35 @@ impl WordApp {
 
     /// Draw the File page, the empty-window chrome, or the normal document window.
     pub(super) fn paint_window(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, t: theme::Tokens) {
+        // Whether the ribbon's tab strip is laid out this frame; `ribbon::show` sets it.
+        self.ribbon_tabs_shown = false;
         let window = self.windows.shown();
         let moved = |app: &WordApp| app.windows.shown() != window;
         if self.ui.backstage {
             backstage::show(self, ui);
         } else if !self.has_document() {
-            // No document open (#1129): the ribbon greyed out but for Help, and no page.
-            chrome::title_bar(self, ui);
-            ribbon::show(self, ui);
-            chrome::status_bar(self, ui);
-            egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |_| {});
+            // No document open (#1129): the ribbon greyed out but for Help, and no page. A screen
+            // state stays in charge of the window even with nothing open (#1678): its slim bar is
+            // the way out, so closing the last document in Focus can't leave the window full
+            // screen showing ordinary chrome with no Focus bar and no Escape out of it.
+            let screen = chrome::Screen::of(&self.session.view);
+            self.focus_ribbon &= screen != chrome::Screen::Normal;
+            if screen != chrome::Screen::Normal {
+                chrome::screen_bar(self, ui, screen);
+            } else {
+                chrome::title_bar(self, ui);
+                ribbon::show(self, ui);
+                chrome::status_bar(self, ui);
+            }
+            let fill = if screen == chrome::Screen::Focus { chrome::FOCUS_CANVAS } else { t.canvas };
+            egui::CentralPanel::default().frame(egui::Frame::NONE.fill(fill)).show(ui, |_| {});
+            if self.focus_ribbon && !moved(self) {
+                chrome::focus_ribbon(self, ctx);
+            }
         } else {
             let screen = chrome::Screen::of(&self.session.view);
             // Focus and Full Screen (#1678) take the whole screen, with only their slim bar.
-            self.focus_ribbon &= screen == chrome::Screen::Focus;
+            self.focus_ribbon &= screen != chrome::Screen::Normal;
             if screen != chrome::Screen::Normal {
                 chrome::screen_bar(self, ui, screen);
             } else {

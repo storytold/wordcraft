@@ -532,7 +532,7 @@ fn insert_block(s: &mut Session, mut ctl: ContentControl, a: &Pos, b: &Pos) -> C
 // Acting on a control
 
 fn design_mode(s: &mut Session, v: &Value) -> CmdResult {
-    s.view.design_mode = p::bool(v, "value").unwrap_or(!s.view.design_mode);
+    s.view.design_mode = p::toggle(v, s.view.design_mode)?;
     Ok(json!({"designMode": s.view.design_mode}))
 }
 
@@ -663,7 +663,7 @@ fn toggle_check_box(s: &mut Session, v: &Value) -> CmdResult {
     if !r.control.lock.can_edit() {
         return Err(locked(s, CANT_EDIT));
     }
-    let now = p::bool(v, "value").unwrap_or(!checked);
+    let now = p::toggle(v, *checked)?;
     let (ch, font) = if now { (*checked_char, checked_font) } else { (*unchecked_char, unchecked_font) };
     let mut props = content_base(s, &r);
     if !font.is_empty() {

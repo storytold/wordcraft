@@ -145,11 +145,9 @@ pub fn tab_letter(tab: &str) -> &'static str {
 
 /// The tabs that carry a badge, in display order.
 pub fn badge_tabs(app: &WordApp) -> Vec<&'static str> {
-    let mut v: Vec<&'static str> = TAB_LETTERS.iter().filter(|(_, l)| !l.is_empty()).map(|(t, _)| *t).collect();
-    if crate::ribbon::in_table_public(app) {
-        v.extend_from_slice(&["Table Design", "Table Layout"]);
-    }
-    v
+    let user_tabs = app.session.ribbon.tabs().into_owned();
+    let tabs = crate::ribbon::visible_tabs(&user_tabs, &app.session);
+    tabs.iter().filter_map(|(tab, _)| TAB_LETTERS.iter().chain(&TABLE_TAB_LETTERS).find(|(t, _)| t == tab).map(|(t, _)| *t)).collect()
 }
 
 /// Letters Alt+letter already drives elsewhere; only Alt-only (or bare) shortcuts count, so
@@ -529,15 +527,19 @@ pub fn controls_public(tab: &str) -> Vec<ControlInfo> {
 
 /// A keytip badge: letters or toolbar numbers, high contrast in both themes.
 pub fn badge(ui: &Ui, rect: Rect, letter: &str) {
+    badge_on(ui.painter(), ui.ctx(), rect, letter);
+}
+
+/// A badge on any painter: the ribbon's own layer when it is dropped over the page in Focus.
+fn badge_on(p: &egui::Painter, ctx: &egui::Context, rect: Rect, letter: &str) {
     let count = letter.chars().count();
     if count == 0 || count > 4 {
         return;
     }
-    let t = Tokens::get(ui.ctx());
+    let t = Tokens::get(ctx);
     let font = semibold(if count > 3 { 8.5 } else { 10.0 });
-    let width = ui.ctx().fonts_mut(|f| f.layout_no_wrap(letter.to_string(), font.clone(), t.on_accent).size().x);
+    let width = ctx.fonts_mut(|f| f.layout_no_wrap(letter.to_string(), font.clone(), t.on_accent).size().x);
     let r = Rect::from_min_size(rect.min + Vec2::new(2.0, 1.0), Vec2::new((width + 4.0).max(15.0), 15.0));
-    let p = ui.painter();
     p.rect_filled(r, CornerRadius::same(3), t.accent);
     p.rect_stroke(r, CornerRadius::same(3), Stroke::new(1.0, t.menu), egui::StrokeKind::Inside);
     p.text(r.center(), Align2::CENTER_CENTER, letter, font, t.on_accent);
@@ -606,6 +608,13 @@ pub fn handle_key(app: &mut WordApp, key: egui::Key) -> bool {
                                 let _ = app.run("ui.tab", serde_json::json!({ "tab": tab }));
                                 // File opens the Backstage: its pages get the badges (Alt, F, P prints).
                                 app.ui.keytips = if tab == "File" && app.ui.backstage { Phase::Backstage } else { Phase::Commands };
+                                // Focus and Full Screen View hide the ribbon, so the command badges
+                                // would have no rects to hang on: drop it down, as "⋯" does, and
+                                // they land on it.
+                                if app.ui.keytips == Phase::Commands && crate::chrome::Screen::of(&app.session.view) != crate::chrome::Screen::Normal
+                                {
+                                    let _ = app.run("ui.focusRibbon", serde_json::json!({ "value": true }));
+                                }
                             }
                             // Q is the title bar's Search box, as in Word (#819).
                             None if name == SEARCH_LETTER => {
@@ -859,9 +868,62 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context, ui: &mut Ui) {
         return;
     }
     let cmds: Vec<(Rect, String)> = ui.data(|d| d.get_temp::<Vec<(Rect, String)>>(rects_id())).unwrap_or_default();
-    for (r, l) in tabs.into_iter().chain(cmds) {
-        badge(ui, r, &l);
+    // Badges sit on the ribbon. In Focus the ribbon is dropped over the page in its own area above
+    // the window's layer, so the window's painter would put them underneath it: paint on that
+    // area's layer instead (#1678).
+    let painter = if app.focus_ribbon && crate::chrome::Screen::of(&app.session.view) != crate::chrome::Screen::Normal {
+        ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Middle, egui::Id::unique("focus_ribbon")))
+    } else {
+        ui.painter().clone()
+    };
+    for (r, l) in badge_rects(app, ui.ctx().content_rect(), tabs, cmds) {
+        badge_on(&painter, ui.ctx(), r, &l);
     }
+}
+
+/// Every badge this frame paints: the ribbon's own tab rects, the tab badges laid along the slim
+/// bar when no ribbon is showing, and the command badges the widgets published.
+///
+/// Whether the tab badges go on the bar is decided by whether the tab strip was laid out this
+/// frame, not by "no rects were recorded": Full Screen View's bar has a Search box that records its
+/// own `Q` badge, so a recorded-rect test would leave that state showing `Q` alone (#1678). With
+/// the ribbon dropped over the page in Focus the strip is laid out and its badges are recorded, so
+/// a slim-bar set would only double them up.
+pub(crate) fn badge_rects(app: &WordApp, window: Rect, tabs: Vec<(Rect, String)>, cmds: Vec<(Rect, String)>) -> Vec<(Rect, String)> {
+    let bar_tabs =
+        if app.ui.keytips == Phase::Tabs && !app.ribbon_tabs_shown && crate::chrome::Screen::of(&app.session.view) != crate::chrome::Screen::Normal {
+            slim_bar_badges(app, window, &tabs.iter().map(|(r, _)| *r).collect::<Vec<_>>())
+        } else {
+            Vec::new()
+        };
+    tabs.into_iter().chain(bar_tabs).chain(cmds).collect()
+}
+
+/// Tab badge positions along the slim bar of Focus and Full Screen View, in tab order: a small
+/// square each, starting at the bar's left end. They stop before `avoid` — the chrome the bar
+/// carries, like Full Screen View's Search box and its `Q` badge — and never cross the bar's
+/// centre, where the "⋯" button sits in Focus.
+pub(crate) fn slim_bar_badges(app: &WordApp, window: Rect, avoid: &[Rect]) -> Vec<(Rect, String)> {
+    let letters = badge_tabs(app);
+    let mut out = Vec::with_capacity(letters.len());
+    let mut x = window.left() + 8.0;
+    let y = window.top() + (crate::chrome::SCREEN_BAR_HEIGHT - 17.0) / 2.0;
+    for tab in letters {
+        let letter = tab_letter(tab);
+        if letter.is_empty() {
+            continue;
+        }
+        let w = 9.0 * letter.chars().count() as f32 + 10.0;
+        let r = Rect::from_min_size(egui::pos2(x, y), Vec2::new(w, 15.0));
+        if avoid.iter().any(|a| a.intersects(r.expand2(egui::vec2(4.0, 2.0)))) || r.right() > window.center().x - 26.0 {
+            // The next badge would reach a centre control (the ⋯, or Search and its badge): the
+            // remaining tabs drop, and their keys still work through the mode.
+            break;
+        }
+        out.push((r, letter.to_string()));
+        x += w + 3.0;
+    }
+    out
 }
 
 /// Where the legacy hint hangs from: the tab row, or, with no ribbon showing (Focus, Full Screen

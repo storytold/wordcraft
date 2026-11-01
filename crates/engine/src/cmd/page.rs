@@ -55,7 +55,7 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"value": "top|center|justify|bottom"} (also both|justified; anything else is top). Justified shares each page's spare room between its paragraphs and tables"#),
         CommandSpec::new("layout.sectionRtl", "Right-to-Left Section", "Layout › Page Setup", |s, v| {
-            let on = p::bool(v, "value").unwrap_or(!sect(s).rtl);
+            let on = p::toggle(v, sect(s).rtl)?;
             with_sect(s, |x| x.rtl = on)
         })
         .params(r#"{"value"?: bool} (true: the section's columns run right to left; without a value it toggles)"#),
@@ -63,11 +63,11 @@ pub fn specs() -> Vec<CommandSpec> {
             r#"{"value"?: "horizontal|down|up"} (also lrTb|tbRl|btLr; down: rotate all text 90°, lines top to bottom stacking right to left; up: 270°; default: the next after the current). In a table cell it turns the selected cells, in a text box the box; anywhere else the section(s) of the selection"#,
         ),
         CommandSpec::new("layout.differentFirstPage", "Different First Page", "Header & Footer › Options", |s, v| {
-            let on = p::bool(v, "value").unwrap_or(!sect(s).title_page);
+            let on = p::toggle(v, sect(s).title_page)?;
             with_sect(s, |x| x.title_page = on)
         }),
         CommandSpec::new("layout.differentOddEven", "Different Odd & Even Pages", "Header & Footer › Options", |s, v| {
-            s.doc.settings.even_odd_headers = p::bool(v, "value").unwrap_or(!s.doc.settings.even_odd_headers);
+            s.doc.settings.even_odd_headers = p::toggle(v, s.doc.settings.even_odd_headers)?;
             sel_result(s)
         }),
         CommandSpec::new("layout.pageNumberFormat", "Format Page Numbers", "Insert › Header & Footer › Page Number", |s, v| {
@@ -141,6 +141,8 @@ fn line_numbers(s: &mut Session, v: &Value) -> CmdResult {
 
 /// Hyphenation: automatic on or off, and its options (Hyphenation Options).
 fn hyphenation(s: &mut Session, v: &Value) -> CmdResult {
+    // A `value` that is not a boolean refuses the command instead of toggling hyphenation.
+    p::check_switch(v)?;
     let st = &mut s.doc.settings;
     let options = ["zone", "caps", "limit"].iter().any(|k| v.get(*k).is_some_and(|x| !x.is_null()));
     match p::bool(v, "value") {
