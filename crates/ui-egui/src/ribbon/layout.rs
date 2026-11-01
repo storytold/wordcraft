@@ -147,24 +147,20 @@ pub(super) fn layout(app: &mut WordApp, ui: &mut Ui) {
             let mut l = rp.indent_left / k;
             let mut b = rp.space_before;
             ui.label(egui::RichText::new(tl!("Left:")).small());
-            if ui.add_sized(FIELD, egui::DragValue::new(&mut l).speed(3.6 / k).range(-792.0 / k..=1584.0 / k).measure(u).max_decimals(2)).changed() {
-                let _ = app.run("para.indents", json!({"left": l * k}));
-            }
+            let r = ui.add_sized(FIELD, egui::DragValue::new(&mut l).speed(3.6 / k).range(-792.0 / k..=1584.0 / k).measure(u).max_decimals(2));
+            apply_box(app, ui, &r, "para.indents", json!({"left": l * k}));
             spaced(ui, egui::RichText::new(tl!("Before:")).small());
-            if ui.add_sized(FIELD, egui::DragValue::new(&mut b).speed(1.0).range(0.0..=1584.0).suffix(format!(" {}", tl!("pt")))).changed() {
-                let _ = app.run("para.spacing", json!({"before": b}));
-            }
+            let r = ui.add_sized(FIELD, egui::DragValue::new(&mut b).speed(1.0).range(0.0..=1584.0).suffix(format!(" {}", tl!("pt"))));
+            apply_box(app, ui, &r, "para.spacing", json!({"before": b}));
             ui.end_row();
             let mut r = rp.indent_right / k;
             let mut a = rp.space_after;
             ui.label(egui::RichText::new(tl!("Right:")).small());
-            if ui.add_sized(FIELD, egui::DragValue::new(&mut r).speed(3.6 / k).range(-792.0 / k..=1584.0 / k).measure(u).max_decimals(2)).changed() {
-                let _ = app.run("para.indents", json!({"right": r * k}));
-            }
+            let resp = ui.add_sized(FIELD, egui::DragValue::new(&mut r).speed(3.6 / k).range(-792.0 / k..=1584.0 / k).measure(u).max_decimals(2));
+            apply_box(app, ui, &resp, "para.indents", json!({"right": r * k}));
             spaced(ui, egui::RichText::new(tl!("After:")).small());
-            if ui.add_sized(FIELD, egui::DragValue::new(&mut a).speed(1.0).range(0.0..=1584.0).suffix(format!(" {}", tl!("pt")))).changed() {
-                let _ = app.run("para.spacing", json!({"after": a}));
-            }
+            let r = ui.add_sized(FIELD, egui::DragValue::new(&mut a).speed(1.0).range(0.0..=1584.0).suffix(format!(" {}", tl!("pt"))));
+            apply_box(app, ui, &r, "para.spacing", json!({"after": a}));
             ui.end_row();
         });
     });
@@ -203,4 +199,25 @@ pub(super) fn layout(app: &mut WordApp, ui: &mut Ui) {
             rotate_menu(ui, app, None);
         });
     });
+}
+
+/// Apply the new value of a Layout › Paragraph box (Indent Left/Right, Spacing Before/After)
+/// with `cmd` and `params`. A drag changes it frame by frame: every change after the drag's
+/// first joins the undo step before it, so one Undo takes the whole drag back (#5171), not 0.1 cm
+/// of it. The first change starts its own step, whatever frame it comes on.
+fn apply_box(app: &mut WordApp, ui: &Ui, r: &egui::Response, cmd: &str, params: serde_json::Value) {
+    let applied = r.id.with("drag_applied");
+    if !r.dragged() {
+        ui.data_mut(|d| d.remove::<bool>(applied));
+    }
+    if !r.changed() {
+        return;
+    }
+    if r.dragged() {
+        if ui.data(|d| d.get_temp::<bool>(applied)).is_some() {
+            app.session.join_next_undo();
+        }
+        ui.data_mut(|d| d.insert_temp(applied, true));
+    }
+    let _ = app.run(cmd, params);
 }

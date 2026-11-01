@@ -781,3 +781,48 @@ fn shape_and_chart_formats_leave_out_of_range_sizes_alone() {
     assert_eq!(before.0, Some((20.0, 2500.0)));
     assert_eq!(shown(a), before, "Chart Design shown, the chart untouched");
 }
+
+/// #5171: dragging Layout › Paragraph › Indent Left changes the indent as it goes, in one undo
+/// step: one Undo takes the whole drag back, not 0.1 cm of it. The text typed before it keeps
+/// its own step.
+#[test]
+fn dragging_a_layout_indent_box_is_one_undo_step() {
+    use crate::table_resize::tests::{button, steps};
+    use egui_kittest::kittest::Queryable;
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("text.insert", json!({"text": "Indented"})).unwrap();
+    a.ui.tab = "Layout".into();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    steps(&mut h, 4);
+    let left = |h: &egui_kittest::Harness<'_, WordApp>| {
+        let s = &h.state().session;
+        s.doc.para_at(&s.sel.focus).map(|p| s.doc.styles.resolve_para(&p.props).indent_left).unwrap()
+    };
+    let depth = h.state().session.undo_depth();
+    let label = h.get_by_label("Left:").rect();
+    // The box is the cell right of the label.
+    let from = egui::pos2(label.right() + 30.0, label.center().y);
+    h.event(egui::Event::PointerMoved(from));
+    h.step();
+    button(&h, from, true);
+    h.step();
+    for k in 1..=10 {
+        h.event(egui::Event::PointerMoved(from + egui::vec2(6.0 * k as f32, 0.0)));
+        h.step();
+    }
+    button(&h, from + egui::vec2(60.0, 0.0), false);
+    steps(&mut h, 3);
+    let dragged = left(&h);
+    assert!(dragged > 20.0, "the drag indents the paragraph: {dragged}");
+    assert_eq!(h.state().session.undo_depth(), depth + 1, "one undo step for the drag");
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert_eq!(left(&h), 0.0, "one Undo takes the whole drag back");
+    assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).starts_with("Indented"), "the typing keeps its own step");
+}
