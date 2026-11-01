@@ -523,6 +523,9 @@ mod tests {
         assert_eq!(labels([1, 1, 1], std, &[0, 2, 1, 0]), ["1.", "1.1.1.", "1.2.", "2."]);
         // The num's own start for the level above counts in its place, as the level's start does.
         assert_eq!(labels_with([1, 1, 1], std, &[(0, 10)], &[1, 1, 0]), ["10.1.", "10.2.", "11."]);
+        assert_eq!(labels_with([1, 1, 1], std, &[(0, 5)], &[1, 0, 1]), ["5.1.", "6.", "6.1."]);
+        // A level-1 item after the first deeper ones restarts level 2 below it, as usual.
+        assert_eq!(labels([1, 1, 1], std, &[1, 1, 0, 1, 1, 0, 2]), ["1.1.", "1.2.", "2.", "2.1.", "2.2.", "3.", "3.1.1."]);
     }
 
     #[test]
