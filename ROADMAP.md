@@ -706,7 +706,6 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-28 | trivial | Note conversion walks reference offsets and formatting runs together, #4750; readiness estimates unchanged. |
 | 2026-10-28 | trivial | #4658: bound Markdown reference-label rejection work, preserving literal source and ordinary link matching |
 | 2026-10-27 | trivial | Connector rerouting indexes laid-out object positions once per batch, preserving page hints, first-match order and same-page glue; synthetic equivalence, geometry and scaling regressions (#3631); routing policy and readiness estimates unchanged |
-
 | 2026-10-27 | trivial | NUMWORDS/NUMCHARS Update Fields counts shared within one call, with paragraph deltas retaining sequential result visibility (#3620); REF and broader performance work remain open; readiness estimates unchanged |
 | 2026-10-22 | trivial | Progress log: one native window per open document |
 | 2026-10-22 | trivial | Progress log: every open document keeps its own recovery copy |

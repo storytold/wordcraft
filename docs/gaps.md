@@ -169,7 +169,6 @@ Recipient label generation (#4880) now includes all selected recipients across a
 | 2026-10-28 | trivial | Note conversion reference-run membership uses one ordered walk, #4750; readiness estimates unchanged. |
 | 2026-10-28 | trivial | #4658: bound Markdown reference-label rejection work, preserving literal source and ordinary link matching |
 | 2026-10-27 | trivial | Connector rerouting indexes laid-out object positions once per batch, preserving page hints, first-match order and same-page glue; synthetic equivalence, geometry and scaling regressions (#3631); routing policy and readiness estimates unchanged |
-
 | 2026-10-27 | trivial | NUMWORDS/NUMCHARS Update Fields counts shared within one call, with paragraph deltas retaining sequential result visibility (#3620); REF and broader performance work remain open; readiness estimates unchanged |
 | 2026-10-22 | trivial | View windows: several open documents and Switch Windows in the engine |
 | 2026-10-25 | trivial | egui 0.37 migration: interface catalogs remain pinned by `craft-i18n.rev` (`9205108…`; 27 languages, English fallback); IME surrounding deletions and composition resets are implemented with regressions, but managed CI passed; native IME acceptance and native-speaker catalog review remain open; no gap or readiness change |

@@ -257,7 +257,6 @@ can be used without committing Word output.
 |---|---|---|
 | 2026-11-01 | trivial | Integrate operation-local NUMWORDS/NUMCHARS counts with current main (#3620); retain paragraph-order updates, current word-count rules and both progress histories; readiness estimates unchanged |
 | 2026-10-29 | trivial | Recipient labels continue across product-sized sheets instead of stopping after the first sheet (#4880). Filtered/sorted order, product geometry and single-label mode retained; readiness estimates unchanged. |
-
 | 2026-10-27 | trivial | NUMWORDS/NUMCHARS Update Fields counts shared within one call, with paragraph deltas retaining sequential result visibility (#3620); REF and broader performance work remain open; readiness estimates unchanged |
 | 2026-10-18 | trivial | References: Insert Table of Figures dialog; a table of figures lists any caption label (`TOC \c`), without label and number (`\a`), without page numbers (`\n`) or with them after the text (`\p`); Word's switch order is recognised and the leader kept on update (#3013); no percentage change |
 | 2026-10-15 | trivial | Pictures, shapes, text boxes: Insert › Shapes adds the new shape beside the selection, as Word draws it, so a second shape no longer replaces the first (still selected after its insert) and selected text stays; a picture still replaces a selected picture, as in Word (#2019) |
