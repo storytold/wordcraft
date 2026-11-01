@@ -97,6 +97,14 @@ fn build_new(s: &Session, v: &Value) -> Result<Style, CmdError> {
     };
     let id = s.doc.styles.new_id(&name);
     let mut st = Style { id, name, kind: StyleKind::Table, based_on, priority: Some(99), ..Default::default() };
+    // Bands of one row and one column unless the style it's based on sets them: Word, like us,
+    // reads a style with no band size as having no bands (#3415).
+    let base = st.based_on.as_deref().and_then(|b| s.doc.styles.table_style(b)).map(|t| t.parts).unwrap_or_default();
+    if base.band_size.is_none() || base.col_band_size.is_none() {
+        let parts = st.table.get_or_insert_with(TableStyleParts::default);
+        parts.band_size = base.band_size.is_none().then_some(1);
+        parts.col_band_size = base.col_band_size.is_none().then_some(1);
+    }
     edit(&mut st, v)?;
     Ok(st)
 }

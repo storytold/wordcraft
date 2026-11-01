@@ -1,6 +1,6 @@
 //! JSON-RPC 2.0 framing and the MCP lifecycle / tools / resources methods.
 
-use std::io::{BufRead, Write};
+use std::io::{BufRead, Read, Write};
 
 use serde_json::{Value, json};
 
@@ -22,11 +22,57 @@ const INSTRUCTIONS: &str = "WordCraft is a word processor (a Microsoft Word clon
 parameters with list_commands and run them with execute (or several with batch). Positions are \
 {story:\"body\", path:[block,(row,cell,block)...], off:byteOffset}. Typical flow: new_document → type_text \
 \"Hello\" → execute text.newParagraph → execute para.style {style:\"Heading 1\"} → select_text {text:\"Hello\"} → \
-execute format.bold → inspect_document to verify → render_page to look at the result → save {path:\"out.docx\"}.";
+execute format.bold → inspect_document to verify → render_page to look at the result → save {path:\"out.docx\"}. \
+Several documents can be open: new_document and open_document open another one and make it active; \
+list_documents gives their ids, and `doc` on execute, batch and the other document tools works on one \
+without switching.";
 
 /// Resource URIs.
 pub const DOC_URI: &str = "wordcraft://document";
 pub const COMMANDS_URI: &str = "wordcraft://commands";
+
+/// Longest request line accepted on stdin.
+pub const MAX_REQUEST_LINE: usize = 1 << 20;
+
+/// One bounded line read.
+pub(crate) enum BoundedLine {
+    Eof,
+    Line(String),
+    /// The line exceeded the limit; the rest of it has been discarded.
+    TooLong,
+}
+
+/// Read one line of at most `max` bytes (excluding the newline) without buffering more than
+/// `max + 1` bytes; an over-long line is skipped up to its newline.
+pub(crate) fn read_bounded_line(reader: &mut impl BufRead, max: usize) -> std::io::Result<BoundedLine> {
+    let mut buf = Vec::new();
+    reader.by_ref().take(max as u64 + 1).read_until(b'\n', &mut buf)?;
+    if buf.is_empty() {
+        return Ok(BoundedLine::Eof);
+    }
+    if buf.last() != Some(&b'\n') && buf.len() > max {
+        loop {
+            let chunk = reader.fill_buf()?;
+            if chunk.is_empty() {
+                break;
+            }
+            let found = chunk.iter().position(|&b| b == b'\n');
+            let used = found.map_or(chunk.len(), |i| i + 1);
+            reader.consume(used);
+            if found.is_some() {
+                break;
+            }
+        }
+        return Ok(BoundedLine::TooLong);
+    }
+    if buf.last() == Some(&b'\n') {
+        buf.pop();
+        if buf.last() == Some(&b'\r') {
+            buf.pop();
+        }
+    }
+    String::from_utf8(buf).map(BoundedLine::Line).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+}
 
 /// An MCP server bound to one backend.
 pub struct Server {
@@ -58,10 +104,14 @@ impl Server {
 
     /// Serve newline-delimited JSON-RPC until `input` closes. Logs go to stderr only (stdout is
     /// the protocol stream).
-    pub fn serve(&mut self, input: impl BufRead, mut output: impl Write) -> std::io::Result<()> {
-        for line in input.lines() {
-            let line = line?;
-            if let Some(reply) = self.handle_line(&line) {
+    pub fn serve(&mut self, mut input: impl BufRead, mut output: impl Write) -> std::io::Result<()> {
+        loop {
+            let reply = match read_bounded_line(&mut input, MAX_REQUEST_LINE)? {
+                BoundedLine::Eof => break,
+                BoundedLine::Line(line) => self.handle_line(&line),
+                BoundedLine::TooLong => Some(error(Value::Null, INVALID_REQUEST, "request line too long").to_string()),
+            };
+            if let Some(reply) = reply {
                 output.write_all(reply.as_bytes())?;
                 output.write_all(b"\n")?;
                 output.flush()?;
