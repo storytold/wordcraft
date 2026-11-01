@@ -110,6 +110,22 @@ The checks hold for every thread of the server process. A path is checked, then 
 program that swaps a link in between can still win that race, so the roots keep an agent to the
 files it was given rather than guarding against other software on the computer.
 
+## Preferences
+
+With `--connect`, an agent works in the user's own app, whose preferences are saved and used for
+every later document. Its commands can't change them: the user name and initials, AutoCorrect,
+keyboard shortcuts, the ribbon and Quick Access Toolbar, and the File › Options settings
+(including the default proofing language, Check Spelling as You Type, Print Markup, how tracked
+changes are shown, and the window's own settings such as the theme and the Start screen). A command
+that would is refused with an error naming `--allow-preference-changes`, and nothing it did stays,
+document edits included, except words added to the user dictionary (#3622). Start
+the app with `wordcraft --control 7981 --allow-preference-changes` to let an agent you trust
+change them. Reading them still works: `tools.customizeKeyboard` with `command` or `key`, and
+`file.options` without settings, which returns them.
+
+A headless server (`wordcraft-cli mcp`) saves no preferences: whatever its agent sets lasts until
+the server exits, so it isn't restricted. Words added to the user dictionary aren't covered yet.
+
 ## Tools
 
 | Tool | What it does |

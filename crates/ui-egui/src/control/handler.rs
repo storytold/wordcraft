@@ -171,8 +171,85 @@ fn handle_in(app: &mut WordApp, doc: u64, method: &str, p: &Value) -> Outcome {
 
 /// Dispatches one JSON-lines control request: commands and inspection, parity, synthetic click,
 /// drag, key, wheel and text input, screenshots and renders, resize, focus and quit, and unknown
-/// ids as commands. It refuses closing unsaved work and document operations without a document.
+/// ids as commands. It refuses closing unsaved work and document operations without a document,
+/// and commands that would change the user's saved preferences unless the app allows it
+/// (`--allow-preference-changes`, #3622): an agent steered by a document it reads must not leave
+/// AutoCorrect entries, shortcuts or a user name behind for documents it never saw.
 pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
+    let locked = !app.control_changes_preferences;
+    app.session.preferences_locked = locked;
+    // The session's preferences are guarded command by command; the File › Options settings the
+    // window keeps itself (`ui.*` commands never reach `Session::run`) are compared here.
+    let options_before = locked.then(|| WindowOptions::of(&app.ui));
+    let mut outcome = dispatch(app, ctx, req);
+    // The user's own edits after the request change preferences as usual.
+    app.session.preferences_locked = false;
+    if let Some(before) = options_before
+        && WindowOptions::of(&app.ui) != before
+    {
+        before.restore(&mut app.ui);
+        outcome = err(format!("{}: {}", req.method, wordcraft_engine::PREFERENCES_LOCKED));
+    }
+    outcome
+}
+
+/// The File › Options settings the window keeps in `ui.json` itself, not in the session: the
+/// interface theme, size, language and animations, the Quick Access Toolbar, KeyTips, the mini
+/// toolbar, alignment guides, the Start screen, the recent-document count and the print options.
+#[derive(PartialEq)]
+struct WindowOptions {
+    theme: crate::theme::Appearance,
+    interface_size: crate::theme::InterfaceSize,
+    animations: crate::theme::Animations,
+    language: String,
+    quick_access_toolbar: bool,
+    keytips_enabled: bool,
+    caret_animation: bool,
+    mini_toolbar: bool,
+    alignment_guides: bool,
+    start_screen: bool,
+    recent_count: usize,
+    print_backgrounds: bool,
+    update_fields_before_print: bool,
+}
+
+impl WindowOptions {
+    fn of(ui: &crate::UiState) -> Self {
+        WindowOptions {
+            theme: ui.theme,
+            interface_size: ui.interface_size,
+            animations: ui.animations,
+            language: ui.language.clone(),
+            quick_access_toolbar: ui.quick_access_toolbar,
+            keytips_enabled: ui.keytips_enabled,
+            caret_animation: ui.caret_animation,
+            mini_toolbar: ui.mini_toolbar,
+            alignment_guides: ui.alignment_guides,
+            start_screen: ui.start_screen,
+            recent_count: ui.recent_count,
+            print_backgrounds: ui.print_backgrounds,
+            update_fields_before_print: ui.update_fields_before_print,
+        }
+    }
+
+    fn restore(self, ui: &mut crate::UiState) {
+        ui.theme = self.theme;
+        ui.interface_size = self.interface_size;
+        ui.animations = self.animations;
+        ui.language = self.language;
+        ui.quick_access_toolbar = self.quick_access_toolbar;
+        ui.keytips_enabled = self.keytips_enabled;
+        ui.caret_animation = self.caret_animation;
+        ui.mini_toolbar = self.mini_toolbar;
+        ui.alignment_guides = self.alignment_guides;
+        ui.start_screen = self.start_screen;
+        ui.recent_count = self.recent_count;
+        ui.print_backgrounds = self.print_backgrounds;
+        ui.update_fields_before_print = self.update_fields_before_print;
+    }
+}
+
+fn dispatch(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
     let p = &req.params;
     if DOC_METHODS.contains(&req.method.as_str()) {
         match addressed(app, p) {

@@ -41,6 +41,10 @@ pub use snapshot_types::EditSnapshot;
 use snapshot_types::{LayoutSlots, RunSnapshot};
 pub use view::{StylesPaneDock, ViewState};
 
+/// Why a command is refused while [`Session::preferences_locked`] is set (#3622); the desktop app
+/// gives the same reason for the window's own settings.
+pub const PREFERENCES_LOCKED: &str = "automation can't change the user's preferences (user name, AutoCorrect, keyboard shortcuts, ribbon, options); start WordCraft with --allow-preference-changes to let it";
+
 /// An editing session: the app-wide state (clipboard, preferences, macros, the command registry…)
 /// and the open documents. The active document's state is in the session's own fields, which
 /// every command works on; the other open documents wait in [`DocState`] values and are swapped
@@ -193,6 +197,12 @@ pub struct Session {
     pub keymap: crate::KeyMap,
     /// Custom ribbon and Quick Access Toolbar (`tools.customizeRibbon`); the front end saves it too.
     pub ribbon: crate::RibbonLayout,
+    /// While set, a command may not change what the front end saves between runs: the user name
+    /// and initials, `prefs`, `keymap`, `ribbon` and Check Spelling as You Type. One that does is
+    /// refused and undone (#3622). The desktop app sets it for requests from its control channel
+    /// (agents and scripts), unless it was started with `--allow-preference-changes`. The refusal
+    /// says [`PREFERENCES_LOCKED`].
+    pub preferences_locked: bool,
     /// The language new blank documents (and opened plain text) are written in, a BCP 47 tag;
     /// `None` is WordCraft's default, US English. The front end sets it from the interface
     /// language with [`Session::set_editing_language`] (a Polish interface writes Polish).

@@ -497,6 +497,9 @@ pub struct WordApp {
     pub(crate) focus_ribbon: bool,
     pub(crate) updates_rt: updates_ui::Runtime,
     control_rx: Option<std::sync::mpsc::Receiver<ControlRequest>>,
+    /// Whether control-channel requests may change the user's saved preferences
+    /// (`--allow-preference-changes`); off, they are refused (#3622).
+    pub(crate) control_changes_preferences: bool,
     /// Admitted `ui.screenshot` requests: count/byte budgets, retries and completion slots.
     shots: control::Shots,
     /// Monotonic geometry epoch; any size/DPI/zoom/surface/document change increments it,
