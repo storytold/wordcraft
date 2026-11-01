@@ -717,6 +717,7 @@ fn the_complex_script_standard_font_is_read_only_when_present() {
         crate::stsh::standard_fonts(&b, 0, b.len() as u32).bidi
     };
     assert_eq!(bidi(&[2]), Some(2), "a header that ends with it (Word 97)");
+    assert_eq!(bidi(&[4]), Some(4), "font 4, at the end of the header");
     assert_eq!(bidi(&[2, 4, 0, 0]), Some(2), "followed by the latent style data");
     assert_eq!(bidi(&[4, 4, 0, 0]), Some(4), "font 4, followed by the latent style data");
     assert_eq!(bidi(&[4, 0, 0]), None, "left out: cbLSD is in its place");

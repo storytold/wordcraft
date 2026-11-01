@@ -45,11 +45,11 @@ pub(crate) fn standard_fonts(table: &[u8], fc: u32, lcb: u32) -> StandardFonts {
     // nVerBuiltInNamesWhenSaved (2 bytes each), then rgftcStandardChpStsh (3 × 2); ftcBi follows.
     let at = |o: usize| stshi.get(o..o + 2).map(|b| u16::from_le_bytes([b[0], b[1]]));
     // ftcBi is optional, and the latent style data (`StshiLsd`, whose `cbLSD` MUST be 4) follows
-    // it: a 4 right after it says it is there, a 4 in its place and none after says it was left
-    // out. Otherwise the field is taken as there (a header that ends after it, as Word 97's).
+    // it: a 4 right after it says it is there, a 4 in its place with more data after says it was
+    // left out. A header that ends right after the field (as Word 97's) has it, a 4 included.
     let bidi = match (at(18), at(20)) {
-        (b, Some(LSD_SIZE)) => b,
-        (Some(LSD_SIZE), _) => None,
+        (b, Some(LSD_SIZE) | None) => b,
+        (Some(LSD_SIZE), Some(_)) => None,
         (b, _) => b,
     };
     StandardFonts { ascii: at(12), east_asian: at(14), other: at(16), bidi }
