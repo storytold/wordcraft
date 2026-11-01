@@ -693,11 +693,11 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
         heights.push(if collapsed && !cells.is_empty() { rh.max(0.0) } else { rh.max(4.0) });
         rows.push(cells);
     }
-    grow_vertical_merges(&rows, &mut heights);
+    grow_vertical_merges(&t.rows, &rows, &mut heights);
     finish_table_rows(ctx, TableRows { story, table: t, path, depth, cell_text, rows, heights, bottoms, edges, x, total })
 }
 
-fn grow_vertical_merges(rows: &[Vec<CellBox>], heights: &mut [f32]) {
+fn grow_vertical_merges(model_rows: &[Row], rows: &[Vec<CellBox>], heights: &mut [f32]) {
     // Vertically merged cells: grow the last row of the merge if the content is taller.
     for ri in 0..rows.len() {
         let restarts: Vec<(usize, f32, usize)> =
@@ -708,7 +708,7 @@ fn grow_vertical_merges(rows: &[Vec<CellBox>], heights: &mut [f32]) {
                 end += 1;
             }
             // Exact rows clip a merged cell's overflow instead of moving following content.
-            if t.rows
+            if model_rows
                 .get(ri..=end)
                 .is_some_and(|rows| rows.iter().all(|row| row.props.height_rule == HeightRule::Exact && row.props.height.is_some_and(|h| h > 0.0)))
             {
