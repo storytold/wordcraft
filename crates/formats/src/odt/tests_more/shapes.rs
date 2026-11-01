@@ -68,8 +68,8 @@ fn shapes_open_with_their_kind_size_look_and_text() {
             // From (3in, 0) to (1in, 1in): 2in × 1in, rising from its bottom left.
             (ShapeKind::Line, (144.0, 72.0), None, Some((Rgb(0, 0, 0), 2.0)), true, true, String::new()),
             (ShapeKind::Heart, (72.0, 72.0), None, None, true, false, String::new()),
-            // A geometry WordCraft has no shape for: a rectangle in its place.
-            (ShapeKind::Rectangle, (72.0, 72.0), None, None, true, false, String::new()),
+            // A geometry WordCraft has no shape for: drawn from its own path.
+            (ShapeKind::Freeform, (72.0, 72.0), None, None, true, false, String::new()),
         ]
     );
     // The shape's text isn't the paragraph's.

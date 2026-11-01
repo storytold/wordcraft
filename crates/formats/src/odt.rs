@@ -46,6 +46,7 @@ mod flat;
 mod forms;
 mod formula_size;
 mod frames;
+mod geometry;
 mod import;
 mod limits;
 mod objects;

@@ -355,6 +355,21 @@ impl PathReader {
 /// `freeform`'s paths as SVG path data in a view box `vw` × `vh` (whole numbers, as ODF's view
 /// box is): each path moved to, lined through, and closed when it is.
 pub(super) fn path_data(f: &Freeform, vw: u32, vh: u32) -> String {
+    path_text(f, vw, vh, false)
+}
+
+/// Whether `freeform` has both closed and open paths: drawn filled and unfilled.
+pub(super) fn is_mixed(f: &Freeform) -> bool {
+    f.paths.iter().any(|p| p.closed) && f.paths.iter().any(|p| !p.closed)
+}
+
+/// `freeform`'s paths as a custom shape's path (§19.145 `draw:enhanced-path`) in a view box
+/// `vw` × `vh`: each path ended (`N`), open ones unfilled (`F`).
+pub(super) fn enhanced_path_data(f: &Freeform, vw: u32, vh: u32) -> String {
+    path_text(f, vw, vh, true)
+}
+
+fn path_text(f: &Freeform, vw: u32, vh: u32, enhanced: bool) -> String {
     let sx = if f.w > 0.0 { vw as f32 / f.w } else { 1.0 };
     let sy = if f.h > 0.0 { vh as f32 / f.h } else { 1.0 };
     let n = |v: f32| {
@@ -365,10 +380,16 @@ pub(super) fn path_data(f: &Freeform, vw: u32, vh: u32) -> String {
     for p in f.paths.iter().take(MAX_PATHS) {
         for (i, [x, y]) in p.pts.iter().take(MAX_POINTS).enumerate() {
             d.push_str(if i == 0 { "M" } else { " L" });
+            if enhanced {
+                d.push(' ');
+            }
             d.push_str(&format!("{} {}", n(x * sx), n(y * sy)));
         }
         if p.closed {
             d.push_str(" Z");
+        }
+        if enhanced {
+            d.push_str(if p.closed { " N" } else { " F N" });
         }
         d.push(' ');
     }

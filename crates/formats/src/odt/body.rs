@@ -121,6 +121,9 @@ pub(super) struct Body<'a> {
     shape_flip: (bool, bool),
     /// A freeform shape's paths (a polygon's, polyline's, path's or regular polygon's).
     shape_path: Option<std::sync::Arc<wordcraft_doc::freeform::Freeform>>,
+    /// A custom shape's geometry being read, when its type has no WordCraft kind: drawn from its
+    /// own path and equations.
+    geometry: Option<Box<super::geometry::Pending>>,
     /// The turn of a group's member being read, from its `draw:transform`.
     member_rot: Option<f32>,
     /// The depth of the `draw:g` group being read: its shapes are placed by it, not anchored.
@@ -201,6 +204,7 @@ impl<'a> Body<'a> {
             shape_kind: None,
             shape_flip: (false, false),
             shape_path: None,
+            geometry: None,
             member_rot: None,
             group_at: None,
             index: None,
@@ -652,6 +656,12 @@ impl Body<'_> {
             return;
         }
         if self.skip > 0 {
+            if self.skip == 1
+                && q == "draw:equation"
+                && let Some(g) = &mut self.geometry
+            {
+                g.equation(a);
+            }
             self.skip += 1;
             return;
         }
@@ -669,11 +679,12 @@ impl Body<'_> {
         if self.tracked_context(q, a) {
             return;
         }
-        // A custom shape's geometry: its kind. Its formulas and handles aren't read.
+        // A custom shape's geometry: its kind, or, for a type WordCraft has no kind for, its
+        // path, worked out from its equations when the element ends. Its handles aren't read.
         if q == "draw:enhanced-geometry" && self.shape_kind.is_some() {
-            if let Some(t) = get(a, "draw:type") {
-                self.shape_kind = Some(super::shapes::kind_of(t));
-            }
+            let t = get(a, "draw:type").unwrap_or_default();
+            self.shape_kind = Some(super::shapes::kind_of(t));
+            self.geometry = super::geometry::Pending::of(t, a);
             // Mirrored (§20.112 `draw:mirror-horizontal`, §20.113 `draw:mirror-vertical`).
             let on = |k: &str| get(a, k).is_some_and(|v| v.trim() == "true");
             self.shape_flip = (on("draw:mirror-horizontal"), on("draw:mirror-vertical"));
@@ -1089,6 +1100,13 @@ impl Body<'_> {
         }
         if self.skip > 0 {
             self.skip -= 1;
+            if self.skip == 0
+                && let Some(g) = self.geometry.take()
+                && let Some(f) = g.freeform()
+            {
+                self.shape_kind = Some(wordcraft_doc::para::ShapeKind::Freeform);
+                self.shape_path = Some(std::sync::Arc::new(f));
+            }
             return;
         }
         if !self.in_text {

@@ -394,8 +394,12 @@ impl Writer {
         let (element, geometry) = match crate::odt::shapes::element_of(kind) {
             // A freeform without paths has nothing to draw but its frame.
             ("draw:path", _) if path.is_none() => ("draw:rect", None),
+            // Paths filled and unfilled: a custom shape, whose path says which is which
+            // (LibreOffice fills no part of a path with an open part).
+            ("draw:path", _) if path.is_some_and(crate::odt::path::is_mixed) => ("draw:custom-shape", Some("non-primitive")),
             e => e,
         };
+        let mut custom_path = String::new();
         let len = |v: f32, least: f32| if v.is_finite() { v.clamp(least, 1584.0) } else { 72.0 };
         let at = if element == "draw:line" || element == "draw:connector" {
             {
@@ -421,6 +425,10 @@ impl Writer {
                 let (vw, vh) = ((w * 100.0).round().max(1.0) as u32, (h * 100.0).round().max(1.0) as u32);
                 at.push_str(&format!(" svg:viewBox=\"0 0 {vw} {vh}\" svg:d=\"{}\"", crate::odt::path::path_data(f, vw, vh)));
             }
+            if let Some(f) = path.filter(|_| geometry == Some("non-primitive")) {
+                let (vw, vh) = ((w * 100.0).round().max(1.0) as u32, (h * 100.0).round().max(1.0) as u32);
+                custom_path = format!(" svg:viewBox=\"0 0 {vw} {vh}\" draw:enhanced-path=\"{}\"", crate::odt::path::enhanced_path_data(f, vw, vh));
+            }
             at
         };
         // Mirrored, as a custom shape's geometry says (§20.112, §20.113).
@@ -428,11 +436,10 @@ impl Writer {
         let (fh, fv) = float.map_or((false, false), |f| (f.flip_h, f.flip_v));
         let geometry = geometry
             .map(|t| {
-                format!(
-                    "<draw:enhanced-geometry svg:viewBox=\"0 0 21600 21600\" draw:type=\"{t}\"{}{}/>",
-                    mirror(fh, "horizontal"),
-                    mirror(fv, "vertical")
-                )
+                if custom_path.is_empty() {
+                    custom_path = " svg:viewBox=\"0 0 21600 21600\"".into();
+                }
+                format!("<draw:enhanced-geometry{custom_path} draw:type=\"{t}\"{}{}/>", mirror(fh, "horizontal"), mirror(fv, "vertical"))
             })
             .unwrap_or_default();
         let conn = self.conn_attrs(kind, look);

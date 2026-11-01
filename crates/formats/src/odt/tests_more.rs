@@ -6,6 +6,7 @@ mod chars;
 mod charts;
 mod comments;
 mod connectors;
+mod custom_geometry;
 mod drop_caps;
 mod encryption;
 mod equations;
