@@ -56,6 +56,8 @@ Never reuse an account namespace for a different account.
 A device choice uses the browser's local download service. A device copy of a provider-bound
 project does not acknowledge provider persistence or replace that binding. As with the normal
 browser fallback, accepting a download does not prove the browser wrote it to physical disk.
+Device copies therefore retain the document's unsaved-work state, including for documents
+without a provider binding. Explicit-path saves and template/export pickers keep their local route.
 Exports remain local copies and never mark a provider project saved.
 
 Supported Save packages: **DOCX, DOCM, DOTX and DOTM**.

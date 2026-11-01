@@ -84,7 +84,7 @@ impl WordApp {
                     self.status(error);
                 }
             }
-            Ok((revision, bytes)) => {
+            Ok((_, bytes)) => {
                 let result = self
                     .services
                     .provider_download
@@ -93,14 +93,8 @@ impl WordApp {
                     .and_then(|download| download(&name, &bytes));
                 match result {
                     Ok(()) => {
-                        // A device copy must not assert that the provider now has it.
-                        if !host.bound(doc) {
-                            let _ = self.session.with_document(doc, |session| {
-                                if session.rev() == revision {
-                                    session.dirty = false;
-                                }
-                            });
-                        }
+                        // The browser may still cancel or fail after accepting these bytes.
+                        // Neither a provider binding nor a device checkpoint is acknowledged.
                         host.finish_device(&request);
                         self.status(format!("Downloaded {name}"));
                     }
@@ -193,6 +187,61 @@ mod tests {
         app.provider_tick();
         let event = host.take_events().into_iter().find(|e| e.metadata["type"] == "save").unwrap();
         (request, event.bytes.unwrap())
+    }
+
+    #[test]
+    fn provider_enabled_export_and_template_dialogs_write_the_picked_local_file() {
+        for (extension, template) in [("docx", false), ("dotx", true)] {
+            let directory = std::env::temp_dir().join(format!("wordcraft-provider-local-{extension}-{}", std::process::id()));
+            std::fs::create_dir_all(&directory).unwrap();
+            let path = directory.join(format!("Local copy.{extension}"));
+            let picked = path.to_string_lossy().into_owned();
+            let (mut app, host) = app();
+            app.services.pick_save = Some(Box::new(move |_| Some(picked.clone())));
+            app.services.templates_dir = Some(directory.clone());
+            if template {
+                let _ = app.save_as_template_dialog();
+            } else {
+                app.export_dialog(extension);
+            }
+            let restored = wordcraft_engine::io::open_path(&path).unwrap();
+            assert!(restored.plain_text(wordcraft_doc::StoryRef::Body).contains("Documento con ñ"));
+            assert!(!host.busy(), "explicit local paths must not open a provider chooser");
+            assert!(host.take_events().is_empty());
+            std::fs::remove_file(&path).unwrap();
+            std::fs::remove_dir(&directory).unwrap();
+        }
+    }
+
+    #[test]
+    fn device_download_acceptance_and_cancel_do_not_clear_unsaved_document_state() {
+        for destination in ["device", "cancel"] {
+            let (mut app, host) = app();
+            let copies = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            let received = copies.clone();
+            app.services.provider_download = Some(Box::new(move |name, bytes| {
+                received.borrow_mut().push((name.to_string(), bytes.to_vec()));
+                Ok(())
+            }));
+            assert_eq!(app.run("file.save", json!({})).unwrap()["pending"], "fileProvider");
+            let events = host.take_events();
+            let request = events[0].metadata["requestId"].as_str().unwrap();
+            host.resolve_dialog(request, destination, "Device.docx").unwrap();
+            app.provider_tick();
+            assert!(app.session.dirty, "an accepted browser download has no durable acknowledgement");
+            assert!(!host.bound(app.session.document_id()));
+            assert!(!host.busy());
+            assert_eq!(copies.borrow().len(), usize::from(destination == "device"));
+            if let Some((name, bytes)) = copies.borrow().first() {
+                let restored = wordcraft_engine::io::open_bytes(name, bytes).unwrap();
+                assert!(restored.plain_text(wordcraft_doc::StoryRef::Body).contains("Documento con ñ"));
+            }
+            app.session.run("text.insert", &json!({"text":" later edit"})).unwrap();
+            app.provider_tick();
+            assert_eq!(host.snapshot()["documents"][0]["dirty"], true);
+            assert_eq!(app.run("file.close", json!({})).unwrap()["pending"], "saveChanges");
+            assert!(app.has_document());
+        }
     }
 
     #[test]
