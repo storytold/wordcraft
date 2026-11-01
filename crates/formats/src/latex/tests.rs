@@ -358,6 +358,15 @@ fn urls_preserve_tildes() {
 }
 
 #[test]
+fn percent_in_url_is_not_a_comment() {
+    let ps = paras("See \\url{http://a.b/c%20d} for more.\n\nNext paragraph.\n");
+    assert_eq!(ps.len(), 2);
+    assert_eq!(ps[0].text(), "See http://a.b/c%20d for more.");
+    assert_eq!(ps[1].text(), "Next paragraph.");
+    assert_eq!(ps[0].inlines[1], Inline::Text("http://a.b/c%20d".to_string(), Fmt { link: Some("http://a.b/c%20d".into()), ..Default::default() }));
+}
+
+#[test]
 fn exported_borderless_tables_omit_rules() {
     let mut t = FTable { rows: Vec::new(), widths: vec![100.0, 200.0], borderless: true };
     let cell = |s: &str| Cell {
