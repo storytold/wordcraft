@@ -97,6 +97,23 @@ fn character_styles_and_paragraph_numbers() {
     assert_eq!(h[3], ["two", "3", "3.a", "3"]);
 }
 
+/// #4985: a heading on a "none" list level (its label is its text, `Note`) shows its parent's
+/// number in full context (`\w`): the parent is not taken for the heading's own level, which
+/// has no number to list.
+#[test]
+fn full_context_keeps_the_parent_of_a_none_level_heading() {
+    let mut d = doc(CHAPTERS, &[r#"STYLEREF "Heading 2" \w"#, r#"STYLEREF "Heading 2" \r"#]);
+    let num = d.numbering.add_list(ListKind::Numbered);
+    if let Some(n) = d.numbering.nums.iter_mut().find(|n| n.id == num) {
+        let note = wordcraft_doc::numbering::Level { format: wordcraft_doc::section::NumFormat::None, text: "Note".into(), ..Default::default() };
+        n.level_overrides = vec![(1, note)];
+    }
+    for (i, lvl) in [(0, 0u8), (2, 0), (5, 0), (6, 1)] {
+        d.para_mut(StoryRef::Body, &Path::top(i)).unwrap().props.numbering = Some(NumRef { num, level: lvl });
+    }
+    assert_eq!(headers(&d)[3], ["3.Note", "3.Note"]);
+}
+
 /// Editing a heading updates the headers that show it, through the paragraph cache.
 #[test]
 fn headers_follow_heading_edits() {

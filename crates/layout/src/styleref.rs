@@ -125,9 +125,11 @@ struct Entry {
     runs: Vec<(String, String)>,
     /// The list label as shown (`Chapter 2.`).
     label: Option<String>,
-    /// Each level's value up to the paragraph's, formatted; and whether the label's own
-    /// template shows that level.
-    levels: Vec<(String, bool)>,
+    /// Each level up to the paragraph's that has a number (not a bullet, nor a "none" level):
+    /// its index, its value formatted, and whether the label's own template shows it.
+    levels: Vec<(u8, String, bool)>,
+    /// The paragraph's own list level.
+    level: u8,
     /// How many paragraphs of its style there are up to this one.
     ordinal: u32,
 }
@@ -174,7 +176,7 @@ impl StyleIndex {
             *ord = ord.saturating_add(1);
             let ordinal = *ord;
             let num = p.props.numbering.or_else(|| doc.styles.resolve_para(&p.props).numbering).filter(|n| n.num != 0);
-            let (mut label, mut levels) = (None, Vec::new());
+            let (mut label, mut levels, mut level) = (None, Vec::new(), 0u8);
             if let Some(n) = num
                 && let Some((l, def)) = counters.next_label(&doc.numbering, n.num, n.level)
                 && def.format != NumFormat::Bullet
@@ -187,9 +189,10 @@ impl StyleIndex {
                     }
                     let v = if *v == 0 { lv.start } else { *v };
                     let fmt = if def.legal && lv.format != NumFormat::DecimalZero { NumFormat::Decimal } else { lv.format };
-                    levels.push((fmt.format(v), def.text.contains(&format!("%{}", k + 1))));
+                    levels.push((k as u8, fmt.format(v), def.text.contains(&format!("%{}", k + 1))));
                 }
                 label = Some(l);
+                level = n.level.min(8);
             }
             let mut runs: Vec<(String, String)> = Vec::new();
             let mut off = 0usize;
@@ -207,7 +210,7 @@ impl StyleIndex {
                 off = end;
             }
             by_path.insert(path.clone(), entries.len());
-            entries.push(Entry { path, style, text: clean(&p.plain_text()), runs, label, levels, ordinal });
+            entries.push(Entry { path, style, text: clean(&p.plain_text()), runs, label, levels, level, ordinal });
         }
         StyleIndex { entries, by_path, styles }
     }
@@ -295,9 +298,9 @@ impl StyleIndex {
                     None => e.ordinal.to_string(),
                 };
                 if code.number == Number::Full && e.label.is_some() {
-                    // Levels above that the label's own template doesn't show.
-                    let above: Vec<&str> =
-                        e.levels.iter().take(e.levels.len().saturating_sub(1)).filter(|(_, shown)| !shown).map(|(v, _)| v.as_str()).collect();
+                    // Levels above the paragraph's that the label's own template doesn't show. By
+                    // level, not position: a "none" level has no entry, its own (#4985) included.
+                    let above: Vec<&str> = e.levels.iter().filter(|(k, _, shown)| *k < e.level && !shown).map(|(_, v, _)| v.as_str()).collect();
                     if above.is_empty() { own } else { format!("{}.{own}", above.join(".")) }
                 } else {
                     own
@@ -321,8 +324,8 @@ fn chapter_number(label: &str) -> String {
 }
 
 /// `\t`: the label without its words that hold no number (`Chapter 2.` → `2`).
-fn suppress(label: &str, levels: &[(String, bool)]) -> String {
-    let kept: Vec<&str> = label.split_whitespace().filter(|w| levels.iter().any(|(v, _)| !v.is_empty() && w.contains(v.as_str()))).collect();
+fn suppress(label: &str, levels: &[(u8, String, bool)]) -> String {
+    let kept: Vec<&str> = label.split_whitespace().filter(|w| levels.iter().any(|(_, v, _)| !v.is_empty() && w.contains(v.as_str()))).collect();
     let s = if kept.is_empty() { label.trim().to_string() } else { kept.join(" ") };
     s.trim_end_matches('.').to_string()
 }
@@ -359,7 +362,7 @@ mod tests {
 
     #[test]
     fn suppress_keeps_the_number() {
-        assert_eq!(suppress("Chapter 2.", &[("2".into(), true)]), "2");
+        assert_eq!(suppress("Chapter 2.", &[(0, "2".into(), true)]), "2");
         assert_eq!(chapter_number("Chapter IV."), "IV");
     }
 }
