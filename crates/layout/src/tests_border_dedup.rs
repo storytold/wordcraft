@@ -1,4 +1,5 @@
 use super::*;
+use crate::{DocLayout, Document, LayoutCache, LayoutOptions, layout};
 use wordcraft_doc::props::{Border, BorderStyle, Borders, LineSpacing, TextFrame, VMerge};
 use wordcraft_doc::{Paragraph, Rgb, Table, para_block};
 
