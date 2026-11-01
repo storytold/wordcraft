@@ -299,6 +299,8 @@ mod bar {
         Run(&'static str, Value),
         Input(InputKind),
         Open(String),
+        /// WordCraft ▸ Hide WordCraft, without AppKit's ⌘H (Find and Replace in WordCraft's keymap).
+        Hide,
         /// Window ▸ Minimize, without AppKit's ⌘M (Increase Indent in WordCraft's keymap).
         Minimize,
         /// WordCraft ▸ Quit WordCraft, with save check before exit (#4295).
@@ -436,7 +438,7 @@ mod bar {
             append(&app_menu, &PredefinedMenuItem::separator());
             append(&app_menu, &PredefinedMenuItem::services(Some(t("Services"))));
             append(&app_menu, &PredefinedMenuItem::separator());
-            append(&app_menu, &PredefinedMenuItem::hide(Some(t("Hide WordCraft"))));
+            me.add(&app_menu, t("Hide WordCraft"), Action::Hide, None);
             append(&app_menu, &PredefinedMenuItem::hide_others(Some(t("Hide Others"))));
             append(&app_menu, &PredefinedMenuItem::show_all(Some(t("Show All"))));
             append(&app_menu, &PredefinedMenuItem::separator());
@@ -499,6 +501,11 @@ mod bar {
                     Action::Open(path) => {
                         if let Err(err) = app.run("file.open", json!({"path": path})) {
                             app.status(err);
+                        }
+                    }
+                    Action::Hide => {
+                        if let Some(mtm) = objc2::MainThreadMarker::new() {
+                            objc2_app_kit::NSApplication::sharedApplication(mtm).hide(None);
                         }
                     }
                     Action::Minimize => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
@@ -576,7 +583,7 @@ mod bar {
                     physical_key: Some(egui::Key::A),
                     pressed,
                     repeat: false,
-                    modifiers: egui::Modifiers::COMMAND,
+                    modifiers: egui::Modifiers::MAC_CMD | egui::Modifiers::COMMAND,
                 })
                 .to_vec(),
         }
