@@ -308,6 +308,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 });
             });
         });
+    // The tab strip is laid out, so keytips can hang their tab badges on it (a collapsed ribbon
+    // still shows the strip). Keytips check this to decide where their badges go.
+    app.ribbon_tabs_shown = true;
     if app.ui.ribbon_collapsed {
         return;
     }

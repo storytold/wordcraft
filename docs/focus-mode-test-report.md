@@ -1,6 +1,6 @@
 # Focus (distraction-free / "Zen") mode: integration test report
 
-> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-10-31 · **Change:** issues 1–5 fixed and their tests flipped to the fixed behaviour (24 tests); a review follow-up widened fix 2 to four more commands that read `value` without the shared pattern, and fixed the tab badges beside Full Screen View's Search badge (25 tests). Issue 6 stands as notes. First version the same day: integration testing of View › Immersive › Focus (`view.focus`, #1678) across the engine, the egui front end, the control channel, the CLI and MCP; six issues found (one severe), all pinned by new tests.
+> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-10-31 · **Change:** issues 1–5 fixed and their tests flipped to the fixed behaviour (25 tests); a review follow-up widened fix 2 to four more commands that read `value` without the shared pattern, and fixed the tab badges beside Full Screen View's Search badge (25 tests). Issue 6 stands as notes. First version the same day: integration testing of View › Immersive › Focus (`view.focus`, #1678) across the engine, the egui front end, the control channel, the CLI and MCP; six issues found (one severe), all pinned by new tests.
 
 Focus is WordCraft's distraction-free mode: the document alone on a black canvas, with a slim bar
 whose `…` drops the ribbon over the page. It shares the "screen state" code with Full Screen View
@@ -115,13 +115,13 @@ read `value` with `p::bool(...).unwrap_or(...)` now goes through them, so paragr
 switches, panes, options and equations share the contract. MCP reports it as
 `bad parameters: `value` must be true or false`.
 
-**Review follow-up:** four more commands read `value` without that pattern, so a junk value fell
+**Review follow-up:** six command families read `value` without that pattern, so a junk value fell
 through to the "no value" branch — the worst being `draw.inkToShape`, which would convert the
-lasso-selected strokes to shapes. All four now validate first and change nothing:
-`draw.inkToShape`, `layout.hyphenation`, `format.bold`/`format.italic`/… (the character-toggle
-helper) and `format.underline`, plus `table.repeatHeader` and `table.rtl`. The widened test checks
-thirty switches and compares `view.state`, `document.inspect` and the undo labels before and after
-every refusal.
+lasso-selected strokes to shapes. All six now validate first and change nothing:
+`draw.inkToShape`, `layout.hyphenation`, the character-toggle helper behind `format.bold` and
+friends, `format.underline`, `table.repeatHeader` and `table.rtl`. The widened test checks thirty
+switches — with ink lasso-selected, so the refusal is proven to come before the conversion — and
+compares `view.state`, `document.inspect` and the undo labels before and after every refusal.
 
 ### 3. Moderate: Focus started without a click strands the keyboard in the vanished field — **fixed**
 
@@ -249,18 +249,20 @@ MCP stdio: initialize → tools/call execute {"command":"view.focus"} → {"valu
            tools/call execute {"command":"view.state"} → … "focusMode": true …
 ```
 
-Gates run while checking this work: `cargo fmt --all -- --check` (clean),
-`cargo clippy -p wordcraft-engine -p wordcraft-ui-egui --all-targets` (clean), `cargo xtask layers`
-(ok), `cargo xtask assets` (57 files attributed), `cargo test -p wordcraft-ui-egui --lib`
-(1000 passed), `cargo test -p wordcraft-engine --lib` (1076 passed, 1 pre-existing failure above).
+Gates, latest runs (after the fixes below): `cargo fmt --all -- --check` (clean), `cargo clippy -p
+wordcraft-engine -p wordcraft-ui-egui --all-targets` (clean), `cargo xtask layers` (ok), `cargo
+xtask assets` (57 files attributed), `cargo test -p wordcraft-engine --lib` (1077 passed; the
+`ime_body_epoch…` failure recorded below was fixed in this change) and
+`cargo test -p wordcraft-ui-egui --lib` (1003 passed).
 
 ## Revision history
 
-> 2026-10-31 · Review follow-up: fix 2 widened to four commands that read `value` without the
-> shared pattern — `draw.inkToShape` (which converted the lasso's strokes), `layout.hyphenation`,
-> the character-toggle helper and `format.underline`, `table.repeatHeader` and `table.rtl` — and fix
-> 4 widened to Full Screen View, whose Search box's own `Q` badge would have hidden the tab badges.
-> 25 tests.
+> 2026-10-31 · Review follow-up: fix 2 widened to six command families that read `value` without
+> the shared pattern — `draw.inkToShape` (which converted the lasso's strokes), `layout.hyphenation`,
+> the character-toggle helper behind `format.bold` and friends, `format.underline`,
+> `table.repeatHeader` and `table.rtl` — and fix 4 widened to Full Screen View, whose Search box's
+> own `Q` badge would have hidden the tab badges, and to the badges not doubling up when Focus's
+> ribbon is dropped. 25 tests.
 
 > 2026-10-31 · Fixes: issues 1–5 resolved — the empty window keeps the screen state and its bar, so
 > nothing can strand a full-screen window; `p::toggle`/`p::switch` refuse a non-boolean `value`
