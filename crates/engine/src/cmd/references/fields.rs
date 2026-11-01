@@ -140,7 +140,8 @@ pub const REFERENCE_NOT_FOUND: &str = "Error! Reference source not found.";
 
 /// The fresh results of the body's unlocked REF fields as output shows them: the bookmark's
 /// text, or Word's error when the document lacks the bookmark (measured in Word for Windows);
-/// `\p`, which gives "above" or "below", keeps the stored result. The document's bookmarks are
+/// `\p` ("above" or "below") and the paragraph number switches `\r`, `\n` and `\w` keep the
+/// stored result. The document's bookmarks are
 /// looked up once, and each bookmark's text read once, however many fields refer to it.
 fn ref_results(doc: &wordcraft_doc::Document) -> Vec<FieldResult> {
     let mut out = Vec::new();
@@ -154,7 +155,9 @@ fn ref_results(doc: &wordcraft_doc::Document) -> Vec<FieldResult> {
         let Some(p) = doc.para(StoryRef::Body, &path) else { continue };
         for (k, o) in p.objects.iter().enumerate() {
             let InlineObject::Field { instr, locked: false, .. } = o else { continue };
-            if wordcraft_layout::fields::field_name(instr) != "REF" || has_switch(instr, 'p') {
+            // `\r`, `\n` and `\w` show the bookmarked paragraph's number, which isn't computed
+            // here: those keep their stored result rather than print the paragraph's text.
+            if wordcraft_layout::fields::field_name(instr) != "REF" || ['p', 'r', 'n', 'w'].iter().any(|&sw| has_switch(instr, sw)) {
                 continue;
             }
             let f = FieldCode::parse(instr);

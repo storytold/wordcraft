@@ -600,6 +600,42 @@ fn output_shows_words_error_for_a_reference_to_a_missing_bookmark() {
     assert_eq!(fields(&s).iter().map(|f| f.1.as_str()).collect::<Vec<_>>(), ["stale", "stale"], "the document keeps it");
 }
 
+/// A REF showing the bookmarked paragraph's number (`\r`, `\n`, `\w`), which output doesn't
+/// compute, keeps its stored number when printed or exported rather than show the paragraph's
+/// text; a plain REF to the same bookmark is filled in.
+#[test]
+fn output_keeps_paragraph_number_references_as_stored() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Target heading\nRefs "));
+    s.run("select.text", &json!({"text": "Target heading"})).unwrap();
+    s.run("insert.bookmark", &json!({"name": "Mark"})).unwrap();
+    s.run("caret.docEnd", &json!({})).unwrap();
+    let instrs = ["REF Mark \\r \\h", "REF Mark \\n", "REF Mark \\w \\h", "REF Mark \\h"];
+    for instr in instrs {
+        s.run("insert.field", &json!({"instr": instr, "result": "x"})).unwrap();
+        s.run("text.insert", &json!({"text": " "})).unwrap();
+    }
+    let last = s.doc.para_paths(StoryRef::Body).pop().unwrap();
+    let para = s.doc.para_mut(StoryRef::Body, &last).unwrap();
+    for o in &mut para.objects {
+        if let InlineObject::Field { result, .. } = o {
+            *result = "2.1".into();
+        }
+    }
+    para.touch();
+    let out = output_fields(&s.doc).expect("the plain REF changes");
+    let results: Vec<String> = out
+        .para(StoryRef::Body, &last)
+        .unwrap()
+        .objects
+        .iter()
+        .filter_map(|o| match o {
+            InlineObject::Field { result, .. } => Some(result.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(results, ["2.1", "2.1", "2.1", "Target heading"]);
+}
+
 /// Output looks the bookmarks up once for all of a document's REF fields: several fields to one
 /// bookmark, fields to others, and one to a bookmark the document lacks each show what
 /// `bookmark_text` (F9's lookup) gives, or Word's error.
