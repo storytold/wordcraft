@@ -300,6 +300,17 @@ pub struct BoxLook {
     pub inset: Option<[f32; 4]>,
     /// The box grows to its text; its height is the least it is.
     pub auto_fit: bool,
+    /// The drawing id connectors glue to, and a connector's glued ends (see
+    /// [`wordcraft_doc::connector`]).
+    pub conn: Option<Box<Conn>>,
+}
+
+/// A shape's drawing id (0: none) and, for a connector, what its ends are glued to.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Conn {
+    pub id: u32,
+    pub start: Option<wordcraft_doc::connector::ConnEnd>,
+    pub end: Option<wordcraft_doc::connector::ConnEnd>,
 }
 
 impl Default for BoxLook {
@@ -312,6 +323,7 @@ impl Default for BoxLook {
             arrows: (false, false),
             inset: None,
             auto_fit: false,
+            conn: None,
         }
     }
 }

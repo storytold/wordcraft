@@ -406,6 +406,10 @@ impl<'a> Builder<'a> {
                         dash: look.dash.clone(),
                         arrow_start: look.arrows.0,
                         arrow_end: look.arrows.1,
+                        // Its drawing id, and what a connector's ends are glued to (sites bounded).
+                        id: look.conn.as_ref().map_or(0, |c| c.id),
+                        start: look.conn.as_ref().and_then(|c| c.start).filter(|e| e.site <= wordcraft_doc::connector::MAX_SITE),
+                        end: look.conn.as_ref().and_then(|c| c.end).filter(|e| e.site <= wordcraft_doc::connector::MAX_SITE),
                         ..Default::default()
                     },
                 };

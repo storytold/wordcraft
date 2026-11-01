@@ -22,6 +22,7 @@ pub(super) fn is_shape(q: &str) -> bool {
             | "draw:polyline"
             | "draw:path"
             | "draw:regular-polygon"
+            | "draw:connector"
     )
 }
 
@@ -30,6 +31,7 @@ pub(super) fn element_kind(name: &str) -> ShapeKind {
     match name {
         "ellipse" | "circle" => ShapeKind::Ellipse,
         "line" => ShapeKind::Line,
+        "connector" => ShapeKind::ElbowConnector,
         "polygon" | "polyline" | "path" | "regular-polygon" => ShapeKind::Freeform,
         _ => ShapeKind::Rectangle,
     }
@@ -58,12 +60,51 @@ pub(super) fn kind_of(t: &str) -> ShapeKind {
     }
 }
 
+/// A connector's kind by its `draw:type` (§19.229): `line` straight, `curve` curved, `standard`
+/// (the default) and `lines` with bends.
+pub(super) fn connector_kind(t: Option<&str>) -> ShapeKind {
+    match t.map(str::trim) {
+        Some("line") => ShapeKind::StraightConnector,
+        Some("curve") => ShapeKind::CurvedConnector,
+        _ => ShapeKind::ElbowConnector,
+    }
+}
+
+/// A connector kind's `draw:type`.
+pub(super) fn connector_type(kind: ShapeKind) -> &'static str {
+    match kind {
+        ShapeKind::StraightConnector => "line",
+        ShapeKind::CurvedConnector => "curve",
+        _ => "standard",
+    }
+}
+
+/// WordCraft's connection site of a `kind` shape for ODF glue point `g` (§9.2.19: a shape's
+/// default glue points are 0 top, 1 right, 2 bottom, 3 left; see
+/// [`wordcraft_doc::connector::sites`]). `None` for a glue point of its own (4 on) or a shape
+/// without sides.
+pub(super) fn site_of_glue(kind: ShapeKind, g: u32) -> Option<u32> {
+    let sides: [u32; 4] = match kind {
+        ShapeKind::Ellipse => [0, 6, 4, 2],
+        ShapeKind::Triangle => [0, 5, 3, 1],
+        k if k.is_open() || k == ShapeKind::RightTriangle => return None,
+        _ => [0, 3, 2, 1],
+    };
+    sides.get(g as usize).copied()
+}
+
+/// The ODF glue point of site `site` of a `kind` shape (the inverse of [`site_of_glue`]).
+pub(super) fn glue_of_site(kind: ShapeKind, site: u32) -> Option<u32> {
+    (0..4).find(|g| site_of_glue(kind, *g) == Some(site))
+}
+
 /// How shape `kind` is written: its element, and a custom shape's `draw:type`.
 pub(super) fn element_of(kind: ShapeKind) -> (&'static str, Option<&'static str>) {
     let custom = |t| ("draw:custom-shape", Some(t));
     match kind {
         ShapeKind::Ellipse => ("draw:ellipse", None),
-        ShapeKind::Line | ShapeKind::StraightConnector | ShapeKind::ElbowConnector | ShapeKind::CurvedConnector => ("draw:line", None),
+        ShapeKind::Line => ("draw:line", None),
+        ShapeKind::StraightConnector | ShapeKind::ElbowConnector | ShapeKind::CurvedConnector => ("draw:connector", None),
         ShapeKind::RoundedRectangle => custom("round-rectangle"),
         ShapeKind::FlowchartOr => custom("flowchart-or"),
         ShapeKind::Triangle => custom("isosceles-triangle"),
@@ -86,7 +127,7 @@ pub(super) fn element_of(kind: ShapeKind) -> (&'static str, Option<&'static str>
 /// or upwards is flipped that way (its arrowheads stay at its ends).
 pub(super) fn geometry(kind: ShapeKind, a: &Attrs) -> (f32, f32, Option<f32>, Option<f32>, (bool, bool)) {
     let len = |k: &str| get(a, k).and_then(length).filter(|v| v.is_finite()).map(|v| v.clamp(-MAX_LEN, MAX_LEN));
-    if kind == ShapeKind::Line {
+    if kind.is_open() {
         let [x1, y1, x2, y2] = ["svg:x1", "svg:y1", "svg:x2", "svg:y2"].map(|k| len(k).unwrap_or(0.0));
         let size = |d: f32| d.abs().min(MAX_LEN);
         return (size(x2 - x1), size(y2 - y1), Some(x1.min(x2)), Some(y1.min(y2)), (x2 < x1, y2 < y1));

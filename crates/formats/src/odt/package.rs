@@ -502,6 +502,35 @@ fn flow_sections(blocks: &[FBlock], last: &SectionProps) -> Vec<(SectionProps, s
 }
 
 /// Write an `.odt` package.
+/// The kinds of the shapes with drawing ids in `blocks` (paragraphs, tables, groups), by id.
+fn conn_kinds(blocks: &[FBlock]) -> super::HashMap<u32, wordcraft_doc::para::ShapeKind> {
+    fn walk(blocks: &[FBlock], depth: usize, out: &mut super::HashMap<u32, wordcraft_doc::para::ShapeKind>) {
+        if depth > model::MAX_DEPTH {
+            return;
+        }
+        for b in blocks {
+            match b {
+                FBlock::Para(p) => p.inlines.iter().for_each(|i| inline(i, 0, out)),
+                FBlock::Table(t) => t.rows.iter().flatten().for_each(|c| walk(&c.blocks, depth + 1, out)),
+            }
+        }
+    }
+    fn inline(i: &super::Inline, depth: usize, out: &mut super::HashMap<u32, wordcraft_doc::para::ShapeKind>) {
+        match i {
+            super::Inline::Shape { kind, look, .. } => {
+                if let Some(c) = look.conn.as_deref().filter(|c| c.id != 0) {
+                    out.insert(c.id, *kind);
+                }
+            }
+            super::Inline::Group { members, .. } if depth < model::MAX_GROUP_DEPTH => members.iter().for_each(|m| inline(&m.inline, depth + 1, out)),
+            _ => {}
+        }
+    }
+    let mut out = super::HashMap::new();
+    walk(blocks, 0, &mut out);
+    out
+}
+
 pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
     let flow = model::from_doc_with(
         doc,
@@ -510,6 +539,7 @@ pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
     let accents = doc.settings.theme_colors.get(4..10).map(<[_]>::to_vec).unwrap_or_default();
     let mut w = Writer::default();
     w.accents.clone_from(&accents);
+    w.conn_kinds = conn_kinds(&flow.blocks);
     w.forms_allowed = true;
     w.ranged = model::ranged_anchors(&flow.blocks);
     let mut body = String::new();

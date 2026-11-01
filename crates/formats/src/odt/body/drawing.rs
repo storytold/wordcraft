@@ -71,6 +71,9 @@ pub(in crate::odt) struct OpenGroup {
 /// Largest size or offset read in a group, points (22 inches).
 pub(in crate::odt) const MAX_LEN: f32 = 1584.0;
 
+/// Most shape ids connectors can glue to.
+const MAX_CONN_IDS: usize = 10_000;
+
 impl Body<'_> {
     /// End a frame or drawing shape: its picture, equation, text box or shape goes into the
     /// paragraph.
@@ -99,7 +102,11 @@ impl Body<'_> {
                     let empty = blocks.iter().all(|b| matches!(b, FBlock::Para(p) if p.inlines.is_empty()));
                     let blocks = if kind != wordcraft_doc::para::ShapeKind::TextBox && empty { Vec::new() } else { blocks };
                     let path = self.shape_path.take().filter(|_| kind == wordcraft_doc::para::ShapeKind::Freeform);
-                    Some(Inline::Shape { kind, w: w.unwrap_or(72.0), h: h.unwrap_or(1.0), float: float.map(Box::new), blocks, look, path })
+                    let (w, h) = (w.unwrap_or(72.0), h.unwrap_or(1.0));
+                    if self.member_at.is_none() {
+                        self.note_place(kind, (w, h), &look, float.as_ref());
+                    }
+                    Some(Inline::Shape { kind, w, h, float: float.map(Box::new), blocks, look, path })
                 }
                 (None, Some((linear, display))) => Some(Inline::Equation { linear, display }),
                 (None, None) if let Some(spec) = chart => Some(Inline::Chart(model::Chart {
@@ -141,6 +148,79 @@ impl Body<'_> {
             }
         }
         self.frame = None;
+    }
+
+    /// A shape's drawing id (its `xml:id` or `draw:id`) and, for a connector, its glued ends (§19.228
+    /// `draw:start-shape`, §19.229 `draw:start-glue-point`…), their glue points as written until
+    /// the paragraph ends (see [`Self::glue_connectors`]). `None` for a shape with neither.
+    fn conn_of(&mut self, a: &Attrs) -> Option<model::Conn> {
+        let mut id_of = |name: &str| -> u32 {
+            let next = u32::try_from(self.conn_ids.len()).unwrap_or(u32::MAX).saturating_add(1);
+            match self.conn_ids.get(name) {
+                Some(id) => *id,
+                None if self.conn_ids.len() < MAX_CONN_IDS => {
+                    self.conn_ids.insert(name.to_string(), next);
+                    next
+                }
+                None => 0,
+            }
+        };
+        let id = get(a, "xml:id").or_else(|| get(a, "draw:id")).map(str::trim).filter(|n| !n.is_empty()).map_or(0, &mut id_of);
+        let mut end = |shape: &str, glue: &str| {
+            let target = get(a, shape).map(str::trim).filter(|n| !n.is_empty()).map(&mut id_of).filter(|id| *id != 0)?;
+            let site = get(a, glue).and_then(|g| g.trim().parse::<u32>().ok()).filter(|g| *g <= wordcraft_doc::connector::MAX_SITE)?;
+            Some(wordcraft_doc::connector::ConnEnd { id: target, site })
+        };
+        let (start, finish) = (end("draw:start-shape", "draw:start-glue-point"), end("draw:end-shape", "draw:end-glue-point"));
+        (id != 0 || start.is_some() || finish.is_some()).then_some(model::Conn { id, start, end: finish })
+    }
+
+    /// Where a shape with a drawing id (`look`) sits, for connectors glued to it.
+    pub(in crate::odt) fn note_place(
+        &mut self,
+        kind: wordcraft_doc::para::ShapeKind,
+        (w, h): (f32, f32),
+        look: &model::BoxLook,
+        float: Option<&wordcraft_doc::para::Float>,
+    ) {
+        if let (Some(c), Some(f)) = (look.conn.as_deref().filter(|c| c.id != 0), float)
+            && self.shape_places.len() < MAX_CONN_IDS
+        {
+            self.shape_places.insert(c.id, (kind, [f.x, f.y, w, h], f.clone(), self.para_seq));
+        }
+    }
+
+    /// The connectors of paragraph `p` glued to shapes (see [`Self::conn_of`]): each end's glue
+    /// point made WordCraft's site of the shape it is glued to (an end glued to a shape not read,
+    /// or to a glue point of the shape's own, is unglued); and a connector glued at both ends to
+    /// shapes anchored in this paragraph, placed alike, runs between their sites. (A connector's
+    /// own coordinates are in LibreOffice's drawing layer, not its anchor's.)
+    pub(in crate::odt) fn glue_connectors(&self, p: &mut model::Para) {
+        use crate::odt::shapes::site_of_glue;
+        for i in &mut p.inlines {
+            let Inline::Shape { kind, w, h, float, look, .. } = i else { continue };
+            let Some(c) = look.conn.as_deref_mut().filter(|_| kind.is_connector()) else { continue };
+            let resolve = |e: Option<wordcraft_doc::connector::ConnEnd>| {
+                let e = e?;
+                let place = self.shape_places.get(&e.id)?;
+                site_of_glue(place.0, e.site).map(|site| (wordcraft_doc::connector::ConnEnd { id: e.id, site }, place))
+            };
+            let (start, end) = (resolve(c.start), resolve(c.end));
+            (c.start, c.end) = (start.map(|(e, _)| e), end.map(|(e, _)| e));
+            let (Some((s, sp)), Some((e, ep)), Some(f)) = (start, end, float.as_deref_mut()) else { continue };
+            let same = |pl: &(wordcraft_doc::para::ShapeKind, [f32; 4], wordcraft_doc::para::Float, usize)| {
+                pl.3 == self.para_seq && pl.2.h_rel == f.h_rel && pl.2.v_rel == f.v_rel
+            };
+            if !(same(sp) && same(ep)) {
+                continue;
+            }
+            let point = |pl: &(wordcraft_doc::para::ShapeKind, [f32; 4], wordcraft_doc::para::Float, usize), site| {
+                wordcraft_doc::connector::site_point(pl.0, pl.1, pl.2.spin(), site)
+            };
+            let (Some((x1, y1)), Some((x2, y2))) = (point(sp, s.site), point(ep, e.site)) else { continue };
+            (f.x, f.y, f.flip_h, f.flip_v) = (x1.min(x2), y1.min(y2), x2 < x1, y2 < y1);
+            (*w, *h) = ((x2 - x1).abs().min(MAX_LEN), (y2 - y1).abs().min(MAX_LEN));
+        }
     }
 
     /// A frame or shape `w` × `h` (attributes `a`) begins: in a group (not in a shape's text), where
@@ -193,10 +273,13 @@ impl Body<'_> {
     /// Begin a drawing shape (ODF 1.3 §10.3): its size, placement and look, and its text read
     /// as a text box's. A custom shape's kind comes from its geometry, read inside it.
     pub(in crate::odt) fn start_shape(&mut self, q: &str, a: &Attrs) {
-        let kind = crate::odt::shapes::element_kind(local(q));
+        let mut kind = crate::odt::shapes::element_kind(local(q));
+        if kind.is_connector() {
+            kind = crate::odt::shapes::connector_kind(get(a, "draw:type"));
+        }
         let g = self.styles.shape_graphic(get(a, "draw:style-name"));
         let (w, h, x, y, (flip_h, flip_v)) = crate::odt::shapes::geometry(kind, a);
-        let mut float = if kind == wordcraft_doc::para::ShapeKind::Line {
+        let mut float = if kind.is_open() {
             // A line is placed by its ends.
             let at = |v: Option<f32>| v.map(crate::odt::writer::pt);
             crate::odt::frames::float_of(get(a, "text:anchor-type"), at(x).as_deref(), at(y).as_deref(), &g)
@@ -205,11 +288,12 @@ impl Body<'_> {
         };
         (float.flip_h, float.flip_v) = (flip_h, flip_v);
         self.shape_flip = (false, false);
-        self.member_start(a, w, h, (kind == wordcraft_doc::para::ShapeKind::Line).then_some((x, y)));
+        self.member_start(a, w, h, kind.is_open().then_some((x, y)));
         if let Some(rot) = self.member_rot.take() {
             float.rot = rot;
         }
         self.frame_look = g.shape_look(kind, &self.styles.defs);
+        self.frame_look.conn = self.conn_of(a).map(Box::new);
         self.shape_path = crate::odt::shapes::freeform(local(q), a, w, h).map(std::sync::Arc::new);
         self.shape_kind = Some(kind);
         let frame = (Some((Some(w), Some(h), None, String::new(), None, None, None)), Some(float), std::mem::take(&mut self.frame_look));

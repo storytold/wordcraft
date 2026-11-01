@@ -159,6 +159,8 @@ pub(super) struct Writer {
     /// kept objects' folders with their media types, for the manifest.
     pub(super) object_names: usize,
     pub(super) object_dirs: Vec<(String, String)>,
+    /// The kinds of the shapes with drawing ids, which connectors' glue points depend on.
+    pub(super) conn_kinds: HashMap<u32, wordcraft_doc::para::ShapeKind>,
     /// Ruby was written: its automatic ruby style is.
     ruby_used: bool,
     /// Form controls written (`form:*` elements for `office:forms`), and whether this writer's

@@ -5,6 +5,7 @@ mod char_styles;
 mod chars;
 mod charts;
 mod comments;
+mod connectors;
 mod drop_caps;
 mod encryption;
 mod equations;

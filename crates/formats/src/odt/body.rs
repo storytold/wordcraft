@@ -33,6 +33,13 @@ pub(super) struct Body<'a> {
     pub(super) entries: &'a [String],
     /// The paragraph before had a page break after it: the next one starts a page.
     break_next: bool,
+    /// Shapes' ids (`xml:id`, `draw:id`) as WordCraft drawing ids, and where the shapes with one
+    /// sit (kind, frame relative to its anchor, turn, placement, the paragraph they are in), for
+    /// connectors glued to them.
+    pub(super) conn_ids: HashMap<String, u32>,
+    pub(super) shape_places: HashMap<u32, (wordcraft_doc::para::ShapeKind, [f32; 4], wordcraft_doc::para::Float, usize)>,
+    /// Paragraphs started so far: which paragraph a shape is in.
+    pub(super) para_seq: usize,
     /// Index entries over text whose end hasn't come (in the paragraph being read): their id,
     /// keys and where they start: an inline, and a byte offset in it when it is text.
     index_marks: Vec<(String, (Option<String>, Option<String>), (usize, usize))>,
@@ -139,6 +146,9 @@ impl<'a> Body<'a> {
             break_next: false,
             ruby: None,
             index_marks: Vec::new(),
+            conn_ids: HashMap::new(),
+            shape_places: HashMap::new(),
+            para_seq: 0,
             manifest: None,
             containers: vec![Vec::new()],
             fmt: Vec::new(),
@@ -367,6 +377,10 @@ impl Body<'_> {
 
     fn start_para(&mut self, style: Option<&str>, heading: Option<u8>) {
         self.end_para();
+        // Paragraphs of the text (not of a shape's, a note's or a comment's) say where shapes are.
+        if self.note.is_none() {
+            self.para_seq = self.para_seq.wrapping_add(1);
+        }
         let look = style.map(|s| self.styles.para(s)).unwrap_or_default();
         let (mut kind, align, mut pb, rule, keep_next, base) = (look.kind, look.align, look.page_break, look.rule, look.keep_next, look.fmt);
         // The section break starts the new page; no page break besides.
@@ -453,6 +467,7 @@ impl Body<'_> {
         // An index entry is marked within one paragraph.
         self.index_marks.clear();
         let Some(mut p) = self.para.take() else { return };
+        self.glue_connectors(&mut p);
         self.fmt.pop();
         // A paragraph ending inside an open insertion has an inserted mark. (Paragraphs that
         // `place_deletion` splits off keep only the marks read inside their region.)
@@ -682,7 +697,7 @@ impl Body<'_> {
                 self.skip = 1;
             }
             // Drawing shapes (ODF 1.3 §10.3) anchored in the text, with their text.
-            "rect" | "ellipse" | "circle" | "line" | "custom-shape" | "polygon" | "polyline" | "path" | "regular-polygon"
+            "rect" | "ellipse" | "circle" | "line" | "custom-shape" | "polygon" | "polyline" | "path" | "regular-polygon" | "connector"
                 if q.starts_with("draw:") && self.frame.is_none() && self.note.is_none() && self.del.is_none() && !self.in_tc =>
             {
                 self.start_shape(q, a);

@@ -367,7 +367,7 @@ impl Writer {
             e => e,
         };
         let len = |v: f32, least: f32| if v.is_finite() { v.clamp(least, 1584.0) } else { 72.0 };
-        let at = if element == "draw:line" {
+        let at = if element == "draw:line" || element == "draw:connector" {
             {
                 // A line by its ends: from its box's top left to its bottom right, or bottom left
                 // to top right when it rises.
@@ -405,13 +405,38 @@ impl Writer {
                 )
             })
             .unwrap_or_default();
+        let conn = self.conn_attrs(kind, look);
         out.push_str(&format!(
-            "<{element} draw:name=\"{}Shape{}\" draw:style-name=\"{style}\"{anchor}{at} draw:z-index=\"0\">{body}{geometry}</{element}>",
+            "<{element} draw:name=\"{}Shape{}\" draw:style-name=\"{style}\"{anchor}{at}{conn} draw:z-index=\"0\">{body}{geometry}</{element}>",
             self.prefix, self.boxes,
         ));
         if let Some(m) = reopen {
             self.open_ins(&m, out);
         }
+    }
+
+    /// A shape's drawing id as the id connectors name (`xml:id`, `draw:id`), and a connector's
+    /// type and glued ends (§19.228–19.229), each end's site as the ODF glue point of the shape it
+    /// is glued to (an end glued to a shape not written, or to a site ODF has no glue point for,
+    /// is left unglued).
+    fn conn_attrs(&self, kind: wordcraft_doc::para::ShapeKind, look: &model::BoxLook) -> String {
+        let mut a = String::new();
+        if kind.is_connector() {
+            a.push_str(&format!(" draw:type=\"{}\"", crate::odt::shapes::connector_type(kind)));
+        }
+        let Some(c) = look.conn.as_deref() else { return a };
+        if c.id != 0 {
+            a.push_str(&format!(" xml:id=\"{0}shape{1}\" draw:id=\"{0}shape{1}\"", self.prefix, c.id));
+        }
+        if kind.is_connector() {
+            for (which, end) in [("start", c.start), ("end", c.end)] {
+                let glue = end.and_then(|e| self.conn_kinds.get(&e.id).and_then(|k| crate::odt::shapes::glue_of_site(*k, e.site)).map(|g| (e.id, g)));
+                if let Some((id, g)) = glue {
+                    a.push_str(&format!(" draw:{which}-shape=\"{}shape{id}\" draw:{which}-glue-point=\"{g}\"", self.prefix));
+                }
+            }
+        }
+        a
     }
 
     /// The paragraphs of a text box's or shape's text, written apart from the paragraph being

@@ -302,9 +302,10 @@ fn drawing_inline(doc: &Document, o: &InlineObject, opts: FlowOpts, depth: usize
         InlineObject::Shape { kind, w, h, float, story, fill, stroke, stroke_width, extra, freeform, .. }
             if *kind != ShapeKind::Freeform || freeform.is_some() =>
         {
-            // A connector is a straight line.
+            // A connector stays one in formats that glue them (ODT, with boxes); elsewhere it is a
+            // straight line.
             let kind = match kind {
-                ShapeKind::StraightConnector | ShapeKind::ElbowConnector | ShapeKind::CurvedConnector => ShapeKind::Line,
+                ShapeKind::StraightConnector | ShapeKind::ElbowConnector | ShapeKind::CurvedConnector if !opts.boxes => ShapeKind::Line,
                 k => *k,
             };
             let inner = FlowOpts { notes: false, comments: false, boxes: false, ..opts };
@@ -317,6 +318,8 @@ fn drawing_inline(doc: &Document, o: &InlineObject, opts: FlowOpts, depth: usize
                 arrows: (extra.arrow_start, extra.arrow_end),
                 inset: part.and_then(|p| p.body.inset.is_some().then(|| p.body.insets_pt())),
                 auto_fit: part.is_some_and(|p| p.body.auto_fit),
+                conn: (opts.boxes && (extra.id != 0 || extra.start.is_some() || extra.end.is_some()))
+                    .then(|| Box::new(crate::model::Conn { id: extra.id, start: extra.start, end: extra.end })),
             };
             let path = freeform.clone().filter(|_| kind == ShapeKind::Freeform);
             Some(Inline::Shape { kind, w: w * sx, h: h * sy, float: kept_float(float), blocks, look, path })
