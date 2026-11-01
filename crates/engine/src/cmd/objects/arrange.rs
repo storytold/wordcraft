@@ -18,8 +18,9 @@ pub(super) fn bounds(s: &mut Session, v: &Value) -> CmdResult {
     }
     let (w0, h0) = obj_size(&obj);
     let min = min_size(&obj);
-    let w = p::f32(v, "width").unwrap_or(w0).clamp(min, MAX_OFFSET);
-    let h = p::f32(v, "height").unwrap_or(h0).clamp(min, MAX_OFFSET);
+    // A size not given stays as it is: a move must not give a level line (0 high) a height.
+    let w = p::f32(v, "width").map_or(w0, |w| w.clamp(min, MAX_OFFSET));
+    let h = p::f32(v, "height").map_or(h0, |h| h.clamp(min, MAX_OFFSET));
     if (w, h) != (w0, h0) {
         with_obj(s, |o| o.set_size(w, h))?;
     }
