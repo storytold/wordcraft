@@ -243,6 +243,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 | 2026-10-28 | Markdown import bounds nested undefined reference-label work within the existing link allowance; literal source and normal reference matching are preserved (#4658). |
 | 2026-10-23 | A command that changes nothing is not an edit: it adds no undo step, marks no unsaved changes and forces no relayout, so the redo stack survives it and five hundred of them can no longer push the user's own edits out of the undo history. |
 | 2026-10-23 | Interface translations come from storytold/craft-i18n, shared with the other Crafting Apps: the catalogs are embedded at build time from the commit in `craft-i18n.rev` and looked up through craft-libs' `craft-i18n` crate; `crates/ui-egui/src/i18n/*.tsv` are gone (translations now go to craft-i18n). Strings other apps already translate show translated; a build without `CRAFT_I18N_DIR` is English only |
+| 2026-10-25 | Slovak joins the interface choices with a craft-i18n catalog: `sk`/`sk-SK` system locales and saved preferences select it; the Numerals picker uses its contextual labels. The 2,849 WordCraft translations remain an AI-assisted draft pending native-speaker and running-app review. |
 | 2026-10-25 | #4085 mark review: whole-cell and ordinary highlight targets include their selected paragraph marks; empty, inherited and partial-column controls added. |
 | 2026-10-25 | #4085 review: highlight toggling checks the full target with constant resolved-run storage; a different colour after 10,000 runs prevents clearing. |
 | 2026-10-24 | #4085: Ctrl+Alt+H toggles the last chosen highlight colour; explicit colour setters remain idempotent. Mixed, inherited and pending formatting and Undo/Redo covered by command/key regressions. |
@@ -722,6 +723,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-22 | trivial | Progress log: several open documents in the desktop window |
 | 2026-10-22 | trivial | Progress log: several open documents in one session |
 | 2026-10-25 | trivial | Progress log: egui 0.37 migration records the `craft-i18n.rev` catalog pin (9205108…; 27 languages) and the input-method handling; managed CI passed; native acceptance and native-speaker review remain open |
+| 2026-10-26 | trivial | Progress log: Slovak interface from craft-i18n, locale and saved-preference tests, contextual Numerals labels; review pending |
 | 2026-10-17 | trivial | Progress log: Standard-encrypted (AES) Word files open (gap 9) |
 | 2026-10-25 | trivial | Progress log: Text Highlight Color buttons show the remembered colour, or no colour bar after No Color (#4087) |
 | 2026-10-23 | minor | A command that changes nothing is not an edit: no undo step, no unsaved changes, no relayout, and the redo stack survives it. |
