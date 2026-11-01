@@ -287,6 +287,10 @@ pub(super) struct Body<'a> {
     frame_box: Option<Vec<FBlock>>,
     /// The look of the frame being read, should it hold a text box.
     frame_look: model::BoxLook,
+    /// The kind of the drawing shape being read (its text is read as a text box's).
+    shape_kind: Option<wordcraft_doc::para::ShapeKind>,
+    /// The depth of the `draw:g` group being read: its shapes are placed by it, not anchored.
+    group_at: Option<usize>,
     /// The note or comment being read.
     note: Option<OpenNote>,
     /// The list being read (its flow number, [`ListInfo::list`]), the last one, the next number,
@@ -400,6 +404,8 @@ impl<'a> Body<'a> {
             frame_float: None,
             frame_box: None,
             frame_look: model::BoxLook::default(),
+            shape_kind: None,
+            group_at: None,
             note: None,
             comment_names: HashMap::new(),
             next_comment: 0,
@@ -790,6 +796,14 @@ impl Body<'_> {
         if self.tracked_context(q, a) {
             return;
         }
+        // A custom shape's geometry: its kind. Its formulas and handles aren't read.
+        if q == "draw:enhanced-geometry" && self.shape_kind.is_some() {
+            if let Some(t) = get(a, "draw:type") {
+                self.shape_kind = Some(super::shapes::kind_of(t));
+            }
+            self.skip = 1;
+            return;
+        }
         if self.start_inline(q, a) || self.start_note_part(q, a) || self.start_list_part(q, a) {
             return;
         }
@@ -823,8 +837,20 @@ impl Body<'_> {
             | "table-of-content-source" => {
                 self.skip = 1;
             }
-            // Drawing shapes (ODF 1.3 §10.3), with their text, until shapes are read (#1654).
-            // Groups are walked, so the pictures in them still are.
+            // Drawing shapes (ODF 1.3 §10.3) anchored in the text, with their text.
+            "rect" | "ellipse" | "line" | "custom-shape"
+                if q.starts_with("draw:")
+                    && self.group_at.is_none()
+                    && self.frame.is_none()
+                    && self.note.is_none()
+                    && self.del.is_none()
+                    && !self.in_tc =>
+            {
+                self.start_shape(q, a);
+            }
+            "g" if q == "draw:g" && self.group_at.is_none() => self.group_at = Some(self.depth),
+            // Other shapes, and shapes in groups, are left out, with their text. Groups are
+            // walked, so the pictures in them are still read.
             "rect" | "line" | "polyline" | "polygon" | "regular-polygon" | "path" | "circle" | "ellipse" | "connector" | "caption" | "measure"
             | "custom-shape"
                 if q.starts_with("draw:") =>
@@ -1352,6 +1378,11 @@ impl Body<'_> {
             if q == "text:note" || q == "office:annotation" || q == "draw:text-box" {
                 return true;
             }
+            if self.shape_kind.is_some() && super::shapes::is_shape(q) {
+                // A drawing shape's own end: it goes into the paragraph, its text read.
+                self.end_frame();
+                return true;
+            }
         }
         // Everything inside a field was its text: only the field's own end does anything. An
         // outer element ending first (malformed) ends the field, then itself.
@@ -1377,6 +1408,55 @@ impl Body<'_> {
             p.inlines.push(Inline::Field { instr, result: result.trim().to_string(), fmt });
         }
         self.xml_space_end = false;
+    }
+
+    /// End a frame or drawing shape: its picture, equation, text box or shape goes into the
+    /// paragraph.
+    fn end_frame(&mut self) {
+        if let Some((w, h, img, alt, eq)) = self.frame.take() {
+            let boxed = self.frame_box.take();
+            let float = self.frame_float.take().filter(|f| f.wrap != wordcraft_doc::para::Wrap::Inline);
+            let inline = match (boxed, eq) {
+                (Some(blocks), _) => {
+                    let look = std::mem::take(&mut self.frame_look);
+                    // Without a height it grows from nothing to its text.
+                    let kind = self.shape_kind.take().unwrap_or(wordcraft_doc::para::ShapeKind::TextBox);
+                    Some(Inline::Shape { kind, w: w.unwrap_or(72.0), h: h.unwrap_or(1.0), float: float.map(Box::new), blocks, look })
+                }
+                (None, Some((linear, display))) => Some(Inline::Equation { linear, display }),
+                (None, None) => img.and_then(|data| make_img(data, w, h, alt.trim())).map(|mut img| {
+                    img.float = float.map(Box::new);
+                    Inline::Image(img)
+                }),
+            };
+            if let Some(inline) = inline {
+                if self.para.is_none() {
+                    self.start_para(None, None);
+                }
+                if let Some(p) = &mut self.para {
+                    p.inlines.push(inline);
+                }
+            }
+        }
+        self.frame = None;
+    }
+
+    /// Begin a drawing shape (ODF 1.3 §10.3): its size, placement and look, and its text read
+    /// as a text box's. A custom shape's kind comes from its geometry, read inside it.
+    fn start_shape(&mut self, q: &str, a: &Attrs) {
+        let kind = super::shapes::element_kind(local(q));
+        let g = self.styles.shape_graphic(get(a, "draw:style-name"));
+        let (w, h, x, y, rising) = super::shapes::geometry(kind, a);
+        let at = |v: Option<f32>| v.map(super::writer::pt);
+        let mut float = super::frames::float_of(get(a, "text:anchor-type"), at(x).as_deref(), at(y).as_deref(), &g);
+        float.flip_v = rising;
+        self.frame_look = g.shape_look(kind);
+        self.shape_kind = Some(kind);
+        let frame = (Some((Some(w), Some(h), None, String::new(), None)), Some(float), std::mem::take(&mut self.frame_look));
+        self.start_note(a);
+        if let Some(n) = &mut self.note {
+            n.text_box = Some(frame);
+        }
     }
 
     fn end(&mut self, q: &str) {
@@ -1501,33 +1581,8 @@ impl Body<'_> {
                 let next = SectionProps { start: SectionStart::Continuous, page_num_start: None, ..self.page.clone() };
                 self.break_section(next);
             }
-            "frame" => {
-                if let Some((w, h, img, alt, eq)) = self.frame.take() {
-                    let boxed = self.frame_box.take();
-                    let float = self.frame_float.take().filter(|f| f.wrap != wordcraft_doc::para::Wrap::Inline);
-                    let inline = match (boxed, eq) {
-                        (Some(blocks), _) => {
-                            let look = std::mem::take(&mut self.frame_look);
-                            // Without a height it grows from nothing to its text.
-                            Some(Inline::TextBox { w: w.unwrap_or(72.0), h: h.unwrap_or(1.0), float: float.map(Box::new), blocks, look })
-                        }
-                        (None, Some((linear, display))) => Some(Inline::Equation { linear, display }),
-                        (None, None) => img.and_then(|data| make_img(data, w, h, alt.trim())).map(|mut img| {
-                            img.float = float.map(Box::new);
-                            Inline::Image(img)
-                        }),
-                    };
-                    if let Some(inline) = inline {
-                        if self.para.is_none() {
-                            self.start_para(None, None);
-                        }
-                        if let Some(p) = &mut self.para {
-                            p.inlines.push(inline);
-                        }
-                    }
-                }
-                self.frame = None;
-            }
+            "frame" => self.end_frame(),
+            "g" if self.group_at == Some(self.depth + 1) => self.group_at = None,
             _ => {}
         }
     }

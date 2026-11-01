@@ -198,9 +198,11 @@ pub enum Inline {
     },
     /// Where comment `id`'s range ends.
     CommentEnd(u32),
-    /// A text box: its size in points, its placement when it floats, and its content. Only flows
-    /// asked for text boxes ([`FlowOpts::boxes`]) hold them.
-    TextBox {
+    /// A drawing shape or text box: its kind, its size in points, its placement when it floats,
+    /// its text (none for a shape without), and its look. Only flows asked for them
+    /// ([`FlowOpts::boxes`]) hold them.
+    Shape {
+        kind: wordcraft_doc::para::ShapeKind,
         w: f32,
         h: f32,
         float: Option<Box<wordcraft_doc::para::Float>>,
@@ -209,8 +211,8 @@ pub enum Inline {
     },
 }
 
-/// How a text box looks: its fill, its outline, its inner margins, and whether it grows to fit
-/// its text.
+/// How a text box or shape looks: its fill, its outline, its inner margins, and whether it
+/// grows to fit its text.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BoxLook {
     /// Fill colour; `None` is no fill.
@@ -276,7 +278,7 @@ pub struct FlowOpts {
     pub notes: bool,
     /// Comments as [`Inline::Comment`] and [`Inline::CommentEnd`] (otherwise left out).
     pub comments: bool,
-    /// Text boxes as [`Inline::TextBox`] (otherwise left out).
+    /// Text boxes and drawing shapes as [`Inline::Shape`] (otherwise left out).
     pub boxes: bool,
     /// Character formatting beyond the [`Fmt`] fields ([`Fmt::extra`]), hidden text kept (as
     /// hidden), and a monospaced font by its name rather than as code.
@@ -533,7 +535,7 @@ impl Para {
                 | Inline::Note { .. }
                 | Inline::Comment { .. }
                 | Inline::CommentEnd(_)
-                | Inline::TextBox { .. } => {}
+                | Inline::Shape { .. } => {}
             }
         }
         s
@@ -555,7 +557,7 @@ impl Para {
                 | Inline::Note { .. }
                 | Inline::Comment { .. }
                 | Inline::CommentEnd(_)
-                | Inline::TextBox { .. } => {}
+                | Inline::Shape { .. } => {}
             }
         }
         s

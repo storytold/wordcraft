@@ -7,7 +7,7 @@ use super::styles::parse_border;
 use super::writer::pt;
 use super::xml::{Attrs, get, length};
 use crate::model::{BoxLook, parse_color};
-use wordcraft_doc::para::{Anchor, Float, FloatAlign, Wrap, WrapText};
+use wordcraft_doc::para::{Anchor, Float, FloatAlign, ShapeKind, Wrap, WrapText};
 use wordcraft_doc::props::BorderStyle;
 use wordcraft_doc::props::Rgb;
 
@@ -30,10 +30,27 @@ pub(super) struct Graphic {
     line: Option<Option<(Rgb, f32)>>,
     /// `fo:padding-left`, `-top`, `-right`, `-bottom` (or `fo:padding` for each).
     padding: [Option<f32>; 4],
-    /// Its fill (`draw:fill` and `draw:fill-color`, or `fo:background-color`), or `Some(None)`
-    /// for none.
-    fill: Option<Option<Rgb>>,
+    /// Its fill style (`draw:fill`: none, solid, gradient, hatch, bitmap) and colour
+    /// (`draw:fill-color`), and its background (`fo:background-color`, `Some(None)` when
+    /// transparent).
+    fill: Option<String>,
+    fill_color: Option<Rgb>,
+    background: Option<Option<Rgb>>,
+    /// A drawing shape's line: its style (`draw:stroke`: none, solid, dash), colour and width.
+    stroke: Option<String>,
+    stroke_color: Option<Rgb>,
+    stroke_width: Option<f32>,
+    /// A shape grows to fit its text (`draw:auto-grow-height`).
+    grow: Option<bool>,
 }
+
+/// The colour LibreOffice draws a shape's line in when its styles give none (#3465a4), and fills
+/// it with (#729fcf); its default graphic style states them too.
+const SHAPE_LINE: Rgb = Rgb(0x34, 0x65, 0xa4);
+const SHAPE_FILL: Rgb = Rgb(0x72, 0x9f, 0xcf);
+
+/// The width a hairline (`svg:stroke-width` 0, or none stated) is drawn at, points.
+const HAIRLINE: f32 = 0.5;
 
 impl Graphic {
     /// A `style:graphic-properties` element.
@@ -54,7 +71,13 @@ impl Graphic {
                 .and_then(parse_border)
                 .map(|b| (b.style != BorderStyle::None && b.width > 0.0).then(|| (b.color.unwrap_or(Rgb::BLACK), b.width.clamp(0.0, 12.0)))),
             padding: ["left", "top", "right", "bottom"].map(|side| m(&format!("fo:padding-{side}")).or_else(|| m("fo:padding"))),
-            fill: read_fill(a),
+            fill: s("draw:fill"),
+            fill_color: get(a, "draw:fill-color").and_then(parse_color),
+            background: get(a, "fo:background-color").map(|v| parse_color(v).filter(|_| !v.trim().eq_ignore_ascii_case("transparent"))),
+            stroke: s("draw:stroke"),
+            stroke_color: get(a, "svg:stroke-color").and_then(parse_color),
+            grow: get(a, "draw:auto-grow-height").map(|v| v.trim() == "true"),
+            stroke_width: get(a, "svg:stroke-width").and_then(length).filter(|v| v.is_finite()).map(|v| v.clamp(0.0, 12.0)),
         }
     }
 
@@ -78,27 +101,50 @@ impl Graphic {
             *m = m.or(p);
         }
         self.line = self.line.or(parent.line);
-        self.fill = self.fill.or(parent.fill);
+        fill(&mut self.fill, &parent.fill);
+        self.fill_color = self.fill_color.or(parent.fill_color);
+        self.background = self.background.or(parent.background);
+        fill(&mut self.stroke, &parent.stroke);
+        self.stroke_color = self.stroke_color.or(parent.stroke_color);
+        self.stroke_width = self.stroke_width.or(parent.stroke_width);
+        self.grow = self.grow.or(parent.grow);
         self
+    }
+
+    /// The fill a style of `draw:fill` `kind` gives, `default` when it states none: `None` is
+    /// no fill; a gradient, hatch or bitmap stands as its colour.
+    fn fill_with(&self, default: Option<&str>) -> Option<Rgb> {
+        let color = self.fill_color.or(self.background.flatten());
+        match self.fill.as_deref().or(default) {
+            Some("none") => None,
+            Some("solid") => color,
+            Some(_) => color.or(Some(Rgb::WHITE)),
+            None => self.background.flatten(),
+        }
+    }
+
+    /// The look of drawing shape `kind` in this style: LibreOffice's solid fill and hairline in
+    /// its default colours where the styles say nothing; a line has no fill.
+    pub(super) fn shape_look(&self, kind: ShapeKind) -> BoxLook {
+        let fill = if kind == ShapeKind::Line {
+            None
+        } else {
+            let mut g = self.clone();
+            g.fill_color = g.fill_color.or(Some(SHAPE_FILL));
+            g.fill_with(Some("solid"))
+        };
+        let line = match self.stroke.as_deref() {
+            Some("none") => None,
+            _ => Some((self.stroke_color.unwrap_or(SHAPE_LINE), self.stroke_width.filter(|w| *w > 0.0).unwrap_or(HAIRLINE))),
+        };
+        // Only a shape that says it grows to its text does: WordCraft's fit shrinks it too.
+        BoxLook { fill, line, inset: Some(self.padding.map(|p| p.unwrap_or(0.0))), auto_fit: self.grow == Some(true) }
     }
 
     /// The look of a text box in a frame of this style, growing to its text when `auto_fit`.
     /// What the styles leave unsaid is ODF's default: no line, no fill, no padding.
     pub(super) fn look(&self, auto_fit: bool) -> BoxLook {
-        BoxLook { fill: self.fill.flatten(), line: self.line.flatten(), inset: Some(self.padding.map(|p| p.unwrap_or(0.0))), auto_fit }
-    }
-}
-
-/// A graphic style's fill (ODF 1.3 §20.80 `draw:fill`, §20.82 `draw:fill-color`, §20.175
-/// `fo:background-color`): `Some(None)` for none, a gradient, hatch or bitmap fill as its colour.
-fn read_fill(a: &Attrs) -> Option<Option<Rgb>> {
-    let color = get(a, "draw:fill-color").and_then(parse_color);
-    let background = get(a, "fo:background-color").map(|v| parse_color(v).filter(|_| !v.trim().eq_ignore_ascii_case("transparent")));
-    match get(a, "draw:fill").map(str::trim) {
-        Some("none") => Some(None),
-        Some("solid") => Some(color.or(background.flatten())),
-        Some(_) => Some(color.or(background.flatten()).or(Some(Rgb::WHITE))),
-        None => background,
+        BoxLook { fill: self.fill_with(None), line: self.line.flatten(), inset: Some(self.padding.map(|p| p.unwrap_or(0.0))), auto_fit }
     }
 }
 

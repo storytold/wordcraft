@@ -227,7 +227,8 @@ fn common_paragraph_styles_give_text_formatting() {
 #[test]
 fn text_after_a_drawing_shape_stays_in_its_paragraph() {
     // #1654: a shape's own text:p closed the paragraph it is anchored in, and the text after
-    // the shape was dropped. Shapes are skipped like text boxes; the paragraph keeps its text.
+    // the shape was dropped. A shape's text is its own (`odt/tests_more/shapes.rs`); the
+    // paragraph keeps its text.
     let draw =
         r#"xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0""#;
     let content = format!(

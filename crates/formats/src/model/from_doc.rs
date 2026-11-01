@@ -278,20 +278,27 @@ fn rich_inlines(doc: &Document, o: &InlineObject, f: &Fmt, opts: FlowOpts) -> Op
             }
         }
         // A text box's content, without notes, comments or boxes of its own.
-        InlineObject::Shape { kind: wordcraft_doc::para::ShapeKind::TextBox, w, h, float, story: Some(id), fill, stroke, stroke_width, .. }
-            if opts.boxes =>
+        // A drawing shape or text box, with its text but without notes, comments or boxes of its own. A
+        // freeform's paths have no ODF shape here; a connector is a straight line.
+        InlineObject::Shape { kind, w, h, float, story, fill, stroke, stroke_width, .. }
+            if opts.boxes && *kind != wordcraft_doc::para::ShapeKind::Freeform =>
         {
+            use wordcraft_doc::para::ShapeKind;
+            let kind = match kind {
+                ShapeKind::StraightConnector | ShapeKind::ElbowConnector | ShapeKind::CurvedConnector => ShapeKind::Line,
+                k => *k,
+            };
             let inner = FlowOpts { notes: false, comments: false, boxes: false, ..opts };
-            let part = doc.parts.get(id);
+            let part = story.and_then(|id| doc.parts.get(&id));
             let blocks = part.map(|p| flow_blocks(doc, &p.blocks, 0, inner)).unwrap_or_default();
             let float = (float.wrap != wordcraft_doc::para::Wrap::Inline).then(|| Box::new(float.clone()));
             let look = BoxLook {
-                fill: fill.as_ref().map(wordcraft_doc::fill::Fill::main_color),
+                fill: fill.as_ref().filter(|_| kind != ShapeKind::Line).map(wordcraft_doc::fill::Fill::main_color),
                 line: stroke.filter(|_| stroke_width.is_finite() && *stroke_width > 0.0).map(|c| (c, stroke_width.min(12.0))),
                 inset: part.and_then(|p| p.body.inset.is_some().then(|| p.body.insets_pt())),
                 auto_fit: part.is_some_and(|p| p.body.auto_fit),
             };
-            vec![Inline::TextBox { w: *w, h: *h, float, blocks, look }]
+            vec![Inline::Shape { kind, w: *w, h: *h, float, blocks, look }]
         }
         InlineObject::Field { instr, result, .. } if opts.fields => {
             vec![Inline::Field { instr: instr.clone(), result: result.clone(), fmt: f.clone() }]

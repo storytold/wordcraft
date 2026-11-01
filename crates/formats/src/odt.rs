@@ -44,6 +44,7 @@ mod frames;
 mod import;
 mod limits;
 mod package;
+mod shapes;
 mod styles;
 mod writer;
 mod xml;

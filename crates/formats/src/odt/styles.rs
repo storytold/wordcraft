@@ -744,6 +744,8 @@ pub(super) struct Styles {
     /// Pair kerning of `style:default-style` for paragraphs (`style:letter-kerning`, §20.317;
     /// off unless it says so).
     pub(super) default_kern: bool,
+    /// `style:default-style` for graphics: what every drawing shape's style falls back on.
+    default_graphic: super::frames::Graphic,
 }
 
 impl Styles {
@@ -751,6 +753,7 @@ impl Styles {
         let mut in_auto = false;
         let mut cur: Option<(String, StyleInfo)> = None;
         let mut in_default = false;
+        let mut in_graphic_default = false;
         let mut list: Option<(String, Vec<ListLevel>)> = None;
         // The list or outline level being read.
         let mut level_at: Option<usize> = None;
@@ -773,7 +776,11 @@ impl Styles {
                         cur = Some((name.to_string(), info));
                     }
                 }
-                "default-style" if q.starts_with("style:") => in_default = get(&a, "style:family") == Some("paragraph"),
+                "default-style" if q.starts_with("style:") => {
+                    in_default = get(&a, "style:family") == Some("paragraph");
+                    in_graphic_default = get(&a, "style:family") == Some("graphic");
+                }
+                "graphic-properties" if in_graphic_default && cur.is_none() => self.default_graphic = super::frames::Graphic::read(&a),
                 "text-properties" if in_default && cur.is_none() => {
                     self.default_font = default_font(&a, &self.faces);
                     self.default_kern = get(&a, "style:letter-kerning").is_some_and(|k| k.trim() == "true");
@@ -830,7 +837,7 @@ impl Styles {
             },
             Ev::End(q) => match local(&q) {
                 "automatic-styles" => in_auto = false,
-                "default-style" if q.starts_with("style:") => in_default = false,
+                "default-style" if q.starts_with("style:") => (in_default, in_graphic_default) = (false, false),
                 "style" if q.starts_with("style:") => {
                     if let Some((n, s)) = cur.take()
                         && self.map.len() < 100_000
@@ -979,6 +986,12 @@ impl Styles {
     /// A graphic style's frame placement (whole chain).
     pub(super) fn graphic(&self, name: &str) -> super::frames::Graphic {
         self.chain(name).iter().filter_map(|(_, s)| s.graphic.as_ref()).fold(super::frames::Graphic::default(), |g, p| g.or(p))
+    }
+
+    /// The graphic properties of drawing shape style `name` (none stated: the default style's),
+    /// over its chain and then the default graphic style.
+    pub(super) fn shape_graphic(&self, name: Option<&str>) -> super::frames::Graphic {
+        name.map(|n| self.graphic(n)).unwrap_or_default().or(&self.default_graphic)
     }
 
     /// Vertical alignment of a table-cell style (whole chain).

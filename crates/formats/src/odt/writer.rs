@@ -442,6 +442,47 @@ fn box_look_attrs(look: &model::BoxLook) -> String {
     a
 }
 
+/// How a frame or shape is anchored and placed: its `text:anchor-type`, its graphic style's
+/// placement and its `svg:x`/`svg:y`; in line with the text when it doesn't float.
+fn placement(float: Option<&wordcraft_doc::para::Float>) -> (&'static str, String, String) {
+    match float {
+        Some(f) => super::frames::frame_of(f),
+        None => ("as-char", " style:vertical-pos=\"top\" style:vertical-rel=\"baseline\"".to_string(), String::new()),
+    }
+}
+
+/// A drawing shape's graphic properties for `look`: its line (§20.167 `draw:stroke`,
+/// `svg:stroke-color`, `svg:stroke-width`), fill (§20.118 `draw:fill`, `draw:fill-color`),
+/// whether it grows to its text (§20.105 `draw:auto-grow-height`) and the padding around its
+/// text.
+fn shape_look_attrs(look: &model::BoxLook) -> String {
+    let hex = |c: Rgb| format!("#{}", c.hex().to_ascii_lowercase());
+    let mut a = match look.line {
+        Some((c, w)) if w.is_finite() && w > 0.0 => {
+            format!(" draw:stroke=\"solid\" svg:stroke-color=\"{}\" svg:stroke-width=\"{}\"", hex(c), pt(w.min(12.0)))
+        }
+        _ => " draw:stroke=\"none\"".to_string(),
+    };
+    match look.fill {
+        Some(c) => a.push_str(&format!(" draw:fill=\"solid\" draw:fill-color=\"{}\"", hex(c))),
+        None => a.push_str(" draw:fill=\"none\""),
+    }
+    // Its size is its own unless it resizes to fit its text (LibreOffice otherwise grows and
+    // shrinks a shape with text to it).
+    a.push_str(&format!(" draw:auto-grow-height=\"{}\" draw:auto-grow-width=\"false\"", look.auto_fit));
+    if let Some(inset) = look.inset {
+        let [l, t, r, b] = inset.map(|v| if v.is_finite() { v.clamp(0.0, 1584.0) } else { 0.0 });
+        a.push_str(&format!(
+            " fo:padding-left=\"{}\" fo:padding-top=\"{}\" fo:padding-right=\"{}\" fo:padding-bottom=\"{}\"",
+            pt(l),
+            pt(t),
+            pt(r),
+            pt(b)
+        ));
+    }
+    a
+}
+
 /// A text box's default inner margins (left, top, right, bottom), points: WordCraft's and
 /// Word's (0.1" and 0.05").
 const DEFAULT_BOX_INSET: [f32; 4] = [7.2, 3.6, 7.2, 3.6];
@@ -838,8 +879,12 @@ impl Writer {
                     self.comment(*id, comment, out);
                     prev_space = false;
                 }
-                Inline::TextBox { w, h, float, blocks, look } => {
-                    self.text_box((*w, *h), float.as_deref(), look, blocks, out);
+                Inline::Shape { kind, w, h, float, blocks, look } => {
+                    if *kind == wordcraft_doc::para::ShapeKind::TextBox {
+                        self.text_box((*w, *h), float.as_deref(), look, blocks, out);
+                    } else {
+                        self.shape(*kind, (*w, *h), float.as_deref(), look, blocks, out);
+                    }
                     prev_space = false;
                 }
                 Inline::CommentEnd(id) => out.push_str(&format!("<office:annotation-end office:name=\"{}\"/>", annotation_name(self.prefix, *id))),
@@ -909,16 +954,9 @@ impl Writer {
         let reopen = self.open_ins.as_ref().map(|(m, _)| m.clone());
         self.close_ins(out);
         let frame = box_look_attrs(look);
-        let (anchor, props, xy) = match float {
-            Some(f) => super::frames::frame_of(f),
-            None => ("as-char", " style:vertical-pos=\"top\" style:vertical-rel=\"baseline\"".to_string(), String::new()),
-        };
+        let (anchor, props, xy) = placement(float);
         let style = self.graphic_style(format!("{props}{frame}"));
-        let saved = (std::mem::take(&mut self.cur_style), std::mem::take(&mut self.chain), self.part, self.note_parent.take());
-        let mut body = String::new();
-        self.blocks(blocks, &mut body, 1);
-        self.close_ins(&mut body);
-        (self.cur_style, self.chain, self.part, self.note_parent) = saved;
+        let mut body = self.story(blocks);
         if body.is_empty() {
             body.push_str("<text:p/>");
         }
@@ -939,6 +977,61 @@ impl Writer {
         if let Some(m) = reopen {
             self.open_ins(&m, out);
         }
+    }
+
+    /// A drawing shape (ODF 1.3 §10.3) of `size` (points): a rectangle, ellipse or line, or a
+    /// custom shape of a predefined geometry, in line with the text or anchored and placed as it
+    /// floats, with its fill, line and text.
+    fn shape(
+        &mut self,
+        kind: wordcraft_doc::para::ShapeKind,
+        size: (f32, f32),
+        float: Option<&wordcraft_doc::para::Float>,
+        look: &model::BoxLook,
+        blocks: &[FBlock],
+        out: &mut String,
+    ) {
+        let reopen = self.open_ins.as_ref().map(|(m, _)| m.clone());
+        self.close_ins(out);
+        let (anchor, props, xy) = placement(float);
+        let style = self.graphic_style(format!("{props}{}", shape_look_attrs(look)));
+        let body = self.story(blocks);
+        self.boxes += 1;
+        let (element, geometry) = super::shapes::element_of(kind);
+        let len = |v: f32, least: f32| if v.is_finite() { v.clamp(least, 1584.0) } else { 72.0 };
+        let at = if element == "draw:line" {
+            {
+                // A line by its ends: from its box's top left to its bottom right, or bottom left
+                // to top right when it rises.
+                let (w, h) = (len(size.0, 0.0), len(size.1, 0.0));
+                let off = |v: f32, aligned: bool| if aligned || !v.is_finite() { 0.0 } else { v.clamp(-1584.0, 1584.0) };
+                let (x, y) = float.map_or((0.0, 0.0), |f| (off(f.x, f.h_align.is_some()), off(f.y, f.v_align.is_some())));
+                let rises = float.is_some_and(|f| f.flip_v != f.flip_h);
+                let (y1, y2) = if rises { (y + h, y) } else { (y, y + h) };
+                format!(" svg:x1=\"{}\" svg:y1=\"{}\" svg:x2=\"{}\" svg:y2=\"{}\"", pt(x), pt(y1), pt(x + w), pt(y2))
+            }
+        } else {
+            format!(" svg:width=\"{}\" svg:height=\"{}\"{xy}", pt(len(size.0, 1.0)), pt(len(size.1, 1.0)))
+        };
+        let geometry = geometry.map(|t| format!("<draw:enhanced-geometry svg:viewBox=\"0 0 21600 21600\" draw:type=\"{t}\"/>")).unwrap_or_default();
+        out.push_str(&format!(
+            "<{element} draw:name=\"{}Shape{}\" draw:style-name=\"{style}\" text:anchor-type=\"{anchor}\"{at} draw:z-index=\"0\">{body}{geometry}</{element}>",
+            self.prefix, self.boxes,
+        ));
+        if let Some(m) = reopen {
+            self.open_ins(&m, out);
+        }
+    }
+
+    /// The paragraphs of a text box's or shape's text, written apart from the paragraph being
+    /// written.
+    fn story(&mut self, blocks: &[FBlock]) -> String {
+        let saved = (std::mem::take(&mut self.cur_style), std::mem::take(&mut self.chain), self.part, self.note_parent.take());
+        let mut body = String::new();
+        self.blocks(blocks, &mut body, 1);
+        self.close_ins(&mut body);
+        (self.cur_style, self.chain, self.part, self.note_parent) = saved;
+        body
     }
 
     /// A footnote or endnote (ODF 1.3 §6.3): its citation (the number LibreOffice shows until it

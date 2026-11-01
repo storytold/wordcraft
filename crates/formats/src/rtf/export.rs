@@ -405,7 +405,7 @@ impl Writer {
                 | Inline::Note { .. }
                 | Inline::Comment { .. }
                 | Inline::CommentEnd(_)
-                | Inline::TextBox { .. } => {}
+                | Inline::Shape { .. } => {}
             }
         }
     }

@@ -15,6 +15,7 @@ mod outline;
 mod para_borders;
 mod rtl;
 mod settings;
+mod shapes;
 mod spacing;
 mod style_look;
 mod tables;
