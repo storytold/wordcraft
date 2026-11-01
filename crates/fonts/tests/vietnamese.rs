@@ -5,6 +5,7 @@
 //! Independent of legacy 8-bit encodings (TCVN3/VNI), which are transcoded before text reaches
 //! the shaper.
 
+use kurbo::Shape;
 use unicode_normalization::UnicodeNormalization;
 use wordcraft_fonts::{FontDb, shape};
 
@@ -31,6 +32,8 @@ fn precomposed_latin_extended_additional_shapes_as_one_glyph() {
     let db = FontDb::global();
     for &family in BUNDLED_FAMILIES {
         let face = db.face(family, "Regular");
+        assert_eq!(&face.family, family, "FontDb fell back to a different face for {family}");
+
         // Latin Extended Additional block (U+1EA0..=U+1EF9 contains almost all Vietnamese accented letters)
         for cp in 0x1EA0u32..=0x1EF9 {
             let Some(ch) = char::from_u32(cp) else { continue };
@@ -63,6 +66,8 @@ fn nfc_nfd_equivalence_across_bundled_fonts() {
     let db = FontDb::global();
     for &family in BUNDLED_FAMILIES {
         let face = db.face(family, "Regular");
+        assert_eq!(&face.family, family, "FontDb fell back to a different face for {family}");
+
         for &vowel in VOWELS {
             for &tone in TONES_NFD {
                 let nfd = format!("{vowel}{tone}");
@@ -72,12 +77,15 @@ fn nfc_nfd_equivalence_across_bundled_fonts() {
 
                 let gids_nfd: Vec<u32> = glyphs_nfd.iter().map(|g| g.gid).collect();
                 let gids_nfc: Vec<u32> = glyphs_nfc.iter().map(|g| g.gid).collect();
-
                 assert_eq!(gids_nfd, gids_nfc, "{family}: NFD {nfd:?} vs NFC {nfc:?} produced different glyph IDs: {gids_nfd:?} vs {gids_nfc:?}");
 
-                let total_adv_nfd: i32 = glyphs_nfd.iter().map(|g| g.x_advance).sum();
-                let total_adv_nfc: i32 = glyphs_nfc.iter().map(|g| g.x_advance).sum();
-                assert_eq!(total_adv_nfd, total_adv_nfc, "{family}: NFD {nfd:?} vs NFC {nfc:?} advance mismatch: {total_adv_nfd} vs {total_adv_nfc}");
+                let advs_nfd: Vec<i32> = glyphs_nfd.iter().map(|g| g.x_advance).collect();
+                let advs_nfc: Vec<i32> = glyphs_nfc.iter().map(|g| g.x_advance).collect();
+                assert_eq!(advs_nfd, advs_nfc, "{family}: per-glyph advance mismatch between NFD {nfd:?} and NFC {nfc:?}");
+
+                let offsets_nfd: Vec<(i32, i32)> = glyphs_nfd.iter().map(|g| (g.x_offset, g.y_offset)).collect();
+                let offsets_nfc: Vec<(i32, i32)> = glyphs_nfc.iter().map(|g| (g.x_offset, g.y_offset)).collect();
+                assert_eq!(offsets_nfd, offsets_nfc, "{family}: per-glyph offset mismatch between NFD {nfd:?} and NFC {nfc:?}");
             }
         }
     }
@@ -96,6 +104,8 @@ fn double_diacritics_stacking_without_precomposed_base() {
     let db = FontDb::global();
     for &family in BUNDLED_FAMILIES {
         let face = db.face(family, "Regular");
+        assert_eq!(&face.family, family, "FontDb fell back to a different face for {family}");
+
         let glyphs = shape(&face, text, &[], |c| c);
 
         // Expect: base glyph + at least one mark glyph
@@ -114,10 +124,22 @@ fn double_diacritics_stacking_without_precomposed_base() {
         if marks.len() == 1 {
             // ccmp ligature: the font composed the two marks into a single combined accent glyph.
             assert_ne!(marks[0].gid, 0);
+            let outline = face.glyph_outline(marks[0].gid);
+            assert!(!outline.elements().is_empty(), "{family}: ccmp ligature outline is empty");
         } else {
-            // Separate marks: GPOS mkmk must lift the second mark above the first (y_offset > 0).
-            let lifted = marks.iter().any(|g| g.y_offset > 0);
-            assert!(lifted, "{family}: separate marks must use mkmk to lift the upper mark (y_offset > 0); marks: {marks:?}");
+            // Separate marks: GPOS mkmk must lift the second mark above the first.
+            let outline0 = face.glyph_outline(marks[0].gid);
+            let outline1 = face.glyph_outline(marks[1].gid);
+            let bbox0 = outline0.bounding_box();
+            let bbox1 = outline1.bounding_box();
+
+            let top0 = bbox0.y1 + marks[0].y_offset as f64;
+            let bottom0 = bbox0.y0 + marks[0].y_offset as f64;
+            let top1 = bbox1.y1 + marks[1].y_offset as f64;
+            let bottom1 = bbox1.y0 + marks[1].y_offset as f64;
+
+            assert!(top1 > top0, "{family}: upper mark top ({top1}) should be strictly above lower mark top ({top0})");
+            assert!(bottom1 > bottom0, "{family}: upper mark bottom ({bottom1}) should be strictly above lower mark bottom ({bottom0})");
         }
     }
 }
@@ -133,6 +155,8 @@ fn vietnamese_phrases_shaping_consistency() {
     let db = FontDb::global();
     for &family in BUNDLED_FAMILIES {
         let face = db.face(family, "Regular");
+        assert_eq!(&face.family, family, "FontDb fell back to a different face for {family}");
+
         for phrase in phrases {
             let nfc_text: String = phrase.nfc().collect();
             let nfd_text: String = phrase.nfd().collect();
@@ -147,9 +171,13 @@ fn vietnamese_phrases_shaping_consistency() {
             let gids_nfd: Vec<u32> = glyphs_nfd.iter().map(|g| g.gid).collect();
             assert_eq!(gids_nfc, gids_nfd, "{family}: glyph IDs diverge between NFC and NFD for {phrase:?}");
 
-            let adv_nfc: i32 = glyphs_nfc.iter().map(|g| g.x_advance).sum();
-            let adv_nfd: i32 = glyphs_nfd.iter().map(|g| g.x_advance).sum();
-            assert_eq!(adv_nfc, adv_nfd, "{family}: total advance mismatch for {phrase:?}: {adv_nfc} vs {adv_nfd}");
+            let advs_nfc: Vec<i32> = glyphs_nfc.iter().map(|g| g.x_advance).collect();
+            let advs_nfd: Vec<i32> = glyphs_nfd.iter().map(|g| g.x_advance).collect();
+            assert_eq!(advs_nfc, advs_nfd, "{family}: per-glyph advance mismatch between NFC and NFD for {phrase:?}");
+
+            let offsets_nfc: Vec<(i32, i32)> = glyphs_nfc.iter().map(|g| (g.x_offset, g.y_offset)).collect();
+            let offsets_nfd: Vec<(i32, i32)> = glyphs_nfd.iter().map(|g| (g.x_offset, g.y_offset)).collect();
+            assert_eq!(offsets_nfc, offsets_nfd, "{family}: per-glyph offset mismatch between NFC and NFD for {phrase:?}");
         }
     }
 }
@@ -188,12 +216,16 @@ fn fully_decomposed_triple_codepoint_equivalence() {
     let db = FontDb::global();
     for &family in BUNDLED_FAMILIES {
         let face = db.face(family, "Regular");
+        assert_eq!(&face.family, family, "FontDb fell back to a different face for {family}");
+
         for (precomposed, nfd_canonical, nfd_alt) in triply_decomposed {
             let g_pre = shape(&face, precomposed, &[], |c| c);
             let g_can = shape(&face, nfd_canonical, &[], |c| c);
 
             assert_eq!(g_pre.len(), 1, "{family}: {precomposed} should shape to 1 glyph");
             let target_gid = g_pre[0].gid;
+            let target_adv = g_pre[0].x_advance;
+            let target_offset = (g_pre[0].x_offset, g_pre[0].y_offset);
             assert_ne!(target_gid, 0, "{family}: {precomposed} has .notdef gid 0");
 
             // Canonical NFD must compose to the exact precomposed glyph
@@ -202,6 +234,8 @@ fn fully_decomposed_triple_codepoint_equivalence() {
                 vec![target_gid],
                 "{family}: full NFD {nfd_canonical:?} did not compose to precomposed glyph {target_gid}"
             );
+            assert_eq!(g_can[0].x_advance, target_adv, "{family}: advance mismatch for {nfd_canonical:?} vs {precomposed}");
+            assert_eq!((g_can[0].x_offset, g_can[0].y_offset), target_offset, "{family}: offset mismatch for {nfd_canonical:?} vs {precomposed}");
 
             // If an alternative valid CCC order exists (e.g. dot below + circumflex), verify it too
             if let Some(alt) = nfd_alt {
@@ -211,6 +245,8 @@ fn fully_decomposed_triple_codepoint_equivalence() {
                     vec![target_gid],
                     "{family}: alternative CCC order {alt:?} did not compose to precomposed glyph {target_gid}"
                 );
+                assert_eq!(g_alt[0].x_advance, target_adv, "{family}: advance mismatch for {alt:?} vs {precomposed}");
+                assert_eq!((g_alt[0].x_offset, g_alt[0].y_offset), target_offset, "{family}: offset mismatch for {alt:?} vs {precomposed}");
             }
         }
     }
@@ -228,6 +264,8 @@ fn vietnamese_orthography_new_and_old_styles() {
     let db = FontDb::global();
     for &family in BUNDLED_FAMILIES {
         let face = db.face(family, "Regular");
+        assert_eq!(&face.family, family, "FontDb fell back to a different face for {family}");
+
         for (new_style, old_style) in pairs {
             let g_new = shape(&face, new_style, &[], |c| c);
             let g_old = shape(&face, old_style, &[], |c| c);
