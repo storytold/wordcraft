@@ -7819,6 +7819,37 @@ fn the_line_between_columns_spans_the_section_s_text() {
     assert!(top >= boxes[0].3 - 0.5 && (top - boxes[1].2).abs() < 0.5, "from the section's top: {top} {boxes:?}");
     assert!(bottom <= boxes[9].2 + 0.5 && bottom > top + 30.0, "down to its columns' bottom, above After: {bottom} {boxes:?}");
 
+    // Space before and after the column paragraphs isn't text: the line runs from the first
+    // line's top to the bottom of the lowest line.
+    let mut spaced = d.clone();
+    for i in 1..=8 {
+        let p = spaced.para_mut(StoryRef::Body, &Path::top(i)).unwrap();
+        (p.props.space_before, p.props.space_after) = (Some(24.0), Some(24.0));
+    }
+    let l = lay(&spaced);
+    let boxes = para_boxes(&l);
+    let rules = vertical_rules(&l, 0);
+    let [(_, top, bottom)] = rules[..] else { panic!("one line: {rules:?}") };
+    let lowest = boxes[1..=8].iter().map(|b| b.3).fold(0.0f32, f32::max);
+    // The second column's first paragraph starts at the column's top (no space before there).
+    let highest = boxes[1..=8].iter().map(|b| b.2).fold(f32::MAX, f32::min);
+    assert!(boxes[1].2 > highest + 10.0, "the first column's text starts below its space before: {boxes:?}");
+    assert!((top - highest).abs() < 0.5, "from the highest line, not a space before: {top} {boxes:?}");
+    assert!((bottom - lowest).abs() < 0.5, "to the lowest line, not its space after: {bottom} vs {lowest}");
+    // A section of one paragraph: its line starts at the paragraph's first line, below its space
+    // before, not at the section's top.
+    let mut one = Document::from_text("Intro\nOnly paragraph\nAfter");
+    one.para_mut(StoryRef::Body, &Path::top(0)).unwrap().section = Some(Box::default());
+    let p = one.para_mut(StoryRef::Body, &Path::top(1)).unwrap();
+    p.props.space_before = Some(24.0);
+    p.section = Some(Box::new(two.clone()));
+    one.last_section.start = SectionStart::Continuous;
+    let l = lay(&one);
+    let boxes = para_boxes(&l);
+    let rules = vertical_rules(&l, 0);
+    let [(_, top, bottom)] = rules[..] else { panic!("one line: {rules:?}") };
+    assert!((top - boxes[1].2).abs() < 0.5 && (bottom - boxes[1].3).abs() < 0.5, "the paragraph's lines: {top}..{bottom} {boxes:?}");
+
     // One section of two columns: the line runs down to the bottom of the text, not the page.
     let mut d = Document::from_text("One\nTwo\nThree");
     d.last_section.columns = two.columns.clone();

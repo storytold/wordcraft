@@ -98,6 +98,8 @@ pub(crate) struct ColumnLines {
     page: usize,
     top: f32,
     xs: Vec<f32>,
+    /// The page's items before the section's text on it: its text's items are the ones after.
+    from: usize,
 }
 
 /// Page borders, measured from the page edge (Word's default), so they surround the header,
@@ -355,21 +357,27 @@ impl PageBuilder<'_> {
                 _ => None,
             })
             .collect();
-        self.column_lines = Some(ColumnLines { page: self.pages.len() - 1, top: self.top, xs });
+        let from = self.pages.last().map_or(0, |p| p.items.len());
+        self.column_lines = Some(ColumnLines { page: self.pages.len() - 1, top: self.top, xs, from });
     }
     /// Draw the lines between the columns of the section's text on its page, from the top of
     /// that text to the bottom of its tallest column, as Word does: a continuous section in the
     /// middle of a page (columns for selected text, #5178) gets lines its own height, and a
-    /// section with no text on the page none. Called when the page or the section ends there.
+    /// section with no text on the page none. They span the text's lines and table cells, not
+    /// the space before its first paragraph or after its last. Called when the page or the
+    /// section ends there.
     pub(crate) fn close_column_lines(&mut self) {
         let Some(c) = self.column_lines.take() else { return };
-        let bottom = self.text_bottom();
-        if bottom <= c.top + 0.5 || c.page + 1 != self.pages.len() {
+        if c.page + 1 != self.pages.len() {
             return;
         }
-        if let Some(pg) = self.pages.get_mut(c.page) {
-            pg.items.extend(c.xs.iter().map(|&x| Placed::Rule { x0: x, y0: c.top, x1: x, y1: bottom, border: Border::single(0.5) }));
+        let flow = (c.top, self.text_bottom());
+        let Some(pg) = self.pages.get_mut(c.page) else { return };
+        let (top, bottom) = text_extent(pg.items.get(c.from..).unwrap_or_default()).map_or(flow, |(t, b)| (t.max(c.top), b.min(flow.1)));
+        if bottom <= top + 0.5 {
+            return;
         }
+        pg.items.extend(c.xs.iter().map(|&x| Placed::Rule { x0: x, y0: top, x1: x, y1: bottom, border: Border::single(0.5) }));
     }
     /// Where the columns end on this page: the page bottom above its footnotes, or higher up
     /// when the columns are balanced.
@@ -434,6 +442,20 @@ impl PageBuilder<'_> {
     pub(crate) fn page(&mut self) -> Option<&mut Page> {
         self.pages.last_mut()
     }
+}
+
+/// The top of the first and the bottom of the last body text line or table cell among `items`
+/// (the space before and after paragraphs left out), `None` when there are none.
+fn text_extent(items: &[Placed]) -> Option<(f32, f32)> {
+    items
+        .iter()
+        .filter_map(|it| match it {
+            Placed::Lines { story: StoryRef::Body, y, para, l0, l1, .. } => Some((*y, item_bottom(*y, para, *l0, *l1)?)),
+            Placed::Cell { story: StoryRef::Body, rect, .. } => Some((rect.y, rect.bottom())),
+            _ => None,
+        })
+        .filter(|(t, b)| t.is_finite() && b.is_finite())
+        .reduce(|(t0, b0), (t1, b1)| (t0.min(t1), b0.max(b1)))
 }
 
 pub(crate) fn item_bottom(y: f32, para: &ParaLayout, l0: usize, l1: usize) -> Option<f32> {
