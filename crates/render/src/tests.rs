@@ -4,6 +4,62 @@ use wordcraft_layout::{LayoutCache, LayoutOptions, layout};
 
 mod color_glyphs;
 
+#[test]
+fn collapsed_or_invalid_space_outline_does_not_leave_a_vertical_stroke() {
+    let doc = Document::new();
+    for width in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+        let img = render_items(
+            &doc,
+            &[Draw::Mark { x: 10.0, baseline: 30.0, size: 12.0, width: Some(width), ch: '□', color: None }],
+            wordcraft_geom::Rect::new(0.0, 0.0, 50.0, 50.0),
+            2.0,
+            &RenderOptions::default(),
+        );
+        assert!((0..img.width).all(|x| (0..img.height).all(|y| img.pixel(x, y)[3] == 0)), "width {width}");
+    }
+}
+
+#[test]
+fn ideographic_space_mark_is_a_hollow_gray_square() {
+    let doc = Document::new();
+    for size in [5.0, 5.5, 6.5, 7.5, 8.0, 9.0, 10.0, 10.5, 11.0, 12.0, 14.0, 16.0, 18.0, 20.0, 22.0, 24.0, 26.0, 28.0, 36.0, 48.0, 72.0] {
+        let scale = 4.0;
+        let img = render_items(
+            &doc,
+            &[Draw::Mark { x: 10.0, baseline: 100.0, size, width: Some(size * 0.35), ch: '□', color: Some(Rgb(0x60, 0x60, 0x60)) }],
+            wordcraft_geom::Rect::new(0.0, 0.0, 100.0, 120.0),
+            scale,
+            &RenderOptions::default(),
+        );
+        let center_x = ((10.0 + size * 0.175) * scale) as u32;
+        let center_y = ((100.0 - size * 0.43) * scale) as u32;
+        assert_eq!(img.pixel(center_x, center_y)[3], 0, "square centre is hollow at {size}pt");
+        let edge = img.pixel(center_x, ((100.0 - size * 0.82) * scale) as u32);
+        assert!(edge[3] > 0 && edge[0] == edge[1] && edge[1] == edge[2], "gray top edge at {size}pt: {edge:?}");
+        let full = render_items(
+            &doc,
+            &[Draw::Mark { x: 10.0, baseline: 100.0, size, width: Some(size * 0.78), ch: '□', color: Some(Rgb(0x60, 0x60, 0x60)) }],
+            wordcraft_geom::Rect::new(0.0, 0.0, 100.0, 120.0),
+            scale,
+            &RenderOptions::default(),
+        );
+        let bounds = |image: &Rendered| {
+            let pixels: Vec<_> =
+                (0..image.width).flat_map(|x| (0..image.height).map(move |y| (x, y))).filter(|&(x, y)| image.pixel(x, y)[3] > 100).collect();
+            (
+                pixels.iter().map(|p| p.0).min().unwrap(),
+                pixels.iter().map(|p| p.0).max().unwrap(),
+                pixels.iter().map(|p| p.1).min().unwrap(),
+                pixels.iter().map(|p| p.1).max().unwrap(),
+            )
+        };
+        let (px0, px1, py0, py1) = bounds(&img);
+        let (fx0, fx1, fy0, fy1) = bounds(&full);
+        assert_eq!((py0, py1), (fy0, fy1), "equal heights at {size}pt");
+        assert!(px1 - px0 < fx1 - fx0, "narrower proportional mark at {size}pt");
+    }
+}
+
 /// The first and last pixel rows with ink in a black-on-white [`render_text_line`] raster.
 fn ink_rows(img: &Rendered) -> Option<(usize, usize)> {
     let w = img.width as usize * 4;

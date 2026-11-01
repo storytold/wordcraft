@@ -2535,6 +2535,35 @@ fn column_segments_take_the_same_x_range_on_every_line() {
 }
 
 #[test]
+fn ideographic_space_mark_is_centered_without_changing_text_layout() {
+    for size in [5.0, 5.5, 6.5, 7.5, 8.0, 9.0, 10.0, 10.5, 11.0, 12.0, 14.0, 16.0, 18.0, 20.0, 22.0, 24.0, 26.0, 28.0, 36.0, 48.0, 72.0] {
+        let mut d = Document::from_text("A \u{3000}B");
+        d.styles.default_chr.size = Some(size);
+        let l = lay(&d);
+        let left = l.caret(&Pos::body(0, 2)).unwrap().x;
+        let right = l.caret(&Pos::body(0, 5)).unwrap().x;
+        let plain = display::page_display(&d, &l.pages[0], &Default::default());
+        let marked = display::page_display(&d, &l.pages[0], &display::DisplayOptions { marks: true, ..Default::default() });
+        let marks: Vec<_> = marked
+            .iter()
+            .filter_map(|item| match item {
+                display::Draw::Mark { x, size, width, ch, .. } if *ch == '□' || *ch == '·' => Some((*ch, *x, *size, *width)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(marks.iter().map(|m| m.0).collect::<Vec<_>>(), ['·', '□'], "size {size}");
+        let (_, x, square_size, width) = marks[1];
+        let width = width.expect("ideographic space has an explicit width");
+        assert!((x + width / 2.0 - (left + right) / 2.0).abs() < 0.01, "size {size}");
+        assert!(width <= right - left + 0.01 && (square_size - size).abs() < 0.01, "size {size}");
+        assert!(!plain.iter().any(|item| matches!(item, display::Draw::Mark { ch: '□' | '·', .. })));
+        let content =
+            |items: &[display::Draw]| format!("{:?}", items.iter().filter(|i| !matches!(i, display::Draw::Mark { .. })).collect::<Vec<_>>());
+        assert_eq!(content(&plain), content(&marked), "showing marks must not move or alter content at size {size}");
+    }
+}
+
+#[test]
 fn display_has_glyphs_and_marks() {
     let mut d = Document::from_text("Hello\tworld");
     d.format_range(&Pos::body(0, 0), &Pos::body(0, 5), &|c| c.underline = Some(wordcraft_doc::props::Underline::Single)).unwrap();

@@ -109,8 +109,9 @@ pub enum Draw {
     /// tagged PDF). `kind` is the graphic's, `None` for a shape (see [`crate::shape_figure_alt`]).
     Figure { alt: String, kind: Option<GraphicKind>, draws: Vec<Draw> },
     /// A formatting mark (¶ · → ↵) in the UI's mark colour, or in `color` (a tracked
-    /// paragraph mark in its reviser's colour).
-    Mark { x: f32, baseline: f32, size: f32, ch: char, color: Option<Rgb> },
+    /// paragraph mark in its reviser's colour). `width` sets the horizontal span of an
+    /// ideographic-space outline without changing its font-size-based height.
+    Mark { x: f32, baseline: f32, size: f32, width: Option<f32>, ch: char, color: Option<Rgb> },
     /// Turned text (a table cell's text direction): `items` are drawn in a frame turned `turn`
     /// whose origin is page point (`x`, `y`) (see [`crate::turn_point`]).
     Turned { x: f32, y: f32, turn: TextDirection, items: Vec<Draw> },
