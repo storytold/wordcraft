@@ -198,6 +198,8 @@ pub struct ResolvedPara {
     pub kinsoku: bool,
     /// Latin words wrap whole (`false`: they may break at any character).
     pub word_wrap: bool,
+    /// Force a break between every character including Thai/Lao (stacked-text mode).
+    pub force_char_break: bool,
     pub overflow_punct: bool,
     pub top_line_punct: bool,
     pub auto_space_de: bool,
@@ -280,6 +282,7 @@ impl ResolvedPara {
             suppress_line_numbers: p.suppress_line_numbers.unwrap_or(false),
             kinsoku: p.kinsoku.unwrap_or(true),
             word_wrap: p.word_wrap.unwrap_or(true),
+            force_char_break: p.force_char_break,
             overflow_punct: p.overflow_punct.unwrap_or(true),
             top_line_punct: p.top_line_punct.unwrap_or(false),
             auto_space_de: p.auto_space_de.unwrap_or(true),

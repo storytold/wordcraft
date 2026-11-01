@@ -1,5 +1,5 @@
 //! Text clusters for complex scripts (Myanmar, Khmer, Tai Tham, the Indic scripts): where the
-//! caret may stop, what Backspace removes, and where Myanmar text may wrap.
+//! caret may stop, what Backspace removes, and where Myanmar / Thai / Lao text may wrap.
 //!
 //! Extended grapheme clusters (UAX #29) split some syllables that a shaper draws as one unit: a
 //! Myanmar consonant stacked under a virama (`မ္ဘ`), the Myanmar vowel signs U+102B/U+102C and
@@ -174,6 +174,11 @@ pub fn myanmar_breaks(text: &str) -> Vec<usize> {
     out
 }
 
+/// Whether `c` is a Thai or Lao character (U+0E00–U+0EFF).
+pub fn is_thai_lao(c: char) -> bool {
+    matches!(u32::from(c), 0x0E00..=0x0EFF)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -266,4 +271,5 @@ mod tests {
         assert!(!backspaces_by_char('\u{301}') && !backspaces_by_char('a') && !backspaces_by_char('語'));
         assert!(!backspaces_by_char('ب') && !backspaces_by_char('\u{06E5}') && !backspaces_by_char('\u{08E2}'));
     }
+
 }
