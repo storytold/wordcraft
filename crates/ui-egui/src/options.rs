@@ -669,13 +669,14 @@ fn header_colour_picker(app: &mut WordApp, ui: &mut Ui) {
     use crate::theme::HeaderColour;
     ui.horizontal(|ui| {
         let label = ui.label(tl!("Header colour:"));
-        let combo = craft_ui::ComboBox::from_id_salt("header_colour").selected_text(tl!(app.ui.header_colour.label())).width(120.0).show_ui(ui, |ui| {
-            for (name, colour) in HeaderColour::PRESETS {
-                if ui.selectable_label(app.ui.header_colour == colour, tl!(name)).clicked() {
-                    let _ = app.run("ui.headerColour", json!({"value": colour.code()}));
+        let combo =
+            craft_ui::ComboBox::from_id_salt("header_colour").selected_text(tl!(app.ui.header_colour.label())).width(120.0).show_ui(ui, |ui| {
+                for (name, colour) in HeaderColour::PRESETS {
+                    if ui.selectable_label(app.ui.header_colour == colour, tl!(name)).clicked() {
+                        let _ = app.run("ui.headerColour", json!({"value": colour.code()}));
+                    }
                 }
-            }
-        });
+            });
         combo.response.labelled_by(label.id);
         let default = Tokens::get(ui.ctx()).title_bar;
         let mut rgb = app.ui.header_colour.rgb().unwrap_or([default.r(), default.g(), default.b()]);
