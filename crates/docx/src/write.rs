@@ -124,9 +124,9 @@ pub(crate) struct Writer<'d> {
     toc_end_here: bool,
     /// Byte offsets of the content control markers the next paragraph writes inline.
     inline_controls: Vec<usize>,
-    /// The run formatting the table style gives the cell being written (its conditional parts
+    /// The formatting the table style gives the cell being written (its conditional parts
     /// merged), which the resolver puts under the paragraph's styles; `None` outside table cells.
-    table_chr: Option<wordcraft_doc::props::CharProps>,
+    table_text: Option<TableText>,
     /// Media keys actually referenced by a written drawing.
     used_media: std::collections::BTreeSet<String>,
     /// Bounds writing text boxes inside text boxes (as layout shows them).
@@ -139,6 +139,14 @@ pub(crate) struct Writer<'d> {
     /// Linked text boxes: part id → (`wps:txbx`/`wps:linkedTxbx` id, seq; 0 for the box holding
     /// the text).
     txbx_links: HashMap<u32, (u32, u32)>,
+}
+
+/// What a table style gives the text of one cell, its conditional parts merged.
+pub(crate) struct TableText {
+    /// Paragraph formatting, under the paragraph's styles (`StyleSheet::resolve_para_in`).
+    pub(crate) para: wordcraft_doc::props::ParaProps,
+    /// Run formatting, under the paragraph's styles (`StyleSheet::para_style_props_in`).
+    pub(crate) chr: wordcraft_doc::props::CharProps,
 }
 
 const CT_WML: &str = "application/vnd.openxmlformats-officedocument.wordprocessingml.";

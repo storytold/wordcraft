@@ -310,6 +310,30 @@ fn table_style_formatting_becomes_the_complex_script_values() {
 }
 
 #[test]
+fn a_table_style_s_paragraph_direction_splits_the_cells_runs() {
+    // The table style makes its paragraphs right to left, as layout lays them out: the final
+    // stop after a Latin word takes the paragraph's direction, so it is a right-to-left piece of
+    // its own, as in a right-to-left paragraph outside a table.
+    use wordcraft_doc::styles::{Style, StyleKind};
+    let st = Style {
+        id: "RtlTable".into(),
+        name: "RtlTable".into(),
+        kind: StyleKind::Table,
+        para: wordcraft_doc::props::ParaProps { bidi: Some(true), ..Default::default() },
+        ..Default::default()
+    };
+    let mut d = Document::new();
+    d.styles.upsert(st);
+    let mut t = wordcraft_doc::Table::new(1, 1, 468.0);
+    t.props.style = Some("RtlTable".into());
+    t.rows[0].cells[0].blocks = vec![para_block(Paragraph::with_text("שלום WordCraft.", arial()))];
+    d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(t)), para_block(Paragraph::with_text("", CharProps::default()))];
+    let outside = written_runs(&doc_of("שלום WordCraft.", true, arial()));
+    assert_eq!(outside, owned(&[(true, "שלום "), (false, "WordCraft"), (true, ".")]));
+    assert_eq!(runs(&document_xml(&wordcraft_docx::write(&d).unwrap())), outside);
+}
+
+#[test]
 fn complex_script_values_already_set_are_not_repeated() {
     let mut d = doc_of("שלום WordCraft", true, CharProps { size: Some(20.0), bold: Some(true), ..arial() });
     d.styles.default_chr.font_cs = Some("Arial".into());

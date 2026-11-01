@@ -136,10 +136,10 @@ impl Writer<'_> {
         let mut pieces: Vec<(Piece, &CharProps)> = Vec::new();
         let mut k = 0usize;
         // Runs of mixed direction are split so Word orders them as WordCraft does (#1543).
-        let rtl_para = self.doc.styles.resolve_para(&p.props).bidi;
+        let rtl_para = self.doc.styles.resolve_para_in(&p.props, self.table_text.as_ref().map(|t| &t.para)).bidi;
         let styles = &self.doc.styles;
         let para_style = p.props.style.as_deref();
-        let para_chr = styles.para_style_props_in(para_style.unwrap_or("Normal"), self.table_chr.as_ref()).1;
+        let para_chr = styles.para_style_props_in(para_style.unwrap_or("Normal"), self.table_text.as_ref().map(|t| &t.chr)).1;
         let para_lang = para_chr.lang_bidi.is_some();
         let spans = crate::write::bidi::direction_spans(
             &p.text,

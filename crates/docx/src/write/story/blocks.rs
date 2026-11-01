@@ -128,10 +128,10 @@ impl Writer<'_> {
                 let chg = c.props.fmt_change.as_ref().map(|c| self.change_attrs(c.rev));
                 tcpr(w, &c.props, chg.as_ref());
                 let span = c.span();
-                let chr = style.as_ref().map(|st| cell_chr(st, t, (ri, g, span, ncols)));
-                let outer = std::mem::replace(&mut self.table_chr, chr);
+                let text = style.as_ref().map(|st| cell_text(st, t, (ri, g, span, ncols)));
+                let outer = std::mem::replace(&mut self.table_text, text);
                 self.blocks(w, &c.blocks, rels, false, depth + 1);
-                self.table_chr = outer;
+                self.table_text = outer;
                 g = g.saturating_add(span);
                 w.close("w:tc");
                 let n = c.controls.close.min(open_cells);
@@ -157,15 +157,20 @@ impl Writer<'_> {
     }
 }
 
-/// The run formatting table style `st` gives the cell of `t` at row `ri`, grid column `g`
-/// spanning `span` of the table's `ncols` columns: each of the cell's style parts over the last,
-/// lowest precedence first (ECMA-376 §17.7.6), as layout gives the cell's text.
-fn cell_chr(st: &wordcraft_doc::styles::TableStyleProps, t: &Table, (ri, g, span, ncols): (usize, usize, usize, usize)) -> CharProps {
+/// The paragraph and run formatting table style `st` gives the cell of `t` at row `ri`, grid
+/// column `g` spanning `span` of the table's `ncols` columns: the style's paragraph formatting
+/// with each part's alignment, and each part's run formatting over the last, lowest precedence
+/// first (ECMA-376 §17.7.6), as layout gives the cell's text.
+fn cell_text(st: &wordcraft_doc::styles::TableStyleProps, t: &Table, (ri, g, span, ncols): (usize, usize, usize, usize)) -> crate::write::TableText {
     let bands = (st.parts.band_size.unwrap_or(0), st.parts.col_band_size.unwrap_or(0));
     let parts = wordcraft_doc::styles::PartSet::of_cell(&t.props.look, bands, (ri, t.rows.len()), (g, span, ncols));
-    let mut chr = CharProps::default();
+    let mut text = crate::write::TableText { para: st.para.clone(), chr: CharProps::default() };
     for part in parts.iter() {
-        chr.overlay(&st.part(part).chr);
+        let f = st.part(part);
+        text.chr.overlay(&f.chr);
+        if f.align.is_some() {
+            text.para.align = f.align;
+        }
     }
-    chr
+    text
 }
