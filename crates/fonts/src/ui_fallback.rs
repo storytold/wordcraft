@@ -249,7 +249,7 @@ pub fn system_bengali_ui_font() -> Option<SystemUiFont> {
             "truetype/freefont/FreeSans.ttf",
         ]
     };
-    find_ui_font(&crate::system_font_dirs(), names, &['ক'], Region::Other)
+    find_ui_font(&with_asset_data(crate::system_font_dirs()), names, &['ক'], Region::Other)
 }
 
 /// `dirs` and, for each macOS font asset folder among them (`com_apple_MobileAsset_Font<N>`),
