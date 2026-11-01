@@ -6726,6 +6726,54 @@ fn chart_axis_and_series_formatting_round_trips() {
 }
 
 #[test]
+fn chart_axis_and_series_settings_can_be_turned_off_again() {
+    let mut s = s();
+    run(&mut s, "insert.chart", json!({"type": "line"}));
+    let chart = |s: &Session| first_chart(&s.doc).unwrap();
+    let round_trips = |s: &Session| {
+        let back = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap();
+        assert_eq!(first_chart(&back), first_chart(&s.doc), "the chart reads back as the live model");
+    };
+    // Axis bounds: set, then `null` back to Auto; an absent key leaves them alone.
+    run(&mut s, "chart.axis", json!({"min": 2, "max": 9}));
+    run(&mut s, "chart.axis", json!({"title": "T"}));
+    assert_eq!((chart(&s).val_axis.min, chart(&s).val_axis.max), (Some(2.0), Some(9.0)), "absent bounds stay");
+    run(&mut s, "chart.axis", json!({"min": null}));
+    assert_eq!((chart(&s).val_axis.min, chart(&s).val_axis.max), (None, Some(9.0)), "null clears only the minimum");
+    run(&mut s, "chart.axis", json!({"min": null, "max": null}));
+    assert_eq!((chart(&s).val_axis.min, chart(&s).val_axis.max), (None, None));
+    round_trips(&s);
+    // Smooth lines on, then off.
+    run(&mut s, "chart.series", json!({"smooth": true}));
+    assert!(chart(&s).series[0].smooth);
+    round_trips(&s);
+    run(&mut s, "chart.series", json!({"smooth": false}));
+    assert!(!chart(&s).series[0].smooth, "smooth: false turns smoothing off");
+    run(&mut s, "chart.series", json!({"smooth": true}));
+    run(&mut s, "chart.series", json!({"markers": true}));
+    assert!(chart(&s).series[0].smooth, "a command without `smooth` leaves it");
+    // No line, then a width.
+    run(&mut s, "chart.series", json!({"line": "none"}));
+    assert!(chart(&s).series[0].no_line);
+    run(&mut s, "chart.series", json!({"line": 3}));
+    let s0 = chart(&s).series[0].clone();
+    assert!(!s0.no_line && s0.line_w == Some(3.0), "a width brings the line back");
+    round_trips(&s);
+    // No fill, then a colour, then no fill and automatic.
+    run(&mut s, "chart.series", json!({"fill": "none"}));
+    assert!(chart(&s).series[0].no_fill);
+    run(&mut s, "chart.series", json!({"fill": "FF8000"}));
+    let s0 = chart(&s).series[0].clone();
+    assert!(!s0.no_fill && s0.fill.map(|c| c.hex()).as_deref() == Some("FF8000"), "a colour brings the fill back");
+    round_trips(&s);
+    run(&mut s, "chart.series", json!({"fill": "none"}));
+    run(&mut s, "chart.series", json!({"fill": "auto"}));
+    let s0 = chart(&s).series[0].clone();
+    assert!(!s0.no_fill && s0.fill.is_none(), "auto clears No fill and the colour");
+    round_trips(&s);
+}
+
+#[test]
 fn chart_formatting_is_one_undo_step_each() {
     let mut s = s();
     run(&mut s, "insert.chart", json!({"type": "column"}));

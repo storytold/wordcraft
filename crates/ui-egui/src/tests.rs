@@ -7187,3 +7187,59 @@ fn focus_hides_the_ribbon_and_escape_brings_it_back() {
     h.step();
     assert!(h.state().session.view.read_mode && shown(&h, "Focus"), "Immersive Reader keeps the status bar");
 }
+
+/// Format Axis / Format Series dialogs (gap 13): clearing a field or leaving a box alone does
+/// what it says. An emptied minimum goes back to Auto, an untouched dialog keeps a series
+/// following the chart-wide data labels, and No fill / Smooth lines can be turned off again.
+#[test]
+fn chart_format_dialogs_clear_and_leave_alone() {
+    use crate::dialogs_chart::{ChartAxisForm, ChartSeriesForm};
+    let mut a = app();
+    a.run("insert.chart", json!({"type": "line"})).unwrap();
+    let chart = |a: &WordApp| wordcraft_engine::cmd::chart::selected_chart(&a.session).unwrap();
+
+    // Set a bound, reopen the dialog, clear the field, accept: Auto again, also after a reopen.
+    a.run("chart.axis", json!({"min": 2, "max": 9})).unwrap();
+    let mut f = ChartAxisForm::new(&a).unwrap();
+    assert_eq!((f.min.as_str(), f.max.as_str()), ("2", "9"));
+    f.min.clear();
+    a.run("chart.axis", f.params().unwrap()).unwrap();
+    assert_eq!((chart(&a).val_axis.min, chart(&a).val_axis.max), (None, Some(9.0)));
+    assert_eq!(ChartAxisForm::new(&a).unwrap().min, "", "the reopened dialog shows Auto");
+
+    // An untouched Format Series dialog changes no label or marker override.
+    let before = chart(&a).series[0].clone();
+    let f = ChartSeriesForm::new(&a).unwrap();
+    a.run("chart.series", f.params().unwrap()).unwrap();
+    let after = chart(&a).series[0].clone();
+    assert_eq!((after.labels, after.markers), (None, None), "no override from an unchanged form");
+    assert_eq!(after, before);
+    a.run("chart.dataLabels", json!({"on": true})).unwrap();
+    let seen = chart(&a);
+    assert!(seen.data_labels && seen.series[0].labels.is_none(), "the series still follows the chart-wide labels");
+    // Changing the box does set it.
+    let mut f = ChartSeriesForm::new(&a).unwrap();
+    f.labels = false;
+    a.run("chart.series", f.params().unwrap()).unwrap();
+    assert_eq!(chart(&a).series[0].labels, Some(false));
+
+    // Smooth lines and No fill, on and off through the dialog.
+    let mut f = ChartSeriesForm::new(&a).unwrap();
+    (f.smooth, f.no_fill) = (true, true);
+    a.run("chart.series", f.params().unwrap()).unwrap();
+    assert!(chart(&a).series[0].smooth && chart(&a).series[0].no_fill);
+    let mut f = ChartSeriesForm::new(&a).unwrap();
+    assert!(f.smooth && f.no_fill);
+    (f.smooth, f.no_fill) = (false, false);
+    a.run("chart.series", f.params().unwrap()).unwrap();
+    let s0 = chart(&a).series[0].clone();
+    assert!(!s0.smooth && !s0.no_fill && s0.fill.is_none(), "{s0:?}");
+    // A colour after No fill, and a width after No line.
+    a.run("chart.series", json!({"fill": "none", "line": 1})).unwrap();
+    a.run("chart.series", json!({"line": "none"})).unwrap();
+    let mut f = ChartSeriesForm::new(&a).unwrap();
+    (f.fill, f.no_fill, f.width) = ("FF8000".into(), false, "2.5".into());
+    a.run("chart.series", f.params().unwrap()).unwrap();
+    let s0 = chart(&a).series[0].clone();
+    assert!(!s0.no_fill && !s0.no_line && s0.line_w == Some(2.5) && s0.fill.map(|c| c.hex()).as_deref() == Some("FF8000"), "{s0:?}");
+}

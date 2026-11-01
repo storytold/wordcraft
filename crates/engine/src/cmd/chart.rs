@@ -113,10 +113,10 @@ pub fn specs() -> Vec<CommandSpec> {
                     a.title = t.clone();
                 }
                 if let Some(m) = axis.min {
-                    a.min = Some(m);
+                    a.min = m;
                 }
                 if let Some(m) = axis.max {
-                    a.max = Some(m);
+                    a.max = m;
                 }
                 if let Some(f) = &axis.fmt {
                     a.fmt = Some(f.clone());
@@ -133,14 +133,16 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(())
             })
         })
-        .params(r#"{"side"?: "category|value", "title"?: string|null, "min"?: number|null, "max"?: number|null, "format"?: string, "gridlines"?: bool, "labels"?: bool, "line"?: bool} (side: the category axis of a scatter chart is its x axis)"#)
+        .params(r#"{"side"?: "category|value", "title"?: string|null, "min"?: number|null (null: Auto), "max"?: number|null (null: Auto), "format"?: string, "gridlines"?: bool, "labels"?: bool, "line"?: bool} (side: the category axis of a scatter chart is its x axis)"#)
         .when(has_chart),
         CommandSpec::new("chart.series", "Format Series", "Chart Design › Format Selection", |s, v| {
             let i = p::u64(v, "index").unwrap_or(0) as usize;
             let mut set = ChartSeries::default();
+            let mut fill_auto = false;
             if let Some(x) = v.get("fill") {
                 match x {
                     Value::String(t) if t.eq_ignore_ascii_case("none") => set.no_fill = true,
+                    Value::String(t) if t.eq_ignore_ascii_case("auto") => fill_auto = true,
                     Value::String(t) => set.fill = Some(Rgb::parse(t).ok_or_else(|| CmdError::Params("`fill`: a colour as hex (RRGGBB), \"none\" or null".into()))?),
                     Value::Null => set.no_fill = true,
                     other => return Err(CmdError::Params(format!("`fill`: a colour as hex (RRGGBB), \"none\" or null, not `{other}`"))),
@@ -155,14 +157,19 @@ pub fn specs() -> Vec<CommandSpec> {
                 }
             }
             set.markers = p::bool(v, "markers").or_else(|| p::bool(v, "marker"));
-            set.smooth = p::bool(v, "smooth").unwrap_or(false);
+            let smooth = p::bool(v, "smooth");
             set.labels = p::bool(v, "labels").or_else(|| p::bool(v, "dataLabels"));
             set.fmt = v.get("format").filter(|f| !f.is_null()).map(|f| f.as_str().unwrap_or_default().to_string());
             edit(s, move |c| {
                 let n = c.series.len();
                 let s = c.series.get_mut(i).ok_or_else(|| CmdError::Params(format!("`index` must be a series of the chart (0-based, {n} series)")))?;
+                if fill_auto {
+                    s.fill = None;
+                    s.no_fill = false;
+                }
                 if let Some(f) = &set.fill {
                     s.fill = Some(*f);
+                    s.no_fill = false;
                 }
                 if set.no_fill {
                     s.no_fill = true;
@@ -170,6 +177,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 }
                 if let Some(w) = set.line_w {
                     s.line_w = Some(w);
+                    s.no_line = false;
                 }
                 if set.no_line {
                     s.no_line = true;
@@ -177,8 +185,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 if set.markers.is_some() {
                     s.markers = set.markers;
                 }
-                if set.smooth {
-                    s.smooth = true;
+                if let Some(sm) = smooth {
+                    s.smooth = sm;
                 }
                 if set.labels.is_some() {
                     s.labels = set.labels;
@@ -189,7 +197,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(())
             })
         })
-        .params(r#"{"index"?: 0-based series (default 0), "fill"?: "RRGGBB"|null|"none", "line"?: number (pt)|null|"none", "markers"?: bool, "smooth"?: bool, "labels"?: bool, "format"?: number format code (string)}"#)
+        .params(r#"{"index"?: 0-based series (default 0), "fill"?: "RRGGBB"|"auto" (the chart's accent colour, clears No fill)|null|"none", "line"?: number (pt)|null|"none", "markers"?: bool, "smooth"?: bool, "labels"?: bool, "format"?: number format code (string)}"#)
         .when(has_chart),
     ]
 }
@@ -217,8 +225,10 @@ fn side(v: &Value) -> Result<Side, CmdError> {
 /// The axis fields a command sets (all optional; `None` fields are left alone).
 struct AxisSet {
     title: Option<Option<String>>,
-    min: Option<f64>,
-    max: Option<f64>,
+    /// `None`: key absent or not a number, leave the bound alone; `Some(None)`: `null`, back to
+    /// Auto; `Some(Some(x))`: set it.
+    min: Option<Option<f64>>,
+    max: Option<Option<f64>>,
     fmt: Option<String>,
     gridlines: Option<bool>,
     labels: Option<bool>,
@@ -231,7 +241,10 @@ fn axis_of(v: &Value) -> Option<AxisSet> {
         Value::Null => None,
         other => Some(other.to_string()),
     });
-    let number_field = |v: &Value, key: &str| v.get(key).filter(|x| !x.is_null()).and_then(|x| x.as_f64().filter(|f| f.is_finite()));
+    let number_field = |v: &Value, key: &str| match v.get(key)? {
+        Value::Null => Some(None),
+        x => x.as_f64().filter(|f| f.is_finite()).map(Some),
+    };
     let set = AxisSet {
         title,
         min: number_field(v, "min"),

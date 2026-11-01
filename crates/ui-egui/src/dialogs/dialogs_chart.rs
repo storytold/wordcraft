@@ -206,22 +206,32 @@ pub struct ChartSeriesForm {
     pub labels: bool,
     pub fmt: String,
     pub message: String,
+    /// The markers and labels the form opened with. An unchanged box sends nothing, so a series
+    /// that follows the chart's setting keeps following it.
+    #[serde(skip)]
+    opened_markers: bool,
+    #[serde(skip)]
+    opened_labels: bool,
 }
 
 impl ChartSeriesForm {
     pub fn new(app: &WordApp) -> Option<ChartSeriesForm> {
         let c = wordcraft_engine::cmd::chart::selected_chart(&app.session)?;
         let s = c.series.first()?;
+        let markers = s.markers.unwrap_or(c.kind == wordcraft_doc::chart::ChartType::Scatter);
+        let labels = s.labels.unwrap_or(c.data_labels);
         Some(ChartSeriesForm {
             index: 0,
             fill: s.fill.map(|c| c.hex()).unwrap_or_default(),
             no_fill: s.no_fill,
             width: s.line_w.map(|w| number_text(w as f64)).unwrap_or_default(),
-            markers: s.markers.unwrap_or(c.kind == wordcraft_doc::chart::ChartType::Scatter),
+            markers,
             smooth: s.smooth,
-            labels: s.labels.unwrap_or(c.data_labels),
+            labels,
             fmt: s.fmt.clone().unwrap_or_default(),
             message: String::new(),
+            opened_markers: markers,
+            opened_labels: labels,
         })
     }
 
@@ -237,6 +247,10 @@ impl ChartSeriesForm {
                 return Err(crate::i18n::fmt(tl!("“{text}” isn't a colour (RRGGBB)."), &[("text", &t)]));
             }
             v.insert("fill".into(), json!(t));
+        } else {
+            // An empty colour with No fill off is "automatic": it also clears a No fill the
+            // series had when the dialog opened.
+            v.insert("fill".into(), json!("auto"));
         }
         let width = self.width.trim().replace(',', ".");
         if let Some(w) = width.parse::<f64>().ok().filter(|w| w.is_finite()) {
@@ -244,9 +258,13 @@ impl ChartSeriesForm {
         } else if !self.width.trim().is_empty() {
             return Err(crate::i18n::fmt(tl!("“{text}” isn't a width in points."), &[("text", self.width.trim())]));
         }
-        v.insert("markers".into(), json!(self.markers));
+        if self.markers != self.opened_markers {
+            v.insert("markers".into(), json!(self.markers));
+        }
         v.insert("smooth".into(), json!(self.smooth));
-        v.insert("labels".into(), json!(self.labels));
+        if self.labels != self.opened_labels {
+            v.insert("labels".into(), json!(self.labels));
+        }
         if !self.fmt.trim().is_empty() {
             v.insert("format".into(), json!(self.fmt.trim()));
         }
