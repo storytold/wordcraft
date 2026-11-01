@@ -172,3 +172,15 @@ fn the_list_paragraph_style_is_written() {
     let r = back.styles.resolve_para(&props(&back)[0]);
     assert!(r.contextual_spacing && r.space_after == 3.0, "{r:?}");
 }
+
+#[test]
+fn leading_is_at_least_a_line_and_the_leading() {
+    // LibreOffice's leading (`style:line-spacing`) draws its extra space above each line, as an
+    // at-least spacing does: a 12 pt line (14 pt high) and 3 mm.
+    let d = import(&package(&content(&p_style("P1", "Standard", r#"style:line-spacing="3mm""#), r#"<text:p text:style-name="P1">x</text:p>"#), None))
+        .unwrap();
+    match props(&d)[0].line_spacing {
+        Some(LineSpacing::AtLeast(h)) => assert!((h - (14.0 + 3.0 * 72.0 / 25.4)).abs() < 0.01, "{h}"),
+        other => panic!("{other:?}"),
+    }
+}

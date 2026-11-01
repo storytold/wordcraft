@@ -299,9 +299,11 @@ fn paragraph_spacing(a: &Attrs, sp: &mut Spacing) {
     if let Some(h) = len("style:line-height-at-least").filter(|h| *h >= 0.0) {
         sp.line = Some(LineSpacing::AtLeast(h.clamp(0.7, MAX_LEN)));
     }
-    // Leading (extra space between lines) has no WordCraft mode: as a multiple of a 12 pt line.
+    // Leading (§20.336: extra space between lines, above each line as LibreOffice draws it) has
+    // no WordCraft mode: at least a 12 pt line and the leading, which also puts the extra space
+    // above the text.
     if let Some(l) = len("style:line-spacing").filter(|l| *l >= 0.0) {
-        sp.line = Some(LineSpacing::Multiple(((LEADING_LINE + l.min(MAX_LEN)) / LEADING_LINE).clamp(0.06, 132.0)));
+        sp.line = Some(LineSpacing::AtLeast((LEADING_LINE + l.min(MAX_LEN)).clamp(0.7, MAX_LEN)));
     }
 }
 
