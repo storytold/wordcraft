@@ -139,10 +139,15 @@ impl Writer<'_> {
         let rtl_para = self.doc.styles.resolve_para(&p.props).bidi;
         let styles = &self.doc.styles;
         let para_style = p.props.style.as_deref();
-        let para_lang = crate::write::bidi::para_inherits_lang_bidi(styles, para_style);
-        let spans = crate::write::bidi::direction_spans(&p.text, rtl_para, p.run_ranges(), |c| {
-            para_lang || crate::write::bidi::char_style_has_lang_bidi(styles, c)
-        });
+        let para_chr = styles.para_style_props(para_style.unwrap_or("Normal")).1;
+        let para_lang = para_chr.lang_bidi.is_some();
+        let spans = crate::write::bidi::direction_spans(
+            &p.text,
+            rtl_para,
+            p.run_ranges(),
+            |c| para_lang || crate::write::bidi::char_style_has_lang_bidi(styles, c),
+            |c| crate::write::bidi::over_styles(styles, &para_chr, c),
+        );
         for (range, props) in &spans {
             let props: &CharProps = props;
             let range = range.clone();

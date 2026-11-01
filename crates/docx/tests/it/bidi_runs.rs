@@ -192,3 +192,80 @@ fn an_inherited_bidi_language_is_not_repeated() {
     d.styles.default_chr.lang_bidi = Some("fa-IR".into());
     assert_eq!(langs(&d), vec![(true, None), (false, None), (true, None)]);
 }
+
+// Word draws a `w:rtl` run with the complex-script font, size, bold and italic alone: a bold,
+// italic, 20 pt Courier New Hebrew run with no complex-script values was drawn, once marked
+// `w:rtl`, plain, in the theme's complex-script font and at its default size (measured in Word
+// for Windows). WordCraft falls back to the ordinary values, so the pieces the writer marks get
+// those as complex-script values wherever nothing sets one.
+
+/// The `w:rPr` of each run of the first paragraph of `xml`.
+fn run_props(xml: &str) -> Vec<String> {
+    let body = xml.split("<w:body>").nth(1).unwrap();
+    let para = body.split("</w:p>").next().unwrap();
+    para.split("<w:r>").skip(1).map(|r| r.split("</w:r>").next().unwrap().split("<w:t").next().unwrap().to_string()).collect()
+}
+
+/// How WordCraft draws each character of `d`'s first paragraph: its font, size, bold and italic,
+/// the complex-script ones for a right-to-left letter.
+fn drawn(d: &Document) -> Vec<(String, f32, bool, bool)> {
+    let p = d.body.iter().find_map(|b| b.as_para()).unwrap();
+    let mut out = Vec::new();
+    for (range, props) in p.run_ranges() {
+        let r = d.styles.resolve_char(p.props.style.as_deref(), props);
+        for c in p.text.get(range).unwrap().chars() {
+            let rc = if wordcraft_doc::bidi::has_rtl(&c.to_string()) { r.complex() } else { r.clone() };
+            out.push((rc.font, rc.size, rc.bold, rc.italic));
+        }
+    }
+    out
+}
+
+#[test]
+fn right_to_left_pieces_keep_the_font_size_bold_and_italic_they_were_drawn_with() {
+    let courier = CharProps { font: Some("Courier New".into()), size: Some(20.0), bold: Some(true), italic: Some(true), ..Default::default() };
+    let d = doc_of("שלום WordCraft עולם", true, courier);
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let runs = run_props(&document_xml(&bytes));
+    assert_eq!(runs.len(), 3, "{runs:?}");
+    for r in &runs {
+        let rtl = r.contains("<w:rtl/>");
+        assert_eq!(r.contains(r#"w:cs="Courier New""#), rtl, "{r}");
+        assert_eq!(r.contains("<w:bCs/>"), rtl, "{r}");
+        assert_eq!(r.contains("<w:iCs/>"), rtl, "{r}");
+        assert_eq!(r.contains(r#"<w:szCs w:val="40"/>"#), rtl, "{r}");
+    }
+    // Read back, every character is drawn as it was.
+    let r = wordcraft_docx::read(&bytes).unwrap();
+    assert_eq!(drawn(&r), drawn(&d));
+}
+
+#[test]
+fn inherited_ordinary_values_become_the_complex_script_ones() {
+    // The run sets nothing: its font, size and bold come from the document defaults.
+    let mut d = doc_of("English with עברית inside.", false, CharProps::default());
+    d.styles.default_chr.font = Some("Courier New".into());
+    d.styles.default_chr.size = Some(18.0);
+    d.styles.default_chr.bold = Some(true);
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let runs = run_props(&document_xml(&bytes));
+    let rtl: Vec<&String> = runs.iter().filter(|r| r.contains("<w:rtl/>")).collect();
+    assert_eq!(rtl.len(), 1, "{runs:?}");
+    for want in [r#"w:cs="Courier New""#, "<w:bCs/>", r#"<w:szCs w:val="36"/>"#] {
+        assert!(rtl[0].contains(want), "{want}: {}", rtl[0]);
+    }
+    assert!(!rtl[0].contains("<w:iCs"), "not italic: {}", rtl[0]);
+    assert_eq!(drawn(&wordcraft_docx::read(&bytes).unwrap()), drawn(&d));
+}
+
+#[test]
+fn complex_script_values_already_set_are_not_repeated() {
+    let mut d = doc_of("שלום WordCraft", true, CharProps { size: Some(20.0), bold: Some(true), ..arial() });
+    d.styles.default_chr.font_cs = Some("Arial".into());
+    d.styles.default_chr.bold_cs = Some(false);
+    // `arial()` sets the run's own complex-script font and size; the defaults set bold.
+    let runs = run_props(&document_xml(&wordcraft_docx::write(&d).unwrap()));
+    let rtl = runs.iter().find(|r| r.contains("<w:rtl/>")).unwrap();
+    assert!(rtl.contains(r#"<w:szCs w:val="32"/>"#) && !rtl.contains(r#"<w:szCs w:val="40"/>"#), "the run's own szCs: {rtl}");
+    assert!(!rtl.contains("<w:bCs"), "bold comes from the defaults' bCs: {rtl}");
+}
