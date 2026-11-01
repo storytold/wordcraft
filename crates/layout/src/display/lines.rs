@@ -4,8 +4,8 @@ use super::options::DisplayOptions;
 use super::page::{char_box, stroke_of};
 use super::paint::Stroke;
 use super::{
-    Block, Border, ClKind, DeleteMark, Document, Draw, InlineObject, InsertMark, LineEnd, MItem, ParaLayout, Path, Rect, Rgb, SectionStart, Spin,
-    StoryRef, TextColor, Underline,
+    Block, Border, ClKind, DeleteMark, Document, Draw, FaceRef, InlineObject, InsertMark, LineEnd, MItem, ParaLayout, Path, Rect, Rgb, SectionStart,
+    Spin, StoryRef, TextColor, Underline,
 };
 use wordcraft_doc::Paragraph;
 
@@ -270,7 +270,7 @@ fn draw_glyph_runs(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
         // the PDF's text. Not for colour glyphs (no outlines), top-to-bottom text with upright
         // characters (their outlines would lie on their side), `#` deletion marks, or WordArt
         // in revision colours.
-        let upright = down && text.chars().any(upright_in_vertical);
+        let upright = down && (rc.vert || text.chars().any(upright_in_vertical));
         let art =
             (!upright && !glyphs.is_empty() && del_mark != Some(DeleteMark::Hash) && (rc.text_effects.is_none() || ins.is_none() && del.is_none()))
                 .then(|| crate::wordart::run_effects(rc, color))
@@ -285,21 +285,52 @@ fn draw_glyph_runs(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
             out.push(Draw::Art { path, fx: Box::new(fx), color, alpha, text_bg });
         }
         if !glyphs.is_empty() {
-            out.push(Draw::Glyphs {
-                face: st.face,
-                size: st.size,
-                glyphs,
-                color,
-                alpha: if has_art { 0.0 } else { alpha },
-                synth_bold,
-                synth_italic,
-                text,
-                link: rc.link.clone(),
-                ranges,
-                text_bg,
-                x_scale: rc.scale / 100.0,
-            });
+            if down && rc.vert {
+                // 縦中横: the run across the line, upright (see [`tate_chu_yoko`]).
+                let start = x + line.cl_left(run_start).unwrap_or(0.0);
+                // A bidirectional line's visible boxes stop at its last cluster: a run that
+                // ends the line ends at that cluster's trailing edge, not at zero.
+                let end = x + match line.vis.last() {
+                    Some(last) if run_end == line.c1 => last.trailing(),
+                    _ => line.cl_left(run_end).unwrap_or(0.0),
+                };
+                out.extend(tate_chu_yoko(
+                    st.face,
+                    st.size,
+                    color,
+                    if has_art { 0.0 } else { alpha },
+                    synth_bold,
+                    synth_italic,
+                    rc.link.clone(),
+                    text_bg,
+                    rc.scale / 100.0,
+                    glyphs,
+                    text,
+                    ranges,
+                    start,
+                    end,
+                    base,
+                ));
+            } else {
+                out.push(Draw::Glyphs {
+                    face: st.face,
+                    size: st.size,
+                    glyphs,
+                    color,
+                    alpha: if has_art { 0.0 } else { alpha },
+                    synth_bold,
+                    synth_italic,
+                    text,
+                    link: rc.link.clone(),
+                    ranges,
+                    text_bg,
+                    x_scale: rc.scale / 100.0,
+                });
+            }
         }
+        // 縦中横 glyphs are placed across the line one by one, so a decoration along the run's
+        // line span is not Word's per-upright-glyph one; draw it along the span until that is
+        // done, or the run loses its underline, strikethrough and tracked-change marks.
         // Decorations across the run (underline skips trailing spaces of the line). Right-to-left
         // text inside a run can split it into several visual spans.
         let mut end_k = run_end;
@@ -723,6 +754,99 @@ fn enclosures(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
 
 /// The kind of section break that ends at body paragraph `path`: the start type of the section
 /// that follows it. `None` for any other paragraph, and for the document's last section.
+/// Draws a horizontal-in-vertical run (`w:eastAsianLayout/@w:vert`, 縦中横) in top-to-bottom text:
+/// Word turns the run 90 degrees left from the way vertical text lies, so its characters stand
+/// upright side by side across the line, reading left to right, inside the length the run takes
+/// along the line (a pair of half-width digits fits one character's height). Every cluster is
+/// drawn on its own in a frame turned -90° about the em square the page's +90° turn cancels. `start`
+/// and `end` are the run's extent along the line (page coordinates of the unturned frame), `base`
+/// its baseline. The glyphs, text and ranges are the run's, as [`lines`] built them; `x_scale` is
+/// the run's character scale (`w:w`), applied to each glyph as elsewhere.
+fn tate_chu_yoko(
+    face: FaceRef,
+    size: f32,
+    color: Rgb,
+    alpha: f32,
+    synth_bold: bool,
+    synth_italic: bool,
+    link: Option<String>,
+    text_bg: Option<Rgb>,
+    x_scale: f32,
+    glyphs: Vec<(u32, f32, f32)>,
+    text: String,
+    ranges: Vec<std::ops::Range<usize>>,
+    start: f32,
+    end: f32,
+    base: f32,
+) -> Vec<Draw> {
+    // One slot per cluster: a cluster shaped to several glyphs (a base letter and its combining
+    // mark, a field result's letters) stands in one slot, its glyphs keeping their places in it,
+    // and its text is drawn once.
+    let mut slots: Vec<std::ops::Range<usize>> = Vec::with_capacity(glyphs.len());
+    for i in 0..glyphs.len() {
+        match slots.last_mut() {
+            Some(last) if ranges.get(i).is_some() && ranges.get(i) == ranges.get(last.start) => last.end = i + 1,
+            _ => slots.push(i..i + 1),
+        }
+    }
+    let n = slots.len();
+    let len = (end - start).max(0.0);
+    // One slot per cluster across the run's length; a pair of half-width digits makes one character.
+    let step = if n > 0 && len > 0.0 { len / n as f32 } else { size };
+    // The em square's centre across the line, where upright East Asian characters put it.
+    let across = base - size * 0.38;
+    // The run's centre along the line: every cluster is drawn there, across the line.
+    let cx = start + len / 2.0;
+    let mut out = Vec::with_capacity(n);
+    for (k, slot) in slots.iter().enumerate() {
+        let Some(&first) = glyphs.get(slot.start) else { continue };
+        // The cluster's advance along the line, which centres its ink in its em square: up to the
+        // next cluster's first glyph, else the cluster's own width from the face (a lone half-width
+        // digit is narrower than a whole em), so the glyph does not shift along the line.
+        let advance = match glyphs.get(slot.end) {
+            Some(next) => (first.1 - next.1).abs(),
+            None => slot
+                .clone()
+                .filter_map(|i| {
+                    glyphs.get(i).map(|&(gid, gx, _)| gx + face.advance(gid) as f32 * size / face.upem.max(1.0) as f32 * x_scale - first.1)
+                })
+                .fold(0.0, f32::max)
+                .abs(),
+        };
+        // Reading order runs left to right on the turned page, so the first cluster is the
+        // leftmost: x of a cluster is `turn origin - cy`, and frame y grows toward the line's start.
+        let cy = across + (n as f32 - 1.0) * 0.5 * step - k as f32 * step;
+        let (t, range) = match ranges.get(slot.start).and_then(|r| text.get(r.clone())) {
+            Some(t) => (t.to_string(), 0..t.len()),
+            None => (String::new(), 0..0),
+        };
+        let items = slot
+            .clone()
+            .filter_map(|i| glyphs.get(i).map(|&(gid, gx, gy)| (gid, cx - advance / 2.0 + (gx - first.1), cy + size * 0.38 + (gy - first.2))))
+            .collect();
+        out.push(Draw::Rotated {
+            cx,
+            cy,
+            spin: Spin::new(-90.0, false, false),
+            items: vec![Draw::Glyphs {
+                face,
+                size,
+                glyphs: items,
+                color,
+                alpha,
+                synth_bold,
+                synth_italic,
+                text: t,
+                link: link.clone(),
+                ranges: vec![range.clone(); slot.end - slot.start],
+                text_bg,
+                x_scale,
+            }],
+        });
+    }
+    out
+}
+
 fn section_break_after(doc: &Document, story: StoryRef, path: &Path) -> Option<SectionStart> {
     if story != StoryRef::Body || path.0.len() != 1 {
         return None;

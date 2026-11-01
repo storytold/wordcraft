@@ -340,7 +340,8 @@ pub struct CharProps {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lang_ea: Option<String>,
     /// East Asian typography: two lines in one and horizontal in vertical (`w:eastAsianLayout`).
-    /// Kept for round trip; layout doesn't apply it yet.
+    /// The layout applies horizontal in vertical (`vert`) in top-to-bottom vertical text; two lines
+    /// in one (`combine`) is kept for round trip only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub east_asian_layout: Option<EastAsianLayout>,
     /// Hyperlink target: a URL, or `#bookmark` for an internal link.
