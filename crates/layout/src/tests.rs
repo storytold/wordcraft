@@ -12099,6 +12099,7 @@ fn an_empty_bulleted_mark_after_a_bulleted_section_closer_draws_no_bullet() {
 #[cfg(test)]
 mod review2849 {
     use super::*;
+    use crate::notes::NoteBox;
     use wordcraft_doc::PartKind;
     use wordcraft_doc::para::{Anchor, CanvasStyle, Float, GroupChild, Wrap};
     use wordcraft_doc::props::{HeightRule, LineSpacing};

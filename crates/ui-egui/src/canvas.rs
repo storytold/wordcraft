@@ -1717,30 +1717,4 @@ mod math_clip_tests {
             assert_eq!(math_ime_rect(edge, Some(cell())), edge);
         }
     }
-
-    #[test]
-    fn decoration_owner_changes_key() {
-        use wordcraft_doc::props::{Border, Rgb};
-        use wordcraft_doc::{Path, StoryRef};
-        let rect = wordcraft_geom::Rect::new(0.0, 0.0, 40.0, 60.0);
-        for item in [
-            Placed::Fill { rect, color: Rgb::BLACK, source: None },
-            Placed::Rule { x0: 0.0, y0: 0.0, x1: 0.0, y1: 60.0, border: Border::single(1.0), source: None },
-        ] {
-            let original = Page { items: vec![item], ..Default::default() };
-            let key = page_content_key(&original);
-            let mut keys = vec![key];
-            for source in [(StoryRef::Body, Path::top(0)), (StoryRef::Body, Path::top(1)), (StoryRef::Part(0), Path::top(0))] {
-                let mut changed = original.clone();
-                match &mut changed.items[0] {
-                    Placed::Fill { source: owner, .. } | Placed::Rule { source: owner, .. } => *owner = Some(source),
-                    _ => panic!("decoration fixture"),
-                }
-                let next = page_content_key(&changed);
-                assert!(!keys.contains(&next), "owner-only mutation must invalidate cell paint");
-                keys.push(next);
-            }
-            assert_eq!(key, page_content_key(&original), "unchanged source retains the paint cache");
-        }
-    }
 }

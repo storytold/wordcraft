@@ -1126,9 +1126,9 @@ impl DocLayout {
         None
     }
 
-    /// Page index for a body position (first page showing its line).
+    /// Logical page index for a position, including retained text whose ink is clipped.
     pub fn page_of(&self, pos: &Pos) -> Option<usize> {
-        self.caret(pos).map(|c| c.page)
+        self.caret_for(pos, 0, CaretGeometry::Intrinsic).map(|c| c.page)
     }
 
     /// Table cell under a point: (story, table path, row, cell).
@@ -1212,34 +1212,36 @@ mod clip_navigation_tests {
 
     #[test]
     fn clipped_anchor_can_navigate() {
-        let mut doc = Document::from_text("FIRST\nSECOND");
-        for index in 0..2 {
+        let mut doc = Document::from_text("LEAD\nFIRST\nSECOND");
+        for index in 0..3 {
             doc.para_mut(StoryRef::Body, &Path::top(index)).unwrap().props.line_spacing = Some(LineSpacing::Exactly(24.0));
         }
+        doc.para_mut(StoryRef::Body, &Path::top(1)).unwrap().props.page_break_before = Some(true);
         let mut lay = layout(&doc, &mut LayoutCache::new(), &LayoutOptions::default());
-        let path = Path(vec![0, 0, 0, 0]);
-        let index = lay.pages[0].items.iter().position(|item| matches!(item, Placed::Lines { path, .. } if *path == Path::top(0))).unwrap();
-        if let Placed::Lines { path: actual, .. } = &mut lay.pages[0].items[index] {
+        let path = Path(vec![1, 0, 0, 0]);
+        let index = lay.pages[1].items.iter().position(|item| matches!(item, Placed::Lines { path, .. } if *path == Path::top(1))).unwrap();
+        if let Placed::Lines { path: actual, .. } = &mut lay.pages[1].items[index] {
             *actual = path.clone();
         }
-        lay.index.remove(&(StoryRef::Body, Path::top(0)));
-        lay.index.insert((StoryRef::Body, path.clone()), vec![(0, index)]);
+        lay.index.remove(&(StoryRef::Body, Path::top(1)));
+        lay.index.insert((StoryRef::Body, path.clone()), vec![(1, index)]);
         let pos = Pos { story: StoryRef::Body, path, off: 0 };
-        let anchor = lay.caret_for(&pos, 0, CaretGeometry::Intrinsic).unwrap();
-        lay.pages[0].items.push(Placed::Cell {
+        let anchor = lay.caret_for(&pos, 1, CaretGeometry::Intrinsic).unwrap();
+        lay.pages[1].items.push(Placed::Cell {
             rect: Rect::new(anchor.x, anchor.top + anchor.height + 100.0, 100.0, 1.0),
             covered: false,
-            table: Path::top(0),
+            table: Path::top(1),
             row: 0,
             cell: 0,
             story: StoryRef::Body,
             clip: true,
         });
-        assert!(lay.caret_on(&pos, 0).is_none(), "painting has no visible caret");
-        assert_eq!(lay.caret_for(&pos, 0, CaretGeometry::Intrinsic), Some(anchor), "the navigation anchor stays logical");
-        let (next, goal) = lay.vertical(&pos, Some(anchor.x), 1, 0).unwrap();
-        assert_eq!(next.path, Path::top(1));
+        assert!(lay.caret_on(&pos, 1).is_none(), "painting has no visible caret");
+        assert_eq!(lay.caret_for(&pos, 1, CaretGeometry::Intrinsic), Some(anchor), "the navigation anchor stays logical");
+        assert_eq!(lay.page_of(&pos), Some(1), "logical page lookup retains the hidden anchor on page two");
+        let (next, goal) = lay.vertical(&pos, Some(anchor.x), 1, 1).unwrap();
+        assert_eq!(next.path, Path::top(2));
         assert_eq!(goal, anchor.x);
-        assert!(lay.caret_on(&next, 0).is_some(), "navigation lands on a visible caret");
+        assert!(lay.caret_on(&next, 1).is_some(), "navigation lands on a visible caret");
     }
 }

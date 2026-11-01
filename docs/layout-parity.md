@@ -450,3 +450,5 @@ clips, repeated headers, fragments, carets, selections and equation overlays. Ex
 PDF controls check glyph outlines against active clips with tagged output on and off.
 Equation layout stays intrinsic; the canvas clips padding and animated carets and
 clamps IME geometry. Native Word editing behavior has not been observed.
+
+Clipped text retains its logical page for generated references. Page texture keys include physical clip markers and sourced text identity. Painting and pointer hits still use visible clipped geometry.
