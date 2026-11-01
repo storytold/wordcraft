@@ -68,13 +68,16 @@ pub struct ObjectDrag {
 /// How near (screen points) a press must be to a connector's end to grab it.
 const END_GRAB: f32 = 7.0;
 
-/// The selected connector's start and end on its page (points), and its layout; or a floating
-/// line's in the body, whose ends move the same way (they just don't glue). Such a line shows
+/// The selected floating connector's start and end on its page (points), and its layout; or a
+/// floating line's, whose ends move the same way (they just don't glue); both in the body text,
+/// where `shape.connect` moves them. Such a line shows
 /// and takes handles at its ends only, as Word's do: the frame's handles would sit on a level
 /// line, so pressing it there would resize it into a slant rather than move it.
 fn connector_ends(app: &WordApp, layout: &DocLayout) -> Option<(ObjectHit, (f32, f32), (f32, f32))> {
     let (pos, InlineObject::Shape { kind, float, .. }) = selected(app)? else { return None };
-    if !kind.is_open() || (!kind.is_connector() && (pos.story != StoryRef::Body || float.wrap == Wrap::Inline)) {
+    // Where `shape.connect` can't move its ends (In Line with Text, a header or footer), a line or
+    // connector keeps its frame's handles instead.
+    if !kind.is_open() || pos.story != StoryRef::Body || float.wrap == Wrap::Inline {
         return None;
     }
     let (flip_h, flip_v) = (float.flip_h, float.flip_v);

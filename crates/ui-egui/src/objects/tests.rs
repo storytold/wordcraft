@@ -499,6 +499,25 @@ fn a_level_line_dragged_by_its_middle_moves_and_stays_level() {
     }
 }
 
+/// End handles go only to the lines and connectors `shape.connect` moves: floating ones in the
+/// body text. One In Line with Text keeps its frame's handles, so it can still be resized on the
+/// page.
+#[test]
+fn only_floating_lines_and_connectors_take_end_handles() {
+    for kind in [ShapeKind::Line, ShapeKind::StraightConnector] {
+        for (wrap, ends) in [(Wrap::InFrontOfText, true), (Wrap::Inline, false)] {
+            let mut obj = floating_line(200.0, 40.0, false);
+            if let InlineObject::Shape { kind: k, float, .. } = &mut obj {
+                (*k, float.wrap) = (kind, wrap);
+            }
+            let (mut app, hit) = app_with(obj);
+            app.run("select.range", json!({"anchor": hit.pos(), "focus": Pos { off: hit.off + OBJ.len_utf8(), ..hit.pos() }})).unwrap();
+            let layout = app.session.layout();
+            assert_eq!(connector_ends(&app, &layout).is_some(), ends, "{kind:?} {wrap:?}");
+        }
+    }
+}
+
 /// A text box doesn't snap to the objects inside it (they move with it).
 #[test]
 fn a_text_box_does_not_snap_to_its_own_contents() {
