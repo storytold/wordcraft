@@ -68,6 +68,41 @@ fn csv_delimiter_reads_complete_header_record() {
 }
 
 #[test]
+fn csv_delimiter_reads_multiline_headers_after_blank_lines() {
+    for sep in [',', ';', '\t'] {
+        for newline in ["\n", "\r\n", "\r"] {
+            let header = format!("Given{newline}Family");
+            for prefix in ["\n\r\n", "\r", "\r\r"] {
+                let text = format!("{prefix}\"{header}\"{sep}City\rAda{sep}Paris");
+                assert_eq!(parse_csv(&text), vec![vec![header.as_str(), "City"], vec!["Ada", "Paris"]]);
+            }
+        }
+    }
+}
+
+#[test]
+fn recipient_csv_blank_prefix_keeps_columns_without_dropping_literal_records() {
+    let mut s = Session::new(Document::new());
+    for sep in [',', ';', '\t'] {
+        for newline in ["\n", "\r\n", "\r"] {
+            let header = format!("First{newline}Name");
+            let csv = format!(" \t{newline}\"{header}\"{sep}Email{newline}Ada{sep}ada@example.com");
+            let result = s.run("mailings.recipients", &json!({"csv": csv})).unwrap();
+            assert_eq!(result, json!({"fields": [header, "Email"], "records": 1}));
+            assert_eq!(s.run("mailings.editRecipients", &json!({})).unwrap()["rows"], json!([["Ada", "ada@example.com"]]));
+        }
+    }
+    s.run("mailings.recipients", &json!({"csv": " \nName,Email\nAda,ada@example.com", "headers": false})).unwrap();
+    assert_eq!(s.run("mailings.editRecipients", &json!({})).unwrap()["rows"], json!([[" ", ""], ["Name", "Email"], ["Ada", "ada@example.com"]]));
+    s.run("mailings.recipients", &json!({"csv": "\" \",Email\nAda,ada@example.com"})).unwrap();
+    assert_eq!(s.run("mailings.editRecipients", &json!({})).unwrap()["rows"], json!([["Ada", "ada@example.com"]]));
+    let rows = s.merge.rows.clone();
+    assert!(s.run("mailings.recipients", &json!({"csv": " \t\r\n \r"})).is_err());
+    assert_eq!(s.merge.rows, rows, "an empty headered list must not replace existing recipients");
+    assert_eq!(parse_csv(" \nName,Email\nAda,ada@example.com")[0], vec![" "], "the shared CSV reader keeps literal whitespace rows");
+}
+
+#[test]
 fn csv_delimiter_keeps_record_boundaries_and_ties() {
     // Later records cannot choose the header's delimiter.
     assert_eq!(parse_csv("Name;City\rAda;Paris,,,,\rBo;Oslo"), vec![vec!["Name", "City"], vec!["Ada", "Paris,,,,"], vec!["Bo", "Oslo"]]);

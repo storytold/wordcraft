@@ -3,20 +3,10 @@ use super::{CmdError, CmdResult, Session, Value, json, p};
 
 /// The field separator: whichever of `,` `;` and tab the first non-blank record (outside quotes) uses most.
 fn csv_separator(text: &str) -> char {
-    // Skip leading blank lines (LF, CRLF or bare CR line ends).
-    let mut start = 0;
-    for (i, c) in text.char_indices() {
-        if c == '\n' || c == '\r' {
-            start = i + 1;
-        } else if !c.is_whitespace() {
-            break;
-        }
-    }
-    let text = text.get(start..).unwrap_or(text);
     let mut quoted = false;
     let mut unquoted = String::new();
     // A quoted header may span physical lines; infer from the first complete record.
-    for c in text.chars() {
+    for c in text.split_inclusive(['\n', '\r']).skip_while(|line| line.trim().is_empty()).flat_map(str::chars) {
         if c == '"' {
             quoted = !quoted;
         } else if !quoted {
@@ -125,13 +115,23 @@ fn table_from_rows(fields: Option<&Vec<Value>>, arr: &[Value]) -> Result<(Vec<St
     Ok((headers, rows))
 }
 
+/// Skip unquoted blank prefix lines only when a text recipient list has a header.
+/// Headerless lists and the shared CSV reader keep whitespace records.
+fn recipient_csv(text: &str, headers: bool) -> Vec<Vec<String>> {
+    let prefix = text
+        .split_inclusive(['\n', '\r'])
+        .take_while(|line| headers && line.trim().is_empty())
+        .fold(0_usize, |bytes, line| bytes.saturating_add(line.len()));
+    parse_csv(text.get(prefix..).unwrap_or_default())
+}
+
 pub(super) fn recipients(s: &mut Session, v: &Value) -> CmdResult {
     let mut sheet = Value::Null;
     let (headers, rows) = if let Some(arr) = v.get("rows").and_then(Value::as_array) {
         table_from_rows(v.get("fields").and_then(Value::as_array), arr)?
     } else {
         let all = if let Some(c) = p::str(v, "csv") {
-            parse_csv(c)
+            recipient_csv(c, p::bool(v, "headers").unwrap_or(true))
         } else {
             let (bytes, ext) = if let Some(d) = p::str(v, "data") {
                 let b = crate::cmd::insert::base64_decode(d.trim()).ok_or_else(|| CmdError::Params("`data` isn't valid base64".into()))?;
@@ -188,7 +188,7 @@ pub(super) fn recipients(s: &mut Session, v: &Value) -> CmdResult {
                 sheet = json!(chosen);
                 rows
             } else {
-                parse_csv(&decode(&bytes, v)?)
+                recipient_csv(&decode(&bytes, v)?, p::bool(v, "headers").unwrap_or(true))
             }
         };
         header_split(all, p::bool(v, "headers").unwrap_or(true))?
