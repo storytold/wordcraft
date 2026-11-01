@@ -672,7 +672,7 @@ fn custom(ui: &mut Ui, d: &mut ColorsDialog) {
     ui.add_space(8.0);
     egui::Grid::new("colors_custom").num_columns(2).spacing(vec2(10.0, 5.0)).show(ui, |ui| {
         ui.label(tl!("Color model:"));
-        egui::ComboBox::from_id_salt("colors_model")
+        craft_ui::ComboBox::from_id_salt("colors_model")
             .selected_text(match d.model {
                 Model::Rgb => "RGB",
                 Model::Hsl => "HSL",

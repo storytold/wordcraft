@@ -116,7 +116,7 @@ strings look uniform.
   `wgpu` harness, `--sample`, control JSON lines).
 - Performance probe: `crates/ui-egui/examples/perf_probe.rs` (open, typing, wheel/trackpad
   scrolling, zoom, ribbon tabs, resize, accept-all; returns medians, p95 and max, not p99).
-- Large-table benchmark: `crates/ui-egui/src/tests_perf.rs` (`big_table_scroll_bench`, ignored,
+- Large-table benchmark: `crates/ui-egui/src/tests/perf.rs` (`big_table_scroll_bench`, ignored,
   2000x8 synthetic table by default, `WORDCRAFT_BENCH_DOCX` override).
 - Control protocol: `crates/ui-egui/src/control.rs`, documented in `docs/control-protocol.md`.
   `ui.screenshot`/`ui.render` reply shapes, request ids, timeouts and paths are public contracts.
@@ -310,7 +310,7 @@ Affected constructors and patterns:
 - `crates/ui-egui/src/control.rs:247` (`ui.wheel` synthetic event): add
   `source: egui::MouseWheelSource::Unknown`.
 - `crates/ui-egui/src/canvas.rs:642` (pattern), `canvas.rs:3821` (test constructor).
-- `crates/ui-egui/src/scroll.rs:180`, `:278`, `:329`, `:418`; `tests_perf.rs:39`;
+- `crates/ui-egui/src/scroll.rs:180`, `:278`, `:329`, `:418`; `tests/perf.rs:39`;
   `examples/perf_probe.rs:106`; `mini_toolbar.rs:779`; `dialogs_keyboard.rs:430`; and the
   test constructors in `lib.rs`
   (`:3772`, `:3817`, `:3924`, `:4131`, `:4277`, `:4332`, `:4397`, `:4522`, `:4821`, `:5018`,
@@ -836,7 +836,7 @@ The engine and command registry are not migrated. Tests must still prove the UI 
 ### 6.2 UI geometry and screenshots
 
 Fixtures: `wordcraft_engine::sample::sample_document()`, a large synthetic table
-(`tests_perf::big_table_doc`), and a durable evidence `.docx` with Latin/Arabic/Hebrew/CJK/
+(`tests::perf::big_table_doc`), and a durable evidence `.docx` with Latin/Arabic/Hebrew/CJK/
 Vietnamese/emoji/comments/headers. Fixtures and fonts are licensed and pinned: use
 `CRAFT_FONTS_DIR` at `b076417b5880bd4154bd22f00695b1d28c6bea83` for the app's CI text faces,
 the central craft-fonts fixtures at `2481a8a324b986a45954e90045ed1f8f2efaaf3c` for
@@ -956,7 +956,7 @@ Proposed `task.py run` command bodies (the parent supplies task/job/evidence):
 - `cargo clippy --workspace --all-targets --locked -- -D warnings`
 - `cargo test --workspace --locked`
 - `cargo test -p wordcraft-ui-egui --locked`
-- `cargo test -p wordcraft-engine tests_typing --locked`
+- `cargo test -p wordcraft-engine tests::typing --locked`
 - `cargo test -p wordcraft-ui-egui --release big_table_scroll_bench -- --ignored --nocapture`
 - `cargo run --release -p wordcraft-ui-egui --example perf_probe -- <fixture.docx>`
 - `cargo run --release -p wordcraft-ui-egui --example ui_shot -- <script.jsonl>`

@@ -25,7 +25,14 @@
 //! floating object whose text before is not laid out again here, or that still has text of an
 //! earlier section on the page (or of a block that started more than a page before) under it, is
 //! left to the layout pass made again with it known from the page's start (#2048).
-use super::*;
+use super::ctx::Ctx;
+use super::floats::{WrapArea, floating, wrap_area};
+use super::flow::place_para;
+use super::page::PageBuilder;
+use super::pass::Snap;
+use super::placed::Placed;
+use super::table_flow::place_table;
+use super::{Block, Document, HashMap, Page, Paragraph, Rect, StoryRef, Wrap};
 
 /// Most blocks on one page whose state is kept, and most blocks one float lays out again before
 /// it (far above a real page): a float that would lay out more leaves the text before it as it
