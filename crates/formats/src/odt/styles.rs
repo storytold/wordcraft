@@ -326,16 +326,17 @@ impl Styles {
         });
     }
 
-    /// The document's default paragraph spacing: the Standard paragraph style's, else the default
-    /// style's, else ODF's own defaults (no space before or after, single line spacing, ODF 1.3
-    /// §20.207, §20.235, §20.355), which are not Word's (8pt after, 1.15 lines).
+    /// The document's default paragraph spacing: the Standard paragraph style's (through its own
+    /// parent styles, should it have any), else the default style's, else ODF's own defaults (no
+    /// space before or after, single line spacing, ODF 1.3 §20.207, §20.235, §20.355), which are
+    /// not Word's (8pt after, 1.15 lines).
     pub(super) fn doc_spacing(&self) -> model::Spacing {
-        let standard = self.map.get("Standard").filter(|s| !s.auto).map(|s| s.spacing).unwrap_or_default();
+        let chain = if self.map.get("Standard").is_some_and(|s| !s.auto) { self.chain("Standard") } else { Vec::new() };
         let base = self.base_spacing();
         model::Spacing {
-            before: standard.before.or(base.before),
-            after: standard.after.or(base.after),
-            line: standard.line.or(base.line),
+            before: chain.iter().find_map(|(_, s)| s.spacing.before).or(base.before),
+            after: chain.iter().find_map(|(_, s)| s.spacing.after).or(base.after),
+            line: chain.iter().find_map(|(_, s)| s.spacing.line).or(base.line),
             ..model::Spacing::default()
         }
     }
@@ -455,9 +456,9 @@ impl Styles {
         // Like the text formatting, the kind style's own `fo:keep-with-next` (a heading's) is the kind's look, not direct formatting.
         let keep_next = chain.iter().take(kind_at).find_map(|(_, s)| s.keep_next).unwrap_or(false);
         // Space before/after and line spacing, the nearest style's in the chain, the same way.
-        // `Standard` holds the document defaults (`doc_spacing`); a paragraph that sets nothing
-        // of its own follows them.
-        let own = || chain.iter().take(kind_at).filter(|(n, s)| s.auto || *n != "Standard");
+        // `Standard` holds the document defaults (`doc_spacing`, which also covers its parents);
+        // a paragraph that sets nothing of its own below it follows them.
+        let own = || chain.iter().take(kind_at).take_while(|(n, s)| s.auto || *n != "Standard");
         let mut spacing = model::Spacing {
             before: own().find_map(|(_, s)| s.spacing.before),
             after: own().find_map(|(_, s)| s.spacing.after),

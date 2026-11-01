@@ -1351,3 +1351,32 @@ fn a_parentless_style_inherits_the_default_styles_spacing_not_standards() {
     // style, which LibreOffice puts on Standard) follow the document defaults.
     assert_eq!(&got[2..], &[(None, None, None), (None, None, None), (None, None, None)]);
 }
+
+#[test]
+fn standards_own_parent_styles_give_the_document_defaults() {
+    // Should `Standard` have a parent style, what `Standard` leaves unset comes from that parent
+    // (ODF 1.3 §16.2) before the default style, and a style under `Standard` takes `Standard`'s
+    // values over the parent's.
+    use wordcraft_doc::props::LineSpacing;
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles>
+        <style:default-style style:family="paragraph"><style:paragraph-properties fo:margin-bottom="2pt" fo:line-height="200%"/></style:default-style>
+        <style:style style:name="Base" style:family="paragraph"><style:paragraph-properties fo:margin-top="3pt" fo:margin-bottom="12pt"/></style:style>
+        <style:style style:name="Standard" style:family="paragraph" style:class="text" style:parent-style-name="Base"><style:paragraph-properties fo:margin-top="6pt"/></style:style>
+        <style:style style:name="Body" style:family="paragraph" style:parent-style-name="Standard"/>
+        </office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text>
+        <text:p>Default</text:p><text:p text:style-name="Body">Body</text:p>
+        </office:text></office:body></office:document-content>"#
+    );
+    let flow = parse(&package(&content, Some(&styles))).unwrap();
+    let got: Vec<_> = paras(&flow).iter().map(|p| (p.spacing.before, p.spacing.after, p.spacing.line)).collect();
+    assert_eq!(got, vec![(None, None, None), (None, None, None)]);
+    let doc = import(&package(&content, Some(&styles))).unwrap();
+    let d = &doc.styles.default_para;
+    assert!(d.space_before.is_some_and(|v| (v - 6.0).abs() < 1e-3), "{:?}", d.space_before);
+    assert!(d.space_after.is_some_and(|v| (v - 12.0).abs() < 1e-3), "{:?}", d.space_after);
+    assert!(matches!(d.line_spacing, Some(LineSpacing::Multiple(m)) if (m - 2.0).abs() < 1e-6), "{:?}", d.line_spacing);
+}
