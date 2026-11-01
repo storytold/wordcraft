@@ -259,7 +259,8 @@ impl WordApp {
             }
             AfterPick::Object => {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
-                self.run("insert.object", json!({"path": path}))
+                // The command `insert.object` runs, directly: one undo step for the insertion.
+                self.run("insert.textFromFile", json!({"path": path}))
             }
             AfterPick::Font => {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
