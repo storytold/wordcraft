@@ -8,6 +8,17 @@
 //! - [`hit`]: point ↔ position, caret geometry, line navigation, selection rectangles.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+/// Installs the pinned test fonts as the process-wide font database. The layout entry points
+/// (`layout`, `layout_para`, `layout_equation`, `display::mark_text_width`) call it first in test builds; a test that looks
+/// up fonts itself before any layout call (fixtures, `word::resolve`, `FontDb::global`) calls it
+/// at its start. It is idempotent and never calls back into layout, so it cannot recurse. The
+/// choice is process-wide and immutable, which keeps font and math caches consistent across
+/// test threads.
+#[cfg(test)]
+fn test_fonts() {
+    assert!(wordcraft_fonts::FontDb::init_test_fonts(), "layout tests must initialize fixed fonts before any global font lookup");
+}
+
 pub mod balloons;
 mod contour;
 pub mod display;
@@ -307,6 +318,8 @@ pub struct DocLayout {
 
 /// Lay out the whole document.
 pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> DocLayout {
+    #[cfg(test)]
+    crate::test_fonts();
     let t0 = now_ms();
     // Page totals shown in the body (`NUMPAGES`, `SECTIONPAGES`) are known only after
     // paginating: lay out again with the totals found until they hold (bounded). Footnotes

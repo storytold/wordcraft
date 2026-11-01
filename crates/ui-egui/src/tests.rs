@@ -1632,6 +1632,66 @@ fn wheel_notches_land_at_once_with_animation_effects_off() {
     assert!(first > 0.0 && first < notch, "a notch eases in again: {first}");
 }
 
+/// A Ctrl+wheel notch eases in over several frames, each a new size: those pages are drawn
+/// unhinted (they show for a moment, and hinting each size would fill the hint caches), and
+/// the first frame after the zoom stops draws them hinted, as the platform draws text.
+#[test]
+fn an_easing_zoom_draws_unhinted_pages_until_it_stops() {
+    let ctx = egui::Context::default();
+    let system = std::rc::Rc::new(std::cell::Cell::new(Some(true)));
+    let mut a = app_with_system_animations(&system);
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0));
+    let mut t = 0.0;
+    let mut frame = |a: &mut WordApp, events: Vec<egui::Event>| {
+        t += 1.0 / 60.0;
+        let input = egui::RawInput { events, time: Some(t), screen_rect: Some(screen), ..Default::default() };
+        ctx.run_ui(input, |ui| {
+            a.logic(ui.ctx());
+            a.ui(ui);
+        })
+        .drop_without_applying_deltas();
+    };
+    for _ in 0..3 {
+        frame(&mut a, Vec::new());
+    }
+    let platform = crate::canvas::screen_render_options().hinting;
+    assert_eq!(a.canvas.pages_hinted, platform, "at rest");
+    let over_page = a.canvas.canvas_rect.unwrap().center();
+    frame(&mut a, vec![egui::Event::PointerMoved(over_page)]);
+    let wheel = egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Line,
+        source: egui::MouseWheelSource::Unknown,
+        delta: egui::vec2(0.0, 1.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::COMMAND,
+    };
+    let before = a.canvas.scale;
+    frame(&mut a, vec![wheel]);
+    // The wheel's own frame already starts the zoom, unhinted.
+    assert_ne!(a.canvas.scale, before, "the zoom starts in the wheel's frame");
+    assert!(!platform || !a.canvas.pages_hinted, "the wheel's frame is unhinted");
+    let (mut eased, mut unhinted) = (0, 0);
+    let mut last = a.canvas.scale;
+    for _ in 0..60 {
+        frame(&mut a, Vec::new());
+        if a.canvas.scale != last {
+            eased += 1;
+            unhinted += usize::from(!a.canvas.pages_hinted);
+            last = a.canvas.scale;
+        } else {
+            break;
+        }
+    }
+    assert!(a.canvas.scale > before && eased >= 2, "the notch eased in over frames: {eased}");
+    if platform {
+        assert_eq!(unhinted, eased, "every in-between size unhinted");
+    }
+    // The frame after the zoom stops: hinted again, at the size it ended on.
+    frame(&mut a, Vec::new());
+    assert_eq!(a.canvas.scale, last);
+    assert_eq!(a.canvas.pages_hinted, platform, "hinted once the zoom stops");
+}
+
 /// With animation effects off a zoom step is finished in its own frame: Ctrl+wheel zooms the
 /// notch's whole step at once, the page is already placed and drawn as it will stay, and the
 /// status bar's zoom readout follows in the very next frame. Turns that arrive in small pieces

@@ -387,6 +387,7 @@ pub(super) fn make_face(
         index,
         bmp: std::sync::OnceLock::new(),
         outline_hinter: std::sync::OnceLock::new(),
+        glyph_styles: std::sync::OnceLock::new(),
         hint_draws: Default::default(),
         hint_slow: Default::default(),
         hinting_off: Default::default(),

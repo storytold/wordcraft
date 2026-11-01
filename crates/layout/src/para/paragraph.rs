@@ -553,6 +553,8 @@ fn joined_cluster_starts(p: &Paragraph, clusters: &[Cluster]) -> Vec<usize> {
 
 /// Lay out one paragraph.
 pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
+    #[cfg(test)]
+    crate::test_fonts();
     let doc = env.doc;
     let rp = paragraph_props(p, env);
     let res = Resolver { doc, style: p.props.style.as_deref(), table: env.table.map(|t| &t.chr) };
