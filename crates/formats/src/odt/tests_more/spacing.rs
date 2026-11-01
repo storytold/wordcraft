@@ -144,3 +144,31 @@ fn the_document_defaults_round_trip() {
     let o = d.styles.resolve_para(&ParaProps::default());
     assert_eq!((r.space_before, r.space_after, r.line_spacing), (o.space_before, o.space_after, o.line_spacing));
 }
+
+#[test]
+fn contextual_spacing_round_trips() {
+    // `style:contextual-spacing` (ODF 1.3 §20.255): no space between paragraphs of one style.
+    let auto = p_style("P1", "Standard", r#"fo:margin-bottom="10pt" style:contextual-spacing="true""#);
+    let d = import(&package(&content(&auto, r#"<text:p text:style-name="P1">a</text:p>"#), None)).unwrap();
+    assert_eq!(props(&d)[0].contextual_spacing, Some(true));
+    let back = import(&export(&d).unwrap()).unwrap();
+    assert_eq!(props(&back)[0].contextual_spacing, Some(true));
+}
+
+#[test]
+fn the_list_paragraph_style_is_written() {
+    // Its spacing (and contextual spacing) was dropped: list items were written in Standard.
+    let mut d = Document::new();
+    let mut p = Paragraph::new();
+    p.text = "item".into();
+    p.runs = vec![wordcraft_doc::para::Run { len: 4, props: Default::default() }];
+    p.props = ParaProps { style: Some("ListParagraph".into()), ..Default::default() };
+    d.body = vec![para_block(p)];
+    if let Some(st) = d.styles.get_mut("ListParagraph") {
+        st.para.contextual_spacing = Some(true);
+        st.para.space_after = Some(3.0);
+    }
+    let back = import(&export(&d).unwrap()).unwrap();
+    let r = back.styles.resolve_para(&props(&back)[0]);
+    assert!(r.contextual_spacing && r.space_after == 3.0, "{r:?}");
+}

@@ -13,6 +13,7 @@ mod named_styles;
 mod notes;
 mod outline;
 mod para_borders;
+mod settings;
 mod spacing;
 mod style_look;
 mod tables;

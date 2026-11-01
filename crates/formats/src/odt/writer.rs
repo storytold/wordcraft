@@ -520,6 +520,9 @@ impl Writer {
         if let Some(bg) = p.extra.as_ref().and_then(|x| x.shading) {
             props.push_str(&format!(" fo:background-color=\"#{}\"", bg.hex().to_ascii_lowercase()));
         }
+        if let Some(c) = p.extra.as_ref().and_then(|x| x.contextual_spacing) {
+            props.push_str(&format!(" style:contextual-spacing=\"{c}\""));
+        }
         let master = start.map(|(m, _)| m.clone()).unwrap_or_default();
         if props.is_empty() && master.is_empty() {
             return parent;

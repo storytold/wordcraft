@@ -43,6 +43,9 @@ fn kind_styles(doc: &Document) -> String {
         if pp.keep_next == Some(true) {
             para.push_str(" fo:keep-with-next=\"always\"");
         }
+        if let Some(c) = pp.contextual_spacing {
+            para.push_str(&format!(" style:contextual-spacing=\"{c}\""));
+        }
         let outline = outline.map(|n| format!(" style:default-outline-level=\"{n}\"")).unwrap_or_default();
         s.push_str(&format!(
             "<style:style style:name=\"{name}\" style:display-name=\"{display}\" style:family=\"paragraph\" style:parent-style-name=\"Standard\" style:next-style-name=\"Standard\"{outline} style:class=\"{class}\"><style:paragraph-properties{para}/><style:text-properties{}/></style:style>",
@@ -95,6 +98,9 @@ fn custom_styles(doc: &Document, named: &std::collections::BTreeSet<String>) -> 
         attrs.push_str(align_attr(pp.align));
         if pp.keep_next == Some(true) {
             attrs.push_str(" fo:keep-with-next=\"always\"");
+        }
+        if let Some(c) = pp.contextual_spacing {
+            attrs.push_str(&format!(" style:contextual-spacing=\"{c}\""));
         }
         attrs.push_str(&super::writer::border_attrs(pp.borders));
         if let Some(bg) = pp.shading {
@@ -331,15 +337,105 @@ fn styles_xml(
     s
 }
 
-/// `settings.xml` (ODF 1.3 §3.10): tab stops are measured from the margin, as WordCraft's and
-/// Word's are (LibreOffice's own default measures them from the paragraph's indent).
-const SETTINGS: &str = concat!(
-    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
-    "<office:document-settings xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" xmlns:config=\"urn:oasis:names:tc:opendocument:xmlns:config:1.0\" office:version=\"1.3\">",
-    "<office:settings><config:config-item-set config:name=\"ooo:configuration-settings\">",
-    "<config:config-item config:name=\"TabsRelativeToIndent\" config:type=\"boolean\">false</config:config-item>",
-    "</config:config-item-set></office:settings></office:document-settings>\n"
-);
+/// `Document::passthrough` key of an ODT's own `settings.xml`, kept for the next save.
+pub(super) const SETTINGS_PART: &str = "odt/settings.xml";
+
+/// Largest `settings.xml` kept, in bytes.
+pub(super) const MAX_SETTINGS: usize = 1 << 20;
+
+/// LibreOffice's layout compatibility switches (`ooo:configuration-settings`) for a document
+/// laid out as Word lays it out, as LibreOffice sets them for Word files.
+const WORD_COMPAT: &[(&str, bool)] = &[
+    ("NoNumberingShowFollowBy", true),
+    ("HyphenateURLs", false),
+    ("FootnoteInColumnToPageEnd", true),
+    ("GutterAtTop", false),
+    ("ContinuousEndnotes", false),
+    ("FrameAutowidthWithMorePara", true),
+    ("SubtractFlysAnchoredAtFlys", false),
+    ("SurroundTextWrapSmall", true),
+    ("TreatSingleColumnBreakAsPageBreak", true),
+    ("TabOverSpacing", true),
+    ("AutoFirstLineIndentDisregardLineSpace", true),
+    ("TabOverMargin", false),
+    ("ApplyTextAttrToEmptyLineAtEndOfParagraph", true),
+    ("DisableOffPagePositioning", true),
+    ("BackgroundParaOverDrawings", true),
+    ("TabOverflow", true),
+    ("AddVerticalFrameOffsets", true),
+    ("AddFrameOffsets", false),
+    ("TableRowKeep", true),
+    ("ApplyParagraphMarkFormatToNumbering", true),
+    ("JustifyLinesWithShrinking", true),
+    ("CollapseEmptyCellPara", true),
+    ("UnbreakableNumberings", true),
+    ("MsWordCompTrailingBlanks", true),
+    ("AddParaTableSpacing", false),
+    ("OutlineLevelYieldsNumbering", false),
+    ("UseOldNumbering", false),
+    ("AddParaSpacingToTableCells", true),
+    ("PropLineSpacingShrinksFirstLine", true),
+    ("TabAtLeftIndentForParagraphsInList", true),
+    ("DoNotCaptureDrawObjsOnPage", false),
+    ("HeaderSpacingBelowLastPara", true),
+    ("ClippedPictures", true),
+    ("MathBaselineAlignment", true),
+    ("AlignTabStopPosition", true),
+    ("UseFormerLineSpacing", false),
+    ("DoNotMirrorRtlDrawObjs", true),
+    ("AddParaLineSpacingToTableCells", true),
+    ("IsKernAsianPunctuation", false),
+    ("DoNotJustifyLinesWithManualBreak", false),
+    ("UseVariableWidthNBSP", false),
+    ("AddParaTableSpacingAtStart", true),
+    ("InvertBorderSpacing", true),
+    ("AddExternalLeading", true),
+    ("UseFormerObjectPositioning", false),
+    ("UnxForceZeroExtLeading", false),
+    ("UseFormerTextWrapping", false),
+    ("ConsiderTextWrapOnObjPos", true),
+    ("StylesNoDefault", false),
+    ("IgnoreFirstLineIndentInNumbering", false),
+    ("NoGapAfterNoteNumber", true),
+    ("EmptyDbFieldHidesPara", false),
+    ("DoNotResetParaAttrsForNumFont", false),
+    ("IgnoreTabsAndBlanksForLineCalculation", true),
+    ("ClipAsCharacterAnchoredWriterFlyFrames", false),
+    ("DropCapPunctuation", true),
+    ("UseOldPrinterMetrics", false),
+    ("MsWordCompMinLineHeightByFly", false),
+];
+
+/// `settings.xml` (ODF 1.3 §3.10) for `doc`: an ODT's own, kept from opening it, or LibreOffice's
+/// switches for Word's layout. Either way tab stops are measured from the margin, as WordCraft
+/// writes them (LibreOffice's own default measures them from the paragraph's indent).
+fn settings_xml(doc: &Document) -> String {
+    const TABS: &str = "<config:config-item config:name=\"TabsRelativeToIndent\" config:type=\"boolean\">false</config:config-item>";
+    if let Some(own) = doc.passthrough.get(SETTINGS_PART).filter(|b| b.len() <= MAX_SETTINGS).and_then(|b| std::str::from_utf8(b).ok()) {
+        let set = "config:name=\"ooo:configuration-settings\"";
+        let tabs = "config:name=\"TabsRelativeToIndent\"";
+        if let Some(at) = own.find(tabs) {
+            // The file's item, its value made false.
+            let rest = own.get(at..).unwrap_or("");
+            if let (Some(gt), Some(lt)) = (rest.find('>'), rest.find("</config:config-item>"))
+                && gt < lt
+            {
+                return format!("{}false{}", own.get(..at + gt + 1).unwrap_or(""), own.get(at + lt..).unwrap_or(""));
+            }
+        } else if let Some(at) = own.find(set).and_then(|at| own.get(at..)?.find('>').map(|gt| at + gt + 1)) {
+            return format!("{}{TABS}{}", own.get(..at).unwrap_or(""), own.get(at..).unwrap_or(""));
+        }
+    }
+    let mut s = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-settings xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" xmlns:config=\"urn:oasis:names:tc:opendocument:xmlns:config:1.0\" office:version=\"1.3\"><office:settings><config:config-item-set config:name=\"ooo:configuration-settings\">",
+    );
+    s.push_str(TABS);
+    for (name, on) in WORD_COMPAT {
+        s.push_str(&format!("<config:config-item config:name=\"{name}\" config:type=\"boolean\">{on}</config:config-item>"));
+    }
+    s.push_str("</config:config-item-set></office:settings></office:document-settings>\n");
+    s
+}
 
 fn meta_xml(m: &Meta) -> String {
     let mut s =
@@ -484,7 +580,7 @@ pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
         ("content.xml", content.as_bytes()),
         ("styles.xml", styles.as_bytes()),
         ("meta.xml", meta.as_bytes()),
-        ("settings.xml", SETTINGS.as_bytes()),
+        ("settings.xml", settings_xml(doc).as_bytes()),
     ] {
         z.start_file(name, deflated).map_err(err)?;
         z.write_all(data).map_err(ioerr)?;

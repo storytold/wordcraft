@@ -185,6 +185,8 @@ struct StyleInfo {
     family: Option<String>,
     /// Declared among automatic styles (of either file): never a custom style.
     declared_auto: bool,
+    /// `style:contextual-spacing` of a paragraph style.
+    contextual: Option<bool>,
     /// `fo:border*` of a paragraph style, each side's padding as its distance from the text.
     para_borders: Option<Borders>,
     /// `fo:background-color` of a paragraph style (`Some(None)`: transparent, stated).
@@ -304,6 +306,8 @@ pub(super) struct ParaLook {
     pub(super) spacing: Spacing,
     /// Tab stops, from where the document measures them.
     pub(super) tabs: Option<Vec<TabStop>>,
+    /// No spacing between paragraphs of one style (`style:contextual-spacing`).
+    pub(super) contextual: Option<bool>,
     /// Borders (when a side shows) and background.
     pub(super) borders: Option<Borders>,
     pub(super) shading: Option<Rgb>,
@@ -566,6 +570,9 @@ fn paragraph_properties(a: &Attrs, s: &mut StyleInfo) {
     paragraph_spacing(a, &mut s.spacing);
     if let Some(b) = border_sides(a) {
         s.para_borders = Some(b);
+    }
+    if let Some(c) = get(a, "style:contextual-spacing") {
+        s.contextual = Some(c.trim() == "true");
     }
     if let Some(bg) = get(a, "fo:background-color") {
         s.para_shading = Some(if bg.trim() == "transparent" { None } else { model::parse_color(bg) });
@@ -962,7 +969,8 @@ impl Styles {
                 }
                 let align = chain.iter().find_map(|(_, s)| s.align);
                 let keep_next = chain.iter().find_map(|(_, s)| s.keep_next).unwrap_or(false);
-                (kind, ParaLook { kind, align, keep_next, fmt, spacing, ..Default::default() })
+                let contextual = chain.iter().find_map(|(_, s)| s.contextual);
+                (kind, ParaLook { kind, align, keep_next, fmt, spacing, contextual, ..Default::default() })
             })
             .collect()
     }
@@ -1006,6 +1014,7 @@ impl Styles {
             tabs: s.tabs.clone(),
             borders: s.para_borders.filter(|b| b.any_visible()),
             shading: s.para_shading.flatten(),
+            contextual: s.contextual,
             ..Default::default()
         };
         let name = s.display.clone().unwrap_or_else(|| odt.replace("_20_", " "));
@@ -1062,6 +1071,7 @@ impl Styles {
         let own = || chain.iter().take(kind_at).filter(|(n, s)| s.auto || *n != "Standard");
         let borders = own().find_map(|(_, s)| s.para_borders).filter(|b| b.any_visible());
         let shading = own().find_map(|(_, s)| s.para_shading).flatten();
-        ParaLook { kind, align, page_break: pb, rule, keep_next, fmt: f, spacing, tabs, borders, shading, named }
+        let contextual = own().find_map(|(_, s)| s.contextual);
+        ParaLook { kind, align, page_break: pb, rule, keep_next, fmt: f, spacing, tabs, borders, shading, named, contextual }
     }
 }

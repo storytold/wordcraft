@@ -245,6 +245,7 @@ fn add_custom_styles(doc: &mut Document, named: &[super::styles::NamedStyle], od
             borders: look.borders,
             shading: look.shading,
             tabs: look.tabs.clone(),
+            contextual_spacing: look.contextual,
             ..Default::default()
         };
         let style = wordcraft_doc::styles::Style {
@@ -279,6 +280,9 @@ fn apply_look(doc: &mut Document, kind: model::Kind, look: &super::styles::ParaL
     (p.indent_left, p.indent_right, p.indent_first) = (sp.left, sp.right, sp.first);
     p.align = look.align;
     p.keep_next = look.keep_next.then_some(true);
+    if look.contextual.is_some() {
+        p.contextual_spacing = look.contextual;
+    }
 }
 
 /// Number the headings as the outline style `levels` does (ODF 1.3 §16.34): one list whose
@@ -366,6 +370,8 @@ struct Parsed {
     char_styles: Vec<(String, String)>,
     /// Their names, parents and own formatting, alongside.
     char_defs: Vec<(String, Option<String>, model::Fmt)>,
+    /// The file's `settings.xml`, kept for the next save.
+    settings: Option<Vec<u8>>,
     /// The heading numbering (`text:outline-style`), level by level.
     outline: Option<Vec<super::styles::ListLevel>>,
     /// How the file's heading, title, quotation and preformatted styles look.
@@ -397,7 +403,8 @@ fn parse_tracked(bytes: &[u8]) -> Result<Parsed, String> {
         pages = read_pages(s);
     }
     styles.read(&content, true);
-    styles.tabs_from_indent = read_entry(&mut z, "settings.xml").map(|s| setting(&s, "TabsRelativeToIndent")).unwrap_or(None).unwrap_or(true);
+    let settings = read_entry(&mut z, "settings.xml");
+    styles.tabs_from_indent = settings.as_deref().and_then(|s| setting(s, "TabsRelativeToIndent")).unwrap_or(true);
     let meta = read_entry(&mut z, "meta.xml").map(|m| read_meta(&m)).unwrap_or_default();
     let mut pictures = Pictures::new(MAX_ENTRY);
     let mut fetch = |path: &str| -> Option<Vec<u8>> {
@@ -445,6 +452,7 @@ fn parse_tracked(bytes: &[u8]) -> Result<Parsed, String> {
         named_odt,
         char_styles,
         char_defs,
+        settings: settings.filter(|s| s.len() <= super::package::MAX_SETTINGS),
         outline: styles.outline.clone(),
         kern: styles.default_kern,
         default_tab: styles.default_tab,
@@ -455,7 +463,7 @@ fn parse_tracked(bytes: &[u8]) -> Result<Parsed, String> {
 /// Parse an `.odt` package into a document.
 pub fn import(bytes: &[u8]) -> Result<Document, String> {
     model::begin_import();
-    let Parsed { flow, last, track, font, spacing, looks, named, named_odt, char_styles, char_defs, outline, kern, default_tab, parts } =
+    let Parsed { flow, last, track, font, spacing, looks, named, named_odt, char_styles, char_defs, settings, outline, kern, default_tab, parts } =
         parse_tracked(bytes)?;
     let mut doc = model::to_doc(&flow);
     if font.is_some() {
@@ -470,6 +478,9 @@ pub fn import(bytes: &[u8]) -> Result<Document, String> {
     (d.indent_left, d.indent_right, d.indent_first) = (spacing.left, spacing.right, spacing.first);
     for (kind, look) in &looks {
         apply_look(&mut doc, *kind, look);
+    }
+    if let Some(s) = settings {
+        doc.passthrough.insert(super::package::SETTINGS_PART.into(), std::sync::Arc::new(s));
     }
     add_custom_styles(&mut doc, &named, &named_odt);
     add_char_styles(&mut doc, &char_styles, &char_defs);
