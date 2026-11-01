@@ -781,3 +781,80 @@ fn shape_and_chart_formats_leave_out_of_range_sizes_alone() {
     assert_eq!(before.0, Some((20.0, 2500.0)));
     assert_eq!(shown(a), before, "Chart Design shown, the chart untouched");
 }
+
+type LayoutH = egui_kittest::Harness<'static, WordApp>;
+
+/// A window on the Layout tab with "Indented" typed, and the Left indent box drag, 60 points
+/// right in ten moves: `between(k)` runs before the k-th move (an edit coming in mid-drag).
+fn drag_left_indent(between: impl Fn(&mut LayoutH, usize)) -> (LayoutH, usize) {
+    use crate::table_resize::tests::{button, steps};
+    use egui_kittest::kittest::Queryable;
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("text.insert", json!({"text": "Indented"})).unwrap();
+    a.ui.tab = "Layout".into();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    steps(&mut h, 4);
+    let depth = h.state().session.undo_depth();
+    let label = h.get_by_label("Left:").rect();
+    // The box is the cell right of the label.
+    let from = egui::pos2(label.right() + 30.0, label.center().y);
+    h.event(egui::Event::PointerMoved(from));
+    h.step();
+    button(&h, from, true);
+    h.step();
+    for k in 1..=10 {
+        between(&mut h, k);
+        h.event(egui::Event::PointerMoved(from + egui::vec2(6.0 * k as f32, 0.0)));
+        h.step();
+    }
+    button(&h, from + egui::vec2(60.0, 0.0), false);
+    steps(&mut h, 3);
+    (h, depth)
+}
+
+fn left_indent(h: &LayoutH) -> f32 {
+    let s = &h.state().session;
+    s.doc.para_at(&s.sel.focus).map(|p| s.doc.styles.resolve_para(&p.props).indent_left).unwrap()
+}
+
+/// #5171: dragging Layout › Paragraph › Indent Left changes the indent as it goes, in one undo
+/// step: one Undo takes the whole drag back, not 0.1 cm of it. The text typed before it keeps
+/// its own step.
+#[test]
+fn dragging_a_layout_indent_box_is_one_undo_step() {
+    let (mut h, depth) = drag_left_indent(|_, _| {});
+    let dragged = left_indent(&h);
+    assert!(dragged > 20.0, "the drag indents the paragraph: {dragged}");
+    assert_eq!(h.state().session.undo_depth(), depth + 1, "one undo step for the drag");
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert_eq!(left_indent(&h), 0.0, "one Undo takes the whole drag back");
+    assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).starts_with("Indented"), "the typing keeps its own step");
+}
+
+/// #5171 review: an edit that comes in during the drag (a control-channel command) keeps its own
+/// undo step: the drag's changes after it make a step of their own instead of joining it.
+#[test]
+fn an_edit_in_the_middle_of_a_box_drag_keeps_its_own_undo_step() {
+    let (mut h, depth) = drag_left_indent(|h, k| {
+        if k == 5 {
+            h.state_mut().run("text.insert", json!({"text": " now"})).unwrap();
+        }
+    });
+    let text = |h: &LayoutH| h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+    assert!(text(&h).contains(" now"), "{}", text(&h));
+    assert_eq!(h.state().session.undo_depth(), depth + 3, "the drag before, the edit, the drag after");
+    let full = left_indent(&h);
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    let mid = left_indent(&h);
+    assert!(mid > 0.0 && mid < full, "one Undo takes back the drag after the edit: {mid} of {full}");
+    assert!(text(&h).contains(" now"), "and leaves the edit");
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert!(!text(&h).contains(" now") && left_indent(&h) == mid, "the edit is its own step");
+}
