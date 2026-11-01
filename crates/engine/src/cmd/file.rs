@@ -580,7 +580,8 @@ fn story_fields(blocks: &wordcraft_doc::Blocks, depth: usize, out: &mut Vec<Valu
 /// The range fields of `story` (a `FieldStart` … `FieldEnd` pair: what the DOCX reader makes of a
 /// field whose result has tracked changes of its own or spans paragraphs, and of every TOC),
 /// listed as [`story_fields`] lists inline ones, after them; the result is the text between the
-/// markers, at most [`MAX_RANGE_RESULT`] characters of it. False when a limit cut the list short.
+/// markers as it is, at most [`MAX_RANGE_RESULT`] characters of it (`resultTruncated` when it is
+/// cut: a bibliography or a long TOC). False when a limit cut the list short.
 fn range_fields(doc: &Document, story: StoryRef, out: &mut Vec<Value>) -> bool {
     for r in doc.field_ranges(story) {
         if out.len() >= MAX_STORY_FIELDS {
@@ -588,8 +589,13 @@ fn range_fields(doc: &Document, story: StoryRef, out: &mut Vec<Value>) -> bool {
         }
         let from = wordcraft_doc::Pos { off: r.start.off.saturating_add(wordcraft_doc::para::OBJ.len_utf8()), ..r.start.clone() };
         let text = doc.copy_range(&from, &r.end).plain_text();
-        let result: String = text.trim_end().chars().filter(|c| *c != wordcraft_doc::para::OBJ).take(MAX_RANGE_RESULT).collect();
-        out.push(field_json(&r.instr, &result));
+        let mut chars = text.chars().filter(|c| *c != wordcraft_doc::para::OBJ);
+        let result: String = chars.by_ref().take(MAX_RANGE_RESULT).collect();
+        let mut field = field_json(&r.instr, &result);
+        if chars.next().is_some() {
+            field["resultTruncated"] = json!(true);
+        }
+        out.push(field);
     }
     true
 }

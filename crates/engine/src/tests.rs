@@ -11579,20 +11579,28 @@ fn inspect_lists_range_fields() {
     let c = CharProps::default();
     let mut page = Paragraph::new();
     page.insert_object(0, start("PAGE"), &c).unwrap();
-    page.insert_text(page.len(), "7", &c).unwrap();
+    page.insert_text(page.len(), "7  ", &c).unwrap();
     page.insert_object(page.len(), InlineObject::FieldEnd, &c).unwrap();
     let mut first = Paragraph::new();
     first.insert_object(0, start("TOC \\o \"1-3\""), &c).unwrap();
     first.insert_text(first.len(), "One", &c).unwrap();
     let mut second = Paragraph::with_text("Two", c.clone());
     second.insert_object(second.len(), InlineObject::FieldEnd, &c).unwrap();
+    // A result longer than `document.inspect` gives: cut, and marked.
+    let mut long = Paragraph::new();
+    long.insert_object(0, start("BIBLIOGRAPHY"), &c).unwrap();
+    long.insert_text(long.len(), &"x".repeat(2500), &c).unwrap();
+    long.insert_object(long.len(), InlineObject::FieldEnd, &c).unwrap();
     let blocks = &mut s.doc.parts.get_mut(&key).unwrap().blocks;
-    blocks.extend([para_block(page), para_block(first), para_block(second)]);
+    blocks.extend([para_block(page), para_block(first), para_block(second), para_block(long)]);
     let doc = run(&mut s, "document.inspect", json!({}));
     let part = doc["parts"].as_array().unwrap().iter().find(|p| p["id"] == id).unwrap().clone();
     let fields = part["fields"].as_array().unwrap();
-    assert!(fields.contains(&json!({"code": "PAGE", "result": "7", "perPage": true})), "{fields:?}");
+    assert!(fields.contains(&json!({"code": "PAGE", "result": "7  ", "perPage": true})), "spaces kept: {fields:?}");
     assert!(fields.contains(&json!({"code": "TOC \\o \"1-3\"", "result": "One\nTwo", "perPage": false})), "{fields:?}");
+    let bib = fields.iter().find(|f| f["code"] == "BIBLIOGRAPHY").unwrap();
+    assert_eq!((bib["result"].as_str().map(str::len), &bib["resultTruncated"]), (Some(2000), &json!(true)));
+    assert!(fields.iter().filter(|f| f["code"] != "BIBLIOGRAPHY").all(|f| f.get("resultTruncated").is_none()));
     assert!(part.get("fieldsTruncated").is_none(), "{part}");
 }
 
