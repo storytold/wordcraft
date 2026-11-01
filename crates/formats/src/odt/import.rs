@@ -1,4 +1,4 @@
-use super::body::Body;
+use super::body::{Body, read_regions};
 use super::limits::{MAX_ENTRY, MAX_SECTIONS};
 use super::styles::{Styles, column_sep, columns_of};
 use super::xml::{Attrs, Ev, events, get, length, local};
@@ -139,6 +139,11 @@ fn parse_tracked(bytes: &[u8]) -> Result<(Flow, SectionProps, Option<bool>, Opti
     };
     let parts = styles_xml.as_deref().map(|x| page_parts::read(x, &styles, &mut pages, &mut fetch)).unwrap_or_default();
     let mut body = Body::new(&styles, &pages, &mut fetch);
+    // Only a document with tracked changes has regions to read first.
+    let tc: &[u8] = b"tracked-changes";
+    if content.windows(tc.len()).any(|w| w == tc) {
+        body.all_regions = read_regions(&styles, &pages, &content);
+    }
     events(&content, |ev| body.feed(ev));
     let mut blocks = body.take_blocks();
     // An open section with nothing in it (after a column section at the end) isn't one: the

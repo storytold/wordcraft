@@ -10951,6 +10951,47 @@ fn odt_deleted_mark_inside_an_insertion_survives_reject_all() {
     }
 }
 
+/// Gap 19: ODT format changes (ODF 1.3 Part 3 §5.5.6: who and when, not the old formatting) on
+/// text and on a paragraph mark are listed with their authors; Accept All and Reject All both
+/// clear them and keep the formatting, before and after an ODT save.
+#[test]
+fn odt_format_change_is_listed_and_keeps_the_formatting() {
+    use std::io::Write;
+    let ns = r#"xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" xmlns:dc="http://purl.org/dc/elements/1.1/""#;
+    let region = |id: &str, who: &str| {
+        format!(
+            r#"<text:changed-region text:id="{id}"><text:format-change><office:change-info><dc:creator>{who}</dc:creator><dc:date>2024-04-05T09:15:00</dc:date></office:change-info></text:format-change></text:changed-region>"#
+        )
+    };
+    let (f1, f2) = (region("f1", "Carol"), region("f2", "Dee"));
+    let content = format!(
+        r#"<office:document-content {ns}><office:automatic-styles><style:style style:name="T1" style:family="text"><style:text-properties fo:font-weight="bold"/></style:style><style:style style:name="P1" style:family="paragraph"><style:paragraph-properties fo:text-align="center" fo:keep-with-next="always"/></style:style></office:automatic-styles><office:body><office:text><text:tracked-changes>{f1}{f2}</text:tracked-changes><text:p>Plain <text:change-start text:change-id="f1"/><text:span text:style-name="T1">bold</text:span><text:change-end text:change-id="f1"/> end.</text:p><text:p text:style-name="P1">Centred<text:change-start text:change-id="f2"/></text:p><text:change-end text:change-id="f2"/></office:text></office:body></office:document-content>"#
+    );
+    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (name, data) in [("mimetype", "application/vnd.oasis.opendocument.text"), ("content.xml", content.as_str())] {
+        z.start_file(name, o).unwrap();
+        z.write_all(data.as_bytes()).unwrap();
+    }
+    let doc = crate::io::open_bytes("t.odt", &z.finish().unwrap().into_inner()).unwrap();
+    let saved = crate::io::open_bytes("t.odt", &wordcraft_formats::odt::export(&doc).unwrap()).unwrap();
+    for d in [doc, saved] {
+        let mut s = Session::new(d);
+        let list = run(&mut s, "review.changes", json!({}));
+        let changes: Vec<_> = list.as_array().unwrap().iter().map(|c| (c["kind"].clone(), c["author"].clone(), c["text"].clone())).collect();
+        assert_eq!(changes, [(json!("format"), json!("Carol"), json!("bold")), (json!("format"), json!("Dee"), json!("Centred"))], "{list:#}");
+        for cmd in ["review.rejectAll", "review.acceptAll"] {
+            let mut s = Session::new(s.doc.clone());
+            run(&mut s, cmd, json!({}));
+            assert!(run(&mut s, "review.changes", json!({})).as_array().unwrap().is_empty(), "{cmd}");
+            let p = s.doc.para_at(&s.doc.start_of(StoryRef::Body)).unwrap();
+            assert_eq!((p.text.as_str(), p.props_of_char(6).bold), ("Plain bold end.", Some(true)), "{cmd}");
+            let q = s.doc.body.get(1).and_then(|b| b.as_para()).unwrap();
+            assert_eq!((q.props.align, q.props.keep_next), (Some(wordcraft_doc::props::Align::Center), Some(true)), "{cmd}");
+        }
+    }
+}
+
 /// #1320: `layout.verticalAlign` sets the section's vertical alignment, Justified included
 /// ("justify", or "both"/"justified"); a value it doesn't know is Top, as before. Section JSON
 /// for `layout.pageSetup` keeps its names.

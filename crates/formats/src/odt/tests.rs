@@ -861,6 +861,218 @@ fn an_inserted_ruby_keeps_its_tracked_insertion() {
     assert_eq!(rev_runs(&back), vec![(vec![("before ".to_string(), None), ("漢字".to_string(), Some(Insert))], None)]);
 }
 
+/// Each body paragraph's runs as (text, author of the run's formatting change).
+fn fmt_runs(doc: &Document) -> Vec<Vec<(String, Option<String>)>> {
+    doc.body
+        .iter()
+        .filter_map(|b| if let wordcraft_doc::Block::Para(p) = &**b { Some(p) } else { None })
+        .map(|p| {
+            p.run_ranges()
+                .map(|(r, cp)| {
+                    let author = cp.fmt_change.as_deref().and_then(|c| doc.revisions.get(c.rev as usize)).map(|r| r.author.clone());
+                    (p.text[r].to_string(), author)
+                })
+                .collect()
+        })
+        .collect()
+}
+
+#[test]
+fn format_changes_open_as_formatting_revisions() {
+    // ODF 1.3 Part 3 §5.5.6: the region says who changed the formatting and when, not what it was.
+    let regions = region("f1", "format-change", "Carol", "2024-04-05T09:15:00", "");
+    let body = r#"<text:p>Plain <text:change-start text:change-id="f1"/>changed<text:change-end text:change-id="f1"/> after.</text:p>"#;
+    let doc = import(&tracked(&regions, body)).unwrap();
+    let s = |v: &str| v.to_string();
+    assert_eq!(fmt_runs(&doc), vec![vec![(s("Plain "), None), (s("changed"), Some(s("Carol"))), (s(" after."), None)]]);
+    let revs: Vec<_> = doc.revisions.iter().map(|r| (r.kind, r.author.as_str(), r.date.as_str())).collect();
+    assert_eq!(revs, vec![(wordcraft_doc::RevisionKind::Format, "Carol", "2024-04-05T09:15:00")]);
+    // The old formatting is the current one: rejecting the change leaves the text as it is.
+    let Some(wordcraft_doc::Block::Para(p)) = doc.body.first().map(|b| &**b) else { panic!("a paragraph") };
+    let (_, cp) = p.run_ranges().nth(1).unwrap();
+    assert_eq!(cp.fmt_change.as_deref().map(|c| c.old.clone()), Some(cp.formatting()));
+}
+
+#[test]
+fn a_format_change_on_heading_text_keeps_its_formatting() {
+    // A heading's text size comes from its style, so a span's size is dropped: from the
+    // opened change's old formatting too, or Reject would bring it back.
+    let regions = region("f1", "format-change", "Carol", "2024-04-05T09:15:00", "");
+    let ns = format!(
+        r#"{NS_TC} xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0""#
+    );
+    let content = format!(
+        r#"<office:document-content {ns}><office:automatic-styles><style:style style:name="T1" style:family="text"><style:text-properties fo:font-size="20pt" fo:font-weight="bold"/></style:style></office:automatic-styles><office:body><office:text><text:tracked-changes>{regions}</text:tracked-changes><text:h text:outline-level="1"><text:change-start text:change-id="f1"/><text:span text:style-name="T1">Title</text:span><text:change-end text:change-id="f1"/></text:h></office:text></office:body></office:document-content>"#
+    );
+    let doc = import(&package(&content, None)).unwrap();
+    let Some(wordcraft_doc::Block::Para(p)) = doc.body.first().map(|b| &**b) else { panic!("a paragraph") };
+    let (_, cp) = p.run_ranges().next().unwrap();
+    assert_eq!((cp.size, cp.bold), (None, Some(true)), "the heading style's size, the span's bold");
+    assert_eq!(cp.fmt_change.as_deref().map(|c| c.old.clone()), Some(cp.formatting()));
+}
+
+#[test]
+fn format_changes_round_trip_through_export() {
+    use wordcraft_doc::props::{CharProps, ParaProps, PropChange};
+    let mut d = Document::new();
+    d.settings.track_changes = true;
+    d.revisions.push(wordcraft_doc::Revision::new(wordcraft_doc::RevisionKind::Format, "Alice", "2024-03-01T10:00:00"));
+    d.revisions.push(wordcraft_doc::Revision::new(wordcraft_doc::RevisionKind::Format, "Bob", "2024-03-02T11:30:00"));
+    // "word" made bold, and a paragraph centred, with tracking on.
+    let mut p = wordcraft_doc::Paragraph::with_text("Bold ", CharProps::default());
+    let bold = CharProps { bold: Some(true), fmt_change: PropChange::boxed(0, CharProps::default()), ..Default::default() };
+    p.insert_text(p.len(), "word", &bold).unwrap();
+    p.insert_text(p.len(), " here", &CharProps::default()).unwrap();
+    let mut q = wordcraft_doc::Paragraph::with_text("Centred", CharProps::default());
+    q.props.align = Some(Align::Center);
+    q.props.keep_next = Some(true);
+    q.props.fmt_change = PropChange::boxed(1, ParaProps::default());
+    d.body = vec![wordcraft_doc::para_block(p), wordcraft_doc::para_block(q)];
+    let bytes = export(&d).unwrap();
+    let xml = String::from_utf8(read_entry(&mut archive(&bytes), "content.xml").unwrap()).unwrap();
+    assert_eq!(xml.matches("<text:format-change><office:change-info>").count(), 2, "{xml}");
+    // ODF 1.3 requires `xml:id` on a changed region; `text:id` is for older readers.
+    assert!(xml.contains(r#"<text:changed-region xml:id="ct1" text:id="ct1">"#), "{xml}");
+    let back = import(&bytes).unwrap();
+    let s = |v: &str| v.to_string();
+    assert_eq!(fmt_runs(&back), vec![vec![(s("Bold "), None), (s("word"), Some(s("Alice"))), (s(" here"), None)], vec![(s("Centred"), None)]]);
+    // The paragraph's change comes back on the paragraph, and Reject keeps its formatting.
+    assert_eq!(para_changes(&back), vec![(s("Bold word here"), None), (s("Centred"), Some((s("Bob"), true)))]);
+    let dates: Vec<_> = back.revisions.iter().map(|r| r.date.as_str()).collect();
+    assert_eq!(dates, ["2024-03-01T10:00:00", "2024-03-02T11:30:00"]);
+    let Some(wordcraft_doc::Block::Para(p)) = back.body.first().map(|b| &**b) else { panic!("a paragraph") };
+    assert_eq!(p.run_ranges().nth(1).map(|(_, cp)| cp.bold), Some(Some(true)), "the new formatting stays");
+}
+
+/// Every paragraph (body and table cells, in order) as (text, author of its formatting change
+/// and whether rejecting it keeps the formatting).
+type ParaChanges = Vec<(String, Option<(String, bool)>)>;
+
+fn para_changes(doc: &Document) -> ParaChanges {
+    fn walk(doc: &Document, bl: &wordcraft_doc::Blocks, out: &mut ParaChanges) {
+        for b in bl {
+            match &**b {
+                wordcraft_doc::Block::Para(p) => out.push((
+                    p.text.clone(),
+                    p.props.fmt_change.as_deref().map(|c| {
+                        let author = doc.revisions.get(c.rev as usize).map(|r| r.author.clone()).unwrap_or_default();
+                        (author, c.old.formatting() == p.props.formatting())
+                    }),
+                )),
+                wordcraft_doc::Block::Table(t) => {
+                    for r in &t.rows {
+                        for c in &r.cells {
+                            walk(doc, &c.blocks, out);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(doc, &doc.body, &mut out);
+    out
+}
+
+#[test]
+fn paragraph_format_changes_stay_on_their_paragraphs() {
+    use wordcraft_doc::RevisionKind::{Delete, Format};
+    use wordcraft_doc::props::{CharProps, ParaProps, PropChange};
+    let mut d = Document::new();
+    d.settings.track_changes = true;
+    for (kind, who) in [(Format, "Alice"), (Format, "Bob"), (Delete, "Dee"), (Format, "Carl")] {
+        d.revisions.push(wordcraft_doc::Revision::new(kind, who, "2024-03-01T10:00:00"));
+    }
+    let para = |text: &str, cp: CharProps, change: Option<u32>, deleted_mark: bool| {
+        let mut p = wordcraft_doc::Paragraph::with_text(text, cp);
+        p.props.fmt_change = change.and_then(|r| PropChange::boxed(r, ParaProps::default()));
+        p.mark.del = deleted_mark.then_some(2);
+        wordcraft_doc::para_block(p)
+    };
+    let plain = CharProps::default;
+    let deleted = CharProps { del: Some(2), ..Default::default() };
+    let changed = CharProps { fmt_change: PropChange::boxed(0, CharProps::default()), ..Default::default() };
+    d.body = vec![
+        // Joined at deleted marks: changes on the first, a deleted middle and neither last.
+        para("One", plain(), Some(0), true),
+        para("gone", deleted, Some(3), true),
+        para("two", plain(), None, false),
+        // Joined, with a change on the last paragraph only.
+        para("Three", plain(), None, true),
+        para("four", plain(), Some(1), false),
+        // An empty paragraph, and one whose text has a change of its own.
+        para("", plain(), Some(3), false),
+        para("all", changed, Some(1), false),
+    ];
+    let back = import(&export(&d).unwrap()).unwrap();
+    let s = |v: &str| v.to_string();
+    let ch = |who: &str| Some((s(who), true));
+    assert_eq!(
+        para_changes(&back),
+        vec![
+            (s("One"), ch("Alice")),
+            (s("gone"), ch("Carl")),
+            (s("two"), None),
+            (s("Three"), None),
+            (s("four"), ch("Bob")),
+            (s(""), ch("Carl")),
+            (s("all"), ch("Bob"))
+        ]
+    );
+    let changed_runs: Vec<_> = fmt_runs(&back).into_iter().flatten().filter(|(_, who)| who.is_some()).collect();
+    assert_eq!(changed_runs, vec![(s("all"), Some(s("Alice")))], "only the run's own change is on text");
+    let deleted_marks: Vec<_> = marks(&back).into_iter().map(|(_, m)| m.1).collect();
+    assert_eq!(deleted_marks, [true, true, false, true, false, false, false]);
+}
+
+#[test]
+fn paragraph_format_changes_end_before_a_table_and_inside_a_cell() {
+    let regions =
+        region("f1", "format-change", "Alice", "2024-03-01T10:00:00", "") + &region("f2", "format-change", "Bob", "2024-03-02T10:00:00", "");
+    let table = r#"<table:table><table:table-column/><table:table-row><table:table-cell><text:p>Cell<text:change-start text:change-id="f2"/></text:p><text:change-end text:change-id="f2"/></table:table-cell></table:table-row></table:table>"#;
+    let body = format!(
+        r#"<text:p>Before<text:change-start text:change-id="f1"/></text:p><text:change-end text:change-id="f1"/>{table}<text:p>End.</text:p>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_TC} xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0"><office:body><office:text><text:tracked-changes>{regions}</text:tracked-changes>{body}</office:text></office:body></office:document-content>"#
+    );
+    let doc = import(&package(&content, None)).unwrap();
+    let s = |v: &str| v.to_string();
+    let want = vec![(s("Before"), Some((s("Alice"), true))), (s("Cell"), Some((s("Bob"), true))), (s("End."), None)];
+    assert_eq!(para_changes(&doc), want);
+    let back = import(&export(&doc).unwrap()).unwrap();
+    assert_eq!(para_changes(&back), want, "after a save");
+}
+
+#[test]
+fn a_region_named_only_by_xml_id_is_read() {
+    let regions = r#"<text:changed-region xml:id="i1"><text:insertion><office:change-info><dc:creator>Dee</dc:creator><dc:date>2024-05-06T07:08:09</dc:date></office:change-info></text:insertion></text:changed-region>"#;
+    let ns = format!(r#"{NS_TC} xmlns:xml="http://www.w3.org/XML/1998/namespace""#);
+    let content = format!(
+        r#"<office:document-content {ns}><office:body><office:text><text:tracked-changes>{regions}</text:tracked-changes><text:p>a<text:change-start text:change-id="i1"/>b<text:change-end text:change-id="i1"/></text:p></office:text></office:body></office:document-content>"#
+    );
+    let doc = import(&package(&content, None)).unwrap();
+    let s = |v: &str| v.to_string();
+    assert_eq!(rev_runs(&doc), vec![(vec![(s("a"), None), (s("b"), Some(wordcraft_doc::RevisionKind::Insert))], None)]);
+}
+
+#[test]
+fn hostile_format_changes_are_ignored_or_bounded() {
+    // A format change used as a deletion point, opened inside deleted text, ended twice, and
+    // one never ended (it runs to the end of the document, as an insertion would).
+    let regions = region("f1", "format-change", "A", "x", "")
+        + &region("f2", "format-change", "B", "y", "")
+        + &region("d1", "deletion", "C", "z", r#"<text:p>gone<text:change-start text:change-id="f1"/>x</text:p>"#);
+    let body = r#"<text:p>a<text:change text:change-id="f1"/><text:change text:change-id="d1"/>b<text:change-end text:change-id="f1"/><text:change-end text:change-id="f1"/><text:change-start text:change-id="f2"/>c</text:p><text:p>d</text:p>"#;
+    let doc = import(&tracked(&regions, body)).unwrap();
+    let s = |v: &str| v.to_string();
+    let runs: Vec<_> = fmt_runs(&doc).into_iter().flatten().collect();
+    assert_eq!(runs, vec![(s("a"), None), (s("gonex"), None), (s("b"), None), (s("c"), Some(s("B"))), (s("d"), Some(s("B")))]);
+    // The paragraph marks it covers change too; one left open at a deleted region's end doesn't.
+    let ch = Some((s("B"), true));
+    assert_eq!(para_changes(&doc), vec![(s("agonexbc"), ch.clone()), (s("d"), ch)]);
+}
+
 #[test]
 fn hostile_tracked_changes_are_bounded() {
     // Unknown and duplicate ids, a change-end without a start, nested regions, a deletion
@@ -908,6 +1120,31 @@ fn marks(doc: &Document) -> Marks {
     let mut out = Vec::new();
     walk(&doc.body, &mut out);
     out
+}
+
+#[test]
+fn marks_in_deleted_text_may_name_regions_listed_later() {
+    // Bob deleted "old", a paragraph break whose formatting Carl had changed, and "new",
+    // which Alice had inserted. Only the order of the regions differs.
+    let deletion = region(
+        "d1",
+        "deletion",
+        "Bob",
+        "2024-03-02T11:30:00",
+        r#"<text:p>old<text:change-start text:change-id="f1"/></text:p><text:p><text:change-end text:change-id="f1"/><text:change-start text:change-id="i1"/>new<text:change-end text:change-id="i1"/></text:p>"#,
+    );
+    let others = region("i1", "insertion", "Alice", "2024-03-01T10:00:00", "") + &region("f1", "format-change", "Carl", "2024-03-01T12:00:00", "");
+    let read = |regions: &str| import(&tracked(regions, r#"<text:p>Keep <text:change text:change-id="d1"/>end.</text:p>"#)).unwrap();
+    let s = |v: &str| v.to_string();
+    let later = read(&(deletion.clone() + &others));
+    assert_eq!(para_changes(&later), vec![(s("Keep old"), Some((s("Carl"), true))), (s("newend."), None)]);
+    let want = vec![
+        (vec![(s("Keep "), false, false), (s("old"), false, true)], (false, true)),
+        (vec![(s("new"), true, true), (s("end."), false, false)], (false, false)),
+    ];
+    assert_eq!(marks(&later), want);
+    let first = read(&(others + &deletion));
+    assert_eq!((para_changes(&first), marks(&first)), (para_changes(&later), want));
 }
 
 #[test]

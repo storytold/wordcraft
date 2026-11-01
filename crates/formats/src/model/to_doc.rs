@@ -103,6 +103,9 @@ fn para_props(p: &Para, list_num: Option<u32>) -> ParaProps {
     if p.page_break {
         out.page_break_before = Some(true);
     }
+    if p.keep_next {
+        out.keep_next = Some(true);
+    }
     out
 }
 
@@ -176,9 +179,6 @@ impl<'a> Builder<'a> {
             };
             let old = para_props(&c.old, old_num);
             out.props.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, &c.mark), old);
-        }
-        if p.keep_next {
-            out.props.keep_next = Some(true);
         }
         out.section.clone_from(&p.section);
         // Inlines are appended in order, so build the runs directly: inserting each one through

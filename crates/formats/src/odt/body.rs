@@ -2,7 +2,9 @@ use super::import::Pages;
 use super::limits::{MAX_INFO_CHARS, MAX_OPEN_INSERTIONS, MAX_REGIONS, MAX_SECTIONS, MAX_XML_DEPTH};
 use super::styles::Styles;
 use super::xml::{Attrs, Ev, events, get, length, local};
-use super::{Cell, FBlock, FTable, Fmt, HashMap, Inline, Kind, ListInfo, Para, RevMark, RevisionKind, SectionProps, SectionStart, make_img, model};
+use super::{
+    Cell, FBlock, FTable, Fmt, FmtChange, HashMap, Inline, Kind, ListInfo, Para, RevMark, RevisionKind, SectionProps, SectionStart, make_img, model,
+};
 
 /// An embedded ODF formula sub-document's `content.xml`, read for its `math:math` element
 /// (ODF 1.3 §10.4.3.2 wraps it in `office:document-content`/`office:body`/`office:math`, but
@@ -79,7 +81,7 @@ impl TableB {
 
 /// A `text:changed-region` read from `text:tracked-changes`.
 #[derive(Default)]
-struct Region {
+pub(super) struct Region {
     kind: Option<RevisionKind>,
     /// Sequence number: tells regions by the same author at the same time apart.
     id: u32,
@@ -106,6 +108,8 @@ struct DelState {
     item_used: Vec<bool>,
     /// Insertions open inside the deleted content (text inserted, then deleted).
     ins: Vec<(String, RevMark)>,
+    /// Format changes open inside it (over deleted paragraph marks).
+    fmt_changes: Vec<(String, RevMark)>,
 }
 
 pub(super) struct Body<'a> {
@@ -146,6 +150,11 @@ pub(super) struct Body<'a> {
     pub(super) track: Option<bool>,
     /// Changed regions read, by id.
     regions: HashMap<String, Region>,
+    /// Every changed region, read before the body by [`read_regions`]: a change mark inside
+    /// deleted content may name a region listed after the deletion's own region.
+    pub(super) all_regions: HashMap<String, Region>,
+    /// Read only the changed regions, without deleted content (for [`read_regions`]).
+    regions_only: bool,
     /// Regions seen (capped at [`MAX_REGIONS`]).
     region_count: usize,
     /// The region being read.
@@ -157,6 +166,8 @@ pub(super) struct Body<'a> {
     del: Option<DelState>,
     /// Insertions open in the body: (region id, revision).
     active_ins: Vec<(String, RevMark)>,
+    /// Format changes open in the body: (region id, revision).
+    active_fmt: Vec<(String, RevMark)>,
 }
 
 impl<'a> Body<'a> {
@@ -189,12 +200,15 @@ impl<'a> Body<'a> {
             in_tc: false,
             track: None,
             regions: HashMap::new(),
+            all_regions: HashMap::new(),
+            regions_only: false,
             region_count: 0,
             region: None,
             info_at: None,
             info_field: None,
             del: None,
             active_ins: Vec::new(),
+            active_fmt: Vec::new(),
         }
     }
 
@@ -342,6 +356,12 @@ impl Body<'_> {
         if p.mark_ins.is_none() {
             p.mark_ins = self.open_insertion().map(Box::new);
         }
+        // One ending inside an open format change has its paragraph formatting changed.
+        if p.fmt_change.is_none()
+            && let Some(mark) = self.open_format()
+        {
+            p.fmt_change = Some(Box::new(FmtChange { mark, old: Para::default() }));
+        }
         self.finish_para(p);
     }
 
@@ -350,6 +370,15 @@ impl Body<'_> {
         let open = match &self.del {
             Some(d) => &d.ins,
             None => &self.active_ins,
+        };
+        open.last().map(|(_, m)| m.clone())
+    }
+
+    /// The innermost format change open where a paragraph ends (the body, or deleted content).
+    fn open_format(&self) -> Option<RevMark> {
+        let open = match &self.del {
+            Some(d) => &d.fmt_changes,
+            None => &self.active_fmt,
         };
         open.last().map(|(_, m)| m.clone())
     }
@@ -378,14 +407,35 @@ impl Body<'_> {
         if p.kind == Kind::Rule && !p.is_empty() {
             p.kind = Kind::Normal;
         }
+        // ODF keeps who changed the formatting, not what it was: the old formatting is the current one.
+        if let Some(c) = p.fmt_change.as_deref_mut() {
+            c.old = Para {
+                kind: p.kind,
+                list: p.list,
+                align: p.align,
+                page_break: p.page_break,
+                keep_next: p.keep_next,
+                spacing: p.spacing,
+                borders: p.borders,
+                ..Default::default()
+            };
+        }
         if matches!(p.kind, Kind::Code | Kind::Heading(_) | Kind::Title) {
+            let code = p.kind == Kind::Code;
+            let plain = |f: &mut Fmt| {
+                if code {
+                    f.code = false;
+                    f.font = None;
+                }
+                f.size = None;
+            };
             for i in &mut p.inlines {
                 if let Inline::Text(_, f) = i {
-                    if p.kind == Kind::Code {
-                        f.code = false;
-                        f.font = None;
+                    plain(f);
+                    // An opened format change keeps the current formatting as its old one.
+                    if let Some(c) = f.fmt_change.as_deref_mut() {
+                        plain(&mut c.old);
                     }
-                    f.size = None;
                 }
             }
         }
@@ -406,6 +456,13 @@ impl Body<'_> {
 
     fn push_text(&mut self, t: &str) {
         let mut f = self.cur_fmt();
+        // ODF keeps who changed the formatting, not what it was: the old formatting is the current one.
+        if self.del.is_none()
+            && let Some((_, m)) = self.active_fmt.last()
+        {
+            let old = Fmt { link: None, ins: None, del: None, fmt_change: None, ..f.clone() };
+            f.fmt_change = Some(Box::new(FmtChange { mark: m.clone(), old }));
+        }
         f.ins = self.open_insertion();
         if self.para.is_none() {
             if t.trim().is_empty() {
@@ -491,6 +548,10 @@ impl Body<'_> {
         if self.tracked_context(q, a) {
             return;
         }
+        if self.regions_only && local(q) != "tracked-changes" {
+            self.skip = 1;
+            return;
+        }
         if self.start_inline(q, a) {
             return;
         }
@@ -512,7 +573,11 @@ impl Body<'_> {
                     self.place_deletion(r.blocks, mark);
                 }
             }
-            "change-start" | "change-end" => change_mark(&self.regions, &mut self.active_ins, local(q) == "change-start", a),
+            "change-start" | "change-end" => {
+                let start = local(q) == "change-start";
+                change_mark(&[&self.regions], &mut self.active_ins, RevisionKind::Insert, start, a);
+                change_mark(&[&self.regions], &mut self.active_fmt, RevisionKind::Format, start, a);
+            }
             "note"
             | "annotation"
             | "text-box"
@@ -656,7 +721,7 @@ impl Body<'_> {
     fn tracked_start(&mut self, q: &str, a: &Attrs) {
         match local(q) {
             "changed-region" if self.region.is_none() && self.region_count < MAX_REGIONS => {
-                let id = get(a, "text:id").unwrap_or_default().to_string();
+                let id = get(a, "text:id").or_else(|| get(a, "xml:id")).unwrap_or_default().to_string();
                 let r = Region { id: self.region_count as u32, ..Default::default() };
                 self.region_count += 1;
                 self.region = Some((id, r));
@@ -670,7 +735,7 @@ impl Body<'_> {
                 if let Some((_, r)) = &mut self.region {
                     r.kind = Some(kind);
                 }
-                if kind == RevisionKind::Delete {
+                if kind == RevisionKind::Delete && !self.regions_only {
                     self.containers.push(Vec::new());
                     self.del = Some(DelState {
                         containers: self.containers.len(),
@@ -681,6 +746,7 @@ impl Body<'_> {
                         lists: std::mem::take(&mut self.lists),
                         item_used: std::mem::take(&mut self.item_used),
                         ins: Vec::new(),
+                        fmt_changes: Vec::new(),
                     });
                 }
             }
@@ -749,9 +815,10 @@ impl Body<'_> {
         };
         let n = paras.len();
         let mut it = paras.into_iter();
-        let mut first_mark_ins = None;
+        let (mut first_mark_ins, mut first_fmt) = (None, None);
         if let Some(first) = it.next() {
             first_mark_ins = first.mark_ins;
+            first_fmt = first.fmt_change;
             append(&mut cur, first.inlines);
         }
         if n < 2 {
@@ -762,6 +829,7 @@ impl Body<'_> {
         // The host paragraph now ends at the first deleted paragraph's mark.
         cur.mark_del = Some(Box::new(mark.clone()));
         cur.mark_ins = first_mark_ins;
+        cur.fmt_change = first_fmt;
         self.finish_para(cur);
         for (k, mut p) in it.enumerate() {
             if k + 2 == n {
@@ -785,11 +853,13 @@ impl Body<'_> {
             self.tracked_start(q, a);
             return true;
         }
-        // Inside deleted content: only insertions (text inserted, then deleted) nest.
+        // Inside deleted content: insertions and format changes over paragraph marks nest.
         if matches!(local(q), "change-start" | "change-end") {
-            let regions = &self.regions;
+            let regions = [&self.regions, &self.all_regions];
+            let start = local(q) == "change-start";
             if let Some(d) = &mut self.del {
-                change_mark(regions, &mut d.ins, local(q) == "change-start", a);
+                change_mark(&regions, &mut d.ins, RevisionKind::Insert, start, a);
+                change_mark(&regions, &mut d.fmt_changes, RevisionKind::Format, start, a);
             }
             return true;
         }
@@ -979,9 +1049,20 @@ impl Body<'_> {
     }
 }
 
-/// A `text:change-start` (`start`) or `text:change-end` (attributes `a`) among the insertions
-/// `open`: unknown ids, ends without a start and starts past [`MAX_OPEN_INSERTIONS`] are ignored.
-fn change_mark(regions: &HashMap<String, Region>, open: &mut Vec<(String, RevMark)>, start: bool, a: &Attrs) {
+/// The changed regions in `xml` (a `content.xml`) without their deleted content, read before
+/// the body: see [`Body::all_regions`].
+pub(super) fn read_regions(styles: &Styles, pages: &Pages, xml: &[u8]) -> HashMap<String, Region> {
+    let mut no_files = |_: &str| -> Option<Vec<u8>> { None };
+    let mut b = Body::new(styles, pages, &mut no_files);
+    b.regions_only = true;
+    events(xml, |ev| b.feed(ev));
+    b.regions
+}
+
+/// A `text:change-start` (`start`) or `text:change-end` (attributes `a`) among the open changes
+/// of `kind` in `open`, its region looked up in `regions` in turn: unknown ids, other kinds,
+/// ends without a start and starts past [`MAX_OPEN_INSERTIONS`] are ignored.
+fn change_mark(regions: &[&HashMap<String, Region>], open: &mut Vec<(String, RevMark)>, kind: RevisionKind, start: bool, a: &Attrs) {
     let Some(id) = get(a, "text:change-id") else { return };
     if !start {
         if let Some(k) = open.iter().position(|(o, _)| o == id) {
@@ -989,7 +1070,7 @@ fn change_mark(regions: &HashMap<String, Region>, open: &mut Vec<(String, RevMar
         }
         return;
     }
-    if let Some(r) = regions.get(id).filter(|r| r.kind == Some(RevisionKind::Insert))
+    if let Some(r) = regions.iter().find_map(|m| m.get(id)).filter(|r| r.kind == Some(kind))
         && open.len() < MAX_OPEN_INSERTIONS
         && !open.iter().any(|(o, _)| o == id)
     {
