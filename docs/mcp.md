@@ -18,6 +18,65 @@ isn't open yet: tool calls return "not reachable … will retry on each call" an
 app's port opens (#4078), so a client that starts before WordCraft doesn't lose the server for
 its whole session.
 
+## Connecting an AI app
+
+An AI app on the same computer starts the server itself and talks to it over standard input and
+output, so WordCraft needs no account, key or sign-in for it. **File › Options › Agents** shows
+the command for the copy of WordCraft that is running, set up for Claude Code, Codex and apps
+configured with a JSON file, each with a Copy button. The command by package:
+
+| Package | MCP server command |
+|---|---|
+| deb, rpm, pkg.tar.zst | `wordcraft-cli mcp` (installed as `/usr/bin/wordcraft-cli`) |
+| tar.gz | `bin/wordcraft-cli mcp` in the unpacked folder |
+| AppImage | `/usr/bin/env APPIMAGE_EXTRACT_AND_RUN=1 /path/to/wordcraft-<ver>-linux-<arch>.AppImage --cli mcp` (below) |
+| Flatpak | `flatpak run --command=wordcraft-cli ai.storyteller.wordcraft mcp`; the sandbox reaches files in Documents and Pictures only |
+| Windows installer | `"C:\Program Files\WordCraft\wordcraft-cli.exe" mcp` (the 32-bit build: `Program Files (x86)`) |
+| Windows zip | `wordcraft-cli.exe mcp` in the unpacked folder |
+| macOS | the app has no CLI inside; download `wordcraft-cli-<ver>-macos-universal.zip` from the releases page |
+
+The AppImage's `--cli` runs the bundled wordcraft-cli with the arguments after it.
+`APPIMAGE_EXTRACT_AND_RUN=1` has the AppImage unpack itself into /tmp instead of mounting with
+FUSE. On Ubuntu 26.04, an AI app started from VS Code's snap couldn't mount it, so the server
+closed at once. The first start unpacks about 115 MB (0.25 s on the test machine), and later
+starts reuse it.
+
+With `<command>` standing for one of those:
+
+```sh
+claude mcp add --scope user wordcraft -- <command>   # Claude Code, in every project
+codex mcp add wordcraft -- <command>                  # Codex
+```
+
+Apps set up with a JSON file (Claude Desktop, Cursor, LM Studio and others) take the program and
+its arguments separately:
+
+```json
+{"mcpServers": {"wordcraft": {"command": "/usr/bin/wordcraft-cli", "args": ["mcp"]}}}
+```
+
+The server runs as a process on the same computer as the AI app, so a chat service in a browser
+that reaches MCP servers only over the internet can't start it.
+
+### Local models with Ollama
+
+Ollama runs AI models on your own computer. To let one work in WordCraft:
+
+1. **Choose a model that supports tools.** Tools are how a model acts in WordCraft: typing,
+   formatting, saving. A model without them can still chat, but it can't change your documents.
+   Ollama's [model library](https://ollama.com/search?c=tools) marks these models with a
+   **tools** label. To check one you already have, run `ollama show <model>` and look for
+   `tools` under Capabilities.
+2. **Download it once:** `ollama pull <model>`.
+3. **Install ollmcp**, a helper app that connects Ollama to MCP servers like WordCraft's:
+   `pip install ollmcp` (or `uv tool install ollmcp`).
+4. **Save the JSON setup** from File › Options › Agents as `wordcraft.json`.
+5. **Start it** with `ollmcp -j wordcraft.json -m <model>`, then ask for what you want in plain
+   words.
+
+Small models get tool calls wrong more often than large ones; if one keeps failing, try a larger
+model.
+
 ## Scripts from the command line
 
 `wordcraft-cli run --script job.json` (`--script -` reads standard input) runs the commands in a
