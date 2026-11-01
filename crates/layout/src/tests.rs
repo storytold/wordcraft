@@ -1345,6 +1345,7 @@ fn a_missing_roman_font_is_drawn_as_word_draws_it() {
 
 #[test]
 fn a_missing_roman_font_with_its_own_substitute_keeps_it() {
+    crate::test_fonts();
     // Times New Roman is roman in every font table. Where it isn't installed it keeps its metric
     // clone (Liberation Serif), not Cambria: Word, which always has it, never draws it missing.
     let mut d = Document::from_text("Serif");
@@ -1970,6 +1971,7 @@ fn bullet_first_line(label_font: Option<&str>) -> (f32, f32, f32, f32) {
 
 #[test]
 fn a_symbol_bullet_sizes_its_line_by_the_symbol_font() {
+    crate::test_fonts();
     // Measured in Word: a Symbol bullet makes its line taller than the text alone (Calibri 11 pt
     // at 1.08 spacing: 15.1 pt, not 14.5 pt), the extra ascent added unscaled. Symbol isn't an open
     // font; without it the bullet is drawn from another face but its line keeps Symbol's height.
@@ -6396,6 +6398,7 @@ fn graphic_text_in_a_degenerate_rectangle_is_not_drawn() {
 
 #[test]
 fn chart_text_the_font_lacks_is_drawn_in_a_fallback_face() {
+    crate::test_fonts();
     // #4720: a Chinese legend in a chart drawn in the body font (which has no Chinese) showed boxes.
     use wordcraft_doc::graphic::{Graphic, GraphicItem, GraphicKind, TextAlign};
     use wordcraft_doc::props::Rgb;
