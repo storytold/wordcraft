@@ -2,6 +2,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod automation_args;
+mod logging;
 mod script;
 
 use std::ffi::{OsStr, OsString};
@@ -25,8 +26,10 @@ USAGE:
                                               --markup (Print Markup): comments beside each page and
                                               tracked changes in pdf/png, a comment list in html/md/txt;
                                               --report (pdf only) also writes <out>.report.json:
-                                              pages, pdf version, tagged state, the fonts the
-                                              document requests and the fonts embedded
+                                              schemaVersion 1, pages, pdf version, tagged state,
+                                              requested/embedded fonts and warnings (empty if none);
+                                              announces replacement of any existing report;
+                                              a report write failure keeps the PDF and exits 1
   wordcraft-cli info <file>                   pages, words, paragraphs, properties (JSON)
   wordcraft-cli text <file>                   plain text
   wordcraft-cli inspect <file>                document structure (JSON)
@@ -66,6 +69,10 @@ A password-protected Word file is opened with --password PASS, --password-file P
 WORDCRAFT_PASSWORD environment variable; a password given on the command line is readable by
 every other process, so the other two are better. A file opened with a password is written with
 it again, as the app does. Exports that cannot carry a password (pdf, html, txt) stay plain.
+
+PDF dates: SOURCE_DATE_EPOCH pins Info and XMP dates to UTC integer seconds in
+0..=253402300799. Invalid values warn on stderr and use the document date or current time;
+an unset variable uses the same fallback without a warning.
 
 Paper: documents created here, and HTML, Markdown and text files (which give no page size), use
 the system region's paper (A4, or Letter in the US and other Letter regions), read from
@@ -234,27 +241,40 @@ fn convert(rest: &[String], open: &impl Fn(&str, Option<&str>) -> Result<Session
 /// `file.save` supplies the report from the bytes it wrote, including its saved-copy
 /// normalization. This path performs no second layout or PDF export.
 fn write_report(s: &Session, source: &str, target: &str, report: &Value) -> Result<(), String> {
+    let requested = requested_fonts(&s.doc);
+    let embedded = report.get("embeddedFonts").and_then(Value::as_array);
+    let warnings: Vec<Value> = requested
+        .iter()
+        .filter(|font| !embedded.is_some_and(|names| names.iter().any(|name| name.as_str().is_some_and(|name| name.eq_ignore_ascii_case(font)))))
+        .map(|font| json!({"code": "requestedFontNotEmbedded", "font": font}))
+        .collect();
     let mut value = report.clone();
+    value["schemaVersion"] = json!(1);
     value["source"] = json!(source);
     value["target"] = json!(target);
     value["format"] = json!("pdf");
-    value["requestedFonts"] = json!(requested_fonts(&s.doc));
+    value["requestedFonts"] = json!(requested);
+    value["warnings"] = json!(warnings);
     let sidecar = format!("{target}.report.json");
     let text = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
-    wordcraft_engine::io::write_file(&sidecar, text.as_bytes())?;
+    // Announce the replacement policy even if a report is created concurrently:
+    // the atomic write below may replace any directory entry at this exact path.
+    eprintln!("writing {sidecar} (replaces any existing report at this path)");
+    wordcraft_engine::io::write_file(&sidecar, text.as_bytes()).map_err(|e| format!("could not write report; the PDF remains at {target}: {e}"))?;
     eprintln!("wrote {sidecar}");
     Ok(())
 }
 
 /// The font names the document's runs ask for, sorted: body paragraphs and table
-/// cells, with tables nested inside cells walked as well. A run with no font of
+/// cells, with tables nested inside cells walked as well. Includes the Latin,
+/// East Asian and complex-script names set directly on each run. A run with no font of
 /// its own names none — it takes its style's font, which this does not resolve,
 /// so such text shows only under `embeddedFonts`. Header and footer stories are
 /// not walked in this first version.
 fn requested_fonts(doc: &wordcraft_doc::Document) -> Vec<String> {
     fn collect(p: &wordcraft_doc::Paragraph, fonts: &mut std::collections::BTreeSet<String>) {
         for (_, c) in p.run_ranges() {
-            if let Some(f) = c.font.as_deref().filter(|f| !f.trim().is_empty()) {
+            for f in [c.font.as_deref(), c.font_ea.as_deref(), c.font_cs.as_deref()].into_iter().flatten().filter(|f| !f.trim().is_empty()) {
                 fonts.insert(f.to_string());
             }
         }
@@ -829,6 +849,7 @@ fn parity_markdown(p: &Value) -> String {
 }
 
 fn main() -> ExitCode {
+    logging::init();
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     match run(&args) {
         Ok(()) | Err(Failure::StdoutClosed) => ExitCode::SUCCESS,

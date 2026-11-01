@@ -5,6 +5,7 @@ use wordcraft_doc::{CharProps, Document, Paragraph, para_block};
 fn doc_with_named_font(tag: &str) -> (tempfile::TempDir, std::path::PathBuf) {
     let dir = tempfile::Builder::new().prefix(&format!("wc-cli-report-{tag}-")).tempdir().unwrap();
     let mut doc = Document::new();
+    doc.core.title = "Private document title".into();
     doc.body = vec![para_block(Paragraph::with_text("Report me", CharProps { font: Some("Source Sans 3".into()), ..Default::default() }))];
     let input = dir.path().join("in.json");
     std::fs::write(&input, serde_json::to_vec(&doc).unwrap()).unwrap();
@@ -27,10 +28,18 @@ fn convert(input: &std::path::Path, out: &std::path::Path, report: bool) -> std:
 #[test]
 fn convert_report_writes_the_sidecar() {
     let (dir, input) = doc_with_named_font("sidecar");
-    let out = dir.path().join("out.pdf");
+    let output_dir = dir.path().join("converted");
+    std::fs::create_dir(&output_dir).unwrap();
+    let out = output_dir.join("out.pdf");
     let run = convert(&input, &out, true);
-    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
-    let report: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.path().join("out.pdf.report.json")).unwrap()).unwrap();
+    assert_eq!(run.status.code(), Some(0), "{}", String::from_utf8_lossy(&run.stderr));
+    let text = std::fs::read_to_string(output_dir.join("out.pdf.report.json")).unwrap();
+    assert!(!text.contains("Report me"));
+    assert!(!text.contains("Private document title"));
+    let report: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(report["schemaVersion"], 1);
+    assert_eq!(report["source"], input.to_string_lossy().as_ref());
+    assert_eq!(report["target"], out.to_string_lossy().as_ref());
     assert_eq!(report["format"], "pdf");
     assert_eq!(report["pages"], 1);
     assert_eq!(report["pdfVersion"], "1.7");
@@ -38,6 +47,7 @@ fn convert_report_writes_the_sidecar() {
     assert_eq!(report["pdfUa"], false);
     assert!(report["sourceDateEpoch"].is_null());
     assert_eq!(report["requestedFonts"], serde_json::json!(["Source Sans 3"]));
+    assert_eq!(report["warnings"], serde_json::json!([]));
     let embedded = report["embeddedFonts"].as_array().unwrap();
     assert!(embedded.iter().any(|f| f == "Source Sans 3"), "embedded fonts: {embedded:?}");
 }
@@ -54,7 +64,7 @@ fn convert_report_records_the_epoch_in_effect() {
         .env("SOURCE_DATE_EPOCH", "1700000000")
         .output()
         .unwrap();
-    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+    assert_eq!(run.status.code(), Some(0), "{}", String::from_utf8_lossy(&run.stderr));
     let report: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.path().join("epoch.pdf.report.json")).unwrap()).unwrap();
     assert_eq!(report["sourceDateEpoch"], 1_700_000_000);
 }
@@ -71,9 +81,10 @@ fn convert_report_names_an_unembeddable_font_as_requested_only() {
     std::fs::write(&input, serde_json::to_vec(&doc).unwrap()).unwrap();
     let out = dir.path().join("out.pdf");
     let run = convert(&input, &out, true);
-    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+    assert_eq!(run.status.code(), Some(0), "{}", String::from_utf8_lossy(&run.stderr));
     let report: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.path().join("out.pdf.report.json")).unwrap()).unwrap();
     assert_eq!(report["requestedFonts"], serde_json::json!(["Fictional Display Pro"]));
+    assert_eq!(report["warnings"], serde_json::json!([{"code": "requestedFontNotEmbedded", "font": "Fictional Display Pro"}]));
     let embedded = report["embeddedFonts"].as_array().unwrap();
     assert!(!embedded.iter().any(|f| f == "Fictional Display Pro"), "embedded fonts: {embedded:?}");
     assert!(!embedded.is_empty(), "a substitute font is embedded in its place");
@@ -84,7 +95,7 @@ fn convert_without_report_writes_no_sidecar() {
     let (dir, input) = doc_with_named_font("plain");
     let out = dir.path().join("plain.pdf");
     let run = convert(&input, &out, false);
-    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+    assert_eq!(run.status.code(), Some(0), "{}", String::from_utf8_lossy(&run.stderr));
     assert!(!dir.path().join("plain.pdf.report.json").exists());
 }
 
@@ -93,8 +104,9 @@ fn report_is_refused_for_non_pdf_output() {
     let (dir, input) = doc_with_named_font("refused");
     let out = dir.path().join("out.txt");
     let run = convert(&input, &out, true);
-    assert!(!run.status.success());
+    assert_eq!(run.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&run.stderr).contains("--report is only for PDF output"));
+    assert!(!out.exists());
 }
 
 #[cfg(unix)]
@@ -108,10 +120,63 @@ fn convert_report_replaces_an_existing_sidecar_symlink() {
     std::os::unix::fs::symlink(&unrelated, &sidecar).unwrap();
 
     let run = convert(&input, &out, true);
-    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+    assert_eq!(run.status.code(), Some(0), "{}", String::from_utf8_lossy(&run.stderr));
+    assert!(String::from_utf8_lossy(&run.stderr).contains("replaces any existing report"));
     assert_eq!(std::fs::read_to_string(&unrelated).unwrap(), "Keep this file intact.");
     assert!(!std::fs::symlink_metadata(&sidecar).unwrap().file_type().is_symlink());
     let report: serde_json::Value = serde_json::from_slice(&std::fs::read(&sidecar).unwrap()).unwrap();
     assert_eq!(report["format"], "pdf");
     assert_eq!(report["pages"], 1);
+}
+
+#[test]
+fn an_existing_report_is_replaced_with_a_notice() {
+    let (dir, input) = doc_with_named_font("replace");
+    let out = dir.path().join("out.pdf");
+    let sidecar = dir.path().join("out.pdf.report.json");
+    std::fs::write(&sidecar, "Previous report").unwrap();
+    let run = convert(&input, &out, true);
+    assert_eq!(run.status.code(), Some(0), "{}", String::from_utf8_lossy(&run.stderr));
+    assert!(String::from_utf8_lossy(&run.stderr).contains("replaces any existing report"));
+    let report: serde_json::Value = serde_json::from_slice(&std::fs::read(sidecar).unwrap()).unwrap();
+    assert_eq!(report["schemaVersion"], 1);
+}
+
+#[test]
+fn a_report_write_failure_keeps_the_pdf_and_exits_one() {
+    let (dir, input) = doc_with_named_font("write-error");
+    let out = dir.path().join("out.pdf");
+    let sidecar = dir.path().join("out.pdf.report.json");
+    // An existing directory cannot be replaced by the report's atomic file save,
+    // including when this test runs with privileges that bypass permission bits.
+    std::fs::create_dir(&sidecar).unwrap();
+    let run = convert(&input, &out, true);
+    assert_eq!(run.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(stderr.contains(&format!("wrote {}", out.display())), "{stderr}");
+    assert!(stderr.contains("could not write report; the PDF remains"), "{stderr}");
+    assert!(std::fs::read(&out).unwrap().starts_with(b"%PDF-"));
+    assert!(sidecar.is_dir());
+}
+
+#[test]
+fn requested_fonts_include_direct_east_asian_and_complex_script_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("in.json");
+    let out = dir.path().join("out.pdf");
+    let mut doc = Document::new();
+    doc.body = vec![para_block(Paragraph::with_text(
+        "Direct font names",
+        CharProps {
+            font: Some("Source Sans 3".into()),
+            font_ea: Some("Fictional East Asian".into()),
+            font_cs: Some("Fictional Complex Script".into()),
+            ..Default::default()
+        },
+    ))];
+    std::fs::write(&input, serde_json::to_vec(&doc).unwrap()).unwrap();
+    let run = convert(&input, &out, true);
+    assert_eq!(run.status.code(), Some(0), "{}", String::from_utf8_lossy(&run.stderr));
+    let report: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.path().join("out.pdf.report.json")).unwrap()).unwrap();
+    assert_eq!(report["requestedFonts"], serde_json::json!(["Fictional Complex Script", "Fictional East Asian", "Source Sans 3"]));
 }
