@@ -98,6 +98,12 @@ fn extra_of(e: &CharProps) -> Option<Box<CharProps>> {
     (x != CharProps::default()).then(|| Box::new(x))
 }
 
+/// The paragraph formatting only [`Para::extra`] holds that `p` sets itself; `None` when none.
+fn para_extra(p: &wordcraft_doc::props::ParaProps) -> Option<Box<wordcraft_doc::props::ParaProps>> {
+    let tabs = p.tabs.clone().filter(|t| !t.is_empty());
+    tabs.is_some().then(|| Box::new(wordcraft_doc::props::ParaProps { tabs, ..Default::default() }))
+}
+
 /// Revision `i` as a flow mark (unknown author and date when there is none).
 fn rev_mark(doc: &Document, i: u32) -> RevMark {
     doc.revisions.get(i as usize).map(|r| RevMark { author: r.author.clone(), date: r.date.clone(), id: Some(i) }).unwrap_or_default()
@@ -246,7 +252,11 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
         mark_ins: None,
         mark_del: None,
         fmt_change: None,
+        extra: None,
     };
+    if opts.paras {
+        out.extra = para_extra(&p.props);
+    }
     let in_code = kind == Kind::Code;
     let mut k = 0usize;
     for (range, props) in p.run_ranges() {
@@ -286,6 +296,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
                         mark_ins: None,
                         mark_del: None,
                         fmt_change: None,
+                        extra: None,
                     };
                     let prev = std::mem::replace(&mut out, next);
                     if prev.inlines.is_empty() {

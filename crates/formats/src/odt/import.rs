@@ -103,6 +103,18 @@ pub(super) fn read_meta(xml: &[u8]) -> Meta {
     m
 }
 
+/// The boolean configuration item `name` of `settings.xml` (ODF 1.3 §3.10), when it has one.
+fn setting(xml: &[u8], name: &str) -> Option<bool> {
+    let mut inside = false;
+    let mut value = None;
+    events(xml, |ev| match ev {
+        Ev::Start(q, a) => inside = q == "config:config-item" && get(&a, "config:name") == Some(name) && value.is_none(),
+        Ev::Text(t) if inside => value = Some(t.trim() == "true"),
+        _ => inside = false,
+    });
+    value
+}
+
 /// Parse an `.odt` package into the flow model.
 pub fn parse(bytes: &[u8]) -> Result<Flow, String> {
     parse_full(bytes).map(|(flow, _)| flow)
@@ -126,6 +138,8 @@ struct Parsed {
     spacing: model::Spacing,
     /// Whether the document kerns pairs of letters by default.
     kern: bool,
+    /// The default tab interval, points.
+    default_tab: Option<f32>,
     parts: page_parts::Parts,
 }
 
@@ -147,6 +161,7 @@ fn parse_tracked(bytes: &[u8]) -> Result<Parsed, String> {
         pages = read_pages(s);
     }
     styles.read(&content, true);
+    styles.tabs_from_indent = read_entry(&mut z, "settings.xml").map(|s| setting(&s, "TabsRelativeToIndent")).unwrap_or(None).unwrap_or(true);
     let meta = read_entry(&mut z, "meta.xml").map(|m| read_meta(&m)).unwrap_or_default();
     let mut pictures = Pictures::new(MAX_ENTRY);
     let mut fetch = |path: &str| -> Option<Vec<u8>> {
@@ -170,18 +185,30 @@ fn parse_tracked(bytes: &[u8]) -> Result<Parsed, String> {
         blocks.push(FBlock::Para(Para::default()));
     }
     let track = body.track;
-    Ok(Parsed { flow: Flow { blocks, meta }, last, track, font: styles.doc_font(), spacing: styles.doc_spacing(), kern: styles.default_kern, parts })
+    Ok(Parsed {
+        flow: Flow { blocks, meta },
+        last,
+        track,
+        font: styles.doc_font(),
+        spacing: styles.doc_spacing(),
+        kern: styles.default_kern,
+        default_tab: styles.default_tab,
+        parts,
+    })
 }
 
 /// Parse an `.odt` package into a document.
 pub fn import(bytes: &[u8]) -> Result<Document, String> {
     model::begin_import();
-    let Parsed { flow, last, track, font, spacing, kern, parts } = parse_tracked(bytes)?;
+    let Parsed { flow, last, track, font, spacing, kern, default_tab, parts } = parse_tracked(bytes)?;
     let mut doc = model::to_doc(&flow);
     if font.is_some() {
         doc.styles.default_chr.font = font;
     }
     doc.styles.default_chr.kern = kern.then_some(1.0);
+    if let Some(t) = default_tab {
+        doc.settings.default_tab = t;
+    }
     let d = &mut doc.styles.default_para;
     (d.space_before, d.space_after, d.line_spacing) = (spacing.before, spacing.after, spacing.line);
     (d.indent_left, d.indent_right, d.indent_first) = (spacing.left, spacing.right, spacing.first);

@@ -253,6 +253,32 @@ fn annotation_name(prefix: &str, id: u32) -> String {
     format!("__Annotation__{prefix}{id}")
 }
 
+/// `style:tab-stops` (ODF 1.3 §17.7) for `tabs`, measured from the margin (the package's
+/// settings say so); bar and clearing stops have no ODF form and are left out.
+fn tab_stops(tabs: &[wordcraft_doc::props::TabStop]) -> String {
+    use wordcraft_doc::props::{TabAlign, TabLeader};
+    let mut s = String::from("<style:tab-stops>");
+    for t in tabs.iter().filter(|t| t.pos.is_finite()) {
+        let kind = match t.align {
+            TabAlign::Left => "",
+            TabAlign::Center => " style:type=\"center\"",
+            TabAlign::Right => " style:type=\"right\"",
+            TabAlign::Decimal => " style:type=\"char\" style:char=\".\"",
+            TabAlign::Bar | TabAlign::Clear => continue,
+        };
+        let leader = match t.leader {
+            TabLeader::None => "",
+            TabLeader::Dot => " style:leader-style=\"dotted\" style:leader-text=\".\"",
+            TabLeader::Hyphen => " style:leader-style=\"solid\" style:leader-text=\"-\"",
+            TabLeader::Underscore => " style:leader-style=\"solid\" style:leader-text=\"_\"",
+            TabLeader::MiddleDot => " style:leader-style=\"dotted\" style:leader-text=\"·\"",
+        };
+        s.push_str(&format!("<style:tab-stop style:position=\"{}\"{kind}{leader}/>", pt(t.pos)));
+    }
+    s.push_str("</style:tab-stops>");
+    s
+}
+
 fn parent_style(k: Kind) -> &'static str {
     match k {
         Kind::Heading(1) => "Heading_20_1",
@@ -318,6 +344,11 @@ impl Writer {
             props.push_str(" fo:keep-with-next=\"always\"");
         }
         props.push_str(&spacing_props(&p.spacing));
+        // Children of the paragraph properties go after a separator in the key.
+        if let Some(tabs) = p.extra.as_ref().and_then(|x| x.tabs.as_ref()) {
+            props.push('\u{1}');
+            props.push_str(&tab_stops(tabs));
+        }
         if p.kind == Kind::Rule {
             props.push_str(" fo:border-bottom=\"0.75pt solid #a0a0a0\" fo:padding-bottom=\"1pt\"");
         }
@@ -879,8 +910,9 @@ impl Writer {
         }
         for ((parent, props, master), n) in &self.para_styles {
             let master = if master.is_empty() { String::new() } else { format!(" style:master-page-name=\"{}\"", x(master)) };
+            let (attrs, children) = props.split_once('\u{1}').unwrap_or((props, ""));
             s.push_str(&format!(
-                "<style:style style:name=\"{n}\" style:family=\"paragraph\" style:parent-style-name=\"{parent}\"{master}><style:paragraph-properties{props}/></style:style>"
+                "<style:style style:name=\"{n}\" style:family=\"paragraph\" style:parent-style-name=\"{parent}\"{master}><style:paragraph-properties{attrs}>{children}</style:paragraph-properties></style:style>"
             ));
         }
         for (i, kinds) in self.list_styles.iter().enumerate() {

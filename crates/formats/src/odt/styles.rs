@@ -1,7 +1,7 @@
 use super::xml::{Attrs, Ev, events, get, length, local};
 use super::{Align, Arc, Columns, Fmt, HashMap, Kind, Rgb, VAlign, model};
 use crate::model::Spacing;
-use wordcraft_doc::props::{LineSpacing, Underline};
+use wordcraft_doc::props::{LineSpacing, TabAlign, TabLeader, TabStop, Underline};
 use wordcraft_doc::section::NumFormat;
 
 // ---------------------------------------------------------------------------------------------
@@ -172,6 +172,38 @@ struct StyleInfo {
     columns: Option<Columns>,
     /// Margins, first-line indent and line spacing of `style:paragraph-properties`.
     spacing: Spacing,
+    /// `style:tab-stops`: the style's whole set (it replaces the parent's, §17.7).
+    tabs: Option<Vec<TabStop>>,
+}
+
+/// Most tab stops a paragraph style keeps (Word's limit).
+const MAX_TABS: usize = 64;
+
+/// A `style:tab-stop` (ODF 1.3 §17.8), its position from where the style measures; `None` when
+/// it has no usable position.
+fn tab_stop(a: &Attrs) -> Option<TabStop> {
+    let pos = get(a, "style:position").and_then(length).filter(|p| p.is_finite())?.clamp(-MAX_LEN, MAX_LEN);
+    let align = match get(a, "style:type").map(str::trim) {
+        Some("center") => TabAlign::Center,
+        Some("right") => TabAlign::Right,
+        Some("char") => TabAlign::Decimal,
+        _ => TabAlign::Left,
+    };
+    let style = get(a, "style:leader-style").map(str::trim).unwrap_or("none");
+    let leader = if style == "none" {
+        TabLeader::None
+    } else {
+        match get(a, "style:leader-text").and_then(|t| t.chars().next()) {
+            Some('.') => TabLeader::Dot,
+            Some('-') => TabLeader::Hyphen,
+            Some('_') => TabLeader::Underscore,
+            Some('·') => TabLeader::MiddleDot,
+            _ if style == "dotted" => TabLeader::Dot,
+            _ if matches!(style, "dash" | "long-dash") => TabLeader::Hyphen,
+            _ => TabLeader::Underscore,
+        }
+    };
+    Some(TabStop { pos, align, leader })
 }
 
 /// Paragraph spacing, indents and line height of a `style:paragraph-properties` element (ODF 1.3
@@ -237,6 +269,8 @@ pub(super) struct ParaLook {
     pub(super) keep_next: bool,
     pub(super) fmt: Fmt,
     pub(super) spacing: Spacing,
+    /// Tab stops, from where the document measures them.
+    pub(super) tabs: Option<Vec<TabStop>>,
 }
 
 /// Columns of a `style:columns` element (ODF 1.3 §17.12): count and gap, clamped as the RTF and
@@ -397,6 +431,11 @@ pub(super) struct Styles {
     default_font: Option<String>,
     /// Spacing of `style:default-style` for paragraphs.
     default_spacing: Spacing,
+    /// Tab stops are measured from the paragraph's indent (LibreOffice's `TabsRelativeToIndent`
+    /// setting in `settings.xml`, on unless it says otherwise).
+    pub(super) tabs_from_indent: bool,
+    /// The default tab interval (`style:tab-stop-distance` of the default style), points.
+    pub(super) default_tab: Option<f32>,
     /// Pair kerning of `style:default-style` for paragraphs (`style:letter-kerning`, §20.317;
     /// off unless it says so).
     pub(super) default_kern: bool,
@@ -429,7 +468,24 @@ impl Styles {
                     self.default_font = default_font(&a);
                     self.default_kern = get(&a, "style:letter-kerning").is_some_and(|k| k.trim() == "true");
                 }
-                "paragraph-properties" if in_default && cur.is_none() => paragraph_spacing(&a, &mut self.default_spacing),
+                "paragraph-properties" if in_default && cur.is_none() => {
+                    paragraph_spacing(&a, &mut self.default_spacing);
+                    if let Some(d) = get(&a, "style:tab-stop-distance").and_then(length).filter(|d| d.is_finite() && *d > 0.0) {
+                        self.default_tab = Some(d.clamp(1.0, MAX_LEN));
+                    }
+                }
+                "tab-stops" => {
+                    if let Some((_, s)) = &mut cur {
+                        s.tabs = Some(Vec::new());
+                    }
+                }
+                "tab-stop" => {
+                    if let Some(t) = cur.as_mut().and_then(|(_, s)| s.tabs.as_mut()).filter(|t| t.len() < MAX_TABS)
+                        && let Some(stop) = tab_stop(&a)
+                    {
+                        t.push(stop);
+                    }
+                }
                 "text-properties" => {
                     if let Some((_, s)) = &mut cur {
                         text_properties(&a, s);
@@ -634,6 +690,8 @@ impl Styles {
         }
         // Like the text formatting, the kind style's own `fo:keep-with-next` (a heading's) is the kind's look, not direct formatting.
         let keep_next = chain.iter().take(kind_at).find_map(|(_, s)| s.keep_next).unwrap_or(false);
-        ParaLook { kind, align, page_break: pb, rule, keep_next, fmt: f, spacing }
+        // A style's tab stops replace its parent's; the kind's style and Standard give none.
+        let tabs = chain.iter().take(kind_at).filter(|(n, s)| s.auto || *n != "Standard").find_map(|(_, s)| s.tabs.clone());
+        ParaLook { kind, align, page_break: pb, rule, keep_next, fmt: f, spacing, tabs }
     }
 }

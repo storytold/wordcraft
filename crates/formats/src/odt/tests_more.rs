@@ -7,3 +7,4 @@ mod headers;
 mod lists;
 mod notes;
 mod spacing;
+mod tabs;

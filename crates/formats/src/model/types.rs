@@ -246,6 +246,8 @@ pub struct FlowOpts {
     /// Character formatting beyond the [`Fmt`] fields ([`Fmt::extra`]), hidden text kept (as
     /// hidden), and a monospaced font by its name rather than as code.
     pub chars: bool,
+    /// Paragraph formatting beyond the [`Para`] fields ([`Para::extra`]).
+    pub paras: bool,
     /// Lists with their identity and labels ([`ListInfo::list`], [`ListInfo::label`]; otherwise
     /// consecutive items form one list in the default look of its kind).
     pub lists: bool,
@@ -426,6 +428,9 @@ pub struct Para {
     /// Tracked formatting change of the paragraph: the paragraph's formatting before it (kind,
     /// list, alignment, page break, spacing and borders of `old`; its inlines are unused).
     pub fmt_change: Option<Box<FmtChange<Para>>>,
+    /// Paragraph formatting beyond the fields above, for formats that keep it (ODT): its own
+    /// tab stops. Only flows asked for it ([`FlowOpts::paras`]) hold it.
+    pub extra: Option<Box<wordcraft_doc::props::ParaProps>>,
 }
 
 impl Para {

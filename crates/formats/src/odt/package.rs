@@ -38,7 +38,11 @@ fn page_parts(doc: &Document, sec: &SectionProps, w: &mut Writer) -> PageParts {
             }
             let mut body = String::new();
             if let Some(part) = id.and_then(|i| doc.parts.get(&i)) {
-                let blocks = model::part_flow(doc, &part.blocks, model::FlowOpts { fields: true, lists: true, chars: true, ..Default::default() });
+                let blocks = model::part_flow(
+                    doc,
+                    &part.blocks,
+                    model::FlowOpts { fields: true, lists: true, chars: true, paras: true, ..Default::default() },
+                );
                 w.blocks(&blocks, &mut body, 0);
             }
             if body.is_empty() {
@@ -65,12 +69,14 @@ fn styles_xml(
     body_font: &str,
     defaults: &model::Spacing,
     kern: bool,
+    tab: f32,
 ) -> String {
     let mut s = format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-styles {NS}><office:styles>");
     s.push_str(&format!(
-        "<style:default-style style:family=\"paragraph\"><style:paragraph-properties{}/><style:text-properties fo:font-family=\"'{}'\" fo:font-size=\"12pt\" style:letter-kerning=\"{kern}\"/></style:default-style>",
+        "<style:default-style style:family=\"paragraph\"><style:paragraph-properties{} style:tab-stop-distance=\"{tab}\"/><style:text-properties fo:font-family=\"'{}'\" fo:font-size=\"12pt\" style:letter-kerning=\"{kern}\"/></style:default-style>",
         spacing_props(defaults),
-        x(body_font)
+        x(body_font),
+        tab = pt(tab)
     ));
     s.push_str("<style:style style:name=\"Standard\" style:family=\"paragraph\" style:class=\"text\"/>");
     s.push_str("<style:style style:name=\"Heading\" style:family=\"paragraph\" style:parent-style-name=\"Standard\" style:class=\"text\"><style:paragraph-properties fo:margin-top=\"12pt\" fo:margin-bottom=\"4pt\" fo:keep-with-next=\"always\"/><style:text-properties fo:color=\"#0f4761\"/></style:style>");
@@ -141,6 +147,16 @@ fn styles_xml(
     s
 }
 
+/// `settings.xml` (ODF 1.3 §3.10): tab stops are measured from the margin, as WordCraft's and
+/// Word's are (LibreOffice's own default measures them from the paragraph's indent).
+const SETTINGS: &str = concat!(
+    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+    "<office:document-settings xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" xmlns:config=\"urn:oasis:names:tc:opendocument:xmlns:config:1.0\" office:version=\"1.3\">",
+    "<office:settings><config:config-item-set config:name=\"ooo:configuration-settings\">",
+    "<config:config-item config:name=\"TabsRelativeToIndent\" config:type=\"boolean\">false</config:config-item>",
+    "</config:config-item-set></office:settings></office:document-settings>\n"
+);
+
 fn meta_xml(m: &Meta) -> String {
     let mut s =
         format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-meta {NS}><office:meta><meta:generator>WordCraft</meta:generator>");
@@ -188,7 +204,10 @@ fn flow_sections(blocks: &[FBlock], last: &SectionProps) -> Vec<(SectionProps, s
 
 /// Write an `.odt` package.
 pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
-    let flow = model::from_doc_with(doc, model::FlowOpts { tracked: true, fields: true, notes: true, comments: true, lists: true, chars: true });
+    let flow = model::from_doc_with(
+        doc,
+        model::FlowOpts { tracked: true, fields: true, notes: true, comments: true, lists: true, chars: true, paras: true },
+    );
     let mut w = Writer::default();
     let mut body = String::new();
     let sections = flow_sections(&flow.blocks, &doc.last_section);
@@ -256,11 +275,11 @@ pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
     let mut hw = Writer::with_prefix("M");
     let parts: Vec<PageParts> = pages.iter().map(|(_, sec)| page_parts(doc, sec, &mut hw)).collect();
     let kern = doc.styles.default_chr.kern.is_some_and(|k| k > 0.0);
-    let styles = styles_xml(&pages, &parts, &hw.style_defs(), &body_font, &defaults, kern);
+    let styles = styles_xml(&pages, &parts, &hw.style_defs(), &body_font, &defaults, kern, doc.settings.default_tab.clamp(1.0, 1584.0));
     w.pictures.append(&mut hw.pictures);
     let meta = meta_xml(&flow.meta);
     let mut manifest = String::from(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<manifest:manifest xmlns:manifest=\"urn:oasis:names:tc:opendocument:xmlns:manifest:1.0\" manifest:version=\"1.3\">\n<manifest:file-entry manifest:full-path=\"/\" manifest:version=\"1.3\" manifest:media-type=\"application/vnd.oasis.opendocument.text\"/>\n<manifest:file-entry manifest:full-path=\"content.xml\" manifest:media-type=\"text/xml\"/>\n<manifest:file-entry manifest:full-path=\"styles.xml\" manifest:media-type=\"text/xml\"/>\n<manifest:file-entry manifest:full-path=\"meta.xml\" manifest:media-type=\"text/xml\"/>\n",
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<manifest:manifest xmlns:manifest=\"urn:oasis:names:tc:opendocument:xmlns:manifest:1.0\" manifest:version=\"1.3\">\n<manifest:file-entry manifest:full-path=\"/\" manifest:version=\"1.3\" manifest:media-type=\"application/vnd.oasis.opendocument.text\"/>\n<manifest:file-entry manifest:full-path=\"content.xml\" manifest:media-type=\"text/xml\"/>\n<manifest:file-entry manifest:full-path=\"styles.xml\" manifest:media-type=\"text/xml\"/>\n<manifest:file-entry manifest:full-path=\"meta.xml\" manifest:media-type=\"text/xml\"/>\n<manifest:file-entry manifest:full-path=\"settings.xml\" manifest:media-type=\"text/xml\"/>\n",
     );
     for (name, _, mime) in &w.pictures {
         manifest.push_str(&format!("<manifest:file-entry manifest:full-path=\"{}\" manifest:media-type=\"{mime}\"/>\n", x(name)));
@@ -279,6 +298,7 @@ pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
         ("content.xml", content.as_bytes()),
         ("styles.xml", styles.as_bytes()),
         ("meta.xml", meta.as_bytes()),
+        ("settings.xml", SETTINGS.as_bytes()),
     ] {
         z.start_file(name, deflated).map_err(err)?;
         z.write_all(data).map_err(ioerr)?;
