@@ -24,7 +24,10 @@ pub use kurbo::BezPath;
 pub use script::{fallback_rank, is_emoji, needs_layout_tables, script_fallbacks};
 use skrifa::MetadataProvider;
 use skrifa::instance::Size;
-pub use ui_fallback::{SystemUiFont, is_cjk, system_cjk_ui_font, system_cjk_ui_font_for, system_hant_ui_font, ui_needs_system_cjk, ui_uncovered_cjk};
+pub use ui_fallback::{
+    SystemUiFont, SystemUiFonts, is_cjk, system_cjk_ui_font, system_cjk_ui_font_for, system_hant_ui_font, system_ui_fonts, ui_needs_system_cjk,
+    ui_uncovered_cjk,
+};
 
 /// A font from the optional craft-fonts build input (https://github.com/storytold/craft-fonts;
 /// empty unless built with `CRAFT_FONTS_DIR`, see `build.rs`).

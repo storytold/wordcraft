@@ -167,6 +167,9 @@ pub struct UiState {
     /// size in percent. Junk saved values read as Auto; out-of-range ones are clamped to 50–300 %.
     #[serde(rename = "uiScale")]
     pub interface_size: theme::InterfaceSize,
+    /// Interface font (#1375): the embedded Inter (default), the desktop's default sans-serif, or
+    /// an installed family. Ribbon, menus and dialogs only; document fonts are separate.
+    pub interface_font: theme::InterfaceFont,
     /// The interface size `ui.json` held before #822, on top of the display scale: read once to
     /// migrate ([`theme::legacy_interface_percent`]), never written. A valid `uiScale` wins.
     #[serde(rename = "interfaceSize", skip_serializing)]
@@ -313,6 +316,7 @@ impl Default for UiState {
             recent_fonts: Vec::new(),
             theme: theme::Appearance::default(),
             interface_size: theme::InterfaceSize::default(),
+            interface_font: theme::InterfaceFont::default(),
             legacy_interface_size: None,
             animations: theme::Animations::default(),
             legacy_dark: None,
@@ -519,6 +523,12 @@ pub struct WordApp {
     /// The Navigation pane's search box takes the keyboard on its next frame (Ctrl+F, #712).
     pub(crate) nav_search_focus: bool,
     styled: bool,
+    /// The chosen interface faces (#1375), resolved when the setting changes; `None` is Inter.
+    interface_faces: Option<theme::InterfaceFaces>,
+    /// The interface font setting [`WordApp::interface_faces`] was resolved for.
+    interface_font: Option<theme::InterfaceFont>,
+    /// The interface fonts need installing on the next frame (the setting changed).
+    fonts_dirty: bool,
     /// The CJK face order the installed UI fonts use (Chinese first, or Japanese first).
     fonts_hans: bool,
     /// Whether the installed UI fonts use the Korean CJK face order.

@@ -212,6 +212,7 @@ fn general(app: &mut WordApp, ui: &mut Ui) {
     section(ui, "Interface");
     theme_picker(app, ui);
     interface_size_picker(app, ui);
+    interface_font_picker(app, ui);
     ui.checkbox(&mut app.ui.mini_toolbar, tl!("Show the mini toolbar when text is selected"));
     let mut dark_page = app.session.view.dark_mode;
     if ui
@@ -688,6 +689,45 @@ fn interface_size_picker(app: &mut WordApp, ui: &mut Ui) {
     ui.label(
         RichText::new(tl!(
             "Makes the ribbon, menus and dialogs larger or smaller. Auto follows your system's display scaling; 100% is one screen pixel per point. Document zoom is separate."
+        ))
+        .small()
+        .weak(),
+    );
+}
+
+/// Interface font (#1375): Inter (the default), the desktop's default sans-serif, or an installed
+/// family. The document's own fonts are separate.
+fn interface_font_picker(app: &mut WordApp, ui: &mut Ui) {
+    use crate::theme::InterfaceFont;
+    let selected = match &app.ui.interface_font {
+        InterfaceFont::Inter => tl!("Inter (default)").to_string(),
+        InterfaceFont::System => tl!("System default").to_string(),
+        InterfaceFont::Family(family) => app.previews.font_shown(family),
+    };
+    let mut chosen: Option<InterfaceFont> = None;
+    ui.horizontal(|ui| {
+        craft_ui::ComboBox::new("interface_font", tl!("Interface font:")).selected_text(selected).width(220.0).show_ui(ui, |ui| {
+            if ui.selectable_label(matches!(&app.ui.interface_font, InterfaceFont::Inter), tl!("Inter (default)")).clicked() {
+                chosen = Some(InterfaceFont::Inter);
+            }
+            if ui.selectable_label(matches!(&app.ui.interface_font, InterfaceFont::System), tl!("System default")).clicked() {
+                chosen = Some(InterfaceFont::System);
+            }
+            ui.separator();
+            for family in app.previews.families().into_iter().filter(|f| !f.eq_ignore_ascii_case("Inter")) {
+                let stored = app.previews.font_stored(&family);
+                if ui.selectable_label(app.ui.interface_font.family().is_some_and(|f| f.eq_ignore_ascii_case(&stored)), family).clicked() {
+                    chosen = Some(InterfaceFont::Family(stored));
+                }
+            }
+        });
+    });
+    if let Some(font) = chosen {
+        let _ = app.run("ui.interfaceFont", json!({"value": font.value()}));
+    }
+    ui.label(
+        RichText::new(tl!(
+            "Draws the ribbon, menus and dialogs in Inter (the default), your desktop's interface font, or an installed family. Document text is unchanged."
         ))
         .small()
         .weak(),

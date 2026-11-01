@@ -79,6 +79,76 @@ impl From<Appearance> for String {
     }
 }
 
+/// The interface font setting (File › Options › General, `ui.interfaceFont`, #1375): the embedded
+/// Inter (the default), the desktop's default sans-serif (`system`; on Linux resolved through
+/// fontconfig), or an installed family. Document fonts are separate: this changes the ribbon,
+/// menus and dialogs only.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(from = "String", into = "String")]
+pub enum InterfaceFont {
+    /// The embedded Inter faces: WordCraft's own interface font.
+    #[default]
+    Inter,
+    /// The desktop's default sans-serif (fontconfig's `sans-serif` on Linux).
+    System,
+    /// An installed family, by its English family name.
+    Family(String),
+}
+
+impl InterfaceFont {
+    /// Longest family name kept, in characters.
+    pub const MAX_FAMILY_CHARS: usize = 128;
+
+    /// A setting value: `inter` (or `default`), `system`, or a family name. `None` for an empty
+    /// value or one with control characters; a family name that is too long is truncated.
+    pub fn from_value(value: &str) -> Option<Self> {
+        let v = value.trim();
+        if v.is_empty() {
+            return None;
+        }
+        if v.eq_ignore_ascii_case("inter") || v.eq_ignore_ascii_case("default") {
+            return Some(InterfaceFont::Inter);
+        }
+        if v.eq_ignore_ascii_case("system") {
+            return Some(InterfaceFont::System);
+        }
+        if v.chars().any(char::is_control) {
+            return None;
+        }
+        Some(InterfaceFont::Family(v.chars().take(Self::MAX_FAMILY_CHARS).collect()))
+    }
+
+    /// The value saved in `ui.json` and used by `ui.interfaceFont`.
+    pub fn value(&self) -> String {
+        match self {
+            InterfaceFont::Inter => "inter".into(),
+            InterfaceFont::System => "system".into(),
+            InterfaceFont::Family(family) => family.clone(),
+        }
+    }
+
+    /// The family named by the setting, if it names one.
+    pub fn family(&self) -> Option<&str> {
+        match self {
+            InterfaceFont::Family(family) => Some(family),
+            _ => None,
+        }
+    }
+}
+
+/// An unknown saved value reads as Inter rather than discarding the whole `ui.json`.
+impl From<String> for InterfaceFont {
+    fn from(value: String) -> Self {
+        InterfaceFont::from_value(&value).unwrap_or_default()
+    }
+}
+
+impl From<InterfaceFont> for String {
+    fn from(font: InterfaceFont) -> Self {
+        font.value()
+    }
+}
+
 /// Interface size (File › Options › General, `ui.interfaceSize`): how large the ribbon, menus, panes
 /// and dialogs are drawn, through egui's zoom factor. Document zoom (View › Zoom) is a separate
 /// setting and never changes with it.
@@ -439,6 +509,117 @@ impl Tokens {
     }
 }
 
+/// The installed faces that draw the interface instead of Inter, kept while the setting stays the
+/// same. Inter stays after them in every family, so a character the chosen face lacks still draws.
+#[derive(Clone)]
+pub struct InterfaceFaces {
+    /// The family the faces came from, for the Options page and `ui.interfaceFont`.
+    pub label: String,
+    /// The chosen family's regular, medium and semibold faces. They may be the same face when the
+    /// family has only one weight; an `Arc` shared between them is installed once.
+    pub regular: Arc<FontData>,
+    pub medium: Arc<FontData>,
+    pub semibold: Arc<FontData>,
+}
+
+/// The egui font names of a chosen interface family's faces.
+const CHOSEN_REGULAR: &str = "chosen interface regular";
+const CHOSEN_MEDIUM: &str = "chosen interface medium";
+const CHOSEN_SEMIBOLD: &str = "chosen interface semibold";
+
+/// The faces for the interface font setting, or `None` when it asks for Inter or the system font
+/// can't be resolved (the caller keeps Inter then).
+pub fn resolve_interface_faces(font: &InterfaceFont) -> Option<InterfaceFaces> {
+    match font {
+        InterfaceFont::Inter => None,
+        InterfaceFont::System => system_interface_faces(),
+        InterfaceFont::Family(family) => family_interface_faces(family),
+    }
+}
+
+/// The desktop's default interface faces. Linux asks fontconfig for `sans-serif`; the other
+/// platforms use their UI family when it is installed. Inter remains the fallback everywhere.
+fn system_interface_faces() -> Option<InterfaceFaces> {
+    #[cfg(target_os = "linux")]
+    {
+        let fonts = wordcraft_fonts::system_ui_fonts()?;
+        let rd = system_font_data(&fonts.regular);
+        let md = if same_system_face(&fonts.regular, &fonts.medium) { rd.clone() } else { system_font_data(&fonts.medium) };
+        let sd = if same_system_face(&fonts.regular, &fonts.semibold) {
+            rd.clone()
+        } else if same_system_face(&fonts.medium, &fonts.semibold) {
+            md.clone()
+        } else {
+            system_font_data(&fonts.semibold)
+        };
+        Some(InterfaceFaces { label: fonts.regular.family.clone(), regular: rd, medium: md, semibold: sd })
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let families: &[&str] = if cfg!(target_os = "macos") {
+            &["System Font", ".SF NS", "Helvetica Neue"]
+        } else if cfg!(target_os = "windows") {
+            &["Segoe UI"]
+        } else {
+            &[]
+        };
+        families.iter().find_map(|family| family_interface_faces(family))
+    }
+}
+
+/// Whether `face` really is a face of `family`: its typographic, legacy or full name, or one of the
+/// family's localized names (宋体 for SimSun). [`wordcraft_fonts::FontDb::face`] falls back to another
+/// family when a cataloged family's files can't be read, so a caller that chose `family` must check.
+fn face_is_family(face: &wordcraft_fonts::FontFace, family: &str) -> bool {
+    face.named(family) || face.local_names.iter().any(|n| n.name.eq_ignore_ascii_case(family))
+}
+
+/// The installed `family`'s regular, medium and semibold faces (the closest weight it has). `None`
+/// when `family` can't be resolved to a face of its own: a selected family never silently becomes
+/// another one.
+fn family_interface_faces(family: &str) -> Option<InterfaceFaces> {
+    let db = wordcraft_fonts::FontDb::global();
+    if !db.has_family(family) {
+        return None;
+    }
+    let regular = db.face(family, "Regular");
+    if !face_is_family(&regular, family) {
+        return None;
+    }
+    let medium = db.face(family, "Medium");
+    let semibold = db.face(family, "SemiBold");
+    // A missing weight resolves to the closest one in the family; a face from another family is a
+    // fallback and must not be used, so the chosen family's regular face stands in instead.
+    let medium = (medium.id() != regular.id() && face_is_family(&medium, family)).then_some(medium);
+    let semibold = (semibold.id() != regular.id() && face_is_family(&semibold, family)).then_some(semibold);
+    let rd = face_data(&regular);
+    let md = medium.as_ref().map_or_else(|| rd.clone(), |face| face_data(face));
+    let sd = match semibold {
+        Some(face) if medium.as_ref().is_some_and(|m| m.id() == face.id()) => md.clone(),
+        Some(face) => face_data(&face),
+        None => md.clone(),
+    };
+    Some(InterfaceFaces { label: regular.family.clone(), regular: rd, medium: md, semibold: sd })
+}
+
+fn face_data(face: &wordcraft_fonts::FontFace) -> Arc<FontData> {
+    let mut data = FontData::from_owned(face.data().to_vec());
+    data.index = face.index();
+    Arc::new(data)
+}
+
+#[cfg(target_os = "linux")]
+fn system_font_data(font: &wordcraft_fonts::SystemUiFont) -> Arc<FontData> {
+    let mut data = FontData::from_owned(font.bytes.as_slice().to_vec());
+    data.index = font.index;
+    Arc::new(data)
+}
+
+#[cfg(target_os = "linux")]
+fn same_system_face(a: &wordcraft_fonts::SystemUiFont, b: &wordcraft_fonts::SystemUiFont) -> bool {
+    a.index == b.index && Arc::ptr_eq(&a.bytes, &b.bytes)
+}
+
 /// Install the UI fonts (Inter, JetBrains Mono) and the craft-fonts CJK interface faces if built
 /// in, Japanese first.
 pub fn install_fonts(ctx: &egui::Context) {
@@ -485,7 +666,20 @@ pub fn install_fonts_language_extra(
     system_cjk: bool,
     faces: &[Arc<wordcraft_fonts::FontFace>],
 ) {
-    let mut fonts = font_definitions_language(prefer_hans, prefer_korean, prefer_hant, system_cjk);
+    install_fonts_language_extra_with(ctx, prefer_hans, prefer_korean, prefer_hant, system_cjk, faces, None);
+}
+
+/// [`install_fonts_language_extra`] with a chosen interface font (#1375); `None` is Inter.
+pub fn install_fonts_language_extra_with(
+    ctx: &egui::Context,
+    prefer_hans: bool,
+    prefer_korean: bool,
+    prefer_hant: bool,
+    system_cjk: bool,
+    faces: &[Arc<wordcraft_fonts::FontFace>],
+    interface: Option<&InterfaceFaces>,
+) {
+    let mut fonts = font_definitions_language_with(prefer_hans, prefer_korean, prefer_hant, system_cjk, interface);
     add_fallback_faces(&mut fonts, faces);
     ctx.set_fonts(fonts);
 }
@@ -541,6 +735,18 @@ pub fn font_definitions(prefer_hans: bool, system_cjk: bool) -> FontDefinitions 
 
 /// The interface fonts, ordered for the preferred CJK writing system.
 pub fn font_definitions_language(prefer_hans: bool, prefer_korean: bool, prefer_hant: bool, system_cjk: bool) -> FontDefinitions {
+    font_definitions_language_with(prefer_hans, prefer_korean, prefer_hant, system_cjk, None)
+}
+
+/// [`font_definitions_language`] with a chosen interface font (#1375): its regular, medium and
+/// semibold faces go first in the three families, and Inter stays after them as the fallback.
+pub fn font_definitions_language_with(
+    prefer_hans: bool,
+    prefer_korean: bool,
+    prefer_hant: bool,
+    system_cjk: bool,
+    interface: Option<&InterfaceFaces>,
+) -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
     let add = |fonts: &mut FontDefinitions, name: &str, bytes: &'static [u8]| {
         fonts.font_data.insert(name.into(), Arc::new(FontData::from_static(bytes)));
@@ -550,15 +756,39 @@ pub fn font_definitions_language(prefer_hans: bool, prefer_korean: bool, prefer_
     add(&mut fonts, "InterSemiBold", include_bytes!("../../../assets/fonts/Inter-SemiBold.ttf"));
     add(&mut fonts, "SourceSans", include_bytes!("../../../assets/fonts/SourceSans3-Regular.ttf"));
     add(&mut fonts, "Mono", include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf"));
+    let mut regular_first = "Inter".to_string();
+    let mut medium_first = "InterMedium".to_string();
+    let mut semibold_first = "InterSemiBold".to_string();
+    if let Some(interface) = interface {
+        fonts.font_data.insert(CHOSEN_REGULAR.into(), interface.regular.clone());
+        regular_first = CHOSEN_REGULAR.into();
+        if !Arc::ptr_eq(&interface.medium, &interface.regular) {
+            fonts.font_data.insert(CHOSEN_MEDIUM.into(), interface.medium.clone());
+            medium_first = CHOSEN_MEDIUM.into();
+        } else {
+            medium_first = regular_first.clone();
+        }
+        if Arc::ptr_eq(&interface.semibold, &interface.regular) {
+            semibold_first = regular_first.clone();
+        } else if Arc::ptr_eq(&interface.semibold, &interface.medium) {
+            semibold_first = medium_first.clone();
+        } else {
+            fonts.font_data.insert(CHOSEN_SEMIBOLD.into(), interface.semibold.clone());
+            semibold_first = CHOSEN_SEMIBOLD.into();
+        }
+    }
     if let Some(prop) = fonts.families.get_mut(&FontFamily::Proportional) {
         prop.insert(0, "Inter".into());
+        if regular_first != "Inter" {
+            prop.insert(0, regular_first);
+        }
         prop.push("SourceSans".into());
     }
     if let Some(m) = fonts.families.get_mut(&FontFamily::Monospace) {
         m.insert(0, "Mono".into());
     }
-    fonts.families.insert(FontFamily::Name("medium".into()), vec!["InterMedium".into(), "Inter".into(), "SourceSans".into()]);
-    fonts.families.insert(FontFamily::Name("semibold".into()), vec!["InterSemiBold".into(), "Inter".into(), "SourceSans".into()]);
+    fonts.families.insert(FontFamily::Name("medium".into()), vec![medium_first, "InterMedium".into(), "Inter".into(), "SourceSans".into()]);
+    fonts.families.insert(FontFamily::Name("semibold".into()), vec![semibold_first, "InterSemiBold".into(), "Inter".into(), "SourceSans".into()]);
     let add_cjk = |fonts: &mut FontDefinitions, name: String, data: FontData| {
         fonts.font_data.insert(name.clone(), Arc::new(data));
         for fam in [FontFamily::Proportional, FontFamily::Name("medium".into()), FontFamily::Name("semibold".into())] {
@@ -592,7 +822,7 @@ pub fn font_definitions_language(prefer_hans: bool, prefer_korean: bool, prefer_
     // installed CJK font after them, so the menus don't show boxes or `?`.
     #[cfg(not(target_arch = "wasm32"))]
     if system_cjk && let Some(f) = system_cjk_font(prefer_hans, prefer_korean) {
-        let mut data = FontData::from_static(&f.bytes);
+        let mut data = FontData::from_static(f.bytes.as_slice());
         data.index = f.index;
         add_cjk(&mut fonts, format!("system {}", f.family), data);
     }
@@ -1080,5 +1310,87 @@ mod tests {
             symbols.iter().filter(|(c, _)| !f.has_glyph(&font, *c)).map(|(c, file)| format!("{c} U+{:04X} in {file}", *c as u32)).collect()
         });
         assert!(missing.is_empty(), "symbols without a glyph: {missing:#?}");
+    }
+
+    /// #1375: `ui.json` and `ui.interfaceFont` use `inter`, `system` or a family; junk reads as
+    /// Inter, and a family name is bounded.
+    #[test]
+    fn interface_font_setting_parses_and_saves() {
+        assert_eq!(super::InterfaceFont::default(), super::InterfaceFont::Inter);
+        for value in ["inter", "Inter", "default", " DEFAULT "] {
+            assert_eq!(super::InterfaceFont::from_value(value), Some(super::InterfaceFont::Inter), "{value}");
+        }
+        assert_eq!(super::InterfaceFont::from_value("system"), Some(super::InterfaceFont::System));
+        assert_eq!(super::InterfaceFont::from_value("  Source Sans 3  "), Some(super::InterfaceFont::Family("Source Sans 3".into())));
+        assert_eq!(super::InterfaceFont::from_value("").map(|f| f.value()), None, "an empty value is rejected");
+        assert_eq!(super::InterfaceFont::from_value("bad\u{7}name"), None);
+        let long = "x".repeat(super::InterfaceFont::MAX_FAMILY_CHARS + 20);
+        assert_eq!(super::InterfaceFont::from_value(&long).map(|f| f.value().chars().count()), Some(super::InterfaceFont::MAX_FAMILY_CHARS));
+        assert_eq!(super::InterfaceFont::Family("Rubik".into()).value(), "Rubik");
+        assert_eq!(serde_json::from_str::<super::InterfaceFont>(r#""system""#).unwrap(), super::InterfaceFont::System);
+        assert_eq!(serde_json::to_string(&super::InterfaceFont::Inter).unwrap(), r#""inter""#);
+        assert_eq!(serde_json::from_str::<super::InterfaceFont>(r#""""#).unwrap(), super::InterfaceFont::Inter, "an empty saved value falls back");
+    }
+
+    /// #1375: an installed family heads all three interface families, and Inter stays right after
+    /// it so a character the chosen face lacks still draws.
+    #[test]
+    fn chosen_interface_font_heads_every_family() {
+        let faces =
+            super::resolve_interface_faces(&super::InterfaceFont::Family("Source Sans 3".into())).expect("the bundled Source Sans 3 resolves");
+        let defs = super::font_definitions_language_with(false, false, false, false, Some(&faces));
+        let prop = &defs.families[&egui::FontFamily::Proportional];
+        assert_eq!(prop.first().map(String::as_str), Some(super::CHOSEN_REGULAR));
+        assert_eq!(prop.get(1).map(String::as_str), Some("Inter"));
+        let medium = &defs.families[&egui::FontFamily::Name("medium".into())];
+        assert!(medium.first().is_some_and(|n| n == super::CHOSEN_MEDIUM || n == super::CHOSEN_REGULAR), "{medium:?}");
+        assert!(medium.iter().any(|n| n == "InterMedium"), "Inter's medium face is the fallback");
+        let semibold = &defs.families[&egui::FontFamily::Name("semibold".into())];
+        assert!(
+            semibold.first().is_some_and(|n| n == super::CHOSEN_SEMIBOLD || n == super::CHOSEN_MEDIUM || n == super::CHOSEN_REGULAR),
+            "{semibold:?}"
+        );
+        assert!(semibold.iter().any(|n| n == "InterSemiBold"), "Inter's semibold face is the fallback");
+        assert_eq!(faces.label, "Source Sans 3");
+    }
+
+    /// #1375: a family setting resolves only to that family's own faces. `FontDb::face` falls back
+    /// to another family when the chosen one can't be loaded, and that fallback is rejected, while
+    /// legacy and localized names of the family still count.
+    #[test]
+    fn chosen_interface_font_never_resolves_to_another_family() {
+        let db = wordcraft_fonts::FontDb::global();
+        let face = db.face(wordcraft_fonts::FALLBACK_FAMILY, "Regular");
+        assert!(super::face_is_family(&face, wordcraft_fonts::FALLBACK_FAMILY));
+        assert!(!super::face_is_family(&face, "No Such Interface Family"), "a fallback face is not the chosen family");
+        let semibold = db.face("Source Sans 3 Semibold", "Regular");
+        assert_eq!(semibold.style, "Semibold");
+        assert!(super::face_is_family(&semibold, "Source Sans 3 Semibold"), "a legacy family name counts");
+        assert!(super::family_interface_faces("Source Sans 3 Semibold").is_some(), "a legacy family name resolves");
+        assert!(super::family_interface_faces("No Such Interface Family").is_none());
+    }
+
+    /// #1375: without a setting the chain is exactly Inter first (the default), and an unknown
+    /// family resolves to no faces rather than a wrong font.
+    #[test]
+    fn inter_is_the_default_interface_font() {
+        let defs = super::font_definitions(false, false);
+        assert_eq!(defs.families[&egui::FontFamily::Proportional].first().map(String::as_str), Some("Inter"));
+        assert_eq!(defs.families[&egui::FontFamily::Name("medium".into())].first().map(String::as_str), Some("InterMedium"));
+        assert_eq!(defs.families[&egui::FontFamily::Name("semibold".into())].first().map(String::as_str), Some("InterSemiBold"));
+        assert!(super::resolve_interface_faces(&super::InterfaceFont::Family("No Such Interface Family".into())).is_none());
+    }
+
+    /// #1375: the system choice resolves to a usable face where the platform has one (macOS and
+    /// Windows here; Linux asks fontconfig), and otherwise falls back to Inter without failing.
+    #[test]
+    fn system_interface_font_is_resolved_or_falls_back() {
+        let faces = super::resolve_interface_faces(&super::InterfaceFont::System);
+        if cfg!(any(target_os = "macos", target_os = "windows")) {
+            assert!(faces.is_some(), "the platform UI family is installed");
+        }
+        if let Some(faces) = faces {
+            assert!(!faces.label.is_empty());
+        }
     }
 }

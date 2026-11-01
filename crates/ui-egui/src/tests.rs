@@ -661,6 +661,7 @@ fn start_screen_shows_file_home_and_esc_leaves_no_document() {
     let refused = a.run("ui.zotero.status", json!({})).unwrap_err();
     assert!(refused.contains("No document is open"), "refused before it runs: {refused}");
     assert!(works_without_document("font.add"), "a font file dropped on the empty window is added");
+    assert!(works_without_document("ui.interfaceFont"), "the interface font setting works with no document");
     // #4585: File › Options › Proofing › AutoCorrect Options edits a user setting, not the document.
     a.run("tools.autocorrect", json!({})).unwrap();
     assert_eq!(a.dialog.as_ref().map(|d| d.name()), Some("autoCorrect"));
@@ -6308,6 +6309,11 @@ fn a_font_picked_on_the_web_is_added_listed_and_kept() {
     a.services.inbox = Some(inbox.clone());
     let ctx = egui::Context::default();
     assert!(!a.previews.families().iter().any(|f| f == FAMILY));
+    // #1375: a chosen interface family resolves once its font arrives and falls back to Inter
+    // when it is removed again.
+    a.ui.interface_font = theme::InterfaceFont::Family(FAMILY.into());
+    a.install_ui_fonts(&ctx, i18n::Lang::EN);
+    assert!(a.interface_faces.is_none(), "the family is not installed yet");
     a.run("font.add", json!({})).unwrap();
     assert_eq!(*asked.borrow(), "font");
     inbox.lock().unwrap().push(("Uifont-Regular.ttf".into(), font.clone()));
@@ -6324,6 +6330,9 @@ fn a_font_picked_on_the_web_is_added_listed_and_kept() {
     a.watch_fonts(&ctx);
     assert!(kept.borrow().is_empty());
     assert!(!a.previews.families().iter().any(|f| f == FAMILY));
+    assert!(a.interface_font.is_none(), "the removed family is resolved again");
+    a.install_ui_fonts(&ctx, i18n::Lang::EN);
+    assert!(a.interface_faces.is_none(), "the removed family falls back to Inter");
 }
 
 /// Web: the picked file arrives through the inbox and loads as recipients, even as .txt; a
@@ -7186,4 +7195,44 @@ fn focus_hides_the_ribbon_and_escape_brings_it_back() {
     h.step();
     h.step();
     assert!(h.state().session.view.read_mode && shown(&h, "Focus"), "Immersive Reader keeps the status bar");
+}
+
+/// #1375: the interface font setting is kept between runs, and junk saved values read as
+/// Inter without losing the other preferences. `ui.interfaceFont` rejects unknown families
+/// and leaves the setting alone.
+#[test]
+fn interface_font_survives_a_restart_and_rejects_unknown_families() {
+    let mut a = app();
+    let doc_before = serde_json::to_value(&a.session.doc).unwrap();
+    assert_eq!(a.run("ui.interfaceFont", json!({})).unwrap()["value"], "inter");
+    a.run("ui.interfaceFont", json!({"value": "Source Sans 3"})).unwrap();
+    let read = a.run("ui.interfaceFont", json!({})).unwrap();
+    assert_eq!(
+        (read["value"].as_str(), read["family"].as_str(), read["available"].as_bool()),
+        (Some("Source Sans 3"), Some("Source Sans 3"), Some(true))
+    );
+    assert!(a.run("ui.interfaceFont", json!({"value": "No Such Interface Family"})).is_err());
+    assert_eq!(a.ui.interface_font, theme::InterfaceFont::Family("Source Sans 3".into()), "a rejected value keeps the setting");
+    assert!(a.run("ui.interfaceFont", json!({"value": 42})).is_err());
+    assert!(a.run("ui.interfaceFont", json!({"value": ""})).is_err());
+    // A frame resolves and installs the faces.
+    let ctx = egui::Context::default();
+    ctx.run_ui(egui::RawInput::default(), |ui| a.logic(ui.ctx())).drop_without_applying_deltas();
+    assert!(a.interface_faces.is_some());
+    assert_eq!(serde_json::to_value(&a.session.doc).unwrap(), doc_before, "the document is unchanged");
+    let read = a.run("ui.interfaceFont", json!({})).unwrap();
+    assert_eq!((read["value"].as_str(), read["family"].as_str()), (Some("Source Sans 3"), Some("Source Sans 3")));
+    assert_eq!(read["available"], true);
+    let saved = serde_json::to_string(&a.prefs()).unwrap();
+    assert!(saved.contains(r#""interfaceFont":"Source Sans 3""#), "{saved}");
+    let mut b = app();
+    b.apply_prefs(UiState::from_json(saved.as_bytes()).unwrap());
+    assert_eq!(b.ui.interface_font, theme::InterfaceFont::Family("Source Sans 3".into()));
+
+    assert_eq!(a.run("ui.interfaceFont", json!({"value": "system"})).unwrap()["value"], "system");
+    assert_eq!(a.run("ui.interfaceFont", json!({"value": "inter"})).unwrap()["value"], "inter");
+    for raw in [r#""interfaceFont": "" "#, r#""interfaceFont": 42"#, r#""interfaceFont": null"#] {
+        let ui = UiState::from_json(format!(r#"{{{raw}, "tab": "Insert"}}"#).as_bytes()).unwrap();
+        assert_eq!((ui.interface_font, ui.tab.as_str()), (theme::InterfaceFont::Inter, "Insert"), "{raw}");
+    }
 }

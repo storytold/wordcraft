@@ -10,6 +10,8 @@ impl WordApp {
             return;
         }
         self.font_generation = generation;
+        // The chosen interface family may have just been added or removed: resolve it again.
+        self.interface_font = None;
         self.session.relayout();
         self.previews.fonts_changed(ctx, db.user_fonts().iter().flat_map(|f| f.families()));
         ctx.request_repaint();
@@ -153,9 +155,17 @@ impl WordApp {
 
     /// Install the interface fonts when the language, the CJK fallback, or a caption fallback
     /// face has changed since the last install.
-    pub(super) fn install_ui_fonts(&mut self, ctx: &egui::Context, lang: i18n::Lang) {
+    pub(crate) fn install_ui_fonts(&mut self, ctx: &egui::Context, lang: i18n::Lang) {
         let system_cjk = self.fonts_system_cjk || self.want_system_cjk || lang.uses_cjk();
+        let font = self.ui.interface_font.clone();
+        let font_changed = self.interface_font.as_ref() != Some(&font);
+        if font_changed {
+            self.interface_faces = theme::resolve_interface_faces(&font);
+            self.interface_font = Some(font);
+        }
         if !self.styled
+            || font_changed
+            || self.fonts_dirty
             || lang.prefers_hans() != self.fonts_hans
             || lang.prefers_korean() != self.fonts_korean
             || lang.prefers_hant() != self.fonts_hant
@@ -170,7 +180,15 @@ impl WordApp {
                     }
                 }
             }
-            theme::install_fonts_language_extra(ctx, lang.prefers_hans(), lang.prefers_korean(), lang.prefers_hant(), system_cjk, &faces);
+            theme::install_fonts_language_extra_with(
+                ctx,
+                lang.prefers_hans(),
+                lang.prefers_korean(),
+                lang.prefers_hant(),
+                system_cjk,
+                &faces,
+                self.interface_faces.as_ref(),
+            );
             self.fonts_hans = lang.prefers_hans();
             self.fonts_korean = lang.prefers_korean();
             self.fonts_hant = lang.prefers_hant();
@@ -187,6 +205,7 @@ impl WordApp {
                 o.quit_shortcuts = quit;
             });
             self.styled = true;
+            self.fonts_dirty = false;
         }
     }
 }

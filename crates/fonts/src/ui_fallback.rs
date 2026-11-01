@@ -8,19 +8,32 @@
 //! ([`system_font_dirs`](crate::system_font_dirs)) rather than waiting for the full system font
 //! scan, since the interface fonts are installed on the first frame.
 
+use std::sync::Arc;
+
 use skrifa::MetadataProvider;
 use skrifa::raw::FileRef;
 
 use crate::CraftFont;
 
 /// An installed font file chosen for the interface.
+#[derive(Clone)]
 pub struct SystemUiFont {
     /// The face's family name, e.g. `Microsoft YaHei`.
     pub family: String,
     /// The whole font file.
-    pub bytes: Vec<u8>,
+    pub bytes: Arc<Vec<u8>>,
     /// The face's index in the file (0 unless it is a collection).
     pub index: u32,
+}
+
+/// The desktop's default interface faces, one per weight the interface draws (regular, medium
+/// and semibold). The faces usually share a file; [`SystemUiFont::bytes`] is shared between them
+/// then, so the file is read once.
+#[derive(Clone)]
+pub struct SystemUiFonts {
+    pub regular: SystemUiFont,
+    pub medium: SystemUiFont,
+    pub semibold: SystemUiFont,
 }
 
 /// Is `c` drawn from a CJK font: Han ideographs, kana, bopomofo, Hangul, CJK punctuation or a
@@ -218,6 +231,99 @@ pub fn system_cjk_ui_font_for(hans: bool, korean: bool, needed: &[char]) -> Opti
     find_ui_font(&with_asset_data(crate::system_font_dirs()), &candidates(hans, korean), needed, Region::from_hans(hans))
 }
 
+/// The desktop's default interface font, resolved through fontconfig on Linux (#1375): the
+/// `sans-serif` match and its medium and semibold faces. `None` elsewhere, or when fontconfig or
+/// the matched font can't be used; the caller keeps the embedded Inter then.
+#[cfg(target_os = "linux")]
+pub fn system_ui_fonts() -> Option<SystemUiFonts> {
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    let mut cache: HashMap<PathBuf, Arc<Vec<u8>>> = HashMap::new();
+    let (path, index) = fc_match("sans-serif")?;
+    let (family, bytes) = read_fc_face(&path, index, &mut cache)?;
+    let regular = SystemUiFont { family: family.clone(), bytes, index };
+    let medium = fc_match(&format!("{family}:weight=medium"))
+        .and_then(|(p, i)| same_family_face(&p, i, &family, &mut cache))
+        .unwrap_or_else(|| regular.clone());
+    let semibold = fc_match(&format!("{family}:weight=demibold"))
+        .and_then(|(p, i)| same_family_face(&p, i, &family, &mut cache))
+        .unwrap_or_else(|| medium.clone());
+    log::debug!("interface font: fontconfig sans-serif is {family}");
+    Some(SystemUiFonts { regular, medium, semibold })
+}
+
+/// No fontconfig to ask outside Linux; the platform families in `theme` are tried first.
+#[cfg(not(target_os = "linux"))]
+pub fn system_ui_fonts() -> Option<SystemUiFonts> {
+    None
+}
+
+/// The fontconfig match for `query`: its file and face index.
+#[cfg(target_os = "linux")]
+fn fc_match(query: &str) -> Option<(std::path::PathBuf, u32)> {
+    // `--format` is pattern syntax, not a shell command: `query` is one argument to fc-match.
+    let out = std::process::Command::new("fc-match").args(["--format=%{file}\n%{index}\n", query]).env("LC_ALL", "C").output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut lines = text.lines();
+    let path = lines.next()?.trim();
+    if path.is_empty() {
+        return None;
+    }
+    let index = lines.next().and_then(|s| s.trim().parse::<u32>().ok()).unwrap_or(0);
+    Some((path.into(), index))
+}
+
+/// The face at `path`/`index`, with its family, reading each file once.
+#[cfg(target_os = "linux")]
+fn read_fc_face(
+    path: &std::path::Path,
+    index: u32,
+    cache: &mut std::collections::HashMap<std::path::PathBuf, Arc<Vec<u8>>>,
+) -> Option<(String, Arc<Vec<u8>>)> {
+    let bytes = match cache.get(path) {
+        Some(b) => b.clone(),
+        None => {
+            let size = std::fs::metadata(path).ok().filter(|m| m.is_file()).map(|m| m.len())?;
+            if size > MAX_FILE {
+                return None;
+            }
+            let bytes = Arc::new(std::fs::read(path).ok()?);
+            cache.insert(path.to_path_buf(), bytes.clone());
+            bytes
+        }
+    };
+    let family = ui_face_family(&bytes, index)?;
+    Some((family, bytes))
+}
+
+/// The face at `path`/`index` when it belongs to `family`, so the three weights stay one family.
+#[cfg(target_os = "linux")]
+fn same_family_face(
+    path: &std::path::Path,
+    index: u32,
+    family: &str,
+    cache: &mut std::collections::HashMap<std::path::PathBuf, Arc<Vec<u8>>>,
+) -> Option<SystemUiFont> {
+    let (actual, bytes) = read_fc_face(path, index, cache)?;
+    actual.eq_ignore_ascii_case(family).then_some(SystemUiFont { family: actual, bytes, index })
+}
+
+/// The family of the face at `index`, when the file has a face with outlines (a bitmap-only face
+/// draws nothing in egui).
+#[cfg(target_os = "linux")]
+fn ui_face_family(data: &[u8], index: u32) -> Option<String> {
+    let f = skrifa::FontRef::from_index(data, index).ok()?;
+    if !OUTLINE_TABLES.iter().any(|t| f.table_data(skrifa::Tag::new(t)).is_some()) {
+        return None;
+    }
+    let (family, _, _) = crate::fontdb::face_names(&f)?;
+    Some(family)
+}
+
 /// `dirs` and, for each macOS font asset folder among them (`com_apple_MobileAsset_Font<N>`),
 /// the `AssetData` folder of every `<hash>.asset` in it: macOS ships PingFang there, e.g.
 /// `/System/Library/AssetsV2/com_apple_MobileAsset_Font7/<hash>.asset/AssetData/PingFang.ttc`
@@ -259,7 +365,7 @@ pub(crate) fn find_ui_font(dirs: &[std::path::PathBuf], names: &[&str], needed: 
         }
         log::debug!("interface CJK fallback: {family} ({}), {covered} of {} characters", path.display(), needed.len());
         let done = covered >= needed.len() && (region != Region::Hant || fit == 2);
-        best = Some(((fit, covered), SystemUiFont { family, bytes, index }));
+        best = Some(((fit, covered), SystemUiFont { family, bytes: Arc::new(bytes), index }));
         if done {
             break;
         }
@@ -446,8 +552,25 @@ mod tests {
         std::fs::write(dir.join("hvgl.ttf"), &hvgl).unwrap();
         std::fs::write(dir.join("glyf.ttf"), sans).unwrap();
         let found = find_ui_font(std::slice::from_ref(&dir), &["hvgl.ttf", "glyf.ttf"], &['A'], Region::Hans).unwrap();
-        assert!(found.bytes == sans);
+        assert!(found.bytes.as_slice() == sans);
         assert!(find_ui_font(std::slice::from_ref(&dir), &["hvgl.ttf"], &['A'], Region::Hans).is_none());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #1375: fontconfig's `sans-serif` answers with a face the interface can draw. The test
+    /// skips a machine without fontconfig; when it answers, the three weights share the file
+    /// they come from, so it was read once.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn system_ui_fonts_follow_fontconfig() {
+        let available = std::process::Command::new("fc-match").arg("--version").output().is_ok_and(|o| o.status.success());
+        if !available {
+            return;
+        }
+        let Some(fonts) = system_ui_fonts() else { return };
+        assert!(!fonts.regular.family.is_empty());
+        assert!(fonts.regular.bytes.as_slice().len() > 4);
+        assert_eq!(ui_face_family(&fonts.regular.bytes, fonts.regular.index).as_deref(), Some(fonts.regular.family.as_str()));
+        assert!(std::sync::Arc::ptr_eq(&fonts.regular.bytes, &fonts.medium.bytes) || !fonts.medium.family.is_empty());
     }
 }

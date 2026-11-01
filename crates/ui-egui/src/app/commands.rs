@@ -649,6 +649,44 @@ impl WordApp {
                 let size = self.ui.interface_size;
                 json!({"auto": size.is_auto(), "percent": size.drawn_percent(self.native_scale)})
             }
+            "ui.interfaceFont" => {
+                // `inter` (the default), `system` (fontconfig's sans-serif on Linux), or an
+                // installed family; no value reads it. The faces apply from the next frame; the
+                // document's own fonts are unchanged.
+                if let Some(v) = p.get("value") {
+                    let Some(value) = v.as_str() else {
+                        return Some(Err("`value` must be \"inter\", \"system\", or an installed font family".into()));
+                    };
+                    let Some(font) = theme::InterfaceFont::from_value(value) else {
+                        return Some(Err("`value` must be \"inter\", \"system\", or an installed font family".into()));
+                    };
+                    if let Some(family) = font.family()
+                        && !wordcraft_fonts::FontDb::global().has_family(family)
+                    {
+                        return Some(Err(format!("unknown font family {family:?}; use an installed family, \"inter\" or \"system\"")));
+                    }
+                    // Resolve now so the result reports what will be drawn; the next frame
+                    // installs the faces.
+                    self.interface_faces = theme::resolve_interface_faces(&font);
+                    self.interface_font = Some(font.clone());
+                    self.ui.interface_font = font;
+                    self.fonts_dirty = true;
+                }
+                let setting = &self.ui.interface_font;
+                let family = match (setting, &self.interface_faces) {
+                    (theme::InterfaceFont::Inter, _) => "Inter".to_string(),
+                    (theme::InterfaceFont::System, Some(f)) | (theme::InterfaceFont::Family(_), Some(f)) => f.label.clone(),
+                    (theme::InterfaceFont::System, None) => "System default".to_string(),
+                    (theme::InterfaceFont::Family(family), None) => family.clone(),
+                };
+                json!({
+                    "value": setting.value(),
+                    "family": family,
+                    "system": matches!(setting, theme::InterfaceFont::System),
+                    "available": matches!(setting, theme::InterfaceFont::Inter) || self.interface_faces.is_some(),
+                })
+            }
+
             "ui.animations" => {
                 // `system` (follow the system's animation setting), `on` or `off`; no value reads
                 // it. `enabled` is what that comes to now, `system` what the system reports.
@@ -1030,6 +1068,7 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.dark"
             | "ui.theme"
             | "ui.interfaceSize"
+            | "ui.interfaceFont"
             | "ui.animations"
             | "ui.language"
             | "ui.saveChanges"

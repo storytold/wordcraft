@@ -477,3 +477,12 @@ fn length_units_follow_the_interface_language() {
     h.run_steps(4);
     assert_eq!(length(72.0), "25,4 mm", "English keeps the English names");
 }
+
+/// #1375: File › Options › General offers the interface font next to the interface size.
+#[test]
+fn options_offer_the_interface_font() {
+    let h = nav_harness("en", 100);
+    assert!(h.query_by_label("Interface font:").is_some());
+    let combo = h.get_by(|n| n.role() == egui::accesskit::Role::ComboBox && n.value().as_deref() == Some("Inter (default)"));
+    assert_eq!(combo.value().as_deref(), Some("Inter (default)"));
+}

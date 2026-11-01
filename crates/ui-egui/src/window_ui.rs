@@ -242,6 +242,9 @@ impl WordApp {
             file_browser,
             info_editing,
             shown_document,
+            interface_faces: _,
+            interface_font: _,
+            fonts_dirty: _,
         } = self;
         let UiState {
             // App-wide: preferences, recent lists, and the settings the session owns while
@@ -254,6 +257,7 @@ impl WordApp {
             recent_fonts: _,
             theme: _,
             interface_size: _,
+            interface_font: _,
             legacy_interface_size: _,
             animations: _,
             legacy_dark: _,
