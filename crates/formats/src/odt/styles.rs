@@ -329,6 +329,23 @@ pub(super) fn parse_border(v: &str) -> Option<Border> {
     any.then_some(b)
 }
 
+/// A table-cell style's `style:table-cell-properties` (ODF 1.3 §17.18): background, borders,
+/// padding and vertical alignment.
+fn table_cell_properties(a: &Attrs, s: &mut StyleInfo) {
+    if let Some(c) = get(a, "fo:background-color").and_then(model::parse_color) {
+        s.cell_background = Some(c);
+    }
+    cell_borders_and_padding(a, s);
+    if let Some(va) = get(a, "style:vertical-align") {
+        s.cell_valign = match va.trim() {
+            "top" => Some(VAlign::Top),
+            "middle" | "center" => Some(VAlign::Center),
+            "bottom" => Some(VAlign::Bottom),
+            _ => None,
+        };
+    }
+}
+
 /// A table-cell style's `fo:border*` and `fo:padding*` (a side's own value wins over the
 /// shorthand) into `s`.
 fn cell_borders_and_padding(a: &Attrs, s: &mut StyleInfo) {
@@ -364,13 +381,19 @@ pub(super) fn column_sep(a: &Attrs) -> bool {
     get(a, "style:style") != Some("none")
 }
 
-fn default_font(a: &Attrs) -> Option<String> {
-    let family = get(a, "fo:font-family").or_else(|| get(a, "style:font-name"))?;
+/// The font family `a` names: `fo:font-family`, else the family of the font face `style:font-name`
+/// names (ODF 1.3 §20.194, §16.23), else that name itself.
+fn family_of<'a>(a: &'a Attrs, faces: &'a HashMap<String, String>) -> Option<&'a str> {
+    get(a, "fo:font-family").or_else(|| get(a, "style:font-name").map(|n| faces.get(n).map_or(n, String::as_str)))
+}
+
+fn default_font(a: &Attrs, faces: &HashMap<String, String>) -> Option<String> {
+    let family = family_of(a, faces)?;
     let family = family.split(',').next().unwrap_or("").trim().trim_matches(['\'', '"']);
     (!family.is_empty() && !model::is_mono(family)).then(|| family.to_string())
 }
 
-fn text_properties(a: &Attrs, style: &mut StyleInfo) {
+fn text_properties(a: &Attrs, style: &mut StyleInfo, faces: &HashMap<String, String>) {
     let fmt = &mut style.fmt;
     let is_bold = |weight: &str| {
         let weight = weight.trim();
@@ -424,7 +447,7 @@ fn text_properties(a: &Attrs, style: &mut StyleInfo) {
     } else if let Some(size) = get(a, "fo:font-size").and_then(length).filter(|size| (1.0..=1638.0).contains(size)) {
         fmt.size = Some(size);
     }
-    if let Some(family) = get(a, "fo:font-family").or_else(|| get(a, "style:font-name")) {
+    if let Some(family) = family_of(a, faces) {
         let family = family.split(',').next().unwrap_or("").trim().trim_matches(['\'', '"']).to_string();
         // A monospaced font keeps its name (it is not "code" here, which would be Courier New).
         if !family.is_empty() {
@@ -502,9 +525,14 @@ fn list_level(local: &str, a: &Attrs) -> ListLevel {
     }
 }
 
+/// Most font faces kept from `office:font-face-decls` (hostile input).
+const MAX_FACES: usize = 10_000;
+
 #[derive(Default)]
 pub(super) struct Styles {
     map: HashMap<String, StyleInfo>,
+    /// Font faces (`style:font-face`): name → family.
+    faces: HashMap<String, String>,
     pub(super) lists: HashMap<String, Vec<ListLevel>>,
     /// Font of `style:default-style` for paragraphs (the document default, ODF 1.3 §16.4).
     default_font: Option<String>,
@@ -544,7 +572,7 @@ impl Styles {
                 }
                 "default-style" if q.starts_with("style:") => in_default = get(&a, "style:family") == Some("paragraph"),
                 "text-properties" if in_default && cur.is_none() => {
-                    self.default_font = default_font(&a);
+                    self.default_font = default_font(&a, &self.faces);
                     self.default_kern = get(&a, "style:letter-kerning").is_some_and(|k| k.trim() == "true");
                 }
                 "paragraph-properties" if in_default && cur.is_none() => {
@@ -567,7 +595,7 @@ impl Styles {
                 }
                 "text-properties" => {
                     if let Some((_, s)) = &mut cur {
-                        text_properties(&a, s);
+                        text_properties(&a, s, &self.faces);
                     }
                 }
                 "table-properties" => {
@@ -586,18 +614,7 @@ impl Styles {
                 }
                 "table-cell-properties" => {
                     if let Some((_, s)) = &mut cur {
-                        if let Some(c) = get(&a, "fo:background-color").and_then(model::parse_color) {
-                            s.cell_background = Some(c);
-                        }
-                        cell_borders_and_padding(&a, s);
-                        if let Some(va) = get(&a, "style:vertical-align") {
-                            s.cell_valign = match va.trim() {
-                                "top" => Some(VAlign::Top),
-                                "middle" | "center" => Some(VAlign::Center),
-                                "bottom" => Some(VAlign::Bottom),
-                                _ => None,
-                            };
-                        }
+                        table_cell_properties(&a, s);
                     }
                 }
                 "paragraph-properties" => {
@@ -615,6 +632,14 @@ impl Styles {
                         && let Some(c) = &mut s.columns
                     {
                         c.separator = column_sep(&a);
+                    }
+                }
+                "font-face" if q.starts_with("style:") && self.faces.len() < MAX_FACES => {
+                    if let (Some(n), Some(f)) = (get(&a, "style:name"), get(&a, "svg:font-family")) {
+                        let family = f.split(',').next().unwrap_or("").trim().trim_matches(['\'', '"']);
+                        if !family.is_empty() && family.len() <= model::MAX_FONT_NAME {
+                            self.faces.insert(n.to_string(), family.to_string());
+                        }
                     }
                 }
                 "list-style" => list = get(&a, "style:name").map(|n| (n.to_string(), vec![ListLevel::default(); 10])),

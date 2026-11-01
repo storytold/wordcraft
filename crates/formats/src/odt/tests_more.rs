@@ -3,6 +3,7 @@
 mod chars;
 mod comments;
 mod fields;
+mod fonts;
 mod headers;
 mod lists;
 mod notes;
