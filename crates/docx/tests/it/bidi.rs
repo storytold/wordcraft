@@ -253,3 +253,30 @@ fn marked_thai_keeps_the_font_size_bold_and_italic_it_was_drawn_with() {
     let run = run_xml(&xml, "ค่าเริ่มต้น");
     assert!(run.contains("<w:cs/>") && !run.contains("w:szCs") && !run.contains("w:cs=\""), "{run}");
 }
+
+#[test]
+fn a_run_already_marked_complex_script_round_trips_unchanged() {
+    // A Thai run that already says `w:cs`, with its complex-script font, is written as it came,
+    // digits and all (the writer marks only runs that don't say it):
+    // one `<w:cs/>`, the `w:rFonts w:cs` attribute kept. Read back, the marks are what they were,
+    // not direct formatting added to the run, and saving again writes the same document.
+    let marked = docx(
+        r#"<w:p><w:r><w:rPr><w:rFonts w:ascii="TH SarabunPSK" w:hAnsi="TH SarabunPSK" w:cs="TH SarabunPSK"/><w:cs/><w:lang w:bidi="th-TH"/></w:rPr><w:t>ตามที่ได้แจ้งไว้ 2569</w:t></w:r></w:p>"#,
+    );
+    let first = wordcraft_docx::read(&marked).unwrap();
+    let saved = wordcraft_docx::write(&first).unwrap();
+    let xml = document_xml(&saved);
+    assert_eq!(xml.matches("<w:cs/>").count(), 1, "{xml}");
+    assert!(run_xml(&xml, "ตามที่ได้แจ้งไว้ 2569").contains(r#"w:cs="TH SarabunPSK""#), "{xml}");
+    let again = wordcraft_docx::read(&saved).unwrap();
+    let props = |d: &Document| paras(d)[0].runs.iter().map(|r| r.props.clone()).collect::<Vec<_>>();
+    assert_eq!(run_cs(paras(&again)[0]), vec![("ตามที่ได้แจ้งไว้ 2569", Some(true))]);
+    assert_eq!(props(&again)[0].font_cs, props(&first)[0].font_cs);
+    assert_eq!(props(&again)[0].font, props(&first)[0].font);
+    assert_eq!((props(&again)[0].bold, props(&again)[0].size, props(&again)[0].italic), (None, None, None), "no formatting added");
+    assert_eq!(document_xml(&wordcraft_docx::write(&again).unwrap()), xml, "a second save writes the same document");
+    // The WPS run the save marks keeps its complex-script font too.
+    let wps = docx(r#"<w:p><w:r><w:rPr><w:rFonts w:cs="TH SarabunPSK"/><w:lang w:bidi="th-TH"/></w:rPr><w:t>ตามที่ได้แจ้งไว้</w:t></w:r></w:p>"#);
+    let xml = document_xml(&wordcraft_docx::write(&wordcraft_docx::read(&wps).unwrap()).unwrap());
+    assert!(run_xml(&xml, "ตามที่ได้แจ้งไว้").contains(r#"w:cs="TH SarabunPSK""#), "{xml}");
+}
