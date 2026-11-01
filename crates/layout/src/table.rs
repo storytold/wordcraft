@@ -418,9 +418,28 @@ fn table_frame(ctx: &mut Ctx, t: &Table, avail: f32, depth: usize, style: Option
     // A top-level table in an inherited header or footer takes its share of the defining
     // section's width (`Ctx::pct_base`).
     let pct_base = if depth <= 1 { ctx.pct_base.unwrap_or(avail) } else { avail };
+    // The style's borders, overlaid by the table's own side by side.
+    let mut tborders = style.and_then(|s| s.parts.borders).unwrap_or_default();
+    if let Some(own) = t.props.borders {
+        tborders.overlay(&own);
+    }
+    let first_row = t.rows.first();
+    let first_cell = first_row.and_then(|r| r.cells.first());
+    let last_cell = first_row.and_then(|r| r.cells.last());
+    // Half of a visible outer border: the part of it outside the edge it is centred on.
+    let outer_half = |b: Option<Border>| b.filter(Border::is_visible).map_or(0.0, |b| b.width.clamp(0.0, 12.0) / 2.0);
+    let start_half = outer_half(first_cell.and_then(|c| c.props.borders.and_then(|b| b.left)).or(tborders.left));
+    let end_half = outer_half(last_cell.and_then(|c| c.props.borders.and_then(|b| b.right)).or(tborders.right));
+    let new_borders = ctx.doc.settings.compat_mode >= 15;
     let target = match (t.props.width_pct, t.props.width) {
-        // Word keeps a percentage past 100%; the cap only bounds hostile input.
-        (Some(p), _) if p > 0.0 => Some(pct_base * (p / 100.0).min(MAX_WIDTH_SHARE)),
+        // Word keeps a percentage past 100%; the cap only bounds hostile input. From Word 2013
+        // (compatibility mode 15) a percentage reaches the outer edges of the table's outer
+        // borders, so its columns give up the halves of those borders standing outside the
+        // edges; a width in points is the columns' own (measured in Word for Windows).
+        (Some(p), _) if p > 0.0 => {
+            let w = pct_base * (p / 100.0).min(MAX_WIDTH_SHARE);
+            Some(if new_borders { (w - start_half - end_half).max(0.0) } else { w })
+        }
         (_, Some(w)) if w > 0.0 => Some(w),
         _ => None,
     };
@@ -467,22 +486,15 @@ fn table_frame(ctx: &mut Ctx, t: &Table, avail: f32, depth: usize, style: Option
     // indent); earlier modes line the first cell's text up with it instead.
     let margins_def = default_margins(t, style);
     let indent = t.props.indent.unwrap_or(0.0);
-    // The style's borders, overlaid by the table's own side by side.
-    let mut tborders = style.and_then(|s| s.parts.borders).unwrap_or_default();
-    if let Some(own) = t.props.borders {
-        tborders.overlay(&own);
-    }
-    let first_cell = t.rows.first().and_then(|r| r.cells.first());
     // A right-to-left table (`w:bidiVisual`) mirrors: its first column stands at the right, its
     // start alignment and indent are measured from the right margin, and each cell's start
     // (left) margin and border are on its right.
     let rtl = t.props.bidi_visual;
     // How far in from the start margin the table's edge sits when it is start-aligned.
-    let start_offset = if ctx.doc.settings.compat_mode >= 15 {
+    let start_offset = if new_borders {
         // The border is centred on the edge, so half of it sits outside: Word moves the table in
         // by that half.
-        let border = first_cell.and_then(|c| c.props.borders.and_then(|b| b.left)).or(tborders.left);
-        indent + border.filter(Border::is_visible).map_or(0.0, |b| b.width.clamp(0.0, 12.0) / 2.0)
+        indent + start_half
     } else {
         indent - first_cell_left_margin_in(t, margins_def)
     };

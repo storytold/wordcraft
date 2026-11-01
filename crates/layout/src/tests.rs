@@ -5686,6 +5686,48 @@ fn compatibility_mode_decides_where_a_table_s_edge_sits() {
     assert!((cell_text_x(12) - 72.0).abs() < 0.01, "{}", cell_text_x(12));
 }
 
+/// Measured in Word for Windows (compatibility mode 15, two equal columns, cell borders 0.75pt,
+/// 3pt and 6pt): a 100% table reaches the margins with the outer edges of its outer borders, so
+/// its columns give up those borders' outer halves and the line between them stays at the middle
+/// of the text width; the same table 400pt wide keeps its columns and moves right by half its
+/// left border.
+#[test]
+fn a_percentage_table_from_word_2013_ends_its_outer_borders_at_its_width() {
+    use wordcraft_doc::props::{Border, BorderStyle, Borders};
+    // The cells' left and right edges, for border width `w` and a table 100% or 400pt wide.
+    let cells = |w: f32, pct: bool| {
+        let mut d = Document::from_text("");
+        d.settings.compat_mode = 15;
+        let style = if w > 0.0 { BorderStyle::Single } else { BorderStyle::None };
+        let line = Some(Border { style, width: w, color: None, space: 0.0 });
+        let mut t = Table::new(1, 2, 200.0);
+        if pct {
+            t.props.width_pct = Some(100.0);
+        } else {
+            t.props.width = Some(400.0);
+        }
+        t.props.fixed = true;
+        t.props.borders = Some(Borders { top: line, left: line, bottom: line, right: line, between: line, inside_v: line });
+        d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(t))];
+        let l = lay(&d);
+        let mut out: Vec<(f32, f32)> =
+            l.pages[0].items.iter().filter_map(|i| if let Placed::Cell { rect, .. } = i { Some((rect.x, rect.x + rect.w)) } else { None }).collect();
+        out.sort_by(|a, b| a.0.total_cmp(&b.0));
+        out
+    };
+    let near = |a: f32, b: f32| (a - b).abs() < 0.01;
+    let plain = cells(0.0, true);
+    let (left, right) = (plain[0].0, plain[1].1);
+    for w in [0.75, 3.0, 6.0] {
+        let c = cells(w, true);
+        assert!(near(c[0].0, left + w / 2.0) && near(c[1].1, right - w / 2.0), "{w}: {c:?} without borders {plain:?}");
+        assert!(near(c[0].1, (left + right) / 2.0) && near(c[1].0, (left + right) / 2.0), "{w}: {c:?} without borders {plain:?}");
+        let fixed = cells(w, false);
+        let plain = cells(0.0, false);
+        assert!(near(fixed[0].0, plain[0].0 + w / 2.0) && near(fixed[1].1, plain[1].1 + w / 2.0), "{w}: {fixed:?}");
+    }
+}
+
 #[test]
 fn floating_tables_take_no_room_and_text_wraps_beside_them() {
     use wordcraft_doc::para::Anchor;
