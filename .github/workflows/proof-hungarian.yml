@@ -1,0 +1,76 @@
+# Hungarian proofing on PRs that touch the proof crate: everywhere without a dictionary (spelling
+# stays off, nothing panics), and on Linux against the real Magyar Ispell `hu_HU` from
+# `hunspell-hu` (the opt-in test in `crates/proof/src/hu/mod.rs` reads WORDCRAFT_HU_DICT_DIR).
+name: Hungarian proofing
+
+on:
+  pull_request:
+    paths:
+      - 'Cargo*'
+      - 'crates/proof/**'
+      - '.github/workflows/proof-hungarian.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'Cargo*'
+      - 'crates/proof/**'
+      - '.github/workflows/proof-hungarian.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: proof-hungarian-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  proof:
+    name: Proof (${{ matrix.os }}${{ matrix.dictionary && ', hu_HU' || '' }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            dictionary: true
+          - os: ubuntu-24.04
+            dictionary: false
+          - os: windows-latest
+            dictionary: false
+          - os: macos-latest
+            dictionary: false
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install the Hungarian Hunspell dictionary
+        if: matrix.dictionary
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends hunspell-hu
+          echo "WORDCRAFT_HU_DICT_DIR=/usr/share/hunspell" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Formatting
+        run: cargo fmt -p wordcraft-proof -- --check
+
+      - name: Clippy
+        run: cargo clippy -p wordcraft-proof --all-targets --locked -- -D warnings
+
+      - name: Tests
+        run: cargo test -p wordcraft-proof --locked
+
+      - name: Real dictionary (timings)
+        if: matrix.dictionary
+        run: cargo test -p wordcraft-proof --locked --release real_magyar_ispell_when_available -- --nocapture

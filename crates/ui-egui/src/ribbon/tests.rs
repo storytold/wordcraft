@@ -311,6 +311,18 @@ fn czech_has_a_name_in_the_language_menu() {
 }
 
 #[test]
+fn hungarian_has_a_name_in_the_language_menu() {
+    assert!(PROOFING_LANGUAGES.contains(&("hu-HU", "Hungarian")));
+    for tag in ["hu", "hu-HU", "HU-hu", "hun"] {
+        assert_eq!(language_name(Some(tag)), "Hungarian", "{tag}");
+    }
+    // Another region keeps its own name above the list rather than checking Hungarian.
+    let c = language_checks("hu-AT", |t: &str| t.eq_ignore_ascii_case("hu-AT"));
+    assert_eq!(c.extra.as_deref(), Some("hu-AT"));
+    assert!(!c.listed.contains(&true));
+}
+
+#[test]
 fn portuguese_has_a_name_in_the_language_menu() {
     assert!(PROOFING_LANGUAGES.iter().any(|(t, _)| *t == "pt-BR"));
     assert_eq!(language_name(Some("pt-BR")), "Portuguese (Brazil)");
