@@ -571,6 +571,57 @@ fn output_shows_fresh_seq_styleref_and_ref_results() {
 /// (measured in Word for Windows: "Error! Reference source not found."); the editor and the
 /// document keep the stored result, and a REF showing "above" or "below" (`\p`) keeps it too.
 #[test]
+fn output_numbers_text_box_captions_where_their_boxes_are_anchored() {
+    // Measured in Word for Windows, every SEQ result stored as a stale 9: output numbers a text
+    // box's SEQ field where the box is anchored (box B before C in its paragraph, box F after E),
+    // and a REF to a bookmark in a box shows the box's text as stored.
+    let ns = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:v="urn:schemas-microsoft-com:vml""#;
+    let run = |t: &str| format!(r#"<w:r><w:t xml:space="preserve">{t}</w:t></w:r>"#);
+    let field = |instr: &str, stored: &str| {
+        format!(
+            r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> {instr} </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>{}<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+            run(stored)
+        )
+    };
+    let seq = |label: &str| format!("{}{}", run(&format!("{label} Fig ")), field("SEQ Fig \\* ARABIC", "9"));
+    let text_box = |inner: String| {
+        format!(
+            r##"<w:r><w:pict><v:shape type="#_x0000_t202" style="position:absolute;margin-left:300pt;width:150pt;height:30pt"><v:textbox><w:txbxContent><w:p>{inner}</w:p></w:txbxContent></v:textbox></v:shape></w:pict></w:r>"##
+        )
+    };
+    let marked = format!(r#"<w:bookmarkStart w:id="1" w:name="boxmark"/>{}<w:bookmarkEnd w:id="1"/>"#, seq("B"));
+    let paras = [
+        seq("A"),
+        format!("{}{}{}", run("anchor first: "), text_box(marked), seq("C")),
+        seq("D"),
+        format!("{}{}", seq("E"), text_box(seq("F"))),
+        seq("G"),
+        format!("{}{}", run("ref: "), field("REF boxmark \\h", "stored")),
+    ];
+    let body: String = paras.iter().map(|p| format!("<w:p>{p}</w:p>")).collect();
+    let document = format!("<w:document {ns}><w:body>{body}<w:sectPr/></w:body></w:document>");
+    let root = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
+    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, text) in [("_rels/.rels", root), ("word/document.xml", document.as_str())] {
+        zw.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+        std::io::Write::write_all(&mut zw, text.as_bytes()).unwrap();
+    }
+    let s = Session::new(crate::io::open_bytes("boxes.docx", &zw.finish().unwrap().into_inner()).unwrap());
+    let out = crate::cmd::references::output_fields(&s.doc).expect("fresh numbers");
+    // The SEQ and REF results in reading order, text boxes where they are anchored.
+    let mut results = Vec::new();
+    out.objects_in_reading_order(&mut |o| {
+        if let InlineObject::Field { instr, result, .. } = o {
+            results.push((instr.split_whitespace().next().unwrap_or("").to_string(), result.clone()));
+        }
+    });
+    let seqs: Vec<&str> = results.iter().filter(|(n, _)| n == "SEQ").map(|(_, r)| r.as_str()).collect();
+    assert_eq!(seqs, ["1", "2", "3", "4", "5", "6", "7"], "{results:?}");
+    let refs: Vec<&str> = results.iter().filter(|(n, _)| n == "REF").map(|(_, r)| r.as_str()).collect();
+    assert_eq!(refs, ["B Fig 9"], "{results:?}");
+}
+
+#[test]
 fn output_shows_words_error_for_a_reference_to_a_missing_bookmark() {
     let mut s = Session::new(wordcraft_doc::Document::from_text("See "));
     s.run("caret.docEnd", &json!({})).unwrap();
