@@ -181,6 +181,10 @@ struct StyleInfo {
     columns: Option<Columns>,
     /// Margins, first-line indent and line spacing of `style:paragraph-properties`.
     spacing: Spacing,
+    /// `style:family` (paragraph, text, table…).
+    family: Option<String>,
+    /// Declared among automatic styles (of either file): never a custom style.
+    declared_auto: bool,
     /// `fo:border*` of a paragraph style, each side's padding as its distance from the text.
     para_borders: Option<Borders>,
     /// `fo:background-color` of a paragraph style (`Some(None)`: transparent, stated).
@@ -701,8 +705,10 @@ impl Styles {
                     if let Some(name) = get(&a, "style:name") {
                         let info = StyleInfo {
                             parent: get(&a, "style:parent-style-name").map(String::from),
+                            family: get(&a, "style:family").map(String::from),
                             display: get(&a, "style:display-name").map(String::from),
                             auto: in_auto && auto_section_is_auto,
+                            declared_auto: in_auto,
                             outline: get(&a, "style:default-outline-level").and_then(|v| v.trim().parse::<u8>().ok()),
                             master_page: get(&a, "style:master-page-name").map(String::from),
                             ..Default::default()
@@ -828,6 +834,47 @@ impl Styles {
     }
 
     /// Text formatting of a text style (whole chain).
+    /// Whether `odt` names a custom character style: a common text style other than those
+    /// LibreOffice gives links, note marks and list labels.
+    pub(super) fn is_named_text(&self, odt: &str) -> bool {
+        let Some(s) = self.map.get(odt).filter(|s| !s.declared_auto && s.family.as_deref() == Some("text")) else { return false };
+        let special = |n: &str| {
+            let n = n.to_ascii_lowercase().replace("_20_", " ");
+            n.contains("internet link") || n.contains("footnote") || n.contains("endnote") || n.ends_with("symbols") || n.contains("anchor")
+        };
+        !(special(odt) || s.display.as_deref().is_some_and(special))
+    }
+
+    /// A custom character style ([`Self::is_named_text`]): its name, the custom character style
+    /// it is based on (by ODF name) and its own formatting.
+    pub(super) fn named_text(&self, odt: &str) -> Option<(String, Option<String>, Fmt)> {
+        if !self.is_named_text(odt) {
+            return None;
+        }
+        let s = self.map.get(odt)?;
+        let mut fmt = Fmt::default();
+        s.fmt.apply(&mut fmt);
+        let parent = s.parent.clone().filter(|p| self.is_named_text(p));
+        let name: String = s.display.clone().unwrap_or_else(|| odt.replace("_20_", " ")).chars().take(model::MAX_FONT_NAME).collect();
+        Some((name, parent, fmt))
+    }
+
+    /// The formatting of a span in text style `name` over `base`: the automatic styles' over the
+    /// nearest custom character style, which the span then names ([`Fmt::extra`]'s style, by ODF
+    /// name until import makes it a document style id); without one, the whole chain's.
+    pub(super) fn span_fmt(&self, name: &str, base: &Fmt) -> Fmt {
+        let chain = self.chain(name);
+        let Some(at) = chain.iter().position(|(n, _)| self.is_named_text(n)) else { return self.text_fmt(name, base) };
+        let mut f = base.clone();
+        for (_, s) in chain.iter().take(at).rev() {
+            s.fmt.apply(&mut f);
+        }
+        if let Some((n, _)) = chain.get(at) {
+            f.extra.get_or_insert_with(Default::default).style = Some(n.to_string());
+        }
+        f
+    }
+
     pub(super) fn text_fmt(&self, name: &str, base: &Fmt) -> Fmt {
         let mut f = base.clone();
         for (_, s) in self.chain(name).iter().rev() {
@@ -924,7 +971,7 @@ impl Styles {
     /// kinds' styles), with its parent and own formatting; `None` for any other style.
     /// Whether `odt` names a custom style ([`Self::named_style`]), without building it.
     pub(super) fn is_named(&self, odt: &str) -> bool {
-        let Some(s) = self.map.get(odt).filter(|s| !s.auto && odt != "Standard") else { return false };
+        let Some(s) = self.map.get(odt).filter(|s| !s.auto && !s.declared_auto && odt != "Standard") else { return false };
         let lower = |n: &str| n.to_ascii_lowercase().replace("_20_", " ");
         // The kinds' styles, and the note text styles (WordCraft's Footnote Text and Endnote
         // Text stand for them), are no custom styles.

@@ -1086,7 +1086,7 @@ impl Body<'_> {
         match local(q) {
             "span" => {
                 let base = self.cur_fmt();
-                let fmt = get(a, "text:style-name").map_or_else(|| base.clone(), |s| self.styles.text_fmt(s, &base));
+                let fmt = get(a, "text:style-name").map_or_else(|| base.clone(), |s| self.styles.span_fmt(s, &base));
                 self.fmt.push(fmt);
             }
             "a" => {

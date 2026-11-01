@@ -74,6 +74,36 @@ fn fmt_of(doc: &Document, cp: &CharProps, in_code: bool) -> Fmt {
     }
 }
 
+/// The flow formatting of a run with properties `props`: with `opts.chars`, its extra formatting,
+/// its custom character style by name (only its direct formatting then its own) and a
+/// monospaced font by its name.
+fn run_fmt(doc: &Document, props: &CharProps, in_code: bool, opts: FlowOpts) -> Fmt {
+    let mut f = fmt_of(doc, props, in_code);
+    if !opts.chars {
+        return f;
+    }
+    let custom = props.style.as_deref().filter(|id| is_custom_char_style(doc, id));
+    let direct;
+    let props_now = match custom {
+        Some(_) => {
+            direct = CharProps { style: None, ..props.clone() };
+            f = fmt_of(doc, &direct, in_code);
+            &direct
+        }
+        None => props,
+    };
+    let e = effective(doc, props_now);
+    f.extra = extra_of(&e);
+    if let Some(id) = custom {
+        f.extra.get_or_insert_with(Default::default).style = Some(id.to_string());
+    }
+    if f.code {
+        f.code = false;
+        f.font = e.shown_font().map(Arc::from);
+    }
+    f
+}
+
 /// The formatting in `e` (effective character properties) that only [`Fmt::extra`] holds;
 /// `None` when it sets none of it.
 fn extra_of(e: &CharProps) -> Option<Box<CharProps>> {
@@ -96,6 +126,14 @@ fn extra_of(e: &CharProps) -> Option<Box<CharProps>> {
         ..Default::default()
     };
     (x != CharProps::default()).then(|| Box::new(x))
+}
+
+/// Whether character style `id` of `doc` is one of its own rather than one WordCraft gives links,
+/// note and comment marks or placeholders.
+pub fn is_custom_char_style(doc: &Document, id: &str) -> bool {
+    let builtin =
+        ["DefaultParagraphFont", "Hyperlink", "FollowedHyperlink", "FootnoteReference", "EndnoteReference", "CommentReference", "PlaceholderText"];
+    !builtin.contains(&id) && doc.styles.get(id).is_some_and(|s| s.kind == wordcraft_doc::styles::StyleKind::Character)
 }
 
 /// Whether paragraph style `id` of `doc` is one of its own rather than one the flow model's
@@ -299,15 +337,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
         let hidden = props.hidden.unwrap_or(false) || props.del.is_some();
         // Formats that keep hidden text get it, marked hidden.
         let hidden_text = (props.hidden.unwrap_or(false) && !opts.chars) || (props.del.is_some() && !tracked);
-        let mut f = fmt_of(doc, props, in_code);
-        if opts.chars {
-            let e = effective(doc, props);
-            f.extra = extra_of(&e);
-            if f.code {
-                f.code = false;
-                f.font = e.shown_font().map(Arc::from);
-            }
-        }
+        let mut f = run_fmt(doc, props, in_code, opts);
         if tracked {
             (f.ins, f.del) = rev_marks(doc, props);
             f.fmt_change = props.fmt_change.as_deref().map(|c| Box::new(FmtChange { mark: rev_mark(doc, c.rev), old: fmt_of(doc, &c.old, in_code) }));

@@ -53,6 +53,7 @@ impl WithExtra for CharProps {
             (self.strike, self.double_strike) = (None, Some(true));
         }
         let finite = |v: Option<f32>, lo: f32, hi: f32| v.filter(|v| v.is_finite()).map(|v| v.clamp(lo, hi));
+        self.style = x.style.as_deref().map(clean_text).filter(|s| !s.is_empty());
         self.caps = x.caps;
         self.small_caps = x.small_caps;
         self.hidden = x.hidden;

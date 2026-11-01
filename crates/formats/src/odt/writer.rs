@@ -70,6 +70,8 @@ type SecStart = (String, Option<u32>);
 pub(super) struct Writer {
     /// The custom paragraph styles paragraphs were written in (document style ids).
     pub(super) named: std::collections::BTreeSet<String>,
+    /// The custom character styles text was written in.
+    pub(super) named_text: std::collections::BTreeSet<String>,
     /// Notes written so far (their ids), and footnotes and endnotes among them (their numbers).
     notes: usize,
     footnotes: u32,
@@ -450,7 +452,13 @@ impl Writer {
     }
 
     fn text_style(&mut self, f: &Fmt) -> Option<String> {
-        let props = text_props(f);
+        let mut props = text_props(f);
+        // A custom character style: the automatic style's parent (after a separator in the key).
+        if let Some(id) = f.extra.as_ref().and_then(|x| x.style.as_deref()) {
+            self.named_text.insert(id.to_string());
+            props.push('\u{1}');
+            props.push_str(&odf_name(id));
+        }
         if props.is_empty() {
             return None;
         }
@@ -1110,7 +1118,11 @@ impl Writer {
     pub(super) fn style_defs(&self) -> String {
         let mut s = String::new();
         for (props, n) in &self.text_styles {
-            s.push_str(&format!("<style:style style:name=\"{n}\" style:family=\"text\"><style:text-properties{props}/></style:style>"));
+            let (props, parent) = match props.split_once('\u{1}') {
+                Some((p, parent)) => (p, format!(" style:parent-style-name=\"{parent}\"")),
+                None => (props.as_str(), String::new()),
+            };
+            s.push_str(&format!("<style:style style:name=\"{n}\" style:family=\"text\"{parent}><style:text-properties{props}/></style:style>"));
         }
         for ((parent, props, master), n) in &self.para_styles {
             let master = if master.is_empty() { String::new() } else { format!(" style:master-page-name=\"{}\"", x(master)) };

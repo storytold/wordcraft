@@ -103,34 +103,88 @@ pub(super) fn read_meta(xml: &[u8]) -> Meta {
     m
 }
 
-/// The custom styles the paragraphs of `blocks` name (by ODF name, [`super::styles::ParaLook::named`])
-/// with their parents, parents first; the paragraphs then name them by document style id.
-/// `odt` holds the styles already found (in other parts), which aren't added again.
-fn custom_styles(blocks: &mut [FBlock], styles: &Styles, odt: Vec<String>) -> (Vec<String>, Vec<super::styles::NamedStyle>) {
-    fn each_para(blocks: &mut [FBlock], depth: usize, f: &mut dyn FnMut(&mut Para)) {
-        if depth > model::MAX_DEPTH {
-            return;
-        }
-        for b in blocks {
-            match b {
-                FBlock::Para(p) => {
-                    f(p);
-                    for i in &mut p.inlines {
-                        match i {
-                            model::Inline::Note { blocks, .. } => each_para(blocks, depth + 1, f),
-                            model::Inline::Comment { comment, .. } => each_para(&mut comment.blocks, depth + 1, f),
-                            _ => {}
-                        }
+/// Every paragraph of `blocks`, in table cells, notes and comments too.
+fn each_para(blocks: &mut [FBlock], depth: usize, f: &mut dyn FnMut(&mut Para)) {
+    if depth > model::MAX_DEPTH {
+        return;
+    }
+    for b in blocks {
+        match b {
+            FBlock::Para(p) => {
+                f(p);
+                for i in &mut p.inlines {
+                    match i {
+                        model::Inline::Note { blocks, .. } => each_para(blocks, depth + 1, f),
+                        model::Inline::Comment { comment, .. } => each_para(&mut comment.blocks, depth + 1, f),
+                        _ => {}
                     }
                 }
-                FBlock::Table(t) => {
-                    for c in t.rows.iter_mut().flatten() {
-                        each_para(&mut c.blocks, depth + 1, f);
-                    }
+            }
+            FBlock::Table(t) => {
+                for c in t.rows.iter_mut().flatten() {
+                    each_para(&mut c.blocks, depth + 1, f);
                 }
             }
         }
     }
+}
+
+/// The custom character styles the text of `blocks` names (by ODF name, in [`model::Fmt::extra`])
+/// with their custom parents, parents first, each with its document style id, added to `found`;
+/// the text then names them by id. `para_ids` are the paragraph styles' ids, which a character
+/// style's id doesn't take.
+fn custom_char_styles(blocks: &mut [FBlock], styles: &Styles, para_ids: &[String], found: &mut Vec<(String, String)>) {
+    let id_for = |odt: &str| {
+        let id = super::styles::style_id(odt);
+        if para_ids.contains(&id) { format!("{id}Char") } else { id }
+    };
+    each_para(blocks, 0, &mut |p| {
+        for i in &mut p.inlines {
+            let fmt = match i {
+                model::Inline::Text(_, f) | model::Inline::Field { fmt: f, .. } | model::Inline::Ruby { fmt: f, .. } => f,
+                _ => continue,
+            };
+            let Some(odt) = fmt.extra.as_mut().and_then(|x| x.style.take()) else { continue };
+            let mut chain: Vec<String> = Vec::new();
+            let mut cur = Some(odt.clone());
+            while let Some(n) = cur.take() {
+                if found.iter().any(|(o, _)| *o == n) || chain.contains(&n) || chain.len() >= 16 {
+                    break;
+                }
+                cur = styles.named_text(&n).and_then(|(_, parent, _)| parent);
+                chain.push(n);
+            }
+            for n in chain.into_iter().rev() {
+                let id = id_for(&n);
+                found.push((n, id));
+            }
+            if let Some(x) = fmt.extra.as_mut() {
+                x.style = found.iter().find(|(o, _)| *o == odt).map(|(_, id)| id.clone());
+            }
+        }
+    });
+}
+
+/// Add the custom character styles `found` (ODF name, document id; parents first) built from
+/// `defs` (name, parent's ODF name, own formatting), alongside.
+fn add_char_styles(doc: &mut Document, found: &[(String, String)], defs: &[(String, Option<String>, model::Fmt)]) {
+    for ((_, id), (name, parent, fmt)) in found.iter().zip(defs) {
+        let based_on = parent.as_ref().and_then(|p| found.iter().find(|(o, _)| o == p).map(|(_, id)| id.clone())).filter(|b| b != id);
+        doc.styles.upsert(wordcraft_doc::styles::Style {
+            id: id.clone(),
+            name: name.clone(),
+            kind: wordcraft_doc::styles::StyleKind::Character,
+            based_on,
+            chr: model::char_props(fmt),
+            ..Default::default()
+        });
+    }
+}
+
+/// The custom styles the paragraphs of `blocks` name (by ODF name, [`super::styles::ParaLook::named`])
+/// with their parents, parents first; the paragraphs then name them by document style id.
+/// `odt` holds the styles already found (in other parts), which aren't added again.
+fn custom_styles(blocks: &mut [FBlock], styles: &Styles, odt: Vec<String>) -> (Vec<String>, Vec<super::styles::NamedStyle>) {
     let mut odt = odt;
     let mut defs: Vec<super::styles::NamedStyle> = Vec::new();
     each_para(blocks, 0, &mut |p| {
@@ -308,6 +362,10 @@ struct Parsed {
     named: Vec<super::styles::NamedStyle>,
     /// Their ODF names, alongside.
     named_odt: Vec<String>,
+    /// The custom character styles the text uses: ODF name and document id, parents first.
+    char_styles: Vec<(String, String)>,
+    /// Their names, parents and own formatting, alongside.
+    char_defs: Vec<(String, Option<String>, model::Fmt)>,
     /// The heading numbering (`text:outline-style`), level by level.
     outline: Option<Vec<super::styles::ListLevel>>,
     /// How the file's heading, title, quotation and preformatted styles look.
@@ -356,6 +414,13 @@ fn parse_tracked(bytes: &[u8]) -> Result<Parsed, String> {
         named_odt = o;
         named.extend(n);
     }
+    let para_ids: Vec<String> = named_odt.iter().map(|n| super::styles::style_id(n)).collect();
+    let mut char_styles = Vec::new();
+    custom_char_styles(&mut blocks, &styles, &para_ids, &mut char_styles);
+    for b in parts.blocks_mut() {
+        custom_char_styles(b, &styles, &para_ids, &mut char_styles);
+    }
+    let char_defs = char_styles.iter().filter_map(|(o, _)| styles.named_text(o)).collect();
     // An open section with nothing in it (after a column section at the end) isn't one: the
     // section before it ends the document.
     let mut last = body.sec;
@@ -378,6 +443,8 @@ fn parse_tracked(bytes: &[u8]) -> Result<Parsed, String> {
         looks: styles.kind_looks(),
         named,
         named_odt,
+        char_styles,
+        char_defs,
         outline: styles.outline.clone(),
         kern: styles.default_kern,
         default_tab: styles.default_tab,
@@ -388,7 +455,8 @@ fn parse_tracked(bytes: &[u8]) -> Result<Parsed, String> {
 /// Parse an `.odt` package into a document.
 pub fn import(bytes: &[u8]) -> Result<Document, String> {
     model::begin_import();
-    let Parsed { flow, last, track, font, spacing, looks, named, named_odt, outline, kern, default_tab, parts } = parse_tracked(bytes)?;
+    let Parsed { flow, last, track, font, spacing, looks, named, named_odt, char_styles, char_defs, outline, kern, default_tab, parts } =
+        parse_tracked(bytes)?;
     let mut doc = model::to_doc(&flow);
     if font.is_some() {
         doc.styles.default_chr.font = font;
@@ -404,6 +472,7 @@ pub fn import(bytes: &[u8]) -> Result<Document, String> {
         apply_look(&mut doc, *kind, look);
     }
     add_custom_styles(&mut doc, &named, &named_odt);
+    add_char_styles(&mut doc, &char_styles, &char_defs);
     if let Some(levels) = &outline {
         number_headings(&mut doc, levels);
     }

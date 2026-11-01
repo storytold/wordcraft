@@ -112,6 +112,33 @@ fn custom_styles(doc: &Document, named: &std::collections::BTreeSet<String>) -> 
     s
 }
 
+/// The custom character styles in `named` and those they are based on, as common text styles.
+fn char_styles(doc: &Document, named: &std::collections::BTreeSet<String>) -> String {
+    let mut todo: Vec<String> = named.iter().cloned().collect();
+    let mut done = std::collections::BTreeSet::new();
+    let mut s = String::new();
+    while let Some(id) = todo.pop() {
+        if !done.insert(id.clone()) || done.len() > 10_000 {
+            continue;
+        }
+        let Some(st) = doc.styles.get(&id) else { continue };
+        let parent = match st.based_on.as_deref().filter(|b| model::is_custom_char_style(doc, b)) {
+            Some(b) => {
+                todo.push(b.to_string());
+                format!(" style:parent-style-name=\"{}\"", super::writer::odf_name(b))
+            }
+            None => String::new(),
+        };
+        s.push_str(&format!(
+            "<style:style style:name=\"{}\" style:display-name=\"{}\" style:family=\"text\"{parent}><style:text-properties{}/></style:style>",
+            super::writer::odf_name(&id),
+            x(&st.name),
+            props_text(&st.chr)
+        ));
+    }
+    s
+}
+
 /// `text:outline-style` (ODF 1.3 §16.34): the numbering of Heading 1–6, from the list level each
 /// heading style numbers its paragraphs with; levels without one show no number.
 fn outline_style(doc: &Document) -> String {
@@ -423,7 +450,11 @@ pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
     let parts: Vec<PageParts> = pages.iter().map(|(_, sec)| page_parts(doc, sec, &mut hw)).collect();
     let mut named = std::mem::take(&mut w.named);
     named.append(&mut hw.named);
-    let styles = styles_xml(doc, &pages, &parts, &hw.style_defs(), &named);
+    let mut named_text = std::mem::take(&mut w.named_text);
+    named_text.append(&mut hw.named_text);
+    let named_text_xml = char_styles(doc, &named_text);
+    let styles =
+        styles_xml(doc, &pages, &parts, &hw.style_defs(), &named).replacen("</office:styles>", &format!("{named_text_xml}</office:styles>"), 1);
     w.pictures.append(&mut hw.pictures);
     w.formulas.append(&mut hw.formulas);
     let meta = meta_xml(&flow.meta);
