@@ -6,6 +6,8 @@
 //!   breaks; the lists make sure of it for the standard Japanese/Chinese sets.
 //! - Kinsoku off: a line may break between any two East Asian characters, punctuation included.
 //! - Word wrap off: Latin words may break at any character.
+//! - Automatic spacing (`autoSpaceDE`, `autoSpaceDN`): which neighbouring characters get room
+//!   between Asian text and Latin text or digits ([`auto_space`]).
 //!
 //! Only East Asian characters are in the lists, and the extra breaks need letters on both sides,
 //! so text with no East Asian characters breaks exactly as before unless word wrap is off.
@@ -69,9 +71,56 @@ pub fn apply(text: &str, opps: &mut Vec<usize>, kinsoku: bool, word_wrap: bool) 
     opps.dedup();
 }
 
+/// Which of two adjacent characters is the Asian one, when the paragraph's automatic spacing puts
+/// room between them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AsianSide {
+    Left,
+    Right,
+}
+
+/// Whether the paragraph's `autoSpaceDE` (Asian and Latin text) or `autoSpaceDN` (Asian text and
+/// digits) spaces `a` from the `b` right after it, and which side is Asian. Asian text is
+/// ideographs, kana and bopomofo, not their punctuation: Word leaves "5、" and "、8" alone. Hangul
+/// is neither Asian nor Latin here, and Latin punctuation such as `%` or `(` is not Latin.
+pub fn auto_space(a: char, b: char, de: bool, dn: bool) -> Option<AsianSide> {
+    let spaced = |other: char| (de && is_latin_letter(other)) || (dn && other.is_ascii_digit());
+    if is_asian_text(a) && spaced(b) {
+        Some(AsianSide::Left)
+    } else if is_asian_text(b) && spaced(a) {
+        Some(AsianSide::Right)
+    } else {
+        None
+    }
+}
+
+fn is_asian_text(c: char) -> bool {
+    is_east_asian(c) && c.is_alphanumeric() && !is_hangul(c)
+}
+
+fn is_latin_letter(c: char) -> bool {
+    c.is_alphabetic() && !is_east_asian(c) && !is_hangul(c)
+}
+
+/// Hangul jamo, compatibility jamo, extended jamo, syllables and halfwidth Hangul.
+fn is_hangul(c: char) -> bool {
+    matches!(c as u32, 0x1100..=0x11FF | 0x3130..=0x318F | 0xA960..=0xA97F | 0xAC00..=0xD7FF | 0xFFA0..=0xFFDC)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::apply;
+    use super::{AsianSide, apply, auto_space};
+
+    #[test]
+    fn auto_space_pairs() {
+        assert_eq!(auto_space('院', '9', true, true), Some(AsianSide::Left));
+        assert_eq!(auto_space('A', 'カ', true, true), Some(AsianSide::Right));
+        assert_eq!(auto_space('院', '9', true, false), None);
+        assert_eq!(auto_space('A', '字', false, true), None);
+        for (a, b) in [('5', '、'), ('、', '8'), ('漢', '%'), ('漢', '한'), ('한', 'A'), ('a', 'b'), ('漢', '字'), ('漢', '１')] {
+            assert_eq!(auto_space(a, b, true, true), None, "{a}{b}");
+        }
+    }
 
     /// Where a line may start, as the text from there to the next opportunity.
     fn breaks(text: &str, kinsoku: bool, word_wrap: bool) -> Vec<String> {

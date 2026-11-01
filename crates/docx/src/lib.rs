@@ -7,6 +7,7 @@
 //! error or a best-effort document, never a panic.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod bibliography;
 mod chart_spec;
 mod crypt;
 mod custom;
@@ -15,19 +16,22 @@ mod fonts;
 mod package;
 mod read;
 mod smart_art;
+#[cfg(test)]
+mod test_log;
 mod units;
 mod wordml2003;
 mod wordml2003_write;
 mod write;
 mod xml;
 
+pub use bibliography::{MAX_SOURCES, Sources, read_sources};
 pub use chart_spec::{chart_items, chart_xml};
 pub use crypt::{
-    DEFAULT_SPIN_COUNT, MAX_PASSWORD_CHARS, PasswordCheck, check_password, check_protection_password, decrypt, encrypt, encrypt_with_spin_count,
-    is_encrypted, protection_hash,
+    DEFAULT_SPIN_COUNT, MAX_PASSWORD_CHARS, PasswordCheck, check_password, check_protection_password, decrypt, encrypt, encrypt_standard_for_tests,
+    encrypt_with_spin_count, is_encrypted, protection_hash,
 };
 pub use flat::{XmlKind, sniff_xml, write as write_flat};
-pub use fonts::embedded_fonts;
+pub use fonts::{EmbeddedFont, embedded_fonts};
 pub use read::read;
 pub use smart_art::smart_art_items;
 pub use wordml2003_write::write as write_wordml2003;
@@ -48,6 +52,22 @@ pub fn read_xml(bytes: &[u8]) -> Result<wordcraft_doc::Document, DocxError> {
         XmlKind::WordMl2003 => wordml2003::read(bytes),
         XmlKind::Other => Err(DocxError::NotWordXml),
     }
+}
+
+/// The title (`dc:title`) in a package's core properties part (`docProps/core.xml`, ECMA-376
+/// Part 2 §11), trimmed; `None` when the part can't be read or has no title. Only the package's
+/// directory and at most `max_part` bytes of that part are read: for listing templates by name
+/// without reading the whole package.
+pub fn package_title<R: std::io::Read + std::io::Seek>(package: R, max_part: u64) -> Option<String> {
+    use std::io::Read;
+    let mut zip = zip::ZipArchive::new(package).ok()?;
+    let part = zip.by_name("docProps/core.xml").ok()?;
+    let mut xml = Vec::new();
+    part.take(max_part).read_to_end(&mut xml).ok()?;
+    let root = xml::parse(&xml).ok()?;
+    let title = root.child("dc:title")?.text();
+    let title = title.trim();
+    (!title.is_empty()).then(|| title.to_string())
 }
 
 /// What [`DocxError::PasswordRequired`] says.

@@ -6,6 +6,49 @@ use wordcraft_doc::{Block, CharProps, Document, ListKind, Paragraph, Table, Wate
 
 use crate::*;
 
+/// Verify preset lines and connectors emit the requested PDF line-cap operator.
+#[test]
+fn shape_line_caps_reach_pdf_content() {
+    use wordcraft_doc::{
+        connector::{LineCap as ShapeCap, ShapeExtra},
+        para::{Anchor, Float, ShapeKind, Wrap},
+    };
+    for kind in [ShapeKind::Line, ShapeKind::StraightConnector] {
+        for (cap, operator) in [(ShapeCap::Flat, None), (ShapeCap::Round, Some("1 J")), (ShapeCap::Square, Some("2 J"))] {
+            let shape = InlineObject::Shape {
+                kind,
+                w: 40.0,
+                h: 0.0,
+                fill: None,
+                stroke: Some(wordcraft_doc::props::Rgb::BLACK),
+                stroke_width: 10.0,
+                float: Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 100.0, y: 100.0, ..Default::default() },
+                story: None,
+                freeform: None,
+                effects: Default::default(),
+                extra: ShapeExtra { cap, ..Default::default() },
+            };
+            let mut p = Paragraph::new();
+            p.insert_object(0, shape, &Default::default()).unwrap();
+            let mut d = Document::new();
+            d.body = vec![para_block(p)];
+            let bytes = export(&d, &PdfOptions { compress: false, ..Default::default() }).unwrap();
+            let raw = String::from_utf8_lossy(&bytes);
+            // Content operators can share a line: PDF separates them by whitespace.
+            let tokens: Vec<_> = raw.split_ascii_whitespace().collect();
+            let has_operator = |op: &str| {
+                let expected: Vec<_> = op.split_ascii_whitespace().collect();
+                tokens.windows(2).any(|pair| pair == expected.as_slice())
+            };
+            if let Some(op) = operator {
+                assert!(has_operator(op), "{kind:?} {cap:?}: missing PDF cap operator {op}");
+            } else {
+                assert!(!has_operator("1 J") && !has_operator("2 J"), "flat cap must remain butt");
+            }
+        }
+    }
+}
+
 fn png() -> Vec<u8> {
     let img = image::RgbaImage::from_fn(16, 8, |x, y| image::Rgba([(x * 15) as u8, (y * 30) as u8, 200, 255]));
     let mut buf = Vec::new();
@@ -426,6 +469,9 @@ fn shapes_have_paths() {
         ShapeKind::Star,
         ShapeKind::Heart,
         ShapeKind::Arrow,
+        ShapeKind::ArrowLeft,
+        ShapeKind::ArrowUp,
+        ShapeKind::ArrowDown,
         ShapeKind::Line,
         ShapeKind::Diamond,
         ShapeKind::Triangle,
@@ -447,6 +493,12 @@ fn shapes_have_paths() {
     assert_eq!(parse_iso("2024-02-03T04:05:06Z"), Some((2024, 2, 3, 4, 5, 6)));
     assert_eq!(parse_iso("garbage"), None);
     assert_eq!(civil(0), (1970, 1, 1, 0, 0, 0));
+    // Past chrono's ±262143-year range `civil` keeps the proleptic Gregorian date the old
+    // hand-rolled converter gave (only the caller's 0..=9999 PDF year clamp applies later), rather
+    // than falling back to the epoch. Values pinned from the old formula.
+    assert_eq!(civil(10_000_000_000_000), (318857, 5, 20, 17, 46, 40));
+    assert_eq!(civil(-10_000_000_000_000), (-314918, 8, 13, 6, 13, 20));
+    assert_eq!(civil(253_402_300_800), (10000, 1, 1, 0, 0, 0));
 }
 
 #[test]
@@ -525,7 +577,7 @@ fn unsubsettable_font(family: &str, gid: u16) -> Vec<u8> {
             i += 1;
         }
     };
-    let wide = |s: &str| s.encode_utf16().flat_map(|u| u.to_be_bytes()).collect::<Vec<u8>>();
+    let wide = |s: &str| s.encode_utf16().flat_map(u16::to_be_bytes).collect::<Vec<u8>>();
     assert_eq!(family.len(), "Source Sans 3".len());
     rename(&mut f, &wide("Source Sans 3"), &wide(family));
     rename(&mut f, b"Source Sans 3", family.as_bytes());
@@ -619,6 +671,43 @@ fn filled_paths(bytes: &[u8]) -> Vec<kurbo::BezPath> {
     fills.0
 }
 
+/// The straight stroked segments drawn, over every page, in page space: `((x0, y0), (x1, y1), width)`.
+fn stroked_segments(bytes: &[u8]) -> Vec<(kurbo::Point, kurbo::Point, f64)> {
+    use hayro_interpret::font::Glyph;
+    use hayro_interpret::{
+        BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, SoftMask,
+        interpret_page,
+    };
+    use hayro_syntax::Pdf;
+    struct Strokes(Vec<(kurbo::Point, kurbo::Point, f64)>);
+    impl Device<'_> for Strokes {
+        fn set_soft_mask(&mut self, _: Option<SoftMask<'_>>) {}
+        fn set_blend_mode(&mut self, _: BlendMode) {}
+        fn draw_path(&mut self, path: &kurbo::BezPath, transform: kurbo::Affine, _: &Paint<'_>, mode: &PathDrawMode) {
+            use kurbo::PathEl;
+            let PathDrawMode::Stroke(props) = mode else { return };
+            if let [PathEl::MoveTo(a), PathEl::LineTo(b)] = path.elements() {
+                let width = f64::from(props.line_width) * transform.determinant().abs().sqrt();
+                self.0.push((transform * *a, transform * *b, width));
+            }
+        }
+        fn push_clip_path(&mut self, _: &ClipPath) {}
+        fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, _: BlendMode) {}
+        fn draw_glyph(&mut self, _: &Glyph<'_>, _: kurbo::Affine, _: kurbo::Affine, _: &Paint<'_>, _: &GlyphDrawMode) {}
+        fn draw_image(&mut self, _: Image<'_, '_>, _: kurbo::Affine) {}
+        fn pop_clip_path(&mut self) {}
+        fn pop_transparency_group(&mut self) {}
+    }
+    let pdf = Pdf::new(bytes.to_vec()).expect("parse");
+    let cache = InterpreterCache::new();
+    let mut strokes = Strokes(Vec::new());
+    for page in pdf.pages().iter() {
+        let mut ctx = Context::new(kurbo::Affine::IDENTITY, kurbo::Rect::new(0.0, 0.0, 1.0, 1.0), &cache, pdf.xref(), InterpreterSettings::default());
+        interpret_page(page, &mut ctx, &mut strokes);
+    }
+    strokes.0
+}
+
 #[test]
 fn rounded_rectangle_corners_follow_their_radius() {
     // `roundRect` with its own `adj`: Word's address boxes use small corners (adj 3565: 3.6% of
@@ -631,7 +720,7 @@ fn rounded_rectangle_corners_follow_their_radius() {
             kind: ShapeKind::RoundedRectangle,
             w: 200.0,
             h: 100.0,
-            fill: Some(wordcraft_doc::props::Rgb(0xD9, 0xD9, 0xD9)),
+            fill: Some(wordcraft_doc::fill::Fill::solid(wordcraft_doc::props::Rgb(0xD9, 0xD9, 0xD9))),
             stroke: None,
             stroke_width: 0.0,
             float,
@@ -684,6 +773,32 @@ fn unsubsettable_font_is_drawn_as_outlines() {
     assert!(paths > 0, "its glyphs are drawn as outlines");
 }
 
+/// #3674: shaping gives 32-bit glyph ids (a format-12 cmap can map a character to any of them),
+/// but krilla takes 16-bit ones and panics on a larger id. That failed the export, and on wasm
+/// (`panic = "abort"`) lost the tab. A glyph id above 65535 is now written as .notdef.
+#[test]
+fn glyph_id_above_u16_exports() {
+    let mut d = Document::new();
+    d.body = vec![para_block(Paragraph::with_text("Wide glyph", CharProps { font: Some("Source Sans 3".into()), ..Default::default() }))];
+    let opts = PdfOptions { tagged: false, ..Default::default() };
+    let mut lay = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let (want, _) = count_glyphs_and_paths(&export_layout(&d, &lay, &opts).unwrap());
+    assert!(want > 0);
+    let mut wide = 0;
+    for item in lay.pages.iter_mut().flat_map(|p| p.items.iter_mut()) {
+        if let Placed::Lines { para, .. } = item
+            && let Some(g) = Arc::make_mut(para).glyphs.first_mut()
+        {
+            g.gid = 70_000;
+            wide += 1;
+        }
+    }
+    assert_eq!(wide, 1, "one glyph id is out of range");
+    let bytes = export_layout(&d, &lay, &opts).expect("a glyph id above 65535 must not fail the export");
+    let (glyphs, _) = count_glyphs_and_paths(&bytes);
+    assert_eq!(glyphs, want, "every glyph is still drawn, the wide one as .notdef");
+}
+
 #[test]
 fn flat_lines_in_a_group_are_drawn() {
     // A horizontal divider inside a group has no height (`a:ext cy="0"`): it used to be left out
@@ -719,6 +834,47 @@ fn flat_lines_in_a_group_are_drawn() {
         GroupChild { x: 20.0, y: 20.0, obj: line(0.0, 0.0) },
     ]));
     assert_eq!(flat, empty + 2, "the horizontal and the vertical line, not the one without length");
+}
+
+/// #1740: a triple border is three lines in the PDF (it was drawn as a double one).
+#[test]
+fn triple_borders_export_three_lines() {
+    use wordcraft_doc::props::{Border, BorderStyle, Borders};
+    let pdf = |style: BorderStyle| {
+        let mut p = Paragraph::with_text("Ruled", CharProps::default());
+        p.props.borders = Some(Borders { bottom: Some(Border { style, width: 0.75, color: None, space: 1.0 }), ..Default::default() });
+        let mut d = Document::new();
+        d.body = vec![para_block(p)];
+        export(&d, &PdfOptions { tagged: false, ..Default::default() }).unwrap()
+    };
+    let paths = |style: BorderStyle| count_glyphs_and_paths(&pdf(style)).1;
+    let single = paths(BorderStyle::Single);
+    assert_eq!(paths(BorderStyle::Double), single + 1);
+    assert_eq!(paths(BorderStyle::Triple), single + 2);
+
+    // The three lines run along the border, side by side: one on the single line's centre and one
+    // either side of it, each 3 stroke widths away (1.8 x the line width apart, drawn 0.6 x wide).
+    let flat = |style: BorderStyle| -> Vec<(kurbo::Point, kurbo::Point, f64)> {
+        stroked_segments(&pdf(style)).into_iter().filter(|(a, b, _)| (a.y - b.y).abs() < 1e-3 && (a.x - b.x).abs() > 1.0).collect()
+    };
+    let centre = match flat(BorderStyle::Single).as_slice() {
+        [(a, _, _)] => a.y,
+        other => panic!("one single border line, got {other:?}"),
+    };
+    let mut triple = flat(BorderStyle::Triple);
+    assert_eq!(triple.len(), 3, "three horizontal strokes: {triple:?}");
+    triple.sort_by(|l, r| l.0.y.total_cmp(&r.0.y));
+    let (x0, x1) = (triple[0].0.x, triple[0].1.x);
+    for (a, b, _) in &triple {
+        assert!((a.x - x0).abs() < 1e-3 && (b.x - x1).abs() < 1e-3, "the lines span the same run: {triple:?}");
+    }
+    let width = triple[0].2;
+    assert!(width > 0.0 && triple.iter().all(|t| (t.2 - width).abs() < 1e-3), "equally thin lines: {triple:?}");
+    let ys: Vec<f64> = triple.iter().map(|t| t.0.y).collect();
+    assert!((ys[1] - centre).abs() < 1e-2, "the middle line sits on the border's centre: {ys:?} vs {centre}");
+    for gap in [ys[1] - ys[0], ys[2] - ys[1]] {
+        assert!((gap - 3.0 * width).abs() < 1e-2, "the lines are 3 stroke widths apart across the border: {ys:?}, width {width}");
+    }
 }
 
 #[test]
@@ -875,6 +1031,94 @@ fn metafile_pictures_are_drawn_as_vector_paths() {
     assert!(!raw.contains("0.8156"), "the grey placeholder box is not drawn");
 }
 
+/// #1899: a picture cropped to a sliver of its source (3% across here) is drawn at that sliver's
+/// size, bitmap or metafile: the source spans 1/0.03 frames, not at most 20 (the old 5% floor).
+#[test]
+fn a_crop_keeping_a_sliver_draws_the_source_that_much_wider() {
+    use hayro_interpret::font::Glyph;
+    use hayro_interpret::{
+        BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, SoftMask,
+        interpret_page,
+    };
+    use hayro_syntax::Pdf;
+    /// The widest image and the widest fill drawn, in page units.
+    #[derive(Default)]
+    struct Widest(f64, f64);
+    impl Device<'_> for Widest {
+        fn set_soft_mask(&mut self, _: Option<SoftMask<'_>>) {}
+        fn set_blend_mode(&mut self, _: BlendMode) {}
+        fn draw_path(&mut self, path: &kurbo::BezPath, transform: kurbo::Affine, _: &Paint<'_>, mode: &PathDrawMode) {
+            if matches!(mode, PathDrawMode::Fill(_)) {
+                self.1 = self.1.max(kurbo::Shape::bounding_box(&(transform * path.clone())).width());
+            }
+        }
+        fn push_clip_path(&mut self, _: &ClipPath) {}
+        fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, _: BlendMode) {}
+        fn draw_glyph(&mut self, _: &Glyph<'_>, _: kurbo::Affine, _: kurbo::Affine, _: &Paint<'_>, _: &GlyphDrawMode) {}
+        fn draw_image(&mut self, _: Image<'_, '_>, transform: kurbo::Affine) {
+            self.0 = self.0.max(transform.as_coeffs()[0].abs());
+        }
+        fn pop_clip_path(&mut self) {}
+        fn pop_transparency_group(&mut self) {}
+    }
+    let widest = |bytes: Vec<u8>, ext: &str, crop: [f32; 4]| {
+        let mut d = Document::new();
+        let media = d.add_media(bytes, ext);
+        let mut p = Paragraph::new();
+        p.insert_object(
+            0,
+            InlineObject::Image { media, w: 70.0, h: 70.0, alt: String::new(), float: Default::default(), crop, ole: None },
+            &CharProps::default(),
+        )
+        .unwrap();
+        d.body = vec![para_block(p)];
+        let pdf = Pdf::new(export(&d, &PdfOptions { compress: false, tagged: false, ..Default::default() }).unwrap()).expect("parse");
+        let cache = InterpreterCache::new();
+        let mut w = Widest::default();
+        for page in pdf.pages().iter() {
+            let mut ctx =
+                Context::new(kurbo::Affine::IDENTITY, kurbo::Rect::new(0.0, 0.0, 1.0, 1.0), &cache, pdf.xref(), InterpreterSettings::default());
+            interpret_page(page, &mut ctx, &mut w);
+        }
+        w
+    };
+    let sliver = [0.47, 0.0, 0.5, 0.0];
+    // The bitmap: the whole image drawn behind the frame's clip.
+    let (whole, cropped) = (widest(png(), "png", [0.0; 4]).0, widest(png(), "png", sliver).0);
+    assert!(whole > 0.0 && (cropped / whole - 1.0 / 0.03).abs() < 0.5, "png: {whole} → {cropped}");
+    // The metafile: its red right half, a filled path.
+    let (whole, cropped) = (widest(red_right_half_emf(), "emf", [0.0; 4]).1, widest(red_right_half_emf(), "emf", sliver).1);
+    assert!(whole > 0.0 && (cropped / whole - 1.0 / 0.03).abs() < 0.5, "emf: {whole} → {cropped}");
+}
+
+/// A JPEG whose headers say progressive (SOF2, a DC-only first scan) and `w` × `h`, its three
+/// components unsubsampled, with no pixel data that size.
+fn progressive_jpeg_header(w: u16, h: u16) -> Vec<u8> {
+    let mut jpeg = Vec::new();
+    image::RgbImage::new(16, 16).write_to(&mut std::io::Cursor::new(&mut jpeg), image::ImageFormat::Jpeg).unwrap();
+    let sof = jpeg.windows(2).position(|m| m == [0xFF, 0xC0]).unwrap();
+    jpeg[sof + 1] = 0xC2;
+    jpeg[sof + 5..sof + 7].copy_from_slice(&h.to_be_bytes());
+    jpeg[sof + 7..sof + 9].copy_from_slice(&w.to_be_bytes());
+    for c in 0..3 {
+        jpeg[sof + 11 + 3 * c] = 0x11;
+    }
+    let sos = jpeg.windows(2).position(|m| m == [0xFF, 0xDA]).unwrap();
+    let n = usize::from(jpeg[sos + 4]);
+    jpeg[sos + 6 + 2 * n] = 0;
+    jpeg
+}
+
+/// #3644: a progressive JPEG's coefficients count toward the budget, beside its output.
+#[test]
+fn progressive_jpeg_coefficients_count_toward_the_image_budget() {
+    assert!(wordcraft_geom::decode_fits(7900, 7900, wordcraft_geom::MAX_DECODED_BYTES));
+    assert!(load_image(&Arc::new(progressive_jpeg_header(7900, 7900))).is_none());
+    let mut baseline = Vec::new();
+    image::RgbImage::new(64, 64).write_to(&mut std::io::Cursor::new(&mut baseline), image::ImageFormat::Jpeg).unwrap();
+    assert!(load_image(&Arc::new(baseline)).is_some(), "other JPEGs still embed");
+}
+
 /// #1502: an inline picture's Figure carries its own alt text, not the "picture" fallback.
 #[test]
 fn inline_picture_figure_keeps_its_alt_text() {
@@ -892,6 +1136,72 @@ fn inline_picture_figure_keeps_its_alt_text() {
     assert!(with.contains("/Alt(Blue rectangle used as test image)"), "inline alt text lost");
     assert!(!with.contains("/Alt(picture)"));
     assert!(raw("").contains("/Alt(picture)"), "no alt text keeps the fallback");
+}
+
+/// A tagged PDF of one picture in a paragraph, placed by `float`, with alt text "A red square".
+fn tagged_picture_pdf(float: wordcraft_doc::para::Float) -> String {
+    let mut d = Document::new();
+    let media = d.add_media(red_right_half_emf(), "emf");
+    let mut p = Paragraph::with_text("Figure: ", CharProps::default());
+    let n = p.len();
+    let obj = InlineObject::Image { media, w: 70.0, h: 70.0, alt: "A red square".into(), float, crop: [0.0; 4], ole: None };
+    p.insert_object(n, obj, &CharProps::default()).unwrap();
+    d.body = vec![para_block(p)];
+    String::from_utf8_lossy(&export(&d, &PdfOptions { compress: false, tagged: true, ..Default::default() }).unwrap()).into_owned()
+}
+
+/// A picture marked decorative is an artifact in tagged PDF, inline, rotated or floating, so
+/// screen readers skip it; the same picture not marked decorative stays a Figure with its alt text.
+#[test]
+fn decorative_pictures_are_artifacts_not_figures() {
+    use wordcraft_doc::para::{AltText, Anchor, Float, Wrap};
+    let decorative = AltText { decorative: true, ..Default::default() };
+    let floating = Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 72.0, y: 200.0, ..Default::default() };
+    let cases = [
+        ("inline", Float::default()),
+        ("rotated inline", Float { rot: 30.0, ..Default::default() }),
+        ("floating", floating.clone()),
+        ("rotated floating", Float { rot: 30.0, ..floating }),
+    ];
+    for (name, float) in cases {
+        let plain = tagged_picture_pdf(float.clone());
+        assert!(plain.contains("/Alt(A red square)"), "{name}: a described picture is a Figure with its alt text");
+        let raw = tagged_picture_pdf(Float { alt: decorative.clone(), ..float });
+        assert!(!raw.contains("/Alt("), "{name}: a decorative picture has no Figure and no alt text");
+        assert!(raw.contains("1 0 0 rg"), "{name}: the decorative picture is still drawn");
+    }
+}
+
+/// In a rotated group, each picture is tagged on its own: the decorative one is an artifact, the
+/// other stays a Figure with its alt text.
+#[test]
+fn rotated_group_tags_each_picture_on_its_own() {
+    use wordcraft_doc::para::{AltText, Float, GroupChild};
+    let mut d = Document::new();
+    let media = d.add_media(red_right_half_emf(), "emf");
+    let picture =
+        |alt: &str, float: Float| InlineObject::Image { media: media.clone(), w: 70.0, h: 70.0, alt: alt.into(), float, crop: [0.0; 4], ole: None };
+    let decorative = Float { alt: AltText { decorative: true, ..Default::default() }, ..Default::default() };
+    let group = InlineObject::Group {
+        w: 160.0,
+        h: 70.0,
+        float: Float { rot: 30.0, ..Default::default() },
+        ch_w: 160.0,
+        ch_h: 70.0,
+        children: vec![
+            GroupChild { x: 0.0, y: 0.0, obj: picture("A decorative border", decorative) },
+            GroupChild { x: 90.0, y: 0.0, obj: picture("A red square", Float::default()) },
+        ],
+        canvas: None,
+    };
+    let mut p = Paragraph::with_text("Group: ", CharProps::default());
+    let n = p.len();
+    p.insert_object(n, group, &CharProps::default()).unwrap();
+    d.body = vec![para_block(p)];
+    let raw = String::from_utf8_lossy(&export(&d, &PdfOptions { compress: false, tagged: true, ..Default::default() }).unwrap()).into_owned();
+    assert!(raw.contains("/Alt(A red square)"), "the picture not marked decorative is a Figure with its alt text");
+    assert!(!raw.contains("A decorative border"), "the decorative picture has no Figure and no alt text");
+    assert_eq!(raw.matches("/Alt(").count(), 1, "one Figure, for the picture not marked decorative");
 }
 
 /// An EMF file of the given records, with a 25 mm frame and 1000 device pixels across (0.04 per 0.01 mm).
@@ -993,6 +1303,44 @@ fn cosmetic_metafile_pens_are_thin_but_visible() {
     assert!(raw.contains("0.25 w"), "the hairline is a quarter point wide");
 }
 
+/// EMF text records: EXTCREATEFONTINDIRECTW (Arial, 20 units high) in slot 1, SELECTOBJECT,
+/// SETTEXTCOLOR (black), then EXTTEXTOUTW `text` at (5, 40) with no dx array.
+fn emf_text_records(text: &str) -> Vec<Vec<u8>> {
+    let mut font = [82i32.to_le_bytes(), 104u32.to_le_bytes(), 1i32.to_le_bytes(), (-20i32).to_le_bytes()].concat();
+    font.extend([0i32, 0, 0, 400, 0, 0].iter().flat_map(|v| v.to_le_bytes()));
+    let mut name: Vec<u8> = "Arial".encode_utf16().flat_map(u16::to_le_bytes).collect();
+    name.resize(64, 0);
+    font.extend(name);
+    let units: Vec<u8> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    let padded = units.len().div_ceil(4) * 4;
+    let mut out = [84u32.to_le_bytes(), ((76 + padded) as u32).to_le_bytes()].concat();
+    out.extend([0i32, 0, 100, 100, 1, 0, 0, 5, 40, text.encode_utf16().count() as i32, 76, 0, 0, 0, 0, 0, 0].iter().flat_map(|v| v.to_le_bytes()));
+    out.extend(units);
+    out.resize(76 + padded, 0);
+    vec![font, emf_rec(37, &[1]), emf_rec(24, &[0]), out]
+}
+
+/// #1764: the text of an EMF picture (EXTTEXTOUTW) is drawn, so it is in the PDF's text layer.
+#[test]
+fn metafile_text_records_are_drawn_as_text() {
+    let mut recs = emf_text_records("Cell42");
+    recs.push(emf_rec(14, &[0; 3]));
+    let mut d = Document::new();
+    let media = d.add_media(emf_file(&recs), "emf");
+    let mut p = Paragraph::with_text("Figure: ", CharProps::default());
+    let n = p.len();
+    p.insert_object(
+        n,
+        InlineObject::Image { media, w: 70.0, h: 70.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None },
+        &CharProps::default(),
+    )
+    .unwrap();
+    d.body = vec![para_block(p)];
+    let bytes = export(&d, &PdfOptions { compress: false, tagged: false, ..Default::default() }).unwrap();
+    let text = extract_text(&bytes).concat();
+    assert!(text.contains("Cell42"), "the metafile's text is drawn: {text:?}");
+}
+
 /// #455: a link to a bookmark after a page break inside its paragraph goes to the page the
 /// bookmark is on, not the paragraph's first page.
 #[test]
@@ -1001,6 +1349,7 @@ fn bookmark_destination_is_the_page_of_its_start() {
     let mut p = Paragraph::with_text("Paragraph start\u{c}Bookmark target", CharProps::default());
     let at = "Paragraph start\u{c}".len();
     p.insert_object(at, InlineObject::BookmarkStart { name: "target".into() }, &CharProps::default()).unwrap();
+    p.insert_object(at, InlineObject::BookmarkStart { name: "First".into() }, &CharProps::default()).unwrap();
     p.insert_object(0, InlineObject::BookmarkStart { name: "first".into() }, &CharProps::default()).unwrap();
     d.body = vec![para_block(p)];
     let lay = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
@@ -1027,6 +1376,134 @@ fn bookmark_destination_is_the_page_of_its_start() {
     assert_eq!(page, 1, "the bookmark is on the second page");
     assert!((x - 72.0).abs() < 1.0 && y < 150.0, "{x} {y}");
     assert_eq!(ex.bookmark("first").map(|b| b.0), Some(0));
+
+    // Case-insensitive lookup matches
+    let (page_ci, x_ci, y_ci) = ex.bookmark("TARGET").unwrap();
+    assert_eq!(page_ci, 1);
+    assert_eq!((x_ci, y_ci), (x, y));
+    // An exact name wins; names that differ only in case fall back to the first in the document
+    // (a folded index, not a scan of a hash map in arbitrary order for every link).
+    assert_eq!(ex.bookmark("First").map(|b| b.0), Some(1));
+    assert_eq!(ex.bookmark("FIRST").map(|b| b.0), Some(0));
+    assert!(ex.bookmark("absent").is_none());
+    let (exact, folded) = ex.bookmarks.get().unwrap();
+    assert_eq!((exact.len(), folded.len()), (3, 2));
+
+    // Whitespace in ISO date string is parsed successfully
+    assert!(parse_iso("  2024-05-06T07:08:09Z \n").is_some());
+}
+
+#[test]
+fn ref_fields_export_cached_links() {
+    use hayro_syntax::object::{Array, Dict};
+
+    for (instr, outer, code, expected) in [
+        (r"REF target \w \h \* MERGEFORMAT", None, false, Some(1)),
+        (r#"ref "target"\H"#, None, false, Some(1)),
+        (r"REF target", None, false, None),
+        (r"REF target \hello", None, false, None),
+        (r#"REF target \d "\h""#, None, false, None),
+        (r"REF absent \h", None, false, None),
+        (r"REF target \h", None, true, None),
+        (r"REF target \h", Some("#outer"), false, Some(2)),
+    ] {
+        let mut d = Document::new();
+        let mut p = Paragraph::new();
+        p.insert_object(
+            0,
+            InlineObject::Field { instr: instr.into(), result: "Cached label".into(), locked: true, dirty: false, code, form: String::new() },
+            &CharProps { link: outer.map(str::to_owned), ..Default::default() },
+        )
+        .unwrap();
+        d.body = vec![para_block(p)];
+        for name in ["target", "outer"] {
+            let mut p = Paragraph::with_text("Current target", CharProps::default());
+            p.props.page_break_before = Some(true);
+            p.insert_object(0, InlineObject::BookmarkStart { name: name.into() }, &CharProps::default()).unwrap();
+            d.body.push(para_block(p));
+        }
+        let before = d.body.clone();
+        let bytes = export(&d, &PdfOptions::default()).unwrap();
+        assert_eq!(d.body, before, "export must not refresh cached fields");
+        if !code {
+            assert_eq!(squash(&extract_text(&bytes)[0]), "Cached label");
+        }
+        let pdf = hayro_syntax::Pdf::new(bytes).unwrap();
+        let targets: Vec<_> = pdf.pages()[0]
+            .raw()
+            .get::<Array>(b"Annots")
+            .into_iter()
+            .flat_map(|a| a.iter::<Dict>().collect::<Vec<_>>())
+            .map(|a| a.get::<Array>(b"Dest").unwrap().iter::<Dict>().next().unwrap().obj_id())
+            .collect();
+        let expected: Vec<_> = expected.map(|i| pdf.pages()[i].raw().obj_id()).into_iter().collect();
+        assert_eq!(targets, expected, "{instr}, enclosing={outer:?}, code={code}");
+    }
+}
+
+#[test]
+fn outline_after_leading_breaks() {
+    use hayro_syntax::object::{Array, Dict};
+
+    for (lead, marker) in [
+        ("\u{c}", None),
+        ("\u{c}\u{c}", None),
+        ("\u{c}", Some(InlineObject::BookmarkStart { name: "leading".into() })),
+        ("\u{c}\u{c}", Some(InlineObject::CommentStart { id: 0 })),
+    ] {
+        let mut d = Document::from_text("Earlier page");
+        let mut heading = Paragraph::with_text(&format!("{lead}Navigation target"), CharProps::default()).styled("Heading1");
+        heading.insert_object(lead.len(), InlineObject::BookmarkStart { name: "target".into() }, &CharProps::default()).unwrap();
+        if let Some(marker) = marker {
+            heading.insert_object(0, marker, &CharProps::default()).unwrap();
+        }
+        d.body.push(para_block(heading));
+        let bytes = export(&d, &PdfOptions::default()).unwrap();
+        let text = extract_text(&bytes);
+        let target = text.iter().position(|t| squash(t).contains("Navigation target")).unwrap();
+        assert!(target > 0, "the heading follows a page break");
+        for pages in [None, Some(vec![target]), Some(vec![target, 0]), Some(vec![0])] {
+            let expected = pages.as_ref().map_or(Some(target), |p| p.iter().position(|i| *i == target));
+            let bytes = export(&d, &PdfOptions { pages, ..Default::default() }).unwrap();
+            let pdf = hayro_syntax::Pdf::new(bytes).unwrap();
+            let catalog = pdf.xref().get::<Dict<'_>>(pdf.xref().root_id()).unwrap();
+            let outlines = catalog.get::<Dict<'_>>(b"Outlines");
+            let Some(expected) = expected else {
+                assert!(outlines.is_none(), "a page containing only the break has no heading outline");
+                continue;
+            };
+            let first = outlines.unwrap().get::<Dict<'_>>(b"First").unwrap();
+            let dest = first.get::<Array<'_>>(b"Dest").unwrap();
+            assert_eq!(dest.iter::<Dict<'_>>().next().unwrap(), *pdf.pages()[expected].raw(), "outline must reach the visible heading");
+            assert!(first.get::<Dict<'_>>(b"Next").is_none(), "one outline entry per heading");
+        }
+    }
+}
+
+#[test]
+fn outline_keeps_visible_objects() {
+    use hayro_syntax::object::{Array, Dict};
+
+    let mut base = Document::from_text("Earlier text");
+    let media = base.add_media(png(), "png");
+    for object in [
+        InlineObject::Field { instr: "QUOTE Visible".into(), result: "Visible".into(), locked: true, dirty: false, code: false, form: String::new() },
+        InlineObject::Image { media, w: 16.0, h: 8.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None },
+    ] {
+        let mut d = base.clone();
+        let mut heading = Paragraph::with_text("\u{c}After break", CharProps::default()).styled("Heading1");
+        heading.insert_object(0, object, &CharProps::default()).unwrap();
+        heading.insert_object(0, InlineObject::BookmarkStart { name: "leading".into() }, &CharProps::default()).unwrap();
+        d.body.push(para_block(heading));
+        let bytes = export(&d, &PdfOptions::default()).unwrap();
+        assert!(squash(&extract_text(&bytes)[1]).contains("After break"));
+        let pdf = hayro_syntax::Pdf::new(bytes).unwrap();
+        let catalog = pdf.xref().get::<Dict<'_>>(pdf.xref().root_id()).unwrap();
+        let outlines = catalog.get::<Dict<'_>>(b"Outlines").unwrap();
+        let first = outlines.get::<Dict<'_>>(b"First").unwrap();
+        let dest = first.get::<Array<'_>>(b"Dest").unwrap();
+        assert_eq!(dest.iter::<Dict<'_>>().next().unwrap(), *pdf.pages()[0].raw(), "visible objects before the break anchor the heading");
+    }
 }
 
 /// Print Markup (#589): the comments and their replies print beside each page, which is scaled
@@ -1179,9 +1656,42 @@ fn rtl_sample() -> Document {
     d
 }
 
+/// The `/ActualText` of each marked-content sequence (BMC/BDC) on a page, in content-stream order.
+fn actual_texts(page: &hayro_syntax::page::Page<'_>) -> Vec<Option<String>> {
+    use hayro_syntax::content::ops::TypedInstruction;
+    use hayro_syntax::object::{Object, String as PdfString};
+    let mut out = Vec::new();
+    let mut ops = page.typed_operations();
+    while let Some(op) = ops.next() {
+        match op {
+            TypedInstruction::BeginMarkedContent(_) => out.push(None),
+            TypedInstruction::BeginMarkedContentWithProperties(bdc) => out.push(match bdc.1 {
+                Object::Dict(d) => d.get::<PdfString<'_>>("ActualText").map(|s| pdf_text_string(s.as_bytes())),
+                _ => None,
+            }),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// A PDF text string: UTF-16BE or UTF-8 after a byte order mark, else (near enough) PDFDocEncoding.
+fn pdf_text_string(b: &[u8]) -> String {
+    if let Some(utf16) = b.strip_prefix(&[0xFE, 0xFF]) {
+        let units: Vec<u16> = utf16.as_chunks::<2>().0.iter().map(|&c| u16::from_be_bytes(c)).collect();
+        String::from_utf16_lossy(&units)
+    } else if let Some(utf8) = b.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
+        String::from_utf8_lossy(utf8).into_owned()
+    } else {
+        b.iter().map(|&c| char::from(c)).collect()
+    }
+}
+
 /// Each glyph's Unicode text in content-stream order, with its baseline y and its outline's left
-/// and right edges (none for a space); `None` text for a glyph without a ToUnicode entry of its
-/// own (a cluster's extra glyph, covered by ActualText).
+/// and right edges (none for a space). Inside a marked-content sequence with `/ActualText` (a
+/// cluster whose glyphs' ToUnicode entries can't spell it), that text goes with the first glyph and
+/// the rest have none, as PDFium and poppler read it; elsewhere a glyph without a ToUnicode entry
+/// has `None` text.
 type StreamGlyph = (Option<String>, f64, Option<(f64, f64)>);
 fn stream_glyphs(bytes: &[u8]) -> Vec<StreamGlyph> {
     use hayro_interpret::font::Glyph;
@@ -1190,21 +1700,40 @@ fn stream_glyphs(bytes: &[u8]) -> Vec<StreamGlyph> {
         interpret_page,
     };
     use hayro_syntax::Pdf;
-    struct Units(Vec<StreamGlyph>);
+    #[derive(Default)]
+    struct Units {
+        glyphs: Vec<StreamGlyph>,
+        /// The page's ActualText per marked-content sequence, and how many have begun.
+        actual: Vec<Option<String>>,
+        begun: usize,
+        /// Open sequences: the ActualText still to hand out (emptied by the first glyph).
+        open: Vec<Option<String>>,
+    }
     impl Device<'_> for Units {
         fn set_soft_mask(&mut self, _: Option<SoftMask<'_>>) {}
         fn set_blend_mode(&mut self, _: BlendMode) {}
         fn draw_path(&mut self, _: &kurbo::BezPath, _: kurbo::Affine, _: &Paint<'_>, _: &PathDrawMode) {}
         fn push_clip_path(&mut self, _: &ClipPath) {}
         fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, _: BlendMode) {}
+        fn begin_marked_content(&mut self, _: &[u8], _: Option<i32>) {
+            self.open.push(self.actual.get(self.begun).cloned().flatten());
+            self.begun += 1;
+        }
+        fn end_marked_content(&mut self) {
+            self.open.pop();
+        }
         fn draw_glyph(&mut self, g: &Glyph<'_>, t: kurbo::Affine, gt: kurbo::Affine, _: &Paint<'_>, mode: &GlyphDrawMode) {
             if matches!(mode, GlyphDrawMode::Stroke(_)) {
                 return;
             }
-            let text = match g.as_unicode() {
-                Some(hayro_cmap::BfString::Char(c)) => Some(c.to_string()),
-                Some(hayro_cmap::BfString::String(s)) => Some(s),
-                None => None,
+            let text = if let Some(actual) = self.open.iter_mut().find_map(Option::as_mut) {
+                Some(std::mem::take(actual)).filter(|s| !s.is_empty())
+            } else {
+                match g.as_unicode() {
+                    Some(hayro_cmap::BfString::Char(c)) => Some(c.to_string()),
+                    Some(hayro_cmap::BfString::String(s)) => Some(s),
+                    None => None,
+                }
             };
             let edges = match g {
                 Glyph::Outline(o) if !o.outline().elements().is_empty() => {
@@ -1214,7 +1743,7 @@ fn stream_glyphs(bytes: &[u8]) -> Vec<StreamGlyph> {
                 }
                 _ => None,
             };
-            self.0.push((text, (t * gt * kurbo::Point::ZERO).y, edges));
+            self.glyphs.push((text, (t * gt * kurbo::Point::ZERO).y, edges));
         }
         fn draw_image(&mut self, _: Image<'_, '_>, _: kurbo::Affine) {}
         fn pop_clip_path(&mut self) {}
@@ -1222,18 +1751,40 @@ fn stream_glyphs(bytes: &[u8]) -> Vec<StreamGlyph> {
     }
     let pdf = Pdf::new(bytes.to_vec()).expect("parse");
     let cache = InterpreterCache::new();
-    let mut out = Units(Vec::new());
+    let mut out = Units::default();
     for page in pdf.pages().iter() {
+        out.actual = actual_texts(page);
+        out.begun = 0;
         let mut ctx = Context::new(kurbo::Affine::IDENTITY, kurbo::Rect::new(0.0, 0.0, 1.0, 1.0), &cache, pdf.xref(), InterpreterSettings::default());
         interpret_page(page, &mut ctx, &mut out);
     }
-    out.0
+    out.glyphs
+}
+
+/// One glyph drawn for two different letters: ToUnicode can map it to only one, so krilla wraps
+/// the other in an ActualText span, and `stream_glyphs` reads the span's text (#1773). Whether
+/// shaping reuses a glyph like this depends on the font: Noto Naskh Arabic draws a dotted letter
+/// as a dotless body that other letters share, so the RTL tests met it only where it's installed.
+#[test]
+fn stream_glyphs_read_actual_text() {
+    let font = Font::new(wordcraft_fonts::bundled()[0].to_vec().into(), 0).unwrap();
+    let glyph = |range| KrillaGlyph::new(GlyphId::new(10), 0.5, 0.0, 0.0, 0.0, range, None);
+    let mut pdf = krilla::Document::new();
+    let mut page = pdf.start_page_with(PageSettings::new(Size::from_wh(200.0, 100.0).unwrap()));
+    let mut s = page.surface();
+    s.draw_glyphs(Point::from_xy(10.0, 50.0), &[glyph(0..1), glyph(1..2)], font, "AB", 12.0, false);
+    s.finish();
+    page.finish();
+    let bytes = pdf.finish().unwrap();
+    let texts: Vec<_> = stream_glyphs(&bytes).into_iter().map(|(t, ..)| t).collect();
+    assert_eq!(texts, [Some("A".to_string()), Some("B".to_string())]);
 }
 
 /// Words as PDF viewers' text extraction (PDFium in Chrome and Edge, pdf.js, poppler) reads them:
 /// glyphs are taken to be in visual order, so a word in a right-to-left script is read with its
 /// glyphs reversed. Words end at spaces, at a jump back to the left, and where the
-/// baseline moves (more than a raised mark does).
+/// baseline moves (more than a raised mark does). ActualText is read as PDFium and poppler read
+/// it; pdf.js ignores it.
 fn viewer_words(bytes: &[u8]) -> Vec<String> {
     let mut words = Vec::new();
     let mut word: Vec<String> = Vec::new();
@@ -1394,6 +1945,21 @@ fn left_to_right_glyphs_keep_their_order() {
     assert!(left_to_right(&glyphs));
 }
 
+/// A lam-alef some fonts draw as a lam and a zero-width alef at the same x goes in reverse
+/// text order, so the run's ranges still decrease and viewers read لا, not ال (#2310).
+/// Left-to-right clusters at one x keep their text order.
+#[test]
+fn clusters_at_the_same_x_go_in_reading_order() {
+    let text = "سلا";
+    let glyphs = [(3, 20.0, 10.0), (1, 10.0, 10.0), (2, 10.0, 0.0)];
+    let ranges = [0..2, 2..4, 4..6];
+    assert_eq!(visual_order(text, &glyphs, &ranges, &ranges), [2, 1, 0]);
+    let text = "ab";
+    let glyphs = [(1, 10.0, 0.0), (2, 10.0, 5.0)];
+    let ranges = [0..1, 1..2];
+    assert_eq!(visual_order(text, &glyphs, &ranges, &ranges), [0, 1]);
+}
+
 /// Right-to-left glyphs (reading order, drawn right to left) are written left to right a
 /// cluster at a time. A letter's vowel mark takes its own character and goes before the letter,
 /// so a viewer reversing the word reads letter then mark; a lam-alef drawn as two glyphs keeps
@@ -1411,6 +1977,32 @@ fn right_to_left_clusters_are_written_whole_left_to_right() {
     assert_eq!(parts, [2..4, 0..2, 4..8, 4..8, 8..12, 12..14]);
     // Glyph by glyph by x this would be [5, 4, 3, 2, 0, 1]: the lam-alef's glyphs swapped.
     assert_eq!(visual_order(text, &glyphs, &ranges, &parts), [5, 4, 2, 3, 0, 1]);
+}
+
+/// A PNG signature, an IHDR declaring `w`×`h` 8-bit RGBA and a short IDAT (all CRCs valid, so
+/// the header parses), with no real pixel data.
+fn ihdr_only_png(w: u32, h: u32) -> Vec<u8> {
+    fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+        let mut body = kind.to_vec();
+        body.extend_from_slice(data);
+        let mut crc = 0xFFFF_FFFFu32;
+        for b in &body {
+            crc ^= *b as u32;
+            for _ in 0..8 {
+                crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+            }
+        }
+        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        out.extend_from_slice(&body);
+        out.extend_from_slice(&(!crc).to_be_bytes());
+    }
+    let mut out = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    let mut ihdr = w.to_be_bytes().to_vec();
+    ihdr.extend_from_slice(&h.to_be_bytes());
+    ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
+    chunk(&mut out, b"IHDR", &ihdr);
+    chunk(&mut out, b"IDAT", &[0x78, 0x9c, 0, 0]);
+    out
 }
 
 #[test]
@@ -1473,7 +2065,7 @@ fn bundled_unicode_glyphs_are_visible_and_extractable() {
     let lay = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
     let mut drawn = String::new();
     for page in &lay.pages {
-        for draw in page_display(&d, page, &DisplayOptions::default()) {
+        for draw in wordcraft_layout::display::page_display(&d, page, &DisplayOptions::default()) {
             if let Draw::Glyphs { face, glyphs, text, .. } = draw {
                 assert_eq!(face.data(), bundled.data(), "page glyphs must use the bundled face without system fallback");
                 assert!(glyphs.iter().all(|(id, _, _)| *id != 0), "page glyphs must not use .notdef");
@@ -1485,4 +2077,414 @@ fn bundled_unicode_glyphs_are_visible_and_extractable() {
     let bytes = export_layout(&d, &lay, &PdfOptions::default()).unwrap();
     assert!(String::from_utf8_lossy(&bytes).contains("/ToUnicode"));
     assert_eq!(squash(&extract_text(&bytes).concat()), TEXT);
+}
+
+/// #2534: text with legacy font effects is drawn from its outlines and keeps its text, once.
+#[test]
+fn legacy_font_effects_keep_their_text() {
+    let mut d = Document::new();
+    d.body = [
+        CharProps { outline: Some(true), ..Default::default() },
+        CharProps { shadow: Some(true), ..Default::default() },
+        CharProps { emboss: Some(true), ..Default::default() },
+        CharProps { engrave: Some(true), ..Default::default() },
+    ]
+    .into_iter()
+    .map(|c| para_block(Paragraph::with_text("Effect", c)))
+    .collect();
+    let text = extract_text(&export(&d, &PdfOptions::default()).unwrap()).concat();
+    assert_eq!(text.matches("Effect").count(), 4, "{text}");
+}
+
+#[test]
+fn shape_dash_arrays_export() {
+    use wordcraft_doc::{
+        connector::ShapeExtra,
+        line_dash::LineDash,
+        para::{Anchor, Float, ShapeKind, Wrap},
+    };
+    for kind in [ShapeKind::Rectangle, ShapeKind::Ellipse, ShapeKind::StraightConnector] {
+        for dash in [LineDash::Dash, LineDash::Custom(vec![(400_000, 300_000)]), LineDash::Solid] {
+            let shape = InlineObject::Shape {
+                kind,
+                w: 70.0,
+                h: 28.0,
+                fill: None,
+                stroke: Some(wordcraft_doc::props::Rgb(192, 0, 0)),
+                stroke_width: 1.0,
+                float: Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 100.0, y: 100.0, ..Default::default() },
+                story: None,
+                freeform: None,
+                effects: Default::default(),
+                extra: ShapeExtra { dash: dash.clone(), ..Default::default() },
+            };
+            let mut p = Paragraph::new();
+            p.insert_object(0, shape, &Default::default()).unwrap();
+            let mut d = Document::new();
+            d.body = vec![para_block(p)];
+            let bytes = export(&d, &PdfOptions { compress: false, tagged: false, ..Default::default() }).unwrap();
+            let raw = String::from_utf8_lossy(&bytes);
+            assert_eq!(raw.contains("[4 3]0 d"), !dash.is_solid(), "dash array for {kind:?}");
+        }
+    }
+}
+
+#[test]
+fn zero_width_connector_dashes() {
+    use wordcraft_doc::{
+        connector::ShapeExtra,
+        line_dash::LineDash,
+        para::{Anchor, Float, ShapeKind, Wrap},
+    };
+    for kind in [ShapeKind::StraightConnector, ShapeKind::ElbowConnector, ShapeKind::CurvedConnector, ShapeKind::Freeform] {
+        let shape = InlineObject::Shape {
+            kind,
+            w: 70.0,
+            h: 28.0,
+            fill: None,
+            stroke: Some(wordcraft_doc::props::Rgb(192, 0, 0)),
+            stroke_width: 0.0,
+            float: Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 100.0, y: 100.0, ..Default::default() },
+            story: None,
+            freeform: (kind == ShapeKind::Freeform).then(|| {
+                std::sync::Arc::new(wordcraft_doc::freeform::Freeform {
+                    w: 70.0,
+                    h: 28.0,
+                    paths: vec![wordcraft_doc::freeform::FreePath { pts: vec![[0.0, 0.0], [70.0, 0.0], [70.0, 28.0]], closed: true }],
+                    ..Default::default()
+                })
+            }),
+            effects: Default::default(),
+            extra: ShapeExtra { dash: LineDash::Dash, ..Default::default() },
+        };
+        let mut p = Paragraph::new();
+        p.insert_object(0, shape, &Default::default()).unwrap();
+        let mut d = Document::new();
+        d.body = vec![para_block(p)];
+        let bytes = export(&d, &PdfOptions { compress: false, tagged: false, ..Default::default() }).unwrap();
+        let raw = String::from_utf8_lossy(&bytes);
+        assert!(raw.contains("0.75 w"), "effective width for {kind:?}");
+        assert!(raw.contains("[3 2.25]0 d"), "stroke-relative dash array for {kind:?}");
+    }
+}
+
+#[test]
+fn image_budget_is_checked_from_the_header() {
+    let data = Arc::new(png());
+    // The decoded image and its RGBA conversion are charged: two buffers at peak.
+    assert!(load_image_within(&data, 1024).is_some());
+    assert!(load_image_within(&data, 1023).is_none());
+    // 16-bit RGBA decodes to 8 bytes a pixel, alive with its RGBA8 conversion: 12 bytes a pixel.
+    let mut wide = Vec::new();
+    let img16 = image::ImageBuffer::<image::Rgba<u16>, _>::from_fn(16, 8, |x, y| image::Rgba([x as u16 * 999, y as u16, 9, 65535]));
+    image::DynamicImage::ImageRgba16(img16).write_to(&mut std::io::Cursor::new(&mut wide), image::ImageFormat::Png).unwrap();
+    let wide = Arc::new(wide);
+    assert!(load_image_within(&wide, 1024).is_none(), "two RGBA8 buffers' worth is not enough for RGBA16");
+    assert!(load_image_within(&wide, 1536).is_some());
+    // A header (valid CRC) claiming 30000x30000 with no pixel data reads fine, then the budget refuses it.
+    let hdr = ihdr_only_png(30_000, 30_000);
+    let dims = image::ImageReader::new(std::io::Cursor::new(hdr.as_slice())).with_guessed_format().unwrap().into_dimensions().unwrap();
+    assert_eq!(dims, (30_000, 30_000));
+    assert!(load_image(&Arc::new(hdr)).is_none());
+}
+
+/// Scale to paper size (#2108): every page goes on the chosen paper, turned to the page's
+/// orientation, with its text, links and Print Markup's balloons scaled onto it.
+#[test]
+fn pages_print_scaled_to_other_paper() {
+    let size = |bytes: &[u8]| {
+        let pdf = hayro_syntax::Pdf::new(bytes.to_vec()).expect("parse");
+        pdf.pages().iter().map(|p| p.media_box()).map(|r| (r.width().round(), r.height().round())).collect::<Vec<_>>()
+    };
+    let a4 = Some((595.28, 841.89));
+    let d = sample();
+    let plain = export(&d, &PdfOptions::default()).unwrap();
+    assert!(size(&plain).iter().all(|s| *s == (612.0, 792.0)), "the sample is Letter");
+    let on_a4 = export(&d, &PdfOptions { paper: a4, compress: false, ..Default::default() }).unwrap();
+    assert!(size(&on_a4).iter().all(|s| *s == (595.0, 842.0)), "{:?}", size(&on_a4));
+    assert_eq!(size(&on_a4).len(), size(&plain).len(), "the pagination is the document's");
+    assert_eq!(squash(&extract_text(&on_a4).concat()), squash(&extract_text(&plain).concat()));
+    // Link areas are scaled with the page: they stay on the narrower paper.
+    let raw = String::from_utf8_lossy(&on_a4).into_owned();
+    let rects: Vec<Vec<f32>> = raw
+        .split("/Rect[")
+        .skip(1)
+        .filter_map(|r| r.split(']').next())
+        .map(|r| r.split_whitespace().filter_map(|n| n.parse().ok()).collect())
+        .collect();
+    assert!(!rects.is_empty(), "the sample has links");
+    for r in &rects {
+        assert!(r.len() == 4 && r.iter().all(|v| (0.0..=842.0).contains(v)) && r[0] <= 595.28 && r[2] <= 595.28, "{r:?}");
+    }
+    // A landscape page gets landscape paper; Legal is taller than Letter.
+    let mut wide = Document::from_text("Wide page");
+    let s = &mut wide.last_section;
+    (s.page_w, s.page_h) = (792.0, 612.0);
+    let landscape = export(&wide, &PdfOptions { paper: a4, ..Default::default() }).unwrap();
+    assert_eq!(size(&landscape), vec![(842.0, 595.0)]);
+    let legal = export(&Document::from_text("Tall"), &PdfOptions { paper: Some((612.0, 1008.0)), ..Default::default() }).unwrap();
+    assert_eq!(size(&legal), vec![(612.0, 1008.0)]);
+    // Print Markup's page with balloons goes on the same paper.
+    let mut c = Document::from_text("Quarterly figures are in.");
+    let part = c.add_part(wordcraft_doc::PartKind::Comment, vec![para_block(Paragraph::with_text("Check the totals", CharProps::default()))]);
+    c.comments.insert(0, wordcraft_doc::Comment { author: "Ada".into(), part, ..Default::default() });
+    c.insert_object(&wordcraft_doc::Pos::body(0, 4), InlineObject::CommentStart { id: 0 }, &CharProps::default()).unwrap();
+    let marked = export(&c, &PdfOptions { comments: true, include_markup: true, paper: a4, ..Default::default() }).unwrap();
+    assert_eq!(size(&marked), vec![(595.0, 842.0)]);
+    assert!(squash(&extract_text(&marked).concat()).contains("Check the totals"));
+    // Hostile paper never panics: it prints the page as it is.
+    for paper in [(f32::NAN, 1.0), (0.0, 0.0), (-5.0, f32::INFINITY)] {
+        let bytes = export(&d, &PdfOptions { paper: Some(paper), ..Default::default() }).unwrap();
+        assert_eq!(size(&bytes), size(&plain));
+    }
+}
+
+/// #1500: gradient shape fills are exported as PDF shadings (axial and radial), and a
+/// transparent fill with its opacity.
+#[test]
+fn shape_gradients_export_as_shadings() {
+    use wordcraft_doc::fill::{Fill as ShapeFill, Gradient, GradientFlip, GradientKind, PathShape};
+    use wordcraft_doc::wordart::GradStop;
+    let stops = vec![GradStop { pos: 0.0, color: Rgb::BLACK, transparency: 0.0 }, GradStop { pos: 100.0, color: Rgb::WHITE, transparency: 0.0 }];
+    let grad =
+        |kind| ShapeFill::Gradient(Arc::new(Gradient { stops: stops.clone(), kind, tile: None, rot_with_shape: true, flip: GradientFlip::None }));
+    let mut d = Document::from_text("");
+    let at = wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 0 };
+    for fill in [
+        grad(GradientKind::Linear { angle: 90.0, scaled: false }),
+        grad(GradientKind::Path { shape: PathShape::Circle, focus: [50.0; 4] }),
+        ShapeFill::Solid { color: Rgb::WHITE, transparency: 70.0 },
+    ] {
+        let shape = InlineObject::Shape {
+            kind: ShapeKind::Rectangle,
+            w: 50.0,
+            h: 50.0,
+            fill: Some(fill),
+            stroke: None,
+            stroke_width: 0.0,
+            float: Default::default(),
+            story: None,
+            freeform: None,
+            effects: Default::default(),
+            extra: Default::default(),
+        };
+        d.insert_object(&at, shape, &Default::default()).unwrap();
+    }
+    let raw = String::from_utf8_lossy(&export(&d, &PdfOptions { compress: false, ..Default::default() }).unwrap()).into_owned();
+    assert!(raw.contains("/ShadingType 2"), "axial shading");
+    assert!(raw.contains("/ShadingType 3"), "radial shading");
+    assert!(raw.contains("/ca 0.3"), "30% opaque fill");
+}
+
+/// A tagged PDF of a paragraph with one blue rectangle placed by `float`: a text box showing
+/// "Inside the box" when `text_box`.
+fn tagged_shape_pdf(float: wordcraft_doc::para::Float, text_box: bool) -> String {
+    use wordcraft_doc::para::ShapeKind;
+    let mut d = Document::from_text("Body");
+    let story = text_box
+        .then(|| d.add_part(wordcraft_doc::PartKind::TextBox, vec![para_block(Paragraph::with_text("Inside the box", CharProps::default()))]));
+    let kind = if text_box { ShapeKind::TextBox } else { ShapeKind::Rectangle };
+    let shape = InlineObject::Shape {
+        kind,
+        w: 120.0,
+        h: 60.0,
+        fill: Some(wordcraft_doc::fill::Fill::solid(wordcraft_doc::props::Rgb(0, 0, 0xFF))),
+        stroke: None,
+        stroke_width: 0.0,
+        float,
+        story,
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    d.insert_object(&wordcraft_doc::Pos::body(0, 4), shape, &Default::default()).unwrap();
+    String::from_utf8_lossy(&export(&d, &PdfOptions { compress: false, tagged: true, ..Default::default() }).unwrap()).into_owned()
+}
+
+/// A shape with a description is a Figure with it in tagged PDF, inline, rotated or floating; one
+/// without, or marked decorative, stays an artifact screen readers skip, and so does a text box's
+/// frame: its text is read as text, not replaced by its description.
+#[test]
+fn described_shapes_are_figures_with_their_description() {
+    use wordcraft_doc::para::{AltText, Anchor, Float, Wrap};
+    let described = AltText { text: "Arrow pointing to the exit".into(), ..Default::default() };
+    let floating = Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 72.0, y: 200.0, ..Default::default() };
+    let cases = [
+        ("inline", Float::default()),
+        ("rotated inline", Float { rot: 30.0, ..Default::default() }),
+        ("floating", floating.clone()),
+        ("rotated floating", Float { rot: 30.0, ..floating }),
+    ];
+    for (name, float) in cases {
+        let raw = tagged_shape_pdf(Float { alt: described.clone(), ..float.clone() }, false);
+        assert!(raw.contains("/Alt(Arrow pointing to the exit)"), "{name}: a described shape is a Figure with its description");
+        assert_eq!(raw.matches("/Alt(").count(), 1, "{name}: the described shape is one Figure");
+        assert!(raw.contains("0 0 1 rg"), "{name}: the shape is drawn");
+        assert!(!tagged_shape_pdf(float.clone(), false).contains("/Alt("), "{name}: an undescribed shape stays an artifact");
+        let decorative = AltText { decorative: true, ..described.clone() };
+        assert!(
+            !tagged_shape_pdf(Float { alt: decorative, ..float.clone() }, false).contains("/Alt("),
+            "{name}: a decorative shape stays an artifact"
+        );
+        let text_box = tagged_shape_pdf(Float { alt: described.clone(), ..float }, true);
+        assert!(!text_box.contains("/Alt("), "{name}: a text box is not a Figure");
+        assert_eq!(text_box.matches("/S/P").count(), 2, "{name}: the text box's text is read as a paragraph");
+    }
+}
+
+#[test]
+fn a_watermark_fills_its_box() {
+    // Word stretches the watermark's text over its shape (`fitshape`): one em down the box's
+    // height, the advance across its width, the box centred on the margins. WordCraft made the
+    // text 70 % of the page diagonal, whatever the box.
+    let mut d = Document::new();
+    d.body = vec![para_block(Paragraph::with_text("Body", CharProps::default()))];
+    d.settings.watermark = Some(Watermark { text: "COPY".into(), diagonal: false, size: Some([300.0, 80.0]), ..Default::default() });
+    let frames = glyph_frames(&export(&d, &PdfOptions::default()).unwrap());
+    // (Glyph space is a thousandth of the size.)
+    let wm: Vec<&(f64, f64, f64)> = frames.iter().filter(|f| (f.2 * 1000.0 - 80.0).abs() < 0.01).collect();
+    assert_eq!(wm.len(), 4, "four letters one box high: {frames:?}");
+    let s = &d.last_section;
+    let centre = f64::from(s.margin_left + (s.page_w - s.margin_left - s.margin_right) / 2.0);
+    assert!((wm[0].0 - (centre - 150.0)).abs() < 0.05, "the text starts at the box's left edge: {wm:?}");
+    // Stretched across (the box is wider than the text at 80 pt), the same for every letter.
+    assert!(wm.iter().all(|f| f.1 > f.2 * 1.01 && (f.1 - wm[0].1).abs() < 1e-6), "{wm:?}");
+}
+
+/// Each glyph drawn as text: its origin and its horizontal and vertical scale, in page space.
+fn glyph_frames(bytes: &[u8]) -> Vec<(f64, f64, f64)> {
+    use hayro_interpret::font::Glyph;
+    use hayro_interpret::{
+        BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, SoftMask,
+        interpret_page,
+    };
+    use hayro_syntax::Pdf;
+    struct Frames(Vec<(f64, f64, f64)>);
+    impl Device<'_> for Frames {
+        fn set_soft_mask(&mut self, _: Option<SoftMask<'_>>) {}
+        fn set_blend_mode(&mut self, _: BlendMode) {}
+        fn draw_path(&mut self, _: &kurbo::BezPath, _: kurbo::Affine, _: &Paint<'_>, _: &PathDrawMode) {}
+        fn push_clip_path(&mut self, _: &ClipPath) {}
+        fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, _: BlendMode) {}
+        fn draw_glyph(&mut self, _: &Glyph<'_>, transform: kurbo::Affine, glyph: kurbo::Affine, _: &Paint<'_>, _: &GlyphDrawMode) {
+            let [a, b, c, d, e, _] = (transform * glyph).as_coeffs();
+            self.0.push((e, a.hypot(b), c.hypot(d)));
+        }
+        fn draw_image(&mut self, _: Image<'_, '_>, _: kurbo::Affine) {}
+        fn pop_clip_path(&mut self) {}
+        fn pop_transparency_group(&mut self) {}
+    }
+    let pdf = Pdf::new(bytes.to_vec()).expect("parse");
+    let cache = InterpreterCache::new();
+    let mut f = Frames(Vec::new());
+    for page in pdf.pages().iter() {
+        let mut ctx = Context::new(kurbo::Affine::IDENTITY, kurbo::Rect::new(0.0, 0.0, 1.0, 1.0), &cache, pdf.xref(), InterpreterSettings::default());
+        interpret_page(page, &mut ctx, &mut f);
+    }
+    f.0
+}
+
+#[test]
+fn scaled_letters_are_stretched_not_spaced() {
+    // `w:w` 200: the letters are twice as wide and stand where the layout put them (their
+    // advances doubled), as in Word; at 100 they are drawn as they are.
+    let frames = |scale: Option<f32>| {
+        let mut d = Document::new();
+        d.body = vec![para_block(Paragraph::with_text("HHH", CharProps { scale, ..Default::default() }))];
+        glyph_frames(&export(&d, &PdfOptions::default()).unwrap())
+    };
+    let plain = frames(None);
+    let wide = frames(Some(200.0));
+    assert_eq!((plain.len(), wide.len()), (3, 3), "{plain:?} {wide:?}");
+    for ((x, sx, sy), (wx, wsx, wsy)) in plain.iter().zip(&wide) {
+        assert!((sx / sy - 1.0).abs() < 1e-3, "plain letters keep their shape: {sx} {sy}");
+        assert!((wsx / wsy - 2.0).abs() < 1e-3, "scaled letters are twice as wide: {wsx} {wsy}");
+        assert!((wsy - sy).abs() < 1e-3, "and as high");
+        let (x0, w0) = (plain[0].0, wide[0].0);
+        assert!(((wx - w0) - 2.0 * (x - x0)).abs() < 0.01, "pen positions follow the doubled advances: {wide:?} {plain:?}");
+    }
+}
+
+/// The PDF's bytes, uncompressed, as text: content stream operators can be read directly.
+fn raw_pdf(d: &Document) -> String {
+    String::from_utf8_lossy(&export(d, &PdfOptions { compress: false, tagged: false, ..Default::default() }).unwrap()).into_owned()
+}
+
+#[test]
+fn borders_are_dashed_with_words_patterns() {
+    // Word draws a border's dots one width on and one off, its dashes three on and one off, and
+    // dash-dot as three, one, one, one; underlines keep their own patterns.
+    use wordcraft_doc::props::{Border, BorderStyle, Borders};
+    let bordered = |style: BorderStyle, width: f32| {
+        let mut p = Paragraph::with_text("Rule", CharProps::default());
+        p.props.borders = Some(Borders { bottom: Some(Border { style, width, ..Default::default() }), ..Default::default() });
+        para_block(p)
+    };
+    let mut d = Document::new();
+    d.body = vec![bordered(BorderStyle::Dotted, 1.0), bordered(BorderStyle::Dashed, 2.0), bordered(BorderStyle::DotDash, 1.0)];
+    let raw = raw_pdf(&d);
+    assert!(raw.contains("[1 1]0 d") || raw.contains("[1 1] 0 d"), "the dotted border");
+    assert!(raw.contains("[6 2]0 d") || raw.contains("[6 2] 0 d"), "the dashed border");
+    assert!(raw.contains("[3 1 1 1]0 d") || raw.contains("[3 1 1 1] 0 d"), "the dash-dot border");
+}
+
+#[test]
+fn only_safe_link_targets_become_annotations() {
+    use hayro_syntax::object::{Array, Dict, String as PdfString};
+
+    let mut d = Document::new();
+    d.body = ["https://example.com/", "mailto:ada@example.com", "javascript:alert(1)", "file:///etc/passwd"]
+        .into_iter()
+        .map(|url| para_block(Paragraph::with_text("Click here", CharProps { link: Some(url.into()), ..Default::default() })))
+        .collect();
+    let bytes = export(&d, &PdfOptions::default()).unwrap();
+    assert_eq!(squash(&extract_text(&bytes)[0]).matches("Click here").count(), 4, "unlinked text stays");
+    let pdf = hayro_syntax::Pdf::new(bytes).unwrap();
+    let uris: Vec<String> = pdf.pages()[0]
+        .raw()
+        .get::<Array>(b"Annots")
+        .into_iter()
+        .flat_map(|a| a.iter::<Dict>().collect::<Vec<_>>())
+        .map(|a| {
+            let uri = a.get::<Dict>(b"A").unwrap().get::<PdfString>(b"URI").unwrap();
+            String::from_utf8_lossy(uri.as_ref()).into_owned()
+        })
+        .collect();
+    assert_eq!(uris, ["https://example.com/", "mailto:ada@example.com"]);
+}
+
+/// A glyph's text runs to the first later glyph with a cluster past its own (the end of the text
+/// without one), found in one pass: a long run of glyphs sharing a cluster used to rescan the rest
+/// of the run for every glyph.
+#[test]
+fn cluster_ends_match_the_next_larger_cluster_in_linear_time() {
+    let brute = |cl: &[usize], len: usize| -> Vec<usize> {
+        (0..cl.len()).map(|i| cl.iter().skip(i + 1).copied().find(|n| *n > cl[i]).unwrap_or(len)).collect::<Vec<_>>()
+    };
+    for cl in [vec![], vec![0], vec![0, 0, 3, 3, 5], vec![5, 3, 3, 0], vec![2, 0, 4, 1, 1, 6, 3], vec![0, 7, 2, 2, 9, 1]] {
+        assert_eq!(cluster_ends(&cl, 10), brute(&cl, 10), "{cl:?}");
+    }
+    // One base letter and a million combining marks in its cluster, then one more letter.
+    // Milliseconds; the rescan (`brute`) took 2.9 s at 50,000 and grows with the square, so
+    // about 20 minutes here.
+    let n = 1_000_000;
+    let mut cl = vec![0; n + 1];
+    cl.push(2 * n + 2);
+    let start = std::time::Instant::now();
+    let ends = cluster_ends(&cl, 2 * n + 4);
+    assert!(start.elapsed() < std::time::Duration::from_secs(10), "{:?}", start.elapsed());
+    assert!(ends[..=n].iter().all(|e| *e == 2 * n + 2));
+    assert_eq!(ends.last(), Some(&(2 * n + 4)));
+}
+
+/// A run's baseline is the y most of its glyphs share, ties to the lower bits; a run on one
+/// baseline (the common case) gives its y without counting.
+#[test]
+fn baseline_is_the_most_shared_y() {
+    assert_eq!(baseline(&[]), None);
+    assert_eq!(baseline(&[(1, 0.0, 7.5)]), Some(7.5));
+    assert_eq!(baseline(&[(1, 0.0, 7.5), (2, 3.0, 7.5), (3, 6.0, 7.5)]), Some(7.5));
+    assert_eq!(baseline(&[(1, 0.0, 7.5), (2, 3.0, 4.0), (3, 6.0, 7.5)]), Some(7.5));
+    assert_eq!(baseline(&[(1, 0.0, 9.0), (2, 3.0, 4.0)]), Some(4.0));
+    assert_eq!(baseline(&[(1, 0.0, -0.0), (2, 3.0, 0.0)]), Some(0.0));
 }

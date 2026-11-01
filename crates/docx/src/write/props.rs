@@ -1,8 +1,8 @@
 //! Property writers, in ECMA-376 schema element order.
 
 use wordcraft_doc::props::{
-    Align, Border, BorderStyle, Borders, CellProps, CharProps, HeightRule, Highlight, LineSpacing, ParaProps, RowProps, TabAlign, TabLeader,
-    TableFloat, TableLook, TableProps, TextColor, VAlign, VMerge, VertAlign,
+    Align, Border, BorderStyle, Borders, CellProps, CharProps, EastAsianLayout, HeightRule, Highlight, LineSpacing, ParaProps, RowProps, TabAlign,
+    TabLeader, TableFloat, TableLook, TableProps, TextColor, VAlign, VMerge, VertAlign,
 };
 
 use crate::units::{n, twips};
@@ -53,7 +53,9 @@ pub fn rpr_inner(w: &mut W, c: &CharProps) {
     toggle(w, "w:emboss", c.emboss);
     toggle(w, "w:imprint", c.engrave);
     toggle(w, "w:noProof", c.no_proof);
+    toggle(w, "w:snapToGrid", c.snap_to_grid);
     toggle(w, "w:vanish", c.hidden);
+    toggle(w, "w:webHidden", c.web_hidden);
     match c.color {
         Some(TextColor::Auto) => w.val("w:color", "auto"),
         Some(TextColor::Rgb(rgb)) => w.val("w:color", &rgb.hex()),
@@ -81,11 +83,12 @@ pub fn rpr_inner(w: &mut W, c: &CharProps) {
     if let Some(h) = c.highlight {
         w.val("w:highlight", if h == Highlight::None { "none" } else { h.ooxml() });
     }
-    if let Some(u) = c.underline {
-        match c.underline_color {
-            Some(col) => w.empty("w:u", &[("w:val", u.ooxml()), ("w:color", &col.hex())]),
-            None => w.val("w:u", u.ooxml()),
-        }
+    match (c.underline, c.underline_color) {
+        (Some(u), Some(col)) => w.empty("w:u", &[("w:val", u.ooxml()), ("w:color", &col.hex())]),
+        (Some(u), None) => w.val("w:u", u.ooxml()),
+        // A colour-only w:u, as read: keep it without inventing an underline
+        (None, Some(col)) => w.empty("w:u", &[("w:color", &col.hex())]),
+        (None, None) => {}
     }
     if let Some(b) = &c.border {
         border_el(w, "w:bdr", b);
@@ -105,15 +108,52 @@ pub fn rpr_inner(w: &mut W, c: &CharProps) {
     }
     toggle(w, "w:rtl", c.rtl);
     toggle(w, "w:cs", c.cs);
-    match (&c.lang, &c.lang_bidi) {
-        (Some(l), Some(b)) => w.empty("w:lang", &[("w:val", l), ("w:bidi", b)]),
-        (Some(l), None) => w.val("w:lang", l),
-        (None, Some(b)) => w.empty("w:lang", &[("w:bidi", b)]),
-        (None, None) => {}
+    let mut lang_attrs: Vec<(&str, &str)> = Vec::with_capacity(3);
+    if let Some(l) = &c.lang {
+        lang_attrs.push(("w:val", l));
+    }
+    if let Some(ea) = &c.lang_ea {
+        lang_attrs.push(("w:eastAsia", ea));
+    }
+    if let Some(b) = &c.lang_bidi {
+        lang_attrs.push(("w:bidi", b));
+    }
+    if !lang_attrs.is_empty() {
+        w.empty("w:lang", &lang_attrs);
+    }
+    // After w:lang (CT_RPr's sequence).
+    if let Some(l) = &c.east_asian_layout {
+        east_asian_layout(w, l);
     }
     if let Some(fx) = &c.text_effects {
         super::wordart::rpr_effects(w, fx);
     }
+    if let Some(l) = c.ligatures {
+        w.empty("w14:ligatures", &[("w14:val", &l.ooxml())]);
+    }
+}
+
+/// `w:eastAsianLayout` with the attributes that are set (ISO/IEC 29500-1 §17.3.2.10).
+fn east_asian_layout(w: &mut W, l: &EastAsianLayout) {
+    let on = |v: bool| if v { "1" } else { "0" };
+    let id = l.id.map(|v| v.to_string());
+    let mut a: Vec<(&str, &str)> = Vec::new();
+    if let Some(id) = &id {
+        a.push(("w:id", id));
+    }
+    if let Some(v) = l.combine {
+        a.push(("w:combine", on(v)));
+    }
+    if let Some(b) = l.combine_brackets {
+        a.push(("w:combineBrackets", b.ooxml()));
+    }
+    if let Some(v) = l.vert {
+        a.push(("w:vert", on(v)));
+    }
+    if let Some(v) = l.vert_compress {
+        a.push(("w:vertCompress", on(v)));
+    }
+    w.empty("w:eastAsianLayout", &a);
 }
 
 /// Does `c` produce any `w:rPr` content (besides a tracked change)?
@@ -154,6 +194,17 @@ pub fn align_val(a: Align) -> &'static str {
         Align::Right => "right",
         Align::Justify => "both",
         Align::Distribute => "distribute",
+    }
+}
+
+/// A tab stop's or positional tab's `w:leader` value.
+pub fn tab_leader(l: TabLeader) -> &'static str {
+    match l {
+        TabLeader::None => "none",
+        TabLeader::Dot => "dot",
+        TabLeader::Hyphen => "hyphen",
+        TabLeader::Underscore => "underscore",
+        TabLeader::MiddleDot => "middleDot",
     }
 }
 
@@ -204,11 +255,52 @@ pub fn ppr_inner(w: &mut W, p: &ParaProps, framed: bool, num_change: Option<&Cha
     toggle(w, "w:keepNext", p.keep_next);
     toggle(w, "w:keepLines", p.keep_lines);
     toggle(w, "w:pageBreakBefore", p.page_break_before);
+    write_frame(w, p, framed);
+    toggle(w, "w:widowControl", p.widow_control);
+    if let Some(nr) = p.numbering {
+        w.open("w:numPr", &[]);
+        w.val("w:ilvl", &n(nr.level.min(8) as i64));
+        w.val("w:numId", &n(nr.num as i64));
+        if let Some(a) = num_change {
+            let refs: Vec<(&str, &str)> = a.iter().map(|(k, v)| (*k, v.as_str())).collect();
+            w.empty("w:numberingChange", &refs);
+        }
+        w.close("w:numPr");
+    }
+    toggle(w, "w:suppressLineNumbers", p.suppress_line_numbers);
+    if let Some(b) = &p.borders {
+        borders(w, "w:pBdr", b, Some("w:between"), &[]);
+    }
+    if let Some(s) = p.shading {
+        w.empty("w:shd", &[("w:val", "clear"), ("w:color", "auto"), ("w:fill", &s.hex())]);
+    }
+    write_tabs(w, p);
+    write_text_flow(w, p);
+    write_spacing(w, p);
+    write_indentation(w, p);
+    toggle(w, "w:contextualSpacing", p.contextual_spacing);
+    toggle(w, "w:mirrorIndents", p.mirror_indents);
+    if let Some(a) = p.align {
+        w.val("w:jc", align_val(a));
+    }
+    if let Some(l) = p.outline_level {
+        w.val("w:outlineLvl", &n(l.min(9) as i64));
+    }
+}
+
+fn write_frame(w: &mut W, p: &ParaProps, framed: bool) {
     if framed && let Some(lines) = p.drop_cap.filter(|l| *l > 0) {
-        w.empty(
-            "w:framePr",
-            &[("w:dropCap", "drop"), ("w:lines", &n(lines.min(10) as i64)), ("w:wrap", "around"), ("w:vAnchor", "text"), ("w:hAnchor", "text")],
-        );
+        // ECMA-376 §17.3.1.11: the drop cap's frame — dropped or in the margin, the lines it
+        // spans and its distance from the text (`w:hSpace`, twips).
+        let kind = if p.drop_cap_margin == Some(true) { "margin" } else { "drop" };
+        let lines = n(lines.min(10) as i64);
+        let space = p.drop_cap_distance.filter(|d| d.is_finite() && *d > 0.0).map(|d| twips(d.min(wordcraft_doc::resolve::MAX_DROP_CAP_DISTANCE)));
+        let mut a: Vec<(&str, &str)> = vec![("w:dropCap", kind), ("w:lines", &lines)];
+        if let Some(h) = &space {
+            a.push(("w:hSpace", h));
+        }
+        a.extend([("w:wrap", "around"), ("w:vAnchor", "text"), ("w:hAnchor", "text")]);
+        w.empty("w:framePr", &a);
     } else if let Some(f) = &p.frame {
         let (fw, fh, fx, fy) = (f.w.map(twips), f.h.map(twips), twips(f.x), twips(f.y));
         let (hs, vs) = (twips(f.h_space), twips(f.v_space));
@@ -239,24 +331,9 @@ pub fn ppr_inner(w: &mut W, p: &ParaProps, framed: bool, num_change: Option<&Cha
         }
         w.empty("w:framePr", &a);
     }
-    toggle(w, "w:widowControl", p.widow_control);
-    if let Some(nr) = p.numbering {
-        w.open("w:numPr", &[]);
-        w.val("w:ilvl", &n(nr.level.min(8) as i64));
-        w.val("w:numId", &n(nr.num as i64));
-        if let Some(a) = num_change {
-            let refs: Vec<(&str, &str)> = a.iter().map(|(k, v)| (*k, v.as_str())).collect();
-            w.empty("w:numberingChange", &refs);
-        }
-        w.close("w:numPr");
-    }
-    toggle(w, "w:suppressLineNumbers", p.suppress_line_numbers);
-    if let Some(b) = &p.borders {
-        borders(w, "w:pBdr", b, Some("w:between"), &[]);
-    }
-    if let Some(s) = p.shading {
-        w.empty("w:shd", &[("w:val", "clear"), ("w:color", "auto"), ("w:fill", &s.hex())]);
-    }
+}
+
+fn write_tabs(w: &mut W, p: &ParaProps) {
     if let Some(tabs) = &p.tabs
         && !tabs.is_empty()
     {
@@ -273,19 +350,14 @@ pub fn ppr_inner(w: &mut W, p: &ParaProps, framed: bool, num_change: Option<&Cha
             let pos = twips(t.pos);
             match t.leader {
                 TabLeader::None => w.empty("w:tab", &[("w:val", val), ("w:pos", &pos)]),
-                l => {
-                    let lv = match l {
-                        TabLeader::Dot => "dot",
-                        TabLeader::Hyphen => "hyphen",
-                        TabLeader::Underscore => "underscore",
-                        _ => "middleDot",
-                    };
-                    w.empty("w:tab", &[("w:val", val), ("w:leader", lv), ("w:pos", &pos)]);
-                }
+                l => w.empty("w:tab", &[("w:val", val), ("w:leader", tab_leader(l)), ("w:pos", &pos)]),
             }
         }
         w.close("w:tabs");
     }
+}
+
+fn write_text_flow(w: &mut W, p: &ParaProps) {
     toggle(w, "w:suppressAutoHyphens", p.suppress_hyphens);
     toggle(w, "w:kinsoku", p.kinsoku);
     toggle(w, "w:wordWrap", p.word_wrap);
@@ -295,6 +367,9 @@ pub fn ppr_inner(w: &mut W, p: &ParaProps, framed: bool, num_change: Option<&Cha
     toggle(w, "w:autoSpaceDN", p.auto_space_dn);
     toggle(w, "w:bidi", p.bidi);
     toggle(w, "w:snapToGrid", p.snap_to_grid);
+}
+
+fn write_spacing(w: &mut W, p: &ParaProps) {
     if p.space_before.is_some()
         || p.space_after.is_some()
         || p.line_spacing.is_some()
@@ -327,6 +402,9 @@ pub fn ppr_inner(w: &mut W, p: &ParaProps, framed: bool, num_change: Option<&Cha
         }
         w.empty("w:spacing", &a);
     }
+}
+
+fn write_indentation(w: &mut W, p: &ParaProps) {
     let chars = [p.indent_left_chars, p.indent_right_chars, p.indent_first_chars];
     if p.indent_left.is_some() || p.indent_right.is_some() || p.indent_first.is_some() || chars.iter().any(Option::is_some) {
         let l = p.indent_left.map(twips);
@@ -356,20 +434,18 @@ pub fn ppr_inner(w: &mut W, p: &ParaProps, framed: bool, num_change: Option<&Cha
         }
         w.empty("w:ind", &a);
     }
-    toggle(w, "w:contextualSpacing", p.contextual_spacing);
-    toggle(w, "w:mirrorIndents", p.mirror_indents);
-    if let Some(a) = p.align {
-        w.val("w:jc", align_val(a));
-    }
-    if let Some(l) = p.outline_level {
-        w.val("w:outlineLvl", &n(l.min(9) as i64));
-    }
 }
 
 pub fn margins(w: &mut W, tag: &str, m: &[f32; 4]) {
+    margin_sides(w, tag, &m.map(Some));
+}
+
+fn margin_sides(w: &mut W, tag: &str, m: &[Option<f32>; 4]) {
     w.open(tag, &[]);
-    for (name, v) in ["w:top", "w:left", "w:bottom", "w:right"].iter().zip(m.iter()) {
-        w.empty(name, &[("w:w", &twips(v.clamp(0.0, 1584.0))), ("w:type", "dxa")]);
+    for (name, value) in ["w:top", "w:left", "w:bottom", "w:right"].iter().zip(m.iter()) {
+        if let Some(v) = value {
+            w.empty(name, &[("w:w", &twips(v.clamp(0.0, 1584.0))), ("w:type", "dxa")]);
+        }
     }
     w.close(tag);
 }
@@ -573,6 +649,8 @@ fn tcpr_inner(w: &mut W, c: &CellProps) {
     }
     if let Some(m) = &c.margins {
         margins(w, "w:tcMar", m);
+    } else if let Some(m) = &c.partial_margins {
+        margin_sides(w, "w:tcMar", m);
     }
     if c.text_direction.is_turned() || c.text_direction_set {
         w.val("w:textDirection", c.text_direction.ooxml());

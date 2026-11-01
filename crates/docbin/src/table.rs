@@ -77,6 +77,7 @@ pub(crate) struct RowInfo {
     /// automatic `Shd` (`None`) clears it.
     shading: Vec<(u8, Option<Rgb>)>,
     widths: Vec<(u8, f32)>,
+    width_pcts: Vec<(u8, f32)>,
     valign: Vec<(u8, VAlign)>,
 }
 
@@ -92,6 +93,18 @@ impl RowInfo {
     #[cfg(test)]
     pub(crate) fn shading_of(&self, i: u8) -> Option<Rgb> {
         self.shading.iter().rfind(|(k, _)| *k == i).and_then(|(_, s)| *s)
+    }
+
+    /// The width cell `i` ends up with, for tests.
+    #[cfg(test)]
+    pub(crate) fn width_of(&self, i: u8) -> Option<f32> {
+        self.widths.iter().rfind(|(k, _)| *k == i).map(|(_, w)| *w)
+    }
+
+    /// The width percentage cell `i` ends up with, for tests.
+    #[cfg(test)]
+    pub(crate) fn width_pct_of(&self, i: u8) -> Option<f32> {
+        self.width_pcts.iter().rfind(|(k, _)| *k == i).map(|(_, w)| *w)
     }
 }
 
@@ -187,13 +200,20 @@ pub(crate) fn decode(papx: &[u8]) -> RowInfo {
                 }
             }
             T_CELL_WIDTH => {
-                // cb, itcFirst, itcLim, ftsWidth (3 = twips), wWidth.
-                if let [a, b, fts, w0, w1, ..] = prl.operand
-                    && *fts == 3
-                {
-                    let w = (i16::from_le_bytes([*w0, *w1]) as f32 / 20.0).clamp(0.0, 1584.0);
-                    for c in *a..(*b).min(MAX_COLS as u8) {
-                        r.widths.push((c, w));
+                // Operand: cb (1 byte), itcFirst (1 byte), itcLim (1 byte), ftsWidth (1 byte), wWidth (2 bytes).
+                // [MS-DOC] §2.9.290 sprmTCellWidth (0xD635).
+                // ftsWidth: 3 = twips (dxa), 2 = percentage (50ths of a percent).
+                if let [_, a, b, fts, w0, w1, ..] = prl.operand {
+                    if *fts == 3 {
+                        let w = (i16::from_le_bytes([*w0, *w1]) as f32 / 20.0).clamp(0.0, 1584.0);
+                        for c in *a..(*b).min(MAX_COLS as u8) {
+                            r.widths.push((c, w));
+                        }
+                    } else if *fts == 2 {
+                        let pct = (u16::from_le_bytes([*w0, *w1]) as f32 / 50.0).clamp(0.0, 100.0);
+                        for c in *a..(*b).min(MAX_COLS as u8) {
+                            r.width_pcts.push((c, pct));
+                        }
                     }
                 }
             }
@@ -256,13 +276,16 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
             if let Some((_, m)) = info.vmerge.iter().find(|(k, _)| *k == i) {
                 c.props.vmerge = *m;
             }
-            if let Some((_, w)) = info.widths.iter().find(|(k, _)| *k == i) {
+            if let Some((_, w)) = info.widths.iter().rfind(|(k, _)| *k == i) {
                 c.props.width = Some(*w);
+            }
+            if let Some((_, pct)) = info.width_pcts.iter().rfind(|(k, _)| *k == i) {
+                c.props.width_pct = Some(*pct);
             }
             if let Some((_, s)) = info.shading.iter().rfind(|(k, _)| *k == i) {
                 c.props.shading = *s;
             }
-            if let Some((_, v)) = info.valign.iter().find(|(k, _)| *k == i) {
+            if let Some((_, v)) = info.valign.iter().rfind(|(k, _)| *k == i) {
                 c.props.valign = Some(*v);
             }
         }
