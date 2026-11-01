@@ -46,6 +46,116 @@ pub(super) fn text_result(instr: &str, text: String) -> String {
     wordcraft_layout::fields::apply_case_switch(instr, text)
 }
 
+/// What Word's F9 shows for an `IF` whose operator isn't one it knows (`IF 1=1 …` reads `1=1` as
+/// the first expression).
+pub const IF_UNKNOWN_OP: &str = "Error! Unknown op code for conditional.";
+
+/// What an `IF` field shows when updated (ECMA-376 §17.16.5.30), as measured in Word for Windows:
+/// `IF expression1 operator expression2 "true text" "false text"`, the operator one of `=`, `<>`,
+/// `<`, `>`, `<=`, `>=` standing apart. Two unquoted numbers compare as numbers (`2 > 10` is
+/// false, `1,000 = 1000` true); anything else as text, case-sensitively for `=` and `<>`, and in
+/// word order otherwise, lowercase before uppercase (`"apple" < "banana"`, `"z" < "Z"`); with
+/// `=` and `<>` the second expression may hold `?` (any one character) and `*` (any run). A
+/// missing text is empty. `None` for a code holding a field written out in braces
+/// (`IF { PAGE } = 1 …`, as mail merge rules are), which isn't evaluated here: it keeps its
+/// result.
+pub(super) fn if_result(instr: &str) -> Option<String> {
+    let words = if_words(instr);
+    if words.iter().any(|(w, quoted)| !quoted && w.contains(['{', '}'])) {
+        return None;
+    }
+    let [left, op, right, rest @ ..] = words.as_slice() else { return Some(String::new()) };
+    let ord = match (if_number(left), if_number(right)) {
+        (Some(a), Some(b)) => a.partial_cmp(&b),
+        _ => None,
+    };
+    use std::cmp::Ordering::{Equal, Greater, Less};
+    let pattern = right.0.contains(['*', '?']);
+    let equal = || ord.map_or_else(|| if pattern { wildcard_match(&left.0, &right.0) } else { left.0 == right.0 }, |o| o == Equal);
+    let order = || ord.unwrap_or_else(|| word_order(&left.0, &right.0));
+    let holds = match op.0.as_str() {
+        "=" => equal(),
+        "<>" => !equal(),
+        "<" => order() == Less,
+        ">" => order() == Greater,
+        "<=" => order() != Greater,
+        ">=" => order() != Less,
+        _ => return Some(IF_UNKNOWN_OP.to_string()),
+    };
+    Some(rest.get(if holds { 0 } else { 1 }).map(|w| w.0.clone()).unwrap_or_default())
+}
+
+/// The words of an `IF` code after its name and before its first switch: each a quoted text (the
+/// quotes dropped, `true`) or a run of non-blank characters.
+fn if_words(instr: &str) -> Vec<(String, bool)> {
+    let mut out = Vec::new();
+    let mut chars = instr.trim_start().chars().skip_while(|c| !c.is_whitespace()).peekable();
+    while let Some(&c) = chars.peek() {
+        if c.is_whitespace() {
+            chars.next();
+        } else if c == '"' {
+            chars.next();
+            out.push((chars.by_ref().take_while(|&c| c != '"').collect(), true));
+        } else if c == '\\' {
+            break;
+        } else {
+            let mut w = String::new();
+            while let Some(&c) = chars.peek().filter(|c| !c.is_whitespace()) {
+                w.push(c);
+                chars.next();
+            }
+            out.push((w, false));
+        }
+    }
+    out
+}
+
+/// An unquoted `IF` expression as a number (thousands separators allowed).
+fn if_number((text, quoted): &(String, bool)) -> Option<f64> {
+    if *quoted {
+        return None;
+    }
+    text.replace(',', "").parse::<f64>().ok().filter(|n| n.is_finite())
+}
+
+/// Word's text order: letters compared regardless of case first, then lowercase before uppercase.
+fn word_order(a: &str, b: &str) -> std::cmp::Ordering {
+    a.to_lowercase().cmp(&b.to_lowercase()).then_with(|| {
+        a.chars()
+            .zip(b.chars())
+            .find(|(x, y)| x != y)
+            .map_or(std::cmp::Ordering::Equal, |(x, _)| if x.is_lowercase() { std::cmp::Ordering::Less } else { std::cmp::Ordering::Greater })
+    })
+}
+
+/// Does `text` match `pattern`, `?` standing for any one character and `*` for any run?
+fn wildcard_match(text: &str, pattern: &str) -> bool {
+    let (t, p): (Vec<char>, Vec<char>) = (text.chars().collect(), pattern.chars().collect());
+    // The last `*` seen and where the text stood then, to retry from.
+    let (mut ti, mut pi, mut star) = (0usize, 0usize, None::<(usize, usize)>);
+    while ti < t.len() {
+        match p.get(pi) {
+            Some('*') => {
+                star = Some((pi, ti));
+                pi += 1;
+            }
+            Some(&c) if c == '?' || c == t[ti] => {
+                ti += 1;
+                pi += 1;
+            }
+            _ => match star {
+                Some((sp, st)) => {
+                    pi = sp + 1;
+                    ti = st + 1;
+                    star = Some((sp, st + 1));
+                }
+                None => return false,
+            },
+        }
+    }
+    p[pi.min(p.len())..].iter().all(|&c| c == '*')
+}
+
 /// The property name of a `DOCPROPERTY` field: the word (or quoted text) after the field name,
 /// before any switch (`DOCPROPERTY "Project Name" \* MERGEFORMAT`).
 pub(super) fn doc_property_arg(instr: &str) -> Option<String> {

@@ -1,5 +1,6 @@
 use super::properties::{
-    bookmark_text, count_text, date_picture, doc_property, doc_property_arg, new_property_value, set_summary_property, summary_property, text_result,
+    bookmark_text, count_text, date_picture, doc_property, doc_property_arg, if_result, new_property_value, set_summary_property, summary_property,
+    text_result,
 };
 use super::toc::{heading_style_level, update_toc};
 use super::{
@@ -241,6 +242,11 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
                 }
                 "REVNUM" => updates.push((k, count_text(instr, core.revision as usize))),
                 // DOCPROPERTY <name>: a custom property first, then a built-in one (#1798).
+                "IF" => {
+                    if let Some(r) = if_result(instr) {
+                        updates.push((k, text_result(instr, r)));
+                    }
+                }
                 "DOCPROPERTY" => {
                     if let Some(name) = doc_property_arg(instr)
                         && let Some(v) = doc_property(&s.doc, &core, &name)
