@@ -52,6 +52,7 @@ mod import;
 mod limits;
 mod objects;
 mod package;
+mod parts;
 mod path;
 mod shapes;
 mod strokes;

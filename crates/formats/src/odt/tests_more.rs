@@ -27,6 +27,7 @@ mod notes;
 mod numbering_fields;
 mod objects;
 mod outline;
+mod parts;
 mod page_setup;
 mod para_borders;
 mod polygons;

@@ -408,6 +408,8 @@ struct Parsed {
     custom: Vec<wordcraft_doc::CustomProp>,
     /// The bibliography sources the citations carry.
     sources: Vec<wordcraft_doc::Source>,
+    /// The package's parts WordCraft doesn't read itself (macros…), kept for the next save.
+    kept: super::parts::Kept,
 }
 
 /// Hyphenation is a paragraph's in ODF (`fo:hyphenate`) and the document's in WordCraft (as in
@@ -459,6 +461,7 @@ fn parse_tracked(bytes: &[u8]) -> Result<Parsed, String> {
     }
     let entries: Vec<String> = z.file_names().take(100_000).map(str::to_string).collect();
     let manifest = read_entry(&mut z, "META-INF/manifest.xml").map(|m| super::objects::manifest(&m)).unwrap_or_default();
+    let kept = super::parts::read(&mut z, &entries, &manifest);
     let mut pictures = Pictures::new(MAX_ENTRY);
     let mut fetch = |path: &str| -> Option<Vec<u8>> {
         // A frame may point at any entry, as often as it likes: `Pictures` keeps that bounded.
@@ -520,6 +523,7 @@ fn parse_tracked(bytes: &[u8]) -> Result<Parsed, String> {
         hyphenate,
         custom,
         sources,
+        kept,
     })
 }
 
@@ -548,8 +552,10 @@ pub fn import(bytes: &[u8]) -> Result<Document, String> {
         hyphenate,
         custom,
         sources,
+        kept,
     } = parse_tracked(bytes)?;
     let mut doc = model::to_doc(&flow);
+    kept.store(&mut doc);
     doc.custom_props = custom;
     doc.sources = sources;
     doc.settings.auto_hyphenation |= hyphenate;

@@ -662,6 +662,17 @@ pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
             x(dir)
         ));
     }
+    // The parts WordCraft doesn't read, as they were, unless one would take a path written here.
+    let (kept_files, kept_entries) = super::parts::kept(doc);
+    let dirs: Vec<String> =
+        w.objects.iter().map(|(d, _, _)| d).chain(w.object_dirs.iter().map(|(d, _)| d)).map(|d| format!("{}/", d.trim_end_matches('/'))).collect();
+    let taken = |p: &str| w.pictures.iter().any(|(n, _, _)| n == p) || dirs.iter().any(|d| p.starts_with(d.as_str()));
+    let kept_files: Vec<_> = kept_files.into_iter().filter(|(p, _)| !taken(p)).collect();
+    for (path, mime) in &kept_entries {
+        if (path.ends_with('/') && kept_files.iter().any(|(p, _)| p.starts_with(path.as_str()))) || kept_files.iter().any(|(p, _)| p == path) {
+            manifest.push_str(&format!("<manifest:file-entry manifest:full-path=\"{}\" manifest:media-type=\"{}\"/>\n", x(path), x(mime)));
+        }
+    }
     manifest.push_str("</manifest:manifest>\n");
 
     let err = |e: zip::result::ZipError| format!("ODT: {e}");
@@ -687,6 +698,10 @@ pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
     }
     for (name, data, _) in &w.pictures {
         z.start_file(name.as_str(), stored).map_err(err)?;
+        z.write_all(data).map_err(ioerr)?;
+    }
+    for (name, data) in &kept_files {
+        z.start_file(name.as_str(), deflated).map_err(err)?;
         z.write_all(data).map_err(ioerr)?;
     }
     let cur = z.finish().map_err(err)?;
