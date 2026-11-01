@@ -700,6 +700,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-29 | trivial | Progress log: window fallback geometry and equation symbol tooltips |
 | 2026-10-29 | trivial | Progress log: window titles omit NUL characters (#3634) |
 | 2026-10-29 | trivial | Recipient labels continue across product-sized sheets instead of stopping after the first sheet (#4880). Filtered/sorted order, product geometry and single-label mode retained; readiness estimates unchanged. |
+| 2026-10-26 | trivial | Visible ribbon collapse/expand chevron, temporary tab reveal and pin control, using the existing commands; numeric field drags keep the preview open until release, and page presses dismiss it before selection drags, allowing typed field edits to commit first; touch scrolling keeps the preview open |
 | 2026-10-22 | trivial | Progress log: one native window per open document |
 | 2026-10-22 | trivial | Progress log: every open document keeps its own recovery copy |
 | 2026-10-22 | trivial | Progress log: several open documents in the desktop window |

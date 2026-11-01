@@ -95,6 +95,7 @@ impl WordApp {
                 alt_modifier_seen,
                 ..UiState::default()
             },
+            ribbon_preview: false,
             services,
             printing: Default::default(),
             print_feedback_seen: None,

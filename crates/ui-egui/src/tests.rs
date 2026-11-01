@@ -7187,3 +7187,22 @@ fn focus_hides_the_ribbon_and_escape_brings_it_back() {
     h.step();
     assert!(h.state().session.view.read_mode && shown(&h, "Focus"), "Immersive Reader keeps the status bar");
 }
+
+/// A fallback file browser keeps keyboard focus when a ribbon preview closes.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn ribbon_preview_does_not_steal_focus_from_fallback_file_browser() {
+    let mut a = typed();
+    a.services.file_dialog = Some(Box::new(|_| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(Err("unavailable".into())).unwrap();
+        rx
+    }));
+    a.ribbon_preview = true;
+    a.canvas.want_focus = false;
+
+    a.run("ui.openRecipientList", json!({})).unwrap();
+
+    assert!(a.file_dialog_open());
+    assert!(!a.canvas.want_focus, "the browser keeps keyboard focus");
+}

@@ -28,6 +28,21 @@ impl WordApp {
     /// Close, Envelopes, Labels and Finish & Merge on a document with unsaved changes first ask
     /// Save / Don't Save / Cancel, and the command runs once that is answered (`ui.saveChanges`).
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        // Numeric fields dispatch intermediate values while the pointer is still dragging.
+        let dragging = self.ctx.as_ref().is_some_and(|ctx| ctx.dragged_id().is_some());
+        let dismiss_preview = self.ribbon_preview && !dragging && !matches!(id, "ui.tab" | "ui.collapseRibbon");
+        if dismiss_preview {
+            self.ribbon_preview = false;
+        }
+        let result = self.run_user_command(id, params);
+        if dismiss_preview && self.dialog.is_none() && !self.file_dialog_open() && !self.nav_search_focus {
+            self.canvas.want_focus = true;
+        }
+        result
+    }
+
+    /// Dispatch a user command, opening input or save dialogs when needed.
+    fn run_user_command(&mut self, id: &str, params: Value) -> Result<Value, String> {
         // Comment text still being typed is written first, so a save or export has it and a
         // close, New or Open counts it as a change (#1348). A draft the document refuses is not
         // part of it: saving and exporting go on without it (the refusal stays on the status
@@ -508,6 +523,7 @@ impl WordApp {
             }
             "ui.tab" => {
                 let tab = s("tab").unwrap_or("Home").to_string();
+                self.ribbon_preview = self.ui.ribbon_collapsed && tab != "File";
                 if tab == "File" {
                     self.ui.backstage = true;
                 } else {
@@ -570,6 +586,7 @@ impl WordApp {
             "ui.paneDock" => return Some(panes::dock_command(self, p)),
             "ui.collapseRibbon" => {
                 self.ui.ribbon_collapsed = !self.ui.ribbon_collapsed;
+                self.ribbon_preview = false;
                 json!({"collapsed": self.ui.ribbon_collapsed})
             }
             "ui.focusRibbon" => {
