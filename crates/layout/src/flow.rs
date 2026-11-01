@@ -523,9 +523,10 @@ impl<'a> Flow<'a> {
                 depth: 0,
             },
         );
+        let up = (items.len(), front.len());
         items.extend(front);
         items.extend(line_numbers(ctx, pb, &self.pl, (l0, l1), y));
-        add_items(pb, behind, items);
+        add_items(pb, behind, items, up);
         if let (Some(f), Some(l)) = (self.pl.lines.get(l0), self.pl.lines.get(l1 - 1)) {
             pb.y = y + (l.top + l.height - f.top);
             pb.content_bottom = pb.content_bottom.max(pb.y);
@@ -696,9 +697,16 @@ fn line_numbers(ctx: &mut Ctx, pb: &mut PageBuilder, pl: &ParaLayout, (l0, l1): 
 }
 
 /// Add a piece's items to the last page: those `behind` the text at the front, the rest at the end.
-fn add_items(pb: &mut PageBuilder, behind: Vec<Placed>, items: Vec<Placed>) {
+/// `up` is (start, count) of the items in front of the text among `items` (#3863).
+fn add_items(pb: &mut PageBuilder, behind: Vec<Placed>, items: Vec<Placed>, up: (usize, usize)) {
     let n_behind = behind.len();
     if let Some(pg) = pb.pages.last_mut() {
+        if up.1 > 0
+            && let Some(f) = pb.front.last_mut()
+        {
+            let at = pg.items.len().saturating_sub(pb.behind.last().copied().unwrap_or(0)).saturating_add(up.0);
+            f.push((at, up.1));
+        }
         for (i, it) in behind.into_iter().enumerate() {
             pg.items.insert(i.min(pg.items.len()), it);
         }
