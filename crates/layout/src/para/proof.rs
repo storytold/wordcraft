@@ -79,10 +79,15 @@ pub fn proof_text(p: &wordcraft_doc::Paragraph) -> String {
     let mut runs = p.runs.iter();
     let mut run = runs.next();
     let mut end = run.map_or(0, |r| r.len);
+    // Each run this walk looks at is a step ([`crate::work`]), so the linear-time test counts
+    // them instead of timing the walk: a caller that went back to the first run for every
+    // character would count the runs once per character and show up as a quadratic count (#5185).
+    crate::work::steps(usize::from(run.is_some()));
     for (i, c) in p.text.char_indices() {
         while run.is_some() && i >= end {
             run = runs.next();
             end = end.saturating_add(run.map_or(0, |r| r.len));
+            crate::work::steps(usize::from(run.is_some()));
         }
         let props = run.map_or(&p.mark, |r| &r.props);
         let deleted = c == wordcraft_doc::para::OBJ || props.del.is_some();
