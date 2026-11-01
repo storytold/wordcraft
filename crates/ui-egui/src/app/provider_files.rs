@@ -141,7 +141,7 @@ impl WordApp {
         }
     }
     fn provider_open(&mut self, host: &Host, command: Command) {
-        let Command::Open { request, resource: _, name, bytes } = command else { return };
+        let Command::Open { request, name, bytes } = command else { return };
         let data = wordcraft_engine::cmd::insert::base64_encode(&bytes);
         // `data` forces an import, never a lookup by a homonymous device path.
         // Ordinary imports record their path in device history. This name identifies

@@ -59,7 +59,7 @@ struct Dialog {
 pub(crate) enum Command {
     Save { request: String, doc: u64, destination: String, name: String, save_as: bool },
     Result { capture: Capture, resource: String, status: String },
-    Open { request: String, resource: String, name: String, bytes: Vec<u8> },
+    Open { request: String, name: String, bytes: Vec<u8> },
 }
 
 #[derive(Default)]
@@ -348,8 +348,8 @@ impl Host {
             return Err("file provider open queue is full".into());
         }
         let resource = s.reads.remove(&request).ok_or("unknown or completed provider read")?;
-        s.opening.insert(request.clone(), resource.clone());
-        s.commands.push(Command::Open { request, resource, name, bytes });
+        s.opening.insert(request.clone(), resource);
+        s.commands.push(Command::Open { request, name, bytes });
         Ok(())
     }
 

@@ -124,8 +124,11 @@ fn provider_open_is_correlated_and_committed_after_decode() {
     assert!(!host.bound(1));
     assert!(host.disconnect().is_err());
     let commands = host.take_commands();
-    assert!(matches!(&commands[0], Command::Open { request, resource, bytes, .. } if request == &read && resource == "one" && bytes == &[7]));
+    assert!(matches!(&commands[0], Command::Open { request, name, bytes } if request == &read && name == "Example.docx" && bytes == &[7]));
     host.opened(&read, Some(capture(1, 1)), "");
+    assert!(host.take_events().iter().any(|event| event.metadata["type"] == "opened"
+        && event.metadata["resourceId"] == "one"
+        && event.metadata["connectionId"].as_str() == Some(connection.as_str())));
     assert!(host.bound(1));
     assert!(host.open(read, "Example.docx".into(), vec![]).is_err());
 }
