@@ -97,9 +97,15 @@ struct Scan {
     skip: bool,
 }
 
-/// How wide the run of spaces ending with cluster `j` is, back to `c0` at most.
+/// How wide the run of spaces ending with cluster `j` is, back to `c0` at most. A zero-width
+/// marker in it (a bookmark, hidden text) doesn't end the run.
 fn space_run(pl: &ParaLayout, c0: usize, j: usize) -> f32 {
-    (c0..=j).rev().map_while(|k| pl.clusters.get(k).filter(|c| c.kind == ClKind::Space)).map(|c| c.adv).sum()
+    (c0..=j)
+        .rev()
+        .map_while(|k| pl.clusters.get(k).filter(|c| matches!(c.kind, ClKind::Space | ClKind::Marker)))
+        .filter(|c| c.kind == ClKind::Space)
+        .map(|c| c.adv)
+        .sum()
 }
 
 /// Whether anything but markers (a bookmark, say) is among the clusters `c0..j`: an empty line
@@ -191,8 +197,7 @@ impl<'e> Breaker<'e> {
             first_left: rp.indent_left + rp.indent_first,
             default_tab: settings.default_tab,
             hanging_at: if rp.indent_first < 0.0 { Some(rp.indent_left) } else { None },
-            // Distributed lines too, with the same room (measured in Word for Windows).
-            shrink_spaces: matches!(rp.align, Align::Justify | Align::Distribute) && settings.compat_mode >= wordcraft_doc::COMPAT_MODE_CURRENT,
+            shrink_spaces: rp.align == Align::Justify && settings.compat_mode >= wordcraft_doc::COMPAT_MODE_CURRENT,
             expand_break: !settings.do_not_expand_shift_return,
             zone: Some(settings.hyphenation_zone).filter(|z| z.is_finite() && *z >= 0.0).unwrap_or(HYPHENATION_ZONE).min(1584.0),
             hyph_limit: settings.consecutive_hyphen_limit as usize,
@@ -890,7 +895,7 @@ impl Scan {
             self.last_plain = Some((j, self.x));
             // From the start of the spaces before the word, all of them: Word lets a word after a
             // run of spaces ("terms      and") overrun as far as the word and the run allow.
-            self.word_from = if c.kind == ClKind::Space { self.x - space_run(pl, self.c0, j) } else { self.x };
+            self.word_from = if matches!(c.kind, ClKind::Space | ClKind::Marker) { self.x - space_run(pl, self.c0, j) } else { self.x };
         } else if self.hyph_ok
             && !pl.clusters.get(j + 1).is_some_and(|n| n.kind == ClKind::Text && n.g1 <= n.g0)
             && self.x + hyphen_glyph(pl, c.style, &mut bk.hcache).2 <= self.right_edge + shrink + 0.01
