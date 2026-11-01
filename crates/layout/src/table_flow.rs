@@ -125,7 +125,7 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
         tl.x = float_table_x(pb, tl.width, &f, legacy, ctx.mirror) - pb.col_x();
     }
     // A table in the text flow starts below the floating objects in its way.
-    below_floats(ctx, pb, pb.col_x() + tl.x, pb.col_x() + tl.x + tl.width);
+    below_floats(ctx, pb, pb.col_x() + tl.x, pb.col_x() + tl.x + tl.width, tl.rows.first().map_or(0.0, |r| r.height));
     let header_rows: Vec<usize> = (0..t.rows.len()).take_while(|r| t.rows.get(*r).is_some_and(|row| row.props.header)).collect();
     // Items repeated so far, and what one more repeat of the header rows costs (see
     // `MAX_HEADER_ITEMS`).
@@ -357,17 +357,18 @@ fn float_table_x(pb: &PageBuilder, w: f32, f: &TableFloat, legacy: f32, mirror: 
     if f.h_align.is_none() { x - legacy } else { x }
 }
 
-/// Move `pb.y` below the floating objects in the way of something spanning `x0..x1` that
-/// starts there (a table in the text flow doesn't wrap around them).
-fn below_floats(ctx: &mut Ctx, pb: &mut PageBuilder, x0: f32, x1: f32) {
-    pb.y = below(&body_wraps(ctx, pb), pb.y, x0, x1);
+/// Move `pb.y` below the floating objects in the way of something spanning `x0..x1`, `height`
+/// tall, that starts there (a table in the text flow doesn't wrap around them).
+fn below_floats(ctx: &mut Ctx, pb: &mut PageBuilder, x0: f32, x1: f32, height: f32) {
+    pb.y = below(&body_wraps(ctx, pb), pb.y, x0, x1, height);
 }
 
-/// `y`, moved below the wrap areas in `excl` in the way of something spanning `x0..x1` that
-/// starts there.
-pub(crate) fn below(excl: &[WrapArea], mut y: f32, x0: f32, x1: f32) -> f32 {
+/// `y`, moved below the wrap areas in `excl` in the way of something spanning `x0..x1`, `height`
+/// tall (a table's first row), that starts there: a float a hair below `y` (`w:tblpY="1"`) is in
+/// the way too.
+pub(crate) fn below(excl: &[WrapArea], mut y: f32, x0: f32, x1: f32, height: f32) -> f32 {
     for _ in 0..64 {
-        let in_the_way = excl.iter().filter(|(r, ..)| r.y <= y + 0.01 && r.bottom() > y && r.x < x1 && r.right() > x0);
+        let in_the_way = excl.iter().filter(|(r, ..)| r.y < y + height.max(0.01) && r.bottom() > y && r.x < x1 && r.right() > x0);
         let Some(bottom) = in_the_way.map(|(r, ..)| r.bottom()).reduce(f32::max) else { break };
         y = bottom;
     }
