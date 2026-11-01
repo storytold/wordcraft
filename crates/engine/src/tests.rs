@@ -8507,9 +8507,18 @@ fn next_footnote_skips_endnotes() {
     assert_eq!(s.sel.focus.off, 9);
 }
 
+/// Tests that install a test dictionary wait for the dictionaries-folder test, which changes the
+/// folder and then reads what each language reports: an install in between reports no file.
+static DICTIONARIES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn dictionaries_turn() -> std::sync::MutexGuard<'static, ()> {
+    DICTIONARIES.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// A tiny synthetic Polish Hunspell dictionary (written for these tests). Real dictionaries are
 /// installed on the system, never bundled; every Polish test installs this same one.
 fn polish_test_dictionary() {
+    let _turn = dictionaries_turn();
     wordcraft_proof::pl::install_dictionary(POLISH_TEST_AFF, POLISH_TEST_DIC).unwrap();
 }
 
@@ -8519,6 +8528,7 @@ const POLISH_TEST_DIC: &str = "12\npłynie\nrzeka\na\nto\nwiem\nże\ntak\nw\nog�
 /// A tiny synthetic Portuguese Hunspell dictionary (written for these tests). Real dictionaries
 /// are installed on the system, never bundled; every Portuguese test installs this same one.
 fn portuguese_test_dictionary() {
+    let _turn = dictionaries_turn();
     wordcraft_proof::pt::install_dictionary(PORTUGUESE_TEST_AFF, PORTUGUESE_TEST_DIC).unwrap();
 }
 
@@ -8532,6 +8542,7 @@ const PORTUGUESE_TEST_DIC: &str = "11\nsaudade\ncoração\ne\nele\ndisse\nnão\n
 /// running meanwhile see the same words; it stays set for the rest of the run for that reason.
 #[test]
 fn dictionaries_folder_option_is_saved_searched_and_reported() {
+    let _turn = dictionaries_turn();
     let dir = std::env::temp_dir().join(format!("wc-engine-dictionaries-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     for (name, aff, dic) in [
@@ -8562,14 +8573,20 @@ fn dictionaries_folder_option_is_saved_searched_and_reported() {
     assert_eq!(r["dictionariesFolder"], json!(dir.to_string_lossy()));
     let dicts = r["dictionaries"].as_array().unwrap();
     let file = |lang: &str| dicts.iter().find(|d| d["language"] == lang).map(|d| d["file"].clone());
-    assert_eq!(file("pl"), Some(json!(dir.join("pl_PL.dic").to_string_lossy())));
-    assert_eq!(file("pt"), Some(json!(dir.join("pt_BR.dic").to_string_lossy())));
-    assert_eq!(file("id"), Some(json!(dir.join("id_ID.dic").to_string_lossy())));
+    // Each language reports the folder's file, which is searched first.
+    let reported = |got: Option<&serde_json::Value>, name: &str| {
+        let want = dir.join(format!("{name}.dic"));
+        assert_eq!(got, Some(&json!(want.to_string_lossy())), "{name}: {dicts:?}");
+        assert_eq!(wordcraft_proof::hunspell::find(&[name]).map(|(_, dic)| dic), Some(want));
+    };
+    reported(file("pl").as_ref(), "pl_PL");
+    reported(file("pt").as_ref(), "pt_BR");
+    reported(file("id").as_ref(), "id_ID");
     // Each Spanish variety reports its own file (Spain, Mexico, Latin America, Uruguay, in order).
     let spanish: Vec<serde_json::Value> = dicts.iter().filter(|d| d["language"] == "es").map(|d| d["file"].clone()).collect();
     assert_eq!(spanish.len(), 4);
-    assert_eq!(spanish.first(), Some(&json!(dir.join("es_ES.dic").to_string_lossy())));
-    assert_eq!(spanish.last(), Some(&json!(dir.join("es_UY.dic").to_string_lossy())));
+    reported(spanish.first(), "es_ES");
+    reported(spanish.last(), "es_UY");
     // Polish text is checked against the folder's dictionary.
     run(&mut s, "document.setText", json!({"text": "rzeka płynie żeka"}));
     run(&mut s, "select.all", json!({}));
@@ -8619,6 +8636,7 @@ fn portuguese_proofing_through_the_review_commands() {
 }
 
 fn indonesian_test_dictionary() {
+    let _turn = dictionaries_turn();
     wordcraft_proof::id::install_dictionary(INDONESIAN_TEST_AFF, INDONESIAN_TEST_DIC).unwrap();
 }
 
@@ -8790,6 +8808,7 @@ const URUGUAYAN_TEST_DIC: &str = "10\nesto\nes\nuna\nprueba/S\ndel\ncorrector\nt
 
 fn spanish_test_dictionaries() {
     use wordcraft_proof::ProofLang;
+    let _turn = dictionaries_turn();
     for (lang, dic) in [(ProofLang::Es, SPANISH_TEST_DIC), (ProofLang::EsUy, URUGUAYAN_TEST_DIC)] {
         wordcraft_proof::es::install_dictionary(lang, SPANISH_TEST_AFF, dic).unwrap();
     }
@@ -8918,6 +8937,7 @@ const ITALIAN_TEST_AFF: &str = "SET UTF-8\nTRY aeiortnsclcaffèéè\nMAP 2\nMAP 
 const ITALIAN_TEST_DIC: &str = "6\ncasa\ncaffè\nroma\ndisse\ne\nper\n";
 
 fn italian_test_dictionary() {
+    let _turn = dictionaries_turn();
     wordcraft_proof::it::install_dictionary(ITALIAN_TEST_AFF, ITALIAN_TEST_DIC).unwrap();
 }
 
