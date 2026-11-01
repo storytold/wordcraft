@@ -174,6 +174,9 @@ pub struct Line {
     pub right: f32,
     /// The line ends at a hyphenation point: (style, glyph, advance) of the hyphen drawn there.
     pub hyphen: Option<(u32, u32, f32)>,
+    /// Clusters at the end of the line that hang past its right margin (`w:overflowPunct`): their
+    /// glyphs are drawn past `right`, and alignment measures the line up to where they start.
+    pub hang: usize,
     /// The text continues the previous line's row on the far side of a floating object (same top
     /// and height): one row, two lines. Row counts (line numbers, keeping rows on one page) skip it.
     pub beside: bool,
