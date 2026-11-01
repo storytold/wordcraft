@@ -1413,6 +1413,22 @@ fn copied_list_labels_follow_what_the_selection_covers() {
     assert_eq!(copy(&mut s, Pos::body(0, 0), Pos::body(0, 5)), "Intro", "no list, no label");
 }
 
+/// #2015: a nested list item's copy has its own level's label, and the item after it on the
+/// first level goes on counting from the one before the nested item.
+#[test]
+fn a_copied_nested_list_item_has_its_level_s_label() {
+    let mut s = session_with_lists();
+    run(&mut s, "document.setText", json!({"text": "Item 1\nSub item\nItem 2"}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "para.numbering", json!({}));
+    let path = wordcraft_doc::Path::top(1);
+    let sub = s.doc.para_mut(StoryRef::Body, &path).unwrap();
+    sub.props.numbering = sub.props.numbering.map(|n| wordcraft_doc::props::NumRef { level: 1, ..n });
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "edit.copy", json!({}));
+    assert_eq!(s.clipboard_text, "1.\tItem 1\na.\tSub item\n2.\tItem 2");
+}
+
 /// #2015: a selection that crosses a table (Select All in a document that starts with one, or a
 /// list down into a table) keeps the labels of the list paragraphs outside the table; the
 /// paragraphs in its cells keep their text without labels.
