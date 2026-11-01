@@ -25,7 +25,7 @@ fn equation_build_up_preserves_function_parentheses() {
         ("f(x)=3 ln(3x-2)+1 ", r"f\left(x\right)=3\ln {\left(3x-2\right)}+1"),
         ("sin(x+1) ", r"\sin {\left(x+1\right)}"),
         ("cos(x) ", r"\cos {\left(x\right)}"),
-        ("log_2(x+1) ", r"{\log }_{2}{\left(x+1\right)}"),
+        ("log_2(x+1) ", r"\log _{2}{\left(x+1\right)}"),
     ] {
         let mut s = s();
         run(&mut s, "insert.equation", json!({}));

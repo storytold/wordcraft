@@ -874,7 +874,7 @@ fn node(node: &MNode, output: &mut String, depth: usize) {
         MNode::Nary { .. } => nary_node(node, output, depth),
         MNode::Delim { beg, end, sep, elems, .. } => delimiter_node(*beg, *end, *sep, elems, output, depth),
         MNode::Func { name, e } => {
-            arg(name, output, depth);
+            function_name(name, output, depth);
             braced(e, output, depth);
         }
         MNode::Lim { upper, e, lim } => limit_node(*upper, e, lim, output, depth),
@@ -898,6 +898,20 @@ fn node(node: &MNode, output: &mut String, depth: usize) {
             output.push_str("\\phantom");
             braced(e, output, depth);
         }
+    }
+}
+
+/// Keep a named function's script attached to its command, before its argument.
+fn function_name(name: &[MNode], output: &mut String, depth: usize) {
+    if let [MNode::Script { kind, base, sub, sup }] = name
+        && matches!(kind, ScriptKind::Sub | ScriptKind::Sup)
+        && matches!(base.as_slice(), [MNode::Run(run)] if run.sty == Some(MSty::Plain) && FUNCTION_NAMES.contains(&run.text.as_str()))
+    {
+        arg(base, output, depth);
+        output.push(if *kind == ScriptKind::Sub { '_' } else { '^' });
+        braced(if *kind == ScriptKind::Sub { sub } else { sup }, output, depth);
+    } else {
+        arg(name, output, depth);
     }
 }
 
@@ -1115,6 +1129,15 @@ fn matrix_node(rows: &[Vec<Arg>], output: &mut String, depth: usize) {
 mod tests {
     use super::*;
     use crate::math::{LimLoc, MathJc};
+
+    /// A function-name script remains part of the function through LaTeX serialization.
+    #[test]
+    fn scripted_function_name_round_trip() {
+        for text in [r"\log_{2}{x+1}", r"\sin^{2}{x+1}"] {
+            let nodes = parse_latex(text);
+            assert_eq!(parse_latex(&to_latex(&nodes)), nodes, "{text}");
+        }
+    }
 
     #[test]
     fn latex_structures() {
