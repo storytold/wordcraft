@@ -832,6 +832,12 @@ fn unbalanced(nodes: &[MNode], depth: usize) -> bool {
     })
 }
 
+/// Raw input stays verbatim; a structure must survive LaTeX serialization and parsing unchanged.
+fn lossless_latex(n: &MNode) -> bool {
+    matches!(n, MNode::Run(_))
+        || crate::math_latex::parse_latex(&crate::math_latex::to_latex(std::slice::from_ref(n))).as_slice() == std::slice::from_ref(n)
+}
+
 /// Build up the linear text before the caret in its argument (`latex`: read it as LaTeX).
 /// Returns the new caret when the structure changed; every refusal leaves the tree untouched.
 pub fn build_up(root: &mut Arg, pos: &MathPos, latex: bool) -> Option<MathPos> {
@@ -839,8 +845,8 @@ pub fn build_up(root: &mut Arg, pos: &MathPos, latex: bool) -> Option<MathPos> {
     // Plan on this argument alone: splitting runs must not mutate a refused build-up.
     let mut a = arg_at(root, &pos.path)?.clone();
     let at = split_at(&mut a, pos.off);
-    // Rewrite from after the last formatted run (its formatting would be lost) to the caret.
-    let start = a.get(..at)?.iter().rposition(|n| !plain(n)).map(|k| k + 1).unwrap_or(0);
+    // Rewrite after the last formatted run or structure LaTeX cannot preserve.
+    let start = a.get(..at)?.iter().rposition(|n| !plain(n) || (latex && !lossless_latex(n))).map(|k| k + 1).unwrap_or(0);
     let region: Arg = a.get(start..at)?.to_vec();
     if region.is_empty() {
         return None;
@@ -853,8 +859,8 @@ pub fn build_up(root: &mut Arg, pos: &MathPos, latex: bool) -> Option<MathPos> {
                 text.push_str(&run.text);
             } else {
                 let serialized = crate::math_latex::to_latex(std::slice::from_ref(node));
-                // Some imported structures have no lossless LaTeX spelling. Keep them intact.
-                if crate::math_latex::parse_latex(&serialized).as_slice() != std::slice::from_ref(node) {
+                // A raw backslash would escape the serialized node's leading command.
+                if text.ends_with('\\') {
                     return None;
                 }
                 text.push_str(&serialized);
@@ -1245,6 +1251,33 @@ mod tests {
         let before = eq.clone();
         assert_eq!(build_up(&mut eq, &pos, true), None);
         assert_eq!(eq, before, "A function without a lossless LaTeX spelling stays untouched");
+    }
+
+    /// A structure without a lossless spelling is a boundary; later LaTeX still builds up.
+    #[test]
+    fn latex_build_up_after_unsupported_structure() {
+        let opaque = MNode::Func { name: vec![MNode::Run(MRun::plain("custom"))], e: parse_linear("x+1") };
+        let mut eq = vec![opaque.clone()];
+        let pos = MathPos::new(Vec::new(), units(&eq));
+        let pos = insert_text(&mut eq, &pos, r"+\frac{a}{b}", TypeStyle::default());
+        assert!(build_up(&mut eq, &pos, true).is_some());
+        assert_eq!(eq.first(), Some(&opaque));
+        assert_eq!(eq.get(1..), Some(crate::math_latex::parse_latex(r"+\frac{a}{b}").as_slice()));
+    }
+
+    /// Raw trailing backslashes cannot escape or consume a following serialized structure.
+    #[test]
+    fn latex_build_up_keeps_structures_after_raw_backslashes() {
+        for prefix in ["\\", "\\\\", "a\\"] {
+            for latex in [r"\frac{a}{b}", r"\sqrt{x}", r"\sin{x+1}"] {
+                let mut eq = vec![MNode::Run(MRun::new(prefix))];
+                eq.extend(crate::math_latex::parse_latex(latex));
+                let before = eq.clone();
+                let pos = MathPos::new(Vec::new(), units(&eq));
+                assert_eq!(build_up(&mut eq, &pos, true), None, "{prefix}{latex}");
+                assert_eq!(eq, before, "{prefix}{latex}");
+            }
+        }
     }
 
     /// Rebuilding an expanded function sequence must not discard its last term in either mode.
