@@ -1635,6 +1635,11 @@ fn a_right_or_centre_tab_past_the_margin_ends_at_the_indent_from_word_2013() {
     near(end(15, TabAlign::Right, 36.0), 504.0, "right tab with a right indent, Word 2013");
     near(end(14, TabAlign::Right, 0.0), 572.0, "right tab, Word 2010");
     near(end_at(15, TabAlign::Right, 36.0, 450.0), 522.0, "right tab past the indent inside the margin, Word 2013");
+    // A stop inside the margin is the same in both modes.
+    near(end_at(15, TabAlign::Right, 0.0, 300.0), 372.0, "right tab inside the margin, Word 2013");
+    for align in [TabAlign::Right, TabAlign::Center] {
+        near(end_at(15, align, 0.0, 300.0), end_at(14, align, 0.0, 300.0), &format!("{align:?} tab inside the margin, Word 2013 and 2010"));
+    }
 }
 
 /// A left tab whose only stop is past the right indent wraps; on the next line it still can't
