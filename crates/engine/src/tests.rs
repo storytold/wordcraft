@@ -9838,6 +9838,26 @@ fn spacing_commands_handle_automatic_spacing() {
     assert!(s.run("para.spacing", &json!({"beforeAuto": "yes"})).is_ok(), "junk is ignored, never a panic");
 }
 
+/// #5175: the Line Spacing menu's spacing items say what clicking them will do, and flip after
+/// each click, as in Word.
+#[test]
+fn spacing_menu_labels_follow_the_paragraph() {
+    use crate::cmd::para::spacing_labels;
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Spacing"}));
+    run(&mut s, "para.spacing", json!({"before": 0, "after": 0}));
+    assert_eq!(spacing_labels(&s), ("Add Space Before Paragraph", "Add Space After Paragraph"));
+    run(&mut s, "para.addSpaceBefore", json!({}));
+    assert_eq!(spacing_labels(&s).0, "Remove Space Before Paragraph");
+    run(&mut s, "para.removeSpaceAfter", json!({}));
+    assert_eq!(spacing_labels(&s).1, "Remove Space After Paragraph", "the item adds space when there is none");
+    run(&mut s, "para.addSpaceBefore", json!({}));
+    run(&mut s, "para.removeSpaceAfter", json!({}));
+    assert_eq!(spacing_labels(&s), ("Add Space Before Paragraph", "Add Space After Paragraph"));
+    run(&mut s, "para.spacing", json!({"beforeAuto": true}));
+    assert_eq!(spacing_labels(&s).0, "Remove Space Before Paragraph", "automatic spacing counts as space");
+}
+
 /// #712, as in Word: Ctrl+F (`edit.find` with no text) opens the Navigation pane and asks the UI
 /// to put the keyboard in its search box, not the dialog; Ctrl+H (`edit.replace` with nothing to
 /// replace) opens Find and Replace on its Replace tab instead of failing; Go To moves by pages from
