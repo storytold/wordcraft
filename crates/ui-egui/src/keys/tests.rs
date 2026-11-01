@@ -1233,3 +1233,43 @@ fn typing_with_smart_art_selected_types_into_an_item() {
     let g = wordcraft_engine::cmd::smart_art::selected_smart_art(&a.session).expect("still there");
     assert_eq!(g.items[0].text, "Ada", "one undo step for the typing");
 }
+
+/// The key beside the left Shift on European keyboards, which egui gives as `IntlBackslash`, is
+/// < and, with Shift, >: the registry and Customize Keyboard write it so.
+#[test]
+fn the_european_key_beside_shift_is_less_than_and_greater_than() {
+    assert_eq!(key_name_with(Key::IntlBackslash, Modifiers::COMMAND), Some("<"));
+    assert_eq!(key_name_with(Key::IntlBackslash, Modifiers::COMMAND | Modifiers::SHIFT), Some(">"));
+    assert_eq!(key_name_with(Key::Comma, Modifiers::SHIFT), Some(","), "other keys keep their names");
+    let shortcut = |m| key_name_with(Key::IntlBackslash, m).map(|n| combo(m, n, true));
+    assert_eq!(shortcut(Modifiers::COMMAND).as_deref(), Some("Mod+<"));
+    assert_eq!(shortcut(Modifiers::COMMAND | Modifiers::SHIFT).as_deref(), Some("Mod+Shift+>"));
+}
+
+/// On those keyboards Ctrl+Shift+< (which types >) grows the font and Ctrl+< shrinks it, as in
+/// Word there. Before, the key had no name, and neither did anything.
+#[test]
+fn the_european_less_than_key_changes_the_font_size() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Lanterns glow")), crate::Services::default());
+    app.canvas.want_focus = true;
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    h.run_steps(6);
+    assert!(h.state().canvas.focused, "the page has the keyboard");
+    h.state_mut().session.sel = wordcraft_engine::Selection { anchor: wordcraft_doc::Pos::body(0, 0), focus: wordcraft_doc::Pos::body(0, 8) };
+    let size = |h: &egui_kittest::Harness<'_, WordApp>| wordcraft_engine::cmd::format::state(&h.state().session).get("size").and_then(Value::as_f64);
+    let start = size(&h).expect("one size");
+    h.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::IntlBackslash);
+    h.run_steps(2);
+    let grown = size(&h).expect("one size");
+    assert!(grown > start, "Ctrl+Shift+< grows the font: {start} → {grown}");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::IntlBackslash);
+    h.run_steps(2);
+    assert_eq!(size(&h), Some(start), "Ctrl+< shrinks it back");
+}
