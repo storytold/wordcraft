@@ -12,7 +12,8 @@ Opus 5.5 agent wall-clock.
    (Clipboard pane #264, Manage Styles #270, Group #267), fix field bugs (Hebrew RTL #20, IME
    fixes #155–#164) or add languages (nb, nn, he). Owner review needed.
    French integration now has a [historical shared-affix gate](affix-compatibility.md)
-   and a pinned compiler on all three desktop systems; upstream workflow approval remains owner work.
+   in the normal repository gate; the [pinned real-dictionary check](french-proofing.md#reproduce-the-checks)
+   is a separate explicit manual command.
 2. **DOCX real-world corpus** (gap #1, 30–50 h): collect openly licensed real-world .docx files,
    open/render/round-trip them, compare with Word locally, fix what breaks. Omitted/empty
    paragraph defaults now have synthetic save/reopen coverage; the corpus gate remains open.

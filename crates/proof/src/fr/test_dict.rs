@@ -231,7 +231,9 @@ p
 /// Make [`AFF`]/[`DIC`] the French dictionary (every test that needs one calls this; they all
 /// install the same one, so tests running in parallel agree).
 pub fn install() {
-    if let Err(e) = super::install_dictionary(AFF, DIC) {
+    // Fixtures do not alter load diagnostics while the diagnostics unit test is running.
+    // Public installation/recovery is exercised in separate integration-test processes.
+    if let Err(e) = super::DICT.install(AFF, DIC) {
         panic!("test dictionary: {e}");
     }
 }

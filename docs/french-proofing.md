@@ -1,22 +1,20 @@
 # Shipping and improving French proofing
 
-> **Last reviewed:** 2026-10-20 · **Last updated:** 2026-10-31 · **Change:** trivial (technical integration with main e6a5cd0; French behavior and shared test fixtures retained); previously minor (French dictionary reload, regional language choices and dictionary-respecting suggestion casing); previously minor (French uppercase/number proofing options and review-record corrections); previously minor (integration with current main, shared NFC lookup and external interface catalogs); previously minor (French spelling keeps attached combining marks and checks compound boundaries); previously minor (French proofing region parser respects extension boundaries); previously minor (French dictionary recovery and regional labels); previously trivial (French hyphenation CI path coverage); previously minor (historical affix compatibility gates and pinned French CI toolchain); previously major (French integration and regression gates, based on #1660)
+> **Last reviewed:** 2026-10-20 · **Last updated:** 2026-11-01 · **Change:** minor (integration with shared dictionary slots, language registry and upstream affix features; normal CI retained); previously trivial (technical integration with main e6a5cd0; French behavior and shared test fixtures retained); previously minor (French dictionary reload, regional language choices and dictionary-respecting suggestion casing); previously minor (French uppercase/number proofing options and review-record corrections); previously minor (integration with current main, shared NFC lookup and external interface catalogs); previously minor (French spelling keeps attached combining marks and checks compound boundaries); previously minor (French proofing region parser respects extension boundaries); previously minor (French dictionary recovery and regional labels); previously trivial (French hyphenation CI path coverage); previously minor (historical affix compatibility gates and pinned French CI toolchain); previously major (French integration and regression gates, based on #1660)
 
 ## Shared-engine compatibility and reproducible CI
 
 The [historical affix compatibility gate](affix-compatibility.md) compares seven
 original non-French fixtures against actual upstream e6c5a70 outputs and old
-WCAFF1 bytes. The full proofing suite includes these tests. The French workflow
-pins both its action revision and Rust 1.98.1, prints the compiler version, and
-runs `cargo fmt --all -- --check` on Linux, Windows and macOS. Real dictionary
-inputs retain their revision and byte checksums. Changes to
-`assets/hyphenation/fr.pat` trigger this workflow on pull requests and main pushes,
-including changes to that pattern file alone.
+WCAFF1 bytes. The normal `cargo xtask ci` gate includes the proof unit tests,
+compatibility tests, synthetic French dictionary integrations and engine Review
+regressions. This feature does not add or alter workflows. The ignored real-dictionary
+check remains an explicit manual gate with pinned runtime inputs (see below).
 
 ## Baseline for review
 
 The technical integration baseline is upstream main
-[`e6a5cd0`](https://github.com/storytold/wordcraft/commit/e6a5cd05f045e4caf25a28660bfeb622f25b5129).
+[`fd7f662`](https://github.com/storytold/wordcraft/commit/fd7f6621a1419c7c99f2293c9e99b1b7c4b87282).
 Upstream document, word-count, PDF and printing fixes remain in place; the French
 dictionary fixture shared by Review and the folder-reload test is unchanged.
 This source baseline does not substitute for the exact revision’s required checks or reviews.
@@ -37,8 +35,10 @@ permitted original case when conversion is disallowed. Ordinary mixed-case entri
 their established recasing behavior; this display permission does not alter spelling lookup.
 A final form explicitly excluded from suggestions cannot bypass that restriction through
 a source recasing permission, including dictionary input-conversion aliases.
-Loading the French dictionary holds the cache write lock, so
-a concurrent reload waits for that load and clears its result before the next lookup.
+French uses the shared dictionary slot and reload generation, like the other dictionary
+languages. A load that started before a reload cannot become the cached dictionary after
+that reload; the next lookup loads from the current folder. Both French regions share
+this slot, and an in-memory installation reports no file path.
 New documents under the French interface take the French system region. Missing and unreadable
 dictionaries are reported through the existing status-bar and Options diagnostics.
 
@@ -61,9 +61,14 @@ The synthetic suite runs without downloads:
 ```sh
 cargo test --locked -p wordcraft-proof
 cargo test --locked -p wordcraft-engine --lib french_proofing_through_the_review_commands
-cargo test --locked -p wordcraft-ui-egui --lib a_french_interface_writes_new_documents_in_french
 cargo xtask ci
 ```
+
+The standalone UI test also needs the external interface catalog checkout:
+set `CRAFT_I18N_DIR` to its absolute directory and `CRAFT_I18N_REQUIRED=1`, then run
+`cargo test --locked -p wordcraft-ui-egui --lib a_french_interface_writes_new_documents_in_french`.
+Without these inputs the standalone test may return before its assertions; the normal
+repository gate supplies its required catalogs.
 
 For the real dictionary, set `WORDCRAFT_DICTIONARIES` to its folder, then run:
 
@@ -76,10 +81,29 @@ outside the requested folder. It checks real words, accents, elisions, suggestio
 fr-FR/fr-CA dispatch. A separate process tests unreadable-dictionary diagnostics and recovery,
 so synthetic unit tests cannot replace the dictionary being checked.
 
-The **French proofing** workflow runs these dictionary and review-command checks on Windows,
-macOS and Linux. It downloads a pinned LibreOffice revision of Dicollecte 7.7 and verifies both
-SHA-256 hashes. The existing UI workflow and `cargo xtask ci` remain required validation;
-declaring a workflow here does not mean its remote runs have passed.
+Use Dicollecte 7.7 at LibreOffice/dictionaries revision
+`67032ee957631908098a72edf48dc81cac27e369`. Download the runtime inputs from
+[fr.aff](https://raw.githubusercontent.com/LibreOffice/dictionaries/67032ee957631908098a72edf48dc81cac27e369/fr_FR/dictionaries/fr.aff)
+and [fr.dic](https://raw.githubusercontent.com/LibreOffice/dictionaries/67032ee957631908098a72edf48dc81cac27e369/fr_FR/dictionaries/fr.dic).
+Verify these SHA-256 hashes **before** running the manual command:
+
+| File | SHA-256 |
+|---|---|
+| fr.aff | `c176610cd5dc4846806a65ddd029f422d87978bf58f224aa44222662a16a2de5` |
+| fr.dic | `b78a868e31dd6e373b6c3217969afb898a9acde828a5e7ef97308da42218c88c` |
+
+The test checks dictionary location, size and behavior, not these hashes itself.
+No dictionary data is bundled or downloaded by the normal gate. A synthetic-suite
+success does not imply that this separate check ran.
+The existing repository checks remain required; this document does not claim
+that an untested integration revision has passed them.
+
+Current upstream ICONV syntax treats underscore literally, including WCAFF1
+round trips. The unmerged French branch previously interpreted underscore as a
+space. Those two encodings have indistinguishable bytes, so no provenance is
+inferred: compact data produced with that former extension must be regenerated.
+The frozen pre-French fixtures contain no ICONV and remain unchanged; the pinned
+French dictionary's apostrophe conversions are unaffected.
 
 ## Small follow-ups
 
@@ -105,6 +129,7 @@ before proposing a suggestion/ranking change. Keep follow-ups independently revi
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | minor | Integrate the shared language registry, dictionary slots and upstream affix features; retain one French/Canadian slot, recovery diagnostics and synthetic tests; replace the feature workflow with normal gates plus the explicit pinned real-dictionary command; document the ICONV underscore compatibility boundary |
 | 2026-10-31 | trivial | Technical integration with main e6a5cd0 preserves upstream fixes, French behavior and the shared Review/folder dictionary fixture; validation remains tied to the exact revision |
 | 2026-10-28 | minor | French dictionary loading is serialized with cache invalidation; both pickers offer Canada explicitly; extension keys do not select a region; final suggestion casing respects dictionary restrictions |
 | 2026-10-26 | minor | French dispatch honours the uppercase and number ignore options; regressions cover both regions, independent choices and original UTF-8 issue ranges; progress records aligned with the current integration |

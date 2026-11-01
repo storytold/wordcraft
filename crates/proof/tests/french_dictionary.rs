@@ -1,5 +1,5 @@
-//! Explicit real-dictionary gate. The normal synthetic suite stays offline; CI installs the
-//! pinned Dicollecte dictionary and runs this test with `--ignored`. Missing data is a failure,
+//! Explicit manual real-dictionary gate. Verify the pinned runtime inputs as documented in
+//! docs/french-proofing.md before running with `--ignored`. Missing data is a failure,
 //! never a silently successful test that checked nothing.
 
 #![cfg(not(target_arch = "wasm32"))]

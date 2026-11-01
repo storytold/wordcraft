@@ -17,71 +17,45 @@ mod suggest;
 #[cfg(test)]
 pub(crate) mod test_dict;
 
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use crate::affix::AffixDict;
+use crate::slot::DictSlot;
 
 pub use suggest::{suggest, suggest_in};
-
-/// The French dictionary: `None` until first use, then the installed one (or an empty one).
-static DICT: RwLock<Option<Arc<AffixDict>>> = RwLock::new(None);
 
 /// File names of a French Hunspell dictionary: France first, then the generic and regional ones.
 const NAMES: &[&str] = &["fr_FR", "fr", "fr-FR", "fr_BE", "fr_CA", "fr_CH", "fr_LU", "fr_MC"];
 
-/// The French dictionary: the installed Hunspell `fr_FR` (read on first use), one given with
-/// [`install_dictionary`], or an empty one when none is available (French spelling is off
-/// then; see [`has_dictionary`]).
+/// Both French regions use the same installed dictionary and reload generation.
+pub(crate) static DICT: DictSlot<AffixDict> = DictSlot::new(NAMES, "French");
+
+/// The installed Hunspell dictionary, one given with [install_dictionary], or an empty one.
 pub fn dictionary() -> Arc<AffixDict> {
-    cached_dictionary(&DICT, load_installed)
+    DICT.get()
 }
 
-/// Initialize an empty cache while holding its write lock, so a concurrent reload clears the
-/// completed load instead of allowing an old-folder result to be published after the reload.
-fn cached_dictionary(cache: &RwLock<Option<Arc<AffixDict>>>, load: impl FnOnce() -> AffixDict) -> Arc<AffixDict> {
-    if let Some(d) = cache.read().unwrap_or_else(|e| e.into_inner()).as_ref() {
-        return Arc::clone(d);
-    }
-    let mut slot = cache.write().unwrap_or_else(|e| e.into_inner());
-    Arc::clone(slot.get_or_insert_with(|| Arc::new(load())))
-}
-
-fn load_installed() -> AffixDict {
-    let Some((aff, dic)) = crate::hunspell::find(NAMES) else {
-        crate::hunspell::clear_load_error(NAMES[0]);
-        log::info!("French spelling: no Hunspell fr_FR dictionary installed");
-        return AffixDict::default();
-    };
-    crate::hunspell::note_load(NAMES[0], &dic, crate::hunspell::load(&aff, &dic)).unwrap_or_else(|e| {
-        log::warn!("French spelling: {e}");
-        AffixDict::default()
-    })
-}
-
-/// Use this French dictionary from now on (Hunspell `.aff` and `.dic` text, decoded to UTF-8),
-/// for example one the user picked. On error the current dictionary stays.
+/// Use this French dictionary from now on. An invalid replacement preserves the current one
+/// and its diagnostic; a successful replacement clears the previous load error.
 pub fn install_dictionary(aff: &str, dic: &str) -> Result<(), String> {
-    let d = AffixDict::from_hunspell(aff, dic, &[])?;
-    *DICT.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(d));
-    crate::hunspell::clear_load_error(NAMES[0]);
+    DICT.install(aff, dic)?;
+    crate::hunspell::clear_load_error(DICT.name());
     Ok(())
 }
 
-/// Forget the loaded dictionary, so the next check looks for an installed one again (after
-/// [`crate::hunspell::set_dictionary_dir`] or a dictionary was installed).
+/// Forget the loaded dictionary so the next check searches the configured folder again.
 pub fn reload_dictionary() {
-    *DICT.write().unwrap_or_else(|e| e.into_inner()) = None;
+    DICT.reload();
 }
 
-/// The `.dic` file of the Hunspell French dictionary found in the dictionaries folder or the
-/// system locations now (File › Options › Proofing shows it, #1063); `None` when there is none.
+/// The installed dictionary's file, or None for an in-memory replacement or no installed file.
 pub fn installed_path() -> Option<std::path::PathBuf> {
-    crate::hunspell::find(NAMES).map(|(_, dic)| dic)
+    DICT.installed_path()
 }
 
 /// Is a French dictionary available (spelling is checked)?
 pub fn has_dictionary() -> bool {
-    !dictionary().is_empty()
+    DICT.has_dictionary()
 }
 
 /// Is `c` a letter of the Latin script (the only one the French dictionary covers)?
@@ -151,62 +125,6 @@ fn known(d: &AffixDict, w: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A reload concurrent with a suspended load must clear its result. A local cache avoids
-    /// interfering with the installed dictionaries used by other tests, and channels force the
-    /// interleaving without sleeps. Completion waits are bounded even if a regression deadlocks.
-    #[test]
-    fn dictionary_load_is_serialized_with_reload() {
-        use std::sync::mpsc;
-        use std::time::Duration;
-
-        let timeout = Duration::from_secs(10);
-        let cache = Arc::new(RwLock::new(None));
-        let old = AffixDict::from_hunspell("SET UTF-8\n", "1\nancien\n", &[]).unwrap();
-        let new = AffixDict::from_hunspell("SET UTF-8\n", "1\nnouveau\n", &[]).unwrap();
-        let (started_tx, started_rx) = mpsc::channel();
-        let (release_tx, release_rx) = mpsc::channel();
-        let (loaded_tx, loaded_rx) = mpsc::channel();
-        let loading_cache = Arc::clone(&cache);
-        let loading = std::thread::spawn(move || {
-            let loaded = cached_dictionary(&loading_cache, || {
-                started_tx.send(()).unwrap();
-                release_rx.recv_timeout(timeout).unwrap();
-                old
-            });
-            loaded_tx.send(loaded).unwrap();
-        });
-        started_rx.recv_timeout(timeout).unwrap();
-        let loading_holds_write_lock = cache.try_write().is_err();
-        let (reload_started_tx, reload_started_rx) = mpsc::channel();
-        let (reloaded_tx, reloaded_rx) = mpsc::channel();
-        let reloading_cache = Arc::clone(&cache);
-        let reloading = std::thread::spawn(move || {
-            reload_started_tx.send(()).unwrap();
-            // This is reload_dictionary's cache-clear operation, on the isolated cache.
-            *reloading_cache.write().unwrap() = None;
-            reloaded_tx.send(()).unwrap();
-        });
-        reload_started_rx.recv_timeout(timeout).unwrap();
-        // If loading regresses to outside the lock, force the stale-publication order rather
-        // than relying on scheduling luck: reload finishes before the old load can publish.
-        if !loading_holds_write_lock {
-            reloaded_rx.recv_timeout(timeout).unwrap();
-        }
-        release_tx.send(()).unwrap();
-        let old = loaded_rx.recv_timeout(timeout).unwrap();
-        if loading_holds_write_lock {
-            reloaded_rx.recv_timeout(timeout).unwrap();
-        }
-        loading.join().unwrap();
-        reloading.join().unwrap();
-        assert!(loading_holds_write_lock, "reload must wait for the in-progress load");
-        assert!(old.check("ancien"));
-        assert!(cache.read().unwrap().is_none(), "reload clears the completed old-folder load");
-        let current = cached_dictionary(&cache, || new);
-        assert!(current.check("nouveau") && !current.check("ancien"), "the next check loads the replacement dictionary");
-        assert!(!Arc::ptr_eq(&old, &current));
-    }
 
     #[test]
     fn test_dictionary_loads() {

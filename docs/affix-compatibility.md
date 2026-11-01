@@ -1,6 +1,6 @@
 # Shared affix compatibility baseline
 
-> **Last reviewed:** 2026-10-20 · **Last updated:** 2026-10-20 · **Change:** minor (frozen pre-French behavior and old compact dictionaries)
+> **Last reviewed:** 2026-10-20 · **Last updated:** 2026-11-01 · **Change:** minor (frozen pre-French behavior and old compact dictionaries)
 
 `cargo test --locked -p wordcraft-proof --test affix_compatibility` checks the
 shared affix refactor against the implementation before French proofing, upstream
@@ -38,8 +38,8 @@ from the new engine when a test fails.
 This is a bounded compatibility regression, not a guarantee for all possible
 Hunspell dictionaries. The existing language-specific spelling, suggestions,
 grammar and hyphenation tests remain in the full `wordcraft-proof` suite. French
-CI runs that suite and the checksum-pinned real French dictionary gate on all
-three desktop systems, with Rust 1.98.1, and prints the compiler version.
+tests run in the normal repository gate. The checksum-pinned real French dictionary
+check is an explicit ignored/manual test; see [French proofing](french-proofing.md).
 
 ## Additional local comparison with real dictionaries
 
@@ -73,4 +73,14 @@ the correctness of every word in those dictionaries.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | minor | Clarify normal and manual gates and the bounded ICONV underscore compatibility exception |
 | 2026-10-20 | minor | Historical output and compact-format compatibility regressions for the shared affix refactor |
+
+## ICONV compatibility boundary
+
+Current upstream syntax treats underscore literally in ICONV, including compact
+WCAFF1 round trips. An unmerged French branch instead treated underscore as a
+space. The same bytes cannot identify which interpretation produced a compact
+dictionary, so data relying on that former extension must be regenerated. The
+frozen historical fixtures contain no ICONV and are preserved unchanged; their
+compatibility evidence is bounded to the cases actually recorded.
