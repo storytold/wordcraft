@@ -196,6 +196,7 @@ impl WordApp {
             autosave: _,
             zotero: _,
             ctx: _,
+            pending_paste: _,
             read_aloud_error: _,
             saves_in_flight: _,
             recovery_seen: _,

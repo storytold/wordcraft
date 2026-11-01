@@ -587,6 +587,9 @@ pub struct WordApp {
     pub zotero: zotero::ZoteroLink,
     /// The egui context, once the first frame has run (background work wakes the UI with it).
     pub(crate) ctx: Option<egui::Context>,
+    /// A menu or ribbon Paste waiting for the text egui reads when the host can't
+    /// ([`system_clipboard::defer`]).
+    pub(crate) pending_paste: Option<system_clipboard::PendingPaste>,
     /// Whether the current command was entered by an input method's own transaction. The engine
     /// uses it to keep IME commits from setting the application-change signal.
     pub(crate) ime_origin: bool,

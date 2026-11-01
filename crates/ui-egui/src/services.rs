@@ -75,6 +75,10 @@ pub struct Services {
     /// names), where the platform lists them, so a paste that finds nothing it can use says what
     /// is there instead of "empty" (#833).
     pub clipboard_formats: Option<Box<dyn Fn() -> Vec<String>>>,
+    /// Desktop: `true` when the system clipboard can't be opened at all, so the hooks above read
+    /// nothing. GNOME's Wayland has no data-control protocol and a Flatpak without X11 has no
+    /// fallback; the menu and ribbon Paste then read the text the way Ctrl+V does (#1368).
+    pub clipboard_unreachable: Option<Box<dyn Fn() -> bool>>,
     /// Web: keep a font the user added (stored file name, original bytes) for the next visit
     /// (#582). Desktop fonts are stored by the font database itself, in the app's font folder.
     pub store_font: Option<Box<dyn Fn(&str, &[u8])>>,
