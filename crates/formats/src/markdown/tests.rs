@@ -695,3 +695,175 @@ fn exported_link_destinations_read_back_unchanged() {
     assert_eq!(md("https://example.com/a b"), "[x](<https://example.com/a b>)");
     assert_eq!(md("https://e.com/x\ny"), "[x](https://e.com/xy)");
 }
+
+/// The equations in a flow's paragraphs: linear text and whether each is displayed.
+fn equations(flow: &model::Flow) -> Vec<(String, bool)> {
+    flow.blocks
+        .iter()
+        .filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None })
+        .flat_map(|p| &p.inlines)
+        .filter_map(|i| if let Inline::Equation { linear, display } = i { Some((linear.clone(), *display)) } else { None })
+        .collect()
+}
+
+fn para_texts(flow: &model::Flow) -> Vec<String> {
+    flow.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p.text()) } else { None }).collect()
+}
+
+/// `$$…$$` blocks are display equations, on one line or several, and a `$$` line ends the
+/// paragraph before it, as in "Display equation:" followed by the formula (#4130).
+#[test]
+fn display_math_blocks_import_as_display_equations() {
+    let flow = parse("$$\\alpha \\rightarrow \\beta$$");
+    assert_eq!(equations(&flow), [("α → β".to_string(), true)]);
+    assert_eq!(flow.blocks.len(), 1);
+    for src in ["   $$\n\\frac{a}{b}\n$$", "$$\\frac{a}\n{b}$$", "$$\n\\frac{a}{b}  $$  "] {
+        assert_eq!(equations(&parse(src)), [("a/b".to_string(), true)], "{src:?}");
+    }
+    let oint = "\\oint_C \\mathbf{B} \\cdot d\\mathbf{l} = \\mu_0 \\left( \\mathbf{I}_{\\text{enc}} + \\varepsilon_0 \\frac{d\\Phi_E}{dt} \\right)";
+    let linear = crate::latex::latex_to_linear(oint);
+    let flow = parse(&format!("Display equation:\n$${oint}$$\nafter"));
+    assert_eq!(para_texts(&flow), ["Display equation:".to_string(), linear.clone(), "after".to_string()]);
+    assert_eq!(equations(&flow), [(linear, true)]);
+    for src in ["> $$x^2$$", "- $$x^2$$"] {
+        assert_eq!(equations(&parse(src)), [("x^2".to_string(), true)], "{src:?}");
+    }
+}
+
+/// What can't be a display block stays text: a blank line before the closing `$$`, a stray
+/// `$$` on a line, text after the closing one, nothing to convert, or a code block.
+#[test]
+fn display_math_that_cannot_be_read_stays_text() {
+    for (src, texts) in [
+        ("$$x\n\ny$$", vec!["$$x", "y$$"]),
+        ("$$$$", vec!["$$$$"]),
+        ("$$ $$", vec!["$$ $$"]),
+        ("$$a $$ b $$", vec!["$$a $$ b $$"]),
+        ("$$x$$ (1)", vec!["$$x$$ (1)"]),
+        ("$$\\text{}$$", vec!["$$\\text{}$$"]),
+        ("$$a\nb $$ c\nd$$", vec!["$$a b $$ c d$$"]),
+        ("```\n$$x$$\n```", vec!["$$x$$"]),
+    ] {
+        let flow = parse(src);
+        assert!(equations(&flow).is_empty(), "{src:?}");
+        assert_eq!(para_texts(&flow), texts, "{src:?}");
+    }
+}
+
+#[test]
+fn a_run_of_unclosed_display_openers_parses_in_linear_time() {
+    // Each search for the closing `$$` stops at the next line holding one; searching on to
+    // the end of the paragraph from every opener was quadratic.
+    let src = "$$a\n".repeat(200_000);
+    let t = std::time::Instant::now();
+    let flow = parse(&src);
+    assert!(t.elapsed() < std::time::Duration::from_secs(10), "{:?}", t.elapsed());
+    assert!(equations(&flow).is_empty());
+    assert_eq!(para_texts(&flow).len(), 1);
+}
+
+/// Past 32 levels (`MAX_NEST`) the math reader stops recursing and the surplus `}` ends the
+/// equation, so what follows the deep group is lost; the file still opens.
+#[test]
+fn display_math_nesting_stops_at_the_reader_limit() {
+    let linear = |open: &str, close: &str, n: usize| {
+        let eqs = equations(&parse(&format!("$$a {}x{} z$$", open.repeat(n), close.repeat(n))));
+        assert_eq!(eqs.len(), 1, "{open:?} at {n}");
+        assert!(eqs[0].1, "{open:?} at {n}");
+        eqs[0].0.clone()
+    };
+    assert_eq!(linear("{", "}", 32), "a x z");
+    assert_eq!(linear("{", "}", 33), "a x");
+    assert_eq!(linear("{", "}", 100_000), "a x");
+    for (open, close) in [("\\frac{", "}{y}"), ("\\sqrt{", "}"), ("x^{", "}"), ("\\hat{", "}")] {
+        assert!(linear(open, close, 32).ends_with(" z"), "{open:?}");
+        assert!(!linear(open, close, 33).contains('z'), "{open:?}");
+        assert!(linear(open, close, 100_000).contains('x'), "{open:?}");
+    }
+}
+
+/// Equations are written as LaTeX between dollars: a `$$…$$` line for a display equation
+/// alone in its paragraph, `$…$` for any other (a heading's too), with escaped bars in a
+/// table cell. Before, Markdown wrote their linear text and reopening the file lost them (#4130).
+#[test]
+fn equations_export_as_latex_and_display_lines_read_back() {
+    let eq = |linear: &str, display: bool| Inline::Equation { linear: linear.into(), display };
+    let para = |inlines: Vec<Inline>| FBlock::Para(Para { inlines, ..Default::default() });
+    let text = |t: &str| Inline::Text(t.into(), Fmt::default());
+    let cell = Cell { blocks: vec![para(vec![eq("|x|", true)])], ..Default::default() };
+    let flow = model::Flow {
+        blocks: vec![
+            para(vec![text("Energy "), eq("E = mc^2", false), text(".")]),
+            para(vec![eq("α → β", true)]),
+            para(vec![text("so "), eq("x", true)]),
+            FBlock::Para(Para { kind: Kind::Heading(2), inlines: vec![eq("y", true)], ..Default::default() }),
+            FBlock::Table(FTable { rows: vec![vec![cell], vec![Cell::default()]], ..Default::default() }),
+        ],
+        ..Default::default()
+    };
+    let md = export(&model::to_doc(&flow));
+    let lines: Vec<&str> = md.lines().collect();
+    for line in ["Energy $E = mc^2$.", "$$\\alpha \\to \\beta$$", "so $x$", "## $y$", "| $\\|x\\|$ |"] {
+        assert!(lines.contains(&line), "{line:?} in {md:?}");
+    }
+    let back = model::from_doc(&import(&md));
+    assert!(equations(&back).contains(&("α → β".to_string(), true)), "{md:?}");
+    let Some(FBlock::Table(t)) = back.blocks.iter().find(|b| matches!(b, FBlock::Table(_))) else { panic!("{md:?}") };
+    assert!(t.rows.iter().all(|r| r.len() == 1), "{md:?}");
+    // Nothing to write as LaTeX: the linear text stays.
+    assert_eq!(inlines_md(&[eq(" ", false)]), " ");
+}
+
+/// Text never writes `$$`, which would read back as a display equation: its first `$` is
+/// escaped. A single `$` stays as typed, so inline math a file still holds as text is saved
+/// as it came.
+#[test]
+fn text_dollars_never_read_back_as_display_math() {
+    for (text, written) in [("Pay $19.50 and $21.00", "Pay $19.50 and $21.00"), ("$$x$$", "\\$$x\\$$"), ("$$$ and $", "\\$\\$$ and $")] {
+        let p = Para { inlines: vec![Inline::Text(text.into(), Fmt::default())], ..Default::default() };
+        let md = export(&model::to_doc(&model::Flow { blocks: vec![FBlock::Para(p)], ..Default::default() }));
+        assert_eq!(md.trim_end(), written);
+        let back = model::from_doc(&import(&md));
+        assert!(equations(&back).is_empty(), "{md:?}");
+        assert_eq!(para_texts(&back), [text], "{md:?}");
+    }
+    // Nor does a text `$` next to an equation's delimiter or another span's `$`.
+    let text = |t: &str| Inline::Text(t.into(), Fmt::default());
+    let eq = |display: bool| Inline::Equation { linear: "x".into(), display };
+    for (inlines, written) in [
+        (vec![text("$"), eq(false), text("$")], "\\$$x$\\$"),
+        (vec![text("a $"), eq(true)], "a \\$$x$"),
+        (vec![text("$"), text("$x$"), text("$")], "$\\$x$\\$"),
+    ] {
+        let md = inlines_md(&inlines);
+        assert_eq!(md, written);
+        assert!(equations(&model::from_doc(&import(&md))).is_empty(), "{md:?}");
+    }
+    let src = "The relation $E = mc^2$ holds, at $5 a go.";
+    assert_eq!(export(&import(src)), format!("{src}\n"));
+}
+
+/// A display equation on a line of its own in a list item is a `$$` line too. The reader joins
+/// an item's later paragraphs onto its first with a break, and such an equation wrote `$…$`,
+/// which reopened as text.
+#[test]
+fn list_item_display_equations_keep_their_own_line() {
+    for src in ["- intro\n  $$x^2$$", "- intro\n  $$x^2$$\n  more", "1. $$x^2$$\n   more\n   $$y$$", "- a\n    - b\n      $$x^2$$"] {
+        let eqs = equations(&parse(src));
+        assert!(!eqs.is_empty() && eqs.iter().all(|e| e.1), "{src:?}");
+        assert_eq!(export(&import(src)), format!("{src}\n"));
+    }
+    // After an empty line it stays `$…$`: a `\` break before a `$$` line reads back as a backslash.
+    let inlines = vec![Inline::Text("a\n\n".into(), Fmt::default()), Inline::Equation { linear: "x".into(), display: true }];
+    let p = Para { list: Some(ListInfo { ordered: false, level: 0, start: 1 }), inlines, ..Default::default() };
+    let md = export(&model::to_doc(&model::Flow { blocks: vec![FBlock::Para(p)], ..Default::default() }));
+    assert!(para_texts(&model::from_doc(&import(&md))).iter().all(|t| !t.contains('\\')), "{md:?}");
+    // A break next to an item's only equation still gives a `$$` line.
+    let eq = Inline::Equation { linear: "x".into(), display: true };
+    let br = Inline::Text("\n".into(), Fmt::default());
+    for inlines in [vec![eq.clone(), br.clone()], vec![br, eq]] {
+        let p = Para { list: Some(ListInfo { ordered: false, level: 0, start: 1 }), inlines, ..Default::default() };
+        let md = export(&model::to_doc(&model::Flow { blocks: vec![FBlock::Para(p)], ..Default::default() }));
+        assert_eq!(md, "- $$x$$\n");
+    }
+}

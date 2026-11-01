@@ -299,9 +299,9 @@ fn equations_survive_a_round_trip() {
         "{:?}",
         bp.objects
     );
-    // Formats without equations keep the text.
+    // Markdown writes the same LaTeX between dollars.
     let md = crate::markdown::export(&d);
-    assert!(md.contains("π r^2"), "{md}");
+    assert!(md.contains("Area $\\pi r^2$"), "{md}");
 }
 
 #[test]
