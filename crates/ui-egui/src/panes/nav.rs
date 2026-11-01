@@ -221,16 +221,19 @@ mod cache_tests {
     use wordcraft_doc::{CharProps, Paragraph, para_block};
     use wordcraft_engine::Session;
 
+    /// Build an original one-heading document with independent per-window state.
     fn app() -> WordApp {
         let mut doc = Document::new();
         doc.body = vec![para_block(Paragraph::with_text("First heading", CharProps::default()).styled("Heading1"))];
         WordApp::new(Session::new(doc), crate::Services::default())
     }
 
+    /// Draw the Navigation pane in the root viewport and return its visible text.
     fn paint(ctx: &egui::Context, app: &mut WordApp) -> Vec<String> {
         paint_viewport(ctx, app, egui::ViewportId::ROOT)
     }
 
+    /// Draw one viewport without applying texture changes, retaining the app state across passes.
     fn paint_viewport(ctx: &egui::Context, app: &mut WordApp, viewport_id: egui::ViewportId) -> Vec<String> {
         let mut input =
             egui::RawInput { viewport_id, screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(400.0, 600.0))), ..Default::default() };
@@ -248,6 +251,7 @@ mod cache_tests {
         text
     }
 
+    /// Unchanged repaints and caret movement reuse the list while showing the heading.
     #[test]
     fn navigation_repaints_do_not_rebuild_headings() {
         let ctx = egui::Context::default();
@@ -263,6 +267,7 @@ mod cache_tests {
         assert_eq!(HEADING_BUILDS.with(|n| n.get()), 1, "moving the caret does not rebuild document headings");
     }
 
+    /// Alternating real window states build one list per window rather than evicting each other.
     #[test]
     #[cfg(not(target_arch = "wasm32"))]
     fn navigation_alternating_windows_reuse_their_own_heading_lists() {
@@ -283,6 +288,7 @@ mod cache_tests {
         assert_eq!(HEADING_BUILDS.with(|n| n.get()), 2, "each window builds once across alternating viewport passes");
     }
 
+    /// Closing a parked window releases its list while the other window and egui remain alive.
     #[test]
     #[cfg(not(target_arch = "wasm32"))]
     fn navigation_heading_cache_is_dropped_with_its_window() {
@@ -301,6 +307,7 @@ mod cache_tests {
         assert!(paint(&ctx, &mut app).iter().any(|t| t == "First heading"));
     }
 
+    /// Text, numbering, style and Undo/Redo changes refresh the visible heading labels.
     #[test]
     fn navigation_headings_refresh_after_edits_styles_numbering_and_history() {
         let ctx = egui::Context::default();
@@ -324,6 +331,7 @@ mod cache_tests {
         assert!(paint(&ctx, &mut app).iter().any(|t| t == "First heading edited"));
     }
 
+    /// Document identity and replacement invalidate headings even when revisions coincide.
     #[test]
     fn navigation_headings_follow_document_replacement_and_switches() {
         let ctx = egui::Context::default();
@@ -345,6 +353,7 @@ mod cache_tests {
         assert!(paint(&ctx, &mut app).iter().any(|t| t == "Other heading"));
     }
 
+    /// Cached rows retain live child visibility and click-to-caret targets after collapse changes.
     #[test]
     #[cfg(not(target_arch = "wasm32"))]
     fn navigation_cached_headings_keep_collapse_and_click_targets_live() {
