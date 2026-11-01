@@ -215,6 +215,106 @@ pub fn requested_size(size: egui::Vec2, max_side: f32) -> Option<egui::Vec2> {
     Some(size.max(MIN_SIZE).min(max))
 }
 
+/// The monitors the host reported last, in physical pixels of the desktop's coordinate space
+/// (the one winit places windows in). Kept in the context, so a dialog drawn in any window finds them.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Monitors(Vec<egui::Rect>);
+
+fn monitors_key() -> egui::Id {
+    egui::Id::unique("window_geometry::monitors")
+}
+
+/// The host's monitors, in physical pixels, each frame: the desktop app reads them from winit. A
+/// host that doesn't know them (the web app, tests) leaves them unset, and dialogs are centred on
+/// the window as before.
+pub fn set_monitors(ctx: &egui::Context, monitors: Vec<egui::Rect>) {
+    let monitors = Monitors(monitors);
+    if ctx.data(|d| d.get_temp::<Monitors>(monitors_key()).as_ref() != Some(&monitors)) {
+        ctx.data_mut(|d| d.insert_temp(monitors_key(), monitors));
+    }
+}
+
+/// The host's monitors in this viewport's points, in the coordinates of
+/// [`egui::ViewportInfo::inner_rect`] (which egui-winit divides by the same pixels per point).
+pub fn monitors_in_points(ctx: &egui::Context) -> Vec<egui::Rect> {
+    let ppp = ctx.pixels_per_point();
+    if !(ppp.is_finite() && ppp > 0.0) {
+        return Vec::new();
+    }
+    ctx.data(|d| d.get_temp::<Monitors>(monitors_key())).map(|m| m.0.into_iter().map(|r| r / ppp).collect()).unwrap_or_default()
+}
+
+/// Where a dialog goes instead of its usual place, when that place is off screen (#4842).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DialogPlacement {
+    /// How far to move the dialog from its usual place, in points.
+    pub dialog_shift: egui::Vec2,
+    /// How far to move the window so the dialog is on screen, in points: zero unless too little
+    /// of the window is on its monitor to hold the dialog. A dialog is drawn inside its window, so
+    /// a window almost or entirely off screen can only show it by coming back on screen.
+    pub window_shift: egui::Vec2,
+}
+
+/// Placing a dialog that would be at `dialog` (in desktop points) in a window whose content is
+/// at `content`, on `monitors` (the same coordinates; negative for monitors left of or above the
+/// primary one). `None` (no change) when the dialog is all on one monitor already, as for every
+/// window that is on screen, and when the geometry is unknown or not sane.
+///
+/// Otherwise, on the monitor that shows most of the window (the nearest when none does), the
+/// dialog is centred on the part of the window that the monitor shows. Along an axis where that
+/// part is too small for it, the dialog goes to the window's edge nearest the monitor and the
+/// window moves just far enough to bring it on screen.
+pub fn place_dialog_on_screen(content: egui::Rect, monitors: &[egui::Rect], dialog: egui::Rect) -> Option<DialogPlacement> {
+    let sane =
+        |r: &egui::Rect| r.is_finite() && r.min.x.abs() <= MAX_COORD * 8.0 && r.min.y.abs() <= MAX_COORD * 8.0 && r.width() > 0.0 && r.height() > 0.0;
+    if !sane(&content) || !sane(&dialog) {
+        return None;
+    }
+    let monitors: Vec<egui::Rect> = monitors.iter().copied().filter(sane).collect();
+    // On screen: each corner on a monitor (a window across two side-by-side monitors included).
+    let on_screen = |p: egui::Pos2| monitors.iter().any(|m| m.contains(p));
+    if [dialog.left_top(), dialog.right_top(), dialog.left_bottom(), dialog.right_bottom()].into_iter().all(on_screen) {
+        return None;
+    }
+    let overlap = |m: &egui::Rect| {
+        let i = m.intersect(content);
+        if i.is_positive() { i.area() } else { 0.0 }
+    };
+    let distance = |m: &egui::Rect| m.distance_sq_to_pos(content.center());
+    let shown = monitors.iter().copied().filter(|m| overlap(m) > 0.0).max_by(|a, b| overlap(a).total_cmp(&overlap(b)));
+    let monitor = shown.or_else(|| monitors.iter().copied().min_by(|a, b| distance(a).total_cmp(&distance(b))))?;
+    let (x, wx) = place_span(content.x_range(), monitor.x_range(), dialog.x_range());
+    let (y, wy) = place_span(content.y_range(), monitor.y_range(), dialog.y_range());
+    let placement = DialogPlacement { dialog_shift: egui::vec2(x - dialog.min.x, y - dialog.min.y), window_shift: egui::vec2(wx, wy) };
+    (placement.dialog_shift != egui::Vec2::ZERO || placement.window_shift != egui::Vec2::ZERO).then_some(placement)
+}
+
+/// One axis of [`place_dialog_on_screen`]: the dialog's new start, and how far the window moves.
+fn place_span(content: egui::Rangef, monitor: egui::Rangef, dialog: egui::Rangef) -> (f32, f32) {
+    let size = dialog.span();
+    let (lo, hi) = (content.min.max(monitor.min), content.max.min(monitor.max));
+    if dialog.min >= lo && dialog.max <= hi {
+        return (dialog.min, 0.0);
+    }
+    if hi - lo >= size {
+        return (lo + (hi - lo - size) / 2.0, 0.0);
+    }
+    // Too little of the window is on the monitor: the dialog takes the window's edge nearest the
+    // monitor, and the window brings that much of itself on screen. A dialog larger than the
+    // window or the monitor shows its start (the title bar, the left edge).
+    let room = size.min(content.span()).min(monitor.span());
+    let start = if content.max - room < monitor.min { content.max - room } else { content.min };
+    let start = start.max(content.min);
+    let shift = if start < monitor.min {
+        monitor.min - start
+    } else if start + room > monitor.max {
+        monitor.max - (start + room)
+    } else {
+        0.0
+    };
+    (start, shift)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -505,5 +605,103 @@ mod tests {
         assert_eq!(system.fit_on_monitor(&i), None);
         // Wayland reports no rects.
         assert_eq!(system.fit_on_monitor(&RawWindowState { monitor_size: Some(laptop), ..Default::default() }), None);
+    }
+
+    fn r(x: f32, y: f32, w: f32, h: f32) -> egui::Rect {
+        egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h))
+    }
+
+    /// The 400 × 200 dialog window `content` centres.
+    fn centred(content: egui::Rect) -> egui::Rect {
+        egui::Rect::from_center_size(content.center(), egui::vec2(400.0, 200.0))
+    }
+
+    /// #4842: a dialog on screen stays put; one off screen is centred on the part of the window
+    /// on screen, or brings a window too far off screen back just far enough to show it.
+    #[test]
+    fn a_dialog_off_screen_comes_onto_the_visible_part_of_its_window() {
+        let primary = r(0.0, 0.0, 1920.0, 1080.0);
+        let left = r(-1920.0, 0.0, 1920.0, 1080.0);
+        let above = r(0.0, -1440.0, 2560.0, 1440.0);
+        let place = |content: egui::Rect, monitors: &[egui::Rect]| place_dialog_on_screen(content, monitors, centred(content));
+        // On screen: nothing changes, also on a monitor left of or above the primary one, and
+        // for a window across two side-by-side monitors.
+        assert_eq!(place(r(100.0, 100.0, 1440.0, 900.0), &[primary]), None);
+        assert_eq!(place(r(-1800.0, 100.0, 1440.0, 900.0), &[left, primary]), None);
+        assert_eq!(place(r(100.0, -1300.0, 1440.0, 900.0), &[primary, above]), None);
+        assert_eq!(place(r(-700.0, 100.0, 1440.0, 900.0), &[left, primary]), None);
+        // Off the left edge with 740 showing: centred on those, across only.
+        let p = place(r(-700.0, 100.0, 1440.0, 900.0), &[primary]);
+        assert_eq!(p, Some(DialogPlacement { dialog_shift: egui::vec2(350.0, 0.0), window_shift: egui::Vec2::ZERO }));
+        // Off the bottom-right corner: centred on the corner that shows.
+        let content = r(1200.0, 700.0, 1440.0, 900.0);
+        let Some(p) = place(content, &[primary]) else { panic!("moved") };
+        let at = centred(content).translate(p.dialog_shift);
+        assert_eq!(at, egui::Rect::from_center_size(egui::pos2(1560.0, 890.0), egui::vec2(400.0, 200.0)));
+        assert_eq!(p.window_shift, egui::Vec2::ZERO);
+        // 40 points showing: the dialog takes the window's right edge, and the window moves
+        // 360 points right to show it.
+        let content = r(-1400.0, 100.0, 1440.0, 900.0);
+        let Some(p) = place(content, &[primary]) else { panic!("moved") };
+        let at = centred(content).translate(p.dialog_shift);
+        assert_eq!((at.left(), at.right()), (-360.0, 40.0));
+        assert_eq!(p.window_shift, egui::vec2(360.0, 0.0));
+        assert!(primary.contains_rect(at.translate(p.window_shift)));
+        // Entirely off screen, right of the right-most monitor: onto the nearest one.
+        let content = r(5000.0, 100.0, 1440.0, 900.0);
+        let Some(p) = place(content, &[left, primary]) else { panic!("moved") };
+        let at = centred(content).translate(p.dialog_shift + p.window_shift);
+        assert_eq!((at.left(), at.right()), (1520.0, 1920.0));
+        // Above every monitor: down onto the nearest one.
+        let content = r(100.0, -3000.0, 1440.0, 900.0);
+        let Some(p) = place(content, &[primary]) else { panic!("moved") };
+        let at = centred(content).translate(p.dialog_shift + p.window_shift);
+        assert!(primary.contains_rect(at), "{at:?}");
+        // A dialog wider than its window shows its start.
+        let small = r(-100.0, 0.0, 300.0, 300.0);
+        let Some(p) = place(small, &[primary]) else { panic!("moved") };
+        assert_eq!(centred(small).translate(p.dialog_shift + p.window_shift).left(), 0.0);
+    }
+
+    /// Unknown or insane geometry changes nothing and never panics.
+    #[test]
+    fn hostile_geometry_leaves_dialogs_alone() {
+        let primary = r(0.0, 0.0, 1920.0, 1080.0);
+        let off = r(-1400.0, 100.0, 1440.0, 900.0);
+        let bad = [
+            r(f32::NAN, 0.0, 100.0, 100.0),
+            r(0.0, 0.0, f32::INFINITY, 100.0),
+            r(f32::NEG_INFINITY, 0.0, 100.0, 100.0),
+            r(0.0, 0.0, 0.0, 100.0),
+            r(0.0, 0.0, 100.0, -5.0),
+            r(1e30, 1e30, 100.0, 100.0),
+            egui::Rect::NOTHING,
+            egui::Rect::EVERYTHING,
+        ];
+        for b in bad {
+            assert_eq!(place_dialog_on_screen(b, &[primary], centred(off)), None, "content {b:?}");
+            assert_eq!(place_dialog_on_screen(off, &[primary], b), None, "dialog {b:?}");
+            // An insane monitor is ignored: with none left, nothing moves.
+            assert_eq!(place_dialog_on_screen(off, &[b], centred(off)), None, "monitor {b:?}");
+            assert!(place_dialog_on_screen(off, &[b, primary], centred(off)).is_some(), "the sane monitor counts: {b:?}");
+        }
+        assert_eq!(place_dialog_on_screen(off, &[], centred(off)), None, "no monitors");
+        // Tiny but valid rects give finite answers.
+        let p = place_dialog_on_screen(r(-0.25, 0.0, 0.5, 0.5), &[r(0.0, 0.0, 0.1, 0.1)], r(-1.0, -1.0, 2.0, 2.0));
+        assert!(p.is_none_or(|p| p.dialog_shift.is_finite() && p.window_shift.is_finite()), "{p:?}");
+    }
+
+    /// The host's monitors are kept in pixels and read in the viewport's points; none set, none known.
+    #[test]
+    fn monitors_are_kept_in_pixels_and_read_in_points() {
+        let ctx = egui::Context::default();
+        assert!(monitors_in_points(&ctx).is_empty());
+        set_monitors(&ctx, vec![r(-3840.0, 0.0, 3840.0, 2160.0)]);
+        let mut raw = egui::RawInput::default();
+        raw.viewports.entry(egui::ViewportId::ROOT).or_default().native_pixels_per_point = Some(2.0);
+        ctx.begin_pass(raw);
+        let monitors = monitors_in_points(&ctx);
+        ctx.end_pass().drop_without_applying_deltas();
+        assert_eq!(monitors, vec![r(-1920.0, 0.0, 1920.0, 1080.0)]);
     }
 }
