@@ -70,8 +70,9 @@ fn supplementary_and_ivs_codepoints_survive_layout() {
     assert!(slices.contains(&"\u{20000}"), "{slices:?}");
 }
 
-/// Lay out `text` in a narrow column and return the first character of each line after the first.
-fn line_heads(text: &str, kinsoku: bool) -> Vec<char> {
+/// Lay out `text` in a narrow column; return the first character of each line after the first and
+/// the text the layout's clusters reproduce.
+fn wrap(text: &str, kinsoku: bool) -> (Vec<char>, String) {
     let mut d = Document::from_text(text);
     d.last_section.page_w = 72.0;
     d.last_section.margin_left = 18.0;
@@ -80,7 +81,12 @@ fn line_heads(text: &str, kinsoku: bool) -> Vec<char> {
         p.props.kinsoku = Some(kinsoku);
     }
     let pl = first_para(&lay(&d));
-    pl.lines.iter().skip(1).filter_map(|l| text.get(l.start..).and_then(|s| s.chars().next())).collect()
+    let heads = pl.lines.iter().skip(1).filter_map(|l| text.get(l.start..).and_then(|s| s.chars().next())).collect();
+    (heads, cluster_slices(text, &pl).concat())
+}
+
+fn line_heads(text: &str, kinsoku: bool) -> Vec<char> {
+    wrap(text, kinsoku).0
 }
 
 /// How many ideographs fit on the first line of the narrow column.
@@ -104,7 +110,8 @@ fn wrapped_japanese_line_does_not_start_with_full_stop() {
     assert!(n >= 2, "fixture needs a measure of at least two characters, got {n}");
     let text = format!("{}。続き", "春".repeat(n));
     assert!(line_heads(&text, false).contains(&'。'), "precondition: with kinsoku off the line starts with 。");
-    let heads = line_heads(&text, true);
+    let (heads, laid_out) = wrap(&text, true);
+    assert_eq!(laid_out, text, "wrapping must not drop or reorder text");
     assert!(!heads.contains(&'。'), "kinsoku on: no line starts with 。: {heads:?}");
     assert_eq!(heads.first(), Some(&'春'), "the preceding character travels with it: {heads:?}");
 }
@@ -120,7 +127,9 @@ fn wrapped_japanese_line_does_not_end_with_opening_bracket() {
         Some(&'続'),
         "precondition: with kinsoku off 「 is the last character on the first line, so 続 starts the next"
     );
-    assert_eq!(line_heads(&text, true).first(), Some(&'「'), "kinsoku on: 「 starts the next line");
+    let (heads, laid_out) = wrap(&text, true);
+    assert_eq!(laid_out, text, "wrapping must not drop or reorder text");
+    assert_eq!(heads.first(), Some(&'「'), "kinsoku on: 「 starts the next line");
 }
 
 /// `w:eastAsianLayout` (warichū / tate-chū-yoko) is stored but not applied in layout yet.
