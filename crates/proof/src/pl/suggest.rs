@@ -440,6 +440,23 @@ mod tests {
     }
 
     #[test]
+    fn a_huge_rep_table_stays_fast() {
+        // #4999: 20,000 `REP a a{i}` lines took over a second for one suggestion of a long word;
+        // the table is capped when the dictionary is read, which bounds the REP round.
+        let mut aff = String::from("SET UTF-8\nTRY aeiou\nREP 20000\n");
+        for i in 0..20_000 {
+            aff.push_str(&format!("REP a a{i}\n"));
+        }
+        let d = AffixDict::from_hunspell(&aff, "1\nkot\n", &[]).unwrap();
+        let word = "a".repeat(40);
+        let t = std::time::Instant::now();
+        let _ = suggest_in(&d, &word, 6);
+        let ms = t.elapsed().as_secs_f64() * 1000.0;
+        eprintln!("one suggestion call with a capped REP table: {ms:.0} ms");
+        assert!(ms < 5_000.0, "{ms} ms");
+    }
+
+    #[test]
     fn suggestions_are_fast_enough() {
         crate::pl::test_dict::install();
         // Warm the dictionary, then time a worst case (a long word nothing near): the scan round.
