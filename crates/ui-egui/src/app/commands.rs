@@ -572,6 +572,14 @@ impl WordApp {
                 self.ui.ribbon_collapsed = !self.ui.ribbon_collapsed;
                 json!({"collapsed": self.ui.ribbon_collapsed})
             }
+            "ui.singleLineRibbon" => {
+                self.ui.single_line_ribbon = match p.get("value") {
+                    None => !self.ui.single_line_ribbon,
+                    Some(Value::Bool(value)) => *value,
+                    Some(_) => return Some(Err("`value` must be true or false".into())),
+                };
+                json!({"singleLineRibbon": self.ui.single_line_ribbon})
+            }
             "ui.focusRibbon" => {
                 // Focus's "⋯" (#1678): `value` true drops the ribbon down over the page, false
                 // puts it away; no value toggles it. Outside Focus there is no ribbon to drop:
@@ -1025,6 +1033,7 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.dialog"
             | "ui.closeDialog"
             | "ui.collapseRibbon"
+            | "ui.singleLineRibbon"
             | "ui.quickAccessToolbar"
             | "ui.keytips"
             | "ui.dark"

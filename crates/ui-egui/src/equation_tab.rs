@@ -124,7 +124,7 @@ fn math_menu_button(ui: &mut Ui, app: &mut WordApp, picture: &str, label: &str, 
         y += LABEL_PITCH;
     }
     let resp = resp.on_hover_text(label.replace('\n', " "));
-    egui::Popup::menu(&resp).show(|ui| {
+    crate::widgets::ribbon_popup(ui, &resp, |ui| {
         ui.set_min_width(260.0);
         menu(ui, app);
     });
@@ -239,7 +239,7 @@ pub fn insert_button(ui: &mut Ui, app: &mut WordApp) {
         let _ = app.run("insert.equation", json!({}));
         app.canvas.want_focus = true;
     }
-    egui::Popup::menu(&rb).show(|ui| builtin_menu(ui, app));
+    crate::widgets::ribbon_popup(ui, &rb, |ui| builtin_menu(ui, app));
 }
 
 /// The Symbols group: a strip of the current set's symbols, and a menu with every set.
@@ -282,7 +282,7 @@ fn symbols(ui: &mut Ui, app: &mut WordApp) {
             ui.data_mut(|d| d.insert_temp(start_id, start + per_row));
         }
         let resp = ui.add(egui::Button::new("…").min_size(vec2(16.0, 22.0))).on_hover_text(tl!("All symbol sets"));
-        egui::Popup::menu(&resp).show(|ui| {
+        crate::widgets::ribbon_popup(ui, &resp, |ui| {
             ui.set_width(420.0);
             ui.horizontal_wrapped(|ui| {
                 for (i, (name, _)) in SYMBOL_SETS.iter().enumerate() {

@@ -148,6 +148,8 @@ pub struct UiState {
     #[serde(skip)]
     pub print: print_page::PrintSettings,
     pub ribbon_collapsed: bool,
+    /// Show ribbon commands in one row; independent of the collapsed state.
+    pub single_line_ribbon: bool,
     /// The Quick Access Toolbar shows in the title bar (#1945). Its menu's Hide Quick Access
     /// Toolbar takes it away; Show Quick Access Toolbar (the ribbon's right-click menu, Customize
     /// Ribbon › Quick Access Toolbar) brings it back. Kept between runs.
@@ -306,6 +308,7 @@ impl Default for UiState {
             backstage_page: "home".into(),
             print: print_page::PrintSettings::default(),
             ribbon_collapsed: false,
+            single_line_ribbon: false,
             quick_access_toolbar: true,
             recent: Vec::new(),
             recent_symbols: Vec::new(),

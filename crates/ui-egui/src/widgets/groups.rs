@@ -11,6 +11,51 @@ pub fn group(ui: &mut Ui, title: &str, launcher: Option<&str>, app: &mut WordApp
 
 /// A ribbon group whose title is shown as is (a custom group's name, Customize Ribbon).
 pub fn group_titled(ui: &mut Ui, id_title: &str, title: &str, launcher: Option<&str>, app: &mut WordApp, add: impl FnOnce(&mut Ui, &mut WordApp)) {
+    if crate::widgets::single_line(ui) {
+        let controls = |ui: &mut Ui, app: &mut WordApp| {
+            add(ui, app);
+            if let Some(id) = launcher {
+                let tip = crate::i18n::fmt(tl!("{group} settings"), &[("group", title)]);
+                super::buttons::small(ui, app, "launcher", None, &tip, super::buttons::ButtonAction::new(id, serde_json::json!({}), false));
+            }
+        };
+        if app.ui.tab == "Equation"
+            || matches!(
+                id_title,
+                "Styles" | "Document Formatting" | "Layouts" | "Table Styles" | "Table Style Options" | "Alignment" | "Drawing Tools" | "Symbols"
+            )
+            || (app.ui.tab == "Layout" && id_title == "Paragraph")
+            || (app.ui.tab == "Table Layout" && matches!(id_title, "Cell Size" | "Data"))
+        {
+            super::buttons::menu_button_with_behavior(
+                ui,
+                app,
+                super::buttons::MenuButtonOptions::new(group_icon(id_title), None, title, false, ""),
+                egui::PopupCloseBehavior::CloseOnClickOutside,
+                |ui, app| {
+                    ui.scope_builder(egui::UiBuilder::new().ui_stack_info(egui::UiStackInfo::default().with_tag("ribbon_group_popup")), |ui| {
+                        if id_title == "Drawing Tools" {
+                            egui::ScrollArea::horizontal().max_width(ui.available_width()).show(ui, |ui| {
+                                ui.horizontal_top(|ui| controls(ui, app));
+                            });
+                        } else {
+                            ui.horizontal_top(|ui| controls(ui, app));
+                        }
+                    });
+                },
+            );
+        } else {
+            let row = ui.horizontal_centered(|ui| controls(ui, app));
+            #[cfg(test)]
+            if row.response.rect.height() > 22.5 {
+                TALL_GROUPS.with(|g| g.borrow_mut().push(format!("{id_title}: {:.1}", row.response.rect.height())));
+            }
+            #[cfg(not(test))]
+            let _ = row;
+        }
+        ui.separator();
+        return;
+    }
     let t = Tokens::get(ui.ctx());
     let start = ui.cursor().min;
     // #662: the window may be too narrow for the tab; the plan says how this group fits.
@@ -214,6 +259,10 @@ pub fn command_menu(resp: &Response, app: &mut WordApp, id: &str) {
 /// "Customize the Ribbon…" and "Customize Quick Access Toolbar…" (context menus), and "Show
 /// Quick Access Toolbar" while the toolbar is hidden (#1945).
 pub fn customize_menu_items(ui: &mut Ui, app: &mut WordApp) {
+    if ui.selectable_label(app.ui.single_line_ribbon, tl!("Single-line ribbon")).clicked() {
+        let _ = app.run("ui.singleLineRibbon", serde_json::json!({}));
+        ui.close();
+    }
     if !app.ui.quick_access_toolbar && ui.button(tl!("Show Quick Access Toolbar")).clicked() {
         let _ = app.run("ui.quickAccessToolbar", serde_json::json!({"value": true}));
         ui.close();

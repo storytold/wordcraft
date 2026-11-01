@@ -16,7 +16,7 @@ pub use buttons::{
     BIG_ICON_Y, BIG_LABEL_Y, ButtonAction, CONTENT_H, DROPDOWN, LABEL_H, LABEL_LINE_H, LABEL_PITCH, MenuButtonOptions, big, big_toggle, enabled,
     label_line, menu_button, menu_enabled, small, split,
 };
-pub(crate) use buttons::{bg, run_from_ribbon};
+pub(crate) use buttons::{bg, in_group_popup, run_from_ribbon};
 pub(crate) use combo::swatch;
 pub use combo::{
     ADD_FONT, COMBO_PREVIEW_ROW_H, DrawnState, FontComboOptions, LOAD_SYSTEM_FONTS, color_grid, combo, combo_hint, combo_list, drawn_state,
@@ -33,6 +33,20 @@ use tooltip::show_hint;
 #[cfg(test)]
 pub(crate) use tooltip::tooltip_lines;
 pub use tooltip::{key_text, shortcut_text};
+
+/// Whether a control belongs to the compact, single-row ribbon.
+pub(crate) fn single_line(ui: &Ui) -> bool {
+    ui.stack().iter().find_map(|s| s.tags().get_downcast::<bool>("single_line_ribbon").copied()).unwrap_or(false)
+}
+
+/// Show a nested menu without closing its containing group popup.
+pub(crate) fn ribbon_popup(ui: &mut Ui, response: &Response, content: impl FnOnce(&mut Ui)) {
+    if in_group_popup(ui) {
+        egui::containers::menu::SubMenu::new().config(egui::containers::menu::MenuConfig::new()).show(ui, response, content);
+    } else {
+        egui::Popup::menu(response).show(content);
+    }
+}
 // #653: a two-line label ends inside the content, above the group title row.
 const _: () = assert!(BIG_LABEL_Y + LABEL_PITCH + LABEL_LINE_H <= CONTENT_H);
 const _: () = assert!(BIG_ICON_Y + 16.0 <= BIG_LABEL_Y);

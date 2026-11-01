@@ -312,11 +312,15 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         return;
     }
     egui::Panel::top("ribbon")
-        .exact_size(CONTENT_H + LABEL_H + 10.0)
+        .exact_size(if app.ui.single_line_ribbon { 32.0 } else { CONTENT_H + LABEL_H + 10.0 })
         .frame(
             egui::Frame::NONE.fill(t.ribbon).inner_margin(egui::Margin { left: 8, right: 8, top: 4, bottom: 4 }).stroke(Stroke::new(1.0, t.border)),
         )
         .show(ui, |ui| {
+            let mut content = ui.new_child(
+                egui::UiBuilder::new().ui_stack_info(egui::UiStackInfo::default().with_tag_value("single_line_ribbon", app.ui.single_line_ribbon)),
+            );
+            let ui = &mut content;
             // Right-click on the ribbon (outside a button): Customize Ribbon. Registered first, so
             // the buttons drawn over it keep their own clicks.
             // No document open (#1129): every command is greyed out but Help's.
@@ -326,7 +330,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             let bg = ui.interact(ui.max_rect(), ui.scope_id().with("ribbon_background"), Sense::click());
             bg.context_menu(|ui| crate::widgets::customize_menu_items(ui, app));
             let entry = user_tabs.iter().find(|e| e.name == app.ui.tab);
-            crate::ribbon_fit::begin(ui.ctx(), &app.ui.tab, ui.available_width() - 4.0);
+            if !app.ui.single_line_ribbon {
+                crate::ribbon_fit::begin(ui.ctx(), &app.ui.tab, ui.available_width() - 4.0);
+            }
             // 0.37 keeps the scroll offset private: an edge-chevron click leaves a one-frame
             // request here and the next scroll area is built at that offset.
             let pending_id = ui.scope_id().with("ribbon_scroll_pending");
@@ -372,10 +378,12 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     }
                 });
             });
+            if !app.ui.single_line_ribbon {
+                crate::ribbon_fit::end(ui.ctx());
+            }
             if pending.is_some() {
                 let _ = ui.data_mut(|d| d.remove_temp::<f32>(pending_id));
             }
-            crate::ribbon_fit::end(ui.ctx());
             // The bar is hidden, so a row wider than the window would be clipped with no sign. Edge chevrons show
             // where more is and scroll it on click. Every command also stays reachable through Search Commands.
             let r = scroll.inner_rect;
@@ -401,6 +409,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             }
         });
 }
+
+/// Custom groups (Customize Ribbon, #379): up to three commands as large buttons, more as small
+/// labelled buttons in columns of three. Each shows the command's own icon and label.
 
 #[cfg(test)]
 mod tests;

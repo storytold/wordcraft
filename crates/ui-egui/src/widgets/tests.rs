@@ -530,3 +530,131 @@ fn a_long_combo_list_builds_only_the_rows_in_view() {
     })
     .drop_without_applying_deltas();
 }
+
+/// Ribbon context actions toggle layout without editing the document and restore a hidden QAT.
+#[test]
+fn ribbon_menu_toggles_layout_and_restores_quick_access_toolbar() {
+    use egui_kittest::kittest::Queryable;
+    let a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    // The ribbon's Bold is the topmost one (the mini toolbar's, when up, sits lower).
+    let ribbon_bold = |h: &egui_kittest::Harness<'static, WordApp>| {
+        h.get_all_by_label("Bold").map(|n| n.rect().center()).min_by(|a, b| a.y.total_cmp(&b.y)).expect("the ribbon has Bold")
+    };
+    let right_click = |h: &mut egui_kittest::Harness<'static, WordApp>, at: egui::Pos2| {
+        h.event(egui::Event::PointerMoved(at));
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() });
+        }
+        h.run_steps(2);
+    };
+    let at = ribbon_bold(&h);
+    right_click(&mut h, at);
+    assert!(h.query_by_label("Add to Quick Access Toolbar").is_some(), "the button's menu opened");
+    assert!(h.query_by_label("Show Quick Access Toolbar").is_none(), "nothing extra while the toolbar shows");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    h.state_mut().run("ui.quickAccessToolbar", serde_json::json!({"value": false})).unwrap();
+    h.run_steps(2);
+    let at = ribbon_bold(&h);
+    right_click(&mut h, at);
+    h.get_by_label("Show Quick Access Toolbar").click();
+    h.run_steps(2);
+    assert!(h.state().ui.quick_access_toolbar, "Show Quick Access Toolbar brings it back");
+    assert!(h.query_by_label("Show Quick Access Toolbar").is_none(), "and closes the menu");
+    let selection = h.state().session.sel.clone();
+    let revision = h.state().session.rev();
+    for expected in [true, false] {
+        let at = ribbon_bold(&h);
+        right_click(&mut h, at);
+        h.get_by_label("Single-line ribbon").click();
+        h.run_steps(3);
+        assert_eq!(h.state().ui.single_line_ribbon, expected);
+        assert_eq!(h.state().session.sel, selection);
+        assert_eq!(h.state().session.rev(), revision, "changing layout does not edit the document");
+        assert!(!egui::Popup::is_any_open(&h.ctx));
+    }
+}
+
+/// Editable group fields survive their first click and apply text input to the document.
+#[test]
+fn single_line_group_popups_keep_fields_open_until_a_command_completes() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    for (tab, group, table) in [("Layout", "Paragraph", false), ("Table Layout", "Cell Size", true)] {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+        if table {
+            app.run("insert.table", serde_json::json!({"rows": 2, "cols": 2})).unwrap();
+        }
+        app.run("ui.singleLineRibbon", serde_json::json!({"value": true})).unwrap();
+        app.run("ui.tab", serde_json::json!({"tab": tab})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(2560.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                app.logic(ui.ctx());
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(4);
+        h.get_by_label(group).click();
+        h.run_steps(3);
+        h.get_all_by_role(Role::SpinButton).next().unwrap().click();
+        h.run_steps(3);
+        assert!(egui::Popup::is_any_open(&h.ctx), "{group}: clicking a field keeps it open");
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.event(egui::Event::Text("1".into()));
+        h.key_press(egui::Key::Enter);
+        h.run_steps(3);
+        let session = &h.state().session;
+        let actual = if table {
+            let (path, row, _) = session.sel.focus.path.cell().unwrap();
+            session.doc.table(session.sel.focus.story, &path).unwrap().rows.get(row).unwrap().props.height.unwrap()
+        } else {
+            session.doc.para_at(&session.sel.focus).unwrap().props.indent_left.unwrap()
+        };
+        assert!((actual - crate::options::unit().pt_per_unit()).abs() < 0.1, "{group}: {actual}");
+        h.get_by_label(if table { "Distribute Rows" } else { "Paragraph settings" }).click();
+        h.run_steps(3);
+        assert!(!egui::Popup::is_any_open(&h.ctx), "completed commands dismiss their group popup");
+    }
+}
+
+/// Nested Equation commands dismiss both their menu and the enclosing single-line group.
+#[test]
+fn single_line_equation_commands_close_the_group_popup() {
+    use egui_kittest::kittest::Queryable;
+    for (group, menu, action, property) in [
+        ("Tools", "Convert between built-up and linear form", "Current - Linear", "linearForm"),
+        ("Equation Options", "Justification of a display equation", "Left", "display"),
+    ] {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        app.run("insert.equation", serde_json::json!({"linear": "x/2"})).unwrap();
+        app.run("ui.singleLineRibbon", serde_json::json!({"value": true})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(2560.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                app.logic(ui.ctx());
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(4);
+        h.get_by_label(group).click();
+        h.run_steps(3);
+        h.get_by_label(menu).click();
+        h.run_steps(3);
+        let revision = h.state().session.rev();
+        h.get_by_label(action).click();
+        h.run_steps(3);
+        assert!(h.state().session.rev() > revision, "{action} executes");
+        assert_eq!(h.state_mut().session.run("equation.get", &serde_json::json!({})).unwrap()[property], true);
+        assert!(!egui::Popup::is_any_open(&h.ctx), "{action} closes both popups");
+    }
+}
