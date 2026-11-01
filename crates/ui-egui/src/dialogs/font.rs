@@ -6,6 +6,92 @@ pub(super) fn preview_size(size: &str) -> f32 {
     size.trim().parse::<f32>().ok().filter(|pt| pt.is_finite()).unwrap_or(12.0).clamp(6.0, 72.0)
 }
 
+/// The page colour the sample sits on.
+pub(super) fn sample_paper(app: &WordApp) -> wordcraft_doc::Rgb {
+    app.session.doc.settings.page_color.unwrap_or(wordcraft_doc::Rgb(255, 255, 255))
+}
+
+/// The sample's character properties: the dialog's fields as the document reads them.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn font_sample_props(
+    app: &mut WordApp,
+    paper: wordcraft_doc::Rgb,
+    font: &str,
+    size: &str,
+    color: &str,
+    (bold, italic, underline, strike): (bool, bool, bool, bool),
+    (small_caps, caps, hidden): (bool, bool, bool),
+    spacing: f32,
+) -> wordcraft_doc::props::CharProps {
+    use wordcraft_doc::props::{CharProps, TextColor, Underline};
+    // Automatic text is black, or white on a dark page.
+    let dark = u32::from(paper.0) * 299 + u32::from(paper.1) * 587 + u32::from(paper.2) * 114 < 128_000;
+    let auto = if dark { 255 } else { 0 };
+    let ink = wordcraft_doc::Rgb::parse(color).unwrap_or(wordcraft_doc::Rgb(auto, auto, auto));
+    // A hidden run is dotted, as Word draws hidden text when it is shown.
+    let line = if hidden {
+        Underline::Dotted
+    } else if underline {
+        Underline::Single
+    } else {
+        Underline::None
+    };
+    CharProps {
+        font: Some(app.previews.font_stored(font)),
+        size: Some(preview_size(size).min(40.0)),
+        bold: Some(bold),
+        italic: Some(italic),
+        underline: Some(line),
+        strike: Some(strike),
+        color: Some(TextColor::Rgb(ink)),
+        caps: Some(caps),
+        small_caps: Some(small_caps),
+        spacing: Some(spacing),
+        ..Default::default()
+    }
+}
+
+/// Draws the Font dialog's sample. A raised or lowered "2" follows the text
+/// when Superscript or Subscript is on.
+pub(super) fn font_sample_box(
+    app: &mut WordApp,
+    ui: &mut Ui,
+    paper: wordcraft_doc::Rgb,
+    props: &wordcraft_doc::props::CharProps,
+    (sup, sub): (bool, bool),
+    hidden: bool,
+) {
+    use wordcraft_doc::props::VertAlign;
+    let dark = app.session.view.dark_mode;
+    let mut render_options = crate::canvas::screen_render_options();
+    render_options.dark = dark;
+    render_options.dark_paper = wordcraft_render::DARK_PAPER;
+    let display_paper = render_options.paper_of(&app.session.doc);
+    let mark = if sup {
+        Some(VertAlign::Superscript)
+    } else if sub {
+        Some(VertAlign::Subscript)
+    } else {
+        None
+    };
+    let (w, h) = (ui.available_width().clamp(120.0, 400.0), 56.0);
+    let ppp = ui.ctx().pixels_per_point();
+    let text = tl!("AaBbYyZz");
+    let key = format!("fontsample:{text}:{props:?}:{mark:?}:{paper:?}:{display_paper:?}:{dark}:{w}:{ppp}");
+    let tex = app.previews.get_or(ui.ctx(), &key, || crate::previews::font_sample(text, props, mark, w, h, ppp, paper, dark));
+    let (r, _) = ui.allocate_exact_size(vec2(w + 4.0, h + 2.0), egui::Sense::hover());
+    let t = crate::theme::Tokens::get(ui.ctx());
+    let page = crate::theme::c32(display_paper);
+    ui.painter().rect(r, 6.0, page, egui::Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+    if let Some(tex) = tex {
+        let full = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+        ui.painter().image(tex.id(), egui::Rect::from_min_size(r.min, tex.size_vec2() / ppp), full, egui::Color32::WHITE);
+    }
+    if hidden {
+        ui.label(egui::RichText::new(tl!("Hidden text is not shown unless you display it.")).small().weak());
+    }
+}
+
 /// The character properties the Font dialog's fields stand for.
 pub(super) fn font_props(d: &Dialog) -> serde_json::Map<String, Value> {
     let Dialog::Font {
