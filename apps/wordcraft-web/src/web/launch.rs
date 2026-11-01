@@ -7,6 +7,7 @@
 //! access with a launch.
 
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::rc::Rc;
 
 use wasm_bindgen::JsCast as _;
@@ -15,8 +16,20 @@ use wordcraft_ui_egui::i18n;
 
 /// Largest launched file read into memory; wasm32 has 4 GB at most, shared with the app.
 const MAX_LAUNCHED_BYTES: f64 = (256u32 << 20) as f64;
-/// Most files one launch opens; the operating system can pass a whole folder's selection.
-const MAX_LAUNCHED_FILES: u32 = 20;
+/// Most launched files waiting to be read, over every launch; the operating system can pass a
+/// whole folder's selection.
+const MAX_WAITING_FILES: usize = 20;
+/// How often the reader looks whether the app has opened the file it read last.
+const DRAIN_POLL_MS: i32 = 50;
+
+/// Launched files not read yet, whether a reader is going through them, and how many files the
+/// launches since the last report left out.
+#[derive(Default)]
+struct Launches {
+    waiting: VecDeque<web_sys::FileSystemFileHandle>,
+    reading: bool,
+    omitted: usize,
+}
 
 /// Register the consumer once, at startup. Browsers without `launchQueue` (Firefox, Safari, or a
 /// page that isn't installed) skip this silently: there is nothing to receive.
@@ -30,40 +43,93 @@ pub(super) fn listen(inbox: Inbox, ctx: egui::Context, messages: Rc<RefCell<Vec<
         .map_err(|e| format!("{e:?}"))?
         .dyn_into()
         .map_err(|_| "launchQueue.setConsumer is not a function".to_string())?;
+    let launches = Rc::new(RefCell::new(Launches::default()));
     let consumer = wasm_bindgen::closure::Closure::<dyn FnMut(wasm_bindgen::JsValue)>::new(move |params: wasm_bindgen::JsValue| {
         let Ok(files) = js_sys::Reflect::get(&params, &"files".into()) else { return };
         // A launch without files (the app icon, a link) has an empty list.
         let Ok(files) = files.dyn_into::<js_sys::Array>() else { return };
-        if files.length() > MAX_LAUNCHED_FILES {
-            log::warn!("launch: {} files given, opening the first {MAX_LAUNCHED_FILES}", files.length());
-        }
-        let handles: Vec<web_sys::FileSystemFileHandle> =
-            files.iter().take(MAX_LAUNCHED_FILES as usize).filter_map(|f| f.dyn_into::<web_sys::FileSystemFileHandle>().ok()).collect();
-        if handles.is_empty() {
-            return;
-        }
-        let (inbox, ctx, messages) = (inbox.clone(), ctx.clone(), messages.clone());
-        // One after another, in the order given: the documents open in that order, and only one
-        // file's bytes are copied at a time.
-        wasm_bindgen_futures::spawn_local(async move {
+        let handles = files.iter().filter_map(|f| f.dyn_into::<web_sys::FileSystemFileHandle>().ok());
+        let start = {
+            let mut l = launches.borrow_mut();
             for handle in handles {
-                let name = handle.name();
-                match read(&handle).await {
-                    Ok(bytes) => inbox.lock().unwrap_or_else(|e| e.into_inner()).push((name, bytes)),
-                    Err(error) => {
-                        log::warn!("{name}: {error}");
-                        let msg = i18n::fmt(i18n::t("Couldn't open {path}: {error}"), &[("path", &name), ("error", &error)]);
-                        messages.borrow_mut().push(msg);
-                    }
+                if l.waiting.len() < MAX_WAITING_FILES {
+                    l.waiting.push_back(handle);
+                } else {
+                    l.omitted = l.omitted.saturating_add(1);
                 }
-                ctx.request_repaint();
             }
-        });
+            let start = !l.reading && (!l.waiting.is_empty() || l.omitted > 0);
+            l.reading |= start;
+            start
+        };
+        if start {
+            wasm_bindgen_futures::spawn_local(read_all(launches.clone(), inbox.clone(), ctx.clone(), messages.clone()));
+        }
     });
     set_consumer.call1(&queue, consumer.as_ref()).map_err(|e| format!("{e:?}"))?;
     // The browser calls the consumer for every later launch into this window, for the page's life.
     consumer.forget();
     Ok(())
+}
+
+/// Read the waiting files one after another, in the order given, until none is left. A file is
+/// read only once the app has taken everything out of the inbox, so at most one launched file's
+/// bytes wait in memory, however many files and launches arrive. The files left out are reported
+/// once the last one has opened: opening a document clears the status bar.
+async fn read_all(launches: Rc<RefCell<Launches>>, inbox: Inbox, ctx: egui::Context, messages: Rc<RefCell<Vec<String>>>) {
+    loop {
+        let next = launches.borrow_mut().waiting.pop_front();
+        let Some(handle) = next else {
+            while !inbox_empty(&inbox) {
+                sleep(DRAIN_POLL_MS).await;
+            }
+            let omitted = {
+                let mut l = launches.borrow_mut();
+                if !l.waiting.is_empty() {
+                    continue;
+                }
+                l.reading = false;
+                std::mem::take(&mut l.omitted)
+            };
+            if omitted > 0 {
+                let msg = i18n::fmt(
+                    i18n::t("{count} more files weren't opened: WordCraft opens up to {limit} at a time."),
+                    &[("count", &omitted.to_string()), ("limit", &MAX_WAITING_FILES.to_string())],
+                );
+                messages.borrow_mut().push(msg);
+                ctx.request_repaint();
+            }
+            return;
+        };
+        while !inbox_empty(&inbox) {
+            sleep(DRAIN_POLL_MS).await;
+        }
+        let name = handle.name();
+        match read(&handle).await {
+            Ok(bytes) => inbox.lock().unwrap_or_else(|e| e.into_inner()).push((name, bytes)),
+            Err(error) => {
+                log::warn!("{name}: {error}");
+                let msg = i18n::fmt(i18n::t("Couldn't open {path}: {error}"), &[("path", &name), ("error", &error)]);
+                messages.borrow_mut().push(msg);
+            }
+        }
+        ctx.request_repaint();
+    }
+}
+
+fn inbox_empty(inbox: &Inbox) -> bool {
+    inbox.lock().unwrap_or_else(|e| e.into_inner()).is_empty()
+}
+
+/// Wait `ms` milliseconds on the browser's timer; at once without a window.
+async fn sleep(ms: i32) {
+    let promise = js_sys::Promise::new(&mut |resolve: js_sys::Function, _reject: js_sys::Function| {
+        let scheduled = web_sys::window().is_some_and(|w| w.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, ms).is_ok());
+        if !scheduled {
+            let _ = resolve.call0(&wasm_bindgen::JsValue::NULL);
+        }
+    });
+    let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
 }
 
 /// The file's bytes, refusing one over [`MAX_LAUNCHED_BYTES`] before reading it.
