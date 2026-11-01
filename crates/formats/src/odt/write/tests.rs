@@ -844,3 +844,94 @@ fn decorative_pictures_have_no_description() {
     assert!(o.content.contains("<draw:image"), "{}", o.content);
     assert!(!o.content.contains("ornament"), "{}", o.content);
 }
+
+/// Word numbering the writer must keep: a list continued after a plain paragraph, a nested level
+/// restarting after a higher one, a restarted list (a new num with a start override), a second
+/// list, and the first list again after both. With the labels the model gives each item.
+fn numbering_doc() -> (Document, Vec<(String, String)>) {
+    let mut d = Document::new();
+    let a = d.numbering.add_list(ListKind::Numbered);
+    let item = |t: &str, num: u32, level: u8| {
+        let mut p = plain(t).styled("ListParagraph");
+        p.props.numbering = Some(NumRef { num, level });
+        p
+    };
+    let mut body = vec![item("one", a, 0), item("one.a", a, 1), item("one.b", a, 1), item("two", a, 0), plain("between"), item("three", a, 0)];
+    body.push(item("three.a", a, 1));
+    let r = d.numbering.restart(a).unwrap();
+    body.extend([item("again", r, 0), item("again.a", r, 1), item("again 2", r, 0)]);
+    let b = d.numbering.add_list(ListKind::Numbered);
+    body.extend([item("other", b, 0), plain("between 2"), item("four", a, 0)]);
+    let mut counters = wordcraft_doc::numbering::Counters::default();
+    let labels = body
+        .iter()
+        .filter_map(|p| {
+            let n = p.props.numbering?;
+            Some((p.plain_text(), counters.next_label(&d.numbering, n.num, n.level)?.0))
+        })
+        .collect();
+    d.body = body.into_iter().map(para_block).collect();
+    (d, labels)
+}
+
+/// The `text:start-value` of the list item holding paragraph `text`, if it has one.
+fn item_start(content: &str, text: &str) -> Option<String> {
+    let at = content.find(&format!(">{text}</text:p>"))?;
+    let item = content.get(..at)?.rsplit("<text:list-item").next()?;
+    item.strip_prefix(" text:start-value=\"")?.split('"').next().map(String::from)
+}
+
+#[test]
+fn word_numbers_survive_breaks_and_restarts() {
+    let (d, labels) = numbering_doc();
+    let o = Odt::new(&d);
+    // Where ODF's own counting gives another number, the item says Word's.
+    for (text, start) in [("three", "3"), ("again", "1"), ("other", "1"), ("four", "3")] {
+        assert_eq!(item_start(&o.content, text).as_deref(), Some(start), "{text}: {}", o.content);
+    }
+    let said: Vec<&str> = labels.iter().map(|(t, _)| t.as_str()).filter(|t| item_start(&o.content, t).is_some()).collect();
+    assert_eq!(said, ["three", "again", "other", "four"], "items ODF counts right say nothing");
+    // The model's labels, for the LibreOffice check below.
+    let l: Vec<&str> = labels.iter().map(|(_, l)| l.as_str()).collect();
+    assert_eq!(l, ["1.", "a.", "b.", "2.", "3.", "a.", "1.", "a.", "2.", "1.", "3."]);
+}
+
+/// The same document opened by LibreOffice: its plain-text export shows every item with Word's
+/// label. Ignored by default: run with `cargo test -p wordcraft-formats --lib
+/// numbering_through_libreoffice -- --ignored` where LibreOffice (`soffice`, or
+/// `WORDCRAFT_SOFFICE`) is installed; without it the test says so and passes.
+#[test]
+#[ignore = "needs LibreOffice"]
+fn numbering_through_libreoffice() {
+    use std::process::Command;
+    let soffice = std::env::var("WORDCRAFT_SOFFICE").ok().or_else(|| {
+        let mac = "/Applications/LibreOffice.app/Contents/MacOS/soffice";
+        if std::path::Path::new(mac).exists() {
+            return Some(mac.to_string());
+        }
+        Command::new("soffice").arg("--version").output().ok().filter(|o| o.status.success()).map(|_| "soffice".to_string())
+    });
+    let Some(soffice) = soffice else {
+        eprintln!("numbering_through_libreoffice: no soffice, skipped");
+        return;
+    };
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    let dir = std::env::temp_dir().join(format!("wordcraft-odt-lists-{}-{nanos}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (d, labels) = numbering_doc();
+    let odt = dir.join("lists.odt");
+    std::fs::write(&odt, crate::odt::export(&d).unwrap()).unwrap();
+    let profile = format!("-env:UserInstallation=file://{}", dir.join("profile").display());
+    let st = Command::new(&soffice)
+        .args([profile.as_str(), "--headless", "--norestore", "--convert-to", "txt:Text (encoded):UTF8", "--outdir"])
+        .arg(&dir)
+        .arg(&odt)
+        .output()
+        .unwrap();
+    let txt = std::fs::read_to_string(dir.join("lists.txt")).unwrap_or_default();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(st.status.success() && !txt.is_empty(), "soffice: {}", String::from_utf8_lossy(&st.stderr));
+    let got: Vec<String> = txt.lines().map(|l| l.trim_start_matches('\u{feff}').trim().to_string()).filter(|l| !l.starts_with("between")).collect();
+    let want: Vec<String> = labels.iter().map(|(t, l)| format!("{l} {t}")).collect();
+    assert_eq!(got, want);
+}

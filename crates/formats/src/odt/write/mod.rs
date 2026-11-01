@@ -75,6 +75,8 @@ pub(super) struct Ctx<'d> {
     pub depth: usize,
     /// A page (`"page"`) or column break ending the last paragraph, for the next block.
     pub break_next: Option<&'static str>,
+    /// Word's list counters over the list items written so far, in document order.
+    pub counters: wordcraft_doc::numbering::Counters,
 }
 
 /// Deepest nesting of stories written (tables in cells).
@@ -92,6 +94,7 @@ impl<'d> Ctx<'d> {
             names: HashMap::new(),
             depth: 0,
             break_next: None,
+            counters: Default::default(),
         }
     }
 
