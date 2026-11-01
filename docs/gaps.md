@@ -152,7 +152,7 @@ Recipient label generation (#4880) now includes all selected recipients across a
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-01 | trivial | Before Word 2013 (compatibility mode 14 and earlier, and files that name no mode) a percentage-width table is that share of the text width plus its first cell's left and last cell's right margin, as measured in Word; from mode 15 it is a share of the text width alone; no ranked gap changed; readiness estimates unchanged |
+| 2026-11-01 | trivial | Before Word 2013 (compatibility mode 14 and earlier, and files that name no mode) a percentage-width table takes that share of the text width with its first cell's left and last cell's right margins added to it, as measured in Word; from mode 15 it is a share of the text width alone; no ranked gap changed; readiness estimates unchanged |
 | 2026-10-30 | trivial | Only the PDF sent to the printer omits link annotations; File › Print › Save these pages as PDF (`file.printPdf`) keeps them, like Export (#4734); no ranked gap changed; readiness estimates unchanged |
 | 2026-10-29 | trivial | The print job's PDF omits link annotations, which the spooler refused to fit to the paper, so documents with links reach the printer (#4734); physical printer output remains to be validated; no ranked gap changed; readiness estimates unchanged |
 | 2026-10-28 | trivial | Aligned copies retain their locked document coordinate during middle-button scrolling and can start on secondary selected objects; existing Ctrl and Shift selection behavior stays (#4764) |
