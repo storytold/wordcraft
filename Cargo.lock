@@ -6728,6 +6728,7 @@ dependencies = [
  "thiserror 2.0.21",
  "wordcraft-doc",
  "wordcraft-geom",
+ "zeroize",
 ]
 
 [[package]]
