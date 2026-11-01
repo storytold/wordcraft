@@ -44,6 +44,10 @@ pub struct PdfOptions {
     /// How [`export`] shows digits (the Numeral setting; callers resolve `System`, see
     /// [`NumeralMode::resolve`]). [`export_layout`] keeps the layout it is given.
     pub numeral: NumeralMode,
+    /// Fillable form fields (AcroForm) for the document's form fields: legacy form fields and
+    /// content controls that may be edited, with their values. None on pages drawn scaled or moved
+    /// (`comments`, `paper`).
+    pub form_fields: bool,
 }
 
 impl Default for PdfOptions {
@@ -59,6 +63,7 @@ impl Default for PdfOptions {
             links: true,
             paper: None,
             numeral: NumeralMode::Arabic,
+            form_fields: false,
         }
     }
 }

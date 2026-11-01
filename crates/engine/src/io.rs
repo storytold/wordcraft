@@ -61,6 +61,9 @@ pub struct ExportOptions {
     pub word2003: bool,
     /// How digits look in PDFs and page images (the Numeral setting, `System` resolved).
     pub numeral: wordcraft_layout::NumeralMode,
+    /// A PDF copy gets fillable fields for the document's form fields and content controls:
+    /// `formFields: true` on the save and export commands.
+    pub form_fields: bool,
 }
 
 /// A document password: wiped from memory when dropped, never printed (`Debug` shows `***`).
