@@ -58,11 +58,8 @@ pub use navigation::{nearest_page, page_at, page_to_screen};
 use navigation::{scrollbar_page_tip, viewed_page};
 #[cfg(test)]
 use pages::{DRAWING_GRID_MAX_LINES, DRAWING_GRID_MIN_PX};
-pub(crate) use pages::{PageKeys, page_doc, page_screen_scale, preview_sel, screen_render_options};
-use pages::{
-    drawing_grid, drawing_grid_step, gridline_cells, page_image, page_key, page_render_options, shown_layout, texel_aligned_rect, view_key,
-    visible_tiles,
-};
+pub(crate) use pages::{PageKeys, page_doc, page_render_options, page_screen_scale, preview_sel, screen_render_options};
+use pages::{drawing_grid, drawing_grid_step, gridline_cells, page_image, page_key, shown_layout, texel_aligned_rect, view_key, visible_tiles};
 pub(crate) use reading::turn_read_page;
 #[cfg(test)]
 use reading::{READ_NAV_BAR, RESIZE_SETTLE, place_read_pages};
@@ -259,6 +256,9 @@ pub struct CanvasState {
     pub(crate) link_from: Option<wordcraft_doc::Pos>,
     /// What screen readers were last told about the document (#488).
     pub(crate) a11y: crate::a11y::A11yCache,
+    /// Screen readers get the document as one text (`a11y_text`) rather than node by node
+    /// (`a11y`): on Windows, whose AccessKit adapter reads it.
+    pub a11y_as_text: bool,
     /// A press on a table's selection area or move handle, held (`table_mouse`).
     pub(crate) table_drag: Option<crate::table_mouse::TableDrag>,
     /// The kind of tab stop a click on the ruler sets (the selector in the rulers' corner).
@@ -299,6 +299,7 @@ impl CanvasState {
             tab_kind: old.tab_kind,
             scale: old.scale,
             canvas_rect: old.canvas_rect,
+            a11y_as_text: old.a11y_as_text,
             read_viewport: old.read_viewport,
             web_viewport: old.web_viewport,
             scroll_to_caret: !seen,
@@ -418,6 +419,7 @@ impl Default for CanvasState {
             table_resize: None,
             link_from: None,
             a11y: Default::default(),
+            a11y_as_text: cfg!(windows),
             table_drag: None,
             tab_kind: Default::default(),
             tab_drag: None,
@@ -1159,8 +1161,13 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
     // A click on the page leaves the selected comment balloon.
     dismiss_balloon_on_canvas_click(app, ui, &resp);
     update_canvas_focus(app, ui, &resp, ime_geometry, ime_interrupt);
-    // Screen readers: the document under the canvas, with the caret (#488).
-    crate::a11y::expose(app, ui.ctx(), resp.id, layout, &rects, area);
+    // Screen readers: the document under the canvas, with the caret (#488), as one text where
+    // the platform's adapter reads it that way.
+    if app.canvas.a11y_as_text {
+        crate::a11y_text::expose(app, ui.ctx(), resp.id, layout, &rects, area);
+    } else {
+        crate::a11y::expose(app, ui.ctx(), resp.id, layout, &rects, area);
+    }
     // The buttons that start or stop middle-click scrolling don't also click the page.
     let middle_gesture = app.canvas.auto_scroll.blocks_input();
     handle_primary_pointer(app, ui, &resp, &rects, layout, geo, middle_gesture);
