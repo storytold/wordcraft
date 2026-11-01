@@ -13,6 +13,69 @@ fn object_area(s: &mut Session) -> wordcraft_layout::hit::ObjectHit {
     s.layout().find_object(0, |o| o.text_box.is_none()).unwrap()
 }
 
+/// #4250: a shape dragged into the middle of a page that only continues a long paragraph
+/// stays there, as in Word: anchored at the line beside it, it's drawn on that page, not
+/// thrown back to the page the paragraph starts on. One undo step puts it back.
+#[test]
+fn a_shape_dropped_on_a_page_a_paragraph_continues_onto_stays_there() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("text.insert", &json!({"text": "The quick brown fox jumps over the lazy dog. ".repeat(400)})).unwrap();
+    s.run("caret.docStart", &json!({})).unwrap();
+    s.run("insert.shape", &json!({"kind": "rectangle"})).unwrap();
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+    s.run("arrange.bounds", &json!({"page": 0, "x": 100, "y": 250, "width": 100, "height": 50})).unwrap();
+    assert!(s.layout().pages.len() > 2);
+    let before = (object_area(&mut s), s.undo_depth());
+    s.run("arrange.bounds", &json!({"page": 1, "x": 100, "y": 275})).unwrap();
+    let o = object_area(&mut s);
+    assert_eq!(o.page, 1, "on the page it was dropped on: {o:?}");
+    assert!((o.rect.x - 100.0).abs() < 0.5 && (o.rect.y - 275.0).abs() < 0.5, "where it was dropped: {:?}", o.rect);
+    assert_eq!(s.undo_depth(), before.1 + 1);
+    s.run("edit.undo", &json!({})).unwrap();
+    let back = object_area(&mut s);
+    assert_eq!((back.page, back.rect), (before.0.page, before.0.rect));
+}
+
+/// #4250: and dragged back onto the page the paragraph starts on, it stays there: its anchor
+/// goes back to the paragraph's start rather than staying on the later page's line.
+#[test]
+fn a_shape_dragged_back_to_the_page_its_paragraph_starts_on_stays_there() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("text.insert", &json!({"text": "The quick brown fox jumps over the lazy dog. ".repeat(400)})).unwrap();
+    s.run("caret.docStart", &json!({})).unwrap();
+    s.run("insert.shape", &json!({"kind": "rectangle"})).unwrap();
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+    s.run("arrange.bounds", &json!({"page": 1, "x": 100, "y": 275, "width": 100, "height": 50})).unwrap();
+    let before = (object_area(&mut s), s.undo_depth());
+    assert!(before.0.page == 1 && before.0.off > 0, "anchored on page 2's line: {:?}", before.0);
+    s.run("arrange.bounds", &json!({"page": 0, "x": 120, "y": 300})).unwrap();
+    let o = object_area(&mut s);
+    assert_eq!((o.page, o.off), (0, 0), "on the page it was dropped on, anchored at the paragraph's start: {o:?}");
+    assert!((o.rect.x - 120.0).abs() < 0.5 && (o.rect.y - 300.0).abs() < 0.5, "where it was dropped: {:?}", o.rect);
+    assert_eq!(s.undo_depth(), before.1 + 1);
+}
+
+/// #4262: dropped beside the first line after a page break inside a paragraph, a shape stays
+/// on the page it was dropped on, anchored in that line.
+#[test]
+fn a_shape_dropped_just_after_a_page_break_in_a_paragraph_stays_there() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    let text = "The quick brown fox jumps over the lazy dog. ";
+    s.run("text.insert", &json!({"text": text.repeat(20)})).unwrap();
+    s.run("insert.pageBreak", &json!({})).unwrap();
+    s.run("text.insert", &json!({"text": text.repeat(40)})).unwrap();
+    assert_eq!(s.doc.body.len(), 1, "one paragraph");
+    s.run("caret.docStart", &json!({})).unwrap();
+    s.run("insert.shape", &json!({"kind": "rectangle"})).unwrap();
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+    s.run("arrange.bounds", &json!({"page": 0, "x": 100, "y": 250, "width": 100, "height": 50})).unwrap();
+    s.run("arrange.bounds", &json!({"page": 1, "x": 100, "y": 80})).unwrap();
+    let o = object_area(&mut s);
+    let after_break = text.len() * 20 + wordcraft_doc::para::PAGE_BREAK.len_utf8();
+    assert_eq!((o.page, o.off), (1, after_break), "on the page it was dropped on, anchored right after the break: {o:?}");
+    assert!((o.rect.x - 100.0).abs() < 0.5 && (o.rect.y - 80.0).abs() < 0.5, "where it was dropped: {:?}", o.rect);
+}
+
 /// What a click and a handle or body drag do in the editor (#142, #82): hit-test the object,
 /// select it, then resize and move it with `arrange.bounds`.
 fn click_resize_and_drag(insert: &str, params: Value) {
