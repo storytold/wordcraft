@@ -96,6 +96,113 @@ fn big_table_scroll_bench() {
     eprintln!("scroll offset after: {:?}", h.state().canvas.scroll_offset);
 }
 
+/// Benchmark simulating an extended interactive session on Baguio-Benguet docx
+#[test]
+#[ignore]
+fn long_open_baguio_bench() {
+    let doc = match std::env::var("WORDCRAFT_BENCH_DOCX") {
+        Ok(p) => wordcraft_engine::io::open_path(std::path::Path::new(&p)).unwrap(),
+        Err(_) => big_table_doc(200, 8),
+    };
+    let mut h = harness(doc);
+    let l = h.state_mut().session.layout();
+    eprintln!("Baguio pages count: {}", l.pages.len());
+    for (i, p) in l.pages.iter().enumerate().take(3) {
+        let lines_count = p.items.iter().filter(|it| matches!(it, wordcraft_layout::Placed::Lines { .. })).count();
+        let other_count = p.items.len() - lines_count;
+        eprintln!("Page {}: {} lines, {} other items, w={}, h={}", i, lines_count, other_count, p.w, p.h);
+    }
+    h.run_steps(3);
+
+    // Warm-up (allows progressive idle prewarming for documents under 24 pages)
+    for _ in 0..15 {
+        h.step();
+    }
+
+    let mut phase_times = Vec::new();
+    let mut max_times = Vec::new();
+
+    // Phase 1: 100 idle frames (simulating sitting open for 100 caret ticks)
+    let mut idle_times = Vec::new();
+    for _ in 0..100 {
+        let t = Instant::now();
+        h.step();
+        idle_times.push(t.elapsed().as_secs_f64() * 1e3);
+    }
+    idle_times.sort_by(|a, b| a.total_cmp(b));
+    phase_times.push(idle_times[idle_times.len() / 2]);
+    max_times.push(*idle_times.last().unwrap());
+
+    // Phase 2: 100 down motions ('j')
+    let mut j_times = Vec::new();
+    for _ in 0..100 {
+        h.input_mut().events.push(egui::Event::Key {
+            key: egui::Key::J,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let t = Instant::now();
+        h.step();
+        j_times.push(t.elapsed().as_secs_f64() * 1e3);
+    }
+    j_times.sort_by(|a, b| a.total_cmp(b));
+    phase_times.push(j_times[j_times.len() / 2]);
+    max_times.push(*j_times.last().unwrap());
+
+    // Phase 3: 100 word motions ('w')
+    let mut w_times = Vec::new();
+    for _ in 0..100 {
+        h.input_mut().events.push(egui::Event::Key {
+            key: egui::Key::W,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let t = Instant::now();
+        h.step();
+        w_times.push(t.elapsed().as_secs_f64() * 1e3);
+    }
+    w_times.sort_by(|a, b| a.total_cmp(b));
+    phase_times.push(w_times[w_times.len() / 2]);
+    max_times.push(*w_times.last().unwrap());
+
+    // Phase 4: 50 wheel scroll steps down and 50 up
+    let mut scroll_times = Vec::new();
+    for i in 0..100 {
+        wheel(&mut h, if i < 50 { -200.0 } else { 200.0 });
+        let t = Instant::now();
+        h.step();
+        scroll_times.push(t.elapsed().as_secs_f64() * 1e3);
+    }
+    scroll_times.sort_by(|a, b| a.total_cmp(b));
+    phase_times.push(scroll_times[scroll_times.len() / 2]);
+    max_times.push(*scroll_times.last().unwrap());
+
+    // Phase 5: 100 more idle frames after heavy navigation
+    let mut late_idle_times = Vec::new();
+    for _ in 0..100 {
+        let t = Instant::now();
+        h.step();
+        late_idle_times.push(t.elapsed().as_secs_f64() * 1e3);
+    }
+    late_idle_times.sort_by(|a, b| a.total_cmp(b));
+    phase_times.push(late_idle_times[late_idle_times.len() / 2]);
+    max_times.push(*late_idle_times.last().unwrap());
+
+    eprintln!(
+        "Phases (median ms): idle1={:.2}, j={:.2}, w={:.2}, scroll={:.2}, idle2={:.2}",
+        phase_times[0], phase_times[1], phase_times[2], phase_times[3], phase_times[4]
+    );
+    eprintln!(
+        "Phases (max ms): idle1={:.2}, j={:.2}, w={:.2}, scroll={:.2}, idle2={:.2}",
+        max_times[0], max_times[1], max_times[2], max_times[3], max_times[4]
+    );
+    eprintln!("Textures count: {}", h.state().canvas.texture_count());
+}
+
 /// #811: scrolling through one very large table was slow because every frame fingerprinted every
 /// item of every page (thousands of cell borders a page) for the page texture cache, and every
 /// page ever shown kept its texture. Now a frame lays nothing out again, fingerprints a page once

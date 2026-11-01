@@ -896,15 +896,20 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
         let visible = band_of(sr).intersects(ui.clip_rect().expand(200.0));
         // Only pages on screen or with a texture need their key (#811).
         let cached = !tiled && app.canvas.textures.contains_key(&i);
-        let key =
-            if visible || cached { page_key(app, layout, i, view, scale_px) ^ if tiled { (tile_height_px as u64) << 32 } else { 0 } } else { 0 };
+        let is_idle = ui.input(|inp| inp.events.is_empty() && !inp.pointer.any_down());
+        let prewarm = !visible && !tiled && !cached && layout.pages.len() <= 24 && rendered == 0 && is_idle;
+        let key = if visible || cached || prewarm {
+            page_key(app, layout, i, view, scale_px) ^ if tiled { (tile_height_px as u64) << 32 } else { 0 }
+        } else {
+            0
+        };
         let mut fresh = cached && app.canvas.textures.get(&i).is_some_and(|(k, _)| *k == key);
         // The page a drag took an object off: render it this frame whatever the budget, or the
         // raster with the object still on it shows for a frame.
         let forced = hidden.as_ref().is_some_and(|(page, _)| *page == i);
         // Render before placing the page: a page re-rendered in this frame (a zoom step, an
         // edit) then sits on the pixel grid in this frame too, rather than a frame later.
-        if visible && !tiled && !fresh && (forced || rendered < 2 || !app.canvas.textures.contains_key(&i) && rendered < 4) {
+        if (visible || prewarm) && !tiled && !fresh && (forced || rendered < 2 || !app.canvas.textures.contains_key(&i) && rendered < 4) {
             let mut opts = page_render_options(app, dim_body);
             // Only on the page it is on: the `Pos` can't match an object of another page.
             opts.display.hide_object = hidden.as_ref().filter(|(page, _)| *page == i).map(|(_, p)| p.clone());
@@ -924,6 +929,8 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
             fresh = true;
         } else if visible && !tiled && !fresh {
             ui.ctx().request_repaint();
+        } else if prewarm && !tiled && !fresh {
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(30));
         }
         let current_scale = geo.scale * ppp;
         let visual_sr = if fresh && (scale_px - current_scale).abs() <= 0.0001_f32.max(current_scale.abs() * 0.0001) {
@@ -1361,8 +1368,12 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         // (#811): scrolling through a long document kept every page it had shown in memory.
         let n = layout.pages.len();
         let clip = ui.clip_rect();
-        let near = clip.expand2(vec2(clip.width(), clip.height() * TEXTURE_KEEP_SCREENS));
-        app.canvas.textures.retain(|k, _| *k < n && geo.rects.get(*k).is_some_and(|r| r.translate(content_origin.to_vec2()).intersects(near)));
+        if n <= 24 {
+            app.canvas.textures.retain(|k, _| *k < n);
+        } else {
+            let near = clip.expand2(vec2(clip.width(), clip.height() * TEXTURE_KEEP_SCREENS));
+            app.canvas.textures.retain(|k, _| *k < n && geo.rects.get(*k).is_some_and(|r| r.translate(content_origin.to_vec2()).intersects(near)));
+        }
         app.canvas.tiles.retain(|id, _| visible_tile_keys.contains(id));
         app.canvas.page_rects = rects.clone();
         let view_rect = ui.clip_rect();
