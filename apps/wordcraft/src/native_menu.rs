@@ -4,10 +4,10 @@
 //! Every item runs a registered command through `WordApp::run`, the path the ribbon and the
 //! keyboard take (so "Save changes?" prompts, input dialogs and clipboard handling all apply), or,
 //! for Cut / Copy / Paste / Select All, feeds egui the input events the keyboard would have. Items
-//! carry no key equivalents: the keyboard keeps going through egui and the keymap exactly as before,
+//! carry no key equivalents (Quit uses ⌘Q): the keyboard keeps going through egui and the keymap exactly as before,
 //! so a menu never takes a key away from a text field or the document.
 //!
-//! Quit routes through `Action::Quit` -> `ViewportCommand::Close` so unsaved changes prompt the user
+//! Quit routes through `Action::Quit` -> `WordApp::quit_requested` so unsaved changes prompt the user
 //! before exiting, protecting against accidental closure on Command-Q (#4295).
 //!
 //! The item list is plain data (tested on every platform against the registry); the AppKit part
@@ -504,7 +504,7 @@ mod bar {
                     Action::Minimize => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
                     Action::Quit => {
                         if app.close_requested() {
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            app.quit_requested = true;
                         }
                     }
                     Action::Input(kind) => {
