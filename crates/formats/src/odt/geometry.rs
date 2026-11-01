@@ -18,6 +18,8 @@ const MAX_EQUATIONS: usize = 512;
 const MAX_DEPTH: usize = 64;
 const MAX_TOKENS: usize = 20_000;
 const MAX_POINTS: usize = 20_000;
+/// Farthest a point goes from the view box's origin, either way.
+const MAX_COORD: f64 = 1e7;
 /// Straight steps an arc of a full turn is followed in.
 const ARC_STEPS: f64 = 64.0;
 
@@ -82,7 +84,9 @@ struct Env<'a> {
     modifiers: Vec<f64>,
     equations: &'a [(String, String)],
     names: HashMap<&'a str, usize>,
-    memo: std::cell::RefCell<HashMap<usize, f64>>,
+    /// Each equation worked out so far: its value, or `None` when it can't be (or is being worked
+    /// out: one referring to itself fails), so none is worked out twice.
+    memo: std::cell::RefCell<HashMap<usize, Option<f64>>>,
 }
 
 impl Env<'_> {
@@ -115,14 +119,14 @@ impl Env<'_> {
             return None;
         }
         if let Some(v) = self.memo.borrow().get(&i) {
-            return Some(*v);
+            return *v;
         }
         let f = &self.equations.get(i)?.1;
+        self.memo.borrow_mut().insert(i, None);
         let mut p = Formula { s: f.as_bytes(), at: 0, env: self, depth: depth + 1 };
-        let v = p.expr()?;
-        let v = if v.is_finite() { v } else { 0.0 };
+        let v = p.expr().map(|v| if v.is_finite() { v } else { 0.0 });
         self.memo.borrow_mut().insert(i, v);
-        Some(v)
+        v
     }
 }
 
@@ -273,6 +277,10 @@ impl Pen {
             return;
         }
         self.d.push(c);
+        // Far outside any view box is as far as it goes: points stay finite as `f32`.
+        let at = |v: f64| if v.is_finite() { v.clamp(-MAX_COORD, MAX_COORD) } else { 0.0 };
+        let pts: Vec<(f64, f64)> = pts.iter().map(|(x, y)| (at(*x), at(*y))).collect();
+        let pts = pts.as_slice();
         for (x, y) in pts {
             self.d.push_str(&format!(" {x:.2} {y:.2}"));
         }

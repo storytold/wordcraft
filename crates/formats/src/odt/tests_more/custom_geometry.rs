@@ -168,3 +168,26 @@ fn a_freeform_with_open_and_closed_paths_is_saved_as_a_custom_shape() {
     assert_eq!(drawn(&again), drawn(&d));
     assert_eq!(drawn(&again)[0].1.iter().map(|p| p.1).collect::<Vec<_>>(), [true, false]);
 }
+
+#[test]
+fn equations_referring_twice_to_ones_that_fail_are_worked_out_once() {
+    // Each equation refers twice to the next, and the last to itself: worked out naively, 2^200
+    // steps. Each is worked out once, and all fail, so the path has nothing to draw.
+    let mut eqs = String::new();
+    for i in 0..200 {
+        eqs.push_str(&format!(r#"<draw:equation draw:name="f{i}" draw:formula="?f{0}+?f{0}"/>"#, i + 1));
+    }
+    eqs.push_str(r#"<draw:equation draw:name="f200" draw:formula="?f200"/>"#);
+    let start = std::time::Instant::now();
+    let d = open(&shape(r#"draw:type="hostile" draw:enhanced-path="M 0 0 L ?f0 10 L 20 20 N""#, &eqs));
+    assert!(start.elapsed().as_secs() < 5);
+    // The line with the unknown end is left out; the rest is drawn.
+    assert_eq!(drawn(&d)[0].1, [(vec![(0.0, 0.0), (0.0, 0.0)], false)]);
+}
+
+#[test]
+fn points_far_outside_the_view_box_stay_finite() {
+    let d = open(&shape(r#"draw:type="hostile" draw:enhanced-path="M 0 0 L 1e300 -1e300 N""#, ""));
+    let Some(InlineObject::Shape { freeform: Some(f), .. }) = d.body[0].as_para().unwrap().objects.first() else { panic!("a freeform") };
+    assert!(f.paths.iter().flat_map(|p| p.pts.iter()).all(|[x, y]| x.is_finite() && y.is_finite()));
+}
