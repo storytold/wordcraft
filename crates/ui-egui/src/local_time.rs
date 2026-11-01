@@ -20,6 +20,20 @@ fn offset_minutes(secs: i64) -> i32 {
     minutes.clamp(-24 * 60, 24 * 60)
 }
 
+/// The hour of the day (0–23) in the user's own time zone right now, which the Home page's
+/// greeting goes by: the clock's UTC hour would greet a Brazilian at 10 in the morning with
+/// "Good afternoon" (#4870).
+pub(crate) fn local_hour() -> u32 {
+    hour_at(i64::try_from(wordcraft_engine::cmd::now_unix()).unwrap_or(0), offset_minutes)
+}
+
+/// The local hour (0–23) at Unix time `utc_secs`, in the zone `offset` (minutes east of UTC at
+/// that time) gives.
+fn hour_at(utc_secs: i64, offset: impl Fn(i64) -> i32) -> u32 {
+    let local = utc_secs.saturating_add(i64::from(offset(utc_secs)) * 60);
+    (local.rem_euclid(86_400) / 3600) as u32
+}
+
 /// A comment's time for the pane and the balloons: `YYYY-MM-DD HH:MM` in local time. The UTC
 /// time (`date_utc`, Word's `w16cex:dateUtc`) wins, else `date`, converted when it names an
 /// offset (`±HH:MM`) and shown as written when it doesn't. A `Z` on `date` alone doesn't count:
@@ -151,6 +165,21 @@ mod tests {
             assert_eq!(days_from_civil(y, m, d), days);
         }
         assert_eq!(days_from_civil(2026, 10, 12), 20_738);
+    }
+
+    /// #4870: the hour is the one on the user's own clock, across the date line too.
+    #[test]
+    fn the_hour_follows_the_users_zone() {
+        // 2026-10-12T13:13:00Z: 10:13 in Brasília, 22:13 in Tokyo, 13:13 in London.
+        let utc = days_from_civil(2026, 10, 12) * 86_400 + 13 * 3600 + 13 * 60;
+        assert_eq!(hour_at(utc, |_| -3 * 60), 10);
+        assert_eq!(hour_at(utc, |_| 9 * 60), 22);
+        assert_eq!(hour_at(utc, |_| 0), 13);
+        // Midnight is hour 0 on either side of it, and half-hour zones round down.
+        assert_eq!(hour_at(utc - 13 * 3600 - 13 * 60, |_| 0), 0);
+        assert_eq!(hour_at(utc, |_| 5 * 60 + 30), 18);
+        assert_eq!(hour_at(0, |_| -60), 23);
+        assert!(hour_at(i64::MAX, |_| 24 * 60) < 24);
     }
 
     /// WordCraft's own comments carry their UTC time: shown in the user's zone, across a date

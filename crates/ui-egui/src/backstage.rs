@@ -336,20 +336,21 @@ fn matching_templates(query: &str) -> Vec<(&'static str, &'static str)> {
         .collect()
 }
 
+/// The Home page's greeting for the hour of the day (0–23) on the user's own clock (#4870).
+fn greeting(hour: u32) -> &'static str {
+    if hour < 12 {
+        "Good morning"
+    } else if hour < 18 {
+        "Good afternoon"
+    } else {
+        "Good evening"
+    }
+}
+
 /// Home: a greeting, Blank plus a short row of templates with a link to New, then Recent.
 fn home_page(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
-    let hour = wordcraft_engine::cmd::now_iso().get(11..13).and_then(|h| h.parse::<u32>().ok()).unwrap_or(9);
-    heading(
-        ui,
-        if hour < 12 {
-            "Good morning"
-        } else if hour < 18 {
-            "Good afternoon"
-        } else {
-            "Good evening"
-        },
-    );
+    heading(ui, greeting(crate::local_time::local_hour()));
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing = vec2(18.0, 0.0);
         for (label, template) in TEMPLATES.into_iter().take(HOME_TEMPLATES) {
