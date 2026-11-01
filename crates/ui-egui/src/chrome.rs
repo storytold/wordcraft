@@ -564,7 +564,7 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                 } else if app.session.selects_whole_story() {
                     app.session.page_hint.min(l.pages.len().saturating_sub(1)) + 1
                 } else {
-                    l.caret_on(&app.session.sel.focus, app.session.page_hint).map(|c| c.page + 1).unwrap_or(1)
+                    app.session.caret_geometry(&l, &app.session.sel.focus).map(|c| c.page + 1).unwrap_or(1)
                 };
                 let st = |ui: &mut Ui, s: &str| {
                     let font = TypeRung::Caption.regular();

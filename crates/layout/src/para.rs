@@ -201,7 +201,8 @@ impl ParaLayout {
         for (i, l) in self.lines.iter().enumerate() {
             let next_start = self.lines.get(i + 1).map(|n| n.start);
             match next_start {
-                Some(ns) if off < ns => return i,
+                // Wrapped object pieces share a range: its start stays on the first piece.
+                Some(ns) if off < ns || (off == ns && l.stop > ns) => return i,
                 Some(_) => {}
                 None => return i,
             }

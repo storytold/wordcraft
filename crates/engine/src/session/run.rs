@@ -1,7 +1,7 @@
 use super::doc_state::{ColumnBlock, Selection};
 use super::ime_state::ImeCaretState;
-use super::snapshot_types::RunSnapshot;
-use super::{CharProps, CmdError, Document, Fragment, ImeEditOutcome, Pos, Session, StoryRef, Value, document_id_mark};
+use super::snapshot_types::{LayoutSlots, RunSnapshot};
+use super::{Arc, CharProps, CmdError, DocLayout, Document, Fragment, ImeEditOutcome, Pos, Session, StoryRef, Value, VisualPos, document_id_mark};
 use crate::CommandSpec;
 
 struct SuccessContext<'a> {
@@ -30,6 +30,20 @@ struct ElsewhereContext {
 }
 
 impl Session {
+    fn restore_layouts(&mut self, before: Option<LayoutSlots>) {
+        if let Some(entries) = before {
+            self.layout = entries.map(|entry| entry.filter(|entry| entry.0 == self.rev));
+        }
+    }
+
+    fn restore_visual(&mut self, result: &crate::CmdResult, before: (Option<VisualPos>, Option<VisualPos>)) {
+        if result.is_ok() {
+            return;
+        }
+        self.visual_anchor = before.0.filter(|hint| hint.position() == &self.sel.anchor);
+        self.visual_focus = before.1.filter(|hint| hint.position() == &self.sel.focus);
+    }
+
     fn leave_math_for_command(&mut self, id: &str) {
         if self.math.is_some()
             && (id.starts_with("text.") || id.starts_with("caret.") || id.starts_with("select.") || id.starts_with("edit.paste"))
@@ -134,6 +148,8 @@ impl Session {
         // trace.
         let dirty_before = spec.mutates.then_some(self.dirty);
         let rev_restore = spec.mutates.then_some(self.rev);
+        // Rollback must retain owners evicted by temporary layouts. layout() still checks eligibility.
+        let layout_before = spec.mutates.then(|| self.layout.clone());
         // These mutating commands can replace the open document and discard its saved versions.
         // Keep the versions until the command and the protected-region post-check have both
         // succeeded; rejected commands must leave the old document and its snapshots together.
@@ -177,6 +193,7 @@ impl Session {
         {
             self.pending_move = None;
         }
+        let visual_before = (self.visual_anchor.clone(), self.visual_focus.clone());
         let sel_before = self.sel.clone();
         // A rejected command must not persist a new proofing default, including a rejection
         // by the protected-region check after its handler has succeeded. Undo stays document-only.
@@ -266,13 +283,60 @@ impl Session {
                 if let Some(rev) = rev_restore {
                     self.restore_rev(rev);
                 }
+                self.restore_layouts(layout_before);
                 if let Some(b) = blocks_before {
                     self.building_blocks = b;
                 }
                 self.status = e.to_string();
             }
         }
+        self.restore_visual(&result, visual_before);
         result
+    }
+
+    /// Geometry for a session endpoint, including valid transient visual affinity.
+    /// Preview layouts and stale hints fall back to canonical position geometry.
+    pub fn caret_geometry(&self, layout: &Arc<DocLayout>, pos: &Pos) -> Option<wordcraft_layout::hit::Caret> {
+        let hint = if *pos == self.sel.focus {
+            self.visual_focus.as_ref()
+        } else if *pos == self.sel.anchor {
+            self.visual_anchor.as_ref()
+        } else {
+            None
+        };
+        layout.caret_visual(pos, hint, self.page_hint)
+    }
+
+    /// Whether a pointer target is already the current visual insertion point.
+    pub fn visual_matches(&self, target: &VisualPos) -> bool {
+        target.position() == &self.sel.focus && self.visual_focus.as_ref() == Some(target)
+    }
+
+    /// Attach an opaque hit after a successful caret command. Source selection is authoritative.
+    /// Stale snapshot owners are rejected when geometry is resolved.
+    pub fn retain_visual(&mut self, target: VisualPos) {
+        if target.position() != &self.sel.focus {
+            return;
+        }
+        if self.sel.is_collapsed() && self.visual_anchor.is_none() {
+            self.visual_anchor = Some(target.clone());
+        }
+        self.visual_focus = Some(target);
+    }
+
+    pub(crate) fn visual_hint(&self) -> Option<&VisualPos> {
+        self.visual_focus.as_ref().filter(|hint| hint.position() == &self.sel.focus)
+    }
+
+    pub(crate) fn drop_visual(&mut self, mode: crate::cmd::caret::SelectionMode) {
+        if mode == crate::cmd::caret::SelectionMode::Extend {
+            if self.sel.is_collapsed() && self.visual_anchor.is_none() {
+                self.visual_anchor = self.visual_focus.clone();
+            }
+        } else {
+            self.visual_anchor = None;
+        }
+        self.visual_focus = None;
     }
 
     fn finish_success(&mut self, context: SuccessContext<'_>) {
@@ -392,6 +456,10 @@ impl Session {
             self.also_selected.clear();
         }
         self.note_typing(id, before_doc.as_ref().map(|b| &b.0), sel_before);
+        if (!id.starts_with("caret.") && self.sel != *sel_before) || matches!(id, "edit.undo" | "edit.undoTo" | "edit.redo") {
+            self.visual_anchor = None;
+            self.visual_focus = None;
+        }
     }
 
     /// The end of [`Session::run`] for a command that ended up in another document than it

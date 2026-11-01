@@ -99,6 +99,8 @@ impl Session {
     }
 
     pub fn touch(&mut self) {
+        self.visual_anchor = None;
+        self.visual_focus = None;
         self.rev = self.rev.wrapping_add(1);
         self.dirty = true;
     }

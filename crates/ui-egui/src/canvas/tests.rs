@@ -4841,3 +4841,159 @@ fn the_view_key_changes_when_a_drag_takes_an_object_off_the_page() {
     assert_ne!(hidden, view_key(&app, false, None), "the page without the dragged object is rendered again");
     assert_eq!(hidden, view_key(&app, false, Some(&object)), "the same drag keeps the key: no re-render every frame");
 }
+
+fn ref_visual_app() -> WordApp {
+    use wordcraft_doc::props::{LineSpacing, ParaProps};
+    let mut doc = wordcraft_doc::Document::new();
+    let mut paragraph = wordcraft_doc::Paragraph::new();
+    let cp = wordcraft_doc::CharProps { font: Some("Arial".into()), size: Some(10.0), ..Default::default() };
+    paragraph
+        .insert_object(
+            0,
+            wordcraft_doc::InlineObject::Field {
+                instr: "REF Sample".into(),
+                result: "Alpha Beta ".repeat(400),
+                locked: true,
+                dirty: false,
+                code: false,
+                form: String::new(),
+            },
+            &cp,
+        )
+        .unwrap();
+    paragraph.props = ParaProps {
+        space_before: Some(0.0),
+        space_after: Some(0.0),
+        line_spacing: Some(LineSpacing::Exactly(12.0)),
+        widow_control: Some(false),
+        ..Default::default()
+    };
+    doc.body = vec![wordcraft_doc::para_block(paragraph)];
+    doc.last_section.page_w = 240.0;
+    doc.last_section.page_h = 200.0;
+    doc.last_section.margin_left = 40.0;
+    doc.last_section.margin_right = 40.0;
+    doc.last_section.margin_top = 40.0;
+    doc.last_section.margin_bottom = 40.0;
+    WordApp::new(wordcraft_engine::Session::new(doc), Default::default())
+}
+
+#[test]
+fn ref_pointer_canvas_typing() {
+    let mut app = ref_visual_app();
+    app.session.doc.body.insert(0, wordcraft_doc::para_block(wordcraft_doc::Paragraph::new()));
+    app.session.touch();
+    app.run("text.insert", json!({"text": "draft"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1000.0, 650.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    h.run_steps(8);
+    let before = h.state_mut().session.layout();
+    let rev = h.state().session.rev();
+    let (x, y) = before.pages[0]
+        .items
+        .iter()
+        .find_map(|it| {
+            let Placed::Lines { path, para, l0, l1, x, y, .. } = it else { return None };
+            if *path != Pos::body(1, 0).path || l1 - l0 < 4 {
+                return None;
+            }
+            Some((x + para.lines[l0 + 2].left + 1.0, y + para.lines[l0 + 2].top - para.lines[*l0].top + 6.0))
+        })
+        .unwrap();
+    let screen = page_to_screen(h.state_mut(), 0, x, y).unwrap();
+    h.event(egui::Event::PointerMoved(screen));
+    h.event(egui::Event::PointerButton { pos: screen, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+    h.step();
+    let after = h.state_mut().session.layout();
+    assert!(!std::sync::Arc::ptr_eq(&before, &after), "ending typing changes the snapshot owner");
+    assert_eq!(h.state().session.rev(), rev);
+    assert_eq!(h.state().session.sel.focus, Pos::body(1, 0));
+    let target = after.hit_visual(0, x, y, StoryRef::Body).unwrap();
+    let expected = after.caret_visual(target.position(), Some(&target), 0).unwrap();
+    let actual = h.state().session.caret_geometry(&after, &h.state().session.sel.focus).unwrap();
+    assert_eq!(actual, expected, "the real pointer path retains the continuation after typing ends");
+    let caret = caret_screen(h.state_mut()).unwrap().0;
+    let expected_screen = page_to_screen(h.state_mut(), 0, expected.x, expected.top).unwrap();
+    assert!((caret.y - expected_screen.y).abs() < 0.1);
+    h.event(egui::Event::PointerButton { pos: screen, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+    h.run_steps(3);
+    let ime = h.output().platform_output.ime.as_ref().unwrap().cursor_rect;
+    let caret = caret_screen(h.state_mut()).unwrap().0;
+    assert!((ime.min.y - caret.y).abs() < 0.1);
+}
+
+#[test]
+fn ref_visual_canvas() {
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1000.0, 650.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        ref_visual_app(),
+    );
+    h.run_steps(8);
+    h.state_mut().session.recording = Some(("affinity".into(), vec![]));
+    let layout = h.state_mut().session.layout();
+    let point = |page: usize, index: usize| {
+        layout.pages[page]
+            .items
+            .iter()
+            .find_map(|it| {
+                let Placed::Lines { para, l0, l1, x, y, .. } = it else { return None };
+                let li = (l0 + index).min(l1 - 1);
+                Some((x + para.lines[li].left + 1.0, y + para.lines[li].top - para.lines[*l0].top + 6.0))
+            })
+            .unwrap()
+    };
+    let screen = |app: &mut WordApp, (x, y)| page_to_screen(app, 0, x, y).unwrap();
+    let from = screen(h.state_mut(), point(0, 2));
+    let to = screen(h.state_mut(), point(0, 3));
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+    h.event(egui::Event::PointerMoved(from));
+    h.event(button(from, true));
+    h.step();
+    let pressed = caret_screen(h.state_mut()).unwrap().0;
+    assert!(std::sync::Arc::ptr_eq(&layout, &h.state_mut().session.layout()), "canvas preparation and pointer press retain the owner");
+    assert_eq!(h.state().session.sel.focus, Pos::body(0, 0));
+    assert!(pressed.y > screen(h.state_mut(), point(0, 0)).y + 10.0, "click must retain its continuation line");
+    h.event(egui::Event::PointerMoved(to));
+    h.step();
+    let dragged = caret_screen(h.state_mut()).unwrap().0;
+    assert!(std::sync::Arc::ptr_eq(&layout, &h.state_mut().session.layout()), "pointer drag retains the same snapshot");
+    assert!(dragged.y > pressed.y + 5.0, "same-Pos drag must update visual affinity");
+    h.event(button(to, false));
+    h.run_steps(3);
+    assert!(h.state().session.sel.is_collapsed(), "an atomic field has no partial source selection");
+    let recording = &h.state().session.recording.as_ref().unwrap().1;
+    let caret_commands: Vec<_> = recording.iter().filter(|(id, _)| id == "caret.set").collect();
+    assert!(caret_commands.len() >= 2);
+    for (_, params) in caret_commands {
+        assert!(params.get("pos").is_some() && params.get("page").is_none(), "pointer recordings retain source positions");
+    }
+    assert_eq!(h.state().session.doc.body[0].as_para().unwrap().text, wordcraft_doc::para::OBJ.to_string());
+    let caret = caret_screen(h.state_mut()).unwrap().0;
+    let ime = h.output().platform_output.ime.as_ref().expect("the canvas supplies IME geometry").cursor_rect;
+    assert!((ime.min.x - caret.x).abs() < 0.1 && (ime.min.y - caret.y).abs() < 0.1, "IME and caret must share the visual line");
+
+    let before = h.state().canvas.scroll_offset;
+    let last = layout.pages.len() - 1;
+    assert!(last > 2);
+    let (x, y) = point(last, 1);
+    h.state_mut().run("caret.set", json!({"page":last,"x":x,"y":y})).unwrap();
+    // Let the existing scroll animation settle before checking the viewport.
+    h.run_steps(40);
+    assert_eq!(h.state().session.page_hint, last);
+    assert!((h.state().canvas.scroll_offset - before).length() > 1.0, "same-Pos navigation must scroll to the visual page");
+    let caret = caret_screen(h.state_mut()).unwrap().0;
+    let viewport = h.state().canvas.viewport.unwrap();
+    assert!(viewport.contains(caret), "visual caret {caret:?} outside {viewport:?}, scroll={:?}", h.state().canvas.scroll_offset);
+    let ime = h.output().platform_output.ime.as_ref().unwrap().cursor_rect;
+    assert!((ime.min.y - caret.y).abs() < 0.1);
+}

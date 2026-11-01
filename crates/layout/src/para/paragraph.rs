@@ -66,6 +66,7 @@ impl Slot {
 struct Shaped<'a> {
     b: Builder<'a>,
     has_page_fields: bool,
+    ref_breaks: Vec<(usize, bool)>,
     notes: Vec<(usize, u32)>,
     obj_index: usize,
     drop_cap: Option<(usize, u8, f32)>,
@@ -154,6 +155,7 @@ impl<'a> Shaped<'a> {
         Shaped {
             b,
             has_page_fields: false,
+            ref_breaks: Vec::new(),
             notes: Vec::new(),
             obj_index: 0,
             drop_cap: None,
@@ -377,7 +379,12 @@ impl<'a> Shaped<'a> {
             None => {
                 let (t, page_dep) = field_text_on(instr, result, cx.env.fields, cx.env.fields.page_at(start));
                 self.has_page_fields |= page_dep;
-                self.b.shape_atomic(&t, start, end, &linked(rc, instr));
+                let rc = linked(rc, instr);
+                if crate::fields::field_name(instr) == "REF" {
+                    self.b.shape_ref(&t, start, end, &rc, &mut self.ref_breaks);
+                } else {
+                    self.b.shape_atomic(&t, start, end, &rc);
+                }
             }
         }
     }
@@ -451,10 +458,16 @@ impl<'a> BreakText<'a> {
 }
 
 /// Mark the clusters a line may break after.
-fn mark_break_opportunities(clusters: &mut [Cluster], bt: &BreakText, rp: &ResolvedPara) {
+fn mark_break_opportunities(clusters: &mut [Cluster], bt: &BreakText, rp: &ResolvedPara, ref_breaks: &[(usize, bool)]) {
     let opps: std::collections::HashSet<usize> = break_positions(&bt.text, rp).into_iter().filter_map(|i| bt.to_para(i)).collect();
-    for c in clusters {
+    for c in clusters.iter_mut() {
         c.break_after = opps.contains(&c.end) || matches!(c.kind, ClKind::Object(_) | ClKind::Tab);
+    }
+    // Expanded REF pieces share one object offset, so use their own space boundaries.
+    for &(i, allowed) in ref_breaks {
+        if let Some(c) = clusters.get_mut(i) {
+            c.break_after = allowed;
+        }
     }
 }
 
@@ -574,7 +587,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let mut skip = sh.left.clone();
     skip.extend(sh.bare.iter().cloned());
     let bt = BreakText::new(&p.text, skip);
-    mark_break_opportunities(&mut sh.b.clusters, &bt, &rp);
+    mark_break_opportunities(&mut sh.b.clusters, &bt, &rp, &sh.ref_breaks);
     let label = list_label(&cx, &mut sh.b, mark_style);
     let joined_cluster_starts = joined_cluster_starts(p, &sh.b.clusters);
     let Shaped { b, has_page_fields, notes, drop_cap, drop_cap_w, maths, enclosures, rubies, displays, ptabs, left, runs, .. } = sh;

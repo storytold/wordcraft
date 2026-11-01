@@ -102,6 +102,8 @@ impl Session {
             find,
             goal_x,
             page_hint,
+            visual_anchor: None,
+            visual_focus: None,
             registry,
             author: "WordCraft User".into(),
             initials: String::new(),

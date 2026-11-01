@@ -11424,6 +11424,260 @@ fn nested_spans_use_grid_weights() {
     assert!((widths[0] - widths[1]).abs() < 0.01, "equivalent nested grids changed outer fitting: {widths:?}");
 }
 
+#[derive(Clone, Copy)]
+enum RefText {
+    Plain,
+    Field,
+}
+
+fn ref_wrap_doc(text: &str, kind: RefText) -> Document {
+    let cp = wordcraft_doc::CharProps {
+        font: Some("Arial".into()),
+        size: Some(8.0),
+        bold: Some(true),
+        italic: Some(true),
+        color: Some(wordcraft_doc::TextColor::Rgb(wordcraft_doc::Rgb(20, 40, 60))),
+        ..Default::default()
+    };
+    let mut p = wordcraft_doc::Paragraph::new();
+    match kind {
+        RefText::Plain => {
+            p.insert_text(0, text, &cp).unwrap();
+        }
+        RefText::Field => p
+            .insert_object(
+                0,
+                InlineObject::Field { instr: "REF Sample".into(), result: text.into(), locked: true, dirty: true, code: false, form: String::new() },
+                &cp,
+            )
+            .unwrap(),
+    }
+    p.props.space_before = Some(0.0);
+    p.props.space_after = Some(0.0);
+    p.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Exactly(10.0));
+    let mut d = Document::new();
+    d.last_section.page_w = 90.0;
+    d.last_section.page_h = 80.0;
+    d.last_section.margin_left = 20.0;
+    d.last_section.margin_right = 20.0;
+    d.last_section.margin_top = 20.0;
+    d.last_section.margin_bottom = 20.0;
+    d.body = vec![wordcraft_doc::para_block(p)];
+    d
+}
+
+fn ref_drawn_words(d: &Document, l: &DocLayout) -> Vec<String> {
+    l.pages
+        .iter()
+        .flat_map(|p| display::page_display(d, p, &display::DisplayOptions::default()))
+        .filter_map(|draw| match draw {
+            display::Draw::Glyphs { text, .. } => Some(text),
+            _ => None,
+        })
+        .flat_map(|s| s.split_whitespace().map(str::to_owned).collect::<Vec<_>>())
+        .collect()
+}
+
+#[test]
+fn ref_result_wraps_like_text() {
+    let plain = ref_wrap_doc("Original sample", RefText::Plain);
+    let field = ref_wrap_doc("Original sample", RefText::Field);
+    let a = lay(&plain);
+    let b = lay(&field);
+    let lines = |l: &DocLayout| {
+        l.pages
+            .iter()
+            .flat_map(|p| &p.items)
+            .filter_map(|it| match it {
+                Placed::Lines { l0, l1, .. } => Some(l1 - l0),
+                _ => None,
+            })
+            .sum::<usize>()
+    };
+    assert_eq!(lines(&a), 2);
+    assert_eq!(lines(&b), lines(&a));
+    assert_eq!(ref_drawn_words(&field, &b), ref_drawn_words(&plain, &a));
+    for page in &b.pages {
+        for it in &page.items {
+            if let Placed::Lines { para, .. } = it {
+                for c in &para.clusters {
+                    if c.g0 == c.g1 {
+                        continue;
+                    }
+                    let rc = &para.styles[c.style as usize].rc;
+                    assert!(rc.bold && rc.italic);
+                    assert_eq!(rc.size, 8.0);
+                    assert_eq!(rc.color, wordcraft_doc::TextColor::Rgb(wordcraft_doc::Rgb(20, 40, 60)));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn ref_wrap_crosses_pages_once() {
+    let text = "Alpha Beta ".repeat(40);
+    let plain = ref_wrap_doc(&text, RefText::Plain);
+    let field = ref_wrap_doc(&text, RefText::Field);
+    let a = lay(&plain);
+    let b = lay(&field);
+    assert!(a.pages.len() > 1);
+    assert_eq!(b.pages.len(), a.pages.len());
+    assert_eq!(ref_drawn_words(&field, &b), ref_drawn_words(&plain, &a));
+}
+
+#[test]
+fn ref_caret_spans_wrapped_field() {
+    let mut d = ref_wrap_doc("Original sample", RefText::Field);
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().insert_text(0, "X ", &Default::default()).unwrap();
+    let l = lay(&d);
+    let before = l.caret(&Pos::body(0, 0)).unwrap();
+    let start = l.caret(&Pos::body(0, 2)).unwrap();
+    let end = l.caret(&Pos::body(0, 5)).unwrap();
+    assert_eq!(start.top, before.top);
+    assert!(end.top > start.top);
+
+    let d = ref_wrap_doc(&"Alpha Beta ".repeat(40), RefText::Field);
+    let l = lay(&d);
+    assert_eq!(l.caret(&Pos::body(0, 0)).unwrap().page, 0);
+    assert_eq!(l.caret(&Pos::body(0, 3)).unwrap().page, l.pages.len() - 1);
+}
+
+#[test]
+fn ref_bidi_keeps_atomic_result() {
+    fn first_para(l: &DocLayout) -> &para::ParaLayout {
+        l.pages[0]
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Placed::Lines { para, .. } => Some(&**para),
+                _ => None,
+            })
+            .unwrap()
+    }
+
+    for (rtl, text) in [
+        (false, "אב גד"),
+        (false, "ab אב 12 (cd)"),
+        (true, "ab 12 (cd)"),
+        (false, "\u{202e}ab cd\u{202c}"),
+        (false, "\u{2067}ab cd\u{2069}"),
+        (false, "١٢ ٣٤"),
+    ] {
+        let mut d = ref_wrap_doc(text, RefText::Field);
+        d.last_section.page_w = 1200.0;
+        d.last_section.page_h = 400.0;
+        let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+        p.props.bidi = Some(rtl);
+        let InlineObject::Field { instr, .. } = &mut p.objects[0] else { panic!("field") };
+        *instr = r"REF Sample \h".into();
+        let wrapped = lay(&d);
+        let actual = first_para(&wrapped);
+        assert_eq!(actual.clusters.len(), 1, "rtl={rtl}, {text:?}: preserve the whole-result isolate");
+        assert_eq!(actual.shown.len(), 1);
+        assert_eq!(actual.shown[0].1, text);
+        assert_eq!(actual.styles[actual.clusters[0].style as usize].rc.link.as_deref(), Some("#Sample"));
+
+        let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+        let InlineObject::Field { instr, .. } = &mut p.objects[0] else { panic!("field") };
+        *instr = "CACHED".into();
+        let atomic = lay(&d);
+        let expected = first_para(&atomic);
+        assert_eq!(actual.shown, expected.shown, "retain complete glyph-to-result ranges");
+        assert_eq!(actual.glyphs.len(), expected.glyphs.len());
+        for (a, b) in actual.glyphs.iter().zip(&expected.glyphs) {
+            assert_eq!(a.gid, b.gid, "rtl={rtl}, {text:?}");
+            assert!((a.dx - b.dx).abs() < 0.001 && (a.dy - b.dy).abs() < 0.001, "retain whole-result glyph placement");
+        }
+        assert!((actual.clusters[0].adv - expected.clusters[0].adv).abs() < 0.001);
+    }
+}
+
+#[test]
+fn ref_thai_retains_atomic_face() {
+    const TEXT: &str = "ไทย Latin 123";
+    const FONT: &str = "TH Missing REF 2473";
+    let db = wordcraft_fonts::FontDb::global();
+    let run: Vec<char> = TEXT.chars().filter(|c| !c.is_whitespace()).collect();
+    if db.fallback_for_run(&run, 0, false, false).is_none() {
+        eprintln!("UNEXERCISED_REF_THAI_FACE: no face covers the complete Thai/Latin run; this run is not font qualification");
+        return;
+    }
+    assert!(wordcraft_fonts::word::resolve(FONT, false, false).substituted);
+    let mut d = ref_wrap_doc(TEXT, RefText::Field);
+    d.last_section.page_w = 1200.0;
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    p.runs[0].props.font = Some(FONT.into());
+    p.runs[0].props.bold = Some(false);
+    p.runs[0].props.italic = Some(false);
+    let wrapped = lay(&d);
+    let first_para = |l: &DocLayout| {
+        l.pages[0]
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Placed::Lines { para, .. } => Some(para.clone()),
+                _ => None,
+            })
+            .unwrap()
+    };
+    let actual = first_para(&wrapped);
+    assert_eq!(actual.clusters.len(), 1, "a missing Thai font keeps whole-result shaping");
+    assert_eq!(actual.shown[0].1, TEXT);
+    let drawn = display::page_display(&d, &wrapped.pages[0], &display::DisplayOptions::default());
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    let InlineObject::Field { instr, .. } = &mut p.objects[0] else { panic!("field") };
+    *instr = "CACHED".into();
+    let atomic = lay(&d);
+    let expected = first_para(&atomic);
+    assert_eq!(actual.shown, expected.shown);
+    assert_eq!(actual.styles.len(), expected.styles.len());
+    for (a, b) in actual.styles.iter().zip(&expected.styles) {
+        assert_eq!(a.face.id(), b.face.id(), "retain whole-result fallback faces");
+    }
+    assert_eq!(actual.glyphs.len(), expected.glyphs.len());
+    for (a, b) in actual.glyphs.iter().zip(&expected.glyphs) {
+        assert_eq!(a.gid, b.gid);
+        assert!((a.dx - b.dx).abs() < 0.001 && (a.dy - b.dy).abs() < 0.001);
+    }
+    assert!((actual.clusters[0].adv - expected.clusters[0].adv).abs() < 0.001);
+    let chosen = actual.styles[actual.clusters[0].style as usize].face;
+    for c in TEXT.chars().filter(|c| !c.is_whitespace()) {
+        assert!(chosen.covers(c), "{} must cover Thai and Latin: {c}", chosen.family);
+    }
+    assert!(actual.glyphs.iter().all(|g| g.gid != 0), "the complete result has no missing glyphs");
+    assert!(chosen.covers('ไ') && chosen.covers('L'));
+    let mut shown = String::new();
+    for draw in drawn {
+        if let display::Draw::Glyphs { face, text, glyphs, .. } = draw {
+            assert_eq!(face.id(), chosen.id(), "Thai and Latin draw with the complete-result face");
+            assert!(glyphs.iter().all(|g| g.0 != 0));
+            shown.push_str(&text);
+        }
+    }
+    assert_eq!(shown, TEXT, "both scripts were drawn and checked");
+    eprintln!("REF_THAI_COMPLETE_FACE_ASSERTIONS_EXECUTED: {} draws Thai and Latin", chosen.family);
+}
+
+#[test]
+fn ref_latin_keeps_piece_wrapping() {
+    for (font, text) in [("No Such Latin Font REF 2473", "ไทย Latin"), ("TH Missing REF 2473", "Latin only")] {
+        let mut d = ref_wrap_doc(text, RefText::Field);
+        d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().runs[0].props.font = Some(font.into());
+        let l = lay(&d);
+        let para = l.pages[0]
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Placed::Lines { para, .. } => Some(para),
+                _ => None,
+            })
+            .unwrap();
+        assert!(para.clusters.len() > 1, "{font}: {text}");
+        assert_eq!(ref_drawn_words(&d, &l), text.split_whitespace().map(str::to_owned).collect::<Vec<_>>());
+    }
+}
+
 /// #2048: a picture anchored in a later paragraph but placed higher up the page (fixed on the
 /// page, or moved up from its paragraph) keeps the text of the paragraphs above its anchor clear
 /// too, as in Word, not just its own paragraph's.
@@ -12090,4 +12344,156 @@ fn an_empty_bulleted_mark_after_a_bulleted_section_closer_draws_no_bullet() {
             .any(|it| matches!(it, Placed::Lines { path, para, .. } if *path == Path::top(filler) && para.label.is_some()));
         assert!(text, "{filler} lines above: the text closer keeps its bullet");
     }
+}
+
+#[test]
+fn ref_keeps_complete_cjk_face() {
+    let text = "日本語 龘 日本語";
+    let mut doc = ref_wrap_doc(text, RefText::Field);
+    doc.last_section.page_w = 1200.0;
+    let drawn = |doc: &Document| {
+        let layout = lay(doc);
+        display::page_display(doc, &layout.pages[0], &display::DisplayOptions::default())
+            .into_iter()
+            .flat_map(|draw| match draw {
+                display::Draw::Glyphs { face, glyphs, .. } => glyphs.into_iter().map(|glyph| (face.id(), glyph.0)).collect::<Vec<_>>(),
+                _ => Vec::new(),
+            })
+            .collect::<Vec<_>>()
+    };
+    let wrapped = drawn(&doc);
+    let mut plain = ref_wrap_doc(text, RefText::Plain);
+    plain.last_section.page_w = doc.last_section.page_w;
+    assert!(!wrapped.is_empty());
+    assert_eq!(wrapped, drawn(&plain), "REF pieces retain the full text's CJK face and primary-font spaces");
+}
+
+#[test]
+fn ref_visual_lines() {
+    let doc = ref_wrap_doc(&"Alpha Beta ".repeat(12), RefText::Field);
+    let layout = Arc::new(lay(&doc));
+    let mut checked = 0;
+    for (page, placed) in layout.pages.iter().enumerate() {
+        for item in &placed.items {
+            let Placed::Lines { para, l0, l1, x, y, .. } = item else { continue };
+            for li in *l0..*l1 {
+                let line = &para.lines[li];
+                let top = y + line.top - para.lines[*l0].top;
+                let target = layout.hit_visual(page, x + line.left, top + line.height / 2.0, StoryRef::Body).unwrap();
+                assert_eq!(target.position(), &Pos::body(0, 0));
+                let caret = layout.caret_visual(target.position(), Some(&target), page).unwrap();
+                assert_eq!(caret.page, page);
+                assert!(caret.top >= top && caret.top < top + line.height, "line={li}: {caret:?}");
+                for edge in [crate::VisualEdge::Leading, crate::VisualEdge::Trailing] {
+                    let end = layout.line_edge_visual(target.position(), Some(&target), page, edge).unwrap();
+                    let expected = if edge == crate::VisualEdge::Leading { 0 } else { wordcraft_doc::para::OBJ.len_utf8() };
+                    assert_eq!(end.position().off, expected);
+                    assert!(doc.body[0].as_para().unwrap().text.is_char_boundary(end.position().off));
+                    let caret = layout.caret_visual(end.position(), Some(&end), page).unwrap();
+                    assert_eq!(caret.page, page);
+                    assert!(caret.top >= top && caret.top < top + line.height);
+                }
+                let other = Arc::new((*layout).clone());
+                assert_eq!(other.caret_visual(target.position(), Some(&target), page), other.caret_on(target.position(), page));
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked > 4);
+    assert_eq!(layout.caret(&Pos::body(0, 0)).unwrap().page, 0);
+    assert_eq!(layout.caret(&Pos::body(0, 3)).unwrap().page, layout.pages.len() - 1);
+}
+
+#[test]
+fn ref_visual_navigation() {
+    let doc = ref_wrap_doc(&"Alpha Beta ".repeat(12), RefText::Field);
+    let layout = Arc::new(lay(&doc));
+    let mut current = layout.hit_visual(0, 20.0, 21.0, StoryRef::Body).unwrap();
+    let mut seen = vec![layout.caret_visual(current.position(), Some(&current), 0).unwrap()];
+    let mut goal = None;
+    while let Some((next, gx)) = layout.vertical_visual(current.position(), Some(&current), goal, 1, seen.last().unwrap().page) {
+        let caret = layout.caret_visual(next.position(), Some(&next), 0).unwrap();
+        assert!(!seen.contains(&caret), "navigation must not repeat a shared source offset");
+        seen.push(caret);
+        current = next;
+        goal = Some(gx);
+    }
+    let lines: usize = layout
+        .pages
+        .iter()
+        .flat_map(|p| &p.items)
+        .filter_map(|it| match it {
+            Placed::Lines { l0, l1, .. } => Some(l1 - l0),
+            _ => None,
+        })
+        .sum();
+    assert_eq!(seen.len(), lines);
+    for expected in seen.iter().rev().skip(1) {
+        let (next, gx) = layout.vertical_visual(current.position(), Some(&current), goal, -1, 0).unwrap();
+        assert_eq!(&layout.caret_visual(next.position(), Some(&next), 0).unwrap(), expected);
+        current = next;
+        goal = Some(gx);
+    }
+}
+
+#[test]
+fn ref_visual_legacy_paths() {
+    for direction in [TextDirection::Horizontal, TextDirection::Down, TextDirection::Up] {
+        let mut doc = ref_wrap_doc("Alpha Beta Gamma", RefText::Field);
+        doc.last_section.text_direction = direction;
+        let layout = Arc::new(lay(&doc));
+        let caret = layout.caret(&Pos::body(0, 0)).unwrap();
+        let (x, y) = (caret.x + caret.width / 2.0, caret.top + caret.height / 2.0);
+        let visual = layout.hit_visual(caret.page, x, y, StoryRef::Body).unwrap();
+        assert_eq!(Some(visual.position()), layout.hit(caret.page, x, y, StoryRef::Body).as_ref());
+        assert_eq!(layout.caret_visual(visual.position(), Some(&visual), caret.page), layout.caret_on(visual.position(), caret.page));
+    }
+    let doc = ref_wrap_doc("אב גד", RefText::Field);
+    let layout = Arc::new(lay(&doc));
+    let caret = layout.caret(&Pos::body(0, 0)).unwrap();
+    let visual = layout.hit_visual(caret.page, caret.x, caret.top + caret.height / 2.0, StoryRef::Body).unwrap();
+    assert_eq!(layout.caret_visual(visual.position(), Some(&visual), caret.page), layout.caret_on(visual.position(), caret.page));
+}
+
+/// A repeated header can place the same source line twice on one page, in different columns.
+#[test]
+fn ref_repeated_line_occurrence() {
+    let doc = ref_wrap_doc(&"Alpha Beta ".repeat(12), RefText::Field);
+    let mut layout = lay(&doc);
+    let first = layout.pages[0].items.iter().find(|item| matches!(item, Placed::Lines { l0, l1, .. } if l1 - l0 > 2)).unwrap().clone();
+    let mut second = first.clone();
+    let column_offset = 300.0;
+    if let Placed::Lines { x, .. } = &mut second {
+        *x += column_offset;
+    }
+    layout.pages[0].items = vec![first, second];
+    layout.pages[0].w += column_offset;
+    layout.pages[0].body.w += column_offset;
+    let layout = Arc::new(layout);
+    let Placed::Lines { para, l0, x, y, .. } = &layout.pages[0].items[0] else { panic!("placed text") };
+    let li = l0 + 1;
+    let line = &para.lines[li];
+    let hit_y = y + line.top - para.lines[*l0].top + line.height / 2.0;
+    let left = layout.hit_visual(0, x + line.left + 1.0, hit_y, StoryRef::Body).unwrap();
+    let right = layout.hit_visual(0, x + column_offset + line.left + 1.0, hit_y, StoryRef::Body).unwrap();
+    assert_eq!(left.position(), right.position(), "copies retain the same legal source position");
+    assert_ne!(left, right, "same-Pos dragging must distinguish physical copies");
+    let caret = |target: &crate::VisualPos| layout.caret_visual(target.position(), Some(target), 0).unwrap();
+    let left_caret = caret(&left);
+    let right_caret = caret(&right);
+    assert!((right_caret.x - left_caret.x - column_offset).abs() < 0.001);
+    assert_eq!(left_caret.top, right_caret.top);
+    for edge in [crate::VisualEdge::Leading, crate::VisualEdge::Trailing] {
+        let left_edge = layout.line_edge_visual(left.position(), Some(&left), 0, edge).unwrap();
+        let right_edge = layout.line_edge_visual(right.position(), Some(&right), 0, edge).unwrap();
+        assert!((caret(&right_edge).x - caret(&left_edge).x - column_offset).abs() < 0.001);
+    }
+    for dir in [-1, 1] {
+        let (next, goal) = layout.vertical_visual(right.position(), Some(&right), None, dir, 0).unwrap();
+        assert!((caret(&next).x - right_caret.x).abs() < 0.001, "vertical movement stays in the selected column");
+        let (back, _) = layout.vertical_visual(next.position(), Some(&next), Some(goal), -dir, 0).unwrap();
+        assert_eq!(caret(&back), right_caret);
+    }
+    let other = Arc::new((*layout).clone());
+    assert_eq!(other.caret_visual(right.position(), Some(&right), 0), other.caret_on(right.position(), 0), "another owner rejects the occurrence");
 }

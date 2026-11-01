@@ -6,6 +6,13 @@ use wordcraft_doc::{Pos, StoryRef};
 use super::{parse_pos, sel_result};
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 
+/// Whether a visual caret move replaces or extends the logical selection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SelectionMode {
+    Replace,
+    Extend,
+}
+
 const EXTEND: &str = r#"{"extend"?: bool}"#;
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -76,6 +83,7 @@ fn extend(v: &Value) -> bool {
 }
 
 fn apply(s: &mut Session, to: Pos, ext: bool) {
+    s.drop_visual(if ext { SelectionMode::Extend } else { SelectionMode::Replace });
     if ext {
         s.sel.focus = to;
     } else {
@@ -110,6 +118,7 @@ fn lr(s: &mut Session, v: &Value, is_left: bool) -> CmdResult {
         let (a, b) = s.sel.ordered();
         // The left edge of a selection in right-to-left text is its logical end.
         let to_start = is_left != rtl_para(s);
+        s.drop_visual(SelectionMode::Replace);
         s.sel = Selection::caret(if to_start { a } else { b });
         s.goal_x = None;
         return sel_result(s);
@@ -216,41 +225,33 @@ fn vert(s: &mut Session, v: &Value, dir: i32) -> CmdResult {
     let ext = extend(v);
     let l = s.layout();
     let from = s.sel.focus.clone();
-    let to = match l.vertical(&from, s.goal_x, dir, s.page_hint) {
-        Some((p, gx)) => {
-            s.goal_x = Some(gx);
-            p
-        }
-        None => {
-            // Top/bottom of the story: go to its start/end.
-            if dir < 0 { s.doc.start_of(from.story) } else { s.doc.end_of(from.story) }
-        }
+    let target = l.vertical_visual(&from, s.visual_hint(), s.goal_x, dir, s.page_hint);
+    let (to, goal) = match &target {
+        Some((target, gx)) => (target.position().clone(), Some(*gx)),
+        None => (if dir < 0 { s.doc.start_of(from.story) } else { s.doc.end_of(from.story) }, s.goal_x),
     };
-    if let Some(c) = l.caret_on(&to, s.page_hint) {
+    apply(s, to, ext);
+    if let Some((target, _)) = target {
+        s.retain_visual(target);
+    }
+    s.goal_x = goal;
+    if let Some(c) = s.caret_geometry(&l, &s.sel.focus) {
         s.page_hint = c.page;
     }
-    let gx = s.goal_x;
-    apply(s, to, ext);
-    s.goal_x = gx;
     sel_result(s)
 }
 
 fn line(s: &mut Session, v: &Value, home: bool) -> CmdResult {
     let ext = extend(v);
     let l = s.layout();
-    let from = s.sel.focus.clone();
-    let to = match l.line_bounds(&from, s.page_hint) {
-        Some((a, b)) => {
-            if home {
-                a
-            } else {
-                b
-            }
-        }
-        None => from,
-    };
+    let edge = if home { wordcraft_layout::VisualEdge::Leading } else { wordcraft_layout::VisualEdge::Trailing };
+    let target = l.line_edge_visual(&s.sel.focus, s.visual_hint(), s.page_hint, edge);
+    let to = target.as_ref().map_or_else(|| s.sel.focus.clone(), |target| target.position().clone());
     s.goal_x = None;
     apply(s, to, ext);
+    if let Some(target) = target {
+        s.retain_visual(target);
+    }
     sel_result(s)
 }
 
@@ -258,30 +259,45 @@ fn page(s: &mut Session, v: &Value, dir: i32) -> CmdResult {
     let ext = extend(v);
     let l = s.layout();
     let from = s.sel.focus.clone();
-    let Some(c) = l.caret_on(&from, s.page_hint) else { return sel_result(s) };
+    let Some(c) = s.caret_geometry(&l, &from) else { return sel_result(s) };
     let np = if dir < 0 { c.page.saturating_sub(1) } else { (c.page + 1).min(l.pages.len().saturating_sub(1)) };
-    let to = l.hit(np, c.x, c.top + 1.0, from.story).unwrap_or(from);
+    let target = l.hit_visual(np, c.x, c.top + 1.0, from.story);
+    let to = target.as_ref().map_or(from, |target| target.position().clone());
     s.page_hint = np;
     apply(s, to, ext);
+    if let Some(target) = target {
+        s.retain_visual(target);
+    }
     sel_result(s)
 }
 
 fn set(s: &mut Session, v: &Value) -> CmdResult {
     let ext = extend(v);
+    let mut point = None;
     let to = if let Some(pv) = v.get("pos") {
         parse_pos(pv).ok_or_else(|| CmdError::Params("bad `pos`".into()))?
     } else if let (Some(pg), Some(x), Some(y)) = (p::u64(v, "page"), p::f32(v, "x"), p::f32(v, "y")) {
         let story = super::story_param(s, v);
         let l = s.layout();
-        let page = usize::try_from(pg).unwrap_or(usize::MAX);
+        let page = usize::try_from(pg).map_err(|_| CmdError::Params("bad `page`".into()))?;
+        let hit = l.hit_visual(page, x, y, story).ok_or_else(|| CmdError::Params("no text on that page".into()))?;
+        let pos = hit.position().clone();
+        point = Some((page, x, y, story));
         s.page_hint = page;
-        l.hit(page, x, y, story).ok_or_else(|| CmdError::Params("no text on that page".into()))?
+        pos
     } else {
         return Err(CmdError::Params("`pos` or `page`/`x`/`y` required".into()));
     };
     let to = s.doc.clamp(&to);
     s.goal_x = None;
     apply(s, to, ext);
+    // Ending typing can replace the snapshot even when the document is unchanged.
+    if let Some((page, x, y, story)) = point {
+        let layout = s.layout();
+        if let Some(target) = layout.hit_visual(page, x, y, story) {
+            s.retain_visual(target);
+        }
+    }
     sel_result(s)
 }
 
