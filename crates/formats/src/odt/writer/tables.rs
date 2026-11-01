@@ -90,6 +90,7 @@ impl Writer {
             vec![468.0 / cols as f32; cols]
         };
         self.tables.push(widths);
+        self.table_looks.push(t.extra.as_ref().map(|x| (x.align, x.width_pct.filter(|p| *p < 100.0))).unwrap_or_default());
         self.table_starts.push(self.master.take());
         let tn = format!("{}{}", self.prefix, self.tables.len());
         out.push_str(&format!("<table:table table:name=\"Table{tn}\" table:style-name=\"Table{tn}\">"));
@@ -101,7 +102,21 @@ impl Writer {
             if ri == 0 && header_rows > 0 {
                 out.push_str("<table:table-header-rows>");
             }
-            out.push_str("<table:table-row>");
+            // A row of a set height: exact (`style:row-height`) or at least (`style:min-row-height`).
+            match t.extra.as_ref().and_then(|x| x.heights.get(ri).copied().flatten()) {
+                Some((h, exact)) => {
+                    let props = if exact { format!(" style:row-height=\"{}\"", pt(h)) } else { format!(" style:min-row-height=\"{}\"", pt(h)) };
+                    let k = match self.row_styles.iter().position(|s| *s == props) {
+                        Some(k) => k,
+                        None => {
+                            self.row_styles.push(props);
+                            self.row_styles.len() - 1
+                        }
+                    };
+                    out.push_str(&format!("<table:table-row table:style-name=\"{}Row{}\">", self.prefix, k + 1));
+                }
+                None => out.push_str("<table:table-row>"),
+            }
             let mut g = 0usize;
             for c in row {
                 let span = c.colspan.clamp(1, 63) as usize;

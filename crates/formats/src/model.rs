@@ -28,7 +28,7 @@ pub use media::{base64_decode, base64_encode, data_uri, decode_bounded, image_px
 pub use to_doc::{char_props, part_blocks, to_doc, to_doc_in};
 pub use types::{
     Affix, BoxLook, CODE_STYLE, Cell, Chart, FBlock, FComment, FTable, Flow, FlowOpts, Fmt, FmtChange, Img, Inline, Kind, Label, ListInfo, MAX_DEPTH,
-    MAX_FONT_NAME, MAX_GROUP_DEPTH, MAX_LINK, MONO_FONT, Member, Meta, OdfObject, Para, RUBY_BASE_SIZE, RevMark, Spacing, clean_text,
+    MAX_FONT_NAME, MAX_GROUP_DEPTH, MAX_LINK, MONO_FONT, Member, Meta, OdfObject, Para, RUBY_BASE_SIZE, RevMark, Spacing, TableExtra, clean_text,
     equations_as_text, flatten_tables, kept_font, kept_link, ranged_anchors, ruby_as_text, ruby_object,
 };
 pub(crate) use types::{Dropped, begin_import, dropped};
@@ -56,8 +56,12 @@ mod tests {
     fn insert_covered_is_bounded_on_hostile_rowspan() {
         // Many rows each carrying the maximum rowspan would be O(rows × rowspan) covered cells;
         // the work cap must keep insertion bounded (and quick) instead of exhausting memory.
-        let mut t =
-            FTable { rows: (0..20_000).map(|_| vec![Cell { rowspan: 1000, ..Default::default() }]).collect(), widths: Vec::new(), borderless: false };
+        let mut t = FTable {
+            rows: (0..20_000).map(|_| vec![Cell { rowspan: 1000, ..Default::default() }]).collect(),
+            widths: Vec::new(),
+            borderless: false,
+            extra: None,
+        };
         t.insert_covered();
         assert!(t.rows.iter().all(|r| r.len() <= 64), "a row grew past the column cap");
     }
@@ -107,6 +111,7 @@ mod tests {
             rows: vec![vec![Cell { rowspan: 2, ..Default::default() }, Cell::default()], vec![Cell::default()]],
             widths: vec![],
             borderless: false,
+            extra: None,
         };
         t.insert_covered();
         assert_eq!(t.rows[1].len(), 2);

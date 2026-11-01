@@ -167,6 +167,10 @@ fn para_extra(doc: &Document, p: &wordcraft_doc::props::ParaProps) -> Option<Box
         bidi: p.bidi.filter(|b| *b),
         drop_cap: p.drop_cap.filter(|l| *l > 1),
         drop_cap_distance: p.drop_cap_distance.filter(|_| p.drop_cap.is_some_and(|l| l > 1)),
+        keep_lines: p.keep_lines.filter(|k| *k),
+        widow_control: p.widow_control.filter(|w| !*w),
+        // Hyphenated (the document hyphenates and the paragraph doesn't opt out): `Some(false)`.
+        suppress_hyphens: (doc.settings.auto_hyphenation && p.suppress_hyphens != Some(true)).then_some(false),
         ..Default::default()
     };
     (x != wordcraft_doc::props::ParaProps::default()).then(|| Box::new(x))
@@ -710,7 +714,23 @@ fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: FlowOpts) -> FTa
     let visible = |b: &Option<wordcraft_doc::props::Borders>| b.as_ref().is_some_and(|b| b.any_visible());
     let borderless =
         t.props.style.is_none() && !visible(&t.props.borders) && t.rows.iter().flat_map(|r| &r.cells).all(|c| !visible(&c.props.borders));
-    FTable { rows, widths: t.grid.clone(), borderless }
+    // Formats that keep them get the table's alignment, width and row heights.
+    let extra = tracked.paras.then(|| {
+        use wordcraft_doc::props::HeightRule;
+        let heights = t
+            .rows
+            .iter()
+            .map(|r| match (r.props.height, r.props.height_rule) {
+                (Some(h), HeightRule::Exact) => Some((h, true)),
+                (Some(h), HeightRule::AtLeast) => Some((h, false)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        super::types::TableExtra { align: t.props.align, width: t.props.width, width_pct: t.props.width_pct, heights }
+    });
+    let extra =
+        extra.filter(|x| x.align.is_some() || x.width.is_some() || x.width_pct.is_some() || x.heights.iter().any(Option::is_some)).map(Box::new);
+    FTable { rows, widths: t.grid.clone(), borderless, extra }
 }
 
 /// The document body as a flow.

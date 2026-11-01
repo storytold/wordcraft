@@ -479,7 +479,7 @@ impl<'r> Builder<'r> {
                     // Keep at most MAX_ROWS rows (the model drops the rest anyway): bounds the
                     // O(rows × rowspan) work of `insert_covered` on a table of millions of `<tr>`.
                     let rows: Vec<_> = t.rows.into_iter().filter(|r| !r.is_empty()).take(wordcraft_doc::table::MAX_ROWS).collect();
-                    let mut ft = FTable { rows, widths: Vec::new(), borderless };
+                    let mut ft = FTable { rows, widths: Vec::new(), borderless, extra: None };
                     if !ft.rows.is_empty() {
                         ft.insert_covered();
                         self.container().push(FBlock::Table(ft));

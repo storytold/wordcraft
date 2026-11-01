@@ -73,6 +73,8 @@ pub(in crate::odt) struct TableB {
     pub(in crate::odt) hcover: usize,
     /// Widths in points of the `table:table-column`s so far, 0 where the style gives none.
     pub(in crate::odt) widths: Vec<f32>,
+    /// Its alignment and width, and each row's height so far (see [`crate::model::TableExtra`]).
+    pub(in crate::odt) extra: crate::model::TableExtra,
 }
 
 impl TableB {
@@ -84,6 +86,8 @@ impl TableB {
         // A table whose cells all say "no line" draws none.
         let stated = rows.iter().flatten().filter(|c| !c.covered).all(|c| c.borders.is_some());
         let borderless = stated && rows.iter().flatten().all(|c| !c.borders.is_some_and(|b| b.any_visible()));
-        FTable { rows, widths, borderless }
+        let extra = self.extra;
+        let kept = extra.align.is_some() || extra.width_pct.is_some() || extra.heights.iter().any(Option::is_some);
+        FTable { rows, widths, borderless, extra: kept.then(|| Box::new(extra)) }
     }
 }

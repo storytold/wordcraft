@@ -11,6 +11,7 @@ mod equations;
 mod fields;
 mod flat;
 mod floats;
+mod flow_breaks;
 mod fonts;
 mod format_changes;
 mod forms;

@@ -208,6 +208,14 @@ struct StyleInfo {
     cell_padding: [Option<f32>; 4],
     /// `style:column-width` of a table-column style's `style:table-column-properties`, in points.
     column_width: Option<f32>,
+    /// A table style's `style:table-properties`: `table:align`, and its width (`style:width`,
+    /// points, or `style:rel-width`, percent of the text width).
+    table_align: Option<Align>,
+    table_width: Option<f32>,
+    table_rel_width: Option<f32>,
+    /// A table-row style's `style:table-row-properties`: its height (`style:row-height`, exact)
+    /// or least height (`style:min-row-height`), points.
+    row_height: Option<(f32, bool)>,
     /// `style:master-page-name` of a paragraph or table style: its paragraphs (tables) start a
     /// page of that master page. Empty: explicitly none, which stops the lookup up the chain.
     master_page: Option<String>,
@@ -228,6 +236,14 @@ struct StyleInfo {
     rtl: Option<bool>,
     /// A drop cap (§17.9 `style:drop-cap`): lines it spans and its distance from the text.
     drop_cap: Option<(u8, f32)>,
+    /// How its lines break across pages: `fo:keep-together` (`always`: kept together),
+    /// `fo:widows`/`fo:orphans` (widow and orphan control on with any, off with none), and
+    /// `fo:break-after` (`page`: the next paragraph starts a page).
+    keep_lines: Option<bool>,
+    widow_control: Option<bool>,
+    break_after: bool,
+    /// `fo:hyphenate` of its text properties: its words may be hyphenated.
+    hyphenate: Option<bool>,
     /// `fo:border*` of a paragraph style, each side's padding as its distance from the text.
     para_borders: Option<Borders>,
     /// `fo:background-color` of a paragraph style (`Some(None)`: transparent, stated).
@@ -358,6 +374,11 @@ pub(super) struct ParaLook {
     pub(super) rtl: Option<bool>,
     /// A drop cap: lines it spans (2–10) and its distance from the text, points.
     pub(super) drop_cap: Option<(u8, f32)>,
+    /// Lines kept together, widow and orphan control, a page break after it, hyphenation.
+    pub(super) keep_lines: Option<bool>,
+    pub(super) widow_control: Option<bool>,
+    pub(super) break_after: bool,
+    pub(super) hyphenate: Option<bool>,
     /// Borders (when a side shows) and background.
     pub(super) borders: Option<Borders>,
     pub(super) shading: Option<Rgb>,
@@ -520,6 +541,28 @@ fn style_child(name: &str, q: &str, a: &Attrs, s: &mut StyleInfo) -> bool {
             if let Some(v) = get(a, "style:page-number") {
                 s.page_number = Some(v.trim().parse::<u32>().ok().map(|n| n.min(32_767)));
             }
+            // §20.300 `table:align`: `margins` fills the text width, as no alignment does.
+            s.table_align = match get(a, "table:align").map(str::trim) {
+                Some("left") => Some(Align::Left),
+                Some("center") => Some(Align::Center),
+                Some("right") => Some(Align::Right),
+                _ => s.table_align,
+            };
+            if let Some(w) = get(a, "style:width").and_then(length).filter(|w| w.is_finite() && *w > 0.0) {
+                s.table_width = Some(w.min(MAX_LEN));
+            }
+            if let Some(p) =
+                get(a, "style:rel-width").and_then(|v| v.trim().strip_suffix('%')?.trim().parse::<f32>().ok()).filter(|p| p.is_finite() && *p > 0.0)
+            {
+                s.table_rel_width = Some(p.min(100.0));
+            }
+        }
+        "table-row-properties" => {
+            if let Some(h) = get(a, "style:row-height").and_then(length).filter(|h| h.is_finite() && *h > 0.0) {
+                s.row_height = Some((h.min(MAX_LEN), true));
+            } else if let Some(h) = get(a, "style:min-row-height").and_then(length).filter(|h| h.is_finite() && *h > 0.0) {
+                s.row_height = Some((h.min(MAX_LEN), false));
+            }
         }
         "table-column-properties" => {
             if let Some(w) = get(a, "style:column-width").and_then(length) {
@@ -680,6 +723,20 @@ fn paragraph_properties(a: &Attrs, s: &mut StyleInfo) {
     };
     if get(a, "fo:break-before").is_some_and(|b| b.trim().eq_ignore_ascii_case("page")) {
         s.page_break = true;
+    }
+    if get(a, "fo:break-after").is_some_and(|b| b.trim().eq_ignore_ascii_case("page")) {
+        s.break_after = true;
+    }
+    match get(a, "fo:keep-together").map(str::trim) {
+        Some("always") => s.keep_lines = Some(true),
+        Some("auto") => s.keep_lines = Some(false),
+        _ => {}
+    }
+    let lines = |k: &str| get(a, k).and_then(|v| v.trim().parse::<u32>().ok());
+    if let (w, o) = (lines("fo:widows"), lines("fo:orphans"))
+        && (w.is_some() || o.is_some())
+    {
+        s.widow_control = Some(w.unwrap_or(0) > 0 || o.unwrap_or(0) > 0);
     }
     match get(a, "fo:keep-with-next") {
         Some("always") => s.keep_next = Some(true),
@@ -885,6 +942,9 @@ impl Styles {
                 "text-properties" => {
                     if let Some((_, s)) = &mut cur {
                         text_properties(&a, s, &self.faces);
+                        if let Some(h) = get(&a, "fo:hyphenate") {
+                            s.hyphenate = Some(h.trim() == "true");
+                        }
                     }
                 }
                 name if cur.as_mut().is_some_and(|(_, s)| style_child(name, &q, &a, s)) => {}
@@ -1055,6 +1115,21 @@ impl Styles {
     /// Width in points of a table-column style (whole chain).
     pub(super) fn column_width(&self, name: &str) -> Option<f32> {
         self.chain(name).iter().find_map(|(_, s)| s.column_width)
+    }
+
+    /// A table style's alignment, width (points) and relative width (percent), whole chain.
+    pub(super) fn table_look(&self, name: &str) -> (Option<Align>, Option<f32>, Option<f32>) {
+        let chain = self.chain(name);
+        (
+            chain.iter().find_map(|(_, s)| s.table_align),
+            chain.iter().find_map(|(_, s)| s.table_width),
+            chain.iter().find_map(|(_, s)| s.table_rel_width),
+        )
+    }
+
+    /// A table-row style's height (points) and whether it is exact, whole chain.
+    pub(super) fn row_height(&self, name: &str) -> Option<(f32, bool)> {
+        self.chain(name).iter().find_map(|(_, s)| s.row_height)
     }
 
     /// Background colour of a table-cell style (whole chain).
@@ -1239,6 +1314,11 @@ impl Styles {
         let contextual = own().find_map(|(_, s)| s.contextual);
         let rtl = own().find_map(|(_, s)| s.rtl);
         let drop_cap = own().find_map(|(_, s)| s.drop_cap);
+        let keep_lines = own().find_map(|(_, s)| s.keep_lines);
+        let widow_control = own().find_map(|(_, s)| s.widow_control);
+        // A page break after the paragraph: its own style's (automatic or common).
+        let break_after = own().take(1).any(|(_, s)| s.break_after);
+        let hyphenate = chain.iter().find_map(|(_, s)| s.hyphenate);
         // Where LibreOffice measures the tab stops from: the indent the paragraph ends up with,
         // whichever style in the chain gives it.
         let tab_origin = chain.iter().find_map(|(_, s)| s.spacing.left).filter(|v| v.is_finite()).unwrap_or(0.0);
@@ -1258,6 +1338,10 @@ impl Styles {
             rtl,
             tab_origin,
             drop_cap,
+            keep_lines,
+            widow_control,
+            break_after,
+            hyphenate,
         }
     }
 }

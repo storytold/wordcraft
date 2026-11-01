@@ -28,6 +28,8 @@ pub(super) struct Body<'a> {
     zip: &'a mut dyn FnMut(&str) -> Option<Vec<u8>>,
     /// The package's entry names and its manifest's media types, for embedded objects.
     pub(super) entries: &'a [String],
+    /// The paragraph before had a page break after it: the next one starts a page.
+    break_next: bool,
     /// The form controls of `office:forms`, placed where a `draw:control` names them.
     forms: super::forms::FormsReader,
     pub(super) manifest: Option<&'a HashMap<String, String>>,
@@ -125,6 +127,7 @@ impl<'a> Body<'a> {
             zip,
             entries: &[],
             forms: Default::default(),
+            break_next: false,
             manifest: None,
             containers: vec![Vec::new()],
             fmt: Vec::new(),
@@ -324,13 +327,19 @@ impl Body<'_> {
         let look = style.map(|s| self.styles.para(s)).unwrap_or_default();
         let (mut kind, align, mut pb, rule, keep_next, base) = (look.kind, look.align, look.page_break, look.rule, look.keep_next, look.fmt);
         // The section break starts the new page; no page break besides.
+        let mut new_page = false;
         if let Some(next) = style.and_then(|s| self.page_section(s))
             && self.break_section(next)
         {
-            pb = false;
+            (pb, new_page) = (false, true);
         }
         if let Some(h) = heading {
             kind = Kind::Heading(h.clamp(1, 6));
+        }
+        // The paragraph before ended with a page break after it (`fo:break-after`): this one
+        // starts the page.
+        if std::mem::take(&mut self.break_next) && !new_page {
+            pb = true;
         }
         let mut p = Para { kind, align, page_break: pb, keep_next, spacing: look.spacing, ..Default::default() };
         p.borders = look.borders;
@@ -350,6 +359,20 @@ impl Body<'_> {
         if let Some((lines, distance)) = look.drop_cap {
             let x = p.extra.get_or_insert_with(Default::default);
             (x.drop_cap, x.drop_cap_distance) = (Some(lines), (distance > 0.0).then_some(distance));
+        }
+        if look.keep_lines == Some(true) {
+            p.extra.get_or_insert_with(Default::default).keep_lines = Some(true);
+        }
+        if look.widow_control == Some(false) {
+            p.extra.get_or_insert_with(Default::default).widow_control = Some(false);
+        }
+        // Hyphenated: `Some(false)` (not suppressed); the document then hyphenates (see
+        // `import::hyphenation`).
+        if look.hyphenate == Some(true) {
+            p.extra.get_or_insert_with(Default::default).suppress_hyphens = Some(false);
+        }
+        if look.break_after {
+            self.break_next = true;
         }
         if let Some(mut tabs) = look.tabs {
             // LibreOffice measures tabs from the indent (its `TabsRelativeToIndent`); Word from
@@ -654,7 +677,7 @@ impl Body<'_> {
                     self.skip = 1;
                     return;
                 }
-                self.tables.push(TableB { rows: Vec::new(), row: Vec::new(), hcover: 0, widths: Vec::new() });
+                self.start_table(a);
             }
             "table-column" => {
                 let w = get(a, "table:style-name").and_then(|n| self.styles.column_width(n)).unwrap_or(0.0);
@@ -664,12 +687,7 @@ impl Body<'_> {
                     t.widths.extend(std::iter::repeat_n(w, n.min(room)));
                 }
             }
-            "table-row" => {
-                if let Some(t) = self.tables.last_mut() {
-                    t.row.clear();
-                    t.hcover = 0;
-                }
-            }
+            "table-row" => self.start_row(a),
             "table-cell" => {
                 self.end_para();
                 let span = get(a, "table:number-columns-spanned").and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(1).clamp(1, 63);
@@ -746,6 +764,28 @@ impl Body<'_> {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// A table (`table:table`) begins: its alignment and width, a relative width or a fixed
+    /// one when aligned (a table filling the margins, LibreOffice's default, takes the text width).
+    fn start_table(&mut self, a: &Attrs) {
+        let (align, width, rel) = get(a, "table:style-name").map(|s| self.styles.table_look(s)).unwrap_or_default();
+        let width_pct = rel.or_else(|| width.filter(|_| align.is_some()).map(|w| (w / self.sec.text_width().max(1.0) * 100.0).min(100.0)));
+        let extra = model::TableExtra { align, width: None, width_pct, heights: Vec::new() };
+        self.tables.push(TableB { rows: Vec::new(), row: Vec::new(), hcover: 0, widths: Vec::new(), extra });
+    }
+
+    /// A table row (`table:table-row`) begins: its height, kept as rows are (see the row's end).
+    fn start_row(&mut self, a: &Attrs) {
+        let height = get(a, "table:style-name").and_then(|s| self.styles.row_height(s));
+        if let Some(t) = self.tables.last_mut() {
+            t.row.clear();
+            t.hcover = 0;
+            if t.extra.heights.len() < wordcraft_doc::table::MAX_ROWS {
+                t.extra.heights.truncate(t.rows.len());
+                t.extra.heights.push(height);
+            }
         }
     }
 

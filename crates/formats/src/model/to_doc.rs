@@ -165,6 +165,11 @@ fn para_props(p: &Para, list_num: Option<u32>) -> ParaProps {
     if let Some(bg) = p.extra.as_ref().and_then(|x| x.shading) {
         out.shading = Some(bg);
     }
+    if let Some(x) = &p.extra {
+        out.keep_lines = x.keep_lines.or(out.keep_lines);
+        out.widow_control = x.widow_control.or(out.widow_control);
+        out.suppress_hyphens = x.suppress_hyphens.or(out.suppress_hyphens);
+    }
     // Tab stops a format gives the paragraph itself: finite, on the page, at most 64.
     if let Some(tabs) = p.extra.as_ref().and_then(|x| x.tabs.as_ref()) {
         let tabs: Vec<_> = tabs
@@ -708,7 +713,7 @@ impl<'a> Builder<'a> {
     }
 
     fn table(&mut self, t: &FTable, depth: usize) -> Option<Table> {
-        let rows: Vec<&Vec<Cell>> = t.rows.iter().filter(|r| !r.is_empty()).take(wordcraft_doc::table::MAX_ROWS).collect();
+        let rows: Vec<(usize, &Vec<Cell>)> = t.rows.iter().enumerate().filter(|(_, r)| !r.is_empty()).take(wordcraft_doc::table::MAX_ROWS).collect();
         if rows.is_empty() {
             return None;
         }
@@ -725,9 +730,21 @@ impl<'a> Builder<'a> {
             tb.grid = t.widths.iter().map(|w| w.clamp(6.0, 1584.0)).collect();
         }
         tb.rows.clear();
-        for r in rows {
+        if let Some(x) = &t.extra {
+            tb.props.align = x.align;
+            tb.props.width_pct = x.width_pct.filter(|p| p.is_finite() && *p > 0.0).map(|p| p.min(100.0));
+            tb.props.width = x.width.filter(|w| w.is_finite() && *w > 0.0).map(|w| w.min(1584.0));
+        }
+        for (ri, r) in rows {
             let mut row = wordcraft_doc::Row { props: RowProps::default(), cells: Vec::new(), controls: Default::default() };
             row.props.header = !r.is_empty() && r.iter().all(|c| c.header);
+            if let Some(&Some((h, exact))) = t.extra.as_ref().and_then(|x| x.heights.get(ri))
+                && h.is_finite()
+                && h > 0.0
+            {
+                row.props.height = Some(h.min(1584.0));
+                row.props.height_rule = if exact { wordcraft_doc::props::HeightRule::Exact } else { wordcraft_doc::props::HeightRule::AtLeast };
+            }
             let mut g = 0usize;
             for c in r.iter().take(wordcraft_doc::table::MAX_COLS) {
                 let span = (c.colspan.clamp(1, 63) as usize).min(cols.saturating_sub(g).max(1));

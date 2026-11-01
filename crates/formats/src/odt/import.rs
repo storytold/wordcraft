@@ -402,6 +402,26 @@ struct Parsed {
     /// The page settings that are the document's.
     page_doc: PageDoc,
     parts: page_parts::Parts,
+    /// Some paragraph hyphenates: the document hyphenates (see [`hyphenation`]).
+    hyphenate: bool,
+}
+
+/// Hyphenation is a paragraph's in ODF (`fo:hyphenate`) and the document's in WordCraft (as in
+/// Word): when any paragraph of `blocks` hyphenates (its `suppress_hyphens` read as
+/// `Some(false)`), the document does, and every other paragraph opts out; otherwise nothing is
+/// marked. Whether the document hyphenates.
+fn hyphenation(blocks: &mut [FBlock]) -> bool {
+    let mut any = false;
+    each_para(blocks, 0, &mut |p| any |= p.extra.as_ref().is_some_and(|x| x.suppress_hyphens == Some(false)));
+    each_para(blocks, 0, &mut |p| {
+        let hyphenates = p.extra.as_ref().is_some_and(|x| x.suppress_hyphens == Some(false));
+        if any && !hyphenates {
+            p.extra.get_or_insert_with(Default::default).suppress_hyphens = Some(true);
+        } else if let Some(x) = &mut p.extra {
+            x.suppress_hyphens = None;
+        }
+    });
+    any
 }
 
 /// [`parse_full`], plus what the document holds outside the flow.
@@ -463,6 +483,7 @@ fn parse_tracked(bytes: &[u8]) -> Result<Parsed, String> {
     if blocks.is_empty() {
         blocks.push(FBlock::Para(Para::default()));
     }
+    let hyphenate = hyphenation(&mut blocks);
     let track = body.track;
     Ok(Parsed {
         flow: Flow { blocks, meta },
@@ -483,6 +504,7 @@ fn parse_tracked(bytes: &[u8]) -> Result<Parsed, String> {
         tabs_from_indent: styles.tabs_from_indent,
         page_doc: pages.doc.clone(),
         parts,
+        hyphenate,
     })
 }
 
@@ -508,8 +530,10 @@ pub fn import(bytes: &[u8]) -> Result<Document, String> {
         tabs_from_indent,
         page_doc,
         parts,
+        hyphenate,
     } = parse_tracked(bytes)?;
     let mut doc = model::to_doc(&flow);
+    doc.settings.auto_hyphenation |= hyphenate;
     if font.is_some() {
         doc.styles.default_chr.font = font;
     }

@@ -132,6 +132,10 @@ pub(super) struct Writer {
     list_xml: HashMap<u32, String>,
     /// Table styles: (name, column widths).
     tables: Vec<Vec<f32>>,
+    /// Each table's alignment and relative width (percent), by table.
+    table_looks: Vec<(Option<Align>, Option<f32>)>,
+    /// Row styles: their `style:table-row-properties` attributes.
+    row_styles: Vec<String>,
     /// The master page (and page-number restart) each table in `tables` starts.
     table_starts: Vec<Option<SecStart>>,
     /// Automatic styles of the columned `text:section`s written.
@@ -258,10 +262,22 @@ impl Writer {
         if p.extra.as_ref().and_then(|x| x.bidi) == Some(true) {
             props.push_str(" style:writing-mode=\"rl-tb\"");
         }
-        // The children go after a separator in the key.
+        // How its lines break across pages (§20.247, §20.251, §20.250).
+        if p.extra.as_ref().and_then(|x| x.keep_lines) == Some(true) {
+            props.push_str(" fo:keep-together=\"always\"");
+        }
+        if p.extra.as_ref().and_then(|x| x.widow_control) == Some(false) {
+            props.push_str(" fo:widows=\"0\" fo:orphans=\"0\"");
+        }
+        // The children go after a separator in the key; text properties (hyphenation, a text
+        // property in ODF, §20.217) after another.
         if !children.is_empty() {
             props.push('\u{1}');
             props.push_str(&children);
+        }
+        if p.extra.as_ref().and_then(|x| x.suppress_hyphens) == Some(false) {
+            props.push('\u{2}');
+            props.push_str(" fo:hyphenate=\"true\"");
         }
         let master = start.map(|(m, _)| m.clone()).unwrap_or_default();
         if props.is_empty() && master.is_empty() {
@@ -645,9 +661,11 @@ impl Writer {
         }
         for ((parent, props, master), n) in &self.para_styles {
             let master = if master.is_empty() { String::new() } else { format!(" style:master-page-name=\"{}\"", x(master)) };
+            let (props, text) =
+                props.split_once('\u{2}').map_or((props.as_str(), String::new()), |(p, t)| (p, format!("<style:text-properties{t}/>")));
             let (attrs, children) = props.split_once('\u{1}').unwrap_or((props, ""));
             s.push_str(&format!(
-                "<style:style style:name=\"{n}\" style:family=\"paragraph\" style:parent-style-name=\"{parent}\"{master}><style:paragraph-properties{attrs}>{children}</style:paragraph-properties></style:style>"
+                "<style:style style:name=\"{n}\" style:family=\"paragraph\" style:parent-style-name=\"{parent}\"{master}><style:paragraph-properties{attrs}>{children}</style:paragraph-properties>{text}</style:style>"
             ));
         }
         for (i, kinds) in self.list_styles.iter().enumerate() {
@@ -708,8 +726,18 @@ impl Writer {
                 }
                 None => (String::new(), String::new()),
             };
+            // Aligned, or narrower than the text: as wide as its columns, with its relative width.
+            let (align, pct) = self.table_looks.get(i).copied().unwrap_or_default();
+            let align = match align {
+                Some(Align::Left) => "left",
+                Some(Align::Center) => "center",
+                Some(Align::Right) => "right",
+                _ if pct.is_some() => "left",
+                _ => "margins",
+            };
+            let rel = pct.map(|p| format!(" style:rel-width=\"{}%\"", (p * 100.0).round() / 100.0)).unwrap_or_default();
             s.push_str(&format!(
-                "<style:style style:name=\"Table{tn}\" style:family=\"table\"{master}><style:table-properties style:width=\"{}\" table:align=\"margins\"{number}/></style:style>",
+                "<style:style style:name=\"Table{tn}\" style:family=\"table\"{master}><style:table-properties style:width=\"{}\"{rel} table:align=\"{align}\"{number}/></style:style>",
                 pt(total)
             ));
             for (c, w) in widths.iter().enumerate() {
@@ -719,6 +747,13 @@ impl Writer {
                     pt(*w)
                 ));
             }
+        }
+        for (i, props) in self.row_styles.iter().enumerate() {
+            s.push_str(&format!(
+                "<style:style style:name=\"{}Row{}\" style:family=\"table-row\"><style:table-row-properties{props}/></style:style>",
+                self.prefix,
+                i + 1
+            ));
         }
         for (i, props) in self.graphic_styles.iter().enumerate() {
             // A text box's frame derives from LibreOffice's Frame style, without which

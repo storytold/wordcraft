@@ -324,7 +324,7 @@ fn special_characters_round_trip() {
 
 #[test]
 fn exported_tables_size_their_columns() {
-    let mut t = FTable { rows: Vec::new(), widths: vec![100.0, 200.0], borderless: false };
+    let mut t = FTable { rows: Vec::new(), widths: vec![100.0, 200.0], borderless: false, extra: None };
     let cell = |s: &str| Cell {
         blocks: vec![FBlock::Para({
             let mut p = Para::default();
@@ -359,7 +359,7 @@ fn urls_preserve_tildes() {
 
 #[test]
 fn exported_borderless_tables_omit_rules() {
-    let mut t = FTable { rows: Vec::new(), widths: vec![100.0, 200.0], borderless: true };
+    let mut t = FTable { rows: Vec::new(), widths: vec![100.0, 200.0], borderless: true, extra: None };
     let cell = |s: &str| Cell {
         blocks: vec![FBlock::Para({
             let mut p = Para::default();

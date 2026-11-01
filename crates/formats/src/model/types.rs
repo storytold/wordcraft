@@ -776,6 +776,20 @@ pub struct FTable {
     pub widths: Vec<f32>,
     /// The source table had no borders (HTML default); the document table gets no grid style.
     pub borderless: bool,
+    /// Its alignment, width and row heights, for formats that keep them (ODT).
+    pub extra: Option<Box<TableExtra>>,
+}
+
+/// A table's placement and row heights ([`FTable::extra`]).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TableExtra {
+    pub align: Option<wordcraft_doc::Align>,
+    /// Width, points.
+    pub width: Option<f32>,
+    /// Width, percent of the text width.
+    pub width_pct: Option<f32>,
+    /// Each row's height (points) and whether it is exact (else at least), by row.
+    pub heights: Vec<Option<(f32, bool)>>,
 }
 
 impl FTable {
