@@ -1,5 +1,6 @@
 use super::properties::{
-    bookmark_text, count_text, date_picture, doc_property, doc_property_arg, new_property_value, set_summary_property, summary_property, text_result,
+    BookmarkTextIndex, count_text, date_picture, doc_property, doc_property_arg, new_property_value, set_summary_property, summary_property,
+    text_result,
 };
 use super::toc::{heading_style_level, update_toc};
 use super::{
@@ -161,26 +162,41 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
     if in_body {
         update_seq(s)?;
     }
-    let mut pages: std::collections::HashMap<String, (u32, NumFormat)> = Default::default();
+    let stories: Vec<StoryRef> =
+        if all { std::iter::once(StoryRef::Body).chain(s.doc.parts.keys().map(|k| StoryRef::Part(*k))).collect() } else { vec![caret_story] };
+    // Only PAGEREF reads page information. Keep its pre-update snapshot when present, without
+    // finding caret geometry for every textual REF target when there is no PAGEREF to update.
+    let needs_pages = stories.iter().any(|&story| {
+        s.doc.para_paths(story).iter().any(|path| {
+            s.doc.para(story, path).is_some_and(|p| {
+                p.objects.iter().any(|o| matches!(o, InlineObject::Field { instr, .. } if wordcraft_layout::fields::field_name(instr) == "PAGEREF"))
+            })
+        })
+    });
+    let mut bookmarks: std::collections::HashMap<String, (Pos, (u32, NumFormat))> = Default::default();
     let formats: Vec<NumFormat> = s.doc.sections().into_iter().map(|(_, sec)| sec.page_num_format).collect();
     let marks = s.doc.bookmarks();
     for (name, pos) in marks {
-        let l = s.layout();
-        let page_info = l
-            .caret(&pos)
-            .and_then(|c| l.pages.get(c.page))
-            .map(|p| {
-                let format = formats.get(p.section).copied().unwrap_or_default();
-                (p.number, format)
-            })
-            .unwrap_or((1, NumFormat::Decimal));
-        pages.entry(name).or_insert(page_info);
+        let page_info = if needs_pages {
+            let l = s.layout();
+            l.caret(&pos)
+                .and_then(|c| l.pages.get(c.page))
+                .map(|p| {
+                    let format = formats.get(p.section).copied().unwrap_or_default();
+                    (p.number, format)
+                })
+                .unwrap_or((1, NumFormat::Decimal))
+        } else {
+            (1, NumFormat::Decimal)
+        };
+        // Result writes below leave marker positions intact. Share this first-name lookup
+        // with textual REF, but read the target's current text when each field is evaluated.
+        bookmarks.entry(name).or_insert((pos, page_info));
     }
-    let stories: Vec<StoryRef> =
-        if all { std::iter::once(StoryRef::Body).chain(s.doc.parts.keys().map(|k| StoryRef::Part(*k))).collect() } else { vec![caret_story] };
     // The document properties as the fields read and set them (`SUBJECT "New subject"`): a field
     // after one that sets a property shows the new value.
     let mut core = s.doc.core.clone();
+    let mut bookmark_text = BookmarkTextIndex::default();
     for (story, path) in stories.into_iter().flat_map(|st| s.doc.para_paths(st).into_iter().map(move |p| (st, p))).collect::<Vec<_>>() {
         let Some(p) = s.doc.para(story, &path) else { continue };
         if !p.objects.iter().any(|o| matches!(o, InlineObject::Field { .. })) {
@@ -213,9 +229,13 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
                     let f = FieldCode::parse(instr);
                     let target = f.args.first().map(|s| s.split('\\').next().unwrap_or("").trim_matches('"')).unwrap_or("");
                     let r = if name == "REF" {
-                        if !has_switch(instr, 'p') { bookmark_text(&s.doc, target) } else { None }
+                        if !has_switch(instr, 'p') {
+                            bookmarks.get(target).and_then(|(start, _)| bookmark_text.text_at(&s.doc, target, start))
+                        } else {
+                            None
+                        }
                     } else if !has_switch(instr, 'p') {
-                        pages.get(target).map(|(num, page_fmt)| {
+                        bookmarks.get(target).map(|(_, (num, page_fmt))| {
                             let fmt = wordcraft_layout::fields::format_switch(instr).unwrap_or(*page_fmt);
                             wordcraft_layout::fields::field_number(instr, fmt, *num)
                         })

@@ -185,6 +185,204 @@ fn update_fields_ref_and_pageref() {
     assert_eq!(res[4], ("REF TargetMark \\p".into(), "above".into()));
 }
 
+/// #3620: textual REF updates must not enumerate all bookmarks for every field.
+#[test]
+fn update_fields_ref_many_bookmarks_is_not_quadratic() {
+    let n = 8_000;
+    let mut doc = wordcraft_doc::Document::new();
+    doc.body.clear();
+    for i in 0..n {
+        let name = format!("Target{i}");
+        let mut p = Paragraph::new();
+        p.insert_text(0, &format!("Original target {i}"), &CharProps::default()).unwrap();
+        p.insert_object(0, InlineObject::BookmarkStart { name: name.clone() }, &CharProps::default()).unwrap();
+        p.insert_object(p.len(), InlineObject::BookmarkEnd { name }, &CharProps::default()).unwrap();
+        doc.body.push(Block::Para(p).into());
+    }
+    for i in 0..n {
+        let mut p = Paragraph::default();
+        p.insert_object(
+            0,
+            InlineObject::Field {
+                instr: format!("REF Target{i}"),
+                result: "stale".into(),
+                locked: false,
+                dirty: true,
+                code: false,
+                form: String::new(),
+            },
+            &CharProps::default(),
+        )
+        .unwrap();
+        doc.body.push(Block::Para(p).into());
+    }
+    let mut s = Session::new(doc);
+    let start = std::time::Instant::now();
+    update_fields(&mut s).unwrap();
+    let elapsed = start.elapsed();
+    let got = fields(&s);
+    assert_eq!(got.len(), n);
+    for (i, (_, text)) in got.iter().enumerate() {
+        assert_eq!(text, &format!("Original target {i}"));
+    }
+    // Ample headroom for ordinary CI, while guarding the repeated whole-body scan.
+    assert!(elapsed.as_secs_f32() < 20.0, "8,000 textual REF updates took {elapsed:?}");
+}
+
+/// #3620: many short targets in one paragraph must not copy or scan that paragraph per REF.
+#[test]
+fn update_fields_ref_dense_targets_is_not_quadratic() {
+    let document = |n: usize| {
+        let mut targets = Paragraph::new();
+        let mut refs = Paragraph::new();
+        for i in 0..n {
+            let name = format!("Target{i:05}");
+            targets.text.push(wordcraft_doc::para::OBJ);
+            targets.text.push_str(&format!("  α{i:05}Ω  "));
+            targets.text.push(wordcraft_doc::para::OBJ);
+            targets.objects.push(InlineObject::BookmarkStart { name: name.clone() });
+            targets.objects.push(InlineObject::BookmarkEnd { name: name.clone() });
+            refs.text.push(wordcraft_doc::para::OBJ);
+            refs.objects.push(InlineObject::Field {
+                instr: format!("REF {name}"),
+                result: "stale".into(),
+                locked: false,
+                dirty: true,
+                code: false,
+                form: String::new(),
+            });
+        }
+        for p in [&mut targets, &mut refs] {
+            p.runs = vec![wordcraft_doc::para::Run { len: p.len(), props: CharProps::default() }];
+        }
+        let mut d = wordcraft_doc::Document::new();
+        d.body = vec![Block::Para(targets).into(), Block::Para(refs).into()];
+        Session::new(d)
+    };
+    let cpu = || std::fs::read_to_string("/proc/thread-self/schedstat").ok()?.split_whitespace().next()?.parse::<u64>().ok();
+    let measure = |n| {
+        let mut s = document(n);
+        // Page lookup is shared with PAGEREF and is outside the changed range-reading work.
+        s.layout();
+        let before = cpu();
+        update_fields(&mut s).unwrap();
+        let after = cpu();
+        let got = fields(&s);
+        assert_eq!(got.len(), n);
+        for (i, (_, text)) in got.iter().enumerate() {
+            assert_eq!(text, &format!("α{i:05}Ω"));
+        }
+        match (before, after) {
+            (Some(a), Some(b)) if b > a => Some((b - a) as f64 * 1e-9),
+            _ => None,
+        }
+    };
+    let (small, big) = (measure(2_000), measure(16_000));
+    let (Some(a), Some(b)) = (small, big) else {
+        eprintln!("Dense REF targets: CPU counter unavailable; semantic checks passed, timing assertion skipped");
+        return;
+    };
+    eprintln!("Dense REF targets: small={a:.9}s big={b:.9}s ratio={:.2}", b / a);
+    assert!(b < a * 24.0 + 0.005, "8x dense targets must not take quadratic lookup work: {a:.9}s -> {b:.9}s");
+}
+
+/// The index stores positions, not text: later paragraphs still see earlier result writes.
+#[test]
+fn update_fields_ref_first_bookmark_and_live_results() {
+    let field = |instr: &str, result: &str| InlineObject::Field {
+        instr: instr.into(),
+        result: result.into(),
+        locked: false,
+        dirty: true,
+        code: false,
+        form: String::new(),
+    };
+    let para = |objects: Vec<InlineObject>| {
+        let mut p = Paragraph::default();
+        for o in objects {
+            p.insert_object(p.len(), o, &CharProps::default()).unwrap();
+        }
+        Block::Para(p).into()
+    };
+    let mut doc = wordcraft_doc::Document::new();
+    doc.core.title = "Fresh title".into();
+    doc.body = vec![
+        para(vec![field("REF Target", "stale")]),
+        para(vec![
+            InlineObject::BookmarkStart { name: "Target".into() },
+            field("TITLE", "Old title"),
+            InlineObject::BookmarkEnd { name: "Target".into() },
+        ]),
+        para(vec![field(r"REF Target \* Upper", "stale"), field("REF Missing", "keep missing"), field(r"REF Target \p", "above")]),
+        para(vec![
+            InlineObject::BookmarkStart { name: "Target".into() },
+            field("AUTHOR", "Duplicate"),
+            InlineObject::BookmarkEnd { name: "Target".into() },
+        ]),
+    ];
+    let mut s = Session::new(doc);
+    let before = s.doc.clone();
+    let selection = s.sel.clone();
+    s.run("references.updateFields", &json!({})).unwrap();
+    assert_eq!(
+        fields(&s).into_iter().map(|(_, r)| r).take(5).collect::<Vec<_>>(),
+        ["Old title", "Fresh title", "FRESH TITLE", "keep missing", "above"]
+    );
+    assert_eq!(s.sel, selection);
+    let updated = s.doc.clone();
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.doc, before);
+    s.run("edit.redo", &json!({})).unwrap();
+    assert_eq!(s.doc, updated);
+    // A later call must find bookmarks and field results afresh, without retained cache state.
+    s.doc.core.title = "Changed again".into();
+    s.run("references.updateFields", &json!({})).unwrap();
+    assert_eq!(fields(&s)[0].1, "Fresh title");
+    assert_eq!(fields(&s)[2].1, "CHANGED AGAIN");
+}
+
+/// A same-named part bookmark cannot displace the body's first target; missing ends keep
+/// the existing paragraph-end fallback, including Unicode text and an empty target.
+#[test]
+fn update_fields_ref_parts_and_unclosed_bookmarks() {
+    let mut doc = wordcraft_doc::Document::from_text("  αβ 中 tail  \n");
+    let p = doc.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    p.insert_object(0, InlineObject::BookmarkStart { name: "Body Target".into() }, &CharProps::default()).unwrap();
+    let p = doc.para_mut(StoryRef::Body, &Path::top(1)).unwrap();
+    p.insert_object(0, InlineObject::BookmarkStart { name: "Empty".into() }, &CharProps::default()).unwrap();
+    p.insert_object(p.len(), InlineObject::BookmarkEnd { name: "Empty".into() }, &CharProps::default()).unwrap();
+    let mut header = Paragraph::new();
+    header.insert_text(0, "Header witness", &CharProps::default()).unwrap();
+    header.insert_object(0, InlineObject::BookmarkStart { name: "Body Target".into() }, &CharProps::default()).unwrap();
+    for (instr, result, locked) in
+        [(r#"REF "Body Target" \h"#, "stale", false), ("REF Empty", "stale", false), ("REF Missing", "keep", false), ("REF Empty", "locked", true)]
+    {
+        header
+            .insert_object(
+                header.len(),
+                InlineObject::Field { instr: instr.into(), result: result.into(), locked, dirty: true, code: false, form: String::new() },
+                &CharProps::default(),
+            )
+            .unwrap();
+    }
+    let id = doc.add_part(PartKind::Header, vec![Block::Para(header).into()]);
+    let mut s = Session::new(doc);
+    s.sel = Selection::caret(Pos { story: StoryRef::Part(id), path: Path::top(0), off: 0 });
+    let body = s.doc.body.clone();
+    s.run("references.updateFields", &json!({})).unwrap();
+    assert_eq!(s.doc.body, body);
+    let p = s.doc.para(StoryRef::Part(id), &Path::top(0)).unwrap();
+    let got: Vec<_> = p
+        .objects
+        .iter()
+        .filter_map(|o| match o {
+            InlineObject::Field { result, dirty, .. } => Some((result.as_str(), *dirty)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(got, [("αβ 中 tail", false), ("", false), ("keep", true), ("locked", true)]);
+}
+
 /// A document with a body AUTHOR field and a header holding AUTHOR, NUMWORDS and a locked TITLE,
 /// all stale; the author is "Ada".
 fn doc_with_header_fields() -> (wordcraft_doc::Document, u32) {

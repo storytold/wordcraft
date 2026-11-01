@@ -1,11 +1,13 @@
 # WordCraft roadmap
 
+> **Textual REF performance update:** 2026-10-27 · Update Fields reuses its bookmark/page lookup for textual REF. The first body bookmark of each name still wins, and later paragraphs see earlier field-result writes. Missing targets, paragraph-end fallbacks, locks, story scope and Undo/Redo retain their behavior. Numeric REF switches and broader reference semantics remain separate. Original synthetic regressions cover this change. [Harrison-Booth later reported a targeted Word COM observation](https://github.com/storytold/wordcraft/pull/4644#issuecomment-6479029326): a DATE field inside a bookmark followed by REF displayed the updated date on both attempts. Those runs reported a shutdown timeout and a `Document.Close` type mismatch. Duplicate bookmarks, quoted or Unicode names, missing ends, nested cells and locked fields remain unverified in Word. Readiness estimates are unchanged.
+>
 > **Highlight update:** 2026-10-25 · Highlight shortcut toggles the last chosen colour off when the whole selection has it; explicit colour commands remain setters (#4085). Readiness estimates unchanged.
 
 **Stage: alpha** · next: beta, ~15 points (60% → 75% ready for real work) and ~150–230 h away
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-31 · **Change:** trivial (progress log: a paragraph naming an undefined style is formatted as Normal, #5077); previously trivial (progress log: TOC page numbers as PAGEREF fields, #5097); previously trivial (progress log: Backstage keytips, #4960); previously trivial (Progress log: only the printer's PDF leaves out links; Save these pages as PDF keeps them, #4734); previously trivial (progress log: Chinese and Japanese text counts a word per character, #4547; previously trivial: aligned-copy review fixes retain the document axis through scrolling and include secondary selections (#4764)); previously trivial (connector rerouting indexes laid-out object positions once per batch (#3631); previously trivial (progress log: corporate authors in bibliographies, #4848); previously trivial (custom-property bookmark-link preservation, #4767); previously trivial (progress log: Table Properties follows the selection, #4857); previously trivial (Relative font-size commands preserve mixed sizes in the selection (#4903); existing button steps and one-point shortcuts are unchanged; readiness estimates unchanged); previously trivial (Arabic Backspace removes one combining mark and keeps its base letter (#4757); previously trivial (note conversion walks reference offsets and formatting runs together, #4750); previously trivial (DOCX comment-ID save lookups); previously trivial (progress log: RTF pictures stored as Windows or Enhanced Metafiles are imported, #4259); previously trivial (#4658 bounds nested Markdown reference-label work); previously trivial (HTML import keeps preformatted lines with CR or CRLF input newlines, #4810); previously trivial (progress log: Insert › Shapes icon grid, #4349); previously trivial (progress log: AutoCorrect Options with no document open, #4585); previously trivial (progress log: window fallback geometry and equation symbol tooltips); previously trivial (progress log: window titles omit NUL characters, #3634); previously trivial (Recipient labels continue across product-sized sheets instead of stopping after the first sheet (#4880)); previously trivial (progress log: Custom document properties dialog, #2982; previously trivial: progress log: View › New Window; previously trivial: progress log: interface translations come from storytold/craft-i18n through the `craft-i18n` crate; previously trivial: progress log: disabled-control reasons translated in every interface language, #2678; previously trivial: progress log: mail merge record navigation and record ranges for printing, #3028; previously trivial: selection bar for right-to-left paragraphs and table rows; previously trivial: group connector rerouting preserves rotated and flipped free or unresolved endpoints under nonuniform group scaling; readiness estimates unchanged; previously trivial: progress log: a word with no break opportunity in it no longer makes the layout quadratic, #3412; previously trivial: progress log: a relationship the markup names without the prefix is read as it wrote, and an ordinary `id` names no part; previously trivial: progress log: a document with many relationships opens in the time its part takes, and an id the text only mentions is not a reference, #3411; previously trivial: progress log: read only and comments-only protection grey out edits; previously trivial: progress log: an empty paragraph with a hidden mark shows nothing, not even its list number, #3982; previously trivial: progress log: "NaN" in the Font dialog's Size box no longer closes the app, #3663; previously trivial: progress log: a table cell span from a `.json` file no longer overflows, #3637; previously trivial: progress log: a click in the footer while editing the header moves there; previously trivial: explicit documents keep the editor when recovery discovery finishes; readable recovery controls; previously trivial: Slovenian interface catalog, 2,614 entries; previously trivial: Insert Table of Figures dialog for any caption label, #3013; previously trivial: progress log: Home › Underline drop-down, #2738; previously trivial: personal templates in File › New and Save as Word Template, #2852; previously trivial: progress log: the scrollbar page tip stays on one line, #3341; previously trivial: progress log: forms protection greys out the control buttons; previously trivial: progress log: a document with many content controls saves in the time the controls take, #13; previously trivial: progress log: Word signature lines kept on save; previously trivial: a Thai run with Latin finds one installed font covering it all on Linux too, #1549; previously trivial: progress log: closing the header returns to the body selection, #3331; previously trivial: progress log: saving to a NAS share mounted by GVFS, #3003; previously trivial: progress log: a picture dragged near the bottom of a page lands there, #3169; previously trivial: centred list labels after leading page breaks, #2964; previously trivial: progress log: inline pictures drag to an insertion cursor and stay inline, #2233, #2234; previously trivial: progress log: a text file saved over itself closes without asking, #2376; previously trivial: progress log: a text frame in the paragraph defaults frames nothing, #2360; previously trivial: fixed font inputs in four layout controls; previously trivial: typing no longer starts render threads on every repaint, #3027; previously trivial: a right, centre or decimal tab whose text doesn't fit, or a left tab past the right indent, goes to the next line with its text, #1840; previously trivial: progress log: banded rows shade as in Word, #3415; previously trivial: progress log: the table handles show while the caret is in the table, #2428; previously trivial: progress log: a click below a floating table reaches the text after it, #2038; previously trivial: progress log: Delete on selected table cells leaves one empty paragraph in each, #2802; previously trivial: progress log: lam-alef in exported PDFs extracts whole with fonts that draw it as two glyphs, #2310; previously trivial: Bullets and Numbering toggle off style-inherited lists at their effective level, including basedOn chains and numbered ListParagraph styles; other paragraphs and list definitions stay unchanged (related to #3459); previously trivial: Russian sorting keeps ё with е and recognises decomposed ё/й; previously trivial: progress log: a text box that keeps the keyboard no longer resets the input method every frame, #2986; previously trivial: progress log: recovery copies and .json files store pictures as base64, #586 follow-up; previously trivial: progress log: legacy menu keys, #1697; previously trivial: progress log: shape gradients and transparency, #1500; previously trivial: progress log: Focus fills the screen, and Full Screen View shows the pages alone, #1678; previously trivial: progress log: text above a float's anchor wraps around it, #2048; previously trivial: progress log: File › Recover follows the app theme, #3243; previously trivial: progress log: formatting toolbar with the text context menu, #2959; previously trivial: progress log: caret inside ligatures, #1974; previously trivial: text typed into a content control takes the control's formatting; localized placeholder styles recognised; previously trivial: forms protection keeps its content controls: no inserting, Properties or Remove Content Control; previously trivial: long navigation headings wrap onto further lines within the pane, #3015; previously trivial: clearing a no-match font query keeps the recent heading visible, #2068; previously trivial: a word after a slash wraps whole, like Word, #2963; previously trivial: progress log: a header-cell picture watermark sits behind the text, #1775; previously trivial: symbols keep their font when the text font changes, #2036; previously trivial: opening a DOCX no longer copies its pictures; previously trivial: Add Font imports every selected font file, #1789); previously trivial (RTF export writes sections (gap 19); previously trivial: ODT export writes sections (gap 19); previously trivial: Read Aloud speaks each sentence in its own language, #1843; previously trivial: hint-reliant CJK outlines; previously trivial: Ctrl+wheel zoom no longer scrolls the document, #1743; previously trivial: progress log: Turkish case mapping in AutoCorrect, #1923; previously trivial: a mouse drag on a table leaves the view where it is, #1738; previously trivial: progress log: Hebrew field results and smart quotes, #1670; previously trivial: Backspace removes a selected table, rows or columns, #1844; previously trivial: progress log: mixed Hebrew/Latin text keeps its order in Word, #1543; previously trivial: progress log: web typing in non-Latin text no longer repeats, #1480; previously trivial: progress log: font family caches bounded and math font lookups follow font changes, #1354; previously trivial: `-->` AutoCorrect replacement, #2223; previously trivial: numbered headings, #1793; previously trivial: Navigation Find exposes Results, #2096; previously trivial: progress log: Columns on selected text, #2024; previously trivial: progress log: legacy outline, shadow, emboss and imprint text effects drawn, #2534; previously trivial: progress log: Indonesian proofing, #498; previously trivial: progress log: DOCX glossary documents (building blocks); previously trivial: progress log: Read Mode keeps the keyboard and shows whole, unobscured columns, #1772); previously trivial: progress log: font list entries of tall-ascent fonts no longer cut off, #2570); previously trivial: progress log: Split Cells and Convert Text to Table dialogs follow the Word check, #2592; previously trivial: a new source's Tag is made like Word's, three letters of the author and two digits of the year with a number added when taken, and an edit keeps the Tag, #2094; previously trivial: Web Layout fills the window width, #1876; previously trivial: progress log: Different First Page headers reachable from page 1, #2826; previously trivial: Language dialog keeps inherited proofing language and no-proof choices (#2717); previously trivial: progress log: web preferences kept between visits, #2132; previously trivial: progress log: undrawable private-use list bullets show the level's default bullet, #1683; previously trivial: progress log: `w:eastAsianLayout` kept on save; previously trivial: table style editor formats every part, #714); previously trivial: VML freeforms read and kept on save; previously trivial: progress log: consistent preferred cell widths; previously trivial: multi-paragraph field instructions no longer add blank lines; previously trivial: page-break-only list paragraphs hide their labels; previously trivial: progress log: grouped `flowChartOr` shapes draw their circle and crossing spokes; previously trivial: progress log: copies keep their formatting in other programs, #1523; previously trivial: progress log: privacy options on save, #1062; previously trivial: progress log: equation pictures in theme colours on Windows, #1002; previously trivial: symbol fonts, #776; previously trivial: the save prompt answers from the keyboard, #861; previously trivial: table column and row markers on the rulers, #700; previously trivial: table borders and the resize handle drag on the page, #217; previously trivial: formatting revisions landed, #41; previously trivial: Draw tab ink, #307, and Draw Table and Eraser, #303, landed: catalog 402/434; previously minor: readiness table with hours per audience; full number back to the additive weighted sum, 60%; mainstream and essentials numbers added; alpha gate checked; previously major: full re-measure against Word for Mac 16.113.4; progress docs restructured) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-29 · **Change:** trivial (Recipient labels continue across product-sized sheets instead of stopping after the first sheet (#4880)); previously trivial (English dialects in proofing, #1281; previously trivial: triple borders draw three lines, #1740; previously trivial: progress log: double-clicking a later page's footer no longer scrolls up, #2103; previously trivial: long navigation headings wrap onto further lines within the pane, #3015; previously trivial: clearing a no-match font query keeps the recent heading visible, #2068; previously trivial: a word after a slash wraps whole, like Word, #2963; previously trivial: RTF export writes sections (gap 19); previously trivial: ODT export writes sections (gap 19); previously trivial: progress log: pasted blockquotes are indented paragraphs, #1270; previously trivial: progress log: print-area strings translated in every catalog; previously trivial: progress log: comments readable in the dark theme, #2045; previously trivial: progress log: ODT sections, #1379; previously trivial: progress log: table deletes, Change Case and Unlink Fields respect Track Changes and locked content controls, #1329; previously trivial: progress log: rounded rectangle corners, #1476; previously trivial: progress log: Save As type list, #1399; previously trivial: progress log: privacy options on save, #1062; previously trivial: progress log: equation pictures in theme colours on Windows, #1002; previously trivial: symbol fonts, #776; previously trivial: the save prompt answers from the keyboard, #861; previously trivial: table column and row markers on the rulers, #700; previously trivial: table borders and the resize handle drag on the page, #217; previously trivial: formatting revisions landed, #41; previously trivial: Draw tab ink, #307, and Draw Table and Eraser, #303, landed: catalog 402/434; previously minor: readiness table with hours per audience; full number back to the additive weighted sum, 60%; mainstream and essentials numbers added; alpha gate checked; previously major: full re-measure against Word for Mac 16.113.4; progress docs restructured) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-01 · **Change:** trivial (attribute the narrow external Word COM REF observation and retain its native-test limitations, #3614/#3620; readiness estimates unchanged); previously trivial (document the bookmark-index regression contracts, #3614/#3620; production behavior and readiness estimates unchanged); previously trivial (integrate textual REF bookmark indexes with current main, #3614/#3620; preserve live target reads and both progress histories; readiness estimates unchanged); previously trivial (progress log: a paragraph naming an undefined style is formatted as Normal, #5077); previously trivial (progress log: TOC page numbers as PAGEREF fields, #5097); previously trivial (progress log: Backstage keytips, #4960); previously trivial (Progress log: only the printer's PDF leaves out links; Save these pages as PDF keeps them, #4734); previously trivial (progress log: Chinese and Japanese text counts a word per character, #4547; previously trivial: aligned-copy review fixes retain the document axis through scrolling and include secondary selections (#4764)); previously trivial (connector rerouting indexes laid-out object positions once per batch (#3631); previously trivial (progress log: corporate authors in bibliographies, #4848); previously trivial (custom-property bookmark-link preservation, #4767); previously trivial (progress log: Table Properties follows the selection, #4857); previously trivial (Relative font-size commands preserve mixed sizes in the selection (#4903); existing button steps and one-point shortcuts are unchanged; readiness estimates unchanged); previously trivial (Arabic Backspace removes one combining mark and keeps its base letter (#4757); previously trivial (note conversion walks reference offsets and formatting runs together, #4750); previously trivial (DOCX comment-ID save lookups); previously trivial (progress log: RTF pictures stored as Windows or Enhanced Metafiles are imported, #4259); previously trivial (#4658 bounds nested Markdown reference-label work); previously trivial (HTML import keeps preformatted lines with CR or CRLF input newlines, #4810); previously trivial (progress log: Insert › Shapes icon grid, #4349); previously trivial (progress log: AutoCorrect Options with no document open, #4585); previously trivial (progress log: window fallback geometry and equation symbol tooltips); previously trivial (progress log: window titles omit NUL characters, #3634); previously trivial (Recipient labels continue across product-sized sheets instead of stopping after the first sheet (#4880)); previously trivial (progress log: Custom document properties dialog, #2982; previously trivial: progress log: View › New Window; previously trivial: progress log: interface translations come from storytold/craft-i18n through the `craft-i18n` crate; previously trivial: progress log: disabled-control reasons translated in every interface language, #2678; previously trivial: progress log: mail merge record navigation and record ranges for printing, #3028; previously trivial: selection bar for right-to-left paragraphs and table rows; previously trivial: group connector rerouting preserves rotated and flipped free or unresolved endpoints under nonuniform group scaling; readiness estimates unchanged; previously trivial: progress log: a word with no break opportunity in it no longer makes the layout quadratic, #3412; previously trivial: progress log: a relationship the markup names without the prefix is read as it wrote, and an ordinary `id` names no part; previously trivial: progress log: a document with many relationships opens in the time its part takes, and an id the text only mentions is not a reference, #3411; previously trivial: progress log: read only and comments-only protection grey out edits; previously trivial: progress log: an empty paragraph with a hidden mark shows nothing, not even its list number, #3982; previously trivial: progress log: "NaN" in the Font dialog's Size box no longer closes the app, #3663; previously trivial: progress log: a table cell span from a `.json` file no longer overflows, #3637; previously trivial: progress log: a click in the footer while editing the header moves there; previously trivial: explicit documents keep the editor when recovery discovery finishes; readable recovery controls; previously trivial: Slovenian interface catalog, 2,614 entries; previously trivial: Insert Table of Figures dialog for any caption label, #3013; previously trivial: progress log: Home › Underline drop-down, #2738; previously trivial: personal templates in File › New and Save as Word Template, #2852; previously trivial: progress log: the scrollbar page tip stays on one line, #3341; previously trivial: progress log: forms protection greys out the control buttons; previously trivial: progress log: a document with many content controls saves in the time the controls take, #13; previously trivial: progress log: Word signature lines kept on save; previously trivial: a Thai run with Latin finds one installed font covering it all on Linux too, #1549; previously trivial: progress log: closing the header returns to the body selection, #3331; previously trivial: progress log: saving to a NAS share mounted by GVFS, #3003; previously trivial: progress log: a picture dragged near the bottom of a page lands there, #3169; previously trivial: centred list labels after leading page breaks, #2964; previously trivial: progress log: inline pictures drag to an insertion cursor and stay inline, #2233, #2234; previously trivial: progress log: a text file saved over itself closes without asking, #2376; previously trivial: progress log: a text frame in the paragraph defaults frames nothing, #2360; previously trivial: fixed font inputs in four layout controls; previously trivial: typing no longer starts render threads on every repaint, #3027; previously trivial: a right, centre or decimal tab whose text doesn't fit, or a left tab past the right indent, goes to the next line with its text, #1840; previously trivial: progress log: banded rows shade as in Word, #3415; previously trivial: progress log: the table handles show while the caret is in the table, #2428; previously trivial: progress log: a click below a floating table reaches the text after it, #2038; previously trivial: progress log: Delete on selected table cells leaves one empty paragraph in each, #2802; previously trivial: progress log: lam-alef in exported PDFs extracts whole with fonts that draw it as two glyphs, #2310; previously trivial: Bullets and Numbering toggle off style-inherited lists at their effective level, including basedOn chains and numbered ListParagraph styles; other paragraphs and list definitions stay unchanged (related to #3459); previously trivial: Russian sorting keeps ё with е and recognises decomposed ё/й; previously trivial: progress log: a text box that keeps the keyboard no longer resets the input method every frame, #2986; previously trivial: progress log: recovery copies and .json files store pictures as base64, #586 follow-up; previously trivial: progress log: legacy menu keys, #1697; previously trivial: progress log: shape gradients and transparency, #1500; previously trivial: progress log: Focus fills the screen, and Full Screen View shows the pages alone, #1678; previously trivial: progress log: text above a float's anchor wraps around it, #2048; previously trivial: progress log: File › Recover follows the app theme, #3243; previously trivial: progress log: formatting toolbar with the text context menu, #2959; previously trivial: progress log: caret inside ligatures, #1974; previously trivial: text typed into a content control takes the control's formatting; localized placeholder styles recognised; previously trivial: forms protection keeps its content controls: no inserting, Properties or Remove Content Control; previously trivial: long navigation headings wrap onto further lines within the pane, #3015; previously trivial: clearing a no-match font query keeps the recent heading visible, #2068; previously trivial: a word after a slash wraps whole, like Word, #2963; previously trivial: progress log: a header-cell picture watermark sits behind the text, #1775; previously trivial: symbols keep their font when the text font changes, #2036; previously trivial: opening a DOCX no longer copies its pictures; previously trivial: Add Font imports every selected font file, #1789); previously trivial (RTF export writes sections (gap 19); previously trivial: ODT export writes sections (gap 19); previously trivial: Read Aloud speaks each sentence in its own language, #1843; previously trivial: hint-reliant CJK outlines; previously trivial: Ctrl+wheel zoom no longer scrolls the document, #1743; previously trivial: progress log: Turkish case mapping in AutoCorrect, #1923; previously trivial: a mouse drag on a table leaves the view where it is, #1738; previously trivial: progress log: Hebrew field results and smart quotes, #1670; previously trivial: Backspace removes a selected table, rows or columns, #1844; previously trivial: progress log: mixed Hebrew/Latin text keeps its order in Word, #1543; previously trivial: progress log: web typing in non-Latin text no longer repeats, #1480; previously trivial: progress log: font family caches bounded and math font lookups follow font changes, #1354; previously trivial: `-->` AutoCorrect replacement, #2223; previously trivial: numbered headings, #1793; previously trivial: Navigation Find exposes Results, #2096; previously trivial: progress log: Columns on selected text, #2024; previously trivial: progress log: legacy outline, shadow, emboss and imprint text effects drawn, #2534; previously trivial: progress log: Indonesian proofing, #498; previously trivial: progress log: DOCX glossary documents (building blocks); previously trivial: progress log: Read Mode keeps the keyboard and shows whole, unobscured columns, #1772); previously trivial: progress log: font list entries of tall-ascent fonts no longer cut off, #2570); previously trivial: progress log: Split Cells and Convert Text to Table dialogs follow the Word check, #2592; previously trivial: a new source's Tag is made like Word's, three letters of the author and two digits of the year with a number added when taken, and an edit keeps the Tag, #2094; previously trivial: Web Layout fills the window width, #1876; previously trivial: progress log: Different First Page headers reachable from page 1, #2826; previously trivial: Language dialog keeps inherited proofing language and no-proof choices (#2717); previously trivial: progress log: web preferences kept between visits, #2132; previously trivial: progress log: undrawable private-use list bullets show the level's default bullet, #1683; previously trivial: progress log: `w:eastAsianLayout` kept on save; previously trivial: table style editor formats every part, #714); previously trivial: VML freeforms read and kept on save; previously trivial: progress log: consistent preferred cell widths; previously trivial: multi-paragraph field instructions no longer add blank lines; previously trivial: page-break-only list paragraphs hide their labels; previously trivial: progress log: grouped `flowChartOr` shapes draw their circle and crossing spokes; previously trivial: progress log: copies keep their formatting in other programs, #1523; previously trivial: progress log: privacy options on save, #1062; previously trivial: progress log: equation pictures in theme colours on Windows, #1002; previously trivial: symbol fonts, #776; previously trivial: the save prompt answers from the keyboard, #861; previously trivial: table column and row markers on the rulers, #700; previously trivial: table borders and the resize handle drag on the page, #217; previously trivial: formatting revisions landed, #41; previously trivial: Draw tab ink, #307, and Draw Table and Eraser, #303, landed: catalog 402/434; previously minor: readiness table with hours per audience; full number back to the additive weighted sum, 60%; mainstream and essentials numbers added; alpha gate checked; previously major: full re-measure against Word for Mac 16.113.4; progress docs restructured) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-01 · **Change:** trivial (attribute the narrow external Word COM REF observation and retain its native-test limitations, #3614/#3620; readiness estimates unchanged); previously trivial (document the bookmark-index regression contracts, #3614/#3620; production behavior and readiness estimates unchanged); previously trivial (integrate textual REF bookmark indexes with current main, #3614/#3620; preserve live target reads and both progress histories; readiness estimates unchanged); previously trivial (Recipient labels continue across product-sized sheets instead of stopping after the first sheet (#4880)); previously trivial (English dialects in proofing, #1281; previously trivial: triple borders draw three lines, #1740; previously trivial: progress log: double-clicking a later page's footer no longer scrolls up, #2103; previously trivial: long navigation headings wrap onto further lines within the pane, #3015; previously trivial: clearing a no-match font query keeps the recent heading visible, #2068; previously trivial: a word after a slash wraps whole, like Word, #2963; previously trivial: RTF export writes sections (gap 19); previously trivial: ODT export writes sections (gap 19); previously trivial: progress log: pasted blockquotes are indented paragraphs, #1270; previously trivial: progress log: print-area strings translated in every catalog; previously trivial: progress log: comments readable in the dark theme, #2045; previously trivial: progress log: ODT sections, #1379; previously trivial: progress log: table deletes, Change Case and Unlink Fields respect Track Changes and locked content controls, #1329; previously trivial: progress log: rounded rectangle corners, #1476; previously trivial: progress log: Save As type list, #1399; previously trivial: progress log: privacy options on save, #1062; previously trivial: progress log: equation pictures in theme colours on Windows, #1002; previously trivial: symbol fonts, #776; previously trivial: the save prompt answers from the keyboard, #861; previously trivial: table column and row markers on the rulers, #700; previously trivial: table borders and the resize handle drag on the page, #217; previously trivial: formatting revisions landed, #41; previously trivial: Draw tab ink, #307, and Draw Table and Eraser, #303, landed: catalog 402/434; previously minor: readiness table with hours per audience; full number back to the additive weighted sum, 60%; mainstream and essentials numbers added; alpha gate checked; previously major: full re-measure against Word for Mac 16.113.4; progress docs restructured) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 > **Printing update:** 2026-10-12 · direct desktop printing through craft-print; details below.
 
 WordCraft aims for complete parity with Microsoft Word, then goes further on speed, openness and
@@ -162,6 +164,8 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 - 2026-10-27: File › Options › Proofing › AutoCorrect Options opens with no document open (#4585). On the Start screen, or after closing the last document, the button did nothing: AutoCorrect wasn't among the commands allowed without a document. Its options are user preferences, so changes made there are kept for the next document.
 - 2026-10-29: Recipient labels continue across product-sized sheets instead of stopping after the first sheet (#4880). Labels → New Document with one label per recipient includes every selected address, with unused labels blank on the final sheet. Fixed-text and single-label output remain one sheet. Finish & Merge template expansion is separate.
 - 2026-10-29: HTML import keeps preformatted lines with CR, CRLF or LF input newlines (#4810); numeric character references retain their separate meaning; readiness estimates unchanged.
+- 2026-10-27: Textual REF fields reuse the existing bookmark/page lookup during Update Fields. Target text remains live so paragraph-batched result writes keep their existing order (#3620).
+
 - 2026-10-22: View › Window › New Window opens a second window on the document (desktop). The windows are titled `Name:1` and `Name:2` and each keeps its own caret, scroll position, zoom and view; edits and Undo are the document's and show in both. Closing one of them asks nothing; the last one asks about unsaved changes, and quitting asks once per document.
 - 2026-10-22: One native window per open document on the desktop. File › New and Open (from the ribbon, File, shortcuts, the file manager, the command line or the control channel) open the document in a window of its own, focused and placed a step below and right of the last one; opening a file replaces a blank document nobody has used in its own window, and a file that is already open brings its window to the front. Each window keeps its own ribbon tab, File page, dialogs, panes, scroll position and composition. View › Window › Switch Windows lists the windows and brings the chosen one forward. File › Close and a window's close button close that window, asking about unsaved changes first; the last window stays open with no document. Quitting asks about each document with unsaved changes in its own window, and Cancel keeps everything open. The control channel's input and screenshots go to the window focused last. The web app keeps one window.
 - 2026-10-22: Recovery covers every open document. Each dirty document keeps its own copy, written on the same ten-second cadence whether it is shown or not; closing a document without saving deletes its copy, as saving does, and a clean exit deletes the copies of every document saved or closed since its last copy. File › Recover lists only copies no open document keeps, and Restore opens a copy as another document (or in place of an untouched blank one), so it never replaces work. After a crash with several unsaved documents, the next start lists all of them.
@@ -229,6 +233,8 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 | 2026-10-29 | A NUL in a document title no longer reaches the native window title, which panicked on X11 (#3634): displayed titles and suggested file names drop NUL characters and fall back to the untitled name when empty; the stored title is unchanged |
 | 2026-10-28 | The Traditional Chinese interface draws hanzi to the Taiwan standard: on the desktop an installed Traditional Chinese font (PingFang TC on macOS, Microsoft JhengHei on Windows, Noto Sans CJK TC on Linux) comes before the embedded Noto Sans CJK SC, which drew 說, 這, 為, 戶 in mainland shapes; without one, and on the web, nothing changes. |
 | 2026-10-17 | macOS launch arguments (`-psn_*`, `-NS*`, `-Apple*`) are no longer opened as files, and a file that fails to open names the file and the real cause on the status bar and in the log (#1103). The reported "corrupt" error could not be reproduced. |
+| 2026-10-28 | Textual REF updates index bookmark ends and marker positions once per target paragraph and read only the requested text range (#3614, #3620). Without PAGEREF fields in the updated stories, page lookup preparation is skipped; PAGEREF keeps its pre-update page snapshot. Current field results remain live after earlier paragraph writes. First starts and ends, missing-end fallbacks, Unicode/table paths, trimming, locks, history and persistence retain their behavior; malformed object storage uses the existing fragment fallback. Synthetic controls cover dense targets, object text and sequential updates; readiness estimates are unchanged. |
+| 2026-10-28 | Bookmark text finds its closing marker in one pass through paragraph objects (#3614, #3620). Existing first-start/end choices, missing-end fallback, Unicode offsets, table paths, trimming and live field-result reads stay unchanged. Original synthetic regressions cover semantics and scaling; this changes no reference policy or readiness estimate. |
 | 2026-10-17 | Password-protected Word files from Word 2007 (Standard encryption: AES-128/192/256, SHA-1) open with their password, also when named `.doc` or `.dot`; a wrong or missing password is reported as for newer files. Word 97-2003 files with an AES header, which the public spec doesn't define, are refused with a clear message (gap 9) |
 | 2026-10-27 | Connector rerouting indexes laid-out object positions once per batch, preserving page hints, first-match order and same-page glue; synthetic equivalence, geometry and scaling regressions (#3631); routing policy and readiness estimates unchanged |
 | 2026-10-28 | Markdown import bounds nested undefined reference-label work within the existing link allowance; literal source and normal reference matching are preserved (#4658). |
@@ -680,75 +686,82 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | trivial | Attribute the external DATE-to-REF Word COM observation, its shutdown errors and unverified native cases (#3614, #3620); synthetic Linux qualification and readiness estimates are unchanged |
+| 2026-11-01 | trivial | Document bookmark-index semantic, malformed-storage, live-result and scaling regressions (#3614, #3620); production behavior and readiness estimates unchanged |
+| 2026-11-01 | trivial | Integrate textual REF bookmark indexes with current main (#3614, #3620); preserve live target reads, PAGEREF snapshots and both progress histories; readiness estimates unchanged |
 | 2026-10-31 | trivial | Progress log: a paragraph naming an undefined DOCX style is formatted as Normal (#5077) |
 | 2026-10-31 | trivial | Progress log: TOC page numbers are PAGEREF fields (#5097) |
 | 2026-10-31 | trivial | Progress log: Backstage keytips, Alt, F, P prints (#4960) |
 | 2026-10-30 | trivial | Progress log: only the PDF sent to the printer leaves out link annotations; Save these pages as PDF keeps them (#4734) |
 | 2026-10-29 | trivial | Progress log: documents with links print (#4734) |
-| 2026-10-28 | trivial | Aligned copies retain their locked document coordinate during middle-button scrolling and can start on secondary selected objects; existing Ctrl and Shift selection behavior stays (#4764) |
-| 2026-10-28 | trivial | Ctrl/Command+Shift drags a selected floating object into an axis-aligned copy (#4764); synthetic Linux interaction and persistence controls, native desktop and Word untested; gap/readiness estimates unchanged |
-| 2026-10-28 | trivial | Connector object lookups retain the typed column-selection inputs on current main (#3631); readiness estimates unchanged |
-| 2026-10-27 | trivial | Connector rerouting indexes laid-out object positions once per batch, preserving page hints, first-match order and same-page glue; synthetic equivalence, geometry and scaling regressions (#3631); routing policy and readiness estimates unchanged |
-| 2026-10-28 | trivial | Preserve custom-property bookmark link targets through saves, value edits and dialog renames (#4767); no linked-value evaluation or readiness change |
 | 2026-10-29 | trivial | Relative font-size commands preserve mixed sizes in the selection (#4903); existing button steps and one-point shortcuts are unchanged; readiness estimates unchanged |
-| 2026-10-28 | trivial | Arabic Backspace removes one combining mark and keeps its base letter (#4757); stored mark order, caret/forward-Delete and other-script behavior retained; original synthetic command/history/protection/save-reopen checks, no native Word comparison; readiness estimates unchanged |
-| 2026-10-28 | trivial | Note conversion walks reference offsets and formatting runs together, #4750; readiness estimates unchanged. |
 | 2026-10-29 | trivial | DOCX comment IDs use ordered paragraph lookup and one durable-ID reservation set; threading and ID rules unchanged |
-| 2026-10-28 | trivial | #4658: bound Markdown reference-label rejection work, preserving literal source and ordinary link matching |
 | 2026-10-29 | trivial | Progress log: Insert › Shapes icon grid (#4349) |
 | 2026-10-29 | trivial | HTML import keeps preformatted lines with CR, CRLF or LF input newlines (#4810); numeric character references retain their separate meaning; readiness estimates unchanged. |
 | 2026-10-29 | trivial | Progress log: window fallback geometry and equation symbol tooltips |
 | 2026-10-29 | trivial | Progress log: window titles omit NUL characters (#3634) |
 | 2026-10-29 | trivial | Recipient labels continue across product-sized sheets instead of stopping after the first sheet (#4880). Filtered/sorted order, product geometry and single-label mode retained; readiness estimates unchanged. |
-| 2026-10-22 | trivial | Progress log: one native window per open document |
-| 2026-10-22 | trivial | Progress log: every open document keeps its own recovery copy |
-| 2026-10-22 | trivial | Progress log: several open documents in the desktop window |
-| 2026-10-22 | trivial | Progress log: several open documents in one session |
+| 2026-10-29 | trivial | Progress log: corporate authors in bibliographies (#4848) |
+| 2026-10-29 | trivial | Progress log: Table Properties follows the selection (#4857) |
+| 2026-10-28 | trivial | Aligned copies retain their locked document coordinate during middle-button scrolling and can start on secondary selected objects; existing Ctrl and Shift selection behavior stays (#4764) |
+| 2026-10-28 | trivial | Ctrl/Command+Shift drags a selected floating object into an axis-aligned copy (#4764); synthetic Linux interaction and persistence controls, native desktop and Word untested; gap/readiness estimates unchanged |
+| 2026-10-28 | trivial | Connector object lookups retain the typed column-selection inputs on current main (#3631); readiness estimates unchanged |
+| 2026-10-28 | trivial | Preserve custom-property bookmark link targets through saves, value edits and dialog renames (#4767); no linked-value evaluation or readiness change |
+| 2026-10-28 | trivial | Arabic Backspace removes one combining mark and keeps its base letter (#4757); stored mark order, caret/forward-Delete and other-script behavior retained; original synthetic command/history/protection/save-reopen checks, no native Word comparison; readiness estimates unchanged |
+| 2026-10-28 | trivial | Note conversion walks reference offsets and formatting runs together, #4750; readiness estimates unchanged. |
+| 2026-10-28 | trivial | #4658: bound Markdown reference-label rejection work, preserving literal source and ordinary link matching |
+| 2026-10-28 | trivial | Textual REF updates index bookmark ends and marker positions once per target paragraph and read only the requested text range (#3614, #3620). Without PAGEREF fields in the updated stories, page lookup preparation is skipped; PAGEREF keeps its pre-update page snapshot. Current field results remain live after earlier paragraph writes. First starts and ends, missing-end fallbacks, Unicode/table paths, trimming, locks, history and persistence retain their behavior; malformed object storage uses the existing fragment fallback. Synthetic controls cover dense targets, object text and sequential updates; readiness estimates are unchanged. |
+| 2026-10-28 | trivial | Bookmark text finds its closing marker in one pass through paragraph objects (#3614, #3620). Existing first-start/end choices, missing-end fallback, Unicode offsets, table paths, trimming and live field-result reads stay unchanged. Original synthetic regressions cover semantics and scaling; this changes no reference policy or readiness estimate. |
+| 2026-10-28 | trivial | Progress log: chart and SmartArt text the font lacks is drawn in a fallback face (#4720) |
+| 2026-10-28 | trivial | Progress log: RTF metafile pictures are imported (#4259) |
+| 2026-10-28 | trivial | Progress log: Chinese and Japanese text counts a word per character (#4547) |
+| 2026-10-27 | trivial | Connector rerouting indexes laid-out object positions once per batch, preserving page hints, first-match order and same-page glue; synthetic equivalence, geometry and scaling regressions (#3631); routing policy and readiness estimates unchanged |
+| 2026-10-27 | trivial | Textual REF updates reuse bookmark positions once per operation and read current target contents; duplicate-name, field-order, part-story, lock and Undo/Redo controls (#3620). Readiness estimates unchanged. |
+| 2026-10-27 | trivial | Progress log: AutoCorrect Options with no document open (#4585) |
 | 2026-10-25 | trivial | Progress log: egui 0.37 migration records the `craft-i18n.rev` catalog pin (9205108…; 27 languages) and the input-method handling; managed CI passed; native acceptance and native-speaker review remain open |
-| 2026-10-17 | trivial | Progress log: Standard-encrypted (AES) Word files open (gap 9) |
 | 2026-10-25 | trivial | Progress log: Text Highlight Color buttons show the remembered colour, or no colour bar after No Color (#4087) |
-| 2026-10-23 | minor | A command that changes nothing is not an edit: no undo step, no unsaved changes, no relayout, and the redo stack survives it. |
-| 2026-10-23 | trivial | cu20we: preserve and render outline caps across DOCX/VML, screen and PDF; synthetic regressions; readiness estimates unchanged |
-| 2026-10-23 | trivial | cu20we: box float paragraph origins corrected, synthetic regressions added |
+| 2026-10-25 | trivial | Highlight decisions include fully selected paragraph marks in whole cells and ordinary ranges, including empty paragraphs; partial text columns exclude unselected marks (#4085). |
+| 2026-10-25 | trivial | Highlight toggle checks the full target beyond 10,000 runs without collecting resolved formatting; mixed and inherited tails and Undo/Redo covered (#4085). |
 | 2026-10-24 | trivial | Exact-spacing table contact uses the specified line height in row selection and word skipping; large/small mark regressions in modes 11/12/14/15 (#3977); shape estimates unchanged |
 | 2026-10-24 | trivial | Floating tables count exact line-bottom contact; shapes keep strict overlap (#3977); original boundary/skip regressions in modes 11/12/14/15, expected Word rule from cyril265; readiness estimates unchanged |
 | 2026-10-24 | trivial | Progress log: AutoCorrect corrects a word typed after a no-break space or an ideographic space |
-| 2026-10-25 | trivial | Highlight decisions include fully selected paragraph marks in whole cells and ordinary ranges, including empty paragraphs; partial text columns exclude unselected marks (#4085). |
-| 2026-10-25 | trivial | Highlight toggle checks the full target beyond 10,000 runs without collecting resolved formatting; mixed and inherited tails and Undo/Redo covered (#4085). |
 | 2026-10-24 | trivial | Highlight shortcut toggles the last chosen colour off when the whole selection has it; explicit colour commands remain setters (#4085). |
 | 2026-10-24 | trivial | Progress log: AutoFormat As You Type turns `*bold*` and `_italic_` marks into formatting |
 | 2026-10-24 | trivial | Progress log: the parity catalog counts Read Mode's View menu (Column Width, Page Color, Layout) |
 | 2026-10-24 | trivial | Progress log: regex Replace expands capture groups (#4177) |
+| 2026-10-23 | minor | A command that changes nothing is not an edit: no undo step, no unsaved changes, no relayout, and the redo stack survives it. |
+| 2026-10-23 | trivial | cu20we: preserve and render outline caps across DOCX/VML, screen and PDF; synthetic regressions; readiness estimates unchanged |
+| 2026-10-23 | trivial | cu20we: box float paragraph origins corrected, synthetic regressions added |
 | 2026-10-23 | trivial | Progress log: interface translations from storytold/craft-i18n through the `craft-i18n` crate |
 | 2026-10-23 | trivial | Progress log: comment times in local time (#2322, #2337) |
-| 2026-10-22 | trivial | Progress log: mail merge record navigation and record ranges for Finish & Merge and Print Documents (#3028) |
 | 2026-10-23 | trivial | Progress log: a relationship the markup names without the prefix is read as it wrote (#3411 follow-up) |
-| 2026-10-21 | trivial | Progress log: a document with many relationships opens in the time its part takes (#3411) |
 | 2026-10-23 | trivial | Progress log: an empty paragraph with a hidden mark draws no list number (#3982) |
-| 2026-10-22 | minor | Progress log: Spanish proofing (#3360, #3553) |
 | 2026-10-23 | trivial | Progress log: Update Table keeps a two-column TOC from a localized Word in its columns (#3889) |
+| 2026-10-23 | trivial | Progress log: continuous sections paginate, #3907 |
+| 2026-10-23 | trivial | Progress log: justified lines ending in a manual line break reach the margin (#3924) |
+| 2026-10-23 | trivial | Progress log: "NaN" in the Font dialog's Size box no longer closes the app (#3663) |
+| 2026-10-23 | trivial | Progress log: a table cell span from a `.json` file no longer overflows (#3637) |
+| 2026-10-22 | trivial | Progress log: one native window per open document |
+| 2026-10-22 | trivial | Progress log: every open document keeps its own recovery copy |
+| 2026-10-22 | trivial | Progress log: several open documents in the desktop window |
+| 2026-10-22 | trivial | Progress log: several open documents in one session |
+| 2026-10-22 | trivial | Progress log: mail merge record navigation and record ranges for Finish & Merge and Print Documents (#3028) |
+| 2026-10-22 | minor | Progress log: Spanish proofing (#3360, #3553) |
 | 2026-10-22 | minor | Compare's new and revised untitled results clear the previous document's version snapshots; a rejected protected comparison or mailing result preserves the snapshots and file identity. |
 | 2026-10-22 | minor | The CLI author flag and the Options user name field cannot change the session name after protection starts (#3279 follow-up). |
-| 2026-10-21 | trivial | Progress log: a word with no break opportunity in it no longer makes the layout quadratic (#3412) |
-| 2026-10-20 | minor | The Document Inspector's removals are refused while the document tracks changes (they delete straight from the document, so the text would go with no revision to show for it and the revision trail would be broken behind the user's back), and a version snapshot belongs to the document it was taken from |
-| 2026-10-20 | minor | Restrict Editing, three more gaps closed: the protection of a protected document only changes through the explicit stop, the session author can't change through `file.setAuthor` under protection, and the post-check compares the settings and the metadata as well as the text and the formatting |
-| 2026-10-20 | minor | Restrict Editing: a file command that changes the open document is checked like any other — the privacy options, the properties and the inspector's removals are refused on a protected document, and restoring a stored version no longer lifts the protection or drops its password |
-| 2026-10-17 | trivial | Progress log: disabled-control reasons translated (#2678) |
 | 2026-10-22 | trivial | Markdown code spans normalize line endings before export, keeping block markers literal (#3738); format readiness unchanged |
-| 2026-10-23 | trivial | Progress log: continuous sections paginate, #3907 |
 | 2026-10-22 | trivial | Progress log: a click in the footer while editing the header moves there |
-| 2026-10-18 | trivial | Explicit New/Open is not interrupted by startup recovery discovery; older copies stay available and Recover follows the interface theme. |
-| 2026-10-17 | trivial | Progress log: Home › Underline drop-down (#2738) |
-| 2026-10-19 | trivial | Text context menus include the existing formatting mini toolbar (#2959); paste options remain in PR #2599. Readiness estimates unchanged. |
-| 2026-10-19 | trivial | Progress log: Insert Caption picks the label used last (#3120) |
-| 2026-10-16 | trivial | Progress log: `HYPERLINK` fields read as links (#2174) |
-| 2026-10-18 | trivial | Progress log: German text hyphenates by the German patterns |
+| 2026-10-21 | trivial | Progress log: a document with many relationships opens in the time its part takes (#3411) |
+| 2026-10-21 | trivial | Progress log: a word with no break opportunity in it no longer makes the layout quadratic (#3412) |
 | 2026-10-21 | trivial | Progress log: File › Recover follows the app theme (#3243) |
 | 2026-10-21 | trivial | Bullets and Numbering toggle off style-inherited lists at their effective level, including basedOn chains and numbered ListParagraph styles; other paragraphs and list definitions stay unchanged (related to #3459) |
 | 2026-10-21 | trivial | Progress log: table style band sizes, banded rows as in Word (#3415) |
 | 2026-10-21 | trivial | Progress log: ODT table column widths are read, so widths set in LibreOffice or changed in WordCraft survive a save |
 | 2026-10-21 | trivial | Pin the font input of four geometric layout controls; assertions and renderer font policy unchanged. |
 | 2026-10-21 | trivial | Progress log: a document with many content controls saves in the time the controls take (#13) |
+| 2026-10-20 | minor | The Document Inspector's removals are refused while the document tracks changes (they delete straight from the document, so the text would go with no revision to show for it and the revision trail would be broken behind the user's back), and a version snapshot belongs to the document it was taken from |
+| 2026-10-20 | minor | Restrict Editing, three more gaps closed: the protection of a protected document only changes through the explicit stop, the session author can't change through `file.setAuthor` under protection, and the post-check compares the settings and the metadata as well as the text and the formatting |
+| 2026-10-20 | minor | Restrict Editing: a file command that changes the open document is checked like any other — the privacy options, the properties and the inspector's removals are refused on a protected document, and restoring a stored version no longer lifts the protection or drops its password |
 | 2026-10-20 | trivial | Russian sorting keeps ё with е and recognises decomposed ё/й; synthetic ordering, case and index-heading regressions; broader parity estimates unchanged |
 | 2026-10-20 | trivial | Progress log: a click below a floating table goes to the text after it, not its last row (#2038) |
 | 2026-10-20 | trivial | Progress log: the table handles show while the caret is in the table (#2428) |
@@ -759,6 +772,9 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-20 | trivial | Progress log: read only and comments-only protection grey out edits |
 | 2026-10-20 | trivial | Progress log: forms protection greys out the Developer tab's control buttons and Properties |
 | 2026-10-20 | trivial | Progress log: the scrollbar page tip stays on one line (#3341) |
+| 2026-10-20 | trivial | Progress log: saving to a NAS share mounted by GVFS (#3003) |
+| 2026-10-19 | trivial | Text context menus include the existing formatting mini toolbar (#2959); paste options remain in PR #2599. Readiness estimates unchanged. |
+| 2026-10-19 | trivial | Progress log: Insert Caption picks the label used last (#3120) |
 | 2026-10-19 | trivial | Progress log: typing no longer stops after clicking Search (#2986) |
 | 2026-10-19 | trivial | Progress log: Delete on selected table cells leaves one empty paragraph in each (#2802) |
 | 2026-10-19 | trivial | A right, centre or decimal tab whose text doesn't fit, or a left tab past the right indent, starts the next line with its text instead of ending the line (a TOC entry's page number keeps its leader); a left tab still past the right indent there takes no room (#1840) |
@@ -766,229 +782,260 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-19 | trivial | Progress log: a Thai run with Latin finds one installed font covering it all on Linux too (#1549) |
 | 2026-10-19 | trivial | Progress log: forms protection keeps its content controls: no inserting, Properties or Remove Content Control |
 | 2026-10-19 | trivial | Progress log: text typed into a content control takes the control's formatting; localized placeholder styles recognised |
-| 2026-10-17 | trivial | Progress log: #2048 entry covers anchors pushed onto the next page |
-| 2026-10-17 | trivial | A line breaks after a hyphen before a digit, like Word (#2712) |
-| 2026-10-15 | trivial | Progress log: text above a float's anchor wraps around it, #2048 |
+| 2026-10-19 | trivial | Progress log: render threads reused while typing (#3027) |
+| 2026-10-19 | trivial | #2964: a centred or end-aligned list label after a leading page break uses its text line's alignment. Synthetic LTR/RTL numbered/bulleted controls and the issue's DOCX export; broader pagination gaps and readiness estimates unchanged |
+| 2026-10-19 | trivial | Progress log: personal templates in File › New, Save as Word Template (#2852) |
+| 2026-10-18 | trivial | Explicit New/Open is not interrupted by startup recovery discovery; older copies stay available and Recover follows the interface theme. |
+| 2026-10-18 | trivial | Progress log: German text hyphenates by the German patterns |
 | 2026-10-18 | trivial | Progress log: long navigation headings wrap within the pane instead of ending in an ellipsis (#3015) |
 | 2026-10-18 | trivial | Font list starts at its first row after clearing a no-match query; recent heading remains visible (#2068) |
 | 2026-10-18 | trivial | A word after a slash wraps whole, like Word (#2963) |
-| 2026-10-19 | trivial | Progress log: render threads reused while typing (#3027) |
-| 2026-10-19 | trivial | #2964: a centred or end-aligned list label after a leading page break uses its text line's alignment. Synthetic LTR/RTL numbered/bulleted controls and the issue's DOCX export; broader pagination gaps and readiness estimates unchanged |
-| 2026-10-17 | trivial | Progress log: recipient list search and merged-only view (#1576) |
 | 2026-10-18 | trivial | Progress log: a single selected cell's border drags in its row only |
 | 2026-10-18 | trivial | Progress log: symbols keep their font when the text font changes (#2036) |
-| 2026-10-17 | trivial | Progress log: Restrict Editing guards tables, Paste Formatting and merge fields (#1327) |
 | 2026-10-18 | trivial | Progress log: Picture Format › Size, sizes typed in any unit and the Size dialog (#2573); readiness estimates unchanged |
 | 2026-10-18 | trivial | Progress log: Manage Sources imports Word's `Sources.xml` (#2640) |
-| 2026-10-14 | trivial | Progress log: a list item's first word is not flagged for a missing capital (#1741) |
 | 2026-10-18 | trivial | #2445: pending Save As answers keep their originating document identity, so a replacement document is never written to an old picker destination; real Save-button and focused-editor shortcut controls verified |
-| 2026-10-16 | trivial | #2445: interactive Save on import-only .doc/.dot paths uses the existing DOCX Save As flow; cancel and failed writes keep the draft, and Close waits for a successful save. Explicit/script saves still report unsupported legacy output |
-| 2026-10-16 | trivial | Save Changes exposes an alert-dialog role, the document-specific question and loss/failure context to accessibility; full-app focus/ancestry regression. Native screen-reader verification remains pending. |
 | 2026-10-18 | trivial | Progress log: legacy menu keys (#1697) |
 | 2026-10-18 | trivial | Progress log: Focus fills the screen; Full Screen View (#1678) |
-| 2026-10-16 | trivial | Progress log: the Spike |
-| 2026-10-16 | trivial | Progress log: `w:eastAsianLayout` kept on save |
-| 2026-10-15 | trivial | Progress log: undrawable private-use list bullets show the level's default bullet (#1683) |
-| 2026-10-15 | trivial | Progress log: web preferences kept between visits (#2132) |
-| 2026-10-15 | trivial | Progress log: Recently Used Fonts in the font box (#2068) |
-| 2026-10-15 | trivial | Progress log: one Thai face for a run in a missing Thai font (#1549) |
 | 2026-10-18 | trivial | Progress log: Different First Page headers reachable from page 1 (#2826) |
 | 2026-10-18 | trivial | Progress log: bold Black/Heavy fonts are not emboldened again |
 | 2026-10-18 | trivial | Progress log: shape gradients and transparency (#1500) |
-| 2026-10-16 | trivial | Progress log: Web Layout fills the window width (#1876) |
-| 2026-10-17 | trivial | Progress log: DOCX glossary documents (building blocks) |
-| 2026-10-15 | trivial | Progress log: move options in Track Changes Options (gap #5) |
-| 2026-10-15 | trivial | Progress log: image size limits checked before allocation (#1321) |
-| 2026-10-17 | trivial | Progress log: Read Aloud speaks each sentence in its own language, #1843 |
 | 2026-10-18 | trivial | Progress log: `wordcraft-cli run --script` (#1963) |
 | 2026-10-18 | trivial | Progress log: header-cell picture watermarks drawn behind the text (#1775); readiness estimates unchanged |
-| 2026-10-14 | trivial | Progress log: comment drafts kept and written before saving or closing (#1348) |
+| 2026-10-18 | trivial | Progress log: Split Cells and Convert Text to Table dialogs, matched to the Word check (#2592) |
+| 2026-10-17 | trivial | Progress log: Standard-encrypted (AES) Word files open (gap 9) |
+| 2026-10-17 | trivial | Progress log: disabled-control reasons translated (#2678) |
+| 2026-10-17 | trivial | Progress log: Home › Underline drop-down (#2738) |
+| 2026-10-17 | trivial | Progress log: #2048 entry covers anchors pushed onto the next page |
+| 2026-10-17 | trivial | A line breaks after a hyphen before a digit, like Word (#2712) |
+| 2026-10-17 | trivial | Progress log: recipient list search and merged-only view (#1576) |
+| 2026-10-17 | trivial | Progress log: Restrict Editing guards tables, Paste Formatting and merge fields (#1327) |
+| 2026-10-17 | trivial | Progress log: DOCX glossary documents (building blocks) |
+| 2026-10-17 | trivial | Progress log: Read Aloud speaks each sentence in its own language, #1843 |
 | 2026-10-17 | trivial | Language dialog keeps inherited proofing language and no-proof choices (#2717); readiness estimates unchanged |
 | 2026-10-17 | trivial | Progress log: macOS launch arguments and open failures (#1103) |
-| 2026-10-14 | trivial | Progress log: ASK and SET fields show nothing (#1765) |
-| 2026-10-15 | trivial | Progress log: at-least table rows start the next page whole (#1742) |
-| 2026-10-14 | trivial | Progress log: ODT sections on export (gap 19) |
-| 2026-10-15 | trivial | Progress log: selection bar for right-to-left paragraphs and table rows |
 | 2026-10-17 | trivial | Explicit DrawingML preset/custom outline dashes survive import/save and paint in raster/PDF, scaled to the effective stroke width even for zero-width paths. Synthetic controls; theme-inherited dashes and line caps remain unverified. |
-| 2026-10-15 | trivial | `wordcraft-cli convert --update-fields` explicitly refreshes unlocked fields before conversion; ordinary conversion keeps cached results. Field refresh can change pagination |
 | 2026-10-17 | trivial | Arial Unicode MS uses Arial and its proportional substitutes; glyph coverage and exact Word line height remain font-dependent. |
-| 2026-10-18 | trivial | Progress log: Split Cells and Convert Text to Table dialogs, matched to the Word check (#2592) |
+| 2026-10-17 | minor | Progress log: Drop Cap Options (#2601) |
+| 2026-10-17 | trivial | SECTIONPAGES includes shared continuous-section pages in body and header/footer fields |
+| 2026-10-17 | trivial | Footer page tables no longer inflate footer text height; body lines wrap at their physical bounds |
+| 2026-10-17 | minor | Progress log: Scale to paper size on File › Print, #2108 |
+| 2026-10-17 | trivial | Non-overlapping body floating tables clear header tables; overlapping tables keep their requested position |
+| 2026-10-17 | trivial | Progress log: the ribbon's paste choices in the context menu (#2583) |
+| 2026-10-17 | trivial | Progress log: Scale Font Sizes command (#1475) |
+| 2026-10-17 | trivial | Progress log: saving into a folder that refuses a temporary file (#2138) |
+| 2026-10-16 | trivial | Progress log: `HYPERLINK` fields read as links (#2174) |
+| 2026-10-16 | trivial | #2445: interactive Save on import-only .doc/.dot paths uses the existing DOCX Save As flow; cancel and failed writes keep the draft, and Close waits for a successful save. Explicit/script saves still report unsupported legacy output |
+| 2026-10-16 | trivial | Save Changes exposes an alert-dialog role, the document-specific question and loss/failure context to accessibility; full-app focus/ancestry regression. Native screen-reader verification remains pending. |
+| 2026-10-16 | trivial | Progress log: the Spike |
+| 2026-10-16 | trivial | Progress log: `w:eastAsianLayout` kept on save |
+| 2026-10-16 | trivial | Progress log: Web Layout fills the window width (#1876) |
 | 2026-10-16 | trivial | Progress log: tall-ascent font list entries no longer cut off (#2570) |
 | 2026-10-16 | trivial | Progress log: Read Mode keeps the keyboard, whole columns, page-turn bar clear (#1772) |
 | 2026-10-16 | trivial | Progress log: comments readable in the dark theme (#2045) |
 | 2026-10-16 | trivial | Progress log: Indonesian proofing (#498) |
 | 2026-10-16 | trivial | Progress log: legacy outline, shadow, emboss and imprint text effects drawn (#2534) |
+| 2026-10-16 | trivial | Progress log: Hebrew field results and smart quotes (#1670) |
+| 2026-10-16 | trivial | Progress log: Ctrl+wheel zoom no longer scrolls the document (#1743) |
+| 2026-10-16 | trivial | Hint-reliant CJK fonts execute TrueType contour assembly; Windows DFKai-SB no longer loses strokes. Synthetic local-font regression; no font binaries bundled. |
+| 2026-10-16 | trivial | Drawing dispatch uses the direct graphic-data child so nested pictures keep their text boxes. Synthetic regressions. |
+| 2026-10-16 | trivial | Zero-extent drawing anchors contribute no inline font height. Synthetic regressions. |
+| 2026-10-16 | trivial | Control keyboard/text input works in the inactive native window (#2420) |
+| 2026-10-16 | trivial | Body and active note text keep normal opacity while editing footnotes or endnotes (#2545); header/footer dimming is unchanged |
+| 2026-10-16 | trivial | An otherwise empty section at page start retains its line before continuous content; later closing marks stay quiet |
+| 2026-10-16 | trivial | Progress log: equations from Word files keep their content (#1273) |
+| 2026-10-16 | trivial | Progress log: Insert Caption… on objects and Page Setup header and footer options (#1230) |
+| 2026-10-16 | trivial | Progress log: live rotation preview while dragging (#2277); readiness estimates unchanged |
+| 2026-10-16 | trivial | Progress log: a text frame in the paragraph defaults frames nothing (#2360) |
+| 2026-10-16 | trivial | Progress log: a text file saved over itself closes without asking (#2376) |
+| 2026-10-16 | trivial | Progress log: opening a DOCX no longer copies its pictures |
+| 2026-10-16 | trivial | Progress log: lam-alef drawn as two glyphs at one x extracts whole from exported PDFs (#2310) |
+| 2026-10-15 | trivial | Progress log: text above a float's anchor wraps around it, #2048 |
+| 2026-10-15 | trivial | Progress log: undrawable private-use list bullets show the level's default bullet (#1683) |
+| 2026-10-15 | trivial | Progress log: web preferences kept between visits (#2132) |
+| 2026-10-15 | trivial | Progress log: Recently Used Fonts in the font box (#2068) |
+| 2026-10-15 | trivial | Progress log: one Thai face for a run in a missing Thai font (#1549) |
+| 2026-10-15 | trivial | Progress log: move options in Track Changes Options (gap #5) |
+| 2026-10-15 | trivial | Progress log: image size limits checked before allocation (#1321) |
+| 2026-10-15 | trivial | Progress log: at-least table rows start the next page whole (#1742) |
+| 2026-10-15 | trivial | Progress log: selection bar for right-to-left paragraphs and table rows |
+| 2026-10-15 | trivial | `wordcraft-cli convert --update-fields` explicitly refreshes unlocked fields before conversion; ordinary conversion keeps cached results. Field refresh can change pagination |
 | 2026-10-15 | trivial | Progress log: Columns on selected text (#2024) |
 | 2026-10-15 | trivial | Navigation Find and query edits expose Results (#2096) |
 | 2026-10-15 | trivial | Progress log: numbered headings (#1793) |
 | 2026-10-15 | trivial | Add the missing `-->` → `→` AutoCorrect entry (#2223), with typing, undo and preference regression coverage; existing arrow bullets unchanged |
 | 2026-10-15 | trivial | Progress log: Update Field updates the part being edited, as in Word (#1706) |
-| 2026-10-14 | trivial | Progress log: Update Fields reaches headers, footers and text boxes (#1706) |
 | 2026-10-15 | trivial | Progress log: font family caches bounded; math font resolution follows font changes (#1354) |
 | 2026-10-15 | trivial | Progress log: web typing in non-Latin text no longer repeats (#1480) |
 | 2026-10-15 | trivial | Progress log: Backspace removes a selected table, rows or columns (#1844) |
-| 2026-10-16 | trivial | Progress log: Hebrew field results and smart quotes (#1670) |
-| 2026-10-16 | trivial | Progress log: Ctrl+wheel zoom no longer scrolls the document (#1743) |
-| 2026-10-16 | trivial | Hint-reliant CJK fonts execute TrueType contour assembly; Windows DFKai-SB no longer loses strokes. Synthetic local-font regression; no font binaries bundled. |
-| 2026-10-16 | trivial | Drawing dispatch uses the direct graphic-data child so nested pictures keep their text boxes. Synthetic regressions. |
-| 2026-10-14 | trivial | Progress log: RTF export writes sections (gap 19) |
 | 2026-10-15 | trivial | Progress log: multi-letter equation scripts (#1609) |
 | 2026-10-15 | trivial | Progress log: plain-text paste keeps the paragraph formatting where it lands |
-| 2026-10-14 | trivial | Progress log: Add Font imports every selected font file (#1789) |
 | 2026-10-15 | trivial | Additive paragraph spacing retains the full before-space after a section page break; ordinary overlapping spacing is unchanged. |
 | 2026-10-15 | trivial | Exact line spacing keeps the run font baseline around tall equations; automatic and minimum spacing still grow for math. |
-| 2026-10-16 | trivial | Zero-extent drawing anchors contribute no inline font height. Synthetic regressions. |
-| 2026-10-16 | trivial | Control keyboard/text input works in the inactive native window (#2420) |
 | 2026-10-15 | trivial | Progress log: Hide Quick Access Toolbar (#1945) |
 | 2026-10-15 | trivial | Progress log: native ink nested in groups and drawing canvases kept on save |
 | 2026-10-15 | trivial | Progress log: the word being typed gets no squiggle until the caret leaves it (#1552) |
 | 2026-10-15 | trivial | Progress log: Highlight No Color sticks to the button (#2105) |
-| 2026-10-16 | trivial | Body and active note text keep normal opacity while editing footnotes or endnotes (#2545); header/footer dimming is unchanged |
-| 2026-10-17 | minor | Progress log: Drop Cap Options (#2601) |
-| 2026-10-16 | trivial | An otherwise empty section at page start retains its line before continuous content; later closing marks stay quiet |
-| 2026-10-16 | trivial | Progress log: equations from Word files keep their content (#1273) |
-| 2026-10-16 | trivial | Progress log: Insert Caption… on objects and Page Setup header and footer options (#1230) |
-| 2026-10-17 | trivial | SECTIONPAGES includes shared continuous-section pages in body and header/footer fields |
-| 2026-10-17 | trivial | Footer page tables no longer inflate footer text height; body lines wrap at their physical bounds |
-| 2026-10-17 | minor | Progress log: Scale to paper size on File › Print, #2108 |
-| 2026-10-17 | trivial | Non-overlapping body floating tables clear header tables; overlapping tables keep their requested position |
 | 2026-10-15 | trivial | Progress log: caret inside ligatures (#1974) |
-| 2026-10-17 | trivial | Progress log: the ribbon's paste choices in the context menu (#2583) |
-| 2026-10-16 | trivial | Progress log: live rotation preview while dragging (#2277); readiness estimates unchanged |
-| 2026-10-16 | trivial | Progress log: a text frame in the paragraph defaults frames nothing (#2360) |
-| 2026-10-16 | trivial | Progress log: a text file saved over itself closes without asking (#2376) |
 | 2026-10-15 | trivial | Progress log: recovery copies and .json files store pictures as base64 (#586 follow-up) |
 | 2026-10-15 | trivial | Progress log: selected table rows and cells copy as a table; Cut clears their text (#1744) |
-| 2026-10-14 | trivial | Progress log: Select Table copies and cuts the whole table (#1744) |
-| 2026-10-17 | trivial | Progress log: Scale Font Sizes command (#1475) |
-| 2026-10-14 | trivial | Progress log: row table border exceptions |
-| 2026-10-12 | minor | Czech proofing review: short-word splits rank after deletion, NOSUGGEST excludes suggestions while accepting typed forms, affix comments apply only to headers, ratios keep spaces and repeated-word messages use Czech quotes; synthetic engine end-to-end and latency checks |
 | 2026-10-15 | trivial | Three-column header/footer presets use editable table cells and screen-only editing guides (#2197); readiness unchanged |
-| 2026-10-12 | minor | Czech spelling from the installed Hunspell dictionary, runtime-table suggestions and generic checks; Czech interface writes cs-CZ documents; no Czech hyphenation patterns bundled; estimates unchanged |
-| 2026-10-12 | trivial | Progress log: one selected cell's border drags in its row only (#962) |
-| 2026-10-16 | trivial | Progress log: opening a DOCX no longer copies its pictures |
-| 2026-10-12 | minor | Progress log: Word default shortcuts expanded to 140 commands on macOS (169 combinations) and 158 on Linux/Windows (188 combinations), addressing gap #24 |
-| 2026-10-13 | trivial | Web/Draft long-page blur fixed with visible full-resolution raster tiles |
+| 2026-10-15 | trivial | Progress log: comments outside the body in the list, balloons and Next/Previous (#2289) |
+| 2026-10-15 | trivial | Progress log: Ink to Shape two-stroke and closed-head arrows |
+| 2026-10-15 | trivial | Charts: radar charts (standard, marker, filled) are drawn instead of a placeholder (#1890) |
+| 2026-10-15 | trivial | Progress log: dialog close box (#1885) |
+| 2026-10-15 | trivial | Progress log: mixed Hebrew/Latin text keeps its order in Word (#1543) |
+| 2026-10-15 | trivial | Progress log: ruler numbers by zoom, rulers follow the caret's page (#1878) |
+| 2026-10-14 | trivial | Progress log: a list item's first word is not flagged for a missing capital (#1741) |
+| 2026-10-14 | trivial | Progress log: comment drafts kept and written before saving or closing (#1348) |
+| 2026-10-14 | trivial | Progress log: ASK and SET fields show nothing (#1765) |
+| 2026-10-14 | trivial | Progress log: ODT sections on export (gap 19) |
+| 2026-10-14 | trivial | Progress log: Update Fields reaches headers, footers and text boxes (#1706) |
+| 2026-10-14 | trivial | Progress log: RTF export writes sections (gap 19) |
+| 2026-10-14 | trivial | Progress log: Add Font imports every selected font file (#1789) |
+| 2026-10-14 | trivial | Progress log: Select Table copies and cuts the whole table (#1744) |
+| 2026-10-14 | trivial | Progress log: row table border exceptions |
 | 2026-10-14 | trivial | Progress log: VML freeforms read and kept on save |
 | 2026-10-14 | trivial | Progress log: consistent preferred cell widths |
 | 2026-10-14 | trivial | Field instructions spanning paragraphs no longer add blank lines during pagination; empty result paragraphs still take a line. |
 | 2026-10-14 | trivial | A list paragraph containing only a page break has no visible label; it still advances the list counter. Ordinary empty list items keep their label. |
 | 2026-10-14 | trivial | Floating-table overlap checks use visible line content; empty line-break lines no longer move a table |
-| 2026-10-15 | trivial | Progress log: comments outside the body in the list, balloons and Next/Previous (#2289) |
 | 2026-10-14 | trivial | Progress log: deleting a comment leaves no dangling anchors or replies (#1345) |
 | 2026-10-14 | minor | Legacy DOC DIB conversion byte limits only; related #1334/#1554, stage and readiness estimates unchanged |
-| 2026-10-15 | trivial | Progress log: Ink to Shape two-stroke and closed-head arrows |
-| 2026-10-13 | trivial | Progress log: justified vertical page alignment (#1320) |
 | 2026-10-14 | trivial | Progress log: file names that aren't valid Unicode (#1440) |
-| 2026-10-13 | trivial | Behind Text pictures and shapes drag over overlapping text in the body and headers, selected or not, while ordinary clicks keep editing text; In Front of Text drag covered too |
-| 2026-10-13 | trivial | Progress log: the watermark written to DOCX (#1290) |
-| 2026-10-13 | trivial | Progress log: Word's text watermark read from DOCX (#1290) |
-| 2026-10-13 | trivial | Progress log: Insert Hyperlink › Place in This Document (#1234) |
-| 2026-10-13 | trivial | Progress log: Insert › Bookmark deletes and goes to bookmarks (#1236) |
-| 2026-10-12 | trivial | Progress log: an option to show only the selected text's comment (#1055) |
-| 2026-10-12 | trivial | Progress log: clicking in a comment's text moves its caret (#1013) |
 | 2026-10-14 | trivial | Comment commands reject malformed explicit IDs instead of truncating floats or targeting the caret (#1690, finding 3); synthetic command, undo/redo and DOCX save/reopen coverage; readiness estimates unchanged |
-| 2026-10-12 | trivial | Progress log: a press on the ribbon no longer scrolls the document (#1019) |
-| 2026-10-12 | trivial | Progress log: Ctrl+drag copies an object (#1014) |
-| 2026-10-12 | trivial | Document title opens Rename Document; the account badge opens Options › General for user name and initials. |
 | 2026-10-14 | trivial | Progress log: tables nest 24 deep at most (#1596) |
-| 2026-10-13 | trivial | Progress log: rounded rectangle corners (#1476) |
-| 2026-10-13 | trivial | Progress log: PAGEREF in headers and footers (#1477) |
-| 2026-10-13 | trivial | Replace All checks content-control locks before editing; a refused batch leaves the document and undo history unchanged; existing deletion-lock rules reused, with tracked/untracked regression coverage |
 | 2026-10-14 | trivial | Progress log: print-area strings translated in every catalog |
 | 2026-10-14 | trivial | Progress log: All Caps and Small Caps draw ß as SS (#1581) |
-| 2026-10-13 | trivial | Progress log: Windows Magnifier follows the caret onto a new line (#1119) |
-| 2026-10-13 | trivial | Progress log: a window too big for its screen shrinks to fit (#1215) |
 | 2026-10-14 | trivial | Progress log: Page Setup sections are validated (#1582) |
-| 2026-10-13 | trivial | Progress log: `--control` checks its port (#1426) |
 | 2026-10-14 | trivial | Progress log: words beside a floating picture are no longer split (#1376) |
 | 2026-10-14 | trivial | Progress log: VML preset shapes (#1377) |
 | 2026-10-14 | trivial | Progress log: Russian letter list labels |
 | 2026-10-14 | trivial | Progress log: the save prompt takes the keyboard from the page (#1597) |
-| 2026-10-12 | trivial | Progress log: VML text box margins, fit and alignment; hidden drawings |
-| 2026-10-13 | trivial | Progress log: comment balloon buttons work, empty comments can be deleted (#1085) |
-| 2026-10-12 | trivial | Progress log: sample-text formulas on Enter (#1067) |
-| 2026-10-12 | trivial | Progress log: direct run-level native InkML content parts survive DOCX edits and repeated saves |
-| 2026-10-13 | trivial | Progress log: the caret contrasts with its background (#299) |
-| 2026-10-13 | trivial | Progress log: clicks on ribbon chrome keep typing in the document (#1093) |
-| 2026-10-13 | trivial | Progress log: dragged shapes wrap in their new column (#884) |
 | 2026-10-14 | trivial | Progress log: All Caps and Small Caps text extracts from PDFs as shown (#1473) |
 | 2026-10-14 | trivial | Progress log: the web's Save before New/Open waits for the save picker (#1315) |
-| 2026-10-13 | trivial | Progress log: a failed save from the close prompt says so (#1445) |
 | 2026-10-14 | trivial | Progress log: Inspect Document removes hidden text in every story (#1344) |
 | 2026-10-14 | trivial | Progress log: ODT tracked changes (gap 19) |
 | 2026-10-14 | trivial | Progress log: RTF tracked insertions and deletions (gap 19) |
 | 2026-10-14 | trivial | Progress log: alignment guides while dragging pictures and shapes |
 | 2026-10-14 | trivial | Progress log: ODT sections on import (#1379) |
 | 2026-10-14 | trivial | Progress log: right-to-left text in exported PDFs extracts as whole words (#1383) |
-| 2026-10-16 | trivial | Progress log: lam-alef drawn as two glyphs at one x extracts whole from exported PDFs (#2310) |
 | 2026-10-14 | trivial | Progress log: HTML header cells, cell alignment and region paper for opened HTML/Markdown/text (#1381) |
 | 2026-10-14 | trivial | Progress log: custom page size from More Paper Sizes… and Page Setup (#1433) |
+| 2026-10-14 | trivial | Progress log: continued paragraphs wrap around the next column's shapes (#1374) |
+| 2026-10-14 | trivial | Progress log: RTF import keeps sections (#1378) |
+| 2026-10-14 | trivial | Progress log: colour emoji drawn on screen and in page renders (#1269) |
+| 2026-10-14 | trivial | Progress log: `.doc` table shading and the extra column (#1380) |
+| 2026-10-14 | trivial | Progress log: table deletes, Change Case and Unlink Fields respect Track Changes and locked content controls (#1329) |
+| 2026-10-14 | trivial | Progress log: Ink to Shape recognises single-stroke arrows |
+| 2026-10-14 | trivial | Progress log: Save As type list (#1399) |
+| 2026-10-14 | trivial | Progress log: a picture inserted by a command survives the next typing (#965) |
+| 2026-10-14 | trivial | Progress log: `.doc` notes, headers and text boxes read their text once (#1319) |
+| 2026-10-14 | trivial | Progress log: ODT and `.doc` pictures read once, within their byte budget (#1334) |
+| 2026-10-14 | trivial | Progress log: text boxes in deeply nested tables kept through edits (#1339) |
+| 2026-10-14 | trivial | Progress log: Flat OPC reading bounded everywhere in the file, CDATA base64 read (#1353) |
+| 2026-10-13 | trivial | Web/Draft long-page blur fixed with visible full-resolution raster tiles |
+| 2026-10-13 | trivial | Progress log: justified vertical page alignment (#1320) |
+| 2026-10-13 | trivial | Behind Text pictures and shapes drag over overlapping text in the body and headers, selected or not, while ordinary clicks keep editing text; In Front of Text drag covered too |
+| 2026-10-13 | trivial | Progress log: the watermark written to DOCX (#1290) |
+| 2026-10-13 | trivial | Progress log: Word's text watermark read from DOCX (#1290) |
+| 2026-10-13 | trivial | Progress log: Insert Hyperlink › Place in This Document (#1234) |
+| 2026-10-13 | trivial | Progress log: Insert › Bookmark deletes and goes to bookmarks (#1236) |
+| 2026-10-13 | trivial | Progress log: rounded rectangle corners (#1476) |
+| 2026-10-13 | trivial | Progress log: PAGEREF in headers and footers (#1477) |
+| 2026-10-13 | trivial | Replace All checks content-control locks before editing; a refused batch leaves the document and undo history unchanged; existing deletion-lock rules reused, with tracked/untracked regression coverage |
+| 2026-10-13 | trivial | Progress log: Windows Magnifier follows the caret onto a new line (#1119) |
+| 2026-10-13 | trivial | Progress log: a window too big for its screen shrinks to fit (#1215) |
+| 2026-10-13 | trivial | Progress log: `--control` checks its port (#1426) |
+| 2026-10-13 | trivial | Progress log: comment balloon buttons work, empty comments can be deleted (#1085) |
+| 2026-10-13 | trivial | Progress log: the caret contrasts with its background (#299) |
+| 2026-10-13 | trivial | Progress log: clicks on ribbon chrome keep typing in the document (#1093) |
+| 2026-10-13 | trivial | Progress log: dragged shapes wrap in their new column (#884) |
+| 2026-10-13 | trivial | Progress log: a failed save from the close prompt says so (#1445) |
 | 2026-10-13 | trivial | Progress log: highlighted text on a dark page (#1252) |
 | 2026-10-13 | trivial | Progress log: full screen on F11 (#980) |
 | 2026-10-13 | trivial | Progress log: interface audit back in CI (#1128) |
 | 2026-10-13 | trivial | Progress log: double-click the margin to create and edit a header or footer (#960) |
 | 2026-10-13 | trivial | Progress log: Set Proofing Language… in the Language menu (#860) |
-| 2026-10-12 | trivial | Progress log: list label follows paragraph alignment (#1159) |
 | 2026-10-13 | trivial | Progress log: space after a page break |
 | 2026-10-13 | trivial | Progress log: table row margins and splitting |
 | 2026-10-13 | trivial | Progress log: lines inside groups in PDF export (#1474) |
-| 2026-10-14 | trivial | Progress log: continued paragraphs wrap around the next column's shapes (#1374) |
 | 2026-10-13 | trivial | Progress log: PAGE fields on the pages a paragraph runs onto (#1352) |
-| 2026-10-14 | trivial | Progress log: RTF import keeps sections (#1378) |
-| 2026-10-14 | trivial | Progress log: colour emoji drawn on screen and in page renders (#1269) |
-| 2026-10-14 | trivial | Progress log: `.doc` table shading and the extra column (#1380) |
-| 2026-10-12 | trivial | Progress log: web picture paste respects the edit target (#1349) |
-| 2026-10-14 | trivial | Progress log: table deletes, Change Case and Unlink Fields respect Track Changes and locked content controls (#1329) |
-| 2026-10-14 | trivial | Progress log: Ink to Shape recognises single-stroke arrows |
 | 2026-10-13 | trivial | Progress log: Styles gallery fallback for DOCX files without qFormat (#1238) |
 | 2026-10-13 | trivial | Progress log: crop handles on the canvas |
 | 2026-10-13 | trivial | Progress log: cell size boxes act on the whole selection (#1242) |
+| 2026-10-13 | trivial | Progress log: equation pictures keep the theme colours on Windows (#1002) |
+| 2026-10-13 | trivial | Progress log: no document behind the Start screen (#1129) |
+| 2026-10-13 | trivial | Progress log: an empty .docx opens and saves back to itself (#1384) |
+| 2026-10-13 | trivial | Progress log: the Paragraph dialog leaves mixed formatting alone (#1346) |
+| 2026-10-13 | trivial | Progress log: Word 365 cover pages, positions and closed freeforms (#743) |
+| 2026-10-13 | trivial | Progress log: every distinct format in a paragraph keeps its own layout style (#1340) |
+| 2026-10-13 | trivial | Progress log: free part, list and comment ids after a file's largest ones (#1338) |
+| 2026-10-13 | trivial | Progress log: Markdown backtick runs read in linear time (#1336) |
+| 2026-10-13 | trivial | Progress log: Markdown brackets no longer turn later links into text (#1452) |
+| 2026-10-13 | trivial | Swedish interface (`sv`): progress log and shipped languages |
+| 2026-10-13 | trivial | Croatian interface (`hr`): progress log and shipped languages |
+| 2026-10-12 | minor | Czech proofing review: short-word splits rank after deletion, NOSUGGEST excludes suggestions while accepting typed forms, affix comments apply only to headers, ratios keep spaces and repeated-word messages use Czech quotes; synthetic engine end-to-end and latency checks |
+| 2026-10-12 | minor | Czech spelling from the installed Hunspell dictionary, runtime-table suggestions and generic checks; Czech interface writes cs-CZ documents; no Czech hyphenation patterns bundled; estimates unchanged |
+| 2026-10-12 | trivial | Progress log: one selected cell's border drags in its row only (#962) |
+| 2026-10-12 | minor | Progress log: Word default shortcuts expanded to 140 commands on macOS (169 combinations) and 158 on Linux/Windows (188 combinations), addressing gap #24 |
+| 2026-10-12 | trivial | Progress log: an option to show only the selected text's comment (#1055) |
+| 2026-10-12 | trivial | Progress log: clicking in a comment's text moves its caret (#1013) |
+| 2026-10-12 | trivial | Progress log: a press on the ribbon no longer scrolls the document (#1019) |
+| 2026-10-12 | trivial | Progress log: Ctrl+drag copies an object (#1014) |
+| 2026-10-12 | trivial | Document title opens Rename Document; the account badge opens Options › General for user name and initials. |
+| 2026-10-12 | trivial | Progress log: VML text box margins, fit and alignment; hidden drawings |
+| 2026-10-12 | trivial | Progress log: sample-text formulas on Enter (#1067) |
+| 2026-10-12 | trivial | Progress log: direct run-level native InkML content parts survive DOCX edits and repeated saves |
+| 2026-10-12 | trivial | Progress log: list label follows paragraph alignment (#1159) |
+| 2026-10-12 | trivial | Progress log: web picture paste respects the edit target (#1349) |
 | 2026-10-12 | trivial | Progress log: Accept All and Reject All keep the right paragraph marks (#864) |
 | 2026-10-12 | trivial | Progress log: `--help` for the app and every CLI subcommand (#968) |
 | 2026-10-12 | trivial | Progress log: Down and Up no longer skip a table (#1007) |
-| 2026-10-13 | trivial | Progress log: equation pictures keep the theme colours on Windows (#1002) |
 | 2026-10-12 | trivial | Progress log: table style editor (#714) |
-| 2026-10-11 | trivial | Progress log: Ctrl, Alt, left-edge and selected-cells table border drags (#711) |
-| 2026-10-11 | trivial | Progress log: table markers on the rulers (#700) |
-| 2026-10-11 | trivial | Progress log: the table context menu |
 | 2026-10-12 | trivial | Progress log: AutoFit in a nested table, whole cells shaded for a selection through a table, Shift+Right at a cell's end (#971) |
-| 2026-10-11 | trivial | Progress log: drags and Shift+arrows over table cells select whole cells |
-| 2026-10-11 | trivial | Progress log: table selection areas, insert buttons, move handle and double-click AutoFit; catalog 484/499 |
 | 2026-10-12 | trivial | Progress log: Undo history list (#701) |
-| 2026-10-14 | trivial | Progress log: Save As type list (#1399) |
 | 2026-10-12 | trivial | Progress log: Start screen at launch (#766) |
-| 2026-10-13 | trivial | Progress log: no document behind the Start screen (#1129) |
 | 2026-10-12 | trivial | Progress log: Alt+Q command search (#819); log table header fixed |
 | 2026-10-12 | trivial | Progress log: ribbon groups fit above their labels |
 | 2026-10-12 | trivial | Font list previews no longer grow memory (#848) |
 | 2026-10-12 | trivial | Progress log: section break keeps the selected text (#852) |
 | 2026-10-12 | trivial | Progress log: save prompt from the keyboard (#861) |
-| 2026-10-13 | trivial | Progress log: an empty .docx opens and saves back to itself (#1384) |
 | 2026-10-12 | trivial | Progress log: craft-fonts Simplified Chinese in documents |
 | 2026-10-12 | trivial | Progress log: symbol-font text drawn as Unicode symbols (#776) |
-| 2026-10-13 | trivial | Progress log: the Paragraph dialog leaves mixed formatting alone (#1346) |
 | 2026-10-12 | trivial | Progress log: WMF and EMF pictures can be inserted (#802) |
-| 2026-10-14 | trivial | Progress log: a picture inserted by a command survives the next typing (#965) |
-| 2026-10-11 | trivial | Progress log and shipped languages: Turkish interface completed, 2,325 entries (#774) |
 | 2026-10-12 | trivial | Progress log: Navigation heading truncation (#759) |
-| 2026-10-11 | trivial | Progress log: Reading Mode implementation |
 | 2026-10-12 | trivial | Progress log: new documents follow the system region (#838) |
+| 2026-10-12 | trivial | Progress log: AutoCorrect replacement list follows the text's language (#835) |
+| 2026-10-12 | trivial | Progress log: language-aware sorting and table numbers (#836, #837) |
+| 2026-10-12 | trivial | Progress log: Word 365 cover pages (#743) |
+| 2026-10-12 | trivial | Progress log: large-table scrolling (#811) |
+| 2026-10-12 | minor | Desktop File > Print now discovers printers and submits PDF jobs through pinned craft-print with printer choice, copies, collation, duplex and grayscale; the upstream preview, ranges, parity and Print Markup remain available, along with browser printing and PDF export. Remaining print parity includes driver-specific tray/options and pages-per-sheet UI; physical printer fidelity needs hardware validation. |
+| 2026-10-12 | trivial | Progress log: selection bar in the left margin (#856) |
+| 2026-10-12 | minor | Progress log: opaque custom XML store preservation, with synthetic package regressions and explicit limits |
+| 2026-10-12 | minor | Preserve imported TOC ranges and retain #538 refresh/undo/save coverage on current main; readiness unchanged |
+| 2026-10-12 | trivial | Native saves protect existing temporary-name entries and originals on pre-replacement failure; synthetic macOS evidence, explicit durability/platform limits; readiness unchanged |
+| 2026-10-12 | trivial | Bulgarian interface (`bg`): progress log and shipped languages |
+| 2026-10-12 | minor | Native drawing-level ink and its picture fallback survive DOCX edits and repeated saves; adapted to the current graphic writer; rendering and editing InkML remain missing |
+| 2026-10-12 | minor | List-label automatic/AtLeast line-height inflation corrected; gap #4 remains open and readiness unchanged |
+| 2026-10-12 | minor | Local desktop recovery: unsaved drafts and edits are snapshotted in the profile; File › Recover restores an unsaved copy or confirms discard. Full model storage includes media and opaque parts. Password sessions skip plaintext snapshots. See [recovery.md](docs/recovery.md); stability estimates remain unchanged. |
+| 2026-10-12 | trivial | Legacy table paragraph spacing preserved; modes 11/12/14 versus 15 checked with original synthetic documents |
+| 2026-10-12 | trivial | Progress log: recipient filter and sort, .xls and legacy-encoding recipient lists (#778) |
+| 2026-10-11 | trivial | Progress log: Ctrl, Alt, left-edge and selected-cells table border drags (#711) |
+| 2026-10-11 | trivial | Progress log: table markers on the rulers (#700) |
+| 2026-10-11 | trivial | Progress log: the table context menu |
+| 2026-10-11 | trivial | Progress log: drags and Shift+arrows over table cells select whole cells |
+| 2026-10-11 | trivial | Progress log: table selection areas, insert buttons, move handle and double-click AutoFit; catalog 484/499 |
+| 2026-10-11 | trivial | Progress log and shipped languages: Turkish interface completed, 2,325 entries (#774) |
+| 2026-10-11 | trivial | Progress log: Reading Mode implementation |
 | 2026-10-11 | trivial | DOCX complex-script formatting inheritance fix and round-trip coverage |
 | 2026-10-11 | minor | Czech (`cs`) interface catalog added |
-| 2026-10-12 | trivial | Progress log: AutoCorrect replacement list follows the text's language (#835) |
 | 2026-10-11 | trivial | Progress log: German interface (#574) |
-| 2026-10-12 | trivial | Progress log: language-aware sorting and table numbers (#836, #837) |
-| 2026-10-13 | trivial | Progress log: Word 365 cover pages, positions and closed freeforms (#743) |
-| 2026-10-12 | trivial | Progress log: Word 365 cover pages (#743) |
 | 2026-10-11 | trivial | Progress log: tables resize with the mouse (#217) |
 | 2026-10-11 | trivial | Progress log: Animation effects setting |
 | 2026-10-11 | trivial | Progress log: built-in file browser when the system file dialog is unavailable (#576) |
-| 2026-10-12 | trivial | Progress log: large-table scrolling (#811) |
 | 2026-10-11 | trivial | Progress log: security review fixes (temp files, exported link schemes) |
-| 2026-10-13 | trivial | Progress log: every distinct format in a paragraph keeps its own layout style (#1340) |
 | 2026-10-11 | trivial | Progress log: Find and Replace special characters and wildcards (#543) |
-| 2026-10-12 | minor | Desktop File > Print now discovers printers and submits PDF jobs through pinned craft-print with printer choice, copies, collation, duplex and grayscale; the upstream preview, ranges, parity and Print Markup remain available, along with browser printing and PDF export. Remaining print parity includes driver-specific tray/options and pages-per-sheet UI; physical printer fidelity needs hardware validation. |
 | 2026-10-11 | trivial | Progress log: Windows DX12 shaders compiled with FXC (#603) |
 | 2026-10-11 | trivial | Progress log: Insert › SmartArt (#497); catalog 429/451 → 437/458 (95.4%) |
 | 2026-10-11 | trivial | Progress log: Outline view (#493) |
@@ -999,51 +1046,33 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-11 | trivial | Progress log: complex-script shaping (#604) |
 | 2026-10-11 | trivial | Progress log: unknown text extensions open as text (#569) |
 | 2026-10-11 | trivial | Progress log: drag-select by words/paragraphs/sentences (#549) |
-| 2026-10-12 | trivial | Progress log: selection bar in the left margin (#856) |
 | 2026-10-11 | trivial | Progress log: content controls (#381) |
 | 2026-10-11 | trivial | Progress log: Insert › Chart (#409); catalog 408/439 (92.9%) |
-| 2026-10-13 | trivial | Progress log: free part, list and comment ids after a file's largest ones (#1338) |
 | 2026-10-11 | trivial | Progress log: Line Numbers, Hyphenation, Language, Envelopes and Labels dialogs (#407) |
 | 2026-10-11 | trivial | Progress log: Alt Text pane, decorative objects, deeper accessibility checker (#386) |
 | 2026-10-11 | trivial | Progress log: Draw lasso, Add Pen, Ink to Shape, Ink Replay (#395); catalog 406/434 |
 | 2026-10-11 | trivial | Progress log: document grid (#391) |
 | 2026-10-11 | trivial | Progress log: text direction, Align Text and linked text boxes (#369) |
-| 2026-10-10 | trivial | Progress: Drawing Canvas (#344): insert, shapes/pictures/text boxes inside, Fit/Expand/Scale, DOCX `wpc:wpc`, turns and flips as a whole; catalog 404/434 |
 | 2026-10-11 | trivial | Quick Access Toolbar KeyTips and persisted enable/disable setting (#620) |
 | 2026-10-11 | trivial | Progress log: mail-merge recipients from .xlsx/.xlsm/.ods (#334) |
 | 2026-10-11 | trivial | Insert › Icons landed (#309): catalog 402/434 → 403/434 (92.9%) |
-| 2026-10-13 | trivial | Progress log: Markdown backtick runs read in linear time (#1336) |
-| 2026-10-13 | trivial | Progress log: Markdown brackets no longer turn later links into text (#1452) |
 | 2026-10-11 | trivial | Enclose Characters (#297): catalog 403/434 (92.9%) |
-| 2026-10-12 | minor | Progress log: opaque custom XML store preservation, with synthetic package regressions and explicit limits |
-| 2026-10-12 | minor | Preserve imported TOC ranges and retain #538 refresh/undo/save coverage on current main; readiness unchanged |
 | 2026-10-11 | trivial | Progress log: Customize Ribbon and the Quick Access Toolbar (#379) |
 | 2026-10-11 | trivial | Omitted `w:pPrDefault` stays omitted across saves; explicit empty/default properties and later spacing edits remain writable. Synthetic preservation checks only; readiness estimates unchanged |
 | 2026-10-11 | trivial | Progress log: Customize Keyboard (#368) |
-| 2026-10-12 | trivial | Native saves protect existing temporary-name entries and originals on pre-replacement failure; synthetic macOS evidence, explicit durability/platform limits; readiness unchanged |
 | 2026-10-11 | trivial | Word's common keyboard shortcuts (#330): 125 of ~250 |
 | 2026-10-11 | trivial | Collapsed duplicate rows left by parallel merges |
-| 2026-10-13 | trivial | Swedish interface (`sv`): progress log and shipped languages |
-| 2026-10-12 | trivial | Bulgarian interface (`bg`): progress log and shipped languages |
-| 2026-10-13 | trivial | Croatian interface (`hr`): progress log and shipped languages |
 | 2026-10-11 | trivial | Hungarian interface (`hu`): progress log and shipped languages |
 | 2026-10-11 | trivial | Turkish interface (`tr`): progress log and shipped languages |
-| 2026-10-14 | trivial | Progress log: `.doc` notes, headers and text boxes read their text once (#1319) |
-| 2026-10-12 | minor | Native drawing-level ink and its picture fallback survive DOCX edits and repeated saves; adapted to the current graphic writer; rendering and editing InkML remain missing |
-| 2026-10-12 | minor | List-label automatic/AtLeast line-height inflation corrected; gap #4 remains open and readiness unchanged |
-| 2026-10-12 | minor | Local desktop recovery: unsaved drafts and edits are snapshotted in the profile; File › Recover restores an unsaved copy or confirms discard. Full model storage includes media and opaque parts. Password sessions skip plaintext snapshots. See [recovery.md](docs/recovery.md); stability estimates remain unchanged. |
-| 2026-10-12 | trivial | Legacy table paragraph spacing preserved; modes 11/12/14 versus 15 checked with original synthetic documents |
 | 2026-10-11 | minor | Progress log: contextual paragraph spacing in body paragraphs and headers |
 | 2026-10-11 | trivial | Progress log: eight more bibliography styles (#383) |
-| 2026-10-14 | trivial | Progress log: ODT and `.doc` pictures read once, within their byte budget (#1334) |
+| 2026-10-10 | trivial | Progress: Drawing Canvas (#344): insert, shapes/pictures/text boxes inside, Fit/Expand/Scale, DOCX `wpc:wpc`, turns and flips as a whole; catalog 404/434 |
 | 2026-10-10 | trivial | Progress log: Draw tab ink (#307) |
 | 2026-10-10 | trivial | Draw Table and Eraser (#303): catalog 393/431 (91.2%) |
 | 2026-10-10 | trivial | Progress log: charts, SmartArt and OLE objects kept on DOCX save (#319) |
 | 2026-10-10 | trivial | Progress log: contour wrap (#354) |
-| 2026-10-14 | trivial | Progress log: text boxes in deeply nested tables kept through edits (#1339) |
 | 2026-10-10 | trivial | Progress log: free rotation and flips (#332) |
 | 2026-10-10 | trivial | Progress log: Windows OpenGL fallback without a DirectX 12 driver (#316) |
-| 2026-10-14 | trivial | Progress log: Flat OPC reading bounded everywhere in the file, CDATA base64 read (#1353) |
 | 2026-10-10 | minor | Password-protected .docx (#281): files encrypted with a password (agile encryption) open and save; File › Info › Encrypt with Password |
 | 2026-10-10 | minor | Relanded clipboard pane, table styles editor, Manage Styles, Asian typography (kinsoku), Group/Ungroup and Shape Effects (#264 #263 #270 #271 #267 #280): catalog 390/431 (90.5%) |
 | 2026-10-10 | minor | Polish interface and proofing landed: Localization 25% → 27%, Proofing 35% → 40% |
@@ -1054,20 +1083,3 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-10 | major | Full re-measure; progress docs restructured (stage banner, two numbers, dimensions, languages, upcoming, progress log); parity tables moved to `docs/target-app-parity.md`, milestones to `docs/roadmap.md` |
 | 2026-10-09 | minor | Recently landed: RTL, Ukrainian and Brazilian Portuguese |
 | 2026-10-06 | major | First honest estimate: 88% catalog, ~62% real parity, alpha ~85% of the way |
-| 2026-10-12 | trivial | Progress log: recipient filter and sort, .xls and legacy-encoding recipient lists (#778) |
-| 2026-10-15 | trivial | Charts: radar charts (standard, marker, filled) are drawn instead of a placeholder (#1890) |
-| 2026-10-15 | trivial | Progress log: dialog close box (#1885) |
-| 2026-10-15 | trivial | Progress log: mixed Hebrew/Latin text keeps its order in Word (#1543) |
-| 2026-10-15 | trivial | Progress log: ruler numbers by zoom, rulers follow the caret's page (#1878) |
-| 2026-10-17 | trivial | Progress log: saving into a folder that refuses a temporary file (#2138) |
-| 2026-10-19 | trivial | Progress log: personal templates in File › New, Save as Word Template (#2852) |
-| 2026-10-20 | trivial | Progress log: saving to a NAS share mounted by GVFS (#3003) |
-| 2026-10-23 | trivial | Progress log: justified lines ending in a manual line break reach the margin (#3924) |
-| 2026-10-23 | trivial | Progress log: "NaN" in the Font dialog's Size box no longer closes the app (#3663) |
-| 2026-10-23 | trivial | Progress log: a table cell span from a `.json` file no longer overflows (#3637) |
-| 2026-10-28 | trivial | Progress log: chart and SmartArt text the font lacks is drawn in a fallback face (#4720) |
-| 2026-10-29 | trivial | Progress log: corporate authors in bibliographies (#4848) |
-| 2026-10-29 | trivial | Progress log: Table Properties follows the selection (#4857) |
-| 2026-10-27 | trivial | Progress log: AutoCorrect Options with no document open (#4585) |
-| 2026-10-28 | trivial | Progress log: RTF metafile pictures are imported (#4259) |
-| 2026-10-28 | trivial | Progress log: Chinese and Japanese text counts a word per character (#4547) |
