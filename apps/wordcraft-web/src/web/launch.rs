@@ -21,6 +21,8 @@ const MAX_LAUNCHED_BYTES: f64 = (256u32 << 20) as f64;
 const MAX_WAITING_FILES: usize = 20;
 /// How often the reader looks whether the app has opened the file it read last.
 const DRAIN_POLL_MS: i32 = 50;
+/// Most read failures one report names on the status bar.
+const MAX_REPORTED_FAILURES: usize = 3;
 
 /// Launched files not read yet, whether a reader is going through them, and how many files the
 /// launches since the last report left out.
@@ -75,8 +77,11 @@ pub(super) fn listen(inbox: Inbox, ctx: egui::Context, messages: Rc<RefCell<Vec<
 /// Read the waiting files one after another, in the order given, until none is left. A file is
 /// read only once the app has taken everything out of the inbox, so at most one launched file's
 /// bytes wait in memory, however many files and launches arrive. The files left out are reported
-/// once the last one has opened: opening a document clears the status bar.
+/// once the last one has opened: opening a document clears the status bar. Files that couldn't be
+/// read are reported then too, for the same reason: a failure shown earlier would be replaced as
+/// soon as the next file opened.
 async fn read_all(launches: Rc<RefCell<Launches>>, inbox: Inbox, ctx: egui::Context, messages: Rc<RefCell<Vec<String>>>) {
+    let mut failed: Vec<String> = Vec::new();
     loop {
         let next = launches.borrow_mut().waiting.pop_front();
         let Some(handle) = next else {
@@ -91,12 +96,15 @@ async fn read_all(launches: Rc<RefCell<Launches>>, inbox: Inbox, ctx: egui::Cont
                 l.reading = false;
                 std::mem::take(&mut l.omitted)
             };
-            if omitted > 0 {
-                let msg = i18n::fmt(
+            let omission = (omitted > 0).then(|| {
+                i18n::fmt(
                     i18n::t("{count} more files weren't opened: WordCraft opens up to {limit} at a time."),
                     &[("count", &omitted.to_string()), ("limit", &MAX_WAITING_FILES.to_string())],
-                );
-                messages.borrow_mut().push(msg);
+                )
+            });
+            let report: Vec<String> = std::mem::take(&mut failed).into_iter().chain(omission).collect();
+            if !report.is_empty() {
+                messages.borrow_mut().push(report.join(" "));
                 ctx.request_repaint();
             }
             return;
@@ -109,8 +117,10 @@ async fn read_all(launches: Rc<RefCell<Launches>>, inbox: Inbox, ctx: egui::Cont
             Ok(bytes) => inbox.lock().unwrap_or_else(|e| e.into_inner()).push((name, bytes)),
             Err(error) => {
                 log::warn!("{name}: {error}");
-                let msg = i18n::fmt(i18n::t("Couldn't open {path}: {error}"), &[("path", &name), ("error", &error)]);
-                messages.borrow_mut().push(msg);
+                // The rest are in the log: a status line holds a few files at most.
+                if failed.len() < MAX_REPORTED_FAILURES {
+                    failed.push(i18n::fmt(i18n::t("Couldn't open {path}: {error}"), &[("path", &name), ("error", &error)]));
+                }
             }
         }
         ctx.request_repaint();
