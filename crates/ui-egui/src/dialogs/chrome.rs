@@ -97,6 +97,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::TableStyle { id: None, .. } => "New Table Style",
         Dialog::TableStyle { .. } => "Modify Table Style",
         Dialog::Commands { .. } => "Search Commands",
+        Dialog::Macros { .. } => "Macros",
         Dialog::Insert(d) => d.title(),
         Dialog::Refs(d) => d.title(),
         Dialog::Icons { .. } => "Icons",
