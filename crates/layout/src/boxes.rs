@@ -217,6 +217,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     let mut page_table_wraps = Vec::new();
     let mut y = 0.0f32;
     let mut prev_after = 0.0f32;
+    let mut trailing_after = 0.0f32;
     let mut prev_after_auto = false;
     let mut prev_listed = false;
     let mut prev_style: Option<(String, bool)> = None;
@@ -347,6 +348,9 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                 // Automatic space after: none after the last paragraph of a cell or box.
                 let after = if pl.rp.after_auto && i + 1 == blocks.len() { 0.0 } else { pl.rp.space_after };
                 y += edges.top + pl.height + edges.bottom + after;
+                if separator && i + 1 == blocks.len() {
+                    trailing_after = after;
+                }
                 prev_after = after;
                 prev_after_auto = pl.rp.after_auto;
                 prev_listed = listed;
@@ -378,9 +382,10 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     }
     let floats_bottom = float_tables.iter().map(|r| r.bottom()).fold(float_objects_bottom, f32::max);
     ctx.hide_deleted = outer_hide;
-    // Word ignores space after the final paragraph of a separator story. Keep internal
-    // paragraph gaps, line height and border room; ordinary boxes retain their after-space.
-    let height = (y - if separator { prev_after } else { 0.0 }).max(0.0);
+    // Trim only after-space actually applied by a final footnote-separator paragraph block.
+    // A trailing table or framed paragraph makes the preceding paragraph's gap internal.
+    // Keep line height and border room; ordinary boxes retain their after-space.
+    let height = (y - trailing_after).max(0.0);
     BoxLayout { items, height, floats_bottom, last_top: last_top.max(0.0), table_areas, page_table_wraps }
 }
 

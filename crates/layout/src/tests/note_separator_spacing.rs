@@ -150,3 +150,50 @@ fn endnote_separator_after_space_is_unchanged() {
     let at = |doc: &Document| lay(doc).caret(&Pos { story: StoryRef::Part(id), path: Path::top(0), off: 0 }).unwrap().top;
     assert!((at(&b) - at(&a) - 12.0).abs() < 0.01, "endnote separator after-space still shifts its note");
 }
+
+/// A paragraph before a trailing floating table keeps its internal after-space.
+#[test]
+fn separator_keeps_after_space_before_a_trailing_floating_table() {
+    use wordcraft_doc::para::Anchor;
+    use wordcraft_doc::props::{HeightRule, TableFloat};
+    let make = |after| {
+        let mut doc = pagination_fixture_document("SYNTHETIC BODY");
+        let id = footnote(&mut doc, &Pos::body(0, 0), "SYNTHETIC NOTE");
+        let note = doc.para_mut(StoryRef::Part(id), &Path::top(0)).unwrap();
+        note.props.line_spacing = Some(LineSpacing::Exactly(14.0));
+        note.props.space_after = Some(0.0);
+        let mut blocks = separator(false, Some(after));
+        let mut table = wordcraft_doc::Table::new(1, 1, 40.0);
+        table.props.style = None;
+        table.props.fixed = true;
+        table.props.cell_margins = Some([0.0; 4]);
+        table.props.float = Some(TableFloat { h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 200.0, y: -10.0, ..Default::default() });
+        table.rows[0].props.height = Some(8.0);
+        table.rows[0].props.height_rule = HeightRule::Exact;
+        let mut p = Paragraph::new();
+        p.props = ParaProps { line_spacing: Some(LineSpacing::Exactly(6.0)), space_before: Some(0.0), space_after: Some(0.0), ..Default::default() };
+        table.rows[0].cells[0].blocks = vec![para_block(p)];
+        blocks.push(Arc::new(Block::Table(table)));
+        doc.footnote_separators.separator = Some(blocks);
+        (doc, id)
+    };
+    let positions = |after| {
+        let (doc, id) = make(after);
+        let layout = lay(&doc);
+        signature(&layout, doc.body.len());
+        let rule = layout.pages[0]
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Placed::Rule { x0, x1, y0, .. } if (x1 - x0 - 144.0).abs() < 0.01 => Some(*y0),
+                _ => None,
+            })
+            .unwrap();
+        let note = layout.caret(&Pos { story: StoryRef::Part(id), path: Path::top(0), off: 0 }).unwrap().top;
+        (rule, note)
+    };
+    let a = positions(0.0);
+    let b = positions(12.0);
+    assert!((a.0 - b.0 - 12.0).abs() < 0.01, "the gap before the floating table stays reserved: {a:?}, {b:?}");
+    assert!((a.1 - b.1).abs() < 0.01, "the note stays clear of the complete separator area");
+}
