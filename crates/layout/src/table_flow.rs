@@ -51,7 +51,7 @@ pub(crate) fn footer_table_wraps(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<WrapAre
             let story = StoryRef::Part(id);
             let h = layout_box(ctx, BoxInput::other(story, &blocks, sect.text_width(), 0, None)).height;
             let y = sect.page_h - sect.footer - h;
-            let frame = PageFrame { sect, origin: (x, y), number: page.number, mirror: ctx.mirror };
+            let frame = PageFrame { sect, margin_top: None, origin: (x, y), number: page.number, mirror: ctx.mirror };
             let mut areas = layout_box(ctx, BoxInput::other(story, &blocks, sect.text_width(), 0, Some(frame))).page_table_wraps;
             for (rect, ..) in &mut areas {
                 rect.x += x;
