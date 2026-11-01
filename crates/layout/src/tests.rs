@@ -7850,6 +7850,22 @@ fn the_line_between_columns_spans_the_section_s_text() {
     let [(_, top, bottom)] = rules[..] else { panic!("one line: {rules:?}") };
     assert!((top - boxes[1].2).abs() < 0.5 && (bottom - boxes[1].3).abs() < 0.5, "the paragraph's lines: {top}..{bottom} {boxes:?}");
 
+    // A section whose one line doesn't fit at the foot of the page (40 pt type) starts on the
+    // next: no line where it has no text, though the flow moved down there by its space before.
+    let mut late = Document::from_text("Filler\nBig\nAfter");
+    let filler = late.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    filler.props.space_after = Some(600.0);
+    filler.section = Some(Box::default());
+    late.format_range(&Pos::body(1, 0), &Pos::body(1, 3), &|c: &mut wordcraft_doc::CharProps| c.size = Some(40.0)).unwrap();
+    let p = late.para_mut(StoryRef::Body, &Path::top(1)).unwrap();
+    p.props.space_before = Some(6.0);
+    p.section = Some(Box::new(two.clone()));
+    late.last_section.start = SectionStart::Continuous;
+    let l = lay(&late);
+    assert_eq!(para_boxes(&l)[1].0, 1, "the paragraph moves to page 2: {:?}", para_boxes(&l));
+    assert!(vertical_rules(&l, 0).is_empty(), "no line on page 1: {:?}", vertical_rules(&l, 0));
+    assert_eq!(vertical_rules(&l, 1).len(), 1, "its line on page 2");
+
     // One section of two columns: the line runs down to the bottom of the text, not the page.
     let mut d = Document::from_text("One\nTwo\nThree");
     d.last_section.columns = two.columns.clone();

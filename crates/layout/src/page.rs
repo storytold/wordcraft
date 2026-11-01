@@ -98,8 +98,6 @@ pub(crate) struct ColumnLines {
     page: usize,
     top: f32,
     xs: Vec<f32>,
-    /// The page's items before the section's text on it: its text's items are the ones after.
-    from: usize,
 }
 
 /// Page borders, measured from the page edge (Word's default), so they surround the header,
@@ -357,23 +355,24 @@ impl PageBuilder<'_> {
                 _ => None,
             })
             .collect();
-        let from = self.pages.last().map_or(0, |p| p.items.len());
-        self.column_lines = Some(ColumnLines { page: self.pages.len() - 1, top: self.top, xs, from });
+        self.column_lines = Some(ColumnLines { page: self.pages.len() - 1, top: self.top, xs });
     }
     /// Draw the lines between the columns of the section's text on its page, from the top of
     /// that text to the bottom of its tallest column, as Word does: a continuous section in the
     /// middle of a page (columns for selected text, #5178) gets lines its own height, and a
-    /// section with no text on the page none. They span the text's lines and table cells, not
-    /// the space before its first paragraph or after its last. Called when the page or the
-    /// section ends there.
+    /// section with no text on the page none (space before alone included). They span the text's
+    /// lines and table cells, not the space before its first paragraph or after its last. Called
+    /// when the page or the section ends there, so the page's text below the section's top is the
+    /// section's.
     pub(crate) fn close_column_lines(&mut self) {
         let Some(c) = self.column_lines.take() else { return };
         if c.page + 1 != self.pages.len() {
             return;
         }
-        let flow = (c.top, self.text_bottom());
+        let flow_bottom = self.text_bottom();
         let Some(pg) = self.pages.get_mut(c.page) else { return };
-        let (top, bottom) = text_extent(pg.items.get(c.from..).unwrap_or_default()).map_or(flow, |(t, b)| (t.max(c.top), b.min(flow.1)));
+        let Some((top, bottom)) = text_extent(&pg.items, c.top) else { return };
+        let (top, bottom) = (top.max(c.top), bottom.min(flow_bottom));
         if bottom <= top + 0.5 {
             return;
         }
@@ -444,17 +443,19 @@ impl PageBuilder<'_> {
     }
 }
 
-/// The top of the first and the bottom of the last body text line or table cell among `items`
-/// (the space before and after paragraphs left out), `None` when there are none.
-fn text_extent(items: &[Placed]) -> Option<(f32, f32)> {
+/// The top of the highest and the bottom of the lowest body text line or table cell among
+/// `items` from `from` down (the space before and after paragraphs left out), `None` when there
+/// are none. Lines in table cells count by their cell's box, which clips what overflows an exact
+/// row height; items are picked by place, not by their order (objects behind the text go first).
+fn text_extent(items: &[Placed], from: f32) -> Option<(f32, f32)> {
     items
         .iter()
         .filter_map(|it| match it {
-            Placed::Lines { story: StoryRef::Body, y, para, l0, l1, .. } => Some((*y, item_bottom(*y, para, *l0, *l1)?)),
+            Placed::Lines { story: StoryRef::Body, path, y, para, l0, l1, .. } if path.depth() == 0 => Some((*y, item_bottom(*y, para, *l0, *l1)?)),
             Placed::Cell { story: StoryRef::Body, rect, .. } => Some((rect.y, rect.bottom())),
             _ => None,
         })
-        .filter(|(t, b)| t.is_finite() && b.is_finite())
+        .filter(|(t, b)| t.is_finite() && b.is_finite() && *t >= from - 0.5)
         .reduce(|(t0, b0), (t1, b1)| (t0.min(t1), b0.max(b1)))
 }
 
