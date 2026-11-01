@@ -1,4 +1,8 @@
-use super::*;
+use super::text::GlyphPaint;
+use super::{
+    Draw, Exporter, Fill, FillRule, LineCap, LineJoin, LineStyle, PathBuilder, Rect, Rgb, ShapeKind, Size, Stroke, StrokeDash, Surface, Transform,
+    append_path, fill, grown, krilla, norm, ok, paint_fill, pdf_line_cap, rect_path, rgb, shape_effects, shape_path, vector_picture,
+};
 
 impl Exporter<'_> {
     /// Paint one display item on the PDF surface in its current point-coordinate system.
@@ -13,6 +17,7 @@ impl Exporter<'_> {
                 }
             }
             Draw::Glyphs { face, size, glyphs, color, alpha, synth_bold, synth_italic, text, link, ranges, x_scale, .. } => {
+                let paint = GlyphPaint { color: *color, alpha: *alpha, bold: *synth_bold, italic: *synth_italic };
                 match glyphs.first().map(|g| g.1).filter(|_| x_scale.is_finite() && *x_scale > 0.0 && (x_scale - 1.0).abs() > 1e-4) {
                     // Scaled letters (`w:w`): drawn stretched across from the run's start, their
                     // positions brought back so the stretch puts each where the layout has it.
@@ -20,10 +25,10 @@ impl Exporter<'_> {
                         let k = *x_scale;
                         let moved: Vec<(u32, f32, f32)> = glyphs.iter().map(|&(g, x, y)| (g, x0 + (x - x0) / k, y)).collect();
                         s.push_transform(&Transform::from_row(k, 0.0, 0.0, 1.0, x0 * (1.0 - k), 0.0));
-                        self.glyphs(s, face, *size, &moved, *color, *alpha, *synth_bold, *synth_italic, text, ranges);
+                        self.glyphs(s, face, *size, &moved, paint, (text, ranges));
                         s.pop();
                     }
-                    None => self.glyphs(s, face, *size, glyphs, *color, *alpha, *synth_bold, *synth_italic, text, ranges),
+                    None => self.glyphs(s, face, *size, glyphs, paint, (text, ranges)),
                 }
                 if let Some(l) = link {
                     self.link_rect(face, *size, glyphs, l);
@@ -93,7 +98,7 @@ impl Exporter<'_> {
                 let can_fill = *kind != ShapeKind::Line;
                 let fx = effects.sanitized();
                 if !fx.is_empty() && (f.is_some() && can_fill || stroke.is_some()) {
-                    shape_effects(s, *kind, *corner, rect, &fx, f.is_some() && can_fill, stroke.is_some(), *stroke_width);
+                    shape_effects(s, (*kind, *corner), rect, &fx, (f.is_some() && can_fill, stroke.is_some(), *stroke_width));
                 }
                 // Soft edges: the fill fades out toward the outline (which fades with it).
                 if let (Some(rad), Some(c), true) = (fx.soft_edge, f.as_ref(), can_fill) {

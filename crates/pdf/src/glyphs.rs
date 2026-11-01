@@ -1,5 +1,13 @@
 use super::paint::append_path;
-use super::*;
+use super::{FaceRef, GlyphId, HashMap, Path, PathBuilder};
+
+/// A shaped glyph id as krilla takes it. Shaping gives 32-bit ids (a format-12 cmap can map to
+/// any), but krilla's font subsetting takes 16-bit ones and panics on a larger id (#3674): one
+/// that doesn't fit is written as .notdef (glyph 0), keeping its place. Its own character doesn't
+/// extract, since krilla maps no text to .notdef.
+pub(crate) fn glyph_id(g: u32) -> GlyphId {
+    GlyphId::new(u16::try_from(g).map_or(0, u32::from))
+}
 
 /// The outlines of `glyphs` (glyph id, pen position) at `size`, as one path in page coordinates.
 pub(crate) fn glyph_outlines(face: &FaceRef, size: f32, glyphs: &[(u32, f32, f32)]) -> Option<Path> {
@@ -116,6 +124,10 @@ pub(crate) fn visual_order(
 
 /// The y most of a run's glyphs share: its baseline, which raised or lowered marks leave.
 pub(crate) fn baseline(glyphs: &[(u32, f32, f32)]) -> Option<f32> {
+    let &(_, _, first) = glyphs.first()?;
+    if glyphs.iter().all(|g| g.2.to_bits() == first.to_bits()) {
+        return Some(first);
+    }
     let mut counts: HashMap<u32, usize> = HashMap::new();
     for (_, _, y) in glyphs {
         *counts.entry(y.to_bits()).or_insert(0) += 1;

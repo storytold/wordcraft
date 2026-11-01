@@ -1,4 +1,4 @@
-use super::*;
+use super::{Align, Cell, FBlock, Fmt, Para, Rgb, VAlign};
 
 /// Deepest group nesting we track; deeper groups share the innermost state.
 pub(super) const MAX_GROUPS: usize = 512;

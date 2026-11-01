@@ -1,5 +1,5 @@
 use super::geometry::CaptureGeometry;
-use super::*;
+use super::{CaptureSlot, Sender, Value, WordApp, json};
 
 /// A page rendered by the engine, as base64 PNG in the reply (the same shape as the headless
 /// MCP server's `ui.render`).

@@ -2,7 +2,10 @@ use super::ctx::Ctx;
 use super::page::{PageBuilder, PageFrame};
 use super::placed::Placed;
 use super::table_flow::footer_table_wraps;
-use super::*;
+use super::{
+    Anchor, Arc, CharProps, Document, Float, FloatAlign, HashMap, HideDeleted, InlineObject, Level, ParaLayout, Paragraph, Path, Point, Rect, Spin,
+    StoryRef, Wrap, WrapText, contour, display, para, textbox,
+};
 
 /// Which of `p`'s objects (by index) the layout leaves out ([`para::left_out`]): anchored in hidden
 /// text unless `show_hidden`, in a tracked deletion with `hide_deleted`, or a hidden drawing
@@ -77,15 +80,23 @@ pub(crate) fn float_rect(frame: Option<PageFrame>, col: (f32, f32), y0: f32, w: 
         };
         Some((start - shift, extent))
     };
-    let page_y = |s: &SectionProps| match float.v_rel {
-        Anchor::Page => Some((0.0, s.page_h)),
-        Anchor::Margin => Some((s.margin_top, s.page_h - s.margin_top - s.margin_bottom)),
-        Anchor::TopMargin | Anchor::InsideMargin => Some((0.0, s.margin_top)),
-        Anchor::BottomMargin | Anchor::OutsideMargin => Some((s.page_h - s.margin_bottom, s.margin_bottom)),
-        _ => None,
+    let page_y = |f: &PageFrame| {
+        let s = f.sect;
+        let top = f.margin_top.unwrap_or(s.margin_top);
+        match float.v_rel {
+            Anchor::Page => Some((0.0, s.page_h)),
+            Anchor::Margin => {
+                let mut reference = s.clone();
+                reference.margin_top = top;
+                Some((top, reference.text_height()))
+            }
+            Anchor::TopMargin | Anchor::InsideMargin => Some((0.0, s.margin_top)),
+            Anchor::BottomMargin | Anchor::OutsideMargin => Some((s.page_h - s.margin_bottom, s.margin_bottom)),
+            _ => None,
+        }
     };
     let hx = frame.and_then(|f| page_x(&f).map(|(a, e)| (a - f.origin.0, e))).unwrap_or(col);
-    let vy = frame.and_then(|f| page_y(f.sect).map(|(a, e)| (a - f.origin.1, e))).unwrap_or((y0, 0.0));
+    let vy = frame.and_then(|f| page_y(&f).map(|(a, e)| (a - f.origin.1, e))).unwrap_or((y0, 0.0));
     let h_align = PageFrame::h_align(frame.as_ref(), float.h_align);
     // Without a frame (a cell) `vy` has no height to align in: the object starts at the anchor
     // line instead of being pushed up by half its height or more.
@@ -326,18 +337,12 @@ fn group_members(o: &InlineObject, rect: Rect) -> Vec<(Rect, &InlineObject)> {
 /// broken again for another column) the floats stay where its first piece placed and drew them:
 /// they aren't placed again in the new column, and their record for the page they are drawn on
 /// ([`EarlyFloats`]) stands.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn anchor_floats(
     ctx: &mut Ctx,
     pb: &mut PageBuilder,
-    p: &Paragraph,
-    block: usize,
-    y0: f32,
-    before: f32,
-    excl_mark: usize,
-    label: &Option<(String, Level)>,
-    place: bool,
+    anchor: FloatAnchor,
 ) -> (HashMap<usize, Rect>, Arc<ParaLayout>, Vec<para::Exclusion>) {
+    let FloatAnchor { p, block, y0, before, excl_mark, label, place } = anchor;
     ctx.fields.page = pb.number;
     let (col_x, width) = (pb.col_x(), pb.col_w());
     let mut rects = HashMap::new();
@@ -349,7 +354,7 @@ pub(crate) fn anchor_floats(
         // The paragraph's top, and whether text was placed before it on the page.
         let top = y0 - before;
         let text_before = top > pb.top + 0.5 || pb.col > 0;
-        let frame = PageFrame { sect: pb.sect, origin: (0.0, 0.0), number: pb.number, mirror: ctx.mirror };
+        let frame = PageFrame { sect: pb.sect, margin_top: None, origin: (0.0, 0.0), number: pb.number, mirror: ctx.mirror };
         // An object left out of the layout (hidden, or deleted in the final text) is not placed, so
         // it takes no room either.
         let left_out = left_out_objects(ctx.doc, p, None, ctx.opts.show_hidden, ctx.hide_deleted);
@@ -410,23 +415,41 @@ pub(crate) struct ObjFrame<'a> {
     pub(crate) pinned: Option<&'a HashMap<usize, Rect>>,
 }
 
+/// What [`anchor_floats`] anchors: paragraph `p` (body block `block`) starting at `y0` with
+/// `before` of space above it, its list `label`, the wrap areas to keep from `excl_mark` on, and
+/// whether to `place` its floats.
+#[derive(Clone, Copy)]
+pub(crate) struct FloatAnchor<'a> {
+    pub p: &'a Paragraph,
+    pub block: usize,
+    pub y0: f32,
+    pub before: f32,
+    pub excl_mark: usize,
+    pub label: &'a Option<(String, Level)>,
+    pub place: bool,
+}
+
+/// What [`place_objects`] places: the objects of paragraph `p` (layout `pl`, story `story` at
+/// `path`) in `lines`, whose lines start at `origin`, in frame `at`; `depth` is the nesting.
+#[derive(Clone, Copy)]
+pub(crate) struct ObjectPlacement<'a> {
+    pub story: StoryRef,
+    pub path: &'a [u32],
+    pub p: &'a Paragraph,
+    pub pl: &'a ParaLayout,
+    pub lines: (usize, usize),
+    pub origin: (f32, f32),
+    pub at: &'a ObjFrame<'a>,
+    pub floats: &'a HashMap<usize, Rect>,
+    pub depth: usize,
+}
+
 /// The pictures, shapes and text boxes in lines `l0..l1` of paragraph `p` (story `story`, at
 /// `path`), whose lines start at (x, y): floating ones drawn, every one's area (hit testing,
 /// selection) and text boxes' text. Floating rects come from `floats` (by object index) or are
 /// worked out from `at`. Returns what goes behind the text, and what goes in front.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn place_objects(
-    ctx: &mut Ctx,
-    story: StoryRef,
-    path: &[u32],
-    p: &Paragraph,
-    pl: &ParaLayout,
-    (l0, l1): (usize, usize),
-    (x, y): (f32, f32),
-    at: &ObjFrame,
-    floats: &HashMap<usize, Rect>,
-    depth: usize,
-) -> (Vec<Placed>, Vec<Placed>) {
+pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed>, Vec<Placed>) {
+    let ObjectPlacement { story, path, p, pl, lines: (l0, l1), origin: (x, y), at, floats, depth } = *req;
     // Each object's items (behind the text, in front), with its stacking order: drawn lowest
     // first once all are placed, as Word stacks floating objects by `relativeHeight`, not by
     // their order in the paragraph. Inline objects and objects without one keep their order.

@@ -1,4 +1,4 @@
-use super::*;
+use super::{Color32, Deserialize, Rect, Sense, Serialize, Stroke, Tokens, Ui, Value, WordApp, buttons, json, pos2, regular, semibold, vec2};
 
 // ---------------------------------------------------------------------------------------------
 // Symbol

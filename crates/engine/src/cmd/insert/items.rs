@@ -1,5 +1,8 @@
 use super::header_footer::hf_part;
-use super::*;
+use super::{
+    Align, Block, CharProps, CmdError, CmdResult, InlineObject, Paragraph, Rgb, Selection, Session, StoryRef, TabAlign, TabStop, TextColor, Value,
+    delete_selection, json, p, para_block, sel_result, type_text,
+};
 
 pub(super) fn page_number(s: &mut Session, v: &Value) -> CmdResult {
     let position = p::str(v, "position").unwrap_or("bottom");

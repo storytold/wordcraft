@@ -1,4 +1,4 @@
-use super::*;
+use super::{FieldCode, InlineObject, NumFormat, Pos};
 
 /// The summary property a TITLE, SUBJECT, AUTHOR, KEYWORDS or COMMENTS field shows.
 pub(super) fn summary_property<'a>(core: &'a wordcraft_doc::CoreProps, field: &str) -> &'a str {

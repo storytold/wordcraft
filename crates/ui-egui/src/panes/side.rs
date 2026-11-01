@@ -1,4 +1,4 @@
-use super::*;
+use super::{Stroke, Tokens, Ui, Value, WordApp, json, regular};
 
 /// Items collected by Copy and Cut, newest first; clicking one pastes it at the caret.
 pub(super) fn clipboard(app: &mut WordApp, ui: &mut Ui) {

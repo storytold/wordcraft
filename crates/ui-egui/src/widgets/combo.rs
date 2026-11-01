@@ -1,6 +1,6 @@
 use super::buttons::DROPDOWN;
 use super::tooltip::{keytip_badge, show_hint};
-use super::*;
+use super::{Color32, CornerRadius, Rect, Response, Sense, Stroke, Tokens, Ui, icons, pos2, regular, vec2};
 
 /// Word's standard colour grid (theme colours + tints, standard colours). Returns a picked hex.
 pub fn color_grid(ui: &mut Ui, theme: &[wordcraft_doc::Rgb]) -> Option<String> {
@@ -62,7 +62,7 @@ pub fn combo(
     items: &[String],
     preview: Option<&dyn Fn(&mut Ui, &str) -> Response>,
 ) -> Option<String> {
-    combo_impl(ui, id, width, current, items, &[], preview, false, "")
+    combo_impl(ui, ComboOptions { id, width, current, items, recent: &[], preview, search: false, tip: "" })
 }
 
 /// [`combo`] whose field and arrow show the hover hint `tip` (already translated).
@@ -75,7 +75,7 @@ pub fn combo_hint(
     preview: Option<&dyn Fn(&mut Ui, &str) -> Response>,
     tip: &str,
 ) -> Option<String> {
-    combo_impl(ui, id, width, current, items, &[], preview, false, tip)
+    combo_impl(ui, ComboOptions { id, width, current, items, recent: &[], preview, search: false, tip })
 }
 
 /// What [`font_combo`] returns when its list's last entry, Add Font…, is chosen (#582): the
@@ -99,7 +99,7 @@ pub fn font_combo(
     items: &[String],
     preview: Option<&dyn Fn(&mut Ui, &str) -> Response>,
 ) -> Option<String> {
-    combo_impl(ui, id, width, current, items, &[], preview, true, tl!("Font"))
+    combo_impl(ui, ComboOptions { id, width, current, items, recent: &[], preview, search: true, tip: tl!("Font") })
 }
 
 /// [`font_combo`] with the `recent` families (most recent first) in a Recently Used Fonts
@@ -116,21 +116,45 @@ pub fn font_combo_with_recent(
     recent: &[String],
     preview: Option<&dyn Fn(&mut Ui, &str) -> Response>,
 ) -> Option<String> {
-    combo_impl(ui, id, width, current, items, recent, preview, true, tl!("Font"))
+    combo_impl(ui, ComboOptions { id, width, current, items, recent, preview, search: true, tip: tl!("Font") })
 }
 
 /// [`font_combo_with_recent`] with a hover hint `tip` (already translated).
-pub fn font_combo_with_recent_hint(
-    ui: &mut Ui,
-    id: &str,
+pub struct FontComboOptions<'a> {
+    pub id: &'a str,
+    pub width: f32,
+    pub current: &'a str,
+    pub items: &'a [String],
+    pub recent: &'a [String],
+    pub preview: Option<&'a dyn Fn(&mut Ui, &str) -> Response>,
+    pub tip: &'a str,
+}
+
+pub fn font_combo_with_recent_hint(ui: &mut Ui, options: FontComboOptions<'_>) -> Option<String> {
+    combo_impl(
+        ui,
+        ComboOptions {
+            search: true,
+            id: options.id,
+            width: options.width,
+            current: options.current,
+            items: options.items,
+            recent: options.recent,
+            preview: options.preview,
+            tip: options.tip,
+        },
+    )
+}
+
+struct ComboOptions<'a> {
+    id: &'a str,
     width: f32,
-    current: &str,
-    items: &[String],
-    recent: &[String],
-    preview: Option<&dyn Fn(&mut Ui, &str) -> Response>,
-    tip: &str,
-) -> Option<String> {
-    combo_impl(ui, id, width, current, items, recent, preview, true, tip)
+    current: &'a str,
+    items: &'a [String],
+    recent: &'a [String],
+    preview: Option<&'a dyn Fn(&mut Ui, &str) -> Response>,
+    search: bool,
+    tip: &'a str,
 }
 
 /// Indices of the `items` matching `query`, ignoring case: exact matches, then the names starting
@@ -183,17 +207,8 @@ struct ComboSearch {
 /// Draws an editable or searchable combo box: keeps temporary text and search state, supports
 /// keyboard selection, popup rows with recent and preview sections, an arrow and hint, and
 /// returns the chosen or committed text.
-fn combo_impl(
-    ui: &mut Ui,
-    id: &str,
-    width: f32,
-    current: &str,
-    items: &[String],
-    recent: &[String],
-    preview: Option<&dyn Fn(&mut Ui, &str) -> Response>,
-    search: bool,
-    tip: &str,
-) -> Option<String> {
+fn combo_impl(ui: &mut Ui, options: ComboOptions<'_>) -> Option<String> {
+    let ComboOptions { id, width, current, items, recent, preview, search, tip } = options;
     let mut out = None;
     let edit_id = ui.scope_id().with(("combo_text", id));
     let te_id = ui.scope_id().with(("combo_edit", id));
@@ -314,7 +329,9 @@ fn combo_impl(
         let item = |k: usize| items.get(k);
         let row = |k: usize| section_row(k, recent, &item);
         let total = section_rows(recent.len(), items.len());
-        let list = |ui: &mut Ui, range: std::ops::Range<usize>, ()| draw_rows(ui, width, current, range, &row, None, preview, row_h);
+        let list = |ui: &mut Ui, range: std::ops::Range<usize>, ()| {
+            draw_rows(ui, RowDrawOptions { width, current, range, row: &row, highlight: None, preview, row_height: row_h })
+        };
         let footer = |ui: &mut Ui| {
             let mut picked = None;
             ui.separator();
@@ -357,7 +374,7 @@ fn combo_impl(
                     .show(ui, |ui| {
                         let item = |k: usize| matches.get(k).and_then(|&i| items.get(i));
                         let row = |k: usize| section_row(k, recent_shown, &item);
-                        list_rows(ui, width, current, n, &row, Some(lit), scroll, preview)
+                        list_rows(ui, RowListOptions { width, current, n, row: &row, highlight: Some(lit), scroll, preview })
                     })
                     .inner
             });
@@ -399,7 +416,7 @@ pub const COMBO_PREVIEW_ROW_H: f32 = 24.0;
 /// family and each preview loads that font, so building all rows loaded every font on the system
 /// (gigabytes on large font collections) and froze the app (#121).
 pub fn combo_list(ui: &mut Ui, width: f32, current: &str, items: &[String], preview: Option<&dyn Fn(&mut Ui, &str) -> Response>) -> Option<String> {
-    list_rows(ui, width, current, items.len(), &|k| items.get(k).map(Row::Item), None, None, preview).0
+    list_rows(ui, RowListOptions { width, current, n: items.len(), row: &|k| items.get(k).map(Row::Item), highlight: None, scroll: None, preview }).0
 }
 
 /// A row of a combo's list: a dim section heading nothing picks, or an entry.
@@ -460,16 +477,18 @@ fn heading_row(ui: &mut Ui, text: &str, size: egui::Vec2, rule: bool) {
 }
 
 /// The rows `range` of a combo's list, in `ui`'s scroll area. Returns the clicked item.
-fn draw_rows<'a>(
-    ui: &mut Ui,
+struct RowDrawOptions<'rows, 'text> {
     width: f32,
-    current: &str,
+    current: &'text str,
     range: std::ops::Range<usize>,
-    row: &dyn Fn(usize) -> Option<Row<'a>>,
+    row: &'rows dyn Fn(usize) -> Option<Row<'text>>,
     highlight: Option<usize>,
-    preview: Option<&dyn Fn(&mut Ui, &str) -> Response>,
-    row_h: f32,
-) -> Option<String> {
+    preview: Option<&'rows dyn Fn(&mut Ui, &str) -> Response>,
+    row_height: f32,
+}
+
+fn draw_rows(ui: &mut Ui, options: RowDrawOptions<'_, '_>) -> Option<String> {
+    let RowDrawOptions { width, current, range, row, highlight, preview, row_height: row_h } = options;
     let mut out = None;
     let fill = Tokens::get(ui.ctx()).checked;
     ui.set_min_width(width + 60.0);
@@ -503,16 +522,18 @@ fn draw_rows<'a>(
 /// The rows of [`combo_list`], virtualised, for `n` rows fetched by index. With a `highlight`
 /// that row is marked instead of `current`; `scroll` (last frame's offset and visible height)
 /// scrolls the highlight into view. Returns the clicked item, the scroll offset and the height.
-fn list_rows<'a>(
-    ui: &mut Ui,
+struct RowListOptions<'rows, 'text> {
     width: f32,
-    current: &str,
+    current: &'text str,
     n: usize,
-    row: &dyn Fn(usize) -> Option<Row<'a>>,
+    row: &'rows dyn Fn(usize) -> Option<Row<'text>>,
     highlight: Option<usize>,
     scroll: Option<(f32, f32)>,
-    preview: Option<&dyn Fn(&mut Ui, &str) -> Response>,
-) -> (Option<String>, f32, f32) {
+    preview: Option<&'rows dyn Fn(&mut Ui, &str) -> Response>,
+}
+
+fn list_rows(ui: &mut Ui, options: RowListOptions<'_, '_>) -> (Option<String>, f32, f32) {
+    let RowListOptions { width, current, n, row, highlight, scroll, preview } = options;
     let mut out = None;
     let row_h = if preview.is_some() { COMBO_PREVIEW_ROW_H } else { ui.spacing().interact_size.y };
     let desired_h = (n as f32 * (row_h + ui.spacing().item_spacing.y)).min(420.0);
@@ -535,7 +556,7 @@ fn list_rows<'a>(
         area = area.vertical_scroll_offset(offset.max(0.0));
     }
     let shown = area.show_rows(ui, row_h, n, |ui, range| {
-        if let Some(v) = draw_rows(ui, width, current, range, row, highlight, preview, row_h) {
+        if let Some(v) = draw_rows(ui, RowDrawOptions { width, current, range, row, highlight, preview, row_height: row_h }) {
             out = Some(v);
         }
     });

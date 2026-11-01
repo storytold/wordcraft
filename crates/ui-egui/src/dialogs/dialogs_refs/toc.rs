@@ -1,7 +1,7 @@
 use super::common::{BUILT_IN_LABELS, LEADERS, choice, heading, leader_char, sample};
 use super::index::body_field;
 use super::shell::{Next, go};
-use super::*;
+use super::{Dialog, FieldCode, RefsDialog, Serialize, StyleKind, Ui, Value, WordApp, buttons, json, vec2};
 
 // ---------------------------------------------------------------------------------------------
 // Table of Contents

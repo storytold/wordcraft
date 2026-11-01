@@ -1,4 +1,4 @@
-use super::*;
+use super::{Align, FBlock, FTable, Fmt, HashMap, Inline, Kind, Para, RevMark, Rgb, VAlign, mime_of, model};
 
 // ---------------------------------------------------------------------------------------------
 // Export
@@ -730,12 +730,14 @@ fn ins_close(st: &mut Option<(RevMark, String)>, out: &mut String) {
     }
 }
 
+/// The blocks after joining at deleted marks, and each joined run's paragraphs by the first one's index.
+type JoinedMarks = (Vec<FBlock>, HashMap<usize, Vec<Para>>);
+
 /// `blocks` with each run of paragraphs joined at tracked deleted paragraph marks (ODF keeps
 /// such a deletion inside one body paragraph): the first paragraph stands for the run, and the
 /// whole run is returned by its index. `None` when nothing is joined. A deleted mark with no
 /// paragraph after it (before a table, at the end) is written as a plain mark.
-#[allow(clippy::type_complexity)]
-fn join_deleted_marks(blocks: &[FBlock]) -> Option<(Vec<FBlock>, HashMap<usize, Vec<Para>>)> {
+fn join_deleted_marks(blocks: &[FBlock]) -> Option<JoinedMarks> {
     if !blocks.iter().any(|b| matches!(b, FBlock::Para(p) if p.mark_del.is_some())) {
         return None;
     }

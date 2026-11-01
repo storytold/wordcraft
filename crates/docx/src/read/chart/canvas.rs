@@ -1,5 +1,5 @@
 use super::model::Pos;
-use super::*;
+use super::{CHAR_W, GAP, GraphicItem, LEGEND_SHARE, LINE, MAX_LEGEND_ROWS, PAD, PathSeg, Rgb, ShapeKind, TEXT, TextAlign};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct Rect {

@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    Block, CharProps, CmdError, CmdResult, Float, InlineObject, Paragraph, PartKind, Path, Pos, Rgb, Selection, Session, ShapeKind, StoryRef, Table,
+    Value, Wrap, delete_selection, json, p, para_block, sel_result,
+};
 
 /// Insert a block after the caret's paragraph (splitting it if the caret is mid-paragraph).
 fn insert_block_at_caret(s: &mut Session, block: Block) -> Result<Path, CmdError> {

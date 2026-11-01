@@ -1,4 +1,4 @@
-use super::*;
+use super::{BTreeMap, Edge, Pane, PaneLabels, PaneState, Place, StylesPaneDock, Value, WordApp};
 
 /// Every pane in the order the user left them (`paneOrder` in `ui.json`), then the panes that
 /// list lacks in their default order. Each edge shows its panes in this order, the first outermost.
