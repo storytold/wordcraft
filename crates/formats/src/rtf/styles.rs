@@ -194,6 +194,11 @@ pub(super) fn is_format_word(w: &str) -> bool {
             | "chcbpat"
             | "cb"
             | "v"
+            | "lang"
+            | "langnp"
+            | "langfe"
+            | "langfenp"
+            | "alang"
             | "pard"
             | "ql"
             | "qc"
@@ -242,6 +247,11 @@ pub(super) fn is_char_format_word(w: &str) -> bool {
             | "chcbpat"
             | "cb"
             | "v"
+            | "lang"
+            | "langnp"
+            | "langfe"
+            | "langfenp"
+            | "alang"
     ) || (w.starts_with("ul") && w.len() <= 8)
 }
 

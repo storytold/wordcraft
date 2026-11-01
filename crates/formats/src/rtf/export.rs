@@ -1,6 +1,8 @@
 use super::date::{iso_to_dttm, rtf_date};
 use super::styles::{style_fmt, styled};
 use super::{Align, Document, FBlock, FTable, Fmt, Inline, Kind, Meta, Para, RevMark, Rgb, VAlign, model};
+use crate::lang::{self, Langs, Slot};
+use std::sync::Arc;
 
 // ---------------------------------------------------------------------------------------------
 // Export
@@ -73,6 +75,8 @@ pub(super) struct Writer {
     pub(super) sections: Vec<wordcraft_doc::SectionProps>,
     /// The section being written.
     pub(super) sect_i: usize,
+    /// The document's languages (`\deflang`…): what a run without a language of its own has.
+    pub(super) langs: Langs,
 }
 
 /// `\sectd` and a section's formatting, in the words the reader reads back.
@@ -295,6 +299,16 @@ impl Writer {
             let i = old.background.map_or(0, |c| self.t.color(c));
             ctl.push_str(&format!("\\chcbpat{i}"));
         }
+        // No language before the change is none of its own (`\lang1024`): the document's.
+        for (slot, word) in LANG_WORDS {
+            let (o, c) = (old.lang.get(slot), cur.lang.get(slot));
+            if o != c {
+                let id = o.map_or(Some(lang::LCID_NONE), |t| lang::lcid_of(t));
+                if let Some(id) = id {
+                    ctl.push_str(&format!("{word}{id}"));
+                }
+            }
+        }
         ctl
     }
 
@@ -336,6 +350,15 @@ impl Writer {
         if let Some(c) = f.background {
             let i = self.t.color(c);
             ctl.push_str(&format!("\\chcbpat{i}"));
+        }
+        // A language the document's defaults already give the text isn't repeated; one the
+        // language ID table lacks can't be said in RTF (the text then has the document's).
+        for (slot, word) in LANG_WORDS {
+            if let Some(t) = f.lang.get(slot).filter(|t| self.langs.get(slot) != Some(*t))
+                && let Some(id) = lang::lcid_of(t)
+            {
+                ctl.push_str(&format!("{word}{id}"));
+            }
         }
         ctl
     }
@@ -653,6 +676,10 @@ fn level_def(ordered: bool, l: usize) -> String {
     }
 }
 
+/// The control word of each of a run's languages (RTF 1.9.1): `\lang` for its text, `\langfe`
+/// for East Asian text, `\alang` (an associated property) for complex-script text.
+const LANG_WORDS: [(Slot, &str); 3] = [(Slot::Latin, "\\lang"), (Slot::Ea, "\\langfe"), (Slot::Bidi, "\\alang")];
+
 /// RTF text of a document.
 pub fn export(doc: &Document) -> String {
     let flow = model::from_doc_tracked(doc);
@@ -664,6 +691,7 @@ pub fn export(doc: &Document) -> String {
         base: Fmt::default(),
         sections: Vec::new(),
         sect_i: 0,
+        langs: flow.meta.lang.clone(),
     };
     let mut body = String::new();
     // Every section starts with its own `\sectd`; `\sect` breaks only where there are several.
@@ -679,7 +707,16 @@ pub fn export(doc: &Document) -> String {
 }
 
 fn export_with(m: &Meta, w: &Writer, body: &str, sec: &wordcraft_doc::SectionProps) -> String {
-    let mut out = String::from("{\\rtf1\\ansi\\ansicpg1252\\deff0\\deflang1033\\uc1\n{\\fonttbl");
+    // The document's languages; US English, as before, when it has none RTF can say.
+    let id = |t: Option<&Arc<str>>| t.and_then(|t| lang::lcid_of(t));
+    let mut langs = format!("\\deflang{}", id(m.lang.latin.as_ref()).unwrap_or(0x0409));
+    if let Some(n) = id(m.lang.ea.as_ref()) {
+        langs.push_str(&format!("\\deflangfe{n}"));
+    }
+    if let Some(n) = id(m.lang.bidi.as_ref()) {
+        langs.push_str(&format!("\\adeflang{n}"));
+    }
+    let mut out = format!("{{\\rtf1\\ansi\\ansicpg1252\\deff0{langs}\\uc1\n{{\\fonttbl");
     for (i, f) in w.t.fonts.iter().enumerate() {
         let fam = if model::is_mono(f) { "\\fmodern" } else { "\\fswiss" };
         out.push_str(&format!("{{\\f{i}{fam}\\fcharset0 {};}}", esc(f)));

@@ -1135,3 +1135,44 @@ fn meta_creation_date_timezones_and_fallbacks() {
     assert_eq!(m2.created, "2024-03-05T13:45:00Z");
     assert_eq!(m2.author, "Solo Creator");
 }
+
+/// The languages of the run holding `needle` (its own, else the document's): Latin, complex
+/// script, East Asian.
+fn langs_at(doc: &Document, needle: &str) -> [Option<String>; 3] {
+    let d = &doc.styles.default_chr;
+    for p in doc.body.iter().filter_map(|b| b.as_para()) {
+        let mut at = 0;
+        for r in &p.runs {
+            let text = p.text.get(at..at + r.len).unwrap_or("");
+            at += r.len;
+            if text.contains(needle) {
+                let c = &r.props;
+                return [c.lang.clone().or(d.lang.clone()), c.lang_bidi.clone().or(d.lang_bidi.clone()), c.lang_ea.clone().or(d.lang_ea.clone())];
+            }
+        }
+    }
+    [None, None, None]
+}
+
+#[test]
+fn languages_come_from_default_paragraph_and_text_styles() {
+    // ODF 1.3 §16.4, §16.2: the default style's languages are the document's, Standard's
+    // override them; a paragraph style's (a heading's too) are its text's; a span's style wins.
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:text-properties fo:language="de" fo:country="DE" style:language-asian="zh" style:country-asian="CN" style:language-complex="ar" style:country-complex="EG"/></style:default-style><style:style style:name="Standard" style:family="paragraph"><style:text-properties style:language-asian="ja" style:country-asian="JP"/></style:style><style:style style:name="Heading_20_1" style:display-name="Heading 1" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:language="sr" fo:script="Latn" fo:country="RS"/></style:style><style:style style:name="Nepali" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:language="ne" fo:country="NP"/></style:style></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="T1" style:family="text"><style:text-properties style:rfc-language-tag="es-419" fo:language="es"/></style:style><style:style style:name="T2" style:family="text"><style:text-properties fo:language="zxx" fo:country="none" style:language-complex="he" style:country-complex="IL"/></style:style><style:style style:name="T3" style:family="text"><style:text-properties fo:language="&lt;b&gt;" style:rfc-language-tag="{}" style:language-asian=""/></style:style></office:automatic-styles><office:body><office:text><text:p>plain</text:p><text:h text:style-name="Heading_20_1" text:outline-level="1">heading</text:h><text:p text:style-name="Nepali">nepali <text:span text:style-name="T1">spanish</text:span> <text:span text:style-name="T2">none</text:span> <text:span text:style-name="T3">junk</text:span></text:p></office:text></office:body></office:document-content>"#,
+        "x".repeat(10_000)
+    );
+    let doc = import(&package(&content, Some(&styles))).unwrap();
+    let s = |v: &[&str; 3]| v.map(|t| (!t.is_empty()).then(|| t.to_string()));
+    assert_eq!(langs_at(&doc, "plain"), s(&["de-DE", "ar-EG", "ja-JP"]));
+    assert_eq!(langs_at(&doc, "heading"), s(&["sr-Latn-RS", "ar-EG", "ja-JP"]));
+    assert_eq!(langs_at(&doc, "nepali"), s(&["ne-NP", "ar-EG", "ja-JP"]));
+    assert_eq!(langs_at(&doc, "spanish"), s(&["es-419", "ar-EG", "ja-JP"]));
+    // `zxx` is no language: the document's.
+    assert_eq!(langs_at(&doc, "none"), s(&["de-DE", "he-IL", "ja-JP"]));
+    // Malformed values say nothing, and an empty Asian language is none.
+    assert_eq!(langs_at(&doc, "junk"), s(&["ne-NP", "ar-EG", "ja-JP"]));
+}

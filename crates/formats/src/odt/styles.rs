@@ -1,5 +1,6 @@
 use super::xml::{Attrs, Ev, events, get, length, local};
 use super::{Align, Arc, Columns, Fmt, HashMap, Kind, Rgb, VAlign, model};
+use crate::lang::{self, Langs, Slot};
 
 // ---------------------------------------------------------------------------------------------
 // Import
@@ -17,7 +18,11 @@ struct FmtDelta {
     size: Option<f32>,
     font: Option<Arc<str>>,
     code: Option<bool>,
+    /// Languages per slot (Latin, East Asian, complex): `Some(None)` is an explicit none.
+    lang: [Option<Option<Arc<str>>>; 3],
 }
+
+const SLOTS: [Slot; 3] = [Slot::Latin, Slot::Ea, Slot::Bidi];
 
 impl FmtDelta {
     fn apply(&self, f: &mut Fmt) {
@@ -37,7 +42,21 @@ impl FmtDelta {
         if let Some(fam) = &self.font {
             f.font = Some(fam.clone());
         }
+        self.apply_lang(&mut f.lang);
     }
+
+    fn apply_lang(&self, langs: &mut Langs) {
+        for (slot, v) in SLOTS.iter().zip(&self.lang) {
+            if let Some(v) = v {
+                *langs.slot_mut(*slot) = v.clone();
+            }
+        }
+    }
+}
+
+/// The languages a `style:text-properties` element gives, per slot.
+fn lang_delta(a: &Attrs) -> [Option<Option<Arc<str>>>; 3] {
+    SLOTS.map(|s| lang::odf_read(s, |k| get(a, k)))
 }
 
 #[derive(Clone, Debug, Default)]
@@ -128,6 +147,11 @@ fn text_properties(a: &Attrs, style: &mut StyleInfo) {
     if let Some(size) = get(a, "fo:font-size").and_then(length).filter(|size| (1.0..=1638.0).contains(size)) {
         fmt.size = Some(size);
     }
+    for (slot, v) in fmt.lang.iter_mut().zip(lang_delta(a)) {
+        if v.is_some() {
+            *slot = v;
+        }
+    }
     if let Some(family) = get(a, "fo:font-family").or_else(|| get(a, "style:font-name")) {
         let family = family.split(',').next().unwrap_or("").trim().trim_matches(['\'', '"']).to_string();
         if model::is_mono(&family) || get(a, "style:font-pitch").is_some_and(|pitch| pitch.trim().eq_ignore_ascii_case("fixed")) {
@@ -144,6 +168,8 @@ pub(super) struct Styles {
     pub(super) lists: HashMap<String, Vec<bool>>,
     /// Font of `style:default-style` for paragraphs (the document default, ODF 1.3 §16.4).
     default_font: Option<String>,
+    /// Languages of `style:default-style` for paragraphs.
+    default_lang: [Option<Option<Arc<str>>>; 3],
 }
 
 impl Styles {
@@ -171,6 +197,7 @@ impl Styles {
                 "default-style" if q.starts_with("style:") => in_default = get(&a, "style:family") == Some("paragraph"),
                 "text-properties" if in_default && cur.is_none() => {
                     self.default_font = default_font(&a);
+                    self.default_lang = lang_delta(&a);
                 }
                 "text-properties" => {
                     if let Some((_, s)) = &mut cur {
@@ -281,6 +308,16 @@ impl Styles {
         self.map.get("Standard").filter(|s| !s.auto).and_then(|s| s.fmt.font.as_deref().map(str::to_string)).or_else(|| self.default_font.clone())
     }
 
+    /// The document's languages: the default style's, then the Standard paragraph style's.
+    pub(super) fn doc_langs(&self) -> Langs {
+        let mut l = Langs::default();
+        FmtDelta { lang: self.default_lang.clone(), ..Default::default() }.apply_lang(&mut l);
+        if let Some(s) = self.map.get("Standard").filter(|s| !s.auto) {
+            s.fmt.apply_lang(&mut l);
+        }
+        l
+    }
+
     fn chain<'a>(&'a self, name: &'a str) -> Vec<(&'a str, &'a StyleInfo)> {
         let mut out = Vec::new();
         let mut cur = Some(name);
@@ -374,6 +411,11 @@ impl Styles {
         let mut f = Fmt::default();
         for (_, s) in chain.iter().take(kind_at).rev().filter(|(n, s)| s.auto || *n != "Standard") {
             s.fmt.apply(&mut f);
+        }
+        // A language is the text's whatever style gives it, the kind's own included (Standard's
+        // is the document's, [`Styles::doc_langs`]).
+        for (_, s) in chain.iter().rev().filter(|(n, s)| s.auto || *n != "Standard") {
+            s.fmt.apply_lang(&mut f.lang);
         }
         // Like the text formatting, the kind style's own `fo:keep-with-next` (a heading's) is the kind's look, not direct formatting.
         let keep_next = chain.iter().take(kind_at).find_map(|(_, s)| s.keep_next).unwrap_or(false);

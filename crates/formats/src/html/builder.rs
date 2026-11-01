@@ -1,6 +1,7 @@
 use super::css::{apply_style, css_len_pt};
 use super::import::collapse_ws;
 use super::{Align, Arc, Cell, FBlock, FTable, Flow, Fmt, Inline, Kind, ListInfo, Meta, Para, VAlign, data_uri, make_img, model, parse_color};
+use crate::lang;
 
 /// Open elements kept at most (deeper start tags are ignored).
 const MAX_STACK: usize = 256;
@@ -198,6 +199,17 @@ fn closes_p(n: &str) -> bool {
 
 fn attr<'a>(attrs: &'a [(String, String)], name: &str) -> Option<&'a str> {
     attrs.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str())
+}
+
+/// The language an element's `xml:lang` (which wins, as in XHTML) or `lang` gives its text:
+/// `Some(None)` for an empty one (the language is unknown: the document's), `None` when it
+/// gives none or one that isn't a language tag.
+fn lang_attr(attrs: &[(String, String)]) -> Option<Option<Arc<str>>> {
+    let v = attr(attrs, "xml:lang").or_else(|| attr(attrs, "lang"))?;
+    if v.trim().is_empty() {
+        return Some(None);
+    }
+    lang::tag(v).map(Some)
 }
 
 impl<'r> Builder<'r> {
@@ -665,6 +677,18 @@ impl<'r> Builder<'r> {
         if let Some(style) = attr(attrs, "style") {
             apply_style(style, &mut fmt, &mut align, &mut preserve, &mut page_break, &mut page_break_after);
         }
+        // The root's language is the document's (`Builder::start`); any other element's is its
+        // text's, in the slot the language is written in.
+        if name != "html" {
+            match lang_attr(attrs) {
+                Some(Some(t)) => {
+                    let slot = lang::slot_of(&t);
+                    *fmt.lang.slot_mut(slot) = Some(t);
+                }
+                Some(None) => fmt.lang = Default::default(),
+                None => {}
+            }
+        }
         if kind == ElKind::Pre {
             preserve = true;
         }
@@ -704,6 +728,12 @@ impl<'r> Builder<'r> {
             self.flush();
         }
         let ElementStyle { mut fmt, align, preserve, page_break, page_break_after } = self.element_style(name, attrs, kind);
+        if name == "html"
+            && let Some(Some(t)) = lang_attr(attrs)
+        {
+            let slot = lang::slot_of(&t);
+            *self.meta.lang.slot_mut(slot) = Some(t);
+        }
         match kind {
             ElKind::Table => self.tables.push(TableB { rows: Vec::new(), row: None, bordered: declares_border(attrs, true) }),
             ElKind::Tr => {

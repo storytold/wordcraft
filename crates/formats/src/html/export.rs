@@ -1,4 +1,6 @@
 use super::{Align, Document, FBlock, FTable, Flow, Fmt, Inline, Kind, Para, VAlign, base64_encode, mime_of, model};
+use crate::lang::{self, Langs};
+use std::sync::Arc;
 
 // ---------------------------------------------------------------------------------------------
 // Export
@@ -47,9 +49,32 @@ fn text_html(t: &str, at_start: bool) -> String {
     o
 }
 
+/// What the text being written already has for its language: the `<html lang>` (`root`), and
+/// the document's languages, which text without one of its own has.
+#[derive(Default)]
+struct LangCtx {
+    root: Option<Arc<str>>,
+    defaults: Langs,
+}
+
+impl LangCtx {
+    /// The `lang` attribute (with its leading space) text `text` formatted `f` needs: HTML gives
+    /// text one language, so the one of its slot (the complex-script language for Arabic
+    /// letters, the East Asian one for kana and ideographs, else the Latin one), when it isn't
+    /// the root's already.
+    fn attr(&self, f: &Fmt, text: &str) -> String {
+        let slot = lang::text_slot(text);
+        match f.lang.get(slot).or_else(|| self.defaults.get(slot)) {
+            Some(t) if !self.root.as_deref().is_some_and(|r| r.replace('_', "-").eq_ignore_ascii_case(t)) => format!(" lang=\"{}\"", esc(t)),
+            _ => String::new(),
+        }
+    }
+}
+
 /// The tags that carry `f`'s character formatting: what opens them, and what closes them
-/// (innermost last, so the closes are written in reverse).
-fn fmt_tags(f: &Fmt) -> (String, Vec<&'static str>) {
+/// (innermost last, so the closes are written in reverse). `lang` is the text's `lang`
+/// attribute, if it needs one.
+fn fmt_tags(f: &Fmt, lang: &str) -> (String, Vec<&'static str>) {
     let mut open = String::new();
     let mut close: Vec<&str> = Vec::new();
     // A script or other non-web target is written as plain text (`is_safe_href`).
@@ -95,7 +120,10 @@ fn fmt_tags(f: &Fmt) -> (String, Vec<&'static str>) {
         css.push(format!("font-family:'{}'", esc(&fam.replace('\'', ""))));
     }
     if !css.is_empty() {
-        open.push_str(&format!("<span style=\"{}\">", css.join(";")));
+        open.push_str(&format!("<span{lang} style=\"{}\">", css.join(";")));
+        close.push("</span>");
+    } else if !lang.is_empty() {
+        open.push_str(&format!("<span{lang}>"));
         close.push("</span>");
     }
     (open, close)
@@ -103,11 +131,15 @@ fn fmt_tags(f: &Fmt) -> (String, Vec<&'static str>) {
 
 /// Inline spans → HTML.
 pub fn inlines_html(inlines: &[Inline]) -> String {
+    inlines_in(inlines, &LangCtx::default())
+}
+
+fn inlines_in(inlines: &[Inline], cx: &LangCtx) -> String {
     let mut o = String::new();
     for i in inlines.iter() {
         match i {
             Inline::Text(t, f) => {
-                let (open, close) = fmt_tags(f);
+                let (open, close) = fmt_tags(f, &cx.attr(f, t));
                 let at_start = o.is_empty();
                 o.push_str(&open);
                 o.push_str(&text_html(t, at_start));
@@ -118,7 +150,7 @@ pub fn inlines_html(inlines: &[Inline]) -> String {
             // A phonetic guide: the base text with its reading in `<rt>` (#1681). HTML ruby has
             // no alignment or size, so the guide's own attributes stay in the document model.
             Inline::Ruby { base, ruby, fmt } => {
-                let (open, close) = fmt_tags(fmt);
+                let (open, close) = fmt_tags(fmt, &cx.attr(fmt, base));
                 let at_start = o.is_empty();
                 o.push_str(&open);
                 o.push_str(&format!("<ruby>{}<rt>{}</rt></ruby>", text_html(base, at_start), text_html(ruby, false)));
@@ -162,8 +194,8 @@ fn para_attrs(p: &Para) -> String {
     if css.is_empty() { String::new() } else { format!(" style=\"{}\"", css.join(";")) }
 }
 
-fn para_html(p: &Para) -> String {
-    let body = inlines_html(&p.inlines);
+fn para_html(p: &Para, cx: &LangCtx) -> String {
+    let body = inlines_in(&p.inlines, cx);
     let attrs = para_attrs(p);
     match p.kind {
         Kind::Heading(n) => format!("<h{n}{attrs}>{body}</h{n}>", n = n.clamp(1, 6)),
@@ -174,7 +206,7 @@ fn para_html(p: &Para) -> String {
     }
 }
 
-fn table_html(t: &FTable, out: &mut String, depth: usize) {
+fn table_html(t: &FTable, out: &mut String, depth: usize, cx: &LangCtx) {
     out.push_str("<table style=\"border-collapse:collapse\">\n");
     for row in &t.rows {
         out.push_str("<tr>");
@@ -211,10 +243,10 @@ fn table_html(t: &FTable, out: &mut String, depth: usize) {
             }
             out.push_str(&format!("<{tag}{attrs} style=\"{}\">", css.join(";")));
             match single {
-                Some(p) => out.push_str(&inlines_html(&p.inlines)),
+                Some(p) => out.push_str(&inlines_in(&p.inlines, cx)),
                 None => {
                     out.push('\n');
-                    blocks_html(&c.blocks, out, depth + 1);
+                    blocks_html(&c.blocks, out, depth + 1, cx);
                 }
             }
             out.push_str(&format!("</{tag}>"));
@@ -224,13 +256,13 @@ fn table_html(t: &FTable, out: &mut String, depth: usize) {
     out.push_str("</table>\n");
 }
 
-fn blocks_html(blocks: &[FBlock], out: &mut String, depth: usize) {
+fn blocks_html(blocks: &[FBlock], out: &mut String, depth: usize, cx: &LangCtx) {
     let mut i = 0;
     while let Some(b) = blocks.get(i) {
         match b {
             FBlock::Table(t) => {
                 if depth < model::MAX_DEPTH {
-                    table_html(t, out, depth);
+                    table_html(t, out, depth, cx);
                 }
                 i += 1;
             }
@@ -262,7 +294,7 @@ fn blocks_html(blocks: &[FBlock], out: &mut String, depth: usize) {
                         }
                         top.1 = true;
                     }
-                    let body = inlines_html(&q.inlines);
+                    let body = inlines_in(&q.inlines, cx);
                     let attrs = para_attrs(q);
                     out.push_str(&format!("<li{attrs}>{body}"));
                     i += 1;
@@ -294,14 +326,14 @@ fn blocks_html(blocks: &[FBlock], out: &mut String, depth: usize) {
                     if q.kind != Kind::Quote || q.list.is_some() {
                         break;
                     }
-                    out.push_str(&para_html(&Para { kind: Kind::Normal, ..q.clone() }));
+                    out.push_str(&para_html(&Para { kind: Kind::Normal, ..q.clone() }, cx));
                     out.push('\n');
                     i += 1;
                 }
                 out.push_str("</blockquote>\n");
             }
             FBlock::Para(p) => {
-                out.push_str(&para_html(p));
+                out.push_str(&para_html(p, cx));
                 out.push('\n');
                 i += 1;
             }
@@ -329,7 +361,8 @@ pub fn export(doc: &Document) -> String {
 pub fn export_fragment(doc: &Document) -> String {
     let flow = model::from_doc(doc);
     let mut out = String::from("<meta charset=\"utf-8\">");
-    blocks_html(&flow.blocks, &mut out, 0);
+    // No `<html lang>` and no document defaults to lean on: only text's own languages.
+    blocks_html(&flow.blocks, &mut out, 0, &LangCtx::default());
     out
 }
 
@@ -350,7 +383,8 @@ pub fn export_flow(flow: &Flow, lang: &str) -> String {
          table{border-collapse:collapse;margin:0.5em 0}\nblockquote{margin:0.5em 2em;font-style:italic;color:#404040}\n\
          pre{background:#f5f5f5;padding:0.5em;font-family:'Courier New',monospace;font-size:10pt}\n</style>\n</head>\n<body>\n",
     );
-    blocks_html(&flow.blocks, &mut out, 0);
+    let cx = LangCtx { root: Some(lang.into()), defaults: m.lang.clone() };
+    blocks_html(&flow.blocks, &mut out, 0, &cx);
     out.push_str("</body>\n</html>\n");
     out
 }
