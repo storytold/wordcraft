@@ -306,6 +306,16 @@ pub struct BoxLook {
     /// The drawing id connectors glue to, and a connector's glued ends (see
     /// [`wordcraft_doc::connector`]).
     pub conn: Option<Box<Conn>>,
+    /// A text box's name and the box its text continues in when it doesn't fit (linked text
+    /// boxes), by name.
+    pub chain: Option<Box<Chain>>,
+}
+
+/// A text box's name, and the name of the box its text continues in ([`BoxLook::chain`]).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Chain {
+    pub name: String,
+    pub next: Option<String>,
 }
 
 /// A shape's drawing id (0: none) and, for a connector, what its ends are glued to.
@@ -327,6 +337,7 @@ impl Default for BoxLook {
             inset: None,
             auto_fit: false,
             conn: None,
+            chain: None,
         }
     }
 }

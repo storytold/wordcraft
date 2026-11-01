@@ -231,7 +231,16 @@ impl Graphic {
         };
         // Only a shape that says it grows to its text does: WordCraft's fit shrinks it too.
         let (dash, arrows) = self.stroke_extra(line.map_or(HAIRLINE, |l| l.1), defs);
-        BoxLook { fill, line, dash, arrows, inset: Some(self.padding.map(|p| p.unwrap_or(0.0))), auto_fit: self.grow == Some(true), conn: None }
+        BoxLook {
+            fill,
+            line,
+            dash,
+            arrows,
+            inset: Some(self.padding.map(|p| p.unwrap_or(0.0))),
+            auto_fit: self.grow == Some(true),
+            conn: None,
+            chain: None,
+        }
     }
 
     /// The look of a text box in a frame of this style, growing to its text when `auto_fit`.
@@ -245,6 +254,7 @@ impl Graphic {
             inset: Some(self.padding.map(|p| p.unwrap_or(0.0))),
             auto_fit,
             conn: None,
+            chain: None,
         }
     }
 }

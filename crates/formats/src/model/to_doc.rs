@@ -202,6 +202,10 @@ struct Builder<'a> {
     ranged: std::collections::HashSet<String>,
     started: std::collections::HashSet<String>,
     ended: std::collections::HashSet<String>,
+    /// Text boxes by name, and the boxes whose text continues in a box named so (linked text
+    /// boxes), linked once all are made ([`Builder::link_boxes`]).
+    boxes: std::collections::HashMap<String, u32>,
+    chains: Vec<(u32, String)>,
 }
 
 fn rev_key(kind: RevisionKind) -> u8 {
@@ -231,6 +235,8 @@ impl<'a> Builder<'a> {
             ranged: super::types::ranged_anchors(blocks),
             started: Default::default(),
             ended: Default::default(),
+            boxes: Default::default(),
+            chains: Vec::new(),
         }
     }
 
@@ -379,6 +385,15 @@ impl<'a> Builder<'a> {
                 } else {
                     None
                 };
+                // A named box, and the box its text continues in.
+                if let (Some(id), Some(c)) = (story, look.chain.as_deref()) {
+                    if !c.name.is_empty() && self.boxes.len() < MAX_NAMED_BOXES {
+                        self.boxes.entry(c.name.clone()).or_insert(id);
+                    }
+                    if let Some(next) = c.next.as_ref().filter(|n| !n.is_empty() && **n != c.name) {
+                        self.chains.push((id, next.clone()));
+                    }
+                }
                 if let Some(part) = story.and_then(|id| self.doc.parts.get_mut(&id)) {
                     let emu = |v: f32| if v.is_finite() { (v.clamp(0.0, 1584.0) * 12_700.0).round() as u32 } else { 0 };
                     part.body.inset = look.inset.map(|i| i.map(emu));
@@ -806,6 +821,40 @@ pub fn to_doc(flow: &Flow) -> Document {
 }
 
 /// [`to_doc`] on a page of the source's own size and margins (`section`), which tables size to.
+/// Most named text boxes linked.
+const MAX_NAMED_BOXES: usize = 10_000;
+
+impl Builder<'_> {
+    /// Each text box whose text continues in another (by name) linked to it, a chain at a time
+    /// (a box is in at most one chain, and a chain doesn't loop back on itself).
+    fn link_boxes(&mut self) {
+        let mut linked_to = std::collections::HashSet::new();
+        for (from, name) in std::mem::take(&mut self.chains) {
+            let Some(&to) = self.boxes.get(&name) else { continue };
+            if to == from || !linked_to.insert(to) {
+                continue;
+            }
+            if let Some(p) = self.doc.parts.get_mut(&from) {
+                p.body.next = Some(to);
+            }
+        }
+        // A link that closes a loop is undone.
+        for id in self.boxes.values().copied().collect::<Vec<_>>() {
+            let mut seen = std::collections::HashSet::new();
+            let mut at = id;
+            while let Some(next) = self.doc.parts.get(&at).and_then(|p| p.body.next) {
+                if !seen.insert(at) || seen.len() > MAX_NAMED_BOXES {
+                    if let Some(p) = self.doc.parts.get_mut(&at) {
+                        p.body.next = None;
+                    }
+                    break;
+                }
+                at = next;
+            }
+        }
+    }
+}
+
 pub fn to_doc_in(flow: &Flow, section: wordcraft_doc::SectionProps) -> Document {
     let mut doc = Document::new();
     doc.last_section = section;
@@ -814,7 +863,9 @@ pub fn to_doc_in(flow: &Flow, section: wordcraft_doc::SectionProps) -> Document 
     if uses_code {
         doc.styles.upsert(code_style());
     }
-    let body = Builder::new(&mut doc, &flow.blocks).blocks(&flow.blocks, 0);
+    let mut b = Builder::new(&mut doc, &flow.blocks);
+    let body = b.blocks(&flow.blocks, 0);
+    b.link_boxes();
     doc.body = body;
     let m = &flow.meta;
     doc.core.title = m.title.clone();

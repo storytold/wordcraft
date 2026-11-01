@@ -151,3 +151,49 @@ fn a_text_box_frame_derives_from_the_frame_style() {
     assert!(style.contains(r#"style:parent-style-name="Frame""#), "{content}");
     assert!(crate::odt::tests::styles_of(&pkg).contains(r#"<style:style style:name="Frame" style:family="graphic"/>"#));
 }
+
+/// Each text box's story id and the box its text continues in.
+fn links(d: &Document) -> Vec<(u32, Option<u32>)> {
+    d.body
+        .iter()
+        .filter_map(|b| b.as_para())
+        .flat_map(|p| p.objects.iter())
+        .filter_map(
+            |o| if let InlineObject::Shape { story: Some(id), .. } = o { Some((*id, d.parts.get(id).and_then(|p| p.body.next))) } else { None },
+        )
+        .collect()
+}
+
+fn linked(frames: &str) -> Document {
+    let content = format!(
+        r#"<office:document-content {NS_T} {NS_D}><office:body><office:text><text:p>{frames}</text:p></office:text></office:body></office:document-content>"#
+    );
+    import(&package(&content, None)).unwrap()
+}
+
+#[test]
+fn linked_text_boxes_stay_linked() {
+    // `draw:chain-next-name` names the frame the text continues in.
+    let d = linked(
+        r#"<draw:frame draw:name="A" text:anchor-type="paragraph" svg:width="1in" svg:height="1in"><draw:text-box draw:chain-next-name="B"><text:p>Text that flows on.</text:p></draw:text-box></draw:frame><draw:frame draw:name="B" text:anchor-type="paragraph" svg:x="2in" svg:width="1in" svg:height="1in"><draw:text-box/></draw:frame>"#,
+    );
+    let l = links(&d);
+    assert_eq!(l.len(), 2);
+    assert_eq!(l[0].1, Some(l[1].0), "{l:?}");
+    let saved = export(&d).unwrap();
+    let c = crate::odt::tests::content_of(&saved);
+    assert!(c.contains(&format!(r#"draw:chain-next-name="Frame{}""#, l[1].0)), "{c}");
+    let back = links(&import(&saved).unwrap());
+    assert_eq!(back[0].1, Some(back[1].0));
+}
+
+#[test]
+fn a_chain_to_nothing_itself_or_round_is_not_linked() {
+    let d = linked(
+        r#"<draw:frame draw:name="A" text:anchor-type="paragraph" svg:width="1in" svg:height="1in"><draw:text-box draw:chain-next-name="A"><text:p>x</text:p></draw:text-box></draw:frame><draw:frame draw:name="B" text:anchor-type="paragraph" svg:width="1in" svg:height="1in"><draw:text-box draw:chain-next-name="missing"/></draw:frame><draw:frame draw:name="C" text:anchor-type="paragraph" svg:width="1in" svg:height="1in"><draw:text-box draw:chain-next-name="D"/></draw:frame><draw:frame draw:name="D" text:anchor-type="paragraph" svg:width="1in" svg:height="1in"><draw:text-box draw:chain-next-name="C"/></draw:frame>"#,
+    );
+    let l = links(&d);
+    assert_eq!((l[0].1, l[1].1), (None, None));
+    // C → D → C: one of the two links is undone.
+    assert!(l[2].1.is_none() || l[3].1.is_none(), "{l:?}");
+}

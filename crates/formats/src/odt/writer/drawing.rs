@@ -352,10 +352,18 @@ impl Writer {
         } else {
             (format!(" svg:height=\"{}\"", pt(fit(size.1))), String::new())
         };
+        // Its name (its story's, which a linked box names), and the box its text continues in
+        // (§19.112 `draw:chain-next-name`).
+        let name = look.chain.as_deref().map_or_else(|| format!("{}Frame{}", self.prefix, self.boxes), |c| format!("{}{}", self.prefix, c.name));
+        let next = look
+            .chain
+            .as_deref()
+            .and_then(|c| c.next.as_deref())
+            .map(|n| format!(" draw:chain-next-name=\"{}{}\"", self.prefix, x(n)))
+            .unwrap_or_default();
         out.push_str(&format!(
-            "<draw:frame draw:name=\"{}Frame{}\" draw:style-name=\"{style}\"{anchor} svg:width=\"{}\"{height}{xy} draw:z-index=\"0\"><draw:text-box{min}>{body}</draw:text-box></draw:frame>",
-            self.prefix,
-            self.boxes,
+            "<draw:frame draw:name=\"{}\" draw:style-name=\"{style}\"{anchor} svg:width=\"{}\"{height}{xy} draw:z-index=\"0\"><draw:text-box{min}{next}>{body}</draw:text-box></draw:frame>",
+            x(&name),
             pt(fit(size.0)),
         ));
         if let Some(m) = reopen {

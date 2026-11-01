@@ -320,6 +320,11 @@ fn drawing_inline(doc: &Document, o: &InlineObject, opts: FlowOpts, depth: usize
                 auto_fit: part.is_some_and(|p| p.body.auto_fit),
                 conn: (opts.boxes && (extra.id != 0 || extra.start.is_some() || extra.end.is_some()))
                     .then(|| Box::new(crate::model::Conn { id: extra.id, start: extra.start, end: extra.end })),
+                // A text box is named after its story; a linked one names the box it continues in.
+                chain: story.filter(|_| opts.boxes).map(|id| {
+                    let next = part.and_then(|p| p.body.next).map(|n| format!("Frame{n}"));
+                    Box::new(crate::model::Chain { name: format!("Frame{id}"), next })
+                }),
             };
             let path = freeform.clone().filter(|_| kind == ShapeKind::Freeform);
             Some(Inline::Shape { kind, w: w * sx, h: h * sy, float: kept_float(float), blocks, look, path })

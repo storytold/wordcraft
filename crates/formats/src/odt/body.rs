@@ -108,6 +108,8 @@ pub(super) struct Body<'a> {
     /// The open frame's picture crop (`fo:clip`: top, right, bottom, left, points of its original
     /// size).
     frame_clip: Option<[f32; 4]>,
+    /// The open frame's name (`draw:name`), which a linked text box names.
+    pub(super) frame_name: Option<String>,
     /// The kind of the drawing shape being read (its text is read as a text box's).
     shape_kind: Option<wordcraft_doc::para::ShapeKind>,
     /// A custom shape's mirroring (left to right, top to bottom), from its geometry.
@@ -189,6 +191,7 @@ impl<'a> Body<'a> {
             frame_box: None,
             frame_look: model::BoxLook::default(),
             frame_clip: None,
+            frame_name: None,
             shape_kind: None,
             shape_flip: (false, false),
             shape_path: None,
@@ -785,6 +788,7 @@ impl Body<'_> {
                 self.member_start(a, w.unwrap_or(0.0), h.unwrap_or(0.0), None);
                 // Without a height, a text box in it grows to its text (`fo:min-height` below).
                 self.frame_look = g.look(h.is_none(), &self.styles.defs);
+                self.frame_name = get(a, "draw:name").map(|n| n.chars().take(256).collect());
                 self.frame_clip = g.clip;
             }
             "image" | "object" | "object-ole" | "desc" | "title" | "contour-polygon" => self.frame_part(q, a),

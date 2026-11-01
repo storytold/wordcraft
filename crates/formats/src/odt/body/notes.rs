@@ -139,6 +139,11 @@ impl Body<'_> {
                     self.frame_look.auto_fit = true;
                     fr.1 = fr.1.or(Some(min));
                 }
+                // Its name, and the box its text continues in (§19.112 `draw:chain-next-name`).
+                let next = get(a, "draw:chain-next-name").map(str::trim).filter(|n| !n.is_empty()).map(|n| n.chars().take(256).collect::<String>());
+                if let Some(name) = self.frame_name.take().filter(|n| !n.is_empty()) {
+                    self.frame_look.chain = Some(Box::new(model::Chain { name, next }));
+                }
                 let frame = (self.frame.take(), self.frame_float.take(), std::mem::take(&mut self.frame_look));
                 self.start_note(a);
                 if let Some(n) = &mut self.note {
