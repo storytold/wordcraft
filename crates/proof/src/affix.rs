@@ -669,7 +669,16 @@ impl AffixDict {
             while let Some((w, a, b)) = stems.get(j)
                 && w == word
             {
-                merged.extend(stem_keys.get(*a..*b).unwrap_or_default().iter().filter_map(|&k| id_of(k)));
+                // Homonyms each within MAX_FLAGS_PER_ENTRY can still add up to more; an entry
+                // that would take the merged set past it is skipped, as an oversized entry is, so
+                // the compact data never holds a set its reader refuses.
+                let mut next = merged.clone();
+                next.extend(stem_keys.get(*a..*b).unwrap_or_default().iter().filter_map(|&k| id_of(k)));
+                next.sort_unstable();
+                next.dedup();
+                if next.len() <= MAX_FLAGS_PER_ENTRY {
+                    merged = next;
+                }
                 j += 1;
             }
             let id = d.intern(&mut set_ids, &mut merged)?;
@@ -1167,8 +1176,14 @@ impl AffixDict {
         for (a, b) in &self.rep {
             out.push_str(&format!("REP {} {}\n", a.replace(' ', "_"), b.replace(' ', "_")));
         }
+        // In one-character mode a directive flag that no stem or rule uses isn't written, as
+        // before flag ids existed, so those dictionaries' compact data stays byte for byte the same.
+        let used = |flag: u16| {
+            self.flags.iter().any(|&id| self.set(id).contains(&flag))
+                || self.prefixes.iter().chain(&self.suffixes).any(|r| r.flag == flag || self.set(r.cont).contains(&flag))
+        };
         for (directive, flag) in [("FORBIDDENWORD", self.forbidden), ("NOSUGGEST", self.no_suggest)] {
-            if let Some(flag) = flag {
+            if let Some(flag) = flag.filter(|&f| self.flag_mode != FlagMode::Char || used(f)) {
                 out.push_str(directive);
                 out.push(' ');
                 self.write_flags(&[flag], &mut out);
@@ -1796,6 +1811,28 @@ pub(crate) mod tests {
         }
         let err = AffixDict::from_hunspell("", &dic, &[]).unwrap_err();
         assert!(err.contains("distinct flags"), "{err}");
+        // Homonyms are merged into one set; an entry that would take it past the cap is skipped,
+        // so the compact data reloads with the word.
+        let first = field(MAX_FLAGS_PER_ENTRY);
+        let second = (MAX_FLAGS_PER_ENTRY + 1..=MAX_FLAGS_PER_ENTRY + 10).map(|i| i.to_string()).collect::<Vec<_>>().join(",");
+        let dic = format!("2\nsame/{first}\nsame/{second}\n");
+        let d = AffixDict::from_hunspell(aff, &dic, &[]).unwrap();
+        assert!(d.check("same") && d.check("samea"));
+        let back = AffixDict::from_bytes(&d.to_bytes()).unwrap();
+        assert!(back.check("same") && back.check("samea"));
+    }
+
+    #[test]
+    fn an_unused_directive_flag_is_not_written_in_character_mode() {
+        // FORBIDDENWORD names a flag no stem or rule uses: the compact data leaves it out, as it
+        // did before flag ids, in one-character mode only.
+        let d = AffixDict::from_hunspell("FORBIDDENWORD F\nNOSUGGEST N\nSFX a Y 1\nSFX a 0 y .\n", "1\nkot/a\n", &[]).unwrap();
+        let raw = String::from_utf8(miniz_oxide::inflate::decompress_to_vec(&d.to_bytes()).unwrap()).unwrap();
+        assert!(!raw.contains("FORBIDDENWORD") && !raw.contains("NOSUGGEST"), "{raw}");
+        // A used one is still written.
+        let d = AffixDict::from_hunspell("FORBIDDENWORD F\nSFX a Y 1\nSFX a 0 y .\n", "2\nkot/a\nzly/F\n", &[]).unwrap();
+        let back = AffixDict::from_bytes(&d.to_bytes()).unwrap();
+        assert!(back.check("koty") && !back.check("zly"));
     }
 
     #[test]
