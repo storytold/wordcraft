@@ -359,7 +359,7 @@ mod tests {
             .iter()
             .filter_map(|b| {
                 let p = b.as_para()?;
-                (p.props.page_break_before == Some(true)).then(|| p.text.as_str())
+                (p.props.page_break_before == Some(true)).then_some(p.text.as_str())
             })
             .collect();
         for name in ["РЕФЕРАТ", "СОДЕРЖАНИЕ", "ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"]
@@ -373,7 +373,7 @@ mod tests {
             .filter_map(|b| {
                 let p = b.as_para()?;
                 let style = p.props_of_char(0).style.as_deref()?;
-                matches!(style, "Heading1" | "Heading2").then(|| p.text.clone())
+                matches!(style, "Heading1" | "Heading2").then_some(p.text.clone())
             })
             .collect();
         assert!(sections.iter().any(|t| t.starts_with("1 ")), "{sections:?}");
