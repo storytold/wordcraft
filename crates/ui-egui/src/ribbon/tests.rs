@@ -605,6 +605,43 @@ fn language_menu_reaches_every_language() {
     assert_eq!(language_name(Some("de-DE")), "German (Germany)");
 }
 
+/// A contextual tab that appears eases in (quick, then slowing); tabs shown from the first frame, or
+/// still shown later, do not move; with animations off it is in place at once.
+#[test]
+fn a_new_contextual_tab_eases_in() {
+    let ctx = egui::Context::default();
+    note_contextual_tabs(&ctx, &[("Table Design", 1)], 1.0, true);
+    assert_eq!(tab_entry(&ctx, "Table Design", 1.0, true), 1.0, "tabs already there do not slide");
+    note_contextual_tabs(&ctx, &[("Table Design", 1), ("Picture Format", 2)], 2.0, true);
+    let at = |secs: f64| tab_entry(&ctx, "Picture Format", 2.0 + secs, true);
+    assert_eq!(at(0.0), 0.0);
+    let (a, b, c) = (at(0.1), at(0.2), at(TAB_ENTRY_SECS));
+    assert!(0.0 < a && a < b && b < c && c == 1.0, "{a} {b} {c}");
+    assert!(a > 0.1 / TAB_ENTRY_SECS as f32, "faster than linear at the start: {a}");
+    assert!(c - b < b - a, "slower at the end: {a} {b} {c}");
+    assert_eq!(tab_entry(&ctx, "Picture Format", 2.0, false), 1.0, "animations off");
+    note_contextual_tabs(&ctx, &[("Table Design", 1), ("Picture Format", 2)], 3.0, true);
+    assert_eq!(tab_entry(&ctx, "Picture Format", 3.0, true), 1.0, "staying shown does not restart it");
+}
+
+/// A contextual tab that goes away stays, in its old place, for the length of its exit, and not
+/// at all with animations off; one that comes back is no longer leaving.
+#[test]
+fn a_contextual_tab_that_goes_away_leaves_gently() {
+    let ctx = egui::Context::default();
+    let both = [("Table Design", 1), ("Picture Format", 2)];
+    assert!(note_contextual_tabs(&ctx, &both, 1.0, true).is_empty());
+    let leaving = note_contextual_tabs(&ctx, &both[..1], 2.0, true);
+    assert_eq!(leaving, vec![("Picture Format".to_string(), 2, 2.0)]);
+    assert_eq!(note_contextual_tabs(&ctx, &both[..1], 2.2, true).len(), 1, "still leaving");
+    assert!(note_contextual_tabs(&ctx, &both[..1], 2.0 + TAB_ENTRY_SECS + 0.01, true).is_empty(), "gone");
+    assert!(note_contextual_tabs(&ctx, &both, 4.0, true).is_empty());
+    assert!(note_contextual_tabs(&ctx, &both[..1], 5.0, false).is_empty(), "animations off");
+    note_contextual_tabs(&ctx, &both, 6.0, true);
+    note_contextual_tabs(&ctx, &both[..1], 7.0, true);
+    assert!(note_contextual_tabs(&ctx, &both, 7.1, true).is_empty(), "back again");
+}
+
 /// #1281: every short-list entry (the four Englishes, Indonesian…) is picked in the menu:
 /// clicking it sets the selection's proofing language, and the entry is then the checked one.
 #[test]
@@ -780,4 +817,39 @@ fn shape_and_chart_formats_leave_out_of_range_sizes_alone() {
     let before = (size(&a), a.session.undo_depth());
     assert_eq!(before.0, Some((20.0, 2500.0)));
     assert_eq!(shown(a), before, "Chart Design shown, the chart untouched");
+}
+
+#[test]
+fn the_underline_slides_to_a_newly_chosen_tab() {
+    let first = next_underline(None, "Home", (40.0, 50.0), 0.0, true);
+    assert_eq!(underline_at(&first, 5.0), (40.0, 50.0), "the first tab is just there");
+    let moved = next_underline(Some(&first), "Insert", (140.0, 60.0), 10.0, true);
+    assert_eq!(underline_at(&moved, 10.0), (40.0, 50.0), "it sets off from the old tab");
+    let mid = underline_at(&moved, 10.0 + UNDERLINE_SLIDE_SECS / 2.0);
+    assert!(mid.0 > 40.0 && mid.0 < 140.0 && mid.1 > 50.0 && mid.1 < 60.0, "{mid:?}");
+    assert_eq!(underline_at(&moved, 11.0), (140.0, 60.0), "and settles on the new one");
+    let again = next_underline(Some(&moved), "Draw", (240.0, 50.0), 10.0 + UNDERLINE_SLIDE_SECS / 2.0, true);
+    assert_eq!(underline_at(&again, 10.0 + UNDERLINE_SLIDE_SECS / 2.0), mid, "a second change starts from where it is");
+}
+
+#[test]
+fn the_underline_follows_its_tab_without_sliding_when_nothing_changed() {
+    let first = next_underline(None, "Home", (40.0, 50.0), 0.0, true);
+    let resized = next_underline(Some(&first), "Home", (30.0, 44.0), 1.0, true);
+    assert_eq!(underline_at(&resized, 1.0), (30.0, 44.0));
+    let off = next_underline(Some(&first), "Insert", (140.0, 60.0), 1.0, false);
+    assert_eq!(underline_at(&off, 1.0), (140.0, 60.0), "animations off: no slide");
+}
+
+#[test]
+fn the_content_comes_in_from_the_side_the_new_tab_lies_on() {
+    let first = next_tab_change(None, "Home", 1, 0.0, true);
+    assert_eq!(first.dir, 0.0, "the first tab does not animate");
+    let forward = next_tab_change(Some(&first), "Insert", 2, 5.0, true);
+    assert_eq!((forward.dir, forward.start), (1.0, 5.0));
+    let back = next_tab_change(Some(&forward), "Home", 1, 6.0, true);
+    assert_eq!((back.dir, back.start), (-1.0, 6.0));
+    let same = next_tab_change(Some(&back), "Home", 1, 7.0, true);
+    assert_eq!((same.dir, same.start), (-1.0, 6.0), "no change, no restart");
+    assert_eq!(next_tab_change(Some(&forward), "Draw", 3, 8.0, false).dir, 0.0, "animations off");
 }

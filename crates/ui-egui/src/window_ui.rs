@@ -283,6 +283,7 @@ impl WordApp {
             start_screen: _,
             print_backgrounds: _,
             update_fields_before_print: _,
+            ribbon_blur: _,
             dictionary: _,
             // Where each task pane sits, and their order.
             styles_pane_dock: _,
