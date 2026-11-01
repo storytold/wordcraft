@@ -170,3 +170,39 @@ fn the_default_letter_kerning_round_trips() {
     let back = import(&export(&off).unwrap()).unwrap();
     assert!(back.styles.default_chr.kern.is_none_or(|k| k == 0.0));
 }
+
+#[test]
+fn asian_and_complex_script_fonts_and_languages() {
+    let d = spans(&[
+        r#"style:font-name-complex="Noto Sans Hebrew" style:font-size-complex="14pt" style:font-weight-complex="bold" style:language-complex="he" style:country-complex="IL""#,
+        r#"style:font-name-asian="Noto Sans CJK JP" style:language-asian="ja" style:country-asian="JP""#,
+    ]);
+    let r = runs(&d);
+    assert_eq!((r[0].font_cs.as_deref(), r[0].size_cs, r[0].bold_cs), (Some("Noto Sans Hebrew"), Some(14.0), Some(true)));
+    assert_eq!(r[0].lang_bidi.as_deref(), Some("he-IL"));
+    // Latin bold isn't taken from the complex-script weight once the run has its own.
+    assert_eq!((r[1].font_ea.as_deref(), r[1].lang_ea.as_deref()), (Some("Noto Sans CJK JP"), Some("ja-JP")));
+    let back = import(&export(&d).unwrap()).unwrap();
+    let b = runs(&back);
+    assert_eq!(
+        (b[0].font_cs.as_deref(), b[0].size_cs, b[0].bold_cs, b[0].lang_bidi.as_deref()),
+        (Some("Noto Sans Hebrew"), Some(14.0), Some(true), Some("he-IL"))
+    );
+    assert_eq!((b[1].font_ea.as_deref(), b[1].lang_ea.as_deref()), (Some("Noto Sans CJK JP"), Some("ja-JP")));
+}
+
+#[test]
+fn the_default_styles_script_fonts_are_the_document_defaults() {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:text-properties style:font-name="Liberation Serif" style:font-name-asian="WenQuanYi Zen Hei" style:font-name-complex="FreeSans" style:language-complex="hi" style:country-complex="IN"/></style:default-style></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p>x</text:p></office:text></office:body></office:document-content>"#
+    );
+    let d = import(&package(&content, Some(&styles))).unwrap();
+    let c = &d.styles.default_chr;
+    assert_eq!((c.font_ea.as_deref(), c.font_cs.as_deref(), c.lang_bidi.as_deref()), (Some("WenQuanYi Zen Hei"), Some("FreeSans"), Some("hi-IN")));
+    let back = import(&export(&d).unwrap()).unwrap();
+    let c = &back.styles.default_chr;
+    assert_eq!((c.font_ea.as_deref(), c.font_cs.as_deref(), c.lang_bidi.as_deref()), (Some("WenQuanYi Zen Hei"), Some("FreeSans"), Some("hi-IN")));
+}

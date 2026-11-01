@@ -282,10 +282,11 @@ fn styles_xml(
     let tab = doc.settings.default_tab.clamp(1.0, 1584.0);
     let mut s = format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-styles {NS}><office:styles>");
     s.push_str(&format!(
-        "<style:default-style style:family=\"paragraph\"><style:paragraph-properties{} style:tab-stop-distance=\"{tab}\"/><style:text-properties fo:font-family=\"'{}'\" fo:font-size=\"12pt\" style:letter-kerning=\"{kern}\"/></style:default-style>",
+        "<style:default-style style:family=\"paragraph\"><style:paragraph-properties{} style:tab-stop-distance=\"{tab}\"/><style:text-properties fo:font-family=\"'{}'\" fo:font-size=\"12pt\" style:letter-kerning=\"{kern}\"{scripts}/></style:default-style>",
         spacing_props(defaults),
         x(&body_font),
-        tab = pt(tab)
+        tab = pt(tab),
+        scripts = super::writer::script_attrs(&doc.styles.default_chr)
     ));
     s.push_str("<style:style style:name=\"Standard\" style:family=\"paragraph\" style:class=\"text\"/>");
     s.push_str(&kind_styles(doc));

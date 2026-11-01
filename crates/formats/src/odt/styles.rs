@@ -98,6 +98,43 @@ fn underline_kind(a: &Attrs) -> Underline {
 }
 
 /// The rest of a `style:text-properties` element: what only [`Fmt::extra`] holds.
+/// The Asian and complex-script fonts, complex-script size, weight and posture and both
+/// languages of a `style:text-properties` element (ODF 1.3 §20.2xx `-asian`/`-complex`
+/// attributes), into `x`.
+fn script_properties(a: &Attrs, x: &mut wordcraft_doc::props::CharProps, faces: &HashMap<String, String>) {
+    let family = |fam: &str, name: &str| {
+        let v = get(a, fam).or_else(|| get(a, name).map(|n| faces.get(n).map_or(n, String::as_str)))?;
+        let v = v.split(',').next().unwrap_or("").trim().trim_matches(['\'', '"']);
+        (!v.is_empty() && v.len() <= model::MAX_FONT_NAME).then(|| v.to_string())
+    };
+    if let Some(f) = family("style:font-family-asian", "style:font-name-asian") {
+        x.font_ea = Some(f);
+    }
+    if let Some(f) = family("style:font-family-complex", "style:font-name-complex") {
+        x.font_cs = Some(f);
+    }
+    if let Some(s) = get(a, "style:font-size-complex").and_then(length).filter(|s| (1.0..=1638.0).contains(s)) {
+        x.size_cs = Some(s);
+    }
+    if let Some(w) = get(a, "style:font-weight-complex") {
+        let w = w.trim();
+        x.bold_cs = Some(w.eq_ignore_ascii_case("bold") || w.parse::<u32>().is_ok_and(|n| n >= 600));
+    }
+    if let Some(s) = get(a, "style:font-style-complex") {
+        x.italic_cs = Some(matches!(s.trim(), "italic" | "oblique"));
+    }
+    fn tag(v: Option<&str>) -> Option<&str> {
+        v.map(str::trim).filter(|v| (1..=8).contains(&v.len()) && v.chars().all(|c| c.is_ascii_alphanumeric()) && *v != "none" && *v != "zxx")
+    }
+    let lang = |l: &str, c: &str| tag(get(a, l)).map(|l| tag(get(a, c)).map_or_else(|| l.to_string(), |c| format!("{l}-{c}")));
+    if let Some(l) = lang("style:language-asian", "style:country-asian") {
+        x.lang_ea = Some(l);
+    }
+    if let Some(l) = lang("style:language-complex", "style:country-complex") {
+        x.lang_bidi = Some(l);
+    }
+}
+
 fn extra_text_properties(a: &Attrs, d: &mut FmtDelta) {
     let underlined = d.fmt_underline_on();
     let x = &mut d.extra;
@@ -546,6 +583,7 @@ fn text_properties(a: &Attrs, style: &mut StyleInfo, faces: &HashMap<String, Str
         }
     }
     extra_text_properties(a, &mut style.fmt);
+    script_properties(a, &mut style.fmt.extra, faces);
 }
 
 /// A paragraph style's `style:paragraph-properties` (ODF 1.3 §17.6) into `s`.
@@ -701,6 +739,8 @@ pub(super) struct Styles {
     pub(super) tabs_from_indent: bool,
     /// The default tab interval (`style:tab-stop-distance` of the default style), points.
     pub(super) default_tab: Option<f32>,
+    /// The Asian and complex-script fonts and languages of `style:default-style` for paragraphs.
+    pub(super) default_scripts: wordcraft_doc::props::CharProps,
     /// Pair kerning of `style:default-style` for paragraphs (`style:letter-kerning`, §20.317;
     /// off unless it says so).
     pub(super) default_kern: bool,
@@ -737,6 +777,7 @@ impl Styles {
                 "text-properties" if in_default && cur.is_none() => {
                     self.default_font = default_font(&a, &self.faces);
                     self.default_kern = get(&a, "style:letter-kerning").is_some_and(|k| k.trim() == "true");
+                    script_properties(&a, &mut self.default_scripts, &self.faces);
                 }
                 "paragraph-properties" if in_default && cur.is_none() => {
                     paragraph_spacing(&a, &mut self.default_spacing);

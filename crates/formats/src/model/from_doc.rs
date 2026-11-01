@@ -123,6 +123,13 @@ fn extra_of(e: &CharProps) -> Option<Box<CharProps>> {
         emboss: set(e.emboss),
         engrave: set(e.engrave),
         lang: e.lang.clone().filter(|l| !l.is_empty()),
+        font_cs: e.font_cs.clone().filter(|f| !f.is_empty()),
+        font_ea: e.font_ea.clone().filter(|f| !f.is_empty()),
+        size_cs: e.size_cs.filter(|s| s.is_finite()),
+        bold_cs: e.bold_cs,
+        italic_cs: e.italic_cs,
+        lang_bidi: e.lang_bidi.clone().filter(|l| !l.is_empty()),
+        lang_ea: e.lang_ea.clone().filter(|l| !l.is_empty()),
         ..Default::default()
     };
     (x != CharProps::default()).then(|| Box::new(x))

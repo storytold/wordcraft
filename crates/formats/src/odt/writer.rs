@@ -161,6 +161,7 @@ fn extra_props(x: &wordcraft_doc::props::CharProps, size: Option<f32>) -> String
     } else if on(x.engrave) {
         p.push_str(" style:font-relief=\"engraved\"");
     }
+    p.push_str(&script_attrs(x));
     if let Some(l) = x.lang.as_deref() {
         let mut parts = l.split(['-', '_']);
         let ok = |s: &&str| (1..=8).contains(&s.len()) && s.chars().all(|c| c.is_ascii_alphanumeric());
@@ -207,13 +208,65 @@ pub(super) fn align_attr(a: Option<Align>) -> &'static str {
     }
 }
 
+/// `fo:language`/`fo:country` (with `suffix`: `-asian`, `-complex` on `style:`) for BCP 47 tag
+/// `tag`.
+fn lang_attrs(tag: &str, suffix: &str) -> String {
+    let mut parts = tag.split(['-', '_']);
+    let ok = |s: &&str| (1..=8).contains(&s.len()) && s.chars().all(|c| c.is_ascii_alphanumeric());
+    let ns = if suffix.is_empty() { "fo" } else { "style" };
+    let mut p = String::new();
+    if let Some(lang) = parts.next().filter(ok) {
+        p.push_str(&format!(" {ns}:language{suffix}=\"{lang}\""));
+        if let Some(country) = parts.next().filter(ok) {
+            p.push_str(&format!(" {ns}:country{suffix}=\"{country}\""));
+        }
+    }
+    p
+}
+
+/// The Asian and complex-script attributes of `x`: fonts, complex size, weight, posture and the
+/// two languages.
+pub(super) fn script_attrs(x: &wordcraft_doc::props::CharProps) -> String {
+    let mut p = String::new();
+    if let Some(f) = x.font_ea.as_deref() {
+        p.push_str(&format!(" style:font-family-asian=\"'{}'\"", super::writer::x(&f.replace('\'', ""))));
+    }
+    if let Some(f) = x.font_cs.as_deref() {
+        p.push_str(&format!(" style:font-family-complex=\"'{}'\"", super::writer::x(&f.replace('\'', ""))));
+    }
+    if let Some(s) = x.size_cs.filter(|s| s.is_finite()) {
+        p.push_str(&format!(" style:font-size-complex=\"{}\"", pt(s)));
+    }
+    if let Some(b) = x.bold_cs {
+        p.push_str(if b { " style:font-weight-complex=\"bold\"" } else { " style:font-weight-complex=\"normal\"" });
+    }
+    if let Some(i) = x.italic_cs {
+        p.push_str(if i { " style:font-style-complex=\"italic\"" } else { " style:font-style-complex=\"normal\"" });
+    }
+    if let Some(l) = x.lang_ea.as_deref() {
+        p.push_str(&lang_attrs(l, "-asian"));
+    }
+    if let Some(l) = x.lang_bidi.as_deref() {
+        p.push_str(&lang_attrs(l, "-complex"));
+    }
+    p
+}
+
 fn text_props(f: &Fmt) -> String {
     let mut p = String::new();
+    // Complex-script weight and posture of their own are written with the other script extras.
+    let own_cs = |pick: fn(&wordcraft_doc::props::CharProps) -> Option<bool>| f.extra.as_deref().and_then(pick).is_some();
     if f.bold {
-        p.push_str(" fo:font-weight=\"bold\" style:font-weight-asian=\"bold\" style:font-weight-complex=\"bold\"");
+        p.push_str(" fo:font-weight=\"bold\" style:font-weight-asian=\"bold\"");
+        if !own_cs(|x| x.bold_cs) {
+            p.push_str(" style:font-weight-complex=\"bold\"");
+        }
     }
     if f.italic {
-        p.push_str(" fo:font-style=\"italic\" style:font-style-asian=\"italic\" style:font-style-complex=\"italic\"");
+        p.push_str(" fo:font-style=\"italic\" style:font-style-asian=\"italic\"");
+        if !own_cs(|x| x.italic_cs) {
+            p.push_str(" style:font-style-complex=\"italic\"");
+        }
     }
     let extra = f.extra.as_deref();
     if f.underline {

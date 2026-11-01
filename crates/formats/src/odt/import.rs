@@ -381,6 +381,8 @@ struct Parsed {
     spacing: model::Spacing,
     /// Whether the document kerns pairs of letters by default.
     kern: bool,
+    /// The document's default Asian and complex-script fonts and languages.
+    scripts: wordcraft_doc::props::CharProps,
     /// The default tab interval, points.
     default_tab: Option<f32>,
     parts: page_parts::Parts,
@@ -456,6 +458,7 @@ fn parse_tracked(bytes: &[u8]) -> Result<Parsed, String> {
         settings: settings.filter(|s| s.len() <= super::package::MAX_SETTINGS),
         outline: styles.outline.clone(),
         kern: styles.default_kern,
+        scripts: styles.default_scripts.clone(),
         default_tab: styles.default_tab,
         parts,
     })
@@ -464,13 +467,30 @@ fn parse_tracked(bytes: &[u8]) -> Result<Parsed, String> {
 /// Parse an `.odt` package into a document.
 pub fn import(bytes: &[u8]) -> Result<Document, String> {
     model::begin_import();
-    let Parsed { flow, last, track, font, spacing, looks, named, named_odt, char_styles, char_defs, settings, outline, kern, default_tab, parts } =
-        parse_tracked(bytes)?;
+    let Parsed {
+        flow,
+        last,
+        track,
+        font,
+        spacing,
+        looks,
+        named,
+        named_odt,
+        char_styles,
+        char_defs,
+        settings,
+        outline,
+        kern,
+        scripts,
+        default_tab,
+        parts,
+    } = parse_tracked(bytes)?;
     let mut doc = model::to_doc(&flow);
     if font.is_some() {
         doc.styles.default_chr.font = font;
     }
     doc.styles.default_chr.kern = kern.then_some(1.0);
+    doc.styles.default_chr.overlay(&scripts);
     if let Some(t) = default_tab {
         doc.settings.default_tab = t;
     }
