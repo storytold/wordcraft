@@ -5130,6 +5130,54 @@ fn justified_spaces_shrink_a_quarter_at_most_and_by_the_word() {
     }
 }
 
+/// Measured in Word for Windows (compatibility mode 15, a word after a run of 1, 3, 6 or 12
+/// spaces, Latin and Thai): the word may overrun the line by 0.355 of its width with the whole run
+/// before it, not one space (a run typed to push the text along, as letters often are). A
+/// bookmark inside the run doesn't cut it short.
+#[test]
+fn a_word_after_a_run_of_spaces_overruns_with_the_whole_run() {
+    let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(12.0), ..Default::default() };
+    let para = |text: &str, align: Align, right: f32| {
+        let mut d = Document::new();
+        d.settings.compat_mode = 15;
+        let mut p = wordcraft_doc::Paragraph::with_text(text, chr.clone());
+        p.props = ParaProps { align: Some(align), indent_right: Some(right), ..Default::default() };
+        d.body = vec![wordcraft_doc::para_block(p)];
+        d
+    };
+    let first = |d: &Document| {
+        let l = lay(d);
+        let para = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+        let line = &para.lines[0];
+        let text = &d.para(StoryRef::Body, &Path::top(0)).unwrap().text[line.start..line.stop];
+        text.split(|c: char| c.is_whitespace() || c == wordcraft_doc::para::OBJ).filter(|w| !w.is_empty()).count()
+    };
+    let (word, n, run) = ("nn", 6, 6);
+    let probe = para(&format!("{word} {word}"), Align::Left, 0.0);
+    let l = lay(&probe);
+    let pl = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+    let w = pl.x_of(0, word.len()).unwrap() - pl.x_of(0, 0).unwrap();
+    let sw = pl.x_of(0, word.len() + 1).unwrap() - pl.x_of(0, word.len()).unwrap();
+    let spaces = (n - 1 + run) as f32 * sw;
+    let room = (0.25 * spaces).min(0.355 * (w + run as f32 * sw));
+    assert!(room > 0.355 * (w + sw) + 0.5, "the run must allow more than one space would: {room:.2}");
+    let text = format!("{}{}{}", vec![word; n].join(" "), " ".repeat(run), vec![word; 20].join(" "));
+    let full = probe.last_section.text_width();
+    let width = |overrun: f32| (n + 1) as f32 * w + spaces - overrun;
+    // Before the run's last space: counting from the bookmark would leave one space.
+    let mid_run = vec![word; n].join(" ").len() + run - 1;
+    for marked in [false, true] {
+        for (overrun, words) in [(room - 0.1, n + 1), (room + 0.1, n)] {
+            let mut d = para(&text, Align::Justify, full - width(overrun));
+            if marked {
+                d.insert_object(&Pos::body(0, mid_run), InlineObject::BookmarkStart { name: "mid".into() }, &Default::default()).unwrap();
+            }
+            assert_eq!(first(&d), words, "bookmark in the run {marked}: overrun {overrun:.2} of {room:.2} allowed");
+        }
+    }
+    assert_eq!(first(&para(&text, Align::Left, full - width(0.1))), n, "left-aligned text never shrinks");
+}
+
 #[test]
 fn space_shrinking_is_only_for_justified_text() {
     let text = "We tie the spend to a pipe and to the books, so it is in an ad hoc view of all of it. ".repeat(40);

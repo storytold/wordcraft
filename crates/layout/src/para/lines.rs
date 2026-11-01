@@ -81,8 +81,11 @@ struct Scan {
     last_break: Option<usize>,
     /// The last non-hyphen break and the x after it.
     last_plain: Option<(usize, f32)>,
-    /// Where the space before the current word starts.
+    /// Where the spaces before the current word start.
     word_from: f32,
+    /// Where the current run of spaces starts; a zero-width marker in it (a bookmark, hidden
+    /// text) doesn't end it.
+    space_from: f32,
     /// After `hyph_limit` hyphenated lines in a row this one may not end with a hyphen.
     hyph_ok: bool,
     end: LineEnd,
@@ -272,6 +275,7 @@ impl<'e> Breaker<'e> {
             last_break: None,
             last_plain: None,
             word_from: left,
+            space_from: left,
             hyph_ok: self.hyph_limit == 0 || self.lines.iter().rev().take_while(|l| l.hyphen.is_some()).count() < self.hyph_limit,
             end: LineEnd::Para,
             j: self.i,
@@ -823,6 +827,10 @@ impl Scan {
             return true;
         }
         self.xs.push(self.x);
+        let blank = |c: &Cluster| matches!(c.kind, ClKind::Space | ClKind::Marker);
+        if blank(c) && !(j > c0 && pl.clusters.get(j - 1).is_some_and(blank)) {
+            self.space_from = self.x;
+        }
         self.x += c.adv;
         if c.kind == ClKind::Space {
             self.space_w += c.adv;
@@ -882,7 +890,9 @@ impl Scan {
         if pl.hyph_after.binary_search(&(j as u32)).is_err() {
             self.last_break = Some(j);
             self.last_plain = Some((j, self.x));
-            self.word_from = if c.kind == ClKind::Space { self.x - c.adv } else { self.x };
+            // From the start of the spaces before the word, all of them: Word lets a word after a
+            // run of spaces ("terms      and") overrun as far as the word and the run allow.
+            self.word_from = if matches!(c.kind, ClKind::Space | ClKind::Marker) { self.space_from } else { self.x };
         } else if self.hyph_ok
             && !pl.clusters.get(j + 1).is_some_and(|n| n.kind == ClKind::Text && n.g1 <= n.g0)
             && self.x + hyphen_glyph(pl, c.style, &mut bk.hcache).2 <= self.right_edge + shrink + 0.01
