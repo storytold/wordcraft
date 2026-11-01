@@ -48,6 +48,9 @@ pub(super) fn language(s: &mut Session, v: &Value) -> CmdResult {
     Ok(result)
 }
 
+/// `tools.macros`: define, delete or play back a macro, or list them. Playing one back runs each
+/// step as a command; with a command list in force ([`crate::command_access`]) each step is held
+/// to it as it comes, and playback stops with an error at the first step off the list.
 pub(super) fn macros(s: &mut Session, v: &Value) -> CmdResult {
     if let Some(d) = v.get("define") {
         let name = d.get("name").and_then(Value::as_str).unwrap_or("Macro").to_string();
@@ -69,6 +72,9 @@ pub(super) fn macros(s: &mut Session, v: &Value) -> CmdResult {
             if id == "tools.macros" {
                 continue;
             }
+            // A macro step is a command automation asked for: held to --allow-commands like one
+            // sent directly, so a macro can't run what the list leaves out.
+            crate::command_access::check(id).map_err(CmdError::Disabled)?;
             s.run(id, params)?;
         }
         return Ok(json!({"ran": n, "steps": steps.len()}));
