@@ -142,7 +142,7 @@ Small follow-ups from the 2026-10-25 field, table and AutoFormat batch (#4232):
 
 Recipient label generation (#4880) now includes all selected recipients across as many sheets as needed, retaining filtered/sorted order and the chosen product geometry. This fixes the one-sheet omission; Update Labels and Finish & Merge template behavior remain separate, and gap 21 remains open. Readiness estimates are unchanged.
 
-The stability verifier has an opt-in bounded Linux process soak for repeated recovery with several dirty documents, failed writes and corrupt-generation fallback. It retains original hashes, timing results and fresh native/DOCX reopen evidence; native-platform and longer real-world qualification remain open. See [recovery.md](recovery.md#opt-in-linux-process-soak). Readiness estimates are unchanged.
+The stability verifier has an opt-in bounded Linux process soak for repeated recovery with two dirty synthetic documents, failed writes and corrupt-generation fallback. It retains original hashes, timing results and fresh native/DOCX reopen evidence; native-platform, Word, power-loss and longer real-world qualification remain open. See [recovery.md](recovery.md#opt-in-linux-process-soak). Readiness estimates are unchanged.
 
 ## Revision history
 
