@@ -1,5 +1,5 @@
 use super::chrome::buttons;
-use super::*;
+use super::{Dialog, FilterOp, FilterRule, Sense, Serialize, SortKey, Tokens, Ui, Value, WordApp, json, vec2};
 
 /// The address parts Match Fields lists, with their keys in `mailings.matchFields`' `address`.
 pub const ADDRESS_PARTS: [(&str, &str); 9] = [

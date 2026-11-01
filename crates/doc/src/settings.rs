@@ -1,4 +1,4 @@
-use super::*;
+use super::{Deserialize, Rgb, Serialize, math, section, styles};
 
 /// A bibliography source.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
@@ -10,6 +10,10 @@ pub struct Source {
     pub kind: String,
     /// "Last, First; Last, First"
     pub author: String,
+    /// A corporate author ("World Health Organization"): written as it is, never split into
+    /// names, and in place of `author` when set (Create Source › Corporate Author, `b:Corporate`,
+    /// #4848).
+    pub corporate: String,
     pub title: String,
     pub year: String,
     pub publisher: String,
@@ -39,6 +43,9 @@ pub struct CustomProp {
     /// the property's XML content kept verbatim (vectors, blobs).
     pub kind: String,
     pub value: String,
+    /// Bookmark associated with this property (`linkTarget`), retained without evaluating it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub link_target: Option<String>,
 }
 
 /// Document properties (File › Info).
