@@ -657,10 +657,7 @@ fn align_to_page_uses_each_objects_own_section() {
     let mut s = Session::new(wordcraft_doc::Document::new());
     s.run("document.setText", &json!({"text": "one\ntwo"})).unwrap();
     // Section one is narrow with wide margins; section two is the default.
-    let mut narrow = wordcraft_doc::SectionProps::default();
-    narrow.page_w = 300.0;
-    narrow.margin_left = 50.0;
-    narrow.margin_right = 50.0;
+    let narrow = wordcraft_doc::SectionProps { page_w: 300.0, margin_left: 50.0, margin_right: 50.0, ..Default::default() };
     s.doc.para_mut(StoryRef::Body, &Pos::body(0, 0).path).unwrap().section = Some(Box::new(narrow.clone()));
     let wide = s.doc.sections().get(1).map(|(_, x)| (**x).clone()).unwrap();
     assert!((wide.page_w - narrow.page_w).abs() > 1.0);
