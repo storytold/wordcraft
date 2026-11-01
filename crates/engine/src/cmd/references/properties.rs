@@ -179,6 +179,7 @@ mod tests {
         InlineObject::BookmarkEnd { name: name.into() }
     }
 
+    /// First starts and closing ends win, while object results are read from the current document.
     #[test]
     fn bookmark_text_preserves_first_start_end_and_live_results() {
         let objects = vec![end("Target"), start("Target"), end("Other"), end("Target"), end("Target"), start("Target"), end("Target")];
@@ -216,6 +217,7 @@ mod tests {
         assert_eq!(bookmark_text_at(&d, "Target", &at).as_deref(), Some("Changed result"));
     }
 
+    /// Missing ends and mismatched marker storage retain the existing paragraph-end fallbacks.
     #[test]
     fn bookmark_text_preserves_missing_end_and_unpaired_object_fallbacks() {
         let mut d = Document::new();
@@ -231,6 +233,7 @@ mod tests {
         assert_eq!(bookmark_text(&d, "Target").as_deref(), Some(""));
     }
 
+    /// Unrelated markers preserve target text without quadratic closing-marker lookup work.
     #[test]
     fn bookmark_text_end_lookup_scales_with_unrelated_markers() {
         let document = |n| {
@@ -269,6 +272,7 @@ mod tests {
         eprintln!("Bookmark text: small={a:.9}s big={b:.9}s ratio={:.2}", b / a);
         assert!(b < a * 24.0 + 0.005, "8x markers must not take quadratic end lookup work: {a:.9}s -> {b:.9}s");
     }
+    /// Indexed reads match the fragment reader for object values, offsets and malformed storage.
     #[test]
     fn indexed_bookmark_text_matches_fragment_text_for_objects_and_malformed_storage() {
         let field =
@@ -328,6 +332,7 @@ mod tests {
         }
     }
 
+    /// A reused marker index reads changed field values without caching the old result text.
     #[test]
     fn indexed_bookmark_text_reads_changed_result_without_rebuilding_markers() {
         let mut d = Document::new();
