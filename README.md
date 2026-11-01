@@ -202,8 +202,9 @@ covers every target starting with it (`wordcraft*=debug`). The logger is
 | L6 | `wordcraft-ui-egui` | the word processor front end (swappable) |
 | apps | `wordcraft`, `wordcraft-cli`, `wordcraft-web` | desktop, command line, browser |
 
-`cargo xtask ci` runs formatting, clippy, ~800 tests, the asset-attribution check, the layering
-check and the wasm build. Contributor and agent instructions: [AGENTS.md](AGENTS.md).
+`cargo xtask ci` runs formatting, clippy, ~800 tests, the asset-attribution check, the
+workflow-ref check, the layering check and the wasm build. Contributor and agent instructions:
+[AGENTS.md](AGENTS.md).
 
 ## Roadmap
 
