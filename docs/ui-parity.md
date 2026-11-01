@@ -85,6 +85,7 @@ Labels → New Document with “One label per recipient” includes all filtered
 ## Revision history
 
 | Date | Change | Summary |
+| 2026-10-26 | trivial | Dialog sections: 13 dialogs group related controls in theme-aware panels with indented settings; tall dialogs scroll only when needed (#4035, #4038) |
 |---|---|---|
 | 2026-10-31 | trivial | Keytips: Alt, F badges the Backstage pages with Word's letters and the letter opens the page; Alt, F, P and Alt, F, V open Print; the badges end with the Backstage (#4960) |
 | 2026-10-31 | trivial | View › Macros opens a Macros dialog (also Alt+F8 and command search): the macros of this session listed with Run, Delete and Record, which reads Stop Recording while a recording runs; the button did nothing before, as `tools.macros` without a macro to run, define or delete only returned the list (#4327) |

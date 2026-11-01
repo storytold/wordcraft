@@ -151,6 +151,7 @@ Recipient label generation (#4880) now includes all selected recipients across a
 > 2026-10-23 · cu20we: Paragraph-relative floats in headers, footers, cells and text boxes now start above effective space before; synthetic layout regressions cover all four contexts. Framed paragraphs already used the pre-spacing position. No new native Word comparison; broader object-position parity remains open.
 
 | Date | Change | Summary |
+| 2026-10-26 | trivial | Dialog sections improve readability across 13 dialogs; conditional scrolling keeps tall dialogs usable. Ranked gaps and estimates unchanged (#4035, #4038) |
 |---|---|---|
 | 2026-10-30 | trivial | Only the PDF sent to the printer omits link annotations; File › Print › Save these pages as PDF (`file.printPdf`) keeps them, like Export (#4734); no ranked gap changed; readiness estimates unchanged |
 | 2026-10-29 | trivial | The print job's PDF omits link annotations, which the spooler refused to fit to the paper, so documents with links reach the printer (#4734); physical printer output remains to be validated; no ranked gap changed; readiness estimates unchanged |
