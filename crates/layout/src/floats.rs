@@ -1,3 +1,4 @@
+use super::boxes::{Edges, joined};
 use super::ctx::Ctx;
 use super::page::{PageBuilder, PageFrame};
 use super::placed::Placed;
@@ -334,56 +335,142 @@ pub(crate) fn anchor_floats(
     pb: &mut PageBuilder,
     anchor: FloatAnchor,
 ) -> (HashMap<usize, Rect>, Arc<ParaLayout>, Vec<para::Exclusion>) {
-    let FloatAnchor { p, block, y0, before, excl_mark, label, place } = anchor;
+    let FloatAnchor { p, block, y0, before, label, place, .. } = anchor;
     ctx.fields.page = pb.number;
     let (col_x, width) = (pb.col_x(), pb.col_w());
+    let placing = !pb.web && place;
+    let mut rects = if placing { place_anchored(ctx, pb, anchor, &HashMap::new()) } else { HashMap::new() };
+    let eq_start = ctx.eq_count;
+    let mut rel = rel_exclusions(&body_wraps(ctx, pb), col_x, y0);
+    let mut pl = ctx.para_labelled(p, width, None, &rel, label.clone());
+    // Objects placed from a line after the first start at that line (#3978): placed again once
+    // the lines are known, and the paragraph laid out around them there. A line that starts below
+    // the page's text (on a later page) keeps the paragraph's top, as before.
+    // Moving a wrapped object can move its anchor to another line: placed again until the lines
+    // stop moving it ([`settle_line_drops`]).
+    if placing && p.objects.iter().filter_map(floating).any(|(_, _, f)| f.v_rel == Anchor::Line) {
+        let joined_above = joined(ctx.doc, &ctx.doc.body, block, block.checked_sub(1), None);
+        let bottom = pb.bottom;
+        let measure = |pl: &ParaLayout| {
+            let room = if joined_above { 0.0 } else { Edges::own(pl, 0, pl.lines.len()).top };
+            let mut drops = line_drops(p, pl, before, room);
+            drops.retain(|_, d| y0 - before + *d < bottom);
+            drops
+        };
+        let first = measure(&pl);
+        settle_line_drops(first, |drops| {
+            rects = place_anchored(ctx, pb, anchor, drops);
+            ctx.eq_count = eq_start;
+            rel = rel_exclusions(&body_wraps(ctx, pb), col_x, y0);
+            pl = ctx.para_labelled(p, width, None, &rel, label.clone());
+            measure(&pl)
+        });
+    }
+    (rects, pl, rel)
+}
+
+/// The most times [`settle_line_drops`] lays a paragraph out again.
+pub(crate) const LINE_DROP_PASSES: usize = 4;
+
+/// Settles the objects of a paragraph placed from a later line ([`line_drops`]). `drops` are
+/// those its layout with every such object at the paragraph's top gives; `relayout` places the
+/// objects that far down, lays the paragraph out around them and returns the drops that layout
+/// gives. Wrapped text can move an anchor to another line once its object moves, so this goes
+/// on until a layout gives the drops it was made with (each object at the top of its anchor's
+/// line), at most [`LINE_DROP_PASSES`] times: an anchor that keeps moving between lines (the
+/// object pushing it down a line, and from there no longer in its way) keeps the last layout.
+/// No drops (every anchor on the first line) places the objects at the paragraph's top. A
+/// paragraph with no drops is not laid out again. Returns how many times it was.
+pub(crate) fn settle_line_drops(mut drops: HashMap<usize, f32>, mut relayout: impl FnMut(&HashMap<usize, f32>) -> HashMap<usize, f32>) -> usize {
+    // The drops the current layout was made with: none, the objects at the paragraph's top.
+    let mut placed = HashMap::new();
+    let mut passes = 0;
+    while passes < LINE_DROP_PASSES && !same_drops(&drops, &placed) {
+        let next = relayout(&drops);
+        placed = std::mem::replace(&mut drops, next);
+        passes += 1;
+    }
+    passes
+}
+
+fn same_drops(a: &HashMap<usize, f32>, b: &HashMap<usize, f32>) -> bool {
+    a.len() == b.len() && a.iter().all(|(k, d)| b.get(k).is_some_and(|e| (d - e).abs() < 0.01))
+}
+
+/// Places the floating objects of [`anchor_floats`]'s paragraph on the page and adds their wrap
+/// areas (replacing those from an earlier attempt), objects placed from a later line `drops`
+/// lower ([`line_drops`]). Returns their rectangles by object index.
+fn place_anchored(ctx: &mut Ctx, pb: &mut PageBuilder, anchor: FloatAnchor, drops: &HashMap<usize, f32>) -> HashMap<usize, Rect> {
+    let FloatAnchor { p, block, y0, before, excl_mark, .. } = anchor;
+    let (col_x, width) = (pb.col_x(), pb.col_w());
     let mut rects = HashMap::new();
-    if !pb.web && place {
-        // (A mark from a page before may be short of the areas this page started with.)
-        pb.excl.truncate(excl_mark.max(pb.seeded));
-        let page = pb.pages.len().saturating_sub(1);
-        let early = pb.early.get(&page);
-        // The paragraph's top, and whether text was placed before it on the page.
-        let top = y0 - before;
-        let text_before = top > pb.top + 0.5 || pb.col > 0;
-        let frame = PageFrame { sect: pb.sect, origin: (0.0, 0.0), number: pb.number, mirror: ctx.mirror };
-        // An object left out of the layout (hidden, or deleted in the final text) is not placed, so
-        // it takes no room either.
-        let left_out = left_out_objects(ctx.doc, p, None, ctx.opts.show_hidden, ctx.hide_deleted);
-        for (oi, o) in p.objects.iter().enumerate() {
-            let Some((w, h, float)) = floating(o) else { continue };
-            if left_out(oi) {
-                continue;
-            }
-            // Positions relative to the paragraph start above its space before (Word for Windows).
-            let mut r = float_rect(Some(frame), (col_x, width), y0 - before, w, h, float);
-            let outline = ctx.wrap_outline(o);
-            let outline = outline.as_deref().map(Vec::as_slice);
-            let mut area = wrap_area(r, float, outline);
-            if pb.settle && text_before {
-                let seed = early.and_then(|v| v.iter().find(|(b, k, _)| (*b, *k) == (block, oi))).map(|(_, _, a)| a);
-                (r, area) = settle_early(r, area, seed, top, |r| wrap_area(r, float, outline));
-            }
-            rects.insert(oi, r);
-            // Above the paragraph, beside text laid out before it: the page is laid out again
-            // with it known from the start (#2048).
-            let above = area.as_ref().filter(|a| text_before && a.0.y < top - 0.5).map(|a| (page, a.clone()));
-            ctx.floats_above.insert((block, oi), above);
-            if let Some(area) = area {
-                match early.and_then(|v| v.iter().position(|(b, k, _)| (*b, *k) == (block, oi))).filter(|k| *k < pb.seeded) {
-                    Some(k) => {
-                        if let Some(slot) = pb.excl.get_mut(k) {
-                            *slot = area;
-                        }
+    // (A mark from a page before may be short of the areas this page started with.)
+    pb.excl.truncate(excl_mark.max(pb.seeded));
+    let page = pb.pages.len().saturating_sub(1);
+    let early = pb.early.get(&page);
+    // The paragraph's top, and whether text was placed before it on the page.
+    let top = y0 - before;
+    let text_before = top > pb.top + 0.5 || pb.col > 0;
+    let frame = PageFrame { sect: pb.sect, origin: (0.0, 0.0), number: pb.number, mirror: ctx.mirror };
+    // An object left out of the layout (hidden, or deleted in the final text) is not placed, so
+    // it takes no room either.
+    let left_out = left_out_objects(ctx.doc, p, None, ctx.opts.show_hidden, ctx.hide_deleted);
+    for (oi, o) in p.objects.iter().enumerate() {
+        let Some((w, h, float)) = floating(o) else { continue };
+        if left_out(oi) {
+            continue;
+        }
+        // Positions relative to the paragraph start above its space before (Word for Windows),
+        // those relative to a later line at that line.
+        let drop = drops.get(&oi).copied().unwrap_or(0.0);
+        let mut r = float_rect(Some(frame), (col_x, width), top + drop, w, h, float);
+        let outline = ctx.wrap_outline(o);
+        let outline = outline.as_deref().map(Vec::as_slice);
+        let mut area = wrap_area(r, float, outline);
+        if pb.settle && text_before {
+            let seed = early.and_then(|v| v.iter().find(|(b, k, _)| (*b, *k) == (block, oi))).map(|(_, _, a)| a);
+            (r, area) = settle_early(r, area, seed, top, |r| wrap_area(r, float, outline));
+        }
+        rects.insert(oi, r);
+        // Above the paragraph, beside text laid out before it: the page is laid out again
+        // with it known from the start (#2048).
+        let above = area.as_ref().filter(|a| text_before && a.0.y < top - 0.5).map(|a| (page, a.clone()));
+        ctx.floats_above.insert((block, oi), above);
+        if let Some(area) = area {
+            match early.and_then(|v| v.iter().position(|(b, k, _)| (*b, *k) == (block, oi))).filter(|k| *k < pb.seeded) {
+                Some(k) => {
+                    if let Some(slot) = pb.excl.get_mut(k) {
+                        *slot = area;
                     }
-                    None => pb.excl.push(area),
                 }
+                None => pb.excl.push(area),
             }
         }
     }
-    let rel = rel_exclusions(&body_wraps(ctx, pb), col_x, y0);
-    let pl = ctx.para_labelled(p, width, None, &rel, label.clone());
-    (rects, pl, rel)
+    rects
+}
+
+/// For the floating objects of `p` placed relative to their line (`Anchor::Line`, ECMA-376
+/// Part 1 §20.4.2.11) whose anchor is on a line after the first of its layout `pl`: how far
+/// below the paragraph's top, above its space `before`, that line starts, `room` being the room
+/// above its first line (its top border). Word measures such an object from the top of the line
+/// holding its anchor; on the first line that is the paragraph's top, above the space before, as
+/// for an object placed from the paragraph (Word for Mac 16, #3978).
+pub(crate) fn line_drops(p: &Paragraph, pl: &ParaLayout, before: f32, room: f32) -> HashMap<usize, f32> {
+    let mut drops = HashMap::new();
+    let Some(first) = pl.lines.first().filter(|_| p.objects.iter().filter_map(floating).any(|(_, _, f)| f.v_rel == Anchor::Line)) else {
+        return drops;
+    };
+    for line in pl.lines.iter().skip(1) {
+        for k in line.c0..line.c1 {
+            let Some(para::ClKind::Object(oi)) = pl.clusters.get(k).map(|c| c.kind) else { continue };
+            if p.objects.get(oi).and_then(floating).is_some_and(|(_, _, f)| f.v_rel == Anchor::Line) {
+                let drop = before + room + first.top.max(0.0) + (line.top - first.top);
+                drops.insert(oi, wordcraft_geom::finite(drop).clamp(0.0, 31_680.0));
+            }
+        }
+    }
+    drops
 }
 
 pub(crate) fn body_wraps(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<WrapArea> {
@@ -480,7 +567,12 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
             let rect = if let Some(r) = pinned {
                 r
             } else if floating {
-                floats.get(&oi).copied().unwrap_or_else(|| float_rect(at.page, at.col, at.para_y, w, h, float))
+                // Not placed already (web view, outline): one placed from a later line starts there.
+                let drop = match pl.lines.first() {
+                    Some(first) if li > 0 && float.v_rel == Anchor::Line => (line.top - first.top).max(0.0),
+                    _ => 0.0,
+                };
+                floats.get(&oi).copied().unwrap_or_else(|| float_rect(at.page, at.col, at.para_y + drop, w, h, float))
             } else {
                 let cx = x + line.cl_left(k).unwrap_or(0.0);
                 display::inline_rect(Some(obj), cx, y + (line.baseline - fl.top), c.adv, c.obj_h)
