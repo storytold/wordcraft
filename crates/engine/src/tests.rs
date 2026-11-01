@@ -7422,6 +7422,26 @@ More"}),
     assert_eq!((p.props.shading, p.props_of_char(0).shading), (orange, None));
 }
 
+/// #4685 review: in a cell's last paragraph all of its text stands for the paragraph with its
+/// mark (a selection can't reach the next paragraph's start there), so Shading shades the
+/// paragraph; part of the text is text.
+#[test]
+fn shading_all_of_a_cells_last_paragraph_shades_the_paragraph() {
+    let orange = wordcraft_doc::Rgb::parse("FFA500");
+    for (from, to, paragraph) in [(0, 9, true), (0, 4, false)] {
+        let mut s = s();
+        run(&mut s, "insert.table", json!({"rows": 1, "cols": 1}));
+        run(&mut s, "text.insert", json!({"text": "Cell text"}));
+        let cell = s.sel.focus.clone();
+        assert!(cell.path.cell().is_some());
+        run(&mut s, "select.range", json!({"anchor": Pos { off: from, ..cell.clone() }, "focus": Pos { off: to, ..cell.clone() }}));
+        run(&mut s, "para.shading", json!({"color": "FFA500"}));
+        let p = s.doc.para_at(&cell).unwrap();
+        let want = if paragraph { (orange, None) } else { (None, orange) };
+        assert_eq!((p.props.shading, p.props_of_char(0).shading), want, "{from}..{to}");
+    }
+}
+
 /// #2738: Home › Underline › Underline Color sets the underline's own colour and leaves its style
 /// alone; `auto` drops it again. One undo step each, kept through a DOCX round trip, and junk is
 /// a params error that changes nothing.
