@@ -991,6 +991,31 @@ fn rtl_paragraphs_read_and_write_their_direction() {
 }
 
 #[test]
+fn a_child_style_writing_mode_overrides_its_parent() {
+    // ODF: a style that sets `style:writing-mode` wins over its parent's; one that sets none
+    // inherits it.
+    let style = |name: &str, parent: &str, mode: &str| {
+        let props = if mode.is_empty() { String::new() } else { format!(r#"<style:paragraph-properties style:writing-mode="{mode}"/>"#) };
+        format!(r#"<style:style style:name="{name}" style:family="paragraph" style:parent-style-name="{parent}">{props}</style:style>"#)
+    };
+    let styles = format!(
+        "<office:styles>{}{}{}{}{}</office:styles>",
+        style("Rtl", "Standard", "rl-tb"),
+        style("LtrChild", "Rtl", "lr-tb"),
+        style("Plain", "Rtl", ""),
+        style("PageChild", "Rtl", "page"),
+        style("LtrGrand", "LtrChild", "")
+    );
+    let body: String =
+        ["Rtl", "LtrChild", "Plain", "PageChild", "LtrGrand"].iter().map(|n| format!(r#"<text:p text:style-name="{n}">x</text:p>"#)).collect();
+    let content =
+        format!(r#"<office:document-content {NS_T}><office:body><office:text>{body}</office:text></office:body></office:document-content>"#);
+    let flow = parse(&package(content.as_str(), Some(styles.as_str()))).unwrap();
+    let got: Vec<bool> = paras(&flow).iter().map(|p| p.rtl).collect();
+    assert_eq!(got, [true, false, true, true, false], "Rtl, LtrChild, Plain, PageChild, LtrGrand");
+}
+
+#[test]
 fn exported_changes_always_have_a_date_and_keep_paragraph_separators() {
     // A change without a date gets one on save (`dc:date` is required); a U+2029 in deleted
     // text is text, not a paragraph break.

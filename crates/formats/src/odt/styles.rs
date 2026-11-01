@@ -47,8 +47,9 @@ struct StyleInfo {
     auto: bool,
     fmt: FmtDelta,
     align: Option<Align>,
-    /// `style:writing-mode="rl-tb"`: the style's paragraphs read right to left.
-    rtl: bool,
+    /// `style:writing-mode`: `Some(true)` for "rl-tb" (right to left), `Some(false)` for "lr-tb";
+    /// `None` when the style sets none (it then inherits from its parent style).
+    rtl: Option<bool>,
     page_break: bool,
     /// `fo:keep-with-next`: `Some(true)` for "always", `Some(false)` for "auto".
     keep_next: Option<bool>,
@@ -88,9 +89,14 @@ pub(super) fn column_sep(a: &Attrs) -> bool {
     get(a, "style:style") != Some("none")
 }
 
-/// `style:writing-mode="rl-tb"`: right-to-left.
-fn writing_mode_rtl(a: &Attrs) -> bool {
-    get(a, "style:writing-mode").is_some_and(|v| v.trim() == "rl-tb")
+/// `style:writing-mode`: "rl-tb" is right-to-left, "lr-tb" left-to-right; anything else (`page`,
+/// vertical modes) says nothing about the inline direction here.
+fn writing_mode_rtl(a: &Attrs) -> Option<bool> {
+    match get(a, "style:writing-mode")?.trim() {
+        "rl-tb" => Some(true),
+        "lr-tb" => Some(false),
+        _ => None,
+    }
 }
 
 fn default_font(a: &Attrs) -> Option<String> {
@@ -216,7 +222,7 @@ impl Styles {
                 }
                 "paragraph-properties" => {
                     if let Some((_, s)) = &mut cur {
-                        s.rtl |= writing_mode_rtl(&a);
+                        s.rtl = writing_mode_rtl(&a).or(s.rtl);
                         s.align = match get(&a, "fo:text-align").map(|v| v.trim().to_ascii_lowercase()).as_deref() {
                             Some("center") => Some(Align::Center),
                             Some("end") | Some("right") => Some(Align::Right),
@@ -329,9 +335,10 @@ impl Styles {
         self.chain(name).iter().find_map(|(_, s)| s.columns.clone())
     }
 
-    /// Does this paragraph style read right to left (`style:writing-mode="rl-tb"`, whole chain)?
+    /// Does this paragraph style read right to left? The nearest style in the chain that sets
+    /// `style:writing-mode` decides, so a child's "lr-tb" overrides its parent's "rl-tb".
     pub(super) fn rtl(&self, name: &str) -> bool {
-        self.chain(name).iter().any(|(_, s)| s.rtl)
+        self.chain(name).iter().find_map(|(_, s)| s.rtl).unwrap_or(false)
     }
 
     /// Width in points of a table-column style (whole chain).

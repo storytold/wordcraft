@@ -244,6 +244,11 @@ impl<'r> Builder<'r> {
             for (i, e) in self.stack.iter().enumerate().rev() {
                 match e.kind {
                     ElKind::Cell => {
+                        // Text directly in a cell takes the cell's direction; a block inside the
+                        // cell (already seen) has its own.
+                        if !rtl_seen {
+                            p.rtl = e.rtl;
+                        }
                         // CSS inherits `text-align` from the cell, its row, row group and table
                         // (#1381); the paragraph's own (found above) wins.
                         if p.align.is_none() {
@@ -338,7 +343,6 @@ impl<'r> Builder<'r> {
             && prev.list.is_some()
             && prev.list.map(|l| l.level) == level
         {
-            prev.rtl |= p.rtl;
             prev.push_text("\n", &Fmt::default());
             prev.inlines.extend(p.inlines);
             return;
@@ -641,7 +645,9 @@ impl<'r> Builder<'r> {
         let mut align = None;
         // `dir="rtl"` or CSS `direction:rtl` on this element (inherited by block children).
         // An explicit `dir="ltr"` (or `direction:ltr`) wins over an RTL ancestor.
-        let inherited = self.stack.iter().any(|e| e.rtl && e.kind != ElKind::Inline);
+        // What it inherits is the nearest enclosing block's direction (which already includes
+        // that block's own `dir`), so an LTR block inside an RTL one keeps its descendants LTR.
+        let inherited = self.stack.iter().rev().find(|e| e.kind != ElKind::Inline).is_some_and(|e| e.rtl);
         let mut rtl = match attr(attrs, "dir").map(|d| d.trim().to_ascii_lowercase()).as_deref() {
             Some("rtl") => true,
             Some("ltr") => false,
