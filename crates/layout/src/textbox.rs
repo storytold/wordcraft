@@ -315,9 +315,9 @@ fn from_y(items: Vec<Placed>, top: f32) -> Vec<Placed> {
                 let ky = para.lines.get(k).map_or(y, |l| y + l.top - first.top);
                 out.push(Placed::Lines { story, path, para, l0: k, l1, x, y: ky, turn });
             }
-            Placed::Fill { rect, color } if rect.bottom() > lim => {
+            Placed::Fill { rect, color, source } if rect.bottom() > lim => {
                 let y0 = rect.y.max(top);
-                out.push(Placed::Fill { rect: Rect::new(rect.x, y0, rect.w, rect.bottom() - y0), color });
+                out.push(Placed::Fill { rect: Rect::new(rect.x, y0, rect.w, rect.bottom() - y0), color, source });
             }
             Placed::Rule { y0, y1, .. } if y0.max(y1) >= lim => out.push(it),
             Placed::Image { rect, .. }
@@ -363,4 +363,31 @@ fn fit_flow(items: Vec<Placed>, across: f32) -> (Vec<Placed>, Option<Cut>) {
         }
     }
     (fit_box(items, across), cut.map(|(_, c)| c))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decoration_cut_keeps_owner() {
+        for source in [None, Some((StoryRef::Body, Path::top(0)))] {
+            let items = vec![
+                Placed::Fill { rect: Rect::new(0.0, 0.0, 40.0, 60.0), color: wordcraft_doc::props::Rgb::BLACK, source: source.clone() },
+                Placed::Rule { x0: 0.0, y0: 0.0, x1: 0.0, y1: 60.0, border: wordcraft_doc::props::Border::single(1.0), source: source.clone() },
+            ];
+            let out = from_y(items, 20.0);
+            assert_eq!(out.len(), 2);
+            for it in out {
+                match it {
+                    Placed::Fill { source: actual, rect, .. } => {
+                        assert_eq!(rect.h, 40.0);
+                        assert_eq!(actual, source);
+                    }
+                    Placed::Rule { source: actual, .. } => assert_eq!(actual, source),
+                    _ => panic!("decoration fixture"),
+                }
+            }
+        }
+    }
 }

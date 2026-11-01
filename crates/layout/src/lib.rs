@@ -262,6 +262,182 @@ impl HideDeleted {
     }
 }
 
+#[derive(Clone)]
+struct CellClip {
+    story: StoryRef,
+    prefix: Vec<u32>,
+    items: std::ops::Range<usize>,
+    rect: Rect,
+}
+
+/// Physical copies are indexed by source path; each vector is ordered by placement end.
+type Clips = HashMap<StoryRef, HashMap<Vec<u32>, Vec<CellClip>>>;
+
+/// Cell markers follow content. Unclipped copies still close the preceding occurrence.
+fn clipped_cells(items: &[Placed]) -> Clips {
+    let mut previous = HashMap::new();
+    let mut clips = Clips::new();
+    for (index, item) in items.iter().enumerate() {
+        crate::work::steps(1);
+        let Placed::Cell { rect, table, row, cell, story, clip, .. } = item else { continue };
+        let start = previous.insert((*story, table, *row, *cell), index + 1).unwrap_or(0);
+        if !clip {
+            continue;
+        }
+        let (Ok(row), Ok(cell)) = (u32::try_from(*row), u32::try_from(*cell)) else { continue };
+        let mut prefix = table.0.clone();
+        prefix.extend([row, cell]);
+        let entry = CellClip { story: *story, prefix, items: start..index, rect: *rect };
+        clips.entry(entry.story).or_default().entry(entry.prefix.clone()).or_default().push(entry);
+    }
+    clips
+}
+
+/// Look up only ancestors, then the physical copy containing this item. Empty clips stay empty.
+fn cell_clip(clips: &Clips, story: StoryRef, path: &[u32], index: usize) -> Option<Rect> {
+    let cells = clips.get(&story)?;
+    (0..=path.len())
+        .filter_map(|n| {
+            crate::work::steps(1);
+            let copies = cells.get(path.get(..n)?)?;
+            let at = copies.partition_point(|copy| {
+                crate::work::steps(1);
+                copy.items.end <= index
+            });
+            let copy = copies.get(at)?;
+            copy.items.contains(&index).then_some(copy.rect)
+        })
+        .reduce(|a, b| {
+            let (x, y) = (a.x.max(b.x), a.y.max(b.y));
+            Rect::new(x, y, a.right().min(b.right()) - x, a.bottom().min(b.bottom()) - y)
+        })
+}
+
+#[derive(Clone, Copy)]
+enum LineFit {
+    Complete,
+    Clipped(StoryRef),
+}
+
+fn fit_cell_box(items: Vec<Placed>, height: f32, story: StoryRef) -> Vec<Placed> {
+    fit_lines(items, height, LineFit::Clipped(story))
+}
+
+/// Owners keep partial ink; foreign sourced decorations follow their text's fitting policy.
+fn cell_keeps(item: &Placed, owner: StoryRef) -> bool {
+    match item {
+        Placed::Lines { story, .. } | Placed::Fill { source: Some((story, _)), .. } | Placed::Rule { source: Some((story, _)), .. } => {
+            *story == owner
+        }
+        _ => true,
+    }
+}
+
+fn fit_lines(items: Vec<Placed>, height: f32, fit: LineFit) -> Vec<Placed> {
+    let limit = height + 0.5;
+    let mut out = Vec::with_capacity(items.len());
+    let mut kept_line = false;
+    for it in items {
+        // Exact cells retain their own source under the paint clip. Embedded stories still fit.
+        if let LineFit::Clipped(owner) = fit
+            && cell_keeps(&it, owner)
+        {
+            kept_line |= matches!(it, Placed::Lines { .. });
+            out.push(it);
+            continue;
+        }
+        if let Some(r) = it.turned_bounds() {
+            // Turned text (in a table cell) stays whole.
+            if r.y < limit {
+                out.push(it);
+            }
+            continue;
+        }
+        match it {
+            Placed::Lines { story, path, para, l0, l1, x, y, turn } => {
+                let Some(first) = para.lines.get(l0) else { continue };
+                let mut end = l0;
+                for k in l0..l1 {
+                    let Some(l) = para.lines.get(k) else { break };
+                    if y + (l.top - first.top) + l.height > limit && kept_line {
+                        break;
+                    }
+                    end = k + 1;
+                    kept_line = true;
+                }
+                if end > l0 {
+                    out.push(Placed::Lines { story, path, para, l0, l1: end, x, y, turn });
+                }
+            }
+            Placed::Fill { rect, color, source } if rect.y < limit => {
+                out.push(Placed::Fill { rect: Rect::new(rect.x, rect.y, rect.w, rect.h.min(limit - rect.y)), color, source });
+            }
+            Placed::Rule { x0, y0, x1, y1, border, source } if y0.min(y1) < limit => {
+                out.push(Placed::Rule { x0, y0: y0.min(limit), x1, y1: y1.min(limit), border, source });
+            }
+            Placed::Image { rect, .. }
+            | Placed::Shape { rect, .. }
+            | Placed::Graphic { rect, .. }
+            | Placed::Clip { rect, .. }
+            | Placed::Cell { rect, .. }
+            | Placed::Object { rect, .. }
+                if rect.y < limit =>
+            {
+                out.push(it);
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+impl Placed {
+    /// The physical source owning this item, including grouped drawing members.
+    fn source(&self) -> Option<(StoryRef, &Path)> {
+        let mut pending = vec![self];
+        while let Some(item) = pending.pop() {
+            match item {
+                Placed::Lines { story, path, .. } | Placed::Image { story, path, .. } | Placed::Graphic { story, path, .. } => {
+                    return Some((*story, path));
+                }
+                Placed::Fill { source: Some((story, path)), .. } | Placed::Rule { source: Some((story, path)), .. } => return Some((*story, path)),
+                Placed::Shape { object: Some(pos), .. } => return Some((pos.story, &pos.path)),
+                Placed::Clip { items, .. } => pending.extend(items.iter().rev()),
+                _ => {}
+            }
+        }
+        None
+    }
+}
+
+/// Bound nested backgrounds after fitting; owned paint and floats retain their physical clips.
+fn fit_exact_cell(items: Vec<Placed>, height: f32, story: StoryRef) -> Vec<Placed> {
+    let limit = height + 0.5;
+    fit_cell_box(items, height, story)
+        .into_iter()
+        .filter_map(|item| {
+            crate::work::steps(1);
+            match item {
+                Placed::Lines { .. }
+                | Placed::Cell { .. }
+                | Placed::Image { .. }
+                | Placed::Shape { .. }
+                | Placed::Graphic { .. }
+                | Placed::Clip { .. }
+                | Placed::Object { .. } => Some(item),
+                Placed::Fill { source: Some((owner, _)), .. } | Placed::Rule { source: Some((owner, _)), .. } if owner == story => Some(item),
+                Placed::Fill { rect, color, source } if rect.y < limit => {
+                    Some(Placed::Fill { rect: Rect::new(rect.x, rect.y, rect.w, rect.h.min(limit - rect.y)), color, source })
+                }
+                Placed::Rule { x0, y0, x1, y1, border, source } if y0.min(y1) < limit => {
+                    Some(Placed::Rule { x0, y0: y0.min(limit), x1, y1: y1.min(limit), border, source })
+                }
+                _ => None,
+            }
+        })
+        .collect()
+}
+
 /// One laid-out page.
 #[derive(Clone, Debug, Default)]
 pub struct Page {
@@ -353,5 +529,7 @@ thread_local! {
     static WRAP_RELAYS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+#[cfg(test)]
+mod cell_hit_tests;
 #[cfg(test)]
 mod tests;

@@ -7,6 +7,7 @@ use super::{
     BezPath, Border, BorderStyle, ChangeBar, Document, Draw, HashMap, InlineObject, LineEnd, Page, Placed, Rect, Rgb, Spin, StoryRef, TextDirection,
     Underline,
 };
+use crate::{Clips, cell_clip, clipped_cells};
 
 /// Colour of moved text (both ends of a tracked move).
 pub const MOVE_COLOR: Rgb = Rgb(0x1A, 0x7F, 0x37);
@@ -47,14 +48,22 @@ pub struct ItemDisplay<'a> {
     doc: &'a Document,
     page: &'a Page,
     authors: Authors<'a>,
-    clips: Clips,
+    clips: [Clips; 3],
+    positions: HashMap<usize, (usize, usize)>,
 }
 
 impl<'a> ItemDisplay<'a> {
     pub fn new(doc: &'a Document, page: &'a Page) -> Self {
-        let cells: Vec<Placed> =
-            page.header.iter().chain(&page.footer).chain(&page.items).filter(|c| matches!(c, Placed::Cell { clip: true, .. })).cloned().collect();
-        ItemDisplay { doc, page, authors: Authors::new(doc), clips: clipped_cells(&cells) }
+        let lists = [&page.header, &page.footer, &page.items];
+        let clips = lists.map(|items| clipped_cells(items));
+        let mut positions = HashMap::new();
+        for (slice, items) in lists.iter().enumerate() {
+            for (index, item) in items.iter().enumerate() {
+                crate::work::steps(1);
+                positions.insert(item as *const Placed as usize, (slice, index));
+            }
+        }
+        ItemDisplay { doc, page, authors: Authors::new(doc), clips, positions }
     }
 
     /// The draw items of `it` alone, as [`page_display`] gives them for a page holding just it
@@ -63,7 +72,8 @@ impl<'a> ItemDisplay<'a> {
         let mut out = Vec::new();
         let items = std::slice::from_ref(it);
         let (_, ba) = dimming(opts);
-        stories_display(self.doc, &[items], Some(&self.clips), opts, &self.authors, ba, &mut out);
+        let shared = self.positions.get(&(it as *const Placed as usize)).map(|&(slice, index)| (&self.clips[slice], index));
+        stories_display(self.doc, &[items], shared, opts, &self.authors, ba, &mut out);
         body_change_bars(self.doc, self.page, items, opts, ba, &mut out);
         out
     }
@@ -99,7 +109,7 @@ fn body_change_bars(doc: &Document, page: &Page, items: &[Placed], opts: &Displa
 fn stories_display(
     doc: &Document,
     stories: &[&[Placed]],
-    shared: Option<&Clips>,
+    shared: Option<(&Clips, usize)>,
     opts: &DisplayOptions,
     authors: &Authors,
     a: f32,
@@ -110,20 +120,21 @@ fn stories_display(
         let warps = warped_boxes(doc, items);
         let own;
         let clips = match shared {
-            Some(c) => c,
+            Some((c, _)) => c,
             None => {
                 own = clipped_cells(items);
                 &own
             }
         };
         let mut done: Vec<u32> = Vec::new();
-        for it in items.iter() {
+        for (index, it) in items.iter().enumerate() {
             // The object being dragged is drawn by its preview instead: leave it out here.
             if hidden.as_ref().is_some_and(|h| h.hides(it)) {
                 continue;
             }
-            if let Placed::Lines { story, path, .. } = it
-                && let Some(rect) = cell_clip(clips, *story, &path.0)
+            if !clips.is_empty()
+                && let Some((story, path)) = it.source()
+                && let Some(rect) = cell_clip(clips, story, &path.0, shared.map_or(index, |(_, index)| index))
             {
                 let mut inner = Vec::new();
                 item(doc, it, opts, authors, a, &mut inner);
@@ -167,41 +178,6 @@ pub fn object_display(doc: &Document, page: &Page, o: &InlineObject, rect: Rect,
         }
     }
     out
-}
-
-/// The cells among `items` whose content is cut off at their edge (see [`Placed::Cell`]'s
-/// `clip`), by story and the path of their content (table, row, cell): their area, and the
-/// order they come in (the first of two that hold a line clips it).
-type Clips = HashMap<StoryRef, HashMap<Vec<u32>, (usize, Rect)>>;
-
-fn clipped_cells(items: &[Placed]) -> Clips {
-    let mut clips = Clips::new();
-    let cells = items.iter().filter_map(|it| match it {
-        Placed::Cell { rect, table, row, cell, story, clip: true, .. } => {
-            let mut prefix = table.0.clone();
-            prefix.extend([u32::try_from(*row).ok()?, u32::try_from(*cell).ok()?]);
-            Some((*story, prefix, *rect))
-        }
-        _ => None,
-    });
-    for (i, (story, prefix, rect)) in cells.enumerate() {
-        crate::work::steps(1);
-        clips.entry(story).or_default().entry(prefix).or_insert((i, rect));
-    }
-    clips
-}
-
-/// The area to clip a line at `path` of `story` to: its cell's, when that cell is clipped. Only
-/// the cells holding the line are looked up, not every clipped cell on the page.
-fn cell_clip(clips: &Clips, story: StoryRef, path: &[u32]) -> Option<Rect> {
-    let cells = clips.get(&story)?;
-    (0..=path.len())
-        .filter_map(|n| {
-            crate::work::steps(1);
-            cells.get(path.get(..n)?)
-        })
-        .min_by_key(|(i, _)| *i)
-        .map(|(_, r)| *r)
 }
 
 /// The text boxes among `items` whose text is warped (Text Effects › Transform, drawn bent): their
@@ -366,8 +342,8 @@ fn item(doc: &Document, it: &Placed, opts: &DisplayOptions, authors: &Authors, a
 /// effects follow all the turns it is drawn inside.
 fn item_in(doc: &Document, it: &Placed, opts: &DisplayOptions, authors: &Authors, alpha: f32, outer: Spin, out: &mut Vec<Draw>) {
     match it {
-        Placed::Fill { rect, color } => out.push(Draw::Fill { rect: *rect, color: *color, alpha, text_bg: false }),
-        Placed::Rule { x0, y0, x1, y1, border } => out.push(rule(*x0, *y0, *x1, *y1, border, alpha)),
+        Placed::Fill { rect, color, .. } => out.push(Draw::Fill { rect: *rect, color: *color, alpha, text_bg: false }),
+        Placed::Rule { x0, y0, x1, y1, border, .. } => out.push(rule(*x0, *y0, *x1, *y1, border, alpha)),
         Placed::Image { rect, media, crop, spin, .. } => spun(
             *spin,
             *rect,
@@ -448,7 +424,7 @@ mod tests_clips {
 
     /// Which cell (by its `x`) clips a line at `path` of `story`.
     fn found(clips: &Clips, story: StoryRef, path: &[u32]) -> Option<f32> {
-        cell_clip(clips, story, path).map(|r| r.x)
+        cell_clip(clips, story, path, 0).map(|r| r.x)
     }
 
     /// A line in a cell cut off at its edge is drawn with that cell's clip, found by path in an
@@ -460,14 +436,15 @@ mod tests_clips {
             items: vec![cell(StoryRef::Body, vec![0], 0, 1, false, 1.0), cell(StoryRef::Body, vec![2], 1, 0, true, 2.0)],
             ..Default::default()
         };
-        // A nested clipped cell inside the second one; the outer one comes first in the page.
+        // Nested ancestors both constrain the same content placement.
         page.items.push(cell(StoryRef::Body, vec![2, 1, 0, 3], 0, 0, true, 3.0));
         page.footer.push(cell(StoryRef::Part(7), vec![0], 0, 0, true, 4.0));
         // The page's cells in header, footer, items order, as the PDF export and layout see them.
-        let all: Vec<Placed> = page.header.iter().chain(&page.footer).chain(&page.items).cloned().collect();
+        let mut all: Vec<Placed> = page.header.iter().chain(&page.footer).chain(&page.items).cloned().collect();
+        all.insert(0, Placed::Rule { x0: 0.0, y0: 0.0, x1: 1.0, y1: 0.0, border: Border::single(0.5), source: None });
         let clips = clipped_cells(&all);
         assert_eq!(found(&clips, StoryRef::Body, &[2, 1, 0, 0]), Some(2.0));
-        assert_eq!(found(&clips, StoryRef::Body, &[2, 1, 0, 3, 0, 0, 1]), Some(2.0), "the first cell in page order wins, as in layout");
+        assert_eq!(found(&clips, StoryRef::Body, &[2, 1, 0, 3, 0, 0, 1]), Some(3.0), "nested ancestors intersect, retaining an empty intersection");
         assert_eq!(found(&clips, StoryRef::Body, &[0, 0, 1, 0]), None, "that cell isn't clipped");
         assert_eq!(found(&clips, StoryRef::Body, &[2, 0, 0, 0]), None, "another row");
         assert_eq!(found(&clips, StoryRef::Part(7), &[0, 0, 0, 2]), Some(4.0));
@@ -477,11 +454,20 @@ mod tests_clips {
     /// Thousands of clipped cells and as many lines: a lookup each, not a pass over the cells each.
     #[test]
     fn looking_up_many_clipped_cells_takes_linear_time() {
-        let make = |n: usize| (0..n).map(|r| cell(StoryRef::Body, vec![0], r, 0, true, r as f32)).collect::<Vec<_>>();
+        let make = |n: usize| {
+            (0..n)
+                .flat_map(|r| {
+                    [
+                        Placed::Rule { x0: 0.0, y0: 0.0, x1: 1.0, y1: 0.0, border: Border::single(0.5), source: None },
+                        cell(StoryRef::Body, vec![0], r, 0, true, r as f32),
+                    ]
+                })
+                .collect::<Vec<_>>()
+        };
         crate::tests::linear::assert_linear_steps("clip lookups", 1000, make, |cells| {
             let clips = clipped_cells(cells);
-            let hits = (0..cells.len() as u32).filter(|r| cell_clip(&clips, StoryRef::Body, &[0, *r, 0, 0]).is_some()).count();
-            assert_eq!(hits, cells.len());
+            let hits = (0..(cells.len() / 2) as u32).filter(|r| cell_clip(&clips, StoryRef::Body, &[0, *r, 0, 0], *r as usize * 2).is_some()).count();
+            assert_eq!(hits, cells.len() / 2);
         });
     }
 }

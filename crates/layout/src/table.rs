@@ -9,7 +9,7 @@ use wordcraft_doc::{Block, Blocks, Paragraph, Row, StoryRef, Table};
 use wordcraft_geom::Rect;
 
 use crate::para::{CellText, ClKind, ParaLayout};
-use crate::{BoxInput, BoxLayout, Ctx, Placed, layout_box};
+use crate::{BoxInput, BoxLayout, Ctx, Placed, fit_exact_cell, layout_box};
 
 /// Largest preferred table width, as a share of the text column, that a file can ask for.
 const MAX_WIDTH_SHARE: f32 = 10.0;
@@ -693,11 +693,11 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
         heights.push(if collapsed && !cells.is_empty() { rh.max(0.0) } else { rh.max(4.0) });
         rows.push(cells);
     }
-    grow_vertical_merges(&rows, &mut heights);
+    grow_vertical_merges(&t.rows, &rows, &mut heights);
     finish_table_rows(ctx, TableRows { story, table: t, path, depth, cell_text, rows, heights, bottoms, edges, x, total })
 }
 
-fn grow_vertical_merges(rows: &[Vec<CellBox>], heights: &mut [f32]) {
+fn grow_vertical_merges(model_rows: &[Row], rows: &[Vec<CellBox>], heights: &mut [f32]) {
     // Vertically merged cells: grow the last row of the merge if the content is taller.
     for ri in 0..rows.len() {
         let restarts: Vec<(usize, f32, usize)> =
@@ -706,6 +706,13 @@ fn grow_vertical_merges(rows: &[Vec<CellBox>], heights: &mut [f32]) {
             let mut end = ri;
             while rows.get(end + 1).is_some_and(|r| r.iter().any(|c| c.g == g && c.vmerge == VMerge::Continue)) {
                 end += 1;
+            }
+            // Exact rows clip a merged cell's overflow instead of moving following content.
+            if model_rows
+                .get(ri..=end)
+                .is_some_and(|rows| rows.iter().all(|row| row.props.height_rule == HeightRule::Exact && row.props.height.is_some_and(|h| h > 0.0)))
+            {
+                continue;
             }
             let have: f32 = heights.get(ri..=end).map(|s| s.iter().sum()).unwrap_or(0.0);
             if h > have
@@ -771,7 +778,7 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
             if c.vmerge != VMerge::Continue
                 && let Some(f) = c.fill
             {
-                items.push(Placed::Fill { rect, color: f });
+                items.push(Placed::Fill { rect, color: f, source: None });
             }
             // Behind-text frames count towards vertical alignment even without inline content.
             // They do not increase the row's flow height.
@@ -823,6 +830,8 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
                 for it in &mut cell_items {
                     it.turn(tn.turn, ox, oy);
                 }
+            } else if exact {
+                cell_items = fit_exact_cell(cell_items, span_h - c.margins[2], story);
             }
             for mut it in cell_items {
                 it.translate(0.0, dy);
@@ -836,17 +845,17 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
             let (hx0, hx1) = (x0 - half(b.left), x1 + half(b.right));
             let top_vis = c.vmerge != VMerge::Continue;
             if top_vis && let Some(e) = b.top.filter(Border::is_visible) {
-                items.push(Placed::Rule { x0: hx0, y0, x1: hx1, y1: y0, border: e });
+                items.push(Placed::Rule { x0: hx0, y0, x1: hx1, y1: y0, border: e, source: None });
             }
             let last_of_merge = c.vmerge == VMerge::None || !cont.get(ri + 1).is_some_and(|v| v.contains(&c.g));
             if last_of_merge && let Some(e) = b.bottom.filter(Border::is_visible) {
-                items.push(Placed::Rule { x0: hx0, y0: y1, x1: hx1, y1, border: e });
+                items.push(Placed::Rule { x0: hx0, y0: y1, x1: hx1, y1, border: e, source: None });
             }
             if let Some(e) = b.left.filter(Border::is_visible) {
-                items.push(Placed::Rule { x0, y0, x1: x0, y1, border: e });
+                items.push(Placed::Rule { x0, y0, x1: x0, y1, border: e, source: None });
             }
             if let Some(e) = b.right.filter(Border::is_visible) {
-                items.push(Placed::Rule { x0: x1, y0, x1, y1, border: e });
+                items.push(Placed::Rule { x0: x1, y0, x1, y1, border: e, source: None });
             }
             items.push(Placed::Cell {
                 rect: Rect::new(c.x, 0.0, c.w, if c.vmerge == VMerge::Continue { rh } else { span_h }),
@@ -1049,10 +1058,10 @@ pub fn split_row(row: &RowLayout, cut: f32) -> Option<(RowLayout, RowLayout)> {
                 }
                 // Shading and cell areas: the part above the cut stays, the rest moves up with the
                 // continuation (a nested table's cell below the cut moves whole).
-                Placed::Fill { rect, color } => {
+                Placed::Fill { rect, color, source } => {
                     let (above, below) = split_rect(*rect, cut, geo_shift(rect.bottom(), shift));
-                    a.extend(above.map(|rect| Placed::Fill { rect, color: *color }));
-                    b.extend(below.map(|rect| Placed::Fill { rect, color: *color }));
+                    a.extend(above.map(|rect| Placed::Fill { rect, color: *color, source: source.clone() }));
+                    b.extend(below.map(|rect| Placed::Fill { rect, color: *color, source: source.clone() }));
                 }
                 Placed::Cell { rect, covered, table, row: r, cell, story, clip } => {
                     let (above, below) = split_rect(*rect, cut, geo_shift(rect.bottom(), shift));
@@ -1061,28 +1070,35 @@ pub fn split_row(row: &RowLayout, cut: f32) -> Option<(RowLayout, RowLayout)> {
                     a.extend(above.map(cell_at));
                     b.extend(below.map(cell_at));
                 }
-                Placed::Rule { x0, y0, x1, y1, border } => {
+                Placed::Rule { x0, y0, x1, y1, border, source } => {
                     if (y0 - y1).abs() < 0.01 {
                         // Horizontal: the top edge stays, the bottom edge moves; both fragments close.
                         if *y0 <= 0.01 {
                             a.push(it.clone());
-                            b.push(Placed::Rule { x0: *x0, y0: 0.0, x1: *x1, y1: 0.0, border: *border });
+                            b.push(Placed::Rule { x0: *x0, y0: 0.0, x1: *x1, y1: 0.0, border: *border, source: source.clone() });
                         } else if *y0 >= row.height - 0.01 {
-                            a.push(Placed::Rule { x0: *x0, y0: cut, x1: *x1, y1: cut, border: *border });
-                            b.push(Placed::Rule { x0: *x0, y0: y0 - rest, x1: *x1, y1: y1 - rest, border: *border });
+                            a.push(Placed::Rule { x0: *x0, y0: cut, x1: *x1, y1: cut, border: *border, source: source.clone() });
+                            b.push(Placed::Rule { x0: *x0, y0: y0 - rest, x1: *x1, y1: y1 - rest, border: *border, source: source.clone() });
                         } else if *y0 <= cut {
                             a.push(it.clone());
                         } else {
-                            b.push(Placed::Rule { x0: *x0, y0: y0 - shift, x1: *x1, y1: y1 - shift, border: *border });
+                            b.push(Placed::Rule { x0: *x0, y0: y0 - shift, x1: *x1, y1: y1 - shift, border: *border, source: source.clone() });
                         }
                     } else {
                         let (t, bt) = (y0.min(*y1), y0.max(*y1));
                         if t < cut {
-                            a.push(Placed::Rule { x0: *x0, y0: t, x1: *x1, y1: bt.min(cut), border: *border });
+                            a.push(Placed::Rule { x0: *x0, y0: t, x1: *x1, y1: bt.min(cut), border: *border, source: source.clone() });
                         }
                         if bt > cut {
                             let shift = geo_shift(bt, shift);
-                            b.push(Placed::Rule { x0: *x0, y0: (t - shift).max(0.0), x1: *x1, y1: bt - shift, border: *border });
+                            b.push(Placed::Rule {
+                                x0: *x0,
+                                y0: (t - shift).max(0.0),
+                                x1: *x1,
+                                y1: bt - shift,
+                                border: *border,
+                                source: source.clone(),
+                            });
                         }
                     }
                 }

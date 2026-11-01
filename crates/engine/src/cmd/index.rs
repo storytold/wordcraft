@@ -190,7 +190,7 @@ fn collect(s: &mut Session, lang: Option<&str>) -> BTreeMap<Vec<SortKey>, Node> 
         }
     }
     let l = s.layout();
-    let page = |pos: &Pos| l.caret(pos).and_then(|c| l.pages.get(c.page)).map(|p| p.number).unwrap_or(1);
+    let page = |pos: &Pos| l.page_of(pos).and_then(|page| l.pages.get(page)).map(|p| p.number).unwrap_or(1);
     let bookmark_end = |name: &str| {
         s.doc.para_paths(StoryRef::Body).into_iter().find_map(|path| {
             let p = s.doc.para(StoryRef::Body, &path)?;

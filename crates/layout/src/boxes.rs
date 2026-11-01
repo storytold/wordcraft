@@ -510,53 +510,7 @@ pub(crate) const BOX_INSET_Y: f32 = 3.6;
 /// dropped (whole lines; a line that only partly fits too) and so is anything starting below.
 /// The first line always stays, so even a tiny box shows the start of its text.
 pub(crate) fn fit_box(items: Vec<Placed>, height: f32) -> Vec<Placed> {
-    let limit = height + 0.5;
-    let mut out = Vec::with_capacity(items.len());
-    let mut kept_line = false;
-    for it in items {
-        if let Some(r) = it.turned_bounds() {
-            // Turned text (in a table cell) stays whole.
-            if r.y < limit {
-                out.push(it);
-            }
-            continue;
-        }
-        match it {
-            Placed::Lines { story, path, para, l0, l1, x, y, turn } => {
-                let Some(first) = para.lines.get(l0) else { continue };
-                let mut end = l0;
-                for k in l0..l1 {
-                    let Some(l) = para.lines.get(k) else { break };
-                    if y + (l.top - first.top) + l.height > limit && kept_line {
-                        break;
-                    }
-                    end = k + 1;
-                    kept_line = true;
-                }
-                if end > l0 {
-                    out.push(Placed::Lines { story, path, para, l0, l1: end, x, y, turn });
-                }
-            }
-            Placed::Fill { rect, color } if rect.y < limit => {
-                out.push(Placed::Fill { rect: Rect::new(rect.x, rect.y, rect.w, rect.h.min(limit - rect.y)), color });
-            }
-            Placed::Rule { x0, y0, x1, y1, border } if y0.min(y1) < limit => {
-                out.push(Placed::Rule { x0, y0: y0.min(limit), x1, y1: y1.min(limit), border });
-            }
-            Placed::Image { rect, .. }
-            | Placed::Shape { rect, .. }
-            | Placed::Graphic { rect, .. }
-            | Placed::Clip { rect, .. }
-            | Placed::Cell { rect, .. }
-            | Placed::Object { rect, .. }
-                if rect.y < limit =>
-            {
-                out.push(it);
-            }
-            _ => {}
-        }
-    }
-    out
+    super::fit_lines(items, height, super::LineFit::Complete)
 }
 
 /// Word joins neighbouring paragraphs with the same borders and indents into one box: the top
@@ -623,7 +577,11 @@ pub(crate) fn push_para(
     let (top, bottom) = (y - e.top - e.up, y + h + e.bottom);
     if let Some(c) = pl.rp.shading {
         let pad = pl.rp.borders.as_ref().map(|b| b.left.map(|l| l.space).unwrap_or(4.0)).unwrap_or(0.0);
-        items.push(Placed::Fill { rect: Rect::new(left - pad, top, right - left + pad * 2.0, bottom - top), color: c });
+        items.push(Placed::Fill {
+            rect: Rect::new(left - pad, top, right - left + pad * 2.0, bottom - top),
+            color: c,
+            source: Some((story, Path(path.to_vec()))),
+        });
     }
     items.push(Placed::Lines { story, path: Path(path.to_vec()), para: pl.clone(), l0, l1, x, y, turn: TextDirection::Horizontal });
     if let Some(b) = &pl.rp.borders {
@@ -632,17 +590,17 @@ pub(crate) fn push_para(
         // The top and bottom lines lie beyond their distance from the text.
         if let Some(t) = b.top.filter(|t| e.top > 0.0 && t.is_visible()) {
             let ty = y - t.space - t.width / 2.0;
-            items.push(Placed::Rule { x0: lx, y0: ty, x1: rx, y1: ty, border: t });
+            items.push(Placed::Rule { x0: lx, y0: ty, x1: rx, y1: ty, border: t, source: Some((story, Path(path.to_vec()))) });
         }
         if let Some(t) = b.bottom.filter(|t| e.bottom > 0.0 && t.is_visible()) {
             let by = y + h + t.space + t.width / 2.0;
-            items.push(Placed::Rule { x0: lx, y0: by, x1: rx, y1: by, border: t });
+            items.push(Placed::Rule { x0: lx, y0: by, x1: rx, y1: by, border: t, source: Some((story, Path(path.to_vec()))) });
         }
         if let Some(t) = b.left.filter(Border::is_visible) {
-            items.push(Placed::Rule { x0: lx, y0: top, x1: lx, y1: bottom, border: t });
+            items.push(Placed::Rule { x0: lx, y0: top, x1: lx, y1: bottom, border: t, source: Some((story, Path(path.to_vec()))) });
         }
         if let Some(t) = b.right.filter(Border::is_visible) {
-            items.push(Placed::Rule { x0: rx, y0: top, x1: rx, y1: bottom, border: t });
+            items.push(Placed::Rule { x0: rx, y0: top, x1: rx, y1: bottom, border: t, source: Some((story, Path(path.to_vec()))) });
         }
     }
     y + h

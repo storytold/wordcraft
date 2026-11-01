@@ -96,7 +96,7 @@ pub(crate) fn page_border_rules(s: &SectionProps) -> Vec<Placed> {
         let (x0, x1, y0, y1) = (sp(&b.left), s.page_w - sp(&b.right), sp(&b.top), s.page_h - sp(&b.bottom));
         for (e, a, bb) in [(b.top, (x0, y0), (x1, y0)), (b.bottom, (x0, y1), (x1, y1)), (b.left, (x0, y0), (x0, y1)), (b.right, (x1, y0), (x1, y1))] {
             if let Some(e) = e.filter(Border::is_visible) {
-                v.push(Placed::Rule { x0: a.0, y0: a.1, x1: bb.0, y1: bb.1, border: e });
+                v.push(Placed::Rule { x0: a.0, y0: a.1, x1: bb.0, y1: bb.1, border: e, source: None });
             }
         }
     }
@@ -187,7 +187,7 @@ impl PageBuilder<'_> {
                 None => {
                     let len = if cont { self.sect.text_width() } else { NOTE_SEP_W };
                     let sy = top + NOTE_SEP / 2.0;
-                    pg.items.push(Placed::Rule { x0: x, y0: sy, x1: x + len, y1: sy, border: Border::single(0.5) });
+                    pg.items.push(Placed::Rule { x0: x, y0: sy, x1: x + len, y1: sy, border: Border::single(0.5), source: None });
                 }
             }
             for (n, ny) in placed {
@@ -309,7 +309,7 @@ impl PageBuilder<'_> {
                         // Midway across the space between neighbours (leftwards in an RTL section).
                         let mid = if bx >= ax { (ax + aw + bx) / 2.0 } else { (bx + bw + ax) / 2.0 };
                         let x = s.margin_left + s.gutter + mid;
-                        decor.push(Placed::Rule { x0: x, y0: body_top, x1: x, y1: bottom, border: Border::single(0.5) });
+                        decor.push(Placed::Rule { x0: x, y0: body_top, x1: x, y1: bottom, border: Border::single(0.5), source: None });
                     }
                 }
             }
@@ -453,7 +453,7 @@ pub(crate) fn foot_top_for(ctx: &mut Ctx, sect: &SectionProps, footer: Option<u3
     laid.items
         .iter()
         .filter_map(|item| match item {
-            Placed::Rule { x0, x1, y0, y1, border }
+            Placed::Rule { x0, x1, y0, y1, border, .. }
                 if border.is_visible()
                     && (y0 - y1).abs() < 0.01
                     && flow_cells.iter().any(|r| (r.y - y0).abs() < 0.01 && *x0 <= r.x + 0.01 && *x1 >= r.right() - 0.01) =>
