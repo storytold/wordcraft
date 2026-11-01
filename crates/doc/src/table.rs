@@ -211,6 +211,7 @@ impl Table {
         }
         let mut row = Row { props: src.props.clone(), cells: Vec::with_capacity(src.cells.len()), controls: ControlWrap::default() };
         row.props.header = false;
+        row.props.del = None;
         for c in &src.cells {
             let mut nc = Cell::empty();
             nc.props = c.props.clone();
@@ -729,8 +730,10 @@ mod tests {
     #[test]
     fn row_col_ops() {
         let mut t = Table::new(2, 2, 200.0);
+        t.rows[0].props.del = Some(1);
         t.insert_row(1, 0);
         assert_eq!(t.rows.len(), 3);
+        assert_eq!(t.rows[1].props.del, None);
         t.insert_col(1);
         assert_eq!(t.cols(), 3);
         assert!(t.rows.iter().all(|r| r.cells.len() == 3));

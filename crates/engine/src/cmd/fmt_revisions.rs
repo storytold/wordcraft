@@ -186,7 +186,7 @@ fn strip_table(t: &TableProps) -> TableProps {
     TableProps { fmt_change: None, ..t.clone() }
 }
 fn strip_row(r: &RowProps) -> RowProps {
-    RowProps { fmt_change: None, ..r.clone() }
+    RowProps { fmt_change: None, del: None, ..r.clone() }
 }
 fn strip_cell(c: &CellProps) -> CellProps {
     CellProps { fmt_change: None, span: 0, vmerge: VMerge::None, ..c.clone() }
@@ -339,6 +339,25 @@ pub fn resolve_containers(blocks: &mut Blocks, accept: bool, depth: usize) {
                         resolve_containers(&mut c.blocks, accept, depth + 1);
                     }
                 }
+                resolve_deleted_rows(t, accept);
+            }
+        }
+    }
+    // A table whose every row was accepted as deleted goes; a container keeps a paragraph.
+    blocks.retain(|b| !matches!(&**b, Block::Table(t) if t.rows.is_empty()));
+    if blocks.is_empty() {
+        blocks.push(Arc::new(Block::Para(Default::default())));
+    }
+}
+
+/// Accept (remove) or reject (keep) every row marked as a tracked deletion.
+pub fn resolve_deleted_rows(t: &mut Table, accept: bool) {
+    for r in (0..t.rows.len()).rev() {
+        if t.rows.get(r).is_some_and(|row| row.props.del.is_some()) {
+            if accept {
+                t.delete_row(r);
+            } else if let Some(row) = t.rows.get_mut(r) {
+                row.props.del = None;
             }
         }
     }
@@ -384,7 +403,7 @@ pub fn table_diff(t: &TableProps) -> Vec<Value> {
 pub fn row_diff(r: &RowProps) -> Vec<Value> {
     r.fmt_change
         .as_ref()
-        .map(|ch| diff(&RowProps { fmt_change: None, ..ch.old.clone() }, &RowProps { fmt_change: None, ..r.clone() }))
+        .map(|ch| diff(&RowProps { fmt_change: None, del: None, ..ch.old.clone() }, &RowProps { fmt_change: None, del: None, ..r.clone() }))
         .unwrap_or_default()
 }
 pub fn cell_diff(c: &CellProps) -> Vec<Value> {

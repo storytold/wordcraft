@@ -242,6 +242,10 @@ pub struct RowProps {
     /// Tracked formatting change (`w:trPrChange`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fmt_change: Option<Box<PropChange<RowProps>>>,
+    /// Tracked deletion of the whole row (`w:del` in `w:trPr`): an index into the document's
+    /// revisions. The row's text carries its own deletions; accepting removes the row.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub del: Option<u32>,
 }
 
 fn is_zero(v: &u32) -> bool {
