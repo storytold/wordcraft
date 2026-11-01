@@ -147,7 +147,9 @@ fn complex_script_direct_properties_leave_latin_defaults_inherited() {
 #[test]
 fn complex_script_runs_take_bold_and_italic_only_from_bcs_and_ics() {
     // Word draws Thai marked `w:cs` with `<w:b/><w:i/>` and no `w:bCs`/`w:iCs` neither bold nor
-    // italic, through a style too; a run not marked `w:cs` still borrows the Latin values.
+    // italic, through a style too; a run not marked `w:cs`, as older writers leave Hebrew, still
+    // borrows the Latin values (Word draws such Hebrew bold). The Latin text of every run keeps
+    // `w:b` and `w:i`. Measured in Word for Windows.
     let styles = r#"
 <w:style w:type="paragraph" w:styleId="LatinBold"><w:name w:val="LatinBold"/><w:rPr><w:b/><w:i/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="BothBold"><w:name w:val="BothBold"/><w:rPr><w:bCs/><w:iCs/></w:rPr></w:style>"#;
@@ -164,6 +166,8 @@ fn complex_script_runs_take_bold_and_italic_only_from_bcs_and_ics() {
             let c = d.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props);
             let cs = c.complex();
             assert_eq!((cs.bold, cs.italic), (complex, complex), "{run} {style}");
+            let latin = run.contains("<w:b/>") || style.contains("LatinBold");
+            assert_eq!((c.bold, c.italic), (latin, latin), "Latin text: {run} {style}");
         });
     }
 }
