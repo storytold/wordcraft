@@ -462,6 +462,20 @@ mod tests {
         hyphenate_word(w, &Limits::default())
     }
 
+    /// Nepali and Hindi have no hyphenation data: their words (whose viramas and nuktas aren't
+    /// letters to Unicode) are never broken, in a Nepali run or under any other language, so no
+    /// hyphen lands inside a conjunct (क्ष) or between a consonant and its vowel sign.
+    #[test]
+    fn devanagari_words_are_not_hyphenated() {
+        let lim = Limits { min_word: 2, after_first: 1, before_last: 1, capitalized: true };
+        for w in ["क्षेत्रहरूमा", "विश्वविद्यालयको", "प्रतिनिधिसभा", "ज़िम्मेदारी", "राष्ट्रपति"]
+        {
+            for lang in [ProofLang::Other, ProofLang::En, ProofLang::Pl, ProofLang::from_tag(Some("ne-NP"))] {
+                assert_eq!(hyphen_points_in(w, &lim, lang), Vec::<usize>::new(), "{w} in {lang:?}");
+            }
+        }
+    }
+
     #[test]
     fn bundled_data_loads() {
         assert!(Dictionary::en_us().len() > 150_000, "{}", Dictionary::en_us().len());

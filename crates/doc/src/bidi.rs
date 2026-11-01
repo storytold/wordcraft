@@ -24,12 +24,22 @@ pub fn is_complex_script(c: char) -> bool {
 
 /// A character that belongs to a word for word selection and Ctrl+arrow movement: letters,
 /// digits, `_` and `'`, plus what sits inside Persian and Arabic words: the zero-width non-joiner
-/// (نیم‌فاصله, as in «می‌خواهم»), the zero-width joiner, tatweel and the Arabic combining marks.
+/// (نیم‌فاصله, as in «می‌خواهم»), the zero-width joiner, tatweel and the Arabic combining marks;
+/// and the signs of the Indic scripts ([`is_indic_word_sign`]).
 pub fn is_word_char(c: char) -> bool {
     c.is_alphanumeric()
         || c == '_'
         || c == '\''
         || matches!(u32::from(c), 0x200C | 0x200D | 0x0640 | 0x0610..=0x061A | 0x064B..=0x065F | 0x0670 | 0x06D6..=0x06DC | 0x06DF..=0x06E8 | 0x06EA..=0x06ED | 0x08D3..=0x08FF | 0x0300..=0x036F)
+        || is_indic_word_sign(c)
+}
+
+/// A character of the Indic blocks (Devanagari … Sinhala, U+0900–U+0DFF) that Unicode doesn't
+/// class as a letter or digit but that sits inside a word: the viramas that form conjuncts
+/// (क्ष), the nuktas (ज़), the Vedic accents, and the scripts' few signs and symbols. Only their
+/// punctuation (the danda ।, the double danda ॥, the abbreviation signs) separates words.
+fn is_indic_word_sign(c: char) -> bool {
+    matches!(u32::from(c), 0x0900..=0x0DFF) && !matches!(u32::from(c), 0x0964 | 0x0965 | 0x0970 | 0x09FD | 0x0A76 | 0x0AF0 | 0x0C77 | 0x0C84 | 0x0DF4)
 }
 
 /// Does `text` contain a right-to-left character?
@@ -82,5 +92,20 @@ mod tests {
         assert!(!first_strong_is_rtl("Hello سلام"));
         assert!(!first_strong_is_rtl("123 Hello"));
         assert!(!first_strong_is_rtl(""));
+    }
+
+    #[test]
+    fn indic_signs_are_inside_the_word() {
+        // The virama (्) and nukta (़) aren't letters to Unicode, but a Nepali or Hindi word holds
+        // them: क्षेत्र, ज़मीन and the half form क्‍ (ZWJ) are each one word.
+        for w in ["क्षेत्र", "त्रिभुवन", "ज़मीन", "कर्म", "क्\u{200D}ष", "ক্ষমা", "ಕ್ಷೇತ್ರ", "ශ්‍රී"]
+        {
+            assert!(w.chars().all(is_word_char), "{w}");
+        }
+        // The danda and double danda end a sentence, the abbreviation sign follows one.
+        for c in ['।', '॥', '॰', '\u{0DF4}'] {
+            assert!(!is_word_char(c), "{c}");
+        }
+        assert!("१२३".chars().all(is_word_char), "Devanagari digits");
     }
 }
