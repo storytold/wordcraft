@@ -198,7 +198,7 @@ impl Session {
         self.editing_lang = tag;
         let untouched = self.path.is_none() && !self.dirty && self.history.is_empty() && self.redo.is_empty();
         if untouched && self.doc.plain_text(StoryRef::Body).trim().is_empty() && self.doc.paragraph_count() <= 1 {
-            self.doc.styles.default_chr.lang = Some(self.editing_lang.clone().unwrap_or_else(|| "en-US".into()));
+            Arc::make_mut(&mut self.doc.styles).default_chr.lang = Some(self.editing_lang.clone().unwrap_or_else(|| "en-US".into()));
             self.rev = self.rev.wrapping_add(1);
             // Not an edit: the document is as untouched as it was.
             if self.made_rev == self.rev.wrapping_sub(1) {

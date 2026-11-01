@@ -3,6 +3,7 @@ use super::limits::{MAX_ENTRY, MAX_SECTIONS};
 use super::styles::{Styles, column_sep, columns_of};
 use super::xml::{Attrs, Ev, events, get, length, local};
 use super::{Columns, Cursor, Document, FBlock, Flow, HashMap, Meta, Para, Read, SectionProps, model, page_parts};
+use std::sync::Arc;
 
 pub(super) fn read_entry(z: &mut zip::ZipArchive<Cursor<&[u8]>>, name: &str) -> Option<Vec<u8>> {
     let f = z.by_name(name).ok()?;
@@ -163,7 +164,7 @@ pub fn import(bytes: &[u8]) -> Result<Document, String> {
     let (flow, last, track, font, parts) = parse_tracked(bytes)?;
     let mut doc = model::to_doc(&flow);
     if font.is_some() {
-        doc.styles.default_chr.font = font;
+        Arc::make_mut(&mut doc.styles).default_chr.font = font;
     }
     doc.last_section = last;
     page_parts::add(&mut doc, parts);

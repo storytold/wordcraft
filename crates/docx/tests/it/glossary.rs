@@ -4,6 +4,7 @@
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
+use std::sync::Arc;
 
 use wordcraft_doc::{Block, BuildingBlock, CharProps, Document, Paragraph, para_block};
 
@@ -191,7 +192,7 @@ fn glossary_entries_are_read_into_the_model() {
 fn edited_glossary_is_written_from_the_model() {
     let mut doc = wordcraft_docx::read(&with_glossary()).unwrap();
     doc.glossary[0].name = "Sign-off".into();
-    let num = doc.numbering.add_list(wordcraft_doc::ListKind::Bullet);
+    let num = Arc::make_mut(&mut doc.numbering).add_list(wordcraft_doc::ListKind::Bullet);
     let mut listed = Paragraph::with_text("Second line", CharProps::default());
     listed.props.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
     doc.glossary.push(BuildingBlock {

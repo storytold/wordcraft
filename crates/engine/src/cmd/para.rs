@@ -1,6 +1,7 @@
 //! Paragraph formatting, lists and styles (Home › Paragraph, Home › Styles).
 
 use serde_json::{Value, json};
+use std::sync::Arc;
 use wordcraft_doc::collate::{SortKey, sort_key};
 use wordcraft_doc::numbering::ListKind;
 use wordcraft_doc::props::{Align, Border, BorderStyle, Borders, LineSpacing, NumRef, ParaProps, Rgb, TabAlign, TabLeader, TabStop};
@@ -256,7 +257,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("styles.addToGallery", "Add to Style Gallery", "Home › Styles", |s, v| {
             let id = style_id(s, p::req_str(v, "style")?)?;
             let on = p::bool(v, "value").unwrap_or(true);
-            if let Some(st) = s.doc.styles.get_mut(&id) {
+            if let Some(st) = Arc::make_mut(&mut s.doc.styles).get_mut(&id) {
                 st.quick = on;
             }
             sel_result(s)

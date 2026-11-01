@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use serde_json::json;
 use wordcraft_engine::Session;
 
@@ -142,10 +144,10 @@ fn language_dialog_reads_inherited_proofing() {
         a.run("select.all", json!({})).unwrap();
         let proofing = wordcraft_doc::CharProps { lang: Some("en-GB".into()), no_proof: Some(true), ..Default::default() };
         match source {
-            "default" => a.session.doc.styles.default_chr.overlay(&proofing),
-            "paragraph" => a.session.doc.styles.styles.iter_mut().find(|s| s.id == "Normal").unwrap().chr.overlay(&proofing),
+            "default" => Arc::make_mut(&mut a.session.doc.styles).default_chr.overlay(&proofing),
+            "paragraph" => Arc::make_mut(&mut a.session.doc.styles).styles.iter_mut().find(|s| s.id == "Normal").unwrap().chr.overlay(&proofing),
             _ => {
-                a.session.doc.styles.styles.push(wordcraft_doc::Style {
+                Arc::make_mut(&mut a.session.doc.styles).styles.push(wordcraft_doc::Style {
                     id: "ProofingCharacter".into(),
                     kind: wordcraft_doc::StyleKind::Character,
                     chr: proofing,
@@ -170,7 +172,7 @@ fn language_dialog_ok_keeps_inherited_proofing() {
     use egui_kittest::kittest::Queryable;
     let mut a = app();
     a.run("ui.language", json!({"value": "en"})).unwrap();
-    let normal = a.session.doc.styles.styles.iter_mut().find(|s| s.id == "Normal").unwrap();
+    let normal = Arc::make_mut(&mut a.session.doc.styles).styles.iter_mut().find(|s| s.id == "Normal").unwrap();
     normal.chr.lang = Some("en-GB".into());
     normal.chr.no_proof = Some(true);
     a.run("select.all", json!({})).unwrap();

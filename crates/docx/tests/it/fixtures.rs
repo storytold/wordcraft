@@ -1,6 +1,7 @@
 //! Hand-written minimal WordprocessingML fixtures (written for these tests from the spec).
 
 use std::io::Write;
+use std::sync::Arc;
 
 use wordcraft_doc::fill::Fill;
 use wordcraft_doc::para::{Anchor, FloatAlign, NoteKind, ShapeKind, Wrap};
@@ -182,7 +183,7 @@ fn omitted_paragraph_defaults_can_be_edited() {
         format!(r#"<w:styles {W_NS}><w:style w:type="paragraph" w:styleId="Normal" w:default="1"><w:name w:val="Normal"/></w:style></w:styles>"#);
     let mut d = wordcraft_docx::read(&docx("<w:p/>", &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &styles)])).unwrap();
     assert!(!d.styles.default_para_present);
-    d.styles.default_para.space_after = Some(12.0);
+    Arc::make_mut(&mut d.styles).default_para.space_after = Some(12.0);
     let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
     assert!(again.styles.default_para_present);
     assert_eq!(again.styles.default_para.space_after, Some(12.0));

@@ -281,7 +281,7 @@ impl<'a> Builder<'a> {
                 level
             })
             .collect();
-        let numbering = &mut self.doc.numbering;
+        let numbering = Arc::make_mut(&mut self.doc.numbering);
         let aid = numbering.abstracts.iter().map(|a| a.id + 1).max().unwrap_or(0);
         numbering.abstracts.push(AbstractNum { id: aid, name: None, levels, ..Default::default() });
         let nid = numbering.nums.iter().map(|n| n.id + 1).max().unwrap_or(1).max(1);
@@ -416,7 +416,7 @@ pub fn to_doc_in(flow: &Flow, section: wordcraft_doc::SectionProps) -> Document 
     doc.numbering = Default::default();
     let uses_code = uses_kind(&flow.blocks, Kind::Code, 0);
     if uses_code {
-        doc.styles.upsert(code_style());
+        Arc::make_mut(&mut doc.styles).upsert(code_style());
     }
     let body = Builder::new(&mut doc).blocks(&flow.blocks, 0);
     doc.body = body;
