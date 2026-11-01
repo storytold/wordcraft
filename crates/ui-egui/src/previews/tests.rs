@@ -101,6 +101,33 @@ fn a_hanging_indent_style_previews_from_the_tile_edge() {
     assert!(last - first > 40, "the first line is cut off by the tile's left edge (ink {first}..{last})");
 }
 
+/// #4944: a right-to-left style's sample is laid out at the right end of its picture, and the
+/// tile showed the left end, so the tile was blank. The tile now shows the end with the text.
+#[test]
+fn a_right_to_left_style_previews_its_sample_text() {
+    let mut style = gallery_style("Right to left");
+    style.para.bidi = Some(true);
+    let (shapes, images) = run_gallery(Document::new(), style);
+    let preview = images.iter().find(|i| (200..300).contains(&i.size[0]) && (20..60).contains(&i.size[1])).expect("the preview is rendered");
+    let [w, h] = preview.size;
+    let inked: Vec<bool> = (0..w).map(|x| (0..h).any(|y| preview.pixels.get(y * w + x).is_some_and(|p| p.a() > 0 && p.r() < 160))).collect();
+    // The part of the picture the tile paints: the preview's mesh uv range.
+    let (u0, u1) = shapes
+        .iter()
+        .find_map(|s| match &s.shape {
+            egui::Shape::Mesh(m) if m.texture_id != egui::TextureId::default() => {
+                let us: Vec<f32> = m.vertices.iter().map(|v| v.uv.x).collect();
+                Some((us.iter().copied().fold(f32::MAX, f32::min), us.iter().copied().fold(f32::MIN, f32::max)))
+            }
+            _ => None,
+        })
+        .expect("the preview is painted");
+    assert!(u0 > 0.0 && (u1 - 1.0).abs() < 1e-3, "the tile shows uv {u0}..{u1}, not the picture's right end");
+    let shown = ((u0 * w as f32) as usize).min(w)..((u1 * w as f32).ceil() as usize).min(w);
+    let ink = inked.get(shown.clone()).map_or(0, |c| c.iter().filter(|&&i| i).count());
+    assert!(ink > 20, "the tile shows columns {shown:?} of the preview, which have {ink} inked columns");
+}
+
 /// #663: gallery previews are dimmed in the dark theme, unless they show Switch Modes' dark
 /// page; the light theme keeps a white page.
 #[test]
