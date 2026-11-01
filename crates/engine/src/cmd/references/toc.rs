@@ -386,6 +386,16 @@ pub(super) fn insert_toc(s: &mut Session, v: &Value) -> CmdResult {
     s.doc.insert_block(StoryRef::Body, &Path::top(i), Block::Para(head))?;
     let leader = leader(p::str(v, "tabLeader").unwrap_or("dot"));
     regenerate_toc(s, Some(leader), &tabs)?;
+    // Like Word, the caret lands in a paragraph right after the table, ready to keep typing —
+    // not inside the table's own title or entries, where typing (or Enter) would corrupt them.
+    if let Some((_, end)) = toc_range(s) {
+        let after = end + 1;
+        let is_para = s.doc.body.get(after).is_some_and(|b| b.as_para().is_some());
+        if !is_para {
+            s.doc.insert_block(StoryRef::Body, &Path::top(after), Block::Para(Paragraph::new()))?;
+        }
+        s.sel = Selection::caret(Pos { story: StoryRef::Body, path: Path::top(after), off: 0 });
+    }
     s.clamp_selection();
     sel_result(s)
 }
