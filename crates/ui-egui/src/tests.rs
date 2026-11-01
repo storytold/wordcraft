@@ -1632,6 +1632,145 @@ fn wheel_notches_land_at_once_with_animation_effects_off() {
     assert!(first > 0.0 && first < notch, "a notch eases in again: {first}");
 }
 
+/// A Ctrl+wheel notch eases in over several frames, each a new size: those pages are drawn
+/// unhinted (they show for a moment, and hinting each size would fill the hint caches), and
+/// the first frame after the zoom stops draws them hinted, as the platform draws text.
+#[test]
+fn an_easing_zoom_draws_unhinted_pages_until_it_stops() {
+    let ctx = egui::Context::default();
+    let system = std::rc::Rc::new(std::cell::Cell::new(Some(true)));
+    let mut a = app_with_system_animations(&system);
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0));
+    let mut t = 0.0;
+    let mut frame = |a: &mut WordApp, events: Vec<egui::Event>| {
+        t += 1.0 / 60.0;
+        let input = egui::RawInput { events, time: Some(t), screen_rect: Some(screen), ..Default::default() };
+        ctx.run_ui(input, |ui| {
+            a.logic(ui.ctx());
+            a.ui(ui);
+        })
+        .drop_without_applying_deltas();
+    };
+    for _ in 0..3 {
+        frame(&mut a, Vec::new());
+    }
+    let platform = crate::canvas::screen_render_options().hinting;
+    assert_eq!(a.canvas.pages_hinted, platform, "at rest");
+    let over_page = a.canvas.canvas_rect.unwrap().center();
+    frame(&mut a, vec![egui::Event::PointerMoved(over_page)]);
+    let wheel = egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Line,
+        source: egui::MouseWheelSource::Unknown,
+        delta: egui::vec2(0.0, 1.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::COMMAND,
+    };
+    let before = a.canvas.scale;
+    frame(&mut a, vec![wheel]);
+    // The wheel's own frame already starts the zoom, unhinted.
+    assert_ne!(a.canvas.scale, before, "the zoom starts in the wheel's frame");
+    assert!(!platform || !a.canvas.pages_hinted, "the wheel's frame is unhinted");
+    let (mut eased, mut unhinted) = (0, 0);
+    let mut last = a.canvas.scale;
+    for _ in 0..60 {
+        frame(&mut a, Vec::new());
+        if a.canvas.scale != last {
+            eased += 1;
+            unhinted += usize::from(!a.canvas.pages_hinted);
+            last = a.canvas.scale;
+        } else {
+            break;
+        }
+    }
+    assert!(a.canvas.scale > before && eased >= 2, "the notch eased in over frames: {eased}");
+    if platform {
+        assert_eq!(unhinted, eased, "every in-between size unhinted");
+    }
+    // The frame after the zoom stops: hinted again, at the size it ended on.
+    frame(&mut a, Vec::new());
+    assert_eq!(a.canvas.scale, last);
+    assert_eq!(a.canvas.pages_hinted, platform, "hinted once the zoom stops");
+}
+
+/// A pointer zoom stretches the pages' last rasters rather than rendering each in-between
+/// size: a notch (22 %) renders nothing until it stops, then the page once; a long zoom renders
+/// again only when a raster would be stretched past half again its size. A zoom that isn't a
+/// gesture (View › Zoom) renders at once.
+#[test]
+fn a_pointer_zoom_stretches_pages_until_it_stops() {
+    let ctx = egui::Context::default();
+    let system = std::rc::Rc::new(std::cell::Cell::new(Some(true)));
+    let mut a = app_with_system_animations(&system);
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0));
+    let mut t = 0.0;
+    let mut frame = |a: &mut WordApp, events: Vec<egui::Event>| {
+        t += 1.0 / 60.0;
+        // A GPU's texture size, as on desktops: at egui's 2048 default the zoomed page would
+        // be drawn in tiles (for very long Web Layout pages), which this isn't about.
+        let input = egui::RawInput { events, time: Some(t), screen_rect: Some(screen), max_texture_side: Some(8192), ..Default::default() };
+        ctx.run_ui(input, |ui| {
+            a.logic(ui.ctx());
+            a.ui(ui);
+        })
+        .drop_without_applying_deltas();
+    };
+    for _ in 0..3 {
+        frame(&mut a, Vec::new());
+    }
+    let over_page = a.canvas.canvas_rect.unwrap().center();
+    frame(&mut a, vec![egui::Event::PointerMoved(over_page)]);
+    let wheel = || egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Line,
+        source: egui::MouseWheelSource::Unknown,
+        delta: egui::vec2(0.0, 1.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::COMMAND,
+    };
+    // Frames until the zoom stops; returns (frames with a new scale, rasters rendered in them,
+    // rasters rendered in the frame it stopped).
+    let ease = |a: &mut WordApp, frame: &mut dyn FnMut(&mut WordApp, Vec<egui::Event>), notches: &[usize]| {
+        let before = a.canvas.rasters;
+        let (mut moving, mut last, mut f) = (0, a.canvas.scale, 0);
+        loop {
+            let ahead = a.canvas.rasters;
+            frame(a, if notches.contains(&f) { vec![wheel()] } else { Vec::new() });
+            f += 1;
+            if a.canvas.scale == last && f > notches.iter().max().copied().unwrap_or(0) {
+                return (moving, ahead - before, a.canvas.rasters - ahead);
+            }
+            moving += usize::from(a.canvas.scale != last);
+            last = a.canvas.scale;
+            assert!(f < 120, "the zoom stops");
+        }
+    };
+    let start = a.canvas.scale;
+    let (moving, while_moving, at_rest) = ease(&mut a, &mut frame, &[0]);
+    assert!(moving >= 3 && a.canvas.scale / start > 1.2, "a notch eases in: {moving} frames");
+    assert_eq!((while_moving, at_rest), (0, 1), "no raster while it moves ({moving} frames), one the frame it stops");
+    // A long zoom (three notches, about 1.8x): rendered again only every half again.
+    let start = a.canvas.scale;
+    let (moving, while_moving, at_rest) = ease(&mut a, &mut frame, &[0, 3, 6]);
+    let rasters = while_moving + at_rest;
+    assert!(a.canvas.scale / start > 1.7, "{}", a.canvas.scale / start);
+    assert!((2..=3).contains(&rasters) && rasters < moving as u64, "{rasters} rasters over {moving} frames");
+    // View › Zoom isn't a gesture: the page is rendered at the new size in that frame.
+    let before = a.canvas.rasters;
+    a.run("view.zoom", json!({"value": 100.0})).unwrap();
+    frame(&mut a, Vec::new());
+    assert_eq!(a.canvas.rasters, before + 1);
+    // Read Mode: the wheel changes the text size and the pages reflow, so a raster of the old
+    // text must not stand in for them: they are rendered as they change.
+    a.run("view.readMode", json!({})).unwrap();
+    for _ in 0..10 {
+        frame(&mut a, Vec::new());
+    }
+    let over_page = a.canvas.canvas_rect.unwrap().center();
+    frame(&mut a, vec![egui::Event::PointerMoved(over_page)]);
+    let (moving, while_moving, _) = ease(&mut a, &mut frame, &[0]);
+    assert!(moving >= 3, "the text size eases in: {moving} frames");
+    assert!(while_moving >= 2, "reflowed pages rendered while it moves: {while_moving} over {moving} frames");
+}
+
 /// With animation effects off a zoom step is finished in its own frame: Ctrl+wheel zooms the
 /// notch's whole step at once, the page is already placed and drawn as it will stay, and the
 /// status bar's zoom readout follows in the very next frame. Turns that arrive in small pieces
@@ -1674,6 +1813,7 @@ fn zoom_steps_land_finished_with_animation_effects_off() {
     frame(&mut a, vec![ctrl_wheel(1.0)]);
     let (scale, pages) = (a.canvas.scale, a.canvas.page_rects.clone());
     assert!((scale / before - notch_zoom).abs() < 1e-3, "the whole notch in its frame: {before} -> {scale}");
+    assert_eq!(a.canvas.pages_hinted, crate::canvas::screen_render_options().hinting, "drawn as it stays: hinted where text is");
     for _ in 0..30 {
         frame(&mut a, Vec::new());
         assert_eq!(a.canvas.scale, scale, "nothing is left to ease in");

@@ -38,6 +38,7 @@ fn kai_contours_include_complete_character_body() {
     }
 }
 
+use super::face::FlipPen;
 use super::*;
 
 #[test]
@@ -90,6 +91,67 @@ fn run_fallback_is_cached_per_char_set() {
     drop(cache);
     db.set_system_fallback(false);
     assert!(db.run_fallbacks.read().unwrap().map.is_empty());
+}
+
+#[test]
+fn screen_hinting_puts_horizontal_edges_on_whole_pixels_and_moves_nothing_sideways() {
+    let db = FontDb::global();
+    let face = db.face(FALLBACK_FAMILY, "Regular");
+    let x = face.glyph_for('x');
+    // 11 pt at 100 % zoom on a 145 % desktop: a fractional size, as on most screens.
+    let ppem = 11.0 * 96.0 / 72.0 * 1.45;
+    let hinted = db.hinted_outline(&face, x, ppem).expect("Source Sans 3 can be hinted");
+    let plain = db.outline(&face, x);
+    let k = f64::from(ppem) / face.upem;
+    let (h, u) = (kurbo::Shape::bounding_box(&*hinted), kurbo::Shape::bounding_box(&*plain));
+    // The x-height (the top, y-down) and the baseline sit on the pixel grid…
+    assert!((h.y0 - h.y0.round()).abs() < 0.02, "x-height at {}", h.y0);
+    assert!((h.y1 - h.y1.round()).abs() < 0.02, "baseline at {}", h.y1);
+    assert!((u.y0 * k - (u.y0 * k).round()).abs() > 0.02, "the unhinted x-height is off the grid: {}", u.y0 * k);
+    // …and the sides stay where the font puts them, so advances and line breaks don't change.
+    assert!((h.x0 - u.x0 * k).abs() < 0.01 && (h.x1 - u.x1 * k).abs() < 0.01, "{h:?} vs {:?}", u.scale_from_origin(k));
+    // Cached per size.
+    assert!(Arc::ptr_eq(&hinted, &db.hinted_outline(&face, x, ppem).expect("cached")));
+}
+
+#[test]
+fn screen_hinting_uses_the_autohinter_even_for_fonts_with_their_own_instructions() {
+    // FreeType's light hinting (`hintslight`, Firefox on Linux) runs its autohinter on
+    // TrueType outlines and ignores their instructions: measured against Firefox, the
+    // instructions drew Arial's rows elsewhere and heavier.
+    let db = FontDb::global();
+    let face = db.face(FALLBACK_FAMILY, "Regular");
+    let font = face.skrifa().unwrap();
+    let outlines = font.outline_glyphs();
+    assert!(outlines.prefer_interpreter(), "Source Sans 3 carries TrueType instructions (ttfautohint)");
+    let ppem = 11.0 * 96.0 / 72.0 * 1.45;
+    let target = Target::Smooth { mode: SmoothMode::Light, symmetric_rendering: true, preserve_linear_metrics: true };
+    let drawn = |engine: Engine, gid: u32| {
+        let h = HintingInstance::new(&outlines, Size::new(ppem), face.location(), HintingOptions { engine, target }).unwrap();
+        let mut pen = FlipPen { path: BezPath::new(), room: usize::MAX, over: false, hinted: true };
+        outlines.get(GlyphId::new(gid)).unwrap().draw(DrawSettings::hinted(&h, false), &mut pen).unwrap();
+        pen.path
+    };
+    let mut differs = false;
+    for c in "Every Thursday".chars().filter(|c| !c.is_whitespace()) {
+        let gid = face.glyph_for(c);
+        let ours = db.hinted_outline(&face, gid, ppem).unwrap();
+        assert_eq!(*ours, drawn(Engine::Auto(None), gid), "{c}: the autohinter's outline");
+        differs |= *ours != drawn(Engine::Interpreter, gid);
+    }
+    assert!(differs, "the font's own instructions would draw it differently");
+}
+
+#[test]
+fn screen_hinting_refuses_hostile_sizes() {
+    let db = FontDb::global();
+    let face = db.face(FALLBACK_FAMILY, "Regular");
+    let x = face.glyph_for('x');
+    for ppem in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -12.0, 0.0, 1.0, 3.99, 96.01, 1e9] {
+        assert!(db.hinted_outline(&face, x, ppem).is_none(), "{ppem}");
+    }
+    // A glyph id past the font's glyphs has no outline to hint.
+    assert!(db.hinted_outline(&face, u32::MAX, 20.0).is_none_or(|o| o.elements().is_empty()));
 }
 
 /// The issue's run (#1549): Thai letters and digits, Latin letters, digits and the baht sign.
