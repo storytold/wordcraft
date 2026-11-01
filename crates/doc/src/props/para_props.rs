@@ -274,6 +274,14 @@ pub struct ParaProps {
     pub space_before: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub space_after: Option<f32>,
+    /// Space before in lines (`w:beforeLines`, stored by Word in hundredths). A non-zero value
+    /// wins over `space_before`; one line is 12 pt, or the line pitch of a document grid with
+    /// lines. `Some(0.0)` cancels an inherited value. Written by WPS Office and East Asian Word.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub space_before_lines: Option<f32>,
+    /// Space after in lines (`w:afterLines`), like `space_before_lines`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub space_after_lines: Option<f32>,
     /// HTML-style automatic space before (`w:beforeAutospacing`): 14 pt, none at the top of the
     /// document or of a table cell, and collapsing with the space after the paragraph above.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -374,7 +382,8 @@ impl ParaProps {
 
     fn overlay_layout(&mut self, patch: &ParaProps) {
         overlay_fields!(self, patch; style, align, indent_left, indent_right, indent_first, indent_left_chars, indent_right_chars, indent_first_chars,
-            space_before, space_after, space_before_auto, space_after_auto, line_spacing, contextual_spacing, mirror_indents, tabs, shading, borders);
+            space_before, space_after, space_before_lines, space_after_lines, space_before_auto, space_after_auto, line_spacing, contextual_spacing, mirror_indents, tabs, shading,
+            borders);
     }
 
     fn overlay_pagination(&mut self, patch: &ParaProps) {

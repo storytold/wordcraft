@@ -99,6 +99,10 @@ fn paragraph_props(p: &Paragraph, env: &ParaEnv) -> ResolvedPara {
     if rp.indent_chars.iter().any(|c| *c != 0.0) {
         rp.set_char_unit(doc.styles.resolve_char_in(p.props.style.as_deref(), env.table.map(|t| &t.chr), &p.mark).size);
     }
+    // Spacing in lines: a line is the section's line pitch when it has a line grid.
+    if rp.space_lines.iter().any(|l| *l != 0.0) {
+        rp.set_line_unit(env.grid.line.unwrap_or(wordcraft_doc::resolve::LINE_UNIT));
+    }
     list_indents(&mut rp, p, env);
     rp
 }
