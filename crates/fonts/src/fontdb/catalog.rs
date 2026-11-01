@@ -45,11 +45,17 @@ impl FontDb {
     }
 
     /// The installed Chinese, Japanese and Korean families (English names), for the Font dialog's
-    /// Asian text font list.
+    /// Asian text font list: as in [`FontDb::families`], each face's legacy family name, and its
+    /// typographic family only when the face is one of its own.
     pub fn east_asian_families(&self) -> Vec<String> {
-        let mut v: Vec<String> = self.read_faces().iter().filter(|f| f.is_east_asian()).map(|f| f.family.clone()).collect();
+        let names = |family: &str, legacy: &str| {
+            let typographic = owns_name(legacy, family).then(|| family.to_string());
+            typographic.into_iter().chain(std::iter::once(legacy.to_string()))
+        };
+        let mut v: Vec<String> = self.read_faces().iter().filter(|f| f.is_east_asian()).flat_map(|f| names(&f.family, &f.legacy_family)).collect();
         #[cfg(not(target_arch = "wasm32"))]
-        v.extend(self.read_catalog().iter().filter(|c| c.east_asian).map(|c| c.family.clone()));
+        v.extend(self.read_catalog().iter().filter(|c| c.east_asian).flat_map(|c| names(&c.family, &c.legacy)));
+        v.retain(|n| !n.is_empty());
         v.sort_by_key(|a| a.to_lowercase());
         v.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
         v

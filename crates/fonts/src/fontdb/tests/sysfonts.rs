@@ -275,6 +275,7 @@ fn a_claimant_hides_the_installed_family_neither_by_localized_name_nor_in_the_pr
     let f = db.face("ทดสอบ", "Regular");
     assert_ne!(f.id(), c.id());
     assert_eq!(f.legacy_family, FAMILY);
+    assert!(db.has_family("ทดสอบ"), "the family it names is installed");
     // The font list previews the face `face` would choose, without loading the family.
     let db = FontDb::with_font_dirs(vec![dir]);
     let c = claimant();
@@ -283,6 +284,52 @@ fn a_claimant_hides_the_installed_family_neither_by_localized_name_nor_in_the_pr
     assert_ne!(p.id(), c.id());
     assert_eq!(p.legacy_family, FAMILY);
     assert!(db.read_faces().iter().all(|f| f.id() == c.id() || f.family != FAMILY), "the preview loads nothing");
+}
+
+#[test]
+fn a_localized_name_only_a_claimant_has_is_a_missing_family() {
+    // The claimant's localized name stands for FAMILY, which no installed face owns: the name is
+    // missing as FAMILY is, and gets the fallback.
+    let mut f = make_face(FontBytes::Static(BUNDLED[0]), 0, FAMILY.into(), "Regular".into(), "Sysfont Other".into(), Vec::new()).unwrap();
+    f.local_names = vec![LocalName { lang: "th".into(), name: "ทดสอบ".into(), english: FAMILY.into() }];
+    let c = Arc::new(f);
+    let db = FontDb::with_font_dirs(vec![]);
+    db.set_system_fallback(false);
+    db.faces.write().unwrap().push(c.clone());
+    assert!(!db.has_family(FAMILY));
+    assert!(!db.has_family("ทดสอบ"), "has_family agrees with face");
+    assert_eq!(db.face("ทดสอบ", "Regular").family, FALLBACK_FAMILY);
+    assert!(db.has_family("Sysfont Other"), "the claimant by its own name");
+}
+
+#[test]
+fn the_asian_font_list_names_a_claimant_by_its_own_name() {
+    // An East Asian face claiming FAMILY lists as itself, as in the main font list, since
+    // `face` and `has_family` treat FAMILY as missing; the family's own faces list as FAMILY.
+    use crate::fontdb::names::CatalogEntry;
+    let db = FontDb::with_font_dirs(vec![]);
+    db.load_system_fonts();
+    let entry = |family: &str, legacy: &str| CatalogEntry {
+        family: family.into(),
+        style: "Regular".into(),
+        legacy: legacy.into(),
+        full_name: None,
+        postscript: None,
+        local: Vec::new(),
+        east_asian: true,
+        path: "cjk.ttf".into(),
+    };
+    db.catalog.write().unwrap().extend([
+        entry(FAMILY, "Sysfont Other"),
+        entry("Sysfont CJK", "Sysfont CJK"),
+        entry("Sysfont CJK", "Sysfont CJK Light"),
+    ]);
+    let list = db.east_asian_families();
+    assert!(!has(&list, FAMILY), "{list:?}");
+    for name in ["Sysfont Other", "Sysfont CJK", "Sysfont CJK Light"] {
+        assert!(has(&list, name), "{name}: {list:?}");
+    }
+    assert_eq!(list.iter().filter(|n| n.eq_ignore_ascii_case("Sysfont CJK")).count(), 1, "{list:?}");
 }
 
 #[test]

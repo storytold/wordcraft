@@ -233,9 +233,12 @@ fn a_font_naming_another_family_as_its_typographic_family_is_not_that_family() {
     assert_eq!(db.face("Test SansPSK", "Regular {wght:500}").legacy_family, "Test SansPSK");
     assert_eq!(db.face("Test SansIT9", "Regular {wght:500}").id(), claimed.id());
     // The style list offers what `face` chooses among: not the impostor's Bold.
-    let styles = db.styles("Test SansPSK");
-    assert!(styles.iter().any(|s| s == "Regular") && styles.iter().any(|s| s == "Light") && !styles.iter().any(|s| s == "Bold"), "{styles:?}");
-    assert!(db.styles("Test SansIT9").iter().any(|s| s == "Bold"));
+    let sorted = |mut v: Vec<String>| {
+        v.sort();
+        v
+    };
+    assert_eq!(sorted(db.styles("Test SansPSK")), ["Light", "Regular"]);
+    assert_eq!(sorted(db.styles("Test SansIT9")), ["Bold", "Regular"]);
     // With no face of its own a family is missing: faces that claim it offer no styles, and its
     // name gets the fallback, as Word substitutes for a missing font (measured in Word for Windows).
     let only = FontDb::with_font_dirs(vec![]);

@@ -151,7 +151,15 @@ impl FontDb {
     /// Is `family` available (loaded, or installed on the system)? English and localized family
     /// names and exact full or PostScript face names count; a face claiming the family only by its
     /// typographic name (see `keep_own_faces`) doesn't, so the family shows as missing, as in Word.
+    /// A localized name counts when the English family it stands for does, as [`FontDb::face`]
+    /// resolves it.
     pub fn has_family(&self, family: &str) -> bool {
+        self.has_own_family(family) || self.english_family(family).is_some_and(|en| self.has_own_family(&en))
+    }
+
+    /// [`FontDb::has_family`] without localized names: a loaded or installed face has `family`
+    /// as its own typographic family, its legacy family name, or its full or PostScript name.
+    fn has_own_family(&self, family: &str) -> bool {
         if self.read_faces().iter().any(|f| f.named(family) && !is_claimant(f, family)) {
             return true;
         }
@@ -164,7 +172,7 @@ impl FontDb {
         }) {
             return true;
         }
-        self.english_family(family).is_some()
+        false
     }
 
     /// Is a face named `family` (typographic, legacy, full or PostScript) loaded?
