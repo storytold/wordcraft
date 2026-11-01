@@ -10,6 +10,9 @@ use serde_json::Value;
 pub enum Class {
     /// Regular layered crate.
     Layer(u8),
+    /// A layered crate that only builds natively (it talks to the network with a blocking HTTP
+    /// stack): left out of the wasm check, and no wasm-built crate may depend on it.
+    Native(u8),
     /// Layer 0, and additionally may depend on no workspace crate at all.
     Standalone,
     /// Test tooling: may depend on anything up to L5 (it sits at L6 for rule
@@ -22,7 +25,7 @@ pub enum Class {
 impl Class {
     fn layer(self) -> Option<u8> {
         match self {
-            Class::Layer(l) => Some(l),
+            Class::Layer(l) | Class::Native(l) => Some(l),
             Class::Standalone => Some(0),
             Class::Testkit => Some(6),
             Class::Exempt => None,
@@ -47,6 +50,8 @@ pub const TABLE: &[(&str, Class)] = &[
     ("pdf", Class::Layer(3)),
     ("engine", Class::Layer(4)),
     ("mcp", Class::Layer(5)),
+    ("assistant", Class::Layer(5)),
+    ("fantastico", Class::Native(5)),
     ("zotero", Class::Layer(5)),
     ("ui-egui", Class::Layer(6)),
     ("testkit", Class::Testkit),
@@ -60,8 +65,19 @@ pub const TABLE: &[(&str, Class)] = &[
 /// Explicit orderings *within* a layer (earlier may be used by later).
 /// The L0 foundation is a small chain: `raster` builds on `color` and
 /// `geom`, which the §3 diagram draws on one line. The GPU backend (`gpu`)
-/// reuses the CPU reference (`compose`) for LUTs and parity tests.
-pub const INTRA_LAYER_ORDER: &[&[&str]] = &[&["doc", "fonts"]];
+/// reuses the CPU reference (`compose`) for LUTs and parity tests. The
+/// assistant offers the MCP tools to its model, and the FANTASTICO provider
+/// brings the assistant its model.
+pub const INTRA_LAYER_ORDER: &[&[&str]] = &[&["doc", "fonts"], &["mcp", "assistant", "fantastico"]];
+
+/// Whether a crate of `class` is built for the web (`cargo xtask wasm`).
+pub fn built_for_wasm(name: &str, class: Class) -> bool {
+    match class {
+        Class::Layer(l) => l <= 5 || short_name(name) == "ui-egui",
+        Class::Standalone => true,
+        Class::Native(_) | Class::Testkit | Class::Exempt => false,
+    }
+}
 
 fn intra_layer_allowed(from: &str, to: &str) -> bool {
     let (from, to) = (short_name(from), short_name(to));
@@ -117,11 +133,33 @@ pub struct Crate {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Violation {
-    Unregistered { krate: String },
-    Upward { krate: String, dep: String, from: u8, to: u8, kind: DepKind },
-    StandaloneHasWorkspaceDep { krate: String, dep: String },
-    TestkitAsNormalDep { krate: String },
-    UiBelowL6 { krate: String, dep: String, layer: u8 },
+    Unregistered {
+        krate: String,
+    },
+    Upward {
+        krate: String,
+        dep: String,
+        from: u8,
+        to: u8,
+        kind: DepKind,
+    },
+    StandaloneHasWorkspaceDep {
+        krate: String,
+        dep: String,
+    },
+    TestkitAsNormalDep {
+        krate: String,
+    },
+    UiBelowL6 {
+        krate: String,
+        dep: String,
+        layer: u8,
+    },
+    /// A crate built for the web depends on a native-only crate.
+    NativeInWasm {
+        krate: String,
+        dep: String,
+    },
 }
 
 impl std::fmt::Display for Violation {
@@ -141,6 +179,9 @@ impl std::fmt::Display for Violation {
             }
             Violation::UiBelowL6 { krate, dep, layer } => {
                 write!(f, "{krate} (L{layer}) depends on UI crate `{dep}`; UI toolkits are only allowed in L6+")
+            }
+            Violation::NativeInWasm { krate, dep } => {
+                write!(f, "{krate} is built for the web but depends on native-only crate {dep}")
             }
         }
     }
@@ -175,6 +216,9 @@ pub fn check(crates: &[Crate]) -> Vec<Violation> {
                     // Unregistered deps are reported on their own entry; testkit dev deps are allowed.
                     None | Some(Class::Testkit) => {}
                     Some(dc) => {
+                        if matches!(dc, Class::Native(_)) && built_for_wasm(&c.name, class) && d.kind != DepKind::Dev {
+                            out.push(Violation::NativeInWasm { krate: c.name.clone(), dep: d.name.clone() });
+                        }
                         let to = dc.layer().unwrap_or(u8::MAX);
                         if to >= layer && !(to == layer && intra_layer_allowed(&c.name, &d.name)) {
                             out.push(Violation::Upward {
@@ -224,6 +268,7 @@ pub fn from_metadata(meta: &Value) -> Result<Vec<Crate>, String> {
 pub fn describe(class: Option<Class>) -> String {
     match class {
         Some(Class::Layer(l)) => format!("L{l}"),
+        Some(Class::Native(l)) => format!("L{l} native"),
         Some(Class::Standalone) => "L0 standalone".into(),
         Some(Class::Testkit) => "testkit".into(),
         Some(Class::Exempt) => "exempt".into(),

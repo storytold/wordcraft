@@ -553,6 +553,28 @@ impl WordApp {
                 self.colors = None;
                 json!({})
             }
+            // GeenioAI, the AI assistant pane (Home › GeenioAI): `value` shows or hides it, none toggles.
+            "ui.assistant" => {
+                let open = p.get("value").and_then(Value::as_bool).unwrap_or(!self.assistant.open);
+                if open {
+                    crate::assistant::open(self);
+                } else {
+                    self.assistant.open = false;
+                }
+                json!({"open": self.assistant.open, "available": self.assistant.available(), "connected": self.assistant.ready()})
+            }
+            // Ask the assistant: the pane opens and `prompt` is sent with the document context
+            // (the selection, or where the caret is). `draft` asks for the answer in the document.
+            "ui.assistant.ask" => {
+                let Some(prompt) = s("prompt").map(str::trim).filter(|t| !t.is_empty()) else { return Some(Err("missing `prompt`".into())) };
+                let draft = p.get("draft").and_then(Value::as_bool).unwrap_or(false);
+                let ctx = self.ctx.clone().unwrap_or_default();
+                crate::assistant::open(self);
+                if let Err(e) = crate::assistant::ask(self, &ctx, prompt, draft) {
+                    return Some(Err(e));
+                }
+                json!({"sent": true})
+            }
             "ui.changePicture" => {
                 let Some(media) = self.selected_picture_media() else {
                     return Some(Err("select a picture first".into()));

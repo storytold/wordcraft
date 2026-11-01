@@ -1,6 +1,6 @@
 use super::common::{mi, mi_text, stack};
 use super::underline::underline_menu;
-use super::{Remember, Stroke, Target, Tokens, Ui, Value, WordApp, big, group, json, menu_button, small, split, vec2};
+use super::{Remember, Stroke, Target, Tokens, Ui, Value, WordApp, big, big_toggle, group, json, menu_button, small, split, vec2};
 
 /// The Format Painter button. A click arms it for one use (blue border only); a double-click keeps
 /// it on across several uses (full checked look), like Word. Esc or another click turns it off.
@@ -352,5 +352,10 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
     });
     group(ui, "Editor", None, app, |ui, app| {
         big(ui, app, "editor", "Editor", "review.spelling", json!({}), false);
+    });
+    // GeenioAI, the AI assistant pane, where Word's Home tab ends with its Copilot button.
+    group(ui, "GeenioAI", None, app, |ui, app| {
+        let open = app.assistant.open;
+        big_toggle(ui, app, "assistant", "GeenioAI", "ui.assistant", open);
     });
 }

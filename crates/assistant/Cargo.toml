@@ -1,0 +1,19 @@
+[package]
+name = "wordcraft-assistant"
+description = "WordCraft assistant: an LLM agent loop that writes and edits through WordCraft's MCP tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+# No network code: the host supplies the model endpoint as a `Provider`.
+[dependencies]
+wordcraft-mcp = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }
+
+[dev-dependencies]
+wordcraft-engine = { workspace = true }
+wordcraft-doc = { workspace = true }

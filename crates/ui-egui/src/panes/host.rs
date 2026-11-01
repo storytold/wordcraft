@@ -151,6 +151,7 @@ fn close(app: &mut WordApp, pane: Pane) {
         Some(id) => {
             let _ = app.run(id, json!({"value": false}));
         }
+        None if pane == Pane::Assistant => app.assistant.open = false,
         None => app.restrict.open = false,
     }
 }

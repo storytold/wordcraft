@@ -1,7 +1,7 @@
 use super::navigation::{page_at, page_to_screen};
 use super::pages::{page_render_options, page_screen_scale};
 use super::story::dims_body;
-use super::{Color32, DocLayout, Hash, Hasher, Pos, Pos2, WordApp};
+use super::{Color32, DocLayout, Hash, Hasher, Pos, Pos2, Rect, WordApp, vec2};
 
 /// Caret position on screen.
 pub fn caret_screen(app: &mut WordApp) -> Option<(Pos2, f32)> {
@@ -15,6 +15,24 @@ pub fn caret_screen(app: &mut WordApp) -> Option<(Pos2, f32)> {
         .and_then(|r| l.pages.get(c.page).map(|page| page_screen_scale(*r, page, app.canvas.scale)))
         .unwrap_or(app.canvas.scale);
     Some((p, c.height.max(c.width) * scale))
+}
+
+/// Where the AI Assistant's margin icon anchors: the screen rect of the caret's line (the
+/// selection's first line when there is one) and the screen x of the page body's left edge
+/// beside it.
+pub fn assistant_anchor(app: &mut WordApp) -> Option<(Rect, f32)> {
+    let l = app.session.layout();
+    let c = l.caret_on(&app.session.sel.focus, app.session.page_hint)?;
+    let body_x = l.pages.get(c.page)?.body.x;
+    let body_left = page_to_screen(app, c.page, body_x, c.top)?.x;
+    let line = match app.canvas.mini_anchor.filter(|_| !app.session.sel.is_collapsed()) {
+        Some(r) => r,
+        None => {
+            let (p, h) = caret_screen(app)?;
+            Rect::from_min_size(p, vec2(1.0, h))
+        }
+    };
+    Some((line, body_left))
 }
 
 pub fn pos_from_screen(app: &mut WordApp, p: Pos2) -> Option<Pos> {

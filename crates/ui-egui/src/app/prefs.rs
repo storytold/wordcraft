@@ -25,6 +25,8 @@ impl WordApp {
         ui.keyboard = self.session.keymap.clone();
         ui.ribbon = self.session.ribbon.clone();
         ui.ink_pens = self.session.view.draw.pens.clone();
+        ui.assistant_language = self.assistant.language.code().into();
+        ui.assistant_model = self.assistant.model.clone().unwrap_or_default();
         ui
     }
 
@@ -81,6 +83,10 @@ impl WordApp {
         self.session.ribbon = std::mem::take(&mut self.ui.ribbon);
         self.session.ribbon.retain_known(&reg);
         self.session.view.draw.pens = std::mem::take(&mut self.ui.ink_pens);
+        // The assistant owns its settings from here on; `prefs` copies them back when saving.
+        // Junk values read as the defaults.
+        self.assistant.set_language(crate::assistant::Language::parse(&self.ui.assistant_language).unwrap_or_default());
+        self.assistant.set_model(Some(std::mem::take(&mut self.ui.assistant_model)));
     }
 
     /// Follow the desktop's light/dark choice while the app runs (Linux, where winit reports no
