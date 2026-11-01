@@ -2719,6 +2719,25 @@ fn a_lines_direction_and_arrowheads_round_trip() {
     }
     // The one drawn from the bottom-left: it starts there and its arrowhead is at the top-right.
     assert_eq!(geometry(&got[1]).0, ((0.0, 30.0), (60.0, 0.0)));
+
+    // Word's `lineInv` runs from the bottom-left to the top-right, and flipped top to bottom it
+    // runs from the top-left: it reads as `line` turned the other way, and is saved as `line`.
+    let inv = String::from_utf8(bytes_of(&bytes, "word/document.xml")).unwrap().replace("prst=\"line\"", "prst=\"lineInv\"");
+    let r = wordcraft_docx::read(&replace_part(&bytes, "word/document.xml", inv.as_bytes())).unwrap();
+    let got = &paras(&r)[0].objects;
+    assert_eq!(geometry(&got[0]).0, ((0.0, 30.0), (60.0, 0.0)), "lineInv: bottom-left to top-right");
+    assert_eq!(geometry(&got[1]).0, ((0.0, 0.0), (60.0, 30.0)), "lineInv with flipV: top-left to bottom-right");
+    let again = String::from_utf8(bytes_of(&wordcraft_docx::write(&r).unwrap(), "word/document.xml")).unwrap();
+    assert_eq!(again.matches("prst=\"line\"").count(), 4, "{again}");
+    assert!(!again.contains("lineInv"), "{again}");
+}
+
+/// The bytes of part `name` in `zip`.
+fn bytes_of(zip: &[u8], name: &str) -> Vec<u8> {
+    let mut pkg = zip::ZipArchive::new(std::io::Cursor::new(zip)).unwrap();
+    let mut out = Vec::new();
+    std::io::Read::read_to_end(&mut pkg.by_name(name).unwrap(), &mut out).unwrap();
+    out
 }
 
 /// WordArt's warp (`a:prstTxWarp` with its adjust value) and connectors glued to shapes
