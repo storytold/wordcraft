@@ -114,8 +114,13 @@ impl ResolvedChar {
             font_cs: c.font_cs.clone().or_else(|| c.font.clone()).unwrap_or_else(|| crate::styles::BODY_FONT.to_string()),
             font_ea: c.font_ea.clone(),
             size_cs: c.size_cs.or(c.size).unwrap_or(crate::props::DEFAULT_FONT_SIZE).clamp(1.0, 1638.0),
-            bold_cs: c.bold_cs.or(c.bold).unwrap_or(false),
-            italic_cs: c.italic_cs.or(c.italic).unwrap_or(false),
+            // A run marked complex script (`w:cs`) is bold and italic only by `w:bCs` and `w:iCs`:
+            // Word draws Thai with `<w:b/><w:cs/>` and no `w:bCs` upright and plain (measured in
+            // Word for Windows). Other runs, including those no DOCX marked, still borrow the
+            // Latin values. The size keeps borrowing `w:sz` until generated styles carry a
+            // `w:szCs` (#4197).
+            bold_cs: c.bold_cs.or(c.bold.filter(|_| c.cs != Some(true))).unwrap_or(false),
+            italic_cs: c.italic_cs.or(c.italic.filter(|_| c.cs != Some(true))).unwrap_or(false),
         }
     }
     /// The formatting complex-script text in this run is drawn with: the complex-script font,
