@@ -440,6 +440,28 @@ fn general_start_up_turns_the_start_screen_off_and_on() {
     assert!(h.state().ui.start_screen, "and on again");
 }
 
+/// File › Options › General › Start-up (#5053): the checkbox is the `ui.updateCheck` setting.
+#[test]
+fn general_start_up_turns_the_update_check_off_and_on() {
+    let mut a = app();
+    a.run("file.options", json!({"pane": "general"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    h.get_by_label("Check for updates when WordCraft starts").click();
+    h.run_steps(4);
+    assert!(!h.state().ui.update_check, "the checkbox turns it off");
+    h.get_by_label("Check for updates when WordCraft starts").click();
+    h.run_steps(4);
+    assert!(h.state().ui.update_check, "and on again");
+}
+
 /// File › Options › Advanced › Editing: the alignment guides checkbox is the
 /// `ui.alignmentGuides` setting.
 #[test]

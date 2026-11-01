@@ -806,6 +806,16 @@ impl WordApp {
                 }
                 json!({"startScreen": self.ui.start_screen})
             }
+            "ui.updateCheck" => {
+                // File › Options › General › Start-up (#5053): `value` true or false turns the
+                // check for a newer release at start-up on or off; no value reads it.
+                match p.get("value") {
+                    None => {}
+                    Some(Value::Bool(on)) => self.ui.update_check = *on,
+                    Some(_) => return Some(Err("`value` must be true or false".into())),
+                }
+                json!({"updateCheck": self.ui.update_check})
+            }
             // Shape Format › Text › Create Link: the next click on an empty text box links the
             // selected box to it (`shape.link` with that box as the target); Esc cancels.
             // Picture Format › Size › Crop: crop mode on the selected picture, or off (`crop`).
@@ -1064,6 +1074,7 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.copyMcpSetup"
             | "ui.caretAnimation"
             | "ui.startScreen"
+            | "ui.updateCheck"
             | "ui.checkForUpdates"
     ) || id.starts_with("help.")
 }

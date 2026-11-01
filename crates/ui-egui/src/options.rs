@@ -207,7 +207,8 @@ fn flag(app: &mut WordApp, ui: &mut Ui, label: &str, key: &str, value: bool) {
 }
 
 /// Draws General options: interface theme and size, mini toolbar, dark page, community button and
-/// default apps; the Start screen; and personalization such as user name and initials.
+/// default apps; the Start screen and the update check; and personalization such as user name and
+/// initials.
 fn general(app: &mut WordApp, ui: &mut Ui) {
     section(ui, "Interface");
     theme_picker(app, ui);
@@ -234,6 +235,17 @@ fn general(app: &mut WordApp, ui: &mut Ui) {
         .changed()
     {
         let _ = app.run("ui.startScreen", json!({"value": start}));
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let mut check = app.ui.update_check;
+        if ui
+            .checkbox(&mut check, tl!("Check for updates when WordCraft starts"))
+            .on_hover_text(tl!("Off: WordCraft doesn't look for new versions by itself. Help › Check for Updates still works."))
+            .changed()
+        {
+            let _ = app.run("ui.updateCheck", json!({"value": check}));
+        }
     }
     ui.add_space(8.0);
     section(ui, "Personalize");

@@ -814,6 +814,33 @@ fn failed_open_with_unsaved_work_names_the_file() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// The update check setting is a UI command, kept between runs, and off it stops only the check
+/// at start (#5053); settings saved before it existed leave it on.
+#[test]
+fn update_check_setting_is_a_ui_command_and_survives_a_restart() {
+    let mut a = app();
+    assert!(!crate::updates_ui::startup_check_due(&a), "only the desktop app asks for the check");
+    a.set_startup_update_check(true);
+    assert!(crate::updates_ui::startup_check_due(&a), "on by default");
+    assert_eq!(a.run("ui.updateCheck", json!({})).unwrap(), json!({"updateCheck": true}), "no value reads it");
+    assert_eq!(a.run("ui.updateCheck", json!({"value": false})).unwrap(), json!({"updateCheck": false}));
+    assert!(!crate::updates_ui::startup_check_due(&a), "off: no check at start");
+    for junk in [json!({"value": "false"}), json!({"value": 0}), json!({"value": null}), json!({"value": [false]})] {
+        assert!(a.run("ui.updateCheck", junk).is_err());
+    }
+    assert!(!a.ui.update_check, "a rejected value keeps the setting");
+    let saved = serde_json::to_string(&a.prefs()).unwrap();
+    assert!(saved.contains(r#""updateCheck":false"#), "{saved}");
+    let mut b = app();
+    b.set_startup_update_check(true);
+    b.apply_prefs(serde_json::from_str(&saved).unwrap());
+    assert!(!b.ui.update_check && !crate::updates_ui::startup_check_due(&b), "settings load after the desktop app asks");
+    a.run("ui.checkForUpdates", json!({})).unwrap();
+    assert!(a.updates_rt.manual_window_open, "Help › Check for Updates still works");
+    let old: UiState = serde_json::from_str(r#"{"tab":"Insert"}"#).unwrap();
+    assert!(old.update_check, "settings from before the option leave it on");
+}
+
 /// The Start screen setting is a UI command, kept between runs; settings saved before it
 /// existed leave it on, and opening saved settings never reopens the Backstage by itself.
 #[test]

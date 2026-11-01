@@ -282,6 +282,7 @@ impl WordApp {
             mini_toolbar: _,
             alignment_guides: _,
             start_screen: _,
+            update_check: _,
             print_backgrounds: _,
             update_fields_before_print: _,
             dictionary: _,
