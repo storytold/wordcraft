@@ -18,6 +18,7 @@ pub(crate) use ime::observe_ime;
 #[cfg(test)]
 use ime::{ImeProof, MAX_IME_COMMIT_BYTES, MAX_IME_PREEDIT_BYTES, classify_ime_proof};
 pub use shortcuts::{combo, global_shortcuts, key_name};
+pub(crate) use shortcuts::{localized_keys_for, localized_resolve, pt_br_word_keys};
 #[cfg(test)]
 use shortcuts::{
     dispatch, is_context_menu_key, is_global_shortcut, is_paste_release, is_paste_special_release, is_shift_delete, paste_release_modifiers,

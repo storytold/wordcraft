@@ -4,7 +4,7 @@ use super::{Rect, Response, Ui, WordApp};
 /// Shortcut text for a command (`⌘B` on macOS, `Ctrl+B` elsewhere): its first key in effect,
 /// custom keys included (Customize Keyboard).
 pub fn shortcut_text(app: &WordApp, id: &str) -> String {
-    let keys = app.session.keymap.keys_for(&app.session.registry, id);
+    let keys = crate::keys::localized_keys_for(&app.session.registry, &app.session.keymap, &app.ui.language, id);
     keys.first().map(|k| key_text(k)).unwrap_or_default()
 }
 

@@ -1233,3 +1233,85 @@ fn typing_with_smart_art_selected_types_into_an_item() {
     let g = wordcraft_engine::cmd::smart_art::selected_smart_art(&a.session).expect("still there");
     assert_eq!(g.items[0].text, "Ada", "one undo step for the typing");
 }
+
+#[test]
+fn pt_br_word_shortcuts_are_localized_without_changing_english() {
+    let reg = wordcraft_engine::cmd::registry();
+    let user = wordcraft_engine::keymap::KeyMap::default();
+    let cases = [
+        ("Mod+N", "format.bold", "file.new"),
+        ("Mod+S", "format.underline", "file.save"),
+        ("Mod+B", "file.save", "format.bold"),
+        ("Mod+O", "file.new", "file.open"),
+        ("Mod+A", "file.open", "select.all"),
+        ("Mod+T", "select.all", "para.hanging"),
+        ("Mod+Q", "para.alignLeft", "para.reset"),
+        ("Mod+L", "edit.find", "para.alignLeft"),
+    ];
+    for (key, brazil, english) in cases {
+        if !cfg!(target_os = "macos") {
+            assert_eq!(localized_resolve(&reg, &user, "pt-br", key).map(|s| s.id), Some(brazil), "pt-BR {key}");
+        }
+        assert_eq!(localized_resolve(&reg, &user, "en", key).map(|s| s.id), user.resolve(&reg, key).map(|s| s.id), "English {key} remains unchanged (normally {english})");
+    }
+    assert_eq!(localized_resolve(&reg, &user, "pt-br", "Mod+C").map(|s| s.id), Some("edit.copy"));
+    assert_eq!(localized_resolve(&reg, &user, "pt-br", "Mod+I").map(|s| s.id), Some("format.italic"));
+}
+
+#[test]
+fn pt_br_word_shortcuts_follow_user_customization_and_tooltips() {
+    let reg = wordcraft_engine::cmd::registry();
+    let mut user = wordcraft_engine::keymap::KeyMap::default();
+    if !cfg!(target_os = "macos") {
+        assert_eq!(localized_keys_for(&reg, &user, "pt-br", "format.bold").first().map(String::as_str), Some("Mod+N"));
+        assert_eq!(localized_keys_for(&reg, &user, "pt-br", "file.save").first().map(String::as_str), Some("Mod+B"));
+        assert!(!localized_keys_for(&reg, &user, "pt-br", "file.new").contains(&"Mod+N".to_string()));
+        user.assigned.insert("Mod+N".into(), "file.new".into());
+        assert_eq!(localized_resolve(&reg, &user, "pt-br", "Mod+N").map(|s| s.id), Some("file.new"));
+        assert!(!localized_keys_for(&reg, &user, "pt-br", "format.bold").contains(&"Mod+N".to_string()));
+        user.assigned.remove("Mod+N");
+        user.removed.insert("Mod+N".into());
+        assert!(localized_resolve(&reg, &user, "pt-br", "Mod+N").is_none());
+    }
+}
+
+#[test]
+fn brazilian_shortcut_removal_is_scoped_to_portuguese() {
+    let reg = wordcraft_engine::cmd::registry();
+    let mut user = wordcraft_engine::keymap::KeyMap::default();
+    assert!(user.remove_for_locale(&reg, "pt-br", "format.bold", "Mod+N").unwrap());
+    assert_eq!(localized_resolve(&reg, &user, "en", "Mod+N").map(|c| c.id), Some("file.new"));
+    if !cfg!(target_os = "macos") {
+        assert!(localized_resolve(&reg, &user, "pt-br", "Mod+N").is_none());
+        assert!(!localized_keys_for(&reg, &user, "pt-br", "format.bold").contains(&"Mod+N".to_string()));
+    }
+    let saved = serde_json::to_string(&user).unwrap();
+    let restored: wordcraft_engine::keymap::KeyMap = serde_json::from_str(&saved).unwrap();
+    assert_eq!(user, restored);
+    assert!(!restored.removed.contains("Mod+N"), "English Ctrl+N remains New");
+    assert!(!user.remove_for_locale(&reg, "pt-br", "format.bold", "Mod+N").unwrap());
+    user.reset();
+    assert!(user.is_empty());
+    if !cfg!(target_os = "macos") {
+        assert_eq!(localized_resolve(&reg, &user, "pt-br", "Mod+N").map(|c| c.id), Some("format.bold"));
+    }
+}
+
+#[test]
+fn pt_br_word_shortcuts_removing_other_assignment_preserves_localized_owner() {
+    let reg = wordcraft_engine::cmd::registry();
+    let mut user = wordcraft_engine::keymap::KeyMap::default();
+    user.assign(&reg, "edit.find", "Mod+N").unwrap();
+    assert_eq!(localized_resolve(&reg, &user, "pt-br", "Mod+N").map(|s| s.id), Some("edit.find"));
+
+    assert!(user.remove_for_locale(&reg, "pt-br", "edit.find", "Mod+N").unwrap());
+    assert!(!user.assigned.contains_key("Mod+N"));
+    assert!(!user.removed_localized.get("pt-br").is_some_and(|keys| keys.contains("Mod+N")));
+
+    // Restoring the English built-in must not leave the pt-BR built-in disabled.
+    user.assign(&reg, "file.new", "Mod+N").unwrap();
+    if !cfg!(target_os = "macos") {
+        assert_eq!(localized_resolve(&reg, &user, "pt-br", "Mod+N").map(|s| s.id), Some("format.bold"));
+    }
+    assert_eq!(localized_resolve(&reg, &user, "en", "Mod+N").map(|s| s.id), Some("file.new"));
+}

@@ -30,7 +30,24 @@ const NAMED: &[&str] =
 pub struct KeyMap {
     pub assigned: BTreeMap<String, String>,
     pub removed: BTreeSet<String>,
+    /// A localized built-in key removed only for that interface locale. Unrelated English
+    /// bindings are unaffected (pt-BR Ctrl+N is Bold; English Ctrl+N is New).
+    #[serde(rename = "removedLocalized", skip_serializing_if = "BTreeMap::is_empty")]
+    pub removed_localized: BTreeMap<String, BTreeSet<String>>,
 }
+
+/// Word for Windows Brazilian Portuguese defaults that differ from the English layout.
+/// Used by both the UI and the locale-aware keyboard customization command.
+pub const PT_BR_WORD_KEYS: &[(&str, &str)] = &[
+    ("Mod+N", "format.bold"),
+    ("Mod+S", "format.underline"),
+    ("Mod+B", "file.save"),
+    ("Mod+O", "file.new"),
+    ("Mod+A", "file.open"),
+    ("Mod+T", "select.all"),
+    ("Mod+Q", "para.alignLeft"),
+    ("Mod+L", "edit.find"),
+];
 
 /// A key in canonical form: modifiers in the order `Mod+Ctrl+Alt+Shift+`, then the key (a single
 /// character upper-cased, a named key, or `F1`–`F24`). `None` when it isn't a key.
@@ -105,18 +122,37 @@ impl KeyMap {
         if let Some(r) = v.get("removed").and_then(Value::as_array) {
             map.removed.extend(r.iter().take(MAX_ENTRIES).filter_map(Value::as_str).filter_map(normalize));
         }
+        if let Some(keys) = v.get("removedLocalized").and_then(Value::as_object)
+            && let Some(br) = keys.get("pt-br").and_then(Value::as_array)
+        {
+            let removed: BTreeSet<_> = br
+                .iter()
+                .take(MAX_ENTRIES)
+                .filter_map(Value::as_str)
+                .filter_map(normalize)
+                .filter(|key| PT_BR_WORD_KEYS.iter().any(|(k, _)| *k == key))
+                .collect();
+            if !removed.is_empty() {
+                map.removed_localized.insert("pt-br".to_string(), removed);
+            }
+        }
         map
     }
 
     /// Whether nothing is customized.
     pub fn is_empty(&self) -> bool {
-        self.assigned.is_empty() && self.removed.is_empty()
+        self.assigned.is_empty() && self.removed.is_empty() && self.removed_localized.values().all(BTreeSet::is_empty)
     }
 
     /// Drop entries for commands that don't exist and removals of keys that aren't built in.
     pub fn retain_known(&mut self, reg: &Registry) {
         self.assigned.retain(|_, id| reg.get(id).is_some());
         self.removed.retain(|k| builtin(reg, k).is_some());
+        self.removed_localized.retain(|locale, keys| {
+            if locale != "pt-br" { return false; }
+            keys.retain(|key| PT_BR_WORD_KEYS.iter().any(|(k, id)| *k == key && reg.get(id).is_some()));
+            !keys.is_empty()
+        });
     }
 
     /// The command a key runs: the user's assignment, else the built-in one unless removed.
@@ -186,6 +222,30 @@ impl KeyMap {
             self.removed.insert(key);
         }
         Ok(true)
+    }
+
+    /// Remove a locale-only built-in without disabling the English command on the same key.
+    /// For unlocalized keys, continue to use the standard global removal path.
+    pub fn remove_for_locale(&mut self, reg: &Registry, locale: &str, id: &str, key: &str) -> Result<bool, String> {
+        let key = normalize(key).ok_or_else(|| format!("`{key}` isn't a key"))?;
+        let Some((_, owner)) = (if locale == "pt-br" { PT_BR_WORD_KEYS } else { &[] })
+            .iter()
+            .find(|(k, _)| *k == key)
+        else {
+            return self.remove(reg, id, &key);
+        };
+        // A custom assignment may own this key instead of the locale's built-in command.
+        if let Some(assigned) = self.assigned.get(&key) {
+            if assigned != id { return Ok(false); }
+            self.assigned.remove(&key);
+            // Removing another custom command must not also remove the
+            // localized built-in that happens to use the same key.
+            if *owner != id { return Ok(true); }
+        } else if *owner != id || self.removed.contains(&key) {
+            return Ok(false);
+        }
+        let removed = self.removed_localized.entry("pt-br".into()).or_default().insert(key);
+        Ok(removed)
     }
 
     /// Back to the built-in keys only.
