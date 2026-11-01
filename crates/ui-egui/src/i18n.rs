@@ -70,7 +70,7 @@ pub struct LangInfo {
 
 /// The languages WordCraft offers, when their catalogs are embedded. English first: it is the
 /// fallback and the source language.
-pub static LANGUAGES: [LangInfo; 27] = [
+pub static LANGUAGES: [LangInfo; 28] = [
     LangInfo { code: "en", prefer_hans: false, editing_lang: None },
     // Simplified Chinese; `zh`, `zh-CN`, `zh-SG` and `zh-Hans-*` resolve here (the crate's matching).
     LangInfo { code: "zh-hans", prefer_hans: true, editing_lang: None },
@@ -126,6 +126,9 @@ pub static LANGUAGES: [LangInfo; 27] = [
     LangInfo { code: "ro", prefer_hans: false, editing_lang: None },
     // Slovenian; `sl`, `sl-SI` and `sl_SI.UTF-8` resolve here.
     LangInfo { code: "sl", prefer_hans: false, editing_lang: None },
+    // Finnish; `fi`, `fi-FI` and `fi_FI.UTF-8` resolve here. No proofing yet, so editing_lang stays
+    // None; the Voikko contribution (#1155) would set it to fi-FI.
+    LangInfo { code: "fi", prefer_hans: false, editing_lang: None },
 ];
 
 /// A language the UI can be shown in: English, or an offered language whose catalogs are embedded.
