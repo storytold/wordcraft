@@ -70,6 +70,10 @@ pub enum ProofLang {
     /// spelling). There is no German dictionary or grammar yet, so, as for [`ProofLang::Other`],
     /// no spelling or grammar marks.
     De,
+    /// Hungarian (`hu`, `hu-HU`): the installed Hunspell dictionary (`hu_HU`, Magyar Ispell, when
+    /// there is one), the Hungarian grammar rules, spelling suggestions, and the installed
+    /// Hungarian hyphenation patterns or else the Hungarian syllable rules.
+    Hu,
     /// A language without proofing tools here (`fr-FR`, `ja-JP`, `x-none`…). Like Word without
     /// the language's proofing tools: no spelling or grammar marks, so its words are never
     /// flagged as English misspellings. Hyphenation keeps using the English patterns, as before
@@ -79,7 +83,7 @@ pub enum ProofLang {
 
 impl ProofLang {
     /// Every language with a spelling dictionary, in display order.
-    pub const PROOFED: [ProofLang; 15] = [
+    pub const PROOFED: [ProofLang; 16] = [
         ProofLang::En,
         ProofLang::EnGb,
         ProofLang::EnCa,
@@ -95,6 +99,7 @@ impl ProofLang {
         ProofLang::EsMx,
         ProofLang::Es419,
         ProofLang::EsUy,
+        ProofLang::Hu,
     ];
 
     /// The proofing language of a BCP 47 tag (`pl-PL`, `en_GB`, `PL`…). The primary subtag
@@ -128,6 +133,8 @@ impl ProofLang {
             ProofLang::spanish(tag)
         } else if ["de", "deu", "ger"].iter().any(|c| primary.eq_ignore_ascii_case(c)) {
             ProofLang::De
+        } else if primary.eq_ignore_ascii_case("hu") || primary.eq_ignore_ascii_case("hun") {
+            ProofLang::Hu
         } else {
             ProofLang::Other
         }
@@ -167,7 +174,7 @@ impl ProofLang {
         matches!(self, ProofLang::Es | ProofLang::EsMx | ProofLang::Es419 | ProofLang::EsUy)
     }
 
-    /// The primary language subtag (`en`, `pl`, `bg`, `tr`, `ru`, `cs`, `id`, `de`, `es`); empty for [`ProofLang::Other`].
+    /// The primary language subtag (`en`, `pl`, `bg`, `tr`, `ru`, `cs`, `id`, `de`, `es`, `hu`); empty for [`ProofLang::Other`].
     pub fn code(self) -> &'static str {
         match self {
             ProofLang::En | ProofLang::EnGb | ProofLang::EnCa => "en",
@@ -182,6 +189,7 @@ impl ProofLang {
             ProofLang::Id => "id",
             ProofLang::Es | ProofLang::EsMx | ProofLang::Es419 | ProofLang::EsUy => "es",
             ProofLang::De => "de",
+            ProofLang::Hu => "hu",
             ProofLang::Other => "",
         }
     }
@@ -335,6 +343,7 @@ mod tests {
         assert_tags(&["de", "de-DE", "de-CH", "DE_at", "deu", "ger"], ProofLang::De);
         assert_tags(&["ru", "ru-RU", "RU-ru", "ru_RU", "ru_RU.UTF-8", " ru-RU ", "rus"], ProofLang::Ru);
         assert!(!ProofLang::De.is_proofed());
+        assert_tags(&["hu", "hu-HU", "HU_hu", "hu_HU.UTF-8", "hun"], ProofLang::Hu);
         assert!(!ProofLang::Bg.is_proofed());
         assert_eq!(ProofLang::Bg.code(), "bg");
         assert!(ProofLang::Pt.is_proofed() && !ProofLang::Other.is_proofed());
@@ -349,6 +358,8 @@ mod tests {
         assert!(ProofLang::Hr.is_proofed());
         assert_eq!(ProofLang::Hr.code(), "hr");
         assert_eq!(ProofLang::Tr.code(), "tr");
+        assert!(ProofLang::Hu.is_proofed());
+        assert_eq!(ProofLang::Hu.code(), "hu");
         assert!(ProofLang::PROOFED.contains(&ProofLang::Pt), "every proofed language is listed");
         assert_eq!(ProofLang::from_tag(None), ProofLang::En);
         assert_eq!(ProofLang::from_tag(Some("")), ProofLang::En);
@@ -358,7 +369,7 @@ mod tests {
 
     #[test]
     fn tags_reject_unknown_or_partial_language_codes() {
-        assert_tags(&["fr-FR", "dex", "x-none", "ja-JP", "plx", "bgx", "trx", "csx", "idx", "inx", "esx", "spax", "e", "-"], ProofLang::Other);
+        assert_tags(&["fr-FR", "dex", "x-none", "ja-JP", "plx", "bgx", "trx", "csx", "idx", "inx", "esx", "spax", "hux", "e", "-"], ProofLang::Other);
     }
 
     /// #3360, #3553: Spanish is proofed, by region: Spain (and no region), Mexico, Uruguay, and

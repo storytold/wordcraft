@@ -142,6 +142,13 @@ fn core_breaks(core: &[char], lang: ProofLang) -> (Vec<usize>, Source) {
     if lang == ProofLang::Tr && core.iter().all(|&c| crate::tr::hyphen::is_letter(c)) {
         return (crate::tr::hyphen::points(core), Source::Rules);
     }
+    // Hungarian: the installed patterns, else the Hungarian syllable rules; words in another
+    // alphabet fall through to the English ones.
+    if lang == ProofLang::Hu
+        && let Some((points, from_patterns)) = crate::hu::hyphen::points(core)
+    {
+        return (points, if from_patterns { Source::Patterns } else { Source::Rules });
+    }
     match lang {
         ProofLang::Pt => return core_breaks_patterns(Patterns::pt(), core),
         ProofLang::It => return core_breaks_patterns(Patterns::it(), core),
