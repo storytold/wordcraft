@@ -26,7 +26,8 @@ pub use combo::{
 use combo::{Row, highlight_row, section_row, section_rows};
 pub use groups::{command_icon, command_menu, customize_menu_items, group, group_titled, row};
 pub use icon_buttons::{
-    dialog_tabs, icon_button, icon_menu_item, icon_only_button, icon_text_button, icon_text_button_width, icon_text_menu_button, primary_button,
+    dialog_tabs, dialog_tabs_within, icon_button, icon_menu_item, icon_only_button, icon_text_button, icon_text_button_width, icon_text_menu_button,
+    primary_button,
 };
 #[cfg(test)]
 use tooltip::show_hint;
