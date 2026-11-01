@@ -49,6 +49,19 @@ jobs:
       - name: Check out craft-i18n
         uses: storytold/craft-common-actions/actions/checkout-craft-i18n@main
 
+      # The catalogs include CJK interface languages, so the UI tests need the suite's fonts, as in
+      # the gate (same commit as ci.yml and release.yml).
+      - name: Check out craft-fonts
+        uses: storytold/craft-common-actions/actions/checkout-craft-fonts@main
+        with:
+          ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+
+      - name: Build with craft-fonts
+        shell: bash
+        run: |
+          echo "CRAFT_FONTS_DIR=$GITHUB_WORKSPACE/craft-fonts" >> "$GITHUB_ENV"
+          echo "CRAFT_FONTS_REQUIRED=1" >> "$GITHUB_ENV"
+
       - name: Install Linux build and software-rendering dependencies
         if: runner.os == 'Linux'
         run: |
