@@ -777,19 +777,29 @@ impl Scan {
                 }
                 self.x += w;
             }
-            _ => self.pending_tab = Some((j, stop, self.x)),
+            _ => {
+                // Its room grows from nothing with its text (a tab moved on from the line before
+                // may still hold the width it had there).
+                if let Some(c) = pl.clusters.get_mut(j) {
+                    c.adv = 0.0;
+                }
+                self.pending_tab = Some((j, stop, self.x));
+            }
         }
         if stop.leader != TabLeader::None {
             self.leaders.push((j, stop.leader));
         }
     }
 
-    /// Whether text after a right/centre tab grows leftwards into the tab's space first.
+    /// Whether text after a right/centre tab grows leftwards into the tab's space first. Up to a
+    /// right or decimal stop it fits even past the right indent (Word: a TOC entry whose text ends
+    /// less than a digit short of the indent keeps its page number on its line when the stop is
+    /// at the margin); unshifted, the text after the tab ends at `x - room`.
     fn absorbs(&self, pl: &ParaLayout, advance: f32) -> bool {
         self.pending_tab.is_some_and(|(tj, stop, _)| {
             let room = pl.clusters.get(tj).map(|t| t.adv).unwrap_or(0.0);
             match stop.align {
-                TabAlign::Right | TabAlign::Decimal => room >= advance,
+                TabAlign::Right | TabAlign::Decimal => room >= advance || self.x - room + advance <= stop.pos + 0.01,
                 TabAlign::Center => room >= advance / 2.0 && self.x + advance / 2.0 <= self.right_edge + 0.01,
                 _ => false,
             }
@@ -842,7 +852,9 @@ impl Scan {
     /// Text after a decimal/centre/right tab shifts as it grows.
     fn shift_pending_tab(&mut self, pl: &mut ParaLayout) {
         let Some((tj, stop, tx)) = self.pending_tab else { return };
-        let seg_w = self.x - tx;
+        // `x` includes the room the tab has so far.
+        let old = pl.clusters.get(tj).map(|c| c.adv).unwrap_or(0.0);
+        let seg_w = self.x - tx - old;
         let shift = match stop.align {
             TabAlign::Right => stop.pos - tx - seg_w,
             TabAlign::Center => stop.pos - tx - seg_w / 2.0,
@@ -851,7 +863,6 @@ impl Scan {
             _ => 0.0,
         };
         let shift = shift.max(0.0);
-        let old = pl.clusters.get(tj).map(|c| c.adv).unwrap_or(0.0);
         if (shift - old).abs() > 0.001 {
             let delta = shift - old;
             if let Some(c) = pl.clusters.get_mut(tj) {
