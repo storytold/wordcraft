@@ -91,7 +91,7 @@ pub fn is_combining(c: char) -> bool {
 }
 
 /// Characters that end an operand.
-fn is_boundary(c: char) -> bool {
+pub(crate) fn is_boundary(c: char) -> bool {
     matches!(c, ' ' | '&' | '@' | '#' | '▒' | '│' | '/' | '⁄' | '∕' | '¦' | '\u{2061}')
         || is_closer(c)
         || matches!(math_class(c), MClass::Bin | MClass::Rel | MClass::Punct)
