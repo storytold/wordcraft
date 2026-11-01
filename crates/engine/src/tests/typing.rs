@@ -493,6 +493,136 @@ fn autocorrect_replacement_list_follows_the_texts_language() {
     assert_eq!(s.doc.plain_text(StoryRef::Body), "So I think ");
 }
 
+/// A session whose document is written in `lang` (Review › Language, as default).
+fn in_lang(lang: &str) -> Session {
+    let mut s = s();
+    run(&mut s, "review.language", json!({"lang": lang, "default": true}));
+    s
+}
+
+/// #735: smart quotes follow the text's language. German „…“ and ‚…‘ (Germany and Austria),
+/// Swiss «…» and ‹…›; an apostrophe after a letter stays ’; English is unchanged.
+#[test]
+fn smart_quotes_follow_the_texts_language() {
+    for lang in ["de-DE", "de-AT", "de"] {
+        let mut s = in_lang(lang);
+        typ(&mut s, "Er sagte \"Hallo\" und 'tschüss', geht's? ");
+        assert_eq!(s.doc.plain_text(StoryRef::Body), "Er sagte „Hallo“ und ‚tschüss‘, geht’s? ", "{lang}");
+    }
+    let mut s = in_lang("de-CH");
+    typ(&mut s, "Er sagte \"Grüezi\" und 'tschau', gäll's? ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Er sagte «Grüezi» und ‹tschau›, gäll’s? ");
+    // Nested quotes: German ‘ closes the inner quote, so the " after it closes the outer one.
+    let mut s = in_lang("de-DE");
+    typ(&mut s, "\"Er sagte 'Hallo'\" ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "„Er sagte ‚Hallo‘“ ");
+    let mut s = in_lang("de-CH");
+    typ(&mut s, "\"Er sagte 'Grüezi'\" ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "«Er sagte ‹Grüezi›» ");
+    // A script subtag doesn't hide the region: de-Latn-CH is Swiss.
+    let mut s = in_lang("de-Latn-CH");
+    typ(&mut s, "\"Grüezi\" ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "«Grüezi» ");
+    // English text keeps “…” and ‘…’, also with the apostrophe rule.
+    let mut s = in_lang("en-GB");
+    typ(&mut s, "she said \"hi\" and 'bye', don't ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "She said “hi” and ‘bye’, don’t ");
+    // A German word inside an English document: the run's language counts.
+    let mut s = self::s();
+    typ(&mut s, "Er sagte");
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "review.language", json!({"lang": "de-DE"}));
+    run(&mut s, "caret.docEnd", json!({}));
+    typ(&mut s, " \"ja\" ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Er sagte „ja“ ");
+    // German set at the caret after English text: the next quote is already German.
+    let mut s = in_lang("en-US");
+    typ(&mut s, "Hello ");
+    run(&mut s, "review.language", json!({"lang": "de-DE"}));
+    typ(&mut s, "\"ja\" ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Hello „ja“ ");
+    // English ‘bye’ earlier in the paragraph doesn't close a German ‚ typed after it.
+    let mut s = in_lang("en-US");
+    typ(&mut s, "Say 'bye' ");
+    run(&mut s, "review.language", json!({"lang": "de-DE"}));
+    typ(&mut s, "'hallo' ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Say ‘bye’ ‚hallo‘ ");
+    // An apostrophe inside single quotes: the ‘ after geht becomes ’ once the s follows.
+    for (typed, want) in [("'geht's' ", "‚Geht’s‘ "), ("'Wie geht's?' ", "‚Wie geht’s?‘ "), ("\"Sie sagte 'geht's'\" ", "„Sie sagte ‚geht’s‘“ ")]
+    {
+        let mut s = in_lang("de-DE");
+        typ(&mut s, typed);
+        assert_eq!(s.doc.plain_text(StoryRef::Body), want, "{typed}");
+    }
+    let mut s = in_lang("de-CH");
+    typ(&mut s, "'Wie gäll's?' ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "‹Wie gäll’s?› ");
+    // A German interface writes German: untagged text follows the editing language.
+    let mut s = self::s();
+    s.editing_lang = Some("de-DE".into());
+    s.doc.styles.default_chr.lang = None;
+    typ(&mut s, "\"Ja\" ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "„Ja“ ");
+}
+
+/// #735: German abbreviations and ordinal numbers don't end a sentence, so the next word keeps
+/// its lowercase letter; a real sentence end still capitalises. English keeps its own list.
+#[test]
+fn german_abbreviations_and_ordinals_dont_end_sentences() {
+    let mut s = in_lang("de-DE");
+    typ(&mut s, "das gilt z.B. für alle, vgl. dazu Abs. drei bzw. vier. am 3. oktober ggf. mehr. ende ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Das gilt z.B. für alle, vgl. dazu Abs. drei bzw. vier. Am 3. oktober ggf. mehr. Ende ");
+    // A sentence ending inside German or Swiss quotes still ends: the next word is capitalised.
+    let mut s = in_lang("de-DE");
+    typ(&mut s, "er rief „Hallo.“ danach ‚ging‘ er. dann ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Er rief „Hallo.“ Danach ‚ging‘ er. Dann ");
+    let mut s = in_lang("de-CH");
+    typ(&mut s, "er rief «Hallo.» danach ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Er rief «Hallo.» Danach ");
+    // A German exception the user deleted no longer stops the capital.
+    let mut s = in_lang("de-DE");
+    run(&mut s, "tools.autocorrect", json!({"deleteException": "bzw."}));
+    typ(&mut s, "drei bzw. vier ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Drei bzw. Vier ");
+    // English text: a number's full stop still ends a sentence.
+    let mut s = in_lang("en-US");
+    typ(&mut s, "we won 3. then it ended ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "We won 3. Then it ended ");
+}
+
+/// #735: a German sentence that starts with a quote is capitalised at its first letter, TWo INitial
+/// CApitals is corrected inside German and Swiss quotes, and empty quotes close.
+#[test]
+fn german_quotes_capitalise_and_fix_two_initial_capitals() {
+    let mut s = in_lang("de-DE");
+    typ(&mut s, "\"hallo welt\", sagte er. \"nein\" ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "„Hallo welt“, sagte er. „Nein“ ");
+    let mut s = in_lang("de-CH");
+    typ(&mut s, "\"grüezi\" ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "«Grüezi» ");
+    // English keeps its quoted first word as typed (not yet compared with Word).
+    let mut s = in_lang("en-US");
+    typ(&mut s, "\"hello\" ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "“hello” ");
+    // Mid-sentence a quoted word keeps its letter.
+    let mut s = in_lang("de-DE");
+    typ(&mut s, "Er sagte \"hallo\" ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Er sagte „hallo“ ");
+    let mut s = in_lang("de-DE");
+    typ(&mut s, "Ein \"TEst\" und ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Ein „Test“ und ");
+    let mut s = in_lang("de-CH");
+    typ(&mut s, "Ein \"TEst\" und ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Ein «Test» und ");
+    // Empty quotes open then close, as in English.
+    let mut s = in_lang("de-DE");
+    typ(&mut s, "\"\" '' ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "„“ ‚‘ ");
+    let mut s = in_lang("de-CH");
+    typ(&mut s, "\"\" '' ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "«» ‹› ");
+}
+
 #[test]
 fn autocorrect_options_change_what_typing_does() {
     let mut s = s();

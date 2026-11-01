@@ -24,7 +24,7 @@ pub use autocorrect::{AUTOCORRECT, AutoCap, AutoCorrectPrefs, lenient_autocorrec
 use compare::{Op, collapse_noise_matches, lcs_ops};
 pub use specs::specs;
 pub use typing::{INITIAL_CAPS_EXCEPTIONS, autocorrect, autocorrect_word, emphasis_autoformat, has_emphasis};
-pub(crate) use typing::{is_turkic, lower_char, upper_char};
+pub(crate) use typing::{is_german, is_turkic, lower_char, text_lang, upper_char};
 
 #[cfg(test)]
 mod tests;

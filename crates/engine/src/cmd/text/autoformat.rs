@@ -4,6 +4,21 @@ use super::{
     p, sel_result, split_para, type_text_effect,
 };
 
+/// The (opening, closing) double and single quotes for text in language `tag`: German „…“ and
+/// ‚…‘; Swiss and Liechtenstein German «…» and ‹…›; everything else English “…” and ‘…’.
+fn quote_pairs(tag: Option<&str>) -> ((&'static str, &'static str), (&'static str, &'static str)) {
+    if !crate::cmd::tools::is_german(tag) {
+        return (("\u{201C}", "\u{201D}"), ("\u{2018}", "\u{2019}"));
+    }
+    // The region is the first two-letter subtag after the language, past a script (`de-Latn-CH`).
+    let region = tag.unwrap_or("").split(['-', '_']).skip(1).find(|r| r.len() == 2).unwrap_or("");
+    if region.eq_ignore_ascii_case("CH") || region.eq_ignore_ascii_case("LI") {
+        (("\u{00AB}", "\u{00BB}"), ("\u{2039}", "\u{203A}"))
+    } else {
+        (("\u{201E}", "\u{201C}"), ("\u{201A}", "\u{2018}"))
+    }
+}
+
 /// Smart quotes and AutoFormat-as-you-type (lists from "* " / "1. ", dashes).
 fn autoformat(s: &mut Session, text: &str) -> Option<String> {
     if text.chars().count() != 1 {
@@ -17,17 +32,61 @@ fn autoformat(s: &mut Session, text: &str) -> Option<String> {
     let para = s.doc.para_at(f)?;
     let before = para.text.get(..f.off)?;
     let prev = before.chars().next_back();
+    // The quotes follow the language of the text being typed (#735): a language just set at the
+    // caret, else the character before the caret, else the paragraph's own formatting.
+    let lang = s.pending.as_ref().and_then(|p| p.lang.clone()).or_else(|| crate::cmd::tools::text_lang(s, f, f.off.saturating_sub(1)));
+    let (double, single) = quote_pairs(lang.as_deref());
+    // A quote opens after a space, a bracket, a dash, a guillemet or low quote, or the other
+    // kind's opening quote in this language (nesting; German „…‚…‘…“ closes after ‘). Right
+    // after its own kind's opening quote it closes, so empty quotes are „“ and «», not „„.
+    let own = if c == '"' { double.0 } else { single.0 };
     let opening = prev.is_none_or(|p| {
-        p.is_whitespace()
-            || "([{<\u{2014}\u{2013}\u{00AB}\u{2039}\u{201E}\u{201A}".contains(p)
-            || (c == '"' && p == '\u{2018}')
-            || (c == '\'' && p == '\u{201C}')
+        !own.starts_with(p)
+            && (p.is_whitespace()
+                || "([{<\u{2014}\u{2013}\u{00AB}\u{2039}\u{201E}\u{201A}".contains(p)
+                || (c == '"' && single.0.starts_with(p))
+                || (c == '\'' && double.0.starts_with(p)))
     });
+    // After a letter or digit a single quote is an apostrophe (geht’s, Andreas’), which German
+    // writes as ’ like English, not as its closing quote ‘; unless it closes a ‚ still open in
+    // the paragraph (‚tschüss‘).
+    // Only marks after the last opening quote count, so English ‘…’ earlier in the paragraph
+    // (its ‘ is German's closing quote) doesn't close a German ‚.
+    let open_single = before.rfind(single.0).is_some_and(|i| !before[i..].contains(single.1));
+    let apostrophe = prev.is_some_and(char::is_alphanumeric) && !open_single;
     match c {
-        '"' => Some(if opening { "\u{201C}" } else { "\u{201D}" }.into()),
-        '\'' => Some(if opening { "\u{2018}" } else { "\u{2019}" }.into()),
+        '"' => Some(if opening { double.0 } else { double.1 }.into()),
+        '\'' if !opening && apostrophe => Some("\u{2019}".into()),
+        '\'' => Some(if opening { single.0 } else { single.1 }.into()),
         _ => None,
     }
+}
+
+/// A German closing ‘ (Swiss ›) typed right after a letter was only provisional: a letter typed
+/// after it makes it the apostrophe ’, so ‚Wie geht's?‘ gives ‚Wie geht’s?‘ and the next ' closes
+/// the ‚ that is still open. The two marks are the same length, so the caret stays put.
+fn provisional_apostrophe(s: &mut Session, text: &str) -> Result<(), CmdError> {
+    let mut chars = text.chars();
+    let (Some(c), None) = (chars.next(), chars.next()) else { return Ok(()) };
+    if !c.is_alphanumeric() || !s.sel.is_collapsed() || !s.prefs.autocorrect.enabled || !s.prefs.autocorrect.smart_quotes {
+        return Ok(());
+    }
+    let f = s.sel.focus.clone();
+    let Some(before) = s.doc.para_at(&f).and_then(|p| p.text.get(..f.off)) else { return Ok(()) };
+    let mut prev = before.chars().rev();
+    let (Some(q), Some(letter)) = (prev.next(), prev.next()) else { return Ok(()) };
+    let at = f.off - q.len_utf8();
+    let lang = crate::cmd::tools::text_lang(s, &f, at);
+    let (_, single) = quote_pairs(lang.as_deref());
+    // In English the closing quote already is the apostrophe.
+    if !letter.is_alphanumeric() || !single.1.starts_with(q) || single.1 == "\u{2019}" {
+        return Ok(());
+    }
+    let p = s.doc.para_mut(f.story, &f.path)?;
+    let props = p.props_of_char(at).clone();
+    p.delete(at, f.off)?;
+    p.insert_text(at, "\u{2019}", &props)?;
+    Ok(())
 }
 
 /// File › Options › Advanced before typed text goes in: with "Typing replaces selected text"
@@ -64,6 +123,10 @@ pub(super) fn insert(s: &mut Session, v: &Value) -> CmdResult {
     let raw = p::bool(v, "raw").unwrap_or(false);
     if p::bool(v, "paragraphs").unwrap_or(false) {
         return insert_paragraphs(s, text);
+    }
+    // Before typing_options: in overtype it selects the characters after the caret.
+    if !raw {
+        provisional_apostrophe(s, text)?;
     }
     typing_options(s, text);
     let smart_quote = if raw { None } else { autoformat(s, text) };
