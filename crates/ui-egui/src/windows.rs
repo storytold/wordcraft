@@ -257,7 +257,10 @@ impl egui::Plugin for ViewportInput {
         }
         self.target = None;
         let events = std::mem::take(&mut self.events);
-        if events.iter().any(|e| matches!(e, egui::Event::Key { .. } | egui::Event::Text(_))) {
+        if events
+            .iter()
+            .any(|e| matches!(e, egui::Event::Key { .. } | egui::Event::Text(_) | egui::Event::Cut | egui::Event::Copy | egui::Event::Paste(_)))
+        {
             input.focused = true;
             self.keys_for = Some(viewport);
         }
@@ -729,6 +732,28 @@ impl WordApp {
     /// active window drawn there, or viewports embedded in the root (tests).
     pub(crate) fn control_input_is_roots(&self, ctx: &egui::Context) -> bool {
         !self.windows.native || ctx.embed_viewports() || self.active_viewport() == ViewportId::ROOT
+    }
+
+    /// Delivers input events to the active window: into `raw` when it is in the root viewport,
+    /// or queued through [`ViewportInput`] when it has a viewport of its own.
+    pub fn route_input(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput, events: Vec<egui::Event>) {
+        if events.is_empty() {
+            return;
+        }
+        let target = self.active_viewport();
+        if self.control_input_is_roots(ctx) {
+            raw.events.extend(events);
+        } else {
+            if !self.windows.input_plugin {
+                ctx.add_plugin(ViewportInput::default());
+                self.windows.input_plugin = true;
+            }
+            ctx.with_plugin(|p: &mut ViewportInput| {
+                p.target = Some(target);
+                p.events.extend(events);
+            });
+            ctx.request_repaint_of(target);
+        }
     }
 
     /// Keys from the control channel reached this window's viewport: the page counts as focused

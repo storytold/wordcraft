@@ -19,6 +19,8 @@ mod file_dialogs;
 #[cfg(any(target_os = "windows", target_os = "macos", test))]
 mod graphics;
 mod logging;
+#[cfg(any(target_os = "macos", test))]
+mod native_menu;
 mod print;
 mod region;
 #[cfg(target_os = "macos")]
@@ -43,6 +45,8 @@ struct App(
     // a hidden logic tick.
     RawWindowState,
     #[cfg(target_os = "macos")] fmv_macos_events::Inbox,
+    // The macOS menu bar (File, Edit, View, Go…), built on the first frame.
+    #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>,
 );
 
 impl eframe::App for App {
@@ -53,6 +57,9 @@ impl eframe::App for App {
         #[cfg(target_os = "macos")]
         apple_events::poll(&self.5, &mut self.0, ctx);
         self.0.logic(ctx);
+        // After `logic` has set the interface language the menu's labels follow.
+        #[cfg(target_os = "macos")]
+        native_menu::NativeMenu::frame(&mut self.6, &mut self.0, ctx);
         self.3.show(frame);
         let window = self.4;
         // A window that doesn't fit on its screen (the default size on a laptop) shrinks to fit
@@ -110,6 +117,13 @@ impl eframe::App for App {
         // Keep this frame's native window state. `logic` must not read the last painted
         // `InputState` when a hidden Wayland tick reports no fresh inner rect.
         self.4 = RawWindowState::from_raw(raw);
+        // Cut / Copy / Paste / Select All chosen in the menu bar arrive as the keyboard's would,
+        // routed to the focused viewport when the active window has its own.
+        #[cfg(target_os = "macos")]
+        if let Some(menu) = self.6.as_mut() {
+            let events = std::mem::take(&mut menu.input);
+            self.0.route_input(ctx, raw, events);
+        }
         self.0.raw_input_hook(ctx, raw);
     }
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
@@ -543,6 +557,8 @@ fn main() -> eframe::Result {
                 RawWindowState::default(),
                 #[cfg(target_os = "macos")]
                 apple_events.connect(&cc.egui_ctx),
+                #[cfg(target_os = "macos")]
+                None,
             )))
         }),
     )
