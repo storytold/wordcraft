@@ -75,7 +75,7 @@ impl Body<'_> {
     /// End a frame or drawing shape: its picture, equation, text box or shape goes into the
     /// paragraph.
     pub(in crate::odt) fn end_frame(&mut self) {
-        if let Some((w, h, img, alt, eq, chart)) = self.frame.take() {
+        if let Some((w, h, img, alt, eq, chart, object)) = self.frame.take() {
             let boxed = self.frame_box.take();
             let mut float = self.frame_float.take();
             if boxed.is_some()
@@ -108,6 +108,21 @@ impl Body<'_> {
                     alt: alt.trim().to_string(),
                     float: float.map(Box::new),
                 })),
+                // An object kept whole: shown by its replacement picture when WordCraft can show
+                // it, else by a placeholder.
+                (None, None) if let Some(mut o) = object => {
+                    if o.replacement.is_none() {
+                        o.replacement = img.clone().map(std::sync::Arc::new);
+                    }
+                    let shown = img
+                        .and_then(|data| make_img(data, w, h, alt.trim()))
+                        .or_else(|| crate::odt::objects::placeholder(&o.mime).and_then(|p| make_img(p, w, h, alt.trim())));
+                    shown.map(|mut img| {
+                        img.float = float.map(Box::new);
+                        img.object = Some(std::sync::Arc::new(o));
+                        Inline::Image(img)
+                    })
+                }
                 (None, None) => img.and_then(|data| make_img(data, w, h, alt.trim())).map(|mut img| {
                     img.float = float.map(Box::new);
                     Inline::Image(img)
@@ -196,7 +211,7 @@ impl Body<'_> {
         self.frame_look = g.shape_look(kind, &self.styles.defs);
         self.shape_path = crate::odt::shapes::freeform(local(q), a, w, h).map(std::sync::Arc::new);
         self.shape_kind = Some(kind);
-        let frame = (Some((Some(w), Some(h), None, String::new(), None, None)), Some(float), std::mem::take(&mut self.frame_look));
+        let frame = (Some((Some(w), Some(h), None, String::new(), None, None, None)), Some(float), std::mem::take(&mut self.frame_look));
         self.start_note(a);
         if let Some(n) = &mut self.note {
             n.text_box = Some(frame);

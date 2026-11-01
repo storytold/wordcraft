@@ -172,8 +172,7 @@ pub(in crate::odt) fn chart_xml(spec: &ChartSpec, w: f32, h: f32, accents: &[Rgb
 impl Writer {
     /// A chart: its frame here, placed as its float says, and its chart object in the package.
     pub(in crate::odt) fn chart(&mut self, c: &model::Chart, place: Place<'_>, out: &mut String) {
-        let n = self.objects.len() + 1;
-        let name = format!("Object {}{n}", self.prefix);
+        let (n, name) = self.object_name();
         self.objects.push((name.clone(), chart_xml(&c.spec, c.w, c.h, &self.accents), "application/vnd.oasis.opendocument.chart"));
         let (anchor, style) = match place {
             Place::Text(None) => (" text:anchor-type=\"as-char\"".to_string(), String::new()),

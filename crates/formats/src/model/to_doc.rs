@@ -335,7 +335,8 @@ impl<'a> Builder<'a> {
                 let key = self.doc.add_media(img.data.to_vec(), &img.ext);
                 let (w, h) = (finite_or(img.w, 72.0).clamp(1.0, 1584.0), finite_or(img.h, 72.0).clamp(1.0, 1584.0));
                 let float = fit_float(&img.float);
-                Some(InlineObject::Image { media: key, w, h, alt: img.alt.clone(), float: float.unwrap_or_default(), crop: [0.0; 4], ole: None })
+                let ole = img.object.as_deref().and_then(|o| super::odf_object::store(self.doc, o));
+                Some(InlineObject::Image { media: key, w, h, alt: img.alt.clone(), float: float.unwrap_or_default(), crop: [0.0; 4], ole })
             }
             // Its drawing is made from the chart by the program that opens the document
             // (`wordcraft_engine`'s chart drawing), which has the theme's colours.

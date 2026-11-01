@@ -316,7 +316,7 @@ fn drawing_inline(doc: &Document, o: &InlineObject, opts: FlowOpts, depth: usize
             let path = freeform.clone().filter(|_| kind == ShapeKind::Freeform);
             Some(Inline::Shape { kind, w: w * sx, h: h * sy, float: kept_float(float), blocks, look, path })
         }
-        InlineObject::Image { media, w, h, alt, float, .. } => {
+        InlineObject::Image { media, w, h, alt, float, ole, .. } => {
             let data = doc.media.get(media)?;
             let alt = if o.is_decorative() { "" } else { alt.as_str() };
             Some(Inline::Image(Img {
@@ -326,6 +326,7 @@ fn drawing_inline(doc: &Document, o: &InlineObject, opts: FlowOpts, depth: usize
                 h: h * sy,
                 alt: alt.to_string(),
                 float: kept_float(float),
+                object: ole.as_deref().filter(|_| opts.boxes).and_then(|e| super::odf_object::load(doc, e)),
             }))
         }
         InlineObject::Group { w, h, float, ch_w, ch_h, children, .. } if depth < MAX_GROUP_DEPTH => {
@@ -469,7 +470,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
                 continue;
             }
             match obj {
-                Some(o @ InlineObject::Image { media, w, h, alt, float, .. }) => {
+                Some(o @ InlineObject::Image { media, w, h, alt, float, ole, .. }) => {
                     if !buf.is_empty() {
                         out.push_text(&std::mem::take(&mut buf), &f);
                     }
@@ -484,6 +485,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
                             h: *h,
                             alt: alt.to_string(),
                             float: kept_float(float).filter(|_| opts.paras),
+                            object: ole.as_deref().filter(|_| opts.boxes).and_then(|e| super::odf_object::load(doc, e)),
                         })),
                         None if !alt.is_empty() => buf.push_str(alt),
                         None => {}

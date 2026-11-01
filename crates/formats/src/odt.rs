@@ -46,6 +46,7 @@ mod formula_size;
 mod frames;
 mod import;
 mod limits;
+mod objects;
 mod package;
 mod path;
 mod shapes;

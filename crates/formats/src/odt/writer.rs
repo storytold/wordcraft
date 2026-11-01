@@ -146,6 +146,10 @@ pub(super) struct Writer {
     pub(super) pictures: Vec<(String, std::sync::Arc<Vec<u8>>, String)>,
     /// Object sub-documents (formulas, charts): their directory, `content.xml` and media type.
     pub(super) objects: Vec<(String, String, &'static str)>,
+    /// Objects named so far (formulas, charts and kept objects share `Object n` names), and the
+    /// kept objects' folders with their media types, for the manifest.
+    pub(super) object_names: usize,
+    pub(super) object_dirs: Vec<(String, String)>,
     /// The theme's accent colours, which charts' series are drawn in.
     pub(super) accents: Vec<wordcraft_doc::Rgb>,
     /// `text:changed-region` elements written so far.

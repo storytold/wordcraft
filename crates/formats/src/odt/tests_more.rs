@@ -19,6 +19,7 @@ mod lists;
 mod named_styles;
 mod notes;
 mod numbering_fields;
+mod objects;
 mod outline;
 mod page_setup;
 mod para_borders;

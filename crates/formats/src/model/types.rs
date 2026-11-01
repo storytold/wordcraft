@@ -150,6 +150,23 @@ pub struct Img {
     /// How a floating picture is placed and wrapped, for formats that keep it (ODT); `None`: in
     /// line with the text.
     pub float: Option<Box<wordcraft_doc::para::Float>>,
+    /// The embedded object this picture shows, kept whole (ODT only; see [`OdfObject`]).
+    pub object: Option<Arc<OdfObject>>,
+}
+
+/// An embedded object WordCraft shows but doesn't edit, kept whole for saving back (ODF 1.3
+/// §10.4.6 `draw:object`, a sub-document such as a spreadsheet, or §10.4.7 `draw:object-ole`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct OdfObject {
+    /// Its media type (`application/vnd.oasis.opendocument.spreadsheet`…).
+    pub mime: String,
+    /// An OLE object: one binary file (`draw:object-ole`) rather than a sub-document folder.
+    pub ole: bool,
+    /// Its files, by their path in its folder (an OLE object's one file: "").
+    pub files: Vec<(String, Arc<Vec<u8>>)>,
+    /// The replacement picture as read (LibreOffice's own metafile format, say), written back
+    /// in place of the picture shown.
+    pub replacement: Option<Arc<Vec<u8>>>,
 }
 
 /// An editable chart in a flow ([`Inline::Chart`]).

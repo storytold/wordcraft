@@ -19,12 +19,16 @@ use notes::{OpenField, OpenNote, balance_comments};
 use tables::TableB;
 use tracked::{DelState, Region, change_mark};
 
-/// An open frame: its size, picture, alt text, equation and chart.
-type Frame = (Option<f32>, Option<f32>, Option<Vec<u8>>, String, Option<(String, bool)>, Option<wordcraft_doc::chart::ChartSpec>);
+/// An open frame: its size, picture, alt text, equation, chart and other embedded object.
+type Frame =
+    (Option<f32>, Option<f32>, Option<Vec<u8>>, String, Option<(String, bool)>, Option<wordcraft_doc::chart::ChartSpec>, Option<model::OdfObject>);
 
 pub(super) struct Body<'a> {
     styles: &'a Styles,
     zip: &'a mut dyn FnMut(&str) -> Option<Vec<u8>>,
+    /// The package's entry names and its manifest's media types, for embedded objects.
+    pub(super) entries: Vec<String>,
+    pub(super) manifest: HashMap<String, String>,
     containers: Vec<Vec<FBlock>>,
     fmt: Vec<Fmt>,
     para: Option<Para>,
@@ -117,6 +121,8 @@ impl<'a> Body<'a> {
         Body {
             styles,
             zip,
+            entries: Vec::new(),
+            manifest: HashMap::new(),
             containers: vec![Vec::new()],
             fmt: Vec::new(),
             para: None,
@@ -683,7 +689,7 @@ impl Body<'_> {
             "frame" => {
                 let w = get(a, "svg:width").and_then(length);
                 let h = get(a, "svg:height").and_then(length);
-                self.frame = Some((w, h, None, String::new(), None, None));
+                self.frame = Some((w, h, None, String::new(), None, None, None));
                 let g = get(a, "draw:style-name").map(|s| self.styles.graphic(s)).unwrap_or_default();
                 self.frame_float = Some(super::frames::place(a, w.unwrap_or(0.0), h.unwrap_or(0.0), &g));
                 self.member_start(a, w.unwrap_or(0.0), h.unwrap_or(0.0), None);
@@ -696,18 +702,22 @@ impl Body<'_> {
                     && fr.2.is_none()
                     && fr.4.is_none()
                     && fr.5.is_none()
+                    && fr.6.as_ref().is_none_or(|o| o.replacement.is_none())
                 {
                     let path = href.trim_start_matches("./");
                     fr.2 = (self.zip)(path);
+                    if let Some(o) = &mut fr.6 {
+                        o.replacement = fr.2.clone().map(std::sync::Arc::new);
+                    }
                 }
             }
             // An embedded object (ODF 1.3 §10.4.3): a formula sub-document's `content.xml` holds
             // a `math:math` tree (#3099), a chart's an `office:chart`. Other object kinds (and
             // charts WordCraft can't edit) fall back to the frame's `draw:image` replacement
             // preview, read at `end` below.
-            "object" => {
+            "object" | "object-ole" => {
                 if let Some(href) = get(a, "xlink:href") {
-                    self.read_object(href);
+                    self.read_object(href, local(q) == "object-ole");
                 }
             }
             "desc" | "title" if self.frame.is_some() => self.in_desc = true,
@@ -731,16 +741,28 @@ impl Body<'_> {
         }
     }
 
-    /// The open frame's object at `href`: its formula, or else its chart.
-    fn read_object(&mut self, href: &str) {
+    /// The open frame's object at `href`: its formula, or else its chart, or else the object
+    /// itself, kept whole (an OLE object's file, when `ole`).
+    fn read_object(&mut self, href: &str, ole: bool) {
         if let Some(fr) = &mut self.frame
             && fr.4.is_none()
+            && fr.5.is_none()
+            && fr.6.is_none()
         {
-            let path = format!("{}/content.xml", href.trim_start_matches("./").trim_end_matches('/'));
-            if let Some(xml) = (self.zip)(&path) {
-                fr.4 = read_formula(&xml);
-                if fr.4.is_none() {
-                    fr.5 = super::chart::read_chart(&xml);
+            if !ole {
+                let path = format!("{}/content.xml", href.trim_start_matches("./").trim_end_matches('/'));
+                if let Some(xml) = (self.zip)(&path) {
+                    fr.4 = read_formula(&xml);
+                    if fr.4.is_none() {
+                        fr.5 = super::chart::read_chart(&xml);
+                    }
+                }
+            }
+            if fr.4.is_none() && fr.5.is_none() {
+                fr.6 = super::objects::gather(href, ole, &self.entries, &self.manifest, &mut *self.zip);
+                // A replacement picture read before the object.
+                if let Some(o) = &mut fr.6 {
+                    o.replacement = fr.2.clone().map(std::sync::Arc::new);
                 }
             }
         }

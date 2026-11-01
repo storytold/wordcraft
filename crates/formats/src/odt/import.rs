@@ -425,6 +425,8 @@ fn parse_tracked(bytes: &[u8]) -> Result<Parsed, String> {
     let settings = read_entry(&mut z, "settings.xml");
     styles.tabs_from_indent = settings.as_deref().and_then(|s| setting(s, "TabsRelativeToIndent")).unwrap_or(true);
     let meta = read_entry(&mut z, "meta.xml").map(|m| read_meta(&m)).unwrap_or_default();
+    let entries: Vec<String> = z.file_names().take(100_000).map(str::to_string).collect();
+    let manifest = read_entry(&mut z, "META-INF/manifest.xml").map(|m| super::objects::manifest(&m)).unwrap_or_default();
     let mut pictures = Pictures::new(MAX_ENTRY);
     let mut fetch = |path: &str| -> Option<Vec<u8>> {
         // A frame may point at any entry, as often as it likes: `Pictures` keeps that bounded.
@@ -432,6 +434,8 @@ fn parse_tracked(bytes: &[u8]) -> Result<Parsed, String> {
     };
     let mut parts = styles_xml.as_deref().map(|x| page_parts::read(x, &styles, &mut pages, &mut fetch)).unwrap_or_default();
     let mut body = Body::new(&styles, &pages, &mut fetch);
+    body.entries = entries;
+    body.manifest = manifest;
     events(&content, |ev| body.feed(ev));
     let mut blocks = body.take_blocks();
     let (mut named_odt, mut named) = custom_styles(&mut blocks, &styles, Vec::new());

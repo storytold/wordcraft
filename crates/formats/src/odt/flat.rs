@@ -141,22 +141,39 @@ fn take_out(xml: &str, files: &mut Vec<(String, Vec<u8>)>) -> String {
             // The picture's `draw:image` start tag (just before) gets the package's reference.
             let b64: String = body.chars().filter(|c| !c.is_whitespace()).collect();
             let data = STANDARD.decode(b64.as_bytes()).ok().filter(|d| d.len() <= MAX_ENTRY as usize).unwrap_or_default();
-            let name = format!("Pictures/flat{n}.{}", picture_ext(&data));
-            match before.rfind("<draw:image") {
-                Some(img) if !data.is_empty() => {
-                    let (head, tag) = before.split_at(img);
+            // The element holding the data: the start tag just before it.
+            let holder = before.rfind('<').filter(|_| !data.is_empty()).and_then(|i| {
+                let tag = before.get(i..).unwrap_or("");
+                ["<draw:image", "<draw:object-ole"]
+                    .into_iter()
+                    .find(|el| tag.starts_with(el) && tag.get(el.len()..).is_some_and(|r| r.starts_with([' ', '>', '\n', '\t', '\r'])))
+                    .map(|el| (i, el))
+            });
+            match holder {
+                Some((at, el)) => {
+                    let name = if el == "<draw:image" { format!("Pictures/flat{n}.{}", picture_ext(&data)) } else { format!("Object flat{n}") };
+                    let (head, tag) = before.split_at(at);
                     out.push_str(head);
-                    out.push_str(&format!("<draw:image xlink:href=\"{name}\""));
-                    out.push_str(tag.get("<draw:image".len()..).unwrap_or(""));
+                    out.push_str(&format!("{el} xlink:href=\"{}\"", if el == "<draw:image" { name.clone() } else { format!("./{name}") }));
+                    out.push_str(tag.get(el.len()..).unwrap_or(""));
                     files.push((name, data));
                 }
-                _ => out.push_str(before),
+                None => out.push_str(before),
             }
         } else {
             let dir = format!("Object flat{n}");
             out.push_str(before);
             out.push_str(&format!("<draw:object xlink:href=\"./{dir}\"/>"));
-            files.push((format!("{dir}/content.xml"), body.as_bytes().to_vec()));
+            // A sub-document (a chart, a spreadsheet) goes back into its files; a formula is
+            // its `content.xml`.
+            match package_parts(body.trim()) {
+                Some(parts) => {
+                    for (name, xml) in ["content.xml", "styles.xml", "meta.xml", "settings.xml"].into_iter().zip(parts) {
+                        files.push((format!("{dir}/{name}"), xml.into_bytes()));
+                    }
+                }
+                None => files.push((format!("{dir}/content.xml"), body.as_bytes().to_vec())),
+            }
         }
         rest = after;
     }
@@ -168,21 +185,16 @@ fn take_out(xml: &str, files: &mut Vec<(String, Vec<u8>)>) -> String {
 pub fn import_flat(bytes: &[u8]) -> Result<Document, String> {
     let xml = std::str::from_utf8(bytes).map_err(|_| "FODT: not UTF-8 text".to_string())?;
     let root = element(xml, "office:document");
-    let attrs =
-        root.find('>').and_then(|e| root.get("<office:document".len()..e)).map(|a| a.trim_end_matches('/')).ok_or("FODT: no office:document")?;
-    let doc = |name: &str, parts: &[&str]| -> String {
-        let body: String = parts.iter().map(|p| element(root, p)).collect();
-        format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:{name}{attrs}>{body}</office:{name}>")
-    };
+    let [content, styles, meta, settings] = package_parts(root).ok_or("FODT: no office:document")?;
     let mut files: Vec<(String, Vec<u8>)> = Vec::new();
-    let content = take_out(&doc("document-content", &[FONTS, AUTOMATIC, BODY]), &mut files);
-    let styles = take_out(&doc("document-styles", &[FONTS, STYLES, AUTOMATIC, MASTERS]), &mut files);
+    let content = take_out(&content, &mut files);
+    let styles = take_out(&styles, &mut files);
     let entries: Vec<(String, Vec<u8>)> = [
         ("mimetype".to_string(), b"application/vnd.oasis.opendocument.text".to_vec()),
         ("content.xml".to_string(), content.into_bytes()),
         ("styles.xml".to_string(), styles.into_bytes()),
-        ("meta.xml".to_string(), doc("document-meta", &[META]).into_bytes()),
-        ("settings.xml".to_string(), doc("document-settings", &[SETTINGS]).into_bytes()),
+        ("meta.xml".to_string(), meta.into_bytes()),
+        ("settings.xml".to_string(), settings.into_bytes()),
     ]
     .into_iter()
     .chain(files)
@@ -217,20 +229,8 @@ pub fn export_flat(doc: &Document) -> Result<Vec<u8>, String> {
         }
         v
     };
-    let automatic = format!("<{AUTOMATIC}>{}{}</{AUTOMATIC}>", inner(element(&content, AUTOMATIC)), inner(element(&styles, AUTOMATIC)));
-    let mut body = String::new();
-    for part in [
-        element(&meta, META),
-        element(&settings, SETTINGS),
-        element(&styles, FONTS),
-        element(&content, FONTS),
-        element(&styles, STYLES),
-        &automatic,
-        element(&styles, MASTERS),
-        element(&content, BODY),
-    ] {
-        body.push_str(part);
-    }
+    let manifest = super::objects::manifest(&bytes_of("META-INF/manifest.xml"));
+    let body = flat_parts(&content, &styles, &meta, &settings);
     // Pictures and formulas in the document, not beside it.
     let mut flat = String::with_capacity(body.len());
     let mut rest = body.as_str();
@@ -241,9 +241,11 @@ pub fn export_flat(doc: &Document) -> Result<Vec<u8>, String> {
         let target = from.get(target_start..target_start + len).unwrap_or("");
         let after = from.get(target_start + len + 1..).unwrap_or("");
         let tag = before.rfind('<').and_then(|i| before.get(i..)).unwrap_or("");
-        if tag.starts_with("<draw:image") && target.starts_with("Pictures/") {
+        // A picture, or an embedded object's replacement picture.
+        let picture = target.starts_with("Pictures/") || target.trim_start_matches("./").starts_with("ObjectReplacements/");
+        if tag.starts_with("<draw:image") && picture {
             // `<draw:image xlink:href="…" …/>` → `<draw:image …><office:binary-data>…`.
-            let data = bytes_of(target);
+            let data = bytes_of(target.trim_start_matches("./"));
             let rest_tag_end = after.find("/>").unwrap_or(0);
             // The link's other attributes go with it.
             let attrs: String =
@@ -252,14 +254,25 @@ pub fn export_flat(doc: &Document) -> Result<Vec<u8>, String> {
             flat.push_str(&attrs);
             flat.push_str(&format!("><office:binary-data>{}</office:binary-data></draw:image>", STANDARD.encode(&data)));
             rest = after.get(rest_tag_end + 2..).unwrap_or("");
+        } else if tag.starts_with("<draw:object-ole") && target.starts_with("./Object ") {
+            // An OLE object's file inline (§10.4.7 allows `office:binary-data` in it).
+            let data = bytes_of(target.trim_start_matches("./"));
+            let rest_tag_end = after.find("/>").unwrap_or(0);
+            flat.push_str(before.rfind("<draw:object-ole").and_then(|i| before.get(..i)).unwrap_or(before));
+            flat.push_str(&format!("<draw:object-ole><office:binary-data>{}</office:binary-data></draw:object-ole>", STANDARD.encode(&data)));
+            rest = after.get(rest_tag_end + 2..).unwrap_or("");
         } else if tag.starts_with("<draw:object") && target.starts_with("./Object ") {
-            let math = bytes_of(&format!("{}/content.xml", target.trim_start_matches("./")));
-            let math = String::from_utf8_lossy(&math);
-            let math = math.split_once("?>").map_or(math.as_ref(), |(_, m)| m).trim();
-            // A sub-document (a chart) goes in as an `office:document` (§3.1.2), its root.
-            let math = match math.strip_prefix("<office:document-content").and_then(|m| m.strip_suffix("</office:document-content>")) {
-                Some(inner) => format!("<office:document{inner}</office:document>"),
-                None => math.to_string(),
+            let dir = target.trim_start_matches("./");
+            let mut text = |name: &str| String::from_utf8_lossy(&bytes_of(&format!("{dir}/{name}"))).into_owned();
+            let content = text("content.xml");
+            // A sub-document (a chart, a spreadsheet) goes in as an `office:document` (§3.1.2)
+            // of its media type, its files together; a formula as its `math:math`.
+            let math = if content.contains("<office:document-content") {
+                let mime = manifest.get(&format!("{dir}/")).map_or("application/vnd.oasis.opendocument.graphics", String::as_str);
+                let (styles, meta, settings) = (text("styles.xml"), text("meta.xml"), text("settings.xml"));
+                flat_document(mime, &content, &styles, &meta, &settings)
+            } else {
+                content.split_once("?>").map_or(content.as_str(), |(_, m)| m).trim().to_string()
             };
             // A plain `draw:object` around it: the reference's other attributes go with it.
             let rest_tag_end = after.find("/>").unwrap_or(0);
@@ -273,21 +286,83 @@ pub fn export_flat(doc: &Document) -> Result<Vec<u8>, String> {
         }
     }
     flat.push_str(rest);
-    // Every namespace the parts declare (the settings' `config`, say), each prefix once.
-    let mut ns: Vec<String> = Vec::new();
-    for part in [&content, &styles, &meta, &settings] {
+    Ok(format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document {} office:version=\"1.3\" office:mimetype=\"application/vnd.oasis.opendocument.text\">{flat}</office:document>\n",
+        merged_namespaces(&[&content, &styles, &meta, &settings])
+    )
+    .into_bytes())
+}
+
+/// Every namespace the parts declare (the settings' `config`, say), each prefix once.
+fn merged_namespaces(parts: &[&str]) -> String {
+    let mut ns: Vec<&str> = Vec::new();
+    for part in parts {
         for decl in namespaces(part) {
             let prefix = decl.split('=').next().unwrap_or("");
             if !ns.iter().any(|d| d.split('=').next() == Some(prefix)) {
-                ns.push(decl.to_string());
+                ns.push(decl);
             }
         }
     }
-    Ok(format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document {} office:version=\"1.3\" office:mimetype=\"application/vnd.oasis.opendocument.text\">{flat}</office:document>\n",
-        ns.join(" ")
+    ns.join(" ")
+}
+
+/// What a flat document holds, from a package's parts in the order §3.1.2 gives them: one
+/// font declaration list and one automatic styles list for its content and its styles together.
+fn flat_parts(content: &str, styles: &str, meta: &str, settings: &str) -> String {
+    let both = |name: &str| {
+        let (a, b) = (element(styles, name), element(content, name));
+        if a.is_empty() && b.is_empty() { String::new() } else { format!("<{name}>{}{}</{name}>", inner(a), inner(b)) }
+    };
+    [
+        element(meta, META).to_string(),
+        element(settings, SETTINGS).to_string(),
+        both(FONTS),
+        element(styles, STYLES).to_string(),
+        both(AUTOMATIC),
+        element(styles, MASTERS).to_string(),
+        element(content, BODY).to_string(),
+    ]
+    .concat()
+}
+
+/// A sub-document's parts as one `office:document` of media type `mime`.
+fn flat_document(mime: &str, content: &str, styles: &str, meta: &str, settings: &str) -> String {
+    format!(
+        "<office:document {} office:version=\"1.3\" office:mimetype=\"{}\">{}</office:document>",
+        merged_namespaces(&[content, styles, meta, settings]),
+        super::writer::x(mime),
+        flat_parts(content, styles, meta, settings)
     )
-    .into_bytes())
+}
+
+/// An `office:document` element taken apart into a package's `content.xml`, `styles.xml`,
+/// `meta.xml` and `settings.xml` (each part's root with the document's attributes but its
+/// media type). `None` when `root` is no `office:document`.
+fn package_parts(root: &str) -> Option<[String; 4]> {
+    if !root.starts_with("<office:document") || root.starts_with("<office:document-") {
+        return None;
+    }
+    let attrs = root.find('>').and_then(|e| root.get("<office:document".len()..e)).map(|a| a.trim_end_matches('/'))?;
+    // Without its media type, which only the flat root has.
+    let attrs = match attrs.find(" office:mimetype=\"") {
+        Some(i) => {
+            let from = i + " office:mimetype=\"".len();
+            let end = attrs.get(from..).and_then(|r| r.find('"')).map_or(attrs.len(), |e| from + e + 1);
+            format!("{}{}", attrs.get(..i).unwrap_or(""), attrs.get(end..).unwrap_or(""))
+        }
+        None => attrs.to_string(),
+    };
+    let doc = |name: &str, parts: &[&str]| -> String {
+        let body: String = parts.iter().map(|p| element(root, p)).collect();
+        format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:{name}{attrs}>{body}</office:{name}>")
+    };
+    Some([
+        doc("document-content", &[FONTS, AUTOMATIC, BODY]),
+        doc("document-styles", &[FONTS, STYLES, AUTOMATIC, MASTERS]),
+        doc("document-meta", &[META]),
+        doc("document-settings", &[SETTINGS]),
+    ])
 }
 
 /// The namespace declarations (`xmlns:p="…"`) on the root element of `xml`.

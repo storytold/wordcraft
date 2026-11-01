@@ -180,8 +180,62 @@ impl Writer {
 
     /// A picture (ODF 1.3 §10.4.4 `draw:image` in a `draw:frame`) at `place`: a floating one or a
     /// group's in a graphic style that places and wraps it.
+    /// The next object's number and name (`Object 3`, `Object M3` in headers and footers).
+    pub(in crate::odt) fn object_name(&mut self) -> (usize, String) {
+        self.object_names += 1;
+        (self.object_names, format!("Object {}{}", self.prefix, self.object_names))
+    }
+
+    /// Object `o`'s files in the package under `name`, and the link to it with its replacement
+    /// picture (the one read, else the picture shown, `img`).
+    fn kept_object(&mut self, o: &model::OdfObject, img: &model::Img) -> String {
+        let (_, name) = self.object_name();
+        if o.ole {
+            if let Some((_, bytes)) = o.files.first() {
+                self.pictures.push((name.clone(), bytes.clone(), o.mime.clone()));
+            }
+        } else {
+            self.object_dirs.push((format!("{name}/"), o.mime.clone()));
+            for (path, bytes) in &o.files {
+                let mime = if path.ends_with(".xml") {
+                    "text/xml"
+                } else if path.ends_with(".rdf") {
+                    "application/rdf+xml"
+                } else {
+                    ""
+                };
+                self.pictures.push((format!("{name}/{path}"), bytes.clone(), mime.to_string()));
+            }
+        }
+        let replacement = format!("ObjectReplacements/{name}");
+        match &o.replacement {
+            Some(r) => {
+                let mime =
+                    crate::model::sniff_image(r).map(mime_of).unwrap_or("application/x-openoffice-gdimetafile;windows_formatname=\"GDIMetaFile\"");
+                self.pictures.push((replacement.clone(), r.clone(), mime.to_string()));
+            }
+            None => self.pictures.push((replacement.clone(), img.data.clone(), mime_of(&img.ext).to_string())),
+        }
+        let el = if o.ole { "draw:object-ole" } else { "draw:object" };
+        format!(
+            "<{el} xlink:href=\"./{}\" xlink:type=\"simple\" xlink:show=\"embed\" xlink:actuate=\"onLoad\"/><draw:image xlink:href=\"./{}\" xlink:type=\"simple\" xlink:show=\"embed\" xlink:actuate=\"onLoad\"/>",
+            x(&name),
+            x(&replacement)
+        )
+    }
+
     pub(in crate::odt) fn image(&mut self, img: &model::Img, place: Place<'_>, out: &mut String) {
+        if let Some(o) = img.object.as_deref() {
+            let inner = self.kept_object(o, img);
+            return self.image_frame(img, place, &inner, out);
+        }
         let href = self.picture(img);
+        let inner = format!("<draw:image xlink:href=\"{href}\" xlink:type=\"simple\" xlink:show=\"embed\" xlink:actuate=\"onLoad\"/>");
+        self.image_frame(img, place, &inner, out);
+    }
+
+    /// A picture's frame at `place`, holding `inner`.
+    fn image_frame(&mut self, img: &model::Img, place: Place<'_>, inner: &str, out: &mut String) {
         let n = self.pictures.len();
         let (anchor, style) = match place {
             Place::Text(None) => (" text:anchor-type=\"as-char\"".to_string(), String::new()),
@@ -191,7 +245,7 @@ impl Writer {
             }
         };
         out.push_str(&format!(
-            "<draw:frame draw:name=\"{}Image{n}\"{style}{anchor} svg:width=\"{}\" svg:height=\"{}\" draw:z-index=\"0\"><draw:image xlink:href=\"{href}\" xlink:type=\"simple\" xlink:show=\"embed\" xlink:actuate=\"onLoad\"/>",
+            "<draw:frame draw:name=\"{}Image{n}\"{style}{anchor} svg:width=\"{}\" svg:height=\"{}\" draw:z-index=\"0\">{inner}",
             self.prefix,
             pt(img.w),
             pt(img.h)
@@ -366,8 +420,7 @@ impl Writer {
     /// pointing at a sub-document whose `content.xml` is the equation's MathML, its frame about
     /// the size the formula takes (LibreOffice scales the formula to the frame).
     pub(in crate::odt) fn formula(&mut self, linear: &str, display: bool, out: &mut String) {
-        let n = self.objects.len() + 1;
-        let name = format!("Object {}{n}", self.prefix);
+        let (n, name) = self.object_name();
         let mathml = crate::mathml::linear_to_mathml(linear, display);
         self.objects.push((
             name.clone(),

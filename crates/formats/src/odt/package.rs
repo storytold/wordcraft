@@ -594,12 +594,20 @@ pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
     );
     w.pictures.append(&mut hw.pictures);
     w.objects.append(&mut hw.objects);
+    w.object_dirs.append(&mut hw.object_dirs);
     let meta = meta_xml(&flow.meta);
     let mut manifest = String::from(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<manifest:manifest xmlns:manifest=\"urn:oasis:names:tc:opendocument:xmlns:manifest:1.0\" manifest:version=\"1.3\">\n<manifest:file-entry manifest:full-path=\"/\" manifest:version=\"1.3\" manifest:media-type=\"application/vnd.oasis.opendocument.text\"/>\n<manifest:file-entry manifest:full-path=\"content.xml\" manifest:media-type=\"text/xml\"/>\n<manifest:file-entry manifest:full-path=\"styles.xml\" manifest:media-type=\"text/xml\"/>\n<manifest:file-entry manifest:full-path=\"meta.xml\" manifest:media-type=\"text/xml\"/>\n<manifest:file-entry manifest:full-path=\"settings.xml\" manifest:media-type=\"text/xml\"/>\n",
     );
+    for (dir, mime) in &w.object_dirs {
+        manifest.push_str(&format!(
+            "<manifest:file-entry manifest:full-path=\"{}\" manifest:version=\"1.3\" manifest:media-type=\"{}\"/>\n",
+            x(dir),
+            x(mime)
+        ));
+    }
     for (name, _, mime) in &w.pictures {
-        manifest.push_str(&format!("<manifest:file-entry manifest:full-path=\"{}\" manifest:media-type=\"{mime}\"/>\n", x(name)));
+        manifest.push_str(&format!("<manifest:file-entry manifest:full-path=\"{}\" manifest:media-type=\"{}\"/>\n", x(name), x(mime)));
     }
     for (dir, _, mime) in &w.objects {
         manifest.push_str(&format!(
