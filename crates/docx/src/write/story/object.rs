@@ -279,6 +279,18 @@ impl Writer<'_> {
 
     fn write_shape(&mut self, w: &mut W, o: &InlineObject, props: &CharProps, rels: &mut PartRels, depth: usize) {
         let InlineObject::Shape { kind, w: sw, h: sh, float, effects, freeform, extra, .. } = o else { return };
+        // An ActiveX control read from a file: the control itself, at its current size.
+        if let Some(src) = extra.ole.as_deref()
+            && let Some(obj) = self.embedded_xml(src, rels, Some((*sw, *sh, float, o.alt_text())))
+        {
+            self.rev_open(w, props);
+            w.open("w:r", &[]);
+            self.rpr(w, props);
+            w.raw(&obj);
+            w.close("w:r");
+            self.rev_close(w, props);
+            return;
+        }
         self.rev_open(w, props);
         w.open("w:r", &[]);
         self.rpr(w, props);
