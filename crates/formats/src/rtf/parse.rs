@@ -1,3 +1,6 @@
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
+
 use super::reader::Reader;
 use super::state::{Dest, HeaderFooter, HfPages, MAX_PICT, PageGeom};
 use super::{Cell, Document, FBlock, Flow, Para, model};
@@ -231,41 +234,140 @@ fn finalize(mut r: Reader) -> Parsed {
     Parsed { flow: Flow { blocks, meta: r.meta }, page: r.page, last_section, default_font, headers_footers }
 }
 
+/// Most grid columns a table gets (the document model's own cap).
+const MAX_GRID_COLS: usize = 63;
+/// Grid columns under this width, in twips (6 pt), merge while the rows leave room: import widens
+/// any narrower column to 6 pt, which grows the table, and files exported from spreadsheets put
+/// edges a few twips apart.
+const MIN_GRID_GAP: i64 = 120;
+/// Grid columns of this width or less, in twips (1 pt), always merge: the document model refuses
+/// them, and would then give the table equal columns.
+const NO_GRID_GAP: i64 = 20;
+
 /// The column grid of a table from its rows' cell right edges: every distinct edge starts a grid
 /// column, and each cell spans the grid columns between its left and right edges, as Word lays
 /// out RTF rows whose cells don't line up. Returns the widths in points, or none (equal columns)
-/// when the edges don't make a grid.
+/// when no grid fits, which only a row of more cells than grid columns can cause.
+///
+/// One odd row never costs the whole table its grid (a form exported from a spreadsheet, with
+/// many narrow columns, otherwise had its wide title squeezed into one of four equal columns):
+/// - Over [`MAX_GRID_COLS`] edges, or edges closer than [`MIN_GRID_GAP`], merge, leaving a column
+///   for each cell of the widest row ([`coarse_edges`]); each cell edge moves to the nearest
+///   grid edge.
+/// - A cell that ends at or before the previous one (a zero-width cell, or a cell with no
+///   `\cellx` of its own) still gets a grid column of its own; cells pushed past the table's
+///   right edge move back.
 pub(super) fn column_grid(rows: &mut [Vec<Cell>], rights: &[Vec<i32>]) -> Vec<f32> {
+    if rights.len() != rows.len() {
+        return Vec::new();
+    }
     let mut edges: Vec<i32> = rights.iter().flatten().copied().filter(|&x| x > 0).collect();
     edges.sort_unstable();
     edges.dedup();
-    let ok = rights.len() == rows.len()
-        && rows
-            .iter()
-            .zip(rights)
-            .all(|(r, x)| r.len() == x.len() && x.windows(2).all(|w| w.first() < w.get(1)) && x.first().is_some_and(|&v| v > 0))
-        && !edges.is_empty()
-        && edges.len() <= 63;
-    if !ok {
+    if edges.is_empty() {
         return Vec::new();
     }
-    for (row, x) in rows.iter_mut().zip(rights) {
+    let grid = coarse_edges(&edges, rows.iter().map(Vec::len).max().unwrap_or(0));
+    // Each cell's right edge as a grid edge number (1 = the first grid column's right edge).
+    let mut ends: Vec<Vec<usize>> = Vec::with_capacity(rows.len());
+    for (row, x) in rows.iter().zip(rights) {
+        if row.len() > grid.len() {
+            return Vec::new();
+        }
+        let mut at: Vec<usize> = Vec::with_capacity(row.len());
+        let mut prev = 0;
+        for i in 0..row.len() {
+            let end = x.get(i).map_or(0, |&r| nearest_edge(&grid, r)).max(prev + 1);
+            at.push(end);
+            prev = end;
+        }
+        // Cells pushed past the right edge move back, each keeping a column of its own.
+        let mut limit = grid.len();
+        for end in at.iter_mut().rev() {
+            *end = (*end).min(limit);
+            limit = end.saturating_sub(1);
+        }
+        ends.push(at);
+    }
+    for (row, at) in rows.iter_mut().zip(&ends) {
         let mut left = 0;
-        for (c, &right) in row.iter_mut().zip(x) {
-            let span = edges.iter().filter(|&&e| e > left && e <= right).count().max(1);
-            c.colspan = span as u32;
-            left = right;
+        for (c, &end) in row.iter_mut().zip(at) {
+            c.colspan = u32::try_from(end.saturating_sub(left)).unwrap_or(1).max(1);
+            left = end;
         }
     }
-    let mut prev = 0;
-    edges
-        .iter()
+    let mut prev = 0i64;
+    grid.iter()
         .map(|&e| {
-            let w = (e - prev) as f32 / 20.0;
-            prev = e;
+            let w = (i64::from(e) - prev) as f32 / 20.0;
+            prev = i64::from(e);
             w
         })
         .collect()
+}
+
+/// The grid edges kept from the sorted, distinct, positive `edges`. The narrowest column merges
+/// into the next, one at a time, so an edge moves only when it has to: while there are over
+/// [`MAX_GRID_COLS`] columns, or columns of [`NO_GRID_GAP`] or less, and while a column is under
+/// [`MIN_GRID_GAP`] and more columns remain than the `widest_row`'s cells. The table's right edge
+/// is always kept.
+fn coarse_edges(edges: &[i32], widest_row: usize) -> Vec<i32> {
+    let n = edges.len();
+    // Each edge's neighbours among the edges still kept.
+    let mut left: Vec<Option<usize>> = (0..n).map(|i| i.checked_sub(1)).collect();
+    let mut right: Vec<Option<usize>> = (1..=n).map(|i| (i < n).then_some(i)).collect();
+    let mut kept = vec![true; n];
+    let at = |i: Option<usize>| i.and_then(|i| edges.get(i)).map_or(0, |&e| i64::from(e));
+    let width = |i: usize, left: &[Option<usize>]| at(Some(i)) - at(left.get(i).copied().flatten());
+    let mut narrowest: BinaryHeap<Reverse<(i64, usize)>> = (0..n).map(|i| Reverse((width(i, &left), i))).collect();
+    let mut count = n;
+    while count > 1 {
+        let Some(Reverse((w, i))) = narrowest.pop() else {
+            break;
+        };
+        // A column that has since grown, or gone, has a fresher entry or none.
+        if !kept.get(i).copied().unwrap_or(false) || w != width(i, &left) {
+            continue;
+        }
+        if count <= MAX_GRID_COLS && w > NO_GRID_GAP && (w >= MIN_GRID_GAP || count <= widest_row) {
+            break;
+        }
+        // The column's right edge goes, unless it is the table's: then its left edge does.
+        let last = right.get(i).copied().flatten().is_none();
+        let Some(gone) = (if last { left.get(i).copied().flatten() } else { Some(i) }) else {
+            break;
+        };
+        let before = left.get(gone).copied().flatten();
+        let after = right.get(gone).copied().flatten();
+        if let Some(slot) = before.and_then(|b| right.get_mut(b)) {
+            *slot = after;
+        }
+        if let Some(a) = after {
+            if let Some(slot) = left.get_mut(a) {
+                *slot = before;
+            }
+            narrowest.push(Reverse((width(a, &left), a)));
+        }
+        if let Some(slot) = kept.get_mut(gone) {
+            *slot = false;
+        }
+        count -= 1;
+    }
+    edges.iter().zip(&kept).filter(|&(_, &k)| k).map(|(&e, _)| e).collect()
+}
+
+/// The number of the grid edge nearest `x` (1-based; 0 is the table's left edge).
+fn nearest_edge(grid: &[i32], x: i32) -> usize {
+    if x <= 0 {
+        return 0;
+    }
+    let p = grid.partition_point(|&e| e < x);
+    let below = if p == 0 { 0 } else { grid.get(p - 1).copied().unwrap_or(0) };
+    match grid.get(p) {
+        Some(&above) if i64::from(above) - i64::from(x) <= i64::from(x) - i64::from(below) => p + 1,
+        Some(_) => p,
+        None => grid.len(),
+    }
 }
 
 /// Parse RTF bytes into a document.

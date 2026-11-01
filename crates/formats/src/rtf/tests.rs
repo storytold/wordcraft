@@ -256,6 +256,141 @@ fn table_grid_from_cell_edges_and_borders() {
     assert_eq!(t.grid, [240.9, 241.0]);
 }
 
+/// The table of `rtf`'s flow and every row's column spans; checks the spans fit the grid.
+fn grid_of(rtf: &[u8]) -> (Vec<f32>, Vec<Vec<u32>>) {
+    let f = parse(rtf).unwrap();
+    let FBlock::Table(t) = &f.blocks[0] else { panic!("no table") };
+    let spans: Vec<Vec<u32>> = t.rows.iter().map(|r| r.iter().map(|c| c.colspan).collect()).collect();
+    assert!(!t.widths.is_empty(), "the table kept no grid");
+    assert_eq!(t.cols(), t.widths.len(), "spans {spans:?} don't fit {} grid columns", t.widths.len());
+    assert!(t.widths.iter().all(|&w| w > 1.0), "a grid column under a point: {:?}", t.widths);
+    (t.widths.clone(), spans)
+}
+
+/// Width in points of the first `n` grid columns.
+fn first_cols(widths: &[f32], n: u32) -> f32 {
+    widths.iter().take(n as usize).sum()
+}
+
+#[test]
+fn table_grid_survives_more_than_63_edges() {
+    // A form exported from a spreadsheet: a wide title over rows whose middle edge moves by
+    // 100 twips, 80 distinct edges in all. The grid used to be dropped, giving equal columns.
+    let mut rtf = String::from(r"{\rtf1\ansi\trowd\cellx6000\cellx8000\pard\intbl Title\cell Codes\cell\row");
+    for k in 1..80 {
+        rtf.push_str(&format!(r"\trowd\cellx{}\cellx8000\pard\intbl a\cell b\cell\row", k * 100));
+    }
+    rtf.push_str(r"\pard\par}");
+    let (widths, spans) = grid_of(rtf.as_bytes());
+    assert!(widths.len() <= 63, "{} grid columns", widths.len());
+    assert!((widths.iter().sum::<f32>() - 400.0).abs() < 0.01, "the table keeps its 400 pt");
+    // The title keeps its 300 pt, within a grid column's merge.
+    let title = first_cols(&widths, spans[0][0]);
+    assert!((title - 300.0).abs() <= 5.0, "title {title} pt");
+    // The staircase still climbs: the 60th row's first cell is about 300 pt wide too.
+    assert!((first_cols(&widths, spans[60][0]) - 300.0).abs() <= 5.0);
+
+    // The same through import: the document table has the grid, not equal columns.
+    let d = import(rtf.as_bytes()).unwrap();
+    let t = d.body.iter().find_map(|b| if let wordcraft_doc::Block::Table(t) = &**b { Some(t) } else { None }).unwrap();
+    assert_eq!(t.grid.len(), widths.len());
+    let w = t.rows[0].cells[0].props.width.unwrap();
+    assert!((w - 300.0).abs() <= 5.0, "title cell {w} pt");
+}
+
+#[test]
+fn table_grid_survives_a_zero_width_cell_and_a_missing_cellx() {
+    // A zero-width cell (two edges at 3000) in one row: the other rows keep their grid.
+    let (widths, spans) = grid_of(
+        br"{\rtf1\ansi
+\trowd\cellx6000\cellx9000 \pard\intbl Title\cell b\cell\row
+\trowd\cellx2000\cellx2000\cellx9000 \pard\intbl a\cell\cell c\cell\row
+\pard\par}",
+    );
+    assert_eq!(first_cols(&widths, spans[0][0]), 300.0);
+    assert_eq!(spans[1].len(), 3, "the zero-width cell is kept: {spans:?}");
+    assert_eq!(first_cols(&widths, spans[1][0]), 100.0, "the cell before it keeps its width");
+
+    // A row with a third cell but only two `\cellx`.
+    let (widths, spans) = grid_of(
+        br"{\rtf1\ansi
+\trowd\cellx6000\cellx9000 \pard\intbl Title\cell b\cell\row
+\trowd\cellx2000\cellx6000 \pard\intbl a\cell b\cell extra\cell\row
+\pard\par}",
+    );
+    assert_eq!(first_cols(&widths, spans[0][0]), 300.0);
+    assert_eq!(spans[1].len(), 3);
+    assert_eq!(first_cols(&widths, spans[1][0]), 100.0);
+}
+
+#[test]
+fn table_grid_merges_edges_a_few_twips_apart() {
+    // Two rows that mean the same 3000-twip edge, 5 twips apart: one grid column, not one of
+    // a quarter point (which the document model refuses, so the table got equal columns).
+    let (widths, spans) = grid_of(
+        br"{\rtf1\ansi
+\trowd\cellx3000\cellx9000 \pard\intbl a\cell b\cell\row
+\trowd\cellx3005\cellx9000 \pard\intbl c\cell d\cell\row
+\pard\par}",
+    );
+    assert_eq!(widths.len(), 2, "{widths:?}");
+    assert_eq!(spans, [[1, 1], [1, 1]]);
+    assert_eq!(widths.iter().sum::<f32>(), 450.0);
+}
+
+/// `edges` as one table row, a cell for each.
+fn rtf_row(edges: &[usize]) -> String {
+    let cells: String = edges.iter().map(|e| format!(r"\cellx{e}")).collect();
+    format!(r"\trowd{cells}\pard\intbl {}\row", r"x\cell ".repeat(edges.len()))
+}
+
+#[test]
+fn table_grid_keeps_a_column_for_each_cell_of_the_widest_row() {
+    // 64 evenly spaced edges: merging by a common gap halves them to 32 columns, too few for a
+    // row of 33 or more cells, and the table lost its grid.
+    let edges: Vec<usize> = (1..=64).map(|k| k * 100).collect();
+    for cells in [33, 40, 50, 62] {
+        let wide: Vec<usize> = edges.iter().copied().take(cells).chain([6400]).collect();
+        let rest: Vec<usize> = edges.iter().copied().skip(cells - 1).collect();
+        let rtf = format!(r"{{\rtf1\ansi {}{}\pard\par}}", rtf_row(&wide), rtf_row(&rest));
+        let (widths, spans) = grid_of(rtf.as_bytes());
+        assert!((cells + 1..=63).contains(&widths.len()), "{cells} cells, {} grid columns", widths.len());
+        assert_eq!(spans[0].len(), cells + 1, "every cell is kept");
+        assert_eq!(widths.iter().sum::<f32>(), 320.0, "the table keeps its 320 pt");
+    }
+}
+
+#[test]
+fn table_grid_merges_columns_import_would_widen() {
+    // Columns under 6 pt that no row needs: import raises each one to 6 pt, so this table of
+    // 3 pt columns doubled in width. Merged, it keeps its 60 pt.
+    let mut rtf = String::from(r"{\rtf1\ansi ");
+    for k in 1..=20 {
+        rtf.push_str(&rtf_row(&[k * 60, 1200]));
+    }
+    rtf.push_str(r"\pard\par}");
+    let (widths, _) = grid_of(rtf.as_bytes());
+    assert!(widths.iter().all(|&w| w >= 6.0), "{widths:?}");
+    let d = import(rtf.as_bytes()).unwrap();
+    let t = d.body.iter().find_map(|b| if let wordcraft_doc::Block::Table(t) = &**b { Some(t) } else { None }).unwrap();
+    assert_eq!(t.grid.iter().sum::<f32>(), 60.0, "{:?}", t.grid);
+
+    // A row that needs them keeps them, narrow as they are.
+    let (widths, spans) = grid_of(format!(r"{{\rtf1\ansi {}\pard\par}}", rtf_row(&[60, 120, 180])).as_bytes());
+    assert_eq!(widths, [3.0, 3.0, 3.0]);
+    assert_eq!(spans, [[1, 1, 1]]);
+}
+
+#[test]
+fn table_grid_never_keeps_a_column_the_document_model_refuses() {
+    // Three cells within a point of each other: too narrow to keep even for a row that needs
+    // them. The row can't fit, so the table has no grid, and nothing panics.
+    let f = parse(format!(r"{{\rtf1\ansi {}\pard\par}}", rtf_row(&[5, 10, 15])).as_bytes()).unwrap();
+    let FBlock::Table(t) = &f.blocks[0] else { panic!("no table") };
+    assert!(t.widths.is_empty(), "{:?}", t.widths);
+    assert_eq!(t.rows[0].len(), 3);
+}
+
 #[test]
 fn code_pages_from_ansicpg_and_font_charsets() {
     // The document's code page: Russian RTF as accounting systems write it.
