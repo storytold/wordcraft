@@ -140,7 +140,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
-- 2026-11-01: Text boxes: with Wrap text in shape off, each line runs as long as its text, so a label in a box saved too narrow for it, such as a classification mark in a header, stays on one line instead of wrapping letter by letter. The setting is kept on save.
+- 2026-11-01: Text boxes: with Wrap text in shape off, each line runs as long as its text, so a label in a box saved too narrow for it, such as a classification mark in a header, stays on one line instead of wrapping letter by letter, and a floating box is drawn as wide as its lines, as in Word. The setting is kept on save.
 - 2026-11-01: Shapes: a line's arrowheads are as long and as wide as Word draws them: 2, 3 or 5 times the line's width for small, medium and large (a line under 2 points as a 2-point one). Their kind, width and length are read from DOCX (DrawingML and VML) and saved back; before, every arrowhead was one size and saved as a medium triangle.
 - 2026-11-01: Columns with Line between, made for selected text (a section in the middle of a page), draw their line; the line runs as tall as the section's text on the page, not the whole page (#5178). Readiness unchanged.
 - 2026-10-31: `.doc` import: text that names no font takes the stylesheet's standard font, so a Word 365 `.doc` in Aptos opens in Aptos (or its substitute) instead of Times New Roman, the font table's first entry (#5066). Readiness unchanged.

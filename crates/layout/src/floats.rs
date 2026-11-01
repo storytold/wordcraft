@@ -493,18 +493,24 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
                 let cx = x + line.cl_left(k).unwrap_or(0.0);
                 display::inline_rect(Some(obj), cx, y + (line.baseline - fl.top), c.adv, c.obj_h)
             };
-            let (mut behind, mut front) = (Vec::new(), Vec::new());
-            let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
-            // Floating ones are drawn here; inline ones with their line.
-            if floating {
-                layer.extend(float_items(obj, rect, (Spin::default(), Point::default()), story, path, c.start));
-            }
             let text_box = match obj {
                 InlineObject::Shape { story: Some(id), .. } if ctx.doc.parts.get(id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::TextBox) => {
                     Some(*id)
                 }
                 _ => None,
             };
+            // Wrap text in shape off: a floating box is as wide as its lines. A turned box keeps
+            // the rectangle it turns about.
+            let rect = match text_box {
+                Some(id) if floating && float.rot == 0.0 => Rect { w: textbox::no_wrap_width(ctx, id, rect.w), ..rect },
+                _ => rect,
+            };
+            let (mut behind, mut front) = (Vec::new(), Vec::new());
+            let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
+            // Floating ones are drawn here; inline ones with their line.
+            if floating {
+                layer.extend(float_items(obj, rect, (Spin::default(), Point::default()), story, path, c.start));
+            }
             // A box linked from another shows (and edits) that box's story.
             let shown = text_box.map(|id| textbox::shown_story(ctx, id));
             front.push(Placed::Object {

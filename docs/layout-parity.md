@@ -278,7 +278,7 @@ layout suite are pending; this is not a new Word/native-IME acceptance claim.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-01 | trivial | Text boxes: with Wrap text in shape off (`wrap="none"`, `mso-wrap-style:none`), lines run as long as their text, so a box saved narrower than its text no longer wraps it letter by letter; estimates unchanged |
+| 2026-11-01 | trivial | Text boxes: with Wrap text in shape off (`wrap="none"`, `mso-wrap-style:none`), lines run as long as their text, list labels included, so a box saved narrower than its text no longer wraps it letter by letter; a floating box is drawn as wide as its lines and short paragraphs align to the widest one, as observed in Word with a synthetic document; estimates unchanged |
 | 2026-11-01 | trivial | Columns: the line between them runs from the section's top on the page to the bottom of its tallest column; a continuous section mid-page gets its line (#5178) |
 | 2026-10-31 | trivial | A table row that would leave a cell empty on a page that already holds something (its inline picture or first line runs past the room) moves on whole instead of leaving the other cells' text beside the empty cell; an at-least row grown by its picture no longer splits off the picture (#4272) |
 | 2026-11-01 | trivial | A cell aligned to the middle or bottom of a row split across pages is aligned within the part left on the page when its text fits there, and starts at the top of the cell otherwise, as measured in Word |

@@ -1414,7 +1414,7 @@ fn list_level(ctx: &Ctx, p: &Paragraph) -> Option<wordcraft_doc::numbering::Leve
 }
 
 /// A width to lay a paragraph out in so that only its own line breaks end lines.
-const UNBOUNDED: f32 = 100_000.0;
+pub(crate) const UNBOUNDED: f32 = 100_000.0;
 
 /// A paragraph's longest word and longest line (between line breaks), indents included.
 fn para_content(pl: &ParaLayout) -> (f32, f32) {
@@ -1446,6 +1446,14 @@ fn para_content(pl: &ParaLayout) -> (f32, f32) {
         }
     }
     (lo.max(word) + indents, hi.max(line) + indents)
+}
+
+/// [`para_content`], with how far a list label pushes the first line's text past its indent.
+pub(crate) fn para_content_labelled(pl: &ParaLayout) -> (f32, f32) {
+    let (lo, hi) = para_content(pl);
+    let start = pl.rp.indent_left.max(0.0) + pl.rp.indent_first.max(0.0);
+    let text = pl.label.as_ref().and_then(|_| pl.lines.first()).and_then(|l| l.xs.first()).copied().unwrap_or(start);
+    (lo, hi + (text - start).max(0.0))
 }
 
 /// Whether nothing in `t` asks for a width (its own or any cell's): its columns then follow
