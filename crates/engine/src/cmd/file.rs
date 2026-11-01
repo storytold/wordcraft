@@ -561,9 +561,7 @@ fn story_fields(blocks: &wordcraft_doc::Blocks, depth: usize, out: &mut Vec<Valu
                         if out.len() >= MAX_STORY_FIELDS {
                             return false;
                         }
-                        let name = wordcraft_layout::fields::field_name(instr);
-                        let per_page = matches!(name.as_str(), "PAGE" | "NUMPAGES" | "SECTIONPAGES" | "SECTION" | "PAGEREF" | "STYLEREF");
-                        out.push(json!({"code": instr.trim(), "result": result, "perPage": per_page}));
+                        out.push(field_json(instr, result));
                     }
                 }
             }
@@ -577,6 +575,34 @@ fn story_fields(blocks: &wordcraft_doc::Blocks, depth: usize, out: &mut Vec<Valu
         }
     }
     true
+}
+
+/// The range fields of `story` (a `FieldStart` … `FieldEnd` pair: what the DOCX reader makes of a
+/// field whose result has tracked changes of its own or spans paragraphs, and of every TOC),
+/// listed as [`story_fields`] lists inline ones, after them; the result is the text between the
+/// markers, at most [`MAX_RANGE_RESULT`] characters of it. False when a limit cut the list short.
+fn range_fields(doc: &Document, story: StoryRef, out: &mut Vec<Value>) -> bool {
+    for r in doc.field_ranges(story) {
+        if out.len() >= MAX_STORY_FIELDS {
+            return false;
+        }
+        let from = wordcraft_doc::Pos { off: r.start.off.saturating_add(wordcraft_doc::para::OBJ.len_utf8()), ..r.start.clone() };
+        let text = doc.copy_range(&from, &r.end).plain_text();
+        let result: String = text.trim_end().chars().filter(|c| *c != wordcraft_doc::para::OBJ).take(MAX_RANGE_RESULT).collect();
+        out.push(field_json(&r.instr, &result));
+    }
+    true
+}
+
+/// Longest result `document.inspect` gives a range field, in characters.
+const MAX_RANGE_RESULT: usize = 2000;
+
+/// A field as `document.inspect` lists it: its code, its stored result, and whether each page
+/// shows a value of its own.
+fn field_json(instr: &str, result: &str) -> Value {
+    let name = wordcraft_layout::fields::field_name(instr);
+    let per_page = matches!(name.as_str(), "PAGE" | "NUMPAGES" | "SECTIONPAGES" | "SECTION" | "PAGEREF" | "STYLEREF");
+    json!({"code": instr.trim(), "result": result, "perPage": per_page})
 }
 
 /// Structure for agents: blocks with text and formatting summary, selection, stats.
@@ -637,7 +663,7 @@ fn inspect(s: &mut Session, v: &Value) -> CmdResult {
         .map(|(id, p)| {
             let mut o = json!({"id": id, "kind": p.kind, "text": s.doc.plain_text(StoryRef::Part(*id))});
             let mut fields = Vec::new();
-            let complete = story_fields(&p.blocks, 0, &mut fields);
+            let complete = story_fields(&p.blocks, 0, &mut fields) && range_fields(&s.doc, StoryRef::Part(*id), &mut fields);
             if !fields.is_empty() {
                 o["fields"] = json!(fields);
             }

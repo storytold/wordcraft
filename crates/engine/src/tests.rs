@@ -11566,6 +11566,36 @@ fn inspect_lists_cell_fields_and_marks_a_cut_list() {
     assert_eq!(p["fieldsTruncated"], true);
 }
 
+/// #4467 review: a field kept as a range (`FieldStart` … `FieldEnd`, as the DOCX reader keeps a
+/// PAGE whose result has tracked changes, or a TOC spanning paragraphs) is listed too, its result
+/// the text between the markers.
+#[test]
+fn inspect_lists_range_fields() {
+    use wordcraft_doc::{CharProps, InlineObject, Paragraph, para_block};
+    let start = |instr: &str| InlineObject::FieldStart { instr: instr.into(), locked: false, dirty: false };
+    let mut s = s();
+    let id = run(&mut s, "insert.pageNumber", json!({}))["story"].as_u64().unwrap();
+    let key = u32::try_from(id).unwrap();
+    let c = CharProps::default();
+    let mut page = Paragraph::new();
+    page.insert_object(0, start("PAGE"), &c).unwrap();
+    page.insert_text(page.len(), "7", &c).unwrap();
+    page.insert_object(page.len(), InlineObject::FieldEnd, &c).unwrap();
+    let mut first = Paragraph::new();
+    first.insert_object(0, start("TOC \\o \"1-3\""), &c).unwrap();
+    first.insert_text(first.len(), "One", &c).unwrap();
+    let mut second = Paragraph::with_text("Two", c.clone());
+    second.insert_object(second.len(), InlineObject::FieldEnd, &c).unwrap();
+    let blocks = &mut s.doc.parts.get_mut(&key).unwrap().blocks;
+    blocks.extend([para_block(page), para_block(first), para_block(second)]);
+    let doc = run(&mut s, "document.inspect", json!({}));
+    let part = doc["parts"].as_array().unwrap().iter().find(|p| p["id"] == id).unwrap().clone();
+    let fields = part["fields"].as_array().unwrap();
+    assert!(fields.contains(&json!({"code": "PAGE", "result": "7", "perPage": true})), "{fields:?}");
+    assert!(fields.contains(&json!({"code": "TOC \\o \"1-3\"", "result": "One\nTwo", "perPage": false})), "{fields:?}");
+    assert!(part.get("fieldsTruncated").is_none(), "{part}");
+}
+
 /// #3676: a 1-based page parameter becomes a 0-based index without wrapping.
 /// On 32-bit and wasm the old cast truncated 2^32 to 0 and `0 - 1` panicked.
 #[test]
