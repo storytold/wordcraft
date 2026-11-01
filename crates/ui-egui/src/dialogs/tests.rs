@@ -205,6 +205,49 @@ fn body_of(app: &WordApp) -> String {
     app.session.doc.plain_text(wordcraft_doc::StoryRef::Body)
 }
 
+/// Tab goes from OK to Cancel, as the buttons read (Word on Windows: OK, then Cancel; macOS has
+/// Cancel first), and Shift+Tab comes back. A right-to-left layout adds its right button first,
+/// and Tab follows the order buttons are added, so Tab used to reach Cancel before OK.
+#[test]
+fn tab_goes_through_ok_and_cancel_as_they_read() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    let mut app = app_with("One");
+    let _ = app.run("ui.dialog", json!({"name": "font"}));
+    let mut h = app_harness(app);
+    h.run_steps(3);
+    let (first, second) = if cfg!(target_os = "macos") { ("Cancel", "OK") } else { ("OK", "Cancel") };
+    let (left, right) = (h.get_by_role_and_label(Role::Button, first).rect(), h.get_by_role_and_label(Role::Button, second).rect());
+    assert!(left.max.x <= right.min.x, "{first} is left of {second}, apart: {left:?} {right:?}");
+    h.get_by_role_and_label(Role::Button, first).focus();
+    h.run_steps(2);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(2);
+    assert!(h.get_by_role_and_label(Role::Button, second).is_focused(), "Tab from {first} reaches {second}");
+    h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Tab);
+    h.run_steps(2);
+    assert!(h.get_by_role_and_label(Role::Button, first).is_focused(), "Shift+Tab comes back to {first}");
+}
+
+/// Paragraph › Spacing: Tab goes Before, After, then Line spacing beside them, as in Word (it went
+/// Before, Line spacing, After: a grid's Tab order is row by row).
+#[test]
+fn paragraph_spacing_tabs_in_words_order() {
+    use egui_kittest::kittest::NodeT;
+    use egui_kittest::kittest::Queryable;
+    let mut app = app_with("One");
+    let _ = app.run("ui.dialog", json!({"name": "paragraph"}));
+    let mut h = app_harness(app);
+    h.run_steps(3);
+    h.query_all_by_label("Before:").find(|n| n.accesskit_node().role() == egui::accesskit::Role::SpinButton).expect("Before box").focus();
+    h.run_steps(2);
+    for next in ["After:", "Line spacing:"] {
+        h.key_press(egui::Key::Tab);
+        h.run_steps(2);
+        assert!(h.query_all_by_label(next).any(|n| n.is_focused()), "Tab reaches {next}");
+    }
+}
+
 fn app_with(text: &str) -> WordApp {
     let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
     let _ = app.run("document.setText", json!({"text": text}));
