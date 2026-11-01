@@ -404,6 +404,11 @@ fn insert_symbol(s: &mut Session, v: &Value) -> CmdResult {
     result(s)
 }
 
+/// Whether the equation at `at` is displayed on a line of its own.
+fn is_display(s: &Session, at: &Pos) -> bool {
+    matches!(s.doc.para_at(at).and_then(|p| p.object_at(at.off)), Some(InlineObject::Equation { display: true, .. }))
+}
+
 fn nodes_of(s: &Session, at: &Pos) -> Option<Arg> {
     match s.doc.para_at(at)?.object_at(at.off)? {
         InlineObject::Equation { math, linear, .. } => {
@@ -780,8 +785,9 @@ fn get(s: &mut Session, _: &Value) -> CmdResult {
 fn structure_actions(s: &mut Session, _: &Value) -> CmdResult {
     let m = current(s)?;
     let nodes = nodes_of(s, &m.at).ok_or_else(|| CmdError::Failed("no equation there".into()))?;
+    let display = is_display(s, &m.at);
     let acts: Vec<Value> =
-        me::structure_actions(&nodes, &m.pos).into_iter().map(|(l, a, label)| json!({"level": l, "action": a, "label": label})).collect();
+        me::structure_actions(&nodes, &m.pos, display).into_iter().map(|(l, a, label)| json!({"level": l, "action": a, "label": label})).collect();
     Ok(json!({"actions": acts}))
 }
 
@@ -791,16 +797,17 @@ fn structure(s: &mut Session, v: &Value) -> CmdResult {
     let m = current(s)?;
     let action = p::req_str(v, "action")?.to_string();
     let nodes = nodes_of(s, &m.at).ok_or_else(|| CmdError::Failed("no equation there".into()))?;
+    let display = is_display(s, &m.at);
     let level = match p::u64(v, "level") {
         Some(l) => l as usize,
-        None => me::structure_actions(&nodes, &m.pos)
+        None => me::structure_actions(&nodes, &m.pos, display)
             .into_iter()
             .find(|(_, a, _)| *a == action)
             .map(|(l, _, _)| l)
             .ok_or_else(|| CmdError::Params(format!("{action} doesn't apply here")))?,
     };
     let mut pos = None;
-    let (_, effect) = with_eq(s, &m.at, |math, _| pos = me::apply_structure(&mut math.nodes, &m.pos, level, &action))?;
+    let (_, effect) = with_eq(s, &m.at, |math, _| pos = me::apply_structure(&mut math.nodes, &m.pos, level, &action, display))?;
     let pos = pos.ok_or_else(|| CmdError::Params(format!("{action} doesn't apply here")))?;
     if let Some(m) = s.math.as_mut() {
         m.pos = pos;

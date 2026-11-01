@@ -2084,6 +2084,35 @@ fn equation_manual_breaks_round_trip() {
     assert_eq!(r.settings.math, None);
 }
 
+/// #3217 review: an n-ary operator's `m:grow` keeps what the file said, including an explicit
+/// off, and a file that says nothing stays that way (Word then grows a display operator).
+#[test]
+fn nary_grow_keeps_on_off_and_unsaid_round_trip() {
+    use wordcraft_doc::math::{MNode, MRun, Math};
+    let nary = |grow| MNode::Nary {
+        chr: '\u{222B}',
+        lim_loc: None,
+        grow,
+        sub_hide: true,
+        sup_hide: true,
+        sub: vec![],
+        sup: vec![],
+        e: vec![MNode::Run(MRun::new("x"))],
+    };
+    let nodes = vec![nary(None), nary(Some(true)), nary(Some(false))];
+    let mut d = Document::new();
+    let math = Math { nodes: nodes.clone(), ..Default::default() };
+    let mut p = Paragraph::with_text("", CharProps::default());
+    p.insert_object(0, InlineObject::Equation { linear: "x".into(), display: true, math }, &CharProps::default()).unwrap();
+    d.body = vec![para_block(p)];
+    let r = rt(&d);
+    let got = paras(&r).iter().flat_map(|p| p.objects.iter()).find_map(|o| match o {
+        InlineObject::Equation { math, .. } => Some(math.nodes.clone()),
+        _ => None,
+    });
+    assert_eq!(got, Some(nodes));
+}
+
 /// #332: rotation (`a:xfrm/@rot`, 60000ths of a degree) and flips of pictures, shapes, text boxes
 /// and groups survive save and load; the effect extent written covers the rotated bounds, and
 /// reading takes that overhang back out of the effects room.

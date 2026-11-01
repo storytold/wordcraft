@@ -156,6 +156,19 @@ impl Ctx {
         self.stretch(con, t, target, size, true)
     }
 
+    /// `gid` at `size`, scaled by its own measured ink height toward `target` (points): for a
+    /// display operator the font has no size variant or assembly data for at all, so there's
+    /// nothing to pick from or stretch — the plain, unscaled glyph would otherwise silently stay
+    /// at its small, inline size even in display mode (#3208). Only ever grows it: a glyph whose
+    /// own natural size already meets or exceeds `target` stays at its natural size, not shrunk
+    /// down toward it.
+    pub(super) fn scaled_fallback(&self, gid: u32, target: f32, size: f32) -> Bx {
+        let target_fu = target * self.upem / size;
+        let f =
+            glyph_bounds(&self.face, gid).map(|(_, y0, _, y1)| y1 - y0).filter(|h| *h > 0.0).map(|h| (target_fu / h).clamp(1.0, 1.5)).unwrap_or(1.0);
+        self.glyph_id(gid, size * f, self.color)
+    }
+
     pub(super) fn stretch_h(&self, gid: u32, target: f32, size: f32) -> Option<Bx> {
         let t = self.t.as_ref()?;
         let con = t.horiz.get(&gid)?;

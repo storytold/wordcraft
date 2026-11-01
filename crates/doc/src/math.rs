@@ -261,8 +261,10 @@ pub enum MNode {
         /// `None`: Word's default (integrals take sub/sup limits, the rest under/over).
         #[serde(default)]
         lim_loc: Option<LimLoc>,
+        /// `m:grow`: `None` when the file doesn't say (Word then grows a display operator to its
+        /// operand), `Some(false)` when it says not to.
         #[serde(default)]
-        grow: bool,
+        grow: Option<bool>,
         #[serde(default)]
         sub_hide: bool,
         #[serde(default)]
@@ -1015,7 +1017,7 @@ mod tests {
             vec![MNode::Nary {
                 chr: '∑',
                 lim_loc: None,
-                grow: false,
+                grow: None,
                 sub_hide: false,
                 sup_hide: false,
                 sub: vec![run("ij")],

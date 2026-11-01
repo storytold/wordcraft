@@ -223,8 +223,10 @@ fn write_nary(w: &mut W, n: &MNode, depth: usize) {
         Some(LimLoc::SubSup) => val(w, "m:limLoc", "subSup"),
         None => {}
     }
-    if *grow {
-        val(w, "m:grow", "1");
+    match grow {
+        Some(true) => val(w, "m:grow", "1"),
+        Some(false) => val(w, "m:grow", "0"),
+        None => {}
     }
     if *sub_hide {
         val(w, "m:subHide", "1");
