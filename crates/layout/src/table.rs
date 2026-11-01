@@ -391,7 +391,9 @@ struct TableFrame {
     x: f32,
 }
 
-// Nested measurement needs the same preferred weights as layout before sharing span minima.
+/// The table's column widths before autofit: its grid, or equal shares of `avail` without one,
+/// then the cells' absolute and percentage widths. Nested measurement needs the same preferred
+/// weights as layout before sharing span minima.
 fn preferred_grid(t: &Table, avail: f32) -> Vec<f32> {
     let ncols = grid_cols(t).max(1);
     let mut grid: Vec<f32> = if t.grid.len() == ncols {
