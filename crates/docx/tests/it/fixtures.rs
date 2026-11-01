@@ -1924,6 +1924,10 @@ fn office_2016_chart_with_no_fallback_keeps_its_chart() {
         let g = graphics(&d);
         let [InlineObject::Graphic { graphic, .. }] = g.as_slice() else { panic!("{g:?}") };
         assert_eq!(graphic.kind, wordcraft_doc::graphic::GraphicKind::Chart);
+        assert!(
+            matches!(graphic.items.as_slice(), [wordcraft_doc::graphic::GraphicItem::Image { media, .. }] if media.is_empty()),
+            "the missing-picture box"
+        );
         let out = wordcraft_docx::write(&d).unwrap();
         let files = unzip(&out);
         let body = text(&files, "word/document.xml");
@@ -1950,6 +1954,10 @@ fn model_3d_outside_an_alternate_is_kept() {
         let g = graphics(&d);
         let [InlineObject::Graphic { graphic, .. }] = g.as_slice() else { panic!("round {round}: {g:?}") };
         assert_eq!(graphic.kind, wordcraft_doc::graphic::GraphicKind::Model3d);
+        assert!(
+            matches!(graphic.items.as_slice(), [wordcraft_doc::graphic::GraphicItem::Image { media, .. }] if media.is_empty()),
+            "the missing-picture box"
+        );
         let out = wordcraft_docx::write(&d).unwrap();
         let saved = unzip(&out);
         let body = text(&saved, "word/document.xml");

@@ -69,7 +69,11 @@ impl Reader<'_> {
                 GraphicKind::Diagram => self.diagram_drawing_rel(gd, rels).into_iter().collect(),
             };
             let source = c.child("a:graphic").and_then(|g| self.keep_embedded(g, rels, &extra));
-            let graphic = self.graphic(kind, gd, rels, w, h, source);
+            let mut graphic = self.graphic(kind, gd, rels, w, h, source);
+            // A kept model or chart can't be drawn from its own part: the missing-picture box.
+            if kept_kind(gd).is_some() {
+                Arc::make_mut(&mut graphic).items = vec![GraphicItem::Image { rect: [0.0, 0.0, w, h], media: String::new(), crop: [0.0; 4] }];
+            }
             float.effect = float.effect.map(|e| e.max(0.0));
             return Some(InlineObject::Graphic { w, h, alt, float, graphic });
         }
@@ -168,10 +172,8 @@ impl Reader<'_> {
         let source = self.keep_embedded(&kept, rels, &[])?;
         let Some(fallback) = fallback else {
             let mut object = self.read_drawing(sc, choice.child("w:drawing")?, rels)?;
-            if let InlineObject::Graphic { w, h, graphic, .. } = &mut object {
-                let graphic = Arc::make_mut(graphic);
-                graphic.items = vec![GraphicItem::Image { rect: [0.0, 0.0, *w, *h], media: String::new(), crop: [0.0; 4] }];
-                graphic.source = Some(source);
+            if let InlineObject::Graphic { graphic, .. } = &mut object {
+                Arc::make_mut(graphic).source = Some(source);
             }
             return Some(object);
         };
