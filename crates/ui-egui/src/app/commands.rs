@@ -141,8 +141,13 @@ impl WordApp {
         }
         // A local copy cannot acknowledge the checkpoint owned by an external provider.
         // run() has already committed comment drafts before entering this save path.
+        // Disabling new choices does not release a binding or an unresolved provider save.
         let provider_copy = matches!(id, "file.save" | "file.saveAs")
-            && self.services.file_providers.as_ref().is_some_and(|host| host.enabled() && host.bound(self.session.document_id()));
+            && self
+                .services
+                .file_providers
+                .as_ref()
+                .is_some_and(|host| host.bound(self.session.document_id()) || host.pending_for(self.session.document_id()));
         let provider_dirty = provider_copy && self.session.dirty;
         // Web: saving and exporting become downloads.
         if self.services.download.is_some() && matches!(id, "file.save" | "file.saveAs" | "file.exportPdf" | "file.exportPng") {

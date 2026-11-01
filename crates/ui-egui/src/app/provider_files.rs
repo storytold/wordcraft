@@ -293,6 +293,73 @@ mod tests {
     }
 
     #[test]
+    fn disabled_provider_owned_browser_copies_and_async_outcomes_keep_the_provider_checkpoint_dirty() {
+        use crate::async_saves::{AsyncSaves, SaveOutcome};
+
+        for initially_bound in [false, true] {
+            for command in ["file.save", "file.saveAs"] {
+                for outcome in [Some(SaveOutcome::Saved), Some(SaveOutcome::Cancelled), Some(SaveOutcome::Failed("write failed".into())), None] {
+                    let (mut app, host) = app();
+                    let document = app.session.document_id();
+                    let (request, _) = save(&mut app, &host);
+                    if initially_bound {
+                        host.result(request.clone(), "saved".into(), "resource-one".into()).unwrap();
+                        app.provider_tick();
+                    }
+                    host.set_enabled(false).unwrap();
+                    app.session.run("text.insert", &json!({"text":" Edited while provider choices are disabled"})).unwrap();
+
+                    let saves = AsyncSaves::default();
+                    let pending = saves.clone();
+                    let copies = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+                    let received = copies.clone();
+                    let accepted = outcome.is_some();
+                    app.services.async_saves = Some(saves.clone());
+                    app.services.download = Some(Box::new(move |name, bytes| {
+                        if !accepted {
+                            return Err("download refused".into());
+                        }
+                        received.borrow_mut().push((name.to_string(), bytes.to_vec()));
+                        pending.start();
+                        Ok(())
+                    }));
+                    let params = if command == "file.saveAs" { json!({"path":"Device copy.docx"}) } else { json!({}) };
+                    let result = app.run(command, params);
+                    assert!(app.session.dirty, "a disabled provider still owns its unsaved checkpoint");
+                    assert_eq!(host.bound(document), initially_bound);
+                    assert_eq!(host.pending_for(document), !initially_bound);
+                    if let Some(outcome) = outcome {
+                        let ticket = result.unwrap()["pendingSave"].as_u64().unwrap();
+                        let copies = copies.borrow();
+                        let restored = wordcraft_engine::io::open_bytes(&copies[0].0, &copies[0].1).unwrap();
+                        assert!(restored.plain_text(wordcraft_doc::StoryRef::Body).contains("Edited while provider choices are disabled"));
+                        saves.finish(ticket, outcome);
+                        app.settle_async_saves();
+                    } else {
+                        assert!(result.unwrap_err().contains("download refused"));
+                        assert!(copies.borrow().is_empty());
+                    }
+                    assert!(app.session.dirty, "a device outcome never acknowledges the provider revision");
+                    host.set_enabled(true).unwrap();
+                    app.provider_tick();
+                    assert_eq!(host.snapshot()["documents"][0]["dirty"], true);
+                    if !initially_bound {
+                        host.result(request, "saved".into(), "resource-one".into()).unwrap();
+                        app.provider_tick();
+                        assert!(app.session.dirty, "an old pending capture cannot acknowledge the later copy's edits");
+                    }
+                    assert!(host.bound(document));
+                    assert_eq!(host.filename(document).as_deref(), Some("Document.docx"));
+                    let (request, _) = save(&mut app, &host);
+                    host.result(request, "saved".into(), "resource-one".into()).unwrap();
+                    app.provider_tick();
+                    assert!(!app.session.dirty, "only the provider ACK acknowledges the edited revision");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn device_download_acceptance_and_cancel_do_not_clear_unsaved_document_state() {
         for destination in ["device", "cancel"] {
             let (mut app, host) = app();

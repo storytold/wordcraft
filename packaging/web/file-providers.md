@@ -28,6 +28,8 @@ while a chooser, serialization, upload acknowledgement or read is unresolved. Un
 clears resources and bindings without closing documents. `setEnabled(false)` stops new
 provider choices and hides provider Recents while allowing outstanding operations to settle;
 `setEnabled(true)` restores availability. There is no editor preference or end-user cloud switch.
+Disabling choices preserves existing document bindings and pending saves: local copies still
+cannot acknowledge those provider checkpoints, including after a browser picker finishes.
 Never reuse an account namespace for a different account.
 
 ## Save protocol
