@@ -1,0 +1,198 @@
+//! Frames, drawing shapes and groups in the text (ODF 1.3 §10.3–10.4): pictures, formula objects,
+//! text boxes, shapes and groups, each read into the paragraph (or the group) it is in.
+
+use super::{Attrs, Body, Ev, FBlock, Inline, events, get, length, local, make_img, model};
+
+/// An embedded ODF formula sub-document's `content.xml`, read for its `math:math` element
+/// (its root, ODF 1.3 Part 3 §2.2.9 B; some writers wrap it in an `office:math`, which isn't
+/// it): the first MathML element named `math` in document order, with its
+/// subtree, passed to [`crate::mathml::read`]. `None` when there's no such element, it holds
+/// nothing, or the XML is malformed. Nesting and element count are bounded like other XML here.
+pub(in crate::odt) fn read_formula(xml: &[u8]) -> Option<(String, bool)> {
+    use crate::mathml::{El, Item, MAX_NODES, local};
+    let mut stack: Vec<El> = Vec::new();
+    let mut math: Option<El> = None;
+    let mut over = 0usize;
+    let mut count = 0usize;
+    events(xml, |ev| {
+        if math.is_some() {
+            return;
+        }
+        count += 1;
+        if count > MAX_NODES * 4 {
+            math = stack.drain(..).next();
+            return;
+        }
+        match ev {
+            Ev::Start(q, a) => {
+                if stack.is_empty() && (local(&q) != "math" || q.starts_with("office:")) {
+                    return;
+                }
+                if stack.len() < wordcraft_doc::math::MAX_DEPTH {
+                    stack.push(El { name: q, attrs: a, children: Vec::new() });
+                } else {
+                    over += 1;
+                }
+            }
+            Ev::End(_) => {
+                if over > 0 {
+                    over -= 1;
+                } else if stack.len() > 1 {
+                    if let Some(done) = stack.pop()
+                        && let Some(parent) = stack.last_mut()
+                    {
+                        parent.children.push(Item::El(done));
+                    }
+                } else if stack.len() == 1 {
+                    math = stack.pop();
+                }
+            }
+            Ev::Text(t) => {
+                if over == 0
+                    && let Some(top) = stack.last_mut()
+                {
+                    top.children.push(Item::Text(t));
+                }
+            }
+        }
+    });
+    crate::mathml::read(&math?)
+}
+
+/// A frame being read: its width and height, picture bytes, alt text and the equation read from
+/// an embedded formula object.
+/// A group being read (ODF 1.3 §10.3.15 `draw:g`): its anchor, its style, and its members so far.
+pub(in crate::odt) struct OpenGroup {
+    pub(in crate::odt) anchor: Option<String>,
+    pub(in crate::odt) style: Option<String>,
+    pub(in crate::odt) members: Vec<model::Member>,
+}
+
+/// Largest size or offset read in a group, points (22 inches).
+pub(in crate::odt) const MAX_LEN: f32 = 1584.0;
+
+impl Body<'_> {
+    /// End a frame or drawing shape: its picture, equation, text box or shape goes into the
+    /// paragraph.
+    pub(in crate::odt) fn end_frame(&mut self) {
+        if let Some((w, h, img, alt, eq)) = self.frame.take() {
+            let boxed = self.frame_box.take();
+            let mut float = self.frame_float.take();
+            if boxed.is_some()
+                && self.shape_kind.is_some()
+                && let Some(f) = &mut float
+            {
+                let (h, v) = std::mem::take(&mut self.shape_flip);
+                f.flip_h |= h;
+                f.flip_v ^= v;
+            }
+            // Kept when it floats, or turns or mirrors the object in line.
+            let float = float.filter(|f| f.wrap != wordcraft_doc::para::Wrap::Inline || crate::odt::frames::turned(f) || f.flip_h || f.flip_v);
+            let inline = match (boxed, eq) {
+                (Some(blocks), _) => {
+                    let look = std::mem::take(&mut self.frame_look);
+                    // Without a height it grows from nothing to its text.
+                    let kind = self.shape_kind.take().unwrap_or(wordcraft_doc::para::ShapeKind::TextBox);
+                    // A shape whose paragraphs are all empty (LibreOffice writes `<text:p/>` in
+                    // each) holds no text.
+                    let empty = blocks.iter().all(|b| matches!(b, FBlock::Para(p) if p.inlines.is_empty()));
+                    let blocks = if kind != wordcraft_doc::para::ShapeKind::TextBox && empty { Vec::new() } else { blocks };
+                    let path = self.shape_path.take().filter(|_| kind == wordcraft_doc::para::ShapeKind::Freeform);
+                    Some(Inline::Shape { kind, w: w.unwrap_or(72.0), h: h.unwrap_or(1.0), float: float.map(Box::new), blocks, look, path })
+                }
+                (None, Some((linear, display))) => Some(Inline::Equation { linear, display }),
+                (None, None) => img.and_then(|data| make_img(data, w, h, alt.trim())).map(|mut img| {
+                    img.float = float.map(Box::new);
+                    Inline::Image(img)
+                }),
+            };
+            if let Some(inline) = inline {
+                // A group's member goes into the group, at its place in it.
+                if let Some(((x, y), g)) = self.member_at.take().zip(self.group.as_mut().filter(|_| self.note.is_none())) {
+                    if g.members.len() < wordcraft_doc::para::MAX_GROUP_CHILDREN {
+                        g.members.push(model::Member { x, y, inline });
+                    }
+                } else {
+                    self.push_inline(inline);
+                }
+            }
+        }
+        self.frame = None;
+    }
+
+    /// A frame or shape `w` × `h` (attributes `a`) begins: in a group (not in a shape's text), where
+    /// it sits in it, from its `svg:x`/`svg:y` or `draw:transform` (a line's from its ends, `line`).
+    pub(in crate::odt) fn member_start(&mut self, a: &Attrs, w: f32, h: f32, line: Option<(Option<f32>, Option<f32>)>) {
+        self.member_rot = None;
+        if self.group.is_none() || self.note.is_some() {
+            return;
+        }
+        let len = |k: &str| get(a, k).and_then(length).filter(|v| v.is_finite()).map(|v| v.clamp(-MAX_LEN, MAX_LEN));
+        let at = match (line, get(a, "draw:transform").and_then(|t| crate::odt::frames::transform(t, w, h))) {
+            (Some((x, y)), _) => (x.unwrap_or(0.0), y.unwrap_or(0.0)),
+            (None, Some((x, y, rot))) => {
+                self.member_rot = Some(rot);
+                (x, y)
+            }
+            (None, None) => (len("svg:x").unwrap_or(0.0), len("svg:y").unwrap_or(0.0)),
+        };
+        self.member_at = Some(at);
+    }
+
+    /// The group being read ends: its members, placed from the corner of the box around them,
+    /// become one object anchored where the group is.
+    pub(in crate::odt) fn end_group(&mut self) {
+        let Some(g) = self.group.take() else { return };
+        let size = |i: &Inline| match i {
+            Inline::Shape { w, h, .. } => (*w, *h),
+            Inline::Image(img) => (img.w, img.h),
+            Inline::Group { w, h, .. } => (*w, *h),
+            _ => (0.0, 0.0),
+        };
+        let fin = |v: f32| if v.is_finite() { v.clamp(-MAX_LEN, MAX_LEN) } else { 0.0 };
+        let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+        for m in &g.members {
+            let (w, h) = size(&m.inline);
+            (x0, y0) = (x0.min(fin(m.x)), y0.min(fin(m.y)));
+            (x1, y1) = (x1.max(fin(m.x + w)), y1.max(fin(m.y + h)));
+        }
+        if g.members.is_empty() {
+            return;
+        }
+        let members = g.members.into_iter().map(|m| model::Member { x: fin(m.x) - x0, y: fin(m.y) - y0, ..m }).collect();
+        let graphic = self.styles.shape_graphic(g.style.as_deref());
+        let float = crate::odt::frames::float_of(g.anchor.as_deref(), Some(&crate::odt::writer::pt(x0)), Some(&crate::odt::writer::pt(y0)), &graphic);
+        let float = (float.wrap != wordcraft_doc::para::Wrap::Inline).then(|| Box::new(float));
+        let fit = |v: f32| if v.is_finite() { v.clamp(1.0, MAX_LEN) } else { 1.0 };
+        self.push_inline(Inline::Group { w: fit(x1 - x0), h: fit(y1 - y0), float, members });
+    }
+
+    /// Begin a drawing shape (ODF 1.3 §10.3): its size, placement and look, and its text read
+    /// as a text box's. A custom shape's kind comes from its geometry, read inside it.
+    pub(in crate::odt) fn start_shape(&mut self, q: &str, a: &Attrs) {
+        let kind = crate::odt::shapes::element_kind(local(q));
+        let g = self.styles.shape_graphic(get(a, "draw:style-name"));
+        let (w, h, x, y, (flip_h, flip_v)) = crate::odt::shapes::geometry(kind, a);
+        let mut float = if kind == wordcraft_doc::para::ShapeKind::Line {
+            // A line is placed by its ends.
+            let at = |v: Option<f32>| v.map(crate::odt::writer::pt);
+            crate::odt::frames::float_of(get(a, "text:anchor-type"), at(x).as_deref(), at(y).as_deref(), &g)
+        } else {
+            crate::odt::frames::place(a, w, h, &g)
+        };
+        (float.flip_h, float.flip_v) = (flip_h, flip_v);
+        self.shape_flip = (false, false);
+        self.member_start(a, w, h, (kind == wordcraft_doc::para::ShapeKind::Line).then_some((x, y)));
+        if let Some(rot) = self.member_rot.take() {
+            float.rot = rot;
+        }
+        self.frame_look = g.shape_look(kind, &self.styles.defs);
+        self.shape_path = crate::odt::shapes::freeform(local(q), a, w, h).map(std::sync::Arc::new);
+        self.shape_kind = Some(kind);
+        let frame = (Some((Some(w), Some(h), None, String::new(), None)), Some(float), std::mem::take(&mut self.frame_look));
+        self.start_note(a);
+        if let Some(n) = &mut self.note {
+            n.text_box = Some(frame);
+        }
+    }
+}
