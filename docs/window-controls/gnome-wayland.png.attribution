@@ -1,0 +1,9 @@
+asset:        docs/window-controls/gnome-wayland.png
+title:        WordCraft window controls on GNOME Wayland
+author:       @danielmigueltejedor with Codex
+source:       original work; isolated compositor, synthetic demo content or empty home screen
+license:      MIT OR Apache-2.0
+license-file: LICENSE-MIT
+added:        2026-10-21 by @danielmigueltejedor
+notes:        No personal documents or desktop content. Screenshot includes only the application window.
+sha256:       7260d278be943ddef71aba135f07c84528f599de8a45d7c5477d4e028e40882c

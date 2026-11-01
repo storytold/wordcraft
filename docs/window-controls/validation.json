@@ -1,0 +1,58 @@
+{
+  "repo": "wordcraft",
+  "source": "3f86112f1dcdd8c981d52d324cd8505f2f5b5b67",
+  "gnome": "GNOME Shell 51.1",
+  "mutter": "51.1",
+  "binary_sha256": "a37306cca05aca07eb6ae98ea15cf47bea68a5663c8637e3a42a1b253b040be5",
+  "controls": {
+    "maximize": true,
+    "restore": true,
+    "minimize": true,
+    "close": true,
+    "titlebar_drag": true,
+    "edge_drag_resize": true
+  },
+  "resize_before": {
+    "x": 200,
+    "y": 148,
+    "w": 1200,
+    "h": 800,
+    "buffer": {
+      "x": 200,
+      "y": 183,
+      "w": 1200,
+      "h": 765
+    },
+    "minimized": false,
+    "maximized": false,
+    "type": 0
+  },
+  "resize_after": {
+    "x": 200,
+    "y": 148,
+    "w": 1104,
+    "h": 744,
+    "buffer": {
+      "x": 200,
+      "y": 183,
+      "w": 1104,
+      "h": 709
+    },
+    "minimized": false,
+    "maximized": false,
+    "type": 0
+  },
+  "screenshots": {
+    "gnome-wayland.png": "GNOME Shell 51.1 / Mutter 51.0, Wayland",
+    "kde-x11.png": "KWin 6.8.0, X11 client via XWayland in an isolated Wayland compositor"
+  },
+  "kde_x11_frame_extents": [
+    [
+      0,
+      0,
+      36,
+      0
+    ]
+  ],
+  "source_lockfile_note": "Includes the Cargo-generated tiny-skia-path 0.11.4 lockfile correction."
+}
