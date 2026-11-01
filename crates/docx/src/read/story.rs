@@ -158,12 +158,16 @@ fn clean_text(s: &str) -> String {
         .collect()
 }
 
-fn children_of_choice(ac: &El) -> Option<&El> {
-    // Prefer a Choice whose requirements we understand; else the Fallback; else any Choice.
+/// Whether the reader understands everything a `mc:Choice` requires.
+fn choice_understood(c: &El) -> bool {
     // `m`: Office Math (a producer may guard an equation with a picture fallback, #1273).
     const KNOWN: &[&str] = &["wps", "wpg", "wpc", "wpi", "w14", "w15", "wp14", "a14", "w16se", "w16cid", "w16", "w16cex", "w16sdtdh", "v", "m"];
-    let ok = |c: &El| c.attr("Requires").unwrap_or("").split_whitespace().all(|r| KNOWN.contains(&r));
-    ac.children("mc:Choice").find(|c| ok(c)).or_else(|| ac.child("mc:Fallback")).or_else(|| ac.child("mc:Choice"))
+    c.attr("Requires").unwrap_or("").split_whitespace().all(|r| KNOWN.contains(&r))
+}
+
+fn children_of_choice(ac: &El) -> Option<&El> {
+    // Prefer a Choice whose requirements we understand; else the Fallback; else any Choice.
+    ac.children("mc:Choice").find(|c| choice_understood(c)).or_else(|| ac.child("mc:Fallback")).or_else(|| ac.child("mc:Choice"))
 }
 
 /// Gather `name` children (rows, cells), looking through `w:sdt`/`w:customXml` wrappers; each
