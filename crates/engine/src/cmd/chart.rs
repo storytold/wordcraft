@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use serde_json::{Value, json};
-use wordcraft_doc::chart::{ChartSeries, ChartSpec, ChartType, LegendPos, MAX_POINTS, MAX_SERIES};
+use wordcraft_doc::chart::{ChartAxis, ChartSeries, ChartSpec, ChartType, LegendPos, MAX_POINTS, MAX_SERIES};
 use wordcraft_doc::graphic::{Graphic, GraphicKind};
 use wordcraft_doc::para::{Float, InlineObject};
 use wordcraft_doc::props::Rgb;
@@ -104,7 +104,165 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"on"?: bool} (no value: switch the data labels on or off)"#)
         .when(has_chart),
+        CommandSpec::new("chart.axis", "Axis", "Chart Design › Chart Layouts › Add Chart Element", |s, v| {
+            let side = side(v)?;
+            let axis = axis_of(v)?;
+            edit(s, move |c| {
+                let a = side.pick(&mut c.cat_axis, &mut c.val_axis);
+                if let Some(t) = &axis.title {
+                    a.title = t.clone();
+                }
+                if let Some(m) = axis.min {
+                    a.min = m;
+                }
+                if let Some(m) = axis.max {
+                    a.max = m;
+                }
+                if let Some(f) = &axis.fmt {
+                    a.fmt = Some(f.clone());
+                }
+                if let Some(g) = axis.gridlines {
+                    a.gridlines = g;
+                }
+                if let Some(l) = axis.labels {
+                    a.labels = l;
+                }
+                if let Some(l) = axis.line {
+                    a.line = l;
+                }
+                Ok(())
+            })
+        })
+        .params(r#"{"side"?: "category|value", "title"?: string|null, "min"?: number|null (null: Auto), "max"?: number|null (null: Auto), "format"?: string, "gridlines"?: bool, "labels"?: bool, "line"?: bool} (side: the category axis of a scatter chart is its x axis)"#)
+        .when(has_chart),
+        CommandSpec::new("chart.series", "Format Series", "Chart Design › Format Selection", |s, v| {
+            let i = p::u64(v, "index").unwrap_or(0) as usize;
+            let mut set = ChartSeries::default();
+            let mut fill_auto = false;
+            if let Some(x) = v.get("fill") {
+                match x {
+                    Value::String(t) if t.eq_ignore_ascii_case("none") => set.no_fill = true,
+                    Value::String(t) if t.eq_ignore_ascii_case("auto") => fill_auto = true,
+                    Value::String(t) => set.fill = Some(Rgb::parse(t).ok_or_else(|| CmdError::Params("`fill`: a colour as hex (RRGGBB), \"none\" or null".into()))?),
+                    Value::Null => set.no_fill = true,
+                    other => return Err(CmdError::Params(format!("`fill`: a colour as hex (RRGGBB), \"none\" or null, not `{other}`"))),
+                }
+            }
+            if let Some(x) = v.get("line") {
+                match x {
+                    Value::String(t) if t.eq_ignore_ascii_case("none") => set.no_line = true,
+                    Value::Null => set.no_line = true,
+                    Value::Number(n) => set.line_w = n.as_f64().filter(|w| w.is_finite()).map(|w| w.clamp(0.0, 20.0) as f32),
+                    other => return Err(CmdError::Params(format!("`line`: a width in points, \"none\" or null, not `{other}`"))),
+                }
+            }
+            set.markers = p::bool(v, "markers").or_else(|| p::bool(v, "marker"));
+            let smooth = p::bool(v, "smooth");
+            set.labels = p::bool(v, "labels").or_else(|| p::bool(v, "dataLabels"));
+            set.fmt = v.get("format").filter(|f| !f.is_null()).map(|f| f.as_str().unwrap_or_default().to_string());
+            edit(s, move |c| {
+                let n = c.series.len();
+                let s = c.series.get_mut(i).ok_or_else(|| CmdError::Params(format!("`index` must be a series of the chart (0-based, {n} series)")))?;
+                if fill_auto {
+                    s.fill = None;
+                    s.no_fill = false;
+                }
+                if let Some(f) = &set.fill {
+                    s.fill = Some(*f);
+                    s.no_fill = false;
+                }
+                if set.no_fill {
+                    s.no_fill = true;
+                    s.fill = None;
+                }
+                if let Some(w) = set.line_w {
+                    s.line_w = Some(w);
+                    s.no_line = false;
+                }
+                if set.no_line {
+                    s.no_line = true;
+                }
+                if set.markers.is_some() {
+                    s.markers = set.markers;
+                }
+                if let Some(sm) = smooth {
+                    s.smooth = sm;
+                }
+                if set.labels.is_some() {
+                    s.labels = set.labels;
+                }
+                if let Some(f) = &set.fmt {
+                    s.fmt = Some(f.clone());
+                }
+                Ok(())
+            })
+        })
+        .params(r#"{"index"?: 0-based series (default 0), "fill"?: "RRGGBB"|"auto" (the chart's accent colour, clears No fill)|null|"none", "line"?: number (pt)|null|"none", "markers"?: bool, "smooth"?: bool, "labels"?: bool, "format"?: number format code (string)}"#)
+        .when(has_chart),
     ]
+}
+
+/// Which axis a command addresses.
+struct Side(usize);
+
+impl Side {
+    fn pick<'a>(&self, cat: &'a mut ChartAxis, val: &'a mut ChartAxis) -> &'a mut ChartAxis {
+        if self.0 == 0 { cat } else { val }
+    }
+}
+
+fn side(v: &Value) -> Result<Side, CmdError> {
+    match p::str(v, "side") {
+        Some(id) => match id.to_ascii_lowercase().as_str() {
+            "category" | "cat" | "x" => Ok(Side(0)),
+            "value" | "val" | "y" => Ok(Side(1)),
+            other => Err(CmdError::Params(format!("`side`: category|value, not `{other}`"))),
+        },
+        None => Ok(Side(1)),
+    }
+}
+
+/// The axis fields a command sets (all optional; `None` fields are left alone).
+struct AxisSet {
+    title: Option<Option<String>>,
+    /// `None`: key absent or not a number, leave the bound alone; `Some(None)`: `null`, back to
+    /// Auto; `Some(Some(x))`: set it.
+    min: Option<Option<f64>>,
+    max: Option<Option<f64>>,
+    fmt: Option<String>,
+    gridlines: Option<bool>,
+    labels: Option<bool>,
+    line: Option<bool>,
+}
+
+fn axis_of(v: &Value) -> Result<AxisSet, CmdError> {
+    let title = v.get("title").map(|t| match t {
+        Value::String(s) => Some(s.clone()),
+        Value::Null => None,
+        other => Some(other.to_string()),
+    });
+    // Absent: leave the bound; `null`: Auto; a finite number: set it; anything else is an error.
+    let number_field = |v: &Value, key: &str| -> Result<Option<Option<f64>>, CmdError> {
+        match v.get(key) {
+            None => Ok(None),
+            Some(Value::Null) => Ok(Some(None)),
+            Some(x) => x
+                .as_f64()
+                .filter(|f| f.is_finite())
+                .map(|f| Some(Some(f)))
+                .ok_or_else(|| CmdError::Params(format!("`{key}`: a number, or null for Auto, not `{x}`"))),
+        }
+    };
+    let set = AxisSet {
+        title,
+        min: number_field(v, "min")?,
+        max: number_field(v, "max")?,
+        fmt: v.get("format").and_then(|f| f.as_str()).map(str::to_string),
+        gridlines: p::bool(v, "gridlines"),
+        labels: p::bool(v, "labels").or_else(|| p::bool(v, "tickLabels")),
+        line: p::bool(v, "line"),
+    };
+    Ok(set)
 }
 
 /// The selected chart's model, when it has one.
@@ -229,7 +387,7 @@ fn series_list(v: &Value) -> Result<Vec<ChartSeries>, CmdError> {
                 None | Some(Value::Null) => Vec::new(),
                 Some(_) => return Err(CmdError::Params("`values`: an array of numbers (null for none)".into())),
             };
-            Ok(ChartSeries { name, values })
+            Ok(ChartSeries { name, values, ..Default::default() })
         })
         .collect()
 }

@@ -1,4 +1,4 @@
-use super::common::{graphic_size, stack};
+use super::common::{graphic_size, mi, stack};
 use super::language::mi_check;
 use super::{Rect, Sense, Stroke, Tokens, Ui, WordApp, big, group, json, menu_button, pos2, small, vec2};
 
@@ -75,10 +75,20 @@ pub(super) fn smart_art_design(app: &mut WordApp, ui: &mut Ui) {
     graphic_size(ui, app);
 }
 
-/// Chart Design: the selected chart's elements (title, legend, data labels), its data and type,
-/// and its size.
+/// Chart Design: the selected chart's elements (title, legend, data labels), its axes, its
+/// series, its data and type, and its size.
 pub(super) fn chart_design(app: &mut WordApp, ui: &mut Ui) {
     let Some(chart) = wordcraft_engine::cmd::chart::selected_chart(&app.session) else { return };
+    group(ui, "Current Selection", None, app, |ui, app| {
+        // Word's Format Axis / Format Series open on the chart's value axis and first series; the
+        // commands reach the others with `side` and `index`, so scripts get the same dialogs.
+        menu_button(ui, app, crate::widgets::MenuButtonOptions::new("axis", Some("Axis"), "Axis", true, "chart.axis"), |ui, app| {
+            mi(ui, app, "Format Axis…", "ui.dialog", json!({"name": "formatAxis"}));
+        });
+        menu_button(ui, app, crate::widgets::MenuButtonOptions::new("series", Some("Series"), "Series", true, "chart.series"), |ui, app| {
+            mi(ui, app, "Format Series…", "ui.dialog", json!({"name": "formatSeries"}));
+        });
+    });
     group(ui, "Chart Layouts", None, app, |ui, app| {
         menu_button(ui, app, crate::widgets::MenuButtonOptions::new("chartTitle", Some("Chart Title"), "Chart Title", true, ""), |ui, app| {
             mi_check(ui, app, "None", chart.title.is_none(), "chart.title", json!({"text": null}));

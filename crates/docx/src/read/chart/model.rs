@@ -52,24 +52,37 @@ pub(super) enum Pos {
 
 /// One value axis (or category axis) as the file states it.
 #[derive(Default)]
-pub(super) struct Axis {
-    pub(super) deleted: bool,
-    pub(super) grid: bool,
-    pub(super) line: bool,
+pub(crate) struct Axis {
+    pub(crate) deleted: bool,
+    pub(crate) grid: bool,
+    pub(crate) line: bool,
     /// `c:crossBetween val="midCat"`: categories sit on the tick marks, not between them.
     pub(super) mid: bool,
-    pub(super) min: Option<f64>,
-    pub(super) max: Option<f64>,
+    pub(crate) min: Option<f64>,
+    pub(crate) max: Option<f64>,
     /// Number format of the tick labels, when not linked to the source data.
-    pub(super) fmt: Option<String>,
+    pub(crate) fmt: Option<String>,
+    /// The axis title, when the file gives it one.
+    pub(crate) title: Option<String>,
+    /// Tick labels, as `c:tickLblPos` says (`none` hides them; a file that says nothing shows
+    /// them, as Word does).
+    pub(crate) labels: bool,
 }
 
 pub(super) struct Series {
     pub(super) name: String,
     pub(super) color: Option<Rgb>,
-    pub(super) line_w: f32,
+    /// Fixed line width in points, `None`: the chart's default.
+    pub(super) line_w: Option<f32>,
     /// Whether the series is drawn as a line (scatter series without one get markers).
     pub(super) line: bool,
+    /// The series' own fill: `Some` colour, `None` colour with `no_fill` set, else the chart's
+    /// accent for the series.
+    pub(super) no_fill: bool,
+    /// Markers on the series' points, when the file says.
+    pub(super) markers: Option<bool>,
+    /// Draw the series' line as a smooth curve (`c:smooth`).
+    pub(super) smooth: bool,
     pub(super) values: Vec<Option<f64>>,
     /// Scatter x values (index + 1 when the file has none).
     pub(super) xs: Vec<Option<f64>>,

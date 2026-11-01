@@ -34,7 +34,16 @@ pub(super) fn graphic_draws(doc: &Document, g: &Graphic, rect: Rect, alpha: f32)
                     cap: Default::default(),
                 })
             }
-            GraphicItem::Text { rect: r, .. } => out.extend(text_glyphs(doc, inside(r), it, alpha, k)),
+            GraphicItem::Text { rect: r, angle, .. } => {
+                let rect = inside(r);
+                let glyphs = text_glyphs(doc, rect, it, alpha, k);
+                // Turned text (a vertical chart axis title) is rotated about the rect's centre.
+                if angle.is_finite() && *angle != 0.0 {
+                    spun(Spin::new(*angle, false, false), rect, glyphs, &mut out);
+                } else {
+                    out.extend(glyphs);
+                }
+            }
             GraphicItem::Image { rect: r, media } => {
                 out.push(Draw::Image { rect: inside(r), media: media.clone(), crop: [0.0; 4], alpha, alt: String::new(), decorative: false })
             }
@@ -277,7 +286,7 @@ pub fn seg_path(segs: &[PathSeg]) -> BezPath {
 /// or the item's rectangle or size isn't a finite number (a degenerate scale: `r` itself is always
 /// finite, as [`Rect::new`] makes it).
 fn text_glyphs(doc: &Document, r: Rect, it: &GraphicItem, alpha: f32, k: f32) -> Vec<Draw> {
-    let GraphicItem::Text { rect, text, size, color, bold, align, font } = it else { return Vec::new() };
+    let GraphicItem::Text { rect, text, size, color, bold, align, font, .. } = it else { return Vec::new() };
     let size = *size * k;
     if !rect.iter().chain([&size]).all(|v| v.is_finite()) {
         return Vec::new();
