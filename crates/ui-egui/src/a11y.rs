@@ -284,12 +284,14 @@ impl Builder<'_> {
         let node = match (heading, list) {
             (Some(l), _) => {
                 let mut n = Node::new(Role::Heading);
-                n.set_level(l as usize + 1);
+                // AccessKit counts levels from zero, as the outline level does: a Heading 1 is
+                // level 0, which the Windows adapter reports to UIA as level 1.
+                n.set_level(l as usize);
                 n
             }
             (None, Some(num)) => {
                 let mut n = Node::new(Role::ListItem);
-                n.set_level(num.level as usize + 1);
+                n.set_level(num.level as usize);
                 n
             }
             (None, None) => Node::new(Role::Paragraph),
@@ -644,6 +646,9 @@ mod tests {
             ("text.insert", json!({"text": "Title here"})),
             ("para.style", json!({"style": "Heading1"})),
             ("text.newParagraph", json!({})),
+            ("text.insert", json!({"text": "Section here"})),
+            ("para.style", json!({"style": "Heading2"})),
+            ("text.newParagraph", json!({})),
             ("para.style", json!({"style": "Normal"})),
             ("text.insert", json!({"text": "Read this "})),
             ("insert.link", json!({"url": "https://example.com", "text": "link"})),
@@ -707,16 +712,16 @@ mod tests {
                 .collect::<Vec<_>>()
         };
 
+        // AccessKit's levels are zero-based: Heading 1 is level 0, Heading 2 level 1.
         let headings = of(Role::Heading);
-        assert_eq!(headings.len(), 1);
-        assert_eq!(nodes[&headings[0]].level(), Some(1));
-        assert_eq!(texts(Role::Heading), ["Title here\n"]);
+        assert_eq!(headings.iter().map(|h| nodes[h].level()).collect::<Vec<_>>(), [Some(0), Some(1)]);
+        assert_eq!(texts(Role::Heading), ["Title here\n", "Section here\n"]);
         assert!(texts(Role::Paragraph).contains(&"Read this link\n".to_string()), "{:?}", texts(Role::Paragraph));
         assert_eq!(texts(Role::Link), ["link"]);
         assert_eq!(nodes[&of(Role::Link)[0]].url(), Some("https://example.com"));
         assert_eq!(of(Role::List).len(), 1, "one list");
         assert_eq!(texts(Role::ListItem), ["First item\n"]);
-        assert_eq!(nodes[&of(Role::ListItem)[0]].level(), Some(1));
+        assert_eq!(nodes[&of(Role::ListItem)[0]].level(), Some(0), "a first-level list item");
         assert_eq!(of(Role::ListMarker).len(), 1, "the bullet");
         assert_eq!(of(Role::Table).len(), 1);
         assert_eq!(of(Role::Row).len(), 2);
