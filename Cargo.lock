@@ -6685,6 +6685,8 @@ dependencies = [
 name = "wordcraft-cli"
 version = "0.13.2"
 dependencies = [
+ "chrono",
+ "log",
  "serde_json",
  "sys-locale",
  "tempfile",

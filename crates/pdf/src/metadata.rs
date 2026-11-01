@@ -2,7 +2,14 @@ use super::options::PdfOptions;
 use super::{DateTime, Document, Metadata};
 
 pub(crate) fn metadata(doc: &Document, opts: &PdfOptions) -> Metadata {
-    metadata_at(doc, opts, source_date_epoch())
+    let epoch = source_date_epoch();
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+    if epoch.is_none() && std::env::var_os("SOURCE_DATE_EPOCH").is_some() {
+        // The value is untrusted and may contain terminal controls or private data.
+        // Explain the accepted range without echoing it into the log.
+        log::warn!("Ignoring invalid SOURCE_DATE_EPOCH: expected integer seconds in 0..=253402300799; using the document date or current time");
+    }
+    metadata_at(doc, opts, epoch)
 }
 
 pub(crate) fn metadata_at(doc: &Document, opts: &PdfOptions, epoch: Option<i64>) -> Metadata {
@@ -42,7 +49,8 @@ pub(crate) fn metadata_at(doc: &Document, opts: &PdfOptions, epoch: Option<i64>)
 /// for the same variable (tdf#174246) takes, so the two tools agree on a bad value. A
 /// value past the last second a PDF date can name (9999-12-31T23:59:59Z) counts as out
 /// of range on the same rule: writing it would clamp to a different date than the one
-/// asked for, where falling back writes the document's own.
+/// asked for, where falling back writes the document's own. The metadata writer logs
+/// a warning for a present invalid value; reading this value for a report stays quiet.
 pub(crate) fn source_date_epoch() -> Option<i64> {
     // The browser has no environment; its exports keep the document's dates.
     #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]

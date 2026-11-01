@@ -2,6 +2,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod automation_args;
+mod logging;
 mod script;
 
 use std::ffi::{OsStr, OsString};
@@ -63,6 +64,10 @@ A password-protected Word file is opened with --password PASS, --password-file P
 WORDCRAFT_PASSWORD environment variable; a password given on the command line is readable by
 every other process, so the other two are better. A file opened with a password is written with
 it again, as the app does. Exports that cannot carry a password (pdf, html, txt) stay plain.
+
+PDF dates: SOURCE_DATE_EPOCH pins Info and XMP dates to UTC integer seconds in
+0..=253402300799. Invalid values warn on stderr and use the document date or current time;
+an unset variable uses the same fallback without a warning.
 
 Paper: documents created here, and HTML, Markdown and text files (which give no page size), use
 the system region's paper (A4, or Letter in the US and other Letter regions), read from
@@ -757,6 +762,7 @@ fn parity_markdown(p: &Value) -> String {
 }
 
 fn main() -> ExitCode {
+    logging::init();
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     match run(&args) {
         Ok(()) | Err(Failure::StdoutClosed) => ExitCode::SUCCESS,
