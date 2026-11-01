@@ -207,7 +207,9 @@ fn links_out_of_a_root_are_refused() {
     assert!(!base.join("outside/doc.docx").exists());
 }
 
-/// The names in `dir`, sorted.
+/// The names in `dir`, sorted. Only the unix-only link test below reads it; without the gate,
+/// Windows builds fail `cargo xtask ci` at clippy with `dead_code` under `-D warnings`.
+#[cfg(unix)]
 fn names(dir: &Path) -> Vec<String> {
     let mut names: Vec<String> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
     names.sort();
