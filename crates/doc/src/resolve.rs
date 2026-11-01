@@ -300,6 +300,17 @@ impl StyleSheet {
         self.para_style_props_over(style, self.default_para.clone(), self.default_chr.clone())
     }
 
+    /// [`Self::para_style_props`] for a paragraph in a table cell: `table`, the run formatting the
+    /// table style gives the cell, comes between the document defaults and the paragraph style
+    /// chain, as in [`Self::resolve_char_in`].
+    pub fn para_style_props_in(&self, style: &str, table: Option<&CharProps>) -> (ParaProps, CharProps) {
+        let mut defaults = self.default_chr.clone();
+        if let Some(t) = table {
+            defaults.overlay(&CharProps { style: None, ..t.clone() });
+        }
+        self.para_style_props_over(style, self.default_para.clone(), defaults)
+    }
+
     /// The paragraph style chain of `style` applied over `pp` / `cp`. A style the document doesn't
     /// define is the default paragraph style, Normal, as in Word: a footer naming a `Footer` style
     /// that `styles.xml` leaves out is formatted as Normal, not with the document defaults alone

@@ -169,7 +169,10 @@ impl Writer<'_> {
             w.open("w:txbxContent", &[]);
             if self.written_boxes.insert(id) {
                 let blocks = part.blocks.clone();
+                // A text box's story is outside the table its anchor may be in.
+                let table_text = self.table_text.take();
                 self.blocks(w, &blocks, rels, false, depth + 1);
+                self.table_text = table_text;
             } else {
                 w.empty("w:p", &[]);
             }

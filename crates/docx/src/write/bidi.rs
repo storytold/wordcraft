@@ -12,12 +12,20 @@
 //! Word gives right-to-left text without a bidi language (`w:lang w:bidi`, §17.3.2.20) its
 //! default complex-script language, Arabic, so Hebrew would proof and show as Arabic. The pieces
 //! marked `w:rtl` therefore also say their language, unless the run or its styles already do.
+//!
+//! Word draws a `w:rtl` run with the complex-script font, size, bold and italic alone (`w:rFonts
+//! w:cs`, `w:szCs`, `w:bCs`, `w:iCs`), while WordCraft, like Word for a run without `w:rtl`, falls
+//! back to the ordinary ones where no complex-script value is set. A bold 20 pt Courier New
+//! Hebrew run with no complex-script values was drawn in Word, once marked `w:rtl`, plain, in the
+//! theme's complex-script font and at its default size. A marked piece therefore also gets the
+//! values WordCraft drew it with wherever its styles and own formatting set no complex-script
+//! value.
 
 use std::borrow::Cow;
 use std::ops::Range;
 
 use wordcraft_doc::props::CharProps;
-use wordcraft_doc::styles::StyleSheet;
+use wordcraft_doc::styles::{StyleKind, StyleSheet};
 
 /// The language Word expects for right-to-left text of `c`'s script, for the scripts that have
 /// one usual language.
@@ -42,35 +50,65 @@ fn is_rtl_lang(tag: &str) -> bool {
     matches!(primary.as_str(), "he" | "iw" | "yi" | "ar" | "fa" | "ur" | "ps" | "sd" | "ug" | "ckb" | "syr" | "dv" | "ku")
 }
 
-/// Does a paragraph of style `para_style` inherit a bidi language from the document defaults or
-/// its style chain? (Resolved once per paragraph.)
-pub(super) fn para_inherits_lang_bidi(styles: &StyleSheet, para_style: Option<&str>) -> bool {
-    styles.para_style_props(para_style.unwrap_or("Normal")).1.lang_bidi.is_some()
-}
-
 /// Does `c`'s character style chain give it a bidi language?
 pub(super) fn char_style_has_lang_bidi(styles: &StyleSheet, c: &CharProps) -> bool {
     c.style.as_deref().is_some_and(|s| styles.chain(s).iter().any(|st| st.chr.lang_bidi.is_some()))
 }
 
-/// Add `rtl` and, when given, the bidi language `lang` to `c` where it doesn't say them.
-fn direct(c: &mut CharProps, lang: Option<&String>) {
+/// `c` over the run formatting of its paragraph's style chain (`para`, from
+/// [`StyleSheet::para_style_props`]) and its character style chain, as the resolver merges them.
+pub(super) fn over_styles(styles: &StyleSheet, para: &CharProps, c: &CharProps) -> CharProps {
+    let mut m = para.clone();
+    if let Some(s) = c.style.as_deref() {
+        for st in styles.chain(s).iter().filter(|st| matches!(st.kind, StyleKind::Character | StyleKind::Paragraph)) {
+            m.overlay(&st.chr);
+        }
+    }
+    m.overlay(&CharProps { style: None, ..c.clone() });
+    m
+}
+
+/// Add `rtl` and, when given, the bidi language `lang` to `c` where it doesn't say them. Where
+/// `m` (what `c`'s styles and own formatting give it) has no complex-script font, size, bold or
+/// italic, the ordinary one WordCraft drew it with is written as the complex-script value, since
+/// Word draws a `w:rtl` run with those alone. A run already marked complex script (`w:cs`) is
+/// drawn by Word with its complex-script values already, so `w:rtl` changes nothing there and
+/// none is added.
+fn direct(c: &mut CharProps, lang: Option<&String>, m: &CharProps) {
     c.rtl.get_or_insert(true);
     if let Some(l) = lang
         && c.lang_bidi.is_none()
     {
         c.lang_bidi = Some(l.clone());
     }
+    if m.cs == Some(true) {
+        return;
+    }
+    if m.font_cs.is_none() {
+        c.font_cs = m.font.clone();
+    }
+    if m.size_cs.is_none() {
+        c.size_cs = Some(m.size.unwrap_or(wordcraft_doc::props::DEFAULT_FONT_SIZE));
+    }
+    if m.bold_cs.is_none() && m.bold == Some(true) {
+        c.bold_cs = Some(true);
+    }
+    if m.italic_cs.is_none() && m.italic == Some(true) {
+        c.italic_cs = Some(true);
+    }
 }
 
 /// `runs` (byte ranges of `text` with their props), split where the bidi level of `text` in a
 /// paragraph of direction `rtl_para` changes parity; right-to-left pieces get `rtl: Some(true)`
-/// and, unless they have one or `inherits_lang` says it comes from a style, a bidi language.
+/// and, unless they have one or `inherits_lang` says it comes from a style, a bidi language, and
+/// the complex-script values [`direct`] gives them from `merged` (a run's props over its styles,
+/// [`over_styles`]).
 pub(super) fn direction_spans<'a>(
     text: &str,
     rtl_para: bool,
     runs: impl Iterator<Item = (Range<usize>, &'a CharProps)>,
     inherits_lang: impl Fn(&CharProps) -> bool,
+    merged: impl Fn(&CharProps) -> CharProps,
 ) -> Vec<(Range<usize>, Cow<'a, CharProps>)> {
     if !wordcraft_doc::bidi::has_rtl(text) {
         return runs.map(|(r, p)| (r, Cow::Borrowed(p))).collect();
@@ -86,6 +124,8 @@ pub(super) fn direction_spans<'a>(
             continue;
         };
         let named = props.lang_bidi.is_some() || inherits_lang(props);
+        let m = merged(props);
+        let old = props.fmt_change.as_ref().map(|ch| merged(&ch.old));
         let piece = |r: Range<usize>, rtl: bool| {
             if !rtl {
                 return (r, Cow::Borrowed(props));
@@ -97,11 +137,11 @@ pub(super) fn direction_spans<'a>(
                 own.or_else(|| text.get(r.clone()).and_then(text_lang).or(para_lang).map(str::to_string))
             };
             let mut p = props.clone();
-            direct(&mut p, lang.as_ref());
+            direct(&mut p, lang.as_ref(), &m);
             // A tracked formatting change's "before" copy gets the same, so the change lists
             // nothing the author didn't do.
-            if let Some(ch) = p.fmt_change.as_mut() {
-                direct(&mut ch.old, lang.as_ref());
+            if let (Some(ch), Some(old)) = (p.fmt_change.as_mut(), old.as_ref()) {
+                direct(&mut ch.old, lang.as_ref(), old);
             }
             (r, Cow::Owned(p))
         };
@@ -133,7 +173,7 @@ mod tests {
         let p = CharProps::default();
         let text = "עברית WordCraft";
         let runs = vec![(0..3, &p), (3..1000, &p), (usize::MAX - 1..usize::MAX, &p), (2..text.len(), &p)];
-        let out = direction_spans(text, true, runs.into_iter(), |_| false);
+        let out = direction_spans(text, true, runs.into_iter(), |_| false, Clone::clone);
         assert_eq!(out.len(), 5, "bad ranges pass through unsplit: {out:?}");
     }
 

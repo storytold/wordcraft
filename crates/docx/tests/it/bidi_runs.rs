@@ -192,3 +192,178 @@ fn an_inherited_bidi_language_is_not_repeated() {
     d.styles.default_chr.lang_bidi = Some("fa-IR".into());
     assert_eq!(langs(&d), vec![(true, None), (false, None), (true, None)]);
 }
+
+// Word draws a `w:rtl` run with the complex-script font, size, bold and italic alone: a bold,
+// italic, 20 pt Courier New Hebrew run with no complex-script values was drawn, once marked
+// `w:rtl`, plain, in the theme's complex-script font and at its default size (measured in Word
+// for Windows). WordCraft falls back to the ordinary values, so the pieces the writer marks get
+// those as complex-script values wherever nothing sets one.
+
+/// The `w:rPr` of each run of the first paragraph of `xml`.
+fn run_props(xml: &str) -> Vec<String> {
+    let body = xml.split("<w:body>").nth(1).unwrap();
+    let para = body.split("</w:p>").next().unwrap();
+    para.split("<w:r>").skip(1).map(|r| r.split("</w:r>").next().unwrap().split("<w:t").next().unwrap().to_string()).collect()
+}
+
+/// How WordCraft draws each character of `d`'s first paragraph: its font, size, bold and italic,
+/// the complex-script ones for a right-to-left letter.
+fn drawn(d: &Document) -> Vec<(String, f32, bool, bool)> {
+    let p = d.body.iter().find_map(|b| b.as_para()).unwrap();
+    let mut out = Vec::new();
+    for (range, props) in p.run_ranges() {
+        let r = d.styles.resolve_char(p.props.style.as_deref(), props);
+        for c in p.text.get(range).unwrap().chars() {
+            let rc = if wordcraft_doc::bidi::has_rtl(&c.to_string()) { r.complex() } else { r.clone() };
+            out.push((rc.font, rc.size, rc.bold, rc.italic));
+        }
+    }
+    out
+}
+
+#[test]
+fn right_to_left_pieces_keep_the_font_size_bold_and_italic_they_were_drawn_with() {
+    let courier = CharProps { font: Some("Courier New".into()), size: Some(20.0), bold: Some(true), italic: Some(true), ..Default::default() };
+    let d = doc_of("שלום WordCraft עולם", true, courier);
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let runs = run_props(&document_xml(&bytes));
+    assert_eq!(runs.len(), 3, "{runs:?}");
+    for r in &runs {
+        let rtl = r.contains("<w:rtl/>");
+        assert_eq!(r.contains(r#"w:cs="Courier New""#), rtl, "{r}");
+        assert_eq!(r.contains("<w:bCs/>"), rtl, "{r}");
+        assert_eq!(r.contains("<w:iCs/>"), rtl, "{r}");
+        assert_eq!(r.contains(r#"<w:szCs w:val="40"/>"#), rtl, "{r}");
+    }
+    // Read back, every character is drawn as it was.
+    let r = wordcraft_docx::read(&bytes).unwrap();
+    assert_eq!(drawn(&r), drawn(&d));
+}
+
+#[test]
+fn inherited_ordinary_values_become_the_complex_script_ones() {
+    // The run sets nothing: its font, size and bold come from the document defaults.
+    let mut d = doc_of("English with עברית inside.", false, CharProps::default());
+    d.styles.default_chr.font = Some("Courier New".into());
+    d.styles.default_chr.size = Some(18.0);
+    d.styles.default_chr.bold = Some(true);
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let runs = run_props(&document_xml(&bytes));
+    let rtl: Vec<&String> = runs.iter().filter(|r| r.contains("<w:rtl/>")).collect();
+    assert_eq!(rtl.len(), 1, "{runs:?}");
+    for want in [r#"w:cs="Courier New""#, "<w:bCs/>", r#"<w:szCs w:val="36"/>"#] {
+        assert!(rtl[0].contains(want), "{want}: {}", rtl[0]);
+    }
+    assert!(!rtl[0].contains("<w:iCs"), "not italic: {}", rtl[0]);
+    assert_eq!(drawn(&wordcraft_docx::read(&bytes).unwrap()), drawn(&d));
+}
+
+#[test]
+fn a_run_already_marked_complex_script_gets_no_complex_script_values() {
+    // `w:cs` already has Word draw the run with its complex-script values (a bold run with no
+    // `w:bCs` is plain), so marking it `w:rtl` changes nothing and nothing is added.
+    let d = doc_of(
+        "שלום WordCraft",
+        true,
+        CharProps { cs: Some(true), font: Some("Courier New".into()), size: Some(20.0), bold: Some(true), italic: Some(true), ..Default::default() },
+    );
+    let runs = run_props(&document_xml(&wordcraft_docx::write(&d).unwrap()));
+    let rtl = runs.iter().find(|r| r.contains("<w:rtl/>")).unwrap_or_else(|| panic!("{runs:?}"));
+    for added in ["w:cs=\"Courier New\"", "<w:bCs", "<w:iCs", "<w:szCs"] {
+        assert!(!rtl.contains(added), "{added}: {rtl}");
+    }
+}
+
+#[test]
+fn table_style_formatting_becomes_the_complex_script_values() {
+    // The table style makes its text bold and 20 pt, and its header row italic: WordCraft draws
+    // the Hebrew in the cells so, and the pieces marked `w:rtl` must say so in complex-script
+    // values for Word to draw them alike.
+    use wordcraft_doc::styles::{PartFormat, Style, StyleKind, TablePart};
+    let mut st = Style {
+        id: "HebrewTable".into(),
+        name: "HebrewTable".into(),
+        kind: StyleKind::Table,
+        chr: CharProps { bold: Some(true), size: Some(20.0), ..Default::default() },
+        ..Default::default()
+    };
+    st.set_table_part(TablePart::FirstRow, PartFormat { chr: CharProps { italic: Some(true), ..Default::default() }, ..Default::default() });
+    let mut d = Document::new();
+    d.styles.upsert(st);
+    let mut t = wordcraft_doc::Table::new(2, 1, 468.0);
+    t.props.style = Some("HebrewTable".into());
+    for row in &mut t.rows {
+        for cell in &mut row.cells {
+            cell.blocks = vec![para_block(Paragraph::with_text("שלום", CharProps::default()))];
+        }
+    }
+    d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(t)), para_block(Paragraph::with_text("", CharProps::default()))];
+    let xml = document_xml(&wordcraft_docx::write(&d).unwrap());
+    let cells: Vec<&str> = xml.split("<w:tc>").skip(1).map(|c| c.split("</w:tc>").next().unwrap()).collect();
+    assert_eq!(cells.len(), 2);
+    for (row, cell) in cells.iter().enumerate() {
+        let run = cell.split("<w:r>").nth(1).unwrap_or_else(|| panic!("row {row}: {cell}"));
+        assert!(run.contains("<w:rtl/>"), "row {row}: {run}");
+        assert!(run.contains("<w:bCs/>") && run.contains(r#"<w:szCs w:val="40"/>"#), "row {row}: {run}");
+        assert_eq!(run.contains("<w:iCs/>"), row == 0, "only the header row is italic: {run}");
+    }
+}
+
+#[test]
+fn a_row_without_cells_is_not_counted_for_the_table_style_s_rows() {
+    // The row without cells isn't written, so in Word the next row is the header row: its Hebrew
+    // gets the header row's italic as `w:iCs`, the last row's doesn't.
+    use wordcraft_doc::styles::{PartFormat, Style, StyleKind, TablePart};
+    let mut st = Style { id: "HeaderItalic".into(), name: "HeaderItalic".into(), kind: StyleKind::Table, ..Default::default() };
+    st.set_table_part(TablePart::FirstRow, PartFormat { chr: CharProps { italic: Some(true), ..Default::default() }, ..Default::default() });
+    let mut d = Document::new();
+    d.styles.upsert(st);
+    let mut t = wordcraft_doc::Table::new(3, 1, 468.0);
+    t.props.style = Some("HeaderItalic".into());
+    t.rows[0].cells.clear();
+    for row in t.rows.iter_mut().skip(1) {
+        row.cells[0].blocks = vec![para_block(Paragraph::with_text("שלום", CharProps::default()))];
+    }
+    d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(t)), para_block(Paragraph::with_text("", CharProps::default()))];
+    let xml = document_xml(&wordcraft_docx::write(&d).unwrap());
+    let cells: Vec<&str> = xml.split("<w:tc>").skip(1).map(|c| c.split("</w:tc>").next().unwrap()).collect();
+    assert_eq!(cells.len(), 2);
+    let italic: Vec<bool> = cells.iter().map(|c| c.contains("<w:iCs/>")).collect();
+    assert_eq!(italic, [true, false], "{cells:?}");
+}
+
+#[test]
+fn a_table_style_s_paragraph_direction_splits_the_cells_runs() {
+    // The table style makes its paragraphs right to left, as layout lays them out: the final
+    // stop after a Latin word takes the paragraph's direction, so it is a right-to-left piece of
+    // its own, as in a right-to-left paragraph outside a table.
+    use wordcraft_doc::styles::{Style, StyleKind};
+    let st = Style {
+        id: "RtlTable".into(),
+        name: "RtlTable".into(),
+        kind: StyleKind::Table,
+        para: wordcraft_doc::props::ParaProps { bidi: Some(true), ..Default::default() },
+        ..Default::default()
+    };
+    let mut d = Document::new();
+    d.styles.upsert(st);
+    let mut t = wordcraft_doc::Table::new(1, 1, 468.0);
+    t.props.style = Some("RtlTable".into());
+    t.rows[0].cells[0].blocks = vec![para_block(Paragraph::with_text("שלום WordCraft.", arial()))];
+    d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(t)), para_block(Paragraph::with_text("", CharProps::default()))];
+    let outside = written_runs(&doc_of("שלום WordCraft.", true, arial()));
+    assert_eq!(outside, owned(&[(true, "שלום "), (false, "WordCraft"), (true, ".")]));
+    assert_eq!(runs(&document_xml(&wordcraft_docx::write(&d).unwrap())), outside);
+}
+
+#[test]
+fn complex_script_values_already_set_are_not_repeated() {
+    let mut d = doc_of("שלום WordCraft", true, CharProps { size: Some(20.0), bold: Some(true), ..arial() });
+    d.styles.default_chr.font_cs = Some("Arial".into());
+    d.styles.default_chr.bold_cs = Some(false);
+    // `arial()` sets the run's own complex-script font and size; the defaults set bold.
+    let runs = run_props(&document_xml(&wordcraft_docx::write(&d).unwrap()));
+    let rtl = runs.iter().find(|r| r.contains("<w:rtl/>")).unwrap();
+    assert!(rtl.contains(r#"<w:szCs w:val="32"/>"#) && !rtl.contains(r#"<w:szCs w:val="40"/>"#), "the run's own szCs: {rtl}");
+    assert!(!rtl.contains("<w:bCs"), "bold comes from the defaults' bCs: {rtl}");
+}

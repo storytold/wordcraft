@@ -89,15 +89,21 @@ impl Writer<'_> {
     }
 
     fn table(&mut self, w: &mut W, t: &Table, rels: &mut PartRels, depth: usize) {
+        // A row without cells isn't written; the rows Word reads are numbered without it, which is
+        // how they take the table style's first-row, last-row and banded formatting.
         let rows: Vec<_> = t.rows.iter().filter(|r| !r.cells.is_empty()).collect();
         if rows.is_empty() {
             return;
         }
+        let nrows = rows.len();
+        let style = t.props.style.as_deref().and_then(|id| self.doc.styles.table_style(id));
         w.open("w:tbl", &[]);
         let chg = t.props.fmt_change.as_ref().map(|c| self.change_attrs(c.rev));
         tblpr(w, &t.props, chg.as_ref());
         w.open("w:tblGrid", &[]);
-        let cols = t.cols().clamp(1, 63);
+        // Counted once: counting walks every row.
+        let ncols = t.cols();
+        let cols = ncols.clamp(1, 63);
         for g in 0..cols {
             let gw = t.grid.get(g).copied().unwrap_or(72.0);
             w.empty("w:gridCol", &[("w:w", &twips(gw.max(0.0)))]);
@@ -106,7 +112,8 @@ impl Writer<'_> {
         // Controls around rows and cells (repeating sections): opens and closes balanced
         // whatever editing left, the ones still open closed at the end.
         let mut open_rows = 0u32;
-        for r in rows {
+        for (ri, r) in rows.into_iter().enumerate() {
+            let mut g = r.first_grid();
             for c in &r.controls.open {
                 crate::write::sdt::open(w, c);
                 open_rows += 1;
@@ -123,7 +130,12 @@ impl Writer<'_> {
                 w.open("w:tc", &[]);
                 let chg = c.props.fmt_change.as_ref().map(|c| self.change_attrs(c.rev));
                 tcpr(w, &c.props, chg.as_ref());
+                let span = c.span();
+                let text = style.as_ref().map(|st| cell_text(st, t, (ri, nrows), (g, span, ncols)));
+                let outer = std::mem::replace(&mut self.table_text, text);
                 self.blocks(w, &c.blocks, rels, false, depth + 1);
+                self.table_text = outer;
+                g = g.saturating_add(span);
                 w.close("w:tc");
                 let n = c.controls.close.min(open_cells);
                 for _ in 0..n {
@@ -146,4 +158,22 @@ impl Writer<'_> {
         }
         w.close("w:tbl");
     }
+}
+
+/// The paragraph and run formatting table style `st` gives the cell of `t` in written row `ri`
+/// of `nrows` (`rows`), grid column `g` spanning `span` of the table's `ncols` columns (`cols`): the style's paragraph formatting
+/// with each part's alignment, and each part's run formatting over the last, lowest precedence
+/// first (ECMA-376 §17.7.6), as layout gives the cell's text.
+fn cell_text(st: &wordcraft_doc::styles::TableStyleProps, t: &Table, rows: (usize, usize), cols: (usize, usize, usize)) -> crate::write::TableText {
+    let bands = (st.parts.band_size.unwrap_or(0), st.parts.col_band_size.unwrap_or(0));
+    let parts = wordcraft_doc::styles::PartSet::of_cell(&t.props.look, bands, rows, cols);
+    let mut text = crate::write::TableText { para: st.para.clone(), chr: CharProps::default() };
+    for part in parts.iter() {
+        let f = st.part(part);
+        text.chr.overlay(&f.chr);
+        if f.align.is_some() {
+            text.para.align = f.align;
+        }
+    }
+    text
 }
