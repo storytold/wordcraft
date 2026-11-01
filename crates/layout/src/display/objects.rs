@@ -239,10 +239,9 @@ fn line_draws(
         }),
     }
     let Some(color) = stroke else { return };
-    // Our line runs from the bottom-left corner to the top-right; connectors from the top-left
-    // to the bottom-right.
-    let (start, end) =
-        if kind == ShapeKind::Line { ((rect.x, rect.bottom()), (rect.right(), rect.y)) } else { ((rect.x, rect.y), (rect.right(), rect.bottom())) };
+    // A line runs from the top-left corner to the bottom-right, as it is drawn (DrawingML's
+    // `line`), and so do connectors; flips are the frame's turn.
+    let (start, end) = ((rect.x, rect.y), (rect.right(), rect.bottom()));
     let width = if stroke_width.is_finite() { stroke_width.clamp(0.25, 200.0) } else { 0.75 };
     let len = (width * 3.5).max(7.0);
     for (on, tip, at_end) in [(extra.arrow_start, start, false), (extra.arrow_end, end, true)] {

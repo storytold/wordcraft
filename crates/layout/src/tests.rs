@@ -3150,6 +3150,51 @@ fn text_wraps_around_square_float() {
 }
 
 #[test]
+fn a_lines_arrowheads_sit_at_its_ends() {
+    // A line runs from its frame's top left to its bottom right (DrawingML's `line`, as it is
+    // drawn); its arrowheads point out of those two ends, not the other diagonal's.
+    use wordcraft_doc::connector::ShapeExtra;
+    use wordcraft_doc::graphic::PathSeg;
+    use wordcraft_doc::para::{Float, ShapeKind};
+    use wordcraft_doc::props::Rgb;
+
+    let shape = InlineObject::Shape {
+        kind: ShapeKind::Line,
+        w: 60.0,
+        h: 40.0,
+        fill: None,
+        stroke: Some(Rgb::BLACK),
+        stroke_width: 1.0,
+        float: Float::default(),
+        story: None,
+        freeform: None,
+        effects: Default::default(),
+        extra: ShapeExtra { arrow_start: true, arrow_end: true, ..Default::default() },
+    };
+    let mut doc = Document::from_text("Scan");
+    doc.insert_object(&Pos::body(0, 0), shape, &Default::default()).unwrap();
+    let draws = flat(display::page_display(&doc, &lay(&doc).pages[0], &Default::default()));
+    let rect = draws
+        .iter()
+        .find_map(|d| match d {
+            display::Draw::Shape { rect, kind: ShapeKind::Line, .. } => Some(*rect),
+            _ => None,
+        })
+        .expect("the line");
+    let tips: Vec<(f32, f32)> = draws
+        .iter()
+        .filter_map(|d| match d {
+            display::Draw::Path { fill: Some(display::Paint::Solid(Rgb::BLACK, _)), segs, .. } if segs.len() == 4 => match segs.first() {
+                Some(PathSeg::Move(x, y)) => Some((*x, *y)),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(tips, [(rect.x, rect.y), (rect.right(), rect.bottom())]);
+}
+
+#[test]
 fn freeform_arrow_end_draws_at_the_last_point() {
     use std::sync::Arc;
     use wordcraft_doc::connector::ShapeExtra;
