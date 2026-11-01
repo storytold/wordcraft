@@ -238,6 +238,9 @@ fn other_regions_show_by_name_once() {
     assert_eq!(language_name(Some("de_AT")), "German (Austria)");
     assert_eq!(language_name(Some("pt-AO")), "Portuguese (Angola)");
     assert_eq!(language_name(Some("sr-Latn-BA")), "Serbian (Bosnia and Herzegovina)");
+    assert_eq!(language_name(Some("sr")), "Serbian (Cyrillic)");
+    assert_eq!(language_name(Some("sr-Latn")), "Serbian (Latin)");
+    assert_eq!(language_name(Some("sh")), "sh");
     assert_eq!(language_name(Some("en-ZZ")), "English (ZZ)");
     assert_eq!(language_name(Some("xx-YY")), "xx-YY");
     let exact = |cur: &'static str| move |t: &str| t.eq_ignore_ascii_case(cur);

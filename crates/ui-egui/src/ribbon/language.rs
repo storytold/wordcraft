@@ -60,6 +60,11 @@ pub(crate) fn language_name(tag: Option<&str>) -> String {
             wordcraft_engine::proof::ProofLang::Id => "Indonesian".into(),
             wordcraft_engine::proof::ProofLang::Es => "Spanish (Spain)".into(),
             wordcraft_engine::proof::ProofLang::De => "German (Germany)".into(),
+            // Cyrillic is Serbian's default script when a tag names none (`sh` is left as it is).
+            wordcraft_engine::proof::ProofLang::Sr if !tag.split(['-', '_']).any(|s| s.eq_ignore_ascii_case("sh")) => {
+                let latin = tag.split(['-', '_']).any(|s| s.eq_ignore_ascii_case("latn"));
+                if latin { "Serbian (Latin)" } else { "Serbian (Cyrillic)" }.into()
+            }
             wordcraft_engine::proof::ProofLang::En if tag.eq_ignore_ascii_case("en") => "English (United States)".into(),
             _ => tag.to_string(),
         },

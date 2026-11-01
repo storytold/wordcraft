@@ -95,6 +95,12 @@ list (author, source, license) is in ATTRIBUTION.md.
     FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
     OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
     DEALINGS IN THE SOFTWARE.
+- Serbian hyphenation patterns (assets/hyphenation/sr.pat) — hyph-sh-cyrl.tex 2.02 from the
+  hyph-utf8 package (Serbian, Cyrillic script; WordCraft applies them to Serbian Latin text through
+  its Cyrillic spelling), bundled unmodified. Copyright (C) 1990, 2008 Dejan Muhamedagić.
+  Distributed under the LaTeX Project Public License, version 1 or (at your option) any later
+  version, https://latex-project.org/lppl/ (WordCraft uses version 1.3c, approved by the Open
+  Source Initiative); the file's header carries its notice.
 - Application-drawn UI icons (crates/ui-egui/src/icons.rs) are original work, MIT OR Apache-2.0;
   the bundled egui font icons have the separate notice below.
 

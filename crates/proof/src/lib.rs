@@ -41,10 +41,12 @@
 //!   existing English fallback.
 //! - **German** ([`ProofLang::De`]): hyphenation by `hyph-utf8`'s German patterns (reformed
 //!   spelling, MIT); no spelling or grammar marks yet.
+//! - **Serbian** ([`ProofLang::Sr`]): hyphenation by `hyph-utf8`'s Serbian patterns (Cyrillic,
+//!   LPPL), Latin words through their Cyrillic spelling; no spelling or grammar marks yet.
 //! - **Other languages** ([`ProofLang::Other`]): no spelling or grammar marks, like Word without
 //!   the language's proofing tools.
 //! - **Hyphenation** ([`hyphen`]): dictionary, Liang patterns (English, Polish, Portuguese,
-//!   Italian, German), Bulgarian syllable rules, Russian word-division rules, heuristic.
+//!   Italian, German, Serbian), Bulgarian syllable rules, Russian word-division rules, heuristic.
 //!
 //! [`check_text`] checks a paragraph whose runs are in different languages.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
@@ -1078,7 +1080,7 @@ mod tests {
             let english = matches!(l, ProofLang::En | ProofLang::EnGb | ProofLang::EnCa);
             assert_eq!(dictionary_needed(l, false).is_some(), !english, "{l:?}");
         }
-        for l in [ProofLang::En, ProofLang::Bg, ProofLang::De, ProofLang::Other] {
+        for l in [ProofLang::En, ProofLang::Bg, ProofLang::De, ProofLang::Sr, ProofLang::Other] {
             assert_eq!(dictionary_needed(l, false), None);
         }
         // Installed dictionaries and the built-in English list: no hint.

@@ -18,6 +18,11 @@
 //! **German**: the TeX German patterns for the reformed spelling ([`Patterns::de`]), also for
 //! Swiss text, whose `ss` the patterns split like any double consonant (`Stras-se`).
 //!
+//! **Serbian**: the TeX Serbian patterns and exception words ([`Patterns::sr`], Cyrillic script,
+//! by Dejan Muhamedagić); a word in Latin script is hyphenated through its Cyrillic spelling, so
+//! both scripts break alike, and that spelling shows where `nj` and `dž` are two letters
+//! ([`TWO_LETTERS_AT_START`]). Compounds break at the join ([`COMPOUNDS`]).
+//!
 //! Then the paragraph's limits ([`Limits`]) are applied.
 
 pub use crate::dict;
@@ -42,6 +47,9 @@ static IT_PAT: &str = include_str!("../../../assets/hyphenation/it.pat");
 /// hyph-utf8's `hyph-de-1996.tex` (reformed spelling), unmodified (MIT; the notice is in the
 /// file's header).
 static DE_PAT: &str = include_str!("../../../assets/hyphenation/de.pat");
+/// hyph-utf8's `hyph-sh-cyrl.tex` (Serbian, Cyrillic script), unmodified (LPPL 1 or later; the
+/// notice is in the file's header).
+static SR_PAT: &str = include_str!("../../../assets/hyphenation/sr.pat");
 
 impl Dictionary {
     /// The bundled US English dictionary (decoded on first use).
@@ -88,6 +96,12 @@ impl Patterns {
     pub fn de() -> &'static Patterns {
         static P: OnceLock<Patterns> = OnceLock::new();
         P.get_or_init(|| Patterns::parse(DE_PAT))
+    }
+
+    /// The bundled Serbian patterns and exception words, Cyrillic script (parsed on first use).
+    pub fn sr() -> &'static Patterns {
+        static P: OnceLock<Patterns> = OnceLock::new();
+        P.get_or_init(|| Patterns::parse(SR_PAT))
     }
 }
 
@@ -148,6 +162,18 @@ fn core_breaks(core: &[char], lang: ProofLang) -> (Vec<usize>, Source) {
         ProofLang::De => return core_breaks_patterns(Patterns::de(), core),
         _ => {}
     }
+    // Serbian: the Cyrillic patterns, for words in Latin script through their Cyrillic spelling,
+    // so both scripts break alike. Latin words with letters Serbian doesn't have (`WordCraft`,
+    // `keyboard`) are hyphenated as English, as in any other language.
+    if lang == ProofLang::Sr {
+        if core.iter().all(|&c| crate::ru::is_cyrillic(c)) {
+            return core_breaks_patterns(Patterns::sr(), core);
+        }
+        if let Some((cyr, at)) = serbian_cyrillic(core) {
+            let (pts, src) = core_breaks_patterns(Patterns::sr(), &cyr);
+            return (pts.into_iter().filter_map(|p| at.get(p).copied()).collect(), src);
+        }
+    }
     if lang == ProofLang::Ru && core.iter().all(|&c| crate::ru::is_cyrillic(c)) {
         return (crate::ru::hyphen::points(core), Source::Heuristic);
     }
@@ -205,6 +231,156 @@ fn core_breaks_patterns(pats: &Patterns, core: &[char]) -> (Vec<usize>, Source) 
     (heuristic_points(core), Source::Heuristic)
 }
 
+/// Roots of Serbian Latin words where `nj` or `dž` is two letters, not one: the Latin spelling
+/// doesn't show it, the Cyrillic does (конјугација, not коњугација; надживети, not наџивети). `|`
+/// marks the pair. These only start a word: `an|jon` is not in `kanjon`, nor `od|žal` in `odžak`.
+/// Checked against the ~190,000 stems of the Serbian Hunspell dictionaries: they touch no word with
+/// one letter but the variants коњугација and коњунктив, which break as the words they vary. A list,
+/// not a dictionary lookup, so that a text breaks the same on every machine. The headwords of the
+/// Rečnik srpskoga jezika (Matica srpska, 2011) raise no other case. A root stays long enough to
+/// leave foreign names alone (Поџи).
+const TWO_LETTERS_AT_START: &[&str] = &[
+    "an|jon",
+    "and|žej",
+    "feld|žandarm",
+    "man|jogan",
+    "nad|žet",
+    "nad|živ",
+    "nad|žnj",
+    "nad|žup",
+    "od|žali",
+    "od|žalj",
+    "od|žar",
+    "od|živ",
+    "pan|jug",
+    "pod|žanr",
+    "pod|žar",
+    "pod|ždrel",
+    "pod|žel",
+    "pod|žup",
+    "pred|žalb",
+    "pred|žel",
+    "pred|žet",
+    "pred|živ",
+    "šen|jan",
+    "šen|jeng",
+    "tan|jug",
+    "van|jed",
+    "van|jez",
+    "van|jugo",
+];
+
+/// The same, anywhere in a word (`mikroin|jekcija`, `hiperkon|jugacija`).
+const TWO_LETTERS_ANYWHERE: &[&str] = &["in|jek", "in|junk", "kon|jekt", "kon|jug", "kon|juk", "kon|junk", "kon|junt"];
+
+/// The index of the second letter of each such pair in a lowercase Serbian Latin word.
+fn serbian_two_letters(word: &[char]) -> Vec<usize> {
+    let is_at = |root: &str, at: usize| root.chars().filter(|&c| c != '|').enumerate().all(|(i, c)| word.get(at + i) == Some(&c));
+    let mark = |root: &str| root.chars().position(|c| c == '|').unwrap_or(0);
+    let mut out: Vec<usize> = TWO_LETTERS_AT_START.iter().filter(|r| is_at(r, 0)).map(|r| mark(r)).collect();
+    for at in 0..word.len() {
+        out.extend(TWO_LETTERS_ANYWHERE.iter().filter(|r| is_at(r, at)).map(|r| at + mark(r)));
+    }
+    out
+}
+
+/// Compounds the patterns don't see, in Cyrillic: `|` is where the prefix ends. Pravopis srpskoga
+/// jezika, §186е: a transparent compound breaks at the join.
+const COMPOUNDS: &[&str] = &["над|индивид", "над|истор", "под|одбор", "под|одељ", "под|одјељ", "под|оцењ", "под|оцен", "пред|инфаркт"];
+
+/// Prefixes that keep their join before a vowel.
+const PREFIXES: &[&str] = &["без", "из", "над", "об", "обез", "од", "под", "пред", "раз"];
+
+/// `pts` of a lowercase Serbian `core`, with the join of a compound as §186е has it: `пред-услов`,
+/// never `преду-слов`, though the patterns allow both. A vowel alone between two breaks after a
+/// prefix belongs to the second word, so the break after it goes.
+fn serbian_compound_breaks(core: &[char], pts: Vec<usize>) -> Vec<usize> {
+    let (word, at) = if core.iter().all(|&c| crate::ru::is_cyrillic(c)) {
+        (core.to_vec(), (0..core.len()).collect())
+    } else {
+        match serbian_cyrillic(core) {
+            Some(x) => x,
+            None => return pts,
+        }
+    };
+    let mut marks: Vec<usize> = pts.iter().filter_map(|p| at.binary_search(p).ok()).collect();
+    let starts = |s: &str, from: usize| s.chars().enumerate().all(|(i, c)| word.get(from + i) == Some(&c));
+    for root in COMPOUNDS {
+        let (prefix, rest) = root.split_once('|').unwrap_or((root, ""));
+        let n = prefix.chars().count();
+        if starts(prefix, 0) && starts(rest, n) {
+            marks.retain(|&p| p > n);
+            marks.push(n);
+        }
+    }
+    for prefix in PREFIXES {
+        let n = prefix.chars().count();
+        if starts(prefix, 0) && word.get(n).is_some_and(|c| "аеиоу".contains(*c)) && marks.contains(&n) {
+            marks.retain(|&p| p != n + 1);
+        }
+    }
+    marks.sort_unstable();
+    marks.dedup();
+    marks.into_iter().filter_map(|p| at.get(p).copied()).collect()
+}
+
+/// A lowercase Serbian Latin word in Cyrillic, letter for letter (`lj`, `nj`, `dž` are one
+/// letter each: љ, њ, џ, unless [`serbian_two_letters`] says otherwise), with the Latin index each
+/// Cyrillic letter starts at. None when the word has a letter outside the Serbian Latin alphabet
+/// (`q`, `w`, `x`, `y`).
+fn serbian_cyrillic(word: &[char]) -> Option<(Vec<char>, Vec<usize>)> {
+    let two_letters = serbian_two_letters(word);
+    let mut out = Vec::with_capacity(word.len());
+    let mut at = Vec::with_capacity(word.len());
+    let mut i = 0;
+    while let Some(&c) = word.get(i) {
+        let next = word.get(i + 1).copied();
+        let one_letter = !two_letters.contains(&(i + 1));
+        let (cyr, len) = match (c, next) {
+            ('l', Some('j')) if one_letter => ('љ', 2),
+            ('n', Some('j')) if one_letter => ('њ', 2),
+            ('d', Some('ž')) if one_letter => ('џ', 2),
+            _ => (
+                match c {
+                    'a' => 'а',
+                    'b' => 'б',
+                    'c' => 'ц',
+                    'č' => 'ч',
+                    'ć' => 'ћ',
+                    'd' => 'д',
+                    'đ' => 'ђ',
+                    'e' => 'е',
+                    'f' => 'ф',
+                    'g' => 'г',
+                    'h' => 'х',
+                    'i' => 'и',
+                    'j' => 'ј',
+                    'k' => 'к',
+                    'l' => 'л',
+                    'm' => 'м',
+                    'n' => 'н',
+                    'o' => 'о',
+                    'p' => 'п',
+                    'r' => 'р',
+                    's' => 'с',
+                    'š' => 'ш',
+                    't' => 'т',
+                    'u' => 'у',
+                    'v' => 'в',
+                    'z' => 'з',
+                    'ž' => 'ж',
+                    _ => return None,
+                },
+                1,
+            ),
+        };
+        out.push(cyr);
+        at.push(i);
+        i += len;
+    }
+    Some((out, at))
+}
+
 /// Unrestricted break points of an English `word` ([`word_breaks_in`] with [`ProofLang::En`]).
 pub fn word_breaks(word: &str) -> (Vec<usize>, Source) {
     word_breaks_in(word, ProofLang::En)
@@ -235,7 +411,10 @@ pub fn word_breaks_in(word: &str, lang: ProofLang) -> (Vec<usize>, Source) {
             b -= 1;
         }
         let core: Vec<char> = chars[a..b].iter().map(|&c| if is_apostrophe(c) { '\'' } else { c.to_lowercase().next().unwrap_or(c) }).collect();
-        let (pts, s) = core_breaks(&core, lang);
+        let (mut pts, s) = core_breaks(&core, lang);
+        if lang == ProofLang::Sr {
+            pts = serbian_compound_breaks(&core, pts);
+        }
         if src == Source::None {
             src = s;
         }
@@ -260,20 +439,6 @@ pub fn hyphen_points_in(word: &str, lim: &Limits, lang: ProofLang) -> Vec<usize>
     }
     let min_before = lim.after_first.max(1);
     let min_after = lim.before_last.max(1);
-    // Counted once, so each point's checks take constant time however long the word: letters and
-    // uppercase letters before each char, and the letter run (trimmed of apostrophes) of each char.
-    let (mut letters, mut upper) = (Vec::with_capacity(chars.len() + 1), Vec::with_capacity(chars.len() + 1));
-    let (mut l, mut u) = (0usize, 0usize);
-    for c in &chars {
-        letters.push(l);
-        upper.push(u);
-        if c.is_alphabetic() {
-            l += 1;
-            u += usize::from(c.is_uppercase());
-        }
-    }
-    letters.push(l);
-    upper.push(u);
     let mut run_of: Vec<(usize, usize)> = vec![(0, 0); chars.len()];
     let mut i = 0;
     while i < chars.len() {
@@ -293,6 +458,40 @@ pub fn hyphen_points_in(word: &str, lim: &Limits, lang: ProofLang) -> Vec<usize>
         }
         i = j.max(i + 1);
     }
+    // Serbian `lj`, `nj` and `dž` are one letter each (Pravopis, §186г): their second char isn't
+    // counted.
+    let mut second = vec![false; chars.len()];
+    if lang == ProofLang::Sr {
+        let mut start = 0;
+        while let Some(&(a, b)) = run_of.get(start) {
+            let core: Vec<char> = chars.get(a..b).unwrap_or(&[]).iter().map(|c| c.to_lowercase().next().unwrap_or(*c)).collect();
+            if let Some((_, at)) = serbian_cyrillic(&core) {
+                let mut starts = at.iter().peekable();
+                for i in 0..core.len() {
+                    if starts.next_if(|&&s| s == i).is_none()
+                        && let Some(s) = second.get_mut(a + i)
+                    {
+                        *s = true;
+                    }
+                }
+            }
+            start = b.max(start + 1);
+        }
+    }
+    // Counted once, so each point's checks take constant time however long the word: letters and
+    // uppercase letters before each char, and the letter run (trimmed of apostrophes) of each char.
+    let (mut letters, mut upper) = (Vec::with_capacity(chars.len() + 1), Vec::with_capacity(chars.len() + 1));
+    let (mut l, mut u) = (0usize, 0usize);
+    for (c, second) in chars.iter().zip(&second) {
+        letters.push(l);
+        upper.push(u);
+        if c.is_alphabetic() && !second {
+            l += 1;
+            u += usize::from(c.is_uppercase());
+        }
+    }
+    letters.push(l);
+    upper.push(u);
     let count = |v: &[usize], a: usize, b: usize| v.get(b).zip(v.get(a)).map_or(0, |(y, x)| y.saturating_sub(*x));
     pts.into_iter()
         .filter(|&p| {
@@ -916,5 +1115,139 @@ mod tests {
         for w in ["publication", "WordCraft"] {
             assert_eq!(hyphen_points_in(w, &Limits::default(), ProofLang::Bg), hyphen_points(w, &Limits::default()), "{w}");
         }
+    }
+
+    #[test]
+    fn serbian_patterns_load() {
+        let p = Patterns::sr();
+        assert!(p.len() > 2_500, "{}", p.len());
+        assert!(p.exception_count() > 0, "the file's \\hyphenation words");
+    }
+
+    #[test]
+    fn serbian_words_follow_the_serbian_patterns_in_both_scripts() {
+        let sr = |w: &str| hyphenate_word_in(w, &Limits::default(), ProofLang::Sr);
+        assert_eq!(sr("универзитет"), "уни-вер-зи-тет");
+        assert_eq!(sr("рачунар"), "ра-чу-нар");
+        assert_eq!(sr("Београду"), "Бео-гра-ду");
+        // A consonant before a sonorant goes with it.
+        assert_eq!(sr("љубављу"), "љу-ба-вљу");
+        assert_eq!(word_breaks_in("универзитет", ProofLang::Sr).1, Source::Patterns);
+        // Latin breaks as its Cyrillic spelling, lj, nj and dž kept whole.
+        assert_eq!(sr("univerzitet"), "uni-ver-zi-tet");
+        assert_eq!(sr("računar"), "ra-ču-nar");
+        assert_eq!(sr("Beogradu"), "Beo-gra-du");
+        assert_eq!(sr("ljubavlju"), "lju-ba-vlju");
+        assert_eq!(sr("odgovornošću"), "od-go-vor-no-šću");
+        for (lat, cyr) in [("džungla", "џунгла"), ("njegovanje", "његовање"), ("đačkoj", "ђачкој"), ("Srbije", "Србије")]
+        {
+            assert_eq!(sr(lat).matches('-').count(), sr(cyr).matches('-').count(), "{lat} / {cyr}");
+        }
+        // Latin words with letters Serbian doesn't have are hyphenated as English.
+        for w in ["WordCraft", "keyboard"] {
+            assert_eq!(hyphen_points_in(w, &Limits::default(), ProofLang::Sr), hyphen_points(w, &Limits::default()), "{w}");
+        }
+    }
+
+    /// Pairs the Latin spelling hides: Cyrillic has нј and дж, not њ and џ.
+    #[test]
+    fn serbian_latin_breaks_a_pair_of_two_letters() {
+        for (word, broken) in [
+            ("nadživeti", "nad-ži-ve-ti"),
+            ("injekcija", "in-jek-ci-ja"),
+            ("konjunkcija", "kon-junk-ci-ja"),
+            ("konjugacija", "kon-ju-ga-ci-ja"),
+            ("vanjezički", "van-je-zič-ki"),
+            ("panjugoslovenski", "pan-ju-go-slo-ven-ski"),
+            ("podžanr", "pod-žanr"),
+            ("Tanjug", "Tan-jug"),
+            ("konjektura", "kon-jek-tu-ra"),
+            ("injektor", "in-jek-tor"),
+            ("odžaliti", "od-ža-li-ti"),
+            ("podžupan", "pod-žu-pan"),
+            ("nadživljavati", "nad-ži-vlja-va-ti"),
+            ("predživot", "pred-ži-vot"),
+            ("predžetveni", "pred-že-tve-ni"),
+            ("podželudačni", "pod-že-lu-dač-ni"),
+            ("podžariti", "pod-ža-ri-ti"),
+            ("vanjugoslovenski", "van-ju-go-slo-ven-ski"),
+            ("injunktiv", "in-junk-tiv"),
+            ("mikroinjekcija", "mi-kro-in-jek-ci-ja"),
+            // A real digraph later in the word stays one letter.
+            ("nadživljen", "nad-ži-vljen"),
+            ("odžaljen", "od-ža-ljen"),
+        ] {
+            assert_eq!(hyphenate_word_in(word, &Limits::default(), ProofLang::Sr), broken);
+        }
+    }
+
+    /// Words that look like those roots, where the pair is one letter.
+    #[test]
+    fn serbian_latin_keeps_a_pair_of_one_letter() {
+        for (word, cyrillic) in
+            [("kanjon", "кањон"), ("konj", "коњ"), ("tanjur", "тањур"), ("odžak", "оџак"), ("nadžak", "наџак"), ("budžet", "буџет")]
+        {
+            let w: Vec<char> = word.chars().collect();
+            assert_eq!(serbian_cyrillic(&w).unwrap().0.iter().collect::<String>(), cyrillic);
+        }
+        let sr = |w: &str| hyphenate_word_in(w, &Limits::default(), ProofLang::Sr);
+        assert_eq!(sr("kanjon"), "ka-njon");
+        assert_eq!(sr("nadžak"), "na-džak");
+        assert_eq!(sr("Njegovan"), "Nje-go-van");
+        let lim = Limits { min_word: 2, after_first: 1, before_last: 1, capitalized: true };
+        assert!(!hyphen_points_in("Podži", &lim, ProofLang::Sr).contains(&3), "a name, with dž as one letter");
+    }
+
+    /// `lj`, `nj` and `dž` count as one letter against the limits, so both scripts agree.
+    #[test]
+    fn serbian_digraphs_count_as_one_letter() {
+        let sr = |w: &str| hyphenate_word_in(w, &Limits::default(), ProofLang::Sr);
+        for (latin, cyrillic) in [
+            ("njive", "њиве"),
+            ("ljudi", "људи"),
+            ("konja", "коња"),
+            ("Džaci", "Џаци"),
+            ("Njive", "Њиве"),
+            ("Ljudi", "Људи"),
+            ("NJIVE", "ЊИВЕ"),
+            ("LJUDI", "ЉУДИ"),
+            ("DŽACI", "ЏАЦИ"),
+        ] {
+            assert_eq!(sr(latin), latin);
+            assert_eq!(sr(cyrillic), cyrillic);
+        }
+        assert_eq!(sr("injekcija"), "in-jek-ci-ja");
+    }
+
+    /// Pravopis, §186е: a transparent compound breaks at the join, an opaque one by the rules.
+    #[test]
+    fn serbian_compounds_break_at_the_join() {
+        let sr = |w: &str| hyphenate_word_in(w, &Limits::default(), ProofLang::Sr);
+        for (cyrillic, broken, latin) in [
+            ("предуслов", "пред-услов", "pred-uslov"),
+            ("предизборни", "пред-избор-ни", "pred-izbor-ni"),
+            ("предуговор", "пред-уго-вор", "pred-ugo-vor"),
+            ("подофицир", "под-офи-цир", "pod-ofi-cir"),
+            ("подоцењивати", "под-оце-њи-ва-ти", "pod-oce-nji-va-ti"),
+            ("пододбор", "под-од-бор", "pod-od-bor"),
+            ("изиграти", "из-игра-ти", "iz-igra-ti"),
+            ("разиграти", "раз-игра-ти", "raz-igra-ti"),
+        ] {
+            assert_eq!(sr(cyrillic), broken);
+            assert_eq!(sr(&latin.replace('-', "")), latin);
+        }
+        for (word, broken) in [("разорити", "ра-зо-ри-ти"), ("предузети", "пре-ду-зе-ти"), ("подаци", "по-да-ци"), ("надовезати", "на-до-ве-за-ти")]
+        {
+            assert_eq!(sr(word), broken);
+        }
+    }
+
+    #[test]
+    fn serbian_latin_spells_in_cyrillic() {
+        let w: Vec<char> = "džunglanja".chars().collect();
+        let (cyr, at) = serbian_cyrillic(&w).unwrap();
+        assert_eq!(cyr.iter().collect::<String>(), "џунглања");
+        assert_eq!(at, vec![0, 2, 3, 4, 5, 6, 7, 9]);
+        assert!(serbian_cyrillic(&['w']).is_none());
     }
 }
