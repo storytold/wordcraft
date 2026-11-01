@@ -1700,6 +1700,40 @@ fn lists_get_labels_and_indent() {
 }
 
 #[test]
+fn deleted_list_item_is_not_counted_in_no_markup() {
+    // #4861: a list item deleted whole (text and paragraph mark) with Track Changes is gone in
+    // No Markup, as if the deletion were accepted: the items after it are numbered without it.
+    // All Markup still shows and counts it. In a table cell as in the body.
+    let doc = |in_cell: bool| {
+        let mut d = Document::from_text("One\nTwo\nThree");
+        let id = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(2, 5), &|p| p.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 })).unwrap();
+        d.format_range(&Pos::body(1, 0), &Pos::body(1, 3), &|c| c.del = Some(0)).unwrap();
+        d.para_mut(StoryRef::Body, &Path::top(1)).unwrap().mark.del = Some(0);
+        if in_cell {
+            let mut table = Table::new(1, 1, 400.0);
+            table.rows[0].cells[0].blocks = std::mem::take(&mut d.body);
+            d.body = vec![std::sync::Arc::new(Block::Table(table))];
+        }
+        d
+    };
+    let labels = |d: &Document, hide_deleted: bool| -> Vec<Option<String>> {
+        let l = layout(d, &mut LayoutCache::new(), &LayoutOptions { hide_deleted, ..Default::default() });
+        l.pages
+            .iter()
+            .flat_map(|p| &p.items)
+            .filter_map(|it| if let Placed::Lines { para, .. } = it { Some(para.label.as_ref().map(|x| x.text.clone())) } else { None })
+            .collect()
+    };
+    let s = |x: &str| Some(x.to_string());
+    for in_cell in [false, true] {
+        let d = doc(in_cell);
+        assert_eq!(labels(&d, true), vec![s("1."), None, s("2.")], "no markup, in cell: {in_cell}");
+        assert_eq!(labels(&d, false), vec![s("1."), s("2."), s("3.")], "all markup, in cell: {in_cell}");
+    }
+}
+
+#[test]
 fn break_only_list_has_no_label() {
     use wordcraft_doc::ListKind;
     for kind in [ListKind::Numbered, ListKind::Bullet] {

@@ -214,6 +214,9 @@ impl Ctx<'_> {
             .is_some_and(|n| self.doc.numbering.shows_label(n.num, n.level))
     }
     pub(crate) fn next_label(&mut self, p: &Paragraph) -> Option<(String, Level)> {
+        if deleted_away(self.doc, self.hide_deleted, p) {
+            return None;
+        }
         let n = p.props.numbering.or_else(|| self.doc.styles.resolve_para(&p.props).numbering).filter(|n| n.num != 0)?;
         self.counters.next_label(&self.doc.numbering, n.num, n.level)
     }
@@ -423,4 +426,11 @@ pub(crate) fn with_pct_base<T>(ctx: &mut Ctx, base: Option<f32>, f: impl FnOnce(
     let out = f(ctx);
     ctx.pct_base = before;
     out
+}
+
+/// Whether `p`'s text and paragraph mark are all a deletion `hide` leaves out: the paragraph is
+/// gone, as if the deletion were accepted, so it isn't counted in its list (#4861). A paragraph
+/// whose mark is only hidden is still counted (#3982).
+pub(crate) fn deleted_away(doc: &Document, hide: HideDeleted, p: &Paragraph) -> bool {
+    hide.hides(doc, p.mark.del) && p.runs.iter().all(|r| r.len == 0 || hide.hides(doc, r.props.del))
 }
