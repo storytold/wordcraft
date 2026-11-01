@@ -4841,3 +4841,150 @@ fn the_view_key_changes_when_a_drag_takes_an_object_off_the_page() {
     assert_ne!(hidden, view_key(&app, false, None), "the page without the dragged object is rendered again");
     assert_eq!(hidden, view_key(&app, false, Some(&object)), "the same drag keeps the key: no re-render every frame");
 }
+
+/// A document with a Zotero citation range field around "(Smith 2020)": the result is
+/// ordinary text between a `FieldStart` and a `FieldEnd`, as the Zotero bridge stores it.
+fn citation_document() -> wordcraft_doc::Document {
+    use wordcraft_doc::Path;
+    use wordcraft_doc::para::{InlineObject, OBJ};
+    let mut d = wordcraft_doc::Document::from_text("See . Later");
+    let c = wordcraft_doc::CharProps::default();
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    let start = 4;
+    p.insert_object(start, InlineObject::FieldStart { instr: "ADDIN ZOTERO_ITEM CSL_CITATION {}".into(), locked: false, dirty: false }, &c).unwrap();
+    let n = p.insert_text(start + OBJ.len_utf8(), "(Smith 2020)", &c).unwrap();
+    p.insert_object(start + OBJ.len_utf8() + n, InlineObject::FieldEnd, &c).unwrap();
+    d
+}
+
+/// #4290: Never shades nothing, Always every range field, and When selected only a field the
+/// caret is in or the selection overlaps. This is the pure choice the canvas paints.
+#[test]
+fn field_shading_rects_follow_the_setting_and_the_selection() {
+    use wordcraft_doc::para::OBJ;
+    use wordcraft_engine::{FieldShading, Selection};
+    let doc = citation_document();
+    let mut session = wordcraft_engine::Session::new(doc.clone());
+    let layout = session.layout();
+    let range = doc.field_ranges(StoryRef::Body).first().cloned().expect("the citation field");
+    let inside = Pos::body(0, range.start.off + OBJ.len_utf8() + 2);
+    let outside = Pos::body(0, 0);
+    let rects = |shading, sel: &Selection| field_shading_rects(&layout, &session, shading, sel, session.page_hint, &[]);
+
+    assert!(rects(FieldShading::Never, &Selection::caret(inside.clone())).is_empty(), "Never shades nothing");
+    assert!(!rects(FieldShading::Always, &Selection::caret(outside.clone())).is_empty(), "Always shades the field");
+    assert!(rects(FieldShading::WhenSelected, &Selection::caret(outside.clone())).is_empty(), "caret outside: no shading");
+    assert!(!rects(FieldShading::WhenSelected, &Selection::caret(inside.clone())).is_empty(), "caret in the result: shaded");
+    let overlapping = Selection { anchor: outside.clone(), focus: inside.clone() };
+    assert!(!rects(FieldShading::WhenSelected, &overlapping).is_empty(), "a selection reaching into the result: shaded");
+    let before = Selection { anchor: outside.clone(), focus: Pos::body(0, 3) };
+    assert!(rects(FieldShading::WhenSelected, &before).is_empty(), "a selection before the field: not shaded");
+    let up_to = Selection { anchor: outside.clone(), focus: range.start.clone() };
+    assert!(rects(FieldShading::WhenSelected, &up_to).is_empty(), "a selection ending at the field's start: not shaded");
+}
+
+/// #4290: a simple field (PAGE, NUMPAGES) is shaded too, not just a range field. Word shades
+/// every field result, and these fields are one object rather than a start/end pair.
+#[test]
+fn field_shading_rects_include_simple_fields() {
+    use wordcraft_doc::para::{InlineObject, OBJ};
+    use wordcraft_engine::{FieldShading, Selection};
+    let mut doc = wordcraft_doc::Document::from_text("Page 1 of 9");
+    let c = wordcraft_doc::CharProps::default();
+    let p = doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    p.insert_object(
+        5,
+        InlineObject::Field { instr: "PAGE".into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new() },
+        &c,
+    )
+    .unwrap();
+    let mut session = wordcraft_engine::Session::new(doc);
+    let layout = session.layout();
+    let inside = Pos::body(0, 5 + OBJ.len_utf8() / 2);
+    let outside = Pos::body(0, 0);
+    let rects = |shading, sel: &Selection| field_shading_rects(&layout, &session, shading, sel, session.page_hint, &[]);
+
+    assert!(!rects(FieldShading::Always, &Selection::caret(outside.clone())).is_empty(), "Always shades a simple field");
+    assert!(rects(FieldShading::WhenSelected, &Selection::caret(outside)).is_empty(), "caret outside: no shading");
+    assert!(!rects(FieldShading::WhenSelected, &Selection::caret(inside)).is_empty(), "caret in the field: shaded");
+}
+
+/// #4290: a simple field showing its code is not a result; the overlay leaves it alone.
+#[test]
+fn field_shading_skips_a_simple_field_showing_its_code() {
+    use wordcraft_doc::para::InlineObject;
+    use wordcraft_engine::{FieldShading, Selection};
+    let mut doc = wordcraft_doc::Document::from_text("Page 1");
+    let c = wordcraft_doc::CharProps::default();
+    let p = doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    p.insert_object(
+        5,
+        InlineObject::Field { instr: "PAGE".into(), result: "1".into(), locked: false, dirty: false, code: true, form: String::new() },
+        &c,
+    )
+    .unwrap();
+    let mut session = wordcraft_engine::Session::new(doc);
+    let layout = session.layout();
+    let rects = field_shading_rects(&layout, &session, FieldShading::Always, &Selection::caret(Pos::body(0, 0)), session.page_hint, &[]);
+    assert!(rects.is_empty(), "a field showing its code is not shaded as a result");
+}
+
+/// #4290: the shaded rectangles reach the screen as a light grey over the field result, and
+/// field-code view or Never leaves the page plain. Screen only: the page raster is untouched.
+#[test]
+fn field_result_shading_is_drawn_for_the_chosen_setting() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(citation_document()), Default::default());
+    app.run("caret.docStart", json!({})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    h.run_steps(6);
+    let range = h.state().session.doc.field_ranges(StoryRef::Body).first().cloned().expect("the citation field");
+    // Light grey pixels inside the field's line: the shading, not the text's own antialiasing.
+    let shaded_pixels = |h: &mut egui_kittest::Harness<'_, WordApp>, range: &wordcraft_doc::FieldRange| {
+        let (pi, r) = {
+            let layout = h.state_mut().session.layout();
+            let session = &h.state().session;
+            layout.selection_rects(&session.doc, &range.start, &range.end, session.page_hint)[0]
+        };
+        let tl = page_to_screen(h.state_mut(), pi, r.x, r.y).expect("the field is on screen");
+        let br = page_to_screen(h.state_mut(), pi, r.right(), r.bottom()).expect("the field is on screen");
+        let img = h.render().unwrap();
+        let ppp = h.ctx.pixels_per_point();
+        let (x0, y0) = ((tl.x * ppp) as u32, (tl.y * ppp) as u32);
+        let (x1, y1) = ((br.x * ppp) as u32, (br.y * ppp) as u32);
+        (y0..y1)
+            .flat_map(|y| (x0..x1).map(move |x| (x, y)))
+            .filter(|&(x, y)| {
+                let [r, g, b, a] = img.get_pixel(x, y).0;
+                a > 0 && (0xD7..=0xFA).contains(&r) && (0xD7..=0xFA).contains(&g) && (0xD7..=0xFA).contains(&b)
+            })
+            .count()
+    };
+
+    h.state_mut().run("view.fieldShading", json!({"value": "never"})).unwrap();
+    h.run_steps(3);
+    let plain = shaded_pixels(&mut h, &range);
+    h.state_mut().run("view.fieldShading", json!({"value": "always"})).unwrap();
+    h.run_steps(3);
+    let always = shaded_pixels(&mut h, &range);
+    assert!(always > plain + 400, "Always shades the result: {plain} grey pixels plain, {always} shaded");
+    h.state_mut().run("view.fieldShading", json!({"value": "whenSelected"})).unwrap();
+    h.run_steps(3);
+    let selected = shaded_pixels(&mut h, &range);
+    assert!(selected <= plain + 50, "When selected with the caret outside: {selected} grey pixels, plain {plain}");
+    h.state_mut().session.sel = wordcraft_engine::Selection::caret(Pos::body(0, 8));
+    h.run_steps(3);
+    let caret_inside = shaded_pixels(&mut h, &range);
+    assert!(caret_inside > plain + 400, "When selected and the caret is in the result: {caret_inside} grey pixels");
+    h.state_mut().run("view.fieldShading", json!({"value": "always"})).unwrap();
+    h.state_mut().run("view.fieldCodes", json!({"value": true})).unwrap();
+    h.run_steps(3);
+    let codes = shaded_pixels(&mut h, &range);
+    assert!(codes <= plain + 50, "field-code view keeps its own shading: {codes} grey pixels");
+}

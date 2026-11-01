@@ -1380,6 +1380,28 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         } else {
             balloons(app, ui, &painter, &rects, &layout, geo.scale, view_rect);
         }
+        // Field shading (#4290): a screen-only grey behind field results, before the find marks
+        // and the selection. Field-code view already shades its codes. Only fields on a visible
+        // page are measured; scrolling a long citation-heavy document stays cheap.
+        if !app.session.view.field_codes && preview_sel(app).is_none() {
+            let visible_pages: Vec<bool> = rects.iter().map(|r| r.intersects(ui.clip_rect())).collect();
+            for (pi, r) in
+                field_shading_rects(&layout, &app.session, app.session.view.field_shading, &app.session.sel, app.session.page_hint, &visible_pages)
+            {
+                if let Some(pr) = rects.get(pi) {
+                    let scale = layout.pages.get(pi).map_or(geo.scale, |page| page_screen_scale(*pr, page, geo.scale));
+                    let sr = Rect::from_min_size(pos2(pr.min.x + r.x * scale, pr.min.y + r.y * scale), vec2(r.w * scale, r.h * scale));
+                    // Hide White Space overlaps page rects at the hidden margins: clip to the band
+                    // that page actually shows, as the page content does.
+                    let (top, bot) = geo.bands.get(pi).copied().unwrap_or((0.0, pr.height()));
+                    let band = Rect::from_min_max(pos2(pr.min.x, pr.min.y + top), pos2(pr.max.x, pr.min.y + bot));
+                    let sr = sr.intersect(band);
+                    if sr.is_positive() {
+                        painter.rect_filled(sr, 0.0, t.field_shading);
+                    }
+                }
+            }
+        }
         // Find › Reading Highlight. Its places are the document's, not the preview's.
         let marks: Vec<(Pos, Pos)> =
             if preview_sel(app).is_some() { Vec::new() } else { app.session.find_highlights().iter().take(5000).cloned().collect() };
@@ -1600,6 +1622,78 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         CanvasFinish { app, ui, layout: &layout, geo: &geo, caret, ime_geometry, ime_interrupt, area, dim_body, hruler, vruler },
         out,
     );
+}
+
+/// Screen rectangles for field results shaded by File › Options › Advanced › Field shading
+/// (#4290). `Always` shades every field in every story; `When selected` only those in the
+/// selection's story whose bounds hold the caret or overlap the selection; `Never` none. Both
+/// range fields (Zotero citations, cross-references) and simple fields (PAGE, NUMPAGES) count.
+/// Pure, so the tests drive the choice without a window. The field-code view draws its own
+/// shading.
+pub(crate) fn field_shading_rects(
+    layout: &DocLayout,
+    session: &wordcraft_engine::Session,
+    shading: wordcraft_engine::FieldShading,
+    sel: &wordcraft_engine::Selection,
+    page_hint: usize,
+    visible_pages: &[bool],
+) -> Vec<(usize, wordcraft_geom::Rect)> {
+    use wordcraft_engine::FieldShading;
+    let doc = &session.doc;
+    let (a, b) = sel.ordered();
+    let stories: Vec<StoryRef> = match shading {
+        FieldShading::Never => return Vec::new(),
+        // Only one story can hold the selection, so When selected never needs the others.
+        FieldShading::WhenSelected => vec![a.story],
+        FieldShading::Always => std::iter::once(StoryRef::Body).chain(doc.parts.keys().map(|k| StoryRef::Part(*k))).collect(),
+    };
+    let mut fields: Vec<(Pos, Pos)> = Vec::new();
+    for story in stories {
+        for field in wordcraft_engine::cmd::fields::story_fields(session, story) {
+            // A simple field showing its code is not showing its result; field-code view already
+            // shades the code itself (#4290).
+            if field.end.is_none() && field.code {
+                continue;
+            }
+            let end = field.end.unwrap_or_else(|| Pos { off: field.at.off + wordcraft_doc::para::OBJ.len_utf8(), ..field.at.clone() });
+            fields.push((field.at, end));
+        }
+    }
+    let visible: Vec<usize> = visible_pages.iter().enumerate().filter_map(|(pi, seen)| seen.then_some(pi)).collect();
+    let mut out = Vec::new();
+    for (start, end) in fields {
+        let shade = match shading {
+            FieldShading::Never => false,
+            FieldShading::Always => true,
+            FieldShading::WhenSelected => {
+                if a == b {
+                    start <= a && a <= end
+                } else {
+                    // A selection reaching into the result; one that merely stops at the field's
+                    // first marker or starts at its end marker does not intersect it.
+                    start < b && a < end
+                }
+            }
+        };
+        if shade {
+            if start.story == StoryRef::Body {
+                // Body pieces are all on the layout; keep only those whose page is visible.
+                out.extend(
+                    layout
+                        .selection_rects(doc, &start, &end, page_hint)
+                        .into_iter()
+                        .filter(|(pi, _)| visible_pages.get(*pi).copied().unwrap_or(true)),
+                );
+            } else {
+                // A header, footer or note can be shown on many pages; `selection_rects` gives one
+                // placement per hint, so ask for each visible page (CodeRabbit #4290).
+                for pi in &visible {
+                    out.extend(layout.selection_rects(doc, &start, &end, *pi).into_iter().filter(|(p, _)| p == pi));
+                }
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]

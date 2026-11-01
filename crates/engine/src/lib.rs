@@ -37,6 +37,7 @@ pub use session::{
     CellRange, ColumnBlock, DocInfo, DocState, EditSnapshot, FindState, MathEdit, Prefs, Selection, Session, StylesPaneDock, UNDO_LIST_MAX,
     ViewState, WindowView, blank_document, next_math_session, set_system_locale,
 };
+pub use view::FieldShading;
 /// The outcome a command reports for IME receipt classification.
 ///
 /// A command that can be called by an input method must classify its committed effects. Only a
