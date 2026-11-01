@@ -668,7 +668,7 @@ fn page_setup_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
 }
 
 fn link_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
-    let Dialog::Link { url, text, place, targets, pick, focus } = d else {
+    let Dialog::Link { url, text, place, targets, pick, focus, edit, fixed_text } = d else {
         return false;
     };
     // Word's "Link to:" choices; the places are read once, when that tab is first shown.
@@ -682,7 +682,7 @@ fn link_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     ui.add_space(4.0);
     egui::Grid::new("lnk").num_columns(2).show(ui, |ui| {
         ui.label(tl!("Text to display:"));
-        ui.text_edit_singleline(text);
+        ui.add_enabled(!*fixed_text, egui::TextEdit::singleline(text));
         ui.end_row();
         if !*place {
             ui.label(tl!("Address:"));
@@ -745,15 +745,17 @@ fn link_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     }
     let (ok, cancel) = buttons(ui, tl!("OK"));
     if ok {
-        if *place {
-            let Some((mut params, _)) = pick.clone() else { return false };
-            if !text.is_empty() {
-                params["text"] = json!(text);
-            }
-            let _ = app.run("insert.link", params);
+        let id = if *edit { "insert.editLink" } else { "insert.link" };
+        let mut params = if *place {
+            let Some((params, _)) = pick.clone() else { return false };
+            params
         } else {
-            let _ = app.run("insert.link", json!({"url": url, "text": text}));
+            json!({"url": url})
+        };
+        if !*fixed_text && (!*place || !text.is_empty()) {
+            params["text"] = json!(text);
         }
+        let _ = app.run(id, params);
     }
     ok || cancel
 }

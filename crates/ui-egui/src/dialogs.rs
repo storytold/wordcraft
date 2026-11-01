@@ -199,6 +199,10 @@ pub enum Dialog {
         targets: Option<Value>,
         /// The chosen place: the `insert.link` parameters, and the name it shows.
         pick: Option<(Value, String)>,
+        /// The link at the caret is being edited, not a new one added.
+        edit: bool,
+        /// That link holds a picture or field, so its text stays as it is.
+        fixed_text: bool,
     },
     Bookmark {
         name: String,
@@ -713,7 +717,10 @@ impl Dialog {
                 }
             }
             "link" => {
-                Dialog::Link { url: "https://".into(), text: app.session.selected_text(), place: false, targets: None, pick: None, focus: true }
+                let found = wordcraft_engine::cmd::insert::link_at_selection(&app.session);
+                let (edit, fixed_text) = (found.is_some(), found.as_ref().is_some_and(|l| l.has_objects));
+                let (url, text) = found.map_or_else(|| ("https://".to_string(), app.session.selected_text()), |l| (l.url, l.text));
+                Dialog::Link { url, text, edit, fixed_text, place: false, targets: None, pick: None, focus: true }
             }
             "bookmark" => Dialog::Bookmark { name: bookmark_at_caret(&app.session), by_location: false, hidden: false, deleted: false },
             "wordCount" => Dialog::WordCount { stats: app.session.run("review.wordCount", &json!({})).unwrap_or_default() },
