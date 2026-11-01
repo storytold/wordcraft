@@ -542,6 +542,8 @@ struct RichExtra {
     prm: u16,
     alt_fonts: Vec<Option<&'static str>>,
     style_next: Vec<u16>,
+    /// Built-in style indexes (`sti`), parallel to `RichSpec::styles`; none means user-made.
+    style_sti: Vec<u16>,
     /// The stylesheet's standard fonts (ASCII, East Asian, other, complex script).
     standard_fonts: Option<[u16; 4]>,
 }
@@ -581,7 +583,14 @@ fn rich_doc_with(spec: &RichSpec, extra: &RichExtra) -> Vec<u8> {
         .styles
         .iter()
         .enumerate()
-        .map(|(i, s)| std_bytes_next(s.0, s.1, extra.style_next.get(i).copied().unwrap_or(0x0FFF), s.2, &s.3, &s.4))
+        .map(|(i, s)| {
+            let mut std = std_bytes_next(s.0, s.1, extra.style_next.get(i).copied().unwrap_or(0x0FFF), s.2, &s.3, &s.4);
+            if let Some(sti) = extra.style_sti.get(i) {
+                // After the record's cbStd: sti(12) and flags.
+                std[2..4].copy_from_slice(&sti.to_le_bytes());
+            }
+            std
+        })
         .collect();
     let stsh = stsh_bytes_with(&styles, extra.standard_fonts);
     let fonts: Vec<(&str, Option<&str>)> = spec.fonts.iter().enumerate().map(|(i, n)| (*n, extra.alt_fonts.get(i).copied().flatten())).collect();
@@ -742,12 +751,165 @@ fn paragraph_props_and_heading_style() {
     let doc = read(&rich_doc(&spec)).expect("opens");
     let heading = doc.styles.styles.iter().find(|s| s.name == "Heading 1").expect("style");
     assert_eq!(heading.para.align, Some(wordcraft_doc::props::Align::Center));
+    // Word's id, which Home › Styles › Heading 1 (Ctrl+Alt+1) applies; with `Heading 1` the
+    // command failed with "no style `Heading1`" in every .doc file.
+    assert_eq!(heading.id, "Heading1");
     let p0 = doc.body.first().and_then(|b| b.as_para()).expect("para");
-    assert_eq!(p0.props.style.as_deref(), Some("Heading 1"));
+    assert_eq!(p0.props.style.as_deref(), Some("Heading1"));
     assert_eq!(heading.para.outline_level, Some(0));
     let p1 = doc.body.get(1).and_then(|b| b.as_para()).expect("para");
     assert_eq!(p1.props.indent_left, Some(36.0)); // 720 twips = 36pt
     assert_eq!(p1.props.style.as_deref(), Some("Normal"));
+}
+
+/// The TOC level styles get Word's ids (`TOC1`), the ones References › Update Table gives its
+/// entries; with `TOC 1` the rebuilt entries lost the document's TOC formatting.
+#[test]
+fn toc_styles_take_words_ids() {
+    let spec = RichSpec {
+        text: "Intro\rPart\r",
+        styles: vec![
+            (1, 0x0FFF, "Normal", Vec::new(), Vec::new()),
+            (1, 0, "toc 1", grpprl(&[(0x2461, &[0x01, 0x00])]), Vec::new()),
+            (1, 1, "toc 2", Vec::new(), Vec::new()),
+        ],
+        fonts: vec!["Times New Roman"],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![(0, 1, Vec::new()), (6, 2, Vec::new())],
+    };
+    let doc = read(&rich_doc(&spec)).expect("opens");
+    let ids: Vec<(&str, &str, Option<&str>)> =
+        doc.styles.styles.iter().filter(|s| s.name.starts_with("TOC")).map(|s| (s.id.as_str(), s.name.as_str(), s.based_on.as_deref())).collect();
+    assert_eq!(ids, [("TOC1", "TOC 1", Some("Normal")), ("TOC2", "TOC 2", Some("TOC1"))]);
+    let styles: Vec<Option<&str>> = doc.body.iter().filter_map(|b| b.as_para()).map(|p| p.props.style.as_deref()).collect();
+    assert_eq!(styles, [Some("TOC1"), Some("TOC2")]);
+}
+
+/// A list style numbers its paragraphs without a list of their own. Its `sprmPIlfo` was read
+/// only from paragraphs, so the numbers and bullets of "Numbered Paragraph"-style documents were
+/// lost. Ending the list (in a based-on style or a paragraph) is `num: 0`; `ilfo 0` on a
+/// paragraph whose style has no list keeps nothing, so its indents stay.
+#[test]
+fn list_styles_number_their_paragraphs() {
+    use wordcraft_doc::props::NumRef;
+    let ilfo = |n: i16| n.to_le_bytes();
+    let spec = RichSpec {
+        text: "a\rb\rc\rd\re\r",
+        styles: vec![
+            (1, 0x0FFF, "Normal", Vec::new(), Vec::new()),
+            (1, 0, "List Number", grpprl(&[(0x460B, &ilfo(1)), (0x260A, &[0])]), Vec::new()),
+            (1, 1, "List Number Extra", grpprl(&[(0x460B, &ilfo(0))]), Vec::new()),
+            (1, 0, "Body", Vec::new(), Vec::new()),
+        ],
+        fonts: vec!["Times New Roman"],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![
+            (0, 1, Vec::new()),
+            (2, 2, Vec::new()),
+            (4, 1, grpprl(&[(0x460B, &ilfo(0))])),
+            (6, 3, grpprl(&[(0x460B, &ilfo(0))])),
+            (8, 1, grpprl(&[(0x260A, &[2])])),
+        ],
+    };
+    let doc = read(&rich_doc(&spec)).expect("opens");
+    let style = |id: &str| doc.styles.get(id).and_then(|s| s.para.numbering);
+    assert_eq!(style("List Number"), Some(NumRef { num: 1, level: 0 }));
+    assert_eq!(style("List Number Extra"), Some(NumRef { num: 0, level: 0 }), "ends the based-on list");
+    let paras: Vec<_> = doc.body.iter().filter_map(|b| b.as_para()).collect();
+    let own: Vec<Option<NumRef>> = paras.iter().map(|p| p.props.numbering).collect();
+    assert_eq!(own, [None, None, Some(NumRef { num: 0, level: 0 }), None, Some(NumRef { num: 1, level: 2 })]);
+    let shown: Vec<Option<u32>> =
+        paras.iter().map(|p| p.props.numbering.or(doc.styles.resolve_para(&p.props).numbering).filter(|n| n.num != 0).map(|n| n.num)).collect();
+    assert_eq!(shown, [Some(1), None, None, None, Some(1)]);
+}
+
+/// Word's built-in styles (`sti` below istiUser) are built in, and with no quick-style flag
+/// read the Home › Styles gallery shows Word's usual set, as for a DOCX file without
+/// `w:qFormat`. The gallery was empty for every .doc file.
+#[test]
+fn built_in_styles_fill_the_styles_gallery() {
+    let spec = RichSpec {
+        text: "a\r",
+        styles: vec![
+            (1, 0x0FFF, "Normal", Vec::new(), Vec::new()),
+            (1, 0, "heading 1", Vec::new(), Vec::new()),
+            (1, 0, "Report Body", Vec::new(), Vec::new()),
+        ],
+        fonts: vec!["Times New Roman"],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![(0, 0, Vec::new())],
+    };
+    let extra = RichExtra { style_sti: vec![0, 1, 0x0FFE], ..Default::default() };
+    let doc = read(&rich_doc_with(&spec, &extra)).expect("opens");
+    let st = |id: &str| doc.styles.get(id).cloned().expect(id);
+    assert!(st("Normal").builtin && st("Heading1").builtin && !st("Report Body").builtin);
+    assert!(st("Normal").quick && st("Heading1").quick, "Word's usual gallery");
+    assert!(!st("Report Body").quick);
+}
+
+/// Built-in styles are known by their `sti`, which is the same in every language: German
+/// Word's "Überschrift 1" and "Verzeichnis 1" are heading 1 and toc 1. By name alone they got
+/// ids no command looks for.
+#[test]
+fn localized_built_in_styles_take_words_ids() {
+    let spec = RichSpec {
+        text: "a\rb\r",
+        styles: vec![
+            (1, 0x0FFF, "Standard", Vec::new(), Vec::new()),
+            (1, 0, "\u{DC}berschrift 1", Vec::new(), Vec::new()),
+            (1, 0, "Verzeichnis 1", Vec::new(), Vec::new()),
+            (1, 0, "Eigene", Vec::new(), Vec::new()),
+        ],
+        fonts: vec!["Times New Roman"],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![(0, 1, Vec::new()), (2, 2, Vec::new())],
+    };
+    let extra = RichExtra { style_sti: vec![0, 1, 19, 0x0FFE], ..Default::default() };
+    let doc = read(&rich_doc_with(&spec, &extra)).expect("opens");
+    let own: Vec<(&str, &str, Option<&str>)> =
+        doc.styles.styles.iter().take(4).map(|s| (s.id.as_str(), s.name.as_str(), s.based_on.as_deref())).collect();
+    assert_eq!(
+        own,
+        [
+            ("Normal", "Normal", None),
+            ("Heading1", "Heading 1", Some("Normal")),
+            ("TOC1", "TOC 1", Some("Normal")),
+            ("Eigene", "Eigene", Some("Normal"))
+        ]
+    );
+    assert_eq!(doc.styles.get("Heading1").and_then(|s| s.para.outline_level), Some(0));
+    let styles: Vec<Option<&str>> = doc.body.iter().filter_map(|b| b.as_para()).map(|p| p.props.style.as_deref()).collect();
+    assert_eq!(styles, [Some("Heading1"), Some("TOC1")]);
+}
+
+/// A user style named like a built-in one gets its own id: "Heading 1" in a German document
+/// took `Heading1` from "Überschrift 1", so both paragraphs showed one style (review of #4484).
+#[test]
+fn user_styles_named_like_built_in_ones_keep_their_own_id() {
+    let spec = RichSpec {
+        text: "a\rb\rc\r",
+        styles: vec![
+            (1, 0x0FFF, "Standard", Vec::new(), Vec::new()),
+            (1, 0, "\u{DC}berschrift 1", Vec::new(), Vec::new()),
+            (1, 0, "Heading 1", Vec::new(), Vec::new()),
+            (1, 2, "Eigene", Vec::new(), Vec::new()),
+        ],
+        fonts: vec!["Times New Roman"],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![(0, 1, Vec::new()), (2, 2, Vec::new()), (4, 3, Vec::new())],
+    };
+    let extra = RichExtra { style_sti: vec![0, 1, 0x0FFE, 0x0FFE], ..Default::default() };
+    let doc = read(&rich_doc_with(&spec, &extra)).expect("opens");
+    let own: Vec<(&str, Option<&str>, bool)> = doc.styles.styles.iter().take(4).map(|s| (s.id.as_str(), s.based_on.as_deref(), s.builtin)).collect();
+    assert_eq!(
+        own,
+        [("Normal", None, true), ("Heading1", Some("Normal"), true), ("Heading1_2", Some("Normal"), false), ("Eigene", Some("Heading1_2"), false)]
+    );
+    let styles: Vec<Option<&str>> = doc.body.iter().filter_map(|b| b.as_para()).map(|p| p.props.style.as_deref()).collect();
+    assert_eq!(styles, [Some("Heading1"), Some("Heading1_2"), Some("Eigene")]);
+    let mut ids: Vec<&str> = doc.styles.styles.iter().map(|s| s.id.as_str()).collect();
+    ids.sort_unstable();
+    assert!(ids.windows(2).all(|w| w.first() != w.get(1)), "{ids:?}");
 }
 
 /// #534: Chinese theses set a first-line indent of two characters (`sprmPDxaLeft1`, whose operand
@@ -1384,6 +1546,44 @@ fn footnote_reference_links_story_part() {
     assert_eq!(part.kind, wordcraft_doc::PartKind::Footnote);
 }
 
+/// A note's text starts with its own reference character, which Word draws as the note's
+/// number. It was dropped (only body references were matched), so the note text at the foot of
+/// the page had no number; now it is the note's own number, as `w:footnoteRef` is in DOCX.
+#[test]
+fn a_note_text_starts_with_its_own_number() {
+    use wordcraft_doc::para::{InlineObject, NoteKind};
+    let text = "A\u{2} b\u{2}\r";
+    let ccp = text.chars().count() as u32;
+    let spec = StructSpec {
+        text,
+        note_stories: vec!["\u{2} Note body\r"],
+        endnote_stories: vec!["\u{2} End\r"],
+        extra_pairs: vec![
+            (2, plc(&[1, ccp], &1u16.to_le_bytes())),
+            (3, plc(&[0, 12], &[])),
+            (46, plc(&[4, ccp], &1u16.to_le_bytes())),
+            (47, plc(&[0, 6], &[])),
+        ],
+        ..structured_spec(text, ccp)
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let p0 = doc.body.first().and_then(|b| b.as_para()).expect("para");
+    let refs: Vec<(NoteKind, u32)> = p0
+        .objects
+        .iter()
+        .filter_map(|o| match o {
+            InlineObject::NoteRef { kind, id, .. } => Some((*kind, *id)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(refs.iter().map(|r| r.0).collect::<Vec<_>>(), [NoteKind::Footnote, NoteKind::Endnote]);
+    for (kind, id) in refs {
+        let first = doc.parts.get(&id).and_then(|p| p.blocks.first()).and_then(|b| b.as_para()).expect("note text");
+        assert!(first.text.starts_with('\u{FFFC}'), "{:?}", first.text);
+        assert!(matches!(first.objects.first(), Some(InlineObject::NoteRef { kind: k, id: i, .. }) if *k == kind && *i == id), "{:?}", first.objects);
+    }
+}
+
 #[test]
 fn endnote_reference_links_story_part() {
     let text = "Ref\u{2}\r";
@@ -1425,6 +1625,95 @@ fn fields_and_hyperlinks() {
     };
     assert_eq!(instr, "PAGE");
     assert_eq!(result, "3");
+}
+
+/// A table of contents is a TOC field whose result holds one paragraph per entry, each a
+/// HYPERLINK with a PAGEREF inside. The entries were swallowed into one field object, leaving
+/// empty paragraphs and one line of `HYPERLINK \l … PAGEREF …` codes; now they stay paragraphs
+/// between range-field markers, as the DOCX reader keeps them.
+#[test]
+fn toc_entries_stay_paragraphs_with_their_links_and_page_numbers() {
+    use wordcraft_doc::para::InlineObject;
+    let entry =
+        |bm: &str, title: &str, page: &str| format!("\u{13}HYPERLINK \\l \"{bm}\"\u{14}{title}\t\u{13} PAGEREF {bm} \\h \u{14}{page}\u{15}\u{15}");
+    let text = format!("\u{13} TOC \\o \"1-2\" \\h \\z \u{14}{}\r{}\u{15}\rBody\r", entry("_Toc1", "Intro", "4"), entry("_Toc2", "Method", "5"));
+    let text: &'static str = Box::leak(text.into_boxed_str());
+    let spec = structured_spec(text, text.chars().count() as u32);
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let paras: Vec<_> = doc.body.iter().filter_map(|b| b.as_para()).collect();
+    let texts: Vec<&str> = paras.iter().map(|p| p.text.as_str()).collect();
+    assert_eq!(texts, ["\u{FFFC}Intro\t4", "Method\t5\u{FFFC}", "Body"]);
+    let first = paras.first().expect("first entry");
+    assert!(matches!(first.objects.first(), Some(InlineObject::FieldStart { instr, .. }) if instr == r#"TOC \o "1-2" \h \z"#), "{:?}", first.objects);
+    let second = paras.get(1).expect("second entry");
+    assert!(matches!(second.objects.first(), Some(InlineObject::FieldEnd)), "{:?}", second.objects);
+    // Each entry links to its heading's bookmark.
+    for (p, target) in [(first, "#_Toc1"), (second, "#_Toc2")] {
+        assert!(p.runs.iter().any(|r| r.props.link.as_deref() == Some(target)), "{target}: {:?}", p.runs);
+    }
+}
+
+/// A TOC field with no result yet is still a whole range field.
+#[test]
+fn an_empty_toc_field_is_a_whole_range_field() {
+    use wordcraft_doc::para::InlineObject;
+    let text = "\u{13}TOC \\o\u{15}\r";
+    let spec = structured_spec(text, text.chars().count() as u32);
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let p0 = doc.body.first().and_then(|b| b.as_para()).expect("para");
+    assert!(matches!(p0.objects.as_slice(), [InlineObject::FieldStart { .. }, InlineObject::FieldEnd]), "{:?}", p0.objects);
+}
+
+/// A table of contents still open when the story ends gets its end there: a `FieldStart` without
+/// one would be saved as a field begin with no end.
+#[test]
+fn a_toc_left_open_at_the_story_end_is_closed() {
+    use wordcraft_doc::para::InlineObject;
+    for (text, pairs) in [("\u{13}TOC \\o\u{14}Intro\rMethod\r", 1), ("\u{13}TOC\u{14}\u{13}TOC\u{14}x\r", 2)] {
+        let spec = structured_spec(text, text.chars().count() as u32);
+        let doc = read(&struct_doc(&spec)).expect("opens");
+        let objs: Vec<&InlineObject> = doc.body.iter().filter_map(|b| b.as_para()).flat_map(|p| &p.objects).collect();
+        let starts = objs.iter().filter(|o| matches!(o, InlineObject::FieldStart { .. })).count();
+        let ends = objs.iter().filter(|o| matches!(o, InlineObject::FieldEnd)).count();
+        assert_eq!((starts, ends), (pairs, pairs), "{text:?}: {objs:?}");
+        assert!(matches!(objs.last(), Some(InlineObject::FieldEnd)), "{text:?}: the end comes last");
+    }
+}
+
+/// A field inside another field's result shows its result there, not its code.
+#[test]
+fn a_field_in_a_result_adds_its_result_not_its_code() {
+    let text = "\u{13}QUOTE x\u{14}a\u{13}PAGE\u{14}7\u{15}b\u{15}\r";
+    let spec = structured_spec(text, text.chars().count() as u32);
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let p0 = doc.body.first().and_then(|b| b.as_para()).expect("para");
+    let Some(wordcraft_doc::para::InlineObject::Field { instr, result, .. }) = p0.objects.first() else { panic!("no field: {:?}", p0.objects) };
+    assert_eq!((instr.as_str(), result.as_str()), ("QUOTE x", "a7b"));
+}
+
+/// Hostile nesting: fields opened inside results thousands deep stay bounded and the TOC
+/// markers still pair up.
+#[test]
+fn deeply_nested_fields_in_results_are_bounded() {
+    use wordcraft_doc::para::InlineObject;
+    let n = 5_000;
+    let text = format!("\u{13}TOC\u{14}{}y{}\u{15}\r", "\u{13}X\u{14}".repeat(n), "\u{15}".repeat(n));
+    let text: &'static str = Box::leak(text.into_boxed_str());
+    let spec = structured_spec(text, text.chars().count() as u32);
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let objs: Vec<&InlineObject> = doc.body.iter().filter_map(|b| b.as_para()).flat_map(|p| &p.objects).collect();
+    let starts = objs.iter().filter(|o| matches!(o, InlineObject::FieldStart { .. })).count();
+    let ends = objs.iter().filter(|o| matches!(o, InlineObject::FieldEnd)).count();
+    assert_eq!((starts, ends), (1, 1));
+    // Past the cap the fields are only counted: their codes ("X") never reach the result.
+    let results: Vec<&str> = objs
+        .iter()
+        .filter_map(|o| match o {
+            InlineObject::Field { result, .. } => Some(result.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(results, ["y"]);
 }
 
 #[test]
@@ -1969,12 +2258,13 @@ fn style_inherits_its_declared_base() {
                 // A corrupt cycle must neither hang nor crash.
                 (1, 4, "Loop A", Vec::new(), Vec::new()),
                 (1, 3, "Loop B", Vec::new(), Vec::new()),
+                (1, 5, "Self", Vec::new(), Vec::new()),
             ],
             fonts: vec!["Times New Roman"],
             chpx_runs: vec![(0, Vec::new())],
             papx_entries: vec![(0, 1, Vec::new())],
         };
-        let extra = RichExtra { style_next: vec![0x0FFF, next, 0x0FFF, 0x0FFF, 0x0FFF], ..Default::default() };
+        let extra = RichExtra { style_next: vec![0x0FFF, next, 0x0FFF, 0x0FFF, 0x0FFF, 0x0FFF], ..Default::default() };
         let doc = read(&rich_doc_with(&spec, &extra)).expect("opens");
         let style = |name: &str| doc.styles.styles.iter().find(|s| s.name == name).cloned().expect("style");
         let derived = style("Derived");
@@ -1984,6 +2274,7 @@ fn style_inherits_its_declared_base() {
         assert_eq!(grand.based_on.as_deref(), Some("Derived"));
         assert_eq!((grand.chr.bold, grand.chr.italic), (Some(true), Some(true)), "two-level chain");
         assert_eq!(style("Normal").based_on, None);
+        assert_eq!(style("Self").based_on, None, "based on itself");
         assert_eq!(para0(&doc).props.style.as_deref(), Some("Derived"));
     }
 }
@@ -2554,7 +2845,14 @@ fn a_long_hyperlink_over_a_long_result_is_one_linked_run() {
     // One copy of the target for the one run, not one per character (~2.5 s here): counted by
     // what the copies charge to the work budget, which a busy machine can't skew.
     let result = vec![('y', wordcraft_doc::props::CharProps::default()); n];
-    let f = super::FieldBuild { depth: 1, instr: format!("HYPERLINK \"http://{target}\""), sep: Some(result) };
+    let f = super::FieldBuild {
+        depth: 1,
+        instr: format!("HYPERLINK \"http://{target}\""),
+        sep: Some(result),
+        range: false,
+        over_hidden: 0,
+        over_shown: 0,
+    };
     let work = super::Work::new(u64::MAX);
     super::finish_field(&mut super::ParaBuild::default(), f, &work);
     assert_eq!(u64::MAX - work.left.get(), ("http://".len() + n) as u64, "one copy of the target");
@@ -2567,7 +2865,14 @@ fn hyperlink_target_copies_are_charged_to_the_work_budget() {
     use wordcraft_doc::props::CharProps;
     let bold = CharProps { bold: Some(true), ..Default::default() };
     let result: Vec<(char, CharProps)> = (0..1000).map(|i| ('a', if i % 2 == 0 { bold.clone() } else { CharProps::default() })).collect();
-    let f = super::FieldBuild { depth: 1, instr: format!("HYPERLINK \"{}\"", "u".repeat(100)), sep: Some(result) };
+    let f = super::FieldBuild {
+        depth: 1,
+        instr: format!("HYPERLINK \"{}\"", "u".repeat(100)),
+        sep: Some(result),
+        range: false,
+        over_hidden: 0,
+        over_shown: 0,
+    };
     let mut pb = super::ParaBuild::default();
     let budget = super::Work::new(10_000);
     super::finish_field(&mut pb, f, &budget);

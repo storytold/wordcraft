@@ -248,7 +248,13 @@ pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Docume
         doc.core = core;
     }
     doc.body.clear();
-    doc.styles = fmt::stylesheet(&raw_styles, &fonts, standard_fonts);
+    let style_ids = fmt::style_ids(&raw_styles);
+    doc.styles = fmt::stylesheet(&raw_styles, &style_ids, &fonts, standard_fonts);
+    // With no quick flag read, the Home › Styles gallery shows Word's usual set, as the DOCX
+    // reader does.
+    if !doc.styles.styles.iter().any(|s| s.quick) {
+        doc.styles.add_default_gallery();
+    }
     doc.numbering = list::parse(&table, &fib, &fonts);
     let sheet: StyleSheet = doc.styles.clone();
     let sects = sections::parse(&word, &table, &fib);
@@ -276,9 +282,10 @@ pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Docume
         chpx_bins: &chpx_bins,
         papx_bins: &papx_bins,
         fonts: &fonts,
-        raw_styles: &raw_styles,
+        style_ids: &style_ids,
         sheet: &sheet,
         notes: &[],
+        own_note: None,
         marks: &[],
         drawn: &[],
         sect_ends: &[],
@@ -338,20 +345,27 @@ pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Docume
     // Footnote and endnote stories: each text range becomes a part; the reference CPs then
     // link to the part ids during the main walk.
     let mut note_links: Vec<(u32, NoteKind, u32)> = Vec::new();
-    for (cp, ab) in notes::parse_notes(&table, &fib, fib::pair::PLCF_FND_REF, fib::pair::PLCF_FND_TXT) {
-        let Some((a, b)) = story(ftn_base, fib.ccp.ftn, ab) else { continue };
-        let blocks = table::assemble(walk(&ctx, a, b, &mut pics));
-        if !blocks.is_empty() && doc.parts.len() < MAX_PARTS {
-            let id = doc.add_part(PartKind::Footnote, blocks);
-            note_links.push((cp, NoteKind::Footnote, id));
-        }
-    }
-    for (cp, ab) in notes::parse_notes(&table, &fib, fib::pair::PLCF_END_REF, fib::pair::PLCF_END_TXT) {
-        let Some((a, b)) = story(edn_base, fib.ccp.edn, ab) else { continue };
-        let blocks = table::assemble(walk(&ctx, a, b, &mut pics));
-        if !blocks.is_empty() && doc.parts.len() < MAX_PARTS {
-            let id = doc.add_part(PartKind::Endnote, blocks);
-            note_links.push((cp, NoteKind::Endnote, id));
+    let note_kinds = [
+        (fib::pair::PLCF_FND_REF, fib::pair::PLCF_FND_TXT, ftn_base, fib.ccp.ftn, NoteKind::Footnote, PartKind::Footnote),
+        (fib::pair::PLCF_END_REF, fib::pair::PLCF_END_TXT, edn_base, fib.ccp.edn, NoteKind::Endnote, PartKind::Endnote),
+    ];
+    for (ref_pair, txt_pair, base, len, kind, part_kind) in note_kinds {
+        for (cp, ab) in notes::parse_notes(&table, &fib, ref_pair, txt_pair) {
+            let Some((a, b)) = story(base, len, ab) else { continue };
+            if doc.parts.len() >= MAX_PARTS {
+                continue;
+            }
+            // The part's id first, so the note's own number in its text can name it.
+            let Ok(id) = doc.try_add_part(part_kind, Vec::new()) else { continue };
+            let blocks = table::assemble(walk(&WalkCtx { own_note: Some((kind, id)), ..ctx }, a, b, &mut pics));
+            if blocks.is_empty() {
+                doc.parts.remove(&id);
+                continue;
+            }
+            if let Some(part) = doc.parts.get_mut(&id) {
+                part.blocks = blocks;
+            }
+            note_links.push((cp, kind, id));
         }
     }
     // Sorted so the main walk finds each reference by binary search.
@@ -414,10 +428,12 @@ struct WalkCtx<'a> {
     chpx_bins: &'a Bins,
     papx_bins: &'a Bins,
     fonts: &'a [String],
-    raw_styles: &'a [stsh::RawStyle],
+    style_ids: &'a [String],
     sheet: &'a StyleSheet,
     /// (reference CP in the main document, kind, part id) for notes.
     notes: &'a [(u32, NoteKind, u32)],
+    /// The note whose text is being walked: its reference character is the note's own number.
+    own_note: Option<(NoteKind, u32)>,
     /// Bookmark boundaries (main-document CPs), sorted for a sequential walk.
     marks: &'a [(u32, notes::Mark)],
     /// Floating shapes and pictures by anchor CP (absolute), sorted.
@@ -487,9 +503,10 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
     let mut pb = ParaBuild::default();
     let mut cp = cp_start;
     let mut marks = ctx.marks.iter().peekable();
-    // Field assembly state: instruction characters are swallowed, the result is kept until
-    // the end character, then emitted as one object (hyperlinks keep their result text).
-    let mut field: Option<FieldBuild> = None;
+    // Open fields, innermost last: instruction characters are swallowed, the result is kept until
+    // the end character, then emitted as one object (hyperlinks keep their result text). A field
+    // in another's instruction is flattened into it; one in a result is read on its own.
+    let mut fields: Vec<FieldBuild> = Vec::new();
     let mut memo: Option<FmtMemo<'a>> = None;
     while cp < cp_end {
         // Bookmark boundaries at this CP (main-document walks only; subdocument walks get
@@ -527,32 +544,36 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                 // querying at the mark's own FC finds that paragraph's properties.
                 let fc_mark = ctx.pieces.fc_of_cp(cp).unwrap_or(0);
                 let (istd, papx) = ctx.papx_bins.papx(ctx.word, fc_mark);
-                if let Some(st) = ctx.raw_styles.get(istd as usize).filter(|s| !s.name.is_empty()) {
-                    pb.props.style = Some(fmt::style_id(&st.name));
+                if let Some(id) = ctx.style_ids.get(istd as usize).filter(|id| !id.is_empty()) {
+                    pb.props.style = Some(id.clone());
                 }
                 let mut row = table::decode(papx);
                 row.cell_mark = c == '\u{7}';
-                let mut ilvl = 0u8;
-                let mut ilfo = 0i32;
+                let mut ilvl: Option<u8> = None;
+                let mut ilfo: Option<i32> = None;
                 for prl in sprm::iter(papx) {
                     if prl.op == P_ILVL {
-                        ilvl = prl.operand.first().copied().unwrap_or(0).min(8);
+                        ilvl = Some(ilvl_operand(prl.operand));
                         continue;
                     }
                     if prl.op == P_ILFO {
-                        ilfo = match prl.operand {
-                            [b0, b1, ..] => i16::from_le_bytes([*b0, *b1]) as i32,
-                            _ => 0,
-                        };
+                        ilfo = Some(ilfo_operand(prl.operand));
                         continue;
                     }
                     if prl.sgc() == 1 {
                         fmt::apply_para(&mut pb.props, &prl);
                     }
                 }
-                if let Some(num) = num_of(ilfo) {
-                    pb.props.numbering = Some(NumRef { num, level: ilvl });
-                }
+                // The paragraph's own list, or its style's list at its own level. Switching the
+                // style's list off is `num: 0`, which also drops the style's indents, so only a
+                // style that has a list gets it.
+                let style_list = pb.props.style.as_deref().and_then(|id| ctx.sheet.get(id)).and_then(|s| s.para.numbering).filter(|n| n.num != 0);
+                pb.props.numbering = match (ilfo.map(num_of), style_list) {
+                    (Some(Some(num)), _) => Some(NumRef { num, level: ilvl.or(style_list.map(|n| n.level)).unwrap_or(0) }),
+                    (Some(None), Some(s)) => Some(NumRef { num: 0, level: s.level }),
+                    (None, Some(s)) => ilvl.map(|level| NumRef { num: s.num, level }),
+                    _ => None,
+                };
                 let fc = ctx.pieces.fc_of_cp(cp).unwrap_or(0);
                 pb.mark = char_props(ctx.chpx_bins.chpx(ctx.word, fc), ctx.fonts, &CharProps::default());
                 let done = std::mem::take(&mut pb);
@@ -571,34 +592,17 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
             }
             // Field begin/separator/end ([MS-DOC] §2.9.84 Plcfld).
             '\u{13}' => {
-                match field.as_mut() {
-                    Some(f) => {
-                        f.depth = f.depth.saturating_add(1);
-                    }
-                    None => field = Some(FieldBuild { depth: 1, instr: String::new(), sep: None }),
-                }
+                field_begin(&mut fields);
                 cp = cp.saturating_add(1);
                 continue;
             }
             '\u{14}' => {
-                if let Some(f) = field.as_mut()
-                    && f.depth == 1
-                    && f.sep.is_none()
-                {
-                    f.sep = Some(Vec::new());
-                }
+                field_separator(&mut fields, &mut pb);
                 cp = cp.saturating_add(1);
                 continue;
             }
             '\u{15}' => {
-                if let Some(mut f) = field.take() {
-                    if f.depth > 1 {
-                        f.depth -= 1;
-                        field = Some(f);
-                    } else {
-                        finish_field(&mut pb, f, ctx.work);
-                    }
-                }
+                field_end(&mut fields, &mut pb, ctx.work);
                 cp = cp.saturating_add(1);
                 continue;
             }
@@ -639,25 +643,32 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                 }
             }
             '\u{2}' => {
-                // Footnote or endnote reference; custom symbols share the same character.
+                // Footnote or endnote reference; custom symbols share the same character. In a
+                // note's own text it is that note's number, as `w:footnoteRef` is in DOCX.
                 let at = ctx.notes.partition_point(|(c, _, _)| *c < cp);
-                if let Some((_, kind, id)) = ctx.notes.get(at).filter(|(c, _, _)| *c == cp) {
+                let note = ctx.notes.get(at).filter(|(c, _, _)| *c == cp).map(|&(_, kind, id)| (kind, id)).or(ctx.own_note);
+                if let Some((kind, id)) = note {
                     pb.push('\u{FFFC}', CharProps::default());
-                    pb.objects.push(InlineObject::NoteRef { kind: *kind, id: *id, custom: String::new() });
+                    pb.objects.push(InlineObject::NoteRef { kind, id, custom: String::new() });
                 }
             }
-            '\t' => push_formatted(&mut pb, cp, '\t', ctx, field.as_mut(), &mut memo),
-            '\u{B}' => push_formatted(&mut pb, cp, '\n', ctx, field.as_mut(), &mut memo),
-            '\u{C}' => push_formatted(&mut pb, cp, '\u{C}', ctx, field.as_mut(), &mut memo),
-            '\u{E}' => push_formatted(&mut pb, cp, '\u{E}', ctx, field.as_mut(), &mut memo),
-            '\u{1E}' => push_formatted(&mut pb, cp, '\u{2011}', ctx, field.as_mut(), &mut memo),
-            '\u{1F}' => push_formatted(&mut pb, cp, '\u{AD}', ctx, field.as_mut(), &mut memo),
+            '\t' => push_formatted(&mut pb, cp, '\t', ctx, fields.last_mut(), &mut memo),
+            '\u{B}' => push_formatted(&mut pb, cp, '\n', ctx, fields.last_mut(), &mut memo),
+            '\u{C}' => push_formatted(&mut pb, cp, '\u{C}', ctx, fields.last_mut(), &mut memo),
+            '\u{E}' => push_formatted(&mut pb, cp, '\u{E}', ctx, fields.last_mut(), &mut memo),
+            '\u{1E}' => push_formatted(&mut pb, cp, '\u{2011}', ctx, fields.last_mut(), &mut memo),
+            '\u{1F}' => push_formatted(&mut pb, cp, '\u{AD}', ctx, fields.last_mut(), &mut memo),
             // Object anchors, comment references and other special characters are dropped
             // (or handled by later passes).
             c if (c as u32) < 0x20 => {}
-            c => push_formatted(&mut pb, cp, c, ctx, field.as_mut(), &mut memo),
+            c => push_formatted(&mut pb, cp, c, ctx, fields.last_mut(), &mut memo),
         }
         cp = cp.saturating_add(units);
+    }
+    // A table of contents still open when the story ends (a cut-off file) is closed here, so its
+    // `FieldStart` doesn't reach a save without its end.
+    for _ in fields.iter().filter(|f| f.range) {
+        push_field_end(&mut pb);
     }
     if !pb.text.is_empty() {
         let done = pb;
@@ -676,6 +687,102 @@ struct FieldBuild {
     depth: u32,
     instr: String,
     sep: Option<Vec<(char, CharProps)>>,
+    /// A range field: its result is ordinary content after a `FieldStart` marker.
+    range: bool,
+    /// Fields past [`MAX_FIELD_NEST`] opened in this one's result, only counted: those still
+    /// in their code (whose characters are dropped), and those showing their result here.
+    over_hidden: u32,
+    over_shown: u32,
+}
+
+/// Fields open inside one another's results at most; deeper ones are only counted by the
+/// innermost (`over_hidden`, `over_shown`), so a hostile file can't grow the stack without bound.
+const MAX_FIELD_NEST: usize = 32;
+
+/// Fields whose result stays ordinary content between `FieldStart` and `FieldEnd` markers, as
+/// the DOCX reader keeps them: a table of contents (its entries are paragraphs) and ADDIN fields.
+fn is_range_instr(instr: &str) -> bool {
+    let t = instr.trim_start();
+    t.split_whitespace().next().is_some_and(|k| k.eq_ignore_ascii_case("TOC")) || t.get(..5).is_some_and(|k| k.eq_ignore_ascii_case("ADDIN"))
+}
+
+/// A field begin (0x13): a new field, or one more level in the innermost field's code.
+fn field_begin(fields: &mut Vec<FieldBuild>) {
+    let full = fields.len() >= MAX_FIELD_NEST;
+    match fields.last_mut() {
+        Some(f) if f.over_hidden > 0 => f.over_hidden = f.over_hidden.saturating_add(1),
+        Some(f) if f.sep.is_none() && !f.range => f.depth = f.depth.saturating_add(1),
+        // Past the cap, a field in a result is counted, not kept: its code is
+        // hidden and its result shows in the innermost kept field.
+        Some(f) if full => f.over_hidden = 1,
+        _ => fields.push(FieldBuild { depth: 1, instr: String::new(), sep: None, range: false, over_hidden: 0, over_shown: 0 }),
+    }
+}
+
+/// A field separator (0x14): the innermost field's result follows.
+fn field_separator(fields: &mut [FieldBuild], pb: &mut ParaBuild) {
+    if let Some(f) = fields.last_mut()
+        && f.over_hidden > 0
+    {
+        // The separator of the innermost counted field: its result follows.
+        if f.over_hidden == 1 {
+            f.over_hidden = 0;
+            f.over_shown = f.over_shown.saturating_add(1);
+        }
+    } else if let Some(f) = fields.last_mut()
+        && f.depth == 1
+        && f.sep.is_none()
+        && !f.range
+        && f.over_shown == 0
+    {
+        if is_range_instr(&f.instr) {
+            // A table of contents keeps its entries as ordinary paragraphs between
+            // markers, as the DOCX reader does.
+            f.range = true;
+            push_field_start(pb, &f.instr);
+        } else {
+            f.sep = Some(Vec::new());
+        }
+    }
+}
+
+/// A field end (0x15): the innermost field closes, into its outer field's result or the paragraph.
+fn field_end(fields: &mut Vec<FieldBuild>, pb: &mut ParaBuild, work: &Work) {
+    if let Some(f) = fields.last_mut()
+        && (f.over_hidden > 0 || f.over_shown > 0)
+    {
+        if f.over_hidden > 0 {
+            f.over_hidden -= 1;
+        } else {
+            f.over_shown -= 1;
+        }
+    } else if let Some(mut f) = fields.pop() {
+        if f.depth > 1 {
+            f.depth -= 1;
+            fields.push(f);
+        } else if f.range {
+            push_field_end(pb);
+        } else if f.sep.is_none() && is_range_instr(&f.instr) {
+            push_field_start(pb, &f.instr);
+            push_field_end(pb);
+        } else {
+            match fields.last_mut().filter(|o| !o.range).and_then(|o| o.sep.as_mut()) {
+                // A field in another field's kept result shows its own result there.
+                Some(outer) => outer.extend(f.sep.unwrap_or_default()),
+                None => finish_field(pb, f, work),
+            }
+        }
+    }
+}
+
+fn push_field_start(pb: &mut ParaBuild, instr: &str) {
+    pb.push('\u{FFFC}', CharProps::default());
+    pb.objects.push(InlineObject::FieldStart { instr: instr.trim().to_string(), locked: false, dirty: false });
+}
+
+fn push_field_end(pb: &mut ParaBuild) {
+    pb.push('\u{FFFC}', CharProps::default());
+    pb.objects.push(InlineObject::FieldEnd);
 }
 
 /// Bytes a clone of `obj` copies: the object itself plus a picture's alt text, a group with all
@@ -825,6 +932,19 @@ fn symbol_operand(chpx: &[u8]) -> Option<(u16, u16)> {
     None
 }
 
+/// `sprmPIlvl` operand: the list level, 0-8.
+fn ilvl_operand(operand: &[u8]) -> u8 {
+    operand.first().copied().unwrap_or(0).min(8)
+}
+
+/// `sprmPIlfo` operand: the signed 16-bit LFO reference that [`num_of`] reads.
+fn ilfo_operand(operand: &[u8]) -> i32 {
+    match operand {
+        [b0, b1, ..] => i16::from_le_bytes([*b0, *b1]) as i32,
+        _ => 0,
+    }
+}
+
 /// `sprmPIlfo` operand (a signed 16-bit value, [MS-DOC] §2.6.2) → the num id, if the
 /// paragraph is in a list. 0x0001-0x07FE is a 1-based LFO index; 0xF802-0xFFFF (-2046..=-1)
 /// is the negation of one and keeps the paragraph's own indents, which we do by leaving the
@@ -842,6 +962,10 @@ fn num_of(ilfo: i32) -> Option<u32> {
 /// the character is recorded into the instruction or the cached result instead of (or as
 /// well as) the visible text.
 fn push_formatted<'a>(pb: &mut ParaBuild, cp: u32, c: char, ctx: &WalkCtx<'a>, field: Option<&mut FieldBuild>, memo: &mut Option<FmtMemo<'a>>) {
+    // The code of a field counted past the nesting cap is never shown.
+    if field.as_ref().is_some_and(|f| f.over_hidden > 0) {
+        return;
+    }
     let fc = ctx.pieces.fc_of_cp(cp).unwrap_or(0);
     let grpprl = ctx.chpx_bins.chpx(ctx.word, fc);
     let prm = ctx.pieces.prm_of(cp);
@@ -876,7 +1000,8 @@ fn push_formatted<'a>(pb: &mut ParaBuild, cp: u32, c: char, ctx: &WalkCtx<'a>, f
             c = sym;
         }
     }
-    match field {
+    // A range field's result is ordinary content.
+    match field.filter(|f| !f.range) {
         Some(f) => match f.sep.as_mut() {
             // Inside a field, characters are recorded for the field object instead of shown;
             // `finish_field` emits the visible text (hyperlink runs or one object anchor).
