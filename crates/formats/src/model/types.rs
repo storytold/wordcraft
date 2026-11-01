@@ -198,6 +198,14 @@ pub enum Inline {
     },
     /// Where comment `id`'s range ends.
     CommentEnd(u32),
+    /// A text box: its size in points, its placement when it floats, and its content. Only flows
+    /// asked for text boxes ([`FlowOpts::boxes`]) hold them.
+    TextBox {
+        w: f32,
+        h: f32,
+        float: Option<Box<wordcraft_doc::para::Float>>,
+        blocks: Vec<FBlock>,
+    },
 }
 
 /// `blocks` with each table replaced by the blocks of its cells, row by row (nested tables too),
@@ -246,6 +254,8 @@ pub struct FlowOpts {
     pub notes: bool,
     /// Comments as [`Inline::Comment`] and [`Inline::CommentEnd`] (otherwise left out).
     pub comments: bool,
+    /// Text boxes as [`Inline::TextBox`] (otherwise left out).
+    pub boxes: bool,
     /// Character formatting beyond the [`Fmt`] fields ([`Fmt::extra`]), hidden text kept (as
     /// hidden), and a monospaced font by its name rather than as code.
     pub chars: bool,
@@ -495,7 +505,13 @@ impl Para {
                 Inline::Text(t, _) | Inline::Equation { linear: t, .. } | Inline::Ruby { base: t, .. } | Inline::Field { result: t, .. } => {
                     s.push_str(t)
                 }
-                Inline::Image(_) | Inline::Anchor(_) | Inline::Figure(_) | Inline::Note { .. } | Inline::Comment { .. } | Inline::CommentEnd(_) => {}
+                Inline::Image(_)
+                | Inline::Anchor(_)
+                | Inline::Figure(_)
+                | Inline::Note { .. }
+                | Inline::Comment { .. }
+                | Inline::CommentEnd(_)
+                | Inline::TextBox { .. } => {}
             }
         }
         s
@@ -511,7 +527,13 @@ impl Para {
                     _ => s.push_str(t),
                 },
                 Inline::Equation { linear: t, .. } | Inline::Ruby { base: t, .. } | Inline::Field { result: t, .. } => s.push_str(t),
-                Inline::Image(_) | Inline::Anchor(_) | Inline::Figure(_) | Inline::Note { .. } | Inline::Comment { .. } | Inline::CommentEnd(_) => {}
+                Inline::Image(_)
+                | Inline::Anchor(_)
+                | Inline::Figure(_)
+                | Inline::Note { .. }
+                | Inline::Comment { .. }
+                | Inline::CommentEnd(_)
+                | Inline::TextBox { .. } => {}
             }
         }
         s

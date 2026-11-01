@@ -1,14 +1,22 @@
 //! OpenDocument Text (`.odt`, ODF 1.3).
 //!
-//! Export writes `mimetype` (stored, first), `META-INF/manifest.xml`, `content.xml` (paragraphs,
-//! `text:h` headings with outline levels, spans with automatic text styles, links, bookmarks,
-//! line breaks / tabs / `text:s`, nested `text:list`s with generated list styles, tables with
-//! header rows, column/row spans and cell shading, pictures as `draw:frame`/`draw:image` with the
-//! bytes under `Pictures/`, page breaks), `styles.xml` (Standard, Heading 1–6, Title,
-//! Quotations, Preformatted Text, page layout) and `meta.xml`.
+//! Both ways, through the flow model ([`crate::model`]) with what ODT keeps besides
+//! ([`model::FlowOpts`]): paragraphs and headings with their spacing, indents, line spacing,
+//! contextual spacing, alignment, borders, background and tab stops; character formatting (the
+//! extras in [`model::Fmt::extra`] included); custom paragraph and character styles by name, and
+//! the look of the heading, title, quotation and preformatted styles; lists with their identity,
+//! number formats, labels and positions, and heading numbering (`text:outline-style`); tables with
+//! column widths, spans, header rows, cell borders, padding, shading and vertical alignment;
+//! pictures (in line or floating), equations as formula objects, text boxes; links, bookmarks,
+//! text fields, footnotes and endnotes, comments with ranges and replies; sections with their own
+//! master pages, page setup, columns and headers and footers; document defaults, metadata and
+//! LibreOffice's layout settings (`settings.xml`, kept from the file or Word-compatible).
 //!
-//! Import reads the same subset back from `content.xml` / `styles.xml` (style inheritance
-//! resolved, both automatic and common styles), skipping notes, annotations, text boxes and drawing shapes.
+//! Export writes `mimetype` (stored, first), `META-INF/manifest.xml`, `content.xml`,
+//! `styles.xml`, `meta.xml`, `settings.xml`, pictures under `Pictures/` and formula
+//! sub-documents. Import reads `content.xml`, `styles.xml` (style inheritance resolved, automatic
+//! and common styles), `meta.xml`, `settings.xml` and the parts frames point at; drawing shapes
+//! are still skipped.
 //!
 //! Tracked changes (ODF 1.3 Part 3 §5.5) go both ways: `text:tracked-changes` holds one
 //! `text:changed-region` per change; an insertion is the body text between

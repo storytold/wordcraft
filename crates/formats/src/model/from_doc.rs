@@ -263,6 +263,13 @@ fn rich_inlines(doc: &Document, o: &InlineObject, f: &Fmt, opts: FlowOpts) -> Op
                 Vec::new()
             }
         }
+        // A text box's content, without notes, comments or boxes of its own.
+        InlineObject::Shape { kind: wordcraft_doc::para::ShapeKind::TextBox, w, h, float, story: Some(id), .. } if opts.boxes => {
+            let inner = FlowOpts { notes: false, comments: false, boxes: false, ..opts };
+            let blocks = doc.parts.get(id).map(|p| flow_blocks(doc, &p.blocks, 0, inner)).unwrap_or_default();
+            let float = (float.wrap != wordcraft_doc::para::Wrap::Inline).then(|| Box::new(float.clone()));
+            vec![Inline::TextBox { w: *w, h: *h, float, blocks }]
+        }
         InlineObject::Field { instr, result, .. } if opts.fields => {
             vec![Inline::Field { instr: instr.clone(), result: result.clone(), fmt: f.clone() }]
         }

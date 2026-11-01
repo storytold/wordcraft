@@ -365,6 +365,26 @@ impl<'a> Builder<'a> {
                         append(&mut out, "", &CharProps::default(), Some(InlineObject::CommentEnd { id: *doc_id }));
                     }
                 }
+                Inline::TextBox { w, h, float, blocks } => {
+                    let story = self.blocks(blocks, 1);
+                    if let Ok(id) = self.doc.try_add_part(wordcraft_doc::PartKind::TextBox, story) {
+                        let fit = |v: f32| if v.is_finite() { v.clamp(1.0, 1584.0) } else { 72.0 };
+                        let obj = InlineObject::Shape {
+                            kind: wordcraft_doc::para::ShapeKind::TextBox,
+                            w: fit(*w),
+                            h: fit(*h),
+                            fill: Some(wordcraft_doc::fill::Fill::solid(Rgb::WHITE)),
+                            stroke: Some(Rgb::BLACK),
+                            stroke_width: 0.75,
+                            float: float.as_deref().cloned().unwrap_or_default(),
+                            story: Some(id),
+                            freeform: None,
+                            effects: Default::default(),
+                            extra: Default::default(),
+                        };
+                        append(&mut out, "", &CharProps::default(), Some(obj));
+                    }
+                }
                 Inline::Note { endnote, custom, blocks } => {
                     if let Some(obj) = self.note(*endnote, custom, blocks) {
                         let style = if *endnote { "EndnoteReference" } else { "FootnoteReference" };

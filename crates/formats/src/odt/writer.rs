@@ -72,6 +72,8 @@ pub(super) struct Writer {
     pub(super) named: std::collections::BTreeSet<String>,
     /// The custom character styles text was written in.
     pub(super) named_text: std::collections::BTreeSet<String>,
+    /// Text boxes written so far (their frames' names).
+    boxes: usize,
     /// Notes written so far (their ids), and footnotes and endnotes among them (their numbers).
     notes: usize,
     footnotes: u32,
@@ -752,6 +754,10 @@ impl Writer {
                     self.comment(*id, comment, out);
                     prev_space = false;
                 }
+                Inline::TextBox { w, h, float, blocks } => {
+                    self.text_box(*w, *h, float.as_deref(), blocks, out);
+                    prev_space = false;
+                }
                 Inline::CommentEnd(id) => out.push_str(&format!("<office:annotation-end office:name=\"{}\"/>", annotation_name(self.prefix, *id))),
                 Inline::Field { instr, result, fmt } => match super::fields::element(instr, &x(result)) {
                     Some(el) => {
@@ -808,6 +814,40 @@ impl Writer {
         self.close_ins(&mut body);
         (self.cur_style, self.chain, self.part, self.note_parent) = saved;
         out.push_str(&format!("<office:annotation{attrs}>{head}{body}</office:annotation>"));
+        if let Some(m) = reopen {
+            self.open_ins(&m, out);
+        }
+    }
+
+    /// A text box (ODF 1.3 §10.4.3 `draw:text-box` in a `draw:frame`): in line with the text, or
+    /// anchored and placed as it floats; framed by a thin line, as WordCraft draws a new one.
+    fn text_box(&mut self, w: f32, h: f32, float: Option<&wordcraft_doc::para::Float>, blocks: &[FBlock], out: &mut String) {
+        let reopen = self.open_ins.as_ref().map(|(m, _)| m.clone());
+        self.close_ins(out);
+        // The fill both ways: LibreOffice reads `draw:fill` (and fills a frame without it).
+        let frame = " fo:border=\"0.75pt solid #000000\" fo:padding=\"3.6pt\" fo:background-color=\"#ffffff\" draw:fill=\"solid\" draw:fill-color=\"#ffffff\"";
+        let (anchor, props, xy) = match float {
+            Some(f) => super::frames::frame_of(f),
+            None => ("as-char", " style:vertical-pos=\"top\" style:vertical-rel=\"baseline\"".to_string(), String::new()),
+        };
+        let style = self.graphic_style(format!("{props}{frame}"));
+        let saved = (std::mem::take(&mut self.cur_style), std::mem::take(&mut self.chain), self.part, self.note_parent.take());
+        let mut body = String::new();
+        self.blocks(blocks, &mut body, 1);
+        self.close_ins(&mut body);
+        (self.cur_style, self.chain, self.part, self.note_parent) = saved;
+        if body.is_empty() {
+            body.push_str("<text:p/>");
+        }
+        self.boxes += 1;
+        let fit = |v: f32| if v.is_finite() { v.clamp(1.0, 1584.0) } else { 72.0 };
+        out.push_str(&format!(
+            "<draw:frame draw:name=\"{}Frame{}\" draw:style-name=\"{style}\" text:anchor-type=\"{anchor}\" svg:width=\"{}\" svg:height=\"{}\"{xy} draw:z-index=\"0\"><draw:text-box>{body}</draw:text-box></draw:frame>",
+            self.prefix,
+            self.boxes,
+            pt(fit(w)),
+            pt(fit(h))
+        ));
         if let Some(m) = reopen {
             self.open_ins(&m, out);
         }

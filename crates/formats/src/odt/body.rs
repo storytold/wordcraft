@@ -226,6 +226,10 @@ struct DelState {
     ins: Vec<(String, RevMark)>,
 }
 
+/// A frame being read: its width and height, picture bytes, alt text and the equation read from
+/// an embedded formula object.
+type Frame = (Option<f32>, Option<f32>, Option<Vec<u8>>, String, Option<(String, bool)>);
+
 pub(super) struct Body<'a> {
     styles: &'a Styles,
     zip: &'a mut dyn FnMut(&str) -> Option<Vec<u8>>,
@@ -246,7 +250,7 @@ pub(super) struct Body<'a> {
     skip: usize,
     depth: usize,
     /// `(width, height, picture bytes, alt text, equation read from an embedded `draw:object`)`.
-    frame: Option<(Option<f32>, Option<f32>, Option<Vec<u8>>, String, Option<(String, bool)>)>,
+    frame: Option<Frame>,
     in_desc: bool,
     /// The master pages' page setups.
     pages: &'a Pages,
@@ -279,6 +283,8 @@ pub(super) struct Body<'a> {
     field: Option<OpenField>,
     /// Where the frame being read floats.
     frame_float: Option<wordcraft_doc::para::Float>,
+    /// The content of the text box in the frame being read.
+    frame_box: Option<Vec<FBlock>>,
     /// The note or comment being read.
     note: Option<OpenNote>,
     /// The list being read (its flow number, [`ListInfo::list`]), the last one, the next number,
@@ -322,6 +328,9 @@ struct OpenNote {
     custom: String,
     /// Set for a comment.
     comment: Option<CommentInfo>,
+    /// Set for a text box: the frame it is in, put aside with its placement while its content is
+    /// read (a frame inside it is a frame of its own).
+    text_box: Option<(Option<Frame>, Option<wordcraft_doc::para::Float>)>,
     para: Option<Para>,
     fmt: Vec<Fmt>,
     xml_space_end: bool,
@@ -387,6 +396,7 @@ impl<'a> Body<'a> {
             active_ins: Vec::new(),
             field: None,
             frame_float: None,
+            frame_box: None,
             note: None,
             comment_names: HashMap::new(),
             next_comment: 0,
@@ -1178,6 +1188,14 @@ impl Body<'_> {
         }
         match q {
             "office:annotation" if free && self.comment_names.len() < MAX_COMMENTS => self.start_comment(a),
+            // A text box: its content read as a note's, the frame it is in put aside meanwhile.
+            "draw:text-box" if self.frame.is_some() && self.note.is_none() && self.del.is_none() && !self.in_tc && self.frame_box.is_none() => {
+                let frame = (self.frame.take(), self.frame_float.take());
+                self.start_note(a);
+                if let Some(n) = &mut self.note {
+                    n.text_box = Some(frame);
+                }
+            }
             "office:annotation-end" => {
                 if let Some(id) = get(a, "office:name").and_then(|n| self.comment_names.get(n)).copied() {
                     self.push_inline(Inline::CommentEnd(id));
@@ -1232,6 +1250,7 @@ impl Body<'_> {
             endnote: get(a, "text:note-class").is_some_and(|c| c.trim() == "endnote"),
             custom: String::new(),
             comment: None,
+            text_box: None,
             para: self.para.take(),
             fmt: std::mem::take(&mut self.fmt),
             xml_space_end: std::mem::take(&mut self.xml_space_end),
@@ -1265,6 +1284,12 @@ impl Body<'_> {
         self.lists = n.lists;
         self.item_used = n.item_used;
         self.list_id = n.list_id;
+        if let Some((frame, float)) = n.text_box {
+            // Back in the frame, which holds the box's content until it ends.
+            (self.frame, self.frame_float) = (frame, float);
+            self.frame_box = Some(blocks);
+            return;
+        }
         match n.comment {
             Some(c) => {
                 // LibreOffice writes an empty date as all zeroes; a date without a zone is
@@ -1309,7 +1334,7 @@ impl Body<'_> {
             // then that element.
             self.end_field();
             self.end_note();
-            if q == "text:note" || q == "office:annotation" {
+            if q == "text:note" || q == "office:annotation" || q == "draw:text-box" {
                 return true;
             }
         }
@@ -1463,10 +1488,13 @@ impl Body<'_> {
             }
             "frame" => {
                 if let Some((w, h, img, alt, eq)) = self.frame.take() {
-                    let inline = match eq {
-                        Some((linear, display)) => Some(Inline::Equation { linear, display }),
-                        None => img.and_then(|data| make_img(data, w, h, alt.trim())).map(|mut img| {
-                            img.float = self.frame_float.take().filter(|f| f.wrap != wordcraft_doc::para::Wrap::Inline).map(Box::new);
+                    let boxed = self.frame_box.take();
+                    let float = self.frame_float.take().filter(|f| f.wrap != wordcraft_doc::para::Wrap::Inline);
+                    let inline = match (boxed, eq) {
+                        (Some(blocks), _) => Some(Inline::TextBox { w: w.unwrap_or(72.0), h: h.unwrap_or(36.0), float: float.map(Box::new), blocks }),
+                        (None, Some((linear, display))) => Some(Inline::Equation { linear, display }),
+                        (None, None) => img.and_then(|data| make_img(data, w, h, alt.trim())).map(|mut img| {
+                            img.float = float.map(Box::new);
                             Inline::Image(img)
                         }),
                     };
