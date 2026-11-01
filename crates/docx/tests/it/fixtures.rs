@@ -1882,6 +1882,81 @@ fn model_3d_without_its_model_part_opens_as_its_picture() {
     }
 }
 
+/// `docx` with its `mc:Fallback` replaced by `fallback`.
+fn with_fallback(docx: &[u8], fallback: &str) -> Vec<u8> {
+    let mut files = unzip(docx);
+    let doc = text(&files, "word/document.xml");
+    let (head, rest) = doc.split_once("<mc:Fallback>").unwrap();
+    let (_, tail) = rest.split_once("</mc:Fallback>").unwrap();
+    files.insert("word/document.xml".into(), format!("{head}{fallback}{tail}").into_bytes());
+    let entries: Vec<_> = files.iter().map(|(name, bytes)| (name.as_str(), bytes.as_slice())).collect();
+    zip(&entries)
+}
+
+#[test]
+fn model_3d_with_no_fallback_keeps_its_model() {
+    use wordcraft_doc::graphic::{GraphicItem, GraphicKind};
+    // `mc:Fallback` is optional: the model is whole, there's only no picture to draw it from.
+    for fallback in ["", "<mc:Fallback/>"] {
+        let mut d = wordcraft_docx::read(&with_fallback(&model3d_docx(true), fallback)).unwrap();
+        for round in 0..2 {
+            let g = graphics(&d);
+            let [InlineObject::Graphic { w, graphic, .. }] = g.as_slice() else { panic!("{fallback:?} round {round}: {g:?}") };
+            assert_eq!((*w, graphic.kind), (216.0, GraphicKind::Model3d));
+            assert!(matches!(graphic.items.as_slice(), [GraphicItem::Image { media, .. }] if media.is_empty()), "the missing-picture box");
+            let out = wordcraft_docx::write(&d).unwrap();
+            let files = unzip(&out);
+            let body = text(&files, "word/document.xml");
+            assert_eq!(attr_values(&body, "mc:Choice", "Requires"), ["am3d"], "{body}");
+            let doc_rels = text(&files, "word/_rels/document.xml.rels");
+            let [model_id] = attr_values(&body, "am3d:model3d", "r:embed").try_into().unwrap_or_else(|_| panic!("model lost: {body}"));
+            assert_eq!(files.get(&part_at("word", &rel(&doc_rels, &model_id).1)).map(Vec::as_slice), Some(GLB));
+            d = wordcraft_docx::read(&out).unwrap();
+        }
+    }
+}
+
+#[test]
+fn office_2016_chart_with_no_fallback_keeps_its_chart() {
+    let docx = with_fallback(&chartex_docx("cx1", "http://schemas.microsoft.com/office/drawing/2015/9/8/chartex"), "");
+    let mut d = wordcraft_docx::read(&docx).unwrap();
+    for _ in 0..2 {
+        let g = graphics(&d);
+        let [InlineObject::Graphic { graphic, .. }] = g.as_slice() else { panic!("{g:?}") };
+        assert_eq!(graphic.kind, wordcraft_doc::graphic::GraphicKind::Chart);
+        let out = wordcraft_docx::write(&d).unwrap();
+        let files = unzip(&out);
+        let body = text(&files, "word/document.xml");
+        assert_eq!(attr_values(&body, "mc:Choice", "Requires"), ["cx1"], "{body}");
+        let [cx_id] = attr_values(&body, "cx:chart", "r:id").try_into().unwrap_or_else(|_| panic!("chart lost: {body}"));
+        let doc_rels = text(&files, "word/_rels/document.xml.rels");
+        assert_eq!(text(&files, &part_at("word", &rel(&doc_rels, &cx_id).1)), CHARTEX_XML);
+        d = wordcraft_docx::read(&out).unwrap();
+    }
+}
+
+#[test]
+fn model_3d_whose_picture_is_gone_opens_without_it() {
+    // The model's own `am3d:raster` names the picture too, so it can't be written back whole:
+    // the rest of the document stays and the save points at nothing missing.
+    let mut no_part = unzip(&model3d_docx(true));
+    no_part.remove("word/media/image1.png");
+    let mut no_rel = unzip(&model3d_docx(true));
+    let rels = text(&no_rel, "word/_rels/document.xml.rels");
+    let start = rels.find(r#"<Relationship Id="rIdPic""#).unwrap();
+    let end = start + rels[start..].find("/>").unwrap() + "/>".len();
+    no_rel.insert("word/_rels/document.xml.rels".into(), format!("{}{}", &rels[..start], &rels[end..]).into_bytes());
+    for files in [no_part, no_rel] {
+        let entries: Vec<_> = files.iter().map(|(name, bytes)| (name.as_str(), bytes.as_slice())).collect();
+        let d = wordcraft_docx::read(&zip(&entries)).unwrap();
+        assert_eq!(paras(&d).iter().map(|p| p.text.as_str()).collect::<Vec<_>>(), ["Model"]);
+        assert!(paras(&d).iter().all(|p| p.objects.is_empty()));
+        let saved = unzip(&wordcraft_docx::write(&d).unwrap());
+        let body = text(&saved, "word/document.xml");
+        assert!(!body.contains("am3d:model3d") && !body.contains("mc:AlternateContent") && !body.contains("r:embed"), "{body}");
+    }
+}
+
 #[test]
 fn moved_and_copied_chart_keeps_its_parts() {
     let d = wordcraft_docx::read(&chart_docx()).unwrap();

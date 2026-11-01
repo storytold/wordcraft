@@ -211,7 +211,7 @@ impl Writer<'_> {
         if direct_ink {
             w.raw(&root.to_xml());
         } else {
-            if fallback.is_some() {
+            if alternate.is_some() {
                 let requires = if ink { "wpi" } else { choice.and_then(|c| c.attr("Requires")).unwrap_or_default() };
                 w.open("mc:AlternateContent", &[]);
                 w.open("mc:Choice", &[("Requires", requires)]);
@@ -225,17 +225,18 @@ impl Writer<'_> {
             };
             let z = self.z;
             self.graphic_frame(w, DrawingInfo { float, size: (*gw, *gh), docpr: &docpr, name: &name, alt }, native.unwrap_or(&root));
-            if let Some(fallback) = fallback {
+            if alternate.is_some() {
                 w.close("mc:Choice");
-                match picture {
-                    Some(picture) => {
+                match (picture, fallback) {
+                    (Some(picture), _) => {
                         // Both branches are one object: same id and stacking order.
                         self.z = z;
                         w.open("mc:Fallback", &[]);
                         self.graphic_frame(w, DrawingInfo { float, size: (*gw, *gh), docpr: &docpr, name: &name, alt }, picture);
                         w.close("mc:Fallback");
                     }
-                    None => w.raw(&fallback.to_xml()),
+                    (None, Some(fallback)) => w.raw(&fallback.to_xml()),
+                    (None, None) => {}
                 }
                 w.close("mc:AlternateContent");
             }

@@ -59,7 +59,7 @@ impl Reader<'_> {
         } else if uri.ends_with("/diagram") {
             Some(GraphicKind::Diagram)
         } else {
-            None
+            kept_kind(gd)
         };
         if let Some(kind) = graphic_kind {
             // Kept so saving writes the chart or diagram back: the frame around it is written
@@ -149,30 +149,32 @@ impl Reader<'_> {
 
     /// An Office 2016 chart (`cx:chart`: waterfall, sunburst, box & whisker…) or a 3D model
     /// (`am3d:model3d`) drawn from its fallback picture, keeping both branches so saving writes
-    /// the chart or model back rather than only the picture. `None` (read the fallback alone)
-    /// when it can't be kept whole.
+    /// the chart or model back rather than only the picture. With no fallback to draw from it
+    /// shows the missing-picture box. `None` (read the fallback alone) when it can't be kept whole.
     pub(super) fn read_kept_alternate(&mut self, sc: &mut StoryCtx, ac: &El, rels: &Rels) -> Option<InlineObject> {
         // A requirement in a namespace we can't name couldn't be written back.
         let keepable = |c: &El| {
             let requires = c.attr("Requires").unwrap_or("");
             requires.split_whitespace().next().is_some() && requires.split_whitespace().all(|p| p != "?")
         };
-        let kind_of = |c: &El| {
-            let gd = c.child("w:drawing").and_then(|d| d.find("a:graphicData"))?;
-            if gd.attr("uri") == Some(CHARTEX_URI) {
-                Some(GraphicKind::Chart)
-            } else if gd.child("am3d:model3d").is_some() {
-                Some(GraphicKind::Model3d)
-            } else {
-                None
-            }
-        };
+        let kind_of = |c: &El| kept_kind(c.child("w:drawing").and_then(|d| d.find("a:graphicData"))?);
         // The first Choice a reader would take; `children_of_choice` reads it unless it's kept.
         let choice = ac.children("mc:Choice").find(|c| choice_understood(c) || (keepable(c) && kind_of(c).is_some()))?;
         let kind = kind_of(choice).filter(|_| keepable(choice))?;
-        let fallback = ac.child("mc:Fallback")?;
-        let kept = El { name: "mc:AlternateContent".into(), attrs: Vec::new(), kids: vec![Node::El(choice.clone()), Node::El(fallback.clone())] };
+        // An empty fallback offers no picture, the same as none (it's optional, ECMA-376 Part 3).
+        let fallback = ac.child("mc:Fallback").filter(|f| !f.kids.is_empty());
+        let kids = [Some(choice), fallback].into_iter().flatten().map(|e| Node::El(e.clone())).collect();
+        let kept = El { name: "mc:AlternateContent".into(), attrs: Vec::new(), kids };
         let source = self.keep_embedded(&kept, rels, &[])?;
+        let Some(fallback) = fallback else {
+            let mut object = self.read_drawing(sc, choice.child("w:drawing")?, rels)?;
+            if let InlineObject::Graphic { w, h, graphic, .. } = &mut object {
+                let graphic = Arc::make_mut(graphic);
+                graphic.items = vec![GraphicItem::Image { rect: [0.0, 0.0, *w, *h], media: String::new(), crop: [0.0; 4] }];
+                graphic.source = Some(source);
+            }
+            return Some(object);
+        };
         let Some(InlineObject::Image { media, w, h, alt, float, crop, .. }) = self.read_drawing(sc, fallback.child("w:drawing")?, rels) else {
             return None;
         };
@@ -556,6 +558,17 @@ impl Reader<'_> {
         self.group_fill = group;
         self.flush_pending(&mut inner, &mut blocks);
         self.doc.add_part(PartKind::TextBox, blocks)
+    }
+}
+
+/// What an `a:graphicData` kept opaque holds: an Office 2016 chart or a 3D model.
+fn kept_kind(gd: &El) -> Option<GraphicKind> {
+    if gd.attr("uri") == Some(CHARTEX_URI) {
+        Some(GraphicKind::Chart)
+    } else if gd.child("am3d:model3d").is_some() {
+        Some(GraphicKind::Model3d)
+    } else {
+        None
     }
 }
 
