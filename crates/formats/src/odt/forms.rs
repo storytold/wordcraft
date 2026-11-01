@@ -242,8 +242,9 @@ pub(in crate::odt) fn form_xml(c: &ContentControl, text: &str, id: &str, n: usiz
             None => (xml, w, h),
         }
     };
-    // A control kept verbatim, with its new id.
-    if !c.form_xml.is_empty() {
+    // A control kept verbatim, with its new id, while it is still the control it was read as
+    // (made another kind, it is written as that).
+    if !c.form_xml.is_empty() && c.kind == (ControlKind::Text { multi_line: false }) {
         let end = c.form_xml.find(|ch: char| ch.is_whitespace() || ch == '>')?;
         let (head, rest) = (c.form_xml.get(..end)?, c.form_xml.get(end..)?);
         return Some(size((format!("{head} xml:id=\"{id}\" form:id=\"{id}\"{rest}"), 72.0, 20.0)));

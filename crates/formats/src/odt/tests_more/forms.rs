@@ -130,6 +130,20 @@ fn buttons_are_kept() {
         "{c}"
     );
     assert!(c.contains(r#"svg:width="72pt" svg:height="21.6pt" draw:control="control1""#), "{c}");
+    // Made a check box, it is saved as one.
+    let mut c = wordcraft_doc::control::ContentControl::new(ControlKind::Text { multi_line: false });
+    c.form_xml = "<form:button form:name=\"Go\"></form:button>".into();
+    let kept = crate::odt::forms::form_xml(&c, "Go", "control1", 1).unwrap().0;
+    assert!(kept.starts_with(r#"<form:button xml:id="control1" form:id="control1" form:name="Go">"#), "{kept}");
+    c.kind = ControlKind::CheckBox {
+        checked: true,
+        checked_char: '\u{2612}',
+        checked_font: String::new(),
+        unchecked_char: '\u{2610}',
+        unchecked_font: String::new(),
+    };
+    let made = crate::odt::forms::form_xml(&c, "\u{2612}", "control1", 1).unwrap().0;
+    assert!(made.starts_with("<form:checkbox "), "{made}");
     // And again: still a button.
     let again = entry(&export(&import(&saved).unwrap()).unwrap(), "content.xml");
     assert_eq!(again.matches("<form:button ").count(), 1, "{again}");
