@@ -46,6 +46,8 @@ pub(super) fn instr_of(local: &str, a: &Attrs, picture: impl Fn(&str) -> Option<
             .filter(|n| !n.is_empty() && n.len() <= MAX_REF_NAME && !n.contains(|c: char| c.is_whitespace() || c == '"' || c == '\\'))
     };
     match local {
+        // An index entry at a point (§8.1.10): Word's `XE`, its keys the levels above it.
+        "alphabetical-index-mark" => xe_instr(get(a, "text:key1"), get(a, "text:key2"), get(a, "text:string-value")?),
         // Numbering figures, tables and the like (§7.4.13): Word's `SEQ` and its number format.
         "sequence" => {
             let seq = name("text:name")?;
@@ -146,6 +148,15 @@ pub(super) fn element(instr: &str, result: &str, data_style: Option<&str>) -> Op
             };
             Some(format!("<text:page-number{fmt} text:select-page=\"current\">{result}</text:page-number>"))
         }
+        // An index entry: a mark at its place, its first levels the keys (§8.1.10).
+        "XE" => {
+            let entry = instr.get(code.len()..)?.trim_start();
+            let entry = entry.strip_prefix('"').and_then(|t| t.split('"').next())?;
+            let mut levels: Vec<&str> = entry.split(':').map(str::trim).filter(|l| !l.is_empty()).collect();
+            let value = levels.pop()?;
+            let keys: String = levels.iter().take(2).enumerate().map(|(i, k)| format!(" text:key{}=\"{}\"", i + 1, x(k))).collect();
+            Some(format!("<text:alphabetical-index-mark text:string-value=\"{}\"{keys}/>", x(value)))
+        }
         "REF" | "PAGEREF" => {
             let name = words.next().filter(|n| !n.starts_with('\\') && n.len() <= MAX_REF_NAME)?;
             let rest: Vec<&str> = words.collect();
@@ -164,6 +175,24 @@ pub(super) fn element(instr: &str, result: &str, data_style: Option<&str>) -> Op
             Some(format!("<text:{el}{ds}>{result}</text:{el}>"))
         }
     }
+}
+
+/// Most characters of an index entry's level.
+const MAX_ENTRY_LEVEL: usize = 255;
+
+/// The `XE` field code of an index entry `value` under keys `key1` and `key2` (its levels, top
+/// first). Quotes, which end the entry, and colons, which split levels, are left out of each.
+/// `None` when the entry is empty.
+pub(super) fn xe_instr(key1: Option<&str>, key2: Option<&str>, value: &str) -> Option<String> {
+    let clean = |s: &str| {
+        s.chars().filter(|c| !matches!(c, '"' | ':' | '\\') && !c.is_control()).take(MAX_ENTRY_LEVEL).collect::<String>().trim().to_string()
+    };
+    let value = clean(value);
+    if value.is_empty() {
+        return None;
+    }
+    let levels: Vec<String> = [key1, key2].into_iter().flatten().map(clean).filter(|k| !k.is_empty()).chain([value]).collect();
+    Some(format!("XE \"{}\"", levels.join(":")))
 }
 
 /// The argument of switch `\sw` in field code `instr` (quoted or one word).

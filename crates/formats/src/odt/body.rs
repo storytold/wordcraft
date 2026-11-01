@@ -19,6 +19,9 @@ use notes::{OpenField, OpenNote, balance_comments};
 use tables::TableB;
 use tracked::{DelState, Region, change_mark};
 
+/// Most index entries over text open at once in a paragraph.
+const MAX_OPEN_MARKS: usize = 64;
+
 /// An open frame: its size, picture, alt text, equation, chart and other embedded object.
 type Frame =
     (Option<f32>, Option<f32>, Option<Vec<u8>>, String, Option<(String, bool)>, Option<wordcraft_doc::chart::ChartSpec>, Option<model::OdfObject>);
@@ -30,6 +33,9 @@ pub(super) struct Body<'a> {
     pub(super) entries: &'a [String],
     /// The paragraph before had a page break after it: the next one starts a page.
     break_next: bool,
+    /// Index entries over text whose end hasn't come (in the paragraph being read): their id,
+    /// keys and where they start: an inline, and a byte offset in it when it is text.
+    index_marks: Vec<(String, (Option<String>, Option<String>), (usize, usize))>,
     /// A ruby being read: its base text, ruby text, which of them the text goes to (`true`:
     /// the ruby), and the base's formatting.
     ruby: Option<(String, String, Option<bool>, Fmt)>,
@@ -132,6 +138,7 @@ impl<'a> Body<'a> {
             forms: Default::default(),
             break_next: false,
             ruby: None,
+            index_marks: Vec::new(),
             manifest: None,
             containers: vec![Vec::new()],
             fmt: Vec::new(),
@@ -443,6 +450,8 @@ impl Body<'_> {
     }
 
     fn end_para(&mut self) {
+        // An index entry is marked within one paragraph.
+        self.index_marks.clear();
         let Some(mut p) = self.para.take() else { return };
         self.fmt.pop();
         // A paragraph ending inside an open insertion has an inserted mark. (Paragraphs that
@@ -903,6 +912,60 @@ impl Body<'_> {
             "line-break" => self.push_text("\n"),
             // A bookmark (§6.2.1): a point, or the start or end of the text it covers.
             // A reference mark (§7.6) is a bookmark too: references to it are Word's to bookmarks.
+            // An index entry over text (§8.1.11–8.1.12): an `XE` field at its start, the entry the
+            // marked text (in one paragraph).
+            "alphabetical-index-mark-start" => {
+                if let (Some(id), Some(p)) = (get(a, "text:id"), &self.para)
+                    && self.index_marks.len() < MAX_OPEN_MARKS
+                {
+                    let keys = (get(a, "text:key1").map(String::from), get(a, "text:key2").map(String::from));
+                    // Where it starts: after the last inline, or inside the text run the marked
+                    // text will join.
+                    let at = match p.inlines.last() {
+                        Some(Inline::Text(t, _)) => (p.inlines.len() - 1, t.len()),
+                        _ => (p.inlines.len(), 0),
+                    };
+                    self.index_marks.push((id.to_string(), keys, at));
+                }
+            }
+            "alphabetical-index-mark-end" => {
+                if let Some(at) = get(a, "text:id").and_then(|id| self.index_marks.iter().position(|(i, ..)| i == id)) {
+                    let (_, (k1, k2), (from, off)) = self.index_marks.remove(at);
+                    if let Some(p) = &mut self.para {
+                        // The marked text: from the offset in the first run on.
+                        let text: String = p
+                            .inlines
+                            .iter()
+                            .enumerate()
+                            .skip(from)
+                            .filter_map(|(k, i)| match i {
+                                Inline::Text(t, _) if k == from => t.get(off..),
+                                Inline::Text(t, _) => Some(t.as_str()),
+                                _ => None,
+                            })
+                            .collect();
+                        if let Some(instr) = super::fields::xe_instr(k1.as_deref(), k2.as_deref(), &text) {
+                            let field = Inline::Field { instr, result: String::new(), fmt: Fmt::default() };
+                            // Inside a run: split it there.
+                            let split = match p.inlines.get_mut(from) {
+                                Some(Inline::Text(t, f)) if off > 0 && t.is_char_boundary(off) && off < t.len() => {
+                                    let rest = t.split_off(off);
+                                    Some(Inline::Text(rest, f.clone()))
+                                }
+                                _ => None,
+                            };
+                            match split {
+                                Some(rest) => {
+                                    p.inlines.insert(from + 1, rest);
+                                    p.inlines.insert(from + 1, field);
+                                }
+                                None if off > 0 => p.inlines.insert((from + 1).min(p.inlines.len()), field),
+                                None => p.inlines.insert(from.min(p.inlines.len()), field),
+                            }
+                        }
+                    }
+                }
+            }
             "bookmark" | "bookmark-start" | "bookmark-end" | "reference-mark" | "reference-mark-start" | "reference-mark-end" => {
                 if let Some(name) = get(a, "text:name").filter(|n| !n.is_empty()) {
                     let name = name.to_string();

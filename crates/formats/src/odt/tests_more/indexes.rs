@@ -135,3 +135,26 @@ fn hostile_indexes_do_not_panic() {
         let _ = export(&d).unwrap();
     }
 }
+
+#[test]
+fn index_marks_are_xe_fields_and_written_back() {
+    // An entry at a point (`text:alphabetical-index-mark`, its keys the levels above it) and one
+    // over text (`-mark-start` … `-mark-end`, the entry being the marked text).
+    let body = r#"<text:p>Fruit <text:alphabetical-index-mark text:string-value="apple" text:key1="Fruit"/>is sweet; <text:alphabetical-index-mark-start text:id="m1"/>bananas<text:alphabetical-index-mark-end text:id="m1"/> too.</text:p><text:p><text:alphabetical-index-mark text:string-value="a &quot;quoted&quot; one: here"/></text:p>"#;
+    let content =
+        format!(r#"<office:document-content {NS_T}><office:body><office:text>{body}</office:text></office:body></office:document-content>"#);
+    let d = import(&crate::odt::tests::package(&content, None)).unwrap();
+    let xe: Vec<String> = d
+        .body
+        .iter()
+        .filter_map(|b| b.as_para())
+        .flat_map(|p| p.objects.iter())
+        .filter_map(|o| if let wordcraft_doc::para::InlineObject::Field { instr, .. } = o { Some(instr.clone()) } else { None })
+        .collect();
+    assert_eq!(xe, [r#"XE "Fruit:apple""#, r#"XE "bananas""#, r#"XE "a quoted one here""#]);
+    // The marked text stays text.
+    assert!(d.body.iter().filter_map(|b| b.as_para()).any(|p| p.text.contains("bananas too.")));
+    let c = crate::odt::tests::content_of(&export(&d).unwrap());
+    assert!(c.contains(r#"<text:alphabetical-index-mark text:string-value="apple" text:key1="Fruit"/>"#), "{c}");
+    assert!(c.contains(r#"<text:alphabetical-index-mark text:string-value="bananas"/>"#), "{c}");
+}

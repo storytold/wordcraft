@@ -65,3 +65,27 @@ fn an_odt_table_of_contents_updates_from_the_headings() {
         assert_eq!(entries(&s2), ["Planning", "Budget"], "titled: {titled}");
     }
 }
+
+#[test]
+fn an_odt_index_updates_from_its_marks() {
+    // An alphabetical index whose entries are index marks in the text (`XE` fields once open):
+    // Update Index lists them, rather than emptying the index.
+    let content = format!(
+        r#"<office:document-content {NS}><office:body><office:text>
+        <text:alphabetical-index text:name="A"><text:alphabetical-index-source/><text:index-body><text:p>stale, 9</text:p></text:index-body></text:alphabetical-index>
+        <text:p>Clay <text:alphabetical-index-mark text:string-value="kilns"/>is fired; <text:alphabetical-index-mark-start text:id="m"/>glazes<text:alphabetical-index-mark-end text:id="m"/> shine.</text:p>
+        </office:text></office:body></office:document-content>"#
+    );
+    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (name, data) in [("mimetype", "application/vnd.oasis.opendocument.text"), ("content.xml", content.as_str())] {
+        z.start_file(name, o).unwrap();
+        z.write_all(data.as_bytes()).unwrap();
+    }
+    let mut s = Session::new(io::open_bytes("index.odt", &z.finish().unwrap().into_inner()).unwrap());
+    s.run("references.updateIndex", &json!({})).unwrap();
+    let text: Vec<String> = s.doc.body.iter().filter_map(|b| b.as_para()).map(|p| p.text.replace(wordcraft_doc::para::OBJ, "")).collect();
+    assert!(text.iter().any(|t| t.starts_with("glazes")), "{text:?}");
+    assert!(text.iter().any(|t| t.starts_with("kilns")), "{text:?}");
+    assert!(!text.iter().any(|t| t.contains("stale")), "{text:?}");
+}

@@ -65,6 +65,46 @@ fn generated_list_with(s: &mut Session, instr: &str, title: &str, leader: Option
     update_generated(s)
 }
 
+/// Most paragraphs a list held as a field around its entries spans.
+const MAX_WRAPPED: usize = 10_000;
+
+/// A generated list (index, bibliography, table of figures or authorities) held as a complex
+/// field that starts at body block `i` and runs over its entries: its field code and the block
+/// it ends in. `None` for anything else (a TOC has its own update).
+fn wrapped_list(s: &Session, i: usize) -> Option<(String, usize)> {
+    let p = s.doc.body.get(i)?.as_para()?;
+    let (off, instr) = p.objects_with_offsets().find_map(|(off, o)| match o {
+        InlineObject::FieldStart { instr, .. } => {
+            let t = instr.trim_start();
+            (t.starts_with("BIBLIOGRAPHY") || t.starts_with("INDEX") || t.starts_with("TOA") || figures_label(t).is_some())
+                .then(|| (off, t.to_string()))
+        }
+        _ => None,
+    })?;
+    // Only when it starts the paragraph: text before it is the document's, not the list's.
+    if !p.text.get(..off).is_some_and(|t| t.chars().all(|c| c.is_whitespace() || c == wordcraft_doc::para::OBJ)) {
+        return None;
+    }
+    // Where it ends: the field end that closes it, nested fields counted.
+    let mut depth = 0usize;
+    for (j, b) in s.doc.body.iter().enumerate().skip(i).take(MAX_WRAPPED) {
+        let Some(q) = b.as_para() else { continue };
+        for o in &q.objects {
+            match o {
+                InlineObject::FieldStart { .. } => depth += 1,
+                InlineObject::FieldEnd => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        return Some((instr, j));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    None
+}
+
 fn list_kind(p: &Paragraph) -> Option<String> {
     p.objects.iter().find_map(|o| match o {
         InlineObject::Field { instr, .. } => {
@@ -152,6 +192,22 @@ pub(super) const ENTRY_STYLE: &str = "ListEntry";
 pub fn update_generated(s: &mut Session) -> Result<(), CmdError> {
     let mut i = 0;
     while i < s.doc.body.len() {
+        // A list held as a field around its entries (as Word and ODT files hold them): made the
+        // field's own paragraph, as WordCraft inserts one, its old entries rebuilt below.
+        if let Some((instr, last)) = wrapped_list(s, i) {
+            let mut p = Paragraph::default();
+            p.insert_object(
+                0,
+                InlineObject::Field { instr, result: String::new(), locked: false, dirty: false, code: false, form: String::new() },
+                &Default::default(),
+            )?;
+            for _ in i..last {
+                s.doc.remove_block(StoryRef::Body, &Path::top(i + 1))?;
+            }
+            if let Some(b) = s.doc.body.get_mut(i) {
+                *b = wordcraft_doc::para_block(p);
+            }
+        }
         let kind = s.doc.body.get(i).and_then(|b| b.as_para()).and_then(list_kind);
         let Some(kind) = kind else {
             i += 1;
