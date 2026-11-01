@@ -1240,6 +1240,7 @@ fn groups_round_trip() {
             GroupChild { x: 50.0, y: 60.0, obj: tb },
         ],
         canvas: None,
+        picture_fill: false,
     };
     let mut p = Paragraph::with_text("grouped ", CharProps::default());
     let end = p.len();
@@ -1302,6 +1303,7 @@ fn drawing_canvas_round_trips() {
         ch_h: 216.0,
         children: vec![GroupChild { x: 12.0, y: 18.0, obj: pic }, GroupChild { x: 300.0, y: 100.0, obj: star.clone() }],
         canvas: Some(style.clone()),
+        picture_fill: false,
     };
     let mut p = Paragraph::with_text("drawn ", CharProps::default());
     let end = p.len();
@@ -1349,6 +1351,7 @@ fn rotated_drawing_canvas_round_trips() {
         ch_h: 100.0,
         children: vec![GroupChild { x: 10.0, y: 20.0, obj: member.clone() }],
         canvas: Some(CanvasStyle { fill: Some(Fill::solid(Rgb(0xF0, 0xF4, 0xFF))), stroke: None, stroke_width: 0.0 }),
+        picture_fill: false,
     };
     let square = Float { wrap: Wrap::Square, ..Default::default() };
     let mut p = Paragraph::with_text("c", CharProps::default());
@@ -2124,6 +2127,7 @@ fn rotation_and_flips_round_trip() {
         ch_h: 60.0,
         children: vec![wordcraft_doc::para::GroupChild { x: 0.0, y: 0.0, obj: shape(ShapeKind::Ellipse, Float { rot: 10.0, ..Default::default() }) }],
         canvas: None,
+        picture_fill: false,
     };
     let mut p = Paragraph::with_text("turned ", CharProps::default());
     for o in [pic, tri, flipped, group] {
@@ -2181,6 +2185,7 @@ fn rotated_group_and_shadow_rotation_round_trip() {
             wordcraft_doc::para::GroupChild { x: 60.0, y: 0.0, obj: member(false) },
         ],
         canvas: None,
+        picture_fill: false,
     };
     let mut p = Paragraph::with_text("g", CharProps::default());
     p.insert_object(1, group, &CharProps::default()).unwrap();
@@ -2623,6 +2628,7 @@ fn alt_text_title_and_decorative_round_trip_for_every_object() {
         ch_h: 60.0,
         children: vec![wordcraft_doc::para::GroupChild { x: 0.0, y: 0.0, obj: shape(AltText { text: "Left circle".into(), ..Default::default() }) }],
         canvas: None,
+        picture_fill: false,
     };
     let mut p = Paragraph::with_text("objects ", CharProps::default());
     for o in [pic, described, decorative, group] {

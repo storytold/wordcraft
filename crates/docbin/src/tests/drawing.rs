@@ -404,6 +404,7 @@ fn a_floating_copy_is_charged_its_alt_text() {
         ch_h: 1.0,
         children: vec![member(image("x".repeat(100))), member(image(String::new()))],
         canvas: None,
+        picture_fill: false,
     };
     assert_eq!(crate::object_cost(&group), 3 * bare + 100);
 }

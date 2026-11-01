@@ -77,6 +77,14 @@ pub enum InlineObject {
         /// what lies outside the frame is clipped.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         canvas: Option<CanvasStyle>,
+        /// Made by the DOCX reader from a legacy VML rectangle or text box filled with a picture
+        /// (`v:fill type="frame"`): its members are the shape's layers, and the text box over
+        /// them, when it fills the group, takes clicks inside it into its text, as the shape did.
+        /// DOCX keeps it in the drawing's `wp:docPr` extension list (WordCraft's own URI), and
+        /// native JSON as this field; the other writers ignore it and treat the group as any
+        /// other.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        picture_fill: bool,
     },
     /// A field: `instr` is the field code (`PAGE`, `NUMPAGES`, `DATE \@ "M/d/yyyy"`, `TOC \o "1-3"`…);
     /// `result` the cached display text. A `locked` field keeps its result when fields update.

@@ -173,11 +173,16 @@ fn target(s: &Session) -> Option<(Pos, Pos)> {
 }
 
 /// A text box selected as an object (its frame, not text in it): all its text, which Word's Font
-/// group formats then, instead of the box's anchor in the text around it.
+/// group formats then, instead of the box's anchor in the text around it. A text box filled with
+/// a picture (read as a group of its layers, `picture_fill`) is one text box, as in Word.
 fn selected_text_box(s: &Session) -> Option<(Pos, Pos)> {
-    let (_, InlineObject::Shape { story: Some(id), .. }) = super::objects::object_selection(s)? else { return None };
-    let story = StoryRef::Part(*id);
-    s.doc.parts.get(id).filter(|p| p.kind == PartKind::TextBox).map(|_| (s.doc.start_of(story), s.doc.end_of(story)))
+    let id = match super::objects::object_selection(s)?.1 {
+        InlineObject::Shape { story: Some(id), .. } => *id,
+        o @ InlineObject::Group { picture_fill: true, .. } => o.text_boxes().first().copied()?,
+        _ => return None,
+    };
+    let story = StoryRef::Part(id);
+    s.doc.parts.get(&id).filter(|p| p.kind == PartKind::TextBox).map(|_| (s.doc.start_of(story), s.doc.end_of(story)))
 }
 
 /// The non-empty rows of a column selection, if one is active. Of whole cells, every paragraph:

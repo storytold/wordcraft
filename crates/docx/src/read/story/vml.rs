@@ -13,7 +13,8 @@ struct VmlGroupSpace {
 impl Reader<'_> {
     /// Every legacy VML drawing in one `w:pict`, in document order: a `w:pict` may hold any
     /// number of shapes (ECMA-376 Part 4, VML), and each one is its own object. A `v:group`
-    /// becomes an [`InlineObject::Group`].
+    /// becomes an [`InlineObject::Group`]; a shape filled with a picture, the picture with the
+    /// shape's fill under it and its outline and text over it (see [`picture_fill_layers`]).
     pub(super) fn read_vml_all(&mut self, sc: &mut StoryCtx, pict: &El, rels: &Rels) -> Vec<InlineObject> {
         let mut out = Vec::new();
         for e in pict.els().filter(|e| e.name.starts_with("v:") && e.local() != "shapetype") {
@@ -28,7 +29,11 @@ impl Reader<'_> {
                 self.doc.settings.watermark.get_or_insert(wm);
                 continue;
             }
-            let o = if e.local() == "group" { self.read_vml_group(sc, pict, e, rels) } else { self.read_vml_shape(sc, pict, e, rels, None) };
+            let o = if e.local() == "group" {
+                self.read_vml_group(sc, pict, e, rels)
+            } else {
+                self.read_vml_shape(sc, pict, e, rels, None).map(|o| self.vml_picture_filled(e, rels, o))
+            };
             out.extend(o);
         }
         out
@@ -57,12 +62,15 @@ impl Reader<'_> {
         if children.is_empty() {
             return None;
         }
-        Some(InlineObject::Group { w, h, float, ch_w, ch_h, children, canvas: None })
+        Some(InlineObject::Group { w, h, float, ch_w, ch_h, children, canvas: None, picture_fill: false })
     }
 
     /// The members of VML group `g` into `out`, mapped into the outermost group's space by `t`
     /// (x0, y0, sx, sy: outer = x0 + inner × sx). A member is placed by `left`/`top` in that
-    /// space, except a `v:line`, which carries its own offset in `from`.
+    /// space, except a `v:line`, which carries its own offset in `from`. Members are read up to
+    /// [`wordcraft_doc::para::MAX_GROUP_CHILDREN`]; a member filled with a picture gives all its
+    /// layers or, when they don't fit, none, and reading stops there without the text box stories
+    /// it made.
     fn vml_group_members(
         &mut self,
         sc: &mut StoryCtx,
@@ -98,6 +106,9 @@ impl Reader<'_> {
                 self.vml_group_members(sc, pict, e, rels, VmlGroupSpace { origin: (nt.0, nt.1), scale: (nt.2, nt.3), depth: space.depth + 1 }, out);
                 continue;
             }
+            let room = wordcraft_doc::para::MAX_GROUP_CHILDREN.saturating_sub(out.len());
+            let parts_before: Option<std::collections::BTreeSet<u32>> =
+                (room < MAX_PICTURE_FILL_LAYERS).then(|| self.doc.parts.keys().copied().collect());
             let Some(mut obj) = self.read_vml_shape(sc, pict, e, rels, Some((sx, sy))) else { continue };
             // A member is placed by `x`/`y`, so a line's own offset comes off the member itself.
             let (dx, dy) = match obj.float_mut() {
@@ -108,8 +119,49 @@ impl Reader<'_> {
                 }
                 None => (0.0, 0.0),
             };
-            out.push(wordcraft_doc::para::GroupChild { x: fit(x0 + (ox + dx) * sx, -max), y: fit(y0 + (oy + dy) * sy, -max), obj });
+            let (x, y) = (fit(x0 + (ox + dx) * sx, -max), fit(y0 + (oy + dy) * sy, -max));
+            let layers = match self.vml_picture_fill(e, rels, &obj) {
+                Some(fill) => picture_fill_layers(obj, fill, false),
+                None => vec![(0.0, 0.0, obj)],
+            };
+            if layers.len() > room {
+                if let Some(before) = parts_before {
+                    self.doc.parts.retain(|id, _| before.contains(id));
+                }
+                return;
+            }
+            for (lx, ly, obj) in layers {
+                out.push(wordcraft_doc::para::GroupChild { x: fit(x + lx, -max), y: fit(y + ly, -max), obj });
+            }
         }
+    }
+
+    /// The picture VML `shape` (read as `obj`) is filled with, when Word draws one on it: a frame
+    /// fill Word draws (see [`vml_frame_fill`]) of a shape [`picture_fillable`], whose picture
+    /// is in the package.
+    fn vml_picture_fill(&mut self, shape: &El, rels: &Rels, obj: &InlineObject) -> Option<PictureFill> {
+        let id = vml_frame_fill(shape).filter(|_| picture_fillable(obj))?;
+        let media = self.media_for(rels, id)?;
+        let clear = self.doc.media.get(&media).is_none_or(|bytes| !opaque_picture(bytes));
+        Some(PictureFill { media, clear })
+    }
+
+    /// `obj`, read from VML `shape`, as Word draws it when it is filled with a picture: the
+    /// picture alone when nothing else of the shape shows, otherwise a group of its layers (see
+    /// [`picture_fill_layers`]) placed as the shape was. Any other shape as it is.
+    fn vml_picture_filled(&mut self, shape: &El, rels: &Rels, obj: InlineObject) -> InlineObject {
+        let Some(fill) = self.vml_picture_fill(shape, rels, &obj) else { return obj };
+        let Some((w, h, float)) = obj.frame().map(|(w, h, f)| (w, h, f.clone())) else { return obj };
+        let mut layers = picture_fill_layers(obj, fill, true);
+        let alone = matches!(layers.as_slice(), [(_, _, InlineObject::Image { float: f, .. })] if f.spin().is_identity());
+        if alone && let Some((_, _, mut picture)) = layers.pop() {
+            if let Some(f) = picture.float_mut() {
+                *f = float;
+            }
+            return picture;
+        }
+        let children = layers.into_iter().map(|(x, y, obj)| wordcraft_doc::para::GroupChild { x, y, obj }).collect();
+        InlineObject::Group { w, h, float, ch_w: w, ch_h: h, children, canvas: None, picture_fill: true }
     }
 
     /// One legacy VML picture, text box, line, rectangle, oval or preset shape (best effort).
@@ -465,6 +517,130 @@ fn vml_textbox(e: &El, depth: usize) -> Option<(&El, &El)> {
 
 fn vml_style<'a>(style: &'a str, key: &str) -> Option<&'a str> {
     style.rsplit(';').filter_map(|d| d.split_once(':')).find(|(k, _)| k.trim().eq_ignore_ascii_case(key)).map(|(_, v)| v.trim())
+}
+
+/// The relationship id of the picture a VML shape is filled with: a `v:fill` of type `frame`
+/// (ECMA-376 Part 4, VML `fill`) with an `r:id`. Word draws the picture only when the fill also
+/// has an `o:title` (empty or not); drawn here only opaque (`opacity` 1) and stretched over the
+/// shape (`aspect` `ignore`, the default). A fill turned off leaves the shape unfilled, which
+/// [`picture_fillable`] turns down.
+fn vml_frame_fill(shape: &El) -> Option<&str> {
+    let fill = shape.child("v:fill")?;
+    let frame = fill.attr("type").is_some_and(|t| t.trim().eq_ignore_ascii_case("frame"));
+    let opaque = fill.attr("opacity").and_then(vml_fraction).is_none_or(|o| o >= 1.0);
+    let stretched = fill.attr("aspect").is_none_or(|a| a.trim().eq_ignore_ascii_case("ignore"));
+    if !frame || !opaque || !stretched || fill.attr("o:title").is_none() {
+        return None;
+    }
+    fill.attr("r:id")
+}
+
+/// The picture a VML shape is filled with: its media key, and whether it may let the shape's
+/// fill colour through (it isn't known to be opaque, see [`opaque_picture`]).
+struct PictureFill {
+    media: String,
+    clear: bool,
+}
+
+/// Whether Word draws a picture fill on `obj`, a shape read from VML: a rectangle or text box
+/// with a solid fill (the colour a frame fill has under its picture), unturned or turned by
+/// quarter turns, not flipped. Word draws the picture upright over the turned shape, cut to its
+/// outline; at other angles that cut isn't followed.
+fn picture_fillable(obj: &InlineObject) -> bool {
+    let InlineObject::Shape {
+        kind: ShapeKind::Rectangle | ShapeKind::TextBox,
+        fill: Some(wordcraft_doc::fill::Fill::Solid { .. }),
+        freeform: None,
+        float,
+        ..
+    } = obj
+    else {
+        return false;
+    };
+    let spin = float.spin();
+    let quarters = spin.deg / 90.0;
+    !spin.flip_h && !spin.flip_v && (quarters - quarters.round()).abs() < 1e-4
+}
+
+/// Most layers [`picture_fill_layers`] gives one shape: its fill colour, its picture, and its
+/// outline and text.
+const MAX_PICTURE_FILL_LAYERS: usize = 3;
+
+/// The layers Word draws for `obj`, a VML shape [`picture_fillable`] filled with `fill`, each at
+/// its offset in the shape's frame: the shape's fill colour when the picture may let it through,
+/// the picture stretched over the frame, and the shape with no fill when its outline or text
+/// shows. The picture is upright: on a shape turned by a quarter turn it covers the turned frame.
+/// `own_frame`: the layers make up a group turned as the shape was, so the picture turns back;
+/// otherwise they are members of the shape's group, each turned (and hidden) as the shape was.
+/// Anything else is one layer, as it is. At most [`MAX_PICTURE_FILL_LAYERS`].
+fn picture_fill_layers(obj: InlineObject, fill: PictureFill, own_frame: bool) -> Vec<(f32, f32, InlineObject)> {
+    if !picture_fillable(&obj) {
+        return vec![(0.0, 0.0, obj)];
+    }
+    let InlineObject::Shape { kind, w, h, fill: Some(colour), stroke, stroke_width, float, story, freeform: None, effects, extra } = obj else {
+        return vec![(0.0, 0.0, obj)];
+    };
+    let spin = float.spin();
+    let (layer, upright) = if own_frame {
+        let mut back = Float::default();
+        back.set_spin(wordcraft_geom::Spin::new(-spin.deg, false, false));
+        (Float::default(), back)
+    } else {
+        (float.clone(), Float { hidden: float.hidden, ..Float::default() })
+    };
+    let (pw, ph) = if (spin.deg / 90.0).round() as i64 % 2 == 1 { (h, w) } else { (w, h) };
+    let mut layers = Vec::with_capacity(3);
+    if fill.clear {
+        let under = InlineObject::Shape {
+            kind: ShapeKind::Rectangle,
+            w,
+            h,
+            fill: Some(colour),
+            stroke: None,
+            stroke_width,
+            float: layer.clone(),
+            story: None,
+            freeform: None,
+            effects: Default::default(),
+            extra: ShapeExtra::default(),
+        };
+        layers.push((0.0, 0.0, under));
+    }
+    let picture = InlineObject::Image { media: fill.media, w: pw, h: ph, alt: String::new(), float: upright, crop: [0.0; 4], ole: None };
+    layers.push(((w - pw) / 2.0, (h - ph) / 2.0, picture));
+    if stroke.is_some() || story.is_some() {
+        layers.push((
+            0.0,
+            0.0,
+            InlineObject::Shape { kind, w, h, fill: None, stroke, stroke_width, float: layer, story, freeform: None, effects, extra },
+        ));
+    }
+    layers
+}
+
+/// Whether picture `bytes` lets nothing through: a JPEG, or a PNG with neither an alpha channel
+/// (colour types 4 and 6) nor a transparent colour (a `tRNS` chunk before its image data), PNG
+/// (ISO/IEC 15948) §11.2.2 and §11.3.2.1. Anything else may be transparent.
+fn opaque_picture(bytes: &[u8]) -> bool {
+    if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        return true;
+    }
+    let Some(png) = bytes.strip_prefix(b"\x89PNG\r\n\x1a\n") else { return false };
+    if png.get(4..8) != Some(b"IHDR".as_slice()) || !matches!(png.get(17), Some(0 | 2 | 3)) {
+        return false;
+    }
+    let mut at = 0usize;
+    for _ in 0..64 {
+        let Some(len) = png.get(at..at.saturating_add(4)).and_then(|b| <[u8; 4]>::try_from(b).ok()).map(u32::from_be_bytes) else { return false };
+        match png.get(at.saturating_add(4)..at.saturating_add(8)) {
+            Some(b"tRNS") | None => return false,
+            Some(b"IDAT") => return true,
+            Some(_) => {}
+        }
+        let Some(next) = usize::try_from(len).ok().and_then(|l| l.checked_add(12)).and_then(|l| at.checked_add(l)) else { return false };
+        at = next;
+    }
+    false
 }
 
 /// A `v:textpath` style value with one pair of surrounding quotes removed and the writer's CSS

@@ -398,6 +398,7 @@ mod tests {
             ch_h: 300.0,
             float: Float { rot: 25.0, flip_h: true, ..Default::default() },
             canvas: None,
+            picture_fill: false,
             children: vec![
                 GroupChild { x: 100.0, y: 200.0, obj: shape(ShapeKind::Rectangle, ShapeExtra { id: 7, ..Default::default() }, Float::default()) },
                 GroupChild {

@@ -223,7 +223,11 @@ impl Writer<'_> {
                 wordcraft_doc::graphic::GraphicKind::Ink => format!("Ink {docpr}"),
             };
             let z = self.z;
-            self.graphic_frame(w, DrawingInfo { float, size: (*gw, *gh), docpr: &docpr, name: &name, alt }, native.unwrap_or(&root));
+            self.graphic_frame(
+                w,
+                DrawingInfo { float, size: (*gw, *gh), docpr: &docpr, name: &name, alt, picture_fill: false },
+                native.unwrap_or(&root),
+            );
             if let Some(fallback) = fallback {
                 w.close("mc:Choice");
                 match picture {
@@ -231,7 +235,7 @@ impl Writer<'_> {
                         // Both branches are one object: same id and stacking order.
                         self.z = z;
                         w.open("mc:Fallback", &[]);
-                        self.graphic_frame(w, DrawingInfo { float, size: (*gw, *gh), docpr: &docpr, name: &name, alt }, picture);
+                        self.graphic_frame(w, DrawingInfo { float, size: (*gw, *gh), docpr: &docpr, name: &name, alt, picture_fill: false }, picture);
                         w.close("mc:Fallback");
                     }
                     None => w.raw(&fallback.to_xml()),
@@ -264,7 +268,7 @@ impl Writer<'_> {
         w.open("w:drawing", &[]);
         let docpr = self.next_docpr();
         let name = format!("Picture {docpr}");
-        self.drawing_open(w, DrawingInfo { float, size: (*iw, *ih), docpr: &docpr, name: &name, alt });
+        self.drawing_open(w, DrawingInfo { float, size: (*iw, *ih), docpr: &docpr, name: &name, alt, picture_fill: false });
         w.empty("wp:cNvGraphicFramePr", &[]);
         w.open("a:graphic", &[]);
         w.open("a:graphicData", &[("uri", "http://schemas.openxmlformats.org/drawingml/2006/picture")]);
@@ -298,7 +302,7 @@ impl Writer<'_> {
                 .map(std::sync::Arc::new);
         }
         let float = &float;
-        self.drawing_open(w, DrawingInfo { float, size: (*sw, *sh), docpr: &docpr, name: &name, alt: o.alt_text() });
+        self.drawing_open(w, DrawingInfo { float, size: (*sw, *sh), docpr: &docpr, name: &name, alt: o.alt_text(), picture_fill: false });
         w.empty("wp:cNvGraphicFramePr", &[]);
         w.open("a:graphic", &[]);
         w.open("a:graphicData", &[("uri", "http://schemas.microsoft.com/office/word/2010/wordprocessingShape")]);
@@ -312,14 +316,17 @@ impl Writer<'_> {
     }
 
     fn write_group(&mut self, w: &mut W, o: &InlineObject, props: &CharProps, rels: &mut PartRels, depth: usize) {
-        let InlineObject::Group { w: gw, h: gh, float, ch_w, ch_h, children, canvas } = o else { return };
+        let InlineObject::Group { w: gw, h: gh, float, ch_w, ch_h, children, canvas, picture_fill } = o else { return };
         self.rev_open(w, props);
         w.open("w:r", &[]);
         self.rpr(w, props);
         w.open("w:drawing", &[]);
         let docpr = self.next_docpr();
         let name = format!("{} {docpr}", if canvas.is_some() { "Canvas" } else { "Group" });
-        self.drawing_open(w, DrawingInfo { float, size: (*gw, *gh), docpr: &docpr, name: &name, alt: o.alt_text() });
+        self.drawing_open(
+            w,
+            DrawingInfo { float, size: (*gw, *gh), docpr: &docpr, name: &name, alt: o.alt_text(), picture_fill: *picture_fill && canvas.is_none() },
+        );
         w.empty("wp:cNvGraphicFramePr", &[]);
         w.open("a:graphic", &[]);
         let outer = match canvas {

@@ -33,6 +33,7 @@ mod settings_merge;
 mod text_boxes;
 mod toc_ranges;
 mod undefined_style;
+mod vml_picture_fills;
 mod vml_shapes;
 mod word_xml;
 mod wordml2003_write;

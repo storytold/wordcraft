@@ -819,7 +819,7 @@ fn flat_lines_in_a_group_are_drawn() {
     };
     let doc = |children: Vec<GroupChild>| {
         let float = Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 72.0, y: 200.0, ..Default::default() };
-        let group = InlineObject::Group { w: 300.0, h: 100.0, float, ch_w: 300.0, ch_h: 100.0, children, canvas: None };
+        let group = InlineObject::Group { w: 300.0, h: 100.0, float, ch_w: 300.0, ch_h: 100.0, children, canvas: None, picture_fill: false };
         let mut p = Paragraph::with_text("Anchor", CharProps::default());
         p.insert_object(0, group, &CharProps::default()).unwrap();
         let mut d = Document::new();
@@ -1193,6 +1193,7 @@ fn rotated_group_tags_each_picture_on_its_own() {
             GroupChild { x: 90.0, y: 0.0, obj: picture("A red square", Float::default()) },
         ],
         canvas: None,
+        picture_fill: false,
     };
     let mut p = Paragraph::with_text("Group: ", CharProps::default());
     let n = p.len();

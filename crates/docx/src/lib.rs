@@ -80,6 +80,12 @@ pub const WRONG_PASSWORD: &str = "the password is incorrect";
 /// transform, so this rides in the extension list Word and other readers skip.
 pub(crate) const CANVAS_SPIN_EXT: &str = "urn:wordcraft:canvas-xfrm";
 
+/// The `a:ext` URI in a group's `wp:docPr/a:extLst` that marks it as WordCraft's reading of a
+/// VML shape filled with a picture ([`wordcraft_doc::InlineObject::Group`]'s `picture_fill`):
+/// its text box takes clicks inside the group. It holds one `pictureFill` element in the same
+/// namespace; Word skips the extension and keeps it when it saves the file again.
+pub(crate) const PICTURE_FILL_EXT: &str = "urn:wordcraft:picture-fill";
+
 /// Read a package that may be password-protected ([`is_encrypted`]): it is decrypted with
 /// `password` first. An encrypted package without a password gives
 /// [`DocxError::PasswordRequired`]; a wrong one, [`DocxError::WrongPassword`].

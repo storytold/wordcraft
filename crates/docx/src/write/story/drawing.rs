@@ -10,6 +10,8 @@ pub(super) struct DrawingInfo<'a> {
     pub docpr: &'a str,
     pub name: &'a str,
     pub alt: &'a str,
+    /// Our mark of a group read from a VML shape filled with a picture, in its `wp:docPr`.
+    pub picture_fill: bool,
 }
 
 impl Writer<'_> {
@@ -20,7 +22,7 @@ impl Writer<'_> {
         self.used_media.insert(media.clone());
         w.open("pic:pic", &[]);
         w.open("pic:nvPicPr", &[]);
-        nv_props(w, "pic:cNvPr", "0", file, alt, &float.alt, float.hidden);
+        nv_props(w, "pic:cNvPr", "0", file, alt, &float.alt, (float.hidden, false));
         w.open("pic:cNvPicPr", &[]);
         w.empty("a:picLocks", &[("noChangeAspect", "1"), ("noChangeArrowheads", "1")]);
         w.close("pic:cNvPicPr");
@@ -52,7 +54,7 @@ impl Writer<'_> {
         w.open("wps:wsp", &[]);
         if let Some(id) = id {
             let name = shape_name(*kind, freeform.as_deref(), id);
-            nv_props(w, "wps:cNvPr", id, &name, &float.alt.text, &float.alt, float.hidden);
+            nv_props(w, "wps:cNvPr", id, &name, &float.alt.text, &float.alt, (float.hidden, false));
         }
         if kind.is_connector() {
             // A connector's glued ends (ECMA-376 §20.1.2.2.8 `cNvCxnSpPr`).
@@ -220,8 +222,10 @@ impl Writer<'_> {
         w.close("w:drawing");
     }
 
+    /// Open drawing `docpr` (`wp:inline` or `wp:anchor`) up to its `wp:docPr`, which carries our
+    /// mark of a group read from a VML shape filled with a picture when `picture_fill`.
     pub(super) fn drawing_open(&mut self, w: &mut W, info: DrawingInfo<'_>) {
-        let DrawingInfo { float, size: (iw, ih), docpr, name, alt } = info;
+        let DrawingInfo { float, size: (iw, ih), docpr, name, alt, picture_fill } = info;
         let (cx, cy) = (emu(iw.max(0.0)), emu(ih.max(0.0)));
         if float.wrap == Wrap::Inline {
             w.open("wp:inline", &[("distT", "0"), ("distB", "0"), ("distL", "0"), ("distR", "0")]);
@@ -302,7 +306,7 @@ impl Writer<'_> {
             Wrap::TopAndBottom => w.empty("wp:wrapTopAndBottom", &[]),
             Wrap::BehindText | Wrap::InFrontOfText => w.empty("wp:wrapNone", &[]),
         }
-        nv_props(w, "wp:docPr", docpr, name, alt, &float.alt, float.hidden);
+        nv_props(w, "wp:docPr", docpr, name, alt, &float.alt, (float.hidden, picture_fill));
     }
 }
 
@@ -487,9 +491,11 @@ pub(in super::super) fn spin_attrs(spin: wordcraft_geom::Spin) -> Vec<(&'static 
 
 /// A drawing's `wp:docPr` (or a group member's `pic:cNvPr`/`wps:cNvPr`, ECMA-376
 /// `CT_NonVisualDrawingProps`) with its alt text `descr`, its title, and the decorative mark as
-/// the `adec:decorative` extension ([MS-ODRAWXML]). A description that is only the title (read
-/// from a file with no description) is not written twice.
-pub(in super::super) fn nv_props(w: &mut W, tag: &str, id: &str, name: &str, descr: &str, alt: &AltText, hidden: bool) {
+/// the `adec:decorative` extension ([MS-ODRAWXML]), and with `picture_fill` our mark of a group
+/// read from a VML shape filled with a picture ([`crate::PICTURE_FILL_EXT`]) after it. A
+/// description that is only the title (read from a file with no description) is not written
+/// twice.
+pub(in super::super) fn nv_props(w: &mut W, tag: &str, id: &str, name: &str, descr: &str, alt: &AltText, (hidden, picture_fill): (bool, bool)) {
     let mut attrs = vec![("id", id), ("name", name)];
     if descr != alt.title || descr.is_empty() {
         attrs.push(("descr", descr));
@@ -500,15 +506,22 @@ pub(in super::super) fn nv_props(w: &mut W, tag: &str, id: &str, name: &str, des
     if hidden {
         attrs.push(("hidden", "1"));
     }
-    if !alt.decorative {
+    if !alt.decorative && !picture_fill {
         w.empty(tag, &attrs);
         return;
     }
     w.open(tag, &attrs);
     w.open("a:extLst", &[]);
-    w.open("a:ext", &[("uri", crate::xml::DECORATIVE_EXT)]);
-    w.empty("adec:decorative", &[("xmlns:adec", crate::xml::DECORATIVE_NS), ("val", "1")]);
-    w.close("a:ext");
+    if alt.decorative {
+        w.open("a:ext", &[("uri", crate::xml::DECORATIVE_EXT)]);
+        w.empty("adec:decorative", &[("xmlns:adec", crate::xml::DECORATIVE_NS), ("val", "1")]);
+        w.close("a:ext");
+    }
+    if picture_fill {
+        w.open("a:ext", &[("uri", crate::PICTURE_FILL_EXT)]);
+        w.empty("wcpf:pictureFill", &[("xmlns:wcpf", crate::PICTURE_FILL_EXT)]);
+        w.close("a:ext");
+    }
     w.close("a:extLst");
     w.close(tag);
 }

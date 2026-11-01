@@ -329,6 +329,19 @@ fn group_members(o: &InlineObject, rect: Rect) -> Vec<(Rect, &InlineObject)> {
         .collect()
 }
 
+/// The text box filling group `o`'s whole frame `rect`, unturned in it: a click inside the group
+/// goes into its text, as for a text box of its own. Only for a group read from a VML text box
+/// filled with a picture (the picture and the text box over it, `picture_fill`); any other group
+/// is taken whole.
+fn framing_text_box(doc: &Document, o: &InlineObject, rect: Rect) -> Option<u32> {
+    let same = |a: f32, b: f32| (a - b).abs() < 0.01;
+    group_members(o, rect).into_iter().find_map(|(r, c)| {
+        let unturned = c.frame().is_some_and(|(_, _, f)| f.spin().is_identity());
+        let fills = same(r.x, rect.x) && same(r.y, rect.y) && same(r.w, rect.w) && same(r.h, rect.h);
+        c.text_box().filter(|id| unturned && fills && doc.parts.get(id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::TextBox))
+    })
+}
+
 /// Position the floating objects anchored in `p` for a paragraph whose text starts at `y0` in
 /// the current column, add their wrap areas to the page (replacing any from an earlier attempt,
 /// from `excl_mark` on) and lay the paragraph out around them, with its list `label`. `p` is
@@ -503,6 +516,7 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
                 InlineObject::Shape { story: Some(id), .. } if ctx.doc.parts.get(id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::TextBox) => {
                     Some(*id)
                 }
+                InlineObject::Group { picture_fill: true, .. } => framing_text_box(ctx.doc, obj, rect),
                 _ => None,
             };
             // A box linked from another shows (and edits) that box's story.

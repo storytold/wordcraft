@@ -469,7 +469,7 @@ mod tests {
     }
 
     fn group(children: Vec<GroupChild>) -> InlineObject {
-        InlineObject::Group { w: 200.0, h: 300.0, ch_w: 200.0, ch_h: 300.0, float: Float::default(), children, canvas: None }
+        InlineObject::Group { w: 200.0, h: 300.0, ch_w: 200.0, ch_h: 300.0, float: Float::default(), children, canvas: None, picture_fill: false }
     }
 
     #[test]

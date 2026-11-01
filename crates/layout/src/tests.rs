@@ -3383,6 +3383,7 @@ fn hidden_drawings_are_neither_drawn_nor_take_room() {
         ch_h: 50.0,
         children: vec![member(true, 0.0), member(false, 50.0)],
         canvas: None,
+        picture_fill: false,
     };
     d.insert_object(&Pos::body(0, 0), group, &Default::default()).unwrap();
     let l = lay(&d);
@@ -7357,6 +7358,7 @@ fn rotated_group_turns_its_members_and_their_shadows() {
         ch_h: 40.0,
         children: vec![GroupChild { x: 0.0, y: 0.0, obj: member(false, 0.0) }, GroupChild { x: 60.0, y: 0.0, obj: member(true, 10.0) }],
         canvas: None,
+        picture_fill: false,
     };
     let mut d = Document::from_text("Text under the group.");
     d.insert_object(&Pos::body(0, 0), group, &Default::default()).unwrap();
@@ -7918,6 +7920,7 @@ fn rotated_canvas_draws_its_clipped_members_inside_the_turn() {
         ch_h: 100.0,
         children: vec![GroupChild { x: 20.0, y: 30.0, obj: member.clone() }],
         canvas: Some(CanvasStyle { fill: Some(Fill::solid(wordcraft_doc::props::Rgb(0xF0, 0xF4, 0xFF))), stroke: None, stroke_width: 0.0 }),
+        picture_fill: false,
     };
     // Turned draws: (turn, background rect, clip rect, member rect and its own turn).
     let turned = |draws: &[Draw]| -> (Vec<f32>, Vec<Rect>, Vec<(Rect, Vec<(Rect, f32)>)>) {
@@ -11121,6 +11124,7 @@ fn ink_member_of_a_group_draws_its_fallback_picture() {
         ch_h: 100.0,
         children: vec![GroupChild { x: 20.0, y: 30.0, obj: ink }],
         canvas: None,
+        picture_fill: false,
     };
     let mut d = Document::from_text("Text by the group.");
     d.insert_object(&Pos::body(0, 0), group, &Default::default()).unwrap();
