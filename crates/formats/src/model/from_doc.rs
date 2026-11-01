@@ -217,6 +217,19 @@ fn flow_comment(doc: &Document, c: &wordcraft_doc::Comment, parent: Option<u32>,
     FComment { author: c.author.clone(), initials: c.initials.clone(), date: c.date.clone(), resolved: c.resolved, parent, blocks }
 }
 
+/// A paragraph's list membership as the flow keeps it: without the list's identity and label
+/// unless `opts` asks for them, and none for a heading numbered only through its style, which a
+/// format with heading numbering of its own (ODT's outline style) numbers instead.
+fn flow_list(kind: Kind, list: Option<ListInfo>, p: &Paragraph, opts: FlowOpts) -> Option<ListInfo> {
+    let mut li = list?;
+    if !opts.lists {
+        (li.list, li.label) = (0, None);
+    } else if matches!(kind, Kind::Heading(_)) && p.props.numbering.is_none() {
+        return None;
+    }
+    Some(li)
+}
+
 /// The spacing and indents a paragraph sets itself (its style's are not included).
 fn direct_spacing(p: &wordcraft_doc::props::ParaProps) -> Spacing {
     Spacing { before: p.space_before, after: p.space_after, line: p.line_spacing, left: p.indent_left, right: p.indent_right, first: p.indent_first }
@@ -232,12 +245,8 @@ pub fn flow_paras(doc: &Document, p: &Paragraph) -> Vec<Para> {
 /// insertion and deletion marks.
 fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
     let tracked = opts.tracked;
-    let (kind, mut list) = para_kind(doc, p);
-    if !opts.lists
-        && let Some(li) = &mut list
-    {
-        (li.list, li.label) = (0, None);
-    }
+    let (kind, list) = para_kind(doc, p);
+    let list = flow_list(kind, list, p, opts);
     let mut done: Vec<Para> = Vec::new();
     let borders = if kind == Kind::Rule { None } else { p.props.borders.filter(|b| b.any_visible()) };
     let mut out = Para {

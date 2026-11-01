@@ -56,3 +56,20 @@ fn heading_numbering_round_trips() {
     let plain = open("");
     assert_eq!(heading_numbers(&import(&export(&plain).unwrap()).unwrap()), [None, None, None]);
 }
+
+#[test]
+fn exported_heading_numbers_are_followed_by_a_tab() {
+    // Without label alignment LibreOffice set the number against the heading's text.
+    let xml = crate::odt::tests::styles_of(&export(&open(NUMBERED)).unwrap());
+    let outline = xml.split("<text:outline-style").nth(1).unwrap_or("");
+    assert!(outline.contains(r#"text:label-followed-by="listtab""#), "{outline}");
+    assert!(outline.contains(r#"text:list-level-position-and-space-mode="label-alignment""#));
+}
+
+#[test]
+fn numbered_headings_are_not_written_as_list_items() {
+    // The outline style numbers them; wrapped in a list they took that list's indents.
+    let xml = crate::odt::tests::content_of(&export(&open(NUMBERED)).unwrap());
+    assert!(!xml.contains("<text:list"), "{xml}");
+    assert!(xml.contains(r#"<text:h text:style-name="Heading_20_2" text:outline-level="2">One one</text:h>"#), "{xml}");
+}

@@ -33,9 +33,11 @@ fn kind_styles(doc: &Document) -> String {
             before: pp.space_before,
             after: pp.space_after,
             line: pp.line_spacing,
-            left: pp.indent_left,
-            right: pp.indent_right,
-            first: pp.indent_first,
+            // Zero indents are the defaults; stating them would override the indents of the
+            // heading numbering in LibreOffice (its number then sits against the text).
+            left: pp.indent_left.filter(|v| *v != 0.0),
+            right: pp.indent_right.filter(|v| *v != 0.0),
+            first: pp.indent_first.filter(|v| *v != 0.0),
         });
         para.push_str(align_attr(pp.align));
         if pp.keep_next == Some(true) {
@@ -59,6 +61,7 @@ fn outline_style(doc: &Document) -> String {
             .then(|| doc.styles.para_style_props(&format!("Heading{n}")).0.numbering)
             .flatten()
             .and_then(|r| doc.numbering.level(r.num, r.level).cloned().map(|l| (r.level, l)));
+        let (indent, hanging) = level.as_ref().map(|(_, l)| (l.indent, l.hanging)).unwrap_or((0.0, 0.0));
         let attrs = match level {
             Some((lv, l)) if !matches!(l.format, wordcraft_doc::section::NumFormat::None | wordcraft_doc::section::NumFormat::Bullet) => {
                 let label = model::Label::of_level(l.format, &l.text);
@@ -78,7 +81,23 @@ fn outline_style(doc: &Document) -> String {
             }
             _ => " style:num-format=\"\"".into(),
         };
-        s.push_str(&format!("<text:outline-level-style text:level=\"{n}\"{attrs}/>"));
+        // The number at the level's indent, followed by a tab (to the next default tab stop
+        // when the level has no indent), as Word lays out numbered headings.
+        let fit = |v: f32| if v.is_finite() { v.clamp(0.0, 1584.0) } else { 0.0 };
+        // A level with no indent states none, so LibreOffice uses its own (a tab after the number).
+        let place = if fit(indent) > 0.0 || fit(hanging) > 0.0 {
+            format!(
+                " text:list-tab-stop-position=\"{}\" fo:text-indent=\"{}\" fo:margin-left=\"{}\"",
+                pt(fit(indent)),
+                pt(-fit(hanging)),
+                pt(fit(indent))
+            )
+        } else {
+            String::new()
+        };
+        s.push_str(&format!(
+            "<text:outline-level-style text:level=\"{n}\"{attrs}><style:list-level-properties text:list-level-position-and-space-mode=\"label-alignment\"><style:list-level-label-alignment text:label-followed-by=\"listtab\"{place}/></style:list-level-properties></text:outline-level-style>"
+        ));
     }
     s.push_str("</text:outline-style>");
     s

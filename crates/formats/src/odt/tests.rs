@@ -1141,3 +1141,9 @@ pub(super) fn content_of(bytes: &[u8]) -> String {
     let mut z = archive(bytes);
     String::from_utf8(read_entry(&mut z, "content.xml").unwrap()).unwrap()
 }
+
+/// The `styles.xml` of a package.
+pub(super) fn styles_of(bytes: &[u8]) -> String {
+    let mut z = archive(bytes);
+    String::from_utf8(read_entry(&mut z, "styles.xml").unwrap()).unwrap()
+}
