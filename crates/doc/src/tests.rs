@@ -1,5 +1,7 @@
 use super::*;
 
+mod note_conversion;
+
 #[test]
 fn new_document_is_valid() {
     let d = Document::new();
@@ -14,6 +16,20 @@ fn word_count() {
     let d = Document::from_text("Hello, world!\nThis is — a test 42.\n\n");
     assert_eq!(d.word_count(), 7);
     assert_eq!(count_words(" -- "), 0);
+}
+
+/// #4547: each Han ideograph and kana counts as a word; punctuation and Hangul spacing don't change.
+#[test]
+fn word_count_counts_each_chinese_and_japanese_character() {
+    // #4547: unspaced Chinese counted as one word per run.
+    assert_eq!(count_words("我们今天去公园。"), 7);
+    assert_eq!(count_words("WordCraft是一个文字处理器，很好用！"), 1 + 11);
+    assert_eq!(count_words("ひらがなとカタカナ"), 9);
+    assert_eq!(count_words("ｶﾀｶﾅ"), 4);
+    assert_eq!(count_words("ｶﾞｷﾞ"), 2, "voiced sound marks belong to their kana");
+    assert_eq!(count_words("。、・「」"), 0);
+    // Korean is spaced: Hangul counts by tokens.
+    assert_eq!(count_words("안녕하세요 세계"), 2);
 }
 
 #[test]
@@ -59,6 +75,23 @@ fn word_count_includes_numbered_labels_with_nothing_suffix() {
     // and label "2." and text "Banana Cherry" as 3 words (total: 5 words),
     // even though LevelSuffix::Nothing produces no visible separator between label and text.
     assert_eq!(d.word_count(), 5);
+}
+
+/// #4547: a generated CJK list label such as 第十二章 still counts as one word.
+#[test]
+fn word_count_keeps_a_cjk_list_label_one_word() {
+    let mut d = Document::new();
+    let num_id = d.numbering.add_list(ListKind::Numbered);
+    let aid = d.numbering.num(num_id).expect("list num exists").abstract_id;
+    let a = d.numbering.abstracts.iter_mut().find(|a| a.id == aid).expect("abstract num exists");
+    a.levels[0].format = section::NumFormat::ChineseCounting;
+    a.levels[0].text = "第%1章".into();
+    a.levels[0].start = 12;
+    let mut p = Paragraph::with_text("总结", CharProps::default());
+    p.props.numbering = Some(props::NumRef { num: num_id, level: 0 });
+    d.body = vec![Arc::new(Block::Para(p))];
+    // The label 第十二章 stays one word (#4547 changed only document text); 总结 is two.
+    assert_eq!(d.word_count(), 1 + 2);
 }
 
 #[test]
@@ -650,4 +683,67 @@ fn control_markers_kept_are_sorted() {
         assert!(!kept.is_empty(), "{a:?}..{b:?}");
         assert!(kept.windows(2).all(|p| p[0] < p[1]), "sorted, no repeats: {kept:?}");
     }
+}
+
+#[test]
+fn lone_table_open_markers_linear_time() {
+    let mut d = Document::new();
+    let mut t = Table::new(1, 1, 100.0);
+    const COUNT: usize = 2_000;
+    t.controls.open = (0..COUNT).map(|i| ContentControl { tag: format!("ctrl_{i}"), ..Default::default() }).collect();
+    d.body.insert(0, Arc::new(Block::Table(t)));
+
+    let mut paras = Vec::new();
+    let mut tables = Vec::new();
+    let timer = std::time::Instant::now();
+    crate::control::orphans(&d.body, &mut Vec::new(), 0, &mut paras, &mut tables);
+
+    assert_eq!(paras.len(), 0);
+    assert_eq!(tables.len(), COUNT);
+    for (i, (path, nth, is_open)) in tables.iter().enumerate() {
+        assert_eq!(*path, Path::top(0));
+        assert_eq!(*nth, i);
+        assert!(*is_open);
+    }
+
+    assert!(d.has_unbalanced_controls());
+    let removed = d.balance_controls();
+    assert_eq!(removed, COUNT);
+    assert!(!d.has_unbalanced_controls());
+    assert!(timer.elapsed().as_secs_f32() < 10.0, "{:?}", timer.elapsed());
+    let Block::Table(tbl) = &*d.body[0] else { panic!("expected table") };
+    assert!(tbl.controls.open.is_empty());
+}
+
+#[test]
+fn lone_table_open_markers_mixed_tables_and_paired() {
+    let mut d = Document::new();
+    let mut t0 = Table::new(1, 1, 100.0);
+    t0.controls.open = (0..3).map(|i| ContentControl { tag: format!("t0_{i}"), ..Default::default() }).collect();
+    t0.controls.close = 1;
+
+    let mut t1 = Table::new(1, 1, 100.0);
+    t1.controls.open = (0..2).map(|i| ContentControl { tag: format!("t1_{i}"), ..Default::default() }).collect();
+
+    d.body = vec![Arc::new(Block::Table(t0)), Arc::new(Block::Table(t1))];
+
+    let mut paras = Vec::new();
+    let mut tables = Vec::new();
+    crate::control::orphans(&d.body, &mut Vec::new(), 0, &mut paras, &mut tables);
+
+    assert_eq!(paras.len(), 0);
+    assert_eq!(tables, vec![(Path::top(0), 0, true), (Path::top(0), 1, true), (Path::top(1), 0, true), (Path::top(1), 1, true),]);
+
+    let removed = d.balance_controls();
+    assert_eq!(removed, 4);
+    assert!(!d.has_unbalanced_controls());
+
+    let Block::Table(res0) = &*d.body[0] else { panic!("expected table") };
+    assert_eq!(res0.controls.open.len(), 1);
+    assert_eq!(res0.controls.open[0].tag, "t0_2");
+    assert_eq!(res0.controls.close, 1);
+
+    let Block::Table(res1) = &*d.body[1] else { panic!("expected table") };
+    assert!(res1.controls.open.is_empty());
+    assert_eq!(res1.controls.close, 0);
 }
