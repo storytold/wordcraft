@@ -1,5 +1,6 @@
 use super::*;
 
+/// Create a synthetic document with 256 custom styles to exercise list reuse.
 fn app() -> WordApp {
     let mut doc = wordcraft_doc::Document::from_text("Original paragraph.");
     for i in 0..256 {
@@ -11,6 +12,7 @@ fn app() -> WordApp {
     app
 }
 
+/// Draw the actual Restrict Editing pane in a complete headless frame.
 fn paint(ctx: &egui::Context, app: &mut WordApp) {
     ctx.run_ui(
         egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 800.0))), ..Default::default() },
@@ -19,6 +21,7 @@ fn paint(ctx: &egui::Context, app: &mut WordApp) {
     .drop_without_applying_deltas();
 }
 
+/// Unchanged frames and caret movement reuse rows without mutating the document.
 #[test]
 fn restrict_pane_reuses_unchanged_style_list() {
     let ctx = egui::Context::default();
@@ -38,6 +41,7 @@ fn restrict_pane_reuses_unchanged_style_list() {
     assert_eq!(RESTRICT_LIST_BUILDS.with(|n| n.get()), 1);
 }
 
+/// Preserve source-name order, hidden and kind filters, and empty-name fallbacks.
 #[test]
 fn restrict_pane_keeps_stable_order_filtering_and_fallback_names() {
     use wordcraft_doc::{Document, Style, StyleKind};
@@ -67,6 +71,7 @@ fn restrict_pane_keeps_stable_order_filtering_and_fallback_names() {
     );
 }
 
+/// Supported style edits, Undo/Redo and equal-revision replacement refresh the rows.
 #[test]
 fn restrict_pane_refreshes_after_style_edits_history_and_replacement() {
     let ctx = egui::Context::default();
@@ -100,6 +105,7 @@ fn restrict_pane_refreshes_after_style_edits_history_and_replacement() {
     assert!(!app.restrict.styles.rows.iter().any(|r| r.0.starts_with("custom-")));
 }
 
+/// Initial allowed selections follow the first matching style definition for each ID.
 #[test]
 fn restrict_pane_initial_allowed_styles_keep_first_id_lock_semantics() {
     let ctx = egui::Context::default();
@@ -113,6 +119,7 @@ fn restrict_pane_initial_allowed_styles_keep_first_id_lock_semantics() {
     assert_eq!(app.restrict.allowed.as_ref().unwrap(), &vec!["free".to_string()]);
 }
 
+/// Actual pane clicks preserve checkbox, All/None, cancellation and enforcement behavior.
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn restrict_pane_checkboxes_all_none_and_enforcement_stay_live() {
@@ -154,6 +161,7 @@ fn restrict_pane_checkboxes_all_none_and_enforcement_stay_live() {
     assert!(h.state_mut().run("format.bold", json!({"value":true})).is_err());
 }
 
+/// Live language changes translate labels while retaining the source-name row order.
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn restrict_pane_translates_labels_live_without_reordering_source_names() {
@@ -185,6 +193,7 @@ fn restrict_pane_translates_labels_live_without_reordering_source_names() {
     assert_eq!(h.state().session.rev(), revision);
 }
 
+/// Window swaps preserve separate caches and closing a window releases its rows.
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn restrict_pane_cache_follows_window_ownership_and_close() {
