@@ -1,3 +1,4 @@
+use super::select::with_obj;
 use super::*;
 
 fn png(w: u32, h: u32) -> Vec<u8> {

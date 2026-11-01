@@ -10,7 +10,7 @@ const GREEN: Rgb = Rgb(0, 255, 0);
 
 fn image(item: Draw) -> Rendered {
     let items = [Draw::Fill { rect: Rect::new(0.0, 0.0, 40.0, 40.0), color: BLUE, alpha: 1.0, text_bg: false }, item];
-    render_items(&Document::new(), &items, 0.0, 0.0, 40.0, 40.0, 4.0, &RenderOptions::default())
+    render_items(&Document::new(), &items, wordcraft_geom::Rect::new(0.0, 0.0, 40.0, 40.0), 4.0, &RenderOptions::default())
 }
 
 fn close(pixel: [u8; 4], alpha: f32) {

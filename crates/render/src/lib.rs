@@ -1171,7 +1171,7 @@ mod pattern_tests {
                 dash: Vec::new(),
             },
         ];
-        let image = render_items(&Document::new(), &items, 0.0, 0.0, 24.0, 24.0, 4.0, &RenderOptions::default());
+        let image = render_items(&Document::new(), &items, wordcraft_geom::Rect::new(0.0, 0.0, 24.0, 24.0), 4.0, &RenderOptions::default());
         let close = |pixel: [u8; 4], want: [u8; 4]| {
             for (a, b) in pixel.into_iter().zip(want) {
                 assert!(a.abs_diff(b) <= 2, "{pixel:?} != {want:?}");
@@ -1217,7 +1217,7 @@ mod pattern_tests {
         };
         for opacity in [0.0, 0.25, 1.0] {
             let items = items(Some(pattern), opacity);
-            let image = render_items(&Document::new(), &items, 0.0, 0.0, 24.0, 24.0, 4.0, &RenderOptions::default());
+            let image = render_items(&Document::new(), &items, wordcraft_geom::Rect::new(0.0, 0.0, 24.0, 24.0), 4.0, &RenderOptions::default());
             close(image.pixel(50, 50), [124, 150, 122, 255]);
             close(image.pixel(54, 50), [102, 102, 255, 255]);
             let mut bg = [0.0, 0.0, 255.0];
@@ -1228,7 +1228,7 @@ mod pattern_tests {
         }
         for (opacity, want) in [(0.0, [0, 0, 255, 255]), (0.5, [78, 94, 172, 255]), (1.0, [155, 187, 89, 255])] {
             let items = items(None, opacity);
-            let image = render_items(&Document::new(), &items, 0.0, 0.0, 24.0, 24.0, 4.0, &RenderOptions::default());
+            let image = render_items(&Document::new(), &items, wordcraft_geom::Rect::new(0.0, 0.0, 24.0, 24.0), 4.0, &RenderOptions::default());
             close(image.pixel(50, 50), want);
             let mut bg = [0.0, 0.0, 255.0];
             blend_backgrounds(&items[1..], wordcraft_geom::Point::new(12.5, 12.5), &RenderOptions::default(), &mut bg, 0);
