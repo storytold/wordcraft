@@ -89,10 +89,13 @@ impl Writer<'_> {
     }
 
     fn table(&mut self, w: &mut W, t: &Table, rels: &mut PartRels, depth: usize) {
-        let rows: Vec<_> = t.rows.iter().enumerate().filter(|(_, r)| !r.cells.is_empty()).collect();
+        // A row without cells isn't written; the rows Word reads are numbered without it, which is
+        // how they take the table style's first-row, last-row and banded formatting.
+        let rows: Vec<_> = t.rows.iter().filter(|r| !r.cells.is_empty()).collect();
         if rows.is_empty() {
             return;
         }
+        let nrows = rows.len();
         let style = t.props.style.as_deref().and_then(|id| self.doc.styles.table_style(id));
         w.open("w:tbl", &[]);
         let chg = t.props.fmt_change.as_ref().map(|c| self.change_attrs(c.rev));
@@ -109,7 +112,7 @@ impl Writer<'_> {
         // Controls around rows and cells (repeating sections): opens and closes balanced
         // whatever editing left, the ones still open closed at the end.
         let mut open_rows = 0u32;
-        for (ri, r) in rows {
+        for (ri, r) in rows.into_iter().enumerate() {
             let mut g = r.first_grid();
             for c in &r.controls.open {
                 crate::write::sdt::open(w, c);
@@ -128,7 +131,7 @@ impl Writer<'_> {
                 let chg = c.props.fmt_change.as_ref().map(|c| self.change_attrs(c.rev));
                 tcpr(w, &c.props, chg.as_ref());
                 let span = c.span();
-                let text = style.as_ref().map(|st| cell_text(st, t, (ri, g, span, ncols)));
+                let text = style.as_ref().map(|st| cell_text(st, t, (ri, nrows), (g, span, ncols)));
                 let outer = std::mem::replace(&mut self.table_text, text);
                 self.blocks(w, &c.blocks, rels, false, depth + 1);
                 self.table_text = outer;
@@ -157,13 +160,13 @@ impl Writer<'_> {
     }
 }
 
-/// The paragraph and run formatting table style `st` gives the cell of `t` at row `ri`, grid
-/// column `g` spanning `span` of the table's `ncols` columns: the style's paragraph formatting
+/// The paragraph and run formatting table style `st` gives the cell of `t` in written row `ri`
+/// of `nrows` (`rows`), grid column `g` spanning `span` of the table's `ncols` columns (`cols`): the style's paragraph formatting
 /// with each part's alignment, and each part's run formatting over the last, lowest precedence
 /// first (ECMA-376 §17.7.6), as layout gives the cell's text.
-fn cell_text(st: &wordcraft_doc::styles::TableStyleProps, t: &Table, (ri, g, span, ncols): (usize, usize, usize, usize)) -> crate::write::TableText {
+fn cell_text(st: &wordcraft_doc::styles::TableStyleProps, t: &Table, rows: (usize, usize), cols: (usize, usize, usize)) -> crate::write::TableText {
     let bands = (st.parts.band_size.unwrap_or(0), st.parts.col_band_size.unwrap_or(0));
-    let parts = wordcraft_doc::styles::PartSet::of_cell(&t.props.look, bands, (ri, t.rows.len()), (g, span, ncols));
+    let parts = wordcraft_doc::styles::PartSet::of_cell(&t.props.look, bands, rows, cols);
     let mut text = crate::write::TableText { para: st.para.clone(), chr: CharProps::default() };
     for part in parts.iter() {
         let f = st.part(part);

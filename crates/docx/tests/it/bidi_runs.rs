@@ -310,6 +310,29 @@ fn table_style_formatting_becomes_the_complex_script_values() {
 }
 
 #[test]
+fn a_row_without_cells_is_not_counted_for_the_table_style_s_rows() {
+    // The row without cells isn't written, so in Word the next row is the header row: its Hebrew
+    // gets the header row's italic as `w:iCs`, the last row's doesn't.
+    use wordcraft_doc::styles::{PartFormat, Style, StyleKind, TablePart};
+    let mut st = Style { id: "HeaderItalic".into(), name: "HeaderItalic".into(), kind: StyleKind::Table, ..Default::default() };
+    st.set_table_part(TablePart::FirstRow, PartFormat { chr: CharProps { italic: Some(true), ..Default::default() }, ..Default::default() });
+    let mut d = Document::new();
+    d.styles.upsert(st);
+    let mut t = wordcraft_doc::Table::new(3, 1, 468.0);
+    t.props.style = Some("HeaderItalic".into());
+    t.rows[0].cells.clear();
+    for row in t.rows.iter_mut().skip(1) {
+        row.cells[0].blocks = vec![para_block(Paragraph::with_text("שלום", CharProps::default()))];
+    }
+    d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(t)), para_block(Paragraph::with_text("", CharProps::default()))];
+    let xml = document_xml(&wordcraft_docx::write(&d).unwrap());
+    let cells: Vec<&str> = xml.split("<w:tc>").skip(1).map(|c| c.split("</w:tc>").next().unwrap()).collect();
+    assert_eq!(cells.len(), 2);
+    let italic: Vec<bool> = cells.iter().map(|c| c.contains("<w:iCs/>")).collect();
+    assert_eq!(italic, [true, false], "{cells:?}");
+}
+
+#[test]
 fn a_table_style_s_paragraph_direction_splits_the_cells_runs() {
     // The table style makes its paragraphs right to left, as layout lays them out: the final
     // stop after a Latin word takes the paragraph's direction, so it is a right-to-left piece of
