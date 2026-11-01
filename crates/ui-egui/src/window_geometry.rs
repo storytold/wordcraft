@@ -224,6 +224,24 @@ fn monitors_key() -> egui::Id {
     egui::Id::unique("window_geometry::monitors")
 }
 
+/// A monitor's rectangle as winit reports it (`physical`, in pixels), in the pixels the window's
+/// own position is reported in, so both can be divided by the same pixels per point.
+///
+/// Where the desktop places windows in logical points (macOS, `per_monitor_scale`), winit turns
+/// each monitor's position and size into pixels with that monitor's scale, and the window's with
+/// the window's: on a 1× monitor next to a 2× one, the 2× monitor's pixels are not the window's.
+/// Each monitor is taken back to points by its own scale, then to pixels by the window's. Where
+/// the desktop places windows in pixels (Windows, X11), all of them already share one space and
+/// the rectangle is returned as is. A scale that isn't finite and positive leaves it unchanged.
+pub fn monitor_in_window_pixels(physical: egui::Rect, monitor_scale: f64, window_scale: f64, per_monitor_scale: bool) -> egui::Rect {
+    let usable = |s: f64| s.is_finite() && s > 0.0;
+    if !per_monitor_scale || !usable(monitor_scale) || !usable(window_scale) {
+        return physical;
+    }
+    let k = (window_scale / monitor_scale) as f32;
+    egui::Rect::from_min_max((physical.min.to_vec2() * k).to_pos2(), (physical.max.to_vec2() * k).to_pos2())
+}
+
 /// The host's monitors, in physical pixels, each frame: the desktop app reads them from winit. A
 /// host that doesn't know them (the web app, tests) leaves them unset, and dialogs are centred on
 /// the window as before.
@@ -696,6 +714,28 @@ mod tests {
     fn monitors_are_kept_in_pixels_and_read_in_points() {
         let ctx = egui::Context::default();
         assert!(monitors_in_points(&ctx).is_empty());
+        // macOS: a 1× monitor at the origin and a 2× one to its right (1440 points wide each). winit
+        // reports the 2× monitor at x = 2880 px (1440 pt × its scale), 2880 px wide. For a window
+        // on the 1× monitor (scale 1) both become 1× pixels: the second monitor starts where the
+        // first ends, at 1440, and is 1440 wide. A dialog straddling the seam is on screen.
+        let one = monitor_in_window_pixels(r(0.0, 0.0, 1440.0, 900.0), 1.0, 1.0, true);
+        let two = monitor_in_window_pixels(r(2880.0, 0.0, 2880.0, 1800.0), 2.0, 1.0, true);
+        assert_eq!(two, r(1440.0, 0.0, 1440.0, 900.0));
+        assert_eq!(one.max.x, two.min.x);
+        assert!(place_dialog_on_screen(r(800.0, 100.0, 1200.0, 700.0), &[one, two], r(1300.0, 300.0, 300.0, 200.0)).is_none());
+        // Without the per-monitor scale the 2× monitor would sit at 2880, leaving a gap the
+        // dialog falls into.
+        let raw = r(2880.0, 0.0, 2880.0, 1800.0);
+        assert!(place_dialog_on_screen(r(800.0, 100.0, 1200.0, 700.0), &[one, raw], r(1300.0, 300.0, 300.0, 200.0)).is_some());
+        // The same window on the 2× monitor (scale 2): both in 2× pixels.
+        assert_eq!(monitor_in_window_pixels(r(0.0, 0.0, 1440.0, 900.0), 1.0, 2.0, true), r(0.0, 0.0, 2880.0, 1800.0));
+        assert_eq!(monitor_in_window_pixels(raw, 2.0, 2.0, true), raw);
+        // Windows and X11 share one pixel space; bad scales change nothing.
+        assert_eq!(monitor_in_window_pixels(raw, 2.0, 1.0, false), raw);
+        for bad in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(monitor_in_window_pixels(raw, bad, 1.0, true), raw);
+            assert_eq!(monitor_in_window_pixels(raw, 1.0, bad, true), raw);
+        }
         set_monitors(&ctx, vec![r(-3840.0, 0.0, 3840.0, 2160.0)]);
         let mut raw = egui::RawInput::default();
         raw.viewports.entry(egui::ViewportId::ROOT).or_default().native_pixels_per_point = Some(2.0);

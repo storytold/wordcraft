@@ -53,11 +53,14 @@ impl eframe::App for App {
         #[cfg(target_os = "macos")]
         apple_events::poll(&self.5, &mut self.0, ctx);
         // The monitors, so a dialog of a window partly off screen opens on the part that is on
-        // screen (#4842). Physical pixels, like the window positions egui reports in points.
+        // screen (#4842). In the window's pixels, like the window positions egui reports in
+        // points: macOS scales each monitor by its own factor, so it is brought to the window's.
         if let Some(w) = frame.winit_window() {
+            let window_scale = w.scale_factor();
             let monitors = w.available_monitors().map(|m| {
                 let (p, s) = (m.position(), m.size());
-                egui::Rect::from_min_size(egui::pos2(p.x as f32, p.y as f32), egui::vec2(s.width as f32, s.height as f32))
+                let physical = egui::Rect::from_min_size(egui::pos2(p.x as f32, p.y as f32), egui::vec2(s.width as f32, s.height as f32));
+                wordcraft_ui_egui::window_geometry::monitor_in_window_pixels(physical, m.scale_factor(), window_scale, cfg!(target_os = "macos"))
             });
             wordcraft_ui_egui::window_geometry::set_monitors(ctx, monitors.collect());
         }
