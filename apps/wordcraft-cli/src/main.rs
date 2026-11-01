@@ -2,6 +2,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod automation_args;
+mod logging;
 mod script;
 
 use std::ffi::{OsStr, OsString};
@@ -17,13 +18,18 @@ const USAGE: &str = "\
 wordcraft-cli — WordCraft from the command line
 
 USAGE:
-  wordcraft-cli convert <in> <out> [--markup] [--update-fields] [--format wordml2003|flatopc]
+  wordcraft-cli convert <in> <out> [--markup] [--update-fields] [--format wordml2003|flatopc] [--report]
                                               convert between formats (docx, doc [read], pdf, odt, rtf, html, md, tex, txt, json, png,
                                               xml); --update-fields refreshes unlocked fields before saving;
                                               an .xml file is a Word XML Document (Flat OPC), or with
                                               --format wordml2003 a Word 2003 XML Document;
                                               --markup (Print Markup): comments beside each page and
-                                              tracked changes in pdf/png, a comment list in html/md/txt
+                                              tracked changes in pdf/png, a comment list in html/md/txt;
+                                              --report (pdf only) also writes <out>.report.json:
+                                              schemaVersion 1, pages, pdf version, tagged state,
+                                              requested/embedded fonts and warnings (empty if none);
+                                              announces replacement of any existing report;
+                                              a report write failure keeps the PDF and exits 1
   wordcraft-cli info <file>                   pages, words, paragraphs, properties (JSON)
   wordcraft-cli text <file>                   plain text
   wordcraft-cli inspect <file>                document structure (JSON)
@@ -63,6 +69,10 @@ A password-protected Word file is opened with --password PASS, --password-file P
 WORDCRAFT_PASSWORD environment variable; a password given on the command line is readable by
 every other process, so the other two are better. A file opened with a password is written with
 it again, as the app does. Exports that cannot carry a password (pdf, html, txt) stay plain.
+
+PDF dates: SOURCE_DATE_EPOCH pins Info and XMP dates to UTC integer seconds in
+0..=253402300799. Invalid values warn on stderr and use the document date or current time;
+an unset variable uses the same fallback without a warning.
 
 Paper: documents created here, and HTML, Markdown and text files (which give no page size), use
 the system region's paper (A4, or Letter in the US and other Letter regions), read from
@@ -183,6 +193,130 @@ fn listed_text(doc: &wordcraft_doc::Document) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&bytes).replace("\r\n", "\n"))
 }
 
+/// `convert <in> <out> [options]`: one conversion, plus the `--report` sidecar for
+/// PDF output. An arm of the dispatch in a function of its own: `run` sits at the
+/// workspace's cognitive-complexity limit, and a conversion is a procedure of its own.
+/// The opener is `run`'s closure, passed in: it opens the file by its real name,
+/// which the text arguments may have lost, with the password of a protected document.
+fn convert(rest: &[String], open: &impl Fn(&str, Option<&str>) -> Result<Session, String>) -> Result<(), Failure> {
+    validate_options("convert", rest, CONVERT_OPTIONS)?;
+    // `--format wordml2003` (or `flatopc`) picks the kind of `.xml` file; its value isn't a path.
+    let format = arg_value(rest, "--format");
+    let paths = positionals(rest, CONVERT_OPTIONS);
+    let (i, o) = (paths.first().ok_or_else(missing_argument)?.to_string(), paths.get(1).ok_or_else(missing_argument)?.to_string());
+    let markup = rest.iter().any(|a| a == "--markup");
+    let report = rest.iter().any(|a| a == "--report");
+    if report && !o.to_ascii_lowercase().ends_with(".pdf") {
+        return Err("--report is only for PDF output".into());
+    }
+    let password = password_from(rest)?;
+    let mut s = open(&i, password.as_deref())?;
+    if rest.iter().any(|a| a == "--update-fields") {
+        s.run("references.updateFields", &json!({})).map_err(|e| e.to_string())?;
+    }
+    let r = if o.to_ascii_lowercase().ends_with(".png") {
+        s.run("file.exportPng", &json!({"path": o, "page": 1, "markup": markup}))
+    } else {
+        let mut params = json!({"path": o, "markup": markup});
+        if let Some(f) = format {
+            params["format"] = json!(f);
+        }
+        s.run("file.save", &params)
+    };
+    let result = r.map_err(|e| e.to_string())?;
+    eprintln!("wrote {o}");
+    if report {
+        let export_report = result.get("exportReport").ok_or("PDF save returned no export report")?;
+        write_report(&s, &i, &o, export_report)?;
+    }
+    Ok(())
+}
+
+/// `convert --report`: the sidecar JSON for a PDF conversion, written next to the
+/// output as `<out>.report.json` (the name LibreOffice's export report uses). The
+/// split follows that change: the pdf layer reports what the writer knows — pages,
+/// version, tagged state, embedded fonts, the epoch in effect — and this layer adds
+/// what the session knows: the file names and the fonts the document's runs request.
+///
+/// `file.save` supplies the report from the bytes it wrote, including its saved-copy
+/// normalization. This path performs no second layout or PDF export.
+fn write_report(s: &Session, source: &str, target: &str, report: &Value) -> Result<(), String> {
+    let requested = requested_fonts(&s.doc);
+    let embedded = report.get("embeddedFonts").and_then(Value::as_array);
+    let warnings: Vec<Value> = requested
+        .iter()
+        .filter(|font| !embedded.is_some_and(|names| font_is_embedded(font, names)))
+        .map(|font| json!({"code": "requestedFontNotEmbedded", "font": font}))
+        .collect();
+    let mut value = report.clone();
+    value["schemaVersion"] = json!(1);
+    value["source"] = json!(source);
+    value["target"] = json!(target);
+    value["format"] = json!("pdf");
+    value["requestedFonts"] = json!(requested);
+    value["warnings"] = json!(warnings);
+    let sidecar = format!("{target}.report.json");
+    let text = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
+    // Announce the replacement policy even if a report is created concurrently:
+    // the atomic write below may replace any directory entry at this exact path.
+    eprintln!("writing {sidecar} (replaces any existing report at this path)");
+    wordcraft_engine::io::write_file(&sidecar, text.as_bytes()).map_err(|e| format!("could not write report; the PDF remains at {target}: {e}"))?;
+    eprintln!("wrote {sidecar}");
+    Ok(())
+}
+
+/// Did the PDF embed the font a run names? The report lists embedded faces by
+/// typographic family, but a run may name a face by an alias the font database
+/// also answers to: its legacy family ("Source Sans 3 Semibold"), full or
+/// PostScript name ("SourceSans3-Regular"), or a localized family (宋体 for
+/// SimSun). Such a name counts as embedded when it resolves to a face that
+/// answers to it and whose family was embedded. A name no face answers to
+/// resolves to the fallback face, which then doesn't count as the requested font.
+fn font_is_embedded(font: &str, embedded: &[Value]) -> bool {
+    let is_embedded = |family: &str| embedded.iter().any(|name| name.as_str().is_some_and(|name| name.eq_ignore_ascii_case(family)));
+    if is_embedded(font) {
+        return true;
+    }
+    let db = wordcraft_fonts::FontDb::global();
+    let face = db.face(font, "Regular");
+    let answers = face.named(font)
+        || db.english_family(font).is_some_and(|en| en.eq_ignore_ascii_case(&face.family) || en.eq_ignore_ascii_case(&face.legacy_family));
+    answers && is_embedded(&face.family)
+}
+
+/// The font names the document's runs ask for, sorted: body paragraphs and table
+/// cells, with tables nested inside cells walked as well. Includes the Latin,
+/// East Asian and complex-script names set directly on each run. A run with no font of
+/// its own names none — it takes its style's font, which this does not resolve,
+/// so such text shows only under `embeddedFonts`. Header and footer stories are
+/// not walked in this first version.
+fn requested_fonts(doc: &wordcraft_doc::Document) -> Vec<String> {
+    fn collect(p: &wordcraft_doc::Paragraph, fonts: &mut std::collections::BTreeSet<String>) {
+        for (_, c) in p.run_ranges() {
+            for f in [c.font.as_deref(), c.font_ea.as_deref(), c.font_cs.as_deref()].into_iter().flatten().filter(|f| !f.trim().is_empty()) {
+                fonts.insert(f.to_string());
+            }
+        }
+    }
+    fn walk<B: std::borrow::Borrow<wordcraft_doc::Block>>(blocks: &[B], fonts: &mut std::collections::BTreeSet<String>) {
+        for b in blocks {
+            match b.borrow() {
+                wordcraft_doc::Block::Para(p) => collect(p, fonts),
+                wordcraft_doc::Block::Table(t) => {
+                    for row in &t.rows {
+                        for cell in &row.cells {
+                            walk(&cell.blocks, fonts);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut fonts = std::collections::BTreeSet::new();
+    walk(&doc.body, &mut fonts);
+    fonts.into_iter().collect()
+}
+
 /// `--author NAME`: the author recorded on tracked changes and comments (`file.setAuthor`).
 /// The command also checks whether the open document is protected: this name determines which
 /// named editing exceptions the session can use, so the flag must not bypass that check.
@@ -299,6 +433,7 @@ const CONVERT_OPTIONS: &[OptionSpec] = &[
     OptionSpec { name: "--markup", takes_value: false },
     OptionSpec { name: "--format", takes_value: true },
     OptionSpec { name: "--update-fields", takes_value: false },
+    OptionSpec { name: "--report", takes_value: false },
     OptionSpec { name: "--password", takes_value: true },
     OptionSpec { name: "--password-file", takes_value: true },
 ];
@@ -427,31 +562,7 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
         return write_stdout(|o| write!(o, "{USAGE}"));
     }
     match cmd {
-        "convert" => {
-            validate_options("convert", &rest, CONVERT_OPTIONS)?;
-            // `--format wordml2003` (or `flatopc`) picks the kind of `.xml` file; its value isn't a path.
-            let format = arg_value(&rest, "--format");
-            let paths = positionals(&rest, CONVERT_OPTIONS);
-            let (i, o) = (paths.first().ok_or_else(missing_argument)?.to_string(), paths.get(1).ok_or_else(missing_argument)?.to_string());
-            let markup = rest.iter().any(|a| a == "--markup");
-            let password = password_from(&rest)?;
-            let mut s = open(&i, password.as_deref())?;
-            if rest.iter().any(|a| a == "--update-fields") {
-                s.run("references.updateFields", &json!({})).map_err(|e| e.to_string())?;
-            }
-            let r = if o.to_ascii_lowercase().ends_with(".png") {
-                s.run("file.exportPng", &json!({"path": o, "page": 1, "markup": markup}))
-            } else {
-                let mut params = json!({"path": o, "markup": markup});
-                if let Some(f) = format {
-                    params["format"] = json!(f);
-                }
-                s.run("file.save", &params)
-            };
-            r.map_err(|e| e.to_string())?;
-            eprintln!("wrote {o}");
-            Ok(())
-        }
+        "convert" => convert(&rest, &open),
         "info" => {
             validate_options("info", &rest, PASSWORD_OPTIONS)?;
             let paths = positionals(&rest, PASSWORD_OPTIONS);
@@ -757,6 +868,7 @@ fn parity_markdown(p: &Value) -> String {
 }
 
 fn main() -> ExitCode {
+    logging::init();
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     match run(&args) {
         Ok(()) | Err(Failure::StdoutClosed) => ExitCode::SUCCESS,

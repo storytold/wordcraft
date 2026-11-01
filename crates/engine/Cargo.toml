@@ -47,6 +47,7 @@ getrandom = { workspace = true }
 libc = { workspace = true }
 
 [dev-dependencies]
+tempfile = "3"
 encoding_rs = { workspace = true }
 zip = { workspace = true }
 cfb = { workspace = true }

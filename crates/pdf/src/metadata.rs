@@ -2,6 +2,17 @@ use super::options::PdfOptions;
 use super::{DateTime, Document, Metadata};
 
 pub(crate) fn metadata(doc: &Document, opts: &PdfOptions) -> Metadata {
+    let epoch = source_date_epoch();
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+    if epoch.is_none() && std::env::var_os("SOURCE_DATE_EPOCH").is_some() {
+        // The value is untrusted and may contain terminal controls or private data.
+        // Explain the accepted range without echoing it into the log.
+        log::warn!("Ignoring invalid SOURCE_DATE_EPOCH: expected integer seconds in 0..=253402300799; using the document date or current time");
+    }
+    metadata_at(doc, opts, epoch)
+}
+
+pub(crate) fn metadata_at(doc: &Document, opts: &PdfOptions, epoch: Option<i64>) -> Metadata {
     let c = &doc.core;
     let mut m = Metadata { creator: "WordCraft".into(), producer: "WordCraft".into(), ..Default::default() };
     let title = opts.title.clone().unwrap_or_else(|| c.title.clone());
@@ -21,12 +32,41 @@ pub(crate) fn metadata(doc: &Document, opts: &PdfOptions) -> Metadata {
     if !kw.is_empty() {
         m.keywords = kw;
     }
-    let date = parse_iso(&c.created).or_else(|| now_unix().map(civil));
+    let date = epoch.map(civil).or_else(|| parse_iso(&c.created)).or_else(|| now_unix().map(civil));
     if let Some((y, mo, d, h, mi, s)) = date {
         m.created =
             Some(DateTime::new(y.clamp(0, 9999) as u16).month(mo).day(d).hour(h).minute(mi).second(s).utc_offset_hour(0).utc_offset_minute(0));
     }
     m
+}
+
+/// The `SOURCE_DATE_EPOCH` timestamp in effect, when one is: the environment variable's
+/// value parsed as non-negative seconds (the reproducible-builds.org convention). An
+/// export pinned to it writes that moment as its creation date in place of the document's
+/// own date or the wall clock, so the same document converts to the same bytes on any
+/// day; the file IDs hash the content, so they follow the dates. Unset, empty, negative
+/// or non-numeric values mean no epoch is in effect — the fallback the LibreOffice change
+/// for the same variable (tdf#174246) takes, so the two tools agree on a bad value. A
+/// value past the last second a PDF date can name (9999-12-31T23:59:59Z) counts as out
+/// of range on the same rule: writing it would clamp to a different date than the one
+/// asked for, where falling back writes the document's own. The metadata writer logs
+/// a warning for a present invalid value; reading this value for a report stays quiet.
+pub(crate) fn source_date_epoch() -> Option<i64> {
+    // The browser has no environment; its exports keep the document's dates.
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+    {
+        parse_source_date_epoch(std::env::var("SOURCE_DATE_EPOCH").ok().as_deref())
+    }
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    {
+        None
+    }
+}
+
+/// The pure parse behind [`source_date_epoch`], so the tests never touch the environment.
+pub(crate) fn parse_source_date_epoch(raw: Option<&str>) -> Option<i64> {
+    let secs: i64 = raw?.trim().parse().ok()?;
+    (0..=253_402_300_799).contains(&secs).then_some(secs)
 }
 
 type Civil = (i64, u8, u8, u8, u8, u8);

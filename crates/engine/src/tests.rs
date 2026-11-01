@@ -5195,19 +5195,46 @@ fn a_failed_save_leaves_the_save_stamps_untouched() {
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
     let dir = std::env::temp_dir().join(format!("wordcraft-engine-save-stamps-{}-{nanos}", std::process::id()));
     assert!(!dir.exists(), "a fresh name");
-    let bogus = dir.join("does-not-exist").join("out.docx");
-    let mut s = s();
-    run(&mut s, "text.insert", json!({"text": "draft"}));
-    let core_before = s.doc.core.clone();
-    let zoom_before = s.doc.settings.zoom;
+    for filename in ["out.docx", "out.pdf"] {
+        let bogus = dir.join("does-not-exist").join(filename);
+        let mut s = s();
+        run(&mut s, "text.insert", json!({"text": "draft"}));
+        let core_before = s.doc.core.clone();
+        let zoom_before = s.doc.settings.zoom;
 
-    let error = s.run("file.save", &json!({"path": bogus.to_string_lossy()}));
-    assert!(error.is_err(), "the write fails: its parent directory doesn't exist");
-    assert!(!bogus.exists());
-    assert_eq!(s.doc.core, core_before, "modified/created/author/revision are unchanged");
-    assert_eq!(s.doc.settings.zoom, zoom_before);
-    assert!(s.path.is_none(), "the failed write never takes the document's path");
-    assert!(s.dirty, "still unsaved");
+        let error = s.run("file.save", &json!({"path": bogus.to_string_lossy()}));
+        assert!(error.is_err(), "the write fails: its parent directory doesn't exist");
+        assert!(!bogus.exists());
+        assert_eq!(s.doc.core, core_before, "modified/created/author/revision are unchanged");
+        assert_eq!(s.doc.settings.zoom, zoom_before);
+        assert!(s.path.is_none(), "the failed write never takes the document's path");
+        assert!(s.dirty, "still unsaved");
+    }
+}
+
+/// PDF saves return the report for the normalized copy that was actually written. An empty
+/// newly created header stays in the editing session but must not enter the saved copy.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn pdf_save_returns_the_written_copys_report() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("out.PDF");
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "One saved page"}));
+    run(&mut s, "insert.createHeader", json!({}));
+    let result = run(&mut s, "file.save", json!({"path": path.to_string_lossy()}));
+    assert_eq!(result["saved"], true);
+    let copy = crate::cmd::insert::saved_copy(&s).expect("an empty new header is omitted");
+    assert!(copy.parts.len() < s.doc.parts.len());
+    let opts = crate::cmd::file::export_options(&s, &json!({}));
+    let (expected, report) = crate::io::export_pdf(&copy, &opts).unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), expected);
+    assert_eq!(result["exportReport"], json!(report));
+    assert_eq!(result["exportReport"]["pages"], 1);
+    assert!(s.path.is_none(), "a PDF copy does not take the document's path");
+    assert!(s.dirty);
+    let plain = run(&mut s, "file.save", json!({"path": dir.path().join("out.txt").to_string_lossy()}));
+    assert!(plain.get("exportReport").is_none(), "other formats have no PDF report");
 }
 
 #[cfg(not(target_arch = "wasm32"))]

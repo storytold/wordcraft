@@ -6685,10 +6685,14 @@ dependencies = [
 name = "wordcraft-cli"
 version = "0.14.0"
 dependencies = [
+ "chrono",
+ "log",
  "serde_json",
  "sys-locale",
+ "tempfile",
  "wordcraft-doc",
  "wordcraft-engine",
+ "wordcraft-fonts",
  "wordcraft-mcp",
  "wordcraft-render",
  "wordcraft-zotero",
@@ -6769,6 +6773,7 @@ dependencies = [
  "regex-automata",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
  "wordcraft-doc",
  "wordcraft-docbin",
@@ -6878,6 +6883,7 @@ dependencies = [
  "js-sys",
  "kurbo",
  "log",
+ "serde",
  "thiserror 2.0.21",
  "wordcraft-doc",
  "wordcraft-fonts",
