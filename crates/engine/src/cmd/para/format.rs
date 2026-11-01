@@ -1,4 +1,7 @@
 use super::{Align, CmdError, CmdResult, LineSpacing, NumRef, ParaProps, Pos, Session, Value, json, p, sel_result};
+use std::collections::BTreeMap;
+use wordcraft_doc::styles::{PartSet, TableStyleProps};
+use wordcraft_doc::{CharProps, Path, StoryRef};
 
 /// Resolved paragraph props at the caret.
 pub(super) fn cur(s: &Session) -> wordcraft_doc::resolve::ResolvedPara {
@@ -165,12 +168,43 @@ pub(super) fn list_level(s: &mut Session, v: &Value) -> CmdResult {
     sel_result(s)
 }
 
-/// Resolve the command's indent origin as layout does: character units use the paragraph
-/// mark's size, and an explicit list cancellation drops inherited list-style indents.
-fn indent_props(s: &Session, p: &wordcraft_doc::Paragraph) -> (Option<NumRef>, f32, f32) {
-    let mut resolved = s.doc.styles.resolve_para(&p.props);
+/// Resolve each table style and grid width once per command, rather than scanning all
+/// table rows again for every selected cell paragraph.
+type TableTextCache = BTreeMap<Path, Option<(TableStyleProps, usize)>>;
+
+/// The nearest enclosing table's paragraph defaults and conditional cell character format,
+/// using the same style parts and precedence as table layout.
+fn table_text(s: &Session, story: StoryRef, path: &Path, tables: &mut TableTextCache) -> Option<(ParaProps, CharProps)> {
+    let (table_path, row, cell) = path.cell()?;
+    let table = s.doc.table(story, &table_path)?;
+    let selected = table.rows.get(row)?.cells.get(cell)?;
+    let (style, cols) = tables
+        .entry(table_path)
+        .or_insert_with(|| {
+            let style = s.doc.styles.table_style(table.props.style.as_deref()?)?;
+            Some((style, table.cols()))
+        })
+        .as_ref()?;
+    let parts = PartSet::of_cell(
+        &table.props.look,
+        (style.parts.band_size.unwrap_or(0), style.parts.col_band_size.unwrap_or(0)),
+        (row, table.rows.len()),
+        (table.grid_col(row, cell), selected.span(), *cols),
+    );
+    let mut chr = CharProps::default();
+    for part in parts.iter() {
+        chr.overlay(&style.part(part).chr);
+    }
+    Some((style.para.clone(), chr))
+}
+
+/// Resolve the command's indent origin as layout does, including table defaults and the
+/// paragraph mark's conditional cell formatting. A list cancellation drops style indents.
+fn indent_props(s: &Session, p: &wordcraft_doc::Paragraph, story: StoryRef, path: &Path, tables: &mut TableTextCache) -> (Option<NumRef>, f32, f32) {
+    let table = table_text(s, story, path, tables);
+    let mut resolved = s.doc.styles.resolve_para_in(&p.props, table.as_ref().map(|t| &t.0));
     if resolved.indent_chars.iter().any(|c| *c != 0.0) {
-        resolved.set_char_unit(s.doc.styles.resolve_char(p.props.style.as_deref(), &p.mark).size);
+        resolved.set_char_unit(s.doc.styles.resolve_char_in(p.props.style.as_deref(), table.as_ref().map(|t| &t.1), &p.mark).size);
     }
     if p.props.numbering.is_some_and(|n| n.num == 0) {
         if p.props.indent_left.is_none() && !p.props.indent_left_chars.is_some_and(|c| c != 0.0) {
@@ -198,10 +232,11 @@ pub fn indent(s: &mut Session, _: &Value) -> CmdResult {
     let a = s.sel.ordered().0;
     let paths = crate::cmd::selected_paths(s);
     let tab = s.doc.settings.default_tab.max(1.0);
+    let mut tables = TableTextCache::new();
     for path in paths {
         let (num, left, first) = {
             let Some(p) = s.doc.para(a.story, &path) else { continue };
-            indent_props(s, p)
+            indent_props(s, p, a.story, &path, &mut tables)
         };
         let para = s.doc.para_mut(a.story, &path)?;
         match num {
@@ -231,10 +266,11 @@ pub fn outdent(s: &mut Session, _: &Value) -> CmdResult {
     let a = s.sel.ordered().0;
     let paths = crate::cmd::selected_paths(s);
     let tab = s.doc.settings.default_tab.max(1.0);
+    let mut tables = TableTextCache::new();
     for path in paths {
         let (num, left, first) = {
             let Some(p) = s.doc.para(a.story, &path) else { continue };
-            indent_props(s, p)
+            indent_props(s, p, a.story, &path, &mut tables)
         };
         let para = s.doc.para_mut(a.story, &path)?;
         match num {

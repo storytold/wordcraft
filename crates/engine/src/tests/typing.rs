@@ -3811,3 +3811,145 @@ fn paragraph_indent_anchor_ignores_cancelled_list_style_indents() {
         assert_eq!(p.props.indent_first, None);
     }
 }
+
+/// A synthetic cell whose table style supplies indents and a conditional mark size.
+fn table_indent_control(character_units: bool, nested: bool, row: usize, direct_left: Option<f32>) -> Session {
+    use wordcraft_doc::styles::{StyleKind, TableStyleParts};
+    use wordcraft_doc::{Block, CharProps, Document, ParaProps, Path, Style, Table};
+    let mut doc = Document::new();
+    doc.settings.default_tab = 36.0;
+    if let Some(normal) = doc.styles.get_mut("Normal") {
+        normal.para = ParaProps::default();
+        normal.chr = CharProps::default();
+    }
+    let mut base = Style { id: "SyntheticTableBase".into(), kind: StyleKind::Table, ..Default::default() };
+    if character_units {
+        base.para.indent_left_chars = Some(5.0);
+        base.para.indent_first_chars = Some(-0.25);
+    } else {
+        base.para.indent_left = Some(120.0);
+        base.para.indent_first = Some(-6.0);
+    }
+    base.chr.size = Some(12.0);
+    base.table = Some(TableStyleParts { header_chr: CharProps { size: Some(24.0), ..Default::default() }, ..Default::default() });
+    doc.styles.styles.push(base);
+    doc.styles.styles.push(Style {
+        id: "SyntheticTableChild".into(),
+        kind: StyleKind::Table,
+        based_on: Some("SyntheticTableBase".into()),
+        ..Default::default()
+    });
+    let mut table = Table::new(2, 2, 420.0);
+    table.props.style = Some("SyntheticTableChild".into());
+    table.props.look.header_row = true;
+    let path = if nested { Path(vec![0, 0, 0, 0, row as u32, 1, 0]) } else { Path(vec![0, row as u32, 1, 0]) };
+    if nested {
+        doc.styles.styles.push(Style {
+            id: "SyntheticOuter".into(),
+            kind: StyleKind::Table,
+            para: ParaProps { indent_left: Some(240.0), ..Default::default() },
+            ..Default::default()
+        });
+        let mut outer = Table::new(1, 1, 440.0);
+        outer.props.style = Some("SyntheticOuter".into());
+        outer.rows[0].cells[0].blocks = vec![std::sync::Arc::new(Block::Table(table))];
+        table = outer;
+    }
+    doc.body = vec![std::sync::Arc::new(Block::Table(table))];
+    let para = doc.para_mut(StoryRef::Body, &path).unwrap();
+    para.props.indent_left = direct_left;
+    let mut s = Session::new(doc);
+    run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": path, "off": 0}}));
+    typ(&mut s, "CELL SINTETIC — ă â î ș ț");
+    s
+}
+
+/// Commands start from the same inherited physical indent as visible cell layout,
+/// including nested tables and direct paragraph overrides, with history and DOCX retention.
+#[test]
+fn paragraph_indent_anchor_uses_table_style_indents() {
+    for nested in [false, true] {
+        for (direct, increase, decrease) in [(None, 150.0, 114.0), (Some(84.0), 114.0, 78.0)] {
+            for (command, expected) in [("para.indent", increase), ("para.outdent", decrease)] {
+                let mut s = table_indent_control(false, nested, 0, direct);
+                let path = s.sel.focus.path.clone();
+                let initial_left = s
+                    .layout()
+                    .pages
+                    .iter()
+                    .flat_map(|p| &p.items)
+                    .find_map(|item| match item {
+                        crate::layout::Placed::Lines { path: p, para, .. } if p == &path => Some(para.rp.indent_left),
+                        _ => None,
+                    })
+                    .unwrap();
+                assert_eq!(initial_left, direct.unwrap_or(120.0));
+                let before = s.doc.clone();
+                run(&mut s, command, json!({}));
+                assert_eq!(s.doc.para(StoryRef::Body, &path).unwrap().props.indent_left, Some(expected), "{command}, nested={nested}");
+                let after = s.doc.clone();
+                run(&mut s, "edit.undo", json!({}));
+                assert_eq!(s.doc, before);
+                run(&mut s, "edit.redo", json!({}));
+                assert_eq!(s.doc, after);
+                let back = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap();
+                assert_eq!(back.para(StoryRef::Body, &path).unwrap().props.indent_left, Some(expected));
+            }
+        }
+    }
+}
+
+/// Character-unit origins use the table's conditional paragraph-mark size, while a
+/// direct mark size still wins. Conditional row formatting must not leak to other rows.
+#[test]
+fn paragraph_indent_anchor_uses_table_conditional_mark_size() {
+    for nested in [false, true] {
+        for (row, mark_size, initial, increase, decrease) in
+            [(0, None, 120.0, 150.0, 114.0), (1, None, 60.0, 75.0, 39.0), (0, Some(12.0), 60.0, 75.0, 39.0)]
+        {
+            for (command, expected) in [("para.indent", increase), ("para.outdent", decrease)] {
+                let mut s = table_indent_control(true, nested, row, None);
+                let path = s.sel.focus.path.clone();
+                let p = s.doc.para_mut(StoryRef::Body, &path).unwrap();
+                p.mark.size = mark_size;
+                p.touch();
+                let initial_left = s
+                    .layout()
+                    .pages
+                    .iter()
+                    .flat_map(|p| &p.items)
+                    .find_map(|item| match item {
+                        crate::layout::Placed::Lines { path: p, para, .. } if p == &path => Some(para.rp.indent_left),
+                        _ => None,
+                    })
+                    .unwrap();
+                assert_eq!(initial_left, initial);
+                run(&mut s, command, json!({}));
+                let p = s.doc.para(StoryRef::Body, &path).unwrap();
+                assert_eq!(p.props.indent_left, Some(expected), "{command}, row={row}, nested={nested}");
+                assert_eq!(p.props.indent_left_chars, Some(0.0));
+                assert_eq!(p.props.indent_first_chars, None);
+                let back = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap();
+                assert_eq!(back.para(StoryRef::Body, &path).unwrap().props.indent_left, Some(expected));
+            }
+        }
+    }
+    // One command spans differently formatted cells: reusing the table context must
+    // not reuse the first cell's conditional character size for the following row.
+    let mut s = table_indent_control(true, false, 0, None);
+    run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [0, 1, 1, 0], "off": 0}}));
+    typ(&mut s, "SECOND CELL");
+    run(
+        &mut s,
+        "select.range",
+        json!({
+            "anchor": {"story": "body", "path": [0, 0, 1, 0], "off": 0},
+            "focus": {"story": "body", "path": [0, 1, 1, 0], "off": 11}
+        }),
+    );
+    run(&mut s, "para.indent", json!({}));
+    for (row, cell, left) in [(0, 1, 150.0), (1, 0, 75.0), (1, 1, 75.0)] {
+        let path = wordcraft_doc::Path(vec![0, row, cell, 0]);
+        assert_eq!(s.doc.para(StoryRef::Body, &path).unwrap().props.indent_left, Some(left));
+    }
+}
