@@ -196,6 +196,15 @@ mod tests {
         ("txt", "public.plain-text"),
     ];
 
+    /// Other identifiers apps declare for an extension in [`MAC_TYPES`], claimed too: Pages
+    /// declares the macro-enabled types with a hyphen, and on a Mac where its declaration wins a
+    /// `.docm` or `.dotm` file gets that identifier. They aren't imported; the system's own
+    /// declaration stays the one WordCraft relies on.
+    const MAC_ALIASES: &[(&str, &str)] = &[
+        ("docm", "org.openxmlformats.wordprocessingml.document.macro-enabled"),
+        ("dotm", "org.openxmlformats.wordprocessingml.template.macro-enabled"),
+    ];
+
     /// Formats WordCraft opens that the bundle deliberately doesn't claim: macOS has no system
     /// type for LaTeX (TeX editors declare their own), and claiming XML or JSON would put
     /// WordCraft under Open With for every data file (WordCraft's own `.wcraft.json` is opened
@@ -252,8 +261,15 @@ mod tests {
             assert_eq!(role, "Editor", "{uti}: WordCraft edits and saves it");
             assert_eq!(rank, "Alternate", "{uti}: never take a default over another app by itself");
         }
+        for (ext, uti) in MAC_ALIASES {
+            assert!(MAC_TYPES.iter().any(|(e, _)| e == ext), "{uti}: .{ext} isn't a format WordCraft claims");
+            let Some((_, role, rank)) = claims.iter().find(|(t, _, _)| t == uti) else {
+                panic!(".{ext} ({uti}, as Pages declares it) is missing from CFBundleDocumentTypes");
+            };
+            assert_eq!((role.as_str(), rank.as_str()), ("Editor", "Alternate"), "{uti}");
+        }
         for (uti, _, _) in &claims {
-            assert!(MAC_TYPES.iter().any(|(_, t)| t == uti), "{uti} is claimed but no format WordCraft opens has it");
+            assert!(MAC_TYPES.iter().chain(MAC_ALIASES).any(|(_, t)| t == uti), "{uti} is claimed but no format WordCraft opens has it");
         }
     }
 

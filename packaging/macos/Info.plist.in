@@ -47,7 +47,8 @@
 
   <!-- Documents WordCraft opens (#295, #4983). Finder offers WordCraft under Open With, and
        Get Info › Open with › Change All can make it the default, only for a file whose type is
-       listed here, so every document format File › Open offers has its type here
+       listed here, so each document format claimed below has its type here (LaTeX, XML and JSON
+       open from File › Open but are deliberately not claimed)
        (apps/wordcraft/src/default_apps.rs checks). Alternate: WordCraft never takes a default
        over another app by itself; the person chooses it. -->
   <key>CFBundleDocumentTypes</key>
@@ -63,8 +64,12 @@
       <array>
         <string>org.openxmlformats.wordprocessingml.document</string>
         <string>org.openxmlformats.wordprocessingml.document.macroenabled</string>
+        <!-- Pages declares the macro-enabled types with a hyphen; on a Mac where its declaration
+             wins, a .docm or .dotm file gets that identifier, so it's claimed as well. -->
+        <string>org.openxmlformats.wordprocessingml.document.macro-enabled</string>
         <string>org.openxmlformats.wordprocessingml.template</string>
         <string>org.openxmlformats.wordprocessingml.template.macroenabled</string>
+        <string>org.openxmlformats.wordprocessingml.template.macro-enabled</string>
         <string>com.microsoft.word.doc</string>
         <string>com.microsoft.word.dot</string>
         <string>org.oasis-open.opendocument.text</string>
