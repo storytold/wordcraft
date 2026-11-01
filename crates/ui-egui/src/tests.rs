@@ -883,6 +883,52 @@ fn table_properties_button_opens_the_dialog() {
     assert_eq!(g.changes(&basis), json!({"rtl": true}));
 }
 
+/// #4857: with the whole table selected, a row check box the rows differ in shows as mixed and
+/// changes nothing left alone; clicked, OK sets it for every selected row.
+#[test]
+fn table_properties_dialog_sets_every_selected_row() {
+    let mut a = app();
+    a.run("insert.table", json!({"rows": 3, "cols": 2})).unwrap();
+    a.run("table.properties", json!({"allowBreak": false})).unwrap();
+    a.run("table.selectTable", json!({})).unwrap();
+    a.run("table.properties", json!({})).unwrap();
+    let Some(dialogs::Dialog::TableProperties { form, basis }) = a.dialog.clone() else { panic!("no dialog: {:?}", a.dialog) };
+    assert!(form.mixed.contains("allowBreak") && !form.mixed.contains("headerRow"), "{:?}", form.mixed);
+    assert_eq!(form.changes(&basis), json!({}), "a mixed box left alone changes nothing");
+    let mut f = (*form).clone();
+    f.mixed.remove("allowBreak");
+    f.allow_break = false;
+    assert_eq!(f.changes(&basis), json!({"allowBreak": false}), "clicked, it sets every row");
+
+    // Drawn: one click on the mixed box turns breaking on for every row.
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..4 {
+        h.step();
+    }
+    h.get_by_label("Allow row to break across pages").click();
+    for _ in 0..4 {
+        h.step();
+    }
+    h.get_by_label("OK").click();
+    for _ in 0..4 {
+        h.step();
+    }
+    let a = h.state();
+    assert!(a.dialog.is_none(), "OK closes the dialog");
+    let (tp, _, _) = a.session.sel.focus.path.cell().unwrap();
+    let t = a.session.doc.table(a.session.sel.focus.story, &tp).unwrap();
+    assert_eq!(t.rows.iter().map(|r| r.props.cant_split).collect::<Vec<_>>(), [false, false, false]);
+    let g = dialogs::TableForm::read(a).unwrap();
+    assert!(g.mixed.is_empty() && g.allow_break, "reopened, the box is plainly on");
+}
+
 /// Table Layout › Cell Margins opens with the table defaults and does not replace imported
 /// values until the user changes a value and confirms.
 #[test]

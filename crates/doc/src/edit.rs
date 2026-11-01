@@ -434,10 +434,16 @@ impl Document {
                     at.extend(offs.get(k).copied());
                 }
             }
+            // Reference offsets and run boundaries are ordered; do not restart at the first
+            // reference for every run, including runs after the last reference.
+            let mut at = at.into_iter().peekable();
             let mut start = 0usize;
             for r in &mut p.runs {
                 let end = start.saturating_add(r.len);
-                if at.iter().any(|&o| o >= start && o < end) {
+                while at.peek().is_some_and(|&o| o < start) {
+                    at.next();
+                }
+                if at.peek().is_some_and(|&o| o < end) {
                     swap(&mut r.props.style);
                 }
                 start = end;
