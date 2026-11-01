@@ -1,4 +1,4 @@
-use super::writer::{NS, Writer, pt, spacing_props, x};
+use super::writer::{NS, Writer, align_attr, props_text, pt, spacing_props, x};
 use super::{Columns, Cursor, Document, FBlock, Meta, SectionProps, SectionStart, Write, model};
 
 /// `style:columns` (ODF 1.3 §17.12) of equal columns with their gap and, when on, the line between.
@@ -9,6 +9,47 @@ fn columns_xml(c: &Columns) -> String {
 
 /// One master page per entry of `pages` (name, setup), each with its own page layout `pm1`, `pm2`…
 /// (§16.5, §16.9); the first is the default one, "Standard".
+/// The styles WordCraft's paragraph kinds are written in (Heading 1–6, Title, Quotations,
+/// Preformatted Text), each with the look of the document's own style: font, size, bold,
+/// italic, colour and the rest of its text formatting, spacing, indents, alignment and keep with
+/// next, written out in full so other programs show them as WordCraft does.
+fn kind_styles(doc: &Document) -> String {
+    let mut s = String::new();
+    let mut kinds: Vec<(String, String, String, Option<u8>, &str)> =
+        (1..=6).map(|n| (format!("Heading_20_{n}"), format!("Heading {n}"), format!("Heading{n}"), Some(n), "text")).collect();
+    kinds.push(("Title".into(), "Title".into(), "Title".into(), None, "chapter"));
+    kinds.push(("Quotations".into(), "Quotations".into(), "Quote".into(), None, "html"));
+    kinds.push(("Preformatted_20_Text".into(), "Preformatted Text".into(), model::CODE_STYLE.into(), None, "html"));
+    for (name, display, id, outline, class) in kinds {
+        let (pp, cp) = match doc.styles.get(&id) {
+            Some(_) => doc.styles.para_style_props(&id),
+            // Preformatted text in a document without its style: monospaced, no spacing.
+            None => (
+                wordcraft_doc::props::ParaProps { space_before: Some(0.0), space_after: Some(0.0), ..Default::default() },
+                wordcraft_doc::props::CharProps { font: Some(model::MONO_FONT.into()), size: Some(10.0), ..Default::default() },
+            ),
+        };
+        let mut para = spacing_props(&model::Spacing {
+            before: pp.space_before,
+            after: pp.space_after,
+            line: pp.line_spacing,
+            left: pp.indent_left,
+            right: pp.indent_right,
+            first: pp.indent_first,
+        });
+        para.push_str(align_attr(pp.align));
+        if pp.keep_next == Some(true) {
+            para.push_str(" fo:keep-with-next=\"always\"");
+        }
+        let outline = outline.map(|n| format!(" style:default-outline-level=\"{n}\"")).unwrap_or_default();
+        s.push_str(&format!(
+            "<style:style style:name=\"{name}\" style:display-name=\"{display}\" style:family=\"paragraph\" style:parent-style-name=\"Standard\" style:next-style-name=\"Standard\"{outline} style:class=\"{class}\"><style:paragraph-properties{para}/><style:text-properties{}/></style:style>",
+            props_text(&cp)
+        ));
+    }
+    s
+}
+
 /// A master page's headers and footers (ODF 1.3 §16.10), written.
 #[derive(Default)]
 struct PageParts {
@@ -59,38 +100,33 @@ fn page_parts(doc: &Document, sec: &SectionProps, w: &mut Writer) -> PageParts {
     out
 }
 
-/// `defaults` is the spacing of the document's Normal paragraphs, written as the default style's;
-/// `parts` the headers and footers of each page in `pages` and `part_styles` their automatic
-/// styles.
-fn styles_xml(
-    pages: &[(String, wordcraft_doc::SectionProps)],
-    parts: &[PageParts],
-    part_styles: &str,
-    body_font: &str,
-    defaults: &model::Spacing,
-    kern: bool,
-    tab: f32,
-) -> String {
+/// `styles.xml` of `doc`: the default style from the document defaults (Normal's spacing, the
+/// body font, pair kerning, the tab interval), the paragraph kinds' styles, and one master page
+/// per entry of `pages` with `parts`, its headers and footers, whose automatic styles are
+/// `part_styles`.
+fn styles_xml(doc: &Document, pages: &[(String, wordcraft_doc::SectionProps)], parts: &[PageParts], part_styles: &str) -> String {
+    // The document defaults: Normal's font, spacing and indents, pair kerning and tab interval.
+    let body_font = doc.styles.default_chr.font.clone().unwrap_or_else(|| wordcraft_doc::styles::BODY_FONT.to_string());
+    let normal = doc.styles.resolve_para(&Default::default());
+    let defaults = &model::Spacing {
+        before: Some(normal.space_before),
+        after: Some(normal.space_after),
+        line: Some(normal.line_spacing),
+        left: Some(normal.indent_left),
+        right: Some(normal.indent_right),
+        first: Some(normal.indent_first),
+    };
+    let kern = doc.styles.default_chr.kern.is_some_and(|k| k > 0.0);
+    let tab = doc.settings.default_tab.clamp(1.0, 1584.0);
     let mut s = format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-styles {NS}><office:styles>");
     s.push_str(&format!(
         "<style:default-style style:family=\"paragraph\"><style:paragraph-properties{} style:tab-stop-distance=\"{tab}\"/><style:text-properties fo:font-family=\"'{}'\" fo:font-size=\"12pt\" style:letter-kerning=\"{kern}\"/></style:default-style>",
         spacing_props(defaults),
-        x(body_font),
+        x(&body_font),
         tab = pt(tab)
     ));
     s.push_str("<style:style style:name=\"Standard\" style:family=\"paragraph\" style:class=\"text\"/>");
-    s.push_str("<style:style style:name=\"Heading\" style:family=\"paragraph\" style:parent-style-name=\"Standard\" style:class=\"text\"><style:paragraph-properties fo:margin-top=\"12pt\" fo:margin-bottom=\"4pt\" fo:keep-with-next=\"always\"/><style:text-properties fo:color=\"#0f4761\"/></style:style>");
-    let sizes = [20.0, 16.0, 14.0, 12.0, 12.0, 11.0];
-    for (i, sz) in sizes.iter().enumerate() {
-        let n = i + 1;
-        s.push_str(&format!(
-            "<style:style style:name=\"Heading_20_{n}\" style:display-name=\"Heading {n}\" style:family=\"paragraph\" style:parent-style-name=\"Heading\" style:next-style-name=\"Standard\" style:default-outline-level=\"{n}\" style:class=\"text\"><style:text-properties fo:font-size=\"{}\"/></style:style>",
-            pt(*sz)
-        ));
-    }
-    s.push_str("<style:style style:name=\"Title\" style:family=\"paragraph\" style:parent-style-name=\"Standard\" style:class=\"chapter\"><style:text-properties fo:font-size=\"28pt\"/></style:style>");
-    s.push_str("<style:style style:name=\"Quotations\" style:family=\"paragraph\" style:parent-style-name=\"Standard\" style:class=\"html\"><style:paragraph-properties fo:margin-left=\"36pt\" fo:margin-right=\"36pt\"/><style:text-properties fo:font-style=\"italic\" fo:color=\"#404040\"/></style:style>");
-    s.push_str(&format!("<style:style style:name=\"Preformatted_20_Text\" style:display-name=\"Preformatted Text\" style:family=\"paragraph\" style:parent-style-name=\"Standard\" style:class=\"html\"><style:paragraph-properties fo:margin-top=\"0pt\" fo:margin-bottom=\"0pt\"/><style:text-properties fo:font-family=\"'{}'\" style:font-family-generic=\"modern\" style:font-pitch=\"fixed\" fo:font-size=\"10pt\"/></style:style>", model::MONO_FONT));
+    s.push_str(&kind_styles(doc));
     // The note text styles, as WordCraft's Footnote Text and Endnote Text: 10 pt, no spacing.
     for (name, class) in [("Footnote", "extra"), ("Endnote", "extra")] {
         s.push_str(&format!(
@@ -262,20 +298,9 @@ pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-content {NS}>{}<office:body><office:text>\n{tracked}{body}</office:text></office:body></office:document-content>\n",
         w.automatic_styles()
     );
-    let body_font = doc.styles.default_chr.font.clone().unwrap_or_else(|| wordcraft_doc::styles::BODY_FONT.to_string());
-    let normal = doc.styles.resolve_para(&Default::default());
-    let defaults = model::Spacing {
-        before: Some(normal.space_before),
-        after: Some(normal.space_after),
-        line: Some(normal.line_spacing),
-        left: Some(normal.indent_left),
-        right: Some(normal.indent_right),
-        first: Some(normal.indent_first),
-    };
     let mut hw = Writer::with_prefix("M");
     let parts: Vec<PageParts> = pages.iter().map(|(_, sec)| page_parts(doc, sec, &mut hw)).collect();
-    let kern = doc.styles.default_chr.kern.is_some_and(|k| k > 0.0);
-    let styles = styles_xml(&pages, &parts, &hw.style_defs(), &body_font, &defaults, kern, doc.settings.default_tab.clamp(1.0, 1584.0));
+    let styles = styles_xml(doc, &pages, &parts, &hw.style_defs());
     w.pictures.append(&mut hw.pictures);
     let meta = meta_xml(&flow.meta);
     let mut manifest = String::from(

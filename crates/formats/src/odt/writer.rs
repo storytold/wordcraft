@@ -164,6 +164,39 @@ fn extra_props(x: &wordcraft_doc::props::CharProps, size: Option<f32>) -> String
     p
 }
 
+/// `style:text-properties` attributes for character properties `cp` (a style's look).
+pub(super) fn props_text(cp: &wordcraft_doc::props::CharProps) -> String {
+    use wordcraft_doc::props::{TextColor, Underline, VertAlign};
+    let f = Fmt {
+        bold: cp.bold == Some(true),
+        italic: cp.italic == Some(true),
+        underline: cp.underline.is_some_and(|u| u != Underline::None),
+        strike: cp.strike == Some(true),
+        sup: cp.vert_align == Some(VertAlign::Superscript),
+        sub: cp.vert_align == Some(VertAlign::Subscript),
+        color: match cp.color {
+            Some(TextColor::Rgb(c)) => Some(c),
+            _ => None,
+        },
+        size: cp.size,
+        font: cp.font.as_deref().map(std::sync::Arc::from),
+        extra: Some(Box::new(cp.clone())),
+        ..Default::default()
+    };
+    text_props(&f)
+}
+
+/// `fo:text-align` for `a` (ODF 1.3 §20.223).
+pub(super) fn align_attr(a: Option<Align>) -> &'static str {
+    match a {
+        Some(Align::Center) => " fo:text-align=\"center\"",
+        Some(Align::Right) => " fo:text-align=\"end\"",
+        Some(Align::Justify) | Some(Align::Distribute) => " fo:text-align=\"justify\"",
+        Some(Align::Left) => " fo:text-align=\"start\"",
+        None => "",
+    }
+}
+
 fn text_props(f: &Fmt) -> String {
     let mut p = String::new();
     if f.bold {

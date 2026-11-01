@@ -18,6 +18,8 @@ struct FmtDelta {
     color: Option<Rgb>,
     background: Option<Rgb>,
     size: Option<f32>,
+    /// A size in percent of the inherited one (`fo:font-size="130%"`).
+    size_pct: Option<f32>,
     font: Option<Arc<str>>,
     code: Option<bool>,
     /// What [`Fmt::extra`] holds, as set here (unset fields leave the inherited ones).
@@ -45,6 +47,9 @@ impl FmtDelta {
         }
         if self.size.is_some() {
             f.size = self.size;
+        }
+        if let Some(p) = self.size_pct {
+            f.size = Some((f.size.unwrap_or(12.0) * p / 100.0).clamp(1.0, 1638.0));
         }
         if let Some(fam) = &self.font {
             f.font = Some(fam.clone());
@@ -259,6 +264,20 @@ fn overlay_spacing(base: &mut Spacing, over: &Spacing) {
     base.first = over.first.or(base.first);
 }
 
+/// The paragraph kind a style name (lower case, `_20_` as spaces) stands for.
+fn kind_named(n: &str) -> Option<Kind> {
+    if let Some(d) = n.strip_prefix("heading ").and_then(|r| r.trim().parse::<u8>().ok()) {
+        Some(Kind::Heading(d.clamp(1, 6)))
+    } else {
+        match n {
+            "title" => Some(Kind::Title),
+            "quotations" | "quote" => Some(Kind::Quote),
+            "preformatted text" | "source text" | "code" => Some(Kind::Code),
+            _ => None,
+        }
+    }
+}
+
 /// How a paragraph style looks ([`Styles::para`]).
 #[derive(Clone, Debug, Default)]
 pub(super) struct ParaLook {
@@ -342,7 +361,13 @@ fn text_properties(a: &Attrs, style: &mut StyleInfo) {
     if let Some(color) = get(a, "fo:background-color").and_then(model::parse_color) {
         fmt.background = Some(color);
     }
-    if let Some(size) = get(a, "fo:font-size").and_then(length).filter(|size| (1.0..=1638.0).contains(size)) {
+    if let Some(pct) = get(a, "fo:font-size")
+        .and_then(|v| v.trim().strip_suffix('%'))
+        .and_then(|v| v.trim().parse::<f32>().ok())
+        .filter(|p| p.is_finite() && *p > 0.0)
+    {
+        fmt.size_pct = Some(pct.min(10_000.0));
+    } else if let Some(size) = get(a, "fo:font-size").and_then(length).filter(|size| (1.0..=1638.0).contains(size)) {
         fmt.size = Some(size);
     }
     if let Some(family) = get(a, "fo:font-family").or_else(|| get(a, "style:font-name")) {
@@ -651,6 +676,40 @@ impl Styles {
     /// the style that gives the paragraph its kind and that style's ancestors: their formatting
     /// is the kind's own look (a heading's size and colour), not direct formatting. `Standard`,
     /// the default paragraph style, holds document defaults and is left out too.
+    /// The look the file gives each style that maps to a paragraph kind (Heading 1–6, Title,
+    /// Quotations, Preformatted Text): its text formatting, spacing, alignment and keep with
+    /// next, over the whole chain but Standard (the document defaults). A style named for the
+    /// kind wins over one only displayed so.
+    pub(super) fn kind_looks(&self) -> Vec<(Kind, ParaLook)> {
+        let mut found: Vec<(Kind, bool, &str)> = Vec::new();
+        for (n, s) in self.map.iter().filter(|(_, s)| !s.auto) {
+            let own = kind_named(&n.to_ascii_lowercase().replace("_20_", " "));
+            let shown = s.display.as_deref().and_then(|d| kind_named(&d.to_ascii_lowercase()));
+            let Some((kind, canonical)) = own.map(|k| (k, true)).or(shown.map(|k| (k, false))) else { continue };
+            match found.iter_mut().find(|(k, ..)| *k == kind) {
+                Some(slot) if !slot.1 && canonical => *slot = (kind, canonical, n),
+                Some(slot) if slot.1 == canonical && n.as_str() < slot.2 => *slot = (kind, canonical, n),
+                Some(_) => {}
+                None => found.push((kind, canonical, n)),
+            }
+        }
+        found
+            .into_iter()
+            .map(|(kind, _, name)| {
+                let chain: Vec<_> = self.chain(name).into_iter().filter(|(n, _)| *n != "Standard").collect();
+                let mut fmt = Fmt::default();
+                let mut spacing = Spacing::default();
+                for (_, s) in chain.iter().rev() {
+                    s.fmt.apply(&mut fmt);
+                    overlay_spacing(&mut spacing, &s.spacing);
+                }
+                let align = chain.iter().find_map(|(_, s)| s.align);
+                let keep_next = chain.iter().find_map(|(_, s)| s.keep_next).unwrap_or(false);
+                (kind, ParaLook { kind, align, keep_next, fmt, spacing, ..Default::default() })
+            })
+            .collect()
+    }
+
     pub(super) fn para(&self, name: &str) -> ParaLook {
         let chain = self.chain(name);
         let mut kind = Kind::Normal;

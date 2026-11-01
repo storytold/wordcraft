@@ -103,6 +103,27 @@ pub(super) fn read_meta(xml: &[u8]) -> Meta {
     m
 }
 
+/// Give the document's style for paragraph kind `kind` the look the file gives its own: its text
+/// formatting, spacing, alignment and keep with next replace WordCraft's (a heading the file
+/// leaves black isn't blue). Its outline level and other settings stay.
+fn apply_look(doc: &mut Document, kind: model::Kind, look: &super::styles::ParaLook) {
+    let id = match kind {
+        model::Kind::Heading(n) => format!("Heading{}", n.clamp(1, 6)),
+        model::Kind::Title => "Title".into(),
+        model::Kind::Quote => "Quote".into(),
+        model::Kind::Code => model::CODE_STYLE.into(),
+        model::Kind::Normal | model::Kind::Rule => return,
+    };
+    let Some(st) = doc.styles.get_mut(&id) else { return };
+    st.chr = model::char_props(&look.fmt);
+    let sp = &look.spacing;
+    let p = &mut st.para;
+    (p.space_before, p.space_after, p.line_spacing) = (sp.before, sp.after, sp.line);
+    (p.indent_left, p.indent_right, p.indent_first) = (sp.left, sp.right, sp.first);
+    p.align = look.align;
+    p.keep_next = look.keep_next.then_some(true);
+}
+
 /// The boolean configuration item `name` of `settings.xml` (ODF 1.3 §3.10), when it has one.
 fn setting(xml: &[u8], name: &str) -> Option<bool> {
     let mut inside = false;
@@ -134,6 +155,8 @@ struct Parsed {
     track: Option<bool>,
     /// The document's default font.
     font: Option<String>,
+    /// How the file's heading, title, quotation and preformatted styles look.
+    looks: Vec<(model::Kind, super::styles::ParaLook)>,
     /// The document's default paragraph spacing.
     spacing: model::Spacing,
     /// Whether the document kerns pairs of letters by default.
@@ -191,6 +214,7 @@ fn parse_tracked(bytes: &[u8]) -> Result<Parsed, String> {
         track,
         font: styles.doc_font(),
         spacing: styles.doc_spacing(),
+        looks: styles.kind_looks(),
         kern: styles.default_kern,
         default_tab: styles.default_tab,
         parts,
@@ -200,7 +224,7 @@ fn parse_tracked(bytes: &[u8]) -> Result<Parsed, String> {
 /// Parse an `.odt` package into a document.
 pub fn import(bytes: &[u8]) -> Result<Document, String> {
     model::begin_import();
-    let Parsed { flow, last, track, font, spacing, kern, default_tab, parts } = parse_tracked(bytes)?;
+    let Parsed { flow, last, track, font, spacing, looks, kern, default_tab, parts } = parse_tracked(bytes)?;
     let mut doc = model::to_doc(&flow);
     if font.is_some() {
         doc.styles.default_chr.font = font;
@@ -212,6 +236,9 @@ pub fn import(bytes: &[u8]) -> Result<Document, String> {
     let d = &mut doc.styles.default_para;
     (d.space_before, d.space_after, d.line_spacing) = (spacing.before, spacing.after, spacing.line);
     (d.indent_left, d.indent_right, d.indent_first) = (spacing.left, spacing.right, spacing.first);
+    for (kind, look) in &looks {
+        apply_look(&mut doc, *kind, look);
+    }
     doc.last_section = last;
     page_parts::add(&mut doc, parts);
     if let Some(t) = track {
