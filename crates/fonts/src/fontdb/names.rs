@@ -124,43 +124,15 @@ const COLOR_BITMAP_TABLES: [&[u8; 4]; 2] = [b"sbix", b"CBDT"];
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) fn file_face_names(path: &std::path::Path) -> Vec<Found> {
     use crate::ui_fallback::OUTLINE_TABLES;
-    use std::io::{Read, Seek, SeekFrom};
-    /// Caps on what a (possibly damaged) file can make the scan read.
-    const MAX_FACES: u32 = 256;
+    /// The longest `name`, `OS/2` or `fvar` table read.
     const MAX_TABLE: u32 = 1 << 20;
-    let Ok(mut file) = std::fs::File::open(path) else { return vec![] };
-    let mut read_at = |offset: u64, len: usize| -> Option<Vec<u8>> {
-        let mut buf = vec![0; len];
-        file.seek(SeekFrom::Start(offset)).ok()?;
-        file.read_exact(&mut buf).ok()?;
-        Some(buf)
-    };
-    let be32 = |b: &[u8], at: usize| b.get(at..at + 4).and_then(|s| s.try_into().ok()).map(u32::from_be_bytes);
-    let Some(head) = read_at(0, 12) else { return vec![] };
-    // A collection lists where each face's table directory starts.
-    let starts: Vec<u32> = if head.starts_with(b"ttcf") {
-        let n = be32(&head, 8).unwrap_or(0).min(MAX_FACES) as usize;
-        read_at(12, n * 4).map(|b| b.as_chunks::<4>().0.iter().map(|c| u32::from_be_bytes(*c)).collect()).unwrap_or_default()
-    } else {
-        vec![0]
-    };
-    starts
-        .into_iter()
-        .filter_map(|start| {
-            let dir = read_at(start.into(), 12)?;
-            let tables = u16::from_be_bytes(dir.get(4..6)?.try_into().ok()?) as usize;
-            let records = read_at(u64::from(start) + 12, tables * 16)?;
-            if !records.as_chunks::<16>().0.iter().any(|r| OUTLINE_TABLES.iter().chain(&COLOR_BITMAP_TABLES).any(|t| r.starts_with(*t))) {
+    let Some(mut file) = TableReader::open(path) else { return vec![] };
+    (0..file.faces.len())
+        .filter_map(|face| {
+            if !OUTLINE_TABLES.iter().chain(&COLOR_BITMAP_TABLES).any(|t| file.locate(face, t).is_some()) {
                 return None;
             }
-            let mut table = |tag: &[u8; 4]| -> Option<Vec<u8>> {
-                let rec = records.as_chunks::<16>().0.iter().find(|r| r.starts_with(tag))?;
-                let (offset, len) = (be32(rec, 8)?, be32(rec, 12)?);
-                if len > MAX_TABLE {
-                    return None;
-                }
-                read_at(offset.into(), len as usize)
-            };
+            let mut table = |tag: &[u8; 4]| file.locate(face, tag).and_then(|at| file.read(at, MAX_TABLE));
             let name = table(b"name")?;
             // Variable fonts: the named instances; OS/2: the code pages (East Asian fonts).
             let mut tables: Vec<([u8; 4], Vec<u8>)> = table(b"OS/2").map(|t| (*b"OS/2", t)).into_iter().collect();
@@ -172,6 +144,79 @@ pub(super) fn file_face_names(path: &std::path::Path) -> Vec<Found> {
         })
         .flatten()
         .collect()
+}
+
+/// A font file (or collection) read table by table instead of whole: the font folder scan and
+/// the fallback coverage index open hundreds of files, many of them megabytes long (CJK
+/// collections run to 20 MB and more, Apple Color Emoji to 180 MB).
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) struct TableReader {
+    file: std::fs::File,
+    /// Each face's table records (tag, checksum, offset, length), for the faces whose table
+    /// directory could be read.
+    pub(super) faces: Vec<Vec<[u8; 16]>>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl TableReader {
+    /// Most faces read from a (possibly damaged) collection.
+    const MAX_FACES: u32 = 256;
+
+    /// Open the font file at `path` and read its table directories; `None` when it can't be read.
+    pub(super) fn open(path: &std::path::Path) -> Option<TableReader> {
+        let file = std::fs::File::open(path).ok()?;
+        let mut reader = TableReader { file, faces: Vec::new() };
+        let head = reader.read_at(0, 12)?;
+        // A collection lists where each face's table directory starts.
+        let starts: Vec<u32> = if head.starts_with(b"ttcf") {
+            let n = be32(&head, 8).unwrap_or(0).min(Self::MAX_FACES) as usize;
+            reader.read_at(12, n * 4).map(|b| b.as_chunks::<4>().0.iter().map(|c| u32::from_be_bytes(*c)).collect()).unwrap_or_default()
+        } else {
+            vec![0]
+        };
+        for start in starts {
+            if let Some(records) = reader.directory(start) {
+                reader.faces.push(records);
+            }
+        }
+        Some(reader)
+    }
+
+    /// The table records of the face whose table directory starts at `start`.
+    fn directory(&mut self, start: u32) -> Option<Vec<[u8; 16]>> {
+        let dir = self.read_at(start.into(), 12)?;
+        let tables = u16::from_be_bytes(dir.get(4..6)?.try_into().ok()?) as usize;
+        let records = self.read_at(u64::from(start) + 12, tables * 16)?;
+        Some(records.as_chunks::<16>().0.to_vec())
+    }
+
+    /// Where face `face`'s table `tag` is: (offset, length).
+    pub(super) fn locate(&self, face: usize, tag: &[u8; 4]) -> Option<(u32, u32)> {
+        let rec = self.faces.get(face)?.iter().find(|r| r.starts_with(tag))?;
+        Some((be32(rec, 8)?, be32(rec, 12)?))
+    }
+
+    /// The table at `(offset, length)`; `None` when it is longer than `max_len` or can't be read.
+    pub(super) fn read(&mut self, (offset, len): (u32, u32), max_len: u32) -> Option<Vec<u8>> {
+        if len > max_len {
+            return None;
+        }
+        self.read_at(offset.into(), len as usize)
+    }
+
+    fn read_at(&mut self, offset: u64, len: usize) -> Option<Vec<u8>> {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut buf = vec![0; len];
+        self.file.seek(SeekFrom::Start(offset)).ok()?;
+        self.file.read_exact(&mut buf).ok()?;
+        Some(buf)
+    }
+}
+
+/// The big-endian `u32` at `at` in `b`.
+#[cfg(not(target_arch = "wasm32"))]
+fn be32(b: &[u8], at: usize) -> Option<u32> {
+    b.get(at..at.checked_add(4)?).and_then(|s| s.try_into().ok()).map(u32::from_be_bytes)
 }
 
 /// A font file holding just `tables` (sorted by tag), each padded to four bytes.
