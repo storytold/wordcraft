@@ -6921,6 +6921,88 @@ fn repeated_header_moves_with_a_first_row_that_moves_on_whole() {
     assert_eq!(pages, vec![vec![], vec![0, 1]]);
 }
 
+/// #4272: a filler leaving `room` points, then a three-column table: a one-line heading row and
+/// a row at least `min` points tall (no minimum when 0) whose first cell holds only an inline picture `pic_h` points
+/// tall (one line, single spacing) and whose other cells hold `lines` short lines each. Returns
+/// the layout and, per page, the rows with a first cell there.
+fn picture_row(room: f32, min: f32, pic_h: f32, lines: usize) -> (DocLayout, Vec<Vec<usize>>) {
+    use wordcraft_doc::props::{HeightRule, LineSpacing};
+    let (mut d, at) = at_least_rows_filler(room);
+    let mut t = Table::new(2, 3, 468.0);
+    if min > 0.0 {
+        t.rows[1].props.height = Some(min);
+        t.rows[1].props.height_rule = HeightRule::AtLeast;
+    }
+    for c in 1..3 {
+        t.rows[1].cells[c].blocks = lines_in_cell(lines, "N/A");
+    }
+    set_at_least_row_spacing(&mut t);
+    let mut p = wordcraft_doc::Paragraph::with_text("", Default::default());
+    p.props.line_spacing = Some(LineSpacing::Multiple(1.0));
+    p.props.space_before = Some(0.0);
+    p.props.space_after = Some(0.0);
+    p.insert_object(0, picture(114.0, pic_h, Default::default()), &Default::default()).unwrap();
+    t.rows[1].cells[0].blocks = vec![wordcraft_doc::para_block(p)];
+    d.insert_block(StoryRef::Body, &Path::top(at), wordcraft_doc::Block::Table(t)).unwrap();
+    let l = lay(&d);
+    let pages = at_least_rows_pages(&l);
+    (l, pages)
+}
+
+/// The height of row `row`'s first cell on each page it has a part on.
+fn picture_row_parts(l: &DocLayout, row: usize) -> Vec<f32> {
+    l.pages
+        .iter()
+        .filter_map(|p| {
+            p.items.iter().find_map(|i| if let Placed::Cell { rect, row: r, cell: 0, .. } = i { (*r == row).then_some(rect.h) } else { None })
+        })
+        .collect()
+}
+
+#[test]
+fn an_at_least_row_grown_by_its_picture_moves_on_whole_rather_than_leave_the_picture_behind() {
+    // The report in #4272: a row at least 193.45 pt (3869 twips) with a 203 pt inline picture in
+    // its first cell and "N/A" in the others, so the picture makes the row taller than its
+    // minimum. With room for the minimum but not for the picture, the row used to split: the
+    // "N/A" cells stayed beside an empty picture cell and the picture went on alone. The picture
+    // is one line, which Word never splits, so the row moves on whole. The same goes for a row
+    // with no minimum height.
+    for min in [193.45, 0.0] {
+        let (l, pages) = picture_row(214.0, min, 203.0, 1);
+        assert_eq!(pages, vec![vec![0], vec![1]], "min {min}{}", pagination_fixture_diagnostics("picture_row/grown", None, &l));
+        assert_eq!(l.pages.len(), 2, "min {min}");
+        let parts = picture_row_parts(&l, 1);
+        assert_eq!(parts.len(), 1, "min {min}: the picture row is in one piece: {parts:?}");
+        assert!(parts[0] >= 203.0, "min {min}: the row holds its picture: {parts:?}");
+    }
+}
+
+#[test]
+fn a_picture_row_too_tall_for_any_page_splits_from_the_top_of_the_next_one() {
+    // A row of 60 lines beside a 700 pt picture (the body is 648 pt), under a heading row at the
+    // top of page 1: like an at-least row taller than a page (#1742), it starts page 2 rather
+    // than leave its picture cell empty under the heading, then splits from there, its text going
+    // on over the pages (at the top of a page moving on would gain nothing).
+    let (l, pages) = picture_row(648.0, 0.0, 700.0, 60);
+    let rows: Vec<&Vec<usize>> = pages.iter().filter(|p| !p.is_empty()).collect();
+    assert!(
+        rows.len() >= 3 && rows[0] == &vec![0] && rows[1..].iter().all(|p| p == &&vec![1]),
+        "{pages:?}{}",
+        pagination_fixture_diagnostics("picture_row/too_tall", None, &l)
+    );
+}
+
+#[test]
+fn a_picture_row_that_fits_stays_and_text_rows_beside_a_short_picture_still_split() {
+    // The same row with room for all of it stays on page 1.
+    let (_, pages) = picture_row(260.0, 193.45, 203.0, 1);
+    assert_eq!(pages, vec![vec![0, 1]]);
+    // A row of 30 lines beside a 40 pt picture, at least 100 pt: with 225 pt left the picture
+    // and the first lines fit, so the row still splits as before.
+    let (l, pages) = picture_row(225.0, 100.0, 40.0, 30);
+    assert_eq!(pages, vec![vec![0, 1], vec![1]], "{}", pagination_fixture_diagnostics("picture_row/text_splits", None, &l));
+}
+
 #[test]
 fn text_overflowing_an_exact_row_is_clipped_to_it() {
     use wordcraft_doc::props::HeightRule;

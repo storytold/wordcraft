@@ -882,6 +882,20 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
 /// continuation is as tall as the cell needing the most room, and at least the rest of the row
 /// (a minimum height holds over the pages).
 pub fn split_row(row: &RowLayout, cut: f32) -> Option<(RowLayout, RowLayout)> {
+    split_row_with(row, cut, false)
+}
+
+/// [`split_row`] for the first part of a row on a page that already holds something: `None`
+/// also when a cell would be left empty on this page because its first line, starting above the
+/// cut, runs below it (#4272). A line is never split, and an inline picture is one line, so a
+/// cell holding only a picture taller than the room keeps nothing there; rather than leave the
+/// other cells' text beside an empty cell, the row moves on whole (see `docs/layout-parity.md`,
+/// Tables). Content of a cell aligned below the cut doesn't count.
+pub fn split_row_keeping_cells(row: &RowLayout, cut: f32) -> Option<(RowLayout, RowLayout)> {
+    split_row_with(row, cut, true)
+}
+
+fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLayout, RowLayout)> {
     // Also rejects a NaN cut.
     if !(cut > 0.0 && cut < row.height) {
         return None;
@@ -929,30 +943,40 @@ pub fn split_row(row: &RowLayout, cut: f32) -> Option<(RowLayout, RowLayout)> {
         }
     }
     // The top of the first thing that moves on in each cell.
-    let mut kept_any = false;
     let mut moved = vec![f32::MAX; cells.len()];
-    for ((items, splits), m) in cells.iter().zip(&splits).zip(&mut moved) {
+    // Whether each cell keeps anything on this page, and whether a line or picture of it that
+    // moves on starts above the cut but runs below it (its space after aside).
+    let mut kept_cells = vec![false; cells.len()];
+    let mut cut_through = vec![false; cells.len()];
+    for ((((items, splits), m), kept), through) in cells.iter().zip(&splits).zip(&mut moved).zip(&mut kept_cells).zip(&mut cut_through) {
         for (it, &split) in items.iter().zip(splits) {
+            let mut runs_over = |top: f32, bottom: f32| *through |= top < limit - 0.01 && bottom > limit + 0.01;
             let top = if let Some(r) = it.turned_bounds() {
                 // Turned text moves as a whole, like a picture.
                 if fits(r.bottom()) {
-                    kept_any = true;
+                    *kept = true;
                     None
                 } else {
+                    runs_over(r.y, r.bottom());
                     Some(r.y)
                 }
             } else {
                 match it {
                     Placed::Lines { para, l0, l1, y, .. } => {
-                        kept_any |= split > *l0;
+                        *kept |= split > *l0;
                         let base = para.lines.get(*l0).map(|l| l.top).unwrap_or(0.0);
-                        (split < *l1).then(|| para.lines.get(split).map_or(*y, |l| y + l.top - base))
+                        (split < *l1).then(|| {
+                            let Some(l) = para.lines.get(split) else { return *y };
+                            runs_over(y + l.top - base, y + l.top - base + l.height);
+                            y + l.top - base
+                        })
                     }
                     Placed::Image { rect, .. } | Placed::Shape { rect, .. } | Placed::Graphic { rect, .. } | Placed::Clip { rect, .. } => {
                         if fits(rect.bottom()) {
-                            kept_any = true;
+                            *kept = true;
                             None
                         } else {
+                            runs_over(rect.y, rect.bottom());
                             Some(rect.y)
                         }
                     }
@@ -970,8 +994,13 @@ pub fn split_row(row: &RowLayout, cut: f32) -> Option<(RowLayout, RowLayout)> {
             }
         }
     }
+    let kept_any = kept_cells.iter().any(|&k| k);
     let first_moved = moved.iter().copied().fold(f32::MAX, f32::min);
     if !kept_any || first_moved == f32::MAX {
+        return None;
+    }
+    // A cell left with nothing here because its first line or picture runs below the cut.
+    if whole_cells && kept_cells.iter().zip(&cut_through).any(|(&kept, &through)| !kept && through) {
         return None;
     }
     // Each cell resumes below its own top margin and border band.
