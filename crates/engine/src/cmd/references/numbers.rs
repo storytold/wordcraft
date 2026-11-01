@@ -1,6 +1,6 @@
 //! Numbered REF results, adapted from @Alyosha-dot-shop's patch in #4533.
 
-use super::*;
+use super::{Counters, NumFormat, Path, StoryRef};
 
 /// What a numbered body paragraph shows: the counter value of each level down to its own, the
 /// label each of those levels shows at that point (`["14.", "(a)"]` for 14(a)), and the levels
