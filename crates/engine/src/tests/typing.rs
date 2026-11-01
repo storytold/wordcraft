@@ -522,6 +522,9 @@ fn enter_finishes_a_word_for_autocorrect() {
 fn autocorrect_finds_the_word_after_a_wide_space() {
     let s = typed("a\u{a0}teh x\u{3000}teh ");
     assert_eq!(s.doc.plain_text(StoryRef::Body), "a\u{a0}the x\u{3000}the ");
+    // A narrow no-break space and a figure space too.
+    let s = typed("a\u{202f}teh x\u{2007}teh ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "a\u{202f}the x\u{2007}the ");
     let s = typed("end.\u{a0}hello end.\u{3000}world ");
     assert_eq!(s.doc.plain_text(StoryRef::Body), "End.\u{a0}Hello end.\u{3000}World ");
     let s = typed("the\u{a0}1st and\u{3000}22nd ");
@@ -845,6 +848,67 @@ fn a_tracked_table_line_keeps_its_characters_as_a_deletion() {
     run(&mut s, "edit.undo", json!({}));
     run(&mut s, "review.rejectAll", json!({}));
     assert!(s.doc.body.get(1).and_then(|b| b.as_para()).is_some_and(|p| p.text == "+--+------+"));
+    // The table was inserted untracked, so Reject All keeps it before the characters.
+    assert_eq!(s.doc.body.len(), 2, "{:?}", paras(&s));
+    assert!(matches!(s.doc.body.first().map(|b| &**b), Some(wordcraft_doc::Block::Table(_))));
+}
+
+#[test]
+fn a_border_line_at_the_top_with_formatting_markup_off_is_not_a_formatting_change() {
+    // Track Changes on with formatting left out of the markup: the characters are still marked
+    // deleted, the border is not a formatting change, and Reject All keeps it.
+    let mut s = typed("---");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    s.prefs.markup.track_formatting = false;
+    typ(&mut s, "\n");
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert!(p.props.borders.and_then(|b| b.bottom).is_some());
+    assert!(p.props.fmt_change.is_none(), "{:?}", p.props.fmt_change);
+    assert!(all_deleted(&s, 0, "---"), "{:?}", paras(&s));
+    run(&mut s, "review.rejectAll", json!({}));
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert_eq!(p.text, "---");
+    assert!(p.props.borders.and_then(|b| b.bottom).is_some());
+}
+
+#[test]
+fn a_border_line_at_the_top_keeps_the_authors_own_earlier_formatting_change() {
+    // Ana centers the characters' paragraph, then her Enter gives it the border: the paragraph
+    // keeps Ana's one formatting change, which holds the paragraph from before both.
+    let mut s = typed("---");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    s.author = "Ana".into();
+    run(&mut s, "para.align", json!({"value": "center"}));
+    let rev = s.doc.para_at(&Pos::body(0, 0)).and_then(|p| p.props.fmt_change.as_deref()).map(|c| c.rev);
+    typ(&mut s, "\n");
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert!(p.props.borders.and_then(|b| b.bottom).is_some());
+    let ch = p.props.fmt_change.as_deref();
+    assert_eq!(ch.map(|c| c.rev), rev);
+    assert_eq!(ch.map(|c| (c.old.align, c.old.borders.and_then(|b| b.bottom).is_some())), Some((None, false)));
+    run(&mut s, "review.rejectAll", json!({}));
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert_eq!((p.text.as_str(), p.props.align, p.props.borders.and_then(|b| b.bottom).is_some()), ("---", None, false));
+}
+
+#[test]
+fn a_border_line_the_content_control_locks_refuse_to_delete_stays_as_backspace_leaves_it() {
+    // "---" inside an editable rich text control that sits in one locked against editing:
+    // Backspace can't delete its characters, so Enter is refused too, untracked, and the line
+    // stays as it is.
+    let mut s = Session::new(wordcraft_doc::Document::from_text("A\nB\n---\nC\nD"));
+    s.sel = crate::Selection { anchor: Pos::body(0, 0), focus: Pos::body(4, 1) };
+    run(&mut s, "developer.richText", json!({"tag": "outer"}));
+    s.sel = crate::Selection { anchor: Pos::body(1, 0), focus: Pos::body(3, 1) };
+    run(&mut s, "developer.richText", json!({"tag": "inner"}));
+    run(&mut s, "developer.properties", json!({"control": "outer", "lockEdit": true}));
+    let before = s.doc.clone();
+    for key in ["text.backspace", "text.newParagraph"] {
+        s.sel = crate::Selection::caret(Pos::body(2, 3));
+        assert!(s.run(key, &json!({})).is_err(), "{key}");
+        assert_eq!(s.doc, before, "{key}");
+    }
+    assert!(s.doc.para_at(&Pos::body(2, 0)).is_some_and(|p| p.text == "---" && p.props.borders.is_none()));
 }
 
 #[test]
@@ -1026,6 +1090,36 @@ fn tab_before_a_later_line_of_a_paragraph_indents_the_whole_paragraph() {
     s.doc.para_mut(StoryRef::Body, &Pos::body(0, 0).path).unwrap().props.numbering = Some(wordcraft_doc::props::NumRef { num, level: u8::MAX });
     run(&mut s, "outline.demote", json!({}));
     assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().props.numbering.map(|n| n.level), Some(8));
+}
+
+#[test]
+fn with_tab_indents_on_tab_in_a_table_cell_moves_to_the_next_cell() {
+    let mut s = typed("+--+--+\nA");
+    run(&mut s, "tools.autocorrect", json!({"tabIndent": true}));
+    run(&mut s, "caret.home", json!({}));
+    typ(&mut s, "\t");
+    assert_eq!(s.sel.focus.path.cell().map(|(_, r, c)| (r, c)), Some((0, 1)));
+    let Some(wordcraft_doc::Block::Table(t)) = s.doc.body.first().map(|b| &**b) else { panic!("no table: {:?}", paras(&s)) };
+    let a = t.rows[0].cells[0].blocks[0].as_para().unwrap();
+    assert_eq!((a.text.as_str(), a.props.indent_left, a.props.indent_first), ("A", None, None));
+}
+
+#[test]
+fn with_tab_indents_off_backspace_before_an_indented_paragraph_joins_it() {
+    // The paragraph's own left indent, in points or in characters, doesn't stop the join.
+    for chars in [false, true] {
+        let mut s = typed("One\nTwo");
+        let second = Pos::body(1, 0);
+        let p = s.doc.para_mut(StoryRef::Body, &second.path).unwrap();
+        if chars {
+            p.props.indent_left_chars = Some(6.0);
+        } else {
+            p.props.indent_left = Some(36.0);
+        }
+        s.sel = crate::Selection::caret(second);
+        typ(&mut s, "\u{8}");
+        assert_eq!(s.doc.plain_text(StoryRef::Body), "OneTwo", "indent in characters: {chars}");
+    }
 }
 
 #[test]
@@ -1412,6 +1506,78 @@ fn indic_and_khmer_backspace_removes_one_character() {
     // Latin keeps grapheme Backspace: e + combining acute goes as one.
     let s = typed("ae\u{301}\u{8}");
     assert_eq!(paras(&s)[0].0, "a");
+}
+
+/// Arabic vowel and Quranic marks are individually editable without retyping their base (#4757).
+#[test]
+fn arabic_backspace_removes_one_mark_and_keeps_the_base() {
+    for mark in [
+        '\u{0610}',
+        '\u{064B}',
+        '\u{064C}',
+        '\u{064D}',
+        '\u{064E}',
+        '\u{064F}',
+        '\u{0650}',
+        '\u{0651}',
+        '\u{0652}',
+        '\u{065F}',
+        '\u{0670}',
+        '\u{06D6}',
+        '\u{06DF}',
+        '\u{06E7}',
+        '\u{06EA}',
+        '\u{0897}',
+        '\u{089F}',
+        '\u{08CA}',
+        '\u{08E1}',
+        '\u{08E3}',
+        '\u{08FF}',
+        '\u{10EFA}',
+        '\u{10EFF}',
+    ] {
+        let original = format!("Λ ب{mark}");
+        let mut s = typed(&original);
+        typ(&mut s, "\u{8}");
+        assert_eq!(paras(&s)[0].0, "Λ ب", "mark U+{:04X}", u32::from(mark));
+        assert_eq!(s.sel.focus.off, "Λ ب".len());
+        run(&mut s, "edit.undo", json!({}));
+        assert_eq!(paras(&s)[0].0, original);
+        run(&mut s, "edit.redo", json!({}));
+        typ(&mut s, "\u{0650}");
+        assert_eq!(paras(&s)[0].0, "Λ ب\u{0650}");
+    }
+}
+
+#[test]
+fn arabic_backspace_uses_stored_mark_order_but_delete_keeps_the_cluster() {
+    for marks in ["\u{0651}\u{064E}", "\u{064E}\u{0651}"] {
+        let mut s = typed(&format!("ب{marks}"));
+        typ(&mut s, "\u{8}");
+        assert_eq!(paras(&s)[0].0, format!("ب{}", marks.chars().next().unwrap()));
+        typ(&mut s, "\u{8}");
+        assert_eq!(paras(&s)[0].0, "ب");
+        typ(&mut s, "\u{8}");
+        assert!(paras(&s)[0].0.is_empty());
+        let original = format!("ب{marks}ت");
+        let mut s = typed(&original);
+        // Arabic arrows move visually. They still visit only whole-cluster boundaries.
+        let boundaries = [0, original.len() - "ت".len(), original.len()];
+        let mut visited = vec![s.sel.focus.off];
+        for command in ["caret.right", "caret.right", "caret.left", "caret.left"] {
+            run(&mut s, command, json!({}));
+            assert!(boundaries.contains(&s.sel.focus.off));
+            visited.push(s.sel.focus.off);
+        }
+        assert!(boundaries.iter().all(|off| visited.contains(off)));
+        s.sel = crate::Selection::caret(Pos::body(0, 0));
+        run(&mut s, "text.delete", json!({}));
+        assert_eq!(paras(&s)[0].0, "ت");
+    }
+    for cluster in ["e\u{0301}", "👩‍💻", "👍🏽", "🇵🇱", "ב\u{05B7}"] {
+        let s = typed(&format!("a{cluster}\u{8}"));
+        assert_eq!(paras(&s)[0].0, "a", "unchanged grapheme {cluster}");
+    }
 }
 
 /// Press a shortcut the way the keyboard does: run the command bound to it.
@@ -3124,6 +3290,37 @@ fn highlight_toggle_handles_mixed_inherited_and_pending_formatting() {
     assert_eq!(serde_json::to_value(&s.doc).unwrap(), before);
 }
 
+/// #4086: a caret inside a word highlights what is typed next, not the word; Bold still
+/// formats the word.
+#[test]
+fn highlight_at_a_caret_leaves_the_word_alone() {
+    let mut s = typed("Alpha Beta");
+    run(&mut s, "caret.docStart", json!({}));
+    run(&mut s, "caret.right", json!({}));
+    run(&mut s, "format.highlight", json!({"color":"yellow"}));
+    assert!(s.doc.body[0].as_para().unwrap().runs.iter().all(|r| r.props.highlight.is_none()));
+    assert_eq!(s.pending.as_ref().unwrap().highlight, Some(wordcraft_doc::props::Highlight::Yellow));
+    run(&mut s, "text.insert", json!({"text":"X"}));
+    run(&mut s, "select.text", json!({"text":"X"}));
+    assert_eq!(s.run("format.state", &json!({})).unwrap()["highlight"], json!("FFFF00"));
+    run(&mut s, "select.text", json!({"text":"Beta"}));
+    assert_eq!(s.run("format.state", &json!({})).unwrap()["highlight"], serde_json::Value::Null);
+    // The toggle reads the pending colour, not the word's: a second press turns it off.
+    run(&mut s, "caret.docStart", json!({}));
+    run(&mut s, "caret.right", json!({}));
+    run(&mut s, "format.highlight", json!({}));
+    assert_eq!(s.pending.as_ref().unwrap().highlight, Some(wordcraft_doc::props::Highlight::Yellow));
+    run(&mut s, "format.highlight", json!({}));
+    assert_eq!(s.pending.as_ref().unwrap().highlight, Some(wordcraft_doc::props::Highlight::None));
+    // Bold after Highlight formats the word and keeps both for what is typed next.
+    run(&mut s, "format.highlight", json!({}));
+    run(&mut s, "format.bold", json!({}));
+    run(&mut s, "text.insert", json!({"text":"Y"}));
+    run(&mut s, "select.text", json!({"text":"Y"}));
+    let state = s.run("format.state", &json!({})).unwrap();
+    assert_eq!((state["highlight"].clone(), state["bold"].clone()), (json!("FFFF00"), json!(true)));
+}
+
 /// A differently coloured final paragraph must remain visible to the shortcut beyond
 /// the formatting-state query limit, including a style-inherited tail and Undo/Redo.
 #[cfg(not(target_os = "macos"))]
@@ -3385,4 +3582,52 @@ fn double_space_adds_a_period_when_asked() {
     run(&mut t, "tools.autocorrect", json!({"doubleSpacePeriod": true, "enabled": false}));
     typ(&mut t, "Hello  world");
     assert_eq!(text(&t), "Hello  world");
+}
+
+#[test]
+fn backspace_after_a_floating_shape_anchor_joins_paragraphs_and_keeps_the_shape() {
+    let mut s = typed("Line one\nLine two");
+    run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [1], "off": 0}}));
+    run(&mut s, "insert.textBox", json!({"text": "Box"}));
+    let (a, f) = (Pos::body(1, 0), Pos::body(1, 3));
+    run(&mut s, "select.range", json!({"anchor": a, "focus": f}));
+    run(&mut s, "arrange.wrap", json!({"wrap": "inFrontOfText"}));
+    let objects = |s: &Session| s.doc.para_at(&Pos::body(1, 0)).map(|p| p.object_offsets().len());
+    assert_eq!(objects(&s), Some(1));
+    run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [1], "off": 3}}));
+    run(&mut s, "text.backspace", json!({}));
+    assert_eq!(s.doc.body.iter().filter(|b| b.as_para().is_some()).count(), 1);
+    assert_eq!(objects(&s), None);
+    assert_eq!(
+        s.doc.para_at(&Pos::body(0, 0)).map(|p| (p.text.replace('\u{FFFC}', ""), p.object_offsets().len())),
+        Some(("Line oneLine two".to_string(), 1))
+    );
+}
+
+#[test]
+fn backspace_after_marker_and_floating_anchors_still_joins_paragraphs() {
+    let mut s = typed("Line one\nLine two");
+    run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [1], "off": 0}}));
+    run(&mut s, "insert.textBox", json!({"text": "Box"}));
+    let (a, f) = (Pos::body(1, 0), Pos::body(1, 3));
+    run(&mut s, "select.range", json!({"anchor": a, "focus": f}));
+    run(&mut s, "arrange.wrap", json!({"wrap": "inFrontOfText"}));
+    s.doc.insert_object(&Pos::body(1, 0), wordcraft_doc::InlineObject::BookmarkStart { name: "anchor".into() }, &Default::default()).unwrap();
+    s.doc.insert_object(&Pos::body(1, 0), wordcraft_doc::InlineObject::CommentStart { id: 1 }, &Default::default()).unwrap();
+    run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [1], "off": 9}}));
+    run(&mut s, "text.backspace", json!({}));
+    assert_eq!(s.doc.body.iter().filter(|b| b.as_para().is_some()).count(), 1);
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).map(|p| p.text.replace('\u{FFFC}', "")), Some("Line oneLine two".to_string()));
+}
+
+#[test]
+fn backspace_cannot_join_into_locked_content_control() {
+    let mut s = typed("Above\nInside");
+    run(&mut s, "select.range", json!({"anchor": {"story": "body", "path": [1], "off": 0}, "focus": {"story": "body", "path": [1], "off": 6}}));
+    run(&mut s, "developer.richText", json!({"tag": "locked"}));
+    run(&mut s, "developer.properties", json!({"control": "locked", "lockEdit": true}));
+    run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [1], "off": 0}}));
+    let before = s.doc.clone();
+    assert!(s.run("text.backspace", &json!({})).is_err());
+    assert_eq!(s.doc, before);
 }
