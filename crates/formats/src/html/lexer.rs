@@ -68,8 +68,14 @@ impl Lexer<'_> {
         }
         let b = rest.as_bytes();
         if rest.starts_with("<!--") {
-            self.pos += 4;
-            self.skip_past("-->");
+            if rest.starts_with("<!-->") {
+                self.pos += 5;
+            } else if rest.starts_with("<!--->") {
+                self.pos += 6;
+            } else {
+                self.pos += 4;
+                self.skip_past("-->");
+            }
             return Some(Tok::Text(String::new()));
         }
         if rest.starts_with("<!") || rest.starts_with("<?") {

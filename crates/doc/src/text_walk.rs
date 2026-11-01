@@ -3,9 +3,36 @@ use super::parts::PartKind;
 use super::position::Path;
 use super::{InlineObject, Numbering, numbering, para, section, styles};
 
-/// Words in `s` (tokens separated by whitespace that contain at least one alphanumeric char).
+/// Words in `s`, as Word counts them: tokens separated by whitespace that contain at least one
+/// alphanumeric char, plus each Han ideograph and kana as a word of its own (Chinese and Japanese
+/// are written without spaces, #4547; Korean is spaced, so Hangul counts by tokens).
 pub fn count_words(s: &str) -> usize {
-    s.split(|c: char| c.is_whitespace() || c == para::OBJ).filter(|w| w.chars().any(char::is_alphanumeric)).count()
+    // The half-width voiced sound marks belong to the kana before them, not a word of their own.
+    let word_char = |c: char| c.is_alphanumeric() && !matches!(c, '\u{FF9E}' | '\u{FF9F}');
+    let tokens = s.split(|c: char| c.is_whitespace() || c == para::OBJ || is_cjk_word(c)).filter(|w| w.chars().any(word_char)).count();
+    tokens.saturating_add(s.chars().filter(|c| is_cjk_word(*c)).count())
+}
+
+/// Words in a generated list label: whitespace-separated tokens holding a letter or digit, so a
+/// CJK label such as 第十二章 stays one word (how Word counts those is unverified).
+fn count_label_words(s: &str) -> usize {
+    s.split(char::is_whitespace).filter(|w| w.chars().any(char::is_alphanumeric)).count()
+}
+
+/// A Han ideograph or kana letter (not CJK punctuation), which Word counts as one word.
+fn is_cjk_word(c: char) -> bool {
+    matches!(c,
+        '\u{3005}'..='\u{3007}' // 々 〆 〇
+        | '\u{3031}'..='\u{3035}' | '\u{303B}' // vertical kana repeat marks, 〻
+        | '\u{3040}'..='\u{30FF}' // hiragana, katakana
+        | '\u{31F0}'..='\u{31FF}' // katakana phonetic extensions
+        | '\u{3400}'..='\u{4DBF}' // extension A
+        | '\u{4E00}'..='\u{9FFF}' // unified ideographs
+        | '\u{F900}'..='\u{FAFF}' // compatibility ideographs
+        | '\u{FF66}'..='\u{FF9D}' // half-width katakana
+        | '\u{1B000}'..='\u{1B16F}' // kana supplement and extended
+        | '\u{20000}'..='\u{3FFFF}' // extensions B and later
+    ) && c.is_alphanumeric()
 }
 
 /// How deep in nested tables [`Document::para_paths`] goes: cells below this are skipped.
@@ -146,7 +173,7 @@ pub(crate) fn story_word_count_of(
                     && let Some((label, def)) = counters.next_label(numbering, n.num, n.level)
                     && !matches!(def.format, section::NumFormat::Bullet | section::NumFormat::None)
                 {
-                    total = total.saturating_add(count_words(&label));
+                    total = total.saturating_add(count_label_words(&label));
                 }
                 total = total.saturating_add(count_words(&p.plain_text()));
             }
