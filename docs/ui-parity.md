@@ -92,6 +92,7 @@ Labels → New Document with “One label per recipient” includes all filtered
 | 2026-10-28 | trivial | Ctrl/Command+Shift drags a selected floating object into an axis-aligned copy (#4764); synthetic Linux interaction and persistence controls, native desktop and Word untested; gap/readiness estimates unchanged |
 | 2026-10-29 | trivial | Insert › Shapes lists the basic shapes as a grid of code-drawn icon tiles with accessible names and tooltips, as Word's gallery does, instead of a text list (#4349) |
 | 2026-10-29 | trivial | Home › Shading and Table Design › Shading draw the last picked colour as their bar, as Word does, with a code-drawn icon that has no bar of its own (#4412) |
+| 2026-10-31 | trivial | Mini toolbar: a selection made to show a Find result or an accessibility issue brings up no bar (#5017) |
 | 2026-10-29 | trivial | File › Options › User Name left blank stays blank after a restart (it came back as the default name); a name of only spaces still keeps the default (#4368) |
 | 2026-10-29 | trivial | Window sizing uses the screen rectangle when the inner rectangle is missing, empty or not finite; an Equation symbol tooltip shows a missing glyph's linear name or code point once instead of twice |
 | 2026-10-29 | trivial | Displayed document titles and suggested file names omit NUL characters (X11 panicked on them) and use the localized untitled name when nothing remains (#3634) |
