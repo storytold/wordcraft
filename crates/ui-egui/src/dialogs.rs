@@ -479,6 +479,11 @@ pub enum Dialog {
     /// File › Info › Properties › Advanced Properties › Custom: the document's custom
     /// properties (#2982).
     CustomProperties(Box<CustomPropertiesForm>),
+    /// Bangla script converter (Unicode <-> ANSI / Bijoy / SutonnyMJ).
+    BanglaConverter {
+        source_text: String,
+        result_text: String,
+    },
 }
 
 impl Dialog {
@@ -542,6 +547,7 @@ impl Dialog {
             Dialog::Organizer { .. } => "organizer",
             Dialog::CustomProperties(..) => "customProperties",
             Dialog::Layout(d) => d.name(),
+            Dialog::BanglaConverter { .. } => "banglaConverter",
         }
     }
 
@@ -832,6 +838,17 @@ impl Dialog {
                     return None;
                 }
             },
+            "banglaConverter" => {
+                let source_text = if app.session.sel.is_collapsed() { String::new() } else { app.session.selected_text() };
+                let result_text = if source_text.is_empty() {
+                    String::new()
+                } else if source_text.chars().any(|c| ('\u{0980}'..='\u{09FF}').contains(&c)) {
+                    wordcraft_engine::cmd::bangla::unicode_to_ansi(&source_text)
+                } else {
+                    wordcraft_engine::cmd::bangla::ansi_to_unicode(&source_text)
+                };
+                Dialog::BanglaConverter { source_text, result_text }
+            }
             _ => return None,
         })
     }

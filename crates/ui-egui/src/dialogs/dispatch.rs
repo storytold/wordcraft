@@ -64,6 +64,7 @@ pub(super) fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         Dialog::MergeRule { .. } => merge_rule_dialog(app, ui, d),
         Dialog::MatchFields { .. } => match_fields_dialog(ui, d),
         Dialog::CheckErrors { .. } => check_errors_dialog(ui, d),
+        Dialog::BanglaConverter { .. } => bangla_converter_dialog(app, ui, d),
     }
 }
 
@@ -1511,4 +1512,64 @@ fn check_errors_dialog(ui: &mut Ui, d: &mut Dialog) -> bool {
     ui.label(egui::RichText::new(crate::i18n::fmt(tl!("Recipients: {count}"), &[("count", &records.to_string())])).weak());
     let (ok, cancel) = buttons(ui, tl!("Close"));
     ok || cancel
+}
+
+fn bangla_converter_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
+    let Dialog::BanglaConverter { source_text, result_text } = d else {
+        return false;
+    };
+    ui.set_min_width(580.0);
+    ui.heading(tl!("Bangla Converter (Unicode <-> ANSI / SutonnyMJ)"));
+    ui.label(tl!("Convert text between modern Unicode and legacy Bijoy/SutonnyMJ ANSI without external software."));
+    ui.add_space(8.0);
+
+    ui.label(tl!("Input Text:"));
+    ui.add(egui::TextEdit::multiline(source_text).desired_rows(5).desired_width(f32::INFINITY));
+
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        if ui.button(tl!("Unicode → ANSI (SutonnyMJ)")).clicked() {
+            *result_text = wordcraft_engine::cmd::bangla::unicode_to_ansi(source_text);
+        }
+        if ui.button(tl!("ANSI (SutonnyMJ) → Unicode")).clicked() {
+            *result_text = wordcraft_engine::cmd::bangla::ansi_to_unicode(source_text);
+        }
+        if ui.button(tl!("Phonetic → Unicode")).clicked() {
+            *result_text = wordcraft_engine::cmd::bangla::phonetic_transliterate(source_text);
+        }
+        if ui.button(tl!("Clear")).clicked() {
+            source_text.clear();
+            result_text.clear();
+        }
+    });
+
+    ui.add_space(8.0);
+    ui.label(tl!("Converted Result:"));
+    ui.add(egui::TextEdit::multiline(result_text).desired_rows(5).desired_width(f32::INFINITY));
+
+    ui.add_space(6.0);
+    let mut close = false;
+    ui.horizontal(|ui| {
+        if ui.button(tl!("Copy Result")).clicked() && !result_text.is_empty() {
+            ui.ctx().copy_text(result_text.clone());
+            app.status(tl!("Copied converted text to clipboard"));
+        }
+        if ui.button(tl!("Insert at Caret")).clicked() && !result_text.is_empty() {
+            let _ = app.run("text.insert", json!({"text": result_text}));
+            close = true;
+        }
+        let has_sel = !app.session.sel.is_collapsed();
+        if ui.add_enabled(has_sel, egui::Button::new(tl!("Convert Selection to Unicode"))).clicked() {
+            let _ = app.run("tools.banglaConvert", json!({"direction": "ansiToUnicode", "target": "selection"}));
+            close = true;
+        }
+        if ui.add_enabled(has_sel, egui::Button::new(tl!("Convert Selection to ANSI"))).clicked() {
+            let _ = app.run("tools.banglaConvert", json!({"direction": "unicodeToAnsi", "target": "selection"}));
+            close = true;
+        }
+        if ui.button(tl!("Close")).clicked() {
+            close = true;
+        }
+    });
+    close
 }

@@ -241,6 +241,28 @@ pub struct UiState {
     pub dark_page: bool,
     /// File › Options › Proofing › Check spelling as you type, kept between runs (#1792).
     pub check_spelling: bool,
+    #[serde(skip)]
+    pub phonetic_buffer: String,
+    #[serde(skip)]
+    pub phonetic_rendered_len: usize,
+    #[serde(skip)]
+    pub phonetic_candidates: Vec<String>,
+    #[serde(skip)]
+    pub phonetic_expected_caret: Option<wordcraft_doc::Pos>,
+    #[serde(skip)]
+    pub jatiya_pre_kar: Option<&'static str>,
+    #[serde(skip)]
+    pub jatiya_linker: bool,
+    #[serde(skip)]
+    pub jatiya_reph: bool,
+    #[serde(skip)]
+    pub ansi_linker: bool,
+    #[serde(skip)]
+    pub ansi_prev_bn: Option<char>,
+    #[serde(skip)]
+    pub ansi_prev_ansi_len: usize,
+    #[serde(skip)]
+    pub ansi_reph: bool,
     /// File › Options › Advanced › Animation: the caret glides to its new place and its blink
     /// fades, as Word's does on Windows (on, the default), or it jumps and blinks on and off
     /// (off).
@@ -340,6 +362,17 @@ impl Default for UiState {
             alt_modifier_seen: false,
             dark_page: false,
             check_spelling: true,
+            phonetic_buffer: String::new(),
+            phonetic_rendered_len: 0,
+            phonetic_candidates: Vec::new(),
+            phonetic_expected_caret: None,
+            jatiya_pre_kar: None,
+            jatiya_linker: false,
+            jatiya_reph: false,
+            ansi_linker: false,
+            ansi_prev_bn: None,
+            ansi_prev_ansi_len: 0,
+            ansi_reph: false,
             caret_animation: true,
             keyboard: wordcraft_engine::KeyMap::default(),
             ribbon: wordcraft_engine::RibbonLayout::default(),
