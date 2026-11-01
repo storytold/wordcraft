@@ -264,6 +264,9 @@ struct Rules {
     /// The `FORBIDDENWORD` flag: stems carrying it are listed but never correct.
     forbidden: Option<char>,
     no_suggest: Option<char>,
+    /// `REP` entries and `MAP` groups left out: past the caps, oversized or empty. Reported once
+    /// when the dictionary is built, so a truncated table isn't silent.
+    dropped: usize,
 }
 
 /// A rule as parsed from text, before flags become bits: `(flag, cross, strip, add, cont, cond)`.
@@ -301,11 +304,15 @@ const MAX_MAP_ENTRIES: usize = 256;
 const MAX_TABLE_ITEM_CHARS: usize = 64;
 
 impl Rules {
-    /// Adds a `REP` entry, unless it is empty, oversized or past [`MAX_REP_ENTRIES`].
+    /// Adds a `REP` entry, unless it is empty, oversized or past [`MAX_REP_ENTRIES`]. Entries
+    /// are kept in file order, so past the cap the rest of the table is left out (never the
+    /// middle). The table's count line is never trusted: nothing is preallocated from it.
     fn push_rep(&mut self, from: &str, to: &str) {
         let fits = |s: &str| s.chars().nth(MAX_TABLE_ITEM_CHARS).is_none();
         if self.rep.len() < MAX_REP_ENTRIES && !from.is_empty() && fits(from) && fits(to) {
             self.rep.push((from.replace('_', " "), to.replace('_', " ")));
+        } else {
+            self.dropped = self.dropped.saturating_add(1);
         }
     }
 
@@ -314,6 +321,8 @@ impl Rules {
         let chars: Vec<char> = group.chars().take(MAX_TABLE_ITEM_CHARS + 1).collect();
         if self.map.len() < MAX_MAP_ENTRIES && !chars.is_empty() && chars.len() <= MAX_TABLE_ITEM_CHARS {
             self.map.push(chars);
+        } else {
+            self.dropped = self.dropped.saturating_add(1);
         }
     }
 }
@@ -469,6 +478,12 @@ impl AffixDict {
     }
 
     fn build(rules: Rules, mut stems: Vec<(String, String)>, comments: Vec<String>) -> Result<AffixDict, String> {
+        if rules.dropped > 0 {
+            log::warn!(
+                "affix dictionary: {} REP/MAP entries ignored (empty, longer than {MAX_TABLE_ITEM_CHARS} characters, or past the first {MAX_REP_ENTRIES} REP / {MAX_MAP_ENTRIES} MAP)",
+                rules.dropped
+            );
+        }
         // Flags: every one a rule or a stem uses gets a bit.
         let mut flag_chars: Vec<char> = rules.prefixes.iter().chain(&rules.suffixes).map(|r| r.0).collect();
         flag_chars.extend(stems.iter().flat_map(|s| s.1.chars()));
@@ -1156,6 +1171,37 @@ pub(crate) mod tests {
         // A real keyboard layout is kept whole.
         let d = AffixDict::from_hunspell("KEY qwertyuiop|asdfghjkl|zxcvbnm\n", "1\nkot\n", &[]).unwrap();
         assert_eq!(d.key(), "qwertyuiop|asdfghjkl|zxcvbnm");
+    }
+
+    #[test]
+    fn rep_and_map_caps_keep_the_first_entries_exactly() {
+        // At the cap everything is kept; one over, the last line is the one left out, and the
+        // count is reported. The count lines (`REP 1000000000`) are never trusted.
+        let table = |n: usize, map: usize| {
+            let mut aff = String::from("REP 1000000000\n");
+            for i in 0..n {
+                aff.push_str(&format!("REP a{i} b{i}\n"));
+            }
+            aff.push_str("MAP 1000000000\n");
+            for i in 0..map {
+                aff.push_str(&format!("MAP x{i}\n"));
+            }
+            aff
+        };
+        let rules = parse_aff(&table(MAX_REP_ENTRIES, MAX_MAP_ENTRIES)).unwrap();
+        assert_eq!((rules.rep.len(), rules.map.len(), rules.dropped), (MAX_REP_ENTRIES, MAX_MAP_ENTRIES, 0));
+        let rules = parse_aff(&table(MAX_REP_ENTRIES + 1, MAX_MAP_ENTRIES + 1)).unwrap();
+        assert_eq!((rules.rep.len(), rules.map.len(), rules.dropped), (MAX_REP_ENTRIES, MAX_MAP_ENTRIES, 2));
+        let last = MAX_REP_ENTRIES - 1;
+        assert_eq!(rules.rep.last(), Some(&(format!("a{last}"), format!("b{last}"))), "the first entries are kept, in order");
+        // A huge count line with two entries loads the two.
+        let d = AffixDict::from_hunspell("REP 4294967295\nREP ab cd\nREP ef gh\n", "1\nkot\n", &[]).unwrap();
+        assert_eq!(d.rep().len(), 2);
+        // A long entry at the edge: 64 characters kept, 65 left out and counted.
+        let edge = "y".repeat(MAX_TABLE_ITEM_CHARS);
+        let long = "y".repeat(MAX_TABLE_ITEM_CHARS + 1);
+        let rules = parse_aff(&format!("REP {edge} z\nREP {long} z\nREP z {long}\n")).unwrap();
+        assert_eq!((rules.rep.len(), rules.dropped), (1, 2));
     }
 
     #[test]
