@@ -1,6 +1,6 @@
 use super::doc_state::{MAX_UNDO, Selection, doc_bib_style};
 use super::snapshot_types::{EditSnapshot, SNAPSHOT_HEAD};
-use super::{Document, Session, StoryRef, next_document_id};
+use super::{Document, Pos, Session, StoryRef, next_document_id};
 
 impl Session {
     /// Replace the document (open/new).
@@ -221,16 +221,24 @@ impl Session {
         self.dirty = dirty;
     }
 
+    /// The tree of the equation at `at`, parsing the linear text of one not yet edited
+    /// (as `equation.edit` does).
+    pub(super) fn equation_nodes(&self, at: &Pos) -> Option<wordcraft_doc::math::Arg> {
+        match self.doc.para_at(at)?.object_at(at.off)? {
+            wordcraft_doc::InlineObject::Equation { math, linear, .. } => {
+                Some(if math.nodes.is_empty() && !math.linear { wordcraft_doc::math::parse_linear(linear) } else { math.nodes.clone() })
+            }
+            _ => None,
+        }
+    }
+
     /// Make the selection valid for the current document.
     pub fn clamp_selection(&mut self) {
         self.sel.anchor = self.doc.clamp(&self.sel.anchor);
         self.sel.focus = self.doc.clamp(&self.sel.focus);
         // The equation being edited must still be there (undo, edits elsewhere).
         if let Some(m) = &self.math {
-            let eq = self.doc.para_at(&m.at).and_then(|p| match p.object_at(m.at.off) {
-                Some(wordcraft_doc::InlineObject::Equation { math, .. }) => Some(wordcraft_doc::math_edit::clamp(&math.nodes, &m.pos)),
-                _ => None,
-            });
+            let eq = self.equation_nodes(&m.at).map(|nodes| wordcraft_doc::math_edit::clamp(&nodes, &m.pos));
             match eq {
                 Some(pos) => {
                     if let Some(m) = self.math.as_mut() {

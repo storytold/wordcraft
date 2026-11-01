@@ -486,6 +486,17 @@ again.
   cap, a commit at 64 KiB): larger hostile events are ignored rather than painted or inserted
   (`oversized_ime_events_are_ignored`).
 
+## Equations
+
+| Keys | Word's result | Test |
+|---|---|---|
+| in an equation, `1/2` Space `x^2` Space | ½x²: what follows a built fraction, root, script or bar is its own item, not part of the denominator ⁴ | `text_after_a_built_fraction_stays_outside_it`, `a_trailing_operand_keeps_the_item_after_it` |
+| in an equation, type until it builds up, ⌘Z | Undo takes back only the build-up: the text comes back as typed with the caret after it, and the next ⌘Z removes the typing before it | `undo_takes_back_one_build_up_at_a_time`, `text_typed_after_a_build_up_in_one_command_joins_its_undo_step`, `one_command_with_several_build_ups_undoes_them_one_at_a_time`, `autocorrect_and_build_up_on_one_space_undo_separately` |
+
+⁴ Reported by a user comparing with Word for Windows side by side; not re-observed on the
+Mac reference here. The linear form writes such a structure with a space after it
+(`1/2 x^2`) so it reads back the same.
+
 ## Known gaps
 
 - Web (#1480): Chrome has been seen moving the caret of eframe's hidden text field to its
@@ -537,6 +548,7 @@ this correction; native Windows interaction and Microsoft Word remain untested.
 | 2026-10-29 | trivial | Relative font-size commands preserve mixed sizes in the selection (#4903); existing button steps and one-point shortcuts are unchanged; readiness estimates unchanged |
 | 2026-10-28 | trivial | Highlighting at a caret leaves the word alone and sets the colour for what is typed next (#4086). |
 | 2026-10-28 | trivial | Arabic Backspace removes one combining mark and keeps its base letter (#4757); stored mark order, caret/forward-Delete and other-script behavior retained; original synthetic command/history/protection/save-reopen checks, no native Word comparison; readiness estimates unchanged |
+| 2026-10-28 | trivial | Equations: `1/2` Space `x^2` Space gives ½x², not 1/(2x²); Undo right after a build-up takes back only the build-up and puts the caret back. |
 | 2026-10-25 | trivial | Tests and notes: border lines with formatting markup off, after the author's own formatting change and in a locked content control; Reject All keeps a `+---+` table; Tab in a table cell with tab indents on; Backspace before an indented paragraph with them off; narrow no-break and figure spaces before an AutoCorrect word; a no-break space typed after a word listed as a known gap |
 | 2026-10-25 | trivial | Highlight decisions include fully selected paragraph marks in whole cells and ordinary ranges, including empty paragraphs; partial text columns exclude unselected marks (#4085). |
 | 2026-10-25 | trivial | Highlight toggle checks the full target beyond 10,000 runs without collecting resolved formatting; mixed and inherited tails and Undo/Redo covered (#4085). |
