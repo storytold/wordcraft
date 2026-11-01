@@ -231,6 +231,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 - 2026-10-15: Find opens Navigation on Results; editing the query restores Results after manual Headings/Pages navigation. Typed and selected-text searches retain document contents (#2096).
 
 | Date | What landed |
+| 2026-10-14 | Pictures keep the brightness, contrast and transparency their file gives them (#1711, #1766): a "Washout" picture watermark (VML `gain`/`blacklevel`) and a washed-out letterhead picture behind the text (`a:lum`) are drawn faded on screen and in PDF instead of at full colour, with the pixel curve measured on Word's own PDF export; `a:alphaModFix` transparency too. Saved back as DrawingML (and as VML `gain`/`blacklevel` in Word 2003 XML, without the transparency). Picture Format › Corrections, Transparency and Color › Washout replace the file's values (other Color modes leave them alone), and Reset Picture discards them all, as in Word; the PDF embeds the corrected pixels once per picture |
 | 2026-10-28 | **Arabic diacritic editing (#4757):** Backspace removes the last stored Arabic combining mark, so its base letter can stay while the mark is replaced. Caret movement and forward Delete keep their cluster rules. Synthetic command, history, protection and native/DOCX fresh-reopen checks; no native Word comparison or readiness change. |
 | 2026-10-29 | Insert › Shapes shows the basic shapes as a grid of code-drawn icon tiles, each with an accessible name and tooltip, instead of a text list (#4349) |
 | 2026-11-01 | Markdown export: a list inside a block quote stays in the quote (`> - item`), its continuation lines included; it was read as quoted list paragraphs but written without `>`, so the list moved out of the quote on every save |
@@ -689,6 +690,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | trivial | Progress log: picture brightness, contrast and transparency (#1711, #1766) |
 | 2026-11-01 | trivial | Progress log: arrowheads keep their kind, width and length and are drawn at Word's sizes |
 | 2026-11-01 | trivial | Progress log: columns for selected text draw their line between (#5178) |
 | 2026-10-31 | trivial | Progress log: a Word 365 .doc in Aptos opens in Aptos (#5066); readiness unchanged |

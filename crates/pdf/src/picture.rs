@@ -3,6 +3,7 @@ use super::paint::{append_path, norm};
 use super::{
     Arc, Fill, FillRule, Image, LineCap, LineJoin, NormalizedF32, Path, PathBuilder, Picture, PlacedItem, Rect, Size, Stroke, Surface, Transform, rgb,
 };
+use wordcraft_doc::picfx::PicFx;
 
 /// Largest picture side we embed (pixels).
 const MAX_IMAGE_SIDE: u32 = 30_000;
@@ -99,17 +100,22 @@ fn path_from(b: &kurbo::BezPath) -> Option<Path> {
 }
 
 /// Decode a picture for embedding (validated with the `image` crate first, so a broken file
-/// can't fail the whole export).
-pub(crate) fn load_image(data: &Arc<Vec<u8>>) -> Option<Image> {
+/// can't fail the whole export), with its brightness and contrast `fx` applied to the pixels.
+///
+/// A JPEG goes in as it is unless `fx` changes its pixels; corrected pixels go in raw and krilla
+/// compresses them (Flate), and `Exporter::image` embeds one picture with the same corrections
+/// once. Corrected or not, a picture goes through the same size checks and decode, so it never
+/// fails here only because it has corrections.
+pub(crate) fn load_image(data: &Arc<Vec<u8>>, fx: PicFx) -> Option<Image> {
     // The shared probe also charges what the decoder holds beside its output (#3644).
     if !wordcraft_geom::picture::probe(data).is_ok_and(|p| p.fits(wordcraft_geom::MAX_DECODED_BYTES)) {
         return None;
     }
-    load_image_within(data, wordcraft_geom::MAX_DECODED_BYTES)
+    load_image_within(data, fx, wordcraft_geom::MAX_DECODED_BYTES)
 }
 
 /// [`load_image`] with an explicit RGBA byte budget (a small one in tests).
-pub(crate) fn load_image_within(data: &Arc<Vec<u8>>, budget: u64) -> Option<Image> {
+pub(crate) fn load_image_within(data: &Arc<Vec<u8>>, fx: PicFx, budget: u64) -> Option<Image> {
     use image::ImageDecoder;
     let fmt = image::guess_format(data).ok()?;
     let mut limits = image::Limits::default();
@@ -136,8 +142,10 @@ pub(crate) fn load_image_within(data: &Arc<Vec<u8>>, budget: u64) -> Option<Imag
     if w == 0 || h == 0 || w > MAX_IMAGE_SIDE || h > MAX_IMAGE_SIDE {
         return None;
     }
-    if fmt == image::ImageFormat::Jpeg && matches!(dec.color(), image::ColorType::L8 | image::ColorType::Rgb8) {
+    if !fx.changes_pixels() && fmt == image::ImageFormat::Jpeg && matches!(dec.color(), image::ColorType::L8 | image::ColorType::Rgb8) {
         return Image::from_jpeg(data.clone().into(), true).ok();
     }
-    Some(Image::from_rgba8(dec.into_rgba8().into_raw(), w, h))
+    let mut px = dec.into_rgba8().into_raw();
+    fx.apply_rgba(&mut px);
+    Some(Image::from_rgba8(px, w, h))
 }

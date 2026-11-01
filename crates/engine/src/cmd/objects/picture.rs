@@ -1,5 +1,6 @@
 use super::select::{obj_size, selected, with_obj};
 use super::{CmdError, CmdResult, InlineObject, Rgb, Session, Value, Wrap, p};
+use wordcraft_doc::picfx::PicFx;
 
 /// `picture.crop`: the crop, and optionally the new display size, as one edit. With a size, a
 /// floating picture positioned by offsets moves by what the crop on its left/top side on the page
@@ -148,13 +149,33 @@ pub fn fit_size(w: f32, h: f32, keep: bool) -> (f32, f32) {
 pub(super) fn adjust(s: &mut Session, f: impl Fn(image::DynamicImage) -> Result<image::DynamicImage, CmdError>) -> CmdResult {
     let (_, o) = selected(s).ok_or_else(|| CmdError::Disabled("no picture".into()))?;
     let InlineObject::Image { media, .. } = o else { return Err(CmdError::Disabled("not a picture".into())) };
-    adjust_media(s, &media, f)
+    adjust_media(s, &media, |_| {}, f)
+}
+
+/// The selected picture's pre-edit media key (itself when never edited).
+pub(super) fn original_media(s: &Session) -> Result<String, CmdError> {
+    let (_, o) = selected(s).ok_or_else(|| CmdError::Disabled("no picture".into()))?;
+    let InlineObject::Image { media, .. } = o else { return Err(CmdError::Disabled("not a picture".into())) };
+    Ok(s.originals.get(&media).cloned().unwrap_or(media))
+}
+
+/// Drops brightness and contrast read from the file: an edit baked them from the original.
+pub(super) fn clear_lum(fx: &mut PicFx) {
+    fx.bright = 0;
+    fx.contrast = 0;
 }
 
 /// Like [`adjust`], but decodes `base` (a media key, usually the pre-edit original) instead
 /// of the picture's current bitmap. The result still chains onto the originals map, so Reset
 /// Picture keeps working.
-pub(super) fn adjust_media(s: &mut Session, base: &str, f: impl Fn(image::DynamicImage) -> Result<image::DynamicImage, CmdError>) -> CmdResult {
+/// `fx` changes the picture's brightness, contrast and transparency from the file (see
+/// [`PicFx`]) for an edit that bakes its own.
+pub(super) fn adjust_media(
+    s: &mut Session,
+    base: &str,
+    fx: impl Fn(&mut PicFx),
+    f: impl Fn(image::DynamicImage) -> Result<image::DynamicImage, CmdError>,
+) -> CmdResult {
     let bytes = s.doc.media.get(base).cloned().ok_or_else(|| CmdError::Failed("picture data missing".into()))?;
     // Within the budget pictures are drawn within, checked from the header first (#3644, #3647).
     let img = wordcraft_geom::picture::decode(&bytes, wordcraft_geom::MAX_DECODED_BYTES).map_err(|e| match e {
@@ -179,8 +200,9 @@ pub(super) fn adjust_media(s: &mut Session, base: &str, f: impl Fn(image::Dynami
         .unwrap_or_else(|| cur.clone().unwrap_or_else(|| key.clone()));
     s.originals.entry(key.clone()).or_insert(orig);
     with_obj(s, |o| {
-        if let InlineObject::Image { media, .. } = o {
+        if let InlineObject::Image { media, fx: pic_fx, .. } = o {
             *media = key.clone();
+            fx(pic_fx);
         }
     })
 }
@@ -244,19 +266,25 @@ pub(super) fn relook(s: &mut Session, change: impl FnOnce(&mut PictureLook)) -> 
         });
     }
     let l = look.clone();
-    let out = adjust_media(s, &look.base, move |img| {
-        let mut img = match &l.effect {
-            Some(e) => artistic_effect(img, e),
-            None => img,
-        };
-        if let Some(st) = &l.style {
-            img = picture_style(img, st)?;
-        }
-        if let Some((c, w)) = l.border {
-            img = frame(img, w, [c.0, c.1, c.2, 255])?;
-        }
-        Ok(img)
-    })?;
+    // Styles, borders and effects leave the file's brightness, contrast and transparency alone.
+    let out = adjust_media(
+        s,
+        &look.base,
+        |_| {},
+        move |img| {
+            let mut img = match &l.effect {
+                Some(e) => artistic_effect(img, e),
+                None => img,
+            };
+            if let Some(st) = &l.style {
+                img = picture_style(img, st)?;
+            }
+            if let Some((c, w)) = l.border {
+                img = frame(img, w, [c.0, c.1, c.2, 255])?;
+            }
+            Ok(img)
+        },
+    )?;
     if let Some((_, InlineObject::Image { media, .. })) = selected(s)
         && let Some(drawn) = s.doc.media.get(&media).cloned()
     {
@@ -299,10 +327,13 @@ pub(super) fn reset(s: &mut Session, _: &Value) -> CmdResult {
     let (_, o) = selected(s).ok_or_else(|| CmdError::Disabled("no picture".into()))?;
     let InlineObject::Image { media, .. } = o else { return Err(CmdError::Disabled("not a picture".into())) };
     let orig = s.originals.get(&media).cloned().unwrap_or(media);
+    // Like Word, Reset Picture discards every correction, those read from the file (`fx`:
+    // brightness, contrast, transparency, #1711, #1766) included.
     with_obj(s, |o| {
-        if let InlineObject::Image { media, crop, .. } = o {
+        if let InlineObject::Image { media, crop, fx, .. } = o {
             *media = orig.clone();
             *crop = [0.0; 4];
+            *fx = PicFx::default();
         }
     })
 }

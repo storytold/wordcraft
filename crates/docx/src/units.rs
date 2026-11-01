@@ -84,6 +84,29 @@ pub fn int(s: &str) -> Option<i64> {
     v.is_finite().then(|| v.round().clamp(i64::MIN as f64, i64::MAX as f64) as i64)
 }
 
+/// A VML number (`gain`, `blacklevel`), unclamped: 16.16 fixed point with an `f` suffix
+/// (`19661f` is 0.3) or a plain decimal (`0.3`). None for anything else or non-finite.
+pub fn vml_number(s: &str) -> Option<f64> {
+    let t = s.trim();
+    if t.is_empty() || t.len() > 40 {
+        return None;
+    }
+    let v = match t.strip_suffix('f') {
+        Some(fixed) => fixed.trim().parse::<f64>().ok()? / 65_536.0,
+        None => t.parse::<f64>().ok()?,
+    };
+    v.is_finite().then_some(v)
+}
+
+/// A picture's brightness, contrast and transparency: `a:lum` (ECMA-376 §20.1.8.42) and
+/// `a:alphaModFix` (§20.1.8.4) in its `a:blip` (#1766).
+pub fn blip_fx(blip: &El) -> wordcraft_doc::picfx::PicFx {
+    let val = |el: Option<&El>, k: &str| el.and_then(|e| e.attr(k)).and_then(int).map(|v| v.clamp(-1_000_000, 1_000_000) as i32);
+    let lum = blip.child("a:lum");
+    let amt = val(blip.child("a:alphaModFix"), "amt").unwrap_or(100_000).clamp(0, 100_000);
+    wordcraft_doc::picfx::PicFx::new(val(lum, "bright").unwrap_or(0), val(lum, "contrast").unwrap_or(0), 100_000 - amt)
+}
+
 pub fn u32_of(s: &str) -> Option<u32> {
     int(s).map(|v| v.clamp(0, u32::MAX as i64) as u32)
 }

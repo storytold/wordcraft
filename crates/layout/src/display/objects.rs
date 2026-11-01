@@ -36,9 +36,15 @@ pub(super) fn graphic_draws(doc: &Document, g: &Graphic, rect: Rect, alpha: f32)
                 })
             }
             GraphicItem::Text { rect: r, .. } => out.extend(text_glyphs(doc, inside(r), it, alpha, k)),
-            GraphicItem::Image { rect: r, media } => {
-                out.push(Draw::Image { rect: inside(r), media: media.clone(), crop: [0.0; 4], alpha, alt: String::new(), decorative: false })
-            }
+            GraphicItem::Image { rect: r, media } => out.push(Draw::Image {
+                rect: inside(r),
+                media: media.clone(),
+                crop: [0.0; 4],
+                alpha,
+                alt: String::new(),
+                fx: Default::default(),
+                decorative: false,
+            }),
         }
     }
     out
@@ -393,9 +399,10 @@ pub(super) fn spun(spin: Spin, rect: Rect, items: Vec<Draw>, out: &mut Vec<Draw>
 pub(super) fn object_draws(o: &InlineObject, rect: Rect, outer: Spin, alpha: f32, opts: &DisplayOptions, out: &mut Vec<Draw>) {
     let own = o.frame().map(|(_, _, f)| f.spin()).unwrap_or_default();
     match o {
-        InlineObject::Image { media, crop, alt, .. } => {
+        InlineObject::Image { media, crop, alt, fx, .. } => {
+            let alpha = alpha * fx.opacity();
             let decorative = o.is_decorative();
-            spun(own, rect, vec![Draw::Image { rect, media: media.clone(), crop: *crop, alpha, alt: alt.clone(), decorative }], out)
+            spun(own, rect, vec![Draw::Image { rect, media: media.clone(), crop: *crop, alpha, alt: alt.clone(), fx: *fx, decorative }], out)
         }
         InlineObject::Shape { kind, fill, stroke, stroke_width, effects, freeform, extra, .. } => {
             let effects = effects_in(*effects, own.within(outer));
@@ -452,6 +459,7 @@ pub(super) fn object_draws(o: &InlineObject, rect: Rect, outer: Spin, alpha: f32
                         crop: [0.0; 4],
                         alpha,
                         alt: String::new(),
+                        fx: Default::default(),
                         decorative: false,
                     }),
                     _ => None,
