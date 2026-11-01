@@ -55,6 +55,13 @@ fn a_non_boolean_value_is_refused_and_leaves_the_view_alone() {
     run(&mut s, "text.insert", json!({"text": "Hello"}));
     run(&mut s, "select.all", json!({}));
     run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    // Ink lasso-selected, so `draw.inkToShape`'s junk-value refusal must come before the branch
+    // that would convert the strokes: the loop's document check would see the conversion.
+    run(&mut s, "draw.stroke", json!({"page": 0, "points": [[40.0, 660.0], [100.0, 660.0]]}));
+    run(&mut s, "draw.lasso", json!({"page": 0, "points": [[20.0, 640.0], [120.0, 640.0], [120.0, 690.0], [20.0, 690.0]]}));
+    assert!(s.view.draw.lasso.as_ref().is_some_and(|l| !l.items.is_empty()), "the lasso picked the stroke up");
+    let converted = run(&mut s, "draw.inkToShape", json!({}));
+    assert_eq!(converted["count"], 1, "and without a value it converts it: {converted}");
     let switches = [
         "view.focus",
         "view.fullScreenView",

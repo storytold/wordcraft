@@ -873,18 +873,26 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context, ui: &mut Ui) {
 /// Every badge this frame paints: the ribbon's own tab rects, the tab badges laid along the slim
 /// bar when no ribbon is showing, and the command badges the widgets published.
 ///
-/// Whether the tab badges go on the bar is decided by the screen state, not by "no rects were
-/// recorded": Full Screen View's bar has a Search box that records its own `Q` badge, so a
-/// recorded-rect test would leave that state showing `Q` alone (#1678).
+/// Whether the tab badges go on the bar is decided by whether the tab strip was laid out this
+/// frame, not by "no rects were recorded": Full Screen View's bar has a Search box that records its
+/// own `Q` badge, so a recorded-rect test would leave that state showing `Q` alone (#1678). With
+/// the ribbon dropped over the page in Focus the strip is laid out and its badges are recorded, so
+/// a slim-bar set would only double them up.
 pub(crate) fn badge_rects(app: &WordApp, window: Rect, tabs: Vec<(Rect, String)>, cmds: Vec<(Rect, String)>) -> Vec<(Rect, String)> {
-    let ribbon_showing = crate::chrome::Screen::of(&app.session.view) == crate::chrome::Screen::Normal;
-    let bar_tabs = if app.ui.keytips == Phase::Tabs && !ribbon_showing { slim_bar_badges(app, window) } else { Vec::new() };
+    let bar_tabs =
+        if app.ui.keytips == Phase::Tabs && !app.ribbon_tabs_shown && crate::chrome::Screen::of(&app.session.view) != crate::chrome::Screen::Normal {
+            slim_bar_badges(app, window, &tabs.iter().map(|(r, _)| *r).collect::<Vec<_>>())
+        } else {
+            Vec::new()
+        };
     tabs.into_iter().chain(bar_tabs).chain(cmds).collect()
 }
 
 /// Tab badge positions along the slim bar of Focus and Full Screen View, in tab order: a small
-/// square each, starting at the bar's left end, clear of the "⋯" or Search box in the middle.
-pub(crate) fn slim_bar_badges(app: &WordApp, window: Rect) -> Vec<(Rect, String)> {
+/// square each, starting at the bar's left end. They stop before `avoid` — the chrome the bar
+/// carries, like Full Screen View's Search box and its `Q` badge — and never cross the bar's
+/// centre, where the "⋯" button sits in Focus.
+pub(crate) fn slim_bar_badges(app: &WordApp, window: Rect, avoid: &[Rect]) -> Vec<(Rect, String)> {
     let letters = badge_tabs(app);
     let mut out = Vec::with_capacity(letters.len());
     let mut x = window.left() + 8.0;
@@ -895,7 +903,13 @@ pub(crate) fn slim_bar_badges(app: &WordApp, window: Rect) -> Vec<(Rect, String)
             continue;
         }
         let w = 9.0 * letter.chars().count() as f32 + 10.0;
-        out.push((Rect::from_min_size(egui::pos2(x, y), Vec2::new(w, 15.0)), letter.to_string()));
+        let r = Rect::from_min_size(egui::pos2(x, y), Vec2::new(w, 15.0));
+        if avoid.iter().any(|a| a.intersects(r.expand2(egui::vec2(4.0, 2.0)))) || r.right() > window.center().x - 26.0 {
+            // The next badge would reach a centre control (the ⋯, or Search and its badge): the
+            // remaining tabs drop, and their keys still work through the mode.
+            break;
+        }
+        out.push((r, letter.to_string()));
         x += w + 3.0;
     }
     out
