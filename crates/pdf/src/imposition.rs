@@ -144,4 +144,47 @@ mod tests {
             }
         }
     }
+    /// #641: independent folding sequences pin blank positions for both bindings at 5–9 pages.
+    #[test]
+    fn booklet_five_through_nine_pages_keep_blank_slot_positions() {
+        let doc = wordcraft_doc::Document::from_text("1\u{c}2\u{c}3\u{c}4\u{c}5\u{c}6\u{c}7\u{c}8\u{c}9");
+        let lay = wordcraft_layout::layout(&doc, &mut Default::default(), &Default::default());
+        assert_eq!(lay.pages.len(), 9);
+        let cases = [
+            (5, vec![[None, Some(0)], [Some(1), None], [None, Some(2)], [Some(3), Some(4)]]),
+            (6, vec![[None, Some(0)], [Some(1), None], [Some(5), Some(2)], [Some(3), Some(4)]]),
+            (7, vec![[None, Some(0)], [Some(1), Some(6)], [Some(5), Some(2)], [Some(3), Some(4)]]),
+            (8, vec![[Some(7), Some(0)], [Some(1), Some(6)], [Some(5), Some(2)], [Some(3), Some(4)]]),
+            (9, vec![[None, Some(0)], [Some(1), None], [None, Some(2)], [Some(3), Some(8)], [Some(7), Some(4)], [Some(5), Some(6)]]),
+        ];
+        for (count, expected) in cases {
+            for reverse in [false, true] {
+                let pages: Vec<usize> = (0..count).collect();
+                let sheets = Imposition::Booklet { reverse }.sheets(&lay, &pages, None).unwrap();
+                assert_eq!(sheets.len(), expected.len(), "page count {count}, reverse {reverse}");
+                let actual: Vec<_> = sheets
+                    .iter()
+                    .map(|side| {
+                        assert!(side.width >= side.height);
+                        assert!(side.slots.len() <= 2);
+                        let mut cells = [None, None];
+                        for slot in &side.slots {
+                            assert_eq!(slot.width, side.width / 2.0);
+                            assert_eq!(slot.height, side.height);
+                            assert_eq!(slot.y, 0.0);
+                            let col = usize::from(slot.x != 0.0);
+                            assert_eq!(slot.x, col as f32 * side.width / 2.0);
+                            assert!(cells[col].replace(slot.page).is_none());
+                        }
+                        cells
+                    })
+                    .collect();
+                let wanted: Vec<_> = expected.iter().map(|&[left, right]| if reverse { [right, left] } else { [left, right] }).collect();
+                assert_eq!(actual, wanted, "page count {count}, reverse {reverse}");
+                let mut occupied: Vec<_> = actual.into_iter().flatten().flatten().collect();
+                occupied.sort_unstable();
+                assert_eq!(occupied, pages, "every selected page occurs exactly once");
+            }
+        }
+    }
 }
