@@ -511,3 +511,80 @@ fn caption_for_an_object_in_a_cell_stays_in_the_cell() {
     let texts: Vec<String> = s.doc.body.iter().filter_map(|b| b.as_para()).map(|p| p.plain_text()).collect();
     assert_eq!(texts.get(1).map(String::as_str), Some("Figure 1"), "{texts:?}");
 }
+
+/// #3620: linked TOCs used to enumerate every body bookmark for every heading.
+#[test]
+fn toc_hyperlinks_many_headings_do_not_rescan_bookmarks() {
+    let n = 8000;
+    let mut doc = wordcraft_doc::Document::new();
+    doc.body = std::iter::once(para_block(Paragraph::new()))
+        .chain((0..n).map(|i| para_block(Paragraph::with_text(&format!("Chapter {i}"), CharProps::default()).styled("Heading1"))))
+        .collect();
+    let mut s = Session::new(doc);
+    let started = std::time::Instant::now();
+    s.run("references.toc", &json!({"pageNumbers": false})).unwrap();
+    let elapsed = started.elapsed();
+    eprintln!("linked TOC with {n} headings: {elapsed:?}");
+    // Leave headroom above the ~5-second fixed run; the old rescan took ~28 seconds.
+    assert!(elapsed.as_secs_f32() < 20.0, "linked TOC took {elapsed:?}");
+    let names: Vec<String> = s.doc.bookmarks().into_iter().map(|(name, _)| name).collect();
+    assert_eq!(names, (1..=n).map(|i| format!("_Toc{i:09}")).collect::<Vec<_>>());
+    let links: Vec<String> = s
+        .doc
+        .body
+        .iter()
+        .filter_map(|b| b.as_para())
+        .filter(|p| p.props.style.as_deref() == Some("TOC1"))
+        .map(|p| p.runs.first().unwrap().props.link.clone().unwrap())
+        .collect();
+    assert_eq!(links, names.iter().map(|n| format!("#{n}")).collect::<Vec<_>>());
+}
+
+/// Existing bookmarks, including a reused mark after a page break, retain their identities.
+#[test]
+fn toc_hyperlinks_keep_existing_bookmarks_and_undo() {
+    let mut doc = wordcraft_doc::Document::from_text("\n\u{000c}Reused\nFresh\nLast\nOther");
+    for i in 1..=3 {
+        doc.para_mut(StoryRef::Body, &Path::top(i)).unwrap().props.style = Some("Heading1".into());
+    }
+    for (i, start, name) in [(1, 1, "_Toc000000009"), (4, 0, "_Toc000000041"), (4, 0, "_TocNotNumeric"), (4, 0, "Visible")] {
+        let end = doc.para(StoryRef::Body, &Path::top(i)).unwrap().len();
+        doc.insert_object(&Pos::body(i, end), InlineObject::BookmarkEnd { name: name.into() }, &CharProps::default()).unwrap();
+        doc.insert_object(&Pos::body(i, start), InlineObject::BookmarkStart { name: name.into() }, &CharProps::default()).unwrap();
+    }
+    let mut s = Session::new(doc);
+    let original = s.doc.clone();
+    let selection = s.sel.clone();
+    s.run("references.toc", &json!({})).unwrap();
+    let names = |s: &Session| s.doc.bookmarks().into_iter().map(|(name, _)| name).collect::<Vec<_>>();
+    let expected = ["_Toc000000009", "_Toc000000042", "_Toc000000043", "Visible", "_TocNotNumeric", "_Toc000000041"];
+    assert_eq!(names(&s), expected);
+    let links: Vec<String> = s
+        .doc
+        .body
+        .iter()
+        .filter_map(|b| b.as_para())
+        .filter(|p| p.props.style.as_deref() == Some("TOC1"))
+        .map(|p| p.runs.first().unwrap().props.link.clone().unwrap())
+        .collect();
+    assert_eq!(links, ["#_Toc000000009", "#_Toc000000042", "#_Toc000000043"]);
+    let regenerated = s.doc.clone();
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.doc, original);
+    assert_eq!(s.sel, selection);
+    s.run("edit.redo", &json!({})).unwrap();
+    assert_eq!(s.doc, regenerated);
+    s.run("references.updateToc", &json!({})).unwrap();
+    assert_eq!(names(&s), expected, "refresh reuses every heading mark");
+    // The single-heading Insert Link caller still allocates after all existing names.
+    s.run("caret.docEnd", &json!({})).unwrap();
+    s.run("text.newParagraph", &json!({})).unwrap();
+    s.run("text.insert", &json!({"text": "New heading"})).unwrap();
+    s.run("styles.apply", &json!({"style": "Heading 1"})).unwrap();
+    let heading = s.sel.focus.path.last();
+    s.run("caret.docStart", &json!({})).unwrap();
+    s.run("insert.link", &json!({"heading": heading, "text": "Jump"})).unwrap();
+    assert!(names(&s).contains(&"_Toc000000044".to_string()));
+    let first = s.doc.body[0].as_para().unwrap();
+    assert!(first.runs.iter().any(|r| r.props.link.as_deref() == Some("#_Toc000000044")));
+}
