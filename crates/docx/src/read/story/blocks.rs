@@ -300,6 +300,15 @@ impl Reader<'_> {
                 table.props.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, ch), old);
             }
         }
+        // Word gives these tables no cell margins; saving may write a default Normal Table, so
+        // the zeros are kept as the table's own. shortcut: they stay direct formatting (a table style
+        // applied later keeps them), until the model knows the file's default table style.
+        if self.no_default_table_style
+            && table.props.cell_margins.is_none()
+            && table.props.style.as_deref().and_then(|id| self.doc.styles.table_style(id)).is_none_or(|s| s.parts.cell_margins.is_none())
+        {
+            table.props.cell_margins = Some([0.0; 4]);
+        }
         if let Some(g) = t.child("w:tblGrid") {
             table.grid = g
                 .children("w:gridCol")

@@ -101,6 +101,8 @@ impl Reader<'_> {
         }
         // Built-in styles' behaviour (gallery, priority, visibility), written back as is.
         sheet.latent_styles = root.child("w:latentStyles").map(|l| l.to_xml()).filter(|x| x.len() <= MAX_LATENT_STYLES_XML);
+        // Ids whose kept (last) definition is a default table style.
+        let mut default_tables: Vec<String> = Vec::new();
         for s in root.children("w:style").take(10_000) {
             let Some(raw_id) = s.attr("w:styleId").filter(|i| !i.is_empty()) else { continue };
             let id = self.pc.style_id(raw_id);
@@ -112,6 +114,7 @@ impl Reader<'_> {
             };
             let name = s.child_val("w:name").map(ui_style_name).unwrap_or_else(|| id.clone());
             let r = |n: &str| s.child_val(n).filter(|v| !v.is_empty()).map(|v| self.pc.style_id(v));
+            let is_default = s.attr("w:default").is_some_and(|v| matches!(v, "1" | "true" | "on"));
             let mut st = Style {
                 id: id.clone(),
                 name,
@@ -125,7 +128,7 @@ impl Reader<'_> {
                 builtin: !s.attr("w:customStyle").is_some_and(|v| matches!(v.trim(), "1" | "true" | "on")),
                 locked: flag(s, "w:locked").unwrap_or(false),
                 // Only where the writer couldn't tell from the id (it flags the English ids).
-                default: s.attr("w:default").is_some_and(|v| v == "1" || v == "true")
+                default: is_default
                     && !matches!(
                         (kind, id.as_str()),
                         (StyleKind::Paragraph, "Normal")
@@ -155,6 +158,10 @@ impl Reader<'_> {
                 let parts = self.table_style_parts(s, &mut st);
                 st.table = (parts != TableStyleParts::default()).then_some(parts);
             }
+            default_tables.retain(|d| *d != id);
+            if kind == StyleKind::Table && is_default {
+                default_tables.push(id.clone());
+            }
             // A style defined twice (some generators write their own Heading 1 after a
             // placeholder one) is the last definition, whole: Word drops the earlier one rather
             // than merging the two (observed with synthetic documents).
@@ -163,6 +170,7 @@ impl Reader<'_> {
                 None => sheet.styles.push(st),
             }
         }
+        self.no_default_table_style = default_tables.is_empty();
         // Styles that give only a list level take the list from the style they are based on
         // (Heading 3: level 3 of Heading 2's outline list).
         let fixed: Vec<Option<wordcraft_doc::props::NumRef>> = sheet
