@@ -1135,3 +1135,248 @@ fn meta_creation_date_timezones_and_fallbacks() {
     assert_eq!(m2.created, "2024-03-05T13:45:00Z");
     assert_eq!(m2.author, "Solo Creator");
 }
+
+#[test]
+fn paragraph_defaults_are_odfs_not_words() {
+    // #5101: ODF's defaults are no space before or after and single line spacing (ODF 1.3
+    // §20.207, §20.235, §20.355). The import used to leave the built-in Normal's 8pt after and 1.15
+    // lines in place, so a LibreOffice document that sets no spacing (blank lines as spacers
+    // are common) opened with a gap after every paragraph and ran onto extra pages.
+    use wordcraft_doc::props::LineSpacing;
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p>One</text:p><text:p/><text:p>Two</text:p></office:text></office:body></office:document-content>"#
+    );
+    let plain = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:paragraph-properties fo:orphans="2"/></style:default-style><style:style style:name="Standard" style:family="paragraph" style:class="text"/></office:styles></office:document-styles>"#
+    );
+    for doc in [import(&package(&content, Some(&plain))).unwrap(), import(&package(&content, None)).unwrap()] {
+        let d = &doc.styles.default_para;
+        assert_eq!((d.space_before, d.space_after, d.line_spacing), (Some(0.0), Some(0.0), Some(LineSpacing::Multiple(1.0))));
+    }
+    // The default style's spacing is the document's, and Standard's comes before it.
+    let set = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:paragraph-properties fo:margin-bottom="8pt" fo:line-height="115%"/></style:default-style><style:style style:name="Standard" style:family="paragraph"><style:paragraph-properties fo:margin-top="0.1in"/></style:style></office:styles></office:document-styles>"#
+    );
+    let doc = import(&package(&content, Some(&set))).unwrap();
+    let d = &doc.styles.default_para;
+    assert!(d.space_before.is_some_and(|b| (b - 7.2).abs() < 1e-3), "{:?}", d.space_before);
+    assert_eq!(d.space_after, Some(8.0));
+    assert!(matches!(d.line_spacing, Some(LineSpacing::Multiple(m)) if (m - 1.15).abs() < 1e-6));
+}
+
+#[test]
+fn paragraph_styles_give_space_before_after_and_line_spacing() {
+    // A paragraph takes the nearest style's `fo:margin-top`, `fo:margin-bottom` and
+    // `fo:line-height` (or `style:line-height-at-least`) along its chain, automatic and common
+    // styles alike; Standard's are the document defaults, so a paragraph that sets nothing has
+    // none of its own.
+    use wordcraft_doc::props::LineSpacing;
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles>
+        <style:style style:name="Standard" style:family="paragraph"><style:paragraph-properties fo:margin-bottom="2pt"/></style:style>
+        <style:style style:name="Text_20_body" style:display-name="Text body" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties fo:margin-top="0in" fo:margin-bottom="0.0972in" fo:line-height="115%"/></style:style>
+        </office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:automatic-styles>
+        <style:style style:name="P1" style:family="paragraph" style:parent-style-name="Text_20_body"><style:paragraph-properties fo:margin-bottom="12pt"/></style:style>
+        <style:style style:name="P2" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties fo:line-height="0.25in"/></style:style>
+        <style:style style:name="P3" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties style:line-height-at-least="14pt"/></style:style>
+        <style:style style:name="P4" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties fo:line-height="normal"/></style:style>
+        <style:style style:name="Bad" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties fo:margin-top="-5pt" fo:margin-bottom="99999in" fo:line-height="1e9%"/></style:style>
+        </office:automatic-styles><office:body><office:text>
+        <text:p text:style-name="Text_20_body">Body</text:p><text:p text:style-name="P1">Own after</text:p>
+        <text:p text:style-name="P2">Exactly</text:p><text:p text:style-name="P3">At least</text:p><text:p text:style-name="P4">Normal</text:p>
+        <text:p text:style-name="Standard">Standard</text:p><text:p>None</text:p><text:p text:style-name="Bad">Hostile</text:p>
+        </office:text></office:body></office:document-content>"#
+    );
+    let flow = parse(&package(&content, Some(&styles))).unwrap();
+    let got: Vec<_> = paras(&flow).iter().map(|p| (p.spacing.before, p.spacing.after, p.spacing.line)).collect();
+    let m115 = LineSpacing::Multiple(1.15);
+    let want = [
+        (Some(0.0), Some(0.0972 * 72.0), Some(m115)),
+        (Some(0.0), Some(12.0), Some(m115)),
+        (None, None, Some(LineSpacing::Exactly(18.0))),
+        (None, None, Some(LineSpacing::AtLeast(14.0))),
+        (None, None, Some(LineSpacing::Multiple(1.0))),
+        (None, None, None),
+        (None, None, None),
+        (None, None, None),
+    ];
+    assert_eq!(got.len(), want.len());
+    for (i, (g, w)) in got.iter().zip(want).enumerate() {
+        let close = |a: Option<f32>, b: Option<f32>| match (a, b) {
+            (Some(a), Some(b)) => (a - b).abs() < 1e-3,
+            (a, b) => a == b,
+        };
+        let line_close = match (g.2, w.2) {
+            (Some(LineSpacing::Multiple(a)), Some(LineSpacing::Multiple(b))) => (a - b).abs() < 1e-6,
+            (a, b) => a == b,
+        };
+        assert!(close(g.0, w.0) && close(g.1, w.1) && line_close, "paragraph {i}: got {g:?}, want {w:?}");
+    }
+    // Standard's 2pt after is the document default, not the Standard paragraph's own.
+    let doc = import(&package(&content, Some(&styles))).unwrap();
+    assert_eq!(doc.styles.default_para.space_after, Some(2.0));
+}
+
+#[test]
+fn paragraph_margins_in_any_unit_and_the_fo_margin_shorthand() {
+    // `fo:margin-top` / `fo:margin-bottom` in cm, inches and mm become points; the `fo:margin`
+    // shorthand sets both, and an explicit top or bottom on the same element overrides it
+    // A child that sets only the shorthand replaces both inherited values.
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles>
+        <style:style style:name="Cm" style:family="paragraph"><style:paragraph-properties fo:margin-top="0.423cm" fo:margin-bottom="0.212cm"/></style:style>
+        <style:style style:name="Inch" style:family="paragraph"><style:paragraph-properties fo:margin-top="0.25in" fo:margin-bottom="0.125in"/></style:style>
+        <style:style style:name="Mm" style:family="paragraph"><style:paragraph-properties fo:margin-top="5mm"/></style:style>
+        <style:style style:name="Short" style:family="paragraph"><style:paragraph-properties fo:margin="12pt"/></style:style>
+        <style:style style:name="ShortTop" style:family="paragraph"><style:paragraph-properties fo:margin="12pt" fo:margin-top="3pt"/></style:style>
+        <style:style style:name="ShortBottom" style:family="paragraph"><style:paragraph-properties fo:margin-bottom="1cm" fo:margin="0.5in"/></style:style>
+        <style:style style:name="ShortChild" style:family="paragraph" style:parent-style-name="Inch"><style:paragraph-properties fo:margin="0pt"/></style:style>
+        <style:style style:name="ShortPct" style:family="paragraph" style:parent-style-name="Inch"><style:paragraph-properties fo:margin="50%"/></style:style>
+        </office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text>
+        <text:p text:style-name="Cm">cm</text:p><text:p text:style-name="Inch">in</text:p><text:p text:style-name="Mm">mm</text:p>
+        <text:p text:style-name="Short">shorthand</text:p><text:p text:style-name="ShortTop">top wins</text:p>
+        <text:p text:style-name="ShortBottom">bottom wins</text:p><text:p text:style-name="ShortChild">child</text:p>
+        <text:p text:style-name="ShortPct">percent</text:p>
+        </office:text></office:body></office:document-content>"#
+    );
+    let flow = parse(&package(&content, Some(&styles))).unwrap();
+    let got: Vec<_> = paras(&flow).iter().map(|p| (p.spacing.before, p.spacing.after)).collect();
+    let cm = |v: f32| v * 72.0 / 2.54;
+    let want = [
+        (Some(cm(0.423)), Some(cm(0.212))),
+        (Some(18.0), Some(9.0)),
+        // Parentless, so what it leaves unset is ODF's default (no default style here), not Standard's.
+        (Some(5.0 * 72.0 / 25.4), Some(0.0)),
+        (Some(12.0), Some(12.0)),
+        (Some(3.0), Some(12.0)),
+        (Some(36.0), Some(cm(1.0))),
+        (Some(0.0), Some(0.0)),
+        // A percentage (in ODF, of the parent style's margin) isn't read, as for fo:margin-top:
+        // the parent's values stay.
+        (Some(18.0), Some(9.0)),
+    ];
+    assert_eq!(got.len(), want.len());
+    let close = |a: Option<f32>, b: Option<f32>| match (a, b) {
+        (Some(a), Some(b)) => (a - b).abs() < 1e-3,
+        (a, b) => a == b,
+    };
+    for (i, (g, w)) in got.iter().zip(want).enumerate() {
+        assert!(close(g.0, w.0) && close(g.1, w.1), "paragraph {i}: got {g:?}, want {w:?}");
+    }
+}
+
+#[test]
+fn own_odt_export_keeps_its_paragraph_spacing_on_reopen() {
+    // The writer declares 8pt after in its default style; reading the file back must keep it,
+    // not fall to ODF's zero.
+    let doc = wordcraft_doc::Document::new();
+    let bytes = crate::odt::export(&doc).unwrap();
+    let again = import(&bytes).unwrap();
+    assert_eq!(again.styles.default_para.space_after, Some(8.0));
+}
+
+#[test]
+fn automatic_style_on_a_parentless_no_spacing_style_keeps_its_zero_spacing() {
+    // A common LibreOffice layout (seen in a real-world document: 9 pages in LibreOffice, 14 before this fix): Standard sets 0.139in
+    // after and 115% lines, but most paragraphs use automatic styles that only change the font and
+    // whose parent is "No Spacing", a common style with no parent of its own that sets 0 / 0 /
+    // 100%. Those paragraphs must take No Spacing's values, not Standard's document defaults.
+    use wordcraft_doc::props::LineSpacing;
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles>
+        <style:style style:name="Standard" style:family="paragraph" style:class="text"><style:paragraph-properties fo:margin-top="0in" fo:margin-bottom="0.139in" fo:line-height="115%"/></style:style>
+        <style:style style:name="No_20_Spacing" style:display-name="No Spacing" style:family="paragraph"><style:paragraph-properties fo:margin-top="0in" fo:margin-bottom="0in" fo:line-height="100%"/></style:style>
+        </office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:automatic-styles>
+        <style:style style:name="P1" style:family="paragraph" style:parent-style-name="No_20_Spacing"><style:text-properties fo:font-size="12pt" fo:font-weight="bold"/></style:style>
+        <style:style style:name="P2" style:family="paragraph" style:parent-style-name="No_20_Spacing"><style:text-properties fo:font-size="12pt"/></style:style>
+        </office:automatic-styles><office:body><office:text>
+        <text:p text:style-name="P1">Heading line</text:p><text:p text:style-name="P2">Body line</text:p>
+        <text:p text:style-name="No_20_Spacing">Plain no spacing</text:p><text:p>Default</text:p>
+        </office:text></office:body></office:document-content>"#
+    );
+    let flow = parse(&package(&content, Some(&styles))).unwrap();
+    let got: Vec<_> = paras(&flow).iter().map(|p| (p.spacing.before, p.spacing.after, p.spacing.line)).collect();
+    let zero = (Some(0.0), Some(0.0), Some(LineSpacing::Multiple(1.0)));
+    assert_eq!(got, vec![zero, zero, zero, (None, None, None)]);
+    // The paragraph with no style falls to Standard's spacing as the document default.
+    let doc = import(&package(&content, Some(&styles))).unwrap();
+    let d = &doc.styles.default_para;
+    assert!(d.space_after.is_some_and(|a| (a - 0.139 * 72.0).abs() < 1e-3), "{:?}", d.space_after);
+    assert!(matches!(d.line_spacing, Some(LineSpacing::Multiple(m)) if (m - 1.15).abs() < 1e-6));
+}
+
+#[test]
+fn a_parentless_style_inherits_the_default_styles_spacing_not_standards() {
+    // ODF 1.3 §16.2: a common style with no parent inherits from the default style. `Standard`
+    // is only the document default for paragraphs that use it (or no style at all), so what a
+    // parentless style leaves unset comes from the default style, then ODF's own defaults.
+    use wordcraft_doc::props::LineSpacing;
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles>
+        <style:default-style style:family="paragraph"><style:paragraph-properties fo:margin-bottom="0.05in"/></style:default-style>
+        <style:style style:name="Standard" style:family="paragraph" style:class="text"><style:paragraph-properties fo:margin-top="0.1in" fo:margin-bottom="0.139in" fo:line-height="115%"/></style:style>
+        <style:style style:name="Plain" style:family="paragraph"><style:paragraph-properties fo:margin-top="6pt"/></style:style>
+        <style:style style:name="Body" style:family="paragraph" style:parent-style-name="Standard"/>
+        </office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:automatic-styles>
+        <style:style style:name="P1" style:family="paragraph" style:parent-style-name="Plain"><style:text-properties fo:font-size="12pt"/></style:style>
+        <style:style style:name="P2" style:family="paragraph"><style:text-properties fo:font-size="12pt"/></style:style>
+        </office:automatic-styles><office:body><office:text>
+        <text:p text:style-name="Plain">Plain</text:p><text:p text:style-name="P1">Plain, automatic</text:p>
+        <text:p text:style-name="Body">Body</text:p><text:p>Default</text:p><text:p text:style-name="P2">Automatic only</text:p>
+        </office:text></office:body></office:document-content>"#
+    );
+    let flow = parse(&package(&content, Some(&styles))).unwrap();
+    let got: Vec<_> = paras(&flow).iter().map(|p| (p.spacing.before, p.spacing.after, p.spacing.line)).collect();
+    let plain = (Some(6.0), Some(0.05 * 72.0), Some(LineSpacing::Multiple(1.0)));
+    let close = |a: Option<f32>, b: Option<f32>| match (a, b) {
+        (Some(x), Some(y)) => (x - y).abs() < 1e-3,
+        (x, y) => x == y,
+    };
+    for g in &got[..2] {
+        assert!(close(g.0, plain.0) && close(g.1, plain.1) && g.2 == plain.2, "{got:?}");
+    }
+    // Paragraphs on Standard (by inheritance, with no style, or with only a parentless automatic
+    // style, which LibreOffice puts on Standard) follow the document defaults.
+    assert_eq!(&got[2..], &[(None, None, None), (None, None, None), (None, None, None)]);
+}
+
+#[test]
+fn standards_own_parent_styles_give_the_document_defaults() {
+    // Should `Standard` have a parent style, what `Standard` leaves unset comes from that parent
+    // (ODF 1.3 §16.2) before the default style, and a style under `Standard` takes `Standard`'s
+    // values over the parent's.
+    use wordcraft_doc::props::LineSpacing;
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles>
+        <style:default-style style:family="paragraph"><style:paragraph-properties fo:margin-bottom="2pt" fo:line-height="200%"/></style:default-style>
+        <style:style style:name="Base" style:family="paragraph"><style:paragraph-properties fo:margin-top="3pt" fo:margin-bottom="12pt"/></style:style>
+        <style:style style:name="Standard" style:family="paragraph" style:class="text" style:parent-style-name="Base"><style:paragraph-properties fo:margin-top="6pt"/></style:style>
+        <style:style style:name="Body" style:family="paragraph" style:parent-style-name="Standard"/>
+        </office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text>
+        <text:p>Default</text:p><text:p text:style-name="Body">Body</text:p>
+        </office:text></office:body></office:document-content>"#
+    );
+    let flow = parse(&package(&content, Some(&styles))).unwrap();
+    let got: Vec<_> = paras(&flow).iter().map(|p| (p.spacing.before, p.spacing.after, p.spacing.line)).collect();
+    assert_eq!(got, vec![(None, None, None), (None, None, None)]);
+    let doc = import(&package(&content, Some(&styles))).unwrap();
+    let d = &doc.styles.default_para;
+    assert!(d.space_before.is_some_and(|v| (v - 6.0).abs() < 1e-3), "{:?}", d.space_before);
+    assert!(d.space_after.is_some_and(|v| (v - 12.0).abs() < 1e-3), "{:?}", d.space_after);
+    assert!(matches!(d.line_spacing, Some(LineSpacing::Multiple(m)) if (m - 2.0).abs() < 1e-6), "{:?}", d.line_spacing);
+}
