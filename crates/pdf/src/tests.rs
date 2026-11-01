@@ -2488,3 +2488,85 @@ fn baseline_is_the_most_shared_y() {
     assert_eq!(baseline(&[(1, 0.0, 9.0), (2, 3.0, 4.0)]), Some(4.0));
     assert_eq!(baseline(&[(1, 0.0, -0.0), (2, 3.0, 0.0)]), Some(0.0));
 }
+
+/// `form_fields` turns legacy form fields into AcroForm widgets with their names and values;
+/// `blank_fields` turns underscore blanks into text fields, transparent but for a date's.
+#[test]
+fn form_fields_are_fillable() {
+    use lopdf::Object;
+    use wordcraft_doc::Pos;
+    let field = |instr: &str, form: &str| InlineObject::Field {
+        instr: instr.into(),
+        result: String::new(),
+        locked: false,
+        dirty: false,
+        code: false,
+        form: form.into(),
+    };
+    let text = "Ref. No. ________ on the day __/__/20__ ab";
+    let mut d = Document::from_text(text);
+    let at = text.len() - 1;
+    d.insert_object(
+        &Pos::body(0, at),
+        field("FORMCHECKBOX", r#"<w:ffData><w:name w:val="Box"/><w:checkBox><w:sizeAuto/><w:checked/></w:checkBox></w:ffData>"#),
+        &Default::default(),
+    )
+    .unwrap();
+    d.insert_object(
+        &Pos::body(0, at),
+        field("FORMDROPDOWN", r#"<w:ffData><w:name w:val="List"/><w:ddList><w:result w:val="1"/><w:listEntry w:val="Alpha"/><w:listEntry w:val="Beta"/></w:ddList></w:ffData>"#),
+        &Default::default(),
+    )
+    .unwrap();
+    let fields = |opts: PdfOptions| -> Vec<(String, String, Option<Object>, bool)> {
+        let pdf = lopdf::Document::load_mem(&export(&d, &opts).unwrap()).unwrap();
+        let root = pdf.trailer.get(b"Root").and_then(Object::as_reference).unwrap();
+        let Ok(form) = pdf.get_dictionary(root).unwrap().get(b"AcroForm") else { return Vec::new() };
+        let form = form.as_dict().unwrap();
+        form.get(b"Fields")
+            .and_then(Object::as_array)
+            .unwrap()
+            .iter()
+            .map(|r| {
+                let w = pdf.get_dictionary(r.as_reference().unwrap()).unwrap();
+                let s = |k: &[u8]| match w.get(k) {
+                    Ok(Object::String(b, _)) => String::from_utf8_lossy(b).into_owned(),
+                    Ok(Object::Name(n)) => String::from_utf8_lossy(n).into_owned(),
+                    _ => String::new(),
+                };
+                (s(b"T"), s(b"FT"), w.get(b"V").ok().cloned(), w.has(b"MK"))
+            })
+            .collect()
+    };
+    assert!(fields(PdfOptions::default()).is_empty());
+    let got = fields(PdfOptions { form_fields: true, blank_fields: true, ..Default::default() });
+    let names: Vec<(&str, &str, bool)> = got.iter().map(|(t, ft, _, mk)| (t.as_str(), ft.as_str(), *mk)).collect();
+    // Form fields are opaque, blanks transparent; a date is a field per part.
+    assert_eq!(
+        names,
+        [
+            ("List", "Ch", true),
+            ("Box", "Btn", true),
+            ("Ref_No", "Tx", false),
+            ("day_day", "Tx", false),
+            ("day_month", "Tx", false),
+            ("day_year", "Tx", false)
+        ]
+    );
+    // A date's parts take digits only, the month 1-12.
+    let raw = export(&d, &PdfOptions { blank_fields: true, ..Default::default() }).unwrap();
+    let has = |needle: &[u8]| raw.windows(needle.len()).any(|w| w == needle);
+    assert!(has(b"/MaxLen 2") && has(b"Enter a number from 1 to 12.") && has(b"Enter a number from 1 to 31."));
+    // A page printed twice has its fields twice, under names of their own.
+    let twice = fields(PdfOptions { form_fields: true, pages: Some(vec![0, 0]), ..Default::default() });
+    let names: Vec<&str> = twice.iter().map(|(t, ..)| t.as_str()).collect();
+    assert_eq!(names, ["List", "List_2", "Box", "Box_2"]);
+    assert_eq!(got[0].2, Some(Object::string_literal("Beta")));
+    assert_eq!(got[1].2, Some(Object::Name(b"Yes".to_vec())));
+    // Each option alone. Print Markup with no comments to show leaves the page as laid out; another
+    // paper size scales it: no fields.
+    assert_eq!(fields(PdfOptions { form_fields: true, ..Default::default() }).len(), 2);
+    assert_eq!(fields(PdfOptions { blank_fields: true, ..Default::default() }).len(), 4);
+    assert_eq!(fields(PdfOptions { form_fields: true, include_markup: true, comments: true, ..Default::default() }).len(), 2);
+    assert!(fields(PdfOptions { form_fields: true, paper: Some((842.0, 1191.0)), ..Default::default() }).is_empty());
+}
