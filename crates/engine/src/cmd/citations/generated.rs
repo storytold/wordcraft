@@ -62,10 +62,29 @@ fn generated_list_with(s: &mut Session, instr: &str, title: &str, leader: Option
         seed.props.tabs = Some(vec![TabStop { pos: 0.0, align: TabAlign::Right, leader }]);
         s.doc.insert_block(StoryRef::Body, &Path::top(i.saturating_add(1)), Block::Para(seed))?;
     }
-    update_generated(s)
+    // Rebuilding a list above this one can change its number of entries and so this list's
+    // place: find it again afterwards as the same-numbered list title.
+    let ordinal = s.doc.body.iter().take(i).filter(|b| b.as_para().and_then(list_kind).is_some()).count();
+    update_generated(s)?;
+    let i = s.doc.body.iter().enumerate().filter(|(_, b)| b.as_para().and_then(list_kind).is_some()).nth(ordinal).map_or(i, |(k, _)| k);
+    // Like Word, the caret lands in a paragraph right after the list, ready to keep typing — not
+    // inside its own title or entries, where typing (or Enter) would corrupt them (the same fix
+    // as references.toc's insert_toc, for its sibling generated lists: bibliography, table of
+    // figures, table of authorities and, through insert_index's first-creation path, the index).
+    let mut after = i + 1;
+    while s.doc.body.get(after).and_then(|b| b.as_para()).is_some_and(|p| p.props.style.as_deref() == Some(ENTRY_STYLE)) {
+        after += 1;
+    }
+    // Another generated list's title right after it is no place to type either.
+    let is_para = s.doc.body.get(after).and_then(|b| b.as_para()).is_some_and(|p| list_kind(p).is_none());
+    if !is_para {
+        s.doc.insert_block(StoryRef::Body, &Path::top(after), Block::Para(Paragraph::new()))?;
+    }
+    s.sel = Selection::caret(Pos { story: StoryRef::Body, path: Path::top(after), off: 0 });
+    Ok(())
 }
 
-fn list_kind(p: &Paragraph) -> Option<String> {
+pub(super) fn list_kind(p: &Paragraph) -> Option<String> {
     p.objects.iter().find_map(|o| match o {
         InlineObject::Field { instr, .. } => {
             let t = instr.trim_start();
