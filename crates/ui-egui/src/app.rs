@@ -102,6 +102,7 @@ impl WordApp {
             mac_titlebar: chrome::MacTitleBar::default(),
             updates_rt: updates_ui::Runtime::default(),
             control_rx: None,
+            control_changes_preferences: false,
             shots: crate::control::Shots::default(),
             capture_epoch: 0,
             surface_geometry: None,
@@ -182,6 +183,14 @@ impl WordApp {
 
     pub fn with_control(mut self, rx: std::sync::mpsc::Receiver<ControlRequest>) -> Self {
         self.control_rx = Some(rx);
+        self
+    }
+
+    /// Let control-channel requests change the user's saved preferences: the user name,
+    /// AutoCorrect, keyboard shortcuts, ribbon and options (`--allow-preference-changes`). Without
+    /// it an agent can't leave them changed for later documents (#3622).
+    pub fn allow_preference_changes(mut self, allow: bool) -> Self {
+        self.control_changes_preferences = allow;
         self
     }
 

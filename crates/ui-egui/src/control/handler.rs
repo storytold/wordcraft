@@ -171,8 +171,19 @@ fn handle_in(app: &mut WordApp, doc: u64, method: &str, p: &Value) -> Outcome {
 
 /// Dispatches one JSON-lines control request: commands and inspection, parity, synthetic click,
 /// drag, key, wheel and text input, screenshots and renders, resize, focus and quit, and unknown
-/// ids as commands. It refuses closing unsaved work and document operations without a document.
+/// ids as commands. It refuses closing unsaved work and document operations without a document,
+/// and commands that would change the user's saved preferences unless the app allows it
+/// (`--allow-preference-changes`, #3622): an agent steered by a document it reads must not leave
+/// AutoCorrect entries, shortcuts or a user name behind for documents it never saw.
 pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
+    app.session.preferences_locked = !app.control_changes_preferences;
+    let outcome = dispatch(app, ctx, req);
+    // The user's own edits after the request change preferences as usual.
+    app.session.preferences_locked = false;
+    outcome
+}
+
+fn dispatch(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
     let p = &req.params;
     if DOC_METHODS.contains(&req.method.as_str()) {
         match addressed(app, p) {

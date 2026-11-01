@@ -193,6 +193,11 @@ pub struct Session {
     pub keymap: crate::KeyMap,
     /// Custom ribbon and Quick Access Toolbar (`tools.customizeRibbon`); the front end saves it too.
     pub ribbon: crate::RibbonLayout,
+    /// While set, a command may not change what the front end saves between runs: the user name
+    /// and initials, `prefs`, `keymap`, `ribbon` and Check Spelling as You Type. One that does is
+    /// refused and undone (#3622). The desktop app sets it for requests from its control channel
+    /// (agents and scripts), unless it was started with `--allow-preference-changes`.
+    pub preferences_locked: bool,
     /// The language new blank documents (and opened plain text) are written in, a BCP 47 tag;
     /// `None` is WordCraft's default, US English. The front end sets it from the interface
     /// language with [`Session::set_editing_language`] (a Polish interface writes Polish).

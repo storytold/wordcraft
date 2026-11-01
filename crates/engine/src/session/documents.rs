@@ -260,6 +260,7 @@ impl Session {
             system_region: _,
             keymap: _,
             ribbon: _,
+            preferences_locked: _,
             editing_lang: _,
             math_latex: _,
             math_normal_text: _,
