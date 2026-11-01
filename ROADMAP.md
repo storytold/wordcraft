@@ -140,7 +140,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
-- 2026-11-01: Keyboard: on European keyboards (Italian, German, French, Spanish, Nordic) the key beside the left Shift, which types < and >, runs Word's font size shortcuts there: Ctrl+< shrinks the font, Ctrl+Shift+< (>) grows it. Before, that key had no name in the keymap and the font size had no working shortcut on those keyboards.
+- 2026-11-01: Keyboard: on European keyboards (Italian, German, French, Spanish, Nordic) the key beside the left Shift, which types < and >, runs Word's font size shortcuts there: Ctrl+< shrinks the font, Ctrl+Shift+< (>) grows it (⌘< and ⌘⇧< on macOS). Before, that key had no name in the keymap and the font size had no working shortcut on those keyboards.
 
 - 2026-10-31: DOCX: a paragraph naming a style the file doesn't define is formatted as Normal, as in Word, not with the document defaults alone, so a Pandoc footer naming an undefined `Footer` style is as tall as Word's and no longer pushes the last paragraph to the next page (#5077). Readiness unchanged.
 - 2026-10-31: A table of contents writes its page numbers as `PAGEREF` fields to the headings' bookmarks, as Word does, so updating the fields in Word moves the numbers with the headings; they were plain text (#5097).
