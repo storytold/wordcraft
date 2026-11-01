@@ -26,6 +26,58 @@ pub(crate) fn renamed_to(file: &str, family: &str) -> Vec<u8> {
     data
 }
 
+/// A bundled Source Sans 3 file made a claimant of [`FAMILY`], as TH SarabunIT๙ is of TH
+/// SarabunPSK: its typographic family (name ID 16) is [`FAMILY`] and its own family name (name
+/// ID 1, also its full and PostScript names) is `legacy`. The `name` table is rewritten at the end of the file.
+fn claimant_of_family(file: &str, legacy: &str) -> Vec<u8> {
+    let mut data = renamed(file);
+    let u16_at = |d: &[u8], at: usize| u16::from_be_bytes([d[at], d[at + 1]]);
+    let u32_at = |d: &[u8], at: usize| u32::from_be_bytes(d[at..at + 4].try_into().unwrap());
+    let tables = u16_at(&data, 4) as usize;
+    let dir = (0..tables).map(|r| 12 + r * 16).find(|&at| &data[at..at + 4] == b"name").expect("a name table");
+    let name = u32_at(&data, dir + 8) as usize;
+    let (count, strings) = (u16_at(&data, name + 2) as usize, name + u16_at(&data, name + 4) as usize);
+    let utf16 = |s: &str| s.encode_utf16().flat_map(u16::to_be_bytes).collect::<Vec<u8>>();
+    // (platform, encoding, language, name ID, string bytes), without typographic names.
+    let mut records: Vec<(u16, u16, u16, u16, Vec<u8>)> = (0..count)
+        .map(|i| {
+            let at = name + 6 + i * 12;
+            let field = |k: usize| u16_at(&data, at + 2 * k);
+            let (len, off) = (field(4) as usize, field(5) as usize);
+            (field(0), field(1), field(2), field(3), data[strings + off..strings + off + len].to_vec())
+        })
+        .filter(|r| r.3 != 16 && r.3 != 17)
+        .collect();
+    // Its own names throughout, as TH SarabunIT๙'s full name is "TH SarabunIT๙": only the
+    // typographic family is FAMILY.
+    for r in records.iter_mut().filter(|r| matches!(r.3, 1 | 4 | 6)) {
+        let name = if r.3 == 6 { legacy.replace(' ', "") } else { legacy.to_string() };
+        r.4 = if r.0 == 1 { name.into_bytes() } else { utf16(&name) };
+    }
+    records.push((3, 1, 0x409, 16, utf16(FAMILY)));
+    records.sort_by_key(|r| (r.0, r.1, r.2, r.3));
+    let mut table = Vec::new();
+    let mut store = Vec::new();
+    table.extend_from_slice(&0u16.to_be_bytes());
+    table.extend_from_slice(&(records.len() as u16).to_be_bytes());
+    table.extend_from_slice(&((6 + 12 * records.len()) as u16).to_be_bytes());
+    for (platform, encoding, language, id, bytes) in &records {
+        for v in [*platform, *encoding, *language, *id, bytes.len() as u16, store.len() as u16] {
+            table.extend_from_slice(&v.to_be_bytes());
+        }
+        store.extend_from_slice(bytes);
+    }
+    table.extend_from_slice(&store);
+    while !data.len().is_multiple_of(4) {
+        data.push(0);
+    }
+    let at = data.len() as u32;
+    data.extend_from_slice(&table);
+    data[dir + 8..dir + 12].copy_from_slice(&at.to_be_bytes());
+    data[dir + 12..dir + 16].copy_from_slice(&(table.len() as u32).to_be_bytes());
+    data
+}
+
 /// The fonts in `faces` as one collection (TTC) file.
 pub(crate) fn collection(faces: &[Vec<u8>]) -> Vec<u8> {
     let mut out = b"ttcf".to_vec();
@@ -88,6 +140,196 @@ fn every_lookup_by_name_finds_installed_fonts_in_a_fresh_database() {
     let db = db();
     assert!(!db.has_family("No Such Font"));
     assert_eq!(db.face("No Such Font", "Regular").family, FALLBACK_FAMILY);
+}
+
+#[test]
+fn an_installed_family_is_not_hidden_by_a_loaded_face_claiming_its_name() {
+    // A user font whose typographic family (name ID 16) is the installed family's but whose own
+    // name (name ID 1) is another's, as TH SarabunIT๙ is TH SarabunPSK's: loaded first, it
+    // doesn't keep the installed family's own faces from loading and being chosen.
+    let dir = font_dir("claimant");
+    let db = FontDb::with_font_dirs(vec![dir]);
+    let claimant =
+        Arc::new(make_face(FontBytes::Static(BUNDLED[0]), 0, FAMILY.into(), "Regular".into(), "Sysfont Other".into(), Vec::new()).unwrap());
+    db.faces.write().unwrap().push(claimant.clone());
+    let f = db.face(FAMILY, "Regular");
+    assert_ne!(f.id(), claimant.id());
+    assert_eq!((f.family.as_str(), f.legacy_family.as_str()), (FAMILY, FAMILY));
+    assert_eq!(db.face(FAMILY, "Bold").style, "Bold");
+    // The claimant is still found by its own name.
+    assert_eq!(db.face("Sysfont Other", "Regular").id(), claimant.id());
+}
+
+#[test]
+fn the_preview_never_shows_a_face_claiming_the_family() {
+    // The font list preview shows one of the family's own installed faces, never a face claiming
+    // the family's name, which `face` doesn't draw the family in either.
+    use crate::fontdb::names::CatalogEntry;
+    let db = FontDb::with_font_dirs(vec![]);
+    db.load_system_fonts();
+    let entry = |style: &str, legacy: &str, path: &str| CatalogEntry {
+        family: FAMILY.into(),
+        style: style.into(),
+        legacy: legacy.into(),
+        full_name: None,
+        postscript: None,
+        local: Vec::new(),
+        east_asian: false,
+        path: path.into(),
+    };
+    let paths = |db: &FontDb| db.unshared_picks(FAMILY).into_iter().map(|p| p.0).collect::<Vec<PathBuf>>();
+    db.catalog.write().unwrap().extend([
+        entry("Regular", "Sysfont Other", "claimant.ttf"),
+        entry("Bold", FAMILY, "own-bold.ttf"),
+        entry("Regular", FAMILY, "own.ttf"),
+    ]);
+    assert_eq!(paths(&db), [PathBuf::from("own.ttf")]);
+    // A family with no face of its own: nothing to preview.
+    db.catalog.write().unwrap().retain(|c| c.legacy != FAMILY);
+    assert!(paths(&db).is_empty());
+    assert!(db.preview_face(FAMILY).is_none());
+}
+
+#[test]
+fn with_only_a_face_claiming_it_installed_the_family_is_missing() {
+    // Real files: the family's own faces and a claimant (typographic family FAMILY, own name
+    // "Sysfont Othr3") are installed, as TH SarabunPSK and TH SarabunIT๙ are. Measured in Word
+    // for Windows: a document naming the typographic family of a font installed alone gets a
+    // substitute, as for any missing font; its own name finds it.
+    let dir = font_dir("claimant-alone");
+    std::fs::write(dir.join("Claimant.ttf"), claimant_of_family("SourceSans3-Regular.ttf", "Sysfont Othr3")).unwrap();
+    assert_eq!(names(&dir.join("Claimant.ttf")), [(FAMILY.to_string(), "Regular".to_string(), "Sysfont Othr3".to_string())]);
+    let db = FontDb::with_font_dirs(vec![dir.clone()]);
+    assert_eq!(db.load_system_fonts(), 3);
+    // The family's own files installed: they are used, listed and previewed.
+    assert_eq!(db.preview_face(FAMILY).unwrap().legacy_family, FAMILY);
+    assert!(has(&db.families(), FAMILY) && has(&db.families(), "Sysfont Othr3"));
+    assert_eq!(db.face(FAMILY, "Regular").legacy_family, FAMILY);
+    // Only the claimant installed: the family is missing, and the claimant is found by its name.
+    for p in [dir.join("Sysfont-Regular.ttf"), dir.join("Sub/Sysfont-Bold.TTF")] {
+        std::fs::remove_file(p).unwrap();
+    }
+    let db = FontDb::with_font_dirs(vec![dir]);
+    assert_eq!(db.load_system_fonts(), 1);
+    assert!(!db.has_family(FAMILY), "the family shows as missing");
+    assert!(!has(&db.families(), FAMILY) && has(&db.families(), "Sysfont Othr3"), "{:?}", db.families());
+    assert!(db.styles(FAMILY).is_empty());
+    assert!(db.preview_face(FAMILY).is_none());
+    assert_eq!(db.face(FAMILY, "Regular").family, FALLBACK_FAMILY);
+    assert_eq!(db.face("Sysfont Othr3", "Regular").legacy_family, "Sysfont Othr3");
+    // The claimant, loaded by its own name first, still isn't the family.
+    assert_eq!(db.face(FAMILY, "Regular").family, FALLBACK_FAMILY);
+}
+
+#[test]
+fn a_family_tried_is_told_apart_from_one_differing_only_in_non_ascii_case() {
+    // The catalog compares names by ASCII case only, so "Семья" and "семья" are two families:
+    // trying to load one's installed files doesn't count as trying the other's.
+    let db = FontDb::with_font_dirs(vec![]);
+    db.load_system_fonts();
+    db.load_cataloged("Семья");
+    db.load_cataloged("семья");
+    db.load_cataloged("СЕМЬЯ");
+    assert_eq!(db.tried.lock().unwrap().1.len(), 3);
+    db.load_cataloged("Sysfont SANS3");
+    db.load_cataloged("sysfont sans3");
+    assert_eq!(db.tried.lock().unwrap().1.len(), 4, "ASCII case is one family");
+}
+
+#[test]
+fn an_unreadable_installed_family_is_tried_once_per_scan() {
+    // The installed family's files can't be read when a lookup asks for it: the family is
+    // missing, even with a face claiming its name loaded, and later lookups don't read the files
+    // again until the font folders are scanned again.
+    let dir = font_dir("unreadable");
+    let db = FontDb::with_font_dirs(vec![dir.clone()]);
+    assert_eq!(db.load_system_fonts(), 2);
+    let (regular, bold) = (dir.join("Sysfont-Regular.ttf"), dir.join("Sub/Sysfont-Bold.TTF"));
+    let away = |p: &Path| p.with_extension("away");
+    for p in [&regular, &bold] {
+        std::fs::rename(p, away(p)).unwrap();
+    }
+    let claimant =
+        Arc::new(make_face(FontBytes::Static(BUNDLED[0]), 0, FAMILY.into(), "Regular".into(), "Sysfont Other".into(), Vec::new()).unwrap());
+    db.faces.write().unwrap().push(claimant.clone());
+    assert_eq!(db.face(FAMILY, "Regular").family, FALLBACK_FAMILY);
+    for p in [&regular, &bold] {
+        std::fs::rename(away(p), p).unwrap();
+    }
+    assert_eq!(db.face(FAMILY, "Regular").family, FALLBACK_FAMILY, "not read again in the same scan");
+    assert_eq!(db.load_system_fonts(), 2);
+    assert_eq!(db.face(FAMILY, "Regular").legacy_family, FAMILY, "tried again after a rescan");
+}
+#[test]
+fn a_claimant_hides_the_installed_family_neither_by_localized_name_nor_in_the_preview() {
+    let dir = font_dir("claimant-local");
+    let claimant = || {
+        let mut f = make_face(FontBytes::Static(BUNDLED[0]), 0, FAMILY.into(), "Regular".into(), "Sysfont Other".into(), Vec::new()).unwrap();
+        f.local_names = vec![LocalName { lang: "th".into(), name: "ทดสอบ".into(), english: FAMILY.into() }];
+        Arc::new(f)
+    };
+    // The family's localized name finds the installed family's own face, not the claimant.
+    let db = FontDb::with_font_dirs(vec![dir.clone()]);
+    let c = claimant();
+    db.faces.write().unwrap().push(c.clone());
+    let f = db.face("ทดสอบ", "Regular");
+    assert_ne!(f.id(), c.id());
+    assert_eq!(f.legacy_family, FAMILY);
+    assert!(db.has_family("ทดสอบ"), "the family it names is installed");
+    // The font list previews the face `face` would choose, without loading the family.
+    let db = FontDb::with_font_dirs(vec![dir]);
+    let c = claimant();
+    db.faces.write().unwrap().push(c.clone());
+    let p = db.preview_face(FAMILY).unwrap();
+    assert_ne!(p.id(), c.id());
+    assert_eq!(p.legacy_family, FAMILY);
+    assert!(db.read_faces().iter().all(|f| f.id() == c.id() || f.family != FAMILY), "the preview loads nothing");
+}
+
+#[test]
+fn a_localized_name_only_a_claimant_has_is_a_missing_family() {
+    // The claimant's localized name stands for FAMILY, which no installed face owns: the name is
+    // missing as FAMILY is, and gets the fallback.
+    let mut f = make_face(FontBytes::Static(BUNDLED[0]), 0, FAMILY.into(), "Regular".into(), "Sysfont Other".into(), Vec::new()).unwrap();
+    f.local_names = vec![LocalName { lang: "th".into(), name: "ทดสอบ".into(), english: FAMILY.into() }];
+    let c = Arc::new(f);
+    let db = FontDb::with_font_dirs(vec![]);
+    db.set_system_fallback(false);
+    db.faces.write().unwrap().push(c.clone());
+    assert!(!db.has_family(FAMILY));
+    assert!(!db.has_family("ทดสอบ"), "has_family agrees with face");
+    assert_eq!(db.face("ทดสอบ", "Regular").family, FALLBACK_FAMILY);
+    assert!(db.has_family("Sysfont Other"), "the claimant by its own name");
+}
+
+#[test]
+fn the_asian_font_list_names_a_claimant_by_its_own_name() {
+    // An East Asian face claiming FAMILY lists as itself, as in the main font list, since
+    // `face` and `has_family` treat FAMILY as missing; the family's own faces list as FAMILY.
+    use crate::fontdb::names::CatalogEntry;
+    let db = FontDb::with_font_dirs(vec![]);
+    db.load_system_fonts();
+    let entry = |family: &str, legacy: &str| CatalogEntry {
+        family: family.into(),
+        style: "Regular".into(),
+        legacy: legacy.into(),
+        full_name: None,
+        postscript: None,
+        local: Vec::new(),
+        east_asian: true,
+        path: "cjk.ttf".into(),
+    };
+    db.catalog.write().unwrap().extend([
+        entry(FAMILY, "Sysfont Other"),
+        entry("Sysfont CJK", "Sysfont CJK"),
+        entry("Sysfont CJK", "Sysfont CJK Light"),
+    ]);
+    let list = db.east_asian_families();
+    assert!(!has(&list, FAMILY), "{list:?}");
+    for name in ["Sysfont Other", "Sysfont CJK", "Sysfont CJK Light"] {
+        assert!(has(&list, name), "{name}: {list:?}");
+    }
+    assert_eq!(list.iter().filter(|n| n.eq_ignore_ascii_case("Sysfont CJK")).count(), 1, "{list:?}");
 }
 
 #[test]

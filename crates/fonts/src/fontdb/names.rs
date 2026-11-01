@@ -304,8 +304,8 @@ pub(super) fn font_faces(f: &skrifa::FontRef<'_>, index: u32) -> Vec<Found> {
 pub(super) const MAX_FILE_FACES: usize = 256;
 
 /// Parse the faces in `data` (a font file or collection), at most `limit` of them; a variable
-/// font yields one face per named instance. A face with the family and style of an earlier one
-/// is left out (a collection can list one font many times, #3716).
+/// font yields one face per named instance. A face with the family, style and legacy family name
+/// of an earlier one is left out (a collection can list one font many times, #3716).
 pub(super) fn enumerate_faces(data: &[u8], limit: usize) -> Vec<Found> {
     let count = match FileRef::new(data) {
         Ok(FileRef::Font(_)) => 1,
@@ -316,7 +316,7 @@ pub(super) fn enumerate_faces(data: &[u8], limit: usize) -> Vec<Found> {
     (0..count)
         .filter_map(|i| skrifa::FontRef::from_index(data, i).ok().map(|f| font_faces(&f, i)))
         .flatten()
-        .filter(|f| seen.insert((f.family.to_ascii_lowercase(), f.style.to_ascii_lowercase())))
+        .filter(|f| seen.insert((f.family.to_ascii_lowercase(), f.style.to_ascii_lowercase(), f.legacy.to_ascii_lowercase())))
         .take(limit)
         .collect()
 }

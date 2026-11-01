@@ -6,6 +6,27 @@ use super::names::{CatalogEntry, MAX_FILE_FACES, enumerate_faces};
 use super::names::{base_style, last_resort_face, make_face, norm, style_italic, style_weight};
 use super::{Arc, BezPath, FontDb, MetadataProvider};
 
+/// Drops from `cands` (the faces whose typographic family is `family`) those whose own legacy
+/// family name (name ID 1) is another family's. Word finds a font by that name: TH SarabunIT๙
+/// gives "TH SarabunPSK" as its typographic family (name ID 16), but a document asking for TH
+/// SarabunPSK gets TH SarabunPSK's file, not IT๙'s, whose digits are drawn Thai; with only IT๙
+/// installed, TH SarabunPSK is a missing font (measured in Word for Windows). A family's styles
+/// named after it ("Roboto Light", "Arial Nova Cond") stay.
+fn keep_own_faces<T>(cands: &mut Vec<&T>, family: &str, legacy: impl Fn(&T) -> &str) {
+    cands.retain(|c| owns_name(legacy(c), family));
+}
+
+/// Is a face with legacy family name `legacy` one of `family`'s own: `family` itself, or a style
+/// named after it ("Roboto Light")? See `keep_own_faces`.
+pub(super) fn owns_name(legacy: &str, family: &str) -> bool {
+    legacy.get(..family.len()).is_some_and(|p| p.eq_ignore_ascii_case(family)) && legacy[family.len()..].chars().next().is_none_or(|c| c == ' ')
+}
+
+/// Is `f` a face claiming `family` only by its typographic name (see `keep_own_faces`)?
+fn is_claimant(f: &FontFace, family: &str) -> bool {
+    f.family.eq_ignore_ascii_case(family) && !owns_name(&f.legacy_family, family)
+}
+
 impl FontDb {
     /// Resolve a family + style to a face, falling back to the closest style of the family, then to
     /// Source Sans 3 Regular. `family` is a typographic family ("Roboto") or a face's legacy family
@@ -64,29 +85,47 @@ impl FontDb {
     }
 
     /// The installed `family`'s face closest to Regular, read from its file into a face the
-    /// database doesn't keep (see [`FontDb::preview_face`]).
+    /// database doesn't keep (see [`FontDb::preview_face`]): one of the family's own faces, never
+    /// one claiming its name (see `keep_own_faces`), as [`FontDb::face`] chooses.
     #[cfg(not(target_arch = "wasm32"))]
     fn unshared_face(&self, family: &str) -> Option<Arc<FontFace>> {
-        let (path, fam, style) = {
-            let cat = self.read_catalog();
-            let mut cands: Vec<&CatalogEntry> = cat.iter().filter(|c| c.family.eq_ignore_ascii_case(family)).collect();
-            if cands.is_empty() {
-                cands = cat.iter().filter(|c| c.legacy.eq_ignore_ascii_case(family)).collect();
+        self.unshared_picks(family).into_iter().find_map(|(path, fam, style, legacy)| Self::read_unshared(&path, &fam, &style, &legacy))
+    }
+
+    /// The cataloged faces [`FontDb::unshared_face`] tries for `family`, as (path, family, style,
+    /// legacy family): the one closest to Regular among the family's own faces, or among the faces
+    /// of that legacy family name. A face claiming the family only by its typographic name (see
+    /// `keep_own_faces`) is never one of them.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn unshared_picks(&self, family: &str) -> Vec<(std::path::PathBuf, String, String, String)> {
+        let cat = self.read_catalog();
+        let mut own: Vec<&CatalogEntry> = cat.iter().filter(|c| c.family.eq_ignore_ascii_case(family)).collect();
+        keep_own_faces(&mut own, family, |c| c.legacy.as_str());
+        let groups: Vec<Vec<&CatalogEntry>> =
+            if own.is_empty() { vec![cat.iter().filter(|c| c.legacy.eq_ignore_ascii_case(family)).collect()] } else { vec![own] };
+        let score = |c: &CatalogEntry| {
+            if matches!(norm(&c.style).as_str(), "regular" | "normal" | "book" | "roman") {
+                -1.0
+            } else {
+                (style_weight(&c.style) - 400.0).abs() + if style_italic(&c.style) { 1000.0 } else { 0.0 }
             }
-            let score = |c: &CatalogEntry| {
-                if matches!(norm(&c.style).as_str(), "regular" | "normal" | "book" | "roman") {
-                    -1.0
-                } else {
-                    (style_weight(&c.style) - 400.0).abs() + if style_italic(&c.style) { 1000.0 } else { 0.0 }
-                }
-            };
-            let best = cands.into_iter().min_by(|a, b| score(a).total_cmp(&score(b)))?;
-            (best.path.clone(), best.family.clone(), best.style.clone())
         };
-        let data = Arc::new(read_fallback_file(&path)?);
+        groups
+            .into_iter()
+            .filter_map(|g| g.into_iter().min_by(|a, b| score(a).total_cmp(&score(b))))
+            .map(|c| (c.path.clone(), c.family.clone(), c.style.clone(), c.legacy.clone()))
+            .collect()
+    }
+
+    /// The face of the font file at `path` with that family, style and legacy family name, read
+    /// into a face the database doesn't keep. `None` when the file can't be read or lacks it.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn read_unshared(path: &std::path::Path, fam: &str, style: &str, legacy: &str) -> Option<Arc<FontFace>> {
+        let data = Arc::new(read_fallback_file(path)?);
+        // The face chosen, also in a collection holding another face of that family and style.
         let found = enumerate_faces(&data, MAX_FILE_FACES)
             .into_iter()
-            .find(|f| f.family.eq_ignore_ascii_case(&fam) && f.style.eq_ignore_ascii_case(&style))?;
+            .find(|f| f.family.eq_ignore_ascii_case(fam) && f.style.eq_ignore_ascii_case(style) && f.legacy.eq_ignore_ascii_case(legacy))?;
         let mut face = make_face(FontBytes::Owned(data), found.index, found.family, found.style, found.legacy, found.coords)?;
         face.local_names = found.local;
         Some(Arc::new(face))
@@ -110,21 +149,30 @@ impl FontDb {
     }
 
     /// Is `family` available (loaded, or installed on the system)? English and localized family
-    /// names and exact full or PostScript face names count.
+    /// names and exact full or PostScript face names count; a face claiming the family only by its
+    /// typographic name (see `keep_own_faces`) doesn't, so the family shows as missing, as in Word.
+    /// A localized name counts when the English family it stands for does, as [`FontDb::face`]
+    /// resolves it.
     pub fn has_family(&self, family: &str) -> bool {
-        if self.is_loaded(family) {
+        self.has_own_family(family) || self.english_family(family).is_some_and(|en| self.has_own_family(&en))
+    }
+
+    /// [`FontDb::has_family`] without localized names: a loaded or installed face has `family`
+    /// as its own typographic family, its legacy family name, or its full or PostScript name.
+    fn has_own_family(&self, family: &str) -> bool {
+        if self.read_faces().iter().any(|f| f.named(family) && !is_claimant(f, family)) {
             return true;
         }
         #[cfg(not(target_arch = "wasm32"))]
         if self.read_catalog().iter().any(|c| {
-            c.family.eq_ignore_ascii_case(family)
+            (c.family.eq_ignore_ascii_case(family) && owns_name(&c.legacy, family))
                 || c.legacy.eq_ignore_ascii_case(family)
                 || c.full_name.as_ref().is_some_and(|n| n.eq_ignore_ascii_case(family))
                 || c.postscript.as_ref().is_some_and(|n| n.eq_ignore_ascii_case(family))
         }) {
             return true;
         }
-        self.english_family(family).is_some()
+        false
     }
 
     /// Is a face named `family` (typographic, legacy, full or PostScript) loaded?
@@ -174,11 +222,17 @@ impl FontDb {
         Some(f)
     }
 
+    /// The loaded face for `family` and `style`, without loading anything: among the faces of
+    /// that typographic family (its own faces only, see `keep_own_faces`),
+    /// else those of that legacy family name, the style asked for or the nearest weight and slant;
+    /// else the face with that full or PostScript name. A style with axis settings (`{…}`) is a
+    /// variable-font instance, made on first use.
     pub(super) fn find(&self, family: &str, style: &str) -> Option<Arc<FontFace>> {
         if style.contains('{') {
             {
                 let faces = self.read_faces();
-                if let Some(f) = faces.iter().find(|f| f.named(family) && f.style == style) {
+                // Never a claimant's instance (see `keep_own_faces`).
+                if let Some(f) = faces.iter().find(|f| f.named(family) && f.style == style && !is_claimant(f, family)) {
                     return Some(f.clone());
                 }
             }
@@ -186,6 +240,7 @@ impl FontDb {
         }
         let faces = self.read_faces();
         let mut cands: Vec<&Arc<FontFace>> = faces.iter().filter(|f| f.family.eq_ignore_ascii_case(family)).collect();
+        keep_own_faces(&mut cands, family, |f| f.legacy_family.as_str());
         if cands.is_empty() {
             // A legacy family name: choose among the faces it names (bold and italic as usual).
             cands = faces.iter().filter(|f| f.legacy_family.eq_ignore_ascii_case(family)).collect();

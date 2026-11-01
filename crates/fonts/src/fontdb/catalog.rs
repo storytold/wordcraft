@@ -1,30 +1,61 @@
 #[cfg(not(target_arch = "wasm32"))]
 use super::Ordering;
 use super::face::{FontBytes, FontFace};
+use super::lookup::owns_name;
 #[cfg(not(target_arch = "wasm32"))]
 use super::names::{CatalogEntry, file_face_names, style_italic, style_weight};
 use super::names::{LocalName, MAX_FAMILY_NAME, MAX_FILE_FACES, enumerate_faces, make_face, name_language_matches};
 use super::{Arc, FontDb, HashMap};
 
+/// Adds the faces of `new` that `faces` doesn't have yet, returning how many. A face is already
+/// there when one with its family, style and legacy family name (name ID 1) is: the same font
+/// in two folders loads once, but TH SarabunIT๙, whose typographic family (name ID 16) is "TH
+/// SarabunPSK", doesn't keep TH SarabunPSK's own file out of the family.
+pub(super) fn push_new_faces(faces: &mut Vec<Arc<FontFace>>, new: Vec<Arc<FontFace>>) -> usize {
+    // Indexed: a document's fonts may add hundreds of faces to thousands (#3716).
+    let key = |f: &FontFace| (f.family.to_ascii_lowercase(), f.style.to_ascii_lowercase(), f.legacy_family.to_ascii_lowercase());
+    let mut present: std::collections::HashSet<_> = faces.iter().map(|g| key(g)).collect();
+    let mut added = 0;
+    for f in new {
+        if present.insert(key(&f)) {
+            faces.push(f);
+            added += 1;
+        }
+    }
+    added
+}
+
 impl FontDb {
     /// Family names available (loaded plus cataloged system fonts), sorted and deduplicated. Like
     /// Word's font list, this holds each face's legacy family name too ("Roboto Light", "Inter
-    /// SemiBold"), which [`FontDb::face`] resolves to that face.
+    /// SemiBold"), which [`FontDb::face`] resolves to that face; a typographic family only when
+    /// the face is one of its own (TH SarabunIT๙ lists as itself, not as TH SarabunPSK).
     pub fn families(&self) -> Vec<String> {
-        let mut v: Vec<String> = self.read_faces().iter().flat_map(|f| [f.family.clone(), f.legacy_family.clone()]).collect();
+        let names = |family: &str, legacy: &str| {
+            let typographic = owns_name(legacy, family).then(|| family.to_string());
+            typographic.into_iter().chain(std::iter::once(legacy.to_string()))
+        };
+        let mut v: Vec<String> = self.read_faces().iter().flat_map(|f| names(&f.family, &f.legacy_family)).collect();
         #[cfg(not(target_arch = "wasm32"))]
-        v.extend(self.read_catalog().iter().flat_map(|c| [c.family.clone(), c.legacy.clone()]));
+        v.extend(self.read_catalog().iter().flat_map(|c| names(&c.family, &c.legacy)));
+        v.retain(|n| !n.is_empty());
         v.sort_by_key(|a| a.to_lowercase());
         v.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
         v
     }
 
     /// The installed Chinese, Japanese and Korean families (English names), for the Font dialog's
-    /// Asian text font list.
+    /// Asian text font list: as in [`FontDb::families`], each face's legacy family name, and its
+    /// typographic family only when the face is one of its own.
     pub fn east_asian_families(&self) -> Vec<String> {
-        let mut v: Vec<String> = self.read_faces().iter().filter(|f| f.is_east_asian()).map(|f| f.family.clone()).collect();
+        let names = |family: &str, legacy: &str| {
+            let typographic = owns_name(legacy, family).then(|| family.to_string());
+            typographic.into_iter().chain(std::iter::once(legacy.to_string()))
+        };
+        let mut v: Vec<String> = self.read_faces().iter().filter(|f| f.is_east_asian()).flat_map(|f| names(&f.family, &f.legacy_family)).collect();
         #[cfg(not(target_arch = "wasm32"))]
-        v.extend(self.read_catalog().iter().filter(|c| c.east_asian).map(|c| c.family.clone()));
+        v.extend(self.read_catalog().iter().filter(|c| c.east_asian).flat_map(|c| names(&c.family, &c.legacy)));
+        v.retain(|n| !n.is_empty());
         v.sort_by_key(|a| a.to_lowercase());
         v.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
         v
@@ -88,22 +119,36 @@ impl FontDb {
         }
     }
 
+    /// The styles of the faces named `family`, loaded or cataloged: by typographic family (the
+    /// family's own faces only, as [`FontDb::face`] chooses), else by legacy family name. Each
+    /// style once, Regular first, then by weight.
     fn styles_named(&self, family: &str) -> Vec<String> {
         let mut v: Vec<(bool, f32, String)> = Vec::new();
         for legacy in [false, true] {
             let named = |typographic: &str, legacy_name: &str| (if legacy { legacy_name } else { typographic }).eq_ignore_ascii_case(family);
-            v.extend(
-                self.read_faces()
-                    .iter()
-                    .filter(|f| named(&f.family, &f.legacy_family) && !f.style.contains('{'))
-                    .map(|f| (f.italic, f.weight, f.style.clone())),
-            );
+            // (italic, weight, style, legacy family name) of the loaded faces, then the cataloged.
+            let mut found: Vec<(bool, f32, String, String)> = self
+                .read_faces()
+                .iter()
+                .filter(|f| named(&f.family, &f.legacy_family) && !f.style.contains('{'))
+                .map(|f| (f.italic, f.weight, f.style.clone(), f.legacy_family.clone()))
+                .collect();
             #[cfg(not(target_arch = "wasm32"))]
             for c in self.read_catalog().iter() {
-                if named(&c.family, &c.legacy) && !v.iter().any(|(_, _, s)| s.eq_ignore_ascii_case(&c.style)) {
-                    v.push((style_italic(&c.style), style_weight(&c.style), c.style.clone()));
+                if named(&c.family, &c.legacy)
+                    && !found.iter().any(|(_, _, s, l)| s.eq_ignore_ascii_case(&c.style) && l.eq_ignore_ascii_case(&c.legacy))
+                {
+                    found.push((style_italic(&c.style), style_weight(&c.style), c.style.clone(), c.legacy.clone()));
                 }
             }
+            // The styles `face` chooses among: a face claiming the family by its typographic name
+            // only (TH SarabunIT๙ for TH SarabunPSK) offers none.
+            if !legacy {
+                found.retain(|t| owns_name(&t.3, family));
+            }
+            // Each style once, though two families' faces can share one.
+            let mut seen = std::collections::HashSet::new();
+            v.extend(found.into_iter().filter(|t| seen.insert(t.2.to_ascii_lowercase())).map(|(i, w, s, _)| (i, w, s)));
             if !v.is_empty() {
                 break;
             }
@@ -141,17 +186,7 @@ impl FontDb {
             }
         }
         let mut faces = self.faces.write().unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Indexed: a document's fonts may add hundreds of faces to thousands (#3716).
-        let key = |f: &FontFace| (f.family.to_ascii_lowercase(), f.style.to_ascii_lowercase());
-        let mut present: std::collections::HashSet<_> = faces.iter().map(|g| key(g)).collect();
-        let mut added = 0;
-        for f in new {
-            if present.insert(key(&f)) {
-                faces.push(f);
-                added += 1;
-            }
-        }
-        added
+        push_new_faces(&mut faces, new)
     }
 
     /// Catalog the installed fonts unless that has been done: the first caller scans the font
@@ -233,11 +268,33 @@ impl FontDb {
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn load_cataloged(&self, family: &str) -> bool {
         let _loading = self.loading.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Another lookup may have loaded it while this one waited.
-        if self.is_loaded(family) {
+        // Another lookup may have loaded it while this one waited. A face claiming the family
+        // only by its typographic name (see `keep_own_faces`) doesn't count: it isn't the family.
+        if self.find(family, "Regular").is_some() {
             return true;
         }
+        // The scan the paths come from, read first: a scan that ends after this counts as another,
+        // so its files are tried.
+        let generation = self.catalog_gen.load(Ordering::Acquire);
         let paths = self.family_paths(family);
+        // Once per family and scan: files that can't be read, or hold only faces claiming the
+        // family's name, aren't read again on every lookup. The set is held only to look and add.
+        {
+            let mut tried = self.tried.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if tried.0 < generation {
+                *tried = (generation, std::collections::HashSet::new());
+            }
+            // ASCII case only, as the catalog compares names: "Семья" and "семья" are two families.
+            // Paths from a scan older than the set's are tried without being recorded.
+            if tried.0 == generation && !tried.1.insert(family.to_ascii_lowercase()) {
+                return false;
+            }
+        }
+        self.load_paths(paths)
+    }
+    /// Load the font files at `paths` (see [`FontDb::add_fonts`]). Returns whether any face was added.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn load_paths(&self, paths: Vec<std::path::PathBuf>) -> bool {
         let files = paths.iter().filter_map(|p| std::fs::read(p).ok()).map(|b| (b, None)).collect();
         let added = self.add_fonts(files) > 0;
         // The fallback searches' index: these files are loaded fonts now.
