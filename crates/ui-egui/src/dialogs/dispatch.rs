@@ -41,6 +41,8 @@ pub(super) fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         Dialog::PasteSpecial { .. } => paste_special_dialog(app, ui, d),
         Dialog::About { .. } => about_dialog(ui, d),
         Dialog::DiscardRecovery { .. } => discard_recovery_dialog(app, ui, d),
+        Dialog::MissingRecent { .. } => missing_recent_dialog(app, ui, d),
+        Dialog::ClearRecent => clear_recent_dialog(app, ui),
         Dialog::SaveChanges { .. } => save_changes_dialog(app, ui, d),
         Dialog::RecipientList { fields, rows, message, filter } => recipient_list(app, ui, fields, rows, message, filter),
         Dialog::InsertMergeField { .. } => insert_merge_field_dialog(app, ui, d),
@@ -1128,6 +1130,34 @@ fn discard_recovery_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bo
         return result.is_ok();
     }
     false
+}
+
+fn missing_recent_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
+    let Dialog::MissingRecent { path } = d else {
+        return false;
+    };
+    let t = Tokens::get(ui.ctx());
+    let name = std::path::Path::new(path.as_str()).file_name().map_or_else(|| path.clone(), |n| n.to_string_lossy().to_string());
+    ui.label(egui::RichText::new(crate::i18n::fmt(tl!("Can't find {name}"), &[("name", &name)])).font(semibold(15.0)));
+    ui.label(egui::RichText::new(path.as_str()).small().color(t.text_dim));
+    ui.add_space(4.0);
+    ui.label(tl!("It isn't at this location any more. Remove it from the Recent list?"));
+    ui.label(tl!("If it's on a drive or network share that isn't connected, cancel to keep it in the list."));
+    let (remove, keep) = buttons(ui, tl!("Remove from list"));
+    if remove && let Err(e) = app.run("ui.recentRemove", json!({"path": path.as_str()})) {
+        app.status(e);
+    }
+    remove || keep
+}
+
+fn clear_recent_dialog(app: &mut WordApp, ui: &mut Ui) -> bool {
+    ui.label(egui::RichText::new(tl!("Clear the Recent list?")).font(semibold(15.0)));
+    ui.label(tl!("Every document is taken off the list. The files themselves stay where they are."));
+    let (clear, cancel) = buttons(ui, tl!("Clear"));
+    if clear && let Err(e) = app.run("ui.recentClear", json!({})) {
+        app.status(e);
+    }
+    clear || cancel
 }
 
 fn save_changes_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {

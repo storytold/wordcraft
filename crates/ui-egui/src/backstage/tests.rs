@@ -62,17 +62,205 @@ fn the_side_menu_edge_is_not_a_resize_handle() {
     }
 }
 
-/// #2938: opening a deleted file from Recent keeps File open and reports the error instead of
-/// closing it on a greyed-out window.
+/// #2938: opening a deleted file from Recent kept File open and reported the error instead of
+/// closing it on a greyed-out window. A file that isn't there any more now asks whether to
+/// take it off the list instead, before anything else (no Save Changes prompt: nothing is
+/// going to replace the document); one that is there but can't be opened still says why.
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
-fn opening_a_missing_recent_file_keeps_file_open_with_the_error() {
+fn opening_a_missing_recent_file_keeps_file_open_and_offers_to_remove_it() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    app.run("text.insert", json!({"text": "Unsaved work"})).unwrap();
+    app.ui.backstage = true;
+    let missing = std::env::temp_dir().join(format!("wordcraft-missing-{}.docx", std::process::id())).to_string_lossy().into_owned();
+    app.ui.recent = vec![missing.clone()];
+    super::open_recent(&mut app, &missing).unwrap();
+    assert!(
+        matches!(&app.dialog, Some(crate::dialogs::Dialog::MissingRecent { path }) if *path == missing),
+        "{:?}",
+        app.dialog.as_ref().map(|d| d.name())
+    );
+    assert!(app.ui.backstage, "File stays open");
+    assert_eq!(app.ui.recent, [missing.as_str()], "nothing leaves the list until the prompt is answered");
+    assert_eq!(app.session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Unsaved work");
+
+    // A folder is there but isn't a document: no prompt, and the error is kept for the list.
     let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
     app.ui.backstage = true;
-    let missing = std::env::temp_dir().join(format!("wordcraft-missing-{}.docx", std::process::id()));
-    let err = super::open_recent(&mut app, &missing.to_string_lossy()).unwrap_err();
+    let folder = std::env::temp_dir().to_string_lossy().into_owned();
+    let err = super::open_recent(&mut app, &folder).unwrap_err();
     assert!(!err.is_empty());
+    assert!(app.dialog.is_none(), "{:?}", app.dialog.as_ref().map(|d| d.name()));
     assert!(app.ui.backstage, "File stays open");
+}
+
+/// A Recent document that isn't there any more: clicking it asks whether to take it off the
+/// list. Cancel keeps it (its drive may come back); Remove from list takes it alone off; the
+/// document that is open stays open. A document that is there still opens.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn a_missing_recent_document_comes_off_the_list_when_asked() {
+    let dir = personal_dir("recent-missing");
+    let there = dir.join("Still here.docx");
+    write_template(&there, "Still here");
+    let there = there.to_string_lossy().into_owned();
+    let gone = dir.join("Gone.docx").to_string_lossy().into_owned();
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.ui.recent = vec![gone.clone(), there.clone()];
+    a.run("ui.backstage", json!({"value": true, "page": "open"})).unwrap();
+    let mut h = a11y_harness(a);
+    let document = h.state().session.document_id();
+    let prompt = |h: &egui_kittest::Harness<'static, WordApp>| h.state().dialog.as_ref().map(|d| d.name());
+
+    h.get_by_label("Gone.docx").click();
+    h.run_steps(4);
+    assert_eq!(prompt(&h), Some("missingRecent"));
+    assert!(h.query_by_label(&gone).is_some(), "the prompt shows where the document was");
+    h.get_by_label("Cancel").click();
+    h.run_steps(4);
+    assert_eq!(prompt(&h), None);
+    assert_eq!(h.state().ui.recent, [gone.as_str(), there.as_str()], "Cancel keeps it");
+
+    h.get_by_label("Gone.docx").click();
+    h.run_steps(4);
+    h.get_by_label("Remove from list").click();
+    h.run_steps(4);
+    assert_eq!(prompt(&h), None);
+    assert_eq!(h.state().ui.recent, [there.as_str()], "Remove from list takes it alone off");
+    assert!(h.query_by_label("Gone.docx").is_none());
+    assert!(h.state().ui.backstage && h.state().session.document_id() == document, "nothing was opened");
+
+    h.get_by_label("Still here.docx").click();
+    h.run_steps(4);
+    assert!(!h.state().ui.backstage, "a document that is there opens");
+    assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("Still here"));
+    drop(h);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// File › Open › Recent › Clear list… asks first: Cancel keeps the list, Clear empties it
+/// (the files themselves are left alone) and File stays open. With nothing left the button
+/// goes.
+#[test]
+fn clear_list_asks_then_empties_the_recent_list() {
+    let dir = std::env::temp_dir().join("wordcraft-recent-clear");
+    let paths = ["One.docx", "Two.docx"].map(|f| dir.join(f).to_string_lossy().into_owned());
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.ui.recent = paths.to_vec();
+    a.run("ui.backstage", json!({"value": true, "page": "open"})).unwrap();
+    let mut h = a11y_harness(a);
+    let prompt = |h: &egui_kittest::Harness<'static, WordApp>| h.state().dialog.as_ref().map(|d| d.name());
+    h.get_by_label("Clear list…").click();
+    h.run_steps(4);
+    assert_eq!(prompt(&h), Some("clearRecent"));
+    h.get_by_label("Cancel").click();
+    h.run_steps(4);
+    assert_eq!(prompt(&h), None);
+    assert_eq!(h.state().ui.recent, paths, "Cancel keeps the list");
+    // Escape answers the dialog alone: File stays open behind it.
+    h.get_by_label("Clear list…").click();
+    h.run_steps(4);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(4);
+    assert_eq!(prompt(&h), None);
+    assert!(h.state().ui.backstage, "Escape in the dialog leaves File open");
+    assert_eq!(h.state().ui.recent, paths, "and keeps the list");
+
+    h.get_by_label("Clear list…").click();
+    h.run_steps(4);
+    h.get_by_label("Clear").click();
+    h.run_steps(4);
+    assert_eq!(prompt(&h), None);
+    assert!(h.state().ui.recent.is_empty());
+    assert!(h.state().ui.backstage && h.state().ui.backstage_page == "open", "File stays open");
+    assert!(h.query_by_label("Documents you open will show up here.").is_some());
+    assert!(h.query_by_label("Clear list…").is_none(), "nothing is left to clear");
+}
+
+/// Right-click a recent document: Remove from list takes that one off; Clear list… asks about
+/// the whole list, as the button beside Recent does.
+#[test]
+fn a_recent_documents_menu_removes_it_or_clears_the_list() {
+    let dir = std::env::temp_dir().join("wordcraft-recent-menu");
+    let [one, two] = ["One.docx", "Two.docx"].map(|f| dir.join(f).to_string_lossy().into_owned());
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.ui.recent = vec![one, two.clone()];
+    a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
+    let mut h = a11y_harness(a);
+    let row = h.get_by_label("One.docx").rect().center();
+    // Escape closes the menu alone: File stays open behind it.
+    right_click_at(&mut h, row);
+    assert!(h.query_by_label("Remove from list").is_some(), "the menu is open");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(4);
+    assert!(h.query_by_label("Remove from list").is_none(), "Escape closes the menu");
+    assert!(h.state().ui.backstage, "and leaves File open");
+    right_click_at(&mut h, row);
+    h.get_by_label("Remove from list").click();
+    h.run_steps(4);
+    assert_eq!(h.state().ui.recent, [two.as_str()]);
+    assert!(h.query_by_label("One.docx").is_none());
+    assert!(h.state().ui.backstage && h.state().dialog.is_none(), "File stays open, nothing asked");
+
+    let row = h.get_by_label("Two.docx").rect().center();
+    right_click_at(&mut h, row);
+    // The menu's Clear list…, which opens at the row, below the button beside Recent.
+    let menu_clear = h.query_all_by_label("Clear list…").map(|n| n.rect().center()).max_by(|a, b| a.y.total_cmp(&b.y)).unwrap();
+    assert!(menu_clear.y > row.y - 1.0, "the menu's item, not the button above the list");
+    click_at(&mut h, menu_clear);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("clearRecent"), "the menu asks first too");
+    assert_eq!(h.state().ui.recent, [two]);
+}
+
+/// The Enter that opens a Recent prompt doesn't answer it: File draws before the dialogs, in
+/// the same pass, and egui leaves the key in the input when it clicks the focused Clear list…
+/// or recent document. In a prompt, Enter on the focused Cancel cancels; with neither button
+/// focused, Enter gives the prompt's own answer.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn the_enter_that_opens_a_recent_prompt_does_not_answer_it() {
+    let dir = std::env::temp_dir().join("wordcraft-recent-enter");
+    let paths = ["One.docx", "Two.docx"].map(|f| dir.join(f).to_string_lossy().into_owned());
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.ui.recent = paths.to_vec();
+    a.run("ui.backstage", json!({"value": true, "page": "open"})).unwrap();
+    let mut h = a11y_harness(a);
+    let prompt = |h: &egui_kittest::Harness<'static, WordApp>| h.state().dialog.as_ref().map(|d| d.name());
+    let enter_on = |h: &mut egui_kittest::Harness<'static, WordApp>, label: &str| {
+        h.get_by_label(label).focus();
+        h.run_steps(2);
+        assert!(h.get_by_label(label).is_focused(), "{label} has focus");
+        h.key_press(egui::Key::Enter);
+        h.run_steps(4);
+    };
+
+    enter_on(&mut h, "Clear list…");
+    assert_eq!(prompt(&h), Some("clearRecent"), "Enter on Clear list… asks");
+    assert_eq!(h.state().ui.recent, paths, "the Enter that opened the prompt doesn't clear the list");
+    enter_on(&mut h, "Cancel");
+    assert_eq!(prompt(&h), None);
+    assert_eq!(h.state().ui.recent, paths, "Enter on Cancel keeps the list");
+
+    enter_on(&mut h, "One.docx");
+    assert_eq!(prompt(&h), Some("missingRecent"), "Enter on a recent document that isn't there asks");
+    assert_eq!(h.state().ui.recent, paths, "the Enter that opened the prompt doesn't take it off");
+    enter_on(&mut h, "Cancel");
+    assert_eq!(prompt(&h), None);
+    assert_eq!(h.state().ui.recent, paths, "Enter on Cancel keeps it");
+
+    // With neither button focused, Enter answers: Remove from list, then Clear.
+    h.get_by_label("One.docx").click();
+    h.run_steps(4);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(4);
+    assert_eq!(prompt(&h), None);
+    assert_eq!(h.state().ui.recent, [paths[1].as_str()], "Enter takes it off");
+    h.get_by_label("Clear list…").click();
+    h.run_steps(4);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(4);
+    assert_eq!(prompt(&h), None);
+    assert!(h.state().ui.recent.is_empty(), "Enter clears the list");
 }
 
 /// #1873: the macOS back chevron sits beside the traffic lights windowed, at the plain
@@ -632,6 +820,15 @@ fn click_at(h: &mut egui_kittest::Harness<'static, WordApp>, pos: egui::Pos2) {
     h.event(egui::Event::PointerMoved(pos));
     for pressed in [true, false] {
         h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+    }
+    h.run_steps(4);
+}
+
+/// A secondary (right) click at `pos`, which opens the context menu there.
+fn right_click_at(h: &mut egui_kittest::Harness<'static, WordApp>, pos: egui::Pos2) {
+    h.event(egui::Event::PointerMoved(pos));
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed, modifiers: egui::Modifiers::NONE });
     }
     h.run_steps(4);
 }

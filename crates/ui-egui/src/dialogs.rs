@@ -320,6 +320,14 @@ pub enum Dialog {
         id: String,
         name: String,
     },
+    /// A Recent document whose file isn't at `path` any more (moved, renamed, deleted, or on a
+    /// drive that isn't connected): Remove from list takes it off (`ui.recentRemove`), Cancel
+    /// keeps it to try again later.
+    MissingRecent {
+        path: String,
+    },
+    /// File › Home and Open › Recent › Clear list…: asks before emptying the list (`ui.recentClear`).
+    ClearRecent,
     /// "Do you want to save changes?" before a user's New, Open, Close, Envelopes, Labels or
     /// Finish & Merge replaces the document (see [`WordApp::run`]); `then` runs once it is
     /// answered (`ui.saveChanges`), and only while the document it asked about
@@ -514,6 +522,8 @@ impl Dialog {
             Dialog::About { .. } => "about",
             Dialog::SaveChanges { .. } => "saveChanges",
             Dialog::DiscardRecovery { .. } => "discardRecovery",
+            Dialog::MissingRecent { .. } => "missingRecent",
+            Dialog::ClearRecent => "clearRecent",
             Dialog::RecipientList { .. } => "recipientList",
             Dialog::SelectTable { .. } => "selectTable",
             Dialog::InsertMergeField { .. } => "insertMergeField",
@@ -762,6 +772,7 @@ impl Dialog {
             "about" => Dialog::About { tab: 0 },
             "contributors" => Dialog::About { tab: 1 },
             "models" => Dialog::About { tab: 2 },
+            "clearRecent" => Dialog::ClearRecent,
             // The current list to edit, or a new one to type.
             "recipientList" | "newRecipientList" => {
                 let m = &app.session.merge;

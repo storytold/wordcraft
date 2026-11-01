@@ -67,12 +67,22 @@ fn count_dialog_frame(ctx: &egui::Context, id: egui::Id) {
     }
 }
 
+/// The dialog this viewport showed in its last pass, so the pass that first shows one is known.
+/// Each native window has its own: one with no dialog doesn't forget another window's.
+fn dialog_shown_key(ctx: &egui::Context) -> egui::Id {
+    egui::Id::unique(("dialog_shown", ctx.viewport_id()))
+}
+
 /// Takes the active dialog, resolves its translated title, hosts it as a non-resizable window, draws
 /// its body, keeps it open when it stays, and gives the Save Changes prompt the AccessKit
 /// alert-dialog role.
 pub fn show(app: &mut WordApp, ctx: &egui::Context) {
+    let shown_key = dialog_shown_key(ctx);
     let Some(mut d) = app.dialog.take() else {
-        ctx.data_mut(|d| d.remove::<(egui::Id, u8)>(dialog_top_key()));
+        ctx.data_mut(|d| {
+            d.remove::<(egui::Id, u8)>(dialog_top_key());
+            d.remove::<egui::Id>(shown_key);
+        });
         return;
     };
     let mut close = false;
@@ -105,6 +115,8 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::About { .. } => "About WordCraft",
         Dialog::SaveChanges { .. } => "WordCraft",
         Dialog::DiscardRecovery { .. } => "Discard recovery copy",
+        Dialog::MissingRecent { .. } => "Document not found",
+        Dialog::ClearRecent => "Clear recent documents",
         Dialog::RecipientList { .. } => "Recipient List",
         Dialog::SelectTable { .. } => "Select Table",
         Dialog::InsertMergeField { .. } => "Insert Merge Field",
@@ -134,6 +146,15 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::Layout(d) => d.title(),
     };
     let id = egui::Id::unique(("dialog", title));
+    // File draws before the dialogs, so the Enter that opens one of its prompts (on Clear list…,
+    // or on a recent document that isn't there any more) is still in the input when the prompt
+    // first draws: egui leaves the key there when it clicks the focused button. It was pressed
+    // before the prompt was on screen, so it isn't an answer.
+    let first_frame = ctx.data(|data| data.get_temp::<egui::Id>(shown_key)) != Some(id);
+    ctx.data_mut(|data| data.insert_temp(shown_key, id));
+    if first_frame && matches!(d, Dialog::MissingRecent { .. } | Dialog::ClearRecent) {
+        ctx.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Key { key: egui::Key::Enter, pressed: true, .. })));
+    }
     let window = crate::window_close::window(ctx, egui::Window::new(tl!(title)).id(id).collapsible(false).resizable(false));
     let shown = place_dialog(ctx, id, window).show(ctx, |ui| {
         ui.set_min_width(340.0);
@@ -160,6 +181,8 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
     }
     if close {
         app.canvas.want_focus = true;
+        // A dialog opened in the next pass is new, even one with the same title.
+        ctx.data_mut(|data| data.remove::<egui::Id>(shown_key));
     } else {
         app.dialog = Some(d);
     }
@@ -191,10 +214,17 @@ pub(crate) fn buttons(ui: &mut Ui, ok: &str) -> (bool, bool) {
             // Enter and Escape belong to the Colors dialog while it is open above this one.
             let keys = !crate::colors::is_open(ui.ctx());
             let (okb, cancelb) = ok_cancel_responses(ui, |ui| ui.add(crate::widgets::primary_button(ui, ok)), tl!("Cancel"));
-            if cancelb.clicked() || (keys && cancel_key_pressed(ui)) {
+            // Enter clicks the focused button, and egui leaves the key in the input when it does:
+            // a clicked button answers first, and Enter means OK only when neither has focus, so
+            // Enter on Cancel cancels.
+            let focused = okb.has_focus() || cancelb.has_focus();
+            if cancelb.clicked() {
                 r.1 = true;
-            }
-            if okb.clicked() || (keys && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
+            } else if okb.clicked() {
+                r.0 = true;
+            } else if keys && cancel_key_pressed(ui) {
+                r.1 = true;
+            } else if keys && !focused && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 r.0 = true;
             }
         });

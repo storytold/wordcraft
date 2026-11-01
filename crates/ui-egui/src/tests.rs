@@ -582,6 +582,68 @@ fn caret_animation_is_a_ui_command_and_survives_a_restart() {
     assert_eq!(a.run("ui.caretAnimation", json!({"value": true})).unwrap()["caretAnimation"], true);
 }
 
+/// File › Home and Open › Recent: `ui.recentRemove` takes exactly one path off the list and
+/// `ui.recentClear` empties it, with no document open too (the Start screen lists Recent);
+/// junk is refused. The open document doesn't come back while it is edited, only when it is
+/// opened again.
+#[test]
+fn recent_documents_can_be_removed_and_cleared() {
+    let dir = scratch("recent-clear");
+    let p = docx_on_disk(&dir, "Recent work").to_string_lossy().into_owned();
+    let other = dir.join("other.docx").to_string_lossy().into_owned();
+    let mut a = app();
+    a.run("file.open", json!({"path": p})).unwrap();
+    assert_eq!(a.ui.recent, [p.as_str()], "an opened document joins the list");
+    a.ui.recent.push(other.clone());
+    assert_eq!(a.run("ui.recentRemove", json!({"path": "elsewhere.docx"})).unwrap()["removed"], false);
+    assert_eq!(a.run("ui.recentRemove", json!({"path": p})).unwrap(), json!({"removed": true, "recent": [other]}));
+    a.run("text.insert", json!({"text": "More "})).unwrap();
+    assert_eq!(a.ui.recent, [other.as_str()], "the open document stays off the list while it is edited");
+    assert_eq!(a.run("ui.recentClear", json!({})).unwrap(), json!({"cleared": 1}));
+    a.run("text.insert", json!({"text": "And more "})).unwrap();
+    assert!(a.ui.recent.is_empty(), "a cleared list stays clear");
+    for junk in [json!({}), json!({"path": 7}), json!({"path": null}), json!({"path": ["a"]}), json!([])] {
+        assert!(a.run("ui.recentRemove", junk).is_err());
+    }
+    // Opened again, it is first on the list again.
+    a.session.dirty = false;
+    a.run("file.open", json!({"path": p})).unwrap();
+    assert_eq!(a.ui.recent, [p.as_str()]);
+
+    // The Start screen: no document is open, and the list still works.
+    let mut b = app();
+    b.ui.recent = vec![p.clone(), other.clone()];
+    assert!(b.start_screen() && !b.has_document());
+    assert_eq!(b.run("ui.recentRemove", json!({"path": other})).unwrap()["removed"], true);
+    assert_eq!(b.run("ui.recentClear", json!({})).unwrap(), json!({"cleared": 1}));
+    assert!(b.ui.recent.is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Several open documents: one taken off Recent stays off when another document is shown and
+/// then it again, and while it is edited; saved under a new name, it joins the list first.
+#[test]
+fn a_removed_recent_document_stays_off_while_other_documents_are_shown() {
+    let (dir_one, dir_two) = (scratch("recent-switch-one"), scratch("recent-switch-two"));
+    let one = docx_on_disk(&dir_one, "One").to_string_lossy().into_owned();
+    let two = docx_on_disk(&dir_two, "Two").to_string_lossy().into_owned();
+    let mut a = app();
+    a.run("file.open", json!({"path": one})).unwrap();
+    let first = a.session.document_id();
+    a.run("file.open", json!({"path": two})).unwrap();
+    assert_ne!(a.session.document_id(), first, "the second file opens beside the first");
+    assert_eq!(a.ui.recent, [two.as_str(), one.as_str()]);
+    a.run("ui.recentRemove", json!({"path": one})).unwrap();
+    a.run("view.switchWindows", json!({"id": first})).unwrap();
+    a.run("text.insert", json!({"text": "More "})).unwrap();
+    assert_eq!(a.ui.recent, [two.as_str()], "showing it again and editing it don't put it back");
+    let renamed = dir_one.join("One v2.docx").to_string_lossy().into_owned();
+    a.run("file.saveAs", json!({"path": renamed})).unwrap();
+    assert_eq!(a.ui.recent, [renamed.as_str(), two.as_str()], "Save As under a new name puts it first");
+    let _ = std::fs::remove_dir_all(&dir_one);
+    let _ = std::fs::remove_dir_all(&dir_two);
+}
+
 /// #1945: showing or hiding the Quick Access Toolbar is a UI command (no value toggles it),
 /// kept between runs; settings saved before it existed show the toolbar; it works with no
 /// document open, like the other interface settings.

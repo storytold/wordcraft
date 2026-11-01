@@ -183,9 +183,12 @@ impl WordApp {
             }
             if marked_saved {
                 self.session.dirty = false;
-                // The host page keeps the file under this name now, as a desktop save would.
-                if self.services.host_save.is_some() {
-                    self.session.path = Some(std::path::PathBuf::from(&name));
+                // The host page keeps the file under this name now, as a desktop save would; a new
+                // name joins Recent, as a desktop Save As does.
+                let path = Some(std::path::PathBuf::from(&name));
+                if self.services.host_save.is_some() && self.session.path != path {
+                    self.session.path = path;
+                    self.put_first_on_recent();
                 }
             }
             // The browser's picker writes the file later (#1315): until it says how that went,
@@ -237,6 +240,16 @@ impl WordApp {
             // Its HTML too when it has some (an equation as MathML, #816).
             crate::system_clipboard::put_result(self, ctx, v);
         }
+        // A document joins Recent, first, when it is opened (again, too: Open shows one that is
+        // already open; not when Open only showed its picker, which names no file) or saved under
+        // a new name, and after no other command, so one taken off the list (or a cleared list)
+        // stays off while it is open, whichever document is shown in between. Read before the
+        // window follows another document, while the session shows the one opened or saved.
+        let opened = id == "file.open" && r.as_ref().is_ok_and(|v| v.get("path").is_some());
+        let new_name = r.is_ok() && self.session.document_id() == document && self.session.path != old_path;
+        if opened || new_name {
+            self.put_first_on_recent();
+        }
         // Another document is shown (not when Open only showed its picker): the window's state
         // for the one it showed is put aside.
         if self.session.document_id() != document {
@@ -272,6 +285,14 @@ impl WordApp {
             self.status(e.clone());
         }
         r
+    }
+
+    /// Put the document's file first on Recent, as opening it or saving it under a new name does.
+    fn put_first_on_recent(&mut self) {
+        let Some(p) = self.session.path.as_ref().map(|path| path.to_string_lossy().to_string()) else { return };
+        self.ui.recent.retain(|r| *r != p);
+        self.ui.recent.insert(0, p);
+        self.ui.recent.truncate(MAX_RECENT);
     }
 
     /// Web: store a font added from bytes, or forget the removed ones ([`Services::store_font`]).
@@ -391,13 +412,6 @@ impl WordApp {
         }
         for req in std::mem::take(&mut self.session.ui_requests) {
             self.handle_request(&req);
-        }
-        if let Some(p) = self.session.path.as_ref().map(|p| p.to_string_lossy().to_string())
-            && self.ui.recent.first() != Some(&p)
-        {
-            self.ui.recent.retain(|r| *r != p);
-            self.ui.recent.insert(0, p);
-            self.ui.recent.truncate(MAX_RECENT);
         }
         if !self.session.status.is_empty() {
             // Engine messages are English; the catalog translates the ones it knows.
@@ -782,6 +796,24 @@ impl WordApp {
                 }
                 json!({"startScreen": self.ui.start_screen})
             }
+            // File › Home and Open › Recent: take `path` off the list, as its right-click Remove
+            // from list does, and the prompt for a document that isn't there any more. The file
+            // itself is left alone. `recent` is the list that remains.
+            "ui.recentRemove" => {
+                let Some(path) = s("path") else {
+                    return Some(Err("`path` must be the path of a recent document".into()));
+                };
+                let before = self.ui.recent.len();
+                self.ui.recent.retain(|r| r.as_str() != path);
+                let removed = self.ui.recent.len() < before;
+                json!({"removed": removed, "recent": self.ui.recent})
+            }
+            // File › Home and Open › Recent › Clear list…: empty the list (the dialog asks first;
+            // this doesn't). The files stay where they are. `cleared`: how many entries it had.
+            "ui.recentClear" => {
+                let cleared = std::mem::take(&mut self.ui.recent).len();
+                json!({"cleared": cleared})
+            }
             // Shape Format › Text › Create Link: the next click on an empty text box links the
             // selected box to it (`shape.link` with that box as the target); Esc cancels.
             // Picture Format › Size › Crop: crop mode on the selected picture, or off (`crop`).
@@ -1040,6 +1072,8 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.caretAnimation"
             | "ui.startScreen"
             | "ui.checkForUpdates"
+            | "ui.recentRemove"
+            | "ui.recentClear"
     ) || id.starts_with("help.")
 }
 
